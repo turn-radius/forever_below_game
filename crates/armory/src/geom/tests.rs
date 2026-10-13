@@ -223,6 +223,65 @@ fn double_sided_cloth_keeps_unit_outline_normals() {
 }
 
 #[test]
+fn thick_sheet_closes_its_edges_and_faces_out() {
+    // An open-topped cup with a pole at the bottom: front surface out, back surface in, a
+    // rim on top. Every face of the outer wall points away from the axis.
+    let cup: Vec<Vec<V3>> = (0..=8)
+        .map(|r| {
+            let y = r as f32 / 8.0;
+            let radius = (y * 4.0).min(1.0);
+            (0..16).map(|c| {
+                let (s, co) = (TAU * c as f32 / 16.0).sin_cos();
+                [radius * co, y, -radius * s]
+            }).collect()
+        })
+        .collect();
+    let options = GridOptions { wrap_around: true, ..GridOptions::default() };
+    let normals = grid_normals(&cup, true, false);
+    assert!(normals[0][0][1] < -0.9, "pole normal {:?} should point down", normals[0][0]);
+    assert!(vec3::dot(normals[6][0], [1.0, 0.0, 0.0]) > 0.9);
+    let sheet = thick_sheet(&cup, &options, 0.05);
+    let p = part(sheet);
+    assert_front_faces_agree(&p);
+    // Rim faces point up, and the mesh is closed: every edge is shared by exactly two faces.
+    let mut edges: HashMap<([i32; 3], [i32; 3]), i32> = HashMap::new();
+    let key = |v: V3| v.map(|c| (c * 1e4).round() as i32);
+    for tri in p.indices.as_chunks::<3>().0 {
+        for k in 0..3 {
+            let (a, b) = (key(p.positions[tri[k] as usize]), key(p.positions[tri[(k + 1) % 3] as usize]));
+            *edges.entry(if a < b { (a, b) } else { (b, a) }).or_default() += 1;
+        }
+    }
+    assert!(edges.values().all(|&n| n == 2), "thick sheet has open edges");
+}
+
+#[test]
+fn extrude_smooth_keeps_its_sharp_corners() {
+    // A half disc: round on top, sharp where the arc meets the flat base.
+    let mut outline: Vec<[f32; 2]> = (0..=12).map(|i| {
+        let a = PI * i as f32 / 12.0;
+        [a.cos(), a.sin()]
+    }).collect();
+    outline.reverse();
+    let sharp: Vec<bool> = (0..outline.len()).map(|i| i == 0 || i == outline.len() - 1).collect();
+    let p = part(extrude_smooth(&outline, &sharp, 2.0));
+    assert_front_faces_agree(&p);
+    assert_outward(&p, [0.0, 0.4, 0.0]);
+    // At the sharp corner (1, 0) some vertex faces straight down (the base) and another not.
+    let at_corner: Vec<V3> = p.positions.iter().zip(&p.normals).filter(|(q, _)| (q[0] - 1.0).abs() < 1e-5 && q[1].abs() < 1e-5 && q[2].abs() > 0.99).map(|(_, n)| *n).collect();
+    assert!(at_corner.iter().any(|n| n[1] < -0.99), "{at_corner:?}");
+    assert!(at_corner.iter().any(|n| n[1] > -0.5 && n[2].abs() < 0.5), "{at_corner:?}");
+}
+
+#[test]
+fn place_basis_maps_up_and_forward() {
+    let mut m = cuboid([0.1, 1.0, 0.1]);
+    m.translate([0.0, 0.5, 0.2]).place_basis([1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+    let (lo, hi) = m.bounds().unwrap();
+    assert!((hi[0] - 2.0).abs() < 1e-4 && (lo[2] + 0.25).abs() < 1e-4, "{lo:?} {hi:?}");
+}
+
+#[test]
 fn transforms_keep_normals_unit_and_faces_front() {
     let mut s = spike(0.3, 1.5, 6, 0.5, Shading::FACETED);
     s.align_y_to([1.0, 1.0, 0.0]).scale([1.0, 0.5, 2.0]).translate([0.0, 3.0, 0.0]);

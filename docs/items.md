@@ -43,6 +43,10 @@ Each family maps to a slot, tags, weight, armour, warmth and damage, plus a grid
 
 A bag keeps its contents wherever it goes, and its weight counts through every bag you carry. A bag set down opens underfoot as its own grid. A bag cannot go inside itself or inside a bag it already holds.
 
+The Armory says where a container's contents go: each container family has a `container(&state)` returning an `armory::build::container::ContainerSpace` (the mouth's centre, facing and size, the interior bounds, and the capacity in litres) in the same item space as its mesh. The game can drop items through the mouth or draw an open container's contents inside it. The capacity is the real volume of the modelled body; the inner grid sizes above stay a game rule.
+
+Departures from the prototype's bags: the front pocket and bedroll roll only on backpacks and spilled coins only on pouches and purses (the prototype rolled them everywhere but drew them only there); a sewn patch can go on any bag, not just sacks; cloth bags take any woven pattern and leather ones can be studded. Every panel has a real thickness, straps lie on the surfaces they cross and close with buckles, and a satchel's strap hangs from D-rings.
+
 ## Classes
 
 `data/outfits.json`: Fighter, Ranger, Mage and Cleric, plus Freshly fallen and Scavenger. Each slot lists candidate bases, optionally with a leading probability. A class's set is rolled once per character, so the outfit you preview is the one you get.

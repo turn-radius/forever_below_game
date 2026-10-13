@@ -31,14 +31,11 @@ mod tests;
 
 pub use builder::MeshBuilder;
 pub use carve::{Hollow, carve_hollows};
-pub use grid::{GridOptions, Shading, parametric_surface, stitch_grid};
-pub use lathe::{
-    LatheOptions, clip_profile, lathe, lathe_fn, lathe_sector, lathe_warped, profile_height_at, profile_radius_at, shell_inside,
-    shell_profile, spline_profile,
-};
+pub use grid::{GridOptions, Shading, grid_normals, parametric_surface, stitch_grid, thick_sheet};
+pub use lathe::{LatheOptions, clip_profile, lathe, lathe_fn, lathe_sector, lathe_warped, profile_height_at, profile_radius_at, shell_inside, shell_profile, spline_profile};
 pub use mesh::{ItemMesh, Part};
 pub use outline::{OutlineMode, smooth_outline_normals, welded_outline_normals};
-pub use polygon::{distance_to_polygon, extrude, extrude_tapered, point_in_polygon, signed_area, triangulate};
+pub use polygon::{P2, distance_to_polygon, extrude, extrude_smooth, extrude_tapered, point_in_polygon, signed_area, triangulate};
 pub use section::{inset_polyline, profile_face, rind_face};
 pub use shapes::{cuboid, cylinder, frustum, icosphere, spike, torus, uv_sphere};
 pub use spline::{CatmullRom, Frame, helix, polyline_length, resample_by_length, rotation_minimizing_frames};

@@ -264,3 +264,47 @@ pub fn extrude_tapered(outline: &[P2], holes: &[Vec<P2>], depth_at_min_x: f32, d
     }
     mesh
 }
+
+/// Extrudes a 2D outline in the XY plane through `depth` along Z, centred on z = 0, with
+/// walls that shade smooth round the outline except at the corners flagged in `sharp` (one
+/// flag per outline point), and flat front (+Z) and back (-Z) faces. For rounded profiles
+/// that keep a few crisp corners: a chest's barrel lid, a moulding, a board with eased
+/// edges. No holes.
+pub fn extrude_smooth(outline: &[P2], sharp: &[bool], depth: f32) -> MeshBuilder {
+    use super::grid::{GridOptions, Shading, stitch_grid};
+    let mut mesh = MeshBuilder::new();
+    if outline.len() < 3 {
+        return mesh;
+    }
+    let flag = |i: usize| sharp.get(i).copied().unwrap_or(false);
+    let order: Vec<usize> = if signed_area(outline) >= 0.0 { (0..outline.len()).collect() } else { (0..outline.len()).rev().collect() };
+    let ring: Vec<P2> = order.iter().map(|&i| outline[i]).collect();
+    let h = depth.max(0.0) * 0.5;
+    // A sharp corner appears twice: the zero-width cell between the copies keeps the normals
+    // on either side of it from blending.
+    let mut columns: Vec<P2> = Vec::with_capacity(ring.len() * 2);
+    for &i in &order {
+        columns.push(outline[i]);
+        if flag(i) {
+            columns.push(outline[i]);
+        }
+    }
+    let rows: Vec<Vec<V3>> = [-h, h].iter().map(|&z| columns.iter().map(|q| [q[0], q[1], z]).collect()).collect();
+    mesh.append(&stitch_grid(&rows, &GridOptions { wrap_around: true, wrap_along: false, shading: Shading::SMOOTH, row_v: None }));
+
+    let tris = triangulate(&ring, &[]);
+    let (min, max) = ring.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), q| {
+        ([lo[0].min(q[0]), lo[1].min(q[1])], [hi[0].max(q[0]), hi[1].max(q[1])])
+    });
+    let size = (max[0] - min[0]).max(max[1] - min[1]).max(1e-6);
+    for (side, front) in [(1.0f32, true), (-1.0, false)] {
+        let base = mesh.vertex_count() as u32;
+        for q in &ring {
+            mesh.push_vertex([q[0], q[1], side * h], [0.0, 0.0, side], [(q[0] - min[0]) / size, (q[1] - min[1]) / size]);
+        }
+        for t in &tris {
+            if front { mesh.push_triangle(base + t[0], base + t[1], base + t[2]) } else { mesh.push_triangle(base + t[0], base + t[2], base + t[1]) };
+        }
+    }
+    mesh
+}

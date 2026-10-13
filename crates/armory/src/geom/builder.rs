@@ -45,6 +45,16 @@ impl MeshBuilder {
         self.align_y_to(up).translate(origin)
     }
 
+    /// Rotates the mesh's +Y onto `up` and its +Z onto `forward` (made perpendicular to `up`),
+    /// then moves its origin to `origin`: sets a part that has a facing as well as an up,
+    /// such as a buckle on a strap or a lock plate on a wall.
+    pub fn place_basis(&mut self, origin: V3, up: V3, forward: V3) -> &mut Self {
+        let y = vec3::normalize_or(up, vec3::Y);
+        let z = vec3::try_normalize(vec3::sub(forward, vec3::scale(y, vec3::dot(forward, y)))).unwrap_or_else(|| vec3::any_perpendicular(y));
+        let x = vec3::cross(y, z);
+        self.transform(&Mat3::from_cols(x, y, z)).translate(origin)
+    }
+
     /// Appends one vertex and returns its index.
     pub fn push_vertex(&mut self, position: V3, normal: V3, uv: [f32; 2]) -> u32 {
         let index = self.positions.len() as u32;

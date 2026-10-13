@@ -3,6 +3,7 @@
 
 use crate::geom::ItemMesh;
 
+pub mod bags;
 pub mod bow;
 pub mod crossbow;
 pub mod dagger;

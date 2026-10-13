@@ -61,4 +61,10 @@ impl Rgb {
     pub const fn hex(v: u32) -> Self {
         Rgb(((v >> 16) & 0xff) as f32 / 255.0, ((v >> 8) & 0xff) as f32 / 255.0, (v & 0xff) as f32 / 255.0)
     }
+
+    /// Every channel times `factor`, clamped to 0..=1 (a darker strap cut from the same hide).
+    pub fn scaled(self, factor: f32) -> Self {
+        let f = |c: f32| (c * factor).clamp(0.0, 1.0);
+        Rgb(f(self.0), f(self.1), f(self.2))
+    }
 }

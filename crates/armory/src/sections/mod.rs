@@ -7,8 +7,10 @@
 //! - [`socket`]: the socket that seats a head on a haft, with its rings and langets (spears).
 //! - [`ranged`]: limbs, string and arrow of bows and crossbows.
 //! - [`blade`]: the blade and guard of swords, daggers and spears.
+//! - [`fabric`]: textiles and fabric patterns (bags, garments, hems, a chest's glaze).
 
 pub mod blade;
+pub mod fabric;
 pub mod hafted;
 pub mod head;
 pub mod ranged;
