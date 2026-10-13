@@ -47,7 +47,7 @@ pub use outline::{OutlineMode, smooth_outline_normals, welded_outline_normals};
 pub use polygon::{P2, distance_to_polygon, extrude, extrude_smooth, extrude_tapered, fillet, fillet_polyline, offset_ring, point_in_polygon, resample_closed, signed_area, triangulate};
 pub use section::{inset_polyline, profile_face, rind_face};
 pub use slab::{SlabOptions, bevelled_slab};
-pub use shapes::{cuboid, cylinder, frustum, icosphere, spike, torus, uv_sphere};
+pub use shapes::{cuboid, cylinder, ellipsoid, frustum, icosphere, spike, torus, uv_sphere};
 pub use spline::{CatmullRom, Frame, helix, polyline_length, resample_by_length, rotation_minimizing_frames};
 pub use sweep::{SweepOptions, regular_polygon, sweep, sweep_frames, sweep_scaled, tube, tube_varying};
 pub use tessellate::{Tessellation, tessellate};

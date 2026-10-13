@@ -97,6 +97,52 @@ pub fn ember_ring(radius: f32, y: f32, thickness: f32) -> MeshBuilder {
     ring
 }
 
+/// A candle standing on y = 0, `radius` wide and `height` tall to its rim, with `drips` runs
+/// of wax down its side. A `burnt` candle's top is cupped round the wick and its wick is
+/// charred. Returns `(wax, wick)`; the wick's tip is [`candle_wick_top`] above the base,
+/// where a flame stands.
+pub fn candle(radius: f32, height: f32, drips: u32, burnt: bool, seed: u32) -> (MeshBuilder, MeshBuilder) {
+    let r = radius;
+    let cup = if burnt { r * 0.28 } else { r * 0.06 };
+    let profile = [
+        [0.0, 0.0],
+        [r * 0.98, 0.0],
+        [r, r * 0.04],
+        [r, height - r * 0.12],
+        [r * 0.96, height],
+        [r * 0.82, height - cup * 0.2],
+        [r * 0.45, height - cup],
+        [0.0, height - cup * 1.05],
+    ];
+    let mut wax = crate::geom::lathe(&profile, &LatheOptions { facets: 28, shading: Shading::SMOOTH, ..Default::default() });
+    // Runs of wax from the rim down the side, each a stretched blob lying on the surface.
+    for k in 0..drips {
+        let a = (seed % 360) as f32 * 0.0174 + k as f32 * 2.4;
+        let run = height * (0.12 + 0.3 * value_noise3([k as f32 * 3.1, seed as f32 * 0.013, 0.5], seed));
+        let mut drip = crate::geom::ellipsoid([r * 0.16, run * 0.5, r * 0.12]);
+        drip.translate([0.0, height - run * 0.45, r * 0.97]).rotate_y(a);
+        wax.append(&drip);
+    }
+    let wick_len = r * 0.55;
+    let base = height - cup * 1.05 - r * 0.05;
+    let path: Vec<V3> = (0..=6)
+        .map(|i| {
+            let t = i as f32 / 6.0;
+            // A burnt wick curls over at the tip.
+            let bend = if burnt { r * 0.18 * t * t } else { 0.0 };
+            [bend, base + wick_len * t, 0.0]
+        })
+        .collect();
+    let wick = crate::geom::tube(&path, 6, &crate::geom::SweepOptions::default(), |t| r * 0.07 * (1.0 - 0.3 * t));
+    (wax, wick)
+}
+
+/// Height above a [`candle`]'s base of its wick's tip.
+pub fn candle_wick_top(radius: f32, height: f32, burnt: bool) -> f32 {
+    let cup = if burnt { radius * 0.28 } else { radius * 0.06 };
+    height - cup * 1.05 - radius * 0.05 + radius * 0.55
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

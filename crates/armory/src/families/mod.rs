@@ -19,6 +19,7 @@ pub mod garment;
 pub mod hands;
 pub mod helm;
 pub mod hood;
+pub mod lantern;
 pub mod legs;
 pub mod mace;
 pub mod ring;

@@ -40,12 +40,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Family {
-    Staff, Mace, Sword, Spear, Dagger, Club, Axe, Bow, Crossbow, Helm, Hood, Garment, Belt, Hands, Legs, Feet, Shield, Ring, Amulet, Charm, Bags, Chests, Food, Torch,
+    Staff, Mace, Sword, Spear, Dagger, Club, Axe, Bow, Crossbow, Helm, Hood, Garment, Belt, Hands, Legs, Feet, Shield, Ring, Amulet, Charm, Bags, Chests, Food, Torch, Lantern,
 }
 
 impl Family {
-    pub const ALL: [Family; 24] = [
-        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Club, Family::Axe, Family::Bow, Family::Crossbow, Family::Helm, Family::Hood, Family::Garment, Family::Belt, Family::Hands, Family::Legs, Family::Feet, Family::Shield, Family::Ring, Family::Amulet, Family::Charm, Family::Bags, Family::Chests, Family::Food, Family::Torch,
+    pub const ALL: [Family; 25] = [
+        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Club, Family::Axe, Family::Bow, Family::Crossbow, Family::Helm, Family::Hood, Family::Garment, Family::Belt, Family::Hands, Family::Legs, Family::Feet, Family::Shield, Family::Ring, Family::Amulet, Family::Charm, Family::Bags, Family::Chests, Family::Food, Family::Torch, Family::Lantern,
     ];
     pub fn key(self) -> &'static str {
         match self {
@@ -73,11 +73,12 @@ impl Family {
             Family::Chests => "chests",
             Family::Food => "food",
             Family::Torch => "torch",
+            Family::Lantern => "lantern",
         }
     }
     /// Whether the Spline Armory prototype had this family (and so example fixtures).
     pub fn in_armory_prototype(self) -> bool {
-        !matches!(self, Family::Club | Family::Axe | Family::Hood | Family::Belt | Family::Legs | Family::Torch)
+        !matches!(self, Family::Club | Family::Axe | Family::Hood | Family::Belt | Family::Legs | Family::Torch | Family::Lantern)
     }
 }
 

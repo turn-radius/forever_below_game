@@ -18,6 +18,14 @@ pub fn uv_sphere(radius: f32, segments: usize, rings: usize) -> MeshBuilder {
     })
 }
 
+/// A smooth ellipsoid of half-extents `size` centred on the origin: drips, blobs, knots,
+/// spots and dents.
+pub fn ellipsoid(size: V3) -> MeshBuilder {
+    let mut m = uv_sphere(1.0, 16, 10);
+    m.scale(size);
+    m
+}
+
 /// A subdivided icosahedron centred on the origin, smooth shaded. Even triangles everywhere
 /// with no poles; use [`MeshBuilder::flat_shaded`] for a cut stone.
 pub fn icosphere(radius: f32, subdivisions: u32) -> MeshBuilder {

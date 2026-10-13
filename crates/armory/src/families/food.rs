@@ -759,9 +759,7 @@ fn disc(radius: f32, center: [f32; 2], lift: f32, sides: usize) -> MeshBuilder {
 
 /// A smooth flattened blob (scores, char, vents, spots): a sphere scaled to `size`.
 fn blob(size: V3) -> MeshBuilder {
-    let mut m = uv_sphere(1.0, 16, 10);
-    m.scale(size);
-    m
+    crate::geom::ellipsoid(size)
 }
 
 /// Seeded low-frequency lumps: a sum of a few sine waves in space, about -1..=1.
@@ -1271,7 +1269,7 @@ fn mushrooms(p: &Provision, rng: &mut Mulberry32, a: &mut Parts) {
 
 // ── Drink ───────────────────────────────────────────────────────────────────────────────
 
-fn stopper(radius_bottom: f32, radius_top: f32, height: f32, base: f32) -> MeshBuilder {
+pub(crate) fn stopper(radius_bottom: f32, radius_top: f32, height: f32, base: f32) -> MeshBuilder {
     let mut m = frustum(radius_bottom, radius_top, height, 16, Shading::SMOOTH);
     m.translate([0.0, base, 0.0]);
     m

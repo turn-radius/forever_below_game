@@ -50,11 +50,13 @@ The Armory's food family (`armory::families::food`) now also makes the glowcap, 
 
 ### Lights
 
-Torches are an Armory family (`armory::families::torch`), and so are the bases the plate drew in `weaponGroup()`. Each light-giving family has a `light(&state)` that returns an `armory::build::light::LightAnchor`: the light's position in item space, a suggested colour, a radius in item units converted from the base's light stat in feet (`light` in `data/bases.json`), and how much it flickers. The game hangs the carried light there. Where the Rust port departs from the plate:
+Torches and lanterns are Armory families (`armory::families::torch`, `armory::families::lantern`), drawn from the bases the plate drew in `weaponGroup()`. Each light-giving family has a `light(&state)` that returns an `armory::build::light::LightAnchor`: the light's position in item space, a suggested colour, a radius in item units converted from the base's light stat in feet (`light` in `data/bases.json`), and how much it flickers. The game hangs the carried light there. Where the Rust port departs from the plate:
 
 - A torch has three heads (a wrapped rag, a bound bundle of resinous splints, an iron cresset packed with tow) and burns through four states: fresh, burning, doused and spent. The plate's `Pitch` and `Tallow` materials are the head's fuel. How charred the head is, and how tall the flame stands, are sliders. A spent torch is named `Torch Stub`.
 - Flames and embers are glowing meshes rather than an unlit material and a sprite. The halo is left to the game.
 - A torch's light reaches 20 ft at an ordinary flame, scaled by the flame's height and the head: a cresset reaches further and a splint bundle less far. Tallow burns a little dimmer.
+- A lantern (`armory::families::lantern`) has three bodies (horn panes in a frame, a pierced tin drum, a wire cage round a glass chimney), each under a hood and over a base, hung by a wire bail on 0 to 6 chain links from the carrying ring the hand holds. Inside stands a candle in a socket or an oil font with a burner and a filler cap. The plate's `Tin`, `Brass` and `Iron` are the lantern's metal; tin is iron tinted pale and horn is bone tinted amber, until there are materials for them.
+- A lit lantern's panes, holes or chimney glow. Its light reaches the base's 30 ft through glass, less through horn and least through a pierced drum, and an oil flame reaches further than a candle.
 
 ## Rarity and affixes
 
