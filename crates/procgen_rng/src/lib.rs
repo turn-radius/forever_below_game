@@ -43,6 +43,33 @@ impl Mulberry32 {
     pub fn range(&mut self, lo: f64, hi: f64) -> f64 {
         lo + (hi - lo) * self.next_f64()
     }
+
+    /// Uniform in `[lo, hi)` as `f32`, the precision item parameters are stored in.
+    pub fn range_f32(&mut self, lo: f32, hi: f32) -> f32 {
+        self.range(lo as f64, hi as f64) as f32
+    }
+
+    /// Uniform integer in `lo..=hi`. One draw.
+    pub fn int(&mut self, lo: u32, hi: u32) -> u32 {
+        debug_assert!(lo <= hi);
+        let span = (hi - lo) as f64 + 1.0;
+        (lo + (self.next_f64() * span).floor() as u32).min(hi)
+    }
+
+    /// Pick from `(value, weight)` pairs with probability proportional to weight. One draw.
+    /// Panics if the weights sum to zero.
+    pub fn weighted<'a, T>(&mut self, table: &'a [(T, u32)]) -> &'a T {
+        let total: u32 = table.iter().map(|(_, w)| w).sum();
+        assert!(total > 0, "weighted pick from an empty table");
+        let mut roll = (self.next_f64() * total as f64).floor() as u32;
+        for (value, w) in table {
+            if roll < *w {
+                return value;
+            }
+            roll -= w;
+        }
+        &table[table.len() - 1].0
+    }
 }
 
 /// The Spline Armory randomizer seeds its stream with `(seed * 2654435761) >>> 0`:
@@ -68,6 +95,17 @@ mod tests {
                 let got = r.next_f64();
                 assert_eq!(got, want.as_f64().unwrap(), "seed {seed}, draw {i}");
             }
+        }
+    }
+
+    #[test]
+    fn int_and_weighted_stay_in_bounds() {
+        let mut r = Mulberry32::new(7);
+        let table = [('a', 1), ('b', 0), ('c', 3)];
+        for _ in 0..2000 {
+            let n = r.int(2, 5);
+            assert!((2..=5).contains(&n));
+            assert_ne!(*r.weighted(&table), 'b');
         }
     }
 

@@ -3,6 +3,7 @@
 
 use crate::geom::ItemMesh;
 
+pub mod mace;
 
 /// The contract every family module implements.
 pub trait Generator {

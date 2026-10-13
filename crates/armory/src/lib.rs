@@ -15,9 +15,15 @@
 //! Starting point: `reference/spline-armory.html` and `reference/spline_armory_engine.js`.
 //! Example output: `fixtures/armory/<family>.json` (64 seeds per family), for reference only.
 
+pub mod cond;
+pub mod etch;
 pub mod families;
+pub mod gem;
 pub mod geom;
 pub mod material;
+pub mod palette;
+pub mod sections;
+pub mod slider;
 
 pub use geom::{ItemMesh, Part};
 pub use material::{MaterialKind, Rgb};
