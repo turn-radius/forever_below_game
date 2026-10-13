@@ -16,6 +16,7 @@ pub mod feet;
 pub mod food;
 pub mod garment;
 pub mod hands;
+pub mod helm;
 pub mod mace;
 pub mod ring;
 pub mod shield;

@@ -44,7 +44,7 @@ pub use lathe::{LatheOptions, clip_profile, lathe, lathe_fn, lathe_sector, lathe
 pub use mesh::{ItemMesh, Part};
 pub use noise::value_noise3;
 pub use outline::{OutlineMode, smooth_outline_normals, welded_outline_normals};
-pub use polygon::{P2, distance_to_polygon, extrude, extrude_smooth, extrude_tapered, fillet, offset_ring, point_in_polygon, resample_closed, signed_area, triangulate};
+pub use polygon::{P2, distance_to_polygon, extrude, extrude_smooth, extrude_tapered, fillet, fillet_polyline, offset_ring, point_in_polygon, resample_closed, signed_area, triangulate};
 pub use section::{inset_polyline, profile_face, rind_face};
 pub use slab::{SlabOptions, bevelled_slab};
 pub use shapes::{cuboid, cylinder, frustum, icosphere, spike, torus, uv_sphere};

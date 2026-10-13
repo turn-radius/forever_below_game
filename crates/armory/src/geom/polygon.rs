@@ -313,6 +313,15 @@ pub fn extrude_smooth(outline: &[P2], sharp: &[bool], depth: f32) -> MeshBuilder
 /// curve of about `radius` (smaller where the neighbouring edges are short), sampled with
 /// `segments` pieces. Gentle bends of a densely sampled curve are left alone.
 pub fn fillet(polygon: &[P2], radius: f32, min_turn: f32, segments: usize) -> Vec<P2> {
+    fillet_points(polygon, radius, min_turn, segments, true)
+}
+
+/// [`fillet`] for an open polyline: the end points stay where they are.
+pub fn fillet_polyline(polyline: &[P2], radius: f32, min_turn: f32, segments: usize) -> Vec<P2> {
+    fillet_points(polyline, radius, min_turn, segments, false)
+}
+
+fn fillet_points(polygon: &[P2], radius: f32, min_turn: f32, segments: usize, closed: bool) -> Vec<P2> {
     let n = polygon.len();
     if n < 3 || radius <= 0.0 {
         return polygon.to_vec();
@@ -323,7 +332,7 @@ pub fn fillet(polygon: &[P2], radius: f32, min_turn: f32, segments: usize) -> Ve
         let (prev, p, next) = (polygon[(i + n - 1) % n], polygon[i], polygon[(i + 1) % n]);
         let (din, dout) = (sub2(p, prev), sub2(next, p));
         let (lin, lout) = (len(din), len(dout));
-        if lin < 1e-7 || lout < 1e-7 {
+        if (!closed && (i == 0 || i + 1 == n)) || lin < 1e-7 || lout < 1e-7 {
             out.push(p);
             continue;
         }
