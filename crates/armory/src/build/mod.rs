@@ -20,10 +20,15 @@
 //!   armour, boots).
 //! - [`hoard`]: spilled and heaped coins (purses, treasure chests).
 //! - [`container`]: a container's opening and inside ([`container::ContainerSpace`]).
+//! - [`plank`]: boards, planked panels and planked round heads (crates, barrels, chests).
+//! - [`fitting`]: box hardware: drop handles, lock plates, hasps, padlocks.
+//! - [`device`]: emblem outlines and their raised or painted shapes (stencils, charges).
 
 pub mod arrow;
 pub mod blade;
 pub mod container;
+pub mod device;
+pub mod fitting;
 pub mod gem;
 pub mod guard;
 pub mod hafted;
@@ -32,6 +37,7 @@ pub mod hilt;
 pub mod hoard;
 pub mod limb;
 pub mod parts;
+pub mod plank;
 pub mod socket;
 pub mod spearhead;
 pub mod strap;

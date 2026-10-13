@@ -47,6 +47,8 @@ The Armory says where a container's contents go: each container family has a `co
 
 Departures from the prototype's bags: the front pocket and bedroll roll only on backpacks and spilled coins only on pouches and purses (the prototype rolled them everywhere but drew them only there); a sewn patch can go on any bag, not just sacks; cloth bags take any woven pattern and leather ones can be studded. Every panel has a real thickness, straps lie on the surfaces they cross and close with buckles, and a satchel's strap hangs from D-rings.
 
+Departures from the prototype's chests: each style rolls only the options it shows. Iron hoops go on barrels, shipping straps and rope handles on crates (the prototype ignored `bands` and `handles` there), and `lock` is an amphora's lid. Coffers and strongboxes can stand open as well as chests. A coffer's crowning stone is a gemstone in the state, not the second colour, and stencils can go on barrels as well as crates. A lidded box is hollow, with walls, a rim and a darker inside, so an open lid shows a real interior with the hoard heaped in it. Its lid turns on hinges and carries its hasp and bands. An amphora is clay (the stone material) tinted with its glaze colour, and stencils are the paint material.
+
 ## Classes
 
 `data/outfits.json`: Fighter, Ranger, Mage and Cleric, plus Freshly fallen and Scavenger. Each slot lists candidate bases, optionally with a leading probability. A class's set is rolled once per character, so the outfit you preview is the one you get.

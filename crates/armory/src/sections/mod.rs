@@ -8,8 +8,10 @@
 //! - [`ranged`]: limbs, string and arrow of bows and crossbows.
 //! - [`blade`]: the blade and guard of swords, daggers and spears.
 //! - [`fabric`]: textiles and fabric patterns (bags, garments, hems, a chest's glaze).
+//! - [`device`]: emblems engraved, painted or stencilled (signets, shields, crates).
 
 pub mod blade;
+pub mod device;
 pub mod fabric;
 pub mod hafted;
 pub mod head;
