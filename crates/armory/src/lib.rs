@@ -1,0 +1,71 @@
+//! # armory
+//!
+//! The Rust port of Spline Armory. Two halves, kept apart on purpose:
+//!
+//! 1. **State**: an [`ItemState`] is every parameter of one item (family, seed, and each
+//!    section's values: shaft, blade, guard, pommel, head, limbs, garment, helm, bag, food...).
+//!    `roll(family, seed)` is the "Forge new" of the prototype, rebuilt: seeded, deterministic,
+//!    and free to grow beyond the prototype's sliders.
+//! 2. **Geometry**: `build(&ItemState) -> ItemMesh` turns a state into plain mesh data
+//!    (positions, normals, indices, a material slot per part, and the smoothed outline
+//!    normals the ink pass needs). The game crate converts that to Bevy meshes.
+//!
+//! Nothing here depends on Bevy, so Heroes' Hold and a future native Spline Armory can share it.
+//!
+//! Starting point: `reference/spline-armory.html` and `reference/spline_armory_engine.js`.
+//! Example output: `fixtures/armory/<family>.json` (64 seeds per family), for reference only.
+
+use serde::{Deserialize, Serialize};
+
+/// The eighteen Armory families, in the order the prototype lists them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Family {
+    Staff, Mace, Sword, Spear, Dagger, Bow, Crossbow, Helm, Garment, Hands, Feet, Shield, Ring, Amulet, Charm, Bags, Chests, Food,
+}
+
+impl Family {
+    pub const ALL: [Family; 18] = [
+        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Bow, Family::Crossbow,
+        Family::Helm, Family::Garment, Family::Hands, Family::Feet, Family::Shield, Family::Ring, Family::Amulet,
+        Family::Charm, Family::Bags, Family::Chests, Family::Food,
+    ];
+    pub fn key(self) -> &'static str {
+        match self {
+            Family::Staff => "staff", Family::Mace => "mace", Family::Sword => "sword", Family::Spear => "spear",
+            Family::Dagger => "dagger", Family::Bow => "bow", Family::Crossbow => "crossbow", Family::Helm => "helm",
+            Family::Garment => "garment", Family::Hands => "hands", Family::Feet => "feet", Family::Shield => "shield",
+            Family::Ring => "ring", Family::Amulet => "amulet", Family::Charm => "charm", Family::Bags => "bags",
+            Family::Chests => "chests", Family::Food => "food",
+        }
+    }
+}
+
+/// One item's full parameter set. Untyped for now, in the prototype's JSON shape so the
+/// example fixtures load; replace with typed sections family by family.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ItemState {
+    pub family: Family,
+    pub seed: u32,
+    #[serde(flatten)]
+    pub sections: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A row of an example fixture: the seed, the generated name, and the prototype's state.
+#[derive(Clone, Debug, Deserialize)]
+pub struct FixtureRow {
+    pub seed: u32,
+    pub name: String,
+    pub state: ItemState,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Fixture {
+    pub family: Family,
+    pub count: usize,
+    pub rows: Vec<FixtureRow>,
+}
+
+// TODO(port): pub fn roll(family: Family, seed: u32) -> ItemState
+// TODO(port): pub fn noun(state: &ItemState) -> String   (forgeNoun in the reference)
+// TODO(port): pub fn build(state: &ItemState) -> ItemMesh

@@ -1,0 +1,180 @@
+[
+ {
+  "n": "Warm",
+  "k": "pre",
+  "g": 1,
+  "on": "cloth",
+  "fx": "fn: it=>{it.warmth+=2}",
+  "t": "+2 warmth"
+ },
+ {
+  "n": "Featherlight",
+  "k": "pre",
+  "g": 1,
+  "on": "wear",
+  "fx": "fn: it=>{it.wt=+(it.wt*.6).toFixed(1)}",
+  "t": "Weighs 40% less"
+ },
+ {
+  "n": "Hardened",
+  "k": "pre",
+  "g": 1,
+  "on": "armor",
+  "fx": "fn: it=>{it.ac+=1}",
+  "t": "+1 armour"
+ },
+ {
+  "n": "Silent",
+  "k": "pre",
+  "g": 1,
+  "on": "quiet",
+  "t": "Stealth +2"
+ },
+ {
+  "n": "Keen",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": "fn: it=>{it.dmgB+=1}",
+  "t": "+1 damage"
+ },
+ {
+  "n": "Balanced",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "t": "+1 to hit"
+ },
+ {
+  "n": "Gleaming",
+  "k": "pre",
+  "g": 1,
+  "on": "light",
+  "fx": "fn: it=>{it.light+=10}",
+  "t": "+10 ft of light"
+ },
+ {
+  "n": "Long-burning",
+  "k": "pre",
+  "g": 1,
+  "on": "light",
+  "t": "Burns twice as long"
+ },
+ {
+  "n": "Moth-eaten",
+  "k": "pre",
+  "g": 0,
+  "on": "cloth",
+  "fx": "fn: it=>{it.warmth=Math.max(0,it.warmth-1)}",
+  "t": "−1 warmth"
+ },
+ {
+  "n": "Mildewed",
+  "k": "pre",
+  "g": 0,
+  "on": "cloth",
+  "t": "Disease risk up"
+ },
+ {
+  "n": "Lice-ridden",
+  "k": "pre",
+  "g": 0,
+  "on": "cloth",
+  "t": "Itching · disease risk up"
+ },
+ {
+  "n": "Rusted",
+  "k": "pre",
+  "g": 0,
+  "on": "metal",
+  "fx": "fn: it=>{if(it.dmg) it.dmgB-=1; else it.ac=Math.max(0,it.ac-1)}",
+  "t": "Weakened by rust"
+ },
+ {
+  "n": "Squeaking",
+  "k": "pre",
+  "g": 0,
+  "on": "quiet",
+  "t": "Stealth −2"
+ },
+ {
+  "n": "Smoky",
+  "k": "pre",
+  "g": 0,
+  "on": "light",
+  "fx": "fn: it=>{it.light-=5}",
+  "t": "−5 ft of light · stings the eyes"
+ },
+ {
+  "n": "Cracked",
+  "k": "pre",
+  "g": 0,
+  "on": "wood",
+  "t": "May break on a hard blow"
+ },
+ {
+  "n": "of the Mole",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "t": "Darkvision 10 ft"
+ },
+ {
+  "n": "of Plenty",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "t": "Hunger 15% slower"
+ },
+ {
+  "n": "of the Hearth",
+  "k": "suf",
+  "g": 1,
+  "on": "wear",
+  "fx": "fn: it=>{it.warmth+=2}",
+  "t": "+2 warmth"
+ },
+ {
+  "n": "of Thieves",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "t": "Lockpicking +2"
+ },
+ {
+  "n": "of the Ox",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": "fn: it=>{it.carry+=25}",
+  "t": "+25 lb carrying"
+ },
+ {
+  "n": "of Wakefulness",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "t": "Fatigue 15% slower"
+ },
+ {
+  "n": "of Quiet Steps",
+  "k": "suf",
+  "g": 1,
+  "on": "quiet",
+  "t": "Stealth +2"
+ },
+ {
+  "n": "of Lesser Warding",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "t": "Resists disease"
+ },
+ {
+  "n": "of the Leech",
+  "k": "suf",
+  "g": 1,
+  "on": "weapon",
+  "t": "Heal 1 on a kill"
+ }
+]

@@ -1,0 +1,13 @@
+[package]
+name = "fb_items"
+description = "Forever Below items on top of armory: rarity, prefixes and suffixes, stats, footprints, provenance."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+armory = { workspace = true }
+procgen_rng = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

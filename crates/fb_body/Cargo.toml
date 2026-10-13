@@ -1,0 +1,12 @@
+[package]
+name = "fb_body"
+description = "Procedural folk bodies, faces, hair and the fitting of worn and held gear. No Bevy dependency."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+procgen_rng = { workspace = true }
+armory = { workspace = true }
+serde = { workspace = true }

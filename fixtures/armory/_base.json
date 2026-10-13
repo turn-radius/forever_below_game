@@ -1,0 +1,4202 @@
+{
+ "BASE": {
+  "cond": {
+   "state": "pristine",
+   "wear": 0,
+   "rust": 1,
+   "patina": 1,
+   "rot": 1,
+   "fray": 1,
+   "damage": 0,
+   "broken": false,
+   "scale": 1.6
+  },
+  "render": {
+   "pose": "diagonal",
+   "bands": 3,
+   "outline": 0.032,
+   "lightAz": -40,
+   "lightEl": 42,
+   "spin": false,
+   "metal": "#8f9ca3",
+   "accent": "#b58a3c",
+   "wood": "#7b5434",
+   "leather": "#4a3227",
+   "string": "#d8ccb0",
+   "fletch": "#e3ddcc",
+   "gold": "#c9a13b",
+   "silver": "#c3c8cc",
+   "bone": "#e2d6bb",
+   "stone": "#8f928b"
+  },
+  "shaft": {
+   "length": 5,
+   "radius": 0.15,
+   "taper": 1.08,
+   "gnarl": 0,
+   "gnarlFreq": 3,
+   "bands": 0,
+   "bandSize": 0.03,
+   "material": "wood"
+  },
+  "grip": {
+   "on": true,
+   "position": 0,
+   "length": 1.5,
+   "thickness": 1.18,
+   "rivets": 0,
+   "material": "wood"
+  },
+  "wrap": {
+   "on": true,
+   "turns": 14,
+   "cord": 0.032,
+   "coverage": 0.9,
+   "cross": false,
+   "bind": true,
+   "material": "leather"
+  },
+  "pommel": {
+   "on": true,
+   "style": "ball",
+   "length": 0.45,
+   "radius": 0.24,
+   "facets": 16,
+   "material": "metal",
+   "gem": "none",
+   "gemCount": 6,
+   "gemSize": 0.05,
+   "gemColor": "#a8323a"
+  },
+  "collar": {
+   "on": true,
+   "bands": 2,
+   "height": 0.12,
+   "radius": 1.45,
+   "facets": 16,
+   "material": "metal"
+  },
+  "head": {
+   "style": "orb",
+   "length": 1.4,
+   "radius": 0.45,
+   "belly": 0.5,
+   "facets": 16,
+   "material": "metal"
+  },
+  "flanges": {
+   "on": false,
+   "count": 6,
+   "phase": 0,
+   "height": 0.9,
+   "bias": 0,
+   "shape": "blade",
+   "depth": 0.5,
+   "thickness": 0.06,
+   "notch": 0,
+   "pierce": false,
+   "lean": 0,
+   "material": "metal"
+  },
+  "spikes": {
+   "on": false,
+   "count": 7,
+   "rings": 3,
+   "pattern": "stagger",
+   "spread": 0.72,
+   "bias": 0,
+   "hemi": "both",
+   "twist": 0,
+   "phase": 0,
+   "jitter": 0,
+   "length": 0.4,
+   "base": 0.1,
+   "sides": 6,
+   "concave": 0.3,
+   "tilt": 0,
+   "falloff": 0.25,
+   "material": "metal"
+  },
+  "prongs": {
+   "on": false,
+   "count": 4,
+   "height": 1.6,
+   "spread": 0.5,
+   "curl": 0.65,
+   "thickness": 0.06,
+   "twist": 0.12,
+   "base": 0.9,
+   "phase": 45,
+   "material": "wood"
+  },
+  "finial": {
+   "style": "none",
+   "length": 0.45,
+   "radius": 0.1,
+   "sides": 8,
+   "material": "metal"
+  },
+  "gem": {
+   "on": false,
+   "cut": "brilliant",
+   "size": 0.34,
+   "color": "#6d4bb3",
+   "lift": 0.55,
+   "glow": 0.5,
+   "bob": true
+  },
+  "blade": {
+   "length": 7.5,
+   "width": 0.5,
+   "baseNarrow": 1,
+   "belly": 0,
+   "bellyWidth": 1,
+   "taper": 0.45,
+   "pointStart": 0.78,
+   "pointShape": 0.35,
+   "curve": 0,
+   "spine": 0,
+   "clip": 0.8,
+   "waves": 0,
+   "waveAmp": 0.08,
+   "ricasso": 0,
+   "section": "lenticular",
+   "thickness": 0.07,
+   "fuller": 0.5,
+   "fullerLen": 0.62,
+   "fullerWidth": 0.22,
+   "fullers": 1,
+   "material": "metal"
+  },
+  "guard": {
+   "on": true,
+   "style": "cross",
+   "mount": "socket",
+   "span": 1,
+   "radius": 0.05,
+   "curve": 0.1,
+   "scurve": false,
+   "taper": 0.35,
+   "curl": 0,
+   "ends": "flare",
+   "endSize": 0.06,
+   "block": 0.2,
+   "blockH": 0.14,
+   "langets": 0,
+   "material": "metal",
+   "gem": false,
+   "gemSize": 0.05,
+   "gemColor": "#a8323a"
+  },
+  "socket": {
+   "on": true,
+   "length": 1.3,
+   "radius": 1.2,
+   "rings": 2,
+   "facets": 8,
+   "langets": 0,
+   "langetLen": 1.2,
+   "material": "metal"
+  },
+  "limbs": {
+   "shape": "longbow",
+   "length": 18,
+   "brace": 1.6,
+   "width": 0.16,
+   "thickness": 0.12,
+   "taper": 0.55,
+   "recurve": 0,
+   "siyah": 0,
+   "material": "wood",
+   "nocks": "horn",
+   "nockMat": "accent"
+  },
+  "string": {
+   "thickness": 0.016,
+   "draw": 0,
+   "spanned": true,
+   "serving": true
+  },
+  "riser": {
+   "length": 1.2,
+   "thickness": 0.2,
+   "width": 0.16,
+   "material": "wood",
+   "wrap": true,
+   "turns": 12,
+   "wrapMat": "leather"
+  },
+  "stock": {
+   "length": 7,
+   "buttW": 0.55,
+   "midW": 0.26,
+   "frontW": 0.34,
+   "depth": 0.32,
+   "prodSet": 0.5,
+   "nut": 0.55,
+   "material": "wood",
+   "stirrup": true,
+   "stirrupSize": 0.8,
+   "inlay": true,
+   "trigger": true,
+   "lashings": 2
+  },
+  "arrow": {
+   "on": false,
+   "length": 7.5,
+   "radius": 0.028,
+   "head": "bodkin",
+   "headLen": 0.4,
+   "headW": 0.12,
+   "material": "wood",
+   "fletches": 3,
+   "fletchShape": "shield",
+   "fletchLen": 1.1,
+   "fletchH": 0.13
+  },
+  "band": {
+   "profile": "round",
+   "inner": 0.18,
+   "width": 0.03,
+   "thickness": 0.02,
+   "shoulder": 0.4,
+   "strands": 1,
+   "twists": 7,
+   "sideStones": 0,
+   "material": "gold"
+  },
+  "setting": {
+   "style": "prongs",
+   "height": 0.03,
+   "prongs": 4,
+   "halo": 10,
+   "table": "oval",
+   "tableSize": 0.13,
+   "device": "tower",
+   "material": "gold"
+  },
+  "stone": {
+   "cut": "brilliant",
+   "size": 0.05,
+   "color": "#a8323a"
+  },
+  "pendant": {
+   "shape": "disc",
+   "size": 0.42,
+   "thickness": 0.035,
+   "rim": 0.1,
+   "centre": "device",
+   "device": "star",
+   "drops": 0,
+   "material": "gold"
+  },
+  "chain": {
+   "style": "cable",
+   "drop": 1.5,
+   "link": 0.05,
+   "thickness": 0.008,
+   "material": "gold",
+   "frame": "close"
+  },
+  "charm": {
+   "shape": "fang",
+   "size": 0.45,
+   "girth": 1,
+   "curve": 0.6,
+   "detail": 3,
+   "facets": 12,
+   "bands": 2,
+   "stone": false,
+   "device": "none",
+   "material": "bone"
+  },
+  "loop": {
+   "style": "cord",
+   "size": 0.06,
+   "beads": 2,
+   "material": "string"
+  },
+  "helm": {
+   "style": "kettle",
+   "radius": 1.05,
+   "height": 1.3,
+   "point": 0.3,
+   "facets": 24,
+   "brim": 0.7,
+   "droop": 0.45,
+   "tail": 0,
+   "material": "metal"
+  },
+  "fittings": {
+   "browband": true,
+   "rivets": 0,
+   "bands": 0,
+   "nasal": false,
+   "comb": 0,
+   "material": "metal"
+  },
+  "aventail": {
+   "on": false,
+   "length": 1.5,
+   "flare": 0.4,
+   "ringSize": 7,
+   "material": "metal"
+  },
+  "crest": {
+   "style": "none",
+   "size": 1.6,
+   "count": 5,
+   "color": "#a3262a",
+   "material": "bone"
+  },
+  "garment": {
+   "style": "tunic",
+   "length": 2.6,
+   "fit": 1.05,
+   "flare": 0.35,
+   "folds": 0.5,
+   "sleeves": "short",
+   "sleeveFlare": 0.15,
+   "armAngle": 28,
+   "neck": "round",
+   "color": "#6a7f3a",
+   "pattern": "none",
+   "color2": "#e0d4b0",
+   "patScale": 2,
+   "material": "metal"
+  },
+  "hem": {
+   "on": true,
+   "width": 0.35,
+   "color": "#c09a3a",
+   "pattern": "chevron",
+   "color2": "#7a2f22",
+   "patScale": 4,
+   "hemline": true,
+   "neck": true,
+   "cuffs": true,
+   "front": false
+  },
+  "belt": {
+   "on": true,
+   "width": 0.35,
+   "material": "leather",
+   "buckle": "accent"
+  },
+  "plates": {
+   "faulds": 3,
+   "ridge": 0.6,
+   "pauldrons": false,
+   "lames": 3,
+   "ringSize": 7
+  },
+  "shield": {
+   "shape": "heater",
+   "size": 7,
+   "width": 0.85,
+   "curve": 0.45,
+   "thickness": 0.14,
+   "material": "wood"
+  },
+  "field": {
+   "painted": true,
+   "division": "plain",
+   "tincture": "#2c4e8c",
+   "tincture2": "#e8e6df",
+   "charge": "tower",
+   "chargeColor": "#d4a838",
+   "chargeSize": 0.5
+  },
+  "rim": {
+   "rim": true,
+   "rimWidth": 0.1,
+   "rimMaterial": "metal",
+   "boss": false,
+   "bossSize": 1,
+   "bossMaterial": "metal",
+   "studs": 0
+  },
+  "hand": {
+   "style": "gauntlet",
+   "size": 1,
+   "curl": 0.25,
+   "spread": 0.3,
+   "cuff": 1.2,
+   "flare": 0.5,
+   "lames": 4,
+   "gadlings": false,
+   "material": "leather",
+   "plate": "metal"
+  },
+  "boot": {
+   "style": "boot",
+   "size": 1,
+   "width": 1,
+   "height": 3.6,
+   "toe": 0,
+   "cuff": 0.35,
+   "straps": 1,
+   "lames": 5,
+   "knee": true,
+   "material": "leather",
+   "sole": "leather",
+   "plate": "metal",
+   "color": "#6b5a44",
+   "color2": "#cbbf9f"
+  },
+  "bag": {
+   "style": "backpack",
+   "size": 1,
+   "shape": 0.5,
+   "fabric": "leather",
+   "color": "#6b4a2e",
+   "color2": "#7a8a5a",
+   "pattern": "none",
+   "patScale": 3,
+   "fittings": "metal",
+   "coins": false,
+   "pocket": true,
+   "bedroll": true,
+   "patch": false
+  },
+  "chest": {
+   "style": "chest",
+   "size": 1,
+   "shape": 0.5,
+   "open": 0,
+   "treasure": false,
+   "bands": 3,
+   "studs": true,
+   "lock": true,
+   "handles": true,
+   "material": "wood",
+   "fittings": "metal",
+   "device": "none",
+   "color": "#b8673a",
+   "pattern": "hoops",
+   "color2": "#2a1d14",
+   "patScale": 3
+  },
+  "food": {
+   "style": "loaf",
+   "size": 1,
+   "shape": 0.5,
+   "count": 3,
+   "fill": 0.7,
+   "cut": true,
+   "glow": 0.5,
+   "color": "#b8752f",
+   "color2": "#ecd29a",
+   "material": "wood"
+  },
+  "etch": {
+   "on": false,
+   "pattern": "scroll",
+   "target": "metals",
+   "scale": 4,
+   "weight": 0.08,
+   "coverage": 1,
+   "mode": "dark",
+   "color": "#d4a838"
+  }
+ },
+ "PRESETS": {
+  "mace": {
+   "Pernach": {
+    "shaft": {
+     "length": 4.6,
+     "radius": 0.15,
+     "taper": 1.08,
+     "material": "metal",
+     "bands": 0
+    },
+    "grip": {
+     "on": true,
+     "position": 0,
+     "length": 1.5,
+     "thickness": 1.2,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": true,
+     "turns": 12,
+     "cord": 0.03,
+     "coverage": 0.85,
+     "cross": false,
+     "bind": true,
+     "material": "leather"
+    },
+    "pommel": {
+     "on": true,
+     "style": "flared",
+     "length": 0.45,
+     "radius": 0.24,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "collar": {
+     "on": true,
+     "bands": 2,
+     "height": 0.12,
+     "radius": 1.45,
+     "facets": 8,
+     "material": "accent"
+    },
+    "head": {
+     "style": "pear",
+     "length": 1.4,
+     "radius": 0.22,
+     "belly": 0.6,
+     "facets": 8,
+     "material": "metal"
+    },
+    "flanges": {
+     "on": true,
+     "count": 7,
+     "phase": 0,
+     "height": 0.9,
+     "bias": 0,
+     "shape": "blade",
+     "depth": 0.5,
+     "thickness": 0.06,
+     "notch": 0.35,
+     "pierce": true,
+     "lean": 0,
+     "material": "metal"
+    },
+    "spikes": {
+     "on": false
+    },
+    "prongs": {
+     "on": false
+    },
+    "finial": {
+     "style": "knob",
+     "length": 0.3,
+     "radius": 0.1,
+     "sides": 8,
+     "material": "accent"
+    },
+    "gem": {
+     "on": false
+    }
+   },
+   "Morningstar": {
+    "shaft": {
+     "length": 5.2,
+     "radius": 0.17,
+     "taper": 1.15,
+     "material": "wood",
+     "bands": 2,
+     "bandSize": 0.035
+    },
+    "grip": {
+     "on": true,
+     "position": 0,
+     "length": 1.7,
+     "thickness": 1.12,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": true,
+     "turns": 16,
+     "cord": 0.03,
+     "coverage": 0.9,
+     "cross": true,
+     "bind": true,
+     "material": "leather"
+    },
+    "pommel": {
+     "on": true,
+     "style": "ball",
+     "length": 0.4,
+     "radius": 0.22,
+     "facets": 16,
+     "material": "metal",
+     "gem": "none"
+    },
+    "collar": {
+     "on": true,
+     "bands": 1,
+     "height": 0.3,
+     "radius": 1.5,
+     "facets": 8,
+     "material": "metal"
+    },
+    "head": {
+     "style": "orb",
+     "length": 1.5,
+     "radius": 0.6,
+     "belly": 0.5,
+     "facets": 20,
+     "material": "metal"
+    },
+    "flanges": {
+     "on": false
+    },
+    "spikes": {
+     "on": true,
+     "count": 7,
+     "rings": 3,
+     "pattern": "stagger",
+     "spread": 0.72,
+     "bias": 0,
+     "hemi": "both",
+     "twist": 0,
+     "phase": 0,
+     "jitter": 0,
+     "length": 0.42,
+     "base": 0.1,
+     "sides": 4,
+     "concave": 0.3,
+     "tilt": 0,
+     "falloff": 0.25,
+     "material": "metal"
+    },
+    "prongs": {
+     "on": false
+    },
+    "finial": {
+     "style": "spike",
+     "length": 0.5,
+     "radius": 0.1,
+     "sides": 4,
+     "material": "metal"
+    },
+    "gem": {
+     "on": false
+    }
+   },
+   "Shestopyor": {
+    "shaft": {
+     "length": 4.4,
+     "radius": 0.14,
+     "taper": 1.05,
+     "material": "metal",
+     "bands": 3,
+     "bandSize": 0.025
+    },
+    "grip": {
+     "on": true,
+     "position": 0,
+     "length": 1.4,
+     "thickness": 1.25,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "disc",
+     "length": 0.35,
+     "radius": 0.26,
+     "facets": 12,
+     "material": "accent",
+     "gem": "ring",
+     "gemCount": 6,
+     "gemSize": 0.045,
+     "gemColor": "#a8323a"
+    },
+    "collar": {
+     "on": true,
+     "bands": 3,
+     "height": 0.08,
+     "radius": 1.4,
+     "facets": 12,
+     "material": "accent"
+    },
+    "head": {
+     "style": "drum",
+     "length": 1.3,
+     "radius": 0.18,
+     "belly": 0.5,
+     "facets": 6,
+     "material": "metal"
+    },
+    "flanges": {
+     "on": true,
+     "count": 6,
+     "phase": 0,
+     "height": 0.95,
+     "bias": 0,
+     "shape": "stepped",
+     "depth": 0.48,
+     "thickness": 0.07,
+     "notch": 0,
+     "pierce": false,
+     "lean": 0,
+     "material": "metal"
+    },
+    "spikes": {
+     "on": false
+    },
+    "prongs": {
+     "on": false
+    },
+    "finial": {
+     "style": "spire",
+     "length": 0.55,
+     "radius": 0.1,
+     "sides": 6,
+     "material": "accent"
+    },
+    "gem": {
+     "on": false
+    }
+   },
+   "Bishop's mace": {
+    "shaft": {
+     "length": 5,
+     "radius": 0.15,
+     "taper": 1.1,
+     "material": "accent",
+     "bands": 4,
+     "bandSize": 0.03
+    },
+    "grip": {
+     "on": true,
+     "position": 0.05,
+     "length": 1.5,
+     "thickness": 1.15,
+     "material": "leather"
+    },
+    "wrap": {
+     "on": true,
+     "turns": 9,
+     "cord": 0.035,
+     "coverage": 0.8,
+     "cross": true,
+     "bind": true,
+     "material": "accent"
+    },
+    "pommel": {
+     "on": true,
+     "style": "ball",
+     "length": 0.5,
+     "radius": 0.24,
+     "facets": 24,
+     "material": "accent",
+     "gem": "end",
+     "gemSize": 0.09,
+     "gemColor": "#9b2d3f"
+    },
+    "collar": {
+     "on": true,
+     "bands": 2,
+     "height": 0.15,
+     "radius": 1.6,
+     "facets": 24,
+     "material": "accent"
+    },
+    "head": {
+     "style": "onion",
+     "length": 1.3,
+     "radius": 0.5,
+     "belly": 0.38,
+     "facets": 24,
+     "material": "accent"
+    },
+    "flanges": {
+     "on": true,
+     "count": 8,
+     "phase": 0,
+     "height": 0.55,
+     "bias": -0.05,
+     "shape": "fan",
+     "depth": 0.18,
+     "thickness": 0.04,
+     "notch": 0,
+     "pierce": false,
+     "lean": 0,
+     "material": "accent"
+    },
+    "spikes": {
+     "on": false
+    },
+    "prongs": {
+     "on": true,
+     "count": 4,
+     "height": 0.8,
+     "spread": 0.18,
+     "curl": 0.85,
+     "thickness": 0.04,
+     "twist": 0,
+     "base": 0.6,
+     "phase": 45,
+     "material": "accent"
+    },
+    "finial": {
+     "style": "none"
+    },
+    "gem": {
+     "on": true,
+     "cut": "brilliant",
+     "size": 0.26,
+     "color": "#9b2d3f",
+     "lift": 0.6,
+     "glow": 0.35,
+     "bob": false
+    }
+   }
+  },
+  "staff": {
+   "Seer's staff": {
+    "shaft": {
+     "length": 16,
+     "radius": 0.17,
+     "taper": 1.12,
+     "gnarl": 0.45,
+     "gnarlFreq": 2.5,
+     "material": "wood",
+     "bands": 0
+    },
+    "grip": {
+     "on": true,
+     "position": 0.48,
+     "length": 2.3,
+     "thickness": 1.1,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": true,
+     "turns": 20,
+     "cord": 0.028,
+     "coverage": 0.95,
+     "cross": true,
+     "bind": true,
+     "material": "leather"
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.8,
+     "radius": 0.2,
+     "facets": 12,
+     "material": "accent",
+     "gem": "none"
+    },
+    "collar": {
+     "on": true,
+     "bands": 1,
+     "height": 0.22,
+     "radius": 1.35,
+     "facets": 12,
+     "material": "accent"
+    },
+    "head": {
+     "style": "cup",
+     "length": 0.75,
+     "radius": 0.32,
+     "belly": 0.5,
+     "facets": 12,
+     "material": "wood"
+    },
+    "flanges": {
+     "on": false
+    },
+    "spikes": {
+     "on": false
+    },
+    "prongs": {
+     "on": true,
+     "count": 4,
+     "height": 1.7,
+     "spread": 0.5,
+     "curl": 0.7,
+     "thickness": 0.065,
+     "twist": 0.12,
+     "base": 0.9,
+     "phase": 45,
+     "material": "wood"
+    },
+    "finial": {
+     "style": "none"
+    },
+    "gem": {
+     "on": true,
+     "cut": "brilliant",
+     "size": 0.36,
+     "color": "#6d4bb3",
+     "lift": 0.55,
+     "glow": 0.55,
+     "bob": true
+    }
+   },
+   "Quarterstaff": {
+    "shaft": {
+     "length": 17,
+     "radius": 0.15,
+     "taper": 1,
+     "gnarl": 0,
+     "material": "wood",
+     "bands": 4,
+     "bandSize": 0.03
+    },
+    "grip": {
+     "on": false,
+     "position": 0.42,
+     "length": 3,
+     "thickness": 1.1
+    },
+    "wrap": {
+     "on": true,
+     "turns": 30,
+     "cord": 0.02,
+     "coverage": 0.9,
+     "cross": false,
+     "bind": true,
+     "material": "leather"
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.6,
+     "radius": 0.17,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "collar": {
+     "on": true,
+     "bands": 2,
+     "height": 0.08,
+     "radius": 1.2,
+     "facets": 8,
+     "material": "metal"
+    },
+    "head": {
+     "style": "drum",
+     "length": 0.5,
+     "radius": 0.17,
+     "belly": 0.5,
+     "facets": 8,
+     "material": "metal"
+    },
+    "flanges": {
+     "on": false
+    },
+    "spikes": {
+     "on": false
+    },
+    "prongs": {
+     "on": false
+    },
+    "finial": {
+     "style": "none"
+    },
+    "gem": {
+     "on": false
+    }
+   },
+   "Orb staff": {
+    "shaft": {
+     "length": 15,
+     "radius": 0.16,
+     "taper": 0.9,
+     "gnarl": 0.1,
+     "gnarlFreq": 2,
+     "material": "wood",
+     "bands": 0
+    },
+    "grip": {
+     "on": true,
+     "position": 0.5,
+     "length": 2,
+     "thickness": 1.15,
+     "material": "leather"
+    },
+    "wrap": {
+     "on": true,
+     "turns": 10,
+     "cord": 0.04,
+     "coverage": 0.7,
+     "cross": true,
+     "bind": true,
+     "material": "accent"
+    },
+    "pommel": {
+     "on": true,
+     "style": "spike",
+     "length": 0.9,
+     "radius": 0.2,
+     "facets": 6,
+     "material": "accent",
+     "gem": "ring",
+     "gemCount": 6,
+     "gemSize": 0.05,
+     "gemColor": "#2f8f86"
+    },
+    "collar": {
+     "on": true,
+     "bands": 3,
+     "height": 0.1,
+     "radius": 1.6,
+     "facets": 6,
+     "material": "accent"
+    },
+    "head": {
+     "style": "cup",
+     "length": 0.6,
+     "radius": 0.45,
+     "belly": 0.55,
+     "facets": 6,
+     "material": "accent"
+    },
+    "flanges": {
+     "on": false
+    },
+    "spikes": {
+     "on": false
+    },
+    "prongs": {
+     "on": true,
+     "count": 3,
+     "height": 1.4,
+     "spread": 0.75,
+     "curl": 0.95,
+     "thickness": 0.05,
+     "twist": 0.35,
+     "base": 1,
+     "phase": 0,
+     "material": "accent"
+    },
+    "finial": {
+     "style": "none"
+    },
+    "gem": {
+     "on": true,
+     "cut": "orb",
+     "size": 0.55,
+     "color": "#2f8f86",
+     "lift": 0.5,
+     "glow": 0.8,
+     "bob": true
+    }
+   },
+   "Thornwood staff": {
+    "shaft": {
+     "length": 15.5,
+     "radius": 0.19,
+     "taper": 1.3,
+     "gnarl": 0.95,
+     "gnarlFreq": 4,
+     "material": "wood",
+     "bands": 0
+    },
+    "grip": {
+     "on": false,
+     "position": 0.5,
+     "length": 2
+    },
+    "wrap": {
+     "on": true,
+     "turns": 6,
+     "cord": 0.05,
+     "coverage": 0.5,
+     "cross": false,
+     "bind": false,
+     "material": "leather"
+    },
+    "pommel": {
+     "on": false
+    },
+    "collar": {
+     "on": false
+    },
+    "head": {
+     "style": "onion",
+     "length": 0.8,
+     "radius": 0.34,
+     "belly": 0.4,
+     "facets": 9,
+     "material": "wood"
+    },
+    "flanges": {
+     "on": false
+    },
+    "spikes": {
+     "on": false
+    },
+    "prongs": {
+     "on": true,
+     "count": 6,
+     "height": 2,
+     "spread": 0.6,
+     "curl": 0.45,
+     "thickness": 0.06,
+     "twist": 0.45,
+     "base": 0.8,
+     "phase": 0,
+     "material": "wood"
+    },
+    "finial": {
+     "style": "none"
+    },
+    "gem": {
+     "on": true,
+     "cut": "shard",
+     "size": 0.32,
+     "color": "#4c9a52",
+     "lift": 0.55,
+     "glow": 0.4,
+     "bob": true
+    }
+   }
+  },
+  "sword": {
+   "Arming sword": {
+    "shaft": {
+     "length": 1.3,
+     "radius": 0.13,
+     "taper": 1,
+     "gnarl": 0,
+     "bands": 0,
+     "material": "wood"
+    },
+    "grip": {
+     "on": true,
+     "position": 0,
+     "length": 1.3,
+     "thickness": 1.15,
+     "material": "leather"
+    },
+    "wrap": {
+     "on": true,
+     "turns": 16,
+     "cord": 0.02,
+     "coverage": 1,
+     "cross": false,
+     "bind": true,
+     "material": "leather"
+    },
+    "pommel": {
+     "on": true,
+     "style": "wheelface",
+     "length": 0.5,
+     "radius": 0.28,
+     "facets": 20,
+     "material": "metal",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "span": 1,
+     "radius": 0.05,
+     "curve": 0.12,
+     "scurve": false,
+     "taper": 0.35,
+     "curl": 0,
+     "ends": "flare",
+     "endSize": 0.06,
+     "block": 0.2,
+     "blockH": 0.14,
+     "langets": 0,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 7.6,
+     "width": 0.5,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0.45,
+     "pointStart": 0.78,
+     "pointShape": 0.35,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "lenticular",
+     "thickness": 0.07,
+     "fuller": 0.55,
+     "fullerLen": 0.62,
+     "fullerWidth": 0.22,
+     "fullers": 1
+    }
+   },
+   "Longsword": {
+    "shaft": {
+     "length": 2.3,
+     "radius": 0.14
+    },
+    "grip": {
+     "length": 2.3
+    },
+    "wrap": {
+     "turns": 22,
+     "cross": true
+    },
+    "pommel": {
+     "on": true,
+     "style": "scent",
+     "length": 0.6,
+     "radius": 0.26,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "span": 1.25,
+     "radius": 0.045,
+     "curve": 0,
+     "scurve": false,
+     "taper": 0.3,
+     "curl": 0,
+     "ends": "none",
+     "block": 0.16,
+     "blockH": 0.16,
+     "langets": 0.35,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 9.2,
+     "width": 0.46,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0.6,
+     "pointStart": 0.65,
+     "pointShape": 0.15,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0.04,
+     "section": "diamond",
+     "thickness": 0.08,
+     "fuller": 0.4,
+     "fullerLen": 0.3,
+     "fullerWidth": 0.16,
+     "fullers": 1
+    }
+   },
+   "Falchion": {
+    "shaft": {
+     "length": 1.2
+    },
+    "grip": {
+     "length": 1.2
+    },
+    "wrap": {
+     "on": true,
+     "turns": 16,
+     "cord": 0.02,
+     "coverage": 1,
+     "cross": false,
+     "bind": true,
+     "material": "leather"
+    },
+    "pommel": {
+     "on": true,
+     "style": "wheelface",
+     "length": 0.4,
+     "radius": 0.22,
+     "facets": 16,
+     "material": "accent",
+     "gem": "end",
+     "gemSize": 0.05,
+     "gemColor": "#a8323a"
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "span": 0.75,
+     "radius": 0.05,
+     "curve": -0.35,
+     "scurve": false,
+     "taper": 0.2,
+     "curl": 0,
+     "ends": "ball",
+     "endSize": 0.07,
+     "block": 0.18,
+     "blockH": 0.12,
+     "langets": 0,
+     "material": "accent",
+     "gem": false
+    },
+    "blade": {
+     "length": 6.4,
+     "width": 0.58,
+     "baseNarrow": 0.85,
+     "belly": 0.8,
+     "bellyWidth": 1.45,
+     "taper": 0,
+     "pointStart": 0.9,
+     "pointShape": 0.7,
+     "curve": 0.05,
+     "spine": 0.9,
+     "clip": 0.78,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "flat",
+     "thickness": 0.06,
+     "fuller": 0
+    }
+   },
+   "Sabre": {
+    "shaft": {
+     "length": 1.35,
+     "radius": 0.12
+    },
+    "grip": {
+     "length": 1.35
+    },
+    "wrap": {
+     "cord": 0.016,
+     "turns": 24
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.35,
+     "radius": 0.15,
+     "facets": 12,
+     "material": "accent",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "span": 0.55,
+     "radius": 0.04,
+     "curve": 0,
+     "scurve": true,
+     "taper": 0.4,
+     "curl": 0.6,
+     "ends": "ball",
+     "endSize": 0.05,
+     "block": 0.14,
+     "blockH": 0.12,
+     "langets": 0,
+     "material": "accent",
+     "gem": false
+    },
+    "blade": {
+     "length": 7.9,
+     "width": 0.34,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0.25,
+     "pointStart": 0.86,
+     "pointShape": 0.55,
+     "curve": 0.55,
+     "spine": 0.85,
+     "clip": 0.88,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "lenticular",
+     "thickness": 0.06,
+     "fuller": 0.45,
+     "fullerLen": 0.72,
+     "fullerWidth": 0.2,
+     "fullers": 1
+    }
+   },
+   "Flamberge": {
+    "shaft": {
+     "length": 3.2,
+     "radius": 0.14
+    },
+    "grip": {
+     "length": 3.2
+    },
+    "wrap": {
+     "turns": 30,
+     "cross": true
+    },
+    "pommel": {
+     "on": true,
+     "style": "scent",
+     "length": 0.7,
+     "radius": 0.32,
+     "facets": 12,
+     "material": "metal",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "span": 1.7,
+     "radius": 0.055,
+     "curve": 0.3,
+     "scurve": false,
+     "taper": 0.2,
+     "curl": 0.8,
+     "ends": "none",
+     "block": 0.3,
+     "blockH": 0.2,
+     "langets": 0.5,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 11.5,
+     "width": 0.5,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0.45,
+     "pointStart": 0.82,
+     "pointShape": 0.3,
+     "curve": 0,
+     "spine": 0,
+     "waves": 10,
+     "waveAmp": 0.1,
+     "ricasso": 0.16,
+     "section": "diamond",
+     "thickness": 0.085,
+     "fuller": 0
+    }
+   },
+   "Gladius": {
+    "shaft": {
+     "length": 1,
+     "radius": 0.15
+    },
+    "grip": {
+     "length": 1,
+     "thickness": 1.35,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "ball",
+     "length": 0.55,
+     "radius": 0.34,
+     "facets": 20,
+     "material": "wood",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "disc",
+     "span": 0.5,
+     "radius": 0.09,
+     "material": "wood",
+     "gem": false
+    },
+    "blade": {
+     "length": 5,
+     "width": 0.54,
+     "baseNarrow": 0.94,
+     "belly": 0.5,
+     "bellyWidth": 1.05,
+     "taper": 0.05,
+     "pointStart": 0.82,
+     "pointShape": 0.15,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "diamond",
+     "thickness": 0.075,
+     "fuller": 0
+    }
+   }
+  },
+  "spear": {
+   "Leaf spear": {
+    "shaft": {
+     "length": 17,
+     "radius": 0.15,
+     "taper": 0.95,
+     "gnarl": 0.04,
+     "gnarlFreq": 2,
+     "bands": 0,
+     "material": "wood"
+    },
+    "grip": {
+     "on": false,
+     "position": 0.45,
+     "length": 2.4,
+     "thickness": 1.1,
+     "material": "leather"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.7,
+     "radius": 0.17,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "socket": {
+     "on": true,
+     "length": 1.4,
+     "radius": 1.2,
+     "rings": 2,
+     "facets": 8,
+     "langets": 0,
+     "langetLen": 1.2,
+     "material": "metal"
+    },
+    "guard": {
+     "on": false
+    },
+    "blade": {
+     "length": 3.2,
+     "width": 0.68,
+     "baseNarrow": 0.3,
+     "belly": 0.38,
+     "bellyWidth": 1.15,
+     "taper": 0.25,
+     "pointStart": 0.6,
+     "pointShape": 0.55,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "diamond",
+     "thickness": 0.08,
+     "fuller": 0
+    }
+   },
+   "Winged spear": {
+    "shaft": {
+     "length": 17,
+     "radius": 0.15,
+     "taper": 0.95,
+     "gnarl": 0.04,
+     "gnarlFreq": 2,
+     "bands": 0,
+     "material": "wood"
+    },
+    "grip": {
+     "on": false,
+     "position": 0.45,
+     "length": 2.4,
+     "thickness": 1.1,
+     "material": "leather"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.7,
+     "radius": 0.17,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "socket": {
+     "length": 1.5,
+     "rings": 3,
+     "langets": 2,
+     "langetLen": 1
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "mount": "socket",
+     "span": 0.42,
+     "radius": 0.07,
+     "curve": 0,
+     "scurve": false,
+     "taper": 0.7,
+     "curl": 0,
+     "ends": "none",
+     "block": 0,
+     "langets": 0,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 3.8,
+     "width": 0.62,
+     "baseNarrow": 0.25,
+     "belly": 0.3,
+     "bellyWidth": 1.1,
+     "taper": 0.3,
+     "pointStart": 0.58,
+     "pointShape": 0.4,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "diamond",
+     "thickness": 0.08,
+     "fuller": 0.35,
+     "fullerLen": 0.4,
+     "fullerWidth": 0.25,
+     "fullers": 2
+    }
+   },
+   "Boar spear": {
+    "shaft": {
+     "length": 14,
+     "radius": 0.17
+    },
+    "grip": {
+     "on": true,
+     "position": 0.52,
+     "length": 2.2,
+     "thickness": 1.08
+    },
+    "wrap": {
+     "on": true,
+     "turns": 14,
+     "cross": true,
+     "cord": 0.028,
+     "coverage": 0.9,
+     "bind": true,
+     "material": "leather"
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.7,
+     "radius": 0.17,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "socket": {
+     "on": true,
+     "length": 1.4,
+     "radius": 1.2,
+     "rings": 2,
+     "facets": 8,
+     "langets": 0,
+     "langetLen": 1.2,
+     "material": "metal"
+    },
+    "guard": {
+     "on": true,
+     "style": "bar",
+     "mount": "socket",
+     "span": 0.5,
+     "radius": 0.05,
+     "ends": "ball",
+     "endSize": 0.07,
+     "block": 0,
+     "langets": 0,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 2.8,
+     "width": 0.8,
+     "baseNarrow": 0.2,
+     "belly": 0.28,
+     "bellyWidth": 1,
+     "taper": 0,
+     "pointStart": 0.3,
+     "pointShape": 0,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "diamond",
+     "thickness": 0.1,
+     "fuller": 0
+    }
+   },
+   "Partisan": {
+    "shaft": {
+     "length": 18
+    },
+    "grip": {
+     "on": false,
+     "position": 0.45,
+     "length": 2.4,
+     "thickness": 1.1,
+     "material": "leather"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.7,
+     "radius": 0.17,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "socket": {
+     "length": 1.1,
+     "rings": 2,
+     "langets": 2,
+     "langetLen": 1.6
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "mount": "blade",
+     "span": 0.6,
+     "radius": 0.06,
+     "curve": 0.95,
+     "scurve": false,
+     "taper": 0.85,
+     "curl": 0.25,
+     "ends": "none",
+     "block": 0.12,
+     "blockH": 0.12,
+     "langets": 0,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 4.2,
+     "width": 0.5,
+     "baseNarrow": 0.7,
+     "belly": 0.15,
+     "bellyWidth": 0.85,
+     "taper": 0.15,
+     "pointStart": 0.7,
+     "pointShape": 0.1,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "diamond",
+     "thickness": 0.07,
+     "fuller": 0.3,
+     "fullerLen": 0.45,
+     "fullerWidth": 0.2,
+     "fullers": 1
+    }
+   },
+   "Awl pike": {
+    "shaft": {
+     "length": 19.5
+    },
+    "grip": {
+     "on": false,
+     "position": 0.45,
+     "length": 2.4,
+     "thickness": 1.1,
+     "material": "leather"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.7,
+     "radius": 0.17,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "socket": {
+     "length": 1,
+     "radius": 1.15,
+     "rings": 1,
+     "langets": 4,
+     "langetLen": 3.2
+    },
+    "guard": {
+     "on": true,
+     "style": "disc",
+     "mount": "blade",
+     "span": 0.3,
+     "radius": 0.05,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 3,
+     "width": 0.16,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0.55,
+     "pointStart": 0.15,
+     "pointShape": 0,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "diamond",
+     "thickness": 0.14,
+     "fuller": 0
+    }
+   }
+  },
+  "dagger": {
+   "Rondel dagger": {
+    "shaft": {
+     "length": 1.1,
+     "radius": 0.11
+    },
+    "grip": {
+     "on": true,
+     "position": 0,
+     "length": 1.2,
+     "thickness": 1.15,
+     "rivets": 0,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "disc",
+     "length": 0.14,
+     "radius": 0.26,
+     "facets": 16,
+     "material": "metal",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "disc",
+     "span": 0.27,
+     "radius": 0.03,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 3.2,
+     "width": 0.22,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0.7,
+     "pointStart": 0.2,
+     "pointShape": 0,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "diamond",
+     "thickness": 0.07,
+     "fuller": 0
+    }
+   },
+   "Ballock dagger": {
+    "shaft": {
+     "length": 1.1,
+     "radius": 0.12,
+     "taper": 1.15
+    },
+    "grip": {
+     "on": true,
+     "position": 0,
+     "length": 1.2,
+     "thickness": 1.15,
+     "rivets": 0,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "ball",
+     "length": 0.16,
+     "radius": 0.13,
+     "facets": 12,
+     "material": "wood",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "lobes",
+     "span": 0.2,
+     "radius": 0.04,
+     "material": "wood",
+     "gem": false
+    },
+    "blade": {
+     "length": 3,
+     "width": 0.26,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0.75,
+     "pointStart": 0.15,
+     "pointShape": 0,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "diamond",
+     "thickness": 0.065,
+     "fuller": 0
+    }
+   },
+   "Quillon dagger": {
+    "shaft": {
+     "length": 0.95
+    },
+    "grip": {
+     "on": true,
+     "position": 0,
+     "length": 1.2,
+     "thickness": 1.15,
+     "rivets": 0,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": true,
+     "turns": 10,
+     "cord": 0.018,
+     "coverage": 1,
+     "cross": false,
+     "bind": true,
+     "material": "leather"
+    },
+    "pommel": {
+     "on": true,
+     "style": "scent",
+     "length": 0.35,
+     "radius": 0.15,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "span": 0.5,
+     "radius": 0.03,
+     "curve": 0.25,
+     "scurve": false,
+     "taper": 0.3,
+     "curl": 0,
+     "ends": "ball",
+     "endSize": 0.035,
+     "block": 0.1,
+     "blockH": 0.08,
+     "langets": 0,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 2.8,
+     "width": 0.32,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0.55,
+     "pointStart": 0.7,
+     "pointShape": 0.3,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "lenticular",
+     "thickness": 0.05,
+     "fuller": 0.5,
+     "fullerLen": 0.5,
+     "fullerWidth": 0.2,
+     "fullers": 1
+    }
+   },
+   "Seax": {
+    "shaft": {
+     "length": 1,
+     "radius": 0.13
+    },
+    "grip": {
+     "length": 1,
+     "thickness": 1.1
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.2,
+     "radius": 0.12,
+     "facets": 12,
+     "material": "metal",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "bar",
+     "span": 0.14,
+     "radius": 0.03,
+     "ends": "none",
+     "block": 0,
+     "langets": 0,
+     "material": "accent",
+     "gem": false
+    },
+    "blade": {
+     "length": 3.4,
+     "width": 0.36,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0,
+     "pointStart": 0.82,
+     "pointShape": 0.2,
+     "curve": 0,
+     "spine": 1,
+     "clip": 0.62,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "flat",
+     "thickness": 0.07,
+     "fuller": 0.3,
+     "fullerLen": 0.6,
+     "fullerWidth": 0.1,
+     "fullers": 2
+    }
+   },
+   "Stiletto": {
+    "shaft": {
+     "length": 0.9,
+     "radius": 0.09
+    },
+    "grip": {
+     "on": true,
+     "position": 0,
+     "length": 1.2,
+     "thickness": 1.15,
+     "rivets": 0,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "ball",
+     "length": 0.2,
+     "radius": 0.12,
+     "facets": 8,
+     "material": "metal",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "span": 0.32,
+     "radius": 0.025,
+     "curve": 0,
+     "scurve": false,
+     "taper": 0.2,
+     "curl": 0,
+     "ends": "ball",
+     "endSize": 0.03,
+     "block": 0.06,
+     "blockH": 0.06,
+     "langets": 0,
+     "material": "metal",
+     "gem": false
+    },
+    "blade": {
+     "length": 2.6,
+     "width": 0.1,
+     "baseNarrow": 1,
+     "belly": 0,
+     "bellyWidth": 1,
+     "taper": 0.8,
+     "pointStart": 0.1,
+     "pointShape": 0,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "diamond",
+     "thickness": 0.075,
+     "fuller": 0
+    }
+   },
+   "Cinquedea": {
+    "shaft": {
+     "length": 1,
+     "radius": 0.12,
+     "taper": 1,
+     "gnarl": 0,
+     "bands": 0,
+     "material": "wood"
+    },
+    "grip": {
+     "thickness": 1.25,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "flared",
+     "length": 0.3,
+     "radius": 0.2,
+     "facets": 16,
+     "material": "accent",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "cross",
+     "span": 0.45,
+     "radius": 0.04,
+     "curve": 0.5,
+     "scurve": false,
+     "taper": 0.3,
+     "curl": 0,
+     "ends": "none",
+     "block": 0,
+     "langets": 0,
+     "material": "accent",
+     "gem": false
+    },
+    "blade": {
+     "length": 3.4,
+     "width": 0.9,
+     "baseNarrow": 1.15,
+     "belly": 0,
+     "bellyWidth": 1.15,
+     "taper": 0,
+     "pointStart": 0.08,
+     "pointShape": 0.1,
+     "curve": 0,
+     "spine": 0,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "lenticular",
+     "thickness": 0.06,
+     "fuller": 0.5,
+     "fullerLen": 0.45,
+     "fullerWidth": 0.12,
+     "fullers": 3
+    }
+   },
+   "Hunting knife": {
+    "shaft": {
+     "length": 1.05,
+     "radius": 0.12
+    },
+    "grip": {
+     "length": 1.05,
+     "thickness": 1.2,
+     "rivets": 3,
+     "material": "wood"
+    },
+    "wrap": {
+     "on": false
+    },
+    "pommel": {
+     "on": true,
+     "style": "ferrule",
+     "length": 0.12,
+     "radius": 0.13,
+     "facets": 12,
+     "material": "metal",
+     "gem": "none"
+    },
+    "guard": {
+     "on": true,
+     "style": "bar",
+     "span": 0.16,
+     "radius": 0.03,
+     "ends": "none",
+     "block": 0,
+     "langets": 0,
+     "material": "accent",
+     "gem": false
+    },
+    "blade": {
+     "length": 2.2,
+     "width": 0.38,
+     "baseNarrow": 0.9,
+     "belly": 0.55,
+     "bellyWidth": 1.05,
+     "taper": 0,
+     "pointStart": 0.7,
+     "pointShape": 0.65,
+     "curve": 0,
+     "spine": 1,
+     "clip": 0.75,
+     "waves": 0,
+     "ricasso": 0,
+     "section": "flat",
+     "thickness": 0.05,
+     "fuller": 0
+    }
+   }
+  },
+  "bow": {
+   "Longbow": {
+    "limbs": {
+     "shape": "longbow",
+     "length": 19,
+     "brace": 1.6,
+     "width": 0.15,
+     "thickness": 0.13,
+     "taper": 0.55,
+     "recurve": 0,
+     "siyah": 0,
+     "material": "wood",
+     "nocks": "horn",
+     "nockMat": "accent"
+    },
+    "string": {
+     "thickness": 0.016,
+     "draw": 0,
+     "serving": true
+    },
+    "riser": {
+     "length": 1.1,
+     "thickness": 0.19,
+     "width": 0.15,
+     "material": "wood",
+     "wrap": true,
+     "turns": 14,
+     "wrapMat": "leather"
+    },
+    "arrow": {
+     "on": true,
+     "length": 8,
+     "radius": 0.026,
+     "head": "bodkin",
+     "headLen": 0.45,
+     "headW": 0.11,
+     "fletches": 3,
+     "fletchShape": "shield",
+     "fletchLen": 1.1,
+     "fletchH": 0.12
+    }
+   },
+   "Hunting recurve": {
+    "limbs": {
+     "shape": "recurve",
+     "length": 14,
+     "brace": 1.9,
+     "width": 0.24,
+     "thickness": 0.08,
+     "taper": 0.5,
+     "recurve": 0.75,
+     "siyah": 0,
+     "material": "wood",
+     "nocks": "none"
+    },
+    "string": {
+     "draw": 0.55
+    },
+    "riser": {
+     "length": 1.4,
+     "thickness": 0.24,
+     "width": 0.2,
+     "material": "wood",
+     "wrap": true,
+     "turns": 10,
+     "wrapMat": "leather"
+    },
+    "arrow": {
+     "on": true,
+     "length": 7,
+     "head": "broadhead",
+     "headLen": 0.5,
+     "headW": 0.3,
+     "fletchShape": "parabolic",
+     "fletchLen": 1,
+     "fletchH": 0.14
+    }
+   },
+   "Horse bow": {
+    "limbs": {
+     "shape": "composite",
+     "length": 11.5,
+     "brace": 1.7,
+     "width": 0.2,
+     "thickness": 0.08,
+     "taper": 0.4,
+     "recurve": 0.8,
+     "siyah": 0.28,
+     "material": "wood",
+     "nocks": "horn",
+     "nockMat": "accent"
+    },
+    "string": {
+     "draw": 0.3
+    },
+    "riser": {
+     "length": 0.9,
+     "thickness": 0.2,
+     "width": 0.16,
+     "wrap": true,
+     "turns": 8,
+     "wrapMat": "leather"
+    },
+    "arrow": {
+     "on": true,
+     "length": 6.6,
+     "head": "leaf",
+     "headLen": 0.4,
+     "headW": 0.16,
+     "fletchShape": "parabolic",
+     "fletchLen": 0.9,
+     "fletchH": 0.12
+    }
+   },
+   "Self bow": {
+    "limbs": {
+     "shape": "reflex",
+     "length": 15,
+     "brace": 1.5,
+     "width": 0.2,
+     "thickness": 0.11,
+     "taper": 0.6,
+     "recurve": 0.3,
+     "siyah": 0,
+     "material": "wood",
+     "nocks": "none"
+    },
+    "string": {
+     "draw": 0
+    },
+    "riser": {
+     "length": 1,
+     "wrap": false
+    },
+    "arrow": {
+     "on": false
+    }
+   }
+  },
+  "crossbow": {
+   "Arbalest": {
+    "stock": {
+     "length": 8.5,
+     "buttW": 0.6,
+     "midW": 0.26,
+     "frontW": 0.36,
+     "depth": 0.34,
+     "prodSet": 0.45,
+     "nut": 0.52,
+     "material": "wood",
+     "stirrup": true,
+     "stirrupSize": 0.9,
+     "inlay": true,
+     "trigger": true,
+     "lashings": 2
+    },
+    "limbs": {
+     "shape": "recurve",
+     "length": 8,
+     "brace": 1.1,
+     "width": 0.16,
+     "thickness": 0.07,
+     "taper": 0.35,
+     "recurve": 0.2,
+     "siyah": 0,
+     "material": "metal",
+     "nocks": "cap",
+     "nockMat": "metal"
+    },
+    "string": {
+     "thickness": 0.022,
+     "spanned": true,
+     "serving": true
+    },
+    "arrow": {
+     "on": true,
+     "length": 3.4,
+     "radius": 0.045,
+     "head": "bodkin",
+     "headLen": 0.35,
+     "headW": 0.14,
+     "fletches": 2,
+     "fletchShape": "triangle",
+     "fletchLen": 0.7,
+     "fletchH": 0.12,
+     "material": "wood"
+    }
+   },
+   "Hunting crossbow": {
+    "stock": {
+     "length": 6.5,
+     "buttW": 0.5,
+     "midW": 0.22,
+     "frontW": 0.3,
+     "depth": 0.28,
+     "prodSet": 0.35,
+     "nut": 0.55,
+     "material": "wood",
+     "stirrup": false,
+     "inlay": true,
+     "trigger": true,
+     "lashings": 3
+    },
+    "limbs": {
+     "shape": "composite",
+     "length": 6.5,
+     "brace": 0.9,
+     "width": 0.2,
+     "thickness": 0.11,
+     "taper": 0.45,
+     "recurve": 0.5,
+     "siyah": 0.12,
+     "material": "wood",
+     "nocks": "horn",
+     "nockMat": "accent"
+    },
+    "string": {
+     "thickness": 0.02,
+     "spanned": false,
+     "serving": true
+    },
+    "arrow": {
+     "on": true,
+     "length": 3,
+     "radius": 0.04,
+     "head": "broadhead",
+     "headLen": 0.4,
+     "headW": 0.26,
+     "fletches": 2,
+     "fletchShape": "triangle",
+     "fletchLen": 0.6,
+     "fletchH": 0.11
+    }
+   },
+   "Latchbow": {
+    "stock": {
+     "length": 3.6,
+     "buttW": 0.3,
+     "midW": 0.18,
+     "frontW": 0.26,
+     "depth": 0.22,
+     "prodSet": 0.25,
+     "nut": 0.55,
+     "material": "wood",
+     "stirrup": false,
+     "inlay": false,
+     "trigger": true,
+     "lashings": 1
+    },
+    "limbs": {
+     "shape": "longbow",
+     "length": 4.2,
+     "brace": 0.6,
+     "width": 0.1,
+     "thickness": 0.05,
+     "taper": 0.4,
+     "recurve": 0,
+     "siyah": 0,
+     "material": "metal",
+     "nocks": "cap",
+     "nockMat": "metal"
+    },
+    "string": {
+     "thickness": 0.012,
+     "spanned": true,
+     "serving": false
+    },
+    "arrow": {
+     "on": true,
+     "length": 1.8,
+     "radius": 0.03,
+     "head": "bodkin",
+     "headLen": 0.2,
+     "headW": 0.08,
+     "fletches": 2,
+     "fletchShape": "triangle",
+     "fletchLen": 0.4,
+     "fletchH": 0.07
+    }
+   }
+  },
+  "helm": {
+   "Kettle hat": {
+    "helm": {
+     "style": "kettle",
+     "radius": 1.05,
+     "height": 1.3,
+     "point": 0.3,
+     "facets": 24,
+     "brim": 0.7,
+     "droop": 0.45,
+     "tail": 0,
+     "material": "metal"
+    },
+    "fittings": {
+     "browband": true,
+     "rivets": 12,
+     "bands": 0,
+     "nasal": false,
+     "comb": 0,
+     "material": "metal"
+    },
+    "aventail": {
+     "on": false
+    },
+    "crest": {
+     "style": "none"
+    },
+    "hem": {
+     "on": false
+    }
+   },
+   "Spangenhelm": {
+    "helm": {
+     "style": "nasal",
+     "radius": 1,
+     "height": 1.55,
+     "point": 0.6,
+     "facets": 4,
+     "brim": 0,
+     "tail": 0,
+     "material": "metal"
+    },
+    "fittings": {
+     "browband": true,
+     "rivets": 10,
+     "bands": 4,
+     "nasal": true,
+     "comb": 0,
+     "material": "accent"
+    },
+    "aventail": {
+     "on": true,
+     "length": 1.1,
+     "flare": 0.3,
+     "ringSize": 7,
+     "material": "metal"
+    },
+    "crest": {
+     "style": "none"
+    },
+    "hem": {
+     "on": false
+    }
+   },
+   "Bascinet": {
+    "helm": {
+     "style": "bascinet",
+     "radius": 1,
+     "height": 1.6,
+     "point": 0.7,
+     "facets": 28,
+     "brim": 0,
+     "tail": 0,
+     "material": "metal"
+    },
+    "fittings": {
+     "browband": false,
+     "rivets": 14,
+     "bands": 0,
+     "nasal": false,
+     "comb": 0,
+     "material": "accent"
+    },
+    "aventail": {
+     "on": true,
+     "length": 1.8,
+     "flare": 0.45,
+     "ringSize": 7,
+     "material": "metal"
+    },
+    "crest": {
+     "style": "none"
+    },
+    "hem": {
+     "on": true,
+     "width": 0.18,
+     "color": "#b58a3c",
+     "pattern": "none",
+     "hemline": true
+    }
+   },
+   "Great helm": {
+    "helm": {
+     "style": "greathelm",
+     "radius": 1.05,
+     "height": 1.7,
+     "point": 0.15,
+     "facets": 28,
+     "brim": 0,
+     "tail": 0,
+     "material": "metal"
+    },
+    "fittings": {
+     "browband": false,
+     "rivets": 16,
+     "bands": 0,
+     "nasal": false,
+     "comb": 0,
+     "material": "accent"
+    },
+    "aventail": {
+     "on": false
+    },
+    "crest": {
+     "style": "plume",
+     "size": 1.6,
+     "count": 5,
+     "color": "#a3262a"
+    },
+    "hem": {
+     "on": false
+    }
+   },
+   "Sallet": {
+    "helm": {
+     "style": "sallet",
+     "radius": 1.05,
+     "height": 1.4,
+     "point": 0.2,
+     "facets": 28,
+     "brim": 0,
+     "tail": 0.8,
+     "material": "metal"
+    },
+    "fittings": {
+     "browband": false,
+     "rivets": 8,
+     "bands": 0,
+     "nasal": false,
+     "comb": 0.14,
+     "material": "metal"
+    },
+    "aventail": {
+     "on": false
+    },
+    "crest": {
+     "style": "none"
+    },
+    "hem": {
+     "on": false
+    },
+    "etch": {
+     "on": true,
+     "pattern": "bands",
+     "target": "metals",
+     "scale": 2.4,
+     "weight": 0.08,
+     "coverage": 1,
+     "mode": "inlay",
+     "color": "#d4a838"
+    }
+   },
+   "Horned helm": {
+    "helm": {
+     "style": "skullcap",
+     "radius": 1.05,
+     "height": 1.6,
+     "point": 0.4,
+     "facets": 12,
+     "brim": 0,
+     "tail": 0,
+     "material": "metal"
+    },
+    "fittings": {
+     "browband": true,
+     "rivets": 10,
+     "bands": 2,
+     "nasal": true,
+     "comb": 0,
+     "material": "metal"
+    },
+    "aventail": {
+     "on": false
+    },
+    "crest": {
+     "style": "horns",
+     "size": 1.5,
+     "material": "bone"
+    },
+    "hem": {
+     "on": false
+    }
+   }
+  },
+  "garment": {
+   "Tunic": {
+    "garment": {
+     "style": "tunic",
+     "length": 2.6,
+     "fit": 1.05,
+     "flare": 0.35,
+     "folds": 0.5,
+     "sleeves": "short",
+     "sleeveFlare": 0.15,
+     "armAngle": 28,
+     "neck": "round",
+     "color": "#6a7f3a",
+     "pattern": "none",
+     "color2": "#e0d4b0",
+     "patScale": 2
+    },
+    "hem": {
+     "on": true,
+     "width": 0.35,
+     "color": "#c09a3a",
+     "pattern": "chevron",
+     "color2": "#7a2f22",
+     "patScale": 4,
+     "hemline": true,
+     "neck": true,
+     "cuffs": true,
+     "front": false
+    },
+    "belt": {
+     "on": true,
+     "width": 0.35,
+     "material": "leather",
+     "buckle": "accent"
+    }
+   },
+   "Wizard's robe": {
+    "garment": {
+     "style": "robe",
+     "length": 7.2,
+     "fit": 1.1,
+     "flare": 0.7,
+     "folds": 0.7,
+     "sleeves": "long",
+     "sleeveFlare": 0.9,
+     "armAngle": 30,
+     "neck": "cowl",
+     "color": "#2c3e6b",
+     "pattern": "dots",
+     "color2": "#d4b850",
+     "patScale": 2.2
+    },
+    "hem": {
+     "on": true,
+     "width": 0.4,
+     "color": "#d4b850",
+     "pattern": "none",
+     "hemline": true,
+     "neck": true,
+     "cuffs": true,
+     "front": true
+    },
+    "belt": {
+     "on": true,
+     "width": 0.2,
+     "material": "string",
+     "buckle": "accent"
+    }
+   },
+   "Gambeson": {
+    "garment": {
+     "style": "gambeson",
+     "length": 2.4,
+     "fit": 1.15,
+     "flare": 0.2,
+     "folds": 0.15,
+     "sleeves": "long",
+     "sleeveFlare": 0,
+     "armAngle": 24,
+     "neck": "high",
+     "color": "#cbbf9f",
+     "pattern": "quilted",
+     "color2": "#cbbf9f",
+     "patScale": 3
+    },
+    "hem": {
+     "on": false
+    },
+    "belt": {
+     "on": false
+    }
+   },
+   "Mail hauberk": {
+    "garment": {
+     "style": "hauberk",
+     "length": 3.2,
+     "fit": 1.08,
+     "flare": 0.3,
+     "folds": 0.25,
+     "sleeves": "short",
+     "sleeveFlare": 0.2,
+     "armAngle": 26,
+     "neck": "round",
+     "material": "metal"
+    },
+    "plates": {
+     "ringSize": 7,
+     "pauldrons": false
+    },
+    "hem": {
+     "on": true,
+     "width": 0.18,
+     "color": "#b58a3c",
+     "pattern": "none",
+     "hemline": true,
+     "neck": false,
+     "cuffs": true,
+     "front": false
+    },
+    "belt": {
+     "on": true,
+     "width": 0.4,
+     "material": "leather",
+     "buckle": "metal"
+    }
+   },
+   "Brigandine": {
+    "garment": {
+     "style": "brigandine",
+     "length": 1.4,
+     "fit": 1.12,
+     "flare": 0.15,
+     "folds": 0,
+     "sleeves": "none",
+     "neck": "round",
+     "color": "#7a1f24",
+     "pattern": "rivets",
+     "color2": "#c9a13b",
+     "patScale": 2.6
+    },
+    "plates": {
+     "pauldrons": false
+    },
+    "hem": {
+     "on": true,
+     "width": 0.22,
+     "color": "#c9a13b",
+     "pattern": "none",
+     "hemline": true,
+     "neck": true,
+     "cuffs": false,
+     "front": true
+    },
+    "belt": {
+     "on": false
+    }
+   },
+   "Scale coat": {
+    "garment": {
+     "style": "scale",
+     "length": 2.8,
+     "fit": 1.1,
+     "flare": 0.25,
+     "folds": 0.1,
+     "sleeves": "short",
+     "sleeveFlare": 0.1,
+     "armAngle": 26,
+     "neck": "round",
+     "material": "accent"
+    },
+    "plates": {
+     "ringSize": 4.5,
+     "pauldrons": false
+    },
+    "hem": {
+     "on": true,
+     "width": 0.25,
+     "color": "#5b3b25",
+     "pattern": "none",
+     "hemline": true,
+     "neck": true,
+     "cuffs": true,
+     "front": false
+    },
+    "belt": {
+     "on": true,
+     "width": 0.35,
+     "material": "leather",
+     "buckle": "accent"
+    }
+   },
+   "Cuirass": {
+    "garment": {
+     "style": "cuirass",
+     "length": 1.4,
+     "fit": 1.05,
+     "flare": 0.1,
+     "folds": 0,
+     "sleeves": "none",
+     "neck": "round",
+     "material": "metal"
+    },
+    "plates": {
+     "faulds": 3,
+     "ridge": 0.8,
+     "pauldrons": true,
+     "lames": 3
+    },
+    "hem": {
+     "on": false
+    },
+    "belt": {
+     "on": false
+    },
+    "etch": {
+     "on": true,
+     "pattern": "bands",
+     "target": "metals",
+     "scale": 2.2,
+     "weight": 0.08,
+     "coverage": 1,
+     "mode": "inlay",
+     "color": "#d4a838"
+    }
+   },
+   "Travelling cloak": {
+    "garment": {
+     "style": "cloak",
+     "length": 6.2,
+     "fit": 1,
+     "flare": 0.6,
+     "folds": 0.8,
+     "sleeves": "none",
+     "neck": "cowl",
+     "color": "#4a3a2e",
+     "pattern": "none"
+    },
+    "hem": {
+     "on": true,
+     "width": 0.3,
+     "color": "#2e2219",
+     "pattern": "none",
+     "hemline": true,
+     "neck": false,
+     "cuffs": false,
+     "front": true
+    },
+    "belt": {
+     "on": false
+    }
+   }
+  },
+  "shield": {
+   "Heater shield": {
+    "shield": {
+     "shape": "heater",
+     "size": 7,
+     "width": 0.85,
+     "curve": 0.45,
+     "thickness": 0.14,
+     "material": "wood"
+    },
+    "field": {
+     "painted": true,
+     "division": "plain",
+     "tincture": "#2c4e8c",
+     "tincture2": "#e8e6df",
+     "charge": "tower",
+     "chargeColor": "#d4a838",
+     "chargeSize": 0.5
+    },
+    "rim": {
+     "rim": true,
+     "rimWidth": 0.09,
+     "rimMaterial": "metal",
+     "boss": false,
+     "studs": 0
+    }
+   },
+   "Round shield": {
+    "shield": {
+     "shape": "round",
+     "size": 8,
+     "width": 1,
+     "curve": 0.25,
+     "thickness": 0.16,
+     "material": "wood"
+    },
+    "field": {
+     "painted": true,
+     "division": "planks",
+     "tincture": "#a3262a",
+     "charge": "none"
+    },
+    "rim": {
+     "rim": true,
+     "rimWidth": 0.1,
+     "rimMaterial": "leather",
+     "boss": true,
+     "bossSize": 1.6,
+     "bossMaterial": "metal",
+     "studs": 16
+    }
+   },
+   "Kite shield": {
+    "shield": {
+     "shape": "kite",
+     "size": 10,
+     "width": 0.62,
+     "curve": 0.55,
+     "thickness": 0.14,
+     "material": "wood"
+    },
+    "field": {
+     "painted": true,
+     "division": "quarterly",
+     "tincture": "#e8e6df",
+     "tincture2": "#a3262a",
+     "charge": "none"
+    },
+    "rim": {
+     "rim": true,
+     "rimWidth": 0.1,
+     "rimMaterial": "metal",
+     "boss": true,
+     "bossSize": 0.7,
+     "bossMaterial": "metal",
+     "studs": 10
+    }
+   },
+   "Pavise": {
+    "shield": {
+     "shape": "tower",
+     "size": 11,
+     "width": 0.6,
+     "curve": 0.3,
+     "thickness": 0.18,
+     "material": "wood"
+    },
+    "field": {
+     "painted": true,
+     "division": "bendy",
+     "tincture": "#2f6b3a",
+     "tincture2": "#e8e6df",
+     "charge": "star",
+     "chargeColor": "#d4a838",
+     "chargeSize": 0.45
+    },
+    "rim": {
+     "rim": true,
+     "rimWidth": 0.1,
+     "rimMaterial": "leather",
+     "boss": false,
+     "studs": 0
+    }
+   },
+   "Buckler": {
+    "shield": {
+     "shape": "buckler",
+     "size": 3.4,
+     "width": 1,
+     "curve": 0.6,
+     "thickness": 0.06,
+     "material": "metal"
+    },
+    "field": {
+     "painted": false,
+     "division": "plain",
+     "charge": "none"
+    },
+    "rim": {
+     "rim": true,
+     "rimWidth": 0.07,
+     "rimMaterial": "metal",
+     "boss": true,
+     "bossSize": 1.1,
+     "bossMaterial": "metal",
+     "studs": 0
+    },
+    "etch": {
+     "on": true,
+     "pattern": "knot",
+     "target": "metals",
+     "scale": 5,
+     "weight": 0.07,
+     "coverage": 1,
+     "mode": "dark",
+     "color": "#d4a838"
+    }
+   },
+   "Chequy heater": {
+    "shield": {
+     "shape": "heater",
+     "size": 7,
+     "width": 0.85,
+     "curve": 0.4,
+     "thickness": 0.14,
+     "material": "wood"
+    },
+    "field": {
+     "painted": true,
+     "division": "checky",
+     "tincture": "#d4a838",
+     "tincture2": "#2c4e8c",
+     "charge": "none"
+    },
+    "rim": {
+     "rim": true,
+     "rimWidth": 0.08,
+     "rimMaterial": "metal",
+     "boss": false,
+     "studs": 0
+    }
+   }
+  },
+  "hands": {
+   "Gauntlets": {
+    "hand": {
+     "style": "gauntlet",
+     "curl": 0.25,
+     "spread": 0.3,
+     "cuff": 1.2,
+     "flare": 0.5,
+     "lames": 4,
+     "gadlings": false,
+     "material": "leather",
+     "plate": "metal"
+    },
+    "hem": {
+     "on": false
+    }
+   },
+   "Spiked gauntlets": {
+    "hand": {
+     "style": "gauntlet",
+     "curl": 0.35,
+     "spread": 0.2,
+     "cuff": 1.4,
+     "flare": 0.7,
+     "lames": 5,
+     "gadlings": true,
+     "material": "leather",
+     "plate": "metal"
+    },
+    "hem": {
+     "on": false
+    },
+    "etch": {
+     "on": true,
+     "pattern": "bands",
+     "target": "metals",
+     "scale": 4,
+     "weight": 0.07,
+     "coverage": 1,
+     "mode": "inlay",
+     "color": "#d4a838"
+    }
+   },
+   "Hourglass gauntlets": {
+    "hand": {
+     "style": "hourglass",
+     "curl": 0.3,
+     "spread": 0.2,
+     "cuff": 1.3,
+     "flare": 0.9,
+     "lames": 4,
+     "gadlings": false,
+     "material": "leather",
+     "plate": "metal"
+    },
+    "hem": {
+     "on": false
+    }
+   },
+   "Leather gloves": {
+    "hand": {
+     "style": "glove",
+     "curl": 0.2,
+     "spread": 0.25,
+     "cuff": 0.9,
+     "flare": 0.6,
+     "material": "leather"
+    },
+    "hem": {
+     "on": true,
+     "width": 0.18,
+     "color": "#c09a3a",
+     "pattern": "none",
+     "hemline": true
+    }
+   },
+   "Mail mittens": {
+    "hand": {
+     "style": "mitten",
+     "curl": 0.2,
+     "spread": 0.2,
+     "cuff": 1,
+     "flare": 0.25,
+     "material": "leather",
+     "plate": "metal"
+    },
+    "hem": {
+     "on": true,
+     "width": 0.14,
+     "color": "#b58a3c",
+     "pattern": "none",
+     "hemline": true
+    }
+   },
+   "Archer's bracer": {
+    "hand": {
+     "style": "bracer",
+     "cuff": 2.2,
+     "flare": 0.15,
+     "material": "leather"
+    },
+    "hem": {
+     "on": false
+    },
+    "etch": {
+     "on": true,
+     "pattern": "knot",
+     "target": "leather",
+     "scale": 3,
+     "weight": 0.07,
+     "coverage": 1,
+     "mode": "dark",
+     "color": "#d4a838"
+    }
+   }
+  },
+  "feet": {
+   "Riding boots": {
+    "boot": {
+     "style": "boot",
+     "width": 1,
+     "height": 3.8,
+     "toe": 0,
+     "cuff": 0.4,
+     "straps": 0,
+     "material": "leather",
+     "sole": "leather"
+    },
+    "hem": {
+     "on": false
+    }
+   },
+   "Buckled boots": {
+    "boot": {
+     "style": "boot",
+     "width": 1,
+     "height": 2,
+     "toe": 0,
+     "cuff": 0,
+     "straps": 3,
+     "material": "leather",
+     "sole": "leather"
+    },
+    "hem": {
+     "on": false
+    }
+   },
+   "Turnshoes": {
+    "boot": {
+     "style": "shoe",
+     "width": 1,
+     "height": 0.35,
+     "toe": 0,
+     "cuff": 0,
+     "straps": 1,
+     "material": "leather",
+     "sole": "leather"
+    },
+    "hem": {
+     "on": false
+    }
+   },
+   "Poulaines": {
+    "boot": {
+     "style": "poulaine",
+     "width": 0.95,
+     "height": 0.5,
+     "toe": 0.8,
+     "cuff": 0,
+     "straps": 1,
+     "material": "leather",
+     "sole": "leather"
+    },
+    "hem": {
+     "on": true,
+     "width": 0.14,
+     "color": "#c09a3a",
+     "pattern": "none",
+     "hemline": true
+    }
+   },
+   "Leg wraps": {
+    "boot": {
+     "style": "wrapped",
+     "width": 1,
+     "height": 3.2,
+     "toe": 0,
+     "cuff": 0,
+     "straps": 0,
+     "color": "#7a6a50",
+     "color2": "#cbbf9f",
+     "material": "leather",
+     "sole": "leather"
+    },
+    "hem": {
+     "on": false
+    }
+   },
+   "Sabatons and greaves": {
+    "boot": {
+     "style": "sabaton",
+     "width": 1,
+     "height": 3.9,
+     "toe": 0.25,
+     "cuff": 0,
+     "straps": 0,
+     "lames": 6,
+     "knee": true,
+     "material": "leather",
+     "sole": "leather",
+     "plate": "metal"
+    },
+    "hem": {
+     "on": false
+    }
+   }
+  },
+  "bags": {
+   "Adventurer's pack": {
+    "bag": {
+     "style": "backpack",
+     "size": 1,
+     "shape": 0.5,
+     "fabric": "leather",
+     "color": "#6b4a2e",
+     "color2": "#7a8a5a",
+     "pattern": "none",
+     "fittings": "metal",
+     "pocket": true,
+     "bedroll": true,
+     "coins": false
+    }
+   },
+   "Drawstring pouch": {
+    "bag": {
+     "style": "pouch",
+     "size": 1,
+     "shape": 0.5,
+     "fabric": "leather",
+     "color": "#7a5232",
+     "color2": "#7a5232",
+     "pattern": "none",
+     "fittings": "accent",
+     "coins": false
+    }
+   },
+   "Coin purse": {
+    "bag": {
+     "style": "purse",
+     "size": 1,
+     "shape": 0.6,
+     "fabric": "cloth",
+     "color": "#7a1f24",
+     "color2": "#7a1f24",
+     "pattern": "dots",
+     "patScale": 6,
+     "fittings": "gold",
+     "coins": true
+    }
+   },
+   "Belt pouch": {
+    "bag": {
+     "style": "beltpouch",
+     "size": 1,
+     "shape": 0.5,
+     "fabric": "leather",
+     "color": "#5e3d24",
+     "color2": "#4a2f1c",
+     "pattern": "none",
+     "fittings": "accent"
+    }
+   },
+   "Satchel": {
+    "bag": {
+     "style": "satchel",
+     "size": 1,
+     "shape": 0.5,
+     "fabric": "leather",
+     "color": "#7a5232",
+     "color2": "#5e3d24",
+     "pattern": "none",
+     "fittings": "metal"
+    }
+   },
+   "Grain sack": {
+    "bag": {
+     "style": "sack",
+     "size": 1,
+     "shape": 0.5,
+     "fabric": "burlap",
+     "color": "#b49a6a",
+     "color2": "#8a7550",
+     "pattern": "none",
+     "fittings": "metal",
+     "patch": true,
+     "coins": false
+    }
+   }
+  },
+  "chests": {
+   "Treasure chest": {
+    "chest": {
+     "style": "chest",
+     "size": 1,
+     "shape": 0.5,
+     "open": 0.55,
+     "treasure": true,
+     "bands": 3,
+     "studs": true,
+     "lock": true,
+     "handles": true,
+     "material": "wood",
+     "fittings": "metal"
+    }
+   },
+   "Iron-bound chest": {
+    "chest": {
+     "style": "chest",
+     "size": 1,
+     "shape": 0.6,
+     "open": 0,
+     "treasure": false,
+     "bands": 4,
+     "studs": true,
+     "lock": true,
+     "handles": true,
+     "material": "wood",
+     "fittings": "metal"
+    }
+   },
+   "Strongbox": {
+    "chest": {
+     "style": "strongbox",
+     "size": 1,
+     "shape": 0.4,
+     "open": 0,
+     "treasure": false,
+     "bands": 2,
+     "studs": true,
+     "lock": true,
+     "handles": true,
+     "material": "metal",
+     "fittings": "metal"
+    }
+   },
+   "Jewel coffer": {
+    "chest": {
+     "style": "coffer",
+     "size": 1,
+     "shape": 0.5,
+     "open": 0,
+     "treasure": false,
+     "bands": 2,
+     "studs": false,
+     "lock": true,
+     "handles": false,
+     "material": "accent",
+     "fittings": "gold",
+     "color2": "#a8323a"
+    }
+   },
+   "Barrel": {
+    "chest": {
+     "style": "barrel",
+     "size": 1,
+     "shape": 0.5,
+     "bands": 4,
+     "material": "wood",
+     "fittings": "metal"
+    }
+   },
+   "Supply crate": {
+    "chest": {
+     "style": "crate",
+     "size": 1,
+     "shape": 0.5,
+     "material": "wood",
+     "fittings": "metal",
+     "device": "tower"
+    }
+   },
+   "Amphora": {
+    "chest": {
+     "style": "urn",
+     "size": 1,
+     "shape": 0.5,
+     "lock": false,
+     "color": "#b8673a",
+     "pattern": "hoops",
+     "color2": "#2a1d14",
+     "patScale": 2.5
+    }
+   }
+  },
+  "food": {
+   "Crusty loaf": {
+    "food": {
+     "style": "loaf",
+     "size": 1,
+     "shape": 0.5,
+     "count": 4,
+     "color": "#b8752f",
+     "color2": "#ecd29a"
+    }
+   },
+   "Round loaf": {
+    "food": {
+     "style": "boule",
+     "size": 1,
+     "shape": 0.5,
+     "count": 2,
+     "color": "#a8692a",
+     "color2": "#ecd29a"
+    }
+   },
+   "Cheese wheel": {
+    "food": {
+     "style": "cheese",
+     "size": 1,
+     "shape": 0.4,
+     "count": 6,
+     "cut": true,
+     "color": "#c9a23c",
+     "color2": "#f0d98a"
+    }
+   },
+   "Red apple": {
+    "food": {
+     "style": "apple",
+     "size": 1,
+     "shape": 0.5,
+     "color": "#b8322a",
+     "color2": "#5f8a34"
+    }
+   },
+   "Pear": {
+    "food": {
+     "style": "pear",
+     "size": 1,
+     "shape": 0.5,
+     "color": "#b9b44a",
+     "color2": "#5f8a34"
+    }
+   },
+   "Roast haunch": {
+    "food": {
+     "style": "haunch",
+     "size": 1,
+     "shape": 0.5,
+     "count": 4,
+     "color": "#9a5a2a",
+     "color2": "#6a3a1c"
+    }
+   },
+   "Smoked fish": {
+    "food": {
+     "style": "fish",
+     "size": 1,
+     "shape": 0.5,
+     "color": "#9a8a5a",
+     "color2": "#6f5f3a"
+    }
+   },
+   "Sausages": {
+    "food": {
+     "style": "sausages",
+     "size": 1,
+     "shape": 0.5,
+     "count": 4,
+     "color": "#8a3f2a"
+    }
+   },
+   "Meat pie": {
+    "food": {
+     "style": "pie",
+     "size": 1,
+     "shape": 0.5,
+     "count": 5,
+     "color": "#c98a3e",
+     "material": "metal"
+    }
+   },
+   "Ale tankard": {
+    "food": {
+     "style": "tankard",
+     "size": 1,
+     "shape": 0.5,
+     "fill": 0.8,
+     "color": "#8a6a3a",
+     "color2": "#f1ead6",
+     "material": "wood"
+    }
+   },
+   "Wine bottle": {
+    "food": {
+     "style": "bottle",
+     "size": 1,
+     "shape": 0.5,
+     "fill": 1,
+     "color": "#2c3f2a",
+     "color2": "#e8dcc0"
+    }
+   },
+   "Healing potion": {
+    "food": {
+     "style": "potion",
+     "size": 1,
+     "shape": 0.5,
+     "count": 5,
+     "fill": 0.7,
+     "glow": 0.6,
+     "color2": "#c8323c"
+    }
+   },
+   "Mana potion": {
+    "food": {
+     "style": "potion",
+     "size": 1,
+     "shape": 0.3,
+     "count": 4,
+     "fill": 0.85,
+     "glow": 0.8,
+     "color2": "#3c6fd4"
+    }
+   }
+  },
+  "ring": {
+   "Signet ring": {
+    "band": {
+     "profile": "dshape",
+     "inner": 0.18,
+     "width": 0.055,
+     "thickness": 0.022,
+     "shoulder": 1.1,
+     "strands": 1,
+     "sideStones": 0,
+     "material": "gold"
+    },
+    "setting": {
+     "style": "signet",
+     "height": 0.014,
+     "table": "oval",
+     "tableSize": 0.13,
+     "device": "tower",
+     "material": "gold"
+    }
+   },
+   "Solitaire": {
+    "band": {
+     "profile": "round",
+     "inner": 0.17,
+     "width": 0.022,
+     "thickness": 0.018,
+     "shoulder": 0.3,
+     "strands": 1,
+     "sideStones": 0,
+     "material": "gold"
+    },
+    "setting": {
+     "style": "prongs",
+     "height": 0.035,
+     "prongs": 6,
+     "material": "gold"
+    },
+    "stone": {
+     "cut": "brilliant",
+     "size": 0.055,
+     "color": "#d9dfe6"
+    }
+   },
+   "Cabochon ring": {
+    "band": {
+     "profile": "flat",
+     "inner": 0.19,
+     "width": 0.05,
+     "thickness": 0.02,
+     "shoulder": 0.6,
+     "strands": 1,
+     "sideStones": 0,
+     "material": "silver"
+    },
+    "setting": {
+     "style": "bezel",
+     "height": 0.025,
+     "material": "silver"
+    },
+    "stone": {
+     "cut": "cabochon",
+     "size": 0.075,
+     "color": "#2f8f86"
+    }
+   },
+   "Cluster ring": {
+    "band": {
+     "profile": "round",
+     "inner": 0.17,
+     "width": 0.026,
+     "thickness": 0.02,
+     "shoulder": 0.5,
+     "strands": 1,
+     "sideStones": 2,
+     "material": "gold"
+    },
+    "setting": {
+     "style": "cluster",
+     "height": 0.03,
+     "prongs": 4,
+     "halo": 10,
+     "material": "gold"
+    },
+    "stone": {
+     "cut": "brilliant",
+     "size": 0.045,
+     "color": "#3c6fb4"
+    }
+   },
+   "Bishop's ring": {
+    "band": {
+     "profile": "dshape",
+     "inner": 0.2,
+     "width": 0.05,
+     "thickness": 0.024,
+     "shoulder": 1.2,
+     "strands": 1,
+     "sideStones": 3,
+     "material": "gold"
+    },
+    "setting": {
+     "style": "bezel",
+     "height": 0.04,
+     "material": "gold"
+    },
+    "stone": {
+     "cut": "rose",
+     "size": 0.095,
+     "color": "#6d4bb3"
+    }
+   },
+   "Twisted band": {
+    "band": {
+     "profile": "round",
+     "inner": 0.18,
+     "width": 0.04,
+     "thickness": 0.03,
+     "shoulder": 0,
+     "strands": 3,
+     "twists": 9,
+     "sideStones": 0,
+     "material": "silver"
+    },
+    "setting": {
+     "style": "none"
+    }
+   },
+   "Iron band": {
+    "band": {
+     "profile": "faceted",
+     "inner": 0.2,
+     "width": 0.06,
+     "thickness": 0.028,
+     "shoulder": 0,
+     "strands": 1,
+     "sideStones": 0,
+     "material": "metal"
+    },
+    "setting": {
+     "style": "none"
+    }
+   }
+  },
+  "amulet": {
+   "Medallion": {
+    "pendant": {
+     "shape": "disc",
+     "size": 0.42,
+     "thickness": 0.035,
+     "rim": 0.1,
+     "centre": "device",
+     "device": "star",
+     "drops": 0,
+     "material": "gold"
+    },
+    "chain": {
+     "style": "cable",
+     "drop": 1.5,
+     "link": 0.05,
+     "thickness": 0.008,
+     "material": "gold"
+    }
+   },
+   "Pilgrim cross": {
+    "pendant": {
+     "shape": "cross",
+     "size": 0.5,
+     "thickness": 0.04,
+     "rim": 0,
+     "centre": "stone",
+     "drops": 0,
+     "material": "silver"
+    },
+    "chain": {
+     "style": "cord",
+     "drop": 1.9,
+     "thickness": 0.012,
+     "material": "string"
+    },
+    "stone": {
+     "cut": "cabochon",
+     "size": 0.05,
+     "color": "#a8323a"
+    }
+   },
+   "Teardrop amulet": {
+    "pendant": {
+     "shape": "teardrop",
+     "size": 0.44,
+     "thickness": 0.04,
+     "rim": 0.12,
+     "centre": "stone",
+     "drops": 0,
+     "material": "gold"
+    },
+    "chain": {
+     "style": "cable",
+     "drop": 1.4,
+     "link": 0.04,
+     "thickness": 0.006,
+     "material": "gold"
+    },
+    "stone": {
+     "cut": "cabochon",
+     "size": 0.13,
+     "color": "#4c9a52"
+    }
+   },
+   "Lunula": {
+    "pendant": {
+     "shape": "crescent",
+     "size": 0.48,
+     "thickness": 0.03,
+     "rim": 0,
+     "centre": "none",
+     "drops": 3,
+     "material": "silver"
+    },
+    "chain": {
+     "style": "thong",
+     "drop": 1.8,
+     "thickness": 0.014,
+     "material": "leather"
+    },
+    "stone": {
+     "cut": "rose",
+     "size": 0.03,
+     "color": "#a8323a"
+    }
+   },
+   "Heraldic pendant": {
+    "pendant": {
+     "shape": "shield",
+     "size": 0.45,
+     "thickness": 0.035,
+     "rim": 0.1,
+     "centre": "device",
+     "device": "cross",
+     "drops": 0,
+     "material": "accent"
+    },
+    "chain": {
+     "style": "beads",
+     "drop": 1.6,
+     "link": 0.05,
+     "thickness": 0.008,
+     "material": "wood"
+    }
+   },
+   "Ankh": {
+    "pendant": {
+     "shape": "ankh",
+     "size": 0.55,
+     "thickness": 0.04,
+     "rim": 0,
+     "centre": "stone",
+     "drops": 0,
+     "material": "gold"
+    },
+    "chain": {
+     "style": "cable",
+     "drop": 1.5,
+     "link": 0.045,
+     "thickness": 0.007,
+     "material": "gold",
+     "frame": "close"
+    },
+    "stone": {
+     "cut": "cabochon",
+     "size": 0.06,
+     "color": "#2f8f86"
+    }
+   },
+   "Quatrefoil": {
+    "pendant": {
+     "shape": "quatrefoil",
+     "size": 0.4,
+     "thickness": 0.035,
+     "rim": 0.12,
+     "centre": "stone",
+     "drops": 1,
+     "material": "gold"
+    },
+    "chain": {
+     "style": "cable",
+     "drop": 1.5,
+     "link": 0.045,
+     "thickness": 0.007,
+     "material": "gold"
+    },
+    "stone": {
+     "cut": "brilliant",
+     "size": 0.07,
+     "color": "#9b2d3f"
+    }
+   }
+  },
+  "charm": {
+   "Fang charm": {
+    "charm": {
+     "shape": "fang",
+     "size": 0.45,
+     "girth": 1,
+     "curve": 0.6,
+     "facets": 12,
+     "bands": 2,
+     "stone": false,
+     "device": "none",
+     "material": "bone"
+    },
+    "loop": {
+     "style": "cord",
+     "size": 0.06,
+     "beads": 2,
+     "material": "string"
+    },
+    "stone": {
+     "color": "#2f8f86"
+    }
+   },
+   "Hammer amulet": {
+    "charm": {
+     "shape": "hammer",
+     "size": 0.38,
+     "girth": 1,
+     "facets": 8,
+     "bands": 0,
+     "stone": false,
+     "device": "rune",
+     "material": "silver"
+    },
+    "loop": {
+     "style": "ring",
+     "size": 0.07,
+     "material": "silver"
+    }
+   },
+   "Sun wheel": {
+    "charm": {
+     "shape": "wheel",
+     "size": 0.38,
+     "girth": 1,
+     "detail": 6,
+     "bands": 0,
+     "stone": true,
+     "device": "none",
+     "material": "accent"
+    },
+    "loop": {
+     "style": "ring",
+     "size": 0.06,
+     "material": "accent"
+    },
+    "stone": {
+     "cut": "cabochon",
+     "size": 0.045,
+     "color": "#c58a23"
+    }
+   },
+   "Knot of binding": {
+    "charm": {
+     "shape": "knot",
+     "size": 0.36,
+     "girth": 1,
+     "detail": 1,
+     "bands": 0,
+     "stone": false,
+     "device": "none",
+     "material": "accent"
+    },
+    "loop": {
+     "style": "chain",
+     "size": 0.05,
+     "material": "accent"
+    }
+   },
+   "Carved idol": {
+    "charm": {
+     "shape": "idol",
+     "size": 0.5,
+     "girth": 1,
+     "facets": 9,
+     "bands": 1,
+     "stone": true,
+     "device": "none",
+     "material": "wood"
+    },
+    "loop": {
+     "style": "cord",
+     "size": 0.05,
+     "beads": 4,
+     "material": "string"
+    },
+    "stone": {
+     "cut": "cabochon",
+     "size": 0.025,
+     "color": "#2f8f86"
+    }
+   },
+   "Rune stone": {
+    "charm": {
+     "shape": "runestone",
+     "size": 0.4,
+     "girth": 1,
+     "bands": 0,
+     "stone": false,
+     "device": "rune",
+     "material": "stone"
+    },
+    "loop": {
+     "style": "cord",
+     "size": 0.06,
+     "beads": 0,
+     "material": "leather"
+    }
+   },
+   "Acorn charm": {
+    "charm": {
+     "shape": "acorn",
+     "size": 0.32,
+     "girth": 1,
+     "facets": 14,
+     "bands": 0,
+     "stone": false,
+     "device": "none",
+     "material": "gold"
+    },
+    "loop": {
+     "style": "ring",
+     "size": 0.05,
+     "material": "gold"
+    }
+   },
+   "Hand bell": {
+    "charm": {
+     "shape": "bell",
+     "size": 0.35,
+     "girth": 1,
+     "facets": 16,
+     "bands": 0,
+     "stone": false,
+     "device": "none",
+     "material": "accent"
+    },
+    "loop": {
+     "style": "ring",
+     "size": 0.06,
+     "material": "accent"
+    }
+   },
+   "Old key": {
+    "charm": {
+     "shape": "key",
+     "size": 0.5,
+     "girth": 1,
+     "detail": 3,
+     "bands": 0,
+     "stone": false,
+     "device": "none",
+     "material": "metal"
+    },
+    "loop": {
+     "style": "ring",
+     "size": 0.08,
+     "material": "metal"
+    }
+   }
+  }
+ },
+ "FAM_LABELS": {
+  "staff": "Staves",
+  "mace": "Maces",
+  "sword": "Swords",
+  "spear": "Spears",
+  "dagger": "Daggers and knives",
+  "bow": "Bows",
+  "crossbow": "Crossbows",
+  "helm": "Helmets",
+  "garment": "Body armour and clothing",
+  "shield": "Shields",
+  "hands": "Gauntlets and gloves",
+  "food": "Food and drink",
+  "bags": "Pouches and backpacks",
+  "chests": "Chests and containers",
+  "feet": "Boots and greaves",
+  "ring": "Rings and signets",
+  "amulet": "Amulets and necklaces",
+  "charm": "Charms and talismans"
+ },
+ "FAM_GROUPS": [
+  [
+   "Arms",
+   [
+    "staff",
+    "mace",
+    "sword",
+    "spear",
+    "dagger"
+   ]
+  ],
+  [
+   "Ranged",
+   [
+    "bow",
+    "crossbow"
+   ]
+  ],
+  [
+   "Armour and clothing",
+   [
+    "helm",
+    "garment",
+    "hands",
+    "feet",
+    "shield"
+   ]
+  ],
+  [
+   "Trinkets",
+   [
+    "ring",
+    "amulet",
+    "charm"
+   ]
+  ],
+  [
+   "Containers",
+   [
+    "bags",
+    "chests"
+   ]
+  ],
+  [
+   "Provisions",
+   [
+    "food"
+   ]
+  ]
+ ]
+}

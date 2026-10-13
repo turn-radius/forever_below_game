@@ -1,0 +1,238 @@
+{
+ "Shirt": {
+  "slot": "shirt",
+  "wt": 1,
+  "fp": [
+   2,
+   2
+  ],
+  "tags": [
+   "cloth",
+   "wear"
+  ],
+  "warmth": 1,
+  "mats": [
+   "Linen",
+   "Wool",
+   "Hemp"
+  ]
+ },
+ "Trousers": {
+  "slot": "legs",
+  "wt": 1.5,
+  "fp": [
+   2,
+   2
+  ],
+  "tags": [
+   "cloth",
+   "wear"
+  ],
+  "warmth": 1,
+  "mats": [
+   "Wool",
+   "Hemp",
+   "Canvas"
+  ]
+ },
+ "Breeches": {
+  "slot": "legs",
+  "wt": 1,
+  "fp": [
+   2,
+   2
+  ],
+  "tags": [
+   "cloth",
+   "wear"
+  ],
+  "warmth": 0.5,
+  "mats": [
+   "Linen",
+   "Hemp",
+   "Wool"
+  ]
+ },
+ "Leggings": {
+  "slot": "legs",
+  "wt": 0.5,
+  "fp": [
+   1,
+   2
+  ],
+  "tags": [
+   "cloth",
+   "wear"
+  ],
+  "warmth": 1,
+  "mats": [
+   "Wool",
+   "Knit"
+  ]
+ },
+ "Leather jerkin": {
+  "slot": "body",
+  "wt": 6,
+  "fp": [
+   2,
+   2
+  ],
+  "tags": [
+   "leather",
+   "armor",
+   "wear"
+  ],
+  "ac": 1,
+  "warmth": 1,
+  "mats": [
+   "Boiled",
+   "Hide",
+   "Studded"
+  ]
+ },
+ "Hood": {
+  "slot": "head",
+  "wt": 0.5,
+  "fp": [
+   1,
+   1
+  ],
+  "tags": [
+   "cloth",
+   "wear"
+  ],
+  "warmth": 1,
+  "mats": [
+   "Wool",
+   "Felted",
+   "Linen"
+  ]
+ },
+ "Mail coif": {
+  "slot": "head",
+  "wt": 6,
+  "fp": [
+   2,
+   2
+  ],
+  "tags": [
+   "metal",
+   "armor",
+   "wear"
+  ],
+  "ac": 1,
+  "mats": [
+   "Iron",
+   "Riveted"
+  ]
+ },
+ "Pointed hat": {
+  "slot": "head",
+  "wt": 0.5,
+  "fp": [
+   1,
+   2
+  ],
+  "tags": [
+   "cloth",
+   "wear"
+  ],
+  "warmth": 0.5,
+  "mats": [
+   "Felted",
+   "Wool"
+  ]
+ },
+ "Belt": {
+  "slot": "belt",
+  "wt": 1,
+  "fp": [
+   2,
+   1
+  ],
+  "tags": [
+   "leather",
+   "wear",
+   "container"
+  ],
+  "mats": [
+   "Leather",
+   "Hide"
+  ],
+  "holds": {
+   "cols": 4,
+   "rows": 2,
+   "label": "Belt pouch"
+  }
+ },
+ "Club": {
+  "slot": "mainhand",
+  "wt": 2,
+  "fp": [
+   1,
+   3
+  ],
+  "tags": [
+   "weapon",
+   "wood"
+  ],
+  "dmg": "1d4",
+  "mats": [
+   "Oak",
+   "Ash",
+   "Bone-studded"
+  ]
+ },
+ "Hand axe": {
+  "slot": "mainhand",
+  "wt": 2,
+  "fp": [
+   2,
+   3
+  ],
+  "tags": [
+   "weapon",
+   "metal"
+  ],
+  "dmg": "1d6",
+  "mats": [
+   "Iron",
+   "Steel"
+  ]
+ },
+ "Torch": {
+  "slot": "offhand",
+  "wt": 1,
+  "fp": [
+   1,
+   3
+  ],
+  "tags": [
+   "light",
+   "wood"
+  ],
+  "light": 20,
+  "mats": [
+   "Pitch",
+   "Tallow"
+  ]
+ },
+ "Lantern": {
+  "slot": "offhand",
+  "wt": 2,
+  "fp": [
+   1,
+   2
+  ],
+  "tags": [
+   "light",
+   "metal"
+  ],
+  "light": 30,
+  "mats": [
+   "Tin",
+   "Brass",
+   "Iron"
+  ]
+ }
+}

@@ -1,0 +1,9 @@
+{
+ "BLADE_SCALE": ".78",
+ "BOW_SCALE": ".8",
+ "BOW_MAX": ".62",
+ "SHIELD_SCALE": ".9",
+ "SHIELD_MAX": ".42",
+ "GRIP_MAX": ".13",
+ "BLADE_TURN": "55*Math.PI/180"
+}

@@ -1,0 +1,263 @@
+{
+ "fallen": {
+  "label": "Freshly fallen",
+  "slots": {
+   "shirt": [
+    "Tunic"
+   ],
+   "legs": [
+    "Trousers"
+   ]
+  },
+  "goods": [],
+  "ground": [
+   "Spare torch",
+   "Bread"
+  ]
+ },
+ "fighter": {
+  "label": "Fighter",
+  "slots": {
+   "shirt": [
+    "Shirt",
+    "Tunic"
+   ],
+   "legs": [
+    "Trousers"
+   ],
+   "feet": [
+    "Boots"
+   ],
+   "hands": [
+    "Gloves",
+    "Gauntlets"
+   ],
+   "body": [
+    "Gambeson",
+    "Mail",
+    "Brigandine",
+    "Scale coat",
+    "Cuirass",
+    "Leather jerkin"
+   ],
+   "head": [
+    "Helm",
+    "Helm",
+    "Mail coif"
+   ],
+   "belt": [
+    "Belt"
+   ],
+   "back": [
+    0.7,
+    "Pack"
+   ],
+   "mainhand": [
+    "Sword",
+    "Sword",
+    "Mace",
+    "Hand axe",
+    "Spear"
+   ],
+   "offhand": [
+    0.75,
+    "Shield",
+    "Shield",
+    "Torch"
+   ]
+  },
+  "goods": [
+   "Bread",
+   "Waterskin",
+   "Purse",
+   "Bandages",
+   "Healing draught"
+  ]
+ },
+ "ranger": {
+  "label": "Ranger",
+  "slots": {
+   "shirt": [
+    "Tunic"
+   ],
+   "legs": [
+    "Trousers",
+    "Breeches"
+   ],
+   "feet": [
+    "Boots"
+   ],
+   "hands": [
+    "Gloves"
+   ],
+   "cloak": [
+    0.75,
+    "Cloak",
+    "Mantle"
+   ],
+   "head": [
+    0.4,
+    "Hood"
+   ],
+   "belt": [
+    "Belt"
+   ],
+   "back": [
+    "Satchel",
+    "Pack"
+   ],
+   "mainhand": [
+    "Bow",
+    "Bow",
+    "Spear"
+   ]
+  },
+  "goods": [
+   "Dagger",
+   "Smoked fish",
+   "Waterskin",
+   "Purse",
+   "Rope",
+   "Spare torch"
+  ]
+ },
+ "cleric": {
+  "label": "Cleric",
+  "slots": {
+   "shirt": [
+    "Robe",
+    "Tunic"
+   ],
+   "body": [
+    0.55,
+    "Mail",
+    "Gambeson"
+   ],
+   "legs": [
+    "Trousers"
+   ],
+   "feet": [
+    "Boots",
+    "Shoes"
+   ],
+   "head": [
+    0.5,
+    "Helm",
+    "Hood"
+   ],
+   "neck": [
+    "Amulet"
+   ],
+   "belt": [
+    "Belt"
+   ],
+   "back": [
+    "Pack"
+   ],
+   "mainhand": [
+    "Mace",
+    "Mace",
+    "Staff"
+   ],
+   "offhand": [
+    0.7,
+    "Shield",
+    "Lantern"
+   ]
+  },
+  "goods": [
+   "Bandages",
+   "Bandages",
+   "Healing draught",
+   "Candle",
+   "Bread",
+   "Waterskin",
+   "Purse"
+  ]
+ },
+ "mage": {
+  "label": "Mage",
+  "slots": {
+   "shirt": [
+    "Robe"
+   ],
+   "feet": [
+    "Shoes"
+   ],
+   "head": [
+    0.8,
+    "Hood",
+    "Pointed hat"
+   ],
+   "cloak": [
+    0.6,
+    "Mantle"
+   ],
+   "belt": [
+    "Belt"
+   ],
+   "mainhand": [
+    "Staff"
+   ],
+   "offhand": [
+    0.7,
+    "Lantern",
+    "Torch"
+   ],
+   "back": [
+    "Sack"
+   ],
+   "neck": [
+    0.6,
+    "Amulet"
+   ]
+  },
+  "goods": [
+   "Candle",
+   "Glowcap",
+   "Glowcap",
+   "Lamp oil",
+   "Purse",
+   "Bread",
+   "Healing draught"
+  ]
+ },
+ "scavenger": {
+  "label": "Scavenger",
+  "slots": {
+   "shirt": [
+    "Tunic"
+   ],
+   "legs": [
+    "Breeches"
+   ],
+   "back": [
+    "Sack"
+   ],
+   "mainhand": [
+    "Club",
+    "Dagger",
+    "Hand axe",
+    "Spear"
+   ],
+   "offhand": [
+    "Torch"
+   ],
+   "feet": [
+    0.4,
+    "Shoes"
+   ],
+   "hands": [
+    0.3,
+    "Gloves"
+   ]
+  },
+  "goods": [
+   "Blind cavefish",
+   "Glowcap",
+   "Glowcap",
+   "Purse",
+   "Candle"
+  ]
+ }
+}

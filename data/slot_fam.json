@@ -1,0 +1,49 @@
+{
+ "head": [
+  "Helmets"
+ ],
+ "neck": [
+  "Amulets and necklaces"
+ ],
+ "ring1": [
+  "Rings and signets"
+ ],
+ "ring2": [
+  "Rings and signets"
+ ],
+ "charm": [
+  "Charms"
+ ],
+ "shirt": [
+  "Clothing"
+ ],
+ "cloak": [
+  "Cloaks"
+ ],
+ "body": [
+  "Body armour"
+ ],
+ "mainhand": [
+  "Swords"
+ ],
+ "offhand": [
+  "Shields"
+ ],
+ "hands": [
+  "Gauntlets and gloves"
+ ],
+ "feet": [
+  "Boots and shoes"
+ ],
+ "back": [
+  "Pouches and packs",
+  "Pack"
+ ],
+ "belt": [
+  "Pouches and packs",
+  "Belt"
+ ],
+ "legs": [
+  "Legwear"
+ ]
+}

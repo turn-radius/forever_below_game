@@ -1,0 +1,4 @@
+# Bevy 0.20 needs Rust 1.97.1 or newer. rustup installs this automatically on first build.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

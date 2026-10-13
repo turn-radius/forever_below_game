@@ -1,0 +1,58 @@
+# The look
+
+Spline Armory's renderer sets the house style: banded toon light, ink outlines, and wear in the shader. Keep the style and raise the fidelity (better meshes and normals, real light and shadow from carried light sources, richer materials). Everything here is read from `reference/spline_armory_engine.js` and `reference/forever-below-plate.html`. Search those files for the names in `code`.
+
+## Toon shading
+
+Materials are three.js `MeshToonMaterial` with a 1-pixel-tall gradient map sampled with nearest filtering, so light falls off in hard bands.
+
+- Spline Armory (`makeGradient(n)`): band `i` of `n` has value `0.12 + 0.88 * i/(n-1)`. Default `n = 3` (`S.render.bands`), giving 0.12, 0.56, 1.0.
+- The plate uses `0.16 + 0.84 * i/(n-1)` with `n = 3`, giving 0.16, 0.58, 1.0, a little lighter in the shadows.
+
+In Bevy, use a custom material (WESL) or an `ExtendedMaterial` on `StandardMaterial` that quantizes the diffuse term into these bands. Keep the band count and values as material parameters.
+
+## Ink outline
+
+This is an inverted hull, drawn for every mesh unless that part opts out.
+
+- A second mesh shares the geometry and is drawn with **back faces only**. Its vertex shader pushes each vertex out along an **outline normal** by width `w`, then writes a flat ink colour.
+- Outline normals are **smoothed across hard edges**: weld vertices by position (rounded to 1e-4) and average the face normals (`withOutlineNormals`). Without this, faceted parts crack open at the corners. Surfaces that are already smooth use their own normals (`smoothOutline`).
+- Ink colour: `#1a1f22` in the Armory, `#1c1814` (a warm near-black) in the plate.
+- The width is in world units, rescaled to the view so the line reads the same at any zoom. In the Armory, `w = outline * clamp(viewHeight/9, 0.45, 2.2)` with `outline = 0.032`. Jewellery, food and bags use a floor of 0.02 instead of 0.45. In the plate, `w = 0.028 * clamp(frustum/9, 0.18, 2.2)`.
+
+For first person this becomes a function of distance to the camera. Keep the same feel: a line about 1.5–2.5 px wide on screen, thinner on small things.
+
+## Wear, rust and grime (the decay shader)
+
+Each material carries a **type** and an **amount**. Its fragment shader mixes in procedural decay from 3D value noise (4-octave fbm) in item space, so the pattern stays fixed to the object as it turns (`DECAY_HEAD`, `DECAY_BODY`, `decayAmt`).
+
+| type | material | what decay does |
+|---|---|---|
+| 1 | iron (`metal`) | dulls, rust blooms, pitting |
+| 2 | brass (`accent`) | tarnish, verdigris |
+| 3 | wood | grain, silvering, rot, moss |
+| 4 | leather, string | darkening, scuffs, grime |
+| 5 | gems and stones | clouding, fractures |
+| 6 | gold | soft dulling, grime in hollows |
+| 7 | silver | tarnish, warm toning, black patches |
+| 8 | bone | yellowing, stains, hairline cracks |
+| 9 | stone | weathering, lichen |
+| 10 | cloth | fading, grime, moth holes |
+| 11 | paint over wood | fading, chips showing the boards |
+| 12 | food | browning, going stale, mould |
+
+The amount is `cond.wear` times a per-material multiplier (`cond.rust`, `cond.patina`, `cond.rot`, `cond.fray`). The same shader also draws fabric patterns (stripes, checks, tartan, lozenges, quilting, mail rings, scales, rivets, heraldic divisions) and etching (scrollwork, border bands, knotwork, chevrons, diaper, runes) as dark engraving or gold inlay.
+
+The plate adds a character-level **dirt** and **wear** on its own body and clothing materials: grime pools low on the body, clothes fray and get moth holes. Both are driven by the character's conditions.
+
+## Light
+
+- The Armory lights from the camera: a key light of 0.78 at azimuth −40°, elevation 42°, plus ambient `#dfe6ee` at 0.42.
+- The plate uses a directional key of `#fff1dc` at 0.62 from (−6, 10, 9), plus ambient `#b6b0c8` at 0.42.
+- A torch is a warm point light (`#ffb36a`, intensity 0.55, range 16, quadratic falloff) with flicker `f = .88 + .08 sin(13.1t) + .05 sin(7.3t + 1.2) + .03 sin(23.7t)` and an additive halo sprite.
+
+In the abyss, carried light is the main light. Ambient should be very low so torches, lanterns and glowcaps matter (the light radius is a game stat).
+
+## Palette and UI
+
+The UI is a parchment ledger. Tokens are at the top of the plate's `<style>`: paper `#ebe5d5`, cells `#d7d1c4`, ink `#2b2420`, accent `#6f4526`, gold `#a8782e`, Stygian portrait blue `#22325c`. Rarity colours: common `#4a4239`, magic `#2c5bb0`, rare `#99700f`, legendary `#bb5119`. Display face Almendra, body Alegreya Sans, data IBM Plex Mono, runes Noto Sans Runic. The title lettering is gold and horizontally striped, from `reference/concept/forever-below-title-card.jpg`.

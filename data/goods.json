@@ -1,0 +1,115 @@
+{
+ "Bread": {
+  "fp": [
+   2,
+   1
+  ],
+  "wt": 1,
+  "desc": "Food · one day",
+  "stack": 3,
+  "food": 1
+ },
+ "Cheese": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.5,
+  "desc": "Food · half a day",
+  "food": 1
+ },
+ "Glowcap": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.1,
+  "desc": "Edible · glows faintly",
+  "stack": 5,
+  "food": 1
+ },
+ "Blind cavefish": {
+  "fp": [
+   3,
+   1
+  ],
+  "wt": 2,
+  "desc": "Food · spoils in two days",
+  "food": 1
+ },
+ "Waterskin": {
+  "fp": [
+   1,
+   2
+  ],
+  "wt": 5,
+  "desc": "Water · two days"
+ },
+ "Purse": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.4,
+  "desc": "Coins"
+ },
+ "Rope": {
+  "fp": [
+   2,
+   2
+  ],
+  "wt": 5,
+  "desc": "Hemp rope, 50 ft"
+ },
+ "Lockpicks": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.2,
+  "desc": "Thieves’ picks · lockpicking +1"
+ },
+ "Lamp oil": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 1,
+  "desc": "Fuel · six hours of lantern light",
+  "stack": 3
+ },
+ "Candle": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.2,
+  "desc": "Light 5 ft · two hours",
+  "stack": 4
+ },
+ "Bandages": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.3,
+  "desc": "Stops bleeding · treats one wound",
+  "stack": 3
+ },
+ "Spare torch": {
+  "fp": [
+   1,
+   3
+  ],
+  "wt": 1,
+  "desc": "Light 20 ft · one hour"
+ },
+ "Healing draught": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.5,
+  "desc": "Restores 2d4 health"
+ }
+}

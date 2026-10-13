@@ -1,0 +1,10 @@
+[package]
+name = "procgen_rng"
+description = "Seeded RNG shared by every generator. Bit-for-bit compatible with the browser prototypes (mulberry32)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }
