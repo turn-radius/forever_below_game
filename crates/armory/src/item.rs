@@ -88,6 +88,7 @@ ported! {
     Bags => bags::Bags(BagState),
     Chests => chests::Chests(ChestState),
     Food => food::Food(FoodState),
+    Torch => torch::Torch(TorchState),
 }
 
 impl Item {

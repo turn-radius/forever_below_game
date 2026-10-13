@@ -48,6 +48,14 @@ The Armory's food family (`armory::families::food`) now also makes the glowcap, 
 - Glass and liquids use the gem material with their own tint, until there is a glass material with transparency; a potion's glass is tinted toward its brew so it reads even when drawn opaque. Cork is tinted wood, wax seals tinted bone, a bottle's paper label tinted cloth.
 - Food's condition word is `freshness()` (Fresh, Day-old, Stale, Mouldy, Rotten), the prototype's `condWord` for food.
 
+### Lights
+
+Torches are an Armory family (`armory::families::torch`), and so are the bases the plate drew in `weaponGroup()`. Each light-giving family has a `light(&state)` that returns an `armory::build::light::LightAnchor`: the light's position in item space, a suggested colour, a radius in item units converted from the base's light stat in feet (`light` in `data/bases.json`), and how much it flickers. The game hangs the carried light there. Where the Rust port departs from the plate:
+
+- A torch has three heads (a wrapped rag, a bound bundle of resinous splints, an iron cresset packed with tow) and burns through four states: fresh, burning, doused and spent. The plate's `Pitch` and `Tallow` materials are the head's fuel. How charred the head is, and how tall the flame stands, are sliders. A spent torch is named `Torch Stub`.
+- Flames and embers are glowing meshes rather than an unlit material and a sprite. The halo is left to the game.
+- A torch's light reaches 20 ft at an ordinary flame, scaled by the flame's height and the head: a cresset reaches further and a splint bundle less far. Tallow burns a little dimmer.
+
 ## Rarity and affixes
 
 - Roll `x`: `x < .58` common, `< .85` magic, `< .97` rare, otherwise legendary. Containers cap at rare.

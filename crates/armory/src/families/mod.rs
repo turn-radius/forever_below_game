@@ -26,6 +26,7 @@ pub mod shield;
 pub mod spear;
 pub mod staff;
 pub mod sword;
+pub mod torch;
 
 pub(crate) mod hilted;
 

@@ -38,6 +38,8 @@
 //! - [`legwear`]: trousers, breeches and leggings on a lower-body form.
 //! - [`hood`]: hoods, cowls and coifs on a head form and the shoulders.
 //! - [`belt`]: a belt buckled round a torso form, with frogs, loops and rings.
+//! - [`light`]: carried light ([`light::LightAnchor`]), flames and embers (torches,
+//!   lanterns, candles, glowcaps).
 
 pub mod arrow;
 pub mod axe_head;
@@ -60,6 +62,7 @@ pub mod hilt;
 pub mod hoard;
 pub mod hood;
 pub mod legwear;
+pub mod light;
 pub mod limb;
 pub mod parts;
 pub mod plank;
