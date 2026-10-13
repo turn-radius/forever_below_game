@@ -25,6 +25,7 @@
 //! - [`device`]: emblem outlines and their raised or painted shapes (stencils, charges).
 //! - [`form`]: the mannequin's body-segment forms, thickened sheets, plate lames and edges.
 //! - [`garment`]: draped cloth, sleeves, trims, belts and plate fittings on a torso form.
+//! - [`hand`]: gloves and gauntlets on a hand form.
 
 pub mod arrow;
 pub mod blade;
@@ -36,6 +37,7 @@ pub mod garment;
 pub mod gem;
 pub mod guard;
 pub mod hafted;
+pub mod hand;
 pub mod head;
 pub mod hilt;
 pub mod hoard;

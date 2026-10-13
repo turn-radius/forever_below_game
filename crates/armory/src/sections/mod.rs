@@ -11,12 +11,14 @@
 //! - [`device`]: emblems engraved, painted or stencilled (signets, shields, crates).
 //! - [`garment`]: the cut, belt and plates of body armour and clothing.
 //! - [`hem`]: hems and trims on garments, helmets, gloves and footwear.
+//! - [`hand`]: gloves, gauntlets, mittens and bracers.
 
 pub mod blade;
 pub mod device;
 pub mod fabric;
 pub mod garment;
 pub mod hafted;
+pub mod hand;
 pub mod head;
 pub mod hem;
 pub mod ranged;

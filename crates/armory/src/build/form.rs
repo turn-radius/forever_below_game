@@ -3,8 +3,9 @@
 //!
 //! The Armory draws worn items standalone, on an implied mannequin, as the prototype does.
 //! The mannequin is a set of parametric forms whose dimensions are inputs: [`TorsoForm`] for
-//! body armour and clothing. `fb_body` fits gear to a folk body by building the same form
-//! from that body's dimensions and passing it to the same builders.
+//! body armour and clothing, [`HandForm`] for gloves and gauntlets. `fb_body` fits gear to
+//! a folk body by building the same form from that body's dimensions and passing it to the
+//! same builders.
 //!
 //! Sheet geometry: [`shell`] gives a sampled surface real thickness (an outer face, an inner
 //! face and a lip round every open edge), so cloth, leather and plate show an edge and
@@ -14,8 +15,9 @@
 //! Angles round a form run as in [`crate::geom::lathe`]: from +X toward -Z, so 90 degrees is
 //! the back and 270 degrees the front (+Z).
 
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI};
 
+use crate::build::hafted::smoothstep;
 use crate::geom::vec3::{self, V3};
 use crate::geom::{CatmullRom, GridOptions, MeshBuilder, Shading, SweepOptions, stitch_grid, tube};
 
@@ -349,15 +351,139 @@ pub fn limb_lames(stack: &LameStack) -> MeshBuilder {
     mesh
 }
 
-/// `count` angles evenly round a circle starting at `start`.
-pub fn angles(count: usize, start: f32) -> impl Iterator<Item = f32> {
-    (0..count).map(move |i| start + TAU * i as f32 / count as f32)
+/// One finger or the thumb: where it leaves the hand, which way it points, how long and
+/// thick it is, and how its length divides between the phalanges (base to tip).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Digit {
+    pub base: V3,
+    /// Direction with the digit straight, before curl.
+    pub direction: V3,
+    pub length: f32,
+    pub radius: f32,
+    /// Fraction of the length in each phalanx; a zero ends the digit early (the thumb).
+    pub phalanges: [f32; 3],
+    /// Which way the digit bends as it curls (toward the palm).
+    pub bend: V3,
+}
+
+impl Digit {
+    /// The joints from base to tip, each phalanx bent `curl` radians further toward `bend`.
+    pub fn joints(&self, curl: f32) -> Vec<V3> {
+        let mut d = vec3::normalize_or(self.direction, vec3::Y);
+        let mut p = self.base;
+        let mut out = vec![p];
+        for &f in self.phalanges.iter().filter(|f| **f > 0.0) {
+            p = vec3::add(p, vec3::scale(d, self.length * f));
+            out.push(p);
+            d = vec3::normalize_or(vec3::add(vec3::scale(d, curl.cos()), vec3::scale(self.bend, curl.sin())), d);
+        }
+        out
+    }
+}
+
+/// A right hand, back of the hand toward +Z, fingers up +Y, wrist at y = 0, forearm down -Y.
+/// The palm is a superelliptic slab; fingers and thumb are [`Digit`]s; the forearm is a
+/// superelliptic tube widening toward the elbow. Mirror in X for a left hand.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HandForm {
+    /// Wrist to knuckles.
+    pub palm_length: f32,
+    /// Half width at the wrist and across the knuckles.
+    pub wrist_half_width: f32,
+    pub knuckle_half_width: f32,
+    /// Half thickness at the wrist and at the knuckles.
+    pub wrist_half_depth: f32,
+    pub knuckle_half_depth: f32,
+    /// Index to little finger.
+    pub fingers: [Digit; 4],
+    pub thumb: Digit,
+    /// Half width and half depth of the forearm at the wrist, and how much it widens per unit.
+    pub forearm_half_width: f32,
+    pub forearm_half_depth: f32,
+    pub forearm_taper: f32,
+}
+
+impl HandForm {
+    /// The prototype's glove hand (`buildHands`) scaled by `size`, fingers splayed by
+    /// `spread` (0..=1).
+    pub fn mannequin(size: f32, spread: f32) -> HandForm {
+        let s = size;
+        let hb = 0.95 * s;
+        let bend = vec3::neg(vec3::Z);
+        let finger = |x: f32, length: f32, radius: f32, splay: f32| {
+            let a = splay * (0.4 + spread * 2.0);
+            Digit {
+                base: [x * s, hb - 0.06 * s, 0.0],
+                direction: [a.sin(), a.cos(), 0.0],
+                length: length * s,
+                radius: radius * s,
+                phalanges: [0.42, 0.32, 0.26],
+                bend,
+            }
+        };
+        HandForm {
+            palm_length: hb,
+            wrist_half_width: 0.36 * s,
+            knuckle_half_width: 0.48 * s,
+            wrist_half_depth: 0.2 * s,
+            knuckle_half_depth: 0.14 * s,
+            // Index finger on the thumb side (-X for a right hand seen from the back).
+            fingers: [finger(-0.34, 0.74, 0.1, -0.1), finger(-0.115, 0.82, 0.104, -0.03), finger(0.115, 0.76, 0.1, 0.04), finger(0.34, 0.62, 0.09, 0.12)],
+            thumb: Digit {
+                base: [-0.36 * s, 0.33 * hb, 0.03 * s],
+                direction: vec3::normalize_or([-0.62, 0.7, 0.32], vec3::Y),
+                length: 0.6 * s,
+                radius: 0.112 * s,
+                phalanges: [0.55, 0.45, 0.0],
+                bend: vec3::normalize_or([0.5, 0.0, -0.85], vec3::Z),
+            },
+            forearm_half_width: 0.36 * 1.12 * s,
+            forearm_half_depth: 0.2 * 1.4 * s,
+            forearm_taper: 0.05,
+        }
+    }
+
+    /// Half width and half depth of the palm at height `y` (0 at the wrist).
+    pub fn palm_at(&self, y: f32) -> (f32, f32) {
+        let t = smoothstep(0.0, 0.55 * self.palm_length, y);
+        let d = smoothstep(0.0, self.palm_length, y);
+        (
+            self.wrist_half_width + (self.knuckle_half_width - self.wrist_half_width) * t,
+            self.wrist_half_depth + (self.knuckle_half_depth - self.wrist_half_depth) * d,
+        )
+    }
+
+    /// A point on the palm at `angle` (lathe convention: 270 degrees is the back of the hand)
+    /// and height `y`, `inflate` further out. Above the knuckles the palm rounds off into an
+    /// end `cap` long (short over a glove's knuckles, long for a mitten's bag).
+    pub fn palm_point(&self, angle: f32, y: f32, cap: f32, inflate: f32) -> V3 {
+        let (mut w, mut d) = self.palm_at(y.min(self.palm_length));
+        let (mut wi, mut di) = (inflate, inflate);
+        if y > self.palm_length {
+            let t = ((y - self.palm_length) / cap.max(1e-3)).clamp(0.0, 1.0);
+            let k = (1.0 - t * t).max(0.0).sqrt();
+            w *= k;
+            d *= k;
+            wi *= k;
+            di *= k;
+        }
+        let [x, z] = section_point(angle, w + wi, d + di, 0.7, 1.0);
+        [x, y, z]
+    }
+
+    /// A point on the forearm `down` below the wrist at `angle`, scaled by `flare`.
+    pub fn forearm_point(&self, angle: f32, down: f32, flare: f32) -> V3 {
+        let k = (1.0 + self.forearm_taper * down) * flare;
+        let [x, z] = section_point(angle, self.forearm_half_width * k, self.forearm_half_depth * k, 2.0 / 2.4, 1.0);
+        [x, -down, z]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geom::OutlineMode;
+    use std::f32::consts::TAU;
 
     #[test]
     fn mannequin_profile_matches_its_rings() {
