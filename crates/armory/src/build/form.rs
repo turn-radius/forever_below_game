@@ -3,9 +3,9 @@
 //!
 //! The Armory draws worn items standalone, on an implied mannequin, as the prototype does.
 //! The mannequin is a set of parametric forms whose dimensions are inputs: [`TorsoForm`] for
-//! body armour and clothing, [`HandForm`] for gloves and gauntlets. `fb_body` fits gear to
-//! a folk body by building the same form from that body's dimensions and passing it to the
-//! same builders.
+//! body armour and clothing, [`HandForm`] for gloves and gauntlets, [`LegForm`] for
+//! footwear and greaves. `fb_body` fits gear to a folk body by building the same form from
+//! that body's dimensions and passing it to the same builders.
 //!
 //! Sheet geometry: [`shell`] gives a sampled surface real thickness (an outer face, an inner
 //! face and a lip round every open edge), so cloth, leather and plate show an edge and
@@ -476,6 +476,144 @@ impl HandForm {
         let k = (1.0 + self.forearm_taper * down) * flare;
         let [x, z] = section_point(angle, self.forearm_half_width * k, self.forearm_half_depth * k, 2.0 / 2.4, 1.0);
         [x, -down, z]
+    }
+}
+
+/// A right foot and lower leg in profile: toe toward +X, sole on y = 0, the outside of the
+/// foot toward -Z, the shin rising from the ankle. The foot is a superelliptic section along
+/// its length with a flat sole, rounded at the heel and the toe; the leg is a superelliptic
+/// tube with a calf.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LegForm {
+    /// Heel to the ball's end of a round toe.
+    pub foot_length: f32,
+    /// Extra length of a pointed toe beyond the foot.
+    pub toe_point: f32,
+    /// How far a pointed toe curls up at its tip.
+    pub toe_lift: f32,
+    /// Half width across the ball of the foot and at the heel.
+    pub ball_half_width: f32,
+    pub heel_half_width: f32,
+    /// Height of the instep and of the toe box.
+    pub instep_height: f32,
+    pub toe_height: f32,
+    /// Where the leg rises from, along the foot.
+    pub ankle_x: f32,
+    /// Half width (toe to heel) and half depth (side to side) of the shin above the ankle.
+    pub shin_half_width: f32,
+    pub shin_half_depth: f32,
+    /// How much the calf swells at its widest.
+    pub calf: f32,
+    /// Height of the knee above the sole.
+    pub knee_height: f32,
+}
+
+impl LegForm {
+    /// The prototype's boot form (`buildFeet`) scaled by `size`, `width` wide, with a pointed
+    /// toe of `toe` (0..=1).
+    pub fn mannequin(size: f32, width: f32, toe: f32) -> LegForm {
+        let s = size;
+        LegForm {
+            foot_length: 2.6 * s,
+            toe_point: toe * 1.8 * s,
+            toe_lift: toe * 0.4 * s,
+            ball_half_width: 0.46 * s * width,
+            heel_half_width: 0.34 * s * width,
+            instep_height: 0.95 * s,
+            toe_height: 0.45 * s,
+            ankle_x: 0.54 * s,
+            shin_half_width: 0.5 * s,
+            shin_half_depth: 0.35 * s * width,
+            calf: 0.22,
+            knee_height: 4.6 * s,
+        }
+    }
+
+    pub fn pointed(&self) -> bool {
+        self.toe_point > 0.09
+    }
+
+    /// Heel to the tip of the toe.
+    pub fn toe_x(&self) -> f32 {
+        self.foot_length + if self.pointed() { self.toe_point } else { 0.0 }
+    }
+
+    /// Half width of the foot at `x` along it, and how far its section is rounded off toward
+    /// the heel or the toe (1 in the middle, 0 at the ends).
+    pub fn half_width(&self, x: f32) -> (f32, f32) {
+        let l = self.foot_length;
+        let heel = {
+            let t = (x / (0.13 * l)).clamp(0.0, 1.0);
+            (1.0 - (1.0 - t) * (1.0 - t)).max(0.0).sqrt()
+        };
+        let mut w = self.heel_half_width + (self.ball_half_width - self.heel_half_width) * smoothstep(0.15 * l, 0.7 * l, x);
+        let mut end = heel;
+        if x > 0.72 * l {
+            let t = ((x - 0.72 * l) / (self.toe_x() - 0.72 * l)).clamp(0.0, 1.0);
+            if self.pointed() {
+                w = self.ball_half_width * (1.0 - t.powf(0.75)) + 0.012 * self.foot_length / 2.6;
+                end = end.min((1.0 - t.powf(0.75)).max(0.0).sqrt());
+            } else {
+                let k = (1.0 - t * t).max(0.0).sqrt();
+                w = self.ball_half_width * k;
+                end = end.min(k.sqrt());
+            }
+        }
+        (w.max(0.0), end)
+    }
+
+    /// Height of the foot's top at `x`.
+    pub fn height(&self, x: f32) -> f32 {
+        let l = self.foot_length;
+        let (inst, toe) = (self.instep_height, self.toe_height);
+        let mut h = if x < 0.38 * l {
+            inst * (0.63 + 0.37 * smoothstep(0.04 * l, 0.36 * l, x))
+        } else {
+            inst - (inst - toe) * smoothstep(0.38 * l, 0.78 * l, x)
+        };
+        if x > 0.78 * l {
+            let t = ((x - 0.78 * l) / (self.toe_x() - 0.78 * l)).clamp(0.0, 1.0);
+            h = toe - toe * if self.pointed() { 0.7 } else { 0.45 } * t;
+        }
+        h
+    }
+
+    /// How far a pointed toe has lifted at `x`.
+    pub fn lift(&self, x: f32) -> f32 {
+        let l = self.foot_length;
+        if self.pointed() && x > 0.78 * l {
+            self.toe_lift * ((x - 0.78 * l) / (self.toe_x() - 0.78 * l)).clamp(0.0, 1.0).powf(2.4)
+        } else {
+            0.0
+        }
+    }
+
+    /// A point on the foot at `x` along it and `angle` round it (0 the outside, a quarter
+    /// turn the top), `inflate` further out. Rows of increasing `x` with increasing `angle`
+    /// face outward.
+    pub fn foot_point(&self, angle: f32, x: f32, inflate: f32) -> V3 {
+        let (s, c) = angle.sin_cos();
+        let (w, end) = self.half_width(x);
+        let h = self.height(x) + inflate;
+        let w = w + inflate;
+        let centre = 0.42 * h;
+        let y = if s >= 0.0 { h * (0.42 + 0.58 * signed_pow(s, 0.8)) } else { 0.42 * h * (1.0 - (-s).powi(3)) } - inflate * 0.6;
+        let y = centre + (y - centre) * end;
+        [x, self.lift(x) + y, -w * end * signed_pow(c, 2.0 / 2.2)]
+    }
+
+    /// A point on the leg `y` above the sole at `angle` (0 toward the toe, lathe convention),
+    /// `inflate` further out. `height` is the shaft's top, for the calf's placement; `ridge`
+    /// raises a crest down the shin (a greave).
+    pub fn shin_point(&self, angle: f32, y: f32, height: f32, ridge: f32, inflate: f32) -> V3 {
+        let t = (y / height.max(0.01)).clamp(0.0, 1.0);
+        let tall = height > 2.0 * self.foot_length / 2.6;
+        let calf = if tall { self.calf * (-((t - 0.55) / 0.22).powi(2)).exp() } else { 0.0 };
+        let a = (angle + PI).rem_euclid(2.0 * PI) - PI;
+        let k = (1.0 + calf + 0.06 * smoothstep(0.85, 1.0, t)) * (1.0 + ridge * (-(a / 0.32).powi(2)).exp());
+        let depth = self.shin_half_depth * (1.0 + 0.2 * smoothstep(0.0, 0.35, t));
+        let [x, z] = section_point(angle, self.shin_half_width * k + inflate, depth * k + inflate, 2.0 / 2.2, 1.0);
+        [self.ankle_x + x, y, z]
     }
 }
 

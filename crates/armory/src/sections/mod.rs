@@ -12,8 +12,10 @@
 //! - [`garment`]: the cut, belt and plates of body armour and clothing.
 //! - [`hem`]: hems and trims on garments, helmets, gloves and footwear.
 //! - [`hand`]: gloves, gauntlets, mittens and bracers.
+//! - [`boot`]: shoes, boots, leg wraps, sabatons and greaves.
 
 pub mod blade;
+pub mod boot;
 pub mod device;
 pub mod fabric;
 pub mod garment;

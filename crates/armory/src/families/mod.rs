@@ -8,6 +8,7 @@ pub mod bow;
 pub mod chests;
 pub mod crossbow;
 pub mod dagger;
+pub mod feet;
 pub mod food;
 pub mod garment;
 pub mod hands;
