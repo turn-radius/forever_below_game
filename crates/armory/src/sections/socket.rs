@@ -1,6 +1,7 @@
 //! A socket: the hollow cone that seats a head on the end of a haft, with raised rings and
 //! langets (strips nailed down the haft). Spears use it; javelins, pikes and other socketed
-//! polearm heads can reuse it. From the prototype's `socket` section.
+//! polearm heads can reuse it. Axes use it for the eye their head is mounted through
+//! (`length` is the eye's height, `flare` its girth). From the prototype's `socket` section.
 
 use crate::material::MaterialKind;
 use crate::slider::sliders;

@@ -4,10 +4,12 @@
 use crate::geom::ItemMesh;
 
 pub mod amulet;
+pub mod axe;
 pub mod bags;
 pub mod bow;
 pub mod charm;
 pub mod chests;
+pub mod club;
 pub mod crossbow;
 pub mod dagger;
 pub mod feet;

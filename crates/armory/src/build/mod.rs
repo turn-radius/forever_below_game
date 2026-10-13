@@ -2,13 +2,14 @@
 //! [`crate::sections`] (never a family's whole state) and returns [`crate::geom::MeshBuilder`]s
 //! in a local space the family places.
 //!
-//! - [`hafted`]: shaft, bands, grip, wrap, rivets and pommel (staves, maces, swords, spears,
-//!   daggers).
+//! - [`hafted`]: shaft, bands, grip, wrap, rivets and pommel, and a club's swelling (staves,
+//!   maces, swords, spears, daggers, clubs, axes).
 //! - [`head`]: collar, head body, flanges, spikes, prongs and finial, and the whole
 //!   [`head::head_assembly`] (maces, staves).
 //! - [`gem`]: cut stones, bezels, collets and claw settings (head gems, pommels, guards,
 //!   rings, amulets, charms).
 //! - [`socket`]: a socket sleeved over a haft, its rings and langets (spears).
+//!   [`head::head_assembly`] (maces, staves), and spikes driven into a haft (clubs).
 //! - [`spearhead`]: a spearhead blade and its wings or bar (spears).
 //! - [`limb`]: bow limbs and crossbow prods, their nocks, the string, a cord wound on a handle.
 //! - [`arrow`]: arrows and crossbow bolts.
@@ -31,8 +32,10 @@
 //! - [`chain`]: cable chains, twisted cords, thongs and beads along a path (necklaces,
 //!   charm hangers, straps, lantern chains).
 //! - [`emblem`]: plaque outlines (signet faces, pendants, badges).
+//! - [`axe_head`]: an eye, a bit mounted crosswise through it, and a poll (axes).
 
 pub mod arrow;
+pub mod axe_head;
 pub mod blade;
 pub mod boot;
 pub mod chain;

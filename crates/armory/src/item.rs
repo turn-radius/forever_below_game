@@ -70,6 +70,8 @@ ported! {
     Sword => sword::Sword(SwordState),
     Spear => spear::Spear(SpearState),
     Dagger => dagger::Dagger(DaggerState),
+    Club => club::Club(ClubState),
+    Axe => axe::Axe(AxeState),
     Bow => bow::Bow(BowState),
     Crossbow => crossbow::Crossbow(CrossbowState),
     Garment => garment::Garment(GarmentState),

@@ -11,7 +11,8 @@ fn load(f: Family) -> Fixture {
 
 #[test]
 fn fixtures_load() {
-    for f in Family::ALL {
+    // Clubs and axes were never Armory families in the prototype, so they have no fixtures.
+    for f in Family::ALL.into_iter().filter(|f| !matches!(f, Family::Club | Family::Axe)) {
         let fx = load(f);
         assert_eq!(fx.family, f);
         assert_eq!(fx.rows.len(), fx.count);

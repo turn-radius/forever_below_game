@@ -13,7 +13,7 @@
 
 use procgen_rng::Mulberry32;
 
-use super::hafted::{radius_on, turned};
+use super::hafted::{Haft, radius_on, turned};
 use super::parts::Parts;
 use crate::geom::polygon::P2;
 use crate::geom::{
@@ -328,6 +328,40 @@ pub fn spikes_mesh(spikes: &Spikes, surface: &HeadSurface, seed: u32) -> MeshBui
         let (point, normal) = surface.surface(slot.angle, surface.base + v * lh);
         let dir = vec3::normalize_or(vec3::add(vec3::scale(normal, tilt.cos()), vec3::scale(vec3::Y, tilt.sin())), normal);
         let scale = (1.0 - spikes.falloff * slot.rank.abs()).max(0.15);
+        let mut spike = one.clone();
+        spike.scale_uniform(scale).place(vec3::sub(point, vec3::scale(dir, spikes.base * 0.35 * scale)), dir);
+        out.append(&spike);
+    }
+    out
+}
+
+/// [`Spikes`] driven into the haft itself over `span` (`(t0, t1)`) rather than into a turned
+/// head: a club's studs, nails and teeth. Rings follow the haft's frames and each spike
+/// seats along the surface normal there, so they sit true on a swelling or a knotted, bent
+/// shaft. `bias` and `spread` work within the span as they do on a head. `seed` drives the
+/// jitter.
+pub fn spikes_on_haft(spikes: &Spikes, haft: &Haft, span: (f32, f32), seed: u32) -> MeshBuilder {
+    let mut out = MeshBuilder::new();
+    let len = (span.1 - span.0) * haft.length();
+    if len <= 0.0 {
+        return out;
+    }
+    let mut rng = Mulberry32::new(seed.wrapping_mul(31).wrapping_add(7));
+    let slots = distribute(spikes.count, spikes.rings, spikes.pattern, spikes.phase, spikes.twist, spikes.hemisphere, spikes.jitter, &mut rng);
+    let one = spike_mesh(spikes.base, spikes.length, spikes.sides, spikes.concave);
+    let tilt = spikes.tilt.to_radians();
+    let e = 0.01 / haft.length();
+    for slot in slots {
+        let v = (0.5 + spikes.bias + slot.offset * spikes.spread * 0.5).clamp(0.03, 0.97);
+        let t = span.0 + v * (span.1 - span.0);
+        let frame = haft.frame(t);
+        let radial = vec3::add(vec3::scale(frame.normal, slot.angle.cos()), vec3::scale(frame.binormal, slot.angle.sin()));
+        let r = haft.surface_radius(t, slot.angle);
+        let slope = (haft.surface_radius(t + e, slot.angle) - haft.surface_radius(t - e, slot.angle)) / 0.02;
+        let normal = vec3::normalize_or(vec3::sub(radial, vec3::scale(frame.tangent, slope)), radial);
+        let dir = vec3::normalize_or(vec3::add(vec3::scale(normal, tilt.cos()), vec3::scale(frame.tangent, tilt.sin())), normal);
+        let scale = (1.0 - spikes.falloff * slot.rank.abs()).max(0.15);
+        let point = vec3::add(frame.origin, vec3::scale(radial, r));
         let mut spike = one.clone();
         spike.scale_uniform(scale).place(vec3::sub(point, vec3::scale(dir, spikes.base * 0.35 * scale)), dir);
         out.append(&spike);

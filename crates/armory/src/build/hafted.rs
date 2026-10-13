@@ -21,7 +21,7 @@ use crate::geom::{
     rotation_minimizing_frames, spline_profile, sweep_frames, tube, tube_varying, vec3,
 };
 use crate::material::MaterialKind;
-use crate::sections::hafted::{Grip, Pommel, PommelGem, PommelStyle, Shaft, Wrap};
+use crate::sections::hafted::{Grip, Pommel, PommelGem, PommelStyle, Shaft, Swell, Wrap};
 
 /// Points along the haft's centreline, evenly spaced by arc length.
 const AXIS_SAMPLES: usize = 161;
@@ -56,6 +56,8 @@ pub struct Haft {
     taper: f32,
     gnarl: f32,
     knots: Vec<Knot>,
+    /// The swelling toward the top and the length (in `t`) of the rounded end.
+    swell: Option<(Swell, f32)>,
 }
 
 impl Haft {
@@ -86,13 +88,47 @@ impl Haft {
                 size: grain.range_f32(0.5, 1.0),
             })
             .collect();
-        Haft { axis, frames, length, radius: shaft.radius, taper: shaft.taper, gnarl, knots }
+        Haft { axis, frames, length, radius: shaft.radius, taper: shaft.taper, gnarl, knots, swell: None }
     }
 
     /// Sands the knots off `t0..=t1` (and a little either side), where a grip or wrap goes.
     pub fn clear(&mut self, t0: f32, t1: f32) {
         let margin = 0.25 / self.length;
         self.knots.retain(|k| k.t < t0 - margin || k.t > t1 + margin);
+    }
+
+    /// Swells the top of the shaft into a club's striking end and rounds it off (see
+    /// [`Swell`]). Everything laid along the haft (knots, bands, grip, studs) follows the
+    /// swelling. A swell that is off leaves the haft as it was.
+    pub fn with_swell(mut self, swell: &Swell) -> Haft {
+        if swell.on {
+            let start = swell.start.clamp(0.0, 0.95);
+            let widest = self.radius * self.taper * swell.girth.max(1.0);
+            let end = (widest * (0.15 + 0.85 * swell.dome.clamp(0.0, 1.0)) / self.length).min((1.0 - start) * 0.6);
+            self.swell = Some((Swell { start, ..*swell }, end.max(1e-3)));
+        }
+        self
+    }
+
+    /// Where the swelling runs at full girth or on its way there, as `(t0, t1)`: from where it
+    /// begins to where the rounded end starts. `None` without a swell.
+    pub fn swell_span(&self) -> Option<(f32, f32)> {
+        self.swell.map(|(sw, end)| (sw.start, 1.0 - end))
+    }
+
+    /// The swell's multiplier on the turned radius at `t`, the rounded end included.
+    fn swell_factor(&self, t: f32) -> f32 {
+        let Some((sw, end)) = self.swell else { return 1.0 };
+        let t = t.clamp(0.0, 1.0);
+        let s = ((t - sw.start) / (1.0 - sw.start).max(1e-3)).clamp(0.0, 1.0);
+        let k = 1.0 + (sw.girth - 1.0) * smoothstep(0.0, sw.peak.max(0.05), s);
+        let e = 1.0 - end;
+        if t > e {
+            let x = ((t - e) / end).min(1.0);
+            k * (1.0 - x * x).max(0.0).sqrt()
+        } else {
+            k
+        }
     }
 
     pub fn length(&self) -> f32 {
@@ -125,9 +161,9 @@ impl Haft {
         self.frame(t).tangent
     }
 
-    /// The turned radius at `t`, tapered, without knots.
+    /// The turned radius at `t`, tapered and swollen, without knots.
     pub fn radius(&self, t: f32) -> f32 {
-        self.radius * (1.0 + (self.taper - 1.0) * t.clamp(0.0, 1.0))
+        self.radius * (1.0 + (self.taper - 1.0) * t.clamp(0.0, 1.0)) * self.swell_factor(t)
     }
 
     /// The surface radius at `t` and `angle` (radians from the frame normal toward the
@@ -161,12 +197,31 @@ impl Haft {
 
     /// The shaft itself: a tube along the centreline, knotted where the grain says.
     pub fn mesh(&self) -> MeshBuilder {
+        if let Some((sw, end)) = self.swell {
+            return self.swollen_mesh(sw.start, end);
+        }
         // Knots need rows and sides to show; a plain tapered haft is straight between bends.
         let (rows, sides) = if self.knots.is_empty() { ((16.0 + self.length * 5.0).round() as usize, 20) } else { ((40.0 + self.length * 16.0).round() as usize, 28) };
         let path = self.path(0.0, 1.0, rows);
         // tube_varying measures angle from its own frames; seed them like the haft's.
         let options = SweepOptions { up: Some(vec3::X), ..Default::default() };
         tube_varying(&path, sides, &options, |t, a| self.surface_radius(t, a))
+    }
+
+    /// A swollen shaft: rows dense over the swelling and closing in over the rounded end, so
+    /// the end is a dome rather than a cone.
+    fn swollen_mesh(&self, start: f32, end: f32) -> MeshBuilder {
+        let per_unit = if self.knots.is_empty() { 5.0 } else { 16.0 };
+        let e = 1.0 - end;
+        let below = ((start * self.length * per_unit).round() as usize).max(2);
+        let over = (((e - start) * self.length * per_unit.max(18.0)).round() as usize).max(16);
+        let dome = 14;
+        let mut ts: Vec<f32> = (0..below).map(|i| start * i as f32 / below as f32).collect();
+        ts.extend((0..over).map(|i| start + (e - start) * i as f32 / over as f32));
+        ts.extend((0..=dome).map(|i| e + end * (std::f32::consts::FRAC_PI_2 * i as f32 / dome as f32).sin()));
+        let path: Vec<V3> = ts.iter().map(|&t| self.point(t)).collect();
+        let options = SweepOptions { up: Some(vec3::X), ..Default::default() };
+        tube_varying(&path, 32, &options, |t, a| self.surface_radius(t, a))
     }
 }
 
@@ -185,6 +240,34 @@ pub fn shaft_bands(haft: &Haft, shaft: &Shaft, avoid: &[(f32, f32)]) -> MeshBuil
         let mut band = lathe(&spline_profile(&control, 12), &LatheOptions { facets: 28, shading: Shading::SMOOTH, ..Default::default() });
         band.place(haft.point(t), haft.tangent(t));
         out.append(&band);
+    }
+    out
+}
+
+/// One raised ring round the haft at `t`, `size` high, following the surface's slope (so it
+/// sits evenly on a swelling).
+pub fn band_mesh(haft: &Haft, t: f32, size: f32) -> MeshBuilder {
+    let bs = size;
+    let at = |y: f32| haft.outer_radius(t + y / haft.length());
+    let control = [
+        [at(-bs) * 0.97, -bs],
+        [at(-bs * 0.5) + bs * 0.7, -bs * 0.5],
+        [at(0.0) + bs * 0.8, 0.0],
+        [at(bs * 0.5) + bs * 0.7, bs * 0.5],
+        [at(bs) * 0.97, bs],
+    ];
+    let mut band = lathe(&spline_profile(&control, 12), &LatheOptions { facets: 32, shading: Shading::SMOOTH, ..Default::default() });
+    band.place(haft.point(t), haft.tangent(t));
+    band
+}
+
+/// `count` raised rings of `size` spaced evenly over `span` (`(t0, t1)`), the first and last
+/// inset half a spacing from its ends: iron bands round a club's swelling, a haft's head end.
+pub fn bands_over(haft: &Haft, count: u32, size: f32, span: (f32, f32)) -> MeshBuilder {
+    let mut out = MeshBuilder::new();
+    for i in 0..count {
+        let t = span.0 + (span.1 - span.0) * (i as f32 + 0.5) / count as f32;
+        out.append(&band_mesh(haft, t, size));
     }
     out
 }

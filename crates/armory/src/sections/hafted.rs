@@ -1,6 +1,7 @@
 //! The handle half of a hafted item: shaft, grip, wrapping and pommel. Shared by staves,
-//! maces, swords (the shaft is the handle), spears (the haft; the pommel is the butt cap)
-//! and daggers. Ranges are the prototype's `SECTIONS`; families narrow them.
+//! maces, swords (the shaft is the handle), spears (the haft; the pommel is the butt cap),
+//! daggers, axes and clubs (whose shaft swells into the striking end). Ranges are the
+//! prototype's `SECTIONS` ([`Swell`] is new); families narrow them.
 
 use crate::gem::Gemstone;
 use crate::material::MaterialKind;
@@ -39,6 +40,37 @@ sliders! {
 impl Default for Shaft {
     fn default() -> Self {
         Shaft { length: 5.0, radius: 0.15, taper: 1.08, gnarl: 0.0, gnarl_freq: 3.0, bands: 0, band_size: 0.03, material: MaterialKind::Wood }
+    }
+}
+
+/// The shaft swelling toward its top into a striking end and closing in a rounded end, as
+/// clubs and cudgels are carved. The swelling is part of the shaft, so knots, bands and
+/// studs follow it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Swell {
+    pub on: bool,
+    /// Where the swelling begins, as a fraction of the shaft's length from the butt.
+    pub start: f32,
+    /// The widest radius, as a multiple of the shaft's radius there.
+    pub girth: f32,
+    /// Where it is widest, as a fraction of the way from `start` to the end.
+    pub peak: f32,
+    /// How round the end is: 0 a flat end with an eased rim, 1 a full dome.
+    pub dome: f32,
+}
+
+sliders! {
+    SwellLimits for Swell {
+        start: 0.1, 0.9, 0.01;
+        girth: 1.0, 4.0, 0.01;
+        peak: 0.2, 1.0, 0.01;
+        dome: 0.0, 1.0, 0.01;
+    }
+}
+
+impl Default for Swell {
+    fn default() -> Self {
+        Swell { on: false, start: 0.45, girth: 2.0, peak: 0.75, dome: 0.6 }
     }
 }
 

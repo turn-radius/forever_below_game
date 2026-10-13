@@ -1,7 +1,8 @@
 //! Sections shared between families, each with its sliders (the prototype's `SECTIONS` entries
 //! whose `fam` list names more than one family).
 //!
-//! - [`hafted`]: the handle half of staves, maces, swords, spears and daggers.
+//! - [`hafted`]: the handle half of staves, maces, swords, spears, daggers, clubs and axes,
+//!   and a club's swelling.
 //! - [`head`]: the striking or crowning end of maces and staves.
 //! - [`spearhead`]: the blade and the wings or lugs of a thrusting polearm head (spears).
 //! - [`socket`]: the socket that seats a head on a haft, with its rings and langets (spears).
@@ -15,7 +16,9 @@
 //! - [`boot`]: shoes, boots, leg wraps, sabatons and greaves.
 //! - [`jewel`]: the set stone of rings, amulets and charms.
 //! - [`emblem`]: plaque outlines (signet faces, pendants).
+//! - [`axe_head`]: an axe's bit, crosswise through an eye, and its poll (axes).
 
+pub mod axe_head;
 pub mod blade;
 pub mod boot;
 pub mod device;
