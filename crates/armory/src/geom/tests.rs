@@ -56,6 +56,9 @@ fn all_primitives() -> Vec<(&'static str, MeshBuilder)> {
         ("sweep star", sweep(&path, &star, &SweepOptions { twist: PI, shading: Shading::FLAT, ..Default::default() }, |_| 0.2)),
         ("extrude", extrude(&star, &[], 0.3)),
         ("extrude holed", extrude(&[[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]], &[vec![[1.0, 1.0], [2.0, 1.0], [2.0, 2.0], [1.0, 2.0]]], 0.5)),
+        ("extrude tapered", extrude_tapered(&[[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]], &[vec![[1.0, 1.0], [2.0, 1.0], [2.0, 2.0], [1.0, 2.0]]], 0.6, 0.2)),
+        ("tube varying", tube_varying(&path, 12, &SweepOptions::default(), |t, a| 0.3 + 0.1 * (3.0 * a).cos() * t)),
+        ("lathe spline profile", lathe(&spline_profile(&[[0.5, 0.0], [1.0, 0.5], [0.6, 2.0], [0.0, 3.0]], 24), &LatheOptions::new(16, Shading::SMOOTH))),
         ("cloth", parametric_surface(8, 12, &GridOptions::default(), |u, v| [u * 4.0, -v * 6.0, (u * 6.0).sin() * 0.3 * v])),
         ("uv sphere", uv_sphere(1.0, 12, 8)),
         ("icosphere", icosphere(1.0, 2)),
@@ -76,6 +79,22 @@ fn every_primitive_is_valid_and_wound_to_its_normals() {
         p.name = name;
         assert_front_faces_agree(&p);
     }
+}
+
+#[test]
+fn tapered_extrusion_thins_toward_max_x() {
+    let mesh = extrude_tapered(&[[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]], &[], 0.4, 0.1);
+    let depth_at = |x: f32| mesh.positions.iter().filter(|p| (p[0] - x).abs() < 1e-6).map(|p| p[2]).fold(0.0f32, f32::max) * 2.0;
+    assert!((depth_at(0.0) - 0.4).abs() < 1e-5);
+    assert!((depth_at(2.0) - 0.1).abs() < 1e-5);
+}
+
+#[test]
+fn polygon_queries() {
+    let square = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]];
+    assert!(point_in_polygon([1.0, 1.0], &square));
+    assert!(!point_in_polygon([3.0, 1.0], &square));
+    assert!((distance_to_polygon([1.0, 0.5], &square) - 0.5).abs() < 1e-6);
 }
 
 #[test]

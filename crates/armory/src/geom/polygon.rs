@@ -167,28 +167,67 @@ fn clip_ears(mut ring: Vec<u32>, pts: &[P2]) -> Vec<[u32; 3]> {
     tris
 }
 
+/// Whether `p` lies strictly inside the closed polygon (even-odd rule; either winding).
+pub fn point_in_polygon(p: P2, polygon: &[P2]) -> bool {
+    let n = polygon.len();
+    let mut inside = false;
+    for i in 0..n {
+        let (a, b) = (polygon[i], polygon[(i + 1) % n]);
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Shortest distance from `p` to the polygon's edges.
+pub fn distance_to_polygon(p: P2, polygon: &[P2]) -> f32 {
+    let n = polygon.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (polygon[i], polygon[(i + 1) % n]);
+            let ab = sub2(b, a);
+            let len2 = (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-12);
+            let t = (((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / len2).clamp(0.0, 1.0);
+            let d = [p[0] - a[0] - ab[0] * t, p[1] - a[1] - ab[1] * t];
+            (d[0] * d[0] + d[1] * d[1]).sqrt()
+        })
+        .fold(f32::MAX, f32::min)
+}
+
 /// Extrudes a 2D outline in the XY plane through `depth` along Z, centred on z = 0, with hard
 /// edges all round: flat front (+Z) and back (-Z) faces and one flat wall per outline edge.
 /// Holes cut through. UVs: faces are a planar projection of XY; walls run u along the
 /// perimeter and v across the depth.
 pub fn extrude(outline: &[P2], holes: &[Vec<P2>], depth: f32) -> MeshBuilder {
+    extrude_tapered(outline, holes, depth, depth)
+}
+
+/// [`extrude`] with the depth running linearly from `depth_at_min_x` at the outline's least
+/// x to `depth_at_max_x` at its greatest: a wedge, thick at the root and thinner toward a
+/// cutting edge (flanges, axe bits, guards). Both faces stay planar, so they shade flat.
+pub fn extrude_tapered(outline: &[P2], holes: &[Vec<P2>], depth_at_min_x: f32, depth_at_max_x: f32) -> MeshBuilder {
     let mut mesh = MeshBuilder::new();
     if outline.len() < 3 {
         return mesh;
     }
-    let half = depth * 0.5;
     let all: Vec<P2> = outline.iter().chain(holes.iter().flatten()).copied().collect();
     let (min, max) = all.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), q| {
         ([lo[0].min(q[0]), lo[1].min(q[1])], [hi[0].max(q[0]), hi[1].max(q[1])])
     });
     let size = (max[0] - min[0]).max(max[1] - min[1]).max(1e-6);
     let uv = |q: P2| [(q[0] - min[0]) / size, (q[1] - min[1]) / size];
+    // Half depth as a linear function of x: half(x) = h0 + slope * (x - min_x).
+    let h0 = depth_at_min_x.max(0.0) * 0.5;
+    let slope = (depth_at_max_x.max(0.0) * 0.5 - h0) / (max[0] - min[0]).max(1e-6);
+    let half = |x: f32| h0 + slope * (x - min[0]);
 
     let tris = triangulate(outline, holes);
-    for (z, normal, front) in [(half, [0.0, 0.0, 1.0], true), (-half, [0.0, 0.0, -1.0], false)] {
+    for (side, front) in [(1.0f32, true), (-1.0, false)] {
+        let normal = super::vec3::normalize_or([-slope, 0.0, side], [0.0, 0.0, side]);
         let base = mesh.vertex_count() as u32;
         for &q in &all {
-            mesh.push_vertex([q[0], q[1], z], normal, uv(q));
+            mesh.push_vertex([q[0], q[1], side * half(q[0])], normal, uv(q));
         }
         for t in &tris {
             if front { mesh.push_triangle(base + t[0], base + t[1], base + t[2]) } else { mesh.push_triangle(base + t[0], base + t[2], base + t[1]) };
@@ -215,8 +254,9 @@ pub fn extrude(outline: &[P2], holes: &[Vec<P2>], depth: f32) -> MeshBuilder {
             let outward: V3 = [d[1], -d[0], 0.0];
             let (u0, u1) = (along / perimeter, (along + len) / perimeter);
             along += len;
+            let (ha, hb) = (half(a[0]), half(b[0]));
             mesh.push_flat_quad(
-                [[a[0], a[1], -half], [b[0], b[1], -half], [b[0], b[1], half], [a[0], a[1], half]],
+                [[a[0], a[1], -ha], [b[0], b[1], -hb], [b[0], b[1], hb], [a[0], a[1], ha]],
                 [[u0, 0.0], [u1, 0.0], [u1, 1.0], [u0, 1.0]],
                 outward,
             );

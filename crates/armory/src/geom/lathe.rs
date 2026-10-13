@@ -3,6 +3,7 @@
 
 use super::builder::MeshBuilder;
 use super::grid::{GridOptions, Shading, stitch_grid};
+use super::spline::CatmullRom;
 use super::vec3::{self, V3};
 
 /// How [`lathe`] revolves a profile.
@@ -78,4 +79,17 @@ pub fn lathe_fn(samples: usize, options: &LatheOptions, profile: impl Fn(f32) ->
     let samples = samples.max(1);
     let points: Vec<[f32; 2]> = (0..=samples).map(|i| profile(i as f32 / samples as f32)).collect();
     lathe(&points, options)
+}
+
+/// Smooths a lathe profile of `[radius, y]` control points into about `samples` points on a
+/// centripetal Catmull-Rom spline through every control point (the prototype's
+/// `SplineCurve(...).getPoints()`, without its cusps). Radii are clamped at zero, so a
+/// control point on the axis stays a clean pole.
+pub fn spline_profile(control: &[[f32; 2]], samples: usize) -> Vec<[f32; 2]> {
+    if control.len() < 3 {
+        return control.to_vec();
+    }
+    let curve = CatmullRom::centripetal(control.iter().map(|&[r, y]| [r, y, 0.0]).collect());
+    let per_segment = samples.div_ceil(curve.segment_count()).max(1);
+    curve.sample(per_segment).into_iter().map(|p| [p[0].max(0.0), p[1]]).collect()
 }

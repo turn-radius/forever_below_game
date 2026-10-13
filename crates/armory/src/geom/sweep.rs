@@ -74,9 +74,20 @@ pub fn sweep(path: &[V3], section: &[P2], options: &SweepOptions, scale: impl Fn
     if path.len() < 2 || section.len() < 3 {
         return MeshBuilder::new();
     }
-    let section: Vec<P2> = if signed_area(section) < 0.0 { section.iter().rev().copied().collect() } else { section.to_vec() };
     let frames = rotation_minimizing_frames(path, options.up, options.closed);
-    let ts = arc_parameters(path, options.closed);
+    sweep_frames(&frames, section, options, scale)
+}
+
+/// [`sweep`] on frames the caller chose: use it when the section must keep a set
+/// orientation, such as a flat strap whose normal stays radial as it winds round a grip.
+/// `options.up` is ignored; every other option applies.
+pub fn sweep_frames(frames: &[Frame], section: &[P2], options: &SweepOptions, scale: impl Fn(f32) -> f32) -> MeshBuilder {
+    if frames.len() < 2 || section.len() < 3 {
+        return MeshBuilder::new();
+    }
+    let section: Vec<P2> = if signed_area(section) < 0.0 { section.iter().rev().copied().collect() } else { section.to_vec() };
+    let path: Vec<V3> = frames.iter().map(|f| f.origin).collect();
+    let ts = arc_parameters(&path, options.closed);
     let scales: Vec<f32> = ts.iter().map(|&t| scale(t).max(0.0)).collect();
     let rows: Vec<Vec<V3>> = frames
         .iter()
@@ -104,6 +115,35 @@ pub fn sweep(path: &[V3], section: &[P2], options: &SweepOptions, scale: impl Fn
             for t in &tris {
                 if at_end { mesh.push_triangle(base + t[0], base + t[1], base + t[2]) } else { mesh.push_triangle(base + t[0], base + t[2], base + t[1]) };
             }
+        }
+    }
+    mesh
+}
+
+/// A tube whose radius varies round its section as well as along it: `radius(t, angle)`,
+/// with `t` 0..=1 by arc length and `angle` in radians from the frame normal toward the
+/// binormal. For knotted hafts, dented pipes and anything not round. `options.twist`
+/// is ignored. Open ends get flat fan caps.
+pub fn tube_varying(path: &[V3], sides: usize, options: &SweepOptions, radius: impl Fn(f32, f32) -> f32) -> MeshBuilder {
+    if path.len() < 2 {
+        return MeshBuilder::new();
+    }
+    let sides = sides.max(3);
+    let frames = rotation_minimizing_frames(path, options.up, options.closed);
+    let ts = arc_parameters(path, options.closed);
+    let angles: Vec<f32> = (0..sides).map(|k| std::f32::consts::TAU * k as f32 / sides as f32).collect();
+    let rows: Vec<Vec<V3>> = frames
+        .iter()
+        .zip(&ts)
+        .map(|(f, &t)| angles.iter().map(|&a| f.place([a.cos() * radius(t, a).max(0.0), a.sin() * radius(t, a).max(0.0)])).collect())
+        .collect();
+    let mut mesh = stitch_grid(&rows, &GridOptions { wrap_around: true, wrap_along: options.closed, shading: options.shading, row_v: (!options.closed).then_some(ts) });
+    if !options.closed {
+        if options.cap_start {
+            mesh.push_fan_cap(&rows[0], vec3::neg(frames[0].tangent));
+        }
+        if options.cap_end {
+            mesh.push_fan_cap(&rows[rows.len() - 1], frames[frames.len() - 1].tangent);
         }
     }
     mesh

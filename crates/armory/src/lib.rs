@@ -15,6 +15,7 @@
 //! Starting point: `reference/spline-armory.html` and `reference/spline_armory_engine.js`.
 //! Example output: `fixtures/armory/<family>.json` (64 seeds per family), for reference only.
 
+pub mod build;
 pub mod cond;
 pub mod etch;
 pub mod families;

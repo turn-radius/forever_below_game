@@ -15,7 +15,10 @@ use crate::cond::{Condition, ConditionLimits};
 use crate::etch::{EtchTarget, Etching, EtchingLimits};
 use crate::families::Generator;
 use crate::gem::{GemCut, Gemstone};
-use crate::geom::ItemMesh;
+use crate::build::gem::{bezel, cut_for, cut_stone, stone_part, stone_reach};
+use crate::build::hafted::{Haft, butt_radius, grip_mesh, grip_span, pommel_mesh, shaft_bands, turned, wrap_mesh};
+use crate::build::head::{HeadSurface, collar_mesh, finial_mesh, flanges_mesh, head_mesh, prongs_mesh, spikes_mesh};
+use crate::geom::{ItemMesh, MeshBuilder, OutlineMode, Part};
 use crate::material::MaterialKind;
 use crate::palette::Palette;
 use crate::sections::hafted::{Grip, GripLimits, Pommel, PommelGem, PommelLimits, PommelStyle, Shaft, ShaftLimits, Wrap, WrapLimits};
@@ -236,9 +239,127 @@ impl Generator for Mace {
         noun.to_string()
     }
 
-    fn build(_state: &MaceState) -> ItemMesh {
-        // TODO(port): mace geometry (lathe head, flanges, spikes, prongs, hafted parts).
-        ItemMesh::default()
+    /// The handle from [`crate::build::hafted`], then the head assembly from
+    /// [`crate::build::head`] set on the top of the haft, with the stone seated in the
+    /// prongs' cradle or a bezel. One part per section and material.
+    fn build(s: &MaceState) -> ItemMesh {
+        let mut parts = Parts::default();
+
+        // Handle.
+        let span = grip_span(&s.shaft, &s.grip);
+        let mut haft = Haft::new(&s.shaft, s.seed);
+        if s.grip.on || s.wrap.on {
+            haft.clear(span.0, span.1);
+        }
+        parts.add("shaft", haft.mesh(), s.shaft.material);
+        let avoid: &[(f32, f32)] = if s.grip.on || s.wrap.on { &[span] } else { &[] };
+        parts.add("bands", shaft_bands(&haft, &s.shaft, avoid), Iron);
+        if s.grip.on {
+            parts.add("grip", grip_mesh(&haft, &s.grip, span), s.grip.material);
+        }
+        if s.wrap.on {
+            parts.add("wrap", wrap_mesh(&haft, &s.grip, span, &s.wrap), s.wrap.material);
+        }
+        if s.pommel.on {
+            let pommel = pommel_mesh(&s.pommel, butt_radius(&haft, &s.grip, span)).placed_on(&haft);
+            parts.add("pommel", pommel.body, s.pommel.material);
+            parts.stone("pommel_stones", pommel.stones, s.pommel.gem_stone, 0.0, false);
+        }
+
+        // Head assembly, built upright on the top of the shaft, then set on it.
+        let mut head_parts = Parts::default();
+        let neck = haft.outer_radius(1.0);
+        let mut y = -0.03;
+        if s.collar.on {
+            let (collar, top) = collar_mesh(&s.collar, neck, y);
+            head_parts.add("collar", collar, s.collar.material);
+            y = top;
+        }
+        let neck_head = if s.collar.on { neck * s.collar.radius.min(1.3) } else { neck };
+        let (body, surface) = head_mesh(&s.head, y, neck_head);
+        let surface = HeadSurface { neck, ..surface };
+        head_parts.add("head", body, s.head.material);
+        if s.flanges.on {
+            head_parts.add("flanges", flanges_mesh(&s.flanges, &surface), s.flanges.material);
+        }
+        if s.spikes.on {
+            head_parts.add("spikes", spikes_mesh(&s.spikes, &surface, s.seed), s.spikes.material);
+        }
+        let lh = surface.length();
+        let sink = 0.04f32.min(lh * 0.05);
+        head_parts.add("finial", finial_mesh(&s.finial, surface.top, sink), s.finial.material);
+        let cradle = s.prongs.on.then(|| {
+            let (mesh, cradle) = prongs_mesh(&s.prongs, &surface, s.head.style == HeadStyle::Cup);
+            head_parts.add("prongs", mesh, s.prongs.material);
+            cradle
+        });
+        if s.gem.on {
+            let crown = if s.finial.style == FinialStyle::None { surface.top } else { surface.top + s.finial.length - sink };
+            let size = s.gem.size;
+            let cut = cut_for(s.gem.stone, s.gem.cut);
+            let (_, up) = stone_reach(cut, size);
+            let girdle = match &cradle {
+                // Claws close on the girdle; a stone too big for them rests on their tips.
+                Some(c) => c.seat(size).unwrap_or(c.tip() - up * 0.3).max(crown + size * 0.25),
+                None => crown + size * 0.25,
+            };
+            let mut stone = cut_stone(cut, size);
+            stone.translate([0.0, girdle, 0.0]);
+            head_parts.stone("gem", stone, s.gem.stone, s.gem.glow, true);
+            if cradle.is_none() {
+                let (sides, shading) = turned(s.head.facets.max(8));
+                let mut setting = bezel(size, sides, shading);
+                setting.translate([0.0, girdle, 0.0]);
+                let metal = if matches!(s.head.material, Gold | Silver | Brass) { s.head.material } else { Brass };
+                head_parts.add("bezel", setting, metal);
+            }
+        }
+        let (top, up) = (haft.point(1.0), haft.tangent(1.0));
+        for part in &mut head_parts.0 {
+            part.1.place(top, up);
+        }
+        parts.0.extend(head_parts.0);
+        parts.finish()
+    }
+}
+
+/// Meshes on their way to becoming parts, in build order. Empty meshes are dropped.
+#[derive(Default)]
+struct Parts(Vec<(&'static str, MeshBuilder, PartLook)>);
+
+enum PartLook {
+    Material(MaterialKind),
+    Stone { stone: Gemstone, glow: f32, outline: bool },
+}
+
+impl Parts {
+    fn add(&mut self, name: &'static str, mesh: MeshBuilder, material: MaterialKind) {
+        if !mesh.is_empty() {
+            self.0.push((name, mesh, PartLook::Material(material)));
+        }
+    }
+
+    fn stone(&mut self, name: &'static str, mesh: MeshBuilder, stone: Gemstone, glow: f32, outline: bool) {
+        if !mesh.is_empty() {
+            self.0.push((name, mesh, PartLook::Stone { stone, glow, outline }));
+        }
+    }
+
+    fn finish(self) -> ItemMesh {
+        let parts = self
+            .0
+            .into_iter()
+            .map(|(name, mesh, look)| -> Part {
+                match look {
+                    PartLook::Material(m) => mesh.into_part(name, OutlineMode::Welded).with_material(m),
+                    PartLook::Stone { stone, glow, outline } => {
+                        let part = stone_part(name, mesh, stone, glow);
+                        if outline { part } else { part.without_outline() }
+                    }
+                }
+            })
+            .collect();
+        ItemMesh { parts }
     }
 }
 
@@ -603,7 +724,9 @@ fn roll_pommel(rng: &mut Mulberry32, a: MaceArchetype, sh: &Shaft, collar: &Coll
     });
     (p.length, p.radius) = match p.style {
         Ferrule => (rng.range_f32(0.5, 0.8), sh.radius * rng.range_f32(1.05, 1.25)),
-        Disc | Wheel => (rng.range_f32(0.2, 0.35), sh.radius * rng.range_f32(1.5, 2.0)),
+        Disc => (rng.range_f32(0.2, 0.35), sh.radius * rng.range_f32(1.5, 2.0)),
+        // The wheel stands on edge, so its length spans the whole disc.
+        Wheel => (rng.range_f32(0.45, 0.75), sh.radius * rng.range_f32(1.5, 2.0)),
         Spike => (rng.range_f32(0.4, 0.7), sh.radius * rng.range_f32(1.1, 1.4)),
         _ => (rng.range_f32(0.3, 0.55), sh.radius * rng.range_f32(1.3, 1.9)),
     };

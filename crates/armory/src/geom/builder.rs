@@ -31,6 +31,20 @@ impl MeshBuilder {
         self.indices.is_empty()
     }
 
+    /// Axis-aligned bounds `(min, max)` of every vertex, or `None` for an empty mesh.
+    pub fn bounds(&self) -> Option<(V3, V3)> {
+        let first = *self.positions.first()?;
+        Some(self.positions.iter().fold((first, first), |(lo, hi), p| {
+            ([lo[0].min(p[0]), lo[1].min(p[1]), lo[2].min(p[2])], [hi[0].max(p[0]), hi[1].max(p[1]), hi[2].max(p[2])])
+        }))
+    }
+
+    /// Rotates the mesh's +Y onto `up`, then moves its origin to `origin`: sets a part built
+    /// upright onto a point of a haft, a head or a surface.
+    pub fn place(&mut self, origin: V3, up: V3) -> &mut Self {
+        self.align_y_to(up).translate(origin)
+    }
+
     /// Appends one vertex and returns its index.
     pub fn push_vertex(&mut self, position: V3, normal: V3, uv: [f32; 2]) -> u32 {
         let index = self.positions.len() as u32;

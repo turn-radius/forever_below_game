@@ -25,11 +25,11 @@ mod tests;
 
 pub use builder::MeshBuilder;
 pub use grid::{GridOptions, Shading, parametric_surface, stitch_grid};
-pub use lathe::{LatheOptions, lathe, lathe_fn};
+pub use lathe::{LatheOptions, lathe, lathe_fn, spline_profile};
 pub use mesh::{ItemMesh, Part};
 pub use outline::{OutlineMode, smooth_outline_normals, welded_outline_normals};
-pub use polygon::{extrude, signed_area, triangulate};
+pub use polygon::{distance_to_polygon, extrude, extrude_tapered, point_in_polygon, signed_area, triangulate};
 pub use shapes::{cuboid, cylinder, frustum, icosphere, spike, torus, uv_sphere};
 pub use spline::{CatmullRom, Frame, helix, polyline_length, resample_by_length, rotation_minimizing_frames};
-pub use sweep::{SweepOptions, regular_polygon, sweep, tube};
+pub use sweep::{SweepOptions, regular_polygon, sweep, sweep_frames, tube, tube_varying};
 pub use vec3::{Mat3, V3};
