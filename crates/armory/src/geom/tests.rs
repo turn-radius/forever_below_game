@@ -68,6 +68,9 @@ fn all_primitives() -> Vec<(&'static str, MeshBuilder)> {
         ("cylinder", cylinder(0.5, 2.0, 8, Shading::FACETED)),
         ("cuboid", cuboid([1.0, 2.0, 3.0])),
         ("torus", torus(2.0, 0.4, 24, 8, Shading::SMOOTH)),
+        ("slab chamfered star", bevelled_slab(&star, &[], &SlabOptions::chamfered(0.4, 0.1))),
+        ("slab rounded holed disc", bevelled_slab(&disc(1.0, 48), &[disc(0.4, 24)], &SlabOptions::rounded(0.3, 0.1))),
+        ("slab flat", bevelled_slab(&star, &[], &SlabOptions::chamfered(0.4, 0.0))),
     ]
 }
 
@@ -371,4 +374,54 @@ fn carved_hollow_lies_on_the_ball() {
     }
     assert_front_faces_agree(&part(kept));
     assert_front_faces_agree(&part(carved));
+}
+
+fn disc(r: f32, n: usize) -> Vec<[f32; 2]> {
+    (0..n).map(|i| {
+        let (s, c) = (TAU * i as f32 / n as f32).sin_cos();
+        [r * c, r * s]
+    }).collect()
+}
+
+/// Every edge, with vertices welded by position, borders exactly two triangles.
+fn assert_watertight(mesh: &MeshBuilder) {
+    let key = |p: V3| p.map(|c| (c * 1e4).round() as i64);
+    let mut edges: HashMap<([i64; 3], [i64; 3]), i32> = HashMap::new();
+    for tri in mesh.indices.as_chunks::<3>().0 {
+        for k in 0..3 {
+            let (a, b) = (key(mesh.positions[tri[k] as usize]), key(mesh.positions[tri[(k + 1) % 3] as usize]));
+            // Directed: a closed, consistently wound surface uses each edge once each way.
+            *edges.entry((a, b)).or_default() += 1;
+            *edges.entry((b, a)).or_default() -= 1;
+        }
+    }
+    let open = edges.values().filter(|&&v| v != 0).count();
+    assert_eq!(open, 0, "{open} unmatched directed edges");
+}
+
+#[test]
+fn slabs_are_closed_and_face_outward() {
+    for (depth, bevel, rounded) in [(0.3, 0.1, true), (0.3, 0.1, false), (0.3, 0.0, false)] {
+        let options = if rounded { SlabOptions::rounded(depth, bevel) } else { SlabOptions::chamfered(depth, bevel) };
+        let mesh = bevelled_slab(&disc(1.0, 40), &[], &options);
+        assert_watertight(&mesh);
+        assert_outward(&part(mesh.clone()), vec3::ZERO);
+        let holed = bevelled_slab(&disc(1.0, 40), &[disc(0.3, 20)], &options);
+        assert_watertight(&holed);
+        let (lo, hi) = mesh.bounds().unwrap();
+        assert!((hi[2] - lo[2] - depth).abs() < 1e-5 && (hi[0] - 1.0).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn slab_walls_are_smooth_round_a_disc_and_creased_at_a_square() {
+    let round = bevelled_slab(&disc(1.0, 40), &[], &SlabOptions::chamfered(0.3, 0.0));
+    let square = bevelled_slab(&[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]], &[], &SlabOptions::chamfered(0.3, 0.0));
+    let wall_normals_at = |m: &MeshBuilder, p: V3| -> Vec<V3> {
+        m.positions.iter().zip(&m.normals).filter(|(q, n)| vec3::distance(**q, p) < 1e-5 && n[2].abs() < 1e-3).map(|(_, n)| *n).collect()
+    };
+    let r = wall_normals_at(&round, [1.0, 0.0, 0.15]);
+    assert!(r.len() >= 2 && r.iter().all(|n| vec3::distance(*n, r[0]) < 1e-5), "disc wall should be smooth: {r:?}");
+    let s = wall_normals_at(&square, [1.0, 1.0, 0.15]);
+    assert!(s.iter().any(|n| (n[0] - 1.0).abs() < 1e-5) && s.iter().any(|n| (n[1] - 1.0).abs() < 1e-5), "square corner should crease: {s:?}");
 }

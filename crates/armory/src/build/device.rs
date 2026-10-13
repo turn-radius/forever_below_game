@@ -1,10 +1,10 @@
 //! Device outlines and their raised or painted shapes (`devicePts` and `deviceGeo` in
-//! `reference/spline_armory_engine.js`). A crate's stencil today; a shield's charge, a
-//! signet's engraving and a medallion's relief can use the same outlines.
+//! `reference/spline_armory_engine.js`): a crate's stencil, a signet's engraving, a
+//! medallion's relief and a charm's carving; a shield's charge can use the same outlines.
 
 use procgen_rng::Mulberry32;
 
-use crate::geom::{MeshBuilder, P2, extrude};
+use crate::geom::{MeshBuilder, P2, SlabOptions, bevelled_slab};
 use crate::sections::device::Device;
 
 /// One filled shape of a device: an outline and the holes cut from it.
@@ -32,7 +32,7 @@ fn rotated_rect(cx: f32, cy: f32, w: f32, h: f32, angle: f32) -> Vec<P2> {
 }
 
 /// A crescent opening to the right, unit outer radius (the prototype's `crescentPts`).
-fn crescent() -> Vec<P2> {
+pub fn crescent() -> Vec<P2> {
     let outer = arc(0.0, 0.0, 1.0, 0.863, std::f32::consts::TAU - 0.863, 30);
     let inner = arc(0.4, 0.0, 0.8, std::f32::consts::TAU - 1.253, 1.253, 24);
     outer.into_iter().chain(inner[1..inner.len() - 1].iter().copied()).collect()
@@ -91,15 +91,16 @@ pub fn device_shapes(device: Device, seed: u32) -> Vec<DeviceShape> {
     }
 }
 
-/// The device `size` across, raised `depth` off z = 0 toward +Z (its back on z = 0). Empty
-/// for [`Device::None`].
+/// The device `size` across, raised `depth` off z = 0 toward +Z (its back on z = 0), its
+/// edges chamfered so the relief catches the light. Empty for [`Device::None`].
 pub fn device_mesh(device: Device, size: f32, depth: f32, seed: u32) -> MeshBuilder {
     let mut mesh = MeshBuilder::new();
     for (outline, holes) in device_shapes(device, seed) {
         let scale = |p: &[f32; 2]| [p[0] * size, p[1] * size];
         let outline: Vec<P2> = outline.iter().map(scale).collect();
         let holes: Vec<Vec<P2>> = holes.iter().map(|h| h.iter().map(scale).collect()).collect();
-        let mut slab = extrude(&outline, &holes, depth);
+        let bevel = (depth * 0.4).min(size * 0.012);
+        let mut slab = bevelled_slab(&outline, &holes, &SlabOptions::chamfered(depth, bevel));
         slab.translate([0.0, 0.0, depth * 0.5]);
         mesh.append(&slab);
     }

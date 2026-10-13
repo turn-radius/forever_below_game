@@ -13,6 +13,7 @@ pub mod food;
 pub mod garment;
 pub mod hands;
 pub mod mace;
+pub mod ring;
 pub mod spear;
 pub mod staff;
 pub mod sword;

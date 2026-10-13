@@ -32,6 +32,12 @@ fn main() {
     for part in &mesh.parts {
         println!("  {:<14} {:<22} {:>6} tris", part.name, format!("{:?}", part.material), part.indices.len() / 3);
         writeln!(obj, "g {}", part.name).unwrap();
+        // The material, and the tint when the part carries its own colour.
+        let material = part.material.map_or("None".to_string(), |m| format!("{m:?}"));
+        match part.tint {
+            Some(t) => writeln!(obj, "usemtl {material}_{:.3}_{:.3}_{:.3}", t.0, t.1, t.2).unwrap(),
+            None => writeln!(obj, "usemtl {material}").unwrap(),
+        }
         for p in &part.positions {
             writeln!(obj, "v {} {} {}", p[0], p[1], p[2]).unwrap();
         }

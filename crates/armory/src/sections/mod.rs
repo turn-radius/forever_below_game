@@ -13,16 +13,20 @@
 //! - [`hem`]: hems and trims on garments, helmets, gloves and footwear.
 //! - [`hand`]: gloves, gauntlets, mittens and bracers.
 //! - [`boot`]: shoes, boots, leg wraps, sabatons and greaves.
+//! - [`jewel`]: the set stone of rings, amulets and charms.
+//! - [`emblem`]: plaque outlines (signet faces, pendants).
 
 pub mod blade;
 pub mod boot;
 pub mod device;
+pub mod emblem;
 pub mod fabric;
 pub mod garment;
 pub mod hafted;
 pub mod hand;
 pub mod head;
 pub mod hem;
+pub mod jewel;
 pub mod ranged;
 pub mod socket;
 pub mod spearhead;

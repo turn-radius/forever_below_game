@@ -19,4 +19,6 @@ pub enum Device {
 
 impl Device {
     pub const ALL: [Device; 7] = [Device::None, Device::Cross, Device::Star, Device::Crescent, Device::Tower, Device::Rune, Device::Wheel];
+    /// Every device that draws something.
+    pub const SIGNS: [Device; 6] = [Device::Cross, Device::Star, Device::Crescent, Device::Tower, Device::Rune, Device::Wheel];
 }

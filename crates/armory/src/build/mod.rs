@@ -6,12 +6,13 @@
 //!   daggers).
 //! - [`head`]: collar, head body, flanges, spikes, prongs and finial, and the whole
 //!   [`head::head_assembly`] (maces, staves).
-//! - [`gem`]: cut stones and bezels (head gems, pommels, guards, rings, amulets, charms).
+//! - [`gem`]: cut stones, bezels, collets and claw settings (head gems, pommels, guards,
+//!   rings, amulets, charms).
 //! - [`socket`]: a socket sleeved over a haft, its rings and langets (spears).
 //! - [`spearhead`]: a spearhead blade and its wings or bar (spears).
 //! - [`limb`]: bow limbs and crossbow prods, their nocks, the string, a cord wound on a handle.
 //! - [`arrow`]: arrows and crossbow bolts.
-//! - [`parts`]: [`parts::PartList`], collecting meshes and their looks into an item.
+//! - [`parts`]: [`parts::Parts`], collecting meshes and their looks into an item.
 //! - [`blade`]: blades of every profile and section (swords, daggers, spears).
 //! - [`guard`]: crosses, bars, discs and lobes, with terminals, langets and stones (swords,
 //!   daggers, spears).
@@ -27,12 +28,17 @@
 //! - [`garment`]: draped cloth, sleeves, trims, belts and plate fittings on a torso form.
 //! - [`hand`]: gloves and gauntlets on a hand form.
 //! - [`boot`]: footwear and greaves on a leg form.
+//! - [`chain`]: cable chains, twisted cords, thongs and beads along a path (necklaces,
+//!   charm hangers, straps, lantern chains).
+//! - [`emblem`]: plaque outlines (signet faces, pendants, badges).
 
 pub mod arrow;
 pub mod blade;
 pub mod boot;
+pub mod chain;
 pub mod container;
 pub mod device;
+pub mod emblem;
 pub mod fitting;
 pub mod form;
 pub mod garment;

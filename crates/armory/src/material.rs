@@ -34,6 +34,26 @@ impl MaterialKind {
         MaterialKind::Bone, MaterialKind::Stone, MaterialKind::Leather, MaterialKind::Cord,
     ];
 
+    /// The word an item name uses for this material ("Gold Band", "Wooden Idol"; the
+    /// prototype's `MATN`, which calls brass bronze).
+    pub fn adjective(self) -> &'static str {
+        match self {
+            MaterialKind::Iron => "Iron",
+            MaterialKind::Brass => "Bronze",
+            MaterialKind::Gold => "Gold",
+            MaterialKind::Silver => "Silver",
+            MaterialKind::Wood => "Wooden",
+            MaterialKind::Bone => "Bone",
+            MaterialKind::Stone => "Stone",
+            MaterialKind::Leather => "Leather",
+            MaterialKind::Cord => "Cord",
+            MaterialKind::Gem => "Jewelled",
+            MaterialKind::Cloth => "Cloth",
+            MaterialKind::Paint => "Painted",
+            MaterialKind::Food => "",
+        }
+    }
+
     /// Decay type id from the table in `docs/rendering.md`.
     pub fn decay_type(self) -> u32 {
         match self {

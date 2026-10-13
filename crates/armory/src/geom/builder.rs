@@ -223,6 +223,24 @@ impl MeshBuilder {
         self.append(&back)
     }
 
+    /// Recomputes every shading normal as the area-weighted average of the triangles that
+    /// share the vertex, after the positions have been displaced (rough stone, dents).
+    /// Vertices with no triangles keep their normal.
+    pub fn recompute_smooth_normals(&mut self) -> &mut Self {
+        let mut sums = vec![vec3::ZERO; self.positions.len()];
+        for tri in self.indices.as_chunks::<3>().0 {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| i as usize);
+            let face = vec3::cross(vec3::sub(self.positions[b], self.positions[a]), vec3::sub(self.positions[c], self.positions[a]));
+            for v in [a, b, c] {
+                sums[v] = vec3::add(sums[v], face);
+            }
+        }
+        for (n, s) in self.normals.iter_mut().zip(sums) {
+            *n = vec3::normalize_or(s, *n);
+        }
+        self
+    }
+
     /// Unshares every vertex and gives each triangle its own face normal (cut gems, rough stone).
     pub fn flat_shaded(&self) -> MeshBuilder {
         let mut out = MeshBuilder::new();
