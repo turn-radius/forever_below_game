@@ -4,13 +4,14 @@
 //! The Armory draws worn items standalone, on an implied mannequin, as the prototype does.
 //! The mannequin is a set of parametric forms whose dimensions are inputs: [`TorsoForm`] for
 //! body armour and clothing, [`HandForm`] for gloves and gauntlets, [`LegForm`] for
-//! footwear and greaves. `fb_body` fits gear to a folk body by building the same form from
+//! footwear and greaves, [`LowerBodyForm`] (both legs and the hips) for trousers. `fb_body` fits gear to a folk body by building the same form from
 //! that body's dimensions and passing it to the same builders.
 //!
 //! Sheet geometry: [`shell`] gives a sampled surface real thickness (an outer face, an inner
 //! face and a lip round every open edge), so cloth, leather and plate show an edge and
 //! outline cleanly. [`patch`] samples and thickens a surface in one step, [`rolled_edge`]
-//! rolls a plate's edge, and [`limb_lames`] stacks overlapping plates down a limb.
+//! rolls a plate's edge, [`limb_lames`] stacks overlapping plates down a limb, and
+//! [`wound_band`] winds a strip of cloth up one.
 //!
 //! Angles round a form run as in [`crate::geom::lathe`]: from +X toward -Z, so 90 degrees is
 //! the back and 270 degrees the front (+Z).
@@ -617,11 +618,211 @@ impl LegForm {
     }
 }
 
+/// Cubic (Catmull-Rom) interpolation of `(y, a, b)` knots by `y`, clamped at the ends.
+/// Knots must rise in `y`.
+fn knot_curve(knots: &[(f32, f32, f32)], y: f32) -> (f32, f32) {
+    let n = knots.len();
+    if y <= knots[0].0 {
+        return (knots[0].1, knots[0].2);
+    }
+    if y >= knots[n - 1].0 {
+        return (knots[n - 1].1, knots[n - 1].2);
+    }
+    let i = knots.partition_point(|k| k.0 <= y).clamp(1, n - 1) - 1;
+    let (k0, k1) = (knots[i], knots[i + 1]);
+    let h = k1.0 - k0.0;
+    let t = (y - k0.0) / h;
+    let slope = |j: usize, pick: fn(&(f32, f32, f32)) -> f32| -> f32 {
+        let (a, b) = (knots[j.saturating_sub(1)], knots[(j + 1).min(n - 1)]);
+        (pick(&b) - pick(&a)) / (b.0 - a.0)
+    };
+    let hermite = |pick: fn(&(f32, f32, f32)) -> f32| {
+        let (p0, p1, m0, m1) = (pick(&k0), pick(&k1), slope(i, pick) * h, slope(i + 1, pick) * h);
+        let (t2, t3) = (t * t, t * t * t);
+        (2.0 * t3 - 3.0 * t2 + 1.0) * p0 + (t3 - 2.0 * t2 + t) * m0 + (-2.0 * t3 + 3.0 * t2) * p1 + (t3 - t2) * m1
+    };
+    (hermite(|k| k.1), hermite(|k| k.2))
+}
+
+/// Both legs from the soles to the waist, for trousers, breeches and leggings: a [`LegForm`]
+/// for the lower legs, thighs that meet at the crotch, and the [`TorsoForm`]'s hips and
+/// waist above. Soles at y = 0, front +Z, the wearer's left +X (the torso's axes); the
+/// torso's waist (its y = 0) sits `waist_height` above the soles.
+///
+/// Each leg is its own tube. Above the crotch each becomes one half of the torso's section,
+/// flat on the midline where it meets the other, so a pair of trousers is two closed halves
+/// seamed down the front and back as real ones are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LowerBodyForm {
+    pub torso: TorsoForm,
+    /// The lower leg: shin and calf girth and the knee's height.
+    pub leg: LegForm,
+    /// Height of the torso's waist above the soles.
+    pub waist_height: f32,
+    pub crotch_height: f32,
+    /// Half width (side to side) and half depth of one thigh at the crotch.
+    pub thigh_half_width: f32,
+    pub thigh_half_depth: f32,
+    /// Distance of each ankle from the midline.
+    pub stance: f32,
+}
+
+impl LowerBodyForm {
+    /// The garment mannequin's hips ([`TorsoForm::MANNEQUIN`]) on the boot mannequin's legs
+    /// ([`LegForm::mannequin`]): a human about 17 units tall, legs straight and a little apart.
+    pub fn mannequin() -> LowerBodyForm {
+        LowerBodyForm {
+            torso: TorsoForm::MANNEQUIN,
+            leg: LegForm::mannequin(1.0, 1.0, 0.0),
+            waist_height: 10.0,
+            crotch_height: 8.0,
+            thigh_half_width: 0.84,
+            thigh_half_depth: 0.95,
+            stance: 0.62,
+        }
+    }
+
+    /// The torso's waist widened by `ease` (a garment's fit), legs unchanged.
+    pub fn eased(&self, ease: f32) -> LowerBodyForm {
+        LowerBodyForm { torso: self.torso.eased(ease), ..*self }
+    }
+
+    /// Height of the knee above the soles.
+    pub fn knee_height(&self) -> f32 {
+        self.leg.knee_height
+    }
+
+    /// Height of the hips' widest section above the soles.
+    pub fn hip_height(&self) -> f32 {
+        self.waist_height + self.torso.hip.y
+    }
+
+    /// The form sampled for lookups.
+    pub fn profile(&self) -> LowerBodyProfile {
+        let l = &self.leg;
+        let k = l.knee_height;
+        // Ankle, the narrow above it, calf, knee and crotch: (height, half width, half depth).
+        let knots = vec![
+            (0.0, l.shin_half_depth * 1.05, l.shin_half_width),
+            (0.25 * k, l.shin_half_depth * 0.95, l.shin_half_width * 0.9),
+            (0.62 * k, l.shin_half_depth * (1.0 + 0.7 * l.calf), l.shin_half_width * (1.0 + l.calf)),
+            (k, l.shin_half_depth * 1.2, l.shin_half_width * 0.94),
+            (self.crotch_height, self.thigh_half_width, self.thigh_half_depth),
+        ];
+        LowerBodyProfile { form: *self, torso: self.torso.profile(), knots }
+    }
+}
+
+/// A [`LowerBodyForm`] sampled for lookups.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LowerBodyProfile {
+    pub form: LowerBodyForm,
+    pub torso: TorsoProfile,
+    knots: Vec<(f32, f32, f32)>,
+}
+
+impl LowerBodyProfile {
+    /// Half width and half depth of one leg at height `y` (up to the crotch).
+    pub fn leg_at(&self, y: f32) -> (f32, f32) {
+        knot_curve(&self.knots, y.min(self.form.crotch_height))
+    }
+
+    /// Distance of a leg's axis from the midline at height `y`: the stance at the soles,
+    /// the thigh's half width at the crotch, so the thighs just meet.
+    pub fn axis_at(&self, y: f32) -> f32 {
+        let f = &self.form;
+        let t = (y / f.crotch_height).clamp(0.0, 1.0);
+        f.stance + (f.thigh_half_width - f.stance) * t
+    }
+
+    /// How far a leg has become half of the torso at height `y`: 0 at the crotch, 1 at the hips.
+    pub fn seat(&self, y: f32) -> f32 {
+        smoothstep(self.form.crotch_height, self.form.hip_height(), y)
+    }
+
+    /// A point on leg `side` (+1 the wearer's left, -1 the right) at `angle` (lathe
+    /// convention, as for [`TorsoProfile::point`]) and height `y`, `inflate` further out.
+    /// Above the crotch the inner half lies on the midline (x = 0). Rows of increasing `y`
+    /// with increasing `angle` face outward on both legs.
+    pub fn point(&self, side: f32, angle: f32, y: f32, inflate: f32) -> V3 {
+        let (s, c) = angle.sin_cos();
+        let (hw, hd) = self.leg_at(y);
+        let leg = [side * self.axis_at(y) + (hw + inflate) * signed_pow(c, 0.9), -(hd + inflate) * signed_pow(s, 0.9)];
+        let b = self.seat(y);
+        if b <= 0.0 {
+            return [leg[0], y, leg[1]];
+        }
+        let [x, z] = self.half_section(side, angle, y, inflate);
+        [leg[0] + (x - leg[0]) * b, y, leg[1] + (z - leg[1]) * b]
+    }
+
+    /// The torso's section at height `y` (above the soles) on leg `side`'s half: its own
+    /// outline outward, the midline inward.
+    fn half_section(&self, side: f32, angle: f32, y: f32, inflate: f32) -> [f32; 2] {
+        let [x, z] = self.torso_xz(angle, y, inflate);
+        if side * angle.cos() >= 0.0 { [x, z] } else { [0.0, z] }
+    }
+
+    fn torso_xz(&self, angle: f32, y: f32, inflate: f32) -> [f32; 2] {
+        let (hw, hd) = self.torso.at(y - self.form.waist_height);
+        section_point(angle, hw + inflate, hd + inflate, self.torso.exponent, self.torso.back)
+    }
+
+    /// A point on the whole torso at `angle` and height `y` above the soles, `inflate`
+    /// further out (a waistband round both halves).
+    pub fn torso_point(&self, angle: f32, y: f32, inflate: f32) -> V3 {
+        let [x, z] = self.torso_xz(angle, y, inflate);
+        [x, y, z]
+    }
+}
+
+/// A band of `width` wound `turns` times round a limb from height `y0` to `y1`, each turn
+/// lapping over the one below (puttees, leg wraps, a wrapped grip on a body). `at(angle,
+/// y, inflate)` is the limb's surface, angles in the lathe convention. Returns the band
+/// and a cord along its lapped lower edge, which reads as the overlap.
+pub fn wound_band(turns: f32, y0: f32, y1: f32, width: f32, thickness: f32, at: impl Fn(f32, f32, f32) -> V3) -> (MeshBuilder, MeshBuilder) {
+    let turns = turns.max(1.0);
+    let rise = |u: f32| y0 + width * 0.5 + (y1 - y0 - width) * u;
+    let ribbon = patch((turns * 40.0) as usize, 2, &ShellOptions::sheet(thickness), |u, v| {
+        let a = std::f32::consts::TAU * turns * u;
+        at(a, rise(u) + (v - 0.5) * width, thickness * 0.5 + width * 0.12 * (1.0 - v))
+    });
+    let n = (turns * 48.0) as usize;
+    let edge: Vec<V3> = (0..=n)
+        .map(|i| {
+            let u = i as f32 / n as f32;
+            at(std::f32::consts::TAU * turns * u, rise(u) - width * 0.5, thickness + width * 0.12)
+        })
+        .collect();
+    let cord = tube(&edge, 6, &SweepOptions::default(), |_| thickness * 0.8);
+    (ribbon, cord)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geom::OutlineMode;
     use std::f32::consts::TAU;
+
+    #[test]
+    fn the_legs_meet_on_the_midline_above_the_crotch() {
+        let p = LowerBodyForm::mannequin().profile();
+        let f = p.form;
+        for side in [1.0f32, -1.0] {
+            for i in 0..32 {
+                let a = TAU * i as f32 / 32.0;
+                let low = p.point(side, a, 3.0, 0.0);
+                assert!(low[0] * side > 0.0, "a leg below the crotch stays on its side: {low:?}");
+                let high = p.point(side, a, f.waist_height, 0.05);
+                assert!(high[0] * side >= -1e-4, "half of the waist stays on its side: {high:?}");
+            }
+            // The waist round both halves matches the torso's own section.
+            let out = p.point(side, if side > 0.0 { 0.0 } else { PI }, f.waist_height, 0.0);
+            assert!((out[0].abs() - f.torso.waist.half_width).abs() < 0.05, "{out:?}");
+        }
+        let (hw, _) = p.leg_at(f.crotch_height);
+        assert!((p.axis_at(f.crotch_height) - hw).abs() < 1e-4, "the thighs just meet");
+    }
 
     #[test]
     fn mannequin_profile_matches_its_rings() {

@@ -40,24 +40,41 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Family {
-    Staff, Mace, Sword, Spear, Dagger, Club, Axe, Bow, Crossbow, Helm, Garment, Hands, Feet, Shield, Ring, Amulet, Charm,
-    Bags, Chests, Food,
+    Staff, Mace, Sword, Spear, Dagger, Club, Axe, Bow, Crossbow, Helm, Garment, Hands, Legs, Feet, Shield, Ring, Amulet, Charm, Bags, Chests, Food,
 }
 
 impl Family {
-    pub const ALL: [Family; 20] = [
-        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Club, Family::Axe,
-        Family::Bow, Family::Crossbow, Family::Helm, Family::Garment, Family::Hands, Family::Feet, Family::Shield,
-        Family::Ring, Family::Amulet, Family::Charm, Family::Bags, Family::Chests, Family::Food,
+    pub const ALL: [Family; 21] = [
+        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Club, Family::Axe, Family::Bow, Family::Crossbow, Family::Helm, Family::Garment, Family::Hands, Family::Legs, Family::Feet, Family::Shield, Family::Ring, Family::Amulet, Family::Charm, Family::Bags, Family::Chests, Family::Food,
     ];
     pub fn key(self) -> &'static str {
         match self {
-            Family::Staff => "staff", Family::Mace => "mace", Family::Sword => "sword", Family::Spear => "spear",
-            Family::Dagger => "dagger", Family::Club => "club", Family::Axe => "axe", Family::Bow => "bow",
-            Family::Crossbow => "crossbow", Family::Helm => "helm", Family::Garment => "garment", Family::Hands => "hands", Family::Feet => "feet", Family::Shield => "shield",
-            Family::Ring => "ring", Family::Amulet => "amulet", Family::Charm => "charm", Family::Bags => "bags",
-            Family::Chests => "chests", Family::Food => "food",
+            Family::Staff => "staff",
+            Family::Mace => "mace",
+            Family::Sword => "sword",
+            Family::Spear => "spear",
+            Family::Dagger => "dagger",
+            Family::Club => "club",
+            Family::Axe => "axe",
+            Family::Bow => "bow",
+            Family::Crossbow => "crossbow",
+            Family::Helm => "helm",
+            Family::Garment => "garment",
+            Family::Hands => "hands",
+            Family::Legs => "legs",
+            Family::Feet => "feet",
+            Family::Shield => "shield",
+            Family::Ring => "ring",
+            Family::Amulet => "amulet",
+            Family::Charm => "charm",
+            Family::Bags => "bags",
+            Family::Chests => "chests",
+            Family::Food => "food",
         }
+    }
+    /// Whether the Spline Armory prototype had this family (and so example fixtures).
+    pub fn in_armory_prototype(self) -> bool {
+        !matches!(self, Family::Club | Family::Axe | Family::Legs)
     }
 }
 

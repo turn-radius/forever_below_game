@@ -17,6 +17,7 @@
 //! - [`jewel`]: the set stone of rings, amulets and charms.
 //! - [`emblem`]: plaque outlines (signet faces, pendants).
 //! - [`axe_head`]: an axe's bit, crosswise through an eye, and its poll (axes).
+//! - [`legwear`]: trousers, breeches and leggings.
 
 pub mod axe_head;
 pub mod blade;
@@ -30,6 +31,7 @@ pub mod hand;
 pub mod head;
 pub mod hem;
 pub mod jewel;
+pub mod legwear;
 pub mod ranged;
 pub mod socket;
 pub mod spearhead;

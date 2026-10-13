@@ -7,7 +7,7 @@ These are the rules the prototype settled on. Keep the intent and improve the de
 1. **Shape**: an `armory::ItemState`, rolled by the Armory's own "Forge new" (`SA.roll(family, seed, accept, preset)`). `data/sab.json` maps each base item name to an Armory family and, where needed, an `acc` filter on the rolled style (for example, `Boots` accepts `boot.style` of `boot` or `sabaton`). `roll` retries with seeds `(seed + i*7919) % 999983 + 1` until the filter accepts, up to 120 tries. Some bases have a `tw` tweak applied after rolling (a Mantle is a short cloak, a Purse always holds coins).
 2. **Game layer**: rarity, affixes, stats, footprint, history.
 
-A few bases are native to the plate because the Armory has no family for them yet: trousers, breeches, leggings, laced shirt, leather jerkin, hood, pointed hat, mail coif, belt, torch and lantern (`data/bases.json`), plus sundries like rope, candles and waterskins (`data/goods.json`). Adding them to the Armory would bring them into the same generator.
+A few bases are native to the plate because the Armory has no family for them yet: laced shirt, leather jerkin, hood, pointed hat, mail coif, belt, torch and lantern (`data/bases.json`), plus sundries like rope, candles and waterskins (`data/goods.json`). Adding them to the Armory would bring them into the same generator.
 
 ### Clubs and axes
 
@@ -16,6 +16,14 @@ Clubs and axes are now Armory families (`armory::families::club`, `armory::famil
 - A club is one piece of wood: the haft swells into the striking end and closes in a dome (`Swell` in `sections::hafted`), and knots, iron bands and studs follow that surface. The plate's materials become archetypes: Oak and Ash are the wood's palette colour, and Bone-studded is bone teeth set in the swelling. Cudgels, plain, gnarled, knobbed (and shillelaghs), studded, spiked and iron-bound clubs roll too.
 - An axe head is a bit crosswise through an eye (`sections::axe_head`, `build::axe_head`). It is wedge-sectioned, with a hard bevel line and a blade cross-section across its height, and it takes nicks and a broken edge from the item's condition. The eye is a socket section, with optional rings and langets. A plain, hammer, spike or second-bit poll backs it. Hatchets, hand, bearded, broad, long, battle, horseman's and throwing axes roll. The plate's Iron and Steel are both iron.
 - The bit faces +X in item space, along the haft frame's normal. The plate's "turn 90° so the bit faces forward" (`docs/body.md`) still applies when the axe is held.
+
+### Legwear
+
+Trousers, breeches and leggings are the Armory's `legs` family (`armory::families::legs`), which the Armory prototype never had: its sliders, ranges and nouns are the port's own. They are drawn on `LowerBodyForm` (both legs and the hips, built from the garment's `TorsoForm` and the boot's `LegForm`), so `fb_body` can fit them by passing a folk body's dimensions. Where the port departs from the plate:
+
+- The plate sweeps a tube down each leg at a fixed offset and lays a band over the hips. Here each leg becomes one half of the hips above the crotch, seamed down the front and back, so the pair reads as one garment.
+- Breeches gather into a buckled knee band; trousers can have turned cuffs, knee patches, or puttees wound from the ankle to below the knee with the cloth bloused above them. The waistband closes with a drawstring, laces or toggles.
+- A patterned pair of leggings is named Hose.
 
 ### Food and drink
 

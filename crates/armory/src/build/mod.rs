@@ -35,6 +35,7 @@
 //!   charm hangers, straps, lantern chains).
 //! - [`emblem`]: plaque outlines (signet faces, pendants, badges).
 //! - [`axe_head`]: an eye, a bit mounted crosswise through it, and a poll (axes).
+//! - [`legwear`]: trousers, breeches and leggings on a lower-body form.
 
 pub mod arrow;
 pub mod axe_head;
@@ -54,6 +55,7 @@ pub mod hand;
 pub mod head;
 pub mod hilt;
 pub mod hoard;
+pub mod legwear;
 pub mod limb;
 pub mod parts;
 pub mod plank;
