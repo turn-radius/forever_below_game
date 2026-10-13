@@ -48,6 +48,14 @@ struct Ring {
     u: Vec<f32>,
 }
 
+/// Whether segments `a0 a1` and `b0 b1` cross at a point inside both.
+fn segments_cross(a0: P2, a1: P2, b0: P2, b1: P2) -> bool {
+    let orient = |p: P2, q: P2, r: P2| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    let (d1, d2) = (orient(b0, b1, a0), orient(b0, b1, a1));
+    let (d3, d4) = (orient(a0, a1, b0), orient(a0, a1, b1));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+
 fn norm2(v: P2) -> P2 {
     let l = (v[0] * v[0] + v[1] * v[1]).sqrt();
     if l > 1e-12 { [v[0] / l, v[1] / l] } else { [0.0, 0.0] }
@@ -119,6 +127,52 @@ impl Ring {
     fn inset_all(&self, s: f32) -> Vec<P2> {
         (0..self.points.len()).map(|i| self.inset(i, s)).collect()
     }
+
+    /// Shrinks the inset at sharp vertices (a crescent's horns, a star's points) until the
+    /// ring inset by `s` no longer crosses itself, so its face still triangulates.
+    fn untangle(&mut self, s: f32) {
+        let n = self.points.len();
+        for _ in 0..8 {
+            let pts = self.inset_all(s);
+            let mut bad = vec![false; n];
+            for i in 0..n {
+                let (a0, a1) = (pts[i], pts[(i + 1) % n]);
+                for j in i + 2..n {
+                    if (j + 1) % n == i {
+                        continue;
+                    }
+                    if segments_cross(a0, a1, pts[j], pts[(j + 1) % n]) {
+                        for k in [i, (i + 1) % n, j, (j + 1) % n] {
+                            bad[k] = true;
+                        }
+                    }
+                }
+            }
+            if !bad.iter().any(|&b| b) {
+                return;
+            }
+            // Only the sharpest vertex of each tangle is to blame; halve the longest miters.
+            for (i, b) in bad.iter().enumerate() {
+                let m = self.miters[i];
+                if *b && m[0].hypot(m[1]) > 1.05 {
+                    self.miters[i] = [m[0] * 0.5, m[1] * 0.5];
+                } else if *b {
+                    self.miters[i] = [m[0] * 0.8, m[1] * 0.8];
+                }
+            }
+        }
+        // Still tangled: no bevel inset anywhere it crosses.
+        let pts = self.inset_all(s);
+        for i in 0..n {
+            for j in i + 2..n {
+                if (j + 1) % n != i && segments_cross(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n]) {
+                    for k in [i, (i + 1) % n, j, (j + 1) % n] {
+                        self.miters[k] = [0.0, 0.0];
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// One ring of a bevel profile: inset from the outline, height, and how much of the normal
@@ -163,12 +217,16 @@ fn band(mesh: &mut MeshBuilder, ring: &Ring, a: Step, b: Step, v: (f32, f32)) {
 /// rims and walls run u round the perimeter.
 pub fn bevelled_slab(outline: &[P2], holes: &[Vec<P2>], options: &SlabOptions) -> MeshBuilder {
     let mut mesh = MeshBuilder::new();
-    let Some(outer) = Ring::new(outline, true, options.crease) else {
+    let Some(mut outer) = Ring::new(outline, true, options.crease) else {
         return mesh;
     };
-    let inner: Vec<Ring> = holes.iter().filter_map(|h| Ring::new(h, false, options.crease)).collect();
+    let mut inner: Vec<Ring> = holes.iter().filter_map(|h| Ring::new(h, false, options.crease)).collect();
     let h = options.depth.max(1e-6) * 0.5;
     let b = options.bevel.clamp(0.0, h * 0.98);
+    if b > 0.0 {
+        outer.untangle(b);
+        inner.iter_mut().for_each(|r| r.untangle(b));
+    }
 
     // The profile from the front face's rim down the wall to the back face's rim.
     let mut steps: Vec<Step> = Vec::new();

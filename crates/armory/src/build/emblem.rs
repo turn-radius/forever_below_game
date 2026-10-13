@@ -134,7 +134,7 @@ pub fn plaque_centre(shape: PlaqueShape) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::signed_area;
+    use crate::geom::{MeshBuilder, SlabOptions, bevelled_slab, signed_area};
 
     #[test]
     fn plaques_fit_unit_height_and_have_area() {
@@ -146,4 +146,36 @@ mod tests {
         }
     }
 
+    /// The area of a slab's front face (triangles at its greatest z, facing +Z).
+    fn front_area(mesh: &MeshBuilder) -> f32 {
+        let z = mesh.positions.iter().fold(f32::MIN, |m, p| m.max(p[2]));
+        mesh.indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| t.map(|i| mesh.positions[i as usize]))
+            .filter(|t| t.iter().all(|p| (p[2] - z).abs() < 1e-6))
+            .map(|[a, b, c]| ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) * 0.5)
+            .sum()
+    }
+
+    #[test]
+    fn plaque_slabs_keep_their_whole_face() {
+        for shape in PlaqueShape::ALL {
+            let s = plaque_shape(shape);
+            let holes: f32 = s.holes.iter().map(|h| signed_area(h).abs()).sum();
+            let area = signed_area(&s.outline).abs() - holes;
+            let perimeter: f32 = std::iter::once(&s.outline)
+                .chain(s.holes.iter())
+                .map(|r| (0..r.len()).map(|i| (r[(i + 1) % r.len()][0] - r[i][0]).hypot(r[(i + 1) % r.len()][1] - r[i][1])).sum::<f32>())
+                .sum();
+            let bevel = 0.02;
+            // The face is the outline inset by the bevel: about the area less a perimeter strip.
+            let expected = area - perimeter * bevel;
+            for options in [SlabOptions::rounded(0.08, bevel), SlabOptions::chamfered(0.08, bevel)] {
+                let face = front_area(&bevelled_slab(&s.outline, &s.holes, &options));
+                assert!((face - expected).abs() < area * 0.06, "{shape:?}: face {face}, expected about {expected} of {area}");
+            }
+        }
+    }
 }

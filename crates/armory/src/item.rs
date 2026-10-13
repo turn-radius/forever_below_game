@@ -76,6 +76,7 @@ ported! {
     Hands => hands::Hands(HandsState),
     Feet => feet::Feet(FeetState),
     Ring => ring::Ring(RingState),
+    Amulet => amulet::Amulet(AmuletState),
     Bags => bags::Bags(BagState),
     Chests => chests::Chests(ChestState),
     Food => food::Food(FoodState),
