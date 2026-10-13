@@ -9,6 +9,7 @@ pub mod chests;
 pub mod crossbow;
 pub mod dagger;
 pub mod food;
+pub mod garment;
 pub mod mace;
 pub mod spear;
 pub mod staff;

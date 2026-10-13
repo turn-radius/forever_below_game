@@ -72,6 +72,7 @@ ported! {
     Dagger => dagger::Dagger(DaggerState),
     Bow => bow::Bow(BowState),
     Crossbow => crossbow::Crossbow(CrossbowState),
+    Garment => garment::Garment(GarmentState),
     Bags => bags::Bags(BagState),
     Chests => chests::Chests(ChestState),
     Food => food::Food(FoodState),

@@ -251,6 +251,7 @@ impl MeshBuilder {
             name,
             material: None,
             tint: None,
+            pattern: None,
             glow: 0.0,
             outline: true,
             positions: self.positions,

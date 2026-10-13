@@ -18,6 +18,7 @@
 pub mod build;
 pub mod cond;
 pub mod etch;
+pub mod fabric;
 pub mod families;
 pub mod gem;
 pub mod geom;

@@ -9,12 +9,16 @@
 //! - [`blade`]: the blade and guard of swords, daggers and spears.
 //! - [`fabric`]: textiles and fabric patterns (bags, garments, hems, a chest's glaze).
 //! - [`device`]: emblems engraved, painted or stencilled (signets, shields, crates).
+//! - [`garment`]: the cut, belt and plates of body armour and clothing.
+//! - [`hem`]: hems and trims on garments, helmets, gloves and footwear.
 
 pub mod blade;
 pub mod device;
 pub mod fabric;
+pub mod garment;
 pub mod hafted;
 pub mod head;
+pub mod hem;
 pub mod ranged;
 pub mod socket;
 pub mod spearhead;

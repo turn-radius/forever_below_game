@@ -1,6 +1,7 @@
 //! Plain mesh data for one item. The game turns each [`Part`] into a Bevy mesh with a toon
 //! material and an ink outline.
 
+use crate::fabric::SurfacePattern;
 use crate::material::{MaterialKind, Rgb};
 
 /// One drawable piece of an item with a single material.
@@ -11,6 +12,8 @@ pub struct Part {
     pub material: Option<MaterialKind>,
     /// Overrides the palette colour for this part (gems carry their own colour).
     pub tint: Option<Rgb>,
+    /// A pattern the shader draws over the part: fabric, quilting, mail rings, scales.
+    pub pattern: Option<SurfacePattern>,
     /// 0..=1 emissive strength (glowing gems).
     pub glow: f32,
     /// False for small parts that should not get an ink outline.
@@ -32,6 +35,11 @@ impl Part {
 
     pub fn with_tint(mut self, tint: Rgb) -> Self {
         self.tint = Some(tint);
+        self
+    }
+
+    pub fn with_pattern(mut self, pattern: Option<SurfacePattern>) -> Self {
+        self.pattern = pattern;
         self
     }
 

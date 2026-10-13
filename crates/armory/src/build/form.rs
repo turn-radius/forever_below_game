@@ -1,0 +1,416 @@
+//! Body-segment forms that worn gear is built around, and the sheet geometry worn gear is
+//! made of.
+//!
+//! The Armory draws worn items standalone, on an implied mannequin, as the prototype does.
+//! The mannequin is a set of parametric forms whose dimensions are inputs: [`TorsoForm`] for
+//! body armour and clothing. `fb_body` fits gear to a folk body by building the same form
+//! from that body's dimensions and passing it to the same builders.
+//!
+//! Sheet geometry: [`shell`] gives a sampled surface real thickness (an outer face, an inner
+//! face and a lip round every open edge), so cloth, leather and plate show an edge and
+//! outline cleanly. [`patch`] samples and thickens a surface in one step, [`rolled_edge`]
+//! rolls a plate's edge, and [`limb_lames`] stacks overlapping plates down a limb.
+//!
+//! Angles round a form run as in [`crate::geom::lathe`]: from +X toward -Z, so 90 degrees is
+//! the back and 270 degrees the front (+Z).
+
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
+
+use crate::geom::vec3::{self, V3};
+use crate::geom::{CatmullRom, GridOptions, MeshBuilder, Shading, SweepOptions, stitch_grid, tube};
+
+/// `sign(c) * |c|^e`: the superellipse term. Exponents below 1 square a section off.
+pub fn signed_pow(c: f32, e: f32) -> f32 {
+    c.signum() * c.abs().powf(e)
+}
+
+/// The angle (lathe convention) of the front of a form.
+pub const FRONT: f32 = 1.5 * PI;
+/// The angle (lathe convention) of the back of a form.
+pub const BACK: f32 = FRAC_PI_2;
+
+/// A point on a superelliptic section of half width `half_width` (along X) and half depth
+/// `half_depth` (along Z) at `angle`. `exponent` 1 is an ellipse; below 1 squares it off.
+/// `back` scales the depth behind the centre (a flatter back).
+pub fn section_point(angle: f32, half_width: f32, half_depth: f32, exponent: f32, back: f32) -> [f32; 2] {
+    let (s, c) = angle.sin_cos();
+    let z = -half_depth * signed_pow(s, exponent);
+    [half_width * signed_pow(c, exponent), if z < 0.0 { z * back } else { z }]
+}
+
+/// One cross-section of a form: a level and its half extents.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FormRing {
+    pub y: f32,
+    pub half_width: f32,
+    pub half_depth: f32,
+}
+
+impl FormRing {
+    pub const fn new(y: f32, half_width: f32, half_depth: f32) -> Self {
+        FormRing { y, half_width, half_depth }
+    }
+
+    fn scaled(self, k: f32) -> Self {
+        FormRing { half_width: self.half_width * k, half_depth: self.half_depth * k, ..self }
+    }
+}
+
+/// The trunk from neck to shins, as superelliptic sections on a spline. Below the hips the
+/// form is the envelope of both legs together, which is what a skirt hangs over. The waist
+/// is at y = 0; +Z is the front, +X the wearer's left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TorsoForm {
+    pub neck: FormRing,
+    pub shoulder_top: FormRing,
+    pub shoulder: FormRing,
+    pub chest: FormRing,
+    pub waist: FormRing,
+    pub hip: FormRing,
+    pub thigh: FormRing,
+    pub knee: FormRing,
+    pub shin: FormRing,
+    /// Superellipse exponent of every section (0.77: slightly boxy, as the prototype's `tSurf`).
+    pub exponent: f32,
+    /// Depth of the back relative to the front.
+    pub back: f32,
+}
+
+impl TorsoForm {
+    /// The prototype's garment mannequin (`buildGarment` rows), 1 unit = 10 cm.
+    pub const MANNEQUIN: TorsoForm = TorsoForm {
+        neck: FormRing::new(4.6, 0.6, 0.56),
+        shoulder_top: FormRing::new(4.38, 1.2, 0.8),
+        shoulder: FormRing::new(4.0, 1.98, 1.02),
+        chest: FormRing::new(2.4, 1.78, 1.2),
+        waist: FormRing::new(0.0, 1.47, 1.02),
+        hip: FormRing::new(-0.9, 1.72, 1.16),
+        thigh: FormRing::new(-2.4, 1.7, 1.15),
+        knee: FormRing::new(-5.0, 1.74, 1.2),
+        shin: FormRing::new(-9.0, 1.82, 1.26),
+        exponent: 2.0 / 2.6,
+        back: 0.9,
+    };
+
+    /// Every section from the shoulders down widened by `ease` (a garment's fit over the body).
+    pub fn eased(&self, ease: f32) -> TorsoForm {
+        TorsoForm {
+            shoulder: self.shoulder.scaled(ease),
+            chest: self.chest.scaled(ease),
+            waist: self.waist.scaled(ease),
+            hip: self.hip.scaled(ease),
+            thigh: self.thigh.scaled(ease),
+            knee: self.knee.scaled(ease),
+            shin: self.shin.scaled(ease),
+            ..*self
+        }
+    }
+
+    /// Sections bottom to top.
+    pub fn rings(&self) -> [FormRing; 9] {
+        [self.shin, self.knee, self.thigh, self.hip, self.waist, self.chest, self.shoulder, self.shoulder_top, self.neck]
+    }
+
+    /// The form sampled densely for lookups by height.
+    pub fn profile(&self) -> TorsoProfile {
+        let curve = CatmullRom::centripetal(self.rings().iter().map(|r| [r.half_width, r.y, r.half_depth]).collect());
+        let mut samples: Vec<FormRing> = curve.sample(48).into_iter().map(|p| FormRing::new(p[1], p[0].max(0.01), p[2].max(0.01))).collect();
+        // Keep heights increasing so lookups can bisect.
+        for i in 1..samples.len() {
+            if samples[i].y <= samples[i - 1].y {
+                samples[i].y = samples[i - 1].y + 1e-4;
+            }
+        }
+        TorsoProfile { samples, exponent: self.exponent, back: self.back }
+    }
+
+    /// Where an arm leaves the body on side `side` (+1 left, -1 right), and the arm's
+    /// direction hanging `arm_angle` radians out from the body.
+    pub fn arm_root(&self, side: f32, arm_angle: f32) -> (V3, V3) {
+        let root = [side * self.shoulder.half_width * 0.98, self.shoulder.y - 0.62, 0.0];
+        let dir = vec3::normalize_or([side * arm_angle.sin(), -arm_angle.cos(), 0.04], vec3::neg(vec3::Y));
+        (root, dir)
+    }
+}
+
+/// A [`TorsoForm`] sampled for lookups.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TorsoProfile {
+    samples: Vec<FormRing>,
+    pub exponent: f32,
+    pub back: f32,
+}
+
+impl TorsoProfile {
+    pub fn bottom(&self) -> f32 {
+        self.samples[0].y
+    }
+
+    pub fn top(&self) -> f32 {
+        self.samples[self.samples.len() - 1].y
+    }
+
+    /// Half width and half depth at height `y` (clamped to the form).
+    pub fn at(&self, y: f32) -> (f32, f32) {
+        let s = &self.samples;
+        let i = s.partition_point(|r| r.y < y).clamp(1, s.len() - 1);
+        let (a, b) = (s[i - 1], s[i]);
+        let t = ((y - a.y) / (b.y - a.y)).clamp(0.0, 1.0);
+        (a.half_width + (b.half_width - a.half_width) * t, a.half_depth + (b.half_depth - a.half_depth) * t)
+    }
+
+    /// The surface point at `angle` and height `y`.
+    pub fn point(&self, angle: f32, y: f32) -> V3 {
+        let (hw, hd) = self.at(y);
+        let [x, z] = section_point(angle, hw, hd, self.exponent, self.back);
+        [x, y, z]
+    }
+}
+
+/// How [`shell`] thickens a grid.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShellOptions {
+    /// The last column joins the first (a tube).
+    pub wrap_around: bool,
+    /// Distance from the outer face to the inner face, measured inward.
+    pub thickness: f32,
+    pub shading: Shading,
+    /// Close the first and last rows with a lip.
+    pub lip_rows: bool,
+    /// Close the first and last columns with a lip (open, unwrapped sheets).
+    pub lip_columns: bool,
+}
+
+impl ShellOptions {
+    /// A tube of cloth or plate, open at both ends.
+    pub fn tube(thickness: f32) -> Self {
+        ShellOptions { wrap_around: true, thickness, shading: Shading::SMOOTH, lip_rows: true, lip_columns: false }
+    }
+
+    /// An open sheet with edges all round.
+    pub fn sheet(thickness: f32) -> Self {
+        ShellOptions { wrap_around: false, thickness, shading: Shading::SMOOTH, lip_rows: true, lip_columns: true }
+    }
+}
+
+/// Per-point outward normals of a grid (`points[row][column]`, front facing `du x dv`).
+pub fn grid_normals(points: &[Vec<V3>], wrap_around: bool) -> Vec<Vec<V3>> {
+    let rows = points.len();
+    let cols = points.first().map_or(0, Vec::len);
+    let at = |r: usize, c: isize| -> V3 {
+        let c = if wrap_around { c.rem_euclid(cols as isize) as usize } else { c.clamp(0, cols as isize - 1) as usize };
+        points[r][c]
+    };
+    let raw: Vec<Vec<Option<V3>>> = (0..rows)
+        .map(|r| {
+            (0..cols)
+                .map(|c| {
+                    let du = vec3::sub(at(r, c as isize + 1), at(r, c as isize - 1));
+                    let (r0, r1) = (r.saturating_sub(1), (r + 1).min(rows - 1));
+                    let dv = vec3::sub(points[r1][c], points[r0][c]);
+                    vec3::try_normalize(vec3::cross(du, dv))
+                })
+                .collect()
+        })
+        .collect();
+    // Points where the grid has collapsed (a pole) borrow the nearest row's normal.
+    (0..rows)
+        .map(|r| {
+            (0..cols)
+                .map(|c| {
+                    raw[r][c]
+                        .or_else(|| (1..rows).find_map(|d| [r.checked_sub(d), Some(r + d)].into_iter().flatten().find_map(|k| raw.get(k).and_then(|row| row[c]))))
+                        .unwrap_or(vec3::Y)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Gives a sampled surface thickness: the outer face as sampled, an inner face
+/// `options.thickness` inward along the surface normal, and lips joining them round the
+/// open edges. Front faces point outward everywhere, so the result is a closed solid for
+/// lighting and the ink hull.
+pub fn shell(points: &[Vec<V3>], options: &ShellOptions) -> MeshBuilder {
+    let rows = points.len();
+    if rows < 2 || points[0].len() < 2 {
+        return MeshBuilder::new();
+    }
+    let normals = grid_normals(points, options.wrap_around);
+    let inner: Vec<Vec<V3>> = points
+        .iter()
+        .zip(&normals)
+        .map(|(row, ns)| row.iter().zip(ns).map(|(&p, &n)| vec3::sub(p, vec3::scale(n, options.thickness))).collect())
+        .collect();
+    let grid = |shading: Shading, wrap_around: bool| GridOptions { wrap_around, wrap_along: false, shading, row_v: None };
+    let mut mesh = stitch_grid(points, &grid(options.shading, options.wrap_around));
+    let mut back = stitch_grid(&inner, &grid(options.shading, options.wrap_around));
+    back.flip();
+    mesh.append(&back);
+    if options.lip_rows {
+        let last = rows - 1;
+        mesh.append(&stitch_grid(&[inner[0].clone(), points[0].clone()], &grid(Shading::SMOOTH, options.wrap_around)));
+        mesh.append(&stitch_grid(&[points[last].clone(), inner[last].clone()], &grid(Shading::SMOOTH, options.wrap_around)));
+    }
+    if options.lip_columns && !options.wrap_around {
+        let last = points[0].len() - 1;
+        let column = |a: &[Vec<V3>], b: &[Vec<V3>], c: usize| -> Vec<Vec<V3>> { (0..rows).map(|r| vec![a[r][c], b[r][c]]).collect() };
+        mesh.append(&stitch_grid(&column(&inner, points, 0), &grid(Shading::SMOOTH, false)));
+        mesh.append(&stitch_grid(&column(points, &inner, last), &grid(Shading::SMOOTH, false)));
+    }
+    mesh
+}
+
+/// Samples `f(u, v)` over `0..=1` squared (`nu` by `nv` cells; with `wrap_around`, u stops
+/// short of 1) and thickens it with [`shell`]. Arrange `f` so `df/du x df/dv` faces outward.
+pub fn patch(nu: usize, nv: usize, options: &ShellOptions, f: impl Fn(f32, f32) -> V3) -> MeshBuilder {
+    let (nu, nv) = (nu.max(1), nv.max(1));
+    let cols = if options.wrap_around { nu } else { nu + 1 };
+    let points: Vec<Vec<V3>> =
+        (0..=nv).map(|r| (0..cols).map(|c| f(c as f32 / nu as f32, r as f32 / nv as f32)).collect()).collect();
+    shell(&points, options)
+}
+
+/// A rolled or wired edge: a round tube of `radius` along `points` (closed when `closed`).
+pub fn rolled_edge(points: &[V3], radius: f32, closed: bool) -> MeshBuilder {
+    if points.len() < 2 {
+        return MeshBuilder::new();
+    }
+    let options = if closed { SweepOptions::closed_loop() } else { SweepOptions::default() };
+    tube(points, 8, &options, |_| radius)
+}
+
+/// Where [`limb_lames`] stacks its plates: down a limb from `origin` along `axis`, centred on
+/// the side facing `toward`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LameStack {
+    pub origin: V3,
+    /// Down the limb.
+    pub axis: V3,
+    /// The side of the limb the plates cover.
+    pub toward: V3,
+    pub count: u32,
+    /// Radius of the first lame; each next one is `step` wider.
+    pub radius: f32,
+    pub step: f32,
+    /// Height of each lame along the axis.
+    pub height: f32,
+    /// Fraction of each lame hidden under the one above.
+    pub overlap: f32,
+    /// Half the angle each lame wraps round the limb, in radians.
+    pub half_angle: f32,
+    pub thickness: f32,
+    /// A domed cap over the top of the stack (a pauldron's shoulder cop).
+    pub cap: bool,
+}
+
+/// Overlapping plates wrapping one side of a limb: each a partial band that widens a little
+/// toward its lower edge, with a rolled lower edge, each lapping over the next (the
+/// prototype's `limbLames`). Pauldrons, couters, cuisses and gauntlet cuffs.
+pub fn limb_lames(stack: &LameStack) -> MeshBuilder {
+    let axis = vec3::normalize_or(stack.axis, vec3::neg(vec3::Y));
+    let side = vec3::normalize_or(vec3::sub(stack.toward, vec3::scale(axis, vec3::dot(stack.toward, axis))), vec3::any_perpendicular(axis));
+    let across = vec3::cross(axis, side);
+    // Angle a about the axis measured from `side`; u runs so faces point outward.
+    let ring = |a: f32, r: f32| vec3::add(vec3::scale(side, r * a.cos()), vec3::scale(across, -r * a.sin()));
+    let mut mesh = MeshBuilder::new();
+    let options = ShellOptions { thickness: stack.thickness, ..ShellOptions::sheet(stack.thickness) };
+    for k in 0..stack.count {
+        let r = stack.radius + k as f32 * stack.step;
+        let top = k as f32 * stack.height * (1.0 - stack.overlap);
+        let h = stack.height;
+        let lame = patch(28, 6, &options, |u, v| {
+            let a = -stack.half_angle + 2.0 * stack.half_angle * u;
+            // v runs from the lower edge up so faces point outward; flare toward the lower edge.
+            let t = 1.0 - v;
+            let rr = r * (1.0 + 0.06 * t * t);
+            vec3::add(vec3::add(stack.origin, vec3::scale(axis, top + h * t)), ring(a, rr))
+        });
+        mesh.append(&lame);
+        let edge: Vec<V3> = (0..=24)
+            .map(|i| {
+                let a = -stack.half_angle + 2.0 * stack.half_angle * i as f32 / 24.0;
+                vec3::add(vec3::add(stack.origin, vec3::scale(axis, top + h)), ring(a, r * 1.06 + stack.thickness * 0.5))
+            })
+            .collect();
+        mesh.append(&rolled_edge(&edge, stack.thickness * 1.1, false));
+    }
+    if stack.cap {
+        let r = stack.radius * 0.98;
+        let cap = patch(28, 10, &options, |u, v| {
+            let a = -stack.half_angle + 2.0 * stack.half_angle * u;
+            // v from the rim up over the dome.
+            let polar = v * FRAC_PI_2 * 0.96;
+            let rr = r * polar.cos();
+            vec3::add(vec3::add(stack.origin, vec3::scale(axis, -r * 0.9 * polar.sin())), ring(a, rr))
+        });
+        mesh.append(&cap);
+    }
+    mesh
+}
+
+/// `count` angles evenly round a circle starting at `start`.
+pub fn angles(count: usize, start: f32) -> impl Iterator<Item = f32> {
+    (0..count).map(move |i| start + TAU * i as f32 / count as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geom::OutlineMode;
+
+    #[test]
+    fn mannequin_profile_matches_its_rings() {
+        let p = TorsoForm::MANNEQUIN.profile();
+        let (hw, hd) = p.at(0.0);
+        assert!((hw - 1.47).abs() < 0.02 && (hd - 1.02).abs() < 0.02, "waist {hw} {hd}");
+        assert!(p.bottom() < -8.9 && p.top() > 4.5);
+        let front = p.point(FRONT, 2.4);
+        assert!(front[2] > 1.1, "front of the chest faces +Z: {front:?}");
+    }
+
+    #[test]
+    fn shells_are_drawable_and_face_out() {
+        let ring = |u: f32, v: f32| {
+            let a = TAU * u;
+            [a.cos(), v * 2.0, -a.sin()]
+        };
+        let points: Vec<Vec<V3>> = (0..=6).map(|r| (0..16).map(|c| ring(c as f32 / 16.0, r as f32 / 6.0)).collect()).collect();
+        for (row, ns) in points.iter().zip(grid_normals(&points, true)) {
+            for (p, n) in row.iter().zip(ns) {
+                assert!(vec3::dot(n, [p[0], 0.0, p[2]]) > 0.9, "normal {n:?} at {p:?}");
+            }
+        }
+        let part = patch(16, 6, &ShellOptions::tube(0.05), ring).into_part("shell", OutlineMode::Welded);
+        part.validate().unwrap();
+        // Signed volume of a closed, outward-facing solid is positive.
+        let volume: f32 = part
+            .indices
+            .chunks(3)
+            .map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| part.positions[i as usize]);
+                vec3::dot(a, vec3::cross(b, c)) / 6.0
+            })
+            .sum();
+        let expected = PI * (1.0 - 0.95f32 * 0.95) * 2.0;
+        assert!((volume - expected).abs() < expected * 0.15, "volume {volume}, expected about {expected}");
+    }
+
+    #[test]
+    fn lames_validate() {
+        let stack = LameStack {
+            origin: [0.0, 0.0, 0.0],
+            axis: [0.0, -1.0, 0.0],
+            toward: [1.0, 0.0, 0.0],
+            count: 3,
+            radius: 0.9,
+            step: 0.05,
+            height: 0.42,
+            overlap: 0.2,
+            half_angle: 1.9,
+            thickness: 0.03,
+            cap: true,
+        };
+        limb_lames(&stack).into_part("lames", OutlineMode::Welded).validate().unwrap();
+    }
+}
