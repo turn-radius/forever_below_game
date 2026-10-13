@@ -120,6 +120,31 @@ pub fn sweep_frames(frames: &[Frame], section: &[P2], options: &SweepOptions, sc
     mesh
 }
 
+/// [`sweep_frames`] with the section stretched independently along its two axes:
+/// `scale(t)` gives `[along normal, along binormal]` at `t` 0..=1 by arc length. For sections
+/// whose width and thickness change at different rates (bow limbs, a crossbow stock, a leaf
+/// blade). A cap whose section has shrunk to a point is skipped.
+pub fn sweep_scaled(frames: &[Frame], section: &[P2], options: &SweepOptions, scale: impl Fn(f32) -> [f32; 2]) -> MeshBuilder {
+    if frames.len() < 2 {
+        return MeshBuilder::new();
+    }
+    let path: Vec<V3> = frames.iter().map(|f| f.origin).collect();
+    let ts = arc_parameters(&path, options.closed);
+    let scales: Vec<[f32; 2]> = ts.iter().map(|&t| scale(t).map(|k| k.max(0.0))).collect();
+    let stretched: Vec<Frame> = frames
+        .iter()
+        .zip(&scales)
+        .map(|(f, k)| Frame { normal: vec3::scale(f.normal, k[0]), binormal: vec3::scale(f.binormal, k[1]), ..*f })
+        .collect();
+    let point = |k: [f32; 2]| k[0].min(k[1]) < 1e-6;
+    let options = SweepOptions {
+        cap_start: options.cap_start && !point(scales[0]),
+        cap_end: options.cap_end && !point(scales[scales.len() - 1]),
+        ..options.clone()
+    };
+    sweep_frames(&stretched, section, &options, |_| 1.0)
+}
+
 /// A tube whose radius varies round its section as well as along it: `radius(t, angle)`,
 /// with `t` 0..=1 by arc length and `angle` in radians from the frame normal toward the
 /// binormal. For knotted hafts, dented pipes and anything not round. `options.twist`

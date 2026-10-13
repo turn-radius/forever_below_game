@@ -18,7 +18,7 @@
 use crate::build::gem::{bezel, cut_for, cut_stone, stone_reach};
 use crate::build::hafted::{Haft, butt_radius, grip_mesh, grip_span, pommel_mesh, shaft_bands, turned, wrap_mesh};
 use crate::build::head::{HeadAssembly, HeadSections, head_assembly};
-use crate::build::parts::PartList;
+use crate::build::parts::Parts;
 use crate::cond::{Condition, ConditionLimits};
 use crate::etch::{EtchTarget, Etching, EtchingLimits};
 use crate::families::Generator;
@@ -241,7 +241,7 @@ impl Generator for Staff {
     /// The handle from [`crate::build::hafted`] with the grip mid-shaft and the pommel as a
     /// butt cap, then [`head_assembly`] on top with the stone seated in it.
     fn build(s: &StaffState) -> ItemMesh {
-        let mut parts = PartList::new();
+        let mut parts = Parts::new();
 
         let span = grip_span(&s.shaft, &s.grip);
         let mut haft = Haft::new(&s.shaft, s.seed);

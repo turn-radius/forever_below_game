@@ -17,7 +17,7 @@
 //!   in `forgeNoun()` comes up with a head that fits it.
 
 use crate::build::hafted::{Haft, butt_radius, grip_mesh, grip_span, pommel_mesh, shaft_bands, wrap_mesh};
-use crate::build::parts::PartList;
+use crate::build::parts::Parts;
 use crate::build::socket::{langets_mesh, socket_mesh};
 use crate::build::spearhead::{Break, half_width, lugs_mesh, spearhead_mesh};
 use crate::cond::{Condition, ConditionLimits};
@@ -247,7 +247,7 @@ impl Generator for Spear {
     /// the socket, and the wings or bar, all from [`crate::build::socket`] and
     /// [`crate::build::spearhead`]. Langets run down the haft from the socket's mouth.
     fn build(s: &SpearState) -> ItemMesh {
-        let mut parts = PartList::new();
+        let mut parts = Parts::new();
 
         let span = grip_span(&s.shaft, &s.grip);
         let mut haft = Haft::new(&s.shaft, s.seed);
@@ -271,7 +271,7 @@ impl Generator for Spear {
         }
 
         // The head, upright in head space on the top of the haft.
-        let mut head = PartList::new();
+        let mut head = Parts::new();
         let r_top = haft.outer_radius(1.0);
         let b = &s.blade;
         // The socket always closes in to a neck; the blade's shoulders slope down into it.

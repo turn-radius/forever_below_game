@@ -8,11 +8,15 @@
 //! - [`gem`]: cut stones and bezels (head gems, pommels, guards, rings, amulets, charms).
 //! - [`socket`]: a socket sleeved over a haft, its rings and langets (spears).
 //! - [`spearhead`]: a spearhead blade and its wings or bar (spears).
-//! - [`parts`]: [`parts::PartList`], named meshes with their materials, finished into an item.
+//! - [`limb`]: bow limbs and crossbow prods, their nocks, the string, a cord wound on a handle.
+//! - [`arrow`]: arrows and crossbow bolts.
+//! - [`parts`]: collecting meshes into an item's parts.
 
+pub mod arrow;
 pub mod gem;
 pub mod hafted;
 pub mod head;
+pub mod limb;
 pub mod parts;
 pub mod socket;
 pub mod spearhead;

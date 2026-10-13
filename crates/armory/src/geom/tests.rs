@@ -229,3 +229,16 @@ fn transforms_keep_normals_unit_and_faces_front() {
     let p = part(s);
     assert_front_faces_agree(&p);
 }
+
+#[test]
+fn sweep_scaled_stretches_each_axis() {
+    let frames = rotation_minimizing_frames(&[[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 2.0, 0.0]], Some(vec3::X), false);
+    let mesh = sweep_scaled(&frames, &regular_polygon(16, 1.0, 0.0), &SweepOptions::default(), |t| [0.4 * (1.0 - t * 0.5), 0.1]);
+    let (_, hi) = mesh.bounds().unwrap();
+    assert!((hi[0] - 0.4).abs() < 1e-3 && (hi[2] - 0.1).abs() < 1e-3, "{hi:?}");
+    let p = part(mesh);
+    assert_front_faces_agree(&p);
+    assert_outward(&p, [0.0, 1.0, 0.0]);
+    // A section shrunk to a point gets no cap.
+    part(sweep_scaled(&frames, &regular_polygon(8, 1.0, 0.0), &SweepOptions::default(), |t| [1.0 - t, 1.0 - t]));
+}

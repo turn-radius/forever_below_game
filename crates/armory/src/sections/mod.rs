@@ -5,8 +5,10 @@
 //! - [`head`]: the striking or crowning end of maces and staves.
 //! - [`spearhead`]: the blade and the wings or lugs of a thrusting polearm head (spears).
 //! - [`socket`]: the socket that seats a head on a haft, with its rings and langets (spears).
+//! - [`ranged`]: limbs, string and arrow of bows and crossbows.
 
 pub mod hafted;
 pub mod head;
+pub mod ranged;
 pub mod socket;
 pub mod spearhead;

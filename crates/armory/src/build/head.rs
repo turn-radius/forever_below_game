@@ -14,7 +14,7 @@
 use procgen_rng::Mulberry32;
 
 use super::hafted::{radius_on, turned};
-use super::parts::PartList;
+use super::parts::Parts;
 use crate::geom::polygon::P2;
 use crate::geom::{
     CatmullRom, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, distance_to_polygon, extrude_tapered, lathe,
@@ -424,7 +424,7 @@ pub struct HeadSections<'a> {
 #[derive(Clone, Debug)]
 pub struct HeadAssembly {
     /// `collar`, `head`, `flanges`, `spikes`, `finial` and `prongs`, as enabled.
-    pub parts: PartList,
+    pub parts: Parts,
     pub surface: HeadSurface,
     /// The prongs' cradle, when there are prongs.
     pub cradle: Option<Cradle>,
@@ -437,7 +437,7 @@ pub struct HeadAssembly {
 /// [`HeadAssembly::cradle`] or on [`HeadAssembly::crown`]) and then places
 /// [`HeadAssembly::parts`] on the haft. `seed` drives spike jitter.
 pub fn head_assembly(s: HeadSections<'_>, neck: f32, seed: u32) -> HeadAssembly {
-    let mut parts = PartList::new();
+    let mut parts = Parts::new();
     let mut y = -0.03;
     if s.collar.on {
         let (collar, top) = collar_mesh(s.collar, neck, y);
