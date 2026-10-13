@@ -14,6 +14,7 @@
 use procgen_rng::Mulberry32;
 
 use super::hafted::{radius_on, turned};
+use super::parts::PartList;
 use crate::geom::polygon::P2;
 use crate::geom::{
     CatmullRom, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, distance_to_polygon, extrude_tapered, lathe,
@@ -405,4 +406,61 @@ pub fn prongs_mesh(prongs: &Prongs, surface: &HeadSurface, cup: bool) -> (MeshBu
         out.append(&k);
     }
     (out, cradle)
+}
+
+/// The sections a turned head assembly is built from (maces, staves).
+#[derive(Clone, Copy, Debug)]
+pub struct HeadSections<'a> {
+    pub collar: &'a Collar,
+    pub head: &'a Head,
+    pub flanges: &'a Flanges,
+    pub spikes: &'a Spikes,
+    pub prongs: &'a Prongs,
+    pub finial: &'a Finial,
+}
+
+/// A head assembly built upright in head space (y = 0 is the top of the shaft), with what a
+/// family needs to set a stone in it.
+#[derive(Clone, Debug)]
+pub struct HeadAssembly {
+    /// `collar`, `head`, `flanges`, `spikes`, `finial` and `prongs`, as enabled.
+    pub parts: PartList,
+    pub surface: HeadSurface,
+    /// The prongs' cradle, when there are prongs.
+    pub cradle: Option<Cradle>,
+    /// The top of the head, or of the finial when there is one.
+    pub crown: f32,
+}
+
+/// Builds the collar, head body, flanges, spikes, finial and prongs over a shaft whose top
+/// radius is `neck`, in head space. The family seats any stone (in
+/// [`HeadAssembly::cradle`] or on [`HeadAssembly::crown`]) and then places
+/// [`HeadAssembly::parts`] on the haft. `seed` drives spike jitter.
+pub fn head_assembly(s: HeadSections<'_>, neck: f32, seed: u32) -> HeadAssembly {
+    let mut parts = PartList::new();
+    let mut y = -0.03;
+    if s.collar.on {
+        let (collar, top) = collar_mesh(s.collar, neck, y);
+        parts.add("collar", collar, s.collar.material);
+        y = top;
+    }
+    let neck_head = if s.collar.on { neck * s.collar.radius.min(1.3) } else { neck };
+    let (body, surface) = head_mesh(s.head, y, neck_head);
+    let surface = HeadSurface { neck, ..surface };
+    parts.add("head", body, s.head.material);
+    if s.flanges.on {
+        parts.add("flanges", flanges_mesh(s.flanges, &surface), s.flanges.material);
+    }
+    if s.spikes.on {
+        parts.add("spikes", spikes_mesh(s.spikes, &surface, seed), s.spikes.material);
+    }
+    let sink = 0.04f32.min(surface.length() * 0.05);
+    parts.add("finial", finial_mesh(s.finial, surface.top, sink), s.finial.material);
+    let crown = if s.finial.style == FinialStyle::None { surface.top } else { surface.top + s.finial.length - sink };
+    let cradle = s.prongs.on.then(|| {
+        let (mesh, cradle) = prongs_mesh(s.prongs, &surface, s.head.style == HeadStyle::Cup);
+        parts.add("prongs", mesh, s.prongs.material);
+        cradle
+    });
+    HeadAssembly { parts, surface, cradle, crown }
 }

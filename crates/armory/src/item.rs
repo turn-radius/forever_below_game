@@ -9,12 +9,14 @@ use crate::Family;
 use crate::cond::Condition;
 use crate::families::Generator;
 use crate::families::mace::{Mace, MaceState};
+use crate::families::staff::{Staff, StaffState};
 use crate::geom::ItemMesh;
 use crate::palette::Palette;
 
 /// One item's full state, tagged by family.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    Staff(StaffState),
     Mace(MaceState),
 }
 
@@ -23,6 +25,10 @@ pub enum Item {
 macro_rules! dispatch {
     ($item:expr, $generator:ident, $state:ident => $body:expr) => {
         match $item {
+            Item::Staff($state) => {
+                type $generator = Staff;
+                $body
+            }
             Item::Mace($state) => {
                 type $generator = Mace;
                 $body
@@ -31,6 +37,7 @@ macro_rules! dispatch {
     };
     ($item:expr, $state:ident => $body:expr) => {
         match $item {
+            Item::Staff($state) => $body,
             Item::Mace($state) => $body,
         }
     };
@@ -38,11 +45,12 @@ macro_rules! dispatch {
 
 impl Item {
     /// The families [`Item::roll`] can make, in [`Family::ALL`] order.
-    pub const PORTED: &[Family] = &[Family::Mace];
+    pub const PORTED: &[Family] = &[Family::Staff, Family::Mace];
 
     /// "Forge new" for any family: `None` until that family is ported.
     pub fn roll(family: Family, seed: u32) -> Option<Item> {
         match family {
+            Family::Staff => Some(Item::Staff(Staff::roll(seed))),
             Family::Mace => Some(Item::Mace(Mace::roll(seed))),
             _ => None,
         }
@@ -50,6 +58,7 @@ impl Item {
 
     pub fn family(&self) -> Family {
         match self {
+            Item::Staff(_) => Family::Staff,
             Item::Mace(_) => Family::Mace,
         }
     }

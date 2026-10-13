@@ -3,9 +3,12 @@
 //! in a local space the family places.
 //!
 //! - [`hafted`]: shaft, bands, grip, wrap and pommel (staves, maces, swords, spears, daggers).
-//! - [`head`]: collar, head body, flanges, spikes, prongs and finial (maces, staves).
+//! - [`head`]: collar, head body, flanges, spikes, prongs and finial, and the whole
+//!   [`head::head_assembly`] (maces, staves).
 //! - [`gem`]: cut stones and bezels (head gems, pommels, guards, rings, amulets, charms).
+//! - [`parts`]: [`parts::PartList`], named meshes with their materials, finished into an item.
 
 pub mod gem;
 pub mod hafted;
 pub mod head;
+pub mod parts;
