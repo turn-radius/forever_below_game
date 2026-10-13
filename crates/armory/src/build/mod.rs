@@ -36,6 +36,7 @@
 //! - [`emblem`]: plaque outlines (signet faces, pendants, badges).
 //! - [`axe_head`]: an eye, a bit mounted crosswise through it, and a poll (axes).
 //! - [`legwear`]: trousers, breeches and leggings on a lower-body form.
+//! - [`hood`]: hoods, cowls and coifs on a head form and the shoulders.
 
 pub mod arrow;
 pub mod axe_head;
@@ -55,6 +56,7 @@ pub mod hand;
 pub mod head;
 pub mod hilt;
 pub mod hoard;
+pub mod hood;
 pub mod legwear;
 pub mod limb;
 pub mod parts;

@@ -75,6 +75,7 @@ ported! {
     Bow => bow::Bow(BowState),
     Crossbow => crossbow::Crossbow(CrossbowState),
     Helm => helm::Helm(HelmState),
+    Hood => hood::Hoods(HoodState),
     Garment => garment::Garment(GarmentState),
     Hands => hands::Hands(HandsState),
     Legs => legs::Legs(LegsState),

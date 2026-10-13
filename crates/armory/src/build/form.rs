@@ -4,8 +4,9 @@
 //! The Armory draws worn items standalone, on an implied mannequin, as the prototype does.
 //! The mannequin is a set of parametric forms whose dimensions are inputs: [`TorsoForm`] for
 //! body armour and clothing, [`HandForm`] for gloves and gauntlets, [`LegForm`] for
-//! footwear and greaves, [`LowerBodyForm`] (both legs and the hips) for trousers. `fb_body` fits gear to a folk body by building the same form from
-//! that body's dimensions and passing it to the same builders.
+//! footwear and greaves, [`LowerBodyForm`] (both legs and the hips) for trousers, and
+//! [`HeadForm`] for hoods and coifs. `fb_body` fits gear to a folk body by building the same
+//! form from that body's dimensions and passing it to the same builders.
 //!
 //! Sheet geometry: [`shell`] gives a sampled surface real thickness (an outer face, an inner
 //! face and a lip round every open edge), so cloth, leather and plate show an edge and
@@ -776,6 +777,102 @@ impl LowerBodyProfile {
     }
 }
 
+/// A head on its neck: an ellipsoid with a narrower jaw, a chin, a flatter face and a
+/// rounded back (the plate prototype's `headFn`), its centre at `centre`. Front +Z, up +Y,
+/// the wearer's left +X, in the same space as the [`TorsoForm`] it sits on.
+///
+/// Points are placed by azimuth (0 the face, a quarter turn the wearer's left, half a turn
+/// the back of the head) and polar angle (0 the crown, PI under the chin).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeadForm {
+    pub centre: V3,
+    /// Ear to ear, crown to chin, and face to back of the head, each from the centre.
+    pub half_width: f32,
+    pub half_height: f32,
+    pub half_depth: f32,
+    /// 0..=1: how much the jaw narrows below the cheekbones.
+    pub jaw: f32,
+    /// 0..=1: how far the chin juts.
+    pub chin: f32,
+    /// 0..=1: how flat the face is.
+    pub flat: f32,
+    pub neck_radius: f32,
+    /// Where the neck meets the shoulders.
+    pub neck_base: f32,
+}
+
+impl HeadForm {
+    /// A human head (the plate prototype's `RACES.human`) scaled by `size`, set on
+    /// [`TorsoForm::MANNEQUIN`]'s neck.
+    pub fn mannequin(size: f32) -> HeadForm {
+        let r = 1.05 * size;
+        let torso = TorsoForm::MANNEQUIN;
+        let half_height = 1.12 * r;
+        let chin_y = torso.shoulder.y + 0.55;
+        HeadForm {
+            centre: [0.0, chin_y + half_height, 0.12],
+            half_width: 0.86 * r,
+            half_height,
+            half_depth: r,
+            jaw: 0.5,
+            chin: 0.5,
+            flat: 0.6,
+            neck_radius: 0.42 * size,
+            neck_base: torso.shoulder_top.y,
+        }
+    }
+
+    /// The surface offset from the centre at `azimuth` and `polar`, before inflation.
+    fn shape(&self, azimuth: f32, polar: f32) -> V3 {
+        let (s, c) = polar.sin_cos();
+        let (st, ct) = azimuth.sin_cos();
+        let r = self.half_width.max(self.half_depth);
+        let mut x = self.half_width * s * st;
+        let y = self.half_height * c;
+        let mut z = self.half_depth * s * ct;
+        if c < 0.0 {
+            let k = (-c).powf(1.4);
+            x *= 1.0 - self.jaw * k * 0.38;
+            if ct > 0.0 {
+                z += self.chin * r * 0.12 * k * ct.powi(3);
+            } else {
+                z *= 1.0 - k * 0.15;
+            }
+        }
+        if ct > 0.0 {
+            z *= 1.0 - self.flat * 0.14 * ct.powi(4) * s;
+        }
+        if ct < 0.0 && c > -0.2 {
+            z *= 1.0 + 0.07 * -ct;
+        }
+        [x, y, z]
+    }
+
+    /// A point on the head at `azimuth` and `polar`, `inflate` further out along the
+    /// ellipsoid's normal. Rows of increasing `azimuth` with decreasing `polar` (going up)
+    /// face outward.
+    pub fn point(&self, azimuth: f32, polar: f32, inflate: f32) -> V3 {
+        let p = self.shape(azimuth, polar);
+        let n = self.normal_of(p);
+        vec3::add(self.centre, vec3::add(p, vec3::scale(n, inflate)))
+    }
+
+    /// The outward normal at `azimuth` and `polar`.
+    pub fn normal(&self, azimuth: f32, polar: f32) -> V3 {
+        self.normal_of(self.shape(azimuth, polar))
+    }
+
+    fn normal_of(&self, p: V3) -> V3 {
+        let g = [p[0] / self.half_width.powi(2), p[1] / self.half_height.powi(2), p[2] / self.half_depth.powi(2)];
+        vec3::normalize_or(g, vec3::Y)
+    }
+
+    /// The lathe-convention angle round a [`TorsoForm`] that faces the same way as `azimuth`.
+    pub fn torso_angle(azimuth: f32) -> f32 {
+        (azimuth - FRAC_PI_2).rem_euclid(2.0 * PI)
+    }
+}
+
 /// A band of `width` wound `turns` times round a limb from height `y0` to `y1`, each turn
 /// lapping over the one below (puttees, leg wraps, a wrapped grip on a body). `at(angle,
 /// y, inflate)` is the limb's surface, angles in the lathe convention. Returns the band
@@ -803,6 +900,25 @@ mod tests {
     use super::*;
     use crate::geom::OutlineMode;
     use std::f32::consts::TAU;
+
+    #[test]
+    fn the_head_sits_on_the_neck_and_faces_front() {
+        let head = HeadForm::mannequin(1.0);
+        let torso = TorsoForm::MANNEQUIN;
+        let chin = head.point(0.0, PI, 0.0);
+        assert!(chin[1] > torso.shoulder.y && chin[1] < torso.neck.y + 0.2, "chin {chin:?}");
+        let face = head.point(0.0, FRAC_PI_2, 0.0);
+        let back = head.point(PI, FRAC_PI_2, 0.0);
+        assert!(face[2] > head.centre[2] && back[2] < head.centre[2]);
+        for (az, polar) in [(0.3, 0.4), (2.0, 1.2), (4.0, 2.6)] {
+            let n = head.normal(az, polar);
+            let p = head.point(az, polar, 0.0);
+            assert!(vec3::dot(n, vec3::sub(p, head.centre)) > 0.0, "normal faces out at {az} {polar}");
+            let out = head.point(az, polar, 0.2);
+            assert!((vec3::distance(out, p) - 0.2).abs() < 1e-4);
+        }
+        assert!((HeadForm::torso_angle(0.0) - FRONT).abs() < 1e-5);
+    }
 
     #[test]
     fn the_legs_meet_on_the_midline_above_the_crotch() {

@@ -18,6 +18,7 @@
 //! - [`emblem`]: plaque outlines (signet faces, pendants).
 //! - [`axe_head`]: an axe's bit, crosswise through an eye, and its poll (axes).
 //! - [`legwear`]: trousers, breeches and leggings.
+//! - [`hood`]: hoods, cowls and coifs of cloth or mail.
 
 pub mod axe_head;
 pub mod blade;
@@ -30,6 +31,7 @@ pub mod hafted;
 pub mod hand;
 pub mod head;
 pub mod hem;
+pub mod hood;
 pub mod jewel;
 pub mod legwear;
 pub mod ranged;

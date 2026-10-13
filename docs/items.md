@@ -7,7 +7,7 @@ These are the rules the prototype settled on. Keep the intent and improve the de
 1. **Shape**: an `armory::ItemState`, rolled by the Armory's own "Forge new" (`SA.roll(family, seed, accept, preset)`). `data/sab.json` maps each base item name to an Armory family and, where needed, an `acc` filter on the rolled style (for example, `Boots` accepts `boot.style` of `boot` or `sabaton`). `roll` retries with seeds `(seed + i*7919) % 999983 + 1` until the filter accepts, up to 120 tries. Some bases have a `tw` tweak applied after rolling (a Mantle is a short cloak, a Purse always holds coins).
 2. **Game layer**: rarity, affixes, stats, footprint, history.
 
-A few bases are native to the plate because the Armory has no family for them yet: laced shirt, leather jerkin, hood, pointed hat, mail coif, belt, torch and lantern (`data/bases.json`), plus sundries like rope, candles and waterskins (`data/goods.json`). Adding them to the Armory would bring them into the same generator.
+A few bases are native to the plate because the Armory has no family for them yet: laced shirt, leather jerkin, pointed hat, belt, torch and lantern (`data/bases.json`), plus sundries like rope, candles and waterskins (`data/goods.json`). Adding them to the Armory would bring them into the same generator.
 
 ### Clubs and axes
 
@@ -24,6 +24,14 @@ Trousers, breeches and leggings are the Armory's `legs` family (`armory::familie
 - The plate sweeps a tube down each leg at a fixed offset and lays a band over the hips. Here each leg becomes one half of the hips above the crotch, seamed down the front and back, so the pair reads as one garment.
 - Breeches gather into a buckled knee band; trousers can have turned cuffs, knee patches, or puttees wound from the ankle to below the knee with the cloth bloused above them. The waistband closes with a drawstring, laces or toggles.
 - A patterned pair of leggings is named Hose.
+
+### Hoods and coifs
+
+Hoods, cowls, coifs and mail coifs are the Armory's `hood` family (`armory::families::hood`), also new to the Armory, drawn on `HeadForm` (a parametric head from the plate's `headFn`) set on the garment's `TorsoForm`. Where the port departs from the plate:
+
+- The plate draws a hood as one offset of the head with a torus for the cowl, and a mail coif as a lathed dome with a skirt. Here each is one sheet with thickness: over the head, round the face opening, falling from the back of the head and the chin to the shoulders, and out as a cape hung with the garment drape.
+- Hoods draw their crown to a point and may trail a liripipe down the back; capes may be dagged. Cowls fall in a rolled loop over the chest. Coifs stop at the jaw and nape and tie under the chin; a quilted coif is an Arming Cap. Mail coifs take the shader's mail pattern, a leather binding round the face and sometimes a strapped ventail.
+- A hood's hem trims the cape's edge (`hemline`) and the face opening (`neck`).
 
 ### Food and drink
 
