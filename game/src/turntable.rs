@@ -94,7 +94,7 @@ pub struct Turntable {
 
 impl Default for Turntable {
     fn default() -> Self {
-        Turntable { family: Item::PORTED[0], first_seed: DEFAULT_SEED, wear: ConditionState::Pristine }
+        Turntable { family: Family::Mace, first_seed: DEFAULT_SEED, wear: ConditionState::Pristine }
     }
 }
 
@@ -682,7 +682,7 @@ mod tests {
     fn parses_the_command_line() {
         let turntable = Turntable::from_args(args("--family mace --seed=42 --wear grave_find")).unwrap();
         assert_eq!(turntable, Turntable { family: Family::Mace, first_seed: 42, wear: ConditionState::GraveFind });
-        assert!(Turntable::from_args(args("--family sword")).unwrap_err().contains("not ported"));
+        assert!(Turntable::from_args(args("--family wand")).is_err());
         assert!(Turntable::from_args(args("--seed")).is_err());
         assert!(Turntable::from_args(args("--seed -3")).is_err());
         assert!(Turntable::from_args(args("--colour red")).is_err());
