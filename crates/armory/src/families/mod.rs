@@ -4,6 +4,7 @@
 use crate::geom::ItemMesh;
 
 pub mod mace;
+pub mod spear;
 pub mod staff;
 
 /// The contract every family module implements.
