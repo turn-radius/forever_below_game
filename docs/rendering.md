@@ -56,3 +56,13 @@ In the abyss, carried light is the main light. Ambient should be very low so tor
 ## Palette and UI
 
 The UI is a parchment ledger. Tokens are at the top of the plate's `<style>`: paper `#ebe5d5`, cells `#d7d1c4`, ink `#2b2420`, accent `#6f4526`, gold `#a8782e`, Stygian portrait blue `#22325c`. Rarity colours: common `#4a4239`, magic `#2c5bb0`, rare `#99700f`, legendary `#bb5119`. Display face Almendra, body Alegreya Sans, data IBM Plex Mono, runes Noto Sans Runic. The title lettering is gold and horizontally striped, from `reference/concept/forever-below-title-card.jpg`.
+
+## In the Bevy build
+
+Where the Rust renderer (`game/src/render/`) departs from the prototypes:
+
+- Bands are applied per light, to `N·L * 0.5 + 0.5` as three.js toon shading does, so each carried light adds its own hard steps. A fragment in shadow drops to the lowest band.
+- The outline width is set in pixels at 1080p (2 px by default) and converted to world units at each vertex's view depth, capped at 0.07 units so distant hulls don't balloon.
+- Decay noise is in mesh-local space, so item parts keep an identity transform under the item root.
+- Paint chips scale with the decay amount; in the prototype they showed at wear 0.
+- Fabric patterns and etching are not ported yet.

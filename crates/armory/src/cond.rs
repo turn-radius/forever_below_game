@@ -7,6 +7,7 @@
 //! made, which is `fb_items`' job.
 
 use crate::slider::sliders;
+use crate::material::MaterialKind;
 use serde::{Deserialize, Serialize};
 
 /// The named condition presets. `Custom` means the sliders were set by hand.
@@ -53,6 +54,19 @@ sliders! {
 }
 
 impl Condition {
+    /// How strongly a material shows wear: overall wear times that material's multiplier,
+    /// capped at 1.2 (`decayAmt` in `reference/spline_armory_engine.js`).
+    pub fn decay(&self, kind: MaterialKind) -> f32 {
+        let multiplier = match kind {
+            MaterialKind::Iron => self.rust,
+            MaterialKind::Brass | MaterialKind::Gold | MaterialKind::Silver => self.patina,
+            MaterialKind::Wood | MaterialKind::Bone | MaterialKind::Stone | MaterialKind::Food => self.rot,
+            MaterialKind::Leather | MaterialKind::Cord | MaterialKind::Cloth => self.fray,
+            MaterialKind::Gem | MaterialKind::Paint => 1.0,
+        };
+        (self.wear * multiplier).clamp(0.0, 1.2)
+    }
+
     /// The sliders for a named state (`COND_STATES`). `Custom` gives the pristine values.
     pub fn of(state: ConditionState) -> Self {
         let (wear, damage, rust, patina, rot, fray) = match state {
@@ -80,5 +94,26 @@ impl Condition {
 impl Default for Condition {
     fn default() -> Self {
         Condition::of(ConditionState::Pristine)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decay_uses_the_material_multiplier() {
+        let condition = Condition { wear: 0.5, rust: 2.0, rot: 0.5, ..Condition::default() };
+        assert_eq!(condition.decay(MaterialKind::Iron), 1.0);
+        assert_eq!(condition.decay(MaterialKind::Wood), 0.25);
+        let ruinous = Condition { wear: 1.0, rust: 1.5, ..Condition::default() };
+        assert_eq!(ruinous.decay(MaterialKind::Iron), 1.2);
+    }
+
+    #[test]
+    fn pristine_items_have_no_decay() {
+        for kind in MaterialKind::SELECTABLE {
+            assert_eq!(Condition::default().decay(kind), 0.0);
+        }
     }
 }
