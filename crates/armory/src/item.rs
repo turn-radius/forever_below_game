@@ -69,6 +69,7 @@ ported! {
     Mace => mace::Mace(MaceState),
     Spear => spear::Spear(SpearState),
     Bow => bow::Bow(BowState),
+    Crossbow => crossbow::Crossbow(CrossbowState),
 }
 
 impl Item {
