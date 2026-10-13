@@ -73,6 +73,17 @@ impl Default for Decay {
     }
 }
 
+/// A floor on how thin a part may look on screen, for fine parts drawn without an ink line
+/// (bowstrings, chains, claws): far off they would otherwise thin to nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct MinWidth {
+    /// Narrowest the part may look, in pixels on a 1080-pixel-tall viewport; 0 for no floor.
+    pub px: f32,
+    /// The part's own half thickness in item units ([`super::half_thickness`]): only a part
+    /// thinner than the floor is fattened, and only by the difference.
+    pub half_thickness: f32,
+}
+
 /// The toon half of [`ToonMaterial`]. The base colour, roughness and so on stay on the
 /// [`StandardMaterial`].
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
@@ -82,6 +93,7 @@ pub struct ToonExtension {
     pub decay: Decay,
     /// Self-lit strength as a fraction of the base colour; fades with decay.
     pub glow: f32,
+    pub min_width: MinWidth,
 }
 
 /// GPU layout of [`ToonExtension`]; must match `ToonUniform` in `toon.wesl`.
@@ -94,6 +106,8 @@ pub struct ToonUniform {
     decay_scale: f32,
     decay_seed: f32,
     glow: f32,
+    min_width_px: f32,
+    half_thickness: f32,
 }
 
 impl From<&ToonExtension> for ToonUniform {
@@ -107,11 +121,17 @@ impl From<&ToonExtension> for ToonUniform {
             decay_scale: toon.decay.scale,
             decay_seed: toon.decay.seed,
             glow: toon.glow,
+            min_width_px: toon.min_width.px,
+            half_thickness: toon.min_width.half_thickness,
         }
     }
 }
 
 impl MaterialExtension for ToonExtension {
+    fn vertex_shader() -> ShaderRef {
+        SHADER_PATH.into()
+    }
+
     // Forward only: the toon lighting replaces Bevy's PBR lighting, which the deferred
     // lighting pass would apply instead.
     fn fragment_shader() -> ShaderRef {

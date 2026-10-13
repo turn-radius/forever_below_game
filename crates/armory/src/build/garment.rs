@@ -372,20 +372,31 @@ pub fn garment_parts(form: &TorsoForm, g: &GarmentCut, hem: &Hem, belt: &Belt, p
     let rows = (30.0 + height * 8.0).round() as usize;
     let columns = 96;
     let cols = if cloak { columns + 1 } else { columns };
-    let points: Vec<Vec<V3>> = (0..=rows)
-        .map(|r| {
-            let v = r as f32 / rows as f32;
-            (0..cols)
-                .map(|c| {
-                    let u = c as f32 / columns as f32;
-                    let a = drape.angle(u, drape.top);
-                    surface.point(u, drape.hem + (drape.top_at(a) - drape.hem) * v, 0.0)
-                })
-                .collect()
-        })
-        .collect();
+    let points = |surface: &DrapedSurface| -> Vec<Vec<V3>> {
+        (0..=rows)
+            .map(|r| {
+                let v = r as f32 / rows as f32;
+                (0..cols)
+                    .map(|c| {
+                        let u = c as f32 / columns as f32;
+                        let a = drape.angle(u, drape.top);
+                        surface.point(u, drape.hem + (drape.top_at(a) - drape.hem) * v, 0.0)
+                    })
+                    .collect()
+            })
+            .collect()
+    };
     let body_options = ShellOptions { wrap_around: !cloak, thickness, lip_columns: cloak, ..ShellOptions::tube(thickness) };
-    parts.add_look("body", shell(&points, &body_options), look);
+    let mut body = shell(&points(&surface), &body_options);
+    if drape.quilt > 0.0 {
+        // Quilting puffs stay in the silhouette but shade with the coat's form: under banded
+        // toon light, relief this fine breaks the coat into islands wherever a band edge
+        // crosses it.
+        let mut plain = surface.clone();
+        plain.drape.quilt = 0.0;
+        body.normals = shell(&points(&plain), &body_options).normals;
+    }
+    parts.add_look("body", body, look);
 
     // Trims.
     if let Some(trim) = trim {

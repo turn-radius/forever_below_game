@@ -6,9 +6,9 @@
 
 import bevy_pbr::render::{
     mesh_functions::{get_world_from_local, mesh_normal_local_to_world},
-    mesh_view_bindings::view,
     view_transformations::position_world_to_clip,
 };
+import super::screen::reference_pixel;
 
 struct OutlineUniform {
     color: vec4<f32>,
@@ -30,24 +30,13 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
 }
 
-const REFERENCE_VIEWPORT_HEIGHT: f32 = 1080.0;
-
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     let world_from_local = get_world_from_local(vertex.instance_index);
     let world_position = (world_from_local * vec4<f32>(vertex.position, 1.0)).xyz;
     let normal = normalize(mesh_normal_local_to_world(vertex.outline_normal, vertex.instance_index));
 
-    // World size of one pixel at this vertex's depth. clip_from_view[1][1] is
-    // 1 / tan(fov_y / 2) for a perspective camera and 2 / height for an orthographic one.
-    let viewport_height = view.viewport.w;
-    var pixel = 2.0 / (view.clip_from_view[1][1] * viewport_height);
-    if view.clip_from_view[3][3] != 1.0 {
-        let depth = -(view.view_from_world * vec4<f32>(world_position, 1.0)).z;
-        pixel = pixel * max(depth, 0.0);
-    }
-    let width_px = outline.width_px * viewport_height / REFERENCE_VIEWPORT_HEIGHT;
-    let width = min(width_px * pixel, outline.max_width);
+    let width = min(outline.width_px * reference_pixel(world_position), outline.max_width);
 
     var out: VertexOutput;
     out.clip_position = position_world_to_clip(world_position + normal * width);

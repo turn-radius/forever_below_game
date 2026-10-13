@@ -9,10 +9,10 @@ mod toon;
 
 pub use item::{
     ArmoryItem, ArmoryPart, InkOutline, ItemAppearance, ItemPalette, ItemSpawner, OutlineMaterials,
-    item_bounds, part_to_mesh,
+    half_thickness, item_bounds, part_to_mesh,
 };
 pub use outline::{ARMORY_INK, ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
-pub use toon::{Decay, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
+pub use toon::{Decay, MinWidth, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
 
 use bevy::{prelude::*, shader::load_shader_library};
 
@@ -21,8 +21,9 @@ pub struct ArmoryRenderPlugin;
 
 impl Plugin for ArmoryRenderPlugin {
     fn build(&self, app: &mut App) {
-        // Embedded and kept loaded so `toon.wesl` can import `super::decay`.
+        // Embedded and kept loaded so the shaders can import `super::decay` and `super::screen`.
         load_shader_library!(app, "decay.wesl");
+        load_shader_library!(app, "screen.wesl");
         load_shader_library!(app, "toon.wesl");
         load_shader_library!(app, "outline.wesl");
 
