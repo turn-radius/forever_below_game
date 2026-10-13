@@ -21,12 +21,14 @@ pub mod etch;
 pub mod families;
 pub mod gem;
 pub mod geom;
+pub mod item;
 pub mod material;
 pub mod palette;
 pub mod sections;
 pub mod slider;
 
 pub use geom::{ItemMesh, Part};
+pub use item::Item;
 pub use material::{MaterialKind, Rgb};
 
 use serde::{Deserialize, Serialize};

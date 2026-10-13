@@ -8,6 +8,7 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     platform::collections::HashMap,
     prelude::*,
+    shape::Aabb3d,
 };
 
 use super::outline::{ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
@@ -122,6 +123,13 @@ pub fn part_to_mesh(part: &Part) -> Mesh {
     mesh
 }
 
+/// Item-space bounds of every part, or `None` for an item with no vertices.
+pub fn item_bounds(item: &ItemMesh) -> Option<Aabb3d> {
+    let mut points = item.parts.iter().flat_map(|part| &part.positions).map(|&p| Vec3::from_array(p)).peekable();
+    points.peek()?;
+    Some(Aabb3d::from_point_cloud(Isometry3d::IDENTITY, points))
+}
+
 /// Marks the root entity of a spawned Armory item.
 #[derive(Component, Debug, Default)]
 pub struct ArmoryItem;
@@ -199,6 +207,16 @@ mod tests {
         let material = ItemAppearance::default().material_for(&part);
         assert_eq!(material.base.base_color, Color::srgb(1.0, 0.0, 0.0));
         assert_eq!(material.extension.decay.kind, 5);
+    }
+
+    #[test]
+    fn bounds_cover_every_part() {
+        let part = |positions: Vec<[f32; 3]>| Part { positions, ..default() };
+        assert!(item_bounds(&ItemMesh::default()).is_none());
+        let item = ItemMesh { parts: vec![part(vec![[0.0, 0.0, 0.0], [1.0, 2.0, 0.5]]), part(vec![[-1.0, 8.0, 0.0]])] };
+        let bounds = item_bounds(&item).unwrap();
+        assert_eq!(Vec3::from(bounds.min), Vec3::new(-1.0, 0.0, 0.0));
+        assert_eq!(Vec3::from(bounds.max), Vec3::new(1.0, 8.0, 0.5));
     }
 
     #[test]

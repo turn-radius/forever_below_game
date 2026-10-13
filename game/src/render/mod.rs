@@ -9,7 +9,7 @@ mod toon;
 
 pub use item::{
     ArmoryItem, ArmoryPart, InkOutline, ItemAppearance, ItemPalette, ItemSpawner, OutlineMaterials,
-    part_to_mesh,
+    item_bounds, part_to_mesh,
 };
 pub use outline::{ARMORY_INK, ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
 pub use toon::{Decay, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
