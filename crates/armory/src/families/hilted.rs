@@ -88,13 +88,17 @@ pub(crate) fn etch_targets(grip: &Grip) -> Vec<(EtchTarget, u32)> {
 }
 
 /// Cord and wire go on in tight turns, touching: as many turns as the cord's thickness
-/// allows, and a thicker cord where that would be more turns than a wrap has.
-pub(crate) fn close_wind(handle: f32, w: &mut Wrap) {
-    let run = handle * w.coverage;
-    let turns = (run / (2.2 * w.cord)).round();
-    if turns > 48.0 {
-        w.turns = 48;
-        w.cord = run / (2.2 * 48.0);
+/// allows. Where that would be more than `max_turns`, the cord thickens up to `max_cord`,
+/// and past that the wrap covers less of the grip.
+pub(crate) fn close_wind(handle: f32, w: &mut Wrap, max_turns: u32, max_cord: f32) {
+    let pitch = |cord: f32| 2.2 * cord;
+    let mut run = handle * w.coverage;
+    let turns = (run / pitch(w.cord)).round();
+    if turns > max_turns as f32 {
+        w.turns = max_turns;
+        w.cord = (run / (pitch(1.0) * max_turns as f32)).min(max_cord);
+        run = pitch(w.cord) * max_turns as f32;
+        w.coverage = (run / handle).min(w.coverage);
     } else {
         w.turns = turns.max(2.0) as u32;
     }

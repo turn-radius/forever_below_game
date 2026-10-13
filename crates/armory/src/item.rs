@@ -69,6 +69,7 @@ ported! {
     Mace => mace::Mace(MaceState),
     Sword => sword::Sword(SwordState),
     Spear => spear::Spear(SpearState),
+    Dagger => dagger::Dagger(DaggerState),
     Bow => bow::Bow(BowState),
     Crossbow => crossbow::Crossbow(CrossbowState),
 }

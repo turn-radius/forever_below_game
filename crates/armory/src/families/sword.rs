@@ -276,6 +276,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, a: SwordArchetype) -> SwordState {
     let stone = *rng.pick(&Gemstone::ALL);
     let precious = matches!(fittings, Gold | Silver);
     set_guard_stone(rng, &mut s.guard, if precious { 0.5 } else { 0.08 }, (0.035, 0.07), stone);
+    s.guard.gem &= s.guard.on;
     set_pommel_stones(rng, &mut s.pommel, if precious { 0.5 } else { 0.1 }, stone);
     s.etch = Etching::roll(rng, if precious { 0.6 } else { 0.35 }, &etch_targets(&s.grip), if precious { 2 } else { 1 });
     s.fit(&LIMITS);
@@ -478,7 +479,7 @@ fn roll_handle(rng: &mut Mulberry32, a: SwordArchetype, blade_length: f32, sh: &
     w.bind = rng.chance(0.7);
     w.material = *rng.weighted(&[(Leather, 5), (Cord, 3), (Brass, 1), (Silver, 1)]);
     if w.material != Leather {
-        close_wind(sh.length, w);
+        close_wind(sh.length, w, 48, LIMITS.wrap.cord.max);
     }
 }
 

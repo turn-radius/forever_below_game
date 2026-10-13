@@ -5,12 +5,14 @@ use crate::geom::ItemMesh;
 
 pub mod bow;
 pub mod crossbow;
+pub mod dagger;
 pub mod mace;
 pub mod spear;
 pub mod staff;
 pub mod sword;
 
 pub(crate) mod hilted;
+
 
 /// The contract every family module implements.
 pub trait Generator {
