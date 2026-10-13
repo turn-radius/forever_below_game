@@ -2,7 +2,8 @@
 
 use armory::families::Generator;
 use armory::families::spear::{Spear, SpearState};
-use armory::sections::spearhead::{LugMount, LugStyle};
+use armory::sections::blade::GuardMount;
+use armory::sections::spearhead::LugStyle;
 use armory::{ItemMesh, Part};
 
 const SEEDS: std::ops::RangeInclusive<u32> = 1..=256;
@@ -107,8 +108,8 @@ fn lugs_stand_out_where_they_are_mounted() {
         assert!(reach < s.lugs.span + 0.5, "seed {}: lugs reach {reach}", s.seed);
         let mid = (lo[1] + hi[1]) * 0.5;
         match s.lugs.mount {
-            LugMount::Socket => assert!(mid > slo[1] && mid < blo[1] + 0.05, "seed {}: socket lugs at {mid}", s.seed),
-            LugMount::Blade => assert!(mid > blo[1] - 0.1, "seed {}: blade lugs at {mid} below the blade {}", s.seed, blo[1]),
+            GuardMount::Socket => assert!(mid > slo[1] && mid < blo[1] + 0.05, "seed {}: socket lugs at {mid}", s.seed),
+            GuardMount::Blade => assert!(mid > blo[1] - 0.1, "seed {}: blade lugs at {mid} below the blade {}", s.seed, blo[1]),
         }
         if s.lugs.style == LugStyle::Wings {
             // Flat in the blade's plane.

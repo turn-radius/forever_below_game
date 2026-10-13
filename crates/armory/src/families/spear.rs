@@ -28,7 +28,8 @@ use crate::material::MaterialKind;
 use crate::palette::Palette;
 use crate::sections::hafted::{Grip, GripLimits, Pommel, PommelGem, PommelLimits, PommelStyle, Shaft, ShaftLimits, Wrap, WrapLimits};
 use crate::sections::socket::{Socket, SocketLimits};
-use crate::sections::spearhead::{BladeSection, LugEnds, LugMount, LugStyle, Lugs, LugsLimits, Spearhead, SpearheadLimits};
+use crate::sections::blade::{BladeSection, GuardMount, GuardTerminal};
+use crate::sections::spearhead::{LugStyle, Lugs, LugsLimits, Spearhead, SpearheadLimits};
 use crate::slider::Sliders;
 use procgen_rng::{Mulberry32, armory_stream_seed};
 use serde::{Deserialize, Serialize};
@@ -227,8 +228,8 @@ impl Generator for Spear {
         } else if l.on {
             match (l.style, l.mount) {
                 (LugStyle::Bar, _) => "Boar Spear",
-                (LugStyle::Wings, LugMount::Socket) => "Winged Spear",
-                (LugStyle::Wings, LugMount::Blade) => "Lugged Spear",
+                (LugStyle::Wings, GuardMount::Socket) => "Winged Spear",
+                (LugStyle::Wings, GuardMount::Blade) => "Lugged Spear",
             }
         } else if hl > 18.0 {
             "Pike"
@@ -290,7 +291,7 @@ impl Generator for Spear {
         head.add("blade", blade, b.material);
         if s.lugs.on {
             let (y, root) = match (s.lugs.mount, &socket) {
-                (LugMount::Socket, Some(sk)) => {
+                (GuardMount::Socket, Some(sk)) => {
                     let y = match s.lugs.style {
                         LugStyle::Wings => sk.top - (sk.top - sk.mouth) * 0.3,
                         LugStyle::Bar => sk.mouth + (sk.top - sk.mouth) * 0.4,
@@ -485,36 +486,36 @@ fn roll_lugs(rng: &mut Mulberry32, a: SpearArchetype, l: &mut Lugs) {
     match a {
         A::Winged => {
             l.style = LugStyle::Wings;
-            l.mount = LugMount::Socket;
+            l.mount = GuardMount::Socket;
             l.span = rng.range_f32(0.18, 0.4);
             l.thickness = rng.range_f32(0.04, 0.07);
             l.curve = rng.range_f32(-0.15, 0.3);
-            l.ends = *rng.weighted(&[(LugEnds::None, 4), (LugEnds::Ball, 1)]);
+            l.ends = *rng.weighted(&[(GuardTerminal::None, 4), (GuardTerminal::Ball, 1)]);
         }
         A::Lugged => {
             l.style = LugStyle::Wings;
-            l.mount = LugMount::Blade;
+            l.mount = GuardMount::Blade;
             l.span = rng.range_f32(0.15, 0.32);
             l.thickness = rng.range_f32(0.035, 0.06);
             l.curve = rng.range_f32(-0.3, 0.4);
-            l.ends = *rng.weighted(&[(LugEnds::None, 3), (LugEnds::Disc, 1)]);
+            l.ends = *rng.weighted(&[(GuardTerminal::None, 3), (GuardTerminal::Disc, 1)]);
         }
         A::Boar => {
             l.style = LugStyle::Bar;
-            l.mount = LugMount::Socket;
+            l.mount = GuardMount::Socket;
             l.span = rng.range_f32(0.3, 0.55);
             l.thickness = rng.range_f32(0.04, 0.06);
             l.curve = 0.0;
             l.taper = rng.range_f32(0.0, 0.5);
-            l.ends = *rng.weighted(&[(LugEnds::Ball, 3), (LugEnds::Disc, 1), (LugEnds::None, 1)]);
+            l.ends = *rng.weighted(&[(GuardTerminal::Ball, 3), (GuardTerminal::Disc, 1), (GuardTerminal::None, 1)]);
         }
         A::Partisan => {
             l.style = LugStyle::Wings;
-            l.mount = LugMount::Blade;
+            l.mount = GuardMount::Blade;
             l.span = rng.range_f32(0.35, 0.7);
             l.thickness = rng.range_f32(0.04, 0.07);
             l.curve = rng.range_f32(0.6, 1.0);
-            l.ends = *rng.weighted(&[(LugEnds::None, 3), (LugEnds::Flare, 1)]);
+            l.ends = *rng.weighted(&[(GuardTerminal::None, 3), (GuardTerminal::Flare, 1)]);
         }
         _ => {}
     }

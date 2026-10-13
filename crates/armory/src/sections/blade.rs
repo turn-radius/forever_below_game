@@ -29,6 +29,28 @@ pub enum BladeSection {
 
 impl BladeSection {
     pub const ALL: [BladeSection; 4] = [BladeSection::Lenticular, BladeSection::Diamond, BladeSection::Hexagonal, BladeSection::Flat];
+
+    /// Thickness across the blade as a fraction of the full thickness, at `v` from -1 (one
+    /// edge) through 0 (the middle) to 1 (the other edge).
+    pub fn thickness_at(self, v: f32) -> f32 {
+        let a = v.abs().min(1.0);
+        match self {
+            BladeSection::Lenticular => (1.0 - a * a).max(0.0).sqrt(),
+            BladeSection::Diamond => 1.0 - a,
+            BladeSection::Hexagonal => ((1.0 - a) / 0.38).min(1.0),
+            BladeSection::Flat => ((1.0 - a) / 0.12).min(1.0),
+        }
+    }
+
+    /// Where the faces fold (hard edges along the blade), as `v` in -1..=1, edges included.
+    pub fn creases(self) -> &'static [f32] {
+        match self {
+            BladeSection::Lenticular => &[-1.0, 1.0],
+            BladeSection::Diamond => &[-1.0, 0.0, 1.0],
+            BladeSection::Hexagonal => &[-1.0, -0.62, 0.62, 1.0],
+            BladeSection::Flat => &[-1.0, -0.88, 0.88, 1.0],
+        }
+    }
 }
 
 /// The blade: its outline (profile), edge and curve, and cross-section.

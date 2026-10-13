@@ -18,7 +18,8 @@ use procgen_rng::Mulberry32;
 use super::hafted::smoothstep;
 use crate::geom::polygon::P2;
 use crate::geom::{GridOptions, LatheOptions, MeshBuilder, Shading, V3, extrude_tapered, lathe, spline_profile, stitch_grid, uv_sphere, vec3};
-use crate::sections::spearhead::{LugEnds, LugStyle, Lugs, Spearhead};
+use crate::sections::blade::GuardTerminal;
+use crate::sections::spearhead::{LugStyle, Lugs, Spearhead};
 
 /// Rows along the blade before waves add more.
 const ROWS: usize = 110;
@@ -157,17 +158,17 @@ pub fn spearhead_mesh(head: &Spearhead, neck: f32, broken: Option<Break>) -> Mes
 }
 
 /// A terminal for the end of a lug, its foot at the origin facing +Y.
-fn terminal(ends: LugEnds, size: f32, root: f32) -> MeshBuilder {
+fn terminal(ends: GuardTerminal, size: f32, root: f32) -> MeshBuilder {
     let e = size;
     let control: &[[f32; 2]] = match ends {
-        LugEnds::None => return MeshBuilder::new(),
-        LugEnds::Ball => {
+        GuardTerminal::None => return MeshBuilder::new(),
+        GuardTerminal::Ball => {
             let mut ball = uv_sphere(e, 16, 10);
             ball.translate([0.0, e * 0.75, 0.0]);
             return ball;
         }
-        LugEnds::Disc => &[[root, 0.0], [e * 1.1, e * 0.1], [e * 1.15, e * 0.35], [e, e * 0.5], [0.0, e * 0.55]],
-        LugEnds::Flare => &[[root * 0.9, 0.0], [e * 0.6, e * 0.5], [e, e], [e * 1.02, e * 1.15], [0.0, e * 1.18]],
+        GuardTerminal::Disc => &[[root, 0.0], [e * 1.1, e * 0.1], [e * 1.15, e * 0.35], [e, e * 0.5], [0.0, e * 0.55]],
+        GuardTerminal::Flare => &[[root * 0.9, 0.0], [e * 0.6, e * 0.5], [e, e], [e * 1.02, e * 1.15], [0.0, e * 1.18]],
     };
     lathe(&spline_profile(control, 14), &LatheOptions { facets: 16, shading: Shading::SMOOTH, ..Default::default() })
 }

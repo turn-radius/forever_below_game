@@ -198,12 +198,7 @@ impl<'a> Shape<'a> {
     fn section(&self, v: f32, s: f32) -> f32 {
         let b = self.b;
         let a = v.abs().min(1.0);
-        let mut z = match b.section {
-            BladeSection::Diamond => 1.0 - a,
-            BladeSection::Hexagonal => ((1.0 - a) / 0.38).min(1.0),
-            BladeSection::Flat => ((1.0 - a) / 0.12).min(1.0),
-            BladeSection::Lenticular => (1.0 - a * a).max(0.0).sqrt(),
-        };
+        let mut z = b.section.thickness_at(v);
         if v < 0.0 && b.spine > 0.0 {
             z += b.spine * 0.55 * a;
         }
@@ -239,12 +234,8 @@ fn normalize2(v: [f32; 2]) -> [f32; 2] {
 /// The columns across the blade, back edge (-1) to front edge (+1), each flagged when it is a
 /// hard crease (a ridge or bevel line).
 fn columns(b: &Blade) -> Vec<(f32, bool)> {
-    let creases: &[f32] = match b.section {
-        BladeSection::Diamond => &[0.0],
-        BladeSection::Hexagonal => &[0.62],
-        BladeSection::Flat => &[0.88],
-        BladeSection::Lenticular => &[],
-    };
+    // Interior folds on one half (the edges are always strip boundaries).
+    let creases: Vec<f32> = b.section.creases().iter().copied().filter(|&c| (0.0..1.0).contains(&c)).collect();
     let segments = if b.fuller > 0.0 {
         30
     } else if b.section == BladeSection::Lenticular {

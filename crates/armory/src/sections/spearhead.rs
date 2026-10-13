@@ -3,50 +3,14 @@
 //!
 //! The sliders are the prototype's `blade` section (`SECTIONS` in
 //! `reference/spline_armory_engine.js`) less the sword-only ones (curve, single edge, clip,
-//! ricasso), plus a midrib; its `guard` section as spears use it ("Wings and lugs"); and its
+//! ricasso), plus a midrib, with the cross-section shared with swords and daggers
+//! ([`BladeSection`]); its `guard` section as spears use it ("Wings and lugs"); and its
 //! `socket` section, in [`crate::sections::socket`].
 
 use crate::material::MaterialKind;
+use crate::sections::blade::{BladeSection, GuardMount, GuardTerminal};
 use crate::slider::sliders;
 use serde::{Deserialize, Serialize};
-
-/// The blade's cross-section, edge to edge (the prototype's `section` select).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BladeSection {
-    /// Two convex faces meeting at the edges.
-    Lenticular,
-    /// A ridge down the middle, flat faces to each edge (square when as thick as wide).
-    Diamond,
-    /// A flat middle and bevelled edges.
-    Hexagonal,
-    /// Flat faces with a narrow bevel at each edge.
-    Flat,
-}
-
-impl BladeSection {
-    /// Thickness across the blade as a fraction of the full thickness, at `v` from -1 (one
-    /// edge) through 0 (the middle) to 1 (the other edge).
-    pub fn thickness_at(self, v: f32) -> f32 {
-        let a = v.abs().min(1.0);
-        match self {
-            BladeSection::Lenticular => (1.0 - a * a).max(0.0).sqrt(),
-            BladeSection::Diamond => 1.0 - a,
-            BladeSection::Hexagonal => ((1.0 - a) / 0.38).min(1.0),
-            BladeSection::Flat => ((1.0 - a) / 0.12).min(1.0),
-        }
-    }
-
-    /// Where the faces fold (hard edges along the blade), as `v` in -1..=1, edges included.
-    pub fn creases(self) -> &'static [f32] {
-        match self {
-            BladeSection::Lenticular => &[-1.0, 1.0],
-            BladeSection::Diamond => &[-1.0, 0.0, 1.0],
-            BladeSection::Hexagonal => &[-1.0, -0.62, 0.62, 1.0],
-            BladeSection::Flat => &[-1.0, -0.88, 0.88, 1.0],
-        }
-    }
-}
 
 /// The spearhead blade. Item space: its base at y = 0, its point up +Y, its edges along
 /// ±X and its faces toward ±Z.
@@ -140,32 +104,13 @@ pub enum LugStyle {
     Bar,
 }
 
-/// Where the lugs are fixed (the prototype's guard `mount`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LugMount {
-    /// Forged on the socket, below the blade.
-    Socket,
-    /// At the base of the blade.
-    Blade,
-}
-
-/// The terminals on the lugs' ends (the prototype's guard `ends`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LugEnds {
-    None,
-    Ball,
-    Disc,
-    Flare,
-}
-
 /// Wings or a bar below the blade (the prototype's "Wings and lugs").
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Lugs {
     pub on: bool,
     pub style: LugStyle,
-    pub mount: LugMount,
+    /// Where the lugs are fixed (the prototype's guard `mount`).
+    pub mount: GuardMount,
     /// How far each lug reaches out from the socket or blade.
     pub span: f32,
     /// Thickness at the root.
@@ -174,7 +119,8 @@ pub struct Lugs {
     pub curve: f32,
     /// How much they thin toward the ends.
     pub taper: f32,
-    pub ends: LugEnds,
+    /// The terminals on the lugs' ends (the prototype's guard `ends`).
+    pub ends: GuardTerminal,
     pub end_size: f32,
     pub material: MaterialKind,
 }
@@ -194,12 +140,12 @@ impl Default for Lugs {
         Lugs {
             on: false,
             style: LugStyle::Wings,
-            mount: LugMount::Socket,
+            mount: GuardMount::Socket,
             span: 0.42,
             thickness: 0.07,
             curve: 0.0,
             taper: 0.7,
-            ends: LugEnds::None,
+            ends: GuardTerminal::None,
             end_size: 0.06,
             material: MaterialKind::Iron,
         }

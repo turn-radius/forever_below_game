@@ -3,7 +3,8 @@
 use armory::families::Generator;
 use armory::families::spear::{LIMITS, Spear, SpearArchetype, SpearState};
 use armory::sections::hafted::{PommelGem, PommelStyle};
-use armory::sections::spearhead::{BladeSection, LugEnds, LugMount, LugStyle};
+use armory::sections::blade::{BladeSection, GuardMount, GuardTerminal};
+use armory::sections::spearhead::LugStyle;
 
 fn rolls(range: std::ops::RangeInclusive<u32>) -> Vec<SpearState> {
     range.map(Spear::roll).collect()
@@ -74,10 +75,10 @@ fn first_256_seeds_cover_the_variety() {
     for style in [LugStyle::Wings, LugStyle::Bar] {
         assert!(any(&|s| s.lugs.on && s.lugs.style == style), "no {style:?}");
     }
-    for mount in [LugMount::Socket, LugMount::Blade] {
+    for mount in [GuardMount::Socket, GuardMount::Blade] {
         assert!(any(&|s| s.lugs.on && s.lugs.mount == mount), "no lugs on the {mount:?}");
     }
-    for ends in [LugEnds::None, LugEnds::Ball, LugEnds::Disc, LugEnds::Flare] {
+    for ends in [GuardTerminal::None, GuardTerminal::Ball, GuardTerminal::Disc, GuardTerminal::Flare] {
         assert!(any(&|s| s.lugs.on && s.lugs.ends == ends), "no {ends:?} lug ends");
     }
     for style in [PommelStyle::Ferrule, PommelStyle::Spike] {
@@ -114,10 +115,10 @@ fn nouns() {
 
     s.lugs.on = true;
     s.lugs.style = LugStyle::Wings;
-    s.lugs.mount = LugMount::Socket;
+    s.lugs.mount = GuardMount::Socket;
     s.lugs.curve = 0.2;
     assert_eq!(Spear::noun(&s), "Winged Spear", "lugs win over length");
-    s.lugs.mount = LugMount::Blade;
+    s.lugs.mount = GuardMount::Blade;
     assert_eq!(Spear::noun(&s), "Lugged Spear");
     s.lugs.style = LugStyle::Bar;
     assert_eq!(Spear::noun(&s), "Boar Spear");
