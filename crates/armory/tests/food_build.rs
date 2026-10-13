@@ -144,3 +144,25 @@ fn sits_on_the_table_at_a_sensible_size() {
         assert!(size > 0.3 && size < 7.0, "{label}: {size} units across");
     }
 }
+
+#[test]
+fn glowcaps_give_light_from_their_caps() {
+    use armory::families::food::{FoodStyle, GLOWCAP};
+    let mut lit = 0;
+    for seed in 1..=64 {
+        let s = Food::roll_as(seed, FoodStyle::Mushroom);
+        match Food::light(&s) {
+            Some(light) => {
+                lit += 1;
+                assert!(s.provision.glow >= GLOWCAP, "seed {seed}");
+                let mesh = Food::build(&s);
+                let top = mesh.parts.iter().flat_map(|p| p.positions.iter()).fold(f32::MIN, |m, p| m.max(p[1]));
+                assert!(light.position[1] > 0.0 && light.position[1] < top, "seed {seed}");
+                assert!(light.radius > 0.0 && light.flicker == 0.0, "seed {seed}");
+            }
+            None => assert!(s.provision.glow < GLOWCAP, "seed {seed}"),
+        }
+    }
+    assert!(lit > 0);
+    assert!(Food::light(&Food::roll_as(1, FoodStyle::Loaf)).is_none());
+}

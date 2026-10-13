@@ -15,7 +15,7 @@ fn arc(cx: f32, cy: f32, r: f32, a0: f32, a1: f32, n: usize) -> Vec<P2> {
 }
 
 /// A rectangle with rounded corners, `w` by `h`, centred on (`cx`, `cy`).
-fn rounded_rect(cx: f32, cy: f32, w: f32, h: f32, r: f32) -> Vec<P2> {
+pub fn rounded_rect(cx: f32, cy: f32, w: f32, h: f32, r: f32) -> Vec<P2> {
     use std::f32::consts::FRAC_PI_2;
     let r = r.min(w * 0.5).min(h * 0.5);
     let (x, y) = (w * 0.5 - r, h * 0.5 - r);

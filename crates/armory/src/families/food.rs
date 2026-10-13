@@ -21,6 +21,7 @@
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+use crate::build::light::LightAnchor;
 use crate::cond::{Condition, ConditionLimits};
 use crate::families::Generator;
 use crate::geom::{
@@ -397,7 +398,32 @@ impl Generator for Food {
 /// Glow at or above which a mushroom is a glowcap.
 pub const GLOWCAP: f32 = 0.25;
 
+/// A glowcap's light in feet at full glow. `data/goods.json` says only "glows faintly", so
+/// this is a proposal: about a candle's reach at its brightest.
+pub const GLOWCAP_FEET: f32 = 4.0;
+
 impl Food {
+    /// Where a glowcap gives its light: the middle of its caps, in the caps' own colour,
+    /// reaching [`GLOWCAP_FEET`] scaled by its glow, steady. `None` for anything that does
+    /// not glow enough to be a glowcap.
+    pub fn light(s: &FoodState) -> Option<LightAnchor> {
+        let p = &s.provision;
+        if p.style != FoodStyle::Mushroom || p.glow < GLOWCAP {
+            return None;
+        }
+        let mesh = Food::build(s);
+        let (lo, hi) = mesh
+            .parts
+            .iter()
+            .filter(|part| part.name == "cap")
+            .flat_map(|part| part.positions.iter())
+            .fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| {
+                ([lo[0].min(q[0]), lo[1].min(q[1]), lo[2].min(q[2])], [hi[0].max(q[0]), hi[1].max(q[1]), hi[2].max(q[2])])
+            });
+        let centre = vec3::lerp(lo, hi, 0.5);
+        Some(LightAnchor::feet(centre, p.outer, GLOWCAP_FEET * p.glow, 0.0))
+    }
+
     /// "Forge new" forced to one style, for turntables and tests. Draws the same stream as
     /// [`Generator::roll`], so `roll(s)` equals `roll_as(s, style)` when `s` rolls that style.
     pub fn roll_as(seed: u32, style: FoodStyle) -> FoodState {

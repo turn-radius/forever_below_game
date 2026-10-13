@@ -20,6 +20,7 @@ use crate::build::container::{ContainerSpace, Opening, stacked_volume};
 use crate::build::hafted::smoothstep;
 use crate::build::hoard::coin_scatter;
 use crate::build::parts::Parts;
+use crate::build::roll::{roll_straps, rolled_sheet};
 use crate::build::strap::{buckle, d_ring, strap, strap_along};
 use crate::cond::{Condition, ConditionLimits};
 use crate::etch::{EtchTarget, Etching, EtchingLimits};
@@ -867,39 +868,12 @@ fn add_bedroll(b: &Bag, f: &Flapped, body: &BoxBody, strap_t: f32, straps: &mut 
     let r = 0.5 * sz;
     let len = f.width * 1.06;
     let centre = [0.0, body.height + 0.1 * sz + r * 0.9, 0.0];
-    let control = [[0.0, -len * 0.5], [r * 0.9, -len * 0.5], [r, -len * 0.5 + r * 0.2], [r, len * 0.5 - r * 0.2], [r * 0.9, len * 0.5], [0.0, len * 0.5]];
-    let mut roll = lathe(&spline_profile(&control, 24), &LatheOptions::new(40, Shading::SMOOTH));
-    roll.rotate_z(-PI * 0.5).translate(centre);
+    let (roll, spirals) = rolled_sheet(centre, r, len, 0.018 * sz, 3.0);
     parts.add_tinted("bedroll", roll, MaterialKind::Cloth, b.color2);
-
-    // The rolled edge: an Archimedean spiral just proud of each end.
-    let mut spirals = MeshBuilder::new();
-    for side in [-1.0f32, 1.0] {
-        let path: Vec<V3> = (0..=96)
-            .map(|i| {
-                let k = i as f32 / 96.0;
-                let (s, c) = (k * 3.0 * TAU).sin_cos();
-                let rr = r * (0.12 + 0.75 * k);
-                vec3::add(centre, [side * len * 0.5, s * rr, c * rr])
-            })
-            .collect();
-        spirals.append(&tube(&path, 6, &SweepOptions::default(), |_| 0.018 * sz));
-    }
     parts.add_tinted("bedroll_edge", spirals, MaterialKind::Cloth, b.color2.scaled(0.7));
 
     // Two straps round the roll, buckled at the front.
-    for k in [-0.28f32, 0.28] {
-        let x = k * f.width;
-        let ring: Vec<V3> = (0..48)
-            .map(|i| {
-                let a = TAU * i as f32 / 48.0;
-                vec3::add(centre, [x, a.sin() * r * 0.98, a.cos() * r * 0.98])
-            })
-            .collect();
-        let faces: Vec<V3> = ring.iter().map(|&p| vec3::sub(p, [x, centre[1], centre[2]])).collect();
-        straps.append(&strap(&ring, &faces, 0.12 * sz, strap_t, true));
-        let mut bk = buckle(0.12 * sz, 0.014 * sz);
-        bk.place_basis(vec3::add(centre, [x, 0.0, r * 0.98 + strap_t]), vec3::Y, vec3::Z);
-        fittings.append(&bk);
-    }
+    let (s, bk) = roll_straps(centre, r, &[-0.28 * f.width, 0.28 * f.width], 0.12 * sz, strap_t, 0.014 * sz);
+    straps.append(&s);
+    fittings.append(&bk);
 }

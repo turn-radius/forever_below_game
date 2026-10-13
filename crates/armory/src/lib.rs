@@ -40,12 +40,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Family {
-    Staff, Mace, Sword, Spear, Dagger, Club, Axe, Bow, Crossbow, Helm, Hood, Garment, Belt, Hands, Legs, Feet, Shield, Ring, Amulet, Charm, Bags, Chests, Food, Torch, Lantern,
+    Staff, Mace, Sword, Spear, Dagger, Club, Axe, Bow, Crossbow, Helm, Hood, Garment, Belt, Hands, Legs, Feet, Shield, Ring, Amulet, Charm, Bags, Chests, Food, Torch, Lantern, Sundry,
 }
 
 impl Family {
-    pub const ALL: [Family; 25] = [
-        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Club, Family::Axe, Family::Bow, Family::Crossbow, Family::Helm, Family::Hood, Family::Garment, Family::Belt, Family::Hands, Family::Legs, Family::Feet, Family::Shield, Family::Ring, Family::Amulet, Family::Charm, Family::Bags, Family::Chests, Family::Food, Family::Torch, Family::Lantern,
+    pub const ALL: [Family; 26] = [
+        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Club, Family::Axe, Family::Bow, Family::Crossbow, Family::Helm, Family::Hood, Family::Garment, Family::Belt, Family::Hands, Family::Legs, Family::Feet, Family::Shield, Family::Ring, Family::Amulet, Family::Charm, Family::Bags, Family::Chests, Family::Food, Family::Torch, Family::Lantern, Family::Sundry,
     ];
     pub fn key(self) -> &'static str {
         match self {
@@ -74,11 +74,12 @@ impl Family {
             Family::Food => "food",
             Family::Torch => "torch",
             Family::Lantern => "lantern",
+            Family::Sundry => "sundry",
         }
     }
     /// Whether the Spline Armory prototype had this family (and so example fixtures).
     pub fn in_armory_prototype(self) -> bool {
-        !matches!(self, Family::Club | Family::Axe | Family::Hood | Family::Belt | Family::Legs | Family::Torch | Family::Lantern)
+        !matches!(self, Family::Club | Family::Axe | Family::Hood | Family::Belt | Family::Legs | Family::Torch | Family::Lantern | Family::Sundry)
     }
 }
 

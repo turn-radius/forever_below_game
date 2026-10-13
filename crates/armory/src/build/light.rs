@@ -21,8 +21,6 @@ pub const FLAME_LIGHT: Rgb = Rgb::hex(0xffb36a);
 pub const CANDLE_LIGHT: Rgb = Rgb::hex(0xffc98a);
 /// Light through horn panes: warmer and duskier.
 pub const HORN_LIGHT: Rgb = Rgb::hex(0xffa457);
-/// A glowcap's cold light (the plate's glowcap cap colour).
-pub const GLOWCAP_LIGHT: Rgb = Rgb::hex(0x7fd8c8);
 
 /// The outer veil of a flame.
 pub const FLAME_OUTER: Rgb = Rgb::hex(0xff8a2a);

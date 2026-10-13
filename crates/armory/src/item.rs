@@ -90,6 +90,7 @@ ported! {
     Food => food::Food(FoodState),
     Torch => torch::Torch(TorchState),
     Lantern => lantern::Lantern(LanternState),
+    Sundry => sundry::Sundry(SundryState),
 }
 
 impl Item {

@@ -38,6 +38,8 @@
 //! - [`legwear`]: trousers, breeches and leggings on a lower-body form.
 //! - [`hood`]: hoods, cowls and coifs on a head form and the shoulders.
 //! - [`belt`]: a belt buckled round a torso form, with frogs, loops and rings.
+//! - [`key`]: keys with ring, trefoil or lozenge bows and warded bits.
+//! - [`roll`]: rolled sheets and the straps round them (bedrolls, bandages).
 //! - [`light`]: carried light ([`light::LightAnchor`]), flames and embers (torches,
 //!   lanterns, candles, glowcaps).
 
@@ -61,12 +63,14 @@ pub mod head;
 pub mod hilt;
 pub mod hoard;
 pub mod hood;
+pub mod key;
 pub mod legwear;
 pub mod light;
 pub mod limb;
 pub mod parts;
 pub mod plank;
 pub mod plate;
+pub mod roll;
 pub mod socket;
 pub mod spearhead;
 pub mod strap;

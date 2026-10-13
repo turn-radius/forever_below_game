@@ -115,6 +115,20 @@ impl Parts {
         self.0.iter_mut().map(|(_, m, _)| m)
     }
 
+    /// Lifts or lowers every mesh together so the lowest point rests on y = 0: set down on
+    /// the ground. Leaves X and Z alone, so anchors computed in the same space stay put
+    /// once their height is shifted by the returned amount.
+    pub fn rest_on_ground(&mut self) -> f32 {
+        let low = self.0.iter().filter_map(|(_, m, _)| m.bounds()).map(|(lo, _)| lo[1]).fold(f32::INFINITY, f32::min);
+        if !low.is_finite() {
+            return 0.0;
+        }
+        for (_, mesh, _) in &mut self.0 {
+            mesh.translate([0.0, -low, 0.0]);
+        }
+        -low
+    }
+
     /// Finishes every mesh into a [`Part`] with welded outline normals.
     pub fn finish(self) -> ItemMesh {
         let parts = self

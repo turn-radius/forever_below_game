@@ -26,6 +26,7 @@ pub mod ring;
 pub mod shield;
 pub mod spear;
 pub mod staff;
+pub mod sundry;
 pub mod sword;
 pub mod torch;
 

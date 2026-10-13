@@ -7,7 +7,7 @@ These are the rules the prototype settled on. Keep the intent and improve the de
 1. **Shape**: an `armory::ItemState`, rolled by the Armory's own "Forge new" (`SA.roll(family, seed, accept, preset)`). `data/sab.json` maps each base item name to an Armory family and, where needed, an `acc` filter on the rolled style (for example, `Boots` accepts `boot.style` of `boot` or `sabaton`). `roll` retries with seeds `(seed + i*7919) % 999983 + 1` until the filter accepts, up to 120 tries. Some bases have a `tw` tweak applied after rolling (a Mantle is a short cloak, a Purse always holds coins).
 2. **Game layer**: rarity, affixes, stats, footprint, history.
 
-A few bases are native to the plate because the Armory has no family for them yet: laced shirt, leather jerkin, pointed hat, torch and lantern (`data/bases.json`), plus sundries like rope, candles and waterskins (`data/goods.json`). Adding them to the Armory would bring them into the same generator.
+A few bases are native to the plate because the Armory has no family for them yet: laced shirt, leather jerkin and pointed hat (`data/bases.json`). Torches, lanterns and the sundries in `data/goods.json` are now Armory families (see "Lights" and "Sundries" below), and the waterskin, lamp oil and glowcap are food.
 
 ### Clubs and axes
 
@@ -57,6 +57,15 @@ Torches and lanterns are Armory families (`armory::families::torch`, `armory::fa
 - A torch's light reaches 20 ft at an ordinary flame, scaled by the flame's height and the head: a cresset reaches further and a splint bundle less far. Tallow burns a little dimmer.
 - A lantern (`armory::families::lantern`) has three bodies (horn panes in a frame, a pierced tin drum, a wire cage round a glass chimney), each under a hood and over a base, hung by a wire bail on 0 to 6 chain links from the carrying ring the hand holds. Inside stands a candle in a socket or an oil font with a burner and a filler cap. The plate's `Tin`, `Brass` and `Iron` are the lantern's metal; tin is iron tinted pale and horn is bone tinted amber, until there are materials for them.
 - A lit lantern's panes, holes or chimney glow. Its light reaches the base's 30 ft through glass, less through horn and least through a pierced drum, and an oil flame reaches further than a candle.
+
+- A glowcap (a food mushroom glowing at 0.25 or more) gives light too: `Food::light` puts it at the middle of its caps, in the caps' colour, steady. The goods table only says it "glows faintly", so its reach (4 ft at full glow) is a proposal, not a number from the plate.
+
+### Sundries
+
+`armory::families::sundry` makes the small goods: candles, a coil of rope, lockpicks, a ring of keys, a tinderbox, a bedroll and bandages. Each rests on the ground, centred over the origin. Where it departs from the plate's `goodGroup()`:
+
+- Keys, the tinderbox and the bedroll are new; the plate's text names them (lockpicking, "fever took them in their bedroll") but never drew them. A bedroll is the same rolled, strapped blanket a backpack carries (`armory::build::roll`).
+- A candle can stand in a chamberstick, carry runs of wax, burn down and be lit, and `Sundry::light` gives its 5 ft light from the flame. The rope is one twisted rope laid in a coil and tied, not four stacked rings, and the lockpicks are hooks, rakes, diamonds and a tension wrench in an open leather roll.
 
 ## Rarity and affixes
 
