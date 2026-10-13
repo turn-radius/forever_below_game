@@ -311,6 +311,32 @@ pub fn wrap_mesh(haft: &Haft, grip: &Grip, span: (f32, f32), wrap: &Wrap) -> Mes
     out
 }
 
+/// Rivets through the grip (a knife's or sword's scales pinned to the tang): `grip.rivets`
+/// domed heads spaced along the span, one on each side where the tang's flats face (the
+/// haft frame's binormal, ±Z on a straight haft).
+pub fn rivets_mesh(haft: &Haft, grip: &Grip, span: (f32, f32)) -> MeshBuilder {
+    let mut out = MeshBuilder::new();
+    let n = grip.rivets;
+    if !grip.on || n == 0 {
+        return out;
+    }
+    for k in 0..n {
+        let u = (k as f32 + 0.7) / (n as f32 + 0.4);
+        let surface = grip_radius(haft, grip, span, u);
+        let head = (surface * 0.22).clamp(0.012, 0.035);
+        let control = [[head * 1.05, -0.012], [head, 0.002], [head * 0.8, head * 0.35], [0.0, head * 0.5]];
+        let dome = lathe(&spline_profile(&control, 10), &LatheOptions::new(16, Shading::SMOOTH));
+        let frame = haft.frame(span.0 + (span.1 - span.0) * u);
+        for side in [1.0f32, -1.0] {
+            let out_dir = vec3::scale(frame.binormal, side);
+            let mut m = dome.clone();
+            m.place(vec3::add(frame.origin, vec3::scale(out_dir, surface * 0.98)), out_dir);
+            out.append(&m);
+        }
+    }
+    out
+}
+
 /// The radius the pommel fits over: the grip, if it reaches the butt, else the shaft.
 pub fn butt_radius(haft: &Haft, grip: &Grip, span: (f32, f32)) -> f32 {
     if grip.on && span.0 < 0.03 { haft.radius(0.0) * grip.thickness } else { haft.outer_radius(0.0) }

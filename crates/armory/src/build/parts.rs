@@ -15,7 +15,7 @@ enum Look {
 }
 
 /// Meshes collected for an item, in build order. Empty meshes are dropped.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Parts(Vec<(&'static str, MeshBuilder, Look)>);
 
 impl Parts {

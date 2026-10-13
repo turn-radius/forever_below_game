@@ -67,6 +67,7 @@ macro_rules! ported {
 ported! {
     Staff => staff::Staff(StaffState),
     Mace => mace::Mace(MaceState),
+    Sword => sword::Sword(SwordState),
     Spear => spear::Spear(SpearState),
     Bow => bow::Bow(BowState),
     Crossbow => crossbow::Crossbow(CrossbowState),
