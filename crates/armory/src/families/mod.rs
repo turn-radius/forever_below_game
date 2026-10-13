@@ -18,6 +18,7 @@ pub mod garment;
 pub mod hands;
 pub mod mace;
 pub mod ring;
+pub mod shield;
 pub mod spear;
 pub mod staff;
 pub mod sword;

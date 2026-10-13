@@ -24,11 +24,11 @@ pub fn signed_area(polygon: &[P2]) -> f32 {
     (0..n).map(|i| cross2(polygon[i], polygon[(i + 1) % n])).sum::<f32>() * 0.5
 }
 
-fn turn(a: P2, b: P2, c: P2) -> f32 {
+pub(crate) fn turn(a: P2, b: P2, c: P2) -> f32 {
     cross2(sub2(b, a), sub2(c, b))
 }
 
-fn in_triangle(p: P2, a: P2, b: P2, c: P2) -> bool {
+pub(crate) fn in_triangle(p: P2, a: P2, b: P2, c: P2) -> bool {
     const EPS: f32 = -1e-7;
     cross2(sub2(b, a), sub2(p, a)) >= EPS && cross2(sub2(c, b), sub2(p, b)) >= EPS && cross2(sub2(a, c), sub2(p, c)) >= EPS
 }
@@ -307,4 +307,95 @@ pub fn extrude_smooth(outline: &[P2], sharp: &[bool], depth: f32) -> MeshBuilder
         }
     }
     mesh
+}
+
+/// Rounds every corner of a closed polygon that turns by more than `min_turn` radians with a
+/// curve of about `radius` (smaller where the neighbouring edges are short), sampled with
+/// `segments` pieces. Gentle bends of a densely sampled curve are left alone.
+pub fn fillet(polygon: &[P2], radius: f32, min_turn: f32, segments: usize) -> Vec<P2> {
+    let n = polygon.len();
+    if n < 3 || radius <= 0.0 {
+        return polygon.to_vec();
+    }
+    let len = |d: P2| (d[0] * d[0] + d[1] * d[1]).sqrt();
+    let mut out = Vec::with_capacity(n + segments * 4);
+    for i in 0..n {
+        let (prev, p, next) = (polygon[(i + n - 1) % n], polygon[i], polygon[(i + 1) % n]);
+        let (din, dout) = (sub2(p, prev), sub2(next, p));
+        let (lin, lout) = (len(din), len(dout));
+        if lin < 1e-7 || lout < 1e-7 {
+            out.push(p);
+            continue;
+        }
+        let (ui, uo) = ([din[0] / lin, din[1] / lin], [dout[0] / lout, dout[1] / lout]);
+        let angle = cross2(ui, uo).atan2(ui[0] * uo[0] + ui[1] * uo[1]);
+        if angle.abs() < min_turn || angle.abs() > std::f32::consts::PI - 1e-3 {
+            out.push(p);
+            continue;
+        }
+        // Tangent points sit `t` back along each edge; a quadratic Bezier through the corner
+        // joins them, tangent to both edges and close to a circular arc.
+        let t = (radius * (angle.abs() * 0.5).tan()).min(lin * 0.45).min(lout * 0.45);
+        let a = [p[0] - ui[0] * t, p[1] - ui[1] * t];
+        let b = [p[0] + uo[0] * t, p[1] + uo[1] * t];
+        let segments = segments.max(1);
+        for s in 0..=segments {
+            let u = s as f32 / segments as f32;
+            let (w0, w1, w2) = ((1.0 - u) * (1.0 - u), 2.0 * u * (1.0 - u), u * u);
+            out.push([w0 * a[0] + w1 * p[0] + w2 * b[0], w0 * a[1] + w1 * p[1] + w2 * b[1]]);
+        }
+    }
+    out
+}
+
+/// Moves every point of a closed polygon `distance` inward (outward when negative) along
+/// the average of its two edge normals. A simple offset for smooth, densely sampled curves
+/// (a row of studs inside a shield's rim); sharp concave corners may fold.
+pub fn offset_ring(polygon: &[P2], distance: f32) -> Vec<P2> {
+    let n = polygon.len();
+    if n < 3 {
+        return polygon.to_vec();
+    }
+    let ccw = signed_area(polygon) >= 0.0;
+    let left = |d: P2| {
+        let l = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-9);
+        if ccw { [-d[1] / l, d[0] / l] } else { [d[1] / l, -d[0] / l] }
+    };
+    (0..n)
+        .map(|i| {
+            let (prev, p, next) = (polygon[(i + n - 1) % n], polygon[i], polygon[(i + 1) % n]);
+            let (a, b) = (left(sub2(p, prev)), left(sub2(next, p)));
+            let m = [a[0] + b[0], a[1] + b[1]];
+            let l = (m[0] * m[0] + m[1] * m[1]).sqrt().max(1e-9);
+            // Keep the offset distance at corners: divide by the cosine of the half-angle.
+            let cos_half = ((m[0] / l) * a[0] + (m[1] / l) * a[1]).max(0.3);
+            [p[0] + m[0] / l * distance / cos_half, p[1] + m[1] / l * distance / cos_half]
+        })
+        .collect()
+}
+
+/// `count` points evenly spaced by arc length round a closed polygon, from its first point.
+pub fn resample_closed(polygon: &[P2], count: usize) -> Vec<P2> {
+    let n = polygon.len();
+    if n < 2 || count == 0 {
+        return polygon.to_vec();
+    }
+    let len = |d: P2| (d[0] * d[0] + d[1] * d[1]).sqrt();
+    let mut acc = vec![0.0f32; n + 1];
+    for i in 0..n {
+        acc[i + 1] = acc[i] + len(sub2(polygon[(i + 1) % n], polygon[i]));
+    }
+    let total = acc[n].max(1e-9);
+    let mut seg = 0;
+    (0..count)
+        .map(|k| {
+            let d = total * k as f32 / count as f32;
+            while seg + 1 < n && acc[seg + 1] < d {
+                seg += 1;
+            }
+            let (a, b) = (polygon[seg], polygon[(seg + 1) % n]);
+            let t = ((d - acc[seg]) / (acc[seg + 1] - acc[seg]).max(1e-9)).clamp(0.0, 1.0);
+            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+        })
+        .collect()
 }

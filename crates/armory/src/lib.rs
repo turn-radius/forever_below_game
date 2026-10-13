@@ -22,6 +22,7 @@ pub mod fabric;
 pub mod families;
 pub mod gem;
 pub mod geom;
+pub mod heraldry;
 pub mod item;
 pub mod material;
 pub mod palette;

@@ -77,6 +77,7 @@ ported! {
     Garment => garment::Garment(GarmentState),
     Hands => hands::Hands(HandsState),
     Feet => feet::Feet(FeetState),
+    Shield => shield::Shield(ShieldState),
     Ring => ring::Ring(RingState),
     Amulet => amulet::Amulet(AmuletState),
     Charm => charm::Charm(CharmState),

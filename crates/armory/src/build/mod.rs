@@ -25,6 +25,8 @@
 //! - [`plank`]: boards, planked panels and planked round heads (crates, barrels, chests).
 //! - [`fitting`]: box hardware: drop handles, lock plates, hasps, padlocks.
 //! - [`device`]: emblem outlines and their raised or painted shapes (stencils, charges).
+//! - [`plate`]: curved plates, any outline laid onto any surface with a thickness, creases kept
+//!   hard (shield boards, helmet shells and everything riveted on them).
 //! - [`form`]: the mannequin's body-segment forms, thickened sheets, plate lames and edges.
 //! - [`garment`]: draped cloth, sleeves, trims, belts and plate fittings on a torso form.
 //! - [`hand`]: gloves and gauntlets on a hand form.
@@ -55,6 +57,7 @@ pub mod hoard;
 pub mod limb;
 pub mod parts;
 pub mod plank;
+pub mod plate;
 pub mod socket;
 pub mod spearhead;
 pub mod strap;

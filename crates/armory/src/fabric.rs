@@ -67,6 +67,20 @@ pub enum PatternKind {
     /// Overlapping scales.
     Scales,
     Rivets,
+    /// Heraldic divisions of a painted field, between the part's tint and the pattern colour,
+    /// over uv 0..=1 across the field ([`crate::heraldry::Division`]).
+    PerPale,
+    PerFess,
+    Quarterly,
+    PerBend,
+    PerChevron,
+    Paly,
+    Bendy,
+    Checky,
+    PerSaltire,
+    Barry,
+    /// Boards running up the part, `scale` of them across uv 0..=1 (bare shield faces).
+    Planks,
 }
 
 impl PatternKind {
@@ -84,6 +98,18 @@ impl PatternKind {
             PatternKind::Mail => 9,
             PatternKind::Scales => 10,
             PatternKind::Rivets => 11,
+            PatternKind::PerPale => 12,
+            PatternKind::PerFess => 13,
+            PatternKind::Quarterly => 14,
+            PatternKind::PerBend => 15,
+            PatternKind::PerChevron => 16,
+            PatternKind::Paly => 17,
+            PatternKind::Bendy => 18,
+            PatternKind::Checky => 19,
+            PatternKind::Planks => 21,
+            // Not in the prototype's table.
+            PatternKind::PerSaltire => 22,
+            PatternKind::Barry => 23,
         }
     }
 }
