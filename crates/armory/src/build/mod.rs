@@ -37,9 +37,11 @@
 //! - [`axe_head`]: an eye, a bit mounted crosswise through it, and a poll (axes).
 //! - [`legwear`]: trousers, breeches and leggings on a lower-body form.
 //! - [`hood`]: hoods, cowls and coifs on a head form and the shoulders.
+//! - [`belt`]: a belt buckled round a torso form, with frogs, loops and rings.
 
 pub mod arrow;
 pub mod axe_head;
+pub mod belt;
 pub mod blade;
 pub mod boot;
 pub mod chain;

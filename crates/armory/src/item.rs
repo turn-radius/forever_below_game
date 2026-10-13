@@ -77,6 +77,7 @@ ported! {
     Helm => helm::Helm(HelmState),
     Hood => hood::Hoods(HoodState),
     Garment => garment::Garment(GarmentState),
+    Belt => belt::Belts(BeltState),
     Hands => hands::Hands(HandsState),
     Legs => legs::Legs(LegsState),
     Feet => feet::Feet(FeetState),

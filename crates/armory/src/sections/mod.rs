@@ -19,8 +19,10 @@
 //! - [`axe_head`]: an axe's bit, crosswise through an eye, and its poll (axes).
 //! - [`legwear`]: trousers, breeches and leggings.
 //! - [`hood`]: hoods, cowls and coifs of cloth or mail.
+//! - [`belt`]: a belt's fittings: tail, studs, frogs, loops and rings.
 
 pub mod axe_head;
+pub mod belt;
 pub mod blade;
 pub mod boot;
 pub mod device;
