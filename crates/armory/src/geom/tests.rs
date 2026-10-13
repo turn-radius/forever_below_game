@@ -242,3 +242,74 @@ fn sweep_scaled_stretches_each_axis() {
     // A section shrunk to a point gets no cap.
     part(sweep_scaled(&frames, &regular_polygon(8, 1.0, 0.0), &SweepOptions::default(), |t| [1.0 - t, 1.0 - t]));
 }
+
+#[test]
+fn sector_closed_by_its_cut_faces_faces_outward() {
+    let profile = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    let (start, end) = (-0.5f32, 0.5f32);
+    let mut wedge = lathe_sector(&profile, &LatheOptions::new(8, Shading::SMOOTH), start, end);
+    let (rind, core) = profile_face(&profile, 0.1);
+    for (mut face, far) in [(rind.clone(), false), (core.clone(), false), (rind, true), (core, true)] {
+        if far {
+            face.flip().rotate_y(end);
+        } else {
+            face.rotate_y(start);
+        }
+        wedge.append(&face);
+    }
+    let p = part(wedge);
+    assert_front_faces_agree(&p);
+    assert_outward(&p, [0.5, 0.5, 0.0]);
+}
+
+#[test]
+fn rind_face_splits_the_area() {
+    let square = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]];
+    let (rind, core) = rind_face(&square, 0.25);
+    let area = |m: &MeshBuilder| -> f32 {
+        m.indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| m.positions[i as usize]);
+                vec3::length(vec3::cross(vec3::sub(b, a), vec3::sub(c, a))) * 0.5
+            })
+            .sum()
+    };
+    assert!((area(&core) - 1.5 * 1.5).abs() < 1e-4, "core {}", area(&core));
+    assert!((area(&rind) + area(&core) - 4.0).abs() < 1e-4);
+    assert!(rind.normals.iter().chain(&core.normals).all(|n| *n == [0.0, 0.0, 1.0]));
+}
+
+#[test]
+fn shell_and_clip_profiles() {
+    let outer = [[0.0, 0.0], [1.0, 0.0], [1.0, 2.0]];
+    let shell = shell_profile(&outer, 0.1);
+    assert_eq!(shell.first(), Some(&[0.0, 0.0]));
+    assert!((shell[outer.len()][0] - 0.9).abs() < 1e-6 && shell[outer.len()][1] == 2.0, "flat lip a wall wide");
+    let inside = shell_inside(&shell, outer.len());
+    assert!(inside[0][0].abs() < 1e-6 && (inside[0][1] - 0.1).abs() < 1e-5, "inside floor {:?}", inside[0]);
+    let liquid = clip_profile(&inside, 1.0);
+    assert_eq!(liquid.last(), Some(&[0.0, 1.0]));
+    assert!(liquid.iter().all(|q| q[1] <= 1.0 + 1e-6));
+    assert!((profile_radius_at(&inside, 1.0, false).unwrap() - 0.9).abs() < 1e-5);
+    assert!((profile_height_at(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0]], 0.5).unwrap() - 1.0).abs() < 1e-6);
+    part(lathe(&shell, &LatheOptions::default()));
+}
+
+#[test]
+fn carved_hollow_lies_on_the_ball() {
+    let ball = uv_sphere(1.0, 48, 32);
+    let bite = Hollow::bite(vec3::ZERO, [1.0, 0.2, 0.0], 1.0, 0.6);
+    let (kept, carved) = carve_hollows(&ball, &[bite]);
+    assert!(!carved.is_empty());
+    for p in &carved.positions {
+        assert!((vec3::distance(*p, bite.center) - bite.radius).abs() < 1e-3, "{p:?} off the hollow");
+    }
+    for p in &kept.positions {
+        assert!(vec3::distance(*p, bite.center) >= bite.radius - 1e-3, "{p:?} left inside the hollow");
+    }
+    assert_front_faces_agree(&part(kept));
+    assert_front_faces_agree(&part(carved));
+}

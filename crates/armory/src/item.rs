@@ -72,6 +72,7 @@ ported! {
     Dagger => dagger::Dagger(DaggerState),
     Bow => bow::Bow(BowState),
     Crossbow => crossbow::Crossbow(CrossbowState),
+    Food => food::Food(FoodState),
 }
 
 impl Item {

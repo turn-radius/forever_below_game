@@ -9,6 +9,15 @@ These are the rules the prototype settled on. Keep the intent and improve the de
 
 A few bases are native to the plate because the Armory has no family for them yet: trousers, breeches, leggings, laced shirt, leather jerkin, hood, pointed hat, mail coif, belt, club, hand axe, torch and lantern (`data/bases.json`), plus sundries like rope, candles and waterskins (`data/goods.json`). Adding them to the Armory would bring them into the same generator.
 
+### Food and drink
+
+The Armory's food family (`armory::families::food`) now also makes the glowcap, the waterskin and the lamp-oil flask from `data/goods.json`, as the `mushroom`, `waterskin` and `flask` styles. Where the Rust port departs from the prototype:
+
+- The prototype's `cut` toggle is a portion: whole, cut (a wedge out of a wheel, pie or round loaf, the end off a loaf, a slice out of an apple), a single piece (a slice of bread, a wedge of cheese, a slice of pie) or bitten (bread, fruit, a roast). Cut faces show a band of crust, rind, skin or pastry round the crumb, paste, flesh or filling. `Blind cavefish` and `Healing draught` tweaks set colours, which now have named roles (`outer`, `inner`, `accent`, `liquid`) instead of `color` and `color2`.
+- A potion's brew is typed, and the noun still follows the liquid's colour, so a retinted potion is named for the brew it looks like.
+- Glass and liquids use the gem material with their own tint, until there is a glass material with transparency; a potion's glass is tinted toward its brew so it reads even when drawn opaque. Cork is tinted wood, wax seals tinted bone, a bottle's paper label tinted cloth.
+- Food's condition word is `freshness()` (Fresh, Day-old, Stale, Mouldy, Rotten), the prototype's `condWord` for food.
+
 ## Rarity and affixes
 
 - Roll `x`: `x < .58` common, `< .85` magic, `< .97` rare, otherwise legendary. Containers cap at rare.
