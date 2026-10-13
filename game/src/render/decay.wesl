@@ -1,4 +1,5 @@
-// Procedural wear painted on a part's base colour before lighting.
+// Procedural wear painted on a part's base colour before lighting. Colours in and out are
+// display (sRGB) values, as in the prototype.
 //
 // Port of `DECAY_HEAD` / `DECAY_BODY` in `reference/spline_armory_engine.js`. The noise is
 // sampled in item space (the part's local space), so the pattern stays on the object as it
@@ -49,6 +50,24 @@ fn fbm(p_in: vec3<f32>) -> f32 {
     return sum / 0.94;
 }
 
+// Two fbm samples blended into one patch field, rescaled to zero mean and unit spread
+// (measured: `0.75 n + 0.35 n2` has mean 0.548, standard deviation 0.094).
+fn patch_field(n: f32, n2: f32) -> f32 {
+    return (n * 0.75 + n2 * 0.35 - 0.548) / 0.094;
+}
+
+// A 0..1 mask over about `coverage` of the surface: `field` (from `patch_field`) thresholded
+// at the logistic estimate of its `1 - coverage` quantile, blurred by `softness` (in standard
+// deviations) at the edges. No coverage, no mask.
+fn patches(field: f32, coverage: f32, softness: f32) -> f32 {
+    if coverage <= 0.0 {
+        return 0.0;
+    }
+    let c = clamp(coverage, 0.001, 0.999);
+    let threshold = log((1.0 - c) / c) / 1.702;
+    return smoothstep(threshold - softness * 0.5, threshold + softness * 0.5, field);
+}
+
 fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3(0.3, 0.59, 0.11));
 }
@@ -79,32 +98,44 @@ fn apply_decay(
         return c;
     }
 
+    // How far along the decay is: 0 as made, 1 at the ruinous end (a grave find).
+    let t = a / 1.2;
     let p = item_position * scale + vec3(seed);
     let n = fbm(p);
     let n2 = fbm(p * 3.3 + vec3(4.1));
 
     if decay_type == DECAY_IRON {
-        // Dulling, rust blooms, pitting.
-        c = mix(c, c * vec3(0.85, 0.82, 0.8), a * 0.6);
-        let threshold = 1.0 - a * 0.95;
-        let bloom = smoothstep(threshold, threshold + 0.08, n * 0.7 + n2 * 0.45);
-        let rust = mix(vec3(0.42, 0.18, 0.08), vec3(0.66, 0.34, 0.14), smoothstep(0.3, 0.8, n2));
-        c = mix(c, rust, bloom * min(1.0, a * 1.6));
-        c = c * (1.0 - 0.45 * smoothstep(0.86 - a * 0.2, 0.9 - a * 0.2, n2) * smoothstep(0.2, 0.5, a));
+        // Dulling, then rust blooms ringed with stain and pitted, with sound metal between.
+        // Even a grave find keeps about half its surface bare.
+        c = mix(c, c * vec3(0.8, 0.79, 0.78), t * 0.7);
+        // Blooms come from a coarser sample than `n`, so they spread a few centimetres.
+        let blooms = patch_field(fbm(p * 0.5 + vec3(5.2)), n2);
+        let bloom = patches(blooms, t * 0.5, 0.12);
+        let stain = patches(blooms, t * 0.68, 0.5);
+        c = mix(c, c * vec3(0.74, 0.6, 0.5), stain * 0.7);
+        let crust = value_noise(p * 7.0 + vec3(2.3));
+        let rust = mix(vec3(0.32, 0.14, 0.07), vec3(0.56, 0.27, 0.11), smoothstep(0.3, 0.75, crust * 0.6 + n2 * 0.4));
+        c = mix(c, rust, bloom);
+        // Pits: dark specks, thickest in the blooms.
+        let pit = smoothstep(0.0, 0.03, value_noise(p * 15.0 + vec3(7.3)) - mix(0.97, 0.88, t) + 0.1 * bloom);
+        c = mix(c, vec3(0.1, 0.06, 0.04), pit * smoothstep(0.1, 0.3, t) * 0.85);
     } else if decay_type == DECAY_BRASS {
-        // Tarnish, verdigris.
-        c = mix(c, c * vec3(0.62, 0.52, 0.38), a * 0.7);
-        let threshold = 1.0 - a * 0.85;
-        let bloom = smoothstep(threshold, threshold + 0.07, n * 0.6 + n2 * 0.5);
-        c = mix(c, mix(vec3(0.30, 0.55, 0.47), vec3(0.45, 0.66, 0.56), n2), bloom * min(1.0, a * 1.5));
+        // Tarnish darkening the whole surface, then crusts of verdigris in patches.
+        c = mix(c, c * vec3(0.66, 0.56, 0.4), t * 0.8);
+        let field = patch_field(fbm(p * 0.6 + vec3(8.4)), n2);
+        let crust = patches(field, t * 0.25, 0.12);
+        // A darker green ring where the crust thins out.
+        let rim = patches(field, t * 0.36, 0.4) * (1.0 - crust);
+        c = mix(c, c * vec3(0.55, 0.68, 0.58), rim * 0.7);
+        let verdigris = mix(vec3(0.3, 0.55, 0.47), vec3(0.45, 0.66, 0.56), smoothstep(0.35, 0.65, value_noise(p * 6.0)));
+        c = mix(c, verdigris, crust);
     } else if decay_type == DECAY_WOOD {
         // Silvering, rot, moss.
         c = mix(c, vec3(luminance(c)) * vec3(0.95, 0.95, 0.92) * 1.15, a * 0.65);
         c = c * (1.0 - a * 0.25 * smoothstep(0.55, 0.75, grain));
-        let threshold = 1.0 - a * 0.8;
-        let rot = smoothstep(threshold, threshold + 0.06, n * 0.65 + n2 * 0.4);
-        c = mix(c, vec3(0.17, 0.12, 0.08), rot * min(1.0, a * 1.4));
-        let moss = smoothstep(0.78 - a * 0.25, 0.82 - a * 0.25, n2) * smoothstep(0.5, 0.9, a);
+        let rot = patches(patch_field(n, n2), t * 0.2, 0.2);
+        c = mix(c, vec3(0.17, 0.12, 0.08), rot);
+        let moss = patches(patch_field(n2, fbm(p * 0.7 + vec3(3.9))), 0.2 * smoothstep(0.4, 0.75, a), 0.15);
         c = mix(c, vec3(0.36, 0.42, 0.22), 0.8 * moss);
     } else if decay_type == DECAY_LEATHER {
         // Darkening, scuffs, grime.
@@ -120,13 +151,13 @@ fn apply_decay(
     } else if decay_type == DECAY_GOLD {
         // Soft dulling, grime in the hollows.
         c = mix(c, c * vec3(0.86, 0.8, 0.68), a * 0.45);
-        let grime = smoothstep(1.0 - a * 0.6, 1.05 - a * 0.6, n * 0.6 + n2 * 0.5) * min(1.0, a * 1.2);
+        let grime = patches(patch_field(n, n2), t * 0.3, 0.3);
         c = mix(c, vec3(0.24, 0.19, 0.12), grime * 0.7);
     } else if decay_type == DECAY_SILVER {
         // Tarnish, warm toning, black patches.
         c = mix(c, c * vec3(0.74, 0.72, 0.7), a * 0.6);
         c = mix(c, c * vec3(0.92, 0.8, 0.62), smoothstep(0.4, 0.7, n2) * a * 0.45);
-        let blotch = smoothstep(1.0 - a * 0.45, 1.06 - a * 0.45, n * 0.6 + n2 * 0.5) * min(1.0, a * 1.5);
+        let blotch = patches(patch_field(n, n2), t * 0.35, 0.15);
         c = mix(c, vec3(0.16, 0.15, 0.16), blotch * 0.75);
     } else if decay_type == DECAY_BONE {
         // Yellowing, stains, hairline cracks.

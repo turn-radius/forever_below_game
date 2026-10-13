@@ -62,6 +62,9 @@ The UI is a parchment ledger. Tokens are at the top of the plate's `<style>`: pa
 Where the Rust renderer (`game/src/render/`) departs from the prototypes:
 
 - Bands are applied per light, to `N·L * 0.5 + 0.5` as three.js toon shading does, so each carried light adds its own hard steps. A fragment in shadow drops to the lowest band.
+- Wear and light work on the display (sRGB) colour, as three.js r128 did with no output encoding: the prototype's wear colours are display values, and the summed light scales the display colour before it is converted to linear. Lit in linear space, the same band values read as nearly flat on screen.
+- Rust, verdigris, gold grime, silver blotches, wood rot and moss cover a set share of the surface instead of a threshold that sweeps the whole item: fbm is rescaled to zero mean and unit spread, then cut at the quantile for the coverage the decay calls for. A grave find keeps about half its iron bare (blooms ringed with stain and pitted) and three quarters of its brass free of verdigris. Wear 0 still draws no decay.
+- The Armory turntable (`game/src/turntable.rs`) lights like the Armory (`StudioLight::ARMORY`: a key riding on the camera plus ambient), draws on the Armory's plate colour with no tone curve, and closes in on one item (Enter or F; `FB_CLOSEUP=<slot>` for captures), so items can be judged beside `reference/spline-armory.html`.
 - The outline width is set in pixels at 1080p (2 px by default) and converted to world units at each vertex's view depth, capped at 0.07 units so distant hulls don't balloon.
 - Decay noise is in mesh-local space, so item parts keep an identity transform under the item root.
 - Paint chips scale with the decay amount; in the prototype they showed at wear 0.

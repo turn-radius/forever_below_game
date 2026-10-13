@@ -4,7 +4,8 @@
 // `pbr_input_from_standard_material`. Lighting is our own: each light's N.L is quantised into
 // hard bands, as three.js `MeshToonMaterial` does with a 1-pixel gradient map
 // (`makeGradient` in `reference/spline_armory_engine.js`), then scaled by the light's colour
-// and distance falloff. Wear is painted on the base colour first (`decay.wesl`).
+// and distance falloff. Wear is painted on the base colour first (`decay.wesl`); both
+// work in display (sRGB) values, as the prototype did.
 // See `docs/rendering.md`.
 
 import bevy_pbr::render::{
@@ -121,6 +122,16 @@ fn toon_direct_light(in: PbrInput) -> vec3<f32> {
     return light * (1.0 / PI);
 }
 
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let x = max(c, vec3(0.0));
+    return select(1.055 * pow(x, vec3(1.0 / 2.4)) - 0.055, x * 12.92, x <= vec3(0.0031308));
+}
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let x = max(c, vec3(0.0));
+    return select(pow((x + 0.055) / 1.055, vec3(2.4)), x / 12.92, x <= vec3(0.04045));
+}
+
 @fragment
 fn fragment(
     vertex_output: VertexOutput,
@@ -136,8 +147,11 @@ fn fragment(
     // Item space: parts sit at the item root with no transform of their own, so the mesh's
     // local space is the item's.
     let item_position = (get_local_from_world(vertex_output.instance_index) * vertex_output.world_position).xyz;
+    // Wear and light both work on the display (sRGB) colour, as three.js r128 did with no
+    // output encoding: the prototype's wear colours are display values, and a band at half
+    // light reads as half as bright on screen, which keeps the steps crisp.
     let base = apply_decay(
-        pbr_input.material.base_color.rgb,
+        linear_to_srgb(pbr_input.material.base_color.rgb),
         item_position,
         toon.decay_type,
         toon.decay_amount,
@@ -146,9 +160,10 @@ fn fragment(
     );
 
     let ambient = view_bindings::lights.ambient_color.rgb * pbr_input.diffuse_occlusion;
-    let lit = base * (toon_direct_light(pbr_input) + ambient) * view_bindings::view.exposure;
+    let light = (toon_direct_light(pbr_input) + ambient) * view_bindings::view.exposure;
+    let lit = srgb_to_linear(base * light);
     // Glow fades as the stone clouds over (`gemMat`).
-    let glow = base * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
+    let glow = srgb_to_linear(base) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
 
     var out: FragmentOutput;
     out.color = vec4<f32>(lit + glow, pbr_input.material.base_color.a);
