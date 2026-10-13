@@ -15,6 +15,13 @@
 //! Starting point: `reference/spline-armory.html` and `reference/spline_armory_engine.js`.
 //! Example output: `fixtures/armory/<family>.json` (64 seeds per family), for reference only.
 
+pub mod families;
+pub mod geom;
+pub mod material;
+
+pub use geom::{ItemMesh, Part};
+pub use material::{MaterialKind, Rgb};
+
 use serde::{Deserialize, Serialize};
 
 /// The eighteen Armory families, in the order the prototype lists them.
