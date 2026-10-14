@@ -123,6 +123,8 @@ pub struct Level {
     pub lights: Vec<LightSpot>,
     /// Who stands in the level, in groups by faction ([`folk`]).
     pub folk: Vec<FolkSpot>,
+    /// Containers and scenery standing along the walls ([`props`]).
+    pub props: Vec<PropSpot>,
 }
 
 impl Level {
@@ -208,5 +210,7 @@ impl Level {
 
 pub mod folk;
 mod generate;
+pub mod props;
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
+pub use props::{FloorShape, Prop, PropSpot};
 pub use generate::generate;
