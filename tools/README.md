@@ -40,4 +40,13 @@ python3 tools/synth_door_shut.py /tmp/door-shut.wav
 oggenc -q 6 -o game/assets/audio/door-shut.ogg /tmp/door-shut.wav
 ```
 
+`tools/synth_combat.py` synthesises the fight's sounds the same way: a rat's squeak (a sine chirp with vibrato), a snake's hiss (band-passed noise) and a weapon's whoosh (noise through a sweeping band-pass), its docstring citing the sources:
+
+```
+python3 tools/synth_combat.py /tmp/combat
+oggenc -q 6 -o game/assets/audio/squeak.ogg /tmp/combat/squeak.wav
+oggenc -q 6 -o game/assets/audio/hiss.ogg /tmp/combat/hiss.wav
+oggenc -q 6 -o game/assets/audio/whoosh.ogg /tmp/combat/whoosh.wav
+```
+
 Bevy loads assets from `game/assets/` under `cargo run` (it uses `CARGO_MANIFEST_DIR`). To run the binary directly, set `BEVY_ASSET_ROOT=game`.

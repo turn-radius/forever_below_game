@@ -182,7 +182,8 @@ pub fn transform_of(place: &Placement) -> Transform {
 
 /// Spawns every creature of the level once, and again only if the spots change.
 fn spawn_creatures(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<Critter>>, mut spawner: ItemSpawner, mut shown: Local<Option<Vec<CreatureSpot>>>) {
-    if shown.as_deref() == Some(&level.0.creatures[..]) {
+    // Again only if the spots change, or every creature was cleared away (a new delve).
+    if shown.as_deref() == Some(&level.0.creatures[..]) && !old.is_empty() {
         return;
     }
     for entity in &old {
@@ -289,7 +290,7 @@ pub fn tongue_flick(t: f32) -> f32 {
 }
 
 /// What [`animate`] reads and writes on each creature.
-type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>);
+type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>, Has<crate::combat::feedback::Corpse>);
 
 /// Poses every creature for this frame from how it moved and what it means to do.
 pub fn animate(
@@ -302,14 +303,17 @@ pub fn animate(
     let dt = time.delta_secs();
     let relief = Relief::new(&level.0);
     let player = players.iter().next().map(GlobalTransform::translation);
-    for (critter, root, intent, mut motion, bones, mut trail) in &mut creatures {
+    for (critter, root, intent, mut motion, bones, mut trail, dead) in &mut creatures {
         let at = root.translation.xz();
         if let (Some(trail), Creature::Snake(snake)) = (trail.as_deref_mut(), &critter.creature) {
             trail.record(at, snake.dims().body_length);
         }
         let moved = motion.last.map_or(0.0, |last| at.distance(last));
         motion.last = Some(at);
-        motion.time += dt;
+        // A body lies still: its idle motions stop where they were.
+        if !dead {
+            motion.time += dt;
+        }
         // Out of sight across the level, the pose holds: changing every bone's transform
         // re-propagates and re-extracts each of its parts, a few hundred entities a frame.
         if player.is_some_and(|p| p.xz().distance(at) > POSE_RANGE) {

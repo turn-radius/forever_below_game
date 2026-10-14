@@ -16,6 +16,8 @@ pub enum Action {
     Look,
     /// Takes the mouse back for looking round, in the level.
     TakeMouse,
+    /// Swings what the main hand holds.
+    Attack,
     PickUp,
     DragItem,
     TurnItem,
@@ -34,6 +36,7 @@ pub enum Action {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Group {
     Moving,
+    Fighting,
     Items,
     Screens,
     Sound,
@@ -41,11 +44,12 @@ pub enum Group {
 
 impl Group {
     /// Every group, in the order the menu lists them.
-    pub const ALL: [Group; 4] = [Group::Moving, Group::Items, Group::Screens, Group::Sound];
+    pub const ALL: [Group; 5] = [Group::Moving, Group::Fighting, Group::Items, Group::Screens, Group::Sound];
 
     pub fn name(self) -> &'static str {
         match self {
             Group::Moving => "Moving",
+            Group::Fighting => "Fighting",
             Group::Items => "Items",
             Group::Screens => "Screens",
             Group::Sound => "Sound",
@@ -138,6 +142,7 @@ impl Default for Keymap {
                 bind(Action::Hurry, "Hurry", Group::Moving, &[Key(KeyCode::ShiftLeft), Key(KeyCode::ShiftRight)]),
                 bind(Action::Look, "Look round", Group::Moving, &[Input::MouseMotion]),
                 bind(Action::TakeMouse, "Take the mouse back", Group::Moving, &[Mouse(MouseButton::Left)]),
+                bind(Action::Attack, "Swing what you hold", Group::Fighting, &[Mouse(MouseButton::Left)]),
                 bind(Action::PickUp, "Pick up or open", Group::Items, &[Key(KeyCode::KeyE)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),

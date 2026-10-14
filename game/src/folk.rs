@@ -285,7 +285,8 @@ pub(crate) fn spawn_folk(
     mut spawner: ItemSpawner,
     mut shown: Local<Option<Vec<FolkSpot>>>,
 ) {
-    if shown.as_deref() == Some(&level.0.folk[..]) {
+    // Again only if the spots change, or every folk was cleared away (a new delve).
+    if shown.as_deref() == Some(&level.0.folk[..]) && !old.is_empty() {
         return;
     }
     for entity in &old {
