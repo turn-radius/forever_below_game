@@ -27,11 +27,14 @@ use crate::level::geometry::Relief;
 use crate::play::{CurrentLevel, DelveSystems, Player};
 use crate::render::{ItemAppearance, ItemSpawner};
 
+pub mod behaviour;
+
 pub struct CreaturesPlugin;
 
 impl Plugin for CreaturesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), idle, animate).chain().in_set(DelveSystems));
+        app.add_plugins(behaviour::BehaviourPlugin)
+            .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), idle, animate).chain().in_set(DelveSystems));
     }
 }
 

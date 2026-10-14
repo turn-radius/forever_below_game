@@ -213,6 +213,7 @@ impl Level {
 pub mod creatures;
 pub mod folk;
 mod generate;
+pub mod path;
 pub mod props;
 pub use creatures::CreatureSpot;
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
