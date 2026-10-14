@@ -120,7 +120,7 @@ impl Plugin for InventoryPlugin {
                     )
                         .chain()
                         .after(switch_screens),
-                    icon::draw_icons,
+                    (icon::draw_icons, icon::reveal_icons).chain().after(build_screen),
                     doll::turn_seal,
                     (doll::dress_doll, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
                 ),
@@ -555,10 +555,9 @@ impl ScreenLayout<'_> {
         let label = item.profile.holds.as_ref().map_or_else(|| item.name.clone(), |h| h.label.clone());
         parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
             column.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), height: px(36), ..default() }).with_children(|head| {
-                let icon = icons.of(item, false);
                 let size = icon::icon_size(item, false).as_vec2();
-                let scale = 34.0 / size.max_element();
-                head.spawn((Node { width: px(size.x * scale), height: px(size.y * scale), ..default() }, ImageNode::new(icon)));
+                let size = size * (34.0 / size.max_element());
+                icons.spawn(head, item, false, Node { width: px(size.x), height: px(size.y), ..default() }, size.min_element().max(14.0));
                 head.spawn((Text::new(format!("{label}{suffix}")), UiFonts::style(&self.fonts.display, 18.0, INK)));
             });
             self.grid(column, icons, view, grid, false);
@@ -623,7 +622,8 @@ impl ScreenLayout<'_> {
                             BackgroundColor(Color::NONE),
                         ))
                         .with_children(|slot| {
-                            slot.spawn((ItemIcon, Node { width: percent(100), height: percent(100), ..default() }, ImageNode::new(icons.of(item, entry.at.turned))));
+                            let glyph = (entry.size.cols.min(entry.size.rows) as f32 * CELL_PX * 0.5).min(40.0);
+                            icons.spawn(slot, item, entry.at.turned, Node { width: percent(100), height: percent(100), ..default() }, glyph).insert(ItemIcon);
                             if item.profile.kind == Kind::Gear && item.rarity != Rarity::Common {
                                 slot.spawn((
                                     Node {
@@ -958,7 +958,7 @@ mod tests {
             .init_resource::<Assets<Image>>()
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
-            .add_systems(Update, (switch_screens, build_screen, drag_items).chain());
+            .add_systems(Update, (switch_screens, build_screen, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -999,6 +999,39 @@ mod tests {
         press(&mut app, KeyCode::KeyI);
         assert_eq!(shown(&mut app), first);
         assert_eq!(app.world().resource::<Inventory>().location(knife), Some(Location::In { container: pack, at: Placement::new(5, 2, true) }));
+    }
+
+    #[test]
+    fn slots_show_an_initial_until_their_icon_is_drawn() {
+        let mut app = screen_app();
+        let knife = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            let knife = inventory.add(dagger());
+            inventory.put(knife, pack, Placement::new(0, 0, false)).unwrap();
+            knife
+        };
+        press(&mut app, KeyCode::KeyI);
+        let initials = |app: &mut App| {
+            let mut placeholders = app.world_mut().query_filtered::<&Children, With<icon::IconPlaceholder>>();
+            let world = app.world();
+            placeholders.iter(world).flat_map(|c| c.iter()).filter_map(|c| world.get::<Text>(c)).map(|t| t.0.clone()).collect::<Vec<_>>()
+        };
+        // The knife in its cell, the pack in the back slot and the pack by its grid's name.
+        let waiting = initials(&mut app);
+        assert_eq!(waiting.len(), 3, "{waiting:?}");
+        let name = app.world().resource::<Inventory>().item(knife).unwrap().name.clone();
+        assert!(waiting.contains(&icon::initial(&name)), "{waiting:?}");
+
+        let mut knife_icon = app.world_mut().query_filtered::<&ImageNode, With<ItemIcon>>();
+        let image = knife_icon.iter(app.world()).next().expect("the knife's icon").image.clone();
+        app.world_mut().resource_mut::<IconCache>().mark_drawn(&image);
+        app.update();
+        assert_eq!(initials(&mut app).len(), 2, "the knife's initial is gone");
+        assert_eq!(knife_icon.iter(app.world()).next().expect("the knife's icon").image, image, "the slot shows the drawn icon");
+        let mut awaiting = app.world_mut().query::<&icon::AwaitingIcon>();
+        assert_eq!(awaiting.iter(app.world()).count(), 2);
     }
 
     #[test]

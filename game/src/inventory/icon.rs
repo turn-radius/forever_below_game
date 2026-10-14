@@ -12,8 +12,16 @@
 //! A camera renders for [`RENDER_SECONDS`] (time for its pipelines to compile the first time)
 //! and is then taken down; the image keeps its last frame. Icons are keyed by base, seed and
 //! whether the item lies turned, since an item is a pure function of its base and seed.
+//!
+//! Every icon the screen asks for is drawn at once, each on a stage of its own (up to
+//! [`STAGES`]), so a full pack and doll are all drawn within about a second of the screen
+//! opening rather than a few at a time. Until an icon is drawn, [`Icons::spawn`] shows the
+//! item's initial faintly in its place, and [`reveal_icons`] takes the initial away once the
+//! icon is drawn. An icon counts as drawn as soon as its image, read back from the GPU each
+//! frame (Bevy's `Readback`, as in its `gpu_readback` example), has any pixel that is not
+//! clear, or when its camera is taken down, whichever is first.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::{
     app::Propagate,
@@ -22,13 +30,18 @@ use bevy::{
     ecs::system::SystemParam,
     light::NotShadowCaster,
     prelude::*,
-    render::{render_resource::TextureFormat, view::Tonemapping},
+    render::{
+        gpu_readback::{Readback, ReadbackComplete},
+        render_resource::{TextureFormat, TextureUsages},
+        view::Tonemapping,
+    },
 };
 use fb_items::Item;
 
 use crate::carry::appearance_of;
 use crate::light::{StudioLight, point_light, reach_falloff};
 use crate::render::ItemSpawner;
+use crate::ui::{MUTED, UiFonts};
 
 use super::grid::oriented;
 
@@ -43,8 +56,10 @@ pub const ICON_CELL_PX: u32 = 92;
 const ICON_STAGE: Vec3 = Vec3::new(0.0, -50_000.0, 0.0);
 /// How far apart stages are, further than any stage light reaches.
 const STAGE_SPACING: f32 = 6_000.0;
-/// How many icons are drawn at once.
-const STAGES: usize = 6;
+/// Stages per row of the square of stages; rows run along +Z, away from the doll's stage.
+const STAGE_ROW: usize = 8;
+/// How many icons are drawn at once: enough for a full screen of them.
+pub const STAGES: usize = STAGE_ROW * STAGE_ROW;
 
 /// How long an icon's camera draws before it is taken down, and the fewest frames it draws.
 pub const RENDER_SECONDS: f32 = 1.0;
@@ -81,11 +96,13 @@ pub struct IconCache {
     images: HashMap<IconKey, Handle<Image>>,
     queued: VecDeque<(IconKey, Item, Handle<Image>)>,
     drawing: Vec<Drawing>,
+    drawn: HashSet<AssetId<Image>>,
 }
 
 struct Drawing {
     stage: usize,
-    entities: [Entity; 3],
+    image: AssetId<Image>,
+    entities: [Entity; 4],
     started: f32,
     frames: u32,
 }
@@ -95,6 +112,23 @@ impl IconCache {
     pub fn is_idle(&self) -> bool {
         self.queued.is_empty() && self.drawing.is_empty()
     }
+
+    /// Whether the icon in `image` has been drawn.
+    pub fn is_drawn(&self, image: impl Into<AssetId<Image>>) -> bool {
+        self.drawn.contains(&image.into())
+    }
+
+    /// Records the icon in `image` as drawn, as [`draw_icons`] does.
+    #[cfg(test)]
+    pub(super) fn mark_drawn(&mut self, image: impl Into<AssetId<Image>>) {
+        self.drawn.insert(image.into());
+    }
+}
+
+/// Where stage `stage` is: a square of stages [`STAGE_SPACING`] apart, kept compact so the
+/// furthest is still near enough the origin for fine detail in 32-bit floats.
+pub fn stage_at(stage: usize) -> Vec3 {
+    ICON_STAGE + Vec3::new((stage % STAGE_ROW) as f32, 0.0, (stage / STAGE_ROW) as f32) * STAGE_SPACING
 }
 
 /// The size in pixels of the icon for `item` lying `turned`.
@@ -108,7 +142,19 @@ pub fn icon_size(item: &Item, turned: bool) -> UVec2 {
 pub struct Icons<'w> {
     cache: ResMut<'w, IconCache>,
     images: ResMut<'w, Assets<Image>>,
+    fonts: Res<'w, UiFonts>,
 }
+
+/// An icon node whose icon is not drawn yet, and the initial shown in its place.
+#[derive(Component, Debug)]
+pub struct AwaitingIcon {
+    image: AssetId<Image>,
+    placeholder: Entity,
+}
+
+/// The faint initial standing in for an icon not drawn yet.
+#[derive(Component, Debug)]
+pub struct IconPlaceholder;
 
 impl Icons<'_> {
     /// The icon for `item` lying `turned`. A new one is blank until it has been drawn.
@@ -120,10 +166,57 @@ impl Icons<'_> {
         let size = icon_size(item, turned);
         let mut target = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
         target.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
+        // Read back by `stage_icon` to see when the item first shows.
+        target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let image = self.images.add(target);
         self.cache.images.insert(key.clone(), image.clone());
         self.cache.queued.push_back((key, item.clone(), image.clone()));
         image
+    }
+
+    /// Spawns `node` showing the icon for `item` lying `turned`. Until the icon is drawn, the
+    /// item's initial stands faintly in its place, `glyph_px` high.
+    pub fn spawn<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, item: &Item, turned: bool, node: Node, glyph_px: f32) -> EntityCommands<'a> {
+        let image = self.of(item, turned);
+        let drawn = self.cache.is_drawn(&image);
+        let mut icon = parent.spawn((node, ImageNode::new(image.clone())));
+        if !drawn {
+            let mut placeholder = Entity::PLACEHOLDER;
+            icon.with_children(|icon| {
+                placeholder = icon
+                    .spawn((
+                        IconPlaceholder,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: percent(100),
+                            height: percent(100),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ))
+                    .with_child((Text::new(initial(&item.name)), UiFonts::style(&self.fonts.display, glyph_px, MUTED.with_alpha(0.45)), Pickable::IGNORE))
+                    .id();
+            });
+            icon.insert(AwaitingIcon { image: image.id(), placeholder });
+        }
+        icon
+    }
+}
+
+/// The first letter or digit of `name`, upper case, for an icon's placeholder.
+pub fn initial(name: &str) -> String {
+    name.chars().find(|c| c.is_alphanumeric()).map_or_else(String::new, |c| c.to_uppercase().collect())
+}
+
+/// Takes away the placeholder of every icon that has been drawn.
+pub fn reveal_icons(mut commands: Commands, cache: Res<IconCache>, awaiting: Query<(Entity, &AwaitingIcon)>) {
+    for (entity, icon) in &awaiting {
+        if cache.is_drawn(icon.image) {
+            commands.entity(icon.placeholder).try_despawn();
+            commands.entity(entity).remove::<AwaitingIcon>();
+        }
     }
 }
 
@@ -167,35 +260,39 @@ fn bounds(points: impl Iterator<Item = Vec3>) -> Option<(Vec3, Vec3)> {
 /// Starts drawing queued icons on free stages and takes down cameras that are done.
 pub fn draw_icons(mut commands: Commands, mut cache: ResMut<IconCache>, mut spawner: ItemSpawner, time: Res<Time<Real>>) {
     let now = time.elapsed_secs();
-    cache.drawing.retain_mut(|drawing| {
+    let IconCache { drawing, drawn, .. } = &mut *cache;
+    drawing.retain_mut(|drawing| {
         drawing.frames += 1;
         let done = drawing.frames >= RENDER_FRAMES && now - drawing.started >= RENDER_SECONDS;
         if done {
             for entity in drawing.entities {
                 commands.entity(entity).despawn();
             }
+            drawn.insert(drawing.image);
         }
         !done
     });
     while cache.drawing.len() < STAGES {
         let Some((key, item, image)) = cache.queued.pop_front() else { break };
         let stage = (0..STAGES).find(|s| cache.drawing.iter().all(|d| d.stage != *s)).expect("a free stage");
+        let id = image.id();
+        // An item with no shape is never drawn and keeps its placeholder.
         if let Some(entities) = stage_icon(&mut commands, &mut spawner, &item, key.turned, image, stage) {
-            cache.drawing.push(Drawing { stage, entities, started: now, frames: 0 });
+            cache.drawing.push(Drawing { stage, image: id, entities, started: now, frames: 0 });
         }
     }
 }
 
-/// Spawns `item` posed on `stage` with a camera drawing it into `image` and its light.
-/// Returns the camera, the item and the light.
-fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, turned: bool, image: Handle<Image>, stage: usize) -> Option<[Entity; 3]> {
+/// Spawns `item` posed on `stage` with a camera drawing it into `image`, its light, and a
+/// readback watching for it to show. Returns the camera, the item, the light and the readback.
+fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, turned: bool, image: Handle<Image>, stage: usize) -> Option<[Entity; 4]> {
     let mesh = item.shape.build();
     let points: Vec<Vec3> = mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
     let (rotation, min, max) = icon_pose(&points, turned)?;
     let size = icon_size(item, turned);
     let view = icon_view(min, max, size.x as f32 / size.y as f32);
     let centre = (min + max) * 0.5;
-    let at = ICON_STAGE + Vec3::X * stage as f32 * STAGE_SPACING;
+    let at = stage_at(stage);
     let layer = RenderLayers::layer(ICON_LAYER);
     let exposure = Exposure::INDOOR;
 
@@ -209,12 +306,13 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
     let root = root.id();
 
     let depth = (max.z - min.z).max(1.0);
+    let image_id = image.id();
     let camera = commands
         .spawn((
             Name::new("Icon camera"),
             Camera3d::default(),
             Camera { order: -10 - stage as isize, clear_color: ClearColorConfig::Custom(Color::NONE), ..default() },
-            RenderTarget::Image(image.into()),
+            RenderTarget::Image(image.clone().into()),
             Projection::Orthographic(OrthographicProjection {
                 scaling_mode: ScalingMode::Fixed { width: view.x, height: view.y },
                 near: 0.1,
@@ -246,7 +344,28 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
             layer,
         ))
         .id();
-    Some([camera, root, light])
+    // Each frame until the item shows, its image is read back to see whether anything is drawn.
+    let (width, height) = (size.x as usize, size.y as usize);
+    let readback = commands
+        .spawn((Name::new("Icon readback"), Readback::texture(image.clone())))
+        .observe(move |event: On<ReadbackComplete>, mut cache: ResMut<IconCache>, mut commands: Commands| {
+            if any_pixel_shows(&event.data, width, height) {
+                cache.drawn.insert(image_id);
+                commands.entity(event.entity).try_remove::<Readback>();
+            }
+        })
+        .id();
+    Some([camera, root, light, readback])
+}
+
+/// Whether any pixel of an RGBA8 image `width` by `height`, read back with its rows padded
+/// (to wgpu's `COPY_BYTES_PER_ROW_ALIGNMENT`), is not fully clear.
+pub fn any_pixel_shows(data: &[u8], width: usize, height: usize) -> bool {
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let stride = data.len() / height;
+    (0..height).any(|y| data.get(y * stride..y * stride + width * 4).is_some_and(|row| row.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0)))
 }
 
 #[cfg(test)]
@@ -277,6 +396,27 @@ mod tests {
         // A wide thing in a tall image is held by its width.
         let wide = icon_view(Vec3::new(-5.0, -1.0, 0.0), Vec3::new(5.0, 1.0, 0.0), 0.5);
         assert!(wide.x >= 10.0, "{wide}");
+    }
+
+    #[test]
+    fn stages_are_apart_and_clear_of_the_doll() {
+        let stages: Vec<Vec3> = (0..STAGES).map(stage_at).collect();
+        for (i, a) in stages.iter().enumerate() {
+            for b in &stages[i + 1..] {
+                assert!(a.distance(*b) >= STAGE_SPACING - 1e-3, "{a} {b}");
+            }
+            assert!(a.distance(super::super::doll::DOLL_STAGE) > 3.0 * STAGE_SPACING, "{a}");
+            // Near enough the origin that a 32-bit float still resolves a hundredth of a unit.
+            assert!(a.length() < 120_000.0, "{a}");
+        }
+        assert_eq!(initial("  apple"), "A");
+        assert_eq!(initial(""), "");
+        // Two rows of two pixels, each row padded to eight pixels; only the padding is set.
+        let mut data = vec![0u8; 2 * 8 * 4];
+        data[2 * 4 + 3] = 255;
+        assert!(!any_pixel_shows(&data, 2, 2));
+        data[8 * 4 + 4 + 3] = 40;
+        assert!(any_pixel_shows(&data, 2, 2));
     }
 
     #[test]

@@ -231,7 +231,6 @@ fn fill_card(commands: &mut Commands, card: Entity, item: &Item, text: &CardText
     let footprint = item.profile.footprint;
     // The plate's `viewH`: the picture's height follows the item's shape, within limits.
     let picture = (CARD_WIDTH * 0.62 * footprint.rows as f32 / footprint.cols.max(1) as f32).clamp(110.0, 230.0);
-    let icon = icons.of(item, false);
     let size = super::icon::icon_size(item, false).as_vec2();
     let scale = ((CARD_WIDTH - 40.0) / size.x).min((picture - 20.0) / size.y);
     let colour = rarity_color(text.rarity);
@@ -241,7 +240,7 @@ fn fill_card(commands: &mut Commands, card: Entity, item: &Item, text: &CardText
             BackgroundColor(BG.mix(&GOLD, 0.12)),
         ))
         .with_children(|frame| {
-            frame.spawn((Node { width: px(size.x * scale), height: px(size.y * scale), ..default() }, ImageNode::new(icon)));
+            icons.spawn(frame, item, false, Node { width: px(size.x * scale), height: px(size.y * scale), ..default() }, 48.0);
         });
         card.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::new(px(14), px(14), px(10), px(12)), ..default() })
             .with_children(|info| {
