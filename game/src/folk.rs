@@ -36,7 +36,7 @@ use crate::carry::{Aimed, REACH, ViewModelCamera, nearest_hit, world_light};
 use crate::figure::Figure;
 use crate::inventory::card::{CARD_WIDTH, place_under};
 use crate::level::EXPOSURE;
-use crate::play::{BlocksTheWay, CurrentLevel, PlayerCamera, ScreenOpen};
+use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, PlayerCamera, ScreenOpen};
 use crate::ui::{BG, FAINT, INK, LINE, MUTED, UiFonts, rarity_color};
 use crate::render::ItemSpawner;
 
@@ -54,7 +54,8 @@ impl Plugin for FolkPlugin {
                     idle_folk,
                     turn_heads,
                     (aim_at_folk, spawn_folk_card, show_folk_card).chain(),
-                ),
+                )
+                    .in_set(DelveSystems),
             );
     }
 }

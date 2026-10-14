@@ -32,7 +32,7 @@ use crate::carry::{Aimed, appearance_of, item_points};
 use crate::inventory::{Inventory, ItemId, OpenContainer};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::level::{LevelPiece, fixture_appearance, geometry::Relief};
-use crate::play::{BlocksTheWay, CurrentLevel, Screen, ScreenOpen, level_has_focus, show_screen};
+use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, Screen, ScreenOpen, level_has_focus, show_screen};
 use crate::render::ItemSpawner;
 
 pub struct PropsPlugin;
@@ -51,7 +51,8 @@ impl Plugin for PropsPlugin {
                     open_aimed_container.run_if(level_has_focus),
                     open_for_capture.run_if(|| std::env::var("FB_OPEN_CONTAINER").is_ok()),
                 )
-                    .chain(),
+                    .chain()
+                    .in_set(DelveSystems),
             );
     }
 }

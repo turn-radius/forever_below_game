@@ -66,11 +66,13 @@ pub fn contrast_ratio(a: Color, b: Color) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// The plate's four faces, and Plex Mono's bold for values.
+/// The plate's four faces, Plex Mono's bold for values and Almendra's bold for the title.
 #[derive(Resource, Clone, Debug)]
 pub struct UiFonts {
     /// Almendra, for names and headings.
     pub display: Handle<Font>,
+    /// Almendra Bold, for the title lettering.
+    pub display_bold: Handle<Font>,
     /// Alegreya Sans, for running text.
     pub body: Handle<Font>,
     pub body_italic: Handle<Font>,
@@ -90,6 +92,7 @@ impl FromWorld for UiFonts {
         let load = |path: &'static str| world.get_resource::<AssetServer>().map_or_else(Handle::default, |assets| assets.load(path));
         UiFonts {
             display: load("fonts/Almendra-Regular.ttf"),
+            display_bold: load("fonts/Almendra-Bold.ttf"),
             body: load("fonts/AlegreyaSans-Regular.ttf"),
             body_italic: load("fonts/AlegreyaSans-Italic.ttf"),
             body_medium: load("fonts/AlegreyaSans-Medium.ttf"),

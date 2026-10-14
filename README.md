@@ -8,12 +8,19 @@ Start with `HANDOFF.md`. Claude Code reads `CLAUDE.md` on its own. `cargo test -
 
 Everything runs from the repository root with `cargo run -p forever_below -- <options>`. The `--` separates cargo's own options from the game's.
 
-### Play a level (the default)
+### The title screen (the default)
 
 ```
-cargo run -p forever_below                 # the level for seed 1207
-cargo run -p forever_below -- --seed 42    # another level; every seed is a different layout
+cargo run -p forever_below                         # the title screen
+cargo run -p forever_below -- --seed 42            # skip it: straight into the level for seed 42
+cargo run -p forever_below -- --title --seed 42    # the title, and New delve plays seed 42
 ```
+
+The game opens on the title screen, to Forever Below's theme. New delve (or Enter) rolls a new level and a new character from the clock and starts the delve; the theme fades out as you go in. Settings is the pause menu's settings page (Esc or Back returns), and Quit leaves.
+
+Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page.
+
+### Play a level
 
 You come through a door into the first level, and it shuts behind you. Folk of the level's factions stand about in groups; look at one up close to see who they are. The keys are listed in the game: press Esc for the menu, then Controls.
 
@@ -23,7 +30,7 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 | Mouse | look round (click to take the mouse back after Esc) |
 | E | pick up what you're looking at, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
-| Esc | close a screen, or open the menu (Resume, Controls, Settings, Quit) |
+| Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
 
 Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
@@ -77,7 +84,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
-| `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page |
+| `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
 
 Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_ASSET_ROOT=game` so it finds the music and fonts; `cargo run` finds them on its own.

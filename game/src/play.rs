@@ -20,6 +20,20 @@ use bevy::{
 use fb_level::{FloorShape, Level};
 
 use crate::keymap::{Action, ActionInput, Keymap};
+use crate::launch::AppState;
+
+/// Every system that plays the level each frame, in `Update` and `PostUpdate`. The play plugins
+/// put their systems here, and [`PlayPlugin`] runs the set only while [`AppState::Delving`];
+/// a plugin added on its own (in tests) runs its systems always. What a delve spawns at its
+/// start goes in `OnEnter(AppState::Delving)`.
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DelveSystems;
+
+/// Runs [`DelveSystems`] only while delving.
+pub fn run_delve_systems_while_delving(app: &mut App) {
+    app.configure_sets(Update, DelveSystems.run_if(in_state(AppState::Delving)))
+        .configure_sets(PostUpdate, DelveSystems.run_if(in_state(AppState::Delving)));
+}
 
 /// The level being played. Inserted before the play plugins run.
 #[derive(Resource, Clone, Debug)]
@@ -205,12 +219,13 @@ pub struct PlayPlugin;
 
 impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
+        run_delve_systems_while_delving(app);
         app.init_resource::<BlockedCells>()
             .init_resource::<Obstacles>()
             .init_resource::<ScreenOpen>()
             .init_resource::<Keymap>()
-            .add_systems(Update, switch_screens)
-            .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate))
+            .add_systems(Update, switch_screens.in_set(DelveSystems))
+            .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate).in_set(DelveSystems))
             .add_plugins((
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
@@ -260,6 +275,32 @@ mod tests {
         assert!(obstacles.contains(&Obstacle::Circle { centre: Vec2::new(4.0, 6.0), radius: 2.5 }));
         let turned = |o: &Obstacle| matches!(*o, Obstacle::Rect { centre, half, yaw } if centre == Vec2::new(-4.0, 0.0) && half == Vec2::new(3.0, 1.0) && (yaw - 0.5).abs() < 1e-5);
         assert!(obstacles.iter().any(turned), "{obstacles:?}");
+    }
+
+    #[test]
+    fn the_delve_plays_only_while_delving() {
+        use bevy::state::app::StatesPlugin;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(AppState::Title)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Keymap>()
+            .init_resource::<ScreenOpen>()
+            .add_systems(Update, switch_screens.in_set(DelveSystems));
+        run_delve_systems_while_delving(&mut app);
+        let escape = |app: &mut App| {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+            app.update();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::Escape);
+            keys.clear();
+        };
+        escape(&mut app);
+        assert_eq!(app.world().resource::<ScreenOpen>().0, None, "Esc on the title opens no pause menu");
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
+        app.update();
+        escape(&mut app);
+        assert_eq!(app.world().resource::<ScreenOpen>().0, Some(Screen::Menu));
     }
 
     #[test]

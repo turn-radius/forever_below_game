@@ -56,7 +56,8 @@ pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 use crate::carry::ViewModelCamera;
 use crate::character::{Character, character_for};
 use crate::keymap::{Action, ActionInput, Keymap};
-use crate::play::{CurrentLevel, Screen, ScreenOpen, show_screen, switch_screens};
+use crate::launch::AppState;
+use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, show_screen, switch_screens};
 pub use crate::ui::node_rect;
 use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
 use header::ToastText;
@@ -103,8 +104,8 @@ impl Plugin for InventoryPlugin {
             .init_resource::<DollAssets>()
             .init_resource::<DollStage>()
             .init_resource::<Character>()
-            .add_systems(Startup, (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted)).chain())
-            .add_systems(PostStartup, open_for_capture.run_if(|| env_flag("FB_OPEN_INVENTORY")))
+            .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted)).chain())
+            .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
             .add_systems(
                 Update,
                 (
@@ -127,7 +128,8 @@ impl Plugin for InventoryPlugin {
                     (icon::draw_icons, icon::reveal_icons).chain().after(build_screen),
                     doll::turn_seal,
                     (doll::dress_doll, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
-                ),
+                )
+                    .in_set(DelveSystems),
             );
     }
 }

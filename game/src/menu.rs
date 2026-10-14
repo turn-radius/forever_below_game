@@ -6,6 +6,9 @@
 //! game reads. Settings has a slider or a toggle for each [`Setting`]; a change applies the
 //! same frame and is saved to `settings.json` ([`crate::settings`]). `FB_OPEN_MENU=main|controls|settings` opens the menu at the start, on that
 //! page, for captures.
+//!
+//! The buttons and the settings page work wherever they are on screen: the title screen
+//! ([`crate::title`]) builds its own buttons and shows the same settings page ([`menu_page`]).
 
 use bevy::{
     prelude::*,
@@ -14,7 +17,8 @@ use bevy::{
 
 use crate::carry::ViewModelCamera;
 use crate::keymap::{Action, ActionInput, Group, Keymap};
-use crate::play::{Screen, ScreenOpen, show_screen, switch_screens};
+use crate::launch::AppState;
+use crate::play::{DelveSystems, Screen, ScreenOpen, show_screen, switch_screens};
 use crate::settings::{GameSettings, Setting};
 use crate::ui::{BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, UiFonts, node_rect};
 
@@ -48,6 +52,8 @@ pub enum MenuCommand {
     Show(MenuPage),
     /// Leaves the game.
     Quit,
+    /// Begins a new delve, from the title ([`crate::title`] carries it out).
+    NewDelve,
 }
 
 /// The whole menu, over the level.
@@ -56,7 +62,22 @@ pub struct MenuScreen;
 
 /// A button on the menu, and what it does.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+#[require(ButtonInk)]
 pub struct MenuButton(pub MenuCommand);
+
+/// The colours of a button's label: at rest, and with the mouse over it.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct ButtonInk {
+    pub idle: Color,
+    pub hover: Color,
+}
+
+impl Default for ButtonInk {
+    /// The pause menu's: muted tan, cream under the mouse.
+    fn default() -> Self {
+        ButtonInk { idle: MUTED, hover: INK }
+    }
+}
 
 /// A line of the controls list, for the binding of this action.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +103,7 @@ pub struct SettingValue(pub Setting);
 const SLIDER_PX: f32 = 280.0;
 
 /// The menu's width in logical pixels.
-const MENU_PX: f32 = 640.0;
+pub const MENU_PX: f32 = 640.0;
 
 pub struct MenuPlugin;
 
@@ -95,13 +116,26 @@ impl Plugin for MenuPlugin {
             .init_resource::<ScreenOpen>()
             .init_resource::<MenuPage>()
             .add_message::<MenuCommand>()
-            .add_systems(PostStartup, open_for_capture.run_if(|| capture_page().is_some()))
-            .add_systems(Update, (choose_buttons, adjust_settings, apply_commands, pause_while_open, build_menu, show_settings, light_hovered).chain().after(switch_screens));
+            .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| capture_page().is_some()))
+            .add_systems(
+                Update,
+                (
+                    choose_buttons,
+                    adjust_settings,
+                    apply_commands,
+                    pause_while_open.in_set(DelveSystems),
+                    build_menu.in_set(DelveSystems),
+                    show_settings,
+                    light_hovered,
+                )
+                    .chain()
+                    .after(switch_screens),
+            );
     }
 }
 
 /// The page `FB_OPEN_MENU` asks for.
-fn capture_page() -> Option<MenuPage> {
+pub fn capture_page() -> Option<MenuPage> {
     std::env::var("FB_OPEN_MENU").ok().and_then(|name| MenuPage::named(&name))
 }
 
@@ -137,16 +171,14 @@ fn hovered_button<'a>(
     buttons.into_iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)).map(|(button, ..)| button.0)
 }
 
-/// A click on a button sends its [`MenuCommand`].
+/// A click on a button sends its [`MenuCommand`]. Buttons exist only while a menu shows.
 fn choose_buttons(
     input: ActionInput,
-    open: Res<ScreenOpen>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     buttons: Query<(&MenuButton, &ComputedNode, &UiGlobalTransform)>,
     mut chosen: MessageWriter<MenuCommand>,
 ) {
-    if open.is(Screen::Menu)
-        && input.just_pressed(Action::Choose)
+    if input.just_pressed(Action::Choose)
         && let Some(command) = hovered_button(window.as_deref().copied(), buttons.iter())
     {
         chosen.write(command);
@@ -167,6 +199,7 @@ fn apply_commands(
             MenuCommand::Quit => {
                 exit.write(AppExit::Success);
             }
+            MenuCommand::NewDelve => {}
         }
     }
 }
@@ -229,16 +262,19 @@ fn build_menu(
         ))
         .with_children(|root| {
             root.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(18), width: px(MENU_PX), ..default() })
-                .with_children(|menu| {
-                    menu.spawn((Text::new("Forever Below"), UiFonts::style(&fonts.display, 54.0, INK)));
-                    menu.spawn((Node { width: percent(100), height: px(1), margin: UiRect::bottom(px(10)), ..default() }, BackgroundColor(FAINT)));
-                    match *page {
-                        MenuPage::Main => main_page(menu, &fonts),
-                        MenuPage::Controls => controls_page(menu, &fonts, &keymap),
-                        MenuPage::Settings => settings_page(menu, &fonts, &keymap, &settings),
-                    }
-                });
+                .with_children(|menu| menu_page(menu, &fonts, *page, &keymap, &settings));
         });
+}
+
+/// A page of the menu under the game's name and a rule, into a column `MENU_PX` wide.
+pub fn menu_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, page: MenuPage, keymap: &Keymap, settings: &GameSettings) {
+    menu.spawn((Text::new("Forever Below"), UiFonts::style(&fonts.display, 54.0, INK)));
+    menu.spawn((Node { width: percent(100), height: px(1), margin: UiRect::bottom(px(10)), ..default() }, BackgroundColor(FAINT)));
+    match page {
+        MenuPage::Main => main_page(menu, fonts),
+        MenuPage::Controls => controls_page(menu, fonts, keymap),
+        MenuPage::Settings => settings_page(menu, fonts, keymap, settings),
+    }
 }
 
 /// A button: a word in the body face, muted until the mouse is over it.
@@ -394,14 +430,13 @@ pub fn fraction_along(rect: Rect, x: f32) -> f32 {
 #[allow(clippy::too_many_arguments)]
 fn adjust_settings(
     input: ActionInput,
-    open: Res<ScreenOpen>,
     page: Res<MenuPage>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     controls: Query<(&SettingControl, &ComputedNode, &UiGlobalTransform)>,
     mut held: Local<Option<Setting>>,
     mut settings: ResMut<GameSettings>,
 ) {
-    if !open.is(Screen::Menu) || *page != MenuPage::Settings || !input.pressed(Action::Choose) {
+    if *page != MenuPage::Settings || controls.is_empty() || !input.pressed(Action::Choose) {
         *held = None;
         return;
     }
@@ -464,17 +499,13 @@ fn show_settings(
 
 /// Brightens the button under the mouse.
 fn light_hovered(
-    open: Res<ScreenOpen>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
-    buttons: Query<(&MenuButton, &ComputedNode, &UiGlobalTransform, &Children)>,
+    buttons: Query<(&MenuButton, &ButtonInk, &ComputedNode, &UiGlobalTransform, &Children)>,
     mut colours: Query<&mut TextColor>,
 ) {
-    if !open.is(Screen::Menu) {
-        return;
-    }
-    let over = hovered_button(window.as_deref().copied(), buttons.iter().map(|(b, n, t, _)| (b, n, t)));
-    for (button, _, _, children) in &buttons {
-        let colour = if over == Some(button.0) { INK } else { MUTED };
+    let over = hovered_button(window.as_deref().copied(), buttons.iter().map(|(b, _, n, t, _)| (b, n, t)));
+    for (button, ink, _, _, children) in &buttons {
+        let colour = if over == Some(button.0) { ink.hover } else { ink.idle };
         for child in children {
             if let Ok(mut text) = colours.get_mut(*child) {
                 text.set_if_neq(TextColor(colour));
