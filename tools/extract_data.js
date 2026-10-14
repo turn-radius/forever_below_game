@@ -6,7 +6,8 @@ function grab(name){const i=src.indexOf('const '+name+'='); if(i<0) throw new Er
  for(;k<src.length;k++){const c=src[k]; if(q){ if(c==='\\'){k++;continue;} if(c===q) q=null; continue;} if(c==='"'||c==="'"||c==='`'){q=c;continue;}
   if('{[('.includes(c)) d++; else if('}])'.includes(c)){d--; if(d===0){k++;break;}} }
  return src.slice(i,k)+';';}
-const names=['RACES','HAIR','HAIR_LIZ','HAIR_GOB','CLOTH','TRIM','LEATHER','EYES','SLOTS','BASES','GOODS','AFX','OUTFITS','SYL','PLACES','FACTIONS','SAB','FOOD_DESC','FAMILIES','SLOT_FAM','MAT_HEX'];
+// SAB is not extracted: its filters and tweaks are typed Rust in crates/fb_items/src/armory_base.rs.
+const names=['RACES','HAIR','HAIR_LIZ','HAIR_GOB','CLOTH','TRIM','LEATHER','EYES','SLOTS','BASES','GOODS','AFX','OUTFITS','SYL','PLACES','FACTIONS','FOOD_DESC','FAMILIES','SLOT_FAM','MAT_HEX'];
 const pre=`const inS=(k,f,arr)=>s=>arr.includes(s[k][f]); const SB=(fam,acc,extra={})=>Object.assign({fam,acc},extra);`;
 const code=pre+names.map(grab).join('\n')+`\nthis.D={${names.join(',')}};`;
 const ctx={}; vm.createContext(ctx); vm.runInContext(code,ctx);

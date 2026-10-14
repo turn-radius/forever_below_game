@@ -2,10 +2,11 @@
 //! everything the game adds: rarity, affixes that change any parameter (including survival
 //! ones like warmth and carry weight), derived stats, the grid footprint, and a history.
 //!
-//! Data tables come from the prototype: `data/afx.json`, `data/bases.json`, `data/goods.json`,
-//! `data/sab.json` (Armory family per base, with the styles it accepts). See `docs/items.md`
-//! and [`tables`].
+//! Data tables come from the prototype: `data/afx.json`, `data/bases.json`, `data/goods.json`
+//! ([`tables`]). The Armory family and styles each base is rolled from are typed Rust in
+//! [`armory_base`]. See `docs/items.md`.
 
+pub mod armory_base;
 pub mod dice;
 pub mod footprint;
 pub mod tables;

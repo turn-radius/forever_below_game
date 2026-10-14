@@ -3,14 +3,12 @@
 //!
 //! - `bases.json`: the plate's own base items (`BASES`): slot, weight, footprint, tags, stats.
 //! - `goods.json`: things carried but not worn (`GOODS`).
-//! - `sab.json`: the Armory family each base is rolled from (`SAB`).
 //! - `afx.json`: prefixes and suffixes (`AFX`).
 //! - `families.json`: the plate's armory menu, bases grouped under a heading (`FAMILIES`).
 
 use crate::dice::Dice;
 use crate::footprint::{Footprint, Grid};
 use crate::{Slot, Tag};
-use armory::Family;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -65,19 +63,6 @@ pub struct Good {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct JsSource(pub String);
-
-/// A row of `data/sab.json`: the Armory family a base is rolled from. The extractor lost the
-/// `acc` filters' arguments (`inS('garment','style',['tunic'])` became `arr.includes(s[k][f])`),
-/// so only the family is usable.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SabEntry {
-    #[serde(rename = "fam")]
-    pub family: Family,
-    #[serde(default, rename = "acc")]
-    pub accept: Option<JsSource>,
-    #[serde(default, rename = "tw")]
-    pub tweak: Option<JsSource>,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AffixKind {
@@ -168,7 +153,6 @@ fn parse<T: for<'de> Deserialize<'de>>(name: &str, json: &str) -> T {
 
 static BASES: LazyLock<BTreeMap<String, BaseItem>> = LazyLock::new(|| parse("bases.json", include_str!("../../../data/bases.json")));
 static GOODS: LazyLock<BTreeMap<String, Good>> = LazyLock::new(|| parse("goods.json", include_str!("../../../data/goods.json")));
-static SAB: LazyLock<BTreeMap<String, SabEntry>> = LazyLock::new(|| parse("sab.json", include_str!("../../../data/sab.json")));
 static AFFIXES: LazyLock<Vec<Affix>> = LazyLock::new(|| parse("afx.json", include_str!("../../../data/afx.json")));
 static BASE_GROUPS: LazyLock<Vec<BaseGroup>> = LazyLock::new(|| parse("families.json", include_str!("../../../data/families.json")));
 
@@ -180,11 +164,6 @@ pub fn bases() -> &'static BTreeMap<String, BaseItem> {
 /// `data/goods.json`, by name.
 pub fn goods() -> &'static BTreeMap<String, Good> {
     &GOODS
-}
-
-/// `data/sab.json`, by base name.
-pub fn sab() -> &'static BTreeMap<String, SabEntry> {
-    &SAB
 }
 
 /// `data/afx.json`, in the plate's order.
@@ -205,7 +184,6 @@ mod tests {
     fn every_table_parses_with_its_entries() {
         assert_eq!(bases().len(), 13);
         assert_eq!(goods().len(), 13);
-        assert_eq!(sab().len(), 42);
         assert_eq!(affixes().len(), 24);
         assert_eq!(base_groups().len(), 25);
         assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 63);
@@ -228,7 +206,6 @@ mod tests {
         assert!(!goods()["Rope"].food);
         assert_eq!(goods()["Rope"].stack, 1);
 
-        assert_eq!(sab()["Chest"].family, Family::Chests);
         let warm = &affixes()[0];
         assert_eq!((warm.name.as_str(), warm.kind, warm.good, warm.on), ("Warm", AffixKind::Prefix, true, On::Tag(Tag::Cloth)));
         assert_eq!(affixes().iter().find(|a| a.name == "of Plenty").map(|a| a.on), Some(On::Any));
