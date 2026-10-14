@@ -52,11 +52,11 @@ fn rolls_are_coherent() {
         }
         if b.fabric == Textile::Burlap {
             assert_eq!(b.style, BagStyle::Sack, "seed {seed}: burlap {:?}", b.style);
-            assert_eq!(b.pattern, FabricPattern::Plain, "seed {seed}: patterned burlap");
+            assert_eq!(b.cloth.pattern, FabricPattern::Plain, "seed {seed}: patterned burlap");
             assert!(!s.etch.on, "seed {seed}: embroidered burlap");
         }
         if b.fabric == Textile::Leather {
-            assert!(matches!(b.pattern, FabricPattern::Plain | FabricPattern::Rivets), "seed {seed}: woven pattern on leather");
+            assert!(matches!(b.cloth.pattern, FabricPattern::Plain | FabricPattern::Rivets), "seed {seed}: woven pattern on leather");
         }
     }
 }
@@ -86,7 +86,7 @@ fn first_256_seeds_cover_the_variety() {
 fn every_pattern_turns_up() {
     let all = rolls(1..=1024);
     for pattern in FabricPattern::ALL {
-        assert!(all.iter().any(|s| s.bag.pattern == pattern), "no {pattern:?}");
+        assert!(all.iter().any(|s| s.bag.cloth.pattern == pattern), "no {pattern:?}");
     }
 }
 

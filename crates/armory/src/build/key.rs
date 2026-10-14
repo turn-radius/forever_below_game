@@ -1,5 +1,6 @@
 //! Keys: a bow to turn it by, a round shank, and a bit cut in steps to pass the wards of a
-//! lock. Rings of keys today; a key in a chest's lock or on a gaoler's belt later.
+//! lock. Rings of keys and key charms today; a key in a chest's lock or on a gaoler's belt
+//! later.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -31,12 +32,34 @@ fn circle(cx: f32, cy: f32, r: f32, n: usize) -> Vec<P2> {
     }).collect()
 }
 
+/// The radius of a key's shank: `girth` times that of a plain iron key `length` long.
+fn shank_radius(length: f32, girth: f32) -> f32 {
+    length * 0.035 * girth
+}
+
+/// How far below the top of the bow its foot reaches.
+fn bow_depth(length: f32, girth: f32, bow: KeyBow) -> f32 {
+    let br = length * 0.14;
+    match bow {
+        KeyBow::Ring => 2.0 * br + shank_radius(length, girth),
+        KeyBow::Trefoil => br * 0.55 * 3.1,
+        KeyBow::Lozenge => br * 2.1,
+    }
+}
+
+/// The height of the collar under the bow of a [`key`] built with the same arguments (where
+/// a charm sets its stone).
+pub fn collar_height(length: f32, girth: f32, bow: KeyBow) -> f32 {
+    -bow_depth(length, girth, bow) - shank_radius(length, girth) * 1.5
+}
+
 /// A key `length` long lying in the XY plane, thickness along Z: the top of its bow at the
-/// origin, its shank down -Y, and its bit at the far end standing out along +X. `wards` are
-/// the bit's steps, each a share (0..1) of the bit's full reach, from the tip up.
-pub fn key(length: f32, bow: KeyBow, wards: &[f32]) -> MeshBuilder {
+/// origin, its shank down -Y, and its bit at the far end standing out along +X. `girth`
+/// thickens the bar, bow and bit (1 for a plain iron key). `wards` are the bit's steps, each
+/// a share (0..1) of the bit's full reach, from the tip up.
+pub fn key(length: f32, girth: f32, bow: KeyBow, wards: &[f32]) -> MeshBuilder {
     let l = length;
-    let wire = l * 0.035;
+    let wire = shank_radius(l, girth);
     let br = l * 0.14;
     let mut mesh = match bow {
         KeyBow::Ring => {
@@ -74,16 +97,12 @@ pub fn key(length: f32, bow: KeyBow, wards: &[f32]) -> MeshBuilder {
             bevelled_slab(&outline, &[hole], &SlabOptions::chamfered(wire * 1.6, wire * 0.35))
         }
     };
-    let bow_bottom = match bow {
-        KeyBow::Ring => -2.0 * br - wire,
-        KeyBow::Trefoil => -br * 0.55 * 3.1,
-        KeyBow::Lozenge => -br * 2.1,
-    };
+    let bow_bottom = -bow_depth(l, girth, bow);
     let mut shank = cylinder(wire, l + bow_bottom + wire, 12, Shading::SMOOTH);
     shank.translate([0.0, -l, 0.0]);
     mesh.append(&shank);
     let mut collar = torus(wire * 1.15, wire * 0.45, 16, 6, Shading::SMOOTH);
-    collar.translate([0.0, bow_bottom - wire * 1.5, 0.0]);
+    collar.translate([0.0, collar_height(l, girth, bow), 0.0]);
     mesh.append(&collar);
     let mut tip = uv_sphere(wire * 1.05, 10, 6);
     tip.translate([0.0, -l, 0.0]);
@@ -107,7 +126,7 @@ mod tests {
     #[test]
     fn keys_are_drawable_and_as_long_as_asked() {
         for bow in KeyBow::ALL {
-            let k = key(1.0, bow, &[0.2, 0.9, 0.5]);
+            let k = key(1.0, 1.0, bow, &[0.2, 0.9, 0.5]);
             let (lo, hi) = k.bounds().unwrap();
             assert!(hi[1] < 0.06 && (lo[1] + 1.0).abs() < 0.05, "{bow:?}: {lo:?}..{hi:?}");
             k.into_part("key", OutlineMode::Welded).validate().unwrap();

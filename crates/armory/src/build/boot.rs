@@ -3,7 +3,8 @@
 //!
 //! Departures from the prototype's `buildFeet`: the heel and toe close in a rounded point
 //! rather than a vertical slit, the sole follows the rounded outline, and every sheet (shaft,
-//! cuff, straps, lames, wraps) has thickness.
+//! cuff, straps, lames, wraps) has thickness. A shaft comes down onto the sole, swings out
+//! behind the heel as a heel counter, and closes in above it on the Achilles tendon.
 
 use std::f32::consts::{PI, TAU};
 
@@ -77,9 +78,20 @@ pub fn boot_parts(form: &LegForm, boot: &Boot, hem: &Hem) -> Parts {
     let ridge = if sabaton { 0.07 } else { 0.0 };
     // The shaft takes in the foot where they meet: low on the leg its sides spread round the
     // foot's (smoothly, so no crease), or the foot pokes out of them beside the ankle.
-    let shaft = |angle: f32, v: f32, inflate: f32| -> V3 {
+    // Low down its back swings out behind the heel as a heel counter does, or the heel pokes
+    // out behind it.
+    let heel_top = form.height(0.0);
+    let leg = |angle: f32, v: f32, inflate: f32| -> V3 {
         let p = form.shin_point(angle, height * v, height, ridge, inflate);
         let y = p[1] + y0;
+        let back = form.ankle_x - form.shin_half_width - inflate;
+        let behind_heel = (back + 0.012 * s + inflate).max(0.0);
+        let counter = (1.0 - smoothstep(0.5 * heel_top, heel_top, y)) * (-angle.cos()).max(0.0);
+        [p[0] - behind_heel * counter, y, p[2]]
+    };
+    let shaft = |angle: f32, v: f32, inflate: f32| -> V3 {
+        let p = leg(angle, v, inflate);
+        let y = p[1];
         let width = form.foot_half_width_at(p[0], y);
         // Clear of the foot by a margin that fades out with it, so the shaft above is untouched.
         let foot = width + (inflate + 0.035 * s) * smoothstep(0.0, 0.05 * s, width);
@@ -89,8 +101,19 @@ pub fn boot_parts(form: &LegForm, boot: &Boot, hem: &Hem) -> Parts {
         let z = (0.5 * (z + foot + ((z - foot).powi(2) + k * k).sqrt()) - 0.5 * k).max(z);
         [p[0], y, side * z]
     };
+    // The spread stays in the silhouette but the shaft shades as the leg under it: where the
+    // smooth maximum hands over from leg to foot its normals swing, and under banded toon
+    // light the side broke into patches (as a drawstring bag's pleats did).
     let band = |v0: f32, v1: f32, rows: usize, inflate: f32, thickness: f32| -> MeshBuilder {
-        patch(56, rows, &ShellOptions::tube(thickness), |u, v| shaft(TAU * u, v0 + (v1 - v0) * v, inflate))
+        let options = ShellOptions::tube(thickness);
+        let mut mesh = patch(56, rows, &options, |u, v| shaft(TAU * u, v0 + (v1 - v0) * v, inflate));
+        let plain = patch(56, rows, &options, |u, v| leg(TAU * u, v0 + (v1 - v0) * v, inflate));
+        // A shell drops edges it finds degenerate, so the two only pair up vertex for vertex
+        // when they kept the same ones.
+        if plain.normals.len() == mesh.normals.len() {
+            mesh.normals = plain.normals;
+        }
+        mesh
     };
     let low = height < 0.65 && !matches!(style, BootStyle::Sabaton | BootStyle::Wrapped);
     let shaft_look = match style {
@@ -104,11 +127,13 @@ pub fn boot_parts(form: &LegForm, boot: &Boot, hem: &Hem) -> Parts {
     if !low {
         // Rows enough to carry the shaft's spread round the foot without stepping the light.
         let rows = ((height * 14.0).round() as usize).max(12);
+        // The shaft comes down onto the sole, not short of it with the foot showing between.
+        let seat = -y0 / height;
         if collar > 0.0 {
-            parts.add_look("shaft", band(0.0, collar, 12, 0.0, 0.03 * s), leather);
+            parts.add_look("shaft", band(seat, collar, 12, 0.0, 0.03 * s), leather);
             parts.add_look("shaft", band(collar, 1.0, rows, 0.0, 0.03 * s), shaft_look);
         } else {
-            parts.add_look("shaft", band(0.0, 1.0, rows, 0.0, 0.03 * s), shaft_look);
+            parts.add_look("shaft", band(seat, 1.0, rows, 0.0, 0.03 * s), shaft_look);
         }
     } else {
         // The opening of a low shoe: a dark lining and a rolled rim.

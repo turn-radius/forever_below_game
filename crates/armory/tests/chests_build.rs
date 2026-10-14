@@ -93,7 +93,23 @@ fn paint_and_glaze_carry_their_colour() {
             assert!(device.tint.is_some() && !device.outline, "seed {}", s.seed);
         }
         if s.chest.style == ChestStyle::Amphora {
-            assert_eq!(part(&mesh, "body").unwrap().tint, Some(s.chest.color), "seed {}", s.seed);
+            assert_eq!(part(&mesh, "body").unwrap().tint, Some(s.chest.glaze.color), "seed {}", s.seed);
+        }
+    }
+}
+
+#[test]
+fn glazed_amphorae_carry_their_surface_pattern() {
+    let amphorae: Vec<_> = (1..=256).map(|seed| Chests::roll_as(seed, ChestStyle::Amphora)).collect();
+    assert!(amphorae.iter().any(|s| s.chest.glaze.surface().is_some()), "no patterned glaze");
+    assert!(amphorae.iter().any(|s| s.chest.glaze.surface().is_none()), "no plain glaze");
+    for s in amphorae {
+        let mesh = Chests::build(&s);
+        for name in ["body", "handles", "lid"] {
+            if let Some(p) = part(&mesh, name) {
+                assert_eq!(p.pattern, s.chest.glaze.surface(), "seed {}: {name}", s.seed);
+                assert_eq!(p.material, Some(MaterialKind::Stone), "seed {}: {name}", s.seed);
+            }
         }
     }
 }

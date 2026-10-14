@@ -25,7 +25,8 @@ impl Look {
         Look { material, tint: None, pattern: None, glow: 0.0, outline: true }
     }
 
-    /// Dyed cloth with its pattern.
+    /// Dyed cloth with its pattern. Chain [`Look::made_of`] for a [`Fabric`] on another
+    /// stuff: a patterned leather bag, a glazed amphora.
     pub fn cloth(fabric: &Fabric) -> Self {
         Look { tint: Some(fabric.color), pattern: fabric.surface(), ..Look::of(MaterialKind::Cloth) }
     }
@@ -38,6 +39,12 @@ impl Look {
     /// A cut stone: gem material in the stone's own colour.
     pub fn stone(stone: Gemstone, glow: f32) -> Self {
         Look { glow: glow.clamp(0.0, 1.0), ..Look::of(MaterialKind::Gem).tinted(stone.rgb()) }
+    }
+
+    /// The same colour and pattern on another material.
+    pub fn made_of(mut self, material: MaterialKind) -> Self {
+        self.material = material;
+        self
     }
 
     pub fn tinted(mut self, tint: Rgb) -> Self {
