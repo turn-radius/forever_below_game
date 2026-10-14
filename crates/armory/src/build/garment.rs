@@ -68,9 +68,9 @@ pub struct Drape {
     pub notch: Option<Notch>,
 }
 
-/// A slit cut up from a hem, its sides meeting at a point (a vent at the back of a cloak, where
-/// a tail passes through): centred on `angle` (lathe convention), `half_width` radians either
-/// side of it at the hem, narrowing to nothing at height `top`.
+/// A vent cut up from a hem where a tail passes through (at the back of a cloak, a robe or a
+/// tunic): an arch centred on `angle` (lathe convention), `half_width` radians either side of
+/// it at the hem, its sides rounding over (a half ellipse) to meet at height `top`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Notch {
     pub angle: f32,
@@ -146,7 +146,8 @@ impl Drape {
                 if off >= n.half_width {
                     return self.hem;
                 }
-                self.hem + (n.top - self.hem).max(0.0) * (1.0 - off / n.half_width)
+                let k = off / n.half_width;
+                self.hem + (n.top - self.hem).max(0.0) * (1.0 - k * k).sqrt()
             }
             None => self.hem,
         }
