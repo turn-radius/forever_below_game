@@ -20,6 +20,9 @@ impl Plugin for LightPlugin {
 pub struct Torch {
     /// Intensity before flicker, in lumens.
     pub intensity: f32,
+    /// How deep the flicker goes, 0 (steady) to 1 (the prototype's full curve), as in
+    /// `armory::build::light::LightAnchor::flicker`.
+    pub flicker_depth: f32,
 }
 
 impl Torch {
@@ -33,14 +36,20 @@ impl Torch {
 
     /// A torch's point light at `intensity` lumens reaching `range` units.
     pub fn light(intensity: f32, range: f32) -> (Torch, PointLight) {
-        (Torch { intensity }, PointLight { color: Torch::COLOR, intensity, range, ..default() })
+        (Torch { intensity, flicker_depth: 1.0 }, PointLight { color: Torch::COLOR, intensity, range, ..default() })
+    }
+
+    /// The intensity multiplier at time `t` seconds: [`Torch::flicker`] scaled toward 1 by
+    /// `flicker_depth`.
+    pub fn wavering(&self, t: f32) -> f32 {
+        1.0 - self.flicker_depth.clamp(0.0, 1.0) * (1.0 - Torch::flicker(t))
     }
 }
 
 fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight)>) {
-    let flicker = Torch::flicker(time.elapsed_secs());
+    let t = time.elapsed_secs();
     for (torch, mut light) in &mut torches {
-        light.intensity = torch.intensity * flicker;
+        light.intensity = torch.intensity * torch.wavering(t);
     }
 }
 
@@ -98,6 +107,17 @@ mod tests {
         for i in 0..10_000 {
             let f = Torch::flicker(i as f32 * 0.01);
             assert!((0.72..=1.04).contains(&f), "{f}");
+        }
+    }
+
+    #[test]
+    fn a_steady_torch_does_not_flicker() {
+        let steady = Torch { intensity: 1.0, flicker_depth: 0.0 };
+        let full = Torch { intensity: 1.0, flicker_depth: 1.0 };
+        for i in 0..100 {
+            let t = i as f32 * 0.1;
+            assert_eq!(steady.wavering(t), 1.0);
+            assert_eq!(full.wavering(t), Torch::flicker(t));
         }
     }
 
