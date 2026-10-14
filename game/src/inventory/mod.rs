@@ -8,14 +8,18 @@
 //! - [`grid`]: cells and the rules for placing things in them, free of Bevy.
 //! - [`items`]: the [`Inventory`], where every item is: worn, in a grid, or loose.
 //! - [`icon`]: icons drawn from the items' Armory meshes.
+//! - [`card`]: the hover card, for an item under the mouse here or under the crosshair in the
+//!   level.
 //! - [`underfoot`]: the items on the floor within reach, as a grid, and bags set down as
 //!   their own grids; dragging in and out of them picks things up and sets them down.
 //!
 //! The delver starts with a belt whose pouch is their first grid (`docs/items.md`, "Slots";
 //! the plate's belt is a container). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
 //! captures; `FB_DEBUG_KIT=1` starts the delver with a pack full of things and sets a sack
-//! holding a few more, and a shield, down in front of them.
+//! holding a few more, and a shield, down in front of them. `FB_DEBUG_HOVER=<n>` holds the
+//! card over the `n`th thing in the first carried grid.
 
+pub mod card;
 pub mod grid;
 pub mod icon;
 pub mod items;
@@ -84,9 +88,12 @@ impl Plugin for InventoryPlugin {
                         underfoot::track_underfoot,
                         build_screen,
                         drag_items,
+                        debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
                         show_drag,
                         show_toast,
+                        card::spawn_card,
+                        card::show_card,
                     )
                         .chain(),
                     icon::draw_icons,
@@ -634,6 +641,25 @@ fn drag_items(
                 toast.text = refusal.reason().to_string();
                 toast.until = time.elapsed_secs() + TOAST_SECONDS;
             }
+        }
+    }
+}
+
+/// For captures: holds the card over the `FB_DEBUG_HOVER`th thing in the first carried grid,
+/// as if the mouse were on it.
+fn debug_hover(
+    inventory: Res<Inventory>,
+    views: Query<(&ItemView, &ComputedNode, &UiGlobalTransform)>,
+    mut hovered: ResMut<Hovered>,
+) {
+    let index: usize = std::env::var("FB_DEBUG_HOVER").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let Some(id) = inventory.carried_containers().first().and_then(|&c| inventory.grid(c)).and_then(|g| g.entries().get(index)).map(|e| e.id) else {
+        return;
+    };
+    if let Some((_, node, transform)) = views.iter().find(|(v, ..)| v.id == id) {
+        let rect = node_rect(node, transform);
+        if rect.width() > 0.0 {
+            hovered.set_if_neq(Hovered(Some((id, rect))));
         }
     }
 }

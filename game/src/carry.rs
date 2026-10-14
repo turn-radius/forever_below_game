@@ -15,8 +15,8 @@
 //!   the item itself casts no shadow, or its own flame and handle would black out its light.
 //! - Every item lying in the level is kept track of in the [`Inventory`], loose, so a bag set
 //!   down keeps its contents and the inventory screen can show what lies underfoot.
-//! - A ray from the camera picks the nearest item in reach and names it in its rarity's colour;
-//!   E picks it up into the inventory ([`Inventory::pick_up`]). Things are set down from the
+//! - A ray from the camera picks the nearest item in reach ([`Aimed`]), which the hover card
+//!   describes (`crate::inventory::card`); E picks it up into the inventory ([`Inventory::pick_up`]). Things are set down from the
 //!   inventory screen ([`set_down`], [`drop_spot`]), and rest like any other floor item.
 //!
 //! With no player in the app a stand-in camera is spawned at the level's start
@@ -42,7 +42,7 @@ use crate::light::{Torch, cast_shadows, point_light};
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, level_has_focus};
 use crate::player::{Gait, blocked_by, slide};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
-use crate::ui::{ACCENT, INK, PAPER, rarity_color};
+use crate::ui::{INK, PAPER};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
 pub const VIEW_MODEL_LAYER: usize = 1;
@@ -125,7 +125,7 @@ impl Plugin for CarryPlugin {
                     equip_player_camera,
                     follow_player_camera,
                     sway_held_torch,
-                    (aim, pick_up.run_if(level_has_focus), show_aimed).chain(),
+                    (aim, pick_up.run_if(level_has_focus)).chain(),
                 ),
             );
     }
@@ -330,17 +330,6 @@ struct Equipped;
 /// The floor item under the crosshair and in reach, if any.
 #[derive(Resource, Debug, Default)]
 pub struct Aimed(pub Option<Entity>);
-
-/// The paper tag under the crosshair naming the aimed item.
-#[derive(Component)]
-struct AimedTag;
-
-#[derive(Component)]
-struct AimedLabel;
-
-/// A legendary's old name, under its title on the tag.
-#[derive(Component)]
-struct AimedSubtitle;
 
 /// Where `FB_DEBUG_POSE` holds the player's view, for captures: `1` at the level's start,
 /// `x,y[,yaw[,pitch]]` at a grid point (cells), turned `yaw` degrees from north (positive turns
@@ -628,43 +617,6 @@ fn spawn_hud(commands: &mut Commands, camera: Entity) {
                 BackgroundColor(PAPER.with_alpha(0.85)),
                 BorderColor::all(INK.with_alpha(0.7)),
             ));
-            // The aimed item's name on a paper tag centred under the crosshair, in its
-            // rarity's colour; a legendary's old name under its title.
-            hud.spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: percent(50),
-                    width: percent(100),
-                    margin: UiRect::top(px(18)),
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                },
-            ))
-            .with_children(|row| {
-                row.spawn((
-                    AimedTag,
-                    Node {
-                        padding: UiRect::axes(px(10), px(4)),
-                        border: UiRect::all(px(1)),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BackgroundColor(PAPER.with_alpha(0.92)),
-                    BorderColor::all(ACCENT),
-                    Visibility::Hidden,
-                ))
-                .with_children(|tag| {
-                    tag.spawn((AimedLabel, Text::default(), TextFont::from_font_size(20.0), TextColor(INK)));
-                    tag.spawn((
-                        AimedSubtitle,
-                        Text::default(),
-                        TextFont::from_font_size(14.0),
-                        TextColor(INK),
-                        Node { display: Display::None, ..default() },
-                    ));
-                });
-            });
         });
 }
 
@@ -743,42 +695,6 @@ fn pick_up(
             lift(&mut commands, &mut level.bypass_change_detection().0, entity, floor);
         }
         Err(refusal) => info!("{}", refusal.reason()),
-    }
-}
-
-/// What the tag under the crosshair says about `item`: its title, its old name under that for
-/// a legendary, and the colour to write them in.
-pub fn aimed_text(item: &fb_items::Item) -> (String, Option<String>, Color) {
-    (item.title().to_string(), item.legend.as_ref().map(|l| l.subtitle.clone()), rarity_color(item.rarity))
-}
-
-/// A text and its colour, as the aimed tag writes them.
-type ColoredText = (&'static mut Text, &'static mut TextColor);
-
-fn show_aimed(
-    aimed: Res<Aimed>,
-    items: Query<&FloorItem>,
-    inventory: Res<Inventory>,
-    mut tags: Query<&mut Visibility, With<AimedTag>>,
-    mut labels: Query<ColoredText, (With<AimedLabel>, Without<AimedSubtitle>)>,
-    mut subtitles: Query<(&mut Text, &mut TextColor, &mut Node), With<AimedSubtitle>>,
-) {
-    if !aimed.is_changed() {
-        return;
-    }
-    let shown = aimed.0.and_then(|entity| items.get(entity).ok()).and_then(|floor| inventory.item(floor.id)).map(aimed_text);
-    for mut visibility in &mut tags {
-        *visibility = if shown.is_some() { Visibility::Inherited } else { Visibility::Hidden };
-    }
-    let Some((title, subtitle, color)) = shown else { return };
-    for (mut text, mut text_color) in &mut labels {
-        text.0.clone_from(&title);
-        text_color.0 = color;
-    }
-    for (mut text, mut text_color, mut node) in &mut subtitles {
-        node.display = if subtitle.is_some() { Display::Flex } else { Display::None };
-        text.0 = subtitle.clone().unwrap_or_default();
-        text_color.0 = color.with_alpha(0.8);
     }
 }
 
@@ -1055,25 +971,11 @@ mod tests {
         assert_eq!(items.len(), level.items.len());
         for (item, spot) in items.iter().zip(&level.items) {
             assert_eq!(item.shape.family(), spot.family);
-            let (title, _, color) = aimed_text(item);
-            assert_eq!(title, item.title());
-            assert_eq!(color, rarity_color(item.rarity));
             if item.profile.kind == fb_items::Kind::Gear {
                 assert_eq!(item.shape.condition().state, armory::cond::ConditionState::Custom, "{}: not dressed", item.name);
             }
         }
         assert!(items.iter().any(|i| i.rarity != Rarity::Common), "a level of nothing but common items");
-    }
-
-    #[test]
-    fn a_legendary_shows_its_title_over_its_old_name() {
-        let legend = (1..5_000).filter_map(|seed| fb_items::roll_item("Sword", seed)).find(|i| i.rarity == Rarity::Legendary).unwrap();
-        let (title, subtitle, color) = aimed_text(&legend);
-        let l = legend.legend.as_ref().unwrap();
-        assert_eq!((title.as_str(), subtitle.as_deref()), (l.title.as_str(), Some(l.subtitle.as_str())));
-        assert_eq!(color, rarity_color(Rarity::Legendary));
-        let plain = fb_items::roll_item("Mace", 1).unwrap();
-        assert_eq!(aimed_text(&plain).1, None);
     }
 
     #[test]
