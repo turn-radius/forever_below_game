@@ -1,10 +1,12 @@
-//! The level's music: a playlist that loops and fades between tracks.
+//! The level's music: tracks drawn at random, with silence between them.
 //!
-//! One track plays at a time. Near the end of a track the next one fades in while the current
-//! one fades out, over [`MusicSettings::crossfade`] seconds, with equal-power curves. The
-//! playlist wraps around. Bevy's Vorbis decoder doesn't report a duration, so it's read from
-//! the Ogg stream ([`ogg_vorbis_duration`]); if that fails the next track starts when the
-//! current one runs dry, fading in from silence.
+//! The level opens on the first track of the [`Playlist`]. After that, each time a track ends
+//! the music falls silent for a while ([`MusicSettings::gap`], about a minute) and then a track
+//! drawn at random from the playlist starts, never the one just heard. Each track fades in and
+//! out over [`MusicSettings::fade`] seconds with an equal-power curve, so nothing overlaps.
+//! Bevy's Vorbis decoder doesn't report a duration, so it's read from the Ogg stream
+//! ([`ogg_vorbis_duration`]) to start the fade-out in time; if that fails the track simply
+//! plays to its end.
 //!
 //! The player's music volume ([`GameSettings::music_volume`], 0 to 1) scales the mix; minus
 //! and equals turn it down and up a tenth at a time ([`Action::MusicQuieter`], [`Action::MusicLouder`]),
@@ -23,6 +25,8 @@ use bevy::{
     prelude::*,
 };
 
+use procgen_rng::Mulberry32;
+
 use crate::capture::FrameCapturePlugin;
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::settings::GameSettings;
@@ -30,7 +34,7 @@ use crate::settings::GameSettings;
 /// How far one press moves the music volume.
 pub const MUSIC_VOLUME_STEP: f32 = 0.1;
 
-/// The tracks to play, as asset paths, in order. Loops back to the first after the last.
+/// The tracks music is drawn from, as asset paths. The first opens the level.
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
 pub struct Playlist {
     pub tracks: Vec<String>,
@@ -55,24 +59,50 @@ impl Default for Playlist {
     }
 }
 
-/// The index after `index` in a list of `len`, wrapping to 0. `None` when the list is empty.
-pub fn next_index(index: usize, len: usize) -> Option<usize> {
-    (len > 0).then(|| (index + 1) % len)
+/// A track drawn at random from a playlist of `len`, never `last` unless it is the only one.
+/// `None` when the playlist is empty.
+pub fn pick_track(rng: &mut Mulberry32, len: usize, last: Option<usize>) -> Option<usize> {
+    match (len, last) {
+        (0, _) => None,
+        (1, _) => Some(0),
+        // Draw from the others: skip over `last` so every other track is equally likely.
+        (_, Some(last)) if last < len => {
+            let i = (rng.next_f64() * (len - 1) as f64) as usize % (len - 1);
+            Some(if i >= last { i + 1 } else { i })
+        }
+        _ => Some((rng.next_f64() * len as f64) as usize % len),
+    }
 }
 
-/// How loud the music is mixed and how long tracks take to fade into each other.
+/// A silence in seconds drawn evenly from `gap`.
+pub fn silence_seconds(rng: &mut Mulberry32, gap: (f32, f32)) -> f32 {
+    rng.range(gap.0 as f64, gap.1.max(gap.0) as f64) as f32
+}
+
+/// How loud the music is mixed, how tracks fade, and how long the silences between them last.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct MusicSettings {
     /// Linear volume at full gain, before the player's [`GameSettings::music_volume`].
     pub volume: f32,
-    /// Fade length in seconds, both into a track and between tracks.
-    pub crossfade: f32,
+    /// Fade length in seconds, into and out of each track.
+    pub fade: f32,
+    /// Silence between tracks in seconds, drawn evenly from this range.
+    pub gap: (f32, f32),
 }
 
 impl Default for MusicSettings {
     fn default() -> Self {
-        MusicSettings { volume: 0.35, crossfade: 3.0 }
+        MusicSettings { volume: 0.35, fade: 3.0, gap: (45.0, 75.0) }
     }
+}
+
+/// What the music does next: the track last heard, and when the silence after it ends.
+#[derive(Resource, Debug)]
+struct MusicSchedule {
+    rng: Mulberry32,
+    last: Option<usize>,
+    /// Real seconds since startup at which the next track starts; `None` while one plays.
+    resume_at: Option<f32>,
 }
 
 pub struct MusicPlugin;
@@ -98,11 +128,9 @@ pub struct MusicTrack {
     pub duration: Option<f32>,
     /// Whether the length has been looked for. It's read once, when the sink first exists.
     pub measured: bool,
-    /// Whether the next track has been started.
-    pub handed_off: bool,
 }
 
-/// Handles to every playlist track, loaded up front so a hand-off never waits on the disk.
+/// Handles to every playlist track, loaded up front so a track never waits on the disk.
 #[derive(Resource, Debug)]
 struct PlaylistAudio(Vec<Handle<AudioSource>>);
 
@@ -111,13 +139,16 @@ fn start_music(mut commands: Commands, assets: Res<AssetServer>, playlist: Res<P
     if !audio.0.is_empty() {
         spawn_track(&mut commands, &audio, 0);
     }
+    // Music isn't part of the seeded world, so each run draws its own order.
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() ^ d.as_secs() as u32);
+    commands.insert_resource(MusicSchedule { rng: Mulberry32::new(seed), last: (!audio.0.is_empty()).then_some(0), resume_at: None });
     commands.insert_resource(audio);
 }
 
 fn spawn_track(commands: &mut Commands, audio: &PlaylistAudio, index: usize) {
     commands.spawn((
         Name::new("Music"),
-        MusicTrack { index, duration: None, measured: false, handed_off: false },
+        MusicTrack { index, duration: None, measured: false },
         AudioPlayer::new(audio.0[index].clone()),
         // Silent until `play_music` sets the fade-in gain on the first frame its sink exists.
         PlaybackSettings::ONCE.with_volume(Volume::SILENT),
@@ -168,6 +199,7 @@ pub fn music_gain(global: f32, settings: &MusicSettings, game: &GameSettings, fa
     global * settings.volume * game.music_volume.clamp(0.0, 1.0) * fade
 }
 
+#[allow(clippy::too_many_arguments)]
 fn play_music(
     mut commands: Commands,
     sources: Res<Assets<AudioSource>>,
@@ -175,8 +207,21 @@ fn play_music(
     settings: Res<MusicSettings>,
     game: Res<GameSettings>,
     global: Res<GlobalVolume>,
+    time: Res<Time<Real>>,
+    mut schedule: ResMut<MusicSchedule>,
     mut tracks: Query<(Entity, &mut MusicTrack, &AudioPlayer, &mut AudioSink)>,
 ) {
+    let now = time.elapsed_secs();
+    if let Some(at) = schedule.resume_at
+        && now >= at
+    {
+        let last = schedule.last;
+        if let Some(next) = pick_track(&mut schedule.rng, audio.0.len(), last) {
+            spawn_track(&mut commands, &audio, next);
+            schedule.last = Some(next);
+        }
+        schedule.resume_at = None;
+    }
     for (entity, mut track, player, mut sink) in &mut tracks {
         if !track.measured {
             track.measured = true;
@@ -185,35 +230,24 @@ fn play_music(
             info!("music: playing {path}, {:?} s", track.duration);
         }
         let position = sink.position().as_secs_f32();
-        let ended = sink.empty();
-        if !track.handed_off && hand_off_due(position, track.duration, ended, settings.crossfade) {
-            track.handed_off = true;
-            if let Some(next) = next_index(track.index, audio.0.len()) {
-                spawn_track(&mut commands, &audio, next);
-            }
-        }
-        if ended {
+        if sink.empty() {
             commands.entity(entity).despawn();
+            let silence = silence_seconds(&mut schedule.rng, settings.gap);
+            schedule.resume_at = Some(now + silence);
+            info!("music: silence for {silence:.0} s");
         } else {
-            let gain = track_gain(position, track.duration, settings.crossfade);
+            let gain = track_gain(position, track.duration, settings.fade);
             // Bevy applies `GlobalVolume` only when it creates a sink, so it's folded in here.
             sink.set_volume(Volume::Linear(music_gain(global.volume.to_linear(), &settings, &game, gain)));
         }
     }
 }
 
-/// Whether the next track should start: inside the closing crossfade when the length is
-/// known, or once the track has run dry.
-pub fn hand_off_due(position: f32, duration: Option<f32>, ended: bool, crossfade: f32) -> bool {
-    ended || duration.is_some_and(|duration| position >= duration - crossfade)
-}
-
 /// A track's gain from 0 to 1 at `position` seconds: an equal-power fade in over the first
-/// `crossfade` seconds and, when the length is known, out over the last. During a crossfade
-/// the outgoing and incoming gains squared sum to 1, so loudness holds steady.
-pub fn track_gain(position: f32, duration: Option<f32>, crossfade: f32) -> f32 {
-    let fade_in = fade_weight(position, crossfade);
-    let fade_out = duration.map_or(1.0, |duration| fade_weight(duration - position, crossfade));
+/// `fade` seconds and, when the length is known, out over the last.
+pub fn track_gain(position: f32, duration: Option<f32>, fade: f32) -> f32 {
+    let fade_in = fade_weight(position, fade);
+    let fade_out = duration.map_or(1.0, |duration| fade_weight(duration - position, fade));
     fade_in.min(fade_out)
 }
 
@@ -251,28 +285,37 @@ mod tests {
     const FADE: f32 = 3.0;
 
     #[test]
-    fn playlist_opens_on_forever_below_and_plays_all_eight_before_repeating() {
+    fn playlist_opens_on_forever_below_and_holds_all_eight_tracks() {
         let tracks = Playlist::default().tracks;
-        assert_eq!(
-            tracks,
-            [
-                "audio/forever-below.ogg",
-                "audio/the-wizards-tower.ogg",
-                "audio/shadowed-pixel.ogg",
-                "audio/cavernous-arpeggios.ogg",
-                "audio/unreachable-home.ogg",
-                "audio/cavern-descent.ogg",
-                "audio/im-not-alone.ogg",
-                "audio/untitled.ogg",
-            ]
-        );
-        let mut order = vec![0];
-        while order.len() < 9 {
-            order.push(next_index(*order.last().unwrap(), tracks.len()).unwrap());
+        assert_eq!(tracks.len(), 8);
+        assert_eq!(tracks[0], "audio/forever-below.ogg");
+    }
+
+    #[test]
+    fn tracks_are_drawn_at_random_and_never_twice_running() {
+        let mut rng = Mulberry32::new(7);
+        let mut seen = [0usize; 8];
+        let mut last = Some(0);
+        for _ in 0..4000 {
+            let next = pick_track(&mut rng, 8, last).unwrap();
+            assert_ne!(Some(next), last);
+            seen[next] += 1;
+            last = Some(next);
         }
-        assert_eq!(order, [0, 1, 2, 3, 4, 5, 6, 7, 0]);
-        assert_eq!(next_index(0, 1), Some(0));
-        assert_eq!(next_index(0, 0), None);
+        // Every track turns up, each roughly an eighth of the time.
+        assert!(seen.iter().all(|&n| (350..650).contains(&n)), "{seen:?}");
+        assert_eq!(pick_track(&mut rng, 1, Some(0)), Some(0));
+        assert_eq!(pick_track(&mut rng, 0, None), None);
+    }
+
+    #[test]
+    fn silences_last_about_a_minute() {
+        let mut rng = Mulberry32::new(3);
+        let gap = MusicSettings::default().gap;
+        for _ in 0..1000 {
+            let s = silence_seconds(&mut rng, gap);
+            assert!((45.0..=75.0).contains(&s), "{s}");
+        }
     }
 
     #[test]
@@ -283,19 +326,6 @@ mod tests {
             let duration = ogg_vorbis_duration(&bytes).unwrap_or_else(|| panic!("{track}: not Ogg Vorbis"));
             assert!(duration > 60.0, "{track}: {duration}");
         }
-    }
-
-    #[test]
-    fn hands_off_inside_the_closing_crossfade() {
-        assert!(!hand_off_due(100.0, Some(184.9), false, FADE));
-        assert!(!hand_off_due(181.8, Some(184.9), false, FADE));
-        assert!(hand_off_due(181.9, Some(184.9), false, FADE));
-    }
-
-    #[test]
-    fn hands_off_when_the_track_ends_without_a_known_length() {
-        assert!(!hand_off_due(500.0, None, false, FADE));
-        assert!(hand_off_due(500.0, None, true, FADE));
     }
 
     #[test]
@@ -310,17 +340,6 @@ mod tests {
     fn fades_out_to_silence_at_the_end() {
         assert!(track_gain(118.5, Some(120.0), FADE) < 1.0);
         assert!(track_gain(120.0, Some(120.0), FADE).abs() < 1e-6);
-    }
-
-    #[test]
-    fn crossfade_keeps_power_constant() {
-        let duration = 120.0;
-        for step in 0..=30 {
-            let into_fade = step as f32 * FADE / 30.0;
-            let outgoing = track_gain(duration - FADE + into_fade, Some(duration), FADE);
-            let incoming = track_gain(into_fade, Some(200.0), FADE);
-            assert!((outgoing * outgoing + incoming * incoming - 1.0).abs() < 1e-5, "at {into_fade}s");
-        }
     }
 
     #[test]
