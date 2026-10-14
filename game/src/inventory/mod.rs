@@ -8,14 +8,18 @@
 //! - [`grid`]: cells and the rules for placing things in them, free of Bevy.
 //! - [`items`]: the [`Inventory`], where every item is: worn, in a grid, or loose.
 //! - [`icon`]: icons drawn from the items' Armory meshes.
+//! - [`underfoot`]: the items on the floor within reach, as a grid, and bags set down as
+//!   their own grids; dragging in and out of them picks things up and sets them down.
 //!
 //! The delver starts with a belt whose pouch is their first grid (`docs/items.md`, "Slots";
 //! the plate's belt is a container). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
-//! captures; `FB_DEBUG_KIT=1` starts the delver with a pack full of things.
+//! captures; `FB_DEBUG_KIT=1` starts the delver with a pack full of things and sets a sack
+//! holding a few more, and a shield, down in front of them.
 
 pub mod grid;
 pub mod icon;
 pub mod items;
+pub mod underfoot;
 
 use bevy::{
     app::HierarchyPropagatePlugin,
@@ -29,6 +33,7 @@ use fb_items::{Kind, Rarity, Slot, footprint::Footprint};
 pub use grid::{Grid, Placement};
 pub use icon::{IconCache, Icons};
 pub use items::{Inventory, ItemId, Location, Refusal};
+pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
 use crate::carry::ViewModelCamera;
 use crate::play::{CurrentLevel, ScreenOpen};
@@ -66,9 +71,27 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
             .init_resource::<Toast>()
+            .init_resource::<Underfoot>()
+            .init_resource::<FloorChanges>()
             .add_systems(Startup, (give_starting_kit, give_debug_kit.run_if(debug_kit_wanted)).chain())
             .add_systems(PostStartup, open_for_capture.run_if(|| env_flag("FB_OPEN_INVENTORY")))
-            .add_systems(Update, ((toggle_screen, build_screen, drag_items, show_drag, show_toast).chain(), icon::draw_icons));
+            .add_systems(
+                Update,
+                (
+                    (
+                        underfoot::set_down_debug_kit.run_if(debug_kit_wanted),
+                        toggle_screen,
+                        underfoot::track_underfoot,
+                        build_screen,
+                        drag_items,
+                        underfoot::apply_floor_changes,
+                        show_drag,
+                        show_toast,
+                    )
+                        .chain(),
+                    icon::draw_icons,
+                ),
+            );
     }
 }
 
@@ -130,8 +153,10 @@ pub struct Ledger;
 /// A grid on the screen, and whose it is.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GridView {
-    /// A container's own grid.
+    /// A container's own grid, carried or set down.
     Container(ItemId),
+    /// What lies on the floor within reach.
+    Underfoot,
 }
 
 /// An item drawn in a grid.
@@ -212,15 +237,6 @@ pub struct Toast {
     pub until: f32,
 }
 
-/// What became of a drop, beyond the inventory itself.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Outcome {
-    /// Moved within the delver's keeping.
-    Moved,
-    /// Nothing happened.
-    Nothing,
-}
-
 /// Whether `drag` may be let go at `target`.
 pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<(), Refusal> {
     match target {
@@ -228,18 +244,31 @@ pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<
             let at = drag.placement_at(cell).ok_or(Refusal::NoRoom)?;
             inventory.check_put(drag.id, container, at)
         }
-        Target::Page | Target::Level => Ok(()),
+        Target::Cell { view: GridView::Underfoot, .. } | Target::Page | Target::Level => Ok(()),
     }
 }
 
-/// Lets `drag` go at `target`.
-pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target) -> Result<Outcome, Refusal> {
+/// Lets `drag` go at `target`, and says what that changes in the level: an item lying there
+/// put into a bag is lifted from it; anything let go on the underfoot grid or the level is
+/// set down, to the side the underfoot column says (`underfoot_cols` wide).
+pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot_cols: u8) -> Result<Option<FloorChange>, Refusal> {
+    let lying = inventory.location(drag.id) == Some(Location::Loose);
+    let set_down = |inventory: &mut Inventory, aside: f32| {
+        if lying {
+            return None;
+        }
+        inventory.take_out(drag.id);
+        Some(FloorChange::SetDown(drag.id, aside))
+    };
     match target {
         Target::Cell { view: GridView::Container(container), cell } => {
             let at = drag.placement_at(cell).ok_or(Refusal::NoRoom)?;
-            inventory.put(drag.id, container, at).map(|()| Outcome::Moved)
+            inventory.put(drag.id, container, at)?;
+            Ok(lying.then_some(FloorChange::Lifted(drag.id)))
         }
-        Target::Page | Target::Level => Ok(Outcome::Nothing),
+        Target::Cell { view: GridView::Underfoot, cell } => Ok(set_down(inventory, underfoot::aside_for_column(cell.x, underfoot_cols))),
+        Target::Level => Ok(set_down(inventory, 0.0)),
+        Target::Page => Ok(None),
     }
 }
 
@@ -274,10 +303,12 @@ fn toggle_screen(
 
 /// Builds the screen when it opens and rebuilds it whenever what is in it changes; takes it
 /// down when it closes.
+#[allow(clippy::too_many_arguments)]
 fn build_screen(
     mut commands: Commands,
     open: Res<ScreenOpen>,
     inventory: Res<Inventory>,
+    underfoot: Res<Underfoot>,
     screens: Query<Entity, With<InventoryScreen>>,
     cameras: Query<Entity, With<ViewModelCamera>>,
     fonts: Res<UiFonts>,
@@ -290,7 +321,7 @@ fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -362,8 +393,17 @@ fn build_screen(
                                     screen.container(row, &mut icons, container, GridView::Container(container), "");
                                 }
                             });
+                        leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
+                            .with_children(|row| {
+                                screen.underfoot(row, &mut icons, &underfoot);
+                                for &bag in &underfoot.bags {
+                                    screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
+                                }
+                            });
                         leaf.spawn((
-                            Text::new("Drag things between your bags. Press R while dragging to turn an item. Tab or Esc to close."),
+                            Text::new(
+                                "Drag things between your bags and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item. Tab or Esc to close.",
+                            ),
                             UiFonts::style(&fonts.body, 13.0, MUTED),
                         ));
                     });
@@ -391,6 +431,19 @@ struct Screen<'a> {
 }
 
 impl Screen<'_> {
+    /// The floor within reach, as a paler grid under its name.
+    fn underfoot(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, underfoot: &Underfoot) {
+        parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
+            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), height: px(36), ..default() }).with_children(|head| {
+                head.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 17.0, MUTED)));
+                if underfoot.grid.is_empty() {
+                    head.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 13.0, MUTED)));
+                }
+            });
+            self.grid(column, icons, GridView::Underfoot, &underfoot.grid, true);
+        });
+    }
+
     /// A container's grid under its name, with a small picture of it.
     fn container(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, view: GridView, suffix: &str) {
         let (Some(item), Some(grid)) = (self.inventory.item(id), self.inventory.grid(id)) else { return };
@@ -501,9 +554,10 @@ fn target_under(point: Vec2, grids: &Query<(&GridView, &ComputedNode, &UiGlobalT
 }
 
 /// The grid a view shows.
-fn grid_of(inventory: &Inventory, view: GridView) -> Option<&Grid<ItemId>> {
+fn grid_of<'a>(inventory: &'a Inventory, underfoot: &'a Underfoot, view: GridView) -> Option<&'a Grid<ItemId>> {
     match view {
         GridView::Container(id) => inventory.grid(id),
+        GridView::Underfoot => Some(&underfoot.grid),
     }
 }
 
@@ -519,6 +573,8 @@ fn drag_items(
     mut dragging: ResMut<Dragging>,
     mut hovered: ResMut<Hovered>,
     mut inventory: ResMut<Inventory>,
+    underfoot: Res<Underfoot>,
+    mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
     time: Res<Time<Real>>,
 ) {
@@ -533,7 +589,7 @@ fn drag_items(
 
     // What the mouse is over, when nothing is being dragged.
     let over = match target {
-        Target::Cell { view, cell } => grid_of(&inventory, view).and_then(|g| g.at_cell(cell.x, cell.y).copied()).map(|e| (view, e)),
+        Target::Cell { view, cell } => grid_of(&inventory, &underfoot, view).and_then(|g| g.at_cell(cell.x, cell.y).copied()).map(|e| (view, e)),
         _ => None,
     };
     let over_rect = over.and_then(|(view, entry)| {
@@ -572,9 +628,12 @@ fn drag_items(
         if !drag.active {
             return;
         }
-        if let Err(refusal) = drop_at(&mut inventory, &drag, target) {
-            toast.text = refusal.reason().to_string();
-            toast.until = time.elapsed_secs() + TOAST_SECONDS;
+        match drop_at(&mut inventory, &drag, target, underfoot.grid.cols) {
+            Ok(change) => floor_changes.0.extend(change),
+            Err(refusal) => {
+                toast.text = refusal.reason().to_string();
+                toast.until = time.elapsed_secs() + TOAST_SECONDS;
+            }
         }
     }
 }
@@ -697,18 +756,18 @@ mod tests {
         let drag = |id| Drag { id, grab: IVec2::new(0, 1), size: Footprint { cols: 1, rows: 2 }, turned: false, press: Vec2::ZERO, active: true, target: None };
         // Grabbed by its lower cell and let go over the belt pouch's cell (2, 1).
         let into_belt = Target::Cell { view: GridView::Container(belt), cell: IVec2::new(2, 1) };
-        assert_eq!(drop_at(&mut inventory, &drag(a), into_belt), Ok(Outcome::Moved));
+        assert_eq!(drop_at(&mut inventory, &drag(a), into_belt, 6), Ok(None));
         assert_eq!(inventory.location(a), Some(Location::In { container: belt, at: Placement::new(2, 0, false) }));
         // Onto the other dagger: refused, and it stays where it was.
         let onto_b = Target::Cell { view: GridView::Container(pack), cell: IVec2::new(3, 1) };
         assert_eq!(check_drop(&inventory, &drag(a), onto_b), Err(Refusal::NoRoom));
-        assert_eq!(drop_at(&mut inventory, &drag(a), onto_b), Err(Refusal::NoRoom));
+        assert_eq!(drop_at(&mut inventory, &drag(a), onto_b, 6), Err(Refusal::NoRoom));
         assert_eq!(inventory.location(a), Some(Location::In { container: belt, at: Placement::new(2, 0, false) }));
         // The pack cannot go into itself.
         let pack_drag = Drag { id: pack, grab: IVec2::ZERO, size: Footprint { cols: 2, rows: 3 }, turned: false, press: Vec2::ZERO, active: true, target: None };
         let into_itself = Target::Cell { view: GridView::Container(pack), cell: IVec2::new(5, 0) };
-        assert_eq!(drop_at(&mut inventory, &pack_drag, into_itself), Err(Refusal::IntoItself));
-        assert_eq!(drop_at(&mut inventory, &drag(b), Target::Page), Ok(Outcome::Nothing));
+        assert_eq!(drop_at(&mut inventory, &pack_drag, into_itself, 6), Err(Refusal::IntoItself));
+        assert_eq!(drop_at(&mut inventory, &drag(b), Target::Page, 6), Ok(None));
     }
 
     #[test]
@@ -733,6 +792,8 @@ mod tests {
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
             .init_resource::<Toast>()
+            .init_resource::<Underfoot>()
+            .init_resource::<FloorChanges>()
             .init_resource::<Assets<Image>>()
             .add_systems(Update, (toggle_screen, build_screen, drag_items).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
