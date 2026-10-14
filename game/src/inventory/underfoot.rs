@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use fb_items::footprint::Footprint;
 
 use crate::carry::{FloorItem, REACH, lift, set_down};
-use crate::play::{BlockedCells, CurrentLevel, PlayerCamera};
+use crate::play::{BlockedCells, CurrentLevel, Obstacles, PlayerCamera};
 use crate::render::ItemSpawner;
 
 use super::grid::Grid;
@@ -104,6 +104,7 @@ pub fn apply_floor_changes(
     inventory: Res<Inventory>,
     mut level: ResMut<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
+    obstacles: Option<Res<Obstacles>>,
     mut spawner: ItemSpawner,
 ) {
     if changes.0.is_empty() {
@@ -111,6 +112,7 @@ pub fn apply_floor_changes(
     }
     // Into and out of the level data without respawning everything still there.
     let level = &mut level.bypass_change_detection().0;
+    let obstacles = obstacles.as_deref().cloned().unwrap_or_default();
     for change in changes.0.drain(..) {
         match change {
             FloorChange::Lifted(id) => {
@@ -120,7 +122,7 @@ pub fn apply_floor_changes(
             }
             FloorChange::SetDown(id, aside) => {
                 if let Some(eye) = eyes.iter().next() {
-                    set_down(&mut spawner, &inventory, level, &blocked_cells, eye, id, aside);
+                    set_down(&mut spawner, &inventory, level, &blocked_cells, &obstacles, eye, id, aside);
                 }
             }
         }
@@ -255,7 +257,7 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 move |mut spawner: ItemSpawner, inventory: Res<Inventory>, mut level: ResMut<CurrentLevel>, blocked: Res<BlockedCells>| {
-                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &eye, knife, 0.0);
+                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &Obstacles::default(), &eye, knife, 0.0);
                 },
             )
             .unwrap();

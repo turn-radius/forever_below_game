@@ -101,9 +101,9 @@ fn stone_appearance(seed: u32) -> ItemAppearance {
     }
 }
 
-/// The look of door frames, the entrance door and braziers: worn items of the level, with
-/// hulls allowed to grow to a few centimetres, as befits things of their size.
-fn fixture_appearance(seed: u32, state: ConditionState) -> ItemAppearance {
+/// The look of door frames, the entrance door, braziers and scenery: worn items of the level,
+/// with hulls allowed to grow to a few centimetres, as befits things of their size.
+pub fn fixture_appearance(seed: u32, state: ConditionState) -> ItemAppearance {
     ItemAppearance {
         condition: Condition::of(state),
         seed,

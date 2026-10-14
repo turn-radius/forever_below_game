@@ -12,7 +12,7 @@
 //! furnishes a level.
 
 use armory::build::scenery::Scenery;
-use armory::families::chests::ChestStyle;
+use armory::families::chests::{ChestState, ChestStyle, Chests};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
@@ -72,6 +72,16 @@ impl FloorShape {
 /// How far a chest's lid stands open once it has been opened (the Armory's `chest.open`,
 /// 0 shut to 1 thrown back). Chests are set far enough off the wall for it.
 pub const OPEN_LID: f32 = 0.55;
+
+/// The Armory state of a container prop of `style` rolled from `seed`: shut, with nothing
+/// heaped in it (what it holds is its loot, not its mesh), or with its lid raised to
+/// [`OPEN_LID`] once `opened`. Barrels, crates and amphorae look the same either way.
+pub fn chest_state(style: ChestStyle, seed: u32, opened: bool) -> ChestState {
+    let mut state = Chests::roll_as(seed, style);
+    state.chest.treasure = false;
+    state.chest.open = if opened && style.is_lidded_box() { OPEN_LID } else { 0.0 };
+    state
+}
 
 impl Prop {
     /// The floor it covers ([`FloorShape`]), the largest any seed builds. Containers are sized
@@ -350,7 +360,6 @@ mod tests {
     use super::*;
     use crate::{Cell, generate};
     use armory::families::Generator;
-    use armory::families::chests::Chests;
 
     const SEEDS: std::ops::RangeInclusive<u32> = 1..=64;
 
@@ -484,13 +493,10 @@ mod tests {
             let shape = Prop::Container { style, seed: 0, loot: 0 }.floor_shape();
             let (hw, hd) = shape.half_extents();
             for seed in 0..48 {
-                let mut state = Chests::roll_as(seed, style);
-                // Largest and widest, with the lid open as far as it opens in the level.
+                // Opened as it opens in the level, at its largest and widest.
+                let mut state = chest_state(style, seed, true);
                 state.chest.size = 1.15;
                 state.chest.shape = 1.0;
-                if style.is_lidded_box() {
-                    state.chest.open = OPEN_LID;
-                }
                 let (lo, hi) = Chests::build(&state).bounds().unwrap();
                 let behind = Prop::Container { style, seed, loot: 0 }.room_behind();
                 match shape {

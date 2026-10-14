@@ -156,6 +156,13 @@ impl Relief {
         (value_noise3(q, seed) - 0.5) + 0.35 * (value_noise3(vec3::scale(q, 2.7), seed ^ 0x2545_f491) - 0.5)
     }
 
+    /// The height of the drawn floor over world `(x, z)`: the grid floor point's height once
+    /// moved. The point also moves a little sideways, a fraction of the relief's metre-long
+    /// wavelength, so this is the floor's height to within a couple of centimetres.
+    pub fn floor_height(&self, x: f32, z: f32) -> f32 {
+        self.displace([x, 0.0, z])[1]
+    }
+
     /// Where the drawn rock is for a point `p` on the cell grid.
     pub fn displace(&self, p: V3) -> V3 {
         let up = (p[1] / self.ceiling.max(1.0)).clamp(0.0, 1.0);

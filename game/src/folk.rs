@@ -15,7 +15,8 @@
 //!   moves a little about its feet, since there is no skeleton. A player within
 //!   [`LOOK_RANGE`] draws their head round ([`look_at`]), turning about the neck; under a hood,
 //!   whose cape lies on the shoulders, the body turns a little instead.
-//! - Each stands in a circle on the floor that the player cannot walk into ([`Obstacles`]).
+//! - Each stands in a circle on the floor that the player cannot walk into
+//!   ([`BlocksTheWay`], gathered into `play::Obstacles`).
 //! - Looked at within reach, a card under the crosshair says who they are ([`folk_card_text`]):
 //!   name, folk and faction, and what they wear and hold, item names in their rarity's colour,
 //!   styled as the item card.
@@ -35,7 +36,7 @@ use crate::carry::{Aimed, REACH, ViewModelCamera, nearest_hit, world_light};
 use crate::figure::Figure;
 use crate::inventory::card::{CARD_WIDTH, place_under};
 use crate::level::EXPOSURE;
-use crate::play::{CurrentLevel, Obstacles, PlayerCamera, ScreenOpen};
+use crate::play::{BlocksTheWay, CurrentLevel, PlayerCamera, ScreenOpen};
 use crate::ui::{BG, FAINT, INK, LINE, MUTED, UiFonts, rarity_color};
 use crate::render::ItemSpawner;
 
@@ -44,7 +45,6 @@ pub struct FolkPlugin;
 impl Plugin for FolkPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FolkFigures>()
-            .init_resource::<Obstacles>()
             .init_resource::<AimedFolk>()
             .init_resource::<UiFonts>()
             .add_systems(
@@ -53,7 +53,6 @@ impl Plugin for FolkPlugin {
                     spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>),
                     idle_folk,
                     turn_heads,
-                    block_the_way,
                     (aim_at_folk, spawn_folk_card, show_folk_card).chain(),
                 ),
             );
@@ -303,7 +302,13 @@ fn spawn_folk(
 pub fn spawn_denizen(commands: &mut Commands, spawner: &mut ItemSpawner, person: &Person, figure: &Figure) -> Entity {
     let (min, max) = figure.bounds().unwrap_or((Vec3::ZERO, Vec3::ZERO));
     let root = commands
-        .spawn((Name::new(person.name.clone()), Denizen { person: person.clone(), radius: footprint(figure), min, max }, stand_at(&person.spot), Visibility::default()))
+        .spawn((
+            Name::new(person.name.clone()),
+            Denizen { person: person.clone(), radius: footprint(figure), min, max },
+            BlocksTheWay(fb_level::FloorShape::Round(footprint(figure))),
+            stand_at(&person.spot),
+            Visibility::default(),
+        ))
         .id();
     let stance = commands.spawn((Stance { idle: Idle::of(person.spot.seed), turn: 0.0 }, Transform::default(), Visibility::default(), ChildOf(root))).id();
     let head = figure
@@ -368,14 +373,6 @@ fn turn_heads(
                 }
             }
         }
-    }
-}
-
-/// Keeps one circle per folk in the player's collision ([`Obstacles`]).
-fn block_the_way(folk: Query<(&Denizen, &GlobalTransform)>, mut obstacles: ResMut<Obstacles>) {
-    let circles: Vec<(Vec2, f32)> = folk.iter().map(|(denizen, at)| (at.translation().xz(), denizen.radius)).collect();
-    if obstacles.0 != circles {
-        obstacles.0 = circles;
     }
 }
 
@@ -619,10 +616,12 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(50)))
-            .init_resource::<Obstacles>()
-            .add_systems(Update, (turn_heads, block_the_way));
+            .init_resource::<crate::play::Obstacles>()
+            .add_systems(Update, turn_heads)
+            .add_systems(PostUpdate, crate::play::gather_obstacles.after(TransformSystems::Propagate));
         let person = Person::of(&folk_1207()[0]);
-        let root = app.world_mut().spawn((Denizen { person, radius: 2.5, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) }, Transform::default())).id();
+        let denizen = Denizen { person, radius: 2.5, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
+        let root = app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(2.5)), Transform::default())).id();
         let stance = app.world_mut().spawn((Stance { idle: Idle::of(1), turn: 0.0 }, Transform::default(), ChildOf(root))).id();
         let head = app.world_mut().spawn((FolkHead::default(), Transform::from_xyz(0.0, 14.0, 0.0), ChildOf(stance))).id();
         let camera = app.world_mut().spawn((PlayerCamera, Transform::from_translation(eye))).id();
@@ -694,7 +693,7 @@ mod tests {
         let (mut app, _, _) = looking_app(Vec3::new(0.0, 16.0, 30.0));
         app.update();
         app.update();
-        assert_eq!(app.world().resource::<Obstacles>().0, vec![(Vec2::ZERO, 2.5)]);
+        assert_eq!(app.world().resource::<crate::play::Obstacles>().0, vec![crate::play::Obstacle::Circle { centre: Vec2::ZERO, radius: 2.5 }]);
         // And on 1207 every folk stands in a circle wide enough to bump into.
         for spot in folk_1207().iter().take(2) {
             let person = Person::of(spot);
