@@ -40,7 +40,7 @@ use fb_level::{CELL, ItemSpot, Level};
 use crate::inventory::{Inventory, ItemId};
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
-use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, level_has_focus};
+use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, ScreenOpen, level_has_focus};
 use crate::player::{Gait, blocked_by, slide};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
 use crate::ui::{BG, BRIGHT};
@@ -128,6 +128,7 @@ impl Plugin for CarryPlugin {
                     follow_player_camera,
                     sway_held_torch,
                     (aim, pick_up.run_if(level_has_focus)).chain(),
+                    hide_hud_under_screens.run_if(resource_exists::<ScreenOpen>),
                 ),
             );
     }
@@ -594,10 +595,22 @@ fn equip_player_camera(
     }
 }
 
+/// The HUD over the level: the crosshair. Hidden while a screen is open.
+#[derive(Component, Debug)]
+pub struct Hud;
+
+fn hide_hud_under_screens(open: Res<ScreenOpen>, mut huds: Query<&mut Visibility, With<Hud>>) {
+    let shown = if open.0.is_some() { Visibility::Hidden } else { Visibility::Inherited };
+    for mut visibility in &mut huds {
+        visibility.set_if_neq(shown);
+    }
+}
+
 fn spawn_hud(commands: &mut Commands, camera: Entity) {
     commands
         .spawn((
             Name::new("HUD"),
+            Hud,
             UiTargetCamera(camera),
             Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() },
             Pickable::IGNORE,

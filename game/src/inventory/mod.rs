@@ -46,8 +46,8 @@ pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
 use crate::carry::ViewModelCamera;
 use crate::keymap::{Action, ActionInput, Keymap};
-use crate::play::{CurrentLevel, ScreenOpen};
-use crate::player::set_grab;
+use crate::play::{CurrentLevel, Screen, ScreenOpen, show_screen, switch_screens};
+pub use crate::ui::node_rect;
 use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
 
 /// Logical pixels from one grid line to the next (the plate's `--cs`).
@@ -92,7 +92,7 @@ impl Plugin for InventoryPlugin {
                 (
                     (
                         underfoot::set_down_debug_kit.run_if(debug_kit_wanted),
-                        toggle_screen,
+                        // Screens open and close in `switch_screens`.
                         underfoot::track_underfoot,
                         build_screen,
                         drag_items,
@@ -103,7 +103,8 @@ impl Plugin for InventoryPlugin {
                         card::spawn_card,
                         card::show_card,
                     )
-                        .chain(),
+                        .chain()
+                        .after(switch_screens),
                     icon::draw_icons,
                     doll::turn_seal,
                 ),
@@ -151,11 +152,8 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLev
     }
 }
 
-fn open_for_capture(mut open: ResMut<ScreenOpen>, cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
-    open.0 = true;
-    if let Some(mut cursor) = cursor {
-        set_grab(&mut cursor, false);
-    }
+fn open_for_capture(mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
+    show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
 }
 
 /// The whole screen, over the level.
@@ -295,33 +293,10 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
     }
 }
 
-/// A node's rectangle in logical pixels.
-pub fn node_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Rect {
-    Rect::from_center_size(transform.translation * node.inverse_scale_factor, node.size * node.inverse_scale_factor)
-}
-
 /// The grid cell under `point`, for a grid drawn at `rect`.
 pub fn cell_under(rect: Rect, point: Vec2) -> IVec2 {
     let (x, y) = grid::cell_at((point.x - rect.min.x - LINE_PX * 0.5, point.y - rect.min.y - LINE_PX * 0.5), CELL_PX);
     IVec2::new(x, y)
-}
-
-/// I opens and closes the screen; Esc closes it. Open, the mouse is free and the body stops.
-fn toggle_screen(
-    input: ActionInput,
-    mut open: ResMut<ScreenOpen>,
-    mut dragging: ResMut<Dragging>,
-    cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
-) {
-    let toggle = input.just_pressed(Action::Inventory) || (open.0 && input.just_pressed(Action::Back));
-    if !toggle {
-        return;
-    }
-    open.0 = !open.0;
-    dragging.0 = None;
-    if let Some(mut cursor) = cursor {
-        set_grab(&mut cursor, !open.0);
-    }
 }
 
 /// Builds the screen when it opens and rebuilds it whenever what is in it changes; takes it
@@ -339,7 +314,7 @@ fn build_screen(
     mut icons: Icons,
 ) {
     let existing = screens.iter().next();
-    if !open.0 {
+    if !open.is(Screen::Inventory) {
         if let Some(screen) = existing {
             commands.entity(screen).despawn();
         }
@@ -353,7 +328,7 @@ fn build_screen(
     if let Some(screen) = existing {
         commands.entity(screen).despawn();
     }
-    let screen = Screen { inventory: &inventory, fonts: &fonts };
+    let screen = ScreenLayout { inventory: &inventory, fonts: &fonts };
     commands
         .spawn((
             Name::new("Inventory"),
@@ -441,12 +416,12 @@ fn build_screen(
 }
 
 /// What the screen is built from.
-struct Screen<'a> {
+struct ScreenLayout<'a> {
     inventory: &'a Inventory,
     fonts: &'a UiFonts,
 }
 
-impl Screen<'_> {
+impl ScreenLayout<'_> {
     /// The floor within reach, as a paler grid under its name; bare, a dashed box the grid's
     /// size that says so, and takes what is dropped on it all the same.
     fn underfoot(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, underfoot: &Underfoot) {
@@ -627,7 +602,7 @@ fn drag_items(
     time: Res<Time<Real>>,
 ) {
     let cursor = window.and_then(|w| w.cursor_position());
-    if !open.0 {
+    if !open.is(Screen::Inventory) {
         dragging.0 = None;
         return;
     }
@@ -861,7 +836,7 @@ mod tests {
             .init_resource::<FloorChanges>()
             .init_resource::<Assets<Image>>()
             .init_resource::<DollAssets>()
-            .add_systems(Update, (toggle_screen, build_screen, drag_items).chain());
+            .add_systems(Update, (switch_screens, build_screen, drag_items).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -892,12 +867,12 @@ mod tests {
             views.iter(app.world()).map(|(v, n)| (v.id, n.left, n.top, n.width)).collect::<Vec<_>>()
         };
         press(&mut app, KeyCode::KeyI);
-        assert!(app.world().resource::<ScreenOpen>().0);
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         let first = shown(&mut app);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0], (knife, px(5.0 * CELL_PX + LINE_PX), px(2.0 * CELL_PX + LINE_PX), px(2.0 * CELL_PX - LINE_PX)));
         press(&mut app, KeyCode::KeyI);
-        assert!(!app.world().resource::<ScreenOpen>().0);
+        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         assert!(shown(&mut app).is_empty());
         press(&mut app, KeyCode::KeyI);
         assert_eq!(shown(&mut app), first);
@@ -908,13 +883,13 @@ mod tests {
     fn i_toggles_the_screen_and_tab_does_nothing() {
         let mut app = screen_app();
         press(&mut app, KeyCode::Tab);
-        assert!(!app.world().resource::<ScreenOpen>().0);
+        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         press(&mut app, KeyCode::KeyI);
-        assert!(app.world().resource::<ScreenOpen>().0);
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         press(&mut app, KeyCode::Tab);
-        assert!(app.world().resource::<ScreenOpen>().0);
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         press(&mut app, KeyCode::KeyI);
-        assert!(!app.world().resource::<ScreenOpen>().0);
+        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory));
     }
 
     #[test]

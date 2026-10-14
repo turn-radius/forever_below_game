@@ -66,7 +66,7 @@ pub fn track_underfoot(
     inventory: Res<Inventory>,
     mut underfoot: ResMut<Underfoot>,
 ) {
-    if !open.0 {
+    if !open.is(crate::play::Screen::Inventory) {
         return;
     }
     let Some(eye) = eyes.iter().next().map(GlobalTransform::translation) else { return };

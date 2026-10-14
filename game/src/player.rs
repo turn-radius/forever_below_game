@@ -46,7 +46,7 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Keymap>()
             .add_systems(Startup, (spawn_player, grab_cursor))
-            .add_systems(Update, (toggle_cursor_grab, look, walk, bob_head).chain().run_if(level_has_focus));
+            .add_systems(Update, (take_cursor, look, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens));
     }
 }
 
@@ -115,13 +115,11 @@ fn grab_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>) {
     set_grab(&mut cursor, true);
 }
 
-/// Click to take the mouse, Esc to let it go.
-fn toggle_cursor_grab(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>, input: ActionInput) {
+/// A click in the level takes the mouse back, if it was let go (say, by switching windows).
+/// Esc frees it by opening the menu ([`crate::play::switch_screens`]).
+fn take_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>, input: ActionInput) {
     if input.just_pressed(Action::TakeMouse) {
         set_grab(&mut cursor, true);
-    }
-    if input.just_pressed(Action::Back) {
-        set_grab(&mut cursor, false);
     }
 }
 

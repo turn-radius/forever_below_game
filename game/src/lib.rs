@@ -8,6 +8,7 @@ pub mod inventory;
 pub mod keymap;
 pub mod level;
 pub mod light;
+pub mod menu;
 pub mod play;
 pub mod player;
 pub mod render;

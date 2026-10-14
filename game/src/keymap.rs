@@ -22,6 +22,8 @@ pub enum Action {
     Inventory,
     /// Closes the open screen, or opens the menu over the level.
     Back,
+    /// Presses a button in the menu.
+    Choose,
     MusicQuieter,
     MusicLouder,
 }
@@ -135,9 +137,10 @@ impl Default for Keymap {
                 bind(Action::TakeMouse, "Take the mouse back", Group::Moving, &[Mouse(MouseButton::Left)]),
                 bind(Action::PickUp, "Pick up", Group::Items, &[Key(KeyCode::KeyE)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
-                bind(Action::TurnItem, "Turn the item being dragged", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
+                bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),
                 bind(Action::Back, "Close a screen, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]),
+                bind(Action::Choose, "Choose in the menu", Group::Screens, &[Mouse(MouseButton::Left)]),
                 bind(Action::MusicQuieter, "Music quieter", Group::Sound, &[Key(KeyCode::Minus)]),
                 bind(Action::MusicLouder, "Music louder", Group::Sound, &[Key(KeyCode::Equal)]),
             ],
