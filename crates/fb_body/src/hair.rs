@@ -35,7 +35,90 @@ pub struct HairFit {
     /// A helmet or hat covers the crown: no cap, ridge or topknot (long hair and tails still
     /// hang below it).
     pub covered: bool,
+    /// What long hair and a beard lie on, when known ([`crate::worn::fit_worn`] measures
+    /// it): they then rest on the outermost worn surface itself, wherever it is, instead of
+    /// standing off by [`HairFit::clearance`] or [`HairFit::chest`] all round.
+    pub rest: Option<Rest>,
 }
+
+const REST_ROWS: usize = 48;
+const REST_COLUMNS: usize = 64;
+/// How far in a strand of hair may lie per unit of height above something it falls onto.
+const REST_SLOPE: f32 = 2.5;
+
+/// How far the outermost worn surface (or the bare body) reaches from the body's axis, by
+/// height and by direction round the axis (`atan2(z, x)`), over the chest, shoulders and
+/// neck: what long hair and a beard rest on. Body space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rest {
+    y0: f32,
+    dy: f32,
+    reach: [[f32; REST_COLUMNS]; REST_ROWS],
+}
+
+impl Rest {
+    /// The surface from height `y0` up to `y1`, reaching `reach(phi, y)` from the axis.
+    pub fn new(y0: f32, y1: f32, reach: impl Fn(f32, f32) -> f32) -> Rest {
+        let dy = (y1 - y0) / (REST_ROWS - 1) as f32;
+        let mut table = [[0.0; REST_COLUMNS]; REST_ROWS];
+        for (i, row) in table.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = reach(-PI + TAU * j as f32 / REST_COLUMNS as f32, y0 + dy * i as f32);
+            }
+        }
+        // Hair falling onto something that stands out (a cowl round the neck) begins to part
+        // round it a little above, so no strand cuts through its top: spread each column's
+        // reach upward at a slope of REST_SLOPE (our own figure).
+        for i in 1..REST_ROWS {
+            let below = table[i - 1];
+            for (cell, under) in table[i].iter_mut().zip(below) {
+                *cell = cell.max(under - REST_SLOPE * dy);
+            }
+        }
+        Rest { y0, dy, reach: table }
+    }
+
+    /// How far the surface reaches toward `phi` at height `y`, between the cells about it;
+    /// `None` outside the heights measured.
+    pub fn at(&self, phi: f32, y: f32) -> Option<f32> {
+        let fy = (y - self.y0) / self.dy;
+        if fy < 0.0 || fy > (REST_ROWS - 1) as f32 {
+            return None;
+        }
+        let (i0, ty) = ((fy.floor() as usize).min(REST_ROWS - 2), fy - fy.floor().min((REST_ROWS - 2) as f32));
+        let fx = (phi + PI).rem_euclid(TAU) / TAU * REST_COLUMNS as f32;
+        let (j0, tx) = (fx.floor() as usize % REST_COLUMNS, fx.fract());
+        let j1 = (j0 + 1) % REST_COLUMNS;
+        let row = |i: usize| self.reach[i][j0] * (1.0 - tx) + self.reach[i][j1] * tx;
+        Some(row(i0) * (1.0 - ty) + row(i0 + 1) * ty)
+    }
+
+    /// Whether `p` lies inside the surface, `margin` out from it.
+    fn inside(&self, p: V3, margin: f32) -> bool {
+        self.at(p[2].atan2(p[0]), p[1]).is_some_and(|r| p[0].hypot(p[2]) < r + margin)
+    }
+
+    /// How far forward (+Z) the surface stands at `x` and height `y`, `margin` out from it,
+    /// if it is measured there.
+    fn ahead(&self, x: f32, y: f32, margin: f32) -> Option<f32> {
+        self.at(PI / 2.0, y)?;
+        // The first point straight ahead that is outside.
+        let (mut lo, mut hi) = (0.0f32, 6.0f32);
+        if !self.inside([x, y, lo], margin) {
+            return Some(lo);
+        }
+        for _ in 0..24 {
+            let mid = 0.5 * (lo + hi);
+            if self.inside([x, y, mid], margin) { lo = mid } else { hi = mid }
+        }
+        Some(hi)
+    }
+}
+
+/// How steeply long hair and a beard may draw back toward what they hang over, per unit of
+/// drop, before they rest on it (our own: hair is limp, so they fall onto it within a short
+/// drop).
+const HANG_TUCK: f32 = 1.5;
 
 /// How far a head's hair stands off the scalp (the plate's `hairVol`), for sizing a helmet
 /// over it: halved under a cap.
@@ -171,14 +254,19 @@ impl Body {
     }
 
     /// Long hair: a curtain from the back and sides of the cap down past the shoulders,
-    /// pushed clear of the trunk and arms.
+    /// pushed clear of the trunk and arms. Given what it rests on ([`HairFit::rest`]), each
+    /// strand falls until it meets the worn surface and then lies on it: pushed out where the
+    /// surface slopes, and where the surface is a shelf (the top of a cloak's shoulders) it
+    /// rests on top and slides back off it, rather than being pushed out to the shelf's edge.
+    /// Our own rule.
     fn long_hair(&self, face: &Face, fit: HairFit, base: f32, vol: f32) -> MeshBuilder {
         let r = face.r;
         let ns = (self.spec.seed % 1000) as f32 * 0.01;
         let length = if self.folk() == Folk::Dwarf { 0.55 } else { 0.42 } * self.trunk_length + r * 0.6;
         let c = face.head.centre;
         let top = self.shoulder_y + 0.2 * self.trunk_length;
-        patch(36, 18, &ShellOptions::sheet(0.03 * r), |u, v| {
+        let (cols, rows) = (36, 18);
+        let natural = |u: f32, v: f32| {
             // Round the back from behind one ear to behind the other.
             let th = 1.3 + (TAU - 2.6) * (1.0 - u);
             let s = face.point(th, self.hairline(HairStyle::Long, th) * 0.93, (base + vol * 0.45) * r);
@@ -188,9 +276,80 @@ impl Body {
             let rad0 = dx.hypot(dz).max(1e-3);
             let (ux, uz) = (dx / rad0, dz / rad0);
             let rad = rad0 * (1.0 + 0.1 * v);
-            let p = [c[0] + ux * rad, y, c[2] + uz * rad];
-            if y < top { self.clear_of_body(p, fit.clearance + 0.1 * r, smoothstep(top, self.shoulder_y - 0.05 * self.trunk_length, y)) } else { p }
-        })
+            [c[0] + ux * rad, y, c[2] + uz * rad]
+        };
+        let Some(rest) = fit.rest else {
+            return patch(cols, rows, &ShellOptions::sheet(0.03 * r), |u, v| {
+                let p = natural(u, v);
+                let y = p[1];
+                if y < top { self.clear_of_body(p, fit.clearance + 0.1 * r, smoothstep(top, self.shoulder_y - 0.05 * self.trunk_length, y)) } else { p }
+            });
+        };
+        // Hair's inner face is its thickness in from the points.
+        let margin = 0.03 * r + 0.05;
+        let grid: Vec<Vec<V3>> = {
+            let strands: Vec<Vec<V3>> = (0..=cols).map(|c| self.strand(&rest, margin, |v| natural(c as f32 / cols as f32, v), rows)).collect();
+            (0..=rows).map(|k| strands.iter().map(|s| s[k]).collect()).collect()
+        };
+        armory::build::form::shell(&grid, &ShellOptions::sheet(0.03 * r))
+    }
+
+    /// One strand of hair falling along `natural` (`v` from 0 at its root to 1 at its end) in
+    /// `rows` steps, laid on `rest` (see [`Body::long_hair`]).
+    fn strand(&self, rest: &Rest, margin: f32, natural: impl Fn(f32) -> V3, rows: usize) -> Vec<V3> {
+        let s = self.scale;
+        // Even its root, where something stands up round the neck (a cowl).
+        let root = natural(0.0);
+        let root = match rest.at(root[2].atan2(root[0]), root[1]) {
+            Some(reach) if root[0].hypot(root[2]) < reach + margin => {
+                let k = (reach + margin) / root[0].hypot(root[2]).max(1e-4);
+                [root[0] * k, root[1], root[2] * k]
+            }
+            _ => root,
+        };
+        let mut out = vec![root];
+        let mut resting = false;
+        for k in 1..=rows {
+            let (a, b) = (natural((k - 1) as f32 / rows as f32), natural(k as f32 / rows as f32));
+            let step = vec3::sub(b, a);
+            let prev = out[k - 1];
+            let mut q = if resting {
+                // Sliding back off the top of a shoulder, then falling.
+                let out_dir = vec3::normalize_or([prev[0], 0.0, prev[2]], vec3::neg(vec3::Z));
+                let dir = vec3::normalize_or(vec3::add(vec3::add([0.0, 0.0, -1.0], vec3::scale(out_dir, 0.3)), [0.0, -0.4, 0.0]), vec3::neg(vec3::Y));
+                vec3::add(prev, vec3::scale(dir, vec3::length(step)))
+            } else {
+                vec3::add(prev, step)
+            };
+            resting = false;
+            let phi = q[2].atan2(q[0]);
+            if let Some(reach) = rest.at(phi, q[1]) {
+                let d = q[0].hypot(q[2]);
+                if d < reach + margin {
+                    // Out to the surface, or up onto it where that is the shorter way (a shelf).
+                    let push = reach + margin - d;
+                    let lift = (1..=40).map(|i| i as f32 * 0.02 * s).find(|&dy| !rest.inside([q[0], q[1] + dy, q[2]], margin));
+                    match lift {
+                        Some(dy) if dy < 0.7 * push => {
+                            q[1] += dy;
+                            resting = true;
+                        }
+                        _ => {
+                            let k = (reach + margin) / d.max(1e-4);
+                            q = [q[0] * k, q[1], q[2] * k];
+                        }
+                    }
+                } else if q[1] < self.shoulder_y + 0.05 * self.trunk_length {
+                    // Below the shoulders it falls back onto what it hangs over and lies on it.
+                    let to = (d - HANG_TUCK * step[1].abs()).max(reach + margin);
+                    let k = to / d.max(1e-4);
+                    q = [q[0] * k, q[1], q[2] * k];
+                }
+            }
+            // Clear of the bare body too.
+            out.push(self.clear_of_body(q, margin, 1.0));
+        }
+        out
     }
 
     /// A tail tied at the back of the head, falling down the back.
@@ -353,7 +512,7 @@ impl Body {
         let hx = face.head.centre[0];
         let forked = style == Beard::Forked;
         let lump = if style == Beard::Stubble { 0.0 } else { 0.025 };
-        let sheet = patch(32, 20, &ShellOptions::sheet(0.025 * r), |u, v| {
+        let natural = |u: f32, v: f32| {
             let th = (u * 2.0 - 1.0) * 1.72;
             let ph0 = PI * (0.565 + 0.135 * (th * 0.85).cos().powi(2));
             let t = (v * 1.7).min(1.0);
@@ -374,11 +533,51 @@ impl Body {
                     p[0] += (p[0] - hx).signum() * 0.14 * r * ex * ex;
                 }
                 // Hanging over the chest, it rests on it rather than sinking in.
-                if p[1] < self.chin_y {
+                if p[1] < self.chin_y && fit.rest.is_none() {
                     p = self.clear_ahead(p, fit.chest + 0.04 * r);
                 }
             }
             p
+        };
+        let sheet = patch(32, 20, &ShellOptions::sheet(0.025 * r), |u, v| {
+            let p = natural(u, v);
+            let Some(rest) = fit.rest else { return p };
+            let margin = 0.025 * r;
+            if p[1] >= self.chin_y {
+                // Along the jaw and under the chin, lying on a collar or a cowl that rises
+                // there: out from the body's axis onto it.
+                // Out from the body's axis or straight forward, whichever is the shorter way.
+                let d = p[0].hypot(p[2]);
+                return match rest.at(p[2].atan2(p[0]), p[1]) {
+                    Some(reach) if d < reach + margin => {
+                        let k = (reach + margin) / d.max(1e-4);
+                        let out = [p[0] * k, p[1], p[2] * k];
+                        let ahead = [p[0], p[1], rest.ahead(p[0], p[1], margin).unwrap_or(p[2]).max(p[2])];
+                        if vec3::distance(out, p) < vec3::distance(ahead, p) { out } else { ahead }
+                    }
+                    _ => p,
+                };
+            }
+            // Falling from the chin onto what is worn on the chest, and resting on it there:
+            // straight forward or back (never fanned out round the axis), drawing back toward
+            // it no faster than HANG_TUCK per unit of drop. Our own rule.
+            let rows = (v * 20.0).round() as usize;
+            let mut z: Option<f32> = None;
+            let mut last_y = 0.0;
+            for k in 0..=rows {
+                let q = natural(u, k as f32 / 20.0);
+                if q[1] >= self.chin_y {
+                    continue;
+                }
+                let floor = rest.ahead(q[0], q[1], margin).unwrap_or(f32::MIN);
+                z = Some(match z {
+                    None => q[2].max(floor),
+                    Some(z) => floor.max(z - HANG_TUCK * (last_y - q[1]).abs()),
+                });
+                last_y = q[1];
+            }
+            let floor = self.clear_ahead(p, 0.04 * r)[2];
+            [p[0], p[1], z.unwrap_or(p[2]).max(floor)]
         });
         out.append(&sheet);
         if style != Beard::Stubble {
@@ -416,7 +615,7 @@ mod tests {
                 for beard in Beard::ALL {
                     let body = with(folk, 31, style, beard);
                     for covered in [false, true] {
-                        let mesh = body.hair_mesh(HairFit { clearance: 0.1, chest: 0.1, covered });
+                        let mesh = body.hair_mesh(HairFit { clearance: 0.1, chest: 0.1, covered, rest: None });
                         for part in &mesh.parts {
                             part.validate().unwrap_or_else(|e| panic!("{folk:?} {style:?} {beard:?}: {e}"));
                         }
@@ -443,7 +642,7 @@ mod tests {
             for seed in [1, 2, 1207] {
                 for clearance in [0.0, 0.25] {
                     let body = with(folk, seed, HairStyle::Long, Beard::None);
-                    let mesh = body.hair_mesh(HairFit { clearance, chest: clearance, covered: false });
+                    let mesh = body.hair_mesh(HairFit { clearance, chest: clearance, covered: false, rest: None });
                     let hair = mesh.parts.iter().find(|p| p.name == "hair").unwrap();
                     let below = body.shoulder_y - 0.05 * body.trunk_length;
                     for p in hair.positions.iter().filter(|p| p[1] < below) {

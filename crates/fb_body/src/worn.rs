@@ -61,7 +61,7 @@ use fb_items::Slot;
 
 use crate::body::Body;
 use crate::folk::Ears;
-use crate::hair::HairFit;
+use crate::hair::{HairFit, Rest};
 use crate::head::HeadFit;
 use crate::limb::{Limb, Side};
 use crate::place::Placement;
@@ -153,7 +153,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
         // Long hair hangs over what is on the shoulders: under a hood and its cape, else over
         // everything but a pack.
         if hair.is_none() && slot == if hooded { Slot::Head } else { Slot::Back } {
-            hair = Some((env.shoulder_clearance(), env.chest_clearance()));
+            hair = Some((env.shoulder_clearance(), env.chest_clearance(), env.rest()));
         }
         for (_, item) in worn.iter().filter(|(s, _)| *s == slot) {
             let mesh = match (slot, item) {
@@ -185,7 +185,9 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
             fit.layers.push(WornLayer { slot, mesh });
         }
     }
-    (fit.hair.clearance, fit.hair.chest) = hair.unwrap_or_else(|| (env.shoulder_clearance(), env.chest_clearance()));
+    let rest = |env: &Envelope| (env.shoulder_clearance(), env.chest_clearance(), env.rest());
+    let (clearance, chest, surface) = hair.unwrap_or_else(|| rest(&env));
+    (fit.hair.clearance, fit.hair.chest, fit.hair.rest) = (clearance, chest, Some(surface));
     fit
 }
 
@@ -571,8 +573,21 @@ impl<'a> Envelope<'a> {
         self.trunk.cells().filter(|c| c.0 >= chest).fold(0.0f32, |m, c| m.max(c.2))
     }
 
+    /// The outermost surface worn so far over the chest, shoulders and neck, or the bare
+    /// trunk where nothing is: what long hair and a beard rest on ([`HairFit::rest`]).
+    fn rest(&self) -> Rest {
+        let b = self.body;
+        let w = b.waist_y;
+        Rest::new(b.chest_y - 0.9 * b.trunk_length, b.shoulder_y + 0.35 * b.trunk_length, |phi, y| {
+            // The most anything reaches within a few degrees, so hair laid over the folds of a
+            // cloak, or a hood lying down its back, rests on their crests and bridges between.
+            let worn = (-6..=6).map(|k| self.outline.at(-phi + k as f32 * TAU / 256.0, y - w)).fold(NONE, f32::max);
+            worn.max(b.trunk_reach([phi.cos(), phi.sin()], y))
+        })
+    }
+
     /// The same over the front of the chest only, within [`CHEST_SPREAD`] of straight ahead:
-    /// what a beard rests on.
+    /// what a beard rests on when nothing better is known.
     fn chest_clearance(&self) -> f32 {
         let chest = self.form.chest.y;
         let ahead = |phi: f32| (phi - FRONT_PHI + PI).rem_euclid(TAU) - PI;
@@ -1510,6 +1525,133 @@ mod tests {
             }
         }
         assert!(checked > 100, "{checked}");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The distance from `p` to triangle `t` (Ericson, "Real-Time Collision Detection",
+    /// 5.1.5).
+    fn point_triangle(p: V3, t: &[V3; 3]) -> f32 {
+        let [a, b, c] = *t;
+        let (ab, ac, ap) = (vec3::sub(b, a), vec3::sub(c, a), vec3::sub(p, a));
+        let (d1, d2) = (vec3::dot(ab, ap), vec3::dot(ac, ap));
+        if d1 <= 0.0 && d2 <= 0.0 {
+            return vec3::distance(p, a);
+        }
+        let bp = vec3::sub(p, b);
+        let (d3, d4) = (vec3::dot(ab, bp), vec3::dot(ac, bp));
+        if d3 >= 0.0 && d4 <= d3 {
+            return vec3::distance(p, b);
+        }
+        let vc = d1 * d4 - d3 * d2;
+        if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+            return vec3::distance(p, vec3::add(a, vec3::scale(ab, d1 / (d1 - d3))));
+        }
+        let cp = vec3::sub(p, c);
+        let (d5, d6) = (vec3::dot(ab, cp), vec3::dot(ac, cp));
+        if d6 >= 0.0 && d5 <= d6 {
+            return vec3::distance(p, c);
+        }
+        let vb = d5 * d2 - d1 * d6;
+        if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+            return vec3::distance(p, vec3::add(a, vec3::scale(ac, d2 / (d2 - d6))));
+        }
+        let va = d3 * d6 - d5 * d4;
+        if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
+            return vec3::distance(p, vec3::add(b, vec3::scale(vec3::sub(c, b), (d4 - d3) / ((d4 - d3) + (d5 - d6)))));
+        }
+        let denom = 1.0 / (va + vb + vc);
+        vec3::distance(p, vec3::add(a, vec3::add(vec3::scale(ab, vb * denom), vec3::scale(ac, vc * denom))))
+    }
+
+    /// How far `p` is from the surface of `part`, looking no further than `reach`.
+    fn distance_to(part: &Part, p: V3, reach: f32) -> f32 {
+        let (lo, hi) = (vec3::sub(p, [reach; 3]), vec3::add(p, [reach; 3]));
+        triangles_in(part, lo, hi).iter().map(|t| point_triangle(p, t)).fold(reach, f32::min)
+    }
+
+    #[test]
+    fn a_full_beard_lies_on_mail() {
+        use crate::folk::Beard;
+        let mut failures = vec![];
+        for folk in [Folk::Dwarf, Folk::Human] {
+            for seed in [3u32, 1207, 40] {
+                let mut spec = BodySpec::roll(folk, seed);
+                spec.beard = Beard::Full;
+                let body = Body::new(&spec);
+                for kit in [10u32, 11] {
+                    let mut mail = Garment::roll_as(kit + 1, GarmentStyle::Hauberk);
+                    mail.cut.neck = Neckline::Round;
+                    let worn = vec![(Slot::Shirt, Item::Garment(Garment::roll_as(kit, GarmentStyle::Tunic))), (Slot::Body, Item::Garment(mail))];
+                    let fit = fit_worn(&body, &worn);
+                    let mail = fit.layer(Slot::Body).unwrap().mesh.parts.iter().find(|p| p.name == "body").unwrap().clone();
+                    let beard = body.hair_mesh(fit.hair).parts.into_iter().find(|p| p.name == "beard").unwrap();
+                    // Down its length, wherever the mail is behind it, the beard's back lies
+                    // within 1 cm of the mail and never in it.
+                    let lo = beard.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+                    let mut y = body.chin_y - 0.1;
+                    while y > lo + 0.05 {
+                        let band: Vec<V3> = beard.positions.iter().filter(|p| (p[1] - y).abs() < 0.05 && p[0].abs() < 0.3 * body.scale).copied().collect();
+                        let behind = mail.positions.iter().any(|q| (q[1] - y).abs() < 0.1 && q[0].abs() < 0.3 * body.scale && q[2] > 0.0);
+                        if behind && !band.is_empty() {
+                            let gap = band.iter().map(|p| distance_to(&mail, *p, 1.0)).fold(f32::MAX, f32::min);
+                            if gap > 0.1 {
+                                failures.push(format!("{folk:?} {seed} kit {kit}: the beard stands {gap:.3} off the mail at height {y:.2}"));
+                            }
+                        }
+                        y -= 0.1;
+                    }
+                    let n = crossings(&beard, &mail);
+                    if n > 0 {
+                        failures.push(format!("{folk:?} {seed} kit {kit}: the beard passes through the mail ({n} crossings)"));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn long_hair_rests_on_a_cloak() {
+        use crate::folk::HairStyle;
+        let mut failures = vec![];
+        for folk in [Folk::Human, Folk::Dwarf, Folk::Gnome] {
+            for seed in [3u32, 1207, 40] {
+                let mut spec = BodySpec::roll(folk, seed);
+                spec.hair = HairStyle::Long;
+                let body = Body::new(&spec);
+                for kit in [10u32, 11, 12] {
+                    let worn = vec![(Slot::Shirt, Item::Garment(Garment::roll_as(kit, GarmentStyle::Tunic))), (Slot::Cloak, Item::Garment(Garment::roll_as(kit + 1, GarmentStyle::Cloak)))];
+                    let fit = fit_worn(&body, &worn);
+                    let mut hair = body.hair_mesh(fit.hair).parts.into_iter().find(|p| p.name == "hair").unwrap();
+                    // What hangs below the chin (a cloak's cowl can meet the scalp itself at
+                    // the nape, as it meets the bare head).
+                    let chin = body.chin_y;
+                    let kept: Vec<u32> = hair.indices.chunks(3).filter(|t| t.iter().all(|&i| hair.positions[i as usize][1] < chin)).flatten().copied().collect();
+                    hair.indices = kept;
+                    for part in &fit.layer(Slot::Cloak).unwrap().mesh.parts {
+                        let n = crossings(&hair, part);
+                        if n > 0 {
+                            failures.push(format!("{folk:?} {seed} kit {kit}: the hair passes through the cloak's {} ({n} crossings)", part.name));
+                        }
+                    }
+                    // Where it falls past the shoulders it lies on the cloak, not off it: round
+                    // the back it comes within about 1 cm of it in most directions and 2 cm in
+                    // all (the edges of the curtain reach the shoulders lower down).
+                    let cloak = &fit.layer(Slot::Cloak).unwrap().mesh.parts;
+                    let (a, b) = (body.shoulder_y - 0.25 * body.trunk_length, body.shoulder_y + 0.05 * body.trunk_length);
+                    let mut nearest = [f32::MAX; 24];
+                    for p in hair.positions.iter().filter(|p| p[1] > a && p[1] < b) {
+                        let j = (((p[2].atan2(p[0]) + PI) / TAU * 24.0) as usize).min(23);
+                        nearest[j] = nearest[j].min(cloak.iter().map(|c| distance_to(c, *p, 1.0)).fold(1.0, f32::min));
+                    }
+                    let mut sectors: Vec<f32> = nearest.into_iter().filter(|d| *d < f32::MAX).collect();
+                    sectors.sort_by(f32::total_cmp);
+                    if sectors.is_empty() || sectors[(sectors.len() - 1) / 2] > 0.12 || sectors.iter().any(|d| *d > 0.22) {
+                        failures.push(format!("{folk:?} {seed} kit {kit}: the hair stands off the cloak: {sectors:.2?}"));
+                    }
+                }
+            }
+        }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
