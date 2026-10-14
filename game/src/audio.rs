@@ -6,6 +6,10 @@
 //! the Ogg stream ([`ogg_vorbis_duration`]); if that fails the next track starts when the
 //! current one runs dry, fading in from silence.
 //!
+//! The player's music volume ([`GameSettings::music_volume`], 0 to 1) scales the mix; minus
+//! and equals turn it down and up a tenth at a time ([`MUSIC_VOLUME_DOWN`], [`MUSIC_VOLUME_UP`]),
+//! and the change is heard the same frame.
+//!
 //! Offscreen captures (`FB_SCREENSHOT`) stay silent. With no audio device Bevy logs a warning
 //! and never creates sinks, so the music systems simply idle.
 
@@ -17,6 +21,13 @@ use bevy::{
 };
 
 use crate::capture::FrameCapturePlugin;
+use crate::settings::GameSettings;
+
+/// Keys that turn the music down and up: minus and equals, the keys marked `-` and `+`.
+pub const MUSIC_VOLUME_DOWN: KeyCode = KeyCode::Minus;
+pub const MUSIC_VOLUME_UP: KeyCode = KeyCode::Equal;
+/// How far one press moves the music volume.
+pub const MUSIC_VOLUME_STEP: f32 = 0.1;
 
 /// The tracks to play, as asset paths, in order. Loops back to the first after the last.
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
@@ -27,7 +38,15 @@ pub struct Playlist {
 impl Default for Playlist {
     fn default() -> Self {
         Playlist {
-            tracks: vec!["audio/the-wizards-tower.ogg".into(), "audio/shadowed-pixel.ogg".into()],
+            tracks: [
+                "audio/forever-below.ogg",
+                "audio/the-wizards-tower.ogg",
+                "audio/shadowed-pixel.ogg",
+                "audio/cavernous-arpeggios.ogg",
+                "audio/unreachable-home.ogg",
+            ]
+            .map(String::from)
+            .into(),
         }
     }
 }
@@ -37,10 +56,10 @@ pub fn next_index(index: usize, len: usize) -> Option<usize> {
     (len > 0).then(|| (index + 1) % len)
 }
 
-/// How loud the music plays and how long tracks take to fade into each other.
+/// How loud the music is mixed and how long tracks take to fade into each other.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct MusicSettings {
-    /// Linear volume at full gain.
+    /// Linear volume at full gain, before the player's [`GameSettings::music_volume`].
     pub volume: f32,
     /// Fade length in seconds, both into a track and between tracks.
     pub crossfade: f32,
@@ -58,8 +77,10 @@ impl Plugin for MusicPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Playlist>()
             .init_resource::<MusicSettings>()
+            // Kept as loaded if `SettingsPlugin` came first.
+            .init_resource::<GameSettings>()
             .add_systems(Startup, start_music.run_if(not(resource_exists::<FrameCapturePlugin>)))
-            .add_systems(Update, play_music.run_if(resource_exists::<PlaylistAudio>));
+            .add_systems(Update, (turn_music_volume, play_music.run_if(resource_exists::<PlaylistAudio>)).chain());
     }
 }
 
@@ -98,11 +119,36 @@ fn spawn_track(commands: &mut Commands, audio: &PlaylistAudio, index: usize) {
     ));
 }
 
+/// The music volume `volume` turned by `steps` presses, kept to 0..=1 and to whole tenths so
+/// repeated presses land on round values.
+pub fn turned_volume(volume: f32, steps: i32) -> f32 {
+    let tenths = 1.0 / MUSIC_VOLUME_STEP;
+    ((volume * tenths).round() + steps as f32).clamp(0.0, tenths) / tenths
+}
+
+fn turn_music_volume(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<GameSettings>) {
+    let steps = keys.just_pressed(MUSIC_VOLUME_UP) as i32 - keys.just_pressed(MUSIC_VOLUME_DOWN) as i32;
+    if steps != 0 {
+        let volume = turned_volume(settings.music_volume, steps);
+        if settings.music_volume != volume {
+            settings.music_volume = volume;
+            info!("music: volume {volume:.1}");
+        }
+    }
+}
+
+/// The linear gain a music sink plays at: Bevy's global volume, the mix level, the player's
+/// music volume and the track's fade.
+pub fn music_gain(global: f32, settings: &MusicSettings, game: &GameSettings, fade: f32) -> f32 {
+    global * settings.volume * game.music_volume.clamp(0.0, 1.0) * fade
+}
+
 fn play_music(
     mut commands: Commands,
     sources: Res<Assets<AudioSource>>,
     audio: Res<PlaylistAudio>,
     settings: Res<MusicSettings>,
+    game: Res<GameSettings>,
     global: Res<GlobalVolume>,
     mut tracks: Query<(Entity, &mut MusicTrack, &AudioPlayer, &mut AudioSink)>,
 ) {
@@ -126,7 +172,7 @@ fn play_music(
         } else {
             let gain = track_gain(position, track.duration, settings.crossfade);
             // Bevy applies `GlobalVolume` only when it creates a sink, so it's folded in here.
-            sink.set_volume(Volume::Linear(global.volume.to_linear() * settings.volume * gain));
+            sink.set_volume(Volume::Linear(music_gain(global.volume.to_linear(), &settings, &game, gain)));
         }
     }
 }
@@ -180,13 +226,35 @@ mod tests {
     const FADE: f32 = 3.0;
 
     #[test]
-    fn playlist_opens_on_the_wizards_tower_and_wraps() {
+    fn playlist_opens_on_forever_below_and_plays_all_five_before_repeating() {
         let tracks = Playlist::default().tracks;
-        assert_eq!(tracks, ["audio/the-wizards-tower.ogg", "audio/shadowed-pixel.ogg"]);
-        assert_eq!(next_index(0, tracks.len()), Some(1));
-        assert_eq!(next_index(1, tracks.len()), Some(0));
+        assert_eq!(
+            tracks,
+            [
+                "audio/forever-below.ogg",
+                "audio/the-wizards-tower.ogg",
+                "audio/shadowed-pixel.ogg",
+                "audio/cavernous-arpeggios.ogg",
+                "audio/unreachable-home.ogg",
+            ]
+        );
+        let mut order = vec![0];
+        while order.len() < 6 {
+            order.push(next_index(*order.last().unwrap(), tracks.len()).unwrap());
+        }
+        assert_eq!(order, [0, 1, 2, 3, 4, 0]);
         assert_eq!(next_index(0, 1), Some(0));
         assert_eq!(next_index(0, 0), None);
+    }
+
+    #[test]
+    fn every_track_is_an_ogg_vorbis_asset() {
+        for track in Playlist::default().tracks {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(&track);
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{track}: {e}"));
+            let duration = ogg_vorbis_duration(&bytes).unwrap_or_else(|| panic!("{track}: not Ogg Vorbis"));
+            assert!(duration > 60.0, "{track}: {duration}");
+        }
     }
 
     #[test]
@@ -230,6 +298,37 @@ mod tests {
     #[test]
     fn a_track_shorter_than_two_fades_never_reaches_full_gain() {
         assert!(track_gain(2.0, Some(4.0), FADE) < 1.0);
+    }
+
+    #[test]
+    fn music_volume_zero_is_silent_and_one_is_the_mix() {
+        let mix = MusicSettings::default();
+        let at = |music_volume: f32| music_gain(1.0, &mix, &GameSettings { music_volume }, 1.0);
+        assert_eq!(at(0.0), 0.0);
+        assert_eq!(at(1.0), mix.volume);
+        assert!((at(0.5) - mix.volume * 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn volume_keys_step_by_tenths_within_range() {
+        assert!((turned_volume(1.0, -1) - 0.9).abs() < 1e-6);
+        assert_eq!(turned_volume(1.0, 1), 1.0);
+        assert_eq!(turned_volume(0.0, -1), 0.0);
+        assert!((turned_volume(0.33, 1) - 0.4).abs() < 1e-6);
+        let mut volume = 1.0;
+        for _ in 0..10 {
+            volume = turned_volume(volume, -1);
+        }
+        assert_eq!(volume, 0.0);
+    }
+
+    #[test]
+    fn a_volume_key_applies_within_the_frame() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>().init_resource::<GameSettings>().add_systems(Update, turn_music_volume);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(MUSIC_VOLUME_DOWN);
+        app.update();
+        assert!((app.world().resource::<GameSettings>().music_volume - 0.9).abs() < 1e-6);
     }
 
     #[test]

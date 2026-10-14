@@ -13,6 +13,7 @@ use forever_below::{
     light::LightPlugin,
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
+    settings::SettingsPlugin,
     turntable::{Focus, Turntable, TurntablePlugin, parse_wear},
 };
 
@@ -33,7 +34,7 @@ fn main() -> AppExit {
         primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
         ..default()
     }))
-    .add_plugins((ArmoryRenderPlugin, LightPlugin, PlayPlugin))
+    .add_plugins((SettingsPlugin, ArmoryRenderPlugin, LightPlugin, PlayPlugin))
     .insert_resource(CurrentLevel(fb_level::generate(seed)));
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);

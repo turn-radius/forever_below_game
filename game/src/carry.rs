@@ -4,10 +4,17 @@
 //!   of whatever [`PlayerCamera`] exists, as in Bevy's `first_person_view_model` example. It
 //!   has its own soft light, so the flame does not burn its own handle white, and its own
 //!   field of view, so it never sinks into a wall.
+//! - It moves with the player's steps ([`Gait`]) and lags a little behind a turn of the head
+//!   ([`HeldSway`]).
 //! - Its light in the world is a separate point light near the eye, on the default layer, with
 //!   the torch's colour, reach and flicker from its [`LightAnchor`]. It is the main light.
 //! - Items lie where `CurrentLevel.items` puts them, resting on the floor; long ones lie down.
+//!   A lit one lights its corner with a shadowed light, so it stays on its side of the rock;
+//!   the item itself casts no shadow, or its own flame and handle would black out its light.
 //! - A ray from the camera picks the nearest item in reach; E picks it up into [`Carried`].
+//! - Number keys 1 to 9 or the scroll wheel choose a carried item ([`CarriedSelection`]); G
+//!   sets it on the floor in front of the player ([`drop_spot`]), where it rests like any other
+//!   floor item and can be picked up again.
 //!
 //! With no player in the app a stand-in camera is spawned at the level's start
 //! ([`StandInCamera`]). For captures, `FB_DEBUG_POSE` holds the player's view at a pose
@@ -20,14 +27,17 @@ use armory::{
 };
 use bevy::{
     app::{HierarchyPropagatePlugin, Propagate},
+    input::mouse::{AccumulatedMouseScroll, MouseScrollUnit},
     camera::{Exposure, RenderTarget, visibility::RenderLayers},
+    light::NotShadowCaster,
     prelude::*,
     render::view::{Msaa, Tonemapping},
 };
 use fb_level::{CELL, ItemSpot, Level};
 
 use crate::light::{Torch, cast_shadows, point_light};
-use crate::play::{Carried, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
+use crate::play::{BlockedCells, Carried, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
+use crate::player::{Gait, blocked_by, slide};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
@@ -35,6 +45,16 @@ pub const VIEW_MODEL_LAYER: usize = 1;
 
 /// How far the player can reach to pick something up, in world units (2 m).
 pub const REACH: f32 = 20.0;
+
+/// How far in front of the player's feet a dropped item is set down, in world units (80 cm):
+/// a metre and three quarters from the eye, inside [`REACH`].
+pub const DROP_DISTANCE: f32 = 8.0;
+
+/// The key that sets the chosen carried item down: G, for ground, clear of the WASD hand.
+pub const DROP_KEY: KeyCode = KeyCode::KeyG;
+
+/// Scroll wheel pixels that count as one line on a trackpad, which scrolls in pixels.
+const PIXELS_PER_SCROLL_LINE: f32 = 24.0;
 
 /// The torch's flame in the view model, in camera space: low on the right, about a metre out
 /// as the view model camera sees it.
@@ -69,6 +89,16 @@ const WORLD_PEAK: f32 = 1.0;
 const HELD_PEAK: f32 = 1.8;
 const HELD_REACH: f32 = 40.0;
 
+/// How far the held torch bobs at walking pace, in view model units, as `(sideways, down)`: a
+/// hand swings further than the head bobs (our own tuning, about 3 cm and 2.5 cm at a metre).
+const HELD_BOB: Vec2 = Vec2::new(0.3, 0.25);
+/// How far behind a turn of the head the held torch trails: the angle it lags is the turn rate
+/// times this many seconds, up to [`HELD_LAG_MAX`] radians either way.
+const HELD_LAG_SECONDS: f32 = 0.05;
+const HELD_LAG_MAX: f32 = 0.12;
+/// How quickly the lag closes on its target, per second ([`StableInterpolate`]).
+const HELD_LAG_RATE: f32 = 12.0;
+
 /// Field of view of the view model camera, fixed whatever the world camera uses.
 const VIEW_MODEL_FOV_DEGREES: f32 = 60.0;
 
@@ -84,7 +114,11 @@ impl Plugin for CarryPlugin {
         if !app.is_plugin_added::<HierarchyPropagatePlugin<RenderLayers>>() {
             app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(Update));
         }
+        if !app.is_plugin_added::<HierarchyPropagatePlugin<NotShadowCaster>>() {
+            app.add_plugins(HierarchyPropagatePlugin::<NotShadowCaster>::new(Update));
+        }
         app.init_resource::<Carried>()
+            .init_resource::<CarriedSelection>()
             .init_resource::<Aimed>()
             .add_systems(PostStartup, spawn_stand_in_camera.run_if(no_player_camera))
             .add_systems(PostUpdate, hold_debug_pose.before(TransformSystems::Propagate))
@@ -94,7 +128,8 @@ impl Plugin for CarryPlugin {
                     lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
                     equip_player_camera,
                     follow_player_camera,
-                    (aim, pick_up, show_aimed, show_carried).chain(),
+                    sway_held_torch,
+                    (aim, pick_up, choose_carried, drop_carried, show_aimed, show_carried).chain(),
                 ),
             );
     }
@@ -222,8 +257,64 @@ pub struct FloorItem {
 
 /// The torch in the player's hand (the view model's root).
 #[derive(Component, Debug)]
+#[require(HeldSway)]
 pub struct HeldTorch {
     pub item: Item,
+}
+
+/// How a held thing moves in the view: it bobs with the player's steps and trails a turn of the
+/// head, then settles back to `rest`. Moving the view model with the same cycle as the eye is
+/// what Quake does (`V_CalcRefdef` adds `V_CalcBob`'s bob to the view model's origin in
+/// `WinQuake/view.c`, <https://github.com/id-Software/Quake>); the sideways swing and the lag
+/// behind a turn are our own.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct HeldSway {
+    /// Where it is held when the player stands still, in view model camera space.
+    pub rest: Transform,
+    /// The look direction last frame, as `(yaw, pitch)` in radians.
+    pub look: Option<Vec2>,
+    /// How far it trails the look now, as `(yaw, pitch)` in radians.
+    pub lag: Vec2,
+}
+
+impl HeldSway {
+    pub fn new(rest: Transform) -> Self {
+        HeldSway { rest, look: None, lag: Vec2::ZERO }
+    }
+
+    /// Follows the look turning to `look` (`(yaw, pitch)`, radians) over `dt` seconds: the lag
+    /// eases toward the turn rate times [`HELD_LAG_SECONDS`], capped, and back to 0 once the
+    /// look stops.
+    pub fn follow(&mut self, look: Vec2, dt: f32) {
+        if dt <= 0.0 {
+            return;
+        }
+        let turned = self.look.map_or(Vec2::ZERO, |last| {
+            let d = look - last;
+            // Yaw wraps; take the short way round.
+            Vec2::new((d.x + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI, d.y)
+        });
+        self.look = Some(look);
+        let target = (turned / dt * HELD_LAG_SECONDS).clamp(Vec2::splat(-HELD_LAG_MAX), Vec2::splat(HELD_LAG_MAX));
+        self.lag.smooth_nudge(&target, HELD_LAG_RATE, dt);
+    }
+
+    /// Where it is held this frame with the player's step at `gait`: its rest bobbed by
+    /// [`HELD_BOB`], then turned about the eye against the lag, so a head turning left leaves
+    /// it trailing right and a head tipping up leaves it trailing low.
+    pub fn transform(&self, gait: Gait) -> Transform {
+        let bob = gait.bob() * HELD_BOB;
+        let trail = Quat::from_euler(EulerRot::YXZ, -self.lag.x, -self.lag.y, 0.0);
+        let held = self.rest.translation + Vec3::new(bob.x, -bob.y, 0.0);
+        Transform { translation: trail * held, rotation: trail * self.rest.rotation, ..self.rest }
+    }
+}
+
+/// The look direction of a world transform, as `(yaw, pitch)`: yaw turning left from -Z about
+/// +Y, pitch up from level.
+fn yaw_pitch(eye: &GlobalTransform) -> Vec2 {
+    let forward = eye.forward().as_vec3();
+    Vec2::new((-forward.x).atan2(-forward.z), forward.y.clamp(-1.0, 1.0).asin())
 }
 
 /// The camera that draws the view model over the world. It stands on [`VIEW_MODEL_STAGE`],
@@ -237,6 +328,20 @@ pub struct ViewModelCamera {
 /// A [`PlayerCamera`] that already has its torch and HUD.
 #[derive(Component, Debug)]
 struct Equipped;
+
+/// Which carried item is chosen, as an index into [`Carried`]: what [`DROP_KEY`] sets down.
+/// Kept inside the list as it shrinks.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CarriedSelection(pub usize);
+
+impl CarriedSelection {
+    /// Moves the choice by `steps` through a list of `len`, wrapping round.
+    pub fn step(&mut self, steps: i32, len: usize) {
+        if len > 0 {
+            self.0 = (self.0 as i64 + steps as i64).rem_euclid(len as i64) as usize;
+        }
+    }
+}
 
 /// The floor item under the crosshair and in reach, if any.
 #[derive(Resource, Debug, Default)]
@@ -339,25 +444,57 @@ fn lay_out_items(mut commands: Commands, level: Res<CurrentLevel>, old: Query<En
         commands.entity(entity).despawn();
     }
     for spot in &level.0.items {
-        let Some(item) = Item::roll(spot.family, spot.seed) else { continue };
-        let mesh = item.build();
-        let points: Vec<Vec3> = mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
-        let at = Vec3::from_array(Level::world(spot.x, spot.y));
-        let (Some(transform), Some((min, max))) = (rest_on_floor(&points, at, spot.yaw), bounds(points.iter().copied())) else {
-            continue;
-        };
-        let light = item_light(&item);
-        let mut root = spawner.spawn(&mesh, &appearance_of(&item));
-        root.insert((transform, Name::new(item.noun()), FloorItem { item, spot: *spot, min, max }));
-        if let Some(anchor) = light {
-            // A lit thing on the floor lights its corner, from a little above the flame so the
-            // stone under it does not burn white; shadows only for the light in hand.
-            let mut flame = transform.transform_point(Vec3::from_array(anchor.position));
-            flame.y = flame.y.max(FLOOR_LIGHT_HEIGHT);
-            let at = transform.compute_affine().inverse().transform_point3(flame);
-            root.with_child((world_light(&anchor, &Exposure::INDOOR), Transform::from_translation(at)));
+        if let Some(item) = Item::roll(spot.family, spot.seed) {
+            spawn_floor_item(&mut spawner, item, *spot);
         }
     }
+}
+
+/// The item's item-space vertices.
+fn item_points(mesh: &armory::ItemMesh) -> Vec<Vec3> {
+    mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect()
+}
+
+/// Spawns `item` resting on the floor at `spot` as a [`FloorItem`], with its light if it gives
+/// one. `None` for an item with no vertices.
+fn spawn_floor_item(spawner: &mut ItemSpawner, item: Item, spot: ItemSpot) -> Option<Entity> {
+    let mesh = item.build();
+    let points = item_points(&mesh);
+    let at = Vec3::from_array(Level::world(spot.x, spot.y));
+    let transform = rest_on_floor(&points, at, spot.yaw)?;
+    let (min, max) = bounds(points.iter().copied())?;
+    let light = item_light(&item);
+    let mut root = spawner.spawn(&mesh, &appearance_of(&item));
+    root.insert((transform, Name::new(item.noun()), FloorItem { item, spot, min, max }));
+    if let Some(anchor) = light {
+        // A lit thing on the floor lights its corner, from a little above the flame so the
+        // stone under it does not burn white. Its light is shadowed so it stops at the rock,
+        // and the thing itself casts none, so its own flame and body do not hide its light.
+        let mut flame = transform.transform_point(Vec3::from_array(anchor.position));
+        flame.y = flame.y.max(FLOOR_LIGHT_HEIGHT);
+        let at = transform.compute_affine().inverse().transform_point3(flame);
+        root.insert(Propagate(NotShadowCaster)).with_child((world_light(&anchor, &Exposure::INDOOR), Transform::from_translation(at)));
+    }
+    Some(root.id())
+}
+
+/// An item's footprint radius on the floor once laid down ([`lie_down`]): half the larger of
+/// its level extents. 0 for an item with no vertices.
+pub fn floor_radius(points: &[Vec3]) -> f32 {
+    bounds(points.iter().copied()).map_or(0.0, |(min, max)| {
+        let size = (lie_down(max - min) * (max - min)).abs();
+        size.x.max(size.z) * 0.5
+    })
+}
+
+/// Where an item of floor `radius` set down by a player at `feet` (world `(x, z)`) facing
+/// `forward` (a unit floor direction) comes to rest: [`DROP_DISTANCE`] ahead, or short of that
+/// where rock or a `blocked` cell is in the way, clear of it by `radius`. Found by sliding the
+/// item's footprint out from the feet as the body slides along walls ([`slide`]). The radius is
+/// held under half a cell so an item fits down a one-cell corridor.
+pub fn drop_spot(feet: Vec2, forward: Vec2, radius: f32, blocked: impl Fn(i32, i32) -> bool) -> Vec2 {
+    let radius = radius.min(CELL * 0.5 - 0.5);
+    slide(feet, feet + forward * DROP_DISTANCE, radius, blocked)
 }
 
 /// A flickering point light in `anchor`'s colour and flicker, `peak` times full close up and
@@ -367,9 +504,11 @@ fn anchor_light(anchor: &LightAnchor, peak: f32, range: f32, exposure: &Exposure
     Torch::flickering(point_light(color, peak, range, exposure), anchor.flicker)
 }
 
-/// An anchor's light in the world: bright out to its radius, dim to [`DIM_REACH`] times it.
-fn world_light(anchor: &LightAnchor, exposure: &Exposure) -> (Torch, PointLight) {
-    anchor_light(anchor, WORLD_PEAK, anchor.radius * DIM_REACH, exposure)
+/// An anchor's light in the world: bright out to its radius, dim to [`DIM_REACH`] times it,
+/// and shadowed, so it never reaches through rock into the next corridor.
+pub fn world_light(anchor: &LightAnchor, exposure: &Exposure) -> (Torch, PointLight) {
+    let (torch, light) = anchor_light(anchor, WORLD_PEAK, anchor.radius * DIM_REACH, exposure);
+    (torch, cast_shadows(light))
 }
 
 /// How a camera draws, which the view model camera copies from the player camera.
@@ -407,12 +546,14 @@ fn equip_player_camera(
         // Held upright and leaning in and away, as a torch is carried; its flame at HELD_FLAME.
         let rotation = Quat::from_euler(EulerRot::XYZ, -0.32, 0.0, 0.22);
         let held_at = HELD_FLAME - rotation * Vec3::from_array(anchor.position);
+        let rest = Transform::from_translation(held_at).with_rotation(rotation);
         let mesh = torch.build();
         let mut root = spawner.spawn(&mesh, &appearance_of(&torch));
         root.insert((
             Name::new("Held torch"),
             HeldTorch { item: torch },
-            Transform::from_translation(held_at).with_rotation(rotation),
+            HeldSway::new(rest),
+            rest,
             Propagate(view_layer.clone()),
             ChildOf(view_model),
         ));
@@ -424,7 +565,7 @@ fn equip_player_camera(
             view_layer,
         ));
         let (torch_light, light) = world_light(&anchor, &exposure);
-        commands.entity(camera).insert(Equipped).with_child((torch_light, cast_shadows(light), Transform::from_translation(WORLD_FLAME)));
+        commands.entity(camera).insert(Equipped).with_child((torch_light, light, Transform::from_translation(WORLD_FLAME)));
         spawn_hud(&mut commands, view_model);
     }
 }
@@ -518,6 +659,23 @@ fn follow_player_camera(
     }
 }
 
+/// Bobs the held torch with the player's steps and trails it behind turns of the head.
+fn sway_held_torch(
+    time: Res<Time>,
+    mut held: Query<(&mut HeldSway, &mut Transform, &ChildOf)>,
+    view_models: Query<&ViewModelCamera>,
+    eyes: Query<(&GlobalTransform, Option<&ChildOf>), With<PlayerCamera>>,
+    gaits: Query<&Gait>,
+) {
+    for (mut sway, mut transform, parent) in &mut held {
+        let Ok(view_model) = view_models.get(parent.parent()) else { continue };
+        let Ok((eye, body)) = eyes.get(view_model.follows) else { continue };
+        let gait = body.and_then(|b| gaits.get(b.parent()).ok()).copied().unwrap_or_default();
+        sway.follow(yaw_pitch(eye), time.delta_secs());
+        *transform = sway.transform(gait);
+    }
+}
+
 fn aim(
     camera: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
     items: Query<(Entity, &GlobalTransform, &FloorItem)>,
@@ -556,6 +714,79 @@ fn pick_up(
     commands.entity(entity).despawn();
 }
 
+/// Chooses a carried item: number keys 1 to 9 pick by place in the list, the scroll wheel steps
+/// through it (down for the next).
+fn choose_carried(
+    keys: Res<ButtonInput<KeyCode>>,
+    scroll: Option<Res<AccumulatedMouseScroll>>,
+    carried: Res<Carried>,
+    mut selection: ResMut<CarriedSelection>,
+    mut lines: Local<f32>,
+) {
+    const DIGITS: [KeyCode; 9] = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ];
+    let len = carried.0.len();
+    if let Some(index) = DIGITS.iter().position(|&key| keys.just_pressed(key)).filter(|&i| i < len) {
+        selection.set_if_neq(CarriedSelection(index));
+    }
+    if let Some(scroll) = scroll {
+        let delta = match scroll.unit {
+            MouseScrollUnit::Line => scroll.delta.y,
+            MouseScrollUnit::Pixel => scroll.delta.y / PIXELS_PER_SCROLL_LINE,
+        };
+        // Whole lines step the choice; a trackpad's fractions add up first. Scrolling up
+        // (positive) goes back up the list.
+        *lines += delta;
+        let steps = lines.trunc();
+        *lines -= steps;
+        if steps != 0.0 {
+            selection.step(-(steps as i32), len);
+        }
+    }
+    if len > 0 && selection.0 >= len {
+        selection.0 = len - 1;
+    }
+}
+
+/// Sets the chosen carried item down on the floor in front of the player.
+fn drop_carried(
+    keys: Res<ButtonInput<KeyCode>>,
+    eyes: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
+    mut carried: ResMut<Carried>,
+    mut selection: ResMut<CarriedSelection>,
+    mut level: ResMut<CurrentLevel>,
+    blocked_cells: Res<BlockedCells>,
+    mut spawner: ItemSpawner,
+) {
+    if !keys.just_pressed(DROP_KEY) || selection.0 >= carried.0.len() {
+        return;
+    }
+    let Some(eye) = eyes.iter().next() else { return };
+    let item = carried.0.remove(selection.0);
+    if selection.0 >= carried.0.len() {
+        selection.0 = carried.0.len().saturating_sub(1);
+    }
+    // Straight down, the top of the head points the way the body faces.
+    let forward = eye.forward().as_vec3().xz().try_normalize().unwrap_or_else(|| eye.up().as_vec3().xz().normalize_or(Vec2::NEG_Y));
+    let radius = floor_radius(&item_points(&item.build()));
+    let at = drop_spot(eye.translation().xz(), forward, radius, blocked_by(&level.0, &blocked_cells)) / CELL;
+    // Laid square to the player's view.
+    let yaw = (-forward.x).atan2(-forward.y);
+    let spot = ItemSpot { x: at.x, y: at.y, yaw, family: item.family(), seed: item.seed() };
+    // Into the level data too, so it stays where it was left, without respawning the rest.
+    level.bypass_change_detection().0.items.push(spot);
+    spawn_floor_item(&mut spawner, item, spot);
+}
+
 fn show_aimed(aimed: Res<Aimed>, items: Query<&FloorItem>, mut labels: Query<&mut Text, With<AimedLabel>>) {
     if !aimed.is_changed() {
         return;
@@ -566,16 +797,32 @@ fn show_aimed(aimed: Res<Aimed>, items: Query<&FloorItem>, mut labels: Query<&mu
     }
 }
 
+/// The carried list's text: each item numbered by its key, the chosen one marked.
+pub fn carried_lines(carried: &[Item], selection: CarriedSelection) -> Vec<String> {
+    carried
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let mark = if i == selection.0 { ">" } else { " " };
+            match i {
+                0..9 => format!("{mark} {}  {}", i + 1, item.noun()),
+                _ => format!("{mark}    {}", item.noun()),
+            }
+        })
+        .collect()
+}
+
 fn show_carried(
     carried: Res<Carried>,
+    selection: Res<CarriedSelection>,
     mut lists: Query<&mut Text, With<CarriedList>>,
     mut panels: Query<&mut Visibility, With<CarriedPanel>>,
     added: Query<(), Added<CarriedList>>,
 ) {
-    if !carried.is_changed() && added.is_empty() {
+    if !carried.is_changed() && !selection.is_changed() && added.is_empty() {
         return;
     }
-    let lines: Vec<String> = carried.0.iter().map(Item::noun).collect();
+    let lines = carried_lines(&carried.0, *selection);
     for mut list in &mut lists {
         list.0 = lines.join("\n");
     }
@@ -648,6 +895,67 @@ mod tests {
         }
     }
 
+    fn rest() -> Transform {
+        Transform::from_translation(HELD_FLAME).with_rotation(Quat::from_rotation_z(0.2))
+    }
+
+    #[test]
+    fn the_held_torch_is_still_when_standing() {
+        let mut sway = HeldSway::new(rest());
+        for _ in 0..30 {
+            sway.follow(Vec2::new(0.4, -0.1), 1.0 / 60.0);
+        }
+        assert_eq!(sway.transform(Gait { phase: 1.1, pace: 0.0 }), rest());
+    }
+
+    #[test]
+    fn the_held_torch_moves_with_the_bob_while_walking() {
+        let sway = HeldSway::new(rest());
+        let step = |phase: f32| sway.transform(Gait { phase, pace: 1.0 }).translation;
+        let quarter = std::f32::consts::FRAC_PI_2;
+        // At the footfall it is low and to one side; a step later, low and to the other.
+        assert!(step(quarter).y < HELD_FLAME.y - 0.2 && step(quarter).x > HELD_FLAME.x + 0.2, "{}", step(quarter));
+        assert!(step(3.0 * quarter).x < HELD_FLAME.x - 0.2, "{}", step(3.0 * quarter));
+        assert!(step(0.0).abs_diff_eq(HELD_FLAME, 1e-5));
+    }
+
+    #[test]
+    fn the_held_torch_lags_a_turn_then_settles() {
+        let mut sway = HeldSway::new(rest());
+        let dt = 1.0 / 60.0;
+        // Turning left at a radian a second, steadily.
+        for frame in 0..30 {
+            sway.follow(Vec2::new(frame as f32 * dt, 0.0), dt);
+        }
+        let turning = sway.transform(Gait::default()).translation;
+        assert!(turning.x > HELD_FLAME.x + 0.2, "trails right: {turning}");
+        assert!(turning.x < HELD_FLAME.x + 2.0, "only slightly: {turning}");
+        // The look stops; the torch comes back to rest.
+        for _ in 0..120 {
+            sway.follow(Vec2::new(29.0 * dt, 0.0), dt);
+        }
+        assert!(sway.transform(Gait::default()).translation.abs_diff_eq(HELD_FLAME, 1e-3));
+        // Across the yaw wrap the turn is the short way round.
+        let mut wrap = HeldSway::new(rest());
+        wrap.follow(Vec2::new(std::f32::consts::PI - 0.01, 0.0), dt);
+        wrap.follow(Vec2::new(-std::f32::consts::PI + 0.01, 0.0), dt);
+        assert!(wrap.lag.x > 0.0 && wrap.lag.x < HELD_LAG_MAX, "{}", wrap.lag);
+    }
+
+    #[test]
+    fn yaw_and_pitch_read_from_the_eye() {
+        let eye = GlobalTransform::from(Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.7, -0.3, 0.0)));
+        assert!(yaw_pitch(&eye).abs_diff_eq(Vec2::new(0.7, -0.3), 1e-5));
+    }
+
+    #[test]
+    fn lights_in_the_world_cast_shadows() {
+        let (_, anchor) = lit_torch(1207);
+        let (_, light) = world_light(&anchor, &Exposure::INDOOR);
+        assert!(light.shadow_maps_enabled);
+        assert_eq!(light.range, anchor.radius * DIM_REACH);
+    }
+
     #[test]
     fn the_debug_pose_is_the_start_or_where_asked() {
         let level = fb_level::generate(1207);
@@ -659,6 +967,97 @@ mod tests {
         assert_eq!(there.at, Vec3::new(90.0, 0.0, 124.0));
         assert_eq!(there.eye().translation.y, EYE_HEIGHT);
         assert!(there.eye().forward().y < -0.4);
+    }
+
+    #[test]
+    fn dropped_items_stop_short_of_rock() {
+        // A corridor running east, one cell wide, rock at x = 3 cells.
+        let blocked = |x: i32, y: i32| !(y == 0 && (0..3).contains(&x));
+        let feet = Vec2::new(10.0, 10.0);
+        assert!(drop_spot(feet, Vec2::X, 2.0, blocked).abs_diff_eq(Vec2::new(10.0 + DROP_DISTANCE, 10.0), 1e-3));
+        // Up against the end wall it lands clear of it by its radius.
+        let near_end = Vec2::new(55.0, 10.0);
+        assert!(drop_spot(near_end, Vec2::X, 2.0, blocked).x <= 3.0 * CELL - 2.0 + 1e-3);
+        // A long thing still fits down the corridor, its radius held under half a cell.
+        let spot = drop_spot(feet, Vec2::Y, 40.0, blocked);
+        assert!(spot.y >= 9.5 && spot.y <= 10.5, "{spot}");
+    }
+
+    #[test]
+    fn the_selection_wraps_and_numbers_the_list() {
+        let mut selection = CarriedSelection(0);
+        selection.step(-1, 3);
+        assert_eq!(selection, CarriedSelection(2));
+        selection.step(2, 3);
+        assert_eq!(selection, CarriedSelection(1));
+        selection.step(1, 0);
+        assert_eq!(selection, CarriedSelection(1));
+        let items: Vec<Item> = [1, 2].map(|seed| Item::roll(Family::Mace, seed).unwrap()).into();
+        let lines = carried_lines(&items, CarriedSelection(1));
+        assert!(lines[0].starts_with("  1  ") && lines[1].starts_with("> 2  "), "{lines:?}");
+    }
+
+    #[test]
+    fn g_drops_the_chosen_item_where_it_can_be_picked_up_again() {
+        let mut level = fb_level::generate(1207);
+        level.items.clear();
+        let start = DebugPose::parse(&level, "1");
+        let item = Item::roll(Family::Mace, 1207).unwrap();
+        let keep = Item::roll(Family::Dagger, 7).unwrap();
+        let mut app = App::new();
+        app.add_plugins(bevy::transform::TransformPlugin)
+            .insert_resource(CurrentLevel(level))
+            .insert_resource(Carried(vec![keep.clone(), item.clone()]))
+            .init_resource::<CarriedSelection>()
+            .init_resource::<Aimed>()
+            .init_resource::<BlockedCells>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<crate::render::ToonMaterial>>()
+            .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<crate::render::OutlineMaterials>()
+            .add_systems(Update, (aim, pick_up, choose_carried, drop_carried).chain());
+        let eye = start.eye();
+        let camera = app.world_mut().spawn((PlayerCamera, Equipped, eye)).id();
+        let press = |app: &mut App, key: KeyCode| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(key);
+            app.update();
+            // As Bevy's input system does at the start of the next frame.
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+        };
+
+        // Choose the second item with 2, then set it down with G.
+        press(&mut app, KeyCode::Digit2);
+        assert_eq!(*app.world().resource::<CarriedSelection>(), CarriedSelection(1));
+        press(&mut app, DROP_KEY);
+        assert_eq!(app.world().resource::<Carried>().0, vec![keep.clone()]);
+        assert_eq!(*app.world().resource::<CarriedSelection>(), CarriedSelection(0));
+        let mut floor = app.world_mut().query::<(Entity, &Transform, &FloorItem)>();
+        let (dropped, at, spot) = floor.single(app.world()).map(|(e, t, f)| (e, *t, f.spot)).unwrap();
+        assert_eq!(app.world().resource::<CurrentLevel>().0.items, vec![spot]);
+        // In front of the player, on open floor, within reach.
+        let ahead = (at.translation - eye.translation).xz();
+        assert!(ahead.dot(eye.forward().as_vec3().xz()) > 0.0, "{ahead}");
+        let reach = Vec3::new(spot.x * CELL, 0.0, spot.y * CELL).distance(eye.translation);
+        assert!(reach < REACH, "{reach}");
+        assert!(app.world().resource::<CurrentLevel>().0.is_open(spot.x.floor() as i32, spot.y.floor() as i32));
+        // Resting like a spawned item: lowest point on the floor.
+        let points = item_points(&item.build());
+        let low = points.iter().map(|&p| at.transform_point(p).y).fold(f32::INFINITY, f32::min);
+        assert!(low.abs() < 1e-3, "{low}");
+
+        // Look down at it and pick it up again with E.
+        let target = Vec3::new(spot.x * CELL, 0.5, spot.y * CELL);
+        *app.world_mut().get_mut::<Transform>(camera).unwrap() = eye.looking_at(target, Vec3::Y);
+        // One frame to carry the turn to its global transform, one to aim with it.
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Aimed>().0, Some(dropped));
+        press(&mut app, KeyCode::KeyE);
+        assert_eq!(app.world().resource::<Carried>().0, vec![keep, item]);
+        assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
     }
 
     #[test]
