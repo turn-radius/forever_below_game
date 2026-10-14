@@ -2,10 +2,14 @@
 //! Used to check scenes visually where window screenshots come back black.
 //!
 //! `FB_SCREENSHOT=path.png cargo run -p forever_below` turns it on via [`FrameCapturePlugin::from_env`].
+//! Adding `FB_SCREENSHOT_FRAMES=120..136` saves a run of consecutive frames instead, as
+//! `path_120.png` up to `path_135.png`, to compare frame by frame.
 //!
 //! A capture shows exactly what its command line and environment ask for. The window still
 //! opens, and on macOS it takes focus, so keys typed meant for a terminal (two W presses step
 //! the turntable to battle worn) would otherwise reach the scene; [`IgnoreInput`] drops them.
+
+use std::ops::Range;
 
 use bevy::{
     camera::{CameraUpdateSystems, RenderTarget, ShadowLodOrigin},
@@ -20,25 +24,80 @@ use bevy::{
     },
 };
 
-/// Retargets the cameras that draw to the window to an offscreen image, saves frame `capture_frame` to `path` and exits
-/// at `exit_frame`. Frames before the capture let assets load and shaders compile.
+/// Retargets the cameras that draw to the window to an offscreen image, saves each frame in
+/// `frames` and exits at `exit_frame`. Frames before the capture let assets load and shaders
+/// compile.
 #[derive(Resource, Clone, Debug)]
 pub struct FrameCapturePlugin {
     pub path: String,
     pub size: UVec2,
-    pub capture_frame: u32,
+    /// The frames to save. One frame is saved to `path` itself; a longer run saves each frame
+    /// `n` to `path` with `_n` before its extension ([`FrameCapturePlugin::path_for`]).
+    pub frames: Range<u32>,
     pub exit_frame: u32,
 }
 
 impl FrameCapturePlugin {
+    /// Frames left after the last capture for its readback to reach the disk.
+    const SETTLE_FRAMES: u32 = 60;
+
     pub fn new(path: impl Into<String>) -> Self {
-        FrameCapturePlugin { path: path.into(), size: UVec2::new(1920, 1080), capture_frame: 120, exit_frame: 180 }
+        FrameCapturePlugin::frames(path, 120..121)
     }
 
-    /// The plugin when `FB_SCREENSHOT` is set.
-    pub fn from_env() -> Option<Self> {
-        std::env::var("FB_SCREENSHOT").ok().filter(|path| !path.is_empty()).map(FrameCapturePlugin::new)
+    /// Saves every frame in `frames` (at least one).
+    pub fn frames(path: impl Into<String>, frames: Range<u32>) -> Self {
+        let frames = frames.start..frames.end.max(frames.start + 1);
+        let exit_frame = frames.end + Self::SETTLE_FRAMES;
+        FrameCapturePlugin { path: path.into(), size: UVec2::new(1920, 1080), frames, exit_frame }
     }
+
+    /// The plugin when `FB_SCREENSHOT` is set, saving the frames `FB_SCREENSHOT_FRAMES` names.
+    pub fn from_env() -> Option<Self> {
+        let path = std::env::var("FB_SCREENSHOT").ok().filter(|path| !path.is_empty())?;
+        let frames = std::env::var("FB_SCREENSHOT_FRAMES").ok().filter(|f| !f.is_empty());
+        match frames.as_deref().map(parse_frames) {
+            None => Some(FrameCapturePlugin::new(path)),
+            Some(Ok(frames)) => Some(FrameCapturePlugin::frames(path, frames)),
+            Some(Err(error)) => {
+                warn!("FB_SCREENSHOT_FRAMES: {error}; saving one frame");
+                Some(FrameCapturePlugin::new(path))
+            }
+        }
+    }
+
+    /// Where frame `frame` is saved: `path` for a single frame, else `path` with `_<frame>`
+    /// before its extension (`shot.png` frame 120 is `shot_120.png`).
+    pub fn path_for(&self, frame: u32) -> String {
+        if self.frames.len() <= 1 {
+            return self.path.clone();
+        }
+        let path = std::path::Path::new(&self.path);
+        let stem = path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+        let name = match path.extension() {
+            Some(ext) => format!("{stem}_{frame}.{}", ext.to_string_lossy()),
+            None => format!("{stem}_{frame}"),
+        };
+        path.with_file_name(name).to_string_lossy().into_owned()
+    }
+}
+
+/// Frames to capture written as a Rust range: `120..136` (120 to 135), `120..=135`, or one
+/// frame, `120`.
+pub fn parse_frames(spec: &str) -> Result<Range<u32>, String> {
+    let number = |s: &str| s.trim().parse::<u32>().map_err(|_| format!("{s:?} is not a frame number"));
+    let range = if let Some((start, end)) = spec.split_once("..=") {
+        number(start)?..number(end)? + 1
+    } else if let Some((start, end)) = spec.split_once("..") {
+        number(start)?..number(end)?
+    } else {
+        let frame = number(spec)?;
+        frame..frame + 1
+    };
+    if range.is_empty() {
+        return Err(format!("{spec:?} holds no frames"));
+    }
+    Ok(range)
 }
 
 impl Plugin for FrameCapturePlugin {
@@ -129,10 +188,34 @@ fn capture_and_exit(
 ) {
     let Some(target) = target else { return };
     *frame += 1;
-    if *frame == settings.capture_frame {
-        commands.spawn(Screenshot::image(target.0.clone())).observe(save_to_disk(settings.path.clone()));
+    if settings.frames.contains(&*frame) {
+        commands.spawn(Screenshot::image(target.0.clone())).observe(save_to_disk(settings.path_for(*frame)));
     }
     if *frame == settings.exit_frame {
         exit.write(AppExit::Success);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frames_read_as_rust_ranges() {
+        assert_eq!(parse_frames("120..136"), Ok(120..136));
+        assert_eq!(parse_frames("120..=135"), Ok(120..136));
+        assert_eq!(parse_frames("150"), Ok(150..151));
+        assert!(parse_frames("136..120").is_err());
+        assert!(parse_frames("soon").is_err());
+    }
+
+    #[test]
+    fn a_run_of_frames_numbers_each_file() {
+        let one = FrameCapturePlugin::new("out/shot.png");
+        assert_eq!(one.path_for(120), "out/shot.png");
+        let run = FrameCapturePlugin::frames("out/shot.png", 120..136);
+        assert_eq!(run.path_for(120), "out/shot_120.png");
+        assert_eq!(run.path_for(135), "out/shot_135.png");
+        assert_eq!(run.exit_frame, 136 + FrameCapturePlugin::SETTLE_FRAMES);
     }
 }
