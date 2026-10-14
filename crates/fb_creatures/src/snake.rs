@@ -11,7 +11,11 @@
 //! the jaw drops.
 //!
 //! Lengths, girths, colourings and patterns are our own proposal, after vipers and pit vipers
-//! for the poisonous snake and boas and pythons for the constrictor.
+//! for the poisonous snake and boas and pythons for the constrictor. Both are drawn bigger than
+//! their SRD size, so they read as a threat across a room ([`SnakeState::drawn_size`]): a viper
+//! of 1.5 to 2.5 m (the SRD's poisonous snake is Tiny, a short coil on the floor) and a
+//! constrictor of 4 to 6 m, heavy in the body. Only the drawing departs; hit points and bite
+//! stay the stat block's.
 
 use armory::fabric::{PatternKind, SurfacePattern};
 use armory::geom::vec3::{self, V3};
@@ -190,8 +194,10 @@ impl SnakeState {
         let species = if species.is_snake() { species } else { Species::PoisonousSnake };
         let mut rng = Mulberry32::new(seed ^ SNAKE_SALT);
         let constrictor = species == Species::ConstrictorSnake;
-        // A viper of a metre or so; a Large constrictor three to nearly four metres long.
-        let (length, girth) = if constrictor { (rng.range_f32(28.0, 38.0), rng.range_f32(0.6, 0.82)) } else { (rng.range_f32(8.5, 12.0), rng.range_f32(0.17, 0.24)) };
+        // A viper of 1.5 to 2.5 m, as thick as a forearm (a Gaboon viper's build); a
+        // constrictor of 4 to 6 m, as thick as a thigh (a python's). Our own departure from the
+        // SRD's sizes ([`SnakeState::drawn_size`]).
+        let (length, girth) = if constrictor { (rng.range_f32(40.0, 60.0), rng.range_f32(1.25, 1.7)) } else { (rng.range_f32(15.0, 25.0), rng.range_f32(0.42, 0.6)) };
         let colouring = if constrictor {
             *rng.weighted(&[(SnakeColouring::Earth, 3), (SnakeColouring::Sand, 3), (SnakeColouring::Moss, 2), (SnakeColouring::Night, 2), (SnakeColouring::Ash, 1)])
         } else {
@@ -217,8 +223,17 @@ impl SnakeState {
         }
     }
 
+    /// Its SRD size category, which its hit points and bite go with.
     pub fn size(&self) -> Size {
         self.species.stat_block().size
+    }
+
+    /// The size its body is drawn at: a viper Medium where the SRD's poisonous snake is Tiny,
+    /// a constrictor Large as in the SRD but longer than the SRD's picture of it. Our own
+    /// departure, so a snake reads as a threat across a room; coiled, it fits this size's
+    /// space.
+    pub fn drawn_size(&self) -> Size {
+        if self.species == Species::ConstrictorSnake { Size::Large } else { Size::Medium }
     }
 
     pub fn dims(&self) -> SnakeDims {
@@ -230,7 +245,7 @@ impl SnakeState {
             head_length,
             body_length,
             segment: body_length / SEGMENTS as f32,
-            neck: body_length * if constrictor { 0.24 } else { 0.3 },
+            neck: body_length * if constrictor { 0.3 } else { 0.4 },
             coil_inner: 1.6 * self.girth,
             coil_spacing: 2.15 * self.girth / TAU,
             constrictor,
@@ -608,18 +623,19 @@ mod tests {
     }
 
     #[test]
-    fn snakes_fill_their_srd_size() {
+    fn snakes_are_drawn_bigger_than_their_srd_size() {
         for seed in 0..24 {
             for species in [Species::PoisonousSnake, Species::ConstrictorSnake] {
                 let snake = SnakeState::roll_as(seed, species);
-                let size = snake.size();
                 let (lo, hi) = snake.build().rest_mesh().bounds().unwrap();
-                // Coiled at rest it fits its space; laid out, it is longer than the size below.
+                // Coiled at rest it fits the space of the size it is drawn at.
                 let across = (hi[0] - lo[0]).max(hi[2] - lo[2]);
-                assert!(across <= size.space(), "{species:?} {seed}: coiled {across} > {}", size.space());
-                if let Some(smaller) = size.smaller() {
-                    assert!(snake.length > smaller.space(), "{species:?} {seed}");
-                }
+                let space = snake.drawn_size().space();
+                assert!(across <= space, "{species:?} {seed}: coiled {across} > {space}");
+                // 1.5 to 2.5 m for a viper, 4 to 6 m for a constrictor.
+                let (short, long) = if species == Species::ConstrictorSnake { (40.0, 60.0) } else { (15.0, 25.0) };
+                assert!((short..=long).contains(&snake.length), "{species:?} {seed}: {}", snake.length);
+                assert!(snake.drawn_size() > snake.size() || species == Species::ConstrictorSnake);
                 assert!(lo[1] > -0.05 * snake.girth && lo[1] < 0.05 * snake.girth, "{species:?} {seed}: lowest point {}", lo[1]);
             }
         }

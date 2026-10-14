@@ -165,9 +165,11 @@ impl RatState {
         let species = if species.is_rat() { species } else { Species::Rat };
         let mut rng = Mulberry32::new(seed ^ RAT_SALT);
         let giant = species == Species::GiantRat;
-        // A brown rat is about 20 to 26 cm nose to rump; a giant rat, Small, is the size of a
-        // terrier. Our own sizes.
-        let length = if giant { rng.range_f32(5.5, 7.5) } else { rng.range_f32(2.0, 2.6) };
+        // A rat of 45 to 60 cm nose to rump, twice a brown rat's, and a giant rat of 1 to 1.5 m
+        // that stands to a delver's shin or knee: our own departure from the SRD's sizes
+        // ([`RatState::drawn_size`]), so a pack reads as a threat. Hit points and bite stay
+        // the stat block's.
+        let length = if giant { rng.range_f32(10.0, 15.0) } else { rng.range_f32(4.5, 6.0) };
         let colouring = *rng.weighted(&[(RatColouring::Agouti, 6), (RatColouring::Black, 4), (RatColouring::Blue, 2), (RatColouring::Fawn, 1), (RatColouring::Albino, 1)]);
         let pattern = *rng.weighted(&[(RatPattern::Plain, 6), (RatPattern::Berkshire, 2), (RatPattern::Hooded, 1), (RatPattern::Variegated, 1)]);
         RatState {
@@ -211,6 +213,24 @@ impl RatState {
             tail_length: self.tail * l,
             tail_radius: 0.045 * l * girth,
         }
+    }
+
+    /// Its SRD size category, which its hit points and bite go with.
+    pub fn size(&self) -> Size {
+        self.species.stat_block().size
+    }
+
+    /// The size its body is drawn at, one up from the SRD's: a rat Small where the SRD's is
+    /// Tiny, a giant rat Medium where the SRD's is Small. Our own departure; its body, nose to
+    /// rump, fits this size's space.
+    pub fn drawn_size(&self) -> Size {
+        if self.species == Species::GiantRat { Size::Medium } else { Size::Small }
+    }
+
+    /// How high its back stands off the floor at rest, world units.
+    pub fn height(&self) -> f32 {
+        let d = self.dims();
+        d.centre_height + d.half_height
     }
 
     /// The circle it covers on the floor, about its centre: its body, nose to rump.
@@ -570,13 +590,6 @@ fn tail_segment(length: f32, r0: f32, r1: f32, tip: bool) -> MeshBuilder {
     lathe(&profile, &LatheOptions::new(10, Shading::SMOOTH))
 }
 
-impl RatState {
-    /// The size category it should fill (the stat block's).
-    pub fn size(&self) -> Size {
-        self.species.stat_block().size
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,11 +635,12 @@ mod tests {
     }
 
     #[test]
-    fn rats_fill_their_srd_size() {
+    fn rats_are_drawn_a_size_up_from_the_srd() {
         for seed in 0..32 {
             for species in [Species::Rat, Species::GiantRat] {
                 let rat = RatState::roll_as(seed, species);
-                let size = rat.size();
+                let size = rat.drawn_size();
+                assert_eq!(size.smaller(), Some(rat.size()));
                 let (lo, hi) = rat.build().rest_mesh().bounds().unwrap();
                 let body = rat.length;
                 let whole = (hi[2] - lo[2]).max(hi[0] - lo[0]);
@@ -634,6 +648,13 @@ mod tests {
                 assert!(body <= size.space(), "{species:?} {seed}: {body} > {}", size.space());
                 if let Some(smaller) = size.smaller() {
                     assert!(whole > smaller.space(), "{species:?} {seed}: {whole} fits a {smaller:?} space");
+                }
+                // 45 to 60 cm for a rat; a giant rat 1 to 1.5 m, its back at a delver's shin or
+                // knee (a 17-unit human's shin is about 3 units up, the knee 4.8).
+                let (short, long) = if species == Species::GiantRat { (10.0, 15.0) } else { (4.5, 6.0) };
+                assert!((short..=long).contains(&body), "{species:?} {seed}: {body}");
+                if species == Species::GiantRat {
+                    assert!((3.0..=crate::pose::KNEE + 0.5).contains(&rat.height()), "{seed}: back at {}", rat.height());
                 }
                 // Standing on the floor, not in it or over it.
                 assert!(lo[1] > -0.02 * body && lo[1] < 0.02 * body, "{species:?} {seed}: lowest point {}", lo[1]);

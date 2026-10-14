@@ -124,14 +124,20 @@ pub fn reach(critter: &Critter) -> f32 {
     }
 }
 
-/// The circle a creature keeps clear of others and walls, world units: smaller than all of it,
-/// since a rat's tail and a snake's coils may brush past things.
+/// The circle a creature keeps clear of others and walls, world units. A rat's is smaller than
+/// all of it, since its tail may brush past things. A snake's is its coil, so it coils clear
+/// of the walls, but no wider than [`SNAKE_SQUEEZE`] so it still fits a doorway; laid out, its
+/// head leads from the root and the body follows the way the head went (`super::Trail`).
 pub fn body_radius(critter: &Critter) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => 0.3 * rat.length,
-        Creature::Snake(snake) => 2.5 * snake.girth,
+        Creature::Snake(_) => critter.radius.min(SNAKE_SQUEEZE),
     }
 }
+
+/// The widest a snake's [`body_radius`] gets, world units: under half a cell, so it passes a
+/// one-cell doorway or corridor. Our own.
+const SNAKE_SQUEEZE: f32 = 0.4 * CELL;
 
 /// Grid coordinates of a world `(x, z)`.
 fn grid(p: Vec2) -> (f32, f32) {
@@ -503,5 +509,74 @@ mod tests {
         assert!((notice_range(Species::Rat) - 30.0 * UNITS_PER_FOOT).abs() < 1e-3);
         assert!((notice_range(Species::GiantRat) - 60.0 * UNITS_PER_FOOT).abs() < 1e-3);
         assert!((notice_range(Species::PoisonousSnake) - 20.0 * UNITS_PER_FOOT).abs() < 1e-3);
+    }
+
+    #[test]
+    fn long_snakes_keep_their_bodies_out_of_the_rock() {
+        let level = fb_level::generate(1207);
+        // How deep a point lies in rock: 0 on open floor, else how far it is from the nearest
+        // open cell beside the rock cell it is in.
+        let depth = |x: f32, z: f32| {
+            let (cx, cz) = ((x / CELL).floor() as i32, (z / CELL).floor() as i32);
+            if level.is_open(cx, cz) {
+                return 0.0;
+            }
+            let mut nearest = f32::MAX;
+            for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                if level.is_open(cx + dx, cz + dz) {
+                    let (min, max) = (Vec2::new((cx + dx) as f32, (cz + dz) as f32) * CELL, Vec2::new((cx + dx + 1) as f32, (cz + dz + 1) as f32) * CELL);
+                    nearest = nearest.min(Vec2::new(x, z).distance(Vec2::new(x, z).clamp(min, max)));
+                }
+            }
+            nearest
+        };
+        // The player walks round the constrictor's room and out of its door, then round the
+        // viper's, so each snake rears, turns and follows.
+        let spots = [Vec2::new(11.0, 10.0), Vec2::new(13.5, 14.5), Vec2::new(10.5, 14.0), Vec2::new(16.0, 11.5), Vec2::new(23.0, 29.0), Vec2::new(27.5, 32.5), Vec2::new(23.0, 32.0)];
+        let (mut app, roots, player) = level_app(spots[0] * CELL);
+        let snakes: Vec<Entity> = roots.iter().copied().filter(|&r| app.world().get::<Critter>(r).unwrap().spot.species.is_snake()).collect();
+        assert!(snakes.len() >= 2);
+        let mut moved = 0.0;
+        let start: Vec<Vec2> = snakes.iter().map(|&s| position(&app, s)).collect();
+        for frame in 0..(spots.len() * 240) {
+            if frame % 240 == 0 {
+                let at = spots[frame / 240] * CELL;
+                app.world_mut().get_mut::<Transform>(player).unwrap().translation = Vec3::new(at.x, 0.0, at.y);
+            }
+            app.update();
+            if frame % 10 != 9 {
+                continue;
+            }
+            for &snake in &snakes {
+                let Creature::Snake(state) = app.world().get::<Critter>(snake).unwrap().creature.clone() else { unreachable!() };
+                let bones = app.world().get::<crate::creatures::Bones>(snake).unwrap().0.clone();
+                for (k, &bone) in bones.iter().enumerate().skip(fb_creatures::snake::bone::SPINE) {
+                    let at = app.world().get::<GlobalTransform>(bone).unwrap().translation();
+                    // The body may brush the wall; its centre line never enters the rock.
+                    let deep = depth(at.x, at.z);
+                    
+                    assert!(deep == 0.0, "{:?}: segment {k} {deep} into the rock at {at} (frame {frame})", state.species);
+                }
+            }
+        }
+        for (i, &snake) in snakes.iter().enumerate() {
+            moved += position(&app, snake).distance(start[i]);
+        }
+        assert!(moved > CELL, "the snakes stayed put");
+    }
+
+    #[test]
+    fn every_creature_fits_a_corridor_and_can_reach_past_its_own_body() {
+        for species in Species::ALL {
+            for seed in 0..32 {
+                let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species, seed, pack: 0 };
+                let creature = spot.creature();
+                let critter = Critter { spot, radius: creature.radius(), creature };
+                // Through a one-cell corridor or doorway, with room to spare.
+                assert!(2.0 * body_radius(&critter) < 0.9 * CELL, "{species:?} {seed}: {}", body_radius(&critter));
+                // Its bite reaches past the circles that keep it off the player.
+                assert!(reach(&critter) > body_radius(&critter) + BODY_RADIUS + 1.0, "{species:?} {seed}");
+            }
+        }
     }
 }

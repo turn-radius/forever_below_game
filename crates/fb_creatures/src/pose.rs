@@ -182,11 +182,27 @@ pub struct SnakePose {
     pub tongue: f32,
     /// How far the head turns toward its left (+X), radians.
     pub look: f32,
+    /// The way it came: how far the body's heading (the way it runs toward the head) turns
+    /// toward its left (+X) from straight ahead, radians, at [`BEND_KNOTS`] even steps from the neck (first) to the tail's tip
+    /// (last), so a laid-out body follows the path its front took rather than swinging round
+    /// as a whole. Ignored as it coils.
+    pub bend: [f32; BEND_KNOTS],
 }
+
+/// Knots along the body in [`SnakePose::bend`].
+pub const BEND_KNOTS: usize = 9;
 
 impl SnakePose {
     /// Coiled, the head raised a little in the middle: how a snake rests and waits.
-    pub const REST: SnakePose = SnakePose { phase: 0.0, pace: 0.0, coil: 1.0, rear: 0.45, strike: 0.0, jaw: 0.0, tongue: 0.0, look: 0.0 };
+    pub const REST: SnakePose = SnakePose { phase: 0.0, pace: 0.0, coil: 1.0, rear: 0.45, strike: 0.0, jaw: 0.0, tongue: 0.0, look: 0.0, bend: [0.0; BEND_KNOTS] };
+
+    /// The bend at `u` along the body (0 the neck, 1 the tail's tip), between its knots.
+    pub fn bend_at(&self, u: f32) -> f32 {
+        let x = u.clamp(0.0, 1.0) * (BEND_KNOTS - 1) as f32;
+        let k = (x.floor() as usize).min(BEND_KNOTS - 2);
+        let f = x - k as f32;
+        self.bend[k] * (1.0 - f) + self.bend[k + 1] * f
+    }
 }
 
 impl Default for SnakePose {
@@ -201,10 +217,24 @@ pub const WAVELENGTH: f32 = 0.55;
 const WAVE_ANGLE: f32 = 0.62;
 /// The rearing S's greatest heading off straight, radians.
 const NECK_ANGLE: f32 = 1.0;
+/// How high the front rears at full height, as a share of the neck's length: a viper stands
+/// tall, a constrictor's heavier body less so. Our own, set so both raise their head past a
+/// human's knee ([`KNEE`]).
+const VIPER_REAR: f32 = 0.82;
+const CONSTRICTOR_REAR: f32 = 0.6;
+/// The steepest the rearing neck climbs, as the sine of its angle off the floor (about 72°):
+/// a column, not a vertical stick.
+const MAX_CLIMB: f32 = 0.95;
+/// A human's knee height in world units: 0.285 of a 17-unit stature (Drillis and Contini's
+/// segment proportions, as tabled in D. A. Winter, *Biomechanics and Motor Control of Human
+/// Movement*, 4th ed., Wiley 2009, fig. 4.1). A rearing snake raises its head at least this
+/// high.
+pub const KNEE: f32 = 0.285 * 17.0;
 
 /// Where the snake's spine lies for `pose`: the centre line's point and heading at `samples`
 /// distances from the neck (0) to the tail tip, each `(point, toward the head)`, in creature
-/// space with the body's middle (behind the neck) on the origin.
+/// space: coiled, the body's middle (behind the neck) on the origin; laid out, the neck on it
+/// and the body trailing behind.
 pub fn snake_spine(state: &SnakeState, pose: &SnakePose, samples: usize) -> Vec<(V3, V3)> {
     let d = state.dims();
     let body = d.body_length;
@@ -216,31 +246,69 @@ pub fn snake_spine(state: &SnakeState, pose: &SnakePose, samples: usize) -> Vec<
     let neck = d.neck;
     let raise = pose.rear.clamp(0.0, 1.0);
     let strike = pose.strike.clamp(0.0, 1.0);
-    // Heading at distance `s` from the neck: blend of the slither and the coil, with the
-    // rearing S in the neck that a strike straightens.
-    let heading = |s: f32| {
-        let slither = amplitude * (TAU * s / lambda - pose.phase).sin();
-        let spiral = state.hand * ((a * a + 2.0 * b * s).sqrt() - a) / b;
+    // Heading at distance `s` from the neck, laid out (the slither along the way it came) or
+    // coiled (the spiral), with the rearing S in the neck that a strike straightens.
+    let heading = |s: f32, coiled: bool| {
         let s_curve = if s < neck { NECK_ANGLE * raise * (1.0 - strike) * (TAU * s / neck).sin() * (1.0 - s / neck) } else { 0.0 };
-        (1.0 - pose.coil) * slither + pose.coil * spiral + s_curve
+        let lie = if coiled {
+            state.hand * ((a * a + 2.0 * b * s).sqrt() - a) / b
+        } else {
+            amplitude * (TAU * s / lambda - pose.phase).sin() + pose.bend_at(s / body)
+        };
+        lie + s_curve
     };
-    // Height of the centre line: belly on the floor, the neck lifted when rearing.
-    let lift_height = neck * if d.constrictor { 0.45 } else { 0.55 } * raise * (1.0 - 0.35 * strike);
+    // Height of the centre line: belly on the floor, the neck lifted when rearing, in an
+    // S of its own: level under the head, a steep column, then down to the floor.
+    let lift_height = neck * if d.constrictor { CONSTRICTOR_REAR } else { VIPER_REAR } * raise * (1.0 - 0.35 * strike);
+    let profile = |s: f32| lift_height * (1.0 - smoothstep(s / neck));
     // The head is deeper than the neck: the neck rises to carry it clear of the floor.
     let head_clear = (state.head_depth() - SnakeState::belly_depth(state.radius_at(0.0))).max(0.0);
-    let lift = |s: f32| (lift_height * (1.0 - smoothstep(s / neck))).max(head_clear * (1.0 - smoothstep(s / (1.5 * d.segment))));
-    let mut points: Vec<V3> = Vec::with_capacity(samples);
-    let mut p = [0.0f32, 0.0];
-    for i in 0..=steps {
-        let s = i as f32 * step;
-        let r = state.radius_at(s / body);
-        points.push([p[0], SnakeState::belly_depth(r) + lift(s), p[1]]);
-        // Step back along the body, a level step shortened by the climb.
-        let climb = lift(s + step) - lift(s);
-        let level = (step * step - climb * climb).max(0.09 * step * step).sqrt();
-        let h = heading(s + 0.5 * step);
-        p = [p[0] - level * h.sin(), p[1] - level * h.cos()];
+    let clear = |s: f32| head_clear * (1.0 - smoothstep(s / (1.5 * d.segment)));
+    // Built up from the tail toward the head, never climbing steeper than [`MAX_CLIMB`], so
+    // every step keeps its length however high the front rears.
+    let mut lift = vec![0.0f32; steps + 2];
+    for i in (0..=steps).rev() {
+        let (s, behind) = (i as f32 * step, (i + 1) as f32 * step);
+        let climb = (profile(s) - profile(behind)).clamp(-MAX_CLIMB * step, MAX_CLIMB * step);
+        lift[i] = lift[i + 1] + climb;
     }
+    for (i, l) in lift.iter_mut().enumerate() {
+        *l = l.max(clear(i as f32 * step));
+    }
+    // The centre line walked back from the neck along one way of lying.
+    let walk = |coiled: bool| {
+        let mut points: Vec<V3> = Vec::with_capacity(samples);
+        let mut p = [0.0f32, 0.0];
+        for i in 0..=steps {
+            let s = i as f32 * step;
+            let r = state.radius_at(s / body);
+            points.push([p[0], SnakeState::belly_depth(r) + lift[i], p[1]]);
+            // Step back along the body, a level step shortened by the climb.
+            let climb = lift[i + 1] - lift[i];
+            let level = (step * step - climb * climb).max(0.09 * step * step).sqrt();
+            let h = heading(s + 0.5 * step, coiled);
+            p = [p[0] - level * h.sin(), p[1] - level * h.cos()];
+        }
+        points
+    };
+    // Laid out, the neck leads from the origin and the body trails behind it, so whatever
+    // moves the creature moves its head, and the body follows the way the head went
+    // ([`SnakePose::bend`]). Coiled, the body behind the neck holds its place: its middle on
+    // the origin.
+    let laid = walk(false);
+    let mut coiled = walk(true);
+    let behind = (neck / step).ceil() as usize;
+    let mid = coiled[behind.min(steps)..].iter().fold([0.0f32; 2], |m, p| [m[0] + p[0], m[1] + p[2]]);
+    let n = (steps + 1).saturating_sub(behind).max(1) as f32;
+    for point in &mut coiled {
+        point[0] -= mid[0] / n;
+        point[2] -= mid[1] / n;
+    }
+    // Between the two, each point slides from one to the other, so a body coiling or uncoiling
+    // stays between where it lay and where it is going rather than sweeping round as its
+    // headings blend. Our own choice.
+    let coil = pose.coil.clamp(0.0, 1.0);
+    let mut points: Vec<V3> = laid.iter().zip(&coiled).map(|(l, c)| [l[0] + coil * (c[0] - l[0]), l[1], l[2] + coil * (c[2] - l[2])]).collect();
     // A strike throws the neck forward along its own line, beyond what straightening gives.
     let throw = 1.6 * d.girth * strike;
     for (i, point) in points.iter_mut().enumerate() {
@@ -248,14 +316,6 @@ pub fn snake_spine(state: &SnakeState, pose: &SnakePose, samples: usize) -> Vec<
         if s < neck {
             point[2] += throw * (1.0 - s / neck);
         }
-    }
-    // The body behind the neck holds its place: its middle on the origin.
-    let behind: Vec<&V3> = points.iter().enumerate().filter(|(i, _)| *i as f32 * step >= neck).map(|(_, p)| p).collect();
-    let mid = behind.iter().fold([0.0f32; 2], |m, p| [m[0] + p[0], m[1] + p[2]]);
-    let mid = [mid[0] / behind.len().max(1) as f32, mid[1] / behind.len().max(1) as f32];
-    for point in &mut points {
-        point[0] -= mid[0];
-        point[2] -= mid[1];
     }
     (0..points.len())
         .map(|i| {
@@ -422,7 +482,7 @@ mod tests {
                     for rear in [0.0, 1.0] {
                         for strike in [0.0, 1.0] {
                             for k in 0..6 {
-                                let pose = SnakePose { phase: k as f32, pace: 1.0, coil, rear, strike, jaw: strike * rear, tongue: 0.5, look: 0.0 };
+                                let pose = SnakePose { phase: k as f32, pace: 1.0, coil, rear, strike, jaw: strike * rear, tongue: 0.5, look: 0.0, bend: [0.0; BEND_KNOTS] };
                                 let low = lowest(&rig, &snake(&state, &pose));
                                 assert!(low > -0.06 * r, "{species:?} {seed} sinks to {low} in {pose:?}");
                                 assert!(low < 0.06 * r, "{species:?} {seed} floats at {low} in {pose:?}");
@@ -457,5 +517,41 @@ mod tests {
         let flat = head(SnakePose { rear: 0.0, ..SnakePose::REST });
         assert!(vec3::distance(drawn, struck) > state.girth, "{drawn:?} {struck:?}");
         assert!(drawn[1] > flat[1] + 2.0 * state.girth);
+    }
+
+    #[test]
+    fn a_rearing_snake_raises_its_head_past_the_knee() {
+        for species in [Species::PoisonousSnake, Species::ConstrictorSnake] {
+            for seed in 0..24 {
+                let state = SnakeState::roll_as(seed, species);
+                for coil in [0.0, 1.0] {
+                    let head = snake(&state, &SnakePose { rear: 1.0, coil, ..SnakePose::REST })[snake_bone::HEAD];
+                    assert!(head.origin[1] >= KNEE, "{species:?} {seed} (coil {coil}): head at {}", head.origin[1]);
+                    // Held level, hooded over the column of its neck, not pointing at the roof.
+                    let snout = head.rotation.transform([0.0, 1.0, 0.0]);
+                    assert!(snout[1].abs() < 0.5, "{species:?} {seed}: snout {snout:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_laid_out_body_follows_the_bend_it_is_given() {
+        let state = SnakeState::roll_as(3, Species::ConstrictorSnake);
+        let laid = SnakePose { coil: 0.0, rear: 0.0, pace: 0.0, ..SnakePose::REST };
+        // The way it came curves off to its left behind the neck.
+        let mut bend = [0.0; BEND_KNOTS];
+        for (k, b) in bend.iter_mut().enumerate() {
+            *b = 0.9 * k as f32 / (BEND_KNOTS - 1) as f32;
+        }
+        let straight = snake_spine(&state, &laid, 41);
+        let curved = snake_spine(&state, &SnakePose { bend, ..laid }, 41);
+        let tail = |spine: &[(V3, V3)]| vec3::sub(spine[40].0, spine[0].0);
+        // The body behind ran toward its left (+X) to reach the neck, so the tail lies off to
+        // its right (-X).
+        assert!(tail(&straight)[0] - tail(&curved)[0] > 0.2 * state.length, "{:?} vs {:?}", tail(&curved), tail(&straight));
+        // Coiled, the bend is ignored.
+        let (bent, rest) = (snake_spine(&state, &SnakePose { bend, ..SnakePose::REST }, 41), snake_spine(&state, &SnakePose::REST, 41));
+        assert!(bent.iter().zip(&rest).all(|(a, b)| vec3::distance(a.0, b.0) < 1e-3));
     }
 }

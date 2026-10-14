@@ -243,7 +243,7 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
                     ViewMotion::Moving => (0.0, 0.0),
                     ViewMotion::Rearing | ViewMotion::Striking => (0.65, 1.0),
                 };
-                pose::snake(snake, &SnakePose { phase: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, coil, rear, strike, jaw: strike, tongue: tongue_flick(t), look: 0.0 })
+                pose::snake(snake, &SnakePose { phase: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, coil, rear, strike, jaw: strike, tongue: tongue_flick(t), look: 0.0, ..SnakePose::REST })
             }
         };
         for (entity, place) in shown.bones.iter().zip(&places) {
