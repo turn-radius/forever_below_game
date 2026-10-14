@@ -1,6 +1,7 @@
 //! The Armory turntable: a grid of items from consecutive seeds of one family, each spinning
 //! slowly over a name label, and a close-up of any one of them. Works for every family
-//! [`Item`] can roll.
+//! [`Item`] can roll. On the grid, flat items tip toward the camera and small ones are
+//! magnified ([`GridPose`]); labels give each item's true size.
 //!
 //! Keys: the arrows move the selection (stepping off either end of the page turns it),
 //! Page Up/Down turn the page, Tab and Shift+Tab switch family, W steps the condition from
@@ -59,6 +60,14 @@ const MIN_CELL_WIDTH: f32 = 240.0;
 const LABEL_WIDTH: f32 = 320.0;
 /// How far from the page the grid camera sits; orthographic, so only the clip range cares.
 const GRID_CAMERA_DISTANCE: f32 = 100.0;
+/// On the grid, an item shorter than this share of the width it sweeps lies flat (keys,
+/// lockpicks, a coiled rope), so it is tipped this far toward the camera to show its face
+/// rather than its edge. The close-up shows it level.
+const FLAT_SHARE: f32 = 0.3;
+const FLAT_TILT: f32 = 0.6;
+/// On the grid, an item filling less than this share of a cell sized for the page's largest
+/// item is magnified to this share, and its label says so.
+const MIN_FILL: f32 = 0.5;
 /// The Armory's plate, ink and accent (`--plate`, `--plate-ink` and `--accent` in
 /// `reference/spline-armory.html`), so items read against it as they do there.
 const PLATE: Color = Color::srgb(0xdf as f32 / 255.0, 0xe3 as f32 / 255.0, 0xe0 as f32 / 255.0);
@@ -305,6 +314,60 @@ pub fn framing_distance(size: Vec3, perspective: &PerspectiveProjection, fill: f
     fit_height.max(fit_width) + radius
 }
 
+/// How an item stands in its grid cell: tipped toward the camera if it lies flat, and
+/// magnified if it would be lost in a cell sized for the largest item on the page. The
+/// close-up ignores both.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridPose {
+    /// Radians the top tips toward the camera.
+    pub tilt: f32,
+    pub scale: f32,
+}
+
+impl GridPose {
+    /// The pose for an item of bounds `size` on a page whose largest grid box is `largest`.
+    pub fn of(size: Vec3, largest: Vec2) -> Self {
+        let tilt = grid_tilt(size);
+        let own = grid_box(size, tilt);
+        let fit = (largest / own.max(Vec2::splat(f32::EPSILON))).min_element();
+        // Within a few percent of true size is left at true size, so the label's note means
+        // something.
+        let scale = fit * MIN_FILL;
+        GridPose { tilt, scale: if scale > 1.05 { scale } else { 1.0 } }
+    }
+
+    /// Whether the grid shows the item larger than life.
+    pub fn magnified(&self) -> bool {
+        self.scale > 1.0
+    }
+
+    /// The pivot's rotation on the grid at spin angle `angle`.
+    pub fn rotation(&self, angle: f32) -> Quat {
+        Quat::from_rotation_x(self.tilt) * Quat::from_rotation_y(angle)
+    }
+}
+
+/// How far an item of bounds `size` tips toward the grid camera: [`FLAT_TILT`] if it lies
+/// flat, otherwise none.
+pub fn grid_tilt(size: Vec3) -> f32 {
+    if size.y < FLAT_SHARE * size.x.hypot(size.z) { FLAT_TILT } else { 0.0 }
+}
+
+/// The width and height an item of bounds `size` takes on screen as it spins about its
+/// vertical axis tipped `tilt` toward an orthographic camera: the swept cylinder's
+/// silhouette.
+pub fn grid_box(size: Vec3, tilt: f32) -> Vec2 {
+    let swept = size.x.hypot(size.z);
+    Vec2::new(swept, size.y * tilt.cos() + swept * tilt.sin())
+}
+
+/// An item's true size for its label: its longest side, in centimetres up to a metre and in
+/// metres beyond (1 world unit = 10 cm).
+pub fn true_size(size: Vec3) -> String {
+    let cm = size.max_element() * 10.0;
+    if cm < 100.0 { format!("{cm:.0} cm") } else { format!("{:.1} m", cm / 100.0) }
+}
+
 /// Spin angle shared by every slot, so rebuilding a page keeps the motion continuous.
 #[derive(Resource, Default)]
 struct Spin {
@@ -319,8 +382,8 @@ struct Spin {
 /// and labels get a band of their own in pixels under them.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 struct PageLayout {
-    /// Bounds of the largest item on the page, axis by axis.
-    item: Vec3,
+    /// The largest [`grid_box`] on the page, axis by axis, before magnification.
+    item: Vec2,
     /// The viewport, in logical pixels.
     viewport: Vec2,
     /// World units per logical pixel.
@@ -330,17 +393,17 @@ struct PageLayout {
 
 impl Default for PageLayout {
     fn default() -> Self {
-        PageLayout::fit(FALLBACK_ITEM_SIZE, Vec2::new(1920.0, 1080.0))
+        PageLayout::fit(grid_box(FALLBACK_ITEM_SIZE, 0.0), Vec2::new(1920.0, 1080.0))
     }
 }
 
 impl PageLayout {
-    /// The layout that fits a page whose largest item is `item` (bounds size) into
-    /// `viewport` (logical pixels): each cell holds the item's full height and the width it
-    /// sweeps as it spins, plus a margin, above a label band.
-    fn fit(item: Vec3, viewport: Vec2) -> Self {
+    /// The layout that fits a page whose largest item takes `item` on screen (its
+    /// [`grid_box`]) into `viewport` (logical pixels): each cell holds that box plus a
+    /// margin, above a label band.
+    fn fit(item: Vec2, viewport: Vec2) -> Self {
         let grid = Vec2::new(COLUMNS as f32, ROWS as f32);
-        let item_box = Vec2::new(item.x.hypot(item.z), item.y) * (1.0 + ITEM_MARGIN);
+        let item_box = item * (1.0 + ITEM_MARGIN);
         // Pixels left for the items once margins and labels are taken.
         let room = viewport - Vec2::new(2.0 * EDGE_MARGIN, STATUS_HEIGHT + EDGE_MARGIN + ROWS as f32 * LABEL_HEIGHT);
         let pixel = (item_box * grid / room.max(Vec2::ONE)).max_element().max(f32::EPSILON);
@@ -397,6 +460,8 @@ struct Slot {
     index: usize,
     /// Size of the item's bounds.
     size: Vec3,
+    /// How it stands on the grid.
+    pose: GridPose,
 }
 
 /// The name label under grid slot `index`.
@@ -548,15 +613,25 @@ fn show_page(
     let items: Vec<(u32, Option<Item>)> = turntable.seeds().map(|seed| (seed, Item::roll(turntable.family, seed))).collect();
     let meshes: Vec<_> = items.iter().map(|(_, item)| item.as_ref().map(Item::build).unwrap_or_default()).collect();
     let bounds: Vec<_> = meshes.iter().map(item_bounds).collect();
-    let largest = bounds.iter().flatten().map(|b| Vec3::from(b.max - b.min)).reduce(Vec3::max);
-    *layout = PageLayout::fit(largest.unwrap_or(FALLBACK_ITEM_SIZE), layout.viewport);
+    let sizes: Vec<Vec3> = bounds.iter().map(|b| b.map_or(FALLBACK_ITEM_SIZE, |b| Vec3::from(b.max - b.min))).collect();
+    let largest = page_box(&sizes);
+    *layout = PageLayout::fit(largest, layout.viewport);
 
     for (index, (((seed, item), mesh), bounds)) in items.iter().zip(&meshes).zip(&bounds).enumerate() {
         let centre = layout.slot(index);
+        let size = sizes[index];
+        let pose = GridPose::of(size, largest);
+        let mut caption = format!("{}\n{seed}", item_name(turntable.family, item.as_ref()));
+        if item.is_some() {
+            caption += &format!("   {}", true_size(size));
+            if pose.magnified() {
+                caption += &format!("   shown x{:.1}", pose.scale);
+            }
+        }
         commands.spawn((
             OnPage,
             Label { index },
-            Text::new(format!("{}\n{seed}", item_name(turntable.family, item.as_ref()))),
+            Text::new(caption),
             TextFont::from_font_size(17.0),
             TextColor(PLATE_INK),
             TextLayout::justify(Justify::Center),
@@ -565,9 +640,9 @@ fn show_page(
             Visibility::Hidden,
         ));
         let Some(item) = item else { continue };
-        let size = bounds.map_or(FALLBACK_ITEM_SIZE, |b| Vec3::from(b.max - b.min));
-        let slot =
-            commands.spawn((OnPage, Slot { index, size }, Transform::from_translation(centre), Visibility::default())).id();
+        let slot = commands
+            .spawn((OnPage, Slot { index, size, pose }, Transform::from_translation(centre), Visibility::default()))
+            .id();
         let offset = bounds.map_or(Vec3::Y * -FALLBACK_ITEM_SIZE.y * 0.5, |b| -Vec3::from(b.center()));
         spawner.spawn(mesh, &turntable.appearance(item)).insert((Transform::from_translation(offset), ChildOf(slot)));
     }
@@ -589,6 +664,12 @@ fn place_slots(layout: Res<PageLayout>, mut slots: Query<(&Slot, &mut Transform)
     for (slot, mut transform) in &mut slots {
         transform.translation = layout.slot(slot.index);
     }
+}
+
+/// The largest [`grid_box`] among items of bounds `sizes`, axis by axis, each tipped as
+/// [`grid_tilt`] says.
+fn page_box(sizes: &[Vec3]) -> Vec2 {
+    sizes.iter().map(|&s| grid_box(s, grid_tilt(s))).reduce(Vec2::max).unwrap_or(grid_box(FALLBACK_ITEM_SIZE, 0.0))
 }
 
 fn item_name(family: Family, item: Option<&Item>) -> String {
@@ -620,13 +701,18 @@ fn show_status(turntable: Res<Turntable>, focus: Res<Focus>, mut status: Query<&
     }
 }
 
-fn spin(time: Res<Time>, mut state: ResMut<Spin>, mut slots: Query<(&Slot, &mut Transform)>) {
+/// Turns every slot; on the grid each also takes its [`GridPose`], in the close-up it stands
+/// level at true size.
+fn spin(time: Res<Time>, focus: Res<Focus>, mut state: ResMut<Spin>, mut slots: Query<(&Slot, &mut Transform)>) {
     if !state.paused {
         state.angle = (state.angle + SPIN_SPEED * time.delta_secs()) % std::f32::consts::TAU;
     }
     for (slot, mut transform) in &mut slots {
         // Offset each slot so the grid shows items at different angles.
-        transform.rotation = Quat::from_rotation_y(state.angle + slot.index as f32 * 0.7);
+        let angle = state.angle + slot.index as f32 * 0.7;
+        let pose = if focus.close_up { GridPose { tilt: 0.0, scale: 1.0 } } else { slot.pose };
+        transform.rotation = pose.rotation(angle);
+        transform.scale = Vec3::splat(pose.scale);
     }
 }
 
@@ -881,7 +967,7 @@ mod tests {
             (Vec3::new(1.2, 17.0, 0.4), Vec2::new(1920.0, 1080.0)),
             (Vec3::new(6.0, 2.0, 4.0), Vec2::new(1280.0, 720.0)),
         ] {
-            let layout = PageLayout::fit(item, viewport);
+            let layout = PageLayout::fit(grid_box(item, 0.0), viewport);
             let swept = item.x.hypot(item.z);
             assert!(swept <= layout.cell.x, "{item}: the turning item is wider than its cell");
             for index in 0..PAGE as usize {
@@ -898,7 +984,7 @@ mod tests {
     #[test]
     fn grid_fits_under_the_status_line() {
         for viewport in [Vec2::new(1920.0, 1080.0), Vec2::new(800.0, 1000.0)] {
-            let layout = PageLayout::fit(Vec3::new(2.0, 8.0, 2.0), viewport);
+            let layout = PageLayout::fit(grid_box(Vec3::new(2.0, 8.0, 2.0), 0.0), viewport);
             let (height, centre) = layout.view();
             let half = Vec2::new(height * viewport.x / viewport.y, height) * 0.5;
             let grid = layout.cell * Vec2::new(COLUMNS as f32, ROWS as f32) * 0.5;
@@ -918,5 +1004,63 @@ mod tests {
         // At the near side of the swept cylinder the item's height is 80% of the view.
         let view_height = 2.0 * (distance - radius) * (perspective.fov * 0.5).tan();
         assert!((size.y / view_height - 0.8).abs() < 1e-4);
+    }
+
+    /// Bounds sizes of the items on `turntable`'s page.
+    fn page_sizes(turntable: &Turntable) -> Vec<Vec3> {
+        turntable
+            .seeds()
+            .map(|seed| {
+                let mesh = Item::roll(turntable.family, seed).unwrap().build();
+                let b = item_bounds(&mesh).unwrap();
+                Vec3::from(b.max - b.min)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn small_sundries_fill_a_share_of_their_cells() {
+        let turntable = Turntable { family: Family::Sundry, ..default() };
+        let sizes = page_sizes(&turntable);
+        let largest = page_box(&sizes);
+        let layout = PageLayout::fit(largest, Vec2::new(1920.0, 1080.0));
+        let room = Vec2::new(layout.cell.x, layout.cell.y - LABEL_HEIGHT * layout.pixel);
+        for (index, size) in sizes.into_iter().enumerate() {
+            let pose = GridPose::of(size, largest);
+            let shown = grid_box(size, pose.tilt) * pose.scale;
+            let share = shown / layout.cell;
+            assert!(share.max_element() >= 0.25, "slot {index} ({size}) fills {share} of its cell");
+            assert!(shown.x <= room.x + 1e-4 && shown.y <= room.y + 1e-4, "slot {index} ({size}) overflows its cell");
+        }
+    }
+
+    #[test]
+    fn flat_items_tip_toward_the_camera_and_upright_ones_stay_level() {
+        let flat = Vec3::new(3.0, 0.2, 1.0);
+        let upright = Vec3::new(1.0, 8.0, 1.0);
+        assert_eq!(grid_tilt(flat), FLAT_TILT);
+        assert_eq!(grid_tilt(upright), 0.0);
+        // Tipped, the flat item shows its face: far taller on screen than its edge.
+        assert!(grid_box(flat, FLAT_TILT).y > flat.y * 5.0);
+        assert_eq!(grid_box(upright, 0.0), Vec2::new(2f32.sqrt(), 8.0));
+    }
+
+    #[test]
+    fn the_largest_item_keeps_its_true_size() {
+        let sizes = [Vec3::new(1.0, 8.0, 1.0), Vec3::new(0.3, 0.4, 0.2), Vec3::new(1.0, 6.0, 1.0)];
+        let largest = page_box(&sizes);
+        assert_eq!(GridPose::of(sizes[0], largest), GridPose { tilt: 0.0, scale: 1.0 });
+        // Three quarters the height: still true to scale.
+        assert!(!GridPose::of(sizes[2], largest).magnified());
+        let small = GridPose::of(sizes[1], largest);
+        assert!(small.magnified(), "{small:?}");
+        let share = (grid_box(sizes[1], small.tilt) * small.scale / largest).max_element();
+        assert!((share - MIN_FILL).abs() < 1e-4, "magnified to {share} of the largest");
+    }
+
+    #[test]
+    fn labels_give_true_sizes() {
+        assert_eq!(true_size(Vec3::new(0.4, 1.8, 0.2)), "18 cm");
+        assert_eq!(true_size(Vec3::new(1.0, 17.0, 3.0)), "1.7 m");
     }
 }
