@@ -8,6 +8,9 @@ use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
 use procgen_rng::Mulberry32;
 
+use crate::carry::carried_light;
+use crate::inventory::Inventory;
+
 /// The four classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Class {
@@ -113,6 +116,44 @@ impl Character {
     }
 }
 
+/// What the delver's gear makes of them (the plate's `derive`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Derived {
+    /// 10, plus every worn item's armour, plus the dexterity modifier.
+    pub armour_class: i32,
+    /// Pounds worn and carried: everything worn and everything inside it.
+    pub load: f32,
+    /// Pounds they can carry: strength times 15 plus what worn items add.
+    pub capacity: f32,
+    pub warmth: f32,
+    /// How far the carried light reaches, in feet; 0 with none.
+    pub light: f32,
+    /// How far they see without light, in feet: their folk's, or a worn item's if further.
+    pub darkvision: f32,
+}
+
+impl Character {
+    /// What everything equipped adds to the delver, as the plate's `derive` adds it up; the
+    /// light is the carried light's ([`carried_light`]) where the plate took the brightest of
+    /// all its items, so an unlit torch in the pack gives none.
+    pub fn derive(&self, inventory: &Inventory) -> Derived {
+        let equipped = inventory.equipped();
+        let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).sum::<f32>();
+        let load = sum(|s| s.weight)
+            + equipped.iter().filter_map(|(slot, _)| inventory.worn(*slot)).map(|id| inventory.contents_weight(id)).sum::<f32>();
+        let light = carried_light(inventory).and_then(|(_, id)| inventory.item(id)).map_or(0.0, |item| item.profile.stats.light);
+        let darkvision = equipped.iter().map(|(_, item)| item.profile.stats.darkvision).fold(self.folk.race().dv as f32, f32::max);
+        Derived {
+            armour_class: 10 + sum(|s| s.armour).round() as i32 + modifier(self.dexterity()),
+            load,
+            capacity: (self.strength() * 15) as f32 + sum(|s| s.carry),
+            warmth: sum(|s| s.warmth),
+            light,
+            darkvision,
+        }
+    }
+}
+
 /// Rolls the delver from `seed`, or as one of the folk `FB_FOLK` names.
 pub fn character_for(seed: u32) -> Character {
     match std::env::var("FB_FOLK").ok().and_then(|f| Folk::parse(&f)) {
@@ -143,6 +184,24 @@ mod tests {
         assert!(!Character::roll_folk(Folk::Goblin, 3).name.contains(' '));
         assert!(Character::roll_folk(Folk::Human, 3).name.contains(' '));
         assert_eq!(Character::roll_folk(Folk::Dwarf, 9).folk, Folk::Dwarf);
+    }
+
+    #[test]
+    fn equipped_stats_add_to_the_delver() {
+        use fb_items::Slot;
+        let delver = Character { abilities: [11, 12, 10, 10], folk: Folk::Human, ..Character::roll(4) };
+        let mut inventory = Inventory::default();
+        let bare = delver.derive(&inventory);
+        assert_eq!((bare.armour_class, bare.load, bare.capacity, bare.light), (11, 0.0, 165.0, 0.0));
+        let mail = (1..300).filter_map(|s| fb_items::roll_item("Mail", s)).find(|i| i.profile.stats.armour > 0.0).unwrap();
+        let (armour, weight) = (mail.profile.stats.armour, mail.profile.stats.weight);
+        let id = inventory.add(mail);
+        inventory.wear(id, Slot::Body).unwrap();
+        let torch = inventory.add(crate::carry::lit_torch(2));
+        inventory.wear(torch, Slot::Offhand).unwrap();
+        let worn = delver.derive(&inventory);
+        assert_eq!(worn.armour_class, 11 + armour.round() as i32);
+        assert!(worn.load >= weight && worn.light > 0.0, "{worn:?}");
     }
 
     #[test]

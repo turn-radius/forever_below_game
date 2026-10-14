@@ -9,7 +9,8 @@
 //! - [`items`]: the [`Inventory`], where every item is: worn, in a grid, or loose.
 //! - [`icon`]: icons drawn from the items' Armory meshes.
 //! - [`doll`] and [`seal`]: the doll's leaf, the runic seal with the equipment slots round
-//!   it; dragging onto a slot wears the item, if it is made for that slot.
+//!   it; dragging onto a slot, or onto the doll, equips the item if it is made for that slot,
+//!   swapping out what was there ([`Inventory::equip`]); double-clicking wears or takes off.
 //! - [`card`]: the hover card, for an item under the mouse here or under the crosshair in the
 //!   level.
 //! - [`underfoot`]: the items on the floor within reach, as a grid, and bags set down as
@@ -17,9 +18,11 @@
 //!
 //! The delver ([`Character`]) is rolled from the level's seed and starts in the "Freshly
 //! fallen" outfit of `data/outfits.json` (a tunic and trousers), with a belt whose pouch is
-//! their first grid (`docs/items.md`, "Slots"; the plate's belt is a container). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
-//! captures; `FB_DEBUG_KIT=1` starts the delver with a pack full of things and sets a sack
-//! holding a few more, and a shield, down in front of them. `FB_DEBUG_HOVER=<n>` holds the
+//! their first grid (`docs/items.md`, "Slots"; the plate's belt is a container), and a burning
+//! torch in the off hand, which is their carried light (`crate::carry::carried_light`). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
+//! captures; `FB_DEBUG_KIT=1` dresses the delver in their class's outfit with a lit light in the
+//! off hand, starts them with a pack full of things, and sets a sack holding a few more, and a
+//! shield, down in front of them. `FB_DEBUG_HOVER=<n>` holds the
 //! card over the `n`th thing in the first carried grid.
 
 pub mod card;
@@ -42,7 +45,7 @@ use fb_items::{Kind, Rarity, Slot, footprint::Footprint};
 pub use grid::{Grid, Placement};
 pub use icon::{IconCache, Icons};
 pub use doll::{DollAssets, DollStage, DollView, SlotView};
-pub use items::{Inventory, ItemId, Location, Refusal};
+pub use items::{Displaced, Inventory, ItemId, Location, Refusal};
 pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
 use crate::carry::ViewModelCamera;
@@ -63,8 +66,12 @@ const GRID_RADIUS_PX: f32 = 12.0;
 const DRAG_START_PX: f32 = 6.0;
 /// How long a refusal stays on the screen, in seconds (the plate's `toast`, 3.6 s).
 const TOAST_SECONDS: f32 = 3.6;
-/// What the help line under the grids says.
-pub const HELP: &str = "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item.";
+/// What the help line under the grids says (the plate's `.hint`).
+pub const HELP: &str = "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item. Double-click to wear or take off.";
+/// Longest gap between the two clicks of a double-click, in seconds: Windows' default of
+/// 500 ms (`SetDoubleClickTime`,
+/// <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdoubleclicktime>).
+const DOUBLE_CLICK_SECONDS: f32 = 0.5;
 
 pub struct InventoryPlugin;
 
@@ -139,7 +146,9 @@ fn roll_character(mut character: ResMut<Character>, level: Option<Res<CurrentLev
 }
 
 /// The delver starts in the [`STARTING_OUTFIT`], wearing a belt whose pouch is their first
-/// grid. What the outfit leaves at their feet goes in the pouch if it fits.
+/// grid, with a burning torch in the off hand so they start with a carried light. What the
+/// outfit leaves at their feet goes in the pouch if it fits; its spare torch is unlit, so the
+/// burning one is a torch of its own.
 fn give_starting_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, level: Option<Res<CurrentLevel>>) {
     if inventory.worn(Slot::Belt).is_some() {
         return;
@@ -155,6 +164,8 @@ fn give_starting_kit(mut inventory: ResMut<Inventory>, character: Res<Character>
             inventory.forget(id);
         }
     }
+    let torch = inventory.add(crate::carry::lit_torch(kit_seed(level.as_deref(), 0x70c4)));
+    inventory.wear(torch, Slot::Offhand).expect("a torch goes in the off hand");
     for item in set.goods.into_iter().chain(set.ground) {
         let id = inventory.add(item);
         if inventory.stow(id).is_err() {
@@ -163,10 +174,38 @@ fn give_starting_kit(mut inventory: ResMut<Inventory>, character: Res<Character>
     }
 }
 
-/// For captures and trying the screen: a pack on the back, filled with one of most things.
-fn give_debug_kit(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLevel>>) {
+/// Equips `item` in `slot`; whatever it displaces is stowed, or forgotten if there is no room.
+fn equip_kit(inventory: &mut Inventory, item: fb_items::Item, slot: Slot) {
+    let id = inventory.add(item);
+    match inventory.equip(id, slot) {
+        Ok(Some((old, Displaced::Underfoot))) => {
+            if inventory.stow(old).is_err() {
+                inventory.forget(old);
+            }
+        }
+        Ok(_) => {}
+        Err(_) => inventory.forget(id),
+    }
+}
+
+/// For captures and trying the screen: the delver's class outfit, with a lit light in the off
+/// hand (a lantern if the outfit gave none), and a pack on the back filled with one of most
+/// things.
+fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, level: Option<Res<CurrentLevel>>) {
     let seed = |salt| kit_seed(level.as_deref(), salt);
-    if let Some(pack) = fb_items::roll_item("Pack", seed(1)) {
+    if let Some(outfit) = fb_items::outfit::outfit(character.class.outfit_key()) {
+        for (slot, item) in outfit.roll(seed(2), character.folk.key()).worn {
+            equip_kit(&mut inventory, item, slot);
+        }
+    }
+    if doll::lit_hand(&inventory) != Some(Slot::Offhand)
+        && let Some(lantern) = (seed(3)..seed(3).wrapping_add(500)).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| crate::carry::item_light(&i.shape).is_some())
+    {
+        equip_kit(&mut inventory, lantern, Slot::Offhand);
+    }
+    if inventory.worn(Slot::Back).is_none()
+        && let Some(pack) = fb_items::roll_item("Pack", seed(1))
+    {
         let pack = inventory.add(pack);
         let _ = inventory.wear(pack, Slot::Back);
     }
@@ -233,6 +272,8 @@ pub enum Target {
     Level,
     /// An equipment slot round the doll.
     Slot(Slot),
+    /// The doll itself: the item goes in the slot it is made for.
+    Doll,
 }
 
 /// An item being dragged, or pressed and about to be.
@@ -289,35 +330,70 @@ pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<
             inventory.check_put(drag.id, container, at)
         }
         Target::Slot(slot) => inventory.check_wear(drag.id, slot),
+        Target::Doll => inventory.target_slot(drag.id).map_or(Err(Refusal::NotWearable), |slot| inventory.check_wear(drag.id, slot)),
         Target::Cell { view: GridView::Underfoot, .. } | Target::Page | Target::Level => Ok(()),
+    }
+}
+
+/// Equips `id` in `slot` ([`Inventory::equip`]) and says what that changes in the level: the
+/// item lifted if it lay there, and whatever it displaced set down if it found no room where
+/// the item came from.
+pub fn equip(inventory: &mut Inventory, id: ItemId, slot: Slot) -> Result<Vec<FloorChange>, Refusal> {
+    let lying = inventory.location(id) == Some(Location::Loose);
+    let displaced = inventory.equip(id, slot)?;
+    let mut changes: Vec<FloorChange> = lying.then_some(FloorChange::Lifted(id)).into_iter().collect();
+    if let Some((old, Displaced::Underfoot)) = displaced {
+        changes.push(FloorChange::SetDown(old, 0.0));
+    }
+    Ok(changes)
+}
+
+/// A double-click on `id` (the plate's `quick`): something worn is taken off and stowed, or set
+/// down underfoot if there is no room for it; something wearable is equipped in its slot
+/// ([`equip`]); anything else lying underfoot is picked up.
+pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
+    let item = inventory.item(id).ok_or(Refusal::Unknown)?;
+    let wearable = item.profile.slot.is_some();
+    match inventory.location(id) {
+        Some(Location::Worn(_)) => {
+            inventory.take_out(id);
+            Ok(match inventory.stow(id) {
+                Ok(_) => vec![],
+                Err(_) => vec![FloorChange::SetDown(id, 0.0)],
+            })
+        }
+        _ if wearable => {
+            let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
+            equip(inventory, id, slot)
+        }
+        Some(Location::Loose) => inventory.pick_up(id).map(|()| vec![FloorChange::Lifted(id)]),
+        _ => Ok(vec![]),
     }
 }
 
 /// Lets `drag` go at `target`, and says what that changes in the level: an item lying there
 /// put into a bag is lifted from it; anything let go on the underfoot grid or the level is
 /// set down, to the side the underfoot column says (`underfoot_cols` wide).
-pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot_cols: u8) -> Result<Option<FloorChange>, Refusal> {
+pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot_cols: u8) -> Result<Vec<FloorChange>, Refusal> {
     let lying = inventory.location(drag.id) == Some(Location::Loose);
     let set_down = |inventory: &mut Inventory, aside: f32| {
         if lying {
-            return None;
+            return vec![];
         }
         inventory.take_out(drag.id);
-        Some(FloorChange::SetDown(drag.id, aside))
+        vec![FloorChange::SetDown(drag.id, aside)]
     };
     match target {
         Target::Cell { view: GridView::Container(container), cell } => {
             let at = drag.placement_at(cell).ok_or(Refusal::NoRoom)?;
             inventory.put(drag.id, container, at)?;
-            Ok(lying.then_some(FloorChange::Lifted(drag.id)))
+            Ok(lying.then_some(FloorChange::Lifted(drag.id)).into_iter().collect())
         }
-        Target::Slot(slot) => {
-            inventory.wear(drag.id, slot)?;
-            Ok(lying.then_some(FloorChange::Lifted(drag.id)))
-        }
+        Target::Slot(slot) => equip(inventory, drag.id, slot),
+        Target::Doll => equip(inventory, drag.id, inventory.target_slot(drag.id).ok_or(Refusal::NotWearable)?),
         Target::Cell { view: GridView::Underfoot, cell } => Ok(set_down(inventory, underfoot::aside_for_column(cell.x, underfoot_cols))),
         Target::Level => Ok(set_down(inventory, 0.0)),
-        Target::Page => Ok(None),
+        Target::Page => Ok(vec![]),
     }
 }
 
@@ -582,11 +658,12 @@ pub fn grid_size<T>(grid: &Grid<T>) -> Vec2 {
     Vec2::new(grid.cols as f32, grid.rows as f32) * CELL_PX + LINE_PX
 }
 
-/// The grid under `point` and its cell, the page, or the level beyond it.
+/// The slot, grid cell or doll under `point`, the page, or the level beyond it.
 fn target_under(
     point: Vec2,
     grids: &Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
     slots: &Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+    doll: Option<Rect>,
     ledger: Option<Rect>,
 ) -> Target {
     if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
@@ -597,6 +674,9 @@ fn target_under(
         if rect.contains(point) {
             return Target::Cell { view: *view, cell: cell_under(rect, point) };
         }
+    }
+    if doll.is_some_and(|rect| rect.contains(point)) {
+        return Target::Doll;
     }
     match ledger {
         Some(page) if !page.contains(point) => Target::Level,
@@ -621,6 +701,7 @@ fn drag_items(
     grids: Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
     slots: Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
     ledgers: Query<(&ComputedNode, &UiGlobalTransform), With<Ledger>>,
+    dolls: Query<(&ComputedNode, &UiGlobalTransform), With<DollView>>,
     mut dragging: ResMut<Dragging>,
     mut hovered: ResMut<Hovered>,
     mut inventory: ResMut<Inventory>,
@@ -628,6 +709,7 @@ fn drag_items(
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
     time: Res<Time<Real>>,
+    mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
     let cursor = window.and_then(|w| w.cursor_position());
     if !open.is(Screen::Inventory) {
@@ -636,7 +718,8 @@ fn drag_items(
     }
     let Some(point) = cursor else { return };
     let ledger = ledgers.iter().next().map(|(n, t)| node_rect(n, t));
-    let target = target_under(point, &grids, &slots, ledger);
+    let doll = dolls.iter().next().map(|(n, t)| node_rect(n, t));
+    let target = target_under(point, &grids, &slots, doll, ledger);
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
@@ -673,14 +756,20 @@ fn drag_items(
     drag.target = drag.active.then(|| (target, check_drop(&inventory, drag, target)));
     if input.just_released(Action::DragItem) {
         let drag = dragging.0.take().expect("a drag");
-        if !drag.active {
+        let now = time.elapsed_secs();
+        let outcome = if drag.active {
+            drop_at(&mut inventory, &drag, target, underfoot.grid.cols)
+        } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
+            quick(&mut inventory, drag.id)
+        } else {
+            *last_click = Some((drag.id, now));
             return;
-        }
-        match drop_at(&mut inventory, &drag, target, underfoot.grid.cols) {
-            Ok(change) => floor_changes.0.extend(change),
+        };
+        match outcome {
+            Ok(changes) => floor_changes.0.extend(changes),
             Err(refusal) => {
                 toast.text = refusal.reason().to_string();
-                toast.until = time.elapsed_secs() + TOAST_SECONDS;
+                toast.until = now + TOAST_SECONDS;
             }
         }
     }
@@ -718,6 +807,7 @@ fn show_drag(
     mut hints: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor, &mut Visibility), (With<DropHint>, Without<DragGhost>)>,
     mut views: Query<(&ItemView, &mut BackgroundColor, &Children), Without<DropHint>>,
     mut item_icons: Query<&mut ImageNode, (With<ItemIcon>, Without<DragGhost>)>,
+    mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>)>,
     mut icons: Icons,
 ) {
     let drag = dragging.0.filter(|d| d.active);
@@ -757,6 +847,18 @@ fn show_drag(
         background.0 = colour.with_alpha(if fits.is_ok() { 0.3 } else { 0.26 });
         *border = BorderColor::all(colour);
         *visibility = Visibility::Inherited;
+    }
+    // A slot under a dragged item shows whether it may go there, green or red, as the
+    // plate's `drop-ok` and `drop-bad`; otherwise filled slots are cream and empty ones tan.
+    for (slot, mut border) in &mut slot_borders {
+        let hint = drag.and_then(|d| d.target).and_then(|(target, fits)| match target {
+            Target::Slot(s) if s == slot.0 => Some(if fits.is_ok() { OK } else { BAD }),
+            _ => None,
+        });
+        let colour = hint.unwrap_or(if inventory.worn(slot.0).is_some() { BRIGHT } else { LINE });
+        if border.top != colour {
+            *border = BorderColor::all(colour);
+        }
     }
     for (view, mut background, children) in &mut views {
         let dragged = drag.is_some_and(|d| d.id == view.id);
@@ -823,7 +925,7 @@ mod tests {
         let drag = |id| Drag { id, grab: IVec2::new(0, 1), size: Footprint { cols: 1, rows: 2 }, turned: false, press: Vec2::ZERO, active: true, target: None };
         // Grabbed by its lower cell and let go over the belt pouch's cell (2, 1).
         let into_belt = Target::Cell { view: GridView::Container(belt), cell: IVec2::new(2, 1) };
-        assert_eq!(drop_at(&mut inventory, &drag(a), into_belt, 6), Ok(None));
+        assert_eq!(drop_at(&mut inventory, &drag(a), into_belt, 6), Ok(vec![]));
         assert_eq!(inventory.location(a), Some(Location::In { container: belt, at: Placement::new(2, 0, false) }));
         // Onto the other dagger: refused, and it stays where it was.
         let onto_b = Target::Cell { view: GridView::Container(pack), cell: IVec2::new(3, 1) };
@@ -834,7 +936,7 @@ mod tests {
         let pack_drag = Drag { id: pack, grab: IVec2::ZERO, size: Footprint { cols: 2, rows: 3 }, turned: false, press: Vec2::ZERO, active: true, target: None };
         let into_itself = Target::Cell { view: GridView::Container(pack), cell: IVec2::new(5, 0) };
         assert_eq!(drop_at(&mut inventory, &pack_drag, into_itself, 6), Err(Refusal::IntoItself));
-        assert_eq!(drop_at(&mut inventory, &drag(b), Target::Page, 6), Ok(None));
+        assert_eq!(drop_at(&mut inventory, &drag(b), Target::Page, 6), Ok(vec![]));
     }
 
     #[test]
@@ -964,11 +1066,47 @@ mod tests {
         inventory.put(gloves, pack, Placement::new(0, 0, false)).unwrap();
         let drag = Drag { id: gloves, grab: IVec2::ZERO, size: inventory.footprint(gloves).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
         assert_eq!(check_drop(&inventory, &drag, Target::Slot(Slot::Head)), Err(Refusal::WrongSlot));
-        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Hands), 6), Ok(None));
+        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Hands), 6), Ok(vec![]));
         assert_eq!(inventory.worn(Slot::Hands), Some(gloves));
         // Lying on the floor, it is lifted from the level as it goes on.
         let ring = inventory.add(fb_items::roll_item("Ring", 2).unwrap());
         let drag = Drag { id: ring, ..drag };
-        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Ring2), 6), Ok(Some(FloorChange::Lifted(ring))));
+        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Ring2), 6), Ok(vec![FloorChange::Lifted(ring)]));
+    }
+
+    #[test]
+    fn a_sword_dropped_on_the_doll_goes_in_the_main_hand_and_swaps() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        let sword = inventory.add(fb_items::roll_item("Sword", 4).unwrap());
+        inventory.put(sword, pack, Placement::new(0, 0, false)).unwrap();
+        let drag = Drag { id: sword, grab: IVec2::ZERO, size: inventory.footprint(sword).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
+        assert_eq!(check_drop(&inventory, &drag, Target::Doll), Ok(()));
+        assert_eq!(drop_at(&mut inventory, &drag, Target::Doll, 6), Ok(vec![]));
+        assert_eq!(inventory.worn(Slot::Mainhand), Some(sword));
+        // A mace lying underfoot dropped on the main hand: lifted, and the sword has nowhere
+        // to go back to but the floor.
+        let mace = inventory.add(fb_items::roll_item("Mace", 2).unwrap());
+        let drag = Drag { id: mace, ..drag };
+        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Mainhand), 6), Ok(vec![FloorChange::Lifted(mace), FloorChange::SetDown(sword, 0.0)]));
+        let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
+        assert_eq!(check_drop(&inventory, &Drag { id: bread, ..drag }, Target::Doll), Err(Refusal::NotWearable));
+    }
+
+    #[test]
+    fn double_clicking_wears_and_takes_off() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        let gloves = inventory.add(fb_items::roll_item("Gloves", 4).unwrap());
+        inventory.put(gloves, pack, Placement::new(0, 0, false)).unwrap();
+        assert_eq!(quick(&mut inventory, gloves), Ok(vec![]));
+        assert_eq!(inventory.worn(Slot::Hands), Some(gloves));
+        assert_eq!(quick(&mut inventory, gloves), Ok(vec![]));
+        assert!(matches!(inventory.location(gloves), Some(Location::In { container, .. }) if container == pack));
+        // Bread lying underfoot is picked up.
+        let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
+        assert_eq!(quick(&mut inventory, bread), Ok(vec![FloorChange::Lifted(bread)]));
     }
 }

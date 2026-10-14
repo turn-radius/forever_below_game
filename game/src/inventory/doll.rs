@@ -620,4 +620,22 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<DollStage>().turn, turn);
     }
+
+    #[test]
+    fn a_sword_equipped_to_the_main_hand_shows_in_the_doll_s_fist() {
+        let mut app = stage_app();
+        let sword = fb_items::roll_item("Sword", 11).unwrap();
+        let name = sword.title().to_string();
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(sword);
+            super::super::equip(&mut inventory, id, Slot::Mainhand).unwrap();
+        }
+        app.update();
+        let figure = app.world().resource::<DollStage>().built.clone().unwrap();
+        let held = figure.pieces.iter().find(|p| p.name == name).expect("the sword is drawn");
+        let fist = Vec3::from_array(figure.body.grip(fb_body::MAIN_HAND).origin);
+        let nearest = held.mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
+        assert!(nearest < 0.5, "{nearest}");
+    }
 }
