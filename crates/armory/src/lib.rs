@@ -18,9 +18,11 @@
 pub mod build;
 pub mod cond;
 pub mod etch;
+pub mod fabric;
 pub mod families;
 pub mod gem;
 pub mod geom;
+pub mod heraldry;
 pub mod item;
 pub mod material;
 pub mod palette;
@@ -33,27 +35,51 @@ pub use material::{MaterialKind, Rgb};
 
 use serde::{Deserialize, Serialize};
 
-/// The eighteen Armory families, in the order the prototype lists them.
+/// The Armory families: the prototype's eighteen in its order, with clubs and axes (which its
+/// plate faked outside the Armory) after daggers among the held weapons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Family {
-    Staff, Mace, Sword, Spear, Dagger, Bow, Crossbow, Helm, Garment, Hands, Feet, Shield, Ring, Amulet, Charm, Bags, Chests, Food,
+    Staff, Mace, Sword, Spear, Dagger, Club, Axe, Bow, Crossbow, Helm, Hood, Garment, Belt, Hands, Legs, Feet, Shield, Ring, Amulet, Charm, Bags, Chests, Food, Torch, Lantern, Sundry,
 }
 
 impl Family {
-    pub const ALL: [Family; 18] = [
-        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Bow, Family::Crossbow,
-        Family::Helm, Family::Garment, Family::Hands, Family::Feet, Family::Shield, Family::Ring, Family::Amulet,
-        Family::Charm, Family::Bags, Family::Chests, Family::Food,
+    pub const ALL: [Family; 26] = [
+        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Club, Family::Axe, Family::Bow, Family::Crossbow, Family::Helm, Family::Hood, Family::Garment, Family::Belt, Family::Hands, Family::Legs, Family::Feet, Family::Shield, Family::Ring, Family::Amulet, Family::Charm, Family::Bags, Family::Chests, Family::Food, Family::Torch, Family::Lantern, Family::Sundry,
     ];
     pub fn key(self) -> &'static str {
         match self {
-            Family::Staff => "staff", Family::Mace => "mace", Family::Sword => "sword", Family::Spear => "spear",
-            Family::Dagger => "dagger", Family::Bow => "bow", Family::Crossbow => "crossbow", Family::Helm => "helm",
-            Family::Garment => "garment", Family::Hands => "hands", Family::Feet => "feet", Family::Shield => "shield",
-            Family::Ring => "ring", Family::Amulet => "amulet", Family::Charm => "charm", Family::Bags => "bags",
-            Family::Chests => "chests", Family::Food => "food",
+            Family::Staff => "staff",
+            Family::Mace => "mace",
+            Family::Sword => "sword",
+            Family::Spear => "spear",
+            Family::Dagger => "dagger",
+            Family::Club => "club",
+            Family::Axe => "axe",
+            Family::Bow => "bow",
+            Family::Crossbow => "crossbow",
+            Family::Helm => "helm",
+            Family::Hood => "hood",
+            Family::Garment => "garment",
+            Family::Belt => "belt",
+            Family::Hands => "hands",
+            Family::Legs => "legs",
+            Family::Feet => "feet",
+            Family::Shield => "shield",
+            Family::Ring => "ring",
+            Family::Amulet => "amulet",
+            Family::Charm => "charm",
+            Family::Bags => "bags",
+            Family::Chests => "chests",
+            Family::Food => "food",
+            Family::Torch => "torch",
+            Family::Lantern => "lantern",
+            Family::Sundry => "sundry",
         }
+    }
+    /// Whether the Spline Armory prototype had this family (and so example fixtures).
+    pub fn in_armory_prototype(self) -> bool {
+        !matches!(self, Family::Club | Family::Axe | Family::Hood | Family::Belt | Family::Legs | Family::Torch | Family::Lantern | Family::Sundry)
     }
 }
 

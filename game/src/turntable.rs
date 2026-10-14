@@ -14,7 +14,7 @@ use armory::{
     cond::{Condition, ConditionState},
 };
 use bevy::{
-    camera::Exposure,
+    camera::{Exposure, ScalingMode},
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
     prelude::*,
     render::view::Tonemapping,
@@ -47,7 +47,18 @@ const SPIN_SPEED: f32 = 0.45;
 const FALLBACK_ITEM_SIZE: Vec3 = Vec3::new(3.0, 8.0, 3.0);
 /// Share of the view height (or width) a close-up item fills.
 const CLOSE_UP_FILL: f32 = 0.84;
+/// Grid margins in logical pixels: the status line takes the top, and every item keeps a
+/// share of its size clear around it, so neighbours never touch as they turn.
+const STATUS_HEIGHT: f32 = 76.0;
+const EDGE_MARGIN: f32 = 16.0;
+const ITEM_MARGIN: f32 = 0.12;
+/// The band under each item for its two-line label, the narrowest cell, so neighbouring
+/// labels never run together, and the width a label may take before it wraps. Logical pixels.
+const LABEL_HEIGHT: f32 = 48.0;
+const MIN_CELL_WIDTH: f32 = 240.0;
 const LABEL_WIDTH: f32 = 320.0;
+/// How far from the page the grid camera sits; orthographic, so only the clip range cares.
+const GRID_CAMERA_DISTANCE: f32 = 100.0;
 /// The Armory's plate, ink and accent (`--plate`, `--plate-ink` and `--accent` in
 /// `reference/spline-armory.html`), so items read against it as they do there.
 const PLATE: Color = Color::srgb(0xdf as f32 / 255.0, 0xe3 as f32 / 255.0, 0xe0 as f32 / 255.0);
@@ -72,8 +83,9 @@ impl Plugin for TurntablePlugin {
                 (
                     (keys, orbit, hover).chain(),
                     show_page.run_if(resource_changed::<Turntable>),
+                    fit_page,
                     show_status,
-                    spin,
+                    (place_slots, spin),
                     show_focus,
                     frame_camera,
                     (place_labels, place_selection),
@@ -94,7 +106,7 @@ pub struct Turntable {
 
 impl Default for Turntable {
     fn default() -> Self {
-        Turntable { family: Item::PORTED[0], first_seed: DEFAULT_SEED, wear: ConditionState::Pristine }
+        Turntable { family: Family::Mace, first_seed: DEFAULT_SEED, wear: ConditionState::Pristine }
     }
 }
 
@@ -300,28 +312,42 @@ struct Spin {
     paused: bool,
 }
 
-/// Grid cell size for the current page, in world units.
-#[derive(Resource)]
+/// Where everything on the grid goes for the current page and viewport, in world units.
+///
+/// The grid camera is orthographic, as the Armory's is, so a logical pixel is the same size in
+/// world units everywhere on the page: items fill their cells exactly through a full turn,
+/// and labels get a band of their own in pixels under them.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
 struct PageLayout {
+    /// Bounds of the largest item on the page, axis by axis.
+    item: Vec3,
+    /// The viewport, in logical pixels.
+    viewport: Vec2,
+    /// World units per logical pixel.
+    pixel: f32,
     cell: Vec2,
-    /// Height of the tallest item, for placing labels under it.
-    item_height: f32,
 }
 
 impl Default for PageLayout {
     fn default() -> Self {
-        PageLayout::fit(FALLBACK_ITEM_SIZE)
+        PageLayout::fit(FALLBACK_ITEM_SIZE, Vec2::new(1920.0, 1080.0))
     }
 }
 
 impl PageLayout {
-    /// Cells that hold an item of `size` (the largest on the page) through a full turn, with
-    /// room for its label.
-    fn fit(size: Vec3) -> Self {
-        let swept = size.x.hypot(size.z);
-        let height = size.y * 1.3;
-        // Tall, thin items still get cells wide enough for their labels.
-        PageLayout { cell: Vec2::new((swept * 1.25).max(height * 0.85), height), item_height: size.y }
+    /// The layout that fits a page whose largest item is `item` (bounds size) into
+    /// `viewport` (logical pixels): each cell holds the item's full height and the width it
+    /// sweeps as it spins, plus a margin, above a label band.
+    fn fit(item: Vec3, viewport: Vec2) -> Self {
+        let grid = Vec2::new(COLUMNS as f32, ROWS as f32);
+        let item_box = Vec2::new(item.x.hypot(item.z), item.y) * (1.0 + ITEM_MARGIN);
+        // Pixels left for the items once margins and labels are taken.
+        let room = viewport - Vec2::new(2.0 * EDGE_MARGIN, STATUS_HEIGHT + EDGE_MARGIN + ROWS as f32 * LABEL_HEIGHT);
+        let pixel = (item_box * grid / room.max(Vec2::ONE)).max_element().max(f32::EPSILON);
+        // A narrow window gives up label room before the grid runs off the sides.
+        let min_cell_width = MIN_CELL_WIDTH.min(room.x / grid.x);
+        let cell = Vec2::new(item_box.x.max(min_cell_width * pixel), item_box.y + LABEL_HEIGHT * pixel);
+        PageLayout { item, viewport, pixel, cell }
     }
 
     /// Centre of grid cell `index` (row-major from top left).
@@ -332,13 +358,21 @@ impl PageLayout {
         Vec3::new(x, y, 0.0)
     }
 
-    /// Where the item in cell `index` turns: high in the cell, with the label below.
+    /// Where the item in cell `index` turns: centred in the cell above its label band.
     fn slot(&self, index: usize) -> Vec3 {
-        self.cell_centre(index) + Vec3::Y * self.cell.y * 0.06
+        self.cell_centre(index) + Vec3::Y * LABEL_HEIGHT * self.pixel * 0.5
     }
 
-    fn grid(&self) -> Vec2 {
-        self.cell * Vec2::new(COLUMNS as f32, ROWS as f32)
+    /// Top centre of the label band in cell `index`.
+    fn label(&self, index: usize) -> Vec3 {
+        self.cell_centre(index) - Vec3::Y * (self.cell.y * 0.5 - LABEL_HEIGHT * self.pixel)
+    }
+
+    /// The grid camera's view: its height in world units and the point it looks at, set so
+    /// the grid sits centred below the status line.
+    fn view(&self) -> (f32, Vec3) {
+        let lift = (STATUS_HEIGHT - EDGE_MARGIN) * 0.5 * self.pixel;
+        (self.viewport.y * self.pixel, Vec3::Y * lift)
     }
 
     /// The cell under viewport point `cursor`, if any.
@@ -365,10 +399,10 @@ struct Slot {
     size: Vec3,
 }
 
-/// A name label under a slot.
+/// The name label under grid slot `index`.
 #[derive(Component)]
 struct Label {
-    anchor: Vec3,
+    index: usize,
 }
 
 /// The frame drawn around the selected cell.
@@ -515,13 +549,13 @@ fn show_page(
     let meshes: Vec<_> = items.iter().map(|(_, item)| item.as_ref().map(Item::build).unwrap_or_default()).collect();
     let bounds: Vec<_> = meshes.iter().map(item_bounds).collect();
     let largest = bounds.iter().flatten().map(|b| Vec3::from(b.max - b.min)).reduce(Vec3::max);
-    *layout = PageLayout::fit(largest.unwrap_or(FALLBACK_ITEM_SIZE));
+    *layout = PageLayout::fit(largest.unwrap_or(FALLBACK_ITEM_SIZE), layout.viewport);
 
     for (index, (((seed, item), mesh), bounds)) in items.iter().zip(&meshes).zip(&bounds).enumerate() {
         let centre = layout.slot(index);
         commands.spawn((
             OnPage,
-            Label { anchor: centre - Vec3::Y * (layout.item_height * 0.5 + layout.cell.y * 0.04) },
+            Label { index },
             Text::new(format!("{}\n{seed}", item_name(turntable.family, item.as_ref()))),
             TextFont::from_font_size(17.0),
             TextColor(PLATE_INK),
@@ -536,6 +570,24 @@ fn show_page(
             commands.spawn((OnPage, Slot { index, size }, Transform::from_translation(centre), Visibility::default())).id();
         let offset = bounds.map_or(Vec3::Y * -FALLBACK_ITEM_SIZE.y * 0.5, |b| -Vec3::from(b.center()));
         spawner.spawn(mesh, &turntable.appearance(item)).insert((Transform::from_translation(offset), ChildOf(slot)));
+    }
+}
+
+/// Refits the grid when the viewport changes size.
+fn fit_page(cameras: Query<&Camera, With<TurntableCamera>>, mut layout: ResMut<PageLayout>) {
+    let Some(viewport) = cameras.single().ok().and_then(Camera::logical_viewport_size) else { return };
+    if viewport != layout.viewport {
+        *layout = PageLayout::fit(layout.item, viewport);
+    }
+}
+
+/// Keeps every slot in its cell as the layout changes.
+fn place_slots(layout: Res<PageLayout>, mut slots: Query<(&Slot, &mut Transform)>) {
+    if !layout.is_changed() {
+        return;
+    }
+    for (slot, mut transform) in &mut slots {
+        transform.translation = layout.slot(slot.index);
     }
 }
 
@@ -586,30 +638,43 @@ fn show_focus(focus: Res<Focus>, mut slots: Query<(&Slot, &mut Visibility)>) {
     }
 }
 
-/// Backs the camera off until the whole grid fits the view, or, in the close-up, orbits the
-/// selected item close enough that it fills most of the view.
+/// Shows the whole grid square on through an orthographic camera, as the Armory does, or, in
+/// the close-up, orbits the selected item in perspective close enough that it fills most of
+/// the view.
 fn frame_camera(
     layout: Res<PageLayout>,
     focus: Res<Focus>,
     slots: Query<(&Slot, &Transform), Without<TurntableCamera>>,
-    mut cameras: Query<(&Projection, &mut Transform), With<TurntableCamera>>,
+    mut cameras: Query<(&mut Projection, &mut Transform), With<TurntableCamera>>,
 ) {
     let selected = slots.iter().find(|(slot, _)| focus.close_up && slot.index == focus.slot);
-    for (projection, mut transform) in &mut cameras {
-        let Projection::Perspective(perspective) = projection else { continue };
+    for (mut projection, mut transform) in &mut cameras {
         let target = match selected {
             Some((slot, pivot)) => {
+                if !matches!(*projection, Projection::Perspective(_)) {
+                    *projection = Projection::Perspective(default());
+                }
+                let Projection::Perspective(perspective) = &*projection else { continue };
                 let centre = pivot.translation;
                 let distance = framing_distance(slot.size, perspective, CLOSE_UP_FILL);
                 Transform::from_translation(centre + focus.orbit.offset(distance)).looking_at(centre, Vec3::Y)
             }
             None => {
-                let half_tan = (perspective.fov * 0.5).tan();
-                // Leave room at the top for the status line.
-                let grid = layout.grid() * Vec2::new(1.04, 1.18);
-                let distance = (grid.y * 0.5 / half_tan).max(grid.x * 0.5 / (half_tan * perspective.aspect_ratio));
-                let lift = Vec3::Y * grid.y * 0.04;
-                Transform::from_translation(Vec3::Z * distance + lift).looking_at(lift, Vec3::Y)
+                let (height, centre) = layout.view();
+                let current = match &*projection {
+                    Projection::Orthographic(OrthographicProjection {
+                        scaling_mode: ScalingMode::FixedVertical { viewport_height },
+                        ..
+                    }) => Some(*viewport_height),
+                    _ => None,
+                };
+                if current != Some(height) {
+                    *projection = Projection::Orthographic(OrthographicProjection {
+                        scaling_mode: ScalingMode::FixedVertical { viewport_height: height },
+                        ..OrthographicProjection::default_3d()
+                    });
+                }
+                Transform::from_translation(centre + Vec3::Z * GRID_CAMERA_DISTANCE).looking_at(centre, Vec3::Y)
             }
         };
         if *transform != target {
@@ -621,6 +686,7 @@ fn frame_camera(
 /// Pins each label under its slot in screen space; the close-up has none.
 fn place_labels(
     focus: Res<Focus>,
+    layout: Res<PageLayout>,
     cameras: Query<(&Camera, &GlobalTransform), With<TurntableCamera>>,
     mut labels: Query<(&Label, &mut Node, &mut Visibility)>,
 ) {
@@ -630,7 +696,7 @@ fn place_labels(
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
-        let Ok(at) = camera.world_to_viewport(camera_transform, label.anchor) else { continue };
+        let Ok(at) = camera.world_to_viewport(camera_transform, layout.label(label.index)) else { continue };
         node.left = px(at.x - LABEL_WIDTH * 0.5);
         node.top = px(at.y);
         visibility.set_if_neq(Visibility::Inherited);
@@ -646,7 +712,8 @@ fn place_selection(
 ) {
     let Ok((camera, camera_transform)) = cameras.single() else { return };
     let centre = layout.cell_centre(focus.slot);
-    let half = (layout.cell * 0.47).extend(0.0);
+    // The whole cell, label and all, inset a few pixels so neighbouring frames don't touch.
+    let half = (layout.cell * 0.5 - 3.0 * layout.pixel).extend(0.0);
     let corners = [centre - half, centre + half].map(|c| camera.world_to_viewport(camera_transform, c));
     for (mut node, mut visibility) in &mut frames {
         let [Ok(bottom_left), Ok(top_right)] = corners else { continue };
@@ -682,7 +749,7 @@ mod tests {
     fn parses_the_command_line() {
         let turntable = Turntable::from_args(args("--family mace --seed=42 --wear grave_find")).unwrap();
         assert_eq!(turntable, Turntable { family: Family::Mace, first_seed: 42, wear: ConditionState::GraveFind });
-        assert!(Turntable::from_args(args("--family sword")).unwrap_err().contains("not ported"));
+        assert!(Turntable::from_args(args("--family wand")).is_err());
         assert!(Turntable::from_args(args("--seed")).is_err());
         assert!(Turntable::from_args(args("--seed -3")).is_err());
         assert!(Turntable::from_args(args("--colour red")).is_err());
@@ -805,6 +872,41 @@ mod tests {
         assert_eq!(orbit.zoom, Orbit::MIN_ZOOM);
         orbit.zoom_by(-100.0);
         assert_eq!(orbit.zoom, Orbit::MAX_ZOOM);
+    }
+
+    #[test]
+    fn grid_keeps_items_clear_of_their_labels() {
+        for (item, viewport) in [
+            (Vec3::new(0.3, 0.4, 0.2), Vec2::new(1920.0, 1080.0)),
+            (Vec3::new(1.2, 17.0, 0.4), Vec2::new(1920.0, 1080.0)),
+            (Vec3::new(6.0, 2.0, 4.0), Vec2::new(1280.0, 720.0)),
+        ] {
+            let layout = PageLayout::fit(item, viewport);
+            let swept = item.x.hypot(item.z);
+            assert!(swept <= layout.cell.x, "{item}: the turning item is wider than its cell");
+            for index in 0..PAGE as usize {
+                let centre = layout.cell_centre(index);
+                let (slot, label) = (layout.slot(index), layout.label(index));
+                assert!(slot.y + item.y * 0.5 <= centre.y + layout.cell.y * 0.5 + 1e-4, "{item}: top leaves the cell");
+                assert!(slot.y - item.y * 0.5 >= label.y - 1e-4, "{item}: item runs into its label");
+                let label_bottom = label.y - LABEL_HEIGHT * layout.pixel;
+                assert!(label_bottom >= centre.y - layout.cell.y * 0.5 - 1e-4, "{item}: label leaves the cell");
+            }
+        }
+    }
+
+    #[test]
+    fn grid_fits_under_the_status_line() {
+        for viewport in [Vec2::new(1920.0, 1080.0), Vec2::new(800.0, 1000.0)] {
+            let layout = PageLayout::fit(Vec3::new(2.0, 8.0, 2.0), viewport);
+            let (height, centre) = layout.view();
+            let half = Vec2::new(height * viewport.x / viewport.y, height) * 0.5;
+            let grid = layout.cell * Vec2::new(COLUMNS as f32, ROWS as f32) * 0.5;
+            let eps = 1e-3;
+            assert!(grid.y <= centre.y + half.y - STATUS_HEIGHT * layout.pixel + eps, "{viewport}: grid under the status line");
+            assert!(-grid.y >= centre.y - half.y + EDGE_MARGIN * layout.pixel - eps, "{viewport}: grid off the bottom");
+            assert!(grid.x <= half.x - EDGE_MARGIN * layout.pixel + eps, "{viewport}: grid off the sides");
+        }
     }
 
     #[test]

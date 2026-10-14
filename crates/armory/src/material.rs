@@ -34,6 +34,26 @@ impl MaterialKind {
         MaterialKind::Bone, MaterialKind::Stone, MaterialKind::Leather, MaterialKind::Cord,
     ];
 
+    /// The word an item name uses for this material ("Gold Band", "Wooden Idol"; the
+    /// prototype's `MATN`, which calls brass bronze).
+    pub fn adjective(self) -> &'static str {
+        match self {
+            MaterialKind::Iron => "Iron",
+            MaterialKind::Brass => "Bronze",
+            MaterialKind::Gold => "Gold",
+            MaterialKind::Silver => "Silver",
+            MaterialKind::Wood => "Wooden",
+            MaterialKind::Bone => "Bone",
+            MaterialKind::Stone => "Stone",
+            MaterialKind::Leather => "Leather",
+            MaterialKind::Cord => "Cord",
+            MaterialKind::Gem => "Jewelled",
+            MaterialKind::Cloth => "Cloth",
+            MaterialKind::Paint => "Painted",
+            MaterialKind::Food => "",
+        }
+    }
+
     /// Decay type id from the table in `docs/rendering.md`.
     pub fn decay_type(self) -> u32 {
         match self {
@@ -60,5 +80,11 @@ pub struct Rgb(pub f32, pub f32, pub f32);
 impl Rgb {
     pub const fn hex(v: u32) -> Self {
         Rgb(((v >> 16) & 0xff) as f32 / 255.0, ((v >> 8) & 0xff) as f32 / 255.0, (v & 0xff) as f32 / 255.0)
+    }
+
+    /// Every channel times `factor`, clamped to 0..=1 (a darker strap cut from the same hide).
+    pub fn scaled(self, factor: f32) -> Self {
+        let f = |c: f32| (c * factor).clamp(0.0, 1.0);
+        Rgb(f(self.0), f(self.1), f(self.2))
     }
 }

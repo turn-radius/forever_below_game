@@ -68,6 +68,9 @@ fn all_primitives() -> Vec<(&'static str, MeshBuilder)> {
         ("cylinder", cylinder(0.5, 2.0, 8, Shading::FACETED)),
         ("cuboid", cuboid([1.0, 2.0, 3.0])),
         ("torus", torus(2.0, 0.4, 24, 8, Shading::SMOOTH)),
+        ("slab chamfered star", bevelled_slab(&star, &[], &SlabOptions::chamfered(0.4, 0.1))),
+        ("slab rounded holed disc", bevelled_slab(&disc(1.0, 48), &[disc(0.4, 24)], &SlabOptions::rounded(0.3, 0.1))),
+        ("slab flat", bevelled_slab(&star, &[], &SlabOptions::chamfered(0.4, 0.0))),
     ]
 }
 
@@ -223,9 +226,202 @@ fn double_sided_cloth_keeps_unit_outline_normals() {
 }
 
 #[test]
+fn thick_sheet_closes_its_edges_and_faces_out() {
+    // An open-topped cup with a pole at the bottom: front surface out, back surface in, a
+    // rim on top. Every face of the outer wall points away from the axis.
+    let cup: Vec<Vec<V3>> = (0..=8)
+        .map(|r| {
+            let y = r as f32 / 8.0;
+            let radius = (y * 4.0).min(1.0);
+            (0..16).map(|c| {
+                let (s, co) = (TAU * c as f32 / 16.0).sin_cos();
+                [radius * co, y, -radius * s]
+            }).collect()
+        })
+        .collect();
+    let options = GridOptions { wrap_around: true, ..GridOptions::default() };
+    let normals = grid_normals(&cup, true, false);
+    assert!(normals[0][0][1] < -0.9, "pole normal {:?} should point down", normals[0][0]);
+    assert!(vec3::dot(normals[6][0], [1.0, 0.0, 0.0]) > 0.9);
+    let sheet = thick_sheet(&cup, &options, 0.05);
+    let p = part(sheet);
+    assert_front_faces_agree(&p);
+    // Rim faces point up, and the mesh is closed: every edge is shared by exactly two faces.
+    let mut edges: HashMap<([i32; 3], [i32; 3]), i32> = HashMap::new();
+    let key = |v: V3| v.map(|c| (c * 1e4).round() as i32);
+    for tri in p.indices.as_chunks::<3>().0 {
+        for k in 0..3 {
+            let (a, b) = (key(p.positions[tri[k] as usize]), key(p.positions[tri[(k + 1) % 3] as usize]));
+            *edges.entry(if a < b { (a, b) } else { (b, a) }).or_default() += 1;
+        }
+    }
+    assert!(edges.values().all(|&n| n == 2), "thick sheet has open edges");
+}
+
+#[test]
+fn extrude_smooth_keeps_its_sharp_corners() {
+    // A half disc: round on top, sharp where the arc meets the flat base.
+    let mut outline: Vec<[f32; 2]> = (0..=12).map(|i| {
+        let a = PI * i as f32 / 12.0;
+        [a.cos(), a.sin()]
+    }).collect();
+    outline.reverse();
+    let sharp: Vec<bool> = (0..outline.len()).map(|i| i == 0 || i == outline.len() - 1).collect();
+    let p = part(extrude_smooth(&outline, &sharp, 2.0));
+    assert_front_faces_agree(&p);
+    assert_outward(&p, [0.0, 0.4, 0.0]);
+    // At the sharp corner (1, 0) some vertex faces straight down (the base) and another not.
+    let at_corner: Vec<V3> = p.positions.iter().zip(&p.normals).filter(|(q, _)| (q[0] - 1.0).abs() < 1e-5 && q[1].abs() < 1e-5 && q[2].abs() > 0.99).map(|(_, n)| *n).collect();
+    assert!(at_corner.iter().any(|n| n[1] < -0.99), "{at_corner:?}");
+    assert!(at_corner.iter().any(|n| n[1] > -0.5 && n[2].abs() < 0.5), "{at_corner:?}");
+}
+
+#[test]
+fn place_basis_maps_up_and_forward() {
+    let mut m = cuboid([0.1, 1.0, 0.1]);
+    m.translate([0.0, 0.5, 0.2]).place_basis([1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+    let (lo, hi) = m.bounds().unwrap();
+    assert!((hi[0] - 2.0).abs() < 1e-4 && (lo[2] + 0.25).abs() < 1e-4, "{lo:?} {hi:?}");
+}
+
+#[test]
 fn transforms_keep_normals_unit_and_faces_front() {
     let mut s = spike(0.3, 1.5, 6, 0.5, Shading::FACETED);
     s.align_y_to([1.0, 1.0, 0.0]).scale([1.0, 0.5, 2.0]).translate([0.0, 3.0, 0.0]);
     let p = part(s);
     assert_front_faces_agree(&p);
+}
+
+#[test]
+fn sweep_scaled_stretches_each_axis() {
+    let frames = rotation_minimizing_frames(&[[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 2.0, 0.0]], Some(vec3::X), false);
+    let mesh = sweep_scaled(&frames, &regular_polygon(16, 1.0, 0.0), &SweepOptions::default(), |t| [0.4 * (1.0 - t * 0.5), 0.1]);
+    let (_, hi) = mesh.bounds().unwrap();
+    assert!((hi[0] - 0.4).abs() < 1e-3 && (hi[2] - 0.1).abs() < 1e-3, "{hi:?}");
+    let p = part(mesh);
+    assert_front_faces_agree(&p);
+    assert_outward(&p, [0.0, 1.0, 0.0]);
+    // A section shrunk to a point gets no cap.
+    part(sweep_scaled(&frames, &regular_polygon(8, 1.0, 0.0), &SweepOptions::default(), |t| [1.0 - t, 1.0 - t]));
+}
+
+#[test]
+fn sector_closed_by_its_cut_faces_faces_outward() {
+    let profile = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    let (start, end) = (-0.5f32, 0.5f32);
+    let mut wedge = lathe_sector(&profile, &LatheOptions::new(8, Shading::SMOOTH), start, end);
+    let (rind, core) = profile_face(&profile, 0.1);
+    for (mut face, far) in [(rind.clone(), false), (core.clone(), false), (rind, true), (core, true)] {
+        if far {
+            face.flip().rotate_y(end);
+        } else {
+            face.rotate_y(start);
+        }
+        wedge.append(&face);
+    }
+    let p = part(wedge);
+    assert_front_faces_agree(&p);
+    assert_outward(&p, [0.5, 0.5, 0.0]);
+}
+
+#[test]
+fn rind_face_splits_the_area() {
+    let square = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]];
+    let (rind, core) = rind_face(&square, 0.25);
+    let area = |m: &MeshBuilder| -> f32 {
+        m.indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| m.positions[i as usize]);
+                vec3::length(vec3::cross(vec3::sub(b, a), vec3::sub(c, a))) * 0.5
+            })
+            .sum()
+    };
+    assert!((area(&core) - 1.5 * 1.5).abs() < 1e-4, "core {}", area(&core));
+    assert!((area(&rind) + area(&core) - 4.0).abs() < 1e-4);
+    assert!(rind.normals.iter().chain(&core.normals).all(|n| *n == [0.0, 0.0, 1.0]));
+}
+
+#[test]
+fn shell_and_clip_profiles() {
+    let outer = [[0.0, 0.0], [1.0, 0.0], [1.0, 2.0]];
+    let shell = shell_profile(&outer, 0.1);
+    assert_eq!(shell.first(), Some(&[0.0, 0.0]));
+    assert!((shell[outer.len()][0] - 0.9).abs() < 1e-6 && shell[outer.len()][1] == 2.0, "flat lip a wall wide");
+    let inside = shell_inside(&shell, outer.len());
+    assert!(inside[0][0].abs() < 1e-6 && (inside[0][1] - 0.1).abs() < 1e-5, "inside floor {:?}", inside[0]);
+    let liquid = clip_profile(&inside, 1.0);
+    assert_eq!(liquid.last(), Some(&[0.0, 1.0]));
+    assert!(liquid.iter().all(|q| q[1] <= 1.0 + 1e-6));
+    assert!((profile_radius_at(&inside, 1.0, false).unwrap() - 0.9).abs() < 1e-5);
+    assert!((profile_height_at(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0]], 0.5).unwrap() - 1.0).abs() < 1e-6);
+    part(lathe(&shell, &LatheOptions::default()));
+}
+
+#[test]
+fn carved_hollow_lies_on_the_ball() {
+    let ball = uv_sphere(1.0, 48, 32);
+    let bite = Hollow::bite(vec3::ZERO, [1.0, 0.2, 0.0], 1.0, 0.6);
+    let (kept, carved) = carve_hollows(&ball, &[bite]);
+    assert!(!carved.is_empty());
+    for p in &carved.positions {
+        assert!((vec3::distance(*p, bite.center) - bite.radius).abs() < 1e-3, "{p:?} off the hollow");
+    }
+    for p in &kept.positions {
+        assert!(vec3::distance(*p, bite.center) >= bite.radius - 1e-3, "{p:?} left inside the hollow");
+    }
+    assert_front_faces_agree(&part(kept));
+    assert_front_faces_agree(&part(carved));
+}
+
+fn disc(r: f32, n: usize) -> Vec<[f32; 2]> {
+    (0..n).map(|i| {
+        let (s, c) = (TAU * i as f32 / n as f32).sin_cos();
+        [r * c, r * s]
+    }).collect()
+}
+
+/// Every edge, with vertices welded by position, borders exactly two triangles.
+fn assert_watertight(mesh: &MeshBuilder) {
+    let key = |p: V3| p.map(|c| (c * 1e4).round() as i64);
+    let mut edges: HashMap<([i64; 3], [i64; 3]), i32> = HashMap::new();
+    for tri in mesh.indices.as_chunks::<3>().0 {
+        for k in 0..3 {
+            let (a, b) = (key(mesh.positions[tri[k] as usize]), key(mesh.positions[tri[(k + 1) % 3] as usize]));
+            // Directed: a closed, consistently wound surface uses each edge once each way.
+            *edges.entry((a, b)).or_default() += 1;
+            *edges.entry((b, a)).or_default() -= 1;
+        }
+    }
+    let open = edges.values().filter(|&&v| v != 0).count();
+    assert_eq!(open, 0, "{open} unmatched directed edges");
+}
+
+#[test]
+fn slabs_are_closed_and_face_outward() {
+    for (depth, bevel, rounded) in [(0.3, 0.1, true), (0.3, 0.1, false), (0.3, 0.0, false)] {
+        let options = if rounded { SlabOptions::rounded(depth, bevel) } else { SlabOptions::chamfered(depth, bevel) };
+        let mesh = bevelled_slab(&disc(1.0, 40), &[], &options);
+        assert_watertight(&mesh);
+        assert_outward(&part(mesh.clone()), vec3::ZERO);
+        let holed = bevelled_slab(&disc(1.0, 40), &[disc(0.3, 20)], &options);
+        assert_watertight(&holed);
+        let (lo, hi) = mesh.bounds().unwrap();
+        assert!((hi[2] - lo[2] - depth).abs() < 1e-5 && (hi[0] - 1.0).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn slab_walls_are_smooth_round_a_disc_and_creased_at_a_square() {
+    let round = bevelled_slab(&disc(1.0, 40), &[], &SlabOptions::chamfered(0.3, 0.0));
+    let square = bevelled_slab(&[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]], &[], &SlabOptions::chamfered(0.3, 0.0));
+    let wall_normals_at = |m: &MeshBuilder, p: V3| -> Vec<V3> {
+        m.positions.iter().zip(&m.normals).filter(|(q, n)| vec3::distance(**q, p) < 1e-5 && n[2].abs() < 1e-3).map(|(_, n)| *n).collect()
+    };
+    let r = wall_normals_at(&round, [1.0, 0.0, 0.15]);
+    assert!(r.len() >= 2 && r.iter().all(|n| vec3::distance(*n, r[0]) < 1e-5), "disc wall should be smooth: {r:?}");
+    let s = wall_normals_at(&square, [1.0, 1.0, 0.15]);
+    assert!(s.iter().any(|n| (n[0] - 1.0).abs() < 1e-5) && s.iter().any(|n| (n[1] - 1.0).abs() < 1e-5), "square corner should crease: {s:?}");
 }

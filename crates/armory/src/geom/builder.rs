@@ -45,6 +45,16 @@ impl MeshBuilder {
         self.align_y_to(up).translate(origin)
     }
 
+    /// Rotates the mesh's +Y onto `up` and its +Z onto `forward` (made perpendicular to `up`),
+    /// then moves its origin to `origin`: sets a part that has a facing as well as an up,
+    /// such as a buckle on a strap or a lock plate on a wall.
+    pub fn place_basis(&mut self, origin: V3, up: V3, forward: V3) -> &mut Self {
+        let y = vec3::normalize_or(up, vec3::Y);
+        let z = vec3::try_normalize(vec3::sub(forward, vec3::scale(y, vec3::dot(forward, y)))).unwrap_or_else(|| vec3::any_perpendicular(y));
+        let x = vec3::cross(y, z);
+        self.transform(&Mat3::from_cols(x, y, z)).translate(origin)
+    }
+
     /// Appends one vertex and returns its index.
     pub fn push_vertex(&mut self, position: V3, normal: V3, uv: [f32; 2]) -> u32 {
         let index = self.positions.len() as u32;
@@ -213,6 +223,24 @@ impl MeshBuilder {
         self.append(&back)
     }
 
+    /// Recomputes every shading normal as the area-weighted average of the triangles that
+    /// share the vertex, after the positions have been displaced (rough stone, dents).
+    /// Vertices with no triangles keep their normal.
+    pub fn recompute_smooth_normals(&mut self) -> &mut Self {
+        let mut sums = vec![vec3::ZERO; self.positions.len()];
+        for tri in self.indices.as_chunks::<3>().0 {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| i as usize);
+            let face = vec3::cross(vec3::sub(self.positions[b], self.positions[a]), vec3::sub(self.positions[c], self.positions[a]));
+            for v in [a, b, c] {
+                sums[v] = vec3::add(sums[v], face);
+            }
+        }
+        for (n, s) in self.normals.iter_mut().zip(sums) {
+            *n = vec3::normalize_or(s, *n);
+        }
+        self
+    }
+
     /// Unshares every vertex and gives each triangle its own face normal (cut gems, rough stone).
     pub fn flat_shaded(&self) -> MeshBuilder {
         let mut out = MeshBuilder::new();
@@ -241,6 +269,7 @@ impl MeshBuilder {
             name,
             material: None,
             tint: None,
+            pattern: None,
             glow: 0.0,
             outline: true,
             positions: self.positions,

@@ -11,7 +11,7 @@ fn load(f: Family) -> Fixture {
 
 #[test]
 fn fixtures_load() {
-    for f in Family::ALL {
+    for f in Family::ALL.into_iter().filter(|f| f.in_armory_prototype()) {
         let fx = load(f);
         assert_eq!(fx.family, f);
         assert_eq!(fx.rows.len(), fx.count);

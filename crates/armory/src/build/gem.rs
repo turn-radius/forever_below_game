@@ -11,7 +11,10 @@
 //! base and a crown of triangles; a shard is a terminated hexagonal crystal.
 
 use crate::gem::{GemCut, Gemstone};
-use crate::geom::{LatheOptions, MeshBuilder, OutlineMode, Part, Shading, V3, icosphere, lathe, spline_profile, vec3};
+use crate::geom::{
+    CatmullRom, LatheOptions, MeshBuilder, OutlineMode, Part, Shading, SweepOptions, V3, icosphere, lathe, spline_profile, tube,
+    uv_sphere, vec3,
+};
 use crate::material::MaterialKind;
 
 /// A horizontal ring of `n` points at height `y`, the first at angle `phase` (radians, from
@@ -175,6 +178,54 @@ pub fn bezel(radius: f32, sides: usize, shading: Shading) -> MeshBuilder {
     let r = radius;
     let control = [[0.0, -0.35 * r], [0.55 * r, -0.3 * r], [0.98 * r, 0.05 * r], [1.04 * r, 0.2 * r], [0.88 * r, 0.25 * r]];
     lathe(&spline_profile(&control, 16), &LatheOptions { facets: sides, shading, cap_start: false, cap_end: true, phase: 0.0 })
+}
+
+/// A collet: a raised cup whose lip turns in over a stone of girdle radius `radius`, its foot
+/// at y = 0 and its lip `height + 0.16 * radius` up (the prototype's `bezelCup`, for rings,
+/// pendants and accent stones). Seat the stone's girdle at [`collet_seat`].
+pub fn collet(radius: f32, height: f32, sides: usize) -> MeshBuilder {
+    let (r, h) = (radius, height.max(radius * 0.15));
+    let control = [[r * 0.5, 0.0], [r * 1.02, h * 0.3], [r * 1.1, h], [r * 1.14, h + r * 0.1], [r * 0.98, h + r * 0.16]];
+    lathe(&spline_profile(&control, 14), &LatheOptions { facets: sides, shading: Shading::SMOOTH, cap_start: true, cap_end: true, phase: 0.0 })
+}
+
+/// The girdle height of a stone in a [`collet`] of the same `radius` and `height`: just
+/// under the turned-in lip.
+pub fn collet_seat(radius: f32, height: f32) -> f32 {
+    height.max(radius * 0.15) + radius * 0.06
+}
+
+/// A claw setting for a stone of girdle radius `radius`: a basket rising `height` from
+/// y = 0, and `count` claws that climb past the girdle and curl over it, each tipped with a
+/// bead. `bend(k)` pushes claw `k`'s tip out (bent by damage) as a fraction of the radius.
+/// Returns `(basket, claws)` so the claws can go without an outline. Seat the girdle at
+/// [`claw_seat`].
+pub fn claw_setting(radius: f32, height: f32, count: u32, bend: impl Fn(u32) -> f32) -> (MeshBuilder, MeshBuilder) {
+    let (r, h) = (radius, height.max(radius * 0.3));
+    let basket = lathe(
+        &spline_profile(&[[r * 0.22, 0.0], [r * 0.32, h * 0.25], [r * 0.72, h * 0.85], [r * 0.78, h]], 10),
+        &LatheOptions { facets: 20, shading: Shading::SMOOTH, ..Default::default() },
+    );
+    let mut claws = MeshBuilder::new();
+    let count = count.max(2);
+    let tip = uv_sphere(r * 0.085, 8, 6);
+    for k in 0..count {
+        let a = std::f32::consts::TAU * k as f32 / count as f32 + std::f32::consts::PI / count as f32;
+        let dir = [a.cos(), 0.0, -a.sin()];
+        let at = |rr: f32, y: f32| vec3::add(vec3::scale(dir, rr), [0.0, y, 0.0]);
+        let control = vec![at(r * 0.3, 0.0), at(r * 0.85, h * 0.6), at(r * 1.04, h + r * 0.05), at(r * (0.86 + bend(k)), h + r * 0.34)];
+        let path = CatmullRom::centripetal(control).sample(8);
+        claws.append(&tube(&path, 8, &SweepOptions::default(), |t| r * (0.11 - 0.04 * t)));
+        let mut bead = tip.clone();
+        bead.translate(path[path.len() - 1]);
+        claws.append(&bead);
+    }
+    (basket, claws)
+}
+
+/// The girdle height of a stone in a [`claw_setting`] of the same `radius` and `height`.
+pub fn claw_seat(radius: f32, height: f32) -> f32 {
+    height.max(radius * 0.3) + radius * 0.05
 }
 
 /// Finishes stone geometry into a part: gem material, the stone's own colour, and a glow.

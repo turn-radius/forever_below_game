@@ -24,11 +24,11 @@ pub fn signed_area(polygon: &[P2]) -> f32 {
     (0..n).map(|i| cross2(polygon[i], polygon[(i + 1) % n])).sum::<f32>() * 0.5
 }
 
-fn turn(a: P2, b: P2, c: P2) -> f32 {
+pub(crate) fn turn(a: P2, b: P2, c: P2) -> f32 {
     cross2(sub2(b, a), sub2(c, b))
 }
 
-fn in_triangle(p: P2, a: P2, b: P2, c: P2) -> bool {
+pub(crate) fn in_triangle(p: P2, a: P2, b: P2, c: P2) -> bool {
     const EPS: f32 = -1e-7;
     cross2(sub2(b, a), sub2(p, a)) >= EPS && cross2(sub2(c, b), sub2(p, b)) >= EPS && cross2(sub2(a, c), sub2(p, c)) >= EPS
 }
@@ -263,4 +263,148 @@ pub fn extrude_tapered(outline: &[P2], holes: &[Vec<P2>], depth_at_min_x: f32, d
         }
     }
     mesh
+}
+
+/// Extrudes a 2D outline in the XY plane through `depth` along Z, centred on z = 0, with
+/// walls that shade smooth round the outline except at the corners flagged in `sharp` (one
+/// flag per outline point), and flat front (+Z) and back (-Z) faces. For rounded profiles
+/// that keep a few crisp corners: a chest's barrel lid, a moulding, a board with eased
+/// edges. No holes.
+pub fn extrude_smooth(outline: &[P2], sharp: &[bool], depth: f32) -> MeshBuilder {
+    use super::grid::{GridOptions, Shading, stitch_grid};
+    let mut mesh = MeshBuilder::new();
+    if outline.len() < 3 {
+        return mesh;
+    }
+    let flag = |i: usize| sharp.get(i).copied().unwrap_or(false);
+    let order: Vec<usize> = if signed_area(outline) >= 0.0 { (0..outline.len()).collect() } else { (0..outline.len()).rev().collect() };
+    let ring: Vec<P2> = order.iter().map(|&i| outline[i]).collect();
+    let h = depth.max(0.0) * 0.5;
+    // A sharp corner appears twice: the zero-width cell between the copies keeps the normals
+    // on either side of it from blending.
+    let mut columns: Vec<P2> = Vec::with_capacity(ring.len() * 2);
+    for &i in &order {
+        columns.push(outline[i]);
+        if flag(i) {
+            columns.push(outline[i]);
+        }
+    }
+    let rows: Vec<Vec<V3>> = [-h, h].iter().map(|&z| columns.iter().map(|q| [q[0], q[1], z]).collect()).collect();
+    mesh.append(&stitch_grid(&rows, &GridOptions { wrap_around: true, wrap_along: false, shading: Shading::SMOOTH, row_v: None }));
+
+    let tris = triangulate(&ring, &[]);
+    let (min, max) = ring.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), q| {
+        ([lo[0].min(q[0]), lo[1].min(q[1])], [hi[0].max(q[0]), hi[1].max(q[1])])
+    });
+    let size = (max[0] - min[0]).max(max[1] - min[1]).max(1e-6);
+    for (side, front) in [(1.0f32, true), (-1.0, false)] {
+        let base = mesh.vertex_count() as u32;
+        for q in &ring {
+            mesh.push_vertex([q[0], q[1], side * h], [0.0, 0.0, side], [(q[0] - min[0]) / size, (q[1] - min[1]) / size]);
+        }
+        for t in &tris {
+            if front { mesh.push_triangle(base + t[0], base + t[1], base + t[2]) } else { mesh.push_triangle(base + t[0], base + t[2], base + t[1]) };
+        }
+    }
+    mesh
+}
+
+/// Rounds every corner of a closed polygon that turns by more than `min_turn` radians with a
+/// curve of about `radius` (smaller where the neighbouring edges are short), sampled with
+/// `segments` pieces. Gentle bends of a densely sampled curve are left alone.
+pub fn fillet(polygon: &[P2], radius: f32, min_turn: f32, segments: usize) -> Vec<P2> {
+    fillet_points(polygon, radius, min_turn, segments, true)
+}
+
+/// [`fillet`] for an open polyline: the end points stay where they are.
+pub fn fillet_polyline(polyline: &[P2], radius: f32, min_turn: f32, segments: usize) -> Vec<P2> {
+    fillet_points(polyline, radius, min_turn, segments, false)
+}
+
+fn fillet_points(polygon: &[P2], radius: f32, min_turn: f32, segments: usize, closed: bool) -> Vec<P2> {
+    let n = polygon.len();
+    if n < 3 || radius <= 0.0 {
+        return polygon.to_vec();
+    }
+    let len = |d: P2| (d[0] * d[0] + d[1] * d[1]).sqrt();
+    let mut out = Vec::with_capacity(n + segments * 4);
+    for i in 0..n {
+        let (prev, p, next) = (polygon[(i + n - 1) % n], polygon[i], polygon[(i + 1) % n]);
+        let (din, dout) = (sub2(p, prev), sub2(next, p));
+        let (lin, lout) = (len(din), len(dout));
+        if (!closed && (i == 0 || i + 1 == n)) || lin < 1e-7 || lout < 1e-7 {
+            out.push(p);
+            continue;
+        }
+        let (ui, uo) = ([din[0] / lin, din[1] / lin], [dout[0] / lout, dout[1] / lout]);
+        let angle = cross2(ui, uo).atan2(ui[0] * uo[0] + ui[1] * uo[1]);
+        if angle.abs() < min_turn || angle.abs() > std::f32::consts::PI - 1e-3 {
+            out.push(p);
+            continue;
+        }
+        // Tangent points sit `t` back along each edge; a quadratic Bezier through the corner
+        // joins them, tangent to both edges and close to a circular arc.
+        let t = (radius * (angle.abs() * 0.5).tan()).min(lin * 0.45).min(lout * 0.45);
+        let a = [p[0] - ui[0] * t, p[1] - ui[1] * t];
+        let b = [p[0] + uo[0] * t, p[1] + uo[1] * t];
+        let segments = segments.max(1);
+        for s in 0..=segments {
+            let u = s as f32 / segments as f32;
+            let (w0, w1, w2) = ((1.0 - u) * (1.0 - u), 2.0 * u * (1.0 - u), u * u);
+            out.push([w0 * a[0] + w1 * p[0] + w2 * b[0], w0 * a[1] + w1 * p[1] + w2 * b[1]]);
+        }
+    }
+    out
+}
+
+/// Moves every point of a closed polygon `distance` inward (outward when negative) along
+/// the average of its two edge normals. A simple offset for smooth, densely sampled curves
+/// (a row of studs inside a shield's rim); sharp concave corners may fold.
+pub fn offset_ring(polygon: &[P2], distance: f32) -> Vec<P2> {
+    let n = polygon.len();
+    if n < 3 {
+        return polygon.to_vec();
+    }
+    let ccw = signed_area(polygon) >= 0.0;
+    let left = |d: P2| {
+        let l = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-9);
+        if ccw { [-d[1] / l, d[0] / l] } else { [d[1] / l, -d[0] / l] }
+    };
+    (0..n)
+        .map(|i| {
+            let (prev, p, next) = (polygon[(i + n - 1) % n], polygon[i], polygon[(i + 1) % n]);
+            let (a, b) = (left(sub2(p, prev)), left(sub2(next, p)));
+            let m = [a[0] + b[0], a[1] + b[1]];
+            let l = (m[0] * m[0] + m[1] * m[1]).sqrt().max(1e-9);
+            // Keep the offset distance at corners: divide by the cosine of the half-angle.
+            let cos_half = ((m[0] / l) * a[0] + (m[1] / l) * a[1]).max(0.3);
+            [p[0] + m[0] / l * distance / cos_half, p[1] + m[1] / l * distance / cos_half]
+        })
+        .collect()
+}
+
+/// `count` points evenly spaced by arc length round a closed polygon, from its first point.
+pub fn resample_closed(polygon: &[P2], count: usize) -> Vec<P2> {
+    let n = polygon.len();
+    if n < 2 || count == 0 {
+        return polygon.to_vec();
+    }
+    let len = |d: P2| (d[0] * d[0] + d[1] * d[1]).sqrt();
+    let mut acc = vec![0.0f32; n + 1];
+    for i in 0..n {
+        acc[i + 1] = acc[i] + len(sub2(polygon[(i + 1) % n], polygon[i]));
+    }
+    let total = acc[n].max(1e-9);
+    let mut seg = 0;
+    (0..count)
+        .map(|k| {
+            let d = total * k as f32 / count as f32;
+            while seg + 1 < n && acc[seg + 1] < d {
+                seg += 1;
+            }
+            let (a, b) = (polygon[seg], polygon[(seg + 1) % n]);
+            let t = ((d - acc[seg]) / (acc[seg + 1] - acc[seg]).max(1e-9)).clamp(0.0, 1.0);
+            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+        })
+        .collect()
 }

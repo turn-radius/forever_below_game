@@ -196,3 +196,98 @@ pub fn parametric_surface(u_segments: usize, v_segments: usize, options: &GridOp
     }
     stitch_grid(&points, &opts)
 }
+
+/// One unit normal per grid point, on the front side (`du x dv`), from central differences
+/// (one-sided at open edges). A collapsed row (a pole) takes the mean of the normals of the
+/// row next to it, so a bag's rounded base points straight down.
+pub fn grid_normals(points: &[Vec<V3>], wrap_around: bool, wrap_along: bool) -> Vec<Vec<V3>> {
+    let rows = points.len();
+    if rows == 0 {
+        return Vec::new();
+    }
+    let cols = points[0].len();
+    let neighbours = |k: usize, n: usize, wrap: bool| -> (usize, usize) {
+        let prev = if k > 0 { k - 1 } else if wrap { n - 1 } else { k };
+        let next = if k + 1 < n { k + 1 } else if wrap { 0 } else { k };
+        (prev, next)
+    };
+    let raw: Vec<Vec<Option<V3>>> = (0..rows)
+        .map(|r| {
+            let (rp, rn) = neighbours(r, rows, wrap_along);
+            (0..cols)
+                .map(|c| {
+                    let (cp, cn) = neighbours(c, cols, wrap_around);
+                    let du = vec3::sub(points[r][cn], points[r][cp]);
+                    let dv = vec3::sub(points[rn][c], points[rp][c]);
+                    let n = vec3::cross(du, dv);
+                    let scale = vec3::length(du) * vec3::length(dv);
+                    (scale > 1e-12 && vec3::length(n) > 1e-6 * scale).then(|| vec3::normalize_or(n, vec3::Y))
+                })
+                .collect()
+        })
+        .collect();
+    let row_mean = |r: usize| -> Option<V3> { vec3::try_normalize(raw[r].iter().flatten().fold(vec3::ZERO, |a, &n| vec3::add(a, n))) };
+    (0..rows)
+        .map(|r| {
+            let pole = is_collapsed(&points[r]);
+            (0..cols)
+                .map(|c| {
+                    let own = if pole { None } else { raw[r][c] };
+                    own.or_else(|| if r + 1 < rows { row_mean(r + 1) } else { None })
+                        .or_else(|| if r > 0 { row_mean(r - 1) } else { None })
+                        .unwrap_or(vec3::Y)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// A grid surface with a real `thickness`: the front surface as [`stitch_grid`] makes it, a
+/// back surface offset `thickness` behind it (against its normals), and hard-edged rims
+/// joining the two along every open edge (rows or columns that do not wrap; poles need
+/// none). For anything made of a sheet that shows its edge: leather flaps, a bag body with
+/// an open mouth, a sewn patch.
+pub fn thick_sheet(points: &[Vec<V3>], options: &GridOptions, thickness: f32) -> MeshBuilder {
+    let rows = points.len();
+    if rows < 2 || points[0].len() < 2 {
+        return stitch_grid(points, options);
+    }
+    let cols = points[0].len();
+    let normals = grid_normals(points, options.wrap_around, options.wrap_along);
+    let inner: Vec<Vec<V3>> = points
+        .iter()
+        .zip(&normals)
+        .map(|(row, ns)| row.iter().zip(ns).map(|(&p, &n)| vec3::sub(p, vec3::scale(n, thickness))).collect())
+        .collect();
+    let mut mesh = stitch_grid(points, options);
+    let mut back = stitch_grid(&inner, &GridOptions { row_v: options.row_v.clone(), ..options.clone() });
+    back.flip();
+    mesh.append(&back);
+
+    // A rim strip runs along the edge (its u) from the front surface to the back (its v).
+    // Worked through du x dv, that faces outward on the last row and the first column as it
+    // stands, and needs flipping on the first row and the last column.
+    let rim = |front: Vec<V3>, back: Vec<V3>, wrap: bool, flip: bool| {
+        let options = GridOptions { wrap_around: wrap, wrap_along: false, shading: Shading { smooth_around: true, smooth_along: false }, row_v: None };
+        let mut strip = stitch_grid(&[front, back], &options);
+        if flip {
+            strip.flip();
+        }
+        strip
+    };
+    if !options.wrap_along {
+        for (r, flip) in [(0, true), (rows - 1, false)] {
+            if !is_collapsed(&points[r]) {
+                mesh.append(&rim(points[r].clone(), inner[r].clone(), options.wrap_around, flip));
+            }
+        }
+    }
+    if !options.wrap_around {
+        for (c, flip) in [(0, false), (cols - 1, true)] {
+            let front: Vec<V3> = points.iter().map(|row| row[c]).collect();
+            let back: Vec<V3> = inner.iter().map(|row| row[c]).collect();
+            mesh.append(&rim(front, back, options.wrap_along, flip));
+        }
+    }
+    mesh
+}

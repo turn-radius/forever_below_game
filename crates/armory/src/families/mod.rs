@@ -3,7 +3,35 @@
 
 use crate::geom::ItemMesh;
 
+pub mod amulet;
+pub mod axe;
+pub mod bags;
+pub mod belt;
+pub mod bow;
+pub mod charm;
+pub mod chests;
+pub mod club;
+pub mod crossbow;
+pub mod dagger;
+pub mod feet;
+pub mod food;
+pub mod garment;
+pub mod hands;
+pub mod helm;
+pub mod hood;
+pub mod lantern;
+pub mod legs;
 pub mod mace;
+pub mod ring;
+pub mod shield;
+pub mod spear;
+pub mod staff;
+pub mod sundry;
+pub mod sword;
+pub mod torch;
+
+pub(crate) mod hilted;
+
 
 /// The contract every family module implements.
 pub trait Generator {

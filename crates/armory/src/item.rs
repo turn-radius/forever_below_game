@@ -1,59 +1,99 @@
 //! [`Item`]: one rolled item of any ported family, so callers (the turntable, `fb_items`, the
 //! loot tables) can roll, name and build items without matching on families themselves.
 //!
-//! Porting a family adds one variant to [`Item`], one entry to [`Item::PORTED`], and one arm
-//! each to [`Item::roll`], [`Item::family`] and both forms of `dispatch!`. Every family state
-//! carries `seed`, `cond` and `palette` fields under those names, which `dispatch!` relies on.
+//! Porting a family is one line in the `ported!` list at the bottom of this file, in
+//! [`Family::ALL`] order. Every family state carries `seed`, `cond` and `palette` fields under
+//! those names, which [`Item`]'s accessors rely on.
 
 use crate::Family;
 use crate::cond::Condition;
 use crate::families::Generator;
-use crate::families::mace::{Mace, MaceState};
 use crate::geom::ItemMesh;
 use crate::palette::Palette;
 
-/// One item's full state, tagged by family.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Item {
-    Mace(MaceState),
-}
+/// Generates [`Item`], [`Item::PORTED`], [`Item::roll`], [`Item::family`] and `dispatch!` from
+/// one list of `Variant => module::Generator(State)` entries.
+macro_rules! ported {
+    ($($variant:ident => $module:ident :: $generator:ident ( $state_ty:ident )),+ $(,)?) => {
+        /// One item's full state, tagged by family. States are plain values of a few hundred
+        /// bytes, rolled and passed around rarely, so variants are not boxed to even out sizes.
+        #[derive(Clone, Debug, PartialEq)]
+        #[allow(clippy::large_enum_variant)]
+        pub enum Item {
+            $($variant(crate::families::$module::$state_ty),)+
+        }
 
-/// Runs `$body` with `$state` bound to the variant's state and, in the first form,
-/// `$generator` aliased to the family's [`Generator`].
-macro_rules! dispatch {
-    ($item:expr, $generator:ident, $state:ident => $body:expr) => {
-        match $item {
-            Item::Mace($state) => {
-                type $generator = Mace;
-                $body
+        /// Runs `$body` with `$state` bound to the variant's state and, in the first form,
+        /// `$g` aliased to the family's [`Generator`].
+        macro_rules! dispatch {
+            ($item:expr, $g:ident, $s:ident => $body:expr) => {
+                match $item {
+                    $(Item::$variant($s) => {
+                        type $g = crate::families::$module::$generator;
+                        $body
+                    })+
+                }
+            };
+            ($item:expr, $s:ident => $body:expr) => {
+                match $item {
+                    $(Item::$variant($s) => $body,)+
+                }
+            };
+        }
+
+        impl Item {
+            /// The families [`Item::roll`] can make, in [`Family::ALL`] order.
+            pub const PORTED: &[Family] = &[$(Family::$variant),+];
+
+            /// "Forge new" for any family: `None` until that family is ported.
+            pub fn roll(family: Family, seed: u32) -> Option<Item> {
+                match family {
+                    $(Family::$variant => Some(Item::$variant(crate::families::$module::$generator::roll(seed))),)+
+                    #[allow(unreachable_patterns)]
+                    _ => None,
+                }
+            }
+
+            pub fn family(&self) -> Family {
+                match self {
+                    $(Item::$variant(_) => Family::$variant,)+
+                }
             }
         }
     };
-    ($item:expr, $state:ident => $body:expr) => {
-        match $item {
-            Item::Mace($state) => $body,
-        }
-    };
+}
+
+
+ported! {
+    Staff => staff::Staff(StaffState),
+    Mace => mace::Mace(MaceState),
+    Sword => sword::Sword(SwordState),
+    Spear => spear::Spear(SpearState),
+    Dagger => dagger::Dagger(DaggerState),
+    Club => club::Club(ClubState),
+    Axe => axe::Axe(AxeState),
+    Bow => bow::Bow(BowState),
+    Crossbow => crossbow::Crossbow(CrossbowState),
+    Helm => helm::Helm(HelmState),
+    Hood => hood::Hoods(HoodState),
+    Garment => garment::Garment(GarmentState),
+    Belt => belt::Belts(BeltState),
+    Hands => hands::Hands(HandsState),
+    Legs => legs::Legs(LegsState),
+    Feet => feet::Feet(FeetState),
+    Shield => shield::Shield(ShieldState),
+    Ring => ring::Ring(RingState),
+    Amulet => amulet::Amulet(AmuletState),
+    Charm => charm::Charm(CharmState),
+    Bags => bags::Bags(BagState),
+    Chests => chests::Chests(ChestState),
+    Food => food::Food(FoodState),
+    Torch => torch::Torch(TorchState),
+    Lantern => lantern::Lantern(LanternState),
+    Sundry => sundry::Sundry(SundryState),
 }
 
 impl Item {
-    /// The families [`Item::roll`] can make, in [`Family::ALL`] order.
-    pub const PORTED: &[Family] = &[Family::Mace];
-
-    /// "Forge new" for any family: `None` until that family is ported.
-    pub fn roll(family: Family, seed: u32) -> Option<Item> {
-        match family {
-            Family::Mace => Some(Item::Mace(Mace::roll(seed))),
-            _ => None,
-        }
-    }
-
-    pub fn family(&self) -> Family {
-        match self {
-            Item::Mace(_) => Family::Mace,
-        }
-    }
-
     pub fn seed(&self) -> u32 {
         dispatch!(self, state => state.seed)
     }
@@ -88,6 +128,7 @@ impl Family {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::families::mace::Mace;
 
     #[test]
     fn rolls_are_deterministic() {

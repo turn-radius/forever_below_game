@@ -5,11 +5,15 @@
 // hard bands, as three.js `MeshToonMaterial` does with a 1-pixel gradient map
 // (`makeGradient` in `reference/spline_armory_engine.js`), then scaled by the light's colour
 // and distance falloff. Wear is painted on the base colour first (`decay.wesl`); both
-// work in display (sRGB) values, as the prototype did.
+// work in display (sRGB) values, as the prototype did. The vertex shader is Bevy's mesh
+// vertex shader plus one thing: fine parts that get no ink line are fattened to a minimum
+// width on screen, so a bowstring stays visible across the room.
 // See `docs/rendering.md`.
 
 import bevy_pbr::render::{
-    forward_io::{VertexOutput, FragmentOutput},
+    forward_io::{Vertex, VertexOutput, FragmentOutput, decompress_vertex},
+    mesh_functions,
+    view_transformations::position_world_to_clip,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, main_pass_post_lighting_processing},
     pbr_types::PbrInput,
@@ -23,6 +27,7 @@ import bevy_pbr::render::{
 };
 import bevy_render::maths::PI;
 import super::decay::apply_decay;
+import super::screen::reference_pixel;
 
 struct ToonUniform {
     // Up to eight band values, packed four to a vec4.
@@ -34,9 +39,48 @@ struct ToonUniform {
     decay_seed: f32,
     // Self-lit strength as a fraction of the worn base colour (glowing gems).
     glow: f32,
+    // Narrowest the part may look, in pixels on a 1080-pixel-tall viewport; 0 for no minimum.
+    min_width_px: f32,
+    // The part's own half thickness in item units, so only parts thinner than the minimum
+    // are fattened.
+    half_thickness: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> toon: ToonUniform;
+
+// Bevy's mesh vertex shader (`bevy_pbr::render::mesh`) without morph targets or skinning,
+// which Armory parts never have, plus the minimum width.
+@vertex
+fn vertex(vertex_in: Vertex) -> VertexOutput {
+    let vertex = decompress_vertex(vertex_in, vertex_in.instance_index);
+    let world_from_local = mesh_functions::get_world_from_local(vertex_in.instance_index);
+    var out: VertexOutput;
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex_in.instance_index);
+    var world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
+    if toon.min_width_px > 0.0 {
+        // Push out along the normal until the part is at least `min_width_px` across. A
+        // thicker part, or the same part seen up close, does not move.
+        let half_width = 0.5 * toon.min_width_px * reference_pixel(world_position.xyz);
+        let push = max(half_width - toon.half_thickness, 0.0);
+        world_position = vec4<f32>(world_position.xyz + normalize(out.world_normal) * push, 1.0);
+    }
+    out.world_position = world_position;
+    out.position = position_world_to_clip(world_position.xyz);
+
+    @if(VERTEX_UVS_A)
+    out.uv = vertex.uv;
+    @if(VERTEX_UVS_B)
+    out.uv_b = vertex.uv_b;
+    @if(VERTEX_TANGENTS)
+    out.world_tangent = mesh_functions::mesh_tangent_local_to_world(world_from_local, vertex.tangent, vertex_in.instance_index);
+    @if(VERTEX_COLORS)
+    out.color = vertex.color;
+    @if(VERTEX_OUTPUT_INSTANCE_INDEX)
+    out.instance_index = vertex_in.instance_index;
+    @if(VISIBILITY_RANGE_DITHER)
+    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(vertex_in.instance_index, world_from_local[3]);
+    return out;
+}
 
 // The band for one light: three.js samples its gradient at N.L * 0.5 + 0.5, so the unlit
 // side still gets the lowest band. A shadowed fragment drops to the lowest band.

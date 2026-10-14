@@ -12,7 +12,7 @@ use bevy::{
 };
 
 use super::outline::{ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
-use super::toon::{Decay, ToonBands, ToonExtension, ToonMaterial};
+use super::toon::{Decay, MinWidth, ToonBands, ToonExtension, ToonMaterial};
 
 /// Base colour for every material kind: the armory palette for paletted metals, wood and
 /// so on, plus the kinds it leaves to other sources (untinted gems, cloth, paint, food).
@@ -65,6 +65,8 @@ pub struct ItemAppearance {
     pub decay_scale_factor: f32,
     pub bands: ToonBands,
     pub outline: OutlineMaterial,
+    /// Narrowest a part without an ink line may look, in pixels at 1080p (`MinWidth::px`).
+    pub min_width_px: f32,
 }
 
 impl Default for ItemAppearance {
@@ -76,6 +78,7 @@ impl Default for ItemAppearance {
             decay_scale_factor: 1.0,
             bands: ToonBands::default(),
             outline: OutlineMaterial::default(),
+            min_width_px: 1.5,
         }
     }
 }
@@ -102,7 +105,17 @@ impl ItemAppearance {
                 reflectance: 0.0,
                 ..default()
             },
-            extension: ToonExtension { bands: self.bands, decay, glow },
+            // Outlined parts already read through their ink line.
+            extension: ToonExtension {
+                bands: self.bands,
+                decay,
+                glow,
+                min_width: if part.outline {
+                    MinWidth::default()
+                } else {
+                    MinWidth { px: self.min_width_px, half_thickness: half_thickness(part) }
+                },
+            },
         }
     }
 }
@@ -121,6 +134,22 @@ pub fn part_to_mesh(part: &Part) -> Mesh {
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
     }
     mesh
+}
+
+/// A part's half thickness, estimated as volume over surface area (`2V / A`) so it needs no
+/// knowledge of the part's shape: exactly the radius of a tube, and the full thickness of a
+/// thin plate, which errs on the thick side. Zero for a part with no area.
+pub fn half_thickness(part: &Part) -> f32 {
+    let points: Vec<Vec3> = part.positions.iter().map(|&p| Vec3::from_array(p)).collect();
+    // Measured about the part's own centre, which keeps the sum accurate far from the origin.
+    let centre = points.iter().sum::<Vec3>() / points.len().max(1) as f32;
+    let (mut volume, mut area) = (0.0, 0.0);
+    for triangle in part.indices.as_chunks::<3>().0 {
+        let [a, b, c] = triangle.map(|i| points[i as usize] - centre);
+        volume += a.dot(b.cross(c)) / 6.0;
+        area += (b - a).cross(c - a).length() * 0.5;
+    }
+    if area > 0.0 { (2.0 * volume / area).max(0.0) } else { 0.0 }
 }
 
 /// Item-space bounds of every part, or `None` for an item with no vertices.
@@ -217,6 +246,41 @@ mod tests {
         let bounds = item_bounds(&item).unwrap();
         assert_eq!(Vec3::from(bounds.min), Vec3::new(-1.0, 0.0, 0.0));
         assert_eq!(Vec3::from(bounds.max), Vec3::new(1.0, 8.0, 0.5));
+    }
+
+    /// A closed cylinder along Y: `sides` around, capped at both ends.
+    fn cylinder(radius: f32, length: f32, sides: u32) -> Part {
+        let mut positions = vec![[0.0, 0.0, 0.0], [0.0, length, 0.0]];
+        for i in 0..sides {
+            let (sin, cos) = (std::f32::consts::TAU * i as f32 / sides as f32).sin_cos();
+            positions.push([cos * radius, 0.0, sin * radius]);
+            positions.push([cos * radius, length, sin * radius]);
+        }
+        let mut indices = Vec::new();
+        for i in 0..sides {
+            let (a, b) = (2 + 2 * i, 2 + 2 * ((i + 1) % sides));
+            indices.extend([a, a + 1, b, b, a + 1, b + 1, 0, a, b, 1, b + 1, a + 1]);
+        }
+        Part { positions, indices, ..default() }
+    }
+
+    #[test]
+    fn half_thickness_of_a_string_is_its_radius() {
+        let string = cylinder(0.01, 12.0, 24);
+        let estimate = half_thickness(&string);
+        assert!((estimate - 0.01).abs() < 0.0005, "{estimate}");
+        assert_eq!(half_thickness(&Part::default()), 0.0);
+    }
+
+    #[test]
+    fn only_parts_without_ink_get_a_minimum_width() {
+        let appearance = ItemAppearance::default();
+        let string = Part { outline: false, ..cylinder(0.01, 12.0, 24) };
+        let limb = Part { outline: true, ..cylinder(0.1, 12.0, 24) };
+        let fine = appearance.material_for(&string).extension.min_width;
+        assert_eq!(fine.px, appearance.min_width_px);
+        assert!((fine.half_thickness - 0.01).abs() < 0.0005);
+        assert_eq!(appearance.material_for(&limb).extension.min_width, MinWidth::default());
     }
 
     #[test]
