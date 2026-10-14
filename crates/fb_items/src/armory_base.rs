@@ -141,6 +141,13 @@ pub fn armory_base(name: &str) -> Option<&'static ArmoryBase> {
     ARMORY_BASES.iter().find(|(n, _)| *n == name).map(|(_, b)| b)
 }
 
+/// The shape of base `name` from `seed`: one of its accepted styles, rolled with the
+/// family's `roll_as`, then its tweak (the plate's `SA.roll(fam, seed, acc)` and `tw`).
+/// `None` for a name no table knows.
+pub fn roll_shape(name: &str, seed: u32) -> Option<Item> {
+    armory_base(name).map(|base| base.roll(seed))
+}
+
 use Accept as A;
 
 /// Every base the Armory makes, in the plate's `SAB` order with the newer families after.
@@ -400,6 +407,38 @@ mod tests {
                 assert!(rolls.iter().any(|item| single.accepts(item)), "{name}: {single:?} never rolls");
             }
         }
+    }
+
+    #[test]
+    fn boots_roll_only_boots_and_sabatons() {
+        for seed in 1..200 {
+            match roll_shape("Boots", seed) {
+                Some(Item::Feet(s)) => assert!(matches!(s.boot.style, BootStyle::Boot | BootStyle::Sabaton), "{seed}: {:?}", s.boot.style),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_mantle_is_a_short_cloak() {
+        for seed in 1..200 {
+            match roll_shape("Mantle", seed) {
+                Some(Item::Garment(s)) => {
+                    assert_eq!(s.cut.style, GarmentStyle::Cloak);
+                    assert!(s.cut.length < 1.6, "{seed}: {}", s.cut.length);
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn same_base_and_seed_same_shape() {
+        for (name, _) in ARMORY_BASES {
+            assert_eq!(roll_shape(name, 4242), roll_shape(name, 4242), "{name}");
+        }
+        assert_ne!(roll_shape("Sword", 1), roll_shape("Sword", 2));
+        assert_eq!(roll_shape("Spoon", 1), None);
     }
 
     #[test]

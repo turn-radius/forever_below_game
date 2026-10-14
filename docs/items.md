@@ -4,7 +4,7 @@ These are the rules the prototype settled on. Keep the intent and improve the de
 
 ## Two layers
 
-1. **Shape**: an `armory::Item`, rolled by the Armory's own "Forge new". `fb_items::armory_base` maps each base name (from `data/bases.json`, `data/goods.json` and the plate's own Armory list) to an Armory family, the styles of it the base accepts (for example, `Boots` accepts a `boot.style` of `boot` or `sabaton`), and sometimes a tweak applied after rolling (a Mantle is a short cloak, a Purse always holds coins).
+1. **Shape**: an `armory::Item`, rolled by the Armory's own "Forge new". `fb_items::armory_base` maps each base name (from `data/bases.json`, `data/goods.json` and the plate's own Armory list) to an Armory family, the styles of it the base accepts (for example, `Boots` accepts a `boot.style` of `boot` or `sabaton`), and sometimes a tweak applied after rolling (a Mantle is a short cloak, a Purse always holds coins). `fb_items::armory_base::roll_shape(base, seed)` rolls the shape: an accepted style straight from the family's `roll_as`, then the tweak. Unlike the plate it never retries seeds; see the first point under "Bases from the Armory".
 2. **Game layer**: rarity, affixes, stats, footprint, history.
 
 Every base is now made by the Armory; the plate's laced shirt, leather jerkin and pointed hat are no longer drawn outside it. See "Bases from the Armory" below.
