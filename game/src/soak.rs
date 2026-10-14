@@ -9,20 +9,23 @@
 //! crosshair. With `--title` it presses Enter on the title to begin a new delve.
 //!
 //! Every [`REPORT_SECONDS`] it logs a `soak:` line to stderr: entities, mesh, image and material
-//! assets, cameras, readbacks, icons, render phases, whether lights are clustered on the GPU
-//! (which must stay off, `crate::render::cluster_lights_on_the_cpu`) and the smoothed frame time,
-//! so counts that grow without bound show in the log, and then the active cameras by name. `FB_SOAK_CHURN=1` also forgets every inventory icon at
+//! assets, cameras, readbacks, icons, render phases and the smoothed frame time, so counts that
+//! grow without bound show in the log, and then the active cameras by name.
+//! The line also gives the render world's GPU preprocessing mode, which must read
+//! `PreprocessingOnly` (`crate::render`'s `indirect`): in Bevy's `Culling` mode, GPU light
+//! clustering now and then read back a garbage index count and crashed the render thread after a
+//! while (#171, `docs/rendering.md`). `FB_SOAK_CHURN=1` also forgets every inventory icon at
 //! each report, so they are all drawn again (many icon cameras made and taken down).
 
 use bevy::{
     core_pipeline::core_3d::Opaque3d,
     diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin},
     input::{InputSystems, mouse::AccumulatedMouseMotion},
-    light::cluster::GlobalClusterSettings,
     pbr::Shadow,
     prelude::*,
     render::{
         Render, RenderApp, RenderSystems,
+        batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport},
         gpu_readback::Readback,
         render_phase::ViewBinnedRenderPhases,
     },
@@ -382,17 +385,31 @@ fn act(
 pub struct RenderCounts {
     pub opaque_phases: usize,
     pub shadow_phases: usize,
+    /// The render world's GPU preprocessing mode, by name; empty until it is read.
+    pub preprocessing: &'static str,
 }
 
 /// The render world's main-world copy of [`RenderCounts`], shared through an atomic since the
 /// render world runs apart.
 static OPAQUE_PHASES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static SHADOW_PHASES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// The render world's [`GpuPreprocessingMode`]: 0 none read yet, then `None`, `PreprocessingOnly`
+/// and `Culling` as 1, 2 and 3.
+static PREPROCESSING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-fn count_render_phases(opaque: Option<Res<ViewBinnedRenderPhases<Opaque3d>>>, shadow: Option<Res<ViewBinnedRenderPhases<Shadow>>>) {
+const PREPROCESSING_MODES: [(GpuPreprocessingMode, &str); 3] =
+    [(GpuPreprocessingMode::None, "None"), (GpuPreprocessingMode::PreprocessingOnly, "PreprocessingOnly"), (GpuPreprocessingMode::Culling, "Culling")];
+
+fn count_render_phases(
+    opaque: Option<Res<ViewBinnedRenderPhases<Opaque3d>>>,
+    shadow: Option<Res<ViewBinnedRenderPhases<Shadow>>>,
+    support: Option<Res<GpuPreprocessingSupport>>,
+) {
     use std::sync::atomic::Ordering::Relaxed;
     OPAQUE_PHASES.store(opaque.map_or(0, |p| p.len()), Relaxed);
     SHADOW_PHASES.store(shadow.map_or(0, |p| p.len()), Relaxed);
+    let mode = support.and_then(|s| PREPROCESSING_MODES.iter().position(|&(m, _)| m == s.max_supported_mode));
+    PREPROCESSING.store(mode.map_or(0, |i| i + 1), Relaxed);
 }
 
 /// Logs the counts every [`REPORT_SECONDS`], and quits once the soak's time is up.
@@ -410,7 +427,6 @@ fn report(
     readbacks: Query<(), With<Readback>>,
     icons: Option<ResMut<IconCache>>,
     store: Res<DiagnosticsStore>,
-    clusters: Option<Res<GlobalClusterSettings>>,
     mut render_counts: ResMut<RenderCounts>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -421,12 +437,16 @@ fn report(
         return;
     }
     soak.next_report = now + REPORT_SECONDS;
-    *render_counts = RenderCounts { opaque_phases: OPAQUE_PHASES.load(Relaxed), shadow_phases: SHADOW_PHASES.load(Relaxed) };
+    *render_counts = RenderCounts {
+        opaque_phases: OPAQUE_PHASES.load(Relaxed),
+        shadow_phases: SHADOW_PHASES.load(Relaxed),
+        preprocessing: PREPROCESSING.load(Relaxed).checked_sub(1).map_or("", |i| PREPROCESSING_MODES[i].1),
+    };
     let frame_ms = store.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME).and_then(|d| d.smoothed()).unwrap_or(0.0);
     let active = cameras.iter().filter(|(_, c, _)| c.is_active).count();
     let (icon_count, icon_drawing) = icons.as_deref().map_or((0, 0), |c| (c.len(), c.drawing_count()));
     eprintln!(
-        "soak: t={:.0}s entities={} meshes={} images={} toon={} standard={} outline={} cameras={} active_cameras={} readbacks={} icons={} icons_drawing={} opaque_phases={} shadow_phases={} gpu_clustering={} frame_ms={:.1} {:?}",
+        "soak: t={:.0}s entities={} meshes={} images={} toon={} standard={} outline={} cameras={} active_cameras={} readbacks={} icons={} icons_drawing={} opaque_phases={} shadow_phases={} preprocessing={} frame_ms={:.1} {:?}",
         now - started,
         entities.iter().count(),
         meshes.len(),
@@ -441,7 +461,7 @@ fn report(
         icon_drawing,
         render_counts.opaque_phases,
         render_counts.shadow_phases,
-        clusters.is_some_and(|c| c.gpu_clustering.is_some()),
+        render_counts.preprocessing,
         frame_ms,
         soak.stats,
     );
