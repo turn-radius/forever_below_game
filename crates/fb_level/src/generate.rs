@@ -1,8 +1,9 @@
 //! The seeded layout: rooms, the corridors and doors that join them, the entrance, and then
 //! the items and lights laid through the rooms.
 //!
-//! Two streams come from each level seed: one lays out the rock, one furnishes it. Changing
-//! the loot tables or light counts never moves a wall.
+//! Three streams come from each level seed: one lays out the rock, one furnishes it, and one
+//! places the folk ([`crate::folk`]). Changing the loot tables or light counts never moves a
+//! wall, and changing the folk never moves an item.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -10,6 +11,7 @@ use std::collections::BinaryHeap;
 use armory::{Family, Item};
 use procgen_rng::Mulberry32;
 
+use crate::folk::{FOLK_SALT, place_folk};
 use crate::{Cell, Entrance, Facing, ItemSpot, Level, LightKind, LightSpot, Room};
 
 const WIDTH: u32 = 48;
@@ -107,12 +109,15 @@ fn try_generate(seed: u32, attempt: u32) -> Option<Level> {
         rooms,
         items: Vec::new(),
         lights: Vec::new(),
+        folk: Vec::new(),
     };
     let (sx, sy, _) = level.start();
     if !reachable_from(&level, sx as i32, sy as i32).iter().zip(&level.cells).all(|(&seen, c)| seen || !c.is_open()) {
         return None;
     }
     furnish(&mut level, &mut Mulberry32::new(layout_seed ^ FURNISH_SALT));
+    let start_room = level.start_room().expect("the entrance leads into a room");
+    level.folk = place_folk(&level, start_room, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
     Some(level)
 }
 
@@ -516,7 +521,7 @@ fn furnish(level: &mut Level, rng: &mut Mulberry32) {
 }
 
 /// A full-range u32 seed for an item.
-fn item_seed(rng: &mut Mulberry32) -> u32 {
+pub(crate) fn item_seed(rng: &mut Mulberry32) -> u32 {
     (rng.next_f64() * 4_294_967_296.0) as u32
 }
 
@@ -657,7 +662,7 @@ fn free_spot(level: &Level, room: &Room, taken: &[(f32, f32)], rng: &mut Mulberr
 }
 
 /// Fisher-Yates, from the level's stream.
-fn shuffle<T>(items: &mut [T], rng: &mut Mulberry32) {
+pub(crate) fn shuffle<T>(items: &mut [T], rng: &mut Mulberry32) {
     for i in (1..items.len()).rev() {
         let j = rng.int(0, i as u32) as usize;
         items.swap(i, j);

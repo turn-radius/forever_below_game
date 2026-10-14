@@ -23,3 +23,11 @@ Delve until you find a level worth inhabiting. Gain favor with its factions and 
 - Spline Armory's renderer is the style guide (see `rendering.md`).
 - Ultima Underworld's portrait-and-doll lineup is the character reference, at higher fidelity (`reference/concept/`).
 - The inventory follows the parchment concept, restyled as a dark ledger so it does not glare over the abyss: engraved item icons in footprint grids, an underfoot drop zone, prepared outfits on invisible mannequins, and the doll inside a runic seal with slot boxes around it.
+
+## Folk in the level (since the handoff)
+
+Our own proposal; neither the seed doc nor the plate places anyone in a level.
+
+- Each level holds three to ten folk (`fb_level::FolkSpot`), in groups of two to four, one faction to a room. A group stands round the room's brazier if it has one, otherwise round a point inside it, facing in as if talking. Nobody stands in the starting room, in a corridor, in a doorway or beside one, or on the loot.
+- The factions are `data/factions.json`. Each leans toward a folk and a pair of outfits (`fb_level::FACTIONS`): the Lantern-keepers human clerics and mages, the Mudfoot clan goblin scavengers and fighters, the Brothers of the Last Door human fighters and clerics, the Scale Court lizardfolk fighters and rangers, the Hogsmeet traders pigfolk rangers and scavengers, the Gnome Guild of Gears gnome mages and scavengers, the Ash Choir dwarf clerics and mages. Three in four members are the faction's folk; the rest are any folk.
+- Folk come from a third stream of the level seed, after the layout and the loot, so they never move a wall or an item.

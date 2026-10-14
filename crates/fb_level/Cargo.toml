@@ -1,6 +1,6 @@
 [package]
 name = "fb_level"
-description = "Seeded dungeon levels: the cell grid, the entrance, and where items and lights lie. No Bevy dependency."
+description = "Seeded dungeon levels: the cell grid, the entrance, where items and lights lie, and the folk met there. No Bevy dependency."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -8,5 +8,9 @@ rust-version.workspace = true
 
 [dependencies]
 armory = { workspace = true }
+fb_body = { workspace = true }
 procgen_rng = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+fb_items = { workspace = true }
