@@ -22,7 +22,7 @@ You come through a door into the first level, and it shuts behind you. The keys 
 | W A S D, Shift | walk, hurry |
 | Mouse | look round (click to take the mouse back after Esc) |
 | E | pick up what you're looking at |
-| I | inventory: drag items between your bags, the floor and your slots; R or right click turns a dragged item |
+| I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
 | Esc | close a screen, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
 
@@ -45,6 +45,21 @@ A grid of twelve items from consecutive seeds, turning, to compare what the gene
 
 On the grid, the arrows select an item, PgUp and PgDn page through seeds, Tab and Shift+Tab change family, W steps the wear, Space pauses the spin, and Enter or F opens a close-up (drag to orbit, scroll to zoom, Esc to go back).
 
+### The doll view
+
+```
+cargo run -p forever_below -- --doll
+cargo run -p forever_below -- --doll --folk dwarf --seed 7 --outfit cleric
+```
+
+One folk's body, dressed in a rolled outfit and holding what it carries, turning on the turntable's plate.
+
+- `--folk <name>`: human, dwarf, gnome, goblin, lizard (or lizardfolk), pig (or pigfolk). Human by default.
+- `--seed <n>` rolls the body and the outfit's items; 1207 by default.
+- `--outfit <key>`: fighter (the default), ranger, mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
+
+Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
+
 ### Screenshots and debug switches
 
 These environment variables are for checking the game without playing it. Put them in front of the command, for example `FB_SCREENSHOT=shot.png cargo run -p forever_below`.
@@ -58,7 +73,8 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps` | a lit camera at a fixed view of the level |
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start |
-| `FB_DEBUG_KIT=1` | a filled pack, with a sack and a shield set down in front of you |
+| `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
+| `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |

@@ -37,6 +37,10 @@ pub const GLOW: Color = hex(0xd9913f);
 /// The portrait's Stygian blue (`--stygian`, `--stygian-2` in the plate's dark theme).
 pub const STYGIAN: Color = hex(0x22325c);
 pub const STYGIAN_DEEP: Color = hex(0x0b1129);
+/// The light in the middle of the portrait's blue (the plate's `.portrait` gradient, `#3a55a0`).
+pub const STYGIAN_LIGHT: Color = hex(0x3a55a0);
+/// The portrait's frame: the plate's dark-theme `--gold`, brighter than the seal's [`GOLD`].
+pub const FRAME_GOLD: Color = hex(0xe3b76a);
 /// A drop that fits, and one that does not (the plate's dark `--ok`, `--bad`).
 pub const OK: Color = hex(0x86ba80);
 pub const BAD: Color = hex(0xea735b);

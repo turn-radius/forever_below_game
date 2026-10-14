@@ -1,5 +1,6 @@
 //! Forever Below. It opens on the first level; `--turntable` (or `--family`) opens the Armory
-//! turntable instead.
+//! turntable instead, and `--doll` the doll view (a dressed body turning on the turntable's
+//! plate: `--doll --folk dwarf --seed 7 --outfit cleric`).
 //!
 //! `cargo run -p forever_below -- --seed 1207` plays the level for that seed.
 //! `cargo run -p forever_below -- --turntable --family mace --seed 1207 --wear grave_find`
@@ -10,6 +11,7 @@
 use bevy::prelude::*;
 use forever_below::{
     capture::FrameCapturePlugin,
+    doll_view::{DollChoice, DollViewPlugin},
     light::LightPlugin,
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
@@ -21,6 +23,9 @@ fn main() -> AppExit {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--turntable" || a.starts_with("--family")) {
         return run_turntable();
+    }
+    if args.iter().any(|a| a == "--doll") {
+        return run_doll(&args);
     }
     let seed = match level_seed(&args) {
         Ok(seed) => seed,
@@ -69,6 +74,27 @@ fn run_turntable() -> AppExit {
     .add_plugins((ArmoryRenderPlugin, LightPlugin, TurntablePlugin))
     .insert_resource(turntable)
     .insert_resource(focus);
+    if let Some(capture) = FrameCapturePlugin::from_env() {
+        app.add_plugins(capture);
+    }
+    app.run()
+}
+
+fn run_doll(args: &[String]) -> AppExit {
+    let choice = match DollChoice::from_args(args.iter().cloned()) {
+        Ok(choice) => choice,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
+        ..default()
+    }))
+    .add_plugins((ArmoryRenderPlugin, LightPlugin, DollViewPlugin))
+    .insert_resource(choice);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }

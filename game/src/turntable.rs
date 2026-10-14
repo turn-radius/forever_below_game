@@ -43,7 +43,7 @@ pub const WEAR_STEPS: [ConditionState; 5] = [
 ];
 
 /// Spin speed in radians per second.
-const SPIN_SPEED: f32 = 0.45;
+pub const SPIN_SPEED: f32 = 0.45;
 /// Cell size for a page whose items have no geometry yet: a mace-sized slot.
 const FALLBACK_ITEM_SIZE: Vec3 = Vec3::new(3.0, 8.0, 3.0);
 /// Share of the view height (or width) a close-up item fills.
@@ -70,8 +70,8 @@ const FLAT_TILT: f32 = 0.6;
 const MIN_FILL: f32 = 0.5;
 /// The Armory's plate, ink and accent (`--plate`, `--plate-ink` and `--accent` in
 /// `reference/spline-armory.html`), so items read against it as they do there.
-const PLATE: Color = Color::srgb(0xdf as f32 / 255.0, 0xe3 as f32 / 255.0, 0xe0 as f32 / 255.0);
-const PLATE_INK: Color = Color::srgb(0x1c as f32 / 255.0, 0x23 as f32 / 255.0, 0x26 as f32 / 255.0);
+pub const PLATE: Color = Color::srgb(0xdf as f32 / 255.0, 0xe3 as f32 / 255.0, 0xe0 as f32 / 255.0);
+pub const PLATE_INK: Color = Color::srgb(0x1c as f32 / 255.0, 0x23 as f32 / 255.0, 0x26 as f32 / 255.0);
 const ACCENT: Color = Color::srgb(0x2e as f32 / 255.0, 0x6b as f32 / 255.0, 0x62 as f32 / 255.0);
 
 /// Shows the [`Turntable`] page: add with the resource set from [`Turntable::from_args`] or

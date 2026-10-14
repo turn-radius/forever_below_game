@@ -33,6 +33,7 @@ use crate::body::{ArmPose, Body, Pose};
 use crate::hand::hand_meshes;
 use crate::limb::Side;
 use crate::place::Placement;
+use crate::spec::BodySpec;
 
 /// Held swords and daggers turn this far about the grip so an edge leads (`BLADE_TURN`).
 pub const BLADE_TURN: f32 = 55.0 * std::f32::consts::PI / 180.0;
@@ -161,6 +162,38 @@ pub fn fit_held(body: &Body, side: Side, item: &Item) -> Option<HeldFit> {
     scale_mesh(&mut mesh, scale);
     placement.apply_to_item(&mut mesh);
     Some(HeldFit { hold, pose, item: fitted.item, mesh, scale, placement })
+}
+
+/// The hand the main-hand slot holds in: the right (the plate's `buildCharacter` draws
+/// `C.items.mainhand` on arm `'R'` and the off hand's on `'L'`).
+pub const MAIN_HAND: Side = Side::Right;
+/// The off hand.
+pub const OFF_HAND: Side = Side::Left;
+
+/// What both hands hold, fitted together: the body posed for both, and each hand's fit.
+#[derive(Clone, Debug)]
+pub struct Hands {
+    /// The body with both arms posed, as each fit drew its item for.
+    pub body: Body,
+    pub main: Option<HeldFit>,
+    pub off: Option<HeldFit>,
+}
+
+/// Fits `main` to [`MAIN_HAND`] and `off` to [`OFF_HAND`] of the body for `spec`. Each fit
+/// poses only its own arm ([`fit_held`] starts from the body's pose), so the off hand is fitted
+/// on the body already posed for the main hand, and the body both are drawn on is posed for
+/// both. An item that is not held (worn gear, food) is left out, its arm relaxed.
+pub fn fit_hands(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>) -> Hands {
+    let mut body = Body::new(spec);
+    let main = main.and_then(|item| fit_held(&body, MAIN_HAND, item));
+    if let Some(fit) = &main {
+        body = Body::posed(spec, fit.pose);
+    }
+    let off = off.and_then(|item| fit_held(&body, OFF_HAND, item));
+    if let Some(fit) = &off {
+        body = Body::posed(spec, fit.pose);
+    }
+    Hands { body, main, off }
 }
 
 /// The scale an item is drawn at in the hand.
@@ -877,5 +910,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn both_hands_hold_at_once() {
+        let spec = BodySpec::roll(Folk::Human, 1207);
+        let (mace, lantern) = (roll(Family::Mace, 3), roll(Family::Lantern, 4));
+        let hands = fit_hands(&spec, Some(&mace), Some(&lantern));
+        let (main, off) = (hands.main.as_ref().unwrap(), hands.off.as_ref().unwrap());
+        // The body is posed for both, each arm as its own fit set it.
+        assert_eq!(hands.body.pose.arm(MAIN_HAND), main.pose.arm(MAIN_HAND));
+        assert_eq!(hands.body.pose.arm(OFF_HAND), off.pose.arm(OFF_HAND));
+        // Each item sits at its own fist on that body.
+        for (side, fit) in [(MAIN_HAND, main), (OFF_HAND, off)] {
+            let fist = hands.body.grip(side).origin;
+            let item = centroid(&fit.mesh, &["grip", "wrap", "shaft", "ring"]);
+            assert!(vec3::length(vec3::sub(item, fist)) < hands.body.height * 0.25, "{side:?}");
+        }
+        assert!(fit_hands(&spec, Some(&roll(Family::Helm, 1)), None).main.is_none());
+        assert_eq!(fit_hands(&spec, None, None).body.pose, Pose::RELAXED);
     }
 }

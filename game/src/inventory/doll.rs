@@ -2,25 +2,62 @@
 //! equipment slots round it where `data/slots.json` puts them (the plate's `renderSlots` and
 //! `.slot` styles). An empty slot shows its name; a filled one, the item's icon.
 //!
-//! The doll itself is a placeholder silhouette until `fb_body` draws it. The hook for it is
-//! [`DollView`]: a node showing [`DollAssets::doll`], an image that is already a render target.
-//! The doll's camera renders into that image (`RenderTarget::Image`) and the screen shows it
-//! with nothing else to change; the silhouette is only the image's starting pixels.
+//! The doll is the delver's own body ([`crate::character::Character`]) dressed in what the
+//! [`Inventory`] has worn and holding what is in the main and off hand ([`Figure::dress`]),
+//! drawn in the house style by its own camera into [`DollAssets::doll`], which the
+//! [`DollView`] node shows. As the icons are ([`super::icon`]), it stands on a stage far
+//! below the level, on its own render layer ([`DOLL_LAYER`]), lit by a point light far off in
+//! the Armory key's direction and the Armory's ambient fill, so no light of the level reaches
+//! it. It is redressed whenever what is worn changes, faces the viewer, and turns about its
+//! own axis when dragged. A lit thing it holds lights its side of the body with a warm point
+//! light at the flame, and its side of the seal with a warm glow.
 
 use bevy::{
+    app::Propagate,
     asset::RenderAssetUsages,
+    camera::{Exposure, RenderTarget, ScalingMode, visibility::RenderLayers},
+    input::mouse::AccumulatedMouseMotion,
+    light::NotShadowCaster,
     prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    render::{
+        render_resource::{Extent3d, TextureDimension, TextureFormat},
+        view::Tonemapping,
+    },
+    window::PrimaryWindow,
 };
 use fb_items::{
-    Kind,
+    Kind, Slot,
     tables::{SlotSide, SlotSize, slot_places},
 };
 
 use super::icon::Icons;
 use super::items::Inventory;
-use super::seal::{Canvas, Glyph, Ink, Seal, SealInks, TURN_SECONDS};
-use crate::ui::{BG, BRIGHT, FAINT, GLOW, GOLD, INK, LINE, MUTED, UiFonts, rarity_color};
+use super::seal::{Canvas, Glyph, Seal, SealInks, TURN_SECONDS};
+use crate::carry::item_light;
+use crate::character::Character;
+use crate::figure::{Figure, spawn_figure};
+use crate::light::{StudioLight, Torch, point_light, reach_falloff};
+use crate::play::{Screen, ScreenOpen};
+use crate::render::ItemSpawner;
+use crate::ui::{BG, BRIGHT, GLOW, GOLD, INK, LINE, UiFonts, node_rect, rarity_color};
+
+/// Render layer the doll's camera and the doll are on.
+pub const DOLL_LAYER: usize = 3;
+/// Where the doll stands: far below the level, and far from the icons' stages and their
+/// lights (`super::icon`) and the view model's (`crate::carry::VIEW_MODEL_STAGE`).
+pub const DOLL_STAGE: Vec3 = Vec3::new(0.0, -50_000.0, -30_000.0);
+/// Room round the turning doll in its image, as a multiple of its height or its turning
+/// width, whichever is larger.
+const DOLL_PADDING: f32 = 1.04;
+/// Radians the doll turns per logical pixel dragged (our own tuning: a drag across the doll's
+/// square turns it about once round).
+const TURN_PER_PIXEL: f32 = 0.014;
+/// The key's strength on the doll before the shader's quarter steps, as for the icons.
+const KEY_LEVEL: f32 = 0.6;
+/// A held light's strength close up and its reach as a multiple of the body's height (our own
+/// tuning: warm on its own arm and side, gone by the far one).
+const HELD_LIGHT_PEAK: f32 = 0.55;
+const HELD_LIGHT_REACH: f32 = 0.9;
 
 /// The doll's frame on the page, in logical pixels: the plate's `.dollwrap`, smaller to share
 /// the screen with the grids.
@@ -78,12 +115,20 @@ pub struct SealBand(pub usize);
 #[derive(Resource, Clone, Debug)]
 pub struct DollAssets {
     pub bands: [Handle<Image>; 3],
-    /// The doll's render target, holding the placeholder silhouette until a camera draws
-    /// into it.
+    /// The doll's render target, which its camera draws into.
     pub doll: Handle<Image>,
     /// The warm glow a carried light casts on its side of the doll.
     pub glow: Handle<Image>,
+    /// The portrait of the doll's head for the header, which its own camera draws into.
+    pub portrait: Handle<Image>,
 }
+
+/// The portrait's size in the header, in logical pixels (the plate's `.portrait`, 92 by 104),
+/// and its image's pixels (the plate's 184 by 208 `snap`).
+pub const PORTRAIT: Vec2 = Vec2::new(92.0, 104.0);
+const PORTRAIT_PIXELS: UVec2 = UVec2::new(184, 208);
+/// The portrait looks at the head from `(.32, .04, 1)` (the plate's `drawPortrait`).
+const PORTRAIT_FROM: Vec3 = Vec3::new(0.32, 0.04, 1.0);
 
 /// The warm glow of a carried light, a canvas [`GLOW_SIZE`] units square.
 pub fn light_glow(scale: f32) -> Canvas {
@@ -92,13 +137,17 @@ pub fn light_glow(scale: f32) -> Canvas {
     canvas
 }
 
-/// The side of the frame the carried light is on: the off hand's if it holds a light and the
-/// main hand does not, otherwise the main hand's, where the torch is held (`crate::carry`
-/// holds it low on the right).
-pub fn light_side(inventory: &Inventory) -> SlotSide {
-    let lit = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).is_some_and(|item| item.profile.stats.light > 0.0);
-    let hand = if lit(fb_items::Slot::Offhand) && !lit(fb_items::Slot::Mainhand) { fb_items::Slot::Offhand } else { fb_items::Slot::Mainhand };
-    slot_places().iter().find(|p| p.slot == hand).map_or(SlotSide::Left, |p| p.side)
+/// The hand holding a lit thing, the main hand's before the off hand's, if either does.
+pub fn lit_hand(inventory: &Inventory) -> Option<Slot> {
+    let lit = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).is_some_and(|item| item_light(&item.shape).is_some());
+    [Slot::Mainhand, Slot::Offhand].into_iter().find(|&slot| lit(slot))
+}
+
+/// The side of the frame the held light is on: the side its hand's slot is on, if a hand holds
+/// a lit thing.
+pub fn light_side(inventory: &Inventory) -> Option<SlotSide> {
+    let hand = lit_hand(inventory)?;
+    slot_places().iter().find(|p| p.slot == hand).map(|p| p.side)
 }
 
 fn srgb(colour: Color) -> [f32; 3] {
@@ -116,41 +165,224 @@ fn image_of(canvas: &Canvas) -> Image {
     )
 }
 
-/// A plain standing figure, faint ink on the page, in a canvas `DOLL_SIZE` units square: a
-/// stand-in for the doll, about the plate's framing of a human.
-pub fn silhouette(scale: f32) -> Canvas {
-    let mut canvas = Canvas::new((DOLL_SIZE * scale).round() as u32, scale);
-    let ink = Ink::new(srgb(LINE.mix(&INK, 0.3)), 1.0);
-    canvas.disc([0.0, -172.0], 25.0, ink);
-    canvas.line([0.0, -150.0], [0.0, -132.0], 18.0, ink);
-    canvas.line([-40.0, -112.0], [40.0, -112.0], 36.0, ink);
-    canvas.line([-28.0, -100.0], [-22.0, 10.0], 44.0, ink);
-    canvas.line([28.0, -100.0], [22.0, 10.0], 44.0, ink);
-    canvas.line([0.0, -100.0], [0.0, 12.0], 44.0, ink);
-    for side in [-1.0f32, 1.0] {
-        canvas.line([side * 58.0, -110.0], [side * 72.0, -20.0], 22.0, ink);
-        canvas.line([side * 72.0, -20.0], [side * 80.0, 52.0], 18.0, ink);
-        canvas.disc([side * 81.0, 62.0], 11.0, ink);
-        canvas.line([side * 20.0, 20.0], [side * 25.0, 110.0], 32.0, ink);
-        canvas.line([side * 25.0, 110.0], [side * 27.0, 196.0], 26.0, ink);
-        canvas.line([side * 27.0, 196.0], [side * 38.0, 204.0], 16.0, ink);
-    }
-    canvas.fade(0.16);
-    canvas
-}
-
 impl FromWorld for DollAssets {
     fn from_world(world: &mut World) -> Self {
         // Gold lines and gold dots alike, faint over the dark page.
         let inks = SealInks { line: srgb(GOLD), gold: srgb(GOLD), page: srgb(BG), glow: SEAL_GLOW };
         let layers = Seal { r: seal_radius() }.layers(PIXELS_PER_POINT, inks);
-        let doll = silhouette(PIXELS_PER_POINT);
-        let mut doll_image = image_of(&doll);
-        // A render target as well, so the doll's camera can draw over the placeholder.
-        doll_image.texture_descriptor.usage |= bevy::render::render_resource::TextureUsages::RENDER_ATTACHMENT;
+        let side = (DOLL_SIZE * PIXELS_PER_POINT).round() as u32;
+        let mut doll_image = Image::new_target_texture(side, side, TextureFormat::Rgba8UnormSrgb, None);
+        doll_image.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
         let glow = image_of(&light_glow(1.0));
         let mut images = world.resource_mut::<Assets<Image>>();
-        DollAssets { bands: layers.map(|canvas| images.add(image_of(&canvas))), doll: images.add(doll_image), glow: images.add(glow) }
+        let mut portrait = Image::new_target_texture(PORTRAIT_PIXELS.x, PORTRAIT_PIXELS.y, TextureFormat::Rgba8UnormSrgb, None);
+        portrait.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
+        DollAssets {
+            bands: layers.map(|canvas| images.add(image_of(&canvas))),
+            doll: images.add(doll_image),
+            glow: images.add(glow),
+            portrait: images.add(portrait),
+        }
+    }
+}
+
+/// Who the doll was dressed as, and each worn item by slot, base and seed.
+type Dressed = (Character, Vec<(Slot, String, u32)>);
+
+/// The doll's stage: what it was last dressed in, its figure, camera and key light, and how
+/// far it is turned.
+#[derive(Resource, Default)]
+pub struct DollStage {
+    /// The delver and each worn item (slot, base and seed) the figure was dressed for.
+    dressed: Option<Dressed>,
+    figure: Option<Entity>,
+    camera: Option<Entity>,
+    portrait: Option<Entity>,
+    /// Radians the doll is turned from facing the viewer.
+    pub turn: f32,
+    /// The figure as last dressed.
+    pub built: Option<Figure>,
+}
+
+impl DollStage {
+    /// The camera drawing the doll, once there is one.
+    pub fn camera(&self) -> Option<Entity> {
+        self.camera
+    }
+
+    /// The camera drawing the portrait, once there is one.
+    pub fn portrait(&self) -> Option<Entity> {
+        self.portrait
+    }
+}
+
+/// The portrait's view of a head centred at `centre` with half height `r`, in body space: the
+/// orthographic width and height and the point it looks at. The plate frames the box from
+/// `1.55 r` either side and `1.45 r` below to `1.75 r` above a point `0.35 r` under the head's
+/// centre (`drawPortrait`), here widened to the image's shape.
+pub fn portrait_view(centre: Vec3, r: f32) -> (Vec2, Vec3) {
+    let aspect = PORTRAIT_PIXELS.x as f32 / PORTRAIT_PIXELS.y as f32;
+    let (width, height) = (3.1 * r, 3.2 * r);
+    let height = height.max(width / aspect);
+    (Vec2::new(height * aspect, height), centre + Vec3::Y * (-0.35 + (1.75 - 1.45) * 0.5) * r)
+}
+
+/// The orthographic view, width and height in world units, that holds a figure of `bounds`
+/// turning about its own vertical axis in a square image, and the height it looks at.
+pub fn doll_view((min, max): (Vec3, Vec3)) -> (f32, f32) {
+    let reach = min.xz().abs().max(max.xz().abs()).length();
+    let side = (max.y - min.y).max(2.0 * reach) * DOLL_PADDING;
+    (side, (min.y + max.y) * 0.5)
+}
+
+/// Redresses the doll whenever the delver or what they wear changes: the figure on the stage,
+/// with its held light, and the camera framing it. The camera and its light are made the
+/// first time.
+pub fn dress_doll(
+    mut commands: Commands,
+    inventory: Res<Inventory>,
+    character: Res<Character>,
+    assets: Res<DollAssets>,
+    mut stage: ResMut<DollStage>,
+    mut spawner: ItemSpawner,
+) {
+    let worn = inventory.equipped();
+    let key = (character.clone(), worn.iter().map(|(slot, item)| (*slot, item.base.clone(), item.seed)).collect::<Vec<_>>());
+    if stage.dressed.as_ref() == Some(&key) {
+        return;
+    }
+    stage.dressed = Some(key);
+    if let Some(old) = stage.figure.take() {
+        commands.entity(old).despawn();
+    }
+    let worn: Vec<(Slot, fb_items::Item)> = worn.into_iter().map(|(slot, item)| (slot, item.clone())).collect();
+    let figure = Figure::dress(&character.spec(), &worn, character.dirt);
+    let Some(bounds) = figure.bounds() else { return };
+    let layer = RenderLayers::layer(DOLL_LAYER);
+    let exposure = Exposure::INDOOR;
+    let root = spawn_figure(&mut commands, &mut spawner, &figure);
+    commands.entity(root).insert((
+        Name::new("Doll"),
+        Transform::from_translation(DOLL_STAGE).with_rotation(Quat::from_rotation_y(stage.turn)),
+        Propagate(layer.clone()),
+        Propagate(NotShadowCaster),
+    ));
+    if let Some(light) = figure.light {
+        let colour = Color::srgb(light.anchor.color.0, light.anchor.color.1, light.anchor.color.2);
+        let lamp = Torch::flickering(point_light(colour, HELD_LIGHT_PEAK, figure.body.height * HELD_LIGHT_REACH, &exposure), light.anchor.flicker);
+        commands.entity(root).with_child((lamp, Transform::from_translation(light.at), layer.clone()));
+    }
+    stage.figure = Some(root);
+
+    // The portrait turns with the doll, so it always sees the face.
+    let (head, _) = figure.head();
+    let (view, looking_at) = portrait_view(head, figure.body.head.half_height);
+    let from = PORTRAIT_FROM.normalize();
+    let portrait = commands
+        .spawn((
+            Name::new("Portrait camera"),
+            Camera3d::default(),
+            Camera { order: -4, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },
+            RenderTarget::Image(assets.portrait.clone().into()),
+            Projection::Orthographic(OrthographicProjection {
+                scaling_mode: ScalingMode::Fixed { width: view.x, height: view.y },
+                near: 0.1,
+                far: 60.0,
+                ..OrthographicProjection::default_3d()
+            }),
+            exposure,
+            Tonemapping::Linear,
+            AmbientLight { color: StudioLight::ARMORY.ambient_color, brightness: StudioLight::ARMORY.ambient / exposure.exposure(), ..default() },
+            layer.clone(),
+            Transform::from_translation(looking_at + from * 30.0).looking_at(looking_at, Vec3::Y),
+            ChildOf(root),
+        ))
+        .id();
+    stage.portrait = Some(portrait);
+
+    let (side, centre_y) = doll_view(bounds);
+    let looking_at = DOLL_STAGE + Vec3::Y * centre_y;
+    let depth = 4.0 * side;
+    let projection = Projection::Orthographic(OrthographicProjection {
+        scaling_mode: ScalingMode::Fixed { width: side, height: side },
+        near: 0.1,
+        far: 2.0 * depth,
+        ..OrthographicProjection::default_3d()
+    });
+    let at = Transform::from_translation(looking_at + Vec3::Z * depth).looking_at(looking_at, Vec3::Y);
+    match stage.camera {
+        Some(camera) => {
+            commands.entity(camera).insert((projection, at));
+        }
+        None => {
+            // Far off along the Armory key's direction, so its falloff is nearly flat over the
+            // doll, as for the icons.
+            let distance = 12.0 * side;
+            let range = 8.0 * distance;
+            let key = point_light(Color::WHITE, KEY_LEVEL / reach_falloff(distance, range), range, &exposure);
+            let camera = commands
+                .spawn((
+                    Name::new("Doll camera"),
+                    Camera3d::default(),
+                    Camera { order: -3, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },
+                    RenderTarget::Image(assets.doll.clone().into()),
+                    projection,
+                    exposure,
+                    Tonemapping::Linear,
+                    AmbientLight { color: StudioLight::ARMORY.ambient_color, brightness: StudioLight::ARMORY.ambient / exposure.exposure(), ..default() },
+                    layer.clone(),
+                    at,
+                ))
+                .with_child((Name::new("Doll key light"), key, Transform::from_translation(StudioLight::ARMORY.key_from() * distance), layer))
+                .id();
+            stage.camera = Some(camera);
+        }
+    }
+    stage.built = Some(figure);
+}
+
+/// Draws the doll and its portrait only while the inventory is open.
+pub fn show_doll(open: Res<ScreenOpen>, stage: Res<DollStage>, mut cameras: Query<&mut Camera>) {
+    let shown = open.is(Screen::Inventory);
+    for entity in [stage.camera, stage.portrait].into_iter().flatten() {
+        if let Ok(mut camera) = cameras.get_mut(entity)
+            && camera.is_active != shown
+        {
+            camera.is_active = shown;
+        }
+    }
+}
+
+/// Turns the doll while the mouse is dragged across it with the button down, unless the press
+/// took up an item or landed on a slot.
+#[allow(clippy::too_many_arguments)]
+pub fn turn_doll(
+    open: Res<ScreenOpen>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    motion: Res<AccumulatedMouseMotion>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    views: Query<(&ComputedNode, &UiGlobalTransform), With<DollView>>,
+    slots: Query<(&ComputedNode, &UiGlobalTransform), With<SlotView>>,
+    dragging: Res<super::Dragging>,
+    mut stage: ResMut<DollStage>,
+    mut transforms: Query<&mut Transform>,
+    mut turning: Local<bool>,
+) {
+    if !open.is(Screen::Inventory) || !buttons.pressed(MouseButton::Left) {
+        *turning = false;
+        return;
+    }
+    if buttons.just_pressed(MouseButton::Left) {
+        let cursor = window.and_then(|w| w.cursor_position());
+        let on = |rect: Rect| cursor.is_some_and(|c| rect.contains(c));
+        *turning = dragging.0.is_none() && views.iter().any(|(n, t)| on(node_rect(n, t))) && !slots.iter().any(|(n, t)| on(node_rect(n, t)));
+    }
+    if !*turning || motion.delta.x == 0.0 {
+        return;
+    }
+    stage.turn = (stage.turn + motion.delta.x * TURN_PER_PIXEL).rem_euclid(std::f32::consts::TAU);
+    if let Some(mut transform) = stage.figure.and_then(|f| transforms.get_mut(f).ok()) {
+        transform.rotation = Quat::from_rotation_y(stage.turn);
     }
 }
 
@@ -171,22 +403,24 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
     let rune_ink = GOLD.with_alpha(RUNE_ALPHA);
     let glyph_inks = [(15.0, rune_ink), (12.0, rune_ink), (12.0, rune_ink)];
     parent.spawn(Node { width: px(FRAME.x), height: px(FRAME.y), flex_shrink: 0.0, ..default() }).with_children(|frame| {
-        let glow_x = match light_side(inventory) {
-            SlotSide::Left => centre.x - GLOW_OFFSET.x,
-            SlotSide::Right => centre.x + GLOW_OFFSET.x,
-        };
-        frame.spawn((
-            LightGlow,
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(glow_x - GLOW_SIZE * 0.5),
-                top: px(centre.y + GLOW_OFFSET.y - GLOW_SIZE * 0.5),
-                width: px(GLOW_SIZE),
-                height: px(GLOW_SIZE),
-                ..default()
-            },
-            ImageNode::new(assets.glow.clone()),
-        ));
+        if let Some(side) = light_side(inventory) {
+            let glow_x = match side {
+                SlotSide::Left => centre.x - GLOW_OFFSET.x,
+                SlotSide::Right => centre.x + GLOW_OFFSET.x,
+            };
+            frame.spawn((
+                LightGlow,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(glow_x - GLOW_SIZE * 0.5),
+                    top: px(centre.y + GLOW_OFFSET.y - GLOW_SIZE * 0.5),
+                    width: px(GLOW_SIZE),
+                    height: px(GLOW_SIZE),
+                    ..default()
+                },
+                ImageNode::new(assets.glow.clone()),
+            ));
+        }
         for (band, glyphs) in [outer, middle, inner].into_iter().enumerate() {
             frame
                 .spawn((
@@ -283,11 +517,6 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                     ));
                 });
         }
-        frame.spawn((
-            Node { position_type: PositionType::Absolute, right: px(6), bottom: px(4), ..default() },
-            Text::new("The doll is to come"),
-            UiFonts::style(&fonts.body, 12.0, MUTED.mix(&FAINT, 0.4)),
-        ));
     });
 }
 
@@ -352,12 +581,13 @@ mod tests {
         let main = slot_places().iter().find(|p| p.slot == fb_items::Slot::Mainhand).unwrap().side;
         let off = slot_places().iter().find(|p| p.slot == fb_items::Slot::Offhand).unwrap().side;
         assert_ne!(main, off);
-        // The torch is held in the main hand.
-        assert_eq!(light_side(&inventory), main);
-        let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| i.profile.stats.light > 0.0).unwrap();
+        // Nothing lit in hand, no glow.
+        assert_eq!(light_side(&inventory), None);
+        let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap();
         let lantern = inventory.add(lantern);
         inventory.wear(lantern, fb_items::Slot::Offhand).unwrap();
-        assert_eq!(light_side(&inventory), off);
+        assert_eq!(light_side(&inventory), Some(off));
+        assert_ne!(Some(main), light_side(&inventory));
     }
 
     #[test]
@@ -370,10 +600,122 @@ mod tests {
     }
 
     #[test]
-    fn the_placeholder_is_a_faint_figure_in_the_middle() {
-        let canvas = silhouette(1.0);
-        let c = canvas.size / 2;
-        assert!(canvas.alpha(c, c - 40) > 0.1 && canvas.alpha(c, c - 40) <= 0.16 + 1e-4, "the chest");
-        assert_eq!(canvas.alpha(5, 5), 0.0);
+    fn the_doll_s_view_holds_it_full_height_as_it_turns() {
+        // A body 17 tall, its arms and a lantern out to 4 either side.
+        let (side, centre) = doll_view((Vec3::new(-4.0, 0.0, -1.0), Vec3::new(3.0, 17.0, 2.0)));
+        assert!((17.0..17.0 * 1.1).contains(&side), "{side}");
+        assert_eq!(centre, 8.5);
+        // A wide shield on a gnome is held by its turning width.
+        let (side, _) = doll_view((Vec3::new(-6.0, 0.0, -1.0), Vec3::new(2.0, 10.0, 1.0)));
+        assert!(side >= 2.0 * 6.0f32.hypot(1.0), "{side}");
+    }
+
+    /// An app that dresses and turns the doll, with no window renderer: the item spawner's
+    /// assets, an open inventory, a window with the cursor on the doll's square, and that
+    /// square laid out at 100..540 by 100..540.
+    fn stage_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Inventory>()
+            .init_resource::<Character>()
+            .init_resource::<DollStage>()
+            .init_resource::<super::super::Dragging>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<AccumulatedMouseMotion>()
+            .insert_resource(ScreenOpen(Some(Screen::Inventory)))
+            .init_resource::<Assets<Image>>()
+            .init_resource::<DollAssets>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<crate::render::ToonMaterial>>()
+            .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<crate::render::OutlineMaterials>()
+            .add_systems(Update, (dress_doll, show_doll, turn_doll).chain());
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(320.0, 320.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        let image = app.world().resource::<DollAssets>().doll.clone();
+        let node = ComputedNode { size: Vec2::splat(440.0), inverse_scale_factor: 1.0, ..ComputedNode::DEFAULT };
+        app.world_mut().spawn((DollView { image }, node, UiGlobalTransform::from_translation(Vec2::splat(320.0))));
+        app
+    }
+
+    fn worn_names(app: &App) -> Vec<String> {
+        app.world().resource::<DollStage>().built.as_ref().unwrap().pieces.iter().map(|p| p.name.clone()).collect()
+    }
+
+    #[test]
+    fn the_doll_wears_what_is_equipped() {
+        let mut app = stage_app();
+        app.update();
+        assert_eq!(worn_names(&app), vec!["Body".to_string()], "bare to begin with");
+        let helm = fb_items::roll_item("Helm", 5).unwrap();
+        let name = helm.title().to_string();
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(helm);
+            inventory.wear(id, Slot::Head).unwrap();
+        }
+        app.update();
+        assert_eq!(worn_names(&app), vec!["Body".to_string(), name]);
+        let stage = app.world().resource::<DollStage>();
+        let camera = app.world().get::<Camera>(stage.camera().unwrap()).unwrap();
+        assert!(camera.is_active, "drawn while the inventory is open");
+        assert!(matches!(app.world().get::<RenderTarget>(stage.camera().unwrap()), Some(RenderTarget::Image(_))));
+    }
+
+    #[test]
+    fn the_portrait_is_of_the_doll_s_head() {
+        let mut app = stage_app();
+        app.update();
+        let stage = app.world().resource::<DollStage>();
+        let (portrait, figure) = (stage.portrait().unwrap(), stage.figure.unwrap());
+        let (head, r) = { let f = stage.built.as_ref().unwrap(); (f.head().0, f.body.head.half_height) };
+        // Drawn into the portrait image, turning with the doll, and looking at its head.
+        let target = app.world().get::<RenderTarget>(portrait).unwrap();
+        assert!(matches!(target, RenderTarget::Image(i) if i.handle == app.world().resource::<DollAssets>().portrait));
+        assert_eq!(app.world().get::<ChildOf>(portrait).map(|c| c.parent()), Some(figure));
+        let at = app.world().get::<Transform>(portrait).unwrap();
+        let to_head = (head - at.translation).normalize();
+        assert!(to_head.dot(at.forward().as_vec3()) > 0.99, "looks at the head");
+        let (view, _) = portrait_view(head, r);
+        assert!(view.y >= 3.2 * r && view.y < 5.0 * r, "{view}");
+    }
+
+    #[test]
+    fn the_doll_turns_when_dragged() {
+        let mut app = stage_app();
+        app.update();
+        let figure = app.world().resource::<DollStage>().figure.unwrap();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(60.0, 0.0);
+        app.update();
+        let turn = app.world().resource::<DollStage>().turn;
+        assert!((turn - 60.0 * TURN_PER_PIXEL).abs() < 1e-4, "{turn}");
+        let rotation = app.world().get::<Transform>(figure).unwrap().rotation;
+        assert!(rotation.abs_diff_eq(Quat::from_rotation_y(turn), 1e-5));
+        // Let go, and dragging no longer turns it.
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<DollStage>().turn, turn);
+    }
+
+    #[test]
+    fn a_sword_equipped_to_the_main_hand_shows_in_the_doll_s_fist() {
+        let mut app = stage_app();
+        let sword = fb_items::roll_item("Sword", 11).unwrap();
+        let name = sword.title().to_string();
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(sword);
+            super::super::equip(&mut inventory, id, Slot::Mainhand).unwrap();
+        }
+        app.update();
+        let figure = app.world().resource::<DollStage>().built.clone().unwrap();
+        let held = figure.pieces.iter().find(|p| p.name == name).expect("the sword is drawn");
+        let fist = Vec3::from_array(figure.body.grip(fb_body::MAIN_HAND).origin);
+        let nearest = held.mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
+        assert!(nearest < 0.5, "{nearest}");
     }
 }

@@ -37,7 +37,6 @@ pub enum Refusal {
     NotAContainer,
     NotWearable,
     WrongSlot,
-    SlotTaken,
     Unknown,
 }
 
@@ -51,7 +50,6 @@ impl Refusal {
             Refusal::NotAContainer => "That holds nothing.",
             Refusal::NotWearable => "That is not something you can wear.",
             Refusal::WrongSlot => "That does not go there.",
-            Refusal::SlotTaken => "Something is already worn there.",
             Refusal::Unknown => "That is not here.",
         }
     }
@@ -71,6 +69,15 @@ pub const CARRYING_SLOTS: [Slot; 2] = [Slot::Back, Slot::Belt];
 /// Whether an item made for `made_for` can be worn in `slot`. Rings fill either ring slot.
 pub fn wearable_in(made_for: Slot, slot: Slot) -> bool {
     made_for == slot || matches!((made_for, slot), (Slot::Ring1 | Slot::Ring2, Slot::Ring1 | Slot::Ring2))
+}
+
+/// Where the item an equip displaced went: back where the equipped item came from, or, if it
+/// did not fit there, loose underfoot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Displaced {
+    Worn(Slot),
+    In { container: ItemId, at: Placement },
+    Underfoot,
 }
 
 /// Everything the delver has, and the items lying in the level.
@@ -125,6 +132,13 @@ impl Inventory {
 
     pub fn worn(&self, slot: Slot) -> Option<ItemId> {
         self.worn.get(&slot).copied()
+    }
+
+    /// Everything worn or held, with its slot, in the slots' order.
+    pub fn equipped(&self) -> Vec<(Slot, &Item)> {
+        let mut worn: Vec<(Slot, &Item)> = self.worn.iter().filter_map(|(&slot, &id)| Some((slot, self.item(id)?))).collect();
+        worn.sort_by_key(|(slot, _)| *slot as u8);
+        worn
     }
 
     /// The containers whose grids show as carried, in order ([`CARRYING_SLOTS`]).
@@ -216,28 +230,72 @@ impl Inventory {
         self.stow(id).map(|_| ())
     }
 
-    /// Whether `id` could be worn in `slot`, without moving anything.
+    /// Whether `id` could be worn in `slot`, without moving anything. Something already worn
+    /// there is no bar: equipping swaps it out ([`Inventory::equip`]).
     pub fn check_wear(&self, id: ItemId, slot: Slot) -> Result<(), Refusal> {
         let made_for = self.item(id).ok_or(Refusal::Unknown)?.profile.slot.ok_or(Refusal::NotWearable)?;
-        if !wearable_in(made_for, slot) {
-            return Err(Refusal::WrongSlot);
-        }
-        match self.worn(slot) {
-            Some(other) if other != id => Err(Refusal::SlotTaken),
-            _ => Ok(()),
+        if wearable_in(made_for, slot) { Ok(()) } else { Err(Refusal::WrongSlot) }
+    }
+
+    /// The slot `id` goes in when worn without saying where: the one it is made for, and for a
+    /// ring whichever ring slot is free, the first if both are or neither is (the plate's
+    /// `targetSlot`).
+    pub fn target_slot(&self, id: ItemId) -> Option<Slot> {
+        let made_for = self.item(id)?.profile.slot?;
+        Some(self.ring_slot(id, made_for))
+    }
+
+    /// `slot`, or for a ring dropped on a taken ring slot the other one if that is free, so a
+    /// ring fills whichever ring slot is free.
+    fn ring_slot(&self, id: ItemId, slot: Slot) -> Slot {
+        let free = |s| self.worn(s).is_none_or(|other| other == id);
+        match slot {
+            Slot::Ring1 | Slot::Ring2 if !free(slot) => {
+                let other = if slot == Slot::Ring1 { Slot::Ring2 } else { Slot::Ring1 };
+                if self.worn(other).is_none() { other } else { slot }
+            }
+            _ => slot,
         }
     }
 
-    /// Wears `id` in `slot`, taking it from wherever it was.
+    /// Wears `id` in `slot`, taking it from wherever it was. Refused if something else is
+    /// worn there; [`Inventory::equip`] swaps instead.
     pub fn wear(&mut self, id: ItemId, slot: Slot) -> Result<(), Refusal> {
         self.check_wear(id, slot)?;
-        if self.worn(slot) == Some(id) {
-            return Ok(());
+        match self.worn(slot) {
+            Some(other) if other == id => return Ok(()),
+            Some(_) => return Err(Refusal::NoRoom),
+            None => {}
         }
         self.take_out(id);
         self.worn.insert(slot, id);
         self.locations.insert(id, Location::Worn(slot));
         Ok(())
+    }
+
+    /// Equips `id` in `slot` (a ring in whichever ring slot is free), taking it from wherever
+    /// it was. Whatever was worn there goes back where `id` came from if it fits (the slot it
+    /// was worn in, or its cell in its grid, upright), or else is left loose to be set down
+    /// underfoot (the plate's `commitDrop`). Returns the displaced item and where it went.
+    pub fn equip(&mut self, id: ItemId, slot: Slot) -> Result<Option<(ItemId, Displaced)>, Refusal> {
+        self.check_wear(id, slot)?;
+        let slot = self.ring_slot(id, slot);
+        let from = self.location(id);
+        let Some(old) = self.worn(slot).filter(|&old| old != id) else {
+            self.wear(id, slot)?;
+            return Ok(None);
+        };
+        self.take_out(old);
+        self.wear(id, slot)?;
+        let back = match from {
+            Some(Location::Worn(was)) if self.check_wear(old, was).is_ok() && self.wear(old, was).is_ok() => Displaced::Worn(was),
+            Some(Location::In { container, at }) => {
+                let upright = Placement { turned: false, ..at };
+                if self.put(old, container, upright).is_ok() { Displaced::In { container, at: upright } } else { Displaced::Underfoot }
+            }
+            _ => Displaced::Underfoot,
+        };
+        Ok(Some((old, back)))
     }
 
     /// Takes `id` from its slot or grid, leaving it loose. What it holds stays in it.
@@ -378,7 +436,73 @@ mod tests {
         let ring = inventory.add(rolled("Ring", 1));
         inventory.wear(ring, Slot::Ring2).unwrap();
         let other = inventory.add(rolled("Ring", 2));
-        assert_eq!(inventory.wear(other, Slot::Ring2), Err(Refusal::SlotTaken));
+        assert_eq!(inventory.wear(other, Slot::Ring2), Err(Refusal::NoRoom));
         assert_eq!(inventory.wear(other, Slot::Head), Err(Refusal::WrongSlot));
+    }
+
+    fn worn_belt(inventory: &mut Inventory) -> ItemId {
+        let belt = inventory.add(rolled("Belt", 2));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        belt
+    }
+
+    #[test]
+    fn a_ring_fills_ring_1_then_ring_2() {
+        let mut inventory = Inventory::default();
+        let (a, b, c) = (inventory.add(rolled("Ring", 1)), inventory.add(rolled("Ring", 2)), inventory.add(rolled("Ring", 3)));
+        for (ring, slot) in [(a, Slot::Ring1), (b, Slot::Ring2)] {
+            let target = inventory.target_slot(ring).unwrap();
+            assert_eq!(target, slot);
+            assert_eq!(inventory.equip(ring, target), Ok(None));
+        }
+        assert_eq!((inventory.worn(Slot::Ring1), inventory.worn(Slot::Ring2)), (Some(a), Some(b)));
+        // Both full: the first is swapped out, and a ring found on the floor sends it there.
+        assert_eq!(inventory.equip(c, inventory.target_slot(c).unwrap()), Ok(Some((a, Displaced::Underfoot))));
+        assert_eq!(inventory.location(a), Some(Location::Loose));
+        // Dropped on a taken ring slot while the other is free, it takes the free one.
+        inventory.take_out(b);
+        assert_eq!(inventory.equip(b, Slot::Ring1), Ok(None));
+        assert_eq!(inventory.worn(Slot::Ring2), Some(b));
+    }
+
+    #[test]
+    fn equipping_a_helmet_replaces_the_one_worn() {
+        let mut inventory = Inventory::default();
+        let belt = worn_belt(&mut inventory);
+        let (old, new) = (inventory.add(rolled("Helm", 1)), inventory.add(rolled("Helm", 2)));
+        inventory.wear(old, Slot::Head).unwrap();
+        let at = Placement::new(1, 0, false);
+        inventory.put(new, belt, at).unwrap();
+        // The old helm goes back to the new one's cell in the pouch, if it fits there.
+        let back = inventory.equip(new, Slot::Head).unwrap();
+        assert_eq!(inventory.worn(Slot::Head), Some(new));
+        let fits = matches!(back, Some((id, Displaced::In { container, at: placed })) if id == old && container == belt && placed == at);
+        let underfoot = back == Some((old, Displaced::Underfoot)) && inventory.location(old) == Some(Location::Loose);
+        assert!(fits || underfoot, "{back:?}");
+        assert_eq!(inventory.equip(new, Slot::Feet), Err(Refusal::WrongSlot));
+    }
+
+    #[test]
+    fn a_swap_sends_the_old_item_back_where_the_new_one_came_from() {
+        let mut inventory = Inventory::default();
+        let pack = worn_pack(&mut inventory);
+        let sword = (1..400).map(|s| rolled("Sword", s)).find(|s| s.profile.packable).unwrap();
+        let (knife, sword) = (inventory.add(dagger()), inventory.add(sword));
+        inventory.wear(knife, Slot::Mainhand).unwrap();
+        inventory.stow(sword).unwrap();
+        let Some(Location::In { at, .. }) = inventory.location(sword) else { panic!("stowed") };
+        let upright = Placement { turned: false, ..at };
+        assert_eq!(inventory.equip(sword, Slot::Mainhand), Ok(Some((knife, Displaced::In { container: pack, at: upright }))));
+        assert_eq!(inventory.location(knife), Some(Location::In { container: pack, at: upright }));
+        // A ring moved from one ring slot onto the other, both full, trades places.
+        let (a, b) = (inventory.add(rolled("Ring", 1)), inventory.add(rolled("Ring", 2)));
+        inventory.wear(a, Slot::Ring1).unwrap();
+        inventory.wear(b, Slot::Ring2).unwrap();
+        assert_eq!(inventory.equip(a, Slot::Ring2), Ok(Some((b, Displaced::Worn(Slot::Ring1)))));
+        // A pack swapped for a sack it holds cannot go inside it: it is set down.
+        let sack = inventory.add(rolled("Sack", 3));
+        inventory.stow(sack).unwrap();
+        assert_eq!(inventory.equip(sack, Slot::Back), Ok(Some((pack, Displaced::Underfoot))));
+        assert_eq!(inventory.carried_containers().first(), Some(&sack));
     }
 }
