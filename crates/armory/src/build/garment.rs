@@ -21,7 +21,7 @@ use std::f32::consts::{PI, TAU};
 
 use procgen_rng::Mulberry32;
 
-use crate::build::form::{BACK, FRONT, LameStack, ShellOptions, TorsoForm, TorsoProfile, limb_lames, patch, rolled_edge, shell};
+use crate::build::form::{BACK, FRONT, LameStack, LimbForm, ShellOptions, TorsoForm, TorsoProfile, limb_lames, patch, rolled_edge, shell};
 use crate::build::gem::cut_stone;
 use crate::build::hafted::smoothstep;
 use crate::build::parts::{Look, Parts};
@@ -30,7 +30,7 @@ use crate::gem::{GemCut, Gemstone};
 use crate::geom::vec3::{self, V3};
 use crate::geom::{CatmullRom, MeshBuilder, SweepOptions, rotation_minimizing_frames, tube};
 use crate::material::MaterialKind;
-use crate::sections::garment::{Belt, GarmentCut, GarmentStyle, Neckline, Plates};
+use crate::sections::garment::{Belt, GarmentCut, GarmentStyle, Neckline, Plates, Sleeves};
 use crate::sections::hem::Hem;
 
 /// How a sheet hangs on a [`TorsoForm`]. Heights are in the form's space.
@@ -281,15 +281,40 @@ impl SleeveForm {
         let start = [side * form.shoulder.half_width * 0.7, form.shoulder.y - 0.35, 0.0];
         let path = CatmullRom::centripetal(vec![start, root, vec3::add(root, vec3::scale(dir, length * 0.5)), vec3::add(root, vec3::scale(dir, length))])
             .sample_evenly(40);
-        let frames = rotation_minimizing_frames(&path, Some(vec3::Z), false);
         let bell = garment.sleeve_flare * 1.5 * if length > 3.0 { 1.0 } else { 0.5 };
+        Self::swept(&path, garment, offset, phase, |t| 0.68 * garment.fit * (1.0 - 0.3 * t) * (1.0 + bell * smoothstep(0.5, 1.0, t)))
+    }
+
+    /// A sleeve on a real arm (`fb_body`'s limbs): from the root inside the trunk down to the
+    /// elbow for short sleeves or the wrist for long ones, standing `ease` off the arm's own
+    /// radius and scaled by the garment's fit.
+    pub fn on_arm(arm: &LimbForm, garment: &GarmentCut, ease: f32, offset: f32, phase: f32) -> SleeveForm {
+        let [ts, te] = arm.t_joints;
+        let end = match garment.sleeves {
+            Sleeves::Long => 0.975,
+            _ => ts + (te - ts) * 0.55,
+        };
+        // From halfway between the root and the shoulder, still inside the garment's body.
+        let start = 0.5 * ts;
+        let path = arm.span(start, end, 40);
+        let long = garment.sleeves == Sleeves::Long;
+        let bell = garment.sleeve_flare * if long { 1.0 } else { 0.5 };
+        Self::swept(&path, garment, offset, phase, |t| {
+            let r = arm.radius_at(start + t * (end - start));
+            (r + ease) * garment.fit + r * bell * smoothstep(0.5, 1.0, t)
+        })
+    }
+
+    /// Rings round `path` of radius `base(t)`, belled and creased by the garment.
+    fn swept(path: &[V3], garment: &GarmentCut, offset: f32, phase: f32, base: impl Fn(f32) -> f32) -> SleeveForm {
+        let frames = rotation_minimizing_frames(path, Some(vec3::Z), false);
         let rows = frames
             .iter()
             .enumerate()
             .map(|(i, f)| {
                 let t = i as f32 / (frames.len() - 1) as f32;
                 let down = vec3::normalize_or(vec3::sub(vec3::neg(vec3::Y), vec3::scale(f.tangent, -f.tangent[1])), vec3::neg(vec3::Y));
-                let base = 0.68 * garment.fit * (1.0 - 0.3 * t) * (1.0 + bell * smoothstep(0.5, 1.0, t));
+                let base = base(t);
                 (0..24)
                     .map(|k| {
                         let a = TAU * k as f32 / 24.0;
@@ -391,6 +416,16 @@ pub fn body_look(g: &GarmentCut, plates: &Plates) -> Look {
 /// `"collar"`, `"cowl"`, `"hood"`, `"belt"`, `"buckle"`, `"faulds"`, `"pauldrons"`,
 /// `"edges"`, `"brooch"` and `"stone"`, as the state calls for them.
 pub fn garment_parts(form: &TorsoForm, g: &GarmentCut, hem: &Hem, belt: &Belt, plates: &Plates, seed: u32) -> Parts {
+    build_garment(form, None, g, hem, belt, plates, seed)
+}
+
+/// [`garment_parts`] on a real body: sleeves and pauldrons follow `arms` (right then left,
+/// in the form's space) instead of the mannequin's arm roots.
+pub fn garment_parts_on_arms(form: &TorsoForm, arms: &[LimbForm; 2], g: &GarmentCut, hem: &Hem, belt: &Belt, plates: &Plates, seed: u32) -> Parts {
+    build_garment(form, Some(arms), g, hem, belt, plates, seed)
+}
+
+fn build_garment(form: &TorsoForm, arms: Option<&[LimbForm; 2]>, g: &GarmentCut, hem: &Hem, belt: &Belt, plates: &Plates, seed: u32) -> Parts {
     let mut parts = Parts::new();
     let form = form.eased(g.fit);
     let drape = garment_drape(&form, g, belt, plates, seed);
@@ -472,7 +507,12 @@ pub fn garment_parts(form: &TorsoForm, g: &GarmentCut, hem: &Hem, belt: &Belt, p
                 let y = drape.top_at(a) - 0.12 + 0.6 * v;
                 let k = 1.1 + 0.05 * v;
                 let [x, z] = crate::build::form::section_point(a, neck.half_width * k, neck.half_depth * k, 0.9, 1.0);
-                [x, y, z]
+                // Where the neckline dips below the neck the collar's foot stands on the
+                // cloth, not inside it.
+                let cloth = surface.point_at(a, y, 0.02);
+                let (r, rc) = (x.hypot(z).max(1e-4), cloth[0].hypot(cloth[2]));
+                let k = if y < neck.y && rc > r { rc / r } else { 1.0 };
+                [x * k, y, z * k]
             });
             parts.add_look("collar", collar, trim.filter(|_| hem.neck).unwrap_or(look));
         }
@@ -497,11 +537,16 @@ pub fn garment_parts(form: &TorsoForm, g: &GarmentCut, hem: &Hem, belt: &Belt, p
 
     // Sleeves.
     if g.sleeves.length() > 0.0 && !cloak && !rigid && style != GarmentStyle::Brigandine {
+        let (_, ease, _, _) = style_drape(style);
         for (side, phase) in [(1.0, drape.phases[0]), (-1.0, drape.phases[1])] {
-            let sleeve = SleeveForm::new(&form, g, side, 0.0, phase);
+            let sleeve_at = |offset: f32| match arms {
+                Some(arms) => SleeveForm::on_arm(&arms[if side > 0.0 { 1 } else { 0 }], g, ease, offset, phase),
+                None => SleeveForm::new(&form, g, side, offset, phase),
+            };
+            let sleeve = sleeve_at(0.0);
             parts.add_look("sleeves", sleeve.mesh(thickness), look);
             if let Some(trim) = trim.filter(|_| hem.cuffs) {
-                let cuff = SleeveForm::new(&form, g, side, 0.02, phase);
+                let cuff = sleeve_at(0.02);
                 parts.add_look("trim", cuff.cuff(tw / g.sleeves.length(), trim_thickness), trim);
             }
         }
@@ -552,12 +597,25 @@ pub fn garment_parts(form: &TorsoForm, g: &GarmentCut, hem: &Hem, belt: &Belt, p
     if plates.pauldrons && matches!(style, GarmentStyle::Cuirass | GarmentStyle::Brigandine | GarmentStyle::Hauberk | GarmentStyle::Scale) {
         for side in [1.0f32, -1.0] {
             let a = 0.38f32;
+            // On a body the cop sits over the shoulder joint, down the upper arm (the plate's
+            // `saGarment` pauldrons), clear of the sleeves under it.
+            let (origin, axis, radius) = match arms {
+                Some(arms) => {
+                    let arm = &arms[if side > 0.0 { 1 } else { 0 }];
+                    let ts = arm.t_joints[0];
+                    let shoulder = arm.point_at(ts);
+                    let r = arm.radius_at(ts);
+                    let axis = vec3::normalize_or(vec3::sub(arm.point_at(arm.t_joints[1]), shoulder), vec3::neg(vec3::Y));
+                    (vec3::add(shoulder, [0.0, r * 0.45, 0.0]), axis, (r * 1.15 + 0.12) * g.fit)
+                }
+                None => ([side * form.shoulder.half_width * 0.9, form.shoulder.y + 0.02, 0.0], [side * a.sin(), -a.cos(), 0.0], 0.92 * g.fit),
+            };
             let stack = LameStack {
-                origin: [side * form.shoulder.half_width * 0.9, form.shoulder.y + 0.02, 0.0],
-                axis: [side * a.sin(), -a.cos(), 0.0],
+                origin,
+                axis,
                 toward: [side, 0.2, 0.0],
                 count: plates.lames,
-                radius: 0.92 * g.fit,
+                radius,
                 step: 0.05,
                 height: 0.42,
                 overlap: 0.2,

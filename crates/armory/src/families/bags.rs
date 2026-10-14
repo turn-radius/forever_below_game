@@ -781,6 +781,9 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
         fittings.append(&bk);
     }
 
+    // The strap or straps the bag is carried by, apart from the rest so `fb_body` can lay its
+    // own over the wearer.
+    let mut carry = MeshBuilder::new();
     match b.style {
         BagStyle::Satchel => {
             // D-rings on stitched tabs at each side, and the shoulder strap arched between them.
@@ -808,7 +811,7 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
             let path = CatmullRom::centripetal(control).sample_evenly(64);
             let centre = [0.0, h * 1.2, 0.0];
             let faces: Vec<V3> = path.iter().map(|&p| vec3::sub(p, centre)).collect();
-            straps.append(&strap(&path, &faces, 0.16 * sz, strap_t, false));
+            carry.append(&strap(&path, &faces, 0.16 * sz, strap_t, false));
         }
         BagStyle::BeltPouch => {
             // Two loops on the back for the belt to pass through.
@@ -832,7 +835,7 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
                 ];
                 let path = CatmullRom::centripetal(control).sample_evenly(40);
                 let faces = vec![vec3::neg(vec3::Z); path.len()];
-                straps.append(&strap(&path, &faces, 0.24 * sz, 0.05 * sz, false));
+                carry.append(&strap(&path, &faces, 0.24 * sz, 0.05 * sz, false));
             }
             // A carrying loop stitched to the flap where it crests the back.
             let n = flap.path.len() - 1;
@@ -863,6 +866,7 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
 
     parts.add_look("flap", flaps, looks.flap);
     parts.add_look("straps", straps, looks.strap);
+    parts.add_look("carry", carry, looks.strap);
     parts.add("fittings", fittings, b.fittings);
 
     if b.patch {
