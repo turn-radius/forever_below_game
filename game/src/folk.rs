@@ -711,4 +711,55 @@ mod tests {
             assert!(radius > 1.5 && radius < 5.0, "{radius}");
         }
     }
+
+    /// Most of a part's surface, by area, that may wind against its normals: smooth normals
+    /// averaged across a fold or a seam lean past a few thin faces, but an inverted part is
+    /// nearly all of it. Our own allowance: on seeds 1 to 16 and 1207 the worst part winds
+    /// 8.5% of its area against, and the worst ink hull 7.1%.
+    const MOST_WOUND_AGAINST: f32 = 0.25;
+
+    /// The share of a part's surface, by area, whose winding faces against its shading normals
+    /// (`Part::indices` are counter-clockwise front faces), and the same for its outline normals.
+    fn wound_against(part: &armory::Part) -> (f32, f32) {
+        let (mut total, mut shading, mut outline) = (0.0, 0.0, 0.0);
+        let at = |i: u32| Vec3::from_array(part.positions[i as usize]);
+        let sum = |set: &[[f32; 3]], tri: &[u32]| tri.iter().map(|&i| Vec3::from_array(set[i as usize])).sum::<Vec3>();
+        for tri in part.indices.as_chunks::<3>().0 {
+            let face = (at(tri[1]) - at(tri[0])).cross(at(tri[2]) - at(tri[0]));
+            let area = face.length() * 0.5;
+            total += area;
+            if face.dot(sum(&part.normals, tri)) <= 0.0 {
+                shading += area;
+            }
+            if face.dot(sum(&part.outline_normals, tri)) <= 0.0 {
+                outline += area;
+            }
+        }
+        if total > 0.0 { (shading / total, outline / total) } else { (0.0, 0.0) }
+    }
+
+    #[test]
+    fn every_fitted_folk_part_faces_out_and_is_coloured() {
+        // Seeds 1 to 16 and 1207: every person standing about, dressed as drawn. A part wound
+        // inside out (its front faces turned in, or its ink hull pushed in over it), with broken
+        // buffers, or with a black or non-finite colour would draw as unlit solid black (#151).
+        for seed in (1..=16).chain([1207]) {
+            for spot in fb_level::generate(seed).folk {
+                let person = Person::of(&spot);
+                let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+                for piece in &figure.pieces {
+                    for part in &piece.mesh.parts {
+                        let at = format!("seed {seed}, {} ({:?}): {} / {}", person.name, spot.folk, piece.name, part.name);
+                        part.validate().unwrap_or_else(|e| panic!("{at}: {e}"));
+                        let (shading, outline) = wound_against(part);
+                        assert!(shading < MOST_WOUND_AGAINST, "{at}: {:.1}% of it winds against its normals", shading * 100.0);
+                        assert!(outline < MOST_WOUND_AGAINST, "{at}: {:.1}% of its ink hull pushes inward", outline * 100.0);
+                        let colour = piece.appearance.material_for(part).base.base_color.to_linear();
+                        let lum = colour.red * 0.2126 + colour.green * 0.7152 + colour.blue * 0.0722;
+                        assert!(lum.is_finite() && lum > 0.002, "{at}: drawn {colour:?}");
+                    }
+                }
+            }
+        }
+    }
 }
