@@ -2,13 +2,13 @@
 //! and squeaks or hisses; at 0 it collapses and its body stays for the run.
 //!
 //! - **Flash**: every part of the creature turns toward a warm white and glows for a moment
-//!   (the toon material's base colour and `glow`), holds there for [`FLASH_HOLD`], then fades
-//!   back, as damage flashes in games since the arcade. Glow alone multiplies a part's own
+//!   (the toon material's base colour and `glow`), holds there for `flash_hold`, then fades
+//!   back over `flash_fade` ([`CombatTuning`]), as damage flashes in games since the arcade. Glow alone multiplies a part's own
 //!   colour, which leaves a black rat dark, so the colour itself is lifted too.
 //! - **Knockback**: the creature is pushed away from the delver over a few frames, sliding round
 //!   rock and props as it walks; less the bigger it is.
 //! - **Sound**: a rat squeaks, a snake hisses (`tools/synth_combat.py`).
-//! - **Collapse**: after the flash's hold ([`DEATH_HOLD`]), so a creature felled by one blow is
+//! - **Collapse**: after the flash's hold, so a creature felled by one blow is
 //!   seen to be struck before it falls, a rat rolls onto its back, legs up; a snake uncoils and
 //!   lies limp along the floor, jaw slack. Its mind stops ([`Corpse`]): it no longer moves, bites or keeps others
 //!   off, and it blocks nobody.
@@ -26,12 +26,14 @@ use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles};
 use crate::player::{blocked_by, slide_around};
 use crate::render::ToonMaterial;
 use crate::settings::GameSettings;
+use crate::tuning::{CombatTuning, Tuning};
 
 pub struct FeedbackPlugin;
 
 impl Plugin for FeedbackPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Struck>()
+            .init_resource::<Tuning>()
             .add_systems(Startup, load_creature_sounds)
             .add_systems(Update, (give_creatures_health, take_blows, knock_back, flash, collapse).chain().in_set(DelveSystems));
     }
@@ -65,39 +67,33 @@ pub struct Flinch {
     materials: Vec<(Handle<ToonMaterial>, Color, f32)>,
 }
 
-/// How long a struck creature flashes, seconds, of which it holds at full for the first
-/// [`FLASH_HOLD`].
-pub const FLASH_TIME: f32 = 0.32;
-pub const FLASH_HOLD: f32 = 0.12;
 /// How far toward [`FLASH_COLOUR`] a part's colour goes at full, and the glow added.
 const FLASH_MIX: f32 = 0.65;
 const FLASH_GLOW: f32 = 0.9;
 /// The flash's colour: the page's cream ([`crate::ui::BRIGHT`]).
 const FLASH_COLOUR: Color = crate::ui::BRIGHT;
-/// How long a felled creature stands, flashing, before it collapses: the flash's hold.
-pub const DEATH_HOLD: f32 = FLASH_HOLD;
-
-/// How strong the flash is with `left` seconds of it to go: full through the hold, then easing
-/// out to nothing.
-pub fn flash_strength(left: f32) -> f32 {
+/// How strong the flash is with `left` seconds of it to go: full through `combat`'s hold, then
+/// easing out to nothing over its fade.
+pub fn flash_strength(left: f32, combat: &CombatTuning) -> f32 {
     if left <= 0.0 {
         return 0.0;
     }
-    let since = FLASH_TIME - left;
-    if since < FLASH_HOLD {
+    let since = combat.flash_time() - left;
+    if since < combat.flash_hold {
         return 1.0;
     }
-    let fade = (left / (FLASH_TIME - FLASH_HOLD)).clamp(0.0, 1.0);
+    let fade = (left / combat.flash_fade.max(1e-3)).clamp(0.0, 1.0);
     fade * fade
 }
 
 /// How far into its collapse a body is, 0 to 1, `since` seconds after it fell: still through
-/// [`DEATH_HOLD`], then over [`COLLAPSE_TIME`].
-pub fn collapse_share(since: f32) -> f32 {
-    ((since - DEATH_HOLD) / COLLAPSE_TIME).clamp(0.0, 1.0)
+/// the flash's `hold` (a felled creature stands, flashing, for it), then over [`COLLAPSE_TIME`].
+pub fn collapse_share(since: f32, hold: f32) -> f32 {
+    ((since - hold) / COLLAPSE_TIME).clamp(0.0, 1.0)
 }
 /// How far a blow knocks a creature back, by the size it is drawn at, world units: a rat a
-/// third of a metre, a giant rat or viper 15 cm, a constrictor hardly at all.
+/// third of a metre, a giant rat or viper 15 cm, a constrictor hardly at all. The tuning's
+/// `knockback_scale` multiplies it.
 pub fn knockback(creature: &Creature) -> f32 {
     let size = match creature {
         Creature::Rat(r) => r.drawn_size(),
@@ -140,6 +136,7 @@ fn take_blows(
     mut struck: MessageReader<Struck>,
     sounds: Option<Res<CreatureSounds>>,
     settings: Option<Res<GameSettings>>,
+    tuning: Res<Tuning>,
     mut creatures: Query<(&Critter, &Transform, &mut Health), Without<Corpse>>,
     children: Query<&Children>,
     materials: Query<&MeshMaterial3d<ToonMaterial>>,
@@ -160,11 +157,12 @@ fn take_blows(
             Ok(old) => old.materials.clone(),
             Err(_) => lit,
         };
-        commands.entity(blow.target).insert(Flinch { left: FLASH_TIME, push: away * knockback(&critter.creature), materials: lit });
+        let push = away * knockback(&critter.creature) * tuning.combat.knockback_scale;
+        commands.entity(blow.target).insert(Flinch { left: tuning.combat.flash_time(), push, materials: lit });
         if let Some(sounds) = &sounds {
             let sound = if critter.spot.species.is_rat() { sounds.squeak.clone() } else { sounds.hiss.clone() };
             let game = settings.as_deref().copied().unwrap_or_default();
-            commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game)));
+            commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game, &tuning)));
         }
         if fell {
             commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<Brain>();
@@ -201,12 +199,12 @@ fn knock_back(
     }
 }
 
-/// Lights a struck creature up, held then fading over [`FLASH_TIME`] ([`flash_strength`]).
-/// The first frame shows it at full: the time is taken off after.
-fn flash(mut commands: Commands, time: Res<Time>, mut creatures: Query<(Entity, &mut Flinch)>, toon: Option<ResMut<Assets<ToonMaterial>>>) {
+/// Lights a struck creature up, held then fading ([`flash_strength`]). The first frame shows it
+/// at full: the time is taken off after.
+fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creatures: Query<(Entity, &mut Flinch)>, toon: Option<ResMut<Assets<ToonMaterial>>>) {
     let mut toon = toon;
     for (entity, mut flinch) in &mut creatures {
-        let strength = flash_strength(flinch.left);
+        let strength = flash_strength(flinch.left, &tuning.combat);
         if let Some(toon) = toon.as_deref_mut() {
             for (handle, colour, glow) in &flinch.materials {
                 if let Some(mut material) = toon.get_mut(handle) {
@@ -232,22 +230,24 @@ fn flash(mut commands: Commands, time: Res<Time>, mut creatures: Query<(Entity, 
 
 /// Lays each body down once the flash's hold is over ([`collapse_share`]): a rat rolls onto its
 /// back about its middle, a snake goes slack.
-fn collapse(time: Res<Time>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent)>) {
+fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent)>) {
+    let hold = tuning.combat.flash_hold;
     for (critter, mut corpse, mut transform, mut intent) in &mut bodies {
         corpse.since += time.delta_secs();
-        if corpse.since <= DEATH_HOLD {
+        if corpse.since <= hold {
             continue;
         }
         // Limp: uncoiled and flat, the jaw a little open, the tongue lolling.
         *intent = Intent { coil: 0.0, rear: 0.0, strike: 0.0, jaw: 0.35, tongue: 0.6, look: 0.0 };
         if let Creature::Rat(rat) = &critter.creature {
-            *transform = rolled_over(rat, &corpse.fell, collapse_share(corpse.since));
+            *transform = rolled_over(rat, &corpse.fell, collapse_share(corpse.since, hold));
         }
     }
 }
 
 /// A rat that stood at `fell`, `share` of the way through rolling onto its back: turned about
-/// its own length through its body's middle, and lowered so its back rests on the floor.
+/// its own length through its body's middle, and lowered so its back rests on the floor, at the
+/// size it is drawn.
 pub fn rolled_over(rat: &fb_creatures::RatState, fell: &Transform, share: f32) -> Transform {
     let d = rat.dims();
     let s = share * share * (3.0 - 2.0 * share);
@@ -256,7 +256,7 @@ pub fn rolled_over(rat: &fb_creatures::RatState, fell: &Transform, share: f32) -
     let middle = Vec3::Y * d.centre_height;
     let drop = (d.centre_height - d.half_height).max(0.0) * s;
     let local = middle - roll * middle - Vec3::Y * drop;
-    Transform { translation: fell.translation + fell.rotation * local, rotation: fell.rotation * roll, ..*fell }
+    Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
 }
 
 #[cfg(test)]
@@ -281,19 +281,25 @@ mod tests {
 
     #[test]
     fn a_felled_creature_flashes_before_it_falls() {
+        let combat = CombatTuning::default();
+        let (time, hold) = (combat.flash_time(), combat.flash_hold);
+        let strength = |left| flash_strength(left, &combat);
         // At full from the blow through the hold, then fading out.
-        assert_eq!(flash_strength(FLASH_TIME), 1.0);
-        assert_eq!(flash_strength(FLASH_TIME - FLASH_HOLD + 0.01), 1.0);
-        assert!(flash_strength(0.5 * (FLASH_TIME - FLASH_HOLD)) < 0.5);
-        assert_eq!(flash_strength(0.0), 0.0);
+        assert_eq!(strength(time), 1.0);
+        assert_eq!(strength(time - hold + 0.01), 1.0);
+        assert!(strength(0.5 * (time - hold)) < 0.5);
+        assert_eq!(strength(0.0), 0.0);
         // The body stands through the hold (about a tenth of a second), then rolls.
-        assert!((0.1..=0.15).contains(&DEATH_HOLD));
-        assert_eq!(collapse_share(0.0), 0.0);
-        assert_eq!(collapse_share(DEATH_HOLD), 0.0);
-        assert!(collapse_share(DEATH_HOLD + 0.5 * COLLAPSE_TIME) > 0.4);
-        assert_eq!(collapse_share(DEATH_HOLD + COLLAPSE_TIME), 1.0);
+        assert!((0.1..=0.15).contains(&hold));
+        assert_eq!(collapse_share(0.0, hold), 0.0);
+        assert_eq!(collapse_share(hold, hold), 0.0);
+        assert!(collapse_share(hold + 0.5 * COLLAPSE_TIME, hold) > 0.4);
+        assert_eq!(collapse_share(hold + COLLAPSE_TIME, hold), 1.0);
         // The flash is still at full when the roll starts.
-        assert_eq!(flash_strength(FLASH_TIME - DEATH_HOLD + 1e-4), 1.0);
+        assert_eq!(strength(time - hold + 1e-4), 1.0);
+        // A longer hold holds longer.
+        let long = CombatTuning { flash_hold: 0.5, ..combat };
+        assert_eq!(flash_strength(long.flash_time() - 0.4, &long), 1.0);
     }
 
     #[test]

@@ -32,7 +32,7 @@ use fb_items::{Item, Rarity, Slot, roll_item};
 use fb_level::{FolkSpot, Level};
 use procgen_rng::Mulberry32;
 
-use crate::carry::{Aimed, REACH, ViewModelCamera, nearest_hit, world_light};
+use crate::carry::{Aimed, REACH, ViewModelCamera, given_light, nearest_hit};
 use crate::figure::Figure;
 use crate::inventory::card::{CARD_WIDTH, place_under};
 use crate::level::EXPOSURE;
@@ -331,7 +331,8 @@ pub fn spawn_denizen(commands: &mut Commands, spawner: &mut ItemSpawner, person:
     }
     if let Some(light) = &figure.light {
         // A little above the flame, so the hand and the stone under it do not burn white.
-        commands.spawn((world_light(&light.anchor, &EXPOSURE), Transform::from_translation(light.at + Vec3::Y * HELD_LIGHT_LIFT), ChildOf(stance)));
+        // Lit as tuned once it is spawned (`carry::relight_given_lights`).
+        commands.spawn((given_light(light.anchor, EXPOSURE, &crate::tuning::LightTuning::default()), Transform::from_translation(light.at + Vec3::Y * HELD_LIGHT_LIFT), ChildOf(stance)));
     }
     root
 }

@@ -1,8 +1,8 @@
 //! Where what the delver holds is drawn in first person: the view model's placement, free of
 //! the ECS so it can be tested. `crate::carry` spawns it on the view model's stage.
 //!
-//! Each hand's item is drawn as rolled, in its own proportions, [`HELD_SCALE`] times its size, as its
-//! inventory icon and the floor show it. Only its turn in the fist comes from the doll
+//! Each hand's item is drawn as rolled, in its own proportions, `held_scale` times its size
+//! ([`crate::tuning::ViewTuning`]), as its inventory icon and the floor show it. Only its turn in the fist comes from the doll
 //! ([`fit_hands`]): a blade's edge leading, an axe's bit forward, a bow's string back, a shield
 //! strapped along the forearm. The doll also thins a handle to the fist and draws blades,
 //! bows and shields smaller, so they sit in its hand; no hand is drawn in first person, so
@@ -13,7 +13,8 @@
 //! the left ([`side_of`]).
 //!
 //! The view model camera sees through a narrower field of view than the world's
-//! ([`VIEW_MODEL_FOV_DEGREES`]), so what is held reads large while drawn at its true size. The
+//! (`held_fov_degrees` in [`crate::tuning::ViewTuning`]), so what is held reads large while drawn
+//! at its true size. The
 //! placements per hold are our own tuning against captures of the level through it, not a rule
 //! from a source: grips stay below the bottom edge (no hands are drawn yet), and nothing reaches
 //! the middle of the view where the crosshair is ([`CLEAR_CENTRE`]).
@@ -22,25 +23,6 @@ use armory::Item;
 use bevy::prelude::*;
 use fb_body::{BodySpec, Hold, Side, fit_hands};
 use fb_items::Slot;
-
-/// Vertical field of view of the view model camera, fixed whatever the world camera uses (70
-/// degrees, `crate::player`). Drawing what is held through a narrower field
-/// of view than the world's is the usual first-person technique: Bevy's `first_person_view_model`
-/// example gives its view model camera a fixed field of view of its own, apart from the world's,
-/// because "the view model is typically designed and animated with a very specific FOV in mind"
-/// (<https://github.com/bevyengine/bevy/blob/main/examples/camera/first_person_view_model.rs>),
-/// and Unreal Engine's camera has a "First Person Field of View" for first-person primitives
-/// apart from the rest of the scene
-/// (<https://dev.epicgames.com/documentation/en-us/unreal-engine/first-person-rendering>).
-/// A narrower field magnifies what is held without moving it nearer: at 46 degrees an item at
-/// the same depth is drawn 1.36 times as tall as at the old 60 (tan 30° / tan 23°), and with
-/// [`HELD_SCALE`] about 1.9 times. The value is our own tuning against captures.
-pub const VIEW_MODEL_FOV_DEGREES: f32 = 46.0;
-
-/// How much larger than its own size each held item is drawn in first person, about its grip:
-/// the user's call ("scaled up 40%"), on top of the narrower field of view. Uniform, so the
-/// item keeps its proportions.
-pub const HELD_SCALE: f32 = 1.4;
 
 /// The middle of the view that nothing held reaches: a circle about the crosshair, its radius
 /// a fraction of the half height, where the player looks at what is ahead. Our own.
@@ -119,7 +101,7 @@ pub struct HeldInView {
     pub hold: Hold,
     /// The item as drawn: the one held, as rolled (not the doll's thinned [`fb_body::HeldFit::item`]).
     pub item: Item,
-    /// From the item's own space into view model camera space, at [`HELD_SCALE`] times its size.
+    /// From the item's own space into view model camera space, at `scale` times its size.
     pub transform: Transform,
     /// Its point, in its own space: the end of it farthest from the fist (a spear's head, a
     /// dagger's tip), which a thrust drives at the crosshair.
@@ -131,9 +113,10 @@ pub fn point_of(item: &Item, grip: Vec3) -> Vec3 {
     item.build().parts.iter().flat_map(|p| p.positions.iter()).map(|&p| Vec3::from_array(p)).max_by(|a, b| a.distance_squared(grip).total_cmp(&b.distance_squared(grip))).unwrap_or(grip)
 }
 
-/// What each hand holds, placed in the view for a delver of body `spec`: the main hand's first,
-/// then the off hand's. A hand whose item is not held (or that holds nothing) is left out.
-pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>) -> Vec<HeldInView> {
+/// What each hand holds, placed in the view for a delver of body `spec` and drawn `scale` times
+/// its size about the grip: the main hand's first, then the off hand's. A hand whose item is
+/// not held (or that holds nothing) is left out.
+pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>, scale: f32) -> Vec<HeldInView> {
     let hands = fit_hands(spec, main, off);
     [(Slot::Mainhand, main, hands.main), (Slot::Offhand, off, hands.off)]
         .into_iter()
@@ -149,17 +132,17 @@ pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>) ->
             let grip = placed.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale;
             let at = view_hold(fit.hold, side);
             let rotation = at.turn * BODY_TO_VIEW * placed;
-            let transform = Transform { translation: at.fist - rotation * grip * HELD_SCALE, rotation, scale: Vec3::splat(HELD_SCALE) };
+            let transform = Transform { translation: at.fist - rotation * grip * scale, rotation, scale: Vec3::splat(scale) };
             Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform, point: point_of(item, grip) })
         })
         .collect()
 }
 
-/// Where a point in view model camera space lands on the screen, as a fraction of the half
-/// height from the centre (+Y up, +X right; at the edges `y` is ±1 and `x` ± the aspect).
-/// `None` behind the eye.
-pub fn on_screen(p: Vec3) -> Option<Vec2> {
-    (p.z < 0.0).then(|| p.xy() / (-p.z * (VIEW_MODEL_FOV_DEGREES.to_radians() * 0.5).tan()))
+/// Where a point in view model camera space lands on the screen through a vertical field of
+/// view of `fov_degrees`, as a fraction of the half height from the centre (+Y up, +X right; at
+/// the edges `y` is ±1 and `x` ± the aspect). `None` behind the eye.
+pub fn on_screen(p: Vec3, fov_degrees: f32) -> Option<Vec2> {
+    (p.z < 0.0).then(|| p.xy() / (-p.z * (fov_degrees.to_radians() * 0.5).tan()))
 }
 
 #[cfg(test)]
@@ -167,6 +150,20 @@ mod tests {
     use super::*;
     use armory::Family;
     use fb_body::Folk;
+    use crate::tuning::ViewTuning;
+
+    /// The held scale and field of view as shipped.
+    fn view() -> ViewTuning {
+        ViewTuning::default()
+    }
+
+    fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>) -> Vec<HeldInView> {
+        super::held_in_view(spec, main, off, view().held_scale)
+    }
+
+    fn on_screen(p: Vec3) -> Option<Vec2> {
+        super::on_screen(p, view().held_fov_degrees)
+    }
 
     fn roll(base: &str, seed: u32) -> Item {
         fb_items::roll_item(base, seed).unwrap().shape
@@ -220,7 +217,7 @@ mod tests {
                 let held = &held_in_view(&spec, Some(&item), None)[0];
                 let fit = fb_body::fit_held(&fb_body::Body::new(&spec), Side::Right, &item).unwrap();
                 assert_eq!(held.item, item, "{folk:?} {base}: the item as rolled, not thinned");
-                assert_eq!(held.transform.scale, Vec3::splat(HELD_SCALE), "{folk:?} {base}: scaled evenly");
+                assert_eq!(held.transform.scale, Vec3::splat(view().held_scale), "{folk:?} {base}: scaled evenly");
                 // The doll's turn in the fist, then the hold's turn into the view.
                 let rot = Quat::from_mat3(&Mat3::from_cols_array_2d(&fit.placement.rotation.cols));
                 let at = view_hold(fit.hold, Side::Right);
@@ -337,8 +334,8 @@ mod tests {
 
     #[test]
     fn the_view_model_sees_narrower_than_the_world() {
-        assert!((crate::player::FOV - 70f32.to_radians()).abs() < 1e-6, "the world's field of view is unchanged");
-        assert!(VIEW_MODEL_FOV_DEGREES.to_radians() < crate::player::FOV);
+        assert_eq!(view().world_fov_degrees, 70.0, "the world's field of view is unchanged");
+        assert!(view().held_fov_degrees < view().world_fov_degrees);
     }
 
     #[test]

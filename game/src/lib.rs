@@ -25,6 +25,7 @@ pub mod render;
 pub mod settings;
 pub mod soak;
 pub mod title;
+pub mod tuning;
 pub mod turntable;
 pub mod ui;
 pub mod view_model;

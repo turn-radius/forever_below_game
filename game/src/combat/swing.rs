@@ -90,6 +90,7 @@ fn start_swing(
     character: Res<Character>,
     sound: Option<Res<SwingSound>>,
     settings: Option<Res<GameSettings>>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
     players: Query<(Entity, Option<&Health>), Ready>,
 ) {
     let looking = cursor.is_none_or(|c| c.grab_mode != CursorGrabMode::None);
@@ -105,7 +106,8 @@ fn start_swing(
         commands.entity(player).insert(Swing { weapon, t: 0.0, landed: false });
         if let Some(sound) = &sound {
             let game = settings.as_deref().copied().unwrap_or_default();
-            commands.spawn((Name::new("swing"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game)));
+            let tuning = tuning.as_deref().cloned().unwrap_or_default();
+            commands.spawn((Name::new("swing"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &tuning)));
         }
     }
 }
@@ -117,6 +119,7 @@ fn land_blows(
     mut commands: Commands,
     time: Res<Time>,
     character: Res<Character>,
+    tuning: Res<crate::tuning::Tuning>,
     mut dice: ResMut<RunDice>,
     mut players: Query<(Entity, &Transform, &mut Swing), With<Player>>,
     creatures: Query<(Entity, &Critter, &Transform, Option<&Bones>), Without<Corpse>>,
@@ -131,7 +134,8 @@ fn land_blows(
             let from = at.translation.xz();
             let forward = at.forward().as_vec3().xz();
             let targets: Vec<Target> = creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &shapes)).collect();
-            if let Some(target) = target_in_reach(from, forward, swing.weapon.reach, &targets) {
+            let combat = &tuning.combat;
+            if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &targets) {
                 let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
                 struck.write(Struck { target, damage, from });
             }
@@ -304,11 +308,13 @@ mod tests {
 
     #[test]
     fn a_thrust_drives_the_point_at_the_crosshair() {
-        use crate::view_model::{held_in_view, on_screen, view_hold};
+        use crate::view_model::view_hold;
+        let view = crate::tuning::Tuning::default().view;
+        let on_screen = |p| crate::view_model::on_screen(p, view.held_fov_degrees);
         let spec = fb_body::BodySpec::roll(fb_body::Folk::Human, 1207);
         for (base, seed) in [("Spear", 4), ("Spear", 9), ("Dagger", 5), ("Dagger", 1207)] {
             let item = fb_items::roll_item(base, seed).unwrap().shape;
-            let held = &held_in_view(&spec, Some(&item), None)[0];
+            let held = &crate::view_model::held_in_view(&spec, Some(&item), None, view.held_scale)[0];
             let fist = view_hold(held.hold, Side::Right).fist;
             let rest = held.transform;
             let aim = Aim::at_crosshair(rest, fist, held.point);

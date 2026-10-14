@@ -62,9 +62,8 @@ use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, show_screen, s
 pub use crate::ui::node_rect;
 use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
 use header::ToastText;
+use crate::tuning::Tuning;
 
-/// Logical pixels from one grid line to the next (the plate's `--cs`).
-pub const CELL_PX: f32 = 46.0;
 /// Width of a grid line, in logical pixels.
 const LINE_PX: f32 = 2.0;
 /// Radius of a grid's rounded corners, in logical pixels (the plate's `.grid`).
@@ -105,6 +104,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<DollAssets>()
             .init_resource::<DollStage>()
             .init_resource::<Character>()
+            .init_resource::<Tuning>()
             .add_systems(OnExit(AppState::Delving), leave_the_delve)
             .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD")), give_for_capture).chain())
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
@@ -524,14 +524,15 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
     }
 }
 
-/// The grid cell under `point`, for a grid drawn at `rect`.
-pub fn cell_under(rect: Rect, point: Vec2) -> IVec2 {
-    let (x, y) = grid::cell_at((point.x - rect.min.x - LINE_PX * 0.5, point.y - rect.min.y - LINE_PX * 0.5), CELL_PX);
+/// The grid cell under `point`, for a grid of `cell`-pixel cells (`cell_size`,
+/// [`crate::tuning::InterfaceTuning`]) drawn at `rect`.
+pub fn cell_under(rect: Rect, point: Vec2, cell: f32) -> IVec2 {
+    let (x, y) = grid::cell_at((point.x - rect.min.x - LINE_PX * 0.5, point.y - rect.min.y - LINE_PX * 0.5), cell);
     IVec2::new(x, y)
 }
 
-/// Builds the screen when it opens and rebuilds it whenever what is in it changes; takes it
-/// down when it closes.
+/// Builds the screen when it opens and rebuilds it whenever what is in it changes, or the
+/// tuning does; takes it down when it closes.
 #[allow(clippy::too_many_arguments)]
 fn build_screen(
     mut commands: Commands,
@@ -544,6 +545,7 @@ fn build_screen(
     fonts: Res<UiFonts>,
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
+    tuning: Res<Tuning>,
     mut icons: Icons,
 ) {
     let existing = screens.iter().next();
@@ -553,7 +555,7 @@ fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !character.is_changed() {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !character.is_changed() && !tuning.is_changed() {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -561,7 +563,7 @@ fn build_screen(
     if let Some(screen) = existing {
         commands.entity(screen).despawn();
     }
-    let screen = ScreenLayout { inventory: &inventory, fonts: &fonts };
+    let screen = ScreenLayout { inventory: &inventory, fonts: &fonts, cell: tuning.interface.cell_size };
     commands
         .spawn((
             Name::new("Inventory"),
@@ -644,6 +646,8 @@ fn build_screen(
 struct ScreenLayout<'a> {
     inventory: &'a Inventory,
     fonts: &'a UiFonts,
+    /// Logical pixels from one grid line to the next.
+    cell: f32,
 }
 
 impl ScreenLayout<'_> {
@@ -651,7 +655,7 @@ impl ScreenLayout<'_> {
     /// size that says so, and takes what is dropped on it all the same.
     fn underfoot(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, underfoot: &Underfoot) {
         if underfoot.grid.is_empty() {
-            let size = grid_size(&underfoot.grid);
+            let size = grid_size(&underfoot.grid, self.cell);
             parent
                 .spawn((
                     GridView::Underfoot,
@@ -697,7 +701,8 @@ impl ScreenLayout<'_> {
     /// A grid of cells with its items drawn at their footprints. `faded` draws the cells paler,
     /// as for what lies underfoot.
     fn grid(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, view: GridView, grid: &Grid<ItemId>, faded: bool) {
-        let size = grid_size(grid);
+        let size = grid_size(grid, self.cell);
+        let cell = self.cell;
         parent
             .spawn((
                 view,
@@ -718,10 +723,10 @@ impl ScreenLayout<'_> {
                         cells.spawn((
                             Node {
                                 position_type: PositionType::Absolute,
-                                left: px(x as f32 * CELL_PX + LINE_PX),
-                                top: px(y as f32 * CELL_PX + LINE_PX),
-                                width: px(CELL_PX - LINE_PX),
-                                height: px(CELL_PX - LINE_PX),
+                                left: px(x as f32 * cell + LINE_PX),
+                                top: px(y as f32 * cell + LINE_PX),
+                                width: px(cell - LINE_PX),
+                                height: px(cell - LINE_PX),
                                 border_radius: BorderRadius {
                                     top_left: round(left, top),
                                     top_right: round(right, top),
@@ -741,10 +746,10 @@ impl ScreenLayout<'_> {
                             ItemView { id: entry.id },
                             Node {
                                 position_type: PositionType::Absolute,
-                                left: px(entry.at.x as f32 * CELL_PX + LINE_PX),
-                                top: px(entry.at.y as f32 * CELL_PX + LINE_PX),
-                                width: px(entry.size.cols as f32 * CELL_PX - LINE_PX),
-                                height: px(entry.size.rows as f32 * CELL_PX - LINE_PX),
+                                left: px(entry.at.x as f32 * cell + LINE_PX),
+                                top: px(entry.at.y as f32 * cell + LINE_PX),
+                                width: px(entry.size.cols as f32 * cell - LINE_PX),
+                                height: px(entry.size.rows as f32 * cell - LINE_PX),
                                 padding: UiRect::all(px(3)),
                                 border_radius: BorderRadius::all(px(6)),
                                 ..default()
@@ -752,7 +757,7 @@ impl ScreenLayout<'_> {
                             BackgroundColor(Color::NONE),
                         ))
                         .with_children(|slot| {
-                            let glyph = (entry.size.cols.min(entry.size.rows) as f32 * CELL_PX * 0.5).min(40.0);
+                            let glyph = (entry.size.cols.min(entry.size.rows) as f32 * cell * 0.5).min(40.0);
                             icons.spawn(slot, item, entry.at.turned, Node { width: percent(100), height: percent(100), ..default() }, glyph).insert(ItemIcon);
                             if item.profile.kind == Kind::Gear && item.rarity != Rarity::Common {
                                 slot.spawn((
@@ -774,9 +779,10 @@ impl ScreenLayout<'_> {
     }
 }
 
-/// A grid's size on the page, in logical pixels: its cells and the lines round them.
-pub fn grid_size<T>(grid: &Grid<T>) -> Vec2 {
-    Vec2::new(grid.cols as f32, grid.rows as f32) * CELL_PX + LINE_PX
+/// A grid's size on the page, in logical pixels, with cells `cell` pixels apart: its cells and
+/// the lines round them.
+pub fn grid_size<T>(grid: &Grid<T>, cell: f32) -> Vec2 {
+    Vec2::new(grid.cols as f32, grid.rows as f32) * cell + LINE_PX
 }
 
 /// The slot, grid cell or doll under `point`, the page, or the level beyond it.
@@ -786,6 +792,7 @@ fn target_under(
     slots: &Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
     doll: Option<Rect>,
     ledger: Option<Rect>,
+    cell: f32,
 ) -> Target {
     if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
         return Target::Slot(slot.0);
@@ -793,7 +800,7 @@ fn target_under(
     for (view, node, transform) in grids {
         let rect = node_rect(node, transform);
         if rect.contains(point) {
-            return Target::Cell { view: *view, cell: cell_under(rect, point) };
+            return Target::Cell { view: *view, cell: cell_under(rect, point, cell) };
         }
     }
     if doll.is_some_and(|rect| rect.contains(point)) {
@@ -830,8 +837,10 @@ fn drag_items(
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
     time: Res<Time<Real>>,
+    tuning: Res<Tuning>,
     mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
+    let cell_px = tuning.interface.cell_size;
     let cursor = window.and_then(|w| w.cursor_position());
     if !open.is(Screen::Inventory) {
         dragging.0 = None;
@@ -840,15 +849,15 @@ fn drag_items(
     let Some(point) = cursor else { return };
     let ledger = ledgers.iter().next().map(|(n, t)| node_rect(n, t));
     let doll = dolls.iter().next().map(|(n, t)| node_rect(n, t));
-    let target = target_under(point, &grids, &slots, doll, ledger);
+    let target = target_under(point, &grids, &slots, doll, ledger, cell_px);
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
     let over: Option<(Rect, Drag)> = match target {
         Target::Cell { view, cell } => grid_of(&inventory, &underfoot, view).and_then(|g| g.at_cell(cell.x, cell.y).copied()).and_then(|entry| {
             let (_, node, transform) = grids.iter().find(|(v, ..)| **v == view)?;
-            let min = node_rect(node, transform).min + Vec2::new(entry.at.x as f32, entry.at.y as f32) * CELL_PX + LINE_PX;
-            let rect = Rect::from_corners(min, min + Vec2::new(entry.size.cols as f32, entry.size.rows as f32) * CELL_PX - LINE_PX);
+            let min = node_rect(node, transform).min + Vec2::new(entry.at.x as f32, entry.at.y as f32) * cell_px + LINE_PX;
+            let rect = Rect::from_corners(min, min + Vec2::new(entry.size.cols as f32, entry.size.rows as f32) * cell_px - LINE_PX);
             let grab = cell - IVec2::new(entry.at.x as i32, entry.at.y as i32);
             Some((rect, Drag { id: entry.id, grab, size: entry.size, turned: entry.at.turned, press: point, active: false, target: None }))
         }),
@@ -929,8 +938,10 @@ fn show_drag(
     mut views: Query<(&ItemView, &mut BackgroundColor, &Children), Without<DropHint>>,
     mut item_icons: Query<&mut ImageNode, (With<ItemIcon>, Without<DragGhost>)>,
     mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>)>,
+    tuning: Res<Tuning>,
     mut icons: Icons,
 ) {
+    let cell_px = tuning.interface.cell_size;
     let drag = dragging.0.filter(|d| d.active);
     let cursor = window.and_then(|w| w.cursor_position());
     for (mut node, mut image, mut visibility) in &mut ghosts {
@@ -942,11 +953,11 @@ fn show_drag(
         if image.image != handle {
             image.image = handle;
         }
-        let at = point - (drag.grab.as_vec2() + 0.5) * CELL_PX;
+        let at = point - (drag.grab.as_vec2() + 0.5) * cell_px;
         node.left = px(at.x);
         node.top = px(at.y);
-        node.width = px(drag.size.cols as f32 * CELL_PX);
-        node.height = px(drag.size.rows as f32 * CELL_PX);
+        node.width = px(drag.size.cols as f32 * cell_px);
+        node.height = px(drag.size.rows as f32 * cell_px);
         *visibility = Visibility::Inherited;
     }
     for (mut node, mut background, mut border, mut visibility) in &mut hints {
@@ -959,11 +970,11 @@ fn show_drag(
             continue;
         };
         let at = (cell - drag.grab).max(IVec2::ZERO).as_vec2();
-        let min = rect.min + at * CELL_PX + LINE_PX;
+        let min = rect.min + at * cell_px + LINE_PX;
         node.left = px(min.x);
         node.top = px(min.y);
-        node.width = px(drag.size.cols as f32 * CELL_PX - LINE_PX);
-        node.height = px(drag.size.rows as f32 * CELL_PX - LINE_PX);
+        node.width = px(drag.size.cols as f32 * cell_px - LINE_PX);
+        node.height = px(drag.size.rows as f32 * cell_px - LINE_PX);
         let colour = if fits.is_ok() { OK } else { BAD };
         background.0 = colour.with_alpha(if fits.is_ok() { 0.3 } else { 0.26 });
         *border = BorderColor::all(colour);
@@ -1011,6 +1022,14 @@ fn show_toast(toast: Res<Toast>, time: Res<Time<Real>>, mut texts: Query<&mut Te
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cell size as shipped.
+    const CELL_PX: f32 = 46.0;
+
+    #[test]
+    fn the_cell_size_here_is_the_shipped_one() {
+        assert_eq!(Tuning::default().interface.cell_size, CELL_PX);
+    }
 
     #[test]
     fn fb_hold_names_each_hand() {
@@ -1075,9 +1094,9 @@ mod tests {
     #[test]
     fn cells_are_read_from_the_grid_rectangle() {
         let rect = Rect::new(100.0, 50.0, 100.0 + 8.0 * CELL_PX + LINE_PX, 50.0 + 5.0 * CELL_PX + LINE_PX);
-        assert_eq!(cell_under(rect, Vec2::new(103.0, 53.0)), IVec2::new(0, 0));
-        assert_eq!(cell_under(rect, Vec2::new(100.0 + 7.5 * CELL_PX, 50.0 + 4.5 * CELL_PX)), IVec2::new(7, 4));
-        assert_eq!(cell_under(rect, Vec2::new(100.0 + 2.0 * CELL_PX + 5.0, 60.0)), IVec2::new(2, 0));
+        assert_eq!(cell_under(rect, Vec2::new(103.0, 53.0), CELL_PX), IVec2::new(0, 0));
+        assert_eq!(cell_under(rect, Vec2::new(100.0 + 7.5 * CELL_PX, 50.0 + 4.5 * CELL_PX), CELL_PX), IVec2::new(7, 4));
+        assert_eq!(cell_under(rect, Vec2::new(100.0 + 2.0 * CELL_PX + 5.0, 60.0), CELL_PX), IVec2::new(2, 0));
     }
 
     /// The screen opens and closes over an app with the inventory plugin's state and systems,
@@ -1101,6 +1120,7 @@ mod tests {
             .init_resource::<Assets<Image>>()
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
+            .init_resource::<Tuning>()
             .add_systems(Update, (switch_screens, build_screen, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
@@ -1194,7 +1214,7 @@ mod tests {
     fn bare_stone_underfoot_is_a_box_the_grid_s_size_that_says_so() {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyI);
-        let size = grid_size(&app.world().resource::<Underfoot>().grid);
+        let size = grid_size(&app.world().resource::<Underfoot>().grid, CELL_PX);
         let mut views = app.world_mut().query::<(&GridView, &Node, &Children)>();
         let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot drop zone");
         assert_eq!((node.width, node.height), (px(size.x), px(size.y)));

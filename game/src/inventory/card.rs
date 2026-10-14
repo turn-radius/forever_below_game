@@ -301,6 +301,24 @@ pub fn card_subject(
     }
 }
 
+/// `subject` once the mouse has rested on it `delay` seconds (the tuning's `hover_delay`), at
+/// `now` seconds: an item hovered on the screen waits that long, counted from when the mouse
+/// came onto it (kept in `since`); the item under the crosshair shows at once.
+pub fn after_hover_delay(subject: Option<(ItemId, CardAnchor)>, now: f32, delay: f32, since: &mut Option<(ItemId, f32)>) -> Option<(ItemId, CardAnchor)> {
+    let Some((id, CardAnchor::Beside(_))) = subject else {
+        *since = None;
+        return subject;
+    };
+    let from = match *since {
+        Some((hovered, from)) if hovered == id => from,
+        _ => {
+            *since = Some((id, now));
+            now
+        }
+    };
+    (now - from >= delay).then_some(subject).flatten()
+}
+
 /// Shows, fills and places the card. A card filled this frame waits a frame to be measured.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn show_card(
@@ -315,11 +333,16 @@ pub fn show_card(
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
+    time: Option<Res<Time<Real>>>,
     mut shown: Local<Option<ItemId>>,
+    mut hovered_since: Local<Option<(ItemId, f32)>>,
 ) {
     let aimed_item = aimed.and_then(|a| a.0).and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
     // No card over the menu.
     let subject = if open.is(Screen::Menu) { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
+    let delay = tuning.map_or(0.0, |t| t.interface.hover_delay);
+    let subject = after_hover_delay(subject, time.map_or(0.0, |t| t.elapsed_secs()), delay, &mut hovered_since);
     for (card, mut node, mut visibility, computed, target) in &mut cards {
         let Some((id, anchor)) = subject.filter(|(id, _)| inventory.item(*id).is_some()) else {
             *visibility = Visibility::Hidden;
@@ -348,6 +371,24 @@ pub fn show_card(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hovered_card_waits_for_the_hover_delay() {
+        let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let over = |id| Some((ItemId(id), CardAnchor::Beside(rect)));
+        let mut since = None;
+        assert_eq!(after_hover_delay(over(3), 1.0, 0.0, &mut since), over(3), "no delay: at once");
+        let mut since = None;
+        assert_eq!(after_hover_delay(over(3), 1.0, 0.5, &mut since), None);
+        assert_eq!(after_hover_delay(over(3), 1.4, 0.5, &mut since), None);
+        assert_eq!(after_hover_delay(over(3), 1.5, 0.5, &mut since), over(3));
+        // Onto another item, the wait starts again.
+        assert_eq!(after_hover_delay(over(4), 1.6, 0.5, &mut since), None);
+        assert_eq!(after_hover_delay(over(4), 2.2, 0.5, &mut since), over(4));
+        // The crosshair's card does not wait.
+        let aimed = Some((ItemId(9), CardAnchor::Crosshair));
+        assert_eq!(after_hover_delay(aimed, 2.3, 0.5, &mut since), aimed);
+    }
 
     #[test]
     fn every_field_comes_from_the_item() {

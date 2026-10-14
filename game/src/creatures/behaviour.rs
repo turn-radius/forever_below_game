@@ -33,7 +33,8 @@ use procgen_rng::Mulberry32;
 use super::{Critter, Driven, Intent, tongue_flick};
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
-use crate::player::{BODY_RADIUS, blocked_by, slide_around};
+use crate::player::{blocked_by, slide_around};
+use crate::tuning::Tuning;
 
 pub struct BehaviourPlugin;
 
@@ -42,6 +43,7 @@ impl Plugin for BehaviourPlugin {
         app.add_message::<CreatureAttack>()
             .init_resource::<BlockedCells>()
             .init_resource::<Obstacles>()
+            .init_resource::<Tuning>()
             .add_systems(Update, (wake, behave).chain().before(super::idle).in_set(DelveSystems));
     }
 }
@@ -98,29 +100,30 @@ const REPATH: f32 = 0.5;
 /// Turning rates, radians per second.
 const RAT_TURN: f32 = 10.0;
 const SNAKE_TURN: f32 = 3.0;
-/// A rat's bite: the lunge takes this long, landing partway through; and the wait between.
+/// A rat's bite: the lunge takes this long, landing partway through. The wait between bites is
+/// tuned (`rat_cooldown`, [`crate::tuning::CreatureTuning`]).
 const BITE_TIME: f32 = 0.35;
 const BITE_LANDS: f32 = 0.12;
-const RAT_COOLDOWN: f32 = 1.5;
-/// A snake's strike: drawn in and reared, thrown, held and drawn back.
+/// A snake's strike: drawn in and reared, thrown, held and drawn back. The wait between is
+/// tuned (`snake_cooldown`).
 const STRIKE_WINDUP: f32 = 0.7;
 const STRIKE_THROW: f32 = 0.12;
 const STRIKE_TIME: f32 = 1.4;
-const SNAKE_COOLDOWN: f32 = 2.5;
 
 /// How far it notices the player, world units: the stat block's darkvision or blindsight, but
 /// at least 20 ft (a snake's blindsight of 10 ft would only notice someone standing on it, and
-/// the player carries a light).
-pub fn notice_range(species: Species) -> f32 {
-    species.stat_block().senses_feet.max(20.0) * UNITS_PER_FOOT
+/// the player carries a light), times `scale` (the tuning's `sense_scale`).
+pub fn notice_range(species: Species, scale: f32) -> f32 {
+    species.stat_block().senses_feet.max(20.0) * UNITS_PER_FOOT * scale
 }
 
-/// How near its centre must come to the player's to bite, world units: the player's body, its
-/// own reach (a rat's snout, a snake's coil and a third of its neck, which it strikes across).
-pub fn reach(critter: &Critter) -> f32 {
+/// How near its centre must come to the centre of a player of `player_radius` to bite, world
+/// units: the player's body, its own reach (a rat's snout, a snake's coil and a third of its
+/// neck, which it strikes across), at the size it is drawn.
+pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
     match &critter.creature {
-        Creature::Rat(rat) => BODY_RADIUS + 0.55 * rat.length,
-        Creature::Snake(snake) => BODY_RADIUS + critter.radius + 0.35 * snake.dims().neck,
+        Creature::Rat(rat) => player_radius + 0.55 * rat.length * critter.size,
+        Creature::Snake(snake) => player_radius + critter.radius + 0.35 * snake.dims().neck * critter.size,
     }
 }
 
@@ -130,7 +133,7 @@ pub fn reach(critter: &Critter) -> f32 {
 /// head leads from the root and the body follows the way the head went (`super::Trail`).
 pub fn body_radius(critter: &Critter) -> f32 {
     match &critter.creature {
-        Creature::Rat(rat) => 0.3 * rat.length,
+        Creature::Rat(rat) => 0.3 * rat.length * critter.size,
         Creature::Snake(_) => critter.radius.min(SNAKE_SQUEEZE),
     }
 }
@@ -188,6 +191,7 @@ fn point_in_room(level: &Level, room: Option<usize>, near: Vec2, margin: f32, rn
 fn behave(
     time: Res<Time>,
     level: Res<CurrentLevel>,
+    tuning: Res<Tuning>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
     player: Query<&Transform, (With<Player>, Without<Critter>)>,
@@ -205,13 +209,14 @@ fn behave(
     // Every creature's circle, to keep the others out of.
     let bodies: Vec<(Entity, Vec2, f32)> = creatures.iter().map(|(e, c, _, _, t)| (e, t.translation.xz(), body_radius(c))).collect();
     let t = time.elapsed_secs();
+    let (tune, player_radius) = (&tuning.creatures, tuning.moving.body_radius);
     for (entity, critter, mut brain, mut intent, mut transform) in &mut creatures {
         let brain = &mut *brain;
         let species = critter.spot.species;
         let snake = species.is_snake();
         let at = transform.translation.xz();
         let radius = body_radius(critter);
-        let sees = player.filter(|p| p.distance(at) <= notice_range(species) && line_of_sight(grid(at), grid(*p), &blocked));
+        let sees = player.filter(|p| p.distance(at) <= notice_range(species, tune.sense_scale) && line_of_sight(grid(at), grid(*p), &blocked));
         brain.cooldown = (brain.cooldown - dt).max(0.0);
 
         // Notice, follow, give up.
@@ -222,7 +227,7 @@ fn behave(
             }
             (Mode::Chase { last_seen, lost }, None) => {
                 *lost += dt;
-                let there = last_seen.distance(at) < reach(critter) + CELL * 0.25;
+                let there = last_seen.distance(at) < reach(critter, player_radius) + CELL * 0.25;
                 if (*lost > LOSE_AFTER && there) || *lost > 3.0 * LOSE_AFTER {
                     brain.mode = Mode::Wander { target: None, wait: brain.rng.range_f32(0.5, 2.0) };
                 }
@@ -231,7 +236,7 @@ fn behave(
             (Mode::Wander { .. }, None) => {}
         }
         if snake && let Mode::Chase { last_seen, .. } = brain.mode
-            && last_seen.distance(brain.home) > SNAKE_LEASH + reach(critter)
+            && last_seen.distance(brain.home) > SNAKE_LEASH + reach(critter, player_radius)
         {
             brain.mode = Mode::Wander { target: Some(brain.home), wait: 0.0 };
         }
@@ -267,10 +272,10 @@ fn behave(
             Mode::Chase { last_seen, .. } => {
                 let goal = sees.unwrap_or(*last_seen);
                 face = Some(goal);
-                let in_reach = player.is_some_and(|p| p.distance(at) <= reach(critter)) && sees.is_some();
+                let in_reach = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius)) && sees.is_some();
                 if !in_reach && brain.attack.is_none() {
                     heading = Some(goal);
-                    speed = species.speed() * if snake { 1.0 } else { 2.0 };
+                    speed = species.speed() * if snake { tune.snake_chase_speed } else { tune.rat_chase_speed };
                 }
                 if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 {
                     brain.attack = Some(0.0);
@@ -302,7 +307,7 @@ fn behave(
                     .iter()
                     .filter(|(e, _, _)| *e != entity)
                     .map(|&(_, centre, r)| Obstacle::Circle { centre, radius: r })
-                    .chain(player.map(|centre| Obstacle::Circle { centre, radius: BODY_RADIUS }))
+                    .chain(player.map(|centre| Obstacle::Circle { centre, radius: player_radius }))
                     .chain(obstacles.0.iter().copied())
                     .collect();
                 let step = (direction * speed * dt).clamp_length_max((target - at).length());
@@ -360,7 +365,7 @@ fn behave(
             }
             if since >= done {
                 brain.attack = None;
-                brain.cooldown = if snake { SNAKE_COOLDOWN } else { RAT_COOLDOWN };
+                brain.cooldown = if snake { tune.snake_cooldown } else { tune.rat_cooldown };
             }
         }
     }
@@ -369,6 +374,14 @@ fn behave(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The player's body radius as shipped.
+    const BODY_RADIUS: f32 = 3.5;
+
+    #[test]
+    fn the_body_radius_here_is_the_shipped_one() {
+        assert_eq!(Tuning::default().moving.body_radius, BODY_RADIUS);
+    }
     use crate::creatures::{animate, spawn_skeleton};
     use bevy::time::TimeUpdateStrategy;
     use fb_level::FloorShape;
@@ -432,7 +445,7 @@ mod tests {
         }
         let attacker = bitten_by.iter().find(|(e, _)| pack.contains(e)).map(|&(e, _)| e).expect("no rat bit");
         let critter = app.world().get::<Critter>(attacker).unwrap().clone();
-        assert!(position(&app, attacker).distance(player_at) <= reach(&critter) + 1.0, "the biter is in reach");
+        assert!(position(&app, attacker).distance(player_at) <= reach(&critter, BODY_RADIUS) + 1.0, "the biter is in reach");
         assert!(bitten_by.iter().all(|&(_, d)| d >= 1), "a rat's bite does 1 (SRD)");
         // Bites come on a cooldown, not every frame.
         let from_one = bitten_by.iter().filter(|(e, _)| *e == attacker).count();
@@ -506,9 +519,9 @@ mod tests {
 
     #[test]
     fn notice_ranges_follow_the_senses() {
-        assert!((notice_range(Species::Rat) - 30.0 * UNITS_PER_FOOT).abs() < 1e-3);
-        assert!((notice_range(Species::GiantRat) - 60.0 * UNITS_PER_FOOT).abs() < 1e-3);
-        assert!((notice_range(Species::PoisonousSnake) - 20.0 * UNITS_PER_FOOT).abs() < 1e-3);
+        assert!((notice_range(Species::Rat, 1.0) - 30.0 * UNITS_PER_FOOT).abs() < 1e-3);
+        assert!((notice_range(Species::GiantRat, 1.0) - 60.0 * UNITS_PER_FOOT).abs() < 1e-3);
+        assert!((notice_range(Species::PoisonousSnake, 1.0) - 20.0 * UNITS_PER_FOOT).abs() < 1e-3);
     }
 
     #[test]
@@ -571,11 +584,11 @@ mod tests {
             for seed in 0..32 {
                 let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species, seed, pack: 0 };
                 let creature = spot.creature();
-                let critter = Critter { spot, radius: creature.radius(), creature };
+                let critter = Critter::new(spot, creature);
                 // Through a one-cell corridor or doorway, with room to spare.
                 assert!(2.0 * body_radius(&critter) < 0.9 * CELL, "{species:?} {seed}: {}", body_radius(&critter));
                 // Its bite reaches past the circles that keep it off the player.
-                assert!(reach(&critter) > body_radius(&critter) + BODY_RADIUS + 1.0, "{species:?} {seed}");
+                assert!(reach(&critter, BODY_RADIUS) > body_radius(&critter) + BODY_RADIUS + 1.0, "{species:?} {seed}");
             }
         }
     }

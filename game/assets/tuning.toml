@@ -1,0 +1,99 @@
+# Forever Below tuning: how the game looks and feels.
+#
+# Edit a value and save; a game started with `cargo run` picks the change up within a second.
+# A key left out, misspelt or given the wrong kind of value keeps its default, and the game
+# logs a warning naming it. 1 world unit is 10 cm; times are in seconds.
+
+[view]
+# How much larger than its own size a held item is drawn (1 = true size).
+held_scale = 1.4
+# Vertical field of view of the camera that draws what you hold, in degrees.
+held_fov_degrees = 46.0
+# Vertical field of view of the world, in degrees.
+world_fov_degrees = 70.0
+# How much the view and what you hold bob as you walk (0 = still, 1 = usual).
+head_bob = 1.0
+# How much larger than its own size an item lying on the floor is drawn (1 = true size).
+floor_item_scale = 1.15
+
+[moving]
+# Walking pace, in world units per second (14 = 1.4 m/s).
+walk_speed = 14.0
+# Pace with Shift held, in world units per second.
+hurry_speed = 45.0
+# How quickly you reach your pace and stop, per second (higher is snappier).
+acceleration = 10.0
+# Your body's radius on the floor, in world units (3.5 = 35 cm).
+body_radius = 3.5
+
+[creatures]
+# How far creatures notice you, as a multiple of their senses.
+sense_scale = 1.0
+# Seconds between a rat's bites.
+rat_cooldown = 1.5
+# Seconds between a snake's strikes.
+snake_cooldown = 2.5
+# How fast a rat comes at you once it has seen you, as a multiple of its speed.
+rat_chase_speed = 2.0
+# How fast a snake comes at you once it has seen you, as a multiple of its speed.
+snake_chase_speed = 1.0
+
+[creatures.size]
+# How large each kind of creature is drawn, and the floor it covers (1 = as rolled).
+rat = 1.0
+# Giant rats, as a multiple.
+giant_rat = 1.0
+# Poisonous snakes, as a multiple.
+viper = 1.0
+# Constrictor snakes, as a multiple.
+constrictor = 1.0
+
+[combat]
+# How far your blows reach, as a multiple of the weapon's own reach.
+reach_scale = 1.0
+# Half the angle of the cone ahead a blow can land in, in degrees either side of the crosshair.
+hit_cone_degrees = 50.0
+# Seconds a struck creature's flash holds at full.
+flash_hold = 0.12
+# Seconds the flash then takes to fade.
+flash_fade = 0.2
+# How far a blow knocks a creature back, as a multiple of the usual.
+knockback_scale = 1.0
+
+[light]
+# A torch, lantern or other burning thing's strength close up (1 = full).
+torch_peak = 1.0
+# How far its light reaches, as a multiple of its bright radius.
+torch_reach = 2.0
+# A brazier's strength close up (1 = full).
+brazier_peak = 1.5
+# How far a brazier's light reaches, in world units.
+brazier_reach = 150.0
+# A patch of glowcaps' strength close up (1 = full).
+glowcap_peak = 0.5
+# How far glowcaps' light reaches, in world units.
+glowcap_reach = 30.0
+# How deeply flames flicker (0 = steady, 1 = usual).
+flicker_depth = 1.0
+# The abyss's own light where no flame reaches, in lux.
+ambient_lux = 4.0
+# Where the dark starts to swallow far stone, in world units.
+fog_start = 40.0
+# Where the dark is complete, in world units.
+fog_end = 260.0
+
+[sound]
+# The music's volume at full, 0 to 1, before your music volume setting.
+music_mix = 0.35
+# The shortest silence between tracks, in seconds.
+silence_min = 45.0
+# The longest silence between tracks, in seconds.
+silence_max = 75.0
+# Sound effects' volume at full, 0 to 1, before your sound volume setting.
+effects_volume = 1.0
+
+[interface]
+# Inventory grid cell size, in logical pixels.
+cell_size = 46.0
+# Seconds the mouse rests on an item before its card shows.
+hover_delay = 0.0
