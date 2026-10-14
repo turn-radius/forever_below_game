@@ -212,8 +212,15 @@ impl Etch {
 
 /// The toon half of [`ToonMaterial`]. The base colour, roughness and so on stay on the
 /// [`StandardMaterial`].
+///
+/// Bindless where the device allows it, as `StandardMaterial` is, with its own index table at
+/// binding 102 (Bevy's `AsBindGroup` docs, "index_table", and its
+/// `shaders/extended_material_bindless` example): every item part has a material of its own, and
+/// without bindless each one is a bind group of its own, so no two parts batch and every shadow
+/// cube face draws them one by one (#148).
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
-#[uniform(100, ToonUniform)]
+#[data(100, ToonUniform, binding_array(101))]
+#[bindless(index_table(range(100..101), binding(102)))]
 pub struct ToonExtension {
     pub bands: ToonBands,
     pub decay: Decay,
@@ -334,6 +341,14 @@ mod tests {
         for (got, want) in bands.values().iter().zip(expected) {
             assert!((got - want).abs() < 1e-6, "{got} != {want}");
         }
+    }
+
+    #[test]
+    fn toon_materials_can_share_a_bind_group() {
+        // Bindless on both halves, or every part's material is a bind group of its own and
+        // nothing batches (#148).
+        assert!(<ToonExtension as AsBindGroup>::bindless_slot_count().is_some());
+        assert!(<ToonMaterial as AsBindGroup>::bindless_slot_count().is_some());
     }
 
     #[test]
