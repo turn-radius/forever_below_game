@@ -55,8 +55,46 @@ impl FormRing {
         FormRing { y, half_width, half_depth }
     }
 
+    /// The same ring `dy` higher.
+    pub const fn raised(self, dy: f32) -> Self {
+        FormRing { y: self.y + dy, ..self }
+    }
+
     fn scaled(self, k: f32) -> Self {
         FormRing { half_width: self.half_width * k, half_depth: self.half_depth * k, ..self }
+    }
+}
+
+/// A swelling on one face of a form (a belly or a bust on the front, the seat behind):
+/// `depth` deep at height `y`, falling off as a Gaussian `spread` above and below, and
+/// round the form as `facing^sharpness`, where `facing` is 1 at the angle `toward` (lathe
+/// convention) and 0 a quarter turn either side and beyond. The plate prototype's `tSurf`
+/// swells the belly at sharpness 2 and the bust at 4, both toward the front.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bulge {
+    pub y: f32,
+    pub spread: f32,
+    pub depth: f32,
+    pub sharpness: i32,
+    pub toward: f32,
+}
+
+impl Bulge {
+    pub const NONE: Bulge = Bulge { y: 0.0, spread: 1.0, depth: 0.0, sharpness: 2, toward: FRONT };
+
+    /// How far the form swells at `angle` (lathe convention) and height `y`.
+    pub fn at(&self, angle: f32, y: f32) -> f32 {
+        if self.depth <= 0.0 {
+            return 0.0;
+        }
+        let facing = (angle - self.toward).cos().max(0.0);
+        let d = (y - self.y) / self.spread.max(1e-3);
+        self.depth * (-d * d).exp() * facing.powi(self.sharpness)
+    }
+
+    /// The same swelling `dy` higher.
+    pub fn raised(self, dy: f32) -> Bulge {
+        Bulge { y: self.y + dy, ..self }
     }
 }
 
@@ -78,6 +116,11 @@ pub struct TorsoForm {
     pub exponent: f32,
     /// Depth of the back relative to the front.
     pub back: f32,
+    /// Swellings over the sections: a belly about the waist and a bust about the chest in
+    /// front, the seat behind the hips. Garments drape over them.
+    pub belly: Bulge,
+    pub bust: Bulge,
+    pub seat: Bulge,
 }
 
 impl TorsoForm {
@@ -94,6 +137,9 @@ impl TorsoForm {
         shin: FormRing::new(-9.0, 1.82, 1.26),
         exponent: 2.0 / 2.6,
         back: 0.9,
+        belly: Bulge::NONE,
+        bust: Bulge::NONE,
+        seat: Bulge::NONE,
     };
 
     /// Every section from the shoulders down widened by `ease` (a garment's fit over the body).
@@ -117,15 +163,7 @@ impl TorsoForm {
 
     /// The form sampled densely for lookups by height.
     pub fn profile(&self) -> TorsoProfile {
-        let curve = CatmullRom::centripetal(self.rings().iter().map(|r| [r.half_width, r.y, r.half_depth]).collect());
-        let mut samples: Vec<FormRing> = curve.sample(48).into_iter().map(|p| FormRing::new(p[1], p[0].max(0.01), p[2].max(0.01))).collect();
-        // Keep heights increasing so lookups can bisect.
-        for i in 1..samples.len() {
-            if samples[i].y <= samples[i - 1].y {
-                samples[i].y = samples[i - 1].y + 1e-4;
-            }
-        }
-        TorsoProfile { samples, exponent: self.exponent, back: self.back }
+        TorsoProfile::new(&self.rings(), self.exponent, self.back, vec![self.belly, self.bust, self.seat])
     }
 
     /// Where an arm leaves the body on side `side` (+1 left, -1 right), and the arm's
@@ -137,15 +175,31 @@ impl TorsoForm {
     }
 }
 
-/// A [`TorsoForm`] sampled for lookups.
+/// A [`TorsoForm`] (or any rising run of sections) sampled for lookups.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TorsoProfile {
     samples: Vec<FormRing>,
     pub exponent: f32,
     pub back: f32,
+    pub bulges: Vec<Bulge>,
 }
 
 impl TorsoProfile {
+    /// Sections `rings` (rising in y) on a centripetal Catmull-Rom spline, sampled densely.
+    /// `fb_body` uses this for the skin of a trunk, which runs on past a garment's form to
+    /// the crotch and up the neck.
+    pub fn new(rings: &[FormRing], exponent: f32, back: f32, bulges: Vec<Bulge>) -> TorsoProfile {
+        let curve = CatmullRom::centripetal(rings.iter().map(|r| [r.half_width, r.y, r.half_depth]).collect());
+        let mut samples: Vec<FormRing> = curve.sample(48).into_iter().map(|p| FormRing::new(p[1], p[0].max(0.01), p[2].max(0.01))).collect();
+        // Keep heights increasing so lookups can bisect.
+        for i in 1..samples.len() {
+            if samples[i].y <= samples[i - 1].y {
+                samples[i].y = samples[i - 1].y + 1e-4;
+            }
+        }
+        TorsoProfile { samples, exponent, back, bulges }
+    }
+
     pub fn bottom(&self) -> f32 {
         self.samples[0].y
     }
@@ -163,10 +217,17 @@ impl TorsoProfile {
         (a.half_width + (b.half_width - a.half_width) * t, a.half_depth + (b.half_depth - a.half_depth) * t)
     }
 
+    /// The section's point at `angle` and height `y`, `inflate` further out, with its
+    /// bulges.
+    pub fn section(&self, angle: f32, y: f32, inflate: f32) -> [f32; 2] {
+        let (hw, hd) = self.at(y);
+        let swell: f32 = self.bulges.iter().map(|b| b.at(angle, y)).sum();
+        section_point(angle, hw + inflate, hd + swell + inflate, self.exponent, self.back)
+    }
+
     /// The surface point at `angle` and height `y`.
     pub fn point(&self, angle: f32, y: f32) -> V3 {
-        let (hw, hd) = self.at(y);
-        let [x, z] = section_point(angle, hw, hd, self.exponent, self.back);
+        let [x, z] = self.section(angle, y, 0.0);
         [x, y, z]
     }
 }
@@ -807,8 +868,7 @@ impl LowerBodyProfile {
     }
 
     fn torso_xz(&self, angle: f32, y: f32, inflate: f32) -> [f32; 2] {
-        let (hw, hd) = self.torso.at(y - self.form.waist_height);
-        section_point(angle, hw + inflate, hd + inflate, self.torso.exponent, self.torso.back)
+        self.torso.section(angle, y - self.form.waist_height, inflate)
     }
 
     /// A point on the whole torso at `angle` and height `y` above the soles, `inflate`

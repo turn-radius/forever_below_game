@@ -18,6 +18,7 @@ const DECAY_BONE: u32 = 8u;
 const DECAY_STONE: u32 = 9u;
 const DECAY_CLOTH: u32 = 10u;
 const DECAY_PAINT: u32 = 11u;
+const DECAY_SKIN: u32 = 13u;
 
 fn hash3(p_in: vec3<f32>) -> f32 {
     var p = fract(p_in * 0.3183099 + 0.1);
@@ -186,6 +187,15 @@ fn apply_decay(
         c = mix(c, c * 0.85 + 0.05, a * 0.35);
         let chip = smoothstep(0.95 - a * 0.45, 0.98 - a * 0.45, n2 * 0.7 + n * 0.45) * min(1.0, a * 4.0);
         c = mix(c, vec3(0.45, 0.31, 0.19) * (0.85 + 0.3 * n), chip);
+    } else if decay_type == DECAY_SKIN {
+        // Dirt on a folk's skin and hair (`amount` is the character's dirt): a dull grey-brown
+        // film, then smudges that pool low on the body, as the plate's body dirt does. Item
+        // space is body space here, feet at y = 0 and 10 cm units, so `low` fades out up
+        // the legs (our own falloff).
+        c = mix(c, c * vec3(0.84, 0.8, 0.74), a * 0.45);
+        let low = 1.0 - smoothstep(0.0, 9.0, item_position.y);
+        let smudge = patches(patch_field(n, n2), t * (0.18 + 0.5 * low), 0.35);
+        c = mix(c, c * vec3(0.5, 0.43, 0.35), smudge * 0.75);
     } else {
         // Food: browning, going stale, mould.
         c = mix(c, c * vec3(0.8, 0.7, 0.56), a * 0.5);

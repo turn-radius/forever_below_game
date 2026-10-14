@@ -10,6 +10,17 @@ This is how the prototype builds and dresses bodies. The Rust version should go 
 - The head (`headFn`) is an ellipsoid with a narrower jaw, a chin, and a flatter face. Each folk adds its own features: snout, pig nose, long ears, frill, tusks.
 - Hair, brows and beards are offset surfaces of the head with lumpy noise. Long hair drapes over the shoulders and clears the clothing.
 
+### In the Rust build (`crates/fb_body`)
+
+`BodySpec::roll(folk, seed)` rolls the plate's body fields (`C.form` is `figure`, `C.hs` is `stature`); `Body::new(&spec)` measures it as `bodyDims` does, in body space (soles on y = 0, face +Z, the wearer's left +X). Departures, all our own:
+
+- **One body for skin and clothes.** The body yields the Armory's forms sized to itself (`torso_form`, `lower_body_form`, `leg_form`, `hand_form`, `head_form`) and where each sits (`Placement`s), so the garments, trousers, boots, gloves and hoods already built on those forms fit it unchanged. `TorsoForm` gained `Bulge`s (belly, bust and seat) that `TorsoProfile::point` adds, so cloth drapes over a belly instead of through it.
+- **A chest and a seat.** The plate swells a bust only past figure 0.55 and leaves the back flat. Every trunk here also has a slight swell of the breast muscles and a seat behind the hips.
+- **Limb radii** run through their knots on a smooth cubic (Catmull-Rom slopes) rather than the plate's piecewise-linear `lerp3`, with a small shoulder cap. The forearm flattens toward the wrist to the hand form's wrist (wide across the palm, thin through it), so arm and hand meet without a step. Legs swell at the calf behind and the knee in front.
+- **Hands** are the glove builder's palm and digit tubes ([`armory::build::hand`]): four fingers and a thumb that curl joint by joint (relaxed, or closed round a grip with each joint bent by phalanx length over grip radius), the ball of the thumb as a pad, and nails. Their length is the plate's `handL`; the knuckles widen with the wrist, so dwarf hands are broad and goblin hands slender. The plate's hand was an ellipsoid and a thumb.
+- **Feet** are the boot builder's `LegForm` foot, sized from the plate's `footFn` (length `0.148 h * race.foot`), turned out 0.12 rad. Pigfolk keep the plate's darker trotters; lizardfolk get three bone claws per foot.
+- **Skin** is its own material (`MaterialKind::Skin`, decay type 13): it wears with the character's dirt, a dull film and smudges pooling low on the body. Lizardfolk skin carries the Armory's `Scales` pattern.
+
 ## Worn gear
 
 Clothing is not modelled per item. Each garment is an **offset of the body surface** (`garmentGeo`), shaped by the Armory state: style, length, fit, flare, folds, sleeves, neck, trim and pattern. That lets one Armory tunic fit a gnome and a pigfolk. Layers stack outward with a running `maxOff` (shirt, legs, armour, neck, cloak, belt, then back). Boots extend the foot surface; gloves and gauntlets wrap the hand and cuff. Helmets are the Armory helm itself, resized so its radius matches the head. Amulets use the Armory pendant, with the chain drawn on the body surface from the back of the neck down to the pendant. Bags are the Armory bag on the back, with straps pushed onto the worn surface (`pushOut`, `strapCurve`).

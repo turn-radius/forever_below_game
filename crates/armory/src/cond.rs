@@ -62,7 +62,7 @@ impl Condition {
             MaterialKind::Brass | MaterialKind::Gold | MaterialKind::Silver => self.patina,
             MaterialKind::Wood | MaterialKind::Bone | MaterialKind::Stone | MaterialKind::Food => self.rot,
             MaterialKind::Leather | MaterialKind::Cord | MaterialKind::Cloth => self.fray,
-            MaterialKind::Gem | MaterialKind::Glass | MaterialKind::Paint => 1.0,
+            MaterialKind::Gem | MaterialKind::Glass | MaterialKind::Paint | MaterialKind::Skin => 1.0,
         };
         (self.wear * multiplier).clamp(0.0, 1.2)
     }

@@ -47,6 +47,9 @@ impl ItemPalette {
             MaterialKind::Paint => self.paint,
             MaterialKind::Food => self.food,
             MaterialKind::Glass => self.glass,
+            // Skin always carries its folk's colour as a tint; this is a fallback only (the
+            // second human skin in `data/races.json`).
+            MaterialKind::Skin => Rgb::hex(0xe2b48f),
             _ => self.gem,
         })
     }
