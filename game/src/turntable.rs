@@ -144,6 +144,18 @@ impl Turntable {
         Ok(turntable)
     }
 
+    /// [`Turntable::from_args`] with `wear` (the `FB_WEAR` variable) as the starting
+    /// condition; a `--wear` flag wins. Unset or empty, the turntable opens pristine.
+    pub fn from_wear_and_args(wear: Option<String>, args: impl IntoIterator<Item = String>) -> Result<Turntable, String> {
+        let wear = wear.filter(|w| !w.is_empty());
+        if let Some(wear) = &wear {
+            parse_wear(wear).map_err(|e| format!("FB_WEAR: {e}"))?;
+        }
+        // Read first, so a later `--wear` flag overrides it.
+        let from_env = wear.into_iter().flat_map(|w| ["--wear".to_string(), w]);
+        Turntable::from_args(from_env.chain(args))
+    }
+
     /// The seeds on this page, in grid order.
     pub fn seeds(&self) -> impl Iterator<Item = u32> + use<> {
         let first = self.first_seed;
@@ -880,6 +892,50 @@ mod tests {
         turntable.step_family(-1);
         assert_eq!(turntable, start);
         assert!(turntable.family.is_ported());
+    }
+
+    #[test]
+    fn opens_pristine_unless_wear_is_asked_for() {
+        let open = |wear: Option<&str>, line: &str| Turntable::from_wear_and_args(wear.map(String::from), args(line)).unwrap().wear;
+        assert_eq!(open(None, "--family mace"), ConditionState::Pristine);
+        assert_eq!(open(Some(""), "--family mace"), ConditionState::Pristine);
+        assert_eq!(open(Some("neglected"), "--family mace"), ConditionState::Neglected);
+        assert_eq!(open(Some("neglected"), "--wear pristine"), ConditionState::Pristine);
+        assert!(Turntable::from_wear_and_args(Some("muddy".into()), args("")).is_err());
+    }
+
+    /// Presses W twice, as typing into the window a capture opens can, and returns the wear.
+    fn wear_after_typing(app: &mut App) -> ConditionState {
+        use bevy::input::{ButtonState, InputPlugin, keyboard::{Key, KeyboardInput}};
+        app.add_plugins((MinimalPlugins, InputPlugin))
+            .init_resource::<Turntable>()
+            .init_resource::<Focus>()
+            .init_resource::<Spin>()
+            .add_systems(Update, keys);
+        for state in [ButtonState::Pressed, ButtonState::Released, ButtonState::Pressed, ButtonState::Released] {
+            app.world_mut().write_message(KeyboardInput {
+                key_code: KeyCode::KeyW,
+                logical_key: Key::Character("w".into()),
+                state,
+                text: None,
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            });
+            app.update();
+        }
+        app.world().resource::<Turntable>().wear
+    }
+
+    #[test]
+    fn typed_w_steps_the_wear() {
+        assert_eq!(wear_after_typing(&mut App::new()), ConditionState::BattleWorn);
+    }
+
+    #[test]
+    fn captures_ignore_typed_keys() {
+        let mut app = App::new();
+        app.add_plugins(crate::capture::IgnoreInput);
+        assert_eq!(wear_after_typing(&mut app), ConditionState::Pristine);
     }
 
     #[test]

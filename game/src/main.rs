@@ -14,7 +14,7 @@ use forever_below::{
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
     settings::SettingsPlugin,
-    turntable::{Focus, Turntable, TurntablePlugin, parse_wear},
+    turntable::{Focus, Turntable, TurntablePlugin},
 };
 
 fn main() -> AppExit {
@@ -76,12 +76,8 @@ fn run_turntable() -> AppExit {
 }
 
 fn turntable_from_env() -> Result<Turntable, String> {
-    let mut args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--turntable").collect();
-    if let Ok(wear) = std::env::var("FB_WEAR") {
-        parse_wear(&wear).map_err(|e| format!("FB_WEAR: {e}"))?;
-        args.splice(0..0, ["--wear".to_string(), wear]);
-    }
-    Turntable::from_args(args)
+    let args = std::env::args().skip(1).filter(|a| a != "--turntable");
+    Turntable::from_wear_and_args(std::env::var("FB_WEAR").ok(), args)
 }
 
 fn focus_from_env() -> Result<Focus, String> {

@@ -2,9 +2,17 @@
 //! Used to check scenes visually where window screenshots come back black.
 //!
 //! `FB_SCREENSHOT=path.png cargo run -p forever_below` turns it on via [`FrameCapturePlugin::from_env`].
+//!
+//! A capture shows exactly what its command line and environment ask for. The window still
+//! opens, and on macOS it takes focus, so keys typed meant for a terminal (two W presses step
+//! the turntable to battle worn) would otherwise reach the scene; [`IgnoreInput`] drops them.
 
 use bevy::{
     camera::{RenderTarget, ShadowLodOrigin},
+    input::{
+        InputSystems,
+        mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    },
     prelude::*,
     render::{
         render_resource::TextureFormat,
@@ -36,8 +44,39 @@ impl FrameCapturePlugin {
 impl Plugin for FrameCapturePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.clone())
+            .add_plugins(IgnoreInput)
             .add_systems(PostStartup, retarget_cameras)
             .add_systems(Update, capture_and_exit);
+    }
+}
+
+/// Clears each frame's keyboard and mouse input once Bevy has gathered it, so no system in
+/// `Update` sees a key, button, drag or scroll.
+pub struct IgnoreInput;
+
+impl Plugin for IgnoreInput {
+    fn build(&self, app: &mut App) {
+        app.add_systems(PreUpdate, ignore_input.after(InputSystems));
+    }
+}
+
+fn ignore_input(
+    mut keys: Option<ResMut<ButtonInput<KeyCode>>>,
+    mut buttons: Option<ResMut<ButtonInput<MouseButton>>>,
+    mut motion: Option<ResMut<AccumulatedMouseMotion>>,
+    mut scroll: Option<ResMut<AccumulatedMouseScroll>>,
+) {
+    if let Some(keys) = keys.as_deref_mut() {
+        keys.reset_all();
+    }
+    if let Some(buttons) = buttons.as_deref_mut() {
+        buttons.reset_all();
+    }
+    if let Some(motion) = motion.as_deref_mut() {
+        *motion = default();
+    }
+    if let Some(scroll) = scroll.as_deref_mut() {
+        *scroll = default();
     }
 }
 
