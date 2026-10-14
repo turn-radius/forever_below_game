@@ -2,7 +2,7 @@
 
 use armory::families::Generator;
 use armory::families::bags::{BagState, BagStyle, Bags, LIMITS};
-use armory::sections::fabric::{FabricPattern, Textile};
+use armory::fabric::{FabricPattern, Textile};
 
 fn rolls(range: std::ops::RangeInclusive<u32>) -> Vec<BagState> {
     range.map(Bags::roll).collect()
@@ -52,11 +52,11 @@ fn rolls_are_coherent() {
         }
         if b.fabric == Textile::Burlap {
             assert_eq!(b.style, BagStyle::Sack, "seed {seed}: burlap {:?}", b.style);
-            assert_eq!(b.pattern, FabricPattern::None, "seed {seed}: patterned burlap");
+            assert_eq!(b.pattern, FabricPattern::Plain, "seed {seed}: patterned burlap");
             assert!(!s.etch.on, "seed {seed}: embroidered burlap");
         }
         if b.fabric == Textile::Leather {
-            assert!(matches!(b.pattern, FabricPattern::None | FabricPattern::Rivets), "seed {seed}: woven pattern on leather");
+            assert!(matches!(b.pattern, FabricPattern::Plain | FabricPattern::Rivets), "seed {seed}: woven pattern on leather");
         }
     }
 }

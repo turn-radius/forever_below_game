@@ -32,7 +32,7 @@ use crate::geom::{
 use crate::geom::vec3;
 use crate::material::{MaterialKind, Rgb};
 use crate::palette::Palette;
-use crate::sections::fabric::{FabricPattern, Textile};
+use crate::fabric::{FabricPattern, Textile};
 use crate::slider::{Sliders, sliders};
 use procgen_rng::{Mulberry32, armory_stream_seed};
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,7 @@ impl Default for Bag {
             fabric: Textile::Leather,
             color: Rgb::hex(0x6b4a2e),
             color2: Rgb::hex(0x7a8a5a),
-            pattern: FabricPattern::None,
+            pattern: FabricPattern::Plain,
             pattern_scale: 3.0,
             fittings: MaterialKind::Iron,
             coins: false,
@@ -283,20 +283,20 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: BagStyle) -> BagState {
     b.color2 = Rgb::hex(*rng.pick(&[0x7a8a5a, 0x5e3d24, 0x8a3a2a, 0xcbbf9f, 0x4a2f1c]));
     b.pattern = match b.fabric {
         Textile::Cloth => *rng.weighted(&[
-            (FabricPattern::None, 5),
+            (FabricPattern::Plain, 5),
             (FabricPattern::Stripes, 2),
             (FabricPattern::Checks, 2),
-            (FabricPattern::Dots, 2),
+            (FabricPattern::Powdered, 2),
             (FabricPattern::Hoops, 1),
             (FabricPattern::Tartan, 1),
-            (FabricPattern::Lozenge, 1),
-            (FabricPattern::Chevron, 1),
+            (FabricPattern::Lozenges, 1),
+            (FabricPattern::Chevrons, 1),
             (FabricPattern::Quilted, 1),
         ]),
-        Textile::Leather => *rng.weighted(&[(FabricPattern::None, 9), (FabricPattern::Rivets, 1)]),
-        Textile::Burlap => FabricPattern::None,
+        Textile::Leather => *rng.weighted(&[(FabricPattern::Plain, 9), (FabricPattern::Rivets, 1)]),
+        Textile::Burlap => FabricPattern::Plain,
     };
-    b.pattern_scale = if b.pattern == FabricPattern::Dots { rng.range_f32(4.5, 7.0) } else { rng.range_f32(2.0, 5.0) };
+    b.pattern_scale = if b.pattern == FabricPattern::Powdered { rng.range_f32(4.5, 7.0) } else { rng.range_f32(2.0, 5.0) };
     b.fittings = *rng.weighted(if style == Purse { &[(Brass, 2), (Gold, 2), (Silver, 1)][..] } else { &[(Iron, 3), (Brass, 3), (Gold, 1)] });
     b.coins = matches!(style, Pouch | Purse) && rng.chance(if style == Purse { 0.6 } else { 0.4 });
     b.pocket = style == Backpack && rng.chance(0.6);

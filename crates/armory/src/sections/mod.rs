@@ -8,7 +8,6 @@
 //! - [`socket`]: the socket that seats a head on a haft, with its rings and langets (spears).
 //! - [`ranged`]: limbs, string and arrow of bows and crossbows.
 //! - [`blade`]: the blade and guard of swords, daggers and spears.
-//! - [`fabric`]: textiles and fabric patterns (bags, garments, hems, a chest's glaze).
 //! - [`device`]: emblems engraved, painted or stencilled (signets, shields, crates).
 //! - [`garment`]: the cut, belt and plates of body armour and clothing.
 //! - [`hem`]: hems and trims on garments, helmets, gloves and footwear.
@@ -27,7 +26,6 @@ pub mod blade;
 pub mod boot;
 pub mod device;
 pub mod emblem;
-pub mod fabric;
 pub mod garment;
 pub mod hafted;
 pub mod hand;

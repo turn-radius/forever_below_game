@@ -40,7 +40,7 @@ use crate::geom::vec3;
 use crate::material::{MaterialKind, Rgb};
 use crate::palette::Palette;
 use crate::sections::device::Device;
-use crate::sections::fabric::FabricPattern;
+use crate::fabric::FabricPattern;
 use crate::slider::{Sliders, sliders};
 use procgen_rng::{Mulberry32, armory_stream_seed};
 use serde::{Deserialize, Serialize};
@@ -378,11 +378,11 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: ChestStyle) -> ChestState {
     c.color = Rgb::hex(*rng.pick(&[0xb8673a, 0xc98a5a, 0x8a5a3a, 0xd8c8a8]));
     c.pattern = *rng.weighted(&[
         (FabricPattern::Hoops, 4),
-        (FabricPattern::Chevron, 2),
-        (FabricPattern::None, 3),
-        (FabricPattern::Lozenge, 2),
+        (FabricPattern::Chevrons, 2),
+        (FabricPattern::Plain, 3),
+        (FabricPattern::Lozenges, 2),
         (FabricPattern::Stripes, 1),
-        (FabricPattern::Dots, 1),
+        (FabricPattern::Powdered, 1),
     ]);
     c.color2 = Rgb::hex(*rng.pick(&[0x2a1d14, 0xa8323a, 0x2c4e8c, 0xd4a838]));
     c.pattern_scale = rng.range_f32(2.0, 4.0);

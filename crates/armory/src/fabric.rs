@@ -1,16 +1,49 @@
-//! Dyed cloth and the surface patterns the shader draws over a part: woven and printed
-//! fabric patterns, quilting, rivets, mail rings and scales. Shared by garments, hems and
-//! trims, leg cloths, bags and anything else made of cloth.
+//! Soft goods and the surface patterns the shader draws over a part: the textiles bags and
+//! sacks are cut from, dyed cloth, woven and printed fabric patterns, quilting, rivets, mail
+//! rings, scales and heraldic divisions. Shared by garments, hems and trims, leg cloths,
+//! hoods, bags, a chest's glaze, shields and anything else that carries a pattern.
 //!
-//! From the prototype's `FABRIC` list, `PAT_ID` and `clothMat` in
+//! From the prototype's `FABRIC` list, the bag's `fabric` select, `PAT_ID` and `clothMat` in
 //! `reference/spline_armory_engine.js`. The pattern is state, not geometry: a part carries a
 //! [`SurfacePattern`] and the toon shader draws it (`docs/rendering.md`).
 
-use crate::material::Rgb;
+use crate::material::{MaterialKind, Rgb};
 use crate::slider::sliders;
 use serde::{Deserialize, Serialize};
 
-/// The prototype's `FABRIC` select.
+/// The stuff a bag, sack or pouch is cut from (the prototype's bag `fabric` select).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Textile {
+    Leather,
+    /// Woven wool or linen.
+    Cloth,
+    /// Coarse jute or hemp sacking.
+    Burlap,
+}
+
+impl Textile {
+    pub const ALL: [Textile; 3] = [Textile::Leather, Textile::Cloth, Textile::Burlap];
+
+    /// The material a part cut from it renders and decays as.
+    pub fn material(self) -> MaterialKind {
+        match self {
+            Textile::Leather => MaterialKind::Leather,
+            Textile::Cloth | Textile::Burlap => MaterialKind::Cloth,
+        }
+    }
+
+    /// How thick a cut panel is, in units (1 unit = 10 cm).
+    pub fn thickness(self) -> f32 {
+        match self {
+            Textile::Leather => 0.035,
+            Textile::Cloth => 0.02,
+            Textile::Burlap => 0.03,
+        }
+    }
+}
+
+/// A woven, printed, painted or glazed pattern (the prototype's `FABRIC` select).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FabricPattern {
