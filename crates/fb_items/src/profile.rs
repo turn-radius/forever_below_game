@@ -56,6 +56,41 @@ pub fn extents(shape: &Item) -> (f32, f32) {
     (e[0], e[1])
 }
 
+/// Whether a shape of `family` is shown standing as it is built rather than laid along its
+/// longest side: worn gear as it is worn (the Armory builds it on the implied mannequin, +Y up
+/// and its front toward +Z), and chests, barrels, crates and amphorae as they stand on the
+/// floor. Its footprint runs the same way ([`upright_footprint`]), so the cells match the
+/// shape drawn upright. Weapons, shields, lights, food and sundries are laid along their
+/// longest side.
+pub fn stands_upright(family: Family) -> bool {
+    matches!(
+        family,
+        Family::Helm
+            | Family::Hood
+            | Family::Hat
+            | Family::Garment
+            | Family::Legs
+            | Family::Hands
+            | Family::Feet
+            | Family::Belt
+            | Family::Amulet
+            | Family::Ring
+            | Family::Charm
+            | Family::Bags
+            | Family::Chests
+    )
+}
+
+/// `footprint` turned, if need be, to run the way `shape` stands as built: more columns than
+/// rows for a shape wider (along X) than tall (along Y), more rows for one taller than wide.
+/// The cell count stays the same; only which way the cells run follows the shape.
+pub fn upright_footprint(footprint: Footprint, shape: &Item) -> Footprint {
+    let Some((lo, hi)) = shape.build().bounds() else { return footprint };
+    let (wide, tall) = (hi[0] - lo[0], hi[1] - lo[1]);
+    let turned = Footprint { cols: footprint.rows, rows: footprint.cols };
+    if (wide > tall && footprint.cols < footprint.rows) || (tall > wide && footprint.rows < footprint.cols) { turned } else { footprint }
+}
+
 /// Families that fold or crumple, so their grid footprint is the plate's folded size rather
 /// than their size as modelled on the mannequin.
 fn folds(family: Family) -> bool {
@@ -112,6 +147,9 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     };
     if !folds(family) {
         p.footprint = Footprint { cols: cells(wide), rows: cells(long) };
+    }
+    if stands_upright(family) {
+        p.footprint = upright_footprint(p.footprint, shape);
     }
     if matches!(family, Family::Staff | Family::Spear | Family::Bow) && long > PACK_LIMIT_UNITS {
         p.packable = false;
@@ -345,6 +383,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn worn_gear_runs_its_footprint_the_way_it_stands() {
+        // A glove stands taller than wide, so its folded 2 by 1 footprint stands 1 by 2; a
+        // belt lies wider than tall and keeps 2 by 1.
+        for seed in 1..20 {
+            let (_, gloves) = rolled("Gloves", seed);
+            assert_eq!((gloves.footprint.cols, gloves.footprint.rows), (1, 2), "{seed}");
+            let (_, belt) = rolled("Belt", seed);
+            assert_eq!((belt.footprint.cols, belt.footprint.rows), (2, 1), "{seed}");
+        }
+        for (name, _) in ARMORY_BASES {
+            for seed in [1, 2, 3, 1207] {
+                let (shape, p) = rolled(name, seed);
+                if !stands_upright(shape.family()) {
+                    continue;
+                }
+                let (lo, hi) = shape.build().bounds().unwrap();
+                let (wide, tall) = (hi[0] - lo[0], hi[1] - lo[1]);
+                let fp = p.footprint;
+                assert!(!(wide > tall && fp.cols < fp.rows) && !(tall > wide && fp.rows < fp.cols), "{name} {seed}: {fp:?} for {wide} by {tall}");
+            }
+        }
+        // Every style of shoe and boot (turnshoes, poulaines, wraps, ankle boots, sabatons)
+        // stands sole down as built, toe to the side, and lies the way it stands.
+        for base in ["Shoes", "Boots", "Mail coif", "Hood"] {
+            for seed in 1..200 {
+                let (shape, p) = rolled(base, seed);
+                let (lo, hi) = shape.build().bounds().unwrap();
+                let (wide, tall) = (hi[0] - lo[0], hi[1] - lo[1]);
+                let fp = p.footprint;
+                assert!(stands_upright(shape.family()), "{base}");
+                assert!(!(wide > tall && fp.cols < fp.rows) && !(tall > wide && fp.rows < fp.cols), "{base} {seed}: {fp:?} for {wide} by {tall}");
+            }
+        }
+        assert!(stands_upright(Family::Hood) && stands_upright(Family::Chests));
+        assert!(!stands_upright(Family::Sword) && !stands_upright(Family::Shield) && !stands_upright(Family::Torch));
     }
 
     #[test]

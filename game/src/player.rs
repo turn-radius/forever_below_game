@@ -32,7 +32,7 @@ const LOOK_SENSITIVITY: f32 = 0.0022;
 /// Pitch stops short of straight up and down.
 const PITCH_LIMIT: f32 = 85.0 * std::f32::consts::PI / 180.0;
 /// Vertical field of view (about 100 degrees across at 16:9).
-const FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
+pub(crate) const FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
 /// Near clip in world units (5 mm), so items held at the face and the torch in hand stay whole.
 const NEAR: f32 = 0.05;
 /// Floor distance covered by one full bob cycle: two steps.

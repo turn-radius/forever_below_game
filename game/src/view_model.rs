@@ -1,7 +1,7 @@
 //! Where what the delver holds is drawn in first person: the view model's placement, free of
 //! the ECS so it can be tested. `crate::carry` spawns it on the view model's stage.
 //!
-//! Each hand's item is drawn exactly as rolled, at its own size and proportions, as its
+//! Each hand's item is drawn as rolled, in its own proportions, [`HELD_SCALE`] times its size, as its
 //! inventory icon and the floor show it. Only its turn in the fist comes from the doll
 //! ([`fit_hands`]): a blade's edge leading, an axe's bit forward, a bow's string back, a shield
 //! strapped along the forearm. The doll also thins a handle to the fist and draws blades,
@@ -12,8 +12,10 @@
 //! than from the front of the doll. The main hand's is low on the right, the off hand's low on
 //! the left ([`side_of`]).
 //!
-//! The placements per hold are our own tuning against captures of the level, not a rule from a
-//! source: grips stay just below the bottom edge (no hands are drawn yet), and nothing reaches
+//! The view model camera sees through a narrower field of view than the world's
+//! ([`VIEW_MODEL_FOV_DEGREES`]), so what is held reads large while drawn at its true size. The
+//! placements per hold are our own tuning against captures of the level through it, not a rule
+//! from a source: grips stay below the bottom edge (no hands are drawn yet), and nothing reaches
 //! the middle of the view where the crosshair is ([`CLEAR_CENTRE`]).
 
 use armory::Item;
@@ -21,8 +23,24 @@ use bevy::prelude::*;
 use fb_body::{BodySpec, Hold, Side, fit_hands};
 use fb_items::Slot;
 
-/// Field of view of the view model camera, fixed whatever the world camera uses.
-pub const VIEW_MODEL_FOV_DEGREES: f32 = 60.0;
+/// Vertical field of view of the view model camera, fixed whatever the world camera uses (70
+/// degrees, `crate::player`). Drawing what is held through a narrower field
+/// of view than the world's is the usual first-person technique: Bevy's `first_person_view_model`
+/// example gives its view model camera a fixed field of view of its own, apart from the world's,
+/// because "the view model is typically designed and animated with a very specific FOV in mind"
+/// (<https://github.com/bevyengine/bevy/blob/main/examples/camera/first_person_view_model.rs>),
+/// and Unreal Engine's camera has a "First Person Field of View" for first-person primitives
+/// apart from the rest of the scene
+/// (<https://dev.epicgames.com/documentation/en-us/unreal-engine/first-person-rendering>).
+/// A narrower field magnifies what is held without moving it nearer: at 46 degrees an item at
+/// the same depth is drawn 1.36 times as tall as at the old 60 (tan 30° / tan 23°), and with
+/// [`HELD_SCALE`] about 1.9 times. The value is our own tuning against captures.
+pub const VIEW_MODEL_FOV_DEGREES: f32 = 46.0;
+
+/// How much larger than its own size each held item is drawn in first person, about its grip:
+/// the user's call ("scaled up 40%"), on top of the narrower field of view. Uniform, so the
+/// item keeps its proportions.
+pub const HELD_SCALE: f32 = 1.4;
 
 /// The middle of the view that nothing held reaches: a circle about the crosshair, its radius
 /// a fraction of the half height, where the player looks at what is ahead. Our own.
@@ -78,13 +96,13 @@ fn turn(spin: f32, roll: f32, tip: f32, yaw: f32) -> Quat {
 pub fn view_hold(hold: Hold, side: Side) -> ViewHold {
     const SPIN: f32 = 0.7;
     let right = match hold {
-        Hold::OneHanded => ViewHold { fist: Vec3::new(5.0, -6.0, -9.5), turn: turn(SPIN, -0.3, -0.3, 0.0) },
-        Hold::Upright => ViewHold { fist: Vec3::new(5.5, -6.8, -10.0), turn: turn(0.0, 1.2, -0.25, -0.35) },
-        Hold::Bow => ViewHold { fist: Vec3::new(4.6, -5.0, -11.0), turn: turn(0.0, 0.3, -0.1, 0.7) },
-        Hold::Shield => ViewHold { fist: Vec3::new(8.6, -6.6, -10.0), turn: turn(0.0, 0.0, 0.0, 0.15) },
-        Hold::Torch => ViewHold { fist: Vec3::new(6.4, -7.4, -9.6), turn: turn(0.0, 0.22, -0.32, 0.0) },
-        Hold::Lantern => ViewHold { fist: Vec3::new(5.4, -1.2, -11.0), turn: Quat::IDENTITY },
-        Hold::Crossbow => ViewHold { fist: Vec3::new(5.6, -6.6, -12.5), turn: turn(0.0, 0.0, 1.3, 0.0) },
+        Hold::OneHanded => ViewHold { fist: Vec3::new(4.03, -5.55, -9.5), turn: turn(SPIN, -0.3, -0.3, 0.0) },
+        Hold::Upright => ViewHold { fist: Vec3::new(4.3, -6.39, -10.0), turn: turn(0.0, 1.2, -0.25, -0.35) },
+        Hold::Bow => ViewHold { fist: Vec3::new(3.61, -5.14, -11.0), turn: turn(0.0, 0.3, -0.1, 0.7) },
+        Hold::Shield => ViewHold { fist: Vec3::new(6.25, -5.28, -11.0), turn: turn(0.0, 0.0, 0.0, 0.15) },
+        Hold::Torch => ViewHold { fist: Vec3::new(5.0, -5.83, -9.6), turn: turn(0.0, 0.22, -0.32, 0.0) },
+        Hold::Lantern => ViewHold { fist: Vec3::new(5.0, 0.56, -11.0), turn: Quat::IDENTITY },
+        Hold::Crossbow => ViewHold { fist: Vec3::new(4.44, -5.28, -12.5), turn: turn(0.0, 0.0, 1.3, 0.0) },
     };
     if side == Side::Left { right.mirrored() } else { right }
 }
@@ -101,7 +119,7 @@ pub struct HeldInView {
     pub hold: Hold,
     /// The item as drawn: the one held, as rolled (not the doll's thinned [`fb_body::HeldFit::item`]).
     pub item: Item,
-    /// From the item's own space into view model camera space, at the item's own size.
+    /// From the item's own space into view model camera space, at [`HELD_SCALE`] times its size.
     pub transform: Transform,
     /// Its point, in its own space: the end of it farthest from the fist (a spear's head, a
     /// dagger's tip), which a thrust drives at the crosshair.
@@ -131,7 +149,7 @@ pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>) ->
             let grip = placed.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale;
             let at = view_hold(fit.hold, side);
             let rotation = at.turn * BODY_TO_VIEW * placed;
-            let transform = Transform { translation: at.fist - rotation * grip, rotation, scale: Vec3::ONE };
+            let transform = Transform { translation: at.fist - rotation * grip * HELD_SCALE, rotation, scale: Vec3::splat(HELD_SCALE) };
             Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform, point: point_of(item, grip) })
         })
         .collect()
@@ -202,7 +220,7 @@ mod tests {
                 let held = &held_in_view(&spec, Some(&item), None)[0];
                 let fit = fb_body::fit_held(&fb_body::Body::new(&spec), Side::Right, &item).unwrap();
                 assert_eq!(held.item, item, "{folk:?} {base}: the item as rolled, not thinned");
-                assert_eq!(held.transform.scale, Vec3::ONE, "{folk:?} {base}: at its own size");
+                assert_eq!(held.transform.scale, Vec3::splat(HELD_SCALE), "{folk:?} {base}: scaled evenly");
                 // The doll's turn in the fist, then the hold's turn into the view.
                 let rot = Quat::from_mat3(&Mat3::from_cols_array_2d(&fit.placement.rotation.cols));
                 let at = view_hold(fit.hold, Side::Right);
@@ -308,5 +326,37 @@ mod tests {
     #[test]
     fn worn_things_are_not_held() {
         assert!(held_in_view(&spec(Folk::Human), Some(&roll("Helm", 1)), None).is_empty());
+    }
+
+    /// How tall a placed item is drawn, as a fraction of the half height of the view: the whole
+    /// of it, including any part past the edge.
+    fn screen_height(held: &HeldInView) -> f32 {
+        let ys: Vec<f32> = points(held).into_iter().filter_map(on_screen).map(|s| s.y).collect();
+        ys.iter().copied().fold(f32::MIN, f32::max) - ys.iter().copied().fold(f32::MAX, f32::min)
+    }
+
+    #[test]
+    fn the_view_model_sees_narrower_than_the_world() {
+        assert!((crate::player::FOV - 70f32.to_radians()).abs() < 1e-6, "the world's field of view is unchanged");
+        assert!(VIEW_MODEL_FOV_DEGREES.to_radians() < crate::player::FOV);
+    }
+
+    #[test]
+    fn held_items_read_half_again_as_large_as_through_the_old_field_of_view() {
+        // The main hand's item's drawn height, averaged over seeds 1, 5, 9 and 1207, through
+        // the old 60-degree field of view with the old holds (measured before the change).
+        let before = [
+            (Folk::Human, "Mace", 1.268),
+            (Folk::Human, "Sword", 1.482),
+            (Folk::Human, "Staff", 2.148),
+            (Folk::Gnome, "Mace", 0.774),
+            (Folk::Gnome, "Sword", 1.482),
+            (Folk::Gnome, "Staff", 1.667),
+        ];
+        for (folk, base, old) in before {
+            let heights: Vec<f32> = [1u32, 5, 9, 1207].iter().map(|&seed| screen_height(&held_in_view(&spec(folk), Some(&roll(base, seed)), None)[0])).collect();
+            let now = heights.iter().sum::<f32>() / heights.len() as f32;
+            assert!(now >= 1.5 * old, "{folk:?} {base}: {now:.3} against {old:.3} before");
+        }
     }
 }

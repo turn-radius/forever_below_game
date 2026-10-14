@@ -74,8 +74,10 @@ pub const DROP_SPREAD: f32 = 5.0;
 
 /// The flame of a lit thing no hold fits ([`held_pose`]) in the view model, in camera space:
 /// low on the right, about a metre out as the view model camera sees it. Held in the off hand,
-/// it is low on the left. Torches and lanterns are placed by `crate::view_model`.
-const HELD_FLAME: Vec3 = Vec3::new(5.4, -2.6, -11.0);
+/// it is low on the left. Torches and lanterns are placed by `crate::view_model`. Where it was
+/// through the old 60-degree view, drawn larger through the narrower one
+/// ([`VIEW_MODEL_FOV_DEGREES`]).
+const HELD_FLAME: Vec3 = Vec3::new(4.03, -1.94, -11.0);
 
 /// Where the view model stands in world space: far below any level, out of reach of every
 /// light in it. Bevy 0.20's GPU light clustering does not filter lights by render layer, so
@@ -210,15 +212,20 @@ pub fn lie_down(size: Vec3) -> Quat {
     }
 }
 
-/// Where an item rests: laid down by [`lie_down`], turned `yaw` about +Y, centred over `at`
-/// on the floor (y = 0) with its lowest point touching it. `points` are its item-space
-/// vertices. `None` for an item with no vertices.
+/// How much larger than its own size an item lying in the level is drawn, about where it
+/// rests: the user's call ("scaled up by 15%"), so things on the floor read from standing
+/// height. Its pickup box and floor radius grow with it.
+pub const FLOOR_SCALE: f32 = 1.15;
+
+/// Where an item rests: laid down by [`lie_down`], turned `yaw` about +Y, drawn
+/// [`FLOOR_SCALE`] times its size, centred over `at` on the floor (y = 0) with its lowest point
+/// touching it. `points` are its item-space vertices. `None` for an item with no vertices.
 pub fn rest_on_floor(points: &[Vec3], at: Vec3, yaw: f32) -> Option<Transform> {
     let (min, max) = bounds(points.iter().copied())?;
     let rotation = Quat::from_rotation_y(yaw) * lie_down(max - min);
-    let (min, max) = bounds(points.iter().map(|&p| rotation * p))?;
+    let (min, max) = bounds(points.iter().map(|&p| rotation * p * FLOOR_SCALE))?;
     let centre = (min + max) * 0.5;
-    Some(Transform { translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z), rotation, ..default() })
+    Some(Transform { translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z), rotation, scale: Vec3::splat(FLOOR_SCALE) })
 }
 
 fn bounds(points: impl Iterator<Item = Vec3>) -> Option<(Vec3, Vec3)> {
@@ -247,8 +254,8 @@ pub fn ray_box(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
     Some(near)
 }
 
-/// The ray's nearest hit among `targets` (each a rigid world-from-item transform and its
-/// item-space bounds) within `reach`.
+/// The ray's nearest hit among `targets` (each a world-from-item transform, rigid or evenly
+/// scaled, and its item-space bounds) within `reach`, in world units.
 pub fn nearest_hit<T: Copy>(
     origin: Vec3,
     dir: Vec3,
@@ -260,7 +267,8 @@ pub fn nearest_hit<T: Copy>(
         .filter_map(|(id, world_from_item, min, max)| {
             let inverse = world_from_item.compute_affine().inverse();
             let local_origin = inverse.transform_point3(origin);
-            let local_dir = inverse.transform_vector3(dir).normalize_or_zero();
+            // Left unnormalised, so the distance along it stays in world units under a scale.
+            let local_dir = inverse.transform_vector3(dir);
             ray_box(local_origin, local_dir, min, max).filter(|&t| t <= reach).map(|t| (id, t))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -528,12 +536,13 @@ pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: It
     Some(root.id())
 }
 
-/// An item's footprint radius on the floor once laid down ([`lie_down`]): half the larger of
-/// its level extents. 0 for an item with no vertices.
+/// An item's footprint radius on the floor once laid down ([`lie_down`]) and drawn
+/// [`FLOOR_SCALE`] times its size: half the larger of its level extents. 0 for an item with no
+/// vertices.
 pub fn floor_radius(points: &[Vec3]) -> f32 {
     bounds(points.iter().copied()).map_or(0.0, |(min, max)| {
         let size = (lie_down(max - min) * (max - min)).abs();
-        size.x.max(size.z) * 0.5
+        size.x.max(size.z) * 0.5 * FLOOR_SCALE
     })
 }
 
@@ -649,6 +658,16 @@ pub fn held_pose(item: &Item, hand: fb_items::Slot) -> (Vec3, Quat) {
     (flame, Quat::from_euler(EulerRot::XYZ, tip, 0.0, lean))
 }
 
+/// Where a held light's own light sits on the view model's stage, in camera space, for the
+/// light held at `rest` in `hand`: off its flame toward the eye, up and in, so the whole light
+/// sits at much the same distance from it and reads firelit rather than burnt white.
+pub fn stage_light_at(anchor: &LightAnchor, rest: Transform, hand: fb_items::Slot) -> Vec3 {
+    let flame = rest.transform_point(Vec3::from_array(anchor.position));
+    let toward_eye = if side_of(hand) == fb_body::OFF_HAND { HELD_LIGHT_OFFSET * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_LIGHT_OFFSET };
+    // As far off the flame, for the item's size, as before it was drawn larger.
+    flame + toward_eye * crate::view_model::HELD_SCALE
+}
+
 /// What each hand holds, placed in the view model camera's space: each item fitted to the
 /// delver's body as on the doll and carried into the view (`crate::view_model`), or, for a lit
 /// thing no hold fits, held by its flame ([`held_pose`]). Other things a hand might hold that
@@ -667,7 +686,8 @@ pub fn held_items(inventory: &Inventory, character: &Character) -> Vec<(fb_items
             let item = item?;
             let anchor = item_light(&item)?;
             let (flame, rotation) = held_pose(&item, hand);
-            Some((hand, item, Transform::from_translation(flame - rotation * Vec3::from_array(anchor.position)).with_rotation(rotation), None))
+            let scale = crate::view_model::HELD_SCALE;
+            Some((hand, item, Transform { translation: flame - rotation * Vec3::from_array(anchor.position) * scale, rotation, scale: Vec3::splat(scale) }, None))
         })
         .collect()
 }
@@ -713,12 +733,8 @@ fn show_held(
                 continue;
             }
             let Some(anchor) = item_light(&item) else { continue };
-            let flame = rest.transform_point(Vec3::from_array(anchor.position));
-            // Off the flame toward the eye, so the whole light sits at much the same distance
-            // from it and reads firelit rather than burnt white.
-            let toward_eye = if side_of(hand) == fb_body::OFF_HAND { HELD_LIGHT_OFFSET * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_LIGHT_OFFSET };
-            let stage_light =
-                commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure), Transform::from_translation(flame + toward_eye), view_layer.clone(), ChildOf(view_model))).id();
+            let at = stage_light_at(&anchor, rest, hand);
+            let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure), Transform::from_translation(at), view_layer.clone(), ChildOf(view_model))).id();
             let world = commands.spawn((world_light(&anchor, &exposure), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
             carrying.entities.extend([stage_light, world]);
         }
@@ -882,6 +898,16 @@ mod tests {
         assert!(max.y < 1.0, "a long thing lies down: {max}");
         assert!(close((min.x + max.x) * 0.5, at.x) && close((min.z + max.z) * 0.5, at.z));
         assert!(rest_on_floor(&[], at, 0.0).is_none());
+        // Drawn larger than its own size, still resting on the floor at its spot: the box's
+        // thin side (0.5 deep) lies down, that much times the scale high.
+        assert_eq!(transform.scale, Vec3::splat(FLOOR_SCALE));
+        assert!(close(max.y - min.y, 0.5 * FLOOR_SCALE), "{min} {max}");
+        assert!(close(floor_radius(&box_points), 4.5 * FLOOR_SCALE));
+        // The pickup box grows with it, and a ray onto its top lands there, in world units.
+        let top = Vec3::new((min.x + max.x) * 0.5, max.y, (min.z + max.z) * 0.5);
+        let from = top + Vec3::Y * 5.0;
+        let hit = nearest_hit(from, Vec3::NEG_Y, REACH, [((), transform, Vec3::new(-1.0, -2.0, -0.2), Vec3::new(1.5, 7.0, 0.3))]);
+        assert!(hit.is_some_and(|(_, t)| (t - 5.0).abs() < 1e-3), "{hit:?}");
     }
 
     #[test]
@@ -999,6 +1025,41 @@ mod tests {
         assert!(right.x > 0.0 && left.x < 0.0 && right.y == left.y);
         assert!(lean.abs_diff_eq(Quat::from_euler(EulerRot::XYZ, -0.32, 0.0, 0.22), 1e-6));
         assert!(mirrored.abs_diff_eq(Quat::from_euler(EulerRot::XYZ, -0.32, 0.0, -0.22), 1e-6));
+    }
+
+    #[test]
+    fn a_held_lights_stage_light_follows_its_flame_and_its_world_light_stays_by_the_eye() {
+        use crate::view_model::on_screen;
+        use fb_body::{BodySpec, Folk};
+        use fb_items::Slot;
+        let lantern = (1..500).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap().shape;
+        for folk in [Folk::Human, Folk::Gnome] {
+            let spec = BodySpec::roll(folk, 1207);
+            for light in [lit_torch(4).shape, lantern.clone()] {
+                for hand in [Slot::Mainhand, Slot::Offhand] {
+                    let (main, off) = if hand == Slot::Mainhand { (Some(&light), None) } else { (None, Some(&light)) };
+                    let held = &held_in_view(&spec, main, off)[0];
+                    let anchor = item_light(&light).unwrap();
+                    let flame = held.transform.transform_point(Vec3::from_array(anchor.position));
+                    let at = stage_light_at(&anchor, held.transform, hand);
+                    let label = format!("{folk:?} {:?} {hand:?}", light.family());
+                    // The stage light keeps its place off the drawn flame, up and toward the eye
+                    // and to the inside of the view, where the world light is.
+                    let side = if hand == Slot::Offhand { -1.0 } else { 1.0 };
+                    assert!((at - flame).abs_diff_eq(HELD_LIGHT_OFFSET * Vec3::new(side, 1.0, 1.0) * crate::view_model::HELD_SCALE, 1e-4), "{label}");
+                    assert!(at.x * side < flame.x * side && at.y > flame.y && at.z > flame.z, "{label}");
+                    // The flame shows on its hand's side of the view, in it.
+                    let screen = on_screen(flame).unwrap();
+                    assert!(screen.x * side > 0.0 && screen.y.abs() < 1.0, "{label}: flame at {screen}");
+                    // The whole held light is within the stage light's reach.
+                    for p in held.item.build().parts.iter().flat_map(|p| p.positions.clone()) {
+                        assert!(held.transform.transform_point(Vec3::from_array(p)).distance(at) < HELD_REACH, "{label}");
+                    }
+                }
+            }
+        }
+        // The world light hangs by the eye whatever the view model's field of view.
+        assert_eq!(WORLD_FLAME, Vec3::new(1.5, 0.0, -1.5));
     }
 
     fn rest() -> Transform {
