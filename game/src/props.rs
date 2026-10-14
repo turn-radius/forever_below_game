@@ -348,6 +348,75 @@ mod tests {
     }
 
     #[test]
+    fn the_level_s_things_are_spawned_once_and_stay_put() {
+        use crate::carry::{Aimed, FloorItem, lay_out_items, pick_up};
+        use crate::folk::{Denizen, FolkFigures, idle_folk, spawn_folk};
+        use crate::inventory::underfoot::{FloorChanges, apply_floor_changes};
+        use crate::play::{BlockedCells, CurrentLevel};
+        let mut app = props_app();
+        // Everything that lays out, or may touch, the level every frame while delving.
+        app.add_plugins(bevy::time::TimePlugin)
+            .init_resource::<Aimed>()
+            .init_resource::<BlockedCells>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<FolkFigures>()
+            .init_resource::<FloorChanges>()
+            .add_systems(
+                Update,
+                (
+                    lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    idle_folk,
+                    pick_up,
+                    apply_floor_changes,
+                ),
+            );
+        // The level was laid out by `props_app`'s first frame; items and folk need it changed.
+        app.world_mut().resource_mut::<CurrentLevel>().set_changed();
+        app.update();
+        type Roots<'w> = (Entity, &'w Transform, Has<FloorItem>, Has<PropPiece>, Has<Denizen>);
+        let snapshot = |app: &mut App| {
+            let mut roots = app.world_mut().query_filtered::<Roots, Or<(With<FloorItem>, With<PropPiece>, With<Denizen>)>>();
+            let mut all: Vec<(Entity, Transform, bool, bool, bool)> = roots.iter(app.world()).map(|(e, t, f, p, d)| (e, *t, f, p, d)).collect();
+            all.sort_by_key(|r| r.0);
+            all
+        };
+        let first = snapshot(&mut app);
+        let level = fb_level::generate(1207);
+        assert_eq!(first.iter().filter(|r| r.2).count(), level.items.len());
+        assert_eq!(first.iter().filter(|r| r.3).count(), level.props.len());
+        assert_eq!(first.iter().filter(|r| r.4).count(), level.folk.len());
+        for _ in 0..120 {
+            app.update();
+        }
+        assert_eq!(snapshot(&mut app), first, "something in the level was respawned or moved");
+    }
+
+    #[test]
+    fn a_container_opened_from_the_level_has_an_upright_icon() {
+        use crate::inventory::icon::{icon_pose, stands_upright};
+        let mut app = props_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        let mut containers = app.world_mut().query::<(Entity, &PropPiece, &Container)>();
+        let all: Vec<(Entity, Prop)> = containers.iter(app.world()).map(|(e, p, _)| (e, p.spot.prop)).collect();
+        for (entity, prop) in all {
+            app.world_mut().resource_mut::<OpenContainer>().0 = None;
+            app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+            press_pick_up_on(&mut app, entity);
+            let id = app.world().resource::<OpenContainer>().0.expect("opened");
+            let item = app.world().resource::<Inventory>().item(id).unwrap().clone();
+            assert!(stands_upright(&item), "{prop:?}");
+            let points: Vec<Vec3> = item.shape.build().parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+            let (rotation, ..) = icon_pose(&points, stands_upright(&item), false).unwrap();
+            // Up stays up and the front faces the viewer, give or take the view's small turn
+            // and tilt.
+            assert!((rotation * Vec3::Y).y > 0.9, "{prop:?}: up is {}", rotation * Vec3::Y);
+            assert!((rotation * Vec3::Z).z > 0.9, "{prop:?}: front is {}", rotation * Vec3::Z);
+        }
+    }
+
+    #[test]
     fn every_container_on_1207_holds_what_its_loot_rolls() {
         let app = props_app();
         let level = fb_level::generate(1207);

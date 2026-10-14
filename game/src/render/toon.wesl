@@ -14,6 +14,7 @@
 import bevy_pbr::render::{
     forward_io::{Vertex, VertexOutput, FragmentOutput, decompress_vertex},
     mesh_functions,
+    mesh_bindings::mesh,
     view_transformations::position_world_to_clip,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, main_pass_post_lighting_processing},
@@ -72,7 +73,29 @@ struct ToonUniform {
     etch_stitched: u32,
 }
 
-@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> toon: ToonUniform;
+// Bindless where the device allows it (`ToonExtension`'s `bindless` attribute), as Bevy's
+// `pbr_bindings` does for `StandardMaterial`: every part's uniform sits in one array, found
+// through the material slot in the mesh's uniform, so parts share one bind group and draw in
+// batches, shadow passes included.
+@if(BINDLESS) {
+struct ToonBindings {
+    material: u32,
+}
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage> toon_indices: array<ToonBindings>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(101) var<storage> toon_array: array<ToonUniform>;
+}
+@else {
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> toon_uniform: ToonUniform;
+}
+
+// This part's toon uniform.
+fn toon_of(instance_index: u32) -> ToonUniform {
+@if(BINDLESS)
+    let toon = toon_array[toon_indices[mesh[instance_index].material_and_lightmap_bind_group_slot & 0xffffu].material];
+@else
+    let toon = toon_uniform;
+    return toon;
+}
 
 // Bevy's mesh vertex shader (`bevy_pbr::render::mesh`) without morph targets or skinning,
 // which Armory parts never have, plus the minimum width.
@@ -80,6 +103,7 @@ struct ToonUniform {
 fn vertex(vertex_in: Vertex) -> VertexOutput {
     let vertex = decompress_vertex(vertex_in, vertex_in.instance_index);
     let world_from_local = mesh_functions::get_world_from_local(vertex_in.instance_index);
+    let toon = toon_of(vertex_in.instance_index);
     var out: VertexOutput;
     out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex_in.instance_index);
     var world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
@@ -110,7 +134,7 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
 
 // The band for one light: three.js samples its gradient at N.L * 0.5 + 0.5, so the unlit
 // side still gets the lowest band. A shadowed fragment drops to the lowest band.
-fn toon_band(n_dot_l: f32, shadow: f32) -> f32 {
+fn toon_band(toon: ToonUniform, n_dot_l: f32, shadow: f32) -> f32 {
     let coord = clamp(n_dot_l * 0.5 + 0.5, 0.0, 1.0) * shadow;
     let count = max(toon.band_count, 1u);
     let index = min(u32(floor(coord * f32(count))), count - 1u);
@@ -174,7 +198,7 @@ fn flame_flicker(position_radius: vec4<f32>) -> f32 {
 // Radiance from every point, spot and directional light reaching this fragment, banded per
 // light, times the view's exposure. Same light data and units as Bevy's
 // `apply_pbr_lighting`, with a Lambert lobe.
-fn toon_direct_light(in: PbrInput) -> vec3<f32> {
+fn toon_direct_light(toon: ToonUniform, in: PbrInput) -> vec3<f32> {
     let N = in.N;
     let P = in.world_position.xyz;
     let receives_shadows = (in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u;
@@ -232,7 +256,7 @@ fn toon_direct_light(in: PbrInput) -> vec3<f32> {
 
         // Lambert: the band stands in for N.L, 1/PI as in Bevy's diffuse lobe.
         let radiance = (*clustered).color_inverse_square_range.rgb * attenuation * cone * (exposure / PI);
-        light += reach_step(radiance) * flame_flicker((*clustered).position_radius) * toon_band(dot(N, L), shadow);
+        light += reach_step(radiance) * flame_flicker((*clustered).position_radius) * toon_band(toon, dot(N, L), shadow);
     }
 
     for (var i: u32 = 0u; i < view_bindings::lights.n_directional_lights; i = i + 1u) {
@@ -243,7 +267,7 @@ fn toon_direct_light(in: PbrInput) -> vec3<f32> {
             shadow = shadows::fetch_directional_shadow(i, in.world_position, in.world_normal, view_z, in.frag_coord.xy);
             shadow *= in.directional_shadow_factor;
         }
-        light += (*directional).color.rgb * (exposure / PI) * toon_band(dot(N, (*directional).direction_to_light), shadow);
+        light += (*directional).color.rgb * (exposure / PI) * toon_band(toon, dot(N, (*directional).direction_to_light), shadow);
     }
 
     return light;
@@ -264,6 +288,7 @@ fn fragment(
     vertex_output: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
+    let toon = toon_of(vertex_output.instance_index);
     var pbr_input = pbr_input_from_standard_material(vertex_output, is_front);
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material.flags,
@@ -302,10 +327,12 @@ fn fragment(
     );
     // Etching after the pattern, wear over both (`DECAY_BODY`).
     let item_normal = normalize((get_local_from_world(vertex_output.instance_index) * vec4<f32>(pbr_input.world_normal, 0.0)).xyz);
+    let pixel = length(fwidth(item_position));
     let etched = apply_etch(
         patterned,
         item_position,
         item_normal,
+        pixel,
         Etch(
             toon.etch_id,
             toon.etch_color,
@@ -323,6 +350,7 @@ fn fragment(
     let base = apply_decay(
         etched,
         item_position,
+        pixel,
         toon.decay_type,
         toon.decay_amount,
         toon.decay_scale,
@@ -330,7 +358,7 @@ fn fragment(
     );
 
     let ambient = view_bindings::lights.ambient_color.rgb * pbr_input.diffuse_occlusion;
-    let light = toon_direct_light(pbr_input) + ambient * view_bindings::view.exposure;
+    let light = toon_direct_light(toon, pbr_input) + ambient * view_bindings::view.exposure;
     let lit = srgb_to_linear(base * light);
     // Glow fades as the stone clouds over (`gemMat`).
     let glow = srgb_to_linear(base) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
