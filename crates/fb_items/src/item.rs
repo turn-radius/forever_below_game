@@ -50,9 +50,14 @@ impl Item {
 
     /// Every slot it can be worn or held in, the one it is made for first; none for goods. A
     /// ring goes on either ring slot (the plate's `targetSlot`), and a weapon in either hand,
-    /// the main hand first (the user's call: the plate held weapons only in the main hand).
+    /// the main hand first (the user's call: the plate held weapons only in the main hand). A
+    /// lantern goes in either hand, the off hand first, or hangs from the belt at the hip
+    /// (the user's call), whose belt the inventory checks.
     pub fn slots(&self) -> Vec<Slot> {
         let Some(made_for) = self.profile.slot else { return vec![] };
+        if self.shape.family() == armory::Family::Lantern {
+            return vec![made_for, Slot::Mainhand, Slot::Hip];
+        }
         match made_for {
             Slot::Ring1 | Slot::Ring2 => vec![Slot::Ring1, Slot::Ring2],
             Slot::Mainhand if self.profile.tags.contains(&Tag::Weapon) => vec![Slot::Mainhand, Slot::Offhand],
@@ -188,6 +193,8 @@ mod tests {
         assert_eq!(roll_item("Helm", 1).unwrap().slots(), vec![Slot::Head]);
         assert_eq!(roll_item("Ring", 1).unwrap().slots(), vec![Slot::Ring1, Slot::Ring2]);
         assert!(roll_item("Bread", 1).unwrap().slots().is_empty());
+        assert_eq!(roll_item("Lantern", 1).unwrap().slots(), vec![Slot::Offhand, Slot::Mainhand, Slot::Hip]);
+        assert!(!roll_item("Torch", 1).unwrap().fits(Slot::Hip));
     }
 
     #[test]

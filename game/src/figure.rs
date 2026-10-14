@@ -14,7 +14,7 @@ use armory::{
     cond::{Condition, ConditionState},
 };
 use bevy::prelude::*;
-use fb_body::{Body, BodySpec, Side, fit_hands, fit_worn};
+use fb_body::{Body, BodySpec, Side, fit_hands, fit_hip, fit_worn};
 use fb_items::Slot;
 
 use crate::carry::{appearance_of, item_light};
@@ -50,7 +50,7 @@ pub struct Figure {
     /// The bare skin, head and hair first, then each worn layer innermost first, then the main
     /// hand's item and the off hand's.
     pub pieces: Vec<Piece>,
-    /// The light it holds, the main hand's before the off hand's.
+    /// The light it holds, the main hand's before the off hand's, or else a lantern's at its hip.
     pub light: Option<HeldLight>,
     /// Where the head turns, in body space: the base of the neck.
     pub neck: Vec3,
@@ -93,6 +93,19 @@ impl Figure {
             {
                 let side = if slot == Slot::Mainhand { fb_body::MAIN_HAND } else { fb_body::OFF_HAND };
                 light = Some(HeldLight { at: Vec3::from_array(fit.to_body(anchor.position)), anchor, side });
+            }
+        }
+        // A lantern hung at the hip, from the belt; the carried light if no hand holds one.
+        let hung = worn.iter().find(|(s, _)| *s == Slot::Hip);
+        if let (Some((_, item)), Some(belt)) = (hung, fit.layer(Slot::Belt))
+            && let Some(hip) = fit_hip(&body, &item.shape, &belt.mesh)
+        {
+            let anchor = item_light(&hip.item);
+            pieces.push(Piece { name: item.title().to_string(), mesh: hip.mesh.clone(), appearance: appearance_of(&hip.item), on_head: false, lit: anchor.is_some() });
+            if light.is_none()
+                && let Some(anchor) = anchor
+            {
+                light = Some(HeldLight { at: Vec3::from_array(hip.to_body(anchor.position)), anchor, side: hip.side });
             }
         }
         let neck = Vec3::from_array(body.neck_base().origin);
@@ -179,6 +192,28 @@ mod tests {
             let centre = points.iter().sum::<Vec3>() / points.len() as f32;
             assert!(fist.x > 0.0 && centre.x > 0.0, "{base}: fist {fist}, centre {centre}");
         }
+    }
+
+    #[test]
+    fn a_hip_lantern_hangs_from_the_belt_and_lights_when_no_hand_does() {
+        let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap();
+        let name = lantern.title().to_string();
+        let (sword, dagger, belt) = (fb_items::roll_item("Sword", 3).unwrap(), fb_items::roll_item("Dagger", 4).unwrap(), fb_items::roll_item("Belt", 2).unwrap());
+        let spec = BodySpec::roll(Folk::Human, 5);
+        let worn = [(Slot::Belt, belt), (Slot::Mainhand, sword), (Slot::Offhand, dagger), (Slot::Hip, lantern.clone())];
+        let figure = Figure::dress(&spec, &worn, 0.0);
+        let hung = figure.pieces.iter().find(|p| p.name == name).expect("the lantern is drawn");
+        assert!(hung.lit);
+        let (lo, hi) = hung.mesh.bounds().unwrap();
+        // At the hip, on the off hand's side (+X): from the belt line down, above the knee.
+        let body = &figure.body;
+        assert!(lo[0] > 0.0 && hi[1] <= body.waist_y + 0.5 && lo[1] > body.hip_y * 0.5, "{lo:?}..{hi:?}");
+        let light = figure.light.expect("the hip lantern lights the doll");
+        assert_eq!(light.side, fb_body::OFF_HAND);
+        assert!(light.at.y < body.waist_y, "{}", light.at);
+        // Without a belt nothing hangs there.
+        let unbelted = Figure::dress(&spec, &[(Slot::Hip, lantern)], 0.0);
+        assert!(unbelted.pieces.iter().all(|p| p.name != name) && unbelted.light.is_none());
     }
 
     #[test]
