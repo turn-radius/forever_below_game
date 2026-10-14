@@ -23,8 +23,8 @@ use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle
 pub const BODY_RADIUS: f32 = 3.5;
 /// Walking pace in world units per second (1.4 m/s).
 pub const WALK_SPEED: f32 = 14.0;
-/// Hurrying pace with Shift held (2.5 m/s).
-pub const HURRY_SPEED: f32 = 25.0;
+/// Hurrying pace with Shift held: a run of 4.5 m/s (our own tuning; walking is 1.4 m/s).
+pub const HURRY_SPEED: f32 = 45.0;
 /// How quickly velocity closes on the wanted velocity, per second ([`StableInterpolate`]).
 const ACCELERATION: f32 = 10.0;
 /// Radians of turn per pixel of mouse motion at a mouse sensitivity of 1.
@@ -72,7 +72,8 @@ struct Locomotion {
 pub struct Gait {
     /// Step cycle, radians; one turn per [`STRIDE`] walked (two steps).
     pub phase: f32,
-    /// Speed as a multiple of walking pace, 0 standing, up to 1.5 hurrying.
+    /// Speed as a multiple of walking pace, 0 standing, capped at 1.5 so bob and sway stay calm
+    /// when hurrying.
     pub pace: f32,
 }
 
