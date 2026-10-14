@@ -8,6 +8,8 @@
 //! - [`grid`]: cells and the rules for placing things in them, free of Bevy.
 //! - [`items`]: the [`Inventory`], where every item is: worn, in a grid, or loose.
 //! - [`icon`]: icons drawn from the items' Armory meshes.
+//! - [`doll`] and [`seal`]: the doll's leaf, the runic seal with the equipment slots round
+//!   it; dragging onto a slot wears the item, if it is made for that slot.
 //! - [`card`]: the hover card, for an item under the mouse here or under the crosshair in the
 //!   level.
 //! - [`underfoot`]: the items on the floor within reach, as a grid, and bags set down as
@@ -20,9 +22,11 @@
 //! card over the `n`th thing in the first carried grid.
 
 pub mod card;
+pub mod doll;
 pub mod grid;
 pub mod icon;
 pub mod items;
+pub mod seal;
 pub mod underfoot;
 
 use bevy::{
@@ -36,6 +40,7 @@ use fb_items::{Kind, Rarity, Slot, footprint::Footprint};
 
 pub use grid::{Grid, Placement};
 pub use icon::{IconCache, Icons};
+pub use doll::{DollAssets, DollView, SlotView};
 pub use items::{Inventory, ItemId, Location, Refusal};
 pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
@@ -77,6 +82,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
+            .init_resource::<DollAssets>()
             .add_systems(Startup, (give_starting_kit, give_debug_kit.run_if(debug_kit_wanted)).chain())
             .add_systems(PostStartup, open_for_capture.run_if(|| env_flag("FB_OPEN_INVENTORY")))
             .add_systems(
@@ -97,6 +103,7 @@ impl Plugin for InventoryPlugin {
                     )
                         .chain(),
                     icon::draw_icons,
+                    doll::turn_seal,
                 ),
             );
     }
@@ -196,6 +203,8 @@ pub enum Target {
     Page,
     /// Off the page, over the level.
     Level,
+    /// An equipment slot round the doll.
+    Slot(Slot),
 }
 
 /// An item being dragged, or pressed and about to be.
@@ -251,6 +260,7 @@ pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<
             let at = drag.placement_at(cell).ok_or(Refusal::NoRoom)?;
             inventory.check_put(drag.id, container, at)
         }
+        Target::Slot(slot) => inventory.check_wear(drag.id, slot),
         Target::Cell { view: GridView::Underfoot, .. } | Target::Page | Target::Level => Ok(()),
     }
 }
@@ -271,6 +281,10 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
         Target::Cell { view: GridView::Container(container), cell } => {
             let at = drag.placement_at(cell).ok_or(Refusal::NoRoom)?;
             inventory.put(drag.id, container, at)?;
+            Ok(lying.then_some(FloorChange::Lifted(drag.id)))
+        }
+        Target::Slot(slot) => {
+            inventory.wear(drag.id, slot)?;
             Ok(lying.then_some(FloorChange::Lifted(drag.id)))
         }
         Target::Cell { view: GridView::Underfoot, cell } => Ok(set_down(inventory, underfoot::aside_for_column(cell.x, underfoot_cols))),
@@ -319,6 +333,7 @@ fn build_screen(
     screens: Query<Entity, With<InventoryScreen>>,
     cameras: Query<Entity, With<ViewModelCamera>>,
     fonts: Res<UiFonts>,
+    doll_assets: Res<DollAssets>,
     mut icons: Icons,
 ) {
     let existing = screens.iter().next();
@@ -373,7 +388,7 @@ fn build_screen(
             ))
             .with_children(|ledger| {
                 ledger
-                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), ..default() })
+                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(700), ..default() })
                     .with_children(|leaf| {
                         leaf.spawn(Node {
                             column_gap: px(16),
@@ -409,11 +424,12 @@ fn build_screen(
                             });
                         leaf.spawn((
                             Text::new(
-                                "Drag things between your bags and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item. Tab or Esc to close.",
+                                "Drag things between your bags, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item. Tab or Esc to close.",
                             ),
                             UiFonts::style(&fonts.body, 13.0, MUTED),
                         ));
                     });
+                doll::doll_leaf(ledger, &doll_assets, &inventory, &fonts, &mut icons);
             });
             root.spawn((
                 DragGhost,
@@ -547,7 +563,15 @@ impl Screen<'_> {
 }
 
 /// The grid under `point` and its cell, the page, or the level beyond it.
-fn target_under(point: Vec2, grids: &Query<(&GridView, &ComputedNode, &UiGlobalTransform)>, ledger: Option<Rect>) -> Target {
+fn target_under(
+    point: Vec2,
+    grids: &Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
+    slots: &Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+    ledger: Option<Rect>,
+) -> Target {
+    if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
+        return Target::Slot(slot.0);
+    }
     for (view, node, transform) in grids {
         let rect = node_rect(node, transform);
         if rect.contains(point) {
@@ -576,6 +600,7 @@ fn drag_items(
     keys: Res<ButtonInput<KeyCode>>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     grids: Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
+    slots: Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
     ledgers: Query<(&ComputedNode, &UiGlobalTransform), With<Ledger>>,
     mut dragging: ResMut<Dragging>,
     mut hovered: ResMut<Hovered>,
@@ -592,35 +617,32 @@ fn drag_items(
     }
     let Some(point) = cursor else { return };
     let ledger = ledgers.iter().next().map(|(n, t)| node_rect(n, t));
-    let target = target_under(point, &grids, ledger);
+    let target = target_under(point, &grids, &slots, ledger);
 
-    // What the mouse is over, when nothing is being dragged.
-    let over = match target {
-        Target::Cell { view, cell } => grid_of(&inventory, &underfoot, view).and_then(|g| g.at_cell(cell.x, cell.y).copied()).map(|e| (view, e)),
+    // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
+    // and how it would be taken up.
+    let over: Option<(Rect, Drag)> = match target {
+        Target::Cell { view, cell } => grid_of(&inventory, &underfoot, view).and_then(|g| g.at_cell(cell.x, cell.y).copied()).and_then(|entry| {
+            let (_, node, transform) = grids.iter().find(|(v, ..)| **v == view)?;
+            let min = node_rect(node, transform).min + Vec2::new(entry.at.x as f32, entry.at.y as f32) * CELL_PX + LINE_PX;
+            let rect = Rect::from_corners(min, min + Vec2::new(entry.size.cols as f32, entry.size.rows as f32) * CELL_PX - LINE_PX);
+            let grab = cell - IVec2::new(entry.at.x as i32, entry.at.y as i32);
+            Some((rect, Drag { id: entry.id, grab, size: entry.size, turned: entry.at.turned, press: point, active: false, target: None }))
+        }),
+        Target::Slot(slot) => inventory.worn(slot).and_then(|id| {
+            let (_, node, transform) = slots.iter().find(|(s, ..)| s.0 == slot)?;
+            let size = inventory.footprint(id)?;
+            Some((node_rect(node, transform), Drag { id, grab: IVec2::ZERO, size, turned: false, press: point, active: false, target: None }))
+        }),
         _ => None,
     };
-    let over_rect = over.and_then(|(view, entry)| {
-        grids.iter().find(|(v, ..)| **v == view).map(|(_, node, transform)| {
-            let grid = node_rect(node, transform);
-            let min = grid.min + Vec2::new(entry.at.x as f32, entry.at.y as f32) * CELL_PX + LINE_PX;
-            Rect::from_corners(min, min + Vec2::new(entry.size.cols as f32, entry.size.rows as f32) * CELL_PX - LINE_PX)
-        })
-    });
-    let now_over = if dragging.0.is_some_and(|d| d.active) { None } else { over.zip(over_rect).map(|((_, e), r)| (e.id, r)) };
+    let now_over = if dragging.0.is_some_and(|d| d.active) { None } else { over.map(|(rect, d)| (d.id, rect)) };
     hovered.set_if_neq(Hovered(now_over));
 
     if mouse.just_pressed(MouseButton::Left)
-        && let (Some((_, entry)), Target::Cell { cell, .. }) = (over, target)
+        && let Some((_, drag)) = over
     {
-        dragging.0 = Some(Drag {
-            id: entry.id,
-            grab: cell - IVec2::new(entry.at.x as i32, entry.at.y as i32),
-            size: entry.size,
-            turned: entry.at.turned,
-            press: point,
-            active: false,
-            target: None,
-        });
+        dragging.0 = Some(drag);
     }
     let Some(drag) = dragging.0.as_mut() else { return };
     if !drag.active && point.distance(drag.press) >= DRAG_START_PX {
@@ -821,6 +843,7 @@ mod tests {
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
             .init_resource::<Assets<Image>>()
+            .init_resource::<DollAssets>()
             .add_systems(Update, (toggle_screen, build_screen, drag_items).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
@@ -862,5 +885,44 @@ mod tests {
         press(&mut app, OPEN_KEY);
         assert_eq!(shown(&mut app), first);
         assert_eq!(app.world().resource::<Inventory>().location(knife), Some(Location::In { container: pack, at: Placement::new(5, 2, true) }));
+    }
+
+    #[test]
+    fn the_slots_sit_round_the_doll_and_empty_ones_show_their_names() {
+        let mut app = screen_app();
+        press(&mut app, OPEN_KEY);
+        let mut slots = app.world_mut().query::<(&SlotView, &Node, &Children)>();
+        let found: Vec<(Slot, Node, Vec<Entity>)> = slots.iter(app.world()).map(|(s, n, c)| (s.0, n.clone(), c.to_vec())).collect();
+        assert_eq!(found.len(), fb_items::tables::slot_places().len());
+        for place in fb_items::tables::slot_places() {
+            let (_, node, children) = found.iter().find(|(s, ..)| *s == place.slot).unwrap();
+            let x = px(doll::FRAME.x * place.x_percent / 100.0);
+            match place.side {
+                fb_items::tables::SlotSide::Left => assert_eq!(node.left, x, "{:?}", place.slot),
+                fb_items::tables::SlotSide::Right => assert_eq!(node.right, x, "{:?}", place.slot),
+            }
+            assert_eq!(node.top, px(doll::FRAME.y * place.y_percent / 100.0));
+            let labels: Vec<String> = children.iter().filter_map(|c| app.world().get::<Text>(*c)).map(|t| t.0.clone()).collect();
+            assert_eq!(labels, vec![place.label.clone()], "{:?}", place.slot);
+        }
+        let mut views = app.world_mut().query::<&DollView>();
+        assert_eq!(views.single(app.world()).unwrap().image, app.world().resource::<DollAssets>().doll);
+    }
+
+    #[test]
+    fn dropping_on_a_slot_wears_what_is_made_for_it() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        let gloves = inventory.add(fb_items::roll_item("Gloves", 4).unwrap());
+        inventory.put(gloves, pack, Placement::new(0, 0, false)).unwrap();
+        let drag = Drag { id: gloves, grab: IVec2::ZERO, size: inventory.footprint(gloves).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
+        assert_eq!(check_drop(&inventory, &drag, Target::Slot(Slot::Head)), Err(Refusal::WrongSlot));
+        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Hands), 6), Ok(None));
+        assert_eq!(inventory.worn(Slot::Hands), Some(gloves));
+        // Lying on the floor, it is lifted from the level as it goes on.
+        let ring = inventory.add(fb_items::roll_item("Ring", 2).unwrap());
+        let drag = Drag { id: ring, ..drag };
+        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Ring2), 6), Ok(Some(FloorChange::Lifted(ring))));
     }
 }

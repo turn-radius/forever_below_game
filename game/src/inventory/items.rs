@@ -216,16 +216,23 @@ impl Inventory {
         self.stow(id).map(|_| ())
     }
 
-    /// Wears `id` in `slot`, taking it from wherever it was.
-    pub fn wear(&mut self, id: ItemId, slot: Slot) -> Result<(), Refusal> {
+    /// Whether `id` could be worn in `slot`, without moving anything.
+    pub fn check_wear(&self, id: ItemId, slot: Slot) -> Result<(), Refusal> {
         let made_for = self.item(id).ok_or(Refusal::Unknown)?.profile.slot.ok_or(Refusal::NotWearable)?;
         if !wearable_in(made_for, slot) {
             return Err(Refusal::WrongSlot);
         }
         match self.worn(slot) {
-            Some(other) if other != id => return Err(Refusal::SlotTaken),
-            Some(_) => return Ok(()),
-            None => {}
+            Some(other) if other != id => Err(Refusal::SlotTaken),
+            _ => Ok(()),
+        }
+    }
+
+    /// Wears `id` in `slot`, taking it from wherever it was.
+    pub fn wear(&mut self, id: ItemId, slot: Slot) -> Result<(), Refusal> {
+        self.check_wear(id, slot)?;
+        if self.worn(slot) == Some(id) {
+            return Ok(());
         }
         self.take_out(id);
         self.worn.insert(slot, id);

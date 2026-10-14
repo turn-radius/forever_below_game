@@ -8,6 +8,7 @@
 //! - `syl.json`, `factions.json`, `places.json`: name syllables per folk, and the factions
 //!   and places legendary histories name (`SYL`, `FACTIONS`, `PLACES`).
 //! - `families.json`: the plate's armory menu, bases grouped under a heading (`FAMILIES`).
+//! - `slots.json`: where each equipment slot sits round the doll (`SLOTS`).
 
 use crate::dice::Dice;
 use crate::footprint::{Footprint, Grid};
@@ -153,6 +154,43 @@ impl From<BaseGroup> for (String, Vec<String>) {
     }
 }
 
+/// How big a slot is drawn round the doll.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SlotSize {
+    Big,
+    Small,
+}
+
+/// Which side of the doll a slot is on, and so which edge its position is measured from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SlotSide {
+    #[serde(rename = "L")]
+    Left,
+    #[serde(rename = "R")]
+    Right,
+}
+
+/// A row of `data/slots.json`: a slot, its label, size and side, and its place round the
+/// doll as percentages of the doll's frame, from the left edge (or the right, for a right
+/// side slot) and from the top.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "(Slot, String, SlotSize, SlotSide, f32, f32)")]
+pub struct SlotPlace {
+    pub slot: Slot,
+    pub label: String,
+    pub size: SlotSize,
+    pub side: SlotSide,
+    pub x_percent: f32,
+    pub y_percent: f32,
+}
+
+impl From<(Slot, String, SlotSize, SlotSide, f32, f32)> for SlotPlace {
+    fn from((slot, label, size, side, x_percent, y_percent): (Slot, String, SlotSize, SlotSide, f32, f32)) -> Self {
+        SlotPlace { slot, label, size, side, x_percent, y_percent }
+    }
+}
+
 fn one() -> u8 {
     1
 }
@@ -178,6 +216,7 @@ fn parse<T: for<'de> Deserialize<'de>>(name: &str, json: &str) -> T {
 static BASES: LazyLock<BTreeMap<String, BaseItem>> = LazyLock::new(|| parse("bases.json", include_str!("../../../data/bases.json")));
 static GOODS: LazyLock<BTreeMap<String, Good>> = LazyLock::new(|| parse("goods.json", include_str!("../../../data/goods.json")));
 static AFFIXES: LazyLock<Vec<Affix>> = LazyLock::new(|| parse("afx.json", include_str!("../../../data/afx.json")));
+static SLOTS: LazyLock<Vec<SlotPlace>> = LazyLock::new(|| parse("slots.json", include_str!("../../../data/slots.json")));
 static BASE_GROUPS: LazyLock<Vec<BaseGroup>> = LazyLock::new(|| parse("families.json", include_str!("../../../data/families.json")));
 
 /// `data/bases.json`, by base name.
@@ -224,6 +263,12 @@ pub fn affixes() -> &'static [Affix] {
     &AFFIXES
 }
 
+/// `data/slots.json`: every equipment slot and where it sits round the doll, in the plate's
+/// order.
+pub fn slot_places() -> &'static [SlotPlace] {
+    &SLOTS
+}
+
 /// `data/families.json`, in menu order.
 pub fn base_groups() -> &'static [BaseGroup] {
     &BASE_GROUPS
@@ -238,6 +283,11 @@ mod tests {
         assert_eq!(bases().len(), 13);
         assert_eq!(goods().len(), 13);
         assert_eq!(affixes().len(), 24);
+        assert_eq!(slot_places().len(), 15);
+        let head = &slot_places()[0];
+        assert_eq!((head.slot, head.label.as_str(), head.size, head.side, head.x_percent, head.y_percent), (Slot::Head, "Head", SlotSize::Big, SlotSide::Left, 4.0, 5.0));
+        let charm = slot_places().last().unwrap();
+        assert_eq!((charm.slot, charm.side), (Slot::Charm, SlotSide::Right));
         assert_eq!(base_groups().len(), 25);
         assert_eq!(food_descriptions().len(), 12);
         assert_eq!((syllables().len(), factions().len(), places().len()), (6, 7, 9));
