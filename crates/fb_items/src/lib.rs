@@ -1,21 +1,25 @@
-//! Forever Below's item layer. An [`Item`] wraps an `armory::ItemState` (the shape) with
+//! Forever Below's item layer. An [`Item`] wraps an `armory::Item` (the shape) with
 //! everything the game adds: rarity, affixes that change any parameter (including survival
 //! ones like warmth and carry weight), derived stats, the grid footprint, and a history.
 //!
 //! Data tables come from the prototype: `data/afx.json`, `data/bases.json`, `data/goods.json`
 //! ([`tables`]). The Armory family and styles each base is rolled from are typed Rust in
-//! [`armory_base`]. See `docs/items.md`.
+//! [`armory_base`]. [`roll_item`] rolls a whole item from a base name and a seed. See
+//! `docs/items.md`.
 
 pub mod armory_base;
 pub mod dice;
 pub mod dress;
 pub mod footprint;
+pub mod item;
 pub mod modifier;
 pub mod naming;
 pub mod profile;
 pub mod rarity;
 pub mod stats;
 pub mod tables;
+
+pub use item::{Coins, Item, roll_item};
 
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
@@ -47,5 +51,3 @@ pub enum Tag { Cloth, Leather, Metal, Wood, Wear, Armor, Quiet, Weapon, Light, T
 pub fn game_rng(seed: u32) -> Mulberry32 {
     Mulberry32::new(seed.wrapping_mul(0x85EB_CA6B) ^ 0xC2B2_AE35)
 }
-
-// TODO(port): Item, roll_item(base, rng), derived stats, footprint from real size (about 24 cm per cell).

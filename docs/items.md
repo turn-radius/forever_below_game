@@ -7,6 +7,8 @@ These are the rules the prototype settled on. Keep the intent and improve the de
 1. **Shape**: an `armory::Item`, rolled by the Armory's own "Forge new". `fb_items::armory_base` maps each base name (from `data/bases.json`, `data/goods.json` and the plate's own Armory list) to an Armory family, the styles of it the base accepts (for example, `Boots` accepts a `boot.style` of `boot` or `sabaton`), and sometimes a tweak applied after rolling (a Mantle is a short cloak, a Purse always holds coins). `fb_items::armory_base::roll_shape(base, seed)` rolls the shape: an accepted style straight from the family's `roll_as`, then the tweak. Unlike the plate it never retries seeds; see the first point under "Bases from the Armory".
 2. **Game layer**: rarity, affixes, stats, footprint, history.
 
+`fb_items::roll_item(base, seed)` does both: the shape, its profile (slot, tags, stats, footprint), then for gear the rarity and affixes, the name, a legend for a legendary, and the dress; goods stay common and plain, and a purse counts its coins. It is pure in the base and seed. The shape draws from the Armory's stream and the game layer from its own (`fb_items::game_rng`), so the game layer can change without changing any shape.
+
 Every base is now made by the Armory; the plate's laced shirt, leather jerkin and pointed hat are no longer drawn outside it. See "Bases from the Armory" below.
 
 ### Bases from the Armory
