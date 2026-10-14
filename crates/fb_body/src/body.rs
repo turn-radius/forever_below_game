@@ -10,7 +10,7 @@
 use std::f32::consts::TAU;
 
 use armory::build::boot::foot_mesh;
-use armory::build::form::{BACK, Bulge, FRONT, FormRing, HandForm, HeadForm, LegForm, LowerBodyForm, TorsoForm, TorsoProfile};
+use armory::build::form::{BACK, Bulge, FRONT, FormRing, HandForm, HeadForm, LEG_SECTIONS, LegForm, LegSection, LowerBodyForm, TorsoForm, TorsoProfile};
 use armory::build::hafted::smoothstep;
 use armory::fabric::{PatternKind, SurfacePattern};
 use armory::geom::vec3::{self, V3};
@@ -349,14 +349,24 @@ impl Body {
     /// Both legs and the hips, for trousers (body space: soles at y = 0).
     pub fn lower_body_form(&self) -> LowerBodyForm {
         let leg = self.leg(Side::Left);
+        // The garment form's hips run on a spline of their own between hip and waist, a few
+        // millimetres inside the skin's at the sides in places: ease them out a little, so even
+        // close leggings cover the hips (our own allowance).
+        let torso = self.torso_form();
+        let mut rings = torso.rings();
+        for ring in &mut rings[2..=4] {
+            *ring = ring.inflated(0.05, 0.03);
+        }
         LowerBodyForm {
-            torso: self.torso_form(),
+            torso: torso.with_rings(rings),
             leg: self.leg_form(),
             waist_height: self.waist_y,
-            crotch_height: self.hip_y - 0.14 * self.trunk_length,
+            // Where the trunk's skin rounds under between the thighs, so the seat covers it.
+            crotch_height: self.hip_y - 0.14 * self.trunk_length - 0.25 * self.scale,
             thigh_half_width: (self.hip.half_width * 0.47).max(leg.radius * 0.9),
             thigh_half_depth: leg.radius * 1.08,
             stance: leg.joints[2][0].abs(),
+            sections: Some(self.leg_sections()),
         }
     }
 
@@ -540,16 +550,47 @@ impl Body {
     /// One leg's skin, root to ankle, with the calf swelling behind and the knee in front.
     fn leg_mesh(&self, side: Side) -> MeshBuilder {
         let leg = self.leg(side);
+        leg.mesh(28, vec3::Z, None, |t, a| self.leg_radius(leg, t, a))
+    }
+
+    /// A leg's radius at `t` along it and `a` round it (0 the front, +Z; PI the back).
+    fn leg_radius(&self, leg: &Limb, t: f32, a: f32) -> f32 {
         let [th, tk] = leg.t_joints;
         let calf_t = tk + 0.3 * (1.0 - tk);
-        leg.mesh(28, vec3::Z, None, |t, a| {
-            // Angle 0 faces the front (+Z), PI the back.
-            let front = a.cos();
-            let calf = 0.1 * (-((t - calf_t) / 0.12).powi(2)).exp() * (-front).max(0.0).powi(2);
-            let knee = 0.05 * (-((t - tk) / 0.05).powi(2)).exp() * front.max(0.0).powi(3);
-            // The thigh is a little deeper front to back than across, below the seat.
-            let thigh = 0.05 * smoothstep(0.0, th, t) * (1.0 - smoothstep(th, tk, t)) * (front * front - 0.5);
-            leg.radius_at(t) * (1.0 + calf + knee + thigh)
+        let front = a.cos();
+        let calf = 0.1 * (-((t - calf_t) / 0.12).powi(2)).exp() * (-front).max(0.0).powi(2);
+        let knee = 0.05 * (-((t - tk) / 0.05).powi(2)).exp() * front.max(0.0).powi(3);
+        // The thigh is a little deeper front to back than across, below the seat.
+        let thigh = 0.05 * smoothstep(0.0, th, t) * (1.0 - smoothstep(th, tk, t)) * (front * front - 0.5);
+        leg.radius_at(t) * (1.0 + calf + knee + thigh)
+    }
+
+    /// The left leg's skin in horizontal sections from the ankle up to the crotch, for
+    /// legwear to follow ([`LowerBodyForm::sections`]): its middle, and how far it reaches to
+    /// the side, in front and behind, sampled round the leg as drawn.
+    pub fn leg_sections(&self) -> [LegSection; LEG_SECTIONS] {
+        let leg = self.leg(Side::Left);
+        let crotch = self.hip_y - 0.14 * self.trunk_length;
+        let (y0, y1) = (leg.joints[2][1], crotch - 0.1 * self.scale);
+        std::array::from_fn(|i| {
+            let y = y0 + (y1 - y0) * i as f32 / (LEG_SECTIONS - 1) as f32;
+            // The share along the leg at this height (its line falls steadily below the hip).
+            let t = (0..=400).map(|k| k as f32 / 400.0).min_by(|a, b| (leg.point_at(*a)[1] - y).abs().total_cmp(&(leg.point_at(*b)[1] - y).abs())).unwrap_or(1.0);
+            let c = leg.point_at(t);
+            let along = leg.tangent_at(t);
+            let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+            // Round the leg's section, each point dropped onto this height along the leg.
+            let a0 = vec3::normalize_or(vec3::sub(vec3::Z, vec3::scale(along, along[2])), vec3::Z);
+            let b0 = vec3::cross(along, a0);
+            for k in 0..48 {
+                let a = TAU * k as f32 / 48.0;
+                let r = self.leg_radius(leg, t, a);
+                let p = vec3::add(c, vec3::add(vec3::scale(a0, r * a.cos()), vec3::scale(b0, r * a.sin())));
+                lo = [lo[0].min(p[0]), lo[1].min(p[2])];
+                hi = [hi[0].max(p[0]), hi[1].max(p[2])];
+            }
+            let (x, z) = (0.5 * (lo[0] + hi[0]), c[2]);
+            LegSection { y, x, z, half_width: 0.5 * (hi[0] - lo[0]), front: hi[1] - z, back: z - lo[1] }
         })
     }
 

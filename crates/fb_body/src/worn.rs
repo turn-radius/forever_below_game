@@ -91,9 +91,8 @@ pub struct Covered {
     pub hands: bool,
     /// Footwear: the bare feet (and a lizard's claws) go.
     pub feet: bool,
-    /// Trousers or leggings to the ankle: the bare legs go (the trousers' legs are straight
-    /// from hip to ankle, the body's bend a little forward at the knee, which would show
-    /// through close leggings).
+    /// Trousers or leggings to the ankle: the bare legs go (wholly covered, they need not be
+    /// drawn).
     pub legs: bool,
 }
 
@@ -1739,6 +1738,108 @@ mod tests {
                         let n = crossings(&cuff, s);
                         if n > 0 {
                             failures.push(format!("{folk:?} {seed} kit {kit}: the sleeve passes through the bracer ({n} crossings)"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// How far along the ray from `origin` toward `dir` the surface of `part` reaches: the
+    /// farthest triangle it meets (Moeller-Trumbore).
+    fn ray_from(part: &Part, origin: V3, dir: V3) -> Option<f32> {
+        part.indices
+            .chunks(3)
+            .filter_map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| part.positions[i as usize]);
+                let (e1, e2) = (vec3::sub(b, a), vec3::sub(c, a));
+                let h = vec3::cross(dir, e2);
+                let det = vec3::dot(e1, h);
+                if det.abs() < 1e-9 {
+                    return None;
+                }
+                let s = vec3::sub(origin, a);
+                let u = vec3::dot(s, h) / det;
+                let q = vec3::cross(s, e1);
+                let v = vec3::dot(dir, q) / det;
+                let t = vec3::dot(e2, q) / det;
+                (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.0).then_some(t)
+            })
+            .reduce(f32::max)
+    }
+
+    #[test]
+    fn legwear_bends_with_the_knees() {
+        use armory::families::legs::Legs;
+        let mut failures = vec![];
+        for folk in Folk::ALL {
+            for seed in [3u32, 1207] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                let skin = body.skin_mesh().parts.into_iter().find(|p| p.name == "legs").unwrap();
+                for style in LegwearStyle::ALL {
+                    for kit in [10u32, 11] {
+                        let wear = Legs::roll_as(kit, style);
+                        let bloused = wear.legwear.puttees;
+                        let fit = fit_worn(&body, &[(Slot::Legs, Item::Legs(wear))]);
+                        let legs = fit.layer(Slot::Legs).unwrap().mesh.parts.iter().find(|p| p.name == "legs").unwrap().clone();
+                        let hem = legs.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+                        let crotch = body.hip_y - 0.14 * body.trunk_length;
+                        // No skin shows through: every point of the bare leg between the hem and
+                        // the crotch lies inside the cloth, measured out from the leg's own line.
+                        let mut shows = 0;
+                        let mut worst = 0.0f32;
+                        let mut at = [0.0f32; 3];
+                        for p in skin.positions.iter().filter(|p| p[1] > hem + 0.15 && p[1] < crotch - 0.1).step_by(3) {
+                            let leg = body.leg(if p[0] > 0.0 { Side::Left } else { Side::Right });
+                            let (t, _) = nearest(leg, *p);
+                            let c = leg.point_at(t);
+                            let dir = vec3::normalize_or(vec3::sub(*p, c), vec3::Z);
+                            let skin_r = vec3::distance(*p, c);
+                            if let Some(cloth) = ray_from(&legs, c, dir).filter(|cloth| skin_r > *cloth) {
+                                shows += 1;
+                                if skin_r - cloth > worst {
+                                    at = *p;
+                                }
+                                worst = worst.max(skin_r - cloth);
+                            }
+                        }
+                        // Nor the hips above the crotch, under the waistband.
+                        let trunk = body.skin_mesh().parts.into_iter().find(|p| p.name == "trunk").unwrap();
+                        let band = body.waist_y - 0.2 * body.scale;
+                        // (Off the midline, where the two halves' seams meet and a ray along
+                        // it slips between them.)
+                        for p in trunk.positions.iter().filter(|p| p[1] > crotch + 0.05 && p[1] < band && p[0].abs() > 0.03) {
+                            let dir = vec3::normalize_or([p[0], 0.0, p[2]], vec3::Z);
+                            let skin_r = p[0].hypot(p[2]);
+                            if let Some(cloth) = ray_from(&legs, [0.0, p[1], 0.0], dir).filter(|cloth| skin_r > *cloth) {
+                                shows += 1;
+                                if skin_r - cloth > worst {
+                                    at = *p;
+                                }
+                                worst = worst.max(skin_r - cloth);
+                            }
+                        }
+                        if shows > 0 {
+                            failures.push(format!("{folk:?} {seed} {style:?} kit {kit}: skin shows through at {shows} points, by up to {worst:.3} at {at:?}"));
+                        }
+                        // And the cloth follows the knee forward: in front of the knee it stands
+                        // no further off the skin than in front of the shin below it (unless it
+                        // blouses there over puttees).
+                        let leg = body.leg(Side::Left);
+                        let off = |y: f32| {
+                            let t = (0..=200).map(|i| i as f32 / 200.0).min_by(|a, b| (leg.point_at(*a)[1] - y).abs().total_cmp(&(leg.point_at(*b)[1] - y).abs())).unwrap();
+                            let c = leg.point_at(t);
+                            let cloth = ray_from(&legs, c, vec3::Z).unwrap_or(0.0);
+                            let flesh = ray_from(&skin, c, vec3::Z).unwrap_or(0.0);
+                            cloth - flesh
+                        };
+                        let knee = leg.joints[1][1];
+                        if knee > hem + 0.6 && !bloused {
+                            let (at_knee, at_shin) = (off(knee), off(knee - 0.4 * (knee - hem)));
+                            if at_knee > at_shin + 0.1 {
+                                failures.push(format!("{folk:?} {seed} {style:?} kit {kit}: the cloth stands {at_knee:.2} off the knee, {at_shin:.2} off the shin"));
+                            }
                         }
                     }
                 }

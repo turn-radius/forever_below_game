@@ -819,6 +819,26 @@ pub struct LowerBodyForm {
     pub thigh_half_depth: f32,
     /// Distance of each ankle from the midline.
     pub stance: f32,
+    /// A real leg's sections from the ankle up toward the crotch (the left leg; the right
+    /// mirrors it), which the cloth follows instead of the straight legs built from `leg`:
+    /// the bend forward at the knee, the calf behind and the knee in front.
+    pub sections: Option<[LegSection; LEG_SECTIONS]>,
+}
+
+/// How many [`LegSection`]s a [`LowerBodyForm`] takes.
+pub const LEG_SECTIONS: usize = 16;
+
+/// One horizontal section of a real leg: at height `y` its middle is `x` from the midline
+/// and `z` forward, and it reaches `half_width` to either side, `front` forward and `back`
+/// behind of that middle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LegSection {
+    pub y: f32,
+    pub x: f32,
+    pub z: f32,
+    pub half_width: f32,
+    pub front: f32,
+    pub back: f32,
 }
 
 impl LowerBodyForm {
@@ -833,6 +853,7 @@ impl LowerBodyForm {
             thigh_half_width: 0.84,
             thigh_half_depth: 0.95,
             stance: 0.62,
+            sections: None,
         }
     }
 
@@ -884,9 +905,32 @@ impl LowerBodyProfile {
     /// Distance of a leg's axis from the midline at height `y`: the stance at the soles,
     /// the thigh's half width at the crotch, so the thighs just meet.
     pub fn axis_at(&self, y: f32) -> f32 {
+        if let Some(s) = self.real_section(y) {
+            return s.x;
+        }
         let f = &self.form;
         let t = (y / f.crotch_height).clamp(0.0, 1.0);
         f.stance + (f.thigh_half_width - f.stance) * t
+    }
+
+    /// A real leg's section at height `y`, between the form's sections and on up to the
+    /// thighs meeting at the crotch; `None` for the mannequin's straight legs.
+    fn real_section(&self, y: f32) -> Option<LegSection> {
+        let sections = self.form.sections.as_ref()?;
+        let f = &self.form;
+        let crotch = LegSection { y: f.crotch_height, x: f.thigh_half_width, z: 0.0, half_width: f.thigh_half_width, front: f.thigh_half_depth, back: f.thigh_half_depth };
+        let all: Vec<LegSection> = sections.iter().copied().filter(|s| s.y < crotch.y - 0.05).chain(std::iter::once(crotch)).collect();
+        let i = all.partition_point(|s| s.y < y);
+        if i == 0 {
+            return Some(all[0]);
+        }
+        if i >= all.len() {
+            return Some(crotch);
+        }
+        let (a, b) = (all[i - 1], all[i]);
+        let t = ((y - a.y) / (b.y - a.y).max(1e-6)).clamp(0.0, 1.0);
+        let l = |p: f32, q: f32| p + (q - p) * t;
+        Some(LegSection { y, x: l(a.x, b.x), z: l(a.z, b.z), half_width: l(a.half_width, b.half_width), front: l(a.front, b.front), back: l(a.back, b.back) })
     }
 
     /// How far a leg has become half of the torso at height `y`: 0 at the crotch, 1 at the hips.
@@ -900,14 +944,33 @@ impl LowerBodyProfile {
     /// with increasing `angle` face outward on both legs.
     pub fn point(&self, side: f32, angle: f32, y: f32, inflate: f32) -> V3 {
         let (s, c) = angle.sin_cos();
-        let (hw, hd) = self.leg_at(y);
-        let leg = [side * self.axis_at(y) + (hw + inflate) * signed_pow(c, 0.9), -(hd + inflate) * signed_pow(s, 0.9)];
+        let leg = match self.real_section(y) {
+            // Lathe angles put the front (+Z) where the sine is negative.
+            Some(r) => {
+                let deep = if s < 0.0 { r.front } else { r.back };
+                [side * r.x + (r.half_width + inflate) * signed_pow(c, 0.9), r.z - (deep + inflate) * signed_pow(s, 0.9)]
+            }
+            None => {
+                let (hw, hd) = self.leg_at(y);
+                [side * self.axis_at(y) + (hw + inflate) * signed_pow(c, 0.9), -(hd + inflate) * signed_pow(s, 0.9)]
+            }
+        };
         let b = self.seat(y);
         if b <= 0.0 {
             return [leg[0], y, leg[1]];
         }
         let [x, z] = self.half_section(side, angle, y, inflate);
-        [leg[0] + (x - leg[0]) * b, y, leg[1] + (z - leg[1]) * b]
+        let p = [leg[0] + (x - leg[0]) * b, leg[1] + (z - leg[1]) * b];
+        if self.form.sections.is_none() {
+            return [p[0], y, p[1]];
+        }
+        // On a real body the blend from leg to hips can dip inside the hips' own outline: keep
+        // the cloth out on it, easing in above the crotch.
+        let (rp, rt) = (p[0].hypot(p[1]), x.hypot(z));
+        let w = smoothstep(self.form.crotch_height, self.form.crotch_height + 0.2, y);
+        let r = rp.max(rp + (rt - rp) * w);
+        let k = r / rp.max(1e-5);
+        [p[0] * k, y, p[1] * k]
     }
 
     /// The torso's section at height `y` (above the soles) on leg `side`'s half: its own
