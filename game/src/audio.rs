@@ -38,7 +38,15 @@ pub struct Playlist {
 impl Default for Playlist {
     fn default() -> Self {
         Playlist {
-            tracks: vec!["audio/the-wizards-tower.ogg".into(), "audio/shadowed-pixel.ogg".into()],
+            tracks: [
+                "audio/forever-below.ogg",
+                "audio/the-wizards-tower.ogg",
+                "audio/shadowed-pixel.ogg",
+                "audio/cavernous-arpeggios.ogg",
+                "audio/unreachable-home.ogg",
+            ]
+            .map(String::from)
+            .into(),
         }
     }
 }
@@ -218,13 +226,35 @@ mod tests {
     const FADE: f32 = 3.0;
 
     #[test]
-    fn playlist_opens_on_the_wizards_tower_and_wraps() {
+    fn playlist_opens_on_forever_below_and_plays_all_five_before_repeating() {
         let tracks = Playlist::default().tracks;
-        assert_eq!(tracks, ["audio/the-wizards-tower.ogg", "audio/shadowed-pixel.ogg"]);
-        assert_eq!(next_index(0, tracks.len()), Some(1));
-        assert_eq!(next_index(1, tracks.len()), Some(0));
+        assert_eq!(
+            tracks,
+            [
+                "audio/forever-below.ogg",
+                "audio/the-wizards-tower.ogg",
+                "audio/shadowed-pixel.ogg",
+                "audio/cavernous-arpeggios.ogg",
+                "audio/unreachable-home.ogg",
+            ]
+        );
+        let mut order = vec![0];
+        while order.len() < 6 {
+            order.push(next_index(*order.last().unwrap(), tracks.len()).unwrap());
+        }
+        assert_eq!(order, [0, 1, 2, 3, 4, 0]);
         assert_eq!(next_index(0, 1), Some(0));
         assert_eq!(next_index(0, 0), None);
+    }
+
+    #[test]
+    fn every_track_is_an_ogg_vorbis_asset() {
+        for track in Playlist::default().tracks {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(&track);
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{track}: {e}"));
+            let duration = ogg_vorbis_duration(&bytes).unwrap_or_else(|| panic!("{track}: not Ogg Vorbis"));
+            assert!(duration > 60.0, "{track}: {duration}");
+        }
     }
 
     #[test]
