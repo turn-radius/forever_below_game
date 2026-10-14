@@ -118,6 +118,29 @@ impl IconCache {
         self.drawn.contains(&image.into())
     }
 
+    /// How many icons are made or being made.
+    pub fn len(&self) -> usize {
+        self.images.len()
+    }
+
+    /// Whether no icon has been asked for.
+    pub fn is_empty(&self) -> bool {
+        self.images.is_empty()
+    }
+
+    /// How many icons are being drawn now.
+    pub fn drawing_count(&self) -> usize {
+        self.drawing.len()
+    }
+
+    /// Forgets every icon that is drawn and not drawing, so each is made again when next asked
+    /// for (the soak's `FB_SOAK_CHURN`, to make and take down many icon cameras).
+    pub fn forget_drawn(&mut self) {
+        let busy: HashSet<AssetId<Image>> = self.drawing.iter().map(|d| d.image).chain(self.queued.iter().map(|q| q.2.id())).collect();
+        self.images.retain(|_, image| busy.contains(&image.id()));
+        self.drawn.retain(|id| busy.contains(id));
+    }
+
     /// Records the icon in `image` as drawn, as [`draw_icons`] does.
     #[cfg(test)]
     pub(super) fn mark_drawn(&mut self, image: impl Into<AssetId<Image>>) {
