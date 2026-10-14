@@ -32,7 +32,8 @@ pub fn cells(units: f32) -> u8 {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
     pub kind: Kind,
-    /// Where it is worn or held; `None` for goods.
+    /// Where it is worn or held: always for gear, and for a good only if it is a light carried
+    /// in the hand ([`held_light_slot`]); `None` for every other good.
     pub slot: Option<Slot>,
     pub tags: Vec<Tag>,
     pub stats: Stats,
@@ -145,7 +146,7 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     } else if let Some(row) = goods().get(base) {
         Profile {
             kind: Kind::Good,
-            slot: None,
+            slot: held_light_slot(family),
             tags: if row.food { vec![Tag::Food] } else { vec![] },
             stats: Stats { weight: row.weight, ..Stats::default() },
             footprint: row.footprint,
@@ -167,6 +168,14 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
         p.packable = false;
     }
     p
+}
+
+/// Where a good that is a hand-held light is held: the off hand, where `data/bases.json` puts
+/// the gear `Torch` and `Lantern`. A spare torch is a torch, so it can be held wherever it is
+/// found (pack, chest or floor) without becoming gear: it stays common, plain and described.
+/// The plate had it only as a pack good; holding it is this port's own.
+pub fn held_light_slot(family: Family) -> Option<Slot> {
+    matches!(family, Family::Torch | Family::Lantern).then_some(Slot::Offhand)
 }
 
 fn gear(slot: Slot, tags: &[Tag], stats: Stats, footprint: [u8; 2]) -> Profile {
@@ -386,10 +395,13 @@ mod tests {
     fn every_base_has_a_profile() {
         for (name, _) in ARMORY_BASES {
             for seed in [1, 1207] {
-                let (_, p) = rolled(name, seed);
+                let (shape, p) = rolled(name, seed);
                 assert!(p.stats.weight > 0.0, "{name}");
                 assert!((1..=9).contains(&p.footprint.cols) && (1..=9).contains(&p.footprint.rows), "{name}: {:?}", p.footprint);
-                assert_eq!(p.kind == Kind::Gear, p.slot.is_some(), "{name}");
+                match p.kind {
+                    Kind::Gear => assert!(p.slot.is_some(), "{name}"),
+                    Kind::Good => assert_eq!(p.slot, held_light_slot(shape.family()), "{name}"),
+                }
                 if p.tags.contains(&Tag::Weapon) {
                     assert!(p.stats.damage.is_some(), "{name}");
                 }
@@ -452,6 +464,8 @@ mod tests {
         assert_eq!(rolled("Lantern", 3).1.stats.light, 30.0);
         let (_, bread) = rolled("Bread", 3);
         assert_eq!((bread.kind, bread.stack), (Kind::Good, 3));
+        let (_, spare) = rolled("Spare torch", 3);
+        assert_eq!((spare.kind, spare.slot, spare.description.as_str()), (Kind::Good, Some(Slot::Offhand), "Light 20 ft · one hour"));
         let (_, mantle) = rolled("Mantle", 3);
         assert_eq!((mantle.slot, mantle.stats.warmth), (Some(Slot::Cloak), 1.5));
     }

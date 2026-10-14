@@ -1880,6 +1880,24 @@ mod tests {
     }
 
     #[test]
+    fn every_torch_and_lantern_lying_in_a_level_can_be_held_in_the_off_hand() {
+        let mut lights = 0;
+        for seed in 1..=32 {
+            for spot in fb_level::generate(seed).items.iter().filter(|s| matches!(s.family, Family::Torch | Family::Lantern)) {
+                let item = fb_items::roll_loot(spot.family, spot.seed).unwrap();
+                let (base, name) = (item.base.clone(), item.title().to_string());
+                let mut inventory = Inventory::default();
+                let id = inventory.add(item);
+                assert_eq!(inventory.target_slot(id), Some(fb_items::Slot::Offhand), "seed {seed}: {base} ({name})");
+                inventory.equip(id, fb_items::Slot::Offhand).unwrap_or_else(|r| panic!("seed {seed}: {base} ({name}): {}", r.reason()));
+                assert_eq!(inventory.worn(fb_items::Slot::Offhand), Some(id));
+                lights += 1;
+            }
+        }
+        assert!(lights > 0, "no torch or lantern lies in levels 1 to 32");
+    }
+
+    #[test]
     fn floor_items_wear_their_own_condition() {
         let item = (1..500).filter_map(|seed| fb_items::roll_item("Sword", seed)).find(|i| i.rarity == Rarity::Common).unwrap();
         assert_eq!(appearance_of(&item.shape).condition, item.shape.condition());
