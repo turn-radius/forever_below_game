@@ -16,8 +16,8 @@
 //!   four named by role: `outer`, `inner`, `accent` and `liquid`.
 //! - A potion's brew is a typed [`Brew`]; the noun still reads the liquid's colour, so a
 //!   hand-tinted potion is named for the brew it looks like.
-//! - There is no glass material: glass is [`MaterialKind::Gem`] with its own tint, as are
-//!   liquids. Cork is tinted wood, wax is tinted bone, a bottle's paper label tinted cloth.
+//! - Glass is [`MaterialKind::Glass`] in its own tint, drawn see-through so the drink inside
+//!   shows; liquids are [`MaterialKind::Gem`] in theirs. Cork is tinted wood, wax is tinted bone, a bottle's paper label tinted cloth.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -36,7 +36,7 @@ use crate::slider::{Sliders, sliders};
 use procgen_rng::{Mulberry32, armory_stream_seed};
 use serde::{Deserialize, Serialize};
 
-use MaterialKind::{Bone, Brass, Cloth, Cord, Gem, Iron, Leather, Silver, Wood};
+use MaterialKind::{Bone, Brass, Cloth, Cord, Gem, Glass, Iron, Leather, Silver, Wood};
 
 /// The food and drink generator.
 pub struct Food;
@@ -202,7 +202,7 @@ pub struct Provision {
     pub accent: Rgb,
     /// The drink in a vessel.
     pub liquid: Rgb,
-    /// What a tankard, pie dish, waterskin or flask is made of ([`MaterialKind::Gem`] is glass).
+    /// What a tankard, pie dish, waterskin or flask is made of ([`MaterialKind::Glass`] for glass).
     pub vessel: MaterialKind,
     /// Wax over the stopper of a bottle, potion or flask, in its colour.
     pub seal: Option<Rgb>,
@@ -357,7 +357,7 @@ impl Generator for Food {
             F::Potion => if p.is_full() { Brew::nearest(p.liquid).name() } else { "Empty Vial" },
             F::Waterskin => if p.is_full() { "Waterskin" } else { "Empty Waterskin" },
             F::Flask => match p.vessel {
-                Gem => "Glass Flask",
+                Glass => "Glass Flask",
                 Leather => "Leather Flask",
                 Brass => "Brass Flask",
                 Silver => "Silver Flask",
@@ -557,7 +557,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: FoodStyle) -> FoodState {
             p.liquid = Rgb::hex(0x8fa8b0);
         }
         F::Flask => {
-            p.vessel = *rng.weighted(&[(Leather, 3), (Brass, 2), (Silver, 2), (Iron, 1), (Gem, 2), (Wood, 1)]);
+            p.vessel = *rng.weighted(&[(Leather, 3), (Brass, 2), (Silver, 2), (Iron, 1), (Glass, 2), (Wood, 1)]);
             p.outer = pick_rgb(rng, &[0x6a8a7a, 0x8aa0b0, 0x7a5a3a]);
             p.liquid = Rgb::hex(0xc8a040);
             p.fill = rng.range_f32(0.2, 1.0);
@@ -661,7 +661,7 @@ fn glowing(a: &mut Parts, name: &'static str, mesh: MeshBuilder, color: Rgb, glo
 
 /// Glass in its own colour.
 fn glass(a: &mut Parts, mesh: MeshBuilder, color: Rgb) {
-    a.add_tinted("glass", mesh, Gem, color);
+    a.add_tinted("glass", mesh, Glass, color);
 }
 
 /// The drink inside a vessel: no outline, since it shows through glass or over a rim.
@@ -1480,7 +1480,7 @@ fn flask(p: &Provision, a: &mut Parts) {
     // Stood on edge: the faces look forward and back.
     body.rotate_x(FRAC_PI_2).translate([0.0, r, 0.0]);
     let neck = lathe(&[[r * 0.2, r * 1.85], [r * 0.17, r * 2.25], [r * 0.23, r * 2.3], [r * 0.2, r * 2.38]], &LatheOptions { cap_start: false, ..LatheOptions::new(20, Shading::SMOOTH) });
-    let is_glass = p.vessel == Gem;
+    let is_glass = p.vessel == Glass;
     if is_glass {
         glass(a, body, p.outer);
         glass(a, neck, p.outer);

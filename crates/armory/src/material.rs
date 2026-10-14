@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The prototype's `MATS` list, plus the kinds other families need: cut stones (which carry
-/// their own colour), cloth, paint over wood, and food.
+/// their own colour), glass, cloth, paint over wood, and food.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MaterialKind {
@@ -21,6 +21,8 @@ pub enum MaterialKind {
     #[serde(rename = "string")]
     Cord,
     Gem,
+    /// Blown glass: bottles, vials, flasks and lantern chimneys, drawn see-through.
+    Glass,
     Cloth,
     /// Paint over wood (shield faces, chests).
     Paint,
@@ -48,6 +50,7 @@ impl MaterialKind {
             MaterialKind::Leather => "Leather",
             MaterialKind::Cord => "Cord",
             MaterialKind::Gem => "Jewelled",
+            MaterialKind::Glass => "Glass",
             MaterialKind::Cloth => "Cloth",
             MaterialKind::Paint => "Painted",
             MaterialKind::Food => "",
@@ -61,7 +64,8 @@ impl MaterialKind {
             MaterialKind::Brass => 2,
             MaterialKind::Wood => 3,
             MaterialKind::Leather | MaterialKind::Cord => 4,
-            MaterialKind::Gem => 5,
+            // Glass clouds and cracks as a cut stone does.
+            MaterialKind::Gem | MaterialKind::Glass => 5,
             MaterialKind::Gold => 6,
             MaterialKind::Silver => 7,
             MaterialKind::Bone => 8,

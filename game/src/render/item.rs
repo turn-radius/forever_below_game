@@ -5,6 +5,7 @@ use armory::{ItemMesh, MaterialKind, Part, Rgb, cond::Condition, palette::Palett
 use bevy::{
     asset::RenderAssetUsages,
     ecs::system::SystemParam,
+    light::NotShadowCaster,
     mesh::{Indices, PrimitiveTopology},
     platform::collections::HashMap,
     prelude::*,
@@ -20,6 +21,7 @@ use super::toon::{Decay, MinWidth, Pattern, ToonBands, ToonExtension, ToonMateri
 pub struct ItemPalette {
     pub materials: Palette,
     pub gem: Rgb,
+    pub glass: Rgb,
     pub cloth: Rgb,
     pub paint: Rgb,
     pub food: Rgb,
@@ -27,11 +29,13 @@ pub struct ItemPalette {
 
 impl ItemPalette {
     /// The Armory's render colours (the prototype's third `PALETTES` entry: iron `#a3aab0`,
-    /// brass `#c29b48`, wood `#8a6a45`, leather `#2f3a33`). Gem, cloth, paint and food are our
-    /// own picks: a sapphire blue, undyed wool, oxblood paint and a bread-crust brown.
+    /// brass `#c29b48`, wood `#8a6a45`, leather `#2f3a33`) and its glass (`glassMat('#dfe9ee')`).
+    /// Gem, cloth, paint and food are our own picks: a sapphire blue, undyed wool, oxblood
+    /// paint and a bread-crust brown.
     pub const ARMORY: ItemPalette = ItemPalette {
         materials: Palette::PRESETS[2],
         gem: Rgb::hex(0x3f6fb0),
+        glass: Rgb::hex(0xdfe9ee),
         cloth: Rgb::hex(0x8c7b62),
         paint: Rgb::hex(0x7a2e26),
         food: Rgb::hex(0xb0814a),
@@ -42,6 +46,7 @@ impl ItemPalette {
             MaterialKind::Cloth => self.cloth,
             MaterialKind::Paint => self.paint,
             MaterialKind::Food => self.food,
+            MaterialKind::Glass => self.glass,
             _ => self.gem,
         })
     }
@@ -99,9 +104,11 @@ impl ItemAppearance {
             Some(MaterialKind::Gem) => 0.25 + part.glow * 0.45,
             _ => part.glow * 0.45,
         };
+        let see_through = is_see_through(part);
         ToonMaterial {
             base: StandardMaterial {
-                base_color: Color::srgb(colour.0, colour.1, colour.2),
+                base_color: Color::srgba(colour.0, colour.1, colour.2, if see_through { GLASS_OPACITY } else { 1.0 }),
+                alpha_mode: if see_through { AlphaMode::Blend } else { AlphaMode::Opaque },
                 perceptual_roughness: 1.0,
                 reflectance: 0.0,
                 ..default()
@@ -120,6 +127,16 @@ impl ItemAppearance {
             },
         }
     }
+}
+
+/// How much of the light behind it glass stops, at its thinnest: the prototype's `glassMat`
+/// opacity (0.32; its bottles use 0.3). The toon shader thickens it towards the silhouette.
+pub const GLASS_OPACITY: f32 = 0.32;
+
+/// Whether a part is drawn see-through (glass), blended over what lies behind it, with no
+/// shadow of its own and its ink hull drawn after it.
+pub fn is_see_through(part: &Part) -> bool {
+    part.material == Some(MaterialKind::Glass)
 }
 
 /// How much of its wear a part shows, from its glow: 1 for an unlit part, falling to 0 for one
@@ -184,12 +201,13 @@ pub struct InkOutline;
 
 /// Outline materials shared between items with the same outline settings, so hulls batch.
 #[derive(Resource, Default)]
-pub struct OutlineMaterials(HashMap<[u32; 6], Handle<OutlineMaterial>>);
+pub struct OutlineMaterials(HashMap<[u32; 7], Handle<OutlineMaterial>>);
 
 impl OutlineMaterials {
     fn get_or_add(&mut self, assets: &mut Assets<OutlineMaterial>, material: OutlineMaterial) -> Handle<OutlineMaterial> {
         let [r, g, b, a] = material.color.to_f32_array();
-        let key = [r, g, b, a, material.width_px, material.max_width].map(f32::to_bits);
+        let [r, g, b, a, width, max] = [r, g, b, a, material.width_px, material.max_width].map(f32::to_bits);
+        let key = [r, g, b, a, width, max, material.see_through as u32];
         self.0.entry(key).or_insert_with(|| assets.add(material)).clone()
     }
 }
@@ -214,16 +232,23 @@ impl ItemSpawner<'_, '_> {
     /// same system: each `Commands` has its own queue, and the other one may apply first.
     pub fn spawn(&mut self, item: &ItemMesh, appearance: &ItemAppearance) -> EntityCommands<'_> {
         let outline = self.shared_outlines.get_or_add(&mut self.outline_materials, appearance.outline);
+        let glass_outline =
+            self.shared_outlines.get_or_add(&mut self.outline_materials, OutlineMaterial { see_through: true, ..appearance.outline });
         let root = self.commands.spawn((ArmoryItem, Transform::default(), Visibility::default())).id();
         for part in &item.parts {
             let mesh = self.meshes.add(part_to_mesh(part));
             let material = self.toon_materials.add(appearance.material_for(part));
-            let part_entity = self
-                .commands
-                .spawn((ArmoryPart, Name::new(part.name), Mesh3d(mesh.clone()), MeshMaterial3d(material), ChildOf(root)))
-                .id();
+            let see_through = is_see_through(part);
+            let mut part_entity =
+                self.commands.spawn((ArmoryPart, Name::new(part.name), Mesh3d(mesh.clone()), MeshMaterial3d(material), ChildOf(root)));
+            if see_through {
+                // Glass lets light through: its shadow would darken the drink inside it.
+                part_entity.insert(NotShadowCaster);
+            }
+            let part_entity = part_entity.id();
             if part.outline {
-                self.commands.spawn((InkOutline, Mesh3d(mesh), MeshMaterial3d(outline.clone()), ChildOf(part_entity)));
+                let ink = if see_through { glass_outline.clone() } else { outline.clone() };
+                self.commands.spawn((InkOutline, Mesh3d(mesh), MeshMaterial3d(ink), ChildOf(part_entity)));
             }
         }
         self.commands.entity(root)
@@ -333,6 +358,28 @@ mod tests {
             assert!((pattern.around - expected).abs() <= 2.0, "{} {expected}", pattern.around);
             assert_eq!(pattern.around % 2.0, 0.0);
         }
+    }
+
+    #[test]
+    fn glass_is_see_through_and_keeps_its_ink() {
+        let appearance = ItemAppearance::default();
+        let glass = Part { material: Some(MaterialKind::Glass), outline: true, ..cylinder(1.0, 3.0, 24) };
+        let drink = Part { material: Some(MaterialKind::Gem), outline: false, ..cylinder(0.9, 2.0, 24) };
+        let material = appearance.material_for(&glass);
+        assert_eq!(material.base.alpha_mode, AlphaMode::Blend);
+        assert_eq!(material.base.base_color.alpha(), GLASS_OPACITY);
+        assert_eq!(material.base.base_color.with_alpha(1.0), { let Rgb(r, g, b) = appearance.palette.glass; Color::srgb(r, g, b) });
+        assert!(is_see_through(&glass) && glass.outline);
+        // The drink inside, and every opaque part, draw as before.
+        let inside = appearance.material_for(&drink);
+        assert_eq!(inside.base.alpha_mode, AlphaMode::Opaque);
+        assert_eq!(inside.base.base_color.alpha(), 1.0);
+        // A see-through hull goes in the transparent pass, sorted after the glass.
+        let ink = OutlineMaterial { see_through: true, ..default() };
+        assert_eq!(ink.alpha_mode(), AlphaMode::Blend);
+        assert!(ink.depth_bias() > 0.0);
+        assert_eq!(OutlineMaterial::default().alpha_mode(), AlphaMode::Opaque);
+        assert_eq!(OutlineMaterial::default().depth_bias(), 0.0);
     }
 
     #[test]

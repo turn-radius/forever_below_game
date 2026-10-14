@@ -281,7 +281,16 @@ fn fragment(
     let glow = srgb_to_linear(base) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
 
     var out: FragmentOutput;
-    out.color = vec4<f32>(lit + glow, pbr_input.material.base_color.a);
+    // See-through glass (alpha below 1) stops more light where it is seen edge on, as a
+    // curved pane looks thicker at its rim. A cubic of 1 - |N.V| is our own stand-in for
+    // Fresnel, here only so a bottle's outline reads inside its ink line.
+    var alpha = pbr_input.material.base_color.a;
+    if alpha < 1.0 {
+        let to_eye = normalize(view_bindings::view.world_position - pbr_input.world_position.xyz);
+        let edge = 1.0 - abs(dot(pbr_input.N, to_eye));
+        alpha = mix(alpha, 0.85, edge * edge * edge);
+    }
+    out.color = vec4<f32>(lit + glow, alpha);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

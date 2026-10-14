@@ -7,9 +7,10 @@ use armory::{
     fabric::{SurfacePattern, Wrap},
 };
 use bevy::{
-    pbr::{ExtendedMaterial, MaterialExtension},
+    mesh::MeshVertexBufferLayoutRef,
+    pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, MeshPipelineKey},
     prelude::*,
-    render::render_resource::{AsBindGroup, ShaderType},
+    render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError},
     shader::ShaderRef,
 };
 
@@ -209,6 +210,22 @@ impl MaterialExtension for ToonExtension {
     // lighting pass would apply instead.
     fn fragment_shader() -> ShaderRef {
         SHADER_PATH.into()
+    }
+
+    /// Glass (alpha-blended) writes depth, which Bevy's blended pipelines leave off, so the
+    /// ink hull drawn after it (`OutlineMaterial::see_through`) shows only outside the glass.
+    /// Glass is drawn front faces only, so a single pane never hides itself.
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        let blended = key.mesh_key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_ALPHA;
+        if blended && let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.depth_write_enabled = Some(true);
+        }
+        Ok(())
     }
 }
 
