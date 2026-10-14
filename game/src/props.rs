@@ -169,7 +169,7 @@ fn lay_out_props(
 /// Opens container prop `entity`: its grid goes up beside what lies underfoot with the
 /// inventory screen, and a lidded one is redrawn standing open, once.
 #[allow(clippy::too_many_arguments)]
-fn open_container(
+pub fn open_container(
     commands: &mut Commands,
     spawner: &mut ItemSpawner,
     level: &Level,

@@ -23,6 +23,7 @@ pub mod player;
 pub mod props;
 pub mod render;
 pub mod settings;
+pub mod soak;
 pub mod title;
 pub mod turntable;
 pub mod ui;

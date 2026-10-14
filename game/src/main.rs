@@ -21,6 +21,7 @@ use forever_below::{
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
     settings::SettingsPlugin,
+    soak::SoakPlugin,
     title::{NewDelveSeed, TitlePlugin},
     turntable::{Focus, Turntable, TurntablePlugin},
 };
@@ -60,6 +61,9 @@ fn main() -> AppExit {
     }
     if let Some(probe) = FrameTimeProbe::from_env() {
         app.add_plugins(probe);
+    }
+    if let Some(soak) = SoakPlugin::from_env() {
+        app.add_plugins(soak);
     }
     app.run()
 }

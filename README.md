@@ -113,6 +113,11 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
 | `FB_FRAME_TIME=<frames>` | prints Bevy's smoothed frame time at each listed frame (`240,270,300`) and quits after the last; with `FB_DEBUG_POSE`, measures a view's frame rate in the window at vsync |
+| `FB_SOAK=<seconds>` | plays the level by itself for that long, then quits: walks random paths, fights the creatures it meets, picks up, equips and drops things, opens containers, the inventory and the menu, and logs a `soak:` line to stderr every 10 s (entities, meshes, images, materials, cameras, readbacks, icons, render phases, frame time). With `--title` it begins a new delve from the title, and after a death begins another. For finding crashes and leaks that only show after a long session |
+| `FB_SOAK_SEED=<n>` | with `FB_SOAK`, seeds the autopilot's choices (1 by default), so parallel soaks on one level take different ways |
+| `FB_SOAK_CHURN=1` | with `FB_SOAK`, forgets every inventory icon at each report, so they are all drawn again by fresh icon cameras |
+
+A soak of twenty minutes: `RUST_BACKTRACE=1 BEVY_ASSET_ROOT=game FB_SOAK=1200 ./target/debug/forever_below --seed 1207 2> soak.log`, then `grep soak: soak.log` for the counts and `grep -A30 panicked soak.log` for a crash.
 
 Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_ASSET_ROOT=game` so it finds the music and fonts; `cargo run` finds them on its own.
 
