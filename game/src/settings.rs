@@ -7,7 +7,10 @@
 
 use std::path::{Path, PathBuf};
 
-use bevy::prelude::*;
+use bevy::{
+    prelude::*,
+    window::{MonitorSelection, PrimaryWindow, WindowMode},
+};
 use serde::{Deserialize, Serialize};
 
 /// Settings the player chooses, saved between runs. Fields missing from the file take their
@@ -17,19 +20,114 @@ use serde::{Deserialize, Serialize};
 pub struct GameSettings {
     /// How loud the music plays, 0 (silent) to 1 (as mixed). Scales `audio::MusicSettings`.
     pub music_volume: f32,
+    /// How loud sound effects play, 0 (silent) to 1 (as recorded): the door's slam.
+    pub sound_volume: f32,
+    /// Mouse look speed as a multiple of the usual, 0.25 to 3.
+    pub mouse_sensitivity: f32,
+    /// Moving the mouse up looks down.
+    pub invert_mouse_y: bool,
+    /// Borderless fullscreen on the window's monitor, rather than a window.
+    pub fullscreen: bool,
 }
 
 impl Default for GameSettings {
     fn default() -> Self {
-        GameSettings { music_volume: 1.0 }
+        GameSettings { music_volume: 1.0, sound_volume: 1.0, mouse_sensitivity: 1.0, invert_mouse_y: false, fullscreen: false }
+    }
+}
+
+/// One setting the menu shows: a slider over a range, or a toggle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Setting {
+    MusicVolume,
+    SoundVolume,
+    MouseSensitivity,
+    InvertMouseY,
+    Fullscreen,
+}
+
+impl Setting {
+    /// Every setting, in the order the menu lists them.
+    pub const ALL: [Setting; 5] = [Setting::MusicVolume, Setting::SoundVolume, Setting::MouseSensitivity, Setting::InvertMouseY, Setting::Fullscreen];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Setting::MusicVolume => "Music volume",
+            Setting::SoundVolume => "Sound volume",
+            Setting::MouseSensitivity => "Mouse sensitivity",
+            Setting::InvertMouseY => "Invert mouse Y",
+            Setting::Fullscreen => "Fullscreen",
+        }
+    }
+
+    /// A slider's range; `None` for a toggle.
+    pub fn range(self) -> Option<(f32, f32)> {
+        match self {
+            Setting::MusicVolume | Setting::SoundVolume => Some((0.0, 1.0)),
+            Setting::MouseSensitivity => Some((0.25, 3.0)),
+            Setting::InvertMouseY | Setting::Fullscreen => None,
+        }
+    }
+
+    /// Its value in `settings`; a toggle is 0 or 1.
+    pub fn get(self, settings: &GameSettings) -> f32 {
+        match self {
+            Setting::MusicVolume => settings.music_volume,
+            Setting::SoundVolume => settings.sound_volume,
+            Setting::MouseSensitivity => settings.mouse_sensitivity,
+            Setting::InvertMouseY => settings.invert_mouse_y as u8 as f32,
+            Setting::Fullscreen => settings.fullscreen as u8 as f32,
+        }
+    }
+
+    /// Sets it to `value`, pulled into its range (a non-number becomes the default); a toggle
+    /// is on from 0.5.
+    pub fn set(self, settings: &mut GameSettings, value: f32) {
+        let value = match self.range() {
+            Some(_) if value.is_nan() => self.get(&GameSettings::default()),
+            Some((low, high)) => value.clamp(low, high),
+            None => value,
+        };
+        match self {
+            Setting::MusicVolume => settings.music_volume = value,
+            Setting::SoundVolume => settings.sound_volume = value,
+            Setting::MouseSensitivity => settings.mouse_sensitivity = value,
+            Setting::InvertMouseY => settings.invert_mouse_y = value >= 0.5,
+            Setting::Fullscreen => settings.fullscreen = value >= 0.5,
+        }
+    }
+
+    /// How far along its range it is, 0 to 1 (a toggle: off 0, on 1).
+    pub fn fraction(self, settings: &GameSettings) -> f32 {
+        let (low, high) = self.range().unwrap_or((0.0, 1.0));
+        ((self.get(settings) - low) / (high - low)).clamp(0.0, 1.0)
+    }
+
+    /// Sets it `fraction` (0 to 1) of the way along its range.
+    pub fn set_fraction(self, settings: &mut GameSettings, fraction: f32) {
+        let (low, high) = self.range().unwrap_or((0.0, 1.0));
+        self.set(settings, low + fraction.clamp(0.0, 1.0) * (high - low));
+    }
+
+    /// Its value as the menu shows it: "70%", "1.25\u{d7}", "On".
+    pub fn shown(self, settings: &GameSettings) -> String {
+        let value = self.get(settings);
+        match self {
+            Setting::MusicVolume | Setting::SoundVolume => format!("{:.0}%", value * 100.0),
+            Setting::MouseSensitivity => format!("{value:.2}\u{d7}"),
+            Setting::InvertMouseY | Setting::Fullscreen => if value >= 0.5 { "On" } else { "Off" }.into(),
+        }
     }
 }
 
 impl GameSettings {
     /// These settings with every value pulled into its range (a non-number becomes the default).
-    pub fn clamped(self) -> Self {
-        let music_volume = if self.music_volume.is_nan() { GameSettings::default().music_volume } else { self.music_volume.clamp(0.0, 1.0) };
-        GameSettings { music_volume }
+    pub fn clamped(mut self) -> Self {
+        for setting in Setting::ALL {
+            let value = setting.get(&self);
+            setting.set(&mut self, value);
+        }
+        self
     }
 
     /// The settings saved at `path`, or the defaults if there are none or they can't be read.
@@ -102,7 +200,24 @@ impl Plugin for SettingsPlugin {
         }
         let file = app.world().resource::<SettingsFile>().clone();
         let settings = file.0.as_deref().map(GameSettings::load).unwrap_or_default();
-        app.insert_resource(settings).add_systems(Last, save_settings);
+        app.insert_resource(settings).add_systems(Update, apply_window_settings).add_systems(Last, save_settings);
+    }
+}
+
+/// The window mode for the fullscreen setting: borderless on the window's own monitor, which
+/// keeps the desktop's resolution and switches without a mode change.
+pub fn window_mode(fullscreen: bool) -> WindowMode {
+    if fullscreen { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed }
+}
+
+/// Puts the window in the mode the settings ask for, at the start and whenever they change.
+fn apply_window_settings(settings: Res<GameSettings>, window: Option<Single<&mut Window, With<PrimaryWindow>>>) {
+    let Some(mut window) = window else { return };
+    if settings.is_changed() || window.is_added() {
+        let mode = window_mode(settings.fullscreen);
+        if window.mode != mode {
+            window.mode = mode;
+        }
     }
 }
 
@@ -143,6 +258,53 @@ mod tests {
     }
 
     #[test]
+    fn older_files_keep_their_music_and_take_defaults_for_the_rest() {
+        let path = scratch("older");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"music_volume": 0.4}"#).unwrap();
+        assert_eq!(GameSettings::load(&path), GameSettings { music_volume: 0.4, ..GameSettings::default() });
+        std::fs::write(&path, r#"{"sound_volume": -1, "mouse_sensitivity": 9, "invert_mouse_y": true}"#).unwrap();
+        let loaded = GameSettings::load(&path);
+        assert_eq!((loaded.sound_volume, loaded.mouse_sensitivity, loaded.invert_mouse_y, loaded.fullscreen), (0.0, 3.0, true, false));
+    }
+
+    #[test]
+    fn sliders_and_toggles_stay_in_range() {
+        let mut settings = GameSettings::default();
+        Setting::MouseSensitivity.set_fraction(&mut settings, 0.0);
+        assert_eq!(settings.mouse_sensitivity, 0.25);
+        Setting::MouseSensitivity.set_fraction(&mut settings, 2.0);
+        assert_eq!(settings.mouse_sensitivity, 3.0);
+        assert_eq!(Setting::MouseSensitivity.fraction(&settings), 1.0);
+        Setting::SoundVolume.set(&mut settings, f32::NAN);
+        assert_eq!(settings.sound_volume, 1.0);
+        Setting::SoundVolume.set_fraction(&mut settings, 0.25);
+        assert_eq!(Setting::SoundVolume.shown(&settings), "25%");
+        Setting::Fullscreen.set_fraction(&mut settings, 1.0);
+        assert!(settings.fullscreen);
+        assert_eq!(Setting::Fullscreen.shown(&settings), "On");
+        assert_eq!(Setting::MouseSensitivity.shown(&GameSettings::default()), "1.00\u{d7}");
+        for setting in Setting::ALL {
+            let default = GameSettings::default();
+            let mut moved = default;
+            setting.set_fraction(&mut moved, setting.fraction(&default));
+            assert_eq!(moved, default, "{setting:?} round-trips through its fraction");
+        }
+    }
+
+    #[test]
+    fn fullscreen_applies_to_the_window_within_the_frame() {
+        let mut app = App::new();
+        app.insert_resource(SettingsFile(None)).add_plugins(SettingsPlugin);
+        let window = app.world_mut().spawn((Window::default(), PrimaryWindow)).id();
+        app.update();
+        assert_eq!(app.world().get::<Window>(window).unwrap().mode, WindowMode::Windowed);
+        app.world_mut().resource_mut::<GameSettings>().fullscreen = true;
+        app.update();
+        assert_eq!(app.world().get::<Window>(window).unwrap().mode, window_mode(true));
+    }
+
+    #[test]
     fn settings_survive_a_restart() {
         let path = scratch("restart");
         let file = SettingsFile(Some(path.clone()));
@@ -150,13 +312,14 @@ mod tests {
         first.insert_resource(file.clone()).add_plugins(SettingsPlugin);
         first.update();
         assert!(!path.exists(), "nothing written until something changes");
-        first.world_mut().resource_mut::<GameSettings>().music_volume = 0.3;
+        let chosen = GameSettings { music_volume: 0.3, sound_volume: 0.6, mouse_sensitivity: 1.5, invert_mouse_y: true, fullscreen: true };
+        *first.world_mut().resource_mut::<GameSettings>() = chosen;
         first.update();
         assert!(path.exists());
 
         let mut second = App::new();
         second.insert_resource(file).add_plugins(SettingsPlugin);
-        assert_eq!(second.world().resource::<GameSettings>().music_volume, 0.3);
+        assert_eq!(*second.world().resource::<GameSettings>(), chosen);
     }
 
     #[test]

@@ -103,6 +103,11 @@ impl UiFonts {
     }
 }
 
+/// A node's rectangle in logical pixels.
+pub fn node_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Rect {
+    Rect::from_center_size(transform.translation * node.inverse_scale_factor, node.size * node.inverse_scale_factor)
+}
+
 /// `text` cut into runs of words, each marked whether it is a value: a word with a digit in
 /// it ("3", "1d8+1", "2×3", "×0.85"). Spaces stay with the word before them.
 pub fn value_runs(text: &str) -> Vec<(String, bool)> {

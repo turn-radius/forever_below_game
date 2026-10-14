@@ -10,7 +10,7 @@ use fb_items::{Item, Kind, Rarity, stats::Stats};
 use super::icon::Icons;
 use super::items::{Inventory, ItemId};
 use super::{Dragging, Hovered};
-use crate::play::ScreenOpen;
+use crate::play::{Screen, ScreenOpen};
 use crate::ui::{BAD, BG, FAINT, GOLD, INK, LINE, MUTED, UiFonts, numbers_line, rarity_color};
 
 /// One affix on the card: what it changes, its name, and whether it is a flaw.
@@ -317,7 +317,8 @@ pub fn show_card(
     mut shown: Local<Option<ItemId>>,
 ) {
     let aimed_item = aimed.and_then(|a| a.0).and_then(|entity| floor.get(entity).ok()).map(|f| f.id);
-    let subject = card_subject(open.0, *hovered, dragging.0.is_some_and(|d| d.active), aimed_item);
+    // No card over the menu.
+    let subject = if open.is(Screen::Menu) { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
     for (card, mut node, mut visibility, computed, target) in &mut cards {
         let Some((id, anchor)) = subject.filter(|(id, _)| inventory.item(*id).is_some()) else {
             *visibility = Visibility::Hidden;
