@@ -13,7 +13,7 @@ use bevy::{
 use fb_level::{CELL, Level};
 
 use crate::light::point_light;
-use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
+use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, level_has_focus};
 
 /// The body's radius on the floor in world units (35 cm).
 pub const BODY_RADIUS: f32 = 3.5;
@@ -44,7 +44,7 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (spawn_player, grab_cursor))
-            .add_systems(Update, (toggle_cursor_grab, look, walk, bob_head).chain());
+            .add_systems(Update, (toggle_cursor_grab, look, walk, bob_head).chain().run_if(level_has_focus));
     }
 }
 
@@ -127,7 +127,8 @@ fn toggle_cursor_grab(
     }
 }
 
-fn set_grab(cursor: &mut CursorOptions, grabbed: bool) {
+/// Takes the mouse for looking round (`true`) or frees it for a screen (`false`).
+pub fn set_grab(cursor: &mut CursorOptions, grabbed: bool) {
     cursor.visible = !grabbed;
     cursor.grab_mode = if grabbed { CursorGrabMode::Locked } else { CursorGrabMode::None };
 }

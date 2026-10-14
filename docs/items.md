@@ -146,6 +146,15 @@ Departures from the prototype's bags: the front pocket and bedroll roll only on 
 
 Departures from the prototype's chests: each style rolls only the options it shows. Iron hoops go on barrels, shipping straps and rope handles on crates (the prototype ignored `bands` and `handles` there), and `lock` is an amphora's lid. Coffers and strongboxes can stand open as well as chests. A coffer's crowning stone is a gemstone in the state, not the second colour, and stencils can go on barrels as well as crates. A lidded box is hollow, with walls, a rim and a darker inside, so an open lid shows a real interior with the hoard heaped in it. Its lid turns on hinges and carries its hasp and bands. An amphora is clay (the stone material) tinted with its glaze colour and painted with its glaze pattern; the glaze is a `Fabric`, like a bag's cloth, so both reach the shader as a `SurfacePattern`. Stencils are the paint material.
 
+## The inventory screen
+
+Tab opens the plate's inventory leaf over the level (`game/src/inventory/`): a parchment ledger with each carried container as its grid, items drawn as icons at their footprints, dragged between cells and grids and turned with R or the right mouse button, as in the plate's `renderGrids` and drag code. The level keeps drawing behind it; the mouse is freed and the body stops. The grid rules (`inventory::grid`) and where every item is (`inventory::items::Inventory`: worn, in a container's grid at a cell and turn, or loose on the floor) are plain Rust. Where it departs from the plate:
+
+- The delver starts wearing a belt, and its 4×2 pouch is the first grid. The plate started from an outfit; there is no outfit yet.
+- Carried grids are the containers worn on the back and the belt, in that order (the plate's `containersOf`). Picking up a bag whose slot is free puts it on, so a pack found on the floor becomes a grid at once; anything else goes into the first grid with room for it, upright first and then turned (the plate's `stow` and `place`). Something with no room for it, or too long to pack, stays on the floor. Wearing a bag on pickup is this build's own rule.
+- The carried list in the corner of the HUD, and choosing from it with the number keys and the wheel and setting down with G, are gone: the screen does all of that.
+- Icons are rendered from each item's Armory mesh in the toon style, one camera per icon drawing into an image the shape of its footprint at 92 px a cell, posed with its longest side along its footprint's rows, then turned and tilted as the plate's item viewer looks (`(.32, .3, 1)`). Each is drawn for a second and kept, keyed by base, seed and turn. The plate drew its icons the same way into a cached canvas (`iconFor`).
+
 ## Classes
 
 `data/outfits.json`: Fighter, Ranger, Mage and Cleric, plus Freshly fallen and Scavenger. Each slot lists candidate bases, optionally with a leading probability. A class's set is rolled once per character, so the outfit you preview is the one you get.

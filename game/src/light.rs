@@ -151,14 +151,19 @@ impl StudioLight {
     /// The key as a camera child: spawn it with `ChildOf(camera)`. `exposure` is the camera's,
     /// so the key reads the same under any exposure.
     pub fn key_light(&self, exposure: &Exposure) -> (DirectionalLight, Transform) {
-        let (azimuth, elevation) = (self.azimuth.to_radians(), self.elevation.to_radians());
-        let from = Vec3::new(azimuth.sin() * elevation.cos(), elevation.sin(), azimuth.cos() * elevation.cos());
+        let from = self.key_from();
         // The toon shader divides direct light by PI, as Bevy's Lambert lobe does.
         let illuminance = self.key * std::f32::consts::PI / exposure.exposure();
         (
             DirectionalLight { color: Color::WHITE, illuminance, ..default() },
             Transform::from_translation(from * 10.0).looking_at(Vec3::ZERO, Vec3::Y),
         )
+    }
+
+    /// The unit direction the key comes from, in camera space.
+    pub fn key_from(&self) -> Vec3 {
+        let (azimuth, elevation) = (self.azimuth.to_radians(), self.elevation.to_radians());
+        Vec3::new(azimuth.sin() * elevation.cos(), elevation.sin(), azimuth.cos() * elevation.cos())
     }
 
     /// The fill, for the camera's `exposure`.
