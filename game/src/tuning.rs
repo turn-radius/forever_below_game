@@ -89,6 +89,11 @@ pub struct ViewTuning {
     /// only, so it shows in the dark and lights nothing. The user's call ("a faint shimmer");
     /// the value is our own tuning against captures. 0 turns it off.
     pub legendary_shimmer: f32,
+    /// How much larger than its own size a container standing in the level (`crate::props`)
+    /// is drawn, about where it stands: the user's call ("containers look small"). Its look
+    /// bounds and the floor it blocks grow with it. The level lays containers out for
+    /// `fb_level::CONTAINER_SCALE`, which this ships at.
+    pub container_scale: f32,
 }
 
 impl Default for ViewTuning {
@@ -102,6 +107,7 @@ impl Default for ViewTuning {
             aim_buffer_degrees: 2.0,
             aim_min_radius: 0.6,
             legendary_shimmer: 0.25,
+            container_scale: fb_level::CONTAINER_SCALE,
         }
     }
 }

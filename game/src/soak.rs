@@ -323,6 +323,7 @@ fn act(
     mut screen: ResMut<ScreenOpen>,
     mut showing: ResMut<OpenContainer>,
     level: Res<CurrentLevel>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
     mut spawner: crate::render::ItemSpawner,
 ) {
     if screen.0.is_some() {
@@ -341,7 +342,7 @@ fn act(
         soak.stats.picked += 1;
     }
     if let Some((entity, _, piece, &container)) = containers.iter().find(|(_, t, _, c)| !c.opened && t.translation().distance(at) < REACH * 0.8) {
-        crate::props::open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut screen, &mut showing, None);
+        crate::props::open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut screen, &mut showing, None, &tuning.as_deref().cloned().unwrap_or_default());
         soak.stats.opened += 1;
         return;
     }

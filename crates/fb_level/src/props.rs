@@ -60,6 +60,14 @@ impl FloorShape {
         }
     }
 
+    /// The same shape `factor` times as large.
+    pub fn scaled(self, factor: f32) -> FloorShape {
+        match self {
+            FloorShape::Round(r) => FloorShape::Round(r * factor),
+            FloorShape::Square { half_width, half_depth } => FloorShape::Square { half_width: half_width * factor, half_depth: half_depth * factor },
+        }
+    }
+
     /// How far it reaches along item X and item Z.
     fn half_extents(self) -> (f32, f32) {
         match self {
@@ -68,6 +76,12 @@ impl FloorShape {
         }
     }
 }
+
+/// How much larger than true Armory scale container props are drawn, and so the floor they
+/// cover: the user's call ("containers look small"), which makes a chest about a metre wide.
+/// The game draws them at its `container_scale` tuning, which ships at this value; placement
+/// here keeps to the constant so a seed lays out the same level whatever the tuning says.
+pub const CONTAINER_SCALE: f32 = 1.6;
 
 /// How far a chest's lid stands open once it has been opened (the Armory's `chest.open`,
 /// 0 shut to 1 thrown back). Chests are set far enough off the wall for it.
@@ -86,17 +100,11 @@ pub fn chest_state(style: ChestStyle, seed: u32, opened: bool) -> ChestState {
 impl Prop {
     /// The floor it covers ([`FloorShape`]), the largest any seed builds. Containers are sized
     /// from `armory::families::chests` at its largest size and widest shape, handles, locks and
-    /// hoops included; a test holds every style's mesh inside its shape.
+    /// hoops included, drawn [`CONTAINER_SCALE`] times; a test holds every style's mesh inside
+    /// its shape.
     pub fn floor_shape(self) -> FloorShape {
         match self {
-            Prop::Container { style, .. } => match style {
-                ChestStyle::Chest => FloorShape::Square { half_width: 4.5, half_depth: 2.4 },
-                ChestStyle::Strongbox => FloorShape::Square { half_width: 2.6, half_depth: 1.8 },
-                ChestStyle::Coffer => FloorShape::Square { half_width: 1.9, half_depth: 1.3 },
-                ChestStyle::Crate => FloorShape::Square { half_width: 3.9, half_depth: 2.6 },
-                ChestStyle::Barrel => FloorShape::Round(3.3),
-                ChestStyle::Amphora => FloorShape::Round(2.4),
-            },
+            Prop::Container { style, .. } => true_container_shape(style).scaled(CONTAINER_SCALE),
             Prop::Scenery { kind: Scenery::Pillar, .. } => {
                 let half = Scenery::Pillar.radius() * std::f32::consts::FRAC_1_SQRT_2;
                 FloorShape::Square { half_width: half, half_depth: half }
@@ -106,10 +114,10 @@ impl Prop {
     }
 
     /// Room it needs behind its back (item -Z) beyond its floor shape, in world units: a
-    /// chest's lid swings back over the hinges when it opens.
+    /// chest's lid swings back over the hinges when it opens, as far as it is drawn larger.
     pub fn room_behind(self) -> f32 {
         match self {
-            Prop::Container { style, .. } if style.is_lidded_box() => 1.8,
+            Prop::Container { style, .. } if style.is_lidded_box() => 1.8 * CONTAINER_SCALE,
             _ => 0.0,
         }
     }
@@ -117,6 +125,18 @@ impl Prop {
     /// Whether it is a container.
     pub fn is_container(self) -> bool {
         matches!(self, Prop::Container { .. })
+    }
+}
+
+/// The floor a container of `style` covers at true Armory scale.
+fn true_container_shape(style: ChestStyle) -> FloorShape {
+    match style {
+        ChestStyle::Chest => FloorShape::Square { half_width: 4.5, half_depth: 2.4 },
+        ChestStyle::Strongbox => FloorShape::Square { half_width: 2.6, half_depth: 1.8 },
+        ChestStyle::Coffer => FloorShape::Square { half_width: 1.9, half_depth: 1.3 },
+        ChestStyle::Crate => FloorShape::Square { half_width: 3.9, half_depth: 2.6 },
+        ChestStyle::Barrel => FloorShape::Round(3.3),
+        ChestStyle::Amphora => FloorShape::Round(2.4),
     }
 }
 
@@ -142,14 +162,18 @@ const PROP_GAP: f32 = 0.6;
 /// [`MOST_IN_A_ROOM`].
 const CELLS_PER_PROP: u32 = 9;
 const MOST_IN_A_ROOM: u32 = 5;
+/// Most a square container is turned off square to its wall, radians, so a row of them does
+/// not look ruled.
+const CONTAINER_TURN: f32 = 0.06;
 /// Chance that a room stands bare of props.
 const BARE_ROOM: f64 = 0.15;
 
 /// What a room's props are, by weight: mostly containers, with scenery among them.
 const KINDS: &[(PropKind, u32)] = &[(PropKind::Container, 9), (PropKind::Scenery(Scenery::Rubble), 4), (PropKind::Scenery(Scenery::Bones), 3), (PropKind::Scenery(Scenery::Pillar), 2)];
-/// Container styles, by weight. Strongboxes and coffers are small enough to lie about as
-/// loot (`generate::LOOT`'s chests) and are not furnished as props.
-const STYLES: &[(ChestStyle, u32)] = &[(ChestStyle::Chest, 2), (ChestStyle::Barrel, 3), (ChestStyle::Crate, 3), (ChestStyle::Amphora, 2)];
+/// Container styles, by weight. Every container is a prop: none lie about as loose loot
+/// (`generate::LOOT` has no chests), so strongboxes and coffers stand here too, now and then.
+const STYLES: &[(ChestStyle, u32)] =
+    &[(ChestStyle::Chest, 4), (ChestStyle::Barrel, 6), (ChestStyle::Crate, 6), (ChestStyle::Amphora, 4), (ChestStyle::Strongbox, 1), (ChestStyle::Coffer, 1)];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PropKind {
@@ -267,9 +291,14 @@ fn fit(level: &Level, nook: &Nook, prop: Prop, placed: &[PropSpot], occupied: &[
     let shape = prop.floor_shape();
     let (half_width, half_depth) = shape.half_extents();
     let back = nook.walls[0];
-    // Out from the back wall: its depth, the room it needs behind, and the wall's relief.
-    let out = (half_depth + prop.room_behind() + WALL_GAP) / CELL;
-    let across = (half_width + WALL_GAP) / CELL;
+    // Out from the back wall: its depth, the room it needs behind, and the wall's relief, and
+    // as far again as a container's small turn ([`CONTAINER_TURN`]) swings its corners.
+    let (sway_out, sway_across) = match shape {
+        FloorShape::Square { .. } if prop.is_container() => (half_width * CONTAINER_TURN.sin(), (half_depth + prop.room_behind()) * CONTAINER_TURN.sin()),
+        _ => (0.0, 0.0),
+    };
+    let out = (half_depth + prop.room_behind() + WALL_GAP + sway_out) / CELL;
+    let across = (half_width + WALL_GAP + sway_across) / CELL;
     if out * 2.0 > 1.0 || across * 2.0 > 1.0 {
         return None;
     }
@@ -301,7 +330,7 @@ fn fit(level: &Level, nook: &Nook, prop: Prop, placed: &[PropSpot], occupied: &[
     if matches!(shape, FloorShape::Round(_)) {
         yaw += rng.range_f32(-std::f32::consts::PI, std::f32::consts::PI);
     } else if prop.is_container() {
-        yaw += rng.range_f32(-0.06, 0.06);
+        yaw += rng.range_f32(-CONTAINER_TURN, CONTAINER_TURN);
     }
     let spot = PropSpot { x, y, yaw, prop };
 
@@ -369,6 +398,17 @@ mod tests {
             occupied[cell_index(level, p.x, p.y)] = true;
         }
         occupied
+    }
+
+    #[test]
+    fn a_chest_prop_is_about_a_metre_wide() {
+        // 10 units is a metre: a chest at its usual size and shape, drawn at its prop scale.
+        let state = chest_state(ChestStyle::Chest, 1207, false);
+        let (lo, hi) = Chests::build(&state).bounds().unwrap();
+        let width = (hi[0] - lo[0]) * CONTAINER_SCALE;
+        assert!((8.5..=12.0).contains(&width), "{width}");
+        let FloorShape::Square { half_width, .. } = Prop::Container { style: ChestStyle::Chest, seed: 0, loot: 0 }.floor_shape() else { panic!() };
+        assert!(half_width * 2.0 >= width);
     }
 
     #[test]
@@ -498,6 +538,7 @@ mod tests {
                 state.chest.size = 1.15;
                 state.chest.shape = 1.0;
                 let (lo, hi) = Chests::build(&state).bounds().unwrap();
+                let (lo, hi) = (lo.map(|v| v * CONTAINER_SCALE), hi.map(|v| v * CONTAINER_SCALE));
                 let behind = Prop::Container { style, seed, loot: 0 }.room_behind();
                 match shape {
                     FloorShape::Round(r) => {

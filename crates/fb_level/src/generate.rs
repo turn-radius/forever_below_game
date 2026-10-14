@@ -45,13 +45,13 @@ const BRAZIER_MIN_AREA: u32 = 25;
 /// Closest two spots (items or lights) may lie, in cells.
 const SPOT_SPACING: f32 = 0.9;
 
-/// What the abyss leaves lying about, by weight. Families not yet ported are skipped.
+/// What the abyss leaves lying about, by weight. Families not yet ported are skipped. No
+/// chests: every container stands as a prop (`crate::props`).
 const LOOT: &[(Family, u32)] = &[
     (Family::Food, 12),
     (Family::Torch, 8),
     (Family::Lantern, 2),
     (Family::Bags, 6),
-    (Family::Chests, 2),
     (Family::Sundry, 6),
     (Family::Dagger, 5),
     (Family::Club, 4),
@@ -821,6 +821,13 @@ mod tests {
     fn items_cover_many_families() {
         let families: HashSet<Family> = (1..=32).flat_map(|s| generate(s).items).map(|i| i.family).collect();
         assert!(families.len() >= 8, "only {} families: {families:?}", families.len());
+    }
+
+    #[test]
+    fn no_chest_lies_loose() {
+        for seed in 1..=32 {
+            assert!(generate(seed).items.iter().all(|i| i.family != Family::Chests), "seed {seed}: a loose chest");
+        }
     }
 
     #[test]
