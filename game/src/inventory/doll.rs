@@ -119,7 +119,16 @@ pub struct DollAssets {
     pub doll: Handle<Image>,
     /// The warm glow a carried light casts on its side of the doll.
     pub glow: Handle<Image>,
+    /// The portrait of the doll's head for the header, which its own camera draws into.
+    pub portrait: Handle<Image>,
 }
+
+/// The portrait's size in the header, in logical pixels (the plate's `.portrait`, 92 by 104),
+/// and its image's pixels (the plate's 184 by 208 `snap`).
+pub const PORTRAIT: Vec2 = Vec2::new(92.0, 104.0);
+const PORTRAIT_PIXELS: UVec2 = UVec2::new(184, 208);
+/// The portrait looks at the head from `(.32, .04, 1)` (the plate's `drawPortrait`).
+const PORTRAIT_FROM: Vec3 = Vec3::new(0.32, 0.04, 1.0);
 
 /// The warm glow of a carried light, a canvas [`GLOW_SIZE`] units square.
 pub fn light_glow(scale: f32) -> Canvas {
@@ -166,7 +175,14 @@ impl FromWorld for DollAssets {
         doll_image.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
         let glow = image_of(&light_glow(1.0));
         let mut images = world.resource_mut::<Assets<Image>>();
-        DollAssets { bands: layers.map(|canvas| images.add(image_of(&canvas))), doll: images.add(doll_image), glow: images.add(glow) }
+        let mut portrait = Image::new_target_texture(PORTRAIT_PIXELS.x, PORTRAIT_PIXELS.y, TextureFormat::Rgba8UnormSrgb, None);
+        portrait.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
+        DollAssets {
+            bands: layers.map(|canvas| images.add(image_of(&canvas))),
+            doll: images.add(doll_image),
+            glow: images.add(glow),
+            portrait: images.add(portrait),
+        }
     }
 }
 
@@ -181,6 +197,7 @@ pub struct DollStage {
     dressed: Option<Dressed>,
     figure: Option<Entity>,
     camera: Option<Entity>,
+    portrait: Option<Entity>,
     /// Radians the doll is turned from facing the viewer.
     pub turn: f32,
     /// The figure as last dressed.
@@ -192,6 +209,22 @@ impl DollStage {
     pub fn camera(&self) -> Option<Entity> {
         self.camera
     }
+
+    /// The camera drawing the portrait, once there is one.
+    pub fn portrait(&self) -> Option<Entity> {
+        self.portrait
+    }
+}
+
+/// The portrait's view of a head centred at `centre` with half height `r`, in body space: the
+/// orthographic width and height and the point it looks at. The plate frames the box from
+/// `1.55 r` either side and `1.45 r` below to `1.75 r` above a point `0.35 r` under the head's
+/// centre (`drawPortrait`), here widened to the image's shape.
+pub fn portrait_view(centre: Vec3, r: f32) -> (Vec2, Vec3) {
+    let aspect = PORTRAIT_PIXELS.x as f32 / PORTRAIT_PIXELS.y as f32;
+    let (width, height) = (3.1 * r, 3.2 * r);
+    let height = height.max(width / aspect);
+    (Vec2::new(height * aspect, height), centre + Vec3::Y * (-0.35 + (1.75 - 1.45) * 0.5) * r)
 }
 
 /// The orthographic view, width and height in world units, that holds a figure of `bounds`
@@ -241,6 +274,32 @@ pub fn dress_doll(
     }
     stage.figure = Some(root);
 
+    // The portrait turns with the doll, so it always sees the face.
+    let (head, _) = figure.head();
+    let (view, looking_at) = portrait_view(head, figure.body.head.half_height);
+    let from = PORTRAIT_FROM.normalize();
+    let portrait = commands
+        .spawn((
+            Name::new("Portrait camera"),
+            Camera3d::default(),
+            Camera { order: -4, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },
+            RenderTarget::Image(assets.portrait.clone().into()),
+            Projection::Orthographic(OrthographicProjection {
+                scaling_mode: ScalingMode::Fixed { width: view.x, height: view.y },
+                near: 0.1,
+                far: 60.0,
+                ..OrthographicProjection::default_3d()
+            }),
+            exposure,
+            Tonemapping::Linear,
+            AmbientLight { color: StudioLight::ARMORY.ambient_color, brightness: StudioLight::ARMORY.ambient / exposure.exposure(), ..default() },
+            layer.clone(),
+            Transform::from_translation(looking_at + from * 30.0).looking_at(looking_at, Vec3::Y),
+            ChildOf(root),
+        ))
+        .id();
+    stage.portrait = Some(portrait);
+
     let (side, centre_y) = doll_view(bounds);
     let looking_at = DOLL_STAGE + Vec3::Y * centre_y;
     let depth = 4.0 * side;
@@ -282,12 +341,15 @@ pub fn dress_doll(
     stage.built = Some(figure);
 }
 
-/// Draws the doll only while the inventory is open.
+/// Draws the doll and its portrait only while the inventory is open.
 pub fn show_doll(open: Res<ScreenOpen>, stage: Res<DollStage>, mut cameras: Query<&mut Camera>) {
-    let Some(mut camera) = stage.camera.and_then(|c| cameras.get_mut(c).ok()) else { return };
     let shown = open.is(Screen::Inventory);
-    if camera.is_active != shown {
-        camera.is_active = shown;
+    for entity in [stage.camera, stage.portrait].into_iter().flatten() {
+        if let Ok(mut camera) = cameras.get_mut(entity)
+            && camera.is_active != shown
+        {
+            camera.is_active = shown;
+        }
     }
 }
 
@@ -599,6 +661,24 @@ mod tests {
         let camera = app.world().get::<Camera>(stage.camera().unwrap()).unwrap();
         assert!(camera.is_active, "drawn while the inventory is open");
         assert!(matches!(app.world().get::<RenderTarget>(stage.camera().unwrap()), Some(RenderTarget::Image(_))));
+    }
+
+    #[test]
+    fn the_portrait_is_of_the_doll_s_head() {
+        let mut app = stage_app();
+        app.update();
+        let stage = app.world().resource::<DollStage>();
+        let (portrait, figure) = (stage.portrait().unwrap(), stage.figure.unwrap());
+        let (head, r) = { let f = stage.built.as_ref().unwrap(); (f.head().0, f.body.head.half_height) };
+        // Drawn into the portrait image, turning with the doll, and looking at its head.
+        let target = app.world().get::<RenderTarget>(portrait).unwrap();
+        assert!(matches!(target, RenderTarget::Image(i) if i.handle == app.world().resource::<DollAssets>().portrait));
+        assert_eq!(app.world().get::<ChildOf>(portrait).map(|c| c.parent()), Some(figure));
+        let at = app.world().get::<Transform>(portrait).unwrap();
+        let to_head = (head - at.translation).normalize();
+        assert!(to_head.dot(at.forward().as_vec3()) > 0.99, "looks at the head");
+        let (view, _) = portrait_view(head, r);
+        assert!(view.y >= 3.2 * r && view.y < 5.0 * r, "{view}");
     }
 
     #[test]

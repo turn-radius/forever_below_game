@@ -11,6 +11,8 @@
 //! - [`doll`] and [`seal`]: the doll's leaf, the runic seal with the equipment slots round
 //!   it; dragging onto a slot, or onto the doll, equips the item if it is made for that slot,
 //!   swapping out what was there ([`Inventory::equip`]); double-clicking wears or takes off.
+//! - [`header`]: the delver's portrait, name, folk, height, class and stats over the left
+//!   leaf, and its tabs.
 //! - [`card`]: the hover card, for an item under the mouse here or under the crosshair in the
 //!   level.
 //! - [`underfoot`]: the items on the floor within reach, as a grid, and bags set down as
@@ -28,6 +30,7 @@
 pub mod card;
 pub mod doll;
 pub mod grid;
+pub mod header;
 pub mod icon;
 pub mod items;
 pub mod seal;
@@ -53,7 +56,8 @@ use crate::character::{Character, character_for};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::play::{CurrentLevel, Screen, ScreenOpen, show_screen, switch_screens};
 pub use crate::ui::node_rect;
-use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
+use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
+use header::ToastText;
 
 /// Logical pixels from one grid line to the next (the plate's `--cs`).
 pub const CELL_PX: f32 = 46.0;
@@ -258,9 +262,6 @@ struct DragGhost;
 #[derive(Component, Debug)]
 struct DropHint;
 
-#[derive(Component, Debug)]
-struct ToastText;
-
 /// Where a dragged item would go if let go now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -415,6 +416,7 @@ fn build_screen(
     cameras: Query<Entity, With<ViewModelCamera>>,
     fonts: Res<UiFonts>,
     doll_assets: Res<DollAssets>,
+    character: Res<Character>,
     mut icons: Icons,
 ) {
     let existing = screens.iter().next();
@@ -424,7 +426,7 @@ fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !character.is_changed() {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -467,18 +469,7 @@ fn build_screen(
                 ledger
                     .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(700), ..default() })
                     .with_children(|leaf| {
-                        leaf.spawn(Node {
-                            column_gap: px(16),
-                            align_items: AlignItems::Baseline,
-                            border: UiRect::bottom(px(1)),
-                            padding: UiRect::bottom(px(6)),
-                            ..default()
-                        })
-                        .insert(BorderColor::all(crate::ui::FAINT))
-                        .with_children(|bar| {
-                            bar.spawn((Text::new("inventory"), UiFonts::style(&fonts.display, 26.0, INK)));
-                            bar.spawn((ToastText, Text::default(), UiFonts::style(&fonts.body, 15.0, ACCENT)));
-                        });
+                        header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone());
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
                             .with_children(|row| {
                                 let carried = screen.inventory.carried_containers();
@@ -1033,6 +1024,33 @@ mod tests {
         assert_eq!((node.width, node.height), (px(size.x), px(size.y)));
         let said: Vec<String> = children.iter().filter_map(|c| app.world().get::<Text>(c)).map(|t| t.0.clone()).collect();
         assert_eq!(said, vec!["underfoot".to_string(), "Bare stone. Drop things here.".to_string()]);
+    }
+
+    /// The header's line of numbers, as read from its spans.
+    fn header_stats(app: &mut App) -> String {
+        let mut lines = app.world_mut().query_filtered::<&Children, With<header::HeaderStats>>();
+        let line = lines.single(app.world()).unwrap()[0];
+        let spans: Vec<Entity> = app.world().get::<Children>(line).map(|c| c.to_vec()).unwrap_or_default();
+        spans.iter().filter_map(|s| app.world().get::<TextSpan>(*s)).map(|t| t.0.clone()).collect()
+    }
+
+    #[test]
+    fn the_header_s_stats_update_when_equipping() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyI);
+        let bare = header_stats(&mut app);
+        assert!(bare.starts_with("AC ") && bare.contains("Load 0/"), "{bare}");
+        let helm = (1..300).filter_map(|s| fb_items::roll_item("Helm", s)).find(|i| i.profile.stats.armour >= 1.0).unwrap();
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(helm);
+            equip(&mut inventory, id, Slot::Head).unwrap();
+        }
+        app.update();
+        let helmed = header_stats(&mut app);
+        assert_ne!(helmed, bare);
+        let character = app.world().resource::<Character>().clone();
+        assert_eq!(helmed, header::stats_line(&character.derive(app.world().resource::<Inventory>())));
     }
 
     #[test]

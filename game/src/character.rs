@@ -138,9 +138,10 @@ impl Character {
     /// all its items, so an unlit torch in the pack gives none.
     pub fn derive(&self, inventory: &Inventory) -> Derived {
         let equipped = inventory.equipped();
-        let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).sum::<f32>();
+        // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
+        let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
         let load = sum(|s| s.weight)
-            + equipped.iter().filter_map(|(slot, _)| inventory.worn(*slot)).map(|id| inventory.contents_weight(id)).sum::<f32>();
+            + equipped.iter().filter_map(|(slot, _)| inventory.worn(*slot)).map(|id| inventory.contents_weight(id)).fold(0.0, |a, b| a + b);
         let light = carried_light(inventory).and_then(|(_, id)| inventory.item(id)).map_or(0.0, |item| item.profile.stats.light);
         let darkvision = equipped.iter().map(|(_, item)| item.profile.stats.darkvision).fold(self.folk.race().dv as f32, f32::max);
         Derived {
