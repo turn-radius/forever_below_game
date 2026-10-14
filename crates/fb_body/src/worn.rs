@@ -32,7 +32,7 @@ use std::f32::consts::{PI, TAU};
 
 use armory::build::boot::boot_parts;
 use armory::build::form::{BACK, FRONT, HeadForm, LimbForm, TorsoForm, TorsoProfile};
-use armory::build::garment::{garment_drape, garment_parts_on_arms};
+use armory::build::garment::{Fitting, Underlay, garment_drape, garment_parts_fitted};
 use armory::build::hand::hand_parts_curled;
 use armory::build::hat::hat_parts;
 use armory::build::hood::hood_parts;
@@ -220,6 +220,22 @@ struct Envelope<'a> {
     /// How far worn surfaces stand out past each arm's and each leg's skin, along it.
     arms: [[f32; LIMB_BINS]; 2],
     legs: [[f32; LIMB_BINS]; 2],
+    /// How far the bare arms and hands and everything worn reach from the trunk's axis, finely
+    /// gridded: what a cloak hangs over.
+    outline: Outline,
+}
+
+/// Which worn surface a trunk form is eased over ([`Envelope::form`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Over {
+    /// What is worn on the trunk.
+    Trunk,
+    /// The trunk and the arms with whatever is on them, its shoulder section moved up to the
+    /// top of the arms (a hood's cape).
+    Arms,
+    /// The bare trunk, its shoulder section moved up to the top of the arms, for a cloak that
+    /// hangs over everything worn, and the arms, through an underlay ([`Envelope::outline`]).
+    Shoulders,
 }
 
 impl<'a> Envelope<'a> {
@@ -236,7 +252,19 @@ impl<'a> Envelope<'a> {
             over_arms: relief(),
             arms: [[NONE; LIMB_BINS]; 2],
             legs: [[NONE; LIMB_BINS]; 2],
+            outline: Outline::new(profile.bottom() - 1.0, profile.top() + 0.7),
         };
+        // The bare arms and hands as drawn, for a cloak over them: a raised forearm and its
+        // hand come out through the cloak instead ([`Envelope::under_cloak`]).
+        for part in body.skin_mesh().parts.iter().filter(|p| matches!(p.name, "arms" | "hands")) {
+            for &p in &part.positions {
+                let (side, t, _) = env.nearest_arm(p);
+                if env.under_cloak(side, t) {
+                    let q = env.torso(p);
+                    env.outline.add(q);
+                }
+            }
+        }
         // The bare arms, for whatever hangs over them.
         for side in Side::BOTH {
             let arm = body.arm(side);
@@ -334,6 +362,21 @@ impl<'a> Envelope<'a> {
         let body = self.body;
         let top = self.form.neck.y + 0.7; // up to the top of a high collar
         let crotch = body.hip_y - 0.14 * body.trunk_length;
+        // Everything counts toward what a cloak hangs over, a belt's pouch included, but for
+        // what is on a raised forearm.
+        for part in &mesh.parts {
+            let on_arms = slot == Slot::Hands || self.on_arms(part);
+            for &p in &part.positions {
+                if on_arms {
+                    let (side, t, _) = self.nearest_arm(p);
+                    if !self.under_cloak(side, t) {
+                        continue;
+                    }
+                }
+                let q = self.torso(p);
+                self.outline.add(q);
+            }
+        }
         for part in mesh.parts.iter().filter(|p| measured(slot, p)) {
             let on_arms = slot == Slot::Hands || self.on_arms(part);
             for &p in &part.positions {
@@ -390,16 +433,21 @@ impl<'a> Envelope<'a> {
     /// sides or the front and back as the point faces, by half the shortfall a pass (the
     /// sections lie on a spline, so a full step overshoots and the form balloons). Our own
     /// fitting.
-    fn form(&self, over_arms: bool, fit: f32) -> TorsoForm {
-        let relief = if over_arms { &self.over_arms } else { &self.trunk };
+    fn form(&self, over: Over, fit: f32) -> TorsoForm {
+        let relief = match over {
+            Over::Trunk => Some(&self.trunk),
+            Over::Arms => Some(&self.over_arms),
+            Over::Shoulders => None,
+        };
         let mut base = self.form.rings();
-        if over_arms {
+        if over != Over::Trunk {
             // Over the arms the shoulder line is the top of the arms (and whatever is on
             // them), not the trunk's slope to the neck: move the section there, so a cloak
             // rests on the shoulders and still closes round the neck.
             let s = self.body.scale;
             let neck = base[8].y;
-            let top = relief
+            let top = self
+                .over_arms
                 .cells()
                 .filter(|&(y, phi, e)| phi.cos().abs() > 0.7 && e > 0.25 * s && y < neck - 0.25 * s)
                 .fold(base[7].y, |m, c| m.max(c.0));
@@ -417,7 +465,7 @@ impl<'a> Envelope<'a> {
         for _ in 0..48 {
             let reach = Reach::of(&inflate(&grow).eased(fit).profile());
             let mut need = [[0.0f32; 2]; 9];
-            for (y, phi, e) in relief.cells() {
+            for (y, phi, e) in relief.into_iter().flat_map(Relief::cells) {
                 let short = self.reach.at(phi, y) + e.max(0.0) + GAP - reach.at(phi, y);
                 if short <= 0.002 {
                     continue;
@@ -511,6 +559,47 @@ impl<'a> Envelope<'a> {
         let chest = self.form.chest.y;
         let ahead = |phi: f32| (phi - FRONT_PHI + PI).rem_euclid(TAU) - PI;
         self.trunk.cells().filter(|c| c.0 >= chest && ahead(c.1).abs() <= CHEST_SPREAD).fold(0.0f32, |m, c| m.max(c.2))
+    }
+}
+
+/// How far points reach from the trunk's axis, gridded finely by height and by angle round
+/// the axis (torso space, lathe convention, as the Armory's forms take angles): the most
+/// any point in each cell reaches.
+struct Outline {
+    y0: f32,
+    rows: Vec<[f32; OUTLINE_COLUMNS]>,
+}
+
+/// The garment drape's own column count, so its columns read cells directly.
+const OUTLINE_COLUMNS: usize = 128;
+const OUTLINE_STEP: f32 = 0.05;
+
+impl Outline {
+    fn new(y0: f32, y1: f32) -> Outline {
+        Outline { y0, rows: vec![[NONE; OUTLINE_COLUMNS]; ((y1 - y0) / OUTLINE_STEP).ceil() as usize + 1] }
+    }
+
+    fn column(angle: f32) -> usize {
+        (angle.rem_euclid(TAU) / TAU * OUTLINE_COLUMNS as f32).round() as usize % OUTLINE_COLUMNS
+    }
+
+    /// Records torso-space `q`.
+    fn add(&mut self, q: V3) {
+        let i = ((q[1] - self.y0) / OUTLINE_STEP).round();
+        if i < 0.0 || i >= self.rows.len() as f32 {
+            return;
+        }
+        let j = Self::column((-q[2]).atan2(q[0]));
+        let cell = &mut self.rows[i as usize][j];
+        *cell = cell.max(q[0].hypot(q[2]));
+    }
+
+    /// How far anything reaches toward `angle` at height `y`, taking the rows either side
+    /// too so sparse sampling leaves no gaps ([`NONE`] where nothing is).
+    fn at(&self, angle: f32, y: f32) -> f32 {
+        let i = ((y - self.y0) / OUTLINE_STEP).round() as isize;
+        let j = Self::column(angle);
+        (i - 2..=i + 2).filter_map(|k| self.rows.get(usize::try_from(k).ok()?)).map(|row| row[j]).fold(NONE, f32::max)
     }
 }
 
@@ -679,6 +768,8 @@ fn scale_mesh(mesh: &mut ItemMesh, k: f32) {
 struct Cover {
     /// A closed garment over its body and skirt.
     garment: bool,
+    /// A cloak hanging round its skirt.
+    cloak: bool,
     /// Sleeves over its sleeves.
     sleeves: bool,
     /// Gloves over its cuffs.
@@ -701,6 +792,7 @@ impl Cover {
                     cover.garment = true;
                     cover.sleeves |= g.cut.sleeves != Sleeves::None && !matches!(g.cut.style, GarmentStyle::Cuirass | GarmentStyle::Brigandine);
                 }
+                Item::Garment(_) if over(*s) && *s == Slot::Cloak => cover.cloak = true,
                 Item::Hands(h) if *s == Slot::Hands => cover.gloves |= h.hand.style != HandStyle::Bracer,
                 Item::Belt(_) if *s == Slot::Belt => cover.belt = true,
                 Item::Hood(_) if *s == Slot::Head => cover.hood = true,
@@ -725,6 +817,9 @@ fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> 
     if cover.garment {
         s.cut.flare = 0.0;
         s.cut.folds *= 0.3;
+    } else if cover.cloak {
+        // A cloak hangs round the skirt and gathers its spread in.
+        s.cut.flare = 0.0;
     }
     if cover.sleeves || cover.gloves {
         s.cut.sleeve_flare = 0.0;
@@ -736,12 +831,15 @@ fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> 
     if cover.hood && s.cut.neck == Neckline::Cowl {
         s.cut.neck = Neckline::Round;
     }
-    let mut form = env.form(s.cut.style.is_open(), s.cut.fit);
-    // The Armory flares a skirt as a share of the form it hangs over: over arms and gear
-    // that would be far wider than on the body, so keep the flare's spread as it would be on
-    // the body alone.
+    // A cloak rests on the shoulders and hangs over the arms and what is on them through an
+    // underlay, falling past them and back toward the legs below them, instead of on a form
+    // widened all round to clear them (which stood out like a tent).
+    let open = s.cut.style.is_open();
+    let mut form = env.form(if open { Over::Shoulders } else { Over::Trunk }, s.cut.fit);
+    // The Armory flares a skirt as a share of the form it hangs over: over gear that would
+    // be wider than on the body, so keep the flare's spread as it would be on the body alone.
     s.cut.flare *= (env.form.hip.half_width / form.hip.half_width).min(1.0);
-    if env.trunk_worn() {
+    if env.trunk_worn() && !open {
         // The skirt's folds dip inward by up to 0.4 of their depth ([`Drape::fold_wave`]):
         // keep their valleys clear of what is under them.
         let drape = garment_drape(&form.eased(s.cut.fit), &s.cut, &s.belt, &s.plates, s.seed);
@@ -752,7 +850,10 @@ fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> 
         }
         form = form.with_rings(rings);
     }
-    let parts = garment_parts_on_arms(&form, &env.arm_forms(), &s.cut, &s.hem, &s.belt, &s.plates, s.seed);
+    let arms = env.arm_forms();
+    let under = |a: f32, y: f32| env.outline.at(a, y) + GAP;
+    let fitting = Fitting { arms: Some(&arms), over: open.then_some(&under as Underlay) };
+    let parts = garment_parts_fitted(&form, &fitting, &s.cut, &s.hem, &s.belt, &s.plates, s.seed);
     on_body(body, parts.finish())
 }
 
@@ -827,7 +928,7 @@ fn gloves(body: &Body, env: &Envelope, state: &HandsState) -> ItemMesh {
 
 /// A belt round the waist over what is worn under it.
 fn belt(body: &Body, env: &Envelope, state: &BeltState) -> ItemMesh {
-    on_body(body, Belts::on_form(&env.form(false, 1.0), state))
+    on_body(body, Belts::on_form(&env.form(Over::Trunk, 1.0), state))
 }
 
 /// The head form `extra` larger all round, in torso space: the head with its hair.
@@ -851,7 +952,7 @@ fn helm(body: &Body, state: &HelmState) -> ItemMesh {
 fn hood(body: &Body, env: &Envelope, state: &HoodState) -> ItemMesh {
     let mut hood = state.hood;
     hood.cape *= body.scale;
-    on_body(body, hood_parts(&head_over_hair(body), &env.form(true, 1.0), &hood, &state.hem, state.seed).finish())
+    on_body(body, hood_parts(&head_over_hair(body), &env.form(Over::Arms, 1.0), &hood, &state.hem, state.seed).finish())
 }
 
 /// A hat over the head and hair.
@@ -866,7 +967,7 @@ fn hat(body: &Body, state: &HatState) -> ItemMesh {
 fn amulet(body: &Body, env: &Envelope, state: &AmuletState) -> ItemMesh {
     let n = &state.necklace;
     let (t, w) = (body.trunk_length, body.waist_y);
-    let profile = env.form(false, 1.0).profile();
+    let profile = env.form(Over::Trunk, 1.0).profile();
     let neck_y = body.shoulder_y + 0.075 * t - w;
     let drop = (n.drop * 0.45 * body.scale.sqrt()).clamp(0.14 * t, 0.42 * t);
     let low = neck_y - drop;
@@ -1071,8 +1172,9 @@ mod tests {
             let fit = fit_worn(&body, &outfit(seed));
             let torso = [Slot::Legs, Slot::Shirt, Slot::Body, Slot::Belt, Slot::Cloak];
             let layers: Vec<&WornLayer> = fit.layers.iter().filter(|l| torso.contains(&l.slot)).collect();
-            for (i, outer) in layers.iter().enumerate().skip(1) {
-                let under = Radial::of(layers[..i].iter().flat_map(|l| trunk_points(&body, l)));
+            let env = Envelope::new(&body);
+            for (li, outer) in layers.iter().enumerate().skip(1) {
+                let under = Radial::of(layers[..li].iter().flat_map(|l| trunk_points(&body, l)));
                 let mut worst = (0.0f32, [0.0; 3], Slot::Legs);
                 let mut count = 0;
                 let mut total = 0;
@@ -1090,7 +1192,13 @@ mod tests {
                             (Some(a), None) | (None, Some(a)) => (a - r).abs(),
                             _ => 0.0,
                         };
-                        let depth = r - p[0].hypot(p[2]) - slope;
+                        let mut depth = r - p[0].hypot(p[2]) - slope;
+                        if depth > tolerance {
+                            // Over a shelf (a cloak on a pauldron's top) the bins mix heights:
+                            // measure the layers under along this point's ray exactly.
+                            let exact = layers[..li].iter().flat_map(|l| l.mesh.parts.iter().filter(|q| measured(l.slot, q) && !env.on_arms(q))).filter_map(|q| ray_reach(q, p)).fold(0.0f32, f32::max);
+                            depth = exact - p[0].hypot(p[2]);
+                        }
                         compared += 1;
                         if depth > tolerance {
                             count += 1;
@@ -1124,6 +1232,102 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A robe with long bell sleeves under a cloak, with trousers and boots.
+    fn robe_and_cloak(seed: u32) -> Vec<(Slot, Item)> {
+        let mut robe = Garment::roll_as(seed, GarmentStyle::Robe);
+        robe.cut.sleeves = Sleeves::Long;
+        robe.cut.sleeve_flare = 1.0;
+        vec![
+            (Slot::Shirt, Item::Garment(robe)),
+            (Slot::Cloak, Item::Garment(Garment::roll_as(seed + 1, GarmentStyle::Cloak))),
+            (Slot::Legs, roll(Family::Legs, seed)),
+            (Slot::Feet, roll(Family::Feet, seed)),
+        ]
+    }
+
+    /// The bare body's silhouettes (not a tail's) from the front and the side: how far it
+    /// reaches to either side (`|x|`), and its front and back (`z`).
+    fn silhouette(body: &Body) -> (f32, f32, f32) {
+        let mut mesh = body.skin_mesh();
+        mesh.parts.retain(|p| p.name != "tail");
+        mesh.parts.extend(body.head_mesh().parts);
+        let (lo, hi) = mesh.bounds().unwrap();
+        (lo[0].abs().max(hi[0]), lo[2], hi[2])
+    }
+
+    /// How far `part`'s surface reaches along the horizontal ray from the body's axis through
+    /// `p`: the farthest triangle the ray meets (Moeller-Trumbore).
+    fn ray_reach(part: &Part, p: V3) -> Option<f32> {
+        let origin = [0.0, p[1], 0.0];
+        let dir = vec3::normalize_or([p[0], 0.0, p[2]], vec3::X);
+        part.indices
+            .chunks(3)
+            .filter_map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| part.positions[i as usize]);
+                let (e1, e2) = (vec3::sub(b, a), vec3::sub(c, a));
+                let h = vec3::cross(dir, e2);
+                let det = vec3::dot(e1, h);
+                if det.abs() < 1e-9 {
+                    return None;
+                }
+                let s = vec3::sub(origin, a);
+                let u = vec3::dot(s, h) / det;
+                let q = vec3::cross(s, e1);
+                let v = vec3::dot(dir, q) / det;
+                let t = vec3::dot(e2, q) / det;
+                (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.0).then_some(t)
+            })
+            .reduce(f32::max)
+    }
+
+    #[test]
+    fn a_cloak_over_bell_sleeves_falls_close_to_the_body() {
+        let mut failures = vec![];
+        for body in Folk::ALL.into_iter().flat_map(|f| [3u32, 1207, 40].map(move |s| Body::new(&BodySpec::roll(f, s)))) {
+            for seed in [10u32, 11, 12, 13] {
+                let fit = fit_worn(&body, &robe_and_cloak(seed));
+                let cloak = fit.layer(Slot::Cloak).unwrap().mesh.parts.iter().find(|p| p.name == "body").unwrap().clone();
+                let (side, back, front) = silhouette(&body);
+                let lo = cloak.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+                // Its hem stays within the silhouette plus a hand's width (about 1 unit), seen
+                // from the front and from the side.
+                let hand = 1.0;
+                let mut worst = (f32::MIN, [0.0; 3]);
+                for p in cloak.positions.iter().filter(|p| p[1] < lo + 0.3) {
+                    let over = (p[0].abs() - side).max(back - p[2]).max(p[2] - front) - hand;
+                    if over > worst.0 {
+                        worst = (over, *p);
+                    }
+                }
+                if worst.0 > 0.0 {
+                    failures.push(format!("{:?} body {} seed {seed}: hem {:.2} past the silhouette and a hand at {:?}", body.folk(), body.spec.seed, worst.0, worst.1));
+                }
+                // Nothing under it pokes through: every point worn under it, sleeves and all,
+                // lies inside it wherever it covers.
+                let outer = Radial::of(cloak.positions.iter().copied());
+                let top = body.shoulder_y - 0.1 * body.trunk_length;
+                for layer in fit.layers.iter().filter(|l| matches!(l.slot, Slot::Shirt | Slot::Legs)) {
+                    for p in layer.mesh.parts.iter().flat_map(|p| p.positions.iter()).filter(|p| p[1] > lo + 0.1 && p[1] < top) {
+                        // The cloak's reach there, from the rows of its mesh either side.
+                        let (i, j) = bin(*p);
+                        let near = (j - 2..=j + 2).filter_map(|k| outer.bins.get(&(i, k))).copied().reduce(f32::max);
+                        if let Some(r) = near {
+                            // Where the bins say it may poke through, measure the cloak along
+                            // the ray exactly.
+                            let r = if p[0].hypot(p[2]) > r + 0.03 { ray_reach(&cloak, *p).unwrap_or(r) } else { r };
+                            let depth = p[0].hypot(p[2]) - r;
+                            if depth > 0.03 {
+                                failures.push(format!("{:?} body {} seed {seed}: {:?} pokes {depth:.2} through the cloak at {p:?}", body.folk(), body.spec.seed, layer.slot));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]

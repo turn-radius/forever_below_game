@@ -173,13 +173,37 @@ pub struct DrapedSurface {
     /// Hull clearance over the form, `[height][column]`.
     hull: Vec<Vec<f32>>,
     y_max: f32,
+    /// Hung over an underlay as well as the form ([`DrapedSurface::over`]): the skirt does not
+    /// flare out from it.
+    underlaid: bool,
 }
 
 const HULL_COLUMNS: usize = 128;
 const HULL_STEP: f32 = 0.05;
 
+/// How fast cloth hanging over an underlay (a cloak over the arms) draws back toward the form
+/// below what holds it out, per unit of drop. Our own figure: about the slope a cloak falls
+/// at from the hands toward the shins, so its hem comes back in toward the legs.
+pub const UNDERLAY_TUCK: f32 = 0.15;
+
+/// What a garment hangs over besides its form, on a real body: the least distance from the
+/// form's axis its cloth's inner face must keep toward each angle (lathe convention) at each
+/// height in the form's space, such as a body's arms and whatever is worn on them.
+pub type Underlay<'a> = &'a dyn Fn(f32, f32) -> f32;
+
 impl DrapedSurface {
     pub fn new(form: &TorsoForm, drape: Drape) -> DrapedSurface {
+        Self::over(form, drape, None, 0.0)
+    }
+
+    /// The drape over `form` and, when given, over `under` too, its cloth `thickness` thick.
+    ///
+    /// Over an underlay, cloth spans across each row as it falls down each meridian: in every
+    /// horizontal slice it takes the convex hull of what it rests on, so it bridges from the
+    /// trunk to the arms instead of dipping between them, and its fold valleys keep clear of
+    /// the underlay. Below what holds it out it draws back toward the form at no less than
+    /// [`UNDERLAY_TUCK`]. Our own model, in the spirit of the hanging hull.
+    pub fn over(form: &TorsoForm, drape: Drape, under: Option<Underlay>, thickness: f32) -> DrapedSurface {
         let profile = form.profile();
         let y_max = drape.top + 0.5;
         let rows = ((y_max - (drape.hem - 1.5)) / HULL_STEP).ceil() as usize + 1;
@@ -187,16 +211,43 @@ impl DrapedSurface {
             let p = profile.point(a, y);
             p[0].hypot(p[2])
         };
+        let angle = |j: usize| TAU * j as f32 / HULL_COLUMNS as f32;
+        // How far out the cloth must stand in each row before it hangs: off the form by its
+        // ease, and clear of the underlay, spanned convexly across the row.
+        let need: Vec<Vec<f32>> = (0..rows)
+            .map(|i| {
+                let y = y_max - i as f32 * HULL_STEP;
+                let mut row: Vec<f32> = (0..HULL_COLUMNS).map(|j| radial(angle(j), y) + drape.ease).collect();
+                if let Some(under) = under {
+                    // A column hangs out along its form point's direction from the axis, which
+                    // a superelliptic section turns away from the column's own angle.
+                    let dirs: Vec<[f32; 2]> = (0..HULL_COLUMNS)
+                        .map(|j| {
+                            let p = profile.point(angle(j), y);
+                            let l = p[0].hypot(p[2]).max(1e-6);
+                            [p[0] / l, p[2] / l]
+                        })
+                        .collect();
+                    let valley = 0.4 * drape.fold_depth(y);
+                    for (r, d) in row.iter_mut().zip(&dirs) {
+                        *r = r.max(under((-d[1]).atan2(d[0]), y) + thickness + valley);
+                    }
+                    row = convex_row(&row, &dirs);
+                }
+                row
+            })
+            .collect();
+        let tuck = if under.is_some() { drape.tuck.max(UNDERLAY_TUCK) } else { drape.tuck };
         let mut hull = vec![vec![drape.ease; HULL_COLUMNS]; rows];
         for j in 0..HULL_COLUMNS {
-            let a = TAU * j as f32 / HULL_COLUMNS as f32;
-            let mut prev = radial(a, y_max) + drape.ease;
+            let a = angle(j);
+            let mut prev = need[0][j];
             for (i, row) in hull.iter_mut().enumerate() {
                 let y = y_max - i as f32 * HULL_STEP;
                 let body = radial(a, y);
-                let mut total = body + drape.ease;
+                let mut total = need[i][j];
                 if y < drape.support {
-                    total = total.max(prev - drape.tuck * HULL_STEP);
+                    total = total.max(prev - tuck * HULL_STEP);
                 }
                 if let Some((cy, cw)) = drape.cinch {
                     if (y - cy).abs() <= cw {
@@ -210,7 +261,7 @@ impl DrapedSurface {
                 prev = total;
             }
         }
-        DrapedSurface { profile, drape, hull, y_max }
+        DrapedSurface { profile, drape, hull, y_max, underlaid: under.is_some() }
     }
 
     fn clearance(&self, angle: f32, y: f32) -> f32 {
@@ -233,7 +284,11 @@ impl DrapedSurface {
         let dir = [p[0] / body, p[2] / body];
         let mut r = body + self.clearance(angle, y);
         let skirt = ((d.flare_from - y) / (d.flare_from - d.hem).max(0.3)).clamp(0.0, 1.0);
-        r *= 1.0 + d.flare * 0.9 * skirt.powf(1.3);
+        // Over an underlay the skirt's fullness falls into its folds round what it hangs over
+        // rather than spreading out from it.
+        if !self.underlaid {
+            r *= 1.0 + d.flare * 0.9 * skirt.powf(1.3);
+        }
         r += d.fold_depth(y) * d.fold_wave(angle);
         if let Some(quilt) = &d.quilt {
             r += quilt.puff([dir[0] * r, y, dir[1] * r]);
@@ -265,6 +320,51 @@ impl DrapedSurface {
             self.point(uu, y0 + (y1 - y0) * v, offset)
         })
     }
+}
+
+/// The convex hull of a row of radii from an axis along unit directions `dirs` (x, z),
+/// as radii along the same directions: what cloth stretched round the row rests on.
+fn convex_row(radii: &[f32], dirs: &[[f32; 2]]) -> Vec<f32> {
+    let n = radii.len();
+    let dir = |j: usize| dirs[j];
+    let cross = |o: [f32; 2], a: [f32; 2], b: [f32; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    // Andrew's monotone chain over the row's points.
+    let mut pts: Vec<[f32; 2]> = (0..n).map(|j| dir(j).map(|c| c * radii[j])).collect();
+    pts.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    let chain = |points: &mut dyn Iterator<Item = [f32; 2]>| {
+        let mut out: Vec<[f32; 2]> = Vec::with_capacity(n);
+        for p in points {
+            while out.len() >= 2 && cross(out[out.len() - 2], out[out.len() - 1], p) <= 0.0 {
+                out.pop();
+            }
+            out.push(p);
+        }
+        out.pop();
+        out
+    };
+    let mut hull = chain(&mut pts.iter().copied());
+    hull.extend(chain(&mut pts.iter().rev().copied()));
+    // Each column's ray from the axis leaves the hull through one edge.
+    (0..n)
+        .map(|j| {
+            let d = dir(j);
+            let mut best = radii[j];
+            for k in 0..hull.len() {
+                let (p, q) = (hull[k], hull[(k + 1) % hull.len()]);
+                let e = [q[0] - p[0], q[1] - p[1]];
+                let den = d[0] * e[1] - d[1] * e[0];
+                if den.abs() < 1e-9 {
+                    continue;
+                }
+                let t = (p[0] * e[1] - p[1] * e[0]) / den;
+                let s = (p[0] * d[1] - p[1] * d[0]) / den;
+                if t > 0.0 && (-1e-4..=1.0 + 1e-4).contains(&s) {
+                    best = best.max(t);
+                }
+            }
+            best
+        })
+        .collect()
 }
 
 /// A sleeve hanging from the shoulder, as rings round a path.
@@ -416,21 +516,38 @@ pub fn body_look(g: &GarmentCut, plates: &Plates) -> Look {
 /// `"collar"`, `"cowl"`, `"hood"`, `"belt"`, `"buckle"`, `"faulds"`, `"pauldrons"`,
 /// `"edges"`, `"brooch"` and `"stone"`, as the state calls for them.
 pub fn garment_parts(form: &TorsoForm, g: &GarmentCut, hem: &Hem, belt: &Belt, plates: &Plates, seed: u32) -> Parts {
-    build_garment(form, None, g, hem, belt, plates, seed)
+    build_garment(form, &Fitting::default(), g, hem, belt, plates, seed)
 }
 
 /// [`garment_parts`] on a real body: sleeves and pauldrons follow `arms` (right then left,
 /// in the form's space) instead of the mannequin's arm roots.
 pub fn garment_parts_on_arms(form: &TorsoForm, arms: &[LimbForm; 2], g: &GarmentCut, hem: &Hem, belt: &Belt, plates: &Plates, seed: u32) -> Parts {
-    build_garment(form, Some(arms), g, hem, belt, plates, seed)
+    build_garment(form, &Fitting { arms: Some(arms), ..Fitting::default() }, g, hem, belt, plates, seed)
 }
 
-fn build_garment(form: &TorsoForm, arms: Option<&[LimbForm; 2]>, g: &GarmentCut, hem: &Hem, belt: &Belt, plates: &Plates, seed: u32) -> Parts {
+/// How a garment sits on a real body beyond its form.
+#[derive(Clone, Copy, Default)]
+pub struct Fitting<'a> {
+    /// Sleeves and pauldrons follow these arms (right then left, in the form's space) instead
+    /// of the mannequin's arm roots.
+    pub arms: Option<&'a [LimbForm; 2]>,
+    /// What the cloth hangs over besides the form ([`DrapedSurface::over`]): a cloak over the
+    /// arms and whatever is on them.
+    pub over: Option<Underlay<'a>>,
+}
+
+/// [`garment_parts`] fitted to a real body as `fitting` describes.
+pub fn garment_parts_fitted(form: &TorsoForm, fitting: &Fitting, g: &GarmentCut, hem: &Hem, belt: &Belt, plates: &Plates, seed: u32) -> Parts {
+    build_garment(form, fitting, g, hem, belt, plates, seed)
+}
+
+fn build_garment(form: &TorsoForm, fitting: &Fitting, g: &GarmentCut, hem: &Hem, belt: &Belt, plates: &Plates, seed: u32) -> Parts {
     let mut parts = Parts::new();
+    let arms = fitting.arms;
     let form = form.eased(g.fit);
     let drape = garment_drape(&form, g, belt, plates, seed);
-    let mut surface = DrapedSurface::new(&form, drape);
     let (thickness, _, _, _) = style_drape(g.style);
+    let mut surface = DrapedSurface::over(&form, drape, fitting.over, thickness);
     let mut look = body_look(g, plates);
     let style = g.style;
     let rigid = style == GarmentStyle::Cuirass;
