@@ -132,6 +132,8 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[view]` | `world_fov_degrees` | 70.0 | Vertical field of view of the world, in degrees. |
 | `[view]` | `head_bob` | 1.0 | How much the view and what you hold bob as you walk (0 = still, 1 = usual). |
 | `[view]` | `floor_item_scale` | 1.15 | How much larger than its own size an item lying on the floor is drawn (1 = true size). |
+| `[view]` | `aim_buffer_degrees` | 2.0 | How far off the crosshair, in degrees, something can be and still be aimed at. |
+| `[view]` | `aim_min_radius` | 0.6 | The least that leeway is, in world units off the crosshair, for small things close by (0.6 = 6 cm). |
 | `[moving]` | `walk_speed` | 14.0 | Walking pace, in world units per second (14 = 1.4 m/s). |
 | `[moving]` | `hurry_speed` | 45.0 | Pace with Shift held, in world units per second. |
 | `[moving]` | `acceleration` | 10.0 | How quickly you reach your pace and stop, per second (higher is snappier). |

@@ -23,7 +23,8 @@
 //!   the item itself casts no shadow, or its own flame and handle would black out its light.
 //! - Every item lying in the level is kept track of in the [`Inventory`], loose, so a bag set
 //!   down keeps its contents and the inventory screen can show what lies underfoot.
-//! - A ray from the camera picks the nearest item or container in reach ([`Aimed`]), which the
+//! - The crosshair's line picks the item or container in reach nearest it, within a small
+//!   buffer round it ([`nearest_aimed`], [`AimBuffer`]), as folk are picked ([`Aimed`]), which the
 //!   hover card describes (`crate::inventory::card`); E picks an item up into the inventory
 //!   ([`Inventory::pick_up`]) and opens a container (`crate::props`). Things are set down from the
 //!   inventory screen ([`set_down`], [`drop_spot`]), and rest like any other floor item.
@@ -256,24 +257,99 @@ pub fn ray_box(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
     Some(near)
 }
 
-/// The ray's nearest hit among `targets` (each a world-from-item transform, rigid or evenly
-/// scaled, and its item-space bounds) within `reach`, in world units.
-pub fn nearest_hit<T: Copy>(
+/// How far off the crosshair's line something can lie and still be aimed at: within `angle`
+/// (radians) of it, or within `min_radius` world units of the line, whichever is wider, so a
+/// ring at your feet is as easy to catch as a chest across the room. From the tuning's
+/// `aim_buffer_degrees` and `aim_min_radius` ([`crate::tuning::ViewTuning`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AimBuffer {
+    pub angle: f32,
+    pub min_radius: f32,
+}
+
+impl AimBuffer {
+    /// Only what the line itself passes through.
+    pub const EXACT: AimBuffer = AimBuffer { angle: 0.0, min_radius: 0.0 };
+
+    /// The buffer the tuning gives.
+    pub fn of(tuning: &Tuning) -> AimBuffer {
+        AimBuffer { angle: tuning.view.aim_buffer_degrees.max(0.0).to_radians(), min_radius: tuning.view.aim_min_radius.max(0.0) }
+    }
+
+    /// How far off the line, in world units, something `along` units out may lie.
+    pub fn radius_at(&self, along: f32) -> f32 {
+        (along * self.angle.tan()).max(self.min_radius)
+    }
+}
+
+/// The point of the box `min..max` closest to the segment from `origin` along unit `dir` for
+/// `length`. Found by alternating projections, each onto the other set, which converges to a
+/// closest pair for two closed convex sets (Cheney and Goldstein, "Proximity maps for convex
+/// sets", Proc. AMS 10, 1959, <https://doi.org/10.1090/S0002-9939-1959-0105008-8>).
+fn segment_box_closest(origin: Vec3, dir: Vec3, length: f32, min: Vec3, max: Vec3) -> Vec3 {
+    let mut t = ((min + max) * 0.5 - origin).dot(dir).clamp(0.0, length);
+    let mut q = (origin + dir * t).clamp(min, max);
+    for _ in 0..24 {
+        let next = (q - origin).dot(dir).clamp(0.0, length);
+        q = (origin + dir * next).clamp(min, max);
+        if (next - t).abs() < 1e-5 {
+            break;
+        }
+        t = next;
+    }
+    q
+}
+
+/// How well a target is aimed at: how far off the crosshair's line it lies, as an angle in
+/// radians (0 if the line passes through it), and how far out along the line, world units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AimScore {
+    pub angle: f32,
+    pub distance: f32,
+}
+
+/// How well the line from `origin` along unit `dir` aims at the box `min..max` placed by
+/// `world_from_item` (rigid or evenly scaled): an exact hit within `reach`, or else the box's
+/// nearest point to the line, if that is ahead, within `reach` of the eye and within `buffer`
+/// of the line. `None` if it is not aimed at.
+pub fn aim_score(origin: Vec3, dir: Vec3, reach: f32, buffer: AimBuffer, world_from_item: Transform, min: Vec3, max: Vec3) -> Option<AimScore> {
+    let world_from_local = world_from_item.compute_affine();
+    let inverse = world_from_local.inverse();
+    let local_origin = inverse.transform_point3(origin);
+    // Left unnormalised, so the distance along it stays in world units under a scale.
+    let local_dir = inverse.transform_vector3(dir);
+    if let Some(t) = ray_box(local_origin, local_dir, min, max).filter(|&t| t <= reach) {
+        return Some(AimScore { angle: 0.0, distance: t });
+    }
+    if buffer == AimBuffer::EXACT {
+        return None;
+    }
+    let world_per_local = local_dir.length().recip();
+    let local_q = segment_box_closest(local_origin, local_dir * world_per_local, reach / world_per_local, min, max);
+    let q = world_from_local.transform_point3(local_q);
+    let along = (q - origin).dot(dir);
+    let off = (q - origin - dir * along).length();
+    if along <= 0.0 || q.distance(origin) > reach || off > buffer.radius_at(along) {
+        return None;
+    }
+    Some(AimScore { angle: off.atan2(along), distance: along })
+}
+
+/// Which of `targets` (each a world-from-item transform, rigid or evenly scaled, and its
+/// item-space bounds) the crosshair's line from `origin` along unit `dir` aims at within
+/// `reach` ([`aim_score`]): the one nearest the line by angle, and of those it passes through,
+/// the nearest. One rule for floor items, containers and folk alike.
+pub fn nearest_aimed<T: Copy>(
     origin: Vec3,
     dir: Vec3,
     reach: f32,
+    buffer: AimBuffer,
     targets: impl IntoIterator<Item = (T, Transform, Vec3, Vec3)>,
-) -> Option<(T, f32)> {
+) -> Option<(T, AimScore)> {
     targets
         .into_iter()
-        .filter_map(|(id, world_from_item, min, max)| {
-            let inverse = world_from_item.compute_affine().inverse();
-            let local_origin = inverse.transform_point3(origin);
-            // Left unnormalised, so the distance along it stays in world units under a scale.
-            let local_dir = inverse.transform_vector3(dir);
-            ray_box(local_origin, local_dir, min, max).filter(|&t| t <= reach).map(|t| (id, t))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter_map(|(id, world_from_item, min, max)| aim_score(origin, dir, reach, buffer, world_from_item, min, max).map(|score| (id, score)))
+        .min_by(|a, b| a.1.angle.total_cmp(&b.1.angle).then(a.1.distance.total_cmp(&b.1.distance)))
 }
 
 /// An item lying in the level, with its item-space bounds for picking. The item itself is in
@@ -879,6 +955,7 @@ pub(crate) fn sway_held(
 }
 
 fn aim(
+    tuning: Res<Tuning>,
     camera: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
     items: Query<(Entity, &GlobalTransform, &FloorItem)>,
     containers: Query<(Entity, &GlobalTransform, &PropPiece), With<Container>>,
@@ -892,7 +969,7 @@ fn aim(
         .iter()
         .map(|(entity, transform, floor)| (entity, transform.compute_transform(), floor.min, floor.max))
         .chain(containers.iter().map(|(entity, transform, piece)| (entity, transform.compute_transform(), piece.min, piece.max)));
-    let hit = nearest_hit(eye.translation(), eye.forward().as_vec3(), REACH, targets).map(|(entity, _)| entity);
+    let hit = nearest_aimed(eye.translation(), eye.forward().as_vec3(), REACH, AimBuffer::of(&tuning), targets).map(|(entity, _)| entity);
     if aimed.0 != hit {
         aimed.0 = hit;
     }
@@ -974,8 +1051,8 @@ mod tests {
         // The pickup box grows with it, and a ray onto its top lands there, in world units.
         let top = Vec3::new((min.x + max.x) * 0.5, max.y, (min.z + max.z) * 0.5);
         let from = top + Vec3::Y * 5.0;
-        let hit = nearest_hit(from, Vec3::NEG_Y, REACH, [((), transform, Vec3::new(-1.0, -2.0, -0.2), Vec3::new(1.5, 7.0, 0.3))]);
-        assert!(hit.is_some_and(|(_, t)| (t - 5.0).abs() < 1e-3), "{hit:?}");
+        let hit = nearest_aimed(from, Vec3::NEG_Y, REACH, AimBuffer::EXACT, [((), transform, Vec3::new(-1.0, -2.0, -0.2), Vec3::new(1.5, 7.0, 0.3))]);
+        assert!(hit.is_some_and(|(_, s)| (s.distance - 5.0).abs() < 1e-3 && s.angle == 0.0), "{hit:?}");
     }
 
     #[test]
@@ -992,8 +1069,76 @@ mod tests {
         let (min, max) = (Vec3::splat(-1.0), Vec3::splat(1.0));
         let at = |z: f32| Transform::from_xyz(0.0, 0.0, z).with_rotation(Quat::from_rotation_y(0.6));
         let targets = [(1, at(-15.0), min, max), (2, at(-8.0), min, max), (3, at(-40.0), min, max)];
-        assert_eq!(nearest_hit(Vec3::ZERO, Vec3::NEG_Z, REACH, targets).map(|h| h.0), Some(2));
-        assert_eq!(nearest_hit(Vec3::ZERO, Vec3::NEG_Z, REACH, [targets[2]]), None);
+        let buffer = AimBuffer::of(&Tuning::default());
+        assert_eq!(nearest_aimed(Vec3::ZERO, Vec3::NEG_Z, REACH, buffer, targets).map(|h| h.0), Some(2));
+        assert_eq!(nearest_aimed(Vec3::ZERO, Vec3::NEG_Z, REACH, buffer, [targets[2]]), None);
+    }
+
+    /// A ring resting on the floor `at`, as it is laid out: its world transform and bounds.
+    fn ring_on_floor(at: Vec3) -> (Transform, Vec3, Vec3) {
+        let ring = fb_items::roll_item("Ring", 2).unwrap();
+        let points = item_points(&ring.shape.build());
+        let (min, max) = bounds(points.iter().copied()).unwrap();
+        (rest_on_floor(&points, at, 0.0, floor_scale()).unwrap(), min, max)
+    }
+
+    /// The direction from `eye` to `target`, turned `degrees` to the right about +Y.
+    fn off_by(eye: Vec3, target: Vec3, degrees: f32) -> Vec3 {
+        Quat::from_rotation_y(-degrees.to_radians()) * (target - eye).normalize()
+    }
+
+    #[test]
+    fn a_ring_a_few_pixels_off_the_crosshair_is_aimed_at() {
+        let eye = Vec3::new(0.0, EYE_HEIGHT, 0.0);
+        let (rest, min, max) = ring_on_floor(Vec3::new(0.0, 0.0, -10.0));
+        let centre = rest.transform_point((min + max) * 0.5);
+        let buffer = AimBuffer::of(&Tuning::default());
+        // Looking straight at it, it is aimed at either way.
+        assert!(nearest_aimed(eye, (centre - eye).normalize(), REACH, AimBuffer::EXACT, [((), rest, min, max)]).is_some());
+        // A degree and a half off is about twenty pixels on a 1080-pixel, 70-degree view: past
+        // the ring's edge, so an exact ray misses it, but the buffer still catches it.
+        let dir = off_by(eye, centre, 1.5);
+        assert_eq!(nearest_aimed(eye, dir, REACH, AimBuffer::EXACT, [((), rest, min, max)]), None, "the ray itself misses the ring");
+        let caught = nearest_aimed(eye, dir, REACH, buffer, [((), rest, min, max)]);
+        assert!(caught.is_some_and(|(_, s)| s.angle > 0.0), "{caught:?}");
+        // Well off to the side, it is not.
+        assert_eq!(nearest_aimed(eye, off_by(eye, centre, 12.0), REACH, buffer, [((), rest, min, max)]), None);
+    }
+
+    #[test]
+    fn of_two_items_side_by_side_the_nearer_the_crosshair_is_aimed_at() {
+        let eye = Vec3::new(0.0, EYE_HEIGHT, 0.0);
+        let left = ring_on_floor(Vec3::new(-1.2, 0.0, -10.0));
+        let right = ring_on_floor(Vec3::new(1.2, 0.0, -10.0));
+        let targets = [("left", left.0, left.1, left.2), ("right", right.0, right.1, right.2)];
+        let between = Vec3::new(0.0, 0.3, -10.0);
+        let buffer = AimBuffer::of(&Tuning::default());
+        // Straight between them, both are off the line and neither is near enough.
+        assert_eq!(nearest_aimed(eye, (between - eye).normalize(), REACH, buffer, targets), None);
+        // Nudged toward one, that one; nudged toward the other, the other.
+        let toward = |x: f32| (Vec3::new(x, 0.3, -10.0) - eye).normalize();
+        assert_eq!(nearest_aimed(eye, toward(0.75), REACH, buffer, targets).map(|h| h.0), Some("right"));
+        assert_eq!(nearest_aimed(eye, toward(-0.75), REACH, buffer, targets).map(|h| h.0), Some("left"));
+        // One the line passes through beats one merely near it.
+        let big = (Transform::from_xyz(0.9, 0.0, -10.0), Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
+        let with_big = [("right", right.0, right.1, right.2), ("big", big.0, big.1, big.2)];
+        assert_eq!(nearest_aimed(eye, toward(0.75), REACH, buffer, with_big).map(|h| h.0), Some("big"));
+    }
+
+    #[test]
+    fn nothing_beyond_reach_is_aimed_at() {
+        let eye = Vec3::new(0.0, EYE_HEIGHT, 0.0);
+        let buffer = AimBuffer::of(&Tuning::default());
+        for z in [-30.0, -21.0] {
+            let (rest, min, max) = ring_on_floor(Vec3::new(0.0, 0.0, z));
+            let centre = rest.transform_point((min + max) * 0.5);
+            for degrees in [0.0, 0.5, 1.5] {
+                assert_eq!(nearest_aimed(eye, off_by(eye, centre, degrees), REACH, buffer, [((), rest, min, max)]), None, "{z} {degrees}");
+            }
+        }
+        // Nor anything behind the eye, however near.
+        let (rest, min, max) = ring_on_floor(Vec3::new(0.0, 0.0, 3.0));
+        assert_eq!(nearest_aimed(eye, Vec3::NEG_Z, REACH, buffer, [((), rest, min, max)]), None);
     }
 
     #[test]
