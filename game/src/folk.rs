@@ -17,6 +17,9 @@
 //!   [`LOOK_RANGE`] draws their head round ([`look_at`]), turning about the neck; under a hood,
 //!   whose cape lies on the shoulders, the body turns a little instead.
 //! - Each stands in a circle on the floor that the player cannot walk into ([`Obstacles`]).
+//! - Looked at within reach, a card under the crosshair says who they are ([`folk_card_text`]):
+//!   name, folk and faction, and what they wear and hold, item names in their rarity's colour,
+//!   styled as the item card.
 //!
 //! Figures are built once per spot, in parallel, and kept in [`FolkFigures`], so the same
 //! level shows the same people without building them again.
@@ -24,15 +27,17 @@
 use std::sync::Arc;
 
 use armory::{ItemMesh, build::light::LightAnchor, cond::Condition};
-use bevy::{app::Propagate, light::NotShadowCaster, platform::collections::HashMap, prelude::*, tasks::ComputeTaskPool};
+use bevy::{app::Propagate, light::NotShadowCaster, platform::collections::HashMap, prelude::*, tasks::ComputeTaskPool, ui::ComputedUiRenderTargetInfo};
 use fb_body::{Body, BodySpec, HeldFit, Side, WornFit, fit_held, fit_worn};
-use fb_items::{Item, Slot, roll_item};
+use fb_items::{Item, Rarity, Slot, roll_item};
 use fb_level::{FolkSpot, Level};
 use procgen_rng::Mulberry32;
 
-use crate::carry::{appearance_of, item_light, world_light};
+use crate::carry::{Aimed, REACH, ViewModelCamera, appearance_of, item_light, nearest_hit, world_light};
+use crate::inventory::card::{CARD_WIDTH, place_under};
 use crate::level::EXPOSURE;
-use crate::play::{CurrentLevel, Obstacles, PlayerCamera};
+use crate::play::{CurrentLevel, Obstacles, PlayerCamera, ScreenOpen};
+use crate::ui::{BG, FAINT, INK, LINE, MUTED, UiFonts, rarity_color};
 use crate::render::{ItemAppearance, ItemSpawner};
 
 pub struct FolkPlugin;
@@ -41,7 +46,18 @@ impl Plugin for FolkPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FolkFigures>()
             .init_resource::<Obstacles>()
-            .add_systems(Update, (spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>), idle_folk, turn_heads, block_the_way));
+            .init_resource::<AimedFolk>()
+            .init_resource::<UiFonts>()
+            .add_systems(
+                Update,
+                (
+                    spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    idle_folk,
+                    turn_heads,
+                    block_the_way,
+                    (aim_at_folk, spawn_folk_card, show_folk_card).chain(),
+                ),
+            );
     }
 }
 
@@ -243,6 +259,9 @@ pub struct Denizen {
     pub person: Person,
     /// The circle on the floor they stand in ([`Figure::radius`]).
     pub radius: f32,
+    /// The figure's bounds in its root's space, for looking at them.
+    pub min: Vec3,
+    pub max: Vec3,
 }
 
 /// The figure under its [`Denizen`] root, moving as someone standing does ([`Idle`]).
@@ -387,7 +406,7 @@ pub fn spawn_figure(commands: &mut Commands, spawner: &mut ItemSpawner, person: 
     let root = commands
         .spawn((
             Name::new(person.name.clone()),
-            Denizen { person: person.clone(), radius: figure.radius },
+            Denizen { person: person.clone(), radius: figure.radius, min: figure.bounds().0, max: figure.bounds().1 },
             stand_at(&person.spot),
             Visibility::default(),
         ))
@@ -460,6 +479,140 @@ fn block_the_way(folk: Query<(&Denizen, &GlobalTransform)>, mut obstacles: ResMu
     let circles: Vec<(Vec2, f32)> = folk.iter().map(|(denizen, at)| (at.translation().xz(), denizen.radius)).collect();
     if obstacles.0 != circles {
         obstacles.0 = circles;
+    }
+}
+
+/// What the card says about someone looked at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FolkCardText {
+    pub name: String,
+    /// Their folk and faction: "Dwarf of the Ash Choir".
+    pub line: String,
+    /// What they wear and what they hold, each item's name and rarity.
+    pub wears: Vec<(String, Rarity)>,
+    pub holds: Vec<(String, Rarity)>,
+}
+
+/// The card for `person`: their name, folk and faction (named as `data/factions.json` names
+/// it), and what they wear and hold.
+pub fn folk_card_text(person: &Person) -> FolkCardText {
+    let names = |gear: &mut dyn Iterator<Item = &(Slot, Item)>| gear.map(|(_, item)| (item.title().to_string(), item.rarity)).collect();
+    FolkCardText {
+        name: person.name.clone(),
+        line: format!("{} of {}", person.spot.folk.race().label, person.spot.faction.name()),
+        wears: names(&mut person.worn()),
+        holds: names(&mut person.held()),
+    }
+}
+
+/// The folk under the crosshair and in reach ([`REACH`]), if any.
+#[derive(Resource, Debug, Default)]
+pub struct AimedFolk(pub Option<Entity>);
+
+/// The card over the level for the folk looked at: one on the screen, styled as the item card
+/// (`crate::inventory::card`).
+#[derive(Component, Debug)]
+pub struct FolkCard;
+
+/// Picks the folk under the crosshair within reach, by their figure's bounds.
+fn aim_at_folk(eyes: Query<&GlobalTransform, With<PlayerCamera>>, folk: Query<(Entity, &GlobalTransform, &Denizen)>, mut aimed: ResMut<AimedFolk>) {
+    let hit = eyes.iter().next().and_then(|eye| {
+        let targets = folk.iter().map(|(entity, at, denizen)| (entity, at.compute_transform(), denizen.min, denizen.max));
+        nearest_hit(eye.translation(), eye.forward().as_vec3(), REACH, targets).map(|(entity, _)| entity)
+    });
+    if aimed.0 != hit {
+        aimed.0 = hit;
+    }
+}
+
+/// Spawns the folk card, hidden, once there is a camera drawing over the held torch to draw
+/// it (as the item card is).
+fn spawn_folk_card(mut commands: Commands, cards: Query<(), With<FolkCard>>, cameras: Query<Entity, With<ViewModelCamera>>) {
+    if !cards.is_empty() {
+        return;
+    }
+    let Some(camera) = cameras.iter().next() else { return };
+    commands.spawn((
+        Name::new("Folk card"),
+        FolkCard,
+        UiTargetCamera(camera),
+        Node {
+            position_type: PositionType::Absolute,
+            width: px(CARD_WIDTH),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4),
+            padding: UiRect::new(px(14), px(14), px(10), px(12)),
+            border: UiRect::all(px(1.5)),
+            border_radius: BorderRadius::all(px(12)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        BackgroundColor(BG),
+        BorderColor::all(LINE),
+        BoxShadow::new(Color::srgba(0.0, 0.0, 0.0, 0.55), px(0), px(14), px(0), px(34)),
+        GlobalZIndex(40),
+        Visibility::Hidden,
+        Pickable::IGNORE,
+    ));
+}
+
+/// Fills the card: the name in the display face, folk and faction under it, then what they
+/// wear and hold, each item's name in its rarity's colour.
+fn fill_folk_card(commands: &mut Commands, card: Entity, text: &FolkCardText, fonts: &UiFonts) {
+    commands.entity(card).despawn_children().with_children(|card| {
+        card.spawn((Text::new(text.name.clone()), UiFonts::style(&fonts.display, 22.0, INK)));
+        card.spawn((Text::new(text.line.clone()), UiFonts::style(&fonts.body_italic, 15.0, MUTED)));
+        for (heading, items) in [("Wears", &text.wears), ("Holds", &text.holds)] {
+            if items.is_empty() {
+                continue;
+            }
+            card.spawn((Node { margin: UiRect::top(px(4)), ..default() }, Text::new(heading), UiFonts::style(&fonts.mono, 12.0, MUTED)));
+            card.spawn((Text::default(), UiFonts::style(&fonts.body, 14.0, INK))).with_children(|line| {
+                for (i, (name, rarity)) in items.iter().enumerate() {
+                    if i > 0 {
+                        line.spawn((TextSpan::new(" \u{b7} "), UiFonts::style(&fonts.body, 14.0, FAINT.mix(&MUTED, 0.5))));
+                    }
+                    line.spawn((TextSpan::new(name.clone()), UiFonts::style(&fonts.body, 14.0, rarity_color(*rarity))));
+                }
+            });
+        }
+    });
+}
+
+/// Shows the card for the folk looked at, under the crosshair, while the level has focus and
+/// no item card is up. A card filled this frame waits a frame to be measured.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn show_folk_card(
+    mut commands: Commands,
+    open: Option<Res<ScreenOpen>>,
+    aimed: Res<AimedFolk>,
+    aimed_item: Option<Res<Aimed>>,
+    folk: Query<&Denizen>,
+    fonts: Res<UiFonts>,
+    mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<FolkCard>>,
+    mut shown: Local<Option<Entity>>,
+) {
+    let screen_open = open.is_some_and(|o| o.0.is_some());
+    let item_card = aimed_item.is_some_and(|a| a.0.is_some());
+    let subject = aimed.0.filter(|_| !screen_open && !item_card).and_then(|e| folk.get(e).ok().map(|d| (e, d)));
+    for (card, mut node, mut visibility, computed, target) in &mut cards {
+        let Some((entity, denizen)) = subject else {
+            *visibility = Visibility::Hidden;
+            *shown = None;
+            continue;
+        };
+        if *shown != Some(entity) {
+            fill_folk_card(&mut commands, card, &folk_card_text(&denizen.person), &fonts);
+            *shown = Some(entity);
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+        let size = computed.size * computed.inverse_scale_factor;
+        let screen = target.logical_size();
+        let at = place_under(screen * 0.5, size, screen);
+        node.left = px(at.x);
+        node.top = px(at.y);
+        *visibility = Visibility::Inherited;
     }
 }
 
@@ -570,7 +723,7 @@ mod tests {
             .init_resource::<Obstacles>()
             .add_systems(Update, (turn_heads, block_the_way));
         let person = Person::of(&folk_1207()[0]);
-        let root = app.world_mut().spawn((Denizen { person, radius: 2.5 }, Transform::default())).id();
+        let root = app.world_mut().spawn((Denizen { person, radius: 2.5, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) }, Transform::default())).id();
         let stance = app.world_mut().spawn((Stance { idle: Idle::of(1), turn: 0.0 }, Transform::default(), ChildOf(root))).id();
         let head = app.world_mut().spawn((FolkHead::default(), Transform::from_xyz(0.0, 14.0, 0.0), ChildOf(stance))).id();
         let camera = app.world_mut().spawn((PlayerCamera, Transform::from_translation(eye))).id();
@@ -597,6 +750,44 @@ mod tests {
         settle(&mut app);
         let look = app.world().get::<FolkHead>(head).unwrap().look;
         assert!(look.length() < 0.05, "back to straight ahead: {look}");
+    }
+
+    #[test]
+    fn the_card_names_the_person_their_faction_and_their_gear() {
+        for spot in folk_1207() {
+            let person = Person::of(&spot);
+            let card = folk_card_text(&person);
+            assert_eq!(card.name, person.name);
+            let faction = &fb_items::tables::factions()[spot.faction.0 as usize];
+            assert!(card.line.ends_with(faction.as_str()), "{}", card.line);
+            assert!(card.line.starts_with(spot.folk.race().label.as_str()), "{}", card.line);
+            assert_eq!(card.wears.len() + card.holds.len(), person.gear.len());
+            assert!(!card.holds.is_empty());
+            for (name, rarity) in card.wears.iter().chain(&card.holds) {
+                assert!(person.gear.iter().any(|(_, item)| item.title() == name && item.rarity == *rarity), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_card_shows_only_within_reach() {
+        let (mut app, _, camera) = looking_app(Vec3::new(0.0, 16.0, 30.0));
+        app.init_resource::<AimedFolk>().add_systems(Update, aim_at_folk);
+        let aim = |app: &mut App, eye: Vec3| {
+            *app.world_mut().get_mut::<Transform>(camera).unwrap() = Transform::from_translation(eye).looking_at(Vec3::new(0.0, 12.0, 0.0), Vec3::Y);
+            app.update();
+            app.update();
+            app.world().resource::<AimedFolk>().0
+        };
+        // A metre and a half off, looking at them: in reach.
+        assert!(aim(&mut app, Vec3::new(0.0, 16.0, 15.0)).is_some());
+        // Four metres off, looking at them: out of reach.
+        assert_eq!(aim(&mut app, Vec3::new(0.0, 16.0, 40.0)), None);
+        // Near, but looking away.
+        *app.world_mut().get_mut::<Transform>(camera).unwrap() = Transform::from_xyz(0.0, 16.0, 15.0).looking_at(Vec3::new(0.0, 16.0, 40.0), Vec3::Y);
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<AimedFolk>().0, None);
     }
 
     #[test]

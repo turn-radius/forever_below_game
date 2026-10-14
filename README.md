@@ -15,7 +15,7 @@ cargo run -p forever_below                 # the level for seed 1207
 cargo run -p forever_below -- --seed 42    # another level; every seed is a different layout
 ```
 
-You come through a door into the first level, and it shuts behind you. The keys are listed in the game: press Esc for the menu, then Controls.
+You come through a door into the first level, and it shuts behind you. Folk of the level's factions stand about in groups; look at one up close to see who they are. The keys are listed in the game: press Esc for the menu, then Controls.
 
 | Key | Does |
 |---|---|
@@ -28,7 +28,7 @@ You come through a door into the first level, and it shuts behind you. The keys 
 
 Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
 
-To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`.
+To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk) and lists where each stands, which is handy for `FB_DEBUG_POSE`.
 
 ### The Armory turntable
 
