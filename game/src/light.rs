@@ -1,6 +1,10 @@
 //! Light rigs. Carried and wall-mounted torches are the main light in the abyss
 //! (`docs/rendering.md`, "Light"); [`StudioLight`] is the even, camera-borne light of an item
 //! viewer. Both live apart from any one scene.
+//!
+//! Point and spot lights fall off as the toon shader draws them ([`reach_falloff`]): an
+//! inverse square softened near the light and windowed to zero at its range, so a light is
+//! set by how bright it is up close ([`peak_lumens`]) and how far it reaches.
 
 use bevy::{camera::Exposure, prelude::*};
 
@@ -13,6 +17,66 @@ impl Plugin for LightPlugin {
     }
 }
 
+/// Fraction of a light's range inside which its falloff stops climbing: the inverse square is
+/// softened to `1 / (d^2 + core^2)` with `core = CORE_FRACTION * range`. Must match
+/// `CORE_FRACTION` in `render/toon.wesl`.
+pub const CORE_FRACTION: f32 = 0.4;
+
+/// Shadow biases for lights in this game's units (10 cm). Bevy's defaults assume metres, so
+/// its depth bias of 0.08 is 8 mm here, which leaves walls the light grazes in shadow acne.
+/// The depth bias is in world units (5 cm); Bevy scales the normal bias by the shadow map's
+/// texel size at the fragment.
+pub const SHADOW_DEPTH_BIAS: f32 = 0.5;
+pub const SHADOW_NORMAL_BIAS: f32 = 1.2;
+
+/// A point or spot light's falloff at `distance` from it with reach `range`, 1 at the light
+/// and 0 from `range` on. The window `(1 - (d/r)^4)^2` and the `+1` that keeps the inverse
+/// square finite are Brian Karis's, from "Real Shading in Unreal Engine 4" (SIGGRAPH 2013,
+/// eq. 9); Bevy's `getDistanceAttenuation` uses the same window without the `+1`. Here the
+/// `+1` is measured in units of `CORE_FRACTION * range` rather than one world unit, so every
+/// light has the same shape across its reach (our own choice). Mirrors `reach_attenuation` in
+/// `render/toon.wesl`, times `core^2`.
+pub fn reach_falloff(distance: f32, range: f32) -> f32 {
+    if range <= 0.0 {
+        return 0.0;
+    }
+    let ratio = distance / range;
+    let window = (1.0 - ratio.powi(4)).clamp(0.0, 1.0).powi(2);
+    let core = distance / (CORE_FRACTION * range);
+    window / (1.0 + core * core)
+}
+
+/// Point light intensity in lumens that lights a surface square to it, `distance` units away,
+/// to `level` times its display colour in the toon shader under a plain inverse square. Bevy
+/// divides lumens by 4 pi for candela, the toon shader divides by pi (its Lambert lobe) and
+/// multiplies by the camera's exposure.
+pub fn lumens(level: f32, distance: f32, exposure: f32) -> f32 {
+    level * 4.0 * std::f32::consts::PI * std::f32::consts::PI * distance * distance / exposure
+}
+
+/// Lumens for a light of reach `range` to light a surface square to it, right at the light, to
+/// `level` times its display colour; further off it follows [`reach_falloff`]. The shader caps
+/// what one light gives at full, so a `level` over 1 widens the fully lit core.
+pub fn peak_lumens(level: f32, range: f32, exposure: f32) -> f32 {
+    lumens(level, CORE_FRACTION * range, exposure)
+}
+
+/// A point light in `color`, `peak` times full close up (see [`peak_lumens`]), reaching
+/// `range` units, for a camera with `exposure`.
+pub fn point_light(color: Color, peak: f32, range: f32, exposure: &Exposure) -> PointLight {
+    PointLight { color, intensity: peak_lumens(peak, range, exposure.exposure()), range, ..default() }
+}
+
+/// `light` casting shadows, with biases for this game's units.
+pub fn cast_shadows(light: PointLight) -> PointLight {
+    PointLight {
+        shadow_maps_enabled: true,
+        shadow_depth_bias: SHADOW_DEPTH_BIAS,
+        shadow_normal_bias: SHADOW_NORMAL_BIAS,
+        ..light
+    }
+}
+
 /// A flickering warm point light. Spawn with a [`PointLight`]; its intensity is driven from
 /// `intensity` here every frame.
 #[derive(Component, Clone, Copy, Debug)]
@@ -20,6 +84,9 @@ impl Plugin for LightPlugin {
 pub struct Torch {
     /// Intensity before flicker, in lumens.
     pub intensity: f32,
+    /// How deep the flicker goes, 0 (steady) to 1 (the prototype's full curve), as in
+    /// `armory::build::light::LightAnchor::flicker`.
+    pub flicker_depth: f32,
 }
 
 impl Torch {
@@ -31,16 +98,27 @@ impl Torch {
         0.88 + 0.08 * (13.1 * t).sin() + 0.05 * (7.3 * t + 1.2).sin() + 0.03 * (23.7 * t).sin()
     }
 
-    /// A torch's point light at `intensity` lumens reaching `range` units.
-    pub fn light(intensity: f32, range: f32) -> (Torch, PointLight) {
-        (Torch { intensity }, PointLight { color: Torch::COLOR, intensity, range, ..default() })
+    /// Flickers `light` by up to `flicker_depth` of the prototype's curve.
+    pub fn flickering(light: PointLight, flicker_depth: f32) -> (Torch, PointLight) {
+        (Torch { intensity: light.intensity, flicker_depth }, light)
+    }
+
+    /// A torch's point light, `peak` times full close up, reaching `range` units.
+    pub fn light(peak: f32, range: f32, exposure: &Exposure) -> (Torch, PointLight) {
+        Torch::flickering(point_light(Torch::COLOR, peak, range, exposure), 1.0)
+    }
+
+    /// The intensity multiplier at time `t` seconds: [`Torch::flicker`] scaled toward 1 by
+    /// `flicker_depth`.
+    pub fn wavering(&self, t: f32) -> f32 {
+        1.0 - self.flicker_depth.clamp(0.0, 1.0) * (1.0 - Torch::flicker(t))
     }
 }
 
 fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight)>) {
-    let flicker = Torch::flicker(time.elapsed_secs());
+    let t = time.elapsed_secs();
     for (torch, mut light) in &mut torches {
-        light.intensity = torch.intensity * flicker;
+        light.intensity = torch.intensity * torch.wavering(t);
     }
 }
 
@@ -99,6 +177,53 @@ mod tests {
             let f = Torch::flicker(i as f32 * 0.01);
             assert!((0.72..=1.04).contains(&f), "{f}");
         }
+    }
+
+    #[test]
+    fn a_steady_torch_does_not_flicker() {
+        let steady = Torch { intensity: 1.0, flicker_depth: 0.0 };
+        let full = Torch { intensity: 1.0, flicker_depth: 1.0 };
+        for i in 0..100 {
+            let t = i as f32 * 0.1;
+            assert_eq!(steady.wavering(t), 1.0);
+            assert_eq!(full.wavering(t), Torch::flicker(t));
+        }
+    }
+
+    #[test]
+    fn falloff_is_full_at_the_light_and_dark_at_its_reach() {
+        assert_eq!(reach_falloff(0.0, 60.0), 1.0);
+        assert_eq!(reach_falloff(60.0, 60.0), 0.0);
+        assert_eq!(reach_falloff(90.0, 60.0), 0.0);
+        let samples: Vec<f32> = (0..=60).map(|d| reach_falloff(d as f32, 60.0)).collect();
+        assert!(samples.windows(2).all(|w| w[1] < w[0]), "falls all the way");
+        // The same shape at any reach.
+        assert!((reach_falloff(15.0, 60.0) - reach_falloff(30.0, 120.0)).abs() < 1e-6);
+        // Softened at the core: at the core distance it is still half, less the window.
+        let core = CORE_FRACTION * 60.0;
+        assert!((reach_falloff(core, 60.0) - 0.5 * (1.0 - CORE_FRACTION.powi(4)).powi(2)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn peak_lumens_match_the_toon_light() {
+        // The toon shader's light: lumens / 4 pi / (d^2 + core^2) / pi * exposure * window.
+        let exposure = Exposure::INDOOR.exposure();
+        let (range, d) = (80.0, 30.0);
+        let core = CORE_FRACTION * range;
+        let window = (1.0f32 - (d / range).powi(4)).powi(2);
+        let peak = peak_lumens(0.8, range, exposure);
+        let pi = std::f32::consts::PI;
+        let level = peak / (4.0 * pi) / (d * d + core * core) / pi * exposure * window;
+        assert!((level - 0.8 * reach_falloff(d, range)).abs() < 1e-4, "{level}");
+        assert!((lumens(1.0, 20.0, exposure) / lumens(1.0, 10.0, exposure) - 4.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn shadowed_lights_use_biases_in_game_units() {
+        let light = cast_shadows(point_light(Torch::COLOR, 1.0, 60.0, &Exposure::INDOOR));
+        assert!(light.shadow_maps_enabled);
+        assert_eq!(light.shadow_depth_bias, SHADOW_DEPTH_BIAS);
+        assert_eq!(light.shadow_normal_bias, SHADOW_NORMAL_BIAS);
     }
 
     #[test]
