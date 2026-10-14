@@ -27,6 +27,8 @@ use fb_level::{CELL, LightKind};
 use crate::capture::FrameCapturePlugin;
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
+use crate::audio::sound_effect;
+use crate::settings::GameSettings;
 use crate::render::{ArmoryPart, ItemAppearance, MinWidth, OutlineMaterial, ToonMaterial, part_to_mesh};
 use geometry::{CellView, Doorway, LevelMesh};
 
@@ -325,6 +327,7 @@ fn shut_the_entrance(
     mut commands: Commands,
     time: Res<Time>,
     sounds: Option<Res<LevelSounds>>,
+    game: Option<Res<GameSettings>>,
     players: Query<&GlobalTransform, With<Player>>,
     mut doors: Query<(&mut EntranceDoor, &mut Transform)>,
     mut blocked: ResMut<BlockedCells>,
@@ -341,7 +344,8 @@ fn shut_the_entrance(
             }
             Some(DoorEvent::Shut) => {
                 if let Some(sounds) = &sounds {
-                    commands.spawn((Name::new("door shut"), AudioPlayer::new(sounds.door_shut.clone()), PlaybackSettings::DESPAWN));
+                    let game = game.as_deref().copied().unwrap_or_default();
+                    commands.spawn((Name::new("door shut"), AudioPlayer::new(sounds.door_shut.clone()), sound_effect(&game)));
                 }
             }
             None => {}
@@ -490,6 +494,7 @@ mod tests {
         app.init_resource::<Time>()
             .init_resource::<BlockedCells>()
             .insert_resource(LevelSounds::default())
+            .insert_resource(GameSettings { sound_volume: 0.5, ..default() })
             .add_systems(Update, shut_the_entrance);
         let d = door();
         app.world_mut().spawn((d, Transform::default()));
@@ -516,6 +521,8 @@ mod tests {
         }
         assert!(shut_at.is_some());
         assert_eq!(sounds(&mut app), 1, "and only once");
+        let mut playback = app.world_mut().query::<&PlaybackSettings>();
+        assert_eq!(playback.single(app.world()).unwrap().volume.to_linear(), 0.5, "at the sound volume");
     }
 
     #[test]

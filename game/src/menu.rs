@@ -3,7 +3,8 @@
 //! free and the level's clock stops ([`Time<Virtual>`]); the music plays on.
 //!
 //! Controls lists every binding in the [`Keymap`], by group, so it always shows the keys the
-//! game reads. `FB_OPEN_MENU=main|controls|settings` opens the menu at the start, on that
+//! game reads. Settings has a slider or a toggle for each [`Setting`]; a change applies the
+//! same frame and is saved to `settings.json` ([`crate::settings`]). `FB_OPEN_MENU=main|controls|settings` opens the menu at the start, on that
 //! page, for captures.
 
 use bevy::{
@@ -14,7 +15,8 @@ use bevy::{
 use crate::carry::ViewModelCamera;
 use crate::keymap::{Action, ActionInput, Group, Keymap};
 use crate::play::{Screen, ScreenOpen, show_screen, switch_screens};
-use crate::ui::{BG, BRIGHT, FAINT, INK, MUTED, UiFonts, node_rect};
+use crate::settings::{GameSettings, Setting};
+use crate::ui::{BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, UiFonts, node_rect};
 
 /// The page of the menu on show.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -60,6 +62,25 @@ pub struct MenuButton(pub MenuCommand);
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ControlRow(pub Action);
 
+/// Where a setting is changed: a slider's bar, or a toggle's box. A click or drag here sets it.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingControl(pub Setting);
+
+/// A slider's filled part, or a toggle's mark.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingFill(pub Setting);
+
+/// A slider's knob.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingKnob(pub Setting);
+
+/// A setting's value as text ("70%", "On").
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingValue(pub Setting);
+
+/// A slider's width in logical pixels.
+const SLIDER_PX: f32 = 280.0;
+
 /// The menu's width in logical pixels.
 const MENU_PX: f32 = 640.0;
 
@@ -69,11 +90,13 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Keymap>()
             .init_resource::<UiFonts>()
+            // Kept as loaded if `SettingsPlugin` came first.
+            .init_resource::<GameSettings>()
             .init_resource::<ScreenOpen>()
             .init_resource::<MenuPage>()
             .add_message::<MenuCommand>()
             .add_systems(PostStartup, open_for_capture.run_if(|| capture_page().is_some()))
-            .add_systems(Update, (choose_buttons, apply_commands, pause_while_open, build_menu, light_hovered).chain().after(switch_screens));
+            .add_systems(Update, (choose_buttons, adjust_settings, apply_commands, pause_while_open, build_menu, show_settings, light_hovered).chain().after(switch_screens));
     }
 }
 
@@ -166,6 +189,7 @@ fn build_menu(
     open: Res<ScreenOpen>,
     page: Res<MenuPage>,
     keymap: Res<Keymap>,
+    settings: Res<GameSettings>,
     fonts: Res<UiFonts>,
     menus: Query<Entity, With<MenuScreen>>,
     cameras: Query<Entity, With<ViewModelCamera>>,
@@ -211,7 +235,7 @@ fn build_menu(
                     match *page {
                         MenuPage::Main => main_page(menu, &fonts),
                         MenuPage::Controls => controls_page(menu, &fonts, &keymap),
-                        MenuPage::Settings => settings_page(menu, &fonts),
+                        MenuPage::Settings => settings_page(menu, &fonts, &keymap, &settings),
                     }
                 });
         });
@@ -271,10 +295,171 @@ fn controls_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, keymap: &Keym
     back_button(menu, fonts);
 }
 
-fn settings_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts) {
+fn settings_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, keymap: &Keymap, settings: &GameSettings) {
     heading(menu, fonts, "settings");
-    menu.spawn((Text::new("Nothing to set here yet. Minus and equals turn the music down and up."), UiFonts::style(&fonts.body, 16.0, MUTED)));
+    menu.spawn(Node { flex_direction: FlexDirection::Column, width: percent(100), row_gap: px(10), ..default() }).with_children(|list| {
+        for setting in Setting::ALL {
+            list.spawn(Node { align_items: AlignItems::Center, column_gap: px(20), border: UiRect::bottom(px(1)), padding: UiRect::bottom(px(8)), ..default() })
+                .insert(BorderColor::all(FAINT))
+                .with_children(|row| {
+                    row.spawn((Text::new(setting.name()), UiFonts::style(&fonts.body, 17.0, MUTED), Node { width: px(200), ..default() }));
+                    match setting.range() {
+                        Some(_) => slider(row, setting, setting.fraction(settings)),
+                        None => toggle(row, setting, setting.fraction(settings) >= 0.5),
+                    }
+                    row.spawn((
+                        SettingValue(setting),
+                        Text::new(setting.shown(settings)),
+                        UiFonts::style(&fonts.mono, 15.0, BRIGHT),
+                        TextLayout::justify(Justify::Right),
+                        Node { flex_grow: 1.0, ..default() },
+                    ));
+                });
+        }
+    });
+    let keys = |action| keymap.binding(action).map(|b| b.labels().join(" or ")).unwrap_or_default();
+    menu.spawn((
+        Node { width: percent(100), ..default() },
+        children![(
+            Text::new(format!("The music also turns down and up with {} and {}.", keys(Action::MusicQuieter), keys(Action::MusicLouder))),
+            UiFonts::style(&fonts.body_italic, 15.0, MUTED),
+        )],
+    ));
     back_button(menu, fonts);
+}
+
+/// A slider in the ledger's colours: a cell-dark bar ruled in tan, filled to its value in muted
+/// tan, with a cream knob. The node is taller than the bar so it is easy to catch.
+fn slider(row: &mut ChildSpawnerCommands, setting: Setting, fraction: f32) {
+    row.spawn((SettingControl(setting), Node { width: px(SLIDER_PX), height: px(22), align_items: AlignItems::Center, ..default() })).with_children(|bar| {
+        bar.spawn((
+            Node { width: percent(100), height: px(6), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), ..default() },
+            BackgroundColor(CELL),
+            BorderColor::all(LINE),
+        ))
+        .with_child((SettingFill(setting), Node { width: percent(fraction * 100.0), height: percent(100), border_radius: BorderRadius::all(px(3)), ..default() }, BackgroundColor(MUTED)));
+        bar.spawn((
+            SettingKnob(setting),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(fraction * 100.0),
+                width: px(14),
+                height: px(14),
+                margin: UiRect::left(px(-7)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::MAX,
+                ..default()
+            },
+            BackgroundColor(INK),
+            BorderColor::all(BG),
+        ));
+    });
+}
+
+/// A toggle: a small box ruled in tan, with a cream mark when on.
+fn toggle(row: &mut ChildSpawnerCommands, setting: Setting, on: bool) {
+    row.spawn((SettingControl(setting), Node { width: px(SLIDER_PX), height: px(22), align_items: AlignItems::Center, ..default() })).with_children(|cell| {
+        cell.spawn((
+            Node {
+                width: px(20),
+                height: px(20),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(4)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(CELL),
+            BorderColor::all(LINE),
+        ))
+        .with_child((
+            SettingFill(setting),
+            Node { width: px(10), height: px(10), border_radius: BorderRadius::all(px(2)), ..default() },
+            BackgroundColor(INK),
+            if on { Visibility::Inherited } else { Visibility::Hidden },
+        ));
+    });
+}
+
+/// How far along a slider drawn at `rect` the point `x` is, 0 to 1.
+pub fn fraction_along(rect: Rect, x: f32) -> f32 {
+    if rect.width() <= 0.0 {
+        return 0.0;
+    }
+    ((x - rect.min.x) / rect.width()).clamp(0.0, 1.0)
+}
+
+/// A click on a toggle flips it; a press on a slider sets it under the mouse and drags it
+/// until the button comes up.
+#[allow(clippy::too_many_arguments)]
+fn adjust_settings(
+    input: ActionInput,
+    open: Res<ScreenOpen>,
+    page: Res<MenuPage>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    controls: Query<(&SettingControl, &ComputedNode, &UiGlobalTransform)>,
+    mut held: Local<Option<Setting>>,
+    mut settings: ResMut<GameSettings>,
+) {
+    if !open.is(Screen::Menu) || *page != MenuPage::Settings || !input.pressed(Action::Choose) {
+        *held = None;
+        return;
+    }
+    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
+    let mut next = *settings;
+    if input.just_pressed(Action::Choose)
+        && let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    {
+        match control.0.range() {
+            Some(_) => *held = Some(control.0),
+            None => {
+                let flipped = 1.0 - control.0.get(&next);
+                control.0.set(&mut next, flipped);
+            }
+        }
+    }
+    if let Some(setting) = *held
+        && let Some((_, node, transform)) = controls.iter().find(|(c, ..)| c.0 == setting)
+    {
+        setting.set_fraction(&mut next, fraction_along(node_rect(node, transform), point.x));
+    }
+    settings.set_if_neq(next);
+}
+
+/// Keeps the sliders, toggles and values on the settings page showing the settings, which the
+/// keyboard can change too.
+fn show_settings(
+    settings: Res<GameSettings>,
+    mut fills: Query<(&SettingFill, &mut Node, &mut Visibility), Without<SettingKnob>>,
+    mut knobs: Query<(&SettingKnob, &mut Node), Without<SettingFill>>,
+    mut values: Query<(&SettingValue, &mut Text)>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    for (fill, mut node, mut visibility) in &mut fills {
+        let fraction = fill.0.fraction(&settings);
+        if fill.0.range().is_some() {
+            let width = percent(fraction * 100.0);
+            if node.width != width {
+                node.width = width;
+            }
+        } else {
+            visibility.set_if_neq(if fraction >= 0.5 { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    }
+    for (knob, mut node) in &mut knobs {
+        let left = percent(knob.0.fraction(&settings) * 100.0);
+        if node.left != left {
+            node.left = left;
+        }
+    }
+    for (value, mut text) in &mut values {
+        let shown = value.0.shown(&settings);
+        if text.0 != shown {
+            text.0 = shown;
+        }
+    }
 }
 
 /// Brightens the button under the mouse.
@@ -378,6 +563,38 @@ mod tests {
         choose(&mut app, MenuCommand::Quit);
         let exits = app.world().resource::<Messages<AppExit>>();
         assert!(exits.iter_current_update_messages().any(|e| *e == AppExit::Success));
+    }
+
+    #[test]
+    fn sliders_read_the_mouse_along_their_bar() {
+        let bar = Rect::new(100.0, 10.0, 380.0, 32.0);
+        assert_eq!(fraction_along(bar, 100.0), 0.0);
+        assert_eq!(fraction_along(bar, 240.0), 0.5);
+        assert_eq!(fraction_along(bar, 500.0), 1.0);
+        assert_eq!(fraction_along(bar, 0.0), 0.0);
+        assert_eq!(fraction_along(Rect::new(5.0, 0.0, 5.0, 10.0), 9.0), 0.0);
+    }
+
+    #[test]
+    fn the_settings_page_shows_every_setting_and_follows_the_keys() {
+        let mut app = menu_app();
+        app.add_systems(Update, crate::audio::turn_music_volume.before(switch_screens));
+        press(&mut app, KeyCode::Escape);
+        choose(&mut app, MenuCommand::Show(MenuPage::Settings));
+        app.update();
+        let mut controls = app.world_mut().query::<&SettingControl>();
+        assert_eq!(controls.iter(app.world()).map(|c| c.0).collect::<Vec<_>>(), Setting::ALL.to_vec());
+        let shown = |app: &mut App, setting: Setting| {
+            let mut values = app.world_mut().query::<(&SettingValue, &Text)>();
+            values.iter(app.world()).find(|(v, _)| v.0 == setting).map(|(_, t)| t.0.clone()).unwrap()
+        };
+        assert_eq!(shown(&mut app, Setting::MusicVolume), "100%");
+        assert_eq!(shown(&mut app, Setting::Fullscreen), "Off");
+        press(&mut app, KeyCode::Minus);
+        assert_eq!(shown(&mut app, Setting::MusicVolume), "90%", "minus still turns the music down, and the page shows it");
+        app.world_mut().resource_mut::<GameSettings>().fullscreen = true;
+        app.update();
+        assert_eq!(shown(&mut app, Setting::Fullscreen), "On");
     }
 
     #[test]

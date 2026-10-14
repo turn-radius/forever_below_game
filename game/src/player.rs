@@ -14,6 +14,7 @@ use fb_level::{CELL, Level};
 
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::light::point_light;
+use crate::settings::GameSettings;
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, level_has_focus};
 
 /// The body's radius on the floor in world units (35 cm).
@@ -24,7 +25,7 @@ pub const WALK_SPEED: f32 = 14.0;
 pub const HURRY_SPEED: f32 = 25.0;
 /// How quickly velocity closes on the wanted velocity, per second ([`StableInterpolate`]).
 const ACCELERATION: f32 = 10.0;
-/// Radians of turn per pixel of mouse motion.
+/// Radians of turn per pixel of mouse motion at a mouse sensitivity of 1.
 const LOOK_SENSITIVITY: f32 = 0.0022;
 /// Pitch stops short of straight up and down.
 const PITCH_LIMIT: f32 = 85.0 * std::f32::consts::PI / 180.0;
@@ -45,6 +46,8 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Keymap>()
+            // Kept as loaded if `SettingsPlugin` came first.
+            .init_resource::<GameSettings>()
             .add_systems(Startup, (spawn_player, grab_cursor))
             .add_systems(Update, (take_cursor, look, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens));
     }
@@ -129,16 +132,27 @@ pub fn set_grab(cursor: &mut CursorOptions, grabbed: bool) {
     cursor.grab_mode = if grabbed { CursorGrabMode::Locked } else { CursorGrabMode::None };
 }
 
+/// The turn for a mouse movement of `delta` pixels, as `(yaw, pitch)` radians: right turns
+/// right and up looks up (down with [`GameSettings::invert_mouse_y`]), scaled by
+/// [`GameSettings::mouse_sensitivity`].
+pub fn look_turn(delta: Vec2, settings: &GameSettings) -> Vec2 {
+    let speed = LOOK_SENSITIVITY * settings.mouse_sensitivity;
+    let up = if settings.invert_mouse_y { -1.0 } else { 1.0 };
+    Vec2::new(-delta.x * speed, -delta.y * speed * up)
+}
+
 fn look(
     motion: Res<AccumulatedMouseMotion>,
+    settings: Res<GameSettings>,
     cursor: Single<&CursorOptions, With<PrimaryWindow>>,
     mut body: Single<(&mut Locomotion, &mut Transform), With<Player>>,
     mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>,
 ) {
     let (locomotion, transform) = &mut *body;
     if cursor.grab_mode != CursorGrabMode::None && motion.delta != Vec2::ZERO {
-        locomotion.yaw -= motion.delta.x * LOOK_SENSITIVITY;
-        locomotion.pitch = (locomotion.pitch - motion.delta.y * LOOK_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        let turn = look_turn(motion.delta, &settings);
+        locomotion.yaw += turn.x;
+        locomotion.pitch = (locomotion.pitch + turn.y).clamp(-PITCH_LIMIT, PITCH_LIMIT);
     }
     transform.rotation = Quat::from_rotation_y(locomotion.yaw);
     camera.rotation = Quat::from_rotation_x(locomotion.pitch);
@@ -261,6 +275,17 @@ fn exit_normal(previous: Vec2, min: Vec2, max: Vec2) -> Vec2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sensitivity_scales_mouse_look_and_invert_flips_it() {
+        let usual = GameSettings::default();
+        let turn = look_turn(Vec2::new(10.0, -5.0), &usual);
+        assert!((turn - Vec2::new(-10.0, 5.0) * LOOK_SENSITIVITY).length() < 1e-7, "right turns right, up looks up");
+        let quick = GameSettings { mouse_sensitivity: 2.0, ..usual };
+        assert!((look_turn(Vec2::new(10.0, -5.0), &quick) - turn * 2.0).length() < 1e-7);
+        let inverted = GameSettings { invert_mouse_y: true, ..usual };
+        assert_eq!(look_turn(Vec2::new(10.0, -5.0), &inverted), Vec2::new(turn.x, -turn.y));
+    }
 
     /// A map from rows of `#` (rock) and `.` (floor); outside it is rock.
     fn map<'a>(rows: &'a [&'a str]) -> impl Fn(i32, i32) -> bool + 'a {
