@@ -220,13 +220,32 @@ pub fn reveal_icons(mut commands: Commands, cache: Res<IconCache>, awaiting: Que
     }
 }
 
+/// Whether `item` is drawn standing as it is built rather than laid along its longest side:
+/// the Armory's chests, barrels, crates and amphorae are built standing on the floor, +Y up
+/// and their front toward +Z (`armory::families::chests`), and read as what they are only
+/// that way up.
+pub fn stands_upright(item: &Item) -> bool {
+    matches!(item.shape, armory::Item::Chests(_))
+}
+
 /// How an item is posed for its icon: turned so its longest side runs up the image and its
-/// next longest across (as its footprint's rows and columns do), a quarter turn more if it
-/// lies `turned`, then turned and tilted a little toward the viewer. Returns the rotation and
-/// the posed bounds. `None` for an item with no vertices.
-pub fn icon_pose(points: &[Vec3], turned: bool) -> Option<(Quat, Vec3, Vec3)> {
+/// next longest across, or, `upright` ([`stands_upright`]), kept as it is built with its
+/// front to the viewer; a quarter turn more if it lies `turned`, then turned and tilted a
+/// little toward the viewer. Returns the rotation and the posed bounds. `None` for an item
+/// with no vertices.
+pub fn icon_pose(points: &[Vec3], upright: bool, turned: bool) -> Option<(Quat, Vec3, Vec3)> {
     let (min, max) = bounds(points.iter().copied())?;
-    let size = max - min;
+    let align = if upright { Quat::IDENTITY } else { longest_up(max - min) };
+    let turn = if turned { Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2) } else { Quat::IDENTITY };
+    let view = Quat::from_rotation_x(VIEW_PITCH) * Quat::from_rotation_y(-VIEW_YAW);
+    let rotation = (view * turn * align).normalize();
+    let (min, max) = bounds(points.iter().map(|&p| rotation * p))?;
+    Some((rotation, min, max))
+}
+
+/// The turn taking an item of `size` so its longest side runs up (+Y) and its next longest
+/// across (+X).
+fn longest_up(size: Vec3) -> Quat {
     let mut axes = [0, 1, 2];
     axes.sort_by(|&a, &b| size[b].total_cmp(&size[a]));
     // Columns of the matrix taking item space to the posed view: longest to +Y, next to +X.
@@ -237,12 +256,7 @@ pub fn icon_pose(points: &[Vec3], turned: bool) -> Option<(Quat, Vec3, Vec3)> {
     if Mat3::from_cols(columns[0], columns[1], columns[2]).determinant() < 0.0 {
         columns[axes[2]] = Vec3::NEG_Z;
     }
-    let align = Quat::from_mat3(&Mat3::from_cols(columns[0], columns[1], columns[2]));
-    let turn = if turned { Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2) } else { Quat::IDENTITY };
-    let view = Quat::from_rotation_x(VIEW_PITCH) * Quat::from_rotation_y(-VIEW_YAW);
-    let rotation = (view * turn * align).normalize();
-    let (min, max) = bounds(points.iter().map(|&p| rotation * p))?;
-    Some((rotation, min, max))
+    Quat::from_mat3(&Mat3::from_cols(columns[0], columns[1], columns[2]))
 }
 
 /// The orthographic view, width and height in world units, that holds posed bounds `min..max`
@@ -288,7 +302,7 @@ pub fn draw_icons(mut commands: Commands, mut cache: ResMut<IconCache>, mut spaw
 fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, turned: bool, image: Handle<Image>, stage: usize) -> Option<[Entity; 4]> {
     let mesh = item.shape.build();
     let points: Vec<Vec3> = mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
-    let (rotation, min, max) = icon_pose(&points, turned)?;
+    let (rotation, min, max) = icon_pose(&points, stands_upright(item), turned)?;
     let size = icon_size(item, turned);
     let view = icon_view(min, max, size.x as f32 / size.y as f32);
     let centre = (min + max) * 0.5;
@@ -379,13 +393,29 @@ mod tests {
     #[test]
     fn the_longest_side_runs_up_the_icon() {
         // Long along X, wide along Z, thin along Y: a sword lying down.
-        let (_, min, max) = icon_pose(&box_points(Vec3::new(9.0, 0.3, 2.0)), false).unwrap();
+        let (_, min, max) = icon_pose(&box_points(Vec3::new(9.0, 0.3, 2.0)), false, false).unwrap();
         let posed = max - min;
         assert!(posed.y > posed.x * 2.0, "{posed}");
-        let (_, min, max) = icon_pose(&box_points(Vec3::new(9.0, 0.3, 2.0)), true).unwrap();
+        let (_, min, max) = icon_pose(&box_points(Vec3::new(9.0, 0.3, 2.0)), false, true).unwrap();
         let turned = max - min;
         assert!(turned.x > turned.y * 2.0, "{turned}");
-        assert!(icon_pose(&[], false).is_none());
+        assert!(icon_pose(&[], false, false).is_none());
+    }
+
+    #[test]
+    fn containers_stand_upright_facing_the_viewer() {
+        use armory::families::chests::ChestStyle;
+        for style in [ChestStyle::Chest, ChestStyle::Strongbox, ChestStyle::Coffer, ChestStyle::Barrel, ChestStyle::Crate, ChestStyle::Amphora] {
+            let item = fb_items::container_item(fb_level::chest_state(style, 11, false));
+            assert!(stands_upright(&item), "{style:?}");
+            let points: Vec<Vec3> = item.shape.build().parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+            let (rotation, ..) = icon_pose(&points, true, false).unwrap();
+            assert!((rotation * Vec3::Y).y > 0.9 && (rotation * Vec3::Z).z > 0.9, "{style:?}");
+            // Turned while dragged, it still turns a quarter in the image.
+            let (turned, ..) = icon_pose(&points, true, true).unwrap();
+            assert!((turned * Vec3::Y).x.abs() > 0.9, "{style:?}");
+        }
+        assert!(!stands_upright(&fb_items::roll_item("Sword", 3).unwrap()));
     }
 
     #[test]

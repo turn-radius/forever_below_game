@@ -348,6 +348,29 @@ mod tests {
     }
 
     #[test]
+    fn a_container_opened_from_the_level_has_an_upright_icon() {
+        use crate::inventory::icon::{icon_pose, stands_upright};
+        let mut app = props_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        let mut containers = app.world_mut().query::<(Entity, &PropPiece, &Container)>();
+        let all: Vec<(Entity, Prop)> = containers.iter(app.world()).map(|(e, p, _)| (e, p.spot.prop)).collect();
+        for (entity, prop) in all {
+            app.world_mut().resource_mut::<OpenContainer>().0 = None;
+            app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+            press_pick_up_on(&mut app, entity);
+            let id = app.world().resource::<OpenContainer>().0.expect("opened");
+            let item = app.world().resource::<Inventory>().item(id).unwrap().clone();
+            assert!(stands_upright(&item), "{prop:?}");
+            let points: Vec<Vec3> = item.shape.build().parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+            let (rotation, ..) = icon_pose(&points, stands_upright(&item), false).unwrap();
+            // Up stays up and the front faces the viewer, give or take the view's small turn
+            // and tilt.
+            assert!((rotation * Vec3::Y).y > 0.9, "{prop:?}: up is {}", rotation * Vec3::Y);
+            assert!((rotation * Vec3::Z).z > 0.9, "{prop:?}: front is {}", rotation * Vec3::Z);
+        }
+    }
+
+    #[test]
     fn every_container_on_1207_holds_what_its_loot_rolls() {
         let app = props_app();
         let level = fb_level::generate(1207);
