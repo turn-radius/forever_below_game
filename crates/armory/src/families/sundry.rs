@@ -466,7 +466,7 @@ fn keys(s: &SundryState, parts: &mut Parts) {
     for k in 0..n {
         let len = sz * rng.range_f32(0.7, 1.1);
         let wards: Vec<f32> = (0..rng.int(1, 4)).map(|_| rng.range_f32(0.0, 1.0)).collect();
-        let mut m = key(len, a.bow, &wards);
+        let mut m = key(len, 1.0, a.bow, &wards);
         // Lay it flat, its length out along +Z, its bow hooked on the ring.
         let hook = len * 0.14 + len * 0.035;
         m.rotate_x(-FRAC_PI_2).translate([0.0, len * 0.035 * 0.8 + wire * 0.2, ring_r - hook]);

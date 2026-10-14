@@ -1,6 +1,8 @@
 //! Charm geometry: deterministic, drawable, complete, and hung from its hanger.
 
+use armory::build::key::{KeyBow, key};
 use armory::families::Generator;
+use armory::geom::OutlineMode;
 use armory::families::charm::{Charm, CharmShape, CharmState, HangerStyle};
 use armory::sections::device::Device;
 use armory::{ItemMesh, Part};
@@ -92,5 +94,20 @@ fn small_parts_skip_the_outline() {
                 assert!(!p.outline, "seed {}: {} outlined", s.seed, p.name);
             }
         }
+    }
+}
+
+#[test]
+fn key_charms_are_shared_keys() {
+    for seed in 1..=64 {
+        let s = Charm::roll_as(seed, CharmShape::Key);
+        let c = &s.charm;
+        let mesh = Charm::build(&s);
+        let body = part(&mesh, "charm").unwrap();
+        let wards = vec![0.5; c.detail.clamp(1, 4) as usize];
+        let shared = key(c.size, c.girth, KeyBow::Ring, &wards).into_part("charm", OutlineMode::Welded);
+        assert_eq!(body.positions.len(), shared.positions.len(), "seed {seed}: not the shared key");
+        let (lo, hi) = (bounds(body), bounds(&shared));
+        assert!((lo.0[1] - hi.0[1]).abs() < 1e-4 && (lo.1[1] - hi.1[1]).abs() < 1e-4, "seed {seed}: {lo:?} vs {hi:?}");
     }
 }

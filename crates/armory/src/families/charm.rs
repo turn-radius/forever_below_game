@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::build::chain::{cable_chain, jump_ring, link_pitch, twisted_cord};
 use crate::build::device::device_mesh;
 use crate::build::gem::{cut_for, cut_stone};
+use crate::build::key::{KeyBow, collar_height, key};
 use crate::build::parts::{Look, Parts};
 use crate::cond::{Condition, ConditionLimits};
 use crate::etch::{EtchTarget, Etching, EtchingLimits};
@@ -32,7 +33,7 @@ use crate::families::Generator;
 use crate::gem::{GemCut, Gemstone};
 use crate::geom::polygon::P2;
 use crate::geom::{
-    CatmullRom, ItemMesh, LatheOptions, MeshBuilder, Shading, SlabOptions, SweepOptions, V3, bevelled_slab, cuboid,
+    CatmullRom, ItemMesh, LatheOptions, MeshBuilder, Shading, SlabOptions, SweepOptions, V3, bevelled_slab,
     cylinder, frustum, icosphere, lathe, resample_by_length, spline_profile, sweep, torus, tube,
     uv_sphere, value_noise3, vec3,
 };
@@ -606,27 +607,18 @@ fn build_charm(s: &CharmState) -> ItemMesh {
             body.top = -h * 0.1 + h * 0.08;
         }
         CharmShape::Key => {
-            let bw = h * 0.035 * gi;
-            let mut bow = torus(h * 0.15, bw, 40, 10, Shading::SMOOTH);
-            bow.rotate_x(FRAC_PI_2).translate([0.0, -h * 0.17, 0.0]);
-            let mut shaft = cylinder(bw * 0.9, h * 0.7, 12, Shading::SMOOTH);
-            shaft.translate([0.0, -h, 0.0]);
-            let mut collar = torus(bw * 1.1, bw * 0.5, 16, 8, Shading::SMOOTH);
-            collar.translate([0.0, -h * 0.34, 0.0]);
-            let mut tip = uv_sphere(bw * 0.95, 10, 6);
-            tip.translate([0.0, -h, 0.0]);
-            let mut bits = MeshBuilder::new();
-            for k in 0..c.detail.clamp(1, 4) {
-                let tl = h * (0.08 + rng.range_f32(0.0, 0.1));
-                let mut bit = cuboid([tl, h * 0.05, bw * 1.4]);
-                bit.translate([bw * 0.5 + tl * 0.5, -h * (0.93 - k as f32 * 0.07), 0.0]);
-                bits.append(&bit);
-            }
-            body.parts.add("charm", MeshBuilder::merged([&bow, &shaft, &collar, &tip, &bits]), c.material);
+            // A ring-bowed key from the shared builder, its bow top at the origin, one ward per
+            // bit (`detail`).
+            let wards: Vec<f32> = (0..c.detail.clamp(1, 4)).map(|_| rng.range_f32(0.0, 1.0)).collect();
+            let key = key(h, gi, KeyBow::Ring, &wards);
+            let bar = h * 0.035 * gi;
+            body.parts.add("charm", key, c.material);
             if c.inset && rng.chance(1.0 - (damage * 0.4) as f64) {
-                stones.append(&inset_stone(cut, s.stone.size.min(h * 0.12), [0.0, -h * 0.34, bw * 1.2], vec3::Z));
+                let at = [0.0, collar_height(h, gi, KeyBow::Ring), bar * 1.2];
+                stones.append(&inset_stone(cut, s.stone.size.min(h * 0.12), at, vec3::Z));
             }
-            body.top = -h * 0.17 + h * 0.15 + bw * 0.4;
+            // The hanger threads the top of the bow.
+            body.top = -bar * 0.6;
         }
     }
 
