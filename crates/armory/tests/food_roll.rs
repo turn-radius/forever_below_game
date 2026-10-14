@@ -80,7 +80,7 @@ fn first_256_seeds_cover_the_variety() {
     for vessel in [MaterialKind::Wood, MaterialKind::Iron, MaterialKind::Silver, MaterialKind::Brass] {
         assert!(any(&|s| s.provision.style == FoodStyle::Tankard && s.provision.vessel == vessel), "no {vessel:?} tankard");
     }
-    assert!(any(&|s| s.provision.style == FoodStyle::Flask && s.provision.vessel == MaterialKind::Gem), "no glass flask");
+    assert!(any(&|s| s.provision.style == FoodStyle::Flask && s.provision.vessel == MaterialKind::Glass), "no glass flask");
     assert!(any(&|s| s.provision.seal.is_some()), "no wax seals");
     assert!(any(&|s| s.provision.style == FoodStyle::Tankard && !s.provision.is_full()), "no empty tankard");
     assert!(any(&|s| s.provision.style == FoodStyle::Mushroom && s.provision.glow >= GLOWCAP), "no glowcap");
@@ -149,7 +149,7 @@ fn nouns() {
     assert_eq!(Food::noun(&s), "Cave Mushrooms");
 
     let mut s = of(F::Flask, Whole);
-    s.provision.vessel = MaterialKind::Gem;
+    s.provision.vessel = MaterialKind::Glass;
     assert_eq!(Food::noun(&s), "Glass Flask");
     s.provision.vessel = MaterialKind::Leather;
     assert_eq!(Food::noun(&s), "Leather Flask");

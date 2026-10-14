@@ -89,7 +89,7 @@ impl HoodSurface {
                 phases,
                 cinch: None,
                 opening: None,
-                quilt: 0.0,
+                quilt: None,
                 ridge: 0.0,
             };
             DrapedSurface::new(torso, drape)

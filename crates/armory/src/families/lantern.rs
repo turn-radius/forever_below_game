@@ -16,8 +16,8 @@
 //!   an oil font with a burner, wick and filler cap.
 //! - Lit or not is state. A lit lantern's panes, pierced holes or chimney glow, and
 //!   [`Lantern::light`] says where its light is and how far horn or tin lets it reach.
-//! - There is no tin material: tin is iron tinted pale, and horn is bone tinted amber. Glass
-//!   is the gem material in its own colour, as in the food family.
+//! - There is no tin material: tin is iron tinted pale, and horn is bone tinted amber. A glass
+//!   chimney is [`MaterialKind::Glass`], as in the food family.
 //!
 //! Item space: the carrying ring is at the origin, where the hand holds it, and the lantern
 //! hangs below it, facing +Z.
@@ -43,7 +43,7 @@ use crate::material::{MaterialKind, Rgb};
 use crate::palette::Palette;
 use crate::slider::{Sliders, sliders};
 
-use MaterialKind::{Bone, Brass, Cord, Gem, Iron};
+use MaterialKind::{Bone, Brass, Cord, Glass, Iron};
 
 /// The lantern generator.
 pub struct Lantern;
@@ -643,7 +643,8 @@ fn cage_body(s: &LanternState, g: &Layout, frame: &mut MeshBuilder, parts: &mut 
     shell.extend(profile.iter().rev().map(|&[r, y]| [r - w * 0.03, y]));
     shell.push(profile[0]);
     let glass = lathe(&shell, &LatheOptions { facets: 32, shading: Shading::SMOOTH, cap_start: false, cap_end: false, phase: 0.0 });
-    let look = if s.flame.lit { glowing(Rgb::hex(0xffe6b0), 0.45) } else { Look::of(Gem).tinted(GLASS) };
+    // Lit, the chimney glows with the flame behind it; glass either way, so it keeps its ink.
+    let look = if s.flame.lit { Look { glow: 0.45, ..Look::of(Glass).tinted(Rgb::hex(0xffe6b0)) } } else { Look::of(Glass).tinted(GLASS) };
     parts.add_look("glass", glass, look);
     // Guards bowed out round the globe.
     let n = b.sides.clamp(4, 8);

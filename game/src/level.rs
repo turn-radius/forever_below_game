@@ -94,7 +94,7 @@ fn stone_appearance(seed: u32) -> ItemAppearance {
         decay_scale_factor: STONE_PATTERN_SCALE / condition.scale,
         // The rock's ink is drawn by its own ribbons, wider than an item's hull may grow, and
         // darker than the Armory's, so it never shows lighter than unlit stone in the dark.
-        outline: OutlineMaterial { color: STONE_INK.into(), width_px: 1.8, max_width: 0.6 },
+        outline: OutlineMaterial { color: STONE_INK.into(), width_px: 1.8, max_width: 0.6, ..default() },
         ..default()
     }
 }

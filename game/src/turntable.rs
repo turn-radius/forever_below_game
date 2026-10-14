@@ -181,6 +181,7 @@ impl Turntable {
             palette: ItemPalette { materials: item.palette(), ..ItemPalette::ARMORY },
             condition: Condition { scale: own.scale, broken: own.broken, ..Condition::of(self.wear) },
             seed: item.seed(),
+            etching: item.etching(),
             ..default()
         }
     }

@@ -2,7 +2,7 @@
 //! Shared by every family. From the prototype's `etch` section and the etch roll in
 //! `randomize()` (`reference/spline_armory_engine.js`).
 
-use crate::material::Rgb;
+use crate::material::{MaterialKind, Rgb};
 use crate::slider::sliders;
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,18 @@ impl EtchPattern {
         EtchPattern::Scrollwork, EtchPattern::BorderBands, EtchPattern::Knotwork, EtchPattern::Chevrons,
         EtchPattern::DiaperLattice, EtchPattern::Runes,
     ];
+
+    /// The shader's etch id (`ETCH_ID` in `reference/spline_armory_engine.js`); 0 is none.
+    pub fn shader_id(self) -> u32 {
+        match self {
+            EtchPattern::Scrollwork => 1,
+            EtchPattern::BorderBands => 2,
+            EtchPattern::Knotwork => 3,
+            EtchPattern::Chevrons => 4,
+            EtchPattern::DiaperLattice => 5,
+            EtchPattern::Runes => 6,
+        }
+    }
 }
 
 /// Which parts get the pattern, by material.
@@ -43,6 +55,25 @@ pub enum EtchTarget {
     Leather,
     /// Embroidered.
     Cloth,
+}
+
+impl EtchTarget {
+    /// Whether parts of `material` take the pattern (`etchFor` in the prototype). Cut stones
+    /// and glass never do.
+    pub fn covers(self, material: MaterialKind) -> bool {
+        use MaterialKind as M;
+        match self {
+            EtchTarget::Metals => matches!(material, M::Iron | M::Brass | M::Gold | M::Silver),
+            EtchTarget::Iron => material == M::Iron,
+            EtchTarget::Brass => material == M::Brass,
+            EtchTarget::Gold => material == M::Gold,
+            EtchTarget::Silver => material == M::Silver,
+            EtchTarget::Wood => material == M::Wood,
+            EtchTarget::Bone => material == M::Bone,
+            EtchTarget::Leather => material == M::Leather,
+            EtchTarget::Cloth => material == M::Cloth,
+        }
+    }
 }
 
 /// How the engraved lines are filled.
@@ -105,5 +136,26 @@ impl Etching {
         let weight = rng.range_f32(0.05, 0.11);
         let coverage = if rng.chance(0.6) { 1.0 } else { rng.range_f32(0.4, 0.9) };
         Etching { on, pattern, target, scale, weight, coverage, finish, inlay }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn targets_cover_only_their_materials() {
+        assert!(EtchTarget::Metals.covers(MaterialKind::Gold) && EtchTarget::Metals.covers(MaterialKind::Iron));
+        assert!(!EtchTarget::Metals.covers(MaterialKind::Wood) && !EtchTarget::Metals.covers(MaterialKind::Gem));
+        assert!(EtchTarget::Cloth.covers(MaterialKind::Cloth) && !EtchTarget::Cloth.covers(MaterialKind::Leather));
+        for target in [EtchTarget::Metals, EtchTarget::Iron, EtchTarget::Wood, EtchTarget::Cloth] {
+            assert!(!target.covers(MaterialKind::Glass) && !target.covers(MaterialKind::Gem));
+        }
+    }
+
+    #[test]
+    fn every_pattern_has_its_own_shader_id() {
+        let ids: Vec<u32> = EtchPattern::ALL.iter().map(|p| p.shader_id()).collect();
+        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6]);
     }
 }

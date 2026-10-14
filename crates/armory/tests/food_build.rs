@@ -69,7 +69,7 @@ fn every_kind_has_its_parts() {
             F::Fish => "body",
             F::Sausages => "casing",
             F::Mushroom => "cap",
-            F::Tankard | F::Flask if p.vessel != MaterialKind::Gem => "vessel",
+            F::Tankard | F::Flask if p.vessel != MaterialKind::Glass => "vessel",
             F::Bottle | F::Potion | F::Flask => "glass",
             F::Waterskin => "body",
             F::Tankard => "vessel",

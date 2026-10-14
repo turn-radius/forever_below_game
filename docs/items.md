@@ -45,7 +45,7 @@ The Armory's food family (`armory::families::food`) now also makes the glowcap, 
 
 - The prototype's `cut` toggle is a portion: whole, cut (a wedge out of a wheel, pie or round loaf, the end off a loaf, a slice out of an apple), a single piece (a slice of bread, a wedge of cheese, a slice of pie) or bitten (bread, fruit, a roast). Cut faces show a band of crust, rind, skin or pastry round the crumb, paste, flesh or filling. `Blind cavefish` and `Healing draught` tweaks set colours, which now have named roles (`outer`, `inner`, `accent`, `liquid`) instead of `color` and `color2`.
 - A potion's brew is typed, and the noun still follows the liquid's colour, so a retinted potion is named for the brew it looks like.
-- Glass and liquids use the gem material with their own tint, until there is a glass material with transparency; a potion's glass is tinted toward its brew so it reads even when drawn opaque. Cork is tinted wood, wax seals tinted bone, a bottle's paper label tinted cloth.
+- Glass is its own material (`MaterialKind::Glass`), drawn see-through so the drink inside shows; liquids use the gem material in their own tint. A potion's glass is still tinted toward its brew. Cork is tinted wood, wax seals tinted bone, a bottle's paper label tinted cloth.
 - Food's condition word is `freshness()` (Fresh, Day-old, Stale, Mouldy, Rotten), the prototype's `condWord` for food.
 
 ### Lights

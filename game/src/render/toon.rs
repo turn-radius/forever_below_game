@@ -1,10 +1,17 @@
 //! Banded toon shading with procedural wear: a [`StandardMaterial`] extended with
-//! [`ToonExtension`]. The shader is `toon.wesl` (lighting) and `decay.wesl` (wear).
+//! [`ToonExtension`]. The shader is `toon.wesl` (lighting), `pattern.wesl` (surface patterns)
+//! and `decay.wesl` (wear).
 
+use armory::{
+    MaterialKind, Rgb,
+    etch::{EtchFinish, Etching},
+    fabric::{SurfacePattern, Wrap},
+};
 use bevy::{
-    pbr::{ExtendedMaterial, MaterialExtension},
+    mesh::MeshVertexBufferLayoutRef,
+    pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, MeshPipelineKey},
     prelude::*,
-    render::render_resource::{AsBindGroup, ShaderType},
+    render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError},
     shader::ShaderRef,
 };
 
@@ -84,6 +91,125 @@ pub struct MinWidth {
     pub half_thickness: f32,
 }
 
+/// A woven, painted or worked pattern drawn over a part (`pattern.wesl`): an
+/// [`armory::fabric::SurfacePattern`] made ready for the shader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct Pattern {
+    /// `PatternKind::shader_id()`; 0 draws no pattern.
+    pub id: u32,
+    /// The second colour, display (sRGB) values.
+    pub color: Vec3,
+    /// Cells per unit (wrapped patterns) or across the field (field patterns).
+    pub scale: f32,
+    /// Where a wrapped pattern sits on the part ([`Wrap`]): a point on its axis, the axis, the
+    /// direction of zero angle, where rows start, the whole number of cells round, whether the
+    /// part is a mirrored pair, its length along the axis and its girth along it.
+    pub origin: Vec3,
+    pub axis: Vec3,
+    pub zero: Vec3,
+    pub base: f32,
+    pub around: f32,
+    pub mirrored: bool,
+    pub length: f32,
+    pub profile: [f32; Wrap::PROFILE],
+}
+
+impl Pattern {
+    /// `pattern` laid on a part with these vertices.
+    pub fn of(pattern: &SurfacePattern, positions: &[[f32; 3]]) -> Self {
+        let wrap = Wrap::of(positions);
+        let Rgb(r, g, b) = pattern.color;
+        Pattern {
+            id: pattern.kind.shader_id(),
+            color: Vec3::new(r, g, b),
+            scale: pattern.scale,
+            origin: Vec3::from(wrap.origin),
+            axis: Vec3::from(wrap.axis),
+            zero: Vec3::from(wrap.zero),
+            base: wrap.base,
+            around: wrap.repeats_around(pattern.scale),
+            mirrored: wrap.mirrored,
+            length: wrap.length,
+            profile: wrap.profile,
+        }
+    }
+}
+
+/// How an etched line is worked into a material, which sets how it reads (our own split of
+/// the prototype's single `c * 0.3` darkening).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+pub enum EtchStyle {
+    /// Cut into metal: blackened lines go nearly black.
+    #[default]
+    Engraved,
+    /// Cut into wood or bone: the groove darkens, less than blackened metal.
+    Carved,
+    /// Pressed into leather: a soft darkening.
+    Tooled,
+    /// Stitched onto cloth: thread laid in fine slanted stitches.
+    Embroidered,
+}
+
+impl EtchStyle {
+    /// How a part of `material` is worked.
+    pub fn of(material: MaterialKind) -> Self {
+        match material {
+            MaterialKind::Wood | MaterialKind::Bone => EtchStyle::Carved,
+            MaterialKind::Leather => EtchStyle::Tooled,
+            MaterialKind::Cloth => EtchStyle::Embroidered,
+            _ => EtchStyle::Engraved,
+        }
+    }
+
+    /// What a blackened (unfilled) line multiplies the surface by.
+    pub fn darken(self) -> f32 {
+        match self {
+            EtchStyle::Engraved | EtchStyle::Embroidered => 0.3,
+            EtchStyle::Carved => 0.45,
+            EtchStyle::Tooled => 0.55,
+        }
+    }
+}
+
+/// Etching on one part (`etch.wesl`): an [`Etching`] whose target covers the part, made ready
+/// for the shader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct Etch {
+    /// `EtchPattern::shader_id()`; 0 draws none.
+    pub id: u32,
+    /// Inlay or thread colour, display (sRGB) values.
+    pub color: Vec3,
+    /// Pattern repeats per unit of item space.
+    pub scale: f32,
+    /// Line weight.
+    pub weight: f32,
+    /// Share of the surface the pattern covers.
+    pub coverage: f32,
+    /// Filled with `color` rather than blackened.
+    pub inlaid: bool,
+    pub style: EtchStyle,
+}
+
+impl Etch {
+    /// `etching` on a part of `material`, or none if its target does not cover that material.
+    /// `scale_factor` scales the pattern as it does the wear (8 for jewellery in the prototype).
+    pub fn on(etching: &Etching, material: MaterialKind, scale_factor: f32) -> Self {
+        if !etching.on || !etching.target.covers(material) {
+            return Etch::default();
+        }
+        let Rgb(r, g, b) = etching.inlay;
+        Etch {
+            id: etching.pattern.shader_id(),
+            color: Vec3::new(r, g, b),
+            scale: etching.scale * scale_factor,
+            weight: etching.weight,
+            coverage: etching.coverage,
+            inlaid: etching.finish == EtchFinish::Inlaid,
+            style: EtchStyle::of(material),
+        }
+    }
+}
+
 /// The toon half of [`ToonMaterial`]. The base colour, roughness and so on stay on the
 /// [`StandardMaterial`].
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
@@ -94,6 +220,8 @@ pub struct ToonExtension {
     /// Self-lit strength as a fraction of the base colour; fades with decay.
     pub glow: f32,
     pub min_width: MinWidth,
+    pub pattern: Pattern,
+    pub etch: Etch,
 }
 
 /// GPU layout of [`ToonExtension`]; must match `ToonUniform` in `toon.wesl`.
@@ -108,12 +236,51 @@ pub struct ToonUniform {
     glow: f32,
     min_width_px: f32,
     half_thickness: f32,
+    pattern_color: Vec3,
+    pattern_id: u32,
+    pattern_origin: Vec3,
+    pattern_scale: f32,
+    pattern_axis: Vec3,
+    pattern_base: f32,
+    pattern_zero: Vec3,
+    pattern_around: f32,
+    pattern_mirrored: u32,
+    pattern_length: f32,
+    pattern_profile: [Vec4; 4],
+    etch_color: Vec3,
+    etch_id: u32,
+    etch_scale: f32,
+    etch_weight: f32,
+    etch_coverage: f32,
+    etch_inlaid: u32,
+    etch_darken: f32,
+    etch_stitched: u32,
 }
 
 impl From<&ToonExtension> for ToonUniform {
     fn from(toon: &ToonExtension) -> Self {
         let v = toon.bands.values;
+        let pattern = toon.pattern;
         ToonUniform {
+            pattern_color: pattern.color,
+            pattern_id: pattern.id,
+            pattern_origin: pattern.origin,
+            pattern_scale: pattern.scale,
+            pattern_axis: pattern.axis,
+            pattern_base: pattern.base,
+            pattern_zero: pattern.zero,
+            pattern_around: pattern.around,
+            pattern_mirrored: pattern.mirrored as u32,
+            pattern_length: pattern.length,
+            pattern_profile: std::array::from_fn(|i| Vec4::from_slice(&pattern.profile[i * 4..i * 4 + 4])),
+            etch_color: toon.etch.color,
+            etch_id: toon.etch.id,
+            etch_scale: toon.etch.scale,
+            etch_weight: toon.etch.weight,
+            etch_coverage: toon.etch.coverage,
+            etch_inlaid: toon.etch.inlaid as u32,
+            etch_darken: toon.etch.style.darken(),
+            etch_stitched: (toon.etch.style == EtchStyle::Embroidered) as u32,
             band_values: [Vec4::new(v[0], v[1], v[2], v[3]), Vec4::new(v[4], v[5], v[6], v[7])],
             band_count: toon.bands.count,
             decay_type: toon.decay.kind,
@@ -136,6 +303,22 @@ impl MaterialExtension for ToonExtension {
     // lighting pass would apply instead.
     fn fragment_shader() -> ShaderRef {
         SHADER_PATH.into()
+    }
+
+    /// Glass (alpha-blended) writes depth, which Bevy's blended pipelines leave off, so the
+    /// ink hull drawn after it (`OutlineMaterial::see_through`) shows only outside the glass.
+    /// Glass is drawn front faces only, so a single pane never hides itself.
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        let blended = key.mesh_key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_ALPHA;
+        if blended && let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.depth_write_enabled = Some(true);
+        }
+        Ok(())
     }
 }
 

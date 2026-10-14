@@ -27,6 +27,8 @@ import bevy_pbr::render::{
 };
 import bevy_render::maths::PI;
 import super::decay::apply_decay;
+import super::pattern::{Wrap, apply_pattern};
+import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
 
 struct ToonUniform {
@@ -44,6 +46,29 @@ struct ToonUniform {
     // The part's own half thickness in item units, so only parts thinner than the minimum
     // are fattened.
     half_thickness: f32,
+    // The part's surface pattern (`pattern.wesl`): its second colour (display values), its id
+    // (0 for none), and where a wrapped pattern sits on the part.
+    pattern_color: vec3<f32>,
+    pattern_id: u32,
+    pattern_origin: vec3<f32>,
+    pattern_scale: f32,
+    pattern_axis: vec3<f32>,
+    pattern_base: f32,
+    pattern_zero: vec3<f32>,
+    pattern_around: f32,
+    pattern_mirrored: u32,
+    pattern_length: f32,
+    pattern_profile: array<vec4<f32>, 4>,
+    // The part's etching (`etch.wesl`): inlay or thread colour, id (0 for none), scale, line
+    // weight, coverage, whether inlaid, how dark a blackened line is, and whether stitched.
+    etch_color: vec3<f32>,
+    etch_id: u32,
+    etch_scale: f32,
+    etch_weight: f32,
+    etch_coverage: f32,
+    etch_inlaid: u32,
+    etch_darken: f32,
+    etch_stitched: u32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> toon: ToonUniform;
@@ -228,8 +253,51 @@ fn fragment(
     // Wear and light both work on the display (sRGB) colour, as three.js r128 did with no
     // output encoding: the prototype's wear colours are display values, and a band at half
     // light reads as half as bright on screen, which keeps the steps crisp.
-    let base = apply_decay(
+    // Patterns go on first and wear over them, as in the prototype's `DECAY_BODY`.
+    var uv = vec2<f32>(0.0);
+    @if(VERTEX_UVS_A)
+    uv = vertex_output.uv;
+    let patterned = apply_pattern(
         linear_to_srgb(pbr_input.material.base_color.rgb),
+        item_position,
+        uv,
+        length(fwidth(item_position)) * toon.pattern_scale,
+        toon.pattern_id,
+        toon.pattern_color,
+        Wrap(
+            toon.pattern_origin,
+            toon.pattern_axis,
+            toon.pattern_zero,
+            toon.pattern_base,
+            toon.pattern_scale,
+            toon.pattern_around,
+            toon.pattern_mirrored,
+            toon.pattern_length,
+            toon.pattern_profile,
+        ),
+    );
+    // Etching after the pattern, wear over both (`DECAY_BODY`).
+    let item_normal = normalize((get_local_from_world(vertex_output.instance_index) * vec4<f32>(pbr_input.world_normal, 0.0)).xyz);
+    let etched = apply_etch(
+        patterned,
+        item_position,
+        item_normal,
+        Etch(
+            toon.etch_id,
+            toon.etch_color,
+            toon.etch_scale,
+            toon.etch_weight,
+            toon.etch_coverage,
+            toon.etch_inlaid,
+            toon.etch_darken,
+            toon.etch_stitched,
+        ),
+        toon.decay_amount,
+        toon.decay_scale,
+        toon.decay_seed,
+    );
+    let base = apply_decay(
+        etched,
         item_position,
         toon.decay_type,
         toon.decay_amount,
@@ -244,7 +312,16 @@ fn fragment(
     let glow = srgb_to_linear(base) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
 
     var out: FragmentOutput;
-    out.color = vec4<f32>(lit + glow, pbr_input.material.base_color.a);
+    // See-through glass (alpha below 1) stops more light where it is seen edge on, as a
+    // curved pane looks thicker at its rim. A cubic of 1 - |N.V| is our own stand-in for
+    // Fresnel, here only so a bottle's outline reads inside its ink line.
+    var alpha = pbr_input.material.base_color.a;
+    if alpha < 1.0 {
+        let to_eye = normalize(view_bindings::view.world_position - pbr_input.world_position.xyz);
+        let edge = 1.0 - abs(dot(pbr_input.N, to_eye));
+        alpha = mix(alpha, 0.85, edge * edge * edge);
+    }
+    out.color = vec4<f32>(lit + glow, alpha);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }
