@@ -115,6 +115,10 @@ impl Rest {
     }
 }
 
+/// How far either side of straight ahead a beard rests on what is worn under it, radians
+/// (about 55 degrees: the front of the chest). Our own choice.
+const BEARD_SPREAD: f32 = 0.95;
+
 /// How steeply long hair and a beard may draw back toward what they hang over, per unit of
 /// drop, before they rest on it (our own: hair is limp, so they fall onto it within a short
 /// drop).
@@ -357,9 +361,11 @@ impl Body {
         let r = face.r;
         let t = self.trunk_length;
         let s0 = face.point(PI, 0.55 * PI, 0.08 * r);
-        let back = |y: f32, extra: f32| {
-            let (p, _) = self.trunk_surface(armory::build::form::BACK, y, fit.clearance + extra);
-            p
+        // On the back as it is worn when that is known (resting on it), else clear of the
+        // thickest anything is worn round the shoulders.
+        let back = |y: f32, extra: f32| match fit.rest.and_then(|rest| rest.at(-PI / 2.0, y)) {
+            Some(reach) => [0.0, y, -(reach.max(self.trunk_reach([0.0, -1.0], y)) + extra)],
+            None => self.trunk_surface(armory::build::form::BACK, y, fit.clearance + extra).0,
         };
         let path = CatmullRom::centripetal(vec![
             s0,
@@ -545,15 +551,18 @@ impl Body {
             let margin = 0.025 * r;
             if p[1] >= self.chin_y {
                 // Along the jaw and under the chin, lying on a collar or a cowl that rises
-                // there: out from the body's axis onto it.
-                // Out from the body's axis or straight forward, whichever is the shorter way.
+                // there: out from the body's axis or straight forward, whichever is the shorter
+                // way; by the ears (well off straight ahead) only straight forward, as pushed
+                // out round the axis onto mail and pauldrons a beard fanned across the shoulders
+                // like a flat plate.
                 let d = p[0].hypot(p[2]);
+                let aside = (p[0] - hx).atan2(p[2] - face.head.centre[2]).abs() > BEARD_SPREAD;
                 return match rest.at(p[2].atan2(p[0]), p[1]) {
                     Some(reach) if d < reach + margin => {
                         let k = (reach + margin) / d.max(1e-4);
                         let out = [p[0] * k, p[1], p[2] * k];
                         let ahead = [p[0], p[1], rest.ahead(p[0], p[1], margin).unwrap_or(p[2]).max(p[2])];
-                        if vec3::distance(out, p) < vec3::distance(ahead, p) { out } else { ahead }
+                        if !aside && vec3::distance(out, p) < vec3::distance(ahead, p) { out } else { ahead }
                     }
                     _ => p,
                 };

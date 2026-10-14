@@ -245,6 +245,9 @@ struct Envelope<'a> {
     /// The points of everything worn on each arm (right then left), body space: what a cuff
     /// is drawn over.
     on_arm: [Vec<V3>; 2],
+    /// The same as `outline` without what is worn on the head: what long hair and a beard
+    /// rest on. An aventail or a hood's cape hangs over them, not under.
+    under_head: Outline,
 }
 
 /// Which worn surface a trunk form is eased over ([`Envelope::form`]).
@@ -276,6 +279,7 @@ impl<'a> Envelope<'a> {
             legs: [[NONE; LIMB_BINS]; 2],
             outline: Outline::new(profile.bottom() - 1.0, profile.top() + 0.7),
             on_arm: [vec![], vec![]],
+            under_head: Outline::new(profile.bottom() - 1.0, profile.top() + 0.7),
         };
         // The bare arms and hands as drawn, for a cloak over them: a raised forearm and its
         // hand come out through the cloak instead ([`Envelope::under_cloak`]).
@@ -285,6 +289,7 @@ impl<'a> Envelope<'a> {
                 if env.under_cloak(side, t) {
                     let q = env.torso(p);
                     env.outline.add(q);
+                    env.under_head.add(q);
                 }
             }
         }
@@ -398,6 +403,9 @@ impl<'a> Envelope<'a> {
                 }
                 let q = self.torso(p);
                 self.outline.add(q);
+                if slot != Slot::Head {
+                    self.under_head.add(q);
+                }
             }
         }
         for part in mesh.parts.iter().filter(|p| measured(slot, p)) {
@@ -585,7 +593,7 @@ impl<'a> Envelope<'a> {
         Rest::new(b.chest_y - 0.9 * b.trunk_length, b.shoulder_y + 0.35 * b.trunk_length, |phi, y| {
             // The most anything reaches within a few degrees, so hair laid over the folds of a
             // cloak, or a hood lying down its back, rests on their crests and bridges between.
-            let worn = (-6..=6).map(|k| self.outline.at(-phi + k as f32 * TAU / 256.0, y - w)).fold(NONE, f32::max);
+            let worn = (-6..=6).map(|k| self.under_head.at(-phi + k as f32 * TAU / 256.0, y - w)).fold(NONE, f32::max);
             worn.max(b.trunk_reach([phi.cos(), phi.sin()], y))
         })
     }
@@ -1843,6 +1851,49 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn a_clerics_beard_and_hair_keep_close_under_mail_and_a_helm() {
+        use crate::folk::{Beard, HairStyle};
+        let mut failures = vec![];
+        let cleric = fb_items::outfit::outfit("cleric").unwrap();
+        for seed in 1..=8u32 {
+            let mut spec = BodySpec::roll(Folk::Human, seed);
+            spec.beard = Beard::Full;
+            spec.hair = if seed % 2 == 0 { HairStyle::Ponytail } else { HairStyle::Long };
+            let body = Body::new(&spec);
+            let mut worn: Vec<(Slot, Item)> = cleric.roll(seed, "human").worn.into_iter().filter(|(s, _)| LAYER_ORDER.contains(s)).map(|(s, i)| (s, i.shape)).collect();
+            // A mail shirt with pauldrons and a helm with an aventail, as on the doll in #129.
+            let mut mail = Garment::roll_as(seed, GarmentStyle::Hauberk);
+            mail.plates.pauldrons = true;
+            let mut helm = Helm::roll_as(seed, armory::families::helm::HelmStyle::Nasal);
+            helm.aventail.on = true;
+            worn.retain(|(s, _)| !matches!(s, Slot::Body | Slot::Head));
+            worn.push((Slot::Body, Item::Garment(mail)));
+            worn.push((Slot::Head, Item::Helm(helm)));
+            let fit = fit_worn(&body, &worn);
+            // No worn part, nor the hair, reaches more than a hand's width (about 1 unit) past
+            // the body's silhouette from the front.
+            let mut skin = body.skin_mesh();
+            skin.parts.extend(body.head_mesh().parts);
+            let (lo, hi) = skin.bounds().unwrap();
+            let side = lo[0].abs().max(hi[0]);
+            let hair = body.hair_mesh(fit.hair);
+            for part in fit.layers.iter().flat_map(|l| l.mesh.parts.iter()).chain(hair.parts.iter()) {
+                let wide = part.positions.iter().map(|p| p[0].abs()).fold(0.0f32, f32::max);
+                if wide > side + 1.0 {
+                    failures.push(format!("seed {seed}: the {} reaches {wide:.2} to the side, the body {side:.2}", part.name));
+                }
+            }
+            // The beard hangs under the chin at its own width, not fanned across the shoulders.
+            let width = |mesh: &ItemMesh| mesh.parts.iter().filter(|p| p.name == "beard").flat_map(|p| &p.positions).map(|p| (p[0] - body.head.centre[0]).abs()).fold(0.0f32, f32::max);
+            let (dressed, bare) = (width(&hair), width(&body.hair_mesh(HairFit::default())));
+            if dressed > bare + 0.1 {
+                failures.push(format!("seed {seed}: the beard spreads to {dressed:.2}, {bare:.2} bare"));
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
