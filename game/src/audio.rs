@@ -1,9 +1,248 @@
 //! The level's music: a playlist that loops and fades between tracks.
+//!
+//! One track plays at a time. Near the end of a track the next one fades in while the current
+//! one fades out, over [`MusicSettings::crossfade`] seconds, with equal-power curves. The
+//! playlist wraps around. Bevy's Vorbis decoder doesn't report a duration, so it's read from
+//! the Ogg stream ([`ogg_vorbis_duration`]); if that fails the next track starts when the
+//! current one runs dry, fading in from silence.
+//!
+//! Offscreen captures (`FB_SCREENSHOT`) stay silent. With no audio device Bevy logs a warning
+//! and never creates sinks, so the music systems simply idle.
 
-use bevy::prelude::*;
+use std::f32::consts::FRAC_PI_2;
+
+use bevy::{
+    audio::{AudioSinkPlayback, Volume},
+    prelude::*,
+};
+
+use crate::capture::FrameCapturePlugin;
+
+/// The tracks to play, as asset paths, in order. Loops back to the first after the last.
+#[derive(Resource, Clone, Debug, PartialEq, Eq)]
+pub struct Playlist {
+    pub tracks: Vec<String>,
+}
+
+impl Default for Playlist {
+    fn default() -> Self {
+        Playlist {
+            tracks: vec!["audio/the-wizards-tower.ogg".into(), "audio/shadowed-pixel.ogg".into()],
+        }
+    }
+}
+
+/// The index after `index` in a list of `len`, wrapping to 0. `None` when the list is empty.
+pub fn next_index(index: usize, len: usize) -> Option<usize> {
+    (len > 0).then(|| (index + 1) % len)
+}
+
+/// How loud the music plays and how long tracks take to fade into each other.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct MusicSettings {
+    /// Linear volume at full gain.
+    pub volume: f32,
+    /// Fade length in seconds, both into a track and between tracks.
+    pub crossfade: f32,
+}
+
+impl Default for MusicSettings {
+    fn default() -> Self {
+        MusicSettings { volume: 0.35, crossfade: 3.0 }
+    }
+}
 
 pub struct MusicPlugin;
 
 impl Plugin for MusicPlugin {
-    fn build(&self, _app: &mut App) {}
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Playlist>()
+            .init_resource::<MusicSettings>()
+            .add_systems(Startup, start_music.run_if(not(resource_exists::<FrameCapturePlugin>)))
+            .add_systems(Update, play_music.run_if(resource_exists::<PlaylistAudio>));
+    }
+}
+
+/// One playing track of the [`Playlist`].
+#[derive(Component, Debug)]
+pub struct MusicTrack {
+    /// Its place in the playlist.
+    pub index: usize,
+    /// Length in seconds, if it could be read from the stream.
+    pub duration: Option<f32>,
+    /// Whether the length has been looked for. It's read once, when the sink first exists.
+    pub measured: bool,
+    /// Whether the next track has been started.
+    pub handed_off: bool,
+}
+
+/// Handles to every playlist track, loaded up front so a hand-off never waits on the disk.
+#[derive(Resource, Debug)]
+struct PlaylistAudio(Vec<Handle<AudioSource>>);
+
+fn start_music(mut commands: Commands, assets: Res<AssetServer>, playlist: Res<Playlist>) {
+    let audio = PlaylistAudio(playlist.tracks.iter().map(|path| assets.load(path)).collect());
+    if !audio.0.is_empty() {
+        spawn_track(&mut commands, &audio, 0);
+    }
+    commands.insert_resource(audio);
+}
+
+fn spawn_track(commands: &mut Commands, audio: &PlaylistAudio, index: usize) {
+    commands.spawn((
+        Name::new("Music"),
+        MusicTrack { index, duration: None, measured: false, handed_off: false },
+        AudioPlayer::new(audio.0[index].clone()),
+        // Silent until `play_music` sets the fade-in gain on the first frame its sink exists.
+        PlaybackSettings::ONCE.with_volume(Volume::SILENT),
+    ));
+}
+
+fn play_music(
+    mut commands: Commands,
+    sources: Res<Assets<AudioSource>>,
+    audio: Res<PlaylistAudio>,
+    settings: Res<MusicSettings>,
+    global: Res<GlobalVolume>,
+    mut tracks: Query<(Entity, &mut MusicTrack, &AudioPlayer, &mut AudioSink)>,
+) {
+    for (entity, mut track, player, mut sink) in &mut tracks {
+        if !track.measured {
+            track.measured = true;
+            track.duration = sources.get(&player.0).and_then(|source| ogg_vorbis_duration(&source.bytes));
+            let path = player.0.path().map(ToString::to_string).unwrap_or_default();
+            info!("music: playing {path}, {:?} s", track.duration);
+        }
+        let position = sink.position().as_secs_f32();
+        let ended = sink.empty();
+        if !track.handed_off && hand_off_due(position, track.duration, ended, settings.crossfade) {
+            track.handed_off = true;
+            if let Some(next) = next_index(track.index, audio.0.len()) {
+                spawn_track(&mut commands, &audio, next);
+            }
+        }
+        if ended {
+            commands.entity(entity).despawn();
+        } else {
+            let gain = track_gain(position, track.duration, settings.crossfade);
+            // Bevy applies `GlobalVolume` only when it creates a sink, so it's folded in here.
+            sink.set_volume(Volume::Linear(global.volume.to_linear() * settings.volume * gain));
+        }
+    }
+}
+
+/// Whether the next track should start: inside the closing crossfade when the length is
+/// known, or once the track has run dry.
+pub fn hand_off_due(position: f32, duration: Option<f32>, ended: bool, crossfade: f32) -> bool {
+    ended || duration.is_some_and(|duration| position >= duration - crossfade)
+}
+
+/// A track's gain from 0 to 1 at `position` seconds: an equal-power fade in over the first
+/// `crossfade` seconds and, when the length is known, out over the last. During a crossfade
+/// the outgoing and incoming gains squared sum to 1, so loudness holds steady.
+pub fn track_gain(position: f32, duration: Option<f32>, crossfade: f32) -> f32 {
+    let fade_in = fade_weight(position, crossfade);
+    let fade_out = duration.map_or(1.0, |duration| fade_weight(duration - position, crossfade));
+    fade_in.min(fade_out)
+}
+
+/// Equal-power ramp from 0 at `t = 0` to 1 at `t = length`.
+fn fade_weight(t: f32, length: f32) -> f32 {
+    if length <= 0.0 {
+        return 1.0;
+    }
+    (FRAC_PI_2 * (t / length).clamp(0.0, 1.0)).sin()
+}
+
+/// The length in seconds of an Ogg Vorbis stream: the last page's granule position (the
+/// sample count at the end of the stream) over the sample rate in the identification header.
+/// `None` if the bytes aren't Ogg Vorbis.
+pub fn ogg_vorbis_duration(bytes: &[u8]) -> Option<f32> {
+    const PAGE: &[u8] = b"OggS";
+    const IDENTIFICATION: &[u8] = b"\x01vorbis";
+    if !bytes.starts_with(PAGE) {
+        return None;
+    }
+    let ident = bytes.windows(IDENTIFICATION.len()).position(|w| w == IDENTIFICATION)?;
+    // After the packet tag: version (u32), channels (u8), sample rate (u32).
+    let rate_at = ident + IDENTIFICATION.len() + 5;
+    let sample_rate = u32::from_le_bytes(bytes.get(rate_at..rate_at + 4)?.try_into().ok()?);
+    let last_page = bytes.windows(PAGE.len()).rposition(|w| w == PAGE)?;
+    // Page header: capture pattern (4), version (1), header type (1), granule position (i64).
+    let granule = i64::from_le_bytes(bytes.get(last_page + 6..last_page + 14)?.try_into().ok()?);
+    (sample_rate > 0 && granule > 0).then(|| granule as f32 / sample_rate as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FADE: f32 = 3.0;
+
+    #[test]
+    fn playlist_opens_on_the_wizards_tower_and_wraps() {
+        let tracks = Playlist::default().tracks;
+        assert_eq!(tracks, ["audio/the-wizards-tower.ogg", "audio/shadowed-pixel.ogg"]);
+        assert_eq!(next_index(0, tracks.len()), Some(1));
+        assert_eq!(next_index(1, tracks.len()), Some(0));
+        assert_eq!(next_index(0, 1), Some(0));
+        assert_eq!(next_index(0, 0), None);
+    }
+
+    #[test]
+    fn hands_off_inside_the_closing_crossfade() {
+        assert!(!hand_off_due(100.0, Some(184.9), false, FADE));
+        assert!(!hand_off_due(181.8, Some(184.9), false, FADE));
+        assert!(hand_off_due(181.9, Some(184.9), false, FADE));
+    }
+
+    #[test]
+    fn hands_off_when_the_track_ends_without_a_known_length() {
+        assert!(!hand_off_due(500.0, None, false, FADE));
+        assert!(hand_off_due(500.0, None, true, FADE));
+    }
+
+    #[test]
+    fn fades_in_from_silence() {
+        assert_eq!(track_gain(0.0, None, FADE), 0.0);
+        assert!(track_gain(1.0, None, FADE) >= 0.5 - 1e-6, "audible within a second");
+        assert_eq!(track_gain(FADE, None, FADE), 1.0);
+        assert_eq!(track_gain(60.0, Some(120.0), FADE), 1.0);
+    }
+
+    #[test]
+    fn fades_out_to_silence_at_the_end() {
+        assert!(track_gain(118.5, Some(120.0), FADE) < 1.0);
+        assert!(track_gain(120.0, Some(120.0), FADE).abs() < 1e-6);
+    }
+
+    #[test]
+    fn crossfade_keeps_power_constant() {
+        let duration = 120.0;
+        for step in 0..=30 {
+            let into_fade = step as f32 * FADE / 30.0;
+            let outgoing = track_gain(duration - FADE + into_fade, Some(duration), FADE);
+            let incoming = track_gain(into_fade, Some(200.0), FADE);
+            assert!((outgoing * outgoing + incoming * incoming - 1.0).abs() < 1e-5, "at {into_fade}s");
+        }
+    }
+
+    #[test]
+    fn a_track_shorter_than_two_fades_never_reaches_full_gain() {
+        assert!(track_gain(2.0, Some(4.0), FADE) < 1.0);
+    }
+
+    #[test]
+    fn reads_the_length_of_the_soundtrack() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/audio/the-wizards-tower.ogg");
+        let duration = ogg_vorbis_duration(&std::fs::read(path).unwrap()).unwrap();
+        assert!((duration - 184.93).abs() < 0.05, "{duration}");
+    }
+
+    #[test]
+    fn non_vorbis_bytes_have_no_length() {
+        assert_eq!(ogg_vorbis_duration(b""), None);
+        assert_eq!(ogg_vorbis_duration(b"RIFF....WAVEfmt "), None);
+        assert_eq!(ogg_vorbis_duration(b"OggS no header here"), None);
+    }
 }
