@@ -5,7 +5,7 @@
 //! The mannequin is a set of parametric forms whose dimensions are inputs: [`TorsoForm`] for
 //! body armour and clothing, [`HandForm`] for gloves and gauntlets, [`LegForm`] for
 //! footwear and greaves, [`LowerBodyForm`] (both legs and the hips) for trousers, and
-//! [`HeadForm`] for hoods and coifs. `fb_body` fits gear to a folk body by building the same
+//! [`HeadForm`] for hoods, coifs and hats. `fb_body` fits gear to a folk body by building the same
 //! form from that body's dimensions and passing it to the same builders.
 //!
 //! Sheet geometry: [`shell`] gives a sampled surface real thickness (an outer face, an inner
@@ -907,6 +907,31 @@ impl HeadForm {
     fn normal_of(&self, p: V3) -> V3 {
         let g = [p[0] / self.half_width.powi(2), p[1] / self.half_height.powi(2), p[2] / self.half_depth.powi(2)];
         vec3::normalize_or(g, vec3::Y)
+    }
+
+    /// The polar angle of the brow line at `azimuth`, where a hat's band sits: above the
+    /// eyebrows in front and lower behind, over the swell of the back of the head, so a hat
+    /// tips back a little as hats are worn.
+    pub fn brow_polar(azimuth: f32) -> f32 {
+        let back = 0.5 - 0.5 * azimuth.cos();
+        (0.38 + 0.05 * back) * PI
+    }
+
+    /// A point on the brow line at `azimuth`, `inflate` off the head.
+    pub fn brow_point(&self, azimuth: f32, inflate: f32) -> V3 {
+        self.point(azimuth, Self::brow_polar(azimuth), inflate)
+    }
+
+    /// The point at height `y` on the head at `azimuth`, `inflate` off it. Above the crown
+    /// or below the chin it is the crown's or the chin's point.
+    pub fn point_at_height(&self, azimuth: f32, y: f32, inflate: f32) -> V3 {
+        let polar = ((y - self.centre[1]) / self.half_height).clamp(-1.0, 1.0).acos();
+        self.point(azimuth, polar, inflate)
+    }
+
+    /// The top of the crown.
+    pub fn crown_top(&self) -> f32 {
+        self.centre[1] + self.half_height
     }
 
     /// The lathe-convention angle round a [`TorsoForm`] that faces the same way as `azimuth`.

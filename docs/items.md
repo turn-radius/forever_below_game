@@ -19,7 +19,7 @@ The plate kept its base-to-family map, `SAB`, as JavaScript: each base named a f
 - `Club` takes any club, `Hand axe` a hatchet, hand axe or bearded axe (the one-handers; broad, long, battle and horseman's axes are left to later bases). `Torch`, `Lantern` and `Belt` take any of their family; the plate's belt is a container, so its belt pouch is always on. `Trousers`, `Breeches` and `Leggings` take their legwear style, `Hood` a hood or cowl, `Mail coif` a mail coif.
 - The goods are food or sundries: `Glowcap` is a mushroom given a glowing cap if it rolled dull, `Waterskin` and `Lamp oil` (a flask) are always filled, and lamp oil's amber colour is this port's own. `Rope`, `Lockpicks`, `Candle` and `Bandages` are their sundry kinds, and a `Spare torch` is a torch that has never been lit.
 - `Blind cavefish` sets the fish's skin (`outer`) and fins (`accent`), the plate's `color` and `color2`. `Healing draught` sets the potion's `liquid` to the healing brew and tints its glass toward it as the Armory tints every potion.
-- The plate's native bases become near styles, named for the base rather than the Armory's noun: a `Shirt` is a short, unbelted tunic with straight long sleeves; a `Leather jerkin` is a brigandine cut in a leather colour from `data/leather.json`, riveted one time in three for the plate's "Studded"; a `Pointed hat` is a hood drawn to its full peak with almost no cape. The hat is a stand-in: it still reads as a hood, and wants a hat style in the Armory.
+- The plate's native bases become near styles, named for the base rather than the Armory's noun: a `Shirt` is a short, unbelted tunic with straight long sleeves; a `Leather jerkin` is a brigandine cut in a leather colour from `data/leather.json`, riveted one time in three for the plate's "Studded". A `Pointed hat` is the Armory's pointed hat style (see Hats below).
 - Level loot names only a family: `fb_level`'s item spots carry an Armory family and a seed. `fb_items::roll_loot(family, seed)` picks one of that family's bases uniformly from the seed (`base_for`) and rolls it from the same seed. `fb_level` keeps its family weights and stays independent of `fb_items`, and the layout of every level seed is unchanged.
 
 ### Clubs and axes
@@ -45,6 +45,14 @@ Hoods, cowls, coifs and mail coifs are the Armory's `hood` family (`armory::fami
 - The plate draws a hood as one offset of the head with a torus for the cowl, and a mail coif as a lathed dome with a skirt. Here each is one sheet with thickness: over the head, round the face opening, falling from the back of the head and the chin to the shoulders, and out as a cape hung with the garment drape.
 - Hoods draw their crown to a point and may trail a liripipe down the back; capes may be dagged. Cowls fall in a rolled loop over the chest. Coifs stop at the jaw and nape and tie under the chin; a quilted coif is an Arming Cap. Mail coifs take the shader's mail pattern, a leather binding round the face and sometimes a strapped ventail.
 - A hood's hem trims the cape's edge (`hemline`) and the face opening (`neck`).
+
+### Hats
+
+Pointed hats, wide-brimmed hats and felt caps are the Armory's `hat` family (`armory::families::hat`), new to the Armory, drawn on the same `HeadForm` as hoods. They are a family of their own rather than hood styles: a hood is one draped sheet from the crown to the shoulders, and none of its controls (cape, face opening, liripipe, ties, ventail, mail) mean anything to a stiff crown and brim, while a hat's (crown height, brim width and set, band, feather) mean nothing to a hood. The plate groups them as "Hoods and hats" only on its shelf. Where the port departs from the plate:
+
+- The plate draws its `Pointed hat` as a torus brim under a cone swept along a bent spline, with a band. Here the crown is raised from the head's brow line (`HeadForm::brow_point`), so it follows the head's oval and tips back a little as hats are worn, and is kept off the head where its profile would cut in. A bent crown turns each row square to its spine, so a slumping tip keeps its girth. The brim is a sheet bent along a circular arc: flat, drooping, or turned up against the crown.
+- Pointed hats slump at the tip over a modest brim. Wide-brimmed hats have a rounded crown and a broad brim that may droop (a Slouch Hat), often a band and sometimes a feather (a Plumed Hat). Caps sit low over the crown with a turned-up brim or none; a cap whose top falls forward is a Phrygian Cap. `crumple` dents the crown and waves the brim, as hand-blocked felt does.
+- The `Pointed hat` base takes the pointed style and the Armory's noun. The level's loot weights give hats 2, so their only base, the pointed hat, now lies about; wide-brimmed hats and caps wait for bases of their own.
 
 ### Belts
 

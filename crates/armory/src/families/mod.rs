@@ -17,6 +17,7 @@ pub mod feet;
 pub mod food;
 pub mod garment;
 pub mod hands;
+pub mod hat;
 pub mod helm;
 pub mod hood;
 pub mod lantern;

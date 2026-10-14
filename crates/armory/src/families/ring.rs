@@ -687,10 +687,12 @@ fn build_ring(s: &RingState) -> ItemMesh {
             let shape = plaque_shape(st.face.plaque()).scaled(size * if oval { 1.15 } else { 1.0 }, size);
             let tt = st.height.max(0.008);
             let bevel = (tt * 0.3).min(size * 0.04);
-            // An octagon's sides and chamfer shade as a round face's, as a faceted band does:
-            // each flat crossed a toon band edge at its own corner, so the rim split light and
-            // dark down the middle. The corners stay in the silhouette; a shield's still crease.
-            let options = SlabOptions { crease: 50f32.to_radians(), ..SlabOptions::chamfered(tt, bevel) };
+            // The rim is rounded over, and an octagon's corners crease: each flat side shades
+            // evenly along its length, light to dark only across the rounded rim, and the
+            // light changes at the corners as on any faceted stone. Shading the octagon as a
+            // round face spread the corner normals across each flat, so a toon band edge
+            // crossed the rim partway along a side.
+            let options = SlabOptions::rounded(tt, bevel);
             let mut face = bevelled_slab(&shape.outline, &shape.holes, &options);
             face.rotate_x(-PI / 2.0).translate([0.0, tt * 0.5, 0.0]);
             // The bolster: the shoulders gather into a flared skirt under the face, from inside

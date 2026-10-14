@@ -37,6 +37,7 @@
 //! - [`axe_head`]: an eye, a bit mounted crosswise through it, and a poll (axes).
 //! - [`legwear`]: trousers, breeches and leggings on a lower-body form.
 //! - [`hood`]: hoods, cowls and coifs on a head form and the shoulders.
+//! - [`hat`]: hats, crown and brim, on a head form.
 //! - [`belt`]: a belt buckled round a torso form, with frogs, loops and rings.
 //! - [`key`]: keys with ring, trefoil or lozenge bows and warded bits.
 //! - [`roll`]: rolled sheets and the straps round them (bedrolls, bandages).
@@ -58,6 +59,7 @@ pub mod garment;
 pub mod gem;
 pub mod guard;
 pub mod hafted;
+pub mod hat;
 pub mod hand;
 pub mod head;
 pub mod hilt;

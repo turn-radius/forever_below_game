@@ -18,6 +18,7 @@ use armory::families::feet::Feet;
 use armory::families::food::{Brew, Food, FoodStyle, GLOWCAP};
 use armory::families::garment::Garment;
 use armory::families::hands::Hands;
+use armory::families::hat::Hats;
 use armory::families::hood::Hoods;
 use armory::families::legs::Legs;
 use armory::families::sundry::{Sundry, SundryKind};
@@ -26,6 +27,7 @@ use armory::fabric::FabricPattern;
 use armory::sections::boot::BootStyle;
 use armory::sections::garment::{GarmentStyle, Sleeves};
 use armory::sections::hand::HandStyle;
+use armory::sections::hat::HatStyle;
 use armory::sections::hood::HoodStyle;
 use armory::sections::legwear::LegwearStyle;
 use armory::{Family, Item, Rgb};
@@ -40,6 +42,7 @@ pub enum Accept {
     Feet(&'static [BootStyle]),
     Legs(&'static [LegwearStyle]),
     Hood(&'static [HoodStyle]),
+    Hat(&'static [HatStyle]),
     Bags(&'static [BagStyle]),
     Food(&'static [FoodStyle]),
     Sundry(&'static [SundryKind]),
@@ -57,6 +60,7 @@ impl Accept {
             Accept::Feet(_) => Family::Feet,
             Accept::Legs(_) => Family::Legs,
             Accept::Hood(_) => Family::Hood,
+            Accept::Hat(_) => Family::Hat,
             Accept::Bags(_) => Family::Bags,
             Accept::Food(_) => Family::Food,
             Accept::Sundry(_) => Family::Sundry,
@@ -73,6 +77,7 @@ impl Accept {
             Accept::Feet(s) => Item::Feet(Feet::roll_as(seed, *rng.pick(s))),
             Accept::Legs(s) => Item::Legs(Legs::roll_as(seed, *rng.pick(s))),
             Accept::Hood(s) => Item::Hood(Hoods::roll_as(seed, *rng.pick(s))),
+            Accept::Hat(s) => Item::Hat(Hats::roll_as(seed, *rng.pick(s))),
             Accept::Bags(s) => Item::Bags(Bags::roll_as(seed, *rng.pick(s))),
             Accept::Food(s) => Item::Food(Food::roll_as(seed, *rng.pick(s))),
             Accept::Sundry(s) => Item::Sundry(Sundry::roll_as(seed, *rng.pick(s))),
@@ -89,6 +94,7 @@ impl Accept {
             (Accept::Feet(s), Item::Feet(st)) => s.contains(&st.boot.style),
             (Accept::Legs(s), Item::Legs(st)) => s.contains(&st.legwear.style),
             (Accept::Hood(s), Item::Hood(st)) => s.contains(&st.hood.style),
+            (Accept::Hat(s), Item::Hat(st)) => s.contains(&st.hat.style),
             (Accept::Bags(s), Item::Bags(st)) => s.contains(&st.bag.style),
             (Accept::Food(s), Item::Food(st)) => s.contains(&st.provision.style),
             (Accept::Sundry(s), Item::Sundry(st)) => s.contains(&st.article.kind),
@@ -215,7 +221,7 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Leather jerkin", ArmoryBase::of(A::Garment(&[GarmentStyle::Brigandine])).tweaked(leather_jerkin).named()),
     ("Hood", ArmoryBase::of(A::Hood(&[HoodStyle::Hood, HoodStyle::Cowl]))),
     ("Mail coif", ArmoryBase::of(A::Hood(&[HoodStyle::MailCoif]))),
-    ("Pointed hat", ArmoryBase::of(A::Hood(&[HoodStyle::Hood])).tweaked(pointed_hat).named()),
+    ("Pointed hat", ArmoryBase::of(A::Hat(&[HatStyle::Pointed]))),
     ("Belt", ArmoryBase::of(A::Any(Family::Belt)).tweaked(belt)),
     ("Club", ArmoryBase::of(A::Any(Family::Club))),
     ("Hand axe", ArmoryBase::of(A::Axe(&[AxeArchetype::Hatchet, AxeArchetype::HandAxe, AxeArchetype::Bearded]))),
@@ -291,15 +297,6 @@ fn leather_jerkin(item: &mut Item, r: &mut Mulberry32) {
     if let Item::Garment(s) = item {
         s.cut.cloth.color = Rgb::hex(*r.pick(&LEATHER));
         s.cut.cloth.pattern = if r.chance(1.0 / 3.0) { FabricPattern::Rivets } else { FabricPattern::Plain };
-    }
-}
-
-/// A felt hat drawn to a tall point, with no cape to speak of.
-fn pointed_hat(item: &mut Item, r: &mut Mulberry32) {
-    if let Item::Hood(s) = item {
-        s.hood.peak = 1.0;
-        s.hood.liripipe = 0.0;
-        s.hood.cape = r.range_f32(0.0, 0.3);
     }
 }
 
@@ -405,6 +402,7 @@ mod tests {
             A::Feet(s) => s.iter().map(|x| A::Feet(one(x))).collect(),
             A::Legs(s) => s.iter().map(|x| A::Legs(one(x))).collect(),
             A::Hood(s) => s.iter().map(|x| A::Hood(one(x))).collect(),
+            A::Hat(s) => s.iter().map(|x| A::Hat(one(x))).collect(),
             A::Bags(s) => s.iter().map(|x| A::Bags(one(x))).collect(),
             A::Food(s) => s.iter().map(|x| A::Food(one(x))).collect(),
             A::Sundry(s) => s.iter().map(|x| A::Sundry(one(x))).collect(),
@@ -438,6 +436,19 @@ mod tests {
         for seed in 1..200 {
             match roll_shape("Boots", seed) {
                 Some(Item::Feet(s)) => assert!(matches!(s.boot.style, BootStyle::Boot | BootStyle::Sabaton), "{seed}: {:?}", s.boot.style),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_pointed_hat_is_a_hat_with_a_brim() {
+        for seed in 1..200 {
+            match roll_shape("Pointed hat", seed) {
+                Some(Item::Hat(s)) => {
+                    assert_eq!(s.hat.style, HatStyle::Pointed);
+                    assert!(s.hat.brim > 0.0, "{seed}: no brim");
+                }
                 other => panic!("{other:?}"),
             }
         }
