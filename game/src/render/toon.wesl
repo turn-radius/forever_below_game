@@ -243,9 +243,13 @@ fn fragment(
     // output encoding: the prototype's wear colours are display values, and a band at half
     // light reads as half as bright on screen, which keeps the steps crisp.
     // Patterns go on first and wear over them, as in the prototype's `DECAY_BODY`.
+    var uv = vec2<f32>(0.0);
+    @if(VERTEX_UVS_A)
+    uv = vertex_output.uv;
     let patterned = apply_pattern(
         linear_to_srgb(pbr_input.material.base_color.rgb),
         item_position,
+        uv,
         length(fwidth(item_position)) * toon.pattern_scale,
         toon.pattern_id,
         toon.pattern_color,

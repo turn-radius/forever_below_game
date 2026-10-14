@@ -378,7 +378,8 @@ impl Generator for Shield {
         let board = Board::new(b);
         let cell = (w.max(hgt) / 64.0).clamp(0.05, 0.16);
         let h = cell * 1e-3;
-        let uv_rect = Some(([-w * 0.5, -hgt * 0.5], [w, hgt]));
+        // The field's uv, centred on the fess point where the charge sits (`Field::surface`).
+        let uv_rect = Some(([-w * 0.5, charge_height(b) - hgt * 0.5], [w, hgt]));
         let shell = plate(&outline, &[], &board, &PlateOptions { thickness: th, cell: [cell, cell], crease: 0.25, uv_rect, ..Default::default() });
 
         let mut parts = Parts::default();

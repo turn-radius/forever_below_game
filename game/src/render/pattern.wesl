@@ -22,6 +22,18 @@ const PATTERN_SCALES: u32 = 10u;
 const PATTERN_RIVETS: u32 = 11u;
 // `PatternKind::FIRST_FIELD_ID`: from here on, patterns lie over the part's uv.
 const FIRST_FIELD_PATTERN: u32 = 12u;
+const PATTERN_PER_PALE: u32 = 12u;
+const PATTERN_PER_FESS: u32 = 13u;
+const PATTERN_QUARTERLY: u32 = 14u;
+const PATTERN_PER_BEND: u32 = 15u;
+const PATTERN_PER_CHEVRON: u32 = 16u;
+const PATTERN_PALY: u32 = 17u;
+const PATTERN_BENDY: u32 = 18u;
+const PATTERN_CHECKY: u32 = 19u;
+const PATTERN_LOZENGY: u32 = 20u;
+const PATTERN_PLANKS: u32 = 21u;
+const PATTERN_PER_SALTIRE: u32 = 22u;
+const PATTERN_BARRY: u32 = 23u;
 
 // GLSL's `mod`: always between 0 and `y`. WGSL's `%` keeps the sign of `x`.
 fn modulo(x: f32, y: f32) -> f32 {
@@ -178,19 +190,92 @@ fn wrapped_pattern_mean(id: u32) -> vec2<f32> {
     return vec2(0.5, 0.0);
 }
 
-// Paints pattern `id` over `color`. `item_position` is in item space; `cell_size` is how many
-// cells one pixel spans (`fwidth` of the pattern coordinates), so fine patterns fade to their
-// mean instead of shimmering. The fade is our own, not the prototype's.
+// Odd cells of a run: 1 for odd `floor(x)`, 0 for even.
+fn odd(x: f32) -> f32 {
+    return modulo(floor(x), 2.0);
+}
+
+// A cheap hash of one number to 0..1 (`h2` in the prototype's shader, in one dimension).
+fn hash1(x: f32) -> f32 {
+    return fract(sin(x * 127.1 + 311.7) * 43758.5453);
+}
+
+// A field pattern over the part's uv, which runs 0..=1 across the field with the fess point
+// (where the field's lines cross) at 0.5, 0.5, u towards sinister (the viewer's right) and v
+// up. `n` is the pattern's scale: repeats for stripes and chequers, boards for planks. x is
+// the share of the second tincture, y how much the surface darkens.
+//
+// From the heraldic branch of `fab()` (`reference/spline_armory_engine.js`), with the first
+// tincture in dexter and in chief as blazon reads it (the prototype put the second tincture
+// in chief for per fess and per bend), and per saltire, barry and planks' board tones our own.
+fn field_pattern(uv: vec2<f32>, id: u32, n: f32) -> vec2<f32> {
+    let p = uv - 0.5;
+    if id == PATTERN_PER_PALE {
+        return vec2(step(0.0, p.x), 0.0);
+    }
+    if id == PATTERN_PER_FESS {
+        return vec2(step(p.y, 0.0), 0.0);
+    }
+    if id == PATTERN_QUARTERLY {
+        // First and fourth quarters (dexter chief, sinister base) in the first tincture.
+        return vec2(1.0 - abs(step(0.0, p.x) - step(0.0, p.y)), 0.0);
+    }
+    if id == PATTERN_PER_BEND {
+        // Dexter chief to sinister base; the second tincture below the line.
+        return vec2(step(p.x + p.y, 0.0), 0.0);
+    }
+    if id == PATTERN_PER_CHEVRON {
+        return vec2(step(p.y, 0.08 - abs(p.x) * 1.1), 0.0);
+    }
+    if id == PATTERN_PALY {
+        return vec2(odd(uv.x * n), 0.0);
+    }
+    if id == PATTERN_BENDY {
+        return vec2(odd((p.x + p.y + 1.0) * n * 0.5), 0.0);
+    }
+    if id == PATTERN_CHECKY {
+        return vec2(modulo(floor(uv.x * n) + floor(uv.y * n), 2.0), 0.0);
+    }
+    if id == PATTERN_LOZENGY {
+        let q = p * n * 2.0;
+        return vec2(modulo(floor((q.x + q.y) * 0.5) + floor((q.x - q.y) * 0.5), 2.0), 0.0);
+    }
+    if id == PATTERN_PLANKS {
+        // A dark seam between boards, and each board a little lighter or darker than the next.
+        let seam = 1.0 - smoothstep(0.003, 0.006, seam_distance(uv.x * n) / max(n, 1.0));
+        let tone = (hash1(floor(uv.x * n)) - 0.5) * 0.12;
+        return vec2(0.0, seam * 0.55 + tone);
+    }
+    if id == PATTERN_PER_SALTIRE {
+        // Chief and base in the first tincture, the flanks in the second.
+        return vec2(step(abs(p.y), abs(p.x)), 0.0);
+    }
+    if id == PATTERN_BARRY {
+        // Stripes from the chief down, the first in the first tincture.
+        return vec2(odd((1.0 - uv.y) * n), 0.0);
+    }
+    return vec2(0.0);
+}
+
+// Paints pattern `id` over `color`. `item_position` is in item space and `uv` the part's own
+// (for field patterns); `cell_size` is how many cells one pixel spans (`fwidth` of the
+// pattern coordinates), so fine wrapped patterns fade to their mean instead of shimmering.
+// The fade is our own, not the prototype's.
 fn apply_pattern(
     color: vec3<f32>,
     item_position: vec3<f32>,
+    uv: vec2<f32>,
     cell_size: f32,
     id: u32,
     second: vec3<f32>,
     wrap: Wrap,
 ) -> vec3<f32> {
-    if id == PATTERN_NONE || id >= FIRST_FIELD_PATTERN {
+    if id == PATTERN_NONE {
         return color;
+    }
+    if id >= FIRST_FIELD_PATTERN {
+        let f = field_pattern(uv, id, wrap.scale);
+        return mix(color, second, f.x) * (1.0 - f.y);
     }
     let p = wrap_coords(item_position, wrap, id);
     let sharp = 1.0 - smoothstep(0.25, 0.6, cell_size);

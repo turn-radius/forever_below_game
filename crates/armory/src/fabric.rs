@@ -101,7 +101,7 @@ pub enum PatternKind {
     Scales,
     Rivets,
     /// Heraldic divisions of a painted field, between the part's tint and the pattern colour,
-    /// over uv 0..=1 across the field ([`crate::heraldry::Division`]).
+    /// over uv 0..=1 across the field, centred on the fess point ([`crate::heraldry::Division`]).
     PerPale,
     PerFess,
     Quarterly,
@@ -112,6 +112,9 @@ pub enum PatternKind {
     Checky,
     PerSaltire,
     Barry,
+    /// Diamonds of the field's two tinctures ([`crate::heraldry::Division::Lozengy`]); the
+    /// cloth pattern is [`PatternKind::Lozenges`].
+    Lozengy,
     /// Boards running up the part, `scale` of them across uv 0..=1 (bare shield faces).
     Planks,
 }
@@ -139,6 +142,8 @@ impl PatternKind {
             PatternKind::Paly => 17,
             PatternKind::Bendy => 18,
             PatternKind::Checky => 19,
+            // Free in the prototype's table, whose lozengy fields reused the cloth lozenge.
+            PatternKind::Lozengy => 20,
             PatternKind::Planks => 21,
             // Not in the prototype's table.
             PatternKind::PerSaltire => 22,
@@ -163,12 +168,12 @@ impl PatternKind {
     /// The lowest shader id of a field pattern (see [`PatternKind::on_field`]).
     pub const FIRST_FIELD_ID: u32 = 12;
 
-    pub const ALL: [PatternKind; 22] = [
+    pub const ALL: [PatternKind; 23] = [
         PatternKind::Stripes, PatternKind::Hoops, PatternKind::Checks, PatternKind::Tartan, PatternKind::Lozenges,
         PatternKind::Powdered, PatternKind::Chevrons, PatternKind::Quilted, PatternKind::Mail, PatternKind::Scales,
         PatternKind::Rivets, PatternKind::PerPale, PatternKind::PerFess, PatternKind::Quarterly, PatternKind::PerBend,
         PatternKind::PerChevron, PatternKind::Paly, PatternKind::Bendy, PatternKind::Checky, PatternKind::PerSaltire,
-        PatternKind::Barry, PatternKind::Planks,
+        PatternKind::Barry, PatternKind::Lozengy, PatternKind::Planks,
     ];
 }
 

@@ -76,12 +76,52 @@ fn painted_parts_carry_their_tinctures() {
         if let Some(charge) = part(&mesh, "charge") {
             assert_eq!(charge.tint, Some(s.field.charge_tincture.rgb()), "seed {}", s.seed);
         }
-        // The face's uv spans the field, for the shader's division.
+        // The face's uv spans the field, for the shader's division, centred on the fess point.
         let (lo, hi) = face.uvs.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), u| {
             ([lo[0].min(u[0]), lo[1].min(u[1])], [hi[0].max(u[0]), hi[1].max(u[1])])
         });
-        assert!(lo[0] > -0.01 && lo[1] > -0.01 && hi[0] < 1.01 && hi[1] < 1.01 && hi[1] - lo[1] > 0.95, "seed {}: uv {lo:?}..{hi:?}", s.seed);
+        assert!(lo[0] > -0.01 && hi[0] < 1.01 && (hi[1] - lo[1] - 1.0).abs() < 0.05, "seed {}: uv {lo:?}..{hi:?}", s.seed);
+        if let Some(charge) = part(&mesh, "charge") {
+            // The charge sits where the field's lines cross: uv 0.5, 0.5 under its middle.
+            let (clo, chi) = bounds(charge);
+            let middle = [(clo[0] + chi[0]) * 0.5, (clo[1] + chi[1]) * 0.5];
+            let nearest = (0..face.positions.len())
+                .min_by(|&a, &b| {
+                    let d = |i: usize| (face.positions[i][0] - middle[0]).hypot(face.positions[i][1] - middle[1]);
+                    d(a).total_cmp(&d(b))
+                })
+                .unwrap();
+            let uv = face.uvs[nearest];
+            assert!((uv[0] - 0.5).abs() < 0.08 && (uv[1] - 0.5).abs() < 0.08, "seed {}: charge at uv {uv:?}", s.seed);
+        }
     }
+}
+
+#[test]
+fn quarterly_fields_and_bare_boards_reach_the_shader() {
+    use armory::fabric::PatternKind;
+    use armory::heraldry::Division;
+    let mut quarterly = 0;
+    let mut boards = 0;
+    for (s, mesh) in built() {
+        if s.field.painted && s.field.division == Division::Quarterly {
+            let face = part(&mesh, "face").unwrap();
+            let pattern = face.pattern.unwrap();
+            // Four quarters: the first tincture as the face's own colour, the second drawn over it.
+            assert_eq!(pattern.kind, PatternKind::Quarterly);
+            assert_eq!(face.tint, Some(s.field.tincture.rgb()));
+            assert_eq!(pattern.color, s.field.tincture2.rgb());
+            quarterly += 1;
+        }
+        if !s.field.painted && s.body.material == MaterialKind::Wood && s.body.planks > 0 {
+            let body = part(&mesh, "body").unwrap();
+            let pattern = body.pattern.unwrap();
+            assert_eq!(pattern.kind, PatternKind::Planks);
+            assert_eq!(pattern.scale, s.body.planks as f32, "seed {}: one seam per board", s.seed);
+            boards += 1;
+        }
+    }
+    assert!(quarterly > 0 && boards > 0, "{quarterly} quarterly fields, {boards} plank boards");
 }
 
 #[test]

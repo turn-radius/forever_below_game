@@ -8,8 +8,9 @@
 //!
 //! Divisions are drawn by the shader: [`Field::surface`] turns one into a
 //! [`SurfacePattern`] in [`Field::tincture2`] over a painted part tinted [`Field::tincture`],
-//! whose uv runs 0..=1 across the field. Charges are the shared [`Device`]s, whose outlines
-//! are in [`crate::build::device`].
+//! whose uv runs 0..=1 across the field, u towards sinister (the viewer's right) and v up, with
+//! the fess point (where the lines of a party field cross, and the charge sits) at 0.5, 0.5.
+//! Charges are the shared [`Device`]s, whose outlines are in [`crate::build::device`].
 
 use crate::fabric::{PatternKind, SurfacePattern};
 use crate::material::Rgb;
@@ -105,7 +106,7 @@ impl Division {
             Division::Barry => PatternKind::Barry,
             Division::Bendy => PatternKind::Bendy,
             Division::Checky => PatternKind::Checky,
-            Division::Lozengy => PatternKind::Lozenges,
+            Division::Lozengy => PatternKind::Lozengy,
         })
     }
 
