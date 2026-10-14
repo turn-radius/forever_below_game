@@ -9,6 +9,8 @@
 pub mod armory_base;
 pub mod dice;
 pub mod footprint;
+pub mod modifier;
+pub mod stats;
 pub mod tables;
 
 use serde::{Deserialize, Serialize};

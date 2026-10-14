@@ -81,10 +81,21 @@ Torches and lanterns are Armory families (`armory::families::torch`, `armory::fa
 
 - Roll `x`: `x < .58` common, `< .85` magic, `< .97` rare, otherwise legendary. Containers cap at rare.
 - Common: 30% chance of one **flaw** prefix. Magic: one good prefix or suffix (50/50). Rare: a good prefix and a good suffix. Legendary: a good prefix and two good suffixes.
-- An affix applies only where its `on` tag matches the item's tags (`cloth`, `leather`, `metal`, `wood`, `wear`, `armor`, `quiet`, `weapon`, `light`, `trinket`, `container`, or `any`). Tables: `data/afx.json`. Each `fx` is kept as the prototype's JS source; port it to a typed effect.
+- An affix applies only where its `on` tag matches the item's tags (`cloth`, `leather`, `metal`, `wood`, `wear`, `armor`, `quiet`, `weapon`, `light`, `trinket`, `container`, or `any`). Tables: `data/afx.json`. Each `fx` is a list of typed effects (see "Affix effects" below).
 - When affixes are chosen by hand (from the armory), rarity follows from them: two good affixes make it rare, one makes it magic, none makes it common.
 - Name: `<prefix> <Armory noun> <suffix>`. The noun comes from `forgeNoun` (Longsword, Rondel Dagger, Kettle Hat).
 - A **legendary** gets a title (`<owner>'s <noun>` or `The <adjective> <noun>`). The original name becomes its subtitle, and it gets three lines of history: where it was made and by which faction, who carried it and what they did, and how it was lost.
+
+### Affix effects
+
+Each affix's `fx` in `data/afx.json` is a list of `fb_items::modifier::Modifier`s acting on `fb_items::stats::Stats` or on the Armory `Condition`: `add` or `scale` a stat, `damage_or_armour` (the plate's Rusted: damage bonus on a weapon, armour on anything else), or `condition`, which raises a condition slider to at least a value. `Stats` is the minimal set the affixes need; deriving it per family is still to do. Amounts and distances never fall below zero (the plate's `Math.max(0, ...)` for warmth and armour, applied to every one); bonuses such as stealth and damage can.
+
+Where the effects come from:
+
+- The plate's `fx` source: Warm, Featherlight, Hardened, Keen, Gleaming, Moth-eaten, Rusted, Smoky, of the Hearth, of the Ox. Featherlight keeps the weight exact where the plate rounded it to 0.1 lb; rounding is left to the card.
+- `dressState`'s condition for flaws, so a flaw's wear travels with the affix: Rusted raises wear to 0.75 and rust to 1.5; Moth-eaten, Mildewed and Lice-ridden raise wear to 0.6, fray to 1.4 and rot to 1.2; Cracked raises wear to 0.6 and rot to 1.5.
+- The card text, for affixes the plate gave no `fx`: Silent, Squeaking and of Quiet Steps (stealth ±2), Balanced (+1 to hit), Long-burning (burn time ×2), of the Mole (darkvision 10 ft), of Plenty and of Wakefulness (hunger and fatigue ×0.85), of Thieves (lockpicking +2), of the Leech (heal 1 on a kill).
+- These numbers are this port's own proposals, since the text gives none: Mildewed and Lice-ridden multiply disease risk by 1.5, of Lesser Warding by 0.5, and Cracked adds a 10% chance to break on a hard blow. Lice-ridden's itching and Smoky's stinging eyes are not simulated yet.
 
 ## Rarity shows on the object
 

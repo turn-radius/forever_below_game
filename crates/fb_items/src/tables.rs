@@ -3,12 +3,15 @@
 //!
 //! - `bases.json`: the plate's own base items (`BASES`): slot, weight, footprint, tags, stats.
 //! - `goods.json`: things carried but not worn (`GOODS`).
-//! - `afx.json`: prefixes and suffixes (`AFX`).
+//! - `afx.json`: prefixes and suffixes (`AFX`), each effect ported to typed [`Modifier`]s.
 //! - `families.json`: the plate's armory menu, bases grouped under a heading (`FAMILIES`).
 
 use crate::dice::Dice;
 use crate::footprint::{Footprint, Grid};
+use crate::modifier::Modifier;
+use crate::stats::Stats;
 use crate::{Slot, Tag};
+use armory::cond::Condition;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -59,11 +62,6 @@ pub struct Good {
     pub food: bool,
 }
 
-/// Prototype source not yet ported to Rust, kept verbatim with the extractor's `fn: ` prefix.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct JsSource(pub String);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AffixKind {
     #[serde(rename = "pre")]
@@ -101,11 +99,25 @@ pub struct Affix {
     #[serde(rename = "g", deserialize_with = "flag")]
     pub good: bool,
     pub on: On,
-    #[serde(default)]
-    pub fx: Option<JsSource>,
+    /// What it does, ported from the plate's `fx` source, its card text and `dressState`.
+    pub fx: Vec<Modifier>,
     /// The card's line ("+2 warmth").
     #[serde(rename = "t")]
     pub text: String,
+}
+
+impl Affix {
+    /// Whether it can roll on an item with `tags`.
+    pub fn fits(&self, tags: &[Tag]) -> bool {
+        self.on.matches(tags)
+    }
+
+    /// Applies every effect, in order.
+    pub fn apply(&self, stats: &mut Stats, condition: &mut Condition) {
+        for m in &self.fx {
+            m.apply(stats, condition);
+        }
+    }
 }
 
 /// A heading of the plate's armory menu and the bases under it (a row of
@@ -210,5 +222,116 @@ mod tests {
         assert_eq!((warm.name.as_str(), warm.kind, warm.good, warm.on), ("Warm", AffixKind::Prefix, true, On::Tag(Tag::Cloth)));
         assert_eq!(affixes().iter().find(|a| a.name == "of Plenty").map(|a| a.on), Some(On::Any));
         assert_eq!(base_groups()[3].label, "Clubs and axes");
+    }
+
+    use crate::modifier::ConditionSlider;
+    use crate::stats::Stat;
+
+    /// A mid-range item to apply affixes to: a weapon or not, pristine.
+    fn baseline(weapon: bool) -> (Stats, Condition) {
+        let stats = Stats {
+            weight: 4.0,
+            armour: 2.0,
+            damage: weapon.then_some(Dice::new(1, 6)),
+            warmth: 2.0,
+            light: 20.0,
+            ..Stats::default()
+        };
+        (stats, Condition::default())
+    }
+
+    /// The stats and condition sliders that differ between two states.
+    fn changes(before: &(Stats, Condition), after: &(Stats, Condition)) -> (Vec<Stat>, Vec<ConditionSlider>) {
+        let stats = Stat::ALL.into_iter().filter(|&s| before.0.get(s) != after.0.get(s)).collect();
+        let sliders = ConditionSlider::ALL.into_iter().filter(|&c| c.get(&before.1) != c.get(&after.1)).collect();
+        (stats, sliders)
+    }
+
+    fn named(m: &Modifier) -> (Vec<Stat>, Vec<ConditionSlider>) {
+        match *m {
+            Modifier::Add { stat, .. } | Modifier::Scale { stat, .. } => (vec![stat], vec![]),
+            Modifier::DamageOrArmour { .. } => (vec![Stat::DamageBonus, Stat::Armour], vec![]),
+            Modifier::Condition { slider, .. } => (vec![], vec![slider]),
+        }
+    }
+
+    #[test]
+    fn every_affix_has_typed_effects() {
+        assert!(!include_str!("../../../data/afx.json").contains("fn:"), "JS source left in data/afx.json");
+        for a in affixes() {
+            assert!(!a.fx.is_empty(), "{} does nothing", a.name);
+        }
+    }
+
+    #[test]
+    fn an_effect_changes_only_what_it_names() {
+        for a in affixes() {
+            for m in &a.fx {
+                let (stats, sliders) = named(m);
+                let mut changed_any = false;
+                for weapon in [false, true] {
+                    let before = baseline(weapon);
+                    let mut after = before;
+                    m.apply(&mut after.0, &mut after.1);
+                    let (cs, cc) = changes(&before, &after);
+                    assert!(cs.iter().all(|s| stats.contains(s)), "{}: {m:?} changed {cs:?}", a.name);
+                    assert!(cc.iter().all(|c| sliders.contains(c)), "{}: {m:?} changed {cc:?}", a.name);
+                    assert_eq!(after.0.damage, before.0.damage);
+                    changed_any |= !cs.is_empty() || !cc.is_empty();
+                }
+                assert!(changed_any, "{}: {m:?} changes nothing", a.name);
+            }
+        }
+    }
+
+    #[test]
+    fn flaws_worsen_and_good_affixes_improve() {
+        for a in affixes() {
+            for m in &a.fx {
+                assert_eq!(m.is_improvement(), a.good, "{}: {m:?}", a.name);
+            }
+            for weapon in [false, true] {
+                let before = baseline(weapon);
+                let mut after = before;
+                a.apply(&mut after.0, &mut after.1);
+                let (stats, sliders) = changes(&before, &after);
+                for s in stats {
+                    let rose = after.0.get(s) > before.0.get(s);
+                    assert_eq!(rose == s.higher_is_better(), a.good, "{}: {s:?} moved the wrong way", a.name);
+                }
+                if a.good {
+                    assert!(sliders.is_empty(), "{} wears the item", a.name);
+                }
+                for c in sliders {
+                    assert!(c.get(&after.1) > c.get(&before.1), "{}: {c:?} fell", a.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn affixes_fit_their_tags() {
+        let warm = affixes().iter().find(|a| a.name == "Warm").unwrap();
+        assert!(warm.fits(&[Tag::Cloth, Tag::Wear]));
+        assert!(!warm.fits(&[Tag::Metal, Tag::Weapon]));
+        let ox = affixes().iter().find(|a| a.name == "of the Ox").unwrap();
+        assert!(ox.fits(&[]));
+    }
+
+    #[test]
+    fn the_plates_effects_are_kept() {
+        let apply = |name: &str, weapon: bool| {
+            let (mut s, mut c) = baseline(weapon);
+            affixes().iter().find(|a| a.name == name).unwrap().apply(&mut s, &mut c);
+            (s, c)
+        };
+        assert_eq!(apply("Warm", false).0.warmth, 4.0);
+        assert!((apply("Featherlight", false).0.weight - 2.4).abs() < 1e-6);
+        assert_eq!(apply("Moth-eaten", false).0.warmth, 1.0);
+        assert_eq!(apply("Smoky", false).0.light, 15.0);
+        assert_eq!(apply("of the Ox", false).0.carry, 25.0);
+        let (sword, rust) = apply("Rusted", true);
+        assert_eq!((sword.damage_bonus, sword.armour, rust.rust, rust.wear), (-1.0, 2.0, 1.5, 0.75));
+        assert_eq!(apply("Rusted", false).0.armour, 1.0);
     }
 }
