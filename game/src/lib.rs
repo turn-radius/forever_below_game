@@ -24,6 +24,7 @@ pub mod props;
 pub mod render;
 pub mod settings;
 pub mod soak;
+pub mod swing_practice;
 pub mod title;
 pub mod tuning;
 pub mod turntable;

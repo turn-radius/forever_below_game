@@ -28,7 +28,7 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 |---|---|
 | W A S D, Shift | walk, hurry |
 | Mouse | look round (click to take the mouse back after Esc) |
-| Left click | swing what your main hand holds: a chop for a mace, axe or club, a slash for a sword, a thrust for a spear or dagger, a sweep for a staff, a punch with nothing (a click while the mouse is free only takes it back) |
+| Left click | swing what your main hand holds, each blow from one of the directions it suits and arcing to the creature in reach: mostly overhead for a mace, axe or club, from every side for a sword, flat across for a staff, a stab for a spear or dagger, a punch with nothing (a click while the mouse is free only takes it back) |
 | E | pick up what you're looking at, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
 | F | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand, a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
@@ -85,6 +85,19 @@ One rat or snake on the turntable's plate, posed and animated as in the level, w
 - `--motion <name>`: still (the default), moving (trotting or slithering in place at its own speed), rearing or striking.
 
 Tab and Shift+Tab change the species, Left and Right the seed, M the motion, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
+
+### Swing practice
+
+```
+cargo run -p forever_below -- --swings
+```
+
+The level, with a panel at the top left and keys for trying every melee weapon's swings. Walk up to a rat to see blows bend toward it.
+
+- `[` and `]` hold the previous or next melee base (every sword, mace, axe, club, dagger, spear and staff base); `N` rolls another of the same base.
+- `1` to `7` throw every swing as one strike, whatever the weapon: overhead, high right, high left, from the right, from the left, rising, stab. `0` goes back to rolling them.
+- `G` swings over and over; `T` slows time to a quarter.
+- `FB_STRIKE=<1 to 7>` starts with that strike pinned, for captures with `FB_SWING=1`.
 
 ### Screenshots and debug switches
 

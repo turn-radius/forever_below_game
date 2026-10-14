@@ -274,18 +274,34 @@ fn hold_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
     let (main, off) = hold_spec(&spec);
     for (slot, want) in [(Slot::Mainhand, main), (Slot::Offhand, off)] {
         let Some(want) = want else { continue };
-        if let Some(old) = inventory.worn(slot) {
-            inventory.take_out(old);
-            if inventory.stow(old).is_err() {
-                inventory.forget(old);
-            }
-        }
-        let Some(base) = want else { continue };
-        match roll_held(&base, kit_seed(level.as_deref(), 0x401d + slot as u32)) {
-            Some(item) => equip_kit(&mut inventory, item, slot),
-            None => warn!("FB_HOLD: no base called {base:?}"),
+        let Some(base) = want else {
+            empty_hand(&mut inventory, slot);
+            continue;
+        };
+        if hold_rolled(&mut inventory, slot, &base, kit_seed(level.as_deref(), 0x401d + slot as u32)).is_none() {
+            warn!("FB_HOLD: no base called {base:?}");
         }
     }
+}
+
+/// Empties `slot`, stowing what it held (or dropping it from the world with no room).
+fn empty_hand(inventory: &mut Inventory, slot: Slot) {
+    if let Some(old) = inventory.worn(slot) {
+        inventory.take_out(old);
+        if inventory.stow(old).is_err() {
+            inventory.forget(old);
+        }
+    }
+}
+
+/// Puts the first item of `base` rolled at or after `seed` in `slot`, stowing what it held, and
+/// returns the item's name; `None`, leaving the hand as it was, if there is no such base.
+pub fn hold_rolled(inventory: &mut Inventory, slot: Slot, base: &str, seed: u32) -> Option<String> {
+    let item = roll_held(base, seed)?;
+    let name = item.name.clone();
+    empty_hand(inventory, slot);
+    equip_kit(inventory, item, slot);
+    Some(name)
 }
 
 /// The bases a comma-separated list names.

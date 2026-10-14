@@ -6,7 +6,9 @@
 //! - **Swinging** ([`swing`]): the attack key swings what the main hand holds, in a shape
 //!   that suits the hold ([`SwingKind`]): a chop for maces, axes and clubs, a slash for
 //!   swords, a thrust for spears and daggers, a sweep for a staff, a punch with nothing in
-//!   hand; a thrust drives the item's point at the crosshair ([`swing::Aim`]). Partway through,
+//!   hand. Each swing is thrown as one of the strikes that kind suits ([`swing::Strike`]),
+//!   from above, either side or below, or a stab, arcing to the creature in reach or the
+//!   crosshair ([`swing::SwingPath`]). Partway through,
 //!   the blow lands on the nearest creature whose body, as its bones are posed
 //!   ([`swing::body_targets`]), is within the weapon's reach in a cone ahead
 //!   ([`target_in_reach`]), for the weapon's damage dice ([`Weapon::roll`]).
@@ -404,7 +406,7 @@ mod tests {
 
     fn swing_at(app: &mut App, player: Entity, frames: usize) {
         let weapon = Weapon::in_hand(app.world().resource::<Inventory>(), app.world().resource::<Character>());
-        app.world_mut().entity_mut(player).insert(swing::Swing { weapon, t: 0.0, landed: false });
+        app.world_mut().entity_mut(player).insert(swing::Swing::new(weapon));
         for _ in 0..frames {
             // The rat stays put for the blow, as if caught mid-step.
             app.update();
@@ -441,7 +443,7 @@ mod tests {
         let (mut app, player, rat) = fight(Some("Sword"), 9.0);
         app.update();
         let weapon = Weapon::in_hand(app.world().resource::<Inventory>(), app.world().resource::<Character>());
-        app.world_mut().entity_mut(player).insert(swing::Swing { weapon, t: 0.0, landed: false });
+        app.world_mut().entity_mut(player).insert(swing::Swing::new(weapon));
         let mut frames = 0;
         while app.world().get::<Corpse>(rat).is_none() {
             app.update();

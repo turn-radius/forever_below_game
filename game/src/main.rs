@@ -2,6 +2,8 @@
 //! turntable instead, and `--doll` the doll view (a dressed body turning on the turntable's
 //! plate: `--doll --folk dwarf --seed 7 --outfit cleric`), and `--creature` the creature view
 //! (a rat or snake on the plate: `--creature --species viper --seed 7 --motion moving`).
+//! `--swings` plays the level with keys for trying every melee weapon's swings
+//! ([`forever_below::swing_practice`]).
 //!
 //! `cargo run -p forever_below -- --seed 1207` plays the level for that seed, skipping the
 //! title, as the debug switches that look at the level do; `--title` keeps the title
@@ -22,6 +24,7 @@ use forever_below::{
     play::{CurrentLevel, PlayPlugin},
     settings::SettingsPlugin,
     soak::SoakPlugin,
+    swing_practice::SwingPracticePlugin,
     title::{NewDelveSeed, TitlePlugin},
     tuning::TuningPlugin,
     turntable::{Focus, Turntable, TurntablePlugin},
@@ -38,6 +41,8 @@ fn main() -> AppExit {
     if args.iter().any(|a| a == "--creature") {
         return run_creature(&args);
     }
+    let swings = args.iter().any(|a| a == "--swings");
+    let args: Vec<String> = args.into_iter().filter(|a| a != "--swings").collect();
     let launch = match Launch::parse(&args) {
         Ok(launch) => launch,
         Err(error) => {
@@ -45,7 +50,7 @@ fn main() -> AppExit {
             return AppExit::error();
         }
     };
-    let opening = launch.opening(env_set);
+    let opening = if swings { AppState::Delving } else { launch.opening(env_set) };
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -58,6 +63,9 @@ fn main() -> AppExit {
     .insert_resource(NewDelveSeed(launch.seed));
     if opening == AppState::Delving {
         app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED))));
+    }
+    if swings {
+        app.add_plugins(SwingPracticePlugin);
     }
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
