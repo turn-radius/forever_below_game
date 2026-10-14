@@ -456,41 +456,53 @@ pub fn door_frame(ceiling: f32, seed: u32) -> ItemMesh {
     let mut masonry = MeshBuilder::new();
     let course: f32 = 4.6;
     let gap = 0.18;
+    // The frame's outer edge across the opening: blocks beside it stop here, and blocks over
+    // it sit on the lintel.
+    let clear = half_open + FRAME_BEAM;
+    let mut block = |lo: f32, hi: f32, bottom: f32, top: f32, rng: &mut Mulberry32| {
+        if hi - lo < 0.6 || top - bottom < 0.6 {
+            return;
+        }
+        let depth = INFILL_DEPTH + (rng.range_f32(0.0, 1.0) - 0.5) * 0.4;
+        let mut stone = plank(hi - lo - gap, top - bottom, depth, 0.35);
+        stone.translate([(lo + hi) * 0.5, (bottom + top) * 0.5, (rng.range_f32(0.0, 1.0) - 0.5) * 0.25]);
+        masonry.append(&stone);
+    };
     let mut row = 0;
     let mut y = 0.0;
     while y < top {
         let h = course.min(top - y);
+        let (bottom, top_of_course) = (y + gap * 0.5, y + h - gap * 0.5);
         // Stagger alternate courses by half a block.
         let mut x = -reach - if row % 2 == 1 { 3.0 } else { 0.0 };
         while x < reach {
             let len = 5.2 + rng.range_f32(0.0, 1.0) * 2.4;
             let (a, b) = (x.max(-reach), (x + len).min(reach));
             x += len;
-            // Leave the opening and the frame clear.
-            let in_opening = |lo: f32, hi: f32| y < lintel_top && hi > -half_open - FRAME_BEAM && lo < half_open + FRAME_BEAM;
-            let mut spans = Vec::new();
-            if in_opening(a, b) {
-                if a < -half_open - FRAME_BEAM {
-                    spans.push((a, -half_open - FRAME_BEAM));
-                }
-                if b > half_open + FRAME_BEAM {
-                    spans.push((half_open + FRAME_BEAM, b));
-                }
-            } else {
-                spans.push((a, b));
+            if y >= lintel_top || b <= -clear || a >= clear {
+                block(a, b, bottom, top_of_course, &mut rng);
+                continue;
             }
-            for (lo, hi) in spans {
-                if hi - lo < 0.6 {
-                    continue;
-                }
-                let depth = INFILL_DEPTH + (rng.range_f32(0.0, 1.0) - 0.5) * 0.4;
-                let mut block = plank(hi - lo - gap, h - gap, depth, 0.35);
-                block.translate([(lo + hi) * 0.5, y + h * 0.5, (rng.range_f32(0.0, 1.0) - 0.5) * 0.25]);
-                masonry.append(&block);
-            }
+            // A course level with the frame: full height beside it, and over it only from the
+            // lintel's top, so the stone sits on the lintel with no gap between.
+            block(a, a.max(-clear).min(b), bottom, top_of_course, &mut rng);
+            block(a.max(-clear), b.min(clear), lintel_top, top_of_course, &mut rng);
+            block(b.min(clear).max(a), b, bottom, top_of_course, &mut rng);
         }
         y += course;
         row += 1;
+    }
+    // A thinner core of stone behind the blocks, so the mortar joints read as recesses rather
+    // than slits through the wall. It beds into the floor's relief and hides its edges behind
+    // the jambs and the lintel.
+    let core_depth = INFILL_DEPTH * 0.6;
+    let floor = -FLOOR_RELIEF;
+    let inner = half_open + 0.05;
+    let over = DOOR_HEIGHT + FRAME_BEAM * 0.5;
+    for (lo, hi, bottom) in [(-reach, -inner, floor), (inner, reach, floor), (-inner, inner, over)] {
+        let mut core = plank(hi - lo, top - bottom, core_depth, 0.1);
+        core.translate([(lo + hi) * 0.5, (bottom + top) * 0.5, 0.0]);
+        masonry.append(&core);
     }
 
     let mut timber = MeshBuilder::new();
@@ -791,6 +803,63 @@ mod tests {
         // The leaf covers the opening from the hinge.
         let (lo, hi) = leaf.bounds().unwrap();
         assert!(lo[0] < 0.0 && hi[0] > DOOR_WIDTH && hi[1] > DOOR_HEIGHT);
+    }
+
+    /// Whether the ray from `from` along `dir` crosses any triangle of `mesh`, by the
+    /// Möller–Trumbore test (Möller and Trumbore, "Fast, Minimum Storage Ray/Triangle
+    /// Intersection", Journal of Graphics Tools 2(1), 1997).
+    fn ray_hits(mesh: &ItemMesh, from: V3, dir: V3) -> bool {
+        mesh.parts.iter().any(|part| {
+            part.indices.as_chunks::<3>().0.iter().any(|&[i, j, k]| {
+                let [a, b, c] = [i, j, k].map(|n| part.positions[n as usize]);
+                let (e1, e2) = (vec3::sub(b, a), vec3::sub(c, a));
+                let p = vec3::cross(dir, e2);
+                let det = vec3::dot(e1, p);
+                if det.abs() < 1e-9 {
+                    return false;
+                }
+                let s = vec3::sub(from, a);
+                let u = vec3::dot(s, p) / det;
+                let q = vec3::cross(s, e1);
+                let v = vec3::dot(dir, q) / det;
+                u >= 0.0 && v >= 0.0 && u + v <= 1.0 && vec3::dot(e2, q) / det > 0.0
+            })
+        })
+    }
+
+    #[test]
+    fn stone_closes_a_doorway_cell_round_the_opening() {
+        // The farthest the relief can move rock off its cell's plane: two octaves of value
+        // noise, each at most half its amplitude.
+        let peak = 0.5 + 0.35 * 0.5;
+        for seed in [1207, 2] {
+            let level = fb_level::generate(seed);
+            let view = CellView::new(&level);
+            let doors = doorways(&view);
+            assert!(!doors.is_empty());
+            for door in doors {
+                let frame = door_frame(level.ceiling, level.seed ^ ((door.x as u32) << 16 | door.y as u32));
+                // Out to where the walls and ceiling can stand, and down into the floor's dip.
+                let (across, low, high) = (CELL * 0.5 + WALL_RELIEF * peak, -FLOOR_RELIEF * peak, level.ceiling + CEILING_RELIEF * peak);
+                let mut rays = 0;
+                for i in 0..=96 {
+                    for j in 0..=80 {
+                        let x = -across + 2.0 * across * i as f32 / 96.0;
+                        let y = low + (high - low) * j as f32 / 80.0;
+                        if x.abs() < DOOR_WIDTH * 0.5 + 0.1 && y < DOOR_HEIGHT - 0.1 {
+                            continue;
+                        }
+                        // Straight through, and slanting as seen from a step off to one side.
+                        for dir in [[0.0, 0.0, 1.0], vec3::normalize_or([0.5, 0.25, 1.0], [0.0, 0.0, 1.0])] {
+                            let from = vec3::sub([x, y, 0.0], vec3::scale(dir, CELL));
+                            assert!(ray_hits(&frame, from, dir), "seed {seed} door ({}, {}): open at x {x:.2} y {y:.2} along {dir:?}", door.x, door.y);
+                            rays += 1;
+                        }
+                    }
+                }
+                assert!(rays > 5_000);
+            }
+        }
     }
 
     #[test]
