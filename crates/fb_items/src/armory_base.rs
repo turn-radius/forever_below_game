@@ -141,6 +141,19 @@ pub fn armory_base(name: &str) -> Option<&'static ArmoryBase> {
     ARMORY_BASES.iter().find(|(n, _)| *n == name).map(|(_, b)| b)
 }
 
+/// Every base the Armory makes from `family`, in table order.
+pub fn bases_of(family: Family) -> impl Iterator<Item = &'static str> {
+    ARMORY_BASES.iter().filter(move |(_, b)| b.accept.family() == family).map(|(n, _)| *n)
+}
+
+/// A base of `family` chosen uniformly from `seed`, for loot that names only a family (the
+/// level's item spots). Its own stream, so `roll_item(base, seed)` with the same seed is
+/// unaffected; the mixing constant is this port's own. `None` for a family no base uses.
+pub fn base_for(family: Family, seed: u32) -> Option<&'static str> {
+    let bases: Vec<&str> = bases_of(family).collect();
+    (!bases.is_empty()).then(|| *Mulberry32::new(seed ^ 0xBA5E_F00D).pick(&bases))
+}
+
 /// The shape of base `name` from `seed`: one of its accepted styles, rolled with the
 /// family's `roll_as`, then its tweak (the plate's `SA.roll(fam, seed, acc)` and `tw`).
 /// `None` for a name no table knows.
@@ -407,6 +420,17 @@ mod tests {
                 assert!(rolls.iter().any(|item| single.accepts(item)), "{name}: {single:?} never rolls");
             }
         }
+    }
+
+    #[test]
+    fn every_ported_family_has_a_base() {
+        for &family in Item::PORTED {
+            let base = base_for(family, 1207).unwrap_or_else(|| panic!("{family:?} has no base"));
+            assert_eq!(armory_base(base).unwrap().accept.family(), family);
+            assert_eq!(base_for(family, 1207), Some(base));
+        }
+        let garments: Vec<_> = (0..200).filter_map(|seed| base_for(Family::Garment, seed)).collect();
+        assert!(garments.contains(&"Robe") && garments.contains(&"Shirt"));
     }
 
     #[test]

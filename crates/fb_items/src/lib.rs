@@ -19,7 +19,7 @@ pub mod rarity;
 pub mod stats;
 pub mod tables;
 
-pub use item::{Coins, Item, roll_item};
+pub use item::{Coins, Item, roll_item, roll_loot};
 
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};

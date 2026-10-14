@@ -46,7 +46,7 @@ pub struct Legend {
     pub history: [String; 3],
 }
 
-/// `legendize`: a title (`<owner>’s <epithet>` or `The <adjective> <epithet>`, the epithet
+/// `legendize`: a title (`<owner>'s <epithet>` or `The <adjective> <epithet>`, the epithet
 /// chosen for what the item is) over its old `name`, and its history.
 pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
     let owner = anyone(rng).split(' ').next().unwrap_or_default().to_string();
@@ -61,7 +61,7 @@ pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
     };
     let adjectives = ["Grey", "Last", "Hollow", "Ninth", "Drowned", "Patient", "Ashen", "Quiet", "Long"];
     let title = if rng.chance(0.5) {
-        format!("{owner}’s {}", rng.pick(epithets))
+        format!("{owner}'s {}", rng.pick(epithets))
     } else {
         let adjective = rng.pick(&adjectives);
         format!("The {adjective} {}", rng.pick(epithets))
@@ -139,7 +139,7 @@ mod tests {
         for seed in 0..200 {
             let legend = legendize(&mut game_rng(seed), "Keen Longsword", &[Tag::Weapon, Tag::Metal]);
             assert_eq!(legend.subtitle, "Keen Longsword");
-            assert!(legend.title.starts_with("The ") || legend.title.contains('’'), "{}", legend.title);
+            assert!(legend.title.starts_with("The ") || legend.title.contains("'s "), "{}", legend.title);
             assert!(["Tooth", "Oath", "Answer", "Thorn", "Reckoning", "Mercy"].iter().any(|e| legend.title.ends_with(e)));
             assert!(legend.history[0].contains(" on level ") && factions().iter().any(|f| legend.history[0].contains(f.as_str())));
             assert!(legend.history[1].starts_with("Carried by "));

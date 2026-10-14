@@ -1,7 +1,7 @@
 //! A whole Forever Below item from a base name and a seed: the plate's `rollSA` and
 //! `makeGood`, tying together the shape, profile, rarity, affixes, name, legend and dress.
 
-use crate::armory_base::roll_shape;
+use crate::armory_base::{base_for, roll_shape};
 use crate::dress::dress;
 use crate::naming::{Legend, item_name, legendize, noun};
 use crate::profile::{Profile, profile};
@@ -86,6 +86,12 @@ pub fn roll_item(base: &str, seed: u32) -> Option<Item> {
     Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None })
 }
 
+/// Loot that names only an Armory family and a seed (the level's item spots): a base of that
+/// family chosen from the seed ([`base_for`]), rolled from the same seed.
+pub fn roll_loot(family: armory::Family, seed: u32) -> Option<Item> {
+    roll_item(base_for(family, seed)?, seed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +146,17 @@ mod tests {
         let l = legend.legend.as_ref().unwrap();
         assert_eq!(legend.title(), l.title);
         assert_eq!(l.subtitle, legend.name);
+    }
+
+    #[test]
+    fn loot_rolls_a_base_of_its_family() {
+        for &family in armory::Item::PORTED {
+            for seed in [5, 1207] {
+                let item = roll_loot(family, seed).unwrap();
+                assert_eq!(item.shape.family(), family);
+                assert_eq!(Some(item.clone()), roll_loot(family, seed));
+            }
+        }
     }
 
     #[test]
