@@ -55,6 +55,15 @@ pub fn palm_mesh(form: &HandForm, cap: f32, inflate: f32) -> MeshBuilder {
     stitch_grid(&points, &GridOptions { wrap_around: true, ..Default::default() })
 }
 
+/// What a cuff is worn over on a real arm: the least distance from the forearm's axis (the
+/// hand form's -Y) its inner face must keep toward `angle` (lathe convention) at `down` below
+/// the wrist, or `None` where nothing is worn there (a sleeve's end).
+pub type CuffUnderlay<'a> = &'a dyn Fn(f32, f32) -> Option<f32>;
+
+/// How far a cuff's inner face stands off what it is worn over. Our own: snug, a laced bracer
+/// or a glove's cuff drawn close over a sleeve.
+const CUFF_GAP: f32 = 0.02;
+
 /// The cuff's radius multiplier at `f` (0 at the wrist, 1 at the open end).
 fn cuff_flare(hand: &Hand, f: f32) -> f32 {
     let flare = hand.flare * if hand.style == HandStyle::Hourglass { 1.4 } else { 1.0 };
@@ -67,27 +76,47 @@ fn cuff_flare(hand: &Hand, f: f32) -> f32 {
     }
 }
 
-/// A point on the cuff a fraction `f` from the wrist to the open end, `inflate` out.
-fn cuff_point(form: &HandForm, hand: &Hand, angle: f32, f: f32, inflate: f32) -> V3 {
+/// The forearm a cuff is built round, and what is worn over it there, if anything.
+#[derive(Clone, Copy)]
+struct Cuff<'a> {
+    form: &'a HandForm,
+    under: Option<CuffUnderlay<'a>>,
+    thickness: f32,
+}
+
+/// A point on the cuff a fraction `f` from the wrist to the open end, `inflate` out. Over
+/// something worn on the forearm the cuff follows it, its own inner face `CUFF_GAP` off it;
+/// only a plate cuff keeps its flare there, cloth, leather and mail drawn close.
+fn cuff_point(cuff: &Cuff, hand: &Hand, angle: f32, f: f32, inflate: f32) -> V3 {
     let length = hand.cuff * hand.size;
     let down = -0.08 * hand.size + (length + 0.08 * hand.size) * f;
-    let p = form.forearm_point(angle, down, cuff_flare(hand, f));
-    let r = p[0].hypot(p[2]).max(1e-4);
-    [p[0] * (1.0 + inflate / r), p[1], p[2] * (1.0 + inflate / r)]
+    // The section's point at this angle lies off toward its own direction from the axis,
+    // which a superellipse turns away from the angle: read what is under it there.
+    let bare = cuff.form.forearm_point(angle, down, 1.0);
+    let under = cuff.under.and_then(|u| u((-bare[2]).atan2(bare[0]), down));
+    let flare = if under.is_some() && !hand.style.is_plated() { 1.0 } else { cuff_flare(hand, f) };
+    let p = cuff.form.forearm_point(angle, down, flare);
+    let mut r = p[0].hypot(p[2]).max(1e-4);
+    let base = r;
+    if let Some(u) = under {
+        r = r.max((u + CUFF_GAP + cuff.thickness) * if hand.style.is_plated() { cuff_flare(hand, f) } else { 1.0 });
+    }
+    let k = (r + inflate) / base;
+    [p[0] * k, p[1], p[2] * k]
 }
 
 /// The cuff from `f0` to `f1` of its length, `inflate` out, as a thickened tube.
-fn cuff_band(form: &HandForm, hand: &Hand, f0: f32, f1: f32, rows: usize, inflate: f32, thickness: f32) -> MeshBuilder {
+fn cuff_band(cuff: &Cuff, hand: &Hand, f0: f32, f1: f32, rows: usize, inflate: f32, thickness: f32) -> MeshBuilder {
     // Rows run from the open end up toward the wrist so faces point outward.
-    patch(56, rows, &ShellOptions::tube(thickness), |u, v| cuff_point(form, hand, BACK + TAU * u, f1 + (f0 - f1) * v, inflate))
+    patch(56, rows, &ShellOptions::tube(thickness), |u, v| cuff_point(cuff, hand, BACK + TAU * u, f1 + (f0 - f1) * v, inflate))
 }
 
 /// A strap round the cuff at `f`, with its buckle on the back of the forearm.
-fn strap(form: &HandForm, hand: &Hand, f: f32, width: f32) -> (MeshBuilder, MeshBuilder) {
+fn strap(cuff: &Cuff, hand: &Hand, f: f32, width: f32) -> (MeshBuilder, MeshBuilder) {
     let length = hand.cuff * hand.size;
     let df = width / length.max(0.1) * 0.5;
-    let band = cuff_band(form, hand, f - df, f + df, 2, 0.03 * hand.size, 0.03);
-    let at = cuff_point(form, hand, FRONT, f, 0.07 * hand.size);
+    let band = cuff_band(cuff, hand, f - df, f + df, 2, 0.03 * hand.size, 0.03);
+    let at = cuff_point(cuff, hand, FRONT, f, 0.07 * hand.size);
     (band, buckle_mesh(width, at))
 }
 
@@ -101,6 +130,11 @@ pub fn hand_parts(form: &HandForm, hand: &Hand, hem: &Hem) -> Parts {
 /// [`hand_parts`] with each finger (index to little) and the thumb curled as given, in
 /// radians per joint, so a glove on a body takes the pose of the hand inside it.
 pub fn hand_parts_curled(form: &HandForm, hand: &Hand, hem: &Hem, fingers: [f32; 4], thumb: f32) -> Parts {
+    hand_parts_fitted(form, hand, hem, fingers, thumb, None)
+}
+
+/// [`hand_parts_curled`] on a real arm, its cuff drawn close over `under` (a sleeve).
+pub fn hand_parts_fitted(form: &HandForm, hand: &Hand, hem: &Hem, fingers: [f32; 4], thumb: f32, under: Option<CuffUnderlay>) -> Parts {
     let mut parts = Parts::new();
     let s = hand.size;
     let style = hand.style;
@@ -114,21 +148,22 @@ pub fn hand_parts_curled(form: &HandForm, hand: &Hand, hem: &Hem, fingers: [f32;
         HandStyle::Glove | HandStyle::Bracer => glove,
     };
     let cuff_thickness = if style.is_plated() { 0.04 } else { 0.03 } * s;
+    let cuff = Cuff { form, under, thickness: cuff_thickness };
 
     // Cuff.
-    parts.add_look("cuff", cuff_band(form, hand, 0.0, 1.0, 24, 0.0, cuff_thickness), cuff_look);
+    parts.add_look("cuff", cuff_band(&cuff, hand, 0.0, 1.0, 24, 0.0, cuff_thickness), cuff_look);
     if style != HandStyle::Glove {
-        let rim: Vec<V3> = (0..64).map(|i| cuff_point(form, hand, BACK + TAU * i as f32 / 64.0, 1.0, 0.0)).collect();
+        let rim: Vec<V3> = (0..64).map(|i| cuff_point(&cuff, hand, BACK + TAU * i as f32 / 64.0, 1.0, 0.0)).collect();
         parts.add_look("edges", rolled_edge(&rim, (0.03 * s).max(0.025), true), cuff_look);
     }
     if let Some(trim) = trim {
         let length = hand.cuff * s;
         let f0 = (1.0 - hem.width * 0.6 / length.max(0.1)).max(0.0);
-        parts.add_look("trim", cuff_band(form, hand, f0, 1.0, 3, 0.01 * s, cuff_thickness + 0.02), trim);
+        parts.add_look("trim", cuff_band(&cuff, hand, f0, 1.0, 3, 0.01 * s, cuff_thickness + 0.02), trim);
     }
     if style == HandStyle::Bracer {
         for f in [0.2, 0.5, 0.8] {
-            let (band, buckle) = strap(form, hand, f, 0.14 * s);
+            let (band, buckle) = strap(&cuff, hand, f, 0.14 * s);
             parts.add_look("straps", band, Look::of(MaterialKind::Leather));
             parts.add_look("buckles", buckle, Look::of(MaterialKind::Iron));
         }

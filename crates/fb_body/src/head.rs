@@ -110,6 +110,20 @@ impl Quirks {
     }
 }
 
+/// How a head's features sit under headgear (from [`crate::worn::fit_worn`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HeadFit {
+    /// The ears lie folded back flat against the head (under a hood, or flop ears under a hat).
+    pub fold_ears: bool,
+    /// A lizard's frill lies folded back flat along the crown (under any headgear).
+    pub fold_frill: bool,
+}
+
+/// How far folded features stand off the head, in units of its radius: a folded ear's sheet
+/// and rim, or the ridge of a folded frill. Headgear over them is sized up by this much.
+const FOLDED_EARS: f32 = 0.13;
+const FOLDED_FRILL: f32 = 0.2;
+
 /// Collects a head's parts by look.
 #[derive(Default)]
 struct Pieces {
@@ -122,6 +136,7 @@ struct Pieces {
     mouth: MeshBuilder,
     ivory: MeshBuilder,
     frill: MeshBuilder,
+    ears: MeshBuilder,
 }
 
 impl Body {
@@ -133,10 +148,24 @@ impl Body {
         face
     }
 
-    /// The head and face: `"head"` (skin), `"head_shade"`, `"eye_whites"`, `"irises"`,
-    /// `"pupils"`, `"mouth"`, `"teeth"` (tusks, fangs, a lizard's teeth) and a lizard's
-    /// `"frill"`, in body space.
+    /// The head and face, features free: `"head"` (skin), `"head_shade"`, `"ears"`,
+    /// `"eye_whites"`, `"irises"`, `"pupils"`, `"mouth"`, `"teeth"` (tusks, fangs, a lizard's
+    /// teeth) and a lizard's `"frill"`, in body space.
     pub fn head_mesh(&self) -> ItemMesh {
+        self.head_mesh_fitted(HeadFit::default())
+    }
+
+    /// How far this head's features stand off it when folded as `fit` folds them, for sizing
+    /// headgear over them.
+    pub fn feature_volume(&self, fit: HeadFit) -> f32 {
+        let r = self.face().r;
+        let ears = if fit.fold_ears && self.race().ears != Ears::None { FOLDED_EARS } else { 0.0 };
+        let frill = if fit.fold_frill && self.folk() == Folk::Lizardfolk { FOLDED_FRILL } else { 0.0 };
+        ears.max(frill) * r
+    }
+
+    /// [`Body::head_mesh`] with its features folded under headgear as `fit` says.
+    pub fn head_mesh_fitted(&self, fit: HeadFit) -> ItemMesh {
         let face = self.face();
         let q = Quirks::roll(self.spec.seed);
         let race = self.race();
@@ -150,10 +179,10 @@ impl Body {
             mouth(&face, (spec.brow - 0.5) * 0.06, q.mouth, &mut p);
         }
         for sg in [1.0f32, -1.0] {
-            ear(&face, race.ears, sg, q.ear, &mut p);
+            ear(&face, race.ears, sg, q.ear, fit.fold_ears, &mut p);
         }
         if self.folk() == Folk::Lizardfolk {
-            frill(&face, &mut p);
+            if fit.fold_frill { folded_frill(&face, &mut p) } else { frill(&face, &mut p) }
         }
         let skin = spec.skin;
         let mut parts: Vec<Part> = vec![];
@@ -171,6 +200,7 @@ impl Body {
         add(p.skin, "head", Some(MaterialKind::Skin), skin, true);
         let shade = if self.folk() == Folk::Pigfolk { lighten(skin, 0.08) } else { skin.scaled(0.92) };
         add(p.shade, "head_shade", Some(MaterialKind::Skin), shade, true);
+        add(p.ears, "ears", Some(MaterialKind::Skin), if race.ears == Ears::Flop { shade } else { skin }, true);
         let white = match race.eyes {
             EyeKind::Yellow => Rgb::hex(0xe3c83a),
             EyeKind::Amber => Rgb::hex(0xd8962a),
@@ -382,7 +412,7 @@ fn mouth(face: &Face, smile: f32, width: f32, p: &mut Pieces) {
 /// An ear as a cupped sheet with a rolled rim, `width` across and `length` long, its outline
 /// sharpened toward the tip by `point` (0 round, 1 a blade), built flat in its own space: x
 /// across, y along toward the tip, the bowl opening toward +z. `fold` curls the tip toward -z.
-fn ear_sheet(width: f32, length: f32, point: f32, cup: f32, fold: f32, thickness: f32) -> MeshBuilder {
+fn ear_sheet(width: f32, length: f32, point: f32, cup: f32, fold: f32, thickness: f32, place: impl Fn(V3) -> V3) -> MeshBuilder {
     let outline = |th: f32| -> [f32; 2] {
         let (s, c) = th.sin_cos();
         let up = s.max(0.0);
@@ -396,52 +426,92 @@ fn ear_sheet(width: f32, length: f32, point: f32, cup: f32, fold: f32, thickness
     };
     let mut mesh = patch(36, 8, &ShellOptions { wrap_around: true, ..ShellOptions::sheet(thickness) }, |u, v| {
         let [x, y] = outline(-TAU * u);
-        lift(x * v, y * v, v)
+        place(lift(x * v, y * v, v))
     });
     let rim: Vec<V3> = (0..48)
         .map(|i| {
             let [x, y] = outline(TAU * i as f32 / 48.0);
-            vec3::add(lift(x, y, 1.0), [0.0, 0.0, thickness * 0.5])
+            place(vec3::add(lift(x, y, 1.0), [0.0, 0.0, thickness * 0.5]))
         })
         .collect();
     mesh.append(&rolled_edge(&rim, thickness * 0.9, true));
     mesh
 }
 
-fn ear(face: &Face, kind: Ears, sg: f32, size: f32, p: &mut Pieces) {
+/// An ear on side `sg`. Folded, it lies back flat along the side of the head from its root
+/// (its length running back round the head and a little down, its width up and down), as an
+/// ear does under a hood; our own, the plate has no headgear over ears.
+fn ear(face: &Face, kind: Ears, sg: f32, size: f32, folded: bool, p: &mut Pieces) {
     let r = face.r;
-    let place = |mut m: MeshBuilder, root: V3, along: V3, out: V3| {
-        m.place_basis(root, along, out);
-        m
+    // Root (azimuth and polar angle), and the sheet: width, length, point, cup, fold, thickness
+    // (all in head radii) and how far its root is set in along its length.
+    let (az, polar, w, l, point, cup, fold, t, set) = match kind {
+        Ears::None => return,
+        Ears::Round => (sg * 1.57, 0.53 * PI, 0.17, 0.56, 0.0, 0.05, 0.0, 0.04, 0.0),
+        Ears::Pointed => (sg * 1.55, 0.52 * PI, 0.2, 0.62, 0.85, 0.05, 0.0, 0.04, 0.4),
+        Ears::Long => (sg * 1.55, 0.52 * PI, 0.2, 1.15, 0.85, 0.05, 0.0, 0.04, 0.4),
+        Ears::Flop => (sg * 1.05, 0.24 * PI, 0.34, 0.62 * 1.15, 0.6, 0.05, 0.55, 0.045, 0.4 / 1.15),
     };
+    let (w, l) = (w * r * size, l * r * size);
+    let shift = move |q: V3| [q[0], q[1] + l * set, q[2]];
+    if folded {
+        // Laid back round the head: length along the azimuth away from the face (shortened a
+        // little, as a folded ear doubles on itself), width along the meridian, the sheet's
+        // shallow cup off the skin.
+        let lat = (r * polar.sin()).max(0.3 * r);
+        let lay = |q: V3| {
+            let q = shift(q);
+            let along = q[1] * 0.7;
+            face.point(az + sg * along / lat, polar + q[0] * sg / r + 0.25 * along / r, 0.03 * r + (q[2] + 0.02 * r).max(0.0))
+        };
+        p.ears.append(&ear_sheet(w, l, point, 0.02 * r, 0.0, t * r, lay));
+        return;
+    }
+    let mut m = ear_sheet(w, l, point, cup * r, fold * l, t * r, shift);
     match kind {
-        Ears::None => {}
         Ears::Round => {
-            let root = face.point(sg * 1.57, 0.53 * PI, -0.05 * r);
-            let m = ear_sheet(0.17 * r * size, 0.56 * r * size, 0.0, 0.05 * r, 0.0, 0.04 * r);
-            p.skin.append(&place(m, root, vec3::normalize_or([0.0, 1.0, -0.18], vec3::Y), vec3::normalize_or([sg, 0.0, 0.2], vec3::X)));
+            let root = face.point(az, polar, -0.05 * r);
+            m.place_basis(root, vec3::normalize_or([0.0, 1.0, -0.18], vec3::Y), vec3::normalize_or([sg, 0.0, 0.2], vec3::X));
         }
         Ears::Pointed | Ears::Long => {
-            let long = kind == Ears::Long;
-            let length = (if long { 1.15 } else { 0.62 }) * r * size;
-            let dir = vec3::normalize_or(if long { [sg * 0.9, 0.32, -0.25] } else { [sg * 0.65, 0.62, -0.22] }, vec3::Y);
-            let root = face.point(sg * 1.55, 0.52 * PI, -0.08 * r);
+            let dir = vec3::normalize_or(if kind == Ears::Long { [sg * 0.9, 0.32, -0.25] } else { [sg * 0.65, 0.62, -0.22] }, vec3::Y);
+            let root = face.point(az, polar, -0.08 * r);
             // The bowl faces forward and out; the sheet's root sits on the head.
             let out = vec3::normalize_or(vec3::sub([sg * 0.3, 0.3, 1.0], vec3::scale(dir, vec3::dot([sg * 0.3, 0.3, 1.0], dir))), vec3::Z);
-            let mut m = ear_sheet(0.2 * r * size, length, 0.85, 0.05 * r, 0.0, 0.04 * r);
-            m.translate([0.0, length * 0.4, 0.0]);
-            p.skin.append(&place(m, root, dir, out));
+            m.place_basis(root, dir, out);
         }
-        Ears::Flop => {
-            let length = 0.62 * r * size;
-            let root = face.point(sg * 1.05, 0.24 * PI, -0.06 * r);
+        _ => {
+            let root = face.point(az, polar, -0.06 * r);
             let dir = vec3::normalize_or([sg * 0.5, -0.18, 0.82], vec3::Z);
-            let mut m = ear_sheet(0.34 * r * size, length * 1.15, 0.6, 0.05 * r, 0.55, 0.045 * r);
-            m.translate([0.0, length * 0.4, 0.0]);
             // The ear's inside faces down toward the face as it folds forward.
             let inside = vec3::normalize_or([-sg * 0.6, -1.0, 0.0], vec3::neg(vec3::Y));
-            p.shade.append(&place(m, root, dir, vec3::sub(vec3::neg(inside), vec3::scale(dir, vec3::dot(vec3::neg(inside), dir)))));
+            m.place_basis(root, dir, vec3::sub(vec3::neg(inside), vec3::scale(dir, vec3::dot(vec3::neg(inside), dir))));
         }
+    }
+    p.ears.append(&m);
+}
+
+/// A lizard's frill folded back flat: each spine laid along the crown toward the nape from
+/// its root, a low ridge from brow to nape.
+fn folded_frill(face: &Face, p: &mut Pieces) {
+    let r = face.r;
+    // Along the midline: negative toward the brow, positive over the crown to the nape.
+    let at = |a: f32, off: f32| {
+        let a = a.min(0.9);
+        let (az, polar) = if a < 0.0 { (0.0, -a * PI) } else { (PI, a * PI) };
+        face.point(az, polar.max(0.001), off)
+    };
+    for i in 0..7 {
+        let a0 = -0.15 + i as f32 * 0.17;
+        let length = (0.58 - 0.06 * (i as f32 - 2.5).abs()) * r * 0.85;
+        let span = length / (PI * r);
+        let path: Vec<V3> = (0..=10)
+            .map(|k| {
+                let t = k as f32 / 10.0;
+                at(a0 + span * t, 0.02 * r + 0.08 * r * (1.0 - t))
+            })
+            .collect();
+        p.frill.append(&tube(&path, 8, &SweepOptions::default(), |t| 0.08 * r * (1.0 - 0.85 * t)));
     }
 }
 

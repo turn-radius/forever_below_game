@@ -91,6 +91,7 @@ impl HoodSurface {
                 opening: None,
                 quilt: None,
                 ridge: 0.0,
+                notch: None,
             };
             DrapedSurface::new(torso, drape)
         });
