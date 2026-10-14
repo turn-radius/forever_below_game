@@ -492,11 +492,12 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                 ))
                 .with_children(|slot| {
                     if let Some(item) = worn {
-                        let icon = icons.of(item, false);
                         let shape = super::icon::icon_size(item, false).as_vec2();
                         let fit = (size - 11.0) / shape.max_element();
                         slot.spawn(Node { width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() })
-                            .with_child((Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, ImageNode::new(icon)));
+                            .with_children(|centre| {
+                                icons.spawn(centre, item, false, Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, (size * 0.45).min(40.0));
+                            });
                         if item.profile.kind == Kind::Gear {
                             slot.spawn((
                                 Node { position_type: PositionType::Absolute, right: px(5), top: px(5), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },
