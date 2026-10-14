@@ -3,6 +3,7 @@
 //!
 //! Add [`ArmoryRenderPlugin`], then spawn items with [`ItemSpawner::spawn`].
 
+mod indirect;
 mod item;
 mod outline;
 mod toon;
@@ -16,7 +17,8 @@ pub use toon::{Decay, Etch, EtchStyle, MinWidth, Pattern, ToonBands, ToonExtensi
 
 use bevy::{prelude::*, shader::load_shader_library};
 
-/// Registers the toon and outline materials and their WESL shaders.
+/// Registers the toon and outline materials and their WESL shaders, and has every view draw
+/// directly rather than through Bevy's GPU-built indirect draws (`indirect`, #163).
 pub struct ArmoryRenderPlugin;
 
 impl Plugin for ArmoryRenderPlugin {
@@ -32,5 +34,6 @@ impl Plugin for ArmoryRenderPlugin {
 
         app.add_plugins((MaterialPlugin::<ToonMaterial>::default(), MaterialPlugin::<OutlineMaterial>::default()))
             .init_resource::<OutlineMaterials>();
+        indirect::add(app);
     }
 }
