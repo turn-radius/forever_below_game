@@ -2,5 +2,28 @@
 //! Reference: `bodyDims`, `mkArm`, `mkLeg`, `tSurf`, `headFn`, `garmentGeo` and the `sa*`
 //! fitting functions in `reference/forever-below-plate.html`. Race parameters: `data/races.json`.
 //! See `docs/body.md` for the fitting rules (grips, blade turn, shields, bows, straps).
+//!
+//! - [`BodySpec`]: one character's folk, build, face and hair, rolled from a seed.
+//! - [`Body`]: the body measured from the spec, the Armory forms sized to it
+//!   ([`Body::torso_form`], [`Body::lower_body_form`], [`Body::leg_form`],
+//!   [`Body::hand_form`], [`Body::head_form`]), where each sits ([`Placement`]s), the anchors
+//!   gear hangs from, and its skin ([`Body::skin_mesh`]).
+//!
+//! Plain Rust, no Bevy; every body is a pure function of its spec.
 
-// TODO(port): BodySpec, body_dims(spec) -> Body, torso/limb/head surfaces, garment offsets.
+pub mod body;
+pub mod folk;
+pub mod hair;
+pub mod hand;
+pub mod head;
+pub mod limb;
+pub mod place;
+pub mod spec;
+
+pub use body::{ArmPose, Body, GRIP_MAX, Pose};
+pub use folk::{Beard, EyeKind, Ears, Folk, HairStyle, Nose, Race};
+pub use hair::HairFit;
+pub use hand::HandPose;
+pub use limb::{Limb, Side};
+pub use place::Placement;
+pub use spec::BodySpec;

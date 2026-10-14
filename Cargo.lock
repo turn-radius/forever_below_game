@@ -2641,6 +2641,7 @@ dependencies = [
  "armory",
  "procgen_rng",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
