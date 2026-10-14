@@ -643,12 +643,21 @@ impl LegForm {
         let tall = height > 2.0 * self.foot_length / 2.6;
         let calf = if tall { self.calf * (-((t - 0.55) / 0.22).powi(2)).exp() } else { 0.0 };
         let a = (angle + PI).rem_euclid(2.0 * PI) - PI;
-        let k = (1.0 + calf + 0.06 * smoothstep(0.85, 1.0, t)) * (1.0 + ridge * (-(a / 0.32).powi(2)).exp());
-        // The leg fills out above the ankle by height, not by share of the shaft, so a short
-        // shaft hugs the ankle instead of flaring like a bucket.
-        let depth = self.shin_half_depth * (1.0 + 0.2 * smoothstep(0.0, 0.35, y / self.knee_height));
+        // Only a tall shaft flares at its top, over the calf; a short one closes on the ankle.
+        let flare = if tall { 0.06 * smoothstep(0.85, 1.0, t) } else { 0.0 };
+        let k = (1.0 + calf + flare) * (1.0 + ridge * (-(a / 0.32).powi(2)).exp());
+        // The leg fills out by height, not by share of the shaft, and only above the ankle, so
+        // a short shaft hugs the ankle instead of flaring like a bucket.
+        let depth = self.shin_half_depth * (1.0 + 0.2 * smoothstep(0.2, 0.45, y / self.knee_height));
         let [x, z] = section_point(angle, self.shin_half_width * k + inflate, depth * k + inflate, 2.0 / 2.2, 1.0);
-        [self.ankle_x + x, y, z]
+        // Above the heel the back of the leg (the Achilles tendon) stands forward of the heel's
+        // back, easing out again toward the calf.
+        let heel_top = self.instep_height;
+        let achilles = 0.04 * self.foot_length
+            * smoothstep(0.5 * heel_top, 0.9 * heel_top, y)
+            * (1.0 - smoothstep(0.25 * self.knee_height, 0.45 * self.knee_height, y))
+            * (-angle.cos()).max(0.0).powi(2);
+        [self.ankle_x + x + achilles, y, z]
     }
 }
 
