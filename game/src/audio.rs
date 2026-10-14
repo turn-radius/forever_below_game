@@ -44,6 +44,9 @@ impl Default for Playlist {
                 "audio/shadowed-pixel.ogg",
                 "audio/cavernous-arpeggios.ogg",
                 "audio/unreachable-home.ogg",
+                "audio/cavern-descent.ogg",
+                "audio/im-not-alone.ogg",
+                "audio/untitled.ogg",
             ]
             .map(String::from)
             .into(),
@@ -226,7 +229,7 @@ mod tests {
     const FADE: f32 = 3.0;
 
     #[test]
-    fn playlist_opens_on_forever_below_and_plays_all_five_before_repeating() {
+    fn playlist_opens_on_forever_below_and_plays_all_eight_before_repeating() {
         let tracks = Playlist::default().tracks;
         assert_eq!(
             tracks,
@@ -236,13 +239,16 @@ mod tests {
                 "audio/shadowed-pixel.ogg",
                 "audio/cavernous-arpeggios.ogg",
                 "audio/unreachable-home.ogg",
+                "audio/cavern-descent.ogg",
+                "audio/im-not-alone.ogg",
+                "audio/untitled.ogg",
             ]
         );
         let mut order = vec![0];
-        while order.len() < 6 {
+        while order.len() < 9 {
             order.push(next_index(*order.last().unwrap(), tracks.len()).unwrap());
         }
-        assert_eq!(order, [0, 1, 2, 3, 4, 0]);
+        assert_eq!(order, [0, 1, 2, 3, 4, 5, 6, 7, 0]);
         assert_eq!(next_index(0, 1), Some(0));
         assert_eq!(next_index(0, 0), None);
     }
