@@ -138,6 +138,48 @@ pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>, sc
         .collect()
 }
 
+/// How far a lantern hung at the hip swings about its hook at walking pace, radians, as
+/// `(side to side, fore and aft)`: with the stride's sway and each footfall ([`hip_swing`]). Our
+/// own tuning.
+pub const HIP_SWING: Vec2 = Vec2::new(0.14, 0.08);
+
+/// A lantern hung at the hip, placed for first person. Unlike what the hands hold it is not on
+/// the view model's stage but in the level, hung from the player's body, so it is seen at the
+/// bottom edge of the view only when looking down, and its light rises from the hip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HipInView {
+    /// The lantern as rolled.
+    pub item: Item,
+    /// Its hook in the player body's space: feet at y = 0, -Z ahead, +X to the right.
+    pub hook: Vec3,
+    /// From the lantern's own space into the hook's (the hook at the origin, unturned).
+    pub transform: Transform,
+}
+
+/// The lantern `worn` hangs at its hip (a [`Slot::Hip`] item, hung from its [`Slot::Belt`]
+/// over what else is worn: [`fb_body::fit_hip`]) for a delver of body `spec` whose eye is
+/// `eye_height` above the feet, as on the doll: the body's eye is moved to the player's, so the
+/// lantern hangs as far below the eye as the doll's hip is below its head. `None` with no
+/// lantern at the hip, or no belt.
+pub fn hip_in_view(spec: &BodySpec, worn: &[(Slot, Item)], eye_height: f32) -> Option<HipInView> {
+    let item = worn.iter().find(|(slot, _)| *slot == Slot::Hip)?.1.clone();
+    let body = fb_body::Body::new(spec);
+    let fit = fb_body::fit_worn(&body, worn);
+    let hip = fb_body::fit_hip(&body, &item, &fit.layer(Slot::Belt)?.mesh)?;
+    let [x, y, z] = hip.placement.rotation.cols.map(Vec3::from_array);
+    let placed = Quat::from_mat3(&Mat3::from_cols(x, y, z));
+    let hook = Vec3::from_array(hip.hook);
+    let transform = Transform { translation: BODY_TO_VIEW * (Vec3::from_array(hip.placement.origin) - hook), rotation: BODY_TO_VIEW * placed, scale: Vec3::splat(hip.scale) };
+    Some(HipInView { item, hook: BODY_TO_VIEW * hook + Vec3::Y * (eye_height - body.head.centre[1]), transform })
+}
+
+/// The hip lantern's turn about its hook at the step's `bob` ([`crate::player::Gait::bob`],
+/// `(sideways, down)`): swaying side to side with the stride and back at each footfall, still
+/// when standing.
+pub fn hip_swing(bob: Vec2) -> Quat {
+    Quat::from_rotation_z(HIP_SWING.x * bob.x) * Quat::from_rotation_x(-HIP_SWING.y * bob.y)
+}
+
 /// Where a point in view model camera space lands on the screen through a vertical field of
 /// view of `fov_degrees`, as a fraction of the half height from the centre (+Y up, +X right; at
 /// the edges `y` is ±1 and `x` ± the aspect). `None` behind the eye.
@@ -194,6 +236,39 @@ mod tests {
         assert_eq!(view_hold(Hold::Torch, Side::Left).fist.x, -view_hold(Hold::Torch, Side::Right).fist.x);
         assert_eq!(side_of(Slot::Mainhand), Side::Right);
         assert_eq!(side_of(Slot::Offhand), Side::Left);
+    }
+
+    #[test]
+    fn every_weapon_family_in_the_off_hand_is_held_on_the_left() {
+        let human = spec(Folk::Human);
+        for base in ["Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff", "Bow", "Crossbow"] {
+            let (sword, item) = (roll("Sword", 3), roll(base, 8));
+            let held = held_in_view(&human, Some(&sword), Some(&item));
+            let off = held.iter().find(|h| h.hand == Slot::Offhand).unwrap_or_else(|| panic!("{base} not held"));
+            let main = held.iter().find(|h| h.hand == Slot::Mainhand).unwrap();
+            assert!(view_hold(off.hold, Side::Left).fist.x < 0.0, "{base}");
+            assert!(centroid(off).x < 0.0 && centroid(main).x > 0.0, "{base}: off {} main {}", centroid(off), centroid(main));
+        }
+    }
+
+    #[test]
+    fn a_hip_lantern_hangs_low_on_the_left_and_swings_only_when_walking() {
+        use crate::play::EYE_HEIGHT;
+        let lantern = roll("Lantern", 2);
+        for folk in Folk::ALL {
+            let worn = [(Slot::Belt, roll("Belt", 3)), (Slot::Hip, lantern.clone())];
+            let hip = hip_in_view(&spec(folk), &worn, EYE_HEIGHT).unwrap_or_else(|| panic!("{folk:?}"));
+            // On the left, a little ahead, well below the eye and above the feet.
+            assert!(hip.hook.x < 0.0 && hip.hook.z < 0.0, "{folk:?}: {}", hip.hook);
+            assert!(hip.hook.y > 0.0 && hip.hook.y < EYE_HEIGHT * 0.75, "{folk:?}: {}", hip.hook);
+            // Every part hangs below the hook.
+            for p in lantern.build().parts.iter().flat_map(|p| &p.positions) {
+                assert!(hip.transform.transform_point(Vec3::from_array(*p)).y <= 0.05, "{folk:?}");
+            }
+        }
+        assert!(hip_in_view(&spec(Folk::Human), &[(Slot::Hip, lantern.clone())], EYE_HEIGHT).is_none(), "no belt, no hip");
+        assert_eq!(hip_swing(Vec2::ZERO), Quat::IDENTITY);
+        assert!(hip_swing(Vec2::new(1.0, 0.5)).angle_between(Quat::IDENTITY) > 0.1);
     }
 
     #[test]

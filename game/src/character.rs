@@ -210,6 +210,32 @@ mod tests {
     }
 
     #[test]
+    fn a_lit_hip_lantern_is_the_light_when_no_hand_holds_one() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let belt = inventory.add(fb_items::roll_item("Belt", 2).unwrap());
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| crate::carry::item_light(&i.shape).is_some()).unwrap();
+        let reach = lantern.profile.stats.light;
+        let lantern = inventory.add(lantern);
+        inventory.wear(lantern, Slot::Hip).unwrap();
+        // Both hands hold weapons, and the hip lantern lights the way.
+        for (base, slot) in [("Sword", Slot::Mainhand), ("Dagger", Slot::Offhand)] {
+            let id = inventory.add(fb_items::roll_item(base, 3).unwrap());
+            inventory.wear(id, slot).unwrap();
+        }
+        assert_eq!(delver.derive(&inventory).light, reach);
+        assert_eq!(carried_light(&inventory), Some((Slot::Hip, lantern)));
+        // A lit torch in hand is carried before it.
+        let dagger = inventory.worn(Slot::Offhand).unwrap();
+        inventory.take_out(dagger);
+        let torch = inventory.add(crate::carry::lit_torch(2));
+        inventory.wear(torch, Slot::Offhand).unwrap();
+        assert_eq!(carried_light(&inventory).map(|(slot, _)| slot), Some(Slot::Offhand));
+    }
+
+    #[test]
     fn modifiers_follow_the_srd() {
         assert_eq!([modifier(3), modifier(9), modifier(10), modifier(11), modifier(18)], [-4, -1, 0, 0, 4]);
     }

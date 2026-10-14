@@ -37,6 +37,8 @@ pub enum Refusal {
     NotAContainer,
     NotWearable,
     WrongSlot,
+    /// The hip with no belt to hang from.
+    NoBelt,
     Unknown,
 }
 
@@ -50,6 +52,7 @@ impl Refusal {
             Refusal::NotAContainer => "That holds nothing.",
             Refusal::NotWearable => "That is not something you can wear.",
             Refusal::WrongSlot => "That does not go there.",
+            Refusal::NoBelt => "It hangs from a belt. Wear one first.",
             Refusal::Unknown => "That is not here.",
         }
     }
@@ -65,11 +68,6 @@ impl From<Misfit> for Refusal {
 /// they show: the pack or sack on the back, then the belt's pouch (the plate's
 /// `containersOf`).
 pub const CARRYING_SLOTS: [Slot; 2] = [Slot::Back, Slot::Belt];
-
-/// Whether an item made for `made_for` can be worn in `slot`. Rings fill either ring slot.
-pub fn wearable_in(made_for: Slot, slot: Slot) -> bool {
-    made_for == slot || matches!((made_for, slot), (Slot::Ring1 | Slot::Ring2, Slot::Ring1 | Slot::Ring2))
-}
 
 /// Where the item an equip displaced went: back where the equipped item came from, or, if it
 /// did not fit there, loose underfoot.
@@ -233,16 +231,45 @@ impl Inventory {
     /// Whether `id` could be worn in `slot`, without moving anything. Something already worn
     /// there is no bar: equipping swaps it out ([`Inventory::equip`]).
     pub fn check_wear(&self, id: ItemId, slot: Slot) -> Result<(), Refusal> {
-        let made_for = self.item(id).ok_or(Refusal::Unknown)?.profile.slot.ok_or(Refusal::NotWearable)?;
-        if wearable_in(made_for, slot) { Ok(()) } else { Err(Refusal::WrongSlot) }
+        let item = self.item(id).ok_or(Refusal::Unknown)?;
+        item.profile.slot.ok_or(Refusal::NotWearable)?;
+        if !item.fits(slot) {
+            return Err(Refusal::WrongSlot);
+        }
+        if slot == Slot::Hip && self.worn(Slot::Belt).is_none() {
+            return Err(Refusal::NoBelt);
+        }
+        Ok(())
     }
 
-    /// The slot `id` goes in when worn without saying where: the one it is made for, and for a
-    /// ring whichever ring slot is free, the first if both are or neither is (the plate's
-    /// `targetSlot`).
+    /// With no belt worn, whatever hung at the hip comes off: into the first carried bag with
+    /// room ([`Inventory::stow`]), or else loose, to be set down underfoot. Returns it and where
+    /// it went. The user's call; the plate had no hip.
+    pub fn unhang(&mut self) -> Option<(ItemId, Displaced)> {
+        if self.worn(Slot::Belt).is_some() {
+            return None;
+        }
+        let id = self.worn(Slot::Hip)?;
+        self.take_out(id);
+        let went = match self.stow(id) {
+            Ok(container) => match self.location(id) {
+                Some(Location::In { at, .. }) => Displaced::In { container, at },
+                _ => Displaced::Underfoot,
+            },
+            Err(_) => Displaced::Underfoot,
+        };
+        Some((id, went))
+    }
+
+    /// The slot `id` goes in when worn without saying where: the first of its slots
+    /// ([`fb_items::Item::slots`]) that is free, or the first if none is. So a ring takes
+    /// whichever ring slot is free (the plate's `targetSlot`), a weapon the main hand, or the
+    /// off hand if only that is free, and a lantern a free hand, or else the hip if a belt is
+    /// worn.
     pub fn target_slot(&self, id: ItemId) -> Option<Slot> {
-        let made_for = self.item(id)?.profile.slot?;
-        Some(self.ring_slot(id, made_for))
+        let slots = self.item(id)?.slots();
+        let free = |slot: &&Slot| self.worn(**slot).is_none_or(|other| other == id) && self.check_wear(id, **slot).is_ok();
+        slots.iter().find(free).or(slots.first()).copied()
     }
 
     /// `slot`, or for a ring dropped on a taken ring slot the other one if that is free, so a
@@ -433,7 +460,6 @@ mod tests {
 
     #[test]
     fn rings_fill_either_ring_slot() {
-        assert!(wearable_in(Slot::Ring1, Slot::Ring2) && wearable_in(Slot::Back, Slot::Back) && !wearable_in(Slot::Head, Slot::Feet));
         let mut inventory = Inventory::default();
         let ring = inventory.add(rolled("Ring", 1));
         inventory.wear(ring, Slot::Ring2).unwrap();
@@ -506,5 +532,110 @@ mod tests {
         inventory.stow(sack).unwrap();
         assert_eq!(inventory.equip(sack, Slot::Back), Ok(Some((pack, Displaced::Underfoot))));
         assert_eq!(inventory.carried_containers().first(), Some(&sack));
+    }
+
+    /// One of `base` that packs, so it can be stowed and swapped back.
+    fn packable(base: &str) -> Item {
+        (1..400).map(|s| rolled(base, s)).find(|i| i.profile.packable).unwrap_or_else(|| panic!("no packable {base}"))
+    }
+
+    #[test]
+    fn every_weapon_family_goes_in_the_off_hand() {
+        for base in ["Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff", "Bow", "Crossbow"] {
+            let mut inventory = Inventory::default();
+            let pack = worn_pack(&mut inventory);
+            let weapon = inventory.add(packable(base));
+            // Dropped on the off hand's slot.
+            assert_eq!(inventory.check_wear(weapon, Slot::Offhand), Ok(()), "{base}");
+            assert_eq!(inventory.equip(weapon, Slot::Offhand), Ok(None), "{base}");
+            assert_eq!(inventory.worn(Slot::Offhand), Some(weapon), "{base}");
+            // Without saying where (a double-click, F, the doll): the main hand while it is free,
+            // the off hand once only that is free.
+            inventory.take_out(weapon);
+            inventory.stow(weapon).unwrap();
+            assert_eq!(inventory.target_slot(weapon), Some(Slot::Mainhand), "{base}");
+            let other = inventory.add(packable("Dagger"));
+            inventory.wear(other, Slot::Mainhand).unwrap();
+            assert_eq!(inventory.target_slot(weapon), Some(Slot::Offhand), "{base}");
+            // Both hands full: the main hand's is swapped out, back into the pack.
+            let shield = inventory.add(rolled("Shield", 2));
+            inventory.wear(shield, Slot::Offhand).unwrap();
+            assert_eq!(inventory.target_slot(weapon), Some(Slot::Mainhand), "{base}");
+            assert!(matches!(inventory.equip(weapon, Slot::Mainhand), Ok(Some((id, Displaced::In { container, .. }))) if id == other && container == pack), "{base}");
+        }
+        // A shield is still only for the off hand, and armour never goes in a hand.
+        let mut inventory = Inventory::default();
+        let shield = inventory.add(rolled("Shield", 2));
+        assert_eq!(inventory.check_wear(shield, Slot::Mainhand), Err(Refusal::WrongSlot));
+        let helm = inventory.add(rolled("Helm", 2));
+        assert_eq!(inventory.check_wear(helm, Slot::Offhand), Err(Refusal::WrongSlot));
+    }
+
+    #[test]
+    fn weapons_trade_hands() {
+        let mut inventory = Inventory::default();
+        let (sword, dagger) = (inventory.add(packable("Sword")), inventory.add(packable("Dagger")));
+        inventory.wear(sword, Slot::Mainhand).unwrap();
+        inventory.wear(dagger, Slot::Offhand).unwrap();
+        // The sword dragged onto the off hand: the dagger goes to the main hand it came from.
+        assert_eq!(inventory.equip(sword, Slot::Offhand), Ok(Some((dagger, Displaced::Worn(Slot::Mainhand)))));
+        assert_eq!((inventory.worn(Slot::Mainhand), inventory.worn(Slot::Offhand)), (Some(dagger), Some(sword)));
+    }
+
+    #[test]
+    fn a_lantern_hangs_at_the_hip_only_from_a_belt() {
+        let mut inventory = Inventory::default();
+        let lantern = inventory.add(rolled("Lantern", 1));
+        assert_eq!(inventory.check_wear(lantern, Slot::Hip), Err(Refusal::NoBelt));
+        assert_eq!(inventory.wear(lantern, Slot::Hip), Err(Refusal::NoBelt));
+        worn_belt(&mut inventory);
+        assert_eq!(inventory.equip(lantern, Slot::Hip), Ok(None));
+        assert_eq!(inventory.worn(Slot::Hip), Some(lantern));
+        assert!(inventory.is_carried(lantern));
+        // Nothing but a lantern hangs there.
+        let (torch, sword) = (inventory.add(rolled("Torch", 1)), inventory.add(rolled("Sword", 1)));
+        assert_eq!(inventory.check_wear(torch, Slot::Hip), Err(Refusal::WrongSlot));
+        assert_eq!(inventory.check_wear(sword, Slot::Hip), Err(Refusal::WrongSlot));
+        // While the belt is on, nothing comes off.
+        assert_eq!(inventory.unhang(), None);
+    }
+
+    #[test]
+    fn taking_the_belt_off_moves_the_hip_lantern_to_a_bag_or_underfoot() {
+        // With a pack on: into the pack.
+        let mut inventory = Inventory::default();
+        let pack = worn_pack(&mut inventory);
+        let belt = worn_belt(&mut inventory);
+        let lantern = inventory.add(rolled("Lantern", 1));
+        inventory.wear(lantern, Slot::Hip).unwrap();
+        inventory.take_out(belt);
+        assert!(matches!(inventory.unhang(), Some((id, Displaced::In { container, .. })) if id == lantern && container == pack));
+        assert!(matches!(inventory.location(lantern), Some(Location::In { container, .. }) if container == pack));
+        assert_eq!(inventory.worn(Slot::Hip), None);
+        // With no bag: loose, to be set down.
+        let mut inventory = Inventory::default();
+        let belt = worn_belt(&mut inventory);
+        let lantern = inventory.add(rolled("Lantern", 1));
+        inventory.wear(lantern, Slot::Hip).unwrap();
+        inventory.take_out(belt);
+        assert_eq!(inventory.unhang(), Some((lantern, Displaced::Underfoot)));
+        assert_eq!(inventory.location(lantern), Some(Location::Loose));
+    }
+
+    #[test]
+    fn a_lantern_takes_a_free_hand_then_the_hip() {
+        let mut inventory = Inventory::default();
+        let lantern = inventory.add(rolled("Lantern", 1));
+        assert_eq!(inventory.target_slot(lantern), Some(Slot::Offhand));
+        let (sword, dagger) = (inventory.add(packable("Sword")), inventory.add(packable("Dagger")));
+        inventory.wear(dagger, Slot::Offhand).unwrap();
+        assert_eq!(inventory.target_slot(lantern), Some(Slot::Mainhand));
+        inventory.wear(sword, Slot::Mainhand).unwrap();
+        // Both hands full and no belt: it swaps out the off hand's.
+        assert_eq!(inventory.target_slot(lantern), Some(Slot::Offhand));
+        worn_belt(&mut inventory);
+        assert_eq!(inventory.target_slot(lantern), Some(Slot::Hip));
+        assert_eq!(inventory.equip(lantern, Slot::Hip), Ok(None));
+        assert_eq!((inventory.worn(Slot::Mainhand), inventory.worn(Slot::Offhand)), (Some(sword), Some(dagger)));
     }
 }

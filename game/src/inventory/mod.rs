@@ -119,6 +119,7 @@ impl Plugin for InventoryPlugin {
                         close_container_with_screen,
                         build_screen,
                         drag_items,
+                        unhang_without_belt,
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
                         show_drag,
@@ -288,6 +289,15 @@ fn hold_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
     }
 }
 
+/// An `FB_EQUIP` entry: a base, or `base@slot` to equip it in another slot it fits
+/// (`Lantern@hip`, `Sword@offhand`).
+pub fn equip_entry(entry: &str) -> (&str, Option<Slot>) {
+    match entry.split_once('@') {
+        Some((base, slot)) => (base.trim(), serde_json::from_str(&format!("\"{}\"", slot.trim().to_lowercase())).ok()),
+        None => (entry, None),
+    }
+}
+
 /// The bases a comma-separated list names.
 fn bases_in(list: &str) -> impl Iterator<Item = &str> {
     list.split(',').map(str::trim).filter(|b| !b.is_empty())
@@ -299,12 +309,13 @@ fn bases_in(list: &str) -> impl Iterator<Item = &str> {
 fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLevel>>) {
     let roll = |base: &str, salt: u32| roll_held(base, kit_seed(level.as_deref(), 0x5700 + salt));
     let equip = std::env::var("FB_EQUIP").unwrap_or_default();
-    for (i, base) in bases_in(&equip).enumerate() {
+    for (i, entry) in bases_in(&equip).enumerate() {
+        let (base, slot) = equip_entry(entry);
         let Some(item) = roll(base, 0x80 + i as u32) else {
             warn!("FB_EQUIP: no base called {base:?}");
             continue;
         };
-        match item.profile.slot {
+        match slot.or(item.profile.slot) {
             Some(slot) => equip_kit(&mut inventory, item, slot),
             None => warn!("FB_EQUIP: {base:?} is not worn"),
         }
@@ -497,11 +508,11 @@ impl FloorEquip {
     /// went.
     pub fn message(&self, inventory: &Inventory, id: ItemId) -> String {
         let title = |id| inventory.item(id).map_or_else(String::new, |item| item.title().to_string());
-        let verb = match self.slot {
-            Slot::Mainhand | Slot::Offhand => "Holding",
-            _ => "Wearing",
+        let mut line = match self.slot {
+            Slot::Mainhand | Slot::Offhand => format!("Holding {}.", title(id)),
+            Slot::Hip => format!("{} hangs from the belt.", title(id)),
+            _ => format!("Wearing {}.", title(id)),
         };
-        let mut line = format!("{verb} {}.", title(id));
         match self.displaced {
             Some((old, Some(bag))) => line += &format!(" {} went into the {}.", title(old), title(bag)),
             Some((old, None)) => line += &format!(" {} was set down.", title(old)),
@@ -512,7 +523,8 @@ impl FloorEquip {
 }
 
 /// Equips `id`, lying on the floor at `at` (cells) turned `yaw`, in the slot it is made for
-/// ([`Inventory::target_slot`]: worn gear in its slot, a weapon in the main hand, a torch,
+/// ([`Inventory::target_slot`]: worn gear in its slot, a weapon in the main hand or else a
+/// free off hand, a torch,
 /// lantern or shield in the off hand, a ring in a free ring slot) by [`equip`]. Whatever it
 /// displaces is stowed in a carried bag if one has room, or else set down where `id` lay.
 /// Equipping from the floor without the screen is the user's call; where the displaced item
@@ -969,6 +981,18 @@ fn drag_items(
                 toast.say(refusal.reason(), now);
             }
         }
+    }
+}
+
+/// With no belt worn, what hung at the hip comes off ([`Inventory::unhang`]): into a carried bag
+/// with room, or else set down underfoot. Every way of taking a belt off (a double-click, a drag
+/// to a grid or the floor, swapping in something that is not a belt) ends here.
+fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResMut<FloorChanges>) {
+    if inventory.worn(Slot::Hip).is_none() || inventory.worn(Slot::Belt).is_some() {
+        return;
+    }
+    if let Some((id, Displaced::Underfoot)) = inventory.unhang() {
+        floor_changes.0.push(FloorChange::SetDown(id, 0.0));
     }
 }
 

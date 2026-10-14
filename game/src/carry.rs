@@ -12,6 +12,10 @@
 //!   (braziers, glowcaps, lit things on the floor). On the view model's stage it has its own
 //!   soft light, so the flame does not burn its own handle white, and lights what the other
 //!   hand holds.
+//! - A lantern hung from the belt at the hip hangs from the player's body in the level, low on
+//!   the left, seen when looking down, and swings with the steps (`crate::view_model::hip_in_view`).
+//!   Lit, it is the carried light when no hand holds one: its light rises from the hip, lower
+//!   than a held one, and lights what the hands hold from below.
 //! - What is held moves with the player's steps ([`Gait`]) and lags a little behind a turn of
 //!   the head ([`HeldSway`]).
 //! - Its light in the world is a separate point light near the eye, on the default layer, with
@@ -48,7 +52,7 @@ use bevy::{
 use fb_level::{CELL, ItemSpot, Level};
 
 use crate::character::Character;
-use crate::inventory::{FloorChanges, Inventory, ItemId, Toast, doll::lit_hand, equip_from_floor, header::ToastText, underfoot::apply_floor_changes};
+use crate::inventory::{FloorChanges, Inventory, ItemId, Toast, doll::lit_slot, equip_from_floor, header::ToastText, underfoot::apply_floor_changes};
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
@@ -58,7 +62,7 @@ use crate::props::{Container, PropPiece};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, Shimmer, ToonMaterial};
 use crate::tuning::{LightTuning, Tuning};
 use crate::ui::{BG, BRIGHT, UiFonts, rarity_color};
-use crate::view_model::{held_in_view, side_of};
+use crate::view_model::{held_in_view, hip_in_view, hip_swing, side_of};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
 pub const VIEW_MODEL_LAYER: usize = 1;
@@ -94,6 +98,11 @@ const WORLD_FLAME: Vec3 = Vec3::new(1.5, 0.0, -1.5);
 /// Where the carried light's light on the view model's stage sits relative to its flame: up,
 /// left and toward the eye (mirrored in the off hand).
 const HELD_LIGHT_OFFSET: Vec3 = Vec3::new(-3.0, 3.0, 7.0);
+
+/// The hip lantern's light on the view model's stage, in camera space, when it is the carried
+/// light: low on the left and a little ahead, so it lights what the hands hold from below, as
+/// the lantern at the hip does. Our own tuning.
+const HIP_STAGE_LIGHT: Vec3 = Vec3::new(-3.0, -14.0, -5.0);
 
 /// Lowest a light given by an item on the floor hangs, in world units (60 cm).
 const FLOOR_LIGHT_HEIGHT: f32 = 6.0;
@@ -145,6 +154,7 @@ impl Plugin for CarryPlugin {
                     relight_given_lights,
                     follow_player_camera,
                     sway_held,
+                    swing_hip,
                     (aim, (pick_up, equip_aimed.before(apply_floor_changes)).run_if(level_has_focus)).chain(),
                     hide_hud_under_screens.run_if(resource_exists::<ScreenOpen>),
                 )
@@ -172,10 +182,11 @@ pub fn lit_torch(seed: u32) -> fb_items::Item {
         .expect("some seed rolls a burning torch")
 }
 
-/// The carried light: the lit thing in the main hand, or else in the off hand, with its hand.
+/// The carried light: the lit thing in the main hand, or else in the off hand, or else a lit
+/// lantern hung at the hip, with its slot.
 pub fn carried_light(inventory: &Inventory) -> Option<(fb_items::Slot, ItemId)> {
-    let hand = lit_hand(inventory)?;
-    Some((hand, inventory.worn(hand)?))
+    let slot = lit_slot(inventory)?;
+    Some((slot, inventory.worn(slot)?))
 }
 
 /// The item's own look: its palette, condition and seed, with the wear scale the prototype
@@ -383,6 +394,9 @@ pub struct HeldKey {
     pub main: Option<ItemId>,
     pub off: Option<ItemId>,
     pub light: Option<ItemId>,
+    /// The lantern hung at the hip, and the belt it hangs from.
+    pub hip: Option<ItemId>,
+    pub belt: Option<ItemId>,
     pub body: (fb_body::Folk, u32),
 }
 
@@ -392,6 +406,8 @@ impl HeldKey {
             main: inventory.worn(fb_items::Slot::Mainhand),
             off: inventory.worn(fb_items::Slot::Offhand),
             light: carried_light(inventory).map(|(_, id)| id),
+            hip: inventory.worn(fb_items::Slot::Hip),
+            belt: inventory.worn(fb_items::Slot::Belt),
             body: (character.folk, character.body_seed),
         }
     }
@@ -879,18 +895,19 @@ pub fn held_items(inventory: &Inventory, character: &Character, scale: f32) -> V
 /// carried light ([`carried_light`]): when either changes, or the tuning does, the old view
 /// model and its lights go and the new ones are spawned, the carried light's light in the world
 /// from its [`LightAnchor`]. With nothing lit in hand there is no light; with nothing in hand, nothing is
-/// drawn.
+/// drawn. A lantern at the hip hangs from the player's body instead ([`HipSwing`]).
+#[allow(clippy::type_complexity)]
 fn show_held(
     mut commands: Commands,
     inventory: Res<Inventory>,
     character: Res<Character>,
     tuning: Res<Tuning>,
-    mut cameras: Query<(Entity, &mut Carrying, Option<&Exposure>), With<PlayerCamera>>,
+    mut cameras: Query<(Entity, &mut Carrying, Option<&Exposure>, Option<&ChildOf>), With<PlayerCamera>>,
     view_models: Query<(Entity, &ViewModelCamera)>,
     mut spawner: ItemSpawner,
 ) {
     let wanted = HeldKey::of(&inventory, &character);
-    for (camera, mut carrying, exposure) in &mut cameras {
+    for (camera, mut carrying, exposure, body) in &mut cameras {
         if carrying.held == Some(wanted) && !tuning.is_changed() {
             continue;
         }
@@ -921,6 +938,43 @@ fn show_held(
             let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light), Transform::from_translation(at), view_layer.clone(), ChildOf(view_model))).id();
             let world = commands.spawn((given_light(anchor, exposure, &tuning.light), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
             carrying.entities.extend([stage_light, world]);
+        }
+        // A lantern at the hip hangs from the body in the level, not on the stage; lit and
+        // carried, its light rises from it, and a light of its own on the stage lights what the
+        // hands hold from below.
+        let worn: Vec<(fb_items::Slot, Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.shape.clone())).collect();
+        let Some(hip) = hip_in_view(&character.spec(), &worn, EYE_HEIGHT) else { continue };
+        let (parent, hook) = match body {
+            Some(body) => (body.parent(), hip.hook),
+            None => (camera, hip.hook - Vec3::Y * EYE_HEIGHT),
+        };
+        let pivot = commands.spawn((Name::new("Hip lantern"), HipSwing, Transform::from_translation(hook), Visibility::default(), ChildOf(parent))).id();
+        let carried = (light_hand == Some(fb_items::Slot::Hip)).then(|| item_light(&hip.item)).flatten();
+        // The lantern and its light go through the spawner's own commands, after the pivot's.
+        let mut lantern = spawner.spawn(&hip.item.build(), &appearance_of(&hip.item));
+        lantern.insert((hip.transform, Propagate(NotShadowCaster), ChildOf(pivot)));
+        if let Some(anchor) = carried {
+            lantern.with_child((given_light(anchor, exposure, &tuning.light), Transform::from_translation(Vec3::from_array(anchor.position))));
+        }
+        carrying.entities.push(pivot);
+        let Some(anchor) = carried else { continue };
+        let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light), Transform::from_translation(HIP_STAGE_LIGHT), view_layer, ChildOf(view_model))).id();
+        carrying.entities.push(stage_light);
+    }
+}
+
+/// The pivot a hip lantern hangs from ([`crate::view_model::HipInView`]), at its hook.
+#[derive(Component, Debug)]
+pub struct HipSwing;
+
+/// Swings each hip lantern about its hook with the step of the body it hangs from
+/// ([`hip_swing`]).
+fn swing_hip(mut pivots: Query<(&mut Transform, &ChildOf), With<HipSwing>>, gaits: Query<&Gait>) {
+    for (mut transform, parent) in &mut pivots {
+        let gait = gaits.get(parent.parent()).copied().unwrap_or_default();
+        let swing = hip_swing(gait.bob());
+        if transform.rotation != swing {
+            transform.rotation = swing;
         }
     }
 }
@@ -1644,6 +1698,9 @@ mod tests {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let mace = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Mace", s)).find(|i| i.profile.packable).unwrap());
             inventory.wear(mace, Slot::Mainhand).unwrap();
+            // The off hand is full too, so the sword swaps out the main hand's mace.
+            let torch = inventory.add(lit_torch(2));
+            inventory.wear(torch, Slot::Offhand).unwrap();
             mace
         };
         let character = Character::default();
@@ -1660,6 +1717,24 @@ mod tests {
         assert_eq!((before.main, after.main), (Some(mace), Some(sword)));
         let toast = &app.world().resource::<Toast>().text;
         assert!(toast.starts_with("Holding ") && toast.contains("went into the"), "{toast}");
+    }
+
+    #[test]
+    fn f_puts_a_weapon_in_the_off_hand_while_only_that_is_free() {
+        use fb_items::Slot;
+        let (mut app, _) = equipping_app();
+        let sword = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let sword = inventory.add(fb_items::roll_item("Sword", 3).unwrap());
+            inventory.wear(sword, Slot::Mainhand).unwrap();
+            sword
+        };
+        let (_, dagger, _) = lay_ahead(&mut app, fb_items::roll_item("Dagger", 4).unwrap());
+        press_f(&mut app);
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!((inventory.worn(Slot::Mainhand), inventory.worn(Slot::Offhand)), (Some(sword), Some(dagger)));
+        let toast = &app.world().resource::<Toast>().text;
+        assert!(toast.starts_with("Holding ") && !toast.contains("went"), "{toast}");
     }
 
     #[test]

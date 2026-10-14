@@ -24,6 +24,9 @@
 //!   the side so the flame burns beside the head.
 //! - **Lantern**: the fist closes on the carrying ring and the lantern hangs plumb below it.
 //! - **Crossbow**: carried by the stock's waist, deck up.
+//!
+//! A lantern can also hang from the belt at the hip ([`fit_hip`]), plumb from its carrying
+//! ring, clear of the hips.
 
 use armory::build::hafted::{Haft, grip_span};
 use armory::geom::vec3::{self, Mat3, V3};
@@ -662,6 +665,85 @@ fn scale_mesh(mesh: &mut ItemMesh, k: f32) {
     }
 }
 
+// ── Hung at the hip ──
+
+/// The hip a lantern hangs at: the off hand's, so a scabbard's side stays the main hand's
+/// reach across. Our own choice.
+pub const HIP_SIDE: Side = OFF_HAND;
+/// How far round the waist from the hip's side toward the front the lantern hangs, radians:
+/// forward of an arm hanging at the side, where it can be seen when looking down. Our own.
+pub const HIP_TURN: f32 = 0.6;
+/// How far the lantern's body stands clear of the hips and thigh below the belt, over the
+/// hip ring's own width (trousers and a tunic's skirt lie there). Our own.
+const HIP_CLEARANCE: f32 = 0.12;
+
+/// A lantern hung from the belt at the hip ([`fit_hip`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct HipFit {
+    /// The lantern as drawn (as rolled; nothing is thinned).
+    pub item: Item,
+    /// The drawn lantern in body space.
+    pub mesh: ItemMesh,
+    /// The uniform scale it is drawn at, before [`HipFit::placement`].
+    pub scale: f32,
+    /// Where the scaled item space sits in body space.
+    pub placement: Placement,
+    /// The point it hangs from, in body space: the top of its carrying ring, on the belt. It
+    /// swings about this point.
+    pub hook: V3,
+    pub side: Side,
+}
+
+impl HipFit {
+    /// A point in the item's own space (its light) in body space.
+    pub fn to_body(&self, p: V3) -> V3 {
+        self.placement.point(vec3::scale(p, self.scale))
+    }
+}
+
+/// Hangs a lantern from `belt` (the worn belt's mesh in body space, from
+/// [`crate::fit_worn`]) at [`HIP_SIDE`]'s hip, [`HIP_TURN`] toward the front: plumb, its
+/// carrying ring over the belt (the belt runs through the ring, as the fist's fingers do when
+/// it is held), the top of the ring at the middle of the belt's band, and its body far enough
+/// out to clear the hips below. `None` for anything but a lantern, or a belt with no mesh.
+/// The plate drew no hip lantern; the fit is our own.
+pub fn fit_hip(body: &Body, item: &Item, belt: &ItemMesh) -> Option<HipFit> {
+    let Item::Lantern(state) = item else { return None };
+    let side = HIP_SIDE;
+    let out = [side.sign() * HIP_TURN.cos(), 0.0, HIP_TURN.sin()];
+    // The belt's outermost point that way, and the middle of its band there.
+    let band: Vec<V3> = belt.parts.iter().filter(|p| p.name == "belt").flat_map(|p| p.positions.iter().copied()).collect();
+    let band = if band.is_empty() { belt.parts.iter().flat_map(|p| p.positions.iter().copied()).collect() } else { band };
+    let reach = |p: &V3| p[0] * out[0] + p[2] * out[2];
+    let support = band.iter().map(reach).fold(f32::MIN, f32::max);
+    if support == f32::MIN {
+        return None;
+    }
+    let near: Vec<&V3> = band.iter().filter(|p| reach(p) > support - 0.15).collect();
+    let belt_y = near.iter().map(|p| p[1]).sum::<f32>() / near.len() as f32;
+    // How far out the hips stand that way, as an ellipse (body space is centred on the trunk).
+    let hip = &body.hip;
+    let hips = ((hip.half_width * out[0]).powi(2) + (hip.half_depth * out[2]).powi(2)).sqrt() + HIP_CLEARANCE;
+
+    let scale = 1.0;
+    let mesh = item.build();
+    let ring = state.bail.ring;
+    let top = mesh.parts.iter().filter(|p| p.name == "ring").flat_map(|p| &p.positions).fold(ring, |m, p| m.max(p[1]));
+    // The widest the lantern stands out from its hanging line, below the ring.
+    let girth = mesh.parts.iter().filter(|p| !matches!(p.name, "ring" | "bail" | "chain")).flat_map(|p| &p.positions).map(|p| p[0].hypot(p[2])).fold(0.0, f32::max) * scale;
+    let distance = support.max(hips + girth);
+    let hook = [out[0] * distance, belt_y, out[2] * distance];
+    // Plumb, the ring's plane (item YZ) along the belt: item +Z runs round the waist.
+    let along = [-out[2], 0.0, out[0]];
+    let rotation = frame_yz(vec3::Y, along, out);
+    let grip = vec3::scale([0.0, top, 0.0], scale);
+    let placement = Placement { rotation, origin: vec3::sub(hook, rotation.transform(grip)) };
+    let mut drawn = mesh;
+    scale_mesh(&mut drawn, scale);
+    placement.apply_to_item(&mut drawn);
+    Some(HipFit { item: item.clone(), mesh: drawn, scale, placement, hook, side })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -682,6 +764,35 @@ mod tests {
 
     fn fit(body: &Body, side: Side, item: &Item) -> HeldFit {
         fit_held(body, side, item).unwrap()
+    }
+
+    #[test]
+    fn a_lantern_hangs_plumb_from_the_belt_at_the_off_hand_hip() {
+        use fb_items::Slot;
+        for folk in Folk::ALL {
+            let body = body(folk);
+            let belt = crate::fit_worn(&body, &[(Slot::Belt, roll(Family::Belt, 3))]);
+            let belt = &belt.layer(Slot::Belt).unwrap().mesh;
+            let (lo, hi) = belt.bounds().unwrap();
+            for seed in [1, 2, 3, 1207] {
+                let lantern = roll(Family::Lantern, seed);
+                let hip = fit_hip(&body, &lantern, belt).unwrap();
+                // Hung from the belt's band, on the off hand's side and toward the front.
+                assert!(hip.hook[1] >= lo[1] - 1e-3 && hip.hook[1] <= hi[1] + 1e-3, "{folk:?} {seed}: hook {:?} off the belt {lo:?}..{hi:?}", hip.hook);
+                assert!(hip.hook[0] * HIP_SIDE.sign() > 0.0 && hip.hook[2] > 0.0, "{folk:?} {seed}: {:?}", hip.hook);
+                // Plumb: all of it below the hook, and its ring's top at the hook.
+                let (mlo, mhi) = hip.mesh.bounds().unwrap();
+                assert!(mhi[1] <= hip.hook[1] + 0.02, "{folk:?} {seed}: {mhi:?} above {:?}", hip.hook);
+                assert!(mlo[1] > 0.0, "{folk:?} {seed}: through the floor");
+                // Its body clear of the hips: no part inside the hip ring's ellipse below the belt.
+                let inside = hip.mesh.parts.iter().filter(|p| !matches!(p.name, "ring" | "bail" | "chain")).flat_map(|p| &p.positions).any(|p| {
+                    let (x, z) = (p[0] / body.hip.half_width, p[2] / body.hip.half_depth);
+                    p[1] < body.waist_y && x * x + z * z < 1.0
+                });
+                assert!(!inside, "{folk:?} {seed}: inside the hips");
+            }
+        }
+        assert!(fit_hip(&body(Folk::Human), &roll(Family::Sword, 1), &ItemMesh::default()).is_none());
     }
 
     fn points<'a>(mesh: &'a ItemMesh, names: &'a [&str]) -> impl Iterator<Item = V3> + 'a {
