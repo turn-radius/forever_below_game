@@ -3,7 +3,8 @@
 //! The shapes are plain data built in [`geometry`] (no Bevy); this file spawns them in the
 //! house style (`docs/rendering.md`): banded toon stone weathered by the decay shader, ink
 //! along the rock's edges, timber door frames, glowcaps and braziers as the only fixed light,
-//! and an ambient fill of a few lux so carried light is what matters.
+//! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
+//! and latches when it reaches shut ([`LevelSounds`]).
 //!
 //! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
@@ -23,6 +24,7 @@ use armory::{
 use bevy::{camera::Exposure, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
 use fb_level::{CELL, LightKind};
 
+use crate::capture::FrameCapturePlugin;
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
 use crate::render::{ArmoryPart, ItemAppearance, MinWidth, OutlineMaterial, ToonMaterial, part_to_mesh};
@@ -35,6 +37,8 @@ impl Plugin for LevelPlugin {
         app.insert_resource(abyss_ambient())
             .insert_resource(ClearColor(FOG_COLOR))
             .add_systems(Startup, (spawn_stone, spawn_fixtures, spawn_debug_camera))
+            // Offscreen captures stay silent, as the music does.
+            .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
             .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames));
     }
 }
@@ -106,6 +110,21 @@ fn fixture_appearance(seed: u32, state: ConditionState) -> ItemAppearance {
     }
 }
 
+/// The level's sound effects, loaded up front so none waits on the disk when it plays.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct LevelSounds {
+    /// The entrance door's slam and latch, synthesised by `tools/synth_door_shut.py`.
+    pub door_shut: Handle<AudioSource>,
+}
+
+impl LevelSounds {
+    pub const DOOR_SHUT: &str = "audio/door-shut.ogg";
+}
+
+fn load_level_sounds(mut commands: Commands, assets: Res<AssetServer>) {
+    commands.insert_resource(LevelSounds { door_shut: assets.load(LevelSounds::DOOR_SHUT) });
+}
+
 /// Marks every entity the level spawns.
 #[derive(Component, Debug, Default)]
 pub struct LevelPiece;
@@ -120,6 +139,15 @@ pub struct EntranceDoor {
     pub centre: Vec3,
     pub cell: (i32, i32),
     pub swing: DoorSwing,
+}
+
+/// A moment in a door's swing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoorEvent {
+    /// It began to swing shut.
+    BeganToShut,
+    /// It reached shut.
+    Shut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -147,22 +175,22 @@ impl EntranceDoor {
     }
 
     /// Advances the swing by `dt` seconds with the player at `feet` (if there is one).
-    /// Returns true on the frame it begins to shut.
-    pub fn step(&mut self, dt: f32, feet: Option<Vec3>) -> bool {
+    /// Returns what happened this step, if anything.
+    pub fn step(&mut self, dt: f32, feet: Option<Vec3>) -> Option<DoorEvent> {
         match self.swing {
             DoorSwing::Open if feet.is_some_and(|f| self.player_is_clear(f)) => {
                 self.swing = DoorSwing::Closing(0.0);
-                true
+                Some(DoorEvent::BeganToShut)
             }
             DoorSwing::Closing(t) if t + dt >= SHUT_SECONDS => {
                 self.swing = DoorSwing::Shut;
-                false
+                Some(DoorEvent::Shut)
             }
             DoorSwing::Closing(t) => {
                 self.swing = DoorSwing::Closing(t + dt);
-                false
+                None
             }
-            _ => false,
+            _ => None,
         }
     }
 }
@@ -294,7 +322,9 @@ fn unshadow_flames(
 }
 
 fn shut_the_entrance(
+    mut commands: Commands,
     time: Res<Time>,
+    sounds: Option<Res<LevelSounds>>,
     players: Query<&GlobalTransform, With<Player>>,
     mut doors: Query<(&mut EntranceDoor, &mut Transform)>,
     mut blocked: ResMut<BlockedCells>,
@@ -304,9 +334,17 @@ fn shut_the_entrance(
         if door.swing == DoorSwing::Shut {
             continue;
         }
-        if door.step(time.delta_secs(), feet) {
+        match door.step(time.delta_secs(), feet) {
             // Blocked from the moment it swings, so the player cannot slip back under it.
-            blocked.0.insert(door.cell);
+            Some(DoorEvent::BeganToShut) => {
+                blocked.0.insert(door.cell);
+            }
+            Some(DoorEvent::Shut) => {
+                if let Some(sounds) = &sounds {
+                    commands.spawn((Name::new("door shut"), AudioPlayer::new(sounds.door_shut.clone()), PlaybackSettings::DESPAWN));
+                }
+            }
+            None => {}
         }
         transform.rotation = door.rotation();
     }
@@ -428,20 +466,63 @@ mod tests {
     fn the_door_waits_for_the_player_to_walk_in() {
         let mut d = door();
         // No player yet, or one still in the doorway's reach: the door stands open.
-        assert!(!d.step(1.0, None));
-        assert!(!d.step(1.0, Some(d.centre + Vec3::new(0.0, 0.0, -CELL))));
+        assert_eq!(d.step(1.0, None), None);
+        assert_eq!(d.step(1.0, Some(d.centre + Vec3::new(0.0, 0.0, -CELL))), None);
         assert_eq!(d.swing, DoorSwing::Open);
         // A step further in and it begins to swing, then shuts after SHUT_SECONDS and stays.
-        assert!(d.step(0.1, Some(d.centre + Vec3::new(0.0, 0.0, -1.3 * CELL))));
+        assert_eq!(d.step(0.1, Some(d.centre + Vec3::new(0.0, 0.0, -1.3 * CELL))), Some(DoorEvent::BeganToShut));
         let mut t = 0.0;
+        let mut shut = 0;
         while d.swing != DoorSwing::Shut {
-            assert!(!d.step(0.1, None));
+            shut += (d.step(0.1, None) == Some(DoorEvent::Shut)) as u32;
             t += 0.1;
         }
+        assert_eq!(shut, 1, "it reaches shut once");
         assert!((t - SHUT_SECONDS).abs() < 0.11, "{t}");
-        assert!(!d.step(1.0, Some(d.centre)));
+        assert_eq!(d.step(1.0, Some(d.centre)), None);
         assert_eq!(d.swing, DoorSwing::Shut);
         assert!(d.rotation().abs_diff_eq(Quat::IDENTITY, 1e-6));
+    }
+
+    #[test]
+    fn the_door_sounds_once_when_it_reaches_shut() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<BlockedCells>()
+            .insert_resource(LevelSounds::default())
+            .add_systems(Update, shut_the_entrance);
+        let d = door();
+        app.world_mut().spawn((d, Transform::default()));
+        let player = app.world_mut().spawn((Player, GlobalTransform::from_translation(d.centre))).id();
+        let sounds = |app: &mut App| app.world_mut().query::<&AudioPlayer>().iter(app.world()).count();
+        let frame = |app: &mut App| {
+            app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
+            app.update();
+        };
+        frame(&mut app);
+        assert_eq!(sounds(&mut app), 0, "open: silent");
+        // The player walks in; the door swings, silent until it reaches shut.
+        *app.world_mut().get_mut::<GlobalTransform>(player).unwrap() = GlobalTransform::from_translation(d.centre - Vec3::Z * 1.5 * CELL);
+        let mut shut_at = None;
+        for i in 0..40 {
+            frame(&mut app);
+            let swing = app.world_mut().query::<&EntranceDoor>().single(app.world()).unwrap().swing;
+            if swing == DoorSwing::Shut && shut_at.is_none() {
+                shut_at = Some(i);
+                assert_eq!(sounds(&mut app), 1, "it sounds the frame it shuts");
+            } else if shut_at.is_none() {
+                assert_eq!(sounds(&mut app), 0, "frame {i}: silent while it swings");
+            }
+        }
+        assert!(shut_at.is_some());
+        assert_eq!(sounds(&mut app), 1, "and only once");
+    }
+
+    #[test]
+    fn the_door_sound_is_an_asset() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(LevelSounds::DOOR_SHUT);
+        let duration = crate::audio::ogg_vorbis_duration(&std::fs::read(path).unwrap()).unwrap();
+        assert!((0.3..2.0).contains(&duration), "{duration}");
     }
 
     #[test]
