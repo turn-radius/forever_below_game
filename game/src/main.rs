@@ -1,8 +1,10 @@
-//! Forever Below. It opens on the first level; `--turntable` (or `--family`) opens the Armory
+//! Forever Below. It opens on the title screen; `--turntable` (or `--family`) opens the Armory
 //! turntable instead, and `--doll` the doll view (a dressed body turning on the turntable's
 //! plate: `--doll --folk dwarf --seed 7 --outfit cleric`).
 //!
-//! `cargo run -p forever_below -- --seed 1207` plays the level for that seed.
+//! `cargo run -p forever_below -- --seed 1207` plays the level for that seed, skipping the
+//! title, as the debug switches that look at the level do; `--title` keeps the title
+//! ([`forever_below::launch`]).
 //! `cargo run -p forever_below -- --turntable --family mace --seed 1207 --wear grave_find`
 //! `FB_SCREENSHOT=path.png` saves one offscreen frame and quits; `FB_WEAR=grave_find` sets the
 //! starting condition (the `--wear` flag wins); `FB_CLOSEUP=<slot>` opens on a close-up of
@@ -12,10 +14,12 @@ use bevy::prelude::*;
 use forever_below::{
     capture::FrameCapturePlugin,
     doll_view::{DollChoice, DollViewPlugin},
+    launch::{AppState, Launch, env_set},
     light::LightPlugin,
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
     settings::SettingsPlugin,
+    title::{NewDelveSeed, TitlePlugin},
     turntable::{Focus, Turntable, TurntablePlugin},
 };
 
@@ -27,35 +31,29 @@ fn main() -> AppExit {
     if args.iter().any(|a| a == "--doll") {
         return run_doll(&args);
     }
-    let seed = match level_seed(&args) {
-        Ok(seed) => seed,
+    let launch = match Launch::parse(&args) {
+        Ok(launch) => launch,
         Err(error) => {
             eprintln!("forever_below: {error}");
             return AppExit::error();
         }
     };
+    let opening = launch.opening(env_set);
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
         ..default()
     }))
-    .add_plugins((SettingsPlugin, ArmoryRenderPlugin, LightPlugin, PlayPlugin))
-    .insert_resource(CurrentLevel(fb_level::generate(seed)));
+    .insert_state(opening)
+    .add_plugins((SettingsPlugin, ArmoryRenderPlugin, LightPlugin, PlayPlugin, TitlePlugin))
+    .insert_resource(NewDelveSeed(launch.seed));
+    if opening == AppState::Delving {
+        app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED))));
+    }
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
     app.run()
-}
-
-/// `--seed N` or `--seed=N`; 1207 by default.
-fn level_seed(args: &[String]) -> Result<u32, String> {
-    let value = match args {
-        [] => return Ok(1207),
-        [flag, value] if flag == "--seed" => value.clone(),
-        [arg] if arg.starts_with("--seed=") => arg["--seed=".len()..].to_string(),
-        [arg, ..] => return Err(format!("unknown argument {arg}")),
-    };
-    value.parse().map_err(|_| format!("--seed {value} is not a number"))
 }
 
 fn run_turntable() -> AppExit {

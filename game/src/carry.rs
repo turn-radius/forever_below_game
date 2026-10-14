@@ -45,7 +45,8 @@ use fb_level::{CELL, ItemSpot, Level};
 use crate::inventory::{Inventory, ItemId, doll::lit_hand};
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
-use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, level_has_focus};
+use crate::launch::AppState;
+use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, level_has_focus};
 use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
@@ -124,8 +125,10 @@ impl Plugin for CarryPlugin {
         app.init_resource::<Inventory>()
             .init_resource::<Keymap>()
             .init_resource::<Aimed>()
-            .add_systems(PostStartup, spawn_stand_in_camera.run_if(no_player_camera))
-            .add_systems(PostUpdate, hold_debug_pose.before(TransformSystems::Propagate))
+            // Only a delve that opens at startup can lack a player; one begun from the title
+            // spawns its own on entering.
+            .add_systems(PostStartup, spawn_stand_in_camera.run_if(in_state(AppState::Delving)).run_if(no_player_camera))
+            .add_systems(PostUpdate, hold_debug_pose.before(TransformSystems::Propagate).in_set(DelveSystems))
             .add_systems(
                 Update,
                 (
@@ -136,7 +139,8 @@ impl Plugin for CarryPlugin {
                     sway_held_torch,
                     (aim, pick_up.run_if(level_has_focus)).chain(),
                     hide_hud_under_screens.run_if(resource_exists::<ScreenOpen>),
-                ),
+                )
+                    .in_set(DelveSystems),
             );
     }
 }

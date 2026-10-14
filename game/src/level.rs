@@ -28,6 +28,8 @@ use crate::capture::FrameCapturePlugin;
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
 use crate::audio::sound_effect;
+use crate::launch::AppState;
+use crate::play::DelveSystems;
 use crate::settings::GameSettings;
 use crate::render::{ArmoryPart, ItemAppearance, MinWidth, OutlineMaterial, ToonMaterial, part_to_mesh};
 use geometry::{CellView, Doorway, LevelMesh};
@@ -38,10 +40,10 @@ impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(abyss_ambient())
             .insert_resource(ClearColor(FOG_COLOR))
-            .add_systems(Startup, (spawn_stone, spawn_fixtures, spawn_debug_camera))
+            .add_systems(OnEnter(AppState::Delving), (spawn_stone, spawn_fixtures, spawn_debug_camera))
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
-            .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames));
+            .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames).in_set(DelveSystems));
     }
 }
 

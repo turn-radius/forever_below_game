@@ -20,10 +20,12 @@ pub enum Action {
     DragItem,
     TurnItem,
     Inventory,
-    /// Closes the open screen, or opens the menu over the level.
+    /// Closes the open screen or page, or opens the menu over the level.
     Back,
-    /// Presses a button in the menu.
+    /// Presses a button in a menu: the title's or the pause menu.
     Choose,
+    /// Begins a new delve from the title screen.
+    NewDelve,
     MusicQuieter,
     MusicLouder,
 }
@@ -79,6 +81,7 @@ fn key_label(key: KeyCode) -> String {
         KeyCode::ControlLeft | KeyCode::ControlRight => "Ctrl",
         KeyCode::AltLeft | KeyCode::AltRight => "Alt",
         KeyCode::Escape => "Esc",
+        KeyCode::Enter | KeyCode::NumpadEnter => "Enter",
         KeyCode::Minus => "-",
         KeyCode::Equal => "=",
         KeyCode::ArrowUp => "Up",
@@ -139,8 +142,9 @@ impl Default for Keymap {
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),
-                bind(Action::Back, "Close a screen, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]),
-                bind(Action::Choose, "Choose in the menu", Group::Screens, &[Mouse(MouseButton::Left)]),
+                bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]),
+                bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]),
+                bind(Action::NewDelve, "New delve, on the title", Group::Screens, &[Key(KeyCode::Enter), Key(KeyCode::NumpadEnter)]),
                 bind(Action::MusicQuieter, "Music quieter", Group::Sound, &[Key(KeyCode::Minus)]),
                 bind(Action::MusicLouder, "Music louder", Group::Sound, &[Key(KeyCode::Equal)]),
             ],
@@ -232,6 +236,7 @@ mod tests {
         assert_eq!(Input::Key(KeyCode::Digit3).label(), "3");
         assert_eq!(Input::Key(KeyCode::Escape).label(), "Esc");
         assert_eq!(Input::Key(KeyCode::Equal).label(), "=");
+        assert_eq!(Keymap::default().binding(Action::NewDelve).unwrap().labels(), vec!["Enter".to_string()]);
         assert_eq!(Input::Mouse(MouseButton::Right).label(), "Right click");
         assert_eq!(Keymap::default().binding(Action::Hurry).unwrap().labels(), vec!["Shift".to_string()]);
     }

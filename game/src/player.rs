@@ -16,7 +16,8 @@ use fb_level::{CELL, Level};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::light::point_light;
 use crate::settings::GameSettings;
-use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, level_has_focus};
+use crate::launch::AppState;
+use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, level_has_focus};
 
 /// The body's radius on the floor in world units (35 cm).
 pub const BODY_RADIUS: f32 = 3.5;
@@ -49,8 +50,8 @@ impl Plugin for PlayerPlugin {
         app.init_resource::<Keymap>()
             // Kept as loaded if `SettingsPlugin` came first.
             .init_resource::<GameSettings>()
-            .add_systems(Startup, (spawn_player, grab_cursor))
-            .add_systems(Update, (take_cursor, look, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens));
+            .add_systems(OnEnter(AppState::Delving), (spawn_player, grab_cursor))
+            .add_systems(Update, (take_cursor, look, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens).in_set(DelveSystems));
     }
 }
 
