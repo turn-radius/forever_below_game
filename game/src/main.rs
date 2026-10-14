@@ -1,6 +1,7 @@
 //! Forever Below. It opens on the title screen; `--turntable` (or `--family`) opens the Armory
 //! turntable instead, and `--doll` the doll view (a dressed body turning on the turntable's
-//! plate: `--doll --folk dwarf --seed 7 --outfit cleric`).
+//! plate: `--doll --folk dwarf --seed 7 --outfit cleric`), and `--creature` the creature view
+//! (a rat or snake on the plate: `--creature --species viper --seed 7 --motion moving`).
 //!
 //! `cargo run -p forever_below -- --seed 1207` plays the level for that seed, skipping the
 //! title, as the debug switches that look at the level do; `--title` keeps the title
@@ -13,6 +14,8 @@
 use bevy::prelude::*;
 use forever_below::{
     capture::FrameCapturePlugin,
+    creature_view::{CreatureChoice, CreatureViewPlugin},
+    frame_time::FrameTimeProbe,
     doll_view::{DollChoice, DollViewPlugin},
     launch::{AppState, Launch, env_set},
     render::ArmoryRenderPlugin,
@@ -29,6 +32,9 @@ fn main() -> AppExit {
     }
     if args.iter().any(|a| a == "--doll") {
         return run_doll(&args);
+    }
+    if args.iter().any(|a| a == "--creature") {
+        return run_creature(&args);
     }
     let launch = match Launch::parse(&args) {
         Ok(launch) => launch,
@@ -51,6 +57,9 @@ fn main() -> AppExit {
     }
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
+    }
+    if let Some(probe) = FrameTimeProbe::from_env() {
+        app.add_plugins(probe);
     }
     app.run()
 }
@@ -91,6 +100,27 @@ fn run_doll(args: &[String]) -> AppExit {
         ..default()
     }))
     .add_plugins((ArmoryRenderPlugin, DollViewPlugin))
+    .insert_resource(choice);
+    if let Some(capture) = FrameCapturePlugin::from_env() {
+        app.add_plugins(capture);
+    }
+    app.run()
+}
+
+fn run_creature(args: &[String]) -> AppExit {
+    let choice = match CreatureChoice::from_args(args.iter().cloned()) {
+        Ok(choice) => choice,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
+        ..default()
+    }))
+    .add_plugins((ArmoryRenderPlugin, CreatureViewPlugin))
     .insert_resource(choice);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);

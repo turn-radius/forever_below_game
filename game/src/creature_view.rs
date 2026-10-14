@@ -1,0 +1,325 @@
+//! The creature view (`--creature`): one rat or snake on the Armory turntable's plate under the
+//! turntable's studio light, posed and animated as in the level, so creatures can be judged
+//! close up as items and bodies are.
+//!
+//! Keys: Tab and Shift+Tab change the species, Left and Right the seed, M the motion (still,
+//! moving, rearing, striking), Space pauses the turn. Command line:
+//! `--creature --species giant_rat --seed 7 --motion moving` ([`CreatureChoice::from_args`]).
+
+use bevy::{camera::Exposure, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera};
+use fb_creatures::pose::{self, RatPose, SnakePose};
+use fb_creatures::{Creature, Species};
+
+use crate::creatures::{transform_of, tongue_flick};
+use crate::light::StudioLight;
+use crate::render::{ItemAppearance, ItemSpawner};
+use crate::turntable::{PLATE, PLATE_INK, SPIN_SPEED, framing_distance};
+
+/// Share of the view the creature fills.
+const FILL: f32 = 0.8;
+/// How far above level the camera looks down, radians.
+const ELEVATION: f32 = 0.42;
+
+pub struct CreatureViewPlugin;
+
+impl Plugin for CreatureViewPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<CreatureChoice>()
+            .init_resource::<ViewSpin>()
+            .insert_resource(ClearColor(PLATE))
+            .insert_resource(StudioLight::ARMORY.ambient_light(&Exposure::INDOOR))
+            .add_systems(Startup, setup)
+            .add_systems(Update, (keys, show_creature.run_if(resource_changed::<CreatureChoice>), spin, move_creature, frame_camera, show_status).chain());
+    }
+}
+
+/// How the shown creature moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewMotion {
+    Still,
+    Moving,
+    Rearing,
+    Striking,
+}
+
+impl ViewMotion {
+    pub const ALL: [ViewMotion; 4] = [ViewMotion::Still, ViewMotion::Moving, ViewMotion::Rearing, ViewMotion::Striking];
+
+    fn parse(name: &str) -> Option<ViewMotion> {
+        ViewMotion::ALL.into_iter().find(|m| m.key() == name)
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            ViewMotion::Still => "still",
+            ViewMotion::Moving => "moving",
+            ViewMotion::Rearing => "rearing",
+            ViewMotion::Striking => "striking",
+        }
+    }
+}
+
+/// What the creature view shows.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CreatureChoice {
+    pub species: Species,
+    pub seed: u32,
+    pub motion: ViewMotion,
+}
+
+impl Default for CreatureChoice {
+    fn default() -> Self {
+        CreatureChoice { species: Species::Rat, seed: 1207, motion: ViewMotion::Still }
+    }
+}
+
+/// A species from its command-line name.
+pub fn parse_species(name: &str) -> Option<Species> {
+    match name.to_ascii_lowercase().replace('-', "_").as_str() {
+        "rat" => Some(Species::Rat),
+        "giant_rat" | "giant" => Some(Species::GiantRat),
+        "poisonous_snake" | "snake" | "viper" => Some(Species::PoisonousSnake),
+        "constrictor_snake" | "constrictor" => Some(Species::ConstrictorSnake),
+        _ => None,
+    }
+}
+
+impl CreatureChoice {
+    /// Parses `--species <name>`, `--seed <n>` and `--motion <still|moving|rearing|striking>`
+    /// (also `--flag=value`); `--creature` itself is skipped.
+    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<CreatureChoice, String> {
+        let mut choice = CreatureChoice::default();
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            let (flag, inline) = match arg.split_once('=') {
+                Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
+                None => (arg, None),
+            };
+            let mut value = || inline.clone().or_else(|| args.next()).ok_or(format!("{flag} needs a value"));
+            match flag.as_str() {
+                "--creature" => {}
+                "--species" => {
+                    let name = value()?;
+                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor"))?;
+                }
+                "--seed" => {
+                    let seed = value()?;
+                    choice.seed = seed.parse().map_err(|_| format!("--seed: {seed:?} is not a u32"))?;
+                }
+                "--motion" => {
+                    let name = value()?;
+                    choice.motion = ViewMotion::parse(&name).ok_or(format!("unknown motion {name:?}; one of still, moving, rearing, striking"))?;
+                }
+                other => return Err(format!("unknown argument {other:?}")),
+            }
+        }
+        Ok(choice)
+    }
+
+    pub fn creature(&self) -> Creature {
+        Creature::of(self.species, self.seed)
+    }
+}
+
+#[derive(Resource, Default)]
+struct ViewSpin {
+    angle: f32,
+    paused: bool,
+}
+
+/// The turning pivot, the shown creature's bone entities, and the size to frame.
+#[derive(Component)]
+struct Shown {
+    creature: Creature,
+    bones: Vec<Entity>,
+    size: Vec3,
+    time: f32,
+    cycle: f32,
+}
+
+#[derive(Component)]
+struct ViewCamera;
+
+#[derive(Component)]
+struct StatusLine;
+
+fn setup(mut commands: Commands) {
+    let exposure = Exposure::INDOOR;
+    commands
+        .spawn((ViewCamera, Camera3d::default(), exposure, Tonemapping::Linear, IsDefaultUiCamera, Transform::from_xyz(0.0, 10.0, 60.0)))
+        .with_child(StudioLight::ARMORY.key_light(&exposure));
+    commands.spawn((
+        StatusLine,
+        Text::default(),
+        TextFont::from_font_size(18.0),
+        TextColor(PLATE_INK),
+        Node { position_type: PositionType::Absolute, top: px(16.0), left: px(20.0), ..default() },
+    ));
+}
+
+fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<CreatureChoice>, mut spin: ResMut<ViewSpin>) {
+    let pressed = |key| keys.just_pressed(key);
+    if pressed(KeyCode::Tab) {
+        let back = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        let at = Species::ALL.iter().position(|&s| s == choice.species).unwrap_or(0) as isize;
+        choice.species = Species::ALL[(at + if back { -1 } else { 1 }).rem_euclid(Species::ALL.len() as isize) as usize];
+    }
+    if pressed(KeyCode::ArrowRight) {
+        choice.seed = choice.seed.wrapping_add(1);
+    }
+    if pressed(KeyCode::ArrowLeft) {
+        choice.seed = choice.seed.wrapping_sub(1);
+    }
+    if pressed(KeyCode::KeyM) {
+        let at = ViewMotion::ALL.iter().position(|&m| m == choice.motion).unwrap_or(0);
+        choice.motion = ViewMotion::ALL[(at + 1) % ViewMotion::ALL.len()];
+    }
+    if pressed(KeyCode::Space) {
+        spin.paused = !spin.paused;
+    }
+}
+
+fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query<Entity, With<Shown>>, mut spawner: ItemSpawner) {
+    for entity in &old {
+        commands.entity(entity).despawn();
+    }
+    let creature = choice.creature();
+    let rig = creature.rig();
+    let Some((lo, hi)) = rig.rest_mesh().bounds() else { return };
+    let reach = Vec2::new(lo[0].abs().max(hi[0]), lo[2].abs().max(hi[2]));
+    let mut size = Vec3::new(reach.x * 2.0, hi[1] - lo[1], reach.y * 2.0);
+    if let Creature::Snake(snake) = &creature
+        && choice.motion != ViewMotion::Still
+    {
+        // Laid out to move or rearing, the snake reaches further than coiled.
+        let laid = rig.posed_mesh(&pose::snake(snake, &SnakePose { coil: 0.0, rear: 1.0, ..SnakePose::REST })).bounds().unwrap_or((lo, hi));
+        let reach = Vec2::new(laid.0[0].abs().max(laid.1[0]), laid.0[2].abs().max(laid.1[2]));
+        size = size.max(Vec3::new(reach.x * 2.0, laid.1[1] - laid.0[1], reach.y * 2.0));
+    }
+    let appearance = ItemAppearance { seed: choice.seed, ..default() };
+    let pivot = commands.spawn((Transform::from_xyz(0.0, 0.0, 0.0), Visibility::default())).id();
+    let mut bones: Vec<Entity> = Vec::new();
+    for bone in &rig.bones {
+        let parent = bone.parent.map_or(pivot, |p| bones[p]);
+        let entity = commands.spawn((transform_of(&bone.rest), Visibility::default(), ChildOf(parent))).id();
+        if !bone.mesh.parts.is_empty() {
+            spawner.spawn(&bone.mesh, &appearance).insert(ChildOf(entity));
+        }
+        bones.push(entity);
+    }
+    commands.entity(pivot).insert(Shown { creature, bones, size, time: 0.0, cycle: 0.0 });
+}
+
+fn spin(time: Res<Time>, mut state: ResMut<ViewSpin>, mut pivots: Query<&mut Transform, With<Shown>>) {
+    if !state.paused {
+        state.angle = (state.angle + SPIN_SPEED * time.delta_secs()) % std::f32::consts::TAU;
+    }
+    for mut transform in &mut pivots {
+        transform.rotation = Quat::from_rotation_y(state.angle);
+    }
+}
+
+/// Poses the creature as its motion says: walking in place at its own speed, rearing, or
+/// striking over and over.
+fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<&mut Shown>, mut transforms: Query<&mut Transform, Without<Shown>>) {
+    let dt = time.delta_secs();
+    for shown in &mut shown {
+        let shown = shown.into_inner();
+        shown.time += dt;
+        let t = shown.time;
+        let moving = choice.motion == ViewMotion::Moving;
+        let speed = if moving { choice.species.speed() } else { 0.0 };
+        // A strike every two seconds: drawn back, thrown in a tenth of a second, held, back.
+        let strike = if choice.motion == ViewMotion::Striking { strike_curve(t % 2.0) } else { 0.0 };
+        let places = match &shown.creature {
+            Creature::Rat(rat) => {
+                shown.cycle = (shown.cycle + speed * dt / pose::rat_stride(rat) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                pose::rat(rat, &RatPose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, bite: strike, look: 0.0 })
+            }
+            Creature::Snake(snake) => {
+                shown.cycle += speed * dt / (pose::WAVELENGTH * snake.dims().body_length) * std::f32::consts::TAU;
+                let (coil, rear) = match choice.motion {
+                    ViewMotion::Still => (1.0, 0.45),
+                    ViewMotion::Moving => (0.0, 0.0),
+                    ViewMotion::Rearing | ViewMotion::Striking => (0.65, 1.0),
+                };
+                pose::snake(snake, &SnakePose { phase: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, coil, rear, strike, jaw: strike, tongue: tongue_flick(t), look: 0.0 })
+            }
+        };
+        for (entity, place) in shown.bones.iter().zip(&places) {
+            if let Ok(mut transform) = transforms.get_mut(*entity) {
+                *transform = transform_of(place);
+            }
+        }
+    }
+}
+
+/// A strike's reach over two seconds: thrown fast, held a moment, drawn back slowly.
+pub fn strike_curve(t: f32) -> f32 {
+    match t {
+        t if t < 1.0 => 0.0,
+        t if t < 1.1 => (t - 1.0) / 0.1,
+        t if t < 1.35 => 1.0,
+        t => (1.0 - (t - 1.35) / 0.5).max(0.0),
+    }
+}
+
+/// Stands the camera back and above the pivot so the turning creature fills [`FILL`] of the
+/// view.
+fn frame_camera(shown: Query<&Shown>, mut cameras: Query<(&Projection, &mut Transform), With<ViewCamera>>) {
+    let Some(shown) = shown.iter().next() else { return };
+    for (projection, mut transform) in &mut cameras {
+        let Projection::Perspective(perspective) = projection else { continue };
+        // The turntable's framing allows for the whole sweep; a creature is lower and longer.
+        let distance = 0.6 * framing_distance(shown.size, perspective, FILL);
+        let centre = Vec3::new(0.0, shown.size.y * 0.5, 0.0);
+        let target = Transform::from_translation(centre + Vec3::new(0.0, ELEVATION.sin(), ELEVATION.cos()) * distance).looking_at(centre, Vec3::Y);
+        if *transform != target {
+            *transform = target;
+        }
+    }
+}
+
+fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<StatusLine>>) {
+    if !choice.is_changed() {
+        return;
+    }
+    let creature = choice.creature();
+    let block = choice.species.stat_block();
+    let look = match &creature {
+        Creature::Rat(r) => format!("{:?}, {:?}, {:.0} cm", r.colouring, r.pattern, r.length * 10.0),
+        Creature::Snake(s) => format!("{:?}, {:?}, {:.1} m", s.colouring, s.pattern, s.length / 10.0),
+    };
+    let line = format!(
+        "{}   seed {}   {}   {:?}\nHit Points {} ({})   Bite {}\nTab species   Left/Right seed   M motion   Space pause",
+        block.name, choice.seed, look, choice.motion, block.hit_points, block.hit_dice, block.bite
+    );
+    for mut text in &mut status {
+        text.0.clone_from(&line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(line: &str) -> Vec<String> {
+        line.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn parses_the_command_line() {
+        let choice = CreatureChoice::from_args(args("--creature --species giant_rat --seed 7 --motion moving")).unwrap();
+        assert_eq!((choice.species, choice.seed, choice.motion), (Species::GiantRat, 7, ViewMotion::Moving));
+        assert_eq!(CreatureChoice::from_args(args("--species=constrictor")).unwrap().species, Species::ConstrictorSnake);
+        assert!(CreatureChoice::from_args(args("--species dragon")).is_err());
+        assert!(CreatureChoice::from_args(args("--motion flying")).is_err());
+    }
+
+    #[test]
+    fn a_strike_is_thrown_and_drawn_back() {
+        assert_eq!(strike_curve(0.5), 0.0);
+        assert_eq!(strike_curve(1.2), 1.0);
+        assert_eq!(strike_curve(1.95), 0.0);
+    }
+}

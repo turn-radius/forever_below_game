@@ -67,6 +67,21 @@ One folk's body, dressed in a rolled outfit and holding what it carries, turning
 
 Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 
+### The creature view
+
+```
+cargo run -p forever_below -- --creature
+cargo run -p forever_below -- --creature --species constrictor --seed 7 --motion rearing
+```
+
+One rat or snake on the turntable's plate, posed and animated as in the level, with its SRD hit points and bite.
+
+- `--species <name>`: rat (the default), giant_rat, viper (the poisonous snake) or constrictor.
+- `--seed <n>` rolls the creature; 1207 by default.
+- `--motion <name>`: still (the default), moving (trotting or slithering in place at its own speed), rearing or striking.
+
+Tab and Shift+Tab change the species, Left and Right the seed, M the motion, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
+
 ### Screenshots and debug switches
 
 These environment variables are for checking the game without playing it. Put them in front of the command, for example `FB_SCREENSHOT=shot.png cargo run -p forever_below`.
@@ -88,6 +103,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
+| `FB_FRAME_TIME=<frames>` | prints Bevy's smoothed frame time at each listed frame (`240,270,300`) and quits after the last; with `FB_DEBUG_POSE`, measures a view's frame rate in the window at vsync |
 
 Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_ASSET_ROOT=game` so it finds the music and fonts; `cargo run` finds them on its own.
 
