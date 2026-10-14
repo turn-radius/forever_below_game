@@ -137,6 +137,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[view]` | `aim_buffer_degrees` | 2.0 | How far off the crosshair, in degrees, something can be and still be aimed at. |
 | `[view]` | `aim_min_radius` | 0.6 | The least that leeway is, in world units off the crosshair, for small things close by (0.6 = 6 cm). |
 | `[view]` | `legendary_shimmer` | 0.25 | How strongly a legendary lying on the floor shimmers (0 = not at all). It lights nothing. |
+| `[view]` | `container_scale` | 1.6 | How much larger than its own size a chest, barrel, crate or other container standing in the level is drawn (1 = true size; 1.6 makes a chest about a metre wide). |
 | `[moving]` | `walk_speed` | 14.0 | Walking pace, in world units per second (14 = 1.4 m/s). |
 | `[moving]` | `hurry_speed` | 45.0 | Pace with Shift held, in world units per second. |
 | `[moving]` | `acceleration` | 10.0 | How quickly you reach your pace and stop, per second (higher is snappier). |

@@ -217,5 +217,5 @@ pub mod path;
 pub mod props;
 pub use creatures::CreatureSpot;
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
-pub use props::{FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
+pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use generate::generate;

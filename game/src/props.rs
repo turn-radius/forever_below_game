@@ -6,8 +6,11 @@
 //!   pillars) is built by `armory::build::scenery` and drawn as the level's fixtures are.
 //! - Each rests on the drawn floor (`geometry::Relief::floor_height`) at its lowest point
 //!   under it, turned to its spot's yaw, and is lit by the level's lights like everything else.
+//!   Containers are drawn larger than true Armory scale, at the tuning's `container_scale`
+//!   ([`prop_scale`]), so a chest is about a metre wide.
 //! - Each blocks the way ([`BlocksTheWay`]) with its `fb_level::FloorShape`: a circle for
-//!   round things, a rectangle turned with it for chests, crates and pillars.
+//!   round things, a rectangle turned with it for chests, crates and pillars, grown or shrunk
+//!   with a container's scale ([`prop_floor_shape`]).
 //! - Every container is kept track of in the [`Inventory`], loose, as an item with its inner
 //!   grid (`fb_items::container_item`), filled when the level is laid out with what its loot
 //!   seed rolls (`fb_items::roll_contents`). What is in it stays there for the rest of the run,
@@ -34,6 +37,7 @@ use crate::keymap::{Action, ActionInput, Keymap};
 use crate::level::{LevelPiece, fixture_appearance, geometry::Relief};
 use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, Screen, ScreenOpen, level_has_focus, show_screen};
 use crate::render::ItemSpawner;
+use crate::tuning::Tuning;
 
 pub struct PropsPlugin;
 
@@ -48,6 +52,7 @@ impl Plugin for PropsPlugin {
                 Update,
                 (
                     lay_out_props.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    rescale_props.run_if(resource_exists_and_changed::<Tuning>),
                     open_aimed_container.run_if(level_has_focus),
                     open_for_capture.run_if(|| std::env::var("FB_OPEN_CONTAINER").is_ok()),
                 )
@@ -93,35 +98,63 @@ pub fn prop_mesh(prop: Prop, level: &Level, opened: bool) -> (armory::ItemMesh, 
     }
 }
 
-/// Where a prop of item-space `points` stands at `spot`: turned to its yaw, with its lowest
-/// point at the lowest the drawn floor falls under its footprint, less [`SINK`].
-pub fn prop_transform(level: &Level, spot: &PropSpot, points: &[Vec3]) -> Option<Transform> {
-    let low = points.iter().map(|p| p.y).reduce(f32::min)?;
+/// How much larger than its own size `prop` is drawn: a container at the tuning's
+/// `container_scale`, scenery as built.
+pub fn prop_scale(prop: Prop, tuning: &Tuning) -> f32 {
+    if prop.is_container() { tuning.view.container_scale } else { 1.0 }
+}
+
+/// The floor `prop` blocks drawn `scale` times its size ([`prop_scale`]). `fb_level` sizes a
+/// container's shape for [`fb_level::CONTAINER_SCALE`]; another scale grows or shrinks it.
+pub fn prop_floor_shape(prop: Prop, scale: f32) -> fb_level::FloorShape {
+    let shape = prop.floor_shape();
+    if prop.is_container() { shape.scaled(scale / fb_level::CONTAINER_SCALE) } else { shape }
+}
+
+/// Where a prop whose item-space lowest point is `low` stands at `spot`, drawn `scale` times
+/// its size: turned to its yaw, with its lowest point at the lowest the drawn floor falls
+/// under its footprint, less [`SINK`].
+pub fn prop_transform(level: &Level, spot: &PropSpot, low: f32, scale: f32) -> Transform {
     let relief = Relief::new(level);
     let centre = Vec3::from_array(Level::world(spot.x, spot.y));
-    let reach = spot.prop.floor_shape().radius();
+    let reach = prop_floor_shape(spot.prop, scale).radius();
     let floor = std::iter::once(Vec2::ZERO)
         .chain((0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * reach * 0.8))
         .map(|offset| relief.floor_height(centre.x + offset.x, centre.z + offset.y))
         .fold(f32::INFINITY, f32::min);
-    Some(Transform::from_translation(Vec3::new(centre.x, floor - low - SINK, centre.z)).with_rotation(Quat::from_rotation_y(spot.yaw)))
+    Transform::from_translation(Vec3::new(centre.x, floor - low * scale - SINK, centre.z))
+        .with_rotation(Quat::from_rotation_y(spot.yaw))
+        .with_scale(Vec3::splat(scale))
 }
 
-/// Spawns prop `index` of the level, shut or `opened`, and returns its commands to insert on.
-/// `None` for a prop with no vertices.
-pub fn spawn_prop<'a>(spawner: &'a mut ItemSpawner, level: &Level, index: usize, opened: bool) -> Option<EntityCommands<'a>> {
+/// Spawns prop `index` of the level, shut or `opened`, at the tuning's scale ([`prop_scale`]),
+/// and returns its commands to insert on. `None` for a prop with no vertices.
+pub fn spawn_prop<'a>(spawner: &'a mut ItemSpawner, level: &Level, index: usize, opened: bool, tuning: &Tuning) -> Option<EntityCommands<'a>> {
     let spot = *level.props.get(index)?;
     let (mesh, appearance) = prop_mesh(spot.prop, level, opened);
     let points = item_points(&mesh);
-    let transform = prop_transform(level, &spot, &points)?;
-    let (min, max) = points.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), &p| (lo.min(p), hi.max(p)));
+    let (min, max) = points.iter().fold(None, |acc: Option<(Vec3, Vec3)>, &p| Some(acc.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p)))))?;
+    let scale = prop_scale(spot.prop, tuning);
+    let transform = prop_transform(level, &spot, min.y, scale);
     let name = match spot.prop {
         Prop::Container { style, .. } => format!("{style:?}"),
         Prop::Scenery { kind, .. } => format!("{kind:?}"),
     };
     let mut root = spawner.spawn(&mesh, &appearance);
-    root.insert((LevelPiece, Name::new(name), transform, PropPiece { index, spot, min, max }, BlocksTheWay(spot.prop.floor_shape())));
+    root.insert((LevelPiece, Name::new(name), transform, PropPiece { index, spot, min, max }, BlocksTheWay(prop_floor_shape(spot.prop, scale))));
     Some(root)
+}
+
+/// Redraws every prop at the tuning's scale when it changes, standing where it stood, with the
+/// floor it blocks to match.
+fn rescale_props(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut props: Query<(&PropPiece, &mut Transform, &mut BlocksTheWay)>) {
+    for (piece, mut transform, mut blocks) in &mut props {
+        let scale = prop_scale(piece.spot.prop, &tuning);
+        if transform.scale.x != scale {
+            *transform = prop_transform(&level.0, &piece.spot, piece.min.y, scale);
+            blocks.0 = prop_floor_shape(piece.spot.prop, scale);
+        }
+    }
 }
 
 /// Keeps track of a container prop in `inventory`, loose, holding what its loot rolls: each
@@ -148,8 +181,10 @@ fn lay_out_props(
     level: Res<CurrentLevel>,
     old: Query<(Entity, Option<&Container>), With<PropPiece>>,
     mut inventory: ResMut<Inventory>,
+    tuning: Option<Res<Tuning>>,
     mut spawner: ItemSpawner,
 ) {
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
     for (entity, container) in &old {
         if let Some(container) = container {
             inventory.forget(container.id);
@@ -158,7 +193,7 @@ fn lay_out_props(
     }
     for (index, spot) in level.0.props.iter().enumerate() {
         let stocked = stock_container(&mut inventory, spot.prop);
-        if let Some(mut root) = spawn_prop(&mut spawner, &level.0, index, false)
+        if let Some(mut root) = spawn_prop(&mut spawner, &level.0, index, false, &tuning)
             && let Some(id) = stocked
         {
             root.insert(Container { id, opened: false });
@@ -179,6 +214,7 @@ pub fn open_container(
     open: &mut ScreenOpen,
     showing: &mut OpenContainer,
     cursor: Option<&mut CursorOptions>,
+    tuning: &Tuning,
 ) {
     showing.0 = Some(container.id);
     show_screen(open, Some(Screen::Inventory), cursor);
@@ -186,7 +222,7 @@ pub fn open_container(
         return;
     }
     commands.entity(entity).despawn();
-    if let Some(mut root) = spawn_prop(spawner, level, piece.index, true) {
+    if let Some(mut root) = spawn_prop(spawner, level, piece.index, true, tuning) {
         root.insert(Container { opened: true, ..container });
     }
 }
@@ -202,6 +238,7 @@ fn open_aimed_container(
     mut open: ResMut<ScreenOpen>,
     mut showing: ResMut<OpenContainer>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+    tuning: Option<Res<Tuning>>,
     mut spawner: ItemSpawner,
 ) {
     if !input.just_pressed(Action::PickUp) {
@@ -211,7 +248,8 @@ fn open_aimed_container(
     let Ok((piece, &container)) = containers.get(entity) else { return };
     aimed.0 = None;
     let cursor = cursor.as_deref_mut().map(|c| &mut **c);
-    open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut open, &mut showing, cursor);
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut open, &mut showing, cursor, &tuning);
 }
 
 /// For captures (`FB_OPEN_CONTAINER=<n>`): a few frames in, opens the level's `n`th container.
@@ -223,6 +261,7 @@ fn open_for_capture(
     mut open: ResMut<ScreenOpen>,
     mut showing: ResMut<OpenContainer>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+    tuning: Option<Res<Tuning>>,
     mut spawner: ItemSpawner,
     mut frames: Local<u32>,
 ) {
@@ -235,7 +274,8 @@ fn open_for_capture(
     all.sort_by_key(|(_, piece, _)| piece.index);
     let Some(&(entity, piece, &container)) = all.get(n) else { return };
     let cursor = cursor.as_deref_mut().map(|c| &mut **c);
-    open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut open, &mut showing, cursor);
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut open, &mut showing, cursor, &tuning);
 }
 
 /// A prop's centre on the floor plane (world `(x, z)`).
@@ -451,13 +491,54 @@ mod tests {
     }
 
     #[test]
+    fn containers_are_drawn_a_metre_wide_and_block_what_they_cover() {
+        let level = fb_level::generate(1207);
+        let tuning = Tuning::default();
+        for spot in level.props.iter().filter(|s| s.prop.is_container()) {
+            let scale = prop_scale(spot.prop, &tuning);
+            let (mesh, _) = prop_mesh(spot.prop, &level, true);
+            let (lo, hi) = mesh.bounds().unwrap();
+            let (lo, hi) = (Vec3::from_array(lo) * scale, Vec3::from_array(hi) * scale);
+            if let Prop::Container { style: armory::families::chests::ChestStyle::Chest, .. } = spot.prop {
+                let width = hi.x - lo.x;
+                assert!((8.5..=12.0).contains(&width), "a chest {width} wide");
+            }
+            match prop_floor_shape(spot.prop, scale) {
+                FloorShape::Round(r) => assert!(lo.x.abs().max(hi.x).max(lo.z.abs()).max(hi.z) <= r, "{spot:?}"),
+                FloorShape::Square { half_width, half_depth } => {
+                    let behind = spot.prop.room_behind() * scale / fb_level::CONTAINER_SCALE;
+                    assert!(lo.x >= -half_width && hi.x <= half_width && hi.z <= half_depth && lo.z >= -half_depth - behind, "{spot:?}: {lo} {hi}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_changed_container_scale_redraws_props_where_they_stand() {
+        let mut app = props_app();
+        app.init_resource::<Tuning>();
+        app.update();
+        let (entity, _) = chest(&mut app);
+        let before = *app.world().get::<Transform>(entity).unwrap();
+        assert_eq!(before.scale, Vec3::splat(fb_level::CONTAINER_SCALE));
+        app.world_mut().resource_mut::<Tuning>().view.container_scale = 1.0;
+        app.update();
+        let after = *app.world().get::<Transform>(entity).unwrap();
+        assert_eq!(after.scale, Vec3::ONE);
+        assert_eq!(after.translation.xz(), before.translation.xz());
+        let blocks = app.world().get::<BlocksTheWay>(entity).unwrap().0;
+        assert!(blocks.radius() < prop_floor_shape(app.world().get::<PropPiece>(entity).unwrap().spot.prop, fb_level::CONTAINER_SCALE).radius());
+    }
+
+    #[test]
     fn no_prop_on_1207_floats_or_sinks() {
         let level = fb_level::generate(1207);
         let relief = Relief::new(&level);
         for (index, spot) in level.props.iter().enumerate() {
             let (mesh, _) = prop_mesh(spot.prop, &level, false);
             let points = item_points(&mesh);
-            let transform = prop_transform(&level, spot, &points).unwrap();
+            let low = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+            let transform = prop_transform(&level, spot, low, prop_scale(spot.prop, &Tuning::default()));
             let bottom = points.iter().map(|&p| transform.transform_point(p).y).fold(f32::INFINITY, f32::min);
             let floor = relief.floor_height(transform.translation.x, transform.translation.z);
             assert!(bottom <= floor + 1e-3, "prop {index} floats: base {bottom}, floor {floor}");
@@ -478,7 +559,7 @@ mod tests {
                 Obstacle::Circle { centre: c, .. } | Obstacle::Rect { centre: c, .. } => c.abs_diff_eq(centre, 1e-3),
             };
             let obstacle = obstacles.iter().find(at).unwrap_or_else(|| panic!("{spot:?} blocks nothing"));
-            match (spot.prop.floor_shape(), obstacle) {
+            match (prop_floor_shape(spot.prop, prop_scale(spot.prop, &Tuning::default())), obstacle) {
                 (FloorShape::Round(r), Obstacle::Circle { centre: c, radius }) => assert!(c.abs_diff_eq(centre, 1e-3) && *radius == r),
                 (FloorShape::Square { .. }, Obstacle::Rect { centre: c, .. }) => assert!(c.abs_diff_eq(centre, 1e-3)),
                 other => panic!("{other:?}"),
