@@ -3,7 +3,8 @@
 //!
 //! `FB_SCREENSHOT=path.png cargo run -p forever_below` turns it on via [`FrameCapturePlugin::from_env`].
 //! Adding `FB_SCREENSHOT_FRAMES=120..136` saves a run of consecutive frames instead, as
-//! `path_120.png` up to `path_135.png`, to compare frame by frame.
+//! `path_120.png` up to `path_135.png`, to compare frame by frame; `FB_SCREENSHOT_EVERY=30` saves
+//! only every 30th of them, for a long run such as a fall, the title and the next delve.
 //!
 //! A capture shows exactly what its command line and environment ask for. The window still
 //! opens, and on macOS it takes focus, so keys typed meant for a terminal (two W presses step
@@ -34,6 +35,8 @@ pub struct FrameCapturePlugin {
     /// The frames to save. One frame is saved to `path` itself; a longer run saves each frame
     /// `n` to `path` with `_n` before its extension ([`FrameCapturePlugin::path_for`]).
     pub frames: Range<u32>,
+    /// Of `frames`, save only every this many (1 saves them all).
+    pub every: u32,
     pub exit_frame: u32,
 }
 
@@ -49,21 +52,27 @@ impl FrameCapturePlugin {
     pub fn frames(path: impl Into<String>, frames: Range<u32>) -> Self {
         let frames = frames.start..frames.end.max(frames.start + 1);
         let exit_frame = frames.end + Self::SETTLE_FRAMES;
-        FrameCapturePlugin { path: path.into(), size: UVec2::new(1920, 1080), frames, exit_frame }
+        FrameCapturePlugin { path: path.into(), size: UVec2::new(1920, 1080), frames, every: 1, exit_frame }
     }
 
     /// The plugin when `FB_SCREENSHOT` is set, saving the frames `FB_SCREENSHOT_FRAMES` names.
     pub fn from_env() -> Option<Self> {
         let path = std::env::var("FB_SCREENSHOT").ok().filter(|path| !path.is_empty())?;
         let frames = std::env::var("FB_SCREENSHOT_FRAMES").ok().filter(|f| !f.is_empty());
+        let every = std::env::var("FB_SCREENSHOT_EVERY").ok().and_then(|n| n.trim().parse::<u32>().ok()).unwrap_or(1).max(1);
         match frames.as_deref().map(parse_frames) {
             None => Some(FrameCapturePlugin::new(path)),
-            Some(Ok(frames)) => Some(FrameCapturePlugin::frames(path, frames)),
+            Some(Ok(frames)) => Some(FrameCapturePlugin { every, ..FrameCapturePlugin::frames(path, frames) }),
             Some(Err(error)) => {
                 warn!("FB_SCREENSHOT_FRAMES: {error}; saving one frame");
                 Some(FrameCapturePlugin::new(path))
             }
         }
+    }
+
+    /// Whether frame `frame` is one to save.
+    pub fn saves(&self, frame: u32) -> bool {
+        self.frames.contains(&frame) && (frame - self.frames.start).is_multiple_of(self.every.max(1))
     }
 
     /// Where frame `frame` is saved: `path` for a single frame, else `path` with `_<frame>`
@@ -188,7 +197,7 @@ fn capture_and_exit(
 ) {
     let Some(target) = target else { return };
     *frame += 1;
-    if settings.frames.contains(&*frame) {
+    if settings.saves(*frame) {
         commands.spawn(Screenshot::image(target.0.clone())).observe(save_to_disk(settings.path_for(*frame)));
     }
     if *frame == settings.exit_frame {
@@ -213,6 +222,8 @@ mod tests {
     fn a_run_of_frames_numbers_each_file() {
         let one = FrameCapturePlugin::new("out/shot.png");
         assert_eq!(one.path_for(120), "out/shot.png");
+        let sparse = FrameCapturePlugin { every: 30, ..FrameCapturePlugin::frames("shot.png", 100..200) };
+        assert_eq!((100..200).filter(|&f| sparse.saves(f)).collect::<Vec<_>>(), vec![100, 130, 160, 190]);
         let run = FrameCapturePlugin::frames("out/shot.png", 120..136);
         assert_eq!(run.path_for(120), "out/shot_120.png");
         assert_eq!(run.path_for(135), "out/shot_135.png");

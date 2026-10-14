@@ -34,7 +34,7 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 | Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
 
-Rats and snakes notice you, close in and bite. Your hit points show low on the left ("HP 8/12", a 1st-level character's from the SRD), and the edge of the view flashes red when you are bitten; a poisonous snake's venom is halved on a Constitution save, and a constrictor holds you, slowed, until you strike it. A blow lands on the nearest creature within your weapon's reach ahead, for its damage dice; struck creatures flash, flinch and squeak or hiss, and at 0 they fall and their bodies stay where they lie. At 0 hit points you fall in the abyss and go back to the title. Combat is a placeholder until the character simulation is designed.
+Rats and snakes notice you, close in and bite. Your hit points show low on the left ("HP 8/12", a 1st-level character's from the SRD), and the edge of the view flashes red when you are bitten; a poisonous snake's venom is halved on a Constitution save, and a constrictor holds you, slowed, until you strike it. A blow lands on the nearest creature whose body (head, legs, tail, any part of a snake) is within your weapon's reach ahead, for its damage dice; a thrust drives the point at the crosshair. Struck creatures flash, flinch and squeak or hiss, and at 0 they fall and their bodies stay where they lie. At 0 hit points you fall in the abyss and go back to the title. Combat is a placeholder until the character simulation is designed.
 
 Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
 
@@ -93,6 +93,7 @@ These environment variables are for checking the game without playing it. Put th
 |---|---|
 | `FB_SCREENSHOT=<file.png>` | renders offscreen, saves one frame and quits; keyboard and mouse are ignored |
 | `FB_SCREENSHOT_FRAMES=<from>..<to>` | with `FB_SCREENSHOT=shot.png`, saves each frame from `from` up to (not including) `to` as `shot_<frame>.png` (`120..136` saves `shot_120.png` to `shot_135.png`; `120..=135` and a single `120` also work), to compare consecutive frames |
+| `FB_SCREENSHOT_EVERY=<n>` | with `FB_SCREENSHOT_FRAMES`, saves only every `n`th frame of the run (`1..900` every `15` saves `shot_1.png`, `shot_16.png`, ...), for long runs such as a fall, the title and the next delve |
 | `FB_WEAR=<state>` | turntable starting condition (`--wear` wins) |
 | `FB_CLOSEUP=<0–11>` | turntable opens on a close-up of that grid slot |
 | `FB_DEBUG_POSE=x,y,yaw,pitch` | holds the player at a grid point (cells), turned `yaw` degrees from north and tilted `pitch` degrees |
@@ -103,6 +104,8 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
 | `FB_SWING=1` | swings the main hand over and over, for captures of the swing and of blows landing (with `FB_HOLD` and `FB_DEBUG_POSE`) |
 | `FB_HOLD=<main>[,<off>]` | puts an item of each named base in that hand, after the starting or debug kit (`Mace,Torch`, `Sword,Shield`, `Staff,none`; a torch or lantern is lit, `none` empties the hand) |
+| `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |
+| `FB_NEW_DELVE=<seconds>` | the title chooses New delve by itself after that many seconds, each time it shows; with `FB_PLAYER_HP=1` and `FB_SCREENSHOT_FRAMES`, captures a fall, the title and the next delve without input |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |

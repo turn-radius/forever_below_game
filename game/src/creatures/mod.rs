@@ -14,7 +14,10 @@
 //!   as a whole when it turns.
 //! - Standing about, a creature idles ([`idle`]): rats sniff and sway their tails, snakes lie
 //!   coiled, now and then raising their heads and tasting the air.
-//! - Only each bone's main surface casts a shadow ([`SHADOW_PARTS`]), and a creature beyond
+//! - Each bone carries the capsule it presents to a blow ([`HitShape`], from
+//!   `fb_creatures::Bone::hit`), so a blow finds a rat's head or tail and every segment of a
+//!   laid-out snake as they are posed, not one circle at the root.
+//! - Only each bone's main surface casts a shadow (`fb_creatures::rig::SURFACE_PARTS`), and a creature beyond
 //!   [`POSE_RANGE`] of the player holds its pose, so a level's creatures cost the frame little.
 
 use armory::cond::{Condition, ConditionState};
@@ -22,6 +25,7 @@ use bevy::{app::Propagate, light::NotShadowCaster, prelude::*};
 use fb_body::Placement;
 use fb_creatures::pose::{self, RatPose, SnakePose};
 use fb_creatures::Creature;
+use fb_creatures::rig::{Capsule, SURFACE_PARTS};
 use fb_level::{CreatureSpot, Level};
 use procgen_rng::Mulberry32;
 
@@ -47,6 +51,22 @@ pub struct Critter {
     pub creature: Creature,
     /// The circle it covers on the floor, world units.
     pub radius: f32,
+}
+
+/// On a bone: the capsule it presents to a blow, in its own space ([`fb_creatures::Bone::hit`]).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct HitShape(pub Capsule);
+
+impl HitShape {
+    /// Spheres that cover the capsule placed by `at` (a bone's world transform): as many along
+    /// it as its length holds radii, so neighbours overlap. Each is its centre and radius in
+    /// world units. Our own stand-in for a capsule test.
+    pub fn spheres(&self, at: &GlobalTransform) -> impl Iterator<Item = (Vec3, f32)> + use<> {
+        let (a, b) = (at.transform_point(Vec3::from_array(self.0.a)), at.transform_point(Vec3::from_array(self.0.b)));
+        let radius = self.0.radius * at.scale().max_element();
+        let count = ((a.distance(b) / radius.max(1e-3)).ceil() as usize).clamp(1, 32);
+        (0..=count).map(move |i| (a.lerp(b, i as f32 / count as f32), radius))
+    }
 }
 
 /// The bone entities of a creature, in its rig's order.
@@ -208,7 +228,7 @@ pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level:
         // Only a bone's main surface casts a shadow: eyes, whiskers, claws, teeth, markings
         // and bellies inside its shadow add nothing to it but draw into every nearby light's
         // shadow maps (a snake has three parts to a segment).
-        let (casts, details): (Vec<_>, Vec<_>) = bone.mesh.parts.iter().cloned().partition(|p| SHADOW_PARTS.contains(&p.name));
+        let (casts, details): (Vec<_>, Vec<_>) = bone.mesh.parts.iter().cloned().partition(|p| SURFACE_PARTS.contains(&p.name));
         for (parts, shadow) in [(casts, true), (details, false)] {
             if parts.is_empty() {
                 continue;
@@ -226,9 +246,6 @@ pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level:
 /// How near the player a creature must be for its pose to change, world units (20 m): well
 /// past a torch's reach and short of the fog's end (`level::FOG_END`, 26 m). Our own.
 const POSE_RANGE: f32 = 200.0;
-
-/// The parts that cast a creature's shadow: each bone's main surface.
-const SHADOW_PARTS: [&str; 6] = ["fur", "spine", "head", "jaw", "tail", "paw"];
 
 /// Salt for a creature's grime. Our own.
 const GRIME_SALT: u32 = 0x6121_3E00;
@@ -254,7 +271,11 @@ pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpo
     let mut bones: Vec<Entity> = Vec::with_capacity(rig.bones.len());
     for bone in &rig.bones {
         let parent = bone.parent.map_or(root, |p| bones[p]);
-        bones.push(commands.spawn((Name::new(bone.name.clone()), transform_of(&bone.rest), Visibility::default(), ChildOf(parent))).id());
+        let mut entity = commands.spawn((Name::new(bone.name.clone()), transform_of(&bone.rest), Visibility::default(), ChildOf(parent)));
+        if let Some(hit) = bone.hit() {
+            entity.insert(HitShape(hit));
+        }
+        bones.push(entity.id());
     }
     commands.entity(root).insert(Bones(bones.clone()));
     if snake {

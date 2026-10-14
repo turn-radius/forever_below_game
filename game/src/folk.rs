@@ -430,6 +430,7 @@ fn spawn_folk_card(mut commands: Commands, cards: Query<(), With<FolkCard>>, cam
     let Some(camera) = cameras.iter().next() else { return };
     commands.spawn((
         Name::new("Folk card"),
+        DespawnOnExit(crate::launch::AppState::Delving),
         FolkCard,
         UiTargetCamera(camera),
         Node {

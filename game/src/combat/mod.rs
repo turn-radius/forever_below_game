@@ -6,11 +6,13 @@
 //! - **Swinging** ([`swing`]): the attack key swings what the main hand holds, in a shape
 //!   that suits the hold ([`SwingKind`]): a chop for maces, axes and clubs, a slash for
 //!   swords, a thrust for spears and daggers, a sweep for a staff, a punch with nothing in
-//!   hand. Partway through, the blow lands on the nearest creature within the weapon's reach
-//!   in a cone ahead ([`target_in_reach`]), for the weapon's damage dice ([`Weapon::roll`]).
+//!   hand; a thrust drives the item's point at the crosshair ([`swing::Aim`]). Partway through,
+//!   the blow lands on the nearest creature whose body, as its bones are posed
+//!   ([`swing::body_targets`]), is within the weapon's reach in a cone ahead
+//!   ([`target_in_reach`]), for the weapon's damage dice ([`Weapon::roll`]).
 //!   Every swing that finds a creature hits: no attack roll against its Armor Class yet.
 //! - **Taking hits** ([`feedback`]): a struck creature flashes, twitches back and squeaks or
-//!   hisses. At 0 hit points it collapses, a rat rolling over and a snake going limp along the
+//!   hisses. At 0 hit points it holds, flashing, for a moment, then collapses, a rat rolling over and a snake going limp along the
 //!   floor, and its body stays for the run. Bodies block nothing: they lie flat (a rat on its
 //!   back, a snake stretched out), low enough to step over.
 //! - **Being bitten** ([`vitals`]): a creature's bite ([`CreatureAttack`]) takes the delver's
@@ -411,7 +413,7 @@ mod tests {
         app.update();
         let hp = app.world().get::<Health>(rat).unwrap().hp;
         assert_eq!(hp, 1, "a rat has the SRD's 1 hit point");
-        swing_at(&mut app, player, 40);
+        swing_at(&mut app, player, 60);
         assert!(app.world().get::<Corpse>(rat).is_some(), "the rat fell to one blow");
         let fell = app.world().get::<Transform>(rat).unwrap().translation;
         // Its body stays for the run, still, and blocks nobody.
@@ -423,6 +425,84 @@ mod tests {
         assert!(now.translation.xz().distance(fell.xz()) < 0.5, "the body lies where it fell");
         assert!((now.rotation * Vec3::Y).y < -0.5, "on its back");
         assert!(app.world().get::<crate::creatures::behaviour::Brain>(rat).is_none());
+    }
+
+    #[test]
+    fn a_killed_rat_flashes_before_it_rolls() {
+        use feedback::{COLLAPSE_TIME, Corpse, DEATH_HOLD, Flinch, flash_strength};
+        let (mut app, player, rat) = fight(Some("Sword"), 9.0);
+        app.update();
+        let weapon = Weapon::in_hand(app.world().resource::<Inventory>(), app.world().resource::<Character>());
+        app.world_mut().entity_mut(player).insert(swing::Swing { weapon, t: 0.0, landed: false });
+        let mut frames = 0;
+        while app.world().get::<Corpse>(rat).is_none() {
+            app.update();
+            frames += 1;
+            assert!(frames < 60, "the blow never landed");
+        }
+        // Through the hold it stands where it was struck, flashing at full.
+        let mut held = 0;
+        while app.world().get::<Corpse>(rat).unwrap().since < DEATH_HOLD - 1e-3 {
+            let flinch = app.world().get::<Flinch>(rat).expect("flashing");
+            assert_eq!(flash_strength(flinch.left), 1.0);
+            let now = app.world().get::<Transform>(rat).unwrap();
+            assert!((now.rotation * Vec3::Y).y > 0.99, "rolling during the hold");
+            held += 1;
+            app.update();
+        }
+        assert!(held >= 6, "held {held} frames");
+        // Then it rolls over.
+        for _ in 0..((COLLAPSE_TIME * 60.0) as usize + 2) {
+            app.update();
+        }
+        let now = app.world().get::<Transform>(rat).unwrap();
+        assert!((now.rotation * Vec3::Y).y < -0.5, "on its back");
+        // About its own middle, where it was struck.
+        let fell = app.world().get::<Corpse>(rat).unwrap().fell;
+        let fb_creatures::Creature::Rat(state) = &app.world().get::<crate::creatures::Critter>(rat).unwrap().creature else { unreachable!() };
+        let middle = Vec3::Y * state.dims().centre_height;
+        assert!(now.transform_point(middle).xz().distance(fell.transform_point(middle).xz()) < 0.5 * state.dims().half_width);
+    }
+
+    #[test]
+    fn a_blow_to_a_laid_out_snakes_mid_body_lands() {
+        use crate::creatures::{Bones, Critter, Driven, Intent, behaviour::{Brain, body_radius}};
+        use fb_creatures::Creature;
+        let (mut app, player, _) = fight(Some("Sword"), 9.0);
+        app.update();
+        let snake = {
+            let mut q = app.world_mut().query::<(Entity, &Critter)>();
+            q.iter(app.world()).find(|(_, c)| c.spot.species == fb_creatures::Species::ConstrictorSnake).map(|(e, _)| e).unwrap()
+        };
+        // Laid out and still, its mind stopped so it stays that way.
+        app.world_mut().entity_mut(snake).remove::<Brain>().insert((Driven, Intent::default()));
+        // The delver nearby, so its pose is kept up (`creatures::POSE_RANGE`).
+        let near = app.world().get::<Transform>(snake).unwrap().translation + Vec3::X * 60.0;
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = near;
+        for _ in 0..240 {
+            app.update();
+        }
+        let bones = app.world().get::<Bones>(snake).unwrap().0.clone();
+        let spine: Vec<Vec3> = (0..fb_creatures::snake::SEGMENTS).map(|k| app.world().get::<GlobalTransform>(bones[fb_creatures::snake::bone::SPINE + k]).unwrap().translation()).collect();
+        let root = *app.world().get::<Transform>(snake).unwrap();
+        let critter = app.world().get::<Critter>(snake).unwrap().clone();
+        let Creature::Snake(state) = &critter.creature else { unreachable!() };
+        assert!(spine[0].xz().distance(spine[spine.len() - 1].xz()) > state.dims().body_length * 0.25, "laid out, not coiled");
+        let weapon = Weapon::in_hand(app.world().resource::<Inventory>(), app.world().resource::<Character>());
+        // The segment of its body farthest from its root, and a place beside it, facing it,
+        // in the sword's reach of it but not of one circle at the root.
+        let mid = *spine.iter().max_by(|a, b| a.xz().distance(root.translation.xz()).total_cmp(&b.xz().distance(root.translation.xz()))).unwrap();
+        let at_root = Target { entity: snake, centre: root.translation.xz(), radius: body_radius(&critter) };
+        let from = (0..24)
+            .map(|i| mid.xz() + Vec2::from_angle(i as f32 * std::f32::consts::TAU / 24.0) * 0.6 * weapon.reach)
+            .filter(|p| spine.iter().all(|s| s.xz().distance(*p) > critter.radius))
+            .find(|&p| target_in_reach(p, mid.xz() - p, weapon.reach, &[at_root]).is_none())
+            .expect("nowhere beside its body out of reach of its root");
+        let floor = Vec3::new(from.x, root.translation.y, from.y);
+        app.world_mut().entity_mut(player).insert(Transform::from_translation(floor).looking_at(Vec3::new(mid.x, root.translation.y, mid.z), Vec3::Y));
+        let before = app.world().get::<Health>(snake).unwrap().hp;
+        swing_at(&mut app, player, 40);
+        assert!(app.world().get::<Health>(snake).unwrap().hp < before, "the blow to its body landed");
     }
 
     #[test]

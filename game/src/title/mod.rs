@@ -118,7 +118,7 @@ impl Plugin for TitlePlugin {
             .init_resource::<NewDelveSeed>()
             .add_message::<MenuCommand>()
             .add_systems(OnEnter(AppState::Title), spawn_title)
-            .add_systems(Update, (title_controls, fit_card, build_panel).run_if(in_state(AppState::Title)));
+            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), title_controls, fit_card, build_panel).chain().run_if(in_state(AppState::Title)));
     }
 }
 
@@ -208,6 +208,22 @@ fn fit_card(images: Res<Assets<Image>>, mut cards: Query<(&mut ImageNode, &Compu
         if card.rect != rect {
             card.rect = rect;
         }
+    }
+}
+
+/// `FB_NEW_DELVE=<seconds>`: how long the title waits before choosing New delve by itself, for
+/// captures of a run going back to the title and on into the next delve.
+fn new_delve_wait() -> Option<f32> {
+    std::env::var("FB_NEW_DELVE").ok().and_then(|s| s.trim().parse::<f32>().ok())
+}
+
+/// Chooses New delve once the title has shown for [`new_delve_wait`] seconds, each time it
+/// shows.
+fn choose_new_delve_after(time: Res<Time>, mut shown: Local<f32>, mut chosen: MessageWriter<MenuCommand>) {
+    *shown += time.delta_secs();
+    if *shown >= new_delve_wait().unwrap_or(f32::MAX) {
+        *shown = 0.0;
+        chosen.write(MenuCommand::NewDelve);
     }
 }
 

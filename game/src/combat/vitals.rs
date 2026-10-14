@@ -70,11 +70,18 @@ pub struct Constricted {
     pub by: Entity,
 }
 
-/// The delver's hit points, from who they are, once they stand in the level.
+/// The delver's hit points, from who they are, once they stand in the level; `FB_PLAYER_HP=<n>`
+/// starts them on `n` of those instead, to check a fall quickly.
 fn give_player_health(mut commands: Commands, character: Res<Character>, new: Query<Entity, (With<Player>, Without<Health>)>) {
+    let start = std::env::var("FB_PLAYER_HP").ok().and_then(|n| n.trim().parse::<i32>().ok());
     for player in &new {
-        commands.entity(player).insert(Health::full(first_level_hit_points(&character)));
+        commands.entity(player).insert(starting_health(first_level_hit_points(&character), start));
     }
+}
+
+/// Full hit points of `max`, or `start` of them (at least 1, at most `max`).
+pub fn starting_health(max: i32, start: Option<i32>) -> Health {
+    Health { hp: start.map_or(max, |n| n.clamp(1, max)), max }
 }
 
 /// Each bite takes its damage from the delver; a constrictor's holds them.
@@ -299,6 +306,14 @@ mod tests {
     }
 
     #[test]
+    fn a_delver_can_start_on_fewer_hit_points() {
+        assert_eq!(starting_health(12, None), Health::full(12));
+        assert_eq!(starting_health(12, Some(1)), Health { hp: 1, max: 12 });
+        assert_eq!(starting_health(12, Some(40)), Health::full(12));
+        assert_eq!(starting_health(12, Some(0)), Health { hp: 1, max: 12 });
+    }
+
+    #[test]
     fn bites_take_hit_points_and_flash_the_edge() {
         let (mut app, player, snake) = delve();
         app.update();
@@ -340,5 +355,38 @@ mod tests {
         assert!(app.world().get_entity(player).is_err(), "the delver is gone");
         assert!(app.world().get_entity(snake).is_err(), "the creatures are gone");
         assert!(app.world().get_resource::<Fallen>().is_none());
+    }
+
+    #[test]
+    fn a_new_delve_after_a_fall_starts_clean() {
+        use crate::inventory::{Hovered, OpenContainer, leave_the_delve};
+        let (mut app, player, snake) = delve();
+        app.init_resource::<crate::inventory::DollStage>()
+            .insert_resource(OpenContainer(Some(crate::inventory::ItemId(3))))
+            .add_systems(OnExit(AppState::Delving), leave_the_delve);
+        // A hover card made for this delve's view.
+        let card = app.world_mut().spawn((Node::default(), DespawnOnExit(AppState::Delving))).id();
+        app.update();
+        bite(&mut app, snake, Species::Rat, 25);
+        for _ in 0..((FALL_TIME * 60.0) as usize + 5) {
+            app.update();
+        }
+        assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
+        for gone in [player, snake, card] {
+            assert!(app.world().get_entity(gone).is_err(), "{gone} outlived the delve");
+        }
+        assert_eq!(*app.world().resource::<OpenContainer>(), OpenContainer(None));
+        assert_eq!(*app.world().resource::<Hovered>(), Hovered(None));
+        assert_eq!(*app.world().resource::<Pain>(), Pain(0.0));
+        // New delve: a fresh delver stands up whole, and nothing of the last run is left over.
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
+        app.update();
+        let fresh = app.world_mut().spawn((Player, Transform::default())).id();
+        app.update();
+        let health = *app.world().get::<Health>(fresh).unwrap();
+        assert!(health.hp == health.max && health.hp > 0);
+        assert!(app.world().get_resource::<Fallen>().is_none());
+        app.update();
+        assert!(app.world().get_resource::<Fallen>().is_none(), "the new delver is not fallen");
     }
 }
