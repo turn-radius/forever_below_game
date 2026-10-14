@@ -40,7 +40,7 @@ use crate::geom::vec3;
 use crate::material::{MaterialKind, Rgb};
 use crate::palette::Palette;
 use crate::sections::device::Device;
-use crate::fabric::FabricPattern;
+use crate::fabric::{Fabric, FabricLimits, FabricPattern};
 use crate::slider::{Sliders, sliders};
 use procgen_rng::{Mulberry32, armory_stream_seed};
 use serde::{Deserialize, Serialize};
@@ -100,12 +100,8 @@ pub struct Chest {
     pub fittings: MaterialKind,
     /// A stencil painted on a crate or barrel.
     pub device: Device,
-    /// An amphora's glaze.
-    pub color: Rgb,
-    pub pattern: FabricPattern,
-    /// The glaze pattern's colour.
-    pub color2: Rgb,
-    pub pattern_scale: f32,
+    /// An amphora's glaze: its colour, and the pattern painted over it in a second colour.
+    pub glaze: Fabric,
     /// The stone crowning a coffer's lid.
     pub stone: Gemstone,
 }
@@ -116,7 +112,6 @@ sliders! {
         shape: 0.0, 1.0, 0.01;
         open: 0.0, 1.0, 0.01;
         bands: 0.0, 5.0, 1.0;
-        pattern_scale: 0.5, 8.0, 0.05;
     }
 }
 
@@ -136,10 +131,7 @@ impl Default for Chest {
             material: Wood,
             fittings: Iron,
             device: Device::None,
-            color: Rgb::hex(0xb8673a),
-            pattern: FabricPattern::Hoops,
-            color2: Rgb::hex(0x2a1d14),
-            pattern_scale: 3.0,
+            glaze: Fabric { color: Rgb::hex(0xb8673a), pattern: FabricPattern::Hoops, color2: Rgb::hex(0x2a1d14), scale: 3.0 },
             stone: Gemstone::Garnet,
         }
     }
@@ -159,17 +151,19 @@ pub struct ChestState {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChestsLimits {
     pub chest: ChestLimits,
+    pub glaze: FabricLimits,
     pub etch: EtchingLimits,
     pub cond: ConditionLimits,
 }
 
 /// The prototype's slider ranges (it has no `RANGES.chests`).
-pub const LIMITS: ChestsLimits = ChestsLimits { chest: ChestLimits::SLIDERS, etch: EtchingLimits::SLIDERS, cond: ConditionLimits::SLIDERS };
+pub const LIMITS: ChestsLimits = ChestsLimits { chest: ChestLimits::SLIDERS, glaze: FabricLimits::SLIDERS, etch: EtchingLimits::SLIDERS, cond: ConditionLimits::SLIDERS };
 
 impl ChestState {
     /// Clamp and snap every slider into `limits`.
     pub fn fit(&mut self, limits: &ChestsLimits) {
         self.chest.fit(&limits.chest);
+        self.chest.glaze.fit(&limits.glaze);
         self.etch.fit(&limits.etch);
         self.cond.fit(&limits.cond);
     }
@@ -179,6 +173,7 @@ impl ChestState {
         let tag = |sec: &str, fields: Vec<&'static str>| fields.into_iter().map(|f| format!("{sec}.{f}")).collect::<Vec<_>>();
         [
             tag("chest", self.chest.out_of_range(&limits.chest)),
+            tag("chest.glaze", self.chest.glaze.out_of_range(&limits.glaze)),
             tag("etch", self.etch.out_of_range(&limits.etch)),
             tag("cond", self.cond.out_of_range(&limits.cond)),
         ]
@@ -316,6 +311,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: ChestStyle) -> ChestState {
     let mut s = ChestState { seed, ..ChestState::default() };
     s.palette = *rng.pick(&Palette::PRESETS);
     s.chest.nudge(rng, &LIMITS.chest, 0.75, 0.3);
+    s.chest.glaze.nudge(rng, &LIMITS.glaze, 0.75, 0.3);
     let c = &mut s.chest;
     c.style = style;
     c.size = rng.range_f32(0.85, 1.15);
@@ -375,8 +371,8 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: ChestStyle) -> ChestState {
         Barrel if rng.chance(0.3) => *rng.weighted(&stencils),
         _ => Device::None,
     };
-    c.color = Rgb::hex(*rng.pick(&[0xb8673a, 0xc98a5a, 0x8a5a3a, 0xd8c8a8]));
-    c.pattern = *rng.weighted(&[
+    c.glaze.color = Rgb::hex(*rng.pick(&[0xb8673a, 0xc98a5a, 0x8a5a3a, 0xd8c8a8]));
+    c.glaze.pattern = *rng.weighted(&[
         (FabricPattern::Hoops, 4),
         (FabricPattern::Chevrons, 2),
         (FabricPattern::Plain, 3),
@@ -384,8 +380,8 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: ChestStyle) -> ChestState {
         (FabricPattern::Stripes, 1),
         (FabricPattern::Powdered, 1),
     ]);
-    c.color2 = Rgb::hex(*rng.pick(&[0x2a1d14, 0xa8323a, 0x2c4e8c, 0xd4a838]));
-    c.pattern_scale = rng.range_f32(2.0, 4.0);
+    c.glaze.color2 = Rgb::hex(*rng.pick(&[0x2a1d14, 0xa8323a, 0x2c4e8c, 0xd4a838]));
+    c.glaze.scale = rng.range_f32(2.0, 4.0);
     let stones: Vec<Gemstone> = Gemstone::ALL.into_iter().filter(|g| g.suits(GemCut::Cabochon)).collect();
     c.stone = *rng.pick(&stones);
 
@@ -1165,6 +1161,7 @@ fn build_amphora(s: &ChestState, parts: &mut Parts) {
     let c = &s.chest;
     let a = AmphoraDims::of(c);
     let (r, h, sz) = (a.belly, a.height, a.size);
+    let glaze = Look::cloth(&c.glaze).made_of(Stone);
     // Outside up to the lip, over it, and down the inside of the neck to a floor in its throat.
     let mut profile: Vec<[f32; 2]> = vec![[0.0, 0.0]];
     profile.extend(a.outer.iter().copied());
@@ -1179,7 +1176,7 @@ fn build_amphora(s: &ChestState, parts: &mut Parts) {
     ];
     profile.extend(throat);
     let body = lathe(&profile, &LatheOptions { facets: 48, shading: Shading::SMOOTH, cap_start: false, cap_end: false, phase: 0.0 });
-    parts.add_tinted("body", body, Stone, c.color);
+    parts.add_look("body", body, glaze);
 
     if c.handles {
         let mut handles = MeshBuilder::new();
@@ -1188,13 +1185,13 @@ fn build_amphora(s: &ChestState, parts: &mut Parts) {
             let path = CatmullRom::centripetal(control).sample(12);
             handles.append(&tube(&path, 12, &SweepOptions::default(), |_| 0.09 * sz));
         }
-        parts.add_tinted("handles", handles, Stone, c.color);
+        parts.add_look("handles", handles, glaze);
     }
 
     if c.lock {
         let lid = [[r * 0.45, 0.0], [r * 0.44, r * 0.05], [r * 0.3, r * 0.12], [r * 0.12, r * 0.15], [r * 0.1, r * 0.24], [r * 0.06, r * 0.28], [0.0, r * 0.28]];
         let mut stopper = lathe(&spline_profile(&lid, 24), &LatheOptions { facets: 40, shading: Shading::SMOOTH, cap_start: true, cap_end: false, phase: 0.0 });
         stopper.translate([0.0, h + a.wall * 0.15, 0.0]);
-        parts.add_tinted("lid", stopper, Stone, c.color);
+        parts.add_look("lid", stopper, glaze);
     }
 }

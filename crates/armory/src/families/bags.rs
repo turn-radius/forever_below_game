@@ -19,7 +19,7 @@ use std::f32::consts::{PI, TAU};
 use crate::build::container::{ContainerSpace, Opening, stacked_volume};
 use crate::build::hafted::smoothstep;
 use crate::build::hoard::coin_scatter;
-use crate::build::parts::Parts;
+use crate::build::parts::{Look, Parts};
 use crate::build::roll::{roll_straps, rolled_sheet};
 use crate::build::strap::{buckle, d_ring, strap, strap_along};
 use crate::cond::{Condition, ConditionLimits};
@@ -32,7 +32,7 @@ use crate::geom::{
 use crate::geom::vec3;
 use crate::material::{MaterialKind, Rgb};
 use crate::palette::Palette;
-use crate::fabric::{FabricPattern, Textile};
+use crate::fabric::{Fabric, FabricLimits, FabricPattern, Textile};
 use crate::slider::{Sliders, sliders};
 use procgen_rng::{Mulberry32, armory_stream_seed};
 use serde::{Deserialize, Serialize};
@@ -76,12 +76,9 @@ pub struct Bag {
     /// Plumper (1) or slimmer (0): girth for drawstring bags and packs, depth for flapped bags.
     pub shape: f32,
     pub fabric: Textile,
-    /// The body's colour.
-    pub color: Rgb,
-    /// The flap's, the bedroll's and the patch's colour.
-    pub color2: Rgb,
-    pub pattern: FabricPattern,
-    pub pattern_scale: f32,
+    /// The body's colour and pattern. Its second colour is the pattern's and also the
+    /// flap's, the bedroll's and the patch's, as in the prototype's `color2`.
+    pub cloth: Fabric,
     /// Buckles, toggles and rings.
     pub fittings: MaterialKind,
     /// Coins spilled at its foot (pouches and purses).
@@ -98,7 +95,6 @@ sliders! {
     BagLimits for Bag {
         size: 0.7, 1.4, 0.01;
         shape: 0.0, 1.0, 0.01;
-        pattern_scale: 0.5, 8.0, 0.05;
     }
 }
 
@@ -110,10 +106,7 @@ impl Default for Bag {
             size: 1.0,
             shape: 0.5,
             fabric: Textile::Leather,
-            color: Rgb::hex(0x6b4a2e),
-            color2: Rgb::hex(0x7a8a5a),
-            pattern: FabricPattern::Plain,
-            pattern_scale: 3.0,
+            cloth: Fabric { color: Rgb::hex(0x6b4a2e), pattern: FabricPattern::Plain, color2: Rgb::hex(0x7a8a5a), scale: 3.0 },
             fittings: MaterialKind::Iron,
             coins: false,
             pocket: true,
@@ -138,17 +131,19 @@ pub struct BagState {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BagsLimits {
     pub bag: BagLimits,
+    pub cloth: FabricLimits,
     pub etch: EtchingLimits,
     pub cond: ConditionLimits,
 }
 
 /// The prototype's slider ranges (it has no `RANGES.bags`).
-pub const LIMITS: BagsLimits = BagsLimits { bag: BagLimits::SLIDERS, etch: EtchingLimits::SLIDERS, cond: ConditionLimits::SLIDERS };
+pub const LIMITS: BagsLimits = BagsLimits { bag: BagLimits::SLIDERS, cloth: FabricLimits::SLIDERS, etch: EtchingLimits::SLIDERS, cond: ConditionLimits::SLIDERS };
 
 impl BagState {
     /// Clamp and snap every slider into `limits`.
     pub fn fit(&mut self, limits: &BagsLimits) {
         self.bag.fit(&limits.bag);
+        self.bag.cloth.fit(&limits.cloth);
         self.etch.fit(&limits.etch);
         self.cond.fit(&limits.cond);
     }
@@ -158,6 +153,7 @@ impl BagState {
         let tag = |sec: &str, fields: Vec<&'static str>| fields.into_iter().map(|f| format!("{sec}.{f}")).collect::<Vec<_>>();
         [
             tag("bag", self.bag.out_of_range(&limits.bag)),
+            tag("bag.cloth", self.bag.cloth.out_of_range(&limits.cloth)),
             tag("etch", self.etch.out_of_range(&limits.etch)),
             tag("cond", self.cond.out_of_range(&limits.cond)),
         ]
@@ -263,6 +259,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: BagStyle) -> BagState {
     s.palette = *rng.pick(&Palette::PRESETS);
     // The prototype's generic pass: sliders drift up to 15% of their range from base.
     s.bag.nudge(rng, &LIMITS.bag, 0.75, 0.3);
+    s.bag.cloth.nudge(rng, &LIMITS.cloth, 0.75, 0.3);
     let b = &mut s.bag;
     b.style = style;
     b.size = rng.range_f32(0.85, 1.15);
@@ -275,13 +272,13 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: BagStyle) -> BagState {
     });
     let hides = [0x6b4a2e, 0x7a5232, 0x5e3d24, 0x4a3a2e, 0x3a2a20];
     let dyes = [0x7a1f24, 0x2c3e6b, 0x4a5a3a, 0x6a5a7a, 0x8a6a3a, 0xcbbf9f];
-    b.color = Rgb::hex(*rng.pick(match b.fabric {
+    b.cloth.color = Rgb::hex(*rng.pick(match b.fabric {
         Textile::Leather => &hides[..],
         Textile::Burlap => &[0xb49a6a, 0xa68c5c],
         Textile::Cloth => &dyes,
     }));
-    b.color2 = Rgb::hex(*rng.pick(&[0x7a8a5a, 0x5e3d24, 0x8a3a2a, 0xcbbf9f, 0x4a2f1c]));
-    b.pattern = match b.fabric {
+    b.cloth.color2 = Rgb::hex(*rng.pick(&[0x7a8a5a, 0x5e3d24, 0x8a3a2a, 0xcbbf9f, 0x4a2f1c]));
+    b.cloth.pattern = match b.fabric {
         Textile::Cloth => *rng.weighted(&[
             (FabricPattern::Plain, 5),
             (FabricPattern::Stripes, 2),
@@ -296,7 +293,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: BagStyle) -> BagState {
         Textile::Leather => *rng.weighted(&[(FabricPattern::Plain, 9), (FabricPattern::Rivets, 1)]),
         Textile::Burlap => FabricPattern::Plain,
     };
-    b.pattern_scale = if b.pattern == FabricPattern::Powdered { rng.range_f32(4.5, 7.0) } else { rng.range_f32(2.0, 5.0) };
+    b.cloth.scale = if b.cloth.pattern == FabricPattern::Powdered { rng.range_f32(4.5, 7.0) } else { rng.range_f32(2.0, 5.0) };
     b.fittings = *rng.weighted(if style == Purse { &[(Brass, 2), (Gold, 2), (Silver, 1)][..] } else { &[(Iron, 3), (Brass, 3), (Gold, 1)] });
     b.coins = matches!(style, Pouch | Purse) && rng.chance(if style == Purse { 0.6 } else { 0.4 });
     b.pocket = style == Backpack && rng.chance(0.6);
@@ -317,19 +314,29 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: BagStyle) -> BagState {
     s
 }
 
-/// The bag's materials: body and flap in their own colours, straps a darker cut of the same
-/// hide (or plain leather on a cloth bag).
+/// The bag's materials: the body in its patterned cloth, the flap, patch and bedroll plain in
+/// the second colour, straps a darker cut of the same hide (or plain leather on a cloth bag).
 struct Looks {
-    body: (MaterialKind, Rgb),
-    flap: (MaterialKind, Rgb),
-    strap: (MaterialKind, Rgb),
+    body: Look,
+    flap: Look,
+    bedroll: Look,
+    /// The bedroll's spiralled ends, a shade darker.
+    bedroll_edge: Look,
+    strap: Look,
 }
 
 impl Looks {
     fn of(b: &Bag, palette: &Palette) -> Looks {
         let m = b.fabric.material();
-        let strap = if b.fabric == Textile::Leather { b.color.scaled(0.7) } else { palette.leather };
-        Looks { body: (m, b.color), flap: (m, b.color2), strap: (MaterialKind::Leather, strap) }
+        let second = Fabric::plain(b.cloth.color2);
+        let strap = if b.fabric == Textile::Leather { b.cloth.color.scaled(0.7) } else { palette.leather };
+        Looks {
+            body: Look::cloth(&b.cloth).made_of(m),
+            flap: Look::cloth(&second).made_of(m),
+            bedroll: Look::cloth(&second),
+            bedroll_edge: Look::cloth(&Fabric::plain(b.cloth.color2.scaled(0.7))),
+            strap: Look::of(MaterialKind::Leather).tinted(strap),
+        }
     }
 }
 
@@ -464,7 +471,7 @@ fn build_drawstring(b: &Bag, d: &Drawstring, looks: &Looks, seed: u32, parts: &m
     // edge crosses it.
     let mut body = thick_sheet(&d.rows(72), &options, t);
     body.normals = thick_sheet(&d.unpleated_rows(72), &options, t).normals;
-    parts.add_tinted("body", body, looks.body.0, looks.body.1);
+    parts.add_look("body", body, looks.body);
 
     // The cord round the neck, sitting on the pleats it gathers.
     let cord_r = 0.035 * sz * if sack { 1.8 } else { 1.0 };
@@ -521,7 +528,7 @@ fn build_drawstring(b: &Bag, d: &Drawstring, looks: &Looks, seed: u32, parts: &m
                 (0..=8).map(|j| 0.45 + half * (j as f32 / 4.0 - 1.0)).map(|a| d.surface(a, y)).map(|(p, n)| vec3::add(p, vec3::scale(n, t * 0.8))).collect()
             })
             .collect();
-        add_patch(parts, rows, t * 0.8, looks.flap.0, b.color2);
+        add_patch(parts, rows, t * 0.8, looks.flap);
     }
 
     if b.coins {
@@ -533,7 +540,7 @@ fn build_drawstring(b: &Bag, d: &Drawstring, looks: &Looks, seed: u32, parts: &m
 }
 
 /// A sewn patch of `rows` (columns run across it, which way it faces), as a thin sheet.
-fn add_patch(parts: &mut Parts, rows: Vec<Vec<V3>>, thickness: f32, material: MaterialKind, color: Rgb) {
+fn add_patch(parts: &mut Parts, rows: Vec<Vec<V3>>, thickness: f32, look: Look) {
     let options = GridOptions { wrap_around: false, wrap_along: false, shading: Shading::SMOOTH, row_v: None };
     // Rows run up, columns round: du x dv faces outward when the columns run the right way.
     let rows: Vec<Vec<V3>> = rows.into_iter().map(|r| r.into_iter().rev().collect()).collect();
@@ -541,7 +548,7 @@ fn add_patch(parts: &mut Parts, rows: Vec<Vec<V3>>, thickness: f32, material: Ma
     if !faces_out(&rows) {
         sheet.flip();
     }
-    parts.add_tinted("patch", sheet, material, color);
+    parts.add_look("patch", sheet, look);
 }
 
 /// Whether a grid's front (du x dv) faces away from the vertical axis at its centre.
@@ -756,7 +763,7 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
     let t = b.fabric.thickness() * sz.max(0.8);
     let body = f.body();
     let options = GridOptions { wrap_around: true, wrap_along: false, shading: Shading::SMOOTH, row_v: None };
-    parts.add_tinted("body", thick_sheet(&body.rows(10, 24), &options, t), looks.body.0, looks.body.1);
+    parts.add_look("body", thick_sheet(&body.rows(10, 24), &options, t), looks.body);
     let flap = Flap::new(&body, f.flap, sz, t);
     let mut flaps = flap.mesh(t);
 
@@ -840,7 +847,7 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
             straps.append(&strap(&loop_path, &faces, 0.12 * sz, strap_t, false));
             if b.pocket {
                 let pocket_body = BoxBody { width: w * 0.62, height: h * 0.3, depth: d * 0.35, bulge: 0.1, squareness: 3.0, origin: [0.0, h * 0.06, d * 0.5 * 0.95] };
-                parts.add_tinted("pocket", thick_sheet(&pocket_body.rows(8, 12), &options, t), looks.body.0, looks.body.1);
+                parts.add_look("pocket", thick_sheet(&pocket_body.rows(8, 12), &options, t), looks.body);
                 let pocket_flap = Flap::new(&pocket_body, pocket_body.height * 0.5, sz * 0.7, t);
                 flaps.append(&pocket_flap.mesh(t));
                 let (s, bk) = flap_closure(&pocket_body, &pocket_flap, 0.0, 0.12 * sz, strap_t, t);
@@ -848,14 +855,14 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
                 fittings.append(&bk);
             }
             if b.bedroll {
-                add_bedroll(b, f, &body, strap_t, &mut straps, &mut fittings, parts);
+                add_bedroll(f, &body, looks, strap_t, &mut straps, &mut fittings, parts);
             }
         }
         _ => {}
     }
 
-    parts.add_tinted("flap", flaps, looks.flap.0, looks.flap.1);
-    parts.add_tinted("straps", straps, looks.strap.0, looks.strap.1);
+    parts.add_look("flap", flaps, looks.flap);
+    parts.add_look("straps", straps, looks.strap);
     parts.add("fittings", fittings, b.fittings);
 
     if b.patch {
@@ -872,19 +879,19 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
                 (0..=6).map(|j| body.face_point(x + half * (j as f32 / 3.0 - 1.0), v, true)).map(|(p, n)| vec3::add(p, vec3::scale(n, t * 0.8))).collect()
             })
             .collect();
-        add_patch(parts, rows, t * 0.8, looks.flap.0, b.color2);
+        add_patch(parts, rows, t * 0.8, looks.flap);
     }
 }
 
 /// A blanket rolled and strapped across the top of a pack, its spiral showing at each end.
-fn add_bedroll(b: &Bag, f: &Flapped, body: &BoxBody, strap_t: f32, straps: &mut MeshBuilder, fittings: &mut MeshBuilder, parts: &mut Parts) {
+fn add_bedroll(f: &Flapped, body: &BoxBody, looks: &Looks, strap_t: f32, straps: &mut MeshBuilder, fittings: &mut MeshBuilder, parts: &mut Parts) {
     let sz = f.size;
     let r = 0.5 * sz;
     let len = f.width * 1.06;
     let centre = [0.0, body.height + 0.1 * sz + r * 0.9, 0.0];
     let (roll, spirals) = rolled_sheet(centre, r, len, 0.018 * sz, 3.0);
-    parts.add_tinted("bedroll", roll, MaterialKind::Cloth, b.color2);
-    parts.add_tinted("bedroll_edge", spirals, MaterialKind::Cloth, b.color2.scaled(0.7));
+    parts.add_look("bedroll", roll, looks.bedroll);
+    parts.add_look("bedroll_edge", spirals, looks.bedroll_edge);
 
     // Two straps round the roll, buckled at the front.
     let (s, bk) = roll_straps(centre, r, &[-0.28 * f.width, 0.28 * f.width], 0.12 * sz, strap_t, 0.014 * sz);

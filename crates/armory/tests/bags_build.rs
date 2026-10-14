@@ -70,12 +70,32 @@ fn every_enabled_section_has_a_part() {
 #[test]
 fn fabric_parts_carry_their_colour() {
     for (s, mesh) in built() {
-        assert_eq!(part(&mesh, "body").unwrap().tint, Some(s.bag.color), "seed {}", s.seed);
+        assert_eq!(part(&mesh, "body").unwrap().tint, Some(s.bag.cloth.color), "seed {}", s.seed);
         assert_eq!(part(&mesh, "body").unwrap().material, Some(s.bag.fabric.material()), "seed {}", s.seed);
         if let Some(flap) = part(&mesh, "flap") {
-            assert_eq!(flap.tint, Some(s.bag.color2), "seed {}", s.seed);
+            assert_eq!(flap.tint, Some(s.bag.cloth.color2), "seed {}", s.seed);
         }
     }
+}
+
+#[test]
+fn patterned_bodies_carry_their_surface_pattern() {
+    let mut patterned = 0;
+    for s in (1..=512).map(Bags::roll) {
+        let mesh = Bags::build(&s);
+        let expected = s.bag.cloth.surface();
+        patterned += u32::from(expected.is_some());
+        assert_eq!(part(&mesh, "body").unwrap().pattern, expected, "seed {}", s.seed);
+        if let Some(pocket) = part(&mesh, "pocket") {
+            assert_eq!(pocket.pattern, expected, "seed {}", s.seed);
+        }
+        for plain in ["flap", "patch", "bedroll", "straps"] {
+            if let Some(p) = part(&mesh, plain) {
+                assert_eq!(p.pattern, None, "seed {}: patterned {plain}", s.seed);
+            }
+        }
+    }
+    assert!(patterned > 0, "no patterned bag in 512 seeds");
 }
 
 #[test]
