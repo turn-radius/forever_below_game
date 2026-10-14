@@ -13,3 +13,5 @@ fb_items = { workspace = true }
 fb_body = { workspace = true }
 fb_level = { workspace = true }
 procgen_rng = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

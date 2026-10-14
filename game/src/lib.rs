@@ -9,4 +9,5 @@ pub mod light;
 pub mod play;
 pub mod player;
 pub mod render;
+pub mod settings;
 pub mod turntable;
