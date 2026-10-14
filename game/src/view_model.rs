@@ -1,15 +1,16 @@
 //! Where what the delver holds is drawn in first person: the view model's placement, free of
 //! the ECS so it can be tested. `crate::carry` spawns it on the view model's stage.
 //!
-//! Each hand's item is fitted exactly as the doll fits it ([`fit_hands`]): its handle thinned to
-//! the fist, drawn at the doll's scale (swords and daggers at `BLADE_SCALE`, shields and bows
-//! capped by the bearer's height), and turned in the fist as the doll's hand holds it (a
-//! blade's edge leading, an axe's bit forward, a bow's string back, a shield strapped along the
-//! forearm). That fitted item, in the body's space, is then carried into the view: turned to
-//! face the way the eye does, its fist moved to where that kind of hold sits in the view
-//! ([`view_hold`]) and turned a little more there, so it reads from behind the eye rather than
-//! from the front of the doll. The main hand's is low on the right, the off hand's low on the
-//! left ([`side_of`]).
+//! Each hand's item is drawn exactly as rolled, at its own size and proportions, as its
+//! inventory icon and the floor show it. Only its turn in the fist comes from the doll
+//! ([`fit_hands`]): a blade's edge leading, an axe's bit forward, a bow's string back, a shield
+//! strapped along the forearm. The doll also thins a handle to the fist and draws blades,
+//! bows and shields smaller, so they sit in its hand; no hand is drawn in first person, so
+//! neither is done here. The item, turned as in the doll's fist, is carried into the view:
+//! turned to face the way the eye does, its grip moved to where that kind of hold sits in the
+//! view ([`view_hold`]) and turned a little more there, so it reads from behind the eye rather
+//! than from the front of the doll. The main hand's is low on the right, the off hand's low on
+//! the left ([`side_of`]).
 //!
 //! The placements per hold are our own tuning against captures of the level, not a rule from a
 //! source: grips stay just below the bottom edge (no hands are drawn yet), and nothing reaches
@@ -98,9 +99,9 @@ const BODY_TO_VIEW: Quat = Quat::from_xyzw(0.0, 1.0, 0.0, 0.0);
 pub struct HeldInView {
     pub hand: Slot,
     pub hold: Hold,
-    /// The item as drawn: its handle thinned to the fist ([`fb_body::HeldFit::item`]).
+    /// The item as drawn: the one held, as rolled (not the doll's thinned [`fb_body::HeldFit::item`]).
     pub item: Item,
-    /// From the item's own space into view model camera space, the doll's scale included.
+    /// From the item's own space into view model camera space, at the item's own size.
     pub transform: Transform,
 }
 
@@ -108,22 +109,22 @@ pub struct HeldInView {
 /// then the off hand's. A hand whose item is not held (or that holds nothing) is left out.
 pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>) -> Vec<HeldInView> {
     let hands = fit_hands(spec, main, off);
-    [(Slot::Mainhand, hands.main), (Slot::Offhand, hands.off)]
+    [(Slot::Mainhand, main, hands.main), (Slot::Offhand, off, hands.off)]
         .into_iter()
-        .filter_map(|(hand, fit)| {
-            let fit = fit?;
+        .filter_map(|(hand, item, fit)| {
+            let (item, fit) = (item?, fit?);
             let side = side_of(hand);
-            let fist = Vec3::from_array(hands.body.grip(side).origin);
             let [x, y, z] = fit.placement.rotation.cols.map(Vec3::from_array);
             let placed = Quat::from_mat3(&Mat3::from_cols(x, y, z));
+            // The fist in the item's own space: the doll's grip, undone of its placement and
+            // scale. Thinning narrows a handle about its axis, so the grip sits at the same
+            // point on the item as rolled.
+            let fist = Vec3::from_array(hands.body.grip(side).origin);
+            let grip = placed.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale;
             let at = view_hold(fit.hold, side);
-            let facing = at.turn * BODY_TO_VIEW;
-            let transform = Transform {
-                translation: at.fist + facing * (Vec3::from_array(fit.placement.origin) - fist),
-                rotation: facing * placed,
-                scale: Vec3::splat(fit.scale),
-            };
-            Some(HeldInView { hand, hold: fit.hold, item: fit.item, transform })
+            let rotation = at.turn * BODY_TO_VIEW * placed;
+            let transform = Transform { translation: at.fist - rotation * grip, rotation, scale: Vec3::ONE };
+            Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform })
         })
         .collect()
 }
@@ -185,19 +186,25 @@ mod tests {
     }
 
     #[test]
-    fn items_keep_the_dolls_scale_and_grip() {
-        let human = spec(Folk::Human);
-        let sword = roll("Sword", 7);
-        let held = &held_in_view(&human, Some(&sword), None)[0];
-        let fit = fb_body::fit_held(&fb_body::Body::new(&human), Side::Right, &sword).unwrap();
-        assert_eq!(held.transform.scale, Vec3::splat(fit.scale));
-        assert!((fit.scale - fb_body::held::BLADE_SCALE * fb_body::Body::new(&human).scale.sqrt()).abs() < 1e-5);
-        assert_eq!(held.item, fit.item, "the handle thinned as on the doll");
-        // The item turns in the fist as on the doll: the same placement up to one rigid move.
-        let doll = |p: [f32; 3]| Vec3::from_array(fit.to_body(p));
-        let (a, b) = ([0.0, 0.0, 0.0], [0.0, 5.0, 0.3]);
-        let view = |p: [f32; 3]| held.transform.transform_point(Vec3::from_array(p));
-        assert!((doll(a).distance(doll(b)) - view(a).distance(view(b))).abs() < 1e-4);
+    fn items_are_drawn_as_rolled_and_turned_as_on_the_doll() {
+        for folk in [Folk::Human, Folk::Gnome] {
+            let spec = spec(folk);
+            for base in ["Sword", "Mace", "Shield", "Bow", "Staff"] {
+                let item = roll(base, 7);
+                let held = &held_in_view(&spec, Some(&item), None)[0];
+                let fit = fb_body::fit_held(&fb_body::Body::new(&spec), Side::Right, &item).unwrap();
+                assert_eq!(held.item, item, "{folk:?} {base}: the item as rolled, not thinned");
+                assert_eq!(held.transform.scale, Vec3::ONE, "{folk:?} {base}: at its own size");
+                // The doll's turn in the fist, then the hold's turn into the view.
+                let rot = Quat::from_mat3(&Mat3::from_cols_array_2d(&fit.placement.rotation.cols));
+                let at = view_hold(fit.hold, Side::Right);
+                assert!(held.transform.rotation.abs_diff_eq(at.turn * BODY_TO_VIEW * rot, 1e-5), "{folk:?} {base}");
+                // The grip sits at the hold's fist.
+                let fist = Vec3::from_array(fb_body::fit_hands(&spec, Some(&item), None).body.grip(Side::Right).origin);
+                let grip = rot.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale;
+                assert!(held.transform.transform_point(grip).abs_diff_eq(at.fist, 1e-4), "{folk:?} {base}");
+            }
+        }
     }
 
     #[test]
