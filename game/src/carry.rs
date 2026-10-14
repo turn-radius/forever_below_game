@@ -4,6 +4,8 @@
 //!   of whatever [`PlayerCamera`] exists, as in Bevy's `first_person_view_model` example. It
 //!   has its own soft light, so the flame does not burn its own handle white, and its own
 //!   field of view, so it never sinks into a wall.
+//! - It moves with the player's steps ([`Gait`]) and lags a little behind a turn of the head
+//!   ([`HeldSway`]).
 //! - Its light in the world is a separate point light near the eye, on the default layer, with
 //!   the torch's colour, reach and flicker from its [`LightAnchor`]. It is the main light.
 //! - Items lie where `CurrentLevel.items` puts them, resting on the floor; long ones lie down.
@@ -31,6 +33,7 @@ use fb_level::{CELL, ItemSpot, Level};
 
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::play::{Carried, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
+use crate::player::Gait;
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
@@ -72,6 +75,16 @@ const WORLD_PEAK: f32 = 1.0;
 const HELD_PEAK: f32 = 1.8;
 const HELD_REACH: f32 = 40.0;
 
+/// How far the held torch bobs at walking pace, in view model units, as `(sideways, down)`: a
+/// hand swings further than the head bobs (our own tuning, about 3 cm and 2.5 cm at a metre).
+const HELD_BOB: Vec2 = Vec2::new(0.3, 0.25);
+/// How far behind a turn of the head the held torch trails: the angle it lags is the turn rate
+/// times this many seconds, up to [`HELD_LAG_MAX`] radians either way.
+const HELD_LAG_SECONDS: f32 = 0.05;
+const HELD_LAG_MAX: f32 = 0.12;
+/// How quickly the lag closes on its target, per second ([`StableInterpolate`]).
+const HELD_LAG_RATE: f32 = 12.0;
+
 /// Field of view of the view model camera, fixed whatever the world camera uses.
 const VIEW_MODEL_FOV_DEGREES: f32 = 60.0;
 
@@ -100,6 +113,7 @@ impl Plugin for CarryPlugin {
                     lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
                     equip_player_camera,
                     follow_player_camera,
+                    sway_held_torch,
                     (aim, pick_up, show_aimed, show_carried).chain(),
                 ),
             );
@@ -228,8 +242,64 @@ pub struct FloorItem {
 
 /// The torch in the player's hand (the view model's root).
 #[derive(Component, Debug)]
+#[require(HeldSway)]
 pub struct HeldTorch {
     pub item: Item,
+}
+
+/// How a held thing moves in the view: it bobs with the player's steps and trails a turn of the
+/// head, then settles back to `rest`. Moving the view model with the same cycle as the eye is
+/// what Quake does (`V_CalcRefdef` adds `V_CalcBob`'s bob to the view model's origin in
+/// `WinQuake/view.c`, <https://github.com/id-Software/Quake>); the sideways swing and the lag
+/// behind a turn are our own.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct HeldSway {
+    /// Where it is held when the player stands still, in view model camera space.
+    pub rest: Transform,
+    /// The look direction last frame, as `(yaw, pitch)` in radians.
+    pub look: Option<Vec2>,
+    /// How far it trails the look now, as `(yaw, pitch)` in radians.
+    pub lag: Vec2,
+}
+
+impl HeldSway {
+    pub fn new(rest: Transform) -> Self {
+        HeldSway { rest, look: None, lag: Vec2::ZERO }
+    }
+
+    /// Follows the look turning to `look` (`(yaw, pitch)`, radians) over `dt` seconds: the lag
+    /// eases toward the turn rate times [`HELD_LAG_SECONDS`], capped, and back to 0 once the
+    /// look stops.
+    pub fn follow(&mut self, look: Vec2, dt: f32) {
+        if dt <= 0.0 {
+            return;
+        }
+        let turned = self.look.map_or(Vec2::ZERO, |last| {
+            let d = look - last;
+            // Yaw wraps; take the short way round.
+            Vec2::new((d.x + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI, d.y)
+        });
+        self.look = Some(look);
+        let target = (turned / dt * HELD_LAG_SECONDS).clamp(Vec2::splat(-HELD_LAG_MAX), Vec2::splat(HELD_LAG_MAX));
+        self.lag.smooth_nudge(&target, HELD_LAG_RATE, dt);
+    }
+
+    /// Where it is held this frame with the player's step at `gait`: its rest bobbed by
+    /// [`HELD_BOB`], then turned about the eye against the lag, so a head turning left leaves
+    /// it trailing right and a head tipping up leaves it trailing low.
+    pub fn transform(&self, gait: Gait) -> Transform {
+        let bob = gait.bob() * HELD_BOB;
+        let trail = Quat::from_euler(EulerRot::YXZ, -self.lag.x, -self.lag.y, 0.0);
+        let held = self.rest.translation + Vec3::new(bob.x, -bob.y, 0.0);
+        Transform { translation: trail * held, rotation: trail * self.rest.rotation, ..self.rest }
+    }
+}
+
+/// The look direction of a world transform, as `(yaw, pitch)`: yaw turning left from -Z about
+/// +Y, pitch up from level.
+fn yaw_pitch(eye: &GlobalTransform) -> Vec2 {
+    let forward = eye.forward().as_vec3();
+    Vec2::new((-forward.x).atan2(-forward.z), forward.y.clamp(-1.0, 1.0).asin())
 }
 
 /// The camera that draws the view model over the world. It stands on [`VIEW_MODEL_STAGE`],
@@ -416,12 +486,14 @@ fn equip_player_camera(
         // Held upright and leaning in and away, as a torch is carried; its flame at HELD_FLAME.
         let rotation = Quat::from_euler(EulerRot::XYZ, -0.32, 0.0, 0.22);
         let held_at = HELD_FLAME - rotation * Vec3::from_array(anchor.position);
+        let rest = Transform::from_translation(held_at).with_rotation(rotation);
         let mesh = torch.build();
         let mut root = spawner.spawn(&mesh, &appearance_of(&torch));
         root.insert((
             Name::new("Held torch"),
             HeldTorch { item: torch },
-            Transform::from_translation(held_at).with_rotation(rotation),
+            HeldSway::new(rest),
+            rest,
             Propagate(view_layer.clone()),
             ChildOf(view_model),
         ));
@@ -524,6 +596,23 @@ fn follow_player_camera(
                 commands.entity(entity).despawn();
             }
         }
+    }
+}
+
+/// Bobs the held torch with the player's steps and trails it behind turns of the head.
+fn sway_held_torch(
+    time: Res<Time>,
+    mut held: Query<(&mut HeldSway, &mut Transform, &ChildOf)>,
+    view_models: Query<&ViewModelCamera>,
+    eyes: Query<(&GlobalTransform, Option<&ChildOf>), With<PlayerCamera>>,
+    gaits: Query<&Gait>,
+) {
+    for (mut sway, mut transform, parent) in &mut held {
+        let Ok(view_model) = view_models.get(parent.parent()) else { continue };
+        let Ok((eye, body)) = eyes.get(view_model.follows) else { continue };
+        let gait = body.and_then(|b| gaits.get(b.parent()).ok()).copied().unwrap_or_default();
+        sway.follow(yaw_pitch(eye), time.delta_secs());
+        *transform = sway.transform(gait);
     }
 }
 
@@ -655,6 +744,59 @@ mod tests {
             assert_eq!(item_light(&item), Some(light));
             assert!(light.radius > 20.0 && (0.0..=1.0).contains(&light.flicker));
         }
+    }
+
+    fn rest() -> Transform {
+        Transform::from_translation(HELD_FLAME).with_rotation(Quat::from_rotation_z(0.2))
+    }
+
+    #[test]
+    fn the_held_torch_is_still_when_standing() {
+        let mut sway = HeldSway::new(rest());
+        for _ in 0..30 {
+            sway.follow(Vec2::new(0.4, -0.1), 1.0 / 60.0);
+        }
+        assert_eq!(sway.transform(Gait { phase: 1.1, pace: 0.0 }), rest());
+    }
+
+    #[test]
+    fn the_held_torch_moves_with_the_bob_while_walking() {
+        let sway = HeldSway::new(rest());
+        let step = |phase: f32| sway.transform(Gait { phase, pace: 1.0 }).translation;
+        let quarter = std::f32::consts::FRAC_PI_2;
+        // At the footfall it is low and to one side; a step later, low and to the other.
+        assert!(step(quarter).y < HELD_FLAME.y - 0.2 && step(quarter).x > HELD_FLAME.x + 0.2, "{}", step(quarter));
+        assert!(step(3.0 * quarter).x < HELD_FLAME.x - 0.2, "{}", step(3.0 * quarter));
+        assert!(step(0.0).abs_diff_eq(HELD_FLAME, 1e-5));
+    }
+
+    #[test]
+    fn the_held_torch_lags_a_turn_then_settles() {
+        let mut sway = HeldSway::new(rest());
+        let dt = 1.0 / 60.0;
+        // Turning left at a radian a second, steadily.
+        for frame in 0..30 {
+            sway.follow(Vec2::new(frame as f32 * dt, 0.0), dt);
+        }
+        let turning = sway.transform(Gait::default()).translation;
+        assert!(turning.x > HELD_FLAME.x + 0.2, "trails right: {turning}");
+        assert!(turning.x < HELD_FLAME.x + 2.0, "only slightly: {turning}");
+        // The look stops; the torch comes back to rest.
+        for _ in 0..120 {
+            sway.follow(Vec2::new(29.0 * dt, 0.0), dt);
+        }
+        assert!(sway.transform(Gait::default()).translation.abs_diff_eq(HELD_FLAME, 1e-3));
+        // Across the yaw wrap the turn is the short way round.
+        let mut wrap = HeldSway::new(rest());
+        wrap.follow(Vec2::new(std::f32::consts::PI - 0.01, 0.0), dt);
+        wrap.follow(Vec2::new(-std::f32::consts::PI + 0.01, 0.0), dt);
+        assert!(wrap.lag.x > 0.0 && wrap.lag.x < HELD_LAG_MAX, "{}", wrap.lag);
+    }
+
+    #[test]
+    fn yaw_and_pitch_read_from_the_eye() {
+        let eye = GlobalTransform::from(Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.7, -0.3, 0.0)));
+        assert!(yaw_pitch(&eye).abs_diff_eq(Vec2::new(0.7, -0.3), 1e-5));
     }
 
     #[test]

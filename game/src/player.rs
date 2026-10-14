@@ -51,13 +51,31 @@ impl Plugin for PlayerPlugin {
 /// How the body is moving and looking. Yaw and pitch are kept here so the transforms can be
 /// rebuilt from them without drift.
 #[derive(Component, Debug, Default)]
+#[require(Gait)]
 struct Locomotion {
     yaw: f32,
     pitch: f32,
     /// Floor velocity, world units per second, as `(x, z)`.
     velocity: Vec2,
-    /// Bob cycle, radians; advances with distance walked.
-    bob_phase: f32,
+}
+
+/// The player's step cycle, for whatever moves with their steps: the head bob here, the torch
+/// in hand in [`crate::carry`].
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Gait {
+    /// Step cycle, radians; one turn per [`STRIDE`] walked (two steps).
+    pub phase: f32,
+    /// Speed as a multiple of walking pace, 0 standing, up to 1.5 hurrying.
+    pub pace: f32,
+}
+
+impl Gait {
+    /// The step's bob as `(sideways, down)`: down at each footfall, swaying toward the stepping
+    /// foot once a stride, both 1 at their peak at walking pace and scaling with speed, so the
+    /// bob fades as the body slows and is still when it stands.
+    pub fn bob(&self) -> Vec2 {
+        Vec2::new(self.pace * self.phase.sin(), self.pace * (1.0 - (2.0 * self.phase).cos()) * 0.5)
+    }
 }
 
 fn spawn_player(mut commands: Commands, level: Res<CurrentLevel>) {
@@ -134,13 +152,13 @@ fn walk(
     keys: Res<ButtonInput<KeyCode>>,
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
-    mut body: Single<(&mut Locomotion, &mut Transform), With<Player>>,
+    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform), With<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP_SECONDS);
     if dt <= 0.0 {
         return;
     }
-    let (locomotion, transform) = &mut *body;
+    let (locomotion, gait, transform) = &mut *body;
     let axis = |plus: KeyCode, minus: KeyCode| keys.pressed(plus) as i32 as f32 - keys.pressed(minus) as i32 as f32;
     let input = Vec2::new(axis(KeyCode::KeyD, KeyCode::KeyA), axis(KeyCode::KeyW, KeyCode::KeyS));
     let speed = if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { HURRY_SPEED } else { WALK_SPEED };
@@ -155,18 +173,14 @@ fn walk(
     locomotion.velocity = (to - from) / dt;
     transform.translation.x = to.x;
     transform.translation.z = to.y;
-    locomotion.bob_phase = (locomotion.bob_phase + (to - from).length() / STRIDE * std::f32::consts::TAU) % std::f32::consts::TAU;
+    gait.phase = (gait.phase + (to - from).length() / STRIDE * std::f32::consts::TAU) % std::f32::consts::TAU;
+    gait.pace = (locomotion.velocity.length() / WALK_SPEED).min(1.5);
 }
 
-/// A small step bob: down at each footfall, swaying a little toward the stepping foot. It
-/// scales with speed, so it fades as the body slows.
-fn bob_head(
-    body: Single<&Locomotion, With<Player>>,
-    mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>,
-) {
-    let pace = (body.velocity.length() / WALK_SPEED).min(1.5);
-    let phase = body.bob_phase;
-    camera.translation = Vec3::new(BOB_SWAY * pace * phase.sin(), EYE_HEIGHT - BOB_HEIGHT * pace * (1.0 - (2.0 * phase).cos()) * 0.5, 0.0);
+/// A small step bob of the head ([`Gait::bob`]).
+fn bob_head(body: Single<&Gait, With<Player>>, mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
+    let bob = body.bob();
+    camera.translation = Vec3::new(BOB_SWAY * bob.x, EYE_HEIGHT - BOB_HEIGHT * bob.y, 0.0);
 }
 
 /// A world position on the floor plane, as `(x, z)`.
@@ -271,6 +285,17 @@ mod tests {
     }
 
     const ROOM: &[&str] = &["#####", "#...#", "#...#", "#...#", "#####"];
+
+    #[test]
+    fn the_bob_is_still_standing_and_dips_at_each_footfall() {
+        assert_eq!(Gait { phase: 1.3, pace: 0.0 }.bob(), Vec2::ZERO);
+        let walking = |phase: f32| Gait { phase, pace: 1.0 }.bob();
+        assert!(walking(0.0).abs_diff_eq(Vec2::ZERO, 1e-6));
+        // Lowest twice a stride, swaying to one side then the other.
+        assert!((walking(std::f32::consts::FRAC_PI_2).y - 1.0).abs() < 1e-6);
+        assert!((walking(std::f32::consts::FRAC_PI_2).x - 1.0).abs() < 1e-6);
+        assert!((walking(3.0 * std::f32::consts::FRAC_PI_2).x + 1.0).abs() < 1e-6);
+    }
 
     #[test]
     fn free_moves_are_untouched() {
