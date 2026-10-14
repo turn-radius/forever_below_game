@@ -3,15 +3,14 @@
 //!
 //! - [`Person::of`] says who stands at a spot: their body ([`BodySpec::roll`]), a name from
 //!   `data/syl.json`, and an outfit from their faction's leaning ([`fb_level::FACTIONS`])
-//!   rolled through `fb_items` ([`fb_items::outfit::Outfit::roll`], which also gives a bare-headed gnome a pointed hat as the plate does). Everyone holds something: a weapon, a light or
-//!   both.
-//! - [`Figure::of`] fits it all to the body: held gear first ([`fit_held`], each hand posing
-//!   its arm, [`Body::posed`]), then what is worn ([`fit_worn`]). Its meshes split into the
-//!   body and the head (the head, hair, and a helm or hat), which turns about the neck.
+//!   rolled through [`fb_items::outfit::Outfit::roll`] (which gives a bare-headed gnome a
+//!   pointed hat, as the plate does). Everyone holds something: a weapon, a light or both.
+//! - The shared [`Figure::dress`] (`crate::figure`, as the doll uses) fits it all to the body:
+//!   held gear first, posing each arm, then what is worn. The pieces that turn with the head
+//!   (head, hair, a helm or hat) go under a pivot at the neck.
 //! - Each item is drawn with its own look (palette, condition, etching) by the
 //!   [`ItemSpawner`], in the house style: toon bands, ink and decay. Skin carries the person's
 //!   dirt. A lit torch or lantern in hand lights the room round them.
-//!
 //! - Standing, they breathe and now and then shift their weight ([`Idle`]): the whole figure
 //!   moves a little about its feet, since there is no skeleton. A player within
 //!   [`LOOK_RANGE`] draws their head round ([`look_at`]), turning about the neck; under a hood,
@@ -26,19 +25,19 @@
 
 use std::sync::Arc;
 
-use armory::{ItemMesh, build::light::LightAnchor, cond::Condition};
 use bevy::{app::Propagate, light::NotShadowCaster, platform::collections::HashMap, prelude::*, tasks::ComputeTaskPool, ui::ComputedUiRenderTargetInfo};
-use fb_body::{Body, BodySpec, HeldFit, Side, WornFit, fit_held, fit_worn};
+use fb_body::BodySpec;
 use fb_items::{Item, Rarity, Slot, roll_item};
 use fb_level::{FolkSpot, Level};
 use procgen_rng::Mulberry32;
 
-use crate::carry::{Aimed, REACH, ViewModelCamera, appearance_of, item_light, nearest_hit, world_light};
+use crate::carry::{Aimed, REACH, ViewModelCamera, nearest_hit, world_light};
+use crate::figure::Figure;
 use crate::inventory::card::{CARD_WIDTH, place_under};
 use crate::level::EXPOSURE;
 use crate::play::{CurrentLevel, Obstacles, PlayerCamera, ScreenOpen};
 use crate::ui::{BG, FAINT, INK, LINE, MUTED, UiFonts, rarity_color};
-use crate::render::{ItemAppearance, ItemSpawner};
+use crate::render::ItemSpawner;
 
 pub struct FolkPlugin;
 
@@ -121,111 +120,10 @@ impl Person {
     }
 }
 
-/// The hand each holding slot is held in.
-pub fn hand_of(slot: Slot) -> Option<Side> {
-    match slot {
-        Slot::Mainhand => Some(Side::Right),
-        Slot::Offhand => Some(Side::Left),
-        _ => None,
-    }
-}
-
-/// One piece of a figure: a mesh in body space and how it looks.
-#[derive(Clone, Debug)]
-pub struct Piece {
-    pub name: String,
-    pub mesh: ItemMesh,
-    pub appearance: ItemAppearance,
-    /// Whether it casts a shadow. A lit torch or lantern does not, or its own flame and body
-    /// would black out its light (as for lit things on the floor, `crate::carry`).
-    pub shadow: bool,
-}
-
-/// A light a figure carries: where its heart is in body space, and what light it gives.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct HeldLight {
-    pub at: Vec3,
-    pub anchor: LightAnchor,
-}
-
-/// A person fitted and built, in body space (soles on y = 0, face +Z).
-#[derive(Clone, Debug)]
-pub struct Figure {
-    pub body: Body,
-    /// What each hand holds, as fitted.
-    pub held: Vec<(Slot, HeldFit)>,
-    pub worn: WornFit,
-    /// Skin, held gear and everything worn below the head.
-    pub torso: Vec<Piece>,
-    /// What turns with the head: head, hair, and a helm or hat. Empty under a hood, whose cape
-    /// lies on the shoulders, so the whole figure turns a little instead.
-    pub head: Vec<Piece>,
-    /// Where the head turns, in body space: the base of the neck.
-    pub neck: Vec3,
-    /// The lights its hands hold.
-    pub lights: Vec<HeldLight>,
-    /// The circle on the floor it stands in, which the player cannot walk into.
-    pub radius: f32,
-}
-
-impl Figure {
-    /// Fits `person`'s gear to their body and builds every mesh.
-    pub fn of(person: &Person) -> Figure {
-        let spec = &person.spec;
-        let mut body = Body::new(spec);
-        let mut held = Vec::new();
-        for (slot, item) in person.held() {
-            let Some(side) = hand_of(*slot) else { continue };
-            if let Some(fit) = fit_held(&body, side, &item.shape) {
-                body = Body::posed(spec, fit.pose);
-                held.push((*slot, fit));
-            }
-        }
-        let worn_items: Vec<(Slot, armory::Item)> = person.worn().map(|(slot, item)| (*slot, item.shape.clone())).collect();
-        let worn = fit_worn(&body, &worn_items);
-
-        let flesh = ItemAppearance {
-            seed: spec.seed,
-            condition: Condition { wear: person.dirt, ..Condition::default() },
-            ..default()
-        };
-        let mut skin = body.skin_mesh();
-        skin.parts.retain(|p| !worn.covered.hides(p.name));
-        let mut torso = vec![Piece { name: "skin".into(), mesh: skin, appearance: flesh, shadow: true }];
-        let hooded = matches!(person.item(Slot::Head).map(|i| &i.shape), Some(armory::Item::Hood(_)));
-        let mut head = vec![
-            Piece { name: "head".into(), mesh: body.head_mesh(), appearance: flesh, shadow: true },
-            Piece { name: "hair".into(), mesh: body.hair_mesh(worn.hair), appearance: flesh, shadow: true },
-        ];
-        for layer in &worn.layers {
-            let Some(item) = person.item(layer.slot) else { continue };
-            let piece = Piece { name: item.title().to_string(), mesh: layer.mesh.clone(), appearance: appearance_of(&item.shape), shadow: true };
-            if layer.slot == Slot::Head && !hooded { head.push(piece) } else { torso.push(piece) }
-        }
-        let mut lights = Vec::new();
-        for (slot, fit) in &held {
-            let name = person.item(*slot).map_or_else(String::new, |i| i.title().to_string());
-            let light = item_light(&fit.item);
-            lights.extend(light.map(|anchor| HeldLight { at: Vec3::from_array(fit.to_body(anchor.position)), anchor }));
-            torso.push(Piece { name, mesh: fit.mesh.clone(), appearance: appearance_of(&fit.item), shadow: light.is_none() });
-        }
-        if hooded {
-            torso.append(&mut head);
-        }
-        // A bald head has no hair to draw.
-        torso.retain(|p| !p.mesh.parts.is_empty());
-        head.retain(|p| !p.mesh.parts.is_empty());
-        let neck = Vec3::from_array(body.neck_base().origin);
-        // Shoulders and a layer or two of clothes. Our own allowance.
-        let radius = body.shoulder_half_width * 1.2 + 0.3;
-        Figure { body, held, worn, torso, head, neck, lights, radius }
-    }
-
-    /// The figure's bounds in body space, every piece included.
-    pub fn bounds(&self) -> (Vec3, Vec3) {
-        let points = self.torso.iter().chain(&self.head).flat_map(|p| &p.mesh.parts).flat_map(|part| &part.positions).map(|&p| Vec3::from_array(p));
-        points.fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(p), hi.max(p)))
-    }
+/// The circle on the floor someone in `figure` stands in, which the player cannot walk into:
+/// their shoulders and a layer or two of clothes. Our own allowance.
+pub fn footprint(figure: &Figure) -> f32 {
+    figure.body.shoulder_half_width * 1.2 + 0.3
 }
 
 /// Figures already built, by spot seed, so a level drawn again reuses them.
@@ -241,7 +139,7 @@ impl FolkFigures {
             for spot in &missing {
                 scope.spawn(async move {
                     let person = Person::of(spot);
-                    let figure = Figure::of(&person);
+                    let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
                     (person, figure)
                 });
             }
@@ -257,7 +155,7 @@ impl FolkFigures {
 #[derive(Component, Clone, Debug)]
 pub struct Denizen {
     pub person: Person,
-    /// The circle on the floor they stand in ([`Figure::radius`]).
+    /// The circle on the floor they stand in ([`footprint`]).
     pub radius: f32,
     /// The figure's bounds in its root's space, for looking at them.
     pub min: Vec3,
@@ -395,37 +293,36 @@ fn spawn_folk(
     }
     for built in figures.for_spots(&level.0.folk) {
         let (person, figure) = &*built;
-        spawn_figure(&mut commands, &mut spawner, person, figure);
+        spawn_denizen(&mut commands, &mut spawner, person, figure);
     }
     *shown = Some(level.0.folk.clone());
 }
 
-/// Spawns one figure: a root at the spot, a [`Stance`] under it carrying the body's pieces,
-/// and the head's pieces under a pivot at the neck.
-pub fn spawn_figure(commands: &mut Commands, spawner: &mut ItemSpawner, person: &Person, figure: &Figure) -> Entity {
+/// Spawns one person: a root at the spot, a [`Stance`] under it carrying the figure's pieces,
+/// and the pieces that turn with the head under a pivot at the neck.
+pub fn spawn_denizen(commands: &mut Commands, spawner: &mut ItemSpawner, person: &Person, figure: &Figure) -> Entity {
+    let (min, max) = figure.bounds().unwrap_or((Vec3::ZERO, Vec3::ZERO));
     let root = commands
-        .spawn((
-            Name::new(person.name.clone()),
-            Denizen { person: person.clone(), radius: figure.radius, min: figure.bounds().0, max: figure.bounds().1 },
-            stand_at(&person.spot),
-            Visibility::default(),
-        ))
+        .spawn((Name::new(person.name.clone()), Denizen { person: person.clone(), radius: footprint(figure), min, max }, stand_at(&person.spot), Visibility::default()))
         .id();
     let stance = commands.spawn((Stance { idle: Idle::of(person.spot.seed), turn: 0.0 }, Transform::default(), Visibility::default(), ChildOf(root))).id();
-    for piece in &figure.torso {
+    let head = figure
+        .pieces
+        .iter()
+        .any(|p| p.on_head)
+        .then(|| commands.spawn((FolkHead::default(), Transform::from_translation(figure.neck), Visibility::default(), ChildOf(stance))).id());
+    for piece in figure.pieces.iter().filter(|p| !p.mesh.parts.is_empty()) {
         let mut entity = spawner.spawn(&piece.mesh, &piece.appearance);
-        entity.insert((Name::new(piece.name.clone()), ChildOf(stance)));
-        if !piece.shadow {
+        entity.insert(Name::new(piece.name.clone()));
+        match head.filter(|_| piece.on_head) {
+            Some(head) => entity.insert((Transform::from_translation(-figure.neck), ChildOf(head))),
+            None => entity.insert(ChildOf(stance)),
+        };
+        if piece.lit {
             entity.insert(Propagate(NotShadowCaster));
         }
     }
-    if !figure.head.is_empty() {
-        let head = commands.spawn((FolkHead::default(), Transform::from_translation(figure.neck), Visibility::default(), ChildOf(stance))).id();
-        for piece in &figure.head {
-            spawner.spawn(&piece.mesh, &piece.appearance).insert((Name::new(piece.name.clone()), Transform::from_translation(-figure.neck), ChildOf(head)));
-        }
-    }
-    for light in &figure.lights {
+    if let Some(light) = &figure.light {
         // A little above the flame, so the hand and the stone under it do not burn white.
         commands.spawn((world_light(&light.anchor, &EXPOSURE), Transform::from_translation(light.at + Vec3::Y * HELD_LIGHT_LIFT), ChildOf(stance)));
     }
@@ -635,12 +532,14 @@ mod tests {
     fn everyone_on_1207_is_dressed_and_holds_something() {
         for spot in folk_1207() {
             let person = Person::of(&spot);
-            let figure = Figure::of(&person);
-            assert!(!figure.held.is_empty(), "{} holds nothing: {:?}", person.name, person.gear.iter().map(|g| &g.1.name).collect::<Vec<_>>());
-            assert!(!figure.worn.layers.is_empty(), "{} wears nothing", person.name);
-            assert!(figure.head.iter().chain(&figure.torso).all(|p| !p.mesh.parts.is_empty()), "{}", person.name);
+            let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+            let names: Vec<&str> = figure.pieces.iter().map(|p| p.name.as_str()).collect();
+            let holds = person.held().filter(|(_, item)| names.contains(&item.title())).count();
+            assert!(holds > 0, "{} holds nothing: {names:?}", person.name);
+            assert!(person.worn().any(|(_, item)| names.contains(&item.title())), "{} wears nothing: {names:?}", person.name);
+            assert!(figure.pieces.iter().any(|p| p.on_head), "{}: nothing turns with the head", person.name);
             // Standing on the floor, about as tall as their folk.
-            let (lo, hi) = figure.bounds();
+            let (lo, hi) = figure.bounds().unwrap();
             assert!(lo.y > -0.5 && lo.y < 0.5, "{}: lowest point {}", person.name, lo.y);
             assert!(hi.y > spot.folk.race().h * 0.85, "{}: {} tall", person.name, hi.y);
         }
@@ -798,8 +697,9 @@ mod tests {
         assert_eq!(app.world().resource::<Obstacles>().0, vec![(Vec2::ZERO, 2.5)]);
         // And on 1207 every folk stands in a circle wide enough to bump into.
         for spot in folk_1207().iter().take(2) {
-            let figure = Figure::of(&Person::of(spot));
-            assert!(figure.radius > 1.5 && figure.radius < 5.0, "{}", figure.radius);
+            let person = Person::of(spot);
+            let radius = footprint(&Figure::dress(&person.spec, &person.gear, person.dirt));
+            assert!(radius > 1.5 && radius < 5.0, "{radius}");
         }
     }
 }
