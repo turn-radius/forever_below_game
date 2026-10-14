@@ -441,7 +441,7 @@ fn hold_debug_pose(
 
 /// Spawns (or respawns, when the level changes) every item the level lays out, each kept
 /// track of in the inventory, loose.
-fn lay_out_items(
+pub(crate) fn lay_out_items(
     mut commands: Commands,
     level: Res<CurrentLevel>,
     old: Query<(Entity, &FloorItem)>,
@@ -753,7 +753,7 @@ fn aim(
 
 /// E picks up the item under the crosshair ([`Inventory::pick_up`]). Something with no room for
 /// it stays where it lies.
-fn pick_up(
+pub(crate) fn pick_up(
     mut commands: Commands,
     input: ActionInput,
     mut aimed: ResMut<Aimed>,

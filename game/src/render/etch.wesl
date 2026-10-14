@@ -7,7 +7,7 @@
 // pattern is projected three ways in item space and blended by the item-space normal, so it is
 // fixed to the item as it turns. See `docs/rendering.md`.
 
-import super::decay::{fbm, value_noise};
+import super::decay::{detail, fbm, value_noise};
 
 const ETCH_NONE: u32 = 0u;
 const ETCH_SCROLLWORK: u32 = 1u;
@@ -111,11 +111,15 @@ fn etch_plane(p: vec2<f32>, id: u32, w: f32, seed: f32) -> f32 {
 }
 
 // Works `etch` into `color`. `item_position` and `item_normal` are in item space; the decay
-// arguments wear the lines away with the surface, as the prototype does.
+// arguments wear the lines away with the surface, as the prototype does. `pixel` is how many
+// item units one pixel spans: lines fade out once a repeat of the pattern is under about eight
+// pixels across, where they would only shimmer (as the wear's fine detail does, `detail`; the
+// eight is our own).
 fn apply_etch(
     color: vec3<f32>,
     item_position: vec3<f32>,
     item_normal: vec3<f32>,
+    pixel: f32,
     etch: Etch,
     decay_amount: f32,
     decay_scale: f32,
@@ -138,7 +142,8 @@ fn apply_etch(
     // Wear rubs the lines out where the surface is worst.
     let a = clamp(decay_amount, 0.0, 1.2);
     let p = item_position * decay_scale + vec3(seed);
-    let n2 = fbm(p * 3.3 + vec3(4.1));
+    let n2 = fbm(p * 3.3 + vec3(4.1), pixel * decay_scale * 3.3);
+    mask = mask * detail(2.0, pixel * etch.scale);
     mask = mask * clamp(1.0 - a * 0.8 * smoothstep(0.3, 0.8, n2), 0.0, 1.0);
 
     var line = select(color * etch.darken, mix(color, etch.color, 0.9), etch.inlaid != 0u);

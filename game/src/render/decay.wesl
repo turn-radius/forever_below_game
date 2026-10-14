@@ -38,15 +38,33 @@ fn value_noise(x: vec3<f32>) -> f32 {
     return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
 }
 
-// Four octaves of value noise, normalised to roughly 0..1.
-fn fbm(p_in: vec3<f32>) -> f32 {
+// How much of a detail survives on screen: `frequency` is its lattice cells per unit of the
+// pattern and `cell` the units one pixel spans (`fwidth`), so `frequency * cell` is lattice
+// cells per pixel. Kept whole while a lattice cell spans four pixels or more, gone by two
+// (the Nyquist limit), so fine noise fades to its mean instead of shimmering as the view moves.
+// Band limiting by the pixel footprint is Inigo Quilez's ("Band limited synthesis",
+// https://iquilezles.org/articles/bandlimiting/); the 2 to 4 pixel window is our own.
+fn detail(frequency: f32, cell: f32) -> f32 {
+    return 1.0 - smoothstep(0.25, 0.5, frequency * cell);
+}
+
+// Value noise at `p`, faded to its mean (0.5) where a pixel spans `cell` units or more of `p`.
+fn filtered_noise(p: vec3<f32>, cell: f32) -> f32 {
+    return mix(0.5, value_noise(p), detail(1.0, cell));
+}
+
+// Four octaves of value noise, normalised to roughly 0..1. Each octave fades to its mean once
+// it is finer than a pixel spans (`cell`, in units of `p_in`; 0 keeps every octave).
+fn fbm(p_in: vec3<f32>, cell: f32) -> f32 {
     var p = p_in;
     var amplitude = 0.5;
+    var frequency = 1.0;
     var sum = 0.0;
     for (var k = 0; k < 4; k = k + 1) {
-        sum = sum + amplitude * value_noise(p);
+        sum = sum + amplitude * mix(0.5, value_noise(p), detail(frequency, cell));
         p = p * 2.03 + vec3(1.7, 9.2, 3.1);
         amplitude = amplitude * 0.5;
+        frequency = frequency * 2.03;
     }
     return sum / 0.94;
 }
@@ -75,23 +93,27 @@ fn luminance(c: vec3<f32>) -> f32 {
 
 // Returns `color` worn by `amount` (0 = as made, up to 1.2 = ruinous) for material
 // `decay_type`. `item_position` is in item space; `scale` sets the size of the pattern and
-// `seed` shifts it per item.
+// `seed` shifts it per item. `pixel` is how many item units one pixel spans
+// (`length(fwidth(item_position))`): detail finer than that fades out (`detail`).
 fn apply_decay(
     color: vec3<f32>,
     item_position: vec3<f32>,
+    pixel: f32,
     decay_type: u32,
     amount: f32,
     scale: f32,
     seed: f32,
 ) -> vec3<f32> {
     var c = color;
+    // Units of the pattern (`p` below) one pixel spans.
+    let cell = pixel * scale;
     let a = clamp(amount, 0.0, 1.2);
 
     // Wood grain is part of the material, not wear: drawn even on new wood.
     var grain = 0.0;
     if decay_type == DECAY_WOOD {
         let q = vec3(item_position.x * 22.0, item_position.y * 1.2, item_position.z * 22.0);
-        grain = fbm(q * scale * 0.6 + vec3(seed));
+        grain = fbm(q * scale * 0.6 + vec3(seed), cell * 22.0 * 0.6);
         c = c * (0.92 + 0.16 * grain);
     }
 
@@ -102,33 +124,33 @@ fn apply_decay(
     // How far along the decay is: 0 as made, 1 at the ruinous end (a grave find).
     let t = a / 1.2;
     let p = item_position * scale + vec3(seed);
-    let n = fbm(p);
-    let n2 = fbm(p * 3.3 + vec3(4.1));
+    let n = fbm(p, cell);
+    let n2 = fbm(p * 3.3 + vec3(4.1), cell * 3.3);
 
     if decay_type == DECAY_IRON {
         // Dulling, then rust blooms ringed with stain and pitted, with sound metal between.
         // Even a grave find keeps about half its surface bare.
         c = mix(c, c * vec3(0.8, 0.79, 0.78), t * 0.7);
         // Blooms come from a coarser sample than `n`, so they spread a few centimetres.
-        let blooms = patch_field(fbm(p * 0.5 + vec3(5.2)), n2);
+        let blooms = patch_field(fbm(p * 0.5 + vec3(5.2), cell * 0.5), n2);
         let bloom = patches(blooms, t * 0.5, 0.12);
         let stain = patches(blooms, t * 0.68, 0.5);
         c = mix(c, c * vec3(0.74, 0.6, 0.5), stain * 0.7);
-        let crust = value_noise(p * 7.0 + vec3(2.3));
+        let crust = filtered_noise(p * 7.0 + vec3(2.3), cell * 7.0);
         let rust = mix(vec3(0.32, 0.14, 0.07), vec3(0.56, 0.27, 0.11), smoothstep(0.3, 0.75, crust * 0.6 + n2 * 0.4));
         c = mix(c, rust, bloom);
         // Pits: dark specks, thickest in the blooms.
-        let pit = smoothstep(0.0, 0.03, value_noise(p * 15.0 + vec3(7.3)) - mix(0.97, 0.88, t) + 0.1 * bloom);
+        let pit = smoothstep(0.0, 0.03, filtered_noise(p * 15.0 + vec3(7.3), cell * 15.0) - mix(0.97, 0.88, t) + 0.1 * bloom);
         c = mix(c, vec3(0.1, 0.06, 0.04), pit * smoothstep(0.1, 0.3, t) * 0.85);
     } else if decay_type == DECAY_BRASS {
         // Tarnish darkening the whole surface, then crusts of verdigris in patches.
         c = mix(c, c * vec3(0.66, 0.56, 0.4), t * 0.8);
-        let field = patch_field(fbm(p * 0.6 + vec3(8.4)), n2);
+        let field = patch_field(fbm(p * 0.6 + vec3(8.4), cell * 0.6), n2);
         let crust = patches(field, t * 0.25, 0.12);
         // A darker green ring where the crust thins out.
         let rim = patches(field, t * 0.36, 0.4) * (1.0 - crust);
         c = mix(c, c * vec3(0.55, 0.68, 0.58), rim * 0.7);
-        let verdigris = mix(vec3(0.3, 0.55, 0.47), vec3(0.45, 0.66, 0.56), smoothstep(0.35, 0.65, value_noise(p * 6.0)));
+        let verdigris = mix(vec3(0.3, 0.55, 0.47), vec3(0.45, 0.66, 0.56), smoothstep(0.35, 0.65, filtered_noise(p * 6.0, cell * 6.0)));
         c = mix(c, verdigris, crust);
     } else if decay_type == DECAY_WOOD {
         // Silvering, rot, moss.
@@ -136,7 +158,7 @@ fn apply_decay(
         c = c * (1.0 - a * 0.25 * smoothstep(0.55, 0.75, grain));
         let rot = patches(patch_field(n, n2), t * 0.2, 0.2);
         c = mix(c, vec3(0.17, 0.12, 0.08), rot);
-        let moss = patches(patch_field(n2, fbm(p * 0.7 + vec3(3.9))), 0.2 * smoothstep(0.4, 0.75, a), 0.15);
+        let moss = patches(patch_field(n2, fbm(p * 0.7 + vec3(3.9), cell * 0.7)), 0.2 * smoothstep(0.4, 0.75, a), 0.15);
         c = mix(c, vec3(0.36, 0.42, 0.22), 0.8 * moss);
     } else if decay_type == DECAY_LEATHER {
         // Darkening, scuffs, grime.

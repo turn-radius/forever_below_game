@@ -302,10 +302,12 @@ fn fragment(
     );
     // Etching after the pattern, wear over both (`DECAY_BODY`).
     let item_normal = normalize((get_local_from_world(vertex_output.instance_index) * vec4<f32>(pbr_input.world_normal, 0.0)).xyz);
+    let pixel = length(fwidth(item_position));
     let etched = apply_etch(
         patterned,
         item_position,
         item_normal,
+        pixel,
         Etch(
             toon.etch_id,
             toon.etch_color,
@@ -323,6 +325,7 @@ fn fragment(
     let base = apply_decay(
         etched,
         item_position,
+        pixel,
         toon.decay_type,
         toon.decay_amount,
         toon.decay_scale,

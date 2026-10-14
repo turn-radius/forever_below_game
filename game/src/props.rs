@@ -348,6 +348,52 @@ mod tests {
     }
 
     #[test]
+    fn the_level_s_things_are_spawned_once_and_stay_put() {
+        use crate::carry::{Aimed, FloorItem, lay_out_items, pick_up};
+        use crate::folk::{Denizen, FolkFigures, idle_folk, spawn_folk};
+        use crate::inventory::underfoot::{FloorChanges, apply_floor_changes};
+        use crate::play::{BlockedCells, CurrentLevel};
+        let mut app = props_app();
+        // Everything that lays out, or may touch, the level every frame while delving.
+        app.add_plugins(bevy::time::TimePlugin)
+            .init_resource::<Aimed>()
+            .init_resource::<BlockedCells>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<FolkFigures>()
+            .init_resource::<FloorChanges>()
+            .add_systems(
+                Update,
+                (
+                    lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    idle_folk,
+                    pick_up,
+                    apply_floor_changes,
+                ),
+            );
+        // The level was laid out by `props_app`'s first frame; items and folk need it changed.
+        app.world_mut().resource_mut::<CurrentLevel>().set_changed();
+        app.update();
+        type Roots<'w> = (Entity, &'w Transform, Has<FloorItem>, Has<PropPiece>, Has<Denizen>);
+        let snapshot = |app: &mut App| {
+            let mut roots = app.world_mut().query_filtered::<Roots, Or<(With<FloorItem>, With<PropPiece>, With<Denizen>)>>();
+            let mut all: Vec<(Entity, Transform, bool, bool, bool)> = roots.iter(app.world()).map(|(e, t, f, p, d)| (e, *t, f, p, d)).collect();
+            all.sort_by_key(|r| r.0);
+            all
+        };
+        let first = snapshot(&mut app);
+        let level = fb_level::generate(1207);
+        assert_eq!(first.iter().filter(|r| r.2).count(), level.items.len());
+        assert_eq!(first.iter().filter(|r| r.3).count(), level.props.len());
+        assert_eq!(first.iter().filter(|r| r.4).count(), level.folk.len());
+        for _ in 0..120 {
+            app.update();
+        }
+        assert_eq!(snapshot(&mut app), first, "something in the level was respawned or moved");
+    }
+
+    #[test]
     fn a_container_opened_from_the_level_has_an_upright_icon() {
         use crate::inventory::icon::{icon_pose, stands_upright};
         let mut app = props_app();

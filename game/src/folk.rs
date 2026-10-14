@@ -277,7 +277,7 @@ pub fn stand_at(spot: &FolkSpot) -> Transform {
 }
 
 /// Spawns every folk spot of the level once, and again only if the spots change.
-fn spawn_folk(
+pub(crate) fn spawn_folk(
     mut commands: Commands,
     level: Res<CurrentLevel>,
     mut figures: ResMut<FolkFigures>,
@@ -337,7 +337,7 @@ pub fn spawn_denizen(commands: &mut Commands, spawner: &mut ItemSpawner, person:
 
 /// Breathes and shifts every figure's weight ([`Idle::at`]), turned toward the player as far
 /// as [`Stance::turn`] says.
-fn idle_folk(time: Res<Time>, mut stances: Query<(&Stance, &mut Transform)>) {
+pub(crate) fn idle_folk(time: Res<Time>, mut stances: Query<(&Stance, &mut Transform)>) {
     let t = time.elapsed_secs();
     for (stance, mut transform) in &mut stances {
         let idle = stance.idle.at(t);
