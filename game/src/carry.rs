@@ -369,6 +369,7 @@ pub fn nearest_aimed<T: Copy>(
 /// An item lying in the level, with its item-space bounds for picking. The item itself is in
 /// the [`Inventory`], loose.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct FloorItem {
     pub id: ItemId,
     pub spot: ItemSpot,
@@ -487,6 +488,7 @@ fn yaw_pitch(eye: &GlobalTransform) -> Vec2 {
 /// The camera that draws the view model over the world. It stands on [`VIEW_MODEL_STAGE`],
 /// with what is held and the carried light's light as children.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct ViewModelCamera {
     /// The [`PlayerCamera`] it draws over.
     pub follows: Entity,
@@ -541,6 +543,7 @@ impl DebugPose {
 /// A camera spawned because no [`PlayerCamera`] existed after startup, so the torch and items
 /// can be seen without the player plugin.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct StandInCamera;
 
 fn no_player_camera(cameras: Query<(), With<PlayerCamera>>) -> bool {
@@ -981,6 +984,7 @@ fn swing_hip(mut pivots: Query<(&mut Transform, &ChildOf), With<HipSwing>>, gait
 
 /// The HUD over the level: the crosshair. Hidden while a screen is open.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct Hud;
 
 fn hide_hud_under_screens(open: Res<ScreenOpen>, mut huds: Query<&mut Visibility, With<Hud>>) {
@@ -1877,6 +1881,24 @@ mod tests {
             }
         }
         assert!(items.iter().any(|i| i.rarity != Rarity::Common), "a level of nothing but common items");
+    }
+
+    #[test]
+    fn every_torch_and_lantern_lying_in_a_level_can_be_held_in_the_off_hand() {
+        let mut lights = 0;
+        for seed in 1..=32 {
+            for spot in fb_level::generate(seed).items.iter().filter(|s| matches!(s.family, Family::Torch | Family::Lantern)) {
+                let item = fb_items::roll_loot(spot.family, spot.seed).unwrap();
+                let (base, name) = (item.base.clone(), item.title().to_string());
+                let mut inventory = Inventory::default();
+                let id = inventory.add(item);
+                assert_eq!(inventory.target_slot(id), Some(fb_items::Slot::Offhand), "seed {seed}: {base} ({name})");
+                inventory.equip(id, fb_items::Slot::Offhand).unwrap_or_else(|r| panic!("seed {seed}: {base} ({name}): {}", r.reason()));
+                assert_eq!(inventory.worn(fb_items::Slot::Offhand), Some(id));
+                lights += 1;
+            }
+        }
+        assert!(lights > 0, "no torch or lantern lies in levels 1 to 32");
     }
 
     #[test]

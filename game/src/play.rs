@@ -27,7 +27,13 @@ use crate::launch::AppState;
 /// Every system that plays the level each frame, in `Update` and `PostUpdate`. The play plugins
 /// put their systems here, and [`PlayPlugin`] runs the set only while [`AppState::Delving`];
 /// a plugin added on its own (in tests) runs its systems always. What a delve spawns at its
-/// start goes in `OnEnter(AppState::Delving)`.
+/// start goes in `OnEnter(AppState::Delving)`. Everything a delve spawns, at its start or
+/// later, is scoped to it: its root carries `DespawnOnExit(AppState::Delving)`, given at the
+/// spawn or required by its marker component ([`Player`], `LevelPiece`, `Critter`, `Denizen`,
+/// `FloorItem`, `Hud` and the like), so leaving the delve despawns it with no list to keep
+/// (Bevy's state-scoped entities,
+/// <https://docs.rs/bevy/0.20.0/bevy/state/state_scoped/struct.DespawnOnExit.html>).
+/// `game/tests/delve_scope.rs` checks it.
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DelveSystems;
 
@@ -43,6 +49,7 @@ pub struct CurrentLevel(pub Level);
 
 /// The player's body. Its `Transform` is at the feet, on the floor; the camera is a child.
 #[derive(Component, Debug, Default)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct Player;
 
 /// The first-person camera, a child of [`Player`].

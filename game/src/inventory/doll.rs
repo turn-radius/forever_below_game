@@ -33,6 +33,7 @@ use fb_items::{
 use super::icon::Icons;
 use super::items::Inventory;
 use super::seal::{Canvas, Glyph, Seal, SealInks, TURN_SECONDS};
+use crate::launch::AppState;
 use crate::carry::item_light;
 use crate::character::Character;
 use crate::figure::{Figure, spawn_figure};
@@ -217,12 +218,6 @@ impl DollStage {
         self.camera
     }
 
-    /// Every entity on the stage: the figure (the portrait camera on it), and the doll camera
-    /// (its key light on it).
-    pub fn entities(&self) -> impl Iterator<Item = Entity> + use<> {
-        [self.figure, self.camera, self.portrait].into_iter().flatten()
-    }
-
     /// The camera drawing the portrait, once there is one.
     pub fn portrait(&self) -> Option<Entity> {
         self.portrait
@@ -276,6 +271,7 @@ pub fn dress_doll(
     let root = spawn_figure(&mut commands, &mut spawner, &figure);
     commands.entity(root).insert((
         Name::new("Doll"),
+        DespawnOnExit(AppState::Delving),
         Transform::from_translation(DOLL_STAGE).with_rotation(Quat::from_rotation_y(stage.turn)),
         Propagate(layer.clone()),
         Propagate(NotShadowCaster),
@@ -336,6 +332,7 @@ pub fn dress_doll(
             let camera = commands
                 .spawn((
                     Name::new("Doll camera"),
+                    DespawnOnExit(AppState::Delving),
                     Camera3d::default(),
                     Camera { order: -3, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },
                     RenderTarget::Image(assets.doll.clone().into()),

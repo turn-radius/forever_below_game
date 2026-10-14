@@ -13,8 +13,8 @@
 //!   the page's colours.
 //! - At 0 the run ends ([`Fallen`]): the delver stops, the view fades to near black with "You
 //!   fall in the abyss", and after [`FALL_TIME`] seconds the game goes back to the title, where
-//!   New delve begins again. Leaving the delve clears everything it spawned
-//!   ([`end_the_delve`]). The SRD's death saving throws (p. 97) are left out.
+//!   New delve begins again. Leaving the delve clears everything it spawned (each is scoped
+//!   to it, [`crate::play::DelveSystems`]) and what it kept ([`end_the_delve`]). The SRD's death saving throws (p. 97) are left out.
 
 use bevy::{
     prelude::*,
@@ -24,15 +24,13 @@ use fb_creatures::Species;
 
 use super::feedback::{Corpse, Struck};
 use super::{Health, RunDice, bite_damage, first_level_hit_points};
-use crate::carry::{Aimed, FloorItem, Hud, StandInCamera, ViewModelCamera};
+use crate::carry::{Aimed, Hud, ViewModelCamera};
 use crate::character::Character;
 use crate::creatures::Critter;
 use crate::creatures::behaviour::{CreatureAttack, reach};
-use crate::folk::Denizen;
 use crate::inventory::Inventory;
 use crate::launch::AppState;
-use crate::level::LevelPiece;
-use crate::play::{BlockedCells, DelveSystems, Obstacles, Player, ScreenOpen};
+use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles, Player, ScreenOpen};
 use crate::player::Slowed;
 use crate::ui::{BAD, BG, BRIGHT, FAINT, MUTED, UiFonts};
 
@@ -133,6 +131,7 @@ fn break_free(
 
 /// The overlay that says the run is over.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct FallOverlay;
 
 /// At 0 hit points the delver stops and the view fades out to "You fall in the abyss"; then
@@ -252,20 +251,13 @@ pub fn hit_points_line(health: &Health) -> String {
     format!("HP {}/{}", health.hp.max(0), health.max)
 }
 
-/// Leaving the delve clears it: the level, its creatures, folk and items, the delver and
-/// their view, and what they carried, so the next delve starts afresh.
-#[allow(clippy::type_complexity)]
-pub fn end_the_delve(
-    mut commands: Commands,
-    spawned: Query<
-        Entity,
-        Or<(With<Player>, With<ViewModelCamera>, With<StandInCamera>, With<Hud>, With<LevelPiece>, With<Critter>, With<FloorItem>, With<Denizen>, With<FallOverlay>)>,
-    >,
-    mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
-) {
-    for entity in &spawned {
-        commands.entity(entity).try_despawn();
-    }
+/// Leaving the delve clears what it kept besides its entities: the level, what the delver
+/// carried and the state of their view, so the next delve starts afresh. Everything the delve
+/// spawned carries `DespawnOnExit(AppState::Delving)` (on its root, or required by its marker
+/// component) and Bevy despawns it on the way out, as its state-scoped entities do
+/// (<https://docs.rs/bevy/0.20.0/bevy/state/state_scoped/struct.DespawnOnExit.html>).
+pub fn end_the_delve(mut commands: Commands, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
+    commands.remove_resource::<CurrentLevel>();
     commands.insert_resource(Inventory::default());
     commands.insert_resource(ScreenOpen::default());
     commands.insert_resource(Obstacles::default());
@@ -364,6 +356,7 @@ mod tests {
         use crate::inventory::{Hovered, OpenContainer, leave_the_delve};
         let (mut app, player, snake) = delve();
         app.init_resource::<crate::inventory::DollStage>()
+            .init_resource::<crate::inventory::icon::IconCache>()
             .insert_resource(OpenContainer(Some(crate::inventory::ItemId(3))))
             .add_systems(OnExit(AppState::Delving), leave_the_delve);
         // A hover card made for this delve's view.

@@ -162,7 +162,7 @@ fn take_blows(
         if let Some(sounds) = &sounds {
             let sound = if critter.spot.species.is_rat() { sounds.squeak.clone() } else { sounds.hiss.clone() };
             let game = settings.as_deref().copied().unwrap_or_default();
-            commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game, &tuning)));
+            commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
         }
         if fell {
             commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<Brain>();

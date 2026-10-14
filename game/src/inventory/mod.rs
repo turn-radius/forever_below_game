@@ -138,14 +138,13 @@ impl Plugin for InventoryPlugin {
     }
 }
 
-/// Leaving the delve clears what the screens kept of it: the doll's figure and the cameras and
-/// lights that draw it, what lay underfoot, a container left open, a hovered item and a toast,
-/// none of which belong to the next delve's delver and items.
-pub fn leave_the_delve(mut commands: Commands, mut stage: ResMut<DollStage>) {
-    for entity in stage.entities() {
-        commands.entity(entity).try_despawn();
-    }
+/// Leaving the delve clears what the screens kept of it: the doll stage's record of its figure
+/// and cameras (despawned with the delve), the icons still being drawn, what lay underfoot, a
+/// container left open, a hovered item and a toast, none of which belong to the next delve's
+/// delver and items.
+pub fn leave_the_delve(mut commands: Commands, mut stage: ResMut<DollStage>, mut icons: ResMut<icon::IconCache>) {
     *stage = DollStage::default();
+    icons.abandon_drawing();
     commands.insert_resource(Underfoot::default());
     commands.insert_resource(FloorChanges::default());
     commands.insert_resource(OpenContainer::default());
@@ -356,6 +355,7 @@ fn open_for_capture(mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut
 
 /// The whole screen, over the level.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct InventoryScreen;
 
 /// The ledger page. Beyond it lies the level.

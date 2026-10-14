@@ -162,7 +162,7 @@ fn start_swing(
         commands.entity(player).insert(Swing { strike, toward: toward.unwrap_or(CROSSHAIR_AIM), flourish, ..Swing::new(weapon) });
         if let Some(sound) = &sound {
             let game = settings.as_deref().copied().unwrap_or_default();
-            commands.spawn((Name::new("swing"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &tuning)));
+            commands.spawn((Name::new("swing"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
         }
     }
 }
