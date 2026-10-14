@@ -275,7 +275,7 @@ impl Inventory {
 
     /// Equips `id` in `slot` (a ring in whichever ring slot is free), taking it from wherever
     /// it was. Whatever was worn there goes back where `id` came from if it fits (the slot it
-    /// was worn in, or its cell in its grid, upright), or else is left loose to be set down
+    /// was worn in, or its cell in its grid, upright or else turned), or else is left loose to be set down
     /// underfoot (the plate's `commitDrop`). Returns the displaced item and where it went.
     pub fn equip(&mut self, id: ItemId, slot: Slot) -> Result<Option<(ItemId, Displaced)>, Refusal> {
         self.check_wear(id, slot)?;
@@ -289,10 +289,12 @@ impl Inventory {
         self.wear(id, slot)?;
         let back = match from {
             Some(Location::Worn(was)) if self.check_wear(old, was).is_ok() && self.wear(old, was).is_ok() => Displaced::Worn(was),
-            Some(Location::In { container, at }) => {
-                let upright = Placement { turned: false, ..at };
-                if self.put(old, container, upright).is_ok() { Displaced::In { container, at: upright } } else { Displaced::Underfoot }
-            }
+            // Upright where it fits, else turned, else set down.
+            Some(Location::In { container, at }) => [false, true]
+                .into_iter()
+                .map(|turned| Placement { turned, ..at })
+                .find(|&placed| self.put(old, container, placed).is_ok())
+                .map_or(Displaced::Underfoot, |at| Displaced::In { container, at }),
             _ => Displaced::Underfoot,
         };
         Ok(Some((old, back)))

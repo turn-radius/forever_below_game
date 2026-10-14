@@ -106,7 +106,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<DollStage>()
             .init_resource::<Character>()
             .add_systems(OnExit(AppState::Delving), leave_the_delve)
-            .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD"))).chain())
+            .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD")), give_for_capture).chain())
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
             .add_systems(
                 Update,
@@ -287,6 +287,41 @@ fn hold_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
     }
 }
 
+/// The bases a comma-separated list names.
+fn bases_in(list: &str) -> impl Iterator<Item = &str> {
+    list.split(',').map(str::trim).filter(|b| !b.is_empty())
+}
+
+/// For captures: `FB_EQUIP` equips one of each base it names in its slot, then `FB_STOW` puts
+/// one of each base it names in the carried grids, after the kit and `FB_HOLD`, so the screen
+/// can be seen with given things worn and in the pack (`FB_EQUIP=Pack` first makes room).
+fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLevel>>) {
+    let roll = |base: &str, salt: u32| roll_held(base, kit_seed(level.as_deref(), 0x5700 + salt));
+    let equip = std::env::var("FB_EQUIP").unwrap_or_default();
+    for (i, base) in bases_in(&equip).enumerate() {
+        let Some(item) = roll(base, 0x80 + i as u32) else {
+            warn!("FB_EQUIP: no base called {base:?}");
+            continue;
+        };
+        match item.profile.slot {
+            Some(slot) => equip_kit(&mut inventory, item, slot),
+            None => warn!("FB_EQUIP: {base:?} is not worn"),
+        }
+    }
+    let stow = std::env::var("FB_STOW").unwrap_or_default();
+    for (i, base) in bases_in(&stow).enumerate() {
+        let Some(item) = roll(base, i as u32) else {
+            warn!("FB_STOW: no base called {base:?}");
+            continue;
+        };
+        let id = inventory.add(item);
+        if inventory.stow(id).is_err() {
+            warn!("FB_STOW: no room for {base:?}");
+            inventory.forget(id);
+        }
+    }
+}
+
 fn open_for_capture(mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
     show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
 }
@@ -399,13 +434,25 @@ pub struct Toast {
     pub until: f32,
 }
 
+/// Where `drag` lands in `container` with its grabbed cell over `cell`: as it lies now; or,
+/// for something being taken off (worn things are drawn upright) and not turned with R since,
+/// turned a quarter turn if it fits only that way.
+pub fn landing(inventory: &Inventory, drag: &Drag, container: ItemId, cell: IVec2) -> Result<Placement, Refusal> {
+    let at = drag.placement_at(cell).ok_or(Refusal::NoRoom)?;
+    match inventory.check_put(drag.id, container, at) {
+        Err(refusal) if !drag.turned && matches!(inventory.location(drag.id), Some(Location::Worn(_))) => {
+            let mut turned = *drag;
+            turned.turn();
+            turned.placement_at(cell).filter(|&at| inventory.check_put(drag.id, container, at).is_ok()).ok_or(refusal)
+        }
+        fits => fits.map(|()| at),
+    }
+}
+
 /// Whether `drag` may be let go at `target`.
 pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<(), Refusal> {
     match target {
-        Target::Cell { view: GridView::Container(container), cell } => {
-            let at = drag.placement_at(cell).ok_or(Refusal::NoRoom)?;
-            inventory.check_put(drag.id, container, at)
-        }
+        Target::Cell { view: GridView::Container(container), cell } => landing(inventory, drag, container, cell).map(|_| ()),
         Target::Slot(slot) => inventory.check_wear(drag.id, slot),
         Target::Doll => inventory.target_slot(drag.id).map_or(Err(Refusal::NotWearable), |slot| inventory.check_wear(drag.id, slot)),
         Target::Cell { view: GridView::Underfoot, .. } | Target::Page | Target::Level => Ok(()),
@@ -465,7 +512,7 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
     };
     match target {
         Target::Cell { view: GridView::Container(container), cell } => {
-            let at = drag.placement_at(cell).ok_or(Refusal::NoRoom)?;
+            let at = landing(inventory, drag, container, cell)?;
             inventory.put(drag.id, container, at)?;
             Ok(lying.then_some(FloorChange::Lifted(drag.id)).into_iter().collect())
         }
@@ -1239,6 +1286,80 @@ mod tests {
         assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Mainhand), 6), Ok(vec![FloorChange::Lifted(mace), FloorChange::SetDown(sword, 0.0)]));
         let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
         assert_eq!(check_drop(&inventory, &Drag { id: bread, ..drag }, Target::Doll), Err(Refusal::NotWearable));
+    }
+
+    /// Whether `item` posed for its icon lying `turned` stands as it is worn: its own up (+Y)
+    /// still up the image and its front (+Z) toward the viewer.
+    fn icon_upright(item: &fb_items::Item, turned: bool) -> bool {
+        let points: Vec<Vec3> = item.shape.build().parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+        let (rotation, ..) = icon::icon_pose(&points, icon::stands_upright(item), turned).unwrap();
+        (rotation * Vec3::Y).y > 0.9 && (rotation * Vec3::Z).z > 0.9
+    }
+
+    #[test]
+    fn r_turns_a_coif_lying_turned_back_upright() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        let coif = fb_items::roll_item("Mail coif", 3).unwrap();
+        assert!(icon_upright(&coif, false), "a coif's icon stands as it is worn");
+        assert!(!icon_upright(&coif, true));
+        let coif = inventory.add(coif);
+        inventory.put(coif, pack, Placement::new(0, 0, true)).unwrap();
+        let entry = *inventory.grid(pack).unwrap().get(coif).unwrap();
+        let mut drag = Drag { id: coif, grab: IVec2::ZERO, size: entry.size, turned: entry.at.turned, press: Vec2::ZERO, active: true, target: None };
+        // R steps through both ways the footprint lies, back to upright.
+        drag.turn();
+        assert!(!drag.turned && icon_upright(inventory.item(coif).unwrap(), drag.turned));
+        assert_eq!(drag.size, inventory.footprint(coif).unwrap());
+        drag.turn();
+        assert!(drag.turned);
+        drag.turn();
+        let into_pack = Target::Cell { view: GridView::Container(pack), cell: IVec2::new(4, 2) };
+        assert_eq!(drop_at(&mut inventory, &drag, into_pack, 6), Ok(vec![]));
+        assert_eq!(inventory.location(coif), Some(Location::In { container: pack, at: Placement::new(4, 2, false) }));
+    }
+
+    #[test]
+    fn worn_gear_icons_stand_upright_and_weapons_lie_along_their_length() {
+        for base in ["Mail coif", "Hood", "Helm", "Pointed hat", "Tunic", "Cloak", "Trousers", "Gloves", "Boots", "Belt", "Amulet", "Ring", "Charm", "Pack", "Sack"] {
+            for seed in [1, 2, 1207] {
+                let item = fb_items::roll_item(base, seed).unwrap();
+                assert!(icon::stands_upright(&item) && icon_upright(&item, false), "{base} {seed}");
+            }
+        }
+        for base in ["Sword", "Staff", "Spear", "Dagger", "Mace", "Bow", "Torch"] {
+            assert!(!icon::stands_upright(&fb_items::roll_item(base, 1).unwrap()), "{base}");
+        }
+    }
+
+    #[test]
+    fn taking_something_off_lands_upright_where_it_fits_else_turned() {
+        let mut inventory = Inventory::default();
+        let belt = inventory.add(fb_items::roll_item("Belt", 3).unwrap());
+        inventory.wear(belt, Slot::Belt).unwrap();
+        // The belt pouch is 4 by 2. Rings fill all but its top-left two cells.
+        for (x, y) in [(2, 0), (3, 0), (0, 1), (1, 1), (2, 1), (3, 1)] {
+            let ring = inventory.add(fb_items::roll_item("Ring", x + 4 * y).unwrap());
+            inventory.put(ring, belt, Placement::new(x as u8, y as u8, false)).unwrap();
+        }
+        let gloves = inventory.add(fb_items::roll_item("Gloves", 4).unwrap());
+        inventory.wear(gloves, Slot::Hands).unwrap();
+        let size = inventory.footprint(gloves).unwrap();
+        assert_eq!(size, Footprint { cols: 1, rows: 2 }, "gloves stand a cell wide and two tall");
+        // Taken off by the slot and let go over the top-left cell: upright it would run onto a
+        // ring, so it lies turned.
+        let drag = Drag { id: gloves, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None };
+        let corner = Target::Cell { view: GridView::Container(belt), cell: IVec2::ZERO };
+        assert_eq!(check_drop(&inventory, &drag, corner), Ok(()));
+        assert_eq!(drop_at(&mut inventory, &drag, corner, 6), Ok(vec![]));
+        assert_eq!(inventory.location(gloves), Some(Location::In { container: belt, at: Placement::new(0, 0, true) }));
+        // Where it fits upright, it lies upright.
+        inventory.wear(gloves, Slot::Hands).unwrap();
+        let ring = inventory.grid(belt).unwrap().at_cell(0, 1).unwrap().id;
+        inventory.take_out(ring);
+        assert_eq!(drop_at(&mut inventory, &drag, corner, 6), Ok(vec![]));
+        assert_eq!(inventory.location(gloves), Some(Location::In { container: belt, at: Placement::new(0, 0, false) }));
     }
 
     #[test]

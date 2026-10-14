@@ -220,18 +220,20 @@ pub fn reveal_icons(mut commands: Commands, cache: Res<IconCache>, awaiting: Que
     }
 }
 
-/// Whether `item` is drawn standing as it is built rather than laid along its longest side:
-/// the Armory's chests, barrels, crates and amphorae are built standing on the floor, +Y up
-/// and their front toward +Z (`armory::families::chests`), and read as what they are only
-/// that way up.
+/// Whether `item` is drawn standing as it is built rather than laid along its longest side
+/// ([`fb_items::profile::stands_upright`]): worn gear as it is worn, built on the implied
+/// mannequin +Y up with its front toward +Z, and the Armory's chests, barrels, crates and
+/// amphorae as they stand on the floor. Each reads as what it is only that way up; laid along
+/// its longest side a coif or a tunic lay on its side. Its footprint runs the same way, so
+/// lying unturned it is upright, and a quarter turn (R) is the only other way it can lie.
 pub fn stands_upright(item: &Item) -> bool {
-    matches!(item.shape, armory::Item::Chests(_))
+    fb_items::profile::stands_upright(item.shape.family())
 }
 
 /// How an item is posed for its icon: turned so its longest side runs up the image and its
 /// next longest across, or, `upright` ([`stands_upright`]), kept as it is built with its
-/// front to the viewer; a quarter turn more if it lies `turned`, then turned and tilted a
-/// little toward the viewer. Returns the rotation and the posed bounds. `None` for an item
+/// front to the viewer; a quarter turn more (clockwise) if it lies `turned`, then turned and
+/// tilted a little toward the viewer. Returns the rotation and the posed bounds. `None` for an item
 /// with no vertices.
 pub fn icon_pose(points: &[Vec3], upright: bool, turned: bool) -> Option<(Quat, Vec3, Vec3)> {
     let (min, max) = bounds(points.iter().copied())?;
