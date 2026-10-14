@@ -23,7 +23,8 @@
 //!   the item itself casts no shadow, or its own flame and handle would black out its light.
 //! - Every item lying in the level is kept track of in the [`Inventory`], loose, so a bag set
 //!   down keeps its contents and the inventory screen can show what lies underfoot.
-//! - A ray from the camera picks the nearest item or container in reach ([`Aimed`]), which the
+//! - The crosshair's line picks the item or container in reach nearest it, within a small
+//!   buffer round it ([`nearest_aimed`], [`AimBuffer`]), as folk are picked ([`Aimed`]), which the
 //!   hover card describes (`crate::inventory::card`); E picks an item up into the inventory
 //!   ([`Inventory::pick_up`]) and opens a container (`crate::props`). Things are set down from the
 //!   inventory screen ([`set_down`], [`drop_spot`]), and rest like any other floor item.
@@ -47,16 +48,16 @@ use bevy::{
 use fb_level::{CELL, ItemSpot, Level};
 
 use crate::character::Character;
-use crate::inventory::{Inventory, ItemId, doll::lit_hand};
+use crate::inventory::{FloorChanges, Inventory, ItemId, Toast, doll::lit_hand, equip_from_floor, header::ToastText, underfoot::apply_floor_changes};
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, level_has_focus};
 use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
-use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
+use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, Shimmer, ToonMaterial};
 use crate::tuning::{LightTuning, Tuning};
-use crate::ui::{BG, BRIGHT};
+use crate::ui::{BG, BRIGHT, UiFonts, rarity_color};
 use crate::view_model::{held_in_view, side_of};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
@@ -128,6 +129,8 @@ impl Plugin for CarryPlugin {
             .init_resource::<Keymap>()
             .init_resource::<Aimed>()
             .init_resource::<Tuning>()
+            .init_resource::<Toast>()
+            .init_resource::<FloorChanges>()
             // Only a delve that opens at startup can lack a player; one begun from the title
             // spawns its own on entering.
             .add_systems(PostStartup, spawn_stand_in_camera.run_if(in_state(AppState::Delving)).run_if(no_player_camera))
@@ -138,11 +141,11 @@ impl Plugin for CarryPlugin {
                     lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
                     equip_player_camera,
                     show_held.after(equip_player_camera),
-                    (widen_view_models, rescale_floor_items).run_if(resource_changed::<Tuning>),
+                    (widen_view_models, rescale_floor_items, reshimmer_floor_items).run_if(resource_changed::<Tuning>),
                     relight_given_lights,
                     follow_player_camera,
                     sway_held,
-                    (aim, pick_up.run_if(level_has_focus)).chain(),
+                    (aim, (pick_up, equip_aimed.before(apply_floor_changes)).run_if(level_has_focus)).chain(),
                     hide_hud_under_screens.run_if(resource_exists::<ScreenOpen>),
                 )
                     .in_set(DelveSystems),
@@ -256,24 +259,99 @@ pub fn ray_box(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
     Some(near)
 }
 
-/// The ray's nearest hit among `targets` (each a world-from-item transform, rigid or evenly
-/// scaled, and its item-space bounds) within `reach`, in world units.
-pub fn nearest_hit<T: Copy>(
+/// How far off the crosshair's line something can lie and still be aimed at: within `angle`
+/// (radians) of it, or within `min_radius` world units of the line, whichever is wider, so a
+/// ring at your feet is as easy to catch as a chest across the room. From the tuning's
+/// `aim_buffer_degrees` and `aim_min_radius` ([`crate::tuning::ViewTuning`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AimBuffer {
+    pub angle: f32,
+    pub min_radius: f32,
+}
+
+impl AimBuffer {
+    /// Only what the line itself passes through.
+    pub const EXACT: AimBuffer = AimBuffer { angle: 0.0, min_radius: 0.0 };
+
+    /// The buffer the tuning gives.
+    pub fn of(tuning: &Tuning) -> AimBuffer {
+        AimBuffer { angle: tuning.view.aim_buffer_degrees.max(0.0).to_radians(), min_radius: tuning.view.aim_min_radius.max(0.0) }
+    }
+
+    /// How far off the line, in world units, something `along` units out may lie.
+    pub fn radius_at(&self, along: f32) -> f32 {
+        (along * self.angle.tan()).max(self.min_radius)
+    }
+}
+
+/// The point of the box `min..max` closest to the segment from `origin` along unit `dir` for
+/// `length`. Found by alternating projections, each onto the other set, which converges to a
+/// closest pair for two closed convex sets (Cheney and Goldstein, "Proximity maps for convex
+/// sets", Proc. AMS 10, 1959, <https://doi.org/10.1090/S0002-9939-1959-0105008-8>).
+fn segment_box_closest(origin: Vec3, dir: Vec3, length: f32, min: Vec3, max: Vec3) -> Vec3 {
+    let mut t = ((min + max) * 0.5 - origin).dot(dir).clamp(0.0, length);
+    let mut q = (origin + dir * t).clamp(min, max);
+    for _ in 0..24 {
+        let next = (q - origin).dot(dir).clamp(0.0, length);
+        q = (origin + dir * next).clamp(min, max);
+        if (next - t).abs() < 1e-5 {
+            break;
+        }
+        t = next;
+    }
+    q
+}
+
+/// How well a target is aimed at: how far off the crosshair's line it lies, as an angle in
+/// radians (0 if the line passes through it), and how far out along the line, world units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AimScore {
+    pub angle: f32,
+    pub distance: f32,
+}
+
+/// How well the line from `origin` along unit `dir` aims at the box `min..max` placed by
+/// `world_from_item` (rigid or evenly scaled): an exact hit within `reach`, or else the box's
+/// nearest point to the line, if that is ahead, within `reach` of the eye and within `buffer`
+/// of the line. `None` if it is not aimed at.
+pub fn aim_score(origin: Vec3, dir: Vec3, reach: f32, buffer: AimBuffer, world_from_item: Transform, min: Vec3, max: Vec3) -> Option<AimScore> {
+    let world_from_local = world_from_item.compute_affine();
+    let inverse = world_from_local.inverse();
+    let local_origin = inverse.transform_point3(origin);
+    // Left unnormalised, so the distance along it stays in world units under a scale.
+    let local_dir = inverse.transform_vector3(dir);
+    if let Some(t) = ray_box(local_origin, local_dir, min, max).filter(|&t| t <= reach) {
+        return Some(AimScore { angle: 0.0, distance: t });
+    }
+    if buffer == AimBuffer::EXACT {
+        return None;
+    }
+    let world_per_local = local_dir.length().recip();
+    let local_q = segment_box_closest(local_origin, local_dir * world_per_local, reach / world_per_local, min, max);
+    let q = world_from_local.transform_point3(local_q);
+    let along = (q - origin).dot(dir);
+    let off = (q - origin - dir * along).length();
+    if along <= 0.0 || q.distance(origin) > reach || off > buffer.radius_at(along) {
+        return None;
+    }
+    Some(AimScore { angle: off.atan2(along), distance: along })
+}
+
+/// Which of `targets` (each a world-from-item transform, rigid or evenly scaled, and its
+/// item-space bounds) the crosshair's line from `origin` along unit `dir` aims at within
+/// `reach` ([`aim_score`]): the one nearest the line by angle, and of those it passes through,
+/// the nearest. One rule for floor items, containers and folk alike.
+pub fn nearest_aimed<T: Copy>(
     origin: Vec3,
     dir: Vec3,
     reach: f32,
+    buffer: AimBuffer,
     targets: impl IntoIterator<Item = (T, Transform, Vec3, Vec3)>,
-) -> Option<(T, f32)> {
+) -> Option<(T, AimScore)> {
     targets
         .into_iter()
-        .filter_map(|(id, world_from_item, min, max)| {
-            let inverse = world_from_item.compute_affine().inverse();
-            let local_origin = inverse.transform_point3(origin);
-            // Left unnormalised, so the distance along it stays in world units under a scale.
-            let local_dir = inverse.transform_vector3(dir);
-            ray_box(local_origin, local_dir, min, max).filter(|&t| t <= reach).map(|t| (id, t))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter_map(|(id, world_from_item, min, max)| aim_score(origin, dir, reach, buffer, world_from_item, min, max).map(|score| (id, score)))
+        .min_by(|a, b| a.1.angle.total_cmp(&b.1.angle).then(a.1.distance.total_cmp(&b.1.distance)))
 }
 
 /// An item lying in the level, with its item-space bounds for picking. The item itself is in
@@ -526,7 +604,8 @@ pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: It
     let transform = rest_on_floor(&points, at, spot.yaw, tuning.view.floor_item_scale)?;
     let (min, max) = bounds(points.iter().copied())?;
     let light = item_light(&item.shape);
-    let mut root = spawner.spawn(&mesh, &appearance_of(&item.shape));
+    let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
+    let mut root = spawner.spawn(&mesh, &appearance);
     root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }));
     if let Some(anchor) = light {
         // A lit thing on the floor lights its corner, from a little above the flame so the
@@ -538,6 +617,39 @@ pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: It
         root.insert(Propagate(NotShadowCaster)).with_child((given_light(anchor, Exposure::INDOOR, &tuning.light), Transform::from_translation(at)));
     }
     Some(root.id())
+}
+
+/// The shimmer an item lying on the floor is drawn with: a legendary's in the legendary colour
+/// (`ui::rarity_color`) at the tuning's `legendary_shimmer`, so it catches the eye even in the
+/// dark, the user's call ("a faint shimmer when they're on the ground"); none for anything
+/// else. Only floor items are drawn with it, so it stops once picked up.
+pub fn floor_shimmer(item: &fb_items::Item, tuning: &Tuning) -> Shimmer {
+    if item.rarity == fb_items::Rarity::Legendary {
+        Shimmer::new(rarity_color(fb_items::Rarity::Legendary), tuning.view.legendary_shimmer.max(0.0))
+    } else {
+        Shimmer::default()
+    }
+}
+
+/// Redraws every floor item's shimmer at the tuning's strength ([`floor_shimmer`]).
+fn reshimmer_floor_items(
+    tuning: Res<Tuning>,
+    inventory: Res<Inventory>,
+    items: Query<(&FloorItem, &Children)>,
+    parts: Query<&MeshMaterial3d<ToonMaterial>>,
+    mut materials: ResMut<Assets<ToonMaterial>>,
+) {
+    for (floor, children) in &items {
+        let Some(item) = inventory.item(floor.id) else { continue };
+        let shimmer = floor_shimmer(item, &tuning);
+        for part in children.iter().filter_map(|child| parts.get(child).ok()) {
+            if materials.get(&part.0).is_some_and(|m| m.extension.shimmer != shimmer)
+                && let Some(mut material) = materials.get_mut(&part.0)
+            {
+                material.extension.shimmer = shimmer;
+            }
+        }
+    }
 }
 
 /// An item's footprint radius on the floor once laid down ([`lie_down`]) and drawn `scale`
@@ -583,6 +695,13 @@ pub fn set_down(
     let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells), &obstacles.0) / CELL;
     // Laid square to the player's view.
     let yaw = (-forward.x).atan2(-forward.y);
+    set_down_at(spawner, inventory, level, id, at, yaw, tuning)
+}
+
+/// Sets loose item `id` down at `at` on the floor (cells), turned `yaw`, into the level data
+/// too so it stays where it was left, and spawns it there. `None` if it has no vertices.
+pub fn set_down_at(spawner: &mut ItemSpawner, inventory: &Inventory, level: &mut Level, id: ItemId, at: Vec2, yaw: f32, tuning: &Tuning) -> Option<Entity> {
+    let item = inventory.item(id)?;
     // For anything that came from a level spot, the spot rolls the same item again
     // ([`fb_items::roll_loot`]); what is spawned is the item itself.
     let spot = ItemSpot { x: at.x, y: at.y, yaw, family: item.shape.family(), seed: item.seed };
@@ -670,7 +789,12 @@ type CameraLook = (Option<&'static Exposure>, Option<&'static Tonemapping>, Opti
 
 /// Gives each new [`PlayerCamera`] its view model camera, on the stage, and the HUD. What it
 /// carries is [`carry_light`]'s.
-fn equip_player_camera(mut commands: Commands, tuning: Res<Tuning>, cameras: Query<(Entity, CameraLook), (With<PlayerCamera>, Without<Equipped>)>) {
+fn equip_player_camera(
+    mut commands: Commands,
+    tuning: Res<Tuning>,
+    fonts: Option<Res<UiFonts>>,
+    cameras: Query<(Entity, CameraLook), (With<PlayerCamera>, Without<Equipped>)>,
+) {
     for (camera, (exposure, tonemapping, msaa)) in &cameras {
         let exposure = exposure.copied().unwrap_or_default();
         let view_model = commands
@@ -694,7 +818,7 @@ fn equip_player_camera(mut commands: Commands, tuning: Res<Tuning>, cameras: Que
             commands.spawn((point_light(Color::WHITE, 0.5, 200.0, &exposure), RenderLayers::layer(VIEW_MODEL_LAYER), ChildOf(view_model)));
         }
         commands.entity(camera).insert((Equipped, Carrying::default()));
-        spawn_hud(&mut commands, view_model);
+        spawn_hud(&mut commands, view_model, fonts.as_deref());
     }
 }
 
@@ -810,7 +934,7 @@ fn hide_hud_under_screens(open: Res<ScreenOpen>, mut huds: Query<&mut Visibility
     }
 }
 
-fn spawn_hud(commands: &mut Commands, camera: Entity) {
+fn spawn_hud(commands: &mut Commands, camera: Entity, fonts: Option<&UiFonts>) {
     commands
         .spawn((
             Name::new("HUD"),
@@ -836,6 +960,17 @@ fn spawn_hud(commands: &mut Commands, camera: Entity) {
                 BackgroundColor(BRIGHT.with_alpha(0.85)),
                 BorderColor::all(BG.with_alpha(0.7)),
             ));
+            // The toast (`crate::inventory::Toast`): a line near the foot of the view, clear of
+            // the card under the crosshair, saying what F equipped or why it could not. Cream
+            // with a dark shadow so it reads on lit stone and in the dark alike.
+            hud.spawn((
+                Node { position_type: PositionType::Absolute, width: percent(100), bottom: percent(7), justify_content: JustifyContent::Center, ..default() },
+                Pickable::IGNORE,
+            ))
+            .with_children(|row| {
+                let font = fonts.map_or_else(TextFont::default, |f| TextFont::from_font_size(20.0).with_font(f.body.clone()));
+                row.spawn((ToastText, Text::default(), font, TextColor(BRIGHT), TextShadow { offset: Vec2::new(1.5, 1.5), color: BG.with_alpha(0.9) }));
+            });
         });
 }
 
@@ -879,6 +1014,7 @@ pub(crate) fn sway_held(
 }
 
 fn aim(
+    tuning: Res<Tuning>,
     camera: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
     items: Query<(Entity, &GlobalTransform, &FloorItem)>,
     containers: Query<(Entity, &GlobalTransform, &PropPiece), With<Container>>,
@@ -892,7 +1028,7 @@ fn aim(
         .iter()
         .map(|(entity, transform, floor)| (entity, transform.compute_transform(), floor.min, floor.max))
         .chain(containers.iter().map(|(entity, transform, piece)| (entity, transform.compute_transform(), piece.min, piece.max)));
-    let hit = nearest_hit(eye.translation(), eye.forward().as_vec3(), REACH, targets).map(|(entity, _)| entity);
+    let hit = nearest_aimed(eye.translation(), eye.forward().as_vec3(), REACH, AimBuffer::of(&tuning), targets).map(|(entity, _)| entity);
     if aimed.0 != hit {
         aimed.0 = hit;
     }
@@ -919,6 +1055,35 @@ pub(crate) fn pick_up(
             lift(&mut commands, &mut level.bypass_change_detection().0, entity, floor);
         }
         Err(refusal) => info!("{}", refusal.reason()),
+    }
+}
+
+/// F equips the item under the crosshair straight from the floor, without the inventory
+/// screen ([`equip_from_floor`]): into its slot, a hand or a free ring slot, swapping out what
+/// was there into a bag, or onto the floor where the new item lay. The toast says what
+/// happened, or why not.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn equip_aimed(
+    input: ActionInput,
+    mut aimed: ResMut<Aimed>,
+    items: Query<&FloorItem>,
+    mut inventory: ResMut<Inventory>,
+    mut changes: ResMut<FloorChanges>,
+    mut toast: ResMut<Toast>,
+    time: Option<Res<Time<Real>>>,
+) {
+    if !input.just_pressed(Action::EquipAimed) {
+        return;
+    }
+    let Some(floor) = aimed.0.and_then(|entity| items.get(entity).ok()) else { return };
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    match equip_from_floor(&mut inventory, floor.id, Vec2::new(floor.spot.x, floor.spot.y), floor.spot.yaw) {
+        Ok(equipped) => {
+            aimed.0 = None;
+            toast.say(equipped.message(&inventory, floor.id), now);
+            changes.0.extend(equipped.changes);
+        }
+        Err(refusal) => toast.say(refusal.reason(), now),
     }
 }
 
@@ -974,8 +1139,8 @@ mod tests {
         // The pickup box grows with it, and a ray onto its top lands there, in world units.
         let top = Vec3::new((min.x + max.x) * 0.5, max.y, (min.z + max.z) * 0.5);
         let from = top + Vec3::Y * 5.0;
-        let hit = nearest_hit(from, Vec3::NEG_Y, REACH, [((), transform, Vec3::new(-1.0, -2.0, -0.2), Vec3::new(1.5, 7.0, 0.3))]);
-        assert!(hit.is_some_and(|(_, t)| (t - 5.0).abs() < 1e-3), "{hit:?}");
+        let hit = nearest_aimed(from, Vec3::NEG_Y, REACH, AimBuffer::EXACT, [((), transform, Vec3::new(-1.0, -2.0, -0.2), Vec3::new(1.5, 7.0, 0.3))]);
+        assert!(hit.is_some_and(|(_, s)| (s.distance - 5.0).abs() < 1e-3 && s.angle == 0.0), "{hit:?}");
     }
 
     #[test]
@@ -992,8 +1157,76 @@ mod tests {
         let (min, max) = (Vec3::splat(-1.0), Vec3::splat(1.0));
         let at = |z: f32| Transform::from_xyz(0.0, 0.0, z).with_rotation(Quat::from_rotation_y(0.6));
         let targets = [(1, at(-15.0), min, max), (2, at(-8.0), min, max), (3, at(-40.0), min, max)];
-        assert_eq!(nearest_hit(Vec3::ZERO, Vec3::NEG_Z, REACH, targets).map(|h| h.0), Some(2));
-        assert_eq!(nearest_hit(Vec3::ZERO, Vec3::NEG_Z, REACH, [targets[2]]), None);
+        let buffer = AimBuffer::of(&Tuning::default());
+        assert_eq!(nearest_aimed(Vec3::ZERO, Vec3::NEG_Z, REACH, buffer, targets).map(|h| h.0), Some(2));
+        assert_eq!(nearest_aimed(Vec3::ZERO, Vec3::NEG_Z, REACH, buffer, [targets[2]]), None);
+    }
+
+    /// A ring resting on the floor `at`, as it is laid out: its world transform and bounds.
+    fn ring_on_floor(at: Vec3) -> (Transform, Vec3, Vec3) {
+        let ring = fb_items::roll_item("Ring", 2).unwrap();
+        let points = item_points(&ring.shape.build());
+        let (min, max) = bounds(points.iter().copied()).unwrap();
+        (rest_on_floor(&points, at, 0.0, floor_scale()).unwrap(), min, max)
+    }
+
+    /// The direction from `eye` to `target`, turned `degrees` to the right about +Y.
+    fn off_by(eye: Vec3, target: Vec3, degrees: f32) -> Vec3 {
+        Quat::from_rotation_y(-degrees.to_radians()) * (target - eye).normalize()
+    }
+
+    #[test]
+    fn a_ring_a_few_pixels_off_the_crosshair_is_aimed_at() {
+        let eye = Vec3::new(0.0, EYE_HEIGHT, 0.0);
+        let (rest, min, max) = ring_on_floor(Vec3::new(0.0, 0.0, -10.0));
+        let centre = rest.transform_point((min + max) * 0.5);
+        let buffer = AimBuffer::of(&Tuning::default());
+        // Looking straight at it, it is aimed at either way.
+        assert!(nearest_aimed(eye, (centre - eye).normalize(), REACH, AimBuffer::EXACT, [((), rest, min, max)]).is_some());
+        // A degree and a half off is about twenty pixels on a 1080-pixel, 70-degree view: past
+        // the ring's edge, so an exact ray misses it, but the buffer still catches it.
+        let dir = off_by(eye, centre, 1.5);
+        assert_eq!(nearest_aimed(eye, dir, REACH, AimBuffer::EXACT, [((), rest, min, max)]), None, "the ray itself misses the ring");
+        let caught = nearest_aimed(eye, dir, REACH, buffer, [((), rest, min, max)]);
+        assert!(caught.is_some_and(|(_, s)| s.angle > 0.0), "{caught:?}");
+        // Well off to the side, it is not.
+        assert_eq!(nearest_aimed(eye, off_by(eye, centre, 12.0), REACH, buffer, [((), rest, min, max)]), None);
+    }
+
+    #[test]
+    fn of_two_items_side_by_side_the_nearer_the_crosshair_is_aimed_at() {
+        let eye = Vec3::new(0.0, EYE_HEIGHT, 0.0);
+        let left = ring_on_floor(Vec3::new(-1.2, 0.0, -10.0));
+        let right = ring_on_floor(Vec3::new(1.2, 0.0, -10.0));
+        let targets = [("left", left.0, left.1, left.2), ("right", right.0, right.1, right.2)];
+        let between = Vec3::new(0.0, 0.3, -10.0);
+        let buffer = AimBuffer::of(&Tuning::default());
+        // Straight between them, both are off the line and neither is near enough.
+        assert_eq!(nearest_aimed(eye, (between - eye).normalize(), REACH, buffer, targets), None);
+        // Nudged toward one, that one; nudged toward the other, the other.
+        let toward = |x: f32| (Vec3::new(x, 0.3, -10.0) - eye).normalize();
+        assert_eq!(nearest_aimed(eye, toward(0.75), REACH, buffer, targets).map(|h| h.0), Some("right"));
+        assert_eq!(nearest_aimed(eye, toward(-0.75), REACH, buffer, targets).map(|h| h.0), Some("left"));
+        // One the line passes through beats one merely near it.
+        let big = (Transform::from_xyz(0.9, 0.0, -10.0), Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
+        let with_big = [("right", right.0, right.1, right.2), ("big", big.0, big.1, big.2)];
+        assert_eq!(nearest_aimed(eye, toward(0.75), REACH, buffer, with_big).map(|h| h.0), Some("big"));
+    }
+
+    #[test]
+    fn nothing_beyond_reach_is_aimed_at() {
+        let eye = Vec3::new(0.0, EYE_HEIGHT, 0.0);
+        let buffer = AimBuffer::of(&Tuning::default());
+        for z in [-30.0, -21.0] {
+            let (rest, min, max) = ring_on_floor(Vec3::new(0.0, 0.0, z));
+            let centre = rest.transform_point((min + max) * 0.5);
+            for degrees in [0.0, 0.5, 1.5] {
+                assert_eq!(nearest_aimed(eye, off_by(eye, centre, degrees), REACH, buffer, [((), rest, min, max)]), None, "{z} {degrees}");
+            }
+        }
+        // Nor anything behind the eye, however near.
+        let (rest, min, max) = ring_on_floor(Vec3::new(0.0, 0.0, 3.0));
+        assert_eq!(nearest_aimed(eye, Vec3::NEG_Z, REACH, buffer, [((), rest, min, max)]), None);
     }
 
     #[test]
@@ -1333,6 +1566,164 @@ mod tests {
         app.update();
         assert!(app.world().get_entity(chest).is_ok());
         assert_eq!(app.world().resource::<Inventory>().location(id), Some(crate::inventory::Location::Loose));
+    }
+
+    /// [`delving_app`] with F equipping what is aimed at, and the level's floor changes made.
+    fn equipping_app() -> (App, ItemId) {
+        let (mut app, pack) = delving_app();
+        app.init_resource::<Toast>().init_resource::<FloorChanges>().add_systems(Update, (equip_aimed, apply_floor_changes).chain().after(pick_up));
+        (app, pack)
+    }
+
+    /// Lays `item` on the floor a metre ahead of an eye looking down at it, as the level does,
+    /// and aims at it. Returns its entity, id and spot.
+    fn lay_ahead(app: &mut App, item: fb_items::Item) -> (Entity, ItemId, ItemSpot) {
+        use bevy::ecs::system::RunSystemOnce;
+        let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
+        let spot = ItemSpot { x: 0.0, y: -0.5, yaw: 0.3, family: item.shape.family(), seed: item.seed };
+        app.world_mut().resource_mut::<CurrentLevel>().0.items.push(spot);
+        let entity = app
+            .world_mut()
+            .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default()).unwrap())
+            .unwrap();
+        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, 0.3, -10.0), Vec3::Y);
+        app.world_mut().spawn((PlayerCamera, Equipped, eye));
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Aimed>().0, Some(entity));
+        (entity, id, spot)
+    }
+
+    fn press_f(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::KeyF);
+        keys.clear();
+        keys.press(KeyCode::KeyF);
+        app.update();
+    }
+
+    #[test]
+    fn f_puts_a_sword_in_the_main_hand_and_the_old_weapon_in_the_pack() {
+        use fb_items::Slot;
+        let (mut app, pack) = equipping_app();
+        let mace = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let mace = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Mace", s)).find(|i| i.profile.packable).unwrap());
+            inventory.wear(mace, Slot::Mainhand).unwrap();
+            mace
+        };
+        let character = Character::default();
+        let before = HeldKey::of(app.world().resource::<Inventory>(), &character);
+        let (entity, sword, _) = lay_ahead(&mut app, fb_items::roll_item("Sword", 3).unwrap());
+        press_f(&mut app);
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!(inventory.worn(Slot::Mainhand), Some(sword));
+        assert!(matches!(inventory.location(mace), Some(crate::inventory::Location::In { container, .. }) if container == pack));
+        // Lifted from the level, and the view model's key changes, so the view holds the sword.
+        assert!(app.world().get_entity(entity).is_err());
+        assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
+        let after = HeldKey::of(inventory, &character);
+        assert_eq!((before.main, after.main), (Some(mace), Some(sword)));
+        let toast = &app.world().resource::<Toast>().text;
+        assert!(toast.starts_with("Holding ") && toast.contains("went into the"), "{toast}");
+    }
+
+    #[test]
+    fn f_on_a_helm_swaps_helms_and_sets_the_old_one_down_where_the_new_one_lay() {
+        use fb_items::Slot;
+        let (mut app, pack) = equipping_app();
+        let old = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            // No room left in the pack, so the old helm cannot be stowed.
+            inventory.take_out(pack);
+            let old = inventory.add(fb_items::roll_item("Helm", 5).unwrap());
+            inventory.wear(old, Slot::Head).unwrap();
+            old
+        };
+        let (_, new, spot) = lay_ahead(&mut app, fb_items::roll_item("Helm", 9).unwrap());
+        press_f(&mut app);
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!(inventory.worn(Slot::Head), Some(new));
+        assert_eq!(inventory.location(old), Some(crate::inventory::Location::Loose));
+        let old_item = inventory.item(old).unwrap();
+        let items = &app.world().resource::<CurrentLevel>().0.items;
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!((items[0].x, items[0].y, items[0].yaw, items[0].seed), (spot.x, spot.y, spot.yaw, old_item.seed));
+        let mut floor = app.world_mut().query::<&FloorItem>();
+        assert_eq!(floor.iter(app.world()).map(|f| f.id).collect::<Vec<_>>(), vec![old]);
+        let toast = &app.world().resource::<Toast>().text;
+        assert!(toast.starts_with("Wearing ") && toast.ends_with("was set down."), "{toast}");
+    }
+
+    #[test]
+    fn f_on_something_with_no_slot_does_nothing_and_says_so() {
+        let (mut app, _) = equipping_app();
+        let (entity, bread, _) = lay_ahead(&mut app, fb_items::roll_item("Bread", 1).unwrap());
+        press_f(&mut app);
+        assert!(app.world().get_entity(entity).is_ok());
+        assert_eq!(app.world().resource::<Inventory>().location(bread), Some(crate::inventory::Location::Loose));
+        assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), 1);
+        assert_eq!(app.world().resource::<Toast>().text, crate::inventory::Refusal::NotWearable.reason());
+    }
+
+    #[test]
+    fn f_puts_a_ring_in_a_free_ring_slot_and_a_torch_in_the_off_hand() {
+        use fb_items::Slot;
+        let mut inventory = Inventory::default();
+        let first = inventory.add(fb_items::roll_item("Ring", 2).unwrap());
+        inventory.wear(first, Slot::Ring1).unwrap();
+        let second = inventory.add(fb_items::roll_item("Ring", 3).unwrap());
+        let equipped = equip_from_floor(&mut inventory, second, Vec2::ZERO, 0.0).unwrap();
+        assert_eq!((equipped.slot, equipped.displaced), (Slot::Ring2, None));
+        assert_eq!(inventory.worn(Slot::Ring1), Some(first));
+        let torch = inventory.add(lit_torch(4));
+        assert_eq!(equip_from_floor(&mut inventory, torch, Vec2::ZERO, 0.0).unwrap().slot, Slot::Offhand);
+        let shield = inventory.add(fb_items::roll_item("Shield", 12).unwrap());
+        let equipped = equip_from_floor(&mut inventory, shield, Vec2::new(2.0, 3.0), 0.5).unwrap();
+        assert_eq!(equipped.slot, Slot::Offhand);
+        // Nowhere to stow the torch: it goes down where the shield lay.
+        assert_eq!(equipped.displaced, Some((torch, None)));
+        assert_eq!(equipped.changes, vec![crate::inventory::FloorChange::Lifted(shield), crate::inventory::FloorChange::SetDownAt(torch, Vec2::new(2.0, 3.0), 0.5)]);
+        assert_eq!(carried_light(&inventory), None, "the carried light follows the hands");
+    }
+
+    #[test]
+    fn legendary_floor_items_shimmer_and_others_do_not() {
+        let drops = crate::inventory::underfoot::drops_for_capture("Sword:legendary,Sword:common");
+        let [legendary, common] = [&drops[0], &drops[1]];
+        assert_eq!((legendary.rarity, common.rarity), (Rarity::Legendary, Rarity::Common));
+        let (mut app, _) = delving_app();
+        let mut spawned = Vec::new();
+        for (x, item) in [(0.0, legendary.clone()), (1.0, common.clone())] {
+            use bevy::ecs::system::RunSystemOnce;
+            let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
+            let spot = ItemSpot { x, y: 0.0, yaw: 0.0, family: item.shape.family(), seed: item.seed };
+            let entity = app
+                .world_mut()
+                .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default()).unwrap())
+                .unwrap();
+            spawned.push(entity);
+        }
+        let shimmers = |app: &mut App, entity: Entity| {
+            let children: Vec<Entity> = app.world().get::<Children>(entity).unwrap().iter().collect();
+            let materials = app.world().resource::<Assets<ToonMaterial>>();
+            children
+                .iter()
+                .filter_map(|&c| app.world().get::<MeshMaterial3d<ToonMaterial>>(c))
+                .map(|m| materials.get(&m.0).unwrap().extension.shimmer)
+                .collect::<Vec<_>>()
+        };
+        let strength = Tuning::default().view.legendary_shimmer;
+        let gold = shimmers(&mut app, spawned[0]);
+        assert!(!gold.is_empty() && gold.iter().all(|s| s.strength == strength && s.color == Shimmer::new(rarity_color(Rarity::Legendary), 1.0).color));
+        assert!(shimmers(&mut app, spawned[1]).iter().all(|s| s.strength == 0.0));
+        // Held or drawn anywhere else, it does not shimmer.
+        assert_eq!(appearance_of(&legendary.shape).shimmer, Shimmer::default());
+        // A change of tuning reaches the floor items already lying there.
+        app.add_systems(Update, reshimmer_floor_items);
+        app.world_mut().resource_mut::<Tuning>().view.legendary_shimmer = 0.5;
+        app.update();
+        assert!(shimmers(&mut app, spawned[0]).iter().all(|s| s.strength == 0.5));
     }
 
     #[test]

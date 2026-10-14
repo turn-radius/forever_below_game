@@ -76,11 +76,33 @@ pub struct ViewTuning {
     /// rests: the user's call ("scaled up by 15%"), so things on the floor read from standing
     /// height. Its pickup box and floor radius grow with it.
     pub floor_item_scale: f32,
+    /// How far off the crosshair's line, degrees, a floor item, container or person can lie
+    /// and still be aimed at (`crate::carry::nearest_aimed`), so the crosshair need not sit
+    /// exactly on it: the user's call ("there should be a buffer around it"); 2 degrees is our
+    /// own tuning. Of several in the buffer, the one nearest the line is aimed at.
+    pub aim_buffer_degrees: f32,
+    /// The least that buffer is, world units off the line, however near the thing is, so a
+    /// ring at your feet is as easy to catch as a chest further off. Our own tuning (6 cm).
+    pub aim_min_radius: f32,
+    /// How strongly a legendary lying on the floor shimmers: the peak of its glow pulse as a
+    /// fraction of the legendary colour, its glints brighter (`render::Shimmer`). Self-light
+    /// only, so it shows in the dark and lights nothing. The user's call ("a faint shimmer");
+    /// the value is our own tuning against captures. 0 turns it off.
+    pub legendary_shimmer: f32,
 }
 
 impl Default for ViewTuning {
     fn default() -> Self {
-        ViewTuning { held_scale: 1.4, held_fov_degrees: 46.0, world_fov_degrees: 70.0, head_bob: 1.0, floor_item_scale: 1.15 }
+        ViewTuning {
+            held_scale: 1.4,
+            held_fov_degrees: 46.0,
+            world_fov_degrees: 70.0,
+            head_bob: 1.0,
+            floor_item_scale: 1.15,
+            aim_buffer_degrees: 2.0,
+            aim_min_radius: 0.6,
+            legendary_shimmer: 0.25,
+        }
     }
 }
 

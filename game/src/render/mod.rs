@@ -13,7 +13,7 @@ pub use item::{
     half_thickness, item_bounds, part_to_mesh,
 };
 pub use outline::{ARMORY_INK, ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
-pub use toon::{Decay, Etch, EtchStyle, MinWidth, Pattern, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
+pub use toon::{Decay, Etch, EtchStyle, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
 
 use bevy::{light::cluster::GlobalClusterSettings, prelude::*, shader::load_shader_library};
 
@@ -25,11 +25,12 @@ pub struct ArmoryRenderPlugin;
 impl Plugin for ArmoryRenderPlugin {
     fn build(&self, app: &mut App) {
         // Embedded and kept loaded so the shaders can import `super::decay`, `super::pattern`,
-        // `super::etch` and `super::screen`.
+        // `super::etch`, `super::screen` and `super::shimmer`.
         load_shader_library!(app, "decay.wesl");
         load_shader_library!(app, "pattern.wesl");
         load_shader_library!(app, "etch.wesl");
         load_shader_library!(app, "screen.wesl");
+        load_shader_library!(app, "shimmer.wesl");
         load_shader_library!(app, "toon.wesl");
         load_shader_library!(app, "outline.wesl");
 

@@ -13,7 +13,7 @@ use bevy::{
 };
 
 use super::outline::{ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
-use super::toon::{Decay, Etch, MinWidth, Pattern, ToonBands, ToonExtension, ToonMaterial};
+use super::toon::{Decay, Etch, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial};
 
 /// Base colour for every material kind: the armory palette for paletted metals, wood and
 /// so on, plus the kinds it leaves to other sources (untinted gems, cloth, paint, food).
@@ -80,6 +80,8 @@ pub struct ItemAppearance {
     pub min_width_px: f32,
     /// The item's etching (`Item::etching`), drawn on the parts its target covers.
     pub etching: Option<Etching>,
+    /// A shimmer over every part (a legendary lying on the floor); none by default.
+    pub shimmer: Shimmer,
 }
 
 impl Default for ItemAppearance {
@@ -93,6 +95,7 @@ impl Default for ItemAppearance {
             outline: OutlineMaterial::default(),
             min_width_px: 1.5,
             etching: None,
+            shimmer: Shimmer::default(),
         }
     }
 }
@@ -137,6 +140,7 @@ impl ItemAppearance {
                     (Some(etching), Some(material)) => Etch::on(&etching, material, self.decay_scale_factor),
                     _ => Etch::default(),
                 },
+                shimmer: self.shimmer,
             },
         }
     }

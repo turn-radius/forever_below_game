@@ -1,6 +1,6 @@
 //! Banded toon shading with procedural wear: a [`StandardMaterial`] extended with
-//! [`ToonExtension`]. The shader is `toon.wesl` (lighting), `pattern.wesl` (surface patterns)
-//! and `decay.wesl` (wear).
+//! [`ToonExtension`]. The shader is `toon.wesl` (lighting), `pattern.wesl` (surface patterns),
+//! `decay.wesl` (wear) and `shimmer.wesl` (a legendary's shimmer on the floor).
 
 use armory::{
     MaterialKind, Rgb,
@@ -210,6 +210,25 @@ impl Etch {
     }
 }
 
+/// A slow, soft glow pulse in one colour with a few glints drifting over the surface
+/// (`shimmer.wesl`), drawn on top of the lit colour: self-lit only, so it reads in the dark but
+/// lights nothing round it. Strength 0 draws none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct Shimmer {
+    /// Display (sRGB) values.
+    pub color: Vec3,
+    /// The pulse's peak as a fraction of `color`; the glints are brighter.
+    pub strength: f32,
+}
+
+impl Shimmer {
+    /// A shimmer of `color` at `strength`.
+    pub fn new(color: Color, strength: f32) -> Self {
+        let [r, g, b, _] = color.to_srgba().to_f32_array();
+        Shimmer { color: Vec3::new(r, g, b), strength }
+    }
+}
+
 /// The toon half of [`ToonMaterial`]. The base colour, roughness and so on stay on the
 /// [`StandardMaterial`].
 ///
@@ -229,6 +248,7 @@ pub struct ToonExtension {
     pub min_width: MinWidth,
     pub pattern: Pattern,
     pub etch: Etch,
+    pub shimmer: Shimmer,
 }
 
 /// GPU layout of [`ToonExtension`]; must match `ToonUniform` in `toon.wesl`.
@@ -262,6 +282,8 @@ pub struct ToonUniform {
     etch_inlaid: u32,
     etch_darken: f32,
     etch_stitched: u32,
+    shimmer_color: Vec3,
+    shimmer_strength: f32,
 }
 
 impl From<&ToonExtension> for ToonUniform {
@@ -288,6 +310,8 @@ impl From<&ToonExtension> for ToonUniform {
             etch_inlaid: toon.etch.inlaid as u32,
             etch_darken: toon.etch.style.darken(),
             etch_stitched: (toon.etch.style == EtchStyle::Embroidered) as u32,
+            shimmer_color: toon.shimmer.color,
+            shimmer_strength: toon.shimmer.strength,
             band_values: [Vec4::new(v[0], v[1], v[2], v[3]), Vec4::new(v[4], v[5], v[6], v[7])],
             band_count: toon.bands.count,
             decay_type: toon.decay.kind,

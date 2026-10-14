@@ -15,6 +15,12 @@ world_fov_degrees = 70.0
 head_bob = 1.0
 # How much larger than its own size an item lying on the floor is drawn (1 = true size).
 floor_item_scale = 1.15
+# How far off the crosshair, in degrees, something can be and still be aimed at.
+aim_buffer_degrees = 2.0
+# The least that leeway is, in world units off the crosshair, for small things close by (0.6 = 6 cm).
+aim_min_radius = 0.6
+# How strongly a legendary lying on the floor shimmers (0 = not at all). It lights nothing.
+legendary_shimmer = 0.25
 
 [moving]
 # Walking pace, in world units per second (14 = 1.4 m/s).

@@ -32,7 +32,7 @@ use fb_items::{Item, Rarity, Slot, roll_item};
 use fb_level::{FolkSpot, Level};
 use procgen_rng::Mulberry32;
 
-use crate::carry::{Aimed, REACH, ViewModelCamera, given_light, nearest_hit};
+use crate::carry::{AimBuffer, Aimed, REACH, ViewModelCamera, given_light, nearest_aimed};
 use crate::figure::Figure;
 use crate::inventory::card::{CARD_WIDTH, place_under};
 use crate::level::EXPOSURE;
@@ -411,11 +411,17 @@ pub struct AimedFolk(pub Option<Entity>);
 #[derive(Component, Debug)]
 pub struct FolkCard;
 
-/// Picks the folk under the crosshair within reach, by their figure's bounds.
-fn aim_at_folk(eyes: Query<&GlobalTransform, With<PlayerCamera>>, folk: Query<(Entity, &GlobalTransform, &Denizen)>, mut aimed: ResMut<AimedFolk>) {
+/// Picks the folk under the crosshair within reach, by their figure's bounds, with the same
+/// buffer round the crosshair as items (`crate::carry::nearest_aimed`).
+fn aim_at_folk(
+    tuning: Res<crate::tuning::Tuning>,
+    eyes: Query<&GlobalTransform, With<PlayerCamera>>,
+    folk: Query<(Entity, &GlobalTransform, &Denizen)>,
+    mut aimed: ResMut<AimedFolk>,
+) {
     let hit = eyes.iter().next().and_then(|eye| {
         let targets = folk.iter().map(|(entity, at, denizen)| (entity, at.compute_transform(), denizen.min, denizen.max));
-        nearest_hit(eye.translation(), eye.forward().as_vec3(), REACH, targets).map(|(entity, _)| entity)
+        nearest_aimed(eye.translation(), eye.forward().as_vec3(), REACH, AimBuffer::of(&tuning), targets).map(|(entity, _)| entity)
     });
     if aimed.0 != hit {
         aimed.0 = hit;
@@ -674,7 +680,7 @@ mod tests {
     #[test]
     fn the_card_shows_only_within_reach() {
         let (mut app, _, camera) = looking_app(Vec3::new(0.0, 16.0, 30.0));
-        app.init_resource::<AimedFolk>().add_systems(Update, aim_at_folk);
+        app.init_resource::<AimedFolk>().init_resource::<crate::tuning::Tuning>().add_systems(Update, aim_at_folk);
         let aim = |app: &mut App, eye: Vec3| {
             *app.world_mut().get_mut::<Transform>(camera).unwrap() = Transform::from_translation(eye).looking_at(Vec3::new(0.0, 12.0, 0.0), Vec3::Y);
             app.update();

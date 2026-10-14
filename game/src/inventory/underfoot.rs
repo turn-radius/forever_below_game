@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 use fb_items::footprint::Footprint;
 
-use crate::carry::{FloorItem, REACH, lift, set_down};
+use crate::carry::{FloorItem, REACH, lift, set_down, set_down_at};
 use crate::play::{BlockedCells, CurrentLevel, Obstacles, PlayerCamera};
 use crate::render::ItemSpawner;
 
@@ -88,6 +88,9 @@ pub enum FloorChange {
     Lifted(ItemId),
     /// The item has been let go, to land `aside` of straight ahead.
     SetDown(ItemId, f32),
+    /// The item has been let go, to land at a spot on the floor (cells) turned `yaw`: where
+    /// what took its place lay.
+    SetDownAt(ItemId, Vec2, f32),
 }
 
 /// Changes to make to the level this frame.
@@ -127,6 +130,9 @@ pub fn apply_floor_changes(
                     set_down(&mut spawner, &inventory, level, &blocked_cells, &obstacles, eye, id, aside, &tuning);
                 }
             }
+            FloorChange::SetDownAt(id, at, yaw) => {
+                set_down_at(&mut spawner, &inventory, level, id, at, yaw, &tuning);
+            }
         }
     }
 }
@@ -153,6 +159,47 @@ pub fn set_down_debug_kit(mut inventory: ResMut<Inventory>, mut changes: ResMut<
     if let Some(shield) = fb_items::roll_item("Shield", 12) {
         let shield = inventory.add(shield);
         changes.0.push(FloorChange::SetDown(shield, 3.0));
+    }
+}
+
+/// The items `FB_DROP` asks for, as `base[:rarity]` separated by commas (`Sword:legendary`,
+/// `Helm:rare,Ring`): for each, the first seed from 1 whose roll of that base has that rarity
+/// (any rarity if none is named). Names that roll nothing, or a rarity no seed gives, are
+/// skipped.
+pub fn drops_for_capture(spec: &str) -> Vec<fb_items::Item> {
+    use fb_items::Rarity;
+    spec.split(',')
+        .filter_map(|entry| {
+            let (base, rarity) = entry.split_once(':').map_or((entry, None), |(b, r)| (b, Some(r.trim().to_lowercase())));
+            let wanted = match rarity.as_deref() {
+                None | Some("") => None,
+                Some("common") => Some(Rarity::Common),
+                Some("magic") => Some(Rarity::Magic),
+                Some("rare") => Some(Rarity::Rare),
+                Some("legendary") => Some(Rarity::Legendary),
+                Some(other) => {
+                    warn!("FB_DROP: no rarity called {other:?}");
+                    return None;
+                }
+            };
+            (1..20_000).filter_map(|seed| fb_items::roll_item(base.trim(), seed)).find(|item| wanted.is_none_or(|r| item.rarity == r))
+        })
+        .collect()
+}
+
+/// For captures (`FB_DROP`): a few frames in, sets each item [`drops_for_capture`] names down
+/// in front of the delver, spread from left to right.
+pub fn set_down_for_capture(mut inventory: ResMut<Inventory>, mut changes: ResMut<FloorChanges>, mut frames: Local<u32>) {
+    *frames += 1;
+    if *frames != 4 {
+        return;
+    }
+    let drops = drops_for_capture(&std::env::var("FB_DROP").unwrap_or_default());
+    let count = drops.len();
+    for (i, item) in drops.into_iter().enumerate() {
+        let id = inventory.add(item);
+        let aside = if count > 1 { (i as f32 / (count - 1) as f32 * 2.0 - 1.0) * crate::carry::DROP_SPREAD } else { 0.0 };
+        changes.0.push(FloorChange::SetDown(id, aside));
     }
 }
 
