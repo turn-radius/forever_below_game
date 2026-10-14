@@ -114,6 +114,10 @@ impl Character {
     pub fn dexterity(&self) -> i32 {
         self.abilities[1]
     }
+
+    pub fn constitution(&self) -> i32 {
+        self.abilities[2]
+    }
 }
 
 /// What the delver's gear makes of them (the plate's `derive`).

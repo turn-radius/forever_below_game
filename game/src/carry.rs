@@ -784,7 +784,7 @@ fn follow_player_camera(
 }
 
 /// Bobs what is held with the player's steps and trails it behind turns of the head.
-fn sway_held(
+pub(crate) fn sway_held(
     time: Res<Time>,
     mut held: Query<(&mut HeldSway, &mut Transform, &ChildOf)>,
     view_models: Query<&ViewModelCamera>,

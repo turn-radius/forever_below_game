@@ -55,6 +55,11 @@ impl Plugin for PlayerPlugin {
     }
 }
 
+/// On the [`Player`] while something slows them: their pace is multiplied by this (0 stops
+/// them). A constrictor's hold, or a fall (`crate::combat`).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct Slowed(pub f32);
+
 /// How the body is moving and looking. Yaw and pitch are kept here so the transforms can be
 /// rebuilt from them without drift.
 #[derive(Component, Debug, Default)]
@@ -123,7 +128,7 @@ fn grab_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>) {
 
 /// A click in the level takes the mouse back, if it was let go (say, by switching windows).
 /// Esc frees it by opening the menu ([`crate::play::switch_screens`]).
-fn take_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>, input: ActionInput) {
+pub(crate) fn take_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>, input: ActionInput) {
     if input.just_pressed(Action::TakeMouse) {
         set_grab(&mut cursor, true);
     }
@@ -167,14 +172,14 @@ fn walk(
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Option<Res<Obstacles>>,
-    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform), With<Player>>,
+    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform, Option<&Slowed>), With<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP_SECONDS);
     if dt <= 0.0 {
         return;
     }
-    let (locomotion, gait, transform) = &mut *body;
-    let speed = if input.pressed(Action::Hurry) { HURRY_SPEED } else { WALK_SPEED };
+    let (locomotion, gait, transform, slowed) = &mut *body;
+    let speed = if input.pressed(Action::Hurry) { HURRY_SPEED } else { WALK_SPEED } * slowed.map_or(1.0, |s| s.0);
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
@@ -193,7 +198,7 @@ fn walk(
 }
 
 /// A small step bob of the head ([`Gait::bob`]).
-fn bob_head(body: Single<&Gait, With<Player>>, mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
+pub(crate) fn bob_head(body: Single<&Gait, With<Player>>, mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
     let bob = body.bob();
     camera.translation = Vec3::new(BOB_SWAY * bob.x, EYE_HEIGHT - BOB_HEIGHT * bob.y, 0.0);
 }

@@ -5,6 +5,7 @@ pub mod audio;
 pub mod capture;
 pub mod carry;
 pub mod character;
+pub mod combat;
 pub mod creature_view;
 pub mod creatures;
 pub mod doll_view;

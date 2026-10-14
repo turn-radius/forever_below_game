@@ -6,6 +6,7 @@
 //! - [`crate::carry`]: the torch in hand, items lying in the level, picking them up, the HUD.
 //! - [`crate::folk`]: the folk standing in the level.
 //! - [`crate::creatures`]: the rats and snakes in the level.
+//! - [`crate::combat`]: swinging weapons, trading blows, hit points and falling.
 //! - [`crate::props`]: the containers and scenery standing along the walls, and opening
 //!   containers.
 //! - [`crate::inventory`]: the inventory screen over the level (I).
@@ -233,6 +234,7 @@ impl Plugin for PlayPlugin {
             crate::carry::CarryPlugin,
             crate::folk::FolkPlugin,
             crate::creatures::CreaturesPlugin,
+            crate::combat::CombatPlugin,
             crate::props::PropsPlugin,
             crate::inventory::InventoryPlugin,
             crate::audio::MusicPlugin,

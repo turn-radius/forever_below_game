@@ -9,7 +9,9 @@
 //!   into a pose (`fb_creatures::pose`) each frame and copies it onto the bones: a rat trots
 //!   with its body bobbing, legs stepping and tail swinging, sniffs about when still and lunges
 //!   to bite; a snake slithers with a wave travelling down its spine, coils when it rests,
-//!   rears, strikes, gapes and flicks its tongue. Snake segments follow the floor's relief.
+//!   rears, strikes, gapes and flicks its tongue. Snake segments follow the floor's relief, and
+//!   a laid-out snake's body follows the way it came ([`Trail`]) rather than swinging round
+//!   as a whole when it turns.
 //! - Standing about, a creature idles ([`idle`]): rats sniff and sway their tails, snakes lie
 //!   coiled, now and then raising their heads and tasting the air.
 //! - Only each bone's main surface casts a shadow ([`SHADOW_PARTS`]), and a creature beyond
@@ -83,6 +85,70 @@ pub struct Motion {
     pub time: f32,
 }
 
+/// Where a snake's head has been: its root's recent places on the floor (world `(x, z)`),
+/// newest first, a point every [`TRAIL_STEP`] world units, as far back as its body is long.
+/// Laid out, a snake's neck is at its root (`fb_creatures::pose::snake_spine`) and its body is
+/// laid along this trail ([`trail_bend`]), so a long snake turning a corner keeps to the floor
+/// its head crossed instead of sweeping its tail through the wall. Our own approach: the
+/// "follow the leader" of snake games, on a [`SnakePose::bend`].
+#[derive(Component, Clone, Debug, Default)]
+pub struct Trail(pub std::collections::VecDeque<Vec2>);
+
+/// How far apart the points of a [`Trail`] are, world units.
+pub const TRAIL_STEP: f32 = 1.0;
+
+impl Trail {
+    /// Records the root standing at `at`, keeping `length` world units of the way behind it.
+    pub fn record(&mut self, at: Vec2, length: f32) {
+        match self.0.front() {
+            Some(&last) if last.distance(at) < TRAIL_STEP => {}
+            _ => self.0.push_front(at),
+        }
+        let keep = (length / TRAIL_STEP).ceil() as usize + 2;
+        self.0.truncate(keep);
+    }
+
+    /// The way the trail runs forward (toward the root) at `back` world units behind the
+    /// root standing at `at`, if it reaches that far.
+    pub fn direction(&self, at: Vec2, back: f32) -> Option<Vec2> {
+        let mut ahead = at;
+        let mut walked = 0.0;
+        for &point in &self.0 {
+            let piece = ahead.distance(point);
+            if piece < 1e-4 {
+                continue;
+            }
+            walked += piece;
+            if walked >= back {
+                return Some((ahead - point) / piece);
+            }
+            ahead = point;
+        }
+        None
+    }
+}
+
+/// The [`SnakePose::bend`] that lays a snake's body along its trail: each knot takes the
+/// trail's heading that far behind the head, turned into the root's frame, or the last heading
+/// the trail has where it runs out (straight on, with no trail yet).
+pub fn trail_bend(snake: &fb_creatures::SnakeState, trail: &Trail, root: &Transform) -> [f32; pose::BEND_KNOTS] {
+    let body = snake.dims().body_length;
+    let at = root.translation.xz();
+    let mut bend = [0.0; pose::BEND_KNOTS];
+    let mut last = 0.0;
+    for (k, b) in bend.iter_mut().enumerate() {
+        let back = k as f32 / (pose::BEND_KNOTS - 1) as f32 * body;
+        if let Some(way) = trail.direction(at, back.max(TRAIL_STEP)) {
+            // Into the root's frame, where the body runs toward +Z; a heading toward +X is a
+            // turn to its left.
+            let local = root.rotation.inverse() * Vec3::new(way.x, 0.0, way.y);
+            last = local.x.atan2(local.z);
+        }
+        *b = last;
+    }
+    bend
+}
+
 /// How a creature idles: its own rates, from its seed.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Idle {
@@ -116,7 +182,8 @@ pub fn transform_of(place: &Placement) -> Transform {
 
 /// Spawns every creature of the level once, and again only if the spots change.
 fn spawn_creatures(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<Critter>>, mut spawner: ItemSpawner, mut shown: Local<Option<Vec<CreatureSpot>>>) {
-    if shown.as_deref() == Some(&level.0.creatures[..]) {
+    // Again only if the spots change, or every creature was cleared away (a new delve).
+    if shown.as_deref() == Some(&level.0.creatures[..]) && !old.is_empty() {
         return;
     }
     for entity in &old {
@@ -190,6 +257,9 @@ pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpo
         bones.push(commands.spawn((Name::new(bone.name.clone()), transform_of(&bone.rest), Visibility::default(), ChildOf(parent))).id());
     }
     commands.entity(root).insert(Bones(bones.clone()));
+    if snake {
+        commands.entity(root).insert(Trail::default());
+    }
     (root, bones)
 }
 
@@ -219,22 +289,31 @@ pub fn tongue_flick(t: f32) -> f32 {
     if cycle < 0.5 { (cycle / 0.25 * std::f32::consts::PI).sin().abs() } else { 0.0 }
 }
 
+/// What [`animate`] reads and writes on each creature.
+type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>, Has<crate::combat::feedback::Corpse>);
+
 /// Poses every creature for this frame from how it moved and what it means to do.
 pub fn animate(
     time: Res<Time>,
     level: Res<CurrentLevel>,
-    mut creatures: Query<(&Critter, &Transform, &Intent, &mut Motion, &Bones)>,
+    mut creatures: Query<Posed>,
     mut transforms: Query<&mut Transform, Without<Critter>>,
     players: Query<&GlobalTransform, With<Player>>,
 ) {
     let dt = time.delta_secs();
     let relief = Relief::new(&level.0);
     let player = players.iter().next().map(GlobalTransform::translation);
-    for (critter, root, intent, mut motion, bones) in &mut creatures {
+    for (critter, root, intent, mut motion, bones, mut trail, dead) in &mut creatures {
         let at = root.translation.xz();
+        if let (Some(trail), Creature::Snake(snake)) = (trail.as_deref_mut(), &critter.creature) {
+            trail.record(at, snake.dims().body_length);
+        }
         let moved = motion.last.map_or(0.0, |last| at.distance(last));
         motion.last = Some(at);
-        motion.time += dt;
+        // A body lies still: its idle motions stop where they were.
+        if !dead {
+            motion.time += dt;
+        }
         // Out of sight across the level, the pose holds: changing every bone's transform
         // re-propagates and re-extracts each of its parts, a few hundred entities a frame.
         if player.is_some_and(|p| p.xz().distance(at) > POSE_RANGE) {
@@ -259,9 +338,10 @@ pub fn animate(
             }
             Creature::Snake(snake) => {
                 motion.cycle += moved / (pose::WAVELENGTH * snake.dims().body_length) * std::f32::consts::TAU;
+                let bend = trail.as_deref().map_or([0.0; pose::BEND_KNOTS], |trail| trail_bend(snake, trail, root));
                 let mut places = pose::snake(
                     snake,
-                    &SnakePose { phase: motion.cycle, pace: motion.pace.min(1.0), coil: now.coil, rear: now.rear, strike: now.strike, jaw: now.jaw, tongue: now.tongue, look: now.look },
+                    &SnakePose { phase: motion.cycle, pace: motion.pace.min(1.0), coil: now.coil, rear: now.rear, strike: now.strike, jaw: now.jaw, tongue: now.tongue, look: now.look, bend },
                 );
                 // Each segment, and the head, rests on the floor under it rather than the floor
                 // at the root.
