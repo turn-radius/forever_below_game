@@ -39,6 +39,7 @@ use fb_level::{CELL, ItemSpot, Level};
 
 use crate::inventory::{Inventory, ItemId};
 use crate::light::{Torch, cast_shadows, point_light};
+use crate::keymap::{Action, ActionInput, Keymap};
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, level_has_focus};
 use crate::player::{Gait, blocked_by, slide};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
@@ -115,6 +116,7 @@ impl Plugin for CarryPlugin {
             app.add_plugins(HierarchyPropagatePlugin::<NotShadowCaster>::new(Update));
         }
         app.init_resource::<Inventory>()
+            .init_resource::<Keymap>()
             .init_resource::<Aimed>()
             .add_systems(PostStartup, spawn_stand_in_camera.run_if(no_player_camera))
             .add_systems(PostUpdate, hold_debug_pose.before(TransformSystems::Propagate))
@@ -678,13 +680,13 @@ fn aim(
 /// it stays where it lies.
 fn pick_up(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
+    input: ActionInput,
     mut aimed: ResMut<Aimed>,
     items: Query<&FloorItem>,
     mut inventory: ResMut<Inventory>,
     mut level: ResMut<CurrentLevel>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyE) {
+    if !input.just_pressed(Action::PickUp) {
         return;
     }
     let Some(entity) = aimed.0 else { return };
@@ -880,6 +882,7 @@ mod tests {
             .init_resource::<Aimed>()
             .init_resource::<BlockedCells>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Keymap>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<crate::render::ToonMaterial>>()
             .init_resource::<Assets<crate::render::OutlineMaterial>>()

@@ -5,6 +5,7 @@ pub mod audio;
 pub mod capture;
 pub mod carry;
 pub mod inventory;
+pub mod keymap;
 pub mod level;
 pub mod light;
 pub mod play;

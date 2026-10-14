@@ -7,7 +7,7 @@
 //! current one runs dry, fading in from silence.
 //!
 //! The player's music volume ([`GameSettings::music_volume`], 0 to 1) scales the mix; minus
-//! and equals turn it down and up a tenth at a time ([`MUSIC_VOLUME_DOWN`], [`MUSIC_VOLUME_UP`]),
+//! and equals turn it down and up a tenth at a time ([`Action::MusicQuieter`], [`Action::MusicLouder`]),
 //! and the change is heard the same frame.
 //!
 //! Offscreen captures (`FB_SCREENSHOT`) stay silent. With no audio device Bevy logs a warning
@@ -21,11 +21,9 @@ use bevy::{
 };
 
 use crate::capture::FrameCapturePlugin;
+use crate::keymap::{Action, ActionInput, Keymap};
 use crate::settings::GameSettings;
 
-/// Keys that turn the music down and up: minus and equals, the keys marked `-` and `+`.
-pub const MUSIC_VOLUME_DOWN: KeyCode = KeyCode::Minus;
-pub const MUSIC_VOLUME_UP: KeyCode = KeyCode::Equal;
 /// How far one press moves the music volume.
 pub const MUSIC_VOLUME_STEP: f32 = 0.1;
 
@@ -79,6 +77,7 @@ pub struct MusicPlugin;
 impl Plugin for MusicPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Playlist>()
+            .init_resource::<Keymap>()
             .init_resource::<MusicSettings>()
             // Kept as loaded if `SettingsPlugin` came first.
             .init_resource::<GameSettings>()
@@ -129,8 +128,8 @@ pub fn turned_volume(volume: f32, steps: i32) -> f32 {
     ((volume * tenths).round() + steps as f32).clamp(0.0, tenths) / tenths
 }
 
-fn turn_music_volume(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<GameSettings>) {
-    let steps = keys.just_pressed(MUSIC_VOLUME_UP) as i32 - keys.just_pressed(MUSIC_VOLUME_DOWN) as i32;
+fn turn_music_volume(input: ActionInput, mut settings: ResMut<GameSettings>) {
+    let steps = input.just_pressed(Action::MusicLouder) as i32 - input.just_pressed(Action::MusicQuieter) as i32;
     if steps != 0 {
         let volume = turned_volume(settings.music_volume, steps);
         if settings.music_volume != volume {
@@ -331,8 +330,8 @@ mod tests {
     #[test]
     fn a_volume_key_applies_within_the_frame() {
         let mut app = App::new();
-        app.init_resource::<ButtonInput<KeyCode>>().init_resource::<GameSettings>().add_systems(Update, turn_music_volume);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(MUSIC_VOLUME_DOWN);
+        app.init_resource::<ButtonInput<KeyCode>>().init_resource::<Keymap>().init_resource::<GameSettings>().add_systems(Update, turn_music_volume);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Minus);
         app.update();
         assert!((app.world().resource::<GameSettings>().music_volume - 0.9).abs() < 1e-6);
     }

@@ -12,6 +12,7 @@ use bevy::{
 };
 use fb_level::{CELL, Level};
 
+use crate::keymap::{Action, ActionInput, Keymap};
 use crate::light::point_light;
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, level_has_focus};
 
@@ -43,7 +44,8 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_player, grab_cursor))
+        app.init_resource::<Keymap>()
+            .add_systems(Startup, (spawn_player, grab_cursor))
             .add_systems(Update, (toggle_cursor_grab, look, walk, bob_head).chain().run_if(level_has_focus));
     }
 }
@@ -114,15 +116,11 @@ fn grab_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>) {
 }
 
 /// Click to take the mouse, Esc to let it go.
-fn toggle_cursor_grab(
-    mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
-) {
-    if mouse.just_pressed(MouseButton::Left) {
+fn toggle_cursor_grab(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>, input: ActionInput) {
+    if input.just_pressed(Action::TakeMouse) {
         set_grab(&mut cursor, true);
     }
-    if keys.just_pressed(KeyCode::Escape) {
+    if input.just_pressed(Action::Back) {
         set_grab(&mut cursor, false);
     }
 }
@@ -150,7 +148,7 @@ fn look(
 
 fn walk(
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    input: ActionInput,
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
     mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform), With<Player>>,
@@ -160,9 +158,8 @@ fn walk(
         return;
     }
     let (locomotion, gait, transform) = &mut *body;
-    let axis = |plus: KeyCode, minus: KeyCode| keys.pressed(plus) as i32 as f32 - keys.pressed(minus) as i32 as f32;
-    let input = Vec2::new(axis(KeyCode::KeyD, KeyCode::KeyA), axis(KeyCode::KeyW, KeyCode::KeyS));
-    let speed = if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { HURRY_SPEED } else { WALK_SPEED };
+    let speed = if input.pressed(Action::Hurry) { HURRY_SPEED } else { WALK_SPEED };
+    let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
     locomotion.velocity.smooth_nudge(&wanted, ACCELERATION, dt);

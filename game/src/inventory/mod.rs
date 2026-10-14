@@ -1,4 +1,4 @@
-//! The inventory screen: Tab opens a dark ledger over the level, which keeps drawing
+//! The inventory screen: I opens a dark ledger over the level, which keeps drawing
 //! behind it, frees the mouse and stops the body. Each carried container shows as its grid,
 //! with every item in it drawn as an icon at its footprint; items are dragged between cells
 //! and grids, and R or the right mouse button turns the one being dragged (the plate's
@@ -45,14 +45,11 @@ pub use items::{Inventory, ItemId, Location, Refusal};
 pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
 use crate::carry::ViewModelCamera;
+use crate::keymap::{Action, ActionInput, Keymap};
 use crate::play::{CurrentLevel, ScreenOpen};
 use crate::player::set_grab;
 use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
 
-/// Opens and closes the screen.
-pub const OPEN_KEY: KeyCode = KeyCode::Tab;
-/// Turns the item being dragged a quarter turn.
-pub const TURN_KEY: KeyCode = KeyCode::KeyR;
 /// Logical pixels from one grid line to the next (the plate's `--cs`).
 pub const CELL_PX: f32 = 46.0;
 /// Width of a grid line, in logical pixels.
@@ -80,6 +77,7 @@ impl Plugin for InventoryPlugin {
         app.init_resource::<Inventory>()
             .init_resource::<IconCache>()
             .init_resource::<UiFonts>()
+            .init_resource::<Keymap>()
             .init_resource::<ScreenOpen>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
@@ -308,14 +306,14 @@ pub fn cell_under(rect: Rect, point: Vec2) -> IVec2 {
     IVec2::new(x, y)
 }
 
-/// Tab opens and closes the screen; Esc closes it. Open, the mouse is free and the body stops.
+/// I opens and closes the screen; Esc closes it. Open, the mouse is free and the body stops.
 fn toggle_screen(
-    keys: Res<ButtonInput<KeyCode>>,
+    input: ActionInput,
     mut open: ResMut<ScreenOpen>,
     mut dragging: ResMut<Dragging>,
     cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
 ) {
-    let toggle = keys.just_pressed(OPEN_KEY) || (open.0 && keys.just_pressed(KeyCode::Escape));
+    let toggle = input.just_pressed(Action::Inventory) || (open.0 && input.just_pressed(Action::Back));
     if !toggle {
         return;
     }
@@ -615,8 +613,7 @@ fn grid_of<'a>(inventory: &'a Inventory, underfoot: &'a Underfoot, view: GridVie
 #[allow(clippy::too_many_arguments)]
 fn drag_items(
     open: Res<ScreenOpen>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
+    input: ActionInput,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     grids: Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
     slots: Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
@@ -658,7 +655,7 @@ fn drag_items(
     let now_over = if dragging.0.is_some_and(|d| d.active) { None } else { over.map(|(rect, d)| (d.id, rect)) };
     hovered.set_if_neq(Hovered(now_over));
 
-    if mouse.just_pressed(MouseButton::Left)
+    if input.just_pressed(Action::DragItem)
         && let Some((_, drag)) = over
     {
         dragging.0 = Some(drag);
@@ -667,11 +664,11 @@ fn drag_items(
     if !drag.active && point.distance(drag.press) >= DRAG_START_PX {
         drag.active = true;
     }
-    if drag.active && (keys.just_pressed(TURN_KEY) || mouse.just_pressed(MouseButton::Right)) {
+    if drag.active && input.just_pressed(Action::TurnItem) {
         drag.turn();
     }
     drag.target = drag.active.then(|| (target, check_drop(&inventory, drag, target)));
-    if mouse.just_released(MouseButton::Left) {
+    if input.just_released(Action::DragItem) {
         let drag = dragging.0.take().expect("a drag");
         if !drag.active {
             return;
@@ -852,6 +849,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<Keymap>()
             .init_resource::<Inventory>()
             .init_resource::<IconCache>()
             .init_resource::<UiFonts>()
@@ -893,23 +891,36 @@ mod tests {
             let mut views = app.world_mut().query::<(&ItemView, &Node)>();
             views.iter(app.world()).map(|(v, n)| (v.id, n.left, n.top, n.width)).collect::<Vec<_>>()
         };
-        press(&mut app, OPEN_KEY);
+        press(&mut app, KeyCode::KeyI);
         assert!(app.world().resource::<ScreenOpen>().0);
         let first = shown(&mut app);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0], (knife, px(5.0 * CELL_PX + LINE_PX), px(2.0 * CELL_PX + LINE_PX), px(2.0 * CELL_PX - LINE_PX)));
-        press(&mut app, OPEN_KEY);
+        press(&mut app, KeyCode::KeyI);
         assert!(!app.world().resource::<ScreenOpen>().0);
         assert!(shown(&mut app).is_empty());
-        press(&mut app, OPEN_KEY);
+        press(&mut app, KeyCode::KeyI);
         assert_eq!(shown(&mut app), first);
         assert_eq!(app.world().resource::<Inventory>().location(knife), Some(Location::In { container: pack, at: Placement::new(5, 2, true) }));
     }
 
     #[test]
+    fn i_toggles_the_screen_and_tab_does_nothing() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::Tab);
+        assert!(!app.world().resource::<ScreenOpen>().0);
+        press(&mut app, KeyCode::KeyI);
+        assert!(app.world().resource::<ScreenOpen>().0);
+        press(&mut app, KeyCode::Tab);
+        assert!(app.world().resource::<ScreenOpen>().0);
+        press(&mut app, KeyCode::KeyI);
+        assert!(!app.world().resource::<ScreenOpen>().0);
+    }
+
+    #[test]
     fn bare_stone_underfoot_is_a_box_the_grid_s_size_that_says_so() {
         let mut app = screen_app();
-        press(&mut app, OPEN_KEY);
+        press(&mut app, KeyCode::KeyI);
         let size = grid_size(&app.world().resource::<Underfoot>().grid);
         let mut views = app.world_mut().query::<(&GridView, &Node, &Children)>();
         let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot drop zone");
@@ -921,7 +932,7 @@ mod tests {
     #[test]
     fn the_slots_sit_round_the_doll_and_empty_ones_show_their_names() {
         let mut app = screen_app();
-        press(&mut app, OPEN_KEY);
+        press(&mut app, KeyCode::KeyI);
         let mut slots = app.world_mut().query::<(&SlotView, &Node, &Children)>();
         let found: Vec<(Slot, Node, Vec<Entity>)> = slots.iter(app.world()).map(|(s, n, c)| (s.0, n.clone(), c.to_vec())).collect();
         assert_eq!(found.len(), fb_items::tables::slot_places().len());

@@ -4,7 +4,8 @@
 //! - [`crate::level`]: the level's stone geometry, its fixed lights and the entrance door.
 //! - [`crate::player`]: the first-person body, camera, movement and collision.
 //! - [`crate::carry`]: the torch in hand, items lying in the level, picking them up, the HUD.
-//! - [`crate::inventory`]: the inventory screen over the level (Tab).
+//! - [`crate::inventory`]: the inventory screen over the level (I).
+//! - [`crate::keymap`]: every key and button, read by action.
 //! - [`crate::audio`]: the level's music.
 
 use bevy::{platform::collections::HashSet, prelude::*};
