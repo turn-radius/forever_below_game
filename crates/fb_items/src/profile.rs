@@ -81,6 +81,18 @@ pub fn stands_upright(family: Family) -> bool {
     )
 }
 
+/// Whether `shape` has a base it stands on as built, and so rests on the floor as made rather
+/// than laid on its largest face: helms, hats, boots, bags, chests, lanterns, food and drink
+/// (the Armory builds each sitting on the table, bottles and tankards upright) and candles.
+/// Weapons, shields, torches, clothes, jewellery and the other sundries have none. Our own
+/// rule (the plate lays nothing on a floor).
+pub fn stands_on_base(shape: &Item) -> bool {
+    match shape {
+        Item::Sundry(s) => s.article.kind == armory::families::sundry::SundryKind::Candle,
+        _ => matches!(shape.family(), Family::Helm | Family::Hat | Family::Feet | Family::Bags | Family::Chests | Family::Lantern | Family::Food),
+    }
+}
+
 /// `footprint` turned, if need be, to run the way `shape` stands as built: more columns than
 /// rows for a shape wider (along X) than tall (along Y), more rows for one taller than wide.
 /// The cell count stays the same; only which way the cells run follows the shape.
@@ -421,6 +433,16 @@ mod tests {
         }
         assert!(stands_upright(Family::Hood) && stands_upright(Family::Chests));
         assert!(!stands_upright(Family::Sword) && !stands_upright(Family::Shield) && !stands_upright(Family::Torch));
+    }
+
+    #[test]
+    fn things_with_a_base_stand_on_it_and_the_rest_do_not() {
+        for base in ["Pack", "Boots", "Lantern", "Candle", "Wine", "Helm"] {
+            assert!(stands_on_base(&rolled(base, 3).0), "{base}");
+        }
+        for base in ["Crossbow", "Bow", "Shield", "Sword", "Torch", "Rope", "Tunic"] {
+            assert!(!stands_on_base(&rolled(base, 3).0), "{base}");
+        }
     }
 
     #[test]

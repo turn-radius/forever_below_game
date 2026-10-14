@@ -196,29 +196,30 @@ pub fn appearance_of(item: &Item) -> ItemAppearance {
     }
 }
 
-/// How an item of item-space `size` lies on the floor: long things (more than twice as tall
-/// as they are wide or deep, such as swords, spears, staves, bows and torches) are laid on
-/// their side, turned about whichever level axis keeps their thinnest side down. Anything
-/// else stands as it was made.
-pub fn lie_down(size: Vec3) -> Quat {
-    if size.y <= 2.0 * size.x.max(size.z) {
+/// How an item of item-space `size` lies on the floor. Something that `stands` on a base of
+/// its own (`fb_items::profile::stands_on_base`: boots, bags, bottles, lanterns) stands as it
+/// was made. Anything else lies flat on its largest face, its thinnest extent up: a sword or a
+/// bow on its side, a crossbow on its stock and prod, a shield on its back, face up.
+pub fn lie_down(size: Vec3, stands: bool) -> Quat {
+    if stands || (size.y <= size.x && size.y <= size.z) {
         return Quat::IDENTITY;
     }
     if size.z <= size.x {
-        // Item +Y goes to +Z, so its depth (the thin side) faces down.
-        Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
+        // Item +Z (its front) goes up, so its depth (the thin side) stands upright.
+        Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
     } else {
+        // Item +X goes up: it lies on its side.
         Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)
     }
 }
 
-/// Where an item rests: laid down by [`lie_down`], turned `yaw` about +Y, drawn `scale` times
-/// its size (`floor_item_scale`, [`crate::tuning::ViewTuning`]), centred over `at` on the floor
-/// (y = 0) with its lowest point touching it. `points` are its item-space vertices. `None` for
-/// an item with no vertices.
-pub fn rest_on_floor(points: &[Vec3], at: Vec3, yaw: f32, scale: f32) -> Option<Transform> {
+/// Where an item rests: laid down by [`lie_down`] (standing as made if it `stands`), turned
+/// `yaw` about +Y, drawn `scale` times its size (`floor_item_scale`,
+/// [`crate::tuning::ViewTuning`]), centred over `at` on the floor (y = 0) with its lowest point
+/// touching it. `points` are its item-space vertices. `None` for an item with no vertices.
+pub fn rest_on_floor(points: &[Vec3], stands: bool, at: Vec3, yaw: f32, scale: f32) -> Option<Transform> {
     let (min, max) = bounds(points.iter().copied())?;
-    let rotation = Quat::from_rotation_y(yaw) * lie_down(max - min);
+    let rotation = Quat::from_rotation_y(yaw) * lie_down(max - min, stands);
     let (min, max) = bounds(points.iter().map(|&p| rotation * p * scale))?;
     let centre = (min + max) * 0.5;
     Some(Transform { translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z), rotation, scale: Vec3::splat(scale) })
@@ -601,7 +602,7 @@ pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: It
     let mesh = item.shape.build();
     let points = item_points(&mesh);
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
-    let transform = rest_on_floor(&points, at, spot.yaw, tuning.view.floor_item_scale)?;
+    let transform = rest_on_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, tuning.view.floor_item_scale)?;
     let (min, max) = bounds(points.iter().copied())?;
     let light = item_light(&item.shape);
     let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
@@ -652,11 +653,12 @@ fn reshimmer_floor_items(
     }
 }
 
-/// An item's footprint radius on the floor once laid down ([`lie_down`]) and drawn `scale`
-/// times its size: half the larger of its level extents. 0 for an item with no vertices.
-pub fn floor_radius(points: &[Vec3], scale: f32) -> f32 {
+/// An item's footprint radius on the floor once laid down ([`lie_down`], standing as made if
+/// it `stands`) and drawn `scale` times its size: half the larger of its level extents. 0 for
+/// an item with no vertices.
+pub fn floor_radius(points: &[Vec3], stands: bool, scale: f32) -> f32 {
     bounds(points.iter().copied()).map_or(0.0, |(min, max)| {
-        let size = (lie_down(max - min) * (max - min)).abs();
+        let size = (lie_down(max - min, stands) * (max - min)).abs();
         size.x.max(size.z) * 0.5 * scale
     })
 }
@@ -691,7 +693,7 @@ pub fn set_down(
     let item = inventory.item(id)?;
     // Straight down, the top of the head points the way the body faces.
     let forward = eye.forward().as_vec3().xz().try_normalize().unwrap_or_else(|| eye.up().as_vec3().xz().normalize_or(Vec2::NEG_Y));
-    let radius = floor_radius(&item_points(&item.shape.build()), tuning.view.floor_item_scale);
+    let radius = floor_radius(&item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), tuning.view.floor_item_scale);
     let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells), &obstacles.0) / CELL;
     // Laid square to the player's view.
     let yaw = (-forward.x).atan2(-forward.y);
@@ -1102,16 +1104,48 @@ mod tests {
     }
 
     #[test]
-    fn long_items_lie_on_their_thin_side() {
+    fn items_lie_on_their_largest_face_unless_they_stand_on_a_base() {
         // A sword: tall, wide at the guard, thin through the blade.
-        let sword = lie_down(Vec3::new(2.5, 9.0, 0.4));
+        let sword = lie_down(Vec3::new(2.5, 9.0, 0.4), false);
         let size = (sword * Vec3::new(2.5, 9.0, 0.4)).abs();
         assert!(close(size.y, 0.4), "{size}");
         // A spear thin both ways still lies flat.
-        let spear = (lie_down(Vec3::new(0.5, 20.0, 0.6)) * Vec3::new(0.5, 20.0, 0.6)).abs();
+        let spear = (lie_down(Vec3::new(0.5, 20.0, 0.6), false) * Vec3::new(0.5, 20.0, 0.6)).abs();
         assert!(spear.y < 1.0, "{spear}");
-        // A bag stands as made.
-        assert_eq!(lie_down(Vec3::new(3.0, 4.0, 3.0)), Quat::IDENTITY);
+        // A crossbow, as wide across its prod as it is long: flat, not stood on its stock.
+        let crossbow = (lie_down(Vec3::new(7.0, 7.5, 1.2), false) * Vec3::new(7.0, 7.5, 1.2)).abs();
+        assert!(close(crossbow.y, 1.2), "{crossbow}");
+        // A shield lies on its back, face up.
+        assert!((lie_down(Vec3::new(6.0, 6.5, 1.0), false) * Vec3::Z).y > 0.99);
+        // Something already flat stays as it is; a bag stands as made.
+        assert_eq!(lie_down(Vec3::new(3.0, 0.5, 2.0), false), Quat::IDENTITY);
+        assert_eq!(lie_down(Vec3::new(3.0, 4.0, 3.0), true), Quat::IDENTITY);
+    }
+
+    /// The floor extents of `item` laid down as the game lays it, and its transform.
+    fn laid_size(item: &fb_items::Item) -> (Vec3, Transform) {
+        let points = item_points(&item.shape.build());
+        let at = Vec3::new(30.0, 0.0, 30.0);
+        let transform = rest_on_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, 0.4, floor_scale()).unwrap();
+        let (min, max) = bounds(points.iter().map(|&p| transform.transform_point(p))).unwrap();
+        assert!(close(min.y, 0.0), "{}: floats or sinks to {}", item.title(), min.y);
+        (max - min, transform)
+    }
+
+    #[test]
+    fn crossbows_bows_and_shields_rest_flat_and_bags_stand() {
+        for seed in 1..=16u32 {
+            for family in [Family::Crossbow, Family::Bow, Family::Shield] {
+                let item = fb_items::roll_loot(family, seed).unwrap();
+                let (size, _) = laid_size(&item);
+                assert!(size.y <= size.x.min(size.z) + 1e-3, "{family:?} {seed}: stands {size}");
+            }
+            for family in [Family::Bags, Family::Feet, Family::Lantern] {
+                let item = fb_items::roll_loot(family, seed).unwrap();
+                let (_, transform) = laid_size(&item);
+                assert!((transform.rotation * Vec3::Y).y > 0.99, "{family:?} {seed}: laid down");
+            }
+        }
     }
 
     #[test]
@@ -1120,21 +1154,21 @@ mod tests {
             .map(|i| Vec3::new(if i & 1 == 0 { -1.0 } else { 1.5 }, if i & 2 == 0 { -2.0 } else { 7.0 }, if i & 4 == 0 { -0.2 } else { 0.3 }))
             .collect();
         let at = Vec3::new(40.0, 0.0, 60.0);
-        let transform = rest_on_floor(&box_points, at, 0.7, floor_scale()).unwrap();
+        let transform = rest_on_floor(&box_points, false, at, 0.7, floor_scale()).unwrap();
         let placed: Vec<Vec3> = box_points.iter().map(|&p| transform.transform_point(p)).collect();
         let (min, max) = bounds(placed.into_iter()).unwrap();
         assert!(close(min.y, 0.0), "{min}");
         assert!(max.y < 1.0, "a long thing lies down: {max}");
         assert!(close((min.x + max.x) * 0.5, at.x) && close((min.z + max.z) * 0.5, at.z));
-        assert!(rest_on_floor(&[], at, 0.0, floor_scale()).is_none());
+        assert!(rest_on_floor(&[], false, at, 0.0, floor_scale()).is_none());
         // Drawn larger than its own size, still resting on the floor at its spot: the box's
         // thin side (0.5 deep) lies down, that much times the scale high.
         assert_eq!(transform.scale, Vec3::splat(floor_scale()));
         assert!(close(max.y - min.y, 0.5 * floor_scale()), "{min} {max}");
-        assert!(close(floor_radius(&box_points, floor_scale()), 4.5 * floor_scale()));
+        assert!(close(floor_radius(&box_points, false, floor_scale()), 4.5 * floor_scale()));
         // Drawn at another scale it still rests at its spot, as if it had been laid there so.
         let twice = rescale_on_floor(transform, at, 2.0);
-        let laid = rest_on_floor(&box_points, at, 0.7, 2.0).unwrap();
+        let laid = rest_on_floor(&box_points, false, at, 0.7, 2.0).unwrap();
         assert!(twice.translation.abs_diff_eq(laid.translation, 1e-4) && twice.scale == laid.scale, "{twice:?}");
         // The pickup box grows with it, and a ray onto its top lands there, in world units.
         let top = Vec3::new((min.x + max.x) * 0.5, max.y, (min.z + max.z) * 0.5);
@@ -1167,7 +1201,7 @@ mod tests {
         let ring = fb_items::roll_item("Ring", 2).unwrap();
         let points = item_points(&ring.shape.build());
         let (min, max) = bounds(points.iter().copied()).unwrap();
-        (rest_on_floor(&points, at, 0.0, floor_scale()).unwrap(), min, max)
+        (rest_on_floor(&points, fb_items::profile::stands_on_base(&ring.shape), at, 0.0, floor_scale()).unwrap(), min, max)
     }
 
     /// The direction from `eye` to `target`, turned `degrees` to the right about +Y.
