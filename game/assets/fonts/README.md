@@ -6,5 +6,5 @@ The plate's four faces (`docs/rendering.md`, "Palette and UI"), downloaded from 
 |---|---|---|---|
 | `Almendra-Regular.ttf` | Almendra, by Ana Sanfelippo | names, headings | `ofl/almendra` |
 | `AlegreyaSans-Regular.ttf`, `-Italic`, `-Medium` | Alegreya Sans, by Huerta Tipográfica | running text | `ofl/alegreyasans` |
-| `IBMPlexMono-Regular.ttf` | IBM Plex Mono, by IBM | numbers | `ofl/ibmplexmono` |
+| `IBMPlexMono-Regular.ttf`, `-Bold` | IBM Plex Mono, by IBM | numbers; Bold for values | `ofl/ibmplexmono` |
 | `NotoSansRunic-Regular.ttf` | Noto Sans Runic, by the Noto Project | the seal's runes | `ofl/notosansrunic` |

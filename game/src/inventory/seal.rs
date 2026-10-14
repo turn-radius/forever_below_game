@@ -142,6 +142,21 @@ impl Canvas {
         }
     }
 
+    /// A radial gradient of `rgb` round `centre` out to `r`, its opacity `at(t)` at `t` of the
+    /// way out (0 to 1, falling): concentric discs from the outside in, each adding what the
+    /// gradient gains there.
+    pub fn radial(&mut self, centre: [f32; 2], r: f32, rgb: [f32; 3], at: impl Fn(f32) -> f32) {
+        let steps = 48;
+        let mut below = 0.0;
+        for i in (0..steps).rev() {
+            let t = i as f32 / steps as f32;
+            let want = at(t);
+            let add = ((want - below) / (1.0 - below)).max(0.0);
+            self.disc(centre, r * (t + 1.0 / steps as f32), Ink::new(rgb, add));
+            below = want;
+        }
+    }
+
     /// Draws a closed or open path through `points`.
     pub fn path(&mut self, points: &[[f32; 2]], width: f32, ink: Ink) {
         for pair in points.windows(2) {
@@ -168,12 +183,14 @@ impl Canvas {
     }
 }
 
-/// The seal's colours: lines (`--muted` at 55%), gold, and the page behind the medallions.
+/// The seal's colours: lines (drawn at 55%), gold, and the page behind the medallions; and
+/// the gold glow's opacity at the centre (the plate's 0.2).
 #[derive(Clone, Copy, Debug)]
 pub struct SealInks {
     pub line: [f32; 3],
     pub gold: [f32; 3],
     pub page: [f32; 3],
+    pub glow: f32,
 }
 
 /// The seal at radius `r` (the plate's `R`, its outer ring), in seal units.
@@ -257,21 +274,12 @@ impl Seal {
         self.r * 0.48
     }
 
-    /// The soft gold glow behind everything (the plate's `#rg` gradient, `.breathe`).
+    /// The soft gold glow behind everything (the plate's `#rg` gradient, `.breathe`): 0.2 at
+    /// the centre, 0.07 at 55%, none at the edge, scaled to `inks.glow` at the centre.
     pub fn draw_glow(&self, canvas: &mut Canvas, inks: SealInks) {
-        let outer = self.r * 1.04;
-        let steps = 48;
-        // Concentric discs from the outside in, each adding a little, so the opacity follows
-        // the gradient's stops: 0.2 at the centre, 0.07 at 55%, none at the edge.
-        let at = |t: f32| if t < 0.55 { 0.2 + (0.07 - 0.2) * t / 0.55 } else { 0.07 * (1.0 - (t - 0.55) / 0.45) };
-        let mut below = 0.0;
-        for i in (0..steps).rev() {
-            let t = i as f32 / steps as f32;
-            let want = at(t);
-            let add = ((want - below) / (1.0 - below)).max(0.0);
-            canvas.disc([0.0, 0.0], outer * (t + 1.0 / steps as f32), Ink::new(inks.gold, add));
-            below = want;
-        }
+        let k = inks.glow / 0.2;
+        let at = |t: f32| k * if t < 0.55 { 0.2 + (0.07 - 0.2) * t / 0.55 } else { 0.07 * (1.0 - (t - 0.55) / 0.45) };
+        canvas.radial([0.0, 0.0], self.r * 1.04, inks.gold, at);
     }
 
     /// The outer band (the plate's `.sa`): its rings, ticks and dots.
@@ -377,7 +385,7 @@ impl Seal {
 mod tests {
     use super::*;
 
-    const INKS: SealInks = SealInks { line: [0.5, 0.46, 0.4], gold: [0.66, 0.47, 0.18], page: [0.95, 0.93, 0.88] };
+    const INKS: SealInks = SealInks { line: [0.5, 0.46, 0.4], gold: [0.66, 0.47, 0.18], page: [0.95, 0.93, 0.88], glow: 0.2 };
 
     #[test]
     fn rings_and_lines_land_where_they_are_drawn() {
