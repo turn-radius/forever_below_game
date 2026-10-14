@@ -18,7 +18,7 @@ cargo run -p forever_below -- --title --seed 42    # the title, and New delve pl
 
 The game opens on the title screen, to Forever Below's theme. New delve (or Enter) rolls a new level and a new character from the clock and starts the delve; the theme fades out as you go in. Settings is the pause menu's settings page (Esc or Back returns), and Quit leaves.
 
-Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page.
+Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page.
 
 ### Play a level
 
@@ -103,6 +103,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start |
 | `FB_OPEN_CONTAINER=<n>` | opens the level's `n`th container (0 the first, in `print_level`'s order) a moment in, with the inventory showing what it holds |
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
+| `FB_DROP=<base>[:<rarity>][,...]` | sets an item of each named base down in front of you a moment in, of that rarity if one is named (`Sword:legendary,Sword:common`), spread left to right; for captures of floor items such as a legendary's shimmer |
 | `FB_SWING=1` | swings the main hand over and over, for captures of the swing and of blows landing (with `FB_HOLD` and `FB_DEBUG_POSE`) |
 | `FB_HOLD=<main>[,<off>]` | puts an item of each named base in that hand, after the starting or debug kit (`Mace,Torch`, `Sword,Shield`, `Staff,none`; a torch or lantern is lit, `none` empties the hand) |
 | `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |
@@ -135,6 +136,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[view]` | `floor_item_scale` | 1.15 | How much larger than its own size an item lying on the floor is drawn (1 = true size). |
 | `[view]` | `aim_buffer_degrees` | 2.0 | How far off the crosshair, in degrees, something can be and still be aimed at. |
 | `[view]` | `aim_min_radius` | 0.6 | The least that leeway is, in world units off the crosshair, for small things close by (0.6 = 6 cm). |
+| `[view]` | `legendary_shimmer` | 0.25 | How strongly a legendary lying on the floor shimmers (0 = not at all). It lights nothing. |
 | `[moving]` | `walk_speed` | 14.0 | Walking pace, in world units per second (14 = 1.4 m/s). |
 | `[moving]` | `hurry_speed` | 45.0 | Pace with Shift held, in world units per second. |
 | `[moving]` | `acceleration` | 10.0 | How quickly you reach your pace and stop, per second (higher is snappier). |

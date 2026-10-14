@@ -113,6 +113,7 @@ impl Plugin for InventoryPlugin {
                 (
                     (
                         underfoot::set_down_debug_kit.run_if(debug_kit_wanted),
+                        underfoot::set_down_for_capture.run_if(|| env_flag("FB_DROP")),
                         // Screens open and close in `switch_screens`.
                         underfoot::track_underfoot,
                         close_container_with_screen,

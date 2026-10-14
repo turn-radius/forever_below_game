@@ -55,9 +55,9 @@ use crate::launch::AppState;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, level_has_focus};
 use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
-use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
+use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, Shimmer, ToonMaterial};
 use crate::tuning::{LightTuning, Tuning};
-use crate::ui::{BG, BRIGHT, UiFonts};
+use crate::ui::{BG, BRIGHT, UiFonts, rarity_color};
 use crate::view_model::{held_in_view, side_of};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
@@ -141,7 +141,7 @@ impl Plugin for CarryPlugin {
                     lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
                     equip_player_camera,
                     show_held.after(equip_player_camera),
-                    (widen_view_models, rescale_floor_items).run_if(resource_changed::<Tuning>),
+                    (widen_view_models, rescale_floor_items, reshimmer_floor_items).run_if(resource_changed::<Tuning>),
                     relight_given_lights,
                     follow_player_camera,
                     sway_held,
@@ -604,7 +604,8 @@ pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: It
     let transform = rest_on_floor(&points, at, spot.yaw, tuning.view.floor_item_scale)?;
     let (min, max) = bounds(points.iter().copied())?;
     let light = item_light(&item.shape);
-    let mut root = spawner.spawn(&mesh, &appearance_of(&item.shape));
+    let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
+    let mut root = spawner.spawn(&mesh, &appearance);
     root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }));
     if let Some(anchor) = light {
         // A lit thing on the floor lights its corner, from a little above the flame so the
@@ -616,6 +617,39 @@ pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: It
         root.insert(Propagate(NotShadowCaster)).with_child((given_light(anchor, Exposure::INDOOR, &tuning.light), Transform::from_translation(at)));
     }
     Some(root.id())
+}
+
+/// The shimmer an item lying on the floor is drawn with: a legendary's in the legendary colour
+/// (`ui::rarity_color`) at the tuning's `legendary_shimmer`, so it catches the eye even in the
+/// dark, the user's call ("a faint shimmer when they're on the ground"); none for anything
+/// else. Only floor items are drawn with it, so it stops once picked up.
+pub fn floor_shimmer(item: &fb_items::Item, tuning: &Tuning) -> Shimmer {
+    if item.rarity == fb_items::Rarity::Legendary {
+        Shimmer::new(rarity_color(fb_items::Rarity::Legendary), tuning.view.legendary_shimmer.max(0.0))
+    } else {
+        Shimmer::default()
+    }
+}
+
+/// Redraws every floor item's shimmer at the tuning's strength ([`floor_shimmer`]).
+fn reshimmer_floor_items(
+    tuning: Res<Tuning>,
+    inventory: Res<Inventory>,
+    items: Query<(&FloorItem, &Children)>,
+    parts: Query<&MeshMaterial3d<ToonMaterial>>,
+    mut materials: ResMut<Assets<ToonMaterial>>,
+) {
+    for (floor, children) in &items {
+        let Some(item) = inventory.item(floor.id) else { continue };
+        let shimmer = floor_shimmer(item, &tuning);
+        for part in children.iter().filter_map(|child| parts.get(child).ok()) {
+            if materials.get(&part.0).is_some_and(|m| m.extension.shimmer != shimmer)
+                && let Some(mut material) = materials.get_mut(&part.0)
+            {
+                material.extension.shimmer = shimmer;
+            }
+        }
+    }
 }
 
 /// An item's footprint radius on the floor once laid down ([`lie_down`]) and drawn `scale`
@@ -1651,6 +1685,45 @@ mod tests {
         assert_eq!(equipped.displaced, Some((torch, None)));
         assert_eq!(equipped.changes, vec![crate::inventory::FloorChange::Lifted(shield), crate::inventory::FloorChange::SetDownAt(torch, Vec2::new(2.0, 3.0), 0.5)]);
         assert_eq!(carried_light(&inventory), None, "the carried light follows the hands");
+    }
+
+    #[test]
+    fn legendary_floor_items_shimmer_and_others_do_not() {
+        let drops = crate::inventory::underfoot::drops_for_capture("Sword:legendary,Sword:common");
+        let [legendary, common] = [&drops[0], &drops[1]];
+        assert_eq!((legendary.rarity, common.rarity), (Rarity::Legendary, Rarity::Common));
+        let (mut app, _) = delving_app();
+        let mut spawned = Vec::new();
+        for (x, item) in [(0.0, legendary.clone()), (1.0, common.clone())] {
+            use bevy::ecs::system::RunSystemOnce;
+            let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
+            let spot = ItemSpot { x, y: 0.0, yaw: 0.0, family: item.shape.family(), seed: item.seed };
+            let entity = app
+                .world_mut()
+                .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default()).unwrap())
+                .unwrap();
+            spawned.push(entity);
+        }
+        let shimmers = |app: &mut App, entity: Entity| {
+            let children: Vec<Entity> = app.world().get::<Children>(entity).unwrap().iter().collect();
+            let materials = app.world().resource::<Assets<ToonMaterial>>();
+            children
+                .iter()
+                .filter_map(|&c| app.world().get::<MeshMaterial3d<ToonMaterial>>(c))
+                .map(|m| materials.get(&m.0).unwrap().extension.shimmer)
+                .collect::<Vec<_>>()
+        };
+        let strength = Tuning::default().view.legendary_shimmer;
+        let gold = shimmers(&mut app, spawned[0]);
+        assert!(!gold.is_empty() && gold.iter().all(|s| s.strength == strength && s.color == Shimmer::new(rarity_color(Rarity::Legendary), 1.0).color));
+        assert!(shimmers(&mut app, spawned[1]).iter().all(|s| s.strength == 0.0));
+        // Held or drawn anywhere else, it does not shimmer.
+        assert_eq!(appearance_of(&legendary.shape).shimmer, Shimmer::default());
+        // A change of tuning reaches the floor items already lying there.
+        app.add_systems(Update, reshimmer_floor_items);
+        app.world_mut().resource_mut::<Tuning>().view.legendary_shimmer = 0.5;
+        app.update();
+        assert!(shimmers(&mut app, spawned[0]).iter().all(|s| s.strength == 0.5));
     }
 
     #[test]

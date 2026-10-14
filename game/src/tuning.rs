@@ -84,6 +84,11 @@ pub struct ViewTuning {
     /// The least that buffer is, world units off the line, however near the thing is, so a
     /// ring at your feet is as easy to catch as a chest further off. Our own tuning (6 cm).
     pub aim_min_radius: f32,
+    /// How strongly a legendary lying on the floor shimmers: the peak of its glow pulse as a
+    /// fraction of the legendary colour, its glints brighter (`render::Shimmer`). Self-light
+    /// only, so it shows in the dark and lights nothing. The user's call ("a faint shimmer");
+    /// the value is our own tuning against captures. 0 turns it off.
+    pub legendary_shimmer: f32,
 }
 
 impl Default for ViewTuning {
@@ -96,6 +101,7 @@ impl Default for ViewTuning {
             floor_item_scale: 1.15,
             aim_buffer_degrees: 2.0,
             aim_min_radius: 0.6,
+            legendary_shimmer: 0.25,
         }
     }
 }

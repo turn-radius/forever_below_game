@@ -32,6 +32,7 @@ import super::decay::apply_decay;
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
+import super::shimmer::shimmer_light;
 
 struct ToonUniform {
     // Up to eight band values, packed four to a vec4.
@@ -71,6 +72,10 @@ struct ToonUniform {
     etch_inlaid: u32,
     etch_darken: f32,
     etch_stitched: u32,
+    // The part's shimmer (`shimmer.wesl`): its colour (display values) and the glow's peak as a
+    // fraction of it, 0 for none.
+    shimmer_color: vec3<f32>,
+    shimmer_strength: f32,
 }
 
 // Bindless where the device allows it (`ToonExtension`'s `bindless` attribute), as Bevy's
@@ -373,7 +378,18 @@ fn fragment(
         let edge = 1.0 - abs(dot(pbr_input.N, to_eye));
         alpha = mix(alpha, 0.85, edge * edge * edge);
     }
-    out.color = vec4<f32>(lit + glow, alpha);
+    // A legendary on the floor shimmers: self-light only, so it shows in the dark and lights
+    // nothing. Each item pulses in its own time, offset by where it lies.
+    let origin = mesh_functions::get_world_from_local(vertex_output.instance_index)[3].xyz;
+    let shimmer = shimmer_light(
+        srgb_to_linear(toon.shimmer_color),
+        toon.shimmer_strength,
+        item_position,
+        pixel,
+        view_bindings::globals.time,
+        dot(origin, vec3(0.37, 0.0, 0.29)),
+    );
+    out.color = vec4<f32>(lit + glow + shimmer, alpha);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }
