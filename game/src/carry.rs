@@ -212,15 +212,20 @@ pub fn lie_down(size: Vec3) -> Quat {
     }
 }
 
-/// Where an item rests: laid down by [`lie_down`], turned `yaw` about +Y, centred over `at`
-/// on the floor (y = 0) with its lowest point touching it. `points` are its item-space
-/// vertices. `None` for an item with no vertices.
+/// How much larger than its own size an item lying in the level is drawn, about where it
+/// rests: the user's call ("scaled up by 15%"), so things on the floor read from standing
+/// height. Its pickup box and floor radius grow with it.
+pub const FLOOR_SCALE: f32 = 1.15;
+
+/// Where an item rests: laid down by [`lie_down`], turned `yaw` about +Y, drawn
+/// [`FLOOR_SCALE`] times its size, centred over `at` on the floor (y = 0) with its lowest point
+/// touching it. `points` are its item-space vertices. `None` for an item with no vertices.
 pub fn rest_on_floor(points: &[Vec3], at: Vec3, yaw: f32) -> Option<Transform> {
     let (min, max) = bounds(points.iter().copied())?;
     let rotation = Quat::from_rotation_y(yaw) * lie_down(max - min);
-    let (min, max) = bounds(points.iter().map(|&p| rotation * p))?;
+    let (min, max) = bounds(points.iter().map(|&p| rotation * p * FLOOR_SCALE))?;
     let centre = (min + max) * 0.5;
-    Some(Transform { translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z), rotation, ..default() })
+    Some(Transform { translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z), rotation, scale: Vec3::splat(FLOOR_SCALE) })
 }
 
 fn bounds(points: impl Iterator<Item = Vec3>) -> Option<(Vec3, Vec3)> {
@@ -249,8 +254,8 @@ pub fn ray_box(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
     Some(near)
 }
 
-/// The ray's nearest hit among `targets` (each a rigid world-from-item transform and its
-/// item-space bounds) within `reach`.
+/// The ray's nearest hit among `targets` (each a world-from-item transform, rigid or evenly
+/// scaled, and its item-space bounds) within `reach`, in world units.
 pub fn nearest_hit<T: Copy>(
     origin: Vec3,
     dir: Vec3,
@@ -262,7 +267,8 @@ pub fn nearest_hit<T: Copy>(
         .filter_map(|(id, world_from_item, min, max)| {
             let inverse = world_from_item.compute_affine().inverse();
             let local_origin = inverse.transform_point3(origin);
-            let local_dir = inverse.transform_vector3(dir).normalize_or_zero();
+            // Left unnormalised, so the distance along it stays in world units under a scale.
+            let local_dir = inverse.transform_vector3(dir);
             ray_box(local_origin, local_dir, min, max).filter(|&t| t <= reach).map(|t| (id, t))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -530,12 +536,13 @@ pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: It
     Some(root.id())
 }
 
-/// An item's footprint radius on the floor once laid down ([`lie_down`]): half the larger of
-/// its level extents. 0 for an item with no vertices.
+/// An item's footprint radius on the floor once laid down ([`lie_down`]) and drawn
+/// [`FLOOR_SCALE`] times its size: half the larger of its level extents. 0 for an item with no
+/// vertices.
 pub fn floor_radius(points: &[Vec3]) -> f32 {
     bounds(points.iter().copied()).map_or(0.0, |(min, max)| {
         let size = (lie_down(max - min) * (max - min)).abs();
-        size.x.max(size.z) * 0.5
+        size.x.max(size.z) * 0.5 * FLOOR_SCALE
     })
 }
 
@@ -891,6 +898,16 @@ mod tests {
         assert!(max.y < 1.0, "a long thing lies down: {max}");
         assert!(close((min.x + max.x) * 0.5, at.x) && close((min.z + max.z) * 0.5, at.z));
         assert!(rest_on_floor(&[], at, 0.0).is_none());
+        // Drawn larger than its own size, still resting on the floor at its spot: the box's
+        // thin side (0.5 deep) lies down, that much times the scale high.
+        assert_eq!(transform.scale, Vec3::splat(FLOOR_SCALE));
+        assert!(close(max.y - min.y, 0.5 * FLOOR_SCALE), "{min} {max}");
+        assert!(close(floor_radius(&box_points), 4.5 * FLOOR_SCALE));
+        // The pickup box grows with it, and a ray onto its top lands there, in world units.
+        let top = Vec3::new((min.x + max.x) * 0.5, max.y, (min.z + max.z) * 0.5);
+        let from = top + Vec3::Y * 5.0;
+        let hit = nearest_hit(from, Vec3::NEG_Y, REACH, [((), transform, Vec3::new(-1.0, -2.0, -0.2), Vec3::new(1.5, 7.0, 0.3))]);
+        assert!(hit.is_some_and(|(_, t)| (t - 5.0).abs() < 1e-3), "{hit:?}");
     }
 
     #[test]
