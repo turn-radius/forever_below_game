@@ -119,3 +119,27 @@ fn longer_cuts_hang_lower() {
     let long = bounds(&Garment::build(&s).parts);
     assert!(long.1[1] - long.0[1] > short.1[1] - short.0[1] + 3.5);
 }
+
+/// The shader lays the quilted pattern out with `Wrap::of` the finished coat; the puffs were
+/// laid out on the plain coat at a scale fitted to hold a whole even number of cells round.
+/// The two agree when only that count lies between the plain coat's girth (at most the puff
+/// depth less) and the finished coat's.
+#[test]
+fn quilting_puffs_line_up_with_the_quilted_pattern() {
+    use armory::build::garment::Quilting;
+    use armory::fabric::Wrap;
+    for seed in 1..=64 {
+        let state = Garment::roll_as(seed, GarmentStyle::Gambeson);
+        let mesh = Garment::build(&state);
+        let body = part(&mesh, "body").unwrap();
+        let pattern = body.pattern.unwrap();
+        assert_eq!(pattern.kind, PatternKind::Quilted);
+        let wrap = Wrap::of(&body.positions);
+        let around = wrap.repeats_around(pattern.scale);
+        let circumference = |r: f32| std::f32::consts::TAU * r * pattern.scale;
+        let (lo, hi) = (circumference(wrap.radius - Quilting::DEPTH), circumference(wrap.radius));
+        let counts: Vec<f32> = (0..200).map(|n| 2.0 * n as f32).filter(|&n| n >= lo - 1e-3 && n <= hi + 1e-3).collect();
+        assert_eq!(counts, vec![around], "seed {seed}: {lo}..{hi}");
+        assert!((pattern.scale - Quilting::SCALE).abs() < 0.2, "seed {seed}: {}", pattern.scale);
+    }
+}

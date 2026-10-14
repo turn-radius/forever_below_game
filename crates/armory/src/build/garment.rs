@@ -25,7 +25,7 @@ use crate::build::form::{BACK, FRONT, LameStack, ShellOptions, TorsoForm, TorsoP
 use crate::build::gem::cut_stone;
 use crate::build::hafted::smoothstep;
 use crate::build::parts::{Look, Parts};
-use crate::fabric::{PatternKind, SurfacePattern};
+use crate::fabric::{PatternKind, SurfacePattern, Wrap};
 use crate::gem::{GemCut, Gemstone};
 use crate::geom::vec3::{self, V3};
 use crate::geom::{CatmullRom, MeshBuilder, SweepOptions, rotation_minimizing_frames, tube};
@@ -60,10 +60,47 @@ pub struct Drape {
     pub cinch: Option<(f32, f32)>,
     /// An opening down the front: its half angle at the top and at the hem, in radians.
     pub opening: Option<(f32, f32)>,
-    /// Quilting: depth of the puff between stitch lines.
-    pub quilt: f32,
+    /// Quilting puffs between stitch lines, if any.
+    pub quilt: Option<Quilting>,
     /// A medial ridge down the front (plate).
     pub ridge: f32,
+}
+
+/// Quilted padding: puffs between stitch lines laid out as the shader lays out the
+/// [`PatternKind::Quilted`] pattern ([`Wrap`]), so the stitching it draws runs along the
+/// hollows between the puffs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Quilting {
+    /// How far a puff stands out at its middle.
+    pub depth: f32,
+    /// The plain coat's wrap.
+    pub wrap: Wrap,
+    /// Cells per unit, fitted to the wrap so a whole number of cells goes round.
+    pub scale: f32,
+}
+
+impl Quilting {
+    /// Puff size, in cells per unit: about half a unit (5 cm) square.
+    pub const SCALE: f32 = 2.0;
+    pub const DEPTH: f32 = 0.035;
+
+    /// Quilting for a coat whose plain (unpuffed) vertices are `positions`.
+    pub fn fitted(positions: &[V3]) -> Self {
+        let wrap = Wrap::of(positions);
+        Quilting { depth: Self::DEPTH, wrap, scale: wrap.fitted_scale(Self::SCALE) }
+    }
+
+    /// How far the cloth puffs out at a point of the plain coat: nothing on a stitch line,
+    /// `depth` in the middle of a cell.
+    pub fn puff(&self, p: V3) -> f32 {
+        let [u, v] = self.wrap.coords(p, self.scale);
+        self.depth * ((PI * u.rem_euclid(1.0)).sin() * (PI * v.rem_euclid(1.0)).sin()).abs().sqrt()
+    }
+
+    /// The quilted pattern the shader draws over these puffs.
+    pub fn pattern(&self, color: crate::material::Rgb) -> SurfacePattern {
+        SurfacePattern { kind: PatternKind::Quilted, color, scale: self.scale }
+    }
 }
 
 impl Drape {
@@ -83,7 +120,7 @@ impl Drape {
             phases: [0.0; 3],
             cinch: None,
             opening: None,
-            quilt: 0.0,
+            quilt: None,
             ridge: 0.0,
         }
     }
@@ -198,10 +235,8 @@ impl DrapedSurface {
         let skirt = ((d.flare_from - y) / (d.flare_from - d.hem).max(0.3)).clamp(0.0, 1.0);
         r *= 1.0 + d.flare * 0.9 * skirt.powf(1.3);
         r += d.fold_depth(y) * d.fold_wave(angle);
-        if d.quilt > 0.0 {
-            let fa = (angle * 24.0 / TAU).rem_euclid(1.0);
-            let fy = (y / 0.55).rem_euclid(1.0);
-            r += d.quilt * ((PI * fa).sin() * (PI * fy).sin()).abs().sqrt();
+        if let Some(quilt) = &d.quilt {
+            r += quilt.puff([dir[0] * r, y, dir[1] * r]);
         }
         if d.ridge > 0.0 {
             let off = (angle - FRONT) / 0.28;
@@ -328,7 +363,8 @@ pub fn garment_drape(form: &TorsoForm, g: &GarmentCut, belt: &Belt, plates: &Pla
         phases,
         cinch: (belt.on && !cloak && !rigid).then_some((form.waist.y, belt.width * 0.5 + 0.05)),
         opening: cloak.then_some((0.07, 1.07)),
-        quilt: if g.style == GarmentStyle::Gambeson { 0.035 } else { 0.0 },
+        // Set once the plain coat is built, so the puffs line up with the pattern.
+        quilt: None,
         ridge: if rigid { plates.ridge } else { 0.0 },
     }
 }
@@ -344,7 +380,8 @@ pub fn body_look(g: &GarmentCut, plates: &Plates) -> Look {
         }
         GarmentStyle::Cuirass => Look::of(g.material),
         GarmentStyle::Gambeson if g.cloth.pattern.kind().is_none() => {
-            Look { pattern: Some(SurfacePattern { kind: PatternKind::Quilted, color: g.cloth.color, scale: g.cloth.scale }), ..Look::cloth(&g.cloth) }
+            // Fitted to the coat in `garment_parts`.
+            Look { pattern: Some(SurfacePattern { kind: PatternKind::Quilted, color: g.cloth.color, scale: Quilting::SCALE }), ..Look::cloth(&g.cloth) }
         }
         _ => Look::cloth(&g.cloth),
     }
@@ -357,9 +394,9 @@ pub fn garment_parts(form: &TorsoForm, g: &GarmentCut, hem: &Hem, belt: &Belt, p
     let mut parts = Parts::new();
     let form = form.eased(g.fit);
     let drape = garment_drape(&form, g, belt, plates, seed);
-    let surface = DrapedSurface::new(&form, drape);
+    let mut surface = DrapedSurface::new(&form, drape);
     let (thickness, _, _, _) = style_drape(g.style);
-    let look = body_look(g, plates);
+    let mut look = body_look(g, plates);
     let style = g.style;
     let rigid = style == GarmentStyle::Cuirass;
     let cloak = style.is_open();
@@ -388,13 +425,19 @@ pub fn garment_parts(form: &TorsoForm, g: &GarmentCut, hem: &Hem, belt: &Belt, p
     };
     let body_options = ShellOptions { wrap_around: !cloak, thickness, lip_columns: cloak, ..ShellOptions::tube(thickness) };
     let mut body = shell(&points(&surface), &body_options);
-    if drape.quilt > 0.0 {
+    if style == GarmentStyle::Gambeson {
         // Quilting puffs stay in the silhouette but shade with the coat's form: under banded
         // toon light, relief this fine breaks the coat into islands wherever a band edge
-        // crosses it.
-        let mut plain = surface.clone();
-        plain.drape.quilt = 0.0;
-        body.normals = shell(&points(&plain), &body_options).normals;
+        // crosses it. The `Quilted` pattern draws the stitching and the shading of the puffs
+        // instead, laid out to match them.
+        let quilting = Quilting::fitted(&body.positions);
+        surface.drape.quilt = Some(quilting);
+        let normals = std::mem::take(&mut body.normals);
+        body = shell(&points(&surface), &body_options);
+        body.normals = normals;
+        if let Some(pattern) = look.pattern.as_mut().filter(|p| p.kind == PatternKind::Quilted) {
+            *pattern = quilting.pattern(pattern.color);
+        }
     }
     parts.add_look("body", body, look);
 

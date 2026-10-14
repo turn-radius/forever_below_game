@@ -12,7 +12,7 @@ use bevy::{
 };
 
 use super::outline::{ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
-use super::toon::{Decay, MinWidth, ToonBands, ToonExtension, ToonMaterial};
+use super::toon::{Decay, MinWidth, Pattern, ToonBands, ToonExtension, ToonMaterial};
 
 /// Base colour for every material kind: the armory palette for paletted metals, wood and
 /// so on, plus the kinds it leaves to other sources (untinted gems, cloth, paint, food).
@@ -84,7 +84,8 @@ impl Default for ItemAppearance {
 }
 
 impl ItemAppearance {
-    /// The toon material for one part. `Part::tint` overrides the palette colour.
+    /// The toon material for one part. `Part::tint` overrides the palette colour, and
+    /// `Part::pattern` is drawn over it.
     pub fn material_for(&self, part: &Part) -> ToonMaterial {
         let colour = part.tint.or(part.material.map(|kind| self.palette.get(kind))).unwrap_or(Rgb(0.5, 0.5, 0.5));
         let decay = Decay {
@@ -115,6 +116,7 @@ impl ItemAppearance {
                 } else {
                     MinWidth { px: self.min_width_px, half_thickness: half_thickness(part) }
                 },
+                pattern: part.pattern.map_or(Pattern::default(), |pattern| Pattern::of(&pattern, &part.positions)),
             },
         }
     }
@@ -231,6 +233,7 @@ impl ItemSpawner<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use armory::fabric::{PatternKind, SurfacePattern};
 
     #[test]
     fn palette_covers_every_kind() {
@@ -300,6 +303,45 @@ mod tests {
         assert_eq!(fine.px, appearance.min_width_px);
         assert!((fine.half_thickness - 0.01).abs() < 0.0005);
         assert_eq!(appearance.material_for(&limb).extension.min_width, MinWidth::default());
+    }
+
+    fn patterned(kind: PatternKind, scale: f32) -> Part {
+        let pattern = SurfacePattern { kind, color: Rgb::hex(0xe0d4b0), scale };
+        Part { material: Some(MaterialKind::Cloth), pattern: Some(pattern), ..cylinder(1.0, 4.0, 48) }
+    }
+
+    #[test]
+    fn every_pattern_kind_draws_its_own_pattern() {
+        let appearance = ItemAppearance::default();
+        let ids: Vec<u32> = PatternKind::ALL.iter().map(|&kind| appearance.material_for(&patterned(kind, 2.0)).extension.pattern.id).collect();
+        for (kind, id) in PatternKind::ALL.iter().zip(&ids) {
+            assert_eq!(*id, kind.shader_id());
+            assert_eq!(ids.iter().filter(|other| *other == id).count(), 1, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn pattern_scale_follows_the_surface_pattern() {
+        let appearance = ItemAppearance::default();
+        for scale in [1.0, 2.5, 9.0] {
+            let pattern = appearance.material_for(&patterned(PatternKind::Mail, scale)).extension.pattern;
+            assert_eq!(pattern.scale, scale);
+            assert_eq!(pattern.color, Vec3::new(0xe0 as f32 / 255.0, 0xd4 as f32 / 255.0, 0xb0 as f32 / 255.0));
+            // The cylinder's girth is about 2 pi, so `scale` cells to a unit give about 2 pi scale
+            // round it, rounded to an even count.
+            let expected = 2.0 * (std::f32::consts::PI * scale).round();
+            assert!((pattern.around - expected).abs() <= 2.0, "{} {expected}", pattern.around);
+            assert_eq!(pattern.around % 2.0, 0.0);
+        }
+    }
+
+    #[test]
+    fn a_part_without_a_pattern_draws_none() {
+        let appearance = ItemAppearance::default();
+        let plain = Part { material: Some(MaterialKind::Cloth), ..cylinder(1.0, 4.0, 48) };
+        let material = appearance.material_for(&plain);
+        assert_eq!(material.extension.pattern, Pattern::default());
+        assert_eq!(material.extension.pattern.id, 0);
     }
 
     #[test]

@@ -1,6 +1,11 @@
 //! Banded toon shading with procedural wear: a [`StandardMaterial`] extended with
-//! [`ToonExtension`]. The shader is `toon.wesl` (lighting) and `decay.wesl` (wear).
+//! [`ToonExtension`]. The shader is `toon.wesl` (lighting), `pattern.wesl` (surface patterns)
+//! and `decay.wesl` (wear).
 
+use armory::{
+    Rgb,
+    fabric::{SurfacePattern, Wrap},
+};
 use bevy::{
     pbr::{ExtendedMaterial, MaterialExtension},
     prelude::*,
@@ -84,6 +89,50 @@ pub struct MinWidth {
     pub half_thickness: f32,
 }
 
+/// A woven, painted or worked pattern drawn over a part (`pattern.wesl`): an
+/// [`armory::fabric::SurfacePattern`] made ready for the shader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct Pattern {
+    /// `PatternKind::shader_id()`; 0 draws no pattern.
+    pub id: u32,
+    /// The second colour, display (sRGB) values.
+    pub color: Vec3,
+    /// Cells per unit (wrapped patterns) or across the field (field patterns).
+    pub scale: f32,
+    /// Where a wrapped pattern sits on the part ([`Wrap`]): a point on its axis, the axis, the
+    /// direction of zero angle, where rows start, the whole number of cells round, whether the
+    /// part is a mirrored pair, its length along the axis and its girth along it.
+    pub origin: Vec3,
+    pub axis: Vec3,
+    pub zero: Vec3,
+    pub base: f32,
+    pub around: f32,
+    pub mirrored: bool,
+    pub length: f32,
+    pub profile: [f32; Wrap::PROFILE],
+}
+
+impl Pattern {
+    /// `pattern` laid on a part with these vertices.
+    pub fn of(pattern: &SurfacePattern, positions: &[[f32; 3]]) -> Self {
+        let wrap = Wrap::of(positions);
+        let Rgb(r, g, b) = pattern.color;
+        Pattern {
+            id: pattern.kind.shader_id(),
+            color: Vec3::new(r, g, b),
+            scale: pattern.scale,
+            origin: Vec3::from(wrap.origin),
+            axis: Vec3::from(wrap.axis),
+            zero: Vec3::from(wrap.zero),
+            base: wrap.base,
+            around: wrap.repeats_around(pattern.scale),
+            mirrored: wrap.mirrored,
+            length: wrap.length,
+            profile: wrap.profile,
+        }
+    }
+}
+
 /// The toon half of [`ToonMaterial`]. The base colour, roughness and so on stay on the
 /// [`StandardMaterial`].
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
@@ -94,6 +143,7 @@ pub struct ToonExtension {
     /// Self-lit strength as a fraction of the base colour; fades with decay.
     pub glow: f32,
     pub min_width: MinWidth,
+    pub pattern: Pattern,
 }
 
 /// GPU layout of [`ToonExtension`]; must match `ToonUniform` in `toon.wesl`.
@@ -108,12 +158,35 @@ pub struct ToonUniform {
     glow: f32,
     min_width_px: f32,
     half_thickness: f32,
+    pattern_color: Vec3,
+    pattern_id: u32,
+    pattern_origin: Vec3,
+    pattern_scale: f32,
+    pattern_axis: Vec3,
+    pattern_base: f32,
+    pattern_zero: Vec3,
+    pattern_around: f32,
+    pattern_mirrored: u32,
+    pattern_length: f32,
+    pattern_profile: [Vec4; 4],
 }
 
 impl From<&ToonExtension> for ToonUniform {
     fn from(toon: &ToonExtension) -> Self {
         let v = toon.bands.values;
+        let pattern = toon.pattern;
         ToonUniform {
+            pattern_color: pattern.color,
+            pattern_id: pattern.id,
+            pattern_origin: pattern.origin,
+            pattern_scale: pattern.scale,
+            pattern_axis: pattern.axis,
+            pattern_base: pattern.base,
+            pattern_zero: pattern.zero,
+            pattern_around: pattern.around,
+            pattern_mirrored: pattern.mirrored as u32,
+            pattern_length: pattern.length,
+            pattern_profile: std::array::from_fn(|i| Vec4::from_slice(&pattern.profile[i * 4..i * 4 + 4])),
             band_values: [Vec4::new(v[0], v[1], v[2], v[3]), Vec4::new(v[4], v[5], v[6], v[7])],
             band_count: toon.bands.count,
             decay_type: toon.decay.kind,

@@ -27,6 +27,7 @@ import bevy_pbr::render::{
 };
 import bevy_render::maths::PI;
 import super::decay::apply_decay;
+import super::pattern::{Wrap, apply_pattern};
 import super::screen::reference_pixel;
 
 struct ToonUniform {
@@ -44,6 +45,19 @@ struct ToonUniform {
     // The part's own half thickness in item units, so only parts thinner than the minimum
     // are fattened.
     half_thickness: f32,
+    // The part's surface pattern (`pattern.wesl`): its second colour (display values), its id
+    // (0 for none), and where a wrapped pattern sits on the part.
+    pattern_color: vec3<f32>,
+    pattern_id: u32,
+    pattern_origin: vec3<f32>,
+    pattern_scale: f32,
+    pattern_axis: vec3<f32>,
+    pattern_base: f32,
+    pattern_zero: vec3<f32>,
+    pattern_around: f32,
+    pattern_mirrored: u32,
+    pattern_length: f32,
+    pattern_profile: array<vec4<f32>, 4>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> toon: ToonUniform;
@@ -228,8 +242,27 @@ fn fragment(
     // Wear and light both work on the display (sRGB) colour, as three.js r128 did with no
     // output encoding: the prototype's wear colours are display values, and a band at half
     // light reads as half as bright on screen, which keeps the steps crisp.
-    let base = apply_decay(
+    // Patterns go on first and wear over them, as in the prototype's `DECAY_BODY`.
+    let patterned = apply_pattern(
         linear_to_srgb(pbr_input.material.base_color.rgb),
+        item_position,
+        length(fwidth(item_position)) * toon.pattern_scale,
+        toon.pattern_id,
+        toon.pattern_color,
+        Wrap(
+            toon.pattern_origin,
+            toon.pattern_axis,
+            toon.pattern_zero,
+            toon.pattern_base,
+            toon.pattern_scale,
+            toon.pattern_around,
+            toon.pattern_mirrored,
+            toon.pattern_length,
+            toon.pattern_profile,
+        ),
+    );
+    let base = apply_decay(
+        patterned,
         item_position,
         toon.decay_type,
         toon.decay_amount,
