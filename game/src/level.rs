@@ -177,6 +177,7 @@ fn load_level_sounds(mut commands: Commands, assets: Res<AssetServer>) {
 
 /// Marks every entity the level spawns.
 #[derive(Component, Debug, Default)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct LevelPiece;
 
 /// The entrance door's leaf: open into the level until the player walks away from it, then
@@ -395,7 +396,7 @@ fn shut_the_entrance(
                 if let Some(sounds) = &sounds {
                     let game = game.as_deref().copied().unwrap_or_default();
                     let tuning = tuning.as_deref().cloned().unwrap_or_default();
-                    commands.spawn((Name::new("door shut"), AudioPlayer::new(sounds.door_shut.clone()), sound_effect(&game, &tuning)));
+                    commands.spawn((Name::new("door shut"), AudioPlayer::new(sounds.door_shut.clone()), sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
                 }
             }
             None => {}

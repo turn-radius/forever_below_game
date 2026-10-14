@@ -38,6 +38,7 @@ use bevy::{
 };
 use fb_items::Item;
 
+use crate::launch::AppState;
 use crate::carry::appearance_of;
 use crate::light::{StudioLight, point_light, reach_falloff};
 use crate::render::ItemSpawner;
@@ -139,6 +140,13 @@ impl IconCache {
         let busy: HashSet<AssetId<Image>> = self.drawing.iter().map(|d| d.image).chain(self.queued.iter().map(|q| q.2.id())).collect();
         self.images.retain(|_, image| busy.contains(&image.id()));
         self.drawn.retain(|id| busy.contains(id));
+    }
+
+    /// Forgets the icons queued or being drawn, whose stages are despawned with the delve, so
+    /// each is made afresh when next asked for. Icons already drawn are kept.
+    pub fn abandon_drawing(&mut self) {
+        let busy: HashSet<AssetId<Image>> = self.drawing.drain(..).map(|d| d.image).chain(self.queued.drain(..).map(|q| q.2.id())).collect();
+        self.images.retain(|_, image| !busy.contains(&image.id()));
     }
 
     /// Records the icon in `image` as drawn, as [`draw_icons`] does.
@@ -338,6 +346,7 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
     let mut root = spawner.spawn(&mesh, &appearance_of(&item.shape));
     root.insert((
         Name::new(format!("Icon: {}", item.name)),
+        DespawnOnExit(AppState::Delving),
         Transform::from_translation(at - centre).with_rotation(rotation),
         Propagate(layer.clone()),
         Propagate(NotShadowCaster),
@@ -349,6 +358,7 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
     let camera = commands
         .spawn((
             Name::new("Icon camera"),
+            DespawnOnExit(AppState::Delving),
             Camera3d::default(),
             Camera { order: -10 - stage as isize, clear_color: ClearColorConfig::Custom(Color::NONE), ..default() },
             RenderTarget::Image(image.clone().into()),
@@ -378,6 +388,7 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
     let light = commands
         .spawn((
             Name::new("Icon light"),
+            DespawnOnExit(AppState::Delving),
             point_light(Color::WHITE, peak, range, &exposure),
             Transform::from_translation(at + StudioLight::ARMORY.key_from() * distance),
             layer,
@@ -386,7 +397,7 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
     // Each frame until the item shows, its image is read back to see whether anything is drawn.
     let (width, height) = (size.x as usize, size.y as usize);
     let readback = commands
-        .spawn((Name::new("Icon readback"), Readback::texture(image.clone())))
+        .spawn((Name::new("Icon readback"), DespawnOnExit(AppState::Delving), Readback::texture(image.clone())))
         .observe(move |event: On<ReadbackComplete>, mut cache: ResMut<IconCache>, mut commands: Commands| {
             if any_pixel_shows(&event.data, width, height) {
                 cache.drawn.insert(image_id);

@@ -6,7 +6,9 @@
 //! sight and swings at them, and opens and closes the inventory (I) and the menu (Esc). Picking
 //! up, opening containers, equipping and dropping go through the inventory's own rules
 //! ([`crate::inventory::quick`], [`crate::inventory::drop_at`]) rather than aiming the
-//! crosshair. With `--title` it presses Enter on the title to begin a new delve.
+//! crosshair. With `--title` it presses Enter on the title to begin a new delve, a second after
+//! the title shows, and first logs a `soak: title` line with the entities on it, so the title
+//! after each death can be held against the first (#177).
 //!
 //! Every [`REPORT_SECONDS`] it logs a `soak:` line to stderr: entities, mesh, image and material
 //! assets, cameras, readbacks, icons, render phases and the smoothed frame time, so counts that
@@ -19,6 +21,7 @@
 
 use bevy::{
     core_pipeline::core_3d::Opaque3d,
+    ecs::resource::IsResource,
     diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin},
     input::{InputSystems, mouse::AccumulatedMouseMotion},
     pbr::Shadow,
@@ -105,6 +108,9 @@ pub struct Soak {
     next_shuffle: f32,
     next_report: f32,
     started: Option<f32>,
+    /// When the title last showed, until a new delve is begun from it.
+    on_title_since: Option<f32>,
+    titles: u32,
     /// Items it set down lately, and when, left alone for a while so it does not pick each
     /// straight back up.
     dropped: Vec<(crate::inventory::ItemId, f32)>,
@@ -139,6 +145,8 @@ impl Soak {
             next_shuffle: 5.0,
             next_report: 0.0,
             started: None,
+            on_title_since: None,
+            titles: 0,
             dropped: Vec::new(),
             stats: SoakStats::default(),
         }
@@ -150,13 +158,29 @@ impl Soak {
     }
 }
 
-/// On the title, Enter begins a new delve.
-fn start_from_title(mut soak: ResMut<Soak>, keys: Option<ResMut<ButtonInput<KeyCode>>>, time: Res<Time<Real>>) {
+/// How long the title shows before the soak begins a new delve, seconds.
+const TITLE_SECONDS: f32 = 1.0;
+
+/// On the title, Enter begins a new delve, once the title has shown a while and its entities
+/// are logged.
+fn start_from_title(mut soak: ResMut<Soak>, keys: Option<ResMut<ButtonInput<KeyCode>>>, time: Res<Time<Real>>, entities: Query<()>, resources: Query<(), With<IsResource>>, sounds: Query<(), With<AudioPlayer>>) {
     let Some(mut keys) = keys else { return };
     for key in std::mem::take(&mut soak.tapped) {
         keys.release(key);
     }
-    if time.elapsed_secs() > 2.0 {
+    let now = time.elapsed_secs();
+    let since = *soak.on_title_since.get_or_insert(now);
+    if now - since > TITLE_SECONDS && now > 2.0 {
+        soak.titles += 1;
+        // Bevy 0.20 keeps each resource on an entity, and keeps it when the resource is removed.
+        eprintln!(
+            "soak: title {} t={now:.0}s entities={} resources={} sounds={}",
+            soak.titles,
+            entities.iter().count(),
+            resources.iter().count(),
+            sounds.iter().count()
+        );
+        soak.on_title_since = None;
         soak.tap(&mut keys, KeyCode::Enter);
     }
 }

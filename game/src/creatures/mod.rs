@@ -48,6 +48,7 @@ impl Plugin for CreaturesPlugin {
 
 /// A creature in the level: which spot it came from and what it is.
 #[derive(Component, Clone, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct Critter {
     pub spot: CreatureSpot,
     pub creature: Creature,

@@ -58,6 +58,7 @@ pub enum MenuCommand {
 
 /// The whole menu, over the level.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct MenuScreen;
 
 /// A button on the menu, and what it does.

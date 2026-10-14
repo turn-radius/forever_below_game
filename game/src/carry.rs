@@ -369,6 +369,7 @@ pub fn nearest_aimed<T: Copy>(
 /// An item lying in the level, with its item-space bounds for picking. The item itself is in
 /// the [`Inventory`], loose.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct FloorItem {
     pub id: ItemId,
     pub spot: ItemSpot,
@@ -487,6 +488,7 @@ fn yaw_pitch(eye: &GlobalTransform) -> Vec2 {
 /// The camera that draws the view model over the world. It stands on [`VIEW_MODEL_STAGE`],
 /// with what is held and the carried light's light as children.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct ViewModelCamera {
     /// The [`PlayerCamera`] it draws over.
     pub follows: Entity,
@@ -541,6 +543,7 @@ impl DebugPose {
 /// A camera spawned because no [`PlayerCamera`] existed after startup, so the torch and items
 /// can be seen without the player plugin.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct StandInCamera;
 
 fn no_player_camera(cameras: Query<(), With<PlayerCamera>>) -> bool {
@@ -981,6 +984,7 @@ fn swing_hip(mut pivots: Query<(&mut Transform, &ChildOf), With<HipSwing>>, gait
 
 /// The HUD over the level: the crosshair. Hidden while a screen is open.
 #[derive(Component, Debug)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct Hud;
 
 fn hide_hud_under_screens(open: Res<ScreenOpen>, mut huds: Query<&mut Visibility, With<Hud>>) {
