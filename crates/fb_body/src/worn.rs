@@ -33,7 +33,7 @@ use std::f32::consts::{PI, TAU};
 use armory::build::boot::boot_parts;
 use armory::build::form::{BACK, FRONT, HeadForm, LimbForm, TorsoForm, TorsoProfile};
 use armory::build::garment::{Fitting, Notch, Underlay, garment_drape, garment_parts_fitted};
-use armory::build::hand::hand_parts_curled;
+use armory::build::hand::hand_parts_fitted;
 use armory::build::hat::hat_parts;
 use armory::build::hood::hood_parts;
 use armory::build::legwear::legwear_parts;
@@ -243,6 +243,9 @@ struct Envelope<'a> {
     /// How far the bare arms and hands and everything worn reach from the trunk's axis, finely
     /// gridded: what a cloak hangs over.
     outline: Outline,
+    /// The points of everything worn on each arm (right then left), body space: what a cuff
+    /// is drawn over.
+    on_arm: [Vec<V3>; 2],
 }
 
 /// Which worn surface a trunk form is eased over ([`Envelope::form`]).
@@ -273,6 +276,7 @@ impl<'a> Envelope<'a> {
             arms: [[NONE; LIMB_BINS]; 2],
             legs: [[NONE; LIMB_BINS]; 2],
             outline: Outline::new(profile.bottom() - 1.0, profile.top() + 0.7),
+            on_arm: [vec![], vec![]],
         };
         // The bare arms and hands as drawn, for a cloak over them: a raised forearm and its
         // hand come out through the cloak instead ([`Envelope::under_cloak`]).
@@ -419,6 +423,7 @@ impl<'a> Envelope<'a> {
                     if !beyond {
                         let bin = &mut self.arms[index(side)][limb_bin(t)];
                         *bin = bin.max(da);
+                        self.on_arm[index(side)].push(p);
                     }
                 } else {
                     self.trunk.add(q, e);
@@ -994,16 +999,58 @@ fn gloves(body: &Body, env: &Envelope, state: &HandsState) -> ItemMesh {
         let forearm = vec3::distance(arm.joints[1], arm.joints[2]);
         let mut hand = h;
         hand.cuff = hand.cuff.min(0.85 * forearm / h.size);
-        let mut f = form;
-        // Clear of what is on the forearm under the cuff only.
-        let from = 1.0 - hand.cuff * h.size / arm.length();
-        if let Some(d) = Envelope::limb_clearance(&env.arms[index(side)], from, 1.0) {
-            f.forearm_half_width += d;
-            f.forearm_half_depth += d;
+        // What is worn on the forearm under the cuff, as the cuff sees it: in the hand's
+        // space, gridded by how far below the wrist and by angle round the forearm, the most
+        // it reaches from the forearm's axis in each cell and the cells about it. The cuff is
+        // drawn close over that, so a bracer follows a sleeve all along. Our own fitting; the
+        // first Rust fit eased the whole cuff by the most anything stood out under it.
+        let place = body.hand_placement(side);
+        let (x, y, z) = (place.x(), place.y(), place.z());
+        let reach = hand.cuff * h.size + 0.3;
+        const DOWN: f32 = 0.05;
+        const ROUND: usize = 32;
+        let rows = (reach / DOWN).ceil() as usize + 2;
+        let mut grid = vec![[NONE; ROUND]; rows];
+        for &p in &env.on_arm[index(side)] {
+            let q = vec3::sub(p, place.origin);
+            let l = [vec3::dot(q, x), vec3::dot(q, y), vec3::dot(q, z)];
+            let down = -l[1];
+            if !(-0.1..reach).contains(&down) {
+                continue;
+            }
+            let i = ((down + 0.1) / DOWN) as usize;
+            let j = ((((-l[2]).atan2(l[0])).rem_euclid(TAU) / TAU * ROUND as f32) as usize).min(ROUND - 1);
+            if let Some(row) = grid.get_mut(i) {
+                row[j] = row[j].max(l[0].hypot(l[2]));
+            }
         }
+        // A sleeve's rings lie further apart than the cells: fill between them, down each
+        // column of the grid.
+        #[allow(clippy::needless_range_loop)]
+        for j in 0..ROUND {
+            let filled: Vec<usize> = (0..rows).filter(|&i| grid[i][j] > NONE).collect();
+            for w in filled.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                if b - a > 1 && b - a <= 8 {
+                    for i in a + 1..b {
+                        let t = (i - a) as f32 / (b - a) as f32;
+                        grid[i][j] = grid[a][j] + (grid[b][j] - grid[a][j]) * t;
+                    }
+                }
+            }
+        }
+        let under = |angle: f32, down: f32| -> Option<f32> {
+            let i = ((down + 0.1) / DOWN).floor() as isize;
+            let j = ((angle.rem_euclid(TAU) / TAU * ROUND as f32) as isize).rem_euclid(ROUND as isize);
+            let m = (i - 2..=i + 2)
+                .filter_map(|k| grid.get(usize::try_from(k).ok()?))
+                .flat_map(|row| (j - 2..=j + 2).map(move |c| row[c.rem_euclid(ROUND as isize) as usize]))
+                .fold(NONE, f32::max);
+            (m > NONE).then_some(m)
+        };
         let pose = body.hand_pose(side);
-        let mut mesh = hand_parts_curled(&f, &hand, &state.hem, pose.fingers, pose.thumb).finish();
-        body.hand_placement(side).apply_to_item(&mut mesh);
+        let mut mesh = hand_parts_fitted(&form, &hand, &state.hem, pose.fingers, pose.thumb, Some(&under)).finish();
+        place.apply_to_item(&mut mesh);
         out.parts.extend(mesh.parts);
     }
     out
@@ -1648,6 +1695,51 @@ mod tests {
                     sectors.sort_by(f32::total_cmp);
                     if sectors.is_empty() || sectors[(sectors.len() - 1) / 2] > 0.12 || sectors.iter().any(|d| *d > 0.22) {
                         failures.push(format!("{folk:?} {seed} kit {kit}: the hair stands off the cloak: {sectors:.2?}"));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn a_bracer_lies_close_over_a_mail_sleeve() {
+        use armory::families::hands::Hands;
+        let mut failures = vec![];
+        for folk in Folk::ALL {
+            for seed in [3u32, 1207] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                for kit in [10u32, 11, 12] {
+                    let mut mail = Garment::roll_as(kit + 1, GarmentStyle::Hauberk);
+                    mail.cut.sleeves = Sleeves::Long;
+                    let worn = vec![
+                        (Slot::Shirt, Item::Garment(Garment::roll_as(kit, GarmentStyle::Tunic))),
+                        (Slot::Body, Item::Garment(mail)),
+                        (Slot::Hands, Item::Hands(Hands::roll_as(kit, HandStyle::Bracer))),
+                    ];
+                    let fit = fit_worn(&body, &worn);
+                    let sleeves: Vec<Part> = fit.layer(Slot::Body).unwrap().mesh.parts.iter().filter(|p| p.name == "sleeves").cloned().collect();
+                    let cuff = fit.layer(Slot::Hands).unwrap().mesh.parts.iter().find(|p| p.name == "cuff").unwrap().clone();
+                    let thickness = 0.03 * body.hand_form().palm_length / 0.95;
+                    // Along its length up the forearm (from a little above the wrist, where the
+                    // sleeve ends), within 1 cm of the sleeve under it, and never in it.
+                    let mut worst = 0.0f32;
+                    for side in Side::BOTH {
+                        let arm = body.arm(side);
+                        let (w, along) = (arm.joints[2], arm.tangent_at(1.0));
+                        for p in cuff.positions.iter().filter(|p| vec3::dot(vec3::sub(**p, w), along) < -0.25 && (p[0] > 0.0) == (side == Side::Left)) {
+                            let d = sleeves.iter().map(|s| distance_to(s, *p, 1.0)).fold(1.0, f32::min);
+                            worst = worst.max(d - thickness);
+                        }
+                    }
+                    if worst > 0.1 {
+                        failures.push(format!("{folk:?} {seed} kit {kit}: the bracer stands {worst:.3} off the sleeve"));
+                    }
+                    for s in &sleeves {
+                        let n = crossings(&cuff, s);
+                        if n > 0 {
+                            failures.push(format!("{folk:?} {seed} kit {kit}: the sleeve passes through the bracer ({n} crossings)"));
+                        }
                     }
                 }
             }
