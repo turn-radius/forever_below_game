@@ -43,16 +43,13 @@ fn main() -> AppExit {
 
 /// `--seed N` or `--seed=N`; 1207 by default.
 fn level_seed(args: &[String]) -> Result<u32, String> {
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        let value = match arg.strip_prefix("--seed") {
-            Some("") => it.next().cloned().ok_or("--seed needs a value")?,
-            Some(rest) if rest.starts_with('=') => rest[1..].to_string(),
-            _ => return Err(format!("unknown argument {arg}")),
-        };
-        return value.parse().map_err(|_| format!("--seed {value} is not a number"));
-    }
-    Ok(1207)
+    let value = match args {
+        [] => return Ok(1207),
+        [flag, value] if flag == "--seed" => value.clone(),
+        [arg] if arg.starts_with("--seed=") => arg["--seed=".len()..].to_string(),
+        [arg, ..] => return Err(format!("unknown argument {arg}")),
+    };
+    value.parse().map_err(|_| format!("--seed {value} is not a number"))
 }
 
 fn run_turntable() -> AppExit {
