@@ -26,7 +26,8 @@
 //! torch in the off hand, which is their carried light (`crate::carry::carried_light`). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
 //! captures; `FB_DEBUG_KIT=1` dresses the delver in their class's outfit with a lit light in the
 //! off hand, starts them with a pack full of things, and sets a sack holding a few more, and a
-//! shield, down in front of them. `FB_DEBUG_HOVER=<n>` holds the
+//! shield, down in front of them. `FB_HOLD=<main>[,<off>]` puts items of those bases in the hands
+//! (a torch or lantern lit; `none` empties a hand), after either kit. `FB_DEBUG_HOVER=<n>` holds the
 //! card over the `n`th thing in the first carried grid.
 
 pub mod card;
@@ -104,7 +105,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<DollAssets>()
             .init_resource::<DollStage>()
             .init_resource::<Character>()
-            .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted)).chain())
+            .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD"))).chain())
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
             .add_systems(
                 Update,
@@ -225,6 +226,47 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
         let id = inventory.add(item);
         if inventory.stow(id).is_err() {
             inventory.forget(id);
+        }
+    }
+}
+
+/// What `FB_HOLD`'s value `spec` puts in each hand: `(main, off)`, each `None` to leave that hand
+/// as the kit left it, `Some(None)` to empty it, or the base to hold.
+pub fn hold_spec(spec: &str) -> (Option<Option<String>>, Option<Option<String>>) {
+    let mut hands = spec.split(',').map(|b| {
+        let base = b.trim();
+        match base {
+            "" => None,
+            "none" => Some(None),
+            _ => Some(Some(base.to_string())),
+        }
+    });
+    (hands.next().flatten(), hands.next().flatten())
+}
+
+/// The first item of `base` rolled at or after `seed`, lit if it is a light that can be.
+fn roll_held(base: &str, seed: u32) -> Option<fb_items::Item> {
+    let rolled = |s: u32| fb_items::roll_item(base, s);
+    let lit = (0..500).filter_map(|k| rolled(seed.wrapping_add(k))).find(|i| crate::carry::item_light(&i.shape).is_some());
+    lit.filter(|_| matches!(base, "Torch" | "Lantern")).or_else(|| rolled(seed))
+}
+
+/// For captures: the hands hold what `FB_HOLD` names ([`hold_spec`]), whatever the kit gave.
+fn hold_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLevel>>) {
+    let Ok(spec) = std::env::var("FB_HOLD") else { return };
+    let (main, off) = hold_spec(&spec);
+    for (slot, want) in [(Slot::Mainhand, main), (Slot::Offhand, off)] {
+        let Some(want) = want else { continue };
+        if let Some(old) = inventory.worn(slot) {
+            inventory.take_out(old);
+            if inventory.stow(old).is_err() {
+                inventory.forget(old);
+            }
+        }
+        let Some(base) = want else { continue };
+        match roll_held(&base, kit_seed(level.as_deref(), 0x401d + slot as u32)) {
+            Some(item) => equip_kit(&mut inventory, item, slot),
+            None => warn!("FB_HOLD: no base called {base:?}"),
         }
     }
 }
@@ -906,6 +948,18 @@ fn show_toast(toast: Res<Toast>, time: Res<Time<Real>>, mut texts: Query<&mut Te
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fb_hold_names_each_hand() {
+        let some = |b: &str| Some(Some(b.to_string()));
+        assert_eq!(hold_spec("Mace,Torch"), (some("Mace"), some("Torch")));
+        assert_eq!(hold_spec("Staff, none"), (some("Staff"), Some(None)));
+        assert_eq!(hold_spec("Bow"), (some("Bow"), None));
+        assert_eq!(hold_spec(",Shield"), (None, some("Shield")));
+        // A torch or lantern asked for is lit; a weapon is as rolled.
+        assert!(roll_held("Torch", 4).is_some_and(|t| crate::carry::item_light(&t.shape).is_some()));
+        assert_eq!(roll_held("Sword", 4).map(|s| s.shape.family()), Some(armory::Family::Sword));
+    }
 
     fn dagger() -> fb_items::Item {
         (1..500).filter_map(|s| fb_items::roll_item("Dagger", s)).find(|d| d.profile.footprint == Footprint { cols: 1, rows: 2 }).unwrap()

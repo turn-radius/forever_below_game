@@ -66,8 +66,8 @@ struct Locomotion {
     velocity: Vec2,
 }
 
-/// The player's step cycle, for whatever moves with their steps: the head bob here, the torch
-/// in hand in [`crate::carry`].
+/// The player's step cycle, for whatever moves with their steps: the head bob here, what is held
+/// in the hands in [`crate::carry`].
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct Gait {
     /// Step cycle, radians; one turn per [`STRIDE`] walked (two steps).
