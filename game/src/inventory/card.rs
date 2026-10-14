@@ -309,13 +309,14 @@ pub fn show_card(
     dragging: Res<Dragging>,
     aimed: Option<Res<crate::carry::Aimed>>,
     floor: Query<&crate::carry::FloorItem>,
+    containers: Query<&crate::props::Container>,
     inventory: Res<Inventory>,
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
     mut shown: Local<Option<ItemId>>,
 ) {
-    let aimed_item = aimed.and_then(|a| a.0).and_then(|entity| floor.get(entity).ok()).map(|f| f.id);
+    let aimed_item = aimed.and_then(|a| a.0).and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
     // No card over the menu.
     let subject = if open.is(Screen::Menu) { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
     for (card, mut node, mut visibility, computed, target) in &mut cards {

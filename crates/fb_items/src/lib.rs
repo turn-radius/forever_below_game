@@ -8,6 +8,7 @@
 //! `docs/items.md`.
 
 pub mod armory_base;
+pub mod contents;
 pub mod dice;
 pub mod dress;
 pub mod footprint;
@@ -20,6 +21,7 @@ pub mod rarity;
 pub mod stats;
 pub mod tables;
 
+pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, roll_item, roll_loot};
 
 use procgen_rng::Mulberry32;

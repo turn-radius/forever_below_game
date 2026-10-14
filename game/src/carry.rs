@@ -19,8 +19,9 @@
 //!   the item itself casts no shadow, or its own flame and handle would black out its light.
 //! - Every item lying in the level is kept track of in the [`Inventory`], loose, so a bag set
 //!   down keeps its contents and the inventory screen can show what lies underfoot.
-//! - A ray from the camera picks the nearest item in reach ([`Aimed`]), which the hover card
-//!   describes (`crate::inventory::card`); E picks it up into the inventory ([`Inventory::pick_up`]). Things are set down from the
+//! - A ray from the camera picks the nearest item or container in reach ([`Aimed`]), which the
+//!   hover card describes (`crate::inventory::card`); E picks an item up into the inventory
+//!   ([`Inventory::pick_up`]) and opens a container (`crate::props`). Things are set down from the
 //!   inventory screen ([`set_down`], [`drop_spot`]), and rest like any other floor item.
 //!
 //! With no player in the app a stand-in camera is spawned at the level's start
@@ -46,6 +47,7 @@ use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, level_has_focus};
 use crate::player::{Gait, blocked_by, slide_around};
+use crate::props::{Container, PropPiece};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
 use crate::ui::{BG, BRIGHT};
 
@@ -346,7 +348,8 @@ pub struct ViewModelCamera {
 #[derive(Component, Debug)]
 struct Equipped;
 
-/// The floor item under the crosshair and in reach, if any.
+/// The floor item, or container standing in the level (`crate::props`), under the crosshair
+/// and in reach, if any.
 #[derive(Resource, Debug, Default)]
 pub struct Aimed(pub Option<Entity>);
 
@@ -729,13 +732,17 @@ fn sway_held_torch(
 fn aim(
     camera: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
     items: Query<(Entity, &GlobalTransform, &FloorItem)>,
+    containers: Query<(Entity, &GlobalTransform, &PropPiece), With<Container>>,
     mut aimed: ResMut<Aimed>,
 ) {
     let Some(eye) = camera.iter().next() else {
         aimed.0 = None;
         return;
     };
-    let targets = items.iter().map(|(entity, transform, floor)| (entity, transform.compute_transform(), floor.min, floor.max));
+    let targets = items
+        .iter()
+        .map(|(entity, transform, floor)| (entity, transform.compute_transform(), floor.min, floor.max))
+        .chain(containers.iter().map(|(entity, transform, piece)| (entity, transform.compute_transform(), piece.min, piece.max)));
     let hit = nearest_hit(eye.translation(), eye.forward().as_vec3(), REACH, targets).map(|(entity, _)| entity);
     if aimed.0 != hit {
         aimed.0 = hit;
@@ -1040,6 +1047,26 @@ mod tests {
         assert!(matches!(inventory.location(id), Some(crate::inventory::Location::In { container, .. }) if container == pack));
         assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
         assert!(app.world().get_entity(dropped).is_err());
+    }
+
+    #[test]
+    fn a_container_in_reach_is_under_the_crosshair_and_e_leaves_it_standing() {
+        let (mut app, _) = delving_app();
+        // A chest a metre ahead of an eye looking down at it.
+        let at = Transform::from_xyz(0.0, 0.0, -10.0);
+        let spot = fb_level::PropSpot { x: 0.0, y: -0.5, yaw: 0.0, prop: fb_level::Prop::Container { style: armory::families::chests::ChestStyle::Chest, seed: 1, loot: 1 } };
+        let piece = PropPiece { index: 0, spot, min: Vec3::new(-3.0, 0.0, -2.0), max: Vec3::new(3.0, 4.0, 2.0) };
+        let id = app.world_mut().resource_mut::<Inventory>().add(fb_items::container_item(fb_level::chest_state(armory::families::chests::ChestStyle::Chest, 1, false)));
+        let chest = app.world_mut().spawn((at, GlobalTransform::from(at), piece, Container { id, opened: false })).id();
+        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, 2.0, -10.0), Vec3::Y);
+        app.world_mut().spawn((PlayerCamera, Equipped, eye, GlobalTransform::from(eye)));
+        app.update();
+        assert_eq!(app.world().resource::<Aimed>().0, Some(chest));
+        // E picks nothing up: the chest is never carried off (`crate::props` opens it).
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        app.update();
+        assert!(app.world().get_entity(chest).is_ok());
+        assert_eq!(app.world().resource::<Inventory>().location(id), Some(crate::inventory::Location::Loose));
     }
 
     #[test]

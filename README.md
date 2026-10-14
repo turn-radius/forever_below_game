@@ -21,7 +21,7 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 |---|---|
 | W A S D, Shift | walk, hurry |
 | Mouse | look round (click to take the mouse back after Esc) |
-| E | pick up what you're looking at |
+| E | pick up what you're looking at, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
 | Esc | close a screen, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
@@ -73,6 +73,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps` | a lit camera at a fixed view of the level |
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start |
+| `FB_OPEN_CONTAINER=<n>` | opens the level's `n`th container (0 the first, in `print_level`'s order) a moment in, with the inventory showing what it holds |
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |

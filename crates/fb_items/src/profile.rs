@@ -8,6 +8,7 @@ use crate::stats::Stats;
 use crate::tables::{bases, food_descriptions, goods};
 use crate::{Kind, Slot, Tag};
 use armory::families::bags::BagStyle;
+use armory::families::chests::ChestStyle;
 use armory::families::shield::ShieldShape;
 use armory::fabric::Textile;
 use armory::sections::boot::BootStyle;
@@ -59,6 +60,21 @@ pub fn extents(shape: &Item) -> (f32, f32) {
 /// than their size as modelled on the mannequin.
 fn folds(family: Family) -> bool {
     matches!(family, Family::Garment | Family::Hood | Family::Legs | Family::Hands | Family::Belt | Family::Bags)
+}
+
+/// The grid a chest, barrel, crate or amphora opens into: columns, rows and its label. The
+/// plate gives chests no inner grid (its `saMeta` has none for `chests`), so these sizes are
+/// our own: a chest as roomy as a satchel and a half, a crate and a barrel a little less, an
+/// amphora's narrow belly a few cells, the small boxes fewer.
+pub fn chest_grid(style: ChestStyle) -> (u8, u8, &'static str) {
+    match style {
+        ChestStyle::Chest => (8, 4, "Chest"),
+        ChestStyle::Strongbox => (5, 3, "Strongbox"),
+        ChestStyle::Coffer => (4, 2, "Coffer"),
+        ChestStyle::Barrel => (4, 5, "Barrel"),
+        ChestStyle::Crate => (6, 4, "Crate"),
+        ChestStyle::Amphora => (3, 4, "Amphora"),
+    }
 }
 
 /// The profile of `shape` rolled for base `base`. A base with its own row in
@@ -246,7 +262,10 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
         Item::Ring(_) => gear(Slot::Ring1, &[Trinket], Stats { weight: 0.05, ..Stats::default() }, [1, 1]),
         Item::Amulet(_) => gear(Slot::Neck, &[Trinket], Stats { weight: 0.1, ..Stats::default() }, [1, 1]),
         Item::Charm(_) => gear(Slot::Charm, &[Trinket], Stats { weight: 0.1, ..Stats::default() }, [1, 1]),
-        Item::Chests(_) => Profile { packable: false, ..good(&[Container], 30.0, [4, 3], "Far too heavy to carry") },
+        Item::Chests(s) => {
+            let (cols, rows, label) = chest_grid(s.chest.style);
+            Profile { packable: false, holds: Some(Grid { cols, rows, label: label.to_string() }), ..good(&[Container], 30.0, [4, 3], "Far too heavy to carry") }
+        }
         Item::Food(s) => {
             use armory::families::food::FoodStyle as F;
             let st = s.provision.style;
