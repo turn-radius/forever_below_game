@@ -20,7 +20,8 @@
 //! - **Shield**: strapped at the fist with the forearm along its back, the board clear of the
 //!   hand and forearm, at most [`SHIELD_MAX`] of the bearer's height.
 //! - **Torch**: upright in the fist like a staff, the forearm level, so the flame burns
-//!   straight up at shoulder height, forward of the body and clear of the arm.
+//!   straight up at shoulder height, forward of the body and clear of the arm, the arm out to
+//!   the side so the flame burns beside the head.
 //! - **Lantern**: the fist closes on the carrying ring and the lantern hangs plumb below it.
 //! - **Crossbow**: carried by the stock's waist, deck up.
 
@@ -51,6 +52,10 @@ pub const SHIELD_MAX: f32 = 0.42;
 /// two-handed polearm and is held upright like a staff. Our own proposal: the plate only
 /// had one-handed clubs and hand axes.
 pub const LONG_HAFT: f32 = 0.45;
+/// How far out from the body a torch arm spreads, radians. Our own: the plate's 0.14 brought
+/// the flame up across a gnome's face (its head is large and its arms short); this far out it
+/// burns beside the head on every folk.
+pub const TORCH_SPREAD: f32 = 0.5;
 /// The smallest grip a hand closes on, the floor of `Body::grip_radius`'s clamp: a fist
 /// round a shield's strap.
 pub const STRAP_GRIP: f32 = 0.07;
@@ -100,7 +105,8 @@ impl Hold {
             Hold::Upright => pose(0.1, 0.62, 0.12),
             Hold::Bow => pose(0.12, 0.4, 0.06),
             Hold::Shield => pose(0.22, 0.85, 0.08),
-            Hold::Torch => pose(0.14, 0.8, 0.18),
+            // Out to the side, so the flame burns beside the head rather than across the face.
+            Hold::Torch => pose(TORCH_SPREAD, 0.8, 0.18),
             Hold::Lantern => pose(0.32, 0.45, 0.12),
             Hold::Crossbow => pose(0.16, 0.32, 0.06),
         }
@@ -145,8 +151,59 @@ impl HeldFit {
 /// places the item. `None` for items that are not held (worn gear, rings, food...).
 pub fn fit_held(body: &Body, side: Side, item: &Item) -> Option<HeldFit> {
     let hold = Hold::of(item, body)?;
+    let first = fit_with(body, side, item, hold, hold.arm_pose())?;
+    let Item::Torch(torch) = item else { return Some(first) };
+    // A torch burns beside the head, not across the face: spread the arm further out until its
+    // flame (where it is, or would be, lit) clears the head as seen from the front. Our own
+    // rule; a goblin's ears reach far out to the sides.
+    let mut lit = torch.clone();
+    lit.burn.state = armory::families::torch::BurnState::Burning;
+    let flame = armory::families::torch::Torch::light(&lit).map_or([0.0, 0.0, 0.0], |l| l.position);
+    let head = body.head_mesh().bounds();
+    let clear = |fit: &HeldFit| {
+        let at = fit.to_body(flame);
+        head.is_none_or(|(lo, hi)| at[0] < lo[0] - HEAD_CLEARANCE || at[0] > hi[0] + HEAD_CLEARANCE || at[1] < lo[1] - HEAD_CLEARANCE || at[1] > hi[1] + HEAD_CLEARANCE)
+    };
+    if clear(&first) {
+        return Some(first);
+    }
+    for k in 1..=6 {
+        let arm = ArmPose { spread: TORCH_SPREAD + 0.05 * k as f32, ..hold.arm_pose() };
+        let Some(fit) = fit_with(body, side, item, hold, arm) else { break };
+        if clear(&fit) {
+            return Some(fit);
+        }
+    }
+    // Spread further the arm would only lift the flame along the head's side (past a
+    // goblin's ears): lean the torch out from the fist instead, a little at a time.
+    let mut leaned = first;
+    for k in 1..=8 {
+        leaned = lean_out(&fit_with(body, side, item, hold, hold.arm_pose())?, body, side, 0.05 * k as f32);
+        if clear(&leaned) {
+            break;
+        }
+    }
+    Some(leaned)
+}
+
+/// `fit` with its item turned `angle` radians about the fist, its top out from the body.
+fn lean_out(fit: &HeldFit, body: &Body, side: Side, angle: f32) -> HeldFit {
+    let posed = Body::posed(&body.spec, fit.pose);
+    let pivot = posed.grip(side).origin;
+    let turn = Mat3::from_axis_angle(vec3::Z, -side.sign() * angle);
+    let placement = Placement { rotation: turn.mul_mat(&fit.placement.rotation), origin: vec3::add(pivot, turn.transform(vec3::sub(fit.placement.origin, pivot))) };
+    let mut mesh = fit.item.build();
+    scale_mesh(&mut mesh, fit.scale);
+    placement.apply_to_item(&mut mesh);
+    HeldFit { placement, mesh, ..fit.clone() }
+}
+
+/// How far a held flame keeps clear of the head's outline from the front.
+const HEAD_CLEARANCE: f32 = 0.15;
+
+/// [`fit_held`] with the arm starting from `arm`.
+fn fit_with(body: &Body, side: Side, item: &Item, hold: Hold, mut arm: ArmPose) -> Option<HeldFit> {
     let scale = draw_scale(body, item);
-    let mut arm = hold.arm_pose();
     if hold.stands_upright() {
         arm = level_forearm(body, side, arm);
     }
@@ -817,6 +874,41 @@ mod tests {
                 assert!(lo[1] > 0.0, "{folk:?} {}: the butt is {} below the ground", item.noun(), -lo[1]);
             }
         }
+    }
+
+    #[test]
+    fn held_lights_burn_beside_the_body_clear_of_the_head() {
+        use armory::families::Generator;
+        use armory::families::lantern::Lantern;
+        use armory::families::torch::{BurnState, Torch};
+        let mut failures = vec![];
+        for folk in Folk::ALL {
+            for seed in [1u32, 8, 1207] {
+                let spec = BodySpec::roll(folk, seed);
+                for light_seed in [3u32, 4, 9] {
+                    let mut torch = Torch::roll(light_seed);
+                    torch.burn.state = BurnState::Burning;
+                    let mut lantern = Lantern::roll(light_seed);
+                    lantern.flame.lit = true;
+                    let staff = roll(Family::Staff, seed);
+                    for (light, flame) in [(Item::Torch(torch.clone()), Torch::light(&torch).unwrap().position), (Item::Lantern(lantern.clone()), Lantern::light(&lantern).unwrap().position)] {
+                        for main in [None, Some(&staff)] {
+                            let hands = fit_hands(&spec, main, Some(&light));
+                            let fit = hands.off.as_ref().unwrap();
+                            let at = fit.to_body(flame);
+                            // The head's silhouette from the front (the doll and its portrait):
+                            // the head and its features, ears and all.
+                            let (lo, hi) = hands.body.head_mesh().bounds().unwrap();
+                            let margin = 0.1;
+                            if at[0] > lo[0] - margin && at[0] < hi[0] + margin && at[1] > lo[1] - margin && at[1] < hi[1] + margin {
+                                failures.push(format!("{folk:?} {seed}: a {} burns across the head at {at:?} (head {lo:?}..{hi:?})", light.family().key()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]
