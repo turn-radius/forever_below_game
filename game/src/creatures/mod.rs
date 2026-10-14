@@ -1,0 +1,404 @@
+//! Creatures in the level (`fb_level::CreatureSpot`): rats and snakes from `fb_creatures`, drawn
+//! in the house style (toon bands, ink and wear) and moved bone by bone without a skeleton.
+//!
+//! - Each creature is a root on the floor at its spot, facing its yaw, with one entity per bone
+//!   of its [`fb_creatures::Rig`] (each on its parent bone, as the rig says) carrying that bone's
+//!   Armory parts, spawned by the [`ItemSpawner`] so every part has its own toon material, ink
+//!   hull and wear. Skin and fur wear with a little grime, as a folk's skin does.
+//! - [`animate`] turns how the root has moved and what the creature means to do ([`Intent`])
+//!   into a pose (`fb_creatures::pose`) each frame and copies it onto the bones: a rat trots
+//!   with its body bobbing, legs stepping and tail swinging, sniffs about when still and lunges
+//!   to bite; a snake slithers with a wave travelling down its spine, coils when it rests,
+//!   rears, strikes, gapes and flicks its tongue. Snake segments follow the floor's relief.
+//! - Standing about, a creature idles ([`idle`]): rats sniff and sway their tails, snakes lie
+//!   coiled, now and then raising their heads and tasting the air.
+//! - Only each bone's main surface casts a shadow ([`SHADOW_PARTS`]), and a creature beyond
+//!   [`POSE_RANGE`] of the player holds its pose, so a level's creatures cost the frame little.
+
+use armory::cond::{Condition, ConditionState};
+use bevy::{app::Propagate, light::NotShadowCaster, prelude::*};
+use fb_body::Placement;
+use fb_creatures::pose::{self, RatPose, SnakePose};
+use fb_creatures::Creature;
+use fb_level::{CreatureSpot, Level};
+use procgen_rng::Mulberry32;
+
+use crate::level::geometry::Relief;
+use crate::play::{CurrentLevel, DelveSystems, Player};
+use crate::render::{ItemAppearance, ItemSpawner};
+
+pub mod behaviour;
+
+pub struct CreaturesPlugin;
+
+impl Plugin for CreaturesPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(behaviour::BehaviourPlugin)
+            .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), idle, animate).chain().in_set(DelveSystems));
+    }
+}
+
+/// A creature in the level: which spot it came from and what it is.
+#[derive(Component, Clone, Debug)]
+pub struct Critter {
+    pub spot: CreatureSpot,
+    pub creature: Creature,
+    /// The circle it covers on the floor, world units.
+    pub radius: f32,
+}
+
+/// The bone entities of a creature, in its rig's order.
+#[derive(Component, Clone, Debug)]
+pub struct Bones(pub Vec<Entity>);
+
+/// What a creature means to do this moment, which the animation eases toward. Each is 0 to 1
+/// except `look`, a head turn in radians toward its left.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Intent {
+    /// A snake coiled up (1) or laid out to move (0).
+    pub coil: f32,
+    /// A snake's front raised.
+    pub rear: f32,
+    /// A snake's strike thrown, a rat's bite lunged.
+    pub strike: f32,
+    /// A snake's jaw open.
+    pub jaw: f32,
+    /// A snake's tongue out.
+    pub tongue: f32,
+    pub look: f32,
+}
+
+/// The pose's moving parts, eased from frame to frame.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Motion {
+    /// The rat's step cycle or the snake's wave, radians.
+    pub cycle: f32,
+    /// Speed as a share of the creature's walking speed, smoothed.
+    pub pace: f32,
+    /// Where the root stood last frame.
+    pub last: Option<Vec2>,
+    /// The intent, eased.
+    pub now: Intent,
+    /// Seconds since it was spawned, for idle motions.
+    pub time: f32,
+}
+
+/// How a creature idles: its own rates, from its seed.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Idle {
+    pub phase: f32,
+    pub rate: f32,
+}
+
+/// How quickly each part of the intent is reached, per second ([`StableInterpolate`]). Our own
+/// tuning: strikes and bites snap, coiling and rearing take a moment.
+const EASE_FAST: f32 = 18.0;
+const EASE_SLOW: f32 = 2.5;
+/// How quickly the measured pace settles, per second.
+const PACE_EASE: f32 = 8.0;
+/// Grime on a creature's skin and fur (as a folk's dirt, 0 to 1). Our own.
+const GRIME: (f32, f32) = (0.15, 0.4);
+
+/// The world transform of a creature at `spot`: on the drawn floor, facing its yaw. Creatures
+/// face +Z and the spot's yaw is a camera's (0 faces -Z), as for folk.
+pub fn stand_at(level: &Level, spot: &CreatureSpot) -> Transform {
+    let [x, _, z] = Level::world(spot.x, spot.y);
+    let y = Relief::new(level).floor_height(x, z);
+    Transform::from_xyz(x, y, z).with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
+}
+
+/// A rig placement as a transform.
+pub fn transform_of(place: &Placement) -> Transform {
+    let [x, y, z] = place.rotation.cols;
+    let rotation = Quat::from_mat3(&Mat3::from_cols(Vec3::from_array(x), Vec3::from_array(y), Vec3::from_array(z))).normalize();
+    Transform { translation: Vec3::from_array(place.origin), rotation, scale: Vec3::ONE }
+}
+
+/// Spawns every creature of the level once, and again only if the spots change.
+fn spawn_creatures(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<Critter>>, mut spawner: ItemSpawner, mut shown: Local<Option<Vec<CreatureSpot>>>) {
+    if shown.as_deref() == Some(&level.0.creatures[..]) {
+        return;
+    }
+    for entity in &old {
+        commands.entity(entity).despawn();
+    }
+    for spot in &level.0.creatures {
+        spawn_creature(&mut commands, &mut spawner, &level.0, spot);
+    }
+    *shown = Some(level.0.creatures.clone());
+}
+
+/// Spawns one creature: a root at its spot and a tree of bones carrying its parts.
+pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot) -> Entity {
+    let rig = spot.creature().rig();
+    let (root, bones) = spawn_skeleton(commands, level, spot, &rig);
+    let appearance = ItemAppearance {
+        condition: Condition { state: ConditionState::Custom, wear: Mulberry32::new(spot.seed ^ GRIME_SALT).range_f32(GRIME.0, GRIME.1), ..Condition::default() },
+        seed: spot.seed,
+        ..default()
+    };
+    for (bone, &entity) in rig.bones.iter().zip(&bones) {
+        // Only a bone's main surface casts a shadow: eyes, whiskers, claws, teeth, markings
+        // and bellies inside its shadow add nothing to it but draw into every nearby light's
+        // shadow maps (a snake has three parts to a segment).
+        let (casts, details): (Vec<_>, Vec<_>) = bone.mesh.parts.iter().cloned().partition(|p| SHADOW_PARTS.contains(&p.name));
+        for (parts, shadow) in [(casts, true), (details, false)] {
+            if parts.is_empty() {
+                continue;
+            }
+            let mut item = spawner.spawn(&armory::ItemMesh { parts }, &appearance);
+            item.insert(ChildOf(entity));
+            if !shadow {
+                item.insert(Propagate(NotShadowCaster));
+            }
+        }
+    }
+    root
+}
+
+/// How near the player a creature must be for its pose to change, world units (20 m): well
+/// past a torch's reach and short of the fog's end (`level::FOG_END`, 26 m). Our own.
+const POSE_RANGE: f32 = 200.0;
+
+/// The parts that cast a creature's shadow: each bone's main surface.
+const SHADOW_PARTS: [&str; 6] = ["fur", "spine", "head", "jaw", "tail", "paw"];
+
+/// Salt for a creature's grime. Our own.
+const GRIME_SALT: u32 = 0x6121_3E00;
+
+/// Spawns a creature's root at its spot and one entity per bone of `rig` on its parent, with
+/// no parts on them: everything but the drawing. Returns the root and the bones.
+pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig) -> (Entity, Vec<Entity>) {
+    let creature = spot.creature();
+    let mut rng = Mulberry32::new(spot.seed ^ 0x1D1E);
+    let snake = spot.species.is_snake();
+    let rest = Intent { coil: if snake { 1.0 } else { 0.0 }, rear: if snake { 0.45 } else { 0.0 }, ..default() };
+    let root = commands
+        .spawn((
+            Name::new(spot.species.stat_block().name),
+            Critter { spot: *spot, radius: creature.radius(), creature },
+            stand_at(level, spot),
+            Visibility::default(),
+            rest,
+            Motion { now: rest, ..default() },
+            Idle { phase: rng.range_f32(0.0, std::f32::consts::TAU), rate: rng.range_f32(0.8, 1.25) },
+        ))
+        .id();
+    let mut bones: Vec<Entity> = Vec::with_capacity(rig.bones.len());
+    for bone in &rig.bones {
+        let parent = bone.parent.map_or(root, |p| bones[p]);
+        bones.push(commands.spawn((Name::new(bone.name.clone()), transform_of(&bone.rest), Visibility::default(), ChildOf(parent))).id());
+    }
+    commands.entity(root).insert(Bones(bones.clone()));
+    (root, bones)
+}
+
+/// Idling: what a creature does standing still, when nothing else drives it. Snakes lie
+/// coiled and now and then raise their heads; every few seconds they taste the air with a
+/// flick or two of the tongue. Rats' sniffing is in their pose.
+pub fn idle(mut creatures: Query<(&Critter, &Idle, &Motion, &mut Intent), Without<Driven>>) {
+    for (critter, idle, motion, mut intent) in &mut creatures {
+        if critter.spot.species.is_rat() {
+            continue;
+        }
+        let t = motion.time * idle.rate + idle.phase;
+        intent.coil = 1.0;
+        intent.rear = 0.3 + 0.35 * (0.5 + 0.5 * (t * 0.35).sin());
+        intent.tongue = tongue_flick(t);
+        intent.look = 0.35 * (t * 0.23).sin();
+    }
+}
+
+/// On a creature whose intent something else sets (its behaviour), so [`idle`] leaves it be.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Driven;
+
+/// A snake's tongue at `t` seconds: two quick flicks every three seconds or so, in between.
+pub fn tongue_flick(t: f32) -> f32 {
+    let cycle = (t / 3.1).fract() * 3.1;
+    if cycle < 0.5 { (cycle / 0.25 * std::f32::consts::PI).sin().abs() } else { 0.0 }
+}
+
+/// Poses every creature for this frame from how it moved and what it means to do.
+pub fn animate(
+    time: Res<Time>,
+    level: Res<CurrentLevel>,
+    mut creatures: Query<(&Critter, &Transform, &Intent, &mut Motion, &Bones)>,
+    mut transforms: Query<&mut Transform, Without<Critter>>,
+    players: Query<&GlobalTransform, With<Player>>,
+) {
+    let dt = time.delta_secs();
+    let relief = Relief::new(&level.0);
+    let player = players.iter().next().map(GlobalTransform::translation);
+    for (critter, root, intent, mut motion, bones) in &mut creatures {
+        let at = root.translation.xz();
+        let moved = motion.last.map_or(0.0, |last| at.distance(last));
+        motion.last = Some(at);
+        motion.time += dt;
+        // Out of sight across the level, the pose holds: changing every bone's transform
+        // re-propagates and re-extracts each of its parts, a few hundred entities a frame.
+        if player.is_some_and(|p| p.xz().distance(at) > POSE_RANGE) {
+            continue;
+        }
+        if dt > 0.0 {
+            let pace = (moved / dt) / critter.spot.species.speed();
+            motion.pace.smooth_nudge(&pace.min(2.5), PACE_EASE, dt);
+            let now = &mut motion.now;
+            now.coil.smooth_nudge(&intent.coil, EASE_SLOW, dt);
+            now.rear.smooth_nudge(&intent.rear, EASE_SLOW, dt);
+            now.strike.smooth_nudge(&intent.strike, EASE_FAST, dt);
+            now.jaw.smooth_nudge(&intent.jaw, EASE_FAST, dt);
+            now.tongue.smooth_nudge(&intent.tongue, EASE_FAST, dt);
+            now.look.smooth_nudge(&intent.look, 4.0, dt);
+        }
+        let now = motion.now;
+        let places = match &critter.creature {
+            Creature::Rat(rat) => {
+                motion.cycle = (motion.cycle + moved / pose::rat_stride(rat) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                pose::rat(rat, &RatPose { stride: motion.cycle, pace: motion.pace, time: motion.time, bite: now.strike, look: now.look })
+            }
+            Creature::Snake(snake) => {
+                motion.cycle += moved / (pose::WAVELENGTH * snake.dims().body_length) * std::f32::consts::TAU;
+                let mut places = pose::snake(
+                    snake,
+                    &SnakePose { phase: motion.cycle, pace: motion.pace.min(1.0), coil: now.coil, rear: now.rear, strike: now.strike, jaw: now.jaw, tongue: now.tongue, look: now.look },
+                );
+                // Each segment, and the head, rests on the floor under it rather than the floor
+                // at the root.
+                use fb_creatures::snake::bone::{HEAD, SPINE};
+                for i in std::iter::once(HEAD).chain(SPINE..places.len()) {
+                    let place = &mut places[i];
+                    let world = root.transform_point(Vec3::from_array(place.origin));
+                    place.origin[1] += relief.floor_height(world.x, world.z) - root.translation.y;
+                }
+                places
+            }
+        };
+        for (entity, place) in bones.0.iter().zip(&places) {
+            if let Ok(mut transform) = transforms.get_mut(*entity) {
+                *transform = transform_of(place);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placements_become_transforms() {
+        let place = Placement { rotation: fb_creatures::shape::spine_to_creature(), origin: [1.0, 2.0, 3.0] };
+        let t = transform_of(&place);
+        assert_eq!(t.translation, Vec3::new(1.0, 2.0, 3.0));
+        assert!((t.rotation * Vec3::Y).abs_diff_eq(Vec3::Z, 1e-5), "the spine frame's forward is the creature's");
+        assert!((t.rotation * Vec3::Z).abs_diff_eq(Vec3::Y, 1e-5));
+    }
+
+    #[test]
+    fn the_tongue_flicks_now_and_then() {
+        let samples: Vec<f32> = (0..310).map(|i| tongue_flick(i as f32 * 0.01)).collect();
+        assert!(samples.iter().any(|&t| t > 0.9));
+        assert!(samples.iter().filter(|&&t| t == 0.0).count() > 200, "mostly in");
+    }
+
+    /// An app with every creature of seed 1207 spawned as bones (no drawing), idling and
+    /// animating, stepped 1/60 s a frame.
+    fn level_app() -> (App, Vec<Entity>) {
+        use bevy::time::TimeUpdateStrategy;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .add_systems(Update, (idle, animate).chain());
+        let level = fb_level::generate(1207);
+        app.insert_resource(CurrentLevel(level.clone()));
+        let roots = {
+            let mut commands = app.world_mut().commands();
+            level.creatures.iter().map(|spot| spawn_skeleton(&mut commands, &level, spot, &spot.creature().rig()).0).collect()
+        };
+        app.world_mut().flush();
+        (app, roots)
+    }
+
+    fn bone_transforms(app: &App, root: Entity) -> Vec<Transform> {
+        let bones = &app.world().get::<Bones>(root).unwrap().0;
+        bones.iter().map(|&b| *app.world().get::<Transform>(b).unwrap()).collect()
+    }
+
+    #[test]
+    fn every_creature_on_1207_animates() {
+        let (mut app, roots) = level_app();
+        assert!(roots.len() >= 5);
+        for _ in 0..10 {
+            app.update();
+        }
+        let before: Vec<Vec<Transform>> = roots.iter().map(|&r| bone_transforms(&app, r)).collect();
+        for _ in 0..90 {
+            app.update();
+        }
+        for (i, &root) in roots.iter().enumerate() {
+            let after = bone_transforms(&app, root);
+            let moved = before[i].iter().zip(&after).any(|(a, b)| !a.translation.abs_diff_eq(b.translation, 1e-4) || !a.rotation.abs_diff_eq(b.rotation, 1e-4));
+            assert!(moved, "{:?} stands frozen", app.world().get::<Critter>(root).unwrap().spot.species);
+        }
+    }
+
+    #[test]
+    fn creatures_on_1207_neither_float_nor_sink_standing_or_moving() {
+        let (mut app, roots) = level_app();
+        let level = fb_level::generate(1207);
+        let relief = Relief::new(&level);
+        let rigs: Vec<fb_creatures::Rig> = roots.iter().map(|&r| app.world().get::<Critter>(r).unwrap().creature.rig()).collect();
+        for frame in 0..150 {
+            // Standing for a second, then everyone moves off forward at its walking speed.
+            if frame >= 60 {
+                for &root in &roots {
+                    let speed = app.world().get::<Critter>(root).unwrap().spot.species.speed();
+                    let mut t = app.world_mut().get_mut::<Transform>(root).unwrap();
+                    // Creatures face +Z.
+                    let ahead = t.rotation * Vec3::Z;
+                    t.translation += ahead * speed / 60.0;
+                    t.translation.y = relief.floor_height(t.translation.x, t.translation.z);
+                }
+            }
+            app.update();
+            if frame % 15 != 14 {
+                continue;
+            }
+            for (&root, rig) in roots.iter().zip(&rigs) {
+                let critter = app.world().get::<Critter>(root).unwrap().clone();
+                let bones = app.world().get::<Bones>(root).unwrap().0.clone();
+                let size = match &critter.creature {
+                    Creature::Rat(r) => r.length,
+                    Creature::Snake(s) => s.girth * 4.0,
+                };
+                let (mut deepest, mut nearest) = (f32::MIN, f32::MAX);
+                for (bone, &entity) in rig.bones.iter().zip(&bones) {
+                    let at = *app.world().get::<GlobalTransform>(entity).unwrap();
+                    for part in &bone.mesh.parts {
+                        for p in part.positions.iter().step_by(3) {
+                            let w = at.transform_point(Vec3::from_array(*p));
+                            let gap = w.y - relief.floor_height(w.x, w.z);
+                            deepest = deepest.max(-gap);
+                            nearest = nearest.min(gap);
+                        }
+                    }
+                }
+                // The floor's relief moves under a long body a little: within 4% of its size.
+                let tolerance = 0.04 * size + 0.03;
+                assert!(deepest < tolerance, "{:?} sinks {deepest} at frame {frame}", critter.spot.species);
+                assert!(nearest < tolerance, "{:?} floats {nearest} at frame {frame}", critter.spot.species);
+            }
+        }
+    }
+
+    #[test]
+    fn creatures_stand_on_the_drawn_floor() {
+        let level = fb_level::generate(1207);
+        let relief = Relief::new(&level);
+        for spot in &level.creatures {
+            let t = stand_at(&level, spot);
+            assert!((t.translation.y - relief.floor_height(t.translation.x, t.translation.z)).abs() < 1e-5);
+        }
+    }
+}

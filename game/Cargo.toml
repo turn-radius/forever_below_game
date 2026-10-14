@@ -12,6 +12,7 @@ armory = { workspace = true }
 fb_items = { workspace = true }
 fb_body = { workspace = true }
 fb_level = { workspace = true }
+fb_creatures = { workspace = true }
 procgen_rng = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

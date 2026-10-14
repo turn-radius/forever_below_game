@@ -35,7 +35,7 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 
 Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
 
-To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, and scenery as `%` rubble, `~` bones and `o` pillar, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
+To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, scenery as `%` rubble, `~` bones and `o` pillar, and creatures as `r` rat, `R` giant rat, `v` poisonous snake and `S` constrictor snake, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
 
 ### The Armory turntable
 
@@ -67,6 +67,21 @@ One folk's body, dressed in a rolled outfit and holding what it carries, turning
 
 Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 
+### The creature view
+
+```
+cargo run -p forever_below -- --creature
+cargo run -p forever_below -- --creature --species constrictor --seed 7 --motion rearing
+```
+
+One rat or snake on the turntable's plate, posed and animated as in the level, with its SRD hit points and bite.
+
+- `--species <name>`: rat (the default), giant_rat, viper (the poisonous snake) or constrictor.
+- `--seed <n>` rolls the creature; 1207 by default.
+- `--motion <name>`: still (the default), moving (trotting or slithering in place at its own speed), rearing or striking.
+
+Tab and Shift+Tab change the species, Left and Right the seed, M the motion, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
+
 ### Screenshots and debug switches
 
 These environment variables are for checking the game without playing it. Put them in front of the command, for example `FB_SCREENSHOT=shot.png cargo run -p forever_below`.
@@ -88,6 +103,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
+| `FB_FRAME_TIME=<frames>` | prints Bevy's smoothed frame time at each listed frame (`240,270,300`) and quits after the last; with `FB_DEBUG_POSE`, measures a view's frame rate in the window at vsync |
 
 Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_ASSET_ROOT=game` so it finds the music and fonts; `cargo run` finds them on its own.
 
@@ -95,4 +111,5 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 
 - `cargo run -p armory --example dump_obj -- [family] <seed> [out.obj]` writes an Armory item as OBJ.
 - `cargo run -p fb_body --example dump_body -- <folk> <seed> > body.obj` writes a folk body as OBJ (human, dwarf, gnome, goblin, lizard, pig).
+- `cargo run -p fb_creatures --example dump_creature -- <rat|giant_rat|viper|constrictor> <seed> > rat.obj` writes a creature at rest as OBJ.
 - `tools/README.md` covers regenerating the data tables and the soundtrack.

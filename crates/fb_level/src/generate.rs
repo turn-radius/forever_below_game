@@ -1,10 +1,11 @@
 //! The seeded layout: rooms, the corridors and doors that join them, the entrance, and then
 //! the items and lights laid through the rooms.
 //!
-//! Four streams come from each level seed: one lays out the rock, one furnishes it with items
-//! and lights, one places the folk ([`crate::folk`]) and one the props ([`crate::props`]).
-//! Changing the loot tables or light counts never moves a wall, changing the folk never moves
-//! an item, and changing the props never moves anything else.
+//! Five streams come from each level seed: one lays out the rock, one furnishes it with items
+//! and lights, one places the folk ([`crate::folk`]), one the props ([`crate::props`]) and one
+//! the creatures ([`crate::creatures`]). Changing the loot tables or light counts never moves a
+//! wall, changing the folk never moves an item, and changing the props or the creatures never
+//! moves anything else.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -12,6 +13,7 @@ use std::collections::BinaryHeap;
 use armory::{Family, Item};
 use procgen_rng::Mulberry32;
 
+use crate::creatures::{CREATURE_SALT, place_creatures};
 use crate::folk::{FOLK_SALT, place_folk};
 use crate::props::{PROP_SALT, place_props};
 use crate::{Cell, Entrance, Facing, ItemSpot, Level, LightKind, LightSpot, Room};
@@ -78,9 +80,16 @@ const LOOT: &[(Family, u32)] = &[
 /// outer edge, items in every room but the first, and a few fixed lights. Most of it is dark;
 /// the light the player carries is the main light.
 pub fn generate(seed: u32) -> Level {
+    let (mut level, layout_seed) = generate_without_creatures(seed);
+    level.creatures = place_creatures(&level, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT));
+    level
+}
+
+/// The level for `seed` with its props but before its creatures, and the layout stream's seed.
+pub(crate) fn generate_without_creatures(seed: u32) -> (Level, u32) {
     let (mut level, layout_seed) = generate_without_props(seed);
     level.props = place_props(&level, &mut Mulberry32::new(layout_seed ^ PROP_SALT));
-    level
+    (level, layout_seed)
 }
 
 /// The level for `seed` before its props are placed, and the layout stream's seed.
@@ -121,6 +130,7 @@ fn try_generate(seed: u32, attempt: u32) -> Option<(Level, u32)> {
         lights: Vec::new(),
         folk: Vec::new(),
         props: Vec::new(),
+        creatures: Vec::new(),
     };
     let (sx, sy, _) = level.start();
     if !reachable_from(&level, sx as i32, sy as i32).iter().zip(&level.cells).all(|(&seen, c)| seen || !c.is_open()) {

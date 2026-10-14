@@ -1,7 +1,7 @@
 //! # fb_level
 //!
 //! One level of the abyss as plain data: a grid of cells, where the player comes in, the door
-//! that shuts behind them, where items and lights lie, and who stands about. `generate(seed)` is a pure function
+//! that shuts behind them, where items and lights lie, who stands about and what lurks there. `generate(seed)` is a pure function
 //! of the seed, like every generator here, so a level is the same on every machine.
 //!
 //! Grid coordinates: `x` runs east, `y` runs south, one cell is [`CELL`] world units (1 unit =
@@ -125,6 +125,8 @@ pub struct Level {
     pub folk: Vec<FolkSpot>,
     /// Containers and scenery standing along the walls ([`props`]).
     pub props: Vec<PropSpot>,
+    /// Rats and snakes ([`creatures`]).
+    pub creatures: Vec<CreatureSpot>,
 }
 
 impl Level {
@@ -208,9 +210,12 @@ impl Level {
     }
 }
 
+pub mod creatures;
 pub mod folk;
 mod generate;
+pub mod path;
 pub mod props;
+pub use creatures::CreatureSpot;
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
 pub use props::{FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use generate::generate;

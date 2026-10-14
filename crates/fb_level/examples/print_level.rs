@@ -2,12 +2,23 @@
 //! `#` rock, `.` floor, `+` door, `E` entrance, `@` start, `i` item, `*` light, and folk by
 //! their first letter in capitals: `H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk,
 //! `P` pigfolk. Props: containers `c` chest, `b` barrel, `x` crate, `a` amphora (`s` strongbox,
-//! `f` coffer), and scenery `%` rubble, `~` bones, `o` pillar.
+//! `f` coffer), and scenery `%` rubble, `~` bones, `o` pillar. Creatures: `r` rat, `R` giant
+//! rat, `v` poisonous snake, `S` constrictor snake.
 
 use armory::build::scenery::Scenery;
 use armory::families::chests::ChestStyle;
 use fb_body::Folk;
+use fb_creatures::Species;
 use fb_level::Prop;
+
+fn creature_mark(species: Species) -> char {
+    match species {
+        Species::Rat => 'r',
+        Species::GiantRat => 'R',
+        Species::PoisonousSnake => 'v',
+        Species::ConstrictorSnake => 'S',
+    }
+}
 
 fn prop_mark(prop: Prop) -> char {
     match prop {
@@ -65,14 +76,18 @@ fn main() {
     for folk in &level.folk {
         rows[folk.y as usize][folk.x as usize] = folk_mark(folk.folk);
     }
+    for creature in &level.creatures {
+        rows[creature.y as usize][creature.x as usize] = creature_mark(creature.species);
+    }
     rows[level.entrance.y as usize][level.entrance.x as usize] = 'E';
     rows[sy as usize][sx as usize] = '@';
     println!(
-        "seed {seed}: start ({sx}, {sy}) facing {facing:?}, {} rooms, {} items, {} folk, {} props",
+        "seed {seed}: start ({sx}, {sy}) facing {facing:?}, {} rooms, {} items, {} folk, {} props, {} creatures",
         level.rooms.len(),
         level.items.len(),
         level.folk.len(),
-        level.props.len()
+        level.props.len(),
+        level.creatures.len()
     );
     for row in rows {
         println!("{}", row.into_iter().collect::<String>());
@@ -97,5 +112,9 @@ fn main() {
             Prop::Scenery { kind, seed } => format!("{kind:?} seed {seed}"),
         };
         println!("{what} at ({:.1}, {:.1}) facing {:.0} degrees", prop.x, prop.y, prop.yaw.to_degrees());
+    }
+    for creature in &level.creatures {
+        let block = creature.species.stat_block();
+        println!("{} of pack {}, seed {}, at ({:.1}, {:.1}) facing {:.0} degrees", block.name, creature.pack, creature.seed, creature.x, creature.y, creature.yaw.to_degrees());
     }
 }
