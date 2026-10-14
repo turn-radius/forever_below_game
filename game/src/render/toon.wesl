@@ -28,6 +28,7 @@ import bevy_pbr::render::{
 import bevy_render::maths::PI;
 import super::decay::apply_decay;
 import super::pattern::{Wrap, apply_pattern};
+import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
 
 struct ToonUniform {
@@ -58,6 +59,16 @@ struct ToonUniform {
     pattern_mirrored: u32,
     pattern_length: f32,
     pattern_profile: array<vec4<f32>, 4>,
+    // The part's etching (`etch.wesl`): inlay or thread colour, id (0 for none), scale, line
+    // weight, coverage, whether inlaid, how dark a blackened line is, and whether stitched.
+    etch_color: vec3<f32>,
+    etch_id: u32,
+    etch_scale: f32,
+    etch_weight: f32,
+    etch_coverage: f32,
+    etch_inlaid: u32,
+    etch_darken: f32,
+    etch_stitched: u32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> toon: ToonUniform;
@@ -265,8 +276,28 @@ fn fragment(
             toon.pattern_profile,
         ),
     );
-    let base = apply_decay(
+    // Etching after the pattern, wear over both (`DECAY_BODY`).
+    let item_normal = normalize((get_local_from_world(vertex_output.instance_index) * vec4<f32>(pbr_input.world_normal, 0.0)).xyz);
+    let etched = apply_etch(
         patterned,
+        item_position,
+        item_normal,
+        Etch(
+            toon.etch_id,
+            toon.etch_color,
+            toon.etch_scale,
+            toon.etch_weight,
+            toon.etch_coverage,
+            toon.etch_inlaid,
+            toon.etch_darken,
+            toon.etch_stitched,
+        ),
+        toon.decay_amount,
+        toon.decay_scale,
+        toon.decay_seed,
+    );
+    let base = apply_decay(
+        etched,
         item_position,
         toon.decay_type,
         toon.decay_amount,

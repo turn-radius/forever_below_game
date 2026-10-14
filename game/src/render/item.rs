@@ -1,7 +1,7 @@
 //! Turning Armory mesh data into Bevy entities: one mesh per [`armory::Part`], drawn with a
 //! [`ToonMaterial`] and, unless the part opts out, an ink hull child.
 
-use armory::{ItemMesh, MaterialKind, Part, Rgb, cond::Condition, palette::Palette};
+use armory::{ItemMesh, MaterialKind, Part, Rgb, cond::Condition, etch::Etching, palette::Palette};
 use bevy::{
     asset::RenderAssetUsages,
     ecs::system::SystemParam,
@@ -13,7 +13,7 @@ use bevy::{
 };
 
 use super::outline::{ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
-use super::toon::{Decay, MinWidth, Pattern, ToonBands, ToonExtension, ToonMaterial};
+use super::toon::{Decay, Etch, MinWidth, Pattern, ToonBands, ToonExtension, ToonMaterial};
 
 /// Base colour for every material kind: the armory palette for paletted metals, wood and
 /// so on, plus the kinds it leaves to other sources (untinted gems, cloth, paint, food).
@@ -65,13 +65,16 @@ pub struct ItemAppearance {
     pub condition: Condition,
     /// The item's seed, so its wear pattern is its own.
     pub seed: u32,
-    /// Multiplies `Condition::scale` for the wear pattern: the prototype uses 8 for
-    /// jewellery and 3 for food, 1 otherwise.
+    /// Multiplies `Condition::scale` for the wear pattern, and the etching's scale: the
+    /// prototype uses 8 for jewellery and 3 for food (2 for food's etching, which no food has),
+    /// 1 otherwise.
     pub decay_scale_factor: f32,
     pub bands: ToonBands,
     pub outline: OutlineMaterial,
     /// Narrowest a part without an ink line may look, in pixels at 1080p (`MinWidth::px`).
     pub min_width_px: f32,
+    /// The item's etching (`Item::etching`), drawn on the parts its target covers.
+    pub etching: Option<Etching>,
 }
 
 impl Default for ItemAppearance {
@@ -84,6 +87,7 @@ impl Default for ItemAppearance {
             bands: ToonBands::default(),
             outline: OutlineMaterial::default(),
             min_width_px: 1.5,
+            etching: None,
         }
     }
 }
@@ -124,6 +128,10 @@ impl ItemAppearance {
                     MinWidth { px: self.min_width_px, half_thickness: half_thickness(part) }
                 },
                 pattern: part.pattern.map_or(Pattern::default(), |pattern| Pattern::of(&pattern, &part.positions)),
+                etch: match (self.etching, part.material) {
+                    (Some(etching), Some(material)) => Etch::on(&etching, material, self.decay_scale_factor),
+                    _ => Etch::default(),
+                },
             },
         }
     }
@@ -258,6 +266,7 @@ impl ItemSpawner<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::toon::EtchStyle;
     use armory::fabric::{PatternKind, SurfacePattern};
 
     #[test]
@@ -380,6 +389,33 @@ mod tests {
         assert!(ink.depth_bias() > 0.0);
         assert_eq!(OutlineMaterial::default().alpha_mode(), AlphaMode::Opaque);
         assert_eq!(OutlineMaterial::default().depth_bias(), 0.0);
+    }
+
+    #[test]
+    fn etching_goes_only_on_its_target() {
+        use armory::etch::{EtchFinish, EtchPattern, EtchTarget, Etching};
+        let etching = Etching { on: true, pattern: EtchPattern::Runes, target: EtchTarget::Metals, ..Etching::default() };
+        let appearance = ItemAppearance { etching: Some(etching), ..default() };
+        let part = |material| Part { material: Some(material), ..cylinder(0.2, 8.0, 12) };
+        let blade = appearance.material_for(&part(MaterialKind::Iron)).extension.etch;
+        let grip = appearance.material_for(&part(MaterialKind::Leather)).extension.etch;
+        assert_eq!(blade.id, EtchPattern::Runes.shader_id());
+        assert_eq!(blade.style, EtchStyle::Engraved);
+        assert_eq!(grip, Etch::default(), "leather is not a metal");
+        // Blackened lines darken; inlaid ones take the inlay colour (gold by default).
+        assert!(!blade.inlaid && blade.style.darken() < 0.5);
+        let inlaid = ItemAppearance { etching: Some(Etching { finish: EtchFinish::Inlaid, ..etching }), ..default() };
+        let gold = inlaid.material_for(&part(MaterialKind::Iron)).extension.etch;
+        assert!(gold.inlaid);
+        assert_eq!(gold.color, Vec3::new(0xd4 as f32 / 255.0, 0xa8 as f32 / 255.0, 0x38 as f32 / 255.0));
+        // Jewellery's pattern is scaled up with its wear (`decay_scale_factor`).
+        let ring = ItemAppearance { decay_scale_factor: 8.0, ..appearance };
+        assert_eq!(ring.material_for(&part(MaterialKind::Gold)).extension.etch.scale, etching.scale * 8.0);
+        // Cloth takes it as embroidery; an item with no etching draws none.
+        let embroidered = Etching { target: EtchTarget::Cloth, ..etching };
+        let cloth = ItemAppearance { etching: Some(embroidered), ..default() }.material_for(&part(MaterialKind::Cloth));
+        assert_eq!(cloth.extension.etch.style, EtchStyle::Embroidered);
+        assert_eq!(ItemAppearance::default().material_for(&part(MaterialKind::Iron)).extension.etch, Etch::default());
     }
 
     #[test]

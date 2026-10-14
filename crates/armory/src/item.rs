@@ -7,6 +7,7 @@
 
 use crate::Family;
 use crate::cond::Condition;
+use crate::etch::Etching;
 use crate::families::Generator;
 use crate::geom::ItemMesh;
 use crate::palette::Palette;
@@ -116,6 +117,37 @@ impl Item {
     pub fn palette(&self) -> Palette {
         dispatch!(self, state => state.palette)
     }
+
+    /// The item's etching, carving, tooling or embroidery, if it has any. Food, torches,
+    /// lanterns and sundries are never etched.
+    pub fn etching(&self) -> Option<Etching> {
+        let etch = match self {
+            Item::Staff(s) => s.etch,
+            Item::Mace(s) => s.etch,
+            Item::Sword(s) => s.etch,
+            Item::Spear(s) => s.etch,
+            Item::Dagger(s) => s.etch,
+            Item::Club(s) => s.etch,
+            Item::Axe(s) => s.etch,
+            Item::Bow(s) => s.etch,
+            Item::Crossbow(s) => s.etch,
+            Item::Helm(s) => s.etch,
+            Item::Hood(s) => s.etch,
+            Item::Garment(s) => s.etch,
+            Item::Belt(s) => s.etch,
+            Item::Hands(s) => s.etch,
+            Item::Legs(s) => s.etch,
+            Item::Feet(s) => s.etch,
+            Item::Shield(s) => s.etch,
+            Item::Ring(s) => s.etch,
+            Item::Amulet(s) => s.etch,
+            Item::Charm(s) => s.etch,
+            Item::Bags(s) => s.etch,
+            Item::Chests(s) => s.etch,
+            Item::Food(_) | Item::Torch(_) | Item::Lantern(_) | Item::Sundry(_) => return None,
+        };
+        etch.on.then_some(etch)
+    }
 }
 
 impl Family {
@@ -150,6 +182,17 @@ mod tests {
         assert_eq!(item.noun(), Mace::noun(&state));
         assert_eq!(item.condition(), state.cond);
         assert_eq!(item.palette(), state.palette);
+    }
+
+    #[test]
+    fn etching_comes_from_the_state_when_on() {
+        let etched = (0..64).filter_map(|seed| Item::roll(Family::Sword, seed)).find(|item| item.etching().is_some()).unwrap();
+        let Item::Sword(state) = &etched else { unreachable!() };
+        assert_eq!(etched.etching(), Some(state.etch));
+        let plain = (0..64).filter_map(|seed| Item::roll(Family::Sword, seed)).find(|item| item.etching().is_none()).unwrap();
+        let Item::Sword(state) = &plain else { unreachable!() };
+        assert!(!state.etch.on);
+        assert_eq!(Item::roll(Family::Food, 7).unwrap().etching(), None);
     }
 
     #[test]

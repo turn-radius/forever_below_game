@@ -169,6 +169,7 @@ pub fn appearance_of(item: &Item) -> ItemAppearance {
         palette: ItemPalette { materials: item.palette(), ..ItemPalette::ARMORY },
         condition: item.condition(),
         seed: item.seed(),
+        etching: item.etching(),
         decay_scale_factor,
         ..default()
     }
