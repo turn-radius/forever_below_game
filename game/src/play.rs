@@ -6,7 +6,7 @@
 //! - [`crate::carry`]: the torch in hand, items lying in the level, picking them up, the HUD.
 //! - [`crate::audio`]: the level's music.
 
-use bevy::prelude::*;
+use bevy::{platform::collections::HashSet, prelude::*};
 use fb_level::Level;
 
 /// The level being played. Inserted before the play plugins run.
@@ -24,12 +24,17 @@ pub struct PlayerCamera;
 /// Eye height above the floor in world units (1.6 m, a human's eyes at 17 units tall).
 pub const EYE_HEIGHT: f32 = 16.0;
 
+/// Grid cells that are open floor in the level data but closed to walking now, such as the
+/// entrance once its door shuts. Player collision treats them as rock.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct BlockedCells(pub HashSet<(i32, i32)>);
+
 /// Everything needed to play a level.
 pub struct PlayPlugin;
 
 impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
+        app.init_resource::<BlockedCells>().add_plugins((
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,
