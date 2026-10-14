@@ -1,16 +1,20 @@
 //! What a blow does to a creature: its hit points fall, it flashes, it is knocked back a step
 //! and squeaks or hisses; at 0 it collapses and its body stays for the run.
 //!
-//! - **Flash**: every part of the creature glows with its own colour for a moment (the toon
-//!   material's `glow`), then fades back, as damage flashes in games since the arcade.
+//! - **Flash**: every part of the creature turns toward a warm white and glows for a moment
+//!   (the toon material's base colour and `glow`), holds there for [`FLASH_HOLD`], then fades
+//!   back, as damage flashes in games since the arcade. Glow alone multiplies a part's own
+//!   colour, which leaves a black rat dark, so the colour itself is lifted too.
 //! - **Knockback**: the creature is pushed away from the delver over a few frames, sliding round
 //!   rock and props as it walks; less the bigger it is.
 //! - **Sound**: a rat squeaks, a snake hisses (`tools/synth_combat.py`).
-//! - **Collapse**: a rat rolls onto its back, legs up; a snake uncoils and lies limp along the
-//!   floor, jaw slack. Its mind stops ([`Corpse`]): it no longer moves, bites or keeps others
+//! - **Collapse**: after the flash's hold ([`DEATH_HOLD`]), so a creature felled by one blow is
+//!   seen to be struck before it falls, a rat rolls onto its back, legs up; a snake uncoils and
+//!   lies limp along the floor, jaw slack. Its mind stops ([`Corpse`]): it no longer moves, bites or keeps others
 //!   off, and it blocks nobody.
 //!
-//! The flash's length and strength, the knockback distances and the collapse are our own.
+//! The flash's length, hold, colour and strength, the knockback distances and the collapse are
+//! our own.
 
 use bevy::prelude::*;
 use fb_creatures::{Creature, Size};
@@ -57,13 +61,41 @@ pub struct Flinch {
     pub left: f32,
     /// The rest of the knockback, world units on the floor.
     pub push: Vec2,
-    /// Each lit part's material and its own glow, to come back to.
-    materials: Vec<(Handle<ToonMaterial>, f32)>,
+    /// Each lit part's material and its own colour and glow, to come back to.
+    materials: Vec<(Handle<ToonMaterial>, Color, f32)>,
 }
 
-/// How long a struck creature flashes, seconds, and how much brighter at first.
-pub const FLASH_TIME: f32 = 0.22;
-const FLASH_GLOW: f32 = 1.6;
+/// How long a struck creature flashes, seconds, of which it holds at full for the first
+/// [`FLASH_HOLD`].
+pub const FLASH_TIME: f32 = 0.32;
+pub const FLASH_HOLD: f32 = 0.12;
+/// How far toward [`FLASH_COLOUR`] a part's colour goes at full, and the glow added.
+const FLASH_MIX: f32 = 0.65;
+const FLASH_GLOW: f32 = 0.9;
+/// The flash's colour: the page's cream ([`crate::ui::BRIGHT`]).
+const FLASH_COLOUR: Color = crate::ui::BRIGHT;
+/// How long a felled creature stands, flashing, before it collapses: the flash's hold.
+pub const DEATH_HOLD: f32 = FLASH_HOLD;
+
+/// How strong the flash is with `left` seconds of it to go: full through the hold, then easing
+/// out to nothing.
+pub fn flash_strength(left: f32) -> f32 {
+    if left <= 0.0 {
+        return 0.0;
+    }
+    let since = FLASH_TIME - left;
+    if since < FLASH_HOLD {
+        return 1.0;
+    }
+    let fade = (left / (FLASH_TIME - FLASH_HOLD)).clamp(0.0, 1.0);
+    fade * fade
+}
+
+/// How far into its collapse a body is, 0 to 1, `since` seconds after it fell: still through
+/// [`DEATH_HOLD`], then over [`COLLAPSE_TIME`].
+pub fn collapse_share(since: f32) -> f32 {
+    ((since - DEATH_HOLD) / COLLAPSE_TIME).clamp(0.0, 1.0)
+}
 /// How far a blow knocks a creature back, by the size it is drawn at, world units: a rat a
 /// third of a metre, a giant rat or viper 15 cm, a constrictor hardly at all.
 pub fn knockback(creature: &Creature) -> f32 {
@@ -111,6 +143,7 @@ fn take_blows(
     mut creatures: Query<(&Critter, &Transform, &mut Health), Without<Corpse>>,
     children: Query<&Children>,
     materials: Query<&MeshMaterial3d<ToonMaterial>>,
+    flinches: Query<&Flinch>,
     toon: Option<Res<Assets<ToonMaterial>>>,
 ) {
     for blow in struck.read() {
@@ -120,8 +153,13 @@ fn take_blows(
         let lit = children
             .iter_descendants(blow.target)
             .filter_map(|e| materials.get(e).ok())
-            .map(|m| (m.0.clone(), toon.as_deref().and_then(|t| t.get(&m.0)).map_or(0.0, |t| t.extension.glow)))
+            .filter_map(|m| toon.as_deref().and_then(|t| t.get(&m.0)).map(|t| (m.0.clone(), t.base.base_color, t.extension.glow)))
             .collect();
+        // Struck again mid-flash, it comes back to its own colours, not the flash's.
+        let lit = match flinches.get(blow.target) {
+            Ok(old) => old.materials.clone(),
+            Err(_) => lit,
+        };
         commands.entity(blow.target).insert(Flinch { left: FLASH_TIME, push: away * knockback(&critter.creature), materials: lit });
         if let Some(sounds) = &sounds {
             let sound = if critter.spot.species.is_rat() { sounds.squeak.clone() } else { sounds.hiss.clone() };
@@ -163,33 +201,47 @@ fn knock_back(
     }
 }
 
-/// Lights a struck creature up with its own colour, fading over [`FLASH_TIME`].
+/// Lights a struck creature up, held then fading over [`FLASH_TIME`] ([`flash_strength`]).
+/// The first frame shows it at full: the time is taken off after.
 fn flash(mut commands: Commands, time: Res<Time>, mut creatures: Query<(Entity, &mut Flinch)>, toon: Option<ResMut<Assets<ToonMaterial>>>) {
     let mut toon = toon;
     for (entity, mut flinch) in &mut creatures {
-        flinch.left -= time.delta_secs();
-        let strength = FLASH_GLOW * (flinch.left / FLASH_TIME).clamp(0.0, 1.0);
+        let strength = flash_strength(flinch.left);
         if let Some(toon) = toon.as_deref_mut() {
-            for (handle, glow) in &flinch.materials {
+            for (handle, colour, glow) in &flinch.materials {
                 if let Some(mut material) = toon.get_mut(handle) {
-                    material.extension.glow = glow + strength;
+                    material.base.base_color = colour.mix(&FLASH_COLOUR, FLASH_MIX * strength).with_alpha(colour.alpha());
+                    material.extension.glow = glow + FLASH_GLOW * strength;
                 }
             }
         }
+        flinch.left -= time.delta_secs();
         if flinch.left <= 0.0 {
+            if let Some(toon) = toon.as_deref_mut() {
+                for (handle, colour, glow) in &flinch.materials {
+                    if let Some(mut material) = toon.get_mut(handle) {
+                        material.base.base_color = *colour;
+                        material.extension.glow = *glow;
+                    }
+                }
+            }
             commands.entity(entity).remove::<Flinch>();
         }
     }
 }
 
-/// Lays each body down: a rat rolls onto its back about its middle, a snake goes slack.
+/// Lays each body down once the flash's hold is over ([`collapse_share`]): a rat rolls onto its
+/// back about its middle, a snake goes slack.
 fn collapse(time: Res<Time>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent)>) {
     for (critter, mut corpse, mut transform, mut intent) in &mut bodies {
         corpse.since += time.delta_secs();
+        if corpse.since <= DEATH_HOLD {
+            continue;
+        }
         // Limp: uncoiled and flat, the jaw a little open, the tongue lolling.
         *intent = Intent { coil: 0.0, rear: 0.0, strike: 0.0, jaw: 0.35, tongue: 0.6, look: 0.0 };
         if let Creature::Rat(rat) = &critter.creature {
-            *transform = rolled_over(rat, &corpse.fell, (corpse.since / COLLAPSE_TIME).min(1.0));
+            *transform = rolled_over(rat, &corpse.fell, collapse_share(corpse.since));
         }
     }
 }
@@ -225,6 +277,23 @@ mod tests {
         assert!(middle.xz().distance(fell.translation.xz()) < 0.5 * rat.dims().half_width);
         let lowest = rat.build().rest_mesh().parts.iter().flat_map(|p| p.positions.clone()).map(|p| down.transform_point(Vec3::from_array(p)).y).fold(f32::MAX, f32::min);
         assert!(lowest > -0.06 * rat.length && lowest < 0.1 * rat.length, "{lowest}");
+    }
+
+    #[test]
+    fn a_felled_creature_flashes_before_it_falls() {
+        // At full from the blow through the hold, then fading out.
+        assert_eq!(flash_strength(FLASH_TIME), 1.0);
+        assert_eq!(flash_strength(FLASH_TIME - FLASH_HOLD + 0.01), 1.0);
+        assert!(flash_strength(0.5 * (FLASH_TIME - FLASH_HOLD)) < 0.5);
+        assert_eq!(flash_strength(0.0), 0.0);
+        // The body stands through the hold (about a tenth of a second), then rolls.
+        assert!((0.1..=0.15).contains(&DEATH_HOLD));
+        assert_eq!(collapse_share(0.0), 0.0);
+        assert_eq!(collapse_share(DEATH_HOLD), 0.0);
+        assert!(collapse_share(DEATH_HOLD + 0.5 * COLLAPSE_TIME) > 0.4);
+        assert_eq!(collapse_share(DEATH_HOLD + COLLAPSE_TIME), 1.0);
+        // The flash is still at full when the roll starts.
+        assert_eq!(flash_strength(FLASH_TIME - DEATH_HOLD + 1e-4), 1.0);
     }
 
     #[test]

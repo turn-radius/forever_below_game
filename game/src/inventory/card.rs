@@ -206,6 +206,7 @@ pub fn spawn_card(mut commands: Commands, cards: Query<(), With<ItemCard>>, came
     let Some(camera) = cameras.iter().next() else { return };
     commands.spawn((
         Name::new("Item card"),
+        DespawnOnExit(crate::launch::AppState::Delving),
         ItemCard,
         UiTargetCamera(camera),
         Node {

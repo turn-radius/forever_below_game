@@ -105,6 +105,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<DollAssets>()
             .init_resource::<DollStage>()
             .init_resource::<Character>()
+            .add_systems(OnExit(AppState::Delving), leave_the_delve)
             .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD"))).chain())
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
             .add_systems(
@@ -133,6 +134,21 @@ impl Plugin for InventoryPlugin {
                     .in_set(DelveSystems),
             );
     }
+}
+
+/// Leaving the delve clears what the screens kept of it: the doll's figure and the cameras and
+/// lights that draw it, what lay underfoot, a container left open, a hovered item and a toast,
+/// none of which belong to the next delve's delver and items.
+pub fn leave_the_delve(mut commands: Commands, mut stage: ResMut<DollStage>) {
+    for entity in stage.entities() {
+        commands.entity(entity).try_despawn();
+    }
+    *stage = DollStage::default();
+    commands.insert_resource(Underfoot::default());
+    commands.insert_resource(FloorChanges::default());
+    commands.insert_resource(OpenContainer::default());
+    commands.insert_resource(Hovered::default());
+    commands.insert_resource(Toast::default());
 }
 
 fn env_flag(name: &str) -> bool {

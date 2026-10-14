@@ -282,6 +282,9 @@ pub struct FloorItem {
 pub struct HeldItem {
     pub item: Item,
     pub hand: fb_items::Slot,
+    /// Its point in its own space, for a thrust (`crate::view_model::HeldInView::point`);
+    /// `None` for a light held by its flame.
+    pub point: Option<Vec3>,
 }
 
 /// What a [`PlayerCamera`]'s view model was last drawn for: the item in each hand, the carried
@@ -650,7 +653,7 @@ pub fn held_pose(item: &Item, hand: fb_items::Slot) -> (Vec3, Quat) {
 /// delver's body as on the doll and carried into the view (`crate::view_model`), or, for a lit
 /// thing no hold fits, held by its flame ([`held_pose`]). Other things a hand might hold that
 /// no hold fits are not drawn.
-pub fn held_items(inventory: &Inventory, character: &Character) -> Vec<(fb_items::Slot, Item, Transform)> {
+pub fn held_items(inventory: &Inventory, character: &Character) -> Vec<(fb_items::Slot, Item, Transform, Option<Vec3>)> {
     use fb_items::Slot;
     let shape = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).map(|item| item.shape.clone());
     let (main, off) = (shape(Slot::Mainhand), shape(Slot::Offhand));
@@ -659,12 +662,12 @@ pub fn held_items(inventory: &Inventory, character: &Character) -> Vec<(fb_items
         .into_iter()
         .filter_map(|(hand, item)| {
             if let Some(held) = fitted.iter().find(|h| h.hand == hand) {
-                return Some((hand, held.item.clone(), held.transform));
+                return Some((hand, held.item.clone(), held.transform, Some(held.point)));
             }
             let item = item?;
             let anchor = item_light(&item)?;
             let (flame, rotation) = held_pose(&item, hand);
-            Some((hand, item, Transform::from_translation(flame - rotation * Vec3::from_array(anchor.position)).with_rotation(rotation)))
+            Some((hand, item, Transform::from_translation(flame - rotation * Vec3::from_array(anchor.position)).with_rotation(rotation), None))
         })
         .collect()
 }
@@ -695,11 +698,11 @@ fn show_held(
         let exposure = exposure.copied().unwrap_or_default();
         let view_layer = RenderLayers::layer(VIEW_MODEL_LAYER);
         let light_hand = carried_light(&inventory).map(|(hand, _)| hand);
-        for (hand, item, rest) in held_items(&inventory, &character) {
+        for (hand, item, rest, point) in held_items(&inventory, &character) {
             let mut root = spawner.spawn(&item.build(), &appearance_of(&item));
             root.insert((
                 Name::new(format!("Held {}", item.family().key())),
-                HeldItem { item: item.clone(), hand },
+                HeldItem { item: item.clone(), hand, point },
                 HeldSway::new(rest),
                 rest,
                 Propagate(view_layer.clone()),

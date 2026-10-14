@@ -210,6 +210,12 @@ impl DollStage {
         self.camera
     }
 
+    /// Every entity on the stage: the figure (the portrait camera on it), and the doll camera
+    /// (its key light on it).
+    pub fn entities(&self) -> impl Iterator<Item = Entity> + use<> {
+        [self.figure, self.camera, self.portrait].into_iter().flatten()
+    }
+
     /// The camera drawing the portrait, once there is one.
     pub fn portrait(&self) -> Option<Entity> {
         self.portrait

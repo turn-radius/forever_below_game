@@ -103,6 +103,14 @@ pub struct HeldInView {
     pub item: Item,
     /// From the item's own space into view model camera space, at the item's own size.
     pub transform: Transform,
+    /// Its point, in its own space: the end of it farthest from the fist (a spear's head, a
+    /// dagger's tip), which a thrust drives at the crosshair.
+    pub point: Vec3,
+}
+
+/// The point of `item` held at `grip` (both in its own space): the vertex farthest from it.
+pub fn point_of(item: &Item, grip: Vec3) -> Vec3 {
+    item.build().parts.iter().flat_map(|p| p.positions.iter()).map(|&p| Vec3::from_array(p)).max_by(|a, b| a.distance_squared(grip).total_cmp(&b.distance_squared(grip))).unwrap_or(grip)
 }
 
 /// What each hand holds, placed in the view for a delver of body `spec`: the main hand's first,
@@ -124,7 +132,7 @@ pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>) ->
             let at = view_hold(fit.hold, side);
             let rotation = at.turn * BODY_TO_VIEW * placed;
             let transform = Transform { translation: at.fist - rotation * grip, rotation, scale: Vec3::ONE };
-            Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform })
+            Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform, point: point_of(item, grip) })
         })
         .collect()
 }
