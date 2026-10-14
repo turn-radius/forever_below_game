@@ -13,11 +13,11 @@
 //!   it (a base of that family, rarity, affixes, name, dressed wear and etching).
 //!   A lit one lights its corner with a shadowed light, so it stays on its side of the rock;
 //!   the item itself casts no shadow, or its own flame and handle would black out its light.
-//! - A ray from the camera picks the nearest item in reach and names it in its rarity's colour;
-//!   E picks it up into [`Carried`].
-//! - Number keys 1 to 9 or the scroll wheel choose a carried item ([`CarriedSelection`]); G
-//!   sets it on the floor in front of the player ([`drop_spot`]), where it rests like any other
-//!   floor item and can be picked up again.
+//! - Every item lying in the level is kept track of in the [`Inventory`], loose, so a bag set
+//!   down keeps its contents and the inventory screen can show what lies underfoot.
+//! - A ray from the camera picks the nearest item in reach ([`Aimed`]), which the hover card
+//!   describes (`crate::inventory::card`); E picks it up into the inventory ([`Inventory::pick_up`]). Things are set down from the
+//!   inventory screen ([`set_down`], [`drop_spot`]), and rest like any other floor item.
 //!
 //! With no player in the app a stand-in camera is spawned at the level's start
 //! ([`StandInCamera`]). For captures, `FB_DEBUG_POSE` holds the player's view at a pose
@@ -30,19 +30,19 @@ use armory::{
 };
 use bevy::{
     app::{HierarchyPropagatePlugin, Propagate},
-    input::mouse::{AccumulatedMouseScroll, MouseScrollUnit},
     camera::{Exposure, RenderTarget, visibility::RenderLayers},
     light::NotShadowCaster,
     prelude::*,
     render::view::{Msaa, Tonemapping},
 };
-use fb_items::Rarity;
 use fb_level::{CELL, ItemSpot, Level};
 
+use crate::inventory::{Inventory, ItemId};
 use crate::light::{Torch, cast_shadows, point_light};
-use crate::play::{BlockedCells, Carried, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
+use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, level_has_focus};
 use crate::player::{Gait, blocked_by, slide};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
+use crate::ui::{INK, PAPER};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
 pub const VIEW_MODEL_LAYER: usize = 1;
@@ -54,11 +54,9 @@ pub const REACH: f32 = 20.0;
 /// a metre and three quarters from the eye, inside [`REACH`].
 pub const DROP_DISTANCE: f32 = 8.0;
 
-/// The key that sets the chosen carried item down: G, for ground, clear of the WASD hand.
-pub const DROP_KEY: KeyCode = KeyCode::KeyG;
-
-/// Scroll wheel pixels that count as one line on a trackpad, which scrolls in pixels.
-const PIXELS_PER_SCROLL_LINE: f32 = 24.0;
+/// Furthest to either side of straight ahead a dropped item is set down, in world units
+/// (50 cm), so it is still within [`REACH`] of the eye.
+pub const DROP_SPREAD: f32 = 5.0;
 
 /// The torch's flame in the view model, in camera space: low on the right, about a metre out
 /// as the view model camera sees it.
@@ -106,21 +104,6 @@ const HELD_LAG_RATE: f32 = 12.0;
 /// Field of view of the view model camera, fixed whatever the world camera uses.
 const VIEW_MODEL_FOV_DEGREES: f32 = 60.0;
 
-/// UI palette (`docs/rendering.md`, "Palette and UI").
-const PAPER: Color = Color::srgb(0xeb as f32 / 255.0, 0xe5 as f32 / 255.0, 0xd5 as f32 / 255.0);
-const INK: Color = Color::srgb(0x2b as f32 / 255.0, 0x24 as f32 / 255.0, 0x20 as f32 / 255.0);
-const ACCENT: Color = Color::srgb(0x6f as f32 / 255.0, 0x45 as f32 / 255.0, 0x26 as f32 / 255.0);
-
-/// The colour an item's name is written in (`docs/rendering.md`, "Palette and UI").
-pub fn rarity_color(rarity: Rarity) -> Color {
-    match rarity {
-        Rarity::Common => Color::srgb_u8(0x4a, 0x42, 0x39),
-        Rarity::Magic => Color::srgb_u8(0x2c, 0x5b, 0xb0),
-        Rarity::Rare => Color::srgb_u8(0x99, 0x70, 0x0f),
-        Rarity::Legendary => Color::srgb_u8(0xbb, 0x51, 0x19),
-    }
-}
-
 pub struct CarryPlugin;
 
 impl Plugin for CarryPlugin {
@@ -131,8 +114,7 @@ impl Plugin for CarryPlugin {
         if !app.is_plugin_added::<HierarchyPropagatePlugin<NotShadowCaster>>() {
             app.add_plugins(HierarchyPropagatePlugin::<NotShadowCaster>::new(Update));
         }
-        app.init_resource::<Carried>()
-            .init_resource::<CarriedSelection>()
+        app.init_resource::<Inventory>()
             .init_resource::<Aimed>()
             .add_systems(PostStartup, spawn_stand_in_camera.run_if(no_player_camera))
             .add_systems(PostUpdate, hold_debug_pose.before(TransformSystems::Propagate))
@@ -143,7 +125,7 @@ impl Plugin for CarryPlugin {
                     equip_player_camera,
                     follow_player_camera,
                     sway_held_torch,
-                    (aim, pick_up, choose_carried, drop_carried, show_aimed, show_carried).chain(),
+                    (aim, pick_up.run_if(level_has_focus)).chain(),
                 ),
             );
     }
@@ -261,10 +243,11 @@ pub fn nearest_hit<T: Copy>(
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-/// An item lying in the level, with its item-space bounds for picking.
+/// An item lying in the level, with its item-space bounds for picking. The item itself is in
+/// the [`Inventory`], loose.
 #[derive(Component, Debug)]
 pub struct FloorItem {
-    pub item: fb_items::Item,
+    pub id: ItemId,
     pub spot: ItemSpot,
     pub min: Vec3,
     pub max: Vec3,
@@ -344,40 +327,9 @@ pub struct ViewModelCamera {
 #[derive(Component, Debug)]
 struct Equipped;
 
-/// Which carried item is chosen, as an index into [`Carried`]: what [`DROP_KEY`] sets down.
-/// Kept inside the list as it shrinks.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CarriedSelection(pub usize);
-
-impl CarriedSelection {
-    /// Moves the choice by `steps` through a list of `len`, wrapping round.
-    pub fn step(&mut self, steps: i32, len: usize) {
-        if len > 0 {
-            self.0 = (self.0 as i64 + steps as i64).rem_euclid(len as i64) as usize;
-        }
-    }
-}
-
 /// The floor item under the crosshair and in reach, if any.
 #[derive(Resource, Debug, Default)]
 pub struct Aimed(pub Option<Entity>);
-
-/// The paper tag under the crosshair naming the aimed item.
-#[derive(Component)]
-struct AimedTag;
-
-#[derive(Component)]
-struct AimedLabel;
-
-/// A legendary's old name, under its title on the tag.
-#[derive(Component)]
-struct AimedSubtitle;
-
-#[derive(Component)]
-struct CarriedPanel;
-
-#[derive(Component)]
-struct CarriedList;
 
 /// Where `FB_DEBUG_POSE` holds the player's view, for captures: `1` at the level's start,
 /// `x,y[,yaw[,pitch]]` at a grid point (cells), turned `yaw` degrees from north (positive turns
@@ -461,27 +413,37 @@ fn hold_debug_pose(
     }
 }
 
-/// Spawns (or respawns, when the level changes) every item the level lays out.
-fn lay_out_items(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<FloorItem>>, mut spawner: ItemSpawner) {
-    for entity in &old {
+/// Spawns (or respawns, when the level changes) every item the level lays out, each kept
+/// track of in the inventory, loose.
+fn lay_out_items(
+    mut commands: Commands,
+    level: Res<CurrentLevel>,
+    old: Query<(Entity, &FloorItem)>,
+    mut inventory: ResMut<Inventory>,
+    mut spawner: ItemSpawner,
+) {
+    for (entity, floor) in &old {
+        inventory.forget(floor.id);
         commands.entity(entity).despawn();
     }
     for spot in &level.0.items {
         if let Some(item) = fb_items::roll_loot(spot.family, spot.seed) {
-            spawn_floor_item(&mut spawner, item, *spot);
+            let id = inventory.add(item);
+            spawn_floor_item(&mut spawner, &inventory, id, *spot);
         }
     }
 }
 
 /// The item's item-space vertices.
-fn item_points(mesh: &armory::ItemMesh) -> Vec<Vec3> {
+pub fn item_points(mesh: &armory::ItemMesh) -> Vec<Vec3> {
     mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect()
 }
 
-/// Spawns `item` resting on the floor at `spot` as a [`FloorItem`], drawn with its own palette,
-/// dressed condition and etching, with its light if it gives one. `None` for an item with no
-/// vertices.
-fn spawn_floor_item(spawner: &mut ItemSpawner, item: fb_items::Item, spot: ItemSpot) -> Option<Entity> {
+/// Spawns item `id` resting on the floor at `spot` as a [`FloorItem`], drawn with its own
+/// palette, dressed condition and etching, with its light if it gives one. `None` for an item
+/// with no vertices or one the inventory does not know.
+pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: ItemId, spot: ItemSpot) -> Option<Entity> {
+    let item = inventory.item(id)?;
     let mesh = item.shape.build();
     let points = item_points(&mesh);
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
@@ -489,7 +451,7 @@ fn spawn_floor_item(spawner: &mut ItemSpawner, item: fb_items::Item, spot: ItemS
     let (min, max) = bounds(points.iter().copied())?;
     let light = item_light(&item.shape);
     let mut root = spawner.spawn(&mesh, &appearance_of(&item.shape));
-    root.insert((transform, Name::new(item.title().to_string()), FloorItem { item, spot, min, max }));
+    root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }));
     if let Some(anchor) = light {
         // A lit thing on the floor lights its corner, from a little above the flame so the
         // stone under it does not burn white. Its light is shadowed so it stops at the rock,
@@ -515,10 +477,46 @@ pub fn floor_radius(points: &[Vec3]) -> f32 {
 /// `forward` (a unit floor direction) comes to rest: [`DROP_DISTANCE`] ahead, or short of that
 /// where rock or a `blocked` cell is in the way, clear of it by `radius`. Found by sliding the
 /// item's footprint out from the feet as the body slides along walls ([`slide`]). The radius is
-/// held under half a cell so an item fits down a one-cell corridor.
-pub fn drop_spot(feet: Vec2, forward: Vec2, radius: f32, blocked: impl Fn(i32, i32) -> bool) -> Vec2 {
+/// held under half a cell so an item fits down a one-cell corridor. `aside` moves the spot to
+/// the right (negative to the left), held within [`DROP_SPREAD`].
+pub fn drop_spot(feet: Vec2, forward: Vec2, aside: f32, radius: f32, blocked: impl Fn(i32, i32) -> bool) -> Vec2 {
     let radius = radius.min(CELL * 0.5 - 0.5);
-    slide(feet, feet + forward * DROP_DISTANCE, radius, blocked)
+    let right = Vec2::new(-forward.y, forward.x);
+    slide(feet, feet + forward * DROP_DISTANCE + right * aside.clamp(-DROP_SPREAD, DROP_SPREAD), radius, blocked)
+}
+
+/// Sets loose item `id` down in front of the eye ([`drop_spot`]), into the level data too so it
+/// stays where it was left, and spawns it there. `None` if it has no vertices.
+pub fn set_down(
+    spawner: &mut ItemSpawner,
+    inventory: &Inventory,
+    level: &mut Level,
+    blocked_cells: &BlockedCells,
+    eye: &GlobalTransform,
+    id: ItemId,
+    aside: f32,
+) -> Option<Entity> {
+    let item = inventory.item(id)?;
+    // Straight down, the top of the head points the way the body faces.
+    let forward = eye.forward().as_vec3().xz().try_normalize().unwrap_or_else(|| eye.up().as_vec3().xz().normalize_or(Vec2::NEG_Y));
+    let radius = floor_radius(&item_points(&item.shape.build()));
+    let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells)) / CELL;
+    // Laid square to the player's view.
+    let yaw = (-forward.x).atan2(-forward.y);
+    // For anything that came from a level spot, the spot rolls the same item again
+    // ([`fb_items::roll_loot`]); what is spawned is the item itself.
+    let spot = ItemSpot { x: at.x, y: at.y, yaw, family: item.shape.family(), seed: item.seed };
+    level.items.push(spot);
+    spawn_floor_item(spawner, inventory, id, spot)
+}
+
+/// Lifts a floor item out of the level: out of the level data, without respawning what is
+/// still there, and its entity despawned. The item stays in the inventory.
+pub fn lift(commands: &mut Commands, level: &mut Level, entity: Entity, floor: &FloorItem) {
+    if let Some(index) = level.items.iter().position(|spot| *spot == floor.spot) {
+        level.items.remove(index);
+    }
+    commands.entity(entity).despawn();
 }
 
 /// A flickering point light in `anchor`'s colour and flicker, `peak` times full close up and
@@ -619,65 +617,6 @@ fn spawn_hud(commands: &mut Commands, camera: Entity) {
                 BackgroundColor(PAPER.with_alpha(0.85)),
                 BorderColor::all(INK.with_alpha(0.7)),
             ));
-            // The aimed item's name on a paper tag centred under the crosshair, in its
-            // rarity's colour; a legendary's old name under its title.
-            hud.spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: percent(50),
-                    width: percent(100),
-                    margin: UiRect::top(px(18)),
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                },
-            ))
-            .with_children(|row| {
-                row.spawn((
-                    AimedTag,
-                    Node {
-                        padding: UiRect::axes(px(10), px(4)),
-                        border: UiRect::all(px(1)),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BackgroundColor(PAPER.with_alpha(0.92)),
-                    BorderColor::all(ACCENT),
-                    Visibility::Hidden,
-                ))
-                .with_children(|tag| {
-                    tag.spawn((AimedLabel, Text::default(), TextFont::from_font_size(20.0), TextColor(INK)));
-                    tag.spawn((
-                        AimedSubtitle,
-                        Text::default(),
-                        TextFont::from_font_size(14.0),
-                        TextColor(INK),
-                        Node { display: Display::None, ..default() },
-                    ));
-                });
-            });
-            // The carried list: a parchment ledger in the top left corner.
-            hud.spawn((
-                CarriedPanel,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(18),
-                    top: px(18),
-                    min_width: px(180),
-                    padding: UiRect::axes(px(12), px(8)),
-                    border: UiRect::all(px(2)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(2),
-                    ..default()
-                },
-                BackgroundColor(PAPER.with_alpha(0.92)),
-                BorderColor::all(ACCENT),
-                Visibility::Hidden,
-            ))
-            .with_children(|panel| {
-                panel.spawn((Text::new("Carried"), TextFont::from_font_size(16.0), TextColor(ACCENT)));
-                panel.spawn((CarriedList, Node { flex_direction: FlexDirection::Column, ..default() }));
-            });
         });
 }
 
@@ -735,182 +674,34 @@ fn aim(
     }
 }
 
+/// E picks up the item under the crosshair ([`Inventory::pick_up`]). Something with no room for
+/// it stays where it lies.
 fn pick_up(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     mut aimed: ResMut<Aimed>,
     items: Query<&FloorItem>,
-    mut carried: ResMut<Carried>,
+    mut inventory: ResMut<Inventory>,
     mut level: ResMut<CurrentLevel>,
 ) {
     if !keys.just_pressed(KeyCode::KeyE) {
         return;
     }
-    let Some(entity) = aimed.0.take() else { return };
+    let Some(entity) = aimed.0 else { return };
     let Ok(floor) = items.get(entity) else { return };
-    // Out of the level data too, without respawning everything that is still there.
-    let spots = &mut level.bypass_change_detection().0.items;
-    if let Some(index) = spots.iter().position(|spot| *spot == floor.spot) {
-        spots.remove(index);
-    }
-    carried.0.push(floor.item.clone());
-    commands.entity(entity).despawn();
-}
-
-/// Chooses a carried item: number keys 1 to 9 pick by place in the list, the scroll wheel steps
-/// through it (down for the next).
-fn choose_carried(
-    keys: Res<ButtonInput<KeyCode>>,
-    scroll: Option<Res<AccumulatedMouseScroll>>,
-    carried: Res<Carried>,
-    mut selection: ResMut<CarriedSelection>,
-    mut lines: Local<f32>,
-) {
-    const DIGITS: [KeyCode; 9] = [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-        KeyCode::Digit7,
-        KeyCode::Digit8,
-        KeyCode::Digit9,
-    ];
-    let len = carried.0.len();
-    if let Some(index) = DIGITS.iter().position(|&key| keys.just_pressed(key)).filter(|&i| i < len) {
-        selection.set_if_neq(CarriedSelection(index));
-    }
-    if let Some(scroll) = scroll {
-        let delta = match scroll.unit {
-            MouseScrollUnit::Line => scroll.delta.y,
-            MouseScrollUnit::Pixel => scroll.delta.y / PIXELS_PER_SCROLL_LINE,
-        };
-        // Whole lines step the choice; a trackpad's fractions add up first. Scrolling up
-        // (positive) goes back up the list.
-        *lines += delta;
-        let steps = lines.trunc();
-        *lines -= steps;
-        if steps != 0.0 {
-            selection.step(-(steps as i32), len);
+    match inventory.pick_up(floor.id) {
+        Ok(()) => {
+            aimed.0 = None;
+            lift(&mut commands, &mut level.bypass_change_detection().0, entity, floor);
         }
-    }
-    if len > 0 && selection.0 >= len {
-        selection.0 = len - 1;
-    }
-}
-
-/// Sets the chosen carried item down on the floor in front of the player.
-fn drop_carried(
-    keys: Res<ButtonInput<KeyCode>>,
-    eyes: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
-    mut carried: ResMut<Carried>,
-    mut selection: ResMut<CarriedSelection>,
-    mut level: ResMut<CurrentLevel>,
-    blocked_cells: Res<BlockedCells>,
-    mut spawner: ItemSpawner,
-) {
-    if !keys.just_pressed(DROP_KEY) || selection.0 >= carried.0.len() {
-        return;
-    }
-    let Some(eye) = eyes.iter().next() else { return };
-    let item = carried.0.remove(selection.0);
-    if selection.0 >= carried.0.len() {
-        selection.0 = carried.0.len().saturating_sub(1);
-    }
-    // Straight down, the top of the head points the way the body faces.
-    let forward = eye.forward().as_vec3().xz().try_normalize().unwrap_or_else(|| eye.up().as_vec3().xz().normalize_or(Vec2::NEG_Y));
-    let radius = floor_radius(&item_points(&item.shape.build()));
-    let at = drop_spot(eye.translation().xz(), forward, radius, blocked_by(&level.0, &blocked_cells)) / CELL;
-    // Laid square to the player's view.
-    let yaw = (-forward.x).atan2(-forward.y);
-    // For anything that came from a level spot, the spot rolls the same item again
-    // ([`fb_items::roll_loot`]); what is spawned is the item itself.
-    let spot = ItemSpot { x: at.x, y: at.y, yaw, family: item.shape.family(), seed: item.seed };
-    // Into the level data too, so it stays where it was left, without respawning the rest.
-    level.bypass_change_detection().0.items.push(spot);
-    spawn_floor_item(&mut spawner, item, spot);
-}
-
-/// What the tag under the crosshair says about `item`: its title, its old name under that for
-/// a legendary, and the colour to write them in.
-pub fn aimed_text(item: &fb_items::Item) -> (String, Option<String>, Color) {
-    (item.title().to_string(), item.legend.as_ref().map(|l| l.subtitle.clone()), rarity_color(item.rarity))
-}
-
-/// A text and its colour, as the aimed tag writes them.
-type ColoredText = (&'static mut Text, &'static mut TextColor);
-
-fn show_aimed(
-    aimed: Res<Aimed>,
-    items: Query<&FloorItem>,
-    mut tags: Query<&mut Visibility, With<AimedTag>>,
-    mut labels: Query<ColoredText, (With<AimedLabel>, Without<AimedSubtitle>)>,
-    mut subtitles: Query<(&mut Text, &mut TextColor, &mut Node), With<AimedSubtitle>>,
-) {
-    if !aimed.is_changed() {
-        return;
-    }
-    let shown = aimed.0.and_then(|entity| items.get(entity).ok()).map(|floor| aimed_text(&floor.item));
-    for mut visibility in &mut tags {
-        *visibility = if shown.is_some() { Visibility::Inherited } else { Visibility::Hidden };
-    }
-    let Some((title, subtitle, color)) = shown else { return };
-    for (mut text, mut text_color) in &mut labels {
-        text.0.clone_from(&title);
-        text_color.0 = color;
-    }
-    for (mut text, mut text_color, mut node) in &mut subtitles {
-        node.display = if subtitle.is_some() { Display::Flex } else { Display::None };
-        text.0 = subtitle.clone().unwrap_or_default();
-        text_color.0 = color.with_alpha(0.8);
-    }
-}
-
-/// The carried list's lines: each item by its title, numbered by its key, the chosen one
-/// marked.
-pub fn carried_lines(carried: &[fb_items::Item], selection: CarriedSelection) -> Vec<String> {
-    carried
-        .iter()
-        .enumerate()
-        .map(|(i, item)| {
-            let mark = if i == selection.0 { ">" } else { " " };
-            match i {
-                0..9 => format!("{mark} {}  {}", i + 1, item.title()),
-                _ => format!("{mark}    {}", item.title()),
-            }
-        })
-        .collect()
-}
-
-/// Rewrites the carried list, one line per item in its rarity's colour.
-fn show_carried(
-    mut commands: Commands,
-    carried: Res<Carried>,
-    selection: Res<CarriedSelection>,
-    lists: Query<Entity, With<CarriedList>>,
-    mut panels: Query<&mut Visibility, With<CarriedPanel>>,
-    added: Query<(), Added<CarriedList>>,
-) {
-    if !carried.is_changed() && !selection.is_changed() && added.is_empty() {
-        return;
-    }
-    let lines = carried_lines(&carried.0, *selection);
-    for list in &lists {
-        commands.entity(list).despawn_children().with_children(|list| {
-            for (line, item) in lines.iter().zip(&carried.0) {
-                list.spawn((Text::new(line.clone()), TextFont::from_font_size(15.0), TextColor(rarity_color(item.rarity))));
-            }
-        });
-    }
-    for mut visibility in &mut panels {
-        *visibility = if lines.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
+        Err(refusal) => info!("{}", refusal.reason()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fb_items::Rarity;
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
@@ -1051,41 +842,41 @@ mod tests {
         // A corridor running east, one cell wide, rock at x = 3 cells.
         let blocked = |x: i32, y: i32| !(y == 0 && (0..3).contains(&x));
         let feet = Vec2::new(10.0, 10.0);
-        assert!(drop_spot(feet, Vec2::X, 2.0, blocked).abs_diff_eq(Vec2::new(10.0 + DROP_DISTANCE, 10.0), 1e-3));
+        assert!(drop_spot(feet, Vec2::X, 0.0, 2.0, blocked).abs_diff_eq(Vec2::new(10.0 + DROP_DISTANCE, 10.0), 1e-3));
         // Up against the end wall it lands clear of it by its radius.
         let near_end = Vec2::new(55.0, 10.0);
-        assert!(drop_spot(near_end, Vec2::X, 2.0, blocked).x <= 3.0 * CELL - 2.0 + 1e-3);
+        assert!(drop_spot(near_end, Vec2::X, 0.0, 2.0, blocked).x <= 3.0 * CELL - 2.0 + 1e-3);
         // A long thing still fits down the corridor, its radius held under half a cell.
-        let spot = drop_spot(feet, Vec2::Y, 40.0, blocked);
+        let spot = drop_spot(feet, Vec2::Y, 0.0, 40.0, blocked);
         assert!(spot.y >= 9.5 && spot.y <= 10.5, "{spot}");
     }
 
-    #[test]
-    fn the_selection_wraps_and_numbers_the_list() {
-        let mut selection = CarriedSelection(0);
-        selection.step(-1, 3);
-        assert_eq!(selection, CarriedSelection(2));
-        selection.step(2, 3);
-        assert_eq!(selection, CarriedSelection(1));
-        selection.step(1, 0);
-        assert_eq!(selection, CarriedSelection(1));
-        let items: Vec<fb_items::Item> = [1, 2].map(|seed| fb_items::roll_item("Mace", seed).unwrap()).into();
-        let lines = carried_lines(&items, CarriedSelection(1));
-        assert!(lines[0].starts_with("  1  ") && lines[1].starts_with("> 2  "), "{lines:?}");
-    }
 
     #[test]
-    fn g_drops_the_chosen_item_where_it_can_be_picked_up_again() {
+    fn dropped_items_go_aside_within_reach() {
+        let open = |_: i32, _: i32| false;
+        let feet = Vec2::new(50.0, 50.0);
+        // Facing -Z, the right is +X.
+        let right = drop_spot(feet, Vec2::NEG_Y, 3.0, 1.0, open);
+        assert!(right.abs_diff_eq(Vec2::new(53.0, 50.0 - DROP_DISTANCE), 1e-3), "{right}");
+        let far = drop_spot(feet, Vec2::NEG_Y, -40.0, 1.0, open);
+        assert!((far.x - (50.0 - DROP_SPREAD)).abs() < 1e-3, "{far}");
+        let eye = Vec3::new(feet.x, EYE_HEIGHT, feet.y);
+        assert!(Vec3::new(far.x, 0.0, far.y).distance(eye) < REACH);
+    }
+
+    /// An app with what picking up and setting down need, the level emptied of loot, and a
+    /// pack worn on the back.
+    fn delving_app() -> (App, ItemId) {
         let mut level = fb_level::generate(1207);
         level.items.clear();
-        let start = DebugPose::parse(&level, "1");
-        let item = fb_items::roll_item("Mace", 1207).unwrap();
-        let keep = fb_items::roll_item("Dagger", 7).unwrap();
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
         let mut app = App::new();
         app.add_plugins(bevy::transform::TransformPlugin)
             .insert_resource(CurrentLevel(level))
-            .insert_resource(Carried(vec![keep.clone(), item.clone()]))
-            .init_resource::<CarriedSelection>()
+            .insert_resource(inventory)
             .init_resource::<Aimed>()
             .init_resource::<BlockedCells>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -1093,26 +884,29 @@ mod tests {
             .init_resource::<Assets<crate::render::ToonMaterial>>()
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
             .init_resource::<crate::render::OutlineMaterials>()
-            .add_systems(Update, (aim, pick_up, choose_carried, drop_carried).chain());
+            .add_systems(Update, (aim, pick_up).chain());
+        (app, pack)
+    }
+
+    #[test]
+    fn a_set_down_item_rests_in_reach_and_can_be_picked_up_again() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, pack) = delving_app();
+        let start = DebugPose::parse(&app.world().resource::<CurrentLevel>().0, "1");
+        let item = fb_items::roll_item("Mace", 1207).unwrap();
+        let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
         let eye = start.eye();
         let camera = app.world_mut().spawn((PlayerCamera, Equipped, eye)).id();
-        let press = |app: &mut App, key: KeyCode| {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.reset_all();
-            keys.press(key);
-            app.update();
-            // As Bevy's input system does at the start of the next frame.
-            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
-        };
-
-        // Choose the second item with 2, then set it down with G.
-        press(&mut app, KeyCode::Digit2);
-        assert_eq!(*app.world().resource::<CarriedSelection>(), CarriedSelection(1));
-        press(&mut app, DROP_KEY);
-        assert_eq!(app.world().resource::<Carried>().0, vec![keep.clone()]);
-        assert_eq!(*app.world().resource::<CarriedSelection>(), CarriedSelection(0));
+        app.world_mut()
+            .run_system_once(
+                move |mut spawner: ItemSpawner, inventory: Res<Inventory>, mut level: ResMut<CurrentLevel>, blocked: Res<BlockedCells>| {
+                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &GlobalTransform::from(eye), id, 0.0);
+                },
+            )
+            .unwrap();
         let mut floor = app.world_mut().query::<(Entity, &Transform, &FloorItem)>();
-        let (dropped, at, spot) = floor.single(app.world()).map(|(e, t, f)| (e, *t, f.spot)).unwrap();
+        let (dropped, at, spot, floor_id) = floor.single(app.world()).map(|(e, t, f)| (e, *t, f.spot, f.id)).unwrap();
+        assert_eq!(floor_id, id);
         assert_eq!(app.world().resource::<CurrentLevel>().0.items, vec![spot]);
         // In front of the player, on open floor, within reach.
         let ahead = (at.translation - eye.translation).xz();
@@ -1125,34 +919,37 @@ mod tests {
         let low = points.iter().map(|&p| at.transform_point(p).y).fold(f32::INFINITY, f32::min);
         assert!(low.abs() < 1e-3, "{low}");
 
-        // Look down at it and pick it up again with E.
+        // Look down at it and pick it up again with E: into the pack.
         let target = Vec3::new(spot.x * CELL, 0.5, spot.y * CELL);
         *app.world_mut().get_mut::<Transform>(camera).unwrap() = eye.looking_at(target, Vec3::Y);
         // One frame to carry the turn to its global transform, one to aim with it.
         app.update();
         app.update();
         assert_eq!(app.world().resource::<Aimed>().0, Some(dropped));
-        press(&mut app, KeyCode::KeyE);
-        assert_eq!(app.world().resource::<Carried>().0, vec![keep, item]);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        app.update();
+        let inventory = app.world().resource::<Inventory>();
+        assert!(matches!(inventory.location(id), Some(crate::inventory::Location::In { container, .. }) if container == pack));
         assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
+        assert!(app.world().get_entity(dropped).is_err());
     }
 
     #[test]
     fn e_picks_up_the_item_under_the_crosshair() {
-        let mut level = fb_level::generate(1207);
-        let spot = level.items[0];
-        level.items.truncate(1);
-        let mut app = App::new();
-        app.insert_resource(CurrentLevel(level))
-            .init_resource::<Carried>()
-            .init_resource::<Aimed>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .add_systems(Update, (aim, pick_up).chain());
-        let item = fb_items::roll_loot(spot.family, spot.seed).unwrap();
+        let (mut app, pack) = delving_app();
+        let level = fb_level::generate(1207);
+        let (spot, item) = level
+            .items
+            .iter()
+            .map(|s| (*s, fb_items::roll_loot(s.family, s.seed).unwrap()))
+            .find(|(_, i)| i.profile.packable && i.profile.holds.is_none())
+            .unwrap();
+        app.world_mut().resource_mut::<CurrentLevel>().0.items.push(spot);
         let name = item.title().to_string();
+        let id = app.world_mut().resource_mut::<Inventory>().add(item);
         // An item a metre ahead of an eye looking down at it.
         let at = Transform::from_xyz(0.0, 0.0, -10.0);
-        let floor = app.world_mut().spawn((at, GlobalTransform::from(at), FloorItem { item, spot, min: Vec3::splat(-1.0), max: Vec3::splat(1.0) })).id();
+        let floor = app.world_mut().spawn((at, GlobalTransform::from(at), FloorItem { id, spot, min: Vec3::splat(-1.0), max: Vec3::splat(1.0) })).id();
         let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, 0.0, -10.0), Vec3::Y);
         app.world_mut().spawn((PlayerCamera, Equipped, eye, GlobalTransform::from(eye)));
 
@@ -1161,7 +958,9 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
         app.update();
         assert!(app.world().get_entity(floor).is_err());
-        assert_eq!(app.world().resource::<Carried>().0.iter().map(|i| i.title().to_string()).collect::<Vec<_>>(), vec![name]);
+        let inventory = app.world().resource::<Inventory>();
+        let packed: Vec<String> = inventory.grid(pack).unwrap().entries().iter().map(|e| inventory.item(e.id).unwrap().title().to_string()).collect();
+        assert_eq!(packed, vec![name]);
         assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
     }
 
@@ -1172,26 +971,11 @@ mod tests {
         assert_eq!(items.len(), level.items.len());
         for (item, spot) in items.iter().zip(&level.items) {
             assert_eq!(item.shape.family(), spot.family);
-            let (title, _, color) = aimed_text(item);
-            assert_eq!(title, item.title());
-            assert_eq!(color, rarity_color(item.rarity));
             if item.profile.kind == fb_items::Kind::Gear {
                 assert_eq!(item.shape.condition().state, armory::cond::ConditionState::Custom, "{}: not dressed", item.name);
             }
         }
         assert!(items.iter().any(|i| i.rarity != Rarity::Common), "a level of nothing but common items");
-    }
-
-    #[test]
-    fn a_legendary_shows_its_title_over_its_old_name() {
-        let legend = (1..5_000).filter_map(|seed| fb_items::roll_item("Sword", seed)).find(|i| i.rarity == Rarity::Legendary).unwrap();
-        let (title, subtitle, color) = aimed_text(&legend);
-        let l = legend.legend.as_ref().unwrap();
-        assert_eq!((title.as_str(), subtitle.as_deref()), (l.title.as_str(), Some(l.subtitle.as_str())));
-        assert_eq!(color, rarity_color(Rarity::Legendary));
-        assert!(carried_lines(std::slice::from_ref(&legend), CarriedSelection(0))[0].ends_with(&l.title));
-        let plain = fb_items::roll_item("Mace", 1).unwrap();
-        assert_eq!(aimed_text(&plain).1, None);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! - [`crate::level`]: the level's stone geometry, its fixed lights and the entrance door.
 //! - [`crate::player`]: the first-person body, camera, movement and collision.
 //! - [`crate::carry`]: the torch in hand, items lying in the level, picking them up, the HUD.
+//! - [`crate::inventory`]: the inventory screen over the level (Tab).
 //! - [`crate::audio`]: the level's music.
 
 use bevy::{platform::collections::HashSet, prelude::*};
@@ -29,19 +30,26 @@ pub const EYE_HEIGHT: f32 = 16.0;
 #[derive(Resource, Clone, Debug, Default)]
 pub struct BlockedCells(pub HashSet<(i32, i32)>);
 
-/// What the player carries, in the order it was picked up.
-#[derive(Resource, Clone, Debug, Default)]
-pub struct Carried(pub Vec<fb_items::Item>);
+/// Whether a screen over the level, such as the inventory, has the mouse and keys. The level
+/// keeps drawing behind it, but the body stands still and does not look round.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScreenOpen(pub bool);
+
+/// Run condition: no screen is open over the level.
+pub fn level_has_focus(screen: Option<Res<ScreenOpen>>) -> bool {
+    !screen.is_some_and(|s| s.0)
+}
 
 /// Everything needed to play a level.
 pub struct PlayPlugin;
 
 impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<BlockedCells>().add_plugins((
+        app.init_resource::<BlockedCells>().init_resource::<ScreenOpen>().add_plugins((
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,
+            crate::inventory::InventoryPlugin,
             crate::audio::MusicPlugin,
         ));
     }
