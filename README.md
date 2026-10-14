@@ -121,6 +121,54 @@ A soak of twenty minutes: `RUST_BACKTRACE=1 BEVY_ASSET_ROOT=game FB_SOAK=1200 ./
 
 Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_ASSET_ROOT=game` so it finds the music and fonts; `cargo run` finds them on its own.
 
+### Tuning
+
+`game/assets/tuning.toml` holds how the game looks and feels: how large held and dropped things are drawn, how fast you walk, how big creatures are and how they fight, how bright the lights burn, the sound mix and the inventory's layout. Edit a value and save; in a debug build (`cargo run`) the game watches the file and applies the change within a second, while it runs. A key left out, misspelt or given the wrong kind of value keeps its default, and the log names it in a warning; nothing in the file can stop the game. A release build reads the file once at startup. 1 world unit is 10 cm; times are in seconds.
+
+| Table | Key | Shipped | What it does |
+| --- | --- | --- | --- |
+| `[view]` | `held_scale` | 1.4 | How much larger than its own size a held item is drawn (1 = true size). |
+| `[view]` | `held_fov_degrees` | 46.0 | Vertical field of view of the camera that draws what you hold, in degrees. |
+| `[view]` | `world_fov_degrees` | 70.0 | Vertical field of view of the world, in degrees. |
+| `[view]` | `head_bob` | 1.0 | How much the view and what you hold bob as you walk (0 = still, 1 = usual). |
+| `[view]` | `floor_item_scale` | 1.15 | How much larger than its own size an item lying on the floor is drawn (1 = true size). |
+| `[moving]` | `walk_speed` | 14.0 | Walking pace, in world units per second (14 = 1.4 m/s). |
+| `[moving]` | `hurry_speed` | 45.0 | Pace with Shift held, in world units per second. |
+| `[moving]` | `acceleration` | 10.0 | How quickly you reach your pace and stop, per second (higher is snappier). |
+| `[moving]` | `body_radius` | 3.5 | Your body's radius on the floor, in world units (3.5 = 35 cm). |
+| `[creatures]` | `sense_scale` | 1.0 | How far creatures notice you, as a multiple of their senses. |
+| `[creatures]` | `rat_cooldown` | 1.5 | Seconds between a rat's bites. |
+| `[creatures]` | `snake_cooldown` | 2.5 | Seconds between a snake's strikes. |
+| `[creatures]` | `rat_chase_speed` | 2.0 | How fast a rat comes at you once it has seen you, as a multiple of its speed. |
+| `[creatures]` | `snake_chase_speed` | 1.0 | How fast a snake comes at you once it has seen you, as a multiple of its speed. |
+| `[creatures.size]` | `rat` | 1.0 | How large each kind of creature is drawn, and the floor it covers (1 = as rolled). |
+| `[creatures.size]` | `giant_rat` | 1.0 | Giant rats, as a multiple. |
+| `[creatures.size]` | `viper` | 1.0 | Poisonous snakes, as a multiple. |
+| `[creatures.size]` | `constrictor` | 1.0 | Constrictor snakes, as a multiple. |
+| `[combat]` | `reach_scale` | 1.0 | How far your blows reach, as a multiple of the weapon's own reach. |
+| `[combat]` | `hit_cone_degrees` | 50.0 | Half the angle of the cone ahead a blow can land in, in degrees either side of the crosshair. |
+| `[combat]` | `flash_hold` | 0.12 | Seconds a struck creature's flash holds at full. |
+| `[combat]` | `flash_fade` | 0.2 | Seconds the flash then takes to fade. |
+| `[combat]` | `knockback_scale` | 1.0 | How far a blow knocks a creature back, as a multiple of the usual. |
+| `[light]` | `torch_peak` | 1.0 | A torch, lantern or other burning thing's strength close up (1 = full). |
+| `[light]` | `torch_reach` | 2.0 | How far its light reaches, as a multiple of its bright radius. |
+| `[light]` | `brazier_peak` | 1.5 | A brazier's strength close up (1 = full). |
+| `[light]` | `brazier_reach` | 150.0 | How far a brazier's light reaches, in world units. |
+| `[light]` | `glowcap_peak` | 0.5 | A patch of glowcaps' strength close up (1 = full). |
+| `[light]` | `glowcap_reach` | 30.0 | How far glowcaps' light reaches, in world units. |
+| `[light]` | `flicker_depth` | 1.0 | How deeply flames flicker (0 = steady, 1 = usual). |
+| `[light]` | `ambient_lux` | 4.0 | The abyss's own light where no flame reaches, in lux. |
+| `[light]` | `fog_start` | 40.0 | Where the dark starts to swallow far stone, in world units. |
+| `[light]` | `fog_end` | 260.0 | Where the dark is complete, in world units. |
+| `[sound]` | `music_mix` | 0.35 | The music's volume at full, 0 to 1, before your music volume setting. |
+| `[sound]` | `silence_min` | 45.0 | The shortest silence between tracks, in seconds. |
+| `[sound]` | `silence_max` | 75.0 | The longest silence between tracks, in seconds. |
+| `[sound]` | `effects_volume` | 1.0 | Sound effects' volume at full, 0 to 1, before your sound volume setting. |
+| `[interface]` | `cell_size` | 46.0 | Inventory grid cell size, in logical pixels. |
+| `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
+
+The shipped values are the defaults in `game/src/tuning.rs`; a test keeps the two, and this list, in step.
+
 ### Generator tools
 
 - `cargo run -p armory --example dump_obj -- [family] <seed> [out.obj]` writes an Armory item as OBJ.

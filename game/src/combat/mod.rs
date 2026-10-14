@@ -32,6 +32,7 @@ use procgen_rng::Mulberry32;
 use crate::character::{Character, Class, modifier};
 use crate::creatures::behaviour::CreatureAttack;
 use crate::inventory::Inventory;
+use crate::tuning::Tuning;
 
 pub mod feedback;
 pub mod swing;
@@ -41,7 +42,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin));
     }
 }
 
@@ -131,10 +132,6 @@ const ARM_TO_FINGERTIPS: f32 = 0.44;
 /// A human's stature, world units.
 const STATURE: f32 = 17.0;
 
-/// Half the angle of the cone ahead a blow can land in, radians (50° either side of the
-/// crosshair). Our own: wide enough for a creature at your feet, which is below the view.
-pub const CONE: f32 = 50.0 * std::f32::consts::PI / 180.0;
-
 /// What the main hand swings: its damage, its reach and how it is swung.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Weapon {
@@ -200,8 +197,9 @@ pub struct Target {
 }
 
 /// The nearest of `targets` a blow from `from` facing `forward` (both on the floor) reaches:
-/// its body's edge within `reach`, and some of it within [`CONE`] of straight ahead.
-pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, targets: &[Target]) -> Option<Entity> {
+/// its body's edge within `reach`, and some of it within `cone` radians of straight ahead
+/// (`hit_cone_degrees`, [`crate::tuning::CombatTuning`]).
+pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, cone: f32, targets: &[Target]) -> Option<Entity> {
     let forward = forward.normalize_or_zero();
     targets
         .iter()
@@ -215,7 +213,7 @@ pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, targets: &[Target]
             // Standing on it counts; otherwise the angle to its nearest side.
             if distance > t.radius {
                 let off = forward.angle_to(to).abs() - (t.radius / distance).asin();
-                if off > CONE {
+                if off > cone {
                     return None;
                 }
             }
@@ -245,6 +243,14 @@ pub fn bite_damage(attack: &CreatureAttack, constitution: i32, rng: &mut Mulberr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hit cone as shipped.
+    const CONE: f32 = 50.0 * std::f32::consts::PI / 180.0;
+
+    #[test]
+    fn the_cone_here_is_the_shipped_one() {
+        assert!((Tuning::default().combat.hit_cone() - CONE).abs() < 1e-6);
+    }
 
     fn delver(class: Class, con: i32) -> Character {
         Character { class, abilities: [12, 12, con, 10], ..Character::roll(3) }
@@ -332,14 +338,14 @@ mod tests {
         let behind = Target { entity: e(3), centre: Vec2::new(0.0, 6.0), radius: 1.5 };
         let beside = Target { entity: e(4), centre: Vec2::new(9.0, -1.0), radius: 1.5 };
         let forward = Vec2::new(0.0, -1.0);
-        assert_eq!(target_in_reach(Vec2::ZERO, forward, 14.0, &[far_ahead, behind, beside, near_ahead]), Some(e(1)));
-        assert_eq!(target_in_reach(Vec2::ZERO, forward, 14.0, &[far_ahead, behind, beside]), None);
+        assert_eq!(target_in_reach(Vec2::ZERO, forward, 14.0, CONE, &[far_ahead, behind, beside, near_ahead]), Some(e(1)));
+        assert_eq!(target_in_reach(Vec2::ZERO, forward, 14.0, CONE, &[far_ahead, behind, beside]), None);
         // A long reach finds the far one; a short one finds nothing.
-        assert_eq!(target_in_reach(Vec2::ZERO, forward, 30.0, &[far_ahead]), Some(e(2)));
-        assert_eq!(target_in_reach(Vec2::ZERO, forward, 5.0, &[near_ahead]), None);
+        assert_eq!(target_in_reach(Vec2::ZERO, forward, 30.0, CONE, &[far_ahead]), Some(e(2)));
+        assert_eq!(target_in_reach(Vec2::ZERO, forward, 5.0, CONE, &[near_ahead]), None);
         // A big body off to the side is still caught by its near edge.
         let big = Target { entity: e(5), centre: Vec2::new(8.0, -4.0), radius: 7.0 };
-        assert_eq!(target_in_reach(Vec2::ZERO, forward, 10.0, &[big]), Some(e(5)));
+        assert_eq!(target_in_reach(Vec2::ZERO, forward, 10.0, CONE, &[big]), Some(e(5)));
     }
 
     #[test]
@@ -429,7 +435,9 @@ mod tests {
 
     #[test]
     fn a_killed_rat_flashes_before_it_rolls() {
-        use feedback::{COLLAPSE_TIME, Corpse, DEATH_HOLD, Flinch, flash_strength};
+        use feedback::{COLLAPSE_TIME, Corpse, Flinch, flash_strength};
+        let combat = Tuning::default().combat;
+        let death_hold = combat.flash_hold;
         let (mut app, player, rat) = fight(Some("Sword"), 9.0);
         app.update();
         let weapon = Weapon::in_hand(app.world().resource::<Inventory>(), app.world().resource::<Character>());
@@ -442,9 +450,9 @@ mod tests {
         }
         // Through the hold it stands where it was struck, flashing at full.
         let mut held = 0;
-        while app.world().get::<Corpse>(rat).unwrap().since < DEATH_HOLD - 1e-3 {
+        while app.world().get::<Corpse>(rat).unwrap().since < death_hold - 1e-3 {
             let flinch = app.world().get::<Flinch>(rat).expect("flashing");
-            assert_eq!(flash_strength(flinch.left), 1.0);
+            assert_eq!(flash_strength(flinch.left, &combat), 1.0);
             let now = app.world().get::<Transform>(rat).unwrap();
             assert!((now.rotation * Vec3::Y).y > 0.99, "rolling during the hold");
             held += 1;
@@ -496,7 +504,7 @@ mod tests {
         let from = (0..24)
             .map(|i| mid.xz() + Vec2::from_angle(i as f32 * std::f32::consts::TAU / 24.0) * 0.6 * weapon.reach)
             .filter(|p| spine.iter().all(|s| s.xz().distance(*p) > critter.radius))
-            .find(|&p| target_in_reach(p, mid.xz() - p, weapon.reach, &[at_root]).is_none())
+            .find(|&p| target_in_reach(p, mid.xz() - p, weapon.reach, CONE, &[at_root]).is_none())
             .expect("nowhere beside its body out of reach of its root");
         let floor = Vec3::new(from.x, root.translation.y, from.y);
         app.world_mut().entity_mut(player).insert(Transform::from_translation(floor).looking_at(Vec3::new(mid.x, root.translation.y, mid.z), Vec3::Y));

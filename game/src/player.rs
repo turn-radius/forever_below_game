@@ -1,5 +1,7 @@
 //! The first-person body: camera, mouse look, walking and collision with the level's rock.
 //!
+//! Its pace, acceleration, radius, field of view and head bob are tuned ([`Tuning`]).
+//!
 //! The body is a circle on the floor plane that slides along rock and round [`Obstacles`] such
 //! as folk and props ([`slide_around`]). Yaw turns the
 //! [`Player`]; pitch tilts its [`PlayerCamera`] child, which also carries the head bob.
@@ -16,28 +18,20 @@ use fb_level::{CELL, Level};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::light::point_light;
 use crate::settings::GameSettings;
+use crate::tuning::Tuning;
 use crate::launch::AppState;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, level_has_focus};
 
-/// The body's radius on the floor in world units (35 cm).
-pub const BODY_RADIUS: f32 = 3.5;
-/// Walking pace in world units per second (1.4 m/s).
-pub const WALK_SPEED: f32 = 14.0;
-/// Hurrying pace with Shift held: a run of 4.5 m/s (our own tuning; walking is 1.4 m/s).
-pub const HURRY_SPEED: f32 = 45.0;
-/// How quickly velocity closes on the wanted velocity, per second ([`StableInterpolate`]).
-const ACCELERATION: f32 = 10.0;
 /// Radians of turn per pixel of mouse motion at a mouse sensitivity of 1.
 const LOOK_SENSITIVITY: f32 = 0.0022;
 /// Pitch stops short of straight up and down.
 const PITCH_LIMIT: f32 = 85.0 * std::f32::consts::PI / 180.0;
-/// Vertical field of view (about 100 degrees across at 16:9).
-pub(crate) const FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
 /// Near clip in world units (5 mm), so items held at the face and the torch in hand stay whole.
 const NEAR: f32 = 0.05;
 /// Floor distance covered by one full bob cycle: two steps.
 const STRIDE: f32 = 14.0;
-/// Bob height and sway at walking pace, in world units (1.5 cm and 1 cm).
+/// Bob height and sway at walking pace, in world units (1.5 cm and 1 cm), at a `head_bob` of 1
+/// ([`crate::tuning::ViewTuning`]).
 const BOB_HEIGHT: f32 = 0.15;
 const BOB_SWAY: f32 = 0.1;
 /// Frames longer than this are walked as this long, so a hitch does not fling the body.
@@ -50,8 +44,10 @@ impl Plugin for PlayerPlugin {
         app.init_resource::<Keymap>()
             // Kept as loaded if `SettingsPlugin` came first.
             .init_resource::<GameSettings>()
+            .init_resource::<Tuning>()
             .add_systems(OnEnter(AppState::Delving), (spawn_player, grab_cursor))
-            .add_systems(Update, (take_cursor, look, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens).in_set(DelveSystems));
+            .add_systems(Update, (take_cursor, look, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens).in_set(DelveSystems))
+            .add_systems(Update, widen_player_view.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
     }
 }
 
@@ -91,7 +87,24 @@ impl Gait {
     }
 }
 
-fn spawn_player(mut commands: Commands, level: Res<CurrentLevel>) {
+/// The world camera's projection for `tuning`.
+pub fn world_projection(tuning: &Tuning) -> Projection {
+    Projection::from(PerspectiveProjection { fov: tuning.view.world_fov_degrees.to_radians(), near: NEAR, ..default() })
+}
+
+/// Keeps every player camera's field of view to the tuning's.
+fn widen_player_view(tuning: Res<Tuning>, mut cameras: Query<&mut Projection, With<PlayerCamera>>) {
+    let fov = tuning.view.world_fov_degrees.to_radians();
+    for mut projection in &mut cameras {
+        if let Projection::Perspective(perspective) = &mut *projection
+            && perspective.fov != fov
+        {
+            perspective.fov = fov;
+        }
+    }
+}
+
+fn spawn_player(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<Tuning>) {
     let (x, y, facing) = level.0.start();
     let [wx, wy, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
     let yaw = facing.yaw();
@@ -107,7 +120,7 @@ fn spawn_player(mut commands: Commands, level: Res<CurrentLevel>) {
             let mut camera = body.spawn((
                 PlayerCamera,
                 Camera3d::default(),
-                Projection::from(PerspectiveProjection { fov: FOV, near: NEAR, ..default() }),
+                world_projection(&tuning),
                 exposure,
                 // Untonemapped, as the turntable draws, so the toon bands stay crisp.
                 Tonemapping::Linear,
@@ -168,6 +181,7 @@ fn look(
 
 fn walk(
     time: Res<Time>,
+    tuning: Res<Tuning>,
     input: ActionInput,
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
@@ -179,27 +193,28 @@ fn walk(
         return;
     }
     let (locomotion, gait, transform, slowed) = &mut *body;
-    let speed = if input.pressed(Action::Hurry) { HURRY_SPEED } else { WALK_SPEED } * slowed.map_or(1.0, |s| s.0);
+    let moving = &tuning.moving;
+    let speed = if input.pressed(Action::Hurry) { moving.hurry_speed } else { moving.walk_speed } * slowed.map_or(1.0, |s| s.0);
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
-    locomotion.velocity.smooth_nudge(&wanted, ACCELERATION, dt);
+    locomotion.velocity.smooth_nudge(&wanted, moving.acceleration, dt);
 
     let from = floor(transform.translation);
     let blocked = blocked_by(&level.0, &blocked_cells);
     let obstacles = obstacles.as_deref().map_or(&[][..], |o| &o.0[..]);
-    let to = slide_around(from, from + locomotion.velocity * dt, BODY_RADIUS, blocked, obstacles);
+    let to = slide_around(from, from + locomotion.velocity * dt, moving.body_radius, blocked, obstacles);
     // Walking into a wall leaves only the speed along it.
     locomotion.velocity = (to - from) / dt;
     transform.translation.x = to.x;
     transform.translation.z = to.y;
     gait.phase = (gait.phase + (to - from).length() / STRIDE * std::f32::consts::TAU) % std::f32::consts::TAU;
-    gait.pace = (locomotion.velocity.length() / WALK_SPEED).min(1.5);
+    gait.pace = (locomotion.velocity.length() / moving.walk_speed.max(1e-3)).min(1.5);
 }
 
 /// A small step bob of the head ([`Gait::bob`]).
-pub(crate) fn bob_head(body: Single<&Gait, With<Player>>, mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
-    let bob = body.bob();
+pub(crate) fn bob_head(tuning: Res<Tuning>, body: Single<&Gait, With<Player>>, mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
+    let bob = body.bob() * tuning.view.head_bob;
     camera.translation = Vec3::new(BOB_SWAY * bob.x, EYE_HEIGHT - BOB_HEIGHT * bob.y, 0.0);
 }
 
@@ -300,6 +315,45 @@ fn exit_normal(previous: Vec2, min: Vec2, max: Vec2) -> Vec2 {
 mod tests {
     use super::*;
 
+    /// The body's radius as shipped.
+    fn body_radius() -> f32 {
+        Tuning::default().moving.body_radius
+    }
+
+    /// How far the body walks forward in `frames` frames of 1/60 s with W held, after
+    /// `tune` changes the tuning.
+    fn walked(frames: u32, tune: impl Fn(&mut Tuning)) -> f32 {
+        use bevy::time::TimeUpdateStrategy;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .insert_resource(CurrentLevel(fb_level::generate(1207)))
+            .init_resource::<Keymap>()
+            .init_resource::<BlockedCells>()
+            .init_resource::<Tuning>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, walk);
+        app.update();
+        tune(&mut app.world_mut().resource_mut::<Tuning>());
+        let (x, y, facing) = app.world().resource::<CurrentLevel>().0.start();
+        let [wx, wy, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
+        let start = Vec3::new(wx, wy, wz);
+        let body = app.world_mut().spawn((Player, Locomotion { yaw: facing.yaw(), ..default() }, Transform::from_translation(start).with_rotation(Quat::from_rotation_y(facing.yaw())))).id();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+        for _ in 0..frames {
+            app.update();
+        }
+        app.world().get::<Transform>(body).unwrap().translation.distance(start)
+    }
+
+    #[test]
+    fn the_walking_pace_follows_the_tuning() {
+        let usual = walked(10, |_| {});
+        let half = walked(10, |t| t.moving.walk_speed *= 0.5);
+        assert!(usual > 1.0, "{usual}");
+        assert!((half / usual - 0.5).abs() < 0.02, "half the pace walks half as far: {half} against {usual}");
+    }
+
     #[test]
     fn sensitivity_scales_mouse_look_and_invert_flips_it() {
         let usual = GameSettings::default();
@@ -326,7 +380,7 @@ mod tests {
     }
 
     fn clear(at: Vec2, blocked: &impl Fn(i32, i32) -> bool) -> bool {
-        !overlaps_blocked(at, BODY_RADIUS, blocked)
+        !overlaps_blocked(at, body_radius(), blocked)
     }
 
     const ROOM: &[&str] = &["#####", "#...#", "#...#", "#...#", "#####"];
@@ -346,7 +400,7 @@ mod tests {
     fn free_moves_are_untouched() {
         let blocked = map(ROOM);
         let (from, to) = (centre(2, 2), centre(2, 2) + Vec2::new(3.0, -4.0));
-        let end = slide(from, to, BODY_RADIUS, &blocked);
+        let end = slide(from, to, body_radius(), &blocked);
         assert!(end.abs_diff_eq(to, 1e-4), "{end}");
     }
 
@@ -356,10 +410,10 @@ mod tests {
         for i in 0..72 {
             let angle = i as f32 * 5f32.to_radians();
             let to = centre(2, 2) + Vec2::from_angle(angle) * 100.0;
-            let end = slide(centre(2, 2), to, BODY_RADIUS, &blocked);
+            let end = slide(centre(2, 2), to, body_radius(), &blocked);
             assert!(clear(end, &blocked), "angle {i}: {end} overlaps rock");
-            let inside = Vec2::splat(CELL + BODY_RADIUS - 1e-3);
-            assert!(end.cmpge(inside).all() && end.cmple(Vec2::splat(4.0 * CELL - BODY_RADIUS + 1e-3)).all(), "angle {i}: {end}");
+            let inside = Vec2::splat(CELL + body_radius() - 1e-3);
+            assert!(end.cmpge(inside).all() && end.cmple(Vec2::splat(4.0 * CELL - body_radius() + 1e-3)).all(), "angle {i}: {end}");
         }
     }
 
@@ -367,8 +421,8 @@ mod tests {
     fn diagonal_moves_slide_along_a_wall() {
         let blocked = map(ROOM);
         // Up against the north wall, moving north-east: the east part survives.
-        let from = Vec2::new(centre(2, 1).x, CELL + BODY_RADIUS);
-        let end = slide(from, from + Vec2::new(5.0, -5.0), BODY_RADIUS, &blocked);
+        let from = Vec2::new(centre(2, 1).x, CELL + body_radius());
+        let end = slide(from, from + Vec2::new(5.0, -5.0), body_radius(), &blocked);
         assert!((end.x - (from.x + 5.0)).abs() < 1e-3, "{end}");
         assert!((end.y - from.y).abs() < 1e-3, "{end}");
     }
@@ -376,8 +430,8 @@ mod tests {
     #[test]
     fn inner_corners_hold_on_both_walls() {
         let blocked = map(ROOM);
-        let end = slide(centre(1, 1), centre(1, 1) - Vec2::splat(30.0), BODY_RADIUS, &blocked);
-        assert!(end.abs_diff_eq(Vec2::splat(CELL + BODY_RADIUS), 1e-3), "{end}");
+        let end = slide(centre(1, 1), centre(1, 1) - Vec2::splat(30.0), body_radius(), &blocked);
+        assert!(end.abs_diff_eq(Vec2::splat(CELL + body_radius()), 1e-3), "{end}");
     }
 
     #[test]
@@ -385,7 +439,7 @@ mod tests {
         // A pillar at (2, 2); brush past its north-west corner going east.
         let blocked = map(&["#####", "#...#", "#.#.#", "#...#", "#####"]);
         let from = Vec2::new(centre(1, 1).x, 2.0 * CELL - 1.0);
-        let end = slide(from, from + Vec2::new(30.0, 0.0), BODY_RADIUS, &blocked);
+        let end = slide(from, from + Vec2::new(30.0, 0.0), body_radius(), &blocked);
         assert!(clear(end, &blocked), "{end}");
         assert!(end.x > from.x + 25.0, "snagged on the corner at {end}");
     }
@@ -393,7 +447,7 @@ mod tests {
     #[test]
     fn corridors_one_cell_wide_are_walkable() {
         let blocked = map(&["###", "#.#", "#.#", "#.#", "###"]);
-        let end = slide(centre(1, 3), centre(1, 1), BODY_RADIUS, &blocked);
+        let end = slide(centre(1, 3), centre(1, 1), body_radius(), &blocked);
         assert!(end.abs_diff_eq(centre(1, 1), 1e-3), "{end}");
     }
 
@@ -401,7 +455,7 @@ mod tests {
     fn diagonal_gaps_between_rock_corners_do_not_let_the_body_through() {
         let blocked = map(&["####", "#..#", "#.##", "##.#", "####"]);
         // (1, 2) and (2, 3) meet only at a corner, between rock (2, 2) and (1, 3).
-        let end = slide(centre(1, 2), centre(2, 3), BODY_RADIUS, &blocked);
+        let end = slide(centre(1, 2), centre(2, 3), body_radius(), &blocked);
         assert!(clear(end, &blocked), "{end}");
         assert!(end.x < 2.0 * CELL && end.y < 3.0 * CELL, "squeezed through to {end}");
     }
@@ -410,9 +464,9 @@ mod tests {
     fn high_speed_does_not_tunnel_through_rock() {
         // One cell of rock between two rooms.
         let blocked = map(&["#####", "#.#.#", "#####"]);
-        let end = slide(centre(1, 1), centre(3, 1), BODY_RADIUS, &blocked);
-        assert!(end.x <= 2.0 * CELL - BODY_RADIUS + 1e-3, "tunnelled to {end}");
-        let far = slide(centre(1, 1), centre(1, 1) + Vec2::new(10_000.0, 7.0), BODY_RADIUS, &blocked);
+        let end = slide(centre(1, 1), centre(3, 1), body_radius(), &blocked);
+        assert!(end.x <= 2.0 * CELL - body_radius() + 1e-3, "tunnelled to {end}");
+        let far = slide(centre(1, 1), centre(1, 1) + Vec2::new(10_000.0, 7.0), body_radius(), &blocked);
         assert!(clear(far, &blocked) && far.x < 2.0 * CELL, "tunnelled to {far}");
     }
 
@@ -420,25 +474,25 @@ mod tests {
     fn the_body_cannot_walk_through_a_circle_and_slides_round_it() {
         let open = |_: i32, _: i32| false;
         let folk = [Obstacle::Circle { centre: Vec2::new(0.0, -20.0), radius: 2.5 }];
-        let clear = |at: Vec2| !folk[0].overlaps(at, BODY_RADIUS);
+        let clear = |at: Vec2| !folk[0].overlaps(at, body_radius());
         // Straight at them: stopped short.
-        let end = slide_around(Vec2::ZERO, Vec2::new(0.0, -40.0), BODY_RADIUS, open, &folk);
+        let end = slide_around(Vec2::ZERO, Vec2::new(0.0, -40.0), body_radius(), open, &folk);
         assert!(clear(end) && end.y > -20.0, "{end}");
         // Walking at them all the way, frame by frame, never gets through.
         let mut at = Vec2::ZERO;
         for _ in 0..200 {
-            at = slide_around(at, at + Vec2::new(0.0, -0.5), BODY_RADIUS, open, &folk);
+            at = slide_around(at, at + Vec2::new(0.0, -0.5), body_radius(), open, &folk);
             assert!(clear(at), "{at}");
         }
         // A glancing step slides round their edge and on past.
         let mut at = Vec2::new(1.0, 0.0);
         for _ in 0..200 {
-            at = slide_around(at, at + Vec2::new(0.0, -0.5), BODY_RADIUS, open, &folk);
+            at = slide_around(at, at + Vec2::new(0.0, -0.5), body_radius(), open, &folk);
             assert!(clear(at), "{at}");
         }
         assert!(at.y < -30.0, "snagged at {at}");
         // Far from them nothing changes.
-        assert_eq!(slide_around(Vec2::ZERO, Vec2::new(5.0, 0.0), BODY_RADIUS, open, &folk), Vec2::new(5.0, 0.0));
+        assert_eq!(slide_around(Vec2::ZERO, Vec2::new(5.0, 0.0), body_radius(), open, &folk), Vec2::new(5.0, 0.0));
     }
 
     #[test]
@@ -447,8 +501,8 @@ mod tests {
         let chest = [Obstacle::Rect { centre: Vec2::new(0.0, -20.0), half: Vec2::new(4.5, 2.4), yaw: 0.3 }];
         let mut at = Vec2::ZERO;
         for _ in 0..200 {
-            at = slide_around(at, at + Vec2::new(0.0, -0.5), BODY_RADIUS, open, &chest);
-            assert!(!chest[0].overlaps(at, BODY_RADIUS), "{at}");
+            at = slide_around(at, at + Vec2::new(0.0, -0.5), body_radius(), open, &chest);
+            assert!(!chest[0].overlaps(at, body_radius()), "{at}");
         }
         // Pressing on into its slanted face slid the body along it and round its end, wide of
         // the chest's half width.
@@ -473,7 +527,7 @@ mod tests {
         let cells = BlockedCells([door].into_iter().collect());
         let from = centre(x as i32, y as i32);
         let to = centre(door.0, door.1);
-        let end = slide(from, to, BODY_RADIUS, blocked_by(&level, &cells));
-        assert!(end.distance(from + (to - from).normalize() * (CELL / 2.0 - BODY_RADIUS)) < 1e-3, "{end}");
+        let end = slide(from, to, body_radius(), blocked_by(&level, &cells));
+        assert!(end.distance(from + (to - from).normalize() * (CELL / 2.0 - body_radius())) < 1e-3, "{end}");
     }
 }

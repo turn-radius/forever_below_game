@@ -12,6 +12,7 @@ rust-version = "1.97.1"
 bevy = "0.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+toml = "1"
 procgen_rng = { path = "crates/procgen_rng" }
 armory = { path = "crates/armory" }
 fb_items = { path = "crates/fb_items" }

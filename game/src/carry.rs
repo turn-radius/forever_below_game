@@ -55,8 +55,9 @@ use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle
 use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
+use crate::tuning::{LightTuning, Tuning};
 use crate::ui::{BG, BRIGHT};
-use crate::view_model::{VIEW_MODEL_FOV_DEGREES, held_in_view, side_of};
+use crate::view_model::{held_in_view, side_of};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
 pub const VIEW_MODEL_LAYER: usize = 1;
@@ -75,8 +76,8 @@ pub const DROP_SPREAD: f32 = 5.0;
 /// The flame of a lit thing no hold fits ([`held_pose`]) in the view model, in camera space:
 /// low on the right, about a metre out as the view model camera sees it. Held in the off hand,
 /// it is low on the left. Torches and lanterns are placed by `crate::view_model`. Where it was
-/// through the old 60-degree view, drawn larger through the narrower one
-/// ([`VIEW_MODEL_FOV_DEGREES`]).
+/// through the old 60-degree view, drawn larger through the narrower one (`held_fov_degrees`,
+/// [`crate::tuning::ViewTuning`]).
 const HELD_FLAME: Vec3 = Vec3::new(4.03, -1.94, -11.0);
 
 /// Where the view model stands in world space: far below any level, out of reach of every
@@ -96,21 +97,14 @@ const HELD_LIGHT_OFFSET: Vec3 = Vec3::new(-3.0, 3.0, 7.0);
 /// Lowest a light given by an item on the floor hangs, in world units (60 cm).
 const FLOOR_LIGHT_HEIGHT: f32 = 6.0;
 
-/// How far a lit thing's light reaches in the world, in multiples of its [`LightAnchor`]
-/// radius: the radius is its bright light, and dim light runs as far again beyond it, as a
-/// torch's does in the D&D 5e SRD 5.1 ("Adventuring Gear": bright light in a 20-foot radius and
-/// dim light for an additional 20 feet).
-const DIM_REACH: f32 = 2.0;
-/// How bright a lit thing's light is close up, as a multiple of full. Over 1 widens the fully
-/// lit core; the shader caps it at full, so nothing near burns white.
-const WORLD_PEAK: f32 = 1.0;
 /// The held torch's own light on the stage: close-up strength and reach, set so the whole
 /// torch sits in its upper steps and reads firelit.
 const HELD_PEAK: f32 = 1.8;
 const HELD_REACH: f32 = 40.0;
 
 /// How far what is held bobs at walking pace, in view model units, as `(sideways, down)`: a
-/// hand swings further than the head bobs (our own tuning, about 3 cm and 2.5 cm at a metre).
+/// hand swings further than the head bobs (our own tuning, about 3 cm and 2.5 cm at a metre),
+/// at a `head_bob` of 1 ([`crate::tuning::ViewTuning`]).
 const HELD_BOB: Vec2 = Vec2::new(0.3, 0.25);
 /// How far behind a turn of the head what is held trails: the angle it lags is the turn rate
 /// times this many seconds, up to [`HELD_LAG_MAX`] radians either way.
@@ -133,6 +127,7 @@ impl Plugin for CarryPlugin {
             .init_resource::<Character>()
             .init_resource::<Keymap>()
             .init_resource::<Aimed>()
+            .init_resource::<Tuning>()
             // Only a delve that opens at startup can lack a player; one begun from the title
             // spawns its own on entering.
             .add_systems(PostStartup, spawn_stand_in_camera.run_if(in_state(AppState::Delving)).run_if(no_player_camera))
@@ -143,6 +138,8 @@ impl Plugin for CarryPlugin {
                     lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
                     equip_player_camera,
                     show_held.after(equip_player_camera),
+                    (widen_view_models, rescale_floor_items).run_if(resource_changed::<Tuning>),
+                    relight_given_lights,
                     follow_player_camera,
                     sway_held,
                     (aim, pick_up.run_if(level_has_focus)).chain(),
@@ -212,20 +209,25 @@ pub fn lie_down(size: Vec3) -> Quat {
     }
 }
 
-/// How much larger than its own size an item lying in the level is drawn, about where it
-/// rests: the user's call ("scaled up by 15%"), so things on the floor read from standing
-/// height. Its pickup box and floor radius grow with it.
-pub const FLOOR_SCALE: f32 = 1.15;
-
-/// Where an item rests: laid down by [`lie_down`], turned `yaw` about +Y, drawn
-/// [`FLOOR_SCALE`] times its size, centred over `at` on the floor (y = 0) with its lowest point
-/// touching it. `points` are its item-space vertices. `None` for an item with no vertices.
-pub fn rest_on_floor(points: &[Vec3], at: Vec3, yaw: f32) -> Option<Transform> {
+/// Where an item rests: laid down by [`lie_down`], turned `yaw` about +Y, drawn `scale` times
+/// its size (`floor_item_scale`, [`crate::tuning::ViewTuning`]), centred over `at` on the floor
+/// (y = 0) with its lowest point touching it. `points` are its item-space vertices. `None` for
+/// an item with no vertices.
+pub fn rest_on_floor(points: &[Vec3], at: Vec3, yaw: f32, scale: f32) -> Option<Transform> {
     let (min, max) = bounds(points.iter().copied())?;
     let rotation = Quat::from_rotation_y(yaw) * lie_down(max - min);
-    let (min, max) = bounds(points.iter().map(|&p| rotation * p * FLOOR_SCALE))?;
+    let (min, max) = bounds(points.iter().map(|&p| rotation * p * scale))?;
     let centre = (min + max) * 0.5;
-    Some(Transform { translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z), rotation, scale: Vec3::splat(FLOOR_SCALE) })
+    Some(Transform { translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z), rotation, scale: Vec3::splat(scale) })
+}
+
+/// `rest` (from [`rest_on_floor`] over `at`) drawn at `scale` instead: everything it places
+/// grows or shrinks about `at` on the floor, so the item stays centred there with its lowest
+/// point on the floor.
+pub fn rescale_on_floor(rest: Transform, at: Vec3, scale: f32) -> Transform {
+    let anchor = Vec3::new(at.x, 0.0, at.z);
+    let ratio = if rest.scale.x.abs() > 1e-6 { scale / rest.scale.x } else { 1.0 };
+    Transform { translation: anchor + (rest.translation - anchor) * ratio, scale: Vec3::splat(scale), ..rest }
 }
 
 fn bounds(points: impl Iterator<Item = Vec3>) -> Option<(Vec3, Vec3)> {
@@ -369,10 +371,11 @@ impl HeldSway {
     }
 
     /// Where it is held this frame with the player's step at `gait`: its rest bobbed by
-    /// [`HELD_BOB`], then turned about the eye against the lag, so a head turning left leaves
-    /// it trailing right and a head tipping up leaves it trailing low.
-    pub fn transform(&self, gait: Gait) -> Transform {
-        let bob = gait.bob() * HELD_BOB;
+    /// [`HELD_BOB`] times `bob` (the tuning's `head_bob`), then turned about the eye against the
+    /// lag, so a head turning left leaves it trailing right and a head tipping up leaves it
+    /// trailing low.
+    pub fn transform(&self, gait: Gait, bob: f32) -> Transform {
+        let bob = gait.bob() * HELD_BOB * bob;
         let trail = Quat::from_euler(EulerRot::YXZ, -self.lag.x, -self.lag.y, 0.0);
         let held = self.rest.translation + Vec3::new(bob.x, -bob.y, 0.0);
         Transform { translation: trail * held, rotation: trail * self.rest.rotation, ..self.rest }
@@ -449,13 +452,13 @@ fn no_player_camera(cameras: Query<(), With<PlayerCamera>>) -> bool {
     cameras.is_empty()
 }
 
-fn spawn_stand_in_camera(mut commands: Commands, level: Res<CurrentLevel>) {
+fn spawn_stand_in_camera(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<Tuning>) {
     warn!("no PlayerCamera after startup; spawning a stand-in at the level's start");
     commands.spawn((
         StandInCamera,
         PlayerCamera,
         Camera3d::default(),
-        Projection::from(PerspectiveProjection { fov: 70f32.to_radians(), near: 0.05, ..default() }),
+        crate::player::world_projection(&tuning),
         Exposure::INDOOR,
         // As in the turntable: a tone curve would flatten the bands.
         Tonemapping::Linear,
@@ -492,6 +495,7 @@ pub(crate) fn lay_out_items(
     level: Res<CurrentLevel>,
     old: Query<(Entity, &FloorItem)>,
     mut inventory: ResMut<Inventory>,
+    tuning: Option<Res<Tuning>>,
     mut spawner: ItemSpawner,
 ) {
     for (entity, floor) in &old {
@@ -501,7 +505,7 @@ pub(crate) fn lay_out_items(
     for spot in &level.0.items {
         if let Some(item) = fb_items::roll_loot(spot.family, spot.seed) {
             let id = inventory.add(item);
-            spawn_floor_item(&mut spawner, &inventory, id, *spot);
+            spawn_floor_item(&mut spawner, &inventory, id, *spot, &tuning.as_deref().cloned().unwrap_or_default());
         }
     }
 }
@@ -512,14 +516,14 @@ pub fn item_points(mesh: &armory::ItemMesh) -> Vec<Vec3> {
 }
 
 /// Spawns item `id` resting on the floor at `spot` as a [`FloorItem`], drawn with its own
-/// palette, dressed condition and etching, with its light if it gives one. `None` for an item
-/// with no vertices or one the inventory does not know.
-pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: ItemId, spot: ItemSpot) -> Option<Entity> {
+/// palette, dressed condition and etching at the tuning's floor scale, with its light if it
+/// gives one. `None` for an item with no vertices or one the inventory does not know.
+pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: ItemId, spot: ItemSpot, tuning: &Tuning) -> Option<Entity> {
     let item = inventory.item(id)?;
     let mesh = item.shape.build();
     let points = item_points(&mesh);
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
-    let transform = rest_on_floor(&points, at, spot.yaw)?;
+    let transform = rest_on_floor(&points, at, spot.yaw, tuning.view.floor_item_scale)?;
     let (min, max) = bounds(points.iter().copied())?;
     let light = item_light(&item.shape);
     let mut root = spawner.spawn(&mesh, &appearance_of(&item.shape));
@@ -531,18 +535,17 @@ pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: It
         let mut flame = transform.transform_point(Vec3::from_array(anchor.position));
         flame.y = flame.y.max(FLOOR_LIGHT_HEIGHT);
         let at = transform.compute_affine().inverse().transform_point3(flame);
-        root.insert(Propagate(NotShadowCaster)).with_child((world_light(&anchor, &Exposure::INDOOR), Transform::from_translation(at)));
+        root.insert(Propagate(NotShadowCaster)).with_child((given_light(anchor, Exposure::INDOOR, &tuning.light), Transform::from_translation(at)));
     }
     Some(root.id())
 }
 
-/// An item's footprint radius on the floor once laid down ([`lie_down`]) and drawn
-/// [`FLOOR_SCALE`] times its size: half the larger of its level extents. 0 for an item with no
-/// vertices.
-pub fn floor_radius(points: &[Vec3]) -> f32 {
+/// An item's footprint radius on the floor once laid down ([`lie_down`]) and drawn `scale`
+/// times its size: half the larger of its level extents. 0 for an item with no vertices.
+pub fn floor_radius(points: &[Vec3], scale: f32) -> f32 {
     bounds(points.iter().copied()).map_or(0.0, |(min, max)| {
         let size = (lie_down(max - min) * (max - min)).abs();
-        size.x.max(size.z) * 0.5 * FLOOR_SCALE
+        size.x.max(size.z) * 0.5 * scale
     })
 }
 
@@ -571,11 +574,12 @@ pub fn set_down(
     eye: &GlobalTransform,
     id: ItemId,
     aside: f32,
+    tuning: &Tuning,
 ) -> Option<Entity> {
     let item = inventory.item(id)?;
     // Straight down, the top of the head points the way the body faces.
     let forward = eye.forward().as_vec3().xz().try_normalize().unwrap_or_else(|| eye.up().as_vec3().xz().normalize_or(Vec2::NEG_Y));
-    let radius = floor_radius(&item_points(&item.shape.build()));
+    let radius = floor_radius(&item_points(&item.shape.build()), tuning.view.floor_item_scale);
     let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells), &obstacles.0) / CELL;
     // Laid square to the player's view.
     let yaw = (-forward.x).atan2(-forward.y);
@@ -583,7 +587,7 @@ pub fn set_down(
     // ([`fb_items::roll_loot`]); what is spawned is the item itself.
     let spot = ItemSpot { x: at.x, y: at.y, yaw, family: item.shape.family(), seed: item.seed };
     level.items.push(spot);
-    spawn_floor_item(spawner, inventory, id, spot)
+    spawn_floor_item(spawner, inventory, id, spot, tuning)
 }
 
 /// Lifts a floor item out of the level: out of the level data, without respawning what is
@@ -595,17 +599,70 @@ pub fn lift(commands: &mut Commands, level: &mut Level, entity: Entity, floor: &
     commands.entity(entity).despawn();
 }
 
-/// A flickering point light in `anchor`'s colour and flicker, `peak` times full close up and
-/// reaching `range` units.
-fn anchor_light(anchor: &LightAnchor, peak: f32, range: f32, exposure: &Exposure) -> PointLight {
+/// A flickering point light in `anchor`'s colour and flicker (times the tuning's
+/// `flicker_depth`), `peak` times full close up and reaching `range` units.
+fn anchor_light(anchor: &LightAnchor, peak: f32, range: f32, exposure: &Exposure, light: &LightTuning) -> PointLight {
     let color = Color::srgb(anchor.color.0, anchor.color.1, anchor.color.2);
-    Torch::flickering(point_light(color, peak, range, exposure), anchor.flicker)
+    Torch::flickering(point_light(color, peak, range, exposure), anchor.flicker * light.flicker_depth)
 }
 
-/// An anchor's light in the world: bright out to its radius, dim to [`DIM_REACH`] times it,
-/// and shadowed, so it never reaches through rock into the next corridor.
-pub fn world_light(anchor: &LightAnchor, exposure: &Exposure) -> PointLight {
-    cast_shadows(anchor_light(anchor, WORLD_PEAK, anchor.radius * DIM_REACH, exposure))
+/// An anchor's light in the world: `torch_peak` close up, bright out to its radius and dim to
+/// `torch_reach` times it ([`LightTuning`]), and shadowed, so it never reaches through rock into
+/// the next corridor.
+pub fn world_light(anchor: &LightAnchor, exposure: &Exposure, light: &LightTuning) -> PointLight {
+    cast_shadows(anchor_light(anchor, light.torch_peak, anchor.radius * light.torch_reach, exposure, light))
+}
+
+/// On a lit thing's light in the world ([`world_light`]): what it is the light of, so it can be
+/// lit again when the tuning changes ([`relight_given_lights`]).
+#[derive(Component, Clone, Copy)]
+pub struct GivenLight {
+    pub anchor: LightAnchor,
+    pub exposure: Exposure,
+}
+
+/// A lit thing's light in the world, with what it is the light of.
+pub fn given_light(anchor: LightAnchor, exposure: Exposure, light: &LightTuning) -> (PointLight, GivenLight) {
+    (world_light(&anchor, &exposure, light), GivenLight { anchor, exposure })
+}
+
+/// Lights every lit thing's light again when the tuning changes (in hand, on the floor, held by
+/// folk), and each new one as it appears, so one spawned without the tuning to hand follows it.
+fn relight_given_lights(tuning: Res<Tuning>, mut lights: Query<(Ref<GivenLight>, &mut PointLight)>) {
+    for (given, mut light) in &mut lights {
+        if !tuning.is_changed() && !given.is_added() {
+            continue;
+        }
+        *light = world_light(&given.anchor, &given.exposure, &tuning.light);
+    }
+}
+
+/// Redraws every floor item at the tuning's floor scale, about where it rests.
+fn rescale_floor_items(tuning: Res<Tuning>, mut items: Query<(&FloorItem, &mut Transform)>) {
+    let scale = tuning.view.floor_item_scale;
+    for (floor, mut transform) in &mut items {
+        if transform.scale.x != scale {
+            let at = Vec3::from_array(Level::world(floor.spot.x, floor.spot.y));
+            *transform = rescale_on_floor(*transform, at, scale);
+        }
+    }
+}
+
+/// The view model camera's projection for `tuning`.
+fn view_model_projection(tuning: &Tuning) -> Projection {
+    Projection::from(PerspectiveProjection { fov: tuning.view.held_fov_degrees.to_radians(), near: 0.05, ..default() })
+}
+
+/// Keeps every view model camera's field of view to the tuning's.
+fn widen_view_models(tuning: Res<Tuning>, mut cameras: Query<&mut Projection, With<ViewModelCamera>>) {
+    let fov = tuning.view.held_fov_degrees.to_radians();
+    for mut projection in &mut cameras {
+        if let Projection::Perspective(perspective) = &mut *projection
+            && perspective.fov != fov
+        {
+            perspective.fov = fov;
+        }
+    }
 }
 
 /// How a camera draws, which the view model camera copies from the player camera.
@@ -613,7 +670,7 @@ type CameraLook = (Option<&'static Exposure>, Option<&'static Tonemapping>, Opti
 
 /// Gives each new [`PlayerCamera`] its view model camera, on the stage, and the HUD. What it
 /// carries is [`carry_light`]'s.
-fn equip_player_camera(mut commands: Commands, cameras: Query<(Entity, CameraLook), (With<PlayerCamera>, Without<Equipped>)>) {
+fn equip_player_camera(mut commands: Commands, tuning: Res<Tuning>, cameras: Query<(Entity, CameraLook), (With<PlayerCamera>, Without<Equipped>)>) {
     for (camera, (exposure, tonemapping, msaa)) in &cameras {
         let exposure = exposure.copied().unwrap_or_default();
         let view_model = commands
@@ -621,7 +678,7 @@ fn equip_player_camera(mut commands: Commands, cameras: Query<(Entity, CameraLoo
                 ViewModelCamera { follows: camera },
                 Camera3d::default(),
                 Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
-                Projection::from(PerspectiveProjection { fov: VIEW_MODEL_FOV_DEGREES.to_radians(), near: 0.05, ..default() }),
+                view_model_projection(&tuning),
                 exposure,
                 tonemapping.copied().unwrap_or(Tonemapping::Linear),
                 msaa.copied().unwrap_or_default(),
@@ -662,21 +719,22 @@ pub fn held_pose(item: &Item, hand: fb_items::Slot) -> (Vec3, Quat) {
 /// light held at `rest` in `hand`: off its flame toward the eye, up and in, so the whole light
 /// sits at much the same distance from it and reads firelit rather than burnt white.
 pub fn stage_light_at(anchor: &LightAnchor, rest: Transform, hand: fb_items::Slot) -> Vec3 {
+    let scale = rest.scale.x;
     let flame = rest.transform_point(Vec3::from_array(anchor.position));
     let toward_eye = if side_of(hand) == fb_body::OFF_HAND { HELD_LIGHT_OFFSET * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_LIGHT_OFFSET };
     // As far off the flame, for the item's size, as before it was drawn larger.
-    flame + toward_eye * crate::view_model::HELD_SCALE
+    flame + toward_eye * scale
 }
 
-/// What each hand holds, placed in the view model camera's space: each item fitted to the
-/// delver's body as on the doll and carried into the view (`crate::view_model`), or, for a lit
-/// thing no hold fits, held by its flame ([`held_pose`]). Other things a hand might hold that
-/// no hold fits are not drawn.
-pub fn held_items(inventory: &Inventory, character: &Character) -> Vec<(fb_items::Slot, Item, Transform, Option<Vec3>)> {
+/// What each hand holds, placed in the view model camera's space and drawn `scale` times its
+/// size: each item fitted to the delver's body as on the doll and carried into the view
+/// (`crate::view_model`), or, for a lit thing no hold fits, held by its flame ([`held_pose`]).
+/// Other things a hand might hold that no hold fits are not drawn.
+pub fn held_items(inventory: &Inventory, character: &Character, scale: f32) -> Vec<(fb_items::Slot, Item, Transform, Option<Vec3>)> {
     use fb_items::Slot;
     let shape = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).map(|item| item.shape.clone());
     let (main, off) = (shape(Slot::Mainhand), shape(Slot::Offhand));
-    let fitted = held_in_view(&character.spec(), main.as_ref(), off.as_ref());
+    let fitted = held_in_view(&character.spec(), main.as_ref(), off.as_ref(), scale);
     [(Slot::Mainhand, main), (Slot::Offhand, off)]
         .into_iter()
         .filter_map(|(hand, item)| {
@@ -686,28 +744,28 @@ pub fn held_items(inventory: &Inventory, character: &Character) -> Vec<(fb_items
             let item = item?;
             let anchor = item_light(&item)?;
             let (flame, rotation) = held_pose(&item, hand);
-            let scale = crate::view_model::HELD_SCALE;
             Some((hand, item, Transform { translation: flame - rotation * Vec3::from_array(anchor.position) * scale, rotation, scale: Vec3::splat(scale) }, None))
         })
         .collect()
 }
 
 /// Keeps each player camera's view model in step with the hands ([`held_items`]) and its
-/// carried light ([`carried_light`]): when either changes, the old view model and its lights go
-/// and the new ones are spawned, the carried light's light in the world from its
-/// [`LightAnchor`]. With nothing lit in hand there is no light; with nothing in hand, nothing is
+/// carried light ([`carried_light`]): when either changes, or the tuning does, the old view
+/// model and its lights go and the new ones are spawned, the carried light's light in the world
+/// from its [`LightAnchor`]. With nothing lit in hand there is no light; with nothing in hand, nothing is
 /// drawn.
 fn show_held(
     mut commands: Commands,
     inventory: Res<Inventory>,
     character: Res<Character>,
+    tuning: Res<Tuning>,
     mut cameras: Query<(Entity, &mut Carrying, Option<&Exposure>), With<PlayerCamera>>,
     view_models: Query<(Entity, &ViewModelCamera)>,
     mut spawner: ItemSpawner,
 ) {
     let wanted = HeldKey::of(&inventory, &character);
     for (camera, mut carrying, exposure) in &mut cameras {
-        if carrying.held == Some(wanted) {
+        if carrying.held == Some(wanted) && !tuning.is_changed() {
             continue;
         }
         let Some((view_model, _)) = view_models.iter().find(|(_, v)| v.follows == camera) else { continue };
@@ -718,7 +776,7 @@ fn show_held(
         let exposure = exposure.copied().unwrap_or_default();
         let view_layer = RenderLayers::layer(VIEW_MODEL_LAYER);
         let light_hand = carried_light(&inventory).map(|(hand, _)| hand);
-        for (hand, item, rest, point) in held_items(&inventory, &character) {
+        for (hand, item, rest, point) in held_items(&inventory, &character, tuning.view.held_scale) {
             let mut root = spawner.spawn(&item.build(), &appearance_of(&item));
             root.insert((
                 Name::new(format!("Held {}", item.family().key())),
@@ -734,8 +792,8 @@ fn show_held(
             }
             let Some(anchor) = item_light(&item) else { continue };
             let at = stage_light_at(&anchor, rest, hand);
-            let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure), Transform::from_translation(at), view_layer.clone(), ChildOf(view_model))).id();
-            let world = commands.spawn((world_light(&anchor, &exposure), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
+            let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light), Transform::from_translation(at), view_layer.clone(), ChildOf(view_model))).id();
+            let world = commands.spawn((given_light(anchor, exposure, &tuning.light), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
             carrying.entities.extend([stage_light, world]);
         }
     }
@@ -805,6 +863,7 @@ fn follow_player_camera(
 /// Bobs what is held with the player's steps and trails it behind turns of the head.
 pub(crate) fn sway_held(
     time: Res<Time>,
+    tuning: Res<Tuning>,
     mut held: Query<(&mut HeldSway, &mut Transform, &ChildOf)>,
     view_models: Query<&ViewModelCamera>,
     eyes: Query<(&GlobalTransform, Option<&ChildOf>), With<PlayerCamera>>,
@@ -815,7 +874,7 @@ pub(crate) fn sway_held(
         let Ok((eye, body)) = eyes.get(view_model.follows) else { continue };
         let gait = body.and_then(|b| gaits.get(b.parent()).ok()).copied().unwrap_or_default();
         sway.follow(yaw_pitch(eye), time.delta_secs());
-        *transform = sway.transform(gait);
+        *transform = sway.transform(gait, tuning.view.head_bob);
     }
 }
 
@@ -868,6 +927,11 @@ mod tests {
     use super::*;
     use fb_items::Rarity;
 
+    /// The floor scale as shipped.
+    fn floor_scale() -> f32 {
+        Tuning::default().view.floor_item_scale
+    }
+
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
     }
@@ -891,18 +955,22 @@ mod tests {
             .map(|i| Vec3::new(if i & 1 == 0 { -1.0 } else { 1.5 }, if i & 2 == 0 { -2.0 } else { 7.0 }, if i & 4 == 0 { -0.2 } else { 0.3 }))
             .collect();
         let at = Vec3::new(40.0, 0.0, 60.0);
-        let transform = rest_on_floor(&box_points, at, 0.7).unwrap();
+        let transform = rest_on_floor(&box_points, at, 0.7, floor_scale()).unwrap();
         let placed: Vec<Vec3> = box_points.iter().map(|&p| transform.transform_point(p)).collect();
         let (min, max) = bounds(placed.into_iter()).unwrap();
         assert!(close(min.y, 0.0), "{min}");
         assert!(max.y < 1.0, "a long thing lies down: {max}");
         assert!(close((min.x + max.x) * 0.5, at.x) && close((min.z + max.z) * 0.5, at.z));
-        assert!(rest_on_floor(&[], at, 0.0).is_none());
+        assert!(rest_on_floor(&[], at, 0.0, floor_scale()).is_none());
         // Drawn larger than its own size, still resting on the floor at its spot: the box's
         // thin side (0.5 deep) lies down, that much times the scale high.
-        assert_eq!(transform.scale, Vec3::splat(FLOOR_SCALE));
-        assert!(close(max.y - min.y, 0.5 * FLOOR_SCALE), "{min} {max}");
-        assert!(close(floor_radius(&box_points), 4.5 * FLOOR_SCALE));
+        assert_eq!(transform.scale, Vec3::splat(floor_scale()));
+        assert!(close(max.y - min.y, 0.5 * floor_scale()), "{min} {max}");
+        assert!(close(floor_radius(&box_points, floor_scale()), 4.5 * floor_scale()));
+        // Drawn at another scale it still rests at its spot, as if it had been laid there so.
+        let twice = rescale_on_floor(transform, at, 2.0);
+        let laid = rest_on_floor(&box_points, at, 0.7, 2.0).unwrap();
+        assert!(twice.translation.abs_diff_eq(laid.translation, 1e-4) && twice.scale == laid.scale, "{twice:?}");
         // The pickup box grows with it, and a ray onto its top lands there, in world units.
         let top = Vec3::new((min.x + max.x) * 0.5, max.y, (min.z + max.z) * 0.5);
         let from = top + Vec3::Y * 5.0;
@@ -968,6 +1036,7 @@ mod tests {
             .init_resource::<Assets<crate::render::ToonMaterial>>()
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
             .init_resource::<crate::render::OutlineMaterials>()
+            .init_resource::<Tuning>()
             .add_systems(Update, show_held);
         let camera = app.world_mut().spawn((PlayerCamera, Carrying::default())).id();
         let view_model = app.world_mut().spawn(ViewModelCamera { follows: camera }).id();
@@ -1029,8 +1098,9 @@ mod tests {
 
     #[test]
     fn a_held_lights_stage_light_follows_its_flame_and_its_world_light_stays_by_the_eye() {
-        use crate::view_model::on_screen;
         use fb_body::{BodySpec, Folk};
+        let view = Tuning::default().view;
+        let on_screen = |p| crate::view_model::on_screen(p, view.held_fov_degrees);
         use fb_items::Slot;
         let lantern = (1..500).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap().shape;
         for folk in [Folk::Human, Folk::Gnome] {
@@ -1038,7 +1108,7 @@ mod tests {
             for light in [lit_torch(4).shape, lantern.clone()] {
                 for hand in [Slot::Mainhand, Slot::Offhand] {
                     let (main, off) = if hand == Slot::Mainhand { (Some(&light), None) } else { (None, Some(&light)) };
-                    let held = &held_in_view(&spec, main, off)[0];
+                    let held = &held_in_view(&spec, main, off, view.held_scale)[0];
                     let anchor = item_light(&light).unwrap();
                     let flame = held.transform.transform_point(Vec3::from_array(anchor.position));
                     let at = stage_light_at(&anchor, held.transform, hand);
@@ -1046,7 +1116,7 @@ mod tests {
                     // The stage light keeps its place off the drawn flame, up and toward the eye
                     // and to the inside of the view, where the world light is.
                     let side = if hand == Slot::Offhand { -1.0 } else { 1.0 };
-                    assert!((at - flame).abs_diff_eq(HELD_LIGHT_OFFSET * Vec3::new(side, 1.0, 1.0) * crate::view_model::HELD_SCALE, 1e-4), "{label}");
+                    assert!((at - flame).abs_diff_eq(HELD_LIGHT_OFFSET * Vec3::new(side, 1.0, 1.0) * view.held_scale, 1e-4), "{label}");
                     assert!(at.x * side < flame.x * side && at.y > flame.y && at.z > flame.z, "{label}");
                     // The flame shows on its hand's side of the view, in it.
                     let screen = on_screen(flame).unwrap();
@@ -1072,13 +1142,13 @@ mod tests {
         for _ in 0..30 {
             sway.follow(Vec2::new(0.4, -0.1), 1.0 / 60.0);
         }
-        assert_eq!(sway.transform(Gait { phase: 1.1, pace: 0.0 }), rest());
+        assert_eq!(sway.transform(Gait { phase: 1.1, pace: 0.0 }, 1.0), rest());
     }
 
     #[test]
     fn the_held_torch_moves_with_the_bob_while_walking() {
         let sway = HeldSway::new(rest());
-        let step = |phase: f32| sway.transform(Gait { phase, pace: 1.0 }).translation;
+        let step = |phase: f32| sway.transform(Gait { phase, pace: 1.0 }, 1.0).translation;
         let quarter = std::f32::consts::FRAC_PI_2;
         // At the footfall it is low and to one side; a step later, low and to the other.
         assert!(step(quarter).y < HELD_FLAME.y - 0.2 && step(quarter).x > HELD_FLAME.x + 0.2, "{}", step(quarter));
@@ -1094,14 +1164,14 @@ mod tests {
         for frame in 0..30 {
             sway.follow(Vec2::new(frame as f32 * dt, 0.0), dt);
         }
-        let turning = sway.transform(Gait::default()).translation;
+        let turning = sway.transform(Gait::default(), 1.0).translation;
         assert!(turning.x > HELD_FLAME.x + 0.2, "trails right: {turning}");
         assert!(turning.x < HELD_FLAME.x + 2.0, "only slightly: {turning}");
         // The look stops; the torch comes back to rest.
         for _ in 0..120 {
             sway.follow(Vec2::new(29.0 * dt, 0.0), dt);
         }
-        assert!(sway.transform(Gait::default()).translation.abs_diff_eq(HELD_FLAME, 1e-3));
+        assert!(sway.transform(Gait::default(), 1.0).translation.abs_diff_eq(HELD_FLAME, 1e-3));
         // Across the yaw wrap the turn is the short way round.
         let mut wrap = HeldSway::new(rest());
         wrap.follow(Vec2::new(std::f32::consts::PI - 0.01, 0.0), dt);
@@ -1118,9 +1188,10 @@ mod tests {
     #[test]
     fn lights_in_the_world_cast_shadows() {
         let anchor = item_light(&lit_torch(1207).shape).unwrap();
-        let light = world_light(&anchor, &Exposure::INDOOR);
+        let tuning = LightTuning::default();
+        let light = world_light(&anchor, &Exposure::INDOOR, &tuning);
         assert!(light.shadow_maps_enabled);
-        assert_eq!(light.range, anchor.radius * DIM_REACH);
+        assert_eq!(light.range, anchor.radius * tuning.torch_reach);
     }
 
     #[test]
@@ -1193,6 +1264,7 @@ mod tests {
             .init_resource::<Assets<crate::render::ToonMaterial>>()
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
             .init_resource::<crate::render::OutlineMaterials>()
+            .init_resource::<Tuning>()
             .add_systems(Update, (aim, pick_up).chain());
         (app, pack)
     }
@@ -1209,7 +1281,7 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 move |mut spawner: ItemSpawner, inventory: Res<Inventory>, mut level: ResMut<CurrentLevel>, blocked: Res<BlockedCells>| {
-                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &Obstacles::default(), &GlobalTransform::from(eye), id, 0.0);
+                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &Obstacles::default(), &GlobalTransform::from(eye), id, 0.0, &Tuning::default());
                 },
             )
             .unwrap();

@@ -19,6 +19,9 @@
 //! Sound effects play at [`GameSettings::sound_volume`] ([`sound_effect`]), and turning it
 //! down turns down the ones already playing.
 //!
+//! The mix level, the silences and the effects' level are tuned ([`SoundTuning`]), and follow
+//! the tuning file as it changes.
+//!
 //! Offscreen captures (`FB_SCREENSHOT`) stay silent. With no audio device Bevy logs a warning
 //! and never creates sinks, so the music systems simply idle.
 
@@ -35,6 +38,7 @@ use crate::capture::FrameCapturePlugin;
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
 use crate::settings::GameSettings;
+use crate::tuning::{SoundTuning, Tuning};
 
 /// How far one press moves the music volume.
 pub const MUSIC_VOLUME_STEP: f32 = 0.1;
@@ -85,6 +89,7 @@ pub fn silence_seconds(rng: &mut Mulberry32, gap: (f32, f32)) -> f32 {
 }
 
 /// How loud the music is mixed, how tracks fade, and how long the silences between them last.
+/// The mix and the silences follow the tuning ([`MusicSettings::tuned`]).
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct MusicSettings {
     /// Linear volume at full gain, before the player's [`GameSettings::music_volume`].
@@ -97,8 +102,21 @@ pub struct MusicSettings {
 
 impl Default for MusicSettings {
     fn default() -> Self {
-        MusicSettings { volume: 0.35, fade: 3.0, gap: (45.0, 75.0) }
+        MusicSettings::tuned(&SoundTuning::default(), 3.0)
     }
+}
+
+impl MusicSettings {
+    /// The mix and silences `sound` gives, fading over `fade` seconds.
+    pub fn tuned(sound: &SoundTuning, fade: f32) -> MusicSettings {
+        MusicSettings { volume: sound.music_mix, fade, gap: (sound.silence_min, sound.silence_max) }
+    }
+}
+
+/// Keeps the music's mix and silences to the tuning.
+fn mix_music(tuning: Res<Tuning>, mut settings: ResMut<MusicSettings>) {
+    let tuned = MusicSettings::tuned(&tuning.sound, settings.fade);
+    settings.set_if_neq(tuned);
 }
 
 /// What the music does next: the track last heard, and when the silence after it ends.
@@ -119,6 +137,8 @@ impl Plugin for MusicPlugin {
             .init_resource::<MusicSettings>()
             // Kept as loaded if `SettingsPlugin` came first.
             .init_resource::<GameSettings>()
+            .init_resource::<Tuning>()
+            .add_systems(PreUpdate, mix_music.run_if(resource_changed::<Tuning>).after(crate::tuning::TuningSet))
             .add_systems(Startup, start_music.run_if(not(resource_exists::<FrameCapturePlugin>)))
             .add_systems(OnExit(AppState::Title), fade_out_for_the_delve)
             .add_systems(Update, ((turn_music_volume, play_music.run_if(resource_exists::<PlaylistAudio>)).chain(), turn_sound_volume));
@@ -216,18 +236,25 @@ pub fn turn_music_volume(input: ActionInput, mut settings: ResMut<GameSettings>)
 #[derive(Component, Debug, Default)]
 pub struct SoundEffect;
 
-/// What a sound effect's [`AudioPlayer`] is spawned with: played once and despawned, at
+/// How loud a sound effect plays: the tuning's `effects_volume` times the player's
 /// [`GameSettings::sound_volume`].
-pub fn sound_effect(game: &GameSettings) -> (SoundEffect, PlaybackSettings) {
-    (SoundEffect, PlaybackSettings::DESPAWN.with_volume(Volume::Linear(game.sound_volume.clamp(0.0, 1.0))))
+pub fn effect_volume(game: &GameSettings, tuning: &Tuning) -> f32 {
+    tuning.sound.effects_volume.clamp(0.0, 1.0) * game.sound_volume.clamp(0.0, 1.0)
 }
 
-/// Sound effects already playing follow a change of sound volume the same frame.
-fn turn_sound_volume(game: Res<GameSettings>, global: Res<GlobalVolume>, mut sinks: Query<&mut AudioSink, With<SoundEffect>>) {
-    if game.is_changed() {
+/// What a sound effect's [`AudioPlayer`] is spawned with: played once and despawned, at
+/// [`effect_volume`].
+pub fn sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, PlaybackSettings) {
+    (SoundEffect, PlaybackSettings::DESPAWN.with_volume(Volume::Linear(effect_volume(game, tuning))))
+}
+
+/// Sound effects already playing follow a change of sound volume, or of the tuning, the same
+/// frame.
+fn turn_sound_volume(game: Res<GameSettings>, tuning: Res<Tuning>, global: Res<GlobalVolume>, mut sinks: Query<&mut AudioSink, With<SoundEffect>>) {
+    if game.is_changed() || tuning.is_changed() {
         for mut sink in &mut sinks {
             // Bevy applies `GlobalVolume` only when it creates a sink, so it's folded in here.
-            sink.set_volume(Volume::Linear(global.volume.to_linear() * game.sound_volume.clamp(0.0, 1.0)));
+            sink.set_volume(Volume::Linear(global.volume.to_linear() * effect_volume(&game, &tuning)));
         }
     }
 }

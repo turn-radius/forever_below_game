@@ -105,11 +105,13 @@ pub fn apply_floor_changes(
     mut level: ResMut<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Option<Res<Obstacles>>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
     mut spawner: ItemSpawner,
 ) {
     if changes.0.is_empty() {
         return;
     }
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
     // Into and out of the level data without respawning everything still there.
     let level = &mut level.bypass_change_detection().0;
     let obstacles = obstacles.as_deref().cloned().unwrap_or_default();
@@ -122,7 +124,7 @@ pub fn apply_floor_changes(
             }
             FloorChange::SetDown(id, aside) => {
                 if let Some(eye) = eyes.iter().next() {
-                    set_down(&mut spawner, &inventory, level, &blocked_cells, &obstacles, eye, id, aside);
+                    set_down(&mut spawner, &inventory, level, &blocked_cells, &obstacles, eye, id, aside, &tuning);
                 }
             }
         }
@@ -257,7 +259,7 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 move |mut spawner: ItemSpawner, inventory: Res<Inventory>, mut level: ResMut<CurrentLevel>, blocked: Res<BlockedCells>| {
-                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &Obstacles::default(), &eye, knife, 0.0);
+                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &Obstacles::default(), &eye, knife, 0.0, &crate::tuning::Tuning::default());
                 },
             )
             .unwrap();

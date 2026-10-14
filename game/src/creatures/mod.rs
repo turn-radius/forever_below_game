@@ -32,6 +32,7 @@ use procgen_rng::Mulberry32;
 use crate::level::geometry::Relief;
 use crate::play::{CurrentLevel, DelveSystems, Player};
 use crate::render::{ItemAppearance, ItemSpawner};
+use crate::tuning::Tuning;
 
 pub mod behaviour;
 
@@ -40,7 +41,8 @@ pub struct CreaturesPlugin;
 impl Plugin for CreaturesPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(behaviour::BehaviourPlugin)
-            .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), idle, animate).chain().in_set(DelveSystems));
+            .init_resource::<Tuning>()
+            .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), size_creatures, idle, animate).chain().in_set(DelveSystems));
     }
 }
 
@@ -49,8 +51,38 @@ impl Plugin for CreaturesPlugin {
 pub struct Critter {
     pub spot: CreatureSpot,
     pub creature: Creature,
-    /// The circle it covers on the floor, world units.
+    /// The circle it covers on the floor, world units, at the size it is drawn.
     pub radius: f32,
+    /// How much larger than rolled it is drawn: its species' tuned size ([`size_creatures`]).
+    /// The creature itself stays as its seed made it.
+    pub size: f32,
+}
+
+impl Critter {
+    /// `creature`, from `spot`, at the size it was rolled.
+    pub fn new(spot: CreatureSpot, creature: Creature) -> Critter {
+        Critter { spot, radius: creature.radius(), creature, size: 1.0 }
+    }
+
+    /// Draws it `size` times as large as rolled, covering that much more floor.
+    pub fn resize(&mut self, size: f32) {
+        self.size = size;
+        self.radius = self.creature.radius() * size;
+    }
+}
+
+/// Draws each creature at its species' tuned size (`creatures.size` in [`Tuning`]): its root
+/// scaled about its feet, so every bone, part and hit shape grows with it, and the floor it
+/// covers grown to match. New creatures take it as they appear, and all of them when the
+/// tuning changes.
+pub fn size_creatures(tuning: Res<Tuning>, mut creatures: Query<(&mut Critter, &mut Transform)>) {
+    for (mut critter, mut transform) in &mut creatures {
+        let size = tuning.creatures.size.of(critter.spot.species);
+        if critter.size != size || transform.scale != Vec3::splat(size) {
+            critter.resize(size);
+            transform.scale = Vec3::splat(size);
+        }
+    }
 }
 
 /// On a bone: the capsule it presents to a blow, in its own space ([`fb_creatures::Bone::hit`]).
@@ -152,7 +184,8 @@ impl Trail {
 /// trail's heading that far behind the head, turned into the root's frame, or the last heading
 /// the trail has where it runs out (straight on, with no trail yet).
 pub fn trail_bend(snake: &fb_creatures::SnakeState, trail: &Trail, root: &Transform) -> [f32; pose::BEND_KNOTS] {
-    let body = snake.dims().body_length;
+    // As long as it is drawn.
+    let body = snake.dims().body_length * root.scale.x;
     let at = root.translation.xz();
     let mut bend = [0.0; pose::BEND_KNOTS];
     let mut last = 0.0;
@@ -244,7 +277,7 @@ pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level:
 }
 
 /// How near the player a creature must be for its pose to change, world units (20 m): well
-/// past a torch's reach and short of the fog's end (`level::FOG_END`, 26 m). Our own.
+/// past a torch's reach and short of the fog's end (`fog_end`, 26 m as shipped). Our own.
 const POSE_RANGE: f32 = 200.0;
 
 /// Salt for a creature's grime. Our own.
@@ -260,7 +293,7 @@ pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpo
     let root = commands
         .spawn((
             Name::new(spot.species.stat_block().name),
-            Critter { spot: *spot, radius: creature.radius(), creature },
+            Critter::new(*spot, creature),
             stand_at(level, spot),
             Visibility::default(),
             rest,
@@ -327,9 +360,12 @@ pub fn animate(
     for (critter, root, intent, mut motion, bones, mut trail, dead) in &mut creatures {
         let at = root.translation.xz();
         if let (Some(trail), Creature::Snake(snake)) = (trail.as_deref_mut(), &critter.creature) {
-            trail.record(at, snake.dims().body_length);
+            trail.record(at, snake.dims().body_length * root.scale.x);
         }
         let moved = motion.last.map_or(0.0, |last| at.distance(last));
+        // How far it moved for its size: a creature drawn twice as large takes strides twice
+        // as long.
+        let strode = moved / root.scale.x.max(1e-3);
         motion.last = Some(at);
         // A body lies still: its idle motions stop where they were.
         if !dead {
@@ -354,11 +390,11 @@ pub fn animate(
         let now = motion.now;
         let places = match &critter.creature {
             Creature::Rat(rat) => {
-                motion.cycle = (motion.cycle + moved / pose::rat_stride(rat) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                motion.cycle = (motion.cycle + strode / pose::rat_stride(rat) * std::f32::consts::TAU) % std::f32::consts::TAU;
                 pose::rat(rat, &RatPose { stride: motion.cycle, pace: motion.pace, time: motion.time, bite: now.strike, look: now.look })
             }
             Creature::Snake(snake) => {
-                motion.cycle += moved / (pose::WAVELENGTH * snake.dims().body_length) * std::f32::consts::TAU;
+                motion.cycle += strode / (pose::WAVELENGTH * snake.dims().body_length) * std::f32::consts::TAU;
                 let bend = trail.as_deref().map_or([0.0; pose::BEND_KNOTS], |trail| trail_bend(snake, trail, root));
                 let mut places = pose::snake(
                     snake,
@@ -370,7 +406,7 @@ pub fn animate(
                 for i in std::iter::once(HEAD).chain(SPINE..places.len()) {
                     let place = &mut places[i];
                     let world = root.transform_point(Vec3::from_array(place.origin));
-                    place.origin[1] += relief.floor_height(world.x, world.z) - root.translation.y;
+                    place.origin[1] += (relief.floor_height(world.x, world.z) - root.translation.y) / root.scale.y.max(1e-3);
                 }
                 places
             }

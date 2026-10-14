@@ -248,7 +248,9 @@ mod tests {
     use super::*;
     use crate::play::{Obstacle, Obstacles, gather_obstacles};
     use fb_level::FloorShape;
-    use crate::player::{BODY_RADIUS, blocked_by, slide_around};
+    use crate::player::{blocked_by, slide_around};
+    /// The player's body radius as shipped.
+    const BODY_RADIUS: f32 = 3.5;
 
     /// An app that lays out the props of 1207, with no renderer.
     fn props_app() -> App {

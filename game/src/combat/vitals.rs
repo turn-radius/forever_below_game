@@ -117,12 +117,14 @@ fn take_bites(
 fn break_free(
     mut commands: Commands,
     mut struck: MessageReader<Struck>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
     players: Query<(Entity, &Constricted, &Transform), With<Player>>,
     snakes: Query<(&Critter, &Transform), Without<Corpse>>,
 ) {
     let blows: Vec<Entity> = struck.read().map(|s| s.target).collect();
+    let radius = tuning.as_deref().cloned().unwrap_or_default().moving.body_radius;
     for (player, held, at) in &players {
-        let still = snakes.get(held.by).is_ok_and(|(critter, snake)| snake.translation.xz().distance(at.translation.xz()) <= reach(critter) + crate::player::BODY_RADIUS);
+        let still = snakes.get(held.by).is_ok_and(|(critter, snake)| snake.translation.xz().distance(at.translation.xz()) <= reach(critter, radius) + radius);
         if blows.contains(&held.by) || !still {
             commands.entity(player).remove::<(Constricted, Slowed)>();
         }
@@ -296,7 +298,7 @@ mod tests {
         let level = fb_level::generate(1207);
         let spot = *level.creatures.iter().find(|c| c.species == Species::ConstrictorSnake).unwrap();
         let creature = spot.creature();
-        let snake = app.world_mut().spawn((Critter { spot, radius: creature.radius(), creature }, Transform::from_xyz(10.0, 0.0, 0.0))).id();
+        let snake = app.world_mut().spawn((Critter::new(spot, creature), Transform::from_xyz(10.0, 0.0, 0.0))).id();
         (app, player, snake)
     }
 

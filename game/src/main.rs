@@ -23,6 +23,7 @@ use forever_below::{
     settings::SettingsPlugin,
     soak::SoakPlugin,
     title::{NewDelveSeed, TitlePlugin},
+    tuning::TuningPlugin,
     turntable::{Focus, Turntable, TurntablePlugin},
 };
 
@@ -46,12 +47,14 @@ fn main() -> AppExit {
     };
     let opening = launch.opening(env_set);
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
-        ..default()
-    }))
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin { primary_window: Some(Window { title: "Forever Below".into(), ..default() }), ..default() })
+            // Debug builds watch the assets, so saving `assets/tuning.toml` applies it live.
+            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() }),
+    )
     .insert_state(opening)
-    .add_plugins((SettingsPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
+    .add_plugins((SettingsPlugin, TuningPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
     .insert_resource(NewDelveSeed(launch.seed));
     if opening == AppState::Delving {
         app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED))));

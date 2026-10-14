@@ -31,6 +31,7 @@ use crate::audio::sound_effect;
 use crate::launch::AppState;
 use crate::play::DelveSystems;
 use crate::settings::GameSettings;
+use crate::tuning::{LightTuning, Tuning};
 use crate::render::{ArmoryPart, ItemAppearance, MinWidth, OutlineMaterial, ToonMaterial, part_to_mesh};
 use geometry::{CellView, Doorway, LevelMesh};
 
@@ -38,12 +39,14 @@ pub struct LevelPlugin;
 
 impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(abyss_ambient())
+        app.init_resource::<Tuning>()
+            .insert_resource(abyss_ambient(&LightTuning::default()))
             .insert_resource(ClearColor(FOG_COLOR))
             .add_systems(OnEnter(AppState::Delving), (spawn_stone, spawn_fixtures, spawn_debug_camera))
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
-            .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames).in_set(DelveSystems));
+            .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames).in_set(DelveSystems))
+            .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
     }
 }
 
@@ -59,24 +62,36 @@ pub const SHUT_DISTANCE_CELLS: f32 = 1.2;
 /// Seconds the entrance door takes to swing shut.
 pub const SHUT_SECONDS: f32 = 1.5;
 
-/// The abyss's own light: a few lux of cold grey-blue, so stone a torch has not reached is
-/// a shape and not a colour.
+/// The abyss's own light: a few lux (`ambient_lux`, [`LightTuning`]) of cold grey-blue, so
+/// stone a torch has not reached is a shape and not a colour.
 pub const AMBIENT_COLOR: Color = Color::srgb(0.55, 0.6, 0.72);
-pub const AMBIENT_LUX: f32 = 4.0;
-/// The dark that swallows far stone: a near-black blue, thickening from 4 m to 26 m.
+/// The dark that swallows far stone: a near-black blue, thickening from `fog_start` to
+/// `fog_end` (4 m to 26 m as shipped).
 pub const FOG_COLOR: Color = Color::srgb(0.012, 0.016, 0.024);
-pub const FOG_START: f32 = 40.0;
-pub const FOG_END: f32 = 260.0;
 
-/// Glowcaps: faint cold cyan, a pool reaching about three metres. Peaks are multiples of full
-/// light close up (`light::peak_lumens`), reaches in world units.
+/// Glowcaps: faint cold cyan, a pool reaching about three metres (`glowcap_peak` and
+/// `glowcap_reach`). Braziers burn in the torch colour, brighter and further than a torch in
+/// hand (`brazier_peak` and `brazier_reach`).
 pub const GLOWCAP_COLOR: Rgb = Rgb::hex(0x6ad0c8);
 pub const GLOWCAP_LIGHT: Color = Color::srgb(0.45, 0.85, 0.88);
-pub const GLOWCAP_PEAK: f32 = 0.5;
-pub const GLOWCAP_REACH: f32 = 30.0;
-/// Brazier light: the torch colour, brighter and further than a torch in hand.
-pub const BRAZIER_PEAK: f32 = 1.5;
-pub const BRAZIER_REACH: f32 = 150.0;
+
+/// On each of the level's fixed lights: which kind it is, so it can be lit again when the
+/// tuning changes.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FixedLight {
+    Brazier,
+    Glowcaps,
+}
+
+impl FixedLight {
+    /// Its light, as tuned.
+    pub fn light(self, tuning: &LightTuning) -> PointLight {
+        match self {
+            FixedLight::Brazier => cast_shadows(Torch::flickering(Torch::light(tuning.brazier_peak, tuning.brazier_reach, &EXPOSURE), tuning.flicker_depth)),
+            FixedLight::Glowcaps => glowcap_light(tuning),
+        }
+    }
+}
 
 /// The stone's weathering: wear 0.5 on stone (decay type 9), its pattern a few metres across
 /// in world space rather than an item's few centimetres.
@@ -85,8 +100,39 @@ const STONE_PATTERN_SCALE: f32 = 0.06;
 /// The rock's ink: near black, a shade under the fog.
 pub const STONE_INK: Color = Color::srgb(0.008, 0.009, 0.011);
 
-fn abyss_ambient() -> GlobalAmbientLight {
-    GlobalAmbientLight { color: AMBIENT_COLOR, brightness: AMBIENT_LUX, ..default() }
+fn abyss_ambient(tuning: &LightTuning) -> GlobalAmbientLight {
+    GlobalAmbientLight { color: AMBIENT_COLOR, brightness: tuning.ambient_lux, ..default() }
+}
+
+/// The abyss's fog, as tuned.
+fn abyss_fog(tuning: &LightTuning) -> DistanceFog {
+    DistanceFog {
+        color: FOG_COLOR,
+        directional_light_color: Color::NONE,
+        falloff: FogFalloff::Linear { start: tuning.fog_start, end: tuning.fog_end },
+        ..default()
+    }
+}
+
+/// Brings the ambient, the fog on every camera and the fixed lights up to the tuning.
+fn apply_light_tuning(
+    tuning: Res<Tuning>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+    mut fogs: Query<&mut DistanceFog>,
+    mut lights: Query<(&FixedLight, &mut PointLight)>,
+    debug: Query<&DebugCamera>,
+) {
+    let light = &tuning.light;
+    // The view from above has its own bright fill.
+    if debug.iter().all(|d| d.fog) {
+        ambient.brightness = light.ambient_lux;
+    }
+    for mut fog in &mut fogs {
+        fog.falloff = FogFalloff::Linear { start: light.fog_start, end: light.fog_end };
+    }
+    for (kind, mut point) in &mut lights {
+        *point = kind.light(light);
+    }
 }
 
 /// The look of the level's own stone and fixtures.
@@ -246,7 +292,7 @@ fn spawn_stone(
 
 }
 
-fn spawn_fixtures(mut commands: Commands, level: Res<CurrentLevel>, mut spawner: crate::render::ItemSpawner) {
+fn spawn_fixtures(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<Tuning>, mut spawner: crate::render::ItemSpawner) {
     let level = &level.0;
     let view = CellView::new(level);
 
@@ -272,19 +318,19 @@ fn spawn_fixtures(mut commands: Commands, level: Res<CurrentLevel>, mut spawner:
         let at = v3(fb_level::Level::world(spot.x, spot.y));
         let seed = level.seed.wrapping_add(0x11 * i as u32 + 1);
         match spot.kind {
-            LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed),
+            LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light),
             LightKind::Brazier => {
                 let (mesh, flame) = geometry::brazier(seed);
                 spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((LevelPiece, Transform::from_translation(at)));
-                let light = cast_shadows(Torch::light(BRAZIER_PEAK, BRAZIER_REACH, &EXPOSURE));
-                commands.spawn((LevelPiece, Name::new("brazier light"), light, Transform::from_translation(at + Vec3::Y * flame)));
+                let light = FixedLight::Brazier.light(&tuning.light);
+                commands.spawn((LevelPiece, Name::new("brazier light"), FixedLight::Brazier, light, Transform::from_translation(at + Vec3::Y * flame)));
             }
         }
     }
 }
 
 /// A patch of glowcaps: three clusters round the spot, and one faint steady light over them.
-fn spawn_glowcaps(commands: &mut Commands, spawner: &mut crate::render::ItemSpawner, at: Vec3, seed: u32) {
+fn spawn_glowcaps(commands: &mut Commands, spawner: &mut crate::render::ItemSpawner, at: Vec3, seed: u32, tuning: &LightTuning) {
     let mut light_at = Vec::new();
     for k in 0..3u32 {
         let mut state = Food::roll_as(seed.wrapping_add(k * 7919), FoodStyle::Mushroom);
@@ -301,13 +347,13 @@ fn spawn_glowcaps(commands: &mut Commands, spawner: &mut crate::render::ItemSpaw
             .insert((LevelPiece, Transform::from_translation(at + offset).with_rotation(Quat::from_rotation_y(angle))));
     }
     let centre = light_at.iter().sum::<Vec3>() / light_at.len() as f32;
-    commands.spawn((LevelPiece, Name::new("glowcap light"), glowcap_light(), Transform::from_translation(centre + Vec3::Y * 1.5)));
+    commands.spawn((LevelPiece, Name::new("glowcap light"), FixedLight::Glowcaps, glowcap_light(tuning), Transform::from_translation(centre + Vec3::Y * 1.5)));
 }
 
 /// The faint light over a patch of glowcaps. Shadowed like every light in the level, so it
 /// stays in the cells it can see; the caps themselves cast none (`unshadow_flames`).
-pub fn glowcap_light() -> PointLight {
-    cast_shadows(point_light(GLOWCAP_LIGHT, GLOWCAP_PEAK, GLOWCAP_REACH, &EXPOSURE))
+pub fn glowcap_light(tuning: &LightTuning) -> PointLight {
+    cast_shadows(point_light(GLOWCAP_LIGHT, tuning.glowcap_peak, tuning.glowcap_reach, &EXPOSURE))
 }
 
 /// Flames and embers on the level's fixtures give the light, so they must not shadow it.
@@ -324,11 +370,13 @@ fn unshadow_flames(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn shut_the_entrance(
     mut commands: Commands,
     time: Res<Time>,
     sounds: Option<Res<LevelSounds>>,
     game: Option<Res<GameSettings>>,
+    tuning: Option<Res<Tuning>>,
     players: Query<&GlobalTransform, With<Player>>,
     mut doors: Query<(&mut EntranceDoor, &mut Transform)>,
     mut blocked: ResMut<BlockedCells>,
@@ -346,7 +394,8 @@ fn shut_the_entrance(
             Some(DoorEvent::Shut) => {
                 if let Some(sounds) = &sounds {
                     let game = game.as_deref().copied().unwrap_or_default();
-                    commands.spawn((Name::new("door shut"), AudioPlayer::new(sounds.door_shut.clone()), sound_effect(&game)));
+                    let tuning = tuning.as_deref().cloned().unwrap_or_default();
+                    commands.spawn((Name::new("door shut"), AudioPlayer::new(sounds.door_shut.clone()), sound_effect(&game, &tuning)));
                 }
             }
             None => {}
@@ -361,18 +410,14 @@ type NewUnfoggedCamera = (Or<(Added<PlayerCamera>, Added<DebugCamera>)>, Without
 /// Lays the abyss's dark over every first-person or debug camera.
 fn fog_cameras(
     mut commands: Commands,
+    tuning: Res<Tuning>,
     cameras: Query<(Entity, Option<&DebugCamera>), NewUnfoggedCamera>,
 ) {
     for (camera, debug) in &cameras {
         if debug.is_some_and(|d| !d.fog) {
             continue;
         }
-        commands.entity(camera).insert(DistanceFog {
-            color: FOG_COLOR,
-            directional_light_color: Color::NONE,
-            falloff: FogFalloff::Linear { start: FOG_START, end: FOG_END },
-            ..default()
-        });
+        commands.entity(camera).insert(abyss_fog(&tuning.light));
     }
 }
 
@@ -429,7 +474,7 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
         // Something to see by until the player brings a torch.
         .with_child((Torch::light(1.0, 120.0, &EXPOSURE), Transform::from_xyz(4.0, -3.0, 2.0)));
     if mode == "top" {
-        commands.insert_resource(GlobalAmbientLight { brightness: 120.0, ..abyss_ambient() });
+        commands.insert_resource(GlobalAmbientLight { brightness: 120.0, ..abyss_ambient(&LightTuning::default()) });
     }
 }
 
@@ -496,6 +541,7 @@ mod tests {
             .init_resource::<BlockedCells>()
             .insert_resource(LevelSounds::default())
             .insert_resource(GameSettings { sound_volume: 0.5, ..default() })
+            .init_resource::<Tuning>()
             .add_systems(Update, shut_the_entrance);
         let d = door();
         app.world_mut().spawn((d, Transform::default()));
@@ -556,7 +602,7 @@ mod tests {
 
     #[test]
     fn glowcaps_light_casts_shadows() {
-        assert!(glowcap_light().shadow_maps_enabled);
+        assert!(glowcap_light(&LightTuning::default()).shadow_maps_enabled);
     }
 
     #[test]
