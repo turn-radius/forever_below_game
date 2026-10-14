@@ -270,12 +270,13 @@ fn spawn_glowcaps(commands: &mut Commands, spawner: &mut crate::render::ItemSpaw
             .insert((LevelPiece, Transform::from_translation(at + offset).with_rotation(Quat::from_rotation_y(angle))));
     }
     let centre = light_at.iter().sum::<Vec3>() / light_at.len() as f32;
-    commands.spawn((
-        LevelPiece,
-        Name::new("glowcap light"),
-        point_light(GLOWCAP_LIGHT, GLOWCAP_PEAK, GLOWCAP_REACH, &EXPOSURE),
-        Transform::from_translation(centre + Vec3::Y * 1.5),
-    ));
+    commands.spawn((LevelPiece, Name::new("glowcap light"), glowcap_light(), Transform::from_translation(centre + Vec3::Y * 1.5)));
+}
+
+/// The faint light over a patch of glowcaps. Shadowed like every light in the level, so it
+/// stays in the cells it can see; the caps themselves cast none (`unshadow_flames`).
+pub fn glowcap_light() -> PointLight {
+    cast_shadows(point_light(GLOWCAP_LIGHT, GLOWCAP_PEAK, GLOWCAP_REACH, &EXPOSURE))
 }
 
 /// Flames and embers on the level's fixtures give the light, so they must not shadow it.
@@ -462,6 +463,11 @@ mod tests {
             assert_eq!(a.extension.glow, b.extension.glow, "{}", flame.name);
             assert_eq!(b.extension.decay.amount, 0.0, "{}", flame.name);
         }
+    }
+
+    #[test]
+    fn glowcaps_light_casts_shadows() {
+        assert!(glowcap_light().shadow_maps_enabled);
     }
 
     #[test]

@@ -7,6 +7,8 @@
 //! - Its light in the world is a separate point light near the eye, on the default layer, with
 //!   the torch's colour, reach and flicker from its [`LightAnchor`]. It is the main light.
 //! - Items lie where `CurrentLevel.items` puts them, resting on the floor; long ones lie down.
+//!   A lit one lights its corner with a shadowed light, so it stays on its side of the rock;
+//!   the item itself casts no shadow, or its own flame and handle would black out its light.
 //! - A ray from the camera picks the nearest item in reach; E picks it up into [`Carried`].
 //!
 //! With no player in the app a stand-in camera is spawned at the level's start
@@ -21,6 +23,7 @@ use armory::{
 use bevy::{
     app::{HierarchyPropagatePlugin, Propagate},
     camera::{Exposure, RenderTarget, visibility::RenderLayers},
+    light::NotShadowCaster,
     prelude::*,
     render::view::{Msaa, Tonemapping},
 };
@@ -83,6 +86,9 @@ impl Plugin for CarryPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<HierarchyPropagatePlugin<RenderLayers>>() {
             app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(Update));
+        }
+        if !app.is_plugin_added::<HierarchyPropagatePlugin<NotShadowCaster>>() {
+            app.add_plugins(HierarchyPropagatePlugin::<NotShadowCaster>::new(Update));
         }
         app.init_resource::<Carried>()
             .init_resource::<Aimed>()
@@ -351,11 +357,12 @@ fn lay_out_items(mut commands: Commands, level: Res<CurrentLevel>, old: Query<En
         root.insert((transform, Name::new(item.noun()), FloorItem { item, spot: *spot, min, max }));
         if let Some(anchor) = light {
             // A lit thing on the floor lights its corner, from a little above the flame so the
-            // stone under it does not burn white; shadows only for the light in hand.
+            // stone under it does not burn white. Its light is shadowed so it stops at the rock,
+            // and the thing itself casts none, so its own flame and body do not hide its light.
             let mut flame = transform.transform_point(Vec3::from_array(anchor.position));
             flame.y = flame.y.max(FLOOR_LIGHT_HEIGHT);
             let at = transform.compute_affine().inverse().transform_point3(flame);
-            root.with_child((world_light(&anchor, &Exposure::INDOOR), Transform::from_translation(at)));
+            root.insert(Propagate(NotShadowCaster)).with_child((world_light(&anchor, &Exposure::INDOOR), Transform::from_translation(at)));
         }
     }
 }
@@ -367,9 +374,11 @@ fn anchor_light(anchor: &LightAnchor, peak: f32, range: f32, exposure: &Exposure
     Torch::flickering(point_light(color, peak, range, exposure), anchor.flicker)
 }
 
-/// An anchor's light in the world: bright out to its radius, dim to [`DIM_REACH`] times it.
-fn world_light(anchor: &LightAnchor, exposure: &Exposure) -> (Torch, PointLight) {
-    anchor_light(anchor, WORLD_PEAK, anchor.radius * DIM_REACH, exposure)
+/// An anchor's light in the world: bright out to its radius, dim to [`DIM_REACH`] times it,
+/// and shadowed, so it never reaches through rock into the next corridor.
+pub fn world_light(anchor: &LightAnchor, exposure: &Exposure) -> (Torch, PointLight) {
+    let (torch, light) = anchor_light(anchor, WORLD_PEAK, anchor.radius * DIM_REACH, exposure);
+    (torch, cast_shadows(light))
 }
 
 /// How a camera draws, which the view model camera copies from the player camera.
@@ -424,7 +433,7 @@ fn equip_player_camera(
             view_layer,
         ));
         let (torch_light, light) = world_light(&anchor, &exposure);
-        commands.entity(camera).insert(Equipped).with_child((torch_light, cast_shadows(light), Transform::from_translation(WORLD_FLAME)));
+        commands.entity(camera).insert(Equipped).with_child((torch_light, light, Transform::from_translation(WORLD_FLAME)));
         spawn_hud(&mut commands, view_model);
     }
 }
@@ -646,6 +655,14 @@ mod tests {
             assert_eq!(item_light(&item), Some(light));
             assert!(light.radius > 20.0 && (0.0..=1.0).contains(&light.flicker));
         }
+    }
+
+    #[test]
+    fn lights_in_the_world_cast_shadows() {
+        let (_, anchor) = lit_torch(1207);
+        let (_, light) = world_light(&anchor, &Exposure::INDOOR);
+        assert!(light.shadow_maps_enabled);
+        assert_eq!(light.range, anchor.radius * DIM_REACH);
     }
 
     #[test]
