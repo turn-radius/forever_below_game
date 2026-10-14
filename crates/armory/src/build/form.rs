@@ -63,6 +63,11 @@ impl FormRing {
     fn scaled(self, k: f32) -> Self {
         FormRing { half_width: self.half_width * k, half_depth: self.half_depth * k, ..self }
     }
+
+    /// The same ring `across` wider and `deep` deeper on each side (a layer worn over it).
+    pub fn inflated(self, across: f32, deep: f32) -> Self {
+        FormRing { half_width: self.half_width + across, half_depth: self.half_depth + deep, ..self }
+    }
 }
 
 /// A swelling on one face of a form (a belly or a bust on the front, the seat behind):
@@ -161,6 +166,13 @@ impl TorsoForm {
         [self.shin, self.knee, self.thigh, self.hip, self.waist, self.chest, self.shoulder, self.shoulder_top, self.neck]
     }
 
+    /// The same form with its sections replaced, bottom to top as [`TorsoForm::rings`] lists
+    /// them; the exponent, back and bulges are kept.
+    pub fn with_rings(&self, rings: [FormRing; 9]) -> TorsoForm {
+        let [shin, knee, thigh, hip, waist, chest, shoulder, shoulder_top, neck] = rings;
+        TorsoForm { shin, knee, thigh, hip, waist, chest, shoulder, shoulder_top, neck, ..*self }
+    }
+
     /// The form sampled densely for lookups by height.
     pub fn profile(&self) -> TorsoProfile {
         TorsoProfile::new(&self.rings(), self.exponent, self.back, vec![self.belly, self.bust, self.seat])
@@ -172,6 +184,44 @@ impl TorsoForm {
         let root = [side * self.shoulder.half_width * 0.98, self.shoulder.y - 0.62, 0.0];
         let dir = vec3::normalize_or([side * arm_angle.sin(), -arm_angle.cos(), 0.04], vec3::neg(vec3::Y));
         (root, dir)
+    }
+}
+
+/// An arm or a leg as a centre line with a radius along it, in the space of the form it
+/// hangs from: what a sleeve follows on a real body. `t` runs by length from the root
+/// (inside the trunk) to the far joint (the wrist or the ankle).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LimbForm {
+    /// The centre line, sampled evenly by length.
+    pub path: Vec<V3>,
+    /// The radius at each point of `path`.
+    pub radii: Vec<f32>,
+    /// Share of the length at the first joint (shoulder or hip) and the second (elbow or knee).
+    pub t_joints: [f32; 2],
+}
+
+impl LimbForm {
+    fn at<T: Copy>(&self, values: &[T], t: f32, lerp: impl Fn(T, T, f32) -> T) -> T {
+        let n = values.len() - 1;
+        let f = t.clamp(0.0, 1.0) * n as f32;
+        let i = (f.floor() as usize).min(n.saturating_sub(1));
+        if n == 0 { values[0] } else { lerp(values[i], values[i + 1], f - i as f32) }
+    }
+
+    /// The centre line a share `t` of the way along.
+    pub fn point_at(&self, t: f32) -> V3 {
+        self.at(&self.path, t, vec3::lerp)
+    }
+
+    /// The radius a share `t` of the way along.
+    pub fn radius_at(&self, t: f32) -> f32 {
+        self.at(&self.radii, t, |a, b, k| a + (b - a) * k)
+    }
+
+    /// The centre line from `t0` to `t1`, `samples` points evenly by share.
+    pub fn span(&self, t0: f32, t1: f32, samples: usize) -> Vec<V3> {
+        let n = samples.max(2) - 1;
+        (0..=n).map(|i| self.point_at(t0 + (t1 - t0) * i as f32 / n as f32)).collect()
     }
 }
 

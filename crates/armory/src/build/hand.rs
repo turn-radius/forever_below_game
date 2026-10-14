@@ -94,6 +94,13 @@ fn strap(form: &HandForm, hand: &Hand, f: f32, width: f32) -> (MeshBuilder, Mesh
 /// Every part of a glove on `form`: `"hand"`, `"fingers"`, `"thumb"`, `"cuff"`, `"plates"`,
 /// `"gadlings"`, `"edges"`, `"straps"`, `"buckles"` and `"trim"`, as the style calls for them.
 pub fn hand_parts(form: &HandForm, hand: &Hand, hem: &Hem) -> Parts {
+    let curl = hand.curl * 0.55;
+    hand_parts_curled(form, hand, hem, [curl; 4], curl)
+}
+
+/// [`hand_parts`] with each finger (index to little) and the thumb curled as given, in
+/// radians per joint, so a glove on a body takes the pose of the hand inside it.
+pub fn hand_parts_curled(form: &HandForm, hand: &Hand, hem: &Hem, fingers: [f32; 4], thumb: f32) -> Parts {
     let mut parts = Parts::new();
     let s = hand.size;
     let style = hand.style;
@@ -131,15 +138,14 @@ pub fn hand_parts(form: &HandForm, hand: &Hand, hem: &Hem) -> Parts {
     // The hand inside.
     let mitten = style.is_mitten();
     let cap = if mitten { 0.8 * s } else { 0.12 * s };
-    let curl = hand.curl * 0.55;
     let hand_look = if style == HandStyle::Mitten { mail } else { glove };
     parts.add_look("hand", palm_mesh(form, cap, 0.0), hand_look);
     if !mitten {
-        for finger in &form.fingers {
+        for (finger, curl) in form.fingers.iter().zip(fingers) {
             parts.add_look("fingers", digit_mesh(finger, curl, 0.0), glove);
         }
     }
-    parts.add_look("thumb", digit_mesh(&form.thumb, curl, 0.0), hand_look);
+    parts.add_look("thumb", digit_mesh(&form.thumb, thumb, 0.0), hand_look);
 
     if !style.is_plated() {
         return parts;
@@ -149,7 +155,7 @@ pub fn hand_parts(form: &HandForm, hand: &Hand, hem: &Hem) -> Parts {
     // sits close over the back of its phalanx and laps a little past the joints, so the plates
     // read as one articulated row per finger: wider or looser lames run into the next finger's
     // and leave the glove showing at every knuckle.
-    let digit_plates = |digit: &Digit, count: usize| -> MeshBuilder {
+    let digit_plates = |digit: &Digit, curl: f32, count: usize| -> MeshBuilder {
         let joints = digit.joints(curl);
         let mut mesh = MeshBuilder::new();
         let thickness = 0.02 * s;
@@ -176,11 +182,11 @@ pub fn hand_parts(form: &HandForm, hand: &Hand, hem: &Hem) -> Parts {
         mesh
     };
     if style == HandStyle::Gauntlet {
-        for finger in &form.fingers {
-            parts.add_look("plates", digit_plates(finger, 3), plate);
+        for (finger, curl) in form.fingers.iter().zip(fingers) {
+            parts.add_look("plates", digit_plates(finger, curl, 3), plate);
         }
     }
-    parts.add_look("plates", digit_plates(&form.thumb, 2), plate);
+    parts.add_look("plates", digit_plates(&form.thumb, thumb, 2), plate);
 
     // Lames over the back of the hand, each lapping over the one below.
     let hb = form.palm_length;

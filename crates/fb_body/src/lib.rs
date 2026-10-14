@@ -20,6 +20,7 @@ pub mod held;
 pub mod limb;
 pub mod place;
 pub mod spec;
+pub mod worn;
 
 pub use body::{ArmPose, Body, GRIP_MAX, Pose};
 pub use folk::{Beard, EyeKind, Ears, Folk, HairStyle, Nose, Race};
@@ -29,3 +30,4 @@ pub use held::{HeldFit, Hold, fit_held};
 pub use limb::{Limb, Side};
 pub use place::Placement;
 pub use spec::BodySpec;
+pub use worn::{Covered, LAYER_ORDER, WornFit, WornLayer, fit_worn};

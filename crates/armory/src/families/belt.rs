@@ -131,12 +131,23 @@ impl Generator for Belts {
 
     /// The belt buckled as worn, front toward +Z, standing on whatever hangs lowest.
     fn build(s: &BeltState) -> ItemMesh {
-        let form = TorsoForm::MANNEQUIN;
-        let mut mesh = belt_parts(&form, &s.belt, &s.fittings).finish();
+        let mut mesh = Belts::on_form(&TorsoForm::MANNEQUIN, s);
+        if let Some((lo, _)) = mesh.bounds() {
+            mesh.transform(&Mat3::IDENTITY, [0.0, -lo[1], 0.0]);
+        }
+        mesh
+    }
+}
+
+impl Belts {
+    /// The belt and its pouch round `form`, in the form's space (the waist at y = 0):
+    /// `fb_body` passes a folk's torso, eased over whatever is worn under the belt.
+    pub fn on_form(form: &TorsoForm, s: &BeltState) -> ItemMesh {
+        let mut mesh = belt_parts(form, &s.belt, &s.fittings).finish();
         if s.fittings.pouch {
             let mut pouch = Bags::build(&BagState { seed: s.seed, bag: s.pouch, etch: Etching::default(), cond: s.cond, palette: s.palette });
             if let Some((lo, hi)) = pouch.bounds() {
-                let (at, out) = belt_pouch_mount(&form, &s.belt, &s.fittings);
+                let (at, out) = belt_pouch_mount(form, &s.belt, &s.fittings);
                 let rotation = Mat3::from_cols(vec3::cross(vec3::Y, out), vec3::Y, out);
                 // Its back on the belt, the loops on its back straddling the belt.
                 let anchor = rotation.transform([0.0, lo[1] + (hi[1] - lo[1]) * 0.72, lo[2]]);
@@ -147,14 +158,9 @@ impl Generator for Belts {
             }
             mesh.parts.extend(pouch.parts);
         }
-        if let Some((lo, _)) = mesh.bounds() {
-            mesh.transform(&Mat3::IDENTITY, [0.0, -lo[1], 0.0]);
-        }
         mesh
     }
-}
 
-impl Belts {
     /// "Forge new" forced to one style, for turntables and tests. Draws the same stream as
     /// [`Generator::roll`], so `roll(s)` equals `roll_as(s, style)` for the style `s` rolls.
     pub fn roll_as(seed: u32, style: BeltStyle) -> BeltState {

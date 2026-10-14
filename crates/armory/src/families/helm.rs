@@ -406,6 +406,24 @@ impl Generator for Helm {
     }
 }
 
+impl HelmState {
+    /// The same helmet made to fit a head of bowl radius `radius`: every length of the bowl,
+    /// its brim, cheek plates, aventail, comb and crest scaled with it (the plate's
+    /// `saHelm`), plate and mail thickness unchanged.
+    pub fn sized(&self, radius: f32) -> HelmState {
+        let k = radius / self.shell.radius.max(1e-3);
+        let mut s = self.clone();
+        s.shell.radius = radius;
+        s.shell.height *= k;
+        s.shell.brim *= k;
+        s.cheeks.length *= k;
+        s.aventail.length *= k;
+        s.fittings.comb *= k;
+        s.crest.size *= k;
+        s
+    }
+}
+
 impl Helm {
     /// "Forge new" forced to one style, for turntables and tests. Draws the same stream as
     /// [`Generator::roll`], so `roll(s)` equals `roll_as(s, style)` when `style` is what `s`

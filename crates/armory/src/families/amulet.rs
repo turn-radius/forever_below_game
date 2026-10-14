@@ -382,6 +382,23 @@ fn compose(rng: &mut Mulberry32, seed: u32, a: AmuletArchetype) -> AmuletState {
 /// centre), `device`, `drop_rings` and `drops`, then the necklace: `chain`, `cord`,
 /// `thong`, or `string`, `beads` and `spacers`.
 fn build_amulet(s: &AmuletState) -> ItemMesh {
+    let (mut parts, bail) = pendant_parts(s);
+    let path = necklace_path([0.0, bail.rest, 0.0], s.necklace.drop);
+    parts.extend(necklace_parts(&s.necklace, &path, true, Some((path[0], bail.clear))));
+    parts.finish()
+}
+
+/// Where a pendant's bail takes its necklace: the height the strand rests at in the bail's
+/// loop, and how far from that point beads keep clear of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bail {
+    pub rest: f32,
+    pub clear: f32,
+}
+
+/// The pendant and its bail without a necklace (`fb_body` lays the necklace over the
+/// wearer): the pendant hangs below y = 0 with the bail's loop above it, facing +Z.
+pub fn pendant_parts(s: &AmuletState) -> (Parts, Bail) {
     let p = &s.pendant;
     let n = &s.necklace;
     let mut rng = Mulberry32::new(s.seed.wrapping_mul(131).wrapping_add(3));
@@ -486,20 +503,28 @@ fn build_amulet(s: &AmuletState) -> ItemMesh {
         NecklaceStyle::Beads => n.thickness * 0.45,
         _ => n.thickness,
     };
-    let path = necklace_path([0.0, bail_r * 0.8 + bail_r - bail_t - rest, 0.0], n.drop);
+    let bail = Bail { rest: bail_r * 0.8 + bail_r - bail_t - rest, clear: bail_r * 1.6 };
+    (parts, bail)
+}
+
+/// A necklace of style `n` along `path` (closed or not): `chain`, `cord`, `thong`, or
+/// `string`, `beads` and `spacers`. Beads keep `clear` (plus their radius) away from a
+/// bail at `bail`, when given.
+pub fn necklace_parts(n: &Necklace, path: &[V3], closed: bool, bail: Option<(V3, f32)>) -> Parts {
+    let mut parts = Parts::new();
     match n.style {
         NecklaceStyle::Cable => {
             let wire = n.thickness.max(n.link * 0.09);
-            parts.add_unoutlined("chain", cable_chain(&path, true, n.link, wire, 1200), n.material);
+            parts.add_unoutlined("chain", cable_chain(path, closed, n.link, wire, 1200), n.material);
         }
         NecklaceStyle::Cord => {
-            parts.add_unoutlined("cord", twisted_cord(&path, true, n.thickness, 2), n.material);
+            parts.add_unoutlined("cord", twisted_cord(path, closed, n.thickness, 2), n.material);
         }
         NecklaceStyle::Thong => {
-            parts.add_unoutlined("thong", thong(&path, true, n.thickness), n.material);
+            parts.add_unoutlined("thong", thong(path, closed, n.thickness), n.material);
         }
         NecklaceStyle::Beads => {
-            parts.add_unoutlined("string", cord(&path, true, (n.thickness * 0.45).max(0.002), 6), Cord);
+            parts.add_unoutlined("string", cord(path, closed, (n.thickness * 0.45).max(0.002), 6), Cord);
             let br = n.link * 0.5;
             let one = bead(br, 12);
             let spacer_material = if n.material == Brass { Gold } else { Brass };
@@ -507,10 +532,8 @@ fn build_amulet(s: &AmuletState) -> ItemMesh {
             spacer_mesh.scale([1.0, 0.6, 1.0]);
             let mut beads = MeshBuilder::new();
             let mut spacers = MeshBuilder::new();
-            let bail_at: V3 = path[0];
-            let clear = bail_r * 1.6 + br;
-            for (k, (at, dir)) in stations(&path, true, br * 2.15, 0.0).into_iter().enumerate() {
-                if vec3::distance(at, bail_at) < clear {
+            for (k, (at, dir)) in stations(path, closed, br * 2.15, 0.0).into_iter().enumerate() {
+                if bail.is_some_and(|(bail_at, clear)| vec3::distance(at, bail_at) < clear + br) {
                     continue;
                 }
                 let (mut m, target) = if k % 6 == 0 { (spacer_mesh.clone(), &mut spacers) } else { (one.clone(), &mut beads) };
@@ -521,5 +544,5 @@ fn build_amulet(s: &AmuletState) -> ItemMesh {
             parts.add("spacers", spacers, spacer_material);
         }
     }
-    parts.finish()
+    parts
 }
