@@ -1,19 +1,53 @@
-//! Forever Below's item layer. An [`Item`] wraps an `armory::ItemState` (the shape) with
+//! Forever Below's item layer. An [`Item`] wraps an `armory::Item` (the shape) with
 //! everything the game adds: rarity, affixes that change any parameter (including survival
 //! ones like warmth and carry weight), derived stats, the grid footprint, and a history.
 //!
-//! Data tables come from the prototype: `data/afx.json`, `data/bases.json`, `data/goods.json`,
-//! `data/sab.json` (Armory family per base, with the styles it accepts). See `docs/items.md`.
+//! Data tables come from the prototype: `data/afx.json`, `data/bases.json`, `data/goods.json`
+//! ([`tables`]). The Armory family and styles each base is rolled from are typed Rust in
+//! [`armory_base`]. [`roll_item`] rolls a whole item from a base name and a seed. See
+//! `docs/items.md`.
 
+pub mod armory_base;
+pub mod dice;
+pub mod dress;
+pub mod footprint;
+pub mod item;
+pub mod modifier;
+pub mod naming;
+pub mod profile;
+pub mod rarity;
+pub mod stats;
+pub mod tables;
+
+pub use item::{Coins, Item, roll_item, roll_loot};
+
+use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Rarity { Common, Magic, Rare, Legendary }
 
+/// Worn or held gear, which takes affixes, or goods that are only carried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind { Gear, Good }
+
 /// Equipment slots on the doll, as in the prototype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, Legs, Feet, Back, Ring1, Ring2, Charm }
 
-// TODO(port): Item, Affix, roll_item(base, rng), derived stats, footprint from real size (about 24 cm per cell).
+/// What an item is made of and how it is used. Affixes roll only on items with their tag
+/// (`docs/items.md`, "Rarity and affixes").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tag { Cloth, Leather, Metal, Wood, Wear, Armor, Quiet, Weapon, Light, Trinket, Container, Food }
+
+/// The game layer's random stream for an item rolled from `seed`: rarity, affixes, names and
+/// history draw from it in that order. Kept apart from the Armory's own stream for the shape,
+/// so the same seed gives the same shape whatever the game layer does. The mixing constants
+/// are this port's own.
+pub fn game_rng(seed: u32) -> Mulberry32 {
+    Mulberry32::new(seed.wrapping_mul(0x85EB_CA6B) ^ 0xC2B2_AE35)
+}

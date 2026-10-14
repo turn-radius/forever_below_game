@@ -4,7 +4,14 @@
   "k": "pre",
   "g": 1,
   "on": "cloth",
-  "fx": "fn: it=>{it.warmth+=2}",
+  "fx": [
+   {
+    "add": {
+     "stat": "warmth",
+     "by": 2
+    }
+   }
+  ],
   "t": "+2 warmth"
  },
  {
@@ -12,7 +19,14 @@
   "k": "pre",
   "g": 1,
   "on": "wear",
-  "fx": "fn: it=>{it.wt=+(it.wt*.6).toFixed(1)}",
+  "fx": [
+   {
+    "scale": {
+     "stat": "weight",
+     "by": 0.6
+    }
+   }
+  ],
   "t": "Weighs 40% less"
  },
  {
@@ -20,7 +34,14 @@
   "k": "pre",
   "g": 1,
   "on": "armor",
-  "fx": "fn: it=>{it.ac+=1}",
+  "fx": [
+   {
+    "add": {
+     "stat": "armour",
+     "by": 1
+    }
+   }
+  ],
   "t": "+1 armour"
  },
  {
@@ -28,6 +49,14 @@
   "k": "pre",
   "g": 1,
   "on": "quiet",
+  "fx": [
+   {
+    "add": {
+     "stat": "stealth",
+     "by": 2
+    }
+   }
+  ],
   "t": "Stealth +2"
  },
  {
@@ -35,7 +64,14 @@
   "k": "pre",
   "g": 1,
   "on": "weapon",
-  "fx": "fn: it=>{it.dmgB+=1}",
+  "fx": [
+   {
+    "add": {
+     "stat": "damage_bonus",
+     "by": 1
+    }
+   }
+  ],
   "t": "+1 damage"
  },
  {
@@ -43,6 +79,14 @@
   "k": "pre",
   "g": 1,
   "on": "weapon",
+  "fx": [
+   {
+    "add": {
+     "stat": "to_hit",
+     "by": 1
+    }
+   }
+  ],
   "t": "+1 to hit"
  },
  {
@@ -50,7 +94,14 @@
   "k": "pre",
   "g": 1,
   "on": "light",
-  "fx": "fn: it=>{it.light+=10}",
+  "fx": [
+   {
+    "add": {
+     "stat": "light",
+     "by": 10
+    }
+   }
+  ],
   "t": "+10 ft of light"
  },
  {
@@ -58,6 +109,14 @@
   "k": "pre",
   "g": 1,
   "on": "light",
+  "fx": [
+   {
+    "scale": {
+     "stat": "burn_time",
+     "by": 2
+    }
+   }
+  ],
   "t": "Burns twice as long"
  },
  {
@@ -65,7 +124,32 @@
   "k": "pre",
   "g": 0,
   "on": "cloth",
-  "fx": "fn: it=>{it.warmth=Math.max(0,it.warmth-1)}",
+  "fx": [
+   {
+    "add": {
+     "stat": "warmth",
+     "by": -1
+    }
+   },
+   {
+    "condition": {
+     "slider": "wear",
+     "at_least": 0.6
+    }
+   },
+   {
+    "condition": {
+     "slider": "fray",
+     "at_least": 1.4
+    }
+   },
+   {
+    "condition": {
+     "slider": "rot",
+     "at_least": 1.2
+    }
+   }
+  ],
   "t": "−1 warmth"
  },
  {
@@ -73,6 +157,32 @@
   "k": "pre",
   "g": 0,
   "on": "cloth",
+  "fx": [
+   {
+    "scale": {
+     "stat": "disease_risk",
+     "by": 1.5
+    }
+   },
+   {
+    "condition": {
+     "slider": "wear",
+     "at_least": 0.6
+    }
+   },
+   {
+    "condition": {
+     "slider": "fray",
+     "at_least": 1.4
+    }
+   },
+   {
+    "condition": {
+     "slider": "rot",
+     "at_least": 1.2
+    }
+   }
+  ],
   "t": "Disease risk up"
  },
  {
@@ -80,6 +190,32 @@
   "k": "pre",
   "g": 0,
   "on": "cloth",
+  "fx": [
+   {
+    "scale": {
+     "stat": "disease_risk",
+     "by": 1.5
+    }
+   },
+   {
+    "condition": {
+     "slider": "wear",
+     "at_least": 0.6
+    }
+   },
+   {
+    "condition": {
+     "slider": "fray",
+     "at_least": 1.4
+    }
+   },
+   {
+    "condition": {
+     "slider": "rot",
+     "at_least": 1.2
+    }
+   }
+  ],
   "t": "Itching · disease risk up"
  },
  {
@@ -87,7 +223,25 @@
   "k": "pre",
   "g": 0,
   "on": "metal",
-  "fx": "fn: it=>{if(it.dmg) it.dmgB-=1; else it.ac=Math.max(0,it.ac-1)}",
+  "fx": [
+   {
+    "damage_or_armour": {
+     "by": -1
+    }
+   },
+   {
+    "condition": {
+     "slider": "wear",
+     "at_least": 0.75
+    }
+   },
+   {
+    "condition": {
+     "slider": "rust",
+     "at_least": 1.5
+    }
+   }
+  ],
   "t": "Weakened by rust"
  },
  {
@@ -95,6 +249,14 @@
   "k": "pre",
   "g": 0,
   "on": "quiet",
+  "fx": [
+   {
+    "add": {
+     "stat": "stealth",
+     "by": -2
+    }
+   }
+  ],
   "t": "Stealth −2"
  },
  {
@@ -102,7 +264,14 @@
   "k": "pre",
   "g": 0,
   "on": "light",
-  "fx": "fn: it=>{it.light-=5}",
+  "fx": [
+   {
+    "add": {
+     "stat": "light",
+     "by": -5
+    }
+   }
+  ],
   "t": "−5 ft of light · stings the eyes"
  },
  {
@@ -110,6 +279,26 @@
   "k": "pre",
   "g": 0,
   "on": "wood",
+  "fx": [
+   {
+    "add": {
+     "stat": "break_chance",
+     "by": 0.1
+    }
+   },
+   {
+    "condition": {
+     "slider": "wear",
+     "at_least": 0.6
+    }
+   },
+   {
+    "condition": {
+     "slider": "rot",
+     "at_least": 1.5
+    }
+   }
+  ],
   "t": "May break on a hard blow"
  },
  {
@@ -117,6 +306,14 @@
   "k": "suf",
   "g": 1,
   "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "darkvision",
+     "by": 10
+    }
+   }
+  ],
   "t": "Darkvision 10 ft"
  },
  {
@@ -124,6 +321,14 @@
   "k": "suf",
   "g": 1,
   "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "hunger_rate",
+     "by": 0.85
+    }
+   }
+  ],
   "t": "Hunger 15% slower"
  },
  {
@@ -131,7 +336,14 @@
   "k": "suf",
   "g": 1,
   "on": "wear",
-  "fx": "fn: it=>{it.warmth+=2}",
+  "fx": [
+   {
+    "add": {
+     "stat": "warmth",
+     "by": 2
+    }
+   }
+  ],
   "t": "+2 warmth"
  },
  {
@@ -139,6 +351,14 @@
   "k": "suf",
   "g": 1,
   "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "lockpicking",
+     "by": 2
+    }
+   }
+  ],
   "t": "Lockpicking +2"
  },
  {
@@ -146,7 +366,14 @@
   "k": "suf",
   "g": 1,
   "on": "any",
-  "fx": "fn: it=>{it.carry+=25}",
+  "fx": [
+   {
+    "add": {
+     "stat": "carry",
+     "by": 25
+    }
+   }
+  ],
   "t": "+25 lb carrying"
  },
  {
@@ -154,6 +381,14 @@
   "k": "suf",
   "g": 1,
   "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "fatigue_rate",
+     "by": 0.85
+    }
+   }
+  ],
   "t": "Fatigue 15% slower"
  },
  {
@@ -161,6 +396,14 @@
   "k": "suf",
   "g": 1,
   "on": "quiet",
+  "fx": [
+   {
+    "add": {
+     "stat": "stealth",
+     "by": 2
+    }
+   }
+  ],
   "t": "Stealth +2"
  },
  {
@@ -168,6 +411,14 @@
   "k": "suf",
   "g": 1,
   "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "disease_risk",
+     "by": 0.5
+    }
+   }
+  ],
   "t": "Resists disease"
  },
  {
@@ -175,6 +426,14 @@
   "k": "suf",
   "g": 1,
   "on": "weapon",
+  "fx": [
+   {
+    "add": {
+     "stat": "heal_on_kill",
+     "by": 1
+    }
+   }
+  ],
   "t": "Heal 1 on a kill"
  }
 ]

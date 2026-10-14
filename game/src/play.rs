@@ -31,7 +31,7 @@ pub struct BlockedCells(pub HashSet<(i32, i32)>);
 
 /// What the player carries, in the order it was picked up.
 #[derive(Resource, Clone, Debug, Default)]
-pub struct Carried(pub Vec<armory::Item>);
+pub struct Carried(pub Vec<fb_items::Item>);
 
 /// Everything needed to play a level.
 pub struct PlayPlugin;

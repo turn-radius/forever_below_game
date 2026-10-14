@@ -4,14 +4,27 @@ These are the rules the prototype settled on. Keep the intent and improve the de
 
 ## Two layers
 
-1. **Shape**: an `armory::ItemState`, rolled by the Armory's own "Forge new" (`SA.roll(family, seed, accept, preset)`). `data/sab.json` maps each base item name to an Armory family and, where needed, an `acc` filter on the rolled style (for example, `Boots` accepts `boot.style` of `boot` or `sabaton`). `roll` retries with seeds `(seed + i*7919) % 999983 + 1` until the filter accepts, up to 120 tries. Some bases have a `tw` tweak applied after rolling (a Mantle is a short cloak, a Purse always holds coins).
+1. **Shape**: an `armory::Item`, rolled by the Armory's own "Forge new". `fb_items::armory_base` maps each base name (from `data/bases.json`, `data/goods.json` and the plate's own Armory list) to an Armory family, the styles of it the base accepts (for example, `Boots` accepts a `boot.style` of `boot` or `sabaton`), and sometimes a tweak applied after rolling (a Mantle is a short cloak, a Purse always holds coins). `fb_items::armory_base::roll_shape(base, seed)` rolls the shape: an accepted style straight from the family's `roll_as`, then the tweak. Unlike the plate it never retries seeds; see the first point under "Bases from the Armory".
 2. **Game layer**: rarity, affixes, stats, footprint, history.
 
-A few bases are native to the plate because the Armory has no family for them yet: laced shirt, leather jerkin and pointed hat (`data/bases.json`). Torches, lanterns and the sundries in `data/goods.json` are now Armory families (see "Lights" and "Sundries" below), and the waterskin, lamp oil and glowcap are food.
+`fb_items::roll_item(base, seed)` does both: the shape, its profile (slot, tags, stats, footprint), then for gear the rarity and affixes, the name, a legend for a legendary, and the dress; goods stay common and plain, and a purse counts its coins. It is pure in the base and seed. The shape draws from the Armory's stream and the game layer from its own (`fb_items::game_rng`), so the game layer can change without changing any shape.
+
+Every base is now made by the Armory; the plate's laced shirt, leather jerkin and pointed hat are no longer drawn outside it. See "Bases from the Armory" below.
+
+### Bases from the Armory
+
+The plate kept its base-to-family map, `SAB`, as JavaScript: each base named a family, an `acc` filter on the rolled state and an optional `tw` tweak. `tools/extract_data.js` wrote the filters out as `s=>arr.includes(s[k][f])`, losing which field and styles they named, and the tweaks set fields (`food.color`, `food.color2`) that the typed Armory states have since renamed. So `data/sab.json` is gone and the map is typed Rust, `fb_items::armory_base::ARMORY_BASES`: each filter is a list of the family's own style enum and each tweak a function on the typed state, so a renamed style or field fails to compile. Where the port departs from the plate:
+
+- The plate rolled and retried (`SA.roll(fam, seed, acc)`, seeds `(seed + i*7919) % 999983 + 1`, up to 120 tries). A base here picks one of its styles uniformly and rolls it with the family's `roll_as`, so it lands first time, and club and axe archetypes, which the Armory does not store, can still be chosen. The plate's retries weighted styles by the family's roll weights; picking uniformly is this port's own choice.
+- `Club` takes any club, `Hand axe` a hatchet, hand axe or bearded axe (the one-handers; broad, long, battle and horseman's axes are left to later bases). `Torch`, `Lantern` and `Belt` take any of their family; the plate's belt is a container, so its belt pouch is always on. `Trousers`, `Breeches` and `Leggings` take their legwear style, `Hood` a hood or cowl, `Mail coif` a mail coif.
+- The goods are food or sundries: `Glowcap` is a mushroom given a glowing cap if it rolled dull, `Waterskin` and `Lamp oil` (a flask) are always filled, and lamp oil's amber colour is this port's own. `Rope`, `Lockpicks`, `Candle` and `Bandages` are their sundry kinds, and a `Spare torch` is a torch that has never been lit.
+- `Blind cavefish` sets the fish's skin (`outer`) and fins (`accent`), the plate's `color` and `color2`. `Healing draught` sets the potion's `liquid` to the healing brew and tints its glass toward it as the Armory tints every potion.
+- The plate's native bases become near styles, named for the base rather than the Armory's noun: a `Shirt` is a short, unbelted tunic with straight long sleeves; a `Leather jerkin` is a brigandine cut in a leather colour from `data/leather.json`, riveted one time in three for the plate's "Studded"; a `Pointed hat` is a hood drawn to its full peak with almost no cape. The hat is a stand-in: it still reads as a hood, and wants a hat style in the Armory.
+- Level loot names only a family: `fb_level`'s item spots carry an Armory family and a seed. `fb_items::roll_loot(family, seed)` picks one of that family's bases uniformly from the seed (`base_for`) and rolls it from the same seed. `fb_level` keeps its family weights and stays independent of `fb_items`, and the layout of every level seed is unchanged.
 
 ### Clubs and axes
 
-Clubs and axes are now Armory families (`armory::families::club`, `armory::families::axe`), after daggers in `Family::ALL`. They have no prototype fixtures, since the prototype's plate faked them outside the Armory. `data/sab.json` does not map the plate's `Club` and `Hand axe` bases to them yet. Where the Rust port departs from the plate:
+Clubs and axes are now Armory families (`armory::families::club`, `armory::families::axe`), after daggers in `Family::ALL`. They have no prototype fixtures, since the prototype's plate faked them outside the Armory. Where the Rust port departs from the plate:
 
 - A club is one piece of wood: the haft swells into the striking end and closes in a dome (`Swell` in `sections::hafted`), and knots, iron bands and studs follow that surface. The plate's materials become archetypes: Oak and Ash are the wood's palette colour, and Bone-studded is bone teeth set in the swelling. Cudgels, plain, gnarled, knobbed (and shillelaghs), studded, spiked and iron-bound clubs roll too.
 - An axe head is a bit crosswise through an eye (`sections::axe_head`, `build::axe_head`). It is wedge-sectioned, with a hard bevel line and a blade cross-section across its height, and it takes nicks and a broken edge from the item's condition. The eye is a socket section, with optional rings and langets. A plain, hammer, spike or second-bit poll backs it. Hatchets, hand, bearded, broad, long, battle, horseman's and throwing axes roll. The plate's Iron and Steel are both iron.
@@ -71,18 +84,45 @@ Torches and lanterns are Armory families (`armory::families::torch`, `armory::fa
 
 - Roll `x`: `x < .58` common, `< .85` magic, `< .97` rare, otherwise legendary. Containers cap at rare.
 - Common: 30% chance of one **flaw** prefix. Magic: one good prefix or suffix (50/50). Rare: a good prefix and a good suffix. Legendary: a good prefix and two good suffixes.
-- An affix applies only where its `on` tag matches the item's tags (`cloth`, `leather`, `metal`, `wood`, `wear`, `armor`, `quiet`, `weapon`, `light`, `trinket`, `container`, or `any`). Tables: `data/afx.json`. Each `fx` is kept as the prototype's JS source; port it to a typed effect.
+- An affix applies only where its `on` tag matches the item's tags (`cloth`, `leather`, `metal`, `wood`, `wear`, `armor`, `quiet`, `weapon`, `light`, `trinket`, `container`, or `any`). Tables: `data/afx.json`. Each `fx` is a list of typed effects (see "Affix effects" below).
 - When affixes are chosen by hand (from the armory), rarity follows from them: two good affixes make it rare, one makes it magic, none makes it common.
 - Name: `<prefix> <Armory noun> <suffix>`. The noun comes from `forgeNoun` (Longsword, Rondel Dagger, Kettle Hat).
 - A **legendary** gets a title (`<owner>'s <noun>` or `The <adjective> <noun>`). The original name becomes its subtitle, and it gets three lines of history: where it was made and by which faction, who carried it and what they did, and how it was lost.
+
+### Affix effects
+
+Each affix's `fx` in `data/afx.json` is a list of `fb_items::modifier::Modifier`s acting on `fb_items::stats::Stats` or on the Armory `Condition`: `add` or `scale` a stat, `damage_or_armour` (the plate's Rusted: damage bonus on a weapon, armour on anything else), or `condition`, which raises a condition slider to at least a value. `Stats` is the minimal set the affixes need; deriving it per family is still to do. Amounts and distances never fall below zero (the plate's `Math.max(0, ...)` for warmth and armour, applied to every one); bonuses such as stealth and damage can.
+
+Where the effects come from:
+
+- The plate's `fx` source: Warm, Featherlight, Hardened, Keen, Gleaming, Moth-eaten, Rusted, Smoky, of the Hearth, of the Ox. Featherlight keeps the weight exact where the plate rounded it to 0.1 lb; rounding is left to the card.
+- `dressState`'s condition for flaws, so a flaw's wear travels with the affix: Rusted raises wear to 0.75 and rust to 1.5; Moth-eaten, Mildewed and Lice-ridden raise wear to 0.6, fray to 1.4 and rot to 1.2; Cracked raises wear to 0.6 and rot to 1.5.
+- The card text, for affixes the plate gave no `fx`: Silent, Squeaking and of Quiet Steps (stealth ±2), Balanced (+1 to hit), Long-burning (burn time ×2), of the Mole (darkvision 10 ft), of Plenty and of Wakefulness (hunger and fatigue ×0.85), of Thieves (lockpicking +2), of the Leech (heal 1 on a kill).
+- These numbers are this port's own proposals, since the text gives none: Mildewed and Lice-ridden multiply disease risk by 1.5, of Lesser Warding by 0.5, and Cracked adds a 10% chance to break on a hard blow. Lice-ridden's itching and Smoky's stinging eyes are not simulated yet.
+
+`fb_items::naming` writes the names and legends. The noun is the Armory's, or the base's own name for the bases marked `named_by_base` in `fb_items::armory_base` (the plate did this for `Blind cavefish` and `Healing draught`). The plate's material word for its own bases ("Linen Shirt", "Oak Club") is gone, since those bases are Armory shapes now and the Armory noun already says what they are. A legendary's title takes its epithet from the plate's lists (Tooth, Oath, Wick, Keepsake...), chosen by whether it is a weapon, a light, a trinket or anything else, and the owner's name is a first name from `data/syl.json`. The title uses a straight apostrophe where the plate used a curly one, because the HUD's font has no curly one.
 
 ## Rarity shows on the object
 
 `dressState` sets the Armory condition from rarity: common wear 0.15–0.50, magic 0.06–0.26, rare 0.02–0.14. A legendary is either pristine (0.02) or old and worn (0.4–0.7). Rare and legendary items get etching; legendary etching is gold inlay. Flaws raise the matching decay: Rusted sets rust to 1.5, and Moth-eaten, Mildewed and Lice-ridden raise fray and rot.
 
+`fb_items::dress::dress` does this from the plate's own stream (`mulberry32(seed * 3 + 1)`). Where it departs from the plate:
+
+- A flaw's decay comes from the affix's own `condition` effects (see "Affix effects"), applied after the rarity's wear, rather than from a list of names inside `dressState`.
+- Food, torches, lanterns and sundries have no etching in the Armory, so a rare one is only cleaner.
+- The plate also turned a legendary's gem glow up to 0.8. The Armory keeps gems in a different section in each family (a mace's head gem, a ring's or amulet's stone, a coffer's crowning stone), so that is left for later.
+
 ## Stats and footprint (`saMeta`)
 
 Each family maps to a slot, tags, weight, armour, warmth and damage, plus a grid footprint from the item's real size: `cells(units) = clamp(ceil(units / 2.4), 1, 9)`, about 24 cm per cell. A staff, spear or bow longer than 14.4 units (six cells) cannot be packed. Bags define their inner grid: backpack 8×5, satchel 6×3, sack 4×4, belt pouch 4×2.
+
+`fb_items::profile::profile(base, &shape)` does this. Where it departs from the plate:
+
+- A base with a row in `data/bases.json` or `data/goods.json` (Club, Torch, Bread, Rope...) takes its slot, tags, weight, armour, warmth, damage, light, stack and card line from that row. Every other base derives them from its shape as `saMeta` does.
+- The footprint is measured from the built mesh (`ItemMesh::bounds`): rows from the longest extent, columns from the next. The plate measured only a few fields per family (blade plus grip, shield size) and fixed the rest. Garments, hoods, legwear, gloves, belts and bags fold, so they keep the plate's folded footprints instead of their size on the mannequin.
+- The pack limit uses the same longest extent, so a staff's head or a bow's string counts.
+- The plate's shields had tower, buckler and everything else; the port's pavise counts as a tower (armour 3, 15 lb).
+- Chests cannot be packed, as the plate's `long` flag had it.
 
 ## Slots
 
