@@ -35,7 +35,7 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 
 Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
 
-To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, and scenery as `%` rubble, `~` bones and `o` pillar, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
+To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, scenery as `%` rubble, `~` bones and `o` pillar, and creatures as `r` rat, `R` giant rat, `v` poisonous snake and `S` constrictor snake, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
 
 ### The Armory turntable
 
