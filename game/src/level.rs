@@ -276,9 +276,8 @@ fn spawn_fixtures(mut commands: Commands, level: Res<CurrentLevel>, mut spawner:
             LightKind::Brazier => {
                 let (mesh, flame) = geometry::brazier(seed);
                 spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((LevelPiece, Transform::from_translation(at)));
-                let (torch, light) = Torch::light(BRAZIER_PEAK, BRAZIER_REACH, &EXPOSURE);
-                let light = cast_shadows(light);
-                commands.spawn((LevelPiece, Name::new("brazier light"), torch, light, Transform::from_translation(at + Vec3::Y * flame)));
+                let light = cast_shadows(Torch::light(BRAZIER_PEAK, BRAZIER_REACH, &EXPOSURE));
+                commands.spawn((LevelPiece, Name::new("brazier light"), light, Transform::from_translation(at + Vec3::Y * flame)));
             }
         }
     }

@@ -550,16 +550,15 @@ pub fn lift(commands: &mut Commands, level: &mut Level, entity: Entity, floor: &
 
 /// A flickering point light in `anchor`'s colour and flicker, `peak` times full close up and
 /// reaching `range` units.
-fn anchor_light(anchor: &LightAnchor, peak: f32, range: f32, exposure: &Exposure) -> (Torch, PointLight) {
+fn anchor_light(anchor: &LightAnchor, peak: f32, range: f32, exposure: &Exposure) -> PointLight {
     let color = Color::srgb(anchor.color.0, anchor.color.1, anchor.color.2);
     Torch::flickering(point_light(color, peak, range, exposure), anchor.flicker)
 }
 
 /// An anchor's light in the world: bright out to its radius, dim to [`DIM_REACH`] times it,
 /// and shadowed, so it never reaches through rock into the next corridor.
-pub fn world_light(anchor: &LightAnchor, exposure: &Exposure) -> (Torch, PointLight) {
-    let (torch, light) = anchor_light(anchor, WORLD_PEAK, anchor.radius * DIM_REACH, exposure);
-    (torch, cast_shadows(light))
+pub fn world_light(anchor: &LightAnchor, exposure: &Exposure) -> PointLight {
+    cast_shadows(anchor_light(anchor, WORLD_PEAK, anchor.radius * DIM_REACH, exposure))
 }
 
 /// How a camera draws, which the view model camera copies from the player camera.
@@ -648,8 +647,7 @@ fn carry_light(
         let toward_eye = if hand == fb_items::Slot::Offhand { HELD_LIGHT_OFFSET * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_LIGHT_OFFSET };
         let stage_light =
             commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure), Transform::from_translation(flame + toward_eye), view_layer, ChildOf(view_model))).id();
-        let (torch_light, light) = world_light(&anchor, &exposure);
-        let world = commands.spawn((torch_light, light, Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
+        let world = commands.spawn((world_light(&anchor, &exposure), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
         carrying.id = Some(id);
         carrying.entities = vec![held, stage_light, world];
     }
@@ -928,7 +926,7 @@ mod tests {
     #[test]
     fn lights_in_the_world_cast_shadows() {
         let anchor = item_light(&lit_torch(1207).shape).unwrap();
-        let (_, light) = world_light(&anchor, &Exposure::INDOOR);
+        let light = world_light(&anchor, &Exposure::INDOOR);
         assert!(light.shadow_maps_enabled);
         assert_eq!(light.range, anchor.radius * DIM_REACH);
     }
