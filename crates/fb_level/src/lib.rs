@@ -149,56 +149,60 @@ impl Level {
     }
 }
 
-/// The level for `seed`.
-///
-/// TODO(#54): rooms and corridors. Until then this is one hand-laid room with a corridor, so
-/// the game can be built against the data.
-pub fn generate(seed: u32) -> Level {
-    let (width, height) = (12u32, 10u32);
-    let mut cells = vec![Cell::Rock; (width * height) as usize];
-    let mut open = |x: u32, y: u32, c: Cell| cells[(y * width + x) as usize] = c;
-    for y in 2..7 {
-        for x in 3..9 {
-            open(x, y, Cell::Floor);
+
+impl Facing {
+    /// The four facings, in a fixed order.
+    pub const ALL: [Facing; 4] = [Facing::North, Facing::East, Facing::South, Facing::West];
+
+    /// The facing pointing the other way.
+    pub fn opposite(self) -> Facing {
+        match self {
+            Facing::North => Facing::South,
+            Facing::East => Facing::West,
+            Facing::South => Facing::North,
+            Facing::West => Facing::East,
         }
     }
-    for y in 7..9 {
-        open(5, y, Cell::Floor);
+}
+
+impl Room {
+    pub fn area(&self) -> u32 {
+        self.w * self.h
     }
-    open(5, 9, Cell::Door);
-    let families = [Family::Mace, Family::Torch, Family::Food, Family::Sword, Family::Bags];
-    let items = families
-        .iter()
-        .enumerate()
-        .map(|(i, &family)| ItemSpot { x: 3.6 + i as f32 * 1.1, y: 2.7 + (i % 2) as f32 * 3.0, yaw: i as f32, family, seed: seed.wrapping_add(i as u32) })
-        .collect();
-    Level {
-        seed,
-        width,
-        height,
-        cells,
-        ceiling: 30.0,
-        entrance: Entrance { x: 5, y: 9, inward: Facing::North },
-        rooms: vec![Room { x: 3, y: 2, w: 6, h: 5 }],
-        items,
-        lights: vec![LightSpot { x: 8.5, y: 2.5, kind: LightKind::Glowcaps }],
+
+    /// Whether cell `(x, y)` is floor of this room.
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.x as i32 && y >= self.y as i32 && x < (self.x + self.w) as i32 && y < (self.y + self.h) as i32
+    }
+
+    /// The room's centre in grid coordinates (cells, fractional).
+    pub fn centre(&self) -> (f32, f32) {
+        (self.x as f32 + self.w as f32 / 2.0, self.y as f32 + self.h as f32 / 2.0)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn levels_are_deterministic() {
-        assert_eq!(generate(1207), generate(1207));
+impl Level {
+    /// Index into [`Level::rooms`] of the room holding cell `(x, y)`, if any.
+    pub fn room_at(&self, x: i32, y: i32) -> Option<usize> {
+        self.rooms.iter().position(|r| r.contains(x, y))
     }
 
-    #[test]
-    fn the_player_starts_on_open_floor_inside_the_entrance() {
-        let level = generate(1207);
-        let (x, y, _) = level.start();
-        assert!(level.is_open(x as i32, y as i32));
-        assert_eq!(level.cell(level.entrance.x as i32, level.entrance.y as i32), Cell::Door);
+    /// Index into [`Level::rooms`] of the room the entrance leads to: the first room reached
+    /// walking inward from the start.
+    pub fn start_room(&self) -> Option<usize> {
+        let (x, y, inward) = self.start();
+        let (dx, dy) = inward.step();
+        let (mut x, mut y) = (x as i32, y as i32);
+        while self.is_open(x, y) {
+            if let Some(i) = self.room_at(x, y) {
+                return Some(i);
+            }
+            x += dx;
+            y += dy;
+        }
+        None
     }
 }
+
+mod generate;
+pub use generate::generate;
