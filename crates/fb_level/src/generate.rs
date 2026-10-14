@@ -59,6 +59,7 @@ const LOOT: &[(Family, u32)] = &[
     (Family::Shield, 3),
     (Family::Helm, 3),
     (Family::Hood, 3),
+    (Family::Hat, 2),
     (Family::Garment, 3),
     (Family::Belt, 2),
     (Family::Hands, 3),
