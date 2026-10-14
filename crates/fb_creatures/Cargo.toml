@@ -1,0 +1,13 @@
+[package]
+name = "fb_creatures"
+description = "Procedural creatures (rats and snakes): a typed state from a seed, an animatable rig of Armory meshes, and their poses. No Bevy dependency."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+armory = { workspace = true }
+fb_body = { workspace = true }
+procgen_rng = { workspace = true }
+serde = { workspace = true }

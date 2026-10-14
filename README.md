@@ -95,4 +95,5 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 
 - `cargo run -p armory --example dump_obj -- [family] <seed> [out.obj]` writes an Armory item as OBJ.
 - `cargo run -p fb_body --example dump_body -- <folk> <seed> > body.obj` writes a folk body as OBJ (human, dwarf, gnome, goblin, lizard, pig).
+- `cargo run -p fb_creatures --example dump_creature -- <rat|giant_rat|viper|constrictor> <seed> > rat.obj` writes a creature at rest as OBJ.
 - `tools/README.md` covers regenerating the data tables and the soundtrack.

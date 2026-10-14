@@ -2646,6 +2646,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fb_creatures"
+version = "0.1.0"
+dependencies = [
+ "armory",
+ "fb_body",
+ "procgen_rng",
+ "serde",
+]
+
+[[package]]
 name = "fb_items"
 version = "0.1.0"
 dependencies = [
