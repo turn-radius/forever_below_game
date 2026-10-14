@@ -1,9 +1,31 @@
 //! Prints a level as a text map: `cargo run -p fb_level --example print_level -- <seed>`.
 //! `#` rock, `.` floor, `+` door, `E` entrance, `@` start, `i` item, `*` light, and folk by
 //! their first letter in capitals: `H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk,
-//! `P` pigfolk.
+//! `P` pigfolk. Props: containers `c` chest, `b` barrel, `x` crate, `a` amphora (`s` strongbox,
+//! `f` coffer), and scenery `%` rubble, `~` bones, `o` pillar.
 
+use armory::build::scenery::Scenery;
+use armory::families::chests::ChestStyle;
 use fb_body::Folk;
+use fb_level::Prop;
+
+fn prop_mark(prop: Prop) -> char {
+    match prop {
+        Prop::Container { style, .. } => match style {
+            ChestStyle::Chest => 'c',
+            ChestStyle::Barrel => 'b',
+            ChestStyle::Crate => 'x',
+            ChestStyle::Amphora => 'a',
+            ChestStyle::Strongbox => 's',
+            ChestStyle::Coffer => 'f',
+        },
+        Prop::Scenery { kind, .. } => match kind {
+            Scenery::Rubble => '%',
+            Scenery::Bones => '~',
+            Scenery::Pillar => 'o',
+        },
+    }
+}
 
 fn folk_mark(folk: Folk) -> char {
     match folk {
@@ -37,16 +59,20 @@ fn main() {
     for light in &level.lights {
         rows[light.y as usize][light.x as usize] = '*';
     }
+    for prop in &level.props {
+        rows[prop.y as usize][prop.x as usize] = prop_mark(prop.prop);
+    }
     for folk in &level.folk {
         rows[folk.y as usize][folk.x as usize] = folk_mark(folk.folk);
     }
     rows[level.entrance.y as usize][level.entrance.x as usize] = 'E';
     rows[sy as usize][sx as usize] = '@';
     println!(
-        "seed {seed}: start ({sx}, {sy}) facing {facing:?}, {} rooms, {} items, {} folk",
+        "seed {seed}: start ({sx}, {sy}) facing {facing:?}, {} rooms, {} items, {} folk, {} props",
         level.rooms.len(),
         level.items.len(),
-        level.folk.len()
+        level.folk.len(),
+        level.props.len()
     );
     for row in rows {
         println!("{}", row.into_iter().collect::<String>());
@@ -64,5 +90,12 @@ fn main() {
             folk.y,
             folk.yaw.to_degrees()
         );
+    }
+    for prop in &level.props {
+        let what = match prop.prop {
+            Prop::Container { style, seed, loot } => format!("{style:?} seed {seed}, loot {loot}"),
+            Prop::Scenery { kind, seed } => format!("{kind:?} seed {seed}"),
+        };
+        println!("{what} at ({:.1}, {:.1}) facing {:.0} degrees", prop.x, prop.y, prop.yaw.to_degrees());
     }
 }

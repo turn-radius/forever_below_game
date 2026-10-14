@@ -17,6 +17,8 @@
 //!   level.
 //! - [`underfoot`]: the items on the floor within reach, as a grid, and bags set down as
 //!   their own grids; dragging in and out of them picks things up and sets them down.
+//! - An opened container standing in the level (`crate::props`) shows as its own grid ahead
+//!   of what lies underfoot while the screen is open ([`OpenContainer`]).
 //!
 //! The delver ([`Character`]) is rolled from the level's seed and starts in the "Freshly
 //! fallen" outfit of `data/outfits.json` (a tunic and trousers), with a belt whose pouch is
@@ -97,6 +99,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
+            .init_resource::<OpenContainer>()
             .init_resource::<DollAssets>()
             .init_resource::<DollStage>()
             .init_resource::<Character>()
@@ -109,6 +112,7 @@ impl Plugin for InventoryPlugin {
                         underfoot::set_down_debug_kit.run_if(debug_kit_wanted),
                         // Screens open and close in `switch_screens`.
                         underfoot::track_underfoot,
+                        close_container_with_screen,
                         build_screen,
                         drag_items,
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
@@ -244,6 +248,18 @@ pub enum GridView {
     Underfoot,
 }
 
+/// The container standing in the level whose grid the screen shows, once it has been opened
+/// (`crate::props`); none once the screen closes.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OpenContainer(pub Option<ItemId>);
+
+/// Closing the screen closes the container it was opened for.
+fn close_container_with_screen(open: Res<ScreenOpen>, mut showing: ResMut<OpenContainer>) {
+    if !open.is(Screen::Inventory) && showing.0.is_some() {
+        showing.0 = None;
+    }
+}
+
 /// An item drawn in a grid.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ItemView {
@@ -351,7 +367,9 @@ pub fn equip(inventory: &mut Inventory, id: ItemId, slot: Slot) -> Result<Vec<Fl
 
 /// A double-click on `id` (the plate's `quick`): something worn is taken off and stowed, or set
 /// down underfoot if there is no room for it; something wearable is equipped in its slot
-/// ([`equip`]); anything else lying underfoot is picked up.
+/// ([`equip`]); anything else lying underfoot, or in a container not carried (a chest standing
+/// in the level, a bag set down), is taken into the carried grids. Taking from a container on
+/// a double-click is this build's own rule.
 pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
     let item = inventory.item(id).ok_or(Refusal::Unknown)?;
     let wearable = item.profile.slot.is_some();
@@ -368,6 +386,7 @@ pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, 
             equip(inventory, id, slot)
         }
         Some(Location::Loose) => inventory.pick_up(id).map(|()| vec![FloorChange::Lifted(id)]),
+        Some(Location::In { .. }) if !inventory.is_carried(id) => inventory.stow(id).map(|_| vec![]),
         _ => Ok(vec![]),
     }
 }
@@ -412,6 +431,7 @@ fn build_screen(
     open: Res<ScreenOpen>,
     inventory: Res<Inventory>,
     underfoot: Res<Underfoot>,
+    showing: Res<OpenContainer>,
     screens: Query<Entity, With<InventoryScreen>>,
     cameras: Query<Entity, With<ViewModelCamera>>,
     fonts: Res<UiFonts>,
@@ -426,7 +446,7 @@ fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !character.is_changed() {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !character.is_changed() {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -485,6 +505,9 @@ fn build_screen(
                             });
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
                             .with_children(|row| {
+                                if let Some(container) = showing.0 {
+                                    screen.container(row, &mut icons, container, GridView::Container(container), "");
+                                }
                                 screen.underfoot(row, &mut icons, &underfoot);
                                 for &bag in &underfoot.bags {
                                     screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
@@ -955,6 +978,7 @@ mod tests {
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
+            .init_resource::<OpenContainer>()
             .init_resource::<Assets<Image>>()
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
@@ -1159,5 +1183,44 @@ mod tests {
         // Bread lying underfoot is picked up.
         let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
         assert_eq!(quick(&mut inventory, bread), Ok(vec![FloorChange::Lifted(bread)]));
+    }
+
+    fn chest_with_bread(inventory: &mut Inventory) -> (ItemId, ItemId) {
+        let chest = inventory.add(fb_items::container_item(fb_level::chest_state(armory::families::chests::ChestStyle::Chest, 3, false)));
+        let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
+        inventory.put(bread, chest, Placement::new(2, 1, false)).unwrap();
+        (chest, bread)
+    }
+
+    #[test]
+    fn double_clicking_takes_from_a_chest_standing_in_the_level() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        let (chest, bread) = chest_with_bread(&mut inventory);
+        assert_eq!(quick(&mut inventory, bread), Ok(vec![]));
+        assert!(matches!(inventory.location(bread), Some(Location::In { container, .. }) if container == pack));
+        assert_eq!(inventory.contents_count(chest), 0);
+    }
+
+    #[test]
+    fn an_open_container_shows_as_its_own_grid_until_the_screen_closes() {
+        let mut app = screen_app();
+        app.add_systems(Update, close_container_with_screen.after(switch_screens).before(build_screen));
+        let (chest, _) = chest_with_bread(&mut app.world_mut().resource_mut::<Inventory>());
+        let grids = |app: &mut App| {
+            let mut views = app.world_mut().query::<&GridView>();
+            views.iter(app.world()).copied().collect::<Vec<_>>()
+        };
+        app.world_mut().resource_mut::<OpenContainer>().0 = Some(chest);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.update();
+        assert!(grids(&mut app).contains(&GridView::Container(chest)), "{:?}", grids(&mut app));
+        let mut items = app.world_mut().query::<&ItemView>();
+        assert_eq!(items.iter(app.world()).count(), 1, "the bread in it");
+        press(&mut app, KeyCode::KeyI);
+        assert_eq!(app.world().resource::<OpenContainer>().0, None);
+        press(&mut app, KeyCode::KeyI);
+        assert!(!grids(&mut app).contains(&GridView::Container(chest)));
     }
 }

@@ -41,6 +41,7 @@
 //! - [`belt`]: a belt buckled round a torso form, with frogs, loops and rings.
 //! - [`key`]: keys with ring, trefoil or lozenge bows and warded bits.
 //! - [`roll`]: rolled sheets and the straps round them (bedrolls, bandages).
+//! - [`scenery`]: what lies about a level and is never an item: rubble, bones, pillars.
 //! - [`light`]: carried light ([`light::LightAnchor`]), flames and embers (torches,
 //!   lanterns, candles, glowcaps).
 
@@ -73,6 +74,7 @@ pub mod parts;
 pub mod plank;
 pub mod plate;
 pub mod roll;
+pub mod scenery;
 pub mod socket;
 pub mod spearhead;
 pub mod strap;

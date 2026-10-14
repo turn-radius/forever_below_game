@@ -19,8 +19,9 @@
 //!   the item itself casts no shadow, or its own flame and handle would black out its light.
 //! - Every item lying in the level is kept track of in the [`Inventory`], loose, so a bag set
 //!   down keeps its contents and the inventory screen can show what lies underfoot.
-//! - A ray from the camera picks the nearest item in reach ([`Aimed`]), which the hover card
-//!   describes (`crate::inventory::card`); E picks it up into the inventory ([`Inventory::pick_up`]). Things are set down from the
+//! - A ray from the camera picks the nearest item or container in reach ([`Aimed`]), which the
+//!   hover card describes (`crate::inventory::card`); E picks an item up into the inventory
+//!   ([`Inventory::pick_up`]) and opens a container (`crate::props`). Things are set down from the
 //!   inventory screen ([`set_down`], [`drop_spot`]), and rest like any other floor item.
 //!
 //! With no player in the app a stand-in camera is spawned at the level's start
@@ -44,8 +45,9 @@ use fb_level::{CELL, ItemSpot, Level};
 use crate::inventory::{Inventory, ItemId, doll::lit_hand};
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
-use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, ScreenOpen, level_has_focus};
-use crate::player::{Gait, blocked_by, slide};
+use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, level_has_focus};
+use crate::player::{Gait, blocked_by, slide_around};
+use crate::props::{Container, PropPiece};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
 use crate::ui::{BG, BRIGHT};
 
@@ -346,7 +348,8 @@ pub struct ViewModelCamera {
 #[derive(Component, Debug)]
 struct Equipped;
 
-/// The floor item under the crosshair and in reach, if any.
+/// The floor item, or container standing in the level (`crate::props`), under the crosshair
+/// and in reach, if any.
 #[derive(Resource, Debug, Default)]
 pub struct Aimed(pub Option<Entity>);
 
@@ -494,23 +497,26 @@ pub fn floor_radius(points: &[Vec3]) -> f32 {
 
 /// Where an item of floor `radius` set down by a player at `feet` (world `(x, z)`) facing
 /// `forward` (a unit floor direction) comes to rest: [`DROP_DISTANCE`] ahead, or short of that
-/// where rock or a `blocked` cell is in the way, clear of it by `radius`. Found by sliding the
-/// item's footprint out from the feet as the body slides along walls ([`slide`]). The radius is
+/// where rock, a `blocked` cell or one of `obstacles` (a prop, someone standing) is in the
+/// way, clear of it by `radius`. Found by sliding the item's footprint out from the feet as the
+/// body slides along walls and round obstacles ([`slide_around`]). The radius is
 /// held under half a cell so an item fits down a one-cell corridor. `aside` moves the spot to
 /// the right (negative to the left), held within [`DROP_SPREAD`].
-pub fn drop_spot(feet: Vec2, forward: Vec2, aside: f32, radius: f32, blocked: impl Fn(i32, i32) -> bool) -> Vec2 {
+pub fn drop_spot(feet: Vec2, forward: Vec2, aside: f32, radius: f32, blocked: impl Fn(i32, i32) -> bool, obstacles: &[Obstacle]) -> Vec2 {
     let radius = radius.min(CELL * 0.5 - 0.5);
     let right = Vec2::new(-forward.y, forward.x);
-    slide(feet, feet + forward * DROP_DISTANCE + right * aside.clamp(-DROP_SPREAD, DROP_SPREAD), radius, blocked)
+    slide_around(feet, feet + forward * DROP_DISTANCE + right * aside.clamp(-DROP_SPREAD, DROP_SPREAD), radius, blocked, obstacles)
 }
 
 /// Sets loose item `id` down in front of the eye ([`drop_spot`]), into the level data too so it
 /// stays where it was left, and spawns it there. `None` if it has no vertices.
+#[allow(clippy::too_many_arguments)]
 pub fn set_down(
     spawner: &mut ItemSpawner,
     inventory: &Inventory,
     level: &mut Level,
     blocked_cells: &BlockedCells,
+    obstacles: &Obstacles,
     eye: &GlobalTransform,
     id: ItemId,
     aside: f32,
@@ -519,7 +525,7 @@ pub fn set_down(
     // Straight down, the top of the head points the way the body faces.
     let forward = eye.forward().as_vec3().xz().try_normalize().unwrap_or_else(|| eye.up().as_vec3().xz().normalize_or(Vec2::NEG_Y));
     let radius = floor_radius(&item_points(&item.shape.build()));
-    let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells)) / CELL;
+    let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells), &obstacles.0) / CELL;
     // Laid square to the player's view.
     let yaw = (-forward.x).atan2(-forward.y);
     // For anything that came from a level spot, the spot rolls the same item again
@@ -726,13 +732,17 @@ fn sway_held_torch(
 fn aim(
     camera: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
     items: Query<(Entity, &GlobalTransform, &FloorItem)>,
+    containers: Query<(Entity, &GlobalTransform, &PropPiece), With<Container>>,
     mut aimed: ResMut<Aimed>,
 ) {
     let Some(eye) = camera.iter().next() else {
         aimed.0 = None;
         return;
     };
-    let targets = items.iter().map(|(entity, transform, floor)| (entity, transform.compute_transform(), floor.min, floor.max));
+    let targets = items
+        .iter()
+        .map(|(entity, transform, floor)| (entity, transform.compute_transform(), floor.min, floor.max))
+        .chain(containers.iter().map(|(entity, transform, piece)| (entity, transform.compute_transform(), piece.min, piece.max)));
     let hit = nearest_hit(eye.translation(), eye.forward().as_vec3(), REACH, targets).map(|(entity, _)| entity);
     if aimed.0 != hit {
         aimed.0 = hit;
@@ -937,24 +947,33 @@ mod tests {
         // A corridor running east, one cell wide, rock at x = 3 cells.
         let blocked = |x: i32, y: i32| !(y == 0 && (0..3).contains(&x));
         let feet = Vec2::new(10.0, 10.0);
-        assert!(drop_spot(feet, Vec2::X, 0.0, 2.0, blocked).abs_diff_eq(Vec2::new(10.0 + DROP_DISTANCE, 10.0), 1e-3));
+        assert!(drop_spot(feet, Vec2::X, 0.0, 2.0, blocked, &[]).abs_diff_eq(Vec2::new(10.0 + DROP_DISTANCE, 10.0), 1e-3));
         // Up against the end wall it lands clear of it by its radius.
         let near_end = Vec2::new(55.0, 10.0);
-        assert!(drop_spot(near_end, Vec2::X, 0.0, 2.0, blocked).x <= 3.0 * CELL - 2.0 + 1e-3);
+        assert!(drop_spot(near_end, Vec2::X, 0.0, 2.0, blocked, &[]).x <= 3.0 * CELL - 2.0 + 1e-3);
         // A long thing still fits down the corridor, its radius held under half a cell.
-        let spot = drop_spot(feet, Vec2::Y, 0.0, 40.0, blocked);
+        let spot = drop_spot(feet, Vec2::Y, 0.0, 40.0, blocked, &[]);
         assert!(spot.y >= 9.5 && spot.y <= 10.5, "{spot}");
     }
 
+
+    #[test]
+    fn dropped_items_stop_short_of_props() {
+        let open = |_: i32, _: i32| false;
+        let chest = [Obstacle::Rect { centre: Vec2::new(50.0, 50.0 - DROP_DISTANCE), half: Vec2::new(4.5, 2.4), yaw: 0.0 }];
+        let spot = drop_spot(Vec2::new(50.0, 50.0), Vec2::NEG_Y, 0.0, 1.0, open, &chest);
+        assert!(!chest[0].overlaps(spot, 1.0), "{spot}");
+        assert!(spot.y > 50.0 - DROP_DISTANCE + 2.4, "{spot}");
+    }
 
     #[test]
     fn dropped_items_go_aside_within_reach() {
         let open = |_: i32, _: i32| false;
         let feet = Vec2::new(50.0, 50.0);
         // Facing -Z, the right is +X.
-        let right = drop_spot(feet, Vec2::NEG_Y, 3.0, 1.0, open);
+        let right = drop_spot(feet, Vec2::NEG_Y, 3.0, 1.0, open, &[]);
         assert!(right.abs_diff_eq(Vec2::new(53.0, 50.0 - DROP_DISTANCE), 1e-3), "{right}");
-        let far = drop_spot(feet, Vec2::NEG_Y, -40.0, 1.0, open);
+        let far = drop_spot(feet, Vec2::NEG_Y, -40.0, 1.0, open, &[]);
         assert!((far.x - (50.0 - DROP_SPREAD)).abs() < 1e-3, "{far}");
         let eye = Vec3::new(feet.x, EYE_HEIGHT, feet.y);
         assert!(Vec3::new(far.x, 0.0, far.y).distance(eye) < REACH);
@@ -996,7 +1015,7 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 move |mut spawner: ItemSpawner, inventory: Res<Inventory>, mut level: ResMut<CurrentLevel>, blocked: Res<BlockedCells>| {
-                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &GlobalTransform::from(eye), id, 0.0);
+                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &Obstacles::default(), &GlobalTransform::from(eye), id, 0.0);
                 },
             )
             .unwrap();
@@ -1028,6 +1047,26 @@ mod tests {
         assert!(matches!(inventory.location(id), Some(crate::inventory::Location::In { container, .. }) if container == pack));
         assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
         assert!(app.world().get_entity(dropped).is_err());
+    }
+
+    #[test]
+    fn a_container_in_reach_is_under_the_crosshair_and_e_leaves_it_standing() {
+        let (mut app, _) = delving_app();
+        // A chest a metre ahead of an eye looking down at it.
+        let at = Transform::from_xyz(0.0, 0.0, -10.0);
+        let spot = fb_level::PropSpot { x: 0.0, y: -0.5, yaw: 0.0, prop: fb_level::Prop::Container { style: armory::families::chests::ChestStyle::Chest, seed: 1, loot: 1 } };
+        let piece = PropPiece { index: 0, spot, min: Vec3::new(-3.0, 0.0, -2.0), max: Vec3::new(3.0, 4.0, 2.0) };
+        let id = app.world_mut().resource_mut::<Inventory>().add(fb_items::container_item(fb_level::chest_state(armory::families::chests::ChestStyle::Chest, 1, false)));
+        let chest = app.world_mut().spawn((at, GlobalTransform::from(at), piece, Container { id, opened: false })).id();
+        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, 2.0, -10.0), Vec3::Y);
+        app.world_mut().spawn((PlayerCamera, Equipped, eye, GlobalTransform::from(eye)));
+        app.update();
+        assert_eq!(app.world().resource::<Aimed>().0, Some(chest));
+        // E picks nothing up: the chest is never carried off (`crate::props` opens it).
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        app.update();
+        assert!(app.world().get_entity(chest).is_ok());
+        assert_eq!(app.world().resource::<Inventory>().location(id), Some(crate::inventory::Location::Loose));
     }
 
     #[test]
