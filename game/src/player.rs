@@ -12,6 +12,7 @@ use bevy::{
 };
 use fb_level::{CELL, Level};
 
+use crate::light::point_light;
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
 
 /// The body's radius on the floor in world units (35 cm).
@@ -85,7 +86,7 @@ fn spawn_player(mut commands: Commands, level: Res<CurrentLevel>) {
             ));
             // A dim light at the eye for looking at the level before the torch exists.
             if std::env::var_os("FB_DEBUG_LIGHT").is_some() {
-                camera.with_child(PointLight { intensity: 40_000.0, range: 200.0, ..default() });
+                camera.with_child(point_light(Color::WHITE, 0.5, 200.0, &exposure));
             }
         });
 }

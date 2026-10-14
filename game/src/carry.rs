@@ -26,7 +26,7 @@ use bevy::{
 };
 use fb_level::{CELL, ItemSpot, Level};
 
-use crate::light::Torch;
+use crate::light::{Torch, cast_shadows, point_light};
 use crate::play::{Carried, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
 
@@ -55,6 +55,19 @@ const HELD_LIGHT_OFFSET: Vec3 = Vec3::new(-3.0, 3.0, 7.0);
 
 /// Lowest a light given by an item on the floor hangs, in world units (60 cm).
 const FLOOR_LIGHT_HEIGHT: f32 = 6.0;
+
+/// How far a lit thing's light reaches in the world, in multiples of its [`LightAnchor`]
+/// radius: the radius is its bright light, and dim light runs as far again beyond it, as a
+/// torch's does in the D&D 5e SRD 5.1 ("Adventuring Gear": bright light in a 20-foot radius and
+/// dim light for an additional 20 feet).
+const DIM_REACH: f32 = 2.0;
+/// How bright a lit thing's light is close up, as a multiple of full. Over 1 widens the fully
+/// lit core; the shader caps it at full, so nothing near burns white.
+const WORLD_PEAK: f32 = 1.0;
+/// The held torch's own light on the stage: close-up strength and reach, set so the whole
+/// torch sits in its upper steps and reads firelit.
+const HELD_PEAK: f32 = 1.8;
+const HELD_REACH: f32 = 40.0;
 
 /// Field of view of the view model camera, fixed whatever the world camera uses.
 const VIEW_MODEL_FOV_DEGREES: f32 = 60.0;
@@ -124,14 +137,6 @@ pub fn appearance_of(item: &Item) -> ItemAppearance {
         decay_scale_factor,
         ..default()
     }
-}
-
-/// Point light intensity in lumens that lights a surface square to it, `distance` units
-/// away, to `level` times its display colour in the toon shader, before bands and range
-/// falloff. Bevy divides lumens by 4 pi for candela, attenuates by the distance squared, and
-/// the toon shader divides by pi (its Lambert lobe) and multiplies by the camera's exposure.
-pub fn lumens_for(level: f32, distance: f32, exposure: f32) -> f32 {
-    level * 4.0 * std::f32::consts::PI * std::f32::consts::PI * distance * distance / exposure
 }
 
 /// How an item of item-space `size` lies on the floor: long things (more than twice as tall
@@ -350,31 +355,21 @@ fn lay_out_items(mut commands: Commands, level: Res<CurrentLevel>, old: Query<En
             let mut flame = transform.transform_point(Vec3::from_array(anchor.position));
             flame.y = flame.y.max(FLOOR_LIGHT_HEIGHT);
             let at = transform.compute_affine().inverse().transform_point3(flame);
-            root.with_child(anchor_light(&anchor, at, anchor.radius / 7.0, anchor.radius, &Exposure::INDOOR, false));
+            root.with_child((world_light(&anchor, &Exposure::INDOOR), Transform::from_translation(at)));
         }
     }
 }
 
-/// A flickering point light in `anchor`'s colour and flicker, at `at`, reaching `range` units
-/// and lighting a surface square to it `full_at` units away to full light.
-fn anchor_light(anchor: &LightAnchor, at: Vec3, full_at: f32, range: f32, exposure: &Exposure, shadows: bool) -> impl Bundle {
-    let intensity = lumens_for(1.0, full_at, exposure.exposure());
-    (
-        Torch { intensity, flicker_depth: anchor.flicker },
-        PointLight {
-            color: Color::srgb(anchor.color.0, anchor.color.1, anchor.color.2),
-            intensity,
-            range,
-            shadow_maps_enabled: shadows,
-            ..default()
-        },
-        Transform::from_translation(at),
-    )
+/// A flickering point light in `anchor`'s colour and flicker, `peak` times full close up and
+/// reaching `range` units.
+fn anchor_light(anchor: &LightAnchor, peak: f32, range: f32, exposure: &Exposure) -> (Torch, PointLight) {
+    let color = Color::srgb(anchor.color.0, anchor.color.1, anchor.color.2);
+    Torch::flickering(point_light(color, peak, range, exposure), anchor.flicker)
 }
 
-/// An anchor's light in the world: full light out to two fifths of its reach, fading to dark at it.
-fn world_light(anchor: &LightAnchor, at: Vec3, exposure: &Exposure, shadows: bool) -> impl Bundle {
-    anchor_light(anchor, at, anchor.radius * 0.4, anchor.radius, exposure, shadows)
+/// An anchor's light in the world: bright out to its radius, dim to [`DIM_REACH`] times it.
+fn world_light(anchor: &LightAnchor, exposure: &Exposure) -> (Torch, PointLight) {
+    anchor_light(anchor, WORLD_PEAK, anchor.radius * DIM_REACH, exposure)
 }
 
 /// How a camera draws, which the view model camera copies from the player camera.
@@ -424,10 +419,12 @@ fn equip_player_camera(
         commands.entity(view_model).with_child((
             // Off the flame toward the eye, so the whole torch sits at much the same distance
             // from it and reads firelit rather than burnt white.
-            anchor_light(&anchor, HELD_FLAME + HELD_LIGHT_OFFSET, 9.0, 40.0, &exposure, false),
+            anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure),
+            Transform::from_translation(HELD_FLAME + HELD_LIGHT_OFFSET),
             view_layer,
         ));
-        commands.entity(camera).insert(Equipped).with_child(world_light(&anchor, WORLD_FLAME, &exposure, true));
+        let (torch_light, light) = world_light(&anchor, &exposure);
+        commands.entity(camera).insert(Equipped).with_child((torch_light, cast_shadows(light), Transform::from_translation(WORLD_FLAME)));
         spawn_hud(&mut commands, view_model);
     }
 }
@@ -649,15 +646,6 @@ mod tests {
             assert_eq!(item_light(&item), Some(light));
             assert!(light.radius > 20.0 && (0.0..=1.0).contains(&light.flicker));
         }
-    }
-
-    #[test]
-    fn lumens_match_the_toon_light() {
-        // The toon shader's light: lumens / 4 pi / d^2 / pi * exposure.
-        let exposure = Exposure::INDOOR.exposure();
-        let lumens = lumens_for(0.8, 15.0, exposure);
-        let level = lumens / (4.0 * std::f32::consts::PI) / (15.0 * 15.0) / std::f32::consts::PI * exposure;
-        assert!(close(level, 0.8), "{level}");
     }
 
     #[test]

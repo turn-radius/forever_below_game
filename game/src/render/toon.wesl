@@ -3,8 +3,8 @@
 // The StandardMaterial inputs (base colour, normal, occlusion) come from Bevy's
 // `pbr_input_from_standard_material`. Lighting is our own: each light's N.L is quantised into
 // hard bands, as three.js `MeshToonMaterial` does with a 1-pixel gradient map
-// (`makeGradient` in `reference/spline_armory_engine.js`), then scaled by the light's colour
-// and distance falloff. Wear is painted on the base colour first (`decay.wesl`); both
+// (`makeGradient` in `reference/spline_armory_engine.js`), then scaled by the light's colour.
+// Point and spot lights also step down in hard steps across their reach (`reach_falloff`). Wear is painted on the base colour first (`decay.wesl`); both
 // work in display (sRGB) values, as the prototype did. The vertex shader is Bevy's mesh
 // vertex shader plus one thing: fine parts that get no ink line are fattened to a minimum
 // width on screen, so a bowstring stays visible across the room.
@@ -17,7 +17,7 @@ import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, main_pass_post_lighting_processing},
     pbr_types::PbrInput,
-    pbr_lighting::getDistanceAttenuation,
+    pbr_lighting::getRangeFalloff,
     mesh_view_bindings as view_bindings,
     mesh_view_types,
     mesh_functions::get_local_from_world,
@@ -91,8 +91,40 @@ fn toon_band(n_dot_l: f32, shadow: f32) -> f32 {
     return toon.band_values[index / 4u][index % 4u];
 }
 
+// Fraction of a light's range inside which its falloff stops climbing. Must match
+// `light::CORE_FRACTION`.
+const CORE_FRACTION: f32 = 0.4;
+// Steps a point or spot light's strength falls in across its reach, from full to dark.
+const REACH_STEPS: f32 = 4.0;
+
+// Distance attenuation of a point or spot light, in place of Bevy's `getDistanceAttenuation`
+// (`1 / d^2` windowed). The window `(1 - (d/r)^4)^2` and the `+1` that keeps the inverse square
+// finite at the light are from Brian Karis, "Real Shading in Unreal Engine 4" (SIGGRAPH 2013,
+// eq. 9): `saturate(1 - (d/r)^4)^2 / (d^2 + 1)`. Here the `+1` is `core^2` with
+// `core = CORE_FRACTION * r` (our own choice), so a light no longer climbs without bound at
+// its source and every light has the same shape across its reach. Mirrors
+// `light::reach_falloff`, which is this times `core^2`.
+fn reach_attenuation(distance_squared: f32, inverse_range_squared: f32) -> f32 {
+    let core_squared = CORE_FRACTION * CORE_FRACTION / max(inverse_range_squared, 1e-12);
+    return getRangeFalloff(distance_squared, inverse_range_squared) / (distance_squared + core_squared);
+}
+
+// One point or spot light's display-space strength (`radiance` per channel, exposed) cut to
+// `REACH_STEPS` hard steps: capped at full, so a wall beside the flame is full light and not
+// burnt white, then rounded up, so the dimmest step runs out to the light's range and ends
+// there, as dim light ends at the edge of a torch's reach. Keeps the light's hue.
+fn reach_step(radiance: vec3<f32>) -> vec3<f32> {
+    let level = max(radiance.r, max(radiance.g, radiance.b));
+    if level <= 0.0 {
+        return vec3(0.0);
+    }
+    let stepped = ceil(min(level, 1.0) * REACH_STEPS) / REACH_STEPS;
+    return radiance * (stepped / level);
+}
+
 // Radiance from every point, spot and directional light reaching this fragment, banded per
-// light. Same light data and units as Bevy's `apply_pbr_lighting`, with a Lambert lobe.
+// light, times the view's exposure. Same light data and units as Bevy's
+// `apply_pbr_lighting`, with a Lambert lobe.
 fn toon_direct_light(in: PbrInput) -> vec3<f32> {
     let N = in.N;
     let P = in.world_position.xyz;
@@ -107,6 +139,7 @@ fn toon_direct_light(in: PbrInput) -> vec3<f32> {
     let cluster_index = clustering::view_fragment_cluster_index(in.frag_coord.xy, view_z, in.is_orthographic);
     let ranges = clustering::unpack_clusterable_object_index_ranges(cluster_index);
 
+    let exposure = view_bindings::view.exposure;
     var light = vec3<f32>(0.0);
 
     // Point lights, then spot lights (they share the clustered light list).
@@ -119,7 +152,7 @@ fn toon_direct_light(in: PbrInput) -> vec3<f32> {
 
         let light_to_frag = (*clustered).position_radius.xyz - P;
         let L = normalize(light_to_frag);
-        let attenuation = getDistanceAttenuation(
+        let attenuation = reach_attenuation(
             dot(light_to_frag, light_to_frag),
             (*clustered).color_inverse_square_range.w,
         );
@@ -148,7 +181,9 @@ fn toon_direct_light(in: PbrInput) -> vec3<f32> {
             cone = falloff * falloff;
         }
 
-        light += (*clustered).color_inverse_square_range.rgb * attenuation * cone * toon_band(dot(N, L), shadow);
+        // Lambert: the band stands in for N.L, 1/PI as in Bevy's diffuse lobe.
+        let radiance = (*clustered).color_inverse_square_range.rgb * attenuation * cone * (exposure / PI);
+        light += reach_step(radiance) * toon_band(dot(N, L), shadow);
     }
 
     for (var i: u32 = 0u; i < view_bindings::lights.n_directional_lights; i = i + 1u) {
@@ -159,11 +194,10 @@ fn toon_direct_light(in: PbrInput) -> vec3<f32> {
             shadow = shadows::fetch_directional_shadow(i, in.world_position, in.world_normal, view_z, in.frag_coord.xy);
             shadow *= in.directional_shadow_factor;
         }
-        light += (*directional).color.rgb * toon_band(dot(N, (*directional).direction_to_light), shadow);
+        light += (*directional).color.rgb * (exposure / PI) * toon_band(dot(N, (*directional).direction_to_light), shadow);
     }
 
-    // Lambert: the band stands in for N.L, 1/PI as in Bevy's diffuse lobe.
-    return light * (1.0 / PI);
+    return light;
 }
 
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
@@ -204,7 +238,7 @@ fn fragment(
     );
 
     let ambient = view_bindings::lights.ambient_color.rgb * pbr_input.diffuse_occlusion;
-    let light = (toon_direct_light(pbr_input) + ambient) * view_bindings::view.exposure;
+    let light = toon_direct_light(pbr_input) + ambient * view_bindings::view.exposure;
     let lit = srgb_to_linear(base * light);
     // Glow fades as the stone clouds over (`gemMat`).
     let glow = srgb_to_linear(base) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));

@@ -23,7 +23,7 @@ use armory::{
 use bevy::{camera::Exposure, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
 use fb_level::{CELL, LightKind};
 
-use crate::light::Torch;
+use crate::light::{Torch, cast_shadows, point_light};
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
 use crate::render::{ArmoryPart, ItemAppearance, MinWidth, OutlineMaterial, ToonMaterial, part_to_mesh};
 use geometry::{CellView, Doorway, LevelMesh};
@@ -60,11 +60,15 @@ pub const FOG_COLOR: Color = Color::srgb(0.012, 0.016, 0.024);
 pub const FOG_START: f32 = 40.0;
 pub const FOG_END: f32 = 260.0;
 
-/// Glowcaps: faint cold cyan, a little over a metre of light.
+/// Glowcaps: faint cold cyan, a pool reaching about three metres. Peaks are multiples of full
+/// light close up (`light::peak_lumens`), reaches in world units.
 pub const GLOWCAP_COLOR: Rgb = Rgb::hex(0x6ad0c8);
 pub const GLOWCAP_LIGHT: Color = Color::srgb(0.45, 0.85, 0.88);
-/// Brazier light: the torch colour, brighter and further.
-pub const BRAZIER_REACH: f32 = 110.0;
+pub const GLOWCAP_PEAK: f32 = 0.5;
+pub const GLOWCAP_REACH: f32 = 30.0;
+/// Brazier light: the torch colour, brighter and further than a torch in hand.
+pub const BRAZIER_PEAK: f32 = 1.5;
+pub const BRAZIER_REACH: f32 = 150.0;
 
 /// The stone's weathering: wear 0.5 on stone (decay type 9), its pattern a few metres across
 /// in world space rather than an item's few centimetres.
@@ -72,15 +76,6 @@ pub const STONE_WEAR: f32 = 0.5;
 const STONE_PATTERN_SCALE: f32 = 0.06;
 /// The rock's ink: near black, a shade under the fog.
 pub const STONE_INK: Color = Color::srgb(0.008, 0.009, 0.011);
-
-/// Lumens for a point light to light a surface it faces at `distance` to the top band at
-/// `brightness` of full, through the toon shader at [`EXPOSURE`]. The shader takes a point
-/// light's intensity over `4 PI` steradians, the inverse square of distance and the `1/PI`
-/// Lambert lobe, then multiplies by the exposure.
-pub fn lumens(brightness: f32, distance: f32) -> f32 {
-    use std::f32::consts::PI;
-    brightness * 4.0 * PI * PI * distance * distance / EXPOSURE.exposure()
-}
 
 fn abyss_ambient() -> GlobalAmbientLight {
     GlobalAmbientLight { color: AMBIENT_COLOR, brightness: AMBIENT_LUX, ..default() }
@@ -249,11 +244,8 @@ fn spawn_fixtures(mut commands: Commands, level: Res<CurrentLevel>, mut spawner:
             LightKind::Brazier => {
                 let (mesh, flame) = geometry::brazier(seed);
                 spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((LevelPiece, Transform::from_translation(at)));
-                let (torch, mut light) = Torch::light(lumens(0.6, 20.0), BRAZIER_REACH);
-                light.shadow_maps_enabled = true;
-                // Biases in world units of 10 cm, where Bevy's defaults assume metres.
-                light.shadow_depth_bias = 0.5;
-                light.shadow_normal_bias = 1.2;
+                let (torch, light) = Torch::light(BRAZIER_PEAK, BRAZIER_REACH, &EXPOSURE);
+                let light = cast_shadows(light);
                 commands.spawn((LevelPiece, Name::new("brazier light"), torch, light, Transform::from_translation(at + Vec3::Y * flame)));
             }
         }
@@ -281,7 +273,7 @@ fn spawn_glowcaps(commands: &mut Commands, spawner: &mut crate::render::ItemSpaw
     commands.spawn((
         LevelPiece,
         Name::new("glowcap light"),
-        PointLight { color: GLOWCAP_LIGHT, intensity: lumens(0.35, 5.0), range: 24.0, ..default() },
+        point_light(GLOWCAP_LIGHT, GLOWCAP_PEAK, GLOWCAP_REACH, &EXPOSURE),
         Transform::from_translation(centre + Vec3::Y * 1.5),
     ));
 }
@@ -391,7 +383,7 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             transform,
         ))
         // Something to see by until the player brings a torch.
-        .with_child((Torch::light(lumens(3.0, 12.0), 120.0), Transform::from_xyz(4.0, -3.0, 2.0)));
+        .with_child((Torch::light(1.0, 120.0, &EXPOSURE), Transform::from_xyz(4.0, -3.0, 2.0)));
     if mode == "top" {
         commands.insert_resource(GlobalAmbientLight { brightness: 120.0, ..abyss_ambient() });
     }
@@ -456,12 +448,6 @@ mod tests {
         // The doorway's +Z is inward; the leaf runs along its +X when shut.
         let open = door().rotation() * Vec3::X;
         assert!(open.z > 0.95, "{open}");
-    }
-
-    #[test]
-    fn light_levels_follow_the_inverse_square() {
-        assert!((lumens(1.0, 20.0) / lumens(1.0, 10.0) - 4.0).abs() < 1e-3);
-        assert!((lumens(0.5, 10.0) * 2.0 - lumens(1.0, 10.0)).abs() < 1.0);
     }
 
     #[test]
