@@ -296,8 +296,12 @@ impl Torch {
     }
 
     /// Where the torch gives its light, while it burns: the heart of the flame, in the
-    /// prototype's torch colour, reaching the base's 20 ft scaled by the flame. `None` unless
-    /// the torch is [`BurnState::Burning`].
+    /// prototype's torch colour, reaching about the SRD's 20 ft of bright light ([`TORCH_FEET`]):
+    /// a cresset's open basket a little farther, a bundle of splints a little less, tallow
+    /// less than pitch or resin, and a bigger flame a little farther. The shares are our own,
+    /// kept narrow enough that no torch reaches as far as the weakest lantern
+    /// ([`crate::families::lantern::Lantern::light`]). `None` unless the torch is
+    /// [`BurnState::Burning`].
     pub fn light(s: &TorchState) -> Option<LightAnchor> {
         if s.burn.state != BurnState::Burning {
             return None;
@@ -305,22 +309,23 @@ impl Torch {
         let g = Geometry::of(s);
         let style = match s.head.style {
             TorchStyle::Rag => 1.0,
-            TorchStyle::Bundle => 0.85,
-            TorchStyle::Cresset => 1.2,
+            TorchStyle::Bundle => 0.9,
+            TorchStyle::Cresset => 1.08,
         };
-        let fuel = if s.head.fuel == Fuel::Tallow { 0.9 } else { 1.0 };
+        let fuel = if s.head.fuel == Fuel::Tallow { 0.92 } else { 1.0 };
         let flicker = match s.head.style {
             TorchStyle::Rag => 0.8,
             TorchStyle::Bundle => 1.0,
             TorchStyle::Cresset => 0.6,
         };
-        let feet = TORCH_FEET * style * fuel * (0.75 + 0.25 * s.burn.flame);
+        let feet = TORCH_FEET * style * fuel * (0.9 + 0.1 * s.burn.flame);
         let at = vec3::add(g.flame_base, [g.flame_lean * g.flame_height * 0.16, g.flame_height * 0.4, 0.0]);
         Some(LightAnchor::feet(at, FLAME_LIGHT, feet, flicker))
     }
 }
 
-/// The torch's light in feet (`light` of `Torch` in `data/bases.json`).
+/// The torch's light in feet (`light` of `Torch` in `data/bases.json`): the SRD's torch, 20 ft
+/// of bright light (https://www.dndbeyond.com/sources/dnd/free-rules/equipment#AdventuringGear).
 pub const TORCH_FEET: f32 = 20.0;
 
 fn compose(rng: &mut Mulberry32, seed: u32, style: TorchStyle) -> TorchState {
