@@ -32,7 +32,7 @@ use std::f32::consts::{PI, TAU};
 
 use armory::build::boot::boot_parts;
 use armory::build::form::{BACK, FRONT, HeadForm, LimbForm, TorsoForm, TorsoProfile};
-use armory::build::garment::{Fitting, Underlay, garment_drape, garment_parts_fitted};
+use armory::build::garment::{Fitting, Notch, Underlay, garment_drape, garment_parts_fitted};
 use armory::build::hand::hand_parts_curled;
 use armory::build::hat::hat_parts;
 use armory::build::hood::hood_parts;
@@ -47,7 +47,7 @@ use armory::families::feet::FeetState;
 use armory::families::garment::GarmentState;
 use armory::families::hands::HandsState;
 use armory::families::hat::HatState;
-use armory::families::helm::{Helm, HelmState};
+use armory::families::helm::{Helm, HelmState, Openings};
 use armory::families::hood::HoodState;
 use armory::families::legs::LegsState;
 use armory::geom::vec3::{self, Mat3, V3};
@@ -60,7 +60,9 @@ use armory::{Item, ItemMesh, MaterialKind, Part};
 use fb_items::Slot;
 
 use crate::body::Body;
+use crate::folk::Ears;
 use crate::hair::HairFit;
+use crate::head::HeadFit;
 use crate::limb::{Limb, Side};
 use crate::place::Placement;
 
@@ -114,6 +116,8 @@ pub struct WornFit {
     pub layers: Vec<WornLayer>,
     /// How the hair and beard sit under it all.
     pub hair: HairFit,
+    /// How the head's features sit under headgear.
+    pub head: HeadFit,
     pub covered: Covered,
 }
 
@@ -137,6 +141,13 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
     let mut env = Envelope::new(body);
     let tucked = worn.iter().any(|(slot, item)| *slot == Slot::Feet && matches!(item, Item::Feet(s) if has_shaft(s)));
     let hooded = worn.iter().any(|(slot, item)| *slot == Slot::Head && matches!(item, Item::Hood(_)));
+    // Ears fold back under a hood, and a pig's flop ears under anything; standing ears come
+    // out through openings cut in a helm; a frill folds flat under anything on the head.
+    fit.head = match worn.iter().find(|(slot, _)| *slot == Slot::Head).map(|(_, item)| item) {
+        Some(Item::Hood(_)) => HeadFit { fold_ears: true, fold_frill: true },
+        Some(Item::Hat(_) | Item::Helm(_)) => HeadFit { fold_ears: body.race().ears == Ears::Flop, fold_frill: true },
+        _ => HeadFit::default(),
+    };
     let mut hair = None;
     for slot in LAYER_ORDER {
         // Long hair hangs over what is on the shoulders: under a hood and its cape, else over
@@ -161,9 +172,9 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
                 }
                 (Slot::Belt, Item::Belt(s)) => belt(body, &env, s),
                 (Slot::Neck, Item::Amulet(s)) => amulet(body, &env, s),
-                (Slot::Head, Item::Helm(s)) => helm(body, s),
-                (Slot::Head, Item::Hood(s)) => hood(body, &env, s),
-                (Slot::Head, Item::Hat(s)) => hat(body, s),
+                (Slot::Head, Item::Helm(s)) => helm(body, s, fit.head),
+                (Slot::Head, Item::Hood(s)) => hood(body, &env, s, fit.head),
+                (Slot::Head, Item::Hat(s)) => hat(body, s, fit.head),
                 (Slot::Back, Item::Bags(s)) => bag(body, &env, s),
                 _ => continue,
             };
@@ -183,11 +194,18 @@ impl Body {
     /// under the gear, and the gear.
     pub fn dressed(&self, worn: &[(Slot, Item)]) -> ItemMesh {
         let fit = fit_worn(self, worn);
+        let mut mesh = self.under(&fit);
+        mesh.parts.extend(fit.gear().parts);
+        mesh
+    }
+
+    /// The body as it shows under `fit`'s gear: skin less what the gear hides, the head with
+    /// its features folded under headgear, and the hair fitted under it all.
+    pub fn under(&self, fit: &WornFit) -> ItemMesh {
         let mut mesh = self.skin_mesh();
         mesh.parts.retain(|p| !fit.covered.hides(p.name));
-        mesh.parts.extend(self.head_mesh().parts);
+        mesh.parts.extend(self.head_mesh_fitted(fit.head).parts);
         mesh.parts.extend(self.hair_mesh(fit.hair).parts);
-        mesh.parts.extend(fit.gear().parts);
         mesh
     }
 }
@@ -852,9 +870,59 @@ fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> 
     }
     let arms = env.arm_forms();
     let under = |a: f32, y: f32| env.outline.at(a, y) + GAP;
-    let fitting = Fitting { arms: Some(&arms), over: open.then_some(&under as Underlay) };
-    let parts = garment_parts_fitted(&form, &fitting, &s.cut, &s.hem, &s.belt, &s.plates, s.seed);
-    on_body(body, parts.finish())
+    let mut fitting = Fitting { arms: Some(&arms), over: open.then_some(&under as Underlay), notch: None };
+    let mut mesh = on_body(body, garment_parts_fitted(&form, &fitting, &s.cut, &s.hem, &s.belt, &s.plates, s.seed).finish());
+    // A tail passing out through a cloak gets a vent cut up from the hem round it.
+    if let Some(notch) = open.then(|| tail_notch(body, &mesh)).flatten() {
+        fitting.notch = Some(notch);
+        mesh = on_body(body, garment_parts_fitted(&form, &fitting, &s.cut, &s.hem, &s.belt, &s.plates, s.seed).finish());
+    }
+    mesh
+}
+
+/// The vent a tail needs in a cloak hung as `cloak` (body space): from the hem up past the
+/// highest point where the tail comes within reach of the cloth, wide enough for it there.
+/// Our own: the plate's lizardfolk wear no cloaks over their tails.
+fn tail_notch(body: &Body, cloak: &ItemMesh) -> Option<Notch> {
+    let (path, radius) = body.tail()?;
+    let w = body.waist_y;
+    let mut reach = Outline::new(body.ankle_y - w - 1.0, body.height - w);
+    let mut hem = f32::MAX;
+    for p in cloak.parts.iter().filter(|p| p.name == "body").flat_map(|p| p.positions.iter()) {
+        reach.add([p[0], p[1] - w, p[2]]);
+        hem = hem.min(p[1] - w);
+    }
+    let margin = 0.15 * body.scale.sqrt();
+    let n = path.len();
+    // Where the tail comes within reach of the cloth's inner face (or is outside it already):
+    // its angle round the body, height, top and the half angle it spans there.
+    let mut near: Vec<(f32, f32, f32, f32)> = vec![];
+    for (i, c) in path.iter().enumerate() {
+        let r = radius(i as f32 / (n - 1) as f32);
+        let q = [c[0], c[1] - w, c[2]];
+        if q[1] + r < hem {
+            continue;
+        }
+        let angle = (-q[2]).atan2(q[0]);
+        let cloth = reach.at(angle, q[1]);
+        let d = q[0].hypot(q[2]);
+        if cloth > NONE && d + r + margin > cloth - 0.05 {
+            near.push((angle, q[1], q[1] + r + margin, (r + margin) / cloth.max(d).max(0.5)));
+        }
+    }
+    let first = near.iter().max_by(|a, b| a.2.total_cmp(&b.2))?;
+    let (angle, top) = (first.0, first.2 + 0.1 * body.scale);
+    // The vent narrows to a point at its top: wide enough at the hem that it still clears
+    // the tail at every height it passes through.
+    let half_width = near
+        .iter()
+        .map(|&(a, y, _, half)| {
+            let off = ((a - angle + PI).rem_euclid(TAU) - PI).abs();
+            (half + off) / (1.0 - (y - hem) / (top - hem)).max(0.15)
+        })
+        .fold(0.0f32, f32::max)
+        .min(1.2);
+    Some(Notch { angle, top, half_width })
 }
 
 /// Whether footwear has a shaft above the ankle that trousers tuck into.
@@ -931,33 +999,43 @@ fn belt(body: &Body, env: &Envelope, state: &BeltState) -> ItemMesh {
     on_body(body, Belts::on_form(&env.form(Over::Trunk, 1.0), state))
 }
 
-/// The head form `extra` larger all round, in torso space: the head with its hair.
-fn head_over_hair(body: &Body) -> HeadForm {
+/// The head form grown by its covered hair and its folded features, in torso space.
+fn head_over_hair(body: &Body, head: HeadFit) -> HeadForm {
     let h = body.head_form();
-    let v = body.hair_volume(true);
+    let v = body.hair_volume(true) + body.feature_volume(head);
     HeadForm { half_width: h.half_width + v, half_height: h.half_height + v, half_depth: h.half_depth + v, ..h }
 }
 
 /// A helmet resized to the head and its covered hair (the plate's `saHelm`: radius
 /// `1.12 * head half width + hair volume`), its brow a little above the head's centre.
-fn helm(body: &Body, state: &HelmState) -> ItemMesh {
+///
+/// Ears come out through openings cut where they pass through the shell (our own: the plate
+/// draws none), and a folded frill under it sizes it up as hair does.
+fn helm(body: &Body, state: &HelmState, fit: HeadFit) -> ItemMesh {
     let head = &body.head;
-    let s = state.sized(1.12 * head.half_width + body.hair_volume(true));
-    let mut mesh = Helm::build(&s);
-    Placement::translation(vec3::add(head.centre, [0.0, 0.1 * head.half_height, 0.0])).apply_to_item(&mut mesh);
+    // A head much deeper than it is wide (a lizard's) sizes it by its depth instead, so the
+    // back of the skull stays inside (our own: the bowl is 1.12 times deeper than wide).
+    let s = state.sized((1.12 * head.half_width).max(0.96 * head.half_depth) + body.hair_volume(true) + body.feature_volume(fit));
+    let at = vec3::add(head.centre, [0.0, 0.1 * head.half_height, 0.0]);
+    let ears = body.head_mesh_fitted(fit).parts.into_iter().filter(|p| p.name == "ears").flat_map(|p| p.positions).collect::<Vec<V3>>();
+    // Each ear on its own side, in the helm's space.
+    let through = [1.0f32, -1.0].map(|sg| ears.iter().filter(|p| (p[0] - head.centre[0]) * sg > 0.0).map(|p| vec3::sub(*p, at)).collect::<Vec<V3>>());
+    let openings = Openings { through: through.into_iter().filter(|t| !t.is_empty()).collect(), margin: 0.08 * body.scale.sqrt() };
+    let mut mesh = Helm::build_with_openings(&s, &openings);
+    Placement::translation(at).apply_to_item(&mut mesh);
     mesh
 }
 
 /// A hood over the head and hair, its cape over everything on the shoulders.
-fn hood(body: &Body, env: &Envelope, state: &HoodState) -> ItemMesh {
+fn hood(body: &Body, env: &Envelope, state: &HoodState, head: HeadFit) -> ItemMesh {
     let mut hood = state.hood;
     hood.cape *= body.scale;
-    on_body(body, hood_parts(&head_over_hair(body), &env.form(Over::Arms, 1.0), &hood, &state.hem, state.seed).finish())
+    on_body(body, hood_parts(&head_over_hair(body, head), &env.form(Over::Arms, 1.0), &hood, &state.hem, state.seed).finish())
 }
 
 /// A hat over the head and hair.
-fn hat(body: &Body, state: &HatState) -> ItemMesh {
-    on_body(body, hat_parts(&head_over_hair(body), &state.hat, state.seed).finish())
+fn hat(body: &Body, state: &HatState, head: HeadFit) -> ItemMesh {
+    on_body(body, hat_parts(&head_over_hair(body, head), &state.hat, state.seed).finish())
 }
 
 /// The Armory pendant on a necklace laid over the body: round the base of the neck behind
@@ -1327,6 +1405,111 @@ mod tests {
                 }
             }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The triangles of `part` whose bounds meet the box `lo..hi`.
+    fn triangles_in(part: &Part, lo: V3, hi: V3) -> Vec<[V3; 3]> {
+        part.indices
+            .chunks(3)
+            .map(|t| [t[0], t[1], t[2]].map(|i| part.positions[i as usize]))
+            .filter(|t| (0..3).all(|k| t.iter().any(|p| p[k] >= lo[k]) && t.iter().any(|p| p[k] <= hi[k])))
+            .collect()
+    }
+
+    /// Whether segment `a`-`b` passes through triangle `t` (Moeller-Trumbore).
+    fn segment_crosses(a: V3, b: V3, t: &[V3; 3]) -> bool {
+        let dir = vec3::sub(b, a);
+        let (e1, e2) = (vec3::sub(t[1], t[0]), vec3::sub(t[2], t[0]));
+        let h = vec3::cross(dir, e2);
+        let det = vec3::dot(e1, h);
+        if det.abs() < 1e-12 {
+            return false;
+        }
+        let s = vec3::sub(a, t[0]);
+        let u = vec3::dot(s, h) / det;
+        let q = vec3::cross(s, e1);
+        let v = vec3::dot(dir, q) / det;
+        let w = vec3::dot(e2, q) / det;
+        u >= 0.0 && v >= 0.0 && u + v <= 1.0 && (0.0..=1.0).contains(&w)
+    }
+
+    /// How many edges of either part pass through a triangle of the other: 0 when their
+    /// surfaces do not meet.
+    fn crossings(a: &Part, b: &Part) -> usize {
+        let bounds = |p: &Part| {
+            p.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| ([lo[0].min(q[0]), lo[1].min(q[1]), lo[2].min(q[2])], [hi[0].max(q[0]), hi[1].max(q[1]), hi[2].max(q[2])]))
+        };
+        let one_way = |a: &Part, b: &Part| {
+            let (lo, hi) = bounds(a);
+            let tris = triangles_in(b, lo, hi);
+            if tris.is_empty() {
+                return 0;
+            }
+            let (blo, bhi) = bounds(b);
+            a.indices
+                .chunks(3)
+                .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+                .map(|(i, j)| (a.positions[i as usize], a.positions[j as usize]))
+                .filter(|(p, q)| (0..3).all(|k| p[k].max(q[k]) >= blo[k] && p[k].min(q[k]) <= bhi[k]))
+                .filter(|(p, q)| tris.iter().any(|t| segment_crosses(*p, *q, t)))
+                .count()
+        };
+        one_way(a, b) + one_way(b, a)
+    }
+
+    #[test]
+    fn a_tail_comes_out_through_a_cloak() {
+        let mut failures = vec![];
+        for seed in [3u32, 1207, 40, 8] {
+            let body = Body::new(&BodySpec::roll(Folk::Lizardfolk, seed));
+            let tail = body.skin_mesh().parts.into_iter().find(|p| p.name == "tail").unwrap();
+            for kit in [10u32, 11, 12, 13] {
+                for worn in [robe_and_cloak(kit), outfit(kit)] {
+                    let fit = fit_worn(&body, &worn);
+                    for part in &fit.layer(Slot::Cloak).unwrap().mesh.parts {
+                        let n = crossings(&tail, part);
+                        if n > 0 {
+                            failures.push(format!("lizardfolk {seed} kit {kit}: the tail passes through the cloak's {} ({n} crossings)", part.name));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn ears_and_frills_clear_hoods_and_helms() {
+        use armory::families::helm::HelmStyle;
+        use armory::families::hood::Hoods;
+        use armory::sections::hood::HoodStyle;
+        let mut failures = vec![];
+        let mut checked = 0;
+        // Goblin and pig ears under hoods and closed helms, a lizard's frill under any.
+        let closed = [HelmStyle::Bascinet, HelmStyle::GreatHelm, HelmStyle::Sallet, HelmStyle::Barbute];
+        for folk in [Folk::Goblin, Folk::Pigfolk, Folk::Lizardfolk] {
+            for seed in [3u32, 1207, 40] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                let mut heads: Vec<(String, Item)> = HoodStyle::ALL.iter().map(|&st| (format!("{st:?}"), Item::Hood(Hoods::roll_as(seed, st)))).collect();
+                let helms = if folk == Folk::Lizardfolk { &HelmStyle::ALL[..] } else { &closed[..] };
+                heads.extend(helms.iter().map(|&st| (format!("{st:?}"), Item::Helm(Helm::roll_as(seed, st)))));
+                for (name, item) in heads {
+                    let fit = fit_worn(&body, &[(Slot::Head, item)]);
+                    let head = body.under(&fit);
+                    for feature in head.parts.iter().filter(|p| matches!(p.name, "ears" | "frill")) {
+                        for part in &fit.layer(Slot::Head).unwrap().mesh.parts {
+                            checked += 1;
+                            let n = crossings(feature, part);
+                            if n > 0 {
+                                failures.push(format!("{folk:?} {seed}: its {} pass through the {name}'s {} ({n} crossings)", feature.name, part.name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 100, "{checked}");
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 

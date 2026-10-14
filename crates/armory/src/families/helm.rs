@@ -637,12 +637,12 @@ fn rim_drop(s: &HelmState, bowl: &Bowl, theta: f32) -> f32 {
 
 /// The shell's outline in bowl coordinates: the crown edge, the seam, and the rim with any face
 /// opening, as `(outline, holes)`.
-fn shell_outline(s: &HelmState, bowl: &Bowl, du: f32) -> (Vec<P2>, Vec<Vec<P2>>) {
+fn shell_outline(s: &HelmState, bowl: &Bowl, du: f32, cuts: &Cuts, margin: f32) -> (Vec<P2>, Vec<Vec<P2>>) {
     let sh = &s.shell;
     let r = sh.radius;
     let seam = bowl.seam();
     let steps = ((2.0 * seam) / (du * 0.5)).ceil() as usize;
-    let rim_at = |u: f32| bowl.rim + rim_drop(s, bowl, bowl.theta(u));
+    let rim_at = |u: f32| cuts.rim(u, bowl.rim + rim_drop(s, bowl, bowl.theta(u)), margin);
     // The rim from the seam on the wearer's right (u = +seam), round the front, to the left.
     let mut rim: Vec<P2> = if sh.style == HelmStyle::Barbute {
         let (slot, eyes) = (0.2, 0.68);
@@ -741,7 +741,172 @@ fn ring_strip(bowl: &Bowl, v0: f32, v1: f32, du: f32) -> Vec<P2> {
     vec![[-seam, v0], [seam, v0], [seam, v1], [-seam, v1]]
 }
 
+/// Openings cut through a helm's shell where something comes out through it, such as a
+/// goblin's ears: each a set of points in item space. Points near the bowl's surface mark
+/// where it crosses, and the opening is their convex hull on the bowl, `margin` wider all
+/// round. Our own: the plate prototype draws no ears through helms.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Openings {
+    pub through: Vec<Vec<V3>>,
+    pub margin: f32,
+}
+
+impl Helm {
+    /// [`Generator::build`] with `openings` cut through the shell.
+    pub fn build_with_openings(s: &HelmState, openings: &Openings) -> ItemMesh {
+        build_helm_cut(s, openings)
+    }
+}
+
+/// What [`Openings`] cut in bowl coordinates: holes through the shell, and notches cut up from
+/// the rim (`u` from, `u` to, and the height `v` they reach up to) where an opening comes
+/// down to it.
+#[derive(Clone, Debug, Default)]
+struct Cuts {
+    holes: Vec<Vec<P2>>,
+    notches: Vec<(f32, f32, f32)>,
+}
+
+impl Cuts {
+    /// How far up from the crown the rim reaches at `u`, notches cut into `rim`.
+    fn rim(&self, u: f32, rim: f32, margin: f32) -> f32 {
+        self.notches.iter().fold(rim, |v, &(u0, u1, top)| {
+            // Straight sides eased over the margin.
+            let inside = smoothstep(u0 - margin, u0, u) * (1.0 - smoothstep(u1, u1 + margin, u));
+            v.min(rim + (top - rim) * inside)
+        })
+    }
+
+    /// The spans of `u` cut away from a band round the bowl between `v0` and `v1`.
+    fn gaps(&self, v0: f32, v1: f32, margin: f32) -> Vec<(f32, f32)> {
+        let mut out: Vec<(f32, f32)> = self
+            .holes
+            .iter()
+            .filter(|h| h.iter().any(|p| p[1] >= v0 - margin) && h.iter().any(|p| p[1] <= v1 + margin))
+            .map(|h| h.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[0]), b.max(p[0]))))
+            .collect();
+        out.extend(self.notches.iter().filter(|n| n.2 <= v1 + margin).map(|n| (n.0 - margin, n.1 + margin)));
+        out
+    }
+
+    /// Whether a fitting at `p` would sit in or at the edge of a cut.
+    fn hits(&self, p: P2, margin: f32) -> bool {
+        self.gaps(p[1], p[1], margin).iter().any(|&(u0, u1)| p[0] > u0 - margin && p[0] < u1 + margin)
+    }
+}
+
+/// A band round the bowl from `v0` to `v1` with `gaps` (spans of `u`) left out, as strips.
+fn ring_strips(bowl: &Bowl, v0: f32, v1: f32, gaps: &[(f32, f32)]) -> Vec<Vec<P2>> {
+    let seam = bowl.seam();
+    let mut cuts: Vec<(f32, f32)> = gaps.iter().map(|&(a, b)| (a.max(-seam), b.min(seam))).filter(|g| g.1 > g.0).collect();
+    cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut strips = Vec::new();
+    let mut from = -seam;
+    for (a, b) in cuts {
+        if a > from + 0.02 {
+            strips.push(vec![[from, v0], [a, v0], [a, v1], [from, v1]]);
+        }
+        from = from.max(b);
+    }
+    if seam > from + 0.02 {
+        strips.push(vec![[from, v0], [seam, v0], [seam, v1], [from, v1]]);
+    }
+    strips
+}
+
+/// The holes and notches `openings` cut, in bowl coordinates.
+fn opening_cuts(s: &HelmState, bowl: &Bowl, openings: &Openings) -> Cuts {
+    let seam = bowl.seam();
+    let m = openings.margin;
+    let mut cuts = Cuts::default();
+    for points in &openings.through {
+        // Where the points pass through the bowl's surface, in bowl coordinates.
+        let mut uv: Vec<P2> = points
+            .iter()
+            .filter_map(|p| {
+                let theta = p[0].atan2(p[2] / bowl.depth);
+                let v = bowl.v_at(p[1]);
+                let (r, _) = bowl.section(v, theta);
+                let r = r * bowl.facet(theta, v);
+                let rp = p[0].hypot(p[2] / bowl.depth);
+                ((rp - r).abs() < 0.12 + m).then(|| [bowl.u(theta), v])
+            })
+            .collect();
+        if uv.len() < 3 {
+            continue;
+        }
+        let hull = hull_2d(&mut uv);
+        if hull.len() < 3 {
+            continue;
+        }
+        let c = hull.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / hull.len() as f32, a[1] + p[1] / hull.len() as f32]);
+        let grown: Vec<P2> = hull
+            .iter()
+            .map(|p| {
+                let d = [p[0] - c[0], p[1] - c[1]];
+                let l = d[0].hypot(d[1]).max(1e-4);
+                [(p[0] + d[0] / l * m).clamp(-seam + 0.03, seam - 0.03), (p[1] + d[1] / l * m).max(0.03)]
+            })
+            .collect();
+        // Clear of the rim it is a hole; reaching down near the rim it is a notch cut up
+        // from it to the opening's top.
+        let (u0, u1) = grown.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[0]), b.max(p[0])));
+        let (v0, v1) = grown.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[1]), b.max(p[1])));
+        let rim = (0..=16).map(|k| bowl.rim + rim_drop(s, bowl, bowl.theta(u0 + (u1 - u0) * k as f32 / 16.0))).fold(f32::MAX, f32::min);
+        if v1 < rim - 0.12 || s.shell.style == HelmStyle::Barbute {
+            let clipped = clip_below(&grown, rim - 0.04);
+            if clipped.len() >= 3 {
+                cuts.holes.push(clipped);
+            }
+        } else {
+            cuts.notches.push((u0, u1, v0));
+        }
+    }
+    cuts
+}
+
+/// The convex hull of `points` (Andrew's monotone chain), counterclockwise.
+fn hull_2d(points: &mut [P2]) -> Vec<P2> {
+    points.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    let cross = |o: P2, a: P2, b: P2| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let chain = |pts: &mut dyn Iterator<Item = P2>| {
+        let mut out: Vec<P2> = Vec::new();
+        for p in pts {
+            while out.len() >= 2 && cross(out[out.len() - 2], out[out.len() - 1], p) <= 0.0 {
+                out.pop();
+            }
+            out.push(p);
+        }
+        out.pop();
+        out
+    };
+    let mut hull = chain(&mut points.iter().copied());
+    hull.extend(chain(&mut points.iter().rev().copied()));
+    hull
+}
+
+/// `polygon` cut off at `v = limit`, keeping the part with smaller `v` (Sutherland-Hodgman).
+fn clip_below(polygon: &[P2], limit: f32) -> Vec<P2> {
+    let mut out = Vec::new();
+    for (i, &a) in polygon.iter().enumerate() {
+        let b = polygon[(i + 1) % polygon.len()];
+        let (ia, ib) = (a[1] <= limit, b[1] <= limit);
+        if ia {
+            out.push(a);
+        }
+        if ia != ib {
+            let t = (limit - a[1]) / (b[1] - a[1]);
+            out.push([a[0] + (b[0] - a[0]) * t, limit]);
+        }
+    }
+    out
+}
+
 fn build_helm(s: &HelmState) -> ItemMesh {
+    build_helm_cut(s, &Openings::default())
+}
+
+fn build_helm_cut(s: &HelmState, openings: &Openings) -> ItemMesh {
     let sh = &s.shell;
     let f = &s.fittings;
     let r = sh.radius;
@@ -771,7 +936,10 @@ fn build_helm(s: &HelmState) -> ItemMesh {
     let mut parts = Parts::default();
 
     // The shell, its outer skin on the surface.
-    let (outline, holes) = shell_outline(s, &bowl, du);
+    let cuts = opening_cuts(s, &bowl, openings);
+    let cut_margin = openings.margin.max(0.05);
+    let (outline, mut holes) = shell_outline(s, &bowl, du, &cuts, cut_margin);
+    holes.extend(cuts.holes.iter().cloned());
     let options = PlateOptions { thickness: thick, offset: -thick * 0.5, cell, origin: [0.0, 0.0], crease: 0.2, open_edge: Some(&seam_edge), uv_rect: None };
     parts.add("shell", plate(&outline, &holes, &bowl, &options).merged(), sh.material);
 
@@ -793,7 +961,9 @@ fn build_helm(s: &HelmState) -> ItemMesh {
     let band_w = sh.height * 0.13;
     let brow = f.browband && sh.style.is_cap();
     if brow {
-        fittings.append(&plate(&ring_strip(&bowl, bowl.rim - band_w, bowl.rim + 0.005, du), &[], &bowl, &on_top(overlay)).merged());
+        for strip in ring_strips(&bowl, bowl.rim - band_w, bowl.rim + 0.005, &cuts.gaps(bowl.rim - band_w, bowl.rim, cut_margin)) {
+            fittings.append(&plate(&strip, &[], &bowl, &on_top(overlay)).merged());
+        }
     }
     // Rivets round the brow band, or just above the rim.
     if f.rivets > 0 {
@@ -850,7 +1020,9 @@ fn build_helm(s: &HelmState) -> ItemMesh {
         let strip = meridian_strip(&bowl, 0.0, v0, bowl.rim + 0.01, |_| 0.13 * r);
         fittings.append(&plate(&strip, &[], &bowl, &on_top(overlay)).merged());
         let (b0, b1) = (bowl.v_at((EYE + 0.2) * r), bowl.v_at((EYE + 0.1) * r));
-        fittings.append(&plate(&ring_strip(&bowl, b0, b1, du), &[], &bowl, &on_top(overlay)).merged());
+        for strip in ring_strips(&bowl, b0, b1, &cuts.gaps(b0, b1, cut_margin)) {
+            fittings.append(&plate(&strip, &[], &bowl, &on_top(overlay)).merged());
+        }
         for k in 0..5 {
             let v = v0 + (bowl.rim - v0) * (k as f32 + 0.5) / 5.0;
             if (v - (b0 + b1) * 0.5).abs() > 0.08 {
@@ -1007,6 +1179,7 @@ fn build_helm(s: &HelmState) -> ItemMesh {
         CrestStyle::None => {}
     }
 
+    rivet_at.retain(|p| !cuts.hits(*p, cut_margin));
     parts.add("rivets", scatter_on_surface(&bowl, &rivet, &rivet_at, overlay - 0.006, h), f.material);
     parts.finish()
 }

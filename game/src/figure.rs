@@ -69,7 +69,7 @@ impl Figure {
 
         let mut skin = body.skin_mesh();
         skin.parts.retain(|p| !fit.covered.hides(p.name));
-        let mut head = body.head_mesh();
+        let mut head = body.head_mesh_fitted(fit.head);
         head.parts.extend(body.hair_mesh(fit.hair).parts);
         let condition = Condition { state: ConditionState::Custom, wear: dirt.clamp(0.0, 1.0), ..Condition::default() };
         let flesh = ItemAppearance { condition, seed: spec.seed, ..default() };

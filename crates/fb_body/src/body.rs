@@ -553,8 +553,10 @@ impl Body {
         })
     }
 
-    /// A lizard's tail sweeping down and back from the base of the spine, or a pig's curl.
-    fn tail_mesh(&self) -> MeshBuilder {
+    /// A tail's centre line and its radius along it (`u` from 0 at the root to 1 at the
+    /// tip): a lizard's sweeping down and back from the base of the spine, or a pig's curl.
+    /// `None` for folk without one.
+    pub fn tail(&self) -> Option<(Vec<V3>, TailRadius)> {
         let (t, s, h) = (self.trunk_length, self.scale, self.height);
         let (hy, hd) = (self.hip_y, self.hip.half_depth);
         match self.folk() {
@@ -567,7 +569,7 @@ impl Body {
                 ])
                 .sample_evenly(48);
                 let ws = self.girth;
-                tube(&path, 18, &SweepOptions::default(), |u| 0.62 * ws * (1.0 - u).powf(0.9) + 0.03)
+                Some((path, Box::new(move |u: f32| 0.62 * ws * (1.0 - u).powf(0.9) + 0.03)))
             }
             Folk::Pigfolk => {
                 let path = CatmullRom::centripetal(vec![
@@ -577,9 +579,19 @@ impl Body {
                     [0.05, hy + 0.15 * t, -hd * 1.0],
                 ])
                 .sample_evenly(24);
-                tube(&path, 8, &SweepOptions::default(), |u| 0.08 * s * (1.0 - u * 0.6))
+                Some((path, Box::new(move |u: f32| 0.08 * s * (1.0 - u * 0.6))))
             }
-            _ => MeshBuilder::new(),
+            _ => None,
+        }
+    }
+
+    fn tail_mesh(&self) -> MeshBuilder {
+        match self.tail() {
+            Some((path, radius)) => {
+                let sides = if self.folk() == Folk::Lizardfolk { 18 } else { 8 };
+                tube(&path, sides, &SweepOptions::default(), radius)
+            }
+            None => MeshBuilder::new(),
         }
     }
 
@@ -602,6 +614,9 @@ impl Body {
         out
     }
 }
+
+/// A tail's radius by share of its length, root to tip ([`Body::tail`]).
+pub type TailRadius = Box<dyn Fn(f32) -> f32>;
 
 /// The largest grip radius a hand closes on (`data/constants.json`, `GRIP_MAX`).
 pub const GRIP_MAX: f32 = 0.13;

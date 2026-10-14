@@ -64,6 +64,18 @@ pub struct Drape {
     pub quilt: Option<Quilting>,
     /// A medial ridge down the front (plate).
     pub ridge: f32,
+    /// A slit cut up from the hem, if any.
+    pub notch: Option<Notch>,
+}
+
+/// A slit cut up from a hem, its sides meeting at a point (a vent at the back of a cloak, where
+/// a tail passes through): centred on `angle` (lathe convention), `half_width` radians either
+/// side of it at the hem, narrowing to nothing at height `top`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Notch {
+    pub angle: f32,
+    pub top: f32,
+    pub half_width: f32,
 }
 
 /// Quilted padding: puffs between stitch lines laid out as the shader lays out the
@@ -122,6 +134,21 @@ impl Drape {
             opening: None,
             quilt: None,
             ridge: 0.0,
+            notch: None,
+        }
+    }
+
+    /// Height of the bottom edge at `angle`: the hem, or the side of a notch cut up from it.
+    pub fn hem_at(&self, angle: f32) -> f32 {
+        match self.notch {
+            Some(n) => {
+                let off = ((angle - n.angle + PI).rem_euclid(TAU) - PI).abs();
+                if off >= n.half_width {
+                    return self.hem;
+                }
+                self.hem + (n.top - self.hem).max(0.0) * (1.0 - off / n.half_width)
+            }
+            None => self.hem,
         }
     }
 
@@ -491,6 +518,7 @@ pub fn garment_drape(form: &TorsoForm, g: &GarmentCut, belt: &Belt, plates: &Pla
         // Set once the plain coat is built, so the puffs line up with the pattern.
         quilt: None,
         ridge: if rigid { plates.ridge } else { 0.0 },
+        notch: None,
     }
 }
 
@@ -534,6 +562,8 @@ pub struct Fitting<'a> {
     /// What the cloth hangs over besides the form ([`DrapedSurface::over`]): a cloak over the
     /// arms and whatever is on them.
     pub over: Option<Underlay<'a>>,
+    /// A slit cut up from the hem (where a tail passes through).
+    pub notch: Option<Notch>,
 }
 
 /// [`garment_parts`] fitted to a real body as `fitting` describes.
@@ -545,7 +575,7 @@ fn build_garment(form: &TorsoForm, fitting: &Fitting, g: &GarmentCut, hem: &Hem,
     let mut parts = Parts::new();
     let arms = fitting.arms;
     let form = form.eased(g.fit);
-    let drape = garment_drape(&form, g, belt, plates, seed);
+    let drape = Drape { notch: fitting.notch, ..garment_drape(&form, g, belt, plates, seed) };
     let (thickness, _, _, _) = style_drape(g.style);
     let mut surface = DrapedSurface::over(&form, drape, fitting.over, thickness);
     let mut look = body_look(g, plates);
@@ -569,7 +599,8 @@ fn build_garment(form: &TorsoForm, fitting: &Fitting, g: &GarmentCut, hem: &Hem,
                     .map(|c| {
                         let u = c as f32 / columns as f32;
                         let a = drape.angle(u, drape.top);
-                        surface.point(u, drape.hem + (drape.top_at(a) - drape.hem) * v, 0.0)
+                        let hem = drape.hem_at(a);
+                        surface.point(u, hem + (drape.top_at(a) - hem) * v, 0.0)
                     })
                     .collect()
             })
@@ -596,8 +627,7 @@ fn build_garment(form: &TorsoForm, fitting: &Fitting, g: &GarmentCut, hem: &Hem,
     // Trims.
     if let Some(trim) = trim {
         if hem.hemline {
-            let lo = drape.hem - 0.012;
-            parts.add_look("trim", surface.band(0.0, 1.0, 4, 0.016, trim_thickness, |_| (lo, lo + tw)), trim);
+            parts.add_look("trim", surface.band(0.0, 1.0, 4, 0.016, trim_thickness, |a| (drape.hem_at(a) - 0.012, drape.hem_at(a) - 0.012 + tw)), trim);
         }
         if hem.neck && g.neck != Neckline::High {
             parts.add_look("trim", surface.band(0.0, 1.0, 3, 0.02, trim_thickness, |a| (drape.top_at(a) - tw * 0.7, drape.top_at(a) + 0.01)), trim);
