@@ -223,6 +223,8 @@ impl Body {
 pub struct StandingFeatures {
     /// Each standing ear (not folded).
     pub ears: Vec<Vec<V3>>,
+    /// A lizard's face: its snout with its jaw and teeth, its eyes and the ridges over them.
+    pub face: Option<Vec<V3>>,
 }
 
 impl Body {
@@ -243,6 +245,15 @@ impl Body {
                     out.ears.push(surface_points(&p.ears));
                 }
             }
+        }
+        if self.folk() == Folk::Lizardfolk {
+            let mut p = Pieces::default();
+            snout(&face, &mut p);
+            eyes(&face, race.eyes, &mut p);
+            for m in [p.mouth, p.ivory, p.whites, p.pupils] {
+                p.skin.append(&m);
+            }
+            out.face = Some(surface_points(&p.skin));
         }
         out
     }

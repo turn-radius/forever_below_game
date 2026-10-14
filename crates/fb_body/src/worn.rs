@@ -1086,10 +1086,11 @@ fn helm(body: &Body, state: &HelmState, fit: HeadFit) -> ItemMesh {
     // back of the skull stays inside (our own: the bowl is 1.12 times deeper than wide).
     let s = state.sized((1.12 * head.half_width).max(0.96 * head.half_depth) + body.hair_volume(true) + body.feature_volume(fit));
     let at = vec3::add(head.centre, [0.0, 0.1 * head.half_height, 0.0]);
-    // In the helm's space: standing ears come out through it.
+    // In the helm's space: standing ears come out through it, and its rim lifts over a
+    // lizard's snout and brow.
     let features = body.standing_features(fit);
     let local = |f: Vec<V3>| f.into_iter().map(|p| vec3::sub(p, at)).collect::<Vec<V3>>();
-    let openings = Openings { through: features.ears.into_iter().map(local).collect(), lift: vec![], margin: 0.08 * body.scale.sqrt() };
+    let openings = Openings { through: features.ears.into_iter().map(local).collect(), lift: features.face.into_iter().map(local).collect(), margin: 0.08 * body.scale.sqrt() };
     let mut mesh = Helm::build_with_openings(&s, &openings);
     Placement::translation(at).apply_to_item(&mut mesh);
     mesh
@@ -2016,6 +2017,36 @@ mod tests {
                             let n = crossings(&ears, part);
                             if n > 0 {
                                 failures.push(format!("{folk:?} {seed} {style:?} kit {kit}: its ears pass through the {} ({n} crossings)", part.name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 500, "{checked}");
+        assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[test]
+    fn a_lizards_snout_and_brow_clear_helms() {
+        use armory::families::helm::HelmStyle;
+        let mut failures = vec![];
+        let mut checked = 0;
+        for seed in [3u32, 1207, 40, 8, 77, 501] {
+            let body = Body::new(&BodySpec::roll(Folk::Lizardfolk, seed));
+            for style in HelmStyle::ALL {
+                for kit in 0..4u32 {
+                    let mut helm = Helm::roll_as(seed + kit, style);
+                    helm.aventail.on = kit % 2 == 0;
+                    helm.cheeks.on = kit < 2;
+                    let fit = fit_worn(&body, &[(Slot::Head, Item::Helm(helm))]);
+                    // The head's skin (snout and brow ridges with it), its eyes, mouth and teeth.
+                    for feature in body.head_mesh_fitted(fit.head).parts.iter().filter(|p| p.name != "frill") {
+                        for part in &fit.layer(Slot::Head).unwrap().mesh.parts {
+                            checked += 1;
+                            let n = crossings(feature, part);
+                            if n > 0 {
+                                failures.push(format!("lizardfolk {seed} {style:?} kit {kit}: its {} passes through the {} ({n} crossings)", feature.name, part.name));
                             }
                         }
                     }
