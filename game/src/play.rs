@@ -4,6 +4,7 @@
 //! - [`crate::level`]: the level's stone geometry, its fixed lights and the entrance door.
 //! - [`crate::player`]: the first-person body, camera, movement and collision.
 //! - [`crate::carry`]: the torch in hand, items lying in the level, picking them up, the HUD.
+//! - [`crate::folk`]: the folk standing in the level.
 //! - [`crate::inventory`]: the inventory screen over the level (I).
 //! - [`crate::keymap`]: every key and button, read by action.
 //! - [`crate::menu`]: the pause menu over the level (Esc).
@@ -108,6 +109,7 @@ impl Plugin for PlayPlugin {
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,
+            crate::folk::FolkPlugin,
             crate::inventory::InventoryPlugin,
             crate::audio::MusicPlugin,
             crate::menu::MenuPlugin,
