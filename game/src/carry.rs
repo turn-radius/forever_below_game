@@ -1644,6 +1644,9 @@ mod tests {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let mace = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Mace", s)).find(|i| i.profile.packable).unwrap());
             inventory.wear(mace, Slot::Mainhand).unwrap();
+            // The off hand is full too, so the sword swaps out the main hand's mace.
+            let torch = inventory.add(lit_torch(2));
+            inventory.wear(torch, Slot::Offhand).unwrap();
             mace
         };
         let character = Character::default();
@@ -1660,6 +1663,24 @@ mod tests {
         assert_eq!((before.main, after.main), (Some(mace), Some(sword)));
         let toast = &app.world().resource::<Toast>().text;
         assert!(toast.starts_with("Holding ") && toast.contains("went into the"), "{toast}");
+    }
+
+    #[test]
+    fn f_puts_a_weapon_in_the_off_hand_while_only_that_is_free() {
+        use fb_items::Slot;
+        let (mut app, _) = equipping_app();
+        let sword = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let sword = inventory.add(fb_items::roll_item("Sword", 3).unwrap());
+            inventory.wear(sword, Slot::Mainhand).unwrap();
+            sword
+        };
+        let (_, dagger, _) = lay_ahead(&mut app, fb_items::roll_item("Dagger", 4).unwrap());
+        press_f(&mut app);
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!((inventory.worn(Slot::Mainhand), inventory.worn(Slot::Offhand)), (Some(sword), Some(dagger)));
+        let toast = &app.world().resource::<Toast>().text;
+        assert!(toast.starts_with("Holding ") && !toast.contains("went"), "{toast}");
     }
 
     #[test]

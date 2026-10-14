@@ -163,6 +163,25 @@ mod tests {
     }
 
     #[test]
+    fn an_off_hand_weapon_is_held_in_the_left_fist() {
+        let spec = BodySpec::roll(Folk::Human, 5);
+        for base in ["Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff", "Bow", "Crossbow"] {
+            let (main, off) = (fb_items::roll_item("Sword", 3).unwrap(), fb_items::roll_item(base, 8).unwrap());
+            let name = off.title().to_string();
+            let figure = Figure::dress(&spec, &[(Slot::Mainhand, main), (Slot::Offhand, off)], 0.0);
+            let held = &figure.pieces.last().unwrap();
+            assert_eq!(held.name, name, "{base}: the off hand's is drawn last");
+            let points: Vec<Vec3> = held.mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+            let fist = Vec3::from_array(figure.body.grip(fb_body::OFF_HAND).origin);
+            let nearest = points.iter().map(|p| p.distance(fist)).fold(f32::MAX, f32::min);
+            assert!(nearest < 0.5, "{base}: {nearest} from the left fist");
+            // On the wearer's left (+X), as the main hand's sword is on the right.
+            let centre = points.iter().sum::<Vec3>() / points.len() as f32;
+            assert!(fist.x > 0.0 && centre.x > 0.0, "{base}: fist {fist}, centre {centre}");
+        }
+    }
+
+    #[test]
     fn a_held_lantern_lights_from_its_hand() {
         let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap();
         let mace = fb_items::roll_item("Mace", 3).unwrap();

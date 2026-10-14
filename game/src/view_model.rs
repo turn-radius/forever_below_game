@@ -197,6 +197,19 @@ mod tests {
     }
 
     #[test]
+    fn every_weapon_family_in_the_off_hand_is_held_on_the_left() {
+        let human = spec(Folk::Human);
+        for base in ["Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff", "Bow", "Crossbow"] {
+            let (sword, item) = (roll("Sword", 3), roll(base, 8));
+            let held = held_in_view(&human, Some(&sword), Some(&item));
+            let off = held.iter().find(|h| h.hand == Slot::Offhand).unwrap_or_else(|| panic!("{base} not held"));
+            let main = held.iter().find(|h| h.hand == Slot::Mainhand).unwrap();
+            assert!(view_hold(off.hold, Side::Left).fist.x < 0.0, "{base}");
+            assert!(centroid(off).x < 0.0 && centroid(main).x > 0.0, "{base}: off {} main {}", centroid(off), centroid(main));
+        }
+    }
+
+    #[test]
     fn a_mirrored_hold_is_a_reflection() {
         for hold in [Hold::OneHanded, Hold::Upright, Hold::Bow, Hold::Shield, Hold::Torch, Hold::Lantern, Hold::Crossbow] {
             let (right, left) = (view_hold(hold, Side::Right), view_hold(hold, Side::Left));

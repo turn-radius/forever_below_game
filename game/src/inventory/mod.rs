@@ -512,7 +512,8 @@ impl FloorEquip {
 }
 
 /// Equips `id`, lying on the floor at `at` (cells) turned `yaw`, in the slot it is made for
-/// ([`Inventory::target_slot`]: worn gear in its slot, a weapon in the main hand, a torch,
+/// ([`Inventory::target_slot`]: worn gear in its slot, a weapon in the main hand or else a
+/// free off hand, a torch,
 /// lantern or shield in the off hand, a ring in a free ring slot) by [`equip`]. Whatever it
 /// displaces is stowed in a carried bag if one has room, or else set down where `id` lay.
 /// Equipping from the floor without the screen is the user's call; where the displaced item
