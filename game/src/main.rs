@@ -15,7 +15,6 @@ use forever_below::{
     capture::FrameCapturePlugin,
     doll_view::{DollChoice, DollViewPlugin},
     launch::{AppState, Launch, env_set},
-    light::LightPlugin,
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
     settings::SettingsPlugin,
@@ -45,7 +44,7 @@ fn main() -> AppExit {
         ..default()
     }))
     .insert_state(opening)
-    .add_plugins((SettingsPlugin, ArmoryRenderPlugin, LightPlugin, PlayPlugin, TitlePlugin))
+    .add_plugins((SettingsPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
     .insert_resource(NewDelveSeed(launch.seed));
     if opening == AppState::Delving {
         app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED))));
@@ -69,7 +68,7 @@ fn run_turntable() -> AppExit {
         primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
         ..default()
     }))
-    .add_plugins((ArmoryRenderPlugin, LightPlugin, TurntablePlugin))
+    .add_plugins((ArmoryRenderPlugin, TurntablePlugin))
     .insert_resource(turntable)
     .insert_resource(focus);
     if let Some(capture) = FrameCapturePlugin::from_env() {
@@ -91,7 +90,7 @@ fn run_doll(args: &[String]) -> AppExit {
         primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
         ..default()
     }))
-    .add_plugins((ArmoryRenderPlugin, LightPlugin, DollViewPlugin))
+    .add_plugins((ArmoryRenderPlugin, DollViewPlugin))
     .insert_resource(choice);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);

@@ -4,7 +4,8 @@
 // `pbr_input_from_standard_material`. Lighting is our own: each light's N.L is quantised into
 // hard bands, as three.js `MeshToonMaterial` does with a 1-pixel gradient map
 // (`makeGradient` in `reference/spline_armory_engine.js`), then scaled by the light's colour.
-// Point and spot lights also step down in hard steps across their reach (`reach_falloff`). Wear is painted on the base colour first (`decay.wesl`); both
+// Point and spot lights also step down in hard steps across their reach (`reach_falloff`), and
+// flames flicker on top of their steps (`flame_flicker`). Wear is painted on the base colour first (`decay.wesl`); both
 // work in display (sRGB) values, as the prototype did. The vertex shader is Bevy's mesh
 // vertex shader plus one thing: fine parts that get no ink line are fattened to a minimum
 // width on screen, so a bowstring stays visible across the room.
@@ -147,6 +148,29 @@ fn reach_step(radiance: vec3<f32>) -> vec3<f32> {
     return radiance * (stepped / level);
 }
 
+// How far a flame's flicker lags per world unit along x and z, in seconds, so neighbouring
+// flames waver out of step: braziers two cells (40 units) apart are about 0.3 s apart, half a
+// period of the curve's main term. Linear in position, so a carried light's flicker stays
+// smooth as it moves (walking shifts its rate by about a tenth). Height is left out so the
+// bob of a carried torch does not touch it. Our own tuning.
+const FLICKER_LAG: vec3<f32> = vec3(0.0071, 0.0, 0.0053);
+
+// A flame's strength multiplier now: the prototype's flicker
+// `.88 + .08 sin(13.1t) + .05 sin(7.3t + 1.2) + .03 sin(23.7t)` (`docs/rendering.md`, "Light"),
+// scaled toward 1 by the light's flicker depth, 0 for a steady light. The depth rides in the
+// light's radius, which Bevy otherwise uses only for specular and soft shadows, neither drawn
+// here (`light::Torch`). Applied after `reach_step`, so the steps hold still and only their
+// brightness wavers. Mirrors `light::Torch::wavering`.
+fn flame_flicker(position_radius: vec4<f32>) -> f32 {
+    let depth = clamp(position_radius.w, 0.0, 1.0);
+    if depth <= 0.0 {
+        return 1.0;
+    }
+    let t = view_bindings::globals.time + dot(position_radius.xyz, FLICKER_LAG);
+    let curve = 0.88 + 0.08 * sin(13.1 * t) + 0.05 * sin(7.3 * t + 1.2) + 0.03 * sin(23.7 * t);
+    return 1.0 - depth * (1.0 - curve);
+}
+
 // Radiance from every point, spot and directional light reaching this fragment, banded per
 // light, times the view's exposure. Same light data and units as Bevy's
 // `apply_pbr_lighting`, with a Lambert lobe.
@@ -208,7 +232,7 @@ fn toon_direct_light(in: PbrInput) -> vec3<f32> {
 
         // Lambert: the band stands in for N.L, 1/PI as in Bevy's diffuse lobe.
         let radiance = (*clustered).color_inverse_square_range.rgb * attenuation * cone * (exposure / PI);
-        light += reach_step(radiance) * toon_band(dot(N, L), shadow);
+        light += reach_step(radiance) * flame_flicker((*clustered).position_radius) * toon_band(dot(N, L), shadow);
     }
 
     for (var i: u32 = 0u; i < view_bindings::lights.n_directional_lights; i = i + 1u) {

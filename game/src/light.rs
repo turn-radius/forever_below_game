@@ -5,17 +5,12 @@
 //! Point and spot lights fall off as the toon shader draws them ([`reach_falloff`]): an
 //! inverse square softened near the light and windowed to zero at its range, so a light is
 //! set by how bright it is up close ([`peak_lumens`]) and how far it reaches.
+//!
+//! Flames flicker in the toon shader, not here: a light's intensity stays steady on the CPU and
+//! the shader wavers its strength after cutting it into steps, so the steps hold still and only
+//! their brightness moves ([`Torch::flickering`]).
 
 use bevy::{camera::Exposure, prelude::*};
-
-/// Flickers every [`Torch`].
-pub struct LightPlugin;
-
-impl Plugin for LightPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Update, flicker_torches);
-    }
-}
 
 /// Fraction of a light's range inside which its falloff stops climbing: the inverse square is
 /// softened to `1 / (d^2 + core^2)` with `core = CORE_FRACTION * range`. Must match
@@ -77,49 +72,52 @@ pub fn cast_shadows(light: PointLight) -> PointLight {
     }
 }
 
-/// A flickering warm point light. Spawn with a [`PointLight`]; its intensity is driven from
-/// `intensity` here every frame.
-#[derive(Component, Clone, Copy, Debug)]
-#[require(PointLight)]
-pub struct Torch {
-    /// Intensity before flicker, in lumens.
-    pub intensity: f32,
-    /// How deep the flicker goes, 0 (steady) to 1 (the prototype's full curve), as in
-    /// `armory::build::light::LightAnchor::flicker`.
-    pub flicker_depth: f32,
-}
+/// Torches, braziers and every other flame: warm point lights that flicker.
+///
+/// The flicker is drawn by the toon shader (`flame_flicker` in `render/toon.wesl`) after it has
+/// cut the light into its reach steps, so step boundaries stay put and only brightness wavers.
+/// Scaling `PointLight::intensity` every frame instead swept the step boundaries across walls
+/// and floors from frame to frame, which read as heavy flicker (#144).
+///
+/// The shader tells a flame from a steady light (glowcaps, the debug light) by the light's
+/// [`PointLight::radius`], which carries its flicker depth ([`flicker_depth`]). Bevy uses
+/// `radius` only for the size of specular highlights and the penumbra of percentage-closer soft
+/// shadows (`bevy_light-0.20.0/src/point_light.rs`); the toon shader draws no specular and this
+/// game builds without `experimental_pbr_pcss`, so the field is otherwise unread. This channel
+/// is our own convention.
+pub struct Torch;
 
 impl Torch {
     /// The torch colour, `#ffb36a`.
     pub const COLOR: Color = Color::srgb(1.0, 0xb3 as f32 / 255.0, 0x6a as f32 / 255.0);
 
-    /// The prototype's flicker multiplier at time `t` seconds: around 0.88, within 0.72..1.04.
+    /// The prototype's flicker multiplier at time `t` seconds: around 0.88, within 0.72..1.04
+    /// (`docs/rendering.md`, "Light"). Mirrors `flame_flicker` in `render/toon.wesl`.
     pub fn flicker(t: f32) -> f32 {
         0.88 + 0.08 * (13.1 * t).sin() + 0.05 * (7.3 * t + 1.2).sin() + 0.03 * (23.7 * t).sin()
     }
 
-    /// Flickers `light` by up to `flicker_depth` of the prototype's curve.
-    pub fn flickering(light: PointLight, flicker_depth: f32) -> (Torch, PointLight) {
-        (Torch { intensity: light.intensity, flicker_depth }, light)
+    /// The strength multiplier at time `t` seconds for a light of `depth` (0 steady, 1 the
+    /// prototype's full curve): [`Torch::flicker`] scaled toward 1. Mirrors the shader.
+    pub fn wavering(depth: f32, t: f32) -> f32 {
+        1.0 - depth.clamp(0.0, 1.0) * (1.0 - Torch::flicker(t))
+    }
+
+    /// `light` flickering by up to `depth` of the prototype's curve, as in
+    /// `armory::build::light::LightAnchor::flicker`.
+    pub fn flickering(light: PointLight, depth: f32) -> PointLight {
+        PointLight { radius: depth.clamp(0.0, 1.0), ..light }
     }
 
     /// A torch's point light, `peak` times full close up, reaching `range` units.
-    pub fn light(peak: f32, range: f32, exposure: &Exposure) -> (Torch, PointLight) {
+    pub fn light(peak: f32, range: f32, exposure: &Exposure) -> PointLight {
         Torch::flickering(point_light(Torch::COLOR, peak, range, exposure), 1.0)
-    }
-
-    /// The intensity multiplier at time `t` seconds: [`Torch::flicker`] scaled toward 1 by
-    /// `flicker_depth`.
-    pub fn wavering(&self, t: f32) -> f32 {
-        1.0 - self.flicker_depth.clamp(0.0, 1.0) * (1.0 - Torch::flicker(t))
     }
 }
 
-fn flicker_torches(time: Res<Time>, mut torches: Query<(&Torch, &mut PointLight)>) {
-    let t = time.elapsed_secs();
-    for (torch, mut light) in &mut torches {
-        light.intensity = torch.intensity * torch.wavering(t);
-    }
+/// How deeply `light` flickers, 0 (steady) to 1, as the toon shader reads it ([`Torch`]).
+pub fn flicker_depth(light: &PointLight) -> f32 {
+    light.radius.clamp(0.0, 1.0)
 }
 
 /// A key light that rides on the camera plus an ambient fill, for looking at items rather than
@@ -186,13 +184,23 @@ mod tests {
 
     #[test]
     fn a_steady_torch_does_not_flicker() {
-        let steady = Torch { intensity: 1.0, flicker_depth: 0.0 };
-        let full = Torch { intensity: 1.0, flicker_depth: 1.0 };
         for i in 0..100 {
             let t = i as f32 * 0.1;
-            assert_eq!(steady.wavering(t), 1.0);
-            assert_eq!(full.wavering(t), Torch::flicker(t));
+            assert_eq!(Torch::wavering(0.0, t), 1.0);
+            assert_eq!(Torch::wavering(1.0, t), Torch::flicker(t));
         }
+    }
+
+    #[test]
+    fn flames_carry_their_flicker_and_steady_lights_none() {
+        let exposure = Exposure::INDOOR;
+        let torch = Torch::light(1.0, 60.0, &exposure);
+        assert_eq!(flicker_depth(&torch), 1.0);
+        assert_eq!(flicker_depth(&Torch::flickering(torch, 0.4)), 0.4);
+        assert_eq!(flicker_depth(&point_light(Color::WHITE, 1.0, 60.0, &exposure)), 0.0);
+        // The intensity is the steady one; the shader does the flickering.
+        assert_eq!(torch.intensity, peak_lumens(1.0, 60.0, exposure.exposure()));
+        assert_eq!(flicker_depth(&cast_shadows(torch)), 1.0);
     }
 
     #[test]
