@@ -7,7 +7,7 @@ use crate::naming::{Legend, item_name, legendize, noun};
 use crate::profile::{Profile, profile};
 use crate::rarity::roll_rarity;
 use crate::tables::Affix;
-use crate::{Kind, Rarity, game_rng};
+use crate::{Kind, Rarity, Slot, Tag, game_rng};
 use std::fmt;
 
 /// D&D coinage in a purse.
@@ -46,6 +46,28 @@ impl Item {
     /// The name shown first: a legendary's title, otherwise its name.
     pub fn title(&self) -> &str {
         self.legend.as_ref().map_or(&self.name, |l| &l.title)
+    }
+
+    /// Every slot it can be worn or held in, the one it is made for first; none for goods. A
+    /// ring goes on either ring slot (the plate's `targetSlot`), and a weapon in either hand,
+    /// the main hand first (the user's call: the plate held weapons only in the main hand). A
+    /// lantern goes in either hand, the off hand first, or hangs from the belt at the hip
+    /// (the user's call), whose belt the inventory checks.
+    pub fn slots(&self) -> Vec<Slot> {
+        let Some(made_for) = self.profile.slot else { return vec![] };
+        if self.shape.family() == armory::Family::Lantern {
+            return vec![made_for, Slot::Mainhand, Slot::Hip];
+        }
+        match made_for {
+            Slot::Ring1 | Slot::Ring2 => vec![Slot::Ring1, Slot::Ring2],
+            Slot::Mainhand if self.profile.tags.contains(&Tag::Weapon) => vec![Slot::Mainhand, Slot::Offhand],
+            _ => vec![made_for],
+        }
+    }
+
+    /// Whether it can be worn or held in `slot` ([`Item::slots`]).
+    pub fn fits(&self, slot: Slot) -> bool {
+        self.slots().contains(&slot)
     }
 }
 
@@ -96,7 +118,6 @@ pub fn roll_loot(family: armory::Family, seed: u32) -> Option<Item> {
 mod tests {
     use super::*;
     use crate::armory_base::ARMORY_BASES;
-    use crate::Tag;
 
     #[test]
     fn every_base_rolls() {
@@ -157,6 +178,23 @@ mod tests {
                 assert_eq!(Some(item.clone()), roll_loot(family, seed));
             }
         }
+    }
+
+    #[test]
+    fn every_weapon_goes_in_either_hand_and_nothing_else_does() {
+        for base in ["Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff", "Bow", "Crossbow"] {
+            for seed in [1, 7, 1207] {
+                let item = roll_item(base, seed).unwrap();
+                assert_eq!(item.slots(), vec![Slot::Mainhand, Slot::Offhand], "{base} {seed}");
+                assert!(item.fits(Slot::Offhand) && !item.fits(Slot::Belt), "{base} {seed}");
+            }
+        }
+        assert_eq!(roll_item("Shield", 1).unwrap().slots(), vec![Slot::Offhand]);
+        assert_eq!(roll_item("Helm", 1).unwrap().slots(), vec![Slot::Head]);
+        assert_eq!(roll_item("Ring", 1).unwrap().slots(), vec![Slot::Ring1, Slot::Ring2]);
+        assert!(roll_item("Bread", 1).unwrap().slots().is_empty());
+        assert_eq!(roll_item("Lantern", 1).unwrap().slots(), vec![Slot::Offhand, Slot::Mainhand, Slot::Hip]);
+        assert!(!roll_item("Torch", 1).unwrap().fits(Slot::Hip));
     }
 
     #[test]

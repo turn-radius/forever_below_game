@@ -9,8 +9,8 @@
 //! below the level, on its own render layer ([`DOLL_LAYER`]), lit by a point light far off in
 //! the Armory key's direction and the Armory's ambient fill, so no light of the level reaches
 //! it. It is redressed whenever what is worn changes, faces the viewer, and turns about its
-//! own axis when dragged. A lit thing it holds lights its side of the body with a warm point
-//! light at the flame, and its side of the seal with a warm glow.
+//! own axis when dragged. A lit thing it holds, or a lit lantern hung at its hip, lights its side
+//! of the body with a warm point light at the flame, and its side of the seal with a warm glow.
 
 use bevy::{
     app::Propagate,
@@ -143,11 +143,18 @@ pub fn lit_hand(inventory: &Inventory) -> Option<Slot> {
     [Slot::Mainhand, Slot::Offhand].into_iter().find(|&slot| lit(slot))
 }
 
-/// The side of the frame the held light is on: the side its hand's slot is on, if a hand holds
-/// a lit thing.
+/// The slot holding the carried light: a hand holding a lit thing ([`lit_hand`]), or else a lit
+/// lantern hung at the hip.
+pub fn lit_slot(inventory: &Inventory) -> Option<Slot> {
+    let lit = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).is_some_and(|item| item_light(&item.shape).is_some());
+    lit_hand(inventory).or_else(|| lit(Slot::Hip).then_some(Slot::Hip))
+}
+
+/// The side of the frame the carried light is on: the side its slot is on, if a hand holds a
+/// lit thing or a lit lantern hangs at the hip.
 pub fn light_side(inventory: &Inventory) -> Option<SlotSide> {
-    let hand = lit_hand(inventory)?;
-    slot_places().iter().find(|p| p.slot == hand).map(|p| p.side)
+    let slot = lit_slot(inventory)?;
+    slot_places().iter().find(|p| p.slot == slot).map(|p| p.side)
 }
 
 fn srgb(colour: Color) -> [f32; 3] {
@@ -575,6 +582,7 @@ mod tests {
             fb_items::Slot::Ring1,
             fb_items::Slot::Ring2,
             fb_items::Slot::Charm,
+            fb_items::Slot::Hip,
         ] {
             let place = places.iter().find(|p| p.slot == slot).unwrap_or_else(|| panic!("{slot:?}"));
             let size = if place.size == SlotSize::Big { BIG_SLOT } else { SMALL_SLOT };
@@ -595,6 +603,13 @@ mod tests {
         inventory.wear(lantern, fb_items::Slot::Offhand).unwrap();
         assert_eq!(light_side(&inventory), Some(off));
         assert_ne!(Some(main), light_side(&inventory));
+        // Hung at the hip, beside the belt, it glows on the hip's side.
+        let belt = inventory.add(fb_items::roll_item("Belt", 2).unwrap());
+        inventory.wear(belt, fb_items::Slot::Belt).unwrap();
+        inventory.take_out(lantern);
+        inventory.wear(lantern, fb_items::Slot::Hip).unwrap();
+        let hip = slot_places().iter().find(|p| p.slot == fb_items::Slot::Hip).unwrap().side;
+        assert_eq!((lit_slot(&inventory), light_side(&inventory)), (Some(fb_items::Slot::Hip), Some(hip)));
     }
 
     #[test]

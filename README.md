@@ -28,9 +28,9 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 |---|---|
 | W A S D, Shift | walk, hurry |
 | Mouse | look round (click to take the mouse back after Esc) |
-| Left click | swing what your main hand holds, each blow from one of the directions it suits and arcing to the creature in reach: mostly overhead for a mace, axe or club, from every side for a sword, flat across for a staff, a stab for a spear or dagger, a punch with nothing (a click while the mouse is free only takes it back) |
+| Left click | swing what your main hand holds (a weapon in the off hand is held but does not swing yet), each blow from one of the directions it suits and arcing to the creature in reach: mostly overhead for a mace, axe or club, from every side for a sword, flat across for a staff, a stab for a spear or dagger, a punch with nothing (a click while the mouse is free only takes it back) |
 | E | pick up what you're looking at, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
-| F | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand, a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay |
+| F | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand (or the off hand, if only that is free), a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay; a lantern goes in a free hand, else at the hip if you wear a belt, where it lights the way with both hands full |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
 | Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
@@ -121,7 +121,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_HOLD=<main>[,<off>]` | puts an item of each named base in that hand, after the starting or debug kit (`Mace,Torch`, `Sword,Shield`, `Staff,none`; a torch or lantern is lit, `none` empties the hand) |
 | `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |
 | `FB_NEW_DELVE=<seconds>` | the title chooses New delve by itself after that many seconds, each time it shows; with `FB_PLAYER_HP=1` and `FB_SCREENSHOT_FRAMES`, captures a fall, the title and the next delve without input |
-| `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot, after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |
+| `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot (or `<base>@<slot>` in another it fits: `Lantern@hip`, `Sword@offhand`), after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |
 | `FB_STOW=<base>[,<base>...]` | puts one item of each named base in the carried grids, after `FB_EQUIP` (`Mail coif,Hood,Helm,Tunic`) |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |

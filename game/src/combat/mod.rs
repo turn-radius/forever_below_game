@@ -290,6 +290,20 @@ mod tests {
     }
 
     #[test]
+    fn only_the_main_hand_swings() {
+        // A weapon in the off hand is held but does not attack yet (#122): a bare main hand
+        // still punches, and a main-hand weapon swings whatever the off hand holds.
+        let character = Character::roll(3);
+        let mut inventory = Inventory::default();
+        let dagger = inventory.add(fb_items::roll_item("Dagger", 7).unwrap());
+        inventory.wear(dagger, fb_items::Slot::Offhand).unwrap();
+        assert_eq!(Weapon::in_hand(&inventory, &character).kind, SwingKind::Punch);
+        let sword = inventory.add(fb_items::roll_item("Sword", 7).unwrap());
+        inventory.wear(sword, fb_items::Slot::Mainhand).unwrap();
+        assert_eq!(Weapon::in_hand(&inventory, &character).kind, SwingKind::Slash);
+    }
+
+    #[test]
     fn damage_rolls_stay_within_their_dice() {
         let mut rng = Mulberry32::new(5);
         let sword = Weapon { kind: SwingKind::Slash, dice: Some(Dice::new(1, 8)), bonus: 1, reach: 14.0, hold: None };
