@@ -39,6 +39,11 @@ pub const EYE_HEIGHT: f32 = 16.0;
 #[derive(Resource, Clone, Debug, Default)]
 pub struct BlockedCells(pub HashSet<(i32, i32)>);
 
+/// Circles on the floor that stop the player as rock does, such as folk standing about: each a
+/// centre (world `(x, z)`) and a radius in world units.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct Obstacles(pub Vec<(Vec2, f32)>);
+
 /// A screen drawn over the level, which takes the mouse and keys while it is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Screen {
@@ -102,6 +107,7 @@ pub struct PlayPlugin;
 impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BlockedCells>()
+            .init_resource::<Obstacles>()
             .init_resource::<ScreenOpen>()
             .init_resource::<Keymap>()
             .add_systems(Update, switch_screens)

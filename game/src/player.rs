@@ -1,6 +1,7 @@
 //! The first-person body: camera, mouse look, walking and collision with the level's rock.
 //!
-//! The body is a circle on the floor plane that slides along rock ([`slide`]). Yaw turns the
+//! The body is a circle on the floor plane that slides along rock and round [`Obstacles`] such
+//! as folk ([`slide_around`]). Yaw turns the
 //! [`Player`]; pitch tilts its [`PlayerCamera`] child, which also carries the head bob.
 
 use bevy::{
@@ -15,7 +16,7 @@ use fb_level::{CELL, Level};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::light::point_light;
 use crate::settings::GameSettings;
-use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, level_has_focus};
+use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Obstacles, Player, PlayerCamera, level_has_focus};
 
 /// The body's radius on the floor in world units (35 cm).
 pub const BODY_RADIUS: f32 = 3.5;
@@ -163,6 +164,7 @@ fn walk(
     input: ActionInput,
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
+    obstacles: Option<Res<Obstacles>>,
     mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform), With<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP_SECONDS);
@@ -178,7 +180,8 @@ fn walk(
 
     let from = floor(transform.translation);
     let blocked = blocked_by(&level.0, &blocked_cells);
-    let to = slide(from, from + locomotion.velocity * dt, BODY_RADIUS, blocked);
+    let circles = obstacles.as_deref().map_or(&[][..], |o| &o.0[..]);
+    let to = slide_around(from, from + locomotion.velocity * dt, BODY_RADIUS, blocked, circles);
     // Walking into a wall leaves only the speed along it.
     locomotion.velocity = (to - from) / dt;
     transform.translation.x = to.x;
@@ -211,20 +214,27 @@ pub fn blocked_by<'a>(level: &'a Level, blocked_cells: &'a BlockedCells) -> impl
 /// wall. Each step is pushed back out of every blocked cell it overlaps, along the line from
 /// the cell's nearest point; a step that cannot be resolved is dropped.
 pub fn slide(from: Vec2, to: Vec2, radius: f32, blocked: impl Fn(i32, i32) -> bool) -> Vec2 {
+    slide_around(from, to, radius, blocked, &[])
+}
+
+/// [`slide`], and round `circles` as well (each a centre and a radius, world units): the body
+/// keeps out of them as it keeps out of rock, sliding round their edge.
+pub fn slide_around(from: Vec2, to: Vec2, radius: f32, blocked: impl Fn(i32, i32) -> bool, circles: &[(Vec2, f32)]) -> Vec2 {
     let delta = to - from;
     let steps = (delta.length() / (radius * 0.5)).ceil().max(1.0) as u32;
     let step = delta / steps as f32;
     let mut at = from;
     for _ in 0..steps {
-        let Some(next) = resolve(at + step, at, radius, &blocked) else { break };
+        let Some(next) = resolve(at + step, at, radius, &blocked, circles) else { break };
         at = next;
     }
     at
 }
 
-/// Pushes `at` out of the blocked cells around it, or `None` if it cannot get clear.
-/// `previous` is a clear spot nearby, used to choose a way out when the centre is inside rock.
-fn resolve(mut at: Vec2, previous: Vec2, radius: f32, blocked: &impl Fn(i32, i32) -> bool) -> Option<Vec2> {
+/// Pushes `at` out of the blocked cells and circles around it, or `None` if it cannot get
+/// clear. `previous` is a clear spot nearby, used to choose a way out when the centre is
+/// inside rock or a circle.
+fn resolve(mut at: Vec2, previous: Vec2, radius: f32, blocked: &impl Fn(i32, i32) -> bool, circles: &[(Vec2, f32)]) -> Option<Vec2> {
     for _ in 0..4 {
         let mut pushed = false;
         for (min, max) in blocked_cells_near(at, radius, blocked) {
@@ -238,11 +248,22 @@ fn resolve(mut at: Vec2, previous: Vec2, radius: f32, blocked: &impl Fn(i32, i32
             at = nearest + normal * radius;
             pushed = true;
         }
+        for &(centre, size) in circles {
+            let offset = at - centre;
+            let reach = size + radius;
+            if offset.length() >= reach {
+                continue;
+            }
+            let normal = offset.try_normalize().or_else(|| (previous - centre).try_normalize()).unwrap_or(Vec2::Y);
+            at = centre + normal * reach;
+            pushed = true;
+        }
         if !pushed {
             return Some(at);
         }
     }
-    (!overlaps_blocked(at, radius, blocked)).then_some(at)
+    let in_circle = circles.iter().any(|&(centre, size)| at.distance(centre) < size + radius - 1e-3);
+    (!overlaps_blocked(at, radius, blocked) && !in_circle).then_some(at)
 }
 
 /// The blocked cells a circle at `at` could touch, as world-space `(min, max)` rectangles.
@@ -390,6 +411,31 @@ mod tests {
         assert!(end.x <= 2.0 * CELL - BODY_RADIUS + 1e-3, "tunnelled to {end}");
         let far = slide(centre(1, 1), centre(1, 1) + Vec2::new(10_000.0, 7.0), BODY_RADIUS, &blocked);
         assert!(clear(far, &blocked) && far.x < 2.0 * CELL, "tunnelled to {far}");
+    }
+
+    #[test]
+    fn the_body_cannot_walk_through_a_circle_and_slides_round_it() {
+        let open = |_: i32, _: i32| false;
+        let folk = [(Vec2::new(0.0, -20.0), 2.5)];
+        let clear = |at: Vec2| at.distance(folk[0].0) >= folk[0].1 + BODY_RADIUS - 1e-3;
+        // Straight at them: stopped short.
+        let end = slide_around(Vec2::ZERO, Vec2::new(0.0, -40.0), BODY_RADIUS, open, &folk);
+        assert!(clear(end) && end.y > -20.0, "{end}");
+        // Walking at them all the way, frame by frame, never gets through.
+        let mut at = Vec2::ZERO;
+        for _ in 0..200 {
+            at = slide_around(at, at + Vec2::new(0.0, -0.5), BODY_RADIUS, open, &folk);
+            assert!(clear(at), "{at}");
+        }
+        // A glancing step slides round their edge and on past.
+        let mut at = Vec2::new(1.0, 0.0);
+        for _ in 0..200 {
+            at = slide_around(at, at + Vec2::new(0.0, -0.5), BODY_RADIUS, open, &folk);
+            assert!(clear(at), "{at}");
+        }
+        assert!(at.y < -30.0, "snagged at {at}");
+        // Far from them nothing changes.
+        assert_eq!(slide_around(Vec2::ZERO, Vec2::new(5.0, 0.0), BODY_RADIUS, open, &folk), Vec2::new(5.0, 0.0));
     }
 
     #[test]

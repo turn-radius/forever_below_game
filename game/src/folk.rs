@@ -12,6 +12,12 @@
 //!   [`ItemSpawner`], in the house style: toon bands, ink and decay. Skin carries the person's
 //!   dirt. A lit torch or lantern in hand lights the room round them.
 //!
+//! - Standing, they breathe and now and then shift their weight ([`Idle`]): the whole figure
+//!   moves a little about its feet, since there is no skeleton. A player within
+//!   [`LOOK_RANGE`] draws their head round ([`look_at`]), turning about the neck; under a hood,
+//!   whose cape lies on the shoulders, the body turns a little instead.
+//! - Each stands in a circle on the floor that the player cannot walk into ([`Obstacles`]).
+//!
 //! Figures are built once per spot, in parallel, and kept in [`FolkFigures`], so the same
 //! level shows the same people without building them again.
 
@@ -26,14 +32,16 @@ use procgen_rng::Mulberry32;
 
 use crate::carry::{appearance_of, item_light, world_light};
 use crate::level::EXPOSURE;
-use crate::play::CurrentLevel;
+use crate::play::{CurrentLevel, Obstacles, PlayerCamera};
 use crate::render::{ItemAppearance, ItemSpawner};
 
 pub struct FolkPlugin;
 
 impl Plugin for FolkPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<FolkFigures>().add_systems(Update, spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>));
+        app.init_resource::<FolkFigures>()
+            .init_resource::<Obstacles>()
+            .add_systems(Update, (spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>), idle_folk, turn_heads, block_the_way));
     }
 }
 
@@ -140,6 +148,8 @@ pub struct Figure {
     pub neck: Vec3,
     /// The lights its hands hold.
     pub lights: Vec<HeldLight>,
+    /// The circle on the floor it stands in, which the player cannot walk into.
+    pub radius: f32,
 }
 
 impl Figure {
@@ -190,7 +200,9 @@ impl Figure {
         torso.retain(|p| !p.mesh.parts.is_empty());
         head.retain(|p| !p.mesh.parts.is_empty());
         let neck = Vec3::from_array(body.neck_base().origin);
-        Figure { body, held, worn, torso, head, neck, lights }
+        // Shoulders and a layer or two of clothes. Our own allowance.
+        let radius = body.shoulder_half_width * 1.2 + 0.3;
+        Figure { body, held, worn, torso, head, neck, lights, radius }
     }
 
     /// The figure's bounds in body space, every piece included.
@@ -229,11 +241,115 @@ impl FolkFigures {
 #[derive(Component, Clone, Debug)]
 pub struct Denizen {
     pub person: Person,
+    /// The circle on the floor they stand in ([`Figure::radius`]).
+    pub radius: f32,
 }
 
-/// The part of a figure that turns with the head, pivoting at the neck.
-#[derive(Component, Debug)]
-pub struct FolkHead;
+/// The figure under its [`Denizen`] root, moving as someone standing does ([`Idle`]).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Stance {
+    pub idle: Idle,
+    /// How far the whole body has turned toward someone near, yaw radians: only when the head
+    /// cannot turn on its own (under a hood).
+    pub turn: f32,
+}
+
+/// The part of a figure that turns with the head, pivoting at the neck: where it looks now as
+/// `(yaw, pitch)` radians, the yaw turning the face (+Z) toward +X, the pitch up.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct FolkHead {
+    pub look: Vec2,
+}
+
+/// Breaths per second at rest: 15 a minute, inside the 12 to 18 the Cleveland Clinic gives for
+/// a resting adult (<https://my.clevelandclinic.org/health/articles/10881-vital-signs>), each
+/// person a little faster or slower.
+const BREATHS_PER_SECOND: f32 = 0.25;
+/// How far a breath lifts and fills the figure, as a share of its height and girth. Our own
+/// tuning: enough to see close up, never enough to read as bobbing.
+const BREATH_LIFT: f32 = 0.006;
+const BREATH_FILL: f32 = 0.004;
+/// Weight shifts from foot to foot: about one every ten seconds, leaning up to this many
+/// radians over the standing foot and moving the hips this far across. Our own tuning.
+const SHIFTS_PER_SECOND: f32 = 0.05;
+const SHIFT_LEAN: f32 = 0.012;
+const SHIFT_SWAY: f32 = 0.18;
+
+/// How someone stands still: breathing, and now and then shifting their weight. Each person's
+/// rates and phases are their own, from their seed, so a group never moves in step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Idle {
+    pub breath_rate: f32,
+    pub breath_phase: f32,
+    pub shift_rate: f32,
+    pub shift_phase: f32,
+}
+
+/// Salt for a person's idle stream. Our own.
+const IDLE_SALT: u32 = 0x1D1E_0B0D;
+
+impl Idle {
+    pub fn of(seed: u32) -> Idle {
+        let mut rng = Mulberry32::new(seed ^ IDLE_SALT);
+        Idle {
+            breath_rate: BREATHS_PER_SECOND * rng.range_f32(0.85, 1.15),
+            breath_phase: rng.range_f32(0.0, std::f32::consts::TAU),
+            shift_rate: SHIFTS_PER_SECOND * rng.range_f32(0.7, 1.3),
+            shift_phase: rng.range_f32(0.0, std::f32::consts::TAU),
+        }
+    }
+
+    /// The figure's transform at `t` seconds, about its feet: a breath lifts and fills it, and
+    /// a weight shift leans it over one foot and moves it across. The shift dwells on each foot
+    /// (a sine through a soft clamp) rather than swaying evenly.
+    pub fn at(&self, t: f32) -> Transform {
+        let tau = std::f32::consts::TAU;
+        let breath = (tau * self.breath_rate * t + self.breath_phase).sin() * 0.5 + 0.5;
+        let shift = ((tau * self.shift_rate * t + self.shift_phase).sin() * 2.0).clamp(-1.0, 1.0);
+        Transform {
+            translation: Vec3::new(shift * SHIFT_SWAY, 0.0, 0.0),
+            rotation: Quat::from_rotation_z(-shift * SHIFT_LEAN),
+            scale: Vec3::new(1.0 + breath * BREATH_FILL, 1.0 + breath * BREATH_LIFT, 1.0 + breath * BREATH_FILL),
+        }
+    }
+}
+
+/// How near the player must come before folk turn to look, in world units (4 m).
+pub const LOOK_RANGE: f32 = 40.0;
+/// How far a head turns to either side, and tilts up or down, radians (70 and 25 degrees).
+/// Our own limits, short of what a neck can do.
+const HEAD_YAW_MAX: f32 = 70.0 * std::f32::consts::PI / 180.0;
+const HEAD_PITCH_MAX: f32 = 25.0 * std::f32::consts::PI / 180.0;
+/// Past this angle off the way they face, someone does not turn to look at all.
+const NOTICE_ANGLE: f32 = 110.0 * std::f32::consts::PI / 180.0;
+/// How quickly a head turns to its target, per second ([`StableInterpolate`]).
+const HEAD_TURN_RATE: f32 = 4.0;
+/// Under a hood the whole body turns instead, this share of the way, at most this far.
+const BODY_TURN_SHARE: f32 = 0.35;
+const BODY_TURN_MAX: f32 = 25.0 * std::f32::consts::PI / 180.0;
+
+/// Where a head at `head` (in its figure's root space, the face +Z) looks to see an eye at
+/// `eye` (the same space): `(yaw, pitch)` radians, yaw turning toward +X and pitch up, held to
+/// the neck's limits. `None` if the eye is out of [`LOOK_RANGE`] or behind them.
+pub fn look_at(head: Vec3, eye: Vec3) -> Option<Vec2> {
+    let to = eye - head;
+    let across = Vec2::new(to.x, to.z).length();
+    if !(1e-3..=LOOK_RANGE).contains(&across) {
+        return None;
+    }
+    let yaw = to.x.atan2(to.z);
+    if yaw.abs() > NOTICE_ANGLE {
+        return None;
+    }
+    let pitch = to.y.atan2(across);
+    Some(Vec2::new(yaw.clamp(-HEAD_YAW_MAX, HEAD_YAW_MAX), pitch.clamp(-HEAD_PITCH_MAX, HEAD_PITCH_MAX)))
+}
+
+/// The head's rotation about the neck for a look of `(yaw, pitch)`: turned, then tipped (a
+/// rotation about +X tips the face down, so the pitch goes in negated).
+pub fn head_rotation(look: Vec2) -> Quat {
+    Quat::from_euler(EulerRot::YXZ, look.x, -look.y, 0.0)
+}
 
 /// The world transform of someone standing at `spot`: on the floor, facing the spot's yaw.
 /// The body faces +Z and [`FolkSpot::yaw`] is a camera's yaw (0 faces -Z), so it turns a half
@@ -265,28 +381,86 @@ fn spawn_folk(
     *shown = Some(level.0.folk.clone());
 }
 
-/// Spawns one figure: a root at the spot, the body's pieces under it, and the head's under a
-/// pivot at the neck.
+/// Spawns one figure: a root at the spot, a [`Stance`] under it carrying the body's pieces,
+/// and the head's pieces under a pivot at the neck.
 pub fn spawn_figure(commands: &mut Commands, spawner: &mut ItemSpawner, person: &Person, figure: &Figure) -> Entity {
     let root = commands
-        .spawn((Name::new(person.name.clone()), Denizen { person: person.clone() }, stand_at(&person.spot), Visibility::default()))
+        .spawn((
+            Name::new(person.name.clone()),
+            Denizen { person: person.clone(), radius: figure.radius },
+            stand_at(&person.spot),
+            Visibility::default(),
+        ))
         .id();
-    let head = commands.spawn((FolkHead, Transform::from_translation(figure.neck), Visibility::default(), ChildOf(root))).id();
+    let stance = commands.spawn((Stance { idle: Idle::of(person.spot.seed), turn: 0.0 }, Transform::default(), Visibility::default(), ChildOf(root))).id();
     for piece in &figure.torso {
         let mut entity = spawner.spawn(&piece.mesh, &piece.appearance);
-        entity.insert((Name::new(piece.name.clone()), ChildOf(root)));
+        entity.insert((Name::new(piece.name.clone()), ChildOf(stance)));
         if !piece.shadow {
             entity.insert(Propagate(NotShadowCaster));
         }
     }
-    for piece in &figure.head {
-        spawner.spawn(&piece.mesh, &piece.appearance).insert((Name::new(piece.name.clone()), Transform::from_translation(-figure.neck), ChildOf(head)));
+    if !figure.head.is_empty() {
+        let head = commands.spawn((FolkHead::default(), Transform::from_translation(figure.neck), Visibility::default(), ChildOf(stance))).id();
+        for piece in &figure.head {
+            spawner.spawn(&piece.mesh, &piece.appearance).insert((Name::new(piece.name.clone()), Transform::from_translation(-figure.neck), ChildOf(head)));
+        }
     }
     for light in &figure.lights {
         // A little above the flame, so the hand and the stone under it do not burn white.
-        commands.spawn((world_light(&light.anchor, &EXPOSURE), Transform::from_translation(light.at + Vec3::Y * HELD_LIGHT_LIFT), ChildOf(root)));
+        commands.spawn((world_light(&light.anchor, &EXPOSURE), Transform::from_translation(light.at + Vec3::Y * HELD_LIGHT_LIFT), ChildOf(stance)));
     }
     root
+}
+
+/// Breathes and shifts every figure's weight ([`Idle::at`]), turned toward the player as far
+/// as [`Stance::turn`] says.
+fn idle_folk(time: Res<Time>, mut stances: Query<(&Stance, &mut Transform)>) {
+    let t = time.elapsed_secs();
+    for (stance, mut transform) in &mut stances {
+        let idle = stance.idle.at(t);
+        *transform = Transform { rotation: Quat::from_rotation_y(stance.turn) * idle.rotation, ..idle };
+    }
+}
+
+/// Turns heads toward a player within [`LOOK_RANGE`] and back once they leave; under a hood,
+/// the whole body turns a little instead.
+fn turn_heads(
+    time: Res<Time>,
+    eyes: Query<&GlobalTransform, With<PlayerCamera>>,
+    folk: Query<(&GlobalTransform, &Children), With<Denizen>>,
+    mut stances: Query<(&mut Stance, &Children)>,
+    mut heads: Query<(&mut FolkHead, &mut Transform)>,
+) {
+    let eye = eyes.iter().next().map(GlobalTransform::translation);
+    let dt = time.delta_secs();
+    for (root, children) in &folk {
+        let from_world = root.affine().inverse();
+        let eye = eye.map(|eye| from_world.transform_point3(eye));
+        for &child in children {
+            let Ok((mut stance, parts)) = stances.get_mut(child) else { continue };
+            match parts.iter().find(|&e| heads.contains(e)) {
+                Some(head) => {
+                    let Ok((mut head, mut transform)) = heads.get_mut(head) else { continue };
+                    let target = eye.and_then(|eye| look_at(transform.translation, eye)).unwrap_or(Vec2::ZERO);
+                    head.look.smooth_nudge(&target, HEAD_TURN_RATE, dt);
+                    transform.rotation = head_rotation(head.look);
+                }
+                None => {
+                    let target = eye.and_then(|eye| look_at(Vec3::ZERO, eye)).map_or(0.0, |look| (look.x * BODY_TURN_SHARE).clamp(-BODY_TURN_MAX, BODY_TURN_MAX));
+                    stance.turn.smooth_nudge(&target, HEAD_TURN_RATE, dt);
+                }
+            }
+        }
+    }
+}
+
+/// Keeps one circle per folk in the player's collision ([`Obstacles`]).
+fn block_the_way(folk: Query<(&Denizen, &GlobalTransform)>, mut obstacles: ResMut<Obstacles>) {
+    let circles: Vec<(Vec2, f32)> = folk.iter().map(|(denizen, at)| (at.translation().xz(), denizen.radius)).collect();
+    if obstacles.0 != circles {
+        obstacles.0 = circles;
+    }
 }
 
 #[cfg(test)]
@@ -347,5 +521,94 @@ mod tests {
         let face = t.rotation * Vec3::Z;
         let (dx, dy) = spot.facing();
         assert!(face.abs_diff_eq(Vec3::new(dx, 0.0, dy), 1e-5), "{face} vs ({dx}, {dy})");
+    }
+
+    #[test]
+    fn idle_motion_is_subtle_and_each_persons_own() {
+        let idles: Vec<Idle> = folk_1207().iter().map(|s| Idle::of(s.seed)).collect();
+        for (i, idle) in idles.iter().enumerate() {
+            let frames: Vec<Transform> = (0..600).map(|k| idle.at(k as f32 * 0.1)).collect();
+            // It moves...
+            let lift = frames.iter().map(|t| t.scale.y).fold(f32::MIN, f32::max) - frames.iter().map(|t| t.scale.y).fold(f32::MAX, f32::min);
+            let sway = frames.iter().map(|t| t.translation.x).fold(f32::MIN, f32::max) - frames.iter().map(|t| t.translation.x).fold(f32::MAX, f32::min);
+            assert!(lift > 0.003 && sway > 0.1, "{i}: lift {lift} sway {sway}");
+            // ...but only a little: under 2 cm across and a degree of lean, the feet staying put.
+            for t in &frames {
+                assert!(t.translation.length() <= 0.2 && t.translation.y == 0.0, "{t:?}");
+                assert!(t.rotation.angle_between(Quat::IDENTITY) < 1f32.to_radians());
+                assert!((t.scale - Vec3::ONE).abs().max_element() < 0.01);
+            }
+            for other in &idles[i + 1..] {
+                assert_ne!(idle, other);
+                assert!((1..50).any(|k| idle.at(k as f32 * 0.37) != other.at(k as f32 * 0.37)), "two folk move in step");
+            }
+        }
+    }
+
+    #[test]
+    fn heads_look_toward_someone_near_in_front() {
+        let head = Vec3::new(0.0, 14.0, 0.0);
+        // Ahead and to the right (+X), at eye height: turns right, looks a little up.
+        let look = look_at(head, Vec3::new(10.0, 16.0, 20.0)).unwrap();
+        assert!(look.x > 0.3 && look.x < 0.6 && look.y > 0.0, "{look}");
+        // Far off, or right behind: no look.
+        assert_eq!(look_at(head, Vec3::new(0.0, 16.0, 60.0)), None);
+        assert_eq!(look_at(head, Vec3::new(0.0, 16.0, -20.0)), None);
+        // Off to the side the turn is held to the neck's limit.
+        let side = look_at(head, Vec3::new(20.0, 14.0, -2.0)).unwrap();
+        assert!((side.x - HEAD_YAW_MAX).abs() < 1e-5, "{side}");
+        // A head turned right by a positive yaw: its face points toward +X.
+        assert!((head_rotation(Vec2::new(0.5, 0.0)) * Vec3::Z).x > 0.4);
+        assert!((head_rotation(Vec2::new(0.0, 0.3)) * Vec3::Z).y > 0.2, "a positive pitch looks up");
+    }
+
+    /// An app with one stand-in figure (no meshes) facing +Z from the origin, and a camera.
+    fn looking_app(eye: Vec3) -> (App, Entity, Entity) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(50)))
+            .init_resource::<Obstacles>()
+            .add_systems(Update, (turn_heads, block_the_way));
+        let person = Person::of(&folk_1207()[0]);
+        let root = app.world_mut().spawn((Denizen { person, radius: 2.5 }, Transform::default())).id();
+        let stance = app.world_mut().spawn((Stance { idle: Idle::of(1), turn: 0.0 }, Transform::default(), ChildOf(root))).id();
+        let head = app.world_mut().spawn((FolkHead::default(), Transform::from_xyz(0.0, 14.0, 0.0), ChildOf(stance))).id();
+        let camera = app.world_mut().spawn((PlayerCamera, Transform::from_translation(eye))).id();
+        (app, head, camera)
+    }
+
+    fn settle(app: &mut App) {
+        // Four and a half seconds at 20 frames a second.
+        for _ in 0..90 {
+            app.update();
+        }
+    }
+
+    #[test]
+    fn heads_turn_toward_a_near_player_and_back() {
+        let (mut app, head, camera) = looking_app(Vec3::new(15.0, 16.0, 25.0));
+        settle(&mut app);
+        let look = app.world().get::<FolkHead>(head).unwrap().look;
+        assert!(look.x > 0.1, "turned toward the player: {look}");
+        let face = app.world().get::<Transform>(head).unwrap().rotation * Vec3::Z;
+        assert!(face.x > 0.1, "{face}");
+        // The player walks off: the head comes back round.
+        app.world_mut().get_mut::<Transform>(camera).unwrap().translation = Vec3::new(200.0, 16.0, 0.0);
+        settle(&mut app);
+        let look = app.world().get::<FolkHead>(head).unwrap().look;
+        assert!(look.length() < 0.05, "back to straight ahead: {look}");
+    }
+
+    #[test]
+    fn folk_block_the_way_where_they_stand() {
+        let (mut app, _, _) = looking_app(Vec3::new(0.0, 16.0, 30.0));
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Obstacles>().0, vec![(Vec2::ZERO, 2.5)]);
+        // And on 1207 every folk stands in a circle wide enough to bump into.
+        for spot in folk_1207().iter().take(2) {
+            let figure = Figure::of(&Person::of(spot));
+            assert!(figure.radius > 1.5 && figure.radius < 5.0, "{}", figure.radius);
+        }
     }
 }
