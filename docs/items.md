@@ -163,3 +163,5 @@ I opens the plate's inventory leaf over the level (`game/src/inventory/`): a par
 ## Classes
 
 `data/outfits.json`: Fighter, Ranger, Mage and Cleric, plus Freshly fallen and Scavenger. Each slot lists candidate bases, optionally with a leading probability. A class's set is rolled once per character, so the outfit you preview is the one you get.
+
+`fb_items::outfit` reads the table and `Outfit::roll(seed, folk)` rolls one into whole items as the plate's `preparedSet` does: each slot filled at its chance from a picked base, a gnome's pointed hat at 60% when nothing is on its head, and an extra ring (22%), amulet (14%) and charm (14%). Each item's seed is drawn from the outfit's own stream, seeded as the plate's is; the plate rolled every item from one global stream.

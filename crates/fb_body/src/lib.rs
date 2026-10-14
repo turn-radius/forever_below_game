@@ -26,7 +26,7 @@ pub use body::{ArmPose, Body, GRIP_MAX, Pose};
 pub use folk::{Beard, EyeKind, Ears, Folk, HairStyle, Nose, Race};
 pub use hair::HairFit;
 pub use hand::HandPose;
-pub use held::{HeldFit, Hold, fit_held};
+pub use held::{Hands, HeldFit, Hold, MAIN_HAND, OFF_HAND, fit_hands, fit_held};
 pub use limb::{Limb, Side};
 pub use place::Placement;
 pub use spec::BodySpec;

@@ -4,6 +4,8 @@
 pub mod audio;
 pub mod capture;
 pub mod carry;
+pub mod doll_view;
+pub mod figure;
 pub mod inventory;
 pub mod keymap;
 pub mod level;

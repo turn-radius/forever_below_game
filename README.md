@@ -45,6 +45,21 @@ A grid of twelve items from consecutive seeds, turning, to compare what the gene
 
 On the grid, the arrows select an item, PgUp and PgDn page through seeds, Tab and Shift+Tab change family, W steps the wear, Space pauses the spin, and Enter or F opens a close-up (drag to orbit, scroll to zoom, Esc to go back).
 
+### The doll view
+
+```
+cargo run -p forever_below -- --doll
+cargo run -p forever_below -- --doll --folk dwarf --seed 7 --outfit cleric
+```
+
+One folk's body, dressed in a rolled outfit and holding what it carries, turning on the turntable's plate.
+
+- `--folk <name>`: human, dwarf, gnome, goblin, lizard (or lizardfolk), pig (or pigfolk). Human by default.
+- `--seed <n>` rolls the body and the outfit's items; 1207 by default.
+- `--outfit <key>`: fighter (the default), ranger, mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
+
+Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
+
 ### Screenshots and debug switches
 
 These environment variables are for checking the game without playing it. Put them in front of the command, for example `FB_SCREENSHOT=shot.png cargo run -p forever_below`.
