@@ -647,7 +647,7 @@ mod tests {
     fn the_doll_wears_what_is_equipped() {
         let mut app = stage_app();
         app.update();
-        assert_eq!(worn_names(&app), vec!["Body".to_string()], "bare to begin with");
+        assert_eq!(worn_names(&app), vec!["Body".to_string(), "Head".to_string()], "bare to begin with");
         let helm = fb_items::roll_item("Helm", 5).unwrap();
         let name = helm.title().to_string();
         {
@@ -656,7 +656,7 @@ mod tests {
             inventory.wear(id, Slot::Head).unwrap();
         }
         app.update();
-        assert_eq!(worn_names(&app), vec!["Body".to_string(), name]);
+        assert_eq!(worn_names(&app), vec!["Body".to_string(), "Head".to_string(), name]);
         let stage = app.world().resource::<DollStage>();
         let camera = app.world().get::<Camera>(stage.camera().unwrap()).unwrap();
         assert!(camera.is_active, "drawn while the inventory is open");

@@ -27,6 +27,11 @@ pub struct HairFit {
     /// How far outside the bare skin long hair must hang: the thickness of everything worn
     /// over the shoulders (the plate's running `maxOff`).
     pub clearance: f32,
+    /// How far outside the bare chest a beard must rest: the thickness of what is worn on the
+    /// front of the chest only. A cloak over the arms stands far out at the sides, which
+    /// [`HairFit::clearance`] counts; pushed out that far, a long beard fanned across the
+    /// shoulders like a shelf.
+    pub chest: f32,
     /// A helmet or hat covers the crown: no cap, ridge or topknot (long hair and tails still
     /// hang below it).
     pub covered: bool,
@@ -247,6 +252,35 @@ impl Body {
         vec3::lerp(p, q, amount.min(1.0))
     }
 
+    /// Moves `p` straight forward (+Z) until it is `clearance` clear of the trunk and the
+    /// upper arms: how a beard comes to rest on the chest, hanging where it falls. Pushed out
+    /// along rays from the body's axis instead, as long hair is ([`Body::clear_of_body`]), a
+    /// long beard's sides fanned out across the shoulders. Our own rule.
+    pub fn clear_ahead(&self, p: V3, clearance: f32) -> V3 {
+        let step = 0.02 * self.scale;
+        let mut q = p;
+        for _ in 0..400 {
+            if !self.within(q, clearance) {
+                break;
+            }
+            q[2] += step;
+        }
+        q
+    }
+
+    /// Whether `q` lies within `clearance` of the trunk's skin or an upper arm's.
+    fn within(&self, q: V3, clearance: f32) -> bool {
+        if q[0].hypot(q[2]) < self.trunk_reach([q[0], q[2]], q[1]) + clearance {
+            return true;
+        }
+        Side::BOTH.into_iter().any(|side| {
+            let arm = self.arm(side);
+            let n = arm.path.len();
+            let upto = ((arm.t_joints[0] + 0.5 * (arm.t_joints[1] - arm.t_joints[0])) * (n - 1) as f32) as usize;
+            arm.path[..upto.max(2)].iter().enumerate().any(|(i, a)| vec3::distance(*a, q) < arm.radius_at(i as f32 / (n - 1) as f32) + clearance)
+        })
+    }
+
     /// How far the trunk's skin reaches from its axis toward horizontal direction `dir` at
     /// height `y`.
     pub fn trunk_reach(&self, dir: [f32; 2], y: f32) -> f32 {
@@ -341,7 +375,7 @@ impl Body {
                 }
                 // Hanging over the chest, it rests on it rather than sinking in.
                 if p[1] < self.chin_y {
-                    p = self.clear_of_body(p, fit.clearance + 0.04 * r, 1.0);
+                    p = self.clear_ahead(p, fit.chest + 0.04 * r);
                 }
             }
             p
@@ -382,7 +416,7 @@ mod tests {
                 for beard in Beard::ALL {
                     let body = with(folk, 31, style, beard);
                     for covered in [false, true] {
-                        let mesh = body.hair_mesh(HairFit { clearance: 0.1, covered });
+                        let mesh = body.hair_mesh(HairFit { clearance: 0.1, chest: 0.1, covered });
                         for part in &mesh.parts {
                             part.validate().unwrap_or_else(|e| panic!("{folk:?} {style:?} {beard:?}: {e}"));
                         }
@@ -409,7 +443,7 @@ mod tests {
             for seed in [1, 2, 1207] {
                 for clearance in [0.0, 0.25] {
                     let body = with(folk, seed, HairStyle::Long, Beard::None);
-                    let mesh = body.hair_mesh(HairFit { clearance, covered: false });
+                    let mesh = body.hair_mesh(HairFit { clearance, chest: clearance, covered: false });
                     let hair = mesh.parts.iter().find(|p| p.name == "hair").unwrap();
                     let below = body.shoulder_y - 0.05 * body.trunk_length;
                     for p in hair.positions.iter().filter(|p| p[1] < below) {

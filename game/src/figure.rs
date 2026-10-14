@@ -26,6 +26,12 @@ pub struct Piece {
     pub name: String,
     pub mesh: ItemMesh,
     pub appearance: ItemAppearance,
+    /// Whether it turns with the head about the neck ([`Figure::neck`]): the head and hair, and
+    /// a helm or hat. Not under a hood, whose cape lies on the shoulders.
+    pub on_head: bool,
+    /// Whether it gives light (a lit torch or lantern in hand). Drawn without a shadow, or its
+    /// own flame and body would black out its light, as for lit things on the floor.
+    pub lit: bool,
 }
 
 /// A lit thing a figure holds: where its light is in body space, the light, and the hand.
@@ -46,6 +52,8 @@ pub struct Figure {
     pub pieces: Vec<Piece>,
     /// The light it holds, the main hand's before the off hand's.
     pub light: Option<HeldLight>,
+    /// Where the head turns, in body space: the base of the neck.
+    pub neck: Vec3,
 }
 
 impl Figure {
@@ -61,26 +69,34 @@ impl Figure {
 
         let mut skin = body.skin_mesh();
         skin.parts.retain(|p| !fit.covered.hides(p.name));
-        skin.parts.extend(body.head_mesh().parts);
-        skin.parts.extend(body.hair_mesh(fit.hair).parts);
+        let mut head = body.head_mesh();
+        head.parts.extend(body.hair_mesh(fit.hair).parts);
         let condition = Condition { state: ConditionState::Custom, wear: dirt.clamp(0.0, 1.0), ..Condition::default() };
-        let mut pieces = vec![Piece { name: "Body".into(), mesh: skin, appearance: ItemAppearance { condition, seed: spec.seed, ..default() } }];
+        let flesh = ItemAppearance { condition, seed: spec.seed, ..default() };
+        let hooded = matches!(held(Slot::Head), Some(armory::Item::Hood(_)));
+        let mut pieces = vec![
+            Piece { name: "Body".into(), mesh: skin, appearance: flesh, on_head: false, lit: false },
+            Piece { name: "Head".into(), mesh: head, appearance: flesh, on_head: !hooded, lit: false },
+        ];
         for layer in &fit.layers {
             let Some((_, item)) = worn.iter().find(|(slot, _)| *slot == layer.slot) else { continue };
-            pieces.push(Piece { name: item.title().to_string(), mesh: layer.mesh.clone(), appearance: appearance_of(&item.shape) });
+            let on_head = layer.slot == Slot::Head && !hooded;
+            pieces.push(Piece { name: item.title().to_string(), mesh: layer.mesh.clone(), appearance: appearance_of(&item.shape), on_head, lit: false });
         }
         let mut light = None;
         for (slot, fit) in [(Slot::Mainhand, &hands.main), (Slot::Offhand, &hands.off)] {
             let (Some(fit), Some((_, item))) = (fit, worn.iter().find(|(s, _)| *s == slot)) else { continue };
-            pieces.push(Piece { name: item.title().to_string(), mesh: fit.mesh.clone(), appearance: appearance_of(&fit.item) });
+            let anchor = item_light(&fit.item);
+            pieces.push(Piece { name: item.title().to_string(), mesh: fit.mesh.clone(), appearance: appearance_of(&fit.item), on_head: false, lit: anchor.is_some() });
             if light.is_none()
-                && let Some(anchor) = item_light(&fit.item)
+                && let Some(anchor) = anchor
             {
                 let side = if slot == Slot::Mainhand { fb_body::MAIN_HAND } else { fb_body::OFF_HAND };
                 light = Some(HeldLight { at: Vec3::from_array(fit.to_body(anchor.position)), anchor, side });
             }
         }
-        Figure { body, pieces, light }
+        let neck = Vec3::from_array(body.neck_base().origin);
+        Figure { body, pieces, light, neck }
     }
 
     /// The figure's bounds in body space, every piece included.

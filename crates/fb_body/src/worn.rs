@@ -70,6 +70,10 @@ pub const LAYER_ORDER: [Slot; 10] = [Slot::Legs, Slot::Feet, Slot::Shirt, Slot::
 
 /// Clearance kept between a layer and the one under it, over the outer layer's own ease.
 const GAP: f32 = 0.04;
+/// A forearm whose direction points further down than this (the downward share of its unit
+/// direction) hangs by the body, under a cloak. Our own threshold: about 37 degrees off the
+/// vertical, so an arm hanging relaxed counts and one bent forward to hold something does not.
+const FOREARM_HANGS: f32 = 0.8;
 
 /// One worn item fitted to the body, in body space.
 #[derive(Clone, Debug, PartialEq)]
@@ -108,7 +112,7 @@ impl Covered {
 pub struct WornFit {
     /// Each item, innermost first.
     pub layers: Vec<WornLayer>,
-    /// How the hair sits under it all.
+    /// How the hair and beard sit under it all.
     pub hair: HairFit,
     pub covered: Covered,
 }
@@ -138,7 +142,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
         // Long hair hangs over what is on the shoulders: under a hood and its cape, else over
         // everything but a pack.
         if hair.is_none() && slot == if hooded { Slot::Head } else { Slot::Back } {
-            hair = Some(env.shoulder_clearance());
+            hair = Some((env.shoulder_clearance(), env.chest_clearance()));
         }
         for (_, item) in worn.iter().filter(|(s, _)| *s == slot) {
             let mesh = match (slot, item) {
@@ -170,7 +174,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
             fit.layers.push(WornLayer { slot, mesh });
         }
     }
-    fit.hair.clearance = hair.unwrap_or_else(|| env.shoulder_clearance());
+    (fit.hair.clearance, fit.hair.chest) = hair.unwrap_or_else(|| (env.shoulder_clearance(), env.chest_clearance()));
     fit
 }
 
@@ -189,6 +193,13 @@ impl Body {
 }
 
 // ───────────────────────── The worn surface ─────────────────────────
+
+/// Straight ahead (+Z) as a [`Relief`] direction, `atan2(z, x)`.
+const FRONT_PHI: f32 = PI / 2.0;
+/// How far either side of straight ahead the front of the chest reaches, radians (45
+/// degrees), for [`Envelope::chest_clearance`]. Our own choice: about the width a beard hangs
+/// over.
+const CHEST_SPREAD: f32 = PI / 4.0;
 
 /// Bins along a limb for its clearance.
 const LIMB_BINS: usize = 24;
@@ -232,6 +243,9 @@ impl<'a> Envelope<'a> {
             let n = arm.path.len();
             for (i, &c) in arm.path.iter().enumerate() {
                 let t = i as f32 / (n - 1) as f32;
+                if !env.under_cloak(side, t) {
+                    continue;
+                }
                 let r = arm.radius_at(t);
                 let along = arm.tangent_at(t);
                 let a = vec3::normalize_or(vec3::cross(along, vec3::Z), vec3::X);
@@ -248,6 +262,17 @@ impl<'a> Envelope<'a> {
             }
         }
         env
+    }
+
+    /// Whether the point `t` along `side`'s arm lies under a cloak hung over the arms: the
+    /// upper arm always, the forearm and hand only while the forearm hangs down by the body. A
+    /// forearm raised to hold a staff or a torch comes out through the cloak's front, as an arm
+    /// comes out of a real cloak. Our own rule: measured over a raised forearm, a cloak stood
+    /// off the shoulders like a shelf.
+    fn under_cloak(&self, side: Side, t: f32) -> bool {
+        let arm = self.body.arm(side);
+        let forearm = vec3::normalize_or(vec3::sub(arm.joints[2], arm.joints[1]), [0.0, -1.0, 0.0]);
+        t <= arm.t_joints[1] || forearm[1] < -FOREARM_HANGS
     }
 
     /// A body-space point in torso space.
@@ -317,9 +342,14 @@ impl<'a> Envelope<'a> {
                     continue;
                 }
                 let e = self.trunk_excess(q).max(0.0);
-                self.over_arms.add(q, e);
+                if !on_arms {
+                    self.over_arms.add(q, e);
+                }
                 if on_arms {
                     let (side, t, da) = self.nearest_arm(p);
+                    if self.under_cloak(side, t) {
+                        self.over_arms.add(q, e);
+                    }
                     // Past the wrist is the hand, not the arm.
                     let limb = body.arm(side);
                     let beyond = t > 0.995 && vec3::dot(vec3::sub(p, limb.joints[2]), limb.tangent_at(1.0)) > 0.0;
@@ -473,6 +503,14 @@ impl<'a> Envelope<'a> {
     fn shoulder_clearance(&self) -> f32 {
         let chest = self.form.chest.y;
         self.trunk.cells().filter(|c| c.0 >= chest).fold(0.0f32, |m, c| m.max(c.2))
+    }
+
+    /// The same over the front of the chest only, within [`CHEST_SPREAD`] of straight ahead:
+    /// what a beard rests on.
+    fn chest_clearance(&self) -> f32 {
+        let chest = self.form.chest.y;
+        let ahead = |phi: f32| (phi - FRONT_PHI + PI).rem_euclid(TAU) - PI;
+        self.trunk.cells().filter(|c| c.0 >= chest && ahead(c.1).abs() <= CHEST_SPREAD).fold(0.0f32, |m, c| m.max(c.2))
     }
 }
 
@@ -1152,5 +1190,34 @@ mod tests {
             let wide = shell.positions.iter().filter(|p| (p[1] - c[1] - 0.1 * body.head.half_height).abs() < 0.15).map(|p| (p[0] - c[0]).abs()).fold(0.0f32, f32::max);
             assert!(wide > body.head.half_width + body.hair_volume(true), "{:?}: {wide} vs {}", body.folk(), body.head.half_width);
         }
+    }
+
+    #[test]
+    fn a_cloak_over_raised_arms_neither_shelves_nor_spreads_the_beard() {
+        use crate::folk::Beard;
+        use crate::held::fit_held;
+        let mut spec = BodySpec::roll(Folk::Dwarf, 1207);
+        spec.beard = Beard::Forked;
+        // A staff in one hand and a torch in the other: both forearms raised level.
+        let mut body = Body::new(&spec);
+        for (side, family, seed) in [(Side::Right, Family::Staff, 3), (Side::Left, Family::Torch, 4)] {
+            let fit = fit_held(&body, side, &roll(family, seed)).unwrap();
+            body = Body::posed(&spec, fit.pose);
+        }
+        let worn = vec![
+            (Slot::Shirt, Item::Garment(Garment::roll_as(5, GarmentStyle::Robe))),
+            (Slot::Cloak, Item::Garment(Garment::roll_as(6, GarmentStyle::Cloak))),
+        ];
+        let fit = fit_worn(&body, &worn);
+        let half_width = |mesh: &ItemMesh, name: &str| {
+            mesh.parts.iter().filter(|p| p.name == name).flat_map(|p| &p.positions).map(|p| p[0].abs()).fold(0.0f32, f32::max)
+        };
+        // The raised forearms come out through the cloak's front rather than pushing it out
+        // (measured over them, it stood 3.6 out in front of shoulders 2.45 wide).
+        let ahead = fit.layer(Slot::Cloak).unwrap().mesh.parts.iter().filter(|p| p.name == "body").flat_map(|p| &p.positions).map(|p| p[2]).fold(0.0f32, f32::max);
+        assert!(ahead < body.shoulder_half_width * 1.2, "the cloak stands {ahead} out in front");
+        let beard = half_width(&body.hair_mesh(fit.hair), "beard");
+        assert!(beard < body.shoulder_half_width, "the beard fans out to {beard}");
+        assert!(fit.hair.chest <= fit.hair.clearance);
     }
 }

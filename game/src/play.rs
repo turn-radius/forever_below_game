@@ -4,6 +4,7 @@
 //! - [`crate::level`]: the level's stone geometry, its fixed lights and the entrance door.
 //! - [`crate::player`]: the first-person body, camera, movement and collision.
 //! - [`crate::carry`]: the torch in hand, items lying in the level, picking them up, the HUD.
+//! - [`crate::folk`]: the folk standing in the level.
 //! - [`crate::inventory`]: the inventory screen over the level (I).
 //! - [`crate::keymap`]: every key and button, read by action.
 //! - [`crate::menu`]: the pause menu over the level (Esc).
@@ -37,6 +38,11 @@ pub const EYE_HEIGHT: f32 = 16.0;
 /// entrance once its door shuts. Player collision treats them as rock.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct BlockedCells(pub HashSet<(i32, i32)>);
+
+/// Circles on the floor that stop the player as rock does, such as folk standing about: each a
+/// centre (world `(x, z)`) and a radius in world units.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct Obstacles(pub Vec<(Vec2, f32)>);
 
 /// A screen drawn over the level, which takes the mouse and keys while it is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -101,6 +107,7 @@ pub struct PlayPlugin;
 impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BlockedCells>()
+            .init_resource::<Obstacles>()
             .init_resource::<ScreenOpen>()
             .init_resource::<Keymap>()
             .add_systems(Update, switch_screens)
@@ -108,6 +115,7 @@ impl Plugin for PlayPlugin {
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,
+            crate::folk::FolkPlugin,
             crate::inventory::InventoryPlugin,
             crate::audio::MusicPlugin,
             crate::menu::MenuPlugin,
