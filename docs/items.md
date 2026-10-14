@@ -97,6 +97,8 @@ Where the effects come from:
 - The card text, for affixes the plate gave no `fx`: Silent, Squeaking and of Quiet Steps (stealth ±2), Balanced (+1 to hit), Long-burning (burn time ×2), of the Mole (darkvision 10 ft), of Plenty and of Wakefulness (hunger and fatigue ×0.85), of Thieves (lockpicking +2), of the Leech (heal 1 on a kill).
 - These numbers are this port's own proposals, since the text gives none: Mildewed and Lice-ridden multiply disease risk by 1.5, of Lesser Warding by 0.5, and Cracked adds a 10% chance to break on a hard blow. Lice-ridden's itching and Smoky's stinging eyes are not simulated yet.
 
+`fb_items::naming` writes the names and legends. The noun is the Armory's, or the base's own name for the bases marked `named_by_base` in `fb_items::armory_base` (the plate did this for `Blind cavefish` and `Healing draught`). The plate's material word for its own bases ("Linen Shirt", "Oak Club") is gone, since those bases are Armory shapes now and the Armory noun already says what they are. A legendary's title takes its epithet from the plate's lists (Tooth, Oath, Wick, Keepsake...), chosen by whether it is a weapon, a light, a trinket or anything else, and the owner's name is a first name from `data/syl.json`.
+
 ## Rarity shows on the object
 
 `dressState` sets the Armory condition from rarity: common wear 0.15–0.50, magic 0.06–0.26, rare 0.02–0.14. A legendary is either pristine (0.02) or old and worn (0.4–0.7). Rare and legendary items get etching; legendary etching is gold inlay. Flaws raise the matching decay: Rusted sets rust to 1.5, and Moth-eaten, Mildewed and Lice-ridden raise fray and rot.

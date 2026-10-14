@@ -11,6 +11,7 @@ pub mod dice;
 pub mod dress;
 pub mod footprint;
 pub mod modifier;
+pub mod naming;
 pub mod profile;
 pub mod rarity;
 pub mod stats;

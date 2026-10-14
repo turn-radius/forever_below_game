@@ -5,6 +5,8 @@
 //! - `goods.json`: things carried but not worn (`GOODS`).
 //! - `afx.json`: prefixes and suffixes (`AFX`), each effect ported to typed [`Modifier`]s.
 //! - `food_desc.json`: the card line for each food style (`FOOD_DESC`).
+//! - `syl.json`, `factions.json`, `places.json`: name syllables per folk, and the factions
+//!   and places legendary histories name (`SYL`, `FACTIONS`, `PLACES`).
 //! - `families.json`: the plate's armory menu, bases grouped under a heading (`FAMILIES`).
 
 use crate::dice::Dice;
@@ -190,6 +192,28 @@ pub fn food_descriptions() -> &'static HashMap<FoodStyle, String> {
     &FOOD_DESCRIPTIONS
 }
 
+/// A folk's first and second name syllables.
+pub type Syllables = (Vec<String>, Vec<String>);
+
+static SYLLABLES: LazyLock<BTreeMap<String, Syllables>> = LazyLock::new(|| parse("syl.json", include_str!("../../../data/syl.json")));
+static FACTIONS: LazyLock<Vec<String>> = LazyLock::new(|| parse("factions.json", include_str!("../../../data/factions.json")));
+static PLACES: LazyLock<Vec<String>> = LazyLock::new(|| parse("places.json", include_str!("../../../data/places.json")));
+
+/// `data/syl.json`: for each folk, first and second name syllables.
+pub fn syllables() -> &'static BTreeMap<String, Syllables> {
+    &SYLLABLES
+}
+
+/// `data/factions.json`.
+pub fn factions() -> &'static [String] {
+    &FACTIONS
+}
+
+/// `data/places.json`.
+pub fn places() -> &'static [String] {
+    &PLACES
+}
+
 /// `data/goods.json`, by name.
 pub fn goods() -> &'static BTreeMap<String, Good> {
     &GOODS
@@ -216,6 +240,7 @@ mod tests {
         assert_eq!(affixes().len(), 24);
         assert_eq!(base_groups().len(), 25);
         assert_eq!(food_descriptions().len(), 12);
+        assert_eq!((syllables().len(), factions().len(), places().len()), (6, 7, 9));
         assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 63);
     }
 
