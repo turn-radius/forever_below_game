@@ -9,11 +9,12 @@ use std::f32::consts::{PI, TAU};
 
 use crate::build::form::{FRONT, LegForm, ShellOptions, patch, rolled_edge};
 use crate::build::garment::buckle_mesh;
+use crate::build::hafted::smoothstep;
 use crate::build::parts::{Look, Parts};
 use crate::fabric::{Fabric, PatternKind, SurfacePattern};
 use crate::geom::polygon::P2;
 use crate::geom::vec3::{self, V3};
-use crate::geom::{GridOptions, LatheOptions, MeshBuilder, Shading, cuboid, extrude, lathe, spline_profile, stitch_grid, tube, SweepOptions};
+use crate::geom::{GridOptions, LatheOptions, MeshBuilder, Shading, extrude, lathe, spline_profile, stitch_grid, tube, SweepOptions};
 use crate::material::{MaterialKind, Rgb};
 use crate::sections::boot::{Boot, BootStyle};
 use crate::sections::hem::Hem;
@@ -27,7 +28,8 @@ pub fn foot_mesh(form: &LegForm, inflate: f32) -> MeshBuilder {
     stitch_grid(&points, &GridOptions { wrap_around: true, ..Default::default() })
 }
 
-/// A sole `thickness` deep under the foot's outline, to `end` along it.
+/// A sole `thickness` deep under the foot's outline, to `end` along it. Cut short of the toe,
+/// it ends square across.
 pub fn sole_mesh(form: &LegForm, end: f32, thickness: f32) -> MeshBuilder {
     let margin = 0.015 * form.foot_length / 2.6;
     let half = |x: f32| {
@@ -35,7 +37,7 @@ pub fn sole_mesh(form: &LegForm, end: f32, thickness: f32) -> MeshBuilder {
         w * k * 1.06 + margin * k
     };
     let mut outline: Vec<P2> = (0..=40).map(|i| end * i as f32 / 40.0).map(|x| [x, -half(x)]).collect();
-    outline.extend((1..40).rev().map(|i| end * i as f32 / 40.0).map(|x| [x, half(x)]));
+    outline.extend((1..=40).rev().map(|i| end * i as f32 / 40.0).map(|x| [x, half(x)]));
     outline.dedup_by(|a, b| (a[0] - b[0]).abs() + (a[1] - b[1]).abs() < 1e-5);
     let mut sole = extrude(&outline, &[], thickness);
     sole.rotate_x(PI / 2.0).translate([0.0, -thickness / 2.0, 0.0]);
@@ -62,8 +64,10 @@ pub fn boot_parts(form: &LegForm, boot: &Boot, hem: &Hem) -> Parts {
     let sole_end = if form.pointed() { toe.min(0.84 * l + 0.25 * (toe - l)) } else { toe };
     parts.add_look("sole", sole_mesh(form, sole_end, 0.08 * s), Look::of(boot.sole));
     if matches!(style, BootStyle::Boot | BootStyle::Sabaton) {
-        let mut heel = cuboid([0.24 * l, 0.13 * s, form.half_width(0.12 * l).0 * 2.05]);
-        heel.translate([0.13 * l, -0.08 * s - 0.065 * s, 0.0]);
+        // A stacked heel under the back of the sole, rounded as the sole is and cut square
+        // across its breast.
+        let mut heel = sole_mesh(form, 0.25 * l, 0.13 * s);
+        heel.translate([0.0, -0.08 * s, 0.0]);
         parts.add_look("heel", heel, Look::of(boot.sole));
     }
 
@@ -71,9 +75,19 @@ pub fn boot_parts(form: &LegForm, boot: &Boot, hem: &Hem) -> Parts {
     let height = boot.height * s;
     let y0 = 0.08 * s;
     let ridge = if sabaton { 0.07 } else { 0.0 };
+    // The shaft takes in the foot where they meet: low on the leg its sides spread round the
+    // foot's (smoothly, so no crease), or the foot pokes out of them beside the ankle.
     let shaft = |angle: f32, v: f32, inflate: f32| -> V3 {
         let p = form.shin_point(angle, height * v, height, ridge, inflate);
-        [p[0], p[1] + y0, p[2]]
+        let y = p[1] + y0;
+        let width = form.foot_half_width_at(p[0], y);
+        // Clear of the foot by a margin that fades out with it, so the shaft above is untouched.
+        let foot = width + (inflate + 0.035 * s) * smoothstep(0.0, 0.05 * s, width);
+        let side = if p[2].abs() > 1e-6 { p[2].signum() } else { -angle.sin().signum() };
+        let (z, k) = (p[2].abs(), 0.04 * s);
+        // A smooth maximum of the two, equal to `z` wherever the leg is already the wider.
+        let z = (0.5 * (z + foot + ((z - foot).powi(2) + k * k).sqrt()) - 0.5 * k).max(z);
+        [p[0], y, side * z]
     };
     let band = |v0: f32, v1: f32, rows: usize, inflate: f32, thickness: f32| -> MeshBuilder {
         patch(56, rows, &ShellOptions::tube(thickness), |u, v| shaft(TAU * u, v0 + (v1 - v0) * v, inflate))
@@ -84,9 +98,18 @@ pub fn boot_parts(form: &LegForm, boot: &Boot, hem: &Hem) -> Parts {
         BootStyle::Wrapped => Look::cloth(&Fabric::plain(boot.leg_cloth)),
         _ => leather,
     };
+    // Leg wraps are wound over a shoe that comes up past the instep, and start above where
+    // the foot meets the leg, so the shoe never pokes out between their turns.
+    let collar = if style == BootStyle::Wrapped { ((form.instep_height + 0.15 * s) / height).min(0.5) } else { 0.0 };
     if !low {
-        let rows = ((height * 8.0).round() as usize).max(6);
-        parts.add_look("shaft", band(0.0, 1.0, rows, 0.0, 0.03 * s), shaft_look);
+        // Rows enough to carry the shaft's spread round the foot without stepping the light.
+        let rows = ((height * 14.0).round() as usize).max(12);
+        if collar > 0.0 {
+            parts.add_look("shaft", band(0.0, collar, 12, 0.0, 0.03 * s), leather);
+            parts.add_look("shaft", band(collar, 1.0, rows, 0.0, 0.03 * s), shaft_look);
+        } else {
+            parts.add_look("shaft", band(0.0, 1.0, rows, 0.0, 0.03 * s), shaft_look);
+        }
     } else {
         // The opening of a low shoe: a dark lining and a rolled rim.
         let (cx, rx, rz) = (form.ankle_x - 0.02 * s, 0.42 * s, 0.3 * s * boot.width);
@@ -160,14 +183,28 @@ pub fn boot_parts(form: &LegForm, boot: &Boot, hem: &Hem) -> Parts {
         let top: Vec<V3> = (0..64).map(|i| shaft(TAU * i as f32 / 64.0, 1.0, 0.01 * s)).collect();
         parts.add_look("edges", rolled_edge(&top, 0.035 * s, true), plate);
         if boot.knee {
-            let kr = 0.5 * s;
+            // The cop over the front of the knee and the wing over its side, each seated on the
+            // greave's surface and facing out along it, the cop's crown level with the rolled top.
+            let seat = |angle: f32, v: f32| -> (V3, V3) {
+                let (da, dv) = (1e-3, 1e-3);
+                let around = vec3::sub(shaft(angle + da, v, 0.0), shaft(angle - da, v, 0.0));
+                let up = vec3::sub(shaft(angle, v + dv, 0.0), shaft(angle, v - dv, 0.0));
+                let at = shaft(angle, v, 0.0);
+                let out = vec3::normalize_or(vec3::cross(up, around), vec3::Z);
+                let centre = [form.ankle_x, at[1], 0.0];
+                (at, if vec3::dot(out, vec3::sub(at, centre)) < 0.0 { vec3::neg(out) } else { out })
+            };
+            let kr = 0.42 * s;
+            let v = 1.0 - kr * 0.9 / height;
             let profile = spline_profile(&[[kr, 0.0], [kr * 0.92, kr * 0.38], [kr * 0.6, kr * 0.7], [0.0, kr * 0.82]], 16);
             let mut cop = lathe(&profile, &LatheOptions::new(24, Shading::SMOOTH));
-            cop.align_y_to(vec3::X).scale([0.75, 1.0, 1.0]).translate([form.ankle_x + 0.44 * s, y0 + height - 0.12 * s, 0.0]);
+            let (at, out) = seat(0.0, v);
+            cop.scale([1.0, 0.75, 1.0]).place(vec3::sub(at, vec3::scale(out, kr * 0.3)), out);
             parts.add_look("knee", cop, plate);
-            let wing_profile = spline_profile(&[[kr * 0.62, 0.0], [kr * 0.55, kr * 0.18], [0.0, kr * 0.22]], 10);
+            let wing_profile = spline_profile(&[[kr * 0.7, 0.0], [kr * 0.62, kr * 0.2], [0.0, kr * 0.26]], 10);
             let mut wing = lathe(&wing_profile, &LatheOptions::new(24, Shading::SMOOTH));
-            wing.align_y_to(vec3::Z).translate([form.ankle_x + 0.12 * s, y0 + height - 0.12 * s, 0.44 * s * boot.width]);
+            let (at, out) = seat(FRONT + 0.55, v);
+            wing.place(vec3::sub(at, vec3::scale(out, kr * 0.08)), out);
             parts.add_look("knee", wing, plate);
         }
     }
@@ -175,8 +212,9 @@ pub fn boot_parts(form: &LegForm, boot: &Boot, hem: &Hem) -> Parts {
     // Wrapped legs: a band wound up the leg, each turn lapping over the one below.
     if style == BootStyle::Wrapped && height > 0.5 {
         let bw = 0.2 * s;
-        let turns = (height / (bw * 1.05)).round().max(2.0);
-        let rise = |u: f32| 0.05 + (height - 0.15) * u;
+        let start = (collar * height - bw * 0.25).max(0.05);
+        let turns = ((height - start) / (bw * 1.05)).round().max(2.0);
+        let rise = |u: f32| start + (height - 0.1 - start) * u;
         let ribbon = patch((turns * 36.0) as usize, 2, &ShellOptions::sheet(0.02 * s), |u, v| {
             let y = rise(u) + (v - 0.5) * bw;
             shaft(TAU * turns * u, y / height, (0.015 + 0.025 * (1.0 - v)) * s)

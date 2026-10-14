@@ -461,8 +461,36 @@ impl Hoop {
 }
 
 /// The section as runs of points that shade smooth within themselves; runs meet at hard
-/// edges. Counter-clockwise in (across, outward). The bool marks a single closed run.
-fn band_section(profile: BandProfile) -> (Vec<Vec<P2>>, bool) {
+/// edges. Counter-clockwise in (across, outward).
+struct BandSection {
+    runs: Vec<Vec<P2>>,
+    /// A single closed run.
+    closed: bool,
+    /// Runs laid out point for point as `runs` whose normals the band shades with, when its
+    /// own would break the light up (see `docs/rendering.md`).
+    shading: Option<Vec<Vec<P2>>>,
+}
+
+impl BandSection {
+    /// Half the section's width across the finger at height `y` (-1 on the finger, 1 at the
+    /// top), as a share of the band's half width.
+    fn half_width(&self, y: f32) -> f32 {
+        let mut widest = 0.0f32;
+        for run in &self.runs {
+            let n = run.len();
+            let edges = if self.closed { n } else { n - 1 };
+            for i in 0..edges {
+                let ([x0, y0], [x1, y1]) = (run[i], run[(i + 1) % n]);
+                if (y0 - y) * (y1 - y) <= 0.0 && y0 != y1 {
+                    widest = widest.max((x0 + (x1 - x0) * (y - y0) / (y1 - y0)).abs());
+                }
+            }
+        }
+        widest
+    }
+}
+
+fn band_section(profile: BandProfile) -> BandSection {
     let ellipse = |n: usize, e: f32| -> Vec<P2> {
         (0..n)
             .map(|i| {
@@ -471,9 +499,10 @@ fn band_section(profile: BandProfile) -> (Vec<Vec<P2>>, bool) {
             })
             .collect()
     };
+    let plain = |runs: Vec<Vec<P2>>, closed: bool| BandSection { runs, closed, shading: None };
     match profile {
-        BandProfile::Round => (vec![ellipse(24, 1.0)], true),
-        BandProfile::Flat => (vec![ellipse(32, 0.4)], true),
+        BandProfile::Round => plain(vec![ellipse(24, 1.0)], true),
+        BandProfile::Flat => plain(vec![ellipse(32, 0.4)], true),
         BandProfile::DShape => {
             let dome: Vec<P2> = (0..=16).map(|i| {
                 let t = PI * i as f32 / 16.0;
@@ -484,9 +513,9 @@ fn band_section(profile: BandProfile) -> (Vec<Vec<P2>>, bool) {
                 let x = -1.0 + 2.0 * i as f32 / 6.0;
                 [x, -0.88 - 0.12 * (1.0 - x * x)]
             }).collect();
-            (vec![inside, dome], false)
+            plain(vec![inside, dome], false)
         }
-        BandProfile::KnifeEdge => (
+        BandProfile::KnifeEdge => plain(
             vec![
                 vec![[-1.0, -1.0], [1.0, -1.0]],
                 vec![[1.0, -1.0], [1.0, -0.5]],
@@ -497,15 +526,30 @@ fn band_section(profile: BandProfile) -> (Vec<Vec<P2>>, bool) {
             false,
         ),
         BandProfile::Faceted => {
-            // An octagon with flats against the finger, on top and at the sides.
+            // An octagon with flats against the finger, on top and at the sides. The facets
+            // stay in the silhouette but shade as a round band: each flat facet crosses a toon
+            // band edge at its own point round the hoop, so the light stepped round the band
+            // in a staircase.
+            const SPLITS: usize = 4;
             let k = 1.0 / (PI / 8.0).cos();
-            let pts: Vec<P2> = (0..8)
-                .map(|i| {
-                    let a = PI / 8.0 + PI / 4.0 * i as f32;
-                    [a.cos() * k, a.sin() * k]
+            let corner = |i: usize| -> P2 {
+                let a = PI / 8.0 + PI / 4.0 * i as f32;
+                [a.cos() * k, a.sin() * k]
+            };
+            let octagon: Vec<P2> = (0..8 * SPLITS)
+                .map(|j| {
+                    let (a, b, t) = (corner(j / SPLITS), corner(j / SPLITS + 1), (j % SPLITS) as f32 / SPLITS as f32);
+                    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
                 })
                 .collect();
-            ((0..8).map(|i| vec![pts[i], pts[(i + 1) % 8]]).collect(), false)
+            let round: Vec<P2> = octagon
+                .iter()
+                .map(|&[x, y]| {
+                    let (s, c) = y.atan2(x).sin_cos();
+                    [c, s]
+                })
+                .collect();
+            BandSection { runs: vec![octagon], closed: true, shading: Some(vec![round]) }
         }
     }
 }
@@ -514,16 +558,22 @@ fn band_section(profile: BandProfile) -> (Vec<Vec<P2>>, bool) {
 const HOOP_ROWS: usize = 160;
 
 fn hoop_mesh(hoop: &Hoop, profile: BandProfile) -> MeshBuilder {
-    let (runs, closed) = band_section(profile);
-    let mut out = MeshBuilder::new();
-    for run in &runs {
+    let section = band_section(profile);
+    let stitch = |run: &[P2]| -> MeshBuilder {
         let rows: Vec<Vec<V3>> = (0..HOOP_ROWS)
             .map(|i| {
                 let th = TAU * i as f32 / HOOP_ROWS as f32;
                 run.iter().map(|&q| hoop.point(th, q)).collect()
             })
             .collect();
-        let mut grid = stitch_grid(&rows, &GridOptions { wrap_around: closed, wrap_along: true, shading: Shading::SMOOTH, row_v: None });
+        stitch_grid(&rows, &GridOptions { wrap_around: section.closed, wrap_along: true, shading: Shading::SMOOTH, row_v: None })
+    };
+    let mut out = MeshBuilder::new();
+    for (i, run) in section.runs.iter().enumerate() {
+        let mut grid = stitch(run);
+        if let Some(shading) = &section.shading {
+            grid.normals = stitch(&shading[i]).normals;
+        }
         // Face away from the section's centre line.
         let outward: f32 = grid
             .indices
@@ -639,22 +689,29 @@ fn build_ring(s: &RingState) -> ItemMesh {
             let bevel = (tt * 0.3).min(size * 0.04);
             let mut face = bevelled_slab(&shape.outline, &shape.holes, &SlabOptions::chamfered(tt, bevel));
             face.rotate_x(-PI / 2.0).translate([0.0, tt * 0.5, 0.0]);
-            // The bolster: the shoulders gather into a flared skirt under the face, from the
-            // band's width at its foot to just inside the face's outline.
+            // The bolster: the shoulders gather into a flared skirt under the face, from inside
+            // the band at its foot to just inside the face's outline. The foot keeps inside the
+            // band's sides where they narrow away from the crown, so the skirt rises out of
+            // them along one clean seam instead of poking through in lumps.
             let half_x = shape.outline.iter().fold(0.0f32, |m, p| m.max(p[0].abs()));
             let half_z = size * 0.5;
-            let foot = (hoop.width(0.0) * 0.5).min(half_z);
             let drop = hoop.thickness(0.0) * 0.9;
-            let rows: Vec<Vec<V3>> = (0..=8)
+            let section = band_section(b.profile);
+            let rows: Vec<Vec<V3>> = (0..=12)
                 .map(|i| {
-                    let v = i as f32 / 8.0;
+                    let v = i as f32 / 12.0;
                     let flare = v * v;
-                    let (rx, rz) = (half_x * (0.55 + 0.4 * flare), foot + (half_z * 0.95 - foot) * flare);
                     let y = -drop * (1.0 - v) + tt * 0.15 * v;
-                    (0..40)
+                    (0..48)
                         .map(|k| {
-                            let a = TAU * k as f32 / 40.0;
-                            [rx * a.cos(), y, -rz * a.sin()]
+                            let (sin, cos) = (TAU * k as f32 / 48.0).sin_cos();
+                            let foot_x = half_x * 0.55 * cos;
+                            let th = foot_x.atan2(crown - drop);
+                            let level = 2.0 * (foot_x.hypot(crown - drop) - hoop.inner) / hoop.thickness(th) - 1.0;
+                            let inside = hoop.width(th) * 0.5 * section.half_width(level.clamp(-1.0, 1.0)) * 0.85;
+                            let foot_z = inside.min(half_z) * sin;
+                            let top = [half_x * 0.95 * cos, half_z * 0.95 * sin];
+                            [foot_x + (top[0] - foot_x) * flare, y, -(foot_z + (top[1] - foot_z) * flare)]
                         })
                         .collect()
                 })

@@ -145,26 +145,30 @@ pub fn hand_parts(form: &HandForm, hand: &Hand, hem: &Hem) -> Parts {
         return parts;
     }
 
-    // Plates over each finger and the thumb: a lame per phalanx, the tip one domed.
+    // Plates over each finger and the thumb: a lame per phalanx, the tip one domed. Each lame
+    // sits close over the back of its phalanx and laps a little past the joints, so the plates
+    // read as one articulated row per finger: wider or looser lames run into the next finger's
+    // and leave the glove showing at every knuckle.
     let digit_plates = |digit: &Digit, count: usize| -> MeshBuilder {
         let joints = digit.joints(curl);
         let mut mesh = MeshBuilder::new();
+        let thickness = 0.02 * s;
         for i in 0..count.min(joints.len() - 1) {
             let (a, b) = (joints[i], joints[i + 1]);
             let len = vec3::distance(a, b);
             let axis = vec3::sub(b, a);
             let tip = i + 2 == joints.len();
             let stack = LameStack {
-                origin: if tip { vec3::add(b, vec3::scale(vec3::normalize_or(axis, vec3::Y), digit.radius * 0.5)) } else { vec3::add(a, vec3::scale(axis, 0.08)) },
+                origin: if tip { vec3::add(b, vec3::scale(vec3::normalize_or(axis, vec3::Y), digit.radius * 0.5)) } else { vec3::sub(a, vec3::scale(axis, 0.06)) },
                 axis: if tip { vec3::neg(axis) } else { axis },
                 toward: vec3::Z,
                 count: 1,
-                radius: digit.radius * 1.3,
+                radius: digit.radius * 1.06 + thickness,
                 step: 0.0,
-                height: len * if tip { 0.9 } else { 0.8 },
+                height: len * if tip { 1.0 } else { 1.02 },
                 overlap: 0.0,
-                half_angle: 1.45,
-                thickness: 0.02 * s,
+                half_angle: 1.15,
+                thickness,
                 cap: tip,
             };
             mesh.append(&limb_lames(&stack));

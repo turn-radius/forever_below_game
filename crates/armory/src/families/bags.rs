@@ -426,13 +426,22 @@ impl Drawstring {
 
     /// A point of the outer surface: `a` round from the front (+Z), at profile radius `r`.
     fn point(&self, a: f32, r: f32, y: f32) -> V3 {
-        let r = r * self.pleat(a, y);
+        Self::turned(a, r * self.pleat(a, y), y)
+    }
+
+    /// A point of the turned profile at radius `r`, before pleating.
+    fn turned(a: f32, r: f32, y: f32) -> V3 {
         [a.sin() * r, y, a.cos() * r * DEPTH_SQUASH]
     }
 
     /// The surface as rows (profile points) of `around` columns, front faces outward.
     fn rows(&self, around: usize) -> Vec<Vec<V3>> {
         self.profile.iter().map(|&[r, y]| (0..around).map(|c| self.point(TAU * c as f32 / around as f32, r, y)).collect()).collect()
+    }
+
+    /// [`Drawstring::rows`] without the pleats, point for point.
+    fn unpleated_rows(&self, around: usize) -> Vec<Vec<V3>> {
+        self.profile.iter().map(|&[r, y]| (0..around).map(|c| Self::turned(TAU * c as f32 / around as f32, r, y)).collect()).collect()
     }
 
     /// The outer surface at (`a`, `y`) and its outward normal.
@@ -450,7 +459,12 @@ fn build_drawstring(b: &Bag, d: &Drawstring, looks: &Looks, seed: u32, parts: &m
     let sack = b.style == BagStyle::Sack;
     let t = b.fabric.thickness() * sz.max(0.8);
     let options = GridOptions { wrap_around: true, wrap_along: false, shading: Shading::SMOOTH, row_v: None };
-    parts.add_tinted("body", thick_sheet(&d.rows(72), &options, t), looks.body.0, looks.body.1);
+    // The pleats stay in the silhouette but shade with the turned profile's normals: under
+    // banded toon light, folds this fine break the neck into ragged patches wherever a band
+    // edge crosses it.
+    let mut body = thick_sheet(&d.rows(72), &options, t);
+    body.normals = thick_sheet(&d.unpleated_rows(72), &options, t).normals;
+    parts.add_tinted("body", body, looks.body.0, looks.body.1);
 
     // The cord round the neck, sitting on the pleats it gathers.
     let cord_r = 0.035 * sz * if sack { 1.8 } else { 1.0 };

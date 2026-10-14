@@ -604,6 +604,37 @@ impl LegForm {
         [x, self.lift(x) + y, -w * end * signed_pow(c, 2.0 / 2.2)]
     }
 
+    /// Half the foot's width (along Z) at `x` along it and `y` above the sole: the inverse of
+    /// [`LegForm::foot_point`]'s section, 0 above the foot or past either end.
+    pub fn foot_half_width_at(&self, x: f32, y: f32) -> f32 {
+        if x < 0.0 || x > self.toe_x() {
+            return 0.0;
+        }
+        let (w, end) = self.half_width(x);
+        let h = self.height(x);
+        let y = y - self.lift(x);
+        if end <= 0.0 || y <= 0.0 {
+            return 0.0;
+        }
+        // Undo the rounding toward the ends, which squeezes the section about its centre.
+        let centre = 0.42 * h;
+        let y = centre + (y - centre) / end;
+        let s = if y >= centre {
+            let t = (y / h - 0.42) / 0.58;
+            if t >= 1.0 {
+                return 0.0;
+            }
+            t.max(0.0).powf(1.0 / 0.8)
+        } else {
+            let t = 1.0 - y / centre;
+            if t >= 1.0 {
+                return 0.0;
+            }
+            -t.cbrt()
+        };
+        w * end * (1.0 - s * s).max(0.0).sqrt().powf(2.0 / 2.2)
+    }
+
     /// A point on the leg `y` above the sole at `angle` (0 toward the toe, lathe convention),
     /// `inflate` further out. `height` is the shaft's top, for the calf's placement; `ridge`
     /// raises a crest down the shin (a greave).
@@ -613,7 +644,9 @@ impl LegForm {
         let calf = if tall { self.calf * (-((t - 0.55) / 0.22).powi(2)).exp() } else { 0.0 };
         let a = (angle + PI).rem_euclid(2.0 * PI) - PI;
         let k = (1.0 + calf + 0.06 * smoothstep(0.85, 1.0, t)) * (1.0 + ridge * (-(a / 0.32).powi(2)).exp());
-        let depth = self.shin_half_depth * (1.0 + 0.2 * smoothstep(0.0, 0.35, t));
+        // The leg fills out above the ankle by height, not by share of the shaft, so a short
+        // shaft hugs the ankle instead of flaring like a bucket.
+        let depth = self.shin_half_depth * (1.0 + 0.2 * smoothstep(0.0, 0.35, y / self.knee_height));
         let [x, z] = section_point(angle, self.shin_half_width * k + inflate, depth * k + inflate, 2.0 / 2.2, 1.0);
         [self.ankle_x + x, y, z]
     }

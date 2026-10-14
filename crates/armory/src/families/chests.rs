@@ -25,7 +25,7 @@ use crate::build::device::device_mesh;
 use crate::build::fitting::{drop_handle, hasp, lock_plate, padlock};
 use crate::build::gem::{bezel, cut_stone};
 use crate::build::hoard::{coin, coin_heap};
-use crate::build::parts::Parts;
+use crate::build::parts::{Look, Parts};
 use crate::build::plank::{plank, planked_disc, planked_panel};
 use crate::build::strap::{rivets, strap};
 use crate::cond::{Condition, ConditionLimits};
@@ -920,24 +920,32 @@ fn build_barrel(s: &ChestState, parts: &mut Parts) {
             [(a, 0.985), (a + step * 0.1, j), (a + step * 0.5, j * 1.004), (a + step * 0.9, j)]
         })
         .collect();
-    let rows: Vec<Vec<V3>> = (0..=28)
-        .map(|i| {
-            let y = b.height * i as f32 / 28.0;
-            let r = b.radius_at(y);
+    // The stave ends are bevelled where they meet the chime, as coopers cut them. Square, the
+    // ends' thin rim gave the ink outline a normal that barely rose off the wall, so the far
+    // rim drew almost no line.
+    let bevel = b.wall * 0.6;
+    let mut levels: Vec<(f32, f32)> = vec![(0.0, bevel)];
+    levels.extend((0..=28).map(|i| (bevel + (b.height - 2.0 * bevel) * i as f32 / 28.0, 0.0)));
+    levels.push((b.height, bevel));
+    let rows: Vec<Vec<V3>> = levels
+        .iter()
+        .map(|&(y, inset)| {
+            let r = b.radius_at(y) - inset;
             columns.iter().map(|&(a, k)| [r * k * a.cos(), y, -r * k * a.sin()]).collect()
         })
         .collect();
     let options = GridOptions { wrap_around: true, wrap_along: false, shading: Shading::SMOOTH, row_v: None };
     parts.add("body", thick_sheet(&rows, &options, b.wall), c.material);
 
-    // Heads sunk in the chimes.
+    // Heads sunk in the chimes. They meet the staves all round, never at a silhouette, so they
+    // draw no ink: their outline hull poked through the thin staves above them in dashes.
     let mut heads = MeshBuilder::new();
     for y in [b.head_inset, b.height - b.head_inset] {
         let mut head = planked_disc(b.radius_at(y) - b.wall * 1.02, 5, 0.015 * sz, 0.1 * sz);
         head.translate([0.0, y, 0.0]);
         heads.append(&head);
     }
-    parts.add_tinted("head", heads, c.material, shade(&s.palette, c.material, 0.9));
+    parts.add_look("head", heads, Look::of(c.material).tinted(shade(&s.palette, c.material, 0.9)).without_outline());
 
     // Hoops: chime hoops at the ends, bilge hoops toward the middle.
     let hoops: &[f32] = match c.bands.max(2) {
