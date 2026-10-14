@@ -127,6 +127,13 @@ impl Inventory {
         self.worn.get(&slot).copied()
     }
 
+    /// Everything worn or held, with its slot, in the slots' order.
+    pub fn equipped(&self) -> Vec<(Slot, &Item)> {
+        let mut worn: Vec<(Slot, &Item)> = self.worn.iter().filter_map(|(&slot, &id)| Some((slot, self.item(id)?))).collect();
+        worn.sort_by_key(|(slot, _)| *slot as u8);
+        worn
+    }
+
     /// The containers whose grids show as carried, in order ([`CARRYING_SLOTS`]).
     pub fn carried_containers(&self) -> Vec<ItemId> {
         CARRYING_SLOTS.iter().filter_map(|&slot| self.worn(slot)).filter(|id| self.grids.contains_key(id)).collect()

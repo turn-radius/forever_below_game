@@ -15,8 +15,9 @@
 //! - [`underfoot`]: the items on the floor within reach, as a grid, and bags set down as
 //!   their own grids; dragging in and out of them picks things up and sets them down.
 //!
-//! The delver starts with a belt whose pouch is their first grid (`docs/items.md`, "Slots";
-//! the plate's belt is a container). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
+//! The delver ([`Character`]) is rolled from the level's seed and starts in the "Freshly
+//! fallen" outfit of `data/outfits.json` (a tunic and trousers), with a belt whose pouch is
+//! their first grid (`docs/items.md`, "Slots"; the plate's belt is a container). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
 //! captures; `FB_DEBUG_KIT=1` starts the delver with a pack full of things and sets a sack
 //! holding a few more, and a shield, down in front of them. `FB_DEBUG_HOVER=<n>` holds the
 //! card over the `n`th thing in the first carried grid.
@@ -40,11 +41,12 @@ use fb_items::{Kind, Rarity, Slot, footprint::Footprint};
 
 pub use grid::{Grid, Placement};
 pub use icon::{IconCache, Icons};
-pub use doll::{DollAssets, DollView, SlotView};
+pub use doll::{DollAssets, DollStage, DollView, SlotView};
 pub use items::{Inventory, ItemId, Location, Refusal};
 pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
 use crate::carry::ViewModelCamera;
+use crate::character::{Character, character_for};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::play::{CurrentLevel, Screen, ScreenOpen, show_screen, switch_screens};
 pub use crate::ui::node_rect;
@@ -85,7 +87,9 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
             .init_resource::<DollAssets>()
-            .add_systems(Startup, (give_starting_kit, give_debug_kit.run_if(debug_kit_wanted)).chain())
+            .init_resource::<DollStage>()
+            .init_resource::<Character>()
+            .add_systems(Startup, (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted)).chain())
             .add_systems(PostStartup, open_for_capture.run_if(|| env_flag("FB_OPEN_INVENTORY")))
             .add_systems(
                 Update,
@@ -107,6 +111,7 @@ impl Plugin for InventoryPlugin {
                         .after(switch_screens),
                     icon::draw_icons,
                     doll::turn_seal,
+                    (doll::dress_doll, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
                 ),
             );
     }
@@ -125,14 +130,37 @@ fn kit_seed(level: Option<&CurrentLevel>, salt: u32) -> u32 {
     level.map_or(1, |l| l.0.seed).wrapping_mul(0x2545_f491).wrapping_add(salt)
 }
 
-/// The delver starts wearing a belt, its pouch their first grid.
-fn give_starting_kit(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLevel>>) {
+/// The outfit the delver starts in (`data/outfits.json`).
+pub const STARTING_OUTFIT: &str = "fallen";
+
+/// Rolls the delver from the level's seed.
+fn roll_character(mut character: ResMut<Character>, level: Option<Res<CurrentLevel>>) {
+    *character = character_for(kit_seed(level.as_deref(), 0xc4a7));
+}
+
+/// The delver starts in the [`STARTING_OUTFIT`], wearing a belt whose pouch is their first
+/// grid. What the outfit leaves at their feet goes in the pouch if it fits.
+fn give_starting_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, level: Option<Res<CurrentLevel>>) {
     if inventory.worn(Slot::Belt).is_some() {
         return;
     }
     let Some(belt) = fb_items::roll_item("Belt", kit_seed(level.as_deref(), 0xbe17)) else { return };
     let belt = inventory.add(belt);
     inventory.wear(belt, Slot::Belt).expect("a belt goes on the belt slot");
+    let Some(outfit) = fb_items::outfit::outfit(STARTING_OUTFIT) else { return };
+    let set = outfit.roll(kit_seed(level.as_deref(), 0x0f17), character.folk.key());
+    for (slot, item) in set.worn {
+        let id = inventory.add(item);
+        if inventory.wear(id, slot).is_err() {
+            inventory.forget(id);
+        }
+    }
+    for item in set.goods.into_iter().chain(set.ground) {
+        let id = inventory.add(item);
+        if inventory.stow(id).is_err() {
+            inventory.forget(id);
+        }
+    }
 }
 
 /// For captures and trying the screen: a pack on the back, filled with one of most things.
@@ -836,6 +864,7 @@ mod tests {
             .init_resource::<FloorChanges>()
             .init_resource::<Assets<Image>>()
             .init_resource::<DollAssets>()
+            .init_resource::<Character>()
             .add_systems(Update, (switch_screens, build_screen, drag_items).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app

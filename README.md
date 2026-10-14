@@ -74,6 +74,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start |
 | `FB_DEBUG_KIT=1` | a filled pack, with a sack and a shield set down in front of you |
+| `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
