@@ -1086,10 +1086,10 @@ fn helm(body: &Body, state: &HelmState, fit: HeadFit) -> ItemMesh {
     // back of the skull stays inside (our own: the bowl is 1.12 times deeper than wide).
     let s = state.sized((1.12 * head.half_width).max(0.96 * head.half_depth) + body.hair_volume(true) + body.feature_volume(fit));
     let at = vec3::add(head.centre, [0.0, 0.1 * head.half_height, 0.0]);
-    let ears = body.head_mesh_fitted(fit).parts.into_iter().filter(|p| p.name == "ears").flat_map(|p| p.positions).collect::<Vec<V3>>();
-    // Each ear on its own side, in the helm's space.
-    let through = [1.0f32, -1.0].map(|sg| ears.iter().filter(|p| (p[0] - head.centre[0]) * sg > 0.0).map(|p| vec3::sub(*p, at)).collect::<Vec<V3>>());
-    let openings = Openings { through: through.into_iter().filter(|t| !t.is_empty()).collect(), margin: 0.08 * body.scale.sqrt() };
+    // In the helm's space: standing ears come out through it.
+    let features = body.standing_features(fit);
+    let local = |f: Vec<V3>| f.into_iter().map(|p| vec3::sub(p, at)).collect::<Vec<V3>>();
+    let openings = Openings { through: features.ears.into_iter().map(local).collect(), lift: vec![], margin: 0.08 * body.scale.sqrt() };
     let mut mesh = Helm::build_with_openings(&s, &openings);
     Placement::translation(at).apply_to_item(&mut mesh);
     mesh
@@ -1992,5 +1992,37 @@ mod tests {
         let beard = half_width(&body.hair_mesh(fit.hair), "beard");
         assert!(beard < body.shoulder_half_width, "the beard fans out to {beard}");
         assert!(fit.hair.chest <= fit.hair.clearance);
+    }
+
+    #[test]
+    fn standing_ears_clear_open_caps() {
+        use armory::families::helm::HelmStyle;
+        let mut failures = vec![];
+        let mut checked = 0;
+        // A goblin's long ears and a gnome's pointed ones under every open cap, with and
+        // without its aventail and cheek plates.
+        for folk in [Folk::Goblin, Folk::Gnome] {
+            for seed in [3u32, 1207, 40, 8, 77, 501] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                for style in [HelmStyle::Kettle, HelmStyle::Nasal, HelmStyle::Skullcap] {
+                    for kit in 0..8u32 {
+                        let mut helm = Helm::roll_as(seed + kit, style);
+                        helm.aventail.on = kit % 2 == 0;
+                        helm.cheeks.on = kit % 4 < 2;
+                        let fit = fit_worn(&body, &[(Slot::Head, Item::Helm(helm))]);
+                        let ears = body.under(&fit).parts.into_iter().find(|p| p.name == "ears").unwrap();
+                        for part in &fit.layer(Slot::Head).unwrap().mesh.parts {
+                            checked += 1;
+                            let n = crossings(&ears, part);
+                            if n > 0 {
+                                failures.push(format!("{folk:?} {seed} {style:?} kit {kit}: its ears pass through the {} ({n} crossings)", part.name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 500, "{checked}");
+        assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
     }
 }

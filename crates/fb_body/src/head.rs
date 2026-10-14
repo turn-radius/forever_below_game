@@ -217,6 +217,48 @@ impl Body {
     }
 }
 
+/// The features that stand out of a head under headgear ([`Body::standing_features`]), each
+/// as a cloud of points over its surface in body space.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StandingFeatures {
+    /// Each standing ear (not folded).
+    pub ears: Vec<Vec<V3>>,
+}
+
+impl Body {
+    /// The features that stand out of the head under headgear fitted as `fit` (each as its
+    /// vertices and the middles of its triangles and their edges), so headgear can be cut
+    /// open where they pass through it (our own; the plate draws features through
+    /// headgear).
+    pub fn standing_features(&self, fit: HeadFit) -> StandingFeatures {
+        let face = self.face();
+        let race = self.race();
+        let q = Quirks::roll(self.spec.seed);
+        let mut out = StandingFeatures::default();
+        if !fit.fold_ears {
+            for sg in [1.0f32, -1.0] {
+                let mut p = Pieces::default();
+                ear(&face, race.ears, sg, q.ear, false, &mut p);
+                if !p.ears.is_empty() {
+                    out.ears.push(surface_points(&p.ears));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A mesh's vertices and the middles of its triangles and of their edges.
+fn surface_points(m: &MeshBuilder) -> Vec<V3> {
+    let mut out = m.positions.clone();
+    for t in m.indices.chunks(3) {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|i| m.positions[i as usize]);
+        out.push(vec3::scale(vec3::add(vec3::add(a, b), c), 1.0 / 3.0));
+        out.extend([(a, b), (b, c), (c, a)].map(|(x, y)| vec3::scale(vec3::add(x, y), 0.5)));
+    }
+    out
+}
+
 /// An ellipsoid of half extents `size`, set at `at` with its +Y toward `up` and +Z toward
 /// `facing`.
 fn blob(size: V3, at: V3, up: V3, facing: V3, segments: usize) -> MeshBuilder {
