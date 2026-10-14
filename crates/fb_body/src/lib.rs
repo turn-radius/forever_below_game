@@ -14,6 +14,7 @@
 pub mod body;
 pub mod folk;
 pub mod hand;
+pub mod head;
 pub mod limb;
 pub mod place;
 pub mod spec;

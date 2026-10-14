@@ -429,9 +429,11 @@ impl Body {
 
     // ── Skin ──
 
-    /// The whole bare body.
+    /// The whole bare body: skin and head.
     pub fn mesh(&self) -> ItemMesh {
-        self.skin_mesh()
+        let mut mesh = self.skin_mesh();
+        mesh.parts.extend(self.head_mesh().parts);
+        mesh
     }
 
     /// Every bare-skin part: `"trunk"`, `"arms"`, `"hands"`, `"nails"`, `"legs"`, `"feet"`,
