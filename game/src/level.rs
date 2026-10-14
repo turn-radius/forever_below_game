@@ -451,6 +451,20 @@ mod tests {
     }
 
     #[test]
+    fn a_grave_find_brazier_burns_as_bright_as_a_new_one() {
+        let (brazier, _) = geometry::brazier(1207);
+        let (new, grave) = (fixture_appearance(1207, ConditionState::Pristine), fixture_appearance(1207, ConditionState::GraveFind));
+        let flames: Vec<_> = brazier.parts.iter().filter(|p| p.name.starts_with("flame")).collect();
+        assert!(!flames.is_empty());
+        for flame in flames {
+            let (a, b) = (new.material_for(flame), grave.material_for(flame));
+            assert_eq!(a.base.base_color, b.base.base_color, "{}", flame.name);
+            assert_eq!(a.extension.glow, b.extension.glow, "{}", flame.name);
+            assert_eq!(b.extension.decay.amount, 0.0, "{}", flame.name);
+        }
+    }
+
+    #[test]
     fn stone_wears_at_a_moderate_amount() {
         let stone = stone_appearance(1207);
         let part = armory::Part { material: Some(MaterialKind::Stone), ..default() };

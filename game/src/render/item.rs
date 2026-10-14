@@ -89,7 +89,7 @@ impl ItemAppearance {
         let colour = part.tint.or(part.material.map(|kind| self.palette.get(kind))).unwrap_or(Rgb(0.5, 0.5, 0.5));
         let decay = Decay {
             kind: part.material.map_or(0, MaterialKind::decay_type),
-            amount: part.material.map_or(0.0, |kind| self.condition.decay(kind)),
+            amount: part.material.map_or(0.0, |kind| self.condition.decay(kind)) * light_fastness(part),
             scale: self.condition.scale * self.decay_scale_factor,
             seed: (self.seed % 997) as f32 * 0.137,
         };
@@ -118,6 +118,15 @@ impl ItemAppearance {
             },
         }
     }
+}
+
+/// How much of its wear a part shows, from its glow: 1 for an unlit part, falling to 0 for one
+/// that glows at full. A part that gives off light is drawn by its own light, and a flame or a
+/// coal does not cloud like a cut stone, so a worn brazier keeps a bright flame. Graded rather
+/// than all or nothing so a faintly glowing stone still clouds with age (our own rule; the
+/// prototype's `gemMat` clouds every gem alike).
+pub fn light_fastness(part: &Part) -> f32 {
+    1.0 - part.glow.clamp(0.0, 1.0)
 }
 
 /// Converts one part to a Bevy mesh: positions, normals, uvs (when present), outline normals
@@ -236,6 +245,16 @@ mod tests {
         let material = ItemAppearance::default().material_for(&part);
         assert_eq!(material.base.base_color, Color::srgb(1.0, 0.0, 0.0));
         assert_eq!(material.extension.decay.kind, 5);
+    }
+
+    #[test]
+    fn flames_do_not_wear() {
+        let grave = ItemAppearance { condition: Condition::of(armory::cond::ConditionState::GraveFind), ..default() };
+        let flame = Part { material: Some(MaterialKind::Gem), glow: 1.0, ..default() };
+        let gem = Part { material: Some(MaterialKind::Gem), glow: 0.5, ..default() };
+        assert_eq!(grave.material_for(&flame).extension.decay.amount, 0.0);
+        let full = grave.condition.decay(MaterialKind::Gem);
+        assert!((grave.material_for(&gem).extension.decay.amount - full * 0.5).abs() < 1e-6);
     }
 
     #[test]
