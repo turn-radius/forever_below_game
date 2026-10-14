@@ -30,6 +30,8 @@ pub enum MaterialKind {
     /// A folk's own skin (`fb_body`), always tinted with its colour. It wears with the
     /// character's dirt rather than an item's condition.
     Skin,
+    /// A folk's hair, brows and beard, tinted with its colour; dirtied as skin is.
+    Hair,
 }
 
 impl MaterialKind {
@@ -56,7 +58,7 @@ impl MaterialKind {
             MaterialKind::Glass => "Glass",
             MaterialKind::Cloth => "Cloth",
             MaterialKind::Paint => "Painted",
-            MaterialKind::Food | MaterialKind::Skin => "",
+            MaterialKind::Food | MaterialKind::Skin | MaterialKind::Hair => "",
         }
     }
 
@@ -76,7 +78,7 @@ impl MaterialKind {
             MaterialKind::Cloth => 10,
             MaterialKind::Paint => 11,
             MaterialKind::Food => 12,
-            MaterialKind::Skin => 13,
+            MaterialKind::Skin | MaterialKind::Hair => 13,
         }
     }
 }

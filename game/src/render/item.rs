@@ -50,6 +50,8 @@ impl ItemPalette {
             // Skin always carries its folk's colour as a tint; this is a fallback only (the
             // second human skin in `data/races.json`).
             MaterialKind::Skin => Rgb::hex(0xe2b48f),
+            // Hair likewise always carries its colour (the third in `data/hair.json`).
+            MaterialKind::Hair => Rgb::hex(0x5a3a22),
             _ => self.gem,
         })
     }

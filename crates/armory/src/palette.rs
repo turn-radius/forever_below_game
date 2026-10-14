@@ -62,7 +62,7 @@ impl Palette {
             MaterialKind::Stone => self.stone,
             MaterialKind::Leather => self.leather,
             MaterialKind::Cord => self.cord,
-            MaterialKind::Gem | MaterialKind::Glass | MaterialKind::Cloth | MaterialKind::Paint | MaterialKind::Food | MaterialKind::Skin => return None,
+            MaterialKind::Gem | MaterialKind::Glass | MaterialKind::Cloth | MaterialKind::Paint | MaterialKind::Food | MaterialKind::Skin | MaterialKind::Hair => return None,
         })
     }
 }

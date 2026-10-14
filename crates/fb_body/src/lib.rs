@@ -13,6 +13,7 @@
 
 pub mod body;
 pub mod folk;
+pub mod hair;
 pub mod hand;
 pub mod head;
 pub mod limb;
@@ -21,6 +22,7 @@ pub mod spec;
 
 pub use body::{ArmPose, Body, GRIP_MAX, Pose};
 pub use folk::{Beard, EyeKind, Ears, Folk, HairStyle, Nose, Race};
+pub use hair::HairFit;
 pub use hand::HandPose;
 pub use limb::{Limb, Side};
 pub use place::Placement;

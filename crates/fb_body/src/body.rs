@@ -429,10 +429,11 @@ impl Body {
 
     // ── Skin ──
 
-    /// The whole bare body: skin and head.
+    /// The whole bare body: skin, head and hair.
     pub fn mesh(&self) -> ItemMesh {
         let mut mesh = self.skin_mesh();
         mesh.parts.extend(self.head_mesh().parts);
+        mesh.parts.extend(self.hair_mesh(crate::hair::HairFit::default()).parts);
         mesh
     }
 

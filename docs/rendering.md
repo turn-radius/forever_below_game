@@ -40,7 +40,7 @@ Each material carries a **type** and an **amount**. Its fragment shader mixes in
 | 10 | cloth | fading, grime, moth holes |
 | 11 | paint over wood | fading, chips showing the boards |
 | 12 | food | browning, going stale, mould |
-| 13 | skin (`fb_body`, ours) | the character's dirt: a dull film, then smudges pooling low on the body |
+| 13 | skin and hair (`fb_body`, ours) | the character's dirt: a dull film, then smudges pooling low on the body |
 
 The amount is `cond.wear` times a per-material multiplier (`cond.rust`, `cond.patina`, `cond.rot`, `cond.fray`). The same shader also draws fabric patterns (stripes, checks, tartan, lozenges, quilting, mail rings, scales, rivets, heraldic divisions) and etching (scrollwork, border bands, knotwork, chevrons, diaper, runes) as dark engraving or gold inlay.
 
