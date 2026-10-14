@@ -19,6 +19,8 @@ pub enum Action {
     /// Swings what the main hand holds.
     Attack,
     PickUp,
+    /// Equips the item under the crosshair straight from the floor.
+    EquipAimed,
     DragItem,
     TurnItem,
     Inventory,
@@ -144,6 +146,7 @@ impl Default for Keymap {
                 bind(Action::TakeMouse, "Take the mouse back", Group::Moving, &[Mouse(MouseButton::Left)]),
                 bind(Action::Attack, "Swing what you hold", Group::Fighting, &[Mouse(MouseButton::Left)]),
                 bind(Action::PickUp, "Pick up or open", Group::Items, &[Key(KeyCode::KeyE)]),
+                bind(Action::EquipAimed, "Equip what you look at", Group::Items, &[Key(KeyCode::KeyF)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),

@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 use fb_items::footprint::Footprint;
 
-use crate::carry::{FloorItem, REACH, lift, set_down};
+use crate::carry::{FloorItem, REACH, lift, set_down, set_down_at};
 use crate::play::{BlockedCells, CurrentLevel, Obstacles, PlayerCamera};
 use crate::render::ItemSpawner;
 
@@ -88,6 +88,9 @@ pub enum FloorChange {
     Lifted(ItemId),
     /// The item has been let go, to land `aside` of straight ahead.
     SetDown(ItemId, f32),
+    /// The item has been let go, to land at a spot on the floor (cells) turned `yaw`: where
+    /// what took its place lay.
+    SetDownAt(ItemId, Vec2, f32),
 }
 
 /// Changes to make to the level this frame.
@@ -126,6 +129,9 @@ pub fn apply_floor_changes(
                 if let Some(eye) = eyes.iter().next() {
                     set_down(&mut spawner, &inventory, level, &blocked_cells, &obstacles, eye, id, aside, &tuning);
                 }
+            }
+            FloorChange::SetDownAt(id, at, yaw) => {
+                set_down_at(&mut spawner, &inventory, level, id, at, yaw, &tuning);
             }
         }
     }

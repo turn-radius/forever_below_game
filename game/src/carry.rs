@@ -48,7 +48,7 @@ use bevy::{
 use fb_level::{CELL, ItemSpot, Level};
 
 use crate::character::Character;
-use crate::inventory::{Inventory, ItemId, doll::lit_hand};
+use crate::inventory::{FloorChanges, Inventory, ItemId, Toast, doll::lit_hand, equip_from_floor, header::ToastText, underfoot::apply_floor_changes};
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
@@ -57,7 +57,7 @@ use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
 use crate::tuning::{LightTuning, Tuning};
-use crate::ui::{BG, BRIGHT};
+use crate::ui::{BG, BRIGHT, UiFonts};
 use crate::view_model::{held_in_view, side_of};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
@@ -129,6 +129,8 @@ impl Plugin for CarryPlugin {
             .init_resource::<Keymap>()
             .init_resource::<Aimed>()
             .init_resource::<Tuning>()
+            .init_resource::<Toast>()
+            .init_resource::<FloorChanges>()
             // Only a delve that opens at startup can lack a player; one begun from the title
             // spawns its own on entering.
             .add_systems(PostStartup, spawn_stand_in_camera.run_if(in_state(AppState::Delving)).run_if(no_player_camera))
@@ -143,7 +145,7 @@ impl Plugin for CarryPlugin {
                     relight_given_lights,
                     follow_player_camera,
                     sway_held,
-                    (aim, pick_up.run_if(level_has_focus)).chain(),
+                    (aim, (pick_up, equip_aimed.before(apply_floor_changes)).run_if(level_has_focus)).chain(),
                     hide_hud_under_screens.run_if(resource_exists::<ScreenOpen>),
                 )
                     .in_set(DelveSystems),
@@ -659,6 +661,13 @@ pub fn set_down(
     let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells), &obstacles.0) / CELL;
     // Laid square to the player's view.
     let yaw = (-forward.x).atan2(-forward.y);
+    set_down_at(spawner, inventory, level, id, at, yaw, tuning)
+}
+
+/// Sets loose item `id` down at `at` on the floor (cells), turned `yaw`, into the level data
+/// too so it stays where it was left, and spawns it there. `None` if it has no vertices.
+pub fn set_down_at(spawner: &mut ItemSpawner, inventory: &Inventory, level: &mut Level, id: ItemId, at: Vec2, yaw: f32, tuning: &Tuning) -> Option<Entity> {
+    let item = inventory.item(id)?;
     // For anything that came from a level spot, the spot rolls the same item again
     // ([`fb_items::roll_loot`]); what is spawned is the item itself.
     let spot = ItemSpot { x: at.x, y: at.y, yaw, family: item.shape.family(), seed: item.seed };
@@ -746,7 +755,12 @@ type CameraLook = (Option<&'static Exposure>, Option<&'static Tonemapping>, Opti
 
 /// Gives each new [`PlayerCamera`] its view model camera, on the stage, and the HUD. What it
 /// carries is [`carry_light`]'s.
-fn equip_player_camera(mut commands: Commands, tuning: Res<Tuning>, cameras: Query<(Entity, CameraLook), (With<PlayerCamera>, Without<Equipped>)>) {
+fn equip_player_camera(
+    mut commands: Commands,
+    tuning: Res<Tuning>,
+    fonts: Option<Res<UiFonts>>,
+    cameras: Query<(Entity, CameraLook), (With<PlayerCamera>, Without<Equipped>)>,
+) {
     for (camera, (exposure, tonemapping, msaa)) in &cameras {
         let exposure = exposure.copied().unwrap_or_default();
         let view_model = commands
@@ -770,7 +784,7 @@ fn equip_player_camera(mut commands: Commands, tuning: Res<Tuning>, cameras: Que
             commands.spawn((point_light(Color::WHITE, 0.5, 200.0, &exposure), RenderLayers::layer(VIEW_MODEL_LAYER), ChildOf(view_model)));
         }
         commands.entity(camera).insert((Equipped, Carrying::default()));
-        spawn_hud(&mut commands, view_model);
+        spawn_hud(&mut commands, view_model, fonts.as_deref());
     }
 }
 
@@ -886,7 +900,7 @@ fn hide_hud_under_screens(open: Res<ScreenOpen>, mut huds: Query<&mut Visibility
     }
 }
 
-fn spawn_hud(commands: &mut Commands, camera: Entity) {
+fn spawn_hud(commands: &mut Commands, camera: Entity, fonts: Option<&UiFonts>) {
     commands
         .spawn((
             Name::new("HUD"),
@@ -912,6 +926,17 @@ fn spawn_hud(commands: &mut Commands, camera: Entity) {
                 BackgroundColor(BRIGHT.with_alpha(0.85)),
                 BorderColor::all(BG.with_alpha(0.7)),
             ));
+            // The toast (`crate::inventory::Toast`): a line near the foot of the view, clear of
+            // the card under the crosshair, saying what F equipped or why it could not. Cream
+            // with a dark shadow so it reads on lit stone and in the dark alike.
+            hud.spawn((
+                Node { position_type: PositionType::Absolute, width: percent(100), bottom: percent(7), justify_content: JustifyContent::Center, ..default() },
+                Pickable::IGNORE,
+            ))
+            .with_children(|row| {
+                let font = fonts.map_or_else(TextFont::default, |f| TextFont::from_font_size(20.0).with_font(f.body.clone()));
+                row.spawn((ToastText, Text::default(), font, TextColor(BRIGHT), TextShadow { offset: Vec2::new(1.5, 1.5), color: BG.with_alpha(0.9) }));
+            });
         });
 }
 
@@ -996,6 +1021,35 @@ pub(crate) fn pick_up(
             lift(&mut commands, &mut level.bypass_change_detection().0, entity, floor);
         }
         Err(refusal) => info!("{}", refusal.reason()),
+    }
+}
+
+/// F equips the item under the crosshair straight from the floor, without the inventory
+/// screen ([`equip_from_floor`]): into its slot, a hand or a free ring slot, swapping out what
+/// was there into a bag, or onto the floor where the new item lay. The toast says what
+/// happened, or why not.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn equip_aimed(
+    input: ActionInput,
+    mut aimed: ResMut<Aimed>,
+    items: Query<&FloorItem>,
+    mut inventory: ResMut<Inventory>,
+    mut changes: ResMut<FloorChanges>,
+    mut toast: ResMut<Toast>,
+    time: Option<Res<Time<Real>>>,
+) {
+    if !input.just_pressed(Action::EquipAimed) {
+        return;
+    }
+    let Some(floor) = aimed.0.and_then(|entity| items.get(entity).ok()) else { return };
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    match equip_from_floor(&mut inventory, floor.id, Vec2::new(floor.spot.x, floor.spot.y), floor.spot.yaw) {
+        Ok(equipped) => {
+            aimed.0 = None;
+            toast.say(equipped.message(&inventory, floor.id), now);
+            changes.0.extend(equipped.changes);
+        }
+        Err(refusal) => toast.say(refusal.reason(), now),
     }
 }
 
@@ -1478,6 +1532,125 @@ mod tests {
         app.update();
         assert!(app.world().get_entity(chest).is_ok());
         assert_eq!(app.world().resource::<Inventory>().location(id), Some(crate::inventory::Location::Loose));
+    }
+
+    /// [`delving_app`] with F equipping what is aimed at, and the level's floor changes made.
+    fn equipping_app() -> (App, ItemId) {
+        let (mut app, pack) = delving_app();
+        app.init_resource::<Toast>().init_resource::<FloorChanges>().add_systems(Update, (equip_aimed, apply_floor_changes).chain().after(pick_up));
+        (app, pack)
+    }
+
+    /// Lays `item` on the floor a metre ahead of an eye looking down at it, as the level does,
+    /// and aims at it. Returns its entity, id and spot.
+    fn lay_ahead(app: &mut App, item: fb_items::Item) -> (Entity, ItemId, ItemSpot) {
+        use bevy::ecs::system::RunSystemOnce;
+        let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
+        let spot = ItemSpot { x: 0.0, y: -0.5, yaw: 0.3, family: item.shape.family(), seed: item.seed };
+        app.world_mut().resource_mut::<CurrentLevel>().0.items.push(spot);
+        let entity = app
+            .world_mut()
+            .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default()).unwrap())
+            .unwrap();
+        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, 0.3, -10.0), Vec3::Y);
+        app.world_mut().spawn((PlayerCamera, Equipped, eye));
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Aimed>().0, Some(entity));
+        (entity, id, spot)
+    }
+
+    fn press_f(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::KeyF);
+        keys.clear();
+        keys.press(KeyCode::KeyF);
+        app.update();
+    }
+
+    #[test]
+    fn f_puts_a_sword_in_the_main_hand_and_the_old_weapon_in_the_pack() {
+        use fb_items::Slot;
+        let (mut app, pack) = equipping_app();
+        let mace = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let mace = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Mace", s)).find(|i| i.profile.packable).unwrap());
+            inventory.wear(mace, Slot::Mainhand).unwrap();
+            mace
+        };
+        let character = Character::default();
+        let before = HeldKey::of(app.world().resource::<Inventory>(), &character);
+        let (entity, sword, _) = lay_ahead(&mut app, fb_items::roll_item("Sword", 3).unwrap());
+        press_f(&mut app);
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!(inventory.worn(Slot::Mainhand), Some(sword));
+        assert!(matches!(inventory.location(mace), Some(crate::inventory::Location::In { container, .. }) if container == pack));
+        // Lifted from the level, and the view model's key changes, so the view holds the sword.
+        assert!(app.world().get_entity(entity).is_err());
+        assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
+        let after = HeldKey::of(inventory, &character);
+        assert_eq!((before.main, after.main), (Some(mace), Some(sword)));
+        let toast = &app.world().resource::<Toast>().text;
+        assert!(toast.starts_with("Holding ") && toast.contains("went into the"), "{toast}");
+    }
+
+    #[test]
+    fn f_on_a_helm_swaps_helms_and_sets_the_old_one_down_where_the_new_one_lay() {
+        use fb_items::Slot;
+        let (mut app, pack) = equipping_app();
+        let old = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            // No room left in the pack, so the old helm cannot be stowed.
+            inventory.take_out(pack);
+            let old = inventory.add(fb_items::roll_item("Helm", 5).unwrap());
+            inventory.wear(old, Slot::Head).unwrap();
+            old
+        };
+        let (_, new, spot) = lay_ahead(&mut app, fb_items::roll_item("Helm", 9).unwrap());
+        press_f(&mut app);
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!(inventory.worn(Slot::Head), Some(new));
+        assert_eq!(inventory.location(old), Some(crate::inventory::Location::Loose));
+        let old_item = inventory.item(old).unwrap();
+        let items = &app.world().resource::<CurrentLevel>().0.items;
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!((items[0].x, items[0].y, items[0].yaw, items[0].seed), (spot.x, spot.y, spot.yaw, old_item.seed));
+        let mut floor = app.world_mut().query::<&FloorItem>();
+        assert_eq!(floor.iter(app.world()).map(|f| f.id).collect::<Vec<_>>(), vec![old]);
+        let toast = &app.world().resource::<Toast>().text;
+        assert!(toast.starts_with("Wearing ") && toast.ends_with("was set down."), "{toast}");
+    }
+
+    #[test]
+    fn f_on_something_with_no_slot_does_nothing_and_says_so() {
+        let (mut app, _) = equipping_app();
+        let (entity, bread, _) = lay_ahead(&mut app, fb_items::roll_item("Bread", 1).unwrap());
+        press_f(&mut app);
+        assert!(app.world().get_entity(entity).is_ok());
+        assert_eq!(app.world().resource::<Inventory>().location(bread), Some(crate::inventory::Location::Loose));
+        assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), 1);
+        assert_eq!(app.world().resource::<Toast>().text, crate::inventory::Refusal::NotWearable.reason());
+    }
+
+    #[test]
+    fn f_puts_a_ring_in_a_free_ring_slot_and_a_torch_in_the_off_hand() {
+        use fb_items::Slot;
+        let mut inventory = Inventory::default();
+        let first = inventory.add(fb_items::roll_item("Ring", 2).unwrap());
+        inventory.wear(first, Slot::Ring1).unwrap();
+        let second = inventory.add(fb_items::roll_item("Ring", 3).unwrap());
+        let equipped = equip_from_floor(&mut inventory, second, Vec2::ZERO, 0.0).unwrap();
+        assert_eq!((equipped.slot, equipped.displaced), (Slot::Ring2, None));
+        assert_eq!(inventory.worn(Slot::Ring1), Some(first));
+        let torch = inventory.add(lit_torch(4));
+        assert_eq!(equip_from_floor(&mut inventory, torch, Vec2::ZERO, 0.0).unwrap().slot, Slot::Offhand);
+        let shield = inventory.add(fb_items::roll_item("Shield", 12).unwrap());
+        let equipped = equip_from_floor(&mut inventory, shield, Vec2::new(2.0, 3.0), 0.5).unwrap();
+        assert_eq!(equipped.slot, Slot::Offhand);
+        // Nowhere to stow the torch: it goes down where the shield lay.
+        assert_eq!(equipped.displaced, Some((torch, None)));
+        assert_eq!(equipped.changes, vec![crate::inventory::FloorChange::Lifted(shield), crate::inventory::FloorChange::SetDownAt(torch, Vec2::new(2.0, 3.0), 0.5)]);
+        assert_eq!(carried_light(&inventory), None, "the carried light follows the hands");
     }
 
     #[test]

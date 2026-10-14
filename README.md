@@ -30,6 +30,7 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 | Mouse | look round (click to take the mouse back after Esc) |
 | Left click | swing what your main hand holds: a chop for a mace, axe or club, a slash for a sword, a thrust for a spear or dagger, a sweep for a staff, a punch with nothing (a click while the mouse is free only takes it back) |
 | E | pick up what you're looking at, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
+| F | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand, a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
 | Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |

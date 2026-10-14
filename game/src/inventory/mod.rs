@@ -427,11 +427,20 @@ pub struct Dragging(pub Option<Drag>);
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub struct Hovered(pub Option<(ItemId, Rect)>);
 
-/// A line saying why a drop was refused, for a few seconds.
+/// A line saying why a drop was refused, or what equipping from the floor did, for a few
+/// seconds: beside the inventory's tabs, and low in the level's HUD (`crate::carry`).
 #[derive(Resource, Debug, Default)]
 pub struct Toast {
     pub text: String,
     pub until: f32,
+}
+
+impl Toast {
+    /// Shows `text` from `now` (seconds of real time) for [`TOAST_SECONDS`].
+    pub fn say(&mut self, text: impl Into<String>, now: f32) {
+        self.text = text.into();
+        self.until = now + TOAST_SECONDS;
+    }
 }
 
 /// Where `drag` lands in `container` with its grabbed cell over `cell`: as it lies now; or,
@@ -470,6 +479,64 @@ pub fn equip(inventory: &mut Inventory, id: ItemId, slot: Slot) -> Result<Vec<Fl
         changes.push(FloorChange::SetDown(old, 0.0));
     }
     Ok(changes)
+}
+
+/// What equipping an item straight from the floor did ([`equip_from_floor`]): the slot it went
+/// in, what it displaced and the bag that went into (`None` if it was set down where the item
+/// lay), and the changes to make to the level.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FloorEquip {
+    pub slot: Slot,
+    pub displaced: Option<(ItemId, Option<ItemId>)>,
+    pub changes: Vec<FloorChange>,
+}
+
+impl FloorEquip {
+    /// The line the toast shows for it: what is now worn or held, and where what it displaced
+    /// went.
+    pub fn message(&self, inventory: &Inventory, id: ItemId) -> String {
+        let title = |id| inventory.item(id).map_or_else(String::new, |item| item.title().to_string());
+        let verb = match self.slot {
+            Slot::Mainhand | Slot::Offhand => "Holding",
+            _ => "Wearing",
+        };
+        let mut line = format!("{verb} {}.", title(id));
+        match self.displaced {
+            Some((old, Some(bag))) => line += &format!(" {} went into the {}.", title(old), title(bag)),
+            Some((old, None)) => line += &format!(" {} was set down.", title(old)),
+            None => {}
+        }
+        line
+    }
+}
+
+/// Equips `id`, lying on the floor at `at` (cells) turned `yaw`, in the slot it is made for
+/// ([`Inventory::target_slot`]: worn gear in its slot, a weapon in the main hand, a torch,
+/// lantern or shield in the off hand, a ring in a free ring slot) by [`equip`]. Whatever it
+/// displaces is stowed in a carried bag if one has room, or else set down where `id` lay.
+/// Equipping from the floor without the screen is the user's call; where the displaced item
+/// goes is this build's own rule.
+pub fn equip_from_floor(inventory: &mut Inventory, id: ItemId, at: Vec2, yaw: f32) -> Result<FloorEquip, Refusal> {
+    let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
+    let mut changes = equip(inventory, id, slot)?;
+    let slot = match inventory.location(id) {
+        Some(Location::Worn(worn)) => worn,
+        _ => slot,
+    };
+    let mut displaced = None;
+    for change in &mut changes {
+        if let FloorChange::SetDown(old, _) = *change {
+            match inventory.stow(old) {
+                Ok(bag) => displaced = Some((old, Some(bag))),
+                Err(_) => {
+                    displaced = Some((old, None));
+                    *change = FloorChange::SetDownAt(old, at, yaw);
+                }
+            }
+        }
+    }
+    changes.retain(|change| !matches!(change, FloorChange::SetDown(..)));
+    Ok(FloorEquip { slot, displaced, changes })
 }
 
 /// A double-click on `id` (the plate's `quick`): something worn is taken off and stowed, or set
@@ -898,8 +965,7 @@ fn drag_items(
         match outcome {
             Ok(changes) => floor_changes.0.extend(changes),
             Err(refusal) => {
-                toast.text = refusal.reason().to_string();
-                toast.until = now + TOAST_SECONDS;
+                toast.say(refusal.reason(), now);
             }
         }
     }
