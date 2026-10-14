@@ -1,15 +1,19 @@
 //! The carried light, items lying in the level, picking them up, and the HUD.
 //!
+//! - What each hand holds is drawn as a view model: by a second camera on [`VIEW_MODEL_LAYER`],
+//!   a child of whatever [`PlayerCamera`] exists, as in Bevy's `first_person_view_model`
+//!   example, with its own field of view, so it never sinks into a wall. The main hand's item
+//!   is low on the right, the off hand's low on the left, each fitted and turned in the fist as
+//!   the doll holds it (`crate::view_model`). It follows the inventory ([`show_held`]): equip a
+//!   sword and the view holds a sword.
 //! - The carried light is the lit torch or lantern the delver holds: the main hand's, or the
-//!   off hand's if the main hand holds none lit ([`carried_light`]). It follows the inventory:
-//!   equip a lit one and it is carried, take it off and the delver walks in the dark, lit only
-//!   by the level's own lights (braziers, glowcaps, lit things on the floor).
-//! - It is drawn as a view model: by a second camera on [`VIEW_MODEL_LAYER`], a child of
-//!   whatever [`PlayerCamera`] exists, as in Bevy's `first_person_view_model` example, low on
-//!   the side of the hand holding it. It has its own soft light, so the flame does not burn its
-//!   own handle white, and its own field of view, so it never sinks into a wall.
-//! - It moves with the player's steps ([`Gait`]) and lags a little behind a turn of the head
-//!   ([`HeldSway`]).
+//!   off hand's if the main hand holds none lit ([`carried_light`]). Equip a lit one and it is
+//!   carried, take it off and the delver walks in the dark, lit only by the level's own lights
+//!   (braziers, glowcaps, lit things on the floor). On the view model's stage it has its own
+//!   soft light, so the flame does not burn its own handle white, and lights what the other
+//!   hand holds.
+//! - What is held moves with the player's steps ([`Gait`]) and lags a little behind a turn of
+//!   the head ([`HeldSway`]).
 //! - Its light in the world is a separate point light near the eye, on the default layer, with
 //!   its colour, reach and flicker from its [`LightAnchor`]. It is the main light.
 //! - Items lie where `CurrentLevel.items` puts them, resting on the floor; long ones lie down.
@@ -42,6 +46,7 @@ use bevy::{
 };
 use fb_level::{CELL, ItemSpot, Level};
 
+use crate::character::Character;
 use crate::inventory::{Inventory, ItemId, doll::lit_hand};
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
@@ -51,6 +56,7 @@ use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
 use crate::ui::{BG, BRIGHT};
+use crate::view_model::{VIEW_MODEL_FOV_DEGREES, held_in_view, side_of};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
 pub const VIEW_MODEL_LAYER: usize = 1;
@@ -66,13 +72,14 @@ pub const DROP_DISTANCE: f32 = 8.0;
 /// (50 cm), so it is still within [`REACH`] of the eye.
 pub const DROP_SPREAD: f32 = 5.0;
 
-/// The carried light's flame in the view model, in camera space: low on the right, about a
-/// metre out as the view model camera sees it. Held in the off hand, it is low on the left.
+/// The flame of a lit thing no hold fits ([`held_pose`]) in the view model, in camera space:
+/// low on the right, about a metre out as the view model camera sees it. Held in the off hand,
+/// it is low on the left. Torches and lanterns are placed by `crate::view_model`.
 const HELD_FLAME: Vec3 = Vec3::new(5.4, -2.6, -11.0);
 
 /// Where the view model stands in world space: far below any level, out of reach of every
 /// light in it. Bevy 0.20's GPU light clustering does not filter lights by render layer, so
-/// keeping the world's lights off the held torch takes distance, not layers.
+/// keeping the world's lights off what is held takes distance, not layers.
 pub const VIEW_MODEL_STAGE: Vec3 = Vec3::new(0.0, -100_000.0, 0.0);
 
 /// Where the carried light hangs in the world, in camera space: level with the eye, a little right of it
@@ -80,7 +87,8 @@ pub const VIEW_MODEL_STAGE: Vec3 = Vec3::new(0.0, -100_000.0, 0.0);
 /// against and does not swing down onto the floor when they look down.
 const WORLD_FLAME: Vec3 = Vec3::new(1.5, 0.0, -1.5);
 
-/// Where the view model's light sits relative to [`HELD_FLAME`]: up, left and toward the eye.
+/// Where the carried light's light on the view model's stage sits relative to its flame: up,
+/// left and toward the eye (mirrored in the off hand).
 const HELD_LIGHT_OFFSET: Vec3 = Vec3::new(-3.0, 3.0, 7.0);
 
 /// Lowest a light given by an item on the floor hangs, in world units (60 cm).
@@ -99,18 +107,15 @@ const WORLD_PEAK: f32 = 1.0;
 const HELD_PEAK: f32 = 1.8;
 const HELD_REACH: f32 = 40.0;
 
-/// How far the held torch bobs at walking pace, in view model units, as `(sideways, down)`: a
+/// How far what is held bobs at walking pace, in view model units, as `(sideways, down)`: a
 /// hand swings further than the head bobs (our own tuning, about 3 cm and 2.5 cm at a metre).
 const HELD_BOB: Vec2 = Vec2::new(0.3, 0.25);
-/// How far behind a turn of the head the held torch trails: the angle it lags is the turn rate
+/// How far behind a turn of the head what is held trails: the angle it lags is the turn rate
 /// times this many seconds, up to [`HELD_LAG_MAX`] radians either way.
 const HELD_LAG_SECONDS: f32 = 0.05;
 const HELD_LAG_MAX: f32 = 0.12;
 /// How quickly the lag closes on its target, per second ([`StableInterpolate`]).
 const HELD_LAG_RATE: f32 = 12.0;
-
-/// Field of view of the view model camera, fixed whatever the world camera uses.
-const VIEW_MODEL_FOV_DEGREES: f32 = 60.0;
 
 pub struct CarryPlugin;
 
@@ -123,6 +128,7 @@ impl Plugin for CarryPlugin {
             app.add_plugins(HierarchyPropagatePlugin::<NotShadowCaster>::new(Update));
         }
         app.init_resource::<Inventory>()
+            .init_resource::<Character>()
             .init_resource::<Keymap>()
             .init_resource::<Aimed>()
             // Only a delve that opens at startup can lack a player; one begun from the title
@@ -134,9 +140,9 @@ impl Plugin for CarryPlugin {
                 (
                     lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
                     equip_player_camera,
-                    carry_light.after(equip_player_camera),
+                    show_held.after(equip_player_camera),
                     follow_player_camera,
-                    sway_held_torch,
+                    sway_held,
                     (aim, pick_up.run_if(level_has_focus)).chain(),
                     hide_hud_under_screens.run_if(resource_exists::<ScreenOpen>),
                 )
@@ -270,19 +276,48 @@ pub struct FloorItem {
     pub max: Vec3,
 }
 
-/// The carried light in the player's hand (the view model's root).
+/// What one hand holds, drawn in the view (a root of the view model).
 #[derive(Component, Debug)]
 #[require(HeldSway)]
-pub struct HeldLight {
+pub struct HeldItem {
     pub item: Item,
+    pub hand: fb_items::Slot,
 }
 
-/// On a [`PlayerCamera`]: which item it carries as its light, if any, and what was spawned to
-/// draw it (the view model, its light on the stage, and its light in the world).
+/// What a [`PlayerCamera`]'s view model was last drawn for: the item in each hand, the carried
+/// light among them, and whose hands hold them (the body they are fitted to).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldKey {
+    pub main: Option<ItemId>,
+    pub off: Option<ItemId>,
+    pub light: Option<ItemId>,
+    pub body: (fb_body::Folk, u32),
+}
+
+impl HeldKey {
+    pub fn of(inventory: &Inventory, character: &Character) -> HeldKey {
+        HeldKey {
+            main: inventory.worn(fb_items::Slot::Mainhand),
+            off: inventory.worn(fb_items::Slot::Offhand),
+            light: carried_light(inventory).map(|(_, id)| id),
+            body: (character.folk, character.body_seed),
+        }
+    }
+}
+
+/// On a [`PlayerCamera`]: what its view model holds, if drawn yet, and what was spawned to draw
+/// it (each hand's item, and the carried light's light on the stage and in the world).
 #[derive(Component, Debug, Default)]
 pub struct Carrying {
-    pub id: Option<ItemId>,
+    pub held: Option<HeldKey>,
     entities: Vec<Entity>,
+}
+
+impl Carrying {
+    /// The carried light, if the view model holds one.
+    pub fn light(&self) -> Option<ItemId> {
+        self.held.and_then(|h| h.light)
+    }
 }
 
 /// How a held thing moves in the view: it bobs with the player's steps and trails a turn of the
@@ -341,7 +376,7 @@ fn yaw_pitch(eye: &GlobalTransform) -> Vec2 {
 }
 
 /// The camera that draws the view model over the world. It stands on [`VIEW_MODEL_STAGE`],
-/// with the held torch and its light as children.
+/// with what is held and the carried light's light as children.
 #[derive(Component, Debug)]
 pub struct ViewModelCamera {
     /// The [`PlayerCamera`] it draws over.
@@ -584,14 +619,21 @@ fn equip_player_camera(mut commands: Commands, cameras: Query<(Entity, CameraLoo
                 Transform::from_translation(VIEW_MODEL_STAGE),
             ))
             .id();
+        if std::env::var_os("FB_DEBUG_LIGHT").is_some() {
+            // The player camera's debug light (`crate::player`), on the stage too, so what is
+            // held can be seen without a light in hand.
+            commands.spawn((point_light(Color::WHITE, 0.5, 200.0, &exposure), RenderLayers::layer(VIEW_MODEL_LAYER), ChildOf(view_model)));
+        }
         commands.entity(camera).insert((Equipped, Carrying::default()));
         spawn_hud(&mut commands, view_model);
     }
 }
 
-/// How the carried light is held in the view model: where its flame sits in camera space and
-/// its turn. A torch is held upright and leaning in and away, as a torch is carried; a lantern
-/// hangs plumb from the fist. In the off hand both are mirrored to the left.
+/// How a lit thing that no hold fits (a candle, a glowing mushroom) is carried in the view
+/// model: where its flame sits in camera space and its turn. A torch is held upright and
+/// leaning in and away, as a torch is carried; a lantern hangs plumb from the fist. In the off
+/// hand both are mirrored to the left. Torches and lanterns themselves are fitted as the doll
+/// holds them (`crate::view_model`).
 pub fn held_pose(item: &Item, hand: fb_items::Slot) -> (Vec3, Quat) {
     let left = hand == fb_items::Slot::Offhand;
     let flame = if left { HELD_FLAME * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_FLAME };
@@ -604,52 +646,79 @@ pub fn held_pose(item: &Item, hand: fb_items::Slot) -> (Vec3, Quat) {
     (flame, Quat::from_euler(EulerRot::XYZ, tip, 0.0, lean))
 }
 
-/// Keeps each player camera's carried light in step with the inventory ([`carried_light`]):
-/// when it changes, the old view model and its lights go and the new one is spawned, its light
-/// in the world from its [`LightAnchor`]. With nothing lit in hand there is none.
-fn carry_light(
+/// What each hand holds, placed in the view model camera's space: each item fitted to the
+/// delver's body as on the doll and carried into the view (`crate::view_model`), or, for a lit
+/// thing no hold fits, held by its flame ([`held_pose`]). Other things a hand might hold that
+/// no hold fits are not drawn.
+pub fn held_items(inventory: &Inventory, character: &Character) -> Vec<(fb_items::Slot, Item, Transform)> {
+    use fb_items::Slot;
+    let shape = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).map(|item| item.shape.clone());
+    let (main, off) = (shape(Slot::Mainhand), shape(Slot::Offhand));
+    let fitted = held_in_view(&character.spec(), main.as_ref(), off.as_ref());
+    [(Slot::Mainhand, main), (Slot::Offhand, off)]
+        .into_iter()
+        .filter_map(|(hand, item)| {
+            if let Some(held) = fitted.iter().find(|h| h.hand == hand) {
+                return Some((hand, held.item.clone(), held.transform));
+            }
+            let item = item?;
+            let anchor = item_light(&item)?;
+            let (flame, rotation) = held_pose(&item, hand);
+            Some((hand, item, Transform::from_translation(flame - rotation * Vec3::from_array(anchor.position)).with_rotation(rotation)))
+        })
+        .collect()
+}
+
+/// Keeps each player camera's view model in step with the hands ([`held_items`]) and its
+/// carried light ([`carried_light`]): when either changes, the old view model and its lights go
+/// and the new ones are spawned, the carried light's light in the world from its
+/// [`LightAnchor`]. With nothing lit in hand there is no light; with nothing in hand, nothing is
+/// drawn.
+fn show_held(
     mut commands: Commands,
     inventory: Res<Inventory>,
+    character: Res<Character>,
     mut cameras: Query<(Entity, &mut Carrying, Option<&Exposure>), With<PlayerCamera>>,
     view_models: Query<(Entity, &ViewModelCamera)>,
     mut spawner: ItemSpawner,
 ) {
-    let wanted = carried_light(&inventory);
+    let wanted = HeldKey::of(&inventory, &character);
     for (camera, mut carrying, exposure) in &mut cameras {
-        if carrying.id == wanted.map(|(_, id)| id) {
+        if carrying.held == Some(wanted) {
             continue;
         }
         let Some((view_model, _)) = view_models.iter().find(|(_, v)| v.follows == camera) else { continue };
         for entity in carrying.entities.drain(..) {
             commands.entity(entity).try_despawn();
         }
-        carrying.id = None;
-        let Some((hand, id)) = wanted else { continue };
-        let Some(item) = inventory.item(id) else { continue };
-        let Some(anchor) = item_light(&item.shape) else { continue };
+        carrying.held = Some(wanted);
         let exposure = exposure.copied().unwrap_or_default();
         let view_layer = RenderLayers::layer(VIEW_MODEL_LAYER);
-        let (flame, rotation) = held_pose(&item.shape, hand);
-        let rest = Transform::from_translation(flame - rotation * Vec3::from_array(anchor.position)).with_rotation(rotation);
-        let mesh = item.shape.build();
-        let mut root = spawner.spawn(&mesh, &appearance_of(&item.shape));
-        root.insert((
-            Name::new(format!("Carried {}", item.title())),
-            HeldLight { item: item.shape.clone() },
-            HeldSway::new(rest),
-            rest,
-            Propagate(view_layer.clone()),
-            ChildOf(view_model),
-        ));
-        let held = root.id();
-        // Off the flame toward the eye, so the whole light sits at much the same distance
-        // from it and reads firelit rather than burnt white.
-        let toward_eye = if hand == fb_items::Slot::Offhand { HELD_LIGHT_OFFSET * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_LIGHT_OFFSET };
-        let stage_light =
-            commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure), Transform::from_translation(flame + toward_eye), view_layer, ChildOf(view_model))).id();
-        let world = commands.spawn((world_light(&anchor, &exposure), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
-        carrying.id = Some(id);
-        carrying.entities = vec![held, stage_light, world];
+        let light_hand = carried_light(&inventory).map(|(hand, _)| hand);
+        for (hand, item, rest) in held_items(&inventory, &character) {
+            let mut root = spawner.spawn(&item.build(), &appearance_of(&item));
+            root.insert((
+                Name::new(format!("Held {}", item.family().key())),
+                HeldItem { item: item.clone(), hand },
+                HeldSway::new(rest),
+                rest,
+                Propagate(view_layer.clone()),
+                ChildOf(view_model),
+            ));
+            carrying.entities.push(root.id());
+            if light_hand != Some(hand) {
+                continue;
+            }
+            let Some(anchor) = item_light(&item) else { continue };
+            let flame = rest.transform_point(Vec3::from_array(anchor.position));
+            // Off the flame toward the eye, so the whole light sits at much the same distance
+            // from it and reads firelit rather than burnt white.
+            let toward_eye = if side_of(hand) == fb_body::OFF_HAND { HELD_LIGHT_OFFSET * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_LIGHT_OFFSET };
+            let stage_light =
+                commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure), Transform::from_translation(flame + toward_eye), view_layer.clone(), ChildOf(view_model))).id();
+            let world = commands.spawn((world_light(&anchor, &exposure), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
+            carrying.entities.extend([stage_light, world]);
+        }
     }
 }
 
@@ -714,8 +783,8 @@ fn follow_player_camera(
     }
 }
 
-/// Bobs the held torch with the player's steps and trails it behind turns of the head.
-fn sway_held_torch(
+/// Bobs what is held with the player's steps and trails it behind turns of the head.
+fn sway_held(
     time: Res<Time>,
     mut held: Query<(&mut HeldSway, &mut Transform, &ChildOf)>,
     view_models: Query<&ViewModelCamera>,
@@ -858,6 +927,65 @@ mod tests {
         let spare = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Torch", s)).find(|i| item_light(&i.shape).is_none()).unwrap());
         inventory.wear(spare, Slot::Offhand).unwrap();
         assert_eq!(carried_light(&inventory), None);
+    }
+
+    #[test]
+    fn the_view_model_follows_the_hands() {
+        use fb_items::Slot;
+        let mut app = App::new();
+        app.init_resource::<Inventory>()
+            .init_resource::<Character>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<crate::render::ToonMaterial>>()
+            .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<crate::render::OutlineMaterials>()
+            .add_systems(Update, show_held);
+        let camera = app.world_mut().spawn((PlayerCamera, Carrying::default())).id();
+        let view_model = app.world_mut().spawn(ViewModelCamera { follows: camera }).id();
+        let (mace, torch) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let mace = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Mace", s)).find(|i| i.shape.family() == Family::Mace).unwrap());
+            let torch = inventory.add(lit_torch(5));
+            inventory.wear(mace, Slot::Mainhand).unwrap();
+            inventory.wear(torch, Slot::Offhand).unwrap();
+            (mace, torch)
+        };
+        let held = |app: &mut App| {
+            let mut query = app.world_mut().query::<(&HeldItem, &Transform, &ChildOf)>();
+            let mut held: Vec<(Slot, Family, f32)> = query.iter(app.world()).map(|(h, t, c)| { assert_eq!(c.parent(), view_model); (h.hand, h.item.family(), t.translation.x) }).collect();
+            held.sort_by_key(|h| h.0 as u8);
+            held
+        };
+        app.update();
+        let both = held(&mut app);
+        assert_eq!(both.iter().map(|h| (h.0, h.1)).collect::<Vec<_>>(), vec![(Slot::Mainhand, Family::Mace), (Slot::Offhand, Family::Torch)]);
+        assert!(both[0].2 > 0.0 && both[1].2 < 0.0, "the mace on the right, the torch on the left: {both:?}");
+        // The torch still lights the level: a light on the player camera.
+        let mut lights = app.world_mut().query::<(&PointLight, &ChildOf)>();
+        assert_eq!(lights.iter(app.world()).filter(|(_, c)| c.parent() == camera).count(), 1);
+        assert_eq!(app.world().get::<Carrying>(camera).unwrap().light(), Some(torch));
+
+        // A sword equipped in its place swaps the view model; the torch stays.
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let sword = inventory.add(fb_items::roll_item("Sword", 3).unwrap());
+            inventory.equip(sword, Slot::Mainhand).unwrap();
+            assert_ne!(inventory.worn(Slot::Mainhand), Some(mace));
+        }
+        app.update();
+        assert_eq!(held(&mut app).iter().map(|h| (h.0, h.1)).collect::<Vec<_>>(), vec![(Slot::Mainhand, Family::Sword), (Slot::Offhand, Family::Torch)]);
+        // Empty hands hold nothing, and nothing lights the level.
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            for slot in [Slot::Mainhand, Slot::Offhand] {
+                let id = inventory.worn(slot).unwrap();
+                inventory.take_out(id);
+            }
+        }
+        app.update();
+        assert!(held(&mut app).is_empty());
+        let mut lights = app.world_mut().query::<&PointLight>();
+        assert_eq!(lights.iter(app.world()).count(), 0);
     }
 
     #[test]

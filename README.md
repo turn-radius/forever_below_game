@@ -79,10 +79,11 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_CLOSEUP=<0–11>` | turntable opens on a close-up of that grid slot |
 | `FB_DEBUG_POSE=x,y,yaw,pitch` | holds the player at a grid point (cells), turned `yaw` degrees from north and tilted `pitch` degrees |
 | `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps` | a lit camera at a fixed view of the level |
-| `FB_DEBUG_LIGHT=1` | a dim light on the player's camera |
+| `FB_DEBUG_LIGHT=1` | a dim light on the player's camera, and on what is held |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start |
 | `FB_OPEN_CONTAINER=<n>` | opens the level's `n`th container (0 the first, in `print_level`'s order) a moment in, with the inventory showing what it holds |
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
+| `FB_HOLD=<main>[,<off>]` | puts an item of each named base in that hand, after the starting or debug kit (`Mace,Torch`, `Sword,Shield`, `Staff,none`; a torch or lantern is lit, `none` empties the hand) |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
