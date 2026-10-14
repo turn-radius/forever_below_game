@@ -4,6 +4,7 @@
 //! - `bases.json`: the plate's own base items (`BASES`): slot, weight, footprint, tags, stats.
 //! - `goods.json`: things carried but not worn (`GOODS`).
 //! - `afx.json`: prefixes and suffixes (`AFX`), each effect ported to typed [`Modifier`]s.
+//! - `food_desc.json`: the card line for each food style (`FOOD_DESC`).
 //! - `families.json`: the plate's armory menu, bases grouped under a heading (`FAMILIES`).
 
 use crate::dice::Dice;
@@ -12,8 +13,9 @@ use crate::modifier::Modifier;
 use crate::stats::Stats;
 use crate::{Slot, Tag};
 use armory::cond::Condition;
+use armory::families::food::FoodStyle;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 
 /// A base from `data/bases.json`.
@@ -173,6 +175,13 @@ pub fn bases() -> &'static BTreeMap<String, BaseItem> {
     &BASES
 }
 
+static FOOD_DESCRIPTIONS: LazyLock<HashMap<FoodStyle, String>> = LazyLock::new(|| parse("food_desc.json", include_str!("../../../data/food_desc.json")));
+
+/// `data/food_desc.json`, by food style.
+pub fn food_descriptions() -> &'static HashMap<FoodStyle, String> {
+    &FOOD_DESCRIPTIONS
+}
+
 /// `data/goods.json`, by name.
 pub fn goods() -> &'static BTreeMap<String, Good> {
     &GOODS
@@ -198,6 +207,7 @@ mod tests {
         assert_eq!(goods().len(), 13);
         assert_eq!(affixes().len(), 24);
         assert_eq!(base_groups().len(), 25);
+        assert_eq!(food_descriptions().len(), 12);
         assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 63);
     }
 

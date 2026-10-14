@@ -105,6 +105,14 @@ Where the effects come from:
 
 Each family maps to a slot, tags, weight, armour, warmth and damage, plus a grid footprint from the item's real size: `cells(units) = clamp(ceil(units / 2.4), 1, 9)`, about 24 cm per cell. A staff, spear or bow longer than 14.4 units (six cells) cannot be packed. Bags define their inner grid: backpack 8×5, satchel 6×3, sack 4×4, belt pouch 4×2.
 
+`fb_items::profile::profile(base, &shape)` does this. Where it departs from the plate:
+
+- A base with a row in `data/bases.json` or `data/goods.json` (Club, Torch, Bread, Rope...) takes its slot, tags, weight, armour, warmth, damage, light, stack and card line from that row. Every other base derives them from its shape as `saMeta` does.
+- The footprint is measured from the built mesh (`ItemMesh::bounds`): rows from the longest extent, columns from the next. The plate measured only a few fields per family (blade plus grip, shield size) and fixed the rest. Garments, hoods, legwear, gloves, belts and bags fold, so they keep the plate's folded footprints instead of their size on the mannequin.
+- The pack limit uses the same longest extent, so a staff's head or a bow's string counts.
+- The plate's shields had tower, buckler and everything else; the port's pavise counts as a tower (armour 3, 15 lb).
+- Chests cannot be packed, as the plate's `long` flag had it.
+
 ## Slots
 
 `data/slots.json` lists the slots: head, neck, shirt, shoulders (cloak), armour (body), main hand, hands, feet, back, belt, off hand, legs, two rings and a charm. Rings fill whichever ring slot is free.

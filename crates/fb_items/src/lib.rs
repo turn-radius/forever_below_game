@@ -10,6 +10,7 @@ pub mod armory_base;
 pub mod dice;
 pub mod footprint;
 pub mod modifier;
+pub mod profile;
 pub mod rarity;
 pub mod stats;
 pub mod tables;
@@ -20,6 +21,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Rarity { Common, Magic, Rare, Legendary }
+
+/// Worn or held gear, which takes affixes, or goods that are only carried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind { Gear, Good }
 
 /// Equipment slots on the doll, as in the prototype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
