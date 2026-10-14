@@ -65,6 +65,12 @@ pub enum Modifier {
 
 impl Modifier {
     pub fn apply(&self, stats: &mut Stats, condition: &mut Condition) {
+        self.apply_to_stats(stats);
+        self.apply_to_condition(condition);
+    }
+
+    /// The stat part of the effect; condition effects do nothing here.
+    pub fn apply_to_stats(&self, stats: &mut Stats) {
         match *self {
             Modifier::Add { stat, by } => stats.set(stat, stats.get(stat) + by),
             Modifier::Scale { stat, by } => stats.set(stat, stats.get(stat) * by),
@@ -72,10 +78,15 @@ impl Modifier {
                 let stat = if stats.is_weapon() { Stat::DamageBonus } else { Stat::Armour };
                 stats.set(stat, stats.get(stat) + by);
             }
-            Modifier::Condition { slider, at_least } => {
-                let v = slider.get_mut(condition);
-                *v = v.max(at_least);
-            }
+            Modifier::Condition { .. } => {}
+        }
+    }
+
+    /// The condition part of the effect; stat effects do nothing here.
+    pub fn apply_to_condition(&self, condition: &mut Condition) {
+        if let Modifier::Condition { slider, at_least } = *self {
+            let v = slider.get_mut(condition);
+            *v = v.max(at_least);
         }
     }
 

@@ -116,9 +116,17 @@ impl Affix {
 
     /// Applies every effect, in order.
     pub fn apply(&self, stats: &mut Stats, condition: &mut Condition) {
-        for m in &self.fx {
-            m.apply(stats, condition);
-        }
+        self.apply_to_stats(stats);
+        self.apply_to_condition(condition);
+    }
+
+    pub fn apply_to_stats(&self, stats: &mut Stats) {
+        self.fx.iter().for_each(|m| m.apply_to_stats(stats));
+    }
+
+    /// The wear it leaves on the shape (a flaw's rust, fray and rot).
+    pub fn apply_to_condition(&self, condition: &mut Condition) {
+        self.fx.iter().for_each(|m| m.apply_to_condition(condition));
     }
 }
 

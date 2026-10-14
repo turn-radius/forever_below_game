@@ -8,6 +8,7 @@
 
 pub mod armory_base;
 pub mod dice;
+pub mod dress;
 pub mod footprint;
 pub mod modifier;
 pub mod profile;

@@ -101,6 +101,12 @@ Where the effects come from:
 
 `dressState` sets the Armory condition from rarity: common wear 0.15–0.50, magic 0.06–0.26, rare 0.02–0.14. A legendary is either pristine (0.02) or old and worn (0.4–0.7). Rare and legendary items get etching; legendary etching is gold inlay. Flaws raise the matching decay: Rusted sets rust to 1.5, and Moth-eaten, Mildewed and Lice-ridden raise fray and rot.
 
+`fb_items::dress::dress` does this from the plate's own stream (`mulberry32(seed * 3 + 1)`). Where it departs from the plate:
+
+- A flaw's decay comes from the affix's own `condition` effects (see "Affix effects"), applied after the rarity's wear, rather than from a list of names inside `dressState`.
+- Food, torches, lanterns and sundries have no etching in the Armory, so a rare one is only cleaner.
+- The plate also turned a legendary's gem glow up to 0.8. The Armory keeps gems in a different section in each family (a mace's head gem, a ring's or amulet's stone, a coffer's crowning stone), so that is left for later.
+
 ## Stats and footprint (`saMeta`)
 
 Each family maps to a slot, tags, weight, armour, warmth and damage, plus a grid footprint from the item's real size: `cells(units) = clamp(ceil(units / 2.4), 1, 9)`, about 24 cm per cell. A staff, spear or bow longer than 14.4 units (six cells) cannot be packed. Bags define their inner grid: backpack 8×5, satchel 6×3, sack 4×4, belt pouch 4×2.
