@@ -2654,6 +2654,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fb_level"
+version = "0.1.0"
+dependencies = [
+ "armory",
+ "procgen_rng",
+ "serde",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2761,6 +2770,7 @@ dependencies = [
  "bevy",
  "fb_body",
  "fb_items",
+ "fb_level",
  "procgen_rng",
 ]
 

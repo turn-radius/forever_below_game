@@ -11,4 +11,5 @@ bevy = { workspace = true }
 armory = { workspace = true }
 fb_items = { workspace = true }
 fb_body = { workspace = true }
+fb_level = { workspace = true }
 procgen_rng = { workspace = true }

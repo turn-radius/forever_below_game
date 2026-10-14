@@ -1,6 +1,8 @@
-//! Forever Below. For now it opens on the Armory turntable.
+//! Forever Below. It opens on the first level; `--turntable` (or `--family`) opens the Armory
+//! turntable instead.
 //!
-//! `cargo run -p forever_below -- --family mace --seed 1207 --wear grave_find`
+//! `cargo run -p forever_below -- --seed 1207` plays the level for that seed.
+//! `cargo run -p forever_below -- --turntable --family mace --seed 1207 --wear grave_find`
 //! `FB_SCREENSHOT=path.png` saves one offscreen frame and quits; `FB_WEAR=grave_find` sets the
 //! starting condition (the `--wear` flag wins); `FB_CLOSEUP=<slot>` opens on a close-up of
 //! grid slot 0 to 11.
@@ -10,10 +12,50 @@ use forever_below::{
     capture::FrameCapturePlugin,
     light::LightPlugin,
     render::ArmoryRenderPlugin,
+    play::{CurrentLevel, PlayPlugin},
     turntable::{Focus, Turntable, TurntablePlugin, parse_wear},
 };
 
 fn main() -> AppExit {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--turntable" || a.starts_with("--family")) {
+        return run_turntable();
+    }
+    let seed = match level_seed(&args) {
+        Ok(seed) => seed,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
+        ..default()
+    }))
+    .add_plugins((ArmoryRenderPlugin, LightPlugin, PlayPlugin))
+    .insert_resource(CurrentLevel(fb_level::generate(seed)));
+    if let Some(capture) = FrameCapturePlugin::from_env() {
+        app.add_plugins(capture);
+    }
+    app.run()
+}
+
+/// `--seed N` or `--seed=N`; 1207 by default.
+fn level_seed(args: &[String]) -> Result<u32, String> {
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let value = match arg.strip_prefix("--seed") {
+            Some("") => it.next().cloned().ok_or("--seed needs a value")?,
+            Some(rest) if rest.starts_with('=') => rest[1..].to_string(),
+            _ => return Err(format!("unknown argument {arg}")),
+        };
+        return value.parse().map_err(|_| format!("--seed {value} is not a number"));
+    }
+    Ok(1207)
+}
+
+fn run_turntable() -> AppExit {
     let (turntable, focus) = match turntable_from_env().and_then(|t| Ok((t, focus_from_env()?))) {
         Ok(view) => view,
         Err(error) => {
@@ -36,7 +78,7 @@ fn main() -> AppExit {
 }
 
 fn turntable_from_env() -> Result<Turntable, String> {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--turntable").collect();
     if let Ok(wear) = std::env::var("FB_WEAR") {
         parse_wear(&wear).map_err(|e| format!("FB_WEAR: {e}"))?;
         args.splice(0..0, ["--wear".to_string(), wear]);
