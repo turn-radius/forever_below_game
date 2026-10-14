@@ -1,4 +1,4 @@
-//! The inventory screen: Tab opens a parchment ledger over the level, which keeps drawing
+//! The inventory screen: Tab opens a dark ledger over the level, which keeps drawing
 //! behind it, frees the mouse and stops the body. Each carried container shows as its grid,
 //! with every item in it drawn as an icon at its footprint; items are dragged between cells
 //! and grids, and R or the right mouse button turns the one being dragged (the plate's
@@ -47,7 +47,7 @@ pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 use crate::carry::ViewModelCamera;
 use crate::play::{CurrentLevel, ScreenOpen};
 use crate::player::set_grab;
-use crate::ui::{ACCENT, BAD, BG, CELL, INK, LINE, MUTED, OK, PAPER, UiFonts, rarity_color};
+use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
 
 /// Opens and closes the screen.
 pub const OPEN_KEY: KeyCode = KeyCode::Tab;
@@ -57,11 +57,15 @@ pub const TURN_KEY: KeyCode = KeyCode::KeyR;
 pub const CELL_PX: f32 = 46.0;
 /// Width of a grid line, in logical pixels.
 const LINE_PX: f32 = 2.0;
+/// Radius of a grid's rounded corners, in logical pixels (the plate's `.grid`).
+const GRID_RADIUS_PX: f32 = 12.0;
 /// How far the mouse moves with the button down before a press becomes a drag, in logical
 /// pixels (the plate's 6).
 const DRAG_START_PX: f32 = 6.0;
 /// How long a refusal stays on the screen, in seconds (the plate's `toast`, 3.6 s).
 const TOAST_SECONDS: f32 = 3.6;
+/// What the help line under the grids says.
+pub const HELP: &str = "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item.";
 
 pub struct InventoryPlugin;
 
@@ -365,8 +369,9 @@ fn build_screen(
                 align_items: AlignItems::Center,
                 ..default()
             },
-            // The plate's `.scrim`: ink at 38% over what lies behind.
-            BackgroundColor(INK.with_alpha(0.38)),
+            // The screen is the page and covers the level. The ledger has no edge of its own;
+            // letting go of an item on the page beyond it still sets it down in the level.
+            BackgroundColor(BG),
             GlobalZIndex(10),
         ))
         .with_children(|root| {
@@ -376,15 +381,10 @@ fn build_screen(
                     flex_direction: FlexDirection::Row,
                     column_gap: px(28),
                     padding: UiRect::all(px(22)),
-                    border: UiRect::all(px(1.5)),
-                    border_radius: BorderRadius::all(px(14)),
                     max_width: percent(94),
                     max_height: percent(92),
                     ..default()
                 },
-                BackgroundColor(BG),
-                BorderColor::all(LINE),
-                BoxShadow::new(Color::srgba(0.04, 0.02, 0.01, 0.4), px(0), px(24), px(0), px(60)),
             ))
             .with_children(|ledger| {
                 ledger
@@ -422,12 +422,7 @@ fn build_screen(
                                     screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
                                 }
                             });
-                        leaf.spawn((
-                            Text::new(
-                                "Drag things between your bags, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item. Tab or Esc to close.",
-                            ),
-                            UiFonts::style(&fonts.body, 13.0, MUTED),
-                        ));
+                        leaf.spawn((Text::new(HELP), UiFonts::style(&fonts.body, 14.0, MUTED)));
                     });
                 doll::doll_leaf(ledger, &doll_assets, &inventory, &fonts, &mut icons);
             });
@@ -454,14 +449,33 @@ struct Screen<'a> {
 }
 
 impl Screen<'_> {
-    /// The floor within reach, as a paler grid under its name.
+    /// The floor within reach, as a paler grid under its name; bare, a dashed box the grid's
+    /// size that says so, and takes what is dropped on it all the same.
     fn underfoot(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, underfoot: &Underfoot) {
+        if underfoot.grid.is_empty() {
+            let size = grid_size(&underfoot.grid);
+            parent
+                .spawn((
+                    GridView::Underfoot,
+                    Node {
+                        width: px(size.x),
+                        height: px(size.y),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(6),
+                        padding: UiRect::axes(px(16), px(12)),
+                        ..default()
+                    },
+                ))
+                .with_children(|bare| {
+                    dashed_outline(bare, size, GRID_RADIUS_PX, LINE_PX, 7.0, 5.0, LINE);
+                    bare.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
+                    bare.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 14.0, MUTED)));
+                });
+            return;
+        }
         parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
-            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), height: px(36), ..default() }).with_children(|head| {
-                head.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 17.0, MUTED)));
-                if underfoot.grid.is_empty() {
-                    head.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 13.0, MUTED)));
-                }
+            column.spawn(Node { align_items: AlignItems::Center, height: px(36), ..default() }).with_children(|head| {
+                head.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
             });
             self.grid(column, icons, GridView::Underfoot, &underfoot.grid, true);
         });
@@ -477,7 +491,7 @@ impl Screen<'_> {
                 let size = icon::icon_size(item, false).as_vec2();
                 let scale = 34.0 / size.max_element();
                 head.spawn((Node { width: px(size.x * scale), height: px(size.y * scale), ..default() }, ImageNode::new(icon)));
-                head.spawn((Text::new(format!("{label}{suffix}")), UiFonts::style(&self.fonts.display, 17.0, MUTED)));
+                head.spawn((Text::new(format!("{label}{suffix}")), UiFonts::style(&self.fonts.display, 18.0, INK)));
             });
             self.grid(column, icons, view, grid, false);
         });
@@ -486,23 +500,23 @@ impl Screen<'_> {
     /// A grid of cells with its items drawn at their footprints. `faded` draws the cells paler,
     /// as for what lies underfoot.
     fn grid(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, view: GridView, grid: &Grid<ItemId>, faded: bool) {
-        let (cols, rows) = (grid.cols as f32, grid.rows as f32);
+        let size = grid_size(grid);
         parent
             .spawn((
                 view,
                 Node {
-                    width: px(cols * CELL_PX + LINE_PX),
-                    height: px(rows * CELL_PX + LINE_PX),
-                    border_radius: BorderRadius::all(px(12)),
+                    width: px(size.x),
+                    height: px(size.y),
+                    border_radius: BorderRadius::all(px(GRID_RADIUS_PX)),
                     ..default()
                 },
                 BackgroundColor(LINE),
             ))
             .with_children(|cells| {
-                let cell_colour = if faded { CELL.mix(&PAPER, 0.5) } else { CELL };
+                let cell_colour = if faded { CELL.mix(&BG, 0.5) } else { CELL };
                 for y in 0..grid.rows {
                     for x in 0..grid.cols {
-                        let round = |at_x: bool, at_y: bool| CornerRadius::from(if at_x && at_y { px(10) } else { px(0) });
+                        let round = |at_x: bool, at_y: bool| CornerRadius::from(if at_x && at_y { px(GRID_RADIUS_PX - LINE_PX) } else { px(0) });
                         let (left, top, right, bottom) = (x == 0, y == 0, x + 1 == grid.cols, y + 1 == grid.rows);
                         cells.spawn((
                             Node {
@@ -560,6 +574,11 @@ impl Screen<'_> {
                 }
             });
     }
+}
+
+/// A grid's size on the page, in logical pixels: its cells and the lines round them.
+pub fn grid_size<T>(grid: &Grid<T>) -> Vec2 {
+    Vec2::new(grid.cols as f32, grid.rows as f32) * CELL_PX + LINE_PX
 }
 
 /// The grid under `point` and its cell, the page, or the level beyond it.
@@ -742,7 +761,7 @@ fn show_drag(
     for (view, mut background, children) in &mut views {
         let dragged = drag.is_some_and(|d| d.id == view.id);
         let over = hovered.0.is_some_and(|(id, _)| id == view.id);
-        let wanted = if over { PAPER.with_alpha(0.45) } else { Color::NONE };
+        let wanted = if over { BRIGHT.with_alpha(0.1) } else { Color::NONE };
         if background.0 != wanted {
             background.0 = wanted;
         }
@@ -885,6 +904,18 @@ mod tests {
         press(&mut app, OPEN_KEY);
         assert_eq!(shown(&mut app), first);
         assert_eq!(app.world().resource::<Inventory>().location(knife), Some(Location::In { container: pack, at: Placement::new(5, 2, true) }));
+    }
+
+    #[test]
+    fn bare_stone_underfoot_is_a_box_the_grid_s_size_that_says_so() {
+        let mut app = screen_app();
+        press(&mut app, OPEN_KEY);
+        let size = grid_size(&app.world().resource::<Underfoot>().grid);
+        let mut views = app.world_mut().query::<(&GridView, &Node, &Children)>();
+        let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot drop zone");
+        assert_eq!((node.width, node.height), (px(size.x), px(size.y)));
+        let said: Vec<String> = children.iter().filter_map(|c| app.world().get::<Text>(c)).map(|t| t.0.clone()).collect();
+        assert_eq!(said, vec!["underfoot".to_string(), "Bare stone. Drop things here.".to_string()]);
     }
 
     #[test]

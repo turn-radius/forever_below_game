@@ -11,7 +11,7 @@ use super::icon::Icons;
 use super::items::{Inventory, ItemId};
 use super::{Dragging, Hovered};
 use crate::play::ScreenOpen;
-use crate::ui::{BAD, FAINT, GOLD, INK, LINE, MUTED, PAPER, UiFonts, rarity_color};
+use crate::ui::{BAD, BG, FAINT, GOLD, INK, LINE, MUTED, UiFonts, numbers_line, rarity_color};
 
 /// One affix on the card: what it changes, its name, and whether it is a flaw.
 #[derive(Clone, Debug, PartialEq)]
@@ -217,9 +217,9 @@ pub fn spawn_card(mut commands: Commands, cards: Query<(), With<ItemCard>>, came
             overflow: Overflow::clip(),
             ..default()
         },
-        BackgroundColor(PAPER),
+        BackgroundColor(BG),
         BorderColor::all(LINE),
-        BoxShadow::new(Color::srgba(0.08, 0.05, 0.02, 0.25), px(0), px(14), px(0), px(34)),
+        BoxShadow::new(Color::srgba(0.0, 0.0, 0.0, 0.55), px(0), px(14), px(0), px(34)),
         GlobalZIndex(40),
         Visibility::Hidden,
         Pickable::IGNORE,
@@ -238,7 +238,7 @@ fn fill_card(commands: &mut Commands, card: Entity, item: &Item, text: &CardText
     commands.entity(card).despawn_children().with_children(|card| {
         card.spawn((
             Node { height: px(picture), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
-            BackgroundColor(PAPER.mix(&GOLD, 0.1)),
+            BackgroundColor(BG.mix(&GOLD, 0.12)),
         ))
         .with_children(|frame| {
             frame.spawn((Node { width: px(size.x * scale), height: px(size.y * scale), ..default() }, ImageNode::new(icon)));
@@ -249,9 +249,9 @@ fn fill_card(commands: &mut Commands, card: Entity, item: &Item, text: &CardText
                 if let Some(subtitle) = &text.subtitle {
                     info.spawn((Text::new(subtitle.clone()), UiFonts::style(&fonts.body_italic, 15.0, colour)));
                 }
-                info.spawn((Text::new(text.meta.clone()), UiFonts::style(&fonts.mono, 12.0, MUTED)));
+                numbers_line(info, fonts, &text.meta, 12.0);
                 if let Some(contents) = &text.contents {
-                    info.spawn((Text::new(contents.clone()), UiFonts::style(&fonts.mono, 12.0, MUTED)));
+                    numbers_line(info, fonts, contents, 12.0);
                 }
                 for affix in &text.affixes {
                     let ink = if affix.good { INK } else { BAD };
@@ -262,7 +262,7 @@ fn fill_card(commands: &mut Commands, card: Entity, item: &Item, text: &CardText
                 }
                 // The totals, with every affix counted, on one line under them.
                 if !text.stats.is_empty() {
-                    info.spawn((Text::new(text.stats.join(" \u{b7} ")), UiFonts::style(&fonts.mono, 12.0, INK)));
+                    numbers_line(info, fonts, &text.stats.join(" \u{b7} "), 12.0);
                 }
                 if !text.history.is_empty() {
                     info.spawn((

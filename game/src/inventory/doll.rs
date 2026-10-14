@@ -13,14 +13,14 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use fb_items::{
-    Kind, Rarity,
+    Kind,
     tables::{SlotSide, SlotSize, slot_places},
 };
 
 use super::icon::Icons;
 use super::items::Inventory;
 use super::seal::{Canvas, Glyph, Ink, Seal, SealInks, TURN_SECONDS};
-use crate::ui::{BG, FAINT, GOLD, INK, MUTED, UiFonts, rarity_color};
+use crate::ui::{BG, BRIGHT, FAINT, GLOW, GOLD, INK, LINE, MUTED, UiFonts, rarity_color};
 
 /// The doll's frame on the page, in logical pixels: the plate's `.dollwrap`, smaller to share
 /// the screen with the grids.
@@ -38,6 +38,22 @@ pub const DOLL_SIZE: f32 = 440.0;
 const PIXELS_PER_POINT: f32 = 2.0;
 /// Room each rune glyph is set in, in logical pixels.
 const GLYPH_BOX: f32 = 20.0;
+/// The carried light's glow: its square, how far its centre sits out to the side of the doll's
+/// and below it, and its opacity at the centre, falling off with the square of the distance
+/// out (our own choice).
+const GLOW_SIZE: f32 = 520.0;
+const GLOW_OFFSET: Vec2 = Vec2::new(140.0, 40.0);
+const GLOW_PEAK: f32 = 0.16;
+/// Opacity of the seal's runes over the dark page; its lines are drawn at 0.55 to 0.6
+/// ([`super::seal`]).
+const RUNE_ALPHA: f32 = 0.5;
+/// The seal's own gold glow at its centre, fainter than the plate's 0.2: Bevy blends the UI
+/// in linear light, where a wash over a near-black page reads far stronger than CSS's sRGB
+/// blend of the same opacity.
+const SEAL_GLOW: f32 = 0.07;
+/// The seal's bands are shown at this opacity, for the same reason: drawn at 0.55 to 0.6 in
+/// the plate, they show at about 40% here.
+const SEAL_TINT: f32 = 0.7;
 
 /// Where the doll is drawn: the node showing the doll's render target. `fb_body` points a
 /// camera at `image` (`RenderTarget::Image`) to draw the delver there.
@@ -50,6 +66,10 @@ pub struct DollView {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlotView(pub fb_items::Slot);
 
+/// The carried light's glow beside the doll.
+#[derive(Component, Debug)]
+pub struct LightGlow;
+
 /// A turning band of the seal: 0 outer, 1 middle, 2 inner.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SealBand(pub usize);
@@ -61,6 +81,24 @@ pub struct DollAssets {
     /// The doll's render target, holding the placeholder silhouette until a camera draws
     /// into it.
     pub doll: Handle<Image>,
+    /// The warm glow a carried light casts on its side of the doll.
+    pub glow: Handle<Image>,
+}
+
+/// The warm glow of a carried light, a canvas [`GLOW_SIZE`] units square.
+pub fn light_glow(scale: f32) -> Canvas {
+    let mut canvas = Canvas::new((GLOW_SIZE * scale).round() as u32, scale);
+    canvas.radial([0.0, 0.0], GLOW_SIZE * 0.5, srgb(GLOW), |t| GLOW_PEAK * (1.0 - t).powi(2));
+    canvas
+}
+
+/// The side of the frame the carried light is on: the off hand's if it holds a light and the
+/// main hand does not, otherwise the main hand's, where the torch is held (`crate::carry`
+/// holds it low on the right).
+pub fn light_side(inventory: &Inventory) -> SlotSide {
+    let lit = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).is_some_and(|item| item.profile.stats.light > 0.0);
+    let hand = if lit(fb_items::Slot::Offhand) && !lit(fb_items::Slot::Mainhand) { fb_items::Slot::Offhand } else { fb_items::Slot::Mainhand };
+    slot_places().iter().find(|p| p.slot == hand).map_or(SlotSide::Left, |p| p.side)
 }
 
 fn srgb(colour: Color) -> [f32; 3] {
@@ -82,7 +120,7 @@ fn image_of(canvas: &Canvas) -> Image {
 /// stand-in for the doll, about the plate's framing of a human.
 pub fn silhouette(scale: f32) -> Canvas {
     let mut canvas = Canvas::new((DOLL_SIZE * scale).round() as u32, scale);
-    let ink = Ink::new(srgb(INK), 1.0);
+    let ink = Ink::new(srgb(LINE.mix(&INK, 0.3)), 1.0);
     canvas.disc([0.0, -172.0], 25.0, ink);
     canvas.line([0.0, -150.0], [0.0, -132.0], 18.0, ink);
     canvas.line([-40.0, -112.0], [40.0, -112.0], 36.0, ink);
@@ -103,14 +141,16 @@ pub fn silhouette(scale: f32) -> Canvas {
 
 impl FromWorld for DollAssets {
     fn from_world(world: &mut World) -> Self {
-        let inks = SealInks { line: srgb(MUTED), gold: srgb(GOLD), page: srgb(BG) };
+        // Gold lines and gold dots alike, faint over the dark page.
+        let inks = SealInks { line: srgb(GOLD), gold: srgb(GOLD), page: srgb(BG), glow: SEAL_GLOW };
         let layers = Seal { r: seal_radius() }.layers(PIXELS_PER_POINT, inks);
         let doll = silhouette(PIXELS_PER_POINT);
         let mut doll_image = image_of(&doll);
         // A render target as well, so the doll's camera can draw over the placeholder.
         doll_image.texture_descriptor.usage |= bevy::render::render_resource::TextureUsages::RENDER_ATTACHMENT;
+        let glow = image_of(&light_glow(1.0));
         let mut images = world.resource_mut::<Assets<Image>>();
-        DollAssets { bands: layers.map(|canvas| images.add(image_of(&canvas))), doll: images.add(doll_image) }
+        DollAssets { bands: layers.map(|canvas| images.add(image_of(&canvas))), doll: images.add(doll_image), glow: images.add(glow) }
     }
 }
 
@@ -128,8 +168,25 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
     let side = seal.r * 2.12;
     let centre = FRAME * 0.5;
     let [outer, middle, inner] = seal.bands([15.0 * 0.7 + 4.0, 12.0 * 0.7 + 4.0, 12.0 * 0.7 + 4.0]);
-    let glyph_inks = [(15.0, MUTED.with_alpha(0.62)), (12.0, GOLD.with_alpha(0.7)), (12.0, GOLD.with_alpha(0.7))];
+    let rune_ink = GOLD.with_alpha(RUNE_ALPHA);
+    let glyph_inks = [(15.0, rune_ink), (12.0, rune_ink), (12.0, rune_ink)];
     parent.spawn(Node { width: px(FRAME.x), height: px(FRAME.y), flex_shrink: 0.0, ..default() }).with_children(|frame| {
+        let glow_x = match light_side(inventory) {
+            SlotSide::Left => centre.x - GLOW_OFFSET.x,
+            SlotSide::Right => centre.x + GLOW_OFFSET.x,
+        };
+        frame.spawn((
+            LightGlow,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(glow_x - GLOW_SIZE * 0.5),
+                top: px(centre.y + GLOW_OFFSET.y - GLOW_SIZE * 0.5),
+                width: px(GLOW_SIZE),
+                height: px(GLOW_SIZE),
+                ..default()
+            },
+            ImageNode::new(assets.glow.clone()),
+        ));
         for (band, glyphs) in [outer, middle, inner].into_iter().enumerate() {
             frame
                 .spawn((
@@ -143,7 +200,7 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                         ..default()
                     },
                     UiTransform::IDENTITY,
-                    ImageNode::new(assets.bands[band].clone()),
+                    ImageNode::new(assets.bands[band].clone()).with_color(Color::WHITE.with_alpha(SEAL_TINT)),
                 ))
                 .with_children(|layer| {
                     let (size, colour) = glyph_inks[band];
@@ -152,7 +209,7 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                     }
                     if band == 1 {
                         for (point, text) in seal.star_points().into_iter().zip(seal.medallion_runes()) {
-                            rune(layer, fonts, &Glyph { text, at: point, turn: 0.0 }, side, 13.0, GOLD.with_alpha(0.85));
+                            rune(layer, fonts, &Glyph { text, at: point, turn: 0.0 }, side, 13.0, GOLD.with_alpha(0.6));
                         }
                     }
                 });
@@ -192,11 +249,12 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                         height: px(size),
                         padding: UiRect::all(px(4)),
                         border: UiRect::all(px(1.5)),
-                        border_radius: BorderRadius::all(px(6)),
+                        border_radius: BorderRadius::all(px(8)),
                         ..default()
                     },
-                    BackgroundColor(BG.with_alpha(0.7)),
-                    BorderColor::all(if worn.is_some() { INK } else { MUTED.with_alpha(0.55) }),
+                    BackgroundColor(BG.with_alpha(0.8)),
+                    // Filled, a bright cream outline; empty, a dim tan one.
+                    BorderColor::all(if worn.is_some() { BRIGHT } else { LINE }),
                 ))
                 .with_children(|slot| {
                     if let Some(item) = worn {
@@ -205,9 +263,9 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                         let fit = (size - 11.0) / shape.max_element();
                         slot.spawn(Node { width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() })
                             .with_child((Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, ImageNode::new(icon)));
-                        if item.profile.kind == Kind::Gear && item.rarity != Rarity::Common {
+                        if item.profile.kind == Kind::Gear {
                             slot.spawn((
-                                Node { position_type: PositionType::Absolute, right: px(4), top: px(4), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },
+                                Node { position_type: PositionType::Absolute, right: px(5), top: px(5), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },
                                 BackgroundColor(rarity_color(item.rarity)),
                             ));
                         }
@@ -220,7 +278,7 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                     slot.spawn((
                         Node { position_type: PositionType::Absolute, top: percent(100), left: label_left, right: label_right, margin: UiRect::top(px(2)), ..default() },
                         Text::new(place.label.clone()),
-                        UiFonts::style(&fonts.display, font, MUTED),
+                        UiFonts::style(&fonts.display, font, INK),
                         TextLayout::no_wrap(),
                     ));
                 });
@@ -228,7 +286,7 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
         frame.spawn((
             Node { position_type: PositionType::Absolute, right: px(6), bottom: px(4), ..default() },
             Text::new("The doll is to come"),
-            UiFonts::style(&fonts.body, 12.0, FAINT.mix(&MUTED, 0.5)),
+            UiFonts::style(&fonts.body, 12.0, MUTED.mix(&FAINT, 0.4)),
         ));
     });
 }
@@ -286,6 +344,29 @@ mod tests {
             let size = if place.size == SlotSize::Big { BIG_SLOT } else { SMALL_SLOT };
             assert!(FRAME.x * place.x_percent / 100.0 + size <= FRAME.x && FRAME.y * place.y_percent / 100.0 + size <= FRAME.y, "{slot:?} off the frame");
         }
+    }
+
+    #[test]
+    fn the_glow_is_on_the_side_of_the_hand_holding_a_light() {
+        let mut inventory = Inventory::default();
+        let main = slot_places().iter().find(|p| p.slot == fb_items::Slot::Mainhand).unwrap().side;
+        let off = slot_places().iter().find(|p| p.slot == fb_items::Slot::Offhand).unwrap().side;
+        assert_ne!(main, off);
+        // The torch is held in the main hand.
+        assert_eq!(light_side(&inventory), main);
+        let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| i.profile.stats.light > 0.0).unwrap();
+        let lantern = inventory.add(lantern);
+        inventory.wear(lantern, fb_items::Slot::Offhand).unwrap();
+        assert_eq!(light_side(&inventory), off);
+    }
+
+    #[test]
+    fn the_glow_is_warm_in_the_middle_and_gone_at_the_edge() {
+        let canvas = light_glow(0.25);
+        let c = canvas.size / 2;
+        assert!((canvas.alpha(c, c) - GLOW_PEAK).abs() < 0.03, "{}", canvas.alpha(c, c));
+        assert!(canvas.alpha(c, c / 2) < canvas.alpha(c, c));
+        assert_eq!(canvas.alpha(0, 0), 0.0);
     }
 
     #[test]

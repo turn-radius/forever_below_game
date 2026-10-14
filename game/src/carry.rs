@@ -42,7 +42,7 @@ use crate::light::{Torch, cast_shadows, point_light};
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera, level_has_focus};
 use crate::player::{Gait, blocked_by, slide};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner};
-use crate::ui::{INK, PAPER};
+use crate::ui::{BG, BRIGHT};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
 pub const VIEW_MODEL_LAYER: usize = 1;
@@ -601,7 +601,7 @@ fn spawn_hud(commands: &mut Commands, camera: Entity) {
             Pickable::IGNORE,
         ))
         .with_children(|hud| {
-            // The crosshair: a small paper dot ringed in ink.
+            // The crosshair: a small cream dot ringed in the page's near black.
             hud.spawn((
                 Node {
                     position_type: PositionType::Absolute,
@@ -614,8 +614,8 @@ fn spawn_hud(commands: &mut Commands, camera: Entity) {
                     border_radius: BorderRadius::MAX,
                     ..default()
                 },
-                BackgroundColor(PAPER.with_alpha(0.85)),
-                BorderColor::all(INK.with_alpha(0.7)),
+                BackgroundColor(BRIGHT.with_alpha(0.85)),
+                BorderColor::all(BG.with_alpha(0.7)),
             ));
         });
 }

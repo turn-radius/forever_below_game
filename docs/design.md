@@ -22,4 +22,4 @@ Delve until you find a level worth inhabiting. Gain favor with its factions and 
 ## Visual direction
 - Spline Armory's renderer is the style guide (see `rendering.md`).
 - Ultima Underworld's portrait-and-doll lineup is the character reference, at higher fidelity (`reference/concept/`).
-- The inventory follows the parchment concept: engraved item icons in footprint grids, an underfoot drop zone, prepared outfits on invisible mannequins, and the doll inside a runic seal with slot boxes around it.
+- The inventory follows the parchment concept, restyled as a dark ledger so it does not glare over the abyss: engraved item icons in footprint grids, an underfoot drop zone, prepared outfits on invisible mannequins, and the doll inside a runic seal with slot boxes around it.
