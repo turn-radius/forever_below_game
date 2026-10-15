@@ -102,6 +102,19 @@ One Armory item turning on the turntable's plate, with a panel on the right like
 
 Tab and Shift+Tab change the family, Left and Right step the seed, N forges a new seed, R resets, and Space pauses the turn. Dragging the stage orbits and scrolling over it zooms. On the panel, dragging a slider sets it, a click cycles a choice (a right click goes back), and scrolling moves the panel. `FB_SCREENSHOT` works here as on the turntable.
 
+### The level view
+
+```
+cargo run -p forever_below -- --level
+cargo run -p forever_below -- --level --seed 7
+```
+
+A whole level from above, drawn as the map draws it but with every cell shown, beside a panel of the level generator's parameters (`fb_level::LevelParams`): the grid's size and ceiling; how many rooms, how big, how often a hall, the gap kept between them and how deep the entrance may lie; what a corridor pays to turn or to run beside another, and how often rooms loop and reuse doors; and where braziers and loot go. The header gives the seed, a "New seed" button and a "Reset" back to the defaults, and counts what the level holds (rooms, floor cells, doors, items, lights, props, creatures and folk). Moving a slider lays the level out again from the same seed at once. The defaults are the game's own, so with them every seed is the level the game plays. The panel is the Forge's (`game/src/tweak_panel.rs`).
+
+- `--seed <n>` picks the level; 1207 by default.
+
+Left and Right step the seed, N rolls a new one and R resets the parameters. Scrolling over the plan zooms about the mouse and dragging pans; on the panel, sliders drag and the panel scrolls. `FB_SCREENSHOT` works here too.
+
 ### Swing practice
 
 ```

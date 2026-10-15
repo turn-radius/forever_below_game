@@ -73,10 +73,16 @@ impl MapView {
         self.centre + (at - size * 0.5) / self.scale
     }
 
-    /// Zooms by `factor` about screen point `at`, keeping the cell under it where it is.
+    /// Zooms by `factor` about screen point `at`, keeping the cell under it where it is, within
+    /// the map's [`ZOOM`].
     pub fn zoom_about(&mut self, factor: f32, at: Vec2, size: Vec2) {
+        self.zoom_within(factor, at, size, ZOOM);
+    }
+
+    /// As [`MapView::zoom_about`], within `(nearest, furthest)` pixels to a cell.
+    pub fn zoom_within(&mut self, factor: f32, at: Vec2, size: Vec2, range: (f32, f32)) {
         let under = self.to_cell(at, size);
-        self.scale = (self.scale * factor).clamp(ZOOM.0, ZOOM.1);
+        self.scale = (self.scale * factor).clamp(range.0, range.1);
         self.centre = under - (at - size * 0.5) / self.scale;
     }
 
