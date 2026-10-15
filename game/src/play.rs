@@ -24,7 +24,7 @@ use fb_level::{FloorShape, Level};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
 
-/// Every system that plays the level each frame, in `Update` and `PostUpdate`. The play plugins
+/// Every system that plays the level, in `FixedUpdate`, `Update` and `PostUpdate`. The play plugins
 /// put their systems here, and [`PlayPlugin`] runs the set only while [`AppState::Delving`];
 /// a plugin added on its own (in tests) runs its systems always. What a delve spawns at its
 /// start goes in `OnEnter(AppState::Delving)`. Everything a delve spawns, at its start or
@@ -37,9 +37,10 @@ use crate::launch::AppState;
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DelveSystems;
 
-/// Runs [`DelveSystems`] only while delving.
+/// Runs [`DelveSystems`] only while delving, in `FixedUpdate` as well as `Update` and `PostUpdate`.
 pub fn run_delve_systems_while_delving(app: &mut App) {
-    app.configure_sets(Update, DelveSystems.run_if(in_state(AppState::Delving)))
+    app.configure_sets(FixedUpdate, DelveSystems.run_if(in_state(AppState::Delving)))
+        .configure_sets(Update, DelveSystems.run_if(in_state(AppState::Delving)))
         .configure_sets(PostUpdate, DelveSystems.run_if(in_state(AppState::Delving)));
 }
 
@@ -236,6 +237,7 @@ impl Plugin for PlayPlugin {
             .add_systems(Update, switch_screens.in_set(DelveSystems))
             .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate).in_set(DelveSystems))
             .add_plugins((
+            crate::game_clock::GameClockPlugin,
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,

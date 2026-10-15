@@ -13,6 +13,7 @@ pub mod figure;
 pub mod folk;
 pub mod forge_view;
 pub mod frame_time;
+pub mod game_clock;
 pub mod inventory;
 pub mod keymap;
 pub mod kindle;
