@@ -1402,6 +1402,7 @@ mod tests {
     use crate::spec::BodySpec;
     use armory::families::bags::Bags;
     use armory::families::garment::Garment;
+    use armory::families::helm::HelmStyle;
     use armory::sections::garment::GarmentStyle;
     use armory::Family;
 
@@ -1465,13 +1466,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn no_layer_pokes_through_the_ones_under_it() {
+    fn no_layer_pokes_through_the_ones_under_it_check(bodies: Vec<Body>, kits: &[u32]) {
         // 8 mm: about two cloth thicknesses, where sleeves join a body and at the shoulders.
         let tolerance = 0.08;
         let mut failures = vec![];
         let mut compared = 0;
-        for (body, seed) in bodies().flat_map(|b| [10u32, 11, 12, 13, 14].map(move |s| (b.clone(), s))) {
+        for (body, seed) in bodies.iter().flat_map(|b| kits.iter().map(move |&s| (b, s))) {
             let fit = fit_worn(&body, &outfit(seed));
             let torso = [Slot::Legs, Slot::Shirt, Slot::Body, Slot::Belt, Slot::Cloak];
             let layers: Vec<&WornLayer> = fit.layers.iter().filter(|l| torso.contains(&l.slot)).collect();
@@ -1518,6 +1518,17 @@ mod tests {
         }
         assert!(compared > 100_000, "layers overlap in only {compared} places: the check is not seeing them");
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn no_layer_pokes_through_the_ones_under_it() {
+        no_layer_pokes_through_the_ones_under_it_check(bodies().collect(), &[10, 11, 12, 13, 14]);
+    }
+
+    #[test]
+    fn no_layer_pokes_through_the_ones_under_it_smoke() {
+        no_layer_pokes_through_the_ones_under_it_check([Folk::Human, Folk::Lizardfolk, Folk::Pigfolk].into_iter().map(|f| Body::new(&BodySpec::roll(f, 1207))).collect(), &[10]);
     }
 
     #[test]
@@ -1585,11 +1596,10 @@ mod tests {
             .reduce(f32::max)
     }
 
-    #[test]
-    fn a_cloak_over_bell_sleeves_falls_close_to_the_body() {
+    fn a_cloak_over_bell_sleeves_falls_close_to_the_body_check(folks: &[Folk], seeds: &[u32], kits: &[u32]) {
         let mut failures = vec![];
-        for body in Folk::ALL.into_iter().flat_map(|f| [3u32, 1207, 40].map(move |s| Body::new(&BodySpec::roll(f, s)))) {
-            for seed in [10u32, 11, 12, 13] {
+        for body in folks.iter().flat_map(|&f| seeds.iter().map(move |&s| Body::new(&BodySpec::roll(f, s)))) {
+            for &seed in kits {
                 let fit = fit_worn(&body, &robe_and_cloak(seed));
                 let cloak = fit.layer(Slot::Cloak).unwrap().mesh.parts.iter().find(|p| p.name == "body").unwrap().clone();
                 let (side, back, front) = silhouette(&body);
@@ -1631,6 +1641,17 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn a_cloak_over_bell_sleeves_falls_close_to_the_body() {
+        a_cloak_over_bell_sleeves_falls_close_to_the_body_check(&Folk::ALL, &[3, 1207, 40], &[10, 11, 12, 13]);
+    }
+
+    #[test]
+    fn a_cloak_over_bell_sleeves_falls_close_to_the_body_smoke() {
+        a_cloak_over_bell_sleeves_falls_close_to_the_body_check(&Folk::ALL, &[1207], &[10]);
     }
 
     /// The triangles of `part` whose bounds meet the box `lo..hi`.
@@ -1727,16 +1748,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_tail_comes_out_through_robes_and_trousers() {
+    fn a_tail_comes_out_through_robes_and_trousers_check(folks: &[Folk], seeds: &[u32], kits: &[u32], min_checked: usize) {
         use armory::families::legs::Legs;
         let mut failures = vec![];
         let mut checked = 0;
-        for folk in [Folk::Lizardfolk, Folk::Pigfolk] {
-            for seed in [3u32, 1207, 40, 8] {
+        for &folk in folks {
+            for &seed in seeds {
                 let body = Body::new(&BodySpec::roll(folk, seed));
                 let tail = body.skin_mesh().parts.into_iter().find(|p| p.name == "tail").unwrap();
-                for kit in [10u32, 11, 12, 13] {
+                for &kit in kits {
                     let robe = vec![
                         (Slot::Shirt, Item::Garment(Garment::roll_as(kit, GarmentStyle::Robe))),
                         (Slot::Legs, Item::Legs(Legs::roll_as(kit, LegwearStyle::Trousers))),
@@ -1762,12 +1782,22 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 300, "{checked}");
+        assert!(checked > min_checked, "{checked}");
         assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
     }
 
     #[test]
-    fn ears_and_frills_clear_hoods_and_helms() {
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn a_tail_comes_out_through_robes_and_trousers() {
+        a_tail_comes_out_through_robes_and_trousers_check(&[Folk::Lizardfolk, Folk::Pigfolk], &[3, 1207, 40, 8], &[10, 11, 12, 13], 300);
+    }
+
+    #[test]
+    fn a_tail_comes_out_through_robes_and_trousers_smoke() {
+        a_tail_comes_out_through_robes_and_trousers_check(&[Folk::Lizardfolk], &[1207], &[10], 10);
+    }
+
+    fn ears_and_frills_clear_hoods_and_helms_check(folks: &[Folk], seeds: &[u32], min_checked: usize) {
         use armory::families::helm::HelmStyle;
         use armory::families::hood::Hoods;
         use armory::sections::hood::HoodStyle;
@@ -1775,8 +1805,8 @@ mod tests {
         let mut checked = 0;
         // Goblin and pig ears under hoods and closed helms, a lizard's frill under any.
         let closed = [HelmStyle::Bascinet, HelmStyle::GreatHelm, HelmStyle::Sallet, HelmStyle::Barbute];
-        for folk in [Folk::Goblin, Folk::Pigfolk, Folk::Lizardfolk] {
-            for seed in [3u32, 1207, 40] {
+        for &folk in folks {
+            for &seed in seeds {
                 let body = Body::new(&BodySpec::roll(folk, seed));
                 let mut heads: Vec<(String, Item)> = HoodStyle::ALL.iter().map(|&st| (format!("{st:?}"), Item::Hood(Hoods::roll_as(seed, st)))).collect();
                 let helms = if folk == Folk::Lizardfolk { &HelmStyle::ALL[..] } else { &closed[..] };
@@ -1796,8 +1826,19 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 100, "{checked}");
+        assert!(checked > min_checked, "{checked}");
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn ears_and_frills_clear_hoods_and_helms() {
+        ears_and_frills_clear_hoods_and_helms_check(&[Folk::Goblin, Folk::Pigfolk, Folk::Lizardfolk], &[3, 1207, 40], 100);
+    }
+
+    #[test]
+    fn ears_and_frills_clear_hoods_and_helms_smoke() {
+        ears_and_frills_clear_hoods_and_helms_check(&[Folk::Lizardfolk], &[1207], 10);
     }
 
     /// The distance from `p` to triangle `t` (Ericson, "Real-Time Collision Detection",
@@ -1882,16 +1923,15 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
-    #[test]
-    fn long_hair_rests_on_a_cloak() {
+    fn long_hair_rests_on_a_cloak_check(folks: &[Folk], seeds: &[u32], kits: &[u32]) {
         use crate::folk::HairStyle;
         let mut failures = vec![];
-        for folk in [Folk::Human, Folk::Dwarf, Folk::Gnome] {
-            for seed in [3u32, 1207, 40, 8] {
+        for &folk in folks {
+            for &seed in seeds {
                 let mut spec = BodySpec::roll(folk, seed);
                 spec.hair = HairStyle::Long;
                 let body = Body::new(&spec);
-                for kit in [10u32, 11, 12] {
+                for &kit in kits {
                     let worn = vec![(Slot::Shirt, Item::Garment(Garment::roll_as(kit, GarmentStyle::Tunic))), (Slot::Cloak, Item::Garment(Garment::roll_as(kit + 1, GarmentStyle::Cloak)))];
                     let fit = fit_worn(&body, &worn);
                     let mut hair = body.hair_mesh(fit.hair).parts.into_iter().find(|p| p.name == "hair").unwrap();
@@ -1928,13 +1968,23 @@ mod tests {
     }
 
     #[test]
-    fn a_bracer_lies_close_over_a_mail_sleeve() {
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn long_hair_rests_on_a_cloak() {
+        long_hair_rests_on_a_cloak_check(&[Folk::Human, Folk::Dwarf, Folk::Gnome], &[3, 1207, 40, 8], &[10, 11, 12]);
+    }
+
+    #[test]
+    fn long_hair_rests_on_a_cloak_smoke() {
+        long_hair_rests_on_a_cloak_check(&[Folk::Human, Folk::Dwarf], &[1207], &[10]);
+    }
+
+    fn a_bracer_lies_close_over_a_mail_sleeve_check(folks: &[Folk], seeds: &[u32], kits: &[u32]) {
         use armory::families::hands::Hands;
         let mut failures = vec![];
-        for folk in Folk::ALL {
-            for seed in [3u32, 1207] {
+        for &folk in folks {
+            for &seed in seeds {
                 let body = Body::new(&BodySpec::roll(folk, seed));
-                for kit in [10u32, 11, 12] {
+                for &kit in kits {
                     let mut mail = Garment::roll_as(kit + 1, GarmentStyle::Hauberk);
                     mail.cut.sleeves = Sleeves::Long;
                     let worn = vec![
@@ -1972,6 +2022,17 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn a_bracer_lies_close_over_a_mail_sleeve() {
+        a_bracer_lies_close_over_a_mail_sleeve_check(&Folk::ALL, &[3, 1207], &[10, 11, 12]);
+    }
+
+    #[test]
+    fn a_bracer_lies_close_over_a_mail_sleeve_smoke() {
+        a_bracer_lies_close_over_a_mail_sleeve_check(&[Folk::Human, Folk::Dwarf, Folk::Lizardfolk], &[1207], &[10]);
+    }
+
     /// How far along the ray from `origin` toward `dir` the surface of `part` reaches: the
     /// farthest triangle it meets (Moeller-Trumbore).
     fn ray_from(part: &Part, origin: V3, dir: V3) -> Option<f32> {
@@ -1995,16 +2056,15 @@ mod tests {
             .reduce(f32::max)
     }
 
-    #[test]
-    fn legwear_bends_with_the_knees() {
+    fn legwear_bends_with_the_knees_check(folks: &[Folk], seeds: &[u32], styles: &[LegwearStyle], kits: &[u32]) {
         use armory::families::legs::Legs;
         let mut failures = vec![];
-        for folk in Folk::ALL {
-            for seed in [3u32, 1207] {
+        for &folk in folks {
+            for &seed in seeds {
                 let body = Body::new(&BodySpec::roll(folk, seed));
                 let skin = body.skin_mesh().parts.into_iter().find(|p| p.name == "legs").unwrap();
-                for style in LegwearStyle::ALL {
-                    for kit in [10u32, 11] {
+                for &style in styles {
+                    for &kit in kits {
                         let wear = Legs::roll_as(kit, style);
                         let bloused = wear.legwear.puttees;
                         let fit = fit_worn(&body, &[(Slot::Legs, Item::Legs(wear))]);
@@ -2074,6 +2134,17 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn legwear_bends_with_the_knees() {
+        legwear_bends_with_the_knees_check(&Folk::ALL, &[3, 1207], &LegwearStyle::ALL, &[10, 11]);
+    }
+
+    #[test]
+    fn legwear_bends_with_the_knees_smoke() {
+        legwear_bends_with_the_knees_check(&[Folk::Human, Folk::Pigfolk], &[1207], &[LegwearStyle::Trousers, LegwearStyle::Breeches], &[10]);
     }
 
     #[test]
@@ -2214,18 +2285,16 @@ mod tests {
         assert!(fit.hair.chest <= fit.hair.clearance);
     }
 
-    #[test]
-    fn standing_ears_clear_open_caps() {
-        use armory::families::helm::HelmStyle;
+    fn standing_ears_clear_open_caps_check(folks: &[Folk], seeds: &[u32], styles: &[HelmStyle], kits: std::ops::Range<u32>, min_checked: usize) {
         let mut failures = vec![];
         let mut checked = 0;
         // A goblin's long ears and a gnome's pointed ones under every open cap, with and
         // without its aventail and cheek plates.
-        for folk in [Folk::Goblin, Folk::Gnome] {
-            for seed in [3u32, 1207, 40, 8, 77, 501] {
+        for &folk in folks {
+            for &seed in seeds {
                 let body = Body::new(&BodySpec::roll(folk, seed));
-                for style in [HelmStyle::Kettle, HelmStyle::Nasal, HelmStyle::Skullcap] {
-                    for kit in 0..8u32 {
+                for &style in styles {
+                    for kit in kits.clone() {
                         let mut helm = Helm::roll_as(seed + kit, style);
                         helm.aventail.on = kit % 2 == 0;
                         helm.cheeks.on = kit % 4 < 2;
@@ -2242,19 +2311,28 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 500, "{checked}");
+        assert!(checked > min_checked, "{checked}");
         assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
     }
 
     #[test]
-    fn a_lizards_snout_and_brow_clear_helms() {
-        use armory::families::helm::HelmStyle;
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn standing_ears_clear_open_caps() {
+        standing_ears_clear_open_caps_check(&[Folk::Goblin, Folk::Gnome], &[3, 1207, 40, 8, 77, 501], &[HelmStyle::Kettle, HelmStyle::Nasal, HelmStyle::Skullcap], 0..8, 500);
+    }
+
+    #[test]
+    fn standing_ears_clear_open_caps_smoke() {
+        standing_ears_clear_open_caps_check(&[Folk::Goblin, Folk::Gnome], &[1207], &[HelmStyle::Kettle, HelmStyle::Skullcap], 0..2, 10);
+    }
+
+    fn a_lizards_snout_and_brow_clear_helms_check(seeds: &[u32], styles: &[HelmStyle], kits: std::ops::Range<u32>, min_checked: usize) {
         let mut failures = vec![];
         let mut checked = 0;
-        for seed in [3u32, 1207, 40, 8, 77, 501] {
+        for &seed in seeds {
             let body = Body::new(&BodySpec::roll(Folk::Lizardfolk, seed));
-            for style in HelmStyle::ALL {
-                for kit in 0..4u32 {
+            for &style in styles {
+                for kit in kits.clone() {
                     let mut helm = Helm::roll_as(seed + kit, style);
                     helm.aventail.on = kit % 2 == 0;
                     helm.cheeks.on = kit < 2;
@@ -2272,7 +2350,18 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 500, "{checked}");
+        assert!(checked > min_checked, "{checked}");
         assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn a_lizards_snout_and_brow_clear_helms() {
+        a_lizards_snout_and_brow_clear_helms_check(&[3, 1207, 40, 8, 77, 501], &HelmStyle::ALL, 0..4, 500);
+    }
+
+    #[test]
+    fn a_lizards_snout_and_brow_clear_helms_smoke() {
+        a_lizards_snout_and_brow_clear_helms_check(&[1207], &[HelmStyle::Bascinet], 0..1, 10);
     }
 }

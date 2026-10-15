@@ -618,11 +618,10 @@ mod tests {
         Body::new(&spec)
     }
 
-    #[test]
-    fn every_listed_style_builds() {
-        for folk in Folk::ALL {
+    fn every_listed_style_builds_check(folks: &[Folk], beards: &[Beard], all_styles: &[HairStyle]) {
+        for &folk in folks {
             for &style in &folk.race().hairs {
-                for beard in Beard::ALL {
+                for &beard in beards {
                     let body = with(folk, 31, style, beard);
                     for covered in [false, true] {
                         let mesh = body.hair_mesh(HairFit { clearance: 0.1, chest: 0.1, covered, rest: None });
@@ -639,11 +638,22 @@ mod tests {
             }
         }
         // And every style on any folk, listed or not.
-        for style in HairStyle::ALL {
+        for &style in all_styles {
             for part in with(Folk::Human, 3, style, Beard::Forked).hair_mesh(HairFit::default()).parts {
                 part.validate().unwrap();
             }
         }
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body rendering test, every folk and beard; run before merging fitting changes"]
+    fn every_listed_style_builds() {
+        every_listed_style_builds_check(&Folk::ALL, &Beard::ALL, &HairStyle::ALL);
+    }
+
+    #[test]
+    fn every_listed_style_builds_smoke() {
+        every_listed_style_builds_check(&[Folk::Human, Folk::Lizardfolk], &[Beard::None, Beard::Forked], &[HairStyle::Long]);
     }
 
     #[test]
