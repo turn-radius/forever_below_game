@@ -111,7 +111,7 @@ struct MarkerArc;
 /// The HUD root the vitals draw into, which attack markers and the orbs ([`super::orbs`]) hang
 /// from.
 #[derive(Component, Debug)]
-pub(super) struct VitalsRoot;
+pub(crate) struct VitalsRoot;
 
 /// The delver's hit points, from who they are, once they stand in the level; `FB_PLAYER_HP=<n>`
 /// starts them on `n` of those instead, to check a fall quickly.

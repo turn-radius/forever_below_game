@@ -7,7 +7,7 @@
 //! (#235): 2d4 + 2 hit points from the run's dice, a green flash and a soft chime. The delver's needs are the [`DelverNeeds`] on the player; the game clock steps
 //! them in #229.
 
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use fb_items::{Consume, Provision};
 use procgen_rng::Mulberry32;
 
@@ -118,39 +118,50 @@ pub fn say(done: &Consumed) -> String {
     format!("You {} the {}", done.how.past(), done.name.to_lowercase())
 }
 
-/// U in the inventory: eats or drinks the item under the mouse.
-fn consume_hovered(
-    input: ActionInput,
-    hovered: Res<Hovered>,
-    mut inventory: ResMut<Inventory>,
-    mut needs: Query<&mut DelverNeeds, With<Player>>,
-    mut healths: Query<&mut Health, With<Player>>,
-    dice: Option<ResMut<RunDice>>,
-    mut glow: ResMut<HealGlow>,
-    sound: Option<Res<HealSound>>,
-    settings: Option<Res<GameSettings>>,
-    tuning: Res<Tuning>,
-    mut toast: ResMut<Toast>,
-    mut commands: Commands,
-    time: Option<Res<Time<Real>>>,
-) {
-    if !input.just_pressed(Action::Consume) {
-        return;
-    }
-    let (Some((id, _)), Ok(mut needs)) = (hovered.0, needs.single_mut()) else { return };
-    if let Some(done) = consume(&mut inventory, &mut needs.0, id) {
+/// What eating needs from the world: the delver's needs and hit points, the run's dice, the
+/// green flash and the chime. [`Eating::eat`] is what U in the inventory and a quickslot share.
+#[derive(SystemParam)]
+pub struct Eating<'w, 's> {
+    commands: Commands<'w, 's>,
+    needs: Query<'w, 's, &'static mut DelverNeeds, With<Player>>,
+    healths: Query<'w, 's, &'static mut Health, With<Player>>,
+    dice: Option<ResMut<'w, RunDice>>,
+    glow: ResMut<'w, HealGlow>,
+    sound: Option<Res<'w, HealSound>>,
+    settings: Option<Res<'w, GameSettings>>,
+    tuning: Res<'w, Tuning>,
+}
+
+impl Eating<'_, '_> {
+    /// Eats or drinks `id` ([`consume`]), and if it is a healing draught heals the delver, flashes
+    /// the view green and chimes. Returns what the toast says; `None`, and nothing changed, if it
+    /// is not food or drink, or there is no delver.
+    pub fn eat(&mut self, inventory: &mut Inventory, id: ItemId) -> Option<String> {
+        let mut needs = self.needs.single_mut().ok()?;
+        let done = consume(inventory, &mut needs.0, id)?;
         let mut line = say(&done);
         if done.base == HEALING_DRAUGHT
-            && let (Some(mut dice), Ok(mut health)) = (dice, healths.single_mut())
+            && let (Some(dice), Ok(mut health)) = (self.dice.as_mut(), self.healths.single_mut())
         {
             let restored = drink_healing(&mut health, &mut dice.0);
             line = format!("{line} (+{restored})");
-            glow.0 = HEAL_FLASH_TIME;
-            if let Some(sound) = sound {
-                let game = settings.as_deref().copied().unwrap_or_default();
-                commands.spawn((Name::new("heal"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
+            self.glow.0 = HEAL_FLASH_TIME;
+            if let Some(sound) = &self.sound {
+                let game = self.settings.as_deref().copied().unwrap_or_default();
+                self.commands.spawn((Name::new("heal"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &self.tuning), DespawnOnExit(crate::launch::AppState::Delving)));
             }
         }
+        Some(line)
+    }
+}
+
+/// U in the inventory: eats or drinks the item under the mouse.
+fn consume_hovered(input: ActionInput, hovered: Res<Hovered>, mut inventory: ResMut<Inventory>, mut eating: Eating, mut toast: ResMut<Toast>, time: Option<Res<Time<Real>>>) {
+    if !input.just_pressed(Action::Consume) {
+        return;
+    }
+    let Some((id, _)) = hovered.0 else { return };
+    if let Some(line) = eating.eat(&mut inventory, id) {
         toast.say(line, time.map_or(0.0, |t| t.elapsed_secs()));
     }
 }

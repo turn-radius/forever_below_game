@@ -256,7 +256,9 @@ impl Plugin for PlayPlugin {
             crate::eat::EatPlugin,
             crate::simulate::SimulatePlugin,
             crate::map::MapPlugin,
-        ));
+        ))
+        // Over the plugin tuple's limit.
+        .add_plugins(crate::quickslots::QuickslotPlugin);
     }
 }
 

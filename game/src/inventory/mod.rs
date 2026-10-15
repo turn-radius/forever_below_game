@@ -59,6 +59,7 @@ use crate::character::{Character, character_for};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
 use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, show_screen, switch_screens};
+use crate::quickslots::{QuickslotDrop, Quickslots};
 pub use crate::ui::node_rect;
 use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
 use header::ToastText;
@@ -74,7 +75,7 @@ const DRAG_START_PX: f32 = 6.0;
 /// How long a refusal stays on the screen, in seconds (the plate's `toast`, 3.6 s).
 const TOAST_SECONDS: f32 = 3.6;
 /// What the help line under the grids says (the plate's `.hint`).
-pub const HELP: &str = "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item. Double-click to wear or take off.";
+pub const HELP: &str = "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item. Double-click to wear or take off. Drop food, a light or a weapon on a quickslot to bind it, and the keys 1 to 0 use it.";
 /// Longest gap between the two clicks of a double-click, in seconds: Windows' default of
 /// 500 ms (`SetDoubleClickTime`,
 /// <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdoubleclicktime>).
@@ -97,6 +98,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<ScreenOpen>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
+            .init_resource::<Quickslots>()
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
@@ -414,6 +416,8 @@ pub enum Target {
     Slot(Slot),
     /// The doll itself: the item goes in the slot it is made for.
     Doll,
+    /// A quickslot on the strip: the item is bound to it, not moved ([`crate::quickslots`]).
+    Quickslot(usize),
 }
 
 /// An item being dragged, or pressed and about to be.
@@ -492,6 +496,7 @@ pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<
         Target::Cell { view: GridView::Container(container), cell } => landing(inventory, drag, container, cell).map(|_| ()),
         Target::Slot(slot) => inventory.check_wear(drag.id, slot),
         Target::Doll => inventory.target_slot(drag.id).map_or(Err(Refusal::NotWearable), |slot| inventory.check_wear(drag.id, slot)),
+        Target::Quickslot(_) => crate::quickslots::check_bind(inventory, drag.id),
         Target::Cell { view: GridView::Underfoot, .. } | Target::Page | Target::Level => Ok(()),
     }
 }
@@ -616,7 +621,7 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
         Target::Doll => equip(inventory, drag.id, inventory.target_slot(drag.id).ok_or(Refusal::NotWearable)?),
         Target::Cell { view: GridView::Underfoot, cell } => Ok(set_down(inventory, underfoot::aside_for_column(cell.x, underfoot_cols))),
         Target::Level => Ok(set_down(inventory, 0.0)),
-        Target::Page => Ok(vec![]),
+        Target::Page | Target::Quickslot(_) => Ok(vec![]),
     }
 }
 
@@ -630,7 +635,7 @@ pub fn cell_under(rect: Rect, point: Vec2, cell: f32) -> IVec2 {
 /// Builds the screen when it opens and rebuilds it whenever what is in it changes, or the
 /// tuning does; takes it down when it closes.
 #[allow(clippy::too_many_arguments)]
-fn build_screen(
+pub(crate) fn build_screen(
     mut commands: Commands,
     open: Res<ScreenOpen>,
     inventory: Res<Inventory>,
@@ -718,6 +723,10 @@ fn build_screen(
                                     screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
                                 }
                             });
+                        leaf.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
+                            column.spawn((Text::new("quickslots"), UiFonts::style(&fonts.display, 18.0, INK)));
+                            crate::quickslots::strip(column, &fonts);
+                        });
                         leaf.spawn((Text::new(HELP), UiFonts::style(&fonts.body, 14.0, MUTED)));
                     });
                 doll::doll_leaf(ledger, &doll_assets, &inventory, &fonts, &mut icons);
@@ -884,12 +893,16 @@ pub fn grid_size<T>(grid: &Grid<T>, cell: f32) -> Vec2 {
 /// The slot, grid cell or doll under `point`, the page, or the level beyond it.
 fn target_under(
     point: Vec2,
+    drops: &Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
     grids: &Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
     slots: &Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
     doll: Option<Rect>,
     ledger: Option<Rect>,
     cell: f32,
 ) -> Target {
+    if let Some((slot, ..)) = drops.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
+        return Target::Quickslot(slot.0);
+    }
     if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
         return Target::Slot(slot.0);
     }
@@ -932,8 +945,8 @@ fn drag_items(
     underfoot: Res<Underfoot>,
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
-    time: Res<Time<Real>>,
-    tuning: Res<Tuning>,
+    (time, tuning): (Res<Time<Real>>, Res<Tuning>),
+    (drops, mut quickslots): (Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>, ResMut<Quickslots>),
     mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
     let cell_px = tuning.interface.cell_size;
@@ -945,7 +958,7 @@ fn drag_items(
     let Some(point) = cursor else { return };
     let ledger = ledgers.iter().next().map(|(n, t)| node_rect(n, t));
     let doll = dolls.iter().next().map(|(n, t)| node_rect(n, t));
-    let target = target_under(point, &grids, &slots, doll, ledger, cell_px);
+    let target = target_under(point, &drops, &grids, &slots, doll, ledger, cell_px);
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
@@ -983,6 +996,14 @@ fn drag_items(
     if input.just_released(Action::DragItem) {
         let drag = dragging.0.take().expect("a drag");
         let now = time.elapsed_secs();
+        // A quickslot takes a binding, not the item.
+        if drag.active
+            && let Target::Quickslot(slot) = target
+        {
+            let said = crate::quickslots::bind_dropped(&mut quickslots, &inventory, drag.id, slot).unwrap_or_else(|refusal| refusal.reason().to_string());
+            toast.say(said, now);
+            return;
+        }
         let outcome = if drag.active {
             drop_at(&mut inventory, &drag, target, underfoot.grid.cols)
         } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
@@ -1220,6 +1241,7 @@ mod tests {
             .init_resource::<ScreenOpen>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
+            .init_resource::<Quickslots>()
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
@@ -1241,6 +1263,85 @@ mod tests {
         keys.release(key);
         keys.clear();
         app.update();
+    }
+
+    /// A strip slot on the page where `at` is its centre, as the layout would make it.
+    fn strip_slot(app: &mut App, slot: usize, at: Vec2) {
+        app.world_mut().spawn((
+            QuickslotDrop(slot),
+            ComputedNode { size: Vec2::splat(44.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(at)),
+        ));
+    }
+
+    /// Lets an active drag of `id` go with the mouse over `at`, on the inventory screen.
+    fn let_go_at(app: &mut App, id: ItemId, at: Vec2) {
+        let mut window = Window::default();
+        window.set_cursor_position(Some(at));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        let size = app.world().resource::<Inventory>().footprint(id).unwrap();
+        app.world_mut().resource_mut::<Dragging>().0 =
+            Some(Drag { id, grab: IVec2::ZERO, size, turned: false, press: at, active: true, target: None });
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.press(MouseButton::Left);
+        mouse.release(MouseButton::Left);
+        app.update();
+    }
+
+    #[test]
+    fn dropping_an_item_on_a_quickslot_binds_it_and_leaves_it_where_it_was() {
+        let mut app = screen_app();
+        let (pack, loaf) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            let loaf = inventory.add(fb_items::roll_item("Bread", 5).unwrap());
+            inventory.put(loaf, pack, Placement::new(3, 1, false)).unwrap();
+            (pack, loaf)
+        };
+        strip_slot(&mut app, 2, Vec2::new(300.0, 300.0));
+        strip_slot(&mut app, 3, Vec2::new(350.0, 300.0));
+        let_go_at(&mut app, loaf, Vec2::new(303.0, 296.0));
+        assert_eq!(app.world().resource::<Quickslots>().get(2), Some(loaf));
+        assert_eq!(app.world().resource::<Inventory>().location(loaf), Some(Location::In { container: pack, at: Placement::new(3, 1, false) }), "bound, not moved");
+        assert!(app.world().resource::<Toast>().text.ends_with("is bound to slot 3"), "{}", app.world().resource::<Toast>().text);
+        assert!(app.world().resource::<Dragging>().0.is_none());
+    }
+
+    #[test]
+    fn a_quickslot_refuses_what_it_cannot_use_and_what_is_not_carried() {
+        let mut app = screen_app();
+        let (ring, loose) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            let ring = inventory.add(fb_items::roll_item("Ring", 5).unwrap());
+            inventory.put(ring, pack, Placement::new(0, 0, false)).unwrap();
+            (ring, inventory.add(fb_items::roll_item("Bread", 5).unwrap()))
+        };
+        strip_slot(&mut app, 0, Vec2::new(100.0, 100.0));
+        let drag = |id| Drag { id, grab: IVec2::ZERO, size: Footprint { cols: 1, rows: 1 }, turned: false, press: Vec2::ZERO, active: true, target: None };
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!(check_drop(inventory, &drag(ring), Target::Quickslot(0)), Err(Refusal::NotUsable));
+        assert_eq!(check_drop(inventory, &drag(loose), Target::Quickslot(0)), Err(Refusal::NotCarried));
+        let_go_at(&mut app, ring, Vec2::new(100.0, 100.0));
+        assert_eq!(*app.world().resource::<Quickslots>(), Quickslots::default());
+        assert_eq!(app.world().resource::<Toast>().text, Refusal::NotUsable.reason());
+    }
+
+    #[test]
+    fn the_screen_has_a_strip_of_ten_quickslots_to_drop_on() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyI);
+        let mut strip = app.world_mut().query::<&QuickslotDrop>();
+        let mut slots: Vec<usize> = strip.iter(app.world()).map(|s| s.0).collect();
+        slots.sort();
+        assert_eq!(slots, (0..10).collect::<Vec<_>>());
+        // Under the mouse, a strip slot is the target before anything beneath it.
+        press(&mut app, KeyCode::KeyI);
+        let mut strip = app.world_mut().query::<&QuickslotDrop>();
+        assert_eq!(strip.iter(app.world()).count(), 0, "the strip goes with the screen");
     }
 
     #[test]
