@@ -155,6 +155,7 @@ impl Plugin for CarryPlugin {
                     relight_given_lights,
                     follow_player_camera,
                     sway_held,
+                    upright_held_flames.after(sway_held),
                     swing_hip,
                     (aim, (pick_up, equip_aimed.before(apply_floor_changes)).run_if(level_has_focus)).chain(),
                     hide_hud_under_screens.run_if(resource_exists::<ScreenOpen>),
@@ -944,6 +945,7 @@ fn show_held(
             root.insert((
                 Name::new(format!("Held {}", item.family().key())),
                 HeldItem { item: item.clone(), hand, point },
+                crate::render::flame::FlameUp::default(),
                 HeldSway::new(rest),
                 rest,
                 Propagate(view_layer.clone()),
@@ -1073,6 +1075,24 @@ fn follow_player_camera(
 }
 
 /// Bobs what is held with the player's steps and trails it behind turns of the head.
+/// Keeps the flames of what is held rising as fire does in the level: on the view model's
+/// stage the world's up is where the eye's look puts it, so looking down tips a flame toward
+/// the eye and looking up away from it.
+fn upright_held_flames(
+    view_models: Query<&ViewModelCamera>,
+    eyes: Query<&GlobalTransform, With<PlayerCamera>>,
+    mut held: Query<(&ChildOf, &mut crate::render::flame::FlameUp), With<HeldItem>>,
+) {
+    for (parent, mut up) in &mut held {
+        let Ok(view_model) = view_models.get(parent.parent()) else { continue };
+        let Ok(eye) = eyes.get(view_model.follows) else { continue };
+        let world_up = eye.rotation().inverse() * Vec3::Y;
+        if up.0 != world_up {
+            up.0 = world_up;
+        }
+    }
+}
+
 pub(crate) fn sway_held(
     time: Res<Time>,
     tuning: Res<Tuning>,
