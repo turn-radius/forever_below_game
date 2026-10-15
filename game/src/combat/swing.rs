@@ -28,7 +28,7 @@ use super::feedback::{Corpse, Struck};
 use super::{Health, RunDice, SwingKind, Target, Weapon, target_in_reach};
 use crate::carry::{HeldItem, ViewModelCamera};
 use crate::view_model::ViewHold;
-use crate::character::{Character, modifier};
+use crate::character::{Character, DelverStamina, modifier};
 use crate::creatures::{Bones, Critter, HitShape};
 use crate::creatures::behaviour::body_radius;
 use crate::inventory::Inventory;
@@ -131,7 +131,7 @@ fn start_swing(
     mut dice: ResMut<RunDice>,
     mut last: Local<Option<Strike>>,
     practice: Option<Res<SwingPractice>>,
-    players: Query<(Entity, &Transform, Option<&Health>), Ready>,
+    mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina), Ready>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
     creatures: Query<(Entity, &Critter, &Transform, Option<&Bones>), Without<Corpse>>,
     shapes: Query<(&GlobalTransform, &HitShape)>,
@@ -143,9 +143,19 @@ fn start_swing(
         return;
     }
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
-    for (player, at, health) in &players {
+    let practising = practice.repeat || crate::launch::env_set("FB_SWING");
+    for (player, at, health, mut stamina) in &mut players {
         if health.is_some_and(Health::is_down) {
             continue;
+        }
+        // A winded delver cannot swing; each swing otherwise takes its bite of stamina.
+        if !practising {
+            if !stamina.0.can_exert() {
+                continue;
+            }
+            let mut spent = stamina.0;
+            spent.spend(fb_character::SWING_COST);
+            stamina.0 = spent;
         }
         let weapon = Weapon::in_hand(&inventory, &character);
         let toward = eyes.iter().next().and_then(|eye| {
@@ -507,6 +517,46 @@ pub(crate) fn lean_into_blow(swings: Query<&Swing, With<Player>>, mut cameras: Q
 mod tests {
     use super::*;
     use crate::view_model::{held_in_view, view_hold};
+
+    /// A delver at a table with nothing to hit, and the attack key pressed.
+    fn swinger() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<Inventory>()
+            .init_resource::<Character>()
+            .init_resource::<RunDice>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .add_systems(Update, start_swing);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        let delver = app.world_mut().spawn((Player, Transform::default())).id();
+        (app, delver)
+    }
+
+    #[test]
+    fn each_swing_takes_a_fixed_bite_of_stamina() {
+        let (mut app, delver) = swinger();
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_some());
+        let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
+        assert!((value - (1.0 - fb_character::SWING_COST)).abs() < 1e-9, "{value}");
+        app.world_mut().entity_mut(delver).remove::<Swing>();
+        app.update();
+        let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
+        assert!((value - (1.0 - 2.0 * fb_character::SWING_COST)).abs() < 1e-9, "{value}");
+    }
+
+    #[test]
+    fn a_winded_delver_cannot_swing() {
+        let (mut app, delver) = swinger();
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.05, winded: true };
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_none());
+        assert_eq!(app.world().get::<DelverStamina>(delver).unwrap().0.value, 0.05, "refused, so no bite");
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.25, winded: false };
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_some());
+    }
 
     const STRIKES: [Strike; 6] = [Strike::Overhead, Strike::HighRight, Strike::HighLeft, Strike::FromRight, Strike::FromLeft, Strike::Rising];
 

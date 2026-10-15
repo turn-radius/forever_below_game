@@ -597,6 +597,88 @@ impl ExhaustionTimes {
     }
 }
 
+/// Seconds a full pool lasts sprinting while Light.
+const SPRINT_SECONDS: f64 = 30.0;
+/// Seconds to refill from empty standing still.
+const STAND_REFILL_SECONDS: f64 = 8.0;
+/// Seconds to refill from empty while walking.
+const WALK_REFILL_SECONDS: f64 = 12.0;
+/// Sleeping refills this many times as fast as standing.
+const SLEEP_REFILL_FACTOR: f64 = 2.0;
+/// A winded delver may sprint and swing again from this much stamina.
+pub const SECOND_WIND: f64 = 0.2;
+/// What one swing costs, of a full pool.
+pub const SWING_COST: f64 = 0.08;
+
+/// The short-term pool that sprinting and swinging drain, from 1 (full) to 0 (empty), stepping
+/// in real seconds. It drains faster the heavier the load and refills in seconds when the
+/// delver walks or stands. Emptied, the delver is winded and cannot sprint or swing hard until
+/// the pool is back to [`SECOND_WIND`].
+///
+/// Every step is closed form for a constant activity, so any step length gives the same result.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Stamina {
+    /// From 0 (empty) to 1 (full).
+    pub value: f64,
+    /// Emptied and not yet back to [`SECOND_WIND`].
+    pub winded: bool,
+}
+
+impl Default for Stamina {
+    fn default() -> Self {
+        Stamina { value: 1.0, winded: false }
+    }
+}
+
+impl Stamina {
+    /// The change per real second at `activity` under `load`: negative drains. Only Exerting
+    /// drains, by a full pool in [`SPRINT_SECONDS`] while Light, 1.5 times as fast Burdened and
+    /// twice as fast Encumbered or Overloaded. Sleeping refills twice as fast as standing.
+    pub fn rate_per_second(activity: Activity, load: LoadBand) -> f64 {
+        match activity {
+            Activity::Exerting => {
+                let heavier = match load {
+                    LoadBand::Light => 1.0,
+                    LoadBand::Burdened => 1.5,
+                    LoadBand::Encumbered | LoadBand::Overloaded => 2.0,
+                };
+                -heavier / SPRINT_SECONDS
+            }
+            Activity::Walking => 1.0 / WALK_REFILL_SECONDS,
+            Activity::Resting => 1.0 / STAND_REFILL_SECONDS,
+            Activity::Sleeping => SLEEP_REFILL_FACTOR / STAND_REFILL_SECONDS,
+        }
+    }
+
+    /// Whether the delver may sprint or swing hard: not winded.
+    pub fn can_exert(&self) -> bool {
+        !self.winded
+    }
+
+    /// Advances by `seconds` of real time at `activity` under `load`.
+    pub fn step(&mut self, seconds: f64, activity: Activity, load: LoadBand) {
+        self.value = (self.value + Stamina::rate_per_second(activity, load) * seconds).clamp(0.0, 1.0);
+        self.settle();
+    }
+
+    /// Takes `cost` off the pool, never below empty.
+    pub fn spend(&mut self, cost: f64) {
+        self.value = (self.value - cost).max(0.0);
+        self.settle();
+    }
+
+    /// Winds the delver at empty and lets them recover at [`SECOND_WIND`].
+    fn settle(&mut self) {
+        // A drain that lands on empty can leave float dust.
+        if self.value <= 1e-9 {
+            self.value = 0.0;
+            self.winded = true;
+        } else if self.winded && self.value >= SECOND_WIND {
+            self.winded = false;
+        }
+    }
+}
+
 /// The ability modifier for a score: `floor((score - 10) / 2)` (D&D 5e SRD 5.1, p. 76).
 ///
 /// A score of 3 gives -4, a score of 10 or 11 gives 0, and a score of 18 gives +4.
@@ -1253,5 +1335,69 @@ mod tests {
         needs.step(0.002, Activity::Walking);
         assert_eq!(needs.hunger.word(), "Hungry");
         assert_eq!(needs.thirst.gear, 1.0, "thirst is not geared");
+    }
+
+    #[test]
+    fn a_full_pool_lasts_thirty_seconds_of_sprinting_while_light() {
+        let mut stamina = Stamina::default();
+        stamina.step(29.0, Activity::Exerting, LoadBand::Light);
+        assert!(stamina.value > 0.0 && !stamina.winded, "{stamina:?}");
+        stamina.step(1.0, Activity::Exerting, LoadBand::Light);
+        assert!(stamina.value.abs() < 1e-9 && stamina.winded, "{stamina:?}");
+    }
+
+    #[test]
+    fn the_heavier_the_load_the_faster_sprinting_drains() {
+        let after = |band| {
+            let mut stamina = Stamina::default();
+            stamina.step(10.0, Activity::Exerting, band);
+            stamina.value
+        };
+        let (light, burdened, encumbered) = (after(LoadBand::Light), after(LoadBand::Burdened), after(LoadBand::Encumbered));
+        assert!(light > burdened && burdened > encumbered, "{light} {burdened} {encumbered}");
+        assert!((1.0 - encumbered - 2.0 * (1.0 - light)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn standing_refills_from_empty_in_eight_seconds_and_walking_is_slower() {
+        let empty = Stamina { value: 0.0, winded: true };
+        let mut standing = empty;
+        standing.step(8.0, Activity::Resting, LoadBand::Light);
+        assert!((standing.value - 1.0).abs() < 1e-9 && !standing.winded);
+        let mut walking = empty;
+        walking.step(8.0, Activity::Walking, LoadBand::Light);
+        assert!(walking.value > 0.5 && walking.value < 1.0);
+    }
+
+    #[test]
+    fn a_winded_delver_cannot_exert_until_twenty_percent() {
+        let mut stamina = Stamina { value: 0.0, winded: true };
+        assert!(!stamina.can_exert());
+        stamina.step(1.5, Activity::Resting, LoadBand::Light);
+        assert!(stamina.value < SECOND_WIND && !stamina.can_exert(), "{stamina:?}");
+        stamina.step(0.2, Activity::Resting, LoadBand::Light);
+        assert!(stamina.value >= SECOND_WIND && stamina.can_exert(), "{stamina:?}");
+    }
+
+    #[test]
+    fn a_swing_takes_a_fixed_bite_and_the_last_one_winds() {
+        let mut stamina = Stamina::default();
+        stamina.spend(SWING_COST);
+        assert!((stamina.value - (1.0 - SWING_COST)).abs() < 1e-9);
+        for _ in 0..20 {
+            stamina.spend(SWING_COST);
+        }
+        assert_eq!(stamina.value, 0.0);
+        assert!(stamina.winded);
+    }
+
+    #[test]
+    fn stamina_steps_the_same_in_any_step_size() {
+        let (mut whole, mut parts) = (Stamina::default(), Stamina::default());
+        whole.step(12.0, Activity::Exerting, LoadBand::Burdened);
+        for _ in 0..120 {
+            parts.step(0.1, Activity::Exerting, LoadBand::Burdened);
+        }
+        assert!((whole.value - parts.value).abs() < 1e-9);
     }
 }

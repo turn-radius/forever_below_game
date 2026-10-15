@@ -20,7 +20,7 @@ use crate::light::point_light;
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
 use crate::launch::AppState;
-use crate::character::{Character, Load};
+use crate::character::{Character, DelverStamina, Load};
 use crate::exhaustion::Exhaustion;
 use crate::inventory::Inventory;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, level_has_focus};
@@ -205,15 +205,15 @@ pub(crate) fn walk(
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Option<Res<Obstacles>>,
-    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform, Option<&Slowed>, &Exhaustion, &Load), With<Player>>,
+    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform, Option<&Slowed>, &Exhaustion, &Load, &DelverStamina), With<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP_SECONDS);
     if dt <= 0.0 {
         return;
     }
-    let (locomotion, gait, transform, slowed, exhaustion, load) = &mut *body;
+    let (locomotion, gait, transform, slowed, exhaustion, load, stamina) = &mut *body;
     let moving = &tuning.moving;
-    let speed = if input.pressed(Action::Hurry) { moving.hurry_speed } else { moving.walk_speed } * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier() * load.0.walk_multiplier();
+    let speed = if input.pressed(Action::Hurry) && stamina.0.can_exert() { moving.hurry_speed } else { moving.walk_speed } * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier() * load.0.walk_multiplier();
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
@@ -383,6 +383,27 @@ mod tests {
         let half = walked(10, |t| t.moving.walk_speed *= 0.5);
         assert!(usual > 1.0, "{usual}");
         assert!((half / usual - 0.5).abs() < 0.02, "half the pace walks half as far: {half} against {usual}");
+    }
+
+    /// How far the body walks in 30 frames with W and Hurry held, for a delver with `stamina`.
+    fn hurried(stamina: fb_character::Stamina) -> f32 {
+        let (mut app, body, start) = walking(|_| {}, DelverStamina(stamina));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftLeft);
+        for _ in 0..30 {
+            app.update();
+        }
+        app.world().get::<Transform>(body).unwrap().translation.distance(start)
+    }
+
+    #[test]
+    fn a_winded_delver_cannot_sprint_until_they_have_caught_their_breath() {
+        let walked = walked(30, |_| {});
+        let fresh = hurried(fb_character::Stamina::default());
+        assert!(fresh > walked * 1.3, "sprinting outpaces walking: {fresh} against {walked}");
+        let winded = hurried(fb_character::Stamina { value: 0.1, winded: true });
+        assert!((winded / walked - 1.0).abs() < 0.02, "winded, hurry only walks: {winded} against {walked}");
+        let recovered = hurried(fb_character::Stamina { value: 0.2, winded: false });
+        assert!((recovered / fresh - 1.0).abs() < 0.02, "{recovered} against {fresh}");
     }
 
     fn exhausted(level: u32) -> Exhaustion {

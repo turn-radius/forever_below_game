@@ -208,6 +208,12 @@ pub struct Load(pub LoadBand);
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverNeeds(pub fb_character::Needs);
 
+/// The delver's stamina, on the [`Player`](crate::play::Player) from their spawn, so a new delve
+/// starts with a full pool. Sprinting and swinging drain it, and it refills in seconds
+/// (`crate::simulate::step_stamina`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverStamina(pub fb_character::Stamina);
+
 /// Determines the delver's activity from movement and load state.
 /// Moving while Burdened or Encumbered counts as Exerting. An Overloaded delver cannot move
 /// (`player::walk`), so wanting to move while Overloaded is reported as Resting, as is
