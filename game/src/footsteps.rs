@@ -2,8 +2,8 @@
 //!
 //! The delver plays a non-spatial footstep at each stride, paced by their walking speed.
 //! Standing still plays no steps; doubling speed doubles the step rate. The same sample never
-//! plays twice in a row. Burdened and Encumbered steps are heavier (lower modes, longer sustain)
-//! than light steps.
+//! plays twice in a row. Burdened and Encumbered steps are heavier (lower, a little longer) than
+//! light steps. All steps are soft and quiet, with a little random gain and speed each.
 //!
 //! Folk and creatures that walk play spatial footsteps at their positions, quieter with distance.
 //! Each entity tracks its own step state with RNG to vary samples independently.
@@ -41,10 +41,28 @@ struct StepState {
     last_pos: Option<Vec2>,
 }
 
-/// Gain on a creature's step against the effects volume. Spatial playback already fades it with
-/// distance (scale 0.1, so a rat 20 units away is 2 m off and plays at a quarter of this), which
-/// keeps a rat's step quieter than the delver's own but present at a few metres.
-const CREATURE_STEP_GAIN: f32 = 0.7;
+/// Gain on the delver's step against the effects volume: footsteps are background detail, soft
+/// and dull under the other effects.
+const STEP_GAIN: f32 = 0.35;
+
+/// A creature's step as a share of the delver's. Spatial playback already fades it with distance
+/// (scale 0.1, so a rat 20 units away is 2 m off and plays at a quarter of this), which keeps a
+/// rat's step quieter than the delver's own but present at a few metres.
+const CREATURE_STEP_SHARE: f32 = 0.7;
+
+/// Per-step random spread of gain (a fraction either way) and playback speed, so repeats of the
+/// same sample do not sound identical.
+const GAIN_SPREAD: f32 = 0.15;
+const SPEED_SPREAD: f32 = 0.06;
+
+/// Playback for one step: `gain` against the effects volume, varied by up to `GAIN_SPREAD` and
+/// `SPEED_SPREAD` from the entity's seeded RNG.
+fn step_settings(rng: &mut Mulberry32, gain: f32, effects: f32) -> PlaybackSettings {
+    let jitter = |rng: &mut Mulberry32, spread: f32| 1.0 + spread * (rng.next_f64() as f32 * 2.0 - 1.0);
+    let volume = effects * gain * jitter(rng, GAIN_SPREAD);
+    let speed = jitter(rng, SPEED_SPREAD);
+    PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)).with_speed(speed)
+}
 
 /// Marker for entities (folk/creatures) that walk and need spatial footsteps.
 #[derive(Component, Debug)]
@@ -139,11 +157,12 @@ fn play_delver_steps(
         _ => false,
     };
     let samples = if is_burdened { &sounds.heavy } else { &sounds.light };
+    let settings = step_settings(&mut state.rng, STEP_GAIN, effect_volume(&game, &tuning));
 
     commands.spawn((
         Name::new("delver step"),
         AudioPlayer::new(samples[sample].clone()),
-        PlaybackSettings::DESPAWN.with_volume(Volume::Linear(effect_volume(&game, &tuning))),
+        settings,
         DespawnOnExit(AppState::Delving),
     ));
 }
@@ -193,13 +212,13 @@ fn play_creature_steps(
             let sample = next_sample(&mut state.rng, old_last);
             state.last_sample = sample;
 
-            // Rats use light steps always, at the effects volume; distance fades them.
-            let volume = effect_volume(&game, &tuning) * CREATURE_STEP_GAIN;
+            // Rats use light steps always, quieter than the delver's; distance fades them.
+            let settings = step_settings(&mut state.rng, STEP_GAIN * CREATURE_STEP_SHARE, effect_volume(&game, &tuning));
 
             commands.spawn((
                 Name::new("creature step"),
                 AudioPlayer::new(sounds.light[sample].clone()),
-                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)).with_spatial(true),
+                settings.with_spatial(true),
                 transform.clone(),
                 DespawnOnExit(AppState::Delving),
             ));
@@ -229,6 +248,36 @@ mod tests {
             assert_ne!(sample, last, "sample repeated");
             last = sample;
         }
+    }
+
+    #[test]
+    fn step_settings_vary_within_their_spread() {
+        let mut rng = Mulberry32::new(7);
+        let (mut volumes, mut speeds) = (Vec::new(), Vec::new());
+        for _ in 0..200 {
+            let settings = step_settings(&mut rng, STEP_GAIN, 1.0);
+            let Volume::Linear(volume) = settings.volume else { panic!("linear volume") };
+            assert!((STEP_GAIN * (1.0 - GAIN_SPREAD)..=STEP_GAIN * (1.0 + GAIN_SPREAD)).contains(&volume), "{volume}");
+            assert!((1.0 - SPEED_SPREAD..=1.0 + SPEED_SPREAD).contains(&settings.speed), "{}", settings.speed);
+            volumes.push(volume);
+            speeds.push(settings.speed);
+        }
+        assert!(volumes.iter().any(|v| *v > STEP_GAIN) && volumes.iter().any(|v| *v < STEP_GAIN));
+        assert!(speeds.iter().any(|s| *s > 1.0) && speeds.iter().any(|s| *s < 1.0));
+    }
+
+    #[test]
+    fn delver_steps_play_at_a_fraction_of_the_effects_volume() {
+        let mut app = delver_app(1.0);
+        for _ in 0..20 {
+            app.update();
+        }
+        let effects = effect_volume(app.world().resource::<GameSettings>(), app.world().resource::<Tuning>());
+        let settings: Vec<_> = app.world_mut().query::<&PlaybackSettings>().iter(app.world()).cloned().collect();
+        assert_eq!(settings.len(), 1);
+        let Volume::Linear(volume) = settings[0].volume else { panic!("linear volume") };
+        assert!(volume <= effects * STEP_GAIN * (1.0 + GAIN_SPREAD) + 1e-6, "{volume} vs {effects}");
+        assert!(volume >= effects * STEP_GAIN * (1.0 - GAIN_SPREAD) - 1e-6, "{volume} vs {effects}");
     }
 
     #[test]
