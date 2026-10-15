@@ -12,6 +12,7 @@ pub mod creatures;
 pub mod doll_view;
 pub mod figure;
 pub mod folk;
+pub mod footsteps;
 pub mod forge_view;
 pub mod frame_time;
 pub mod inventory;

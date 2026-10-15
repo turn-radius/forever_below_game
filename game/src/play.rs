@@ -241,6 +241,7 @@ impl Plugin for PlayPlugin {
             .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate).in_set(DelveSystems))
             .add_plugins((
             crate::ambient::AmbientPlugin,
+            crate::footsteps::FootstepsPlugin,
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,

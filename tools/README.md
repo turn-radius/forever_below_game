@@ -59,4 +59,18 @@ oggenc -q 6 -o game/assets/audio/rumble.ogg /tmp/ambience/rumble.wav
 
 The drip is a rising sine sweep decaying over about 150 ms with proper phase accumulation, plus faint splash noise. The rumble is a deep rolling sound from decaying sine modes in the 40–120 Hz range.
 
+**Footsteps**: `tools/synth_footsteps.py` synthesises footstep sounds on stone by modal synthesis: 3 light variants (quick impacts with high modes) and 3 heavy variants (deeper impacts with lower modes and longer sustain), the same on every run, and `oggenc` encodes them:
+
+```
+python3 tools/synth_footsteps.py /tmp/footsteps
+oggenc -q 6 -o game/assets/audio/step_light_1.ogg /tmp/footsteps/step_light_1.wav
+oggenc -q 6 -o game/assets/audio/step_light_2.ogg /tmp/footsteps/step_light_2.wav
+oggenc -q 6 -o game/assets/audio/step_light_3.ogg /tmp/footsteps/step_light_3.wav
+oggenc -q 6 -o game/assets/audio/step_heavy_1.ogg /tmp/footsteps/step_heavy_1.wav
+oggenc -q 6 -o game/assets/audio/step_heavy_2.ogg /tmp/footsteps/step_heavy_2.wav
+oggenc -q 6 -o game/assets/audio/step_heavy_3.ogg /tmp/footsteps/step_heavy_3.wav
+```
+
+Light steps are quick impacts with modes in the 500–2000 Hz range. Heavy steps are deeper, with modes in the 200–800 Hz range and longer sustain, so a Burdened or Encumbered delver sounds heavier. Variation in each category prevents monotony while the same sample is never played twice in a row.
+
 Bevy loads assets from `game/assets/` under `cargo run` (it uses `CARGO_MANIFEST_DIR`). To run the binary directly, set `BEVY_ASSET_ROOT=game`.
