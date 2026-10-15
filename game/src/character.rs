@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
-use fb_character::{Activity, Attributes, LoadBand, capacity_lb, modifier as ability_modifier};
+use fb_character::{Activity, Attributes, CarriedLight, Gear, LoadBand, Worn, modifier as ability_modifier};
 use procgen_rng::Mulberry32;
 
 use crate::carry::carried_lights;
@@ -148,6 +148,22 @@ pub struct Derived {
 }
 
 impl Character {
+    /// What they wear and carry means for the simulation: the one place capacity, the meter
+    /// rates, darkvision and the carried light come from. Their folk's darkvision counts with
+    /// the items' as the best of them, and the carried light is the farthest reaching of the
+    /// lit things carried ([`carried_lights`]).
+    pub fn gear(&self, inventory: &Inventory) -> Gear {
+        let worn = inventory.equipped().into_iter().map(|(_, item)| {
+            let s = &item.profile.stats;
+            Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64 }
+        });
+        let lights = carried_lights(inventory)
+            .into_iter()
+            .filter_map(|(_, id)| inventory.item(id))
+            .map(|item| CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
+        Gear::new(self.folk.race().dv as f64, worn, lights)
+    }
+
     /// What everything equipped adds to the delver, as the plate's `derive` adds it up; the
     /// light is the farthest reaching of the lit things carried ([`carried_lights`]), where the
     /// plate took the brightest of all its items, so an unlit torch in the pack gives none.
@@ -157,19 +173,17 @@ impl Character {
         let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
         let load = sum(|s| s.weight)
             + equipped.iter().filter_map(|(slot, _)| inventory.worn(*slot)).map(|id| inventory.contents_weight(id)).fold(0.0, |a, b| a + b);
-        let carry_bonus = sum(|s| s.carry);
-        let capacity = capacity_lb(self.strength(), carry_bonus as f64) as f32;
+        let gear = self.gear(inventory);
+        let capacity = gear.capacity_lb(self.strength()) as f32;
         let load_band = LoadBand::from_load(load as f64, capacity as f64);
-        let light = carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)).map(|item| item.profile.stats.light).fold(0.0, f32::max);
-        let darkvision = equipped.iter().map(|(_, item)| item.profile.stats.darkvision).fold(self.folk.race().dv as f32, f32::max);
         Derived {
             armour_class: 10 + sum(|s| s.armour).round() as i32 + modifier(self.dexterity()),
             load,
             capacity,
             load_band,
             warmth: sum(|s| s.warmth),
-            light,
-            darkvision,
+            light: gear.light as f32,
+            darkvision: gear.darkvision as f32,
         }
     }
 }
@@ -298,6 +312,101 @@ mod tests {
         let torch = inventory.add(crate::carry::lit_torch(2));
         inventory.wear(torch, Slot::Offhand).unwrap();
         assert_eq!(crate::carry::carried_light(&inventory).map(|(slot, _)| slot), Some(Slot::Offhand));
+    }
+
+    /// A rolled `base` with the real affix `name` applied to its stats.
+    fn with_affix(base: &str, seed: u32, name: &str) -> fb_items::Item {
+        let mut item = fb_items::roll_item(base, seed).unwrap();
+        let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+        affix.apply_to_stats(&mut item.profile.stats);
+        item.affixes.push(affix);
+        item
+    }
+
+    #[test]
+    fn a_belt_of_the_ox_lifts_a_human_to_175_lb() {
+        use fb_items::Slot;
+        let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        let human = Character { folk: Folk::Human, attributes, ..Character::roll(4) };
+        let mut inventory = Inventory::default();
+        let belt = inventory.add(with_affix("Belt", 2, "of the Ox"));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let derived = human.derive(&inventory);
+        assert_eq!(derived.capacity, 175.0);
+        assert_eq!(derived.capacity as f64, human.gear(&inventory).capacity_lb(10), "one source");
+    }
+
+    #[test]
+    fn the_mole_gives_a_human_10_ft_of_darkvision_and_a_goblin_60() {
+        use fb_items::Slot;
+        for (folk, feet) in [(Folk::Human, 10.0), (Folk::Goblin, 60.0)] {
+            let delver = Character { folk, ..Character::roll(4) };
+            let mut inventory = Inventory::default();
+            assert_eq!(delver.derive(&inventory).darkvision, folk.race().dv as f32);
+            let belt = inventory.add(with_affix("Belt", 2, "of the Mole"));
+            inventory.wear(belt, Slot::Belt).unwrap();
+            assert_eq!(delver.derive(&inventory).darkvision, feet, "{folk:?}: the best, not the sum");
+        }
+    }
+
+    #[test]
+    fn plenty_and_wakefulness_slow_the_meters_through_the_gear() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let belt = inventory.add(with_affix("Belt", 2, "of Plenty"));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let ring = inventory.add(with_affix("Ring", 3, "of Wakefulness"));
+        inventory.wear(ring, Slot::Ring1).unwrap();
+        let gear = delver.gear(&inventory);
+        assert!((gear.hunger_rate - 0.85).abs() < 1e-6 && (gear.sleepiness_rate - 0.85).abs() < 1e-6, "{gear:?}");
+        let mut needs = fb_character::Needs::default();
+        gear.apply_to(&mut needs);
+        needs.step(8.0 / 0.85 - 0.001, Activity::Walking);
+        assert_eq!(needs.hunger.word(), "Peckish");
+        needs.step(0.002, Activity::Walking);
+        assert_eq!(needs.hunger.word(), "Hungry");
+    }
+
+    #[test]
+    fn light_affixes_change_the_carried_light_and_its_burn_time() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let reach_with = |affix: Option<&str>| {
+            let mut torch = crate::carry::lit_torch(2);
+            if let Some(name) = affix {
+                let a = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+                a.apply_to_stats(&mut torch.profile.stats);
+            }
+            let mut inventory = Inventory::default();
+            let id = inventory.add(torch);
+            inventory.wear(id, Slot::Offhand).unwrap();
+            delver.gear(&inventory)
+        };
+        let plain = reach_with(None);
+        assert!(plain.light > 0.0 && plain.burn_time == 1.0);
+        assert_eq!(reach_with(Some("Gleaming")).light, plain.light + 10.0);
+        assert_eq!(reach_with(Some("Smoky")).light, plain.light - 5.0);
+        let long = reach_with(Some("Long-burning"));
+        assert_eq!((long.burn_time, long.light), (2.0, plain.light));
+    }
+
+    #[test]
+    fn featherlight_lowers_the_load_through_weight() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let load = |affix: Option<&str>| {
+            let item = match affix {
+                Some(name) => with_affix("Mail", 1, name),
+                None => fb_items::roll_item("Mail", 1).unwrap(),
+            };
+            let mut inventory = Inventory::default();
+            let id = inventory.add(item);
+            inventory.wear(id, Slot::Body).unwrap();
+            delver.derive(&inventory).load
+        };
+        let (plain, light) = (load(None), load(Some("Featherlight")));
+        assert!(plain > 0.0 && (light - plain * 0.6).abs() < 1e-3, "{light} against {plain}");
     }
 
     #[test]

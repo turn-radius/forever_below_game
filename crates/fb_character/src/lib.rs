@@ -155,6 +155,92 @@ pub fn capacity_lb(strength: i32, carry_bonus_lb: f64) -> f64 {
     (strength as f64) * 15.0 + carry_bonus_lb
 }
 
+/// What one worn or held item does for its wearer, as plain numbers (an item's stats of the
+/// same names). The default changes nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Worn {
+    /// Extra pounds the wearer can carry.
+    pub carry: f64,
+    /// Feet the wearer sees without light.
+    pub darkvision: f64,
+    /// Multiple of the normal hunger rate.
+    pub hunger_rate: f64,
+    /// Multiple of the normal sleepiness rate.
+    pub sleepiness_rate: f64,
+}
+
+impl Default for Worn {
+    fn default() -> Self {
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0 }
+    }
+}
+
+/// A light the delver carries, as plain numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CarriedLight {
+    /// How far it reaches, in feet.
+    pub reach: f64,
+    /// How long it burns, as a multiple of its base's.
+    pub burn_time: f64,
+}
+
+/// What the delver wears and carries, summed for the simulation (#226): the one place the
+/// capacity, the meter rates, the darkvision and the light are worked out from gear.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Gear {
+    /// Extra pounds of capacity: the worn items' bonuses added.
+    pub carry: f64,
+    /// Feet seen without light: the best of the folk's and every item's, never the sum.
+    pub darkvision: f64,
+    /// Multiple of the hunger rate: the items' rates multiplied.
+    pub hunger_rate: f64,
+    /// Multiple of the sleepiness rate: the items' rates multiplied.
+    pub sleepiness_rate: f64,
+    /// Feet the carried light reaches; 0 with none.
+    pub light: f64,
+    /// How long the carried light burns, as a multiple of its base's.
+    pub burn_time: f64,
+}
+
+impl Default for Gear {
+    fn default() -> Self {
+        Gear::new(0.0, [], [])
+    }
+}
+
+impl Gear {
+    /// The gear of a delver whose folk sees `folk_darkvision` feet in the dark, wearing `worn`
+    /// and carrying `lights`. The light that reaches farthest is the carried one, and its
+    /// burn time is the one that counts.
+    pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, light: 0.0, burn_time: 1.0 };
+        for item in worn {
+            gear.carry += item.carry;
+            gear.darkvision = gear.darkvision.max(item.darkvision);
+            gear.hunger_rate *= item.hunger_rate;
+            gear.sleepiness_rate *= item.sleepiness_rate;
+        }
+        for light in lights {
+            if light.reach > gear.light {
+                gear.light = light.reach;
+                gear.burn_time = light.burn_time;
+            }
+        }
+        gear
+    }
+
+    /// Carrying capacity in pounds for a delver of `strength` in this gear.
+    pub fn capacity_lb(&self, strength: i32) -> f64 {
+        capacity_lb(strength, self.carry)
+    }
+
+    /// Sets the hunger and sleepiness meters' gear multipliers to this gear's rates.
+    pub fn apply_to(&self, needs: &mut Needs) {
+        needs.hunger.gear = self.hunger_rate;
+        needs.sleepiness.gear = self.sleepiness_rate;
+    }
+}
+
 /// A meter from 0 (best) to 1 (worst), advancing by a base rate per game hour,
 /// scaled by activity and gear multipliers. Clamped at 0 and 1.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1109,5 +1195,41 @@ mod tests {
         assert_eq!(LoadBand::Burdened.walk_multiplier(), 0.85);
         assert_eq!(LoadBand::Encumbered.walk_multiplier(), 0.65);
         assert_eq!(LoadBand::Overloaded.walk_multiplier(), 0.0);
+    }
+
+    #[test]
+    fn gear_adds_carry_multiplies_rates_and_takes_the_best_darkvision() {
+        let worn = [
+            Worn { carry: 25.0, darkvision: 10.0, hunger_rate: 0.85, ..Worn::default() },
+            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85 },
+        ];
+        let gear = Gear::new(20.0, worn, []);
+        assert_eq!(gear.carry, 50.0);
+        assert_eq!(gear.darkvision, 30.0, "the best, not the sum");
+        assert!((gear.hunger_rate - 0.7225).abs() < 1e-12);
+        assert_eq!(gear.sleepiness_rate, 0.85);
+        assert_eq!(Gear::new(60.0, [Worn { darkvision: 10.0, ..Worn::default() }], []).darkvision, 60.0);
+        assert_eq!(gear.capacity_lb(10), 200.0);
+        assert_eq!(Gear::default(), Gear::new(0.0, [], []));
+    }
+
+    #[test]
+    fn the_brightest_carried_light_gives_the_reach_and_burn_time() {
+        let lights = [CarriedLight { reach: 25.0, burn_time: 1.0 }, CarriedLight { reach: 35.0, burn_time: 2.0 }];
+        let gear = Gear::new(0.0, [], lights);
+        assert_eq!((gear.light, gear.burn_time), (35.0, 2.0));
+        assert_eq!((Gear::default().light, Gear::default().burn_time), (0.0, 1.0));
+    }
+
+    #[test]
+    fn plenty_makes_hungry_arrive_at_8_over_0_85_hours() {
+        let mut needs = Needs::default();
+        Gear::new(0.0, [Worn { hunger_rate: 0.85, ..Worn::default() }], []).apply_to(&mut needs);
+        let hungry_at = 8.0 / 0.85;
+        needs.step(hungry_at - 0.001, Activity::Walking);
+        assert_eq!(needs.hunger.word(), "Peckish");
+        needs.step(0.002, Activity::Walking);
+        assert_eq!(needs.hunger.word(), "Hungry");
+        assert_eq!(needs.thirst.gear, 1.0, "thirst is not geared");
     }
 }
