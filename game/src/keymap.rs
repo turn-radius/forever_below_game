@@ -24,6 +24,8 @@ pub enum Action {
     /// Lights or puts out the carried light (with Shift, the hip lantern), or in the inventory
     /// the light under the mouse.
     Light,
+    /// Eats or drinks the food or drink under the mouse in the inventory.
+    Consume,
     DragItem,
     TurnItem,
     Inventory,
@@ -153,6 +155,7 @@ impl Default for Keymap {
                 bind(Action::PickUp, "Pick up or open", Group::Items, &[Key(KeyCode::KeyE)]),
                 bind(Action::EquipAimed, "Equip what you look at", Group::Items, &[Key(KeyCode::KeyF)]),
                 bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]),
+                bind(Action::Consume, "Eat or drink what is under the mouse in the inventory", Group::Items, &[Key(KeyCode::KeyU)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),

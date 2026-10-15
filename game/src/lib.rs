@@ -9,6 +9,7 @@ pub mod combat;
 pub mod creature_view;
 pub mod creatures;
 pub mod doll_view;
+pub mod eat;
 pub mod exhaustion;
 pub mod figure;
 pub mod fitting;

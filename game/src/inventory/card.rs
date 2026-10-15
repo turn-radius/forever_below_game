@@ -38,6 +38,8 @@ pub struct CardText {
     pub stats: Vec<String>,
     /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
     pub light: Option<String>,
+    /// What U does with food or drink: "U eats it \u{b7} eases hunger 40%".
+    pub consume: Option<String>,
     /// A legendary's three lines of history.
     pub history: Vec<String>,
 }
@@ -62,6 +64,20 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
         _ => return None,
     };
     Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
+}
+
+/// What U does with food or drink, and how much it eases: "U eats it \u{b7} eases hunger 40%".
+/// `None` for anything that is not eaten or drunk.
+pub fn consume_line(item: &Item) -> Option<String> {
+    let how = item.consume()?;
+    let p = item.provision()?;
+    let mut line = format!("U {}s it", how.past());
+    for (meter, by) in [("hunger", p.nutrition), ("thirst", p.water)] {
+        if by > 0.0 {
+            line.push_str(&format!(" \u{b7} eases {meter} {}%", (by * 100.0).round()));
+        }
+    }
+    Some(line)
 }
 
 /// Burning time left as the card writes it, in game hours and minutes: "Fuel 0:42".
@@ -136,6 +152,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         affixes: item.affixes.iter().map(|a| AffixLine { text: a.text.clone(), name: a.name.clone(), good: a.good }).collect(),
         stats: stat_lines(s),
         light: light_line(&item.shape),
+        consume: consume_line(item),
         history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()),
     }
 }
@@ -297,6 +314,9 @@ fn fill_card(commands: &mut Commands, card: Entity, item: &Item, text: &CardText
                 }
                 if let Some(light) = &text.light {
                     info.spawn((Text::new(light.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
+                }
+                if let Some(consume) = &text.consume {
+                    info.spawn((Text::new(consume.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
                 }
                 if !text.history.is_empty() {
                     info.spawn((
@@ -517,6 +537,15 @@ mod tests {
         assert!(inside(place_under(Vec2::new(5.0, 1075.0), size, screen)));
         // Bigger than the screen: pinned to the top left.
         assert_eq!(keep_on_screen(Vec2::new(50.0, 50.0), Vec2::new(2000.0, 2000.0), screen), Vec2::splat(CARD_MARGIN));
+    }
+
+    #[test]
+    fn food_and_drink_cards_say_what_u_does() {
+        let line = |base: &str| consume_line(&fb_items::roll_item(base, 3).unwrap());
+        assert_eq!(line("Bread").unwrap(), "U eats it \u{b7} eases hunger 40%");
+        assert_eq!(line("Tankard").unwrap(), "U drinks it \u{b7} eases thirst 50%");
+        assert_eq!(line("Healing draught").unwrap(), "U drinks it");
+        assert_eq!(line("Torch"), None);
     }
 
     #[test]

@@ -202,6 +202,12 @@ pub fn character_for(seed: u32) -> Character {
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct Load(pub LoadBand);
 
+/// The delver's hunger, thirst and sleepiness, on the [`Player`](crate::play::Player) from their
+/// spawn, so a new delve starts Fed. Eating and drinking take from it (`crate::eat`); the game
+/// clock steps it in #229.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverNeeds(pub fb_character::Needs);
+
 /// Determines the delver's activity from movement and load state.
 /// Moving while Burdened or Encumbered counts as Exerting. An Overloaded delver cannot move
 /// (`player::walk`), so wanting to move while Overloaded is reported as Resting, as is

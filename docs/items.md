@@ -68,6 +68,7 @@ The Armory's food family (`armory::families::food`) now also makes the glowcap, 
 - A potion's brew is typed, and the noun still follows the liquid's colour, so a retinted potion is named for the brew it looks like.
 - Glass is its own material (`MaterialKind::Glass`), drawn see-through so the drink inside shows; liquids use the gem material in their own tint. A potion's glass is still tinted toward its brew. Cork is tinted wood, wax seals tinted bone, a bottle's paper label tinted cloth.
 - Food's condition word is `freshness()` (Fresh, Day-old, Stale, Mouldy, Rotten), the prototype's `condWord` for food.
+- Eating and drinking (our own numbers, `fb_items::provision`): with the inventory open, U eats or drinks the item under the mouse. It is used up, one item at a time, and `fb_character::Needs::consume` takes its value off the meter, never below 0. What each takes off: Bread 0.4 hunger, Cheese 0.3, Smoked fish 0.3, Apple 0.15, Meat pie 0.5, Sausages 0.35, Roast haunch 0.6, Blind cavefish 0.25, Glowcap 0.1; Tankard 0.5 thirst, Wine 0.3. The Potion and the Healing draught are drunk but take nothing off either meter (healing is its own rule). The waterskin and the lamp oil are not consumed. The card says what U does and how much it eases. The delver's needs are `DelverNeeds` on the player, which starts Fed with each delve.
 
 ### Lights
 
