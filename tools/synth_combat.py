@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Synthesises the fight's sound effects as mono 16-bit WAVs: a rat's squeak, a snake's hiss
-and a weapon's whoosh through the air.
+"""Synthesises the fight's sound effects as mono 16-bit WAVs: a rat's squeak, a snake's hiss,
+a weapon's whoosh through the air, the cues a rat and a snake give as they attack, and the
+thud of a blow landing on the delver.
 
     python3 tools/synth_combat.py /tmp/combat
     oggenc -q 6 -o game/assets/audio/squeak.ogg /tmp/combat/squeak.wav
     oggenc -q 6 -o game/assets/audio/hiss.ogg /tmp/combat/hiss.wav
     oggenc -q 6 -o game/assets/audio/whoosh.ogg /tmp/combat/whoosh.wav
+    oggenc -q 6 -o game/assets/audio/rat-squeal.ogg /tmp/combat/rat_squeal.wav
+    oggenc -q 6 -o game/assets/audio/snake-rise.ogg /tmp/combat/snake_rise.wav
+    oggenc -q 6 -o game/assets/audio/thud.ogg /tmp/combat/thud.wav
 
 Standard library only. The output is the same on every run (a fixed seed).
 
@@ -21,6 +25,13 @@ filters, the method of Andy Farnell's "Designing Sound" (MIT Press 2010).
   opening is turbulent, broadband noise, which the filter shapes (Farnell, ch. on turbulence).
 - The whoosh is noise through a band-pass whose centre sweeps up and back down as the blade
   passes, louder at its fastest.
+- The rat's attack cue is a single sharp squeal: a sine that climbs fast and holds high, with
+  harmonics and a little breath, so it reads as a threat and not as the hurt squeak.
+- The snake's attack cue is a hiss that rises: the same band-passed noise as the hiss, with the
+  band sweeping upward and the level building, as a snake draws breath to strike.
+- The thud is a dull blow on a body: a low sine whose pitch falls away fast under a quick
+  decay, with a puff of low band-passed noise for the impact (Farnell's treatment of impacts
+  as a short noise burst exciting a resonance).
 
 The band-pass is Hal Chamberlin's state-variable filter ("Musical Applications of
 Microprocessors", 2nd ed., Hayden 1985, ch. 14). Frequencies, Q and envelopes are our own.
@@ -98,6 +109,44 @@ def hiss(rng):
     return normalise(out, -3.0)
 
 
+def rat_squeal(rng):
+    """One sharp squeal: a quick climb, then held high with a tremble."""
+    n = int(0.26 * RATE)
+    out = []
+    phase = 0.0
+    for i in range(n):
+        t = i / n
+        f = 2800.0 + 1700.0 * math.sin(0.5 * math.pi * min(1.0, t / 0.25)) + 120.0 * math.sin(2.0 * math.pi * 46.0 * i / RATE)
+        phase += 2.0 * math.pi * f / RATE
+        tone = math.sin(phase) + 0.4 * math.sin(2.0 * phase) + 0.2 * math.sin(3.0 * phase)
+        out.append(swell(i, n, 0.06, 0.45) * (tone + 0.15 * rng.uniform(-1.0, 1.0)))
+    return normalise(out, -3.0)
+
+
+def snake_rise(rng):
+    """A hiss that climbs in pitch and builds: breath drawn in to strike."""
+    n = int(0.5 * RATE)
+    noise = [rng.uniform(-1.0, 1.0) for _ in range(n)]
+    band = svf_bandpass(noise, lambda i: 2500.0 + 4500.0 * (i / n) ** 1.5, 1.5)
+    out = [(i / n) ** 0.8 * swell(i, n, 0.9, 0.1) * band[i] for i in range(n)]
+    return normalise(out, -3.0)
+
+
+def thud(rng):
+    """A dull blow: a low sine falling in pitch, and a puff of low noise."""
+    n = int(0.3 * RATE)
+    noise = [rng.uniform(-1.0, 1.0) for _ in range(n)]
+    puff = svf_bandpass(noise, 220.0, 0.9)
+    out = []
+    phase = 0.0
+    for i in range(n):
+        t = i / n
+        phase += 2.0 * math.pi * (45.0 + 70.0 * math.exp(-t * 18.0)) / RATE
+        attack = min(1.0, i / (0.002 * RATE))
+        out.append(attack * (math.exp(-t * 9.0) * math.sin(phase) + 0.6 * math.exp(-t * 25.0) * puff[i]))
+    return normalise(out, -2.0)
+
+
 def whoosh(rng):
     """A blade through the air: the band sweeps up as it speeds past and falls away."""
     n = int(0.38 * RATE)
@@ -126,7 +175,7 @@ def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
     rng = random.Random(SEED)
-    for name, make in [("squeak", squeak), ("hiss", hiss), ("whoosh", whoosh)]:
+    for name, make in [("squeak", squeak), ("hiss", hiss), ("whoosh", whoosh), ("rat_squeal", rat_squeal), ("snake_rise", snake_rise), ("thud", thud)]:
         write(os.path.join(out, name + ".wav"), make(rng))
 
 

@@ -213,9 +213,12 @@ impl Level {
 pub mod creatures;
 pub mod folk;
 mod generate;
+pub mod params;
+pub mod sight;
 pub mod path;
 pub mod props;
 pub use creatures::CreatureSpot;
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
 pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
-pub use generate::generate;
+pub use generate::{generate, generate_with};
+pub use params::LevelParams;

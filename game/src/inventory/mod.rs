@@ -131,7 +131,7 @@ impl Plugin for InventoryPlugin {
                         .after(switch_screens),
                     (icon::draw_icons, icon::reveal_icons).chain().after(build_screen),
                     doll::turn_seal,
-                    (doll::dress_doll, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
+                    (doll::start_doll_fitting, doll::poll_doll_fitting, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
                 )
                     .in_set(DelveSystems),
             );

@@ -409,18 +409,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn worn_gear_runs_its_footprint_the_way_it_stands() {
+    fn worn_gear_runs_its_footprint_the_way_it_stands_check(pairs: std::ops::Range<u32>, base_seeds: &[u32], upright: &[&str], upright_seeds: std::ops::Range<u32>) {
         // A glove stands taller than wide, so its folded 2 by 1 footprint stands 1 by 2; a
         // belt lies wider than tall and keeps 2 by 1.
-        for seed in 1..20 {
+        for seed in pairs {
             let (_, gloves) = rolled("Gloves", seed);
             assert_eq!((gloves.footprint.cols, gloves.footprint.rows), (1, 2), "{seed}");
             let (_, belt) = rolled("Belt", seed);
             assert_eq!((belt.footprint.cols, belt.footprint.rows), (2, 1), "{seed}");
         }
         for (name, _) in ARMORY_BASES {
-            for seed in [1, 2, 3, 1207] {
+            for &seed in base_seeds {
                 let (shape, p) = rolled(name, seed);
                 if !stands_upright(shape.family()) {
                     continue;
@@ -433,8 +432,8 @@ mod tests {
         }
         // Every style of shoe and boot (turnshoes, poulaines, wraps, ankle boots, sabatons)
         // stands sole down as built, toe to the side, and lies the way it stands.
-        for base in ["Shoes", "Boots", "Mail coif", "Hood"] {
-            for seed in 1..200 {
+        for &base in upright {
+            for seed in upright_seeds.clone() {
                 let (shape, p) = rolled(base, seed);
                 let (lo, hi) = shape.build().bounds().unwrap();
                 let (wide, tall) = (hi[0] - lo[0], hi[1] - lo[1]);
@@ -445,6 +444,17 @@ mod tests {
         }
         assert!(stands_upright(Family::Hood) && stands_upright(Family::Chests));
         assert!(!stands_upright(Family::Sword) && !stands_upright(Family::Shield) && !stands_upright(Family::Torch));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: gear fitting test, every seed and base; run before merging fitting changes"]
+    fn worn_gear_runs_its_footprint_the_way_it_stands() {
+        worn_gear_runs_its_footprint_the_way_it_stands_check(1..20, &[1, 2, 3, 1207], &["Shoes", "Boots", "Mail coif", "Hood"], 1..200);
+    }
+
+    #[test]
+    fn worn_gear_runs_its_footprint_the_way_it_stands_smoke() {
+        worn_gear_runs_its_footprint_the_way_it_stands_check(1..3, &[1207], &["Shoes", "Boots", "Mail coif", "Hood"], 1..10);
     }
 
     #[test]

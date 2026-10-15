@@ -174,6 +174,8 @@ pub enum Screen {
     Inventory,
     /// The pause menu ([`crate::menu`]).
     Menu,
+    /// The map of the level ([`crate::map`]).
+    Map,
 }
 
 /// Which screen, if any, is open over the level. The level keeps drawing behind it, but the
@@ -194,14 +196,16 @@ pub fn level_has_focus(screen: Option<Res<ScreenOpen>>) -> bool {
 }
 
 /// The screen open after this frame's presses, from `open`: Esc closes an open screen first,
-/// and with none open brings up the menu; the inventory key opens and closes the inventory,
-/// but not over the menu.
-pub fn next_screen(open: Option<Screen>, inventory: bool, back: bool) -> Option<Screen> {
+/// and with none open brings up the menu; the inventory key opens and closes the inventory and
+/// the map key the map, each swapping for the other, but neither over the menu.
+pub fn next_screen(open: Option<Screen>, inventory: bool, map: bool, back: bool) -> Option<Screen> {
     match open {
         Some(_) if back => None,
         None if back => Some(Screen::Menu),
         Some(Screen::Inventory) if inventory => None,
-        None if inventory => Some(Screen::Inventory),
+        Some(Screen::Map) if map => None,
+        None | Some(Screen::Map) if inventory => Some(Screen::Inventory),
+        None | Some(Screen::Inventory) if map => Some(Screen::Map),
         unchanged => unchanged,
     }
 }
@@ -218,7 +222,7 @@ pub fn show_screen(open: &mut ScreenOpen, screen: Option<Screen>, cursor: Option
 /// Opens and closes screens from the keyboard ([`next_screen`]). Systems that draw a screen
 /// run after it.
 pub fn switch_screens(input: ActionInput, mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
-    let next = next_screen(open.0, input.just_pressed(Action::Inventory), input.just_pressed(Action::Back));
+    let next = next_screen(open.0, input.just_pressed(Action::Inventory), input.just_pressed(Action::Map), input.just_pressed(Action::Back));
     if next != open.0 {
         show_screen(&mut open, next, cursor.as_deref_mut().map(|c| &mut **c));
     }
@@ -249,6 +253,7 @@ impl Plugin for PlayPlugin {
             crate::audio::MusicPlugin,
             crate::menu::MenuPlugin,
             crate::kindle::KindlePlugin,
+            crate::map::MapPlugin,
         ));
     }
 }
@@ -320,12 +325,23 @@ mod tests {
     #[test]
     fn escape_closes_a_screen_before_it_opens_the_menu() {
         use Screen::{Inventory, Menu};
-        assert_eq!(next_screen(Some(Inventory), false, true), None);
-        assert_eq!(next_screen(None, false, true), Some(Menu));
-        assert_eq!(next_screen(Some(Menu), false, true), None);
-        assert_eq!(next_screen(None, true, false), Some(Inventory));
-        assert_eq!(next_screen(Some(Inventory), true, false), None);
-        assert_eq!(next_screen(Some(Menu), true, false), Some(Menu), "no inventory over the menu");
-        assert_eq!(next_screen(None, false, false), None);
+        assert_eq!(next_screen(Some(Inventory), false, false, true), None);
+        assert_eq!(next_screen(None, false, false, true), Some(Menu));
+        assert_eq!(next_screen(Some(Menu), false, false, true), None);
+        assert_eq!(next_screen(None, true, false, false), Some(Inventory));
+        assert_eq!(next_screen(Some(Inventory), true, false, false), None);
+        assert_eq!(next_screen(Some(Menu), true, false, false), Some(Menu), "no inventory over the menu");
+        assert_eq!(next_screen(None, false, false, false), None);
+    }
+
+    #[test]
+    fn m_opens_and_closes_the_map_and_esc_closes_it() {
+        use Screen::{Inventory, Map, Menu};
+        assert_eq!(next_screen(None, false, true, false), Some(Map));
+        assert_eq!(next_screen(Some(Map), false, true, false), None);
+        assert_eq!(next_screen(Some(Map), false, false, true), None, "Esc closes the map, not opening the menu");
+        assert_eq!(next_screen(Some(Inventory), false, true, false), Some(Map), "the map swaps for the inventory");
+        assert_eq!(next_screen(Some(Map), true, false, false), Some(Inventory));
+        assert_eq!(next_screen(Some(Menu), false, true, false), Some(Menu), "no map over the menu");
     }
 }
