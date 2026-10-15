@@ -58,6 +58,9 @@ pub struct CreatureAttack {
     /// Poison rolled from the stat block's venom (the poisonous snake's 2d4), before the DC 10
     /// Constitution save that halves it, which combat resolves; 0 for a creature with none.
     pub poison: u32,
+    /// The attacker's position on the floor (world `(x, z)`), to place the marker relative to the
+    /// delver's facing.
+    pub attacker_pos: Vec2,
 }
 
 /// What a creature is doing.
@@ -361,7 +364,7 @@ fn behave(
                 let block = species.stat_block();
                 let damage = block.bite.roll(&mut brain.rng);
                 let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
-                attacks.write(CreatureAttack { attacker: entity, species, damage, poison });
+                attacks.write(CreatureAttack { attacker: entity, species, damage, poison, attacker_pos: at });
             }
             if since >= done {
                 brain.attack = None;
