@@ -18,7 +18,7 @@ pub const LOOK_EVERY: f32 = 0.12;
 pub const EYE_RANGE: f32 = 30.0;
 /// The share of a light's range that counts as lit: its range runs out into the dim fringe.
 /// Our own.
-pub const LIT_SHARE: f32 = 0.75;
+pub const LIT_SHARE: f32 = 0.9;
 
 /// The cells seen of each level visited this run, by level seed.
 #[derive(Resource, Clone, Debug, Default)]
