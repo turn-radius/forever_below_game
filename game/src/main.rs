@@ -2,7 +2,8 @@
 //! turntable instead, and `--doll` the doll view (a dressed body turning on the turntable's
 //! plate: `--doll --folk dwarf --seed 7 --outfit cleric`), and `--creature` the creature view
 //! (a rat or snake on the plate: `--creature --species viper --seed 7 --motion moving`).
-//! `--swings` plays the level with keys for trying every melee weapon's swings
+//! `--forge` the Forge view (an item beside a panel of sliders for every parameter of its
+//! state: `--forge --family lantern --seed 7`). `--swings` plays the level with keys for trying every melee weapon's swings
 //! ([`forever_below::swing_practice`]).
 //!
 //! `cargo run -p forever_below -- --seed 1207` plays the level for that seed, skipping the
@@ -19,6 +20,7 @@ use forever_below::{
     creature_view::{CreatureChoice, CreatureViewPlugin},
     frame_time::FrameTimeProbe,
     doll_view::{DollChoice, DollViewPlugin},
+    forge_view::{Forge, ForgeViewPlugin},
     launch::{AppState, Launch, env_set},
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
@@ -32,6 +34,9 @@ use forever_below::{
 
 fn main() -> AppExit {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--forge") {
+        return run_forge(&args);
+    }
     if args.iter().any(|a| a == "--turntable" || a.starts_with("--family")) {
         return run_turntable();
     }
@@ -137,6 +142,27 @@ fn run_creature(args: &[String]) -> AppExit {
     }))
     .add_plugins((ArmoryRenderPlugin, CreatureViewPlugin))
     .insert_resource(choice);
+    if let Some(capture) = FrameCapturePlugin::from_env() {
+        app.add_plugins(capture);
+    }
+    app.run()
+}
+
+fn run_forge(args: &[String]) -> AppExit {
+    let forge = match Forge::from_args(args.iter().cloned()) {
+        Ok(forge) => forge,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
+        ..default()
+    }))
+    .add_plugins((ArmoryRenderPlugin, ForgeViewPlugin))
+    .insert_resource(forge);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }

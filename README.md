@@ -87,6 +87,20 @@ One rat or snake on the turntable's plate, posed and animated as in the level, w
 
 Tab and Shift+Tab change the species, Left and Right the seed, M the motion, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 
+### The Forge view
+
+```
+cargo run -p forever_below -- --forge
+cargo run -p forever_below -- --forge --family lantern --seed 7
+```
+
+One Armory item turning on the turntable's plate, with a panel on the right like the Forge sliders of `reference/spline-armory.html`. The panel has a picker for every ported family, the seed with a "Forge new" button that rolls a fresh one and a "Reset" that goes back to the seed's roll, the five wear presets, and then every parameter of the item's state grouped by section (shaft, head, flame, condition...). Sliders show their value and snap to their step, within the range the family allows; choices (a lantern's style, fuel or metal) are buttons that cycle; toggles are boxes. Every change rebuilds the mesh at once. Edits only change the state on show: the seed still rolls the same item. The panel is built from `armory::Item::fields` (`crates/armory/src/reflect.rs`), so a new family needs nothing here.
+
+- `--family <key>` picks the family; mace by default.
+- `--seed <n>` rolls the item; 1207 by default.
+
+Tab and Shift+Tab change the family, Left and Right step the seed, N forges a new seed, R resets, and Space pauses the turn. Dragging the stage orbits and scrolling over it zooms. On the panel, dragging a slider sets it, a click cycles a choice (a right click goes back), and scrolling moves the panel. `FB_SCREENSHOT` works here as on the turntable.
+
 ### Swing practice
 
 ```

@@ -27,6 +27,7 @@ pub mod item;
 pub mod kindle;
 pub mod material;
 pub mod palette;
+pub mod reflect;
 pub mod sections;
 pub mod slider;
 

@@ -18,7 +18,7 @@ macro_rules! ported {
     ($($variant:ident => $module:ident :: $generator:ident ( $state_ty:ident )),+ $(,)?) => {
         /// One item's full state, tagged by family. States are plain values of a few hundred
         /// bytes, rolled and passed around rarely, so variants are not boxed to even out sizes.
-        #[derive(Clone, Debug, PartialEq)]
+        #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
         #[allow(clippy::large_enum_variant)]
         pub enum Item {
             $($variant(crate::families::$module::$state_ty),)+
@@ -58,6 +58,14 @@ macro_rules! ported {
             pub fn family(&self) -> Family {
                 match self {
                     $(Item::$variant(_) => Family::$variant,)+
+                }
+            }
+
+            /// The slider ranges of this item's family, as the JSON of its `LIMITS` (one
+            /// object per section, one `{min, max, step}` per slider). Used by [`crate::reflect`].
+            pub(crate) fn limits_value(&self) -> serde_json::Value {
+                match self {
+                    $(Item::$variant(_) => serde_json::to_value(crate::families::$module::LIMITS).unwrap_or_default(),)+
                 }
             }
         }
@@ -112,6 +120,11 @@ impl Item {
 
     pub fn condition(&self) -> Condition {
         dispatch!(self, state => state.cond)
+    }
+
+    /// Replaces the item's whole condition (a preset from [`Condition::of`], say).
+    pub fn set_condition(&mut self, condition: Condition) {
+        dispatch!(self, state => state.cond = condition);
     }
 
     /// The material colours "Forge new" picked for this item.
