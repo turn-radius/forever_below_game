@@ -28,6 +28,7 @@
 
 use bevy::prelude::*;
 use fb_body::Hold;
+use fb_character::combat as rules;
 use fb_items::dice::Dice;
 use procgen_rng::Mulberry32;
 
@@ -93,7 +94,7 @@ pub fn first_level_hit_points(character: &Character) -> i32 {
         Class::Cleric => 8,
         Class::Mage => 6,
     };
-    (die + modifier(character.constitution())).max(1)
+    rules::first_level_hit_points(die, modifier(character.constitution())).value() as i32
 }
 
 /// How a held thing is swung.
@@ -173,19 +174,25 @@ impl Weapon {
 
     /// The range a blow's damage falls in with a Strength modifier of `strength`.
     pub fn damage_range(&self, strength: i32) -> (u32, u32) {
-        let (lo, hi) = match self.dice {
-            Some(d) => (d.count as i32, (d.count as i32) * (d.sides as i32)),
-            None => (1, 1),
-        };
-        (((lo + self.bonus + strength).max(1)) as u32, ((hi + self.bonus + strength).max(1)) as u32)
+        let range = rules::damage_range(self.dice_sides(), self.bonus, strength);
+        (range.min.value() as u32, range.max.value() as u32)
+    }
+
+    /// The dice as the rules take them: a count and the sides.
+    fn dice_sides(&self) -> Option<(u32, u32)> {
+        self.dice.map(|d| (d.count as u32, d.sides as u32))
     }
 
     /// One blow's damage: the dice, plus the bonus and the Strength modifier (SRD 5.1 p. 96,
     /// "Damage Rolls": roll the weapon's dice and add your ability modifier). The SRD lets a
     /// penalty bring a blow to 0; here every blow that lands does at least 1 (our own).
     pub fn roll(&self, strength: i32, rng: &mut Mulberry32) -> u32 {
-        let dice = self.dice.map_or(1, |d| (0..d.count).map(|_| rng.int(1, d.sides.max(1) as u32) as i32).sum());
-        (dice + self.bonus + strength).max(1) as u32
+        self.roll_explained(strength, rng).value() as u32
+    }
+
+    /// [`Weapon::roll`] with every die and bonus listed.
+    pub fn roll_explained(&self, strength: i32, rng: &mut Mulberry32) -> fb_character::explain::Explained {
+        rules::weapon_damage(self.dice_sides(), self.bonus, strength, rng)
     }
 }
 
@@ -230,16 +237,12 @@ pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, cone: f32, targets
 /// Snake"; rounding down is our own). A placeholder until the character simulation has
 /// poison of its own.
 pub fn venom_after_save(poison: u32, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    if poison == 0 {
-        return 0;
-    }
-    let save = rng.int(1, 20) as i32 + modifier(constitution);
-    if save >= 10 { poison / 2 } else { poison }
+    rules::venom_after_save(poison, modifier(constitution), rng).damage.value() as u32
 }
 
 /// The damage a bite does the delver: its own, and its venom after the save.
 pub fn bite_damage(attack: &CreatureAttack, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    attack.damage + venom_after_save(attack.poison, constitution, rng)
+    rules::bite_damage(attack.damage, attack.poison, modifier(constitution), rng).damage.value() as u32
 }
 
 #[cfg(test)]

@@ -127,6 +127,7 @@ impl Explained {
                 Op::Add => out.push_str(&format!(" + {} ({}{})", term.label, if term.amount < 0.0 { "" } else { "+" }, number(term.amount))),
                 Op::Multiply => out.push_str(&format!(" × {} ({})", term.label, number(term.amount))),
                 Op::BestOf => best.push(format!("{} {}", term.label, number(term.amount))),
+                Op::Clamp { min, max } if max.is_infinite() => out.push_str(&format!(" at least {}", number(min))),
                 Op::Clamp { min, max } => out.push_str(&format!(" held {} within {} to {}", term.label, number(min), number(max))),
             }
         }
