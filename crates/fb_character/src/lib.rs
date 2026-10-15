@@ -1,4 +1,5 @@
-//! Forever Below character attributes: five core stats and their modifiers for gameplay, and game time.
+//! Forever Below character attributes: five core stats and their modifiers for gameplay, game time,
+//! and simulation meters (hunger, thirst, sleepiness).
 //!
 //! This crate provides the character's five D&D 5e attributes (Strength, Dexterity, Constitution,
 //! Intelligence, Wisdom) and the ability modifier formula. Each attribute starts from a folk's
@@ -7,6 +8,9 @@
 //! `GameTime` measures elapsed game seconds. The game clock runs at a configurable ratio to real time
 //! (e.g., 12× real time means 1 game hour passes every 300 real seconds), and pauses while screens
 //! are open over the level.
+//!
+//! `Meter` tracks hunger, thirst, and sleepiness from 0 (best) to 1 (worst), advancing each turn by
+//! a base rate scaled by activity and gear modifiers. `Character` combines these with activity state.
 
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +75,222 @@ impl GameTime {
     }
 }
 
+/// Current activity affecting simulation rates: resting, walking, exerting, or sleeping.
+/// Hunger and thirst have base rates, activity multipliers (0.5 for resting, 1 for walking,
+/// 2 for exerting), and gear multipliers. Sleeping has special effects: hunger and thirst
+/// rates are halved, and sleepiness decreases by 1/8 per hour.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Activity {
+    Resting,
+    Walking,
+    Exerting,
+    Sleeping,
+}
+
+impl Activity {
+    /// Multiplier on meter rates for this activity.
+    pub fn multiplier(self) -> f32 {
+        match self {
+            Activity::Resting => 0.5,
+            Activity::Walking => 1.0,
+            Activity::Exerting => 2.0,
+            Activity::Sleeping => 1.0,
+        }
+    }
+}
+
+/// A meter from 0 (best) to 1 (worst), advancing by a base rate per game hour,
+/// scaled by activity and gear multipliers. Clamped at 0 and 1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Meter {
+    /// Current value from 0 to 1.
+    pub value: f64,
+    /// Base rate of change per game hour. Not serialized (rates come from code).
+    pub rate_per_hour: f64,
+    /// Gear multiplier on this meter's rate.
+    pub gear: f64,
+    /// The kind of meter, determining special rules (e.g., sleeping effects).
+    pub kind: MeterKind,
+}
+
+impl Default for Meter {
+    fn default() -> Self {
+        Meter {
+            value: 0.0,
+            rate_per_hour: 1.0 / 16.0,
+            gear: 1.0,
+            kind: MeterKind::Hunger,
+        }
+    }
+}
+
+fn default_gear() -> f64 {
+    1.0
+}
+
+impl Serialize for Meter {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Meter", 3)?;
+        state.serialize_field("value", &self.value)?;
+        state.serialize_field("kind", &self.kind)?;
+        state.serialize_field("gear", &self.gear)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Meter {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct MeterDe {
+            #[serde(default)]
+            value: f64,
+            #[serde(default)]
+            kind: MeterKind,
+            #[serde(default = "default_gear")]
+            gear: f64,
+        }
+        let m = MeterDe::deserialize(deserializer)?;
+        Ok(Meter {
+            value: m.value,
+            rate_per_hour: m.kind.base_rate(),
+            gear: m.gear,
+            kind: m.kind,
+        })
+    }
+}
+
+impl Meter {
+    /// Creates a meter at 0 with the given kind and base rate from the kind.
+    pub const fn new(kind: MeterKind) -> Self {
+        Meter {
+            value: 0.0,
+            rate_per_hour: 0.0,
+            gear: 1.0,
+            kind,
+        }
+    }
+
+    /// Returns the band (0..=4) for this meter's current value.
+    /// Bands progress at quarters: 0, 0.25, 0.5, 0.75, then max at 1.0.
+    pub fn band(&self) -> usize {
+        if self.value >= 1.0 {
+            4
+        } else {
+            ((self.value * 4.0) as usize).min(4)
+        }
+    }
+
+    /// Returns the HUD word for this meter at its current band.
+    pub fn word(&self) -> &'static str {
+        self.kind.word(self.band())
+    }
+
+    /// Advances the meter by `delta_hours` of game time, scaling by `activity` and this meter's `gear` multiplier.
+    /// Sleeping has special handling: hunger and thirst rates are halved, sleepiness decreases
+    /// by 1/8 per hour instead of increasing.
+    pub fn step(&mut self, delta_hours: f64, activity: Activity) {
+        let base_rate = self.rate_per_hour;
+        let activity_mult = activity.multiplier() as f64;
+        let gear_mult = self.gear;
+
+        let delta = match (activity, self.kind) {
+            (Activity::Sleeping, MeterKind::Hunger) => base_rate * 0.5 * delta_hours * gear_mult,
+            (Activity::Sleeping, MeterKind::Thirst) => base_rate * 0.5 * delta_hours * gear_mult,
+            (Activity::Sleeping, MeterKind::Sleepiness) => -0.125 * delta_hours,
+            (_, _) => base_rate * activity_mult * delta_hours * gear_mult,
+        };
+
+        self.value = (self.value + delta).clamp(0.0, 1.0);
+    }
+
+    /// Reduces the meter by the given amount (e.g., from eating or drinking). Clamped at 0.
+    pub fn reduce(&mut self, by: f64) {
+        self.value = (self.value - by).max(0.0);
+    }
+}
+
+/// The kind of meter, used to apply special sleeping effects and hold base rates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MeterKind {
+    #[default]
+    Hunger,
+    Thirst,
+    Sleepiness,
+}
+
+impl MeterKind {
+    /// The base rate of change per game hour for this meter.
+    pub const fn base_rate(self) -> f64 {
+        match self {
+            MeterKind::Hunger => 1.0 / 16.0,
+            MeterKind::Thirst => 1.0 / 10.0,
+            MeterKind::Sleepiness => 1.0 / 32.0,
+        }
+    }
+
+    /// The HUD word for this meter at the given band (0..=4).
+    pub const fn word(self, band: usize) -> &'static str {
+        match (self, band) {
+            (MeterKind::Hunger, 0) => "Fed",
+            (MeterKind::Hunger, 1) => "Peckish",
+            (MeterKind::Hunger, 2) => "Hungry",
+            (MeterKind::Hunger, 3) => "Famished",
+            (MeterKind::Hunger, _) => "Starving",
+            (MeterKind::Thirst, 0) => "Quenched",
+            (MeterKind::Thirst, 1) => "Thirsty",
+            (MeterKind::Thirst, 2) => "Parched",
+            (MeterKind::Thirst, 3) => "Dry",
+            (MeterKind::Thirst, _) => "Dehydrated",
+            (MeterKind::Sleepiness, 0) => "Rested",
+            (MeterKind::Sleepiness, 1) => "Tired",
+            (MeterKind::Sleepiness, 2) => "Weary",
+            (MeterKind::Sleepiness, 3) => "Drowsy",
+            (MeterKind::Sleepiness, _) => "Spent",
+        }
+    }
+}
+
+/// Simulation state of a character: hunger, thirst, and sleepiness meters.
+/// Activity is passed to `step()`, not stored, so it can change between updates.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Needs {
+    #[serde(default)]
+    pub hunger: Meter,
+    #[serde(default)]
+    pub thirst: Meter,
+    #[serde(default)]
+    pub sleepiness: Meter,
+}
+
+impl Default for Needs {
+    fn default() -> Self {
+        let mut hunger = Meter::new(MeterKind::Hunger);
+        hunger.rate_per_hour = MeterKind::Hunger.base_rate();
+        let mut thirst = Meter::new(MeterKind::Thirst);
+        thirst.rate_per_hour = MeterKind::Thirst.base_rate();
+        let mut sleepiness = Meter::new(MeterKind::Sleepiness);
+        sleepiness.rate_per_hour = MeterKind::Sleepiness.base_rate();
+
+        Needs { hunger, thirst, sleepiness }
+    }
+}
+
+impl Needs {
+    /// Advances all meters by `delta_hours` of game time, with the given activity.
+    pub fn step(&mut self, delta_hours: f64, activity: Activity) {
+        self.hunger.step(delta_hours, activity);
+        self.thirst.step(delta_hours, activity);
+        self.sleepiness.step(delta_hours, activity);
+    }
+}
+
 /// The ability modifier for a score: `floor((score - 10) / 2)` (D&D 5e SRD 5.1, p. 76).
 ///
 /// A score of 3 gives -4, a score of 10 or 11 gives 0, and a score of 18 gives +4.
@@ -128,5 +348,264 @@ mod tests {
         let json = serde_json::to_string(&time).unwrap();
         let parsed: GameTime = serde_json::from_str(&json).unwrap();
         assert_eq!(time, parsed);
+    }
+
+    #[test]
+    fn activity_multipliers_are_correct() {
+        assert_eq!(Activity::Resting.multiplier(), 0.5);
+        assert_eq!(Activity::Walking.multiplier(), 1.0);
+        assert_eq!(Activity::Exerting.multiplier(), 2.0);
+        assert_eq!(Activity::Sleeping.multiplier(), 1.0);
+    }
+
+    #[test]
+    fn band_formula_is_correct() {
+        let mut meter = Meter::new(MeterKind::Hunger);
+        meter.rate_per_hour = 1.0 / 16.0;
+
+        meter.value = 0.0;
+        assert_eq!(meter.band(), 0);
+        meter.value = 0.25;
+        assert_eq!(meter.band(), 1);
+        meter.value = 0.5;
+        assert_eq!(meter.band(), 2);
+        meter.value = 0.75;
+        assert_eq!(meter.band(), 3);
+        meter.value = 0.999;
+        assert_eq!(meter.band(), 3);
+        meter.value = 1.0;
+        assert_eq!(meter.band(), 4);
+    }
+
+    #[test]
+    fn hunger_words_match_bands() {
+        let kind = MeterKind::Hunger;
+        assert_eq!(kind.word(0), "Fed");
+        assert_eq!(kind.word(1), "Peckish");
+        assert_eq!(kind.word(2), "Hungry");
+        assert_eq!(kind.word(3), "Famished");
+        assert_eq!(kind.word(4), "Starving");
+    }
+
+    #[test]
+    fn thirst_words_match_bands() {
+        let kind = MeterKind::Thirst;
+        assert_eq!(kind.word(0), "Quenched");
+        assert_eq!(kind.word(1), "Thirsty");
+        assert_eq!(kind.word(2), "Parched");
+        assert_eq!(kind.word(3), "Dry");
+        assert_eq!(kind.word(4), "Dehydrated");
+    }
+
+    #[test]
+    fn sleepiness_words_match_bands() {
+        let kind = MeterKind::Sleepiness;
+        assert_eq!(kind.word(0), "Rested");
+        assert_eq!(kind.word(1), "Tired");
+        assert_eq!(kind.word(2), "Weary");
+        assert_eq!(kind.word(3), "Drowsy");
+        assert_eq!(kind.word(4), "Spent");
+    }
+
+    #[test]
+    fn from_zero_walking_hunger_reads_hungry_at_eight_hours() {
+        let mut meter = Meter::new(MeterKind::Hunger);
+        meter.rate_per_hour = 1.0 / 16.0;
+        meter.step(8.0, Activity::Walking);
+        assert!((meter.value - 0.5).abs() < 1e-9, "expected 0.5, got {}", meter.value);
+        assert_eq!(meter.word(), "Hungry");
+    }
+
+    #[test]
+    fn exerting_reaches_hungry_in_four_hours() {
+        let mut meter = Meter::new(MeterKind::Hunger);
+        meter.rate_per_hour = 1.0 / 16.0;
+        meter.step(4.0, Activity::Exerting);
+        assert!((meter.value - 0.5).abs() < 1e-9, "expected 0.5, got {}", meter.value);
+    }
+
+    #[test]
+    fn eight_hours_asleep_from_spent_gives_rested() {
+        let mut meter = Meter::new(MeterKind::Sleepiness);
+        meter.rate_per_hour = 1.0 / 32.0;
+        meter.value = 1.0;
+        meter.step(8.0, Activity::Sleeping);
+        assert!(meter.value < 1e-9, "expected ~0, got {}", meter.value);
+    }
+
+    #[test]
+    fn meter_clamps_at_zero_and_one() {
+        // Walking hunger for 16 hours: 16 * (1/16) = 1.0, clamped at 1.0
+        let mut meter = Meter::new(MeterKind::Hunger);
+        meter.rate_per_hour = 1.0 / 16.0;
+        meter.step(16.0, Activity::Walking);
+        assert_eq!(meter.value, 1.0);
+
+        // Sleeping sleepiness: -0.125/hour * 10 hours = -1.25, clamped at 0.0
+        let mut meter = Meter::new(MeterKind::Sleepiness);
+        meter.rate_per_hour = 1.0 / 32.0;
+        meter.value = 0.5;
+        meter.step(10.0, Activity::Sleeping);
+        assert_eq!(meter.value, 0.0);
+    }
+
+    #[test]
+    fn sleeping_halves_hunger_rate() {
+        let mut meter_walk = Meter::new(MeterKind::Hunger);
+        meter_walk.rate_per_hour = 1.0 / 16.0;
+        meter_walk.step(8.0, Activity::Walking);
+
+        let mut meter_sleep = Meter::new(MeterKind::Hunger);
+        meter_sleep.rate_per_hour = 1.0 / 16.0;
+        meter_sleep.step(8.0, Activity::Sleeping);
+
+        assert!((meter_walk.value - 0.5).abs() < 1e-9);
+        assert!((meter_sleep.value - 0.25).abs() < 1e-9, "sleeping halves rate, expected 0.25, got {}", meter_sleep.value);
+    }
+
+    #[test]
+    fn sleeping_halves_thirst_rate() {
+        let mut meter_walk = Meter::new(MeterKind::Thirst);
+        meter_walk.rate_per_hour = 1.0 / 10.0;
+        meter_walk.step(10.0, Activity::Walking);
+
+        let mut meter_sleep = Meter::new(MeterKind::Thirst);
+        meter_sleep.rate_per_hour = 1.0 / 10.0;
+        meter_sleep.step(10.0, Activity::Sleeping);
+
+        assert!((meter_walk.value - 1.0).abs() < 1e-9);
+        assert!((meter_sleep.value - 0.5).abs() < 1e-9, "sleeping halves rate, expected 0.5, got {}", meter_sleep.value);
+    }
+
+    #[test]
+    fn per_meter_gear_multiplier() {
+        let mut meter_hunger = Meter::new(MeterKind::Hunger);
+        meter_hunger.rate_per_hour = 1.0 / 16.0;
+        meter_hunger.gear = 2.0;
+        meter_hunger.step(8.0, Activity::Walking);
+
+        let mut meter_thirst = Meter::new(MeterKind::Thirst);
+        meter_thirst.rate_per_hour = 1.0 / 10.0;
+        meter_thirst.gear = 1.0;
+        meter_thirst.step(8.0, Activity::Walking);
+
+        assert!((meter_hunger.value - 1.0).abs() < 1e-9, "hunger with 2× gear: expected 1.0, got {}", meter_hunger.value);
+        assert!((meter_thirst.value - 0.8).abs() < 1e-9, "thirst with 1× gear: expected 0.8, got {}", meter_thirst.value);
+    }
+
+    #[test]
+    fn thirst_from_0_95_walking_over_2h() {
+        let mut meter = Meter::new(MeterKind::Thirst);
+        meter.rate_per_hour = 1.0 / 10.0;
+        meter.value = 0.95;
+        meter.step(2.0, Activity::Walking);
+        assert!((meter.value - 1.0).abs() < 1e-9, "expected 1.0, got {}", meter.value);
+    }
+
+    #[test]
+    fn sleepiness_from_0_1_sleeping() {
+        // Sleeping sleepiness: 0.1 - (0.125 * 2) = 0.1 - 0.25 = -0.15, clamped to 0.0
+        let mut meter = Meter::new(MeterKind::Sleepiness);
+        meter.rate_per_hour = 1.0 / 32.0;
+        meter.value = 0.1;
+        meter.step(2.0, Activity::Sleeping);
+        assert_eq!(meter.value, 0.0);
+    }
+
+    #[test]
+    fn exerting_walking_and_sleeping_over_2h_from_nonzero() {
+        // Exerting hunger: 0.2 + (2 * 2 * 1/16) = 0.2 + 0.25 = 0.45
+        let mut meter_exert = Meter::new(MeterKind::Hunger);
+        meter_exert.rate_per_hour = 1.0 / 16.0;
+        meter_exert.value = 0.2;
+        meter_exert.step(2.0, Activity::Exerting);
+        assert!((meter_exert.value - 0.45).abs() < 1e-4);
+
+        // Walking hunger: 0.2 + (1 * 2 * 1/16) = 0.2 + 0.125 = 0.325
+        let mut meter_walk = Meter::new(MeterKind::Hunger);
+        meter_walk.rate_per_hour = 1.0 / 16.0;
+        meter_walk.value = 0.2;
+        meter_walk.step(2.0, Activity::Walking);
+        assert!((meter_walk.value - 0.325).abs() < 1e-4);
+
+        // Sleeping hunger (halved): 0.5 + (0.5 * 2 * 1/16) = 0.5 + 0.0625 = 0.5625
+        let mut meter_sleep = Meter::new(MeterKind::Hunger);
+        meter_sleep.rate_per_hour = 1.0 / 16.0;
+        meter_sleep.value = 0.5;
+        meter_sleep.step(2.0, Activity::Sleeping);
+        assert!((meter_sleep.value - 0.5625).abs() < 1e-4);
+    }
+
+    #[test]
+    fn one_hour_against_3600_one_second_steps() {
+        let mut meter1 = Meter::new(MeterKind::Hunger);
+        meter1.rate_per_hour = 1.0 / 16.0;
+        meter1.step(1.0, Activity::Walking);
+
+        let mut meter2 = Meter::new(MeterKind::Hunger);
+        meter2.rate_per_hour = 1.0 / 16.0;
+        for _ in 0..3600 {
+            meter2.step(1.0 / 3600.0, Activity::Walking);
+        }
+
+        assert!((meter1.value - meter2.value).abs() < 1e-4, "1h={}, 3600×1s={}", meter1.value, meter2.value);
+    }
+
+    #[test]
+    fn meter_reduce() {
+        let mut meter = Meter::new(MeterKind::Hunger);
+        meter.value = 0.8;
+        meter.reduce(0.3);
+        assert!((meter.value - 0.5).abs() < 1e-9);
+
+        meter.reduce(0.6);
+        assert_eq!(meter.value, 0.0);
+    }
+
+    #[test]
+    fn needs_default_has_sensible_rates() {
+        let needs = Needs::default();
+        assert_eq!(needs.hunger.rate_per_hour, 1.0 / 16.0);
+        assert_eq!(needs.thirst.rate_per_hour, 1.0 / 10.0);
+        assert_eq!(needs.sleepiness.rate_per_hour, 1.0 / 32.0);
+    }
+
+    #[test]
+    fn needs_step_with_activity() {
+        let mut needs = Needs::default();
+        needs.step(8.0, Activity::Walking);
+        assert!((needs.hunger.value - 0.5).abs() < 1e-9);
+        assert_eq!(needs.hunger.word(), "Hungry");
+    }
+
+    #[test]
+    fn one_2_hour_step_matches_7200_one_second_steps() {
+        let mut needs1 = Needs::default();
+        needs1.step(2.0, Activity::Walking);
+
+        let mut needs2 = Needs::default();
+        for _ in 0..7200 {
+            needs2.step(1.0 / 3600.0, Activity::Walking);
+        }
+
+        assert!((needs1.hunger.value - needs2.hunger.value).abs() < 1e-4, "hunger mismatch: 2h={}, 7200×1s={}", needs1.hunger.value, needs2.hunger.value);
+        assert!((needs1.thirst.value - needs2.thirst.value).abs() < 1e-4, "thirst mismatch: 2h={}, 7200×1s={}", needs1.thirst.value, needs2.thirst.value);
+        assert!((needs1.sleepiness.value - needs2.sleepiness.value).abs() < 1e-4, "sleepiness mismatch: 2h={}, 7200×1s={}", needs1.sleepiness.value, needs2.sleepiness.value);
+    }
+
+    #[test]
+    fn needs_serde_round_trip() {
+        let mut needs = Needs::default();
+        needs.hunger.value = 0.3;
+        needs.hunger.gear = 1.5;
+        needs.thirst.value = 0.7;
+        needs.sleepiness.value = 0.1;
+
+        let json = serde_json::to_string(&needs).unwrap();
+        let parsed: Needs = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.hunger.value, 0.3);
+        assert_eq!(parsed.thirst.value, 0.7);
+        assert_eq!(parsed.sleepiness.value, 0.1);
+        assert_eq!(parsed.hunger.gear, 1.5, "gear should be preserved in serialization");
     }
 }
