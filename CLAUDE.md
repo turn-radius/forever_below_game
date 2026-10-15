@@ -27,7 +27,7 @@ docs/                design, rendering, items, body
 - **One item generator.** The `armory` crate makes the shape of every item. `fb_items` adds rarity, affixes, stats and history on top. Game code never builds its own one-off item shapes.
 - **Units: 1 world unit = 10 cm**, as in the prototypes. A human is about 17 units tall.
 - **Bevy 0.20.** Its APIs change every release. Check the 0.20 docs and migration guides (docs.rs/bevy/0.20, bevy.org) and do not rely on memory of older versions. Custom shaders are WESL (`.wesl`), since the old WGSL preprocessor dialect was removed in 0.20.
-- Tests: `cargo test --workspace`. Run the game: `cargo run -p forever_below`.
+- Tests: `cargo test --workspace` or `cargo nextest run --workspace` for faster parallel execution. Twelve slow fitting sweeps are `#[ignore]`, each with a default-run `_smoke` twin; run the sweeps (`cargo test --workspace -- --ignored`) before merging fitting changes. Run the game: `cargo run -p forever_below`.
 
 ## Game decisions already made
 

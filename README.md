@@ -2,7 +2,7 @@
 
 A first-person delve into an endless Stygian abyss. Rust and Bevy 0.20.
 
-Start with `HANDOFF.md`. Claude Code reads `CLAUDE.md` on its own. `cargo test --workspace` runs every test.
+Start with `HANDOFF.md`. Claude Code reads `CLAUDE.md` on its own. Run tests with `cargo test --workspace` or `cargo nextest run --workspace` for faster parallel execution.
 
 ## Running the game
 
@@ -217,6 +217,17 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
 
 The shipped values are the defaults in `game/src/tuning.rs`; a test keeps the two, and this list, in step.
+
+### Slow tests
+
+Twelve fitting and rendering tests sweep every folk, many seeds and many kits, which takes too long for regular runs. Each keeps its full sweep behind `#[ignore = "slow sweep: ..."]` and has a `_smoke` twin that runs by default over fewer inputs with the same check.
+
+Run the sweeps before merging changes to fitting code in `fb_body`, `fb_items` or the game's folk figures:
+
+```
+cargo test --workspace -- --ignored
+cargo nextest run --workspace --run-ignored only
+```
 
 ### Generator tools
 
