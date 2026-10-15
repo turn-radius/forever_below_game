@@ -42,3 +42,5 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.procgen_rng]
 opt-level = 3
+[profile.dev.package.fb_character]
+opt-level = 3
