@@ -97,6 +97,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<ScreenOpen>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
+            .init_resource::<card::ShownCard>()
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
@@ -126,6 +127,7 @@ impl Plugin for InventoryPlugin {
                         show_toast,
                         card::spawn_card,
                         card::show_card,
+                        card::show_compare,
                     )
                         .chain()
                         .after(switch_screens),
@@ -149,6 +151,7 @@ pub fn leave_the_delve(mut commands: Commands, mut stage: ResMut<DollStage>, mut
     commands.insert_resource(FloorChanges::default());
     commands.insert_resource(OpenContainer::default());
     commands.insert_resource(Hovered::default());
+    commands.insert_resource(card::ShownCard::default());
     commands.insert_resource(Toast::default());
 }
 
@@ -1220,6 +1223,7 @@ mod tests {
             .init_resource::<ScreenOpen>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
+            .init_resource::<card::ShownCard>()
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()

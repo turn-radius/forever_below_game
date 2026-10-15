@@ -26,6 +26,8 @@ pub enum Action {
     Light,
     DragItem,
     TurnItem,
+    /// Held over an item that can be worn, shows what is worn in its place beside its card.
+    Compare,
     Inventory,
     /// Opens and closes the map of the level.
     Map,
@@ -155,6 +157,7 @@ impl Default for Keymap {
                 bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
+                bind(Action::Compare, "Compare with what you wear (hold over an item)", Group::Items, &[Key(KeyCode::ControlLeft), Key(KeyCode::ControlRight)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),
                 bind(Action::Map, "Map", Group::Screens, &[Key(KeyCode::KeyM)]),
                 bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]),
