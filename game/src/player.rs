@@ -60,11 +60,11 @@ pub struct Slowed(pub f32);
 /// rebuilt from them without drift.
 #[derive(Component, Debug, Default)]
 #[require(Gait)]
-struct Locomotion {
-    yaw: f32,
-    pitch: f32,
+pub(crate) struct Locomotion {
+    pub(crate) yaw: f32,
+    pub(crate) pitch: f32,
     /// Floor velocity, world units per second, as `(x, z)`.
-    velocity: Vec2,
+    pub(crate) velocity: Vec2,
 }
 
 /// The player's step cycle, for whatever moves with their steps: the head bob here, what is held
@@ -162,7 +162,7 @@ pub fn look_turn(delta: Vec2, settings: &GameSettings) -> Vec2 {
     Vec2::new(-delta.x * speed, -delta.y * speed * up)
 }
 
-fn look(
+pub(crate) fn look(
     motion: Res<AccumulatedMouseMotion>,
     settings: Res<GameSettings>,
     cursor: Single<&CursorOptions, With<PrimaryWindow>>,
@@ -179,7 +179,7 @@ fn look(
     camera.rotation = Quat::from_rotation_x(locomotion.pitch);
 }
 
-fn walk(
+pub(crate) fn walk(
     time: Res<Time>,
     tuning: Res<Tuning>,
     input: ActionInput,
