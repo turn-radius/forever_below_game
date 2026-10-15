@@ -50,7 +50,7 @@ pub struct CurrentLevel(pub Level);
 
 /// The player's body. Its `Transform` is at the feet, on the floor; the camera is a child.
 #[derive(Component, Debug, Default)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::character::Load, crate::character::DelverNeeds)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds)]
 pub struct Player;
 
 /// The first-person camera, a child of [`Player`].
@@ -254,6 +254,7 @@ impl Plugin for PlayPlugin {
             crate::menu::MenuPlugin,
             crate::kindle::KindlePlugin,
             crate::eat::EatPlugin,
+            crate::simulate::SimulatePlugin,
             crate::map::MapPlugin,
         ));
     }

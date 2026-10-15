@@ -153,7 +153,7 @@ impl FolkFigures {
 
 /// A person standing in the level: the root of their figure, on the floor at their spot.
 #[derive(Component, Clone, Debug)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::simulate::Simulated)]
 pub struct Denizen {
     pub person: Person,
     /// The circle on the floor they stand in ([`footprint`]).

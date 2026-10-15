@@ -31,6 +31,7 @@ pub mod player;
 pub mod props;
 pub mod render;
 pub mod settings;
+pub mod simulate;
 pub mod soak;
 pub mod swing_practice;
 pub mod title;
