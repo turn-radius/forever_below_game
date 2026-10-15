@@ -22,6 +22,8 @@ struct Orb {
     slosh: f32,
     // From 0 to 1, how far the orb is darkened (a winded delver's stamina).
     dim: f32,
+    // From 0 to 1, how hot the frame and liquid are: a blow's pulse flashes them toward red-white.
+    pulse: f32,
 }
 
 @group(0) @binding(1) var<uniform> globals: Globals;
@@ -103,6 +105,11 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     inside += vec3<f32>(0.5, 0.52, 0.55) * (0.22 * glint + 0.55 * point);
 
     inside *= 1.0 - orb.dim * 0.55;
+
+    // A blow's pulse: the liquid and the frame flash toward a hot red and white.
+    let hot = vec3<f32>(1.0, 0.62, 0.52);
+    inside = mix(inside, hot, orb.pulse * 0.6);
+    metal = mix(metal, hot * 1.1, orb.pulse * 0.75);
 
     let in_globe = 1.0 - edge(r, GLOBE + aa, 2.0 * aa);
     let rgb = mix(metal, inside, in_globe);

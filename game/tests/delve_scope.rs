@@ -195,7 +195,8 @@ fn the_delve_draws_the_orbs_eye_and_bar_and_the_inventory_hides_them() {
     let world = app.world_mut();
     let player = world.query_filtered::<Entity, With<Player>>().single(world).expect("one delver");
     assert!(world.get::<DelverStamina>(player).is_some() && world.get::<DelverMana>(player).is_some(), "every delver has the pools");
-    let hud: Vec<Entity> = world.query_filtered::<&ChildOf, With<Orb>>().iter(world).map(|c| c.parent()).collect();
+    let clusters: Vec<Entity> = world.query_filtered::<&ChildOf, With<Orb>>().iter(world).map(|c| c.parent()).collect();
+    let hud: Vec<Entity> = clusters.iter().map(|&cluster| world.get::<ChildOf>(cluster).expect("the cluster is in the HUD").parent()).collect();
     assert_eq!(hud.len(), 3, "a life, stamina and mana orb");
     assert_eq!(world.query_filtered::<(), With<forever_below::combat::eye::Eye>>().iter(world).count(), 1, "the visibility eye");
     assert_eq!(world.query_filtered::<(), (With<forever_below::quickslots::QuickSlot>, Without<forever_below::quickslots::QuickslotDrop>)>().iter(world).count(), 10, "the quickslot bar");

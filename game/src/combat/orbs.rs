@@ -8,10 +8,17 @@
 //! given eases toward the real value, written only while it is moving. A winded delver's stamina
 //! orb darkens.
 //!
-//! The layout follows the sketch: the large life orb at the bottom left, the small stamina orb
-//! above and to the right of it, the visibility eye between the small orbs, the mana orb below
-//! and to the right of the eye, and the quickslots running right. Everything is sized in `vmin`
-//! (a percent of the view's shorter side) so it scales with the window ([`place`]).
+//! The layout follows the sketch, as one cluster anchored at the bottom left ([`OrbCluster`]):
+//! the large life orb, the small stamina orb on its rim up and to the right, the visibility eye
+//! on its rim straight right, the mana orb on its rim down and to the right, and the quickslots
+//! running right from the eye. Everything is positioned from one pure function
+//! ([`orb_cluster_layout`]) in `vmin` (a percent of the view's shorter side), so the cluster
+//! scales with the window.
+//!
+//! The life orb pulses when the delver is struck: its frame and liquid flash toward a hot red
+//! and white and it swells for a moment ([`Pulse`]), harder for a bigger share of their hit
+//! points taken, as the flash over the view is ([`super::vitals::flash_strength`]) and as well as
+//! it.
 
 use bevy::{
     prelude::*,
@@ -20,7 +27,7 @@ use bevy::{
 };
 
 use super::Health;
-use super::vitals::VitalsRoot;
+use super::vitals::{FLASH_CAP, VitalsRoot, flash_strength};
 use crate::character::{DelverMana, DelverStamina};
 use crate::play::{DelveSystems, Player};
 use crate::ui::FRAME_GOLD;
@@ -39,7 +46,7 @@ impl Plugin for OrbPlugin {
         } else if app.world().contains_resource::<AssetServer>() {
             app.init_asset::<OrbMaterial>();
         }
-        app.add_systems(Update, (spawn_orbs, read_vitals, settle_orbs).chain().in_set(DelveSystems));
+        app.add_systems(Update, (spawn_cluster, spawn_orbs, read_vitals, settle_orbs).chain().in_set(DelveSystems));
     }
 }
 
@@ -73,40 +80,116 @@ impl OrbKind {
     }
 }
 
-/// Where an orb sits, in `vmin` from the view's bottom left corner.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Place {
-    /// The left edge.
-    pub left: f32,
-    /// The bottom edge, up from the bottom of the view.
-    pub bottom: f32,
-    /// The side of its square.
-    pub size: f32,
-}
-
-impl Place {
-    pub fn right(&self) -> f32 {
-        self.left + self.size
-    }
-
-    pub fn top(&self) -> f32 {
-        self.bottom + self.size
-    }
-}
-
-/// The space between orbs' neighbours and the view's edge, in `vmin`.
+/// The life orb's diameter in `vmin`, which sizes the whole cluster.
+pub const LIFE_DIAMETER: f32 = 14.0;
+/// The space between the cluster and the view's bottom left corner, in `vmin`.
 pub const MARGIN: f32 = 2.0;
+/// The stamina orb, the eye and the mana orb are this share of the life orb's diameter across.
+pub const SMALL_SHARE: f32 = 0.38;
+/// How tall the eye's box is, as a share of its width.
+pub const EYE_ASPECT: f32 = 0.65;
+/// How tall a quickslot is, as a share of the life orb's diameter.
+pub const SLOT_SHARE: f32 = 0.32;
+/// Where the scroll's rule meets its curl, as a share of its height down from the top
+/// (`scroll.wesl`): the rule runs through the middle of the slots.
+pub const SCROLL_RULE: f32 = 0.676;
 
-/// Where an orb sits: life large at the bottom left, stamina small above and to the right of
-/// it, mana small below and to the right of the eye that sits between them
-/// ([`super::eye::place`]), lower than stamina.
-pub fn place(kind: OrbKind) -> Place {
-    match kind {
-        OrbKind::Life => Place { left: MARGIN, bottom: MARGIN, size: 17.0 },
-        OrbKind::Stamina => Place { left: MARGIN + 17.5, bottom: MARGIN + 9.5, size: 7.5 },
-        OrbKind::Mana => Place { left: MARGIN + 33.0, bottom: MARGIN, size: 7.5 },
+/// An orb: its centre and radius, in `vmin`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Disc {
+    pub centre: Vec2,
+    pub radius: f32,
+}
+
+impl Disc {
+    /// The square the disc fits.
+    pub fn square(&self) -> Rect {
+        Rect::from_center_half_size(self.centre, Vec2::splat(self.radius))
+    }
+
+    /// How far its edge is from `point`: negative inside it.
+    pub fn gap_to(&self, point: Vec2) -> f32 {
+        self.centre.distance(point) - self.radius
     }
 }
+
+/// Where everything in the cluster of orbs, eye and quickslots goes, in `vmin` from the
+/// cluster's top left corner, down and right positive ([`orb_cluster_layout`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClusterLayout {
+    /// The cluster's size: it bounds everything in it.
+    pub size: Vec2,
+    pub life: Disc,
+    pub stamina: Disc,
+    pub mana: Disc,
+    pub eye: Rect,
+    /// The row of quickslots.
+    pub bar: Rect,
+    /// A quickslot's side, and the gap between them.
+    pub slot: f32,
+    pub gap: f32,
+    /// The flourish at the bar's end.
+    pub scroll: Rect,
+}
+
+/// The cluster for a life orb `d` across, as the sketch has it: the life orb large at the
+/// bottom left; the stamina orb with its centre on the life orb's rim at 45 degrees up and to the
+/// right; the visibility eye with its centre on the rim straight right; the mana orb with its
+/// centre on the rim at 45 degrees down and to the right, each about [`SMALL_SHARE`] of `d`
+/// across, so they overlap the life orb's frame; and the quickslot bar starting just right of the
+/// eye, level with it, [`SLOT_SHARE`] of `d` tall, ending in the scroll. Everything scales with
+/// `d`, so it stays a cluster at any window size.
+pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
+    let r = d * 0.5;
+    let small = d * SMALL_SHARE;
+    // A point on the life orb's rim at `degrees` above straight right.
+    let rim = |degrees: f32| {
+        let angle = degrees.to_radians();
+        Vec2::new(r + r * angle.cos(), r - r * angle.sin())
+    };
+    let life = Disc { centre: Vec2::splat(r), radius: r };
+    let stamina = Disc { centre: rim(45.0), radius: small * 0.5 };
+    let mana = Disc { centre: rim(-45.0), radius: small * 0.5 };
+    let eye_centre = rim(0.0);
+    let eye = Rect::from_center_size(eye_centre, Vec2::new(small, small * EYE_ASPECT));
+    let slot = d * SLOT_SHARE;
+    let gap = slot * 0.12;
+    let bar_left = eye.max.x + d * 0.04;
+    let slots = crate::quickslots::SLOTS as f32;
+    let bar = Rect::new(bar_left, eye_centre.y - slot * 0.5, bar_left + slots * slot + (slots - 1.0) * gap, eye_centre.y + slot * 0.5);
+    let scroll_size = Vec2::new(slot * 2.75, slot * 2.1);
+    let scroll_left = bar.max.x + slot * 0.1;
+    let scroll_top = eye_centre.y - SCROLL_RULE * scroll_size.y;
+    let scroll = Rect::new(scroll_left, scroll_top, scroll_left + scroll_size.x, scroll_top + scroll_size.y);
+    // The small orbs poke a little out of the life orb's box, above and below: the cluster is
+    // the box round all of it.
+    let top = stamina.square().min.y.min(eye.min.y).min(scroll.min.y).min(0.0);
+    let bottom = mana.square().max.y.max(scroll.max.y).max(d);
+    let by = Vec2::new(0.0, -top);
+    let shift = |rect: Rect| Rect { min: rect.min + by, max: rect.max + by };
+    let disc = |disc: Disc| Disc { centre: disc.centre + by, ..disc };
+    ClusterLayout {
+        size: Vec2::new(scroll.max.x, bottom - top),
+        life: disc(life),
+        stamina: disc(stamina),
+        mana: disc(mana),
+        eye: shift(eye),
+        bar: shift(bar),
+        slot,
+        gap,
+        scroll: shift(scroll),
+    }
+}
+
+/// The cluster as the game draws it.
+pub fn cluster_layout() -> ClusterLayout {
+    orb_cluster_layout(LIFE_DIAMETER)
+}
+
+/// The container the orbs, the eye and the quickslot bar are positioned in: anchored at the
+/// bottom left of the view and sized by [`cluster_layout`].
+#[derive(Component, Debug)]
+pub struct OrbCluster;
 
 /// An orb on the HUD.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -118,11 +201,49 @@ pub struct Orb {
     pub dim: bool,
     /// Whether the next settle jumps to the target instead of easing (the first reading).
     snap: bool,
+    /// The pulse of a blow, on the life orb.
+    pub pulse: Pulse,
+    /// The hit points last read, to see them fall.
+    last_hp: Option<i32>,
 }
 
 impl Orb {
     pub fn new(kind: OrbKind) -> Orb {
-        Orb { kind, target: None, dim: false, snap: false }
+        Orb { kind, target: None, dim: false, snap: false, pulse: Pulse::default(), last_hp: None }
+    }
+}
+
+/// How long the life orb's pulse lasts, seconds. Our own.
+pub const PULSE_TIME: f32 = 0.25;
+/// How much bigger the life orb swells at the hardest pulse: 1.08 times its size. Our own.
+pub const PULSE_SWELL: f32 = 0.08;
+
+/// A blow's pulse on the life orb: how strong it began (a [`flash_strength`]) and how many
+/// seconds it has left.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Pulse {
+    pub strength: f32,
+    pub left: f32,
+}
+
+impl Pulse {
+    /// How hot the orb is now, 0 to 1: the blow's strength as a share of the hardest flash,
+    /// easing out to nothing over [`PULSE_TIME`].
+    pub fn heat(&self) -> f32 {
+        let left = (self.left / PULSE_TIME).clamp(0.0, 1.0);
+        (self.strength / FLASH_CAP).clamp(0.0, 1.0) * left * left
+    }
+
+    /// How much the orb is swollen now: 1 at rest, [`PULSE_SWELL`] more at the hardest.
+    pub fn scale(&self) -> f32 {
+        1.0 + PULSE_SWELL * self.heat()
+    }
+
+    /// A blow of `strength` pulses afresh unless a harder pulse is still showing.
+    fn strike(&mut self, strength: f32) {
+        if (strength / FLASH_CAP).clamp(0.0, 1.0) >= self.heat() {
+            *self = Pulse { strength, left: PULSE_TIME };
+        }
     }
 }
 
@@ -143,6 +264,8 @@ pub struct OrbStyle {
     pub phase: f32,
     pub slosh: f32,
     pub dim: f32,
+    /// How hot the frame and liquid are, from 0 to 1, in a pulse.
+    pub pulse: f32,
 }
 
 impl OrbStyle {
@@ -158,6 +281,7 @@ impl OrbStyle {
             phase: kind.phase(),
             slosh: 0.035,
             dim: 0.0,
+            pulse: 0.0,
         }
     }
 }
@@ -175,18 +299,40 @@ const EASE_RATE: f32 = 7.0;
 /// Closer than this the shown fill is the real one.
 const SETTLED: f32 = 0.002;
 
-/// Gives each new vitals HUD its three orbs.
-fn spawn_orbs(mut commands: Commands, roots: Query<Entity, Added<VitalsRoot>>, materials: Option<ResMut<Assets<OrbMaterial>>>) {
-    let Some(mut materials) = materials else { return };
+/// Gives each new vitals HUD the container of the cluster ([`OrbCluster`]).
+fn spawn_cluster(mut commands: Commands, roots: Query<Entity, Added<VitalsRoot>>) {
     for root in &roots {
-        commands.entity(root).with_children(|hud| {
-            for kind in OrbKind::ALL {
-                let at = place(kind);
-                hud.spawn((
+        let size = cluster_layout().size;
+        commands.entity(root).with_child((
+            Name::new("Orb cluster"),
+            OrbCluster,
+            Node { position_type: PositionType::Absolute, left: vmin(MARGIN), bottom: vmin(MARGIN), width: vmin(size.x), height: vmin(size.y), ..default() },
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Gives each new cluster its three orbs, positioned from the layout.
+fn spawn_orbs(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>, materials: Option<ResMut<Assets<OrbMaterial>>>) {
+    let Some(mut materials) = materials else { return };
+    let layout = cluster_layout();
+    for cluster in &clusters {
+        commands.entity(cluster).with_children(|cluster| {
+            for (kind, disc) in [(OrbKind::Life, layout.life), (OrbKind::Stamina, layout.stamina), (OrbKind::Mana, layout.mana)] {
+                let square = disc.square();
+                cluster.spawn((
                     Name::new(format!("{kind:?} orb")),
                     Orb::new(kind),
                     MaterialNode(materials.add(OrbMaterial { style: OrbStyle::new(kind) })),
-                    Node { position_type: PositionType::Absolute, left: vmin(at.left), bottom: vmin(at.bottom), width: vmin(at.size), height: vmin(at.size), ..default() },
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: vmin(square.min.x),
+                        top: vmin(square.min.y),
+                        width: vmin(disc.radius * 2.0),
+                        height: vmin(disc.radius * 2.0),
+                        ..default()
+                    },
+                    UiTransform::IDENTITY,
                     Pickable::IGNORE,
                 ));
             }
@@ -206,6 +352,19 @@ fn read_vitals(players: Query<(Option<&Health>, Option<&DelverStamina>, Option<&
             OrbKind::Mana => (mana.map_or(1.0, |m| m.0.fraction() as f32), false),
         };
         let fill = fill.clamp(0.0, 1.0);
+        // Any fall in hit points pulses the life orb, harder for a bigger share of the most.
+        if orb.kind == OrbKind::Life
+            && let Some(health) = health
+        {
+            if let Some(last) = orb.last_hp
+                && health.hp < last
+            {
+                orb.pulse.strike(flash_strength(last - health.hp, health.max));
+            }
+            if orb.last_hp != Some(health.hp) {
+                orb.last_hp = Some(health.hp);
+            }
+        }
         if orb.target != Some(fill) || orb.dim != dim {
             if orb.target.is_none() {
                 orb.snap = true;
@@ -224,21 +383,31 @@ pub fn ease(shown: f32, target: f32, dt: f32) -> f32 {
     target + (shown - target) * (-EASE_RATE * dt).exp()
 }
 
-/// Eases each orb's drawn fill toward its target, and sets its darkening. The material is only
-/// written when it must change, so a still orb costs nothing.
-fn settle_orbs(time: Res<Time>, mut orbs: Query<(&mut Orb, &MaterialNode<OrbMaterial>)>, materials: Option<ResMut<Assets<OrbMaterial>>>) {
+/// Eases each orb's drawn fill toward its target, and sets its darkening and its pulse (the
+/// heat in its frame and liquid, and how far it swells). The material and the orb's scale are
+/// only written when they must change, so a still orb costs nothing.
+fn settle_orbs(time: Res<Time>, mut orbs: Query<(&mut Orb, &MaterialNode<OrbMaterial>, &mut UiTransform)>, materials: Option<ResMut<Assets<OrbMaterial>>>) {
     let Some(mut materials) = materials else { return };
     let dt = time.delta_secs();
-    for (mut orb, handle) in &mut orbs {
+    for (mut orb, handle, mut transform) in &mut orbs {
+        if orb.pulse.left > 0.0 {
+            orb.pulse.left = (orb.pulse.left - dt).max(0.0);
+        }
         let Some(target) = orb.target else { continue };
         let Some(material) = materials.get(&handle.0) else { continue };
         let shown = if orb.snap { target } else { ease(material.style.fill, target, dt) };
         let dim = if orb.dim { DIMMED } else { 0.0 };
-        if material.style.fill != shown || material.style.dim != dim {
+        let heat = orb.pulse.heat();
+        if material.style.fill != shown || material.style.dim != dim || material.style.pulse != heat {
             if let Some(mut material) = materials.get_mut(&handle.0) {
                 material.style.fill = shown;
                 material.style.dim = dim;
+                material.style.pulse = heat;
             }
+        }
+        let scale = Vec2::splat(orb.pulse.scale());
+        if transform.scale != scale {
+            transform.scale = scale;
         }
         if orb.snap {
             orb.snap = false;
@@ -372,39 +541,161 @@ mod tests {
     }
 
     #[test]
-    fn the_orbs_are_part_of_the_hud_and_hide_under_screens() {
+    fn the_orbs_are_part_of_the_hud_cluster_and_hide_under_screens() {
         use crate::carry::{Hud, hide_hud_under_screens};
         let (mut app, _) = delve();
         app.add_systems(Update, hide_hud_under_screens);
         let mut query = app.world_mut().query_filtered::<&ChildOf, With<Orb>>();
-        let roots: Vec<Entity> = query.iter(app.world()).map(|c| c.parent()).collect();
-        assert_eq!(roots.len(), 3);
-        for root in roots {
-            assert!(app.world().get::<Hud>(root).is_some());
-            assert!(app.world().get::<DespawnOnExit<AppState>>(root).is_some(), "scoped to the delve");
-            app.world_mut().resource_mut::<ScreenOpen>().0 = Some(crate::play::Screen::Inventory);
-            app.update();
-            assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Hidden);
-            app.world_mut().resource_mut::<ScreenOpen>().0 = None;
-            app.update();
-            assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Inherited);
+        let clusters: Vec<Entity> = query.iter(app.world()).map(|c| c.parent()).collect();
+        assert_eq!(clusters.len(), 3);
+        assert!(clusters.iter().all(|&c| c == clusters[0] && app.world().get::<OrbCluster>(c).is_some()), "all in the one cluster");
+        let hud = app.world().get::<ChildOf>(clusters[0]).unwrap().parent();
+        assert!(app.world().get::<Hud>(hud).is_some());
+        assert!(app.world().get::<DespawnOnExit<AppState>>(hud).is_some(), "scoped to the delve");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(crate::play::Screen::Inventory);
+        app.update();
+        assert_eq!(*app.world().get::<Visibility>(hud).unwrap(), Visibility::Hidden);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.update();
+        assert_eq!(*app.world().get::<Visibility>(hud).unwrap(), Visibility::Inherited);
+    }
+
+    #[test]
+    fn the_orbs_sit_in_the_cluster_where_the_layout_puts_them() {
+        let layout = cluster_layout();
+        let (mut app, _) = delve();
+        let mut query = app.world_mut().query::<(&Orb, &Node)>();
+        for (orb, node) in query.iter(app.world()) {
+            let disc = match orb.kind {
+                OrbKind::Life => layout.life,
+                OrbKind::Stamina => layout.stamina,
+                OrbKind::Mana => layout.mana,
+            };
+            let square = disc.square();
+            assert_eq!((node.left, node.top), (vmin(square.min.x), vmin(square.min.y)), "{:?}", orb.kind);
+            assert_eq!((node.width, node.height), (vmin(disc.radius * 2.0), vmin(disc.radius * 2.0)));
+        }
+        let mut cluster = app.world_mut().query_filtered::<&Node, With<OrbCluster>>();
+        let node = cluster.single(app.world()).unwrap();
+        assert_eq!((node.left, node.bottom, node.width, node.height), (vmin(MARGIN), vmin(MARGIN), vmin(layout.size.x), vmin(layout.size.y)), "anchored bottom left");
+    }
+
+    #[test]
+    fn the_small_orbs_sit_on_the_life_orbs_rim_and_the_bar_starts_right_of_the_eye_at_its_height() {
+        let d = LIFE_DIAMETER;
+        let layout = orb_cluster_layout(d);
+        let (life, r) = (layout.life, d * 0.5);
+        assert_eq!((life.radius, life.centre.x), (r, r));
+        // Each small orb's centre is on the rim, at its angle, and they are 0.38 of the life orb.
+        let angle = |disc: Disc| (life.centre.y - disc.centre.y).atan2(disc.centre.x - life.centre.x).to_degrees();
+        for (disc, degrees) in [(layout.stamina, 45.0), (layout.mana, -45.0)] {
+            assert!((life.centre.distance(disc.centre) - r).abs() < 1e-4, "{degrees}: on the rim");
+            assert!((angle(disc) - degrees).abs() < 1e-3, "{degrees}: at {}", angle(disc));
+            assert!((disc.radius * 2.0 - 0.38 * d).abs() < 1e-4);
+            assert!(life.centre.distance(disc.centre) < r + disc.radius, "it overlaps the life orb's frame");
+        }
+        // The eye: 0.38 across, its centre on the rim straight right.
+        assert!((layout.eye.width() - 0.38 * d).abs() < 1e-4);
+        assert!((layout.eye.center() - Vec2::new(life.centre.x + r, life.centre.y)).length() < 1e-4);
+        assert!(layout.eye.min.x < life.centre.x + r, "it overlaps the life orb's frame too");
+        // The bar starts just right of the eye, centred on its height, 0.32 of the life orb tall.
+        assert!(layout.bar.min.x > layout.eye.max.x && layout.bar.min.x - layout.eye.max.x < 0.1 * d, "just right of the eye");
+        assert!((layout.bar.center().y - layout.eye.center().y).abs() < 1e-4, "at the eye's height");
+        assert!((layout.bar.height() - 0.32 * d).abs() < 1e-4);
+        // Nothing the cluster holds overlaps anything but the life orb.
+        let stamina = layout.stamina.square();
+        let mana = layout.mana.square();
+        for (name, other) in [("eye", layout.eye), ("bar", layout.bar)] {
+            assert!(stamina.intersect(other).is_empty() && mana.intersect(other).is_empty(), "{name} clear of the small orbs");
+        }
+        assert!(stamina.intersect(mana).is_empty());
+        assert!(layout.eye.intersect(layout.bar).is_empty());
+    }
+
+    #[test]
+    fn the_cluster_bounds_everything_and_scales_with_the_life_orb() {
+        let layout = orb_cluster_layout(14.0);
+        let everything = [layout.life.square(), layout.stamina.square(), layout.mana.square(), layout.eye, layout.bar, layout.scroll];
+        for rect in everything {
+            assert!(rect.min.x >= -1e-4 && rect.min.y >= -1e-4 && rect.max.x <= layout.size.x + 1e-4 && rect.max.y <= layout.size.y + 1e-4, "{rect:?} in {:?}", layout.size);
+        }
+        // Anchored at the corner with the margin, it fits the narrowest (square) window and the
+        // smallest one still shows a readable orb (6 px a vmin at 800 x 600).
+        assert!(MARGIN + layout.size.x <= 100.0 && MARGIN + layout.size.y <= 100.0);
+        assert!(layout.life.radius * 2.0 * 6.0 >= 80.0);
+        let double = orb_cluster_layout(28.0);
+        assert!((double.size - layout.size * 2.0).length() < 1e-3, "twice the life orb, twice the cluster");
+        assert!((double.eye.center() - layout.eye.center() * 2.0).length() < 1e-3);
+    }
+
+    /// A bite of `damage` on a delver of `max` hit points, through the vitals' own systems.
+    fn struck_by(damage: u32, max: i32) -> (App, Entity) {
+        let (mut app, player) = delve();
+        app.world_mut().get_mut::<Health>(player).unwrap().max = max;
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = max;
+        run(&mut app, 3);
+        let attacker = app.world_mut().spawn(Transform::default()).id();
+        app.world_mut().write_message(crate::creatures::behaviour::CreatureAttack { attacker, species: fb_creatures::Species::Rat, damage, poison: 0, attacker_pos: Vec2::ZERO });
+        app.update();
+        (app, player)
+    }
+
+    fn life(app: &mut App) -> (Orb, OrbStyle, Vec2) {
+        let mut query = app.world_mut().query::<(&Orb, &MaterialNode<OrbMaterial>, &UiTransform)>();
+        let (orb, handle, transform) = query.iter(app.world()).find(|(o, ..)| o.kind == OrbKind::Life).expect("the life orb");
+        let style = app.world().resource::<Assets<OrbMaterial>>().get(&handle.0).expect("its material").style;
+        (*orb, style, transform.scale)
+    }
+
+    #[test]
+    fn a_bite_pulses_the_life_orb_and_it_is_gone_after_a_quarter_second() {
+        let (mut app, _) = struck_by(3, 12);
+        let (struck, style, scale) = life(&mut app);
+        assert!(struck.pulse.left > 0.0 && struck.pulse.heat() > 0.0, "{:?}", struck.pulse);
+        assert!(style.pulse > 0.0, "the frame and liquid are hot");
+        assert!(scale.x > 1.0 && scale.x <= 1.0 + PULSE_SWELL + 1e-5 && scale.x == scale.y, "swollen: {scale}");
+        // Easing back.
+        run(&mut app, 6);
+        let (_, mid, mid_scale) = life(&mut app);
+        assert!(mid.pulse > 0.0 && mid.pulse < style.pulse && mid_scale.x < scale.x && mid_scale.x > 1.0);
+        run(&mut app, 12);
+        let (struck, style, scale) = life(&mut app);
+        assert_eq!((struck.pulse.heat(), style.pulse, scale), (0.0, 0.0, Vec2::ONE), "gone after 0.25 s");
+        // The other orbs never pulse.
+        for kind in [OrbKind::Stamina, OrbKind::Mana] {
+            assert_eq!(orb(&mut app, kind).1.pulse, 0.0);
         }
     }
 
     #[test]
-    fn the_layout_follows_the_sketch_and_fits_the_smallest_window() {
-        let (life, stamina, mana) = (place(OrbKind::Life), place(OrbKind::Stamina), place(OrbKind::Mana));
-        assert!(life.size > stamina.size * 2.0 && stamina.size == mana.size, "a large life orb and two small ones");
-        assert!(stamina.left >= life.right() - 1.0 && stamina.bottom > life.bottom + life.size * 0.4, "stamina is above and to the right of life");
-        assert!(mana.left > stamina.right() && mana.bottom < stamina.bottom, "mana is lower, further right: the eye fits between");
-        // No overlaps among the three.
-        for (a, b) in [(life, stamina), (stamina, mana), (life, mana)] {
-            let apart = a.right() <= b.left || b.right() <= a.left || a.top() <= b.bottom || b.top() <= a.bottom;
-            assert!(apart, "{a:?} against {b:?}");
-        }
-        // In a 4:3 window (133 vmin wide, 100 high) and in a square one.
-        for orb in [life, stamina, mana] {
-            assert!(orb.left >= 0.0 && orb.bottom >= 0.0 && orb.right() <= 100.0 && orb.top() <= 100.0, "{orb:?}");
-        }
+    fn a_bigger_bite_pulses_harder() {
+        let heat = |damage: u32| {
+            let (mut app, _) = struck_by(damage, 12);
+            let (orb, style, scale) = life(&mut app);
+            (orb.pulse.heat(), style.pulse, scale.x)
+        };
+        let (rat, constrictor) = (heat(1), heat(6));
+        assert!(rat.0 > 0.0, "even a scratch pulses");
+        assert!(constrictor.0 > rat.0 && constrictor.1 > rat.1 && constrictor.2 > rat.2, "{rat:?} against {constrictor:?}");
+        let swollen = heat(50).2;
+        assert!(swollen > 1.0 + PULSE_SWELL * 0.8 && swollen <= 1.0 + PULSE_SWELL + 1e-5, "the hardest swells to about 1.08: {swollen}");
+    }
+
+    #[test]
+    fn the_pulse_adds_to_the_flash_over_the_view_and_follows_any_fall_in_hit_points() {
+        use crate::combat::vitals::Pain;
+        let (mut app, _) = struck_by(3, 12);
+        assert!(app.world().resource::<Pain>().alpha() > 0.0, "the flash over the view still starts");
+        assert!(life(&mut app).0.pulse.heat() > 0.0, "and the orb pulses too");
+        // A fall that is not a bite (a trap, say) pulses it as well, and a heal does not.
+        let (mut app, player) = delve();
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = 6;
+        run(&mut app, 3);
+        let after_fall = life(&mut app).0.pulse.heat();
+        assert!(after_fall > 0.0, "{after_fall}");
+        run(&mut app, 30);
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = 11;
+        run(&mut app, 3);
+        assert_eq!(life(&mut app).0.pulse.heat(), 0.0, "healing does not pulse");
     }
 }

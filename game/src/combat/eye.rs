@@ -1,4 +1,4 @@
-//! The visibility eye between the stamina and mana orbs: it opens as the delver gets easier to
+//! The visibility eye on the life orb's rim, between the stamina and mana orbs: it opens as the delver gets easier to
 //! see and closes in the dark.
 //!
 //! How visible the delver is comes from [`fb_character::visibility`], a pure function of the
@@ -17,8 +17,7 @@ use bevy::{
     shader::{ShaderRef, load_shader_library, Shader},
 };
 
-use super::orbs::{ease, MARGIN};
-use super::vitals::VitalsRoot;
+use super::orbs::{OrbCluster, cluster_layout, ease};
 use crate::character::{Character, DelverVisibility, Load};
 use crate::inventory::Inventory;
 use crate::light::lit_level;
@@ -41,15 +40,6 @@ impl Plugin for EyePlugin {
         app.add_systems(Update, (watch_the_delver, spawn_eye, read_eye, settle_eye).chain().in_set(DelveSystems));
     }
 }
-
-/// Where the eye sits, in `vmin` from the view's bottom left corner: between the stamina orb
-/// above and to its left and the mana orb below and to its right.
-pub fn place() -> super::orbs::Place {
-    super::orbs::Place { left: MARGIN + 25.9, bottom: MARGIN + 5.6, size: 6.8 }
-}
-
-/// How much taller the eye's box is than wide is `HEIGHT / place().size`.
-const HEIGHT: f32 = 4.4;
 
 /// The eye on the HUD.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -124,16 +114,16 @@ fn watch_the_delver(
     }
 }
 
-/// Gives each new vitals HUD its eye.
-fn spawn_eye(mut commands: Commands, roots: Query<Entity, Added<VitalsRoot>>, materials: Option<ResMut<Assets<EyeMaterial>>>) {
+/// Gives each new cluster its eye, on the life orb's rim straight right ([`cluster_layout`]).
+fn spawn_eye(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>, materials: Option<ResMut<Assets<EyeMaterial>>>) {
     let Some(mut materials) = materials else { return };
-    for root in &roots {
-        let at = place();
-        commands.entity(root).with_child((
+    let eye = cluster_layout().eye;
+    for cluster in &clusters {
+        commands.entity(cluster).with_child((
             Name::new("Visibility eye"),
             Eye { target: None, snap: false },
             MaterialNode(materials.add(EyeMaterial { style: EyeStyle::default() })),
-            Node { position_type: PositionType::Absolute, left: vmin(at.left), bottom: vmin(at.bottom), width: vmin(at.size), height: vmin(HEIGHT), ..default() },
+            Node { position_type: PositionType::Absolute, left: vmin(eye.min.x), top: vmin(eye.min.y), width: vmin(eye.width()), height: vmin(eye.height()), ..default() },
             Pickable::IGNORE,
         ));
     }
@@ -177,6 +167,7 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
+    use crate::combat::orbs::OrbPlugin;
     use crate::combat::vitals::VitalsPlugin;
     use crate::combat::{Health, RunDice};
     use crate::launch::AppState;
@@ -194,7 +185,7 @@ mod tests {
             .init_resource::<Character>()
             .init_resource::<Inventory>()
             .init_resource::<ScreenOpen>()
-            .add_plugins((VitalsPlugin, EyePlugin));
+            .add_plugins((VitalsPlugin, OrbPlugin, EyePlugin));
         crate::play::run_delve_systems_while_delving(&mut app);
         let player = app.world_mut().spawn((Player, Transform::default(), Health::full(12))).id();
         let follows = app.world_mut().spawn_empty().id();
@@ -299,21 +290,31 @@ mod tests {
     }
 
     #[test]
-    fn the_eye_is_part_of_the_hud_and_hides_under_screens_and_sits_between_the_orbs() {
+    fn the_eye_is_part_of_the_hud_cluster_and_hides_under_screens() {
         use crate::carry::{Hud, hide_hud_under_screens};
-        use crate::combat::orbs::{OrbKind, place as orb};
         let (mut app, _) = delve();
         app.add_systems(Update, hide_hud_under_screens);
         let mut query = app.world_mut().query_filtered::<&ChildOf, With<Eye>>();
-        let root = query.single(app.world()).unwrap().parent();
-        assert!(app.world().get::<Hud>(root).is_some());
+        let cluster = query.single(app.world()).unwrap().parent();
+        assert!(app.world().get::<OrbCluster>(cluster).is_some(), "positioned in the cluster");
+        let hud = app.world().get::<ChildOf>(cluster).unwrap().parent();
+        assert!(app.world().get::<Hud>(hud).is_some());
+        assert!(app.world().get::<DespawnOnExit<AppState>>(hud).is_some(), "scoped to the delve");
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(crate::play::Screen::Inventory);
         app.update();
-        assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Hidden);
-        // Between the stamina orb above and to its left and the mana orb below and to its right.
-        let (eye, stamina, mana) = (place(), orb(OrbKind::Stamina), orb(OrbKind::Mana));
-        assert!(eye.left >= stamina.right() && eye.right() <= mana.left, "{eye:?} between {stamina:?} and {mana:?} across");
-        assert!(eye.bottom < stamina.bottom + stamina.size && eye.bottom + HEIGHT > mana.top() - 3.0, "and in height");
-        assert!(eye.right() <= 100.0 && HEIGHT < eye.size);
+        assert_eq!(*app.world().get::<Visibility>(hud).unwrap(), Visibility::Hidden);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.update();
+        assert_eq!(*app.world().get::<Visibility>(hud).unwrap(), Visibility::Inherited);
+    }
+
+    #[test]
+    fn the_eye_sits_where_the_layout_puts_it() {
+        let layout = cluster_layout();
+        let (mut app, _) = delve();
+        let mut query = app.world_mut().query_filtered::<&Node, With<Eye>>();
+        let node = query.single(app.world()).unwrap();
+        assert_eq!((node.left, node.top), (vmin(layout.eye.min.x), vmin(layout.eye.min.y)));
+        assert_eq!((node.width, node.height), (vmin(layout.eye.width()), vmin(layout.eye.height())));
     }
 }

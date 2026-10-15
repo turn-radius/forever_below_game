@@ -20,8 +20,7 @@ use bevy::{
 };
 use fb_items::{Item, Slot};
 
-use crate::combat::orbs::MARGIN;
-use crate::combat::vitals::VitalsRoot;
+use crate::combat::orbs::{OrbCluster, cluster_layout};
 use crate::eat::Eating;
 use crate::inventory::{Dragging, FloorChanges, Icons, Inventory, ItemId, Location, Refusal, Target, Toast};
 use crate::keymap::{Action, ActionInput};
@@ -231,19 +230,6 @@ struct Shown {
     icon: Option<Entity>,
 }
 
-/// Where the bar sits, in `vmin`: after the mana orb and the eye, level with the orbs' base.
-pub const BAR_LEFT: f32 = 44.0;
-pub const BAR_BOTTOM: f32 = MARGIN + 1.65;
-pub const SLOT_SIZE: f32 = 4.0;
-pub const SLOT_GAP: f32 = 0.4;
-/// The flourish after the last slot: its left edge, width and height.
-pub const SCROLL_LEFT: f32 = BAR_LEFT + SLOTS as f32 * SLOT_SIZE + (SLOTS as f32 - 1.0) * SLOT_GAP + 0.4;
-pub const SCROLL_WIDTH: f32 = 11.0;
-pub const SCROLL_HEIGHT: f32 = 8.4;
-/// How far up its node the rule runs, where it meets the curl (`scroll.wesl`): the rule sits at the
-/// middle of the slots.
-pub const SCROLL_RULE: f32 = 0.324;
-
 /// How one slot is drawn: the square's side, and the number's size.
 #[derive(Clone, Copy)]
 pub struct SlotStyle {
@@ -320,31 +306,28 @@ pub fn strip(parent: &mut ChildSpawnerCommands, fonts: &UiFonts) {
 pub const STRIP_SIZE: f32 = 44.0;
 pub const STRIP_GAP: f32 = 6.0;
 
-/// The row of slots the HUD draws: [`SLOT_SIZE`] `vmin` squares.
-pub fn hud_row() -> (SlotStyle, Node) {
-    let style = SlotStyle { size: vmin(SLOT_SIZE), gap: vmin(SLOT_GAP), number: FontSize::VMin(1.3) };
-    let row = Node { position_type: PositionType::Absolute, left: vmin(BAR_LEFT), bottom: vmin(BAR_BOTTOM), flex_direction: FlexDirection::Row, column_gap: style.gap, ..default() };
-    (style, row)
-}
-
-/// Draws the bar into each new vitals HUD: the ten slots and the flourish.
-fn spawn_bar(mut commands: Commands, roots: Query<Entity, Added<VitalsRoot>>, fonts: Option<Res<UiFonts>>, materials: Option<ResMut<Assets<ScrollMaterial>>>) {
+/// Draws the bar into each new cluster: the ten slots starting just right of the eye and level
+/// with it, and the flourish after them, positioned from the layout
+/// ([`cluster_layout`]).
+fn spawn_bar(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>, fonts: Option<Res<UiFonts>>, materials: Option<ResMut<Assets<ScrollMaterial>>>) {
     let Some(fonts) = fonts else { return };
     let mut materials = materials;
-    for root in &roots {
-        commands.entity(root).with_children(|hud| {
-            let (style, row) = hud_row();
-            spawn_slots(hud, &fonts, style, false, row);
+    let layout = cluster_layout();
+    for cluster in &clusters {
+        commands.entity(cluster).with_children(|cluster| {
+            let style = SlotStyle { size: vmin(layout.slot), gap: vmin(layout.gap), number: FontSize::VMin(layout.slot * 0.3) };
+            let row = Node { position_type: PositionType::Absolute, left: vmin(layout.bar.min.x), top: vmin(layout.bar.min.y), flex_direction: FlexDirection::Row, column_gap: style.gap, ..default() };
+            spawn_slots(cluster, &fonts, style, false, row);
             if let Some(materials) = materials.as_deref_mut() {
-                hud.spawn((
+                cluster.spawn((
                     Name::new("Quickslot flourish"),
                     MaterialNode(materials.add(ScrollMaterial::default())),
                     Node {
                         position_type: PositionType::Absolute,
-                        left: vmin(SCROLL_LEFT),
-                        bottom: vmin(BAR_BOTTOM + SLOT_SIZE * 0.5 - SCROLL_RULE * SCROLL_HEIGHT),
-                        width: vmin(SCROLL_WIDTH),
-                        height: vmin(SCROLL_HEIGHT),
+                        left: vmin(layout.scroll.min.x),
+                        top: vmin(layout.scroll.min.y),
+                        width: vmin(layout.scroll.width()),
+                        height: vmin(layout.scroll.height()),
                         ..default()
                     },
                     Pickable::IGNORE,
@@ -449,6 +432,7 @@ mod tests {
 
     use super::*;
     use crate::character::DelverNeeds;
+    use crate::combat::vitals::VitalsRoot;
     use crate::combat::{Health, RunDice};
     use crate::eat::{EatPlugin, HealSound};
     use crate::inventory::{Hovered, IconCache};
@@ -480,7 +464,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .insert_resource(RunDice(procgen_rng::Mulberry32::new(11)))
             .insert_resource(HealSound(Handle::default()))
-            .add_plugins((EatPlugin, QuickslotPlugin));
+            .add_plugins((EatPlugin, QuickslotPlugin, crate::combat::orbs::OrbPlugin));
         run_delve_systems_while_delving(&mut app);
         let mut needs = fb_character::Needs::default();
         needs.hunger.value = 0.55;
@@ -665,7 +649,10 @@ mod tests {
     /// The vitals HUD a view model makes, for the bar to join.
     fn hud(app: &mut App) -> Entity {
         let hud = app.world_mut().spawn((crate::carry::Hud, VitalsRoot, Visibility::default())).id();
-        app.update();
+        // The cluster, then what is drawn in it.
+        for _ in 0..3 {
+            app.update();
+        }
         hud
     }
 
@@ -715,16 +702,19 @@ mod tests {
     }
 
     #[test]
-    fn the_layout_runs_right_from_the_orbs_and_fits_the_smallest_window() {
-        use crate::combat::orbs::{OrbKind, place};
-        let mana = place(OrbKind::Mana);
-        assert!(BAR_LEFT > mana.right(), "the bar starts after the mana orb");
-        let bar_right = BAR_LEFT + SLOTS as f32 * SLOT_SIZE + (SLOTS as f32 - 1.0) * SLOT_GAP;
-        assert!(SCROLL_LEFT >= bar_right, "the flourish ends the bar");
-        // In a square window, the narrowest there is: everything inside the view's 100 vmin.
-        assert!(SCROLL_LEFT + SCROLL_WIDTH <= 100.0, "{}", SCROLL_LEFT + SCROLL_WIDTH);
-        assert!(BAR_BOTTOM + SLOT_SIZE + 2.0 <= 100.0);
-        // The slots are still big enough to read at 800 x 600 (6 px a vmin).
-        assert!(SLOT_SIZE * 6.0 >= 20.0);
+    fn the_bar_is_laid_out_by_the_cluster_and_fits_the_smallest_window() {
+        use crate::combat::orbs::{MARGIN, orb_cluster_layout};
+        let layout = cluster_layout();
+        assert!((layout.bar.height() - layout.slot).abs() < 1e-4, "a row of slots");
+        let row = layout.bar.width();
+        let slots = SLOTS as f32;
+        assert!((row - (slots * layout.slot + (slots - 1.0) * layout.gap)).abs() < 1e-4);
+        assert!(layout.scroll.min.x >= layout.bar.max.x, "the flourish ends the bar");
+        // In a square window, the narrowest there is: everything inside the view's 100 vmin, and
+        // the slots still big enough to read at 800 x 600 (6 px a vmin).
+        assert!(MARGIN + layout.size.x <= 100.0, "{}", MARGIN + layout.size.x);
+        assert!(layout.slot * 6.0 >= 20.0);
+        let double = orb_cluster_layout(28.0);
+        assert!((double.slot - layout.slot * 2.0).abs() < 1e-4, "the bar scales with the cluster");
     }
 }
