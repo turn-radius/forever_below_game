@@ -79,6 +79,13 @@ impl Health {
         was_up && self.hp == 0
     }
 
+    /// Restores `amount`, never above the maximum. Returns how much it restored.
+    pub fn heal(&mut self, amount: u32) -> u32 {
+        let before = self.hp;
+        self.hp = (self.hp + amount as i32).min(self.max).max(before);
+        (self.hp - before) as u32
+    }
+
     pub fn is_down(&self) -> bool {
         self.hp <= 0
     }

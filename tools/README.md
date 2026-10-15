@@ -52,4 +52,11 @@ oggenc -q 6 -o game/assets/audio/snake-rise.ogg /tmp/combat/snake_rise.wav
 oggenc -q 6 -o game/assets/audio/thud.ogg /tmp/combat/thud.wav
 ```
 
+`tools/synth_heal.py` synthesises the healing draught's gentle rising chime (three soft bell notes, decaying sine modes at slightly inharmonic ratios), its docstring citing the source:
+
+```
+python3 tools/synth_heal.py /tmp/heal
+oggenc -q 6 -o game/assets/audio/heal.ogg /tmp/heal/heal.wav
+```
+
 Bevy loads assets from `game/assets/` under `cargo run` (it uses `CARGO_MANIFEST_DIR`). To run the binary directly, set `BEVY_ASSET_ROOT=game`.
