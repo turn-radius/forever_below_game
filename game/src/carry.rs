@@ -6,10 +6,11 @@
 //!   is low on the right, the off hand's low on the left, each fitted and turned in the fist as
 //!   the doll holds it (`crate::view_model`). It follows the inventory ([`show_held`]): equip a
 //!   sword and the view holds a sword.
-//! - The carried light is the lit torch or lantern the delver holds: the main hand's, or the
-//!   off hand's if the main hand holds none lit ([`carried_light`]). Equip a lit one and it is
-//!   carried, take it off and the delver walks in the dark, lit only by the level's own lights
-//!   (braziers, glowcaps, lit things on the floor). On the view model's stage it has its own
+//! - The carried lights are the lit torches and lanterns the delver holds or hangs at the hip
+//!   ([`carried_lights`]), each giving its own light; the first of them, the main hand's, else
+//!   the off hand's, else the hip's, is the carried light ([`carried_light`]). Equip a lit one
+//!   and it is carried, take it off or put it out ([`crate::kindle`]) and the delver walks in
+//!   the dark, lit only by the level's own lights (braziers, glowcaps, lit things on the floor). On the view model's stage it has its own
 //!   soft light, so the flame does not burn its own handle white, and lights what the other
 //!   hand holds.
 //! - A lantern hung from the belt at the hip hangs from the player's body in the level, low on
@@ -187,6 +188,17 @@ pub fn lit_torch(seed: u32) -> fb_items::Item {
 pub fn carried_light(inventory: &Inventory) -> Option<(fb_items::Slot, ItemId)> {
     let slot = lit_slot(inventory)?;
     Some((slot, inventory.worn(slot)?))
+}
+
+/// Every lit thing carried, each of which gives its own light: in the main hand, the off hand
+/// and at the hip, in that order.
+pub fn carried_lights(inventory: &Inventory) -> Vec<(fb_items::Slot, ItemId)> {
+    use fb_items::Slot;
+    [Slot::Mainhand, Slot::Offhand, Slot::Hip]
+        .into_iter()
+        .filter_map(|slot| Some((slot, inventory.worn(slot)?)))
+        .filter(|&(_, id)| inventory.item(id).is_some_and(|item| item_light(&item.shape).is_some()))
+        .collect()
 }
 
 /// The item's own look: its palette, condition and seed, with the wear scale the prototype
@@ -389,12 +401,14 @@ pub struct HeldItem {
 }
 
 /// What a [`PlayerCamera`]'s view model was last drawn for: the item in each hand, the carried
-/// light among them, and whose hands hold them (the body they are fitted to).
+/// lights among them (so lighting or putting one out draws it again), and whose hands hold them
+/// (the body they are fitted to).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeldKey {
     pub main: Option<ItemId>,
     pub off: Option<ItemId>,
-    pub light: Option<ItemId>,
+    /// The lit things carried in the main hand, the off hand and at the hip ([`carried_lights`]).
+    pub lights: [Option<ItemId>; 3],
     /// The lantern hung at the hip, and the belt it hangs from.
     pub hip: Option<ItemId>,
     pub belt: Option<ItemId>,
@@ -406,7 +420,10 @@ impl HeldKey {
         HeldKey {
             main: inventory.worn(fb_items::Slot::Mainhand),
             off: inventory.worn(fb_items::Slot::Offhand),
-            light: carried_light(inventory).map(|(_, id)| id),
+            lights: {
+                let lit = carried_lights(inventory);
+                [fb_items::Slot::Mainhand, fb_items::Slot::Offhand, fb_items::Slot::Hip].map(|slot| lit.iter().find(|(s, _)| *s == slot).map(|(_, id)| *id))
+            },
             hip: inventory.worn(fb_items::Slot::Hip),
             belt: inventory.worn(fb_items::Slot::Belt),
             body: (character.folk, character.body_seed),
@@ -423,9 +440,9 @@ pub struct Carrying {
 }
 
 impl Carrying {
-    /// The carried light, if the view model holds one.
+    /// The carried light, if the view model holds one: the first of its lights.
     pub fn light(&self) -> Option<ItemId> {
-        self.held.and_then(|h| h.light)
+        self.held.and_then(|h| h.lights.into_iter().flatten().next())
     }
 }
 
@@ -894,11 +911,11 @@ pub fn held_items(inventory: &Inventory, character: &Character, scale: f32) -> V
         .collect()
 }
 
-/// Keeps each player camera's view model in step with the hands ([`held_items`]) and its
-/// carried light ([`carried_light`]): when either changes, or the tuning does, the old view
-/// model and its lights go and the new ones are spawned, the carried light's light in the world
-/// from its [`LightAnchor`]. With nothing lit in hand there is no light; with nothing in hand, nothing is
-/// drawn. A lantern at the hip hangs from the player's body instead ([`HipSwing`]).
+/// Keeps each player camera's view model in step with the hands ([`held_items`]) and the
+/// carried lights ([`carried_lights`]): when either changes, or the tuning does, the old view
+/// model and its lights go and the new ones are spawned, each lit thing's light in the world
+/// from its [`LightAnchor`], every one shadowed. With nothing lit there is no light; with
+/// nothing in hand, nothing is drawn. A lantern at the hip hangs from the player's body instead ([`HipSwing`]).
 #[allow(clippy::type_complexity)]
 fn show_held(
     mut commands: Commands,
@@ -921,7 +938,7 @@ fn show_held(
         carrying.held = Some(wanted);
         let exposure = exposure.copied().unwrap_or_default();
         let view_layer = RenderLayers::layer(VIEW_MODEL_LAYER);
-        let light_hand = carried_light(&inventory).map(|(hand, _)| hand);
+        let lit: Vec<fb_items::Slot> = carried_lights(&inventory).into_iter().map(|(slot, _)| slot).collect();
         for (hand, item, rest, point) in held_items(&inventory, &character, tuning.view.held_scale) {
             let mut root = spawner.spawn(&item.build(), &appearance_of(&item));
             root.insert((
@@ -933,7 +950,7 @@ fn show_held(
                 ChildOf(view_model),
             ));
             carrying.entities.push(root.id());
-            if light_hand != Some(hand) {
+            if !lit.contains(&hand) {
                 continue;
             }
             let Some(anchor) = item_light(&item) else { continue };
@@ -952,7 +969,7 @@ fn show_held(
             None => (camera, hip.hook - Vec3::Y * EYE_HEIGHT),
         };
         let pivot = commands.spawn((Name::new("Hip lantern"), HipSwing, Transform::from_translation(hook), Visibility::default(), ChildOf(parent))).id();
-        let carried = (light_hand == Some(fb_items::Slot::Hip)).then(|| item_light(&hip.item)).flatten();
+        let carried = lit.contains(&fb_items::Slot::Hip).then(|| item_light(&hip.item)).flatten();
         // The lantern and its light go through the spawner's own commands, after the pivot's.
         let mut lantern = spawner.spawn(&hip.item.build(), &appearance_of(&hip.item));
         lantern.insert((hip.transform, Propagate(NotShadowCaster), ChildOf(pivot)));
@@ -1409,6 +1426,56 @@ mod tests {
         assert!(held(&mut app).is_empty());
         let mut lights = app.world_mut().query::<&PointLight>();
         assert_eq!(lights.iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn every_lit_carried_light_shines_and_putting_one_out_takes_its_light() {
+        use fb_items::Slot;
+        let mut app = App::new();
+        app.init_resource::<Inventory>()
+            .init_resource::<Character>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<crate::render::ToonMaterial>>()
+            .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<crate::render::OutlineMaterials>()
+            .init_resource::<Tuning>()
+            .add_systems(Update, show_held);
+        let body = app.world_mut().spawn(Transform::default()).id();
+        let camera = app.world_mut().spawn((PlayerCamera, Carrying::default(), ChildOf(body))).id();
+        app.world_mut().spawn(ViewModelCamera { follows: camera });
+        let (torch, lantern) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(fb_items::roll_item("Belt", 1).unwrap());
+            inventory.wear(belt, Slot::Belt).unwrap();
+            let lantern = inventory.add((1..500).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap());
+            inventory.wear(lantern, Slot::Hip).unwrap();
+            let torch = inventory.add(lit_torch(5));
+            inventory.wear(torch, Slot::Offhand).unwrap();
+            (torch, lantern)
+        };
+        let world_lights = |app: &mut App| app.world_mut().query::<&GivenLight>().iter(app.world()).count();
+        app.update();
+        assert_eq!(world_lights(&mut app), 2, "a lit torch in hand and a lit lantern at the hip: two lights");
+        let character = Character::default();
+        let derived = character.derive(app.world().resource::<Inventory>());
+        let inventory = app.world().resource::<Inventory>();
+        let reach = |id| inventory.item(id).unwrap().profile.stats.light;
+        assert_eq!(derived.light, reach(torch).max(reach(lantern)), "the header shows the larger");
+
+        // The hip lantern put out gives none; the torch still does.
+        app.world_mut().resource_mut::<Inventory>().toggle_light(lantern).unwrap();
+        app.update();
+        assert_eq!(world_lights(&mut app), 1);
+        // The torch put out: dark, and the torch drawn doused.
+        app.world_mut().resource_mut::<Inventory>().toggle_light(torch).unwrap();
+        app.update();
+        assert_eq!(world_lights(&mut app), 0);
+        let mut held = app.world_mut().query::<&HeldItem>();
+        assert!(held.iter(app.world()).any(|h| h.item.family() == Family::Torch && h.item.lit() == Some(false)));
+        // Lit again from its card, the lantern's light comes back.
+        app.world_mut().resource_mut::<Inventory>().toggle_light(lantern).unwrap();
+        app.update();
+        assert_eq!(world_lights(&mut app), 1);
     }
 
     #[test]

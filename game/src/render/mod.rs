@@ -3,6 +3,7 @@
 //!
 //! Add [`ArmoryRenderPlugin`], then spawn items with [`ItemSpawner::spawn`].
 
+pub mod flame;
 mod indirect;
 mod item;
 mod outline;
@@ -36,7 +37,8 @@ impl Plugin for ArmoryRenderPlugin {
 
         app.add_plugins((MaterialPlugin::<ToonMaterial>::default(), MaterialPlugin::<OutlineMaterial>::default()))
             .init_resource::<OutlineMaterials>()
-            .add_systems(Startup, cluster_lights_on_the_cpu);
+            .add_systems(Startup, cluster_lights_on_the_cpu)
+            .add_systems(Update, flame::flicker_flames);
         indirect::add(app);
     }
 }

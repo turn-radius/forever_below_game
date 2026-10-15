@@ -252,6 +252,7 @@ impl ItemSpawner<'_, '_> {
         let glass_outline =
             self.shared_outlines.get_or_add(&mut self.outline_materials, OutlineMaterial { see_through: true, ..appearance.outline });
         let root = self.commands.spawn((ArmoryItem, Transform::default(), Visibility::default())).id();
+        let mut flame = None;
         for part in &item.parts {
             let mesh = self.meshes.add(part_to_mesh(part));
             let material = self.toon_materials.add(appearance.material_for(part));
@@ -261,6 +262,15 @@ impl ItemSpawner<'_, '_> {
             if see_through {
                 // Glass lets light through: its shadow would darken the drink inside it.
                 part_entity.insert(NotShadowCaster);
+            }
+            // A flame and the core inside it move as one, about the flame's base.
+            if part.name == "flame" {
+                flame = super::flame::Flame::of(&part.positions);
+            }
+            if matches!(part.name, "flame" | "flame_core")
+                && let Some(flame) = flame
+            {
+                part_entity.insert(flame);
             }
             let part_entity = part_entity.id();
             if part.outline {

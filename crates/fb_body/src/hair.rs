@@ -41,8 +41,9 @@ pub struct HairFit {
     pub rest: Option<Rest>,
 }
 
-const REST_ROWS: usize = 48;
-const REST_COLUMNS: usize = 64;
+/// The rows (by height) and columns (by direction) of a [`Rest`].
+pub const REST_ROWS: usize = 96;
+pub const REST_COLUMNS: usize = 256;
 /// How far in a strand of hair may lie per unit of height above something it falls onto.
 const REST_SLOPE: f32 = 2.5;
 
@@ -269,7 +270,7 @@ impl Body {
         let length = if self.folk() == Folk::Dwarf { 0.55 } else { 0.42 } * self.trunk_length + r * 0.6;
         let c = face.head.centre;
         let top = self.shoulder_y + 0.2 * self.trunk_length;
-        let (cols, rows) = (36, 18);
+        let (cols, rows) = (36, 36);
         let natural = |u: f32, v: f32| {
             // Round the back from behind one ear to behind the other.
             let th = 1.3 + (TAU - 2.6) * (1.0 - u);

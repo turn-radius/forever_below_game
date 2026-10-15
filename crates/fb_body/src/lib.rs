@@ -25,7 +25,7 @@ pub mod worn;
 pub use body::{ArmPose, Body, GRIP_MAX, Pose};
 pub use folk::{Beard, EyeKind, Ears, Folk, HairStyle, Nose, Race};
 pub use hair::HairFit;
-pub use head::HeadFit;
+pub use head::{HeadFit, StandingFeatures};
 pub use hand::HandPose;
 pub use held::{HIP_SIDE, Hands, HeldFit, HipFit, Hold, MAIN_HAND, OFF_HAND, fit_hands, fit_held, fit_hip};
 pub use limb::{Limb, Side};

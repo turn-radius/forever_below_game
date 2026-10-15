@@ -36,7 +36,7 @@ use armory::build::garment::{Fitting, Notch, Underlay, garment_drape, garment_pa
 use armory::build::hand::hand_parts_fitted;
 use armory::build::hat::hat_parts;
 use armory::build::hood::hood_parts;
-use armory::build::legwear::legwear_parts;
+use armory::build::legwear::{LegDrape, LegHole, legwear_parts_holed};
 use armory::build::parts::{Look, Parts};
 use armory::build::strap::strap;
 use armory::families::Generator;
@@ -60,8 +60,8 @@ use armory::{Item, ItemMesh, MaterialKind, Part};
 use fb_items::Slot;
 
 use crate::body::Body;
-use crate::folk::Ears;
-use crate::hair::{HairFit, Rest};
+use crate::folk::{Ears, Folk};
+use crate::hair::{HairFit, REST_COLUMNS, REST_ROWS, Rest};
 use crate::head::HeadFit;
 use crate::limb::{Limb, Side};
 use crate::place::Placement;
@@ -94,6 +94,9 @@ pub struct Covered {
     /// Trousers or leggings to the ankle: the bare legs go (wholly covered, they need not be
     /// drawn).
     pub legs: bool,
+    /// Anything over the seat (legwear, a shirt, armour or a cloak) on a pig: its curled
+    /// tail tucks in under it (our own; a lizard's tail comes out through vents and holes).
+    pub tail: bool,
 }
 
 impl Covered {
@@ -103,6 +106,7 @@ impl Covered {
             "hands" | "nails" => self.hands,
             "feet" | "claws" => self.feet,
             "legs" => self.legs,
+            "tail" => self.tail,
             _ => false,
         }
     }
@@ -180,6 +184,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
             if slot == Slot::Head {
                 fit.hair.covered = true;
             }
+            fit.covered.tail |= body.folk() == Folk::Pigfolk && matches!(slot, Slot::Legs | Slot::Shirt | Slot::Body | Slot::Cloak);
             env.absorb(slot, &mesh);
             fit.layers.push(WornLayer { slot, mesh });
         }
@@ -220,6 +225,13 @@ const FRONT_PHI: f32 = PI / 2.0;
 /// over.
 const CHEST_SPREAD: f32 = PI / 4.0;
 
+/// How many of a [`Rest`]'s columns (1.4 degrees each) either side an edge holds hair off
+/// over, and how far it must stand above the surface's own run from there to count. Our own
+/// figures, tuned against the hair-on-a-cloak test: a little over the spacing of long hair's
+/// strands (about 6 degrees), and a little over a cloth's thickness.
+const EDGE_COLUMNS: isize = 6;
+const EDGE_RISE: f32 = 0.05;
+
 /// Bins along a limb for its clearance.
 const LIMB_BINS: usize = 24;
 /// Nothing measured yet.
@@ -245,9 +257,10 @@ struct Envelope<'a> {
     /// The points of everything worn on each arm (right then left), body space: what a cuff
     /// is drawn over.
     on_arm: [Vec<V3>; 2],
-    /// The same as `outline` without what is worn on the head: what long hair and a beard
-    /// rest on. An aventail or a hood's cape hangs over them, not under.
-    under_head: Outline,
+    /// The surface of everything worn but what is on the head, and of the bare arms under a
+    /// cloak, as triangles (torso space): what long hair and a beard rest on. An aventail or
+    /// a hood's cape hangs over them, not under.
+    under_head: Vec<[V3; 3]>,
 }
 
 /// Which worn surface a trunk form is eased over ([`Envelope::form`]).
@@ -279,18 +292,21 @@ impl<'a> Envelope<'a> {
             legs: [[NONE; LIMB_BINS]; 2],
             outline: Outline::new(profile.bottom() - 1.0, profile.top() + 0.7),
             on_arm: [vec![], vec![]],
-            under_head: Outline::new(profile.bottom() - 1.0, profile.top() + 0.7),
+            under_head: vec![],
         };
         // The bare arms and hands as drawn, for a cloak over them: a raised forearm and its
         // hand come out through the cloak instead ([`Envelope::under_cloak`]).
         for part in body.skin_mesh().parts.iter().filter(|p| matches!(p.name, "arms" | "hands")) {
-            for &p in &part.positions {
+            let under: Vec<bool> = part.positions.iter().map(|&p| {
                 let (side, t, _) = env.nearest_arm(p);
-                if env.under_cloak(side, t) {
-                    let q = env.torso(p);
-                    env.outline.add(q);
-                    env.under_head.add(q);
-                }
+                env.under_cloak(side, t)
+            }).collect();
+            for (&p, _) in part.positions.iter().zip(&under).filter(|(_, u)| **u) {
+                let q = env.torso(p);
+                env.outline.add(q);
+            }
+            for t in part.indices.chunks(3).filter(|t| t.iter().all(|&i| under[i as usize])) {
+                env.under_head.push([t[0], t[1], t[2]].map(|i| env.torso(part.positions[i as usize])));
             }
         }
         // The bare arms, for whatever hangs over them.
@@ -403,8 +419,18 @@ impl<'a> Envelope<'a> {
                 }
                 let q = self.torso(p);
                 self.outline.add(q);
-                if slot != Slot::Head {
-                    self.under_head.add(q);
+            }
+            // What hair rests on, as the triangles themselves.
+            if slot != Slot::Head {
+                for t in part.indices.chunks(3) {
+                    let tri = [t[0], t[1], t[2]].map(|i| part.positions[i as usize]);
+                    if on_arms && tri.iter().any(|p| {
+                        let (side, t, _) = self.nearest_arm(*p);
+                        !self.under_cloak(side, t)
+                    }) {
+                        continue;
+                    }
+                    self.under_head.push(tri.map(|p| self.torso(p)));
                 }
             }
         }
@@ -590,10 +616,83 @@ impl<'a> Envelope<'a> {
     fn rest(&self) -> Rest {
         let b = self.body;
         let w = b.waist_y;
-        Rest::new(b.chest_y - 0.9 * b.trunk_length, b.shoulder_y + 0.35 * b.trunk_length, |phi, y| {
-            // The most anything reaches within a few degrees, so hair laid over the folds of a
-            // cloak, or a hood lying down its back, rests on their crests and bridges between.
-            let worn = (-6..=6).map(|k| self.under_head.at(-phi + k as f32 * TAU / 256.0, y - w)).fold(NONE, f32::max);
+        let (y0, y1) = (b.chest_y - 0.9 * b.trunk_length, b.shoulder_y + 0.35 * b.trunk_length);
+        // The worn surface drawn into Rest's own grid of directions and heights: each cell
+        // takes the farthest any triangle reaches across it (the triangle's corners in
+        // cylindrical coordinates, its reach between them by barycentric weights), and then
+        // the most of the cells about it, so the grid never falls inside a surface that bulges
+        // between its nodes. Measured on the surface itself; binning its points by angle and
+        // taking the most within several degrees held long hair up to 2 cm off a cloak where
+        // it curves round the shoulders.
+        let (rows, cols) = (REST_ROWS, REST_COLUMNS);
+        let dy = (y1 - y0) / (rows - 1) as f32;
+        let dphi = TAU / cols as f32;
+        let mut grid = vec![NONE; rows * cols];
+        for tri in &self.under_head {
+            let c: Vec<(f32, f32, f32)> = tri.iter().map(|p| (p[2].atan2(p[0]), p[1] + w, p[0].hypot(p[2]))).collect();
+            // Unwrapped round the first corner, so a triangle across the back seam stays whole.
+            let unwrap = |a: f32| c[0].0 + (a - c[0].0 + PI).rem_euclid(TAU) - PI;
+            let c: Vec<(f32, f32, f32)> = c.iter().map(|&(a, y, r)| (unwrap(a), y, r)).collect();
+            let (a0, a1) = c.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
+            let (h0, h1) = c.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
+            if h1 < y0 - dy || h0 > y1 + dy || a1 - a0 > PI {
+                continue;
+            }
+            let det = (c[1].1 - c[2].1) * (c[0].0 - c[2].0) + (c[2].0 - c[1].0) * (c[0].1 - c[2].1);
+            let (i0, i1) = (((h0 - y0) / dy).ceil().max(0.0) as isize, (((h1 - y0) / dy).floor() as isize).min(rows as isize - 1));
+            let (j0, j1) = (((a0 + PI) / dphi).ceil() as isize, ((a1 + PI) / dphi).floor() as isize);
+            let mut put = |i: usize, j: isize, r: f32| {
+                let cell = &mut grid[i * cols + j.rem_euclid(cols as isize) as usize];
+                *cell = cell.max(r);
+            };
+            // Its edges, sampled finer than the cells, so a sheet's thin rim (the edge of a
+            // cloak, standing at the nape or down its front) is never missed.
+            for k in 0..3 {
+                let (p, q) = (c[k], c[(k + 1) % 3]);
+                let n = (((q.0 - p.0).abs() / dphi).max((q.1 - p.1).abs() / dy) * 2.0).ceil().max(1.0) as usize;
+                for m in 0..=n {
+                    let t = m as f32 / n as f32;
+                    let (a, y, r) = (p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t, p.2 + (q.2 - p.2) * t);
+                    let i = ((y - y0) / dy).round();
+                    if (0.0..rows as f32).contains(&i) {
+                        put(i as usize, ((a + PI) / dphi).round() as isize, r);
+                    }
+                }
+            }
+            if det.abs() < 1e-9 || i0 > i1 || j0 > j1 {
+                continue;
+            }
+            for i in i0..=i1 {
+                let y = y0 + dy * i as f32;
+                for j in j0..=j1 {
+                    let a = -PI + dphi * j as f32;
+                    let l0 = ((c[1].1 - c[2].1) * (a - c[2].0) + (c[2].0 - c[1].0) * (y - c[2].1)) / det;
+                    let l1 = ((c[2].1 - c[0].1) * (a - c[2].0) + (c[0].0 - c[2].0) * (y - c[2].1)) / det;
+                    let l2 = 1.0 - l0 - l1;
+                    if l0 >= -1e-4 && l1 >= -1e-4 && l2 >= -1e-4 {
+                        put(i as usize, j, l0 * c[0].2 + l1 * c[1].2 + l2 * c[2].2);
+                    }
+                }
+            }
+        }
+        let cell = |i: isize, j: isize| grid[i.clamp(0, rows as isize - 1) as usize * cols + j.rem_euclid(cols as isize) as usize];
+        Rest::new(y0, y1, |phi, y| {
+            let (i, j) = (((y - y0) / dy).round() as isize, ((phi + PI) / dphi).round() as isize);
+            let column = |k: isize| (-1..=1).map(|di| cell(i + di, j + k)).fold(NONE, f32::max);
+            let own = column(0);
+            let mut worn = (-1..=1).map(column).fold(NONE, f32::max);
+            // A few columns further, only an edge standing clear of the surface's own run from
+            // here (a cloak's front edge over the tunic beside it), not a surface that merely
+            // curves away, so hair beside the edge does not dip under it.
+            for dir in [-1, 1] {
+                let step = if own > NONE && column(dir) > NONE { column(dir) - own } else { 0.0 };
+                for k in 2..=EDGE_COLUMNS {
+                    let c = column(dir * k);
+                    if c > own.max(0.0) + step * k as f32 + EDGE_RISE {
+                        worn = worn.max(c);
+                    }
+                }
+            }
             worn.max(b.trunk_reach([phi.cos(), phi.sin()], y))
         })
     }
@@ -899,8 +998,9 @@ fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> 
     let under = |a: f32, y: f32| env.outline.at(a, y) + GAP;
     let mut fitting = Fitting { arms: Some(&arms), over: open.then_some(&under as Underlay), notch: None };
     let mut mesh = on_body(body, garment_parts_fitted(&form, &fitting, &s.cut, &s.hem, &s.belt, &s.plates, s.seed).finish());
-    // A tail passing out through a cloak gets a vent cut up from the hem round it.
-    if let Some(notch) = open.then(|| tail_notch(body, &mesh)).flatten() {
+    // A tail passing out through the skirt (of a cloak, a robe, a tunic) gets a vent cut up
+    // from the hem round it.
+    if let Some(notch) = tail_notch(body, &mesh) {
         fitting.notch = Some(notch);
         mesh = on_body(body, garment_parts_fitted(&form, &fitting, &s.cut, &s.hem, &s.belt, &s.plates, s.seed).finish());
     }
@@ -921,34 +1021,45 @@ fn tail_notch(body: &Body, cloak: &ItemMesh) -> Option<Notch> {
     }
     let margin = 0.15 * body.scale.sqrt();
     let n = path.len();
-    // Where the tail comes within reach of the cloth's inner face (or is outside it already):
-    // its angle round the body, height, top and the half angle it spans there.
+    // Where the tail's surface, `margin` out, comes within reach of the cloth's inner face (or
+    // is outside it already): its angle round the body, height, top and the half angle it
+    // spans there. Points all round the tail, not only its centre line, since the cloth
+    // curves round it.
     let mut near: Vec<(f32, f32, f32, f32)> = vec![];
+    let dirs: Vec<V3> = (0..16)
+        .flat_map(|k| {
+            let a = TAU * k as f32 / 16.0;
+            [-0.6f32, 0.0, 0.6].map(|y| vec3::normalize_or([a.cos(), y, a.sin()], vec3::X))
+        })
+        .chain([vec3::Y, vec3::neg(vec3::Y)])
+        .collect();
     for (i, c) in path.iter().enumerate() {
-        let r = radius(i as f32 / (n - 1) as f32);
-        let q = [c[0], c[1] - w, c[2]];
-        if q[1] + r < hem {
-            continue;
-        }
-        let angle = (-q[2]).atan2(q[0]);
-        let cloth = reach.at(angle, q[1]);
-        let d = q[0].hypot(q[2]);
-        if cloth > NONE && d + r + margin > cloth - 0.05 {
-            near.push((angle, q[1], q[1] + r + margin, (r + margin) / cloth.max(d).max(0.5)));
+        let r = radius(i as f32 / (n - 1) as f32) + margin;
+        for dir in &dirs {
+            let q = [c[0] + dir[0] * r, c[1] - w + dir[1] * r, c[2] + dir[2] * r];
+            if q[1] < hem {
+                continue;
+            }
+            let angle = (-q[2]).atan2(q[0]);
+            let cloth = reach.at(angle, q[1]);
+            if cloth > NONE && q[0].hypot(q[2]) > cloth - 0.05 {
+                near.push((angle, q[1], q[1], 0.03));
+            }
         }
     }
     let first = near.iter().max_by(|a, b| a.2.total_cmp(&b.2))?;
     let (angle, top) = (first.0, first.2 + 0.1 * body.scale);
-    // The vent narrows to a point at its top: wide enough at the hem that it still clears
-    // the tail at every height it passes through.
+    // The vent rounds over to its top (a half ellipse): wide enough at the hem that it still
+    // clears the tail at every height it passes through.
     let half_width = near
         .iter()
         .map(|&(a, y, _, half)| {
             let off = ((a - angle + PI).rem_euclid(TAU) - PI).abs();
-            (half + off) / (1.0 - (y - hem) / (top - hem)).max(0.15)
+            let t = ((y - hem) / (top - hem)).clamp(0.0, 0.97);
+            (half + off) / (1.0 - t * t).sqrt()
         })
         .fold(0.0f32, f32::max)
-        .min(1.2);
+        .min(1.4);
     Some(Notch { angle, top, half_width })
 }
 
@@ -957,13 +1068,58 @@ fn has_shaft(s: &FeetState) -> bool {
     matches!(s.boot.style, BootStyle::Wrapped | BootStyle::Sabaton) || s.boot.height > 0.65
 }
 
-/// Trousers, breeches and leggings on the body's own legs and hips, tucked into tall boots.
+/// Trousers, breeches and leggings on the body's own legs and hips, tucked into tall boots,
+/// with a hole in the seat where a tail comes out (pigfolk tuck theirs in).
 fn legwear(body: &Body, state: &LegsState, tucked: bool) -> ItemMesh {
     let mut wear = state.legwear;
     if tucked {
         wear.taper = 1.0;
     }
-    legwear_parts(&body.lower_body_form(), &wear, &state.hem, state.seed).finish()
+    let form = body.lower_body_form();
+    let holes = if body.folk() == Folk::Lizardfolk { [1.0f32, -1.0].map(|side| tail_hole(body, &LegDrape::new(&form, &wear, state.seed), side)) } else { [None, None] };
+    legwear_parts_holed(&form, &wear, &state.hem, state.seed, holes).finish()
+}
+
+/// The hole a tail needs through the cloth of leg `side`: round where the cloth comes within
+/// reach of the tail (or lies inside it), `margin` wider. Our own: the plate's lizardfolk wear
+/// trousers through their tails.
+fn tail_hole(body: &Body, drape: &LegDrape, side: f32) -> Option<LegHole> {
+    let (path, radius) = body.tail()?;
+    let margin = 0.08 * body.scale.sqrt();
+    let n = path.len();
+    let near = |p: V3| {
+        (0..n - 1).any(|i| {
+            let (a, b) = (path[i], path[i + 1]);
+            let ab = vec3::sub(b, a);
+            let t = (vec3::dot(vec3::sub(p, a), ab) / vec3::dot(ab, ab).max(1e-9)).clamp(0.0, 1.0);
+            let r = radius((i as f32 + t) / (n - 1) as f32);
+            vec3::distance(p, vec3::add(a, vec3::scale(ab, t))) < r + margin
+        })
+    };
+    let mut hits: Vec<(f32, f32)> = vec![];
+    let rows = ((drape.top - drape.hem) / 0.04).ceil() as usize;
+    for k in 0..=rows {
+        let y = drape.hem + (drape.top - drape.hem) * k as f32 / rows as f32;
+        for j in 0..96 {
+            let a = TAU * j as f32 / 96.0;
+            if near(drape.point(side, a, y, 0.0)) {
+                hits.push((a, y));
+            }
+        }
+    }
+    if hits.is_empty() {
+        return None;
+    }
+    let (sx, sz) = hits.iter().fold((0.0, 0.0), |(x, z), (a, _)| (x + a.cos(), z + a.sin()));
+    let angle = sz.atan2(sx);
+    let off = |a: f32| ((a - angle + PI).rem_euclid(TAU) - PI).abs();
+    let (y0, y1) = hits.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &(_, y)| (lo.min(y), hi.max(y)));
+    let y = 0.5 * (y0 + y1);
+    // The smallest ellipse of the hits' own proportions that takes them all in, a cell wider
+    // all round.
+    let (a0, h0) = (hits.iter().map(|&(a, _)| off(a)).fold(0.0f32, f32::max).max(1e-3), (0.5 * (y1 - y0)).max(1e-3));
+    let k = hits.iter().map(|&(a, hy)| ((off(a) / a0).powi(2) + ((hy - y) / h0).powi(2)).sqrt()).fold(0.0f32, f32::max);
+    Some(LegHole { angle, y, half_angle: k * a0 + 1.5 * TAU / 96.0, half_height: k * h0 + 0.06 })
 }
 
 /// Footwear on each foot: the body's own foot with the boot's toe and width, the shaft
@@ -1086,10 +1242,11 @@ fn helm(body: &Body, state: &HelmState, fit: HeadFit) -> ItemMesh {
     // back of the skull stays inside (our own: the bowl is 1.12 times deeper than wide).
     let s = state.sized((1.12 * head.half_width).max(0.96 * head.half_depth) + body.hair_volume(true) + body.feature_volume(fit));
     let at = vec3::add(head.centre, [0.0, 0.1 * head.half_height, 0.0]);
-    let ears = body.head_mesh_fitted(fit).parts.into_iter().filter(|p| p.name == "ears").flat_map(|p| p.positions).collect::<Vec<V3>>();
-    // Each ear on its own side, in the helm's space.
-    let through = [1.0f32, -1.0].map(|sg| ears.iter().filter(|p| (p[0] - head.centre[0]) * sg > 0.0).map(|p| vec3::sub(*p, at)).collect::<Vec<V3>>());
-    let openings = Openings { through: through.into_iter().filter(|t| !t.is_empty()).collect(), margin: 0.08 * body.scale.sqrt() };
+    // In the helm's space: standing ears come out through it, and its rim lifts over a
+    // lizard's snout and brow.
+    let features = body.standing_features(fit);
+    let local = |f: Vec<V3>| f.into_iter().map(|p| vec3::sub(p, at)).collect::<Vec<V3>>();
+    let openings = Openings { through: features.ears.into_iter().map(local).collect(), lift: features.face.into_iter().map(local).collect(), margin: 0.08 * body.scale.sqrt() };
     let mut mesh = Helm::build_with_openings(&s, &openings);
     Placement::translation(at).apply_to_item(&mut mesh);
     mesh
@@ -1242,7 +1399,6 @@ fn bag(body: &Body, env: &Envelope, state: &BagState) -> ItemMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::folk::Folk;
     use crate::spec::BodySpec;
     use armory::families::bags::Bags;
     use armory::families::garment::Garment;
@@ -1549,6 +1705,68 @@ mod tests {
     }
 
     #[test]
+    fn zz_tail_debug() {
+        let body = Body::new(&BodySpec::roll(Folk::Lizardfolk, 3));
+        let tail = body.skin_mesh().parts.into_iter().find(|p| p.name == "tail").unwrap();
+        for worn in [robe_and_cloak(12), outfit(12), robe_and_cloak(13), outfit(13)] {
+            let fit = fit_worn(&body, &worn);
+            for layer in fit.layers.iter().filter(|l| matches!(l.slot, Slot::Shirt | Slot::Cloak)) {
+                let part = layer.mesh.parts.iter().find(|p| p.name == "body").unwrap();
+                let notch = tail_notch(&body, &layer.mesh);
+                let tris = triangles_in(part, [-99.0; 3], [99.0; 3]);
+                let mut hits = vec![];
+                for t in tail.indices.chunks(3) {
+                    let (a, b) = (tail.positions[t[0] as usize], tail.positions[t[1] as usize]);
+                    if tris.iter().any(|tr| segment_crosses(a, b, tr)) {
+                        hits.push(((-a[2]).atan2(a[0]), a[1] - body.waist_y));
+                    }
+                }
+                let hem = part.positions.iter().map(|p| p[1] - body.waist_y).fold(f32::MAX, f32::min);
+                eprintln!("{:?} hem {hem:.2} notch {notch:?} hits {}: {:?}", layer.slot, hits.len(), hits.iter().take(6).collect::<Vec<_>>());
+            }
+        }
+    }
+
+    #[test]
+    fn a_tail_comes_out_through_robes_and_trousers() {
+        use armory::families::legs::Legs;
+        let mut failures = vec![];
+        let mut checked = 0;
+        for folk in [Folk::Lizardfolk, Folk::Pigfolk] {
+            for seed in [3u32, 1207, 40, 8] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                let tail = body.skin_mesh().parts.into_iter().find(|p| p.name == "tail").unwrap();
+                for kit in [10u32, 11, 12, 13] {
+                    let robe = vec![
+                        (Slot::Shirt, Item::Garment(Garment::roll_as(kit, GarmentStyle::Robe))),
+                        (Slot::Legs, Item::Legs(Legs::roll_as(kit, LegwearStyle::Trousers))),
+                        (Slot::Feet, roll(Family::Feet, kit)),
+                    ];
+                    let leggings = vec![(Slot::Legs, Item::Legs(Legs::roll_as(kit, [LegwearStyle::Leggings, LegwearStyle::Breeches][kit as usize % 2])))];
+                    for worn in [robe, leggings, robe_and_cloak(kit), outfit(kit)] {
+                        let fit = fit_worn(&body, &worn);
+                        if fit.covered.hides("tail") {
+                            // (A pig's tail tucks in under them.)
+                            continue;
+                        }
+                        for layer in fit.layers.iter().filter(|l| matches!(l.slot, Slot::Legs | Slot::Shirt | Slot::Body)) {
+                            for part in &layer.mesh.parts {
+                                checked += 1;
+                                let n = crossings(&tail, part);
+                                if n > 0 {
+                                    failures.push(format!("{folk:?} {seed} kit {kit}: the tail passes through the {:?} layer's {} ({n} crossings)", layer.slot, part.name));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 300, "{checked}");
+        assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[test]
     fn ears_and_frills_clear_hoods_and_helms() {
         use armory::families::helm::HelmStyle;
         use armory::families::hood::Hoods;
@@ -1669,7 +1887,7 @@ mod tests {
         use crate::folk::HairStyle;
         let mut failures = vec![];
         for folk in [Folk::Human, Folk::Dwarf, Folk::Gnome] {
-            for seed in [3u32, 1207, 40] {
+            for seed in [3u32, 1207, 40, 8] {
                 let mut spec = BodySpec::roll(folk, seed);
                 spec.hair = HairStyle::Long;
                 let body = Body::new(&spec);
@@ -1689,8 +1907,8 @@ mod tests {
                         }
                     }
                     // Where it falls past the shoulders it lies on the cloak, not off it: round
-                    // the back it comes within about 1 cm of it in most directions and 2 cm in
-                    // all (the edges of the curtain reach the shoulders lower down).
+                    // the back it comes within 1.2 cm of it in every direction, the edges of
+                    // the curtain too.
                     let cloak = &fit.layer(Slot::Cloak).unwrap().mesh.parts;
                     let (a, b) = (body.shoulder_y - 0.25 * body.trunk_length, body.shoulder_y + 0.05 * body.trunk_length);
                     let mut nearest = [f32::MAX; 24];
@@ -1700,7 +1918,7 @@ mod tests {
                     }
                     let mut sectors: Vec<f32> = nearest.into_iter().filter(|d| *d < f32::MAX).collect();
                     sectors.sort_by(f32::total_cmp);
-                    if sectors.is_empty() || sectors[(sectors.len() - 1) / 2] > 0.12 || sectors.iter().any(|d| *d > 0.22) {
+                    if sectors.is_empty() || sectors.iter().any(|d| *d > 0.12) {
                         failures.push(format!("{folk:?} {seed} kit {kit}: the hair stands off the cloak: {sectors:.2?}"));
                     }
                 }
@@ -1816,8 +2034,10 @@ mod tests {
                         let trunk = body.skin_mesh().parts.into_iter().find(|p| p.name == "trunk").unwrap();
                         let band = body.waist_y - 0.2 * body.scale;
                         // (Off the midline, where the two halves' seams meet and a ray along
-                        // it slips between them.)
-                        for p in trunk.positions.iter().filter(|p| p[1] > crotch + 0.05 && p[1] < band && p[0].abs() > 0.03) {
+                        // it slips between them, and away from a tail's root, which comes out
+                        // through a hole in the seat.)
+                        let by_tail = |p: V3| body.tail().is_some_and(|(path, radius)| path.iter().enumerate().any(|(i, c)| vec3::distance(*c, p) < radius(i as f32 / (path.len() - 1) as f32) + 0.4));
+                        for p in trunk.positions.iter().filter(|p| p[1] > crotch + 0.05 && p[1] < band && p[0].abs() > 0.03 && !by_tail(**p)) {
                             let dir = vec3::normalize_or([p[0], 0.0, p[2]], vec3::Z);
                             let skin_r = p[0].hypot(p[2]);
                             if let Some(cloth) = ray_from(&legs, [0.0, p[1], 0.0], dir).filter(|cloth| skin_r > *cloth) {
@@ -1992,5 +2212,67 @@ mod tests {
         let beard = half_width(&body.hair_mesh(fit.hair), "beard");
         assert!(beard < body.shoulder_half_width, "the beard fans out to {beard}");
         assert!(fit.hair.chest <= fit.hair.clearance);
+    }
+
+    #[test]
+    fn standing_ears_clear_open_caps() {
+        use armory::families::helm::HelmStyle;
+        let mut failures = vec![];
+        let mut checked = 0;
+        // A goblin's long ears and a gnome's pointed ones under every open cap, with and
+        // without its aventail and cheek plates.
+        for folk in [Folk::Goblin, Folk::Gnome] {
+            for seed in [3u32, 1207, 40, 8, 77, 501] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                for style in [HelmStyle::Kettle, HelmStyle::Nasal, HelmStyle::Skullcap] {
+                    for kit in 0..8u32 {
+                        let mut helm = Helm::roll_as(seed + kit, style);
+                        helm.aventail.on = kit % 2 == 0;
+                        helm.cheeks.on = kit % 4 < 2;
+                        let fit = fit_worn(&body, &[(Slot::Head, Item::Helm(helm))]);
+                        let ears = body.under(&fit).parts.into_iter().find(|p| p.name == "ears").unwrap();
+                        for part in &fit.layer(Slot::Head).unwrap().mesh.parts {
+                            checked += 1;
+                            let n = crossings(&ears, part);
+                            if n > 0 {
+                                failures.push(format!("{folk:?} {seed} {style:?} kit {kit}: its ears pass through the {} ({n} crossings)", part.name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 500, "{checked}");
+        assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[test]
+    fn a_lizards_snout_and_brow_clear_helms() {
+        use armory::families::helm::HelmStyle;
+        let mut failures = vec![];
+        let mut checked = 0;
+        for seed in [3u32, 1207, 40, 8, 77, 501] {
+            let body = Body::new(&BodySpec::roll(Folk::Lizardfolk, seed));
+            for style in HelmStyle::ALL {
+                for kit in 0..4u32 {
+                    let mut helm = Helm::roll_as(seed + kit, style);
+                    helm.aventail.on = kit % 2 == 0;
+                    helm.cheeks.on = kit < 2;
+                    let fit = fit_worn(&body, &[(Slot::Head, Item::Helm(helm))]);
+                    // The head's skin (snout and brow ridges with it), its eyes, mouth and teeth.
+                    for feature in body.head_mesh_fitted(fit.head).parts.iter().filter(|p| p.name != "frill") {
+                        for part in &fit.layer(Slot::Head).unwrap().mesh.parts {
+                            checked += 1;
+                            let n = crossings(feature, part);
+                            if n > 0 {
+                                failures.push(format!("lizardfolk {seed} {style:?} kit {kit}: its {} passes through the {} ({n} crossings)", feature.name, part.name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 500, "{checked}");
+        assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
     }
 }

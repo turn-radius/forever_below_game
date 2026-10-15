@@ -24,6 +24,7 @@ pub mod gem;
 pub mod geom;
 pub mod heraldry;
 pub mod item;
+pub mod kindle;
 pub mod material;
 pub mod palette;
 pub mod reflect;
