@@ -1004,7 +1004,7 @@ fn swing_hip(mut pivots: Query<(&mut Transform, &ChildOf), With<HipSwing>>, gait
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct Hud;
 
-fn hide_hud_under_screens(open: Res<ScreenOpen>, mut huds: Query<&mut Visibility, With<Hud>>) {
+pub(crate) fn hide_hud_under_screens(open: Res<ScreenOpen>, mut huds: Query<&mut Visibility, With<Hud>>) {
     let shown = if open.0.is_some() { Visibility::Hidden } else { Visibility::Inherited };
     for mut visibility in &mut huds {
         visibility.set_if_neq(shown);

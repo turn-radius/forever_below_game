@@ -56,6 +56,26 @@ pub const FALL_TIME: f32 = 3.5;
 /// How fast a held delver moves, as a share of their pace. Our own placeholder.
 pub const HELD_PACE: f32 = 0.25;
 
+/// Below this share of maximum hit points the view's edge darkens. Our own.
+pub const HURT_BADLY: f32 = 0.25;
+/// Seconds one slow pulse of the darkened edge takes. Our own.
+pub const VIGNETTE_PULSE: f32 = 3.0;
+/// The darkened edge's colour: a dark red. Our own.
+const VIGNETTE_COLOUR: Color = Color::srgb(0.32, 0.02, 0.03);
+
+/// How strong the dark red edge is, 0 to 1, for `hp` of `max` hit points `seconds` into the
+/// delve: nothing at a quarter of `max` or more, and below that stronger the nearer 0, with a
+/// slow pulse. Our own.
+pub fn vignette_strength(hp: i32, max: i32, seconds: f32) -> f32 {
+    let share = hp.max(0) as f32 / max.max(1) as f32;
+    if share >= HURT_BADLY {
+        return 0.0;
+    }
+    let base = 0.35 + 0.65 * (1.0 - share / HURT_BADLY);
+    let pulse = 0.85 + 0.15 * (std::f32::consts::TAU * seconds / VIGNETTE_PULSE).sin();
+    base * pulse
+}
+
 /// Seconds left of the red flash round the view's edge.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub struct Pain(pub f32);
@@ -293,9 +313,12 @@ fn show_vitals(
     for mut bar in &mut bars {
         bar.width = percent(100.0 * health.hp.max(0) as f32 / health.max.max(1) as f32);
     }
-    let alpha = 0.55 * (pain.0 / PAIN_TIME).clamp(0.0, 1.0);
+    let flash = 0.55 * (pain.0 / PAIN_TIME).clamp(0.0, 1.0);
+    let dark = 0.7 * vignette_strength(health.hp, health.max, time.elapsed_secs());
+    // A fresh blow's red flash shows over the dark edge, whichever is stronger.
+    let edge_colour = if flash > 0.0 { BAD.with_alpha(flash.max(dark)) } else { VIGNETTE_COLOUR.with_alpha(dark) };
     for mut edge in &mut edges {
-        *edge = BorderColor::all(BAD.with_alpha(alpha));
+        *edge = BorderColor::all(edge_colour);
     }
 
     for bite in fresh {
@@ -706,5 +729,71 @@ mod tests {
             .init_resource::<crate::tuning::Tuning>();
         bite(&mut app, snake, Species::Rat, 1);
         assert_eq!(playing(&mut app), vec![0.0]);
+    }
+
+    #[test]
+    fn the_vignette_is_off_above_a_quarter_and_stronger_nearer_zero() {
+        for t in [0.0, 0.7, 1.5, 2.2, 2.9] {
+            assert_eq!(vignette_strength(30, 100, t), 0.0, "off at 30%");
+            assert_eq!(vignette_strength(25, 100, t), 0.0, "off at exactly 25%");
+            assert!(vignette_strength(20, 100, t) > 0.0, "on at 20%");
+            assert!(vignette_strength(5, 100, t) > vignette_strength(20, 100, t), "stronger at 5% than 20% at {t}");
+            assert!(vignette_strength(0, 100, t) >= vignette_strength(5, 100, t));
+            assert!(vignette_strength(1, 100, t) <= 1.0);
+        }
+        // It pulses.
+        assert_ne!(vignette_strength(10, 100, 0.0), vignette_strength(10, 100, VIGNETTE_PULSE / 4.0));
+    }
+
+    fn edge_colour(app: &mut App) -> Srgba {
+        let mut query = app.world_mut().query_filtered::<&BorderColor, With<PainEdge>>();
+        query.single(app.world()).unwrap().top.to_srgba()
+    }
+
+    #[test]
+    fn the_edge_darkens_while_badly_hurt_and_clears_on_healing() {
+        let (mut app, player, _snake) = delve_with_hud();
+        assert_eq!(edge_colour(&mut app).alpha, 0.0);
+        *app.world_mut().get_mut::<Health>(player).unwrap() = Health { hp: 2, max: 10 };
+        app.update();
+        let low = edge_colour(&mut app);
+        assert!(low.alpha > 0.0, "dark at 20%");
+        assert!(low.red < 0.5, "a dark red, not the flash: {low:?}");
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = 1;
+        app.update();
+        app.update();
+        assert!(edge_colour(&mut app).alpha > 0.0);
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = 3;
+        app.update();
+        assert_eq!(edge_colour(&mut app).alpha, 0.0, "off at 30%");
+    }
+
+    #[test]
+    fn a_fresh_blow_flashes_over_the_dark_edge() {
+        let (mut app, player, snake) = delve_with_hud();
+        *app.world_mut().get_mut::<Health>(player).unwrap() = Health { hp: 20, max: 100 };
+        app.update();
+        let dark = edge_colour(&mut app);
+        bite(&mut app, snake, Species::Rat, 1);
+        let flash = edge_colour(&mut app);
+        assert!(flash.red > dark.red, "the flash is the brighter red: {flash:?} over {dark:?}");
+        assert!(flash.alpha >= dark.alpha);
+    }
+
+    #[test]
+    fn the_edge_is_part_of_the_hud_and_hides_under_screens() {
+        use crate::carry::hide_hud_under_screens;
+        let (mut app, _player, _snake) = delve_with_hud();
+        app.add_systems(Update, hide_hud_under_screens);
+        let mut query = app.world_mut().query_filtered::<&ChildOf, With<PainEdge>>();
+        let root = query.single(app.world()).unwrap().parent();
+        assert!(app.world().get::<Hud>(root).is_some());
+        assert!(app.world().get::<DespawnOnExit<AppState>>(root).is_some(), "scoped to the delve");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(crate::play::Screen::Inventory);
+        app.update();
+        assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Hidden);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.update();
+        assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Inherited);
     }
 }
