@@ -116,6 +116,11 @@ impl Character {
         BodySpec::roll(self.folk, self.body_seed)
     }
 
+    /// The warmth the delver needs from their gear: 6, or 8 for the cold-blooded lizardfolk.
+    pub fn warmth_need(&self) -> f32 {
+        if self.folk == Folk::Lizardfolk { 8.0 } else { 6.0 }
+    }
+
     pub fn strength(&self) -> i32 {
         self.attributes.strength
     }

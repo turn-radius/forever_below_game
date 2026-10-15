@@ -122,7 +122,7 @@ impl Plugin for InventoryPlugin {
                         build_screen,
                         drag_items,
                         unhang_without_belt,
-                        sheet::update_status.run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::update_status, sheet::update_gear).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
                         show_drag,
@@ -1239,7 +1239,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
-            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, drag_items, icon::reveal_icons).chain());
+            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, sheet::update_gear, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -1381,13 +1381,101 @@ mod tests {
         app.world_mut().spawn((crate::play::Player, crate::character::DelverNeeds(needs), crate::exhaustion::Exhaustion(fb_character::Exhaustion::new(exhaustion)))).id()
     }
 
+    /// A rolled `base` with the real affix `name` applied and its weight set to `weight`.
+    fn weighed_with(base: &str, seed: u32, affix: Option<&str>, weight: f32) -> fb_items::Item {
+        let mut item = fb_items::roll_item(base, seed).unwrap();
+        if let Some(name) = affix {
+            let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+            affix.apply_to_stats(&mut item.profile.stats);
+            item.affixes.push(affix);
+        }
+        item.profile.stats.weight = weight;
+        item
+    }
+
+    /// The value on the gear row `label`.
+    fn gear_row(app: &mut App, label: usize) -> String {
+        let mut lines = app.world_mut().query::<(&sheet::GearLine, &Text)>();
+        lines.iter(app.world()).find(|(l, _)| l.0 == label).map(|(_, t)| t.0.clone()).expect("a gear line")
+    }
+
+    #[test]
+    fn the_attributes_read_with_their_modifiers() {
+        let mut app = screen_app();
+        app.world_mut().resource_mut::<Character>().attributes = fb_character::Attributes { strength: 14, dexterity: 9, constitution: 10, intelligence: 18, wisdom: 3 };
+        press(&mut app, KeyCode::KeyC);
+        let text = sheet_text(&mut app);
+        for want in ["STR 14 (+2)", "DEX 9 (-1)", "CON 10 (+0)", "INT 18 (+4)", "WIS 3 (-4)"] {
+            assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
+        }
+    }
+
+    #[test]
+    fn a_belt_of_the_ox_from_the_pack_changes_the_load_while_the_tab_is_open() {
+        use sheet::GEAR_ROWS;
+        let mut app = screen_app();
+        let attributes = fb_character::Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Human, attributes, ..Character::roll(4) };
+        let belt = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(weighed_with("Pack", 7, None, 0.0));
+            inventory.wear(pack, Slot::Back).unwrap();
+            let load = inventory.add(weighed_with("Dagger", 3, None, 55.0));
+            inventory.put(load, pack, Placement::new(0, 0, false)).unwrap();
+            let belt = inventory.add(weighed_with("Belt", 2, Some("of the Ox"), 0.0));
+            inventory.put(belt, pack, Placement::new(4, 0, false)).unwrap();
+            belt
+        };
+        press(&mut app, KeyCode::KeyC);
+        assert_eq!(GEAR_ROWS[0], "Load");
+        assert_eq!(gear_row(&mut app, 0), "55 / 150 lb \u{b7} Burdened");
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+        }
+        app.update();
+        assert_eq!(gear_row(&mut app, 0), "55 / 175 lb \u{b7} Light");
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
+    }
+
+    #[test]
+    fn the_gear_rows_agree_with_the_header() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyC);
+        let character = app.world().resource::<Character>().clone();
+        let derived = character.derive(app.world().resource::<Inventory>());
+        assert_eq!(gear_row(&mut app, 1), format!("{:.0} / {:.0}", derived.warmth, character.warmth_need()));
+        assert_eq!(gear_row(&mut app, 4), derived.armour_class.to_string());
+        assert_eq!(gear_row(&mut app, 2), "none");
+        assert!(header_stats(&mut app).contains(&format!("AC {}", derived.armour_class)));
+    }
+
+    #[test]
+    fn a_goblin_shows_60_ft_of_darkvision_and_a_lizardfolk_needs_more_warmth() {
+        let mut app = screen_app();
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Goblin, ..Character::roll(4) };
+        press(&mut app, KeyCode::KeyC);
+        assert_eq!(gear_row(&mut app, 3), "60 ft");
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(weighed_with("Belt", 2, Some("of the Mole"), 1.0));
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+        }
+        app.update();
+        assert_eq!(gear_row(&mut app, 3), "60 ft", "the best, not the sum");
+        assert_eq!(gear_row(&mut app, 1).split(" / ").nth(1), Some("6"));
+        app.world_mut().resource_mut::<Character>().folk = fb_body::Folk::Lizardfolk;
+        app.update();
+        assert_eq!(gear_row(&mut app, 1).split(" / ").nth(1), Some("8"));
+    }
+
     #[test]
     fn the_status_reads_the_needs_exhaustion_and_load() {
         let mut app = screen_app();
         delver_with(&mut app, 0.0, 2);
         press(&mut app, KeyCode::KeyC);
         let text = sheet_text(&mut app);
-        for want in ["Hunger", "Thirst", "Sleepiness", "Fed", "Quenched", "Rested", "Light", "Exhaustion 2: half speed"] {
+        for want in ["Hunger", "Thirst", "Sleepiness", "Fed", "Quenched", "Rested", "Exhaustion 2: half speed"] {
             assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
         }
     }

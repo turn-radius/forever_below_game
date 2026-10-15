@@ -1,16 +1,17 @@
 //! The character tab: the inventory screen's third leaf, in the plate's look (the dark ledger's
 //! palette, Almendra headings, Plex Mono values). It shows only what the game simulates.
 //!
-//! The status section reads the delver's `DelverNeeds`, `Exhaustion` and load band. The screen
+//! The attributes and the gear section come from `Character::derive`, so they agree with the
+//! header. The status section reads the delver's `DelverNeeds`, `Exhaustion` and load band. The screen
 //! builds the sheet when the tab opens or the gear changes ([`super::build_screen`]); while it
 //! is open [`update_status`] rewrites only the words and bars that moved, so nothing is rebuilt
 //! when the delver eats or drinks.
 
 use bevy::prelude::*;
-use fb_character::{Exhaustion as ExhaustionLevel, Meter, MeterKind, Needs};
+use fb_character::{Exhaustion as ExhaustionLevel, Meter, MeterKind, Needs, modifier};
 
 use super::items::Inventory;
-use crate::character::{Character, DelverNeeds};
+use crate::character::{Character, DelverNeeds, Derived};
 use crate::exhaustion::Exhaustion;
 use crate::play::Player;
 use crate::ui::{ACCENT, BAD, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts};
@@ -31,9 +32,13 @@ pub struct NeedWord(pub MeterKind);
 #[derive(Component, Debug)]
 pub struct ExhaustionLine;
 
-/// The load band's word.
+/// One of the five attribute lines, by its place in [`ATTRIBUTES`].
 #[derive(Component, Debug)]
-pub struct LoadWord;
+pub struct AttributeLine(pub usize);
+
+/// One of what-gear-makes-of-them lines, by its place in [`GEAR_ROWS`].
+#[derive(Component, Debug)]
+pub struct GearLine(pub usize);
 
 /// Width of a label column and of a bar, in logical pixels.
 const LABEL_PX: f32 = 120.0;
@@ -42,6 +47,37 @@ const BAR_HEIGHT_PX: f32 = 10.0;
 
 /// The meters in the order they are shown, with their labels.
 pub const NEEDS: [(MeterKind, &str); 3] = [(MeterKind::Hunger, "Hunger"), (MeterKind::Thirst, "Thirst"), (MeterKind::Sleepiness, "Sleepiness")];
+
+/// The attributes' short names, in the order shown.
+pub const ATTRIBUTES: [&str; 5] = ["STR", "DEX", "CON", "INT", "WIS"];
+
+/// The rows of what the delver's gear makes of them.
+pub const GEAR_ROWS: [&str; 5] = ["Load", "Warmth", "Light", "Darkvision", "Armour class"];
+
+/// "STR 14 (+2)": the score and its SRD modifier.
+pub fn attribute_text(name: &str, score: i32) -> String {
+    format!("{name} {score} ({:+})", modifier(score))
+}
+
+/// The five attribute lines.
+pub fn attribute_lines(character: &Character) -> [String; 5] {
+    let a = &character.attributes;
+    let scores = [a.strength, a.dexterity, a.constitution, a.intelligence, a.wisdom];
+    std::array::from_fn(|i| attribute_text(ATTRIBUTES[i], scores[i]))
+}
+
+/// The values of [`GEAR_ROWS`], from `derived` (so they agree with the header): "55 / 150 lb
+/// \u{b7} Burdened", "4 / 6", "20 ft", "60 ft", "13".
+pub fn gear_values(character: &Character, derived: &Derived) -> [String; 5] {
+    let feet = |f: f32| if f > 0.0 { format!("{f:.0} ft") } else { "none".to_string() };
+    [
+        format!("{:.0} / {:.0} lb \u{b7} {}", derived.load, derived.capacity, derived.load_band.word()),
+        format!("{:.0} / {:.0}", derived.warmth, character.warmth_need()),
+        feet(derived.light),
+        feet(derived.darkvision),
+        derived.armour_class.to_string(),
+    ]
+}
 
 fn meter(needs: &Needs, kind: MeterKind) -> &Meter {
     match kind {
@@ -102,6 +138,21 @@ fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, fill_row
 /// Builds the character tab's body: the status section.
 pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel) {
     parent.spawn((CharacterSheet, Name::new("CharacterSheet"), Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() })).with_children(|sheet| {
+        heading(sheet, fonts, "attributes");
+        sheet.spawn(Node { column_gap: px(18), flex_wrap: FlexWrap::Wrap, row_gap: px(4), ..default() }).with_children(|line| {
+            for (i, text) in attribute_lines(character).into_iter().enumerate() {
+                line.spawn((AttributeLine(i), Text::new(text), UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT)));
+            }
+        });
+        heading(sheet, fonts, "what your gear makes of you");
+        // TODO(#273): hovering a number lists where it comes from (the folk, each item, each
+        // affix), on the shared `fb_character::explain` once it lands.
+        let values = gear_values(character, &character.derive(inventory));
+        for (i, label) in GEAR_ROWS.into_iter().enumerate() {
+            row(sheet, fonts, label, |row| {
+                row.spawn((GearLine(i), Text::new(values[i].clone()), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
+            });
+        }
         heading(sheet, fonts, "status");
         for (kind, label) in NEEDS {
             let meter = meter(needs, kind);
@@ -115,9 +166,6 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Cha
                 row.spawn((NeedWord(kind), Text::new(meter.word()), UiFonts::style(&fonts.mono_bold, 14.0, need_colour(meter))));
             });
         }
-        row(sheet, fonts, "Load", |row| {
-            row.spawn((LoadWord, Text::new(character.derive(inventory).load_band.word()), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
-        });
         row(sheet, fonts, "Exhaustion", |row| {
             row.spawn((ExhaustionLine, Text::new(exhaustion_text(exhaustion)), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
         });
@@ -126,18 +174,41 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Cha
     });
 }
 
-/// Keeps the open sheet's bars and words true to the delver, writing only what changed.
-pub fn update_status(
-    players: Query<(Ref<DelverNeeds>, Ref<Exhaustion>), With<Player>>,
+/// Keeps the open sheet's attributes and gear numbers true to the delver, writing only the
+/// lines that changed, and only when the character or the inventory did.
+pub fn update_gear(
     character: Res<Character>,
     inventory: Res<Inventory>,
+    mut attributes: Query<(&AttributeLine, &mut Text), Without<GearLine>>,
+    mut gear: Query<(&GearLine, &mut Text), Without<AttributeLine>>,
+) {
+    if !character.is_changed() && !inventory.is_changed() {
+        return;
+    }
+    let lines = attribute_lines(&character);
+    for (AttributeLine(i), mut text) in &mut attributes {
+        if text.0 != lines[*i] {
+            text.0 = lines[*i].clone();
+        }
+    }
+    let values = gear_values(&character, &character.derive(&inventory));
+    for (GearLine(i), mut text) in &mut gear {
+        if text.0 != values[*i] {
+            text.0 = values[*i].clone();
+        }
+    }
+}
+
+/// Keeps the open sheet's need bars, words and exhaustion line true to the delver, writing
+/// only what changed.
+pub fn update_status(
+    players: Query<(Ref<DelverNeeds>, Ref<Exhaustion>), With<Player>>,
     mut fills: Query<(&NeedFill, &mut Node, &mut BackgroundColor)>,
-    mut words: Query<(&NeedWord, &mut Text, &mut TextColor), (Without<LoadWord>, Without<ExhaustionLine>)>,
-    mut loads: Query<&mut Text, (With<LoadWord>, Without<NeedWord>, Without<ExhaustionLine>)>,
-    mut exhaustions: Query<&mut Text, (With<ExhaustionLine>, Without<NeedWord>, Without<LoadWord>)>,
+    mut words: Query<(&NeedWord, &mut Text, &mut TextColor), Without<ExhaustionLine>>,
+    mut exhaustions: Query<&mut Text, (With<ExhaustionLine>, Without<NeedWord>)>,
 ) {
     let Ok((needs, exhaustion)) = players.single() else { return };
-    if !needs.is_changed() && !exhaustion.is_changed() && !character.is_changed() && !inventory.is_changed() {
+    if !needs.is_changed() && !exhaustion.is_changed() {
         return;
     }
     for (NeedFill(kind), mut node, mut colour) in &mut fills {
@@ -154,12 +225,6 @@ pub fn update_status(
             text.0 = meter.word().to_string();
         }
         colour.set_if_neq(TextColor(need_colour(meter)));
-    }
-    let band = character.derive(&inventory).load_band.word();
-    for mut text in &mut loads {
-        if text.0 != band {
-            text.0 = band.to_string();
-        }
     }
     let line = exhaustion_text(exhaustion.0);
     for mut text in &mut exhaustions {
