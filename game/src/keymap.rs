@@ -21,6 +21,9 @@ pub enum Action {
     PickUp,
     /// Equips the item under the crosshair straight from the floor.
     EquipAimed,
+    /// Lights or puts out the carried light (with Shift, the hip lantern), or in the inventory
+    /// the light under the mouse.
+    Light,
     DragItem,
     TurnItem,
     Inventory,
@@ -147,6 +150,7 @@ impl Default for Keymap {
                 bind(Action::Attack, "Swing what you hold", Group::Fighting, &[Mouse(MouseButton::Left)]),
                 bind(Action::PickUp, "Pick up or open", Group::Items, &[Key(KeyCode::KeyE)]),
                 bind(Action::EquipAimed, "Equip what you look at", Group::Items, &[Key(KeyCode::KeyF)]),
+                bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),

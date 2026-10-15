@@ -36,8 +36,30 @@ pub struct CardText {
     pub affixes: Vec<AffixLine>,
     /// Stats the meta line leaves out that differ from an ordinary thing's.
     pub stats: Vec<String>,
+    /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
+    pub light: Option<String>,
     /// A legendary's three lines of history.
     pub history: Vec<String>,
+}
+
+/// What a torch or lantern's card says of its flame, and what L would do; `None` for anything
+/// that is not a light.
+pub fn light_line(item: &armory::Item) -> Option<String> {
+    use armory::families::torch::BurnState;
+    let (state, lit) = match item {
+        armory::Item::Torch(s) => (
+            match s.burn.state {
+                BurnState::Fresh => "Unlit",
+                BurnState::Burning => "Burning",
+                BurnState::Doused => "Doused",
+                BurnState::Spent => return Some("Spent".into()),
+            },
+            s.burn.state == BurnState::Burning,
+        ),
+        armory::Item::Lantern(s) => (if s.flame.lit { "Lit" } else { "Unlit" }, s.flame.lit),
+        _ => return None,
+    };
+    Some(format!("{state} \u{b7} L {}", if lit { "puts it out" } else { "lights it" }))
 }
 
 /// A number as the card writes it: at most two decimals, no trailing zeros.
@@ -105,6 +127,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         contents,
         affixes: item.affixes.iter().map(|a| AffixLine { text: a.text.clone(), name: a.name.clone(), good: a.good }).collect(),
         stats: stat_lines(s),
+        light: light_line(&item.shape),
         history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()),
     }
 }
@@ -263,6 +286,9 @@ fn fill_card(commands: &mut Commands, card: Entity, item: &Item, text: &CardText
                 // The totals, with every affix counted, on one line under them.
                 if !text.stats.is_empty() {
                     numbers_line(info, fonts, &text.stats.join(" \u{b7} "), 12.0);
+                }
+                if let Some(light) = &text.light {
+                    info.spawn((Text::new(light.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
                 }
                 if !text.history.is_empty() {
                     info.spawn((

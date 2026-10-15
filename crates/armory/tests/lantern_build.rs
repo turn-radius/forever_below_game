@@ -90,7 +90,7 @@ fn the_flame_and_its_light_are_inside_the_body() {
                 let (flo, fhi) = bounds(part(&mesh, "flame").unwrap());
                 assert!(fhi[1] < hi[1] - s.body.width * 0.3 && flo[1] > lo[1], "seed {}: flame {flo:?}..{fhi:?} outside", s.seed);
                 assert!(light.position[1] > flo[1] && light.position[1] < fhi[1], "seed {}", s.seed);
-                assert!(light.radius > 40.0 && light.radius < 100.0, "seed {}: radius {}", s.seed, light.radius);
+                assert!(light.radius > 70.0 && light.radius < 110.0, "seed {}: radius {}", s.seed, light.radius);
             }
             None => assert!(!s.flame.lit, "seed {}", s.seed),
         }

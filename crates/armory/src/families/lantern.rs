@@ -240,7 +240,9 @@ impl LanternState {
     }
 }
 
-/// The lantern's light in feet (`light` of `Lantern` in `data/bases.json`).
+/// The lantern's light in feet (`light` of `Lantern` in `data/bases.json`): the SRD's hooded
+/// lantern, 30 ft of bright light
+/// (https://www.dndbeyond.com/sources/dnd/free-rules/equipment#AdventuringGear).
 pub const LANTERN_FEET: f32 = 30.0;
 
 impl Generator for Lantern {
@@ -278,21 +280,24 @@ impl Lantern {
         compose(&mut rng, seed, style)
     }
 
-    /// Where the lantern gives its light, while lit: the heart of the flame. Horn panes warm
-    /// and dim it, a pierced drum lets out least, a glass chimney most; an oil flame reaches
-    /// further than a candle. `None` when the lantern is out.
+    /// Where the lantern gives its light, while lit: the heart of the flame, reaching about the
+    /// SRD's hooded lantern's 30 ft of bright light ([`LANTERN_FEET`]). Horn panes warm it, a
+    /// pierced drum lets out less, an open cage most; an oil flame reaches farther than a
+    /// candle, and a bigger flame a little farther. The shares are our own, kept narrow enough
+    /// that the weakest lantern, pierced with a candle, still reaches farther than any torch
+    /// ([`crate::families::torch::Torch::light`]). `None` when the lantern is out.
     pub fn light(s: &LanternState) -> Option<LightAnchor> {
         if !s.flame.lit {
             return None;
         }
         let g = Layout::of(s);
         let (color, share) = match s.body.style {
-            LanternStyle::Horn => (HORN_LIGHT, 0.85),
-            LanternStyle::Pierced => (CANDLE_LIGHT, 0.6),
-            LanternStyle::Cage => (if s.flame.fuel == LanternFuel::Oil { FLAME_LIGHT } else { CANDLE_LIGHT }, 1.0),
+            LanternStyle::Horn => (HORN_LIGHT, 1.0),
+            LanternStyle::Pierced => (CANDLE_LIGHT, 0.92),
+            LanternStyle::Cage => (if s.flame.fuel == LanternFuel::Oil { FLAME_LIGHT } else { CANDLE_LIGHT }, 1.1),
         };
-        let fuel = if s.flame.fuel == LanternFuel::Oil { 1.0 } else { 0.8 };
-        let feet = LANTERN_FEET * share * fuel * (0.8 + 0.2 * s.flame.flame);
+        let fuel = if s.flame.fuel == LanternFuel::Oil { 1.0 } else { 0.92 };
+        let feet = LANTERN_FEET * share * fuel * (0.9 + 0.1 * s.flame.flame);
         let at = vec3::add(g.flame_base, [0.0, g.flame_height * 0.4, 0.0]);
         Some(LightAnchor::feet(at, color, feet, 0.25))
     }

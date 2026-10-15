@@ -119,6 +119,13 @@ impl Inventory {
         self.items.get(&id)
     }
 
+    /// Lights `id` if it is out or puts it out if it is lit, wherever it is: in a hand, at the
+    /// hip, in a bag or on the floor ([`armory::Item::toggle_lit`]). Returns whether it is lit
+    /// now; a spent torch, or anything that is not a light, is left as it was.
+    pub fn toggle_light(&mut self, id: ItemId) -> Result<bool, armory::kindle::Unlit> {
+        self.items.get_mut(&id).ok_or(armory::kindle::Unlit::NotALight)?.shape.toggle_lit()
+    }
+
     pub fn location(&self, id: ItemId) -> Option<Location> {
         self.locations.get(&id).copied()
     }
