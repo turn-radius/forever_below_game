@@ -1,10 +1,10 @@
 //! Camera jolts when a blow lands: a brief push and tilt that springs back, scaled by damage.
 //!
 //! The kick is applied to the [`PlayerCamera`] child's local transform, never moving the player's
-//! actual position. It uses [`marker_angle`] to push the view away from the attacker in local space.
+//! actual position. It uses [`bearing_from_facing`] to push the view away from the attacker in local space.
 
 use bevy::prelude::*;
-use crate::combat::{Health, vitals::marker_angle};
+use crate::combat::{Health, vitals::bearing_from_facing};
 use crate::creatures::behaviour::CreatureAttack;
 use crate::combat::swing::lean_into_blow;
 use crate::play::{DelveSystems, Player, PlayerCamera, level_has_focus};
@@ -67,11 +67,11 @@ fn apply_kick(
     let (player_entity, player_transform, health) = player.into_inner();
 
     for attack in attacks.read() {
-        // Calculate direction to push: away from the attacker. marker_angle points to the
+        // Calculate direction to push: away from the attacker. bearing_from_facing points to the
         // attacker; we use it directly with the formula Vec3::new(-sin(a), 0, cos(a)) which
         // produces a vector pointing away from an attacker at angle a.
         let player_yaw = player_transform.rotation.to_euler(EulerRot::YXZ).0;
-        let away_angle = marker_angle(player_transform.translation.xz(), player_yaw, attack.attacker_pos);
+        let away_angle = bearing_from_facing(player_transform.translation.xz(), player_yaw, attack.attacker_pos);
 
         // Scale kick magnitude by damage relative to max HP, capped at 1.0.
         let magnitude = (attack.damage as f32 / health.max.max(1) as f32).min(1.0) * scale;
@@ -109,7 +109,7 @@ fn update_kick(
         let progress = (KICK_DURATION - kick.left) / KICK_DURATION;
         let remaining = kick.magnitude * (1.0 - ease_out_cubic(progress));
 
-        // `marker_angle` is clockwise from ahead (0 ahead, π/2 right), so the view moves by
+        // `bearing_from_facing` is clockwise from ahead (0 ahead, π/2 right), so the view moves by
         // (-sin, cos) in local x and z: left for a bite on the right, back for one in front.
         let a = kick.push_yaw;
         camera_transform.translation += Vec3::new(-a.sin(), 0.0, a.cos()) * remaining * MAX_KICK_DISTANCE;
