@@ -6,6 +6,7 @@
 
 use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
+use fb_character::{Attributes, modifier as ability_modifier};
 use procgen_rng::Mulberry32;
 
 use crate::carry::carried_lights;
@@ -39,14 +40,11 @@ impl Class {
     }
 }
 
-/// Strength, dexterity, constitution and intelligence, in that order (the plate's `C.stats`).
-pub type Abilities = [i32; 4];
-
 /// The ability modifier for a score, `floor((score - 10) / 2)` (the plate's `md`, as in the
 /// [D&D 5e SRD 5.1](https://media.wizards.com/2016/downloads/DND/SRD-OGL_V5.1.pdf), "Ability
 /// Scores and Modifiers").
 pub fn modifier(score: i32) -> i32 {
-    (score - 10).div_euclid(2)
+    ability_modifier(score)
 }
 
 /// Who the delver is.
@@ -58,7 +56,7 @@ pub struct Character {
     /// Rolled from the folk's syllables in `data/syl.json` (the plate's `genName`).
     pub name: String,
     pub class: Class,
-    pub abilities: Abilities,
+    pub attributes: Attributes,
     /// How dirty they are, 0 clean to 1 filthy (the plate's `C.dirt`).
     pub dirt: f32,
 }
@@ -94,12 +92,23 @@ impl Character {
         let class = *rng.pick(&Class::ALL);
         let name = fb_items::naming::folk_name(rng, folk.key());
         let race = folk.race();
-        let abilities = race.stats.map(|v| {
+        let [str_base, dex_base, con_base, int_base, wis_base] = race.stats;
+        // Roll each attribute: nudge and clamp to 3–18. WIS is drawn last, so existing seeds
+        // produce the same first four scores; only the WIS roll and dirt shift.
+        let mut roll = |base: i32| {
             let nudge = ((rng.next_f64() + rng.next_f64() + rng.next_f64() - 1.5) * 3.0).round() as i32;
-            (v + nudge).clamp(3, 18)
-        });
+            (base + nudge).clamp(3, 18)
+        };
+        // Fields evaluated in written order: strength, dexterity, constitution, intelligence, wisdom.
+        let attributes = Attributes {
+            strength: roll(str_base),
+            dexterity: roll(dex_base),
+            constitution: roll(con_base),
+            intelligence: roll(int_base),
+            wisdom: roll(wis_base),
+        };
         let dirt = 0.3 + rng.next_f64() as f32 * 0.2;
-        Character { folk, body_seed, name, class, abilities, dirt }
+        Character { folk, body_seed, name, class, attributes, dirt }
     }
 
     /// Their body's spec.
@@ -108,15 +117,15 @@ impl Character {
     }
 
     pub fn strength(&self) -> i32 {
-        self.abilities[0]
+        self.attributes.strength
     }
 
     pub fn dexterity(&self) -> i32 {
-        self.abilities[1]
+        self.attributes.dexterity
     }
 
     pub fn constitution(&self) -> i32 {
-        self.abilities[2]
+        self.attributes.constitution
     }
 }
 
@@ -176,12 +185,35 @@ mod tests {
         for seed in [1, 7, 1207] {
             let delver = Character::roll(seed);
             assert_eq!(delver, Character::roll(seed));
-            assert!(delver.abilities.iter().all(|a| (3..=18).contains(a)));
+            for attr in [delver.attributes.strength, delver.attributes.dexterity, delver.attributes.constitution, delver.attributes.intelligence, delver.attributes.wisdom] {
+                assert!((3..=18).contains(&attr));
+            }
             assert!((0.3..0.5).contains(&delver.dirt));
             assert!(!delver.name.is_empty());
         }
         let folk: std::collections::HashSet<Folk> = (0..60).map(|s| Character::roll(s).folk).collect();
         assert_eq!(folk.len(), Folk::ALL.len(), "every folk turns up");
+    }
+
+    #[test]
+    fn every_folk_has_five_attributes() {
+        for folk in Folk::ALL {
+            let race = folk.race();
+            assert_eq!(race.stats.len(), 5, "folk {folk:?} has stat array of length {}", race.stats.len());
+            for stat in race.stats {
+                assert!((3..=18).contains(&stat), "folk {folk:?} stat {stat} out of range");
+            }
+        }
+    }
+
+    #[test]
+    fn rolling_preserves_rng_stream_with_wis_last() {
+        // Pinning the first four scores ensures WIS is drawn last: existing seeds give the
+        // same STR, DEX, CON, INT but different WIS and dirt (shifted by the WIS roll).
+        let delver1 = Character::roll(1);
+        assert_eq!((delver1.attributes.strength, delver1.attributes.dexterity, delver1.attributes.constitution, delver1.attributes.intelligence), (7, 12, 16, 7));
+        let delver7 = Character::roll(7);
+        assert_eq!((delver7.attributes.strength, delver7.attributes.dexterity, delver7.attributes.constitution, delver7.attributes.intelligence), (12, 9, 8, 12));
     }
 
     #[test]
@@ -194,7 +226,8 @@ mod tests {
     #[test]
     fn equipped_stats_add_to_the_delver() {
         use fb_items::Slot;
-        let delver = Character { abilities: [11, 12, 10, 10], folk: Folk::Human, ..Character::roll(4) };
+        let test_attrs = Attributes { strength: 11, dexterity: 12, constitution: 10, intelligence: 10, wisdom: 10 };
+        let delver = Character { attributes: test_attrs, folk: Folk::Human, ..Character::roll(4) };
         let mut inventory = Inventory::default();
         let bare = delver.derive(&inventory);
         assert_eq!((bare.armour_class, bare.load, bare.capacity, bare.light), (11, 0.0, 165.0, 0.0));

@@ -245,6 +245,7 @@ pub fn bite_damage(attack: &CreatureAttack, constitution: i32, rng: &mut Mulberr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fb_character::Attributes;
 
     /// The hit cone as shipped.
     const CONE: f32 = 50.0 * std::f32::consts::PI / 180.0;
@@ -255,7 +256,7 @@ mod tests {
     }
 
     fn delver(class: Class, con: i32) -> Character {
-        Character { class, abilities: [12, 12, con, 10], ..Character::roll(3) }
+        Character { class, attributes: Attributes { strength: 12, dexterity: 12, constitution: con, intelligence: 10, wisdom: 10 }, ..Character::roll(3) }
     }
 
     #[test]
