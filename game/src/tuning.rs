@@ -46,6 +46,7 @@ pub struct Tuning {
     pub light: LightTuning,
     pub sound: SoundTuning,
     pub interface: InterfaceTuning,
+    pub clock: ClockTuning,
 }
 
 /// How the first-person view draws.
@@ -308,6 +309,21 @@ pub struct InterfaceTuning {
 impl Default for InterfaceTuning {
     fn default() -> Self {
         InterfaceTuning { cell_size: 46.0, hover_delay: 0.0 }
+    }
+}
+
+/// How game time advances.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClockTuning {
+    /// How many game seconds pass per real second: 12 means 1 game hour takes 300 real seconds
+    /// (5 minutes). The clock only advances while delving and not paused.
+    pub game_seconds_per_second: f32,
+}
+
+impl Default for ClockTuning {
+    fn default() -> Self {
+        ClockTuning { game_seconds_per_second: 12.0 }
     }
 }
 

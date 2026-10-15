@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/procgen_rng", "crates/armory", "crates/fb_items", "crates/fb_body", "crates/fb_creatures", "crates/fb_level", "game"]
+members = ["crates/procgen_rng", "crates/armory", "crates/fb_items", "crates/fb_body", "crates/fb_creatures", "crates/fb_level", "crates/fb_character", "game"]
 
 [workspace.package]
 edition = "2024"
@@ -19,6 +19,7 @@ fb_items = { path = "crates/fb_items" }
 fb_body = { path = "crates/fb_body" }
 fb_level = { path = "crates/fb_level" }
 fb_creatures = { path = "crates/fb_creatures" }
+fb_character = { path = "crates/fb_character" }
 
 # Bevy is slow in debug; optimise dependencies, keep our code debuggable.
 [profile.dev]
@@ -40,4 +41,6 @@ opt-level = 3
 [profile.dev.package.fb_level]
 opt-level = 3
 [profile.dev.package.procgen_rng]
+opt-level = 3
+[profile.dev.package.fb_character]
 opt-level = 3

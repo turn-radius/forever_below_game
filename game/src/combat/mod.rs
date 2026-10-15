@@ -79,6 +79,13 @@ impl Health {
         was_up && self.hp == 0
     }
 
+    /// Restores `amount`, never above the maximum. Returns how much it restored.
+    pub fn heal(&mut self, amount: u32) -> u32 {
+        let before = self.hp;
+        self.hp = (self.hp + amount as i32).min(self.max).max(before);
+        (self.hp - before) as u32
+    }
+
     pub fn is_down(&self) -> bool {
         self.hp <= 0
     }
@@ -246,6 +253,7 @@ pub fn bite_damage(attack: &CreatureAttack, constitution: i32, rng: &mut Mulberr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fb_character::Attributes;
 
     /// The hit cone as shipped.
     const CONE: f32 = 50.0 * std::f32::consts::PI / 180.0;
@@ -256,7 +264,7 @@ mod tests {
     }
 
     fn delver(class: Class, con: i32) -> Character {
-        Character { class, abilities: [12, 12, con, 10], ..Character::roll(3) }
+        Character { class, attributes: Attributes { strength: 12, dexterity: 12, constitution: con, intelligence: 10, wisdom: 10 }, ..Character::roll(3) }
     }
 
     #[test]

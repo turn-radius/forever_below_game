@@ -6,6 +6,11 @@
 use crate::families::torch::BurnState;
 use crate::item::Item;
 
+/// How long a full torch burns, in game seconds: one hour.
+pub const TORCH_SECONDS: f32 = 3_600.0;
+/// How long a full lantern burns, in game seconds: six hours of oil (SRD p. 68).
+pub const LANTERN_SECONDS: f32 = 21_600.0;
+
 /// Why a light would not light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unlit {
@@ -13,6 +18,8 @@ pub enum Unlit {
     Spent,
     /// Not a torch or a lantern.
     NotALight,
+    /// A lantern with no fuel left, until it is refuelled.
+    Empty,
 }
 
 impl Item {
@@ -23,6 +30,66 @@ impl Item {
             Item::Torch(s) => Some(s.burn.state == BurnState::Burning),
             Item::Lantern(s) => Some(s.flame.lit),
             _ => None,
+        }
+    }
+
+    /// Burning time left in game seconds, as the item holds it; `None` for anything that is not
+    /// a torch or a lantern. The time a full one holds is [`Item::fuel_capacity`], times the
+    /// item's `BurnTime`.
+    pub fn fuel_left(&self) -> Option<f32> {
+        match self {
+            Item::Torch(s) => Some(s.burn.fuel_left),
+            Item::Lantern(s) => Some(s.flame.fuel_left),
+            _ => None,
+        }
+    }
+
+    /// Game seconds a full torch or lantern burns, before the item's `BurnTime` is applied.
+    pub fn fuel_capacity(&self) -> Option<f32> {
+        match self {
+            Item::Torch(_) => Some(TORCH_SECONDS),
+            Item::Lantern(_) => Some(LANTERN_SECONDS),
+            _ => None,
+        }
+    }
+
+    /// Scales the fuel left, for the item's `BurnTime`.
+    pub fn scale_fuel(&mut self, by: f32) {
+        match self {
+            Item::Torch(s) => s.burn.fuel_left *= by,
+            Item::Lantern(s) => s.flame.fuel_left *= by,
+            _ => {}
+        }
+    }
+
+    /// Burns `seconds` of game time off a lit torch or lantern whose full fuel is `capacity`
+    /// seconds; an unlit light, or anything else, is left alone. The torch's char and the
+    /// lantern's level follow the fuel (the level keeps the slider's floor of 0.1 while lit, so an almost
+    /// empty font still shows a little oil). A torch with none left is spent, and a lantern goes out.
+    pub fn burn(&mut self, seconds: f32, capacity: f32) {
+        if seconds <= 0.0 || self.lit() != Some(true) {
+            return;
+        }
+        match self {
+            Item::Torch(s) => {
+                let b = &mut s.burn;
+                b.fuel_left = (b.fuel_left - seconds).max(0.0);
+                if b.fuel_left <= 0.0 {
+                    b.state = BurnState::Spent;
+                    b.char = 1.0;
+                } else {
+                    b.char = b.char.max(1.0 - b.fuel_left / capacity).min(1.0);
+                }
+            }
+            Item::Lantern(s) => {
+                let f = &mut s.flame;
+                f.fuel_left = (f.fuel_left - seconds).max(0.0);
+                f.level = (f.fuel_left / capacity).clamp(0.1, 1.0);
+                if f.fuel_left <= 0.0 {
+                    f.lit = false;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -41,6 +108,9 @@ impl Item {
                 Ok(())
             }
             Item::Lantern(s) => {
+                if lit && s.flame.fuel_left <= 0.0 {
+                    return Err(Unlit::Empty);
+                }
                 s.flame.lit = lit;
                 Ok(())
             }
@@ -97,6 +167,46 @@ mod tests {
         let was = l.lit().unwrap();
         assert_eq!(l.toggle_lit(), Ok(!was));
         assert_eq!(l.toggle_lit(), Ok(was));
+    }
+
+    #[test]
+    fn burning_takes_fuel_off_a_lit_light_only() {
+        let mut t = torch(BurnState::Burning);
+        if let Item::Torch(s) = &mut t {
+            s.burn.fuel_left = TORCH_SECONDS;
+        }
+        let full = t.fuel_left().unwrap();
+        t.burn(600.0, TORCH_SECONDS);
+        assert_eq!(t.fuel_left(), Some(full - 600.0));
+        t.set_lit(false).unwrap();
+        t.burn(600.0, TORCH_SECONDS);
+        assert_eq!(t.fuel_left(), Some(full - 600.0), "out, it keeps what is left");
+        t.set_lit(true).unwrap();
+        t.burn(1.0e6, TORCH_SECONDS);
+        assert!(matches!(&t, Item::Torch(s) if s.burn.state == BurnState::Spent && s.burn.char == 1.0));
+        assert_eq!(t.fuel_left(), Some(0.0));
+    }
+
+    #[test]
+    fn the_char_follows_the_fuel() {
+        let mut t = torch(BurnState::Fresh);
+        if let Item::Torch(s) = &mut t {
+            s.burn.char = 0.0;
+            s.burn.fuel_left = TORCH_SECONDS;
+        }
+        t.set_lit(true).unwrap();
+        t.burn(TORCH_SECONDS / 2.0, TORCH_SECONDS);
+        assert!(matches!(&t, Item::Torch(s) if (s.burn.char - 0.5).abs() < 1e-4));
+    }
+
+    #[test]
+    fn an_empty_lantern_goes_out_and_will_not_light() {
+        let mut l = Item::Lantern(Lantern::roll(3));
+        l.set_lit(true).unwrap();
+        l.burn(LANTERN_SECONDS * 2.0, LANTERN_SECONDS);
+        assert_eq!(l.lit(), Some(false));
+        assert_eq!(l.fuel_left(), Some(0.0));
+        assert_eq!(l.set_lit(true), Err(Unlit::Empty));
     }
 
     #[test]
