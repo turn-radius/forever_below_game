@@ -26,6 +26,7 @@ pub mod heraldry;
 pub mod item;
 pub mod material;
 pub mod palette;
+pub mod reflect;
 pub mod sections;
 pub mod slider;
 
