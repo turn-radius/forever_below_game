@@ -107,6 +107,10 @@ pub struct HeldInView {
     /// Its point, in its own space: the end of it farthest from the fist (a spear's head, a
     /// dagger's tip), which a thrust drives at the crosshair.
     pub point: Vec3,
+    /// The grip point in item space, for scale-independent placement
+    pub grip: Vec3,
+    /// The fist position in view space, for scale-independent placement
+    pub fist: Vec3,
 }
 
 /// The point of `item` held at `grip` (both in its own space): the vertex farthest from it.
@@ -134,7 +138,7 @@ pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>, sc
             let at = view_hold(fit.hold, side);
             let rotation = at.turn * BODY_TO_VIEW * placed;
             let transform = Transform { translation: at.fist - rotation * grip * scale, rotation, scale: Vec3::splat(scale) };
-            Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform, point: point_of(item, grip) })
+            Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform, point: point_of(item, grip), grip, fist: at.fist })
         })
         .collect()
 }
