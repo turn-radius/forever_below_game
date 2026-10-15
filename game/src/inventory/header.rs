@@ -30,10 +30,6 @@ pub struct ToastText;
 /// The leaf's tabs, the active one first in the plate's order.
 pub const TABS: [&str; 3] = ["inventory", "outfit", "character"];
 
-/// The leaf under the header when the character tab is showing.
-#[derive(Component, Debug)]
-pub struct CharacterSheet;
-
 /// The place of a tab in [`TABS`].
 fn tab_index(tab: SheetTab) -> usize {
     match tab {

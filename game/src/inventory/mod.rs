@@ -37,6 +37,7 @@ pub mod header;
 pub mod icon;
 pub mod items;
 pub mod seal;
+pub mod sheet;
 pub mod underfoot;
 
 use bevy::{
@@ -121,6 +122,7 @@ impl Plugin for InventoryPlugin {
                         build_screen,
                         drag_items,
                         unhang_without_belt,
+                        sheet::update_status.run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
                         show_drag,
@@ -644,6 +646,7 @@ fn build_screen(
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
     tuning: Res<Tuning>,
+    players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion), With<crate::play::Player>>,
     mut icons: Icons,
 ) {
     let existing = screens.iter().next();
@@ -698,7 +701,8 @@ fn build_screen(
                     .with_children(|leaf| {
                         header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab == SheetTab::Character {
-                            leaf.spawn((header::CharacterSheet, Node { flex_direction: FlexDirection::Column, row_gap: px(10), ..default() }));
+                            let (needs, exhaustion) = players.single().map_or_else(|_| Default::default(), |(needs, exhaustion)| (needs.0, exhaustion.0));
+                            sheet::sheet(leaf, &fonts, &character, &inventory, &needs, exhaustion);
                             return;
                         }
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
@@ -1235,7 +1239,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
-            .add_systems(Update, (switch_screens, build_screen, drag_items, icon::reveal_icons).chain());
+            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -1325,7 +1329,7 @@ mod tests {
     }
 
     fn sheet_showing(app: &mut App) -> bool {
-        let mut sheets = app.world_mut().query_filtered::<Entity, With<header::CharacterSheet>>();
+        let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
         sheets.iter(app.world()).count() == 1
     }
 
@@ -1351,6 +1355,75 @@ mod tests {
         assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "Esc closes it");
         press(&mut app, KeyCode::KeyI);
         assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory, "the screen reopens on the inventory tab");
+    }
+
+    /// Every line of text under the character sheet, in order.
+    fn sheet_text(app: &mut App) -> Vec<String> {
+        let mut texts = app.world_mut().query::<(&Text, Option<&ChildOf>)>();
+        let world = app.world();
+        let mut lines = Vec::new();
+        for (text, parent) in texts.iter(world) {
+            let mut up = parent.map(|p| p.parent());
+            while let Some(entity) = up {
+                if world.get::<sheet::CharacterSheet>(entity).is_some() {
+                    lines.push(text.0.clone());
+                    break;
+                }
+                up = world.get::<ChildOf>(entity).map(|p| p.parent());
+            }
+        }
+        lines
+    }
+
+    fn delver_with(app: &mut App, hunger: f64, exhaustion: u32) -> Entity {
+        let mut needs = fb_character::Needs::default();
+        needs.hunger.value = hunger;
+        app.world_mut().spawn((crate::play::Player, crate::character::DelverNeeds(needs), crate::exhaustion::Exhaustion(fb_character::Exhaustion::new(exhaustion)))).id()
+    }
+
+    #[test]
+    fn the_status_reads_the_needs_exhaustion_and_load() {
+        let mut app = screen_app();
+        delver_with(&mut app, 0.0, 2);
+        press(&mut app, KeyCode::KeyC);
+        let text = sheet_text(&mut app);
+        for want in ["Hunger", "Thirst", "Sleepiness", "Fed", "Quenched", "Rested", "Light", "Exhaustion 2: half speed"] {
+            assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
+        }
+    }
+
+    #[test]
+    fn the_status_changes_while_the_screen_stays_open() {
+        let mut app = screen_app();
+        let delver = delver_with(&mut app, 0.0, 0);
+        press(&mut app, KeyCode::KeyC);
+        let before = {
+            let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+            sheets.single(app.world()).unwrap()
+        };
+        assert!(sheet_text(&mut app).contains(&"Fed".to_string()));
+        app.world_mut().get_mut::<crate::character::DelverNeeds>(delver).unwrap().0.hunger.value = 0.55;
+        app.world_mut().get_mut::<crate::exhaustion::Exhaustion>(delver).unwrap().0 = fb_character::Exhaustion::new(2);
+        app.update();
+        let text = sheet_text(&mut app);
+        assert!(text.contains(&"Hungry".to_string()) && !text.contains(&"Fed".to_string()), "{text:?}");
+        assert!(text.contains(&"Exhaustion 2: half speed".to_string()), "{text:?}");
+        let mut fills = app.world_mut().query::<(&sheet::NeedFill, &Node)>();
+        let hunger = fills.iter(app.world()).find(|(f, _)| f.0 == fb_character::MeterKind::Hunger).map(|(_, n)| n.width).unwrap();
+        assert_eq!(hunger, percent(55.0));
+        let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+        assert_eq!(sheets.single(app.world()).unwrap(), before, "the sheet was updated, not rebuilt");
+    }
+
+    #[test]
+    fn eating_with_the_sheet_open_shows_fed() {
+        let mut app = screen_app();
+        let delver = delver_with(&mut app, 0.6, 0);
+        press(&mut app, KeyCode::KeyC);
+        assert!(sheet_text(&mut app).contains(&"Hungry".to_string()));
+        app.world_mut().get_mut::<crate::character::DelverNeeds>(delver).unwrap().0.consume(1.0, 0.0);
+        app.update();
+        assert!(sheet_text(&mut app).contains(&"Fed".to_string()));
     }
 
     #[test]
