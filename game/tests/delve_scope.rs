@@ -183,3 +183,25 @@ fn after_a_fall_the_title_holds_what_a_fresh_launch_did() {
         assert!(app.world().get_resource::<CurrentLevel>().is_none(), "the level outlived the delve");
     }
 }
+
+#[test]
+fn the_delve_draws_the_orbs_and_the_inventory_hides_them() {
+    use forever_below::character::{DelverMana, DelverStamina};
+    use forever_below::combat::orbs::Orb;
+
+    let mut app = headless_game();
+    run(&mut app, 30);
+    begin_delve(&mut app);
+    let world = app.world_mut();
+    let player = world.query_filtered::<Entity, With<Player>>().single(world).expect("one delver");
+    assert!(world.get::<DelverStamina>(player).is_some() && world.get::<DelverMana>(player).is_some(), "every delver has the pools");
+    let hud: Vec<Entity> = world.query_filtered::<&ChildOf, With<Orb>>().iter(world).map(|c| c.parent()).collect();
+    assert_eq!(hud.len(), 3, "a life, stamina and mana orb");
+    assert_eq!(*app.world().get::<Visibility>(hud[0]).unwrap(), Visibility::Inherited);
+    app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+    run(&mut app, 10);
+    assert_eq!(*app.world().get::<Visibility>(hud[0]).unwrap(), Visibility::Hidden, "hidden under the inventory");
+    app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+    run(&mut app, 10);
+    assert_eq!(*app.world().get::<Visibility>(hud[0]).unwrap(), Visibility::Inherited);
+}

@@ -9,8 +9,7 @@
 //!   away). The SRD's constrictor grapples with a separate Constrict attack and restrains its
 //!   target, whose speed becomes 0 (SRD 5.1 p. 370, "Constrict"; p. 358, "Grappled"); the
 //!   slowing, and breaking free by a blow, are our own placeholder.
-//! - The hit points show low on the left of the view, "HP 8/12" in mono over a thin bar, in
-//!   the page's colours.
+//! - The hit points show as the life orb at the bottom left of the view ([`super::orbs`]).
 //! - At 0 the run ends ([`Fallen`]): the delver stops, the view fades to near black with "You
 //!   fall in the abyss", and after [`FALL_TIME`] seconds the game goes back to the title, where
 //!   New delve begins again. Leaving the delve clears everything it spawned (each is scoped
@@ -33,7 +32,7 @@ use crate::inventory::Inventory;
 use crate::launch::AppState;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles, Player, ScreenOpen};
 use crate::player::Slowed;
-use crate::ui::{BAD, BG, BRIGHT, FAINT, MUTED, UiFonts};
+use crate::ui::{BAD, BG, BRIGHT, UiFonts};
 
 pub struct VitalsPlugin;
 
@@ -109,9 +108,10 @@ pub struct AttackMarker {
 #[derive(Component, Debug)]
 struct MarkerArc;
 
-/// The HUD root the vitals draw into, which attack markers hang from.
+/// The HUD root the vitals draw into, which attack markers and the orbs ([`super::orbs`]) hang
+/// from.
 #[derive(Component, Debug)]
-struct VitalsRoot;
+pub(super) struct VitalsRoot;
 
 /// The delver's hit points, from who they are, once they stand in the level; `FB_PLAYER_HP=<n>`
 /// starts them on `n` of those instead, to check a fall quickly.
@@ -243,38 +243,23 @@ fn fall(
     }
 }
 
-/// The hit points readout.
-#[derive(Component, Debug)]
-struct HitPointsText;
-/// The bar's filled part.
-#[derive(Component, Debug)]
-struct HitPointsBar;
 /// The red edge round the view.
 #[derive(Component, Debug)]
 struct PainEdge;
 
-/// The bar's width, logical pixels.
-const BAR_WIDTH: f32 = 140.0;
-
-/// Draws the hit points and the pain edge over each new view model, as part of the HUD.
-fn spawn_vitals(mut commands: Commands, fonts: Option<Res<UiFonts>>, new: Query<Entity, Added<ViewModelCamera>>) {
+/// Draws the pain edge over each new view model, as part of the HUD that the orbs and attack
+/// markers join.
+fn spawn_vitals(mut commands: Commands, new: Query<Entity, Added<ViewModelCamera>>) {
     for camera in &new {
-        let mono = fonts.as_deref().map(|f| f.mono.clone()).unwrap_or_default();
         commands
             .spawn((Name::new("Vitals"), Hud, VitalsRoot, UiTargetCamera(camera), Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() }, Pickable::IGNORE))
             .with_children(|hud| {
                 hud.spawn((PainEdge, Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, border: UiRect::all(px(28)), ..default() }, BorderColor::all(BAD.with_alpha(0.0))));
-                hud.spawn(Node { position_type: PositionType::Absolute, left: px(28), bottom: px(24), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() }).with_children(|corner| {
-                    corner.spawn((HitPointsText, Text::new("HP"), TextFont::from_font_size(17.0).with_font(mono), TextColor(BRIGHT.with_alpha(0.9))));
-                    corner
-                        .spawn((Node { width: px(BAR_WIDTH), height: px(5), border: UiRect::all(px(1)), ..default() }, BackgroundColor(FAINT.with_alpha(0.8)), BorderColor::all(MUTED.with_alpha(0.5))))
-                        .with_child((HitPointsBar, Node { width: percent(100), height: percent(100), ..default() }, BackgroundColor(BAD.with_alpha(0.9))));
-                });
             });
     }
 }
 
-/// Keeps the readout and bar to the delver's hit points, fades the pain edge, and keeps the attack
+/// Fades the pain edge and darkens it while the delver is badly hurt, and keeps the attack
 /// markers: one per attacker, made or refreshed by its bite, turned toward it, fading to nothing.
 #[allow(clippy::too_many_arguments)]
 fn show_vitals(
@@ -283,8 +268,6 @@ fn show_vitals(
     mut pain: ResMut<Pain>,
     mut bites: MessageReader<CreatureAttack>,
     players: Query<(&Health, &Transform), With<Player>>,
-    mut texts: Query<&mut Text, With<HitPointsText>>,
-    mut bars: Query<&mut Node, With<HitPointsBar>>,
     mut edges: Query<&mut BorderColor, With<PainEdge>>,
     mut markers: Query<(Entity, &mut AttackMarker, &mut UiTransform, &Children)>,
     mut arcs: Query<&mut BackgroundColor, With<MarkerArc>>,
@@ -305,15 +288,6 @@ fn show_vitals(
         }
     }
     let Some((health, player)) = players.iter().next() else { return };
-    let line = hit_points_line(health);
-    for mut text in &mut texts {
-        if text.0 != line {
-            text.0 = line.clone();
-        }
-    }
-    for mut bar in &mut bars {
-        bar.width = percent(100.0 * health.hp.max(0) as f32 / health.max.max(1) as f32);
-    }
     let flash = 0.55 * (pain.0 / PAIN_TIME).clamp(0.0, 1.0);
     let dark = 0.7 * vignette_strength(health.hp, health.max, time.elapsed_secs());
     // A fresh blow's red flash shows over the dark edge, whichever is stronger.
@@ -395,11 +369,6 @@ pub fn marker_angle(player_pos: Vec2, yaw: f32, attacker_pos: Vec2) -> f32 {
     (dx.atan2(-dz) + yaw).rem_euclid(std::f32::consts::TAU)
 }
 
-/// "HP 8/12".
-pub fn hit_points_line(health: &Health) -> String {
-    format!("HP {}/{}", health.hp.max(0), health.max)
-}
-
 /// Leaving the delve clears what it kept besides its entities: the level, what the delver
 /// carried and the state of their view, so the next delve starts afresh. Everything the delve
 /// spawned carries `DespawnOnExit(AppState::Delving)` (on its root, or required by its marker
@@ -464,7 +433,6 @@ mod tests {
         bite(&mut app, snake, Species::Rat, 3);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 7);
         assert!(app.world().resource::<Pain>().0 > 0.0);
-        assert_eq!(hit_points_line(app.world().get::<Health>(player).unwrap()), "HP 7/10");
     }
 
     #[test]
