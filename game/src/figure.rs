@@ -228,4 +228,43 @@ mod tests {
         assert!(light.at.x > 0.0 && light.at.y < figure.body.shoulder_y, "{}", light.at);
         assert!(Figure::dress(&spec, &[], 0.0).light.is_none());
     }
+
+    #[test]
+    fn async_fitting_produces_identical_output() {
+        use crate::fitting::Fitting;
+
+        let spec = BodySpec::roll(Folk::Human, 42);
+        let worn = fighter(Folk::Human, 42);
+
+        // Direct fit
+        let direct = Figure::dress(&spec, &worn, 0.3);
+
+        // Async fit
+        let spec_clone = spec.clone();
+        let worn_clone = worn.clone();
+        let mut fitting = Fitting::start((), move || Figure::dress(&spec_clone, &worn_clone, 0.3));
+
+        // Poll until done
+        let async_result = std::iter::repeat_with(|| {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            fitting.poll()
+        })
+        .take(1000)
+        .flatten()
+        .next()
+        .expect("async fitting should complete");
+
+        // Compare key properties
+        assert_eq!(direct.pieces.len(), async_result.pieces.len(), "piece count differs");
+        for (i, (d, a)) in direct.pieces.iter().zip(async_result.pieces.iter()).enumerate() {
+            assert_eq!(d.name, a.name, "piece {i} name differs");
+            assert_eq!(d.mesh.parts.len(), a.mesh.parts.len(), "piece {i} part count differs");
+            for (j, (dp, ap)) in d.mesh.parts.iter().zip(a.mesh.parts.iter()).enumerate() {
+                assert_eq!(dp.positions, ap.positions, "piece {i} part {j} positions differ");
+                assert_eq!(dp.indices, ap.indices, "piece {i} part {j} indices differ");
+                assert_eq!(dp.normals, ap.normals, "piece {i} part {j} normals differ");
+            }
+        }
+        assert_eq!(direct.bounds(), async_result.bounds(), "bounds differ");
+    }
 }

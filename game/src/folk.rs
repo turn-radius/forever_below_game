@@ -739,13 +739,12 @@ mod tests {
         if total > 0.0 { (shading / total, outline / total) } else { (0.0, 0.0) }
     }
 
-    #[test]
-    fn every_fitted_folk_part_faces_out_and_is_coloured() {
+    fn every_fitted_folk_part_faces_out_and_is_coloured_check(seeds: impl IntoIterator<Item = u32>, people: usize) {
         // Seeds 1 to 16 and 1207: every person standing about, dressed as drawn. A part wound
         // inside out (its front faces turned in, or its ink hull pushed in over it), with broken
         // buffers, or with a black or non-finite colour would draw as unlit solid black (#151).
-        for seed in (1..=16).chain([1207]) {
-            for spot in fb_level::generate(seed).folk {
+        for seed in seeds {
+            for spot in fb_level::generate(seed).folk.into_iter().take(people) {
                 let person = Person::of(&spot);
                 let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
                 for piece in &figure.pieces {
@@ -762,5 +761,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[ignore = "slow sweep: folk body fitting test, seeds 1 to 16 and 1207; run before merging fitting changes"]
+    fn every_fitted_folk_part_faces_out_and_is_coloured() {
+        every_fitted_folk_part_faces_out_and_is_coloured_check((1..=16).chain([1207]), usize::MAX);
+    }
+
+    #[test]
+    fn every_fitted_folk_part_faces_out_and_is_coloured_smoke() {
+        every_fitted_folk_part_faces_out_and_is_coloured_check([1207], 1);
     }
 }

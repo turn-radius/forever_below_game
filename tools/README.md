@@ -40,13 +40,16 @@ python3 tools/synth_door_shut.py /tmp/door-shut.wav
 oggenc -q 6 -o game/assets/audio/door-shut.ogg /tmp/door-shut.wav
 ```
 
-`tools/synth_combat.py` synthesises the fight's sounds the same way: a rat's squeak (a sine chirp with vibrato), a snake's hiss (band-passed noise) and a weapon's whoosh (noise through a sweeping band-pass), its docstring citing the sources:
+`tools/synth_combat.py` synthesises the fight's sounds the same way: a rat's squeak (a sine chirp with vibrato), a snake's hiss (band-passed noise) and a weapon's whoosh (noise through a sweeping band-pass), a rat's attack squeal (a held, climbing sine), a snake's rising hiss (band-passed noise with a climbing band) and the dull thud of a blow landing on the delver (a falling low sine with a puff of low noise), its docstring citing the sources:
 
 ```
 python3 tools/synth_combat.py /tmp/combat
 oggenc -q 6 -o game/assets/audio/squeak.ogg /tmp/combat/squeak.wav
 oggenc -q 6 -o game/assets/audio/hiss.ogg /tmp/combat/hiss.wav
 oggenc -q 6 -o game/assets/audio/whoosh.ogg /tmp/combat/whoosh.wav
+oggenc -q 6 -o game/assets/audio/rat-squeal.ogg /tmp/combat/rat_squeal.wav
+oggenc -q 6 -o game/assets/audio/snake-rise.ogg /tmp/combat/snake_rise.wav
+oggenc -q 6 -o game/assets/audio/thud.ogg /tmp/combat/thud.wav
 ```
 
 **Ambient sounds**: `tools/synth_ambience.py` synthesises ambient sounds as mono 16-bit WAVs: water drips and a deep stony rumble, by oscillators, noise and filters (the technique of Andy Farnell's "Designing Sound"), the same on every run, and `oggenc` encodes them:

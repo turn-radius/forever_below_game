@@ -67,8 +67,9 @@ fn turn(spin: f32, roll: f32, tip: f32, yaw: f32) -> Quat {
 ///
 /// - One-handed weapons are held low on the right, standing out of the fist with the head or
 ///   point tipped away and leaning in, as a weapon is carried at the ready.
-/// - Staves, spears and other long hafts lie across the view, low, rising toward the other
-///   side and running away from the eye, as a quarterstaff is carried in both hands.
+/// - Staves, spears and other long hafts lie low and angled to the right, running away from the
+///   eye and clear of a held torch or lantern in the other hand, as a quarterstaff is carried
+///   in both hands.
 /// - A bow stands low on its side, canted in at the top.
 /// - A shield stays strapped along the forearm as on the doll, low at the edge of the view, its
 ///   face out toward that edge and turned a little forward, so its back is seen edge-on.
@@ -79,7 +80,7 @@ pub fn view_hold(hold: Hold, side: Side) -> ViewHold {
     const SPIN: f32 = 0.7;
     let right = match hold {
         Hold::OneHanded => ViewHold { fist: Vec3::new(4.03, -5.55, -9.5), turn: turn(SPIN, -0.3, -0.3, 0.0) },
-        Hold::Upright => ViewHold { fist: Vec3::new(4.3, -6.39, -10.0), turn: turn(0.0, 1.2, -0.25, -0.35) },
+        Hold::Upright => ViewHold { fist: Vec3::new(4.3, -7.0, -11.5), turn: turn(0.0, -0.3, -0.5, 0.15) },
         Hold::Bow => ViewHold { fist: Vec3::new(3.61, -5.14, -11.0), turn: turn(0.0, 0.3, -0.1, 0.7) },
         Hold::Shield => ViewHold { fist: Vec3::new(6.25, -5.28, -11.0), turn: turn(0.0, 0.0, 0.0, 0.15) },
         Hold::Torch => ViewHold { fist: Vec3::new(5.0, -5.83, -9.6), turn: turn(0.0, 0.22, -0.32, 0.0) },
@@ -106,6 +107,10 @@ pub struct HeldInView {
     /// Its point, in its own space: the end of it farthest from the fist (a spear's head, a
     /// dagger's tip), which a thrust drives at the crosshair.
     pub point: Vec3,
+    /// The grip point in item space, for scale-independent placement
+    pub grip: Vec3,
+    /// The fist position in view space, for scale-independent placement
+    pub fist: Vec3,
 }
 
 /// The point of `item` held at `grip` (both in its own space): the vertex farthest from it.
@@ -133,7 +138,7 @@ pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>, sc
             let at = view_hold(fit.hold, side);
             let rotation = at.turn * BODY_TO_VIEW * placed;
             let transform = Transform { translation: at.fist - rotation * grip * scale, rotation, scale: Vec3::splat(scale) };
-            Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform, point: point_of(item, grip) })
+            Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform, point: point_of(item, grip), grip, fist: at.fist })
         })
         .collect()
 }
@@ -339,19 +344,58 @@ mod tests {
     }
 
     #[test]
-    fn long_hafts_lie_across_the_view_low() {
+    fn long_hafts_stay_low_and_to_the_right_of_a_held_torch() {
         for base in ["Staff", "Spear"] {
             let item = roll(base, 4);
-            let held = &held_in_view(&spec(Folk::Human), Some(&item), None)[0];
-            assert_eq!(held.hold, Hold::Upright);
-            // Across: its length runs more sideways than up.
-            let along = (held.transform.rotation * Vec3::Y).normalize();
-            assert!(along.x.abs() > along.y.abs(), "{base}: {along}");
-            // Low: all of it below the middle of the view.
-            for p in points(held) {
-                assert!(on_screen(p).is_some_and(|s| s.y < 0.0), "{base}: {p} above the middle");
+            let torch = roll("Torch", 4);
+            let held = held_in_view(&spec(Folk::Human), Some(&item), Some(&torch));
+            let haft_held = held.iter().find(|h| h.hand == Slot::Mainhand).unwrap();
+            let torch_held = held.iter().find(|h| h.hand == Slot::Offhand).unwrap();
+            assert_eq!(haft_held.hold, Hold::Upright);
+
+            let haft_points = points(haft_held);
+            let torch_points = points(torch_held);
+
+            // All haft points stay to the right of all torch points on screen.
+            let min_torch_x = torch_points.iter().filter_map(|p| on_screen(*p)).map(|s| s.x).fold(f32::INFINITY, f32::min);
+            for p in &haft_points {
+                if let Some(screen) = on_screen(*p) {
+                    assert!(screen.x >= min_torch_x, "{base}: haft at {p} has screen_x {}, left of torch min {}", screen.x, min_torch_x);
+                }
             }
         }
+    }
+
+    #[test]
+    fn long_hafts_clear_an_off_hand_torch() {
+        const MARGIN: f32 = 1.0;
+        let mut failures = vec![];
+        for folk in Folk::ALL {
+            for seed in [1u32, 5, 9, 1207] {
+                for haft_base in ["Staff", "Spear"] {
+                    for torch_base in ["Torch", "Lantern"] {
+                        let haft = roll(haft_base, seed);
+                        let torch = roll(torch_base, seed);
+                        let held = held_in_view(&BodySpec::roll(folk, seed), Some(&haft), Some(&torch));
+                        let haft_held = held.iter().find(|h| h.hand == Slot::Mainhand).unwrap_or_else(|| panic!("{haft_base} not held"));
+                        let torch_held = held.iter().find(|h| h.hand == Slot::Offhand).unwrap_or_else(|| panic!("{torch_base} not held"));
+                        let haft_points = points(haft_held);
+                        let torch_points = points(torch_held);
+                        let mut min_distance = f32::INFINITY;
+                        for &haft_p in &haft_points {
+                            for &torch_p in &torch_points {
+                                let dist = haft_p.distance(torch_p);
+                                min_distance = min_distance.min(dist);
+                            }
+                        }
+                        if min_distance < MARGIN {
+                            failures.push(format!("{folk:?} seed {seed}: {haft_base}-{torch_base} min distance {min_distance:.3} < {MARGIN}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "Long hafts too close to off-hand torch/lantern:\n{}", failures.join("\n"));
     }
 
     #[test]

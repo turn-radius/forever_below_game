@@ -37,6 +37,7 @@ use crate::launch::AppState;
 use crate::carry::item_light;
 use crate::character::Character;
 use crate::figure::{Figure, spawn_figure};
+use crate::fitting::Fitting;
 use crate::light::{StudioLight, Torch, point_light, reach_falloff};
 use crate::play::{Screen, ScreenOpen};
 use crate::render::ItemSpawner;
@@ -199,7 +200,7 @@ type Dressed = (Character, Vec<(Slot, String, u32)>);
 
 /// The doll's stage: what it was last dressed in, its figure, camera and key light, and how
 /// far it is turned.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct DollStage {
     /// The delver and each worn item (slot, base and seed) the figure was dressed for.
     dressed: Option<Dressed>,
@@ -210,6 +211,22 @@ pub struct DollStage {
     pub turn: f32,
     /// The figure as last dressed.
     pub built: Option<Figure>,
+    /// An async fitting job running off the main thread, if any.
+    fitting: Option<Fitting<Dressed, Figure>>,
+}
+
+impl Default for DollStage {
+    fn default() -> Self {
+        DollStage {
+            dressed: None,
+            figure: None,
+            camera: None,
+            portrait: None,
+            turn: 0.0,
+            built: None,
+            fitting: None,
+        }
+    }
 }
 
 impl DollStage {
@@ -243,32 +260,66 @@ pub fn doll_view((min, max): (Vec3, Vec3)) -> (f32, f32) {
     (side, (min.y + max.y) * 0.5)
 }
 
-/// Redresses the doll whenever the delver or what they wear changes: the figure on the stage,
-/// with its held light, and the camera framing it. The camera and its light are made the
-/// first time.
-pub fn dress_doll(
-    mut commands: Commands,
+/// When the inventory screen opens, check if the equipment changed and start an async fitting
+/// task if needed. The old doll stays visible until the new one is ready.
+pub fn start_doll_fitting(
     inventory: Res<Inventory>,
     character: Res<Character>,
+    open: Res<ScreenOpen>,
+    mut stage: ResMut<DollStage>,
+) {
+    if open.0 != Some(Screen::Inventory) {
+        return;
+    }
+    let worn = inventory.equipped();
+    let key = (character.clone(), worn.iter().map(|(slot, item)| (*slot, item.base.clone(), item.seed)).collect::<Vec<_>>());
+    if stage.dressed.as_ref() == Some(&key) {
+        // Already dressed for this equipment; drop any in-flight fit
+        stage.fitting = None;
+        return;
+    }
+    if stage.fitting.as_ref().is_some_and(|f| f.key() == &key) {
+        return;
+    }
+    let spec = character.spec();
+    let dirt = character.dirt;
+    let worn_cloned: Vec<(Slot, fb_items::Item)> = worn.into_iter().map(|(slot, item)| (slot, item.clone())).collect();
+    stage.fitting = Some(Fitting::start(key, move || {
+        Figure::dress(&spec, &worn_cloned, dirt)
+    }));
+}
+
+/// Poll the fitting task and spawn the figure when it's ready.
+pub fn poll_doll_fitting(
+    mut commands: Commands,
     assets: Res<DollAssets>,
     mut stage: ResMut<DollStage>,
     mut spawner: ItemSpawner,
 ) {
-    let worn = inventory.equipped();
-    let key = (character.clone(), worn.iter().map(|(slot, item)| (*slot, item.base.clone(), item.seed)).collect::<Vec<_>>());
-    if stage.dressed.as_ref() == Some(&key) {
-        return;
+    let Some(mut fitting) = stage.fitting.take() else { return };
+    if let Some(figure) = fitting.poll() {
+        stage.dressed = Some(fitting.key().clone());
+        spawn_doll_figure(&mut commands, &mut spawner, &assets, &mut stage, &figure);
+    } else {
+        stage.fitting = Some(fitting);
     }
-    stage.dressed = Some(key);
+}
+
+/// Spawn the fitted figure on the doll stage.
+fn spawn_doll_figure(
+    commands: &mut Commands,
+    spawner: &mut ItemSpawner,
+    assets: &DollAssets,
+    stage: &mut DollStage,
+    figure: &Figure,
+) {
     if let Some(old) = stage.figure.take() {
         commands.entity(old).despawn();
     }
-    let worn: Vec<(Slot, fb_items::Item)> = worn.into_iter().map(|(slot, item)| (slot, item.clone())).collect();
-    let figure = Figure::dress(&character.spec(), &worn, character.dirt);
     let Some(bounds) = figure.bounds() else { return };
     let layer = RenderLayers::layer(DOLL_LAYER);
     let exposure = Exposure::INDOOR;
-    let root = spawn_figure(&mut commands, &mut spawner, &figure);
+    let root = spawn_figure(commands, spawner, figure);
     commands.entity(root).insert((
         Name::new("Doll"),
         DespawnOnExit(AppState::Delving),
@@ -348,7 +399,7 @@ pub fn dress_doll(
             stage.camera = Some(camera);
         }
     }
-    stage.built = Some(figure);
+    stage.built = Some(figure.clone());
 }
 
 /// Draws the doll and its portrait only while the inventory is open.
@@ -648,7 +699,7 @@ mod tests {
             .init_resource::<Assets<crate::render::ToonMaterial>>()
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
             .init_resource::<crate::render::OutlineMaterials>()
-            .add_systems(Update, (dress_doll, show_doll, turn_doll).chain());
+            .add_systems(Update, (start_doll_fitting, poll_doll_fitting, show_doll, turn_doll).chain());
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(320.0, 320.0)));
         app.world_mut().spawn((window, PrimaryWindow));
@@ -658,6 +709,22 @@ mod tests {
         app
     }
 
+    /// Wait for the doll fitting to complete, polling until the figure is ready.
+    fn wait_for_doll_fitting(app: &mut App) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            app.update();
+            let stage = app.world().resource::<DollStage>();
+            if stage.figure.is_some() && stage.fitting.is_none() {
+                return;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("Doll fitting did not complete within 60 seconds");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     fn worn_names(app: &App) -> Vec<String> {
         app.world().resource::<DollStage>().built.as_ref().unwrap().pieces.iter().map(|p| p.name.clone()).collect()
     }
@@ -665,7 +732,7 @@ mod tests {
     #[test]
     fn the_doll_wears_what_is_equipped() {
         let mut app = stage_app();
-        app.update();
+        wait_for_doll_fitting(&mut app);
         assert_eq!(worn_names(&app), vec!["Body".to_string(), "Head".to_string()], "bare to begin with");
         let helm = fb_items::roll_item("Helm", 5).unwrap();
         let name = helm.title().to_string();
@@ -674,7 +741,7 @@ mod tests {
             let id = inventory.add(helm);
             inventory.wear(id, Slot::Head).unwrap();
         }
-        app.update();
+        wait_for_doll_fitting(&mut app);
         assert_eq!(worn_names(&app), vec!["Body".to_string(), "Head".to_string(), name]);
         let stage = app.world().resource::<DollStage>();
         let camera = app.world().get::<Camera>(stage.camera().unwrap()).unwrap();
@@ -685,7 +752,7 @@ mod tests {
     #[test]
     fn the_portrait_is_of_the_doll_s_head() {
         let mut app = stage_app();
-        app.update();
+        wait_for_doll_fitting(&mut app);
         let stage = app.world().resource::<DollStage>();
         let (portrait, figure) = (stage.portrait().unwrap(), stage.figure.unwrap());
         let (head, r) = { let f = stage.built.as_ref().unwrap(); (f.head().0, f.body.head.half_height) };
@@ -703,7 +770,7 @@ mod tests {
     #[test]
     fn the_doll_turns_when_dragged() {
         let mut app = stage_app();
-        app.update();
+        wait_for_doll_fitting(&mut app);
         let figure = app.world().resource::<DollStage>().figure.unwrap();
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
         app.update();
@@ -730,11 +797,43 @@ mod tests {
             let id = inventory.add(sword);
             super::super::equip(&mut inventory, id, Slot::Mainhand).unwrap();
         }
-        app.update();
+        wait_for_doll_fitting(&mut app);
         let figure = app.world().resource::<DollStage>().built.clone().unwrap();
         let held = figure.pieces.iter().find(|p| p.name == name).expect("the sword is drawn");
         let fist = Vec3::from_array(figure.body.grip(fb_body::MAIN_HAND).origin);
         let nearest = held.mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
         assert!(nearest < 0.5, "{nearest}");
+    }
+
+    #[test]
+    fn opening_inventory_after_equipping_while_closed_shows_new_gear() {
+        let mut app = stage_app();
+        wait_for_doll_fitting(&mut app);
+        // Note initial figure is dressed (empty outfit)
+        // Close inventory
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        // Equip while closed
+        let sword = fb_items::roll_item("Sword", 11).unwrap();
+        let name = sword.title().to_string();
+        let old_figure = app.world().resource::<DollStage>().built.clone();
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(sword);
+            super::super::equip(&mut inventory, id, Slot::Mainhand).unwrap();
+        }
+        app.update(); // Should not start fitting a new doll while closed
+        {
+            let stage = app.world().resource::<DollStage>();
+            // Fitting should not be running while closed
+            assert!(stage.fitting.is_none(), "no fitting should run while inventory closed");
+        }
+        // Open inventory
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        wait_for_doll_fitting(&mut app);
+        // Check that new gear is shown
+        let stage = app.world().resource::<DollStage>();
+        let figure = stage.built.as_ref().unwrap();
+        let has_sword = figure.pieces.iter().any(|p| p.name == name);
+        assert!(has_sword, "new sword should be shown after opening inventory");
     }
 }

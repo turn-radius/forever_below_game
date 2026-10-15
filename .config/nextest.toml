@@ -1,0 +1,5 @@
+[profile.default]
+# Don't fail immediately on the first failure to see the full scope of test failures
+fail-fast = false
+# Slow timeout for tests: log warning if a test takes longer than this
+slow-timeout = "60s"
