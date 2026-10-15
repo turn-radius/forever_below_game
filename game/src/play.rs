@@ -247,6 +247,7 @@ impl Plugin for PlayPlugin {
             crate::audio::MusicPlugin,
             crate::menu::MenuPlugin,
             crate::kindle::KindlePlugin,
+            crate::map::MapPlugin,
         ));
     }
 }

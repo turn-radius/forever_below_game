@@ -214,6 +214,7 @@ pub mod creatures;
 pub mod folk;
 mod generate;
 pub mod params;
+pub mod sight;
 pub mod path;
 pub mod props;
 pub use creatures::CreatureSpot;

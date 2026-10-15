@@ -18,6 +18,7 @@ pub mod keymap;
 pub mod kindle;
 pub mod launch;
 pub mod level;
+pub mod map;
 pub mod light;
 pub mod menu;
 pub mod play;
