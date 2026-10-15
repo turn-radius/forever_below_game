@@ -58,7 +58,7 @@ use crate::carry::ViewModelCamera;
 use crate::character::{Character, character_for};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
-use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, show_screen, switch_screens};
+use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, SheetTab, show_screen, switch_screens};
 pub use crate::ui::node_rect;
 use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
 use header::ToastText;
@@ -95,6 +95,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<UiFonts>()
             .init_resource::<Keymap>()
             .init_resource::<ScreenOpen>()
+            .init_resource::<SheetTab>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
             .init_resource::<Toast>()
@@ -633,6 +634,7 @@ pub fn cell_under(rect: Rect, point: Vec2, cell: f32) -> IVec2 {
 fn build_screen(
     mut commands: Commands,
     open: Res<ScreenOpen>,
+    tab: Res<SheetTab>,
     inventory: Res<Inventory>,
     underfoot: Res<Underfoot>,
     showing: Res<OpenContainer>,
@@ -651,7 +653,7 @@ fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !character.is_changed() && !tuning.is_changed() {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -694,7 +696,11 @@ fn build_screen(
                 ledger
                     .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(700), ..default() })
                     .with_children(|leaf| {
-                        header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone());
+                        header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone(), *tab);
+                        if *tab == SheetTab::Character {
+                            leaf.spawn((header::CharacterSheet, Node { flex_direction: FlexDirection::Column, row_gap: px(10), ..default() }));
+                            return;
+                        }
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
                             .with_children(|row| {
                                 let carried = screen.inventory.carried_containers();
@@ -1218,6 +1224,7 @@ mod tests {
             .init_resource::<IconCache>()
             .init_resource::<UiFonts>()
             .init_resource::<ScreenOpen>()
+            .init_resource::<SheetTab>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
             .init_resource::<Toast>()
@@ -1315,6 +1322,35 @@ mod tests {
         assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         press(&mut app, KeyCode::KeyI);
         assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory));
+    }
+
+    fn sheet_showing(app: &mut App) -> bool {
+        let mut sheets = app.world_mut().query_filtered::<Entity, With<header::CharacterSheet>>();
+        sheets.iter(app.world()).count() == 1
+    }
+
+    #[test]
+    fn c_opens_the_character_tab_and_i_the_inventory_tab() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyC);
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Character);
+        assert!(sheet_showing(&mut app));
+        let mut grids = app.world_mut().query::<&GridView>();
+        assert_eq!(grids.iter(app.world()).count(), 0, "the sheet replaces the grids");
+        press(&mut app, KeyCode::KeyI);
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory), "I swaps to the inventory tab");
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory);
+        assert!(!sheet_showing(&mut app));
+        press(&mut app, KeyCode::KeyC);
+        assert!(sheet_showing(&mut app));
+        press(&mut app, KeyCode::KeyC);
+        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "C closes the character tab");
+        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::Escape);
+        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "Esc closes it");
+        press(&mut app, KeyCode::KeyI);
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory, "the screen reopens on the inventory tab");
     }
 
     #[test]
