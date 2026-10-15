@@ -192,22 +192,19 @@ impl Meter {
         self.kind.word(self.band())
     }
 
-    /// Advances the meter by `delta_hours` of game time, scaling by `activity` and this meter's `gear` multiplier.
-    /// Sleeping has special handling: hunger and thirst rates are halved, sleepiness decreases
-    /// by 1/8 per hour instead of increasing.
+    /// The meter's change per game hour at `activity`: the base rate scaled by activity and gear.
+    /// Sleeping halves the rate of hunger and thirst, and sleepiness falls by 1/8 per hour instead.
+    pub fn effective_rate(&self, activity: Activity) -> f64 {
+        match (activity, self.kind) {
+            (Activity::Sleeping, MeterKind::Hunger | MeterKind::Thirst) => self.rate_per_hour * 0.5 * self.gear,
+            (Activity::Sleeping, MeterKind::Sleepiness) => -0.125,
+            (_, _) => self.rate_per_hour * activity.multiplier() as f64 * self.gear,
+        }
+    }
+
+    /// Advances the meter by `delta_hours` of game time at its [`Meter::effective_rate`].
     pub fn step(&mut self, delta_hours: f64, activity: Activity) {
-        let base_rate = self.rate_per_hour;
-        let activity_mult = activity.multiplier() as f64;
-        let gear_mult = self.gear;
-
-        let delta = match (activity, self.kind) {
-            (Activity::Sleeping, MeterKind::Hunger) => base_rate * 0.5 * delta_hours * gear_mult,
-            (Activity::Sleeping, MeterKind::Thirst) => base_rate * 0.5 * delta_hours * gear_mult,
-            (Activity::Sleeping, MeterKind::Sleepiness) => -0.125 * delta_hours,
-            (_, _) => base_rate * activity_mult * delta_hours * gear_mult,
-        };
-
-        self.value = (self.value + delta).clamp(0.0, 1.0);
+        self.value = (self.value + self.effective_rate(activity) * delta_hours).clamp(0.0, 1.0);
     }
 
     /// Reduces the meter by the given amount (e.g., from eating or drinking). Clamped at 0.
@@ -288,6 +285,167 @@ impl Needs {
         self.hunger.step(delta_hours, activity);
         self.thirst.step(delta_hours, activity);
         self.sleepiness.step(delta_hours, activity);
+    }
+}
+
+/// Cumulative exhaustion from prolonged deprivation (D&D 5e SRD 5.1, p. 358).
+/// Each level represents time spent in a meter's worst band.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Exhaustion {
+    /// Level 0–6, where 6 is death.
+    pub level: u32,
+}
+
+impl Exhaustion {
+    /// Creates a new exhaustion level.
+    pub fn new(level: u32) -> Self {
+        Exhaustion { level: level.min(6) }
+    }
+
+    /// Speed multiplier for this exhaustion level (SRD p. 358).
+    /// Level 2 is half speed, level 5 is speed 0.
+    pub fn speed_multiplier(self) -> f32 {
+        match self.level {
+            2..=4 => 0.5,
+            5.. => 0.0,
+            _ => 1.0,
+        }
+    }
+
+    /// Returns true if this is death (level 6).
+    pub fn is_dead(self) -> bool {
+        self.level >= 6
+    }
+
+    /// Increases the exhaustion level by 1 (clamped at 6).
+    pub fn increase(&mut self) {
+        self.level = (self.level + 1).min(6);
+    }
+
+    /// Decreases the exhaustion level by 1 (clamped at 0).
+    pub fn decrease(&mut self) {
+        self.level = self.level.saturating_sub(1);
+    }
+}
+
+/// Slack for float error when a time lands exactly on a threshold.
+const THRESHOLD_SLACK: f64 = 1e-9;
+
+/// Game hours of continuous sleep that remove one level.
+const SLEEP_HOURS_TO_RECOVER: f64 = 8.0;
+
+/// The meter value where Famished and Dry begin (band 3).
+const FAMISHED_AT: f64 = 0.75;
+
+/// Time one meter has spent in its worst band during the current stay, and how many levels
+/// that stay has already added. Both start over when the meter leaves the worst band; the
+/// levels it added stay on the [`Exhaustion`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorstBand {
+    /// Game hours in the worst band since the meter entered it.
+    pub hours: f64,
+    /// Levels this stay has added to the exhaustion so far.
+    pub levels: u32,
+}
+
+impl WorstBand {
+    /// Counts the part of a step of `hours` that the meter spent at its worst, given its value
+    /// `before` the step and its state after. Returns the levels newly earned: the first once
+    /// `first_hours` have passed and one more every `every_hours`.
+    fn advance(&mut self, before: f64, meter: &Meter, activity: Activity, hours: f64, first_hours: f64, every_hours: f64) -> u32 {
+        self.hours += hours_at_worst(before, meter.effective_rate(activity), hours);
+        let earned = if self.hours + THRESHOLD_SLACK >= first_hours {
+            1 + ((self.hours + THRESHOLD_SLACK - first_hours) / every_hours).floor() as u32
+        } else {
+            0
+        };
+        let gained = earned.saturating_sub(self.levels);
+        self.levels = earned;
+        if meter.value < 1.0 {
+            *self = WorstBand::default();
+        }
+        gained
+    }
+}
+
+/// The hours of a step of `hours` that a meter spends at 1, given its value `before` the step
+/// and its rate per hour. A meter that crosses 1 inside the step counts only from the crossing,
+/// at `(1 - before) / rate` hours in; a falling meter never counts once it starts to fall.
+fn hours_at_worst(before: f64, rate: f64, hours: f64) -> f64 {
+    if before >= 1.0 {
+        if rate >= 0.0 { hours } else { 0.0 }
+    } else if rate > 0.0 {
+        (hours - (1.0 - before) / rate).max(0.0)
+    } else {
+        0.0
+    }
+}
+
+/// The hours of a step of `hours` before a rising meter reaches [`FAMISHED_AT`], given its value
+/// `before` the step and its rate per hour.
+fn hours_below_famished(before: f64, rate: f64, hours: f64) -> f64 {
+    if before >= FAMISHED_AT {
+        0.0
+    } else if rate > 0.0 {
+        hours.min((FAMISHED_AT - before) / rate)
+    } else {
+        hours
+    }
+}
+
+/// What a character carries between steps to turn their needs into exhaustion: time in each
+/// meter's worst band and the run of sleep so far. Step it with [`ExhaustionTimes::step`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExhaustionTimes {
+    /// Starving: the first level after 3 + CON modifier days (at least 1), then one a day.
+    pub starving: WorstBand,
+    /// Dehydrated: the first level after a day, then one every 12 hours.
+    pub dehydrated: WorstBand,
+    /// Spent: the first level after a day, then one a day.
+    pub spent: WorstBand,
+    /// Continuous game hours slept while not Famished, Starving, Dry or Dehydrated.
+    pub sleep_hours: f64,
+    /// Whether this sleep has already removed its level.
+    pub slept_recovered: bool,
+}
+
+impl ExhaustionTimes {
+    /// Steps `needs` by `hours` of game time at `activity`, then adds the levels of exhaustion
+    /// that time in the worst bands has earned and removes one if a night's sleep was
+    /// completed. The result is the same for one big step or many small ones.
+    pub fn step(&mut self, needs: &mut Needs, exhaustion: &mut Exhaustion, activity: Activity, hours: f64, con_modifier: i32) {
+        let before = *needs;
+        needs.step(hours, activity);
+
+        let starving_days = (3 + con_modifier).max(1) as f64;
+        let mut gained = self.starving.advance(before.hunger.value, &needs.hunger, activity, hours, starving_days * 24.0, 24.0);
+        gained += self.dehydrated.advance(before.thirst.value, &needs.thirst, activity, hours, 24.0, 12.0);
+        gained += self.spent.advance(before.sleepiness.value, &needs.sleepiness, activity, hours, 24.0, 24.0);
+        exhaustion.level = (exhaustion.level + gained).min(6);
+
+        self.sleep(&before, needs, exhaustion, activity, hours);
+    }
+
+    /// Tracks the run of sleep through the step and removes a level once it reaches 8 hours.
+    fn sleep(&mut self, before: &Needs, needs: &Needs, exhaustion: &mut Exhaustion, activity: Activity, hours: f64) {
+        if activity != Activity::Sleeping {
+            self.sleep_hours = 0.0;
+            self.slept_recovered = false;
+            return;
+        }
+        let fed = hours_below_famished(before.hunger.value, needs.hunger.effective_rate(activity), hours);
+        let watered = hours_below_famished(before.thirst.value, needs.thirst.effective_rate(activity), hours);
+        let comfortable = fed.min(watered);
+        self.sleep_hours += comfortable;
+        if self.sleep_hours + THRESHOLD_SLACK >= SLEEP_HOURS_TO_RECOVER && !self.slept_recovered && !exhaustion.is_dead() {
+            exhaustion.decrease();
+            self.slept_recovered = true;
+        }
+        if comfortable < hours {
+            // Famished, Starving, Dry or Dehydrated broke the run; the next sleep starts over.
+            self.sleep_hours = 0.0;
+            self.slept_recovered = false;
+        }
     }
 }
 
@@ -607,5 +765,235 @@ mod tests {
         assert_eq!(parsed.thirst.value, 0.7);
         assert_eq!(parsed.sleepiness.value, 0.1);
         assert_eq!(parsed.hunger.gear, 1.5, "gear should be preserved in serialization");
+    }
+
+
+    /// Needs where only `kind` moves, starting at `value`; the others stay at 0.
+    fn only(kind: MeterKind, value: f64) -> Needs {
+        let mut needs = Needs::default();
+        for meter in [&mut needs.hunger, &mut needs.thirst, &mut needs.sleepiness] {
+            if meter.kind == kind {
+                meter.value = value;
+            } else {
+                meter.gear = 0.0;
+            }
+        }
+        needs
+    }
+
+    /// Steps `count` times by `hours` each, returning the level after each step.
+    fn levels(needs: &mut Needs, times: &mut ExhaustionTimes, exh: &mut Exhaustion, activity: Activity, hours: f64, count: usize, con: i32) -> Vec<u32> {
+        (0..count)
+            .map(|_| {
+                times.step(needs, exh, activity, hours, con);
+                exh.level
+            })
+            .collect()
+    }
+
+    #[test]
+    fn exhaustion_speed_multipliers() {
+        let speeds: Vec<f32> = (0..=6).map(|level| Exhaustion::new(level).speed_multiplier()).collect();
+        assert_eq!(speeds, [1.0, 1.0, 0.5, 0.5, 0.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn exhaustion_is_dead_at_level_6() {
+        assert!(!Exhaustion::new(5).is_dead());
+        assert!(Exhaustion::new(6).is_dead());
+        assert_eq!(Exhaustion::new(40).level, 6);
+    }
+
+    #[test]
+    fn exhaustion_increase_and_decrease_clamp() {
+        let mut exh = Exhaustion::default();
+        for _ in 0..9 {
+            exh.increase();
+        }
+        assert_eq!(exh.level, 6);
+        for _ in 0..9 {
+            exh.decrease();
+        }
+        assert_eq!(exh.level, 0);
+    }
+
+    #[test]
+    fn a_con_13_dwarf_kept_starving_reaches_level_1_at_exactly_4_days() {
+        let (mut needs, mut times, mut exh) = (only(MeterKind::Hunger, 1.0), ExhaustionTimes::default(), Exhaustion::default());
+        let seen = levels(&mut needs, &mut times, &mut exh, Activity::Walking, 1.0, 120, 1);
+        assert_eq!(seen[94], 0, "95 hours");
+        assert_eq!(seen[95], 1, "96 hours is 4 days");
+        assert_eq!(seen[118], 1, "119 hours");
+        assert_eq!(seen[119], 2, "120 hours is 5 days");
+    }
+
+    #[test]
+    fn a_con_3_character_still_waits_1_day_to_starve() {
+        let (mut needs, mut times, mut exh) = (only(MeterKind::Hunger, 1.0), ExhaustionTimes::default(), Exhaustion::default());
+        let seen = levels(&mut needs, &mut times, &mut exh, Activity::Walking, 1.0, 24, -4);
+        assert_eq!(seen[22], 0);
+        assert_eq!(seen[23], 1);
+    }
+
+    #[test]
+    fn the_dehydrated_ladder_is_1_day_then_every_12_hours() {
+        let (mut needs, mut times, mut exh) = (only(MeterKind::Thirst, 1.0), ExhaustionTimes::default(), Exhaustion::default());
+        let seen = levels(&mut needs, &mut times, &mut exh, Activity::Walking, 1.0, 60, 0);
+        let at = |hours: usize| seen[hours - 1];
+        assert_eq!([at(23), at(24), at(35), at(36), at(47), at(48), at(60)], [0, 1, 1, 2, 2, 3, 4]);
+    }
+
+    #[test]
+    fn the_spent_ladder_is_1_day_then_daily() {
+        let (mut needs, mut times, mut exh) = (only(MeterKind::Sleepiness, 1.0), ExhaustionTimes::default(), Exhaustion::default());
+        let seen = levels(&mut needs, &mut times, &mut exh, Activity::Walking, 1.0, 72, 0);
+        let at = |hours: usize| seen[hours - 1];
+        assert_eq!([at(23), at(24), at(36), at(47), at(48), at(72)], [0, 1, 1, 1, 2, 3]);
+    }
+
+    #[test]
+    fn one_big_step_equals_many_small_steps() {
+        let (mut big_needs, mut big, mut big_exh) = (Needs::default(), ExhaustionTimes::default(), Exhaustion::default());
+        big_needs.hunger.value = 1.0;
+        big_needs.thirst.value = 1.0;
+        big_needs.sleepiness.value = 1.0;
+        let (mut small_needs, mut small, mut small_exh) = (big_needs, ExhaustionTimes::default(), Exhaustion::default());
+        big.step(&mut big_needs, &mut big_exh, Activity::Walking, 100.0, 0);
+        levels(&mut small_needs, &mut small, &mut small_exh, Activity::Walking, 1.0 / 60.0, 6000, 0);
+        assert_eq!(big_exh, small_exh);
+        assert_eq!(big.starving.levels, small.starving.levels);
+        assert!((big.starving.hours - small.starving.hours).abs() < 1e-6);
+        assert!((big.spent.hours - small.spent.hours).abs() < 1e-6);
+    }
+
+    #[test]
+    fn crossing_inside_a_step_counts_from_the_crossing_to_1e_6() {
+        // From 0.9, hunger needs 0.1 / rate hours to reach 1, so a 10 hour step spends the rest at 1.
+        for (activity, gear, rate) in [(Activity::Exerting, 1.0, 1.0 / 8.0), (Activity::Resting, 1.0, 1.0 / 32.0), (Activity::Sleeping, 1.0, 1.0 / 32.0), (Activity::Walking, 2.0, 1.0 / 8.0)] {
+            let mut needs = only(MeterKind::Hunger, 0.9);
+            needs.hunger.gear = gear;
+            let mut times = ExhaustionTimes::default();
+            times.step(&mut needs, &mut Exhaustion::default(), activity, 10.0, 0);
+            let expected = 10.0 - 0.1 / rate;
+            assert!((times.starving.hours - expected).abs() < 1e-6, "{activity:?} x{gear}: {} against {expected}", times.starving.hours);
+
+            let mut needs = only(MeterKind::Hunger, 0.9);
+            needs.hunger.gear = gear;
+            let mut small = ExhaustionTimes::default();
+            levels(&mut needs, &mut small, &mut Exhaustion::default(), activity, 1.0 / 60.0, 600, 0);
+            assert!((small.starving.hours - expected).abs() < 1e-6, "{activity:?} x{gear} in small steps: {} against {expected}", small.starving.hours);
+        }
+    }
+
+    #[test]
+    fn a_falling_meter_never_enters_the_worst_band() {
+        let (mut needs, mut times, mut exh) = (only(MeterKind::Sleepiness, 0.99), ExhaustionTimes::default(), Exhaustion::default());
+        times.step(&mut needs, &mut exh, Activity::Sleeping, 30.0, 0);
+        assert_eq!(times.spent, WorstBand::default());
+        assert_eq!(exh.level, 0);
+    }
+
+    #[test]
+    fn leaving_the_worst_band_keeps_the_levels_and_starts_the_count_over() {
+        // CON 0 waits 3 days.
+        let (mut needs, mut times, mut exh) = (only(MeterKind::Hunger, 1.0), ExhaustionTimes::default(), Exhaustion::default());
+        times.step(&mut needs, &mut exh, Activity::Walking, 72.0, 0);
+        assert_eq!(exh.level, 1);
+        needs.hunger.value = 0.5;
+        times.step(&mut needs, &mut exh, Activity::Walking, 1.0, 0);
+        assert_eq!(exh.level, 1, "eating does not undo a level");
+        assert_eq!(times.starving, WorstBand::default());
+        // Starving again counts a fresh 3 days, and the old level is not added twice.
+        needs.hunger.value = 1.0;
+        times.step(&mut needs, &mut exh, Activity::Walking, 71.0, 0);
+        assert_eq!(exh.level, 1);
+        times.step(&mut needs, &mut exh, Activity::Walking, 1.0, 0);
+        assert_eq!(exh.level, 2);
+    }
+
+    #[test]
+    fn a_spent_delver_who_sleeps_keeps_the_level_and_time_they_had_earned() {
+        let (mut needs, mut times, mut exh) = (only(MeterKind::Sleepiness, 1.0), ExhaustionTimes::default(), Exhaustion::default());
+        times.step(&mut needs, &mut exh, Activity::Walking, 30.0, 0);
+        assert_eq!((exh.level, times.spent.hours), (1, 30.0));
+        // Starting to sleep adds no worst-band time but takes none away before the meter falls.
+        times.step(&mut needs, &mut exh, Activity::Sleeping, 0.0, 0);
+        assert_eq!((exh.level, times.spent.hours), (1, 30.0));
+        times.step(&mut needs, &mut exh, Activity::Sleeping, 1.0, 0);
+        assert_eq!(exh.level, 1);
+        assert!(needs.sleepiness.value < 1.0);
+        assert_eq!(times.spent, WorstBand::default());
+    }
+
+    /// Level 3, fed and watered, and ready to sleep.
+    fn weary() -> (Needs, ExhaustionTimes, Exhaustion) {
+        let mut needs = Needs::default();
+        needs.sleepiness.value = 0.8;
+        (needs, ExhaustionTimes::default(), Exhaustion::new(3))
+    }
+
+    #[test]
+    fn eight_hours_of_sleep_fed_and_watered_take_one_level() {
+        let (mut needs, mut times, mut exh) = weary();
+        let seen = levels(&mut needs, &mut times, &mut exh, Activity::Sleeping, 1.0, 16, 0);
+        assert_eq!(seen[6], 3, "7 hours");
+        assert_eq!(seen[7], 2, "8 hours");
+        assert_eq!(seen[15], 2, "once per sleep, and the next update does not undo it");
+    }
+
+    #[test]
+    fn eight_hours_of_sleep_in_one_step_take_one_level() {
+        let (mut needs, mut times, mut exh) = weary();
+        times.step(&mut needs, &mut exh, Activity::Sleeping, 8.0, 0);
+        assert_eq!(exh.level, 2);
+    }
+
+    #[test]
+    fn a_broken_sleep_starts_over() {
+        let (mut needs, mut times, mut exh) = weary();
+        times.step(&mut needs, &mut exh, Activity::Sleeping, 7.0, 0);
+        times.step(&mut needs, &mut exh, Activity::Walking, 0.5, 0);
+        needs.hunger.value = 0.0;
+        needs.thirst.value = 0.0;
+        times.step(&mut needs, &mut exh, Activity::Sleeping, 7.0, 0);
+        assert_eq!(exh.level, 3);
+        times.step(&mut needs, &mut exh, Activity::Sleeping, 1.0, 0);
+        assert_eq!(exh.level, 2);
+        // A second night takes a second level.
+        times.step(&mut needs, &mut exh, Activity::Walking, 0.5, 0);
+        needs.hunger.value = 0.0;
+        needs.thirst.value = 0.0;
+        times.step(&mut needs, &mut exh, Activity::Sleeping, 8.0, 0);
+        assert_eq!(exh.level, 1);
+    }
+
+    #[test]
+    fn sleeping_while_famished_dry_or_worse_gives_no_level() {
+        for (hunger, thirst) in [(0.75, 0.0), (1.0, 0.0), (0.0, 0.75), (0.0, 1.0)] {
+            let (mut needs, mut times, mut exh) = weary();
+            needs.hunger.value = hunger;
+            needs.thirst.value = thirst;
+            levels(&mut needs, &mut times, &mut exh, Activity::Sleeping, 1.0, 12, 0);
+            assert_eq!(exh.level, 3, "hunger {hunger}, thirst {thirst}");
+        }
+    }
+
+    #[test]
+    fn getting_famished_during_the_night_breaks_the_run() {
+        // Sleeping hunger rises 1/32 an hour: 0.7 reaches 0.75 after 1.6 hours.
+        let (mut needs, mut times, mut exh) = weary();
+        needs.hunger.value = 0.7;
+        levels(&mut needs, &mut times, &mut exh, Activity::Sleeping, 1.0, 12, 0);
+        assert_eq!(exh.level, 3);
+    }
+
+    #[test]
+    fn exhaustion_and_times_round_trip_through_json() {
+        let (mut needs, mut times, mut exh) = (only(MeterKind::Hunger, 1.0), ExhaustionTimes::default(), Exhaustion::default());
+        times.step(&mut needs, &mut exh, Activity::Walking, 80.0, 0);
+        let parsed: ExhaustionTimes = serde_json::from_str(&serde_json::to_string(&times).unwrap()).unwrap();
+        assert_eq!(parsed, times);
+        let parsed: Exhaustion = serde_json::from_str(&serde_json::to_string(&exh).unwrap()).unwrap();
+        assert_eq!(parsed, exh);
     }
 }

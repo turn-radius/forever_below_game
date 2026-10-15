@@ -20,6 +20,7 @@ use crate::light::point_light;
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
 use crate::launch::AppState;
+use crate::exhaustion::Exhaustion;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, level_has_focus};
 
 /// Radians of turn per pixel of mouse motion at a mouse sensitivity of 1.
@@ -186,15 +187,15 @@ fn walk(
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Option<Res<Obstacles>>,
-    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform, Option<&Slowed>), With<Player>>,
+    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform, Option<&Slowed>, &Exhaustion), With<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP_SECONDS);
     if dt <= 0.0 {
         return;
     }
-    let (locomotion, gait, transform, slowed) = &mut *body;
+    let (locomotion, gait, transform, slowed, exhaustion) = &mut *body;
     let moving = &tuning.moving;
-    let speed = if input.pressed(Action::Hurry) { moving.hurry_speed } else { moving.walk_speed } * slowed.map_or(1.0, |s| s.0);
+    let speed = if input.pressed(Action::Hurry) { moving.hurry_speed } else { moving.walk_speed } * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier();
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
@@ -323,6 +324,11 @@ mod tests {
     /// How far the body walks forward in `frames` frames of 1/60 s with W held, after
     /// `tune` changes the tuning.
     fn walked(frames: u32, tune: impl Fn(&mut Tuning)) -> f32 {
+        walked_as(frames, tune, ())
+    }
+
+    /// As [`walked`], for a delver spawned with the extra components `delver`.
+    fn walked_as(frames: u32, tune: impl Fn(&mut Tuning), delver: impl Bundle) -> f32 {
         use bevy::time::TimeUpdateStrategy;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -338,7 +344,7 @@ mod tests {
         let (x, y, facing) = app.world().resource::<CurrentLevel>().0.start();
         let [wx, wy, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
         let start = Vec3::new(wx, wy, wz);
-        let body = app.world_mut().spawn((Player, Locomotion { yaw: facing.yaw(), ..default() }, Transform::from_translation(start).with_rotation(Quat::from_rotation_y(facing.yaw())))).id();
+        let body = app.world_mut().spawn((Player, Locomotion { yaw: facing.yaw(), ..default() }, Transform::from_translation(start).with_rotation(Quat::from_rotation_y(facing.yaw())), delver)).id();
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
         for _ in 0..frames {
             app.update();
@@ -352,6 +358,36 @@ mod tests {
         let half = walked(10, |t| t.moving.walk_speed *= 0.5);
         assert!(usual > 1.0, "{usual}");
         assert!((half / usual - 0.5).abs() < 0.02, "half the pace walks half as far: {half} against {usual}");
+    }
+
+    fn exhausted(level: u32) -> Exhaustion {
+        Exhaustion(fb_character::Exhaustion::new(level))
+    }
+
+    #[test]
+    fn exhaustion_slows_a_delver_who_is_not_otherwise_slowed() {
+        for frames in [10, 30, 60] {
+            let usual = walked(frames, |_| {});
+            let level_2 = walked_as(frames, |_| {}, exhausted(2));
+            assert!((level_2 / usual - 0.5).abs() < 0.02, "{frames} frames: {level_2} against {usual}");
+            assert!(walked_as(frames, |_| {}, exhausted(1)) / usual > 0.99, "level 1 does not slow");
+        }
+    }
+
+    #[test]
+    fn exhaustion_multiplies_with_a_constrictors_hold_and_stays_steady() {
+        use crate::combat::vitals::HELD_PACE;
+        for frames in [10, 30, 60] {
+            let usual = walked(frames, |_| {});
+            let held = walked_as(frames, |_| {}, (exhausted(2), Slowed(HELD_PACE)));
+            assert!((held / usual - 0.5 * HELD_PACE).abs() < 0.01, "{frames} frames: {held} against {usual}");
+        }
+    }
+
+    #[test]
+    fn at_exhaustion_level_5_the_delver_cannot_move() {
+        assert!(walked(10, |_| {}) > 1.0);
+        assert_eq!(walked_as(30, |_| {}, exhausted(5)), 0.0);
     }
 
     #[test]

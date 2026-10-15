@@ -28,6 +28,7 @@ use crate::carry::{Aimed, Hud, ViewModelCamera};
 use crate::character::Character;
 use crate::creatures::Critter;
 use crate::creatures::behaviour::{CreatureAttack, reach};
+use crate::exhaustion::Exhaustion;
 use crate::inventory::Inventory;
 use crate::launch::AppState;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles, Player, ScreenOpen};
@@ -134,7 +135,7 @@ fn break_free(
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct FallOverlay;
 
-/// At 0 hit points the delver stops and the view fades out to "You fall in the abyss"; then
+/// At 0 hit points, or exhaustion level 6, the delver stops and the view fades out to "You fall in the abyss"; then
 /// back to the title.
 #[allow(clippy::too_many_arguments)]
 fn fall(
@@ -142,7 +143,7 @@ fn fall(
     time: Res<Time>,
     fallen: Option<ResMut<Fallen>>,
     fonts: Option<Res<UiFonts>>,
-    players: Query<(Entity, &Health), With<Player>>,
+    players: Query<(Entity, &Health, &Exhaustion), With<Player>>,
     view_models: Query<Entity, With<ViewModelCamera>>,
     mut overlay: Query<(&mut BackgroundColor, &Children), With<FallOverlay>>,
     mut words: Query<&mut TextColor>,
@@ -150,7 +151,7 @@ fn fall(
     next: Option<ResMut<NextState<AppState>>>,
 ) {
     let Some(mut fallen) = fallen else {
-        let Some((player, _)) = players.iter().find(|(_, h)| h.is_down()) else { return };
+        let Some((player, ..)) = players.iter().find(|(_, health, exhaustion)| health.is_down() || exhaustion.0.is_dead()) else { return };
         commands.insert_resource(Fallen(FALL_TIME));
         commands.entity(player).insert(Slowed(0.0)).remove::<Constricted>();
         if let Some(screen) = screen.as_deref_mut() {
@@ -348,6 +349,30 @@ mod tests {
         // Leaving the delve cleared it.
         assert!(app.world().get_entity(player).is_err(), "the delver is gone");
         assert!(app.world().get_entity(snake).is_err(), "the creatures are gone");
+        assert!(app.world().get_resource::<Fallen>().is_none());
+    }
+
+    #[test]
+    fn at_exhaustion_level_6_the_run_ends_as_at_zero_hit_points() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::ConstrictorSnake, 2);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(crate::play::Screen::Inventory);
+        app.update();
+        assert!(app.world().get_resource::<Fallen>().is_none(), "level 0 does not fall");
+        app.world_mut().get_mut::<Exhaustion>(player).unwrap().0 = fb_character::Exhaustion::new(6);
+        app.update();
+        assert!(app.world().get_resource::<Fallen>().is_some());
+        assert_eq!(app.world().get::<Slowed>(player), Some(&Slowed(0.0)), "the delver stops");
+        assert!(app.world().get::<Constricted>(player).is_none(), "the grip lets go");
+        assert_eq!(app.world().resource::<ScreenOpen>().0, None, "the screens close");
+        assert!(app.world().get::<Health>(player).unwrap().hp > 0, "hit points were not what ended it");
+        assert_eq!(app.world_mut().query::<&FallOverlay>().iter(app.world()).count(), 1, "the overlay shows");
+        for _ in 0..((FALL_TIME * 60.0) as usize + 5) {
+            app.update();
+        }
+        assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
+        assert!(app.world().get_entity(player).is_err(), "the delver is gone");
         assert!(app.world().get_resource::<Fallen>().is_none());
     }
 
