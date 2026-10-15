@@ -165,10 +165,10 @@ impl Character {
     /// [`Character::gear`] with each item's name, so the numbers it sums can be explained
     /// ([`Loadout::capacity`] and the rest).
     pub fn loadout(&self, inventory: &Inventory) -> Loadout {
-        let mut loadout = Loadout::new(self.folk.key(), self.folk.race().dv as f64);
+        let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
         for (_, item) in inventory.equipped() {
             let s = &item.profile.stats;
-            loadout = loadout.wearing(&item.name, Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64 });
+            loadout = loadout.wearing(&item.name, Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, warmth: s.warmth as f64 });
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
             loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });

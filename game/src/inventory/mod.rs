@@ -99,6 +99,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<SheetTab>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
+            .init_resource::<sheet::HoveredNumber>()
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
@@ -123,6 +124,7 @@ impl Plugin for InventoryPlugin {
                         drag_items,
                         unhang_without_belt,
                         (sheet::update_status, sheet::update_gear).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
                         show_drag,
@@ -1231,6 +1233,7 @@ mod tests {
             .init_resource::<SheetTab>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
+            .init_resource::<sheet::HoveredNumber>()
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
@@ -1239,7 +1242,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
-            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, sheet::update_gear, drag_items, icon::reveal_icons).chain());
+            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -1467,6 +1470,75 @@ mod tests {
         app.world_mut().resource_mut::<Character>().folk = fb_body::Folk::Lizardfolk;
         app.update();
         assert_eq!(gear_row(&mut app, 1).split(" / ").nth(1), Some("8"));
+    }
+
+    /// The lines of the breakdown tooltip.
+    fn tip_text(app: &mut App) -> Vec<String> {
+        let mut texts = app.world_mut().query::<(&Text, &ChildOf)>();
+        let world = app.world();
+        texts.iter(world).filter(|(_, p)| world.get::<sheet::BreakdownTip>(p.parent()).is_some()).map(|(t, _)| t.0.clone()).collect()
+    }
+
+    fn hover_row(app: &mut App, row: Option<usize>) {
+        app.world_mut().resource_mut::<sheet::HoveredNumber>().0 = row.map(|r| (r, Rect::new(10.0, 10.0 + 22.0 * r as f32, 300.0, 30.0 + 22.0 * r as f32)));
+        app.update();
+        app.update();
+    }
+
+    #[test]
+    fn hovering_capacity_lists_the_strength_and_the_belt_of_the_ox() {
+        let mut app = screen_app();
+        let attributes = fb_character::Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Human, attributes, ..Character::roll(4) };
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(weighed_with("Belt", 2, Some("of the Ox"), 1.0));
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+        }
+        press(&mut app, KeyCode::KeyC);
+        assert!(tip_text(&mut app).is_empty());
+        hover_row(&mut app, Some(0));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.contains("Capacity 175 lb = STR 10 \u{d7} 15 (150) + ") && l.contains("Belt") && l.ends_with("(+25)")), "{tip:?}");
+        assert!(tip.iter().any(|l| l.starts_with("Load 1 lb =")), "{tip:?}");
+        let mut tips = app.world_mut().query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
+        assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Inherited);
+        hover_row(&mut app, None);
+        assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Hidden);
+    }
+
+    #[test]
+    fn hovering_a_goblin_s_darkvision_names_the_folk_as_the_winner() {
+        let mut app = screen_app();
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Goblin, ..Character::roll(4) };
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(weighed_with("Belt", 2, Some("of the Mole"), 1.0));
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+        }
+        press(&mut app, KeyCode::KeyC);
+        hover_row(&mut app, Some(3));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.starts_with("Darkvision 60 ft = best of Goblin 60, ") && l.contains("Belt") && l.ends_with("(Goblin)")), "{tip:?}");
+    }
+
+    #[test]
+    fn hovering_warmth_and_armour_class_explain_them() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyC);
+        hover_row(&mut app, Some(1));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.starts_with("Warmth ")) && tip.iter().any(|l| l == "Warmth needed 6"), "{tip:?}");
+        hover_row(&mut app, Some(4));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.starts_with("Armour class ") && l.contains("= base (10) + DEX ")), "{tip:?}");
+    }
+
+    #[test]
+    fn the_mouse_over_a_row_picks_it() {
+        let rows = [(0, Rect::new(0.0, 0.0, 100.0, 20.0)), (1, Rect::new(0.0, 20.0, 100.0, 40.0))];
+        assert_eq!(sheet::row_under(rows, Vec2::new(5.0, 25.0)).map(|r| r.0), Some(1));
+        assert_eq!(sheet::row_under(rows, Vec2::new(150.0, 5.0)), None);
     }
 
     #[test]

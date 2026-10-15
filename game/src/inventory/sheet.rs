@@ -8,13 +8,17 @@
 //! when the delver eats or drinks.
 
 use bevy::prelude::*;
+use fb_character::explain::Explained;
 use fb_character::{Exhaustion as ExhaustionLevel, Meter, MeterKind, Needs, modifier};
 
+use super::card::place_beside;
 use super::items::Inventory;
+use crate::carry::ViewModelCamera;
 use crate::character::{Character, DelverNeeds, Derived};
 use crate::exhaustion::Exhaustion;
-use crate::play::Player;
-use crate::ui::{ACCENT, BAD, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts};
+use crate::play::{Player, Screen, ScreenOpen, SheetTab};
+use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, node_rect};
+use bevy::window::PrimaryWindow;
 
 /// The leaf under the header when the character tab is showing.
 #[derive(Component, Debug)]
@@ -47,6 +51,22 @@ const BAR_HEIGHT_PX: f32 = 10.0;
 
 /// The meters in the order they are shown, with their labels.
 pub const NEEDS: [(MeterKind, &str); 3] = [(MeterKind::Hunger, "Hunger"), (MeterKind::Thirst, "Thirst"), (MeterKind::Sleepiness, "Sleepiness")];
+
+/// A gear row's whole line, by its place in [`GEAR_ROWS`]: what hovering a number is measured
+/// against.
+#[derive(Component, Debug)]
+pub struct GearRow(pub usize);
+
+/// The gear row under the mouse, with its rectangle on screen in logical pixels.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct HoveredNumber(pub Option<(usize, Rect)>);
+
+/// The tooltip listing where a hovered number comes from: one on the screen.
+#[derive(Component, Debug)]
+pub struct BreakdownTip;
+
+/// Width of the breakdown tooltip, in logical pixels.
+const TIP_WIDTH: f32 = 380.0;
 
 /// The attributes' short names, in the order shown.
 pub const ATTRIBUTES: [&str; 5] = ["STR", "DEX", "CON", "INT", "WIS"];
@@ -128,8 +148,12 @@ fn heading(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, title: &str) {
 }
 
 /// A row: its label in the body face, then what `fill_row` puts after it.
-fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, fill_row: impl FnOnce(&mut ChildSpawnerCommands)) {
-    parent.spawn(Node { align_items: AlignItems::Center, column_gap: px(12), min_height: px(22), ..default() }).with_children(|row| {
+fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Option<usize>, fill_row: impl FnOnce(&mut ChildSpawnerCommands)) {
+    let mut row = parent.spawn(Node { align_items: AlignItems::Center, column_gap: px(12), min_height: px(22), ..default() });
+    if let Some(i) = gear {
+        row.insert(GearRow(i));
+    }
+    row.with_children(|row| {
         row.spawn(Node { width: px(LABEL_PX), flex_shrink: 0.0, ..default() }).with_child((Text::new(label), UiFonts::style(&fonts.body, 15.0, MUTED)));
         fill_row(row);
     });
@@ -145,18 +169,16 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Cha
             }
         });
         heading(sheet, fonts, "what your gear makes of you");
-        // TODO(#273): hovering a number lists where it comes from (the folk, each item, each
-        // affix), on the shared `fb_character::explain` once it lands.
         let values = gear_values(character, &character.derive(inventory));
         for (i, label) in GEAR_ROWS.into_iter().enumerate() {
-            row(sheet, fonts, label, |row| {
+            row(sheet, fonts, label, Some(i), |row| {
                 row.spawn((GearLine(i), Text::new(values[i].clone()), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
             });
         }
         heading(sheet, fonts, "status");
         for (kind, label) in NEEDS {
             let meter = meter(needs, kind);
-            row(sheet, fonts, label, |row| {
+            row(sheet, fonts, label, None, |row| {
                 row.spawn((
                     Node { width: px(BAR_PX), height: px(BAR_HEIGHT_PX), flex_shrink: 0.0, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), overflow: Overflow::clip(), ..default() },
                     BackgroundColor(CELL),
@@ -166,12 +188,124 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Cha
                 row.spawn((NeedWord(kind), Text::new(meter.word()), UiFonts::style(&fonts.mono_bold, 14.0, need_colour(meter))));
             });
         }
-        row(sheet, fonts, "Exhaustion", |row| {
+        row(sheet, fonts, "Exhaustion", None, |row| {
             row.spawn((ExhaustionLine, Text::new(exhaustion_text(exhaustion)), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
         });
         // Stamina and mana go here once their meters land (#267, #268): a bar and a word each,
         // as the needs above, read by the same live system.
     });
+}
+
+/// Where each gear number comes from, one line per term set, for the row `row` of
+/// [`GEAR_ROWS`]: the folk, each item and each affix that gave to it, from the same
+/// [`Character::loadout`] and [`Character::armour_class`] the game plays by.
+pub fn breakdown(character: &Character, inventory: &Inventory, row: usize) -> Vec<String> {
+    let loadout = character.loadout(inventory);
+    match row {
+        0 => {
+            let mut load = Explained::new("Load", "lb");
+            for (slot, item) in inventory.equipped() {
+                let weight = item.profile.stats.weight + inventory.worn(slot).map_or(0.0, |id| inventory.contents_weight(id));
+                load = if load.terms().is_empty() { load.base(&item.name, weight as f64) } else { load.add(&item.name, weight as f64) };
+            }
+            vec![load.line(), loadout.capacity(character.strength()).line()]
+        }
+        1 => vec![loadout.warmth().line(), format!("Warmth needed {}", character.warmth_need())],
+        2 => vec![loadout.light().line()],
+        3 => vec![loadout.darkvision().line()],
+        _ => vec![character.armour_class(inventory).line()],
+    }
+}
+
+/// The gear row under `point`, of the rows `rects`.
+pub fn row_under(rects: impl IntoIterator<Item = (usize, Rect)>, point: Vec2) -> Option<(usize, Rect)> {
+    rects.into_iter().find(|(_, rect)| rect.contains(point))
+}
+
+/// Notes which gear row the mouse is over.
+pub fn hover_numbers(
+    open: Res<ScreenOpen>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    rows: Query<(&GearRow, &ComputedNode, &UiGlobalTransform)>,
+    mut hovered: ResMut<HoveredNumber>,
+) {
+    let over = if open.is(Screen::Inventory) {
+        window.and_then(|w| w.cursor_position()).and_then(|point| row_under(rows.iter().map(|(r, n, t)| (r.0, node_rect(n, t))), point))
+    } else {
+        None
+    };
+    hovered.set_if_neq(HoveredNumber(over));
+}
+
+/// Spawns the tooltip, hidden, once there is a camera to draw it.
+pub fn spawn_tip(mut commands: Commands, tips: Query<(), With<BreakdownTip>>, cameras: Query<Entity, With<ViewModelCamera>>) {
+    if !tips.is_empty() {
+        return;
+    }
+    let Some(camera) = cameras.iter().next() else { return };
+    commands.spawn((
+        Name::new("Breakdown tip"),
+        DespawnOnExit(crate::launch::AppState::Delving),
+        BreakdownTip,
+        UiTargetCamera(camera),
+        Node {
+            position_type: PositionType::Absolute,
+            width: px(TIP_WIDTH),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4),
+            padding: UiRect::all(px(12)),
+            border: UiRect::all(px(1.5)),
+            border_radius: BorderRadius::all(px(10)),
+            ..default()
+        },
+        BackgroundColor(BG),
+        BorderColor::all(LINE),
+        GlobalZIndex(40),
+        Visibility::Hidden,
+        Pickable::IGNORE,
+    ));
+}
+
+/// Fills the tooltip with the hovered number's breakdown and places it beside the row. It is
+/// refilled only when the hovered row, the character or the inventory changed, and waits a
+/// frame to be measured before it shows.
+#[allow(clippy::too_many_arguments)]
+pub fn show_breakdown(
+    mut commands: Commands,
+    open: Res<ScreenOpen>,
+    tab: Res<SheetTab>,
+    hovered: Res<HoveredNumber>,
+    character: Res<Character>,
+    inventory: Res<Inventory>,
+    fonts: Res<UiFonts>,
+    mut tips: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, Option<&ComputedUiRenderTargetInfo>), With<BreakdownTip>>,
+    mut shown: Local<Option<usize>>,
+) {
+    for (tip, mut node, mut visibility, computed, target) in &mut tips {
+        let over = hovered.0.filter(|_| open.is(Screen::Inventory) && *tab == SheetTab::Character);
+        let Some((row, rect)) = over else {
+            visibility.set_if_neq(Visibility::Hidden);
+            *shown = None;
+            continue;
+        };
+        if *shown != Some(row) || hovered.is_changed() || character.is_changed() || inventory.is_changed() {
+            commands.entity(tip).despawn_children().with_children(|tip| {
+                tip.spawn((Text::new(GEAR_ROWS[row]), UiFonts::style(&fonts.display, 18.0, INK)));
+                for line in breakdown(&character, &inventory, row) {
+                    tip.spawn((Text::new(line), UiFonts::style(&fonts.mono, 12.0, MUTED)));
+                }
+            });
+            *shown = Some(row);
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
+        }
+        let size = computed.size * computed.inverse_scale_factor;
+        let screen = target.map_or(Vec2::new(1280.0, 720.0), |t| t.logical_size());
+        let at = place_beside(rect, size, screen);
+        node.left = px(at.x);
+        node.top = px(at.y);
+        visibility.set_if_neq(Visibility::Inherited);
+    }
 }
 
 /// Keeps the open sheet's attributes and gear numbers true to the delver, writing only the

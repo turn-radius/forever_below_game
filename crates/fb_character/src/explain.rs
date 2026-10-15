@@ -229,6 +229,15 @@ impl Loadout {
         e
     }
 
+    /// Warmth: the sum of what each worn item gives.
+    pub fn warmth(&self) -> Explained {
+        let mut e = Explained::new("Warmth", "");
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.warmth != 0.0) {
+            e = if e.terms().is_empty() { e.base(label, item.warmth) } else { e.add(label, item.warmth) };
+        }
+        e
+    }
+
     /// Feet seen without light: the best of the folk's and each item's, naming the winner.
     /// Equals [`Gear::darkvision`].
     pub fn darkvision(&self) -> Explained {
@@ -354,7 +363,7 @@ mod tests {
 
     #[test]
     fn explained_values_equal_the_plain_functions() {
-        let worn = [("A", Worn { carry: 10.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.9 }), ("B", Worn { carry: 5.0, darkvision: 70.0, hunger_rate: 0.85, sleepiness_rate: 1.0 })];
+        let worn = [("A", Worn { carry: 10.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.9, warmth: 2.0 }), ("B", Worn { carry: 5.0, darkvision: 70.0, hunger_rate: 0.85, sleepiness_rate: 1.0, warmth: 1.5 })];
         let lights = [("Torch", CarriedLight { reach: 30.0, burn_time: 1.0 }), ("Lantern", CarriedLight { reach: 50.0, burn_time: 2.0 })];
         for with in [0, 1, 2] {
             let mut loadout = Loadout::new("Dwarf", 60.0);
@@ -380,6 +389,19 @@ mod tests {
             }
         }
         assert_eq!(Loadout::new("Human", 0.0).light().value(), Gear::default().light);
+    }
+
+    #[test]
+    fn warmth_is_the_sum_of_what_is_worn() {
+        let bare = Loadout::new("Human", 0.0).warmth();
+        assert_eq!((bare.value(), bare.line()), (0.0, "Warmth 0 =".to_string()));
+        let worn = Loadout::new("Human", 0.0)
+            .wearing("Wool cloak", Worn { warmth: 2.0, ..Worn::default() })
+            .wearing("Boots", Worn::default())
+            .wearing("Warm hood", Worn { warmth: 1.5, ..Worn::default() });
+        let e = worn.warmth();
+        assert_eq!(e.value(), 3.5);
+        assert_eq!(e.line(), "Warmth 3.5 = Wool cloak (2) + Warm hood (+1.5)");
     }
 
     #[test]
