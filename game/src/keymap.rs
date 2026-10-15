@@ -27,6 +27,8 @@ pub enum Action {
     DragItem,
     TurnItem,
     Inventory,
+    /// Opens and closes the map of the level.
+    Map,
     /// Closes the open screen or page, or opens the menu over the level.
     Back,
     /// Presses a button in a menu: the title's or the pause menu.
@@ -154,6 +156,7 @@ impl Default for Keymap {
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),
+                bind(Action::Map, "Map", Group::Screens, &[Key(KeyCode::KeyM)]),
                 bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]),
                 bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]),
                 bind(Action::NewDelve, "New delve, on the title", Group::Screens, &[Key(KeyCode::Enter), Key(KeyCode::NumpadEnter)]),

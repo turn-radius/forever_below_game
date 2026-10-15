@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(level.folk[5].seed, 748_339_772);
         assert!((level.folk[5].x - 39.5).abs() < 0.05 && (level.folk[5].y - 14.6).abs() < 0.05);
         // And everything but the props is the level as laid out before they are placed.
-        let (before, _) = crate::generate::generate_without_props(1207);
+        let (before, _) = crate::generate::generate_without_props(1207, &crate::LevelParams::default());
         assert!(before.props.is_empty() && !level.props.is_empty());
         assert_eq!(Level { props: Vec::new(), creatures: Vec::new(), ..level }, before);
     }

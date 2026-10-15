@@ -18,6 +18,7 @@ use forever_below::{
     combat::{Health, vitals::FALL_TIME},
     inventory::InventoryScreen,
     launch::AppState,
+    map::screen::MapScreen,
     menu::{MenuCommand, MenuScreen},
     play::{CurrentLevel, PlayPlugin, Player, Screen, ScreenOpen},
     render::ArmoryRenderPlugin,
@@ -140,7 +141,7 @@ fn everything_the_delve_spawns_is_scoped_to_it() {
     let mut checks = vec![("the level", None)];
     // The screens over the level too: the inventory (with its doll, portrait and icons), then
     // the menu.
-    checks.extend([("the inventory", Some(Screen::Inventory)), ("the menu", Some(Screen::Menu))]);
+    checks.extend([("the inventory", Some(Screen::Inventory)), ("the map", Some(Screen::Map)), ("the menu", Some(Screen::Menu))]);
     for (what, screen) in checks {
         if screen.is_some() {
             app.world_mut().resource_mut::<ScreenOpen>().0 = screen;
@@ -151,6 +152,7 @@ fn everything_the_delve_spawns_is_scoped_to_it() {
             None => world.query_filtered::<(), With<Player>>().iter(world).count(),
             Some(Screen::Inventory) => world.query_filtered::<(), With<InventoryScreen>>().iter(world).count(),
             Some(Screen::Menu) => world.query_filtered::<(), With<MenuScreen>>().iter(world).count(),
+            Some(Screen::Map) => world.query_filtered::<(), With<MapScreen>>().iter(world).count(),
         };
         assert_eq!(shown, 1, "{what} is not showing");
         let left = unscoped(&mut app, &before);
