@@ -50,9 +50,11 @@ use bevy::{
     prelude::*,
     render::view::{Msaa, Tonemapping},
 };
+use fb_body::BodySpec;
 use fb_level::{CELL, ItemSpot, Level};
 
 use crate::character::Character;
+use crate::fitting::Fitting;
 use crate::inventory::{FloorChanges, Inventory, ItemId, Toast, doll::lit_slot, equip_from_floor, header::ToastText, underfoot::apply_floor_changes};
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
@@ -63,7 +65,7 @@ use crate::props::{Container, PropPiece};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, Shimmer, ToonMaterial};
 use crate::tuning::{LightTuning, Tuning};
 use crate::ui::{BG, BRIGHT, UiFonts, rarity_color};
-use crate::view_model::{held_in_view, hip_in_view, hip_swing, side_of};
+use crate::view_model::{HipInView, held_in_view, hip_in_view, hip_swing, side_of};
 
 /// Render layer of the view model: what the player holds, drawn over the world.
 pub const VIEW_MODEL_LAYER: usize = 1;
@@ -432,12 +434,115 @@ impl HeldKey {
     }
 }
 
+/// What a view model is fitted for: what the hands and hip hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldWanted {
+    key: HeldKey,
+}
+
+/// Components needed to place a held item at any scale
+#[derive(Clone, Debug)]
+struct HeldPlacement {
+    /// The position in view space where the grip should rest
+    fist: Vec3,
+    /// The grip point in item space
+    grip: Vec3,
+    /// The rotation from item space to view space
+    rotation: Quat,
+}
+
+impl HeldPlacement {
+    /// Compute the world translation for a given scale
+    fn translation_at_scale(&self, scale: f32) -> Vec3 {
+        self.fist - self.rotation * self.grip * scale
+    }
+}
+
+/// One hand's item fitted and built, ready to spawn.
+#[derive(Clone, Debug)]
+struct BuiltHand {
+    hand: fb_items::Slot,
+    item: Item,
+    placement: HeldPlacement,
+    point: Option<Vec3>,
+    mesh: armory::ItemMesh,
+}
+
+/// A view model's items fitted and built off the main thread: each hand's, and the lantern
+/// at the hip with the body's fitted belt it hangs from.
+#[derive(Clone, Debug)]
+pub struct HeldBuilt {
+    wanted: HeldWanted,
+    hands: Vec<BuiltHand>,
+    hip: Option<(HipInView, armory::ItemMesh)>,
+}
+
+impl HeldBuilt {
+    /// Fits and builds what `wanted` holds on a body of `spec` wearing `worn` (a list that
+    /// holds the items in the hands and at the hip).
+    fn fit(wanted: HeldWanted, spec: &BodySpec, worn: &[(fb_items::Slot, Item)]) -> HeldBuilt {
+        use fb_items::Slot;
+        let held = |slot| worn.iter().find(|(s, _)| *s == slot).map(|(_, item)| item.clone());
+
+        // Fit hands by extracting fist, grip, and rotation from fitting (scale-independent placement)
+        let hands = {
+            let fitted = crate::view_model::held_in_view(spec, held(Slot::Mainhand).as_ref(), held(Slot::Offhand).as_ref(), 1.0);
+            let mut result = Vec::new();
+
+            // Weapons fitted by held_in_view
+            for h in fitted {
+                let hand = h.hand;
+                let item = h.item.clone();
+                let mesh = item.build();
+                let point = Some(h.point);
+                let placement = HeldPlacement { fist: h.fist, grip: h.grip, rotation: h.transform.rotation };
+                result.push((hand, item, placement, point, mesh));
+            }
+
+            // Lights that don't fit through held_in_view
+            for slot in [Slot::Mainhand, Slot::Offhand] {
+                if result.iter().any(|(hand, _, _, _, _)| *hand == slot) {
+                    continue; // Already handled as a weapon
+                }
+                let item = match held(slot) {
+                    Some(it) => it,
+                    None => continue,
+                };
+                let anchor = match item_light(&item) {
+                    Some(a) => a,
+                    None => continue, // Not a light
+                };
+                let (flame, rotation) = held_pose(&item, slot);
+                let mesh = item.build();
+                let grip = Vec3::from_array(anchor.position);
+                let placement = HeldPlacement { fist: flame, grip, rotation };
+                result.push((slot, item, placement, None, mesh));
+            }
+
+            result.into_iter()
+                .map(|(hand, item, placement, point, mesh)| {
+                    BuiltHand { hand, item, placement, point, mesh }
+                })
+                .collect()
+        };
+        let hip = hip_in_view(spec, worn, EYE_HEIGHT).map(|hip| {
+            let mesh = hip.item.build();
+            (hip, mesh)
+        });
+        HeldBuilt { wanted, hands, hip }
+    }
+}
+
 /// On a [`PlayerCamera`]: what its view model holds, if drawn yet, and what was spawned to draw
 /// it (each hand's item, and the carried light's light on the stage and in the world).
 #[derive(Component, Debug, Default)]
 pub struct Carrying {
     pub held: Option<HeldKey>,
     entities: Vec<Entity>,
+    /// What was fitted for the view model last, kept to respawn from when only the tuning moves.
+    built: Option<std::sync::Arc<HeldBuilt>>,
+    /// What is being fitted off the main thread, while `built` stays on show.
+    fitting: Option<Fitting<HeldWanted, HeldBuilt>>,
 }
 
 impl Carrying {
@@ -896,8 +1001,13 @@ pub fn stage_light_at(anchor: &LightAnchor, rest: Transform, hand: fb_items::Slo
 pub fn held_items(inventory: &Inventory, character: &Character, scale: f32) -> Vec<(fb_items::Slot, Item, Transform, Option<Vec3>)> {
     use fb_items::Slot;
     let shape = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).map(|item| item.shape.clone());
-    let (main, off) = (shape(Slot::Mainhand), shape(Slot::Offhand));
-    let fitted = held_in_view(&character.spec(), main.as_ref(), off.as_ref(), scale);
+    held_items_of(&character.spec(), shape(Slot::Mainhand), shape(Slot::Offhand), scale)
+}
+
+/// [`held_items`] for the items in the main and off hand of a body of `spec`.
+fn held_items_of(spec: &BodySpec, main: Option<Item>, off: Option<Item>, scale: f32) -> Vec<(fb_items::Slot, Item, Transform, Option<Vec3>)> {
+    use fb_items::Slot;
+    let fitted = held_in_view(spec, main.as_ref(), off.as_ref(), scale);
     [(Slot::Mainhand, main), (Slot::Offhand, off)]
         .into_iter()
         .filter_map(|(hand, item)| {
@@ -917,6 +1027,11 @@ pub fn held_items(inventory: &Inventory, character: &Character, scale: f32) -> V
 /// model and its lights go and the new ones are spawned, each lit thing's light in the world
 /// from its [`LightAnchor`], every one shadowed. With nothing lit there is no light; with
 /// nothing in hand, nothing is drawn. A lantern at the hip hangs from the player's body instead ([`HipSwing`]).
+///
+/// Fitting the items takes long enough to hitch a frame (a lantern at the hip fits the whole
+/// worn kit), so it runs off the main thread ([`Fitting`]) and the old view model stays until
+/// the new one is ready. A fitting for hands that have changed since is dropped. A tuning
+/// change alone respawns from what was last fitted.
 #[allow(clippy::type_complexity)]
 fn show_held(
     mut commands: Commands,
@@ -927,36 +1042,63 @@ fn show_held(
     view_models: Query<(Entity, &ViewModelCamera)>,
     mut spawner: ItemSpawner,
 ) {
-    let wanted = HeldKey::of(&inventory, &character);
+    let wanted = HeldWanted { key: HeldKey::of(&inventory, &character) };
+    let scale = tuning.view.held_scale;
     for (camera, mut carrying, exposure, body) in &mut cameras {
-        if carrying.held == Some(wanted) && !tuning.is_changed() {
+        let Some((view_model, _)) = view_models.iter().find(|(_, v)| v.follows == camera) else { continue };
+        if carrying.fitting.as_ref().is_some_and(|f| *f.key() != wanted) {
+            carrying.fitting = None;
+        }
+        let mut fresh = None;
+        if carrying.built.as_ref().is_none_or(|b| b.wanted != wanted) && carrying.fitting.is_none() {
+            let worn: Vec<(fb_items::Slot, Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.shape.clone())).collect();
+            let spec = character.spec();
+            if wanted.key.main.is_none() && wanted.key.off.is_none() && wanted.key.hip.is_none() {
+                // Nothing to fit: no wait.
+                fresh = Some(HeldBuilt::fit(wanted, &spec, &worn));
+            } else {
+                carrying.fitting = Some(Fitting::start(wanted, move || HeldBuilt::fit(wanted, &spec, &worn)));
+            }
+        }
+        fresh = fresh.or_else(|| carrying.fitting.as_mut().and_then(|f| f.poll()));
+        if fresh.is_some() {
+            carrying.fitting = None;
+        } else if !tuning.is_changed() || carrying.built.is_none() {
             continue;
         }
-        let Some((view_model, _)) = view_models.iter().find(|(_, v)| v.follows == camera) else { continue };
+        if let Some(fresh) = fresh {
+            carrying.built = Some(std::sync::Arc::new(fresh));
+        }
+        let Some(built) = carrying.built.clone() else { continue };
         for entity in carrying.entities.drain(..) {
             commands.entity(entity).try_despawn();
         }
-        carrying.held = Some(wanted);
+        carrying.held = Some(built.wanted.key);
         let exposure = exposure.copied().unwrap_or_default();
         let view_layer = RenderLayers::layer(VIEW_MODEL_LAYER);
         let lit: Vec<fb_items::Slot> = carried_lights(&inventory).into_iter().map(|(slot, _)| slot).collect();
-        for (hand, item, rest, point) in held_items(&inventory, &character, tuning.view.held_scale) {
-            let mut root = spawner.spawn(&item.build(), &appearance_of(&item));
+        for hand in &built.hands {
+            let mut root = spawner.spawn(&hand.mesh, &appearance_of(&hand.item));
+            let transform = Transform {
+                translation: hand.placement.translation_at_scale(scale),
+                rotation: hand.placement.rotation,
+                scale: Vec3::splat(scale),
+            };
             root.insert((
-                Name::new(format!("Held {}", item.family().key())),
-                HeldItem { item: item.clone(), hand, point },
+                Name::new(format!("Held {}", hand.item.family().key())),
+                HeldItem { item: hand.item.clone(), hand: hand.hand, point: hand.point },
                 crate::render::flame::FlameUp::default(),
-                HeldSway::new(rest),
-                rest,
+                HeldSway::new(transform),
+                transform,
                 Propagate(view_layer.clone()),
                 ChildOf(view_model),
             ));
             carrying.entities.push(root.id());
-            if !lit.contains(&hand) {
+            if !lit.contains(&hand.hand) {
                 continue;
             }
-            let Some(anchor) = item_light(&item) else { continue };
-            let at = stage_light_at(&anchor, rest, hand);
+            let Some(anchor) = item_light(&hand.item) else { continue };
+            let at = stage_light_at(&anchor, transform, hand.hand);
             let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light), Transform::from_translation(at), view_layer.clone(), ChildOf(view_model))).id();
             let world = commands.spawn((given_light(anchor, exposure, &tuning.light), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
             carrying.entities.extend([stage_light, world]);
@@ -964,24 +1106,24 @@ fn show_held(
         // A lantern at the hip hangs from the body in the level, not on the stage; lit and
         // carried, its light rises from it, and a light of its own on the stage lights what the
         // hands hold from below.
-        let worn: Vec<(fb_items::Slot, Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.shape.clone())).collect();
-        let Some(hip) = hip_in_view(&character.spec(), &worn, EYE_HEIGHT) else { continue };
-        let (parent, hook) = match body {
-            Some(body) => (body.parent(), hip.hook),
-            None => (camera, hip.hook - Vec3::Y * EYE_HEIGHT),
-        };
-        let pivot = commands.spawn((Name::new("Hip lantern"), HipSwing, Transform::from_translation(hook), Visibility::default(), ChildOf(parent))).id();
-        let carried = lit.contains(&fb_items::Slot::Hip).then(|| item_light(&hip.item)).flatten();
-        // The lantern and its light go through the spawner's own commands, after the pivot's.
-        let mut lantern = spawner.spawn(&hip.item.build(), &appearance_of(&hip.item));
-        lantern.insert((hip.transform, Propagate(NotShadowCaster), ChildOf(pivot)));
-        if let Some(anchor) = carried {
-            lantern.with_child((given_light(anchor, exposure, &tuning.light), Transform::from_translation(Vec3::from_array(anchor.position))));
+        if let Some((hip, mesh)) = &built.hip {
+            let (parent, hook) = match body {
+                Some(body) => (body.parent(), hip.hook),
+                None => (camera, hip.hook - Vec3::Y * EYE_HEIGHT),
+            };
+            let pivot = commands.spawn((Name::new("Hip lantern"), HipSwing, Transform::from_translation(hook), Visibility::default(), ChildOf(parent))).id();
+            let carried = lit.contains(&fb_items::Slot::Hip).then(|| item_light(&hip.item)).flatten();
+            // The lantern and its light go through the spawner's own commands, after the pivot's.
+            let mut lantern = spawner.spawn(mesh, &appearance_of(&hip.item));
+            lantern.insert((hip.transform, Propagate(NotShadowCaster), ChildOf(pivot)));
+            if let Some(anchor) = carried {
+                lantern.with_child((given_light(anchor, exposure, &tuning.light), Transform::from_translation(Vec3::from_array(anchor.position))));
+            }
+            carrying.entities.push(pivot);
+            let Some(anchor) = carried else { continue };
+            let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light), Transform::from_translation(HIP_STAGE_LIGHT), view_layer, ChildOf(view_model))).id();
+            carrying.entities.push(stage_light);
         }
-        carrying.entities.push(pivot);
-        let Some(anchor) = carried else { continue };
-        let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light), Transform::from_translation(HIP_STAGE_LIGHT), view_layer, ChildOf(view_model))).id();
-        carrying.entities.push(stage_light);
     }
 }
 
@@ -1388,6 +1530,23 @@ mod tests {
         assert_eq!(carried_light(&inventory), None);
     }
 
+    /// Wait for held items fitting to complete by forcing it to execute.
+    fn wait_for_held_fitting(app: &mut App) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            app.update();
+            let mut query = app.world_mut().query::<&Carrying>();
+            let carrying = query.iter(app.world()).next().unwrap();
+            if carrying.built.is_some() && carrying.fitting.is_none() {
+                return;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("Held items fitting did not complete within 60 seconds");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn the_view_model_follows_the_hands() {
         use fb_items::Slot;
@@ -1416,7 +1575,7 @@ mod tests {
             held.sort_by_key(|h| h.0 as u8);
             held
         };
-        app.update();
+        wait_for_held_fitting(&mut app);
         let both = held(&mut app);
         assert_eq!(both.iter().map(|h| (h.0, h.1)).collect::<Vec<_>>(), vec![(Slot::Mainhand, Family::Mace), (Slot::Offhand, Family::Torch)]);
         assert!(both[0].2 > 0.0 && both[1].2 < 0.0, "the mace on the right, the torch on the left: {both:?}");
@@ -1432,7 +1591,7 @@ mod tests {
             inventory.equip(sword, Slot::Mainhand).unwrap();
             assert_ne!(inventory.worn(Slot::Mainhand), Some(mace));
         }
-        app.update();
+        wait_for_held_fitting(&mut app);
         assert_eq!(held(&mut app).iter().map(|h| (h.0, h.1)).collect::<Vec<_>>(), vec![(Slot::Mainhand, Family::Sword), (Slot::Offhand, Family::Torch)]);
         // Empty hands hold nothing, and nothing lights the level.
         {
@@ -1442,7 +1601,7 @@ mod tests {
                 inventory.take_out(id);
             }
         }
-        app.update();
+        wait_for_held_fitting(&mut app);
         assert!(held(&mut app).is_empty());
         let mut lights = app.world_mut().query::<&PointLight>();
         assert_eq!(lights.iter(app.world()).count(), 0);
@@ -1474,7 +1633,7 @@ mod tests {
             (torch, lantern)
         };
         let world_lights = |app: &mut App| app.world_mut().query::<&GivenLight>().iter(app.world()).count();
-        app.update();
+        wait_for_held_fitting(&mut app);
         assert_eq!(world_lights(&mut app), 2, "a lit torch in hand and a lit lantern at the hip: two lights");
         let character = Character::default();
         let derived = character.derive(app.world().resource::<Inventory>());
@@ -1484,17 +1643,17 @@ mod tests {
 
         // The hip lantern put out gives none; the torch still does.
         app.world_mut().resource_mut::<Inventory>().toggle_light(lantern).unwrap();
-        app.update();
+        wait_for_held_fitting(&mut app);
         assert_eq!(world_lights(&mut app), 1);
         // The torch put out: dark, and the torch drawn doused.
         app.world_mut().resource_mut::<Inventory>().toggle_light(torch).unwrap();
-        app.update();
+        wait_for_held_fitting(&mut app);
         assert_eq!(world_lights(&mut app), 0);
         let mut held = app.world_mut().query::<&HeldItem>();
         assert!(held.iter(app.world()).any(|h| h.item.family() == Family::Torch && h.item.lit() == Some(false)));
         // Lit again from its card, the lantern's light comes back.
         app.world_mut().resource_mut::<Inventory>().toggle_light(lantern).unwrap();
-        app.update();
+        wait_for_held_fitting(&mut app);
         assert_eq!(world_lights(&mut app), 1);
     }
 
@@ -1993,5 +2152,42 @@ mod tests {
         let item = (1..500).filter_map(|seed| fb_items::roll_item("Sword", seed)).find(|i| i.rarity == Rarity::Common).unwrap();
         assert_eq!(appearance_of(&item.shape).condition, item.shape.condition());
         assert!(item.shape.condition().wear >= 0.15);
+    }
+
+    #[test]
+    fn grip_point_stays_at_hand_regardless_of_held_scale() {
+        use fb_items::Slot;
+        let spec = Character::default().spec();
+        let sword = (1..400).filter_map(|s| fb_items::roll_item("Sword", s)).find(|i| i.shape.family() == Family::Sword).unwrap().shape;
+        let torch = lit_torch(1207).shape;
+
+        for (name, item) in &[("Sword", sword.clone()), ("Torch", torch.clone())] {
+            for scale in [1.0, 1.4] {
+                // Fit the item at this scale
+                let placed = crate::view_model::held_in_view(&spec, Some(item), None, scale);
+                let held = &placed[0];
+
+                // The grip point in item space (stored in HeldBuilt)
+                let grip = held.grip;
+
+                // Compute where the grip is in world space from the fitted transform
+                let hand_transform = held.transform;
+                let grip_world = hand_transform.transform_point(grip);
+
+                // The grip should be at the same world location regardless of scale,
+                // because we're scaling about the grip point
+                if scale == 1.0 {
+                    // On first iteration, just record the position
+                    continue;
+                }
+                // On second iteration, compare with scale 1.0
+                let placed_1 = crate::view_model::held_in_view(&spec, Some(item), None, 1.0)[0].transform;
+                let grip_world_1 = placed_1.transform_point(grip);
+                assert!(
+                    grip_world.abs_diff_eq(grip_world_1, 1e-4),
+                    "{name} at scale {scale}: grip moved from {grip_world_1} to {grip_world}"
+                );
+            }
+        }
     }
 }
