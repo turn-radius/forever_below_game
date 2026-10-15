@@ -285,11 +285,17 @@ pub struct SoundTuning {
     pub silence_max: f32,
     /// Sound effects' linear volume at full, 0 to 1.
     pub effects_volume: f32,
+    /// Ambient sounds' linear volume at full, 0 to 1: drips and rumbles.
+    pub ambience_volume: f32,
+    /// The shortest time between stone rumbles, seconds.
+    pub rumble_interval_min: f32,
+    /// The longest time between stone rumbles, seconds.
+    pub rumble_interval_max: f32,
 }
 
 impl Default for SoundTuning {
     fn default() -> Self {
-        SoundTuning { music_mix: 0.35, silence_min: 45.0, silence_max: 75.0, effects_volume: 1.0 }
+        SoundTuning { music_mix: 0.35, silence_min: 45.0, silence_max: 75.0, effects_volume: 1.0, ambience_volume: 0.3, rumble_interval_min: 60.0, rumble_interval_max: 180.0 }
     }
 }
 

@@ -242,6 +242,12 @@ pub fn effect_volume(game: &GameSettings, tuning: &Tuning) -> f32 {
     tuning.sound.effects_volume.clamp(0.0, 1.0) * game.sound_volume.clamp(0.0, 1.0)
 }
 
+/// How loud ambient sound plays: the tuning's `ambience_volume` times the player's
+/// [`GameSettings::sound_volume`].
+pub fn ambience_volume(game: &GameSettings, tuning: &Tuning) -> f32 {
+    tuning.sound.ambience_volume.clamp(0.0, 1.0) * game.sound_volume.clamp(0.0, 1.0)
+}
+
 /// What a sound effect's [`AudioPlayer`] is spawned with: played once and despawned, at
 /// [`effect_volume`].
 pub fn sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, PlaybackSettings) {

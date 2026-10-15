@@ -49,4 +49,14 @@ oggenc -q 6 -o game/assets/audio/hiss.ogg /tmp/combat/hiss.wav
 oggenc -q 6 -o game/assets/audio/whoosh.ogg /tmp/combat/whoosh.wav
 ```
 
+**Ambient sounds**: `tools/synth_ambience.py` synthesises ambient sounds as mono 16-bit WAVs: water drips and a deep stony rumble, by oscillators, noise and filters (the technique of Andy Farnell's "Designing Sound"), the same on every run, and `oggenc` encodes them:
+
+```
+python3 tools/synth_ambience.py /tmp/ambience
+oggenc -q 6 -o game/assets/audio/drip.ogg /tmp/ambience/drip.wav
+oggenc -q 6 -o game/assets/audio/rumble.ogg /tmp/ambience/rumble.wav
+```
+
+The drip is a rising sine sweep decaying over about 150 ms with proper phase accumulation, plus faint splash noise. The rumble is a deep rolling sound from decaying sine modes in the 40–120 Hz range.
+
 Bevy loads assets from `game/assets/` under `cargo run` (it uses `CARGO_MANIFEST_DIR`). To run the binary directly, set `BEVY_ASSET_ROOT=game`.

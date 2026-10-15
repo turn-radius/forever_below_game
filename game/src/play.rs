@@ -240,6 +240,7 @@ impl Plugin for PlayPlugin {
             .add_systems(Update, switch_screens.in_set(DelveSystems))
             .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate).in_set(DelveSystems))
             .add_plugins((
+            crate::ambient::AmbientPlugin,
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,

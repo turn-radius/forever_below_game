@@ -7,6 +7,7 @@
 //! [`Player`]; pitch tilts its [`PlayerCamera`] child, which also carries the head bob.
 
 use bevy::{
+    audio::SpatialListener,
     camera::Exposure,
     input::mouse::AccumulatedMouseMotion,
     prelude::*,
@@ -126,6 +127,7 @@ fn spawn_player(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<Tu
                 Tonemapping::Linear,
                 // UI follows this camera even when frame capture retargets it to an image.
                 IsDefaultUiCamera,
+                SpatialListener::new(1.8),
                 Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
             ));
             // A dim light at the eye for looking at the level before the torch exists.
