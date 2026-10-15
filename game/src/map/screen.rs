@@ -359,6 +359,86 @@ mod tests {
         assert!((extent.x - (level.width as f32 + 2.0 * MARGIN) * 10.0).abs() < 1e-3);
     }
 
+    /// An app with the map screen's systems, the level for 1207 and the eye at `at` looking
+    /// along `look`, with the map open on a screen 1600 by 900.
+    fn open_map(at: Vec3, look: Vec3) -> (App, Level, Entity) {
+        let level = fb_level::generate(1207);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Assets<Image>>()
+            .init_resource::<UiFonts>()
+            .init_resource::<MapView>()
+            .init_resource::<ExploredLevels>()
+            .insert_resource(CurrentLevel(level.clone()))
+            .insert_resource(ScreenOpen(Some(Screen::Map)))
+            .add_systems(Startup, make_marker)
+            .add_systems(Update, (build_screen, redraw_plan, place_plan).chain());
+        app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
+        let eye = app.world_mut().spawn((PlayerCamera, GlobalTransform::from(Transform::from_translation(at).looking_to(look, Vec3::Y)))).id();
+        app.update();
+        // The screen is laid out at 1600 by 900, as the UI would lay it out.
+        let mut screens = app.world_mut().query_filtered::<Entity, With<MapScreen>>();
+        let screen = screens.iter(app.world()).next().expect("the map is built");
+        app.world_mut().entity_mut(screen).insert(ComputedNode { size: Vec2::new(1600.0, 900.0), inverse_scale_factor: 1.0, ..default() });
+        app.update();
+        (app, level, eye)
+    }
+
+    /// The cell under the marker's middle, and its turn.
+    fn marker(app: &mut App) -> (Vec2, f32) {
+        let view = *app.world().resource::<MapView>();
+        let mut markers = app.world_mut().query_filtered::<(&Node, &UiTransform), With<Marker>>();
+        let (node, turn) = markers.single(app.world()).map(|(n, t)| (n.clone(), *t)).expect("one marker");
+        let (Val::Px(left), Val::Px(top), Val::Px(size)) = (node.left, node.top, node.width) else { panic!("placed in pixels") };
+        let middle = Vec2::new(left, top) + Vec2::splat(size * 0.5);
+        (middle / view.scale - Vec2::splat(MARGIN), turn.rotation.as_radians())
+    }
+
+    #[test]
+    fn the_marker_follows_the_delver_while_the_map_is_open() {
+        let (sx, sy, inward) = fb_level::generate(1207).start();
+        let (dx, dy) = inward.step();
+        let cell_at = |k: f32| Vec3::new((sx as f32 + 0.5 + dx as f32 * k) * CELL, 15.0, (sy as f32 + 0.5 + dy as f32 * k) * CELL);
+        let ahead = Vec3::new(dx as f32, 0.0, dy as f32);
+        let (mut app, _, eye) = open_map(cell_at(2.0), ahead);
+        let (cell, turn) = marker(&mut app);
+        assert!(cell.abs_diff_eq(Vec2::new(sx as f32 + 0.5 + dx as f32 * 2.0, sy as f32 + 0.5 + dy as f32 * 2.0), 1e-3), "on the delver's cell: {cell}");
+        assert!((turn - facing_turn(Vec2::new(dx as f32, dy as f32))).abs() < 1e-4, "facing in");
+        // Moved two cells on and turned round, the marker goes with them.
+        *app.world_mut().get_mut::<GlobalTransform>(eye).unwrap() = GlobalTransform::from(Transform::from_translation(cell_at(4.0)).looking_to(-ahead, Vec3::Y));
+        app.update();
+        let (cell, turn) = marker(&mut app);
+        assert!(cell.abs_diff_eq(Vec2::new(sx as f32 + 0.5 + dx as f32 * 4.0, sy as f32 + 0.5 + dy as f32 * 4.0), 1e-3), "{cell}");
+        assert!((Rot2::radians(turn) * Rot2::radians(-facing_turn(Vec2::new(-dx as f32, -dy as f32)))).as_radians().abs() < 1e-4, "facing out");
+    }
+
+    #[test]
+    fn the_plan_shows_everything_seen_and_grows_while_open() {
+        let level = fb_level::generate(1207);
+        let (mut app, _, _) = open_map(Vec3::ZERO, Vec3::NEG_Z);
+        let drawn = |app: &App| app.world().resource::<PlanImage>().drawn;
+        assert_eq!(drawn(&app), Some((level.seed, 0)), "nothing seen yet");
+        // Seen while the map is open: drawn at once.
+        let room = level.rooms[0];
+        let (cx, cy) = (room.x as f32 + room.w as f32 * 0.5, room.y as f32 + room.h as f32 * 0.5);
+        let eye = fb_level::sight::Eye { x: cx, y: cy, forward: (1.0, 0.0), half_fov: 3.2, range: 30.0 };
+        let lamp = [fb_level::sight::Lamp { x: cx, y: cy, reach: 20.0 }];
+        let seen = app.world_mut().resource_mut::<ExploredLevels>().of(&level).look(&level, &eye, &lamp);
+        assert!(seen > 4);
+        app.update();
+        assert_eq!(drawn(&app), Some((level.seed, seen)));
+        let plan = app.world().resource::<PlanImage>().image.clone();
+        let image = app.world().resource::<Assets<Image>>().get(&plan).unwrap();
+        let frame = super::super::plan::PlanFrame::of(PLAN_PX);
+        assert_eq!((image.width(), image.height()), frame.size(&level));
+        // Closed and opened again, everything seen so far is there.
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.update();
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Map);
+        app.update();
+        assert_eq!(drawn(&app), Some((level.seed, seen)));
+    }
+
     #[test]
     fn the_marker_is_drawn() {
         let marker = marker_canvas(64);
