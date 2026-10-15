@@ -209,11 +209,13 @@ pub struct CombatTuning {
     /// How far a blow knocks a creature back, as a multiple of the usual (a rat a third of a
     /// metre, a constrictor hardly at all; `crate::combat::feedback::knockback`).
     pub knockback_scale: f32,
+    /// How much the camera kicks when hit, as a multiple of the usual. 0 turns it off. Our own.
+    pub hit_kick: f32,
 }
 
 impl Default for CombatTuning {
     fn default() -> Self {
-        CombatTuning { reach_scale: 1.0, hit_cone_degrees: 50.0, flash_hold: 0.12, flash_fade: 0.2, knockback_scale: 1.0 }
+        CombatTuning { reach_scale: 1.0, hit_cone_degrees: 50.0, flash_hold: 0.12, flash_fade: 0.2, knockback_scale: 1.0, hit_kick: 1.0 }
     }
 }
 

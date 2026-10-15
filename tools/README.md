@@ -40,13 +40,23 @@ python3 tools/synth_door_shut.py /tmp/door-shut.wav
 oggenc -q 6 -o game/assets/audio/door-shut.ogg /tmp/door-shut.wav
 ```
 
-`tools/synth_combat.py` synthesises the fight's sounds the same way: a rat's squeak (a sine chirp with vibrato), a snake's hiss (band-passed noise) and a weapon's whoosh (noise through a sweeping band-pass), its docstring citing the sources:
+`tools/synth_combat.py` synthesises the fight's sounds the same way: a rat's squeak (a sine chirp with vibrato), a snake's hiss (band-passed noise) and a weapon's whoosh (noise through a sweeping band-pass), a rat's attack squeal (a held, climbing sine), a snake's rising hiss (band-passed noise with a climbing band) and the dull thud of a blow landing on the delver (a falling low sine with a puff of low noise), its docstring citing the sources:
 
 ```
 python3 tools/synth_combat.py /tmp/combat
 oggenc -q 6 -o game/assets/audio/squeak.ogg /tmp/combat/squeak.wav
 oggenc -q 6 -o game/assets/audio/hiss.ogg /tmp/combat/hiss.wav
 oggenc -q 6 -o game/assets/audio/whoosh.ogg /tmp/combat/whoosh.wav
+oggenc -q 6 -o game/assets/audio/rat-squeal.ogg /tmp/combat/rat_squeal.wav
+oggenc -q 6 -o game/assets/audio/snake-rise.ogg /tmp/combat/snake_rise.wav
+oggenc -q 6 -o game/assets/audio/thud.ogg /tmp/combat/thud.wav
+```
+
+`tools/synth_heal.py` synthesises the healing draught's gentle rising chime (three soft bell notes, decaying sine modes at slightly inharmonic ratios), its docstring citing the source:
+
+```
+python3 tools/synth_heal.py /tmp/heal
+oggenc -q 6 -o game/assets/audio/heal.ogg /tmp/heal/heal.wav
 ```
 
 Bevy loads assets from `game/assets/` under `cargo run` (it uses `CARGO_MANIFEST_DIR`). To run the binary directly, set `BEVY_ASSET_ROOT=game`.

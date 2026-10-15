@@ -17,12 +17,14 @@ pub mod modifier;
 pub mod naming;
 pub mod outfit;
 pub mod profile;
+pub mod provision;
 pub mod rarity;
 pub mod stats;
 pub mod tables;
 
 pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, roll_item, roll_loot};
+pub use provision::{Consume, Provision, provision};
 
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};

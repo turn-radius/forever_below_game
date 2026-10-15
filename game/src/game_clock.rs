@@ -32,7 +32,7 @@ impl GameClock {
 
 /// Advances the game clock each `FixedUpdate` step, scaling the step by the configured ratio.
 /// Runs only while delving ([`DelveSystems`]) and with no screen open.
-fn advance_game_clock(
+pub fn advance_game_clock(
     mut clock: ResMut<GameClock>,
     tuning: Res<Tuning>,
     time: Res<Time<Fixed>>,

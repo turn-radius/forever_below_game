@@ -38,6 +38,7 @@ use crate::inventory::Inventory;
 use crate::tuning::Tuning;
 
 pub mod feedback;
+pub mod kick;
 pub mod swing;
 pub mod vitals;
 
@@ -45,7 +46,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, kick::KickPlugin));
     }
 }
 
@@ -77,6 +78,13 @@ impl Health {
         let was_up = self.hp > 0;
         self.hp = (self.hp - damage as i32).max(0);
         was_up && self.hp == 0
+    }
+
+    /// Restores `amount`, never above the maximum. Returns how much it restored.
+    pub fn heal(&mut self, amount: u32) -> u32 {
+        let before = self.hp;
+        self.hp = (self.hp + amount as i32).min(self.max).max(before);
+        (self.hp - before) as u32
     }
 
     pub fn is_down(&self) -> bool {

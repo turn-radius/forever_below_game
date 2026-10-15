@@ -108,16 +108,28 @@ pub fn knockback(creature: &Creature) -> f32 {
 /// How long a collapse takes, seconds.
 pub const COLLAPSE_TIME: f32 = 0.45;
 
-/// A rat's squeak and a snake's hiss.
+/// A rat's squeak and a snake's hiss when struck, their cues as they attack, and the thud of a
+/// blow landing on the delver.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct CreatureSounds {
     pub squeak: Handle<AudioSource>,
     pub hiss: Handle<AudioSource>,
+    /// A rat's sharp squeal as it lunges.
+    pub rat_squeal: Handle<AudioSource>,
+    /// A snake's rising hiss as it rears.
+    pub snake_rise: Handle<AudioSource>,
+    pub thud: Handle<AudioSource>,
 }
 
 fn load_creature_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>) {
     if let Some(assets) = assets {
-        commands.insert_resource(CreatureSounds { squeak: assets.load("audio/squeak.ogg"), hiss: assets.load("audio/hiss.ogg") });
+        commands.insert_resource(CreatureSounds {
+            squeak: assets.load("audio/squeak.ogg"),
+            hiss: assets.load("audio/hiss.ogg"),
+            rat_squeal: assets.load("audio/rat-squeal.ogg"),
+            snake_rise: assets.load("audio/snake-rise.ogg"),
+            thud: assets.load("audio/thud.ogg"),
+        });
     }
 }
 

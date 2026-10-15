@@ -58,6 +58,9 @@ pub struct CreatureAttack {
     /// Poison rolled from the stat block's venom (the poisonous snake's 2d4), before the DC 10
     /// Constitution save that halves it, which combat resolves; 0 for a creature with none.
     pub poison: u32,
+    /// The attacker's position on the floor (world `(x, z)`), to place the marker relative to the
+    /// delver's facing.
+    pub attacker_pos: Vec2,
 }
 
 /// What a creature is doing.
@@ -197,6 +200,9 @@ fn behave(
     player: Query<&Transform, (With<Player>, Without<Critter>)>,
     mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform)>,
     mut attacks: MessageWriter<CreatureAttack>,
+    mut commands: Commands,
+    sounds: Option<Res<crate::combat::feedback::CreatureSounds>>,
+    settings: Option<Res<crate::settings::GameSettings>>,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
@@ -280,6 +286,18 @@ fn behave(
                 if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 {
                     brain.attack = Some(0.0);
                     brain.bitten = false;
+                    // The cue sounds from the creature as the lunge or rear begins, before the bite.
+                    if let Some(sounds) = &sounds {
+                        let cue = if snake { sounds.snake_rise.clone() } else { sounds.rat_squeal.clone() };
+                        let game = settings.as_deref().copied().unwrap_or_default();
+                        commands.spawn((
+                            Name::new("creature attack cue"),
+                            AudioPlayer::new(cue),
+                            crate::audio::spatial_sound_effect(&game, &tuning),
+                            Transform::from_translation(transform.translation),
+                            DespawnOnExit(crate::launch::AppState::Delving),
+                        ));
+                    }
                 }
             }
         }
@@ -361,7 +379,7 @@ fn behave(
                 let block = species.stat_block();
                 let damage = block.bite.roll(&mut brain.rng);
                 let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
-                attacks.write(CreatureAttack { attacker: entity, species, damage, poison });
+                attacks.write(CreatureAttack { attacker: entity, species, damage, poison, attacker_pos: at });
             }
             if since >= done {
                 brain.attack = None;
@@ -591,5 +609,61 @@ mod tests {
                 assert!(reach(&critter, BODY_RADIUS) > body_radius(&critter) + BODY_RADIUS + 1.0, "{species:?} {seed}");
             }
         }
+    }
+
+    /// The attack cues playing: where each stands, how loud it plays and whether it is spatial.
+    fn cues(app: &mut App) -> Vec<(Vec3, f32, bool)> {
+        let mut query = app.world_mut().query_filtered::<(&Transform, &PlaybackSettings), With<crate::audio::SoundEffect>>();
+        query.iter(app.world()).map(|(t, p)| (t.translation, p.volume.to_linear(), p.spatial)).collect()
+    }
+
+    /// The first cue, where every creature stood the frame it began, and the frames the cue and
+    /// the first bite came.
+    fn first_cue(app: &mut App, roots: &[Entity]) -> ((Vec3, f32, bool), Vec<Vec3>, usize, usize) {
+        let mut cue = None;
+        for frame in 0..900 {
+            app.update();
+            let found = cues(app);
+            if cue.is_none() && !found.is_empty() {
+                let at = roots.iter().map(|&r| app.world().get::<Transform>(r).unwrap().translation).collect();
+                cue = Some((found[0], at, frame));
+            }
+            if !attacks(app).is_empty() {
+                let (found, at, started) = cue.expect("a bite came with no cue before it");
+                return (found, at, started, frame);
+            }
+        }
+        panic!("no bite");
+    }
+
+    fn rat_room_player() -> Vec2 {
+        let level = fb_level::generate(1207);
+        let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
+        let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
+        let (cx, cy) = room.centre();
+        Vec2::new(cx, cy) * CELL + Vec2::new(-1.0, 1.3) * CELL
+    }
+
+    #[test]
+    fn the_attack_cue_sounds_from_the_creature_before_its_bite() {
+        let (mut app, roots, _) = level_app(rat_room_player());
+        app.insert_resource(crate::combat::feedback::CreatureSounds::default());
+        let ((at, _, spatial), creatures, started, bit) = first_cue(&mut app, &roots);
+        assert!(spatial);
+        assert!(started < bit, "the cue at frame {started}, the bite at {bit}");
+        assert!(creatures.iter().any(|c| c.distance(at) < 0.01), "the cue stands at a creature: {at}");
+    }
+
+    #[test]
+    fn the_attack_cue_follows_the_effects_volume_and_a_tenth_scale() {
+        let (mut app, roots, _) = level_app(rat_room_player());
+        app.insert_resource(crate::combat::feedback::CreatureSounds::default()).insert_resource(crate::settings::GameSettings { sound_volume: 0.5, ..default() });
+        let wanted = crate::audio::effect_volume(app.world().resource(), app.world().resource());
+        let ((_, volume, _), ..) = first_cue(&mut app, &roots);
+        assert!(wanted > 0.0);
+        assert_eq!(volume, wanted);
+        let mut query = app.world_mut().query_filtered::<&PlaybackSettings, With<crate::audio::SoundEffect>>();
+        let scale = query.iter(app.world()).next().unwrap().spatial_scale.unwrap();
+        assert_eq!(scale.0, Vec3::splat(0.1));
     }
 }

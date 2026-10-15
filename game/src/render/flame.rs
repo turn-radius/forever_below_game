@@ -1,7 +1,9 @@
 //! Flames that move a little: every Armory flame (a torch's, a lantern's, a candle's: the
 //! `flame` part and the `flame_core` inside it, moved as one) stretches, narrows and leans
 //! about its base, each on its own phase, so a lit
-//! thing never looks frozen. The light it gives already flickers in the toon shader
+//! thing never looks frozen. A flame is built along its item's own up, but fire rises: each
+//! flame is turned about its base to stand upright however its item is held or lies
+//! ([`FlameUp`]), so a leaning torch's flame climbs rather than reaching out along the handle. The light it gives already flickers in the toon shader
 //! (`flame_flicker` in `toon.wesl`); this moves the flame itself. The amounts and rates are our
 //! own, kept small: a flame in still air, not one in a draught.
 
@@ -30,17 +32,18 @@ impl Flame {
         Some(Flame { base, phase })
     }
 
-    /// The flame's pose `t` seconds on: up to [`STRETCH`] taller (and as much narrower, so it
-    /// keeps its body) and leaning up to [`LEAN`] radians, from a few sines of unrelated rates
-    /// so it never visibly repeats.
-    pub fn pose(&self, t: f32) -> Transform {
+    /// The flame's pose `t` seconds on, standing along `up` (its item's space): up to
+    /// [`STRETCH`] taller (and as much narrower, so it keeps its body) and leaning up to
+    /// [`LEAN`] radians, from a few sines of unrelated rates so it never visibly repeats.
+    pub fn pose(&self, t: f32, up: Vec3) -> Transform {
         let p = self.phase;
         let wave = |rate: f32, offset: f32| (t * rate + p + offset).sin();
         let stretch = 1.0 + STRETCH * (0.6 * wave(7.3, 0.0) + 0.4 * wave(11.9, 1.7));
         let width = 1.0 / stretch.sqrt();
         let lean_x = LEAN * (0.7 * wave(3.1, 0.4) + 0.3 * wave(8.7, 2.9));
         let lean_z = LEAN * (0.7 * wave(2.6, 3.3) + 0.3 * wave(9.4, 0.8));
-        let rotation = Quat::from_euler(EulerRot::XYZ, lean_x, 0.0, lean_z);
+        let upright = Quat::from_rotation_arc(Vec3::Y, up.normalize_or(Vec3::Y));
+        let rotation = upright * Quat::from_euler(EulerRot::XYZ, lean_x, 0.0, lean_z);
         let scale = Vec3::new(width, stretch, width);
         // Turned and scaled about the base: p -> base + R S (p - base).
         Transform { translation: self.base - rotation * (scale * self.base), rotation, scale }
@@ -52,12 +55,32 @@ pub const STRETCH: f32 = 0.08;
 /// How far a flame leans at most, radians. Our own.
 pub const LEAN: f32 = 0.06;
 
-/// Moves every flame to its pose this moment.
-pub fn flicker_flames(time: Res<Time>, mut flames: Query<(&Flame, &mut Transform)>) {
-    let t = time.elapsed_secs();
-    for (flame, mut transform) in &mut flames {
-        *transform = flame.pose(t);
+/// On an item's root: the way its flames rise, in the space its transform is in (the world,
+/// or a stage). Without it, up is +Y. Held things in first person are drawn on the view
+/// model's stage, where the world's up is wherever the eye's look puts it
+/// (`crate::carry::upright_held_flames`).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct FlameUp(pub Vec3);
+
+impl Default for FlameUp {
+    fn default() -> Self {
+        FlameUp(Vec3::Y)
     }
+}
+
+/// Moves every flame to its pose this moment, upright.
+pub fn flicker_flames(time: Res<Time>, mut flames: Query<(&Flame, &ChildOf, &mut Transform)>, items: Query<(&GlobalTransform, Option<&FlameUp>)>) {
+    let t = time.elapsed_secs();
+    for (flame, parent, mut transform) in &mut flames {
+        let up = items.get(parent.parent()).map_or(Vec3::Y, |(at, up)| upright_in(at, up.copied().unwrap_or_default()));
+        *transform = flame.pose(t, up);
+    }
+}
+
+/// `up` (in the space `item`'s transform is in) carried into the item's own space.
+pub fn upright_in(item: &GlobalTransform, up: FlameUp) -> Vec3 {
+    let (_, rotation, _) = item.to_scale_rotation_translation();
+    (rotation.inverse() * up.0).normalize_or(Vec3::Y)
 }
 
 #[cfg(test)]
@@ -80,7 +103,7 @@ mod tests {
         let tip = Vec3::new(2.0, 6.5, 0.0);
         let mut moved = 0.0f32;
         for i in 0..200 {
-            let pose = flame.pose(i as f32 * 0.037);
+            let pose = flame.pose(i as f32 * 0.037, Vec3::Y);
             // The base stays put; the tip wanders, but only a little.
             assert!(pose.transform_point(flame.base).abs_diff_eq(flame.base, 1e-4));
             let d = pose.transform_point(tip).distance(tip);
@@ -88,6 +111,22 @@ mod tests {
             moved = moved.max(d);
         }
         assert!(moved > 0.05, "it moves: {moved}");
+    }
+
+    #[test]
+    fn a_flame_rises_however_its_item_lies() {
+        let flame = Flame::of(&cone()).unwrap();
+        let tip = Vec3::new(2.0, 6.5, 0.0);
+        // A torch laid on its side, its own up pointing east.
+        let lying = GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)));
+        let up = upright_in(&lying, FlameUp::default());
+        let pose = flame.pose(0.0, up);
+        let (base_world, tip_world) = (lying.transform_point(pose.transform_point(flame.base)), lying.transform_point(pose.transform_point(tip)));
+        assert!(pose.transform_point(flame.base).abs_diff_eq(flame.base, 1e-4), "the base stays on the wick");
+        let rise = (tip_world - base_world).normalize();
+        assert!(rise.y > 0.95, "the tip is above the base: {rise}");
+        // Upright already, it stands as built.
+        assert!(upright_in(&GlobalTransform::IDENTITY, FlameUp::default()).abs_diff_eq(Vec3::Y, 1e-6));
     }
 
     #[test]

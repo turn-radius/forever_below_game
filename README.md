@@ -2,7 +2,7 @@
 
 A first-person delve into an endless Stygian abyss. Rust and Bevy 0.20.
 
-Start with `HANDOFF.md`. Claude Code reads `CLAUDE.md` on its own. `cargo test --workspace` runs every test.
+Start with `HANDOFF.md`. Claude Code reads `CLAUDE.md` on its own. Run tests with `cargo test --workspace` or `cargo nextest run --workspace` for faster parallel execution.
 
 ## Running the game
 
@@ -18,7 +18,7 @@ cargo run -p forever_below -- --title --seed 42    # the title, and New delve pl
 
 The game opens on the title screen, to Forever Below's theme. New delve (or Enter) rolls a new level and a new character from the clock and starts the delve; the theme fades out as you go in. Settings is the pause menu's settings page (Esc or Back returns), and Quit leaves.
 
-Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page.
+Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page.
 
 ### Play a level
 
@@ -32,6 +32,7 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 | E | pick up what you're looking at, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
 | F | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand (or the off hand, if only that is free), a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay; a lantern goes in a free hand, else at the hip if you wear a belt, where it lights the way with both hands full |
 | L, Shift+L | light or put out the torch or lantern you carry, the one in hand first, then the one at your hip; Shift+L acts on the hip lantern alone. In the inventory, L lights or puts out the torch or lantern under the mouse, wherever it lies; its card says which. A spent torch will not light. Every lit light you carry shines |
+| M | map of the level, filled in as you explore: only cells you have seen while they were lit are drawn, as an inked plan with you marked by an amber arrow; scroll to zoom about the mouse, drag to pan; M or Esc closes it, and the body holds still while it is open |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
 | Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
@@ -101,6 +102,19 @@ One Armory item turning on the turntable's plate, with a panel on the right like
 
 Tab and Shift+Tab change the family, Left and Right step the seed, N forges a new seed, R resets, and Space pauses the turn. Dragging the stage orbits and scrolling over it zooms. On the panel, dragging a slider sets it, a click cycles a choice (a right click goes back), and scrolling moves the panel. `FB_SCREENSHOT` works here as on the turntable.
 
+### The level view
+
+```
+cargo run -p forever_below -- --level
+cargo run -p forever_below -- --level --seed 7
+```
+
+A whole level from above, drawn as the map draws it but with every cell shown, beside a panel of the level generator's parameters (`fb_level::LevelParams`): the grid's size and ceiling; how many rooms, how big, how often a hall, the gap kept between them and how deep the entrance may lie; what a corridor pays to turn or to run beside another, and how often rooms loop and reuse doors; and where braziers and loot go. The header gives the seed, a "New seed" button and a "Reset" back to the defaults, and counts what the level holds (rooms, floor cells, doors, items, lights, props, creatures and folk). Moving a slider lays the level out again from the same seed at once. The defaults are the game's own, so with them every seed is the level the game plays. The panel is the Forge's (`game/src/tweak_panel.rs`).
+
+- `--seed <n>` picks the level; 1207 by default.
+
+Left and Right step the seed, N rolls a new one and R resets the parameters. Scrolling over the plan zooms about the mouse and dragging pans; on the panel, sliders drag and the panel scrolls. `FB_SCREENSHOT` works here too.
+
 ### Swing practice
 
 ```
@@ -129,6 +143,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps` | a lit camera at a fixed view of the level |
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera, and on what is held |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start |
+| `FB_OPEN_MAP=<frame>` | opens the map that many frames into the delve, once the start has been looked round (`FB_OPEN_MAP=120`) |
 | `FB_OPEN_CONTAINER=<n>` | opens the level's `n`th container (0 the first, in `print_level`'s order) a moment in, with the inventory showing what it holds |
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
 | `FB_DROP=<base>[:<rarity>][,...]` | sets an item of each named base down in front of you a moment in, of that rarity if one is named (`Sword:legendary,Sword:common`), spread left to right; for captures of floor items such as a legendary's shimmer |
@@ -184,6 +199,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[combat]` | `flash_hold` | 0.12 | Seconds a struck creature's flash holds at full. |
 | `[combat]` | `flash_fade` | 0.2 | Seconds the flash then takes to fade. |
 | `[combat]` | `knockback_scale` | 1.0 | How far a blow knocks a creature back, as a multiple of the usual. |
+| `[combat]` | `hit_kick` | 1.0 | How much the view jolts when hit, as a multiple of the usual (0 = no jolt). |
 | `[light]` | `torch_peak` | 1.0 | A torch, lantern or other burning thing's strength close up (1 = full). |
 | `[light]` | `torch_reach` | 2.0 | How far its light reaches, as a multiple of its bright radius. |
 | `[light]` | `brazier_peak` | 1.5 | A brazier's strength close up (1 = full). |
@@ -203,6 +219,17 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
 
 The shipped values are the defaults in `game/src/tuning.rs`; a test keeps the two, and this list, in step.
+
+### Slow tests
+
+Twelve fitting and rendering tests sweep every folk, many seeds and many kits, which takes too long for regular runs. Each keeps its full sweep behind `#[ignore = "slow sweep: ..."]` and has a `_smoke` twin that runs by default over fewer inputs with the same check.
+
+Run the sweeps before merging changes to fitting code in `fb_body`, `fb_items` or the game's folk figures:
+
+```
+cargo test --workspace -- --ignored
+cargo nextest run --workspace --run-ignored only
+```
 
 ### Generator tools
 

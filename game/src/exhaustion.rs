@@ -7,3 +7,9 @@ use bevy::prelude::*;
 /// The delver's exhaustion, on the [`Player`](crate::play::Player) from their spawn.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct Exhaustion(pub fb_character::Exhaustion);
+
+/// How long the delver has spent in each meter's worst band, and their run of sleep, for turning
+/// their needs into exhaustion (`crate::simulate`). On the [`Player`](crate::play::Player) from
+/// their spawn, so a new delve starts with nothing counted.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct ExhaustionTimes(pub fb_character::ExhaustionTimes);

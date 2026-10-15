@@ -333,6 +333,8 @@ pub struct Grip {
     pub fist: Vec3,
     pub pointing: Vec3,
     pub edge: Vec3,
+    /// How far the point is from the fist; zero for a light, which has none.
+    pub reach: f32,
 }
 
 impl Grip {
@@ -341,8 +343,9 @@ impl Grip {
     pub fn of(rest: Transform, hold: ViewHold, point: Option<Vec3>) -> Grip {
         let tip = point.map_or(rest.translation, |p| rest.transform_point(p));
         let pointing = (tip - hold.fist).normalize_or(Vec3::Y);
+        let reach = if point.is_some() { (tip - hold.fist).length() } else { 0.0 };
         let edge = (hold.turn * Vec3::NEG_Z).reject_from_normalized(pointing).normalize_or(pointing.any_orthonormal_vector());
-        Grip { fist: hold.fist, pointing, edge }
+        Grip { fist: hold.fist, pointing, edge, reach }
     }
 
     /// The turn about the fist that lays the point along `pointing` with the edge toward `edge`
@@ -422,7 +425,14 @@ impl SwingPath {
         let square = grip.turn_to(aim, travel);
         let (back, through, sweep, hook) = if strike == Strike::Stab {
             let back = SwingPose { offset: -aim * STAB_BACK - travel * STAB_HOOK, turn: square };
-            let through = SwingPose { offset: aim * STAB_DRIVE, turn: square };
+            // The fist is off to one side, so a point driven along the line from it lands off the
+            // crosshair by the fist's offset; shift the throw so the point itself lands on it.
+            let mut drive = aim * STAB_DRIVE;
+            if grip.reach > 0.0 && toward.z < 0.0 {
+                let point = grip.fist + drive + aim * grip.reach;
+                drive += toward * (point.z / toward.z) - point;
+            }
+            let through = SwingPose { offset: drive, turn: square };
             (back, through, None, back.offset.lerp(through.offset, 0.5) - travel * STAB_HOOK)
         } else {
             let centre = Vec3::new(-grip.fist.x, -grip.fist.y, 0.0) * SWEEP_PULL + aim * SWEEP_REACH;
@@ -484,7 +494,7 @@ fn swing_held(swings: Query<&Swing, With<Player>>, mut held: Query<(&HeldItem, &
 }
 
 /// Leans the eye forward into each blow.
-fn lean_into_blow(swings: Query<&Swing, With<Player>>, mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
+pub(crate) fn lean_into_blow(swings: Query<&Swing, With<Player>>, mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
     let Some(swing) = swings.iter().next() else { return };
     let forward = lean(swing.weapon.kind, swing.t);
     for mut camera in &mut cameras {

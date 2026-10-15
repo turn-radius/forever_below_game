@@ -425,6 +425,12 @@ impl Default for Needs {
 }
 
 impl Needs {
+    /// Eats and drinks: takes `nutrition` off hunger and `water` off thirst, neither below 0.
+    pub fn consume(&mut self, nutrition: f64, water: f64) {
+        self.hunger.reduce(nutrition);
+        self.thirst.reduce(water);
+    }
+
     /// Advances all meters by `delta_hours` of game time, with the given activity.
     pub fn step(&mut self, delta_hours: f64, activity: Activity) {
         self.hunger.step(delta_hours, activity);
@@ -912,6 +918,22 @@ mod tests {
         assert_eq!(parsed.hunger.gear, 1.5, "gear should be preserved in serialization");
     }
 
+
+    #[test]
+    fn consuming_takes_off_hunger_and_thirst_and_stops_at_zero() {
+        let mut needs = Needs::default();
+        needs.hunger.value = 0.55;
+        needs.thirst.value = 0.3;
+        assert_eq!(needs.hunger.word(), "Hungry");
+        needs.consume(0.4, 0.0);
+        assert!((needs.hunger.value - 0.15).abs() < 1e-9, "{}", needs.hunger.value);
+        assert_eq!(needs.thirst.value, 0.3, "no water in a loaf");
+        needs.consume(0.0, 0.5);
+        assert_eq!(needs.thirst.value, 0.0);
+        let mut fed = Needs::default();
+        fed.consume(0.4, 0.5);
+        assert_eq!((fed.hunger.value, fed.thirst.value), (0.0, 0.0), "eating while Fed stays at 0");
+    }
 
     /// Needs where only `kind` moves, starting at `value`; the others stay at 0.
     fn only(kind: MeterKind, value: f64) -> Needs {

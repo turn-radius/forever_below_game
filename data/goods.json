@@ -110,6 +110,6 @@
    1
   ],
   "wt": 0.5,
-  "desc": "Restores 2d4 health"
+  "desc": "Restores 2d4 + 2 health"
  }
 }

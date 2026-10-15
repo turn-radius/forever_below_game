@@ -51,7 +51,7 @@ use fb_items::{Kind, Rarity, Slot, footprint::Footprint};
 pub use grid::{Grid, Placement};
 pub use icon::{IconCache, Icons};
 pub use doll::{DollAssets, DollStage, DollView, SlotView};
-pub use items::{Displaced, Inventory, ItemId, Location, Refusal};
+pub use items::{Displaced, Inventory, ItemId, Location, Refusal, char_bucket};
 pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
 use crate::carry::ViewModelCamera;
@@ -131,7 +131,7 @@ impl Plugin for InventoryPlugin {
                         .after(switch_screens),
                     (icon::draw_icons, icon::reveal_icons).chain().after(build_screen),
                     doll::turn_seal,
-                    (doll::dress_doll, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
+                    (doll::start_doll_fitting, doll::poll_doll_fitting, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
                 )
                     .in_set(DelveSystems),
             );
