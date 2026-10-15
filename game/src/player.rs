@@ -127,6 +127,8 @@ fn spawn_player(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<Tu
                 // UI follows this camera even when frame capture retargets it to an image.
                 IsDefaultUiCamera,
                 Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
+                // Ears 20 cm apart, for sounds from the creatures round them.
+                SpatialListener::new(2.0),
             ));
             // A dim light at the eye for looking at the level before the torch exists.
             if std::env::var_os("FB_DEBUG_LIGHT").is_some() {

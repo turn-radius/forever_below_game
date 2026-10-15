@@ -115,7 +115,12 @@ fn take_bites(
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
     mut players: Query<(Entity, &mut Health), With<Player>>,
+    sounds: Option<Res<super::feedback::CreatureSounds>>,
+    settings: Option<Res<crate::settings::GameSettings>>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
 ) {
+    let game = settings.as_deref().copied().unwrap_or_default();
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
     for bite in bites.read() {
         if bodies.contains(bite.attacker) {
             continue;
@@ -127,6 +132,10 @@ fn take_bites(
             let damage = bite_damage(bite, character.constitution(), &mut dice.0);
             health.hurt(damage);
             pain.0 = PAIN_TIME;
+            // One dull thud for each blow that lands.
+            if let Some(sounds) = &sounds {
+                commands.spawn((Name::new("blow lands"), AudioPlayer::new(sounds.thud.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(AppState::Delving)));
+            }
             info!("{:?} bites for {damage}: {} of {} hit points left", bite.species, health.hp, health.max);
             if bite.species == Species::ConstrictorSnake && !health.is_down() {
                 commands.entity(player).insert((Constricted { by: bite.attacker }, Slowed(HELD_PACE)));
@@ -661,5 +670,41 @@ mod tests {
         let found = markers(&mut app);
         assert_eq!(found.len(), 1);
         assert!((found[0].1 - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "rotation {}", found[0].1);
+    }
+
+    /// The volumes of the sound effects playing, loudest last.
+    fn playing(app: &mut App) -> Vec<f32> {
+        let mut query = app.world_mut().query_filtered::<&PlaybackSettings, With<crate::audio::SoundEffect>>();
+        let mut volumes: Vec<f32> = query.iter(app.world()).map(|p| p.volume.to_linear()).collect();
+        volumes.sort_by(f32::total_cmp);
+        volumes
+    }
+
+    #[test]
+    fn each_landed_blow_sounds_one_thud_at_the_effects_volume() {
+        let (mut app, _player, snake) = delve();
+        app.insert_resource(super::super::feedback::CreatureSounds::default())
+            .insert_resource(crate::settings::GameSettings { sound_volume: 0.5, ..default() })
+            .init_resource::<crate::tuning::Tuning>();
+        let wanted = crate::audio::effect_volume(app.world().resource(), app.world().resource());
+        assert!(wanted > 0.0);
+        app.update();
+        assert!(playing(&mut app).is_empty(), "no blow, no thud");
+        bite(&mut app, snake, Species::Rat, 1);
+        assert_eq!(playing(&mut app), vec![wanted]);
+        bite(&mut app, snake, Species::Rat, 1);
+        assert_eq!(playing(&mut app), vec![wanted, wanted], "one thud a blow");
+        app.update();
+        assert_eq!(playing(&mut app).len(), 2, "and no more without one");
+    }
+
+    #[test]
+    fn the_thud_is_silent_with_the_effects_volume_at_zero() {
+        let (mut app, _player, snake) = delve();
+        app.insert_resource(super::super::feedback::CreatureSounds::default())
+            .insert_resource(crate::settings::GameSettings { sound_volume: 0.0, ..default() })
+            .init_resource::<crate::tuning::Tuning>();
+        bite(&mut app, snake, Species::Rat, 1);
+        assert_eq!(playing(&mut app), vec![0.0]);
     }
 }
