@@ -160,7 +160,7 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
     };
     rate(s.burn_time, plain.burn_time, "burns");
     rate(s.hunger_rate, plain.hunger_rate, "hunger");
-    rate(s.fatigue_rate, plain.fatigue_rate, "fatigue");
+    rate(s.sleepiness_rate, plain.sleepiness_rate, "sleepiness");
     rate(s.disease_risk, plain.disease_risk, "disease risk");
     if s.break_chance > 0.0 {
         lines.push(format!("{}% chance to break on a hard blow", number(s.break_chance * 100.0)));

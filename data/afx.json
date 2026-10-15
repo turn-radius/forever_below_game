@@ -384,12 +384,12 @@
   "fx": [
    {
     "scale": {
-     "stat": "fatigue_rate",
+     "stat": "sleepiness_rate",
      "by": 0.85
     }
    }
   ],
-  "t": "Fatigue 15% slower"
+  "t": "Sleep 15% slower"
  },
  {
   "n": "of Quiet Steps",
