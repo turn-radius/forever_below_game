@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
-use fb_character::{Attributes, modifier as ability_modifier};
+use fb_character::{Activity, Attributes, LoadBand, capacity_lb, modifier as ability_modifier};
 use procgen_rng::Mulberry32;
 
 use crate::carry::carried_lights;
@@ -138,6 +138,8 @@ pub struct Derived {
     pub load: f32,
     /// Pounds they can carry: strength times 15 plus what worn items add.
     pub capacity: f32,
+    /// Load band (Light, Burdened, Encumbered, Overloaded).
+    pub load_band: LoadBand,
     pub warmth: f32,
     /// How far the carried light reaches, in feet; 0 with none.
     pub light: f32,
@@ -155,12 +157,16 @@ impl Character {
         let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
         let load = sum(|s| s.weight)
             + equipped.iter().filter_map(|(slot, _)| inventory.worn(*slot)).map(|id| inventory.contents_weight(id)).fold(0.0, |a, b| a + b);
+        let carry_bonus = sum(|s| s.carry);
+        let capacity = capacity_lb(self.strength(), carry_bonus as f64) as f32;
+        let load_band = LoadBand::from_load(load as f64, capacity as f64);
         let light = carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)).map(|item| item.profile.stats.light).fold(0.0, f32::max);
         let darkvision = equipped.iter().map(|(_, item)| item.profile.stats.darkvision).fold(self.folk.race().dv as f32, f32::max);
         Derived {
             armour_class: 10 + sum(|s| s.armour).round() as i32 + modifier(self.dexterity()),
             load,
-            capacity: (self.strength() * 15) as f32 + sum(|s| s.carry),
+            capacity,
+            load_band,
             warmth: sum(|s| s.warmth),
             light,
             darkvision,
@@ -173,6 +179,32 @@ pub fn character_for(seed: u32) -> Character {
     match std::env::var("FB_FOLK").ok().and_then(|f| Folk::parse(&f)) {
         Some(folk) => Character::roll_folk(folk, seed),
         None => Character::roll(seed),
+    }
+}
+
+/// The delver's load band, kept on the [`Player`](crate::play::Player) so walking need not
+/// work out [`Character::derive`] every frame. `player::weigh_the_delver` refreshes it when
+/// the character or the inventory changes.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Load(pub LoadBand);
+
+/// Determines the delver's activity from movement and load state.
+/// Moving while Burdened or Encumbered counts as Exerting. An Overloaded delver cannot move
+/// (`player::walk`), so wanting to move while Overloaded is reported as Resting, as is
+/// standing still.
+pub fn activity_for(moving: bool, sprinting: bool, swinging: bool, load_band: LoadBand) -> Activity {
+    match (moving, sprinting, swinging) {
+        (false, _, _) => Activity::Resting,
+        (true, _, true) => Activity::Exerting,
+        (true, true, _) => Activity::Exerting,
+        (true, false, false) => {
+            // Moving while Burdened or Encumbered counts as Exerting
+            match load_band {
+                LoadBand::Light => Activity::Walking,
+                LoadBand::Burdened | LoadBand::Encumbered => Activity::Exerting,
+                LoadBand::Overloaded => Activity::Resting, // Can't move anyway
+            }
+        }
     }
 }
 
@@ -271,5 +303,16 @@ mod tests {
     #[test]
     fn modifiers_follow_the_srd() {
         assert_eq!([modifier(3), modifier(9), modifier(10), modifier(11), modifier(18)], [-4, -1, 0, 0, 4]);
+    }
+
+    #[test]
+    fn activity_for_determines_exertion_from_load() {
+        assert_eq!(activity_for(false, false, false, LoadBand::Light), Activity::Resting);
+        assert_eq!(activity_for(true, false, false, LoadBand::Light), Activity::Walking);
+        assert_eq!(activity_for(true, false, false, LoadBand::Burdened), Activity::Exerting);
+        assert_eq!(activity_for(true, false, false, LoadBand::Encumbered), Activity::Exerting);
+        assert_eq!(activity_for(true, false, false, LoadBand::Overloaded), Activity::Resting);
+        assert_eq!(activity_for(true, true, false, LoadBand::Light), Activity::Exerting);
+        assert_eq!(activity_for(true, false, true, LoadBand::Light), Activity::Exerting);
     }
 }

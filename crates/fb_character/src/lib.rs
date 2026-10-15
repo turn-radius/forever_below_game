@@ -99,6 +99,62 @@ impl Activity {
     }
 }
 
+/// Load band based on carrying capacity percentage (SRD p. 79).
+/// Light: under 34%. Burdened: 34% to under 67%. Encumbered: 67% to 100%. Overloaded: above 100%.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LoadBand {
+    #[default]
+    Light,
+    Burdened,
+    Encumbered,
+    Overloaded,
+}
+
+impl LoadBand {
+    /// Creates a load band from load and capacity (in pounds).
+    pub fn from_load(load_lb: f64, capacity_lb: f64) -> Self {
+        if capacity_lb <= 0.0 {
+            return LoadBand::Overloaded;
+        }
+        let percent = load_lb / capacity_lb;
+        if percent > 1.0 {
+            LoadBand::Overloaded
+        } else if percent >= 0.67 {
+            LoadBand::Encumbered
+        } else if percent >= 0.34 {
+            LoadBand::Burdened
+        } else {
+            LoadBand::Light
+        }
+    }
+
+    /// Walk speed multiplier for this load band.
+    pub fn walk_multiplier(self) -> f32 {
+        match self {
+            LoadBand::Light => 1.0,
+            LoadBand::Burdened => 0.85,
+            LoadBand::Encumbered => 0.65,
+            LoadBand::Overloaded => 0.0,
+        }
+    }
+
+    /// HUD word for this load band.
+    pub fn word(self) -> &'static str {
+        match self {
+            LoadBand::Light => "Light",
+            LoadBand::Burdened => "Burdened",
+            LoadBand::Encumbered => "Encumbered",
+            LoadBand::Overloaded => "Overloaded",
+        }
+    }
+}
+
+/// Carrying capacity in pounds (SRD p. 79).
+/// `capacity = STR × 15 + carry` where `carry` is gear-specific bonus capacity.
+pub fn capacity_lb(strength: i32, carry_bonus_lb: f64) -> f64 {
+    (strength as f64) * 15.0 + carry_bonus_lb
+}
+
 /// A meter from 0 (best) to 1 (worst), advancing by a base rate per game hour,
 /// scaled by activity and gear multipliers. Clamped at 0 and 1.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -995,5 +1051,63 @@ mod tests {
         assert_eq!(parsed, times);
         let parsed: Exhaustion = serde_json::from_str(&serde_json::to_string(&exh).unwrap()).unwrap();
         assert_eq!(parsed, exh);
+    }
+
+    #[test]
+    fn capacity_str_10_with_0_bonus() {
+        assert_eq!(capacity_lb(10, 0.0), 150.0);
+    }
+
+    #[test]
+    fn str_14_with_60_lb_is_light() {
+        let cap = capacity_lb(14, 0.0);
+        let band = LoadBand::from_load(60.0, cap);
+        assert_eq!(band, LoadBand::Light);
+    }
+
+    #[test]
+    fn str_10_with_155_lb_is_overloaded() {
+        let cap = capacity_lb(10, 0.0);
+        let band = LoadBand::from_load(155.0, cap);
+        assert_eq!(band, LoadBand::Overloaded);
+    }
+
+    #[test]
+    fn load_band_boundaries() {
+        let cap = 150.0; // STR 10: capacity
+
+        // Exactly 34% (51 lb) is Burdened
+        assert_eq!(LoadBand::from_load(51.0, cap), LoadBand::Burdened);
+
+        // Just under 34% (50.99 lb) is Light
+        assert_eq!(LoadBand::from_load(50.99, cap), LoadBand::Light);
+
+        // Exactly 67% (100.5 lb) is Encumbered
+        assert_eq!(LoadBand::from_load(100.5, cap), LoadBand::Encumbered);
+
+        // Just under 67% (100.49 lb) is Burdened
+        assert_eq!(LoadBand::from_load(100.49, cap), LoadBand::Burdened);
+
+        // Exactly 100% (150 lb) is Encumbered
+        assert_eq!(LoadBand::from_load(150.0, cap), LoadBand::Encumbered);
+
+        // Just over 100% (150.01 lb) is Overloaded
+        assert_eq!(LoadBand::from_load(150.01, cap), LoadBand::Overloaded);
+    }
+
+    #[test]
+    fn load_band_words() {
+        assert_eq!(LoadBand::Light.word(), "Light");
+        assert_eq!(LoadBand::Burdened.word(), "Burdened");
+        assert_eq!(LoadBand::Encumbered.word(), "Encumbered");
+        assert_eq!(LoadBand::Overloaded.word(), "Overloaded");
+    }
+
+    #[test]
+    fn load_band_walk_multipliers() {
+        assert_eq!(LoadBand::Light.walk_multiplier(), 1.0);
+        assert_eq!(LoadBand::Burdened.walk_multiplier(), 0.85);
+        assert_eq!(LoadBand::Encumbered.walk_multiplier(), 0.65);
+        assert_eq!(LoadBand::Overloaded.walk_multiplier(), 0.0);
     }
 }
