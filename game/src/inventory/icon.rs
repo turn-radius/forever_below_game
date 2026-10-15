@@ -83,11 +83,13 @@ pub struct IconKey {
     pub base: String,
     pub seed: u32,
     pub turned: bool,
+    /// Whether a torch or lantern is lit, since its flame shows; `None` for anything else.
+    pub lit: Option<bool>,
 }
 
 impl IconKey {
     pub fn of(item: &Item, turned: bool) -> Self {
-        IconKey { base: item.base.clone(), seed: item.seed, turned }
+        IconKey { base: item.base.clone(), seed: item.seed, turned, lit: item.shape.lit() }
     }
 }
 

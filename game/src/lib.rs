@@ -14,6 +14,7 @@ pub mod folk;
 pub mod frame_time;
 pub mod inventory;
 pub mod keymap;
+pub mod kindle;
 pub mod launch;
 pub mod level;
 pub mod light;
