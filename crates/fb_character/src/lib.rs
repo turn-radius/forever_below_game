@@ -167,11 +167,13 @@ pub struct Worn {
     pub hunger_rate: f64,
     /// Multiple of the normal sleepiness rate.
     pub sleepiness_rate: f64,
+    /// Points of Stealth: each makes the wearer a twentieth less visible ([`visibility`]).
+    pub stealth: f64,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0 }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0 }
     }
 }
 
@@ -196,6 +198,8 @@ pub struct Gear {
     pub hunger_rate: f64,
     /// Multiple of the sleepiness rate: the items' rates multiplied.
     pub sleepiness_rate: f64,
+    /// Points of Stealth: the worn items' added.
+    pub stealth: f64,
     /// Feet the carried light reaches; 0 with none.
     pub light: f64,
     /// How long the carried light burns, as a multiple of its base's.
@@ -213,12 +217,13 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, light: 0.0, burn_time: 1.0 };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0 };
         for item in worn {
             gear.carry += item.carry;
             gear.darkvision = gear.darkvision.max(item.darkvision);
             gear.hunger_rate *= item.hunger_rate;
             gear.sleepiness_rate *= item.sleepiness_rate;
+            gear.stealth += item.stealth;
         }
         for light in lights {
             if light.reach > gear.light {
@@ -777,6 +782,33 @@ impl Mana {
         self.points -= cost;
         true
     }
+}
+
+/// How visible a delver is in the dark: the eye is nearly closed.
+const SEEN_IN_DARK: f64 = 0.05;
+/// What full light on the delver adds to their visibility.
+const SEEN_IN_LIGHT: f64 = 0.8;
+/// What sprinting adds (at a [`SPRINT_PACE`]).
+const SEEN_MOVING: f64 = 0.15;
+/// The pace, as a multiple of walking pace, the game caps a delver's gait at.
+const SPRINT_PACE: f64 = 1.5;
+/// What each point of Stealth takes off.
+const STEALTH_STEP: f64 = 0.05;
+
+/// How easy the delver is to see, from 0 (not at all) to 1 (plain as day): a pure function of
+/// the `light` falling on them (0 dark to 1 fully lit), their `pace` (a multiple of walking
+/// pace, 0 still), the `load` they carry and their `stealth` (the sum of their gear's, each
+/// point worth a twentieth). They are hardly seen standing in the dark; light is what shows
+/// them most, then moving fast, then bulky gear. Creatures can read it as the delver does.
+pub fn visibility(light: f64, pace: f64, load: LoadBand, stealth: f64) -> f64 {
+    let lit = light.clamp(0.0, 1.0);
+    let moving = pace.clamp(0.0, SPRINT_PACE) / SPRINT_PACE;
+    let bulk = match load {
+        LoadBand::Light => 0.0,
+        LoadBand::Burdened => 0.04,
+        LoadBand::Encumbered | LoadBand::Overloaded => 0.08,
+    };
+    (SEEN_IN_DARK + SEEN_IN_LIGHT * lit + SEEN_MOVING * moving + bulk - STEALTH_STEP * stealth).clamp(0.0, 1.0)
 }
 
 /// The ability modifier for a score: `floor((score - 10) / 2)` (D&D 5e SRD 5.1, p. 76).
@@ -1405,7 +1437,7 @@ mod tests {
     fn gear_adds_carry_multiplies_rates_and_takes_the_best_darkvision() {
         let worn = [
             Worn { carry: 25.0, darkvision: 10.0, hunger_rate: 0.85, ..Worn::default() },
-            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85 },
+            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85, stealth: 0.0 },
         ];
         let gear = Gear::new(20.0, worn, []);
         assert_eq!(gear.carry, 50.0);
@@ -1504,6 +1536,41 @@ mod tests {
         assert!(!mana.spend(7.0));
         assert_eq!(mana.points, 6.0);
     }
+    #[test]
+    fn a_delver_standing_in_the_dark_is_hardly_seen_and_a_torch_shows_them() {
+        let dark = visibility(0.0, 0.0, LoadBand::Light, 0.0);
+        let torch = visibility(1.0, 0.0, LoadBand::Light, 0.0);
+        assert!(dark < 0.1, "{dark}");
+        assert!(torch > 0.8, "{torch}");
+    }
+
+    #[test]
+    fn light_speed_and_bulk_each_raise_visibility_and_stealth_lowers_it() {
+        let base = visibility(0.4, 0.0, LoadBand::Light, 0.0);
+        assert!(visibility(0.8, 0.0, LoadBand::Light, 0.0) > base);
+        assert!(visibility(0.4, 1.0, LoadBand::Light, 0.0) > base);
+        assert!(visibility(0.4, 1.5, LoadBand::Light, 0.0) > visibility(0.4, 1.0, LoadBand::Light, 0.0));
+        assert!(visibility(0.4, 0.0, LoadBand::Burdened, 0.0) > base);
+        assert!(visibility(0.4, 0.0, LoadBand::Encumbered, 0.0) > visibility(0.4, 0.0, LoadBand::Burdened, 0.0));
+        let silent = visibility(0.4, 0.0, LoadBand::Light, 2.0);
+        assert!((base - silent - 0.1).abs() < 1e-9, "Stealth +2 is a tenth less: {base} against {silent}");
+        assert!(visibility(0.4, 0.0, LoadBand::Light, -2.0) > base, "a negative Stealth shows them more");
+    }
+
+    #[test]
+    fn visibility_stays_between_none_and_plain_as_day() {
+        assert_eq!(visibility(0.0, 0.0, LoadBand::Light, 20.0), 0.0);
+        assert_eq!(visibility(5.0, 9.0, LoadBand::Overloaded, -20.0), 1.0);
+        assert_eq!(visibility(-1.0, -1.0, LoadBand::Light, 0.0), visibility(0.0, 0.0, LoadBand::Light, 0.0));
+    }
+
+    #[test]
+    fn gear_sums_its_stealth() {
+        let worn = [Worn { stealth: 2.0, ..Worn::default() }, Worn { stealth: -1.0, ..Worn::default() }, Worn::default()];
+        assert_eq!(Gear::new(0.0, worn, []).stealth, 1.0);
+        assert_eq!(Gear::default().stealth, 0.0);
+    }
+
     #[test]
     fn a_full_pool_lasts_thirty_seconds_of_sprinting_while_light() {
         let mut stamina = Stamina::default();

@@ -99,12 +99,12 @@ pub const MARGIN: f32 = 2.0;
 
 /// Where an orb sits: life large at the bottom left, stamina small above and to the right of
 /// it, mana small below and to the right of the eye that sits between them
-/// ([`crate::combat::eye::place`] once it exists), lower than stamina.
+/// ([`super::eye::place`]), lower than stamina.
 pub fn place(kind: OrbKind) -> Place {
     match kind {
         OrbKind::Life => Place { left: MARGIN, bottom: MARGIN, size: 17.0 },
         OrbKind::Stamina => Place { left: MARGIN + 17.5, bottom: MARGIN + 9.5, size: 7.5 },
-        OrbKind::Mana => Place { left: MARGIN + 31.0, bottom: MARGIN, size: 7.5 },
+        OrbKind::Mana => Place { left: MARGIN + 33.0, bottom: MARGIN, size: 7.5 },
     }
 }
 

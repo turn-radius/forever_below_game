@@ -169,7 +169,7 @@ impl Character {
     pub fn gear(&self, inventory: &Inventory) -> Gear {
         let worn = inventory.equipped().into_iter().map(|(_, item)| {
             let s = &item.profile.stats;
-            Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64 }
+            Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64 }
         });
         let lights = carried_lights(inventory)
             .into_iter()
@@ -234,6 +234,12 @@ pub struct DelverStamina(pub fb_character::Stamina);
 /// Nothing spends it yet.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverMana(pub Mana);
+
+/// How easy the delver is to see, 0 to 1 ([`fb_character::visibility`]): from the light on them,
+/// their pace, load and Stealth. Kept on the [`Player`](crate::play::Player) so the eye can show
+/// it and, later, creatures read it (`crate::combat::eye`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverVisibility(pub f32);
 
 /// Determines the delver's activity from movement and load state.
 /// Moving while Burdened or Encumbered counts as Exerting. An Overloaded delver cannot move
