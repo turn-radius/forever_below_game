@@ -65,6 +65,24 @@ impl Item {
         }
     }
 
+    /// Game seconds a full torch or lantern of this item burns: one hour for a torch and six for
+    /// a lantern, times its `BurnTime`; `None` for anything else.
+    pub fn fuel_capacity(&self) -> Option<f32> {
+        self.shape.fuel_capacity().map(|seconds| seconds * self.profile.stats.burn_time)
+    }
+
+    /// Game seconds of burning it has left; `None` unless it is a torch or a lantern.
+    pub fn fuel_left(&self) -> Option<f32> {
+        self.shape.fuel_left()
+    }
+
+    /// Burns `seconds` of game time off it if it is lit ([`armory::Item::burn`]).
+    pub fn burn(&mut self, seconds: f32) {
+        if let Some(capacity) = self.fuel_capacity() {
+            self.shape.burn(seconds, capacity.max(1.0));
+        }
+    }
+
     /// Whether it can be worn or held in `slot` ([`Item::slots`]).
     pub fn fits(&self, slot: Slot) -> bool {
         self.slots().contains(&slot)
@@ -105,6 +123,8 @@ pub fn roll_item(base: &str, seed: u32) -> Option<Item> {
     let name = item_name(&noun, &affixes);
     let legend = (rarity == Rarity::Legendary).then(|| legendize(&mut rng, &name, &profile.tags));
     dress(&mut shape, rarity, &affixes, seed);
+    // The fuel it starts with is what the item's `BurnTime` makes of a full one.
+    shape.scale_fuel(profile.stats.burn_time);
     Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None })
 }
 
@@ -139,6 +159,84 @@ mod tests {
             }
         }
         assert_eq!(roll_item("Spoon", 1), None);
+    }
+
+    /// A fresh torch whose `BurnTime` is `burn_time`, with the fuel that makes of a full one.
+    fn torch_burning(burn_time: f32) -> Item {
+        let mut item = roll_item("Spare torch", 3).unwrap();
+        item.profile.stats.burn_time = burn_time;
+        item.shape.scale_fuel(burn_time);
+        item.shape.set_lit(true).unwrap();
+        item
+    }
+
+    fn state(item: &Item) -> armory::families::torch::BurnState {
+        let armory::Item::Torch(s) = &item.shape else { panic!("not a torch") };
+        s.burn.state
+    }
+
+    #[test]
+    fn a_plain_torch_lit_for_an_hour_is_spent() {
+        use armory::families::torch::BurnState;
+        let mut torch = torch_burning(1.0);
+        assert_eq!(torch.fuel_left(), Some(3_600.0));
+        torch.burn(3_599.0);
+        assert_eq!(state(&torch), BurnState::Burning);
+        torch.burn(1.0);
+        assert_eq!((state(&torch), torch.fuel_left()), (BurnState::Spent, Some(0.0)));
+    }
+
+    #[test]
+    fn a_long_burning_torch_burns_for_two_hours() {
+        use armory::families::torch::BurnState;
+        let mut torch = torch_burning(2.0);
+        torch.burn(3_600.0);
+        assert_eq!((state(&torch), torch.fuel_left()), (BurnState::Burning, Some(3_600.0)));
+        torch.burn(3_600.0);
+        assert_eq!(state(&torch), BurnState::Spent);
+    }
+
+    #[test]
+    fn dousing_at_twenty_minutes_and_relighting_leaves_forty() {
+        let mut torch = torch_burning(1.0);
+        torch.burn(20.0 * 60.0);
+        torch.shape.set_lit(false).unwrap();
+        torch.burn(10.0 * 3_600.0);
+        torch.shape.set_lit(true).unwrap();
+        assert_eq!(torch.fuel_left(), Some(40.0 * 60.0));
+    }
+
+    #[test]
+    fn the_char_follows_the_fuel_used() {
+        let mut torch = torch_burning(1.0);
+        let armory::Item::Torch(before) = &torch.shape else { panic!() };
+        let before = before.burn.char;
+        torch.burn(1_800.0);
+        let armory::Item::Torch(after) = &torch.shape else { panic!() };
+        assert!(after.burn.char > before && after.burn.char <= 1.0);
+        assert!((after.burn.char - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn fuel_left_survives_a_serde_round_trip() {
+        let mut torch = torch_burning(1.0);
+        torch.burn(1_234.0);
+        let json = serde_json::to_string(&torch.shape).unwrap();
+        let back: armory::Item = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.fuel_left(), Some(3_600.0 - 1_234.0));
+        let mut lantern = roll_item("Lantern", 7).unwrap();
+        lantern.shape.set_lit(true).unwrap();
+        lantern.burn(100.0);
+        let back: armory::Item = serde_json::from_str(&serde_json::to_string(&lantern.shape).unwrap()).unwrap();
+        assert_eq!(back.fuel_left(), lantern.fuel_left());
+    }
+
+    #[test]
+    fn a_rolled_light_starts_with_its_burn_time_of_fuel() {
+        let torch = roll_item("Spare torch", 3).unwrap();
+        assert_eq!(torch.fuel_left(), Some(3_600.0));
+        assert_eq!(torch.fuel_capacity(), Some(3_600.0));
+        assert_eq!(roll_item("Sword", 1).unwrap().fuel_left(), None);
     }
 
     #[test]

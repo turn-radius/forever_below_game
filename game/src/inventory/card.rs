@@ -46,6 +46,7 @@ pub struct CardText {
 /// that is not a light.
 pub fn light_line(item: &armory::Item) -> Option<String> {
     use armory::families::torch::BurnState;
+    let fuel = item.fuel_left().map(fuel_text);
     let (state, lit) = match item {
         armory::Item::Torch(s) => (
             match s.burn.state {
@@ -56,10 +57,17 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
             },
             s.burn.state == BurnState::Burning,
         ),
+        armory::Item::Lantern(s) if s.flame.fuel_left <= 0.0 => return Some("Empty".into()),
         armory::Item::Lantern(s) => (if s.flame.lit { "Lit" } else { "Unlit" }, s.flame.lit),
         _ => return None,
     };
-    Some(format!("{state} \u{b7} L {}", if lit { "puts it out" } else { "lights it" }))
+    Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
+}
+
+/// Burning time left as the card writes it, in game hours and minutes: "Fuel 0:42".
+pub fn fuel_text(seconds: f32) -> String {
+    let minutes = (seconds.max(0.0) / 60.0).round() as u32;
+    format!("Fuel {}:{:02}", minutes / 60, minutes % 60)
 }
 
 /// A number as the card writes it: at most two decimals, no trailing zeros.
@@ -509,5 +517,18 @@ mod tests {
         assert!(inside(place_under(Vec2::new(5.0, 1075.0), size, screen)));
         // Bigger than the screen: pinned to the top left.
         assert_eq!(keep_on_screen(Vec2::new(50.0, 50.0), Vec2::new(2000.0, 2000.0), screen), Vec2::splat(CARD_MARGIN));
+    }
+
+    #[test]
+    fn a_light_card_shows_fuel_left_in_game_time() {
+        assert_eq!(fuel_text(42.0 * 60.0), "Fuel 0:42");
+        assert_eq!(fuel_text(6.0 * 3_600.0), "Fuel 6:00");
+        assert_eq!(fuel_text(3_600.0 + 5.0 * 60.0), "Fuel 1:05");
+        let mut torch = fb_items::roll_item("Spare torch", 3).unwrap();
+        torch.shape.set_lit(true).unwrap();
+        torch.burn(18.0 * 60.0);
+        assert_eq!(light_line(&torch.shape).unwrap(), "Burning \u{b7} Fuel 0:42 \u{b7} L puts it out");
+        torch.burn(1.0e6);
+        assert_eq!(light_line(&torch.shape).unwrap(), "Spent");
     }
 }

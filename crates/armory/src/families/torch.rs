@@ -190,6 +190,14 @@ pub struct TorchBurn {
     pub char: f32,
     /// Flame height, as a multiplier.
     pub flame: f32,
+    /// Burning time left, in game seconds ([`crate::kindle::TORCH_SECONDS`] when full). Runtime
+    /// state: it burns down while the torch is alight, and `char` follows it.
+    #[serde(default = "full_torch")]
+    pub fuel_left: f32,
+}
+
+fn full_torch() -> f32 {
+    crate::kindle::TORCH_SECONDS
 }
 
 sliders! {
@@ -202,7 +210,7 @@ sliders! {
 impl Default for TorchBurn {
     /// The plate's torch: alight.
     fn default() -> Self {
-        TorchBurn { state: BurnState::Burning, char: 0.3, flame: 1.0 }
+        TorchBurn { state: BurnState::Burning, char: 0.3, flame: 1.0, fuel_left: crate::kindle::TORCH_SECONDS * 0.7 }
     }
 }
 
@@ -400,6 +408,8 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: TorchStyle) -> TorchState {
         BurnState::Spent => rng.range_f32(0.86, 1.0),
     };
     b.flame = if b.state == BurnState::Burning { rng.range_f32(0.7, 1.4) } else { 1.0 };
+    // The fuel is what the char says is left.
+    b.fuel_left = if b.state == BurnState::Spent { 0.0 } else { crate::kindle::TORCH_SECONDS * (1.0 - b.char) };
     s.fit(&LIMITS);
     s
 }
