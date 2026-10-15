@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
 use procgen_rng::Mulberry32;
 
-use crate::carry::carried_light;
+use crate::carry::carried_lights;
 use crate::inventory::Inventory;
 
 /// The four classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
@@ -138,15 +138,15 @@ pub struct Derived {
 
 impl Character {
     /// What everything equipped adds to the delver, as the plate's `derive` adds it up; the
-    /// light is the carried light's ([`carried_light`]) where the plate took the brightest of
-    /// all its items, so an unlit torch in the pack gives none.
+    /// light is the farthest reaching of the lit things carried ([`carried_lights`]), where the
+    /// plate took the brightest of all its items, so an unlit torch in the pack gives none.
     pub fn derive(&self, inventory: &Inventory) -> Derived {
         let equipped = inventory.equipped();
         // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
         let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
         let load = sum(|s| s.weight)
             + equipped.iter().filter_map(|(slot, _)| inventory.worn(*slot)).map(|id| inventory.contents_weight(id)).fold(0.0, |a, b| a + b);
-        let light = carried_light(inventory).and_then(|(_, id)| inventory.item(id)).map_or(0.0, |item| item.profile.stats.light);
+        let light = carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)).map(|item| item.profile.stats.light).fold(0.0, f32::max);
         let darkvision = equipped.iter().map(|(_, item)| item.profile.stats.darkvision).fold(self.folk.race().dv as f32, f32::max);
         Derived {
             armour_class: 10 + sum(|s| s.armour).round() as i32 + modifier(self.dexterity()),
@@ -226,13 +226,13 @@ mod tests {
             inventory.wear(id, slot).unwrap();
         }
         assert_eq!(delver.derive(&inventory).light, reach);
-        assert_eq!(carried_light(&inventory), Some((Slot::Hip, lantern)));
+        assert_eq!(crate::carry::carried_light(&inventory), Some((Slot::Hip, lantern)));
         // A lit torch in hand is carried before it.
         let dagger = inventory.worn(Slot::Offhand).unwrap();
         inventory.take_out(dagger);
         let torch = inventory.add(crate::carry::lit_torch(2));
         inventory.wear(torch, Slot::Offhand).unwrap();
-        assert_eq!(carried_light(&inventory).map(|(slot, _)| slot), Some(Slot::Offhand));
+        assert_eq!(crate::carry::carried_light(&inventory).map(|(slot, _)| slot), Some(Slot::Offhand));
     }
 
     #[test]
