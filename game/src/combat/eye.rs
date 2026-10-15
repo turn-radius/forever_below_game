@@ -156,7 +156,9 @@ fn settle_eye(time: Res<Time>, mut eyes: Query<(&mut Eye, &MaterialNode<EyeMater
         {
             material.style.open = shown;
         }
-        eye.snap = false;
+        if eye.snap {
+            eye.snap = false;
+        }
     }
 }
 

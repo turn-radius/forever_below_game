@@ -112,6 +112,28 @@ pub struct SwingPractice {
     pub repeat: bool,
 }
 
+/// What the toast says when a winded delver tries to swing.
+const WINDED: &str = "Too winded to swing";
+
+/// The toast a refused swing speaks through.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Winded<'w> {
+    toast: Option<ResMut<'w, crate::inventory::Toast>>,
+    real: Option<Res<'w, Time<Real>>>,
+}
+
+impl Winded<'_> {
+    /// Says so, but not again while the line still shows.
+    fn say(&mut self) {
+        let now = self.real.as_deref().map_or(0.0, |t| t.elapsed_secs());
+        if let Some(toast) = self.toast.as_deref_mut()
+            && (toast.text != WINDED || toast.until <= now)
+        {
+            toast.say(WINDED, now);
+        }
+    }
+}
+
 /// A delver with no swing under way.
 type Ready = (With<Player>, Without<Swing>);
 
@@ -131,6 +153,7 @@ fn start_swing(
     mut dice: ResMut<RunDice>,
     mut last: Local<Option<Strike>>,
     practice: Option<Res<SwingPractice>>,
+    mut winded: Winded,
     mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina), Ready>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
     creatures: Query<(Entity, &Critter, &Transform, Option<&Bones>), Without<Corpse>>,
@@ -151,6 +174,7 @@ fn start_swing(
         // A winded delver cannot swing; each swing otherwise takes its bite of stamina.
         if !practising {
             if !stamina.0.can_exert() {
+                winded.say();
                 continue;
             }
             let mut spent = stamina.0;
@@ -527,6 +551,7 @@ mod tests {
             .init_resource::<Character>()
             .init_resource::<RunDice>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<crate::inventory::Toast>()
             .add_systems(Update, start_swing);
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
         let delver = app.world_mut().spawn((Player, Transform::default())).id();
@@ -556,6 +581,23 @@ mod tests {
         app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.25, winded: false };
         app.update();
         assert!(app.world().get::<Swing>(delver).is_some());
+    }
+
+    #[test]
+    fn a_winded_swing_says_so_once_while_the_line_shows() {
+        let (mut app, delver) = swinger();
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.05, winded: true };
+        app.update();
+        let (text, until) = {
+            let toast = app.world().resource::<crate::inventory::Toast>();
+            (toast.text.clone(), toast.until)
+        };
+        assert_eq!(text, WINDED);
+        assert!(until > 0.0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(app.world().resource::<crate::inventory::Toast>().until, until, "not said again while showing");
     }
 
     const STRIKES: [Strike; 6] = [Strike::Overhead, Strike::HighRight, Strike::HighLeft, Strike::FromRight, Strike::FromLeft, Strike::Rising];

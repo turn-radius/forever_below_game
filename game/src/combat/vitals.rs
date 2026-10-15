@@ -283,12 +283,12 @@ fn show_vitals(
     pain.left = (pain.left - time.delta_secs()).max(0.0);
     let flash = pain.alpha();
     for mut colour in &mut flashes {
-        colour.0 = BAD.with_alpha(flash);
+        colour.set_if_neq(BackgroundColor(BAD.with_alpha(flash)));
     }
     let Some(health) = players.iter().next() else { return };
     let dark = 0.7 * vignette_strength(health.hp, health.max, time.elapsed_secs());
     for mut edge in &mut edges {
-        *edge = BorderColor::all(VIGNETTE_COLOUR.with_alpha(dark));
+        edge.set_if_neq(BorderColor::all(VIGNETTE_COLOUR.with_alpha(dark)));
     }
 }
 

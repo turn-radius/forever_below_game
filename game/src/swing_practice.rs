@@ -2,11 +2,12 @@
 //! swings. A panel at the top left names what is held and the strike last thrown.
 //!
 //! - `[` and `]` hold the previous or next melee base, `N` rolls another of the same base.
-//! - `1` to `7` throw every swing as one strike (overhead, high right, high left, from the
-//!   right, from the left, rising, stab), whatever the weapon; `0` rolls them again.
+//! - `F1` to `F7` throw every swing as one strike (overhead, high right, high left, from the
+//!   right, from the left, rising, stab), whatever the weapon; `F8` rolls them again. They are
+//!   function keys so they never collide with the digits, which are the quickslots.
 //! - `G` swings over and over; `T` slows time to a quarter, to follow the arc.
 //!
-//! For captures, `FB_STRIKE=<1 to 7>` starts with that strike pinned, as its key would, and
+//! For captures, `FB_STRIKE=<1 to 7>` starts with that strike pinned, as its `F` key would, and
 //! `FB_SWING=1` swings over and over.
 //!
 //! Blows head for a creature in reach as in play, so walk up to a rat to see them bend.
@@ -35,8 +36,12 @@ impl Plugin for SwingPracticePlugin {
 /// The families swung in practice, and so every base of them.
 const MELEE: [Family; 7] = [Family::Sword, Family::Mace, Family::Axe, Family::Club, Family::Dagger, Family::Spear, Family::Staff];
 
-/// The strikes on `1` to `7`.
+/// The strikes on `F1` to `F7`.
 const STRIKES: [Strike; 7] = [Strike::Overhead, Strike::HighRight, Strike::HighLeft, Strike::FromRight, Strike::FromLeft, Strike::Rising, Strike::Stab];
+
+/// The keys for [`STRIKES`], in order, and the one that goes back to rolled strikes.
+const STRIKE_KEYS: [KeyCode; 7] = [KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4, KeyCode::F5, KeyCode::F6, KeyCode::F7];
+const ROLLED_KEY: KeyCode = KeyCode::F8;
 
 /// Every melee base, in family order.
 pub fn melee_bases() -> Vec<&'static str> {
@@ -91,13 +96,12 @@ fn choose(keys: Res<ButtonInput<KeyCode>>, mut practising: ResMut<Practising>, m
     if reroll {
         practising.held = hold_rolled(&mut inventory, Slot::Mainhand, bases[practising.base], practising.seed);
     }
-    let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7];
-    for (key, strike) in digits.into_iter().zip(STRIKES) {
+    for (key, strike) in STRIKE_KEYS.into_iter().zip(STRIKES) {
         if keys.just_pressed(key) {
             practice.strike = Some(strike);
         }
     }
-    if keys.just_pressed(KeyCode::Digit0) {
+    if keys.just_pressed(ROLLED_KEY) {
         practice.strike = None;
     }
     if keys.just_pressed(KeyCode::KeyG) {
@@ -118,7 +122,7 @@ fn show(mut practising: ResMut<Practising>, practice: Res<SwingPractice>, time: 
     let held = practising.held.as_deref().unwrap_or("nothing");
     let strike = |s: Option<Strike>| s.map_or("rolled".to_string(), |s| format!("{s:?}"));
     let text = format!(
-        "{held}  ({} {}/{}, seed {})\nlast strike  {}\nthrown as    {}{}{}\n\n[ ]  weapon    N  another\n1-7  strike   0  rolled\nG  repeat     T  slow",
+        "{held}  ({} {}/{}, seed {})\nlast strike  {}\nthrown as    {}{}{}\n\n[ ]  weapon    N  another\nF1-F7  strike   F8  rolled\nG  repeat     T  slow",
         bases[practising.base],
         practising.base + 1,
         bases.len(),
@@ -138,6 +142,28 @@ fn show(mut practising: ResMut<Practising>, practice: Res<SwingPractice>, time: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strike_keys_are_not_the_quickslot_digits_and_pin_and_unpin_a_strike() {
+        let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9, KeyCode::Digit0];
+        assert!(STRIKE_KEYS.iter().chain([&ROLLED_KEY]).all(|k| !digits.contains(k)));
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Practising>()
+            .init_resource::<SwingPractice>()
+            .init_resource::<Inventory>()
+            .add_systems(Update, choose);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit3);
+        app.update();
+        assert_eq!(app.world().resource::<SwingPractice>().strike, None, "a digit is a quickslot, not a strike");
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F3);
+        app.update();
+        assert_eq!(app.world().resource::<SwingPractice>().strike, Some(Strike::HighLeft));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(ROLLED_KEY);
+        app.update();
+        assert_eq!(app.world().resource::<SwingPractice>().strike, None);
+    }
 
     #[test]
     fn practice_offers_every_melee_base_and_each_rolls() {
