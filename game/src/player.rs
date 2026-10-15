@@ -60,11 +60,11 @@ pub struct Slowed(pub f32);
 /// rebuilt from them without drift.
 #[derive(Component, Debug, Default)]
 #[require(Gait)]
-struct Locomotion {
-    yaw: f32,
-    pitch: f32,
+pub(crate) struct Locomotion {
+    pub(crate) yaw: f32,
+    pub(crate) pitch: f32,
     /// Floor velocity, world units per second, as `(x, z)`.
-    velocity: Vec2,
+    pub(crate) velocity: Vec2,
 }
 
 /// The player's step cycle, for whatever moves with their steps: the head bob here, what is held
@@ -127,6 +127,8 @@ fn spawn_player(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<Tu
                 // UI follows this camera even when frame capture retargets it to an image.
                 IsDefaultUiCamera,
                 Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
+                // Ears 20 cm apart, for sounds from the creatures round them.
+                SpatialListener::new(2.0),
             ));
             // A dim light at the eye for looking at the level before the torch exists.
             if std::env::var_os("FB_DEBUG_LIGHT").is_some() {
@@ -162,7 +164,7 @@ pub fn look_turn(delta: Vec2, settings: &GameSettings) -> Vec2 {
     Vec2::new(-delta.x * speed, -delta.y * speed * up)
 }
 
-fn look(
+pub(crate) fn look(
     motion: Res<AccumulatedMouseMotion>,
     settings: Res<GameSettings>,
     cursor: Single<&CursorOptions, With<PrimaryWindow>>,
@@ -179,7 +181,7 @@ fn look(
     camera.rotation = Quat::from_rotation_x(locomotion.pitch);
 }
 
-fn walk(
+pub(crate) fn walk(
     time: Res<Time>,
     tuning: Res<Tuning>,
     input: ActionInput,

@@ -69,6 +69,8 @@ flash_hold = 0.12
 flash_fade = 0.2
 # How far a blow knocks a creature back, as a multiple of the usual.
 knockback_scale = 1.0
+# How much the view jolts when hit, as a multiple of the usual (0 = no jolt).
+hit_kick = 1.0
 
 [light]
 # A torch, lantern or other burning thing's strength close up (1 = full).

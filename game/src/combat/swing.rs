@@ -484,7 +484,7 @@ fn swing_held(swings: Query<&Swing, With<Player>>, mut held: Query<(&HeldItem, &
 }
 
 /// Leans the eye forward into each blow.
-fn lean_into_blow(swings: Query<&Swing, With<Player>>, mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
+pub(crate) fn lean_into_blow(swings: Query<&Swing, With<Player>>, mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
     let Some(swing) = swings.iter().next() else { return };
     let forward = lean(swing.weapon.kind, swing.t);
     for mut camera in &mut cameras {

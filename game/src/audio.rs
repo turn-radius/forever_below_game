@@ -28,7 +28,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::{
-    audio::{AudioSinkPlayback, Volume},
+    audio::{AudioSinkPlayback, SpatialScale, Volume},
     prelude::*,
 };
 
@@ -246,6 +246,16 @@ pub fn effect_volume(game: &GameSettings, tuning: &Tuning) -> f32 {
 /// [`effect_volume`].
 pub fn sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, PlaybackSettings) {
     (SoundEffect, PlaybackSettings::DESPAWN.with_volume(Volume::Linear(effect_volume(game, tuning))))
+}
+
+/// How far one world unit sounds: 0.1, as a unit is 10 cm.
+pub const SPATIAL_SCALE: f32 = 0.1;
+
+/// [`sound_effect`], heard from where the [`AudioPlayer`]'s entity stands, by the
+/// [`SpatialListener`] on the player's eye.
+pub fn spatial_sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, PlaybackSettings) {
+    let (effect, playback) = sound_effect(game, tuning);
+    (effect, playback.with_spatial(true).with_spatial_scale(SpatialScale::new(SPATIAL_SCALE)))
 }
 
 /// Sound effects already playing follow a change of sound volume, or of the tuning, the same

@@ -37,6 +37,7 @@ use crate::inventory::Inventory;
 use crate::tuning::Tuning;
 
 pub mod feedback;
+pub mod kick;
 pub mod swing;
 pub mod vitals;
 
@@ -44,7 +45,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, kick::KickPlugin));
     }
 }
 

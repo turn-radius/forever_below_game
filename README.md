@@ -199,6 +199,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[combat]` | `flash_hold` | 0.12 | Seconds a struck creature's flash holds at full. |
 | `[combat]` | `flash_fade` | 0.2 | Seconds the flash then takes to fade. |
 | `[combat]` | `knockback_scale` | 1.0 | How far a blow knocks a creature back, as a multiple of the usual. |
+| `[combat]` | `hit_kick` | 1.0 | How much the view jolts when hit, as a multiple of the usual (0 = no jolt). |
 | `[light]` | `torch_peak` | 1.0 | A torch, lantern or other burning thing's strength close up (1 = full). |
 | `[light]` | `torch_reach` | 2.0 | How far its light reaches, as a multiple of its bright radius. |
 | `[light]` | `brazier_peak` | 1.5 | A brazier's strength close up (1 = full). |
