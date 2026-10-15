@@ -61,7 +61,7 @@ use fb_items::Slot;
 
 use crate::body::Body;
 use crate::folk::{Ears, Folk};
-use crate::hair::{HairFit, Rest};
+use crate::hair::{HairFit, REST_COLUMNS, REST_ROWS, Rest};
 use crate::head::HeadFit;
 use crate::limb::{Limb, Side};
 use crate::place::Placement;
@@ -225,6 +225,13 @@ const FRONT_PHI: f32 = PI / 2.0;
 /// over.
 const CHEST_SPREAD: f32 = PI / 4.0;
 
+/// How many of a [`Rest`]'s columns (1.4 degrees each) either side an edge holds hair off
+/// over, and how far it must stand above the surface's own run from there to count. Our own
+/// figures, tuned against the hair-on-a-cloak test: a little over the spacing of long hair's
+/// strands (about 6 degrees), and a little over a cloth's thickness.
+const EDGE_COLUMNS: isize = 6;
+const EDGE_RISE: f32 = 0.05;
+
 /// Bins along a limb for its clearance.
 const LIMB_BINS: usize = 24;
 /// Nothing measured yet.
@@ -250,9 +257,10 @@ struct Envelope<'a> {
     /// The points of everything worn on each arm (right then left), body space: what a cuff
     /// is drawn over.
     on_arm: [Vec<V3>; 2],
-    /// The same as `outline` without what is worn on the head: what long hair and a beard
-    /// rest on. An aventail or a hood's cape hangs over them, not under.
-    under_head: Outline,
+    /// The surface of everything worn but what is on the head, and of the bare arms under a
+    /// cloak, as triangles (torso space): what long hair and a beard rest on. An aventail or
+    /// a hood's cape hangs over them, not under.
+    under_head: Vec<[V3; 3]>,
 }
 
 /// Which worn surface a trunk form is eased over ([`Envelope::form`]).
@@ -284,18 +292,21 @@ impl<'a> Envelope<'a> {
             legs: [[NONE; LIMB_BINS]; 2],
             outline: Outline::new(profile.bottom() - 1.0, profile.top() + 0.7),
             on_arm: [vec![], vec![]],
-            under_head: Outline::new(profile.bottom() - 1.0, profile.top() + 0.7),
+            under_head: vec![],
         };
         // The bare arms and hands as drawn, for a cloak over them: a raised forearm and its
         // hand come out through the cloak instead ([`Envelope::under_cloak`]).
         for part in body.skin_mesh().parts.iter().filter(|p| matches!(p.name, "arms" | "hands")) {
-            for &p in &part.positions {
+            let under: Vec<bool> = part.positions.iter().map(|&p| {
                 let (side, t, _) = env.nearest_arm(p);
-                if env.under_cloak(side, t) {
-                    let q = env.torso(p);
-                    env.outline.add(q);
-                    env.under_head.add(q);
-                }
+                env.under_cloak(side, t)
+            }).collect();
+            for (&p, _) in part.positions.iter().zip(&under).filter(|(_, u)| **u) {
+                let q = env.torso(p);
+                env.outline.add(q);
+            }
+            for t in part.indices.chunks(3).filter(|t| t.iter().all(|&i| under[i as usize])) {
+                env.under_head.push([t[0], t[1], t[2]].map(|i| env.torso(part.positions[i as usize])));
             }
         }
         // The bare arms, for whatever hangs over them.
@@ -408,8 +419,18 @@ impl<'a> Envelope<'a> {
                 }
                 let q = self.torso(p);
                 self.outline.add(q);
-                if slot != Slot::Head {
-                    self.under_head.add(q);
+            }
+            // What hair rests on, as the triangles themselves.
+            if slot != Slot::Head {
+                for t in part.indices.chunks(3) {
+                    let tri = [t[0], t[1], t[2]].map(|i| part.positions[i as usize]);
+                    if on_arms && tri.iter().any(|p| {
+                        let (side, t, _) = self.nearest_arm(*p);
+                        !self.under_cloak(side, t)
+                    }) {
+                        continue;
+                    }
+                    self.under_head.push(tri.map(|p| self.torso(p)));
                 }
             }
         }
@@ -595,10 +616,83 @@ impl<'a> Envelope<'a> {
     fn rest(&self) -> Rest {
         let b = self.body;
         let w = b.waist_y;
-        Rest::new(b.chest_y - 0.9 * b.trunk_length, b.shoulder_y + 0.35 * b.trunk_length, |phi, y| {
-            // The most anything reaches within a few degrees, so hair laid over the folds of a
-            // cloak, or a hood lying down its back, rests on their crests and bridges between.
-            let worn = (-6..=6).map(|k| self.under_head.at(-phi + k as f32 * TAU / 256.0, y - w)).fold(NONE, f32::max);
+        let (y0, y1) = (b.chest_y - 0.9 * b.trunk_length, b.shoulder_y + 0.35 * b.trunk_length);
+        // The worn surface drawn into Rest's own grid of directions and heights: each cell
+        // takes the farthest any triangle reaches across it (the triangle's corners in
+        // cylindrical coordinates, its reach between them by barycentric weights), and then
+        // the most of the cells about it, so the grid never falls inside a surface that bulges
+        // between its nodes. Measured on the surface itself; binning its points by angle and
+        // taking the most within several degrees held long hair up to 2 cm off a cloak where
+        // it curves round the shoulders.
+        let (rows, cols) = (REST_ROWS, REST_COLUMNS);
+        let dy = (y1 - y0) / (rows - 1) as f32;
+        let dphi = TAU / cols as f32;
+        let mut grid = vec![NONE; rows * cols];
+        for tri in &self.under_head {
+            let c: Vec<(f32, f32, f32)> = tri.iter().map(|p| (p[2].atan2(p[0]), p[1] + w, p[0].hypot(p[2]))).collect();
+            // Unwrapped round the first corner, so a triangle across the back seam stays whole.
+            let unwrap = |a: f32| c[0].0 + (a - c[0].0 + PI).rem_euclid(TAU) - PI;
+            let c: Vec<(f32, f32, f32)> = c.iter().map(|&(a, y, r)| (unwrap(a), y, r)).collect();
+            let (a0, a1) = c.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
+            let (h0, h1) = c.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
+            if h1 < y0 - dy || h0 > y1 + dy || a1 - a0 > PI {
+                continue;
+            }
+            let det = (c[1].1 - c[2].1) * (c[0].0 - c[2].0) + (c[2].0 - c[1].0) * (c[0].1 - c[2].1);
+            let (i0, i1) = (((h0 - y0) / dy).ceil().max(0.0) as isize, (((h1 - y0) / dy).floor() as isize).min(rows as isize - 1));
+            let (j0, j1) = (((a0 + PI) / dphi).ceil() as isize, ((a1 + PI) / dphi).floor() as isize);
+            let mut put = |i: usize, j: isize, r: f32| {
+                let cell = &mut grid[i * cols + j.rem_euclid(cols as isize) as usize];
+                *cell = cell.max(r);
+            };
+            // Its edges, sampled finer than the cells, so a sheet's thin rim (the edge of a
+            // cloak, standing at the nape or down its front) is never missed.
+            for k in 0..3 {
+                let (p, q) = (c[k], c[(k + 1) % 3]);
+                let n = (((q.0 - p.0).abs() / dphi).max((q.1 - p.1).abs() / dy) * 2.0).ceil().max(1.0) as usize;
+                for m in 0..=n {
+                    let t = m as f32 / n as f32;
+                    let (a, y, r) = (p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t, p.2 + (q.2 - p.2) * t);
+                    let i = ((y - y0) / dy).round();
+                    if (0.0..rows as f32).contains(&i) {
+                        put(i as usize, ((a + PI) / dphi).round() as isize, r);
+                    }
+                }
+            }
+            if det.abs() < 1e-9 || i0 > i1 || j0 > j1 {
+                continue;
+            }
+            for i in i0..=i1 {
+                let y = y0 + dy * i as f32;
+                for j in j0..=j1 {
+                    let a = -PI + dphi * j as f32;
+                    let l0 = ((c[1].1 - c[2].1) * (a - c[2].0) + (c[2].0 - c[1].0) * (y - c[2].1)) / det;
+                    let l1 = ((c[2].1 - c[0].1) * (a - c[2].0) + (c[0].0 - c[2].0) * (y - c[2].1)) / det;
+                    let l2 = 1.0 - l0 - l1;
+                    if l0 >= -1e-4 && l1 >= -1e-4 && l2 >= -1e-4 {
+                        put(i as usize, j, l0 * c[0].2 + l1 * c[1].2 + l2 * c[2].2);
+                    }
+                }
+            }
+        }
+        let cell = |i: isize, j: isize| grid[i.clamp(0, rows as isize - 1) as usize * cols + j.rem_euclid(cols as isize) as usize];
+        Rest::new(y0, y1, |phi, y| {
+            let (i, j) = (((y - y0) / dy).round() as isize, ((phi + PI) / dphi).round() as isize);
+            let column = |k: isize| (-1..=1).map(|di| cell(i + di, j + k)).fold(NONE, f32::max);
+            let own = column(0);
+            let mut worn = (-1..=1).map(column).fold(NONE, f32::max);
+            // A few columns further, only an edge standing clear of the surface's own run from
+            // here (a cloak's front edge over the tunic beside it), not a surface that merely
+            // curves away, so hair beside the edge does not dip under it.
+            for dir in [-1, 1] {
+                let step = if own > NONE && column(dir) > NONE { column(dir) - own } else { 0.0 };
+                for k in 2..=EDGE_COLUMNS {
+                    let c = column(dir * k);
+                    if c > own.max(0.0) + step * k as f32 + EDGE_RISE {
+                        worn = worn.max(c);
+                    }
+                }
+            }
             worn.max(b.trunk_reach([phi.cos(), phi.sin()], y))
         })
     }
@@ -1793,7 +1887,7 @@ mod tests {
         use crate::folk::HairStyle;
         let mut failures = vec![];
         for folk in [Folk::Human, Folk::Dwarf, Folk::Gnome] {
-            for seed in [3u32, 1207, 40] {
+            for seed in [3u32, 1207, 40, 8] {
                 let mut spec = BodySpec::roll(folk, seed);
                 spec.hair = HairStyle::Long;
                 let body = Body::new(&spec);
@@ -1813,8 +1907,8 @@ mod tests {
                         }
                     }
                     // Where it falls past the shoulders it lies on the cloak, not off it: round
-                    // the back it comes within about 1 cm of it in most directions and 2 cm in
-                    // all (the edges of the curtain reach the shoulders lower down).
+                    // the back it comes within 1.2 cm of it in every direction, the edges of
+                    // the curtain too.
                     let cloak = &fit.layer(Slot::Cloak).unwrap().mesh.parts;
                     let (a, b) = (body.shoulder_y - 0.25 * body.trunk_length, body.shoulder_y + 0.05 * body.trunk_length);
                     let mut nearest = [f32::MAX; 24];
@@ -1824,7 +1918,7 @@ mod tests {
                     }
                     let mut sectors: Vec<f32> = nearest.into_iter().filter(|d| *d < f32::MAX).collect();
                     sectors.sort_by(f32::total_cmp);
-                    if sectors.is_empty() || sectors[(sectors.len() - 1) / 2] > 0.12 || sectors.iter().any(|d| *d > 0.22) {
+                    if sectors.is_empty() || sectors.iter().any(|d| *d > 0.12) {
                         failures.push(format!("{folk:?} {seed} kit {kit}: the hair stands off the cloak: {sectors:.2?}"));
                     }
                 }
