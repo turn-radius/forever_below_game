@@ -150,6 +150,25 @@ impl LegDrape {
     }
 }
 
+/// A hole through one leg's cloth where something comes out through it (a tail through the
+/// seat): an ellipse centred on `angle` round the leg and height `y`, `half_angle` radians
+/// and `half_height` across. Our own; the prototype's legwear has no tails to clear.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LegHole {
+    pub angle: f32,
+    pub y: f32,
+    pub half_angle: f32,
+    pub half_height: f32,
+}
+
+impl LegHole {
+    /// How far above and below its middle the hole reaches at `angle` (0 outside it).
+    pub fn reach(&self, angle: f32) -> f32 {
+        let off = ((angle - self.angle + PI).rem_euclid(TAU) - PI).abs() / self.half_angle;
+        if off >= 1.0 { 0.0 } else { self.half_height * (1.0 - off * off).sqrt() }
+    }
+}
+
 /// Cloth thickness of each style.
 fn thickness(style: LegwearStyle) -> f32 {
     match style {
@@ -162,6 +181,12 @@ fn thickness(style: LegwearStyle) -> f32 {
 /// `"toggles"`, `"cuffs"`, `"trim"`, `"kneebands"`, `"buckles"`, `"puttees"` and
 /// `"patches"`, as the state calls for them.
 pub fn legwear_parts(form: &LowerBodyForm, wear: &Legwear, hem: &Hem, seed: u32) -> Parts {
+    legwear_parts_holed(form, wear, hem, seed, [None, None])
+}
+
+/// [`legwear_parts`] with a hole through either leg's cloth (left, then right): each leg is
+/// cut into the cloth below the hole and the cloth above it, meeting either side of it.
+pub fn legwear_parts_holed(form: &LowerBodyForm, wear: &Legwear, hem: &Hem, seed: u32, holes: [Option<LegHole>; 2]) -> Parts {
     let mut parts = Parts::new();
     let d = LegDrape::new(form, wear, seed);
     let cloth = Look::cloth(&wear.cloth);
@@ -172,8 +197,18 @@ pub fn legwear_parts(form: &LowerBodyForm, wear: &Legwear, hem: &Hem, seed: u32)
     // The legs, hem to waist.
     let rows = ((d.top - d.hem) * 9.0).round() as usize;
     let mut legs = MeshBuilder::new();
-    for side in sides {
-        legs.append(&d.band(side, rows, 0.0, t, |a| (d.hem_at(a), d.top)));
+    for (side, hole) in sides.into_iter().zip(holes) {
+        match hole {
+            Some(h) => {
+                let y = h.y.clamp(d.hem + 0.1, d.top - wear.band - 0.05);
+                let split = |to: f32| (((to - d.hem) / (d.top - d.hem)) * rows as f32).round().max(2.0) as usize;
+                legs.append(&d.band(side, split(y), 0.0, t, |a| (d.hem_at(a), (y - h.reach(a)).max(d.hem_at(a) + 0.02))));
+                legs.append(&d.band(side, rows.saturating_sub(split(y)).max(2), 0.0, t, |a| ((y + h.reach(a)).min(d.top - 0.02), d.top)));
+            }
+            None => {
+                legs.append(&d.band(side, rows, 0.0, t, |a| (d.hem_at(a), d.top)));
+            }
+        }
     }
     parts.add_look("legs", legs, cloth);
 
