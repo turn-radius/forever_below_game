@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 use fb_character::{Activity, Exhaustion, ExhaustionTimes, Needs};
 
-use crate::character::{Character, DelverNeeds, DelverStamina, Load, activity_for};
+use crate::character::{Character, DelverMana, DelverNeeds, DelverStamina, Load, activity_for};
 use crate::combat::swing::Swing;
 use crate::exhaustion::{Exhaustion as DelverExhaustion, ExhaustionTimes as DelverTimes};
 use crate::game_clock::{GameClock, advance_game_clock};
@@ -56,7 +56,7 @@ fn step_the_delver(
     inventory: Res<Inventory>,
     input: ActionInput,
     mut last: Local<f64>,
-    mut players: Query<(&Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes), With<Player>>,
+    mut players: Query<(&Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana), With<Player>>,
 ) {
     let now = clock.game_seconds();
     // A new delve restarts the clock below where this last stood.
@@ -65,10 +65,21 @@ fn step_the_delver(
     let hours = passed / 3600.0;
     let changed = character.is_changed() || inventory.is_changed();
     let mut gear = None;
-    for (locomotion, swinging, load, mut needs, mut exhaustion, mut times) in &mut players {
+    for (locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana) in &mut players {
         if changed || needs.is_added() {
             let gear = gear.get_or_insert_with(|| character.gear(&inventory));
             gear.apply_to(&mut needs.0);
+            // The pool follows the character's casting ability, a new delver's starting full.
+            let max = character.mana_pool();
+            if mana.0.max != max {
+                let mut pool = mana.0;
+                if mana.is_added() {
+                    pool = fb_character::Mana::full(max);
+                } else {
+                    pool.resize(max);
+                }
+                mana.0 = pool;
+            }
         }
         if hours <= 0.0 {
             continue;
@@ -79,6 +90,10 @@ fn step_the_delver(
         t.step(&mut n, &mut e, activity, hours, crate::character::modifier(character.constitution()));
         needs.0 = n;
         times.0 = t;
+        // Only written when the pool changes, so a full one marks nothing.
+        let mut pool = mana.0;
+        pool.step(hours, activity);
+        mana.set_if_neq(DelverMana(pool));
         // The level moves a few times in a run, so it is only marked changed when it does.
         exhaustion.set_if_neq(DelverExhaustion(e));
     }
@@ -291,6 +306,84 @@ mod tests {
         app.world_mut().clear_trackers();
         run(&mut app, 3);
         assert!(!app.world().entity(delver).get_ref::<DelverStamina>().unwrap().is_changed(), "full and still marks nothing");
+    }
+
+    fn mana(app: &App, who: Entity) -> fb_character::Mana {
+        app.world().get::<DelverMana>(who).unwrap().0
+    }
+
+    fn cast_as(app: &mut App, class: crate::character::Class, intelligence: i32, wisdom: i32) {
+        let mut character = app.world_mut().resource_mut::<Character>();
+        character.class = class;
+        character.attributes.intelligence = intelligence;
+        character.attributes.wisdom = wisdom;
+    }
+
+    #[test]
+    fn a_mage_with_int_16_has_a_larger_pool_than_one_with_int_10() {
+        let pool = |intelligence| {
+            let mut app = app();
+            cast_as(&mut app, crate::character::Class::Mage, intelligence, 10);
+            let delver = walker(&mut app);
+            run(&mut app, 1);
+            mana(&app, delver)
+        };
+        let (clever, average) = (pool(16), pool(10));
+        assert!(clever.max > average.max, "{clever:?} against {average:?}");
+        assert_eq!((clever.points, average.points), (clever.max, average.max), "a new delver starts full");
+    }
+
+    #[test]
+    fn a_clerics_pool_follows_wis_and_fighters_have_a_small_one() {
+        let max = |class, intelligence, wisdom| {
+            let mut app = app();
+            cast_as(&mut app, class, intelligence, wisdom);
+            let delver = walker(&mut app);
+            run(&mut app, 1);
+            mana(&app, delver).max
+        };
+        use crate::character::Class;
+        assert!(max(Class::Cleric, 10, 16) > max(Class::Cleric, 10, 10));
+        assert_eq!(max(Class::Cleric, 18, 10), max(Class::Cleric, 10, 10), "INT does not size a cleric's pool");
+        assert_eq!(max(Class::Fighter, 18, 18), 4.0);
+    }
+
+    #[test]
+    fn resting_for_eight_game_hours_refills_an_empty_pool_and_walking_is_slower() {
+        let mut app = app();
+        app.world_mut().resource_mut::<Tuning>().clock.game_seconds_per_second = 3600.0;
+        cast_as(&mut app, crate::character::Class::Mage, 16, 10);
+        let resting = app.world_mut().spawn((Player, Locomotion::default())).id();
+        run(&mut app, 1);
+        app.world_mut().get_mut::<DelverMana>(resting).unwrap().0.points = 0.0;
+        run(&mut app, 4);
+        let half = mana(&app, resting);
+        assert!((half.fraction() - 0.5).abs() < 0.01, "{half:?}");
+        run(&mut app, 4);
+        assert!((mana(&app, resting).fraction() - 1.0).abs() < 1e-6);
+        // Walking refills at a quarter of that.
+        let walking = walker(&mut app);
+        run(&mut app, 1);
+        app.world_mut().get_mut::<DelverMana>(walking).unwrap().0.points = 0.0;
+        run(&mut app, 4);
+        assert!(mana(&app, walking).fraction() < 0.2, "{:?}", mana(&app, walking));
+    }
+
+    #[test]
+    fn a_full_pool_is_not_rewritten_and_a_changed_character_resizes_it() {
+        let mut app = app();
+        cast_as(&mut app, crate::character::Class::Mage, 16, 10);
+        let delver = walker(&mut app);
+        run(&mut app, 2);
+        app.world_mut().clear_trackers();
+        run(&mut app, 3);
+        assert!(!app.world().entity(delver).get_ref::<DelverMana>().unwrap().is_changed(), "full marks nothing");
+        app.world_mut().get_mut::<DelverMana>(delver).unwrap().0.points = 12.5;
+        cast_as(&mut app, crate::character::Class::Mage, 18, 10);
+        run(&mut app, 1);
+        let pool = mana(&app, delver);
+        assert_eq!(pool.max, 30.0);
+        assert!((pool.fraction() - 0.5).abs() < 0.01, "kept half full: {pool:?}");
     }
 
     fn needs(app: &App, who: Entity) -> Needs {

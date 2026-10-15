@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
-use fb_character::{Activity, Attributes, CarriedLight, Gear, LoadBand, Worn, modifier as ability_modifier};
+use fb_character::{Activity, Attributes, CarriedLight, Casting, Gear, LoadBand, Mana, Worn, modifier as ability_modifier};
 use procgen_rng::Mulberry32;
 
 use crate::carry::carried_lights;
@@ -31,6 +31,15 @@ impl Class {
             Class::Ranger => "ranger",
             Class::Mage => "mage",
             Class::Cleric => "cleric",
+        }
+    }
+
+    /// How the class casts: Mages from INT, Clerics from WIS, Fighters and Rangers hardly at all.
+    pub fn casting(self) -> Casting {
+        match self {
+            Class::Fighter | Class::Ranger => Casting::Martial,
+            Class::Mage => Casting::Arcane,
+            Class::Cleric => Casting::Divine,
         }
     }
 
@@ -127,6 +136,11 @@ impl Character {
     pub fn constitution(&self) -> i32 {
         self.attributes.constitution
     }
+
+    /// Mana points their pool holds: from their class's casting ability.
+    pub fn mana_pool(&self) -> f64 {
+        Mana::max_for(self.class.casting(), &self.attributes)
+    }
 }
 
 /// What the delver's gear makes of them (the plate's `derive`).
@@ -213,6 +227,13 @@ pub struct DelverNeeds(pub fb_character::Needs);
 /// (`crate::simulate::step_stamina`).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverStamina(pub fb_character::Stamina);
+
+/// The delver's mana, on the [`Player`](crate::play::Player) from their spawn. The pool's size
+/// is set from the character when the delver is new and again whenever the character changes,
+/// keeping how full it is; the game clock refills it (`crate::simulate::step_the_delver`).
+/// Nothing spends it yet.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverMana(pub Mana);
 
 /// Determines the delver's activity from movement and load state.
 /// Moving while Burdened or Encumbered counts as Exerting. An Overloaded delver cannot move

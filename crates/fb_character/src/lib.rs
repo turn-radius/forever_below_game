@@ -679,6 +679,106 @@ impl Stamina {
     }
 }
 
+/// How a character casts: the pool a spell caster draws on and how big it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Casting {
+    /// Fighters and Rangers: a small flat pool.
+    #[default]
+    Martial,
+    /// Mages: the pool follows INT.
+    Arcane,
+    /// Clerics: the pool follows WIS.
+    Divine,
+}
+
+/// A small pool every character has, in mana points.
+const MARTIAL_POOL: f64 = 4.0;
+/// The pool of a caster with an ability modifier of 0, in mana points.
+const CASTER_BASE: f64 = 10.0;
+/// What each point of the ability modifier adds to a caster's pool.
+const CASTER_PER_MODIFIER: f64 = 5.0;
+/// A caster's pool is never smaller than this.
+const CASTER_FLOOR: f64 = 4.0;
+/// Of a full pool, what a Resting delver regains each game hour: empty to full in 8 hours.
+const MANA_REST_PER_HOUR: f64 = 1.0 / 8.0;
+/// Of a full pool, what a walking delver regains each game hour.
+const MANA_WALK_PER_HOUR: f64 = 1.0 / 32.0;
+/// Of a full pool, what a sleeping delver regains each game hour.
+const MANA_SLEEP_PER_HOUR: f64 = 3.0 / 8.0;
+
+/// The pool spells will draw on, in points. Its size comes from INT for [`Casting::Arcane`]
+/// or WIS for [`Casting::Divine`], through the SRD modifier ([`modifier`]), and it refills
+/// slowly with rest and faster asleep. Nothing spends it yet. Steps in game hours, closed form
+/// for a constant activity, so any step length gives the same result.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Mana {
+    /// Points in the pool now, from 0 to `max`.
+    pub points: f64,
+    /// The most the pool holds.
+    pub max: f64,
+}
+
+impl Default for Mana {
+    fn default() -> Self {
+        Mana::full(MARTIAL_POOL)
+    }
+}
+
+impl Mana {
+    /// A full pool of `max` points.
+    pub fn full(max: f64) -> Mana {
+        Mana { points: max, max }
+    }
+
+    /// The pool size for a character who casts as `casting`, from their ability scores:
+    /// 10 points plus 5 for each point of the modifier of INT (arcane) or WIS (divine), and
+    /// never fewer than 4. A martial character has 4.
+    pub fn max_for(casting: Casting, attributes: &Attributes) -> f64 {
+        let score = match casting {
+            Casting::Martial => return MARTIAL_POOL,
+            Casting::Arcane => attributes.intelligence,
+            Casting::Divine => attributes.wisdom,
+        };
+        (CASTER_BASE + CASTER_PER_MODIFIER * modifier(score) as f64).max(CASTER_FLOOR)
+    }
+
+    /// How full the pool is, from 0 to 1.
+    pub fn fraction(&self) -> f64 {
+        if self.max <= 0.0 { 0.0 } else { (self.points / self.max).clamp(0.0, 1.0) }
+    }
+
+    /// Makes the pool `max` points, keeping how full it is.
+    pub fn resize(&mut self, max: f64) {
+        let fraction = self.fraction();
+        self.max = max;
+        self.points = max * fraction;
+    }
+
+    /// The share of a full pool regained each game hour at `activity`: none while exerting.
+    pub fn refill_per_hour(activity: Activity) -> f64 {
+        match activity {
+            Activity::Exerting => 0.0,
+            Activity::Walking => MANA_WALK_PER_HOUR,
+            Activity::Resting => MANA_REST_PER_HOUR,
+            Activity::Sleeping => MANA_SLEEP_PER_HOUR,
+        }
+    }
+
+    /// Advances by `hours` of game time at `activity`.
+    pub fn step(&mut self, hours: f64, activity: Activity) {
+        self.points = (self.points + self.max * Mana::refill_per_hour(activity) * hours).clamp(0.0, self.max);
+    }
+
+    /// Spends `cost` points if the pool holds them; returns whether it did.
+    pub fn spend(&mut self, cost: f64) -> bool {
+        if cost > self.points {
+            return false;
+        }
+        self.points -= cost;
+        true
+    }
+}
+
 /// The ability modifier for a score: `floor((score - 10) / 2)` (D&D 5e SRD 5.1, p. 76).
 ///
 /// A score of 3 gives -4, a score of 10 or 11 gives 0, and a score of 18 gives +4.
@@ -1337,6 +1437,73 @@ mod tests {
         assert_eq!(needs.thirst.gear, 1.0, "thirst is not geared");
     }
 
+
+    fn scores(intelligence: i32, wisdom: i32) -> Attributes {
+        Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence, wisdom }
+    }
+
+    #[test]
+    fn a_mage_with_int_16_has_a_bigger_pool_than_one_with_int_10() {
+        let clever = Mana::max_for(Casting::Arcane, &scores(16, 10));
+        let average = Mana::max_for(Casting::Arcane, &scores(10, 10));
+        assert_eq!((clever, average), (25.0, 10.0));
+    }
+
+    #[test]
+    fn a_clerics_pool_follows_wis_and_a_mages_ignores_it() {
+        assert_eq!(Mana::max_for(Casting::Divine, &scores(10, 16)), 25.0);
+        assert_eq!(Mana::max_for(Casting::Divine, &scores(18, 10)), 10.0);
+        assert_eq!(Mana::max_for(Casting::Arcane, &scores(10, 18)), 10.0);
+    }
+
+    #[test]
+    fn fighters_and_rangers_have_a_small_flat_pool_and_a_dull_caster_is_floored() {
+        assert_eq!(Mana::max_for(Casting::Martial, &scores(18, 18)), 4.0);
+        assert_eq!(Mana::max_for(Casting::Martial, &scores(3, 3)), 4.0);
+        assert_eq!(Mana::max_for(Casting::Arcane, &scores(3, 3)), 4.0);
+    }
+
+    #[test]
+    fn mana_refills_from_empty_in_eight_hours_of_rest() {
+        let mut mana = Mana { points: 0.0, max: 25.0 };
+        mana.step(7.0, Activity::Resting);
+        assert!(mana.fraction() < 1.0);
+        mana.step(1.0, Activity::Resting);
+        assert!((mana.points - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sleeping_refills_faster_than_resting_and_exerting_not_at_all() {
+        let from_empty = |activity| {
+            let mut mana = Mana { points: 0.0, max: 10.0 };
+            mana.step(1.0, activity);
+            mana.points
+        };
+        assert!(from_empty(Activity::Sleeping) > from_empty(Activity::Resting));
+        assert!(from_empty(Activity::Resting) > from_empty(Activity::Walking));
+        assert_eq!(from_empty(Activity::Exerting), 0.0);
+    }
+
+    #[test]
+    fn mana_steps_the_same_in_any_step_size_and_resizing_keeps_how_full_it_is() {
+        let (mut whole, mut parts) = (Mana { points: 2.0, max: 10.0 }, Mana { points: 2.0, max: 10.0 });
+        whole.step(3.0, Activity::Resting);
+        for _ in 0..30 {
+            parts.step(0.1, Activity::Resting);
+        }
+        assert!((whole.points - parts.points).abs() < 1e-9);
+        let mut mana = Mana { points: 5.0, max: 10.0 };
+        mana.resize(25.0);
+        assert_eq!((mana.points, mana.max), (12.5, 25.0));
+    }
+
+    #[test]
+    fn mana_is_spent_only_when_the_pool_holds_it() {
+        let mut mana = Mana::full(10.0);
+        assert!(mana.spend(4.0));
+        assert!(!mana.spend(7.0));
+        assert_eq!(mana.points, 6.0);
+    }
     #[test]
     fn a_full_pool_lasts_thirty_seconds_of_sprinting_while_light() {
         let mut stamina = Stamina::default();
