@@ -16,6 +16,7 @@ use procgen_rng::Mulberry32;
 use crate::creatures::{CREATURE_SALT, place_creatures};
 use crate::folk::{FOLK_SALT, place_folk};
 use crate::props::{PROP_SALT, place_props};
+use crate::stairs::{STAIR_SALT, place_stairs};
 use crate::{Cell, Entrance, Facing, ItemSpot, Level, LevelParams, LevelStyle, LightKind, LightSpot, Room};
 
 // The layout's sizes, counts, costs and chances are [`LevelParams`], so the level view can
@@ -71,6 +72,7 @@ pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
     params.fit();
     let (mut level, layout_seed) = generate_without_creatures(seed, depth, &params);
     level.creatures = place_creatures(&level, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT));
+    place_stairs(&mut level, &mut Mulberry32::new(layout_seed ^ STAIR_SALT));
     level
 }
 
@@ -139,6 +141,7 @@ fn try_generate(seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<
         folk: Vec::new(),
         props: Vec::new(),
         creatures: Vec::new(),
+        stairs: Vec::new(),
     };
     if style == LevelStyle::StoneHalls {
         // A level of stone halls has a colonnade; a layout with no hall to hold one is tried
@@ -787,6 +790,8 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    use crate::{Facing, StairKind, depth_seed};
+
     const SEEDS: std::ops::RangeInclusive<u32> = 1..=64;
 
     fn cell_of(level: &Level, x: f32, y: f32) -> Cell {
@@ -1109,5 +1114,129 @@ mod tests {
             assert!(is_whole(&level), "seed {seed}");
         }
         assert!(tries(1, 2, &params) <= RELAX_EVERY + 1);
+    }
+
+    fn spot_cells(level: &Level) -> Vec<(i32, i32)> {
+        let cell = |x: f32, y: f32| (x.floor() as i32, y.floor() as i32);
+        let mut out: Vec<_> = level.items.iter().map(|s| cell(s.x, s.y)).collect();
+        out.extend(level.lights.iter().map(|s| cell(s.x, s.y)));
+        out.extend(level.folk.iter().map(|s| cell(s.x, s.y)));
+        out.extend(level.props.iter().map(|s| cell(s.x, s.y)));
+        out.extend(level.creatures.iter().map(|s| cell(s.x, s.y)));
+        out
+    }
+
+    #[test]
+    fn every_level_has_a_reachable_way_down_far_from_the_start() {
+        for depth in [1, 2, 3, 4] {
+            for seed in 0..150 {
+                let level = generate(seed, depth);
+                let downs: Vec<_> = level.stairs.iter().filter(|s| s.kind == StairKind::Down).collect();
+                assert_eq!(downs.len(), 1, "seed {seed} depth {depth}");
+                let down = downs[0];
+                let (ax, ay, _) = down.arrival();
+                assert!(level.is_open(ax as i32, ay as i32), "seed {seed} depth {depth}: the approach is floor");
+                assert_eq!(level.cell(down.x as i32, down.y as i32), Cell::Floor, "seed {seed} depth {depth}");
+                let dist = crate::stairs::distances_from_start(&level);
+                let at = |x: u32, y: u32| dist[(y * level.width + x) as usize];
+                assert!(at(ax, ay) >= 0, "seed {seed} depth {depth}: reachable from the start");
+                // At least `FAR_SHARE` as far as the furthest cell it could have stood on: free
+                // floor against a wall of a room, clear of doors, with free floor in front.
+                let taken = spot_cells(&level);
+                let free = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && !taken.contains(&(x, y));
+                let mut furthest = 0;
+                for y in 0..level.height as i32 {
+                    for x in 0..level.width as i32 {
+                        let near_door = (-1..=1).any(|dy| (-1..=1).any(|dx| level.cell(x + dx, y + dy) == Cell::Door));
+                        for facing in Facing::ALL {
+                            let (dx, dy) = facing.step();
+                            let (px, py) = (x - dx, y - dy);
+                            let wall_behind = !level.is_open(x + dx, y + dy);
+                            let same_room = level.room_at(x, y).is_some() && level.room_at(x, y) == level.room_at(px, py);
+                            if free(x, y) && free(px, py) && wall_behind && !near_door && same_room && (x, y) != (level.entrance.x as i32, level.entrance.y as i32) {
+                                furthest = furthest.max(dist[(py as u32 * level.width + px as u32) as usize]);
+                            }
+                        }
+                    }
+                }
+                assert!(at(ax, ay) as f32 >= furthest as f32 * crate::stairs::FAR_SHARE, "seed {seed} depth {depth}: {} of {furthest} cells away", at(ax, ay));
+                // Shutting the stair's cell cuts nothing off.
+                assert!(is_whole(&level), "seed {seed} depth {depth}");
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_stands_where_a_delver_arrives_from_above() {
+        for depth in [1, 2, 3, 4] {
+            for seed in 0..150 {
+                let level = generate(seed, depth);
+                let (sx, sy, _) = level.start();
+                let cell = |x: f32, y: f32| (x.floor() as i32, y.floor() as i32);
+                let on = |x: f32, y: f32| cell(x, y) == (sx as i32, sy as i32);
+                assert!(!level.props.iter().any(|s| on(s.x, s.y)), "seed {seed} depth {depth}: a prop on the start");
+                assert!(!level.folk.iter().any(|s| on(s.x, s.y)), "seed {seed} depth {depth}: someone on the start");
+                assert!(!level.creatures.iter().any(|s| on(s.x, s.y)), "seed {seed} depth {depth}: a creature on the start");
+                assert!(!level.items.iter().any(|s| on(s.x, s.y)), "seed {seed} depth {depth}: an item on the start");
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_else_stands_on_a_stair() {
+        for depth in [1, 2, 3] {
+            for seed in 0..150 {
+                let level = generate(seed, depth);
+                let spots = spot_cells(&level);
+                for stair in &level.stairs {
+                    let cell = (stair.x as i32, stair.y as i32);
+                    assert!(!spots.contains(&cell), "seed {seed} depth {depth}: {:?} has something on it", stair.kind);
+                    assert_eq!(level.cell(cell.0, cell.1), Cell::Floor, "seed {seed} depth {depth}: a stair stands on bare floor");
+                    let (ax, ay, _) = stair.arrival();
+                    assert!(level.is_open(ax as i32, ay as i32));
+                    if stair.kind == StairKind::Down {
+                        assert!(!spots.contains(&(ax as i32, ay as i32)), "seed {seed} depth {depth}: something in the way of the way down");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_levels_below_the_first_have_a_way_up_where_they_are_entered() {
+        for seed in [0, 1, 1207, 4242] {
+            let first = generate(seed, 1);
+            assert!(first.stair(StairKind::Up).is_none(), "seed {seed}");
+            assert_eq!(first.cell(first.entrance.x as i32, first.entrance.y as i32), Cell::Door);
+            for depth in [2, 3, 5] {
+                let level = generate(seed, depth);
+                let up = level.stair(StairKind::Up).expect("a way up");
+                assert_eq!((up.x, up.y), (level.entrance.x, level.entrance.y));
+                assert_eq!(up.arrival(), level.start(), "arriving from above stands where the level starts");
+                assert_eq!(level.arrival(StairKind::Up), Some(level.start()));
+                assert_ne!(level.cell(up.x as i32, up.y as i32), Cell::Door, "the entrance is no door below the first level");
+                assert!(level.is_open(up.x as i32, up.y as i32));
+                assert_eq!(level.stairs.len(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn seed_1207_has_a_way_down_on_levels_one_and_two() {
+        let run = 1207;
+        let first = generate(depth_seed(run, 1), 1);
+        let second = generate(depth_seed(run, 2), 2);
+        assert_eq!(first.seed, 1207, "the first level keeps the run's seed");
+        assert_ne!(second.seed, first.seed);
+        let down = first.stair(StairKind::Down).expect("a way down");
+        // Coming up from level two puts you beside it, turned away.
+        let (x, y, facing) = first.arrival(StairKind::Down).unwrap();
+        assert_eq!((x, y), down.approach());
+        assert_eq!(facing, down.facing.opposite());
+        assert!(second.stair(StairKind::Down).is_some() && second.stair(StairKind::Up).is_some());
+        // A depth is always the same level.
+        assert_eq!(second, generate(depth_seed(run, 2), 2));
+        assert_ne!(depth_seed(run, 2), depth_seed(run, 3));
+        assert_ne!(depth_seed(run, 2), depth_seed(run + 1, 2));
     }
 }

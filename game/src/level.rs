@@ -12,6 +12,7 @@
 //! high over the level looking down, or beside the first brazier or glowcaps. Unset, nothing here touches the player's camera.
 
 pub mod geometry;
+pub mod stairs;
 
 use armory::{
     Rgb,
@@ -22,15 +23,15 @@ use armory::{
     },
 };
 use bevy::{camera::Exposure, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
-use fb_level::{CELL, LightKind};
+use fb_level::{CELL, LightKind, StairKind};
 
 use crate::capture::FrameCapturePlugin;
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
 use crate::audio::sound_effect;
-use crate::launch::AppState;
 use crate::play::DelveSystems;
 use crate::settings::GameSettings;
+use crate::travel::{Abyss, Arrival};
 use crate::tuning::{LightTuning, Tuning};
 use crate::render::{ArmoryPart, ItemAppearance, MinWidth, OutlineMaterial, ToonMaterial, part_to_mesh};
 use geometry::{CellView, Doorway, LevelMesh};
@@ -42,7 +43,12 @@ impl Plugin for LevelPlugin {
         app.init_resource::<Tuning>()
             .insert_resource(abyss_ambient(&LightTuning::default()))
             .insert_resource(ClearColor(FOG_COLOR))
-            .add_systems(OnEnter(AppState::Delving), (spawn_stone, spawn_fixtures, spawn_debug_camera))
+            // The level's stone is laid out for each level the delver comes to: the first of a
+            // delve, then each one they travel to ([`crate::travel`]), as the folk and props are.
+            .add_systems(
+                Update,
+                (clear_stone, spawn_stone, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
+            )
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
             .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames).in_set(DelveSystems))
@@ -180,6 +186,13 @@ fn load_level_sounds(mut commands: Commands, assets: Res<AssetServer>) {
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct LevelPiece;
 
+/// Marks the level's own stone, fixtures and stairs (not the props and folk that stand in it,
+/// which have their own systems), so travelling to another level can clear them and lay out
+/// the next ([`clear_stone`]).
+#[derive(Component, Debug, Default)]
+#[require(LevelPiece)]
+pub struct StonePiece;
+
 /// The entrance door's leaf: open into the level until the player walks away from it, then
 /// swinging shut for good.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -256,6 +269,13 @@ fn doorway_transform(doorway: &Doorway) -> Transform {
     Transform::from_translation(centre).with_rotation(Quat::from_mat3(&Mat3::from_cols(x, y, z)))
 }
 
+/// Clears the stone, fixtures and stairs of the level the delver has left.
+fn clear_stone(mut commands: Commands, old: Query<Entity, With<StonePiece>>) {
+    for entity in &old {
+        commands.entity(entity).despawn();
+    }
+}
+
 fn spawn_stone(
     mut commands: Commands,
     level: Res<CurrentLevel>,
@@ -284,17 +304,27 @@ fn spawn_stone(
                     handle
                 }
             };
-            commands.spawn((LevelPiece, Name::new(part.name), Mesh3d(meshes.add(part_to_mesh(part))), MeshMaterial3d(material)));
+            commands.spawn((StonePiece, Name::new(part.name), Mesh3d(meshes.add(part_to_mesh(part))), MeshMaterial3d(material)));
         }
         if !lines.indices.is_empty() {
-            commands.spawn((LevelPiece, Name::new("ink"), Mesh3d(meshes.add(part_to_mesh(&lines))), MeshMaterial3d(ink.clone())));
+            commands.spawn((StonePiece, Name::new("ink"), Mesh3d(meshes.add(part_to_mesh(&lines))), MeshMaterial3d(ink.clone())));
         }
     }
 
 }
 
-fn spawn_fixtures(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<Tuning>, mut spawner: crate::render::ItemSpawner) {
+fn spawn_fixtures(
+    mut commands: Commands,
+    level: Res<CurrentLevel>,
+    abyss: Option<Res<Abyss>>,
+    tuning: Res<Tuning>,
+    mut blocked: ResMut<BlockedCells>,
+    mut spawner: crate::render::ItemSpawner,
+) {
     let level = &level.0;
+    // The door shut behind the delver when they came in; coming back to it from below finds it
+    // shut already, and it does not swing again.
+    let shut_already = abyss.is_some_and(|a| a.arrival == Arrival::FromBelow);
     let view = CellView::new(level);
 
     // Door frames, and the entrance door hung in its own.
@@ -303,14 +333,18 @@ fn spawn_fixtures(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<
         let seed = level.seed ^ ((doorway.x as u32) << 16 | doorway.y as u32);
         let frame = geometry::door_frame(level.ceiling, seed);
         let transform = doorway_transform(&doorway);
-        spawner.spawn(&frame, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((LevelPiece, transform));
+        spawner.spawn(&frame, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
         if (doorway.x, doorway.y) == entrance {
             let hinge = transform.transform_point(v3(geometry::entrance_hinge()));
-            let door = EntranceDoor { shut: transform.rotation, centre: transform.translation, cell: entrance, swing: DoorSwing::Open };
+            let swing = if shut_already { DoorSwing::Shut } else { DoorSwing::Open };
+            if shut_already {
+                blocked.0.insert(entrance);
+            }
+            let door = EntranceDoor { shut: transform.rotation, centre: transform.translation, cell: entrance, swing };
             let leaf = geometry::entrance_leaf(seed);
             spawner
                 .spawn(&leaf, &fixture_appearance(seed, ConditionState::Serviceable))
-                .insert((LevelPiece, Name::new("entrance door"), door, Transform::from_translation(hinge).with_rotation(door.rotation())));
+                .insert((StonePiece, Name::new("entrance door"), door, Transform::from_translation(hinge).with_rotation(door.rotation())));
         }
     }
 
@@ -322,11 +356,26 @@ fn spawn_fixtures(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<
             LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light),
             LightKind::Brazier => {
                 let (mesh, flame) = geometry::brazier(seed);
-                spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((LevelPiece, Transform::from_translation(at)));
+                spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Transform::from_translation(at)));
                 let light = FixedLight::Brazier.light(&tuning.light);
-                commands.spawn((LevelPiece, Name::new("brazier light"), FixedLight::Brazier, light, Transform::from_translation(at + Vec3::Y * flame)));
+                commands.spawn((StonePiece, Name::new("brazier light"), FixedLight::Brazier, light, Transform::from_translation(at + Vec3::Y * flame)));
             }
         }
+    }
+}
+
+/// The level's stairs, each in its cell, which the delver cannot walk onto.
+fn spawn_stairs(level: Res<CurrentLevel>, mut blocked: ResMut<BlockedCells>, mut spawner: crate::render::ItemSpawner) {
+    let level = &level.0;
+    for stair in &level.stairs {
+        blocked.0.insert((stair.x as i32, stair.y as i32));
+        let seed = level.seed ^ ((stair.x << 16 | stair.y) ^ 0x57A1);
+        let mesh = stairs::stair_mesh(stair.kind, level.ceiling, seed);
+        let (at, yaw) = stairs::stair_transform(stair);
+        let name = if stair.kind == StairKind::Down { "stair down" } else { "stair up" };
+        spawner
+            .spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn))
+            .insert((StonePiece, Name::new(name), Transform::from_translation(v3(at)).with_rotation(Quat::from_rotation_y(yaw))));
     }
 }
 
@@ -345,10 +394,10 @@ fn spawn_glowcaps(commands: &mut Commands, spawner: &mut crate::render::ItemSpaw
         let appearance = ItemAppearance { seed: state.seed, decay_scale_factor: 3.0, ..default() };
         spawner
             .spawn(&Food::build(&state), &appearance)
-            .insert((LevelPiece, Transform::from_translation(at + offset).with_rotation(Quat::from_rotation_y(angle))));
+            .insert((StonePiece, Transform::from_translation(at + offset).with_rotation(Quat::from_rotation_y(angle))));
     }
     let centre = light_at.iter().sum::<Vec3>() / light_at.len() as f32;
-    commands.spawn((LevelPiece, Name::new("glowcap light"), FixedLight::Glowcaps, glowcap_light(tuning), Transform::from_translation(centre + Vec3::Y * 1.5)));
+    commands.spawn((StonePiece, Name::new("glowcap light"), FixedLight::Glowcaps, glowcap_light(tuning), Transform::from_translation(centre + Vec3::Y * 1.5)));
 }
 
 /// The faint light over a patch of glowcaps. Shadowed like every light in the level, so it
@@ -465,7 +514,7 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
     commands
         .spawn((
             DebugCamera { walk_in: mode == "shut", fog: mode != "top" },
-            LevelPiece,
+            StonePiece,
             Camera3d::default(),
             EXPOSURE,
             // The house style draws untonemapped; a tone curve would flatten the bands.

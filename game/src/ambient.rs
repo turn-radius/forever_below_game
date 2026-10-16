@@ -53,8 +53,10 @@ impl Plugin for AmbientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AmbientSounds>()
             .add_systems(Startup, load_ambient_sounds.run_if(resource_exists::<AssetServer>))
-            .add_systems(OnEnter(AppState::Delving), (spawn_ambient_emitters, spawn_rumble_schedule).chain())
+            .add_systems(OnEnter(AppState::Delving), spawn_rumble_schedule)
             .add_systems(OnExit(AppState::Delving), end_rumble_schedule)
+            // Each level the delver comes to drips from its own spots.
+            .add_systems(Update, (clear_drips, spawn_ambient_emitters).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems))
             .add_systems(Update, (play_drips, play_rumbles, turn_ambience_volume).in_set(DelveSystems));
     }
 }
@@ -116,6 +118,12 @@ fn new_rumble_schedule(seed: u32, sound: &SoundTuning) -> RumbleSchedule {
     let mut rng = Mulberry32::new(seed);
     let interval = rumble_interval(&mut rng, sound);
     RumbleSchedule { rng, timer: Timer::from_seconds(interval, TimerMode::Once) }
+}
+
+fn clear_drips(mut commands: Commands, old: Query<Entity, With<DripEmitter>>) {
+    for entity in &old {
+        commands.entity(entity).despawn();
+    }
 }
 
 fn spawn_ambient_emitters(mut commands: Commands, level: Res<CurrentLevel>) {

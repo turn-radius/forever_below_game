@@ -178,6 +178,7 @@ fn build_screen(
     fonts: Res<UiFonts>,
     plan: Option<Res<PlanImage>>,
     marker: Option<Res<MarkerImage>>,
+    level: Option<Res<CurrentLevel>>,
     mut view: ResMut<MapView>,
 ) {
     let existing = screens.iter().next();
@@ -213,7 +214,7 @@ fn build_screen(
                 UiTransform::IDENTITY,
             ));
             root.spawn((
-                Text::new("Map"),
+                Text::new(level.map_or("Map".to_string(), |l| format!("Map \u{b7} Depth {}", l.0.depth))),
                 UiFonts::style(&fonts.display, 30.0, crate::ui::INK),
                 Node { position_type: PositionType::Absolute, left: px(28), top: px(18), ..default() },
             ));

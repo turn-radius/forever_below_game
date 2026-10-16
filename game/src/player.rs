@@ -64,11 +64,11 @@ pub struct Slowed(pub f32);
 /// rebuilt from them without drift.
 #[derive(Component, Debug, Default)]
 #[require(Gait)]
-pub(crate) struct Locomotion {
-    pub(crate) yaw: f32,
-    pub(crate) pitch: f32,
+pub struct Locomotion {
+    pub yaw: f32,
+    pub pitch: f32,
     /// Floor velocity, world units per second, as `(x, z)`.
-    pub(crate) velocity: Vec2,
+    pub velocity: Vec2,
 }
 
 /// The player's step cycle, for whatever moves with their steps: the head bob here, what is held

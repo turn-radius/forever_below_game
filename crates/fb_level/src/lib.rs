@@ -152,6 +152,8 @@ pub struct Level {
     pub props: Vec<PropSpot>,
     /// Rats and snakes ([`creatures`]).
     pub creatures: Vec<CreatureSpot>,
+    /// The ways to the levels above and below ([`stairs`]).
+    pub stairs: Vec<Stair>,
 }
 
 impl Level {
@@ -213,6 +215,28 @@ impl Room {
 }
 
 impl Level {
+    /// The stair of `kind`, if the level has one. Every level has a way down; the first has no
+    /// way up.
+    pub fn stair(&self, kind: StairKind) -> Option<&Stair> {
+        self.stairs.iter().find(|s| s.kind == kind)
+    }
+
+    /// The stair standing in cell `(x, y)`.
+    pub fn stair_at(&self, x: i32, y: i32) -> Option<&Stair> {
+        self.stairs.iter().find(|s| (s.x as i32, s.y as i32) == (x, y))
+    }
+
+    /// Where a delver stands on arriving at the level's stair of kind `at`, turned away from
+    /// it: at its way up, the level's start ([`Level::start`], which below the first level is
+    /// in front of its stair up); at its way down, in front of that. `None` if the level has no
+    /// such stair.
+    pub fn arrival(&self, at: StairKind) -> Option<(u32, u32, Facing)> {
+        match at {
+            StairKind::Up => Some(self.start()),
+            StairKind::Down => self.stair(StairKind::Down).map(Stair::arrival),
+        }
+    }
+
     /// Index into [`Level::rooms`] of the room holding cell `(x, y)`, if any.
     pub fn room_at(&self, x: i32, y: i32) -> Option<usize> {
         self.rooms.iter().position(|r| r.contains(x, y))
@@ -242,8 +266,10 @@ pub mod params;
 pub mod sight;
 pub mod path;
 pub mod props;
+pub mod stairs;
 pub use creatures::CreatureSpot;
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
 pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use generate::{generate, generate_with};
+pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;

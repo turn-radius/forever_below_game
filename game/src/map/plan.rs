@@ -10,7 +10,7 @@
 use armory::build::scenery::Scenery;
 use fb_level::props::Prop;
 use fb_level::sight::Explored;
-use fb_level::{Cell, Level, LightKind};
+use fb_level::{Cell, Level, LightKind, StairKind};
 
 /// Cells of blank page round the level.
 pub const MARGIN: f32 = 1.5;
@@ -216,6 +216,24 @@ pub fn draw_plan(level: &Level, explored: &Explored, px: f32) -> PlanCanvas {
         for s in [1.0, -1.0] {
             let wing = [tip[0] - dx as f32 * 0.2 + side[0] * 0.4 * s, tip[1] - dy as f32 * 0.2 + side[1] * 0.4 * s];
             canvas.line(frame.at(tip[0], tip[1]), frame.at(wing[0], wing[1]), ink, ACCENT, 1.0);
+        }
+    }
+
+    // Seen stairs: a box with three treads, narrowing toward a way down and widening toward a
+    // way up.
+    for stair in &level.stairs {
+        if !seen(stair.x as i32, stair.y as i32) {
+            continue;
+        }
+        let c = frame.at(stair.x as f32 + 0.5, stair.y as f32 + 0.5);
+        let r = px * 0.36;
+        canvas.rect([c[0] - r, c[1] - r], [c[0] + r, c[1] + r], INK, 0.9);
+        canvas.rect([c[0] - r + ink, c[1] - r + ink], [c[0] + r - ink, c[1] + r - ink], WASH, 1.0);
+        for k in 0..3 {
+            let t = (k as f32 + 0.5) / 3.0;
+            let half = r * if stair.kind == StairKind::Down { 0.85 - t * 0.5 } else { 0.35 + t * 0.5 };
+            let y = c[1] - r + t * 2.0 * r;
+            canvas.line([c[0] - half, y], [c[0] + half, y], ink, INK, 0.9);
         }
     }
 

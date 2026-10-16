@@ -152,6 +152,7 @@ mod tests {
             folk: Vec::new(),
             props: Vec::new(),
             creatures: Vec::new(),
+            stairs: Vec::new(),
         }
     }
 

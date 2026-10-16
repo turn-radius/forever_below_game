@@ -106,6 +106,10 @@ impl<'a> CellView<'a> {
 /// The cells behind the entrance to carve, nearest first: straight outward, stopping before
 /// any cell that would touch open floor of the level (so the passage never breaks into a room).
 pub fn entrance_passage(level: &Level) -> Vec<(i32, i32)> {
+    // Below the first level the entrance is a stair up, with solid rock behind it.
+    if level.depth >= 2 {
+        return Vec::new();
+    }
     let e = level.entrance;
     let (dx, dy) = e.inward.step();
     let (ox, oy) = (-dx, -dy);
@@ -332,8 +336,15 @@ pub fn level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Le
                 steps: [SEGMENTS, SEGMENTS],
                 facing,
             };
-            flat(0.0, up).build(&relief, &mut floor);
-            flat(level.ceiling, vec3::neg(up)).build(&relief, &mut ceiling);
+            // Where a stair goes through (`super::stairs`), no floor under a way down and no
+            // ceiling over a way up.
+            let stair = level.stair_at(x, y);
+            if !super::stairs::opens_floor(stair) {
+                flat(0.0, up).build(&relief, &mut floor);
+            }
+            if !super::stairs::opens_ceiling(stair) {
+                flat(level.ceiling, vec3::neg(up)).build(&relief, &mut ceiling);
+            }
 
             for facing in DIRECTIONS {
                 let (dx, dy) = facing.step();
@@ -719,19 +730,23 @@ mod tests {
         let level = level();
         let view = CellView::new(&level);
         let (x0, y0, x1, y1) = view.bounds();
-        let (mut open, mut faces) = (0, 0);
+        // A way down has no floor under it and a way up no ceiling over it.
+        let (mut open, mut floors, mut ceilings, mut faces) = (0, 0, 0, 0);
         for y in y0..y1 {
             for x in x0..x1 {
                 if view.is_open(x, y) {
                     open += 1;
+                    floors += !crate::level::stairs::opens_floor(level.stair_at(x, y)) as usize;
+                    ceilings += !crate::level::stairs::opens_ceiling(level.stair_at(x, y)) as usize;
                     faces += DIRECTIONS.iter().filter(|f| !view.is_open(x + f.step().0, y + f.step().1)).count();
                 }
             }
         }
         let mesh = level_mesh(&view, view.bounds());
         let quads = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).unwrap().indices.len() / 6;
-        assert_eq!(quads("floor"), open * SEGMENTS * SEGMENTS);
-        assert_eq!(quads("ceiling"), open * SEGMENTS * SEGMENTS);
+        assert!(floors < open, "the way down leaves its cell unfloored");
+        assert_eq!(quads("floor"), floors * SEGMENTS * SEGMENTS);
+        assert_eq!(quads("ceiling"), ceilings * SEGMENTS * SEGMENTS);
         let rows = (level.ceiling / ROW).ceil() as usize;
         assert_eq!(quads("walls"), faces * SEGMENTS * rows);
     }
@@ -748,7 +763,8 @@ mod tests {
 
     #[test]
     fn walls_meet_the_floor_on_shared_points() {
-        let level = level();
+        // Without the stairs, which leave their cells unfloored.
+        let level = Level { stairs: Vec::new(), ..level() };
         let view = CellView::new(&level);
         let mesh = level_mesh(&view, view.bounds());
         let key = |p: &[f32; 3]| p.map(|c| (c * 1000.0).round() as i64);
