@@ -24,7 +24,7 @@ use armory::{
     },
     geom::{LatheOptions, MeshBuilder, Shading, V3, lathe, value_noise3, vec3},
 };
-use fb_level::{CELL, Cell, Facing, Level};
+use fb_level::{CELL, Cell, Facing, Level, LevelStyle};
 use procgen_rng::Mulberry32;
 
 use super::{
@@ -32,9 +32,7 @@ use super::{
     facing_vector,
 };
 
-/// Where every vault springs from, and the height of a corridor's flat soffit.
-pub const SPRING: f32 = 30.0;
-/// The highest a crown can stand over [`SPRING`].
+/// The highest a crown can stand over the spring, which is the level's ceiling.
 const MAX_RISE: f32 = 26.0;
 
 /// The gap between neighbouring blocks, and the chamfer on a block's face edges.
@@ -52,6 +50,19 @@ const UNDER_SOFFIT: f32 = 0.45;
 /// Flagstones stand this high off the shell, at least and at most, with a chamfer of [`FLAG_CHAMFER`].
 const FLAG_RAISE: (f32, f32) = (0.12, 0.26);
 const FLAG_CHAMFER: f32 = 0.09;
+/// The lowest course of wall is darker where the damp climbs it, and may be chipped.
+pub const DAMP_STONE: Rgb = Rgb::hex(0x676a67);
+/// How often a block of the lowest course has a corner knocked off, and how big a bite, in world units.
+const CHIP_CHANCE: f32 = 0.3;
+const CHIP: (f32, f32) = (1.1, 2.1);
+/// The fine ink along a joint sits this far off the shell, down in the groove between blocks.
+const JOINT_INK_LIFT: f32 = 0.1;
+/// The ink along the base of a wall floats this high and this far off the shell, to clear the
+/// lowest course in front of it and the flagstones beneath.
+const BASE_INK: (f32, f32) = (0.3, 0.95);
+/// Ink on a vault's ribs and creases stands this far off the soffit, to clear the grid the
+/// ceiling is drawn on, which cuts across a crease.
+const RIB_INK_LIFT: f32 = 0.4;
 /// Ink on an upright corner stands this far off the shell, clear of the blocks either side.
 const CORNER_INK_LIFT: f32 = 0.12;
 
@@ -117,6 +128,8 @@ struct RoomVault {
     hi: [f32; 2],
     vault: Vault,
     rise: f32,
+    /// Where the vault springs from: the level's ceiling.
+    spring: f32,
 }
 
 impl RoomVault {
@@ -139,20 +152,23 @@ impl RoomVault {
                 arch(u).max(arch(v))
             }
         };
-        SPRING + self.rise * shape
+        self.spring + self.rise * shape
     }
 }
 
-/// The level's ceiling as a height over the floor plan. Corridors are flat at [`SPRING`]; a
-/// room is vaulted over its floor, and the cell of wall a doorway cuts through slopes from the
-/// room's vault to the corridor's soffit, which the doorway's masonry hides the join of.
+/// The level's ceiling as a height over the floor plan. Corridors are flat at the level's
+/// ceiling height, which every vault springs from; a room is vaulted over its floor, and the
+/// cell of wall a doorway cuts through slopes from the room's vault to the corridor's soffit,
+/// which the doorway's masonry hides the join of.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Vaults {
     rooms: Vec<RoomVault>,
+    spring: f32,
 }
 
 impl Vaults {
     pub fn new(level: &Level) -> Self {
+        let spring = level.ceiling;
         let mut rooms = Vec::new();
         for room in &level.rooms {
             let lo = [room.x as f32 * CELL, room.y as f32 * CELL];
@@ -162,18 +178,23 @@ impl Vaults {
             let (w, h) = (hi[0] - lo[0], hi[1] - lo[1]);
             rooms.push(if columned {
                 let span = w.min(h) * 0.5;
-                RoomVault { lo, hi, vault: Vault::Barrel { along_x: room.w >= room.h }, rise: (span * 0.28).clamp(8.0, MAX_RISE) }
+                RoomVault { lo, hi, vault: Vault::Barrel { along_x: room.w >= room.h }, rise: (span * 0.28).clamp(8.0, MAX_RISE), spring }
             } else {
                 let bays = [((room.w as f32 / 5.0).round() as u32).max(1), ((room.h as f32 / 5.0).round() as u32).max(1)];
                 let half = (w / bays[0] as f32).min(h / bays[1] as f32) * 0.5;
-                RoomVault { lo, hi, vault: Vault::Groin { bays }, rise: (half * 0.3).clamp(5.0, 16.0) }
+                RoomVault { lo, hi, vault: Vault::Groin { bays }, rise: (half * 0.3).clamp(5.0, 16.0), spring }
             });
         }
-        Vaults { rooms }
+        Vaults { rooms, spring }
     }
 
-    /// The ceiling's height over world `(x, z)`.
+    /// The ceiling's height over world `(x, z)`: the vault of the room the point is in, or
+    /// failing that the highest of the slopes down to the soffit from the vaults of the rooms
+    /// within a cell. A room's own height is its crown (no cells outside it), and another room's
+    /// slope has fallen to the soffit by the next cell on, so over a room this is that room's
+    /// however close its neighbour stands, and the height is continuous all the way across.
     pub fn height(&self, x: f32, z: f32) -> f32 {
+        let mut top = self.spring;
         for room in &self.rooms {
             let (cx, cz) = (x.clamp(room.lo[0], room.hi[0]), z.clamp(room.lo[1], room.hi[1]));
             let outside = (x - cx).abs().max((z - cz).abs());
@@ -181,9 +202,60 @@ impl Vaults {
                 continue;
             }
             let crown = room.crown(cx, cz);
-            return crown + (SPRING - crown) * outside / CELL;
+            top = top.max(crown + (self.spring - crown) * outside / CELL);
         }
-        SPRING
+        top
+    }
+
+    /// The soffit's height, and where every vault springs from.
+    pub fn spring(&self) -> f32 {
+        self.spring
+    }
+
+    /// The lines a vault is built along, as polylines over the floor plan: each barrel's arches
+    /// across it every couple of cells, and each groin bay's two creases and the arches
+    /// between bays.
+    pub fn ribs(&self) -> Vec<Vec<[f32; 2]>> {
+        let mut out = Vec::new();
+        // A line from `a` to `b` in steps no longer than a cell's grid step.
+        let straight = |a: [f32; 2], b: [f32; 2]| {
+            let steps = (((b[0] - a[0]).hypot(b[1] - a[1])) / (CELL / SEGMENTS as f32)).ceil().max(1.0) as usize;
+            (0..=steps).map(|i| [a[0] + (b[0] - a[0]) * i as f32 / steps as f32, a[1] + (b[1] - a[1]) * i as f32 / steps as f32]).collect::<Vec<_>>()
+        };
+        for room in &self.rooms {
+            let (lo, hi) = (room.lo, room.hi);
+            match room.vault {
+                Vault::Barrel { along_x } => {
+                    let (axis, cross) = if along_x { (0, 1) } else { (1, 0) };
+                    let arches = (((hi[axis] - lo[axis]) / (CELL * 2.0)).round() as usize).max(1);
+                    for i in 0..=arches {
+                        let t = lo[axis] + (hi[axis] - lo[axis]) * i as f32 / arches as f32;
+                        let (mut a, mut b) = ([0.0; 2], [0.0; 2]);
+                        (a[axis], b[axis], a[cross], b[cross]) = (t, t, lo[cross], hi[cross]);
+                        out.push(straight(a, b));
+                    }
+                }
+                Vault::Groin { bays } => {
+                    let (bw, bh) = ((hi[0] - lo[0]) / bays[0] as f32, (hi[1] - lo[1]) / bays[1] as f32);
+                    for j in 0..bays[1] {
+                        for i in 0..bays[0] {
+                            let (x0, z0) = (lo[0] + bw * i as f32, lo[1] + bh * j as f32);
+                            out.push(straight([x0, z0], [x0 + bw, z0 + bh]));
+                            out.push(straight([x0 + bw, z0], [x0, z0 + bh]));
+                        }
+                    }
+                    for i in 1..bays[0] {
+                        let x = lo[0] + bw * i as f32;
+                        out.push(straight([x, lo[1]], [x, hi[1]]));
+                    }
+                    for j in 1..bays[1] {
+                        let z = lo[1] + bh * j as f32;
+                        out.push(straight([lo[0], z], [hi[0], z]));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// The ceiling's downward normal at `(x, z)`.
@@ -206,27 +278,65 @@ impl Vaults {
     }
 }
 
+/// The ink along a vault's ribs and creases, for the part of them over the cells `in_range`
+/// takes: each stretch between two samples is drawn by whichever range holds its middle, so
+/// the ribs of neighbouring ranges meet and none is drawn twice.
+fn vault_ribs(vaults: &Vaults, in_range: &impl Fn(i32, i32) -> bool, ink: &mut Ink) {
+    let at = |p: [f32; 2]| [p[0], vaults.height(p[0], p[1]), p[1]];
+    for rib in vaults.ribs() {
+        let mut run: Vec<V3> = Vec::new();
+        let flush = |run: &mut Vec<V3>, ink: &mut Ink| {
+            let normals: Vec<V3> = run.iter().map(|p| vaults.normal(p[0], p[2])).collect();
+            ink.ribbon_lifted(run, &normals, RIB_INK_LIFT);
+            run.clear();
+        };
+        for pair in rib.windows(2) {
+            let middle = [(pair[0][0] + pair[1][0]) * 0.5, (pair[0][1] + pair[1][1]) * 0.5];
+            let (cx, cy) = ((middle[0] / CELL).floor() as i32, (middle[1] / CELL).floor() as i32);
+            if !in_range(cx, cy) {
+                flush(&mut run, ink);
+                continue;
+            }
+            if run.is_empty() {
+                run.push(at(pair[0]));
+            }
+            run.push(at(pair[1]));
+        }
+        flush(&mut run, ink);
+    }
+}
+
 /// World coordinate of the `i`th of a cell's [`SEGMENTS`] grid steps along an axis. Whole
 /// numbers all the way, so a wall's top and the ceiling beside it name the same point.
 fn grid(cell: i32, i: usize) -> f32 {
     cell as f32 * CELL + CELL * i as f32 / SEGMENTS as f32
 }
 
+/// The ceiling over world `(x, z)` in `level`: the vaulted stone's of a level of stone halls,
+/// the flat `level.ceiling` of any other. What hangs from the ceiling hangs from this.
+pub fn ceiling_at(level: &Level, x: f32, z: f32) -> f32 {
+    match level.style {
+        LevelStyle::StoneHalls => Vaults::new(level).height(x, z),
+        LevelStyle::RoughRock => level.ceiling,
+    }
+}
+
 /// The courses every wall in a level is laid in, `(bottom, height)` from the floor up past the
-/// highest crown: eight to the spring, so a flat wall ends on a course, then on. Shared by the
-/// doorways' masonry so it is coursed with the walls.
-fn courses(seed: u32) -> Vec<(f32, f32)> {
+/// highest crown: about eight to the `spring`, so a flat wall ends on a course, then on. Shared
+/// by the doorways' masonry so it is coursed with the walls.
+fn courses(seed: u32, spring: f32) -> Vec<(f32, f32)> {
     let mut rng = Mulberry32::new(seed ^ 0xc0a2_5e55);
-    let raw: Vec<f32> = (0..8).map(|_| 0.85 + 0.3 * rng.range_f32(0.0, 1.0)).collect();
+    let count = ((spring / 3.75).round() as usize).max(4);
+    let raw: Vec<f32> = (0..count).map(|_| 0.85 + 0.3 * rng.range_f32(0.0, 1.0)).collect();
     let total: f32 = raw.iter().sum();
     let mut out = Vec::new();
     let mut y = 0.0;
     for r in raw {
-        let h = SPRING * r / total;
+        let h = spring * r / total;
         out.push((y, h));
         y += h;
     }
-    while y < SPRING + MAX_RISE + 4.0 {
+    while y < spring + MAX_RISE + 4.0 {
         let h = 3.75 * (0.85 + 0.3 * rng.range_f32(0.0, 1.0));
         out.push((y, h));
         y += h;
@@ -281,14 +391,14 @@ fn wall_axes(facing: Facing) -> (V3, V3) {
 pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> LevelMesh {
     let level = view.level();
     let vaults = Vaults::new(level);
-    let courses = courses(level.seed);
+    let courses = courses(level.seed, level.ceiling);
     let in_range = |x: i32, y: i32| x >= x0 && x < x1 && y >= y0 && y < y1;
     // Columns stand in drawn cells: the stone is laid under and over them.
     let drawn = |x: i32, y: i32| view.cell(x, y) != Cell::Rock;
     let has_face = |x: i32, y: i32, f: Facing| drawn(x, y) && view.cell(x + f.step().0, y + f.step().1) == Cell::Rock;
 
-    let (mut floor, mut ceiling, mut walls) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
-    let mut ink = Ink::default();
+    let (mut floor, mut ceiling, mut walls, mut damp) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    let (mut ink, mut joints) = (Ink::default(), Ink::default());
     let flat = Relief::new(level);
     let up = [0.0, 1.0, 0.0];
     for y in y0..y1 {
@@ -332,17 +442,21 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
                         let i = (s / CELL).floor() as i32;
                         in_range(run.start.0 + ux * i, run.start.1 + uz * i)
                     };
-                    lay_blocks(&run, &vaults, &courses, &owns, &mut walls);
+                    lay_blocks(&run, &vaults, &courses, &owns, (&mut walls, &mut damp), &mut joints);
                 }
             }
         }
     }
+    vault_ribs(&vaults, &|x, y| in_range(x, y), &mut joints);
     let mut parts = Parts::new();
     let stone = |tint: Rgb| Look::of(MaterialKind::Stone).tinted(tint).without_outline();
     parts.add_look("floor", floor, stone(FLOOR_STONE));
     parts.add_look("walls", walls, stone(WALL_STONE));
+    parts.add_look("damp", damp, stone(DAMP_STONE));
     parts.add_look("ceiling", ceiling, stone(CEILING_STONE));
-    LevelMesh { surfaces: parts.finish(), ink: ink.into_part() }
+    let mut joints = joints.into_part();
+    joints.name = "joints";
+    LevelMesh { surfaces: parts.finish(), ink: ink.into_part(), joints }
 }
 
 /// The run of faces looking `facing` through `at`, found by walking out to both its ends.
@@ -417,14 +531,17 @@ fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [boo
 
 /// Lays the blocks of every course of `run` that this stretch owns: `owns` takes a block's
 /// middle along the wall. The joints come from the run's own seed, never the stretch's, so
-/// a block cut off by the stretch's edge is laid whole by the one that owns it.
-fn lay_blocks(run: &Run, vaults: &Vaults, courses: &[(f32, f32)], owns: &impl Fn(f32) -> bool, mesh: &mut MeshBuilder) {
+/// a block cut off by the stretch's edge is laid whole by the one that owns it. Blocks of the
+/// lowest course go to `damp`, a few with a corner chipped off; `joints` takes the fine ink
+/// along the course lines and the joints between blocks.
+fn lay_blocks(run: &Run, vaults: &Vaults, courses: &[(f32, f32)], owns: &impl Fn(f32) -> bool, (mesh, damp): (&mut MeshBuilder, &mut MeshBuilder), joints: &mut Ink) {
     let len = run.length();
     let frame = run.frame();
     let height_at = |s: f32| {
         let p = run.point(s);
         vaults.height(p[0], p[2])
     };
+    let line = |a: f32, b: f32, y: f32| [vec3::add(run.point(a), [0.0, y, 0.0]), vec3::add(run.point(b), [0.0, y, 0.0])];
     let tallest = (0..=(len / 2.0) as usize).map(|i| height_at(i as f32 * 2.0)).fold(0.0f32, f32::max);
     for (k, &(y0, h)) in courses.iter().enumerate() {
         if y0 + 1.4 >= tallest {
@@ -453,7 +570,32 @@ fn lay_blocks(run: &Run, vaults: &Vaults, courses: &[(f32, f32)], owns: &impl Fn
             if hi - lo < 2.0 || top - bottom < 1.4 {
                 continue;
             }
-            slab(mesh, &frame, [lo, hi], [bottom, top], proud, CHAMFER, true);
+            // The ink in the joint below this block (the base of the wall for the lowest), and the
+            // upright one before it.
+            if k == 0 {
+                joints.ribbon_lifted(&line(lo, hi, BASE_INK.0), &[run.n; 2], BASE_INK.1);
+            } else {
+                joints.ribbon_lifted(&line(lo, hi, y0), &[run.n; 2], JOINT_INK_LIFT);
+            }
+            if a > 1e-3 {
+                let at = |y: f32| vec3::add(run.point(a), [0.0, y, 0.0]);
+                joints.ribbon_lifted(&[at(bottom), at(top)], &[run.n; 2], JOINT_INK_LIFT);
+            }
+            if k > 0 {
+                slab(mesh, &frame, [lo, hi], [bottom, top], proud, CHAMFER, true);
+                continue;
+            }
+            // Damp darkens the lowest course, and now and then the knocks of a floor's traffic
+            // have taken a corner off a block.
+            let mut luck = Mulberry32::new(run.key ^ (a * 64.0) as u32 ^ 0x0da4_9b10);
+            let (chipped, size, left) = (luck.range_f32(0.0, 1.0) < CHIP_CHANCE, luck.range_f32(CHIP.0, CHIP.1), luck.range_f32(0.0, 1.0) < 0.5);
+            if chipped && hi - lo > size * 2.5 && top - bottom > size * 2.0 {
+                slab(damp, &frame, [lo, hi], [bottom + size, top], proud, CHAMFER, true);
+                let strip = if left { [lo + size, hi] } else { [lo, hi - size] };
+                slab(damp, &frame, strip, [bottom, bottom + size], proud - 0.2, CHAMFER, true);
+            } else {
+                slab(damp, &frame, [lo, hi], [bottom, top], proud, CHAMFER, true);
+            }
         }
     }
 }
@@ -513,8 +655,8 @@ fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
 pub fn door_frame(level: &Level, (x, y): (i32, i32), seed: u32) -> ItemMesh {
     let vaults = Vaults::new(level);
     let top = vaults.highest_over(x, y) + 1.5;
-    let courses: Vec<(f32, f32)> = courses(level.seed).into_iter().filter(|&(bottom, _)| bottom < top).collect();
-    door_frame_in(&courses, top, CELL * 0.5 + 1.0, seed)
+    let courses: Vec<(f32, f32)> = courses(level.seed, level.ceiling).into_iter().filter(|&(bottom, _)| bottom < top).collect();
+    door_frame_in(&courses, top, CELL * 0.5 + 1.0, (JOINT, CHAMFER), seed)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -739,8 +881,9 @@ mod tests {
         let view = CellView::new(&level);
         let a = level_mesh(&view, view.bounds());
         assert_eq!(a, level_mesh(&view, view.bounds()));
-        assert_eq!(a.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(), ["floor", "walls", "ceiling"]);
-        for p in a.surfaces.parts.iter().chain([&a.ink]) {
+        assert_eq!(a.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(), ["floor", "walls", "damp", "ceiling"]);
+        assert!(!a.joints.indices.is_empty());
+        for p in a.surfaces.parts.iter().chain([&a.ink, &a.joints]) {
             p.validate().unwrap();
             assert!(p.normals.iter().all(|n| (vec3::length(*n) - 1.0).abs() < 1e-3), "{}: normals are unit", p.name);
         }
@@ -844,16 +987,26 @@ mod tests {
             let level = halls(seed);
             let view = CellView::new(&level);
             let whole = level_mesh(&view, view.bounds());
-            let mut all: Vec<[i64; 3]> = part(&whole, "walls").positions.iter().map(key).collect();
+            let mut all: Vec<[i64; 3]> = part(&whole, "walls").positions.iter().chain(&part(&whole, "damp").positions).map(key).collect();
             let mut pieces: Vec<[i64; 3]> = Vec::new();
+            let mut fine: Vec<[i64; 3]> = Vec::new();
             for range in super::super::chunks(&view, 5) {
                 let piece = level_mesh(&view, range);
-                pieces.extend(piece.surfaces.parts.iter().filter(|p| p.name == "walls").flat_map(|p| p.positions.iter().map(key)));
+                pieces.extend(piece.surfaces.parts.iter().filter(|p| p.name == "walls" || p.name == "damp").flat_map(|p| p.positions.iter().map(key)));
+                fine.extend(piece.joints.positions.iter().map(key));
             }
             all.sort_unstable();
             pieces.sort_unstable();
             assert_eq!(all.len(), pieces.len(), "seed {seed}");
             assert_eq!(all, pieces, "seed {seed}");
+            // A rib cut by a chunk's edge ends there and the next chunk's begins, so the joints'
+            // points are the same set, with the ends of cut ribs drawn twice.
+            let mut whole_fine: Vec<[i64; 3]> = whole.joints.positions.iter().map(key).collect();
+            whole_fine.sort_unstable();
+            whole_fine.dedup();
+            fine.sort_unstable();
+            fine.dedup();
+            assert_eq!(whole_fine, fine, "seed {seed}: joints");
         }
     }
 
@@ -944,29 +1097,74 @@ mod tests {
 
     #[test]
     fn the_vault_is_continuous_and_springs_from_the_corridors() {
-        for seed in [1207, 7, 99] {
+        // Finely stepped over many levels along both axes, so a seam between two rooms a single
+        // cell of rock apart would show as a jump.
+        for seed in 0..8 {
             let level = halls(seed);
             let vaults = Vaults::new(&level);
-            for z in (0..level.height * 20).step_by(7) {
-                for x in (0..level.width * 20).step_by(5) {
-                    let (px, pz) = (x as f32 + 0.37, z as f32 + 0.11);
-                    let (a, b) = (vaults.height(px, pz), vaults.height(px + 0.1, pz));
+            let spring = level.ceiling;
+            assert_eq!(vaults.spring(), spring);
+            for z in (0..level.height * 80).step_by(5) {
+                for x in (0..level.width * 80).step_by(7) {
+                    let (px, pz) = (x as f32 * 0.25 + 0.037, z as f32 * 0.25 + 0.011);
+                    let (a, b, c) = (vaults.height(px, pz), vaults.height(px + 0.1, pz), vaults.height(px, pz + 0.1));
                     assert!((a - b).abs() < 0.2, "seed {seed}: ceiling jumps {a} to {b} at ({px}, {pz})");
-                    assert!((SPRING - 1e-3..=SPRING + MAX_RISE + 1e-3).contains(&a), "{a}");
+                    assert!((a - c).abs() < 0.2, "seed {seed}: ceiling jumps {a} to {c} at ({px}, {pz})");
+                    assert!((spring - 1e-3..=spring + MAX_RISE + 1e-3).contains(&a), "{a}");
                 }
             }
         }
     }
 
     #[test]
+    fn a_room_keeps_its_own_vault_beside_a_neighbour() {
+        // A second room a single cell of rock from the first leaves the ceiling over the first as
+        // it was alone, right up to the edge, and the ceiling continuous across the rock between.
+        let mut level = halls(1207);
+        level.rooms.truncate(1);
+        let alone = Vaults::new(&level);
+        let a = level.rooms[0];
+        let mut b = a;
+        b.x = a.x + a.w + 1;
+        level.rooms.push(b);
+        let both = Vaults::new(&level);
+        for step in 0..=40 {
+            let z = (a.y as f32 + a.h as f32 * step as f32 / 40.0) * CELL;
+            for back in [0.0, 0.5, 1.0, 3.0] {
+                let x = (a.x + a.w) as f32 * CELL - back;
+                assert!((both.height(x, z) - alone.height(x, z)).abs() < 1e-4, "room a's own ceiling at ({x}, {z})");
+            }
+            let edge = (a.x + a.w) as f32 * CELL;
+            for k in 0..40 {
+                let x = edge + CELL * 2.0 * k as f32 / 40.0;
+                assert!((both.height(x, z) - both.height(x + 0.05, z)).abs() < 0.2, "a jump between the rooms at ({x}, {z})");
+            }
+        }
+    }
+
+    #[test]
     fn the_courses_end_on_the_spring_and_reach_the_crowns() {
-        let courses = courses(1207);
-        let (bottom, height) = courses[7];
-        assert!((bottom + height - SPRING).abs() < 1e-3);
-        let (bottom, height) = *courses.last().unwrap();
-        assert!(bottom + height >= SPRING + MAX_RISE);
-        assert!(courses.iter().all(|&(_, h)| h > 3.0 && h < 4.8));
-        assert!(courses.windows(2).all(|w| (w[0].0 + w[0].1 - w[1].0).abs() < 1e-4));
+        for spring in [30.0, 40.0] {
+            let courses = courses(1207, spring);
+            let to_spring = (spring / 3.75).round() as usize;
+            let (bottom, height) = courses[to_spring - 1];
+            assert!((bottom + height - spring).abs() < 1e-3);
+            let (bottom, height) = *courses.last().unwrap();
+            assert!(bottom + height >= spring + MAX_RISE);
+            assert!(courses.iter().all(|&(_, h)| h > 3.0 && h < 5.2));
+            assert!(courses.windows(2).all(|w| (w[0].0 + w[0].1 - w[1].0).abs() < 1e-4));
+        }
+    }
+
+    #[test]
+    fn the_ceiling_is_the_vault_in_halls_and_flat_in_rock() {
+        let level = halls(1207);
+        let vaults = Vaults::new(&level);
+        for (x, z) in [(10.0, 10.0), (200.0, 150.0), (400.0, 300.0)] {
+            assert_eq!(ceiling_at(&level, x, z), vaults.height(x, z));
+        }
+        let rock = fb_level::generate(1207, 1);
+        assert_eq!(ceiling_at(&rock, 200.0, 150.0), rock.ceiling);
     }
 
     #[test]

@@ -318,11 +318,13 @@ impl Ink {
 }
 
 /// One stretch of the level's stone: floor, walls and ceiling as [`Part`]s (stone, drawn
-/// without hulls) and the ink along their edges.
+/// without hulls) and the ink along their edges. Dressed stone also has `joints`, a finer ink
+/// along its courses, joints and vault ribs; rough rock has none.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LevelMesh {
     pub surfaces: ItemMesh,
     pub ink: Part,
+    pub joints: Part,
 }
 
 /// The stone of every drawn cell in `x0..x1`, `y0..y1`, in world space. Walls stand on each
@@ -404,7 +406,7 @@ pub fn level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Le
     parts.add_look("floor", floor, stone(FLOOR_STONE));
     parts.add_look("walls", walls, stone(WALL_STONE));
     parts.add_look("ceiling", ceiling, stone(CEILING_STONE));
-    LevelMesh { surfaces: parts.finish(), ink: ink.into_part() }
+    LevelMesh { surfaces: parts.finish(), ink: ink.into_part(), joints: Part::default() }
 }
 
 /// The cell ranges to draw the level in, `size` cells square, covering the whole view.
@@ -481,18 +483,19 @@ pub fn door_frame(ceiling: f32, seed: u32) -> ItemMesh {
         courses.push((y, course.min(top - y)));
         y += course;
     }
-    door_frame_in(&courses, top, CELL * 0.5 + WALL_RELIEF, seed)
+    door_frame_in(&courses, top, CELL * 0.5 + WALL_RELIEF, (0.18, 0.35), seed)
 }
 
 /// A doorway's frame and masonry with the infill laid in `courses` (each a bottom and a
-/// height, from the floor up to `top`), its blocks reaching `reach` either side of the centre.
-fn door_frame_in(courses: &[(f32, f32)], top: f32, reach: f32, seed: u32) -> ItemMesh {
+/// height, from the floor up to `top`), its blocks reaching `reach` either side of the centre,
+/// with `joint` between them and a `chamfer` on their edges.
+fn door_frame_in(courses: &[(f32, f32)], top: f32, reach: f32, (joint, chamfer): (f32, f32), seed: u32) -> ItemMesh {
     let mut rng = Mulberry32::new(seed ^ 0xd00f_4a3e);
     let half_open = DOOR_WIDTH * 0.5;
     let lintel_top = DOOR_HEIGHT + FRAME_BEAM;
 
     let mut masonry = MeshBuilder::new();
-    let gap = 0.18;
+    let gap = joint;
     // The frame's outer edge across the opening: blocks beside it stop here, and blocks over
     // it sit on the lintel.
     let clear = half_open + FRAME_BEAM;
@@ -501,7 +504,7 @@ fn door_frame_in(courses: &[(f32, f32)], top: f32, reach: f32, seed: u32) -> Ite
             return;
         }
         let depth = INFILL_DEPTH + (rng.range_f32(0.0, 1.0) - 0.5) * 0.4;
-        let mut stone = plank(hi - lo - gap, top - bottom, depth, 0.35);
+        let mut stone = plank(hi - lo - gap, top - bottom, depth, chamfer);
         stone.translate([(lo + hi) * 0.5, (bottom + top) * 0.5, (rng.range_f32(0.0, 1.0) - 0.5) * 0.25]);
         masonry.append(&stone);
     };
@@ -696,7 +699,8 @@ pub fn brazier(seed: u32) -> (ItemMesh, f32) {
 mod tests {
     use super::*;
 
-    const ROUGH_ROCK_HASHES: [(u64, u64); 2] = [(16314085765721590626, 10396788927676635465), (12820801449123820926, 9434967241214962033)];
+    /// Per seed: the hash of the level's stone and ink, and of its door frame.
+    const ROUGH_ROCK_HASHES: [(u32, (u64, u64)); 2] = [(1207, (16314085765721590626, 10396788927676635465)), (2, (12820801449123820926, 9434967241214962033))];
 
     fn level() -> Level {
         fb_level::generate(1207, 1)
@@ -918,16 +922,15 @@ mod tests {
 
     #[test]
     fn rough_rock_geometry_is_unchanged() {
-        let mut seen = Vec::new();
-        for seed in [1207, 2] {
+        for (seed, expected) in ROUGH_ROCK_HASHES {
             // Without the stairs, which came later and leave their cells unfloored.
             let level = Level { stairs: Vec::new(), ..fb_level::generate(seed, 1) };
             let view = CellView::new(&level);
             let mesh = level_mesh(&view, view.bounds());
             let frame = door_frame(level.ceiling, level.seed);
-            seen.push((hash_parts(mesh.surfaces.parts.iter().chain([&mesh.ink])), hash_parts(&frame.parts)));
+            let seen = (hash_parts(mesh.surfaces.parts.iter().chain([&mesh.ink])), hash_parts(&frame.parts));
+            assert_eq!(seen, expected, "rough rock changed for seed {seed}");
         }
-        assert_eq!(seen, ROUGH_ROCK_HASHES);
     }
 
     #[test]

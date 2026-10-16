@@ -106,8 +106,12 @@ impl FixedLight {
 /// in world space rather than an item's few centimetres.
 pub const STONE_WEAR: f32 = 0.5;
 const STONE_PATTERN_SCALE: f32 = 0.06;
+/// How much finer the decay pattern runs over a stone hall's ceiling than over its walls.
+const CEILING_PATTERN_FINER: f32 = 2.6;
 /// The rock's ink: near black, a shade under the fog.
 pub const STONE_INK: Color = Color::srgb(0.008, 0.009, 0.011);
+/// The finer ink along dressed stone's courses and joints: the same dark, a little softer.
+const STONE_JOINT_INK: Color = Color::srgb(0.02, 0.022, 0.026);
 
 fn abyss_ambient(tuning: &LightTuning) -> GlobalAmbientLight {
     GlobalAmbientLight { color: AMBIENT_COLOR, brightness: tuning.ambient_lux, ..default() }
@@ -291,10 +295,11 @@ fn spawn_stone(
     let stone = stone_appearance(level.seed);
 
     // The rock: one entity per surface per chunk, each surface kind sharing one material.
+    let fine_ink = outline_materials.add(OutlineMaterial { color: STONE_JOINT_INK.into(), width_px: 1.0, ..stone.outline });
     let ink = outline_materials.add(stone.outline);
     let mut materials: Vec<(&'static str, Handle<ToonMaterial>)> = Vec::new();
     for range in geometry::chunks(&view, CHUNK_CELLS) {
-        let LevelMesh { surfaces, ink: lines } = geometry::level_mesh(&view, range);
+        let LevelMesh { surfaces, ink: lines, joints } = geometry::level_mesh(&view, range);
         for part in &surfaces.parts {
             let material = match materials.iter().find(|(name, _)| *name == part.name) {
                 Some((_, handle)) => handle.clone(),
@@ -302,6 +307,11 @@ fn spawn_stone(
                     let mut material = stone.material_for(part);
                     // Rock is never a fine part to fatten.
                     material.extension.min_width = MinWidth::default();
+                    // A vault's ceiling is mottled finer than the walls are: the blotches over a
+                    // soffit this size would otherwise read as flat patches.
+                    if part.name == "ceiling" && level.style == LevelStyle::StoneHalls {
+                        material.extension.decay.scale *= CEILING_PATTERN_FINER;
+                    }
                     let handle = toon_materials.add(material);
                     materials.push((part.name, handle.clone()));
                     handle
@@ -311,6 +321,9 @@ fn spawn_stone(
         }
         if !lines.indices.is_empty() {
             commands.spawn((StonePiece, Name::new("ink"), Mesh3d(meshes.add(part_to_mesh(&lines))), MeshMaterial3d(ink.clone())));
+        }
+        if !joints.indices.is_empty() {
+            commands.spawn((StonePiece, Name::new("joints"), Mesh3d(meshes.add(part_to_mesh(&joints))), MeshMaterial3d(fine_ink.clone())));
         }
     }
 
@@ -334,15 +347,23 @@ fn spawn_columns(
     let stone = stone_appearance(level.seed);
     let ink = outline_materials.add(stone.outline);
     let mut shapes: std::collections::HashMap<(i32, i32, u32), Vec<(&'static str, Handle<Mesh>, Handle<ToonMaterial>, bool)>> = Default::default();
+    // One material for every shape's part of a name: they differ only in their meshes.
+    let mut materials: std::collections::HashMap<&'static str, Handle<ToonMaterial>> = Default::default();
     for spot in spots {
         let parts = shapes.entry((spot.seat as i32, spot.top as i32, spot.variant)).or_insert_with(|| {
             geometry::stone::column(spot.seat, spot.top, spot.variant, level.seed)
                 .parts
                 .iter()
                 .map(|part| {
-                    let mut material = stone.material_for(part);
-                    material.extension.min_width = MinWidth::default();
-                    (part.name, meshes.add(part_to_mesh(part)), toon_materials.add(material), part.outline)
+                    let material = materials
+                        .entry(part.name)
+                        .or_insert_with(|| {
+                            let mut material = stone.material_for(part);
+                            material.extension.min_width = MinWidth::default();
+                            toon_materials.add(material)
+                        })
+                        .clone();
+                    (part.name, meshes.add(part_to_mesh(part)), material, part.outline)
                 })
                 .collect()
         });

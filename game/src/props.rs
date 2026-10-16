@@ -85,15 +85,16 @@ pub struct Container {
 const SINK: f32 = 0.05;
 
 /// The prop's mesh and look. A container is shut until `opened`.
-pub fn prop_mesh(prop: Prop, level: &Level, opened: bool) -> (armory::ItemMesh, crate::render::ItemAppearance) {
-    match prop {
+pub fn prop_mesh(spot: &PropSpot, level: &Level, opened: bool) -> (armory::ItemMesh, crate::render::ItemAppearance) {
+    match spot.prop {
         Prop::Container { style, seed, .. } => {
             let item = Item::Chests(chest_state(style, seed, opened));
             (item.build(), appearance_of(&item))
         }
         Prop::Scenery { kind, seed } => {
             let state = if kind == Scenery::Bones { ConditionState::Neglected } else { ConditionState::BattleWorn };
-            (kind.build(seed, level.ceiling), fixture_appearance(seed, state))
+            let [x, _, z] = Level::world(spot.x, spot.y);
+            (kind.build(seed, crate::level::geometry::stone::ceiling_at(level, x, z)), fixture_appearance(seed, state))
         }
     }
 }
@@ -131,7 +132,7 @@ pub fn prop_transform(level: &Level, spot: &PropSpot, low: f32, scale: f32) -> T
 /// and returns its commands to insert on. `None` for a prop with no vertices.
 pub fn spawn_prop<'a>(spawner: &'a mut ItemSpawner, level: &Level, index: usize, opened: bool, tuning: &Tuning) -> Option<EntityCommands<'a>> {
     let spot = *level.props.get(index)?;
-    let (mesh, appearance) = prop_mesh(spot.prop, level, opened);
+    let (mesh, appearance) = prop_mesh(&spot, level, opened);
     let points = item_points(&mesh);
     let (min, max) = points.iter().fold(None, |acc: Option<(Vec3, Vec3)>, &p| Some(acc.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p)))))?;
     let scale = prop_scale(spot.prop, tuning);
@@ -361,7 +362,7 @@ mod tests {
         let (opened_entity, opened) = chest(&mut app);
         assert_eq!(opened, Container { id: container.id, opened: true });
         let piece = *app.world().get::<PropPiece>(opened_entity).unwrap();
-        let shut = prop_mesh(piece.spot.prop, &app.world().resource::<CurrentLevel>().0, false).0.bounds().unwrap();
+        let shut = prop_mesh(&piece.spot, &app.world().resource::<CurrentLevel>().0, false).0.bounds().unwrap();
         assert!(piece.max.y > shut.1[1] + 1.0, "the lid stands raised: {} over {}", piece.max.y, shut.1[1]);
 
         // Dragging the first thing out onto the pack's grid puts it in the pack, and changes
@@ -496,7 +497,7 @@ mod tests {
         let tuning = Tuning::default();
         for spot in level.props.iter().filter(|s| s.prop.is_container()) {
             let scale = prop_scale(spot.prop, &tuning);
-            let (mesh, _) = prop_mesh(spot.prop, &level, true);
+            let (mesh, _) = prop_mesh(spot, &level, true);
             let (lo, hi) = mesh.bounds().unwrap();
             let (lo, hi) = (Vec3::from_array(lo) * scale, Vec3::from_array(hi) * scale);
             if let Prop::Container { style: armory::families::chests::ChestStyle::Chest, .. } = spot.prop {
@@ -535,7 +536,7 @@ mod tests {
         let level = fb_level::generate(1207, 1);
         let relief = Relief::new(&level);
         for (index, spot) in level.props.iter().enumerate() {
-            let (mesh, _) = prop_mesh(spot.prop, &level, false);
+            let (mesh, _) = prop_mesh(spot, &level, false);
             let points = item_points(&mesh);
             let low = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
             let transform = prop_transform(&level, spot, low, prop_scale(spot.prop, &Tuning::default()));
