@@ -312,7 +312,7 @@ impl Plugin for PlayPlugin {
             crate::map::MapPlugin,
         ))
         // Over the plugin tuple's limit.
-        .add_plugins((crate::quickslots::QuickslotPlugin, crate::travel::TravelPlugin));
+        .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin));
     }
 }
 

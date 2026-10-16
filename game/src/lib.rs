@@ -43,6 +43,7 @@ pub mod render;
 pub mod settings;
 pub mod simulate;
 pub mod soak;
+pub mod status;
 pub mod swing_practice;
 pub mod title;
 pub mod travel;

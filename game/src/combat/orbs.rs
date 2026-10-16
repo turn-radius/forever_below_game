@@ -90,6 +90,8 @@ pub const SMALL_SHARE: f32 = 0.38;
 pub const EYE_ASPECT: f32 = 0.65;
 /// How tall a quickslot is, as a share of the life orb's diameter.
 pub const SLOT_SHARE: f32 = 0.38;
+/// A status badge's diameter, as a share of the life orb's diameter. Our own.
+pub const BADGE_SHARE: f32 = 0.22;
 
 /// An orb: its centre and radius, in `vmin`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -125,6 +127,10 @@ pub struct ClusterLayout {
     /// A quickslot's side, and the gap between them.
     pub slot: f32,
     pub gap: f32,
+    /// The row of status badges, just above the left end of the bar (`crate::status`).
+    pub status: Rect,
+    /// A status badge's diameter.
+    pub badge: f32,
 }
 
 /// The cluster for a life orb `d` across, as the sketch has it: the life orb large at the
@@ -132,7 +138,8 @@ pub struct ClusterLayout {
 /// right; the visibility eye with its centre on the rim straight right; the mana orb with its
 /// centre on the rim at 45 degrees down and to the right, each about [`SMALL_SHARE`] of `d`
 /// across, so they overlap the life orb's frame; and the quickslot bar starting just right of the
-/// eye, level with it, [`SLOT_SHARE`] of `d` tall. Everything scales with
+/// eye, level with it, [`SLOT_SHARE`] of `d` tall; and the row of status badges, [`BADGE_SHARE`]
+/// of `d` across, sitting just above the bar from its left end. Everything scales with
 /// `d`, so it stays a cluster at any window size.
 pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
     let r = d * 0.5;
@@ -152,9 +159,11 @@ pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
     let bar_left = eye.max.x + d * 0.04;
     let slots = crate::quickslots::SLOTS as f32;
     let bar = Rect::new(bar_left, eye_centre.y - slot * 0.5, bar_left + slots * slot + (slots - 1.0) * gap, eye_centre.y + slot * 0.5);
+    let badge = d * BADGE_SHARE;
+    let status = Rect::new(bar.min.x, bar.min.y - gap - badge, bar.max.x, bar.min.y - gap);
     // The small orbs poke a little out of the life orb's box, above and below: the cluster is
     // the box round all of it.
-    let top = stamina.square().min.y.min(eye.min.y).min(bar.min.y).min(0.0);
+    let top = stamina.square().min.y.min(eye.min.y).min(status.min.y).min(0.0);
     let bottom = mana.square().max.y.max(bar.max.y).max(d);
     let by = Vec2::new(0.0, -top);
     let shift = |rect: Rect| Rect { min: rect.min + by, max: rect.max + by };
@@ -168,6 +177,8 @@ pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
         bar: shift(bar),
         slot,
         gap,
+        status: shift(status),
+        badge,
     }
 }
 
@@ -595,17 +606,21 @@ mod tests {
         // Nothing the cluster holds overlaps anything but the life orb.
         let stamina = layout.stamina.square();
         let mana = layout.mana.square();
-        for (name, other) in [("eye", layout.eye), ("bar", layout.bar)] {
+        for (name, other) in [("eye", layout.eye), ("bar", layout.bar), ("status row", layout.status)] {
             assert!(stamina.intersect(other).is_empty() && mana.intersect(other).is_empty(), "{name} clear of the small orbs");
         }
         assert!(stamina.intersect(mana).is_empty());
         assert!(layout.eye.intersect(layout.bar).is_empty());
+        // The status row sits just above the bar from its left end, a badge tall.
+        assert_eq!(layout.status.min.x, layout.bar.min.x);
+        assert!(layout.status.max.y < layout.bar.min.y && layout.bar.min.y - layout.status.max.y < 0.1 * d, "just above the bar");
+        assert!((layout.status.height() - layout.badge).abs() < 1e-4);
     }
 
     #[test]
     fn the_cluster_bounds_everything_and_scales_with_the_life_orb() {
         let layout = orb_cluster_layout(14.0);
-        let everything = [layout.life.square(), layout.stamina.square(), layout.mana.square(), layout.eye, layout.bar];
+        let everything = [layout.life.square(), layout.stamina.square(), layout.mana.square(), layout.eye, layout.bar, layout.status];
         for rect in everything {
             assert!(rect.min.x >= -1e-4 && rect.min.y >= -1e-4 && rect.max.x <= layout.size.x + 1e-4 && rect.max.y <= layout.size.y + 1e-4, "{rect:?} in {:?}", layout.size);
         }
