@@ -83,6 +83,7 @@ mod tests {
     fn app_in(state: AppState) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::ZERO))
             .insert_state(state)
             .init_resource::<Tuning>()
             .init_resource::<ScreenOpen>()

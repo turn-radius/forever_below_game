@@ -170,11 +170,16 @@ pub struct Worn {
     pub hunger_rate: f64,
     /// Multiple of the normal sleepiness rate.
     pub sleepiness_rate: f64,
+    /// Points of Stealth: each makes the wearer a twentieth less visible ([`visibility`]).
+    pub stealth: f64,
+    /// Warmth the wearer is given.
+    #[serde(default)]
+    pub warmth: f64,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0 }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0 }
     }
 }
 
@@ -199,6 +204,8 @@ pub struct Gear {
     pub hunger_rate: f64,
     /// Multiple of the sleepiness rate: the items' rates multiplied.
     pub sleepiness_rate: f64,
+    /// Points of Stealth: the worn items' added.
+    pub stealth: f64,
     /// Feet the carried light reaches; 0 with none.
     pub light: f64,
     /// How long the carried light burns, as a multiple of its base's.
@@ -216,12 +223,13 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, light: 0.0, burn_time: 1.0 };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0 };
         for item in worn {
             gear.carry += item.carry;
             gear.darkvision = gear.darkvision.max(item.darkvision);
             gear.hunger_rate *= item.hunger_rate;
             gear.sleepiness_rate *= item.sleepiness_rate;
+            gear.stealth += item.stealth;
         }
         for light in lights {
             if light.reach > gear.light {
@@ -598,6 +606,215 @@ impl ExhaustionTimes {
             self.slept_recovered = false;
         }
     }
+}
+
+/// Seconds a full pool lasts sprinting while Light.
+const SPRINT_SECONDS: f64 = 30.0;
+/// Seconds to refill from empty standing still.
+const STAND_REFILL_SECONDS: f64 = 8.0;
+/// Seconds to refill from empty while walking.
+const WALK_REFILL_SECONDS: f64 = 12.0;
+/// Sleeping refills this many times as fast as standing.
+const SLEEP_REFILL_FACTOR: f64 = 2.0;
+/// A winded delver may sprint and swing again from this much stamina.
+pub const SECOND_WIND: f64 = 0.2;
+/// What one swing costs, of a full pool.
+pub const SWING_COST: f64 = 0.08;
+
+/// The short-term pool that sprinting and swinging drain, from 1 (full) to 0 (empty), stepping
+/// in real seconds. It drains faster the heavier the load and refills in seconds when the
+/// delver walks or stands. Emptied, the delver is winded and cannot sprint or swing hard until
+/// the pool is back to [`SECOND_WIND`].
+///
+/// Every step is closed form for a constant activity, so any step length gives the same result.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Stamina {
+    /// From 0 (empty) to 1 (full).
+    pub value: f64,
+    /// Emptied and not yet back to [`SECOND_WIND`].
+    pub winded: bool,
+}
+
+impl Default for Stamina {
+    fn default() -> Self {
+        Stamina { value: 1.0, winded: false }
+    }
+}
+
+impl Stamina {
+    /// The change per real second at `activity` under `load`: negative drains. Only Exerting
+    /// drains, by a full pool in [`SPRINT_SECONDS`] while Light, 1.5 times as fast Burdened and
+    /// twice as fast Encumbered or Overloaded. Sleeping refills twice as fast as standing.
+    pub fn rate_per_second(activity: Activity, load: LoadBand) -> f64 {
+        match activity {
+            Activity::Exerting => {
+                let heavier = match load {
+                    LoadBand::Light => 1.0,
+                    LoadBand::Burdened => 1.5,
+                    LoadBand::Encumbered | LoadBand::Overloaded => 2.0,
+                };
+                -heavier / SPRINT_SECONDS
+            }
+            Activity::Walking => 1.0 / WALK_REFILL_SECONDS,
+            Activity::Resting => 1.0 / STAND_REFILL_SECONDS,
+            Activity::Sleeping => SLEEP_REFILL_FACTOR / STAND_REFILL_SECONDS,
+        }
+    }
+
+    /// Whether the delver may sprint or swing hard: not winded.
+    pub fn can_exert(&self) -> bool {
+        !self.winded
+    }
+
+    /// Advances by `seconds` of real time at `activity` under `load`.
+    pub fn step(&mut self, seconds: f64, activity: Activity, load: LoadBand) {
+        self.value = (self.value + Stamina::rate_per_second(activity, load) * seconds).clamp(0.0, 1.0);
+        self.settle();
+    }
+
+    /// Takes `cost` off the pool, never below empty.
+    pub fn spend(&mut self, cost: f64) {
+        self.value = (self.value - cost).max(0.0);
+        self.settle();
+    }
+
+    /// Winds the delver at empty and lets them recover at [`SECOND_WIND`].
+    fn settle(&mut self) {
+        // A drain that lands on empty can leave float dust.
+        if self.value <= 1e-9 {
+            self.value = 0.0;
+            self.winded = true;
+        } else if self.winded && self.value >= SECOND_WIND {
+            self.winded = false;
+        }
+    }
+}
+
+/// How a character casts: the pool a spell caster draws on and how big it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Casting {
+    /// Fighters and Rangers: a small flat pool.
+    #[default]
+    Martial,
+    /// Mages: the pool follows INT.
+    Arcane,
+    /// Clerics: the pool follows WIS.
+    Divine,
+}
+
+/// A small pool every character has, in mana points.
+const MARTIAL_POOL: f64 = 4.0;
+/// The pool of a caster with an ability modifier of 0, in mana points.
+const CASTER_BASE: f64 = 10.0;
+/// What each point of the ability modifier adds to a caster's pool.
+const CASTER_PER_MODIFIER: f64 = 5.0;
+/// A caster's pool is never smaller than this.
+const CASTER_FLOOR: f64 = 4.0;
+/// Of a full pool, what a Resting delver regains each game hour: empty to full in 8 hours.
+const MANA_REST_PER_HOUR: f64 = 1.0 / 8.0;
+/// Of a full pool, what a walking delver regains each game hour.
+const MANA_WALK_PER_HOUR: f64 = 1.0 / 32.0;
+/// Of a full pool, what a sleeping delver regains each game hour.
+const MANA_SLEEP_PER_HOUR: f64 = 3.0 / 8.0;
+
+/// The pool spells will draw on, in points. Its size comes from INT for [`Casting::Arcane`]
+/// or WIS for [`Casting::Divine`], through the SRD modifier ([`modifier`]), and it refills
+/// slowly with rest and faster asleep. Nothing spends it yet. Steps in game hours, closed form
+/// for a constant activity, so any step length gives the same result.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Mana {
+    /// Points in the pool now, from 0 to `max`.
+    pub points: f64,
+    /// The most the pool holds.
+    pub max: f64,
+}
+
+impl Default for Mana {
+    fn default() -> Self {
+        Mana::full(MARTIAL_POOL)
+    }
+}
+
+impl Mana {
+    /// A full pool of `max` points.
+    pub fn full(max: f64) -> Mana {
+        Mana { points: max, max }
+    }
+
+    /// The pool size for a character who casts as `casting`, from their ability scores:
+    /// 10 points plus 5 for each point of the modifier of INT (arcane) or WIS (divine), and
+    /// never fewer than 4. A martial character has 4.
+    pub fn max_for(casting: Casting, attributes: &Attributes) -> f64 {
+        let score = match casting {
+            Casting::Martial => return MARTIAL_POOL,
+            Casting::Arcane => attributes.intelligence,
+            Casting::Divine => attributes.wisdom,
+        };
+        (CASTER_BASE + CASTER_PER_MODIFIER * modifier(score) as f64).max(CASTER_FLOOR)
+    }
+
+    /// How full the pool is, from 0 to 1.
+    pub fn fraction(&self) -> f64 {
+        if self.max <= 0.0 { 0.0 } else { (self.points / self.max).clamp(0.0, 1.0) }
+    }
+
+    /// Makes the pool `max` points, keeping how full it is.
+    pub fn resize(&mut self, max: f64) {
+        let fraction = self.fraction();
+        self.max = max;
+        self.points = max * fraction;
+    }
+
+    /// The share of a full pool regained each game hour at `activity`: none while exerting.
+    pub fn refill_per_hour(activity: Activity) -> f64 {
+        match activity {
+            Activity::Exerting => 0.0,
+            Activity::Walking => MANA_WALK_PER_HOUR,
+            Activity::Resting => MANA_REST_PER_HOUR,
+            Activity::Sleeping => MANA_SLEEP_PER_HOUR,
+        }
+    }
+
+    /// Advances by `hours` of game time at `activity`.
+    pub fn step(&mut self, hours: f64, activity: Activity) {
+        self.points = (self.points + self.max * Mana::refill_per_hour(activity) * hours).clamp(0.0, self.max);
+    }
+
+    /// Spends `cost` points if the pool holds them; returns whether it did.
+    pub fn spend(&mut self, cost: f64) -> bool {
+        if cost > self.points {
+            return false;
+        }
+        self.points -= cost;
+        true
+    }
+}
+
+/// How visible a delver is in the dark: the eye is nearly closed.
+const SEEN_IN_DARK: f64 = 0.05;
+/// What full light on the delver adds to their visibility.
+const SEEN_IN_LIGHT: f64 = 0.8;
+/// What sprinting adds (at a [`SPRINT_PACE`]).
+const SEEN_MOVING: f64 = 0.15;
+/// The pace, as a multiple of walking pace, the game caps a delver's gait at.
+const SPRINT_PACE: f64 = 1.5;
+/// What each point of Stealth takes off.
+const STEALTH_STEP: f64 = 0.05;
+
+/// How easy the delver is to see, from 0 (not at all) to 1 (plain as day): a pure function of
+/// the `light` falling on them (0 dark to 1 fully lit), their `pace` (a multiple of walking
+/// pace, 0 still), the `load` they carry and their `stealth` (the sum of their gear's, each
+/// point worth a twentieth). They are hardly seen standing in the dark; light is what shows
+/// them most, then moving fast, then bulky gear. Creatures can read it as the delver does.
+pub fn visibility(light: f64, pace: f64, load: LoadBand, stealth: f64) -> f64 {
+    let lit = light.clamp(0.0, 1.0);
+    let moving = pace.clamp(0.0, SPRINT_PACE) / SPRINT_PACE;
+    let bulk = match load {
+        LoadBand::Light => 0.0,
+        LoadBand::Burdened => 0.04,
+        LoadBand::Encumbered | LoadBand::Overloaded => 0.08,
+    };
+    (SEEN_IN_DARK + SEEN_IN_LIGHT * lit + SEEN_MOVING * moving + bulk - STEALTH_STEP * stealth).clamp(0.0, 1.0)
 }
 
 /// The ability modifier for a score: `floor((score - 10) / 2)` (D&D 5e SRD 5.1, p. 76).
@@ -1226,7 +1443,7 @@ mod tests {
     fn gear_adds_carry_multiplies_rates_and_takes_the_best_darkvision() {
         let worn = [
             Worn { carry: 25.0, darkvision: 10.0, hunger_rate: 0.85, ..Worn::default() },
-            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85 },
+            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85, stealth: 0.0, warmth: 0.0 },
         ];
         let gear = Gear::new(20.0, worn, []);
         assert_eq!(gear.carry, 50.0);
@@ -1256,5 +1473,171 @@ mod tests {
         needs.step(0.002, Activity::Walking);
         assert_eq!(needs.hunger.word(), "Hungry");
         assert_eq!(needs.thirst.gear, 1.0, "thirst is not geared");
+    }
+
+
+    fn scores(intelligence: i32, wisdom: i32) -> Attributes {
+        Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence, wisdom }
+    }
+
+    #[test]
+    fn a_mage_with_int_16_has_a_bigger_pool_than_one_with_int_10() {
+        let clever = Mana::max_for(Casting::Arcane, &scores(16, 10));
+        let average = Mana::max_for(Casting::Arcane, &scores(10, 10));
+        assert_eq!((clever, average), (25.0, 10.0));
+    }
+
+    #[test]
+    fn a_clerics_pool_follows_wis_and_a_mages_ignores_it() {
+        assert_eq!(Mana::max_for(Casting::Divine, &scores(10, 16)), 25.0);
+        assert_eq!(Mana::max_for(Casting::Divine, &scores(18, 10)), 10.0);
+        assert_eq!(Mana::max_for(Casting::Arcane, &scores(10, 18)), 10.0);
+    }
+
+    #[test]
+    fn fighters_and_rangers_have_a_small_flat_pool_and_a_dull_caster_is_floored() {
+        assert_eq!(Mana::max_for(Casting::Martial, &scores(18, 18)), 4.0);
+        assert_eq!(Mana::max_for(Casting::Martial, &scores(3, 3)), 4.0);
+        assert_eq!(Mana::max_for(Casting::Arcane, &scores(3, 3)), 4.0);
+    }
+
+    #[test]
+    fn mana_refills_from_empty_in_eight_hours_of_rest() {
+        let mut mana = Mana { points: 0.0, max: 25.0 };
+        mana.step(7.0, Activity::Resting);
+        assert!(mana.fraction() < 1.0);
+        mana.step(1.0, Activity::Resting);
+        assert!((mana.points - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sleeping_refills_faster_than_resting_and_exerting_not_at_all() {
+        let from_empty = |activity| {
+            let mut mana = Mana { points: 0.0, max: 10.0 };
+            mana.step(1.0, activity);
+            mana.points
+        };
+        assert!(from_empty(Activity::Sleeping) > from_empty(Activity::Resting));
+        assert!(from_empty(Activity::Resting) > from_empty(Activity::Walking));
+        assert_eq!(from_empty(Activity::Exerting), 0.0);
+    }
+
+    #[test]
+    fn mana_steps_the_same_in_any_step_size_and_resizing_keeps_how_full_it_is() {
+        let (mut whole, mut parts) = (Mana { points: 2.0, max: 10.0 }, Mana { points: 2.0, max: 10.0 });
+        whole.step(3.0, Activity::Resting);
+        for _ in 0..30 {
+            parts.step(0.1, Activity::Resting);
+        }
+        assert!((whole.points - parts.points).abs() < 1e-9);
+        let mut mana = Mana { points: 5.0, max: 10.0 };
+        mana.resize(25.0);
+        assert_eq!((mana.points, mana.max), (12.5, 25.0));
+    }
+
+    #[test]
+    fn mana_is_spent_only_when_the_pool_holds_it() {
+        let mut mana = Mana::full(10.0);
+        assert!(mana.spend(4.0));
+        assert!(!mana.spend(7.0));
+        assert_eq!(mana.points, 6.0);
+    }
+    #[test]
+    fn a_delver_standing_in_the_dark_is_hardly_seen_and_a_torch_shows_them() {
+        let dark = visibility(0.0, 0.0, LoadBand::Light, 0.0);
+        let torch = visibility(1.0, 0.0, LoadBand::Light, 0.0);
+        assert!(dark < 0.1, "{dark}");
+        assert!(torch > 0.8, "{torch}");
+    }
+
+    #[test]
+    fn light_speed_and_bulk_each_raise_visibility_and_stealth_lowers_it() {
+        let base = visibility(0.4, 0.0, LoadBand::Light, 0.0);
+        assert!(visibility(0.8, 0.0, LoadBand::Light, 0.0) > base);
+        assert!(visibility(0.4, 1.0, LoadBand::Light, 0.0) > base);
+        assert!(visibility(0.4, 1.5, LoadBand::Light, 0.0) > visibility(0.4, 1.0, LoadBand::Light, 0.0));
+        assert!(visibility(0.4, 0.0, LoadBand::Burdened, 0.0) > base);
+        assert!(visibility(0.4, 0.0, LoadBand::Encumbered, 0.0) > visibility(0.4, 0.0, LoadBand::Burdened, 0.0));
+        let silent = visibility(0.4, 0.0, LoadBand::Light, 2.0);
+        assert!((base - silent - 0.1).abs() < 1e-9, "Stealth +2 is a tenth less: {base} against {silent}");
+        assert!(visibility(0.4, 0.0, LoadBand::Light, -2.0) > base, "a negative Stealth shows them more");
+    }
+
+    #[test]
+    fn visibility_stays_between_none_and_plain_as_day() {
+        assert_eq!(visibility(0.0, 0.0, LoadBand::Light, 20.0), 0.0);
+        assert_eq!(visibility(5.0, 9.0, LoadBand::Overloaded, -20.0), 1.0);
+        assert_eq!(visibility(-1.0, -1.0, LoadBand::Light, 0.0), visibility(0.0, 0.0, LoadBand::Light, 0.0));
+    }
+
+    #[test]
+    fn gear_sums_its_stealth() {
+        let worn = [Worn { stealth: 2.0, ..Worn::default() }, Worn { stealth: -1.0, ..Worn::default() }, Worn::default()];
+        assert_eq!(Gear::new(0.0, worn, []).stealth, 1.0);
+        assert_eq!(Gear::default().stealth, 0.0);
+    }
+
+    #[test]
+    fn a_full_pool_lasts_thirty_seconds_of_sprinting_while_light() {
+        let mut stamina = Stamina::default();
+        stamina.step(29.0, Activity::Exerting, LoadBand::Light);
+        assert!(stamina.value > 0.0 && !stamina.winded, "{stamina:?}");
+        stamina.step(1.0, Activity::Exerting, LoadBand::Light);
+        assert!(stamina.value.abs() < 1e-9 && stamina.winded, "{stamina:?}");
+    }
+
+    #[test]
+    fn the_heavier_the_load_the_faster_sprinting_drains() {
+        let after = |band| {
+            let mut stamina = Stamina::default();
+            stamina.step(10.0, Activity::Exerting, band);
+            stamina.value
+        };
+        let (light, burdened, encumbered) = (after(LoadBand::Light), after(LoadBand::Burdened), after(LoadBand::Encumbered));
+        assert!(light > burdened && burdened > encumbered, "{light} {burdened} {encumbered}");
+        assert!((1.0 - encumbered - 2.0 * (1.0 - light)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn standing_refills_from_empty_in_eight_seconds_and_walking_is_slower() {
+        let empty = Stamina { value: 0.0, winded: true };
+        let mut standing = empty;
+        standing.step(8.0, Activity::Resting, LoadBand::Light);
+        assert!((standing.value - 1.0).abs() < 1e-9 && !standing.winded);
+        let mut walking = empty;
+        walking.step(8.0, Activity::Walking, LoadBand::Light);
+        assert!(walking.value > 0.5 && walking.value < 1.0);
+    }
+
+    #[test]
+    fn a_winded_delver_cannot_exert_until_twenty_percent() {
+        let mut stamina = Stamina { value: 0.0, winded: true };
+        assert!(!stamina.can_exert());
+        stamina.step(1.5, Activity::Resting, LoadBand::Light);
+        assert!(stamina.value < SECOND_WIND && !stamina.can_exert(), "{stamina:?}");
+        stamina.step(0.2, Activity::Resting, LoadBand::Light);
+        assert!(stamina.value >= SECOND_WIND && stamina.can_exert(), "{stamina:?}");
+    }
+
+    #[test]
+    fn a_swing_takes_a_fixed_bite_and_the_last_one_winds() {
+        let mut stamina = Stamina::default();
+        stamina.spend(SWING_COST);
+        assert!((stamina.value - (1.0 - SWING_COST)).abs() < 1e-9);
+        for _ in 0..20 {
+            stamina.spend(SWING_COST);
+        }
+        assert_eq!(stamina.value, 0.0);
+        assert!(stamina.winded);
+    }
+
+    #[test]
+    fn stamina_steps_the_same_in_any_step_size() {
+        let (mut whole, mut parts) = (Stamina::default(), Stamina::default());
+        whole.step(12.0, Activity::Exerting, LoadBand::Burdened);
+        for _ in 0..120 {
+            parts.step(0.1, Activity::Exerting, LoadBand::Burdened);
+        }
+        assert!((whole.value - parts.value).abs() < 1e-9);
     }
 }

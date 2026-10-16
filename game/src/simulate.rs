@@ -8,20 +8,21 @@
 use bevy::prelude::*;
 use fb_character::{Activity, Exhaustion, ExhaustionTimes, Needs};
 
-use crate::character::{Character, DelverNeeds, Load, activity_for};
+use crate::character::{Character, DelverMana, DelverNeeds, DelverStamina, Load, activity_for};
 use crate::combat::swing::Swing;
 use crate::exhaustion::{Exhaustion as DelverExhaustion, ExhaustionTimes as DelverTimes};
 use crate::game_clock::{GameClock, advance_game_clock};
 use crate::inventory::Inventory;
 use crate::keymap::{Action, ActionInput};
-use crate::play::{DelveSystems, Player};
+use crate::play::{DelveSystems, Player, ScreenOpen};
 use crate::player::Locomotion;
 
 pub struct SimulatePlugin;
 
 impl Plugin for SimulatePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, (step_the_delver, step_folk).after(advance_game_clock).in_set(DelveSystems));
+        app.add_systems(FixedUpdate, (step_the_delver, step_folk).after(advance_game_clock).in_set(DelveSystems))
+            .add_systems(FixedUpdate, step_stamina.in_set(DelveSystems));
     }
 }
 
@@ -55,7 +56,7 @@ fn step_the_delver(
     inventory: Res<Inventory>,
     input: ActionInput,
     mut last: Local<f64>,
-    mut players: Query<(&Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes), With<Player>>,
+    mut players: Query<(&Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana), With<Player>>,
 ) {
     let now = clock.game_seconds();
     // A new delve restarts the clock below where this last stood.
@@ -64,10 +65,21 @@ fn step_the_delver(
     let hours = passed / 3600.0;
     let changed = character.is_changed() || inventory.is_changed();
     let mut gear = None;
-    for (locomotion, swinging, load, mut needs, mut exhaustion, mut times) in &mut players {
+    for (locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana) in &mut players {
         if changed || needs.is_added() {
             let gear = gear.get_or_insert_with(|| character.gear(&inventory));
             gear.apply_to(&mut needs.0);
+            // The pool follows the character's casting ability, a new delver's starting full.
+            let max = character.mana_pool();
+            if mana.0.max != max {
+                let mut pool = mana.0;
+                if mana.is_added() {
+                    pool = fb_character::Mana::full(max);
+                } else {
+                    pool.resize(max);
+                }
+                mana.0 = pool;
+            }
         }
         if hours <= 0.0 {
             continue;
@@ -78,8 +90,51 @@ fn step_the_delver(
         t.step(&mut n, &mut e, activity, hours, crate::character::modifier(character.constitution()));
         needs.0 = n;
         times.0 = t;
+        // Only written when the pool changes, so a full one marks nothing.
+        let mut pool = mana.0;
+        pool.step(hours, activity);
+        mana.set_if_neq(DelverMana(pool));
         // The level moves a few times in a run, so it is only marked changed when it does.
         exhaustion.set_if_neq(DelverExhaustion(e));
+    }
+}
+
+/// What the delver's moving means for their stamina: sprinting while moving and not winded
+/// drains it (Exerting), walking refills it slowly and standing refills it fully. Unlike
+/// [`delver_activity`], swinging and walking under a load do not count: a swing takes its own
+/// bite (`crate::combat::swing`), and the load only makes sprinting drain faster.
+pub fn stamina_activity(velocity: Vec2, sprinting: bool, winded: bool) -> Activity {
+    if velocity.length() <= STANDING {
+        Activity::Resting
+    } else if sprinting && !winded {
+        Activity::Exerting
+    } else {
+        Activity::Walking
+    }
+}
+
+/// Steps the delver's stamina by the real seconds of the fixed step, not the game clock: it
+/// is a pool of seconds (a full one lasts 30 seconds of sprinting and refills in 8), so it
+/// must not speed up or slow down with the clock's ratio. It runs on the same fixed step as
+/// the needs, so a sprint is seen by one tick, and it holds still while a screen is open, as
+/// the clock does. The component is written only when the pool actually changes, so a full
+/// pool at rest marks nothing.
+fn step_stamina(
+    time: Res<Time<Fixed>>,
+    screen: Res<ScreenOpen>,
+    input: ActionInput,
+    mut players: Query<(&Locomotion, &Load, &mut DelverStamina), With<Player>>,
+) {
+    let seconds = time.delta_secs_f64();
+    if screen.0.is_some() || seconds <= 0.0 {
+        return;
+    }
+    let sprinting = input.pressed(Action::Hurry);
+    for (locomotion, load, mut stamina) in &mut players {
+        let activity = stamina_activity(locomotion.velocity, sprinting, !stamina.0.can_exert());
+        let mut next = stamina.0;
+        next.step(seconds, activity, load.0);
+        stamina.set_if_neq(DelverStamina(next));
     }
 }
 
@@ -176,6 +231,159 @@ mod tests {
             app.world_mut().resource_mut::<Time<Fixed>>().advance_by(Duration::from_secs(1));
             app.world_mut().run_schedule(FixedUpdate);
         }
+    }
+
+    fn stamina(app: &App, who: Entity) -> fb_character::Stamina {
+        app.world().get::<DelverStamina>(who).unwrap().0
+    }
+
+    fn sprinting(app: &mut App) {
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftLeft);
+    }
+
+    #[test]
+    fn sprinting_drains_stamina_over_thirty_seconds_and_stopping_refills_it() {
+        let mut app = app();
+        sprinting(&mut app);
+        let delver = walker(&mut app);
+        run(&mut app, 15);
+        let half = stamina(&app, delver).value;
+        assert!((half - 0.5).abs() < 0.02, "{half}");
+        // Emptied inside the 30 seconds, then winded and walking.
+        run(&mut app, 15);
+        assert!(stamina(&app, delver).winded && stamina(&app, delver).value < 0.1, "{:?}", stamina(&app, delver));
+        // Stop sprinting and stand: empty to full in about 8 seconds.
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::ShiftLeft);
+        app.world_mut().get_mut::<Locomotion>(delver).unwrap().velocity = Vec2::ZERO;
+        run(&mut app, 8);
+        assert!(stamina(&app, delver).value > 0.98 && !stamina(&app, delver).winded);
+    }
+
+    #[test]
+    fn stamina_follows_real_seconds_whatever_the_clock_ratio() {
+        let mut app = app();
+        app.world_mut().resource_mut::<Tuning>().clock.game_seconds_per_second = 120.0;
+        sprinting(&mut app);
+        let delver = walker(&mut app);
+        run(&mut app, 15);
+        assert!((stamina(&app, delver).value - 0.5).abs() < 0.02);
+    }
+
+    #[test]
+    fn an_encumbered_delver_drains_twice_as_fast() {
+        let mut app = app();
+        sprinting(&mut app);
+        let delver = walker(&mut app);
+        app.world_mut().entity_mut(delver).insert(Load(fb_character::LoadBand::Encumbered));
+        run(&mut app, 10);
+        assert!((stamina(&app, delver).value - (1.0 - 10.0 * 2.0 / 30.0)).abs() < 0.02);
+    }
+
+    #[test]
+    fn a_winded_delver_walks_instead_of_sprinting() {
+        let mut app = app();
+        sprinting(&mut app);
+        let delver = walker(&mut app);
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.0, winded: true };
+        run(&mut app, 4);
+        // Walking refills while Hurry is still held.
+        assert!(stamina(&app, delver).value > 0.2, "{:?}", stamina(&app, delver));
+    }
+
+    #[test]
+    fn an_open_screen_holds_stamina_and_a_full_pool_is_not_rewritten() {
+        let mut app = app();
+        sprinting(&mut app);
+        let delver = walker(&mut app);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        run(&mut app, 10);
+        assert_eq!(stamina(&app, delver).value, 1.0);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.world_mut().get_mut::<Locomotion>(delver).unwrap().velocity = Vec2::ZERO;
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::ShiftLeft);
+        run(&mut app, 1);
+        app.world_mut().clear_trackers();
+        run(&mut app, 3);
+        assert!(!app.world().entity(delver).get_ref::<DelverStamina>().unwrap().is_changed(), "full and still marks nothing");
+    }
+
+    fn mana(app: &App, who: Entity) -> fb_character::Mana {
+        app.world().get::<DelverMana>(who).unwrap().0
+    }
+
+    fn cast_as(app: &mut App, class: crate::character::Class, intelligence: i32, wisdom: i32) {
+        let mut character = app.world_mut().resource_mut::<Character>();
+        character.class = class;
+        character.attributes.intelligence = intelligence;
+        character.attributes.wisdom = wisdom;
+    }
+
+    #[test]
+    fn a_mage_with_int_16_has_a_larger_pool_than_one_with_int_10() {
+        let pool = |intelligence| {
+            let mut app = app();
+            cast_as(&mut app, crate::character::Class::Mage, intelligence, 10);
+            let delver = walker(&mut app);
+            run(&mut app, 1);
+            mana(&app, delver)
+        };
+        let (clever, average) = (pool(16), pool(10));
+        assert!(clever.max > average.max, "{clever:?} against {average:?}");
+        assert_eq!((clever.points, average.points), (clever.max, average.max), "a new delver starts full");
+    }
+
+    #[test]
+    fn a_clerics_pool_follows_wis_and_fighters_have_a_small_one() {
+        let max = |class, intelligence, wisdom| {
+            let mut app = app();
+            cast_as(&mut app, class, intelligence, wisdom);
+            let delver = walker(&mut app);
+            run(&mut app, 1);
+            mana(&app, delver).max
+        };
+        use crate::character::Class;
+        assert!(max(Class::Cleric, 10, 16) > max(Class::Cleric, 10, 10));
+        assert_eq!(max(Class::Cleric, 18, 10), max(Class::Cleric, 10, 10), "INT does not size a cleric's pool");
+        assert_eq!(max(Class::Fighter, 18, 18), 4.0);
+    }
+
+    #[test]
+    fn resting_for_eight_game_hours_refills_an_empty_pool_and_walking_is_slower() {
+        let mut app = app();
+        app.world_mut().resource_mut::<Tuning>().clock.game_seconds_per_second = 3600.0;
+        cast_as(&mut app, crate::character::Class::Mage, 16, 10);
+        let resting = app.world_mut().spawn((Player, Locomotion::default())).id();
+        run(&mut app, 1);
+        app.world_mut().get_mut::<DelverMana>(resting).unwrap().0.points = 0.0;
+        run(&mut app, 4);
+        let half = mana(&app, resting);
+        assert!((half.fraction() - 0.5).abs() < 0.01, "{half:?}");
+        run(&mut app, 4);
+        assert!((mana(&app, resting).fraction() - 1.0).abs() < 1e-6);
+        // Walking refills at a quarter of that.
+        let walking = walker(&mut app);
+        run(&mut app, 1);
+        app.world_mut().get_mut::<DelverMana>(walking).unwrap().0.points = 0.0;
+        run(&mut app, 4);
+        assert!(mana(&app, walking).fraction() < 0.2, "{:?}", mana(&app, walking));
+    }
+
+    #[test]
+    fn a_full_pool_is_not_rewritten_and_a_changed_character_resizes_it() {
+        let mut app = app();
+        cast_as(&mut app, crate::character::Class::Mage, 16, 10);
+        let delver = walker(&mut app);
+        run(&mut app, 2);
+        app.world_mut().clear_trackers();
+        run(&mut app, 3);
+        assert!(!app.world().entity(delver).get_ref::<DelverMana>().unwrap().is_changed(), "full marks nothing");
+        app.world_mut().get_mut::<DelverMana>(delver).unwrap().0.points = 12.5;
+        cast_as(&mut app, crate::character::Class::Mage, 18, 10);
+        run(&mut app, 1);
+        let pool = mana(&app, delver);
+        assert_eq!(pool.max, 30.0);
+        assert!((pool.fraction() - 0.5).abs() < 0.01, "kept half full: {pool:?}");
     }
 
     fn needs(app: &App, who: Entity) -> Needs {

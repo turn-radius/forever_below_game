@@ -1,6 +1,7 @@
 //! Forever Below: the Bevy side of the game. Generators live in the plain-Rust crates under
 //! `crates/`; this crate draws and plays them.
 
+pub mod ambient;
 pub mod audio;
 pub mod capture;
 pub mod carry;
@@ -14,6 +15,7 @@ pub mod exhaustion;
 pub mod figure;
 pub mod fitting;
 pub mod folk;
+pub mod footsteps;
 pub mod forge_view;
 pub mod frame_time;
 pub mod game_clock;
@@ -30,6 +32,7 @@ pub mod menu;
 pub mod play;
 pub mod player;
 pub mod props;
+pub mod quickslots;
 pub mod render;
 pub mod settings;
 pub mod simulate;
