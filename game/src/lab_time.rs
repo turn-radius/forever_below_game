@@ -56,11 +56,30 @@ pub struct Crossing {
     pub hours: f64,
     /// What crossed: `Hunger → Hungry`, `Exhaustion 1`.
     pub what: String,
+    /// For a need, which and the band it reached.
+    pub band: Option<(MeterKind, usize)>,
+    /// For exhaustion, the level it reached.
+    pub level: Option<u32>,
 }
 
 impl Crossing {
     pub fn line(&self) -> String {
         format!("{} {}", clock_text(self.hours), self.what)
+    }
+}
+
+/// What a stretch of time is passed under, worked out once from the lab state: its rules, the
+/// activity, the gear's effect on the needs and the Constitution modifier.
+pub struct Pace<'a> {
+    rules: &'a Rules,
+    pub activity: Activity,
+    gear: fb_character::Gear,
+    constitution: i32,
+}
+
+impl<'a> Pace<'a> {
+    pub fn new(state: &'a LabState) -> Pace<'a> {
+        Pace { rules: &state.ruleset.rules, activity: state.activity, gear: state.character.gear(&state.inventory()), constitution: modifier(state.character.constitution()) }
     }
 }
 
@@ -73,12 +92,14 @@ pub struct TimeLab {
     pub times: ExhaustionTimes,
     /// The latest crossings, oldest first, at most [`LOG_LINES`].
     pub log: VecDeque<Crossing>,
+    /// Every crossing since the start, for a chart of the whole run.
+    pub all: Vec<Crossing>,
 }
 
 impl Default for TimeLab {
     /// Fresh: the clock at 0, every meter at 0 and no exhaustion.
     fn default() -> Self {
-        TimeLab { clock: GameTime::default(), needs: Needs::default(), exhaustion: Exhaustion::default(), times: ExhaustionTimes::default(), log: VecDeque::new() }
+        TimeLab { clock: GameTime::default(), needs: Needs::default(), exhaustion: Exhaustion::default(), times: ExhaustionTimes::default(), log: VecDeque::new(), all: Vec::new() }
     }
 }
 
@@ -88,8 +109,10 @@ impl TimeLab {
         *self = TimeLab::default();
     }
 
-    fn note(&mut self, hours: f64, what: String) {
-        self.log.push_back(Crossing { hours, what });
+    fn note(&mut self, hours: f64, what: String, band: Option<(MeterKind, usize)>, level: Option<u32>) {
+        let crossing = Crossing { hours, what, band, level };
+        self.all.push(crossing.clone());
+        self.log.push_back(crossing);
         while self.log.len() > LOG_LINES {
             self.log.pop_front();
         }
@@ -98,10 +121,15 @@ impl TimeLab {
     /// Passes `hours` of game time (to the nearest minute) under the lab's activity, with the
     /// lab's gear applied to the needs and its Constitution deciding how long Starving lasts.
     pub fn pass(&mut self, state: &LabState, hours: f64) {
-        let rules = &state.ruleset.rules;
+        self.pass_under(&Pace::new(state), hours);
+    }
+
+    /// [`TimeLab::pass`] under a [`Pace`] worked out once, for a run of many short steps.
+    pub fn pass_under(&mut self, pace: &Pace, hours: f64) {
+        let rules = pace.rules;
         rules.apply_to(&mut self.needs);
-        state.character.gear(&state.inventory()).apply_to(&mut self.needs);
-        let (activity, con) = (state.activity, modifier(state.character.constitution()));
+        pace.gear.apply_to(&mut self.needs);
+        let (activity, con) = (pace.activity, pace.constitution);
         for _ in 0..(hours / MINUTE).round() as u32 {
             let (before, level, start) = (self.needs, self.exhaustion.level, self.clock.hours());
             self.times.step_with(rules, &mut self.needs, &mut self.exhaustion, activity, MINUTE, con);
@@ -116,11 +144,12 @@ impl TimeLab {
             }
             for (was, now) in [(before.hunger, self.needs.hunger), (before.thirst, self.needs.thirst), (before.sleepiness, self.needs.sleepiness)] {
                 for (at, band) in band_crossings(rules, &was, &now, activity) {
-                    self.note(start + at, format!("{} → {}", name(now.kind), now.kind.word(band)));
+                    self.note(start + at, format!("{} → {}", name(now.kind), now.kind.word(band)), Some((now.kind, band)), None);
                 }
             }
             if self.exhaustion.level != level {
-                self.note(start + MINUTE, if self.exhaustion.is_dead() { "Exhaustion 6, dead".to_string() } else { format!("Exhaustion {}", self.exhaustion.level) });
+                let what = if self.exhaustion.is_dead() { "Exhaustion 6, dead".to_string() } else { format!("Exhaustion {}", self.exhaustion.level) };
+                self.note(start + MINUTE, what, None, Some(self.exhaustion.level));
             }
         }
     }
@@ -152,7 +181,7 @@ fn name(kind: MeterKind) -> &'static str {
 /// minute it crossed at: where the meter's value, rising or falling at its rate, meets the
 /// band's edge. The band reached is with each, in the order crossed.
 fn band_crossings(rules: &Rules, was: &Meter, now: &Meter, activity: Activity) -> Vec<(f64, usize)> {
-    let (from, to) = (was.band(), now.band());
+    let (from, to) = (was.band_with(rules), now.band_with(rules));
     let rate = now.effective_rate_with(rules, activity);
     let at = |band: usize| ((band as f64 * 0.25 - was.value) / rate).clamp(0.0, MINUTE);
     if to > from {

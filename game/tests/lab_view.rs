@@ -211,19 +211,31 @@ fn one_fight_is_played_out_in_lines() {
 }
 
 #[test]
-fn passing_time_shows_in_the_time_column() {
+fn passing_time_shows_answers_and_the_chart_with_what_each_was() {
+    use forever_below::lab_view::TimeAction;
     let mut app = headless_lab();
     for _ in 0..3 {
         app.update();
     }
-    assert!(texts(&mut app).iter().any(|t| t == "Day 0 00:00 · walking"), "{:?}", texts(&mut app));
-    let state = app.world().resource::<LabState>().clone();
-    app.world_mut().resource_mut::<TimeLab>().pass(&state, 8.0);
+    assert!(texts(&mut app).iter().any(|t| t.starts_with("Press a span")));
+    press(&mut app, Control::Time(TimeAction::Pass(24.0)));
+    let shown = texts(&mut app);
+    for want in ["Hungry after", "8 h", "Thirsty after", "2.5 h", "Tired after", "Exhaustion 1 on", "not reached", "Needs and exhaustion over time"] {
+        assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
+    }
+    assert!(!shown.iter().any(|t| t.starts_with("was ")), "{shown:?}");
+    // Hours walking to Starving 16 to 20: Hungry moves from 8 h to 10 h.
+    for _ in 0..4 {
+        forever_below::lab_rules::step(&mut app.world_mut().resource_mut::<LabState>().ruleset, "needs/hunger_hours_to_full", 1);
+    }
     app.update();
     app.update();
     let shown = texts(&mut app);
-    assert!(shown.iter().any(|t| t == "Day 0 08:00 · walking"), "{shown:?}");
-    assert!(shown.iter().any(|t| t == "Hunger 50% · Hungry"), "{shown:?}");
-    assert!(shown.iter().any(|t| t.contains("Day 0 08:00 Hunger → Hungry")), "{shown:?}");
-    assert!(shown.iter().any(|t| t == "Exhaustion 0 of 6: full speed"), "{shown:?}");
+    assert!(shown.iter().any(|t| t == "10 h") && shown.iter().any(|t| t == "was 8 h"), "{shown:?}");
+    // Eat and Drink add to the run, and Reset starts it over.
+    press(&mut app, Control::Time(TimeAction::Eat));
+    assert_eq!(app.world().resource::<forever_below::lab_view::TimeRun>().steps.len(), 2);
+    press(&mut app, Control::Time(TimeAction::Reset));
+    assert!(texts(&mut app).iter().any(|t| t.starts_with("Press a span")));
 }
+

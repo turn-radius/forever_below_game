@@ -38,10 +38,10 @@ use crate::lab_sheet::{self, GearCard, SheetView, signed};
 use crate::lab_chart::Chart;
 use crate::lab_fight::{FightRecord, FightSummary, THOUSAND};
 use crate::lab_strike::Attacker;
-use crate::lab_time::{ACTIVITIES, STEPS, TimeLab, activity_word, clock_text, exhaustion_effect, percent_text};
+use crate::lab_time::{ACTIVITIES, TimeLab, activity_word, clock_text};
+use crate::lab_timeline::{Goal, Step, Timeline};
 use crate::rules::GameRules;
-use crate::tweak_panel::chip;
-use crate::ui::{ACCENT, BAD, OK, BG, BRIGHT, CELL, FAINT, FRAME_GOLD, INK, LINE, MUTED, UiFonts, node_rect, numbers_line, rarity_color};
+use crate::ui::{ACCENT, BAD, OK, BG, BRIGHT, CELL, FAINT, FRAME_GOLD, INK, LINE, MUTED, UiFonts, node_rect, rarity_color};
 
 /// Width of the sheet on the left and of the rules on the right, in logical pixels.
 pub const SHEET_WIDTH: f32 = 380.0;
@@ -100,6 +100,8 @@ impl Plugin for LabViewPlugin {
             .init_resource::<FightLab>()
             .init_resource::<FightImages>()
             .init_resource::<TimeLab>()
+            .init_resource::<TimeRun>()
+            .init_resource::<TimeImage>()
             .init_resource::<LabTab>()
             .init_resource::<Picker>()
             .init_resource::<LabFigure>()
@@ -110,7 +112,7 @@ impl Plugin for LabViewPlugin {
             .init_resource::<SaveNote>()
             .add_message::<ControlPressed>()
             .insert_resource(ClearColor(BG))
-            .add_systems(Startup, (setup, demo, make_chart_images))
+            .add_systems(Startup, (setup, demo, make_chart_images, make_time_image))
             .add_systems(
                 Update,
                 (
@@ -118,12 +120,12 @@ impl Plugin for LabViewPlugin {
                     press_controls,
                     apply_pressed,
                     show_save_note,
-                    press_time.run_if(|tab: Res<LabTab>| tab.0 == 1),
                     rebuild_sheet.run_if(sheet_changed),
                     rebuild_rules.run_if(|state: Res<LabState>, rules: Res<LabRules>| state.is_changed() || rules.is_changed()),
                     run_fights,
                     refresh_fight.run_if(resource_changed::<FightLab>),
-                    refresh_time.run_if(|state: Res<LabState>, time: Res<TimeLab>| state.is_changed() || time.is_changed()),
+                    run_time,
+                    refresh_time_view.run_if(resource_changed::<TimeRun>),
                     refresh_controls.run_if(|state: Res<LabState>| state.is_changed()),
                     show_tabs.run_if(resource_changed::<LabTab>),
                     (hover_tiles, show_tip).chain(),
@@ -489,6 +491,8 @@ pub enum Control {
     Activity(isize),
     /// Has the character strike first.
     Swap,
+    /// Adds to the Time tab's run.
+    Time(TimeAction),
     /// Plays one fight, or a thousand.
     OneFight,
     Thousand,
@@ -521,7 +525,7 @@ impl Control {
             Control::StrikeSeed(by) => state.strike_seed = (state.strike_seed as i64 + by).clamp(0, u32::MAX as i64) as u32,
             Control::Activity(by) => state.cycle_activity(*by),
             Control::Swap => state.swapped = !state.swapped,
-            Control::OneFight | Control::Thousand => {}
+            Control::OneFight | Control::Thousand | Control::Time(_) => {}
             Control::Rule(path, dir) => crate::lab_rules::step(&mut state.ruleset, path, *dir),
             Control::Dice(path, part, dir) => crate::lab_rules::step_dice(&mut state.ruleset, path, *part, *dir),
             Control::Save => *saved = state.ruleset.clone(),
@@ -671,27 +675,144 @@ fn run_fights(state: Res<LabState>, saved: Res<LabRules>, mut lab: ResMut<FightL
     lab.generation += 1;
 }
 
-/// Where passing time goes.
-#[derive(Component)]
-pub struct TimeColumn;
-
-/// A button in the time column: pass the nth of [`STEPS`], eat, drink or start over.
-#[derive(Component, Clone, Copy, PartialEq)]
-enum TimeButton {
-    Pass(usize),
+/// What a button of the Time tab does to the run.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TimeAction {
+    /// Passes this many game hours.
+    Pass(f64),
+    UntilHungry,
+    UntilExhaustion,
     Eat,
     Drink,
+    /// Starts the run over.
     Reset,
 }
 
-/// A part of the time column.
-#[derive(Component, Clone, Copy, PartialEq)]
-enum TimeText {
-    Clock,
-    /// Holds the meters' rows, built again as the time changes.
-    Meters,
-    Exhaustion,
-    Log,
+/// The Time tab's run: the steps asked for so far, and the run they make under the edited rules
+/// and under the saved ones.
+#[derive(Resource, Default)]
+pub struct TimeRun {
+    pub steps: Vec<Step>,
+    dirty: bool,
+    pub now: Option<Timeline>,
+    pub was: Option<Timeline>,
+    chart: Option<Chart>,
+}
+
+impl TimeRun {
+    /// Adds what `action` says to the run, under `activity`.
+    pub fn push(&mut self, action: TimeAction, activity: Activity) {
+        match action {
+            TimeAction::Pass(hours) => self.steps.push(Step::Pass(hours, activity)),
+            TimeAction::UntilHungry => self.steps.push(Step::Until(Goal::Hungry, activity)),
+            TimeAction::UntilExhaustion => self.steps.push(Step::Until(Goal::Exhaustion, activity)),
+            TimeAction::Eat => self.steps.push(Step::Eat),
+            TimeAction::Drink => self.steps.push(Step::Drink),
+            TimeAction::Reset => self.steps.clear(),
+        }
+        self.dirty = true;
+    }
+}
+
+/// The time chart's image.
+#[derive(Resource, Default)]
+pub struct TimeImage(Option<Handle<Image>>);
+
+/// Where the time tab's answers and chart are built.
+#[derive(Component)]
+pub struct TimeColumn;
+
+/// Makes the time chart's image.
+fn make_time_image(mut image: ResMut<TimeImage>, assets: Option<ResMut<Assets<Image>>>) {
+    let Some(mut assets) = assets else { return };
+    image.0 = Some(assets.add(blank_chart(crate::lab_chart::TIME_SIZE)));
+}
+
+/// Plays the run again, under the edited rules and the saved ones, when a step is added or the
+/// state or the rules change; the sheet's needs follow the end of it.
+fn run_time(state: Res<LabState>, saved: Res<LabRules>, mut run: ResMut<TimeRun>, mut time: ResMut<TimeLab>, image: Res<TimeImage>, assets: Option<ResMut<Assets<Image>>>) {
+    if !(run.dirty || (!run.steps.is_empty() && (state.is_changed() || saved.is_changed()))) {
+        return;
+    }
+    let before = LabState { ruleset: saved.saved.clone(), ..state.clone() };
+    let now = crate::lab_timeline::run(&state, &run.steps);
+    let was = crate::lab_timeline::run(&before, &run.steps);
+    let chart = crate::lab_chart::time_chart(&now, Some(&was), &state.ruleset.rules.needs.band_edges);
+    if let (Some(mut assets), Some(handle)) = (assets, &image.0)
+        && let Some(mut texture) = assets.get_mut(handle)
+    {
+        texture.data = Some(chart.canvas.pixels.clone());
+    }
+    time.set_if_neq(now.lab.clone());
+    run.chart = Some(chart);
+    run.now = Some(now);
+    run.was = Some(was);
+    run.dirty = false;
+}
+
+/// The time chart with its words: the axes, and the words of each band at the right, one line
+/// per need in its colour.
+fn time_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, chart: &Chart, image: &Option<Handle<Image>>, rules: &fb_character::rules::Rules) {
+    let ink = |c: [u8; 4]| Color::srgb_u8(c[0], c[1], c[2]);
+    parent
+        .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
+        .with_children(|figure| {
+            words(figure, &fonts.body_medium, 16.0, BRIGHT, "Needs and exhaustion over time");
+            figure.spawn(Node { column_gap: px(12), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|legend| {
+                for (name, colour) in [("hunger", crate::lab_chart::HUNGER), ("thirst", crate::lab_chart::THIRST), ("sleepiness", crate::lab_chart::SLEEP), ("exhaustion, 0 to 6 over the same height", crate::lab_chart::EXHAUSTION)] {
+                    words(legend, &fonts.body, 12.0, ink(colour), name);
+                }
+                words(legend, &fonts.body, 12.0, MUTED, "faint dashed: saved rules \u{b7} ticks at the bottom: eaten or drunk");
+            });
+            figure.spawn(Node { column_gap: px(6), ..default() }).with_children(|plot| {
+                plot.spawn(Node { flex_direction: FlexDirection::Column, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::End, ..default() }).with_children(|axis| {
+                    words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.0.clone());
+                    words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.1.clone());
+                });
+                if let Some(image) = image {
+                    plot.spawn((ImageNode::new(image.clone()), Node { flex_grow: 1.0, min_width: px(0), aspect_ratio: Some(1200.0 / 420.0), ..default() }));
+                }
+                plot.spawn(Node { flex_direction: FlexDirection::Column, width: px(78), ..default() }).with_children(|band_words| {
+                    for band in (0..=3).rev() {
+                        band_words.spawn(Node { flex_grow: 1.0, flex_basis: px(0), flex_direction: FlexDirection::Column, justify_content: JustifyContent::Center, ..default() }).with_children(|slot| {
+                            for (kind, colour) in [(MeterKind::Hunger, crate::lab_chart::HUNGER), (MeterKind::Thirst, crate::lab_chart::THIRST), (MeterKind::Sleepiness, crate::lab_chart::SLEEP)] {
+                                words(slot, &fonts.body, 11.0, ink(colour), rules.needs.word(kind, band).to_string());
+                            }
+                        });
+                    }
+                });
+            });
+            figure.spawn(Node { justify_content: JustifyContent::SpaceBetween, margin: UiRect::right(px(84)), ..default() }).with_children(|axis| {
+                words(axis, &fonts.body, 12.0, MUTED, chart.x_labels.0.clone());
+                words(axis, &fonts.body, 12.0, MUTED, chart.x_labels.1.clone());
+            });
+        });
+}
+
+/// The Time tab's answers and chart, built again when the run changes.
+fn refresh_time_view(mut commands: Commands, run: Res<TimeRun>, image: Res<TimeImage>, state: Res<LabState>, saved: Res<LabRules>, fonts: Res<UiFonts>, column: Query<Entity, With<TimeColumn>>) {
+    let Ok(column) = column.single() else { return };
+    commands.entity(column).despawn_children().with_children(|c| match (&run.now, &run.was, &run.chart) {
+        (Some(now), Some(was), Some(chart)) if !run.steps.is_empty() => {
+            let (here, before) = (crate::lab_timeline::answers(now, &state.ruleset.rules), crate::lab_timeline::answers(was, &saved.saved.rules));
+            c.spawn(Node { column_gap: px(12), ..default() }).with_children(|row| {
+                for (a, b) in here.iter().zip(&before) {
+                    row.spawn((Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
+                        .with_children(|tile| {
+                            words(tile, &fonts.body, 13.0, MUTED, a.label.clone());
+                            words(tile, &fonts.mono_bold, if a.value == "not reached" { 18.0 } else { 30.0 }, BRIGHT, a.value.clone());
+                            match crate::lab_rules::was_text(&a.value, &b.value) {
+                                Some(was) => words(tile, &fonts.body, 13.0, FRAME_GOLD, was),
+                                None => words(tile, &fonts.body, 13.0, MUTED, " "),
+                            }
+                        });
+                }
+            });
+            time_figure(c, &fonts, chart, &image.0, &state.ruleset.rules);
+            words(c, &fonts.body, 14.0, MUTED, format!("{} so far, {} steps. Each button adds to the run; Reset starts it over.", clock_text(now.end()), run.steps.len()));
+        }
+        _ => words(c, &fonts.body, 16.0, MUTED, "Press a span to pass time and see when each need and exhaustion arrive."),
+    });
 }
 
 /// A button in the ledger's look, with `control` on it.
@@ -800,21 +921,18 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
                                 row.spawn((Text::new("While they are"), UiFonts::style(&fonts.body, 16.0, MUTED)));
                                 state_button(row, &fonts, Control::Activity(1), ControlText::Activity);
                             });
-                            pane.spawn((TimeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(8), ..default() })).with_children(|time| {
-                                time.spawn((Text::new("Time"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                                time.spawn((TimeText::Clock, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
-                                time.spawn(Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() }).with_children(|row| {
-                                    for (i, (label, _)) in STEPS.iter().enumerate() {
-                                        chip(row, &fonts, label, TimeButton::Pass(i));
-                                    }
-                                    chip(row, &fonts, "Eat", TimeButton::Eat);
-                                    chip(row, &fonts, "Drink", TimeButton::Drink);
-                                    chip(row, &fonts, "Reset", TimeButton::Reset);
-                                });
-                                time.spawn((TimeText::Meters, Node { flex_direction: FlexDirection::Column, row_gap: px(8), ..default() }));
-                                time.spawn((TimeText::Exhaustion, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
-                                time.spawn((TimeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
+                            pane.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|row| {
+                                for (label, hours) in [("8 h", 8.0), ("1 day", 24.0), ("3 days", 72.0), ("7 days", 168.0)] {
+                                    button(row, &fonts, label, Control::Time(TimeAction::Pass(hours)));
+                                }
+                                button(row, &fonts, "Until Hungry", Control::Time(TimeAction::UntilHungry));
+                                button(row, &fonts, "Until exhaustion 1", Control::Time(TimeAction::UntilExhaustion));
+                                row.spawn(Node { flex_grow: 1.0, ..default() });
+                                button(row, &fonts, "Eat", Control::Time(TimeAction::Eat));
+                                button(row, &fonts, "Drink", Control::Time(TimeAction::Drink));
+                                button(row, &fonts, "Reset", Control::Time(TimeAction::Reset));
                             });
+                            pane.spawn((TimeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), ..default() }));
                         }
                         _ => {}
                     });
@@ -1100,17 +1218,24 @@ fn rebuild_sheet(
     current.0 = Some(view);
 }
 
-/// With `FB_LAB_DEMO=1`, does what a few clicks would, for a capture: two edits to the rules
-/// (Capacity per STR to 20, the giant rat's attack bonus to +2), +8 h once, 1,000 fights and
-/// One fight, and holds Armour's tooltip up ([`setup`]).
-fn demo(mut state: ResMut<LabState>, mut time: ResMut<TimeLab>, mut fight: ResMut<FightLab>) {
+/// With `FB_LAB_DEMO=1`, does what a few clicks would, for a capture: three edits to the rules
+/// (Capacity per STR to 20, the giant rat's attack bonus to +2, hours walking to Starving to 20),
+/// a 7 day walk, 1,000 fights and One fight, and holds Armour's tooltip up ([`setup`]).
+/// `FB_LAB_TAB=1` opens that tab.
+fn demo(mut state: ResMut<LabState>, mut run: ResMut<TimeRun>, mut fight: ResMut<FightLab>, mut tab: ResMut<LabTab>) {
     if std::env::var("FB_LAB_DEMO").is_ok_and(|v| v == "1") {
         crate::lab_rules::step(&mut state.ruleset, "load/capacity_per_strength", 5);
         crate::lab_rules::step(&mut state.ruleset, "creatures/Giant Rat/attack_bonus", -1);
         crate::lab_rules::step(&mut state.ruleset, "creatures/Giant Rat/attack_bonus", -1);
-        time.pass(&state, 8.0);
+        for _ in 0..4 {
+            crate::lab_rules::step(&mut state.ruleset, "needs/hunger_hours_to_full", 1);
+        }
+        run.push(TimeAction::Pass(168.0), state.activity);
         fight.want_many = true;
         fight.want_one = true;
+        if let Some(open) = std::env::var("FB_LAB_TAB").ok().and_then(|t| t.parse().ok()) {
+            tab.0 = open;
+        }
     }
 }
 
@@ -1178,9 +1303,11 @@ fn apply_pressed(
     mut tab: ResMut<LabTab>,
     mut saved: ResMut<LabRules>,
     mut fight: ResMut<FightLab>,
+    mut run: ResMut<TimeRun>,
 ) {
     for ControlPressed(control) in pressed.read() {
         match control {
+            Control::Time(action) => run.push(*action, state.activity),
             Control::OneFight => {
                 fight.want_one = true;
                 fight.ones += 1;
@@ -1320,27 +1447,6 @@ fn rebuild_rules(
             }
         }
     });
-}
-
-/// A click on a time button.
-fn press_time(
-    buttons: Res<ButtonInput<MouseButton>>,
-    window: Option<Single<&Window, With<PrimaryWindow>>>,
-    controls: Query<(&TimeButton, &ComputedNode, &UiGlobalTransform)>,
-    state: Res<LabState>,
-    mut time: ResMut<TimeLab>,
-) {
-    if !buttons.just_pressed(MouseButton::Left) {
-        return;
-    }
-    let Some(point) = cursor(&window) else { return };
-    let Some((button, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
-    match *button {
-        TimeButton::Pass(i) => time.pass(&state, STEPS[i].1),
-        TimeButton::Eat => time.eat(),
-        TimeButton::Drink => time.drink(),
-        TimeButton::Reset => time.reset(),
-    }
 }
 
 /// Opens the tab that is chosen and marks its button.
@@ -1569,45 +1675,6 @@ fn tip_body(tip: &mut ChildSpawnerCommands, fonts: &UiFonts, content: &lab_sheet
                 words(row, &fonts.body, 15.0, MUTED, label.clone());
                 words(row, &fonts.body_medium, 15.0, BRIGHT, value.clone());
             });
-        }
-    }
-}
-
-/// Shows the clock, each meter with its band and explained rate, the exhaustion and the log.
-fn refresh_time(
-    mut commands: Commands,
-    state: Res<LabState>,
-    time: Res<TimeLab>,
-    fonts: Res<UiFonts>,
-    mut texts: Query<(Entity, &TimeText, Option<&mut Text>)>,
-) {
-    let loadout = state.character.loadout(&state.inventory());
-    for (entity, which, text) in &mut texts {
-        let line = match which {
-            TimeText::Clock => format!("{} · {}", clock_text(time.clock.hours()), activity_word(state.activity)),
-            TimeText::Exhaustion => {
-                let e = time.exhaustion;
-                format!("Exhaustion {} of 6: {}", e.level, exhaustion_effect(&state.ruleset.rules, e))
-            }
-            TimeText::Log => time.log.iter().map(|c| c.line()).collect::<Vec<_>>().join("\n"),
-            TimeText::Meters => {
-                let meters = [(MeterKind::Hunger, time.needs.hunger), (MeterKind::Thirst, time.needs.thirst), (MeterKind::Sleepiness, time.needs.sleepiness)];
-                commands.entity(entity).despawn_children().with_children(|rows| {
-                    for (kind, meter) in meters {
-                        let rate = loadout.rate(kind, state.activity);
-                        rows.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|block| {
-                            block.spawn((Text::new(format!("{} {} · {}", rate.name.trim_end_matches(" rate"), percent_text(&meter), meter.word())), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
-                            numbers_line(block, &fonts, &rate.line(), 15.0);
-                        });
-                    }
-                });
-                continue;
-            }
-        };
-        if let Some(mut text) = text {
-            if text.0 != line {
-                text.0 = line;
-            }
         }
     }
 }

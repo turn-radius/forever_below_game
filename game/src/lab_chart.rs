@@ -5,10 +5,12 @@
 //! test can say so.
 
 use crate::lab_fight::{CHART_ROUNDS, FightSummary};
+use crate::lab_timeline::{Event, Sample, Timeline};
 
 /// The life chart's size in pixels, and the histogram's.
 pub const LIFE_SIZE: (u32, u32) = (960, 360);
 pub const HISTOGRAM_SIZE: (u32, u32) = (640, 360);
+pub const TIME_SIZE: (u32, u32) = (1200, 420);
 /// Room kept clear round the plot, in pixels.
 const MARGIN: f32 = 14.0;
 
@@ -17,6 +19,11 @@ const BACKGROUND: Rgba = [0x1c, 0x19, 0x15, 255];
 const GRID: Rgba = [0x3a, 0x32, 0x26, 255];
 const GOLD: Rgba = [0xd9, 0xb4, 0x6a, 255];
 const FAINT: Rgba = [0x7d, 0x73, 0x5f, 255];
+/// The needs' lines, and the exhaustion step line.
+pub const HUNGER: Rgba = [0xc4, 0x8a, 0x52, 255];
+pub const THIRST: Rgba = [0x6f, 0x9b, 0xe0, 255];
+pub const SLEEP: Rgba = [0x86, 0xba, 0x80, 255];
+pub const EXHAUSTION: Rgba = [0xe6, 0xdc, 0xc6, 255];
 const DRAW: Rgba = [0xc4, 0x8a, 0x52, 255];
 
 /// A canvas of pixels, drawn on with alpha.
@@ -173,6 +180,52 @@ pub fn histogram_chart(now: &FightSummary, was: Option<&FightSummary>) -> Chart 
         x_labels: ("1 round".to_string(), if shown == CHART_ROUNDS { format!("{shown}+") } else { format!("{shown}") }),
         draw: draws.then(|| 1.0 / columns as f32),
     }
+}
+
+/// The needs against game time, 0 to 1, with the band edges as faint rules; exhaustion as a
+/// step line on its own scale (level 0 to 6 over the same height); the saved rules' run faint
+/// and dashed; and a tick at the bottom where something was eaten or drunk.
+pub fn time_chart(now: &Timeline, was: Option<&Timeline>, edges: &[f64]) -> Chart {
+    let (w, h) = TIME_SIZE;
+    let mut canvas = Canvas::new(w, h, BACKGROUND);
+    let end = now.end().max(was.map_or(0.0, |t| t.end())).max(1.0) as f32;
+    let x = |hours: f64| MARGIN + hours as f32 / end * (w as f32 - 2.0 * MARGIN);
+    let y = |share: f64| h as f32 - MARGIN - (share as f32).clamp(0.0, 1.0) * (h as f32 - 2.0 * MARGIN);
+    for share in std::iter::once(&0.0).chain(edges) {
+        canvas.hline(MARGIN, w as f32 - MARGIN, y(*share), GRID);
+    }
+    let lines: [(Rgba, fn(&Sample) -> f64); 3] = [(HUNGER, |s| s.hunger), (THIRST, |s| s.thirst), (SLEEP, |s| s.sleepiness)];
+    let draw = |canvas: &mut Canvas, run: &Timeline, thickness: f32, faint: bool| {
+        let tint = |c: Rgba| if faint { [c[0], c[1], c[2], 120] } else { c };
+        let dash = faint.then_some((10.0, 8.0));
+        for (colour, pick) in lines.iter().copied().chain([(EXHAUSTION, (|s: &Sample| s.exhaustion as f64 / 6.0) as fn(&Sample) -> f64)]) {
+            let step = colour == EXHAUSTION;
+            for pair in run.samples.windows(2) {
+                let (a, b) = (&pair[0], &pair[1]);
+                let (from, to) = ((x(a.hours), y(pick(a))), (x(b.hours), y(pick(b))));
+                if step {
+                    // Held until the next sample, then up.
+                    canvas.line(from, (to.0, from.1), thickness, tint(colour), dash);
+                    canvas.line((to.0, from.1), to, thickness, tint(colour), dash);
+                } else {
+                    canvas.line(from, to, thickness, tint(colour), dash);
+                }
+            }
+        }
+    };
+    if let Some(was) = was {
+        draw(&mut canvas, was, 3.0, true);
+    }
+    for (hours, event) in &now.events {
+        let colour = if *event == Event::Eat { HUNGER } else { THIRST };
+        canvas.line((x(*hours), y(0.0)), (x(*hours), y(0.06)), 4.0, colour, None);
+    }
+    draw(&mut canvas, now, 4.0, false);
+    Chart { canvas, y_labels: ("full".to_string(), "0".to_string()), x_labels: ("start".to_string(), hours_label(end as f64)), draw: None }
+}
+
+fn hours_label(hours: f64) -> String {
+    if hours >= 72.0 { format!("day {}", (hours / 24.0).round()) } else { format!("{} h", hours.round()) }
 }
 
 #[cfg(test)]

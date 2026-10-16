@@ -32,6 +32,7 @@ pub mod lab_rules;
 pub mod lab_sheet;
 pub mod lab_strike;
 pub mod lab_time;
+pub mod lab_timeline;
 pub mod lab_view;
 pub mod launch;
 pub mod level;
