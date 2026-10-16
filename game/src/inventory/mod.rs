@@ -37,6 +37,7 @@ pub mod header;
 pub mod icon;
 pub mod items;
 pub mod seal;
+pub mod sheet;
 pub mod underfoot;
 
 use bevy::{
@@ -58,7 +59,7 @@ use crate::carry::ViewModelCamera;
 use crate::character::{Character, character_for};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
-use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, show_screen, switch_screens};
+use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, SheetTab, show_screen, switch_screens};
 use crate::quickslots::{QuickslotDrop, Quickslots};
 pub use crate::ui::node_rect;
 use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
@@ -96,9 +97,11 @@ impl Plugin for InventoryPlugin {
             .init_resource::<UiFonts>()
             .init_resource::<Keymap>()
             .init_resource::<ScreenOpen>()
+            .init_resource::<SheetTab>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
             .init_resource::<Quickslots>()
+            .init_resource::<sheet::HoveredNumber>()
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
@@ -122,6 +125,8 @@ impl Plugin for InventoryPlugin {
                         build_screen,
                         drag_items,
                         unhang_without_belt,
+                        (sheet::update_status, sheet::update_gear).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
                         show_drag,
@@ -638,6 +643,7 @@ pub fn cell_under(rect: Rect, point: Vec2, cell: f32) -> IVec2 {
 pub(crate) fn build_screen(
     mut commands: Commands,
     open: Res<ScreenOpen>,
+    tab: Res<SheetTab>,
     inventory: Res<Inventory>,
     underfoot: Res<Underfoot>,
     showing: Res<OpenContainer>,
@@ -647,6 +653,7 @@ pub(crate) fn build_screen(
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
     tuning: Res<Tuning>,
+    players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion), With<crate::play::Player>>,
     mut icons: Icons,
 ) {
     let existing = screens.iter().next();
@@ -656,7 +663,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !character.is_changed() && !tuning.is_changed() {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -699,7 +706,12 @@ pub(crate) fn build_screen(
                 ledger
                     .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(700), ..default() })
                     .with_children(|leaf| {
-                        header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone());
+                        header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone(), *tab);
+                        if *tab == SheetTab::Character {
+                            let (needs, exhaustion) = players.single().map_or_else(|_| Default::default(), |(needs, exhaustion)| (needs.0, exhaustion.0));
+                            sheet::sheet(leaf, &fonts, &character, &inventory, &needs, exhaustion);
+                            return;
+                        }
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
                             .with_children(|row| {
                                 let carried = screen.inventory.carried_containers();
@@ -1239,9 +1251,11 @@ mod tests {
             .init_resource::<IconCache>()
             .init_resource::<UiFonts>()
             .init_resource::<ScreenOpen>()
+            .init_resource::<SheetTab>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
             .init_resource::<Quickslots>()
+            .init_resource::<sheet::HoveredNumber>()
             .init_resource::<Toast>()
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
@@ -1250,7 +1264,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
-            .add_systems(Update, (switch_screens, build_screen, drag_items, icon::reveal_icons).chain());
+            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -1416,6 +1430,261 @@ mod tests {
         assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         press(&mut app, KeyCode::KeyI);
         assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory));
+    }
+
+    fn sheet_showing(app: &mut App) -> bool {
+        let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+        sheets.iter(app.world()).count() == 1
+    }
+
+    #[test]
+    fn c_opens_the_character_tab_and_i_the_inventory_tab() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyC);
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Character);
+        assert!(sheet_showing(&mut app));
+        let mut grids = app.world_mut().query::<&GridView>();
+        assert_eq!(grids.iter(app.world()).count(), 0, "the sheet replaces the grids");
+        press(&mut app, KeyCode::KeyI);
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory), "I swaps to the inventory tab");
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory);
+        assert!(!sheet_showing(&mut app));
+        press(&mut app, KeyCode::KeyC);
+        assert!(sheet_showing(&mut app));
+        press(&mut app, KeyCode::KeyC);
+        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "C closes the character tab");
+        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::Escape);
+        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "Esc closes it");
+        press(&mut app, KeyCode::KeyI);
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory, "the screen reopens on the inventory tab");
+    }
+
+    /// Every line of text under the character sheet, in order.
+    fn sheet_text(app: &mut App) -> Vec<String> {
+        let mut texts = app.world_mut().query::<(&Text, Option<&ChildOf>)>();
+        let world = app.world();
+        let mut lines = Vec::new();
+        for (text, parent) in texts.iter(world) {
+            let mut up = parent.map(|p| p.parent());
+            while let Some(entity) = up {
+                if world.get::<sheet::CharacterSheet>(entity).is_some() {
+                    lines.push(text.0.clone());
+                    break;
+                }
+                up = world.get::<ChildOf>(entity).map(|p| p.parent());
+            }
+        }
+        lines
+    }
+
+    fn delver_with(app: &mut App, hunger: f64, exhaustion: u32) -> Entity {
+        let mut needs = fb_character::Needs::default();
+        needs.hunger.value = hunger;
+        app.world_mut().spawn((crate::play::Player, crate::character::DelverNeeds(needs), crate::exhaustion::Exhaustion(fb_character::Exhaustion::new(exhaustion)))).id()
+    }
+
+    /// A rolled `base` with the real affix `name` applied and its weight set to `weight`.
+    fn weighed_with(base: &str, seed: u32, affix: Option<&str>, weight: f32) -> fb_items::Item {
+        let mut item = fb_items::roll_item(base, seed).unwrap();
+        if let Some(name) = affix {
+            let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+            affix.apply_to_stats(&mut item.profile.stats);
+            item.affixes.push(affix);
+        }
+        item.profile.stats.weight = weight;
+        item
+    }
+
+    /// The value on the gear row `label`.
+    fn gear_row(app: &mut App, label: usize) -> String {
+        let mut lines = app.world_mut().query::<(&sheet::GearLine, &Text)>();
+        lines.iter(app.world()).find(|(l, _)| l.0 == label).map(|(_, t)| t.0.clone()).expect("a gear line")
+    }
+
+    #[test]
+    fn the_attributes_read_with_their_modifiers() {
+        let mut app = screen_app();
+        app.world_mut().resource_mut::<Character>().attributes = fb_character::Attributes { strength: 14, dexterity: 9, constitution: 10, intelligence: 18, wisdom: 3 };
+        press(&mut app, KeyCode::KeyC);
+        let text = sheet_text(&mut app);
+        for want in ["STR 14 (+2)", "DEX 9 (-1)", "CON 10 (+0)", "INT 18 (+4)", "WIS 3 (-4)"] {
+            assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
+        }
+    }
+
+    #[test]
+    fn a_belt_of_the_ox_from_the_pack_changes_the_load_while_the_tab_is_open() {
+        use sheet::GEAR_ROWS;
+        let mut app = screen_app();
+        let attributes = fb_character::Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Human, attributes, ..Character::roll(4) };
+        let belt = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(weighed_with("Pack", 7, None, 0.0));
+            inventory.wear(pack, Slot::Back).unwrap();
+            let load = inventory.add(weighed_with("Dagger", 3, None, 55.0));
+            inventory.put(load, pack, Placement::new(0, 0, false)).unwrap();
+            let belt = inventory.add(weighed_with("Belt", 2, Some("of the Ox"), 0.0));
+            inventory.put(belt, pack, Placement::new(4, 0, false)).unwrap();
+            belt
+        };
+        press(&mut app, KeyCode::KeyC);
+        assert_eq!(GEAR_ROWS[0], "Load");
+        assert_eq!(gear_row(&mut app, 0), "55 / 150 lb \u{b7} Burdened");
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+        }
+        app.update();
+        assert_eq!(gear_row(&mut app, 0), "55 / 175 lb \u{b7} Light");
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
+    }
+
+    #[test]
+    fn the_gear_rows_agree_with_the_header() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyC);
+        let character = app.world().resource::<Character>().clone();
+        let derived = character.derive(app.world().resource::<Inventory>());
+        assert_eq!(gear_row(&mut app, 1), format!("{:.0} / {:.0}", derived.warmth, character.warmth_need()));
+        assert_eq!(gear_row(&mut app, 4), derived.armour_class.to_string());
+        assert_eq!(gear_row(&mut app, 2), "none");
+        assert!(header_stats(&mut app).contains(&format!("AC {}", derived.armour_class)));
+    }
+
+    #[test]
+    fn a_goblin_shows_60_ft_of_darkvision_and_a_lizardfolk_needs_more_warmth() {
+        let mut app = screen_app();
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Goblin, ..Character::roll(4) };
+        press(&mut app, KeyCode::KeyC);
+        assert_eq!(gear_row(&mut app, 3), "60 ft");
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(weighed_with("Belt", 2, Some("of the Mole"), 1.0));
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+        }
+        app.update();
+        assert_eq!(gear_row(&mut app, 3), "60 ft", "the best, not the sum");
+        assert_eq!(gear_row(&mut app, 1).split(" / ").nth(1), Some("6"));
+        app.world_mut().resource_mut::<Character>().folk = fb_body::Folk::Lizardfolk;
+        app.update();
+        assert_eq!(gear_row(&mut app, 1).split(" / ").nth(1), Some("8"));
+    }
+
+    /// The lines of the breakdown tooltip.
+    fn tip_text(app: &mut App) -> Vec<String> {
+        let mut texts = app.world_mut().query::<(&Text, &ChildOf)>();
+        let world = app.world();
+        texts.iter(world).filter(|(_, p)| world.get::<sheet::BreakdownTip>(p.parent()).is_some()).map(|(t, _)| t.0.clone()).collect()
+    }
+
+    fn hover_row(app: &mut App, row: Option<usize>) {
+        app.world_mut().resource_mut::<sheet::HoveredNumber>().0 = row.map(|r| (r, Rect::new(10.0, 10.0 + 22.0 * r as f32, 300.0, 30.0 + 22.0 * r as f32)));
+        app.update();
+        app.update();
+    }
+
+    #[test]
+    fn hovering_capacity_lists_the_strength_and_the_belt_of_the_ox() {
+        let mut app = screen_app();
+        let attributes = fb_character::Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Human, attributes, ..Character::roll(4) };
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(weighed_with("Belt", 2, Some("of the Ox"), 1.0));
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+        }
+        press(&mut app, KeyCode::KeyC);
+        assert!(tip_text(&mut app).is_empty());
+        hover_row(&mut app, Some(0));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.contains("Capacity 175 lb = STR 10 \u{d7} 15 (150) + ") && l.contains("Belt") && l.ends_with("(+25)")), "{tip:?}");
+        assert!(tip.iter().any(|l| l.starts_with("Load 1 lb =")), "{tip:?}");
+        let mut tips = app.world_mut().query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
+        assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Inherited);
+        hover_row(&mut app, None);
+        assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Hidden);
+    }
+
+    #[test]
+    fn hovering_a_goblin_s_darkvision_names_the_folk_as_the_winner() {
+        let mut app = screen_app();
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Goblin, ..Character::roll(4) };
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(weighed_with("Belt", 2, Some("of the Mole"), 1.0));
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+        }
+        press(&mut app, KeyCode::KeyC);
+        hover_row(&mut app, Some(3));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.starts_with("Darkvision 60 ft = best of Goblin 60, ") && l.contains("Belt") && l.ends_with("(Goblin)")), "{tip:?}");
+    }
+
+    #[test]
+    fn hovering_warmth_and_armour_class_explain_them() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyC);
+        hover_row(&mut app, Some(1));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.starts_with("Warmth ")) && tip.iter().any(|l| l == "Warmth needed 6"), "{tip:?}");
+        hover_row(&mut app, Some(4));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.starts_with("Armour class ") && l.contains("= base (10) + DEX ")), "{tip:?}");
+    }
+
+    #[test]
+    fn the_mouse_over_a_row_picks_it() {
+        let rows = [(0, Rect::new(0.0, 0.0, 100.0, 20.0)), (1, Rect::new(0.0, 20.0, 100.0, 40.0))];
+        assert_eq!(sheet::row_under(rows, Vec2::new(5.0, 25.0)).map(|r| r.0), Some(1));
+        assert_eq!(sheet::row_under(rows, Vec2::new(150.0, 5.0)), None);
+    }
+
+    #[test]
+    fn the_status_reads_the_needs_exhaustion_and_load() {
+        let mut app = screen_app();
+        delver_with(&mut app, 0.0, 2);
+        press(&mut app, KeyCode::KeyC);
+        let text = sheet_text(&mut app);
+        for want in ["Hunger", "Thirst", "Sleepiness", "Fed", "Quenched", "Rested", "Exhaustion 2: half speed"] {
+            assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
+        }
+    }
+
+    #[test]
+    fn the_status_changes_while_the_screen_stays_open() {
+        let mut app = screen_app();
+        let delver = delver_with(&mut app, 0.0, 0);
+        press(&mut app, KeyCode::KeyC);
+        let before = {
+            let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+            sheets.single(app.world()).unwrap()
+        };
+        assert!(sheet_text(&mut app).contains(&"Fed".to_string()));
+        app.world_mut().get_mut::<crate::character::DelverNeeds>(delver).unwrap().0.hunger.value = 0.55;
+        app.world_mut().get_mut::<crate::exhaustion::Exhaustion>(delver).unwrap().0 = fb_character::Exhaustion::new(2);
+        app.update();
+        let text = sheet_text(&mut app);
+        assert!(text.contains(&"Hungry".to_string()) && !text.contains(&"Fed".to_string()), "{text:?}");
+        assert!(text.contains(&"Exhaustion 2: half speed".to_string()), "{text:?}");
+        let mut fills = app.world_mut().query::<(&sheet::NeedFill, &Node)>();
+        let hunger = fills.iter(app.world()).find(|(f, _)| f.0 == fb_character::MeterKind::Hunger).map(|(_, n)| n.width).unwrap();
+        assert_eq!(hunger, percent(55.0));
+        let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+        assert_eq!(sheets.single(app.world()).unwrap(), before, "the sheet was updated, not rebuilt");
+    }
+
+    #[test]
+    fn eating_with_the_sheet_open_shows_fed() {
+        let mut app = screen_app();
+        let delver = delver_with(&mut app, 0.6, 0);
+        press(&mut app, KeyCode::KeyC);
+        assert!(sheet_text(&mut app).contains(&"Hungry".to_string()));
+        app.world_mut().get_mut::<crate::character::DelverNeeds>(delver).unwrap().0.consume(1.0, 0.0);
+        app.update();
+        assert!(sheet_text(&mut app).contains(&"Fed".to_string()));
     }
 
     #[test]

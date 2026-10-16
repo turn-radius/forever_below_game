@@ -525,6 +525,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<crate::play::SheetTab>()
             .add_systems(Update, switch_screens)
             .add_plugins(MenuPlugin);
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });

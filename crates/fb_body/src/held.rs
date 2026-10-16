@@ -161,12 +161,16 @@ pub fn fit_held(body: &Body, side: Side, item: &Item) -> Option<HeldFit> {
     // rule; a goblin's ears reach far out to the sides.
     let mut lit = torch.clone();
     lit.burn.state = armory::families::torch::BurnState::Burning;
-    let flame = armory::families::torch::Torch::light(&lit).map_or([0.0, 0.0, 0.0], |l| l.position);
+    let flame = armory::families::torch::Torch::flame_extent(&lit);
     let head = body.head_mesh().bounds();
-    let clear = |fit: &HeldFit| {
-        let at = fit.to_body(flame);
-        head.is_none_or(|(lo, hi)| at[0] < lo[0] - HEAD_CLEARANCE || at[0] > hi[0] + HEAD_CLEARANCE || at[1] < lo[1] - HEAD_CLEARANCE || at[1] > hi[1] + HEAD_CLEARANCE)
+    // The whole flame clears the head: its tip, and its bulb with the bulb's width.
+    let outside = |at: V3, wide: f32| {
+        head.is_none_or(|(lo, hi)| {
+            let m = HEAD_CLEARANCE + wide;
+            at[0] < lo[0] - m || at[0] > hi[0] + m || at[1] < lo[1] - HEAD_CLEARANCE || at[1] > hi[1] + HEAD_CLEARANCE
+        })
     };
+    let clear = |fit: &HeldFit| outside(fit.to_body(flame.top), 0.0) && outside(fit.to_body(flame.bulb), flame.radius * fit.scale);
     if clear(&first) {
         return Some(first);
     }
@@ -838,10 +842,14 @@ mod tests {
                     assert!(r <= cap + 1e-4, "{folk:?} {}: grip {r} over {cap}", item.noun());
                     // And as drawn: the handle inside the fist stays within the hand's grip.
                     let g = grip(&body, Side::Right, &fit);
+                    // A torch leaned out from the fist (to keep its flame off a goblin's ears) has its
+                    // handle along its own tilted axis, not the posed grip's: measuring across the
+                    // grip axis would read a tilted handle as wider than it is.
+                    let axis = if family == Family::Torch { fit.placement.rotation.transform(vec3::Y) } else { g.y() };
                     let widest = points(&fit.mesh, HANDLES)
                         .map(|p| vec3::sub(p, g.origin))
-                        .filter(|d| vec3::dot(*d, g.y()).abs() < half_fist * 0.6)
-                        .map(|d| vec3::length(vec3::sub(d, vec3::scale(g.y(), vec3::dot(d, g.y())))))
+                        .filter(|d| vec3::dot(*d, axis).abs() < half_fist * 0.6)
+                        .map(|d| vec3::length(vec3::sub(d, vec3::scale(axis, vec3::dot(d, axis)))))
                         .fold(0.0, f32::max);
                     assert!(widest > 0.0 && widest <= cap * 1.1 + 0.005, "{folk:?} {} seed {seed}: drawn handle {widest} in a fist of {cap}", item.noun());
                 }

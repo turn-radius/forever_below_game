@@ -195,19 +195,52 @@ pub fn level_has_focus(screen: Option<Res<ScreenOpen>>) -> bool {
     !screen.is_some_and(|s| s.0.is_some())
 }
 
-/// The screen open after this frame's presses, from `open`: Esc closes an open screen first,
-/// and with none open brings up the menu; the inventory key opens and closes the inventory and
-/// the map key the map, each swapping for the other, but neither over the menu.
-pub fn next_screen(open: Option<Screen>, inventory: bool, map: bool, back: bool) -> Option<Screen> {
-    match open {
-        Some(_) if back => None,
-        None if back => Some(Screen::Menu),
-        Some(Screen::Inventory) if inventory => None,
-        Some(Screen::Map) if map => None,
-        None | Some(Screen::Map) if inventory => Some(Screen::Inventory),
-        None | Some(Screen::Inventory) if map => Some(Screen::Map),
-        unchanged => unchanged,
-    }
+/// Which leaf of the inventory screen is showing: the plate's tab bar. The outfit tab is a
+/// label only for now.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SheetTab {
+    /// The grids: the pack, the floor and the slots.
+    #[default]
+    Inventory,
+    /// The character sheet and status.
+    Character,
+}
+
+/// The keys pressed this frame that open, close or swap screens.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ScreenKeys {
+    pub inventory: bool,
+    pub character: bool,
+    pub map: bool,
+    pub back: bool,
+}
+
+/// The screen and tab open after this frame's presses, from `open` and `tab`: Esc closes an
+/// open screen first, and with none open brings up the menu; the inventory key opens the
+/// inventory on its inventory tab and the character key on its character tab, each closing
+/// the screen when its tab is already showing and otherwise swapping to its tab; the map key
+/// opens and closes the map, swapping with the inventory. None of them opens over the menu.
+/// With no inventory showing the tab is the inventory's.
+pub fn next_screen(open: Option<Screen>, tab: SheetTab, keys: ScreenKeys) -> (Option<Screen>, SheetTab) {
+    let ScreenKeys { inventory, character, map, back } = keys;
+    let tab_asked = if inventory {
+        Some(SheetTab::Inventory)
+    } else if character {
+        Some(SheetTab::Character)
+    } else {
+        None
+    };
+    let next = match (open, tab_asked) {
+        (Some(_), _) if back => (None, tab),
+        (None, _) if back => (Some(Screen::Menu), tab),
+        (Some(Screen::Inventory), Some(asked)) if asked == tab => (None, tab),
+        (Some(Screen::Inventory), Some(asked)) => (open, asked),
+        (None | Some(Screen::Map), Some(asked)) => (Some(Screen::Inventory), asked),
+        (Some(Screen::Map), None) if map => (None, tab),
+        (None | Some(Screen::Inventory), None) if map => (Some(Screen::Map), tab),
+        _ => (open, tab),
+    };
+    if next.0 == Some(Screen::Inventory) { next } else { (next.0, SheetTab::Inventory) }
 }
 
 /// Opens `screen` (or closes every screen with `None`), freeing the mouse for a screen and
@@ -221,10 +254,24 @@ pub fn show_screen(open: &mut ScreenOpen, screen: Option<Screen>, cursor: Option
 
 /// Opens and closes screens from the keyboard ([`next_screen`]). Systems that draw a screen
 /// run after it.
-pub fn switch_screens(input: ActionInput, mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
-    let next = next_screen(open.0, input.just_pressed(Action::Inventory), input.just_pressed(Action::Map), input.just_pressed(Action::Back));
+pub fn switch_screens(
+    input: ActionInput,
+    mut open: ResMut<ScreenOpen>,
+    mut tab: ResMut<SheetTab>,
+    mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+) {
+    let keys = ScreenKeys {
+        inventory: input.just_pressed(Action::Inventory),
+        character: input.just_pressed(Action::Character),
+        map: input.just_pressed(Action::Map),
+        back: input.just_pressed(Action::Back),
+    };
+    let (next, next_tab) = next_screen(open.0, *tab, keys);
     if next != open.0 {
         show_screen(&mut open, next, cursor.as_deref_mut().map(|c| &mut **c));
+    }
+    if next_tab != *tab {
+        *tab = next_tab;
     }
 }
 
@@ -237,11 +284,12 @@ impl Plugin for PlayPlugin {
         app.init_resource::<BlockedCells>()
             .init_resource::<Obstacles>()
             .init_resource::<ScreenOpen>()
+            .init_resource::<SheetTab>()
             .init_resource::<Keymap>()
             .add_systems(Update, switch_screens.in_set(DelveSystems))
             .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate).in_set(DelveSystems))
             .add_plugins((
-            crate::game_clock::GameClockPlugin,
+            (crate::ambient::AmbientPlugin, crate::footsteps::FootstepsPlugin, crate::game_clock::GameClockPlugin),
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,
@@ -309,6 +357,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Keymap>()
             .init_resource::<ScreenOpen>()
+            .init_resource::<SheetTab>()
             .add_systems(Update, switch_screens.in_set(DelveSystems));
         run_delve_systems_while_delving(&mut app);
         let escape = |app: &mut App| {
@@ -326,26 +375,51 @@ mod tests {
         assert_eq!(app.world().resource::<ScreenOpen>().0, Some(Screen::Menu));
     }
 
+    fn keys(inventory: bool, character: bool, map: bool, back: bool) -> ScreenKeys {
+        ScreenKeys { inventory, character, map, back }
+    }
+
     #[test]
     fn escape_closes_a_screen_before_it_opens_the_menu() {
         use Screen::{Inventory, Menu};
-        assert_eq!(next_screen(Some(Inventory), false, false, true), None);
-        assert_eq!(next_screen(None, false, false, true), Some(Menu));
-        assert_eq!(next_screen(Some(Menu), false, false, true), None);
-        assert_eq!(next_screen(None, true, false, false), Some(Inventory));
-        assert_eq!(next_screen(Some(Inventory), true, false, false), None);
-        assert_eq!(next_screen(Some(Menu), true, false, false), Some(Menu), "no inventory over the menu");
-        assert_eq!(next_screen(None, false, false, false), None);
+        use SheetTab::Inventory as Grids;
+        let screen = |open, k| next_screen(open, Grids, k).0;
+        assert_eq!(screen(Some(Inventory), keys(false, false, false, true)), None);
+        assert_eq!(screen(None, keys(false, false, false, true)), Some(Menu));
+        assert_eq!(screen(Some(Menu), keys(false, false, false, true)), None);
+        assert_eq!(screen(None, keys(true, false, false, false)), Some(Inventory));
+        assert_eq!(screen(Some(Inventory), keys(true, false, false, false)), None);
+        assert_eq!(screen(Some(Menu), keys(true, false, false, false)), Some(Menu), "no inventory over the menu");
+        assert_eq!(screen(Some(Menu), keys(false, true, false, false)), Some(Menu), "no sheet over the menu");
+        assert_eq!(screen(None, keys(false, false, false, false)), None);
+    }
+
+    #[test]
+    fn c_opens_the_character_tab_and_i_the_inventory_tab() {
+        use Screen::Inventory;
+        use SheetTab::{Character, Inventory as Grids};
+        let none = keys(false, false, false, false);
+        assert_eq!(next_screen(None, Grids, keys(false, true, false, false)), (Some(Inventory), Character));
+        assert_eq!(next_screen(None, Grids, keys(true, false, false, false)), (Some(Inventory), Grids));
+        assert_eq!(next_screen(Some(Inventory), Character, keys(true, false, false, false)), (Some(Inventory), Grids), "I swaps to the inventory tab");
+        assert_eq!(next_screen(Some(Inventory), Grids, keys(false, true, false, false)), (Some(Inventory), Character), "C swaps to the character tab");
+        assert_eq!(next_screen(Some(Inventory), Character, keys(false, true, false, false)), (None, Grids), "C closes its own tab");
+        assert_eq!(next_screen(Some(Inventory), Character, keys(false, false, false, true)), (None, Grids), "Esc closes it");
+        assert_eq!(next_screen(Some(Inventory), Character, none), (Some(Inventory), Character));
+        assert_eq!(next_screen(Some(Screen::Map), Grids, keys(false, true, false, false)), (Some(Inventory), Character));
+        assert_eq!(next_screen(Some(Inventory), Character, keys(false, false, true, false)), (Some(Screen::Map), Grids), "the map swaps for the sheet");
     }
 
     #[test]
     fn m_opens_and_closes_the_map_and_esc_closes_it() {
         use Screen::{Inventory, Map, Menu};
-        assert_eq!(next_screen(None, false, true, false), Some(Map));
-        assert_eq!(next_screen(Some(Map), false, true, false), None);
-        assert_eq!(next_screen(Some(Map), false, false, true), None, "Esc closes the map, not opening the menu");
-        assert_eq!(next_screen(Some(Inventory), false, true, false), Some(Map), "the map swaps for the inventory");
-        assert_eq!(next_screen(Some(Map), true, false, false), Some(Inventory));
-        assert_eq!(next_screen(Some(Menu), false, true, false), Some(Menu), "no map over the menu");
+        use SheetTab::Inventory as Grids;
+        let screen = |open, k| next_screen(open, Grids, k).0;
+        assert_eq!(screen(None, keys(false, false, true, false)), Some(Map));
+        assert_eq!(screen(Some(Map), keys(false, false, true, false)), None);
+        assert_eq!(screen(Some(Map), keys(false, false, false, true)), None, "Esc closes the map, not opening the menu");
+        assert_eq!(screen(Some(Inventory), keys(false, false, true, false)), Some(Map), "the map swaps for the inventory");
+        assert_eq!(screen(Some(Map), keys(true, false, false, false)), Some(Inventory));
+        assert_eq!(screen(Some(Menu), keys(false, false, true, false)), Some(Menu), "no map over the menu");
     }
 }

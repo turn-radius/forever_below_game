@@ -12,6 +12,8 @@
 //! `Meter` tracks hunger, thirst, and sleepiness from 0 (best) to 1 (worst), advancing each turn by
 //! a base rate scaled by activity and gear modifiers. `Character` combines these with activity state.
 
+pub mod explain;
+
 use serde::{Deserialize, Serialize};
 
 /// The five core attributes of a character (D&D 5e SRD 5.1, p. 76).
@@ -169,11 +171,14 @@ pub struct Worn {
     pub sleepiness_rate: f64,
     /// Points of Stealth: each makes the wearer a twentieth less visible ([`visibility`]).
     pub stealth: f64,
+    /// Warmth the wearer is given.
+    #[serde(default)]
+    pub warmth: f64,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0 }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0 }
     }
 }
 
@@ -1437,7 +1442,7 @@ mod tests {
     fn gear_adds_carry_multiplies_rates_and_takes_the_best_darkvision() {
         let worn = [
             Worn { carry: 25.0, darkvision: 10.0, hunger_rate: 0.85, ..Worn::default() },
-            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85, stealth: 0.0 },
+            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85, stealth: 0.0, warmth: 0.0 },
         ];
         let gear = Gear::new(20.0, worn, []);
         assert_eq!(gear.carry, 50.0);

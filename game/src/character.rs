@@ -6,6 +6,7 @@
 
 use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
+use fb_character::explain::{Explained, Loadout, armour_class};
 use fb_character::{Activity, Attributes, CarriedLight, Casting, Gear, LoadBand, Mana, Worn, modifier as ability_modifier};
 use procgen_rng::Mulberry32;
 
@@ -125,6 +126,11 @@ impl Character {
         BodySpec::roll(self.folk, self.body_seed)
     }
 
+    /// The warmth the delver needs from their gear: 6, or 8 for the cold-blooded lizardfolk.
+    pub fn warmth_need(&self) -> f32 {
+        if self.folk == Folk::Lizardfolk { 8.0 } else { 6.0 }
+    }
+
     pub fn strength(&self) -> i32 {
         self.attributes.strength
     }
@@ -167,15 +173,26 @@ impl Character {
     /// the items' as the best of them, and the carried light is the farthest reaching of the
     /// lit things carried ([`carried_lights`]).
     pub fn gear(&self, inventory: &Inventory) -> Gear {
-        let worn = inventory.equipped().into_iter().map(|(_, item)| {
+        self.loadout(inventory).gear()
+    }
+
+    /// [`Character::gear`] with each item's name, so the numbers it sums can be explained
+    /// ([`Loadout::capacity`] and the rest).
+    pub fn loadout(&self, inventory: &Inventory) -> Loadout {
+        let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
+        for (_, item) in inventory.equipped() {
             let s = &item.profile.stats;
-            Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64 }
-        });
-        let lights = carried_lights(inventory)
-            .into_iter()
-            .filter_map(|(_, id)| inventory.item(id))
-            .map(|item| CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
-        Gear::new(self.folk.race().dv as f64, worn, lights)
+            loadout = loadout.wearing(&item.name, Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64 });
+        }
+        for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
+            loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
+        }
+        loadout
+    }
+
+    /// Their armour class with its terms: 10, the dexterity modifier and each worn item's armour.
+    pub fn armour_class(&self, inventory: &Inventory) -> Explained {
+        armour_class(self.dexterity(), inventory.equipped().iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)))
     }
 
     /// What everything equipped adds to the delver, as the plate's `derive` adds it up; the
@@ -191,7 +208,7 @@ impl Character {
         let capacity = gear.capacity_lb(self.strength()) as f32;
         let load_band = LoadBand::from_load(load as f64, capacity as f64);
         Derived {
-            armour_class: 10 + sum(|s| s.armour).round() as i32 + modifier(self.dexterity()),
+            armour_class: self.armour_class(inventory).value().round() as i32,
             load,
             capacity,
             load_band,

@@ -7,6 +7,7 @@
 //! [`Player`]; pitch tilts its [`PlayerCamera`] child, which also carries the head bob.
 
 use bevy::{
+    audio::SpatialListener,
     camera::Exposure,
     input::mouse::AccumulatedMouseMotion,
     prelude::*,
