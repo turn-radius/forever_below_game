@@ -29,6 +29,8 @@ pub enum Action {
     DragItem,
     TurnItem,
     Inventory,
+    /// Opens the inventory screen on its character tab.
+    Character,
     /// Opens and closes the map of the level.
     Map,
     /// Closes the open screen or page, or opens the menu over the level.
@@ -159,6 +161,7 @@ impl Default for Keymap {
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),
+                bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyC)]),
                 bind(Action::Map, "Map", Group::Screens, &[Key(KeyCode::KeyM)]),
                 bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]),
                 bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]),
@@ -242,9 +245,10 @@ mod tests {
     }
 
     #[test]
-    fn the_inventory_is_i_and_nothing_is_tab() {
+    fn the_inventory_is_i_the_character_c_and_nothing_is_tab() {
         let keymap = Keymap::default();
         assert_eq!(keymap.inputs(Action::Inventory), &[Input::Key(KeyCode::KeyI)]);
+        assert_eq!(keymap.inputs(Action::Character), &[Input::Key(KeyCode::KeyC)]);
         assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(KeyCode::Tab))));
     }
 

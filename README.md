@@ -34,6 +34,7 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 | L, Shift+L | light or put out the torch or lantern you carry, the one in hand first, then the one at your hip; Shift+L acts on the hip lantern alone. In the inventory, L lights or puts out the torch or lantern under the mouse, wherever it lies; its card says which. A spent torch will not light. Every lit light you carry shines |
 | M | map of the level, filled in as you explore: only cells you have seen while they were lit are drawn, as an inked plan with you marked by an amber arrow; scroll to zoom about the mouse, drag to pan; M or Esc closes it, and the body holds still while it is open |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
+| C | character: the inventory screen's character tab; C or I swaps between its tabs, and the key of the tab showing closes it |
 | Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
 
