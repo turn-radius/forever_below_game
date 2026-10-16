@@ -4,8 +4,8 @@
 //!
 //! A portrait of the doll's head in a gold frame on Stygian blue, the delver's name in the
 //! display face, a line of folk, height and class, and a line of armour class, load and light
-//! in Plex Mono with the values bright. The tabs are the plate's three; only the inventory's
-//! leaf exists yet, so the outfit and character tabs are labels for now.
+//! in Plex Mono with the values bright. The tabs are the plate's three; the inventory and character
+//! tabs have a leaf each, and the outfit tab is a label for now. The showing tab is bright.
 
 use bevy::{
     prelude::*,
@@ -16,6 +16,7 @@ use fb_body::Body;
 use super::doll::PORTRAIT;
 use super::items::Inventory;
 use crate::character::{Character, Derived};
+use crate::play::SheetTab;
 use crate::ui::{ACCENT, FAINT, FRAME_GOLD, INK, MUTED, STYGIAN, STYGIAN_DEEP, STYGIAN_LIGHT, UiFonts, numbers_line};
 
 /// The line of numbers under the name.
@@ -28,6 +29,14 @@ pub struct ToastText;
 
 /// The leaf's tabs, the active one first in the plate's order.
 pub const TABS: [&str; 3] = ["inventory", "outfit", "character"];
+
+/// The place of a tab in [`TABS`].
+fn tab_index(tab: SheetTab) -> usize {
+    match tab {
+        SheetTab::Inventory => 0,
+        SheetTab::Character => 2,
+    }
+}
 
 /// Feet and inches for a height in world units (10 cm), rounded as the plate's `renderIdent`
 /// rounds them: to the centimetre, then to the inch.
@@ -70,7 +79,7 @@ fn backdrop() -> BackgroundGradient {
 }
 
 /// Builds the header and the tab bar.
-pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Character, inventory: &Inventory, portrait: Handle<Image>) {
+pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Character, inventory: &Inventory, portrait: Handle<Image>, showing: SheetTab) {
     parent.spawn(Node { column_gap: px(16), align_items: AlignItems::Center, ..default() }).with_children(|ident| {
         ident
             .spawn((
@@ -102,7 +111,7 @@ pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Ch
         ))
         .with_children(|bar| {
             for (i, tab) in TABS.iter().enumerate() {
-                bar.spawn((Text::new(*tab), UiFonts::style(&fonts.display, 24.0, if i == 0 { INK } else { MUTED })));
+                bar.spawn((Text::new(*tab), UiFonts::style(&fonts.display, 24.0, if i == tab_index(showing) { INK } else { MUTED })));
             }
             bar.spawn((ToastText, Text::default(), UiFonts::style(&fonts.body, 15.0, ACCENT)));
         });
