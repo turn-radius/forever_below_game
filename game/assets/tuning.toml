@@ -103,6 +103,12 @@ silence_min = 45.0
 silence_max = 75.0
 # Sound effects' volume at full, 0 to 1, before your sound volume setting.
 effects_volume = 1.0
+# Ambient sounds' volume at full, 0 to 1: drips and rumbles.
+ambience_volume = 0.3
+# The shortest time between stone rumbles, in seconds.
+rumble_interval_min = 60.0
+# The longest time between stone rumbles, in seconds.
+rumble_interval_max = 180.0
 
 [interface]
 # Inventory grid cell size, in logical pixels.

@@ -52,6 +52,42 @@ oggenc -q 6 -o game/assets/audio/snake-rise.ogg /tmp/combat/snake_rise.wav
 oggenc -q 6 -o game/assets/audio/thud.ogg /tmp/combat/thud.wav
 ```
 
+**Ambient sounds**: `tools/synth_ambience.py` synthesises ambient sounds as mono 16-bit WAVs: water drips and a deep stony rumble, by oscillators, noise and filters (the technique of Andy Farnell's "Designing Sound"), the same on every run, and `oggenc` encodes them:
+
+```
+python3 tools/synth_ambience.py /tmp/ambience
+oggenc -q 6 -o game/assets/audio/drip.ogg /tmp/ambience/drip.wav
+oggenc -q 6 -o game/assets/audio/rumble.ogg /tmp/ambience/rumble.wav
+```
+
+The drip is a rising sine sweep decaying over about 150 ms with proper phase accumulation, plus faint splash noise. The rumble is a deep rolling sound from decaying sine modes in the 40–120 Hz range.
+
+**Footsteps**: `tools/synth_footsteps.py` synthesises soft, dull footfalls, like a leather or cloth sole on stone in a quiet cave: a low sine thump (80–180 Hz, rounded 4–5 ms fade-in, 60–120 ms decay) over a very faint scuff, all through a 4-pole low-pass near 700 Hz, with no broadband noise. There are 3 light variants and 3 heavy variants (lower and slightly longer, not brighter), normalised to -12 dBFS, the same on every run. `oggenc` encodes them:
+
+```
+python3 tools/synth_footsteps.py /tmp/footsteps
+oggenc -q 6 -o game/assets/audio/step_light_1.ogg /tmp/footsteps/step_light_1.wav
+oggenc -q 6 -o game/assets/audio/step_light_2.ogg /tmp/footsteps/step_light_2.wav
+oggenc -q 6 -o game/assets/audio/step_light_3.ogg /tmp/footsteps/step_light_3.wav
+oggenc -q 6 -o game/assets/audio/step_heavy_1.ogg /tmp/footsteps/step_heavy_1.wav
+oggenc -q 6 -o game/assets/audio/step_heavy_2.ogg /tmp/footsteps/step_heavy_2.wav
+oggenc -q 6 -o game/assets/audio/step_heavy_3.ogg /tmp/footsteps/step_heavy_3.wav
+python3 tools/synth_footsteps.py --measure /tmp/footsteps
+```
+
+The script prints each file's spectral centroid and share of energy above 2 kHz (targets: centroid under 400 Hz, under 2% above 2 kHz). The earlier noisy steps measured centroids of 2600–4700 Hz with 30–52% of energy above 2 kHz. Now:
+
+| File | Centroid | Above 2 kHz |
+| --- | --- | --- |
+| step_light_1 | 163 Hz | 0.00% |
+| step_light_2 | 172 Hz | 0.00% |
+| step_light_3 | 183 Hz | 0.00% |
+| step_heavy_1 | 109 Hz | 0.00% |
+| step_heavy_2 | 115 Hz | 0.00% |
+| step_heavy_3 | 122 Hz | 0.00% |
+
+In game, the delver's steps play at 0.35 of the effects volume (creatures at 0.7 of that), each with a random gain of ±15% and playback speed of ±6%. The same sample is never played twice in a row.
+
 `tools/synth_heal.py` synthesises the healing draught's gentle rising chime (three soft bell notes, decaying sine modes at slightly inharmonic ratios), its docstring citing the source:
 
 ```

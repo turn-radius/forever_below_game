@@ -16,7 +16,7 @@
 //! starting condition (the `--wear` flag wins); `FB_CLOSEUP=<slot>` opens on a close-up of
 //! grid slot 0 to 11.
 
-use bevy::prelude::*;
+use bevy::{audio::AudioPlugin, prelude::*};
 use forever_below::{
     capture::FrameCapturePlugin,
     creature_view::{CreatureChoice, CreatureViewPlugin},
@@ -67,7 +67,9 @@ fn main() -> AppExit {
         DefaultPlugins
             .set(WindowPlugin { primary_window: Some(Window { title: "Forever Below".into(), ..default() }), ..default() })
             // Debug builds watch the assets, so saving `assets/tuning.toml` applies it live.
-            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() }),
+            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() })
+            // Spatial audio scale: positions are scaled to metres. 1 world unit is 10 cm = 0.1 m.
+            .set(AudioPlugin { default_spatial_scale: bevy::audio::SpatialScale::new(0.1), ..default() }),
     )
     .insert_state(opening)
     .add_plugins((SettingsPlugin, TuningPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
