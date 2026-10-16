@@ -11,9 +11,9 @@
 //! meter rates, each with its [`Explained`] terms beneath. Changing anything rebuilds the
 //! sheet in the same frame.
 //!
-//! Below the sheet are two empty columns ([`StrikeColumn`], [`TimeColumn`]) where the strike
-//! log and passing time are added. Command line: `--lab --seed 7` rolls the character from
-//! the seed; with none it opens on a human Fighter with every score 10.
+//! Below the sheet is the strike column ([`crate::lab_strike`]: an attacker, Strike, ×100 and
+//! Heal, and the log), and an empty one ([`TimeColumn`]) where passing time is added. Command
+//! line: `--lab --seed 7` rolls the character from the seed; with none it opens on a human Fighter with every score 10.
 
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
@@ -27,6 +27,7 @@ use bevy::{
 };
 use fb_body::Folk;
 use fb_character::explain::{Explained, number};
+use fb_creatures::Species;
 use fb_character::{Activity, Attributes, LoadBand, MeterKind, modifier};
 use fb_items::armory_base::{ARMORY_BASES, roll_shape};
 use fb_items::profile::profile;
@@ -36,8 +37,9 @@ use fb_items::{Item, Slot, roll_item};
 use crate::character::{Character, Class};
 use crate::combat::{Weapon, first_level_hit_points_explained};
 use crate::inventory::Inventory;
-use crate::tweak_panel::{PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, over_body, panel_body};
-use crate::ui::{BG, BRIGHT, FAINT, INK, LINE, MUTED, UiFonts, numbers_line};
+use crate::lab_strike::{Attacker, Strikes};
+use crate::tweak_panel::{PanelBody, Tweak, chip, TweakPanelPlugin, TweakPanelSystems, over_body, panel_body};
+use crate::ui::{node_rect, BG, BRIGHT, FAINT, INK, LINE, MUTED, UiFonts, numbers_line};
 
 /// Width of the panel on the left, in logical pixels.
 pub const PANEL_WIDTH: f32 = 430.0;
@@ -82,10 +84,21 @@ impl Plugin for LabViewPlugin {
         app.init_resource::<LabState>()
             .init_resource::<UiFonts>()
             .init_resource::<SheetBuilds>()
+            .init_resource::<Strikes>()
             .insert_resource(ClearColor(BG))
             .add_plugins(TweakPanelPlugin::<LabState>::default())
             .add_systems(Startup, setup)
-            .add_systems(Update, (rebuild_sheet.run_if(resource_changed::<LabState>), scroll_sheet).chain().after(TweakPanelSystems));
+            .add_systems(
+            Update,
+            (
+                press_strikes,
+                rebuild_sheet.run_if(resource_changed::<LabState>),
+                refresh_strikes.run_if(|state: Res<LabState>, strikes: Res<Strikes>| state.is_changed() || strikes.is_changed()),
+                scroll_sheet,
+            )
+                .chain()
+                .after(TweakPanelSystems),
+        );
     }
 }
 
@@ -145,6 +158,10 @@ pub struct LabState {
     /// The seed the character was last rolled from.
     pub seed: u32,
     pub slots: Vec<LabSlot>,
+    /// Who strikes the character ([`crate::lab_strike`]).
+    pub attacker: Attacker,
+    /// The seed every strike roll comes from.
+    pub strike_seed: u32,
 }
 
 impl Default for LabState {
@@ -153,7 +170,7 @@ impl Default for LabState {
     fn default() -> Self {
         let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
         let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0 };
-        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect() };
+        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1 };
         for (slot, base, seed) in [(Slot::Mainhand, "Sword", 4), (Slot::Head, "Helm", 9), (Slot::Body, "Mail", 9)] {
             state.equip(slot, base, seed);
         }
@@ -282,6 +299,10 @@ impl Tweak for LabState {
         for ((short, _), score) in ATTRIBUTES.iter().zip(scores) {
             fields.push(slider(&format!("attributes.{short}"), score as f32, SCORE));
         }
+        let attackers = Attacker::all();
+        let who = attackers.iter().map(Attacker::label).collect();
+        fields.push(choice("attacker.who", &self.attacker.label(), who));
+        fields.push(slider("attacker.seed", self.strike_seed as f32, SEED));
         for lab in &self.slots {
             let key = slot_key(lab.slot);
             let mut options = vec!["none".to_string()];
@@ -305,6 +326,7 @@ impl Tweak for LabState {
         let value = value.round().max(0.0) as u32;
         match path.split_once('.') {
             Some(("character", "seed")) => self.set_seed(value),
+            Some(("attacker", "seed")) => self.strike_seed = value,
             Some(("attributes", short)) => {
                 let a = &mut self.character.attributes;
                 let score = (value as i32).clamp(3, 20);
@@ -339,6 +361,11 @@ impl Tweak for LabState {
             "character.class" => {
                 let at = Class::ALL.iter().position(|&c| c == self.character.class).unwrap_or(0);
                 self.character.class = Class::ALL[step(Class::ALL.len(), at)];
+            }
+            "attacker.who" => {
+                let all = Attacker::all();
+                let at = all.iter().position(|a| *a == self.attacker).unwrap_or(0);
+                self.attacker = all[step(all.len(), at)].clone();
             }
             _ => {
                 if let Some((key, "base")) = path.rsplit_once('.')
@@ -446,6 +473,23 @@ struct SheetRows;
 #[derive(Component)]
 pub struct StrikeColumn;
 
+/// A button in the strike column.
+#[derive(Component, Clone, Copy, PartialEq)]
+enum StrikeButton {
+    Strike,
+    Hundred,
+    Heal,
+}
+
+/// A line of text in the strike column.
+#[derive(Component, Clone, Copy, PartialEq)]
+enum StrikeText {
+    Note,
+    Hp,
+    Summary,
+    Log,
+}
+
 /// Where passing time goes.
 #[derive(Component)]
 pub struct TimeColumn;
@@ -483,7 +527,18 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
         .with_children(|column| {
             column.spawn((Text::new("The Sheet"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
             column.spawn((SheetRows, Node { flex_direction: FlexDirection::Column, row_gap: px(10), margin: UiRect::top(px(8)), ..default() }));
-            column.spawn((StrikeColumn, Node { flex_direction: FlexDirection::Column, margin: UiRect::top(px(24)), ..default() }));
+            column.spawn((StrikeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(8), margin: UiRect::top(px(24)), ..default() })).with_children(|strikes| {
+                strikes.spawn((Text::new("Strikes"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
+                strikes.spawn((StrikeText::Note, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                strikes.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
+                    chip(row, &fonts, "Strike", StrikeButton::Strike);
+                    chip(row, &fonts, "×100", StrikeButton::Hundred);
+                    chip(row, &fonts, "Heal", StrikeButton::Heal);
+                });
+                strikes.spawn((StrikeText::Hp, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
+                strikes.spawn((StrikeText::Summary, Text::new(""), UiFonts::style(&fonts.mono, 15.0, BRIGHT)));
+                strikes.spawn((StrikeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
+            });
             column.spawn((TimeColumn, Node { flex_direction: FlexDirection::Column, margin: UiRect::top(px(24)), padding: UiRect::bottom(px(30)), ..default() }));
         });
     });
@@ -506,6 +561,45 @@ fn rebuild_sheet(mut builds: ResMut<SheetBuilds>, mut commands: Commands, state:
                 });
         }
     });
+}
+
+/// A click on Strike, ×100 or Heal.
+fn press_strikes(
+    buttons: Res<ButtonInput<MouseButton>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    controls: Query<(&StrikeButton, &ComputedNode, &UiGlobalTransform)>,
+    state: Res<LabState>,
+    mut strikes: ResMut<Strikes>,
+) {
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
+    let Some((button, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
+    match button {
+        StrikeButton::Strike => strikes.strike(&state),
+        StrikeButton::Hundred => strikes.strike_hundred(&state),
+        StrikeButton::Heal => strikes.heal(),
+    }
+}
+
+/// Shows the attacker, the hit points, the last hundred and the log.
+fn refresh_strikes(state: Res<LabState>, strikes: Res<Strikes>, mut texts: Query<(&StrikeText, &mut Text)>) {
+    let (hp, full) = strikes.hit_points(&state);
+    for (which, mut text) in &mut texts {
+        let line = match which {
+            StrikeText::Note => match &state.attacker {
+                Attacker::Creature(_) => format!("{} strikes with its bite. The strike seed sets every roll.", state.attacker.label()),
+                Attacker::Folk(_) => format!("A {}: STR 10, the base rolled from the strike seed.", state.attacker.label()),
+            },
+            StrikeText::Hp => format!("Hit points {hp} of {full} · AC {}", crate::lab_strike::armour_class(&state)),
+            StrikeText::Summary => strikes.summary.clone().unwrap_or_else(|| "×100 strikes a hundred times from the seed.".into()),
+            StrikeText::Log => strikes.log.iter().cloned().collect::<Vec<_>>().join("\n"),
+        };
+        if text.0 != line {
+            text.0 = line;
+        }
+    }
 }
 
 /// Scrolling away from the panel moves the sheet.
@@ -696,6 +790,21 @@ mod tests {
         assert_eq!(state.structure(), structure, "a slider only moves a value");
         state.equip(Slot::Belt, "Belt", 2);
         assert_ne!(state.structure(), structure);
+    }
+
+    #[test]
+    fn the_panel_offers_every_attacker_and_a_strike_seed() {
+        let mut state = LabState::default();
+        let who = state.fields().into_iter().find(|f| f.path == "attacker.who").unwrap();
+        let FieldKind::Choice { options, .. } = who.kind else { panic!("a choice") };
+        for species in Species::ALL {
+            assert!(options.contains(&species.stat_block().name.to_string()), "{options:?}");
+        }
+        assert!(options.contains(&"folk with Sword".to_string()), "{options:?}");
+        state.cycle("attacker.who", -1);
+        assert!(matches!(state.attacker, Attacker::Creature(Species::Rat)));
+        state.set_slider("attacker.seed", 42.0);
+        assert_eq!(state.strike_seed, 42);
     }
 
     #[test]

@@ -199,7 +199,7 @@ impl Character {
     /// what a worn container holds, counted through every bag in it.
     pub fn load_explained(&self, inventory: &Inventory) -> Explained {
         let mut e = Explained::new("Load", "lb");
-        let mut add = |e: Explained, label: String, pounds: f64| if e.terms().is_empty() { e.base(label, pounds) } else { e.add(label, pounds) };
+        let add = |e: Explained, label: String, pounds: f64| if e.terms().is_empty() { e.base(label, pounds) } else { e.add(label, pounds) };
         for (slot, item) in inventory.equipped() {
             if item.profile.stats.weight != 0.0 {
                 e = add(e, item.name.clone(), item.profile.stats.weight as f64);

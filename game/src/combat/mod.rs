@@ -112,6 +112,12 @@ pub fn first_level_hit_points_explained(character: &Character) -> fb_character::
     rules::first_level_hit_points(die, modifier(character.constitution()))
 }
 
+/// Whether things of `family` are swung as melee weapons (anything else held is improvised).
+pub fn is_melee(family: armory::Family) -> bool {
+    use armory::Family;
+    matches!(family, Family::Sword | Family::Mace | Family::Axe | Family::Club | Family::Spear | Family::Dagger | Family::Staff)
+}
+
 /// How a held thing is swung.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SwingKind {
@@ -187,9 +193,8 @@ impl Weapon {
     /// shape and the body): the damage dice and bonus [`Weapon::in_hand`] uses, so a view that
     /// only wants the numbers (the lab) takes the same ones. A bare fist with `None`.
     pub fn of_stats(item: Option<&fb_items::Item>) -> Weapon {
-        use armory::Family;
         let Some(item) = item else { return Weapon::fist() };
-        let melee = matches!(item.shape.family(), Family::Sword | Family::Mace | Family::Axe | Family::Club | Family::Spear | Family::Dagger | Family::Staff);
+        let melee = is_melee(item.shape.family());
         let stats = &item.profile.stats;
         let dice = if melee { stats.damage.unwrap_or(Dice::new(1, 4)) } else { Dice::new(1, 4) };
         Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None }

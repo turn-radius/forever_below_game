@@ -10,6 +10,7 @@ use bevy::{
     winit::WinitPlugin,
 };
 use fb_items::Slot;
+use forever_below::lab_strike::Strikes;
 use forever_below::lab_view::{LabState, LabViewPlugin, SheetBuilds, StrikeColumn, TimeColumn};
 
 fn headless_lab() -> App {
@@ -52,4 +53,20 @@ fn the_lab_builds_its_sheet_and_rebuilds_it_on_a_change() {
     app.update();
     assert_eq!(app.world().resource::<SheetBuilds>().0, builds + 1);
     assert!(texts(&mut app).iter().any(|t| t == "Capacity 210 lb"), "{:?}", texts(&mut app));
+}
+
+#[test]
+fn strikes_show_in_the_strike_column() {
+    let mut app = headless_lab();
+    for _ in 0..3 {
+        app.update();
+    }
+    assert!(texts(&mut app).iter().any(|t| t.starts_with("Hit points 10 of 10")), "{:?}", texts(&mut app));
+    let state = app.world().resource::<LabState>().clone();
+    app.world_mut().resource_mut::<Strikes>().strike(&state);
+    app.world_mut().resource_mut::<Strikes>().strike_hundred(&state);
+    app.update();
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t.starts_with("Giant Rat: d20 (") && t.contains("vs AC 15")), "{shown:?}");
+    assert!(shown.iter().any(|t| t.starts_with("100 blows vs AC 15")), "{shown:?}");
 }
