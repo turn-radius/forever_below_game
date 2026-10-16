@@ -26,7 +26,7 @@ use bevy::{
     window::{PrimaryWindow, WindowResizeConstraints},
 };
 use fb_body::Folk;
-use fb_character::explain::Explained;
+use fb_character::explain::{Explained, number};
 use fb_character::{Activity, Attributes, LoadBand, MeterKind, modifier};
 use fb_items::armory_base::{ARMORY_BASES, roll_shape};
 use fb_items::profile::profile;
@@ -81,6 +81,7 @@ impl Plugin for LabViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LabState>()
             .init_resource::<UiFonts>()
+            .init_resource::<SheetBuilds>()
             .insert_resource(ClearColor(BG))
             .add_plugins(TweakPanelPlugin::<LabState>::default())
             .add_systems(Startup, setup)
@@ -117,7 +118,9 @@ impl LabSlot {
 
     /// The item this slot holds: rolled from its base and seed, then its stats and name
     /// derived again from the base profile with only the affixes still on. With none off the
-    /// item is exactly [`roll_item`]'s.
+    /// item is exactly [`roll_item`]'s. Switching an affix off changes only those two: the
+    /// rarity and a legendary's title and history stay as rolled, and so does the shape's
+    /// dressing.
     pub fn roll(&self) -> Option<Rolled> {
         let base = self.base.as_deref()?;
         let mut item = roll_item(base, self.seed)?;
@@ -145,11 +148,16 @@ pub struct LabState {
 }
 
 impl Default for LabState {
-    /// A human Fighter with every score 10 and nothing worn.
+    /// A human Fighter with every score 10, holding a messer and wearing a sallet and a mail
+    /// hauberk, none of which rolled an affix, so the first view has something to read.
     fn default() -> Self {
         let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
         let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0 };
-        LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect() }
+        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect() };
+        for (slot, base, seed) in [(Slot::Mainhand, "Sword", 4), (Slot::Head, "Helm", 9), (Slot::Body, "Mail", 9)] {
+            state.equip(slot, base, seed);
+        }
+        state
     }
 }
 
@@ -391,20 +399,6 @@ impl Row {
     }
 }
 
-fn number(n: f64) -> String {
-    let s = format!("{n:.4}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
-}
-
-/// The load worn, a term for each item.
-fn load(inventory: &Inventory) -> Explained {
-    let mut e = Explained::new("Load", "lb");
-    for (_, item) in inventory.equipped().iter().filter(|(_, i)| i.profile.stats.weight != 0.0) {
-        e = if e.terms().is_empty() { e.base(&item.name, item.profile.stats.weight as f64) } else { e.add(&item.name, item.profile.stats.weight as f64) };
-    }
-    if e.terms().is_empty() { e.base("nothing worn", 0.0) } else { e }
-}
-
 /// The sheet: every derived number the lab shows for `state`, from the same rules the game
 /// reads, in the order they are listed.
 pub fn sheet(state: &LabState) -> Vec<Row> {
@@ -416,7 +410,7 @@ pub fn sheet(state: &LabState) -> Vec<Row> {
     let weapon = Weapon::of_stats(held);
     let range = weapon.damage_range_explained(modifier(strength));
     let capacity = loadout.capacity(strength);
-    let load = load(&inventory);
+    let load = character.load_explained(&inventory);
     let band = LoadBand::from_load(load.value(), capacity.value());
     let mut rows = vec![
         Row::of(first_level_hit_points_explained(character)),
@@ -428,12 +422,17 @@ pub fn sheet(state: &LabState) -> Vec<Row> {
         Row::of(capacity),
         Row::of(loadout.darkvision()),
         Row::of(loadout.light()),
+        Row::of(loadout.warmth()),
     ];
     for kind in [MeterKind::Hunger, MeterKind::Thirst, MeterKind::Sleepiness] {
         rows.push(Row::of(loadout.rate(kind, Activity::Walking)));
     }
     rows
 }
+
+/// How many times the sheet has been built, so a test can see it is not rebuilt for nothing.
+#[derive(Resource, Default)]
+pub struct SheetBuilds(pub u32);
 
 /// The right-hand column, which scrolls.
 #[derive(Component)]
@@ -491,8 +490,9 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
 }
 
 /// Builds the sheet again from the state.
-fn rebuild_sheet(mut commands: Commands, state: Res<LabState>, fonts: Res<UiFonts>, rows: Query<Entity, With<SheetRows>>) {
+fn rebuild_sheet(mut builds: ResMut<SheetBuilds>, mut commands: Commands, state: Res<LabState>, fonts: Res<UiFonts>, rows: Query<Entity, With<SheetRows>>) {
     let Ok(root) = rows.single() else { return };
+    builds.0 += 1;
     commands.entity(root).despawn_children();
     let rows = sheet(&state);
     commands.entity(root).with_children(|root| {
@@ -501,7 +501,8 @@ fn rebuild_sheet(mut commands: Commands, state: Res<LabState>, fonts: Res<UiFont
                 .insert(BorderColor::all(FAINT))
                 .with_children(|block| {
                     block.spawn((Text::new(row.heading.clone()), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
-                    numbers_line(block, &fonts, &format!("= {}", row.explained.terms_line()), 15.0);
+                    let terms = row.explained.terms_line();
+                    numbers_line(block, &fonts, &if terms.is_empty() { "= nothing adds to it".to_string() } else { format!("= {terms}") }, 15.0);
                 });
         }
     });
@@ -568,20 +569,24 @@ mod tests {
     }
 
     #[test]
+    fn opens_dressed_and_armed() {
+        let state = LabState::default();
+        let held = state.slot(Slot::Mainhand).roll().unwrap().item;
+        assert_eq!((held.base.as_str(), held.name.as_str()), ("Sword", "Messer"));
+        assert_eq!(state.items().len(), 3);
+        assert_eq!(value_of(&state, "Armour class"), 15.0, "10 + sallet 2 + hauberk 3");
+        assert_eq!((value_of(&state, "Least damage"), value_of(&state, "Mean damage"), value_of(&state, "Most damage")), (1.0, 4.5, 8.0));
+        assert!(value_of(&state, "Load") > 0.0);
+        assert!(sheet(&state).iter().any(|r| r.explained.name == "Warmth"));
+    }
+
+    #[test]
     fn raising_strength_to_14_lifts_capacity_and_damage() {
         let mut state = LabState::default();
-        let (cap, most) = (value_of(&state, "Capacity"), value_of(&state, "Most damage"));
-        assert_eq!(cap, 150.0);
+        assert_eq!(value_of(&state, "Capacity"), 150.0);
         state.set_slider("attributes.str", 14.0);
         assert_eq!(value_of(&state, "Capacity"), 210.0);
-        assert_eq!(value_of(&state, "Most damage"), most + 2.0);
-        assert_eq!(value_of(&state, "Least damage"), 3.0);
-        // The same with a sword in hand.
-        let mut armed = LabState::default();
-        armed.equip(Slot::Mainhand, "Sword", 3);
-        let before = value_of(&armed, "Mean damage");
-        armed.set_slider("attributes.str", 14.0);
-        assert_eq!(value_of(&armed, "Mean damage"), before + 2.0);
+        assert_eq!((value_of(&state, "Least damage"), value_of(&state, "Mean damage"), value_of(&state, "Most damage")), (3.0, 6.5, 10.0));
     }
 
     #[test]
@@ -597,22 +602,48 @@ mod tests {
         assert_eq!(value_of(&state, "Capacity"), 175.0);
     }
 
+    /// What `base` rolled from `seed` has for stats with only `kept` applied to its base
+    /// profile, in the order given: the oracle for [`LabSlot::roll`].
+    fn stats_with(base: &str, seed: u32, kept: &[&Affix]) -> fb_items::stats::Stats {
+        let mut stats = profile(base, &roll_shape(base, seed).unwrap()).stats;
+        for affix in kept {
+            affix.fx.iter().for_each(|m| m.apply_to_stats(&mut stats));
+        }
+        stats
+    }
+
+    fn slot_of_item(base: &str, seed: u32, off: &[&str]) -> LabSlot {
+        LabSlot { base: Some(base.into()), seed, off: off.iter().map(|n| n.to_string()).collect(), ..LabSlot::empty(Slot::Belt) }
+    }
+
     #[test]
     fn with_no_affix_off_the_item_is_the_rolled_item() {
         for (base, seed) in [("Belt", 2), ("Sword", 5), ("Mail", 1), ("Torch", 4)] {
-            let mut lab = LabSlot::empty(Slot::Belt);
-            lab.base = Some(base.into());
-            lab.seed = seed;
-            let rolled = lab.roll().unwrap();
             let plain = roll_item(base, seed).unwrap();
+            let rolled = slot_of_item(base, seed, &[]).roll().unwrap();
             assert_eq!(rolled.item.profile.stats, plain.profile.stats, "{base} {seed}");
             assert_eq!(rolled.item.name, plain.name);
-            // Every affix off is the bare base.
-            lab.off = plain.affixes.iter().map(|a| a.name.clone()).collect();
-            let bare = lab.roll().unwrap();
-            assert_eq!(bare.item.profile.stats, profile(base, &roll_shape(base, seed).unwrap()).stats, "{base} {seed}");
-            assert!(bare.item.affixes.is_empty());
+            assert_eq!(rolled.item.profile.stats, stats_with(base, seed, &plain.affixes), "the oracle agrees with roll_item");
         }
+    }
+
+    #[test]
+    fn switching_one_of_two_affixes_off_keeps_the_other() {
+        let (base, seed) = ["Belt", "Sword", "Mail", "Helm", "Ring", "Cloak"]
+            .iter()
+            .flat_map(|b| (1..3000).map(move |s| (*b, s)))
+            .find(|&(b, s)| roll_item(b, s).is_some_and(|i| i.affixes.len() >= 2))
+            .expect("some item rolls two affixes");
+        let plain = roll_item(base, seed).unwrap();
+        let (gone, kept) = (plain.affixes[0], &plain.affixes[1..]);
+        let rolled = slot_of_item(base, seed, &[&gone.name]).roll().unwrap();
+        assert_eq!(rolled.item.profile.stats, stats_with(base, seed, kept), "{base} {seed} without {}", gone.name);
+        assert_eq!(rolled.item.affixes, kept);
+        assert_eq!(rolled.affixes, plain.affixes, "the switch still lists what it rolled");
+        assert!(!rolled.item.name.contains(&gone.name), "{} in {}", gone.name, rolled.item.name);
+        // Every affix off is the bare base.
+        let off: Vec<&str> = plain.affixes.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(slot_of_item(base, seed, &off).roll().unwrap().item.profile.stats, stats_with(base, seed, &[]));
     }
 
     #[test]
@@ -628,6 +659,7 @@ mod tests {
         assert!((value_of(&state, "Load") - derived.load as f64).abs() < 1e-4);
         assert_eq!(value_of(&state, "Darkvision"), derived.darkvision as f64);
         assert_eq!(value_of(&state, "Light"), derived.light as f64);
+        assert!((value_of(&state, "Warmth") - derived.warmth as f64).abs() < 1e-4);
         let weapon = Weapon::in_hand(&inventory, &state.character);
         let (least, most) = weapon.damage_range(modifier(state.character.strength()));
         assert_eq!((value_of(&state, "Least damage") as u32, value_of(&state, "Most damage") as u32), (least, most));

@@ -119,7 +119,7 @@ impl Explained {
     /// reads `Darkvision 60 ft = best of Goblin 60, Belt of the Mole 10 (Goblin)`.
     pub fn line(&self) -> String {
         let unit = if self.unit.is_empty() { String::new() } else { format!(" {}", self.unit) };
-        format!("{} {}{unit} = {}", self.name, number(self.value), self.terms_line())
+        format!("{} {}{unit} = {}", self.name, number(self.value), self.terms_line()).trim_end().to_string()
     }
 
     /// The terms alone, as [`Explained::line`] prints them after the `=`: `d20 (14) + STR (+2)`.
@@ -154,7 +154,7 @@ impl fmt::Display for Explained {
 }
 
 /// A number as short as it can be: no trailing zeros, at most four places.
-fn number(n: f64) -> String {
+pub fn number(n: f64) -> String {
     let s = format!("{n:.4}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s == "-0" { "0".to_string() } else { s.to_string() }

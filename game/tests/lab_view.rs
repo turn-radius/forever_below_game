@@ -10,7 +10,7 @@ use bevy::{
     winit::WinitPlugin,
 };
 use fb_items::Slot;
-use forever_below::lab_view::{LabState, LabViewPlugin, StrikeColumn, TimeColumn};
+use forever_below::lab_view::{LabState, LabViewPlugin, SheetBuilds, StrikeColumn, TimeColumn};
 
 fn headless_lab() -> App {
     let mut app = App::new();
@@ -37,10 +37,19 @@ fn the_lab_builds_its_sheet_and_rebuilds_it_on_a_change() {
     }
     assert_eq!(app.world_mut().query::<&StrikeColumn>().iter(app.world()).count(), 1);
     assert_eq!(app.world_mut().query::<&TimeColumn>().iter(app.world()).count(), 1);
-    assert!(texts(&mut app).iter().any(|t| t.starts_with("Capacity 150 lb")), "{:?}", texts(&mut app));
+    assert!(texts(&mut app).iter().any(|t| t == "Capacity 150 lb"), "{:?}", texts(&mut app));
+    // With no input the sheet is not built again.
+    let builds = app.world().resource::<SheetBuilds>().0;
+    assert!(builds >= 1);
+    for _ in 0..5 {
+        app.update();
+    }
+    assert_eq!(app.world().resource::<SheetBuilds>().0, builds);
+    // A change builds it once more, the same frame.
     app.world_mut().resource_mut::<LabState>().equip(Slot::Belt, "Belt", 2);
     app.world_mut().resource_mut::<LabState>().character.attributes.strength = 14;
     app.update();
     app.update();
-    assert!(texts(&mut app).iter().any(|t| t.starts_with("Capacity 210 lb") || t.starts_with("Capacity 2")), "{:?}", texts(&mut app));
+    assert_eq!(app.world().resource::<SheetBuilds>().0, builds + 1);
+    assert!(texts(&mut app).iter().any(|t| t == "Capacity 210 lb"), "{:?}", texts(&mut app));
 }
