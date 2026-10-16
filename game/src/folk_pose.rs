@@ -163,6 +163,12 @@ fn joint_transform(rig: &Rig, joint: Joint, pose: &fb_body::RigPose) -> Transfor
     }
 }
 
+/// Whether a figure between [`NEAR_RANGE`] and [`POSE_RANGE`] is posed this frame: one frame in
+/// three, staggered by entity. Each is taken mod 3 before adding, so nothing overflows.
+fn posed_this_frame(frame: u32, entity: Entity) -> bool {
+    (frame % 3 + entity.index_u32() % 3) % 3 == 0
+}
+
 /// Poses every figure: advances its gait by the distance its parent's [`Stride`] covers and writes
 /// the joints, as the module says.
 pub fn pose_folk(
@@ -186,7 +192,7 @@ pub fn pose_folk(
         anim.speed += (stride.speed - anim.speed) * (1.0 - (-SPEED_FOLLOW * dt).exp());
         if let Some(eye) = eye {
             let away = (at.translation() - eye).xz().length();
-            if away > POSE_RANGE || (away > NEAR_RANGE && (*frame + entity.to_bits() as u32) % 3 != 0) {
+            if away > POSE_RANGE || (away > NEAR_RANGE && !posed_this_frame(*frame, entity)) {
                 continue;
             }
         }
@@ -215,6 +221,16 @@ mod tests {
 
     fn fighter(folk: Folk, seed: u32) -> Vec<(fb_items::Slot, fb_items::Item)> {
         fb_items::outfit::outfit("fighter").unwrap().roll(seed, folk.key()).worn
+    }
+
+    #[test]
+    fn far_folk_take_turns_without_overflowing() {
+        let mut world = World::new();
+        let entities: Vec<Entity> = (0..9).map(|_| world.spawn_empty().id()).collect();
+        for frame in [0, 1, 2, u32::MAX - 1, u32::MAX] {
+            let posed = entities.iter().filter(|&&e| posed_this_frame(frame, e)).count();
+            assert_eq!(posed, 3, "a third of far folk pose on frame {frame}");
+        }
     }
 
     #[test]
