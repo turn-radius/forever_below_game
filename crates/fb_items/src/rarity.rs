@@ -41,9 +41,15 @@ impl Odds {
     }
 
     /// The gear folk and the risen dead carry at `depth`: as loot, but common or magic only on
-    /// the first level, so that they grow better equipped as one descends.
+    /// the first level and at most rare on the second, so that they grow better equipped as one
+    /// descends.
     pub fn kit(depth: u32) -> Odds {
-        Odds::loot(depth).capped(if depth <= 1 { Rarity::Magic } else { Rarity::Legendary })
+        let cap = match depth {
+            0 | 1 => Rarity::Magic,
+            2 => Rarity::Rare,
+            _ => Rarity::Legendary,
+        };
+        Odds::loot(depth).capped(cap)
     }
 
     /// These odds at most `cap`.
@@ -260,7 +266,8 @@ mod tests {
             }
         }
         assert_eq!(Odds::kit(1).cap, Rarity::Magic);
-        assert_eq!(Odds::kit(2).cap, Rarity::Legendary);
+        assert_eq!(Odds::kit(2).cap, Rarity::Rare);
+        assert_eq!(Odds::kit(3).cap, Rarity::Legendary);
     }
 
     #[test]
