@@ -266,7 +266,7 @@ fn knock_back(
         let step = flinch.push * share;
         flinch.push -= step;
         let at = transform.translation.xz();
-        let own = |o: &&Obstacle| denizen.is_some() && matches!(o, Obstacle::Circle { centre, radius: r } if centre.distance(at) < 1e-3 && *r == radius);
+        let own = |o: &&Obstacle| denizen.is_some() && matches!(o, Obstacle::Circle { centre, radius: r } if centre.distance(at) < 0.5 * radius && *r == radius);
         let others: Vec<Obstacle> = obstacles.0.iter().filter(|o| !own(o)).copied().collect();
         let to = slide_around(at, at + step, radius, &blocked, &others);
         transform.translation = Vec3::new(to.x, relief.floor_height(to.x, to.y), to.y);

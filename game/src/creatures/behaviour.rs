@@ -15,7 +15,7 @@
 //!   snakes come on at their speed and keep near their spot.
 //! - **Attacking.** In reach, it turns to the player and attacks on a cooldown: a rat lunges
 //!   and bites; a snake draws its coils in and rears, then strikes with its jaw open. At the
-//!   moment of the bite it sends a [`CreatureAttack`] with the stat block's bite rolled, which
+//!   moment of the bite it sends a [`AttackOnDelver`] with the stat block's bite rolled, which
 //!   combat (#160) will apply; nothing here hurts anyone.
 //! - **Losing the player.** Out of sight for [`LOSE_AFTER`] seconds once it has reached where
 //!   it last saw them, or led too far from home, it goes back to wandering its room.
@@ -41,7 +41,7 @@ pub struct BehaviourPlugin;
 
 impl Plugin for BehaviourPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<CreatureAttack>()
+        app.add_message::<AttackOnDelver>()
             .init_resource::<BlockedCells>()
             .init_resource::<Obstacles>()
             .init_resource::<Tuning>()
@@ -49,11 +49,13 @@ impl Plugin for BehaviourPlugin {
     }
 }
 
-/// A creature's bite landing, for combat to apply.
+/// A blow landing on the delver, for combat to apply: a creature's bite or blow, or a hostile
+/// folk's (`crate::folk_combat`).
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
-pub struct CreatureAttack {
+pub struct AttackOnDelver {
     pub attacker: Entity,
-    pub species: Species,
+    /// The attacking creature's species, `None` for a folk.
+    pub species: Option<Species>,
     /// The bite's damage, rolled from the stat block ([`fb_creatures::StatBlock::bite`]).
     pub damage: u32,
     /// Poison rolled from the stat block's venom (the poisonous snake's 2d4), before the DC 10
@@ -212,7 +214,7 @@ fn behave(
     obstacles: Res<Obstacles>,
     player: Query<&Transform, (With<Player>, Without<Critter>)>,
     mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform)>,
-    mut attacks: MessageWriter<CreatureAttack>,
+    mut attacks: MessageWriter<AttackOnDelver>,
     mut commands: Commands,
     sounds: Option<Res<crate::combat::feedback::CreatureSounds>>,
     bone_sounds: Option<Res<super::skeletons::BoneSounds>>,
@@ -408,7 +410,7 @@ fn behave(
                 let within = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius) * SKELETON_SLACK && line_of_sight(grid(at), grid(p), &blocked));
                 if let (true, Some(kit)) = (within, critter.kit.as_ref()) {
                     let damage = kit.roll_damage(&mut brain.rng);
-                    attacks.write(CreatureAttack { attacker: entity, species, damage, poison: 0, attacker_pos: at });
+                    attacks.write(AttackOnDelver { attacker: entity, species: Some(species), damage, poison: 0, attacker_pos: at });
                 }
             }
             if !brain.bitten && since >= lands {
@@ -418,7 +420,7 @@ fn behave(
                     let block = species.stat_block();
                     let damage = block.bite.roll(&mut brain.rng);
                     let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
-                    attacks.write(CreatureAttack { attacker: entity, species, damage, poison, attacker_pos: at });
+                    attacks.write(AttackOnDelver { attacker: entity, species: Some(species), damage, poison, attacker_pos: at });
                 }
             }
             if since >= done {
@@ -481,8 +483,8 @@ mod tests {
         app.world().get::<Transform>(entity).unwrap().translation.xz()
     }
 
-    fn attacks(app: &mut App) -> Vec<CreatureAttack> {
-        let messages = app.world().resource::<Messages<CreatureAttack>>();
+    fn attacks(app: &mut App) -> Vec<AttackOnDelver> {
+        let messages = app.world().resource::<Messages<AttackOnDelver>>();
         messages.iter_current_update_messages().copied().collect()
     }
 

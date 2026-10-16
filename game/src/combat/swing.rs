@@ -42,7 +42,9 @@ pub struct SwingPlugin;
 
 impl Plugin for SwingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_swing_sound)
+        app.add_message::<Struck>()
+            .add_message::<SwungAt>()
+            .add_systems(Startup, load_swing_sound)
             .add_systems(
                 Update,
                 (
@@ -65,6 +67,12 @@ pub const LANDS: f32 = 0.24;
 /// the second, then recovered.
 const DRAWN: f32 = 0.34;
 const THROWN: f32 = 0.52;
+
+/// A swing's blow finding `target` in reach, whether or not it lands: the delver attacked it.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SwungAt {
+    pub target: Entity,
+}
 
 /// A swing under way, on the [`Player`].
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -253,6 +261,7 @@ fn land_blows(
     strikeable: Strikeable,
     armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
+    mut swung: MessageWriter<SwungAt>,
 ) {
     let dt = time.delta_secs();
     for (player, at, mut swing) in &mut players {
@@ -263,6 +272,7 @@ fn land_blows(
             let forward = at.forward().as_vec3().xz();
             let combat = &tuning.combat;
             if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
+                swung.write(SwungAt { target });
                 // Only what has an Armor Class is rolled against; every other blow lands.
                 let hits = armour.get(target).map_or(true, |ac| {
                     let attack = attack_roll(&swing.weapon, character.strength(), ac.0, &mut dice.0);

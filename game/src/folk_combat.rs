@@ -18,6 +18,20 @@
 //!   [`Corpse`]: it stops its routine, no longer turns its head, blocks nobody and shows no card.
 //!   "Name is slain" shows low in the view.
 //!
+//! - **Fighting back** ([`fight`]): a folk given cause turns hostile (`crate::hostility`, with the
+//!   kin who see it). A hostile folk leaves their routine and comes at the delver: straight at
+//!   them in sight, else along the shortest way through the grid (`fb_level::path::find_path`,
+//!   as creatures follow), sliding round rock, props, creatures, other folk and the delver, at
+//!   twice their walking pace (the SRD's Dash, p. 93, as rats run). In reach they swing what
+//!   their main hand holds ([`Combatant`]: the delver's own [`Weapon`] rules, its reach an arm to
+//!   the wrist of their height and the weapon's length beyond, a fist an arm's length, a torch an
+//!   improvised 1d4), the blow taking a creature's swing time for the weapon
+//!   ([`crate::combat::swing_time`]) and landing as the arm comes down, if the delver is still in
+//!   reach and in sight; it rolls the weapon's dice plus the Strength modifier and is sent as an
+//!   [`AttackOnDelver`], which takes the delver's hit points as a creature's blow does (no attack
+//!   roll against the delver's Armor Class, as for every creature yet). A friendly folk never
+//!   attacks, however near the delver comes.
+//!
 //! A folk's stance while lying is the one they had standing: the skinned figure is turned as a
 //! whole, not ragdolled. Our own simplification.
 
@@ -25,14 +39,24 @@ use bevy::prelude::*;
 use fb_character::explain::{Explained, armour_class};
 use fb_character::modifier;
 use fb_items::Slot;
+use fb_level::CELL;
+use fb_level::path::{find_path, line_of_sight, steer_toward};
+use procgen_rng::Mulberry32;
 
 use crate::character::Class;
 use crate::combat::feedback::{Corpse, Flinches, Struck, collapse_share, knockback_for, laid_back};
-use crate::combat::{ArmourClass, Health, first_level_hit_points_explained_for};
-use crate::folk::{Denizen, Person};
-use crate::folk_routine::Routine;
+use crate::combat::swing::SwungAt;
+use crate::combat::{ArmourClass, Health, Weapon, first_level_hit_points_explained_for, swing_time};
+use crate::creatures::Critter;
+use crate::creatures::behaviour::{AttackOnDelver, body_radius};
+use crate::folk::{Denizen, Person, Stride};
+use crate::folk_pose::ArmSwing;
+use crate::folk_routine::{Routine, pace};
+use crate::hostility::{Hostility, HostilityPlugin, Provoked};
 use crate::inventory::Toasts;
-use crate::play::{BlocksTheWay, DelveSystems};
+use crate::level::geometry::Relief;
+use crate::play::{BlockedCells, BlocksTheWay, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
+use crate::player::{blocked_by, slide_around};
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
 
@@ -40,9 +64,72 @@ pub struct FolkCombatPlugin;
 
 impl Plugin for FolkCombatPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Struck>().init_resource::<Tuning>().add_systems(Update, (arm_folk, take_folk_blows, collapse_folk).chain().in_set(DelveSystems));
+        app.add_plugins(HostilityPlugin)
+            .add_message::<Struck>()
+            .add_message::<SwungAt>()
+            .add_message::<AttackOnDelver>()
+            .init_resource::<Tuning>()
+            .init_resource::<Obstacles>()
+            .init_resource::<BlockedCells>()
+            .add_systems(Update, (arm_folk, provoke_when_attacked, take_folk_blows, collapse_folk, fight).chain().before(crate::hostility::turn_on_the_delver).in_set(DelveSystems));
     }
 }
+
+/// What a folk fights with: their main hand's [`Weapon`], their Strength, and how long a swing
+/// takes, worked out once when they appear.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct Combatant {
+    pub weapon: Weapon,
+    pub strength: i32,
+    /// Seconds from wind-up to follow-through.
+    pub swing_time: f32,
+}
+
+impl Combatant {
+    /// `person` armed with what their main hand holds, at their folk's height.
+    pub fn of(person: &Person) -> Combatant {
+        let held = person.item(Slot::Mainhand);
+        let weapon = Weapon::wielded(held, person.spot.folk.race().h);
+        Combatant { weapon, strength: FolkStats::of(person).strength, swing_time: swing_time(held.map(|i| i.shape.family())) }
+    }
+}
+
+/// A folk's part in a fight: the swing under way, the wait before the next, and the way to the
+/// delver.
+#[derive(Component, Clone, Debug)]
+pub struct Fight {
+    /// Seconds into the swing under way.
+    pub swing: Option<f32>,
+    /// Seconds until they may swing again.
+    pub cooldown: f32,
+    /// Whether this swing's blow has come down.
+    landed: bool,
+    path: Vec<(i32, i32)>,
+    goal: (i32, i32),
+    repath: f32,
+    rng: Mulberry32,
+}
+
+impl Fight {
+    fn new(seed: u32) -> Fight {
+        Fight { swing: None, cooldown: 0.0, landed: false, path: Vec::new(), goal: (i32::MIN, i32::MIN), repath: 0.0, rng: Mulberry32::new(seed ^ FIGHT_SALT) }
+    }
+}
+
+/// Salt for a folk's fighting stream. Our own.
+const FIGHT_SALT: u32 = 0x0F16_4700;
+/// How far through a swing the blow lands, as a skeleton's does (`creatures::skeletons::LANDS`).
+pub const LANDS: f32 = crate::creatures::skeletons::LANDS;
+/// The wait between a folk's swings, seconds, as a skeleton's. Our own.
+const COOLDOWN: f32 = 0.8;
+/// How much farther than their reach a blow still lands, as a skeleton's. Our own.
+const SLACK: f32 = 1.15;
+/// A hostile folk runs at this many times their walking pace: the SRD's Dash (p. 93).
+const DASH: f32 = 2.0;
+/// How quickly a hostile folk turns to face the delver, radians a second. Our own.
+const TURN_RATE: f32 = 6.0;
+/// How often a folk finds its way again while following, seconds, as a creature does.
+const REPATH: f32 = 0.5;
 
 /// A commoner's hit die and its average (SRD 5.1 "Commoner": Hit Points 4 (1d8)).
 const COMMONER_DIE: u32 = 8;
@@ -85,20 +172,27 @@ impl FolkStats {
     }
 }
 
-/// What `person` holds in their main hand, if anything.
-pub fn main_hand(person: &Person) -> Option<&fb_items::Item> {
-    person.item(Slot::Mainhand)
-}
-
-/// Gives each folk their hit points and Armor Class ([`FolkStats`]) once they stand in the
-/// level; one brought back from the record keeps the hit points it was left with.
+/// Gives each folk their hit points, Armor Class ([`FolkStats`]) and arms ([`Combatant`]) once
+/// they stand in the level; one brought back from the record keeps the hit points it was left
+/// with.
 pub fn arm_folk(mut commands: Commands, new: Query<(Entity, &Denizen, Has<Health>), Without<ArmourClass>>) {
     for (entity, denizen, has_health) in &new {
         let stats = FolkStats::of(&denizen.person);
         let mut entity = commands.entity(entity);
-        entity.insert(ArmourClass(stats.armour_class_value()));
+        entity.insert((ArmourClass(stats.armour_class_value()), Combatant::of(&denizen.person), Fight::new(denizen.person.spot.seed)));
         if !has_health {
             entity.insert(Health::full(stats.max_hit_points()));
+        }
+    }
+}
+
+/// A swing aimed at a living folk, whether or not it lands, or a blow that lands on one, gives
+/// them cause ([`Provoked`]).
+pub fn provoke_when_attacked(mut swung: MessageReader<SwungAt>, mut struck: MessageReader<Struck>, folk: Query<(), (With<Denizen>, Without<Corpse>)>, mut provoked: MessageWriter<Provoked>) {
+    let targets: Vec<Entity> = swung.read().map(|s| s.target).chain(struck.read().map(|s| s.target)).collect();
+    for target in targets {
+        if folk.contains(target) {
+            provoked.write(Provoked { folk: target });
         }
     }
 }
@@ -150,6 +244,133 @@ pub fn collapse_folk(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&D
     }
 }
 
+fn grid(p: Vec2) -> (f32, f32) {
+    (p.x / CELL, p.y / CELL)
+}
+
+fn cell(p: Vec2) -> (i32, i32) {
+    ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32)
+}
+
+/// The signed turn from yaw `from` to yaw `to`, radians, the short way round.
+fn angle_between(from: f32, to: f32) -> f32 {
+    (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+
+/// What [`fight`] moves: each living folk who might fight.
+type Fighters = (
+    Entity,
+    &'static Denizen,
+    &'static Hostility,
+    &'static Combatant,
+    &'static mut Fight,
+    &'static mut Stride,
+    &'static mut ArmSwing,
+    &'static mut Transform,
+);
+
+/// A living creature, not a folk.
+type Standing = (Without<Denizen>, Without<Corpse>);
+
+/// One frame of every hostile folk's fight: close on the delver round what is in the way, turn
+/// to them, and swing in reach, the blow landing as the arm comes down ([`LANDS`]).
+#[allow(clippy::too_many_arguments)]
+pub fn fight(
+    time: Res<Time>,
+    level: Res<CurrentLevel>,
+    tuning: Res<Tuning>,
+    blocked_cells: Res<BlockedCells>,
+    obstacles: Res<Obstacles>,
+    player: Query<&Transform, (With<Player>, Without<Denizen>)>,
+    creatures: Query<(&Critter, &Transform), Standing>,
+    mut folk: Query<Fighters, Without<Corpse>>,
+    mut attacks: MessageWriter<AttackOnDelver>,
+) {
+    let dt = time.delta_secs().min(0.1);
+    if dt <= 0.0 {
+        return;
+    }
+    let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
+    let level = &level.0;
+    let relief = Relief::new(level);
+    let blocked = blocked_by(level, &blocked_cells);
+    let player_radius = tuning.moving.body_radius;
+    // Everything that moves or stands but the folk themselves, whose circles are in the
+    // obstacles already (each fighter sets its own aside).
+    let mut around: Vec<Obstacle> = obstacles.0.clone();
+    around.extend(creatures.iter().map(|(c, t)| Obstacle::Circle { centre: t.translation.xz(), radius: body_radius(c) }));
+    around.push(Obstacle::Circle { centre: player, radius: player_radius });
+    for (entity, denizen, hostility, combatant, mut fight, mut stride, mut arm, mut transform) in &mut folk {
+        if !hostility.is_hostile() {
+            continue;
+        }
+        let fight = &mut *fight;
+        let at = transform.translation.xz();
+        let radius = denizen.radius;
+        let reach = player_radius + combatant.weapon.reach;
+        let sees = line_of_sight(grid(at), grid(player), &blocked);
+        let in_reach = sees && player.distance(at) <= reach;
+        fight.cooldown = (fight.cooldown - dt).max(0.0);
+        let mut moved = 0.0;
+
+        // The swing under way: the blow comes down at `LANDS`, if the delver is still there.
+        if let Some(since) = fight.swing.as_mut() {
+            *since += dt;
+            let since = *since;
+            if !fight.landed && since >= LANDS * combatant.swing_time {
+                fight.landed = true;
+                if sees && player.distance(at) <= reach * SLACK {
+                    let damage = combatant.weapon.roll(modifier(combatant.strength), &mut fight.rng);
+                    attacks.write(AttackOnDelver { attacker: entity, species: None, damage, poison: 0, attacker_pos: at });
+                    info!("{} strikes the delver for {damage}", denizen.person.name);
+                }
+            }
+            if since >= combatant.swing_time {
+                fight.swing = None;
+                fight.cooldown = COOLDOWN;
+            }
+        } else if in_reach && fight.cooldown <= 0.0 {
+            fight.swing = Some(0.0);
+            fight.landed = false;
+        } else if !in_reach {
+            // Closing in: straight in sight, else along the way round the rock.
+            let target = if sees {
+                fight.path.clear();
+                player
+            } else {
+                fight.repath -= dt;
+                if fight.path.is_empty() || fight.goal != cell(player) || fight.repath <= 0.0 {
+                    fight.path = find_path(cell(at), cell(player), 4000, &blocked).unwrap_or_default();
+                    fight.goal = cell(player);
+                    fight.repath = REPATH;
+                }
+                let (x, y) = steer_toward(grid(at), grid(player), &fight.path, radius / CELL, &blocked);
+                Vec2::new(x, y) * CELL
+            };
+            let direction = (target - at).normalize_or_zero();
+            if direction != Vec2::ZERO {
+                let own = |o: &&Obstacle| matches!(o, Obstacle::Circle { centre, radius: r } if centre.distance(at) < 0.5 * radius && *r == radius);
+                let others: Vec<Obstacle> = around.iter().filter(|o| !own(o)).copied().collect();
+                let speed = pace(denizen, tuning.folk.walk_speed) * DASH;
+                let step = (direction * speed * dt).clamp_length_max((target - at).length());
+                let to = slide_around(at, at + step, radius, &blocked, &others);
+                moved = (to - at).length();
+                transform.translation = Vec3::new(to.x, relief.floor_height(to.x, to.y), to.y);
+            }
+        }
+        stride.speed = moved / dt;
+        arm.0 = fight.swing.map(|since| (since / combatant.swing_time).min(1.0));
+
+        // Facing the delver throughout. Folk face +Z.
+        let to = player - transform.translation.xz();
+        if to.length_squared() > 1e-4 {
+            let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
+            let turn = angle_between(yaw, to.x.atan2(to.y));
+            transform.rotation = Quat::from_rotation_y(yaw + turn.clamp(-TURN_RATE * dt, TURN_RATE * dt));
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -159,10 +380,9 @@ pub(crate) mod tests {
     use bevy::time::TimeUpdateStrategy;
     use procgen_rng::Mulberry32;
 
-    /// Seed 1207's level with its first folk standing at their spot as a stand-in (no figure),
-    /// and a delver holding a sword `away` world units west of them, facing them, with the whole
-    /// of combat and the folk's fighting but no drawing. Stepped 1/60 s a frame.
-    pub(crate) fn folk_fight(away: f32) -> (App, Entity, Entity) {
+    /// An app with the whole of combat and the folk's fighting but no drawing, on seed 1207's
+    /// level, the delver holding a sword. Stepped 1/60 s a frame.
+    fn combat_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin, bevy::state::app::StatesPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
@@ -174,21 +394,59 @@ pub(crate) mod tests {
             .init_resource::<crate::play::BlockedCells>()
             .init_resource::<crate::inventory::Toast>()
             .add_plugins((CombatPlugin, FolkCombatPlugin))
+            .add_systems(PostUpdate, crate::play::gather_obstacles.after(TransformSystems::Propagate))
             .insert_resource(RunDice(Mulberry32::new(9)));
         let mut inventory = Inventory::default();
         let sword = inventory.add(fb_items::roll_item("Sword", 7).unwrap());
         inventory.wear(sword, Slot::Mainhand).unwrap();
         app.insert_resource(inventory);
-        let level = fb_level::generate(1207, 1);
-        let spot = level.folk[0];
-        app.insert_resource(CurrentLevel(level));
-        let denizen = Denizen { person: Person::of(&spot), radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
-        let at = crate::folk::stand_at(&spot);
-        let folk = app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(3.0)), at)).id();
-        let from = at.translation - Vec3::X * away;
-        let player = app.world_mut().spawn((Player, Transform::from_translation(from).looking_at(at.translation, Vec3::Y))).id();
+        app.insert_resource(CurrentLevel(fb_level::generate(1207, 1)));
+        app
+    }
+
+    /// A stand-in (no figure) for the folk at `spot`, standing there.
+    fn stand_in(app: &mut App, spot: &fb_level::FolkSpot) -> Entity {
+        let denizen = Denizen { person: Person::of(spot), radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
+        app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(3.0)), crate::folk::stand_at(spot))).id()
+    }
+
+    /// The delver `away` world units west of `at`, facing it.
+    fn delver_near(app: &mut App, at: Vec3, away: f32) -> Entity {
+        let from = at - Vec3::X * away;
+        app.world_mut().spawn((Player, Transform::from_translation(from).looking_at(at, Vec3::Y))).id()
+    }
+
+    /// Seed 1207's level with its first folk alone, standing at their spot as a stand-in, and
+    /// the delver holding a sword `away` world units west of them, facing them.
+    pub(crate) fn folk_fight(away: f32) -> (App, Entity, Entity) {
+        let mut app = combat_app();
+        let spot = app.world().resource::<CurrentLevel>().0.folk[0];
+        let folk = stand_in(&mut app, &spot);
+        let at = app.world().get::<Transform>(folk).unwrap().translation;
+        let player = delver_near(&mut app, at, away);
         app.update();
         (app, player, folk)
+    }
+
+    /// Every folk of seed 1207 as stand-ins going about their routines, and the delver `away`
+    /// world units west of the first, facing them.
+    fn folk_level(away: f32) -> (App, Entity, Vec<Entity>) {
+        let mut app = combat_app();
+        app.add_plugins(crate::folk_routine::FolkRoutinePlugin);
+        let spots = app.world().resource::<CurrentLevel>().0.folk.clone();
+        let folk: Vec<Entity> = spots.iter().map(|spot| stand_in(&mut app, spot)).collect();
+        let at = app.world().get::<Transform>(folk[0]).unwrap().translation;
+        let player = delver_near(&mut app, at, away);
+        app.update();
+        (app, player, folk)
+    }
+
+    fn attacks(app: &App) -> Vec<AttackOnDelver> {
+        app.world().resource::<Messages<AttackOnDelver>>().iter_current_update_messages().copied().collect()
+    }
+
+    fn hostility(app: &App, folk: Entity) -> Hostility {
+        *app.world().get::<Hostility>(folk).unwrap()
     }
 
     /// Swings the delver's weapon once, for a swing's time.
@@ -224,6 +482,8 @@ pub(crate) mod tests {
     fn landed(ac: i32, swings: usize) -> usize {
         let (mut app, player, folk) = folk_fight(9.0);
         app.world_mut().entity_mut(folk).insert((ArmourClass(ac), Health::full(100_000)));
+        // Struck, it fights back: the delver outlasts it.
+        app.world_mut().entity_mut(player).insert(Health::full(100_000));
         let stood = *app.world().get::<Transform>(folk).unwrap();
         let mut hits = 0;
         for _ in 0..swings {
@@ -291,5 +551,98 @@ pub(crate) mod tests {
         let kitted = FolkStats::of(&Person { gear: vec![(Slot::Body, mail), (Slot::Offhand, shield)], ..person });
         assert!(armour > 0);
         assert_eq!(kitted.armour_class_value(), bare.armour_class_value() + armour);
+    }
+
+    #[test]
+    fn folk_that_are_not_attacked_never_attack() {
+        let (mut app, player, folk) = folk_level(12.0);
+        // The delver walks right up to the first, and round them among their kin, for half a
+        // minute: nobody is angered and nobody strikes.
+        let start = app.world().get::<Transform>(player).unwrap().translation;
+        for frame in 0..1800 {
+            let angle = frame as f32 / 300.0 * std::f32::consts::TAU;
+            app.world_mut().get_mut::<Transform>(player).unwrap().translation = start + Vec3::new(angle.cos() * 4.0, 0.0, angle.sin() * 4.0);
+            app.update();
+            assert!(attacks(&app).is_empty(), "a friendly folk struck at frame {frame}");
+        }
+        assert!(folk.iter().all(|&f| hostility(&app, f) == Hostility::Friendly));
+        let hp = app.world().get::<Health>(player).unwrap();
+        assert_eq!(hp.hp, hp.max);
+    }
+
+    #[test]
+    fn striking_a_folk_turns_it_and_the_kin_who_see_it_but_no_other_faction() {
+        let (mut app, _, folk) = folk_level(12.0);
+        let first = folk[0];
+        let faction = app.world().get::<Denizen>(first).unwrap().person.spot.faction;
+        // Who should turn, as they stand now.
+        let kin: Vec<crate::hostility::Kin> = folk
+            .iter()
+            .map(|&f| crate::hostility::Kin { entity: f, faction: app.world().get::<Denizen>(f).unwrap().person.spot.faction, at: app.world().get::<Transform>(f).unwrap().translation.xz() })
+            .collect();
+        let level = app.world().resource::<CurrentLevel>().0.clone();
+        let expected = crate::hostility::who_turns(first, &kin, &level, |x, y| !level.is_open(x, y));
+        assert!(expected.len() > 1, "someone of the faction sees it");
+        let at = app.world().get::<Transform>(first).unwrap().translation.xz();
+        app.world_mut().write_message(Struck { target: first, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false });
+        for _ in 0..3 {
+            app.update();
+        }
+        for &f in &folk {
+            let denizen = app.world().get::<Denizen>(f).unwrap();
+            let hostile = hostility(&app, f).is_hostile();
+            assert_eq!(hostile, expected.contains(&f), "{} of {}", denizen.person.name, denizen.person.spot.faction.name());
+            if denizen.person.spot.faction != faction {
+                assert!(!hostile, "{} of another faction turned", denizen.person.name);
+            }
+        }
+        assert!(folk.iter().any(|&f| app.world().get::<Denizen>(f).unwrap().person.spot.faction != faction), "a level of one faction tests nothing");
+        let toast = &app.world().resource::<crate::inventory::Toast>().text;
+        assert_eq!(*toast, crate::hostility::turn_line(faction));
+    }
+
+    #[test]
+    fn a_missed_swing_turns_a_folk_too() {
+        let (mut app, player, folk) = folk_fight(9.0);
+        app.world_mut().entity_mut(folk).insert(ArmourClass(1000));
+        let before = app.world().get::<Health>(folk).unwrap().hp;
+        swing_once(&mut app, player);
+        assert_eq!(app.world().get::<Health>(folk).unwrap().hp, before, "it missed");
+        assert!(hostility(&app, folk).is_hostile());
+    }
+
+    #[test]
+    fn a_hostile_folk_closes_in_and_deals_damage_and_stays_hostile() {
+        let (mut app, player, folk) = folk_fight(30.0);
+        app.world_mut().write_message(Provoked { folk });
+        let mut struck = Vec::new();
+        for _ in 0..600 {
+            app.update();
+            struck.extend(attacks(&app));
+        }
+        assert!(!struck.is_empty(), "the hostile folk never struck");
+        assert!(struck.iter().all(|a| a.attacker == folk && a.species.is_none() && a.damage >= 1));
+        let delver = app.world().get::<Health>(player).unwrap();
+        assert!(delver.hp < delver.max, "the delver took no damage");
+        let me = app.world().get::<Transform>(player).unwrap().translation.xz();
+        let combatant = *app.world().get::<Combatant>(folk).unwrap();
+        assert!(struck[0].attacker_pos.distance(me) <= (combatant.weapon.reach + 3.5) * SLACK + 0.5, "struck from in reach");
+        // Blows come on a swing's time and a cooldown, not every frame.
+        assert!(struck.len() as f32 <= 10.0 / (combatant.swing_time + COOLDOWN) + 1.0, "{} blows in 10 s", struck.len());
+        assert!(hostility(&app, folk).is_hostile(), "still hostile");
+    }
+
+    #[test]
+    fn the_record_keeps_a_hostile_folk_hostile() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _, folk) = folk_fight(30.0);
+        app.world_mut().write_message(Provoked { folk });
+        app.update();
+        app.init_resource::<crate::record::WorldRecord>();
+        app.world_mut().run_system_once(crate::record::record_level_left).unwrap();
+        let record = app.world().resource::<crate::record::WorldRecord>();
+        let left = &record.level(1).unwrap().folk[&0];
+        assert!(left.hostile);
+        assert_eq!(left.hp, app.world().get::<Health>(folk).unwrap().hp);
     }
 }

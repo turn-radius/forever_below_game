@@ -17,6 +17,7 @@ pub mod figure;
 pub mod fitting;
 pub mod folk;
 pub mod folk_combat;
+pub mod hostility;
 pub mod folk_pose;
 pub mod folk_routine;
 pub mod footsteps;

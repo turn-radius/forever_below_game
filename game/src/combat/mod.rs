@@ -19,7 +19,7 @@
 //!   hisses. At 0 hit points it holds, flashing, for a moment, then collapses, a rat rolling over and a snake going limp along the
 //!   floor, and its body stays for the run. Bodies block nothing: they lie flat (a rat on its
 //!   back, a snake stretched out), low enough to step over.
-//! - **Being bitten** ([`vitals`]): a creature's bite ([`CreatureAttack`]) takes the delver's
+//! - **Being bitten** ([`vitals`]): a creature's bite ([`AttackOnDelver`]) takes the delver's
 //!   hit points, which show low on the left of the view with a red flash round its edge. A
 //!   poisonous snake's venom is halved by a Constitution save; a constrictor's bite holds the
 //!   delver, slowed, until they strike it. At 0 the run ends: "You fall in the abyss", then the
@@ -35,7 +35,7 @@ use fb_items::dice::Dice;
 use procgen_rng::Mulberry32;
 
 use crate::character::{Character, modifier};
-use crate::creatures::behaviour::CreatureAttack;
+use crate::creatures::behaviour::AttackOnDelver;
 use crate::inventory::Inventory;
 use crate::tuning::Tuning;
 
@@ -119,6 +119,21 @@ pub fn first_level_hit_points_explained_for(class: crate::character::Class, cons
 pub fn is_melee(family: armory::Family) -> bool {
     use armory::Family;
     matches!(family, Family::Sword | Family::Mace | Family::Axe | Family::Club | Family::Spear | Family::Dagger | Family::Staff)
+}
+
+/// How long a creature's or a folk's swing with something of `family` takes, seconds, from the
+/// wind-up to the follow-through (`None`, bare-handed): a heavy weapon is swung slower than a
+/// light one. Our own, where the delver's swings all take [`swing::SWING_TIME`].
+pub fn swing_time(family: Option<armory::Family>) -> f32 {
+    use armory::Family;
+    match family {
+        Some(Family::Dagger) => 0.9,
+        Some(Family::Sword) => 1.2,
+        Some(Family::Spear) => 1.3,
+        Some(Family::Axe | Family::Club | Family::Staff | Family::Bow) => 1.4,
+        Some(Family::Mace) => 1.5,
+        _ => 1.0,
+    }
 }
 
 /// How a held thing is swung.
@@ -303,7 +318,7 @@ pub fn venom_after_save(poison: u32, constitution: i32, rng: &mut Mulberry32) ->
 }
 
 /// The damage a bite does the delver: its own, and its venom after the save.
-pub fn bite_damage(attack: &CreatureAttack, constitution: i32, rng: &mut Mulberry32) -> u32 {
+pub fn bite_damage(attack: &AttackOnDelver, constitution: i32, rng: &mut Mulberry32) -> u32 {
     rules::bite_damage(attack.damage, attack.poison, modifier(constitution), rng).damage.value() as u32
 }
 
@@ -784,13 +799,13 @@ mod tests {
 
     /// The distance from the delver at which a skeleton in `base` first lands a blow.
     fn reach_in_use(base: &str) -> f32 {
-        use crate::creatures::behaviour::CreatureAttack;
+        use crate::creatures::behaviour::AttackOnDelver;
         let outfit = fb_items::outfit::OutfitSet { worn: vec![(fb_items::Slot::Mainhand, fb_items::roll_item(base, 5).unwrap())], goods: Vec::new(), ground: Vec::new() };
         let (mut app, player, skeleton) = skeleton_fight(3, Some(outfit));
         let me = app.world().get::<Transform>(player).unwrap().translation.xz();
         for _ in 0..900 {
             app.update();
-            let attacks: Vec<CreatureAttack> = app.world().resource::<Messages<CreatureAttack>>().iter_current_update_messages().copied().collect();
+            let attacks: Vec<AttackOnDelver> = app.world().resource::<Messages<AttackOnDelver>>().iter_current_update_messages().copied().collect();
             if let Some(attack) = attacks.first() {
                 assert_eq!(attack.attacker, skeleton);
                 assert!(attack.damage >= 1);

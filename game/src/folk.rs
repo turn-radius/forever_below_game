@@ -160,7 +160,7 @@ impl FolkFigures {
 
 /// A person standing in the level: the root of their figure, on the floor at their spot.
 #[derive(Component, Clone, Debug)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::simulate::Simulated, Stride)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::simulate::Simulated, Stride, crate::hostility::Hostility, crate::folk_pose::ArmSwing)]
 pub struct Denizen {
     pub person: Person,
     /// The circle on the floor they stand in ([`footprint`]).
@@ -247,12 +247,15 @@ pub fn stand_at(spot: &FolkSpot) -> Transform {
     Transform::from_translation(at).with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
 }
 
-/// Spawns every folk spot of the level once, and again only if the spots change.
+/// Spawns every folk spot of the level once, and again only if the spots change; on a level
+/// that was left, each as the record has them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_folk(
     mut commands: Commands,
     level: Res<CurrentLevel>,
     mut figures: ResMut<FolkFigures>,
     old: Query<Entity, With<Denizen>>,
+    record: Option<Res<crate::record::WorldRecord>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     mut spawner: ItemSpawner,
     mut shown: Local<Option<Vec<FolkSpot>>>,
@@ -264,9 +267,15 @@ pub(crate) fn spawn_folk(
     for entity in &old {
         commands.entity(entity).despawn();
     }
-    for built in figures.for_spots(&level.0.folk, level.0.depth) {
+    // On a level that was left, each folk is as they were left (`crate::record`).
+    let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
+    for (index, built) in figures.for_spots(&level.0.folk, level.0.depth).into_iter().enumerate() {
         let (person, figure) = &*built;
-        spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
+        let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
+        if let Some(left) = saved.and_then(|l| l.folk.get(&index)) {
+            let hostility = if left.hostile { crate::hostility::Hostility::Hostile } else { crate::hostility::Hostility::Friendly };
+            commands.entity(root).insert((crate::combat::Health { hp: left.hp, max: left.max }, hostility, left.transform()));
+        }
     }
     *shown = Some(level.0.folk.clone());
 }

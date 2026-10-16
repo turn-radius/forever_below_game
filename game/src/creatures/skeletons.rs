@@ -131,14 +131,7 @@ impl SkeletonKit {
             Some(w) if melee => ARM_TO_WRIST * height + length(w),
             _ => ARM_TO_FINGERTIPS * height,
         };
-        let swing_time = match family {
-            Some(Family::Dagger) => 0.9,
-            Some(Family::Sword) => 1.2,
-            Some(Family::Spear) => 1.3,
-            Some(Family::Axe | Family::Club | Family::Staff | Family::Bow) => 1.4,
-            Some(Family::Mace) => 1.5,
-            _ => 1.0,
-        };
+        let swing_time = crate::combat::swing_time(family);
         let armour: Vec<(String, f32)> = outfit.worn.iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)).filter(|(_, a)| *a != 0.0).collect();
         let armour_class = if armour.is_empty() {
             Species::Skeleton.stat_block().armour_class

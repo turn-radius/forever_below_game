@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 use crate::combat::{Health, vitals::bearing_from_facing};
-use crate::creatures::behaviour::CreatureAttack;
+use crate::creatures::behaviour::AttackOnDelver;
 use crate::combat::swing::lean_into_blow;
 use crate::play::{DelveSystems, Player, PlayerCamera, level_has_focus};
 use crate::player::{bob_head, look};
@@ -55,7 +55,7 @@ struct CameraKick {
 /// Read creature attacks and apply camera kicks to the player.
 fn apply_kick(
     mut commands: Commands,
-    mut attacks: MessageReader<CreatureAttack>,
+    mut attacks: MessageReader<AttackOnDelver>,
     tuning: Option<Res<Tuning>>,
     player: Single<(Entity, &Transform, &Health), With<Player>>,
 ) {
@@ -187,9 +187,9 @@ mod tests {
         let rest_translation = app.world().get::<Transform>(camera).unwrap().translation;
 
         // Send an attack from the right.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 5,
             poison: 0,
             attacker_pos: Vec2::new(5.0, 0.0), // Right of the player
@@ -210,9 +210,9 @@ mod tests {
         let rest_translation = app.world().get::<Transform>(camera).unwrap().translation;
 
         // Send an attack from the front. With yaw=0 facing -z, an attacker at (0, -5) is ahead.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 5,
             poison: 0,
             attacker_pos: Vec2::new(0.0, -5.0), // Ahead of the player
@@ -233,9 +233,9 @@ mod tests {
         let base_y = app.world().get::<Transform>(camera).unwrap().translation.y;
 
         // Apply a kick and update.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 3,
             poison: 0,
             attacker_pos: Vec2::new(5.0, 0.0),
@@ -265,9 +265,9 @@ mod tests {
         app.update();
 
         // Send an attack.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 5,
             poison: 0,
             attacker_pos: Vec2::new(5.0, 0.0),
@@ -286,9 +286,9 @@ mod tests {
         app.update();
 
         // Send an attack.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 5,
             poison: 0,
             attacker_pos: Vec2::new(5.0, 0.0),
@@ -355,7 +355,7 @@ mod tests {
                 let at = app.world().get::<Transform>(player).unwrap();
                 let right = at.right().as_vec3();
                 let attacker_pos = Vec2::new(at.translation.x + right.x * 5.0, at.translation.z + right.z * 5.0);
-                app.world_mut().write_message(CreatureAttack { attacker: Entity::PLACEHOLDER, species: Species::Rat, damage: 5, poison: 0, attacker_pos });
+                app.world_mut().write_message(AttackOnDelver { attacker: Entity::PLACEHOLDER, species: Some(Species::Rat), damage: 5, poison: 0, attacker_pos });
             }
             app.update();
             let pose = app.world().get::<Transform>(camera).unwrap();
