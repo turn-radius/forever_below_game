@@ -11,7 +11,7 @@ use bevy::{
 use fb_items::Slot;
 use forever_below::lab_strike::Strikes;
 use forever_below::lab_time::TimeLab;
-use forever_below::lab_view::{Hover, LabState, LabTab, LabViewPlugin, RulesColumn, SheetBuilds, StrikeColumn, TabPane, TimeColumn};
+use forever_below::lab_view::{Control, ControlPressed, DataFolder, Hover, LabState, LabTab, LabViewPlugin, RulesColumn, SheetBuilds, StrikeColumn, TabPane, TimeColumn};
 
 fn headless_lab() -> App {
     let mut app = App::new();
@@ -103,6 +103,51 @@ fn the_rules_column_lists_the_rules_and_marks_what_was_changed() {
     app.update();
     app.update();
     assert!(!texts(&mut app).iter().any(|t| t.ends_with(" changed") || t.starts_with("was ")));
+}
+
+fn real_data(name: &str) -> String {
+    std::fs::read_to_string(format!("{}/../data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+#[test]
+fn save_writes_the_data_folder_it_is_given_and_not_the_real_one() {
+    let (rules_before, affixes_before) = (real_data("rules.toml"), real_data("afx.json"));
+    let dir = std::env::temp_dir().join(format!("fb_lab_app_save_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("rules.toml"), &rules_before).unwrap();
+    std::fs::write(dir.join("afx.json"), &affixes_before).unwrap();
+    let mut app = headless_lab();
+    app.insert_resource(DataFolder(dir.clone()));
+    for _ in 0..3 {
+        app.update();
+    }
+    forever_below::lab_rules::step(&mut app.world_mut().resource_mut::<LabState>().ruleset, "load/capacity_per_strength", 5);
+    app.world_mut().write_message(ControlPressed(Control::Save));
+    app.update();
+    app.update();
+    assert!(std::fs::read_to_string(dir.join("rules.toml")).unwrap().contains("capacity_per_strength = 20"));
+    assert_eq!(real_data("rules.toml"), rules_before);
+    assert_eq!(real_data("afx.json"), affixes_before);
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t == "Saved"), "{shown:?}");
+    assert!(!shown.iter().any(|t| t.ends_with(" changed")), "{shown:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_save_that_fails_says_so_and_leaves_the_edits_unsaved() {
+    let mut app = headless_lab();
+    app.insert_resource(DataFolder("/nonexistent/fb_lab".into()));
+    for _ in 0..3 {
+        app.update();
+    }
+    forever_below::lab_rules::step(&mut app.world_mut().resource_mut::<LabState>().ruleset, "load/capacity_per_strength", 5);
+    app.world_mut().write_message(ControlPressed(Control::Save));
+    app.update();
+    app.update();
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t.starts_with("Couldn't save: ")), "{shown:?}");
+    assert!(shown.iter().any(|t| t == "1 changed"), "{shown:?}");
 }
 
 #[test]

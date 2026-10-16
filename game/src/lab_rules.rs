@@ -457,6 +457,50 @@ pub fn write_afx_json(text: &str, strengths: &Strengths) -> String {
     out
 }
 
+/// The strengths a copy of `data/afx.json` holds, or `None` if it does not read.
+pub fn strengths_from_json(text: &str) -> Option<Strengths> {
+    let parsed: Vec<Affix> = serde_json::from_str(text).ok()?;
+    Some(parsed.iter().map(|a| (a.name.clone(), default_strength(a))).collect())
+}
+
+/// Writes `edited` into `rules.toml` and `afx.json` in `folder`, each through a temp file
+/// beside it and `rename`, so a file is whole or as it was. If the second cannot be put in
+/// place the first is put back, so the disk never holds half a save.
+pub fn save_files(folder: &std::path::Path, set: &RuleSet, rename: &dyn Fn(&std::path::Path, &std::path::Path) -> std::io::Result<()>) -> Result<(), String> {
+    use std::fs;
+    let (rules, affixes) = (folder.join(crate::rules::RULES_FILE), folder.join("afx.json"));
+    let read = |path: &std::path::Path| fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
+    let (old_rules, old_affixes) = (read(&rules)?, read(&affixes)?);
+    let new_rules = write_rules_toml(&old_rules, &set.rules)?;
+    let new_affixes = write_afx_json(&old_affixes, &set.strengths);
+    let temp = |path: &std::path::Path| path.with_extension("saving");
+    let (temp_rules, temp_affixes) = (temp(&rules), temp(&affixes));
+    let write = |path: &std::path::Path, text: &str| fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()));
+    let cleanup = || {
+        let _ = fs::remove_file(&temp_rules);
+        let _ = fs::remove_file(&temp_affixes);
+    };
+    if let Err(e) = write(&temp_rules, &new_rules).and_then(|_| write(&temp_affixes, &new_affixes)) {
+        cleanup();
+        return Err(e);
+    }
+    if let Err(e) = rename(&temp_rules, &rules) {
+        cleanup();
+        return Err(format!("{}: {e}", rules.display()));
+    }
+    if let Err(e) = rename(&temp_affixes, &affixes) {
+        cleanup();
+        // Put the first back, whole, the same way.
+        let restored = write(&temp_rules, &old_rules).and_then(|_| fs::rename(&temp_rules, &rules).map_err(|e| e.to_string()));
+        cleanup();
+        return Err(match restored {
+            Ok(()) => format!("{}: {e}", affixes.display()),
+            Err(r) => format!("{}: {e}; and {} could not be put back: {r}", affixes.display(), rules.display()),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,5 +619,61 @@ mod tests {
         let parsed: Vec<fb_items::tables::Affix> = serde_json::from_str(&written).unwrap();
         assert_eq!(strength_of(&parsed[0].fx[0]), Some(2.5));
         assert_eq!(parsed[1..], affixes()[1..]);
+    }
+
+    fn copy_of_data() -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!("fb_lab_save_{}_{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["rules.toml", "afx.json"] {
+            std::fs::write(dir.join(name), text(name)).unwrap();
+        }
+        dir
+    }
+
+    fn edited() -> RuleSet {
+        let mut set = RuleSet::default();
+        step(&mut set, "load/capacity_per_strength", 5);
+        step(&mut set, "affixes/Warm/0", 1);
+        set
+    }
+
+    #[test]
+    fn a_save_replaces_both_files_and_leaves_no_temp_behind() {
+        let dir = copy_of_data();
+        save_files(&dir, &edited(), &|a, b| std::fs::rename(a, b)).unwrap();
+        let rules: Rules = toml::from_str(&std::fs::read_to_string(dir.join("rules.toml")).unwrap()).unwrap();
+        assert_eq!(rules.load.capacity_per_strength, 20.0);
+        assert_eq!(strengths_from_json(&std::fs::read_to_string(dir.join("afx.json")).unwrap()).unwrap()["Warm"][0], 2.5);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_save_that_fails_halfway_leaves_the_files_as_they_were() {
+        let dir = copy_of_data();
+        let calls = std::cell::Cell::new(0);
+        let second_fails = |a: &std::path::Path, b: &std::path::Path| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 { Err(std::io::Error::other("disk full")) } else { std::fs::rename(a, b) }
+        };
+        let error = save_files(&dir, &edited(), &second_fails).unwrap_err();
+        assert!(error.contains("disk full"), "{error}");
+        assert_eq!(std::fs::read_to_string(dir.join("rules.toml")).unwrap(), text("rules.toml"));
+        assert_eq!(std::fs::read_to_string(dir.join("afx.json")).unwrap(), text("afx.json"));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no temp left");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_folder_without_the_files_is_an_error_not_a_panic() {
+        let error = save_files(std::path::Path::new("/nonexistent/fb"), &edited(), &|a, b| std::fs::rename(a, b)).unwrap_err();
+        assert!(error.contains("rules.toml"), "{error}");
+    }
+
+    #[test]
+    fn strengths_read_from_a_json_text() {
+        assert_eq!(strengths_from_json(&text("afx.json")), Some(default_strengths()));
+        assert_eq!(strengths_from_json("nonsense"), None);
     }
 }

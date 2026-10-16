@@ -37,7 +37,7 @@ use crate::lab_strike::{Attacker, Strikes};
 use crate::lab_time::{ACTIVITIES, STEPS, TimeLab, activity_word, clock_text, exhaustion_effect, percent_text};
 use crate::rules::GameRules;
 use crate::tweak_panel::chip;
-use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, FAINT, FRAME_GOLD, INK, LINE, MUTED, UiFonts, node_rect, numbers_line, rarity_color};
+use crate::ui::{ACCENT, BAD, OK, BG, BRIGHT, CELL, FAINT, FRAME_GOLD, INK, LINE, MUTED, UiFonts, node_rect, numbers_line, rarity_color};
 
 /// Width of the sheet on the left and of the rules on the right, in logical pixels.
 pub const SHEET_WIDTH: f32 = 380.0;
@@ -101,6 +101,9 @@ impl Plugin for LabViewPlugin {
             .init_resource::<Hover>()
             .init_resource::<CurrentSheet>()
             .init_resource::<LabRules>()
+            .init_resource::<DataFolder>()
+            .init_resource::<SaveNote>()
+            .add_message::<ControlPressed>()
             .insert_resource(ClearColor(BG))
             .add_systems(Startup, (setup, demo))
             .add_systems(
@@ -108,6 +111,8 @@ impl Plugin for LabViewPlugin {
                 (
                     follow_disk,
                     press_controls,
+                    apply_pressed,
+                    show_save_note,
                     press_strikes.run_if(|tab: Res<LabTab>| tab.0 == 0),
                     press_time.run_if(|tab: Res<LabTab>| tab.0 == 1),
                     rebuild_sheet.run_if(sheet_changed),
@@ -751,6 +756,7 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
             });
             rules.spawn((Text::new("The numbers the game runs on. Change one and the sheet and the tests show it, compared with before."), UiFonts::style(&fonts.body, 14.0, MUTED)));
             rules.spawn((RulesBody, ScrollArea, ScrollPosition::default(), Node { flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(4), overflow: Overflow::scroll_y(), ..default() }));
+            rules.spawn((SaveNoteText, Text::new(""), UiFonts::style(&fonts.body, 14.0, BAD)));
             rules.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
                 for (label, control, gold) in [("Save to the game", Control::Save, true), ("Undo changes", Control::Undo, false)] {
                     let id = button(row, &fonts, label, control);
@@ -1035,56 +1041,120 @@ fn cursor(window: &Option<Single<&Window, With<PrimaryWindow>>>) -> Option<Vec2>
     window.as_ref().and_then(|w| w.cursor_position())
 }
 
-/// A click on a control of the sheet or the tabs does what it says.
+/// A control pressed, by a click on it or by a test.
+#[derive(Message, Clone, Debug)]
+pub struct ControlPressed(pub Control);
+
+/// Where `rules.toml` and `afx.json` are saved to and read from.
+#[derive(Resource, Clone, Debug)]
+pub struct DataFolder(pub std::path::PathBuf);
+
+impl Default for DataFolder {
+    fn default() -> Self {
+        DataFolder(crate::rules::data_folder().into())
+    }
+}
+
+/// What the last save said: shown in the rules footer, "Saved" for a moment, a failure until
+/// the next save.
+#[derive(Resource, Default, Clone, Debug, PartialEq)]
+pub struct SaveNote {
+    pub failed: Option<String>,
+    /// Real seconds at which "Saved" stops showing.
+    saved_until: Option<f64>,
+}
+
+/// The footer's line of that.
+#[derive(Component)]
+struct SaveNoteText;
+
+/// How long "Saved" shows, in seconds.
+const SAVED_SHOWN: f64 = 2.5;
+
+/// A click on a control of the sheet or the tabs is a [`ControlPressed`].
 fn press_controls(
     buttons: Res<ButtonInput<MouseButton>>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     controls: Query<(&Control, &ComputedNode, &UiGlobalTransform)>,
-    mut state: ResMut<LabState>,
-    mut picker: ResMut<Picker>,
-    mut tab: ResMut<LabTab>,
-    mut saved: ResMut<LabRules>,
+    mut pressed: MessageWriter<ControlPressed>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
     let Some(point) = cursor(&window) else { return };
-    let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
-    if *control == Control::Save
-        && let Err(error) = save_to_disk(&state.ruleset)
-    {
-        warn!("lab: could not save the rules: {error}");
-        return;
+    if let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
+        pressed.write(ControlPressed(control.clone()));
     }
-    let (mut next_state, mut next_picker, mut next_tab, mut next_saved) = (state.clone(), picker.clone(), *tab, saved.saved.clone());
-    control.apply(&mut next_state, &mut next_picker, &mut next_tab, &mut next_saved);
-    saved.set_if_neq(LabRules { saved: next_saved });
-    state.set_if_neq(next_state);
-    picker.set_if_neq(next_picker);
-    tab.set_if_neq(next_tab);
 }
 
-/// Writes the edited rules into `data/rules.toml`, with its comments, and the affix strengths
-/// into `data/afx.json`.
-fn save_to_disk(set: &RuleSet) -> Result<(), String> {
-    let folder = std::path::PathBuf::from(crate::rules::data_folder());
-    let (rules, affixes) = (folder.join(crate::rules::RULES_FILE), folder.join("afx.json"));
-    let read = |path: &std::path::Path| std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
-    let rules_text = crate::lab_rules::write_rules_toml(&read(&rules)?, &set.rules)?;
-    let affix_text = crate::lab_rules::write_afx_json(&read(&affixes)?, &set.strengths);
-    std::fs::write(&rules, rules_text).map_err(|e| format!("{}: {e}", rules.display()))?;
-    std::fs::write(&affixes, affix_text).map_err(|e| format!("{}: {e}", affixes.display()))
+/// Does what each pressed control says. Save writes the files first, and the edits stay unsaved
+/// if that fails.
+#[allow(clippy::too_many_arguments)]
+fn apply_pressed(
+    mut pressed: MessageReader<ControlPressed>,
+    time: Res<Time<Real>>,
+    folder: Res<DataFolder>,
+    mut note: ResMut<SaveNote>,
+    mut state: ResMut<LabState>,
+    mut picker: ResMut<Picker>,
+    mut tab: ResMut<LabTab>,
+    mut saved: ResMut<LabRules>,
+) {
+    for ControlPressed(control) in pressed.read() {
+        if *control == Control::Save {
+            match crate::lab_rules::save_files(&folder.0, &state.ruleset, &|a, b| std::fs::rename(a, b)) {
+                Ok(()) => *note = SaveNote { failed: None, saved_until: Some(time.elapsed_secs_f64() + SAVED_SHOWN) },
+                Err(error) => {
+                    warn!("lab: could not save the rules: {error}");
+                    *note = SaveNote { failed: Some(error), saved_until: None };
+                    continue;
+                }
+            }
+        }
+        let (mut next_state, mut next_picker, mut next_tab, mut next_saved) = (state.clone(), picker.clone(), *tab, saved.saved.clone());
+        control.apply(&mut next_state, &mut next_picker, &mut next_tab, &mut next_saved);
+        saved.set_if_neq(LabRules { saved: next_saved });
+        state.set_if_neq(next_state);
+        picker.set_if_neq(next_picker);
+        tab.set_if_neq(next_tab);
+    }
+}
+
+/// Shows the save note in the footer, and takes "Saved" away when its time is up.
+fn show_save_note(time: Res<Time<Real>>, mut note: ResMut<SaveNote>, mut line: Query<(&mut Text, &mut TextColor), With<SaveNoteText>>) {
+    if note.saved_until.is_some_and(|t| time.elapsed_secs_f64() >= t) {
+        note.saved_until = None;
+    }
+    let (words, colour) = match (&note.failed, note.saved_until) {
+        (Some(why), _) => (format!("Couldn't save: {why}"), BAD),
+        (None, Some(_)) => ("Saved".to_string(), OK),
+        _ => (String::new(), OK),
+    };
+    for (mut text, mut ink) in &mut line {
+        if text.0 != words {
+            text.0 = words.clone();
+        }
+        if ink.0 != colour {
+            ink.0 = colour;
+        }
+    }
 }
 
 /// When the rules file changes on disk (an edit outside the lab, or the lab's own save coming
-/// back), the saved rules follow it; the edited ones follow too unless there are unsaved changes.
-fn follow_disk(game: Option<Res<GameRules>>, mut saved: ResMut<LabRules>, mut state: ResMut<LabState>) {
+/// back), the saved rules follow it, and the affix strengths are read again from their file;
+/// the edited ones follow too unless there are unsaved changes.
+fn follow_disk(game: Option<Res<GameRules>>, folder: Res<DataFolder>, mut saved: ResMut<LabRules>, mut state: ResMut<LabState>) {
     let Some(game) = game.filter(|g| g.is_changed()) else { return };
-    if saved.saved.rules == game.0 {
+    let mut next = saved.saved.clone();
+    next.rules = game.0.clone();
+    if let Some(strengths) = std::fs::read_to_string(folder.0.join("afx.json")).ok().and_then(|t| crate::lab_rules::strengths_from_json(&t)) {
+        next.strengths = strengths;
+    }
+    if next == saved.saved {
         return;
     }
     let clean = state.ruleset == saved.saved;
-    saved.saved.rules = game.0.clone();
+    saved.saved = next;
     if clean {
         state.ruleset = saved.saved.clone();
     }
