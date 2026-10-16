@@ -359,9 +359,13 @@ pub struct FlameExtent {
 /// Where the widest ring of [`add_flame`]'s flame stands, as a fraction of its height.
 const FLAME_BELLY: f32 = 0.26;
 
-/// How far a torch's flame leans forward (along item +Z) at its base, in radians: 45 degrees,
+/// How far a torch's flame leans forward (along item +Z) at its base, in radians: 55 degrees,
 /// curling back up to vertical at the tip as a carried flame does. Our own.
-pub const FLAME_TILT: f32 = std::f32::consts::FRAC_PI_4;
+pub const FLAME_TILT: f32 = 55.0 * std::f32::consts::PI / 180.0;
+
+/// Where a torch's flame belly sits on the burning head, as a fraction of the way from the
+/// head's base to its top: high, so the flame crowns the head rather than hanging off its side.
+const FLAME_SEAT: f32 = 0.8;
 
 /// How wide a torch's flame is at its belly, as a multiple of the head's girth: the bulb
 /// wraps the burning head without swallowing it (#276, #280).
@@ -496,7 +500,7 @@ impl Geometry {
         // across the upper head, with the base at or below the char line, so the flame
         // wraps the burning part and the tip still rises above the head.
         let flame_height = height * b.flame;
-        let belly = head_base + (head_top - head_base) * 0.6;
+        let belly = head_base + (head_top - head_base) * FLAME_SEAT;
         let flame_base = [0.0, char_line.min(belly - FLAME_BELLY * flame_height), 0.0];
         Geometry {
             butt,
