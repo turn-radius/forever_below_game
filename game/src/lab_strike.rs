@@ -131,6 +131,7 @@ pub struct Hundred {
     /// The fewest, mean and most damage over the blows that hit; `None` with no hit.
     pub damage: Option<(u32, f64, u32)>,
     /// The mean blows a kill took from full hit points, over the kills made; `None` with none.
+    /// The last fight, if the hundred ended before it did, is dropped.
     pub blows_to_kill: Option<f64>,
     pub kills: u32,
 }
@@ -143,7 +144,7 @@ impl Hundred {
             None => "no damage".to_string(),
         };
         let kill = match self.blows_to_kill {
-            Some(blows) => format!("{} blows to kill from full (over {} kills)", number(blows), self.kills),
+            Some(blows) => format!("{} kills in 100 · {} blows each", self.kills, number(blows)),
             None => "no kill in 100 blows".to_string(),
         };
         format!("100 blows vs AC {}: {} hit · {damage} · {kill}", self.armour_class, self.hits)
@@ -264,7 +265,7 @@ mod tests {
     fn a_rat_striking_ac_12_logs_the_roll_and_its_bite() {
         let state = state(Attacker::Creature(Species::Rat));
         assert_eq!(armour_class(&state), 12);
-        let mut strikes = Strikes::default();
+        let (mut hits, mut misses) = (0, 0);
         for seed in 0..40 {
             let mut state = state.clone();
             state.strike_seed = seed;
@@ -274,13 +275,30 @@ mod tests {
             assert!(line.starts_with("Rat: d20 ("), "{line}");
             assert!(line.contains("vs AC 12"), "{line}");
             if line.contains(": hit") {
+                hits += 1;
                 assert!(line.contains("Bite 1 = bite (1)") && line.contains("HP 10 → 9"), "{line}");
             } else {
+                misses += 1;
                 assert!(!line.contains("HP"), "{line}");
             }
         }
-        strikes.strike(&state);
-        assert_eq!(strikes.log.len(), 1);
+        assert!(hits > 0 && misses > 0, "{hits} hits, {misses} misses");
+    }
+
+    #[test]
+    fn a_hundred_in_between_does_not_change_the_next_blow() {
+        for attacker in [Attacker::Creature(Species::GiantRat), Attacker::Folk("Sword".into())] {
+            let mut state = state(attacker);
+            state.strike_seed = 9;
+            let (mut plain, mut between) = (Strikes::default(), Strikes::default());
+            plain.strike(&state);
+            plain.strike(&state);
+            between.strike(&state);
+            between.strike_hundred(&state);
+            between.strike(&state);
+            assert_eq!(plain.log, between.log);
+            assert_eq!(plain.hp, between.hp);
+        }
     }
 
     #[test]
@@ -318,16 +336,34 @@ mod tests {
     }
 
     #[test]
-    fn a_snake_logs_its_save() {
+    fn a_saved_venom_is_halved_and_the_hit_points_drop_by_the_total() {
         let mut state = state(Attacker::Creature(Species::PoisonousSnake));
         state.character.attributes.dexterity = 3;
-        let line = (0..200).find_map(|seed| {
+        let block = Species::PoisonousSnake.stat_block();
+        let full = full_hit_points(&state);
+        let (mut saved, mut failed) = (0, 0);
+        for seed in 0..300 {
             state.strike_seed = seed;
+            let blow = Arms::of(&state).blow(armour_class(&state), 0, &mut Mulberry32::new(seed));
+            let Some(save) = blow.save else { continue };
+            // The same draws by hand: the d20, the bite, the venom.
+            let mut rng = Mulberry32::new(seed);
+            rng.int(1, 20);
+            let (bite, venom) = (block.bite.roll(&mut rng), block.venom.unwrap().roll(&mut rng));
+            let through = if save.succeeded {
+                saved += 1;
+                venom / 2
+            } else {
+                failed += 1;
+                venom
+            };
+            assert_eq!(blow.damage.unwrap().value() as u32, bite + through, "seed {seed}");
             let mut strikes = Strikes::default();
             strikes.strike(&state);
-            strikes.log.back().cloned().filter(|l| l.contains("DC 10"))
-        });
-        assert!(line.is_some_and(|l| l.contains("CON save")), "a snake's bite is saved against");
+            assert_eq!(strikes.hit_points(&state).0, full - (bite + through) as i32, "seed {seed}: {:?}", strikes.log);
+            assert!(strikes.log.back().unwrap().contains("CON save"));
+        }
+        assert!(saved > 0 && failed > 0, "{saved} saved, {failed} failed");
     }
 
     #[test]
