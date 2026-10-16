@@ -5,7 +5,7 @@ use crate::armory_base::{base_for, roll_shape};
 use crate::dress::dress;
 use crate::naming::{Legend, item_name, legendize, noun};
 use crate::profile::{Profile, profile};
-use crate::rarity::roll_rarity;
+use crate::rarity::{Odds, roll_rarity};
 use crate::tables::Affix;
 use crate::{Kind, Rarity, Slot, Tag, game_rng};
 use std::fmt;
@@ -40,6 +40,8 @@ pub struct Item {
     pub profile: Profile,
     /// What a purse or pouch holds.
     pub coins: Option<Coins>,
+    /// The odds its rarity was rolled against, so its base and seed roll it again the same.
+    pub odds: Odds,
 }
 
 impl Item {
@@ -89,12 +91,18 @@ impl Item {
     }
 }
 
-/// Rolls base `base` from `seed`. `None` for a name no table knows. Pure in its arguments.
+/// Rolls base `base` from `seed` at the first level's odds ([`roll_item_with`]).
+pub fn roll_item(base: &str, seed: u32) -> Option<Item> {
+    roll_item_with(base, seed, Odds::default())
+}
+
+/// Rolls base `base` from `seed`, its rarity against `odds`. `None` for a name no table knows.
+/// Pure in its arguments.
 ///
 /// Gear rolls rarity and affixes from its tags, applies the affixes to its stats, is named
 /// and, if legendary, titled with a history, and is dressed for its rarity. Goods are common
 /// and plain, as in the plate; a purse that rolled coins gets a count of them.
-pub fn roll_item(base: &str, seed: u32) -> Option<Item> {
+pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
     let mut shape = roll_shape(base, seed)?;
     let mut profile = profile(base, &shape);
     let mut rng = game_rng(seed);
@@ -113,10 +121,10 @@ pub fn roll_item(base: &str, seed: u32) -> Option<Item> {
         if let Some(c) = coins {
             profile.description = c.to_string();
         }
-        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins });
+        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds });
     }
 
-    let (rarity, affixes) = roll_rarity(&mut rng, &profile.tags);
+    let (rarity, affixes) = roll_rarity(&mut rng, &profile.tags, &odds);
     for a in &affixes {
         a.apply_to_stats(&mut profile.stats);
     }
@@ -125,13 +133,13 @@ pub fn roll_item(base: &str, seed: u32) -> Option<Item> {
     dress(&mut shape, rarity, &affixes, seed);
     // The fuel it starts with is what the item's `BurnTime` makes of a full one.
     shape.scale_fuel(profile.stats.burn_time);
-    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None })
+    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds })
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that
-/// family chosen from the seed ([`base_for`]), rolled from the same seed.
-pub fn roll_loot(family: armory::Family, seed: u32) -> Option<Item> {
-    roll_item(base_for(family, seed)?, seed)
+/// family chosen from the seed ([`base_for`]), rolled from the same seed against `odds`.
+pub fn roll_loot(family: armory::Family, seed: u32, odds: Odds) -> Option<Item> {
+    roll_item_with(base_for(family, seed)?, seed, odds)
 }
 
 #[cfg(test)]
@@ -159,6 +167,20 @@ mod tests {
             }
         }
         assert_eq!(roll_item("Spoon", 1), None);
+    }
+
+    #[test]
+    fn the_same_base_seed_and_depth_roll_the_same_item() {
+        for depth in [1, 3, 5, 8] {
+            for seed in [1, 2, 1207, 65_537] {
+                let item = roll_item_with("Sword", seed, Odds::loot(depth)).unwrap();
+                assert_eq!(item, roll_item_with("Sword", seed, Odds::loot(depth)).unwrap(), "depth {depth} seed {seed}");
+                assert_eq!(item.odds, Odds::loot(depth));
+            }
+        }
+        for seed in 0..300 {
+            assert_eq!(roll_item("Sword", seed), roll_item_with("Sword", seed, Odds::loot(1)), "{seed}");
+        }
     }
 
     /// A fresh torch whose `BurnTime` is `burn_time`, with the fuel that makes of a full one.
@@ -271,11 +293,32 @@ mod tests {
     fn loot_rolls_a_base_of_its_family() {
         for &family in armory::Item::PORTED {
             for seed in [5, 1207] {
-                let item = roll_loot(family, seed).unwrap();
+                let item = roll_loot(family, seed, Odds::default()).unwrap();
                 assert_eq!(item.shape.family(), family);
-                assert_eq!(Some(item.clone()), roll_loot(family, seed));
+                assert_eq!(Some(item.clone()), roll_loot(family, seed, Odds::default()));
             }
         }
+    }
+
+    /// The share of gear that rolls rare or legendary as floor loot at `depth`, over the
+    /// families quickest to roll and 150 seeds each.
+    fn rare_share_of_loot(depth: u32) -> f64 {
+        use armory::Family::{Amulet, Axe, Charm, Club, Dagger, Mace, Ring};
+        let gear: Vec<Item> = [Mace, Club, Axe, Dagger, Ring, Charm, Amulet]
+            .into_iter()
+            .flat_map(|family| (0..150).filter_map(move |seed| roll_loot(family, seed, Odds::loot(depth))))
+            .filter(|i| i.profile.kind == Kind::Gear)
+            .collect();
+        gear.iter().filter(|i| i.rarity >= Rarity::Rare).count() as f64 / gear.len() as f64
+    }
+
+    #[test]
+    fn floor_loot_grows_rarer_with_depth() {
+        let shares: Vec<f64> = [1, 3, 5].into_iter().map(rare_share_of_loot).collect();
+        for pair in shares.windows(2) {
+            assert!(pair[1] > pair[0], "rare and legendary by depth: {shares:?}");
+        }
+        assert!(shares[2] > 1.7 * shares[0], "rare and legendary by depth: {shares:?}");
     }
 
     #[test]

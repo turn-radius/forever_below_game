@@ -28,7 +28,7 @@ use armory::{ItemMesh, Part};
 use fb_body::{Body, HandPose, Placement, Side, fit_hands, fit_worn};
 use fb_items::outfit::OutfitSet;
 use fb_items::undead::skeleton_outfit;
-use fb_items::Slot;
+use fb_items::{Odds, Slot};
 
 use crate::pose::ArmStance;
 use crate::rig::Rig;
@@ -65,9 +65,10 @@ pub struct SkeletonGear {
 }
 
 impl SkeletonGear {
-    /// The gear a skeleton rolls from its own seed ([`skeleton_outfit`]), fitted.
-    pub fn roll(state: &SkeletonState) -> SkeletonGear {
-        SkeletonGear::fit(state, skeleton_outfit(state.seed))
+    /// The gear a skeleton rolls from its own seed against `odds` ([`skeleton_outfit`]),
+    /// fitted.
+    pub fn roll(state: &SkeletonState, odds: Odds) -> SkeletonGear {
+        SkeletonGear::fit(state, skeleton_outfit(state.seed, odds))
     }
 
     /// `outfit` fitted to the skeleton `state`.
@@ -500,7 +501,7 @@ mod tests {
     /// The gear and bones standing in the stance.
     fn standing(seed: u32) -> (SkeletonGear, Vec<ItemMesh>, Vec<V3>) {
         let state = SkeletonState::roll(seed);
-        let gear = SkeletonGear::roll(&state);
+        let gear = SkeletonGear::roll(&state, Odds::default());
         let local = skeleton_armed(&state.dims(), &SkeletonPose::default(), &gear.stance);
         let worn = gear.posed(&local);
         let bones = points(&gear.rig.posed_mesh(&local));
@@ -517,7 +518,7 @@ mod tests {
     fn the_same_seed_gives_the_same_gear() {
         for seed in [1, 2, 3, 4, 5, 6, 7, 8] {
             let state = SkeletonState::roll(seed);
-            let (a, b) = (SkeletonGear::roll(&state), SkeletonGear::roll(&state));
+            let (a, b) = (SkeletonGear::roll(&state, Odds::default()), SkeletonGear::roll(&state, Odds::default()));
             assert_eq!(a.pieces, b.pieces, "{seed}");
             assert_eq!(a.rig, b.rig, "{seed}");
             assert_eq!(a.stance, b.stance, "{seed}");
@@ -527,7 +528,7 @@ mod tests {
     #[test]
     fn a_skeleton_can_wear_a_helm_armour_and_gloves_and_hold_a_sword_and_shield() {
         let kitted = |s: u32| {
-            let gear = SkeletonGear::roll(&SkeletonState::roll(s));
+            let gear = SkeletonGear::roll(&SkeletonState::roll(s), Odds::default());
             (has(&gear, &FULL) && gear.outfit.item(Slot::Mainhand).is_some_and(|w| w.base == "Sword")).then_some(gear)
         };
         let gear = (0..200).find_map(kitted).expect("a kitted swordsman");
@@ -550,7 +551,7 @@ mod tests {
 
     #[test]
     fn some_wear_nothing_and_some_hold_only_a_spear() {
-        let gears: Vec<SkeletonGear> = (0..40).map(|s| SkeletonGear::roll(&SkeletonState::roll(s))).collect();
+        let gears: Vec<SkeletonGear> = (0..40).map(|s| SkeletonGear::roll(&SkeletonState::roll(s), Odds::default())).collect();
         let bare = gears.iter().position(SkeletonGear::is_bare).expect("a bare skeleton");
         assert_eq!(gears[bare].rig, SkeletonState::roll(bare as u32).build());
         assert!(gears.iter().any(|g| g.outfit.worn.len() == 1 && g.outfit.item(Slot::Mainhand).is_some_and(|w| w.base == "Spear")));
@@ -560,7 +561,7 @@ mod tests {
     fn the_stance_puts_the_hand_where_the_fit_held_it() {
         for seed in 0..30 {
             let state = SkeletonState::roll(seed);
-            let gear = SkeletonGear::roll(&state);
+            let gear = SkeletonGear::roll(&state, Odds::default());
             let dims = state.dims();
             let local = skeleton_armed(&dims, &SkeletonPose::default(), &gear.stance);
             let world = gear.rig.world(&local);
@@ -643,7 +644,7 @@ mod tests {
     /// `far` gathers the greatest distance of any vertex from a bone.
     fn check_fit(seed: u32, far: &mut f32, worst: &mut f32, worst_end: &mut f32) {
         let state = SkeletonState::roll(seed);
-        let gear = SkeletonGear::roll(&state);
+        let gear = SkeletonGear::roll(&state, Odds::default());
         let dims = state.dims();
         let local = skeleton_armed(&dims, &SkeletonPose::default(), &gear.stance);
         let world = gear.rig.world(&local);
@@ -748,7 +749,7 @@ mod tests {
     /// instead of flaring like funnels.
     fn check_openings(seed: u32, cuff: &mut f32, hem: &mut f32) {
         let state = SkeletonState::roll(seed);
-        let gear = SkeletonGear::roll(&state);
+        let gear = SkeletonGear::roll(&state, Odds::default());
         let dims = state.dims();
         let local = skeleton_armed(&dims, &SkeletonPose::default(), &gear.stance);
         let world = gear.rig.world(&local);
@@ -822,7 +823,7 @@ mod tests {
     /// a walk and a swing.
     fn check_seam(seed: u32, slot: Slot, outer: [usize; 2], inner: [usize; 2], seam_at: f32, ahead: f32, widest: &mut f32) {
         let state = SkeletonState::roll(seed);
-        let gear = SkeletonGear::roll(&state);
+        let gear = SkeletonGear::roll(&state, Odds::default());
         let dims = state.dims();
         let find = |bone: usize| gear.pieces.iter().position(|p| p.slot == slot && p.bone == bone);
         let positions = |mesh: &ItemMesh| -> Vec<V3> { mesh.parts.iter().flat_map(|part| part.positions.iter().copied()).collect() };

@@ -70,6 +70,9 @@ pub struct ItemRecord {
     /// A purse's gold, silver and copper.
     pub coins: Option<[u32; 3]>,
     pub contents: Vec<Stowed>,
+    /// The odds it was rolled against; records from before odds roll at the first level's.
+    #[serde(default)]
+    pub odds: fb_items::Odds,
 }
 
 /// An item in a container's grid.
@@ -133,6 +136,7 @@ pub fn record_item(inventory: &Inventory, id: ItemId) -> Option<ItemRecord> {
         shape: item.shape.clone(),
         coins: item.coins.map(|c| [c.gp, c.sp, c.cp]),
         contents: record_contents(inventory, id),
+        odds: item.odds,
     })
 }
 
@@ -148,7 +152,7 @@ pub fn record_contents(inventory: &Inventory, container: ItemId) -> Vec<Stowed> 
 /// Keeps track of the item `record` describes in `inventory`, loose, with its contents where
 /// they lay. `None` for a base no table knows.
 pub fn restore_item(inventory: &mut Inventory, record: &ItemRecord) -> Option<ItemId> {
-    let mut item = fb_items::roll_item(&record.base, record.seed)?;
+    let mut item = fb_items::roll_item_with(&record.base, record.seed, record.odds)?;
     item.shape = record.shape.clone();
     item.coins = record.coins.map(|[gp, sp, cp]| Coins { gp, sp, cp });
     let id = inventory.add(item);
@@ -224,13 +228,25 @@ mod tests {
     }
 
     #[test]
+    fn a_deep_find_restores_with_the_rarity_it_rolled() {
+        let odds = fb_items::Odds::loot(8);
+        let seed = (1..500).find(|&s| fb_items::roll_item_with("Sword", s, odds).unwrap().rarity != fb_items::roll_item("Sword", s).unwrap().rarity).unwrap();
+        let mut inventory = Inventory::default();
+        let sword = inventory.add(fb_items::roll_item_with("Sword", seed, odds).unwrap());
+        let json = serde_json::to_string(&record_item(&inventory, sword).unwrap()).unwrap();
+        let mut other = Inventory::default();
+        let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(other.item(again), inventory.item(sword));
+    }
+
+    #[test]
     fn the_world_record_round_trips_through_serde_unchanged() {
         let mut record = WorldRecord::default();
         let item = fb_items::roll_item("Purse", 11).unwrap();
         let mut level = LevelRecord::default();
         level.floor.push(FloorRecord {
             spot: ItemSpot { x: 3.25, y: 4.5, yaw: 0.3, family: item.shape.family(), seed: item.seed },
-            item: ItemRecord { base: item.base.clone(), seed: item.seed, shape: item.shape.clone(), coins: Some([1, 2, 3]), contents: vec![] },
+            item: ItemRecord { base: item.base.clone(), seed: item.seed, shape: item.shape.clone(), coins: Some([1, 2, 3]), contents: vec![], odds: fb_items::Odds::kit(4) },
         });
         level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
         level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false });

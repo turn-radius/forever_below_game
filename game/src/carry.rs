@@ -752,7 +752,7 @@ pub(crate) fn lay_out_items(
         return;
     }
     for spot in &level.0.items {
-        if let Some(item) = fb_items::roll_loot(spot.family, spot.seed) {
+        if let Some(item) = fb_items::roll_loot(spot.family, spot.seed, fb_items::Odds::loot(level.0.depth)) {
             let id = inventory.add(item);
             spawn_floor_item(&mut spawner, &inventory, id, *spot, &tuning);
         }
@@ -1417,12 +1417,12 @@ mod tests {
     fn crossbows_bows_and_shields_rest_flat_and_bags_stand() {
         for seed in 1..=16u32 {
             for family in [Family::Crossbow, Family::Bow, Family::Shield] {
-                let item = fb_items::roll_loot(family, seed).unwrap();
+                let item = fb_items::roll_loot(family, seed, fb_items::Odds::default()).unwrap();
                 let (size, _) = laid_size(&item);
                 assert!(size.y <= size.x.min(size.z) + 1e-3, "{family:?} {seed}: stands {size}");
             }
             for family in [Family::Bags, Family::Feet, Family::Lantern] {
-                let item = fb_items::roll_loot(family, seed).unwrap();
+                let item = fb_items::roll_loot(family, seed, fb_items::Odds::default()).unwrap();
                 let (_, transform) = laid_size(&item);
                 assert!((transform.rotation * Vec3::Y).y > 0.99, "{family:?} {seed}: laid down");
             }
@@ -2136,7 +2136,7 @@ mod tests {
         let (spot, item) = level
             .items
             .iter()
-            .map(|s| (*s, fb_items::roll_loot(s.family, s.seed).unwrap()))
+            .map(|s| (*s, fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth)).unwrap()))
             .find(|(_, i)| i.profile.packable && i.profile.holds.is_none())
             .unwrap();
         app.world_mut().resource_mut::<CurrentLevel>().0.items.push(spot);
@@ -2162,7 +2162,7 @@ mod tests {
     #[test]
     fn floor_items_on_1207_are_rolled_with_rarity() {
         let level = fb_level::generate(1207, 1);
-        let items: Vec<fb_items::Item> = level.items.iter().map(|s| fb_items::roll_loot(s.family, s.seed).unwrap()).collect();
+        let items: Vec<fb_items::Item> = level.items.iter().map(|s| fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth)).unwrap()).collect();
         assert_eq!(items.len(), level.items.len());
         for (item, spot) in items.iter().zip(&level.items) {
             assert_eq!(item.shape.family(), spot.family);
@@ -2178,7 +2178,7 @@ mod tests {
         let mut lights = 0;
         for seed in 1..=32 {
             for spot in fb_level::generate(seed, 1).items.iter().filter(|s| matches!(s.family, Family::Torch | Family::Lantern)) {
-                let item = fb_items::roll_loot(spot.family, spot.seed).unwrap();
+                let item = fb_items::roll_loot(spot.family, spot.seed, fb_items::Odds::default()).unwrap();
                 let (base, name) = (item.base.clone(), item.title().to_string());
                 let mut inventory = Inventory::default();
                 let id = inventory.add(item);

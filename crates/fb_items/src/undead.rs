@@ -4,7 +4,7 @@
 //!
 //! A skeleton is kitted (helm, body armour, gloves, boots, a weapon and usually a shield),
 //! part dressed (each piece by chance) or bare-boned (a weapon, or nothing at all). Every
-//! piece is rolled through [`roll_item`], so it has a rarity, affixes and a history like loot,
+//! piece is rolled through [`roll_item_with`], so it has a rarity, affixes and a history like loot,
 //! and then it is worn hard: the dead have lain in it for ages, so its wear is high, iron
 //! rusts, cloth and leather rot, and weapons are nicked.
 
@@ -12,7 +12,7 @@ use procgen_rng::Mulberry32;
 
 use crate::dress::condition_mut;
 use crate::outfit::OutfitSet;
-use crate::{Item, Slot, Tag, roll_item};
+use crate::{Item, Odds, Slot, Tag, roll_item_with};
 
 /// Mixed into a skeleton's seed so its gear does not repeat the numbers its bones roll from.
 const OUTFIT_SALT: u32 = 0x0d3a_dc10;
@@ -24,9 +24,10 @@ const KITTED_BODY: &[&str] = &["Mail", "Brigandine", "Scale coat", "Cuirass"];
 const BODY: &[&str] = &["Gambeson", "Mail", "Brigandine", "Scale coat", "Cuirass", "Leather jerkin"];
 const HANDS: &[&str] = &["Gloves", "Gauntlets", "Gauntlets"];
 
-/// Rolls the gear for a skeleton from `seed`. A pure function of the seed; slots left empty
-/// are not in [`OutfitSet::worn`].
-pub fn skeleton_outfit(seed: u32) -> OutfitSet {
+/// Rolls the gear for a skeleton from `seed`, each piece's rarity against `odds` (a skeleton
+/// met at a depth carries [`Odds::kit`] for it). A pure function of its arguments; slots left
+/// empty are not in [`OutfitSet::worn`].
+pub fn skeleton_outfit(seed: u32, odds: Odds) -> OutfitSet {
     let mut rng = Mulberry32::new(seed ^ OUTFIT_SALT);
     // Kitted 2 in 10, part dressed 4 in 10, bare-boned 4 in 10.
     let kit = rng.int(0, 9);
@@ -58,7 +59,7 @@ pub fn skeleton_outfit(seed: u32) -> OutfitSet {
     let mut worn: Vec<(Slot, Item)> = Vec::new();
     for base in bases {
         let item_seed = (rng.next_f64() * 4_294_967_296.0) as u32;
-        if let Some(mut item) = roll_item(base, item_seed)
+        if let Some(mut item) = roll_item_with(base, item_seed, odds)
             && let Some(slot) = item.profile.slot
         {
             wear_hard(&mut item, &mut rng);
@@ -88,11 +89,12 @@ fn wear_hard(item: &mut Item, rng: &mut Mulberry32) {
 mod tests {
     use super::*;
     use crate::armory_base::ARMORY_BASES;
+    use crate::Rarity;
 
     #[test]
     fn the_same_seed_rolls_the_same_gear() {
         for seed in 0..60 {
-            assert_eq!(skeleton_outfit(seed), skeleton_outfit(seed), "{seed}");
+            assert_eq!(skeleton_outfit(seed, Odds::default()), skeleton_outfit(seed, Odds::default()), "{seed}");
         }
     }
 
@@ -100,14 +102,14 @@ mod tests {
     fn every_base_it_names_exists() {
         let known = |base: &&str| ARMORY_BASES.iter().any(|(name, _)| name == base);
         for base in KITTED_WEAPONS.iter().chain(WEAPONS).chain(KITTED_BODY).chain(BODY).chain(HANDS).chain(&["Boots", "Helm", "Shield", "Tunic"]) {
-            assert!(known(base) && roll_item(base, 1).is_some(), "{base}");
+            assert!(known(base) && crate::roll_item(base, 1).is_some(), "{base}");
         }
     }
 
     #[test]
     fn gear_goes_in_the_slot_it_is_made_for_once() {
         for seed in 0..200 {
-            let set = skeleton_outfit(seed);
+            let set = skeleton_outfit(seed, Odds::default());
             for (slot, item) in &set.worn {
                 assert!(item.fits(*slot), "{seed}: {} in {slot:?}", item.base);
                 assert_eq!(set.worn.iter().filter(|(s, _)| s == slot).count(), 1, "{seed}: two in {slot:?}");
@@ -124,7 +126,7 @@ mod tests {
 
     #[test]
     fn some_are_kitted_some_armed_only_and_some_bare() {
-        let sets: Vec<OutfitSet> = (0..200).map(skeleton_outfit).collect();
+        let sets: Vec<OutfitSet> = (0..200).map(|seed| skeleton_outfit(seed, Odds::default())).collect();
         let has = |set: &OutfitSet, slots: &[Slot]| slots.iter().all(|s| set.item(*s).is_some());
         let full = [Slot::Head, Slot::Body, Slot::Hands, Slot::Mainhand, Slot::Offhand];
         assert!(sets.iter().filter(|s| has(s, &full)).count() >= 8);
@@ -134,9 +136,23 @@ mod tests {
     }
 
     #[test]
+    fn the_first_levels_dead_carry_nothing_rare() {
+        let mut magic = 0;
+        for seed in 0..200 {
+            for (_, item) in &skeleton_outfit(seed, Odds::kit(1)).worn {
+                assert!(item.rarity <= Rarity::Magic, "{seed}: {} is {:?}", item.base, item.rarity);
+                magic += usize::from(item.rarity == Rarity::Magic);
+            }
+        }
+        assert!(magic > 0, "no magic gear on 200 skeletons");
+        let deep = (0..50).flat_map(|seed| skeleton_outfit(seed, Odds::kit(5)).worn).filter(|(_, i)| i.rarity >= Rarity::Rare).count();
+        assert!(deep > 0, "nothing rare on 50 skeletons at depth 5");
+    }
+
+    #[test]
     fn it_is_worn_hard() {
         for seed in 0..100 {
-            for (_, item) in &skeleton_outfit(seed).worn {
+            for (_, item) in &skeleton_outfit(seed, Odds::default()).worn {
                 let c = item.shape.condition();
                 assert!(c.wear >= 0.55, "{seed}: {} wear {}", item.base, c.wear);
                 assert!(c.damage >= 0.15, "{seed}: {} damage {}", item.base, c.damage);

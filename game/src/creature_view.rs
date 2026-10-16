@@ -218,7 +218,7 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
     let creature = choice.creature();
     // A skeleton wears and holds what its seed rolls: its rig is the gear's, with the hands closed.
     let gear = match &creature {
-        Creature::Skeleton(skeleton) if choice.gear => Some(SkeletonGear::roll(skeleton)),
+        Creature::Skeleton(skeleton) if choice.gear => Some(SkeletonGear::roll(skeleton, fb_items::Odds::kit(1))),
         _ => None,
     };
     let rig = gear.as_ref().map_or_else(|| creature.rig(), |g| g.rig.clone());
@@ -396,7 +396,7 @@ fn skeleton_look(s: &fb_creatures::SkeletonState, gear: bool) -> String {
         missing.push(format!("{fingers} fingers"));
     }
     let missing = if missing.is_empty() { String::new() } else { format!(", missing {}", missing.join(", ")) };
-    let outfit = fb_items::undead::skeleton_outfit(s.seed);
+    let outfit = fb_items::undead::skeleton_outfit(s.seed, fb_items::Odds::kit(1));
     let kit = if !gear {
         ", gear off".to_string()
     } else if outfit.worn.is_empty() {

@@ -14,7 +14,7 @@ use procgen_rng::Mulberry32;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{Item, Slot, roll_item};
+use crate::{Item, Odds, Slot, roll_item_with};
 
 /// One slot's candidates: the chance it is filled, and the bases to pick from (a base listed
 /// twice is twice as likely).
@@ -121,9 +121,15 @@ impl Outfit {
     /// (`seed * 13 + key.length * 977 + key.charCodeAt(0)`); each item's own seed is drawn
     /// from that stream, where the plate rolled from its one global stream.
     pub fn roll(&self, seed: u32, folk: &str) -> OutfitSet {
+        self.roll_with(seed, folk, Odds::default())
+    }
+
+    /// [`Outfit::roll`] with every item's rarity rolled against `odds`: the folk met at a
+    /// depth wear [`Odds::kit`] for it.
+    pub fn roll_with(&self, seed: u32, folk: &str, odds: Odds) -> OutfitSet {
         let first = self.key.bytes().next().unwrap_or(0) as u32;
         let mut rng = Mulberry32::new(seed.wrapping_mul(13).wrapping_add(self.key.len() as u32 * 977).wrapping_add(first));
-        let draw = |rng: &mut Mulberry32, base: &str| roll_item(base, (rng.next_f64() * 4_294_967_296.0) as u32);
+        let draw = |rng: &mut Mulberry32, base: &str| roll_item_with(base, (rng.next_f64() * 4_294_967_296.0) as u32, odds);
         let mut worn: Vec<(Slot, Item)> = Vec::new();
         for (slot, choice) in &self.slots {
             if choice.bases.is_empty() || (choice.chance < 1.0 && rng.next_f64() > choice.chance as f64) {
@@ -152,6 +158,23 @@ impl Outfit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Rarity;
+
+    #[test]
+    fn the_first_levels_folk_wear_nothing_rare() {
+        // 200 folk, the outfits taken in turn.
+        let o = |seed: u32| &outfits()[seed as usize % outfits().len()];
+        let mut magic = 0;
+        for seed in 0..200 {
+            for (_, item) in o(seed).roll_with(seed, "human", Odds::kit(1)).worn {
+                assert!(item.rarity <= Rarity::Magic, "{} {seed}: {} is {:?}", o(seed).key, item.base, item.rarity);
+                magic += usize::from(item.rarity == Rarity::Magic);
+            }
+        }
+        assert!(magic > 0, "no magic gear on the first level's folk");
+        let deep = (0..50).flat_map(|seed| o(seed).roll_with(seed, "human", Odds::kit(5)).worn).filter(|(_, i)| i.rarity >= Rarity::Rare).count();
+        assert!(deep > 0, "nothing rare on folk at depth 5");
+    }
 
     #[test]
     fn every_outfit_reads_from_the_table() {

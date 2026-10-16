@@ -283,7 +283,7 @@ fn spawn_creatures(
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     // A skeleton takes some hundred milliseconds to roll and fit, so the level's are built side by
     // side before any is spawned.
-    let built = build_creatures(&level.0.creatures);
+    let built = build_creatures(&level.0.creatures, level.0.depth);
     for (index, (spot, built)) in level.0.creatures.iter().zip(built).enumerate() {
         let left = saved.and_then(|l| l.creatures.get(&index));
         // A body from the record lies bare: what it wore was set down where it fell, and is on
@@ -299,7 +299,7 @@ fn spawn_creatures(
         }
     }
     let dev = dev_spots(&level.0);
-    for (spot, built) in dev.iter().zip(build_creatures(&dev)) {
+    for (spot, built) in dev.iter().zip(build_creatures(&dev, level.0.depth)) {
         spawn_built(&mut commands, &mut spawner, &level.0, spot, built, false);
     }
     *shown = Some(level.0.creatures.clone());
@@ -356,7 +356,7 @@ pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level:
 
 /// [`spawn_creature`], a skeleton `fallen` drawn as bare bones: its gear is not put on it.
 pub fn spawn_creature_as(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot, fallen: bool) -> Entity {
-    spawn_built(commands, spawner, level, spot, build_creature(spot), fallen)
+    spawn_built(commands, spawner, level, spot, build_creature(spot, level.depth), fallen)
 }
 
 /// A creature worked out from its spot, ready to spawn: pure data, Bevy-free.
@@ -367,12 +367,13 @@ pub struct Built {
     pub kit: Option<SkeletonKit>,
 }
 
-/// Rolls the creature at `spot`, and fits a skeleton's gear and measures its kit: the slow part
-/// of spawning one.
-pub fn build_creature(spot: &CreatureSpot) -> Built {
+/// Rolls the creature at `spot` on a level `depth` down, and fits a skeleton's gear (rolled
+/// against [`fb_items::Odds::kit`] for the depth) and measures its kit: the slow part of
+/// spawning one.
+pub fn build_creature(spot: &CreatureSpot, depth: u32) -> Built {
     let creature = spot.creature();
     let gear = match &creature {
-        Creature::Skeleton(skeleton) => Some(fb_creatures::SkeletonGear::roll(skeleton)),
+        Creature::Skeleton(skeleton) => Some(fb_creatures::SkeletonGear::roll(skeleton, fb_items::Odds::kit(depth))),
         _ => None,
     };
     let kit = match (&creature, &gear) {
@@ -383,12 +384,12 @@ pub fn build_creature(spot: &CreatureSpot) -> Built {
 }
 
 /// [`build_creature`] for every spot, on as many threads as there are cores.
-pub fn build_creatures(spots: &[CreatureSpot]) -> Vec<Built> {
+pub fn build_creatures(spots: &[CreatureSpot], depth: u32) -> Vec<Built> {
     if spots.len() < 2 {
-        return spots.iter().map(build_creature).collect();
+        return spots.iter().map(|spot| build_creature(spot, depth)).collect();
     }
     std::thread::scope(|scope| {
-        let jobs: Vec<_> = spots.iter().map(|spot| scope.spawn(|| build_creature(spot))).collect();
+        let jobs: Vec<_> = spots.iter().map(|spot| scope.spawn(move || build_creature(spot, depth))).collect();
         jobs.into_iter().map(|job| job.join().expect("a creature builds")).collect()
     })
 }

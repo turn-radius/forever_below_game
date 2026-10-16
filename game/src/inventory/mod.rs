@@ -180,33 +180,40 @@ fn roll_character(mut character: ResMut<Character>, level: Option<Res<CurrentLev
     *character = character_for(kit_seed(level.as_deref(), 0xc4a7));
 }
 
-/// The delver starts in the [`STARTING_OUTFIT`], wearing a belt whose pouch is their first
-/// grid, with a burning torch in the off hand so they start with a carried light. What the
-/// outfit leaves at their feet goes in the pouch if it fits; its spare torch is unlit, so the
-/// burning one is a torch of its own.
+/// The delver starts with almost nothing: the [`STARTING_OUTFIT`]'s clothes, a belt whose pouch
+/// is their first grid, and a burning torch in the off hand so they start with a carried light.
+/// All of it is common. The outfit's goods and the things it leaves at its wearer's feet (a
+/// spare torch, bread) are not given; folk in the same outfit still carry them.
 fn give_starting_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, level: Option<Res<CurrentLevel>>) {
     if inventory.worn(Slot::Belt).is_some() {
         return;
     }
-    let Some(belt) = fb_items::roll_item("Belt", kit_seed(level.as_deref(), 0xbe17)) else { return };
+    let odds = starting_odds();
+    let Some(belt) = fb_items::roll_item_with("Belt", kit_seed(level.as_deref(), 0xbe17), odds) else { return };
     let belt = inventory.add(belt);
     inventory.wear(belt, Slot::Belt).expect("a belt goes on the belt slot");
     let Some(outfit) = fb_items::outfit::outfit(STARTING_OUTFIT) else { return };
-    let set = outfit.roll(kit_seed(level.as_deref(), 0x0f17), character.folk.key());
-    for (slot, item) in set.worn {
+    for (slot, item) in outfit.roll_with(kit_seed(level.as_deref(), 0x0f17), character.folk.key(), odds).worn {
         let id = inventory.add(item);
         if inventory.wear(id, slot).is_err() {
             inventory.forget(id);
         }
     }
-    let torch = inventory.add(crate::carry::lit_torch(kit_seed(level.as_deref(), 0x70c4)));
+    let torch = inventory.add(starting_torch(kit_seed(level.as_deref(), 0x70c4)));
     inventory.wear(torch, Slot::Offhand).expect("a torch goes in the off hand");
-    for item in set.goods.into_iter().chain(set.ground) {
-        let id = inventory.add(item);
-        if inventory.stow(id).is_err() {
-            inventory.forget(id);
-        }
-    }
+}
+
+/// The odds the starting kit rolls at: the first level's, but common only.
+fn starting_odds() -> fb_items::Odds {
+    fb_items::Odds::loot(1).capped(Rarity::Common)
+}
+
+/// The first burning common torch rolled at or after `seed`.
+fn starting_torch(seed: u32) -> fb_items::Item {
+    (0..u32::MAX)
+        .map(|k| seed.wrapping_add(k))
+        .find_map(|s| fb_items::roll_item_with("Torch", s, starting_odds()).filter(|item| crate::carry::item_light(&item.shape).is_some()))
+        .expect("some seed rolls a burning torch")
 }
 
 /// Equips `item` in `slot`; whatever it displaces is stowed, or forgotten if there is no room.
@@ -1168,6 +1175,22 @@ mod tests {
 
     /// The cell size as shipped.
     const CELL_PX: f32 = 52.0;
+
+    #[test]
+    fn the_delver_starts_with_clothes_a_belt_and_a_burning_torch() {
+        let mut app = App::new();
+        app.init_resource::<Inventory>().init_resource::<Character>().add_systems(Update, give_starting_kit);
+        app.update();
+        let inventory = app.world().resource::<Inventory>();
+        // Only what is worn and held, the folk's own headwear among it: nothing in the pouch.
+        assert!(inventory.ids().all(|id| inventory.equipped().iter().any(|(slot, _)| inventory.worn(*slot) == Some(id))));
+        for base in ["Belt", "Tunic", "Trousers", "Torch"] {
+            assert!(inventory.ids().filter_map(|id| inventory.item(id)).any(|item| item.base == base), "{base}");
+        }
+        assert!(inventory.ids().filter_map(|id| inventory.item(id)).all(|item| item.rarity == Rarity::Common));
+        let torch = inventory.worn(Slot::Offhand).and_then(|id| inventory.item(id)).expect("a torch in the off hand");
+        assert!(crate::carry::item_light(&torch.shape).is_some());
+    }
 
     #[test]
     fn the_cell_size_here_is_the_shipped_one() {
