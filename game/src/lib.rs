@@ -20,6 +20,7 @@ pub mod game_clock;
 pub mod inventory;
 pub mod keymap;
 pub mod kindle;
+pub mod lab_view;
 pub mod launch;
 pub mod level;
 pub mod level_view;

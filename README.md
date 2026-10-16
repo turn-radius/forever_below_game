@@ -115,6 +115,19 @@ A whole level from above, drawn as the map draws it but with every cell shown, b
 
 Left and Right step the seed, N rolls a new one and R resets the parameters. Scrolling over the plan zooms about the mouse and dragging pans; on the panel, sliders drag and the panel scrolls. `FB_SCREENSHOT` works here too.
 
+### The lab
+
+```
+cargo run -p forever_below -- --lab
+cargo run -p forever_below -- --lab --seed 7
+```
+
+A character on the left and their sheet on the right, with no level, creatures or audio. The panel (the Forge's, `game/src/tweak_panel.rs`) holds the folk, class, the five attributes (3 to 20) and the character seed, then for each equip slot a base (or none), an item seed and a switch for each affix the item rolled; switching one off derives the item's stats again without it. The sheet lists hit points, armour class, the held weapon's least, mean and most damage, load against capacity with its band, darkvision, light and the hunger, thirst and sleepiness rates, each with the terms of its `fb_character::explain::Explained` beneath. Every number comes from the rules the game calls, so what is balanced here is what the game plays. Any change rebuilds the sheet at once. The window is no smaller than 960 by 540. Later tasks add a strike log and passing time below the sheet.
+
+- `--seed <n>` rolls the class and scores of a human from the seed; with none it opens on a human Fighter with every score 10.
+
+Scrolling over the panel moves it, and anywhere else moves the sheet. `FB_SCREENSHOT` works here too.
+
 ### Swing practice
 
 ```

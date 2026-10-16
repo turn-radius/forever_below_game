@@ -1,0 +1,674 @@
+//! The lab (`--lab`): a character built from sliders and choices on the left, and their sheet
+//! with every derived number explained on the right. No level, creatures or audio load: the
+//! lab only calls the rules the game does ([`fb_character`], [`crate::character`],
+//! [`crate::combat`]), so what is balanced here is what the game plays.
+//!
+//! The left is the shared [`crate::tweak_panel`]: folk, class, the five attributes and the
+//! character seed, then for each equip slot a base (or none), an item seed and a switch for
+//! each rolled affix. Switching an affix off derives that item's stats again from its base
+//! with the remaining affixes ([`LabState::items`]). The right is [`sheet`]: hit points, armour
+//! class, the held weapon's damage range, load against capacity, darkvision, light and the
+//! meter rates, each with its [`Explained`] terms beneath. Changing anything rebuilds the
+//! sheet in the same frame.
+//!
+//! Below the sheet are two empty columns ([`StrikeColumn`], [`TimeColumn`]) where the strike
+//! log and passing time are added. Command line: `--lab --seed 7` rolls the character from
+//! the seed; with none it opens on a human Fighter with every score 10.
+
+use std::collections::BTreeSet;
+use std::hash::{Hash, Hasher};
+
+use armory::reflect::{Field, FieldKind};
+use armory::slider::Slider;
+use bevy::{
+    input::mouse::{AccumulatedMouseScroll, MouseScrollUnit},
+    prelude::*,
+    window::{PrimaryWindow, WindowResizeConstraints},
+};
+use fb_body::Folk;
+use fb_character::explain::Explained;
+use fb_character::{Activity, Attributes, LoadBand, MeterKind, modifier};
+use fb_items::armory_base::{ARMORY_BASES, roll_shape};
+use fb_items::profile::profile;
+use fb_items::tables::{Affix, bases};
+use fb_items::{Item, Slot, roll_item};
+
+use crate::character::{Character, Class};
+use crate::combat::{Weapon, first_level_hit_points_explained};
+use crate::inventory::Inventory;
+use crate::tweak_panel::{PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, over_body, panel_body};
+use crate::ui::{BG, BRIGHT, FAINT, INK, LINE, MUTED, UiFonts, numbers_line};
+
+/// Width of the panel on the left, in logical pixels.
+pub const PANEL_WIDTH: f32 = 430.0;
+/// The smallest window the lab is laid out for: the panel and a sheet column beside it that
+/// wraps its lines.
+pub const MIN_WINDOW: Vec2 = Vec2::new(960.0, 540.0);
+const DEFAULT_SEED: u32 = 1207;
+/// Pixels one scroll line moves the sheet.
+const SCROLL_LINE: f32 = 36.0;
+/// The slots the lab dresses. The hip is left out, since a lantern hangs there from a belt.
+const SLOTS: [Slot; 15] = [
+    Slot::Head,
+    Slot::Neck,
+    Slot::Shirt,
+    Slot::Cloak,
+    Slot::Body,
+    Slot::Mainhand,
+    Slot::Offhand,
+    Slot::Hands,
+    Slot::Belt,
+    Slot::Legs,
+    Slot::Feet,
+    Slot::Back,
+    Slot::Ring1,
+    Slot::Ring2,
+    Slot::Charm,
+];
+
+/// The window the lab opens in, no smaller than [`MIN_WINDOW`].
+pub fn window() -> Window {
+    Window {
+        title: "Forever Below".into(),
+        resize_constraints: WindowResizeConstraints { min_width: MIN_WINDOW.x, min_height: MIN_WINDOW.y, ..default() },
+        ..default()
+    }
+}
+
+pub struct LabViewPlugin;
+
+impl Plugin for LabViewPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<LabState>()
+            .init_resource::<UiFonts>()
+            .insert_resource(ClearColor(BG))
+            .add_plugins(TweakPanelPlugin::<LabState>::default())
+            .add_systems(Startup, setup)
+            .add_systems(Update, (rebuild_sheet.run_if(resource_changed::<LabState>), scroll_sheet).chain().after(TweakPanelSystems));
+    }
+}
+
+/// What one equip slot holds: a base rolled from a seed, with the affixes switched off.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LabSlot {
+    pub slot: Slot,
+    /// The base name, or `None` for an empty slot.
+    pub base: Option<String>,
+    pub seed: u32,
+    /// Names of the rolled affixes switched off.
+    pub off: BTreeSet<String>,
+    /// Whether a torch or lantern burns.
+    pub lit: bool,
+}
+
+/// An item as the lab wears it, with every affix it rolled.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rolled {
+    /// The item with its stats and name derived without the switched-off affixes.
+    pub item: Item,
+    /// Every affix it rolled, in order, the switched-off ones too.
+    pub affixes: Vec<&'static Affix>,
+}
+
+impl LabSlot {
+    fn empty(slot: Slot) -> LabSlot {
+        LabSlot { slot, base: None, seed: 1, off: BTreeSet::new(), lit: true }
+    }
+
+    /// The item this slot holds: rolled from its base and seed, then its stats and name
+    /// derived again from the base profile with only the affixes still on. With none off the
+    /// item is exactly [`roll_item`]'s.
+    pub fn roll(&self) -> Option<Rolled> {
+        let base = self.base.as_deref()?;
+        let mut item = roll_item(base, self.seed)?;
+        let affixes = item.affixes.clone();
+        if !self.off.is_empty() {
+            let mut stats = profile(base, &roll_shape(base, self.seed)?).stats;
+            item.affixes.retain(|a| !self.off.contains(&a.name));
+            item.affixes.iter().for_each(|a| a.apply_to_stats(&mut stats));
+            item.shape.scale_fuel(stats.burn_time);
+            item.profile.stats = stats;
+            item.name = fb_items::naming::item_name(&fb_items::naming::noun(base, &item.shape), &item.affixes);
+        }
+        let _ = item.shape.set_lit(self.lit);
+        Some(Rolled { item, affixes })
+    }
+}
+
+/// The delver being tried: who they are and what each slot holds.
+#[derive(Resource, Clone, Debug, PartialEq)]
+pub struct LabState {
+    pub character: Character,
+    /// The seed the character was last rolled from.
+    pub seed: u32,
+    pub slots: Vec<LabSlot>,
+}
+
+impl Default for LabState {
+    /// A human Fighter with every score 10 and nothing worn.
+    fn default() -> Self {
+        let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0 };
+        LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect() }
+    }
+}
+
+impl LabState {
+    /// Parses `--seed <n>` (also `--seed=n`); `--lab` itself is skipped.
+    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<LabState, String> {
+        let mut state = LabState::default();
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            let (flag, inline) = match arg.split_once('=') {
+                Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
+                None => (arg, None),
+            };
+            match flag.as_str() {
+                "--lab" => {}
+                "--seed" => {
+                    let text = inline.or_else(|| args.next()).ok_or("--seed needs a value")?;
+                    state.set_seed(text.parse().map_err(|_| format!("--seed: {text:?} is not a u32"))?);
+                }
+                other => return Err(format!("unknown argument {other:?}")),
+            }
+        }
+        Ok(state)
+    }
+
+    /// Rolls the class and the scores again from `seed`, keeping the folk the lab chose.
+    pub fn set_seed(&mut self, seed: u32) {
+        self.seed = seed;
+        self.character = Character::roll_folk(self.character.folk, seed);
+    }
+
+    pub fn slot(&self, slot: Slot) -> &LabSlot {
+        self.slots.iter().find(|s| s.slot == slot).expect("every lab slot is listed")
+    }
+
+    fn slot_mut(&mut self, slot: Slot) -> &mut LabSlot {
+        self.slots.iter_mut().find(|s| s.slot == slot).expect("every lab slot is listed")
+    }
+
+    /// Puts `base` (rolled from `seed`) in `slot`, with every affix on.
+    pub fn equip(&mut self, slot: Slot, base: &str, seed: u32) {
+        *self.slot_mut(slot) = LabSlot { base: Some(base.to_string()), seed, ..LabSlot::empty(slot) };
+    }
+
+    /// Switches the affix named `affix` on `slot`'s item on or off.
+    pub fn set_affix(&mut self, slot: Slot, affix: &str, on: bool) {
+        let s = self.slot_mut(slot);
+        if on {
+            s.off.remove(affix);
+        } else {
+            s.off.insert(affix.to_string());
+        }
+    }
+
+    /// Everything worn, rolled.
+    pub fn items(&self) -> Vec<(Slot, Rolled)> {
+        self.slots.iter().filter_map(|s| Some((s.slot, s.roll()?))).collect()
+    }
+
+    /// What the worn items make an [`Inventory`]: each in its slot, so the game's own rules
+    /// read it. An item the slot refuses is left out.
+    pub fn inventory(&self) -> Inventory {
+        let mut inventory = Inventory::default();
+        for (slot, rolled) in self.items() {
+            let id = inventory.add(rolled.item);
+            let _ = inventory.wear(id, slot);
+        }
+        inventory
+    }
+}
+
+/// The bases a slot can hold, by name: the ones that roll an item that fits it.
+fn bases_for(slot: Slot) -> Vec<String> {
+    use std::sync::LazyLock;
+    static TABLE: LazyLock<Vec<(Slot, Vec<String>)>> = LazyLock::new(|| {
+        let mut names: BTreeSet<&str> = ARMORY_BASES.iter().map(|(n, _)| *n).collect();
+        names.extend(bases().keys().map(String::as_str));
+        let rolled: Vec<(&str, Item)> = names.into_iter().filter_map(|n| Some((n, roll_item(n, 1)?))).collect();
+        SLOTS.iter().map(|&slot| (slot, rolled.iter().filter(|(_, i)| i.fits(slot)).map(|(n, _)| n.to_string()).collect())).collect()
+    });
+    TABLE.iter().find(|(s, _)| *s == slot).map(|(_, b)| b.clone()).unwrap_or_default()
+}
+
+/// The path prefix of a slot's fields: `gear.mainhand`.
+fn slot_key(slot: Slot) -> String {
+    format!("gear.{}", format!("{slot:?}").to_lowercase())
+}
+
+fn slot_of(key: &str) -> Option<Slot> {
+    SLOTS.iter().copied().find(|&s| slot_key(s) == key)
+}
+
+fn slider(path: &str, value: f32, range: Slider) -> Field {
+    let (section, name) = path.rsplit_once('.').unwrap_or(("", path));
+    Field { path: path.into(), section: section.into(), name: name.into(), kind: FieldKind::Slider { value, range } }
+}
+
+fn choice(path: &str, value: &str, options: Vec<String>) -> Field {
+    let (section, name) = path.rsplit_once('.').unwrap_or(("", path));
+    Field { path: path.into(), section: section.into(), name: name.into(), kind: FieldKind::Choice { value: value.into(), options } }
+}
+
+/// An affix's switch: its path is the slot's, then `affix/` and the affix's name, which is
+/// the field's label.
+fn affix_switch(key: &str, affix: &str, on: bool) -> Field {
+    Field { path: format!("{key}.affix/{affix}"), section: key.into(), name: affix.into(), kind: FieldKind::Toggle { value: on } }
+}
+
+const ATTRIBUTES: [(&str, &str); 5] = [("str", "strength"), ("dex", "dexterity"), ("con", "constitution"), ("int", "intelligence"), ("wis", "wisdom")];
+const SCORE: Slider = Slider::new(3.0, 20.0, 1.0);
+const SEED: Slider = Slider::new(0.0, 65_535.0, 1.0);
+
+impl Tweak for LabState {
+    fn fields(&self) -> Vec<Field> {
+        let c = &self.character;
+        let mut fields = vec![
+            choice("character.folk", c.folk.key(), Folk::ALL.iter().map(|f| f.key().to_string()).collect()),
+            choice("character.class", c.class.word(), Class::ALL.iter().map(|c| c.word().to_string()).collect()),
+            slider("character.seed", self.seed as f32, SEED),
+        ];
+        let scores = [c.attributes.strength, c.attributes.dexterity, c.attributes.constitution, c.attributes.intelligence, c.attributes.wisdom];
+        for ((short, _), score) in ATTRIBUTES.iter().zip(scores) {
+            fields.push(slider(&format!("attributes.{short}"), score as f32, SCORE));
+        }
+        for lab in &self.slots {
+            let key = slot_key(lab.slot);
+            let mut options = vec!["none".to_string()];
+            options.extend(bases_for(lab.slot));
+            fields.push(choice(&format!("{key}.base"), lab.base.as_deref().unwrap_or("none"), options));
+            if lab.base.is_none() {
+                continue;
+            }
+            fields.push(slider(&format!("{key}.seed"), lab.seed as f32, SEED));
+            if let Some(rolled) = lab.roll() {
+                fields.extend(rolled.affixes.iter().map(|a| affix_switch(&key, &a.name, !lab.off.contains(&a.name))));
+                if rolled.item.shape.lit().is_some() {
+                    fields.push(Field { path: format!("{key}.lit"), section: key.clone(), name: "lit".into(), kind: FieldKind::Toggle { value: lab.lit } });
+                }
+            }
+        }
+        fields
+    }
+
+    fn set_slider(&mut self, path: &str, value: f32) {
+        let value = value.round().max(0.0) as u32;
+        match path.split_once('.') {
+            Some(("character", "seed")) => self.set_seed(value),
+            Some(("attributes", short)) => {
+                let a = &mut self.character.attributes;
+                let score = (value as i32).clamp(3, 20);
+                match short {
+                    "str" => a.strength = score,
+                    "dex" => a.dexterity = score,
+                    "con" => a.constitution = score,
+                    "int" => a.intelligence = score,
+                    "wis" => a.wisdom = score,
+                    _ => {}
+                }
+            }
+            _ => {
+                if let Some((key, "seed")) = path.rsplit_once('.')
+                    && let Some(slot) = slot_of(key)
+                {
+                    let s = self.slot_mut(slot);
+                    s.seed = value;
+                    s.off.clear();
+                }
+            }
+        }
+    }
+
+    fn cycle(&mut self, path: &str, by: isize) {
+        let step = |len: usize, at: usize| (at as isize + by).rem_euclid(len as isize) as usize;
+        match path {
+            "character.folk" => {
+                let at = Folk::ALL.iter().position(|&f| f == self.character.folk).unwrap_or(0);
+                self.character.folk = Folk::ALL[step(Folk::ALL.len(), at)];
+            }
+            "character.class" => {
+                let at = Class::ALL.iter().position(|&c| c == self.character.class).unwrap_or(0);
+                self.character.class = Class::ALL[step(Class::ALL.len(), at)];
+            }
+            _ => {
+                if let Some((key, "base")) = path.rsplit_once('.')
+                    && let Some(slot) = slot_of(key)
+                {
+                    let mut options = vec![None];
+                    options.extend(bases_for(slot).into_iter().map(Some));
+                    let s = self.slot_mut(slot);
+                    let at = options.iter().position(|o| *o == s.base).unwrap_or(0);
+                    s.base = options[step(options.len(), at)].clone();
+                    s.off.clear();
+                }
+            }
+        }
+    }
+
+    fn flip(&mut self, path: &str) {
+        let Some((key, last)) = path.rsplit_once('.') else { return };
+        let Some(slot) = slot_of(key) else { return };
+        if last == "lit" {
+            let s = self.slot_mut(slot);
+            s.lit = !s.lit;
+        } else if let Some(name) = last.strip_prefix("affix/") {
+            let on = self.slot(slot).off.contains(name);
+            self.set_affix(slot, name, on);
+        }
+    }
+
+    /// Changes with the list of fields, so the panel is rebuilt when an item's affixes change
+    /// but not as a slider moves.
+    fn structure(&self) -> u32 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for field in self.fields() {
+            field.path.hash(&mut hasher);
+        }
+        hasher.finish() as u32
+    }
+
+    fn slider(&self, path: &str) -> Option<f32> {
+        self.fields().into_iter().find(|f| f.path == path).and_then(|f| match f.kind {
+            FieldKind::Slider { value, .. } => Some(value),
+            _ => None,
+        })
+    }
+}
+
+/// One line of the sheet: what it says, and the number with the terms it is made of.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    /// The headline: the value with its unit, and anything the terms cannot say (a band).
+    pub heading: String,
+    pub explained: Explained,
+}
+
+impl Row {
+    fn of(explained: Explained) -> Row {
+        Row { heading: format!("{} {}{}", explained.name, number(explained.value()), if explained.unit.is_empty() { String::new() } else { format!(" {}", explained.unit) }), explained }
+    }
+}
+
+fn number(n: f64) -> String {
+    let s = format!("{n:.4}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// The load worn, a term for each item.
+fn load(inventory: &Inventory) -> Explained {
+    let mut e = Explained::new("Load", "lb");
+    for (_, item) in inventory.equipped().iter().filter(|(_, i)| i.profile.stats.weight != 0.0) {
+        e = if e.terms().is_empty() { e.base(&item.name, item.profile.stats.weight as f64) } else { e.add(&item.name, item.profile.stats.weight as f64) };
+    }
+    if e.terms().is_empty() { e.base("nothing worn", 0.0) } else { e }
+}
+
+/// The sheet: every derived number the lab shows for `state`, from the same rules the game
+/// reads, in the order they are listed.
+pub fn sheet(state: &LabState) -> Vec<Row> {
+    let character = &state.character;
+    let inventory = state.inventory();
+    let loadout = character.loadout(&inventory);
+    let strength = character.strength();
+    let held = inventory.worn(Slot::Mainhand).and_then(|id| inventory.item(id));
+    let weapon = Weapon::of_stats(held);
+    let range = weapon.damage_range_explained(modifier(strength));
+    let capacity = loadout.capacity(strength);
+    let load = load(&inventory);
+    let band = LoadBand::from_load(load.value(), capacity.value());
+    let mut rows = vec![
+        Row::of(first_level_hit_points_explained(character)),
+        Row::of(character.armour_class(&inventory)),
+        Row::of(range.min),
+        Row::of(range.mean),
+        Row::of(range.max),
+        Row { heading: format!("Load {} of {} lb: {}", number(load.value()), number(capacity.value()), band.word()), explained: load },
+        Row::of(capacity),
+        Row::of(loadout.darkvision()),
+        Row::of(loadout.light()),
+    ];
+    for kind in [MeterKind::Hunger, MeterKind::Thirst, MeterKind::Sleepiness] {
+        rows.push(Row::of(loadout.rate(kind, Activity::Walking)));
+    }
+    rows
+}
+
+/// The right-hand column, which scrolls.
+#[derive(Component)]
+struct SheetColumn;
+
+/// Where the sheet's rows are built.
+#[derive(Component)]
+struct SheetRows;
+
+/// Where the strike log goes.
+#[derive(Component)]
+pub struct StrikeColumn;
+
+/// Where passing time goes.
+#[derive(Component)]
+pub struct TimeColumn;
+
+fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
+    commands.spawn((Camera2d, bevy::ui::IsDefaultUiCamera));
+    commands.spawn(Node { width: percent(100), height: percent(100), flex_direction: FlexDirection::Row, ..default() }).with_children(|root| {
+        root.spawn((
+            Node { width: px(PANEL_WIDTH), flex_shrink: 0.0, flex_direction: FlexDirection::Column, border: UiRect::right(px(1)), ..default() },
+            BackgroundColor(BG),
+            BorderColor::all(LINE),
+        ))
+        .with_children(|panel| {
+            panel
+                .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::all(px(14)), border: UiRect::bottom(px(1)), ..default() }, BorderColor::all(FAINT)))
+                .with_children(|header| {
+                    header.spawn((Text::new("The Lab"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
+                    header.spawn((Text::new("Click a choice to step it, drag a slider, flip a switch."), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                });
+            panel_body(panel);
+        });
+        root.spawn((
+            SheetColumn,
+            ScrollPosition::default(),
+            Node {
+                flex_grow: 1.0,
+                min_width: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                padding: UiRect::axes(px(20), px(14)),
+                overflow: Overflow::scroll_y(),
+                ..default()
+            },
+        ))
+        .with_children(|column| {
+            column.spawn((Text::new("The Sheet"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
+            column.spawn((SheetRows, Node { flex_direction: FlexDirection::Column, row_gap: px(10), margin: UiRect::top(px(8)), ..default() }));
+            column.spawn((StrikeColumn, Node { flex_direction: FlexDirection::Column, margin: UiRect::top(px(24)), ..default() }));
+            column.spawn((TimeColumn, Node { flex_direction: FlexDirection::Column, margin: UiRect::top(px(24)), padding: UiRect::bottom(px(30)), ..default() }));
+        });
+    });
+}
+
+/// Builds the sheet again from the state.
+fn rebuild_sheet(mut commands: Commands, state: Res<LabState>, fonts: Res<UiFonts>, rows: Query<Entity, With<SheetRows>>) {
+    let Ok(root) = rows.single() else { return };
+    commands.entity(root).despawn_children();
+    let rows = sheet(&state);
+    commands.entity(root).with_children(|root| {
+        for row in &rows {
+            root.spawn(Node { flex_direction: FlexDirection::Column, border: UiRect::bottom(px(1)), padding: UiRect::bottom(px(6)), ..default() })
+                .insert(BorderColor::all(FAINT))
+                .with_children(|block| {
+                    block.spawn((Text::new(row.heading.clone()), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
+                    numbers_line(block, &fonts, &format!("= {}", row.explained.terms_line()), 15.0);
+                });
+        }
+    });
+}
+
+/// Scrolling away from the panel moves the sheet.
+fn scroll_sheet(
+    scroll: Res<AccumulatedMouseScroll>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    body: Query<(&ComputedNode, &UiGlobalTransform), With<PanelBody>>,
+    mut column: Query<(&mut ScrollPosition, &ComputedNode), With<SheetColumn>>,
+) {
+    let lines = match scroll.unit {
+        MouseScrollUnit::Line => scroll.delta.y,
+        MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
+    };
+    let Some(window) = window else { return };
+    if lines == 0.0 || window.cursor_position().is_none() || over_body(&window, &body) {
+        return;
+    }
+    for (mut position, node) in &mut column {
+        let max = ((node.content_size() - node.size()) * node.inverse_scale_factor).y.max(0.0);
+        position.y = (position.y - lines * SCROLL_LINE).clamp(0.0, max);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(line: &str) -> Vec<String> {
+        line.split_whitespace().map(String::from).collect()
+    }
+
+    fn line_of(state: &LabState, name: &str) -> String {
+        sheet(state).into_iter().find(|r| r.explained.name == name).unwrap_or_else(|| panic!("no {name} row")).explained.line()
+    }
+
+    fn value_of(state: &LabState, name: &str) -> f64 {
+        sheet(state).into_iter().find(|r| r.explained.name == name).unwrap().explained.value()
+    }
+
+    /// A seed whose rolled `base` has the affix named `affix`.
+    fn seed_with(base: &str, affix: &str) -> u32 {
+        (1..2000).find(|&s| roll_item(base, s).is_some_and(|i| i.affixes.iter().any(|a| a.name == affix))).unwrap_or_else(|| panic!("no {base} of {affix}"))
+    }
+
+    #[test]
+    fn opens_on_a_human_fighter() {
+        let state = LabState::from_args(args("--lab")).unwrap();
+        assert_eq!((state.character.folk, state.character.class), (Folk::Human, Class::Fighter));
+        assert_eq!(state.character.attributes.strength, 10);
+        assert_eq!(line_of(&state, "Capacity"), "Capacity 150 lb = STR 10 × 15 (150)");
+        assert_eq!(value_of(&state, "Hit points"), 10.0);
+    }
+
+    #[test]
+    fn the_command_line_rolls_a_character_from_the_seed() {
+        let state = LabState::from_args(args("--lab --seed 7")).unwrap();
+        assert_eq!(state.seed, 7);
+        assert_eq!(state.character, Character::roll_folk(Folk::Human, 7));
+        assert!(LabState::from_args(args("--seed x")).is_err());
+        assert!(LabState::from_args(args("--wat")).is_err());
+    }
+
+    #[test]
+    fn raising_strength_to_14_lifts_capacity_and_damage() {
+        let mut state = LabState::default();
+        let (cap, most) = (value_of(&state, "Capacity"), value_of(&state, "Most damage"));
+        assert_eq!(cap, 150.0);
+        state.set_slider("attributes.str", 14.0);
+        assert_eq!(value_of(&state, "Capacity"), 210.0);
+        assert_eq!(value_of(&state, "Most damage"), most + 2.0);
+        assert_eq!(value_of(&state, "Least damage"), 3.0);
+        // The same with a sword in hand.
+        let mut armed = LabState::default();
+        armed.equip(Slot::Mainhand, "Sword", 3);
+        let before = value_of(&armed, "Mean damage");
+        armed.set_slider("attributes.str", 14.0);
+        assert_eq!(value_of(&armed, "Mean damage"), before + 2.0);
+    }
+
+    #[test]
+    fn a_belt_of_the_ox_adds_25_and_switching_it_off_removes_it() {
+        let mut state = LabState::default();
+        state.equip(Slot::Belt, "Belt", seed_with("Belt", "of the Ox"));
+        let line = line_of(&state, "Capacity");
+        assert!(line.contains("+ ") && line.contains("of the Ox (+25)"), "{line}");
+        assert_eq!(value_of(&state, "Capacity"), 175.0);
+        state.flip(&format!("{}.affix/of the Ox", slot_key(Slot::Belt)));
+        assert_eq!(line_of(&state, "Capacity"), "Capacity 150 lb = STR 10 × 15 (150)");
+        state.flip(&format!("{}.affix/of the Ox", slot_key(Slot::Belt)));
+        assert_eq!(value_of(&state, "Capacity"), 175.0);
+    }
+
+    #[test]
+    fn with_no_affix_off_the_item_is_the_rolled_item() {
+        for (base, seed) in [("Belt", 2), ("Sword", 5), ("Mail", 1), ("Torch", 4)] {
+            let mut lab = LabSlot::empty(Slot::Belt);
+            lab.base = Some(base.into());
+            lab.seed = seed;
+            let rolled = lab.roll().unwrap();
+            let plain = roll_item(base, seed).unwrap();
+            assert_eq!(rolled.item.profile.stats, plain.profile.stats, "{base} {seed}");
+            assert_eq!(rolled.item.name, plain.name);
+            // Every affix off is the bare base.
+            lab.off = plain.affixes.iter().map(|a| a.name.clone()).collect();
+            let bare = lab.roll().unwrap();
+            assert_eq!(bare.item.profile.stats, profile(base, &roll_shape(base, seed).unwrap()).stats, "{base} {seed}");
+            assert!(bare.item.affixes.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_sheet_agrees_with_the_games_own_numbers() {
+        let mut state = LabState::default();
+        for (slot, base, seed) in [(Slot::Body, "Mail", 1), (Slot::Belt, "Belt", seed_with("Belt", "of the Ox")), (Slot::Mainhand, "Sword", 3), (Slot::Head, "Helm", 2)] {
+            state.equip(slot, base, seed);
+        }
+        let inventory = state.inventory();
+        let derived = state.character.derive(&inventory);
+        assert_eq!(value_of(&state, "Armour class"), derived.armour_class as f64);
+        assert_eq!(value_of(&state, "Capacity"), derived.capacity as f64);
+        assert!((value_of(&state, "Load") - derived.load as f64).abs() < 1e-4);
+        assert_eq!(value_of(&state, "Darkvision"), derived.darkvision as f64);
+        assert_eq!(value_of(&state, "Light"), derived.light as f64);
+        let weapon = Weapon::in_hand(&inventory, &state.character);
+        let (least, most) = weapon.damage_range(modifier(state.character.strength()));
+        assert_eq!((value_of(&state, "Least damage") as u32, value_of(&state, "Most damage") as u32), (least, most));
+    }
+
+    #[test]
+    fn the_panel_lists_folk_class_scores_and_every_slot() {
+        let mut state = LabState::default();
+        let paths: Vec<String> = state.fields().into_iter().map(|f| f.path).collect();
+        for want in ["character.folk", "character.class", "character.seed", "attributes.str", "attributes.wis", "gear.head.base", "gear.mainhand.base", "gear.belt.base"] {
+            assert!(paths.iter().any(|p| p == want), "{want} in {paths:?}");
+        }
+        assert!(!paths.iter().any(|p| p == "gear.belt.seed"), "an empty slot has no seed");
+        state.cycle("gear.belt.base", 1);
+        assert!(state.slot(Slot::Belt).base.is_some());
+        assert!(state.fields().iter().any(|f| f.path == "gear.belt.seed"));
+        state.cycle("gear.belt.base", -1);
+        assert_eq!(state.slot(Slot::Belt).base, None);
+        // Every choice offers none and bases that fit.
+        for slot in SLOTS {
+            assert!(!bases_for(slot).is_empty(), "{slot:?}");
+        }
+        state.cycle("character.folk", 1);
+        assert_eq!(state.character.folk, Folk::Dwarf);
+        state.cycle("character.class", -1);
+        assert_eq!(state.character.class, Class::Cleric);
+    }
+
+    #[test]
+    fn the_panel_is_rebuilt_only_when_its_rows_change() {
+        let mut state = LabState::default();
+        let structure = state.structure();
+        state.set_slider("attributes.str", 14.0);
+        assert_eq!(state.structure(), structure, "a slider only moves a value");
+        state.equip(Slot::Belt, "Belt", 2);
+        assert_ne!(state.structure(), structure);
+    }
+
+    #[test]
+    fn the_smallest_window_leaves_the_sheet_room() {
+        assert!(MIN_WINDOW.x - PANEL_WIDTH >= 480.0);
+        assert!(window().resize_constraints.min_width >= MIN_WINDOW.x);
+    }
+}
