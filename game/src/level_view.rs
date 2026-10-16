@@ -17,7 +17,7 @@ use bevy::{
     window::PrimaryWindow,
 };
 use fb_level::sight::Explored;
-use fb_level::{Cell, Level, LevelParams, generate_with};
+use fb_level::{Cell, Level, LevelParams, LevelStyle, generate_with};
 
 use crate::forge_view::fresh_seed;
 use crate::map::plan::{MARGIN, draw_plan};
@@ -59,6 +59,8 @@ impl Plugin for LevelViewPlugin {
 #[derive(Resource, Clone, Debug)]
 pub struct LevelForge {
     pub seed: u32,
+    /// How deep the level lies; the depth picks its style ([`fb_level::LevelStyle::for_depth`]).
+    pub depth: u32,
     pub params: LevelParams,
     pub level: Level,
     /// Counts new seeds, so the view frames the new level.
@@ -73,12 +75,18 @@ impl Default for LevelForge {
 
 impl LevelForge {
     pub fn new(seed: u32, params: LevelParams) -> Self {
-        LevelForge { seed, params, level: generate_with(seed, &params), framing: 0 }
+        LevelForge::at_depth(seed, 1, params)
     }
 
-    /// Parses `--seed <n>` (also `--seed=n`); `--level` itself is skipped.
+    pub fn at_depth(seed: u32, depth: u32, params: LevelParams) -> Self {
+        LevelForge { seed, depth, params, level: generate_with(seed, depth, &params), framing: 0 }
+    }
+
+    /// Parses `--seed <n>` and `--depth <n>` (also `--seed=n`); `--level` itself is skipped.
+    /// The parameters start as the depth's style's own.
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<LevelForge, String> {
         let mut seed = DEFAULT_SEED;
+        let mut depth = 1;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             let (flag, inline) = match arg.split_once('=') {
@@ -91,15 +99,25 @@ impl LevelForge {
                     let text = inline.or_else(|| args.next()).ok_or("--seed needs a value")?;
                     seed = text.parse().map_err(|_| format!("--seed: {text:?} is not a u32"))?;
                 }
+                "--depth" => {
+                    let text = inline.or_else(|| args.next()).ok_or("--depth needs a value")?;
+                    depth = text.parse().ok().filter(|&d| d >= 1).ok_or_else(|| format!("--depth: {text:?} is not a depth from 1"))?;
+                }
                 other => return Err(format!("unknown argument {other:?}")),
             }
         }
-        Ok(LevelForge::new(seed, LevelParams::default()))
+        Ok(LevelForge::at_depth(seed, depth, LevelParams::for_style(LevelStyle::for_depth(depth))))
     }
 
     /// Lays the level out again from the seed and parameters.
     fn relay(&mut self) {
-        self.level = generate_with(self.seed, &self.params);
+        self.level = generate_with(self.seed, self.depth, &self.params);
+    }
+
+    /// Moves to `depth` (from 1), taking that depth's style's own parameters.
+    pub fn set_depth(&mut self, depth: u32) {
+        self.depth = depth.max(1);
+        self.reset();
     }
 
     pub fn set_seed(&mut self, seed: u32) {
@@ -108,9 +126,9 @@ impl LevelForge {
         self.relay();
     }
 
-    /// Back to the generator's own parameters, as the game lays levels out.
+    /// Back to the generator's own parameters for this depth, as the game lays levels out.
     pub fn reset(&mut self) {
-        self.params = LevelParams::default();
+        self.params = LevelParams::for_style(LevelStyle::for_depth(self.depth));
         self.framing += 1;
         self.relay();
     }
@@ -171,6 +189,7 @@ struct Stage;
 #[derive(Component, Clone, Copy, PartialEq)]
 enum Control {
     SeedStep(i64),
+    DepthStep(i32),
     ForgeNew,
     Reset,
 }
@@ -178,6 +197,7 @@ enum Control {
 #[derive(Component, Clone, Copy, PartialEq)]
 enum Readout {
     Seed,
+    Depth,
     Summary,
 }
 
@@ -195,7 +215,7 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut images: ResMut<Assets<
         .with_children(|stage| {
             stage.spawn((PlanNode, ImageNode::new(plan.image.clone()), Node { position_type: PositionType::Absolute, ..default() }));
             stage.spawn((
-                Text::new("Scroll zoom   Drag pan   Left Right seed   N new seed   R reset"),
+                Text::new("Scroll zoom   Drag pan   Left Right seed   Up Down depth   N new seed   R reset"),
                 UiFonts::style(&fonts.body_medium, 17.0, MUTED),
                 Node { position_type: PositionType::Absolute, left: px(20), bottom: px(16), ..default() },
             ));
@@ -237,6 +257,18 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut images: ResMut<Assets<
                         chip(row, &fonts, "New seed", Control::ForgeNew);
                         chip(row, &fonts, "Reset", Control::Reset);
                     });
+                    header.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|row| {
+                        row.spawn((Text::new("Depth"), UiFonts::style(&fonts.body, 17.0, MUTED), Node { margin: UiRect::right(px(4)), ..default() }));
+                        chip(row, &fonts, "-", Control::DepthStep(-1));
+                        row.spawn((
+                            Readout::Depth,
+                            Text::new(""),
+                            UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
+                            TextLayout::justify(Justify::Center),
+                            Node { min_width: px(190), ..default() },
+                        ));
+                        chip(row, &fonts, "+", Control::DepthStep(1));
+                    });
                     header.spawn((Readout::Summary, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED)));
                 });
             panel_body(panel);
@@ -256,6 +288,14 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut forge: ResMut<LevelForge>) {
         let seed = forge.seed.wrapping_sub(1);
         forge.set_seed(seed);
     }
+    if keys.just_pressed(KeyCode::ArrowUp) {
+        let depth = forge.depth + 1;
+        forge.set_depth(depth);
+    }
+    if keys.just_pressed(KeyCode::ArrowDown) {
+        let depth = forge.depth.saturating_sub(1);
+        forge.set_depth(depth);
+    }
     if keys.just_pressed(KeyCode::KeyN) {
         forge.set_seed(fresh_seed(clock()));
     }
@@ -274,6 +314,10 @@ fn press_controls(buttons: Res<ButtonInput<MouseButton>>, window: Option<Single<
         Control::SeedStep(by) => {
             let seed = forge.seed.wrapping_add_signed(by as i32);
             forge.set_seed(seed);
+        }
+        Control::DepthStep(by) => {
+            let depth = forge.depth.saturating_add_signed(by);
+            forge.set_depth(depth);
         }
         Control::ForgeNew => forge.set_seed(fresh_seed(clock())),
         Control::Reset => forge.reset(),
@@ -302,6 +346,10 @@ fn refresh_header(forge: Res<LevelForge>, mut readouts: Query<(&Readout, &mut Te
     for (readout, mut text) in &mut readouts {
         let line = match readout {
             Readout::Seed => forge.seed.to_string(),
+            Readout::Depth => format!("{} \u{b7} {}", forge.depth, match forge.level.style {
+                LevelStyle::RoughRock => "rough rock",
+                LevelStyle::StoneHalls => "stone halls",
+            }),
             Readout::Summary => forge.summary(),
         };
         if text.0 != line {
@@ -403,7 +451,7 @@ mod tests {
     fn parses_the_command_line() {
         let forge = LevelForge::from_args(args("--level --seed 7")).unwrap();
         assert_eq!(forge.seed, 7);
-        assert_eq!(forge.level, fb_level::generate(7), "the defaults lay out the game's level");
+        assert_eq!(forge.level, fb_level::generate(7, 1), "the defaults lay out the game's level");
         assert_eq!(LevelForge::from_args(args("--level")).unwrap().seed, DEFAULT_SEED);
         assert!(LevelForge::from_args(args("--seed x")).is_err());
         assert!(LevelForge::from_args(args("--wat")).is_err());
@@ -414,10 +462,27 @@ mod tests {
         let mut forge = LevelForge::new(3, LevelParams::default());
         forge.set_slider("grid.width", 80.0);
         assert_eq!(forge.level.width, 80);
-        assert_eq!(forge.level, generate_with(3, &forge.params), "the same seed and parameters, the same level");
+        assert_eq!(forge.level, generate_with(3, 1, &forge.params), "the same seed and parameters, the same level");
         assert_eq!(Tweak::slider(&forge, "grid.width"), Some(80.0));
         forge.reset();
-        assert_eq!(forge.level, fb_level::generate(3), "reset is the game's level again");
+        assert_eq!(forge.level, fb_level::generate(3, 1), "reset is the game's level again");
+    }
+
+    #[test]
+    fn depth_picks_the_styles_own_parameters() {
+        let forge = LevelForge::from_args(args("--level --seed 7 --depth 2")).unwrap();
+        assert_eq!((forge.depth, forge.level.style), (2, LevelStyle::StoneHalls));
+        assert_eq!(forge.params, LevelParams::for_style(LevelStyle::StoneHalls));
+        assert_eq!(forge.level, fb_level::generate(7, 2));
+        assert!(LevelForge::from_args(args("--depth 0")).is_err());
+        let mut forge = LevelForge::new(7, LevelParams::default());
+        forge.set_depth(2);
+        assert_eq!(forge.params, LevelParams::for_style(LevelStyle::StoneHalls));
+        forge.set_slider("grid.width", 80.0);
+        forge.reset();
+        assert_eq!(forge.level, fb_level::generate(7, 2), "reset at an even depth is the stone halls again");
+        forge.set_depth(1);
+        assert_eq!(forge.level, fb_level::generate(7, 1));
     }
 
     #[test]
@@ -432,7 +497,7 @@ mod tests {
 
     #[test]
     fn the_whole_level_fits_the_stage() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let size = Vec2::new(1490.0, 1080.0);
         let view = fitted(&level, size);
         let (corner, extent) = view.plan_rect(&level, size);

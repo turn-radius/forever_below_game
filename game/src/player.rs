@@ -64,11 +64,11 @@ pub struct Slowed(pub f32);
 /// rebuilt from them without drift.
 #[derive(Component, Debug, Default)]
 #[require(Gait)]
-pub(crate) struct Locomotion {
-    pub(crate) yaw: f32,
-    pub(crate) pitch: f32,
+pub struct Locomotion {
+    pub yaw: f32,
+    pub pitch: f32,
     /// Floor velocity, world units per second, as `(x, z)`.
-    pub(crate) velocity: Vec2,
+    pub velocity: Vec2,
 }
 
 /// The player's step cycle, for whatever moves with their steps: the head bob here, what is held
@@ -362,7 +362,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
-            .insert_resource(CurrentLevel(fb_level::generate(1207)))
+            .insert_resource(CurrentLevel(fb_level::generate(1207, 1)))
             .init_resource::<Keymap>()
             .init_resource::<BlockedCells>()
             .init_resource::<Tuning>()
@@ -663,7 +663,7 @@ mod tests {
 
     #[test]
     fn blocked_cells_close_open_floor() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (x, y, _) = level.start();
         let mut cells = BlockedCells::default();
         assert!(!blocked_by(&level, &cells)(x as i32, y as i32));
@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn the_shut_entrance_keeps_the_body_in() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (x, y, _) = level.start();
         let door = (level.entrance.x as i32, level.entrance.y as i32);
         let cells = BlockedCells([door].into_iter().collect());

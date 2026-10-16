@@ -229,7 +229,7 @@ mod tests {
     /// An app with the level emptied of loot, a pack on the delver's back and their eye at the
     /// level's start, applying floor changes each update.
     fn floor_app() -> (App, ItemId, GlobalTransform) {
-        let mut level = fb_level::generate(1207);
+        let mut level = fb_level::generate(1207, 1);
         level.items.clear();
         let eye = GlobalTransform::from(DebugPose::parse(&level, "1").eye());
         let mut inventory = Inventory::default();

@@ -364,7 +364,7 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         choice.seed,
         look,
         motion,
-        block.armor_class,
+        block.armour_class,
         block.hit_points,
         block.hit_dice,
         if choice.species.is_skeleton() { "Shortsword" } else { "Bite" },

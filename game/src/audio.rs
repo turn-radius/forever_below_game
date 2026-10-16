@@ -61,6 +61,9 @@ impl Default for Playlist {
                 "audio/cavern-descent.ogg",
                 "audio/im-not-alone.ogg",
                 "audio/untitled.ogg",
+                "audio/let-me-think.ogg",
+                "audio/meant-to-be-here.ogg",
+                "audio/what-am-i-doing.ogg",
             ]
             .map(String::from)
             .into(),
@@ -368,24 +371,25 @@ mod tests {
     const FADE: f32 = 3.0;
 
     #[test]
-    fn playlist_opens_on_forever_below_and_holds_all_eight_tracks() {
+    fn playlist_opens_on_forever_below_and_holds_all_eleven_tracks() {
         let tracks = Playlist::default().tracks;
-        assert_eq!(tracks.len(), 8);
+        assert_eq!(tracks.len(), 11);
         assert_eq!(tracks[0], "audio/forever-below.ogg");
     }
 
     #[test]
     fn tracks_are_drawn_at_random_and_never_twice_running() {
         let mut rng = Mulberry32::new(7);
-        let mut seen = [0usize; 8];
+        let len = Playlist::default().tracks.len();
+        let mut seen = vec![0usize; len];
         let mut last = Some(0);
-        for _ in 0..4000 {
-            let next = pick_track(&mut rng, 8, last).unwrap();
+        for _ in 0..500 * len {
+            let next = pick_track(&mut rng, len, last).unwrap();
             assert_ne!(Some(next), last);
             seen[next] += 1;
             last = Some(next);
         }
-        // Every track turns up, each roughly an eighth of the time.
+        // Every track turns up, each about 500 times.
         assert!(seen.iter().all(|&n| (350..650).contains(&n)), "{seen:?}");
         assert_eq!(pick_track(&mut rng, 1, Some(0)), Some(0));
         assert_eq!(pick_track(&mut rng, 0, None), None);

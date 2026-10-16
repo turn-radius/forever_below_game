@@ -53,8 +53,10 @@ impl Plugin for AmbientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AmbientSounds>()
             .add_systems(Startup, load_ambient_sounds.run_if(resource_exists::<AssetServer>))
-            .add_systems(OnEnter(AppState::Delving), (spawn_ambient_emitters, spawn_rumble_schedule).chain())
+            .add_systems(OnEnter(AppState::Delving), spawn_rumble_schedule)
             .add_systems(OnExit(AppState::Delving), end_rumble_schedule)
+            // Each level the delver comes to drips from its own spots.
+            .add_systems(Update, (clear_drips, spawn_ambient_emitters).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems))
             .add_systems(Update, (play_drips, play_rumbles, turn_ambience_volume).in_set(DelveSystems));
     }
 }
@@ -76,7 +78,7 @@ const DRIP_EMITTERS: usize = 4;
 const DRIP_DROP: f32 = 1.5;
 
 /// Choose drip emitter positions from the level seed: spread them across the level area in
-/// open floor cells only, at the cell centre and just under the level's ceiling. The same level
+/// open floor cells only, at the cell centre and just under the level's ceiling there. The same level
 /// seed always gives the same positions.
 fn drip_positions(level: &fb_level::Level) -> Vec<Vec3> {
     let mut rng = Mulberry32::new(level.seed);
@@ -91,7 +93,7 @@ fn drip_positions(level: &fb_level::Level) -> Vec<Vec3> {
         if level.is_open(x, y) {
             let world_x = (x as f32 + 0.5) * fb_level::CELL;
             let world_z = (y as f32 + 0.5) * fb_level::CELL;
-            out.push(Vec3::new(world_x, level.ceiling - DRIP_DROP, world_z));
+            out.push(Vec3::new(world_x, crate::level::geometry::stone::ceiling_at(level, world_x, world_z) - DRIP_DROP, world_z));
         }
 
         attempts += 1;
@@ -116,6 +118,12 @@ fn new_rumble_schedule(seed: u32, sound: &SoundTuning) -> RumbleSchedule {
     let mut rng = Mulberry32::new(seed);
     let interval = rumble_interval(&mut rng, sound);
     RumbleSchedule { rng, timer: Timer::from_seconds(interval, TimerMode::Once) }
+}
+
+fn clear_drips(mut commands: Commands, old: Query<Entity, With<DripEmitter>>) {
+    for entity in &old {
+        commands.entity(entity).despawn();
+    }
 }
 
 fn spawn_ambient_emitters(mut commands: Commands, level: Res<CurrentLevel>) {
@@ -214,9 +222,9 @@ mod tests {
 
     #[test]
     fn drip_positions_are_deterministic() {
-        let pos1 = drip_positions(&fb_level::generate(1207));
-        let pos2 = drip_positions(&fb_level::generate(1207));
-        let pos_other = drip_positions(&fb_level::generate(1208));
+        let pos1 = drip_positions(&fb_level::generate(1207, 1));
+        let pos2 = drip_positions(&fb_level::generate(1207, 1));
+        let pos_other = drip_positions(&fb_level::generate(1208, 1));
 
         assert_eq!(pos1.len(), DRIP_EMITTERS);
         assert_eq!(pos1, pos2, "same seed gives same positions");
@@ -227,7 +235,7 @@ mod tests {
     #[test]
     fn drip_positions_are_open_cells() {
         for seed in [1207, 1208, 42, 7] {
-            let level = fb_level::generate(seed);
+            let level = fb_level::generate(seed, 1);
             for pos in drip_positions(&level) {
                 let x = (pos.x / fb_level::CELL).floor() as i32;
                 let y = (pos.z / fb_level::CELL).floor() as i32;
@@ -238,9 +246,24 @@ mod tests {
 
     #[test]
     fn drips_hang_a_little_below_the_ceiling() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         for pos in drip_positions(&level) {
             assert!(pos.y < level.ceiling && pos.y > level.ceiling - 5.0, "drip at y={} under ceiling {}", pos.y, level.ceiling);
+        }
+    }
+
+    #[test]
+    fn drips_fall_inside_the_drawn_hall_at_every_depth() {
+        use crate::level::geometry::stone::ceiling_at;
+        for depth in [1, 2] {
+            for seed in [1207, 1208, 42, 7, 99, 3] {
+                let level = fb_level::generate(seed, depth);
+                for pos in drip_positions(&level) {
+                    let ceiling = ceiling_at(&level, pos.x, pos.z);
+                    assert!(pos.y > 0.0 && pos.y < ceiling, "depth {depth} seed {seed}: drip at y={} between the floor and ceiling {ceiling}", pos.y);
+                    assert!(pos.y > ceiling - 5.0, "depth {depth} seed {seed}: drip at y={} hangs far from ceiling {ceiling}", pos.y);
+                }
+            }
         }
     }
 

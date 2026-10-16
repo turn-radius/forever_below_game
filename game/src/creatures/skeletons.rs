@@ -138,7 +138,7 @@ impl SkeletonKit {
         };
         let armour: Vec<(String, f32)> = outfit.worn.iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)).filter(|(_, a)| *a != 0.0).collect();
         let armour_class = if armour.is_empty() {
-            Species::Skeleton.stat_block().armor_class as i32
+            Species::Skeleton.stat_block().armour_class
         } else {
             fb_character::explain::armour_class(DEXTERITY, armour).value().round() as i32
         };

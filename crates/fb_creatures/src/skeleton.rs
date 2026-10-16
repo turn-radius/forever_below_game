@@ -922,7 +922,7 @@ mod tests {
     #[test]
     fn the_skeleton_is_a_medium_undead_with_the_srd_numbers() {
         let block = Species::Skeleton.stat_block();
-        assert_eq!((block.name, block.size, block.armor_class, block.hit_points, block.hit_dice, block.page), ("Skeleton", crate::Size::Medium, 13, 13, crate::Dice::new(2, 8, 4), 346));
+        assert_eq!((block.name, block.size, block.armour_class, block.hit_points, block.hit_dice, block.page), ("Skeleton", crate::Size::Medium, 13, 13, crate::Dice::new(2, 8, 4), 346));
         assert_eq!(block.hit_dice.average(), 13);
         let a = block.abilities;
         assert_eq!((a.strength, a.dexterity, a.constitution, a.intelligence, a.wisdom, a.charisma), (10, 14, 15, 6, 8, 5));

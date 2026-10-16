@@ -526,7 +526,7 @@ mod tests {
     use super::*;
 
     fn folk_1207() -> Vec<FolkSpot> {
-        fb_level::generate(1207).folk
+        fb_level::generate(1207, 1).folk
     }
 
     #[test]
@@ -744,7 +744,7 @@ mod tests {
         // inside out (its front faces turned in, or its ink hull pushed in over it), with broken
         // buffers, or with a black or non-finite colour would draw as unlit solid black (#151).
         for seed in seeds {
-            for spot in fb_level::generate(seed).folk.into_iter().take(people) {
+            for spot in fb_level::generate(seed, 1).folk.into_iter().take(people) {
                 let person = Person::of(&spot);
                 let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
                 for piece in &figure.pieces {
