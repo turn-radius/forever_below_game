@@ -31,6 +31,7 @@ use fb_items::{Item, Slot, roll_item};
 use crate::character::{Character, Class};
 use crate::inventory::Inventory;
 use crate::lab_figure::LabFigure;
+use crate::lab_rules::{DicePart, FieldKind, RuleSet, Strengths, default_strength, strengthened};
 use crate::lab_sheet::{self, GearCard, SheetView, signed};
 use crate::lab_strike::{Attacker, Strikes};
 use crate::lab_time::{ACTIVITIES, STEPS, TimeLab, activity_word, clock_text, exhaustion_effect, percent_text};
@@ -99,15 +100,18 @@ impl Plugin for LabViewPlugin {
             .init_resource::<LabFigure>()
             .init_resource::<Hover>()
             .init_resource::<CurrentSheet>()
+            .init_resource::<LabRules>()
             .insert_resource(ClearColor(BG))
             .add_systems(Startup, (setup, demo))
             .add_systems(
                 Update,
                 (
+                    follow_disk,
                     press_controls,
                     press_strikes.run_if(|tab: Res<LabTab>| tab.0 == 0),
                     press_time.run_if(|tab: Res<LabTab>| tab.0 == 1),
                     rebuild_sheet.run_if(sheet_changed),
+                    rebuild_rules.run_if(|state: Res<LabState>, rules: Res<LabRules>| state.is_changed() || rules.is_changed()),
                     refresh_strikes.run_if(|state: Res<LabState>, strikes: Res<Strikes>| state.is_changed() || strikes.is_changed()),
                     refresh_time.run_if(|state: Res<LabState>, time: Res<TimeLab>| state.is_changed() || time.is_changed()),
                     refresh_controls.run_if(|state: Res<LabState>| state.is_changed()),
@@ -153,13 +157,19 @@ impl LabSlot {
     /// rarity and a legendary's title and history stay as rolled, and so does the shape's
     /// dressing.
     pub fn roll(&self) -> Option<Rolled> {
+        self.roll_with(&Strengths::new())
+    }
+
+    /// [`LabSlot::roll`] with the affixes at `strengths` (an affix not named has its own).
+    pub fn roll_with(&self, strengths: &Strengths) -> Option<Rolled> {
         let base = self.base.as_deref()?;
         let mut item = roll_item(base, self.seed)?;
         let affixes = item.affixes.clone();
-        if !self.off.is_empty() {
+        let stronger = affixes.iter().any(|a| strengths.get(&a.name).is_some_and(|s| *s != default_strength(a)));
+        if !self.off.is_empty() || stronger {
             let mut stats = profile(base, &roll_shape(base, self.seed)?).stats;
             item.affixes.retain(|a| !self.off.contains(&a.name));
-            item.affixes.iter().for_each(|a| a.apply_to_stats(&mut stats));
+            item.affixes.iter().for_each(|a| strengthened(a, strengths).apply_to_stats(&mut stats));
             item.shape.scale_fuel(stats.burn_time);
             item.profile.stats = stats;
             item.name = fb_items::naming::item_name(&fb_items::naming::noun(base, &item.shape), &item.affixes);
@@ -183,6 +193,9 @@ pub struct LabState {
     pub attacker: Attacker,
     /// The seed every strike roll comes from.
     pub strike_seed: u32,
+    /// The rules and affix strengths in force: what the lab is editing, which the sheet, the
+    /// strikes and the time all read.
+    pub ruleset: RuleSet,
 }
 
 impl Default for LabState {
@@ -191,7 +204,7 @@ impl Default for LabState {
     fn default() -> Self {
         let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
         let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0 };
-        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), activity: Activity::Walking, attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1 };
+        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), activity: Activity::Walking, attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1, ruleset: RuleSet::default() };
         for (slot, base, seed) in [(Slot::Mainhand, "Sword", 4), (Slot::Head, "Helm", 9), (Slot::Body, "Mail", 9)] {
             state.equip(slot, base, seed);
         }
@@ -317,7 +330,7 @@ impl LabState {
 
     /// Everything worn, rolled.
     pub fn items(&self) -> Vec<(Slot, Rolled)> {
-        self.slots.iter().filter_map(|s| Some((s.slot, s.roll()?))).collect()
+        self.slots.iter().filter_map(|s| Some((s.slot, s.roll_with(&self.ruleset.strengths)?))).collect()
     }
 
     /// What the worn items make an [`Inventory`]: each in its slot, so the game's own rules
@@ -411,6 +424,13 @@ impl Picker {
     }
 }
 
+/// The rules as last saved to the files, which the edited ones in [`LabState::ruleset`] are
+/// compared with.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct LabRules {
+    pub saved: RuleSet,
+}
+
 /// How many times the sheet has been built, so a test can see it is not rebuilt for nothing.
 #[derive(Resource, Default)]
 pub struct SheetBuilds(pub u32);
@@ -453,11 +473,16 @@ pub enum Control {
     Attacker(isize),
     StrikeSeed(i64),
     Activity(isize),
+    /// Steps a number of the rules, or flips a switch.
+    Rule(String, i32),
+    Dice(String, DicePart, i32),
+    Save,
+    Undo,
 }
 
 impl Control {
     /// Does what the control says to the lab, changing only what it needs to.
-    pub fn apply(&self, state: &mut LabState, picker: &mut Picker, tab: &mut LabTab) {
+    pub fn apply(&self, state: &mut LabState, picker: &mut Picker, tab: &mut LabTab, saved: &mut RuleSet) {
         match self {
             Control::Folk(by) => state.cycle_folk(*by),
             Control::Class(by) => state.cycle_class(*by),
@@ -476,6 +501,10 @@ impl Control {
             Control::Attacker(by) => state.cycle_attacker(*by),
             Control::StrikeSeed(by) => state.strike_seed = (state.strike_seed as i64 + by).clamp(0, u32::MAX as i64) as u32,
             Control::Activity(by) => state.cycle_activity(*by),
+            Control::Rule(path, dir) => crate::lab_rules::step(&mut state.ruleset, path, *dir),
+            Control::Dice(path, part, dir) => crate::lab_rules::step_dice(&mut state.ruleset, path, *part, *dir),
+            Control::Save => *saved = state.ruleset.clone(),
+            Control::Undo => state.ruleset = saved.clone(),
         }
     }
 }
@@ -496,9 +525,17 @@ struct SheetRows;
 #[derive(Component)]
 pub struct TabPane(pub usize);
 
-/// The rules column, which a later task fills.
+/// The rules column.
 #[derive(Component)]
 pub struct RulesColumn;
+
+/// Where the rules' sections are built, which scrolls.
+#[derive(Component)]
+struct RulesBody;
+
+/// The header's count of what has changed.
+#[derive(Component)]
+struct RulesCount;
 
 /// A node that scrolls its own overflow when it has any.
 #[derive(Component)]
@@ -703,13 +740,27 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
         // The rules.
         root.spawn((
             RulesColumn,
-            ScrollArea,
-            ScrollPosition::default(),
-            Node { width: px(RULES_WIDTH), flex_shrink: 0.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(14), padding: UiRect::all(px(20)), border: UiRect::left(px(1)), overflow: Overflow::scroll_y(), ..default() },
+            Node { width: px(RULES_WIDTH), flex_shrink: 0.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(10), padding: UiRect::all(px(16)), border: UiRect::left(px(1)), ..default() },
             BackgroundColor(RULES_PAGE),
             BorderColor::all(FAINT),
         ))
-        .with_child((Text::new("Rules"), UiFonts::style(&fonts.display_bold, 26.0, INK)));
+        .with_children(|rules| {
+            rules.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Baseline, ..default() }).with_children(|head| {
+                head.spawn((Text::new("Rules"), UiFonts::style(&fonts.display_bold, 26.0, INK)));
+                head.spawn((RulesCount, Text::new(""), UiFonts::style(&fonts.body_medium, 15.0, FRAME_GOLD)));
+            });
+            rules.spawn((Text::new("The numbers the game runs on. Change one and the sheet and the tests show it, compared with before."), UiFonts::style(&fonts.body, 14.0, MUTED)));
+            rules.spawn((RulesBody, ScrollArea, ScrollPosition::default(), Node { flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(4), overflow: Overflow::scroll_y(), ..default() }));
+            rules.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
+                for (label, control, gold) in [("Save to the game", Control::Save, true), ("Undo changes", Control::Undo, false)] {
+                    let id = button(row, &fonts, label, control);
+                    row.commands().entity(id).insert(Node { flex_grow: 1.0, flex_basis: px(0), min_height: px(40), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() });
+                    if gold {
+                        row.commands().entity(id).insert(BorderColor::all(FRAME_GOLD));
+                    }
+                }
+            });
+        });
         // The tooltip, over everything.
         root.spawn((
             TipBox,
@@ -736,8 +787,8 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
 
 /// Whether anything the sheet shows has changed.
 #[allow(clippy::too_many_arguments)]
-fn sheet_changed(state: Res<LabState>, time: Res<TimeLab>, strikes: Res<Strikes>, picker: Res<Picker>, figure: Res<LabFigure>, rules: Option<Res<GameRules>>) -> bool {
-    state.is_changed() || time.is_changed() || strikes.is_changed() || picker.is_changed() || figure.is_changed() || rules.is_some_and(|r| r.is_changed())
+fn sheet_changed(state: Res<LabState>, time: Res<TimeLab>, strikes: Res<Strikes>, picker: Res<Picker>, figure: Res<LabFigure>, saved: Res<LabRules>) -> bool {
+    state.is_changed() || time.is_changed() || strikes.is_changed() || picker.is_changed() || figure.is_changed() || saved.is_changed()
 }
 
 /// A line of text in the sheet.
@@ -757,7 +808,12 @@ fn bar_row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, bar: &lab_sheet::
     parent.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), ..default() }).with_children(|row| {
         row.spawn(Node { width: px(84), flex_shrink: 0.0, ..default() }).with_child((Text::new(bar.label), UiFonts::style(&fonts.body, 16.0, BRIGHT)));
         bar_track(row, bar.fill, bar.colour, height);
-        row.spawn(Node { width: px(70), flex_shrink: 0.0, justify_content: JustifyContent::End, ..default() }).with_child((Text::new(bar.text.clone()), UiFonts::style(&fonts.body, 16.0, word_colour)));
+        row.spawn(Node { width: px(76), flex_shrink: 0.0, flex_direction: FlexDirection::Column, align_items: AlignItems::End, ..default() }).with_children(|words_column| {
+            words_column.spawn((Text::new(bar.text.clone()), UiFonts::style(&fonts.body, 16.0, word_colour)));
+            if let Some(was) = &bar.was {
+                words_column.spawn((Text::new(was.clone()), UiFonts::style(&fonts.body, 12.0, FRAME_GOLD)));
+            }
+        });
     });
 }
 
@@ -856,6 +912,9 @@ fn build_sheet(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, view: &SheetVi
                         words(value, &fonts.mono, 15.0, MUTED, small.clone());
                     }
                 });
+                if let Some(was) = &tile.was {
+                    words(t, &fonts.body, 13.0, FRAME_GOLD, was.clone());
+                }
             });
         }
     });
@@ -946,22 +1005,26 @@ fn rebuild_sheet(
     strikes: Res<Strikes>,
     picker: Res<Picker>,
     figure: Res<LabFigure>,
-    rules: Option<Res<GameRules>>,
+    saved: Res<LabRules>,
     fonts: Res<UiFonts>,
     rows: Query<Entity, With<SheetRows>>,
 ) {
     let Ok(root) = rows.single() else { return };
     builds.0 += 1;
-    let view = lab_sheet::view(&state, &time, &strikes, GameRules::of(&rules));
+    let view = lab_sheet::view_marked(&state, &time, &strikes, &saved.saved);
     commands.entity(root).despawn_children();
     commands.entity(root).with_children(|root| build_sheet(root, &fonts, &view, &picker, &figure));
     current.0 = Some(view);
 }
 
-/// With `FB_LAB_DEMO=1`, does what a few clicks would, for a capture: +8 h once and Strike
-/// three times, and holds Armour's tooltip up ([`setup`]).
-fn demo(state: Res<LabState>, mut time: ResMut<TimeLab>, mut strikes: ResMut<Strikes>) {
+/// With `FB_LAB_DEMO=1`, does what a few clicks would, for a capture: two edits to the rules
+/// (Capacity per STR to 20, the giant rat's attack bonus to +2), +8 h once and Strike three
+/// times, and holds Armour's tooltip up ([`setup`]).
+fn demo(mut state: ResMut<LabState>, mut time: ResMut<TimeLab>, mut strikes: ResMut<Strikes>) {
     if std::env::var("FB_LAB_DEMO").is_ok_and(|v| v == "1") {
+        crate::lab_rules::step(&mut state.ruleset, "load/capacity_per_strength", 5);
+        crate::lab_rules::step(&mut state.ruleset, "creatures/Giant Rat/attack_bonus", -1);
+        crate::lab_rules::step(&mut state.ruleset, "creatures/Giant Rat/attack_bonus", -1);
         time.pass(&state, 8.0);
         (0..3).for_each(|_| strikes.strike(&state));
     }
@@ -980,17 +1043,126 @@ fn press_controls(
     mut state: ResMut<LabState>,
     mut picker: ResMut<Picker>,
     mut tab: ResMut<LabTab>,
+    mut saved: ResMut<LabRules>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
     let Some(point) = cursor(&window) else { return };
     let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
-    let (mut next_state, mut next_picker, mut next_tab) = (state.clone(), picker.clone(), *tab);
-    control.apply(&mut next_state, &mut next_picker, &mut next_tab);
+    if *control == Control::Save
+        && let Err(error) = save_to_disk(&state.ruleset)
+    {
+        warn!("lab: could not save the rules: {error}");
+        return;
+    }
+    let (mut next_state, mut next_picker, mut next_tab, mut next_saved) = (state.clone(), picker.clone(), *tab, saved.saved.clone());
+    control.apply(&mut next_state, &mut next_picker, &mut next_tab, &mut next_saved);
+    saved.set_if_neq(LabRules { saved: next_saved });
     state.set_if_neq(next_state);
     picker.set_if_neq(next_picker);
     tab.set_if_neq(next_tab);
+}
+
+/// Writes the edited rules into `data/rules.toml`, with its comments, and the affix strengths
+/// into `data/afx.json`.
+fn save_to_disk(set: &RuleSet) -> Result<(), String> {
+    let folder = std::path::PathBuf::from(crate::rules::data_folder());
+    let (rules, affixes) = (folder.join(crate::rules::RULES_FILE), folder.join("afx.json"));
+    let read = |path: &std::path::Path| std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
+    let rules_text = crate::lab_rules::write_rules_toml(&read(&rules)?, &set.rules)?;
+    let affix_text = crate::lab_rules::write_afx_json(&read(&affixes)?, &set.strengths);
+    std::fs::write(&rules, rules_text).map_err(|e| format!("{}: {e}", rules.display()))?;
+    std::fs::write(&affixes, affix_text).map_err(|e| format!("{}: {e}", affixes.display()))
+}
+
+/// When the rules file changes on disk (an edit outside the lab, or the lab's own save coming
+/// back), the saved rules follow it; the edited ones follow too unless there are unsaved changes.
+fn follow_disk(game: Option<Res<GameRules>>, mut saved: ResMut<LabRules>, mut state: ResMut<LabState>) {
+    let Some(game) = game.filter(|g| g.is_changed()) else { return };
+    if saved.saved.rules == game.0 {
+        return;
+    }
+    let clean = state.ruleset == saved.saved;
+    saved.saved.rules = game.0.clone();
+    if clean {
+        state.ruleset = saved.saved.clone();
+    }
+}
+
+/// One field of the rules column: its words and `was`, and the controls that change it.
+fn rule_field(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, field: &crate::lab_rules::Field) {
+    let changed = field.was.is_some();
+    parent
+        .spawn((
+            Node { flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::axes(px(6), px(4)), border_radius: BorderRadius::all(px(4)), ..default() },
+            BackgroundColor(if changed { Color::srgb(0.17, 0.145, 0.10) } else { Color::NONE }),
+        ))
+        .with_children(|f| {
+            f.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
+                row.spawn(Node { flex_direction: FlexDirection::Column, flex_shrink: 1.0, min_width: px(0), ..default() }).with_children(|label| {
+                    words(label, &fonts.body, 15.0, if changed { BRIGHT } else { MUTED }, field.label.clone());
+                    if let Some(was) = &field.was {
+                        words(label, &fonts.body, 12.0, FRAME_GOLD, format!("was {was}"));
+                    }
+                });
+                row.spawn(Node { align_items: AlignItems::Center, column_gap: px(4), flex_shrink: 0.0, ..default() }).with_children(|controls| match field.kind {
+                    FieldKind::Switch => {
+                        button(controls, fonts, &field.now, Control::Rule(field.path.clone(), 1));
+                    }
+                    FieldKind::Number => {
+                        small_button(controls, fonts, "\u{2212}", Control::Rule(field.path.clone(), -1));
+                        controls.spawn(Node { width: px(46), justify_content: JustifyContent::Center, ..default() }).with_child((Text::new(field.now.clone()), UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT)));
+                        small_button(controls, fonts, "+", Control::Rule(field.path.clone(), 1));
+                    }
+                    FieldKind::Dice => {
+                        controls.spawn((Text::new(field.now.clone()), UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT)));
+                    }
+                });
+            });
+            if field.kind == FieldKind::Dice {
+                f.spawn(Node { column_gap: px(10), justify_content: JustifyContent::End, ..default() }).with_children(|row| {
+                    for (caption, part) in [("dice", DicePart::Count), ("sides", DicePart::Sides), ("bonus", DicePart::Bonus)] {
+                        row.spawn(Node { align_items: AlignItems::Center, column_gap: px(3), ..default() }).with_children(|group| {
+                            words(group, &fonts.body, 12.0, MUTED, caption);
+                            small_button(group, fonts, "\u{2212}", Control::Dice(field.path.clone(), part, -1));
+                            small_button(group, fonts, "+", Control::Dice(field.path.clone(), part, 1));
+                        });
+                    }
+                });
+            }
+        });
+}
+
+/// Builds the rules column's sections and its count of changes, when the edited or the saved
+/// rules are not what was last built.
+fn rebuild_rules(
+    mut commands: Commands,
+    state: Res<LabState>,
+    saved: Res<LabRules>,
+    fonts: Res<UiFonts>,
+    body: Query<Entity, With<RulesBody>>,
+    mut count: Query<&mut Text, With<RulesCount>>,
+    mut built: Local<Option<(RuleSet, RuleSet)>>,
+) {
+    let Ok(body) = body.single() else { return };
+    if built.as_ref().is_some_and(|(e, s)| *e == state.ruleset && *s == saved.saved) {
+        return;
+    }
+    *built = Some((state.ruleset.clone(), saved.saved.clone()));
+    let changed = crate::lab_rules::changed(&state.ruleset, &saved.saved).len();
+    for mut text in &mut count {
+        text.0 = if changed == 0 { String::new() } else { format!("{changed} changed") };
+    }
+    let sections = crate::lab_rules::sections(&state.ruleset, &saved.saved);
+    commands.entity(body).despawn_children().with_children(|body| {
+        for section in &sections {
+            body.spawn(Node { margin: UiRect::top(px(10)), ..default() }).with_child((Text::new(section.title.clone()), UiFonts::style(&fonts.body_medium, 17.0, INK)));
+            for field in &section.fields {
+                rule_field(body, &fonts, field);
+            }
+        }
+    });
 }
 
 /// A click on Strike, ×100 or Heal.
@@ -1139,7 +1311,7 @@ fn refresh_time(
             TimeText::Clock => format!("{} · {}", clock_text(time.clock.hours()), activity_word(state.activity)),
             TimeText::Exhaustion => {
                 let e = time.exhaustion;
-                format!("Exhaustion {} of 6: {}", e.level, exhaustion_effect(e))
+                format!("Exhaustion {} of 6: {}", e.level, exhaustion_effect(&state.ruleset.rules, e))
             }
             TimeText::Log => time.log.iter().map(|c| c.line()).collect::<Vec<_>>().join("\n"),
             TimeText::Meters => {
@@ -1312,20 +1484,88 @@ mod tests {
         assert_eq!(picker.seed, 0);
     }
 
+    /// Applies `control` to a fresh lab, with the saved rules as given.
+    fn press(control: Control, state: &mut LabState, picker: &mut Picker, tab: &mut LabTab, saved: &mut RuleSet) {
+        control.apply(state, picker, tab, saved);
+    }
+
     #[test]
     fn controls_change_only_what_they_name() {
-        let (mut state, mut picker, mut tab) = (LabState::default(), Picker::default(), LabTab::default());
+        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
         let was = state.clone();
-        Control::Tab(1).apply(&mut state, &mut picker, &mut tab);
+        press(Control::Tab(1), &mut state, &mut picker, &mut tab, &mut saved);
         assert_eq!((tab, &state, &picker), (LabTab(1), &was, &Picker::default()));
-        Control::Tab(3).apply(&mut state, &mut picker, &mut tab);
+        press(Control::Tab(3), &mut state, &mut picker, &mut tab, &mut saved);
         assert_eq!(tab, LabTab(1), "Effects waits for effects");
-        Control::OpenPicker.apply(&mut state, &mut picker, &mut tab);
+        press(Control::OpenPicker, &mut state, &mut picker, &mut tab, &mut saved);
         assert!(picker.open);
-        Control::Score(1, 2).apply(&mut state, &mut picker, &mut tab);
+        press(Control::Score(1, 2), &mut state, &mut picker, &mut tab, &mut saved);
         assert_eq!(state.character.attributes.dexterity, 12);
-        Control::StrikeSeed(-5).apply(&mut state, &mut picker, &mut tab);
+        press(Control::StrikeSeed(-5), &mut state, &mut picker, &mut tab, &mut saved);
         assert_eq!(state.strike_seed, 0);
+    }
+
+    #[test]
+    fn the_sheets_controls_do_what_they_say() {
+        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
+        let mut go = |c: Control, state: &mut LabState, picker: &mut Picker| press(c, state, picker, &mut tab, &mut saved);
+        go(Control::Folk(1), &mut state, &mut picker);
+        assert_eq!(state.character.folk, Folk::Dwarf);
+        go(Control::Class(1), &mut state, &mut picker);
+        assert_eq!(state.character.class, Class::Ranger);
+        go(Control::Reroll, &mut state, &mut picker);
+        assert_eq!(state.seed, DEFAULT_SEED + 1);
+        go(Control::Remove(Slot::Head), &mut state, &mut picker);
+        assert_eq!(state.slot(Slot::Head).base, None);
+        let ox = seed_with("Belt", "of the Ox");
+        state.equip(Slot::Belt, "Belt", ox);
+        go(Control::Affix(Slot::Belt, "of the Ox".into()), &mut state, &mut picker);
+        assert!(state.slot(Slot::Belt).off.contains("of the Ox"));
+        go(Control::OpenPicker, &mut state, &mut picker);
+        go(Control::PickSlot(1), &mut state, &mut picker);
+        assert_eq!(picker.slot(), SLOTS[1]);
+        go(Control::PickBase(1), &mut state, &mut picker);
+        assert_eq!(picker.base, 1 % bases_for(picker.slot()).len());
+        go(Control::PickSeed(5), &mut state, &mut picker);
+        assert_eq!(picker.seed, 6);
+        go(Control::PutOn, &mut state, &mut picker);
+        assert!(!picker.open && state.slot(SLOTS[1]).base.is_some() && state.slot(SLOTS[1]).seed == 6);
+        go(Control::OpenPicker, &mut state, &mut picker);
+        go(Control::ClosePicker, &mut state, &mut picker);
+        assert!(!picker.open);
+    }
+
+    #[test]
+    fn editing_the_rules_moves_the_numbers_and_save_and_undo_settle_them() {
+        use crate::lab_rules::changed;
+        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
+        let rat = "creatures/Giant Rat/attack_bonus".to_string();
+        for _ in 0..2 {
+            press(Control::Rule(rat.clone(), -1), &mut state, &mut picker, &mut tab, &mut saved);
+        }
+        assert_eq!(state.ruleset.rules.creatures["Giant Rat"].attack_bonus, 2);
+        assert_eq!(changed(&state.ruleset, &saved), vec![rat]);
+        press(Control::Undo, &mut state, &mut picker, &mut tab, &mut saved);
+        assert!(changed(&state.ruleset, &saved).is_empty());
+        press(Control::Rule("load/capacity_per_strength".into(), 1), &mut state, &mut picker, &mut tab, &mut saved);
+        press(Control::Dice("creatures/Giant Rat/bite".into(), DicePart::Bonus, 1), &mut state, &mut picker, &mut tab, &mut saved);
+        assert_eq!(changed(&state.ruleset, &saved).len(), 2);
+        press(Control::Save, &mut state, &mut picker, &mut tab, &mut saved);
+        assert!(changed(&state.ruleset, &saved).is_empty());
+        assert_eq!(saved.rules.load.capacity_per_strength, 16.0);
+    }
+
+    #[test]
+    fn a_stronger_affix_changes_the_gear_on_the_sheet() {
+        let mut state = LabState::default();
+        let ox = seed_with("Belt", "of the Ox");
+        state.equip(Slot::Belt, "Belt", ox);
+        let capacity = |s: &LabState| s.character.loadout(&s.inventory()).capacity_with(&s.ruleset.rules, 10).value();
+        assert_eq!(capacity(&state), 175.0);
+        crate::lab_rules::step(&mut state.ruleset, "affixes/of the Ox/0", 1);
+        let ox_by = state.ruleset.strengths["of the Ox"][0];
+        assert!(ox_by > 25.0, "{ox_by}");
+        assert_eq!(capacity(&state), 150.0 + ox_by as f64);
     }
 
     #[test]

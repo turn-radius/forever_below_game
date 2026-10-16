@@ -79,6 +79,33 @@ fn hovering_armour_lists_its_terms() {
 }
 
 #[test]
+fn the_rules_column_lists_the_rules_and_marks_what_was_changed() {
+    let mut app = headless_lab();
+    for _ in 0..3 {
+        app.update();
+    }
+    let shown = texts(&mut app);
+    for want in ["Combat", "Giant Rat", "Needs", "Affixes", "Capacity per STR (lb)", "Attack bonus", "Save to the game", "Undo changes"] {
+        assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
+    }
+    assert!(!shown.iter().any(|t| t.ends_with(" changed")));
+    forever_below::lab_rules::step(&mut app.world_mut().resource_mut::<LabState>().ruleset, "load/capacity_per_strength", 5);
+    forever_below::lab_rules::step(&mut app.world_mut().resource_mut::<LabState>().ruleset, "creatures/Giant Rat/attack_bonus", -2);
+    app.update();
+    app.update();
+    let shown = texts(&mut app);
+    for want in ["2 changed", "was 4", "was 15", "was 150", " / 200"] {
+        assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
+    }
+    // Undo puts it back.
+    let saved = app.world().resource::<forever_below::lab_view::LabRules>().saved.clone();
+    app.world_mut().resource_mut::<LabState>().ruleset = saved;
+    app.update();
+    app.update();
+    assert!(!texts(&mut app).iter().any(|t| t.ends_with(" changed") || t.starts_with("was ")));
+}
+
+#[test]
 fn the_tabs_open_one_pane_at_a_time() {
     let mut app = headless_lab();
     for _ in 0..3 {

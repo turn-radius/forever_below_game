@@ -14,6 +14,7 @@ use fb_items::tables::slot_places;
 use fb_items::{Rarity, Slot};
 
 use crate::combat::{Weapon, first_level_hit_points_explained_with};
+use crate::lab_rules::was_text;
 use crate::lab_strike::Strikes;
 use crate::lab_time::TimeLab;
 use crate::lab_view::{LabState, Rolled};
@@ -39,6 +40,8 @@ pub struct Bar {
     pub fill: f32,
     pub text: String,
     pub colour: Color,
+    /// What the text was under the saved rules, when the edited ones moved it: `was 25 s`.
+    pub was: Option<String>,
 }
 
 /// A group of tooltip rows under an optional heading.
@@ -63,6 +66,8 @@ pub struct Tile {
     /// What follows the value in a smaller size: the capacity after the load.
     pub small: Option<String>,
     pub tip: Tip,
+    /// What it was under the saved rules, when the edited ones moved it: `was 13`.
+    pub was: Option<String>,
 }
 
 /// An affix on a card: what it does, its name, whether it helps, and whether it is on.
@@ -160,7 +165,7 @@ fn section(heading: Option<String>, explained: &Explained) -> TipSection {
 }
 
 fn bar(label: &'static str, fill: f32, text: impl Into<String>, colour: Color) -> Bar {
-    Bar { label, fill: fill.clamp(0.0, 1.0), text: text.into(), colour }
+    Bar { label, fill: fill.clamp(0.0, 1.0), text: text.into(), colour, was: None }
 }
 
 /// A need's bar: the meter's value, so a full bar is the worst, in the band's word.
@@ -216,7 +221,7 @@ pub fn view(state: &LabState, time: &TimeLab, strikes: &Strikes, rules: &Rules) 
         .collect();
     let mana = character.mana_pool_with(rules);
     let tiles = vec![
-        Tile { label: "Armour", value: number(armour.value().round()), small: None, tip: Tip { title: format!("Armour {}", number(armour.value().round())), sections: vec![section(None, &armour)] } },
+        Tile { label: "Armour", value: number(armour.value().round()), small: None, tip: Tip { title: format!("Armour {}", number(armour.value().round())), sections: vec![section(None, &armour)] }, was: None },
         Tile {
             label: "Damage",
             value: format!("{}\u{2013}{}", number(least), number(most)),
@@ -225,12 +230,14 @@ pub fn view(state: &LabState, time: &TimeLab, strikes: &Strikes, rules: &Rules) 
                 title: format!("Damage {}\u{2013}{}", number(least), number(most)),
                 sections: vec![section(Some(format!("Least {}", number(least))), &range.min), section(Some(format!("Most {}", number(most))), &range.max), section(Some(format!("Average {}", number(range.mean.value()))), &range.mean)],
             },
+            was: None,
         },
         Tile {
             label: "Load",
             value: number(load.value()),
             small: Some(format!(" / {}", number(capacity.value()))),
             tip: Tip { title: format!("Load {} of {} lb", number(load.value()), number(capacity.value())), sections: vec![section(Some("Carrying".into()), &load), section(Some("Can carry".into()), &capacity)] },
+            was: None,
         },
     ];
     SheetView {
@@ -245,6 +252,27 @@ pub fn view(state: &LabState, time: &TimeLab, strikes: &Strikes, rules: &Rules) 
         tiles,
         cards: state.slots.iter().filter_map(|s| Some(card(s.slot, &s.roll()?, &s.off))).collect(),
     }
+}
+
+/// The sheet for `state` under its own rules, with what each number was under `saved` beside the
+/// ones the edit moved ([`crate::lab_rules::was_text`]).
+pub fn view_marked(state: &LabState, time: &TimeLab, strikes: &Strikes, saved: &crate::lab_rules::RuleSet) -> SheetView {
+    let mut now = view(state, time, strikes, &state.ruleset.rules);
+    let before = view(&LabState { ruleset: saved.clone(), ..state.clone() }, time, strikes, &saved.rules);
+    for (tile, was) in now.tiles.iter_mut().zip(&before.tiles) {
+        tile.was = if tile.value == was.value {
+            let small = |t: &Tile| t.small.as_deref().map(|s| s.trim_start_matches(" / ").to_string()).unwrap_or_default();
+            was_text(&small(tile), &small(was))
+        } else {
+            was_text(&format!("{}{}", tile.value, tile.small.clone().unwrap_or_default()), &format!("{}{}", was.value, was.small.clone().unwrap_or_default()))
+        };
+    }
+    let pairs = |v: &SheetView| -> Vec<String> { [&v.life, &v.stamina, &v.mana].into_iter().chain(&v.needs).map(|b| b.text.clone()).collect() };
+    let was_texts = pairs(&before);
+    for (bar, was) in [&mut now.life, &mut now.stamina, &mut now.mana].into_iter().chain(now.needs.iter_mut()).zip(was_texts) {
+        bar.was = was_text(&bar.text, &was);
+    }
+    now
 }
 
 /// Every word on the sheet, for a test that no formula is written out.
@@ -399,5 +427,23 @@ mod tests {
         assert_eq!(slot_word(Slot::Head), "Head");
         assert_eq!(slot_word(Slot::Ring2), "Ring");
         assert!(slot_word(Slot::Mainhand).to_lowercase().contains("hand"), "{}", slot_word(Slot::Mainhand));
+    }
+
+    #[test]
+    fn a_number_the_edit_moved_says_what_it_was() {
+        let saved = crate::lab_rules::RuleSet::default();
+        let mut state = LabState::default();
+        let plain = view_marked(&state, &TimeLab::default(), &Strikes::default(), &saved);
+        assert!(plain.tiles.iter().all(|t| t.was.is_none()) && plain.stamina.was.is_none());
+        crate::lab_rules::set_leaf(&mut state.ruleset, "load/capacity_per_strength", crate::lab_rules::Leaf::Float(20.0));
+        crate::lab_rules::set_leaf(&mut state.ruleset, "combat/armour_base", crate::lab_rules::Leaf::Int(13));
+        crate::lab_rules::set_leaf(&mut state.ruleset, "stamina/sprint_seconds", crate::lab_rules::Leaf::Float(25.0));
+        let view = view_marked(&state, &TimeLab::default(), &Strikes::default(), &saved);
+        let load = tile(&view, "Load");
+        assert_eq!((load.value.as_str(), load.small.as_deref(), load.was.as_deref()), ("27", Some(" / 200"), Some("was 150")));
+        let armour = tile(&view, "Armour");
+        assert_eq!((armour.value.as_str(), armour.was.as_deref()), ("18", Some("was 15")));
+        assert_eq!((view.stamina.text.as_str(), view.stamina.was.as_deref()), ("25 s", Some("was 30 s")));
+        assert!(tile(&view, "Damage").was.is_none());
     }
 }

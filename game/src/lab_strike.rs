@@ -10,7 +10,8 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use fb_character::combat::{self as rules, Attack, Save, creature_attack, folk_attack};
+use fb_character::combat::{self as rules, Attack, Save, creature_attack_with, folk_attack_with};
+use fb_character::rules::Rules;
 use fb_character::explain::{Explained, number};
 use fb_character::modifier;
 use fb_creatures::Species;
@@ -91,21 +92,21 @@ impl Arms {
     }
 
     /// One blow against `armour_class` on a defender with `constitution_modifier`.
-    fn blow(&self, armour_class: i32, constitution_modifier: i32, rng: &mut Mulberry32) -> Blow {
+    fn blow(&self, rs: &Rules, armour_class: i32, constitution_modifier: i32, rng: &mut Mulberry32) -> Blow {
         match self {
             Arms::Creature(species) => {
-                let block = species.stat_block();
-                let attack = creature_attack(block.attack_bonus, armour_class, rng);
+                let block = rs.creature(*species);
+                let attack = creature_attack_with(rs, block.attack_bonus, armour_class, rng);
                 if !attack.hit {
                     return Blow { attack, damage: None, save: None };
                 }
                 let damage = block.bite.roll(rng);
                 let poison = block.venom.map_or(0, |v| v.roll(rng));
-                let bite = rules::bite_damage(damage, poison, constitution_modifier, rng);
+                let bite = rules::bite_damage_with(rs, damage, poison, constitution_modifier, rng);
                 Blow { attack, damage: Some(bite.damage), save: bite.venom.save }
             }
             Arms::Folk { weapon, to_hit } => {
-                let attack = folk_attack(modifier(FOLK_STRENGTH), *to_hit, armour_class, rng);
+                let attack = folk_attack_with(rs, modifier(FOLK_STRENGTH), *to_hit, armour_class, rng);
                 let damage = attack.hit.then(|| weapon.roll_explained(modifier(FOLK_STRENGTH), rng));
                 Blow { attack, damage, save: None }
             }
@@ -115,12 +116,12 @@ impl Arms {
 
 /// The lab character's armour class, as the sheet shows it.
 pub fn armour_class(state: &LabState) -> i32 {
-    state.character.armour_class(&state.inventory()).value().round() as i32
+    state.character.armour_class_with(&state.ruleset.rules, &state.inventory()).value().round() as i32
 }
 
 /// The lab character's hit points at full.
 pub fn full_hit_points(state: &LabState) -> i32 {
-    crate::combat::first_level_hit_points_with(fb_character::rules::defaults(), &state.character)
+    crate::combat::first_level_hit_points_with(&state.ruleset.rules, &state.character)
 }
 
 /// What a hundred blows came to.
@@ -160,7 +161,7 @@ pub fn hundred(state: &LabState) -> Hundred {
     let (mut hits, mut total, mut least, mut most) = (0, 0u32, u32::MAX, 0);
     let (mut hp, mut since, mut fights) = (full, 0u32, Vec::new());
     for _ in 0..HUNDRED {
-        let blow = arms.blow(ac, con, &mut rng);
+        let blow = arms.blow(&state.ruleset.rules, ac, con, &mut rng);
         since += 1;
         if let Some(damage) = &blow.damage {
             let d = damage.value() as u32;
@@ -224,7 +225,7 @@ impl Strikes {
             self.rng = Some((state.strike_seed, Mulberry32::new(state.strike_seed)));
         }
         let rng = &mut self.rng.as_mut().expect("seeded above").1;
-        let blow = Arms::of(state).blow(armour_class(state), modifier(state.character.constitution()), rng);
+        let blow = Arms::of(state).blow(&state.ruleset.rules, armour_class(state), modifier(state.character.constitution()), rng);
         let mut line = format!("{}: {}", state.attacker.label(), blow.attack.line());
         if let Some(damage) = &blow.damage {
             if let Some(save) = &blow.save {
@@ -344,7 +345,7 @@ mod tests {
         let (mut saved, mut failed) = (0, 0);
         for seed in 0..300 {
             state.strike_seed = seed;
-            let blow = Arms::of(&state).blow(armour_class(&state), 0, &mut Mulberry32::new(seed));
+            let blow = Arms::of(&state).blow(&state.ruleset.rules, armour_class(&state), 0, &mut Mulberry32::new(seed));
             let Some(save) = blow.save else { continue };
             // The same draws by hand: the d20, the bite, the venom.
             let mut rng = Mulberry32::new(seed);
@@ -398,5 +399,16 @@ mod tests {
             assert!(hundred(&state).hits <= HUNDRED);
         }
         assert!(Attacker::all().len() > Species::ALL.len());
+    }
+
+    #[test]
+    fn blows_and_hit_points_follow_the_edited_rules() {
+        let mut state = state(Attacker::Creature(Species::GiantRat));
+        crate::lab_rules::set_leaf(&mut state.ruleset, "creatures/Giant Rat/attack_bonus", crate::lab_rules::Leaf::Int(2));
+        crate::lab_rules::set_leaf(&mut state.ruleset, "combat/hit_dice/fighter", crate::lab_rules::Leaf::Int(12));
+        let mut strikes = Strikes::default();
+        strikes.strike(&state);
+        assert!(strikes.log[0].contains("attack bonus (+2)"), "{}", strikes.log[0]);
+        assert_eq!(full_hit_points(&state), 12);
     }
 }

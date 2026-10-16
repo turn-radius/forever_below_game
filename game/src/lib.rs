@@ -26,6 +26,7 @@ pub mod inventory;
 pub mod keymap;
 pub mod kindle;
 pub mod lab_figure;
+pub mod lab_rules;
 pub mod lab_sheet;
 pub mod lab_strike;
 pub mod lab_time;
