@@ -48,6 +48,22 @@ rat_chase_speed = 2.0
 # How fast a snake comes at you once it has seen you, as a multiple of its speed.
 snake_chase_speed = 1.0
 
+[folk]
+# A human's unhurried walking pace, world units per second (shorter folk are slower).
+walk_speed = 11.0
+# The least seconds folk wait between walks.
+pause_min = 3.0
+# The most seconds folk wait between walks.
+pause_max = 8.0
+# How far from its spot a person strolls, world units.
+wander_radius = 90.0
+# How near the player must come, in sight, for a person to stop and face them, world units.
+notice_distance = 28.0
+# How far the player must go before a person who faced them carries on, world units.
+release_distance = 40.0
+# Seconds the player must stay away before a person carries on.
+release_delay = 1.0
+
 [creatures.size]
 # How large each kind of creature is drawn, and the floor it covers (1 = as rolled).
 rat = 1.0

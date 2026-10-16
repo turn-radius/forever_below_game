@@ -23,7 +23,7 @@ use forever_below::{
     capture::FrameCapturePlugin,
     creature_view::{CreatureChoice, CreatureViewPlugin},
     frame_time::FrameTimeProbe,
-    doll_view::{DollChoice, DollViewPlugin},
+    doll_view::{DollChoice, DollMotion, DollViewPlugin},
     forge_view::{Forge, ForgeViewPlugin},
     level_view::{LevelForge, LevelViewPlugin},
     lab_view::{LabState, LabViewPlugin},
@@ -130,13 +130,21 @@ fn run_doll(args: &[String]) -> AppExit {
             return AppExit::error();
         }
     };
+    let motion = match DollMotion::from_args(args.iter().cloned()) {
+        Ok(motion) => motion,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
         ..default()
     }))
     .add_plugins((ArmoryRenderPlugin, DollViewPlugin))
-    .insert_resource(choice);
+    .insert_resource(choice)
+    .insert_resource(motion);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }

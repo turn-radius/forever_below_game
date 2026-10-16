@@ -86,10 +86,15 @@ impl Material for OutlineMaterial {
         layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        let vertex_layout = layout.0.get_layout(&[
-            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
-            ATTRIBUTE_OUTLINE_NORMAL.at_shader_location(1),
-        ])?;
+        let mut attributes = vec![Mesh::ATTRIBUTE_POSITION.at_shader_location(0), ATTRIBUTE_OUTLINE_NORMAL.at_shader_location(1)];
+        // A skinned hull (a folk's) moves with the joints, as Bevy's own pipeline lays out the
+        // joints (`bevy_pbr::render::mesh::setup_morph_and_skinning_defs`, 6 and 7 without
+        // vertex colours or tangents past that, which this layout leaves out).
+        if layout.0.contains(Mesh::ATTRIBUTE_JOINT_INDEX) && layout.0.contains(Mesh::ATTRIBUTE_JOINT_WEIGHT) {
+            attributes.push(Mesh::ATTRIBUTE_JOINT_INDEX.at_shader_location(6));
+            attributes.push(Mesh::ATTRIBUTE_JOINT_WEIGHT.at_shader_location(7));
+        }
+        let vertex_layout = layout.0.get_layout(&attributes)?;
         descriptor.vertex.buffers = vec![vertex_layout];
         descriptor.primitive.cull_mode = Some(Face::Front);
         Ok(())
