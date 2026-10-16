@@ -82,17 +82,30 @@ pub struct MissedDelver {
 /// Where every blow at the delver, a creature's or a folk's, is rolled: the attacker's to-hit
 /// against the delver's Armor Class, the same rule as the delver's swings
 /// ([`fb_character::combat::ToHit`]). A hit is sent as an [`AttackOnDelver`], a miss as a
-/// [`MissedDelver`].
+/// [`MissedDelver`]. Once the delver is down nothing is rolled or sent, and nobody starts a
+/// blow at them ([`BlowsAtDelver::delver_is_down`]).
 #[derive(bevy::ecs::system::SystemParam)]
-pub struct BlowsAtDelver<'w> {
+pub struct BlowsAtDelver<'w, 's> {
     hits: MessageWriter<'w, AttackOnDelver>,
     misses: MessageWriter<'w, MissedDelver>,
+    fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
+    delver: Query<'w, 's, &'static crate::combat::Health, With<Player>>,
 }
 
-impl BlowsAtDelver<'_> {
+impl BlowsAtDelver<'_, '_> {
+    /// Whether the delver has fallen (at 0 hit points, or the run ending): there is nothing left
+    /// to fight.
+    pub fn delver_is_down(&self) -> bool {
+        self.fallen.is_some() || self.delver.iter().any(|health| health.is_down())
+    }
+
     /// Rolls `blow`, by `who` with `to_hit`, against `armour_class` (the delver's, or
     /// [`ArmourClass::UNARMOURED`] when they have none), from `rng`; returns whether it landed.
+    /// Against a fallen delver nothing is rolled and it does not land.
     pub fn strike(&mut self, who: &str, blow: AttackOnDelver, to_hit: ToHit, armour_class: Option<&ArmourClass>, rng: &mut Mulberry32) -> bool {
+        if self.delver_is_down() {
+            return false;
+        }
         let ac = armour_class.copied().unwrap_or(ArmourClass::UNARMOURED).0;
         let attack = to_hit.roll(ac, Odds::Even, rng);
         info!("{who} attacks the delver: {}", attack.line());
@@ -342,7 +355,7 @@ fn behave(
                     heading = Some(goal);
                     speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() { 1.0 } else { tune.rat_chase_speed };
                 }
-                if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 {
+                if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 && !attacks.delver_is_down() {
                     brain.attack = Some(0.0);
                     brain.bitten = false;
                     // The cue sounds from the creature as the lunge or rear begins, before the bite.
@@ -531,6 +544,29 @@ mod tests {
     fn attacks(app: &mut App) -> Vec<AttackOnDelver> {
         let messages = app.world().resource::<Messages<AttackOnDelver>>();
         messages.iter_current_update_messages().copied().collect()
+    }
+
+    #[test]
+    fn nothing_attacks_a_fallen_delver() {
+        let level = fb_level::generate(1207, 1);
+        let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
+        let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
+        let (cx, cy) = room.centre();
+        let player_at = Vec2::new(cx, cy) * CELL + Vec2::new(-1.0, 1.3) * CELL;
+        let (mut app, _, player) = level_app(player_at);
+        // Bitten a while first, then down.
+        let mut before = 0;
+        for _ in 0..600 {
+            app.update();
+            before += attacks(&mut app).len() + app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count();
+        }
+        assert!(before > 0, "the rats never went for the delver");
+        app.world_mut().entity_mut(player).insert(crate::combat::Health { hp: 0, max: 10 });
+        for frame in 0..600 {
+            app.update();
+            assert!(attacks(&mut app).is_empty(), "bitten after the fall, at frame {frame}");
+            assert_eq!(app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count(), 0, "a blow at the fallen, at frame {frame}");
+        }
     }
 
     #[test]

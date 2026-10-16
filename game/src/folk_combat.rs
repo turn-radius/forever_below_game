@@ -476,7 +476,7 @@ pub fn fight(
                 fight.swing = None;
                 fight.cooldown = COOLDOWN;
             }
-        } else if in_reach && fight.cooldown <= 0.0 {
+        } else if in_reach && fight.cooldown <= 0.0 && !attacks.delver_is_down() {
             fight.swing = Some(0.0);
             fight.landed = false;
         } else if !in_reach {
@@ -867,6 +867,21 @@ pub(crate) mod tests {
             app.update();
         }
         assert!(hostility(&app, folk).is_hostile(), "provoked again");
+    }
+
+    #[test]
+    fn a_hostile_folk_stops_swinging_once_the_delver_falls() {
+        let (mut app, player, folk) = folk_fight(12.0);
+        app.world_mut().write_message(Provoked { folk });
+        app.world_mut().entity_mut(player).insert(Health { hp: 0, max: 10 });
+        // Three seconds, the folk in reach for most of it, before the fall sends the game to
+        // the title (`vitals::FALL_TIME`).
+        for frame in 0..180 {
+            app.update();
+            assert!(attacks(&app).is_empty(), "struck the fallen delver at frame {frame}");
+            assert_eq!(app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count(), 0, "swung at the fallen delver at frame {frame}");
+        }
+        assert!(app.world().get::<Fight>(folk).unwrap().swing.is_none(), "no swing under way");
     }
 
     #[test]
