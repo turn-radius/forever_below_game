@@ -18,6 +18,12 @@
 //!   [`Corpse`]: it stops its routine, no longer turns its head, blocks nobody and shows no card.
 //!   "Name is slain" shows low in the view.
 //!
+//! - **What they leave** ([`shed_folk_gear`]): as they fall, every item they wore and held is set
+//!   down round where they fell as the item it is (its rarity, affixes and wear), through the
+//!   floor machinery, as a skeleton's is (`inventory::underfoot::set_down_around`), and their
+//!   body is drawn again bare. The body is marked [`Looted`] at once, and one brought back from
+//!   the record comes back bare and [`Looted`] (`crate::folk::spawn_folk`), so nothing is set down
+//!   twice.
 //! - **Fighting back** ([`fight`]): a folk given cause turns hostile (`crate::hostility`, with the
 //!   kin who see it). A hostile folk leaves their routine and comes at the delver: straight at
 //!   them in sight, else along the shortest way through the grid (`fb_level::path::find_path`,
@@ -44,19 +50,24 @@ use fb_level::path::{find_path, line_of_sight, steer_toward};
 use procgen_rng::Mulberry32;
 
 use crate::character::Class;
-use crate::combat::feedback::{Corpse, Flinches, Struck, collapse_share, knockback_for, laid_back};
+use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+
+use crate::combat::feedback::{Corpse, Flinches, Looted, Struck, collapse_share, knockback_for, laid_back};
 use crate::combat::swing::SwungAt;
 use crate::combat::{ArmourClass, Health, Weapon, first_level_hit_points_explained_for, swing_time};
 use crate::creatures::Critter;
 use crate::creatures::behaviour::{AttackOnDelver, body_radius};
-use crate::folk::{Denizen, Person, Stride};
-use crate::folk_pose::ArmSwing;
+use crate::figure::Figure;
+use crate::folk::{Denizen, Person, Stance, Stride};
+use crate::folk_pose::{ArmSwing, spawn_rigged};
 use crate::folk_routine::{Routine, pace};
 use crate::hostility::{Hostility, HostilityPlugin, Provoked};
-use crate::inventory::Toasts;
+use crate::inventory::underfoot::{FloorChanges, apply_floor_changes, set_down_around};
+use crate::inventory::{Inventory, Toasts};
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, BlocksTheWay, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
 use crate::player::{blocked_by, slide_around};
+use crate::render::ItemSpawner;
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
 
@@ -71,7 +82,64 @@ impl Plugin for FolkCombatPlugin {
             .init_resource::<Tuning>()
             .init_resource::<Obstacles>()
             .init_resource::<BlockedCells>()
-            .add_systems(Update, (arm_folk, provoke_when_attacked, take_folk_blows, collapse_folk, fight).chain().before(crate::hostility::turn_on_the_delver).in_set(DelveSystems));
+            .init_resource::<FloorChanges>()
+            .add_systems(
+                Update,
+                (arm_folk, provoke_when_attacked, take_folk_blows, shed_folk_gear.before(apply_floor_changes), collapse_folk, fight)
+                    .chain()
+                    .before(crate::hostility::turn_on_the_delver)
+                    .in_set(DelveSystems),
+            );
+        // `FB_PROVOKE=<n>` and `FB_SLAY=<n>`, for captures (README, "Debug switches").
+        let index = |name: &str| std::env::var(name).ok().and_then(|v| v.trim().parse::<usize>().ok());
+        if let Some(folk) = index("FB_PROVOKE") {
+            app.add_systems(Update, debug_provoke.run_if(resource_exists::<CurrentLevel>).in_set(DelveSystems));
+            app.insert_resource(DebugFolk { provoke: Some(folk), slay: index("FB_SLAY"), done: [false; 2] });
+        } else if let Some(folk) = index("FB_SLAY") {
+            app.add_systems(Update, debug_provoke.run_if(resource_exists::<CurrentLevel>).in_set(DelveSystems));
+            app.insert_resource(DebugFolk { provoke: None, slay: Some(folk), done: [false; 2] });
+        }
+    }
+}
+
+/// The folk `FB_PROVOKE` provokes and `FB_SLAY` strikes down, by their index in the level's
+/// folk (as `print_level` lists them), and whether each has been done.
+#[derive(Resource, Clone, Copy, Debug)]
+struct DebugFolk {
+    provoke: Option<usize>,
+    slay: Option<usize>,
+    done: [bool; 2],
+}
+
+/// When `FB_PROVOKE` provokes its folk and `FB_SLAY` strikes theirs down, seconds into the delve.
+const PROVOKE_AT: f32 = 1.0;
+const SLAY_AT: f32 = 2.0;
+
+/// Provokes or strikes down the folk the debug switches name, once each, a moment in.
+fn debug_provoke(
+    time: Res<Time>,
+    level: Res<CurrentLevel>,
+    mut debug: ResMut<DebugFolk>,
+    mut since: Local<f32>,
+    folk: Query<(Entity, &Denizen, &Transform), Without<Corpse>>,
+    mut provoked: MessageWriter<Provoked>,
+    mut struck: MessageWriter<Struck>,
+) {
+    *since += time.delta_secs();
+    let find = |index: usize| level.0.folk.get(index).and_then(|spot| folk.iter().find(|(_, d, _)| d.person.spot == *spot));
+    if let (Some(index), false) = (debug.provoke, debug.done[0])
+        && *since >= PROVOKE_AT
+        && let Some((entity, _, _)) = find(index)
+    {
+        provoked.write(Provoked { folk: entity });
+        debug.done[0] = true;
+    }
+    if let (Some(index), false) = (debug.slay, debug.done[1])
+        && *since >= SLAY_AT
+        && let Some((entity, _, at)) = find(index)
+    {
+        struck.write(Struck { target: entity, damage: 1000, from: at.translation.xz() + (at.rotation * Vec3::Z).xz() * 10.0, bludgeoning: false });
+        debug.done[1] = true;
     }
 }
 
@@ -225,6 +293,56 @@ pub fn take_folk_blows(
             commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<(BlocksTheWay, Routine)>();
             toasts.add(&format!("{} is slain", denizen.person.name));
             info!("{} falls", denizen.person.name);
+        }
+    }
+}
+
+/// `person` with nothing worn or held: a body whose gear has been set down.
+pub fn bare(person: &Person) -> Person {
+    Person { gear: Vec::new(), ..person.clone() }
+}
+
+/// Draws the figure under `stance` again as `figure`: its skeleton and meshes, and any light it
+/// held, replaced. On the spawner's own commands, so they apply in order.
+pub fn redraw(spawner: &mut ItemSpawner, bindposes: &mut Assets<SkinnedMeshInverseBindposes>, stance: Entity, figure: &Figure, seed: u32) {
+    spawner.commands().entity(stance).despawn_children();
+    let anim = spawn_rigged(spawner, bindposes, figure, stance, false, seed);
+    spawner.commands().entity(stance).insert(anim);
+}
+
+/// Sets everything a fallen folk wore and held down round where they fell, once, as they start
+/// to fall ([`set_down_around`]), and draws their body again bare. They are marked [`Looted`]
+/// and their gear taken off them, so it is never set down twice; the floor changes are applied
+/// this frame, before the record could read the floor (as a skeleton's are).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn shed_folk_gear(
+    tuning: Res<Tuning>,
+    level: Res<CurrentLevel>,
+    blocked_cells: Res<BlockedCells>,
+    obstacles: Res<Obstacles>,
+    mut inventory: ResMut<Inventory>,
+    mut changes: ResMut<FloorChanges>,
+    mut bodies: Query<(Entity, &mut Denizen, &Transform, Option<&Children>), (With<Corpse>, Without<Looted>)>,
+    stances: Query<(), With<Stance>>,
+    bindposes: Option<ResMut<Assets<SkinnedMeshInverseBindposes>>>,
+    mut spawner: ItemSpawner,
+) {
+    let blocked = blocked_by(&level.0, &blocked_cells);
+    let mut bindposes = bindposes;
+    for (entity, mut denizen, at, children) in &mut bodies {
+        spawner.commands().entity(entity).insert(Looted);
+        let items = denizen.person.gear.iter().map(|(_, item)| item);
+        // Not round the circle they stood in: they no longer block it.
+        let own = |o: &&Obstacle| matches!(o, Obstacle::Circle { centre, radius } if centre.distance(at.translation.xz()) < 0.5 * denizen.radius && *radius == denizen.radius);
+        let others: Vec<Obstacle> = obstacles.0.iter().filter(|o| !own(o)).copied().collect();
+        set_down_around(at.translation.xz(), items, denizen.person.spot.seed, &mut inventory, &mut changes, &blocked, &others, tuning.view.floor_item_scale);
+        info!("{} drops {} things", denizen.person.name, denizen.person.gear.len());
+        denizen.person = bare(&denizen.person);
+        // Drawn again with nothing on.
+        let stance = children.into_iter().flat_map(|c| c.iter()).find(|&c| stances.contains(c));
+        if let (Some(stance), Some(bindposes)) = (stance, bindposes.as_deref_mut()) {
+            let figure = Figure::dress(&denizen.person.spec, &denizen.person.gear, denizen.person.dirt);
+            redraw(&mut spawner, bindposes, stance, &figure, denizen.person.spot.seed);
         }
     }
 }
@@ -393,7 +511,13 @@ pub(crate) mod tests {
             .init_resource::<crate::play::Obstacles>()
             .init_resource::<crate::play::BlockedCells>()
             .init_resource::<crate::inventory::Toast>()
-            .add_plugins((CombatPlugin, FolkCombatPlugin))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<crate::render::ToonMaterial>>()
+            .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<crate::render::OutlineMaterials>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .add_plugins((CombatPlugin, FolkCombatPlugin, crate::folk_routine::FolkRoutinePlugin))
+            .add_systems(Update, apply_floor_changes)
             .add_systems(PostUpdate, crate::play::gather_obstacles.after(TransformSystems::Propagate))
             .insert_resource(RunDice(Mulberry32::new(9)));
         let mut inventory = Inventory::default();
@@ -406,7 +530,7 @@ pub(crate) mod tests {
 
     /// A stand-in (no figure) for the folk at `spot`, standing there.
     fn stand_in(app: &mut App, spot: &fb_level::FolkSpot) -> Entity {
-        let denizen = Denizen { person: Person::of(spot), radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
+        let denizen = Denizen { person: Person::of(spot, 1), radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
         app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(3.0)), crate::folk::stand_at(spot))).id()
     }
 
@@ -432,7 +556,6 @@ pub(crate) mod tests {
     /// world units west of the first, facing them.
     fn folk_level(away: f32) -> (App, Entity, Vec<Entity>) {
         let mut app = combat_app();
-        app.add_plugins(crate::folk_routine::FolkRoutinePlugin);
         let spots = app.world().resource::<CurrentLevel>().0.folk.clone();
         let folk: Vec<Entity> = spots.iter().map(|spot| stand_in(&mut app, spot)).collect();
         let at = app.world().get::<Transform>(folk[0]).unwrap().translation;
@@ -523,7 +646,7 @@ pub(crate) mod tests {
     }
 
     fn people() -> Vec<Person> {
-        fb_level::generate(1207, 1).folk.iter().map(Person::of).collect()
+        fb_level::generate(1207, 1).folk.iter().map(|spot| Person::of(spot, 1)).collect()
     }
 
     #[test]
@@ -644,5 +767,126 @@ pub(crate) mod tests {
         let left = &record.level(1).unwrap().folk[&0];
         assert!(left.hostile);
         assert_eq!(left.hp, app.world().get::<Health>(folk).unwrap().hp);
+    }
+
+    fn on_the_floor(app: &mut App) -> Vec<crate::carry::FloorItem> {
+        app.world_mut().query::<&crate::carry::FloorItem>().iter(app.world()).map(|f| crate::carry::FloorItem { id: f.id, spot: f.spot, min: f.min, max: f.max }).collect()
+    }
+
+    fn strike_down(app: &mut App, folk: Entity) {
+        let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
+        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: at - Vec2::X * 9.0, bludgeoning: false });
+        for _ in 0..120 {
+            app.update();
+        }
+        assert!(app.world().get::<Corpse>(folk).is_some(), "it fell");
+    }
+
+    #[test]
+    fn a_slain_folk_drops_everything_it_wore_and_held_once_where_it_fell() {
+        use crate::inventory::underfoot::{FloorChange, FloorChanges};
+        let (mut app, _, folk) = folk_fight(30.0);
+        let gear = app.world().get::<Denizen>(folk).unwrap().person.gear.clone();
+        assert!(gear.len() >= 2, "a folk wears and holds something");
+        assert!(on_the_floor(&mut app).is_empty(), "nothing lies there while they stand");
+        let lying_before = app.world().resource::<CurrentLevel>().0.items.len();
+        strike_down(&mut app, folk);
+        // Every item they wore and held, as the same item, once.
+        let floor = on_the_floor(&mut app);
+        assert_eq!(floor.len(), gear.len(), "one for each piece of gear");
+        let inventory = app.world().resource::<Inventory>();
+        let mut lying: Vec<(String, u32)> = floor.iter().map(|f| inventory.item(f.id).map(|i| (i.base.to_string(), i.seed)).unwrap()).collect();
+        let mut wore: Vec<(String, u32)> = gear.iter().map(|(_, i)| (i.base.to_string(), i.seed)).collect();
+        lying.sort();
+        wore.sort();
+        assert_eq!(lying, wore);
+        for f in &floor {
+            let item = inventory.item(f.id).unwrap();
+            let original = gear.iter().map(|(_, i)| i).find(|i| i.seed == item.seed && i.base == item.base).unwrap();
+            assert_eq!(item, original, "the same rarity, affixes and wear");
+        }
+        assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), lying_before + gear.len(), "the level records them");
+        // Where they fell.
+        let at = app.world().get::<Corpse>(folk).unwrap().fell.translation.xz();
+        for f in &floor {
+            let world = fb_level::Level::world(f.spot.x, f.spot.y);
+            assert!(Vec2::new(world[0], world[2]).distance(at) < 12.0, "{} from where they fell", Vec2::new(world[0], world[2]).distance(at));
+        }
+        // The body is bare, and sheds nothing more however long it lies.
+        assert!(app.world().get::<Denizen>(folk).unwrap().person.gear.is_empty());
+        for _ in 0..300 {
+            app.update();
+        }
+        assert_eq!(on_the_floor(&mut app).len(), gear.len(), "dropped once");
+        // Picked up, each is the delver's to wear or hold where the folk had it.
+        let ids: Vec<(crate::inventory::ItemId, Slot)> = floor
+            .iter()
+            .map(|f| {
+                let item = app.world().resource::<Inventory>().item(f.id).unwrap().clone();
+                (f.id, gear.iter().find(|(_, i)| *i == item).unwrap().0)
+            })
+            .collect();
+        for &(id, _) in &ids {
+            app.world_mut().resource_mut::<FloorChanges>().0.push(FloorChange::Lifted(id));
+        }
+        app.update();
+        assert!(on_the_floor(&mut app).is_empty(), "all taken up");
+        let mut inventory = app.world_mut().resource_mut::<Inventory>();
+        for &(id, slot) in &ids {
+            inventory.equip(id, slot).unwrap_or_else(|e| panic!("{slot:?}: {e:?}"));
+            assert_eq!(inventory.worn(slot), Some(id), "{slot:?} is worn");
+        }
+    }
+
+    #[test]
+    fn a_body_brought_back_from_the_record_lies_bare_and_drops_nothing() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _, folk) = folk_fight(30.0);
+        strike_down(&mut app, folk);
+        app.init_resource::<crate::record::WorldRecord>();
+        app.world_mut().run_system_once(crate::record::record_level_left).unwrap();
+        let record = app.world().resource::<crate::record::WorldRecord>().clone();
+        let left = &record.level(1).unwrap().folk[&0];
+        assert!(left.dead && left.hp == 0);
+        // The level laid out again from the record: the folk come back as it has them.
+        let mut again = combat_app();
+        again.insert_resource(record).init_resource::<crate::folk::FolkFigures>().add_systems(Update, crate::folk::spawn_folk);
+        for _ in 0..120 {
+            again.update();
+        }
+        let mut denizens = again.world_mut().query::<(Entity, &Denizen)>();
+        let spot = again.world().resource::<CurrentLevel>().0.folk[0];
+        let (body, denizen) = denizens.iter(again.world()).find(|(_, d)| d.person.spot == spot).map(|(e, d)| (e, d.clone())).unwrap();
+        assert!(denizen.person.gear.is_empty(), "bare");
+        assert!(again.world().get::<Corpse>(body).is_some() && again.world().get::<crate::combat::feedback::Looted>(body).is_some());
+        assert!(again.world().get::<Routine>(body).is_none(), "a body keeps no routine");
+        assert!(on_the_floor(&mut again).is_empty(), "nothing set down again");
+        let down = again.world().get::<Transform>(body).unwrap();
+        assert!((down.rotation * Vec3::Y).y.abs() < 0.2, "lying down");
+        // Another, drawn in what they wear, struck down here: their figure is drawn again with
+        // none of it on.
+        let (other, person) = denizens.iter(again.world()).find(|(e, _)| *e != body).map(|(e, d)| (e, d.person.clone())).unwrap();
+        let titles: Vec<String> = person.gear.iter().map(|(_, i)| i.title().to_string()).collect();
+        let drawn = |app: &mut App| -> Vec<String> {
+            let mut names = app.world_mut().query::<&Name>();
+            let children = app.world().get::<Children>(other).map(|c| c.to_vec()).unwrap_or_default();
+            let mut found = Vec::new();
+            for child in children {
+                let mut stack = vec![child];
+                while let Some(e) = stack.pop() {
+                    if let Ok(name) = names.get(app.world(), e) {
+                        found.push(name.to_string());
+                    }
+                    stack.extend(app.world().get::<Children>(e).map(|c| c.to_vec()).unwrap_or_default());
+                }
+            }
+            found
+        };
+        assert!(drawn(&mut again).iter().any(|n| titles.contains(n)), "drawn dressed");
+        strike_down(&mut again, other);
+        let now = drawn(&mut again);
+        assert!(now.iter().any(|n| n == "Body"), "the body is drawn");
+        assert!(!now.iter().any(|n| titles.contains(n)), "still drawn in its gear: {now:?}");
+        assert_eq!(on_the_floor(&mut again).len(), person.gear.len());
     }
 }

@@ -247,6 +247,9 @@ pub fn stand_at(spot: &FolkSpot) -> Transform {
     Transform::from_translation(at).with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
 }
 
+/// Seconds a body brought back from the record has lain, long past its fall.
+const LONG_FALLEN: f32 = 60.0;
+
 /// Spawns every folk spot of the level once, and again only if the spots change; on a level
 /// that was left, each as the record has them.
 #[allow(clippy::too_many_arguments)]
@@ -271,10 +274,23 @@ pub(crate) fn spawn_folk(
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     for (index, built) in figures.for_spots(&level.0.folk, level.0.depth).into_iter().enumerate() {
         let (person, figure) = &*built;
-        let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
-        if let Some(left) = saved.and_then(|l| l.folk.get(&index)) {
-            let hostility = if left.hostile { crate::hostility::Hostility::Hostile } else { crate::hostility::Hostility::Friendly };
-            commands.entity(root).insert((crate::combat::Health { hp: left.hp, max: left.max }, hostility, left.transform()));
+        let left = saved.and_then(|l| l.folk.get(&index));
+        let Some(left) = left else {
+            spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
+            continue;
+        };
+        let hostility = if left.hostile { crate::hostility::Hostility::Hostile } else { crate::hostility::Hostility::Friendly };
+        let health = crate::combat::Health { hp: left.hp, max: left.max };
+        if left.dead {
+            // A body lies bare where it fell, long fallen: what it wore is on the floor.
+            let bare = crate::folk_combat::bare(person);
+            let figure = Figure::dress(&bare.spec, &bare.gear, bare.dirt);
+            let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, &bare, &figure);
+            let fallen = crate::combat::feedback::Corpse { since: LONG_FALLEN, fell: left.transform() };
+            commands.entity(root).insert((health, hostility, fallen, crate::combat::feedback::Looted)).remove::<BlocksTheWay>();
+        } else {
+            let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
+            commands.entity(root).insert((health, hostility, left.transform()));
         }
     }
     *shown = Some(level.0.folk.clone());

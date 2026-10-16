@@ -161,7 +161,8 @@ fn take_bites(
             if let Some(sounds) = &sounds {
                 commands.spawn((Name::new("blow lands"), AudioPlayer::new(sounds.thud.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(AppState::Delving)));
             }
-            info!("{:?} bites for {damage}: {} of {} hit points left", bite.species, health.hp, health.max);
+            let who = bite.species.map_or_else(|| "A folk strikes".to_string(), |s| format!("{s:?} bites"));
+            info!("{who} for {damage}: {} of {} hit points left", health.hp, health.max);
             if bite.species == Some(Species::ConstrictorSnake) && !health.is_down() {
                 commands.entity(player).insert((Constricted { by: bite.attacker }, Slowed(HELD_PACE)));
             }

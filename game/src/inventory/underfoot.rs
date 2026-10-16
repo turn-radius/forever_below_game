@@ -13,6 +13,43 @@ use crate::render::ItemSpawner;
 use super::grid::Grid;
 use super::items::{Inventory, ItemId};
 
+/// How far a shed item lands from where its wearer fell, world units, and the extra every
+/// second one takes. Our own.
+const SHED_RING: f32 = 2.6;
+/// Salt for where shed items land. Our own.
+const SHED_SALT: u32 = 0x5ED0_6EA8;
+
+/// Sets each of `items` down round `centre` (world `(x, z)`) as a new loose item in `inventory`,
+/// as the item it is: a ring of them, from an angle rolled from `seed`, each slid clear of
+/// `blocked` cells and `obstacles` and turned at random, through [`FloorChange::SetDownAt`], which
+/// the floor machinery spawns and records like any dropped item. What a fallen skeleton or folk
+/// wore and held. `floor_scale` is the tuned size of things on the floor
+/// (`view.floor_item_scale`).
+#[allow(clippy::too_many_arguments)]
+pub fn set_down_around<'a>(
+    centre: Vec2,
+    items: impl ExactSizeIterator<Item = &'a fb_items::Item>,
+    seed: u32,
+    inventory: &mut Inventory,
+    changes: &mut FloorChanges,
+    blocked: impl Fn(i32, i32) -> bool,
+    obstacles: &[crate::play::Obstacle],
+    floor_scale: f32,
+) {
+    use fb_level::CELL;
+    let mut rng = procgen_rng::Mulberry32::new(seed ^ SHED_SALT);
+    let count = items.len().max(1);
+    let first = rng.range_f32(0.0, std::f32::consts::TAU);
+    for (i, item) in items.enumerate() {
+        let radius = crate::carry::floor_radius(&crate::carry::item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), floor_scale).min(CELL * 0.5 - 0.5);
+        let angle = first + i as f32 / count as f32 * std::f32::consts::TAU;
+        let want = centre + Vec2::from_angle(angle) * (SHED_RING + radius + 0.8 * (i % 2) as f32);
+        let spot = crate::player::slide_around(centre, want, radius, &blocked, obstacles);
+        let id = inventory.add(item.clone());
+        changes.0.push(FloorChange::SetDownAt(id, spot / CELL, rng.range_f32(0.0, std::f32::consts::TAU)));
+    }
+}
+
 /// Columns of the underfoot grid, and the fewest rows it shows.
 pub const UNDERFOOT_COLS: u8 = 6;
 pub const UNDERFOOT_ROWS: u8 = 3;

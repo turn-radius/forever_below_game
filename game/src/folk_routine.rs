@@ -159,8 +159,9 @@ fn cell(p: Vec2) -> (i32, i32) {
     ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32)
 }
 
-/// Gives each new person a routine.
-fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entity, &Denizen), Added<Denizen>>) {
+/// Gives each new person a routine (a body brought back from the record has none).
+#[allow(clippy::type_complexity)]
+fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entity, &Denizen), (Added<Denizen>, Without<crate::combat::feedback::Corpse>)>) {
     for (entity, denizen) in &new {
         let mut rng = Mulberry32::new(denizen.person.spot.seed ^ ROUTINE_SALT);
         let first = rng.range_f32(0.0, tuning.folk.pause_max.max(tuning.folk.pause_min));

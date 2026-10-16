@@ -5,7 +5,8 @@
 //! it was generated: the items lying on its floor (dropped, moved, worn down, with the full
 //! contents of every bag set down), the containers (opened or not, and what is left in them) and
 //! the creatures (hit points, where they stand, or the body where they fell) and the folk (hit
-//! points, where they stand, and whether they have turned on the delver). A depth never
+//! points, where they stand or the body where they fell, and whether they have turned on the
+//! delver). A depth never
 //! visited has no entry and is exactly its generated state.
 //!
 //! Leaving a level writes it into the record ([`record_level_left`], in
@@ -65,11 +66,16 @@ pub struct LevelRecord {
 pub struct FolkRecord {
     pub hp: i32,
     pub max: i32,
-    /// Where they stand (world units), turned by this quaternion.
+    /// Where they stand, or where they stood as they fell (world units), turned by this
+    /// quaternion.
     pub at: [f32; 3],
     pub turn: [f32; 4],
     /// They have turned on the delver, and stay so.
     pub hostile: bool,
+    /// Fallen: this is their body, bare (what they wore was set down where they fell, and is on
+    /// the floor, or gone, as the record has it).
+    #[serde(default)]
+    pub dead: bool,
 }
 
 impl FolkRecord {
@@ -197,6 +203,7 @@ pub fn restore_contents(inventory: &mut Inventory, container: ItemId, contents: 
 
 /// Writes the level being left into the record. Runs in [`crate::travel::LeavingLevel`], when
 /// the level is still whole.
+#[allow(clippy::type_complexity)]
 pub fn record_level_left(
     level: Res<CurrentLevel>,
     inventory: Res<Inventory>,
@@ -204,7 +211,7 @@ pub fn record_level_left(
     floor: Query<&FloorItem>,
     containers: Query<(&PropPiece, &Container)>,
     creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>)>,
-    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>)>,
+    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>)>,
 ) {
     let mut left = LevelRecord::default();
     let mut lying: Vec<&FloorItem> = floor.iter().collect();
@@ -229,17 +236,19 @@ pub fn record_level_left(
             },
         );
     }
-    for (denizen, transform, health, hostility) in &folk {
+    for (denizen, transform, health, hostility, corpse) in &folk {
         let Some(index) = level.0.folk.iter().position(|s| *s == denizen.person.spot) else { continue };
         let Some(health) = health else { continue };
+        let stood = corpse.map_or(*transform, |c| c.fell);
         left.folk.insert(
             index,
             FolkRecord {
                 hp: health.hp,
                 max: health.max,
-                at: transform.translation.to_array(),
-                turn: transform.rotation.to_array(),
+                at: stood.translation.to_array(),
+                turn: stood.rotation.to_array(),
                 hostile: hostility.is_some_and(|h| h.is_hostile()),
+                dead: corpse.is_some(),
             },
         );
     }
@@ -290,7 +299,7 @@ mod tests {
         });
         level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
         level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false });
-        level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true });
+        level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true, dead: false });
         record.levels.insert(1, level);
         record.levels.insert(4, LevelRecord::default());
         let json = serde_json::to_string(&record).unwrap();

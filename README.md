@@ -170,6 +170,8 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_HOLD=<main>[,<off>]` | puts an item of each named base in that hand, after the starting or debug kit (`Mace,Torch`, `Sword,Shield`, `Staff,none`; a torch or lantern is lit, `none` empties the hand) |
 | `FB_CONDITIONS=<list>` | holds the delver under conditions for the status badges, comma separated: `hunger:<0 to 1>`, `thirst:<0 to 1>`, `sleep:<0 to 1>`, `exhaustion:<level>`, `winded`, `load:<light\|burdened\|encumbered\|overloaded>` (`FB_CONDITIONS=hunger:0.8,winded,load:encumbered`) |
 | `FB_CONDITION_HOVER=<n>` | shows the card of the `n`th status badge (0 the first, worst first) as if hovered |
+| `FB_PROVOKE=<n>` | a second in, gives the level's `n`th folk (0 the first, in `print_level`'s order) cause to fight: they and the kin who see it turn hostile, for captures of folk fighting (with `FB_DEBUG_POSE`) |
+| `FB_SLAY=<n>` | two seconds in, strikes the level's `n`th folk down, for captures of a body and the gear it drops |
 | `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |
 | `FB_NEW_DELVE=<seconds>` | the title chooses New delve by itself after that many seconds, each time it shows; with `FB_PLAYER_HP=1` and `FB_SCREENSHOT_FRAMES`, captures a fall, the title and the next delve without input |
 | `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot (or `<base>@<slot>` in another it fits: `Lantern@hip`, `Sword@offhand`), after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |
