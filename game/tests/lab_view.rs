@@ -277,3 +277,27 @@ fn the_equip_tab_feeds_and_dresses_the_character() {
     let shown = texts(&mut app);
     assert!(shown.iter().any(|t| t == "12"), "{shown:?}");
 }
+
+#[test]
+fn a_search_with_no_hit_says_so_in_the_equip_tab_and_the_quick_card_has_the_rarity_row() {
+    use forever_below::lab_view::{Picker, searches_run};
+    let mut app = headless_lab();
+    for _ in 0..3 {
+        app.update();
+    }
+    // One seed is tried, which is not a legendary: nothing is found.
+    app.world_mut().resource_mut::<Picker>().search = 1;
+    press(&mut app, Control::PickRarity(Some(fb_items::Rarity::Legendary)));
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t == "No legendary rolls from seed 1 within 1 seeds."), "{shown:?}");
+    // Rebuilding the tab again does not search again.
+    let searched = searches_run();
+    press(&mut app, Control::Tab(2));
+    press(&mut app, Control::OneFight);
+    assert_eq!(searches_run(), searched);
+    // The sheet's quick card opens with its rarity row and says the same.
+    press(&mut app, Control::OpenPicker);
+    let shown = texts(&mut app);
+    assert!(shown.iter().filter(|t| *t == "Legendary").count() >= 2, "a Legendary choice in both pickers: {shown:?}");
+    assert!(shown.iter().any(|t| t == "No legendary within 1 seeds."), "{shown:?}");
+}

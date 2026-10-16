@@ -393,14 +393,32 @@ pub struct Picker {
     pub seed: u32,
     /// The rarity wanted: the first seed from `seed` on that rolls it is used. `None` takes the seed as it is.
     pub rarity: Option<Rarity>,
+    /// How many seeds are tried to find one of that rarity.
+    pub search: u32,
+    /// What the search found for the choice it was made for, kept so it runs once per change
+    /// of the choice ([`Picker::refresh`]) and not each time something reads it.
+    found: Option<(PickerKey, Option<u32>)>,
 }
+
+/// What a search depends on: slot, base, seed, rarity and how far it looks.
+type PickerKey = (usize, usize, u32, Option<Rarity>, u32);
 
 /// How many seeds are tried to find one of a chosen rarity.
 pub const RARITY_SEARCH: u32 = 5000;
 
+thread_local! {
+    /// How many searches this thread has run, for a test.
+    static SEARCHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// How many rarity searches this thread has run.
+pub fn searches_run() -> u32 {
+    SEARCHES.with(|n| n.get())
+}
+
 impl Default for Picker {
     fn default() -> Self {
-        Picker { open: false, slot: 0, base: 0, seed: 1, rarity: None }
+        Picker { open: false, slot: 0, base: 0, seed: 1, rarity: None, search: RARITY_SEARCH, found: None }
     }
 }
 
@@ -431,13 +449,33 @@ impl Picker {
         self.seed = (self.seed as i64 + by).clamp(0, u32::MAX as i64) as u32;
     }
 
-    /// The seed the choice rolls from: the seed itself, or with a rarity chosen the first seed
-    /// from it on (within [`RARITY_SEARCH`]) that rolls that rarity.
-    pub fn resolved_seed(&self) -> Option<u32> {
+    fn key(&self) -> PickerKey {
+        (self.slot, self.base, self.seed, self.rarity, self.search)
+    }
+
+    fn search(&self) -> Option<u32> {
         let base = self.base_name()?;
+        SEARCHES.with(|n| n.set(n.get() + 1));
         match self.rarity {
             None => Some(self.seed),
-            Some(rarity) => (0..RARITY_SEARCH).map(|i| self.seed.wrapping_add(i)).find(|&s| roll_item(&base, s).is_some_and(|item| item.rarity == rarity)),
+            Some(rarity) => (0..self.search).map(|i| self.seed.wrapping_add(i)).find(|&s| roll_item(&base, s).is_some_and(|item| item.rarity == rarity)),
+        }
+    }
+
+    /// Searches for the choice's seed if it has not been searched for yet, and keeps what it found.
+    pub fn refresh(&mut self) {
+        if self.found.as_ref().is_none_or(|(key, _)| *key != self.key()) {
+            self.found = Some((self.key(), self.search()));
+        }
+    }
+
+    /// The seed the choice rolls from: the seed itself, or with a rarity chosen the first seed
+    /// from it on (within `search`) that rolls that rarity. Read from what [`Picker::refresh`]
+    /// kept; searched for here only if the choice has changed since.
+    pub fn resolved_seed(&self) -> Option<u32> {
+        match &self.found {
+            Some((key, found)) if *key == self.key() => *found,
+            _ => self.search(),
         }
     }
 
@@ -938,7 +976,7 @@ fn rebuild_equip(mut commands: Commands, mut builds: ResMut<EquipBuilds>, picker
                     }
                     gear_card(card, fonts, &lab_sheet::preview_card(picker.slot(), &item), CardMode::Preview);
                 }
-                _ => words(card, &fonts.body, 14.0, BAD, format!("No {} rolls from seed {} within {RARITY_SEARCH} seeds.", picker.rarity.map_or("item", rarity_word), picker.seed)),
+                _ => words(card, &fonts.body, 14.0, BAD, format!("No {} rolls from seed {} within {} seeds.", picker.rarity.map_or("item", rarity_word), picker.seed, picker.search)),
             }
             card.spawn(Node::default()).with_children(|row| {
                 button(row, fonts, "Put on", Control::PutOn);
@@ -1363,8 +1401,17 @@ fn picker_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, picker: &Pick
                     button(row, fonts, "\u{203a}", up);
                 });
             }
-            if let Some(item) = picker.preview() {
-                words(card, &fonts.body_medium, 17.0, rarity_color(item.rarity), item.title().to_string());
+            card.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), flex_wrap: FlexWrap::Wrap, row_gap: px(6), ..default() }).with_children(|row| {
+                row.spawn(Node { width: px(48), ..default() }).with_child((Text::new("Rarity"), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                choice(row, fonts, "Any", Control::PickRarity(None), picker.rarity.is_none());
+                for (label, rarity) in [("Normal", Rarity::Common), ("Magic", Rarity::Magic), ("Rare", Rarity::Rare), ("Legendary", Rarity::Legendary)] {
+                    choice(row, fonts, label, Control::PickRarity(Some(rarity)), picker.rarity == Some(rarity));
+                }
+            });
+            match picker.preview() {
+                Some(item) => words(card, &fonts.body_medium, 17.0, rarity_color(item.rarity), item.title().to_string()),
+                None if picker.rarity.is_some() => words(card, &fonts.body, 14.0, BAD, format!("No {} within {} seeds.", picker.rarity.map_or("item", rarity_word), picker.search)),
+                None => {}
             }
             card.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
                 button(row, fonts, "Put on", Control::PutOn);
@@ -1505,6 +1552,7 @@ fn apply_pressed(
         }
         let (mut next_state, mut next_picker, mut next_tab, mut next_saved) = (state.clone(), picker.clone(), *tab, saved.saved.clone());
         control.apply(&mut next_state, &mut next_picker, &mut next_tab, &mut next_saved);
+        next_picker.refresh();
         saved.set_if_neq(LabRules { saved: next_saved });
         state.set_if_neq(next_state);
         picker.set_if_neq(next_picker);
@@ -2115,5 +2163,32 @@ mod tests {
         assert_eq!(picker.rarity, Some(Rarity::Rare));
         press(Control::PickSlotAt(0), &mut state, &mut picker, &mut tab, &mut saved);
         assert_eq!((picker.slot(), picker.base), (Slot::Head, 0), "a new slot starts at its first base");
+    }
+
+    #[test]
+    fn the_rarity_search_runs_once_per_change_of_the_choice() {
+        let mut picker = Picker { slot: SLOTS.iter().position(|&s| s == Slot::Belt).unwrap(), rarity: Some(Rarity::Rare), seed: 7, ..Picker::default() };
+        picker.refresh();
+        let after = searches_run();
+        for _ in 0..5 {
+            assert!(picker.resolved_seed().is_some());
+            assert!(picker.preview().is_some());
+            picker.refresh();
+        }
+        assert_eq!(searches_run(), after, "reading and refreshing an unchanged choice searches no more");
+        picker.step_seed(1);
+        picker.refresh();
+        assert_eq!(searches_run(), after + 1, "a new seed is one search");
+        // Through a control, as a click does.
+        let (mut state, mut tab, mut saved) = (LabState::default(), LabTab::default(), RuleSet::default());
+        press(Control::PickRarity(Some(Rarity::Magic)), &mut state, &mut picker, &mut tab, &mut saved);
+        picker.refresh();
+        assert_eq!(searches_run(), after + 2);
+    }
+
+    #[test]
+    fn the_exhaustion_steps_are_the_death_level() {
+        assert_eq!(lab_sheet::EXHAUSTION_STEPS, fb_character::Exhaustion::DEATH);
+        assert_eq!(crate::lab_timeline::DEATH, fb_character::Exhaustion::DEATH);
     }
 }

@@ -155,7 +155,7 @@ pub fn day_text(hours: f64) -> String {
 /// The band at which a need starts to hurt: Hungry, Parched, Weary.
 pub const HURTS_AT: usize = 2;
 /// The exhaustion level that is death.
-pub const DEATH: u32 = 6;
+pub const DEATH: u32 = fb_character::Exhaustion::DEATH;
 
 /// The answers of a run: when each need first reached the band where it starts to hurt, when
 /// exhaustion first reached level 1, and when it reached death.

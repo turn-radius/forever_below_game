@@ -492,9 +492,12 @@ pub struct Exhaustion {
 }
 
 impl Exhaustion {
+    /// The level that is death.
+    pub const DEATH: u32 = 6;
+
     /// Creates a new exhaustion level.
     pub fn new(level: u32) -> Self {
-        Exhaustion { level: level.min(6) }
+        Exhaustion { level: level.min(Self::DEATH) }
     }
 
     /// Speed multiplier for this exhaustion level (SRD p. 358).
@@ -516,7 +519,7 @@ impl Exhaustion {
 
     /// Returns true if this is death (level 6).
     pub fn is_dead(self) -> bool {
-        self.level >= 6
+        self.level >= Self::DEATH
     }
 
     /// Increases the exhaustion level by 1 (clamped at 6).

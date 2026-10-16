@@ -22,7 +22,7 @@ use crate::ui::{ACCENT, BAD, OK};
 /// The five attributes, in the order shown.
 pub const ATTRIBUTE_NAMES: [&str; 5] = ["STR", "DEX", "CON", "INT", "WIS"];
 /// The levels of exhaustion above none, the last being death.
-pub const EXHAUSTION_STEPS: u32 = 6;
+pub const EXHAUSTION_STEPS: u32 = fb_character::Exhaustion::DEATH;
 
 /// One attribute tile.
 #[derive(Clone, Debug, PartialEq)]
