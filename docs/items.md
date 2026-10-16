@@ -92,7 +92,20 @@ Torches and lanterns are Armory families (`armory::families::torch`, `armory::fa
 
 ## Rarity and affixes
 
-- Roll `x`: `x < .58` common, `< .85` magic, `< .97` rare, otherwise legendary. Containers cap at rare.
+- Roll `x` against the find's **odds** (`fb_items::Odds`: a depth and a cap). On the first level these are the plate's: `x < .58` common, `< .85` magic, `< .97` rare, otherwise legendary. Containers cap at rare.
+- **Deeper finds roll better.** Each threshold moves from the plate's (`.58 / .85 / .97`) toward a deep limit (`.07 / .40 / .88`: 7% common, 33% magic, 48% rare, 12% legendary) by `t = 1 - (2/3)^((depth - 1) / 4)`, so a third of the way four levels down and never quite all the way. That doubles rare and legendary by depth 5:
+
+  | depth | common | magic | rare | legendary |
+  |---|---|---|---|---|
+  | 1 | 58% | 27% | 12% | 3% |
+  | 2 | 53% | 28% | 15.5% | 4% |
+  | 3 | 49% | 28% | 19% | 5% |
+  | 5 | 41% | 29% | 24% | 6% |
+  | 10 | 27.5% | 31% | 33.5% | 8% |
+  | 20 | 14% | 32% | 43% | 11% |
+
+  The curve and the deep limit are our own proposal, not from the plate or any source: a saturating curve so that deep levels keep improving without ever making common gear vanish. The depth is an effective one: a find that should roll better than its level, such as a locked room's (not built yet), passes a deeper one, `depth + 2`.
+- An item keeps the odds it was rolled against (`Item::odds`), so its base, seed and odds always roll it again the same. `roll_item(base, seed)` is the first level's odds; `roll_item_with(base, seed, odds)` takes any.
 - Common: 30% chance of one **flaw** prefix. Magic: one good prefix or suffix (50/50). Rare: a good prefix and a good suffix. Legendary: a good prefix and two good suffixes.
 - An affix applies only where its `on` tag matches the item's tags (`cloth`, `leather`, `metal`, `wood`, `wear`, `armor`, `quiet`, `weapon`, `light`, `trinket`, `container`, or `any`). Tables: `data/afx.json`. Each `fx` is a list of typed effects (see "Affix effects" below).
 - When affixes are chosen by hand (from the armory), rarity follows from them: two good affixes make it rare, one makes it magic, none makes it common.

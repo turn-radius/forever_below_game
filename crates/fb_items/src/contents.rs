@@ -24,7 +24,7 @@ pub fn container_item(state: ChestState) -> Item {
     let seed = shape.seed();
     let profile = profile(CONTAINER_BASE, &shape);
     let name = shape.noun();
-    Item { base: CONTAINER_BASE.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name, legend: None, profile, coins: None }
+    Item { base: CONTAINER_BASE.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name, legend: None, profile, coins: None, odds: crate::Odds::default() }
 }
 
 /// What each kind of container holds, by weight, and how many things, inclusive.
