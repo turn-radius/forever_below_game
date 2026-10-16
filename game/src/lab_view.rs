@@ -762,7 +762,7 @@ fn time_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, chart: &Chart
                 for (name, colour) in [("hunger", crate::lab_chart::HUNGER), ("thirst", crate::lab_chart::THIRST), ("sleepiness", crate::lab_chart::SLEEP), ("exhaustion, 0 to 6 over the same height", crate::lab_chart::EXHAUSTION)] {
                     words(legend, &fonts.body, 12.0, ink(colour), name);
                 }
-                words(legend, &fonts.body, 12.0, MUTED, "faint dashed: saved rules \u{b7} ticks at the bottom: eaten or drunk");
+                words(legend, &fonts.body, 12.0, MUTED, "faint dashed: saved rules \u{b7} ticks at the bottom: eaten or drunk \u{b7} red line: death");
             });
             figure.spawn(Node { column_gap: px(6), ..default() }).with_children(|plot| {
                 plot.spawn(Node { flex_direction: FlexDirection::Column, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::End, ..default() }).with_children(|axis| {
@@ -771,6 +771,12 @@ fn time_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, chart: &Chart
                 });
                 if let Some(image) = image {
                     plot.spawn((ImageNode::new(image.clone()), Node { flex_grow: 1.0, min_width: px(0), aspect_ratio: Some(1200.0 / 420.0), ..default() }));
+                    // Over the image: its box at the left of the band words and right of the axis words.
+                    plot.spawn(Node { position_type: PositionType::Absolute, left: px(34), right: px(84), top: px(0), bottom: px(0), ..default() }).with_children(|over| {
+                        for (at, label) in &chart.marks {
+                            over.spawn((Text::new(label.clone()), UiFonts::style(&fonts.body_medium, 13.0, BAD), Node { position_type: PositionType::Absolute, left: percent(at * 100.0 + 0.6), top: px(18), ..default() }));
+                        }
+                    });
                 }
                 plot.spawn(Node { flex_direction: FlexDirection::Column, width: px(78), ..default() }).with_children(|band_words| {
                     for band in (0..=3).rev() {
@@ -796,11 +802,11 @@ fn refresh_time_view(mut commands: Commands, run: Res<TimeRun>, image: Res<TimeI
         (Some(now), Some(was), Some(chart)) if !run.steps.is_empty() => {
             let (here, before) = (crate::lab_timeline::answers(now, &state.ruleset.rules), crate::lab_timeline::answers(was, &saved.saved.rules));
             c.spawn(Node { column_gap: px(12), ..default() }).with_children(|row| {
-                for (a, b) in here.iter().zip(&before) {
-                    row.spawn((Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
+                for (a, b) in here.iter().zip(&before).filter(|(a, b)| !(a.danger && a.value == b.value && a.value == "not reached")) {
+                    row.spawn((Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(if a.danger && a.value != "not reached" { BAD } else { FAINT })))
                         .with_children(|tile| {
                             words(tile, &fonts.body, 13.0, MUTED, a.label.clone());
-                            words(tile, &fonts.mono_bold, if a.value == "not reached" { 18.0 } else { 30.0 }, BRIGHT, a.value.clone());
+                            words(tile, &fonts.mono_bold, if a.value == "not reached" || a.value.len() > 8 { 18.0 } else { 30.0 }, if a.danger && a.value != "not reached" { BAD } else { BRIGHT }, a.value.clone());
                             match crate::lab_rules::was_text(&a.value, &b.value) {
                                 Some(was) => words(tile, &fonts.body, 13.0, FRAME_GOLD, was),
                                 None => words(tile, &fonts.body, 13.0, MUTED, " "),
@@ -1094,7 +1100,7 @@ fn build_sheet(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, view: &SheetVi
                     ladder.spawn((Node { flex_grow: 1.0, flex_basis: px(0), height: px(8), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(2)), ..default() }, BackgroundColor(fill), BorderColor::all(edge)));
                 }
             });
-            row.spawn(Node { width: px(70), flex_shrink: 0.0, justify_content: JustifyContent::End, ..default() }).with_child((Text::new(view.exhaustion.1.clone()), UiFonts::style(&fonts.body, 16.0, MUTED)));
+            row.spawn(Node { width: px(70), flex_shrink: 0.0, justify_content: JustifyContent::End, ..default() }).with_child((Text::new(view.exhaustion.1.clone()), UiFonts::style(&fonts.body, 16.0, if view.exhaustion.0 >= lab_sheet::EXHAUSTION_STEPS { BAD } else { MUTED })));
         });
     });
     // Armour, damage and load.
@@ -1220,7 +1226,7 @@ fn rebuild_sheet(
 
 /// With `FB_LAB_DEMO=1`, does what a few clicks would, for a capture: three edits to the rules
 /// (Capacity per STR to 20, the giant rat's attack bonus to +2, hours walking to Starving to 20),
-/// a 7 day walk, 1,000 fights and One fight, and holds Armour's tooltip up ([`setup`]).
+/// a 14 day walk (which ends in death), 1,000 fights and One fight, and holds Armour's tooltip up ([`setup`]).
 /// `FB_LAB_TAB=1` opens that tab.
 fn demo(mut state: ResMut<LabState>, mut run: ResMut<TimeRun>, mut fight: ResMut<FightLab>, mut tab: ResMut<LabTab>) {
     if std::env::var("FB_LAB_DEMO").is_ok_and(|v| v == "1") {
@@ -1230,6 +1236,7 @@ fn demo(mut state: ResMut<LabState>, mut run: ResMut<TimeRun>, mut fight: ResMut
         for _ in 0..4 {
             crate::lab_rules::step(&mut state.ruleset, "needs/hunger_hours_to_full", 1);
         }
+        run.push(TimeAction::Pass(168.0), state.activity);
         run.push(TimeAction::Pass(168.0), state.activity);
         fight.want_many = true;
         fight.want_one = true;

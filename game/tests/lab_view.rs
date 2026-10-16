@@ -220,7 +220,7 @@ fn passing_time_shows_answers_and_the_chart_with_what_each_was() {
     assert!(texts(&mut app).iter().any(|t| t.starts_with("Press a span")));
     press(&mut app, Control::Time(TimeAction::Pass(24.0)));
     let shown = texts(&mut app);
-    for want in ["Hungry after", "8 h", "Thirsty after", "2.5 h", "Tired after", "Exhaustion 1 on", "not reached", "Needs and exhaustion over time"] {
+    for want in ["Hungry after", "8 h", "Parched after", "5 h", "Weary after", "Exhaustion 1 on", "not reached", "Needs and exhaustion over time"] {
         assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
     }
     assert!(!shown.iter().any(|t| t.starts_with("was ")), "{shown:?}");

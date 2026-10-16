@@ -247,7 +247,7 @@ pub fn view(state: &LabState, time: &TimeLab, rules: &Rules) -> SheetView {
         stamina: bar("Stamina", 1.0, format!("{} s", number(rules.stamina.sprint_seconds)), crate::lab_view::STAMINA),
         mana: bar("Mana", 1.0, format!("{} / {}", number(mana), number(mana)), crate::lab_view::MANA),
         needs: [("Hunger", &time.needs.hunger), ("Thirst", &time.needs.thirst), ("Sleepiness", &time.needs.sleepiness)].into_iter().map(|(label, meter)| need(label, meter, rules)).collect(),
-        exhaustion: (time.exhaustion.level, format!("{} of {EXHAUSTION_STEPS}", time.exhaustion.level)),
+        exhaustion: (time.exhaustion.level, if time.exhaustion.is_dead() { "Dead".to_string() } else { format!("{} of {EXHAUSTION_STEPS}", time.exhaustion.level) }),
         tiles,
         cards: state.slots.iter().filter_map(|s| Some(card(s.slot, &s.roll()?, &s.off))).collect(),
     }
@@ -442,5 +442,14 @@ mod tests {
         assert_eq!((armour.value.as_str(), armour.was.as_deref()), ("18", Some("was 15")));
         assert_eq!((view.stamina.text.as_str(), view.stamina.was.as_deref()), ("25 s", Some("was 30 s")));
         assert!(tile(&view, "Damage").was.is_none());
+    }
+
+    #[test]
+    fn exhaustion_at_the_death_level_reads_dead() {
+        let mut time = TimeLab::default();
+        time.exhaustion = fb_character::Exhaustion::new(5);
+        assert_eq!(view(&LabState::default(), &time, defaults()).exhaustion, (5, "5 of 6".to_string()));
+        time.exhaustion = fb_character::Exhaustion::new(6);
+        assert_eq!(view(&LabState::default(), &time, defaults()).exhaustion, (6, "Dead".to_string()));
     }
 }

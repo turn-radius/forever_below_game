@@ -135,6 +135,8 @@ pub struct Answer {
     pub label: String,
     /// `8 h`, or `not reached`.
     pub value: String,
+    /// Whether it is a danger, drawn in red.
+    pub danger: bool,
 }
 
 /// Game hours as the tiles write them: `8 h`, `2.5 h`, `4 days` from 3 days on.
@@ -142,20 +144,39 @@ pub fn hours_text(hours: f64) -> String {
     if hours >= 72.0 { format!("{} days", number(hours / 24.0)) } else { format!("{} h", number(hours)) }
 }
 
-/// The answers of a run: when each need first reached its first named band (Thirsty, Tired) or
-/// its third (Hungry), and when exhaustion first reached level 1.
+/// To the minute, which the run steps in.
+fn to_the_minute(hours: f64) -> f64 {
+    (hours * 60.0).round() / 60.0
+}
+
+/// An hour of the run as a person counts days, the first being day 1: `day 5 (112 h)`.
+pub fn day_text(hours: f64) -> String {
+    let hours = to_the_minute(hours);
+    format!("day {} ({} h)", (hours / 24.0).floor() + 1.0, number(hours))
+}
+
+/// The band at which a need starts to hurt: Hungry, Parched, Weary.
+pub const HURTS_AT: usize = 2;
+/// The exhaustion level that is death.
+pub const DEATH: u32 = 6;
+
+/// The answers of a run: when each need first reached the band where it starts to hurt, when
+/// exhaustion first reached level 1, and when it reached death.
 pub fn answers(run: &Timeline, rules: &Rules) -> Vec<Answer> {
-    let after = |kind: MeterKind, band: usize| {
-        let when = run.first(|c| c.band == Some((kind, band)));
-        Answer { label: format!("{} after", rules.needs.word(kind, band)), value: when.map_or_else(|| "not reached".to_string(), hours_text) }
+    let after = |kind: MeterKind| {
+        let when = run.first(|c| c.band == Some((kind, HURTS_AT)));
+        Answer { label: format!("{} after", rules.needs.word(kind, HURTS_AT)), value: when.map_or_else(|| "not reached".to_string(), |h| hours_text(to_the_minute(h))), danger: false }
     };
-    let exhaustion = run.first(|c| c.level == Some(1));
-    vec![
-        after(MeterKind::Hunger, 2),
-        after(MeterKind::Thirst, 1),
-        after(MeterKind::Sleepiness, 1),
-        Answer { label: "Exhaustion 1 on".to_string(), value: exhaustion.map_or_else(|| "not reached".to_string(), |h| format!("day {}", (h / 24.0).floor())) },
-    ]
+    let level = |level: u32, label: &str, danger: bool| {
+        let when = run.first(|c| c.level == Some(level));
+        Answer { label: label.to_string(), value: when.map_or_else(|| "not reached".to_string(), day_text), danger }
+    };
+    vec![after(MeterKind::Hunger), after(MeterKind::Thirst), after(MeterKind::Sleepiness), level(1, "Exhaustion 1 on", false), level(DEATH, "Dies on", true)]
+}
+
+/// When the run reached death, if it did.
+pub fn death(run: &Timeline) -> Option<f64> {
+    run.first(|c| c.level == Some(DEATH))
 }
 
 #[cfg(test)]
@@ -181,8 +202,8 @@ mod tests {
         let run = run(&state, &[Step::Pass(24.0, Activity::Walking)]);
         let answers = answers(&run, &state.ruleset.rules);
         assert_eq!(value(&answers, "Hungry after"), "8 h");
-        assert_eq!(value(&answers, "Thirsty after"), "2.5 h");
-        assert_eq!(value(&answers, "Tired after"), "8 h");
+        assert_eq!(value(&answers, "Parched after"), "5 h");
+        assert_eq!(value(&answers, "Weary after"), "16 h");
         assert_eq!(value(&answers, "Exhaustion 1 on"), "not reached");
     }
 
@@ -214,7 +235,7 @@ mod tests {
         let starving_at = run.crossings.iter().find(|c| c.band == Some((MeterKind::Hunger, 4))).unwrap().hours;
         assert!((starving_at - 16.0).abs() < 1e-6, "hunger is full after 16 hours walking: {starving_at}");
         assert!((when - starving_at - 24.0 * 4.0).abs() < 0.1, "3 + 1 days starving: {}", when - starving_at);
-        assert!(value(&answers, "Exhaustion 1 on").starts_with("day "));
+        assert!(value(&answers, "Exhaustion 1 on").starts_with("day 5 ("), "{answers:?}");
     }
 
     #[test]
@@ -266,5 +287,20 @@ mod tests {
     #[test]
     fn hours_read_as_hours_then_days() {
         assert_eq!((hours_text(8.0).as_str(), hours_text(2.5).as_str(), hours_text(96.0).as_str()), ("8 h", "2.5 h", "4 days"));
+    }
+
+    #[test]
+    fn days_count_from_one_and_death_is_an_answer() {
+        assert_eq!(day_text(112.0), "day 5 (112 h)");
+        assert_eq!(day_text(95.9999), "day 5 (96 h)");
+        assert_eq!(day_text(0.0), "day 1 (0 h)");
+        let state = bare();
+        let run = run(&state, &[Step::Pass(LONGEST, Activity::Walking)]);
+        let answers = answers(&run, &state.ruleset.rules);
+        assert!(value(&answers, "Dies on").starts_with("day "), "{answers:?}");
+        assert!(answers.last().unwrap().danger);
+        assert!(death(&run).is_some());
+        let short = crate::lab_timeline::run(&state, &[Step::Pass(24.0, Activity::Walking)]);
+        assert_eq!((value(&crate::lab_timeline::answers(&short, &state.ruleset.rules), "Dies on"), death(&short)), ("not reached", None));
     }
 }

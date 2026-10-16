@@ -25,6 +25,7 @@ pub const THIRST: Rgba = [0x6f, 0x9b, 0xe0, 255];
 pub const SLEEP: Rgba = [0x86, 0xba, 0x80, 255];
 pub const EXHAUSTION: Rgba = [0xe6, 0xdc, 0xc6, 255];
 const DRAW: Rgba = [0xc4, 0x8a, 0x52, 255];
+const DEATH: Rgba = [0xea, 0x73, 0x5b, 255];
 
 /// A canvas of pixels, drawn on with alpha.
 #[derive(Clone, Debug, PartialEq)]
@@ -119,6 +120,8 @@ pub struct Chart {
     pub x_labels: (String, String),
     /// For the histogram, the share of the width the "draw" column takes at the right.
     pub draw: Option<f32>,
+    /// Words to set over the chart at a share of its width: where the run dies.
+    pub marks: Vec<(f32, String)>,
 }
 
 /// Their life over the rounds: the middle half of fights shaded, the median over it, and the
@@ -148,7 +151,7 @@ pub fn life_chart(now: &FightSummary, was: Option<&FightSummary>) -> Chart {
         polyline(&mut canvas, was, 3.0, FAINT, Some((12.0, 9.0)));
     }
     polyline(&mut canvas, now, 5.0, GOLD, None);
-    Chart { canvas, y_labels: (format!("{}", now.full_life), "0".to_string()), x_labels: ("start".to_string(), format!("round {rounds}")), draw: None }
+    Chart { canvas, y_labels: (format!("{}", now.full_life), "0".to_string()), x_labels: ("start".to_string(), format!("round {rounds}")), draw: None, marks: Vec::new() }
 }
 
 /// How many fights took each number of rounds, the saved rules' bars faint behind, and a column
@@ -179,6 +182,7 @@ pub fn histogram_chart(now: &FightSummary, was: Option<&FightSummary>) -> Chart 
         y_labels: (format!("{tallest}"), "0".to_string()),
         x_labels: ("1 round".to_string(), if shown == CHART_ROUNDS { format!("{shown}+") } else { format!("{shown}") }),
         draw: draws.then(|| 1.0 / columns as f32),
+        marks: Vec::new(),
     }
 }
 
@@ -221,11 +225,16 @@ pub fn time_chart(now: &Timeline, was: Option<&Timeline>, edges: &[f64]) -> Char
         canvas.line((x(*hours), y(0.0)), (x(*hours), y(0.06)), 4.0, colour, None);
     }
     draw(&mut canvas, now, 4.0, false);
-    Chart { canvas, y_labels: ("full".to_string(), "0".to_string()), x_labels: ("start".to_string(), hours_label(end as f64)), draw: None }
+    let mut marks = Vec::new();
+    if let Some(dies) = crate::lab_timeline::death(now) {
+        canvas.line((x(dies), y(0.0)), (x(dies), y(1.0)), 3.0, DEATH, None);
+        marks.push((x(dies) / w as f32, "dies".to_string()));
+    }
+    Chart { canvas, y_labels: ("full".to_string(), "0".to_string()), x_labels: ("start".to_string(), hours_label(end as f64)), draw: None, marks }
 }
 
 fn hours_label(hours: f64) -> String {
-    if hours >= 72.0 { format!("day {}", (hours / 24.0).round()) } else { format!("{} h", hours.round()) }
+    if hours >= 72.0 { format!("{} days", (hours / 24.0).round()) } else { format!("{} h", hours.round()) }
 }
 
 #[cfg(test)]

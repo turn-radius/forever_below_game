@@ -7,8 +7,8 @@
 //! each, so it lands there when it should), so a step of any length is the same minutes in a row and one
 //! 8 hour step gives exactly the meters eight 1 hour steps do. Inside each minute a band is
 //! crossed where the meter's rate puts it, in closed form, and a level of exhaustion is logged
-//! at the end of the minute it was earned in. Days are counted from 0, so a log line at "Day 4
-//! 00:00" is after four days.
+//! at the end of the minute it was earned in. Days are counted as a person
+//! counts them, from 1, so a log line at "Day 5 00:00" is after four days.
 
 use std::collections::VecDeque;
 
@@ -43,10 +43,10 @@ pub fn activity_word(activity: Activity) -> &'static str {
     }
 }
 
-/// A game time as `Day 4 08:30`: days elapsed, then the hour and minute.
+/// A game time as `Day 5 08:30`: the day, counting the first as day 1, then the hour and minute.
 pub fn clock_text(hours: f64) -> String {
     let seconds = (hours * 3600.0).round() as u64;
-    format!("Day {} {:02}:{:02}", seconds / 86_400, seconds / 3600 % 24, seconds / 60 % 60)
+    format!("Day {} {:02}:{:02}", seconds / 86_400 + 1, seconds / 3600 % 24, seconds / 60 % 60)
 }
 
 /// One line of the log: when a band or a level was crossed.
@@ -242,7 +242,7 @@ mod tests {
         needs.step(0.002, Activity::Walking);
         assert_eq!(needs.hunger.word(), "Hungry");
         assert!((crossed(&lab, "Hunger → Hungry").unwrap() - 8.0).abs() < 1e-6, "{:?}", lab.log);
-        assert_eq!(lab.log.iter().find(|c| c.what == "Hunger → Hungry").unwrap().line(), "Day 0 08:00 Hunger → Hungry");
+        assert_eq!(lab.log.iter().find(|c| c.what == "Hunger → Hungry").unwrap().line(), "Day 1 08:00 Hunger → Hungry");
     }
 
     #[test]
@@ -281,7 +281,7 @@ mod tests {
         lab.pass(&state, 1.0);
         assert_eq!(lab.exhaustion.level, 1);
         assert_eq!(crossed(&lab, "Exhaustion 1"), Some(96.0));
-        assert_eq!(lab.log.back().unwrap().line(), "Day 4 00:00 Exhaustion 1");
+        assert_eq!(lab.log.back().unwrap().line(), "Day 5 00:00 Exhaustion 1");
         assert_eq!(exhaustion_effect(fb_character::rules::defaults(), lab.exhaustion), "full speed");
     }
 
@@ -368,13 +368,13 @@ mod tests {
         assert_eq!(lab.exhaustion.level, 1, "not before 8 hours");
         lab.pass(&state, 1.0);
         assert_eq!(lab.exhaustion.level, 0);
-        assert_eq!(lab.log.back().unwrap().line(), "Day 0 08:00 Exhaustion 0");
+        assert_eq!(lab.log.back().unwrap().line(), "Day 1 08:00 Exhaustion 0");
     }
 
     #[test]
     fn the_clock_reads_days_and_hours() {
-        assert_eq!(clock_text(0.0), "Day 0 00:00");
-        assert_eq!(clock_text(24.0 * 4.0 + 8.5), "Day 4 08:30");
+        assert_eq!(clock_text(0.0), "Day 1 00:00");
+        assert_eq!(clock_text(24.0 * 4.0 + 8.5), "Day 5 08:30");
         assert_eq!(exhaustion_effect(fb_character::rules::defaults(), Exhaustion::new(2)), "speed ×0.5");
         assert_eq!(exhaustion_effect(fb_character::rules::defaults(), Exhaustion::new(5)), "cannot move");
         assert_eq!(exhaustion_effect(fb_character::rules::defaults(), Exhaustion::new(6)), "dead");
