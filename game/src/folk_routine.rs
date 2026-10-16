@@ -439,7 +439,7 @@ mod tests {
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_plugins((BehaviourPlugin, FolkRoutinePlugin))
             .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate));
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         app.insert_resource(CurrentLevel(level.clone()));
         app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y)));
         for p in &level.props {
@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn folk_never_pass_through_walls_props_creatures_each_other_or_the_player() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let props: Vec<Obstacle> = level
             .props
             .iter()
@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn shorter_folk_walk_slower() {
-        let tall = fb_level::generate(1207).folk.into_iter().map(|s| crate::folk::Person::of(&s)).collect::<Vec<_>>();
+        let tall = fb_level::generate(1207, 1).folk.into_iter().map(|s| crate::folk::Person::of(&s)).collect::<Vec<_>>();
         let mk = |p: &crate::folk::Person| Denizen { person: p.clone(), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO };
         for a in &tall {
             for b in &tall {
@@ -645,7 +645,7 @@ mod tests {
     /// Runs until some person is walking and returns them with a spot `distance` from them, in
     /// the open and in sight, to put the player at.
     fn walker_with_player_near(app: &mut App, folk: &[Entity], distance: f32) -> (Entity, Vec2) {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let blocked = |x: i32, y: i32| !level.is_open(x, y);
         for _ in 0..60 * 30 {
             app.update();
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn folk_never_overlap_a_player_walking_straight_at_them() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
         let (f, p) = walker_with_player_near(&mut app, &folk, 30.0);
         let mut player = p;
