@@ -361,7 +361,7 @@ const FLAME_BELLY: f32 = 0.26;
 /// How far a torch's flame leans forward (along item +Z) at its steepest, in radians: 55
 /// degrees, above the head, curling back up to vertical at the tip as a carried flame does.
 /// Our own.
-pub const FLAME_TILT: f32 = 55.0 * std::f32::consts::PI / 180.0;
+pub const FLAME_TILT: f32 = 5.0 * std::f32::consts::PI / 180.0;
 
 /// Where a torch's flame belly sits on the burning head, as a fraction of the way from the
 /// head's base to its top: high, so the flame crowns the head rather than hanging off its side.
