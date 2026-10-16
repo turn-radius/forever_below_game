@@ -79,7 +79,7 @@ fn backdrop() -> BackgroundGradient {
 }
 
 /// Builds the header and the tab bar.
-pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Character, inventory: &Inventory, portrait: Handle<Image>, showing: SheetTab) {
+pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &fb_character::rules::Rules, character: &Character, inventory: &Inventory, portrait: Handle<Image>, showing: SheetTab) {
     parent.spawn(Node { column_gap: px(16), align_items: AlignItems::Center, ..default() }).with_children(|ident| {
         ident
             .spawn((
@@ -100,7 +100,7 @@ pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Ch
             text.spawn((Text::new(character.name.clone()), UiFonts::style(&fonts.display, 34.0, INK)));
             text.spawn((Text::new(identity_line(character)), UiFonts::style(&fonts.body, 14.0, MUTED)));
             text.spawn((HeaderStats, Node { margin: UiRect::top(px(2)), ..default() })).with_children(|line| {
-                numbers_line(line, fonts, &stats_line(&character.derive(inventory)), 13.0);
+                numbers_line(line, fonts, &stats_line(&character.derive_with(rules, inventory)), 13.0);
             });
         });
     });

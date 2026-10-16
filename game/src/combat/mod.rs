@@ -99,21 +99,11 @@ impl Health {
 /// the Constitution modifier (SRD 5.1 "Hit Points at 1st Level": fighter 10 + Con, p. 24;
 /// ranger 10 + Con, p. 35; cleric 8 + Con, p. 15; wizard, our mage, 6 + Con, p. 52), and never
 /// below 1 (our own floor for a very frail delver).
-pub fn first_level_hit_points(character: &Character) -> i32 {
-    first_level_hit_points_explained(character).value() as i32
-}
-
-/// [`first_level_hit_points`] under `rules`, which name each class's hit die.
 pub fn first_level_hit_points_with(rules: &Rules, character: &Character) -> i32 {
     first_level_hit_points_explained_with(rules, character).value() as i32
 }
 
-/// [`first_level_hit_points`] with its terms: the hit die and the Constitution modifier.
-pub fn first_level_hit_points_explained(character: &Character) -> fb_character::explain::Explained {
-    first_level_hit_points_explained_with(fb_character::rules::defaults(), character)
-}
-
-/// [`first_level_hit_points_explained`] under `rules`.
+/// [`first_level_hit_points_with`] with its terms: the hit die and the Constitution modifier.
 pub fn first_level_hit_points_explained_with(rules: &Rules, character: &Character) -> fb_character::explain::Explained {
     let dice = &rules.combat.hit_dice;
     let die = match character.class {
@@ -278,20 +268,9 @@ pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, cone: f32, targets
         .map(|(_, e)| e)
 }
 
-/// A poisonous snake's venom after the delver's save: a Constitution saving throw (d20 +
-/// Constitution modifier) against DC 10 halves it, rounded down (SRD 5.1 p. 386, "Poisonous
-/// Snake"; rounding down is our own). A placeholder until the character simulation has
-/// poison of its own.
-pub fn venom_after_save(poison: u32, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    rules::venom_after_save(poison, modifier(constitution), rng).damage.value() as u32
-}
-
-/// The damage a bite does the delver: its own, and its venom after the save.
-pub fn bite_damage(attack: &CreatureAttack, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    bite_damage_with(fb_character::rules::defaults(), attack, constitution, rng)
-}
-
-/// [`bite_damage`] under `rules`, which set the venom save's difficulty class.
+/// The damage a bite does the delver: its own, and its venom after a Constitution save
+/// against the rules' difficulty class (SRD 5.1 p. 386, "Poisonous Snake"; rounding the half
+/// down is our own).
 pub fn bite_damage_with(rules: &Rules, attack: &CreatureAttack, constitution: i32, rng: &mut Mulberry32) -> u32 {
     rules::bite_damage_with(rules, attack.damage, attack.poison, modifier(constitution), rng).damage.value() as u32
 }
@@ -315,10 +294,10 @@ mod tests {
 
     #[test]
     fn hit_points_follow_the_srd_at_first_level() {
-        assert_eq!(first_level_hit_points(&delver(Class::Fighter, 14)), 12);
-        assert_eq!(first_level_hit_points(&delver(Class::Ranger, 10)), 10);
-        assert_eq!(first_level_hit_points(&delver(Class::Cleric, 9)), 7);
-        assert_eq!(first_level_hit_points(&delver(Class::Mage, 3)), 2);
+        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Fighter, 14)), 12);
+        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Ranger, 10)), 10);
+        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Cleric, 9)), 7);
+        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Mage, 3)), 2);
     }
 
     #[test]
@@ -417,6 +396,11 @@ mod tests {
         // A big body off to the side is still caught by its near edge.
         let big = Target { entity: e(5), centre: Vec2::new(8.0, -4.0), radius: 7.0 };
         assert_eq!(target_in_reach(Vec2::ZERO, forward, 10.0, CONE, &[big]), Some(e(5)));
+    }
+
+    /// A poisonous snake's venom after the delver's save under the default rules.
+    fn venom_after_save(poison: u32, constitution: i32, rng: &mut Mulberry32) -> u32 {
+        rules::venom_after_save(poison, modifier(constitution), rng).damage.value() as u32
     }
 
     #[test]

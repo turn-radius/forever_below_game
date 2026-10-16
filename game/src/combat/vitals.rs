@@ -1,7 +1,7 @@
 //! The delver's hit points: bites take them, the view shows them, and at 0 the run ends.
 //!
 //! - The delver starts with a 1st-level character's hit points
-//!   ([`super::first_level_hit_points`]).
+//!   ([`super::first_level_hit_points_with`]).
 //! - Each [`CreatureAttack`] takes its bite, and a poisonous snake's venom after the delver's
 //!   Constitution save ([`super::bite_damage`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
 //! - A constrictor's bite also holds the delver ([`Constricted`]), who moves at a quarter of

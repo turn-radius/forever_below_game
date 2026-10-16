@@ -35,7 +35,7 @@ use fb_items::tables::{Affix, bases};
 use fb_items::{Item, Slot, roll_item};
 
 use crate::character::{Character, Class};
-use crate::combat::{Weapon, first_level_hit_points_explained};
+use crate::combat::{Weapon, first_level_hit_points_explained_with};
 use crate::inventory::Inventory;
 use crate::lab_strike::{Attacker, Strikes};
 use crate::lab_time::{ACTIVITIES, STEPS, TimeLab, activity_word, clock_text, exhaustion_effect, percent_text};
@@ -453,7 +453,7 @@ pub fn sheet(state: &LabState) -> Vec<Row> {
     let load = character.load_explained(&inventory);
     let band = LoadBand::from_load(load.value(), capacity.value());
     let mut rows = vec![
-        Row::of(first_level_hit_points_explained(character)),
+        Row::of(first_level_hit_points_explained_with(fb_character::rules::defaults(), character)),
         Row::of(character.armour_class(&inventory)),
         Row::of(range.min),
         Row::of(range.mean),

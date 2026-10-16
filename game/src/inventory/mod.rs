@@ -98,6 +98,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Keymap>()
             .init_resource::<ScreenOpen>()
             .init_resource::<SheetTab>()
+            .init_resource::<crate::rules::GameRules>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
             .init_resource::<Quickslots>()
@@ -653,6 +654,7 @@ pub(crate) fn build_screen(
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
     tuning: Res<Tuning>,
+    rules: Option<Res<crate::rules::GameRules>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
     mut icons: Icons,
 ) {
@@ -663,7 +665,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -706,13 +708,13 @@ pub(crate) fn build_screen(
                 ledger
                     .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(700), ..default() })
                     .with_children(|leaf| {
-                        header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone(), *tab);
+                        header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab == SheetTab::Character {
                             let (needs, exhaustion, vitals) = players.single().map_or_else(
                                 |_| Default::default(),
                                 |(needs, exhaustion, stamina, mana)| (needs.0, exhaustion.0, sheet::Vitals { stamina: stamina.map_or_else(Default::default, |s| s.0), mana: mana.map_or_else(Default::default, |m| m.0) }),
                             );
-                            sheet::sheet(leaf, &fonts, &character, &inventory, &needs, exhaustion, vitals);
+                            sheet::sheet(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, &needs, exhaustion, vitals);
                             return;
                         }
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })

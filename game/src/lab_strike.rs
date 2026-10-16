@@ -120,7 +120,7 @@ pub fn armour_class(state: &LabState) -> i32 {
 
 /// The lab character's hit points at full.
 pub fn full_hit_points(state: &LabState) -> i32 {
-    crate::combat::first_level_hit_points(&state.character)
+    crate::combat::first_level_hit_points_with(fb_character::rules::defaults(), &state.character)
 }
 
 /// What a hundred blows came to.
