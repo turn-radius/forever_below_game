@@ -655,9 +655,20 @@ pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, 
             let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
             equip(inventory, id, slot)
         }
+        _ => take_up(inventory, id),
+    }
+}
+
+/// Takes `id` into the carried grids if it is not carried: lying underfoot it is picked up
+/// ([`Inventory::pick_up`], lifted from the level), and in a container not carried (a chest
+/// standing in the level, a bag set down) it is stowed ([`Inventory::stow`]). Something
+/// carried or worn stays where it is. Refused (no room), it stays where it was.
+pub fn take_up(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
+    match inventory.location(id) {
         Some(Location::Loose) => inventory.pick_up(id).map(|()| vec![FloorChange::Lifted(id)]),
         Some(Location::In { .. }) if !inventory.is_carried(id) => inventory.stow(id).map(|_| vec![]),
-        _ => Ok(vec![]),
+        Some(_) => Ok(vec![]),
+        None => Err(Refusal::Unknown),
     }
 }
 

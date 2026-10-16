@@ -384,7 +384,7 @@ mod tests {
             let (mut app, player, snake) = delve();
             app.world_mut().resource_mut::<RunDice>().0 = procgen_rng::Mulberry32::new(seed_for(natural));
             app.update();
-            app.world_mut().write_message(CreatureAttack { attacker: snake, species: Species::PoisonousSnake, damage: 1, poison: 4, attacker_pos: Vec2::ZERO });
+            app.world_mut().write_message(AttackOnDelver { attacker: snake, species: Some(Species::PoisonousSnake), damage: 1, poison: 4, attacker_pos: Vec2::ZERO });
             app.update();
             let poison = app.world().get::<DelverPoison>(player).map(|p| p.0);
             assert_eq!(poison, poisoned.then(|| fb_character::poison::Poisoned::for_hours(fb_character::poison::VENOM_POISONED_HOURS)), "a natural {natural}");
