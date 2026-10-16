@@ -146,6 +146,10 @@ pub struct StatBlock {
     pub hit_dice: Dice,
     /// Walking speed in feet per 6-second round.
     pub speed_feet: f32,
+    /// Armour Class: what an attack roll must reach to hit it.
+    pub armour_class: i32,
+    /// What the bite adds to its attack roll (the block's "+N to hit").
+    pub attack_bonus: i32,
     /// The bite's damage on a hit (piercing).
     pub bite: Dice,
     /// Poison the bite adds, halved on a successful DC 10 Constitution save (the poisonous
@@ -163,15 +167,18 @@ impl Species {
     /// The SRD 5.1 stat block, read from the CC-BY-4.0 PDF ([`SRD`]):
     ///
     /// - [Rat, p. 387](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=387):
-    ///   Tiny, Hit Points 1 (1d4 − 1), Speed 20 ft., darkvision 30 ft.; Bite: 1 piercing damage.
+    ///   Tiny, Armor Class 10, Hit Points 1 (1d4 − 1), Speed 20 ft., darkvision 30 ft.; Bite:
+    ///   +0 to hit, 1 piercing damage.
     /// - [Giant Rat, p. 378](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=378):
-    ///   Small, Hit Points 7 (2d6), Speed 30 ft., darkvision 60 ft.; Bite: 4 (1d4 + 2) piercing.
+    ///   Small, Armor Class 12, Hit Points 7 (2d6), Speed 30 ft., darkvision 60 ft.; Bite: +4 to
+    ///   hit, 4 (1d4 + 2) piercing.
     /// - [Poisonous Snake, p. 386](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=386):
-    ///   Tiny, Hit Points 2 (1d4), Speed 30 ft., blindsight 10 ft.; Bite: 1 piercing, and 5
-    ///   (2d4) poison on a failed DC 10 Constitution save, half on a success.
+    ///   Tiny, Armor Class 13, Hit Points 2 (1d4), Speed 30 ft., blindsight 10 ft.; Bite: +5 to
+    ///   hit, 1 piercing, and 5 (2d4) poison on a failed DC 10 Constitution save, half on a
+    ///   success.
     /// - [Constrictor Snake, p. 369](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=369):
-    ///   **Large**, Hit Points 13 (2d10 + 2), Speed 30 ft., blindsight 10 ft.; Bite: 5 (1d6 + 2)
-    ///   piercing. Its Constrict (p. 370) is left for later.
+    ///   **Large**, Armor Class 12, Hit Points 13 (2d10 + 2), Speed 30 ft., blindsight 10 ft.;
+    ///   Bite: +4 to hit, 5 (1d6 + 2) piercing. Its Constrict (p. 370) is left for later.
     pub fn stat_block(self) -> StatBlock {
         match self {
             Species::Rat => StatBlock {
@@ -180,6 +187,8 @@ impl Species {
                 hit_points: 1,
                 hit_dice: Dice::new(1, 4, -1),
                 speed_feet: 20.0,
+                armour_class: 10,
+                attack_bonus: 0,
                 bite: Dice::flat(1),
                 venom: None,
                 senses_feet: 30.0,
@@ -191,6 +200,8 @@ impl Species {
                 hit_points: 7,
                 hit_dice: Dice::new(2, 6, 0),
                 speed_feet: 30.0,
+                armour_class: 12,
+                attack_bonus: 4,
                 bite: Dice::new(1, 4, 2),
                 venom: None,
                 senses_feet: 60.0,
@@ -202,6 +213,8 @@ impl Species {
                 hit_points: 2,
                 hit_dice: Dice::new(1, 4, 0),
                 speed_feet: 30.0,
+                armour_class: 13,
+                attack_bonus: 5,
                 bite: Dice::flat(1),
                 venom: Some(Dice::new(2, 4, 0)),
                 senses_feet: 10.0,
@@ -213,6 +226,8 @@ impl Species {
                 hit_points: 13,
                 hit_dice: Dice::new(2, 10, 2),
                 speed_feet: 30.0,
+                armour_class: 12,
+                attack_bonus: 4,
                 bite: Dice::new(1, 6, 2),
                 venom: None,
                 senses_feet: 10.0,
@@ -296,6 +311,15 @@ pub fn snake(seed: u32) -> SnakeState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stat_blocks_carry_the_srd_armour_class_and_attack_bonus() {
+        let numbers = |s: Species| (s.stat_block().armour_class, s.stat_block().attack_bonus);
+        assert_eq!(numbers(Species::Rat), (10, 0));
+        assert_eq!(numbers(Species::GiantRat), (12, 4));
+        assert_eq!(numbers(Species::PoisonousSnake), (13, 5));
+        assert_eq!(numbers(Species::ConstrictorSnake), (12, 4));
+    }
 
     #[test]
     fn stat_blocks_are_the_srd_numbers() {

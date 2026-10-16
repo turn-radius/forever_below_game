@@ -28,6 +28,7 @@
 
 use bevy::prelude::*;
 use fb_body::Hold;
+use fb_character::combat as rules;
 use fb_items::dice::Dice;
 use procgen_rng::Mulberry32;
 
@@ -98,12 +99,23 @@ impl Health {
 /// ranger 10 + Con, p. 35; cleric 8 + Con, p. 15; wizard, our mage, 6 + Con, p. 52), and never
 /// below 1 (our own floor for a very frail delver).
 pub fn first_level_hit_points(character: &Character) -> i32 {
+    first_level_hit_points_explained(character).value() as i32
+}
+
+/// [`first_level_hit_points`] with its terms: the hit die and the Constitution modifier.
+pub fn first_level_hit_points_explained(character: &Character) -> fb_character::explain::Explained {
     let die = match character.class {
         Class::Fighter | Class::Ranger => 10,
         Class::Cleric => 8,
         Class::Mage => 6,
     };
-    (die + modifier(character.constitution())).max(1)
+    rules::first_level_hit_points(die, modifier(character.constitution()))
+}
+
+/// Whether things of `family` are swung as melee weapons (anything else held is improvised).
+pub fn is_melee(family: armory::Family) -> bool {
+    use armory::Family;
+    matches!(family, Family::Sword | Family::Mace | Family::Axe | Family::Club | Family::Spear | Family::Dagger | Family::Staff)
 }
 
 /// How a held thing is swung.
@@ -171,31 +183,49 @@ impl Weapon {
     /// the wrist and the item's length beyond it: a sword reaches about 1.5 m, near the SRD's
     /// 5-foot reach for most creatures (p. 95), and a long spear further.
     pub fn in_hand(inventory: &Inventory, character: &Character) -> Weapon {
-        use armory::Family;
         let Some(item) = inventory.worn(fb_items::Slot::Mainhand).and_then(|id| inventory.item(id)) else { return Weapon::fist() };
-        let melee = matches!(item.shape.family(), Family::Sword | Family::Mace | Family::Axe | Family::Club | Family::Spear | Family::Dagger | Family::Staff);
-        let stats = &item.profile.stats;
-        let dice = if melee { stats.damage.unwrap_or(Dice::new(1, 4)) } else { Dice::new(1, 4) };
         let length = item.shape.build().bounds().map_or(0.0, |(lo, hi)| (0..3).map(|i| hi[i] - lo[i]).fold(0.0, f32::max));
         let hold = Hold::of(&item.shape, &fb_body::Body::new(&character.spec()));
-        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_WRIST * STATURE + length, hold }
+        Weapon { reach: ARM_TO_WRIST * STATURE + length, hold, ..Weapon::of_stats(Some(item)) }
+    }
+
+    /// What `item` in the main hand rolls, without its reach or hold (which need its built
+    /// shape and the body): the damage dice and bonus [`Weapon::in_hand`] uses, so a view that
+    /// only wants the numbers (the lab) takes the same ones. A bare fist with `None`.
+    pub fn of_stats(item: Option<&fb_items::Item>) -> Weapon {
+        let Some(item) = item else { return Weapon::fist() };
+        let melee = is_melee(item.shape.family());
+        let stats = &item.profile.stats;
+        let dice = if melee { stats.damage.unwrap_or(Dice::new(1, 4)) } else { Dice::new(1, 4) };
+        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None }
     }
 
     /// The range a blow's damage falls in with a Strength modifier of `strength`.
     pub fn damage_range(&self, strength: i32) -> (u32, u32) {
-        let (lo, hi) = match self.dice {
-            Some(d) => (d.count as i32, (d.count as i32) * (d.sides as i32)),
-            None => (1, 1),
-        };
-        (((lo + self.bonus + strength).max(1)) as u32, ((hi + self.bonus + strength).max(1)) as u32)
+        let range = self.damage_range_explained(strength);
+        (range.min.value() as u32, range.max.value() as u32)
+    }
+
+    /// [`Weapon::damage_range`] with the terms of its least, mean and most.
+    pub fn damage_range_explained(&self, strength: i32) -> rules::DamageRange {
+        rules::damage_range(self.dice_sides(), self.bonus, strength)
+    }
+
+    /// The dice as the rules take them: a count and the sides.
+    fn dice_sides(&self) -> Option<(u32, u32)> {
+        self.dice.map(|d| (d.count as u32, d.sides as u32))
     }
 
     /// One blow's damage: the dice, plus the bonus and the Strength modifier (SRD 5.1 p. 96,
     /// "Damage Rolls": roll the weapon's dice and add your ability modifier). The SRD lets a
     /// penalty bring a blow to 0; here every blow that lands does at least 1 (our own).
     pub fn roll(&self, strength: i32, rng: &mut Mulberry32) -> u32 {
-        let dice = self.dice.map_or(1, |d| (0..d.count).map(|_| rng.int(1, d.sides.max(1) as u32) as i32).sum());
-        (dice + self.bonus + strength).max(1) as u32
+        self.roll_explained(strength, rng).value() as u32
+    }
+
+    /// [`Weapon::roll`] with every die and bonus listed.
+    pub fn roll_explained(&self, strength: i32, rng: &mut Mulberry32) -> fb_character::explain::Explained {
+        rules::weapon_damage(self.dice_sides(), self.bonus, strength, rng)
     }
 }
 
@@ -240,16 +270,12 @@ pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, cone: f32, targets
 /// Snake"; rounding down is our own). A placeholder until the character simulation has
 /// poison of its own.
 pub fn venom_after_save(poison: u32, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    if poison == 0 {
-        return 0;
-    }
-    let save = rng.int(1, 20) as i32 + modifier(constitution);
-    if save >= 10 { poison / 2 } else { poison }
+    rules::venom_after_save(poison, modifier(constitution), rng).damage.value() as u32
 }
 
 /// The damage a bite does the delver: its own, and its venom after the save.
 pub fn bite_damage(attack: &CreatureAttack, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    attack.damage + venom_after_save(attack.poison, constitution, rng)
+    rules::bite_damage(attack.damage, attack.poison, modifier(constitution), rng).damage.value() as u32
 }
 
 #[cfg(test)]
