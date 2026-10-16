@@ -144,7 +144,7 @@ impl Hundred {
             None => "no damage".to_string(),
         };
         let kill = match self.blows_to_kill {
-            Some(blows) => format!("{} kills in 100 · {} blows each", self.kills, number(blows)),
+            Some(blows) => format!("{} kills in 100 · {} blows each", self.kills, format!("{blows:.1}")),
             None => "no kill in 100 blows".to_string(),
         };
         format!("100 blows vs AC {}: {} hit · {damage} · {kill}", self.armour_class, self.hits)

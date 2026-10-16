@@ -3,8 +3,8 @@
 //! plain data and every step is [`ExhaustionTimes::step`], which steps the needs itself, as
 //! `simulate` steps the delver's, so it runs without Bevy.
 //!
-//! Time passes in whole minutes (the meters rounded to a trillionth after each, so a meter lands
-//! on a band's edge when it should), so a step of any length is the same minutes in a row and one
+//! Time passes in whole minutes (a meter within a trillionth of a band's edge put on it after
+//! each, so it lands there when it should), so a step of any length is the same minutes in a row and one
 //! 8 hour step gives exactly the meters eight 1 hour steps do. Inside each minute a band is
 //! crossed where the meter's rate puts it, in closed form, and a level of exhaustion is logged
 //! at the end of the minute it was earned in. Days are counted from 0, so a log line at "Day 4
@@ -103,9 +103,12 @@ impl TimeLab {
             self.times.step(&mut self.needs, &mut self.exhaustion, activity, MINUTE, con);
             self.clock.advance(MINUTE * 3600.0);
             // A minute is not exact in binary, so a meter that should land on a band's edge (0.5
-            // after 8 hours) is held to a trillionth, as the edge itself is.
+            // after 8 hours) can fall a hair short of it; one within a trillionth is put on it.
             for meter in [&mut self.needs.hunger, &mut self.needs.thirst, &mut self.needs.sleepiness] {
-                meter.value = (meter.value * 1e12).round() / 1e12;
+                let edge = (meter.value * 4.0).round() / 4.0;
+                if (meter.value - edge).abs() < 1e-12 {
+                    meter.value = edge;
+                }
             }
             for (was, now) in [(before.hunger, self.needs.hunger), (before.thirst, self.needs.thirst), (before.sleepiness, self.needs.sleepiness)] {
                 for (at, band) in band_crossings(&was, &now, activity) {
@@ -298,6 +301,40 @@ mod tests {
         assert!(!lab.log.is_empty());
         lab.reset();
         assert_eq!(lab, TimeLab::default());
+    }
+
+    #[test]
+    fn a_day_passed_in_the_lab_matches_one_step_of_the_real_rules() {
+        for activity in ACTIVITIES {
+            let mut state = bare();
+            state.activity = activity;
+            let mut lab = TimeLab::default();
+            lab.needs.sleepiness.value = 0.4;
+            let (mut needs, mut exhaustion, mut times) = (lab.needs, Exhaustion::default(), ExhaustionTimes::default());
+            times.step(&mut needs, &mut exhaustion, activity, 24.0, 0);
+            lab.pass(&state, 24.0);
+            for (ours, real) in [(lab.needs.hunger, needs.hunger), (lab.needs.thirst, needs.thirst), (lab.needs.sleepiness, needs.sleepiness)] {
+                assert!((ours.value - real.value).abs() < 1e-9, "{activity:?} {:?}: {} against {}", ours.kind, ours.value, real.value);
+            }
+            assert_eq!(lab.exhaustion, exhaustion, "{activity:?}");
+            for (ours, real) in [(lab.times.starving, times.starving), (lab.times.dehydrated, times.dehydrated), (lab.times.spent, times.spent)] {
+                assert!((ours.hours - real.hours).abs() < 1e-9 && ours.levels == real.levels, "{activity:?}: {ours:?} against {real:?}");
+            }
+            assert!((lab.times.sleep_hours - times.sleep_hours).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_night_of_sleep_removes_a_level_and_the_lab_logs_it() {
+        let mut state = bare();
+        state.activity = Activity::Sleeping;
+        let mut lab = TimeLab::default();
+        lab.exhaustion = Exhaustion::new(1);
+        lab.pass(&state, 7.0);
+        assert_eq!(lab.exhaustion.level, 1, "not before 8 hours");
+        lab.pass(&state, 1.0);
+        assert_eq!(lab.exhaustion.level, 0);
+        assert_eq!(lab.log.back().unwrap().line(), "Day 0 08:00 Exhaustion 0");
     }
 
     #[test]

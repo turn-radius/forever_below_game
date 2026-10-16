@@ -89,7 +89,7 @@ impl Plugin for LabViewPlugin {
             .init_resource::<TimeLab>()
             .insert_resource(ClearColor(BG))
             .add_plugins(TweakPanelPlugin::<LabState>::default())
-            .add_systems(Startup, setup)
+            .add_systems(Startup, (setup, demo))
             .add_systems(
             Update,
             (
@@ -97,6 +97,7 @@ impl Plugin for LabViewPlugin {
                 rebuild_sheet.run_if(resource_changed::<LabState>),
                 refresh_strikes.run_if(|state: Res<LabState>, strikes: Res<Strikes>| state.is_changed() || strikes.is_changed()),
                 refresh_time.run_if(|state: Res<LabState>, time: Res<TimeLab>| state.is_changed() || time.is_changed()),
+                layout_right,
                 scroll_sheet,
             )
                 .chain()
@@ -473,9 +474,34 @@ pub fn sheet(state: &LabState) -> Vec<Row> {
 #[derive(Resource, Default)]
 pub struct SheetBuilds(pub u32);
 
-/// The right-hand column, which scrolls.
+/// The window, so the right side can see how wide it is.
+#[derive(Component)]
+struct LabRoot;
+
+/// What is right of the panel: one column that scrolls when the window is narrow, and the
+/// sheet and the side column laid out beside each other when it is wide.
+#[derive(Component)]
+struct RightRegion;
+
+/// The sheet's pane.
 #[derive(Component)]
 struct SheetColumn;
+
+/// The strikes above the time, in a pane of their own.
+#[derive(Component)]
+struct SideColumn;
+
+/// A node that scrolls its own overflow when it has any.
+#[derive(Component)]
+struct ScrollArea;
+
+/// How wide the window must be, in logical pixels, to lay the sheet and the side column out
+/// as two panes that scroll on their own.
+pub const WIDE: f32 = 1500.0;
+
+fn pane() -> Node {
+    Node { min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::axes(px(20), px(14)), ..default() }
+}
 
 /// Where the sheet's rows are built.
 #[derive(Component)]
@@ -527,7 +553,7 @@ enum TimeText {
 
 fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
     commands.spawn((Camera2d, bevy::ui::IsDefaultUiCamera));
-    commands.spawn(Node { width: percent(100), height: percent(100), flex_direction: FlexDirection::Row, ..default() }).with_children(|root| {
+    commands.spawn((LabRoot, Node { width: percent(100), height: percent(100), flex_direction: FlexDirection::Row, ..default() })).with_children(|root| {
         root.spawn((
             Node { width: px(PANEL_WIDTH), flex_shrink: 0.0, flex_direction: FlexDirection::Column, border: UiRect::right(px(1)), ..default() },
             BackgroundColor(BG),
@@ -543,21 +569,19 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
             panel_body(panel);
         });
         root.spawn((
-            SheetColumn,
+            RightRegion,
+            ScrollArea,
             ScrollPosition::default(),
-            Node {
-                flex_grow: 1.0,
-                min_width: px(0),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(4),
-                padding: UiRect::axes(px(20), px(14)),
-                overflow: Overflow::scroll_y(),
-                ..default()
-            },
+            Node { flex_grow: 1.0, min_width: px(0), flex_direction: FlexDirection::Column, overflow: Overflow::scroll_y(), ..default() },
         ))
-        .with_children(|column| {
-            column.spawn((Text::new("The Sheet"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-            column.spawn((SheetRows, Node { flex_direction: FlexDirection::Column, row_gap: px(10), margin: UiRect::top(px(8)), ..default() }));
+        .with_children(|right| {
+        right
+            .spawn((SheetColumn, ScrollArea, ScrollPosition::default(), pane()))
+            .with_children(|column| {
+                column.spawn((Text::new("The Sheet"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
+                column.spawn((SheetRows, Node { flex_direction: FlexDirection::Column, row_gap: px(10), margin: UiRect::top(px(8)), ..default() }));
+            });
+        right.spawn((SideColumn, ScrollArea, ScrollPosition::default(), pane())).with_children(|column| {
             column.spawn((StrikeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(8), margin: UiRect::top(px(24)), ..default() })).with_children(|strikes| {
                 strikes.spawn((Text::new("Strikes"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
                 strikes.spawn((StrikeText::Note, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED)));
@@ -586,6 +610,7 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
                 time.spawn((TimeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
             });
         });
+        });
     });
 }
 
@@ -606,6 +631,15 @@ fn rebuild_sheet(mut builds: ResMut<SheetBuilds>, mut commands: Commands, state:
                 });
         }
     });
+}
+
+/// With `FB_LAB_DEMO=1`, does what a few clicks would, for a capture: +8 h once and Strike
+/// three times.
+fn demo(state: Res<LabState>, mut time: ResMut<TimeLab>, mut strikes: ResMut<Strikes>) {
+    if std::env::var("FB_LAB_DEMO").is_ok_and(|v| v == "1") {
+        time.pass(&state, 8.0);
+        (0..3).for_each(|_| strikes.strike(&state));
+    }
 }
 
 /// A click on Strike, ×100 or Heal.
@@ -698,7 +732,7 @@ fn refresh_strikes(state: Res<LabState>, strikes: Res<Strikes>, mut texts: Query
                 Attacker::Creature(_) => format!("{} strikes with its bite. The strike seed sets every roll.", state.attacker.label()),
                 Attacker::Folk(_) => format!("A {}: STR 10, the base rolled from the strike seed.", state.attacker.label()),
             },
-            StrikeText::Hp => format!("Hit points {hp} of {full} · AC {}", crate::lab_strike::armour_class(&state)),
+            StrikeText::Hp => format!("Hit points {} of {full} · AC {}", hp.max(0), crate::lab_strike::armour_class(&state)),
             StrikeText::Summary => strikes.summary.clone().unwrap_or_else(|| "×100 strikes a hundred times from the seed.".into()),
             StrikeText::Log => strikes.log.iter().cloned().collect::<Vec<_>>().join("\n"),
         };
@@ -708,22 +742,64 @@ fn refresh_strikes(state: Res<LabState>, strikes: Res<Strikes>, mut texts: Query
     }
 }
 
-/// Scrolling away from the panel moves the sheet.
+/// Lays the right side out for the window's width ([`WIDE`]): two panes that scroll on their
+/// own, or the panes stacked in one column that scrolls.
+fn layout_right(root: Query<&ComputedNode, With<LabRoot>>, mut right: Query<&mut Node, With<RightRegion>>, mut panes: Query<&mut Node, (Or<(With<SheetColumn>, With<SideColumn>)>, Without<RightRegion>)>) {
+    let Ok(root) = root.single() else { return };
+    let wide = is_wide(root.size.x * root.inverse_scale_factor);
+    for mut node in &mut right {
+        lay_out_right(&mut node, wide);
+    }
+    for mut node in &mut panes {
+        lay_out_pane(&mut node, wide);
+    }
+}
+
+/// Whether a window `width` logical pixels across gets two panes.
+pub fn is_wide(width: f32) -> bool {
+    width >= WIDE
+}
+
+/// The region right of the panel: its panes in a row when `wide`, else in a column that scrolls.
+fn lay_out_right(node: &mut Node, wide: bool) {
+    let (direction, overflow) = if wide { (FlexDirection::Row, Overflow::visible()) } else { (FlexDirection::Column, Overflow::scroll_y()) };
+    if node.flex_direction != direction {
+        node.flex_direction = direction;
+        node.overflow = overflow;
+    }
+}
+
+/// One pane: it scrolls and shares the width when `wide`, else it grows to its content.
+fn lay_out_pane(node: &mut Node, wide: bool) {
+    let (overflow, grow, basis) = if wide { (Overflow::scroll_y(), 1.0, px(0)) } else { (Overflow::visible(), 0.0, auto()) };
+    if node.overflow != overflow {
+        node.overflow = overflow;
+        node.flex_grow = grow;
+        node.flex_basis = basis;
+    }
+}
+
+/// Scrolling away from the panel moves the pane under the mouse, or the whole right side when
+/// it is one column.
 fn scroll_sheet(
     scroll: Res<AccumulatedMouseScroll>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     body: Query<(&ComputedNode, &UiGlobalTransform), With<PanelBody>>,
-    mut column: Query<(&mut ScrollPosition, &ComputedNode), With<SheetColumn>>,
+    mut areas: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform, &Node), With<ScrollArea>>,
 ) {
     let lines = match scroll.unit {
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
     let Some(window) = window else { return };
-    if lines == 0.0 || window.cursor_position().is_none() || over_body(&window, &body) {
+    let Some(point) = window.cursor_position() else { return };
+    if lines == 0.0 || over_body(&window, &body) {
         return;
     }
-    for (mut position, node) in &mut column {
+    for (mut position, node, transform, style) in &mut areas {
+        if style.overflow.y != OverflowAxis::Scroll || !node_rect(node, transform).contains(point) {
+            continue;
+        }
         let max = ((node.content_size() - node.size()) * node.inverse_scale_factor).y.max(0.0);
         position.y = (position.y - lines * SCROLL_LINE).clamp(0.0, max);
     }
@@ -923,6 +999,20 @@ mod tests {
         state.cycle("time.activity", 2);
         assert_eq!(state.activity, Activity::Exerting);
         assert_eq!(value_of(&state, "Hunger rate"), walking * 2.0);
+    }
+
+    #[test]
+    fn the_right_side_is_two_scrolling_panes_when_wide_and_one_column_when_not() {
+        assert!(is_wide(1920.0) && is_wide(WIDE) && !is_wide(WIDE - 1.0) && !is_wide(MIN_WINDOW.x));
+        let (mut right, mut pane) = (Node { flex_direction: FlexDirection::Column, overflow: Overflow::scroll_y(), ..default() }, Node::default());
+        lay_out_right(&mut right, true);
+        lay_out_pane(&mut pane, true);
+        assert_eq!((right.flex_direction, right.overflow), (FlexDirection::Row, Overflow::visible()));
+        assert_eq!((pane.overflow, pane.flex_grow), (Overflow::scroll_y(), 1.0));
+        lay_out_right(&mut right, false);
+        lay_out_pane(&mut pane, false);
+        assert_eq!((right.flex_direction, right.overflow), (FlexDirection::Column, Overflow::scroll_y()));
+        assert_eq!((pane.overflow, pane.flex_grow), (Overflow::visible(), 0.0));
     }
 
     #[test]
