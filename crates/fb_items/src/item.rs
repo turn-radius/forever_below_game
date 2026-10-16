@@ -137,9 +137,9 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that
-/// family chosen from the seed ([`base_for`]), rolled from the same seed.
-pub fn roll_loot(family: armory::Family, seed: u32) -> Option<Item> {
-    roll_item(base_for(family, seed)?, seed)
+/// family chosen from the seed ([`base_for`]), rolled from the same seed against `odds`.
+pub fn roll_loot(family: armory::Family, seed: u32, odds: Odds) -> Option<Item> {
+    roll_item_with(base_for(family, seed)?, seed, odds)
 }
 
 #[cfg(test)]
@@ -293,11 +293,32 @@ mod tests {
     fn loot_rolls_a_base_of_its_family() {
         for &family in armory::Item::PORTED {
             for seed in [5, 1207] {
-                let item = roll_loot(family, seed).unwrap();
+                let item = roll_loot(family, seed, Odds::default()).unwrap();
                 assert_eq!(item.shape.family(), family);
-                assert_eq!(Some(item.clone()), roll_loot(family, seed));
+                assert_eq!(Some(item.clone()), roll_loot(family, seed, Odds::default()));
             }
         }
+    }
+
+    /// The share of gear that rolls rare or legendary as floor loot at `depth`, over the
+    /// families quickest to roll and 150 seeds each.
+    fn rare_share_of_loot(depth: u32) -> f64 {
+        use armory::Family::{Amulet, Axe, Charm, Club, Dagger, Mace, Ring};
+        let gear: Vec<Item> = [Mace, Club, Axe, Dagger, Ring, Charm, Amulet]
+            .into_iter()
+            .flat_map(|family| (0..150).filter_map(move |seed| roll_loot(family, seed, Odds::loot(depth))))
+            .filter(|i| i.profile.kind == Kind::Gear)
+            .collect();
+        gear.iter().filter(|i| i.rarity >= Rarity::Rare).count() as f64 / gear.len() as f64
+    }
+
+    #[test]
+    fn floor_loot_grows_rarer_with_depth() {
+        let shares: Vec<f64> = [1, 3, 5].into_iter().map(rare_share_of_loot).collect();
+        for pair in shares.windows(2) {
+            assert!(pair[1] > pair[0], "rare and legendary by depth: {shares:?}");
+        }
+        assert!(shares[2] > 1.7 * shares[0], "rare and legendary by depth: {shares:?}");
     }
 
     #[test]

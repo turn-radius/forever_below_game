@@ -9,7 +9,7 @@
 use armory::families::chests::{ChestState, ChestStyle};
 use procgen_rng::Mulberry32;
 
-use crate::item::{Item, roll_item};
+use crate::item::{Item, roll_item_with};
 use crate::profile::profile;
 use crate::Rarity;
 
@@ -75,15 +75,15 @@ fn stock(style: ChestStyle) -> (&'static [(&'static str, u32)], (u32, u32)) {
 }
 
 /// What a container of `style` holds, rolled from `loot`: a few things from its kind's table,
-/// each rolled from its own seed off the loot stream. Pure in its arguments.
-pub fn roll_contents(style: ChestStyle, loot: u32) -> Vec<Item> {
+/// each rolled from its own seed off the loot stream against `odds`. Pure in its arguments.
+pub fn roll_contents(style: ChestStyle, loot: u32, odds: crate::Odds) -> Vec<Item> {
     let mut rng = Mulberry32::new(loot ^ 0xC07E_5755);
     let (table, count) = stock(style);
     (0..rng.int(count.0, count.1))
         .filter_map(|_| {
             let base = *rng.weighted(table);
             let seed = (rng.next_f64() * 4_294_967_296.0) as u32;
-            roll_item(base, seed)
+            roll_item_with(base, seed, odds)
         })
         .collect()
 }
@@ -114,18 +114,18 @@ mod tests {
         for style in ChestStyle::ALL {
             let (table, count) = stock(style);
             for loot in [1, 1207, 65_537, u32::MAX] {
-                let contents = roll_contents(style, loot);
-                assert_eq!(contents, roll_contents(style, loot), "{style:?} {loot}");
+                let contents = roll_contents(style, loot, crate::Odds::default());
+                assert_eq!(contents, roll_contents(style, loot, crate::Odds::default()), "{style:?} {loot}");
                 assert!((count.0..=count.1).contains(&(contents.len() as u32)), "{style:?} {loot}: {}", contents.len());
                 assert!(contents.iter().all(|i| table.iter().any(|(b, _)| *b == i.base) && i.profile.packable), "{style:?}");
             }
         }
-        assert_ne!(roll_contents(ChestStyle::Chest, 1), roll_contents(ChestStyle::Chest, 2));
+        assert_ne!(roll_contents(ChestStyle::Chest, 1, crate::Odds::default()), roll_contents(ChestStyle::Chest, 2, crate::Odds::default()));
     }
 
     #[test]
     fn chests_now_and_then_hold_treasure() {
-        let rich = (1..200).filter(|&loot| holds_treasure(&roll_contents(ChestStyle::Chest, loot))).count();
+        let rich = (1..200).filter(|&loot| holds_treasure(&roll_contents(ChestStyle::Chest, loot, crate::Odds::default()))).count();
         assert!(rich > 100, "only {rich} of 199 chests hold coin or magic");
     }
 

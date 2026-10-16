@@ -619,7 +619,7 @@ mod tests {
         let spot = dev_spots_for(&level, &format!("skeleton:{seed}")).remove(0);
         app.insert_resource(CurrentLevel(level.clone()));
         let state = fb_creatures::SkeletonState::roll(seed);
-        let kit = SkeletonKit::new(&state, outfit.unwrap_or_else(|| fb_items::undead::skeleton_outfit(seed)), [None, None]);
+        let kit = SkeletonKit::new(&state, outfit.unwrap_or_else(|| fb_items::undead::skeleton_outfit(seed, fb_items::Odds::default())), [None, None]);
         let skeleton = {
             let mut commands = app.world_mut().commands();
             spawn_skeleton_with(&mut commands, &level, &spot, &state.build(), Some(kit)).0
@@ -638,7 +638,7 @@ mod tests {
 
     /// A seed whose skeleton rolls most of a kit of gear.
     fn kitted_seed() -> u32 {
-        (0..400).find(|&s| fb_items::undead::skeleton_outfit(s).worn.len() >= 5).expect("some skeleton is kitted")
+        (0..400).find(|&s| fb_items::undead::skeleton_outfit(s, fb_items::Odds::default()).worn.len() >= 5).expect("some skeleton is kitted")
     }
 
     fn strike_down(app: &mut App, skeleton: Entity) {
@@ -662,7 +662,7 @@ mod tests {
         use crate::inventory::{FloorChange, FloorChanges};
         use crate::play::CurrentLevel;
         let seed = kitted_seed();
-        let gear = fb_items::undead::skeleton_outfit(seed);
+        let gear = fb_items::undead::skeleton_outfit(seed, fb_items::Odds::default());
         let (mut app, _, skeleton) = skeleton_fight(seed, None);
         app.update();
         assert!(on_the_floor(&mut app).is_empty(), "nothing lies there while it stands");
@@ -713,7 +713,7 @@ mod tests {
     fn a_skeletons_gear_is_dropped_once_and_a_body_brought_back_drops_none() {
         use feedback::Corpse;
         let seed = kitted_seed();
-        let n = fb_items::undead::skeleton_outfit(seed).worn.len();
+        let n = fb_items::undead::skeleton_outfit(seed, fb_items::Odds::default()).worn.len();
         let (mut app, _, skeleton) = skeleton_fight(seed, None);
         app.update();
         strike_down(&mut app, skeleton);
