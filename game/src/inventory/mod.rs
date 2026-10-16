@@ -24,7 +24,7 @@
 //! fallen" outfit of `data/outfits.json` (a tunic and trousers), with a belt whose pouch is
 //! their first grid (`docs/items.md`, "Slots"; the plate's belt is a container), and a burning
 //! torch in the off hand, which is their carried light (`crate::carry::carried_light`). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
-//! captures; `FB_DEBUG_KIT=1` dresses the delver in their class's outfit with a lit light in the
+//! captures (`=character` on the character tab); `FB_DEBUG_KIT=1` dresses the delver in their class's outfit with a lit light in the
 //! off hand, starts them with a pack full of things, and sets a sack holding a few more, and a
 //! shield, down in front of them. `FB_HOLD=<main>[,<off>]` puts items of those bases in the hands
 //! (a torch or lantern lit; `none` empties a hand), after either kit. `FB_DEBUG_HOVER=<n>` holds the
@@ -125,7 +125,7 @@ impl Plugin for InventoryPlugin {
                         build_screen,
                         drag_items,
                         unhang_without_belt,
-                        (sheet::update_status, sheet::update_vitals, sheet::update_gear).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
@@ -363,8 +363,11 @@ fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
     }
 }
 
-fn open_for_capture(mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
+fn open_for_capture(mut open: ResMut<ScreenOpen>, mut tab: ResMut<SheetTab>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
     show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
+    if std::env::var("FB_OPEN_INVENTORY").is_ok_and(|v| v.eq_ignore_ascii_case("character")) {
+        *tab = SheetTab::Character;
+    }
 }
 
 /// The whole screen, over the level.
@@ -652,9 +655,20 @@ pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, 
             let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
             equip(inventory, id, slot)
         }
+        _ => take_up(inventory, id),
+    }
+}
+
+/// Takes `id` into the carried grids if it is not carried: lying underfoot it is picked up
+/// ([`Inventory::pick_up`], lifted from the level), and in a container not carried (a chest
+/// standing in the level, a bag set down) it is stowed ([`Inventory::stow`]). Something
+/// carried or worn stays where it is. Refused (no room), it stays where it was.
+pub fn take_up(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
+    match inventory.location(id) {
         Some(Location::Loose) => inventory.pick_up(id).map(|()| vec![FloorChange::Lifted(id)]),
         Some(Location::In { .. }) if !inventory.is_carried(id) => inventory.stow(id).map(|_| vec![]),
-        _ => Ok(vec![]),
+        Some(_) => Ok(vec![]),
+        None => Err(Refusal::Unknown),
     }
 }
 

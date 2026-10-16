@@ -4,7 +4,9 @@
 //! An item is bound to a slot by dragging it from the inventory onto the strip of slots the
 //! inventory screen shows (the HUD bar itself hides under screens, like the rest of the HUD), or
 //! by pressing the slot's key, 1 to 0, with the mouse over it in the inventory
-//! ([`bind_hovered`]); both go through [`bind_dropped`], with the same refusals.
+//! ([`bind_hovered`]); both go through [`bind_dropped`], with the same refusals. A key over
+//! something lying underfoot (or in a bag set down) picks it up first, into the first carried
+//! place with room as a pickup would, and binds it ([`pick_up_and_bind`]).
 //! The keys 1 to 0 then use the item in the slot ([`use_quickslot`]): food and drink are eaten
 //! and drunk (`crate::eat`, a healing draught heals), a torch or lantern is drawn into the hand
 //! and then lit or put out (`crate::kindle`), and a weapon or shield is drawn into the hand.
@@ -19,7 +21,7 @@ use fb_items::{Item, Slot};
 
 use crate::combat::orbs::{OrbCluster, cluster_layout};
 use crate::eat::Eating;
-use crate::inventory::{Dragging, FloorChanges, Hovered, Icons, Inventory, ItemId, Location, Refusal, Target, Toast};
+use crate::inventory::{Dragging, FloorChange, FloorChanges, Hovered, Icons, Inventory, ItemId, Location, Refusal, Target, Toast, take_up};
 use crate::keymap::{Action, ActionInput};
 use crate::launch::AppState;
 use crate::play::{DelveSystems, inventory_open, level_has_focus};
@@ -201,13 +203,43 @@ fn use_quickslot(
 }
 
 /// Keys 1 to 0 in the inventory: binds the item under the mouse to that slot, as dropping it
-/// on the strip's slot would, and says so (or why not). Nothing under the mouse, nothing
-/// happens.
-fn bind_hovered(input: ActionInput, hovered: Res<Hovered>, mut slots: ResMut<Quickslots>, inventory: Res<Inventory>, mut toast: ResMut<Toast>, time: Option<Res<Time<Real>>>) {
+/// on the strip's slot would, picking it up first if it lies underfoot ([`pick_up_and_bind`]),
+/// and says so (or why not). Nothing under the mouse, nothing happens.
+fn bind_hovered(
+    input: ActionInput,
+    hovered: Res<Hovered>,
+    mut slots: ResMut<Quickslots>,
+    mut inventory: ResMut<Inventory>,
+    mut floor_changes: ResMut<FloorChanges>,
+    mut toast: ResMut<Toast>,
+    time: Option<Res<Time<Real>>>,
+) {
     let Some(slot) = input.just_pressed_index(Action::Quickslot) else { return };
     let Some((id, _)) = hovered.0 else { return };
-    let said = bind_dropped(&mut slots, &inventory, id, slot).unwrap_or_else(|refusal| refusal.reason().to_string());
+    let said = match pick_up_and_bind(&mut slots, &mut inventory, id, slot) {
+        Ok((said, changes)) => {
+            floor_changes.0.extend(changes);
+            said
+        }
+        Err(refusal) => refusal.reason().to_string(),
+    };
     toast.say(said, time.map_or(0.0, |t| t.elapsed_secs()));
+}
+
+/// Binds `id` to `slot` as [`bind_dropped`] does, first taking it up into the carried grids if
+/// it is not carried ([`take_up`]: the first carried place with room, as a pickup puts it), and
+/// says so, with what that changes in the level. Something a slot cannot use is refused before
+/// anything is picked up, and with no room for it nothing is picked up or bound.
+pub fn pick_up_and_bind(slots: &mut Quickslots, inventory: &mut Inventory, id: ItemId, slot: usize) -> Result<(String, Vec<FloorChange>), Refusal> {
+    let item = inventory.item(id).ok_or(Refusal::Unknown)?;
+    if quick_use(item).is_none() {
+        return Err(Refusal::NotUsable);
+    }
+    let carried = inventory.is_carried(id);
+    let changes = take_up(inventory, id)?;
+    let said = bind_dropped(slots, inventory, id, slot)?;
+    let said = if carried { said } else { said.replacen(" is bound", " is picked up and bound", 1) };
+    Ok((said, changes))
 }
 
 /// The delve's end forgets the bindings: its items are gone.
@@ -632,22 +664,67 @@ mod tests {
     }
 
     #[test]
-    fn a_number_over_a_worn_or_unusable_or_underfoot_item_acts_as_dragging_it_would() {
+    fn a_number_over_a_worn_or_unusable_item_acts_as_dragging_it_would() {
         let (mut app, _) = delve();
         let sword = app.world_mut().resource_mut::<Inventory>().add(item("Sword"));
         app.world_mut().resource_mut::<Inventory>().wear(sword, Slot::Mainhand).unwrap();
         let ring = give(&mut app, item("Ring"));
-        let underfoot = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         hover(&mut app, Some(sword));
         press(&mut app, KeyCode::Digit2);
         assert_eq!(bound(&app, 1), Some(sword), "a held weapon binds");
-        for (id, refusal) in [(ring, Refusal::NotUsable), (underfoot, Refusal::NotCarried)] {
+        hover(&mut app, Some(ring));
+        press(&mut app, KeyCode::Digit5);
+        assert_eq!(bound(&app, 4), None);
+        assert_eq!(toast(&app), Refusal::NotUsable.reason(), "the toast a drag onto the strip gives");
+    }
+
+    fn location(app: &App, id: ItemId) -> Option<Location> {
+        app.world().resource::<Inventory>().location(id)
+    }
+
+    #[test]
+    fn a_number_over_an_underfoot_item_picks_it_up_where_a_pickup_would_and_binds_it() {
+        let (mut app, _) = delve();
+        let loaf = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
+        assert_eq!(location(&app, loaf), Some(Location::Loose), "lying underfoot");
+        // Where picking it up would put it.
+        let mut picked = app.world().resource::<Inventory>().clone();
+        picked.pick_up(loaf).unwrap();
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        hover(&mut app, Some(loaf));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit4);
+        app.update();
+        assert_eq!(app.world().resource::<FloorChanges>().0, vec![FloorChange::Lifted(loaf)], "lifted from the level");
+        assert_eq!(location(&app, loaf), picked.location(loaf));
+        assert!(app.world().resource::<Inventory>().is_carried(loaf));
+        assert_eq!(bound(&app, 3), Some(loaf));
+        assert!(toast(&app).ends_with("is picked up and bound to slot 4"), "{}", toast(&app));
+    }
+
+    #[test]
+    fn with_no_room_or_no_use_an_underfoot_item_stays_where_it_lies_and_nothing_binds() {
+        let (mut app, _) = delve();
+        // No pack: nowhere to put it.
+        let pack = app.world().resource::<Inventory>().worn(Slot::Back).unwrap();
+        app.world_mut().resource_mut::<Inventory>().forget(pack);
+        let loaf = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
+        let ring = app.world_mut().resource_mut::<Inventory>().add(item("Ring"));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        for (id, refusal) in [(loaf, Refusal::NoRoom), (ring, Refusal::NotUsable)] {
             hover(&mut app, Some(id));
-            press(&mut app, KeyCode::Digit5);
-            assert_eq!(bound(&app, 4), None);
-            assert_eq!(toast(&app), refusal.reason(), "the toast a drag onto the strip gives");
+            press(&mut app, KeyCode::Digit6);
+            assert_eq!(bound(&app, 5), None);
+            assert_eq!(location(&app, id), Some(Location::Loose), "{refusal:?}: still underfoot");
+            assert_eq!(toast(&app), refusal.reason());
         }
+        // A ring a slot cannot use is refused before anything is picked up, even with room.
+        let mut inventory = app.world().resource::<Inventory>().clone();
+        let sack = inventory.add(fb_items::roll_item("Sack", 7).unwrap());
+        inventory.wear(sack, Slot::Back).unwrap();
+        let mut slots = Quickslots::default();
+        assert_eq!(pick_up_and_bind(&mut slots, &mut inventory, ring, 0), Err(Refusal::NotUsable));
+        assert_eq!(inventory.location(ring), Some(Location::Loose));
     }
 
     /// The vitals HUD a view model makes, for the bar to join.

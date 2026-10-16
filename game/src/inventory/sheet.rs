@@ -2,7 +2,10 @@
 //! palette, Almendra headings, Plex Mono values). It shows only what the game simulates.
 //!
 //! The attributes and the gear section come from `Character::derive`, so they agree with the
-//! header. The status section reads the delver's `DelverNeeds`, `Exhaustion` and load band. The screen
+//! header. The conditions section lists what the delver is under, as the HUD's badges do
+//! ([`crate::status`]): each condition's badge, its name in its severity's colour and what it
+//! does, so the player can read them with the mouse locked or free ([`update_conditions`]).
+//! The status section reads the delver's `DelverNeeds`, `Exhaustion` and load band. The screen
 //! builds the sheet when the tab opens or the gear changes ([`super::build_screen`]); while it
 //! is open [`update_status`] rewrites only the words and bars that moved, so nothing is rebuilt
 //! when the delver eats or drinks.
@@ -17,6 +20,7 @@ use crate::carry::ViewModelCamera;
 use crate::character::{Character, DelverMana, DelverNeeds, DelverStamina, Derived};
 use crate::exhaustion::Exhaustion;
 use crate::play::{Player, Screen, ScreenOpen, SheetTab};
+use crate::status::{ConditionIcons, ShownConditions, badge, severity_colour};
 use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, node_rect};
 use bevy::window::PrimaryWindow;
 
@@ -82,6 +86,16 @@ pub fn vital_colour(vitals: &Vitals, vital: Vital) -> Color {
         Vital::Mana => BRIGHT,
     }
 }
+
+/// The list of conditions on the sheet, filled by [`update_conditions`].
+#[derive(Component, Debug)]
+pub struct ConditionList;
+
+/// What the conditions section says when the delver is under none.
+pub const NO_CONDITIONS: &str = "No conditions";
+
+/// A condition's badge on the sheet, in logical pixels across.
+const CONDITION_BADGE_PX: f32 = 24.0;
 
 /// The exhaustion line: "Exhaustion 2: half speed".
 #[derive(Component, Debug)]
@@ -219,6 +233,8 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Cha
                 line.spawn((AttributeLine(i), Text::new(text), UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT)));
             }
         });
+        heading(sheet, fonts, "conditions");
+        sheet.spawn((ConditionList, Name::new("Conditions"), Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }));
         heading(sheet, fonts, "what your gear makes of you");
         let values = gear_values(character, &character.derive(inventory));
         for (i, label) in GEAR_ROWS.into_iter().enumerate() {
@@ -428,6 +444,42 @@ pub fn update_status(
     }
 }
 
+/// Fills the sheet's conditions section with the conditions the HUD shows ([`ShownConditions`]),
+/// worst first: each one's badge, name and what it does, or [`NO_CONDITIONS`]. Rebuilt only
+/// when the section is new or the conditions changed.
+pub fn update_conditions(
+    mut commands: Commands,
+    shown: Option<Res<ShownConditions>>,
+    lists: Query<(Entity, Ref<ConditionList>)>,
+    fonts: Res<UiFonts>,
+    mut icons: Option<ResMut<ConditionIcons>>,
+    mut images: Option<ResMut<Assets<Image>>>,
+) {
+    let changed = shown.as_ref().is_some_and(|s| s.is_changed());
+    let none = Vec::new();
+    let conditions = shown.as_deref().map_or(&none, |s| &s.0);
+    for (list, added) in &lists {
+        if !changed && !added.is_added() {
+            continue;
+        }
+        commands.entity(list).despawn_children().with_children(|list| {
+            if conditions.is_empty() {
+                list.spawn((Text::new(NO_CONDITIONS), UiFonts::style(&fonts.body, 15.0, MUTED)));
+            }
+            for condition in conditions {
+                let colour = severity_colour(condition.severity);
+                let icon = icons.as_deref_mut().and_then(|icons| icons.get(condition.kind, images.as_deref_mut()));
+                list.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), min_height: px(CONDITION_BADGE_PX), ..default() }).with_children(|line| {
+                    badge(line, condition, px(CONDITION_BADGE_PX), px(2), icon);
+                    line.spawn(Node { width: px(LABEL_PX - CONDITION_BADGE_PX - 10.0), flex_shrink: 0.0, ..default() })
+                        .with_child((Text::new(condition.name.clone()), UiFonts::style(&fonts.mono_bold, 14.0, colour)));
+                    line.spawn((Text::new(condition.effect.clone()), UiFonts::style(&fonts.body, 14.0, INK)));
+                });
+            }
+        });
+    }
+}
+
 /// Keeps the open sheet's stamina and mana bars and words true to the delver, writing only
 /// what changed.
 pub fn update_vitals(
@@ -472,6 +524,54 @@ mod tests {
         assert_eq!(need_colour(&meter_at(MeterKind::Hunger, 0.0)), OK);
         assert_eq!(need_colour(&meter_at(MeterKind::Hunger, 0.55)), ACCENT);
         assert_eq!(need_colour(&meter_at(MeterKind::Hunger, 0.9)), BAD);
+    }
+
+    /// The sheet's conditions section, with `shown` as the delver's conditions, and the lines
+    /// it reads.
+    fn sheet_with(shown: Vec<fb_character::conditions::Condition>) -> (App, Vec<String>) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<UiFonts>().init_resource::<ConditionIcons>().init_resource::<Assets<Image>>().insert_resource(ShownConditions(shown));
+        app.add_systems(Update, update_conditions);
+        app.world_mut().spawn(ConditionList);
+        app.update();
+        let lines = texts(&mut app);
+        (app, lines)
+    }
+
+    /// The texts under the list, in the order they are laid out.
+    fn texts(app: &mut App) -> Vec<String> {
+        fn walk(world: &World, at: Entity, out: &mut Vec<String>) {
+            if let Some(text) = world.get::<Text>(at) {
+                out.push(text.0.clone());
+            }
+            for &child in world.get::<Children>(at).map(|c| &c[..]).unwrap_or_default() {
+                walk(world, child, out);
+            }
+        }
+        let mut lists = app.world_mut().query_filtered::<Entity, With<ConditionList>>();
+        let list = lists.single(app.world()).unwrap();
+        let mut out = Vec::new();
+        walk(app.world(), list, &mut out);
+        out
+    }
+
+    #[test]
+    fn the_conditions_section_lists_each_condition_with_its_badge_and_says_so_when_there_are_none() {
+        use fb_character::conditions::{Circumstances, conditions};
+        let (_, empty) = sheet_with(vec![]);
+        assert_eq!(empty, vec![NO_CONDITIONS.to_string()]);
+        let now = Circumstances { poisoned: fb_character::poison::Poisoned::for_hours(1.0), held_pace: Some(0.25), ..Circumstances::default() };
+        let (mut app, lines) = sheet_with(conditions(&now));
+        assert_eq!(lines, ["Held", "Moving at 25% pace until you strike what holds you", "Poisoned", "No effect yet; wears off in 60 minutes"]);
+        let mut badges = app.world_mut().query::<(&Name, &BorderColor)>();
+        let rims: Vec<(String, BorderColor)> = badges.iter(app.world()).map(|(n, c)| (n.to_string(), *c)).collect();
+        assert!(rims.contains(&("Poisoned badge".to_string(), BorderColor::all(severity_colour(fb_character::conditions::Severity::Moderate)))), "{rims:?}");
+        let mut icons = app.world_mut().query::<&ImageNode>();
+        assert_eq!(icons.iter(app.world()).count(), 2, "each badge has its icon");
+        // The list follows the conditions as they change.
+        app.world_mut().resource_mut::<ShownConditions>().0.clear();
+        app.update();
+        assert_eq!(texts(&mut app), vec![NO_CONDITIONS.to_string()]);
     }
 
     #[test]

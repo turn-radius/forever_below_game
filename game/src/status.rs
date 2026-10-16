@@ -10,6 +10,10 @@
 //! - The row is placed from the orb cluster's layout in `vmin` ([`cluster_layout`]), so it scales
 //!   with the window, and it is part of the HUD, so it hides under screens.
 //!
+//! - The character sheet lists the same conditions with the same badges
+//!   (`crate::inventory::sheet::update_conditions`, [`badge`], [`ConditionIcons`]), which is
+//!   where the player reads them while the mouse is locked.
+//!
 //! `FB_CONDITIONS` holds the delver under conditions for captures, and `FB_CONDITION_HOVER`
 //! shows one badge's card ([`DebugConditions`]).
 
@@ -24,7 +28,7 @@ use bevy::{
 use fb_character::LoadBand;
 use fb_character::conditions::{Circumstances, Condition, ConditionKind, Severity, conditions};
 
-use crate::character::{Character, DelverNeeds, DelverStamina, Load, modifier};
+use crate::character::{Character, DelverNeeds, DelverPoison, DelverStamina, Load, modifier};
 use crate::combat::orbs::{OrbCluster, cluster_layout};
 use crate::combat::vitals::Constricted;
 use crate::exhaustion::Exhaustion;
@@ -36,7 +40,7 @@ pub struct StatusPlugin;
 
 impl Plugin for StatusPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ShownConditions>().insert_resource(DebugConditions::from_env()).add_systems(
+        app.init_resource::<ShownConditions>().init_resource::<ConditionIcons>().insert_resource(DebugConditions::from_env()).add_systems(
             Update,
             (spawn_row, hold_debug_conditions, read_conditions, draw_badges, show_card).chain().in_set(DelveSystems),
         );
@@ -77,10 +81,10 @@ pub struct StatusCard;
 #[allow(clippy::type_complexity)]
 fn read_conditions(
     character: Option<Res<Character>>,
-    players: Query<(&DelverNeeds, &Exhaustion, &DelverStamina, &Load, Has<Constricted>, Option<&Slowed>), With<Player>>,
+    players: Query<(&DelverNeeds, &Exhaustion, &DelverStamina, &Load, Has<Constricted>, Option<&Slowed>, Option<&DelverPoison>), With<Player>>,
     mut shown: ResMut<ShownConditions>,
 ) {
-    let Some((needs, exhaustion, stamina, load, held, slowed)) = players.iter().next() else { return };
+    let Some((needs, exhaustion, stamina, load, held, slowed, poison)) = players.iter().next() else { return };
     let now = Circumstances {
         needs: needs.0,
         exhaustion: exhaustion.0,
@@ -88,6 +92,7 @@ fn read_conditions(
         load: load.0,
         con_modifier: character.map_or(0, |c| modifier(c.constitution())),
         held_pace: held.then(|| slowed.map_or(1.0, |s| s.0 as f64)),
+        poisoned: poison.map_or_else(Default::default, |p| p.0),
     };
     let list = conditions(&now);
     if shown.0 != list {
@@ -150,8 +155,8 @@ fn draw_badges(
     shown: Res<ShownConditions>,
     mut rows: Query<(Entity, &mut Node, Ref<StatusRow>), Without<StatusBadge>>,
     badges: Query<Entity, With<StatusBadge>>,
-    images: Option<ResMut<Assets<Image>>>,
-    mut icons: Local<HashMap<ConditionKind, Handle<Image>>>,
+    mut images: Option<ResMut<Assets<Image>>>,
+    mut icons: ResMut<ConditionIcons>,
 ) {
     if !shown.is_changed() && !rows.iter().any(|(_, _, row)| row.is_added()) {
         return;
@@ -159,7 +164,6 @@ fn draw_badges(
     for badge in &badges {
         commands.entity(badge).despawn();
     }
-    let mut images = images;
     let layout = cluster_layout();
     for (row, mut node, _) in &mut rows {
         let display = if shown.0.is_empty() { Display::None } else { Display::Flex };
@@ -168,30 +172,54 @@ fn draw_badges(
         }
         commands.entity(row).with_children(|row| {
             for (n, condition) in shown.0.iter().enumerate() {
-                let colour = severity_colour(condition.severity);
-                let mut badge = row.spawn((
-                    Name::new(format!("{} badge", condition.name)),
-                    StatusBadge(n),
-                    Node {
-                        width: vmin(layout.badge),
-                        height: vmin(layout.badge),
-                        border: UiRect::all(vmin(layout.badge * 0.07)),
-                        border_radius: BorderRadius::MAX,
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BackgroundColor(colour.darker(0.55).with_alpha(0.92)),
-                    BorderColor::all(colour),
-                    Pickable::IGNORE,
-                ));
-                if let Some(images) = images.as_deref_mut() {
-                    let icon = icons.entry(condition.kind).or_insert_with(|| images.add(icon_image(condition.kind))).clone();
-                    badge.with_child((ImageNode { image: icon, color: colour.lighter(0.12), ..default() }, Node { width: percent(74), height: percent(74), ..default() }, Pickable::IGNORE));
-                }
+                let icon = icons.get(condition.kind, images.as_deref_mut());
+                badge(row, condition, vmin(layout.badge), vmin(layout.badge * 0.07), icon).insert(StatusBadge(n));
             }
         });
     }
+}
+
+/// The badge icons, drawn once a kind and shared by the HUD row and the character sheet.
+#[derive(Resource, Debug, Default)]
+pub struct ConditionIcons(HashMap<ConditionKind, Handle<Image>>);
+
+impl ConditionIcons {
+    /// The icon for `kind`, drawn into `images` the first time it is asked for. None without
+    /// images (the logic tests).
+    pub fn get(&mut self, kind: ConditionKind, images: Option<&mut Assets<Image>>) -> Option<Handle<Image>> {
+        if let Some(icon) = self.0.get(&kind) {
+            return Some(icon.clone());
+        }
+        let icon = images?.add(icon_image(kind));
+        self.0.insert(kind, icon.clone());
+        Some(icon)
+    }
+}
+
+/// Spawns one condition's badge under `parent`: a disc `size` across with a `rim` in its
+/// severity's colour and its icon (if drawn) tinted to match.
+pub fn badge<'a>(parent: &'a mut ChildSpawnerCommands, condition: &Condition, size: Val, rim: Val, icon: Option<Handle<Image>>) -> EntityCommands<'a> {
+    let colour = severity_colour(condition.severity);
+    let mut badge = parent.spawn((
+        Name::new(format!("{} badge", condition.name)),
+        Node {
+            width: size,
+            height: size,
+            flex_shrink: 0.0,
+            border: UiRect::all(rim),
+            border_radius: BorderRadius::MAX,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(colour.darker(0.55).with_alpha(0.92)),
+        BorderColor::all(colour),
+        Pickable::IGNORE,
+    ));
+    if let Some(icon) = icon {
+        badge.with_child((ImageNode { image: icon, color: colour.lighter(0.12), ..default() }, Node { width: percent(74), height: percent(74), ..default() }, Pickable::IGNORE));
+    }
+    badge
 }
 
 /// The badge under the mouse, while the mouse is free (or the one `FB_CONDITION_HOVER` names),
@@ -233,7 +261,8 @@ fn show_card(
 
 /// Conditions to hold the delver under, for captures: `FB_CONDITIONS` lists them, comma
 /// separated, as `hunger:<0 to 1>`, `thirst:<0 to 1>`, `sleep:<0 to 1>`, `exhaustion:<level>`,
-/// `winded` and `load:<light|burdened|encumbered|overloaded>`; `FB_CONDITION_HOVER=<n>` shows the
+/// `winded`, `load:<light|burdened|encumbered|overloaded>` and `poisoned` (for an hour) or
+/// `poisoned:<minutes>`; `FB_CONDITION_HOVER=<n>` shows the
 /// card of the `n`th badge.
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct DebugConditions {
@@ -243,6 +272,8 @@ pub struct DebugConditions {
     pub exhaustion: Option<u32>,
     pub winded: bool,
     pub load: Option<LoadBand>,
+    /// Game hours of poison to hold the delver at.
+    pub poisoned: Option<f64>,
     pub hover: Option<usize>,
 }
 
@@ -267,6 +298,7 @@ impl DebugConditions {
                 "sleep" | "sleepiness" => debug.sleepiness = share,
                 "exhaustion" => debug.exhaustion = value.trim().parse().ok(),
                 "winded" => debug.winded = true,
+                "poisoned" | "poison" => debug.poisoned = Some(value.trim().parse::<f64>().map_or(fb_character::poison::VENOM_POISONED_HOURS, |minutes| minutes.max(0.0) / 60.0)),
                 "load" => {
                     debug.load = match value.trim().to_ascii_lowercase().as_str() {
                         "light" => Some(LoadBand::Light),
@@ -283,17 +315,28 @@ impl DebugConditions {
     }
 
     fn holds_anything(&self) -> bool {
-        self.hunger.is_some() || self.thirst.is_some() || self.sleepiness.is_some() || self.exhaustion.is_some() || self.winded || self.load.is_some()
+        self.hunger.is_some() || self.thirst.is_some() || self.sleepiness.is_some() || self.exhaustion.is_some() || self.winded || self.load.is_some() || self.poisoned.is_some()
     }
 }
 
 /// Holds the delver under the [`DebugConditions`] every frame, so the simulation cannot clear
 /// them before a capture.
-fn hold_debug_conditions(debug: Res<DebugConditions>, mut players: Query<(&mut DelverNeeds, &mut Exhaustion, &mut DelverStamina, &mut Load), With<Player>>) {
+#[allow(clippy::type_complexity)]
+fn hold_debug_conditions(
+    mut commands: Commands,
+    debug: Res<DebugConditions>,
+    mut players: Query<(Entity, &mut DelverNeeds, &mut Exhaustion, &mut DelverStamina, &mut Load, Option<&DelverPoison>), With<Player>>,
+) {
     if !debug.holds_anything() {
         return;
     }
-    for (mut needs, mut exhaustion, mut stamina, mut load) in &mut players {
+    for (player, mut needs, mut exhaustion, mut stamina, mut load, poison) in &mut players {
+        if let Some(hours) = debug.poisoned {
+            let held = DelverPoison(fb_character::poison::Poisoned::for_hours(hours));
+            if poison != Some(&held) {
+                commands.entity(player).insert(held);
+            }
+        }
         let mut held = needs.0;
         for (value, meter) in [(debug.hunger, &mut held.hunger), (debug.thirst, &mut held.thirst), (debug.sleepiness, &mut held.sleepiness)] {
             if let Some(value) = value {
@@ -359,8 +402,8 @@ fn polygon(p: Vec2, corners: &[Vec2]) -> f32 {
 }
 
 /// The signed distance from `p` (from -1 to 1 across, y down) to the icon for `kind`. The
-/// shapes are our own: a loaf, a drop, a crescent moon, an hourglass, gusts of wind, a weight
-/// and two links of a chain.
+/// shapes are our own: a loaf, a drop, a crescent moon, an hourglass, gusts of wind, a weight,
+/// two links of a chain and a bubbling flask.
 pub fn icon_distance(kind: ConditionKind, p: Vec2) -> f32 {
     let v = Vec2::new;
     match kind {
@@ -394,6 +437,11 @@ pub fn icon_distance(kind: ConditionKind, p: Vec2) -> f32 {
             body.min(ring(p, v(0.0, -0.48), 0.3, 0.17))
         }
         ConditionKind::Held => ring(p, v(-0.32, 0.0), 0.42, 0.2).min(ring(p, v(0.32, 0.0), 0.42, 0.2)),
+        ConditionKind::Poisoned => {
+            let flask = circle(p, v(0.0, 0.28), 0.52).min(capsule(p, v(0.0, -0.2), v(0.0, -0.6), 0.17)).min(capsule(p, v(-0.25, -0.7), v(0.25, -0.7), 0.09));
+            let bubbles = circle(p, v(-0.16, 0.36), 0.13).min(circle(p, v(0.2, 0.16), 0.09)).min(circle(p, v(0.08, 0.5), 0.07));
+            flask.max(-bubbles)
+        }
     }
 }
 
@@ -418,7 +466,7 @@ mod tests {
     use super::*;
     use crate::launch::AppState;
 
-    const KINDS: [ConditionKind; 7] = [
+    const KINDS: [ConditionKind; 8] = [
         ConditionKind::Hunger,
         ConditionKind::Thirst,
         ConditionKind::Sleepiness,
@@ -426,6 +474,7 @@ mod tests {
         ConditionKind::Winded,
         ConditionKind::Load,
         ConditionKind::Held,
+        ConditionKind::Poisoned,
     ];
 
     #[test]
@@ -452,11 +501,12 @@ mod tests {
 
     #[test]
     fn the_debug_list_reads_each_condition() {
-        let debug = DebugConditions::parse("hunger:0.8, winded,load:Encumbered,exhaustion:2,thirst:3,bogus");
+        let debug = DebugConditions::parse("hunger:0.8, winded,load:Encumbered,exhaustion:2,thirst:3,poisoned:30,bogus");
         assert_eq!(
             debug,
-            DebugConditions { hunger: Some(0.8), thirst: Some(1.0), exhaustion: Some(2), winded: true, load: Some(LoadBand::Encumbered), ..DebugConditions::default() }
+            DebugConditions { hunger: Some(0.8), thirst: Some(1.0), exhaustion: Some(2), winded: true, load: Some(LoadBand::Encumbered), poisoned: Some(0.5), ..DebugConditions::default() }
         );
+        assert_eq!(DebugConditions::parse("poisoned").poisoned, Some(1.0), "an hour, as venom gives");
         assert!(!DebugConditions::parse("").holds_anything());
     }
 
@@ -488,6 +538,20 @@ mod tests {
         let (mut app, _) = delve();
         assert_eq!(badges(&mut app), Vec::<String>::new());
         assert_eq!(row_display(&mut app), Display::None);
+    }
+
+    #[test]
+    fn venom_shows_a_poisoned_badge_with_the_minutes_left_until_it_wears_off() {
+        let (mut app, player) = delve();
+        app.world_mut().entity_mut(player).insert(DelverPoison(fb_character::poison::Poisoned::for_hours(0.5)));
+        app.update();
+        app.update();
+        assert_eq!(badges(&mut app), vec!["Poisoned badge".to_string()]);
+        assert_eq!(app.world().resource::<ShownConditions>().0[0].effect, "No effect yet; wears off in 30 minutes");
+        app.world_mut().entity_mut(player).remove::<DelverPoison>();
+        app.update();
+        app.update();
+        assert_eq!(badges(&mut app), Vec::<String>::new());
     }
 
     #[test]
