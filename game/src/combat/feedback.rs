@@ -46,6 +46,9 @@ pub struct Struck {
     pub damage: u32,
     /// Where the blow came from on the floor (world `(x, z)`), to knock it away from.
     pub from: Vec2,
+    /// Whether it is a bludgeoning blow (a mace, a club, a staff, a fist), which a skeleton
+    /// takes double of.
+    pub bludgeoning: bool,
 }
 
 /// A creature at 0 hit points: its body, lying where it fell for the rest of the run.
@@ -122,6 +125,16 @@ pub struct CreatureSounds {
     pub thud: Handle<AudioSource>,
 }
 
+/// How far a blow's damage is changed by what struck a creature: a skeleton takes double from
+/// a bludgeoning blow (its stat block's vulnerability). `blow` is the damage as rolled.
+pub fn damage_to(critter: &Critter, blow: &Struck) -> u32 {
+    if critter.spot.species.is_skeleton() {
+        crate::creatures::skeletons::damage_taken(blow.damage, crate::creatures::skeletons::damage_type(blow.bludgeoning))
+    } else {
+        blow.damage
+    }
+}
+
 fn load_creature_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>) {
     if let Some(assets) = assets {
         commands.insert_resource(CreatureSounds {
@@ -151,14 +164,28 @@ fn take_blows(
     settings: Option<Res<GameSettings>>,
     tuning: Res<Tuning>,
     mut creatures: Query<(&Critter, &Transform, &mut Health), Without<Corpse>>,
+    bone_sounds: Option<Res<crate::creatures::skeletons::BoneSounds>>,
+    dice: Option<ResMut<super::RunDice>>,
     children: Query<&Children>,
     materials: Query<&MeshMaterial3d<ToonMaterial>>,
     flinches: Query<&Flinch>,
     toon: Option<Res<Assets<ToonMaterial>>>,
 ) {
+    let mut dice = dice;
     for blow in struck.read() {
         let Ok((critter, at, mut health)) = creatures.get_mut(blow.target) else { continue };
-        let fell = health.hurt(blow.damage);
+        let game = settings.as_deref().copied().unwrap_or_default();
+        // A skeleton's shield turns some blows from the front: a clash, no harm and no flinch.
+        if let Some(kit) = critter.kit.as_ref().filter(|_| critter.spot.species.is_skeleton()) {
+            let roll = dice.as_deref_mut().map_or(1.0, |d| d.0.next_f64() as f32);
+            if kit.blocks(at.translation.xz(), at.rotation.to_euler(EulerRot::YXZ).0, blow.from, roll) {
+                if let Some(sounds) = &bone_sounds {
+                    crate::creatures::skeletons::play_at(&mut commands, "shield blocks", sounds.block.clone(), at.translation, &game, &tuning);
+                }
+                continue;
+            }
+        }
+        let fell = health.hurt(damage_to(critter, blow));
         let away = (at.translation.xz() - blow.from).normalize_or_zero();
         let lit = children
             .iter_descendants(blow.target)
@@ -172,9 +199,13 @@ fn take_blows(
         };
         let push = away * knockback(&critter.creature) * tuning.combat.knockback_scale;
         commands.entity(blow.target).insert(Flinch { left: tuning.combat.flash_time(), push, materials: lit });
-        if let Some(sounds) = &sounds {
+        if critter.spot.species.is_skeleton() {
+            // Its own clack of bone, never a rat's squeak or a snake's hiss.
+            if let Some(sounds) = &bone_sounds {
+                crate::creatures::skeletons::play_at(&mut commands, "bones clack", sounds.hit.clone(), at.translation, &game, &tuning);
+            }
+        } else if let Some(sounds) = &sounds {
             let sound = if critter.spot.species.is_rat() { sounds.squeak.clone() } else { sounds.hiss.clone() };
-            let game = settings.as_deref().copied().unwrap_or_default();
             commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
         }
         if fell {
@@ -243,7 +274,7 @@ fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creat
 
 /// Lays each body down once the flash's hold is over ([`collapse_share`]): a rat rolls onto its
 /// back about its middle, a snake goes slack.
-fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent)>) {
+pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent)>) {
     let hold = tuning.combat.flash_hold;
     for (critter, mut corpse, mut transform, mut intent) in &mut bodies {
         corpse.since += time.delta_secs();
@@ -251,9 +282,15 @@ fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &
             continue;
         }
         // Limp: uncoiled and flat, the jaw a little open, the tongue lolling.
-        *intent = Intent { coil: 0.0, rear: 0.0, strike: 0.0, jaw: 0.35, tongue: 0.6, look: 0.0 };
-        if let Creature::Rat(rat) = &critter.creature {
-            *transform = rolled_over(rat, &corpse.fell, collapse_share(corpse.since, hold));
+        *intent = Intent { coil: 0.0, rear: 0.0, strike: 0.0, jaw: 0.35, tongue: 0.6, look: 0.0, swing: None, fallen: 0.0 };
+        match &critter.creature {
+            Creature::Rat(rat) => *transform = rolled_over(rat, &corpse.fell, collapse_share(corpse.since, hold)),
+            Creature::Skeleton(_) => {
+                let share = collapse_share(corpse.since, hold);
+                intent.fallen = share.max(1e-3);
+                *transform = laid_back(critter.kit.as_ref().map_or(17.0, |k| k.height), &corpse.fell, share);
+            }
+            Creature::Snake(_) => {}
         }
     }
 }
@@ -271,6 +308,19 @@ pub fn rolled_over(rat: &fb_creatures::RatState, fell: &Transform, share: f32) -
     let local = middle - roll * middle - Vec3::Y * drop;
     Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
 }
+
+/// A skeleton of `height` that stood at `fell`, `share` of the way through falling onto its
+/// back: turned about its feet, away from where it faced, and raised by half its body's depth so
+/// its back rests on the floor and not in it.
+pub fn laid_back(height: f32, fell: &Transform, share: f32) -> Transform {
+    let s = share * share * (3.0 - 2.0 * share);
+    let fall = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2 * s);
+    let lift = Vec3::Y * (BACK_DEPTH * height * s * fell.scale.y);
+    Transform { translation: fell.translation + lift, rotation: fell.rotation * fall, ..*fell }
+}
+
+/// How deep a lying skeleton's back is below its centre line, as a share of its height. Our own.
+const BACK_DEPTH: f32 = 0.07;
 
 #[cfg(test)]
 mod tests {

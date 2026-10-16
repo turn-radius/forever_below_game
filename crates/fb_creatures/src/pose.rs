@@ -563,6 +563,30 @@ mod tests {
         let (bent, rest) = (snake_spine(&state, &SnakePose { bend, ..SnakePose::REST }, 41), snake_spine(&state, &SnakePose::REST, 41));
         assert!(bent.iter().zip(&rest).all(|(a, b)| vec3::distance(a.0, b.0) < 1e-3));
     }
+
+    #[test]
+    fn a_fallen_skeleton_has_its_knees_up_and_its_arms_out() {
+        use crate::skeleton::SkeletonState;
+        let state = SkeletonState::roll(5);
+        let d = state.dims();
+        let standing = skeleton_with(&d, &SkeletonPose::default());
+        // Not yet falling, it stands as it did, to within its breathing and sway.
+        let start = skeleton_fallen(&d, 0.0);
+        for (a, b) in start.iter().zip(&standing) {
+            let off = (0..3).flat_map(|i| (0..3).map(move |j| (i, j))).map(|(i, j)| (a.rotation.cols[i][j] - b.rotation.cols[i][j]).abs()).fold(0.0, f32::max);
+            assert!(off < 0.08, "{off}");
+            assert_eq!(a.origin, b.origin);
+        }
+        let down = skeleton_fallen(&d, 1.0);
+        assert_eq!(down.len(), standing.len());
+        let thigh = leg_bone(Side::Right);
+        // The right thigh is drawn up and forward from hanging straight down.
+        let thigh_dir = down[thigh].rotation.transform([0.0, -1.0, 0.0]);
+        assert!(thigh_dir[2] > 0.5, "{thigh_dir:?}");
+        let arm = arm_bone(Side::Right);
+        let arm_dir = down[arm].rotation.transform([0.0, -1.0, 0.0]);
+        assert!(arm_dir[0] < -0.3, "flung out to its right, {arm_dir:?}");
+    }
 }
 
 
@@ -623,6 +647,34 @@ pub fn skeleton(state: &SkeletonState, pose: &SkeletonPose) -> Vec<Placement> {
 /// [`skeleton`] on dimensions already measured.
 pub fn skeleton_with(d: &SkeletonDims, pose: &SkeletonPose) -> Vec<Placement> {
     skeleton_armed(d, pose, &[None, None])
+}
+
+/// A skeleton `share` of the way (0 to 1) through collapsing onto its back, for the bones: the
+/// standing pose with the knees drawn up, the arms flung out, the head fallen back and the
+/// jaw slack. The body as a whole is laid back by whatever holds it (the game turns the root
+/// about the feet); this is how its limbs go as it falls. Our own.
+pub fn skeleton_fallen(d: &SkeletonDims, share: f32) -> Vec<Placement> {
+    use skeleton_bone as bone;
+    let s = share.clamp(0.0, 1.0);
+    let s = s * s * (3.0 - 2.0 * s);
+    let mut out = skeleton_with(d, &SkeletonPose::default());
+    let rot_z = |a: f32| Mat3::from_axis_angle([0.0, 0.0, 1.0], a);
+    for (k, side) in Side::BOTH.into_iter().enumerate() {
+        // The right side lies toward -X: its limbs turn that way, the left's the other.
+        let out_way = if k == 0 { -1.0 } else { 1.0 };
+        let l = leg_bone(side);
+        out[l].rotation = rot_x(-(0.9 + 0.25 * k as f32) * s).mul_mat(&rot_z(out_way * 0.25 * s));
+        out[l + 1].rotation = rot_x((1.6 - 0.3 * k as f32) * s);
+        out[l + 2].rotation = rot_x(-0.3 * s);
+        let a = arm_bone(side);
+        out[a].rotation = rot_x(-0.25 * s).mul_mat(&rot_z(out_way * (0.7 + 0.3 * k as f32) * s));
+        out[a + 1].rotation = rot_x(-(0.3 + 0.4 * k as f32) * s);
+    }
+    out[bone::SPINE].rotation = rot_x(-0.12 * s);
+    out[bone::NECK].rotation = rot_x(0.35 * s);
+    out[bone::SKULL].rotation = rot_y(0.4 * s).mul_mat(&rot_x(0.25 * s));
+    out[bone::JAW].rotation = rot_x(0.5 * 0.7 * s);
+    out
 }
 
 /// How an arm that holds something is set: the turns (each on its parent, from the rest pose) of

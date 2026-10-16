@@ -1,4 +1,5 @@
-//! Creatures in the level (`fb_level::CreatureSpot`): rats and snakes from `fb_creatures`, drawn
+//! Creatures in the level (`fb_level::CreatureSpot`): rats, snakes and skeletons ([`skeletons`], in
+//! their gear) from `fb_creatures`, drawn
 //! in the house style (toon bands, ink and wear) and moved bone by bone without a skeleton.
 //!
 //! - Each creature is a root on the floor at its spot, facing its yaw, with one entity per bone
@@ -35,12 +36,16 @@ use crate::render::{ItemAppearance, ItemSpawner};
 use crate::tuning::Tuning;
 
 pub mod behaviour;
+pub mod skeletons;
+
+use std::sync::Arc;
+use skeletons::{Rattle, SkeletonKit, WornGear};
 
 pub struct CreaturesPlugin;
 
 impl Plugin for CreaturesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(behaviour::BehaviourPlugin)
+        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin))
             .init_resource::<Tuning>()
             .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), size_creatures, idle, animate).chain().in_set(DelveSystems));
     }
@@ -57,18 +62,34 @@ pub struct Critter {
     /// How much larger than rolled it is drawn: its species' tuned size ([`size_creatures`]).
     /// The creature itself stays as its seed made it.
     pub size: f32,
+    /// A skeleton's measures, weapon, armour and gear, worked out once when it appears, so
+    /// nothing rebuilds its body each frame. `None` for the other creatures.
+    pub kit: Option<Arc<SkeletonKit>>,
 }
 
 impl Critter {
-    /// `creature`, from `spot`, at the size it was rolled.
+    /// `creature`, from `spot`, at the size it was rolled. A skeleton has nothing worn or held
+    /// until given a kit ([`Critter::with_kit`]).
     pub fn new(spot: CreatureSpot, creature: Creature) -> Critter {
-        Critter { spot, radius: creature.radius(), creature, size: 1.0 }
+        let kit = match &creature {
+            Creature::Skeleton(skeleton) => Some(Arc::new(SkeletonKit::bare(skeleton))),
+            _ => None,
+        };
+        let radius = kit.as_ref().map_or_else(|| creature.radius(), |k| k.radius);
+        Critter { spot, radius, creature, size: 1.0, kit }
+    }
+
+    /// This skeleton in its `kit` of gear.
+    pub fn with_kit(mut self, kit: SkeletonKit) -> Critter {
+        self.radius = kit.radius * self.size;
+        self.kit = Some(Arc::new(kit));
+        self
     }
 
     /// Draws it `size` times as large as rolled, covering that much more floor.
     pub fn resize(&mut self, size: f32) {
         self.size = size;
-        self.radius = self.creature.radius() * size;
+        self.radius = self.kit.as_ref().map_or_else(|| self.creature.radius(), |k| k.radius) * size;
     }
 }
 
@@ -121,6 +142,11 @@ pub struct Intent {
     /// A snake's tongue out.
     pub tongue: f32,
     pub look: f32,
+    /// A skeleton's swing, how far through it (0 to 1, as `fb_creatures::pose::SkeletonPose`
+    /// takes it), used as it is, not eased.
+    pub swing: Option<f32>,
+    /// A skeleton's collapse, how far through it (0 to 1), used as it is.
+    pub fallen: f32,
 }
 
 /// The pose's moving parts, eased from frame to frame.
@@ -243,16 +269,67 @@ fn spawn_creatures(mut commands: Commands, level: Res<CurrentLevel>, old: Query<
     for entity in &old {
         commands.entity(entity).despawn();
     }
-    for spot in &level.0.creatures {
-        spawn_creature(&mut commands, &mut spawner, &level.0, spot);
+    debug!("spawning creatures: {:?}", level.0.creatures.iter().map(|c| c.species).collect::<Vec<_>>());
+    for spot in level.0.creatures.iter().copied().chain(dev_spots(&level.0)) {
+        spawn_creature(&mut commands, &mut spawner, &level.0, &spot);
     }
     *shown = Some(level.0.creatures.clone());
 }
 
-/// Spawns one creature: a root at its spot and a tree of bones carrying its parts.
+/// Creatures `FB_SPAWN` asks for, for captures and for trying a fight: `skeleton` or
+/// `skeleton:<seed>[,<seed>...]` (`skeleton` alone is seed 1207), each [`DEV_AHEAD`] cells
+/// ahead of the level's start and spread across the way, facing the start. None when unset.
+pub fn dev_spots(level: &Level) -> Vec<CreatureSpot> {
+    let Some(spec) = std::env::var("FB_SPAWN").ok().filter(|s| !s.is_empty()) else { return Vec::new() };
+    dev_spots_for(level, &spec)
+}
+
+/// How far ahead of the start `FB_SPAWN` stands a creature, cells.
+const DEV_AHEAD: f32 = 2.5;
+
+/// [`dev_spots`] for the value `spec`.
+pub fn dev_spots_for(level: &Level, spec: &str) -> Vec<CreatureSpot> {
+    let (name, seeds) = spec.split_once(':').unwrap_or((spec, ""));
+    let species = match name.trim() {
+        "skeleton" => fb_creatures::Species::Skeleton,
+        other => {
+            warn!("FB_SPAWN: no creature called {other:?} (try skeleton)");
+            return Vec::new();
+        }
+    };
+    let seeds: Vec<u32> = seeds.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+    let seeds = if seeds.is_empty() { vec![1207] } else { seeds };
+    let (sx, sy, facing) = level.start();
+    let yaw = facing.yaw();
+    info!("FB_SPAWN: the start is cell ({sx}, {sy}) facing {:.0} degrees", yaw.to_degrees());
+    // The way the start faces, in cells (yaw 0 faces -y, positive turns toward -x), and across.
+    let ahead = Vec2::new(-yaw.sin(), -yaw.cos());
+    let across = Vec2::new(-ahead.y, ahead.x);
+    let count = seeds.len() as f32;
+    seeds
+        .into_iter()
+        .enumerate()
+        .map(|(i, seed)| {
+            let at = Vec2::new(sx as f32 + 0.5, sy as f32 + 0.5) + ahead * DEV_AHEAD + across * (i as f32 - 0.5 * (count - 1.0)) * 1.2;
+            CreatureSpot { x: at.x, y: at.y, yaw: yaw + std::f32::consts::PI, species, seed, pack: 0 }
+        })
+        .collect()
+}
+
+/// Spawns one creature: a root at its spot and a tree of bones carrying its parts. A skeleton
+/// is drawn in the gear its seed rolls, each piece on the bone it rides ([`WornGear`]).
 pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot) -> Entity {
-    let rig = spot.creature().rig();
-    let (root, bones) = spawn_skeleton(commands, level, spot, &rig);
+    let creature = spot.creature();
+    let gear = match &creature {
+        Creature::Skeleton(skeleton) => Some(fb_creatures::SkeletonGear::roll(skeleton)),
+        _ => None,
+    };
+    let rig = gear.as_ref().map_or_else(|| creature.rig(), |g| g.rig.clone());
+    let kit = match (&creature, &gear) {
+        (Creature::Skeleton(skeleton), Some(gear)) => Some(SkeletonKit::armed(skeleton, gear)),
+        _ => None,
+    };
+    let (root, bones) = spawn_skeleton_with(commands, level, spot, &rig, kit);
     let appearance = ItemAppearance {
         condition: Condition { state: ConditionState::Custom, wear: Mulberry32::new(spot.seed ^ GRIME_SALT).range_f32(GRIME.0, GRIME.1), ..Condition::default() },
         seed: spot.seed,
@@ -274,6 +351,11 @@ pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level:
             }
         }
     }
+    if let Some(gear) = &gear {
+        for piece in &gear.pieces {
+            spawner.spawn(&piece.mesh, &crate::carry::appearance_of(&piece.item)).insert((Name::new(piece.name.clone()), WornGear, ChildOf(bones[piece.bone])));
+        }
+    }
     root
 }
 
@@ -287,14 +369,23 @@ const GRIME_SALT: u32 = 0x6121_3E00;
 /// Spawns a creature's root at its spot and one entity per bone of `rig` on its parent, with
 /// no parts on them: everything but the drawing. Returns the root and the bones.
 pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig) -> (Entity, Vec<Entity>) {
+    spawn_skeleton_with(commands, level, spot, rig, None)
+}
+
+/// [`spawn_skeleton`] for a skeleton in `kit` (a skeleton given none has nothing worn or held).
+pub fn spawn_skeleton_with(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig, kit: Option<SkeletonKit>) -> (Entity, Vec<Entity>) {
     let creature = spot.creature();
+    let mut critter = Critter::new(*spot, creature);
+    if let Some(kit) = kit {
+        critter = critter.with_kit(kit);
+    }
     let mut rng = Mulberry32::new(spot.seed ^ 0x1D1E);
     let snake = spot.species.is_snake();
     let rest = Intent { coil: if snake { 1.0 } else { 0.0 }, rear: if snake { 0.45 } else { 0.0 }, ..default() };
     let root = commands
         .spawn((
             Name::new(spot.species.stat_block().name),
-            Critter::new(*spot, creature),
+            critter,
             stand_at(level, spot),
             Visibility::default(),
             rest,
@@ -315,6 +406,9 @@ pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpo
     if snake {
         commands.entity(root).insert(Trail::default());
     }
+    if spot.species.is_skeleton() {
+        commands.entity(root).insert(Rattle::new(spot.seed));
+    }
     (root, bones)
 }
 
@@ -323,7 +417,8 @@ pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpo
 /// flick or two of the tongue. Rats' sniffing is in their pose.
 pub fn idle(mut creatures: Query<(&Critter, &Idle, &Motion, &mut Intent), Without<Driven>>) {
     for (critter, idle, motion, mut intent) in &mut creatures {
-        if critter.spot.species.is_rat() {
+        // Only a snake idles like this: rats sniff in their pose, and a skeleton stands.
+        if !critter.spot.species.is_snake() {
             continue;
         }
         let t = motion.time * idle.rate + idle.phase;
@@ -412,9 +507,21 @@ pub fn animate(
                 places
             }
             Creature::Skeleton(skeleton) => {
-                let dims = skeleton.dims();
-                motion.cycle = (motion.cycle + strode / pose::skeleton_stride(&dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
-                pose::skeleton_with(&dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: None })
+                // Measured once, when it appeared.
+                let measured;
+                let (dims, stance) = match &critter.kit {
+                    Some(kit) => (&kit.dims, kit.stance),
+                    None => {
+                        measured = skeleton.dims();
+                        (&measured, [None, None])
+                    }
+                };
+                if intent.fallen > 0.0 {
+                    pose::skeleton_fallen(dims, intent.fallen)
+                } else {
+                    motion.cycle = (motion.cycle + strode / pose::skeleton_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                    pose::skeleton_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)
+                }
             }
         };
         for (entity, place) in bones.0.iter().zip(&places) {
@@ -534,6 +641,49 @@ mod tests {
                 assert!(nearest < tolerance, "{:?} floats {nearest} at frame {frame}", critter.spot.species);
             }
         }
+    }
+
+    #[test]
+    fn a_skeleton_stands_idle_where_a_snake_would_coil_and_rear() {
+        use bevy::time::TimeUpdateStrategy;
+        let level = fb_level::generate(1207);
+        let skeleton = dev_spots_for(&level, "skeleton:5").remove(0);
+        assert_eq!(skeleton.species, fb_creatures::Species::Skeleton);
+        let snake = *level.creatures.iter().find(|c| c.species.is_snake()).unwrap();
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .add_systems(Update, idle);
+        let (skeleton, snake) = {
+            let mut commands = app.world_mut().commands();
+            (spawn_skeleton(&mut commands, &level, &skeleton, &skeleton.creature().rig()).0, spawn_skeleton(&mut commands, &level, &snake, &snake.creature().rig()).0)
+        };
+        app.world_mut().flush();
+        for _ in 0..90 {
+            app.update();
+        }
+        let intent = |e| *app.world().get::<Intent>(e).unwrap();
+        assert_eq!(intent(skeleton), Intent::default(), "a skeleton neither coils, rears nor flicks a tongue");
+        assert!(intent(snake).coil > 0.9 && intent(snake).tongue >= 0.0 && intent(snake).rear > 0.2, "while a snake does");
+    }
+
+    #[test]
+    fn a_skeletons_bones_are_measured_once_and_its_dev_spot_asks_by_name() {
+        let level = fb_level::generate(1207);
+        assert!(dev_spots_for(&level, "unicorn").is_empty());
+        let spots = dev_spots_for(&level, "skeleton:1,2,3");
+        assert_eq!(spots.iter().map(|s| s.seed).collect::<Vec<_>>(), vec![1, 2, 3]);
+        let spot = spots[0];
+        let creature = spot.creature();
+        let critter = Critter::new(spot, creature);
+        let kit = critter.kit.as_ref().unwrap();
+        let Creature::Skeleton(state) = &critter.creature else { unreachable!() };
+        assert_eq!(kit.height, state.height());
+        // The kit stays put as the creature is resized: nothing is measured again.
+        let mut big = critter.clone();
+        big.resize(2.0);
+        assert!(std::sync::Arc::ptr_eq(big.kit.as_ref().unwrap(), critter.kit.as_ref().unwrap()));
+        assert_eq!(big.radius, 2.0 * critter.radius);
     }
 
     #[test]

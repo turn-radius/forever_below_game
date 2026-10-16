@@ -103,6 +103,12 @@ const REPATH: f32 = 0.5;
 /// Turning rates, radians per second.
 const RAT_TURN: f32 = 10.0;
 const SNAKE_TURN: f32 = 3.0;
+const SKELETON_TURN: f32 = 5.0;
+/// The wait between a skeleton's swings, seconds. Our own.
+const SKELETON_COOLDOWN: f32 = 0.8;
+/// How much farther than its reach a skeleton's blow still lands, in case the delver steps
+/// back as it falls. Our own.
+const SKELETON_SLACK: f32 = 1.15;
 /// A rat's bite: the lunge takes this long, landing partway through. The wait between bites is
 /// tuned (`rat_cooldown`, [`crate::tuning::CreatureTuning`]).
 const BITE_TIME: f32 = 0.35;
@@ -127,8 +133,8 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => player_radius + 0.55 * rat.length * critter.size,
         Creature::Snake(snake) => player_radius + critter.radius + 0.35 * snake.dims().neck * critter.size,
-        // Arm and weapon: about half its height, until its weapon sets the reach.
-        Creature::Skeleton(skeleton) => player_radius + 0.45 * skeleton.height() * critter.size,
+        // Arm and what it holds, as worked out once at spawn: a spear outreaches a dagger.
+        Creature::Skeleton(skeleton) => player_radius + critter.kit.as_ref().map_or_else(|| 0.45 * skeleton.height(), |k| k.reach) * critter.size,
     }
 }
 
@@ -140,7 +146,7 @@ pub fn body_radius(critter: &Critter) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => 0.3 * rat.length * critter.size,
         Creature::Snake(_) => critter.radius.min(SNAKE_SQUEEZE),
-        Creature::Skeleton(skeleton) => 0.12 * skeleton.height() * critter.size,
+        Creature::Skeleton(skeleton) => 0.12 * critter.kit.as_ref().map_or_else(|| skeleton.height(), |k| k.height) * critter.size,
     }
 }
 
@@ -205,6 +211,7 @@ fn behave(
     mut attacks: MessageWriter<CreatureAttack>,
     mut commands: Commands,
     sounds: Option<Res<crate::combat::feedback::CreatureSounds>>,
+    bone_sounds: Option<Res<super::skeletons::BoneSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
 ) {
     let dt = time.delta_secs().min(0.1);
@@ -284,15 +291,20 @@ fn behave(
                 let in_reach = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius)) && sees.is_some();
                 if !in_reach && brain.attack.is_none() {
                     heading = Some(goal);
-                    speed = species.speed() * if snake { tune.snake_chase_speed } else { tune.rat_chase_speed };
+                    speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() { 1.0 } else { tune.rat_chase_speed };
                 }
                 if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 {
                     brain.attack = Some(0.0);
                     brain.bitten = false;
                     // The cue sounds from the creature as the lunge or rear begins, before the bite.
-                    if let Some(sounds) = &sounds {
+                    // A skeleton's is its own: a rattle of bone as the arm goes back.
+                    let game = settings.as_deref().copied().unwrap_or_default();
+                    if species.is_skeleton() {
+                        if let Some(sounds) = &bone_sounds {
+                            super::skeletons::play_at(&mut commands, "creature attack cue", sounds.rattle.clone(), transform.translation, &game, &tuning);
+                        }
+                    } else if let Some(sounds) = &sounds {
                         let cue = if snake { sounds.snake_rise.clone() } else { sounds.rat_squeal.clone() };
-                        let game = settings.as_deref().copied().unwrap_or_default();
                         commands.spawn((
                             Name::new("creature attack cue"),
                             AudioPlayer::new(cue),
@@ -349,7 +361,7 @@ fn behave(
                 let wanted = to.x.atan2(to.y);
                 let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
                 let turn = (wanted - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                let rate = if snake { SNAKE_TURN } else { RAT_TURN };
+                let rate = if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else { RAT_TURN };
                 transform.rotation = Quat::from_rotation_y(yaw + turn.clamp(-rate * dt, rate * dt));
             }
         }
@@ -366,8 +378,16 @@ fn behave(
         if let Some(since) = brain.attack.as_mut() {
             *since += dt;
             let since = *since;
-            let (lands, done) = if snake { (STRIKE_WINDUP + STRIKE_THROW, STRIKE_TIME) } else { (BITE_LANDS, BITE_TIME) };
-            if snake {
+            // A skeleton swings its weapon: its own time, the blow landing as the arm comes down.
+            let swing_time = critter.kit.as_ref().filter(|_| species.is_skeleton()).map(|k| k.swing_time);
+            let (lands, done) = match swing_time {
+                Some(time) => (super::skeletons::LANDS * time, time),
+                None if snake => (STRIKE_WINDUP + STRIKE_THROW, STRIKE_TIME),
+                None => (BITE_LANDS, BITE_TIME),
+            };
+            if let Some(time) = swing_time {
+                intent.swing = Some((since / time).min(1.0));
+            } else if snake {
                 intent.coil = 1.0;
                 intent.rear = 1.0;
                 let thrown = (STRIKE_WINDUP..STRIKE_WINDUP + 0.35).contains(&since);
@@ -376,6 +396,15 @@ fn behave(
                 intent.tongue = 0.0;
             } else {
                 intent.strike = if since < BITE_TIME * 0.6 { 1.0 } else { 0.0 };
+            }
+            if !brain.bitten && since >= lands && species.is_skeleton() {
+                brain.bitten = true;
+                // The weapon's blow: only if the delver has not stepped out of its reach.
+                let within = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius) * SKELETON_SLACK);
+                if let (true, Some(kit)) = (within, critter.kit.as_ref()) {
+                    let damage = kit.roll_damage(&mut brain.rng);
+                    attacks.write(CreatureAttack { attacker: entity, species, damage, poison: 0, attacker_pos: at });
+                }
             }
             if !brain.bitten && since >= lands {
                 brain.bitten = true;
@@ -386,7 +415,7 @@ fn behave(
             }
             if since >= done {
                 brain.attack = None;
-                brain.cooldown = if snake { tune.snake_cooldown } else { tune.rat_cooldown };
+                brain.cooldown = if snake { tune.snake_cooldown } else if species.is_skeleton() { SKELETON_COOLDOWN } else { tune.rat_cooldown };
             }
         }
     }
