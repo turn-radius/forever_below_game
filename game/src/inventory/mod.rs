@@ -125,7 +125,7 @@ impl Plugin for InventoryPlugin {
                         build_screen,
                         drag_items,
                         unhang_without_belt,
-                        (sheet::update_status, sheet::update_gear).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::update_status, sheet::update_vitals, sheet::update_gear).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
@@ -653,7 +653,7 @@ pub(crate) fn build_screen(
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
     tuning: Res<Tuning>,
-    players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion), With<crate::play::Player>>,
+    players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
     mut icons: Icons,
 ) {
     let existing = screens.iter().next();
@@ -708,8 +708,11 @@ pub(crate) fn build_screen(
                     .with_children(|leaf| {
                         header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab == SheetTab::Character {
-                            let (needs, exhaustion) = players.single().map_or_else(|_| Default::default(), |(needs, exhaustion)| (needs.0, exhaustion.0));
-                            sheet::sheet(leaf, &fonts, &character, &inventory, &needs, exhaustion);
+                            let (needs, exhaustion, vitals) = players.single().map_or_else(
+                                |_| Default::default(),
+                                |(needs, exhaustion, stamina, mana)| (needs.0, exhaustion.0, sheet::Vitals { stamina: stamina.map_or_else(Default::default, |s| s.0), mana: mana.map_or_else(Default::default, |m| m.0) }),
+                            );
+                            sheet::sheet(leaf, &fonts, &character, &inventory, &needs, exhaustion, vitals);
                             return;
                         }
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
@@ -1264,7 +1267,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
-            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
+            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -1482,7 +1485,7 @@ mod tests {
     fn delver_with(app: &mut App, hunger: f64, exhaustion: u32) -> Entity {
         let mut needs = fb_character::Needs::default();
         needs.hunger.value = hunger;
-        app.world_mut().spawn((crate::play::Player, crate::character::DelverNeeds(needs), crate::exhaustion::Exhaustion(fb_character::Exhaustion::new(exhaustion)))).id()
+        app.world_mut().spawn((crate::play::Player, crate::character::DelverNeeds(needs), crate::exhaustion::Exhaustion(fb_character::Exhaustion::new(exhaustion)), crate::character::DelverStamina::default(), crate::character::DelverMana::default())).id()
     }
 
     /// A rolled `base` with the real affix `name` applied and its weight set to `weight`.
@@ -1673,6 +1676,29 @@ mod tests {
         let hunger = fills.iter(app.world()).find(|(f, _)| f.0 == fb_character::MeterKind::Hunger).map(|(_, n)| n.width).unwrap();
         assert_eq!(hunger, percent(55.0));
         let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+        assert_eq!(sheets.single(app.world()).unwrap(), before, "the sheet was updated, not rebuilt");
+    }
+
+    #[test]
+    fn stamina_and_mana_show_on_the_sheet_and_move_live() {
+        let mut app = screen_app();
+        let delver = delver_with(&mut app, 0.0, 0);
+        press(&mut app, KeyCode::KeyC);
+        let text = sheet_text(&mut app);
+        for want in ["Stamina", "Mana", "Fresh", "4 / 4"] {
+            assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
+        }
+        let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+        let before = sheets.single(app.world()).unwrap();
+        app.world_mut().get_mut::<crate::character::DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.0, winded: true };
+        app.world_mut().get_mut::<crate::character::DelverMana>(delver).unwrap().0.points = 2.0;
+        app.update();
+        let text = sheet_text(&mut app);
+        assert!(text.contains(&"Winded".to_string()) && !text.contains(&"Fresh".to_string()), "{text:?}");
+        assert!(text.contains(&"2 / 4".to_string()), "{text:?}");
+        let mut fills = app.world_mut().query::<(&sheet::VitalFill, &Node)>();
+        let widths: Vec<_> = fills.iter(app.world()).map(|(f, n)| (f.0, n.width)).collect();
+        assert!(widths.contains(&(sheet::Vital::Stamina, percent(0.0))) && widths.contains(&(sheet::Vital::Mana, percent(50.0))), "{widths:?}");
         assert_eq!(sheets.single(app.world()).unwrap(), before, "the sheet was updated, not rebuilt");
     }
 

@@ -9,12 +9,12 @@
 
 use bevy::prelude::*;
 use fb_character::explain::Explained;
-use fb_character::{Exhaustion as ExhaustionLevel, Meter, MeterKind, Needs, modifier};
+use fb_character::{Exhaustion as ExhaustionLevel, Mana, Meter, MeterKind, Needs, Stamina, modifier};
 
 use super::card::place_beside;
 use super::items::Inventory;
 use crate::carry::ViewModelCamera;
-use crate::character::{Character, DelverNeeds, Derived};
+use crate::character::{Character, DelverMana, DelverNeeds, DelverStamina, Derived};
 use crate::exhaustion::Exhaustion;
 use crate::play::{Player, Screen, ScreenOpen, SheetTab};
 use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, node_rect};
@@ -31,6 +31,57 @@ pub struct NeedFill(pub MeterKind);
 /// A need's word: Fed, Peckish, Hungry.
 #[derive(Component, Debug)]
 pub struct NeedWord(pub MeterKind);
+
+/// Which of the two pools a vital bar or word shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Vital {
+    Stamina,
+    Mana,
+}
+
+/// The filled part of the stamina or mana bar.
+#[derive(Component, Debug)]
+pub struct VitalFill(pub Vital);
+
+/// The stamina or mana word: Fresh, Winded; 5 / 10.
+#[derive(Component, Debug)]
+pub struct VitalWord(pub Vital);
+
+/// The delver's stamina and mana, as the sheet shows them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Vitals {
+    pub stamina: Stamina,
+    pub mana: Mana,
+}
+
+/// How full a vital's bar is, 0 to 1: a full bar is the best.
+pub fn vital_fill(vitals: &Vitals, vital: Vital) -> f32 {
+    match vital {
+        Vital::Stamina => vitals.stamina.value.clamp(0.0, 1.0) as f32,
+        Vital::Mana => vitals.mana.fraction() as f32,
+    }
+}
+
+/// A vital's word: stamina Fresh, Tiring, Spent or Winded; mana "5 / 10".
+pub fn vital_word(vitals: &Vitals, vital: Vital) -> String {
+    match vital {
+        Vital::Stamina if vitals.stamina.winded => "Winded".to_string(),
+        Vital::Stamina if vitals.stamina.value > 0.66 => "Fresh".to_string(),
+        Vital::Stamina if vitals.stamina.value > 0.33 => "Tiring".to_string(),
+        Vital::Stamina => "Spent".to_string(),
+        Vital::Mana => format!("{:.0} / {:.0}", vitals.mana.points, vitals.mana.max),
+    }
+}
+
+/// The colour of a vital: stamina calm, amber, red as it empties; mana always the bright ink.
+pub fn vital_colour(vitals: &Vitals, vital: Vital) -> Color {
+    match vital {
+        Vital::Stamina if vitals.stamina.winded || vitals.stamina.value <= 0.33 => BAD,
+        Vital::Stamina if vitals.stamina.value <= 0.66 => ACCENT,
+        Vital::Stamina => OK,
+        Vital::Mana => BRIGHT,
+    }
+}
 
 /// The exhaustion line: "Exhaustion 2: half speed".
 #[derive(Component, Debug)]
@@ -160,7 +211,7 @@ fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Op
 }
 
 /// Builds the character tab's body: the status section.
-pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel) {
+pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel, vitals: Vitals) {
     parent.spawn((CharacterSheet, Name::new("CharacterSheet"), Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() })).with_children(|sheet| {
         heading(sheet, fonts, "attributes");
         sheet.spawn(Node { column_gap: px(18), flex_wrap: FlexWrap::Wrap, row_gap: px(4), ..default() }).with_children(|line| {
@@ -191,8 +242,17 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Cha
         row(sheet, fonts, "Exhaustion", None, |row| {
             row.spawn((ExhaustionLine, Text::new(exhaustion_text(exhaustion)), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
         });
-        // Stamina and mana go here once their meters land (#267, #268): a bar and a word each,
-        // as the needs above, read by the same live system.
+        for (vital, label) in [(Vital::Stamina, "Stamina"), (Vital::Mana, "Mana")] {
+            row(sheet, fonts, label, None, |row| {
+                row.spawn((
+                    Node { width: px(BAR_PX), height: px(BAR_HEIGHT_PX), flex_shrink: 0.0, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), overflow: Overflow::clip(), ..default() },
+                    BackgroundColor(CELL),
+                    BorderColor::all(LINE),
+                ))
+                .with_child((VitalFill(vital), Node { width: percent(vital_fill(&vitals, vital) * 100.0), height: percent(100), ..default() }, BackgroundColor(vital_colour(&vitals, vital))));
+                row.spawn((VitalWord(vital), Text::new(vital_word(&vitals, vital)), UiFonts::style(&fonts.mono_bold, 14.0, vital_colour(&vitals, vital))));
+            });
+        }
     });
 }
 
@@ -365,6 +425,34 @@ pub fn update_status(
         if text.0 != line {
             text.0 = line.clone();
         }
+    }
+}
+
+/// Keeps the open sheet's stamina and mana bars and words true to the delver, writing only
+/// what changed.
+pub fn update_vitals(
+    players: Query<(Option<Ref<DelverStamina>>, Option<Ref<DelverMana>>), With<Player>>,
+    mut fills: Query<(&VitalFill, &mut Node, &mut BackgroundColor)>,
+    mut words: Query<(&VitalWord, &mut Text, &mut TextColor)>,
+) {
+    let Ok((stamina, mana)) = players.single() else { return };
+    if !stamina.as_ref().is_some_and(|s| s.is_changed()) && !mana.as_ref().is_some_and(|m| m.is_changed()) {
+        return;
+    }
+    let vitals = Vitals { stamina: stamina.map_or_else(Default::default, |s| s.0), mana: mana.map_or_else(Default::default, |m| m.0) };
+    for (VitalFill(vital), mut node, mut colour) in &mut fills {
+        let width = percent(vital_fill(&vitals, *vital) * 100.0);
+        if node.width != width {
+            node.width = width;
+        }
+        colour.set_if_neq(BackgroundColor(vital_colour(&vitals, *vital)));
+    }
+    for (VitalWord(vital), mut text, mut colour) in &mut words {
+        let word = vital_word(&vitals, *vital);
+        if text.0 != word {
+            text.0 = word;
+        }
+        colour.set_if_neq(TextColor(vital_colour(&vitals, *vital)));
     }
 }
 
