@@ -72,9 +72,10 @@ pub fn yaw_towards(up: Vec3, forward: Vec3, facing: Option<Vec3>) -> Option<Quat
 }
 
 /// Share of a held flame's lean that points outward, toward the screen edge its hand is on;
-/// the rest points back toward the delver. Straight back the lean is foreshortened to nothing
-/// in first person, so a held flame leans back and out. Our own tuning.
-pub const HELD_OUTWARD: f32 = 0.45;
+/// the rest points back toward the delver. A lean along the look reads badly in first person:
+/// ahead hides the flame behind the head, and back drops it below the torch on screen. So a
+/// held flame leans mostly out, a little back. Our own tuning.
+pub const HELD_OUTWARD: f32 = 0.85;
 
 /// The horizontal way a held flame leans, in the world: back against `ahead`, as a flame
 /// carried forward trails over the burning head toward its bearer, blended with `right` (both
@@ -92,15 +93,16 @@ pub enum FlameLayer {
 }
 
 /// A flame's opacity `t` of the way up its layer (0 at the base, 1 at the tip). The veil is
-/// a thin skin, mostly see-through (0.15 at the base, 0.3 half way up) and only building
-/// toward its tip; the core inside it is what shows, from 0.35 at its base up to 0.9 at its
-/// top. The burning head shows through the lower flame. Our own.
+/// a glowing skin, under half opaque (0.4 at the base, 0.45 half way up) and building toward
+/// its tip; the core inside it, from 0.5 at its base up to 0.9 at its top. A burning head is
+/// seen through fire, tinted and glowing, rather than in front of a flame too faint to wrap it
+/// (0.15 at the base read as a flat shape behind the head). Our own.
 pub fn flame_alpha(layer: FlameLayer, t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     match layer {
-        FlameLayer::Veil if t < 0.5 => 0.15 + 0.3 * t,
-        FlameLayer::Veil => 0.3 + 0.4 * (t - 0.5),
-        FlameLayer::Core => 0.35 + 0.55 * t,
+        FlameLayer::Veil if t < 0.5 => 0.4 + 0.1 * t,
+        FlameLayer::Veil => 0.45 + 0.3 * (t - 0.5),
+        FlameLayer::Core => 0.5 + 0.4 * t,
     }
 }
 
@@ -275,18 +277,18 @@ mod tests {
     }
 
     #[test]
-    fn a_held_flame_leans_back_and_out_by_hand() {
+    fn a_held_flame_leans_out_by_hand_and_a_little_back() {
         // World forward is -Z, right is +X.
         let main = held_facing(Vec3::NEG_Z, Vec3::X, 1.0);
         let off = held_facing(Vec3::NEG_Z, Vec3::X, -1.0);
-        assert!(main.x > 0.3 && main.z > 0.5 && (main.length() - 1.0).abs() < 1e-5, "{main}");
-        assert!(off.x < -0.3 && off.z > 0.5, "{off}");
+        assert!(main.x > 0.9 && main.z > 0.1 && (main.length() - 1.0).abs() < 1e-5, "{main}");
+        assert!(off.x < -0.9 && off.z > 0.1, "{off}");
         assert!((main.x + off.x).abs() < 1e-6);
-        // The flame yaws to it: leaning right and back for the main hand, left and back for the off hand.
+        // The flame yaws to it: leaning right for the main hand, left for the off hand, and a little back.
         let flame = Flame::of(&cone()).unwrap();
         for (facing, side) in [(main, 1.0), (off, -1.0)] {
             let lean = flame.pose(0.0, Vec3::Y, Some(facing)).rotation * Vec3::Z;
-            assert!(lean.x * side > 0.3 && lean.z > 0.5, "{lean}");
+            assert!(lean.x * side > 0.9 && lean.z > 0.1, "{lean}");
         }
     }
 
@@ -306,16 +308,17 @@ mod tests {
         for layer in [FlameLayer::Veil, FlameLayer::Core] {
             assert!(flame_alpha(layer, 0.0) < flame_alpha(layer, 0.5) && flame_alpha(layer, 0.5) < flame_alpha(layer, 1.0), "{layer:?}");
         }
-        // The veil is mostly see-through over its lower half; the core is what builds up.
+        // The veil is under half opaque over its lower half, so what burns shows through it
+        // tinted; the core is what builds up.
         for i in 0..=10 {
             let alpha = flame_alpha(FlameLayer::Veil, i as f32 * 0.05);
-            assert!((0.15..=0.3 + 1e-6).contains(&alpha), "{alpha}");
+            assert!((0.4..=0.45 + 1e-6).contains(&alpha), "{alpha}");
         }
-        assert!((flame_alpha(FlameLayer::Veil, 0.0) - 0.15).abs() < 1e-6);
-        assert!(flame_alpha(FlameLayer::Core, 1.0) > 3.0 * flame_alpha(FlameLayer::Veil, 0.0));
+        assert!((flame_alpha(FlameLayer::Veil, 0.0) - 0.4).abs() < 1e-6);
+        assert!(flame_alpha(FlameLayer::Core, 1.0) > 2.0 * flame_alpha(FlameLayer::Veil, 0.0));
         let points = cone();
         for (c, p) in flame_vertex_colours(&points, FlameLayer::Veil).iter().zip(&points) {
-            let want = if p[1] == 5.0 { 0.15 } else { 0.5 };
+            let want = if p[1] == 5.0 { 0.4 } else { 0.6 };
             assert!((c[3] - want).abs() < 1e-5, "{c:?}");
         }
     }

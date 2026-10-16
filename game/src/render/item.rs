@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(material.base.base_color, Color::srgb(1.0, 1.0, 1.0));
         let mesh = part_to_mesh(&veil);
         let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!("no vertex colours") };
-        assert!((colors[0][3] - 0.15).abs() < 1e-5 && colors[2][3] > colors[0][3], "{colors:?}");
+        assert!((colors[0][3] - 0.4).abs() < 1e-5 && colors[2][3] > colors[0][3], "{colors:?}");
         // Yellow at the base, redder at the tip.
         assert!(colors[0][1] > colors[2][1]);
         // The core is paler and more opaque than the veil at the same height.

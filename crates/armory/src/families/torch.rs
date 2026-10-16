@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::chain::{cord, thong};
 use crate::build::hafted::smoothstep;
-use crate::build::light::{CHAR, EMBER, FLAME_LIGHT, LightAnchor, add_flame_leaning, ember_ring, spine_offset, glowing};
+use crate::build::light::{CHAR, EMBER, FLAME_LIGHT, LightAnchor, FlameShape, add_flame_shaped, ember_ring, spine_offset, glowing};
 use crate::build::parts::{Look, Parts};
 use crate::build::strap::strap;
 use crate::cond::{Condition, ConditionLimits};
@@ -371,6 +371,10 @@ const FLAME_SEAT: f32 = 0.8;
 /// leaves the flame room to trail. Our own.
 const FLAME_BEND_MAX: f32 = 0.6;
 
+/// How wide a torch flame's bright core is, as a share of its veil: wider than the burning
+/// head, so the head sits in the core's glow instead of hiding it. Our own.
+const FLAME_CORE: f32 = 0.9;
+
 /// How wide a torch's flame is at its belly, as a multiple of the head's girth: the bulb
 /// wraps the burning head without swallowing it (#276, #280).
 const FLAME_GIRTH: f32 = 1.3;
@@ -586,7 +590,8 @@ fn build_torch(s: &TorchState) -> ItemMesh {
         TorchStyle::Cresset => cresset_head(s, &g, fuel, &mut parts),
     }
     if burning {
-        add_flame_leaning(&mut parts, g.flame_base, g.flame_height, g.flame_radius, 0.0, FLAME_TILT, g.flame_bend, s.seed);
+        let shape = FlameShape { tilt: FLAME_TILT, bend: g.flame_bend, core: FLAME_CORE, ..FlameShape::upright(g.flame_height, g.flame_radius, 0.0) };
+        add_flame_shaped(&mut parts, g.flame_base, &shape, s.seed);
     }
     parts.finish()
 }
