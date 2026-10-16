@@ -10,10 +10,10 @@ use armory::geom::vec3::V3;
 use armory::{ItemMesh, Part};
 use fb_body::Placement;
 
-/// The names of the parts that are a bone's main surface (fur, skin, scales), as opposed to
+/// The names of the parts that are a bone's main surface (fur, skin, scales, a skeleton's bone), as opposed to
 /// its details: eyes, whiskers, claws, teeth, tongue, markings and bellies lying on or inside
 /// that surface.
-pub const SURFACE_PARTS: [&str; 6] = ["fur", "spine", "head", "jaw", "tail", "paw"];
+pub const SURFACE_PARTS: [&str; 7] = ["fur", "spine", "head", "jaw", "tail", "paw", "bone"];
 
 /// The points within `radius` of the segment from `a` to `b`: a body part as a blow finds it.
 #[derive(Clone, Copy, Debug, PartialEq)]

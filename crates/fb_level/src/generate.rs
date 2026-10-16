@@ -612,7 +612,7 @@ fn colonnade_halls(level: &mut Level) -> usize {
 }
 
 /// Whether `(x, y)` is one of the two cells straight in from a door.
-fn straight_in_from_a_door(level: &Level, x: i32, y: i32) -> bool {
+pub(crate) fn straight_in_from_a_door(level: &Level, x: i32, y: i32) -> bool {
     Facing::ALL.iter().any(|f| {
         let (dx, dy) = f.step();
         (1..=2).any(|k| level.cell(x - dx * k, y - dy * k) == Cell::Door)
@@ -1160,8 +1160,9 @@ mod tests {
             }
             folk += level.folk.len();
             folk_in += level.folk.iter().filter(|f| in_hall(f.x, f.y)).count();
-            beasts += level.creatures.len();
-            beasts_in += level.creatures.iter().filter(|c| in_hall(c.x, c.y)).count();
+            // Rats and snakes keep out; the skeletons are the ones that stand guard there.
+            beasts += level.creatures.iter().filter(|c| !c.species.is_skeleton()).count();
+            beasts_in += level.creatures.iter().filter(|c| !c.species.is_skeleton() && in_hall(c.x, c.y)).count();
         }
         assert!(folk_in * 3 >= folk, "only {folk_in} of {folk} folk stand in a colonnade");
         // Creatures keep out of the halls more than the halls' share of the rooms they could take.

@@ -186,3 +186,14 @@ hit_points = 13
 hit_dice = { count = 2, sides = 10, bonus = 2 }
 bite = { count = 1, sides = 6, bonus = 2 }
 venom = { count = 0, sides = 0, bonus = 0 }
+
+# Skeleton, SRD p. 346: Medium, Armor Class 13 (armor scraps), Hit Points 13 (2d8 + 4);
+# Shortsword +4 to hit, 5 (1d6 + 2) piercing. Its blow here is the bite row; in play a
+# skeleton strikes with the weapon it carries.
+[creatures."Skeleton"]
+armour_class = 13
+attack_bonus = 4
+hit_points = 13
+hit_dice = { count = 2, sides = 8, bonus = 4 }
+bite = { count = 1, sides = 6, bonus = 2 }
+venom = { count = 0, sides = 0, bonus = 0 }

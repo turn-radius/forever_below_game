@@ -186,7 +186,8 @@ fn play_creature_steps(
     sounds: Res<FootstepSounds>,
     game: Res<GameSettings>,
     tuning: Res<Tuning>,
-    mut creatures: Query<(&Critter, &Transform, &mut StepState), (With<Driven>, With<WalksWithSteps>)>,
+    bones: Option<Res<crate::creatures::skeletons::BoneSounds>>,
+    mut creatures: Query<(&Critter, &Transform, &mut StepState), (With<Driven>, With<WalksWithSteps>, Without<crate::combat::feedback::Corpse>)>,
 ) {
     const RAT_STRIDE: f32 = 0.5;  // World units per step for rats.
 
@@ -197,7 +198,14 @@ fn play_creature_steps(
             continue;
         }
 
-        // Rats make light, quick footsteps. Accumulate distance and step at stride intervals.
+        // A skeleton clicks along on bone, a step to each of its own strides (a step is 0.7 of
+        // its leg); rats make light, quick footsteps. Accumulate distance and step at stride
+        // intervals.
+        let skeleton = critter.spot.species.is_skeleton();
+        let stride = match (&critter.kit, skeleton) {
+            (Some(kit), true) => 0.7 * (kit.dims.thigh + kit.dims.shin) * critter.size,
+            _ => RAT_STRIDE,
+        };
         let current_pos = transform.translation.xz();
         let moved = state.last_pos.map_or(0.0, |last| current_pos.distance(last));
 
@@ -206,8 +214,8 @@ fn play_creature_steps(
         state.last_pos = Some(current_pos);
 
         // Step when accumulated distance exceeds stride threshold.
-        if state.prev_phase >= RAT_STRIDE {
-            state.prev_phase -= RAT_STRIDE;
+        if state.prev_phase >= stride {
+            state.prev_phase -= stride;
 
             let old_last = state.last_sample;
             let sample = next_sample(&mut state.rng, old_last);
@@ -216,9 +224,14 @@ fn play_creature_steps(
             // Rats use light steps always, quieter than the delver's; distance fades them.
             let settings = step_settings(&mut state.rng, STEP_GAIN * CREATURE_STEP_SHARE, effect_volume(&game, &tuning));
 
+            let clip = match (&bones, skeleton) {
+                (Some(bones), true) => bones.steps[sample].clone(),
+                (None, true) => continue,
+                _ => sounds.light[sample].clone(),
+            };
             commands.spawn((
                 Name::new("creature step"),
-                AudioPlayer::new(sounds.light[sample].clone()),
+                AudioPlayer::new(clip),
                 settings.with_spatial(true),
                 transform.clone(),
                 DespawnOnExit(AppState::Delving),
@@ -507,5 +520,43 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(count, 0, "snake should not produce footsteps");
+    }
+
+    #[test]
+    fn skeletons_click_along_on_bone_never_on_a_rats_steps() {
+        use crate::creatures::skeletons::BoneSounds;
+        use bevy::state::app::StatesPlugin;
+        use fb_creatures::Species;
+
+        let bone: Handle<AudioSource> = Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(0xB0), std::marker::PhantomData);
+        let bone_steps = [bone.clone(), Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(0xB1), std::marker::PhantomData), Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(0xB2), std::marker::PhantomData)];
+        let light = [0x10, 0x11, 0x12].map(|n| Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(n), std::marker::PhantomData));
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(AppState::Delving)
+            .init_resource::<GameSettings>()
+            .init_resource::<Tuning>()
+            .insert_resource(FootstepSounds { light: light.clone(), heavy: light.clone() })
+            .insert_resource(BoneSounds { steps: bone_steps.clone(), ..default() });
+        let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species: Species::Skeleton, seed: 42, pack: 0 };
+        let critter = Critter::new(spot, spot.creature());
+        let stride = {
+            let kit = critter.kit.as_ref().unwrap();
+            0.7 * (kit.dims.thigh + kit.dims.shin)
+        };
+        let skeleton = app
+            .world_mut()
+            .spawn((critter, Driven, Transform::default(), Visibility::default(), StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: Some(Vec2::ZERO) }, WalksWithSteps))
+            .id();
+        app.add_systems(Update, play_creature_steps);
+        // A rat's stride is half a unit: a skeleton walking that far is not yet at its first step.
+        app.world_mut().get_mut::<Transform>(skeleton).unwrap().translation = Vec3::new(0.6, 0.0, 0.0);
+        app.update();
+        assert_eq!(app.world_mut().query::<&AudioPlayer>().iter(app.world()).count(), 0, "a skeleton's step is its own stride, not a rat's");
+        app.world_mut().get_mut::<Transform>(skeleton).unwrap().translation = Vec3::new(stride + 1.0, 0.0, 0.0);
+        app.update();
+        let heard: Vec<Handle<AudioSource>> = app.world_mut().query::<&AudioPlayer<AudioSource>>().iter(app.world()).map(|p| p.0.clone()).collect();
+        assert_eq!(heard.len(), 1, "one step for a stride walked");
+        assert!(bone_steps.contains(&heard[0]), "bone, not the delver's or a rat's light step");
     }
 }

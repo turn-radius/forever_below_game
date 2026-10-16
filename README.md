@@ -42,7 +42,7 @@ Rats and snakes notice you, close in and bite. Your hit points show low on the l
 
 Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
 
-To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, scenery as `%` rubble, `~` bones and `o` pillar, stairs as `>` down and `<` up, and creatures as `r` rat, `R` giant rat, `v` poisonous snake and `S` constrictor snake, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
+To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, scenery as `%` rubble, `~` bones and `o` pillar, stairs as `>` down and `<` up, and creatures as `r` rat, `R` giant rat, `v` poisonous snake, `S` constrictor snake and `k` skeleton, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
 
 ### The Armory turntable
 
@@ -80,15 +80,16 @@ Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outf
 ```
 cargo run -p forever_below -- --creature
 cargo run -p forever_below -- --creature --species constrictor --seed 7 --motion rearing
+cargo run -p forever_below -- --skeleton --seed 7 --motion swing
 ```
 
-One rat or snake on the turntable's plate, posed and animated as in the level, with its SRD hit points and bite.
+One rat, snake or skeleton on the turntable's plate, posed and animated as in the level, with its SRD armor class, hit points and bite (a skeleton's shortsword). `--skeleton` is the view opened on a skeleton: roll seeds with Left and Right to see the bones' colour, cracks and missing pieces, and the gear the seed rolls it (`--bare` takes it off; G toggles it).
 
-- `--species <name>`: rat (the default), giant_rat, viper (the poisonous snake) or constrictor.
+- `--species <name>`: rat (the default), giant_rat, viper (the poisonous snake), constrictor or skeleton.
 - `--seed <n>` rolls the creature; 1207 by default.
-- `--motion <name>`: still (the default), moving (trotting or slithering in place at its own speed), rearing or striking.
+- `--motion <name>`: still (the default), moving (trotting, slithering or walking in place at its own speed), rearing or striking. A skeleton has three: still (`stand`), moving (`walk`) and striking (`swing`, the right arm's blow).
 
-Tab and Shift+Tab change the species, Left and Right the seed, M the motion, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
+Tab and Shift+Tab change the species, Left and Right the seed, M the motion, G a skeleton's gear, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 
 ### The Forge view
 
@@ -217,6 +218,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[creatures.size]` | `giant_rat` | 1.0 | Giant rats, as a multiple. |
 | `[creatures.size]` | `viper` | 1.0 | Poisonous snakes, as a multiple. |
 | `[creatures.size]` | `constrictor` | 1.0 | Constrictor snakes, as a multiple. |
+| `[creatures.size]` | `skeleton` | 1.0 | Skeletons, as a multiple. |
 | `[combat]` | `reach_scale` | 1.0 | How far your blows reach, as a multiple of the weapon's own reach. |
 | `[combat]` | `hit_cone_degrees` | 50.0 | Half the angle of the cone ahead a blow can land in, in degrees either side of the crosshair. |
 | `[combat]` | `flash_hold` | 0.12 | Seconds a struck creature's flash holds at full. |
@@ -261,5 +263,5 @@ cargo nextest run --workspace --run-ignored only
 
 - `cargo run -p armory --example dump_obj -- [family] <seed> [out.obj]` writes an Armory item as OBJ.
 - `cargo run -p fb_body --example dump_body -- <folk> <seed> > body.obj` writes a folk body as OBJ (human, dwarf, gnome, goblin, lizard, pig).
-- `cargo run -p fb_creatures --example dump_creature -- <rat|giant_rat|viper|constrictor> <seed> > rat.obj` writes a creature at rest as OBJ.
+- `cargo run -p fb_creatures --example dump_creature -- <rat|giant_rat|viper|constrictor|skeleton> <seed> > rat.obj` writes a creature at rest as OBJ.
 - `tools/README.md` covers regenerating the data tables and the soundtrack.

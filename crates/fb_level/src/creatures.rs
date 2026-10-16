@@ -6,6 +6,11 @@
 //! anyone standing about or a prop. They keep out of the starting room, doorways (and the cells
 //! beside them) and corridors, clear of every item, light, folk and prop.
 //!
+//! Skeletons stand guard in the levels of stone halls and nowhere else: among the columns of the
+//! colonnaded halls, each in a gap between two columns facing the aisle, and in a side room or
+//! two, facing its door. They are placed last, after every rat and snake, so a level of rough rock
+//! draws nothing new from the stream and keeps its creatures as they were.
+//!
 //! How many, of what and where is our own proposal.
 
 use fb_creatures::{Creature, Species};
@@ -13,7 +18,7 @@ use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
 use crate::folk::by_door;
-use crate::generate::{is_colonnaded, item_seed, shuffle};
+use crate::generate::{is_colonnaded, item_seed, shuffle, straight_in_from_a_door};
 use crate::{CELL, Cell, Level, Room};
 
 /// A creature in the level, at a point in grid coordinates (cells, fractional).
@@ -56,6 +61,13 @@ const PACK_SPREAD: f32 = 0.7;
 const WALL_GAP: f32 = 2.5;
 const GAP: f32 = 1.0;
 const CLEARANCE: f32 = 6.0;
+/// Skeletons standing in the gaps of each colonnaded hall (up to three halls), inclusive, and
+/// the side rooms with a skeleton or a pair, inclusive.
+pub const HALL_GUARDS: (u32, u32) = (1, 3);
+pub const GUARDED_HALLS: usize = 3;
+pub const SIDE_GUARDS: (u32, u32) = (1, 2);
+/// Chance that a guarded side room holds a pair.
+const PAIR: f64 = 0.4;
 
 /// Lays out the level's creatures: a few rat packs, each in a room of its own, and maybe a
 /// snake or two, each alone in a room nobody stands in. Never in the starting room.
@@ -105,7 +117,149 @@ pub(crate) fn place_creatures(level: &Level, rng: &mut Mulberry32) -> Vec<Creatu
             pack += 1;
         }
     }
+    if level.style == crate::LevelStyle::StoneHalls {
+        place_skeletons(level, &mut placed, pack, rng);
+    }
     placed
+}
+
+/// The skeletons of a level of stone halls, added to `placed`; their packs count up from `pack`.
+/// Each colonnaded hall (up to [`GUARDED_HALLS`] of them, the largest first) has a few in the
+/// gaps between its columns, facing the aisle, as one pack; a side room or two holds one, or
+/// a pair, facing its door. Never in the starting room, a snake's room, nor on the two cells
+/// straight in from a door. A level always has at least one skeleton when it has a room for it.
+fn place_skeletons(level: &Level, placed: &mut Vec<CreatureSpot>, mut pack: u32, rng: &mut Mulberry32) {
+    let start_room = level.start_room();
+    let snake_rooms: Vec<usize> = placed.iter().filter(|c| c.species.is_snake()).filter_map(|c| level.room_at(c.x as i32, c.y as i32)).collect();
+    let snake_room = |i: usize| snake_rooms.contains(&i);
+    let mut halls: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && is_colonnaded(level, &level.rooms[i]) && !snake_room(i)).collect();
+    halls.sort_by_key(|&i| std::cmp::Reverse(level.rooms[i].area()));
+    halls.truncate(GUARDED_HALLS);
+    let mut guarded = 0;
+    for &i in &halls {
+        let room = &level.rooms[i];
+        let mut gaps = column_gaps(level, room);
+        shuffle(&mut gaps, rng);
+        let want = rng.int(HALL_GUARDS.0, HALL_GUARDS.1) as usize;
+        let mut members = 0;
+        for (x, y, aisle) in gaps {
+            if members == want {
+                break;
+            }
+            let seed = item_seed(rng);
+            let radius = Creature::of(Species::Skeleton, seed).radius();
+            if stands(level, room, x, y, radius, placed) {
+                placed.push(CreatureSpot { x, y, yaw: yaw_toward(aisle), species: Species::Skeleton, seed, pack });
+                members += 1;
+            }
+        }
+        if members > 0 {
+            pack += 1;
+            guarded += 1;
+        }
+    }
+    let mut sides: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && !is_colonnaded(level, &level.rooms[i]) && level.rooms[i].area() >= MIN_ROOM_AREA && !snake_room(i)).collect();
+    shuffle(&mut sides, rng);
+    let rooms = (rng.int(SIDE_GUARDS.0, SIDE_GUARDS.1) as usize).max(if guarded == 0 { 1 } else { 0 });
+    let mut filled = 0;
+    for &i in &sides {
+        if filled == rooms {
+            break;
+        }
+        let room = &level.rooms[i];
+        let size = if rng.chance(PAIR) { 2 } else { 1 };
+        let centre = room.centre();
+        let mut members = 0;
+        for _ in 0..size {
+            let seed = item_seed(rng);
+            let radius = Creature::of(Species::Skeleton, seed).radius();
+            for _ in 0..24 {
+                let angle = rng.range_f32(0.0, std::f32::consts::TAU);
+                let r = 1.0 * rng.range_f32(0.0, 1.0).sqrt();
+                let (x, y) = (centre.0 + angle.cos() * r, centre.1 + angle.sin() * r);
+                if stands(level, room, x, y, radius, placed) {
+                    let door = nearest_door(level, room, (x, y)).unwrap_or((centre.0, centre.1 - 1.0));
+                    placed.push(CreatureSpot { x, y, yaw: yaw_toward((door.0 - x, door.1 - y)), species: Species::Skeleton, seed, pack });
+                    members += 1;
+                    break;
+                }
+            }
+        }
+        if members > 0 {
+            pack += 1;
+            filled += 1;
+        }
+    }
+}
+
+/// The yaw of facing along `(dx, dy)` in grid coordinates ([`CreatureSpot::yaw`]: 0 faces -y).
+fn yaw_toward((dx, dy): (f32, f32)) -> f32 {
+    (-dx).atan2(-dy)
+}
+
+/// The floor cells of a colonnaded `room` that stand between two columns of a row, each as the
+/// cell's centre and the way across to the aisle.
+fn column_gaps(level: &Level, room: &Room) -> Vec<(f32, f32, (f32, f32))> {
+    let mut gaps = Vec::new();
+    for y in room.y..room.y + room.h {
+        for x in room.x..room.x + room.w {
+            let (cx, cy) = (x as i32, y as i32);
+            if level.cell(cx, cy) != Cell::Floor {
+                continue;
+            }
+            let column = |dx: i32, dy: i32| level.cell(cx + dx, cy + dy) == Cell::Column;
+            // Between two columns along a row, with the aisle to one side and the wall's ring to the other.
+            let across = if column(-1, 0) && column(1, 0) {
+                Some([(0, -1), (0, 1)])
+            } else if column(0, -1) && column(0, 1) {
+                Some([(-1, 0), (1, 0)])
+            } else {
+                None
+            };
+            if let Some(sides) = across {
+                // The aisle is the side the room's middle lies on.
+                let (mx, my) = room.centre();
+                let toward = sides.into_iter().min_by(|a, b| {
+                    let d = |s: &(i32, i32)| (x as f32 + 0.5 + s.0 as f32 * 2.0 - mx).hypot(y as f32 + 0.5 + s.1 as f32 * 2.0 - my);
+                    d(a).total_cmp(&d(b))
+                });
+                if let Some(s) = toward {
+                    gaps.push((x as f32 + 0.5, y as f32 + 0.5, (s.0 as f32, s.1 as f32)));
+                }
+            }
+        }
+    }
+    gaps
+}
+
+/// The point of a door of `room` nearest `from`, in grid coordinates.
+fn nearest_door(level: &Level, room: &Room, from: (f32, f32)) -> Option<(f32, f32)> {
+    let (x0, y0) = (room.x as i32 - 1, room.y as i32 - 1);
+    let (x1, y1) = ((room.x + room.w) as i32, (room.y + room.h) as i32);
+    let ring = (x0..=x1).flat_map(|x| [(x, y0), (x, y1)]).chain((y0..=y1).flat_map(|y| [(x0, y), (x1, y)]));
+    ring.filter(|&(x, y)| level.cell(x, y) == Cell::Door)
+        .map(|(x, y)| (x as f32 + 0.5, y as f32 + 0.5))
+        .min_by(|a, b| (a.0 - from.0).hypot(a.1 - from.1).total_cmp(&(b.0 - from.0).hypot(b.1 - from.1)))
+}
+
+/// Whether a skeleton of `radius` can stand at `(x, y)` in `room`: [`fits`], and not on the
+/// two cells straight in from a door, nor against a column's face.
+fn stands(level: &Level, room: &Room, x: f32, y: f32, radius: f32, placed: &[CreatureSpot]) -> bool {
+    let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+    if straight_in_from_a_door(level, cx, cy) || !fits(level, room, x, y, radius, placed) {
+        return false;
+    }
+    // Clear of every column by the skeleton's radius and a little more.
+    let (px, py) = (x * CELL, y * CELL);
+    !(-1..=1).any(|dy| {
+        (-1..=1).any(|dx| {
+            let (nx, ny) = (cx + dx, cy + dy);
+            level.cell(nx, ny) == Cell::Column && {
+                let (qx, qy) = (px.clamp(nx as f32 * CELL, (nx + 1) as f32 * CELL), py.clamp(ny as f32 * CELL, (ny + 1) as f32 * CELL));
+                (px - qx).hypot(py - qy) < radius + GAP
+            }
+        })
+    })
 }
 
 /// A creature of `species` near `centre` (within `spread` cells) in `room`, where it fits, or
@@ -234,6 +388,103 @@ mod tests {
         assert!(rats.len() >= 2, "{rats:?}");
         for r in rats {
             assert!(seen[(r.y as u32 * level.width + r.x as u32) as usize], "{r:?} is cut off");
+        }
+    }
+
+    fn skeletons(level: &Level) -> Vec<&CreatureSpot> {
+        level.creatures.iter().filter(|c| c.species.is_skeleton()).collect()
+    }
+
+    #[test]
+    fn stone_halls_have_skeletons_reachable_from_the_entrance() {
+        let (mut among_columns, mut in_side_rooms) = (0, 0);
+        for seed in SEEDS {
+            let level = generate(seed, 2);
+            let (x, y, _) = level.start();
+            let seen = reachable_from(&level, x as i32, y as i32);
+            let guards = skeletons(&level);
+            assert!(!guards.is_empty(), "seed {seed}: no skeletons in the stone halls");
+            for g in guards {
+                assert!(seen[(g.y as u32 * level.width + g.x as u32) as usize], "seed {seed}: {g:?} is cut off");
+                let room = level.room_at(g.x as i32, g.y as i32).expect("a skeleton stands in a room");
+                assert_ne!(Some(room), level.start_room(), "seed {seed}: {g:?} in the starting room");
+                if is_colonnaded(&level, &level.rooms[room]) {
+                    among_columns += 1;
+                } else {
+                    in_side_rooms += 1;
+                }
+            }
+        }
+        assert!(among_columns > 0 && in_side_rooms > 0, "{among_columns} among columns, {in_side_rooms} in side rooms");
+    }
+
+    #[test]
+    fn rough_rock_has_no_skeletons_and_the_halls_keep_their_rats_and_snakes() {
+        for seed in SEEDS {
+            assert!(skeletons(&generate(seed, 1)).is_empty(), "seed {seed}");
+        }
+        let level = generate(1207, 2);
+        assert!(level.creatures.iter().any(|c| !c.species.is_skeleton()));
+    }
+
+    #[test]
+    fn no_skeleton_stands_on_a_column_a_stair_or_where_a_delver_comes_in() {
+        for depth in [2, 4] {
+            for seed in SEEDS {
+                let level = generate(seed, depth);
+                let (sx, sy, _) = level.start();
+                for g in skeletons(&level) {
+                    let (cx, cy) = (g.x.floor() as i32, g.y.floor() as i32);
+                    assert_eq!(level.cell(cx, cy), Cell::Floor, "seed {seed}: {g:?} not on floor");
+                    assert!((cx, cy) != (sx as i32, sy as i32), "seed {seed}: {g:?} on the start");
+                    assert!(!straight_in_from_a_door(&level, cx, cy), "seed {seed}: {g:?} straight in from a door");
+                    assert!(!by_door(&level, cx, cy), "seed {seed}: {g:?} by a door");
+                    for stair in &level.stairs {
+                        let cells = [(stair.x, stair.y), stair.approach()];
+                        assert!(!cells.iter().any(|&(x, y)| (x as i32, y as i32) == (cx, cy)), "seed {seed}: {g:?} on a stair or its approach");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn guards_face_the_aisle_from_between_the_columns() {
+        let mut checked = 0;
+        for seed in SEEDS {
+            let level = generate(seed, 2);
+            for g in skeletons(&level) {
+                let room = level.rooms[level.room_at(g.x as i32, g.y as i32).unwrap()];
+                if !is_colonnaded(&level, &room) {
+                    continue;
+                }
+                let (cx, cy) = (g.x.floor() as i32, g.y.floor() as i32);
+                let column = |dx: i32, dy: i32| level.cell(cx + dx, cy + dy) == Cell::Column;
+                assert!((column(-1, 0) && column(1, 0)) || (column(0, -1) && column(0, 1)), "seed {seed}: {g:?} is not between two columns");
+                // It faces the room's middle, the aisle, rather than the wall behind it.
+                let (mx, my) = room.centre();
+                let (fx, fy) = (-g.yaw.sin(), -g.yaw.cos());
+                assert!((mx - g.x) * fx + (my - g.y) * fy > 0.0 || (mx - g.x).abs().max((my - g.y).abs()) < 1.0, "seed {seed}: {g:?} faces away from the aisle");
+                checked += 1;
+            }
+        }
+        assert!(checked >= 20, "only {checked} guards among columns");
+    }
+
+    #[test]
+    fn skeleton_packs_stay_in_one_room_and_small() {
+        for seed in SEEDS {
+            let level = generate(seed, 2);
+            let mut packs: std::collections::HashMap<u32, Vec<&CreatureSpot>> = Default::default();
+            for g in skeletons(&level) {
+                packs.entry(g.pack).or_default().push(g);
+            }
+            for members in packs.values() {
+                let room = level.room_at(members[0].x as i32, members[0].y as i32);
+                assert!(members.iter().all(|m| level.room_at(m.x as i32, m.y as i32) == room), "seed {seed}: a pack across rooms");
+                assert!(members.len() <= HALL_GUARDS.1 as usize, "seed {seed}: {} in a pack", members.len());
+            }
+            assert!(packs.len() <= GUARDED_HALLS + SIDE_GUARDS.1 as usize, "seed {seed}");
         }
     }
 }

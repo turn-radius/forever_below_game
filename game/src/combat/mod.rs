@@ -171,13 +171,15 @@ pub struct Weapon {
     pub reach: f32,
     /// The hold it is swung from, for the view model (`None` with nothing in hand).
     pub hold: Option<Hold>,
+    /// Whether it bludgeons (a mace, a club, a staff, a fist): a skeleton takes double.
+    pub bludgeoning: bool,
 }
 
 impl Weapon {
     /// A bare fist: 1 + Strength modifier, bludgeoning (SRD 5.1 p. 95, "Unarmed strike"),
     /// reaching an arm's length.
     pub fn fist() -> Weapon {
-        Weapon { kind: SwingKind::Punch, dice: None, bonus: 0, reach: ARM_TO_FINGERTIPS * STATURE, hold: None }
+        Weapon { kind: SwingKind::Punch, dice: None, bonus: 0, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: true }
     }
 
     /// What the delver's main hand swings. A melee weapon rolls its own damage dice
@@ -200,7 +202,7 @@ impl Weapon {
         let melee = is_melee(item.shape.family());
         let stats = &item.profile.stats;
         let dice = if melee { stats.damage.unwrap_or(Dice::new(1, 4)) } else { Dice::new(1, 4) };
-        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None }
+        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: matches!(item.shape.family(), armory::Family::Mace | armory::Family::Club | armory::Family::Staff) || !melee }
     }
 
     /// The range a blow's damage falls in with a Strength modifier of `strength`.
@@ -340,7 +342,7 @@ mod tests {
     #[test]
     fn damage_rolls_stay_within_their_dice() {
         let mut rng = Mulberry32::new(5);
-        let sword = Weapon { kind: SwingKind::Slash, dice: Some(Dice::new(1, 8)), bonus: 1, reach: 14.0, hold: None };
+        let sword = Weapon { kind: SwingKind::Slash, dice: Some(Dice::new(1, 8)), bonus: 1, reach: 14.0, hold: None, bludgeoning: false };
         let greatsword = Weapon { dice: Some(Dice::new(2, 6)), bonus: 0, ..sword };
         let mut seen = std::collections::HashSet::new();
         for _ in 0..2000 {
@@ -362,7 +364,7 @@ mod tests {
         let mut rng = Mulberry32::new(11);
         let inventory_sword = fb_items::roll_item("Sword", 7).unwrap();
         let dice = inventory_sword.profile.stats.damage.unwrap();
-        let sword = Weapon { kind: SwingKind::Slash, dice: Some(dice), bonus: 0, reach: 14.0, hold: None };
+        let sword = Weapon { kind: SwingKind::Slash, dice: Some(dice), bonus: 0, reach: 14.0, hold: None, bludgeoning: false };
         for species in [Species::Rat, Species::GiantRat] {
             let mut most = 0;
             for _ in 0..500 {
@@ -582,5 +584,247 @@ mod tests {
         app.world_mut().get_mut::<Transform>(player).unwrap().rotate_y(std::f32::consts::PI);
         swing_at(&mut app, player, 40);
         assert!(app.world().get::<Corpse>(rat).is_none());
+    }
+
+    // Skeletons: what they fight with and what they drop.
+
+    /// A skeleton of `seed` in `outfit` (its own rolled gear when `None`), alone in seed 1207's
+    /// level at the dev spot in front of the start, and a delver standing at the start looking
+    /// at it with a sword, with the whole of combat, the floor machinery and the creatures'
+    /// bones but no drawing. Stepped 1/60 s a frame.
+    fn skeleton_fight(seed: u32, outfit: Option<fb_items::outfit::OutfitSet>) -> (App, Entity, Entity) {
+        use crate::creatures::{animate, behaviour::BehaviourPlugin, idle, skeletons::{BoneSounds, SkeletonKit, SkeletonsPlugin}, spawn_skeleton_with, dev_spots_for};
+        use crate::play::{CurrentLevel, Player};
+        use bevy::time::TimeUpdateStrategy;
+        let weak = |n: u128| Handle::<AudioSource>::Uuid(bevy::asset::uuid::Uuid::from_u128(n), std::marker::PhantomData);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin, bevy::state::app::StatesPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .insert_state(crate::launch::AppState::Delving)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<Character>()
+            .init_resource::<crate::play::ScreenOpen>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<crate::render::ToonMaterial>>()
+            .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<crate::render::OutlineMaterials>()
+            .add_plugins((BehaviourPlugin, CombatPlugin, SkeletonsPlugin))
+            .insert_resource(RunDice(Mulberry32::new(9)))
+            // The rat's and the snake's voices are all distinct handles, to tell if one is used.
+            .insert_resource(feedback::CreatureSounds { squeak: weak(1), hiss: weak(2), rat_squeal: weak(3), snake_rise: weak(4), thud: weak(5) })
+            .insert_resource(BoneSounds { steps: [weak(0x20), weak(0x21), weak(0x22)], rattle: weak(0x23), hit: weak(0x24), block: weak(0x25), collapse: weak(0x26) })
+            .add_systems(Update, (idle, animate, crate::inventory::underfoot::apply_floor_changes).chain());
+        app.insert_resource(Inventory::default());
+        let mut level = fb_level::generate(1207, 1);
+        level.items.clear();
+        level.creatures.clear();
+        let spot = dev_spots_for(&level, &format!("skeleton:{seed}")).remove(0);
+        app.insert_resource(CurrentLevel(level.clone()));
+        let state = fb_creatures::SkeletonState::roll(seed);
+        let kit = SkeletonKit::new(&state, outfit.unwrap_or_else(|| fb_items::undead::skeleton_outfit(seed)), [None, None]);
+        let skeleton = {
+            let mut commands = app.world_mut().commands();
+            spawn_skeleton_with(&mut commands, &level, &spot, &state.build(), Some(kit)).0
+        };
+        app.world_mut().flush();
+        let (sx, sy, _) = level.start();
+        let start = Vec3::from_array(fb_level::Level::world(sx as f32 + 0.5, sy as f32 + 0.5));
+        let at = app.world().get::<Transform>(skeleton).unwrap().translation;
+        let mut inventory = Inventory::default();
+        let sword = inventory.add(fb_items::roll_item("Sword", 7).unwrap());
+        inventory.wear(sword, fb_items::Slot::Mainhand).unwrap();
+        app.insert_resource(inventory);
+        let player = app.world_mut().spawn((Player, Transform::from_translation(Vec3::new(start.x, at.y, start.z)).looking_at(at, Vec3::Y))).id();
+        (app, player, skeleton)
+    }
+
+    /// A seed whose skeleton rolls most of a kit of gear.
+    fn kitted_seed() -> u32 {
+        (0..400).find(|&s| fb_items::undead::skeleton_outfit(s).worn.len() >= 5).expect("some skeleton is kitted")
+    }
+
+    fn strike_down(app: &mut App, skeleton: Entity) {
+        use feedback::{Corpse, Struck};
+        for _ in 0..400 {
+            if app.world().get::<Corpse>(skeleton).is_some() {
+                return;
+            }
+            app.world_mut().write_message(Struck { target: skeleton, damage: 30, from: Vec2::new(-30.0, 0.0), bludgeoning: false });
+            app.update();
+        }
+        panic!("the skeleton never fell");
+    }
+
+    fn on_the_floor(app: &mut App) -> Vec<crate::carry::FloorItem> {
+        app.world_mut().query::<&crate::carry::FloorItem>().iter(app.world()).map(|f| crate::carry::FloorItem { id: f.id, spot: f.spot, min: f.min, max: f.max }).collect()
+    }
+
+    #[test]
+    fn killing_a_skeleton_drops_every_item_it_wore_once_to_pick_up_and_wield() {
+        use crate::inventory::{FloorChange, FloorChanges};
+        use crate::play::CurrentLevel;
+        let seed = kitted_seed();
+        let gear = fb_items::undead::skeleton_outfit(seed);
+        let (mut app, _, skeleton) = skeleton_fight(seed, None);
+        app.update();
+        assert!(on_the_floor(&mut app).is_empty(), "nothing lies there while it stands");
+        let dropped_before = app.world().resource::<CurrentLevel>().0.items.len();
+        strike_down(&mut app, skeleton);
+        for _ in 0..120 {
+            app.update();
+        }
+        // Every item it wore and held, as the same item, once.
+        let floor = on_the_floor(&mut app);
+        assert_eq!(floor.len(), gear.worn.len(), "one for each piece of gear");
+        let inventory = app.world().resource::<Inventory>();
+        let mut lying: Vec<(String, u32)> = floor.iter().map(|f| inventory.item(f.id).map(|i| (i.base.to_string(), i.seed)).unwrap()).collect();
+        let mut wore: Vec<(String, u32)> = gear.worn.iter().map(|(_, i)| (i.base.to_string(), i.seed)).collect();
+        lying.sort();
+        wore.sort();
+        assert_eq!(lying, wore);
+        for f in &floor {
+            let item = inventory.item(f.id).unwrap();
+            let original = gear.worn.iter().map(|(_, i)| i).find(|i| i.seed == item.seed && i.base == item.base).unwrap();
+            assert_eq!(item, original, "the same rarity, affixes and wear");
+        }
+        assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), dropped_before + gear.worn.len(), "the level records them");
+        // They fall near it, not far away.
+        let at = app.world().get::<Transform>(skeleton).unwrap().translation.xz();
+        for f in &floor {
+            let world = fb_level::Level::world(f.spot.x, f.spot.y);
+            let there = Vec2::new(world[0], world[2]);
+            assert!(there.distance(at) < 12.0, "{} from where it fell", there.distance(at));
+        }
+        // Picked up, they are the player's: lifted from the floor, worn and wielded.
+        let slots: Vec<(crate::inventory::ItemId, fb_items::Slot)> = floor.iter().map(|f| (f.id, inventory.item(f.id).unwrap().profile.slot.unwrap())).collect();
+        for &(id, _) in &slots {
+            app.world_mut().resource_mut::<FloorChanges>().0.push(FloorChange::Lifted(id));
+        }
+        app.update();
+        assert!(on_the_floor(&mut app).is_empty(), "all taken up");
+        let mut inventory = app.world_mut().resource_mut::<Inventory>();
+        for &(id, slot) in &slots {
+            // Swapping with whatever the delver already wears there, as equipping does.
+            inventory.equip(id, slot).unwrap_or_else(|e| panic!("{slot:?}: {e:?}"));
+            assert_eq!(inventory.worn(slot), Some(id), "{slot:?} is worn");
+        }
+        assert_eq!(inventory.worn(fb_items::Slot::Mainhand).is_some(), gear.item(fb_items::Slot::Mainhand).is_some());
+    }
+
+    #[test]
+    fn a_skeletons_gear_is_dropped_once_and_a_body_brought_back_drops_none() {
+        use feedback::Corpse;
+        let seed = kitted_seed();
+        let n = fb_items::undead::skeleton_outfit(seed).worn.len();
+        let (mut app, _, skeleton) = skeleton_fight(seed, None);
+        app.update();
+        strike_down(&mut app, skeleton);
+        for _ in 0..600 {
+            app.update();
+        }
+        assert_eq!(on_the_floor(&mut app).len(), n);
+        // Left lying, it sheds nothing more however long it lies.
+        for _ in 0..120 {
+            app.update();
+        }
+        assert_eq!(on_the_floor(&mut app).len(), n, "an old body never drops its gear again");
+        // A dead skeleton put back as the record has it (what leaving a level and returning
+        // does) is a body marked looted, and does not drop its kit a second time.
+        let (mut app, _, restored) = skeleton_fight(seed, None);
+        app.update();
+        let fell = *app.world().get::<Transform>(restored).unwrap();
+        app.world_mut().entity_mut(restored).insert((Corpse { since: 30.0, fell }, crate::creatures::skeletons::Looted));
+        for _ in 0..120 {
+            app.update();
+        }
+        assert!(on_the_floor(&mut app).is_empty(), "a restored body drops nothing");
+    }
+
+    #[test]
+    fn a_skeleton_collapses_onto_its_back_where_it_fell() {
+        let (mut app, _, skeleton) = skeleton_fight(kitted_seed(), None);
+        app.update();
+        let stood = app.world().get::<Transform>(skeleton).unwrap().translation;
+        strike_down(&mut app, skeleton);
+        for _ in 0..90 {
+            app.update();
+        }
+        let down = app.world().get::<Transform>(skeleton).unwrap();
+        // Its up now points along the floor (it lies down), and it is where it stood.
+        assert!((down.rotation * Vec3::Y).y.abs() < 0.2, "lying down");
+        assert!(down.translation.xz().distance(stood.xz()) < 6.0);
+        assert_eq!(app.world().get::<crate::creatures::Intent>(skeleton).unwrap().fallen, 1.0);
+    }
+
+    /// The distance from the delver at which a skeleton in `base` first lands a blow.
+    fn reach_in_use(base: &str) -> f32 {
+        use crate::creatures::behaviour::CreatureAttack;
+        let outfit = fb_items::outfit::OutfitSet { worn: vec![(fb_items::Slot::Mainhand, fb_items::roll_item(base, 5).unwrap())], goods: Vec::new(), ground: Vec::new() };
+        let (mut app, player, skeleton) = skeleton_fight(3, Some(outfit));
+        let me = app.world().get::<Transform>(player).unwrap().translation.xz();
+        for _ in 0..900 {
+            app.update();
+            let attacks: Vec<CreatureAttack> = app.world().resource::<Messages<CreatureAttack>>().iter_current_update_messages().copied().collect();
+            if let Some(attack) = attacks.first() {
+                assert_eq!(attack.attacker, skeleton);
+                assert!(attack.damage >= 1);
+                return attack.attacker_pos.distance(me);
+            }
+        }
+        panic!("the skeleton with a {base} never struck");
+    }
+
+    #[test]
+    fn a_skeleton_with_a_spear_strikes_from_further_than_one_with_a_dagger() {
+        let (spear, dagger) = (reach_in_use("Spear"), reach_in_use("Dagger"));
+        assert!(spear > dagger + 4.0, "spear {spear} dagger {dagger}");
+    }
+
+    #[test]
+    fn a_skeleton_makes_its_own_sounds_never_a_rats_or_a_snakes() {
+        use crate::creatures::skeletons::BoneSounds;
+        let (mut app, _, skeleton) = skeleton_fight(kitted_seed(), None);
+        let bones = app.world().resource::<BoneSounds>().clone();
+        let voices = app.world().resource::<feedback::CreatureSounds>().clone();
+        // Let it come at the delver and swing, take a blow and fall.
+        for _ in 0..240 {
+            app.update();
+        }
+        app.world_mut().write_message(feedback::Struck { target: skeleton, damage: 1, from: Vec2::new(-30.0, 0.0), bludgeoning: false });
+        for _ in 0..30 {
+            app.update();
+        }
+        strike_down(&mut app, skeleton);
+        for _ in 0..60 {
+            app.update();
+        }
+        let heard: Vec<Handle<AudioSource>> = app.world_mut().query::<&AudioPlayer<AudioSource>>().iter(app.world()).map(|p| p.0.clone()).collect();
+        assert!(!heard.is_empty());
+        let ours = [bones.rattle, bones.hit, bones.block, bones.collapse];
+        for sound in &heard {
+            // Its own, or the thud of its blow landing on the delver.
+            assert!(ours.contains(sound) || *sound == voices.thud, "a sound that is not a skeleton's: {sound:?}");
+            assert!(![&voices.squeak, &voices.hiss, &voices.rat_squeal, &voices.snake_rise].contains(&sound));
+        }
+        assert!(heard.contains(&ours[3]), "it clatters as it falls");
+    }
+
+    #[test]
+    fn bludgeoning_hurts_a_skeleton_twice_as_much() {
+        use feedback::{Struck, damage_to};
+        let (app, _, skeleton) = skeleton_fight(kitted_seed(), None);
+        let critter = app.world().get::<crate::creatures::Critter>(skeleton).unwrap();
+        let blow = |bludgeoning| Struck { target: skeleton, damage: 4, from: Vec2::ZERO, bludgeoning };
+        assert_eq!((damage_to(critter, &blow(false)), damage_to(critter, &blow(true))), (4, 8));
+        // The delver's mace and club bludgeon, a sword does not.
+        let delver = Character::roll(3);
+        let weapon = |base: &str| {
+            let mut inventory = Inventory::default();
+            let id = inventory.add(fb_items::roll_item(base, 7).unwrap());
+            inventory.wear(id, fb_items::Slot::Mainhand).unwrap();
+            Weapon::in_hand(&inventory, &delver)
+        };
+        assert!(weapon("Mace").bludgeoning && weapon("Club").bludgeoning && Weapon::fist().bludgeoning);
+        assert!(!weapon("Sword").bludgeoning && !weapon("Spear").bludgeoning && !weapon("Hand axe").bludgeoning);
     }
 }
