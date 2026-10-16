@@ -33,10 +33,12 @@
 //!   the wrist of their height and the weapon's length beyond, a fist an arm's length, a torch an
 //!   improvised 1d4), the blow taking a creature's swing time for the weapon
 //!   ([`crate::combat::swing_time`]) and landing as the arm comes down, if the delver is still in
-//!   reach and in sight; it rolls the weapon's dice plus the Strength modifier and is sent as an
-//!   [`AttackOnDelver`], which takes the delver's hit points as a creature's blow does (no attack
-//!   roll against the delver's Armor Class, as for every creature yet). A friendly folk never
-//!   attacks, however near the delver comes.
+//!   reach and in sight. It rolls to hit as the delver's swings do, the Strength modifier and the
+//!   weapon's `ToHit` against the delver's Armor Class ([`BlowsAtDelver`]); a hit rolls the
+//!   weapon's dice plus the Strength modifier and is sent as an [`AttackOnDelver`], which takes
+//!   the delver's hit points as a creature's blow does, and a miss whooshes past. A friendly
+//!   folk never attacks, however near the delver comes. One who has not seen the delver for
+//!   `folk.lose_interest_after` seconds gives up, friendly again, and heads home.
 //!
 //! A folk's stance while lying is the one they had standing: the skinned figure is turned as a
 //! whole, not ragdolled. Our own simplification.
@@ -56,7 +58,7 @@ use crate::combat::feedback::{Corpse, Flinches, Looted, Struck, collapse_share, 
 use crate::combat::swing::SwungAt;
 use crate::combat::{ArmourClass, Health, Weapon, first_level_hit_points_explained_for, swing_time};
 use crate::creatures::Critter;
-use crate::creatures::behaviour::{AttackOnDelver, body_radius};
+use crate::creatures::behaviour::{AttackOnDelver, BlowsAtDelver, DelverToStrike, MissedDelver, body_radius};
 use crate::figure::Figure;
 use crate::folk::{Denizen, Person, Stance, Stride};
 use crate::folk_pose::{ArmSwing, spawn_rigged};
@@ -79,6 +81,7 @@ impl Plugin for FolkCombatPlugin {
             .add_message::<Struck>()
             .add_message::<SwungAt>()
             .add_message::<AttackOnDelver>()
+            .add_message::<MissedDelver>()
             .init_resource::<Tuning>()
             .init_resource::<Obstacles>()
             .init_resource::<BlockedCells>()
@@ -172,6 +175,8 @@ pub struct Fight {
     pub cooldown: f32,
     /// Whether this swing's blow has come down.
     landed: bool,
+    /// Seconds since they last saw the delver.
+    pub unseen: f32,
     path: Vec<(i32, i32)>,
     goal: (i32, i32),
     repath: f32,
@@ -180,7 +185,14 @@ pub struct Fight {
 
 impl Fight {
     fn new(seed: u32) -> Fight {
-        Fight { swing: None, cooldown: 0.0, landed: false, path: Vec::new(), goal: (i32::MIN, i32::MIN), repath: 0.0, rng: Mulberry32::new(seed ^ FIGHT_SALT) }
+        Fight { swing: None, cooldown: 0.0, landed: false, unseen: 0.0, path: Vec::new(), goal: (i32::MIN, i32::MIN), repath: 0.0, rng: Mulberry32::new(seed ^ FIGHT_SALT) }
+    }
+}
+
+impl Fight {
+    /// Drops the fight under way: no swing, no way to the delver, no time unseen.
+    fn calm(&mut self) {
+        *self = Fight { rng: self.rng.clone(), ..Fight::new(0) };
     }
 }
 
@@ -379,12 +391,13 @@ fn angle_between(from: f32, to: f32) -> f32 {
 type Fighters = (
     Entity,
     &'static Denizen,
-    &'static Hostility,
+    &'static mut Hostility,
     &'static Combatant,
     &'static mut Fight,
     &'static mut Stride,
     &'static mut ArmSwing,
     &'static mut Transform,
+    Option<&'static mut Routine>,
 );
 
 /// A living creature, not a folk.
@@ -399,16 +412,16 @@ pub fn fight(
     tuning: Res<Tuning>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
-    player: Query<&Transform, (With<Player>, Without<Denizen>)>,
+    player: Query<DelverToStrike, (With<Player>, Without<Denizen>)>,
     creatures: Query<(&Critter, &Transform), Standing>,
     mut folk: Query<Fighters, Without<Corpse>>,
-    mut attacks: MessageWriter<AttackOnDelver>,
+    mut attacks: BlowsAtDelver,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
         return;
     }
-    let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
+    let Some((player, delver_ac)) = player.iter().next().map(|(t, ac)| (t.translation.xz(), ac.copied())) else { return };
     let level = &level.0;
     let relief = Relief::new(level);
     let blocked = blocked_by(level, &blocked_cells);
@@ -418,7 +431,7 @@ pub fn fight(
     let mut around: Vec<Obstacle> = obstacles.0.clone();
     around.extend(creatures.iter().map(|(c, t)| Obstacle::Circle { centre: t.translation.xz(), radius: body_radius(c) }));
     around.push(Obstacle::Circle { centre: player, radius: player_radius });
-    for (entity, denizen, hostility, combatant, mut fight, mut stride, mut arm, mut transform) in &mut folk {
+    for (entity, denizen, mut hostility, combatant, mut fight, mut stride, mut arm, mut transform, routine) in &mut folk {
         if !hostility.is_hostile() {
             continue;
         }
@@ -427,6 +440,19 @@ pub fn fight(
         let radius = denizen.radius;
         let reach = player_radius + combatant.weapon.reach;
         let sees = line_of_sight(grid(at), grid(player), &blocked);
+        // Out of sight long enough, they give up and go home, friendly again.
+        fight.unseen = if sees { 0.0 } else { fight.unseen + dt };
+        if fight.unseen > tuning.folk.lose_interest_after {
+            *hostility = Hostility::Friendly;
+            fight.calm();
+            stride.speed = 0.0;
+            arm.0 = None;
+            if let Some(mut routine) = routine {
+                routine.head_home();
+            }
+            info!("{} loses interest in the delver", denizen.person.name);
+            continue;
+        }
         let in_reach = sees && player.distance(at) <= reach;
         fight.cooldown = (fight.cooldown - dt).max(0.0);
         let mut moved = 0.0;
@@ -439,15 +465,18 @@ pub fn fight(
                 fight.landed = true;
                 if sees && player.distance(at) <= reach * SLACK {
                     let damage = combatant.weapon.roll(modifier(combatant.strength), &mut fight.rng);
-                    attacks.write(AttackOnDelver { attacker: entity, species: None, damage, poison: 0, attacker_pos: at });
-                    info!("{} strikes the delver for {damage}", denizen.person.name);
+                    let blow = AttackOnDelver { attacker: entity, species: None, damage, poison: 0, attacker_pos: at };
+                    let to_hit = combatant.weapon.to_hit(combatant.strength);
+                    if attacks.strike(&denizen.person.name, blow, to_hit, delver_ac.as_ref(), &mut fight.rng) {
+                        info!("{} strikes the delver for {damage}", denizen.person.name);
+                    }
                 }
             }
             if since >= combatant.swing_time {
                 fight.swing = None;
                 fight.cooldown = COOLDOWN;
             }
-        } else if in_reach && fight.cooldown <= 0.0 {
+        } else if in_reach && fight.cooldown <= 0.0 && !attacks.delver_is_down() {
             fight.swing = Some(0.0);
             fight.landed = false;
         } else if !in_reach {
@@ -603,7 +632,15 @@ pub(crate) mod tests {
 
     /// How many of `swings` swings land on a folk of Armor Class `ac`.
     fn landed(ac: i32, swings: usize) -> usize {
+        landed_by(ac, swings, false)
+    }
+
+    /// [`landed`], the delver poisoned or not.
+    fn landed_by(ac: i32, swings: usize, poisoned: bool) -> usize {
         let (mut app, player, folk) = folk_fight(9.0);
+        if poisoned {
+            app.world_mut().entity_mut(player).insert(crate::character::DelverPoison(fb_character::poison::Poisoned::for_hours(10.0)));
+        }
         app.world_mut().entity_mut(folk).insert((ArmourClass(ac), Health::full(100_000)));
         // Struck, it fights back: the delver outlasts it.
         app.world_mut().entity_mut(player).insert(Health::full(100_000));
@@ -626,6 +663,31 @@ pub(crate) mod tests {
         let (light, heavy) = (landed(8, 60), landed(19, 60));
         assert!(light > heavy + 15, "AC 8: {light} of 60, AC 19: {heavy} of 60");
         assert!(heavy > 0, "a natural 20 still hits");
+    }
+
+    #[test]
+    fn a_poisoned_delver_hits_less_often() {
+        let (even, poisoned) = (landed_by(12, 60, false), landed_by(12, 60, true));
+        assert!(poisoned + 8 < even, "AC 12: {even} of 60 well, {poisoned} of 60 poisoned");
+    }
+
+    #[test]
+    fn a_folks_blows_roll_against_the_delvers_armour_class_and_a_miss_does_nothing() {
+        let (mut app, player, folk) = folk_fight(30.0);
+        app.world_mut().entity_mut(player).insert(Health::full(100_000));
+        app.world_mut().write_message(Provoked { folk });
+        let (mut hits, mut misses) = (Vec::new(), 0);
+        for _ in 0..1800 {
+            app.update();
+            hits.extend(attacks(&app));
+            misses += app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count();
+        }
+        let sheet = app.world().resource::<crate::character::Character>().armour_class(app.world().resource::<Inventory>()).value().round() as i32;
+        assert_eq!(app.world().get::<ArmourClass>(player), Some(&ArmourClass(sheet)), "the delver carries the sheet's Armor Class");
+        assert!(!hits.is_empty() && misses > 0, "{} hits, {misses} misses", hits.len());
+        let taken: u32 = hits.iter().map(|a| a.damage).sum();
+        let delver = app.world().get::<Health>(player).unwrap();
+        assert_eq!((delver.max - delver.hp) as u32, taken, "only the hits hurt");
     }
 
     #[test]
@@ -753,6 +815,85 @@ pub(crate) mod tests {
         // Blows come on a swing's time and a cooldown, not every frame.
         assert!(struck.len() as f32 <= 10.0 / (combatant.swing_time + COOLDOWN) + 1.0, "{} blows in 10 s", struck.len());
         assert!(hostility(&app, folk).is_hostile(), "still hostile");
+    }
+
+    /// A cell of the level far from `from` (world `(x, z)`) with no line of sight to it.
+    fn out_of_sight_of(app: &App, from: Vec2) -> Vec3 {
+        let level = &app.world().resource::<CurrentLevel>().0;
+        let blocked = |x: i32, y: i32| !level.is_open(x, y);
+        let (w, h) = (level.width as i32, level.height as i32);
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| level.is_open(x, y))
+            .map(|(x, y)| Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * CELL)
+            .filter(|p| p.distance(from) > 20.0 * CELL && !line_of_sight(grid(*p), grid(from), blocked))
+            .map(|p| Vec3::new(p.x, 0.0, p.y))
+            .next()
+            .expect("somewhere out of sight")
+    }
+
+    #[test]
+    fn a_hostile_folk_who_loses_sight_of_the_delver_long_enough_goes_home_friendly() {
+        let (mut app, player, folk) = folk_fight(12.0);
+        app.world_mut().resource_mut::<Tuning>().folk.lose_interest_after = 2.0;
+        app.world_mut().entity_mut(player).insert(Health::full(100_000));
+        app.world_mut().write_message(Provoked { folk });
+        for _ in 0..30 {
+            app.update();
+        }
+        assert!(hostility(&app, folk).is_hostile());
+        let home = app.world().get::<Routine>(folk).expect("a routine").home;
+        // The delver slips away out of sight.
+        let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
+        let away = out_of_sight_of(&app, at);
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = away;
+        let mut calmed = None;
+        for frame in 0..240 {
+            app.update();
+            if calmed.is_none() && !hostility(&app, folk).is_hostile() {
+                calmed = Some(frame);
+            }
+        }
+        let calmed = calmed.expect("the folk never gave up");
+        assert!(calmed as f32 / 60.0 >= 2.0, "gave up after {} s, sooner than the tuning", calmed as f32 / 60.0);
+        assert_eq!(hostility(&app, folk), Hostility::Friendly);
+        // Back to their routine: on their way home, or there.
+        let routine = app.world().get::<Routine>(folk).unwrap();
+        assert!(matches!(routine.phase, crate::folk_routine::Phase::Walk { goal } if goal == home) || app.world().get::<Transform>(folk).unwrap().translation.xz().distance(home) < 2.0 * CELL, "{:?}", routine.phase);
+        // Struck again, they turn again.
+        let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
+        app.world_mut().write_message(Struck { target: folk, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false });
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(hostility(&app, folk).is_hostile(), "provoked again");
+    }
+
+    #[test]
+    fn a_hostile_folk_stops_swinging_once_the_delver_falls() {
+        let (mut app, player, folk) = folk_fight(12.0);
+        app.world_mut().write_message(Provoked { folk });
+        app.world_mut().entity_mut(player).insert(Health { hp: 0, max: 10 });
+        // Three seconds, the folk in reach for most of it, before the fall sends the game to
+        // the title (`vitals::FALL_TIME`).
+        for frame in 0..180 {
+            app.update();
+            assert!(attacks(&app).is_empty(), "struck the fallen delver at frame {frame}");
+            assert_eq!(app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count(), 0, "swung at the fallen delver at frame {frame}");
+        }
+        assert!(app.world().get::<Fight>(folk).unwrap().swing.is_none(), "no swing under way");
+    }
+
+    #[test]
+    fn a_hostile_folk_who_keeps_the_delver_in_sight_keeps_fighting() {
+        let (mut app, player, folk) = folk_fight(12.0);
+        app.world_mut().resource_mut::<Tuning>().folk.lose_interest_after = 2.0;
+        app.world_mut().entity_mut(player).insert(Health::full(100_000));
+        app.world_mut().write_message(Provoked { folk });
+        for frame in 0..600 {
+            app.update();
+            assert!(hostility(&app, folk).is_hostile(), "gave up at frame {frame} with the delver in sight");
+        }
     }
 
     #[test]

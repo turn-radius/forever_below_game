@@ -88,6 +88,20 @@ impl Critter {
         self
     }
 
+    /// Its Armor Class: a skeleton's from what it wears ([`SkeletonKit`]), any other creature's
+    /// as its SRD 5.1 stat block prints it ([`fb_creatures::StatBlock`]: rat 10, p. 387; giant
+    /// rat 12, p. 378; poisonous snake 13, p. 386; constrictor snake 12, p. 369).
+    pub fn armour_class(&self) -> i32 {
+        self.kit.as_ref().map_or_else(|| self.spot.species.stat_block().armour_class, |k| k.armour_class)
+    }
+
+    /// What its bite or blow adds to the d20: the stat block's attack bonus, and the `ToHit` of a
+    /// skeleton's weapon.
+    pub fn to_hit(&self) -> fb_character::combat::ToHit {
+        let weapon = self.kit.as_ref().map_or(0, |k| k.to_hit);
+        fb_character::combat::ToHit::StatBlock { attack_bonus: self.spot.species.stat_block().attack_bonus, weapon }
+    }
+
     /// Draws it `size` times as large as rolled, covering that much more floor.
     pub fn resize(&mut self, size: f32) {
         self.size = size;

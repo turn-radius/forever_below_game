@@ -63,6 +63,8 @@ notice_distance = 28.0
 release_distance = 40.0
 # Seconds the player must stay away before a person carries on.
 release_delay = 1.0
+# Seconds a hostile person goes without seeing the player before giving up and going home.
+lose_interest_after = 25.0
 
 [creatures.size]
 # How large each kind of creature is drawn, and the floor it covers (1 = as rolled).

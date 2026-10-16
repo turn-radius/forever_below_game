@@ -23,6 +23,7 @@ use bevy::{
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use fb_body::Side;
+use fb_character::combat::Odds;
 
 use super::feedback::{Corpse, Struck};
 use super::{ArmourClass, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach};
@@ -249,7 +250,8 @@ pub fn toward_target(eye: &GlobalTransform, points: Vec<Vec3>, view: &crate::tun
 const TOWARD_LIMIT: f32 = 0.6;
 
 /// Moves each swing on; at [`LANDS`] its blow finds the nearest creature or folk in reach and
-/// ahead, rolls to hit if it has an [`ArmourClass`] (a folk), and rolls its damage.
+/// ahead, rolls to hit against its [`ArmourClass`] (at disadvantage while the delver is
+/// poisoned, [`fb_character::poison::Poisoned::attack_odds`]), and on a hit rolls its damage.
 #[allow(clippy::too_many_arguments)]
 fn land_blows(
     mut commands: Commands,
@@ -257,14 +259,14 @@ fn land_blows(
     character: Res<Character>,
     tuning: Res<crate::tuning::Tuning>,
     mut dice: ResMut<RunDice>,
-    mut players: Query<(Entity, &Transform, &mut Swing), With<Player>>,
+    mut players: Query<(Entity, &Transform, &mut Swing, Option<&crate::character::DelverPoison>), With<Player>>,
     strikeable: Strikeable,
     armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
     mut swung: MessageWriter<SwungAt>,
 ) {
     let dt = time.delta_secs();
-    for (player, at, mut swing) in &mut players {
+    for (player, at, mut swing, poison) in &mut players {
         swing.t += dt;
         if !swing.landed && swing.t >= LANDS {
             swing.landed = true;
@@ -273,13 +275,11 @@ fn land_blows(
             let combat = &tuning.combat;
             if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
                 swung.write(SwungAt { target });
-                // Only what has an Armor Class is rolled against; every other blow lands.
-                let hits = armour.get(target).map_or(true, |ac| {
-                    let attack = attack_roll(&swing.weapon, character.strength(), ac.0, &mut dice.0);
-                    info!("swing: {}", attack.line());
-                    attack.hit
-                });
-                if hits {
+                let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
+                let odds = poison.map_or(Odds::Even, |p| p.0.attack_odds());
+                let attack = attack_roll(&swing.weapon, character.strength(), ac.0, odds, &mut dice.0);
+                info!("swing: {}", attack.line());
+                if attack.hit {
                     let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
                     struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning });
                 }

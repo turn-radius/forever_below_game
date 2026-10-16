@@ -221,6 +221,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[folk]` | `notice_distance` | 28.0 | How near the player must come, in sight, for a person to stop and face them, world units. |
 | `[folk]` | `release_distance` | 40.0 | How far the player must go before a person who faced them carries on, world units. |
 | `[folk]` | `release_delay` | 1.0 | Seconds the player must stay away before a person carries on. |
+| `[folk]` | `lose_interest_after` | 25.0 | Seconds a hostile person goes without seeing the player before giving up the fight, friendly again, and going home. Our own. |
 | `[creatures.size]` | `rat` | 1.0 | How large each kind of creature is drawn, and the floor it covers (1 = as rolled). |
 | `[creatures.size]` | `giant_rat` | 1.0 | Giant rats, as a multiple. |
 | `[creatures.size]` | `viper` | 1.0 | Poisonous snakes, as a multiple. |

@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(empty, vec![NO_CONDITIONS.to_string()]);
         let now = Circumstances { poisoned: fb_character::poison::Poisoned::for_hours(1.0), held_pace: Some(0.25), ..Circumstances::default() };
         let (mut app, lines) = sheet_with(conditions(&now));
-        assert_eq!(lines, ["Held", "Moving at 25% pace until you strike what holds you", "Poisoned", "No effect yet; wears off in 60 minutes"]);
+        assert_eq!(lines, ["Held", "Moving at 25% pace until you strike what holds you", "Poisoned", "Attacking at disadvantage; wears off in 60 minutes"]);
         let mut badges = app.world_mut().query::<(&Name, &BorderColor)>();
         let rims: Vec<(String, BorderColor)> = badges.iter(app.world()).map(|(n, c)| (n.to_string(), *c)).collect();
         assert!(rims.contains(&("Poisoned badge".to_string(), BorderColor::all(severity_colour(fb_character::conditions::Severity::Moderate)))), "{rims:?}");

@@ -2,7 +2,11 @@
 //!
 //! - The delver starts with a 1st-level character's hit points
 //!   ([`super::first_level_hit_points`]).
-//! - Each [`AttackOnDelver`] takes its bite, and a poisonous snake's venom after the delver's
+//! - The delver carries an [`ArmourClass`], the one the sheet shows (10, the Dexterity modifier
+//!   and what they wear, `Character::armour_class`), kept up as they dress ([`armour_the_delver`]).
+//!   Every creature's and folk's blow rolls to hit against it
+//!   (`creatures::behaviour::BlowsAtDelver`); one that misses whooshes past ([`whoosh_past`]).
+//! - Each [`AttackOnDelver`] (a blow that hit) takes its bite, and a poisonous snake's venom after the delver's
 //!   Constitution save ([`super::bite_damage`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
 //!   A failed save also poisons the delver for a while ([`DelverPoison`],
 //!   [`fb_character::poison`]), which turns the life orb green ([`super::orbs`]).
@@ -24,11 +28,11 @@ use bevy::{
 use fb_creatures::Species;
 
 use super::feedback::{Corpse, Struck};
-use super::{Health, RunDice, bite_damage, first_level_hit_points};
+use super::{ArmourClass, Health, RunDice, bite_damage, first_level_hit_points};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
 use crate::character::{Character, DelverPoison};
 use crate::creatures::Critter;
-use crate::creatures::behaviour::{AttackOnDelver, reach};
+use crate::creatures::behaviour::{AttackOnDelver, MissedDelver, reach};
 use crate::exhaustion::Exhaustion;
 use crate::inventory::Inventory;
 use crate::launch::AppState;
@@ -41,10 +45,11 @@ pub struct VitalsPlugin;
 impl Plugin for VitalsPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<AttackOnDelver>()
+            .add_message::<MissedDelver>()
             .add_message::<Struck>()
             .init_resource::<Pain>()
             .add_systems(OnExit(AppState::Delving), end_the_delve)
-            .add_systems(Update, (give_player_health, take_bites, show_vitals, break_free, fall).chain().in_set(DelveSystems))
+            .add_systems(Update, (give_player_health, armour_the_delver, take_bites, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
             .add_systems(Update, spawn_vitals.in_set(DelveSystems));
     }
 }
@@ -131,6 +136,36 @@ fn give_player_health(mut commands: Commands, character: Res<Character>, new: Qu
 /// Full hit points of `max`, or `start` of them (at least 1, at most `max`).
 pub fn starting_health(max: i32, start: Option<i32>) -> Health {
     Health { hp: start.map_or(max, |n| n.clamp(1, max)), max }
+}
+
+/// The delver's Armor Class, as the sheet works it out from who they are and what they wear,
+/// on the delver for every blow at them to roll against.
+fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, players: Query<(Entity, Option<&ArmourClass>), With<Player>>) {
+    let none = Inventory::default();
+    let ac = ArmourClass(character.armour_class(inventory.as_deref().unwrap_or(&none)).value().round() as i32);
+    for (player, had) in &players {
+        if had != Some(&ac) {
+            commands.entity(player).insert(ac);
+        }
+    }
+}
+
+/// A blow that misses the delver whooshes past them, from the side it came.
+fn whoosh_past(
+    mut commands: Commands,
+    mut misses: MessageReader<MissedDelver>,
+    sound: Option<Res<super::swing::SwingSound>>,
+    players: Query<&Transform, With<Player>>,
+    settings: Option<Res<crate::settings::GameSettings>>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
+) {
+    let game = settings.as_deref().copied().unwrap_or_default();
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    for miss in misses.read() {
+        let (Some(sound), Some(delver)) = (&sound, players.iter().next()) else { continue };
+        let at = Vec3::new(miss.attacker_pos.x, delver.translation.y, miss.attacker_pos.y);
+        crate::audio::play_at(&mut commands, "blow misses", sound.0.clone(), at, &game, &tuning);
+    }
 }
 
 /// Each bite takes its damage from the delver; a constrictor's holds them.

@@ -17,8 +17,8 @@
 //! - Its Armor Class is the delver's sum ([`fb_character::explain::armour_class`]) with the
 //!   stat block's Dexterity of 14, over what it wears: a worn helm, body armour, gloves, boots
 //!   and shield raise it. With nothing worn it keeps the stat block's 13 (the SRD's "armor
-//!   scraps"). No attack roll is made against it yet (as for every creature), so for now it
-//!   shows on the `--skeleton` view and turns the shield's blows.
+//!   scraps"). The delver's swings roll against it (`crate::combat::arm_creatures`), and its own
+//!   blows add its weapon's `ToHit` to the stat block's +4.
 //! - A shield turns some blows from the front ([`SkeletonKit::blocks`]): the better the shield,
 //!   the more.
 //! - Bludgeoning hurts it double and poison does nothing (the stat block's vulnerability and
@@ -90,6 +90,9 @@ pub struct SkeletonKit {
     pub dice: (u32, u32),
     pub bonus: i32,
     pub swing_time: f32,
+    /// Its weapon's `ToHit`, rounded (0 unarmed or with something improvised), added to the stat
+    /// block's attack bonus.
+    pub to_hit: i32,
     pub armour_class: i32,
     /// Its shield's chance to turn a blow from the front, 0 with none.
     pub block: f32,
@@ -128,6 +131,7 @@ impl SkeletonKit {
             _ => ARM_TO_FINGERTIPS * height,
         };
         let swing_time = crate::combat::swing_time(family);
+        let to_hit = weapon.filter(|_| melee).map_or(0, |w| w.profile.stats.to_hit.round() as i32);
         let armour: Vec<(String, f32)> = outfit.worn.iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)).filter(|(_, a)| *a != 0.0).collect();
         let armour_class = if armour.is_empty() {
             Species::Skeleton.stat_block().armour_class
@@ -136,7 +140,7 @@ impl SkeletonKit {
         };
         let block = outfit.item(Slot::Offhand).map_or(0.0, |shield| (BLOCK_BASE + BLOCK_PER_ARMOUR * shield.profile.stats.armour).clamp(0.0, BLOCK_MOST));
         let bludgeons = matches!(family, None | Some(Family::Mace | Family::Club | Family::Staff | Family::Bow));
-        SkeletonKit { dims, height, radius, stance, outfit, reach, dice, bonus, swing_time, armour_class, block, bludgeons }
+        SkeletonKit { dims, height, radius, stance, outfit, reach, dice, bonus, swing_time, to_hit, armour_class, block, bludgeons }
     }
 
     /// One blow's damage: the weapon's dice and bonus, at least 1.
