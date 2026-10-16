@@ -31,6 +31,7 @@ use fb_level::{CELL, Level};
 use procgen_rng::Mulberry32;
 
 use super::{Critter, Driven, Intent, tongue_flick};
+use crate::combat::feedback::Corpse;
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
 use crate::player::{blocked_by, slide_around};
@@ -156,9 +157,12 @@ fn cell(p: Vec2) -> (i32, i32) {
 }
 
 /// Gives each new creature a brain: it now acts for itself, rather than idling.
-fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &Critter, &Transform), Added<Critter>>) {
+fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &Critter, &Transform), (Added<Critter>, Without<Corpse>)>) {
     for (entity, critter, at) in &new {
-        let home = at.translation.xz();
+        // Home is where the level placed it, even when it comes back somewhere else after the
+        // delver left the level ([`crate::record`]): it wanders back to its own room.
+        let [hx, _, hz] = fb_level::Level::world(critter.spot.x, critter.spot.y);
+        let home = Vec2::new(hx, hz);
         let mut rng = Mulberry32::new(critter.spot.seed ^ 0xB4A1);
         let wait = rng.range_f32(0.5, 4.0);
         let (x, y) = cell(home);
@@ -170,7 +174,7 @@ fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &C
             attack: None,
             bitten: false,
             path: Vec::new(),
-            goal: (x, y),
+            goal: cell(at.translation.xz()),
             repath: 0.0,
             stuck: 0.0,
             rng,

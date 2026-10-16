@@ -47,6 +47,7 @@ use crate::combat::vitals::Fallen;
 use crate::inventory::OpenContainer;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Player, PlayerCamera, ScreenOpen, level_has_focus, show_screen};
 use crate::player::Locomotion;
+use crate::record::{WorldRecord, record_level_left};
 use crate::ui::{BG, INK, UiFonts};
 
 /// Seconds the screen takes to fade to black, and to fade back in on the new level.
@@ -186,13 +187,17 @@ impl Plugin for TravelPlugin {
             .add_message::<UseStair>()
             .add_systems(OnEnter(AppState::Delving), begin_the_run)
             .add_systems(OnExit(AppState::Delving), end_the_run)
+            .init_resource::<WorldRecord>()
             .configure_sets(Update, LeavingLevel.run_if(journey_is_leaving).before(step_journey).in_set(DelveSystems))
+            .add_systems(Update, record_level_left.in_set(LeavingLevel))
             .add_systems(Update, (take_stair.run_if(level_has_focus), begin_journey, step_journey, fade_depth_title).chain().in_set(DelveSystems));
     }
 }
 
 /// A new delve is a new abyss, from the seed of the level it opens on.
-fn begin_the_run(level: Option<Res<CurrentLevel>>, mut abyss: ResMut<Abyss>) {
+fn begin_the_run(level: Option<Res<CurrentLevel>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>) {
+    // The world record resets with the run for now (#285).
+    *record = WorldRecord::default();
     *abyss = level.map_or_else(Abyss::default, |level| Abyss { depth: level.0.depth, ..Abyss::new(level.0.seed) });
 }
 
@@ -267,6 +272,7 @@ fn step_journey(
     fonts: Option<Res<UiFonts>>,
     journey: Option<ResMut<Journey>>,
     mut abyss: ResMut<Abyss>,
+    record: Res<WorldRecord>,
     mut level: ResMut<CurrentLevel>,
     mut blocked: ResMut<BlockedCells>,
     mut aimed: ResMut<Aimed>,
@@ -284,7 +290,9 @@ fn step_journey(
         Phase::Leaving => {
             let to = depth_after(abyss.depth, journey.by);
             // Making the level (a few tens of milliseconds) is a hitch the black hides.
-            let next = abyss.level_at(to);
+            let mut next = abyss.level_at(to);
+            // A level visited before is as it was left.
+            record.apply_to(&mut next);
             // Down arrives at the level below's way up, which is where it starts; up arrives
             // in front of the level above's way down.
             let (x, y, facing) = match journey.by {

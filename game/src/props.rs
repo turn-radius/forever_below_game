@@ -36,6 +36,7 @@ use crate::inventory::{Inventory, ItemId, OpenContainer};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::level::{LevelPiece, fixture_appearance, geometry::Relief};
 use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, Screen, ScreenOpen, level_has_focus, show_screen};
+use crate::record::{WorldRecord, restore_contents};
 use crate::render::ItemSpawner;
 use crate::tuning::Tuning;
 
@@ -176,16 +177,19 @@ pub fn stock_container(inventory: &mut Inventory, prop: Prop) -> Option<ItemId> 
 }
 
 /// Spawns (or respawns, when the level changes) every prop the level lays out, each container
-/// stocked in the inventory.
+/// stocked in the inventory, with what was left in it and open or shut as it was left if the
+/// level was visited before (`crate::record`).
 fn lay_out_props(
     mut commands: Commands,
     level: Res<CurrentLevel>,
     old: Query<(Entity, Option<&Container>), With<PropPiece>>,
     mut inventory: ResMut<Inventory>,
     tuning: Option<Res<Tuning>>,
+    record: Option<Res<WorldRecord>>,
     mut spawner: ItemSpawner,
 ) {
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     for (entity, container) in &old {
         if let Some(container) = container {
             inventory.forget(container.id);
@@ -193,11 +197,21 @@ fn lay_out_props(
         commands.entity(entity).despawn();
     }
     for (index, spot) in level.0.props.iter().enumerate() {
-        let stocked = stock_container(&mut inventory, spot.prop);
-        if let Some(mut root) = spawn_prop(&mut spawner, &level.0, index, false, &tuning)
+        // A container that was left holds what was left in it, and stands open if it was opened.
+        let left = saved.and_then(|l| l.containers.get(&index));
+        let stocked = match (left, spot.prop) {
+            (Some(left), Prop::Container { style, seed, .. }) => {
+                let container = inventory.add(fb_items::container_item(chest_state(style, seed, false)));
+                restore_contents(&mut inventory, container, &left.contents);
+                Some(container)
+            }
+            _ => stock_container(&mut inventory, spot.prop),
+        };
+        let opened = left.is_some_and(|c| c.opened);
+        if let Some(mut root) = spawn_prop(&mut spawner, &level.0, index, opened, &tuning)
             && let Some(id) = stocked
         {
-            root.insert(Container { id, opened: false });
+            root.insert(Container { id, opened });
         }
     }
 }

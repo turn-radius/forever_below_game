@@ -62,6 +62,7 @@ use crate::launch::AppState;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, level_has_focus};
 use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
+use crate::record::{WorldRecord, restore_item};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, Shimmer, ToonMaterial};
 use crate::tuning::{LightTuning, Tuning};
 use crate::ui::{BG, BRIGHT, UiFonts, rarity_color};
@@ -728,16 +729,32 @@ pub(crate) fn lay_out_items(
     old: Query<(Entity, &FloorItem)>,
     mut inventory: ResMut<Inventory>,
     tuning: Option<Res<Tuning>>,
+    record: Option<Res<WorldRecord>>,
     mut spawner: ItemSpawner,
 ) {
     for (entity, floor) in &old {
         inventory.forget(floor.id);
         commands.entity(entity).despawn();
     }
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    // A level that was left lays out what lay on its floor then (`crate::record`), else what it
+    // generated. Once a depth is recorded its record is the truth: rolling its loot again would
+    // bring back what was taken.
+    if let Some(saved) = record.as_deref().and_then(|r| r.level(level.0.depth)) {
+        if saved.floor.iter().map(|f| f.spot).ne(level.0.items.iter().copied()) {
+            warn!("the floor of depth {} disagrees with its record; laying out the record", level.0.depth);
+        }
+        for lying in &saved.floor {
+            if let Some(id) = restore_item(&mut inventory, &lying.item) {
+                spawn_floor_item(&mut spawner, &inventory, id, lying.spot, &tuning);
+            }
+        }
+        return;
+    }
     for spot in &level.0.items {
         if let Some(item) = fb_items::roll_loot(spot.family, spot.seed) {
             let id = inventory.add(item);
-            spawn_floor_item(&mut spawner, &inventory, id, *spot, &tuning.as_deref().cloned().unwrap_or_default());
+            spawn_floor_item(&mut spawner, &inventory, id, *spot, &tuning);
         }
     }
 }
