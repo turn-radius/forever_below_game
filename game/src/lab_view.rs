@@ -27,7 +27,7 @@ use fb_creatures::Species;
 use fb_items::armory_base::{ARMORY_BASES, roll_shape};
 use fb_items::profile::profile;
 use fb_items::tables::{Affix, bases};
-use fb_items::{Item, Slot, roll_item};
+use fb_items::{Item, Rarity, Slot, roll_item};
 use procgen_rng::Mulberry32;
 
 use crate::character::{Character, Class};
@@ -101,6 +101,7 @@ impl Plugin for LabViewPlugin {
             .init_resource::<FightImages>()
             .init_resource::<TimeLab>()
             .init_resource::<TimeRun>()
+            .init_resource::<EquipBuilds>()
             .init_resource::<TimeImage>()
             .init_resource::<LabTab>()
             .init_resource::<Picker>()
@@ -124,6 +125,7 @@ impl Plugin for LabViewPlugin {
                     rebuild_rules.run_if(|state: Res<LabState>, rules: Res<LabRules>| state.is_changed() || rules.is_changed()),
                     run_fights,
                     refresh_fight.run_if(resource_changed::<FightLab>),
+                    rebuild_equip.run_if(resource_changed::<SheetBuilds>),
                     run_time,
                     refresh_time_view.run_if(resource_changed::<TimeRun>),
                     refresh_controls.run_if(|state: Res<LabState>| state.is_changed()),
@@ -389,11 +391,16 @@ pub struct Picker {
     /// Index into the slot's [`bases_for`].
     pub base: usize,
     pub seed: u32,
+    /// The rarity wanted: the first seed from `seed` on that rolls it is used. `None` takes the seed as it is.
+    pub rarity: Option<Rarity>,
 }
+
+/// How many seeds are tried to find one of a chosen rarity.
+pub const RARITY_SEARCH: u32 = 5000;
 
 impl Default for Picker {
     fn default() -> Self {
-        Picker { open: false, slot: 0, base: 0, seed: 1 }
+        Picker { open: false, slot: 0, base: 0, seed: 1, rarity: None }
     }
 }
 
@@ -424,15 +431,25 @@ impl Picker {
         self.seed = (self.seed as i64 + by).clamp(0, u32::MAX as i64) as u32;
     }
 
+    /// The seed the choice rolls from: the seed itself, or with a rarity chosen the first seed
+    /// from it on (within [`RARITY_SEARCH`]) that rolls that rarity.
+    pub fn resolved_seed(&self) -> Option<u32> {
+        let base = self.base_name()?;
+        match self.rarity {
+            None => Some(self.seed),
+            Some(rarity) => (0..RARITY_SEARCH).map(|i| self.seed.wrapping_add(i)).find(|&s| roll_item(&base, s).is_some_and(|item| item.rarity == rarity)),
+        }
+    }
+
     /// The item the choice rolls, to preview.
     pub fn preview(&self) -> Option<Item> {
-        roll_item(&self.base_name()?, self.seed)
+        roll_item(&self.base_name()?, self.resolved_seed()?)
     }
 
     /// Puts the choice on, or into the hand, and closes the card.
     pub fn put_on(&mut self, state: &mut LabState) {
-        if let Some(base) = self.base_name() {
-            state.equip(self.slot(), &base, self.seed);
+        if let (Some(base), Some(seed)) = (self.base_name(), self.resolved_seed()) {
+            state.equip(self.slot(), &base, seed);
         }
         self.open = false;
     }
@@ -485,6 +502,10 @@ pub enum Control {
     PickBase(isize),
     PickSeed(i64),
     PutOn,
+    /// Picks the slot, the base (by its place among the slot's bases) or the rarity wanted.
+    PickSlotAt(usize),
+    PickBaseAt(usize),
+    PickRarity(Option<Rarity>),
     Tab(usize),
     Attacker(isize),
     StrikeSeed(i64),
@@ -519,6 +540,12 @@ impl Control {
             Control::PickBase(by) => picker.step_base(*by),
             Control::PickSeed(by) => picker.step_seed(*by),
             Control::PutOn => picker.put_on(state),
+            Control::PickSlotAt(i) => {
+                picker.slot = *i % SLOTS.len();
+                picker.base = 0;
+            }
+            Control::PickBaseAt(i) => picker.base = *i,
+            Control::PickRarity(rarity) => picker.rarity = *rarity,
             Control::Tab(i) if TABS.get(*i).is_some_and(|t| t.1) => tab.0 = *i,
             Control::Tab(_) => {}
             Control::Attacker(by) => state.cycle_attacker(*by),
@@ -682,8 +709,9 @@ pub enum TimeAction {
     Pass(f64),
     UntilHungry,
     UntilExhaustion,
-    Eat,
-    Drink,
+    /// Eats or drinks the provision of this base.
+    Eat(&'static str),
+    Drink(&'static str),
     /// Starts the run over.
     Reset,
 }
@@ -706,8 +734,8 @@ impl TimeRun {
             TimeAction::Pass(hours) => self.steps.push(Step::Pass(hours, activity)),
             TimeAction::UntilHungry => self.steps.push(Step::Until(Goal::Hungry, activity)),
             TimeAction::UntilExhaustion => self.steps.push(Step::Until(Goal::Exhaustion, activity)),
-            TimeAction::Eat => self.steps.push(Step::Eat),
-            TimeAction::Drink => self.steps.push(Step::Drink),
+            TimeAction::Eat(base) => self.steps.push(Step::Eat(base)),
+            TimeAction::Drink(base) => self.steps.push(Step::Drink(base)),
             TimeAction::Reset => self.steps.clear(),
         }
         self.dirty = true;
@@ -819,6 +847,123 @@ fn refresh_time_view(mut commands: Commands, run: Res<TimeRun>, image: Res<TimeI
         }
         _ => words(c, &fonts.body, 16.0, MUTED, "Press a span to pass time and see when each need and exhaustion arrive."),
     });
+}
+
+/// Where the Eat, drink, equip tab is built.
+#[derive(Component)]
+pub struct EquipColumn;
+
+/// How many times the equip tab has been built.
+#[derive(Resource, Default)]
+pub struct EquipBuilds(pub u32);
+
+/// A heading in the equip tab.
+fn heading(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, text: &str) {
+    parent.spawn(Node { margin: UiRect::top(px(6)), border: UiRect::bottom(px(1)), padding: UiRect::bottom(px(3)), ..default() }).insert(BorderColor::all(FAINT)).with_child((Text::new(text), UiFonts::style(&fonts.display_bold, 22.0, INK)));
+}
+
+/// A choice among others: the button of `label`, marked when it is the one chosen.
+fn choice(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, control: Control, chosen: bool) {
+    let id = button(parent, fonts, label, control);
+    if chosen {
+        parent.commands().entity(id).insert((BorderColor::all(FRAME_GOLD), BackgroundColor(OPEN_TAB)));
+    }
+}
+
+/// A row of a label and then what `fill` puts after it, wrapping.
+fn labelled(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, fill: impl FnOnce(&mut ChildSpawnerCommands)) {
+    parent.spawn(Node { column_gap: px(8), align_items: AlignItems::FlexStart, ..default() }).with_children(|row| {
+        row.spawn(Node { width: px(56), flex_shrink: 0.0, padding: UiRect::top(px(6)), ..default() }).with_child((Text::new(label), UiFonts::style(&fonts.body, 16.0, MUTED)));
+        row.spawn(Node { flex_grow: 1.0, flex_basis: px(0), column_gap: px(6), row_gap: px(6), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(fill);
+    });
+}
+
+/// Builds the Eat, drink, equip tab: every provision with what it does and a button, a picker of
+/// slot, base, seed and rarity with the card of what it rolls, and each thing worn with Take off.
+fn rebuild_equip(mut commands: Commands, mut builds: ResMut<EquipBuilds>, picker: Res<Picker>, current: Res<CurrentSheet>, fonts: Res<UiFonts>, column: Query<Entity, With<EquipColumn>>) {
+    let Ok(column) = column.single() else { return };
+    builds.0 += 1;
+    let fonts = &*fonts;
+    commands.entity(column).despawn_children().with_children(|c| {
+        heading(c, fonts, "Provisions");
+        c.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(16), row_gap: px(2), ..default() }).with_children(|list| {
+            for (base, p) in fb_items::provision::PROVISIONS {
+                let drinks = roll_item(base, 1).and_then(|i| i.consume()) == Some(fb_items::Consume::Drink);
+                list.spawn(Node { width: percent(48.5), justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(px(10), px(2)), ..default() }).with_children(|row| {
+                    row.spawn(Node { column_gap: px(14), align_items: AlignItems::Baseline, ..default() }).with_children(|what| {
+                        words(what, &fonts.body_medium, 16.0, BRIGHT, *base);
+                        words(what, &fonts.body, 14.0, MUTED, format!("nutrition {}% \u{b7} water {}%", number(p.nutrition * 100.0), number(p.water * 100.0)));
+                    });
+                    let action = if drinks { TimeAction::Drink(base) } else { TimeAction::Eat(base) };
+                    button(row, fonts, if drinks { "Drink" } else { "Eat" }, Control::Time(action));
+                });
+            }
+        });
+        heading(c, fonts, "Put on or hold something");
+        c.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(8), padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT))).with_children(|card| {
+            labelled(card, fonts, "Slot", |row| {
+                for (i, slot) in SLOTS.iter().enumerate() {
+                    let label = match slot {
+                        Slot::Ring1 => "Ring 1".to_string(),
+                        Slot::Ring2 => "Ring 2".to_string(),
+                        slot => lab_sheet::slot_word(*slot),
+                    };
+                    choice(row, fonts, &label, Control::PickSlotAt(i), i == picker.slot);
+                }
+            });
+            labelled(card, fonts, "Base", |row| {
+                for (i, base) in bases_for(picker.slot()).iter().enumerate() {
+                    choice(row, fonts, base, Control::PickBaseAt(i), i == picker.base);
+                }
+            });
+            labelled(card, fonts, "Seed", |row| {
+                for (label, by) in [("\u{2212}100", -100), ("\u{2212}10", -10), ("\u{2212}1", -1)] {
+                    button(row, fonts, label, Control::PickSeed(by));
+                }
+                row.spawn(Node { min_width: px(56), justify_content: JustifyContent::Center, ..default() }).with_child((Text::new(picker.seed.to_string()), UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT)));
+                for (label, by) in [("+1", 1), ("+10", 10), ("+100", 100)] {
+                    button(row, fonts, label, Control::PickSeed(by));
+                }
+            });
+            labelled(card, fonts, "Rarity", |row| {
+                choice(row, fonts, "Any", Control::PickRarity(None), picker.rarity.is_none());
+                for (label, rarity) in [("Normal", Rarity::Common), ("Magic", Rarity::Magic), ("Rare", Rarity::Rare), ("Legendary", Rarity::Legendary)] {
+                    choice(row, fonts, label, Control::PickRarity(Some(rarity)), picker.rarity == Some(rarity));
+                }
+            });
+            match (picker.resolved_seed(), picker.preview()) {
+                (Some(seed), Some(item)) => {
+                    if seed != picker.seed {
+                        words(card, &fonts.body, 14.0, MUTED, format!("The first seed from {} that rolls {} is {seed}.", picker.seed, picker.rarity.map_or("any", rarity_word)));
+                    }
+                    gear_card(card, fonts, &lab_sheet::preview_card(picker.slot(), &item), CardMode::Preview);
+                }
+                _ => words(card, &fonts.body, 14.0, BAD, format!("No {} rolls from seed {} within {RARITY_SEARCH} seeds.", picker.rarity.map_or("item", rarity_word), picker.seed)),
+            }
+            card.spawn(Node::default()).with_children(|row| {
+                button(row, fonts, "Put on", Control::PutOn);
+            });
+        });
+        heading(c, fonts, "Worn and held");
+        match &current.0 {
+            Some(view) if !view.cards.is_empty() => {
+                for card in &view.cards {
+                    gear_card(c, fonts, card, CardMode::TakeOff);
+                }
+            }
+            _ => words(c, &fonts.body, 15.0, MUTED, "Nothing is worn or held."),
+        }
+    });
+}
+
+/// A rarity as the picker says it.
+fn rarity_word(rarity: Rarity) -> &'static str {
+    match rarity {
+        Rarity::Common => "normal",
+        Rarity::Magic => "magic",
+        Rarity::Rare => "rare",
+        Rarity::Legendary => "legendary",
+    }
 }
 
 /// A button in the ledger's look, with `control` on it.
@@ -934,11 +1079,14 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
                                 button(row, &fonts, "Until Hungry", Control::Time(TimeAction::UntilHungry));
                                 button(row, &fonts, "Until exhaustion 1", Control::Time(TimeAction::UntilExhaustion));
                                 row.spawn(Node { flex_grow: 1.0, ..default() });
-                                button(row, &fonts, "Eat", Control::Time(TimeAction::Eat));
-                                button(row, &fonts, "Drink", Control::Time(TimeAction::Drink));
+                                button(row, &fonts, "Eat", Control::Time(TimeAction::Eat(crate::lab_time::RATION)));
+                                button(row, &fonts, "Drink", Control::Time(TimeAction::Drink(crate::lab_time::DRAUGHT)));
                                 button(row, &fonts, "Reset", Control::Time(TimeAction::Reset));
                             });
                             pane.spawn((TimeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), ..default() }));
+                        }
+                        2 => {
+                            pane.spawn((EquipColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), ..default() }));
                         }
                         _ => {}
                     });
@@ -1129,7 +1277,7 @@ fn build_sheet(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, view: &SheetVi
     // Gear.
     words(sheet, &fonts.display_bold, 19.0, INK, "Worn and held");
     for card in &view.cards {
-        gear_card(sheet, fonts, card);
+        gear_card(sheet, fonts, card, CardMode::Sheet);
     }
     if picker.open {
         picker_card(sheet, fonts, picker);
@@ -1142,7 +1290,16 @@ fn build_sheet(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, view: &SheetVi
 
 /// A card for one thing worn or held: its name in its rarity's colour, the slot and what it
 /// does in plain words on the left, what it adds on the right, and a way to take it off.
-fn gear_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, card: &GearCard) {
+/// What a gear card offers: the sheet's, with a cross and switchable affixes; the equip tab's, with
+/// Take off; or a preview, with nothing to press.
+#[derive(Clone, Copy, PartialEq)]
+enum CardMode {
+    Sheet,
+    TakeOff,
+    Preview,
+}
+
+fn gear_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, card: &GearCard, mode: CardMode) {
     parent
         .spawn((Node { justify_content: JustifyContent::SpaceBetween, column_gap: px(8), padding: UiRect::axes(px(10), px(8)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
         .with_children(|c| {
@@ -1159,7 +1316,11 @@ fn gear_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, card: &GearCard
                             (true, false) => BAD,
                         };
                         let text = format!("{}: {}{}", affix.name, affix.text, if affix.on { "" } else { " (off)" });
-                        left.spawn((Control::Affix(card.slot, affix.name.clone()), Node::default())).with_child((Text::new(text), UiFonts::style(&fonts.body, 14.0, colour)));
+                        let line = left.spawn(Node::default()).id();
+                        if mode != CardMode::Preview {
+                            left.commands().entity(line).insert(Control::Affix(card.slot, affix.name.clone()));
+                        }
+                        left.commands().entity(line).with_child((Text::new(text), UiFonts::style(&fonts.body, 14.0, colour)));
                     }
                 }
             });
@@ -1167,7 +1328,17 @@ fn gear_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, card: &GearCard
                 for (i, add) in card.adds.iter().enumerate() {
                     words(right, &fonts.body, 14.0, if i + 1 == card.adds.len() { MUTED } else { BRIGHT }, add.clone());
                 }
-                right.spawn(Node { margin: UiRect::top(px(4)), ..default() }).with_children(|x| small_button(x, fonts, "\u{d7}", Control::Remove(card.slot)));
+                match mode {
+                    CardMode::Sheet => {
+                        right.spawn(Node { margin: UiRect::top(px(4)), ..default() }).with_children(|x| small_button(x, fonts, "\u{d7}", Control::Remove(card.slot)));
+                    }
+                    CardMode::TakeOff => {
+                        right.spawn(Node { margin: UiRect::top(px(4)), ..default() }).with_children(|x| {
+                            button(x, fonts, "Take off", Control::Remove(card.slot));
+                        });
+                    }
+                    CardMode::Preview => {}
+                }
             });
         });
 }
@@ -1910,5 +2081,39 @@ mod tests {
     fn the_smallest_window_leaves_the_tests_room() {
         assert!(MIN_WINDOW.x - SHEET_WIDTH - RULES_WIDTH >= 400.0);
         assert!(window().resize_constraints.min_width >= MIN_WINDOW.x);
+    }
+
+    #[test]
+    fn the_picker_can_ask_for_a_rarity_and_finds_the_first_seed_that_rolls_it() {
+        let mut picker = Picker { slot: SLOTS.iter().position(|&s| s == Slot::Belt).unwrap(), ..Picker::default() };
+        picker.base = bases_for(Slot::Belt).iter().position(|b| b == "Belt").unwrap();
+        picker.seed = 100;
+        assert_eq!(picker.resolved_seed(), Some(100));
+        for rarity in [Rarity::Common, Rarity::Magic, Rarity::Rare] {
+            picker.rarity = Some(rarity);
+            let seed = picker.resolved_seed().unwrap_or_else(|| panic!("no {rarity:?} belt"));
+            assert!(seed >= 100);
+            assert_eq!(picker.preview().unwrap().rarity, rarity);
+            assert!((100..seed).all(|s| roll_item("Belt", s).unwrap().rarity != rarity), "the first one");
+        }
+        let mut state = LabState::default();
+        picker.rarity = Some(Rarity::Magic);
+        let seed = picker.resolved_seed().unwrap();
+        picker.put_on(&mut state);
+        assert_eq!(state.slot(Slot::Belt).seed, seed);
+        assert_eq!(state.slot(Slot::Belt).roll().unwrap().item.rarity, Rarity::Magic);
+    }
+
+    #[test]
+    fn the_equip_tab_controls_pick_slot_base_and_rarity_directly() {
+        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
+        press(Control::PickSlotAt(3), &mut state, &mut picker, &mut tab, &mut saved);
+        assert_eq!(picker.slot(), Slot::Cloak);
+        press(Control::PickBaseAt(1), &mut state, &mut picker, &mut tab, &mut saved);
+        assert_eq!(picker.base, 1);
+        press(Control::PickRarity(Some(Rarity::Rare)), &mut state, &mut picker, &mut tab, &mut saved);
+        assert_eq!(picker.rarity, Some(Rarity::Rare));
+        press(Control::PickSlotAt(0), &mut state, &mut picker, &mut tab, &mut saved);
+        assert_eq!((picker.slot(), picker.base), (Slot::Head, 0), "a new slot starts at its first base");
     }
 }

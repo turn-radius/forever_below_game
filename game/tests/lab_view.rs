@@ -9,7 +9,6 @@ use bevy::{
     winit::WinitPlugin,
 };
 use fb_items::Slot;
-use forever_below::lab_time::TimeLab;
 use forever_below::lab_view::{Control, ControlPressed, DataFolder, Hover, LabState, LabTab, LabViewPlugin, RulesColumn, SheetBuilds, TabPane, TimeColumn};
 
 fn headless_lab() -> App {
@@ -233,9 +232,48 @@ fn passing_time_shows_answers_and_the_chart_with_what_each_was() {
     let shown = texts(&mut app);
     assert!(shown.iter().any(|t| t == "10 h") && shown.iter().any(|t| t == "was 8 h"), "{shown:?}");
     // Eat and Drink add to the run, and Reset starts it over.
-    press(&mut app, Control::Time(TimeAction::Eat));
+    press(&mut app, Control::Time(TimeAction::Eat("Bread")));
     assert_eq!(app.world().resource::<forever_below::lab_view::TimeRun>().steps.len(), 2);
     press(&mut app, Control::Time(TimeAction::Reset));
     assert!(texts(&mut app).iter().any(|t| t.starts_with("Press a span")));
 }
 
+#[test]
+fn the_equip_tab_feeds_and_dresses_the_character() {
+    use forever_below::lab_view::{Picker, TimeAction};
+    let mut app = headless_lab();
+    for _ in 0..3 {
+        app.update();
+    }
+    let shown = texts(&mut app);
+    for want in ["Provisions", "Bread", "nutrition 40% \u{b7} water 0%", "Tankard", "nutrition 0% \u{b7} water 50%", "Put on or hold something", "Rarity", "Worn and held", "Take off"] {
+        assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
+    }
+    // Eating a roast haunch is a step of the run, and the run moves the sheet's bars.
+    press(&mut app, Control::Time(TimeAction::Pass(8.0)));
+    let word = |app: &App| {
+        let state = app.world().resource::<LabState>();
+        app.world().resource::<forever_below::lab_time::TimeLab>().needs.hunger.word_with(&state.ruleset.rules).to_string()
+    };
+    assert_eq!(word(&app), "Hungry");
+    press(&mut app, Control::Time(TimeAction::Eat("Roast haunch")));
+    assert_eq!(word(&app), "Fed");
+    // The sheet's own bar shows the word.
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t == "Fed"), "{shown:?}");
+    // A lice-ridden cloak: pick the cloak slot, its base and the seed, and the preview shows its affix.
+    let seed = (1..4000).find(|&s| fb_items::roll_item("Cloak", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "Lice-ridden"))).unwrap();
+    let base = forever_below::lab_view::bases_for(Slot::Cloak).iter().position(|b| b == "Cloak").unwrap();
+    press(&mut app, Control::PickSlotAt(3));
+    press(&mut app, Control::PickBaseAt(base));
+    press(&mut app, Control::PickSeed(seed as i64 - 1));
+    assert_eq!(app.world().resource::<Picker>().seed, seed);
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t.starts_with("Lice-ridden: ")), "the preview card: {shown:?}");
+    press(&mut app, Control::PutOn);
+    assert!(app.world().resource::<LabState>().slot(Slot::Cloak).base.is_some());
+    // The mail comes off: armour 15 to 12, load 27 to 7 or so.
+    press(&mut app, Control::Remove(Slot::Body));
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t == "12"), "{shown:?}");
+}

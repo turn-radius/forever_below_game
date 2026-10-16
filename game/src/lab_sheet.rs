@@ -199,6 +199,11 @@ fn card(slot: Slot, rolled: &Rolled, off: &std::collections::BTreeSet<String>) -
     }
 }
 
+/// The card of an item not yet put on, for the picker's preview: every affix on.
+pub fn preview_card(slot: Slot, item: &fb_items::Item) -> GearCard {
+    card(slot, &Rolled { item: item.clone(), affixes: item.affixes.clone() }, &std::collections::BTreeSet::new())
+}
+
 /// The sheet for `state`, with the time the lab has had so far, under `rules`.
 pub fn view(state: &LabState, time: &TimeLab, rules: &Rules) -> SheetView {
     let character = &state.character;
@@ -451,5 +456,29 @@ mod tests {
         assert_eq!(view(&LabState::default(), &time, defaults()).exhaustion, (5, "5 of 6".to_string()));
         time.exhaustion = fb_character::Exhaustion::new(6);
         assert_eq!(view(&LabState::default(), &time, defaults()).exhaustion, (6, "Dead".to_string()));
+    }
+
+    #[test]
+    fn taking_the_mail_off_drops_armour_by_3_and_load_by_20_pounds() {
+        let mut state = LabState::default();
+        let with = view(&state, &TimeLab::default(), defaults());
+        state.remove(Slot::Body);
+        let without = view(&state, &TimeLab::default(), defaults());
+        assert_eq!((tile(&with, "Armour").value.as_str(), tile(&without, "Armour").value.as_str()), ("15", "12"));
+        assert_eq!((tile(&with, "Load").value.as_str(), tile(&without, "Load").value.as_str()), ("27", "7"));
+        assert!(without.cards.iter().all(|c| c.slot != Slot::Body));
+    }
+
+    #[test]
+    fn a_lice_ridden_cloak_shows_its_affix_on_its_card() {
+        let seed = (1..4000).find(|&s| roll_item("Cloak", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "Lice-ridden"))).expect("some cloak is lice-ridden");
+        let item = roll_item("Cloak", seed).unwrap();
+        let preview = preview_card(Slot::Cloak, &item);
+        assert!(preview.affixes.iter().any(|a| a.name == "Lice-ridden" && !a.good && a.on), "{:?}", preview.affixes);
+        let mut state = LabState::default();
+        state.equip(Slot::Cloak, "Cloak", seed);
+        let view = view(&state, &TimeLab::default(), defaults());
+        let worn = view.cards.iter().find(|c| c.slot == Slot::Cloak).unwrap();
+        assert!(worn.affixes.iter().any(|a| a.name == "Lice-ridden"), "{:?}", worn.affixes);
     }
 }

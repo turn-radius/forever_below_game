@@ -35,8 +35,10 @@ pub enum Step {
     Pass(f64, Activity),
     /// Passes time under an activity until the goal is met, or [`LONGEST`].
     Until(Goal, Activity),
-    Eat,
-    Drink,
+    /// Eats the provision of this base.
+    Eat(&'static str),
+    /// Drinks it.
+    Drink(&'static str),
 }
 
 /// A moment of the run.
@@ -112,15 +114,10 @@ pub fn run(state: &LabState, steps: &[Step]) -> Timeline {
                     samples.push(sample(&lab));
                 }
             }
-            Step::Eat | Step::Drink => {
+            Step::Eat(base) | Step::Drink(base) => {
                 let at = lab.clock.hours();
-                if *step == Step::Eat {
-                    lab.eat();
-                    events.push((at, Event::Eat));
-                } else {
-                    lab.drink();
-                    events.push((at, Event::Drink));
-                }
+                lab.consume(base);
+                events.push((at, if matches!(step, Step::Eat(_)) { Event::Eat } else { Event::Drink }));
                 samples.push(sample(&lab));
             }
         }
@@ -251,7 +248,7 @@ mod tests {
     #[test]
     fn eating_and_drinking_are_events_at_the_end_of_the_run_so_far() {
         let state = bare();
-        let run = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Eat, Step::Drink, Step::Pass(4.0, Activity::Walking)]);
+        let run = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Eat("Bread"), Step::Drink("Tankard"), Step::Pass(4.0, Activity::Walking)]);
         assert_eq!(run.events, vec![(12.0, Event::Eat), (12.0, Event::Drink)]);
         let at = run.samples.iter().position(|s| s.hours == 12.0).unwrap();
         let (before, after) = (run.samples[at], run.samples[at + 2]);
@@ -302,5 +299,23 @@ mod tests {
         assert!(death(&run).is_some());
         let short = crate::lab_timeline::run(&state, &[Step::Pass(24.0, Activity::Walking)]);
         assert_eq!((value(&crate::lab_timeline::answers(&short, &state.ruleset.rules), "Dies on"), death(&short)), ("not reached", None));
+    }
+
+    #[test]
+    fn eating_bread_from_hungry_lowers_hunger_by_its_nutrition_and_shows_the_new_word() {
+        let state = bare();
+        let rules = &state.ruleset.rules;
+        let hungry = run(&state, &[Step::Pass(8.0, Activity::Walking)]);
+        assert_eq!(hungry.lab.needs.hunger.word_with(rules), "Hungry");
+        let nutrition = fb_items::provision("Bread").unwrap().nutrition;
+        let fed = run(&state, &[Step::Pass(8.0, Activity::Walking), Step::Eat("Bread")]);
+        assert!((fed.lab.needs.hunger.value - (hungry.lab.needs.hunger.value - nutrition)).abs() < 1e-9);
+        assert_eq!(fed.lab.needs.hunger.word_with(rules), "Fed");
+        let roast = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Eat("Roast haunch")]);
+        let bread = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Eat("Bread")]);
+        assert!(roast.lab.needs.hunger.value < bread.lab.needs.hunger.value, "each provision has its own values");
+        let wine = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Drink("Wine")]);
+        let tankard = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Drink("Tankard")]);
+        assert!(tankard.lab.needs.thirst.value < wine.lab.needs.thirst.value);
     }
 }

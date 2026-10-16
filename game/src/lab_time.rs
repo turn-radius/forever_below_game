@@ -154,18 +154,21 @@ impl TimeLab {
         }
     }
 
-    /// Eats a ration, taking its nutrition off hunger.
-    pub fn eat(&mut self) {
-        if let Some(p) = provision(RATION) {
+    /// Eats or drinks the provision `base`, taking its nutrition off hunger and its water off thirst.
+    pub fn consume(&mut self, base: &str) {
+        if let Some(p) = provision(base) {
             self.needs.consume(p.nutrition, p.water);
         }
     }
 
+    /// Eats a ration, taking its nutrition off hunger.
+    pub fn eat(&mut self) {
+        self.consume(RATION);
+    }
+
     /// Drinks a draught, taking its water off thirst.
     pub fn drink(&mut self) {
-        if let Some(p) = provision(DRAUGHT) {
-            self.needs.consume(p.nutrition, p.water);
-        }
+        self.consume(DRAUGHT);
     }
 }
 
