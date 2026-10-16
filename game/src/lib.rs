@@ -31,6 +31,7 @@ pub mod menu;
 pub mod play;
 pub mod player;
 pub mod props;
+pub mod quickslots;
 pub mod render;
 pub mod settings;
 pub mod simulate;

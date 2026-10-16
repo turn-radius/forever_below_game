@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
 use fb_character::explain::{Explained, Loadout, armour_class};
-use fb_character::{Activity, Attributes, CarriedLight, Gear, LoadBand, Worn, modifier as ability_modifier};
+use fb_character::{Activity, Attributes, CarriedLight, Casting, Gear, LoadBand, Mana, Worn, modifier as ability_modifier};
 use procgen_rng::Mulberry32;
 
 use crate::carry::carried_lights;
@@ -32,6 +32,15 @@ impl Class {
             Class::Ranger => "ranger",
             Class::Mage => "mage",
             Class::Cleric => "cleric",
+        }
+    }
+
+    /// How the class casts: Mages from INT, Clerics from WIS, Fighters and Rangers hardly at all.
+    pub fn casting(self) -> Casting {
+        match self {
+            Class::Fighter | Class::Ranger => Casting::Martial,
+            Class::Mage => Casting::Arcane,
+            Class::Cleric => Casting::Divine,
         }
     }
 
@@ -133,6 +142,11 @@ impl Character {
     pub fn constitution(&self) -> i32 {
         self.attributes.constitution
     }
+
+    /// Mana points their pool holds: from their class's casting ability.
+    pub fn mana_pool(&self) -> f64 {
+        Mana::max_for(self.class.casting(), &self.attributes)
+    }
 }
 
 /// What the delver's gear makes of them (the plate's `derive`).
@@ -168,7 +182,7 @@ impl Character {
         let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
         for (_, item) in inventory.equipped() {
             let s = &item.profile.stats;
-            loadout = loadout.wearing(&item.name, Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, warmth: s.warmth as f64 });
+            loadout = loadout.wearing(&item.name, Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64 });
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
             loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
@@ -224,6 +238,25 @@ pub struct Load(pub LoadBand);
 /// clock steps it in #229.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverNeeds(pub fb_character::Needs);
+
+/// The delver's stamina, on the [`Player`](crate::play::Player) from their spawn, so a new delve
+/// starts with a full pool. Sprinting and swinging drain it, and it refills in seconds
+/// (`crate::simulate::step_stamina`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverStamina(pub fb_character::Stamina);
+
+/// The delver's mana, on the [`Player`](crate::play::Player) from their spawn. The pool's size
+/// is set from the character when the delver is new and again whenever the character changes,
+/// keeping how full it is; the game clock refills it (`crate::simulate::step_the_delver`).
+/// Nothing spends it yet.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverMana(pub Mana);
+
+/// How easy the delver is to see, 0 to 1 ([`fb_character::visibility`]): from the light on them,
+/// their pace, load and Stealth. Kept on the [`Player`](crate::play::Player) so the eye can show
+/// it and, later, creatures read it (`crate::combat::eye`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverVisibility(pub f32);
 
 /// Determines the delver's activity from movement and load state.
 /// Moving while Burdened or Encumbered counts as Exerting. An Overloaded delver cannot move

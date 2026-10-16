@@ -39,6 +39,10 @@ pub enum Refusal {
     WrongSlot,
     /// The hip with no belt to hang from.
     NoBelt,
+    /// A quickslot has nothing to do with it.
+    NotUsable,
+    /// Not carried: a quickslot only takes what the delver has with them.
+    NotCarried,
     Unknown,
 }
 
@@ -53,6 +57,8 @@ impl Refusal {
             Refusal::NotWearable => "That is not something you can wear.",
             Refusal::WrongSlot => "That does not go there.",
             Refusal::NoBelt => "It hangs from a belt. Wear one first.",
+            Refusal::NotUsable => "A quickslot cannot use that.",
+            Refusal::NotCarried => "Pick it up first.",
             Refusal::Unknown => "That is not here.",
         }
     }

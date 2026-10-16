@@ -24,6 +24,20 @@ pub const CORE_FRACTION: f32 = 0.4;
 pub const SHADOW_DEPTH_BIAS: f32 = 0.5;
 pub const SHADOW_NORMAL_BIAS: f32 = 1.2;
 
+/// How brightly `light` lights a surface `distance` units from it, as a multiple of full (the
+/// level the toon shader gives, 1 being the surface's own colour): the inverse of
+/// [`peak_lumens`] at the light's reach, times [`reach_falloff`]. `exposure` is the camera's.
+pub fn level_at(light: &PointLight, distance: f32, exposure: f32) -> f32 {
+    let peak = peak_lumens(1.0, light.range, exposure);
+    if peak <= 0.0 { 0.0 } else { light.intensity / peak * reach_falloff(distance, light.range) }
+}
+
+/// How lit the point `at` is by `lights` (each a position and its light): their levels
+/// ([`level_at`]) added, at most 1. Walls between are not accounted for.
+pub fn lit_level<'a>(at: Vec3, lights: impl IntoIterator<Item = (Vec3, &'a PointLight)>, exposure: f32) -> f32 {
+    lights.into_iter().map(|(position, light)| level_at(light, position.distance(at), exposure)).sum::<f32>().min(1.0)
+}
+
 /// A point or spot light's falloff at `distance` from it with reach `range`, 1 at the light
 /// and 0 from `range` on. The window `(1 - (d/r)^4)^2` and the `+1` that keeps the inverse
 /// square finite are Brian Karis's, from "Real Shading in Unreal Engine 4" (SIGGRAPH 2013,
@@ -215,6 +229,31 @@ mod tests {
         // Softened at the core: at the core distance it is still half, less the window.
         let core = CORE_FRACTION * 60.0;
         assert!((reach_falloff(core, 60.0) - 0.5 * (1.0 - CORE_FRACTION.powi(4)).powi(2)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_lights_level_is_its_peak_at_the_light_and_nothing_past_its_reach() {
+        let exposure = Exposure::INDOOR.exposure();
+        let light = point_light(Color::WHITE, 0.8, 60.0, &Exposure::INDOOR);
+        assert!((level_at(&light, 0.0, exposure) - 0.8).abs() < 1e-4);
+        assert!((level_at(&light, 15.0, exposure) - 0.8 * reach_falloff(15.0, 60.0)).abs() < 1e-4);
+        assert_eq!(level_at(&light, 60.0, exposure), 0.0);
+    }
+
+    #[test]
+    fn a_point_is_lit_by_every_light_near_it_up_to_full() {
+        let exposure = Exposure::INDOOR.exposure();
+        let torch = Torch::light(1.0, 60.0, &Exposure::INDOOR);
+        let at = Vec3::ZERO;
+        let none = lit_level(at, [], exposure);
+        let far = lit_level(at, [(Vec3::new(500.0, 0.0, 0.0), &torch)], exposure);
+        let near = lit_level(at, [(Vec3::new(10.0, 0.0, 0.0), &torch)], exposure);
+        let two = lit_level(at, [(Vec3::new(30.0, 0.0, 0.0), &torch), (Vec3::new(-30.0, 0.0, 0.0), &torch)], exposure);
+        let one = lit_level(at, [(Vec3::new(30.0, 0.0, 0.0), &torch)], exposure);
+        assert_eq!((none, far), (0.0, 0.0));
+        assert!(near > 0.5 && near <= 1.0, "{near}");
+        assert!((two - 2.0 * one).abs() < 1e-4 || two == 1.0, "lights add: {two} against {one}");
+        assert!(lit_level(at, [(Vec3::ZERO, &Torch::light(5.0, 60.0, &Exposure::INDOOR))], exposure) == 1.0, "never more than full");
     }
 
     #[test]
