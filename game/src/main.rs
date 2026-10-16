@@ -20,6 +20,10 @@
 //! starting condition (the `--wear` flag wins); `FB_CLOSEUP=<slot>` opens on a close-up of
 //! grid slot 0 to 11.
 
+// A release build on Windows opens as a window alone, without a console behind it; debug
+// builds keep the console for the log.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use bevy::{audio::AudioPlugin, prelude::*};
 use forever_below::{
     capture::FrameCapturePlugin,

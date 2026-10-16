@@ -4,6 +4,39 @@ A first-person delve into an endless Stygian abyss. Rust and Bevy 0.20.
 
 Start with `HANDOFF.md`. Claude Code reads `CLAUDE.md` on its own. Run tests with `cargo test --workspace` or `cargo nextest run --workspace` for faster parallel execution.
 
+## Installing
+
+### Download a release
+
+Each release on the repository's [Releases](https://github.com/turn-radius/forever_below_game/releases) page has a zip for Windows, macOS and Linux. Unzip it anywhere and keep the `assets` folder beside the game, which loads everything from there.
+
+- **Windows:** run `forever_below.exe`. If SmartScreen says it protected your PC, choose More info, then Run anyway; the build is not signed.
+- **macOS (Apple silicon):** in Terminal, in the unzipped folder, run `xattr -dr com.apple.quarantine .` once, then `./forever_below`. The build is not signed, so Gatekeeper blocks it until the quarantine flag is cleared.
+- **Linux (x86-64):** run `./forever_below`. It needs ALSA and udev, which most desktops already have (`libasound2` and `libudev1` on Debian and Ubuntu).
+
+A graphics card with Vulkan, DirectX 12 or Metal is needed, which any computer from the last several years has.
+
+### Build from source
+
+1. Install Rust with [rustup](https://rustup.rs). The repository's `rust-toolchain.toml` picks the toolchain (Rust 1.97.1 or newer), and rustup fetches it on the first build.
+2. Install the platform's build tools:
+   - **Windows:** the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload. The rustup installer offers to install them.
+   - **macOS:** `xcode-select --install`.
+   - **Linux (Debian or Ubuntu):** `sudo apt install build-essential pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev`. Other distributions are listed in Bevy's [setup guide](https://bevy.org/learn/quick-start/getting-started/setup/).
+3. Clone and run:
+
+   ```
+   git clone https://github.com/turn-radius/forever_below_game.git
+   cd forever_below_game
+   cargo run --release -p forever_below
+   ```
+
+   The first build compiles Bevy and takes several minutes; later builds are quick. `--release` plays smoothly; leave it off for a faster build while working on the code.
+
+### Making a release
+
+Push a version tag, such as `git tag v0.2.0 && git push origin v0.2.0`. The Release workflow (`.github/workflows/release.yml`) builds the game on Windows, macOS and Linux and attaches a zip for each to a new GitHub release. Running the workflow by hand from the Actions tab builds the same zips as workflow artifacts without publishing a release.
+
 ## Running the game
 
 Everything runs from the repository root with `cargo run -p forever_below -- <options>`. The `--` separates cargo's own options from the game's.
@@ -43,7 +76,7 @@ Rats and snakes notice you, close in and bite. Your hit points show low on the l
 
 Small round badges just above the left end of the quickslot bar show the conditions you are under right now: hungry, thirsty or sleepy past the first band, exhausted, winded, burdened or heavier, and held by a constrictor. Each is coloured from cream to red as it gets worse and goes when the condition does; when the mouse is free (say, after switching windows), hovering one names it and says what it does.
 
-Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
+Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS, `%APPDATA%\Forever Below\settings.json` on Windows and `~/.config/forever-below/settings.json` on Linux.
 
 To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, scenery as `%` rubble, `~` bones and `o` pillar, stairs as `>` down and `<` up, and creatures as `r` rat, `R` giant rat, `v` poisonous snake, `S` constrictor snake and `k` skeleton, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
 
