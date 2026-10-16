@@ -3,6 +3,7 @@
 
 pub mod ambient;
 pub mod audio;
+pub mod breath;
 pub mod capture;
 pub mod carry;
 pub mod character;

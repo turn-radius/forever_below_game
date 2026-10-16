@@ -88,6 +88,26 @@ The script prints each file's spectral centroid and share of energy above 2 kHz 
 
 In game, the delver's steps play at 0.35 of the effects volume (creatures at 0.7 of that), each with a random gain of ±15% and playback speed of ±6%. The same sample is never played twice in a row.
 
+**Breathing**: `tools/synth_breath.py` synthesises the delver's breath as three seamless loops, each a run of soft inhales and exhales: noise band-limited to about 300–1500 Hz (a high-pass at 300 Hz, a 4-pole low-pass and a gentle extra low-pass, so no hiss) under smooth raised-cosine envelopes, normalised to -16 dBFS, the same on every run. Steady is a slow, even breath every 4.2 s (12.6 s loop), harder is a deeper breath every 2.4 s (12.0 s) and ragged is fast and uneven with catches and a slight flutter (9.5 s). The strengths differ in pace and character, not brightness.
+
+```
+python3 tools/synth_breath.py /tmp/breath
+oggenc -q 6 -o game/assets/audio/breath_steady.ogg /tmp/breath/breath_steady.wav
+oggenc -q 6 -o game/assets/audio/breath_harder.ogg /tmp/breath/breath_harder.wav
+oggenc -q 6 -o game/assets/audio/breath_ragged.ogg /tmp/breath/breath_ragged.wav
+python3 tools/synth_breath.py --measure /tmp/breath
+```
+
+The script prints each file's peak, spectral centroid and share of energy above 2 kHz (targets: centroid under 900 Hz, under 2% above 2 kHz):
+
+| File | Centroid | Above 2 kHz |
+| --- | --- | --- |
+| breath_steady | 578 Hz | 0.004% |
+| breath_harder | 691 Hz | 0.04% |
+| breath_ragged | 776 Hz | 0.17% |
+
+In game (`game/src/breath.rs`) the loops are non-spatial and play at 0.25 of the effects volume, scaled up 15% per exhaustion level. Stamina below 70% breathes steadily, below 45% harder, and winded or below 20% raggedly, settling as stamina refills. Exhaustion from level 1 keeps a slow loop going under everything (steady at levels 1–2, harder at 3–4, ragged at 5–6) until the level returns to 0. Loops crossfade over 1.5 s and pause while a screen is open.
+
 `tools/synth_heal.py` synthesises the healing draught's gentle rising chime (three soft bell notes, decaying sine modes at slightly inharmonic ratios), its docstring citing the source:
 
 ```
