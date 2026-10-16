@@ -21,19 +21,23 @@ use bevy::{
     window::{PrimaryWindow, WindowResizeConstraints},
 };
 use fb_body::Folk;
+use fb_character::explain::number;
 use fb_character::{Activity, Attributes, MeterKind};
 use fb_creatures::Species;
 use fb_items::armory_base::{ARMORY_BASES, roll_shape};
 use fb_items::profile::profile;
 use fb_items::tables::{Affix, bases};
 use fb_items::{Item, Slot, roll_item};
+use procgen_rng::Mulberry32;
 
 use crate::character::{Character, Class};
 use crate::inventory::Inventory;
 use crate::lab_figure::LabFigure;
 use crate::lab_rules::{DicePart, FieldKind, RuleSet, Strengths, default_strength, strengthened};
 use crate::lab_sheet::{self, GearCard, SheetView, signed};
-use crate::lab_strike::{Attacker, Strikes};
+use crate::lab_chart::Chart;
+use crate::lab_fight::{FightRecord, FightSummary, THOUSAND};
+use crate::lab_strike::Attacker;
 use crate::lab_time::{ACTIVITIES, STEPS, TimeLab, activity_word, clock_text, exhaustion_effect, percent_text};
 use crate::rules::GameRules;
 use crate::tweak_panel::chip;
@@ -93,7 +97,8 @@ impl Plugin for LabViewPlugin {
         app.init_resource::<LabState>()
             .init_resource::<UiFonts>()
             .init_resource::<SheetBuilds>()
-            .init_resource::<Strikes>()
+            .init_resource::<FightLab>()
+            .init_resource::<FightImages>()
             .init_resource::<TimeLab>()
             .init_resource::<LabTab>()
             .init_resource::<Picker>()
@@ -105,7 +110,7 @@ impl Plugin for LabViewPlugin {
             .init_resource::<SaveNote>()
             .add_message::<ControlPressed>()
             .insert_resource(ClearColor(BG))
-            .add_systems(Startup, (setup, demo))
+            .add_systems(Startup, (setup, demo, make_chart_images))
             .add_systems(
                 Update,
                 (
@@ -113,11 +118,11 @@ impl Plugin for LabViewPlugin {
                     press_controls,
                     apply_pressed,
                     show_save_note,
-                    press_strikes.run_if(|tab: Res<LabTab>| tab.0 == 0),
                     press_time.run_if(|tab: Res<LabTab>| tab.0 == 1),
                     rebuild_sheet.run_if(sheet_changed),
                     rebuild_rules.run_if(|state: Res<LabState>, rules: Res<LabRules>| state.is_changed() || rules.is_changed()),
-                    refresh_strikes.run_if(|state: Res<LabState>, strikes: Res<Strikes>| state.is_changed() || strikes.is_changed()),
+                    run_fights,
+                    refresh_fight.run_if(resource_changed::<FightLab>),
                     refresh_time.run_if(|state: Res<LabState>, time: Res<TimeLab>| state.is_changed() || time.is_changed()),
                     refresh_controls.run_if(|state: Res<LabState>| state.is_changed()),
                     show_tabs.run_if(resource_changed::<LabTab>),
@@ -196,8 +201,10 @@ pub struct LabState {
     pub activity: Activity,
     /// Who strikes the character ([`crate::lab_strike`]).
     pub attacker: Attacker,
-    /// The seed every strike roll comes from.
+    /// The seed every fight is rolled from.
     pub strike_seed: u32,
+    /// Whether the character strikes first in a round, as the attacker does by default.
+    pub swapped: bool,
     /// The rules and affix strengths in force: what the lab is editing, which the sheet, the
     /// strikes and the time all read.
     pub ruleset: RuleSet,
@@ -209,7 +216,7 @@ impl Default for LabState {
     fn default() -> Self {
         let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
         let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0 };
-        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), activity: Activity::Walking, attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1, ruleset: RuleSet::default() };
+        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), activity: Activity::Walking, attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1, swapped: false, ruleset: RuleSet::default() };
         for (slot, base, seed) in [(Slot::Mainhand, "Sword", 4), (Slot::Head, "Helm", 9), (Slot::Body, "Mail", 9)] {
             state.equip(slot, base, seed);
         }
@@ -449,6 +456,8 @@ pub struct CurrentSheet(pub Option<SheetView>);
 #[derive(Resource, Default, Clone, Copy, PartialEq)]
 pub struct Hover {
     pub tile: Option<usize>,
+    /// The played-out fight's line the mouse is over.
+    pub line: Option<usize>,
     pinned: Option<usize>,
 }
 
@@ -478,6 +487,11 @@ pub enum Control {
     Attacker(isize),
     StrikeSeed(i64),
     Activity(isize),
+    /// Has the character strike first.
+    Swap,
+    /// Plays one fight, or a thousand.
+    OneFight,
+    Thousand,
     /// Steps a number of the rules, or flips a switch.
     Rule(String, i32),
     Dice(String, DicePart, i32),
@@ -506,6 +520,8 @@ impl Control {
             Control::Attacker(by) => state.cycle_attacker(*by),
             Control::StrikeSeed(by) => state.strike_seed = (state.strike_seed as i64 + by).clamp(0, u32::MAX as i64) as u32,
             Control::Activity(by) => state.cycle_activity(*by),
+            Control::Swap => state.swapped = !state.swapped,
+            Control::OneFight | Control::Thousand => {}
             Control::Rule(path, dir) => crate::lab_rules::step(&mut state.ruleset, path, *dir),
             Control::Dice(path, part, dir) => crate::lab_rules::step_dice(&mut state.ruleset, path, *part, *dir),
             Control::Save => *saved = state.ruleset.clone(),
@@ -561,30 +577,98 @@ struct TabButton(usize);
 /// A text that follows the lab state outside the sheet.
 #[derive(Component, Clone, Copy, PartialEq)]
 enum ControlText {
+    Side,
     Attacker,
     StrikeSeed,
     Activity,
 }
 
-/// Where the strike log goes.
-#[derive(Component)]
-pub struct StrikeColumn;
-
-/// A button in the strike column.
-#[derive(Component, Clone, Copy, PartialEq)]
-enum StrikeButton {
-    Strike,
-    Hundred,
-    Heal,
+/// What the Fight tab has run: the thousand fights under the edited rules and under the saved
+/// ones, from the same seed, and the one fight played out.
+#[derive(Resource, Default)]
+pub struct FightLab {
+    /// Set by the buttons; [`run_fights`] does them.
+    want_many: bool,
+    want_one: bool,
+    /// Once a thousand has been run, a change to the state or the rules runs it again.
+    auto: bool,
+    /// How many One fights have been asked for, which moves the fight's seed.
+    ones: u32,
+    /// How many runs there have been, so a tooltip or a chart knows it is out of date.
+    pub generation: u32,
+    /// The thousand fights now, and under the saved rules.
+    pub many: Option<(FightSummary, FightSummary)>,
+    pub one: Option<FightRecord>,
+    /// The words at the edges of the life chart and the histogram.
+    axes: Option<(Chart, Chart)>,
 }
 
-/// A line of text in the strike column.
-#[derive(Component, Clone, Copy, PartialEq)]
-enum StrikeText {
-    Note,
-    Hp,
-    Summary,
-    Log,
+/// The two charts' images.
+#[derive(Resource, Default)]
+pub struct FightImages {
+    life: Option<Handle<Image>>,
+    histogram: Option<Handle<Image>>,
+}
+
+/// Where the fight's answers, charts and played-out lines are built.
+#[derive(Component)]
+struct FightResults;
+
+/// One line of the played-out fight, by its place in the fight's blows.
+#[derive(Component)]
+struct LogLine(usize);
+
+fn blank_chart((w, h): (u32, u32)) -> Image {
+    let mut image = Image::new(
+        bevy::render::render_resource::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        vec![0; (w * h * 4) as usize],
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD | bevy::asset::RenderAssetUsages::MAIN_WORLD,
+    );
+    image.sampler = bevy::image::ImageSampler::linear();
+    image
+}
+
+/// Makes the charts' images.
+fn make_chart_images(mut images: ResMut<FightImages>, assets: Option<ResMut<Assets<Image>>>) {
+    let Some(mut assets) = assets else { return };
+    images.life = Some(assets.add(blank_chart(crate::lab_chart::LIFE_SIZE)));
+    images.histogram = Some(assets.add(blank_chart(crate::lab_chart::HISTOGRAM_SIZE)));
+}
+
+/// Runs the fights that were asked for, and again after a change when a thousand has been run.
+/// The thousand runs under the edited rules and under the saved ones from the same seed.
+fn run_fights(state: Res<LabState>, saved: Res<LabRules>, mut lab: ResMut<FightLab>, images: Res<FightImages>, assets: Option<ResMut<Assets<Image>>>) {
+    let changed = lab.auto && (state.is_changed() || saved.is_changed());
+    let (many, one) = (lab.want_many || changed, lab.want_one || (changed && lab.one.is_some()));
+    if !many && !one {
+        return;
+    }
+    let seed = state.strike_seed;
+    if many {
+        let before = LabState { ruleset: saved.saved.clone(), ..state.clone() };
+        let now = crate::lab_fight::fights(&state, &state.ruleset.rules, seed, THOUSAND);
+        let was = crate::lab_fight::fights(&before, &saved.saved.rules, seed, THOUSAND);
+        let (life, histogram) = (crate::lab_chart::life_chart(&now, Some(&was)), crate::lab_chart::histogram_chart(&now, Some(&was)));
+        if let Some(mut assets) = assets {
+            for (handle, chart) in [(&images.life, &life), (&images.histogram, &histogram)] {
+                if let Some(mut image) = handle.as_ref().and_then(|h| assets.get_mut(h)) {
+                    image.data = Some(chart.canvas.pixels.clone());
+                }
+            }
+        }
+        lab.axes = Some((life, histogram));
+        lab.many = Some((now, was));
+        lab.auto = true;
+    }
+    if one {
+        let mut rng = Mulberry32::new(seed.wrapping_add(lab.ones));
+        lab.one = Some(crate::lab_fight::fight(&state, &state.ruleset.rules, &mut rng));
+    }
+    lab.want_many = false;
+    lab.want_one = false;
+    lab.generation += 1;
 }
 
 /// Where passing time goes.
@@ -697,25 +781,19 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
                     .with_children(|pane| match i {
                         0 => {
                             pane.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|row| {
-                                row.spawn((Text::new("They are attacked by"), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                                row.spawn((ControlText::Side, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED)));
                                 state_button(row, &fonts, Control::Attacker(1), ControlText::Attacker);
-                                row.spawn((Text::new("strike seed"), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                                button(row, &fonts, "Swap sides", Control::Swap);
+                                row.spawn(Node { flex_grow: 1.0, ..default() });
+                                row.spawn((Text::new("seed"), UiFonts::style(&fonts.body, 16.0, MUTED)));
                                 button(row, &fonts, "\u{2212}", Control::StrikeSeed(-1));
                                 row.spawn((ControlText::StrikeSeed, Text::new(""), UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT)));
                                 button(row, &fonts, "+", Control::StrikeSeed(1));
+                                button(row, &fonts, "One fight", Control::OneFight);
+                                let id = button(row, &fonts, "1,000 fights", Control::Thousand);
+                                row.commands().entity(id).insert((BorderColor::all(FRAME_GOLD), BackgroundColor(OPEN_TAB)));
                             });
-                            pane.spawn((StrikeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(8), ..default() })).with_children(|strikes| {
-                                strikes.spawn((Text::new("Strikes"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                                strikes.spawn((StrikeText::Note, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED)));
-                                strikes.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
-                                    chip(row, &fonts, "Strike", StrikeButton::Strike);
-                                    chip(row, &fonts, "×100", StrikeButton::Hundred);
-                                    chip(row, &fonts, "Heal", StrikeButton::Heal);
-                                });
-                                strikes.spawn((StrikeText::Hp, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
-                                strikes.spawn((StrikeText::Summary, Text::new(""), UiFonts::style(&fonts.mono, 15.0, BRIGHT)));
-                                strikes.spawn((StrikeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
-                            });
+                            pane.spawn((FightResults, Node { flex_direction: FlexDirection::Column, row_gap: px(12), ..default() }));
                         }
                         1 => {
                             pane.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|row| {
@@ -793,8 +871,8 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
 
 /// Whether anything the sheet shows has changed.
 #[allow(clippy::too_many_arguments)]
-fn sheet_changed(state: Res<LabState>, time: Res<TimeLab>, strikes: Res<Strikes>, picker: Res<Picker>, figure: Res<LabFigure>, saved: Res<LabRules>) -> bool {
-    state.is_changed() || time.is_changed() || strikes.is_changed() || picker.is_changed() || figure.is_changed() || saved.is_changed()
+fn sheet_changed(state: Res<LabState>, time: Res<TimeLab>, picker: Res<Picker>, figure: Res<LabFigure>, saved: Res<LabRules>) -> bool {
+    state.is_changed() || time.is_changed() || picker.is_changed() || figure.is_changed() || saved.is_changed()
 }
 
 /// A line of text in the sheet.
@@ -1008,7 +1086,6 @@ fn rebuild_sheet(
     mut commands: Commands,
     state: Res<LabState>,
     time: Res<TimeLab>,
-    strikes: Res<Strikes>,
     picker: Res<Picker>,
     figure: Res<LabFigure>,
     saved: Res<LabRules>,
@@ -1017,22 +1094,23 @@ fn rebuild_sheet(
 ) {
     let Ok(root) = rows.single() else { return };
     builds.0 += 1;
-    let view = lab_sheet::view_marked(&state, &time, &strikes, &saved.saved);
+    let view = lab_sheet::view_marked(&state, &time, &saved.saved);
     commands.entity(root).despawn_children();
     commands.entity(root).with_children(|root| build_sheet(root, &fonts, &view, &picker, &figure));
     current.0 = Some(view);
 }
 
 /// With `FB_LAB_DEMO=1`, does what a few clicks would, for a capture: two edits to the rules
-/// (Capacity per STR to 20, the giant rat's attack bonus to +2), +8 h once and Strike three
-/// times, and holds Armour's tooltip up ([`setup`]).
-fn demo(mut state: ResMut<LabState>, mut time: ResMut<TimeLab>, mut strikes: ResMut<Strikes>) {
+/// (Capacity per STR to 20, the giant rat's attack bonus to +2), +8 h once, 1,000 fights and
+/// One fight, and holds Armour's tooltip up ([`setup`]).
+fn demo(mut state: ResMut<LabState>, mut time: ResMut<TimeLab>, mut fight: ResMut<FightLab>) {
     if std::env::var("FB_LAB_DEMO").is_ok_and(|v| v == "1") {
         crate::lab_rules::step(&mut state.ruleset, "load/capacity_per_strength", 5);
         crate::lab_rules::step(&mut state.ruleset, "creatures/Giant Rat/attack_bonus", -1);
         crate::lab_rules::step(&mut state.ruleset, "creatures/Giant Rat/attack_bonus", -1);
         time.pass(&state, 8.0);
-        (0..3).for_each(|_| strikes.strike(&state));
+        fight.want_many = true;
+        fight.want_one = true;
     }
 }
 
@@ -1099,8 +1177,17 @@ fn apply_pressed(
     mut picker: ResMut<Picker>,
     mut tab: ResMut<LabTab>,
     mut saved: ResMut<LabRules>,
+    mut fight: ResMut<FightLab>,
 ) {
     for ControlPressed(control) in pressed.read() {
+        match control {
+            Control::OneFight => {
+                fight.want_one = true;
+                fight.ones += 1;
+            }
+            Control::Thousand => fight.want_many = true,
+            _ => {}
+        }
         if *control == Control::Save {
             match crate::lab_rules::save_files(&folder.0, &state.ruleset, &|a, b| std::fs::rename(a, b)) {
                 Ok(()) => *note = SaveNote { failed: None, saved_until: Some(time.elapsed_secs_f64() + SAVED_SHOWN) },
@@ -1235,26 +1322,6 @@ fn rebuild_rules(
     });
 }
 
-/// A click on Strike, ×100 or Heal.
-fn press_strikes(
-    buttons: Res<ButtonInput<MouseButton>>,
-    window: Option<Single<&Window, With<PrimaryWindow>>>,
-    controls: Query<(&StrikeButton, &ComputedNode, &UiGlobalTransform)>,
-    state: Res<LabState>,
-    mut strikes: ResMut<Strikes>,
-) {
-    if !buttons.just_pressed(MouseButton::Left) {
-        return;
-    }
-    let Some(point) = cursor(&window) else { return };
-    let Some((button, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
-    match button {
-        StrikeButton::Strike => strikes.strike(&state),
-        StrikeButton::Hundred => strikes.strike_hundred(&state),
-        StrikeButton::Heal => strikes.heal(),
-    }
-}
-
 /// A click on a time button.
 fn press_time(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -1292,6 +1359,7 @@ fn show_tabs(tab: Res<LabTab>, mut panes: Query<(&TabPane, &mut Node)>, mut butt
 fn refresh_controls(state: Res<LabState>, mut texts: Query<(&ControlText, &mut Text)>) {
     for (which, mut text) in &mut texts {
         let line = match which {
+            ControlText::Side => if state.swapped { "They attack".to_string() } else { "They are attacked by".to_string() },
             ControlText::Attacker => state.attacker.label(),
             ControlText::StrikeSeed => state.strike_seed.to_string(),
             ControlText::Activity => activity_word(state.activity).to_string(),
@@ -1302,46 +1370,172 @@ fn refresh_controls(state: Res<LabState>, mut texts: Query<(&ControlText, &mut T
     }
 }
 
-/// Which big number the mouse is over, or the one a demo holds up.
-fn hover_tiles(window: Option<Single<&Window, With<PrimaryWindow>>>, tiles: Query<(&TileNode, &ComputedNode, &UiGlobalTransform)>, mut hover: ResMut<Hover>) {
-    let over = cursor(&window).and_then(|point| tiles.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)).map(|(tile, ..)| tile.0));
-    let tile = over.or(hover.pinned);
-    if hover.tile != tile {
+/// A percentage as the tiles write it: `50%`.
+fn rate_text(rate: f64) -> String {
+    format!("{:.0}%", rate * 100.0)
+}
+
+/// A mean with one decimal, or a dash for none.
+fn mean(value: Option<f64>) -> String {
+    value.map_or_else(|| "\u{2013}".to_string(), |v| format!("{v:.1}"))
+}
+
+/// The four answers of a thousand fights, each with the saved rules' value when it differs:
+/// the label, the value, and `was`.
+fn fight_tiles(now: &FightSummary, was: &FightSummary) -> Vec<(String, String, Option<String>)> {
+    let name = &now.attacker;
+    let rows = [
+        (format!("{name} hits them"), rate_text(now.attacker_hit_rate), rate_text(was.attacker_hit_rate)),
+        ("Damage per hit".to_string(), mean(now.damage_per_hit), mean(was.damage_per_hit)),
+        (format!("{name} blows to down them"), mean(now.blows_to_down), mean(was.blows_to_down)),
+        ("They win".to_string(), rate_text(now.they_win), rate_text(was.they_win)),
+    ];
+    rows.into_iter().map(|(label, value, before)| (label, value.clone(), crate::lab_rules::was_text(&value, &before))).collect()
+}
+
+/// A chart with its caption, the words at its edges and the image.
+fn chart_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, title: &str, note: &str, chart: &Chart, image: &Option<Handle<Image>>, aspect: f32, grow: f32) {
+    parent
+        .spawn((Node { flex_grow: grow, flex_basis: px(0), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
+        .with_children(|figure| {
+            words(figure, &fonts.body_medium, 16.0, BRIGHT, title);
+            words(figure, &fonts.body, 12.0, MUTED, note);
+            figure.spawn(Node { column_gap: px(6), ..default() }).with_children(|plot| {
+                plot.spawn(Node { flex_direction: FlexDirection::Column, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::End, ..default() }).with_children(|axis| {
+                    words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.0.clone());
+                    words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.1.clone());
+                });
+                if let Some(image) = image {
+                    plot.spawn((ImageNode::new(image.clone()), Node { flex_grow: 1.0, min_width: px(0), aspect_ratio: Some(aspect), ..default() }));
+                }
+            });
+            figure.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|axis| {
+                words(axis, &fonts.body, 12.0, MUTED, chart.x_labels.0.clone());
+                words(axis, &fonts.body, 12.0, MUTED, chart.x_labels.1.clone());
+            });
+        });
+}
+
+/// The fight's answers and charts, and the one fight played out, built again when a run
+/// finishes.
+fn refresh_fight(mut commands: Commands, lab: Res<FightLab>, images: Res<FightImages>, fonts: Res<UiFonts>, results: Query<Entity, With<FightResults>>) {
+    let Ok(results) = results.single() else { return };
+    commands.entity(results).despawn_children().with_children(|r| {
+        match (&lab.many, &lab.axes) {
+            (Some((now, was)), Some((life, histogram))) => {
+                r.spawn(Node { column_gap: px(12), ..default() }).with_children(|row| {
+                    for (label, value, was) in fight_tiles(now, was) {
+                        row.spawn((Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
+                            .with_children(|tile| {
+                                words(tile, &fonts.body, 13.0, MUTED, label);
+                                words(tile, &fonts.mono_bold, 30.0, BRIGHT, value);
+                                match was {
+                                    Some(was) => words(tile, &fonts.body, 13.0, FRAME_GOLD, was),
+                                    None => words(tile, &fonts.body, 13.0, MUTED, format!("of {} fights", number(now.fights as f64))),
+                                }
+                            });
+                    }
+                });
+                r.spawn(Node { column_gap: px(12), ..default() }).with_children(|row| {
+                    chart_figure(row, &fonts, "Their life, round by round", "gold: now \u{b7} grey: saved rules \u{b7} band: middle half of fights", life, &images.life, 960.0 / 360.0, 3.0);
+                    chart_figure(row, &fonts, "How many rounds a fight took", "gold: now \u{b7} grey: saved rules", histogram, &images.histogram, 640.0 / 360.0, 2.0);
+                });
+            }
+            _ => words(r, &fonts.body, 16.0, MUTED, "Press 1,000 fights to see how often each side hits, how long a fight lasts and who wins."),
+        }
+        r.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT))).with_children(|log| {
+            log.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|head| {
+                words(head, &fonts.body_medium, 16.0, BRIGHT, "One fight, played out");
+                words(head, &fonts.body, 13.0, MUTED, "hover a line for the dice");
+            });
+            match &lab.one {
+                Some(record) => {
+                    for (i, blow) in record.blows.iter().enumerate() {
+                        log.spawn((LogLine(i), Node::default())).with_child((Text::new(blow.line.clone()), UiFonts::style(&fonts.body, 15.0, if blow.by_attacker { MUTED } else { BRIGHT })));
+                    }
+                    let end = match record.winner {
+                        Some(crate::lab_fight::Side::Them) => format!("They win in {} rounds.", record.rounds),
+                        Some(crate::lab_fight::Side::Attacker) => format!("{} wins in {} rounds.", record.attacker, record.rounds),
+                        None => format!("Neither is down after {} rounds.", record.rounds),
+                    };
+                    words(log, &fonts.body_medium, 15.0, FRAME_GOLD, end);
+                }
+                None => words(log, &fonts.body, 15.0, MUTED, "Press One fight."),
+            }
+        });
+    });
+}
+
+/// A blow's tooltip: the attack roll's terms, then the damage's.
+fn blow_tip(blow: &crate::lab_fight::Blow) -> lab_sheet::Tip {
+    let mut sections = vec![lab_sheet::TipSection { heading: Some(format!("Attack {}", number(blow.attack.roll.value()))), rows: lab_sheet::tip_rows(&blow.attack.roll) }];
+    if let Some(damage) = &blow.damage {
+        sections.push(lab_sheet::TipSection { heading: Some(format!("Damage {}", number(damage.value()))), rows: lab_sheet::tip_rows(damage) });
+    }
+    lab_sheet::Tip { title: format!("Against armour {}", blow.attack.armour_class), sections }
+}
+
+/// Which big number or played-out line the mouse is over, or the number a demo holds up.
+fn hover_tiles(
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    tiles: Query<(&TileNode, &ComputedNode, &UiGlobalTransform)>,
+    lines: Query<(&LogLine, &ComputedNode, &UiGlobalTransform)>,
+    mut hover: ResMut<Hover>,
+) {
+    let point = cursor(&window);
+    let over = |rect: &ComputedNode, transform: &UiGlobalTransform| point.is_some_and(|p| node_rect(rect, transform).contains(p));
+    let tile = tiles.iter().find(|(_, n, t)| over(n, t)).map(|(tile, ..)| tile.0);
+    let line = if tile.is_none() { lines.iter().find(|(_, n, t)| over(n, t)).map(|(l, ..)| l.0) } else { None };
+    let tile = tile.or(if line.is_none() { hover.pinned } else { None });
+    if hover.tile != tile || hover.line != line {
         hover.tile = tile;
+        hover.line = line;
     }
 }
 
-/// Shows the tooltip of the hovered number under it, built again only when the hover or the
-/// sheet changes.
+/// Shows the tooltip of the hovered number or line under it, built again only when the hover,
+/// the sheet or the fight changes.
 #[allow(clippy::too_many_arguments)]
 fn show_tip(
     mut commands: Commands,
     hover: Res<Hover>,
     current: Res<CurrentSheet>,
+    fight: Res<FightLab>,
     fonts: Res<UiFonts>,
     tiles: Query<(&TileNode, &ComputedNode, &UiGlobalTransform)>,
+    lines: Query<(&LogLine, &ComputedNode, &UiGlobalTransform)>,
     root: Query<&ComputedNode, With<LabRoot>>,
     mut tip: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode), With<TipBox>>,
-    mut shown: Local<Option<(usize, u32)>>,
+    mut shown: Local<Option<(bool, usize, u32, u32)>>,
     builds: Res<SheetBuilds>,
 ) {
     let Ok((entity, mut node, mut visibility, size)) = tip.single_mut() else { return };
-    let tile = hover.tile.and_then(|i| Some((i, current.0.as_ref()?.tiles.get(i)?)));
-    let Some((i, tile)) = tile else {
+    let content = match (hover.tile, hover.line) {
+        (Some(i), _) => current.0.as_ref().and_then(|s| s.tiles.get(i)).map(|t| ((false, i, builds.0, 0), t.tip.clone())),
+        (None, Some(i)) => fight.one.as_ref().and_then(|r| r.blows.get(i)).map(|b| ((true, i, 0, fight.generation), blow_tip(b))),
+        _ => None,
+    };
+    let Some((key, content)) = content else {
         if *visibility != Visibility::Hidden {
             *visibility = Visibility::Hidden;
         }
         *shown = None;
         return;
     };
-    if *shown != Some((i, builds.0)) {
-        *shown = Some((i, builds.0));
-        commands.entity(entity).despawn_children().with_children(|t| tip_body(t, &fonts, &tile.tip));
+    if *shown != Some(key) {
+        *shown = Some(key);
+        commands.entity(entity).despawn_children().with_children(|t| tip_body(t, &fonts, &content));
     }
-    let Some(rect) = tiles.iter().find(|(t, ..)| t.0 == i).map(|(_, node, transform)| node_rect(node, transform)) else { return };
+    let rect = if key.0 {
+        lines.iter().find(|(l, ..)| l.0 == key.1).map(|(_, n, t)| node_rect(n, t))
+    } else {
+        tiles.iter().find(|(t, ..)| t.0 == key.1).map(|(_, n, t)| node_rect(n, t))
+    };
+    let Some(rect) = rect else { return };
     let window = root.single().map_or(Vec2::MAX, |r| r.size * r.inverse_scale_factor);
     let height = size.size.y * size.inverse_scale_factor;
-    let (left, top) = (rect.min.x.min(window.x - 270.0).max(8.0), (rect.max.y + 6.0).min(window.y - height - 8.0).max(8.0));
+    let left = if key.0 { rect.min.x + 40.0 } else { rect.min.x };
+    let (left, top) = (left.min(window.x - 270.0).max(8.0), (rect.max.y + 6.0).min(window.y - height - 8.0).max(8.0));
     if node.left != px(left) || node.top != px(top) {
         node.left = px(left);
         node.top = px(top);
@@ -1402,25 +1596,6 @@ fn refresh_time(
             if text.0 != line {
                 text.0 = line;
             }
-        }
-    }
-}
-
-/// Shows the attacker, the hit points, the last hundred and the log.
-fn refresh_strikes(state: Res<LabState>, strikes: Res<Strikes>, mut texts: Query<(&StrikeText, &mut Text)>) {
-    let (hp, full) = strikes.hit_points(&state);
-    for (which, mut text) in &mut texts {
-        let line = match which {
-            StrikeText::Note => match &state.attacker {
-                Attacker::Creature(_) => format!("{} strikes with its bite. The strike seed sets every roll.", state.attacker.label()),
-                Attacker::Folk(_) => format!("A {}: STR 10, the base rolled from the strike seed.", state.attacker.label()),
-            },
-            StrikeText::Hp => format!("Hit points {} of {full} · AC {}", hp.max(0), crate::lab_strike::armour_class(&state)),
-            StrikeText::Summary => strikes.summary.clone().unwrap_or_else(|| "×100 strikes a hundred times from the seed.".into()),
-            StrikeText::Log => strikes.log.iter().cloned().collect::<Vec<_>>().join("\n"),
-        };
-        if text.0 != line {
-            text.0 = line;
         }
     }
 }

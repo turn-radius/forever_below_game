@@ -15,7 +15,6 @@ use fb_items::{Rarity, Slot};
 
 use crate::combat::{Weapon, first_level_hit_points_explained_with};
 use crate::lab_rules::was_text;
-use crate::lab_strike::Strikes;
 use crate::lab_time::TimeLab;
 use crate::lab_view::{LabState, Rolled};
 use crate::ui::{ACCENT, BAD, OK};
@@ -200,8 +199,8 @@ fn card(slot: Slot, rolled: &Rolled, off: &std::collections::BTreeSet<String>) -
     }
 }
 
-/// The sheet for `state`, with the time and strikes the lab has had so far, under `rules`.
-pub fn view(state: &LabState, time: &TimeLab, strikes: &Strikes, rules: &Rules) -> SheetView {
+/// The sheet for `state`, with the time the lab has had so far, under `rules`.
+pub fn view(state: &LabState, time: &TimeLab, rules: &Rules) -> SheetView {
     let character = &state.character;
     let inventory = state.inventory();
     let loadout = character.loadout(&inventory);
@@ -213,7 +212,7 @@ pub fn view(state: &LabState, time: &TimeLab, strikes: &Strikes, rules: &Rules) 
     let armour = character.armour_class_with(rules, &inventory);
     let (least, most) = (range.min.value(), range.max.value());
     let hit_points = first_level_hit_points_explained_with(rules, character).value() as i32;
-    let (hp, _) = strikes.hit_points(state);
+    let hp = hit_points;
     let attributes = [character.attributes.strength, character.attributes.dexterity, character.attributes.constitution, character.attributes.intelligence, character.attributes.wisdom]
         .iter()
         .zip(ATTRIBUTE_NAMES)
@@ -256,9 +255,9 @@ pub fn view(state: &LabState, time: &TimeLab, strikes: &Strikes, rules: &Rules) 
 
 /// The sheet for `state` under its own rules, with what each number was under `saved` beside the
 /// ones the edit moved ([`crate::lab_rules::was_text`]).
-pub fn view_marked(state: &LabState, time: &TimeLab, strikes: &Strikes, saved: &crate::lab_rules::RuleSet) -> SheetView {
-    let mut now = view(state, time, strikes, &state.ruleset.rules);
-    let before = view(&LabState { ruleset: saved.clone(), ..state.clone() }, time, strikes, &saved.rules);
+pub fn view_marked(state: &LabState, time: &TimeLab, saved: &crate::lab_rules::RuleSet) -> SheetView {
+    let mut now = view(state, time, &state.ruleset.rules);
+    let before = view(&LabState { ruleset: saved.clone(), ..state.clone() }, time, &saved.rules);
     for (tile, was) in now.tiles.iter_mut().zip(&before.tiles) {
         tile.was = if tile.value == was.value {
             let small = |t: &Tile| t.small.as_deref().map(|s| s.trim_start_matches(" / ").to_string()).unwrap_or_default();
@@ -299,7 +298,7 @@ mod tests {
     use fb_items::roll_item;
 
     fn default_view() -> SheetView {
-        view(&LabState::default(), &TimeLab::default(), &Strikes::default(), defaults())
+        view(&LabState::default(), &TimeLab::default(), defaults())
     }
 
     fn seed_with(base: &str, affix: &str) -> u32 {
@@ -351,7 +350,7 @@ mod tests {
     fn a_belt_of_the_ox_adds_its_card_and_lifts_capacity_to_175() {
         let mut state = LabState::default();
         state.equip(Slot::Belt, "Belt", seed_with("Belt", "of the Ox"));
-        let view = view(&state, &TimeLab::default(), &Strikes::default(), defaults());
+        let view = view(&state, &TimeLab::default(), defaults());
         assert_eq!(tile(&view, "Load").small.as_deref(), Some(" / 175"));
         let belt = view.cards.iter().find(|c| c.slot == Slot::Belt).expect("the belt's card");
         assert!(belt.title.contains("of the Ox"), "{}", belt.title);
@@ -365,7 +364,7 @@ mod tests {
         let mut state = LabState::default();
         state.equip(Slot::Belt, "Belt", seed_with("Belt", "of the Ox"));
         state.set_affix(Slot::Belt, "of the Ox", false);
-        let view = view(&state, &TimeLab::default(), &Strikes::default(), defaults());
+        let view = view(&state, &TimeLab::default(), defaults());
         assert_eq!(tile(&view, "Load").small.as_deref(), Some(" / 150"));
         let belt = view.cards.iter().find(|c| c.slot == Slot::Belt).unwrap();
         assert!(belt.affixes.iter().any(|a| a.name == "of the Ox" && !a.on));
@@ -375,7 +374,7 @@ mod tests {
     fn strength_moves_the_damage_and_the_load() {
         let mut state = LabState::default();
         state.set_score(0, 14);
-        let view = view(&state, &TimeLab::default(), &Strikes::default(), defaults());
+        let view = view(&state, &TimeLab::default(), defaults());
         assert_eq!((tile(&view, "Damage").value.as_str(), tile(&view, "Load").small.as_deref()), ("3\u{2013}10", Some(" / 210")));
         assert_eq!(view.attributes[0].modifier, 2);
     }
@@ -386,20 +385,18 @@ mod tests {
         rules.combat.armour_base = 12;
         rules.load.capacity_per_strength = 20.0;
         rules.stamina.sprint_seconds = 45.0;
-        let view = view(&LabState::default(), &TimeLab::default(), &Strikes::default(), &rules);
+        let view = view(&LabState::default(), &TimeLab::default(), &rules);
         assert_eq!(tile(&view, "Armour").value, "17");
         assert_eq!(tile(&view, "Load").small.as_deref(), Some(" / 200"));
         assert_eq!(view.stamina.text, "45 s");
     }
 
     #[test]
-    fn time_and_blows_show_in_the_bars() {
+    fn time_shows_in_the_bars() {
         let state = LabState::default();
         let mut time = TimeLab::default();
         time.pass(&state, 8.0);
-        let mut strikes = Strikes::default();
-        strikes.strike(&state);
-        let view = view(&state, &time, &strikes, defaults());
+        let view = view(&state, &time, defaults());
         assert_eq!(view.needs[0].text, "Hungry");
         assert!(view.needs[0].fill > 0.4);
         assert!(view.life.text.ends_with("/ 10"));
@@ -409,7 +406,7 @@ mod tests {
     fn no_text_on_the_sheet_is_a_formula() {
         let mut state = LabState::default();
         state.equip(Slot::Belt, "Belt", seed_with("Belt", "of the Ox"));
-        let view = view(&state, &TimeLab::default(), &Strikes::default(), defaults());
+        let view = view(&state, &TimeLab::default(), defaults());
         for line in sheet_text(&view) {
             assert!(!line.contains(" = "), "{line}");
         }
@@ -433,12 +430,12 @@ mod tests {
     fn a_number_the_edit_moved_says_what_it_was() {
         let saved = crate::lab_rules::RuleSet::default();
         let mut state = LabState::default();
-        let plain = view_marked(&state, &TimeLab::default(), &Strikes::default(), &saved);
+        let plain = view_marked(&state, &TimeLab::default(), &saved);
         assert!(plain.tiles.iter().all(|t| t.was.is_none()) && plain.stamina.was.is_none());
         crate::lab_rules::set_leaf(&mut state.ruleset, "load/capacity_per_strength", crate::lab_rules::Leaf::Float(20.0));
         crate::lab_rules::set_leaf(&mut state.ruleset, "combat/armour_base", crate::lab_rules::Leaf::Int(13));
         crate::lab_rules::set_leaf(&mut state.ruleset, "stamina/sprint_seconds", crate::lab_rules::Leaf::Float(25.0));
-        let view = view_marked(&state, &TimeLab::default(), &Strikes::default(), &saved);
+        let view = view_marked(&state, &TimeLab::default(), &saved);
         let load = tile(&view, "Load");
         assert_eq!((load.value.as_str(), load.small.as_deref(), load.was.as_deref()), ("27", Some(" / 200"), Some("was 150")));
         let armour = tile(&view, "Armour");

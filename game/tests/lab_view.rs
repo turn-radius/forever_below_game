@@ -9,9 +9,8 @@ use bevy::{
     winit::WinitPlugin,
 };
 use fb_items::Slot;
-use forever_below::lab_strike::Strikes;
 use forever_below::lab_time::TimeLab;
-use forever_below::lab_view::{Control, ControlPressed, DataFolder, Hover, LabState, LabTab, LabViewPlugin, RulesColumn, SheetBuilds, StrikeColumn, TabPane, TimeColumn};
+use forever_below::lab_view::{Control, ControlPressed, DataFolder, Hover, LabState, LabTab, LabViewPlugin, RulesColumn, SheetBuilds, TabPane, TimeColumn};
 
 fn headless_lab() -> App {
     let mut app = App::new();
@@ -36,7 +35,6 @@ fn the_lab_builds_its_sheet_and_rebuilds_it_on_a_change() {
     for _ in 0..4 {
         app.update();
     }
-    assert_eq!(app.world_mut().query::<&StrikeColumn>().iter(app.world()).count(), 1);
     assert_eq!(app.world_mut().query::<&TimeColumn>().iter(app.world()).count(), 1);
     assert_eq!(app.world_mut().query::<&RulesColumn>().iter(app.world()).count(), 1);
     assert_eq!(app.world_mut().query::<&TabPane>().iter(app.world()).count(), 4);
@@ -163,20 +161,53 @@ fn the_tabs_open_one_pane_at_a_time() {
     assert_eq!(open(&mut app), vec![1]);
 }
 
+fn press(app: &mut App, control: Control) {
+    app.world_mut().write_message(ControlPressed(control));
+    app.update();
+    app.update();
+}
+
+/// The percentage a tile shows under `label`: the text after the label.
+fn tile_percent(shown: &[String], label: &str) -> f64 {
+    let at = shown.iter().position(|t| t == label).unwrap_or_else(|| panic!("no {label} in {shown:?}"));
+    shown[at + 1].trim_end_matches('%').parse().unwrap()
+}
+
 #[test]
-fn strikes_show_in_the_strike_column() {
+fn a_thousand_fights_fill_the_tiles_and_a_rule_edit_shows_what_it_was() {
     let mut app = headless_lab();
     for _ in 0..3 {
         app.update();
     }
-    assert!(texts(&mut app).iter().any(|t| t.starts_with("Hit points 10 of 10")), "{:?}", texts(&mut app));
-    let state = app.world().resource::<LabState>().clone();
-    app.world_mut().resource_mut::<Strikes>().strike(&state);
-    app.world_mut().resource_mut::<Strikes>().strike_hundred(&state);
+    assert!(texts(&mut app).iter().any(|t| t.starts_with("Press 1,000 fights")));
+    press(&mut app, Control::Thousand);
+    let shown = texts(&mut app);
+    for want in ["Giant Rat hits them", "Damage per hit", "Giant Rat blows to down them", "They win", "Their life, round by round", "How many rounds a fight took"] {
+        assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
+    }
+    assert!((tile_percent(&shown, "Giant Rat hits them") - 50.0).abs() <= 2.0);
+    assert!(!shown.iter().any(|t| t.starts_with("was ")), "nothing is edited: {shown:?}");
+    // The rat's attack bonus goes from +4 to +2, and the lab runs the thousand again by itself.
+    forever_below::lab_rules::step(&mut app.world_mut().resource_mut::<LabState>().ruleset, "creatures/Giant Rat/attack_bonus", -1);
+    forever_below::lab_rules::step(&mut app.world_mut().resource_mut::<LabState>().ruleset, "creatures/Giant Rat/attack_bonus", -1);
+    app.update();
     app.update();
     let shown = texts(&mut app);
-    assert!(shown.iter().any(|t| t.starts_with("Giant Rat: d20 (") && t.contains("vs AC 15")), "{shown:?}");
-    assert!(shown.iter().any(|t| t.starts_with("100 blows vs AC 15")), "{shown:?}");
+    assert!((tile_percent(&shown, "Giant Rat hits them") - 40.0).abs() <= 2.0, "{shown:?}");
+    assert!(shown.iter().any(|t| t == "was 50%"), "{shown:?}");
+}
+
+#[test]
+fn one_fight_is_played_out_in_lines() {
+    let mut app = headless_lab();
+    for _ in 0..3 {
+        app.update();
+    }
+    press(&mut app, Control::OneFight);
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t.starts_with("Giant Rat bites: rolls ") && t.contains(" to hit (15 armour")), "{shown:?}");
+    assert!(shown.iter().any(|t| t.contains(" wins in ") || t.contains("They win in ")), "{shown:?}");
+    assert!(shown.iter().all(|t| !t.contains(" = ")), "{shown:?}");
 }
 
 #[test]
