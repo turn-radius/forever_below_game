@@ -1,6 +1,5 @@
 //! The lab builds as an app without a window or a GPU (as `delve_scope` runs the game): its
-//! plugin and the shared tweak panel have no clashing queries, and the sheet and the panel
-//! are built, and rebuilt when the state changes.
+//! plugin has no clashing queries, and the sheet is built, and rebuilt when the state changes.
 
 use bevy::{
     prelude::*,
@@ -12,7 +11,7 @@ use bevy::{
 use fb_items::Slot;
 use forever_below::lab_strike::Strikes;
 use forever_below::lab_time::TimeLab;
-use forever_below::lab_view::{LabState, LabViewPlugin, SheetBuilds, StrikeColumn, TimeColumn};
+use forever_below::lab_view::{Hover, LabState, LabTab, LabViewPlugin, RulesColumn, SheetBuilds, StrikeColumn, TabPane, TimeColumn};
 
 fn headless_lab() -> App {
     let mut app = App::new();
@@ -39,7 +38,13 @@ fn the_lab_builds_its_sheet_and_rebuilds_it_on_a_change() {
     }
     assert_eq!(app.world_mut().query::<&StrikeColumn>().iter(app.world()).count(), 1);
     assert_eq!(app.world_mut().query::<&TimeColumn>().iter(app.world()).count(), 1);
-    assert!(texts(&mut app).iter().any(|t| t == "Capacity 150 lb"), "{:?}", texts(&mut app));
+    assert_eq!(app.world_mut().query::<&RulesColumn>().iter(app.world()).count(), 1);
+    assert_eq!(app.world_mut().query::<&TabPane>().iter(app.world()).count(), 4);
+    let shown = texts(&mut app);
+    for want in ["Human Fighter", "Life", "Hunger", "Sleepiness", "Exhaustion", "Armour", "Damage", "Load", "15", "1\u{2013}8", "27", " / 150", "Sallet", "Mail Hauberk", "Messer", "+ Put on or hold an item", "Rules", "Fight", "Time and needs", "Eat, drink, equip", "Effects", "after effects land"] {
+        assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
+    }
+    assert!(shown.iter().all(|t| !t.contains(" = ")), "no formula: {shown:?}");
     // With no input the sheet is not built again.
     let builds = app.world().resource::<SheetBuilds>().0;
     assert!(builds >= 1);
@@ -47,13 +52,43 @@ fn the_lab_builds_its_sheet_and_rebuilds_it_on_a_change() {
         app.update();
     }
     assert_eq!(app.world().resource::<SheetBuilds>().0, builds);
-    // A change builds it once more, the same frame.
-    app.world_mut().resource_mut::<LabState>().equip(Slot::Belt, "Belt", 2);
-    app.world_mut().resource_mut::<LabState>().character.attributes.strength = 14;
+    // A belt of the Ox is put on: its card shows and capacity reads 175, the frame it changes.
+    let ox = (1..2000).find(|&s| fb_items::roll_item("Belt", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "of the Ox"))).unwrap();
+    app.world_mut().resource_mut::<LabState>().equip(Slot::Belt, "Belt", ox);
     app.update();
     app.update();
     assert_eq!(app.world().resource::<SheetBuilds>().0, builds + 1);
-    assert!(texts(&mut app).iter().any(|t| t == "Capacity 210 lb"), "{:?}", texts(&mut app));
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t == " / 175"), "{shown:?}");
+    assert!(shown.iter().any(|t| t.contains("Belt of the Ox")), "{shown:?}");
+}
+
+#[test]
+fn hovering_armour_lists_its_terms() {
+    let mut app = headless_lab();
+    for _ in 0..3 {
+        app.update();
+    }
+    app.world_mut().resource_mut::<Hover>().pin(Some(0));
+    app.update();
+    app.update();
+    let shown = texts(&mut app);
+    for want in ["Armour 15", "Base", "10", "DEX", "+0", "Sallet", "+2", "Mail Hauberk", "+3"] {
+        assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
+    }
+}
+
+#[test]
+fn the_tabs_open_one_pane_at_a_time() {
+    let mut app = headless_lab();
+    for _ in 0..3 {
+        app.update();
+    }
+    let open = |app: &mut App| app.world_mut().query::<(&TabPane, &Node)>().iter(app.world()).filter(|(_, n)| n.display != Display::None).map(|(p, _)| p.0).collect::<Vec<_>>();
+    assert_eq!(open(&mut app), vec![0]);
+    app.world_mut().resource_mut::<LabTab>().0 = 1;
+    app.update();
+    assert_eq!(open(&mut app), vec![1]);
 }
 
 #[test]

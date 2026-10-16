@@ -26,6 +26,7 @@ use forever_below::{
     doll_view::{DollChoice, DollMotion, DollViewPlugin},
     forge_view::{Forge, ForgeViewPlugin},
     level_view::{LevelForge, LevelViewPlugin},
+    lab_figure::LabFigurePlugin,
     lab_view::{LabState, LabViewPlugin},
     launch::{AppState, Launch, env_set},
     render::ArmoryRenderPlugin,
@@ -205,9 +206,15 @@ fn run_lab(args: &[String]) -> AppExit {
         }
     };
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(forever_below::lab_view::window()), ..default() }))
-        .add_plugins(LabViewPlugin)
-        .insert_resource(lab);
+    // The lab reads the rules the game runs on, and watches them in a debug build.
+    forever_below::rules::use_data_folder(&mut app);
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin { primary_window: Some(forever_below::lab_view::window()), ..default() })
+            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() }),
+    )
+    .add_plugins((RulesPlugin, ArmoryRenderPlugin, LabFigurePlugin, LabViewPlugin))
+    .insert_resource(lab);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }

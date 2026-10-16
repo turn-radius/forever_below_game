@@ -1,57 +1,62 @@
-//! The lab (`--lab`): a character built from sliders and choices on the left, and their sheet
-//! with every derived number explained on the right. No level, creatures or audio load: the
-//! lab only calls the rules the game does ([`fb_character`], [`crate::character`],
-//! [`crate::combat`]), so what is balanced here is what the game plays.
+//! The lab (`--lab`): a designer's tool for balancing the character rules, laid out as a
+//! character sheet in three columns. On the left is the sheet itself ([`crate::lab_sheet`]):
+//! the figure in the gear it wears, folk, class and seed, the five attributes, the bars, and
+//! Armour, Damage and Load as large numbers whose tooltips list the terms they are made of,
+//! then a card for each thing worn or held. In the middle are the tests to run on the
+//! character, in tabs: the fight ([`crate::lab_strike`]) and passing time ([`crate::lab_time`]),
+//! with room for more. On the right is the rules column, for the numbers the game runs on.
 //!
-//! The left is the shared [`crate::tweak_panel`]: folk, class, the five attributes and the
-//! character seed, then for each equip slot a base (or none), an item seed and a switch for
-//! each rolled affix. Switching an affix off derives that item's stats again from its base
-//! with the remaining affixes ([`LabState::items`]). The right is [`sheet`]: hit points, armour
-//! class, the held weapon's damage range, load against capacity, darkvision, light and the
-//! meter rates, each with its [`Explained`] terms beneath. Changing anything rebuilds the
-//! sheet in the same frame.
-//!
-//! Below the sheet is the strike column ([`crate::lab_strike`]: an attacker, Strike, ×100 and
-//! Heal, and the log), and an empty one ([`TimeColumn`]) where passing time is added. Command
-//! line: `--lab --seed 7` rolls the character from the seed; with none it opens on a human Fighter with every score 10.
+//! No level, creatures or audio load: the lab only calls the rules the game does
+//! ([`fb_character`], [`crate::character`], [`crate::combat`]) under the loaded
+//! [`crate::rules::GameRules`], so what is balanced here is what the game plays. The sheet is
+//! built again only when the state, the time, the strikes, the rules or the picker change.
+//! Command line: `--lab --seed 7` rolls the character from the seed; with none it opens on a
+//! human Fighter with every score 10.
 
 use std::collections::BTreeSet;
-use std::hash::{Hash, Hasher};
 
-use armory::reflect::{Field, FieldKind};
-use armory::slider::Slider;
 use bevy::{
     input::mouse::{AccumulatedMouseScroll, MouseScrollUnit},
     prelude::*,
     window::{PrimaryWindow, WindowResizeConstraints},
 };
 use fb_body::Folk;
-use fb_character::explain::{Explained, number};
+use fb_character::{Activity, Attributes, MeterKind};
 use fb_creatures::Species;
-use fb_character::{Activity, Attributes, LoadBand, MeterKind, modifier};
 use fb_items::armory_base::{ARMORY_BASES, roll_shape};
 use fb_items::profile::profile;
 use fb_items::tables::{Affix, bases};
 use fb_items::{Item, Slot, roll_item};
 
 use crate::character::{Character, Class};
-use crate::combat::{Weapon, first_level_hit_points_explained_with};
 use crate::inventory::Inventory;
+use crate::lab_figure::LabFigure;
+use crate::lab_sheet::{self, GearCard, SheetView, signed};
 use crate::lab_strike::{Attacker, Strikes};
 use crate::lab_time::{ACTIVITIES, STEPS, TimeLab, activity_word, clock_text, exhaustion_effect, percent_text};
-use crate::tweak_panel::{PanelBody, Tweak, chip, TweakPanelPlugin, TweakPanelSystems, over_body, panel_body};
-use crate::ui::{node_rect, BG, BRIGHT, FAINT, INK, LINE, MUTED, UiFonts, numbers_line};
+use crate::rules::GameRules;
+use crate::tweak_panel::chip;
+use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, FAINT, FRAME_GOLD, INK, LINE, MUTED, UiFonts, node_rect, numbers_line, rarity_color};
 
-/// Width of the panel on the left, in logical pixels.
-pub const PANEL_WIDTH: f32 = 430.0;
-/// The smallest window the lab is laid out for: the panel and a sheet column beside it that
-/// wraps its lines.
-pub const MIN_WINDOW: Vec2 = Vec2::new(960.0, 540.0);
+/// Width of the sheet on the left and of the rules on the right, in logical pixels.
+pub const SHEET_WIDTH: f32 = 380.0;
+pub const RULES_WIDTH: f32 = 340.0;
+/// The smallest window the lab is laid out for: the sheet, the rules and a middle column wide
+/// enough for the tabs.
+pub const MIN_WINDOW: Vec2 = Vec2::new(1120.0, 630.0);
 const DEFAULT_SEED: u32 = 1207;
-/// Pixels one scroll line moves the sheet.
+/// Pixels one scroll line moves a column.
 const SCROLL_LINE: f32 = 36.0;
+/// The bars' colours: life, stamina and mana.
+pub const LIFE: Color = Color::srgb(0.71, 0.28, 0.25);
+pub const STAMINA: Color = Color::srgb(0.79, 0.64, 0.23);
+pub const MANA: Color = Color::srgb(0.29, 0.47, 0.74);
+/// The page behind the rules column, a shade darker than the sheet's.
+const RULES_PAGE: Color = Color::srgb(0.086, 0.075, 0.059);
+/// The page behind a tile or a card, and behind the tab that is open.
+const OPEN_TAB: Color = Color::srgb(0.14, 0.12, 0.085);
 /// The slots the lab dresses. The hip is left out, since a lantern hangs there from a belt.
-const SLOTS: [Slot; 15] = [
+pub const SLOTS: [Slot; 15] = [
     Slot::Head,
     Slot::Neck,
     Slot::Shirt,
@@ -68,6 +73,8 @@ const SLOTS: [Slot; 15] = [
     Slot::Ring2,
     Slot::Charm,
 ];
+/// The tabs in the middle and whether each can be opened yet.
+pub const TABS: [(&str, bool); 4] = [("Fight", true), ("Time and needs", true), ("Eat, drink, equip", true), ("Effects", false)];
 
 /// The window the lab opens in, no smaller than [`MIN_WINDOW`].
 pub fn window() -> Window {
@@ -87,22 +94,29 @@ impl Plugin for LabViewPlugin {
             .init_resource::<SheetBuilds>()
             .init_resource::<Strikes>()
             .init_resource::<TimeLab>()
+            .init_resource::<LabTab>()
+            .init_resource::<Picker>()
+            .init_resource::<LabFigure>()
+            .init_resource::<Hover>()
+            .init_resource::<CurrentSheet>()
             .insert_resource(ClearColor(BG))
-            .add_plugins(TweakPanelPlugin::<LabState>::default())
             .add_systems(Startup, (setup, demo))
             .add_systems(
-            Update,
-            (
-                (press_strikes, press_time),
-                rebuild_sheet.run_if(resource_changed::<LabState>),
-                refresh_strikes.run_if(|state: Res<LabState>, strikes: Res<Strikes>| state.is_changed() || strikes.is_changed()),
-                refresh_time.run_if(|state: Res<LabState>, time: Res<TimeLab>| state.is_changed() || time.is_changed()),
-                layout_right,
-                scroll_sheet,
-            )
-                .chain()
-                .after(TweakPanelSystems),
-        );
+                Update,
+                (
+                    press_controls,
+                    press_strikes.run_if(|tab: Res<LabTab>| tab.0 == 0),
+                    press_time.run_if(|tab: Res<LabTab>| tab.0 == 1),
+                    rebuild_sheet.run_if(sheet_changed),
+                    refresh_strikes.run_if(|state: Res<LabState>, strikes: Res<Strikes>| state.is_changed() || strikes.is_changed()),
+                    refresh_time.run_if(|state: Res<LabState>, time: Res<TimeLab>| state.is_changed() || time.is_changed()),
+                    refresh_controls.run_if(|state: Res<LabState>| state.is_changed()),
+                    show_tabs.run_if(resource_changed::<LabTab>),
+                    (hover_tiles, show_tip).chain(),
+                    scroll_columns,
+                )
+                    .chain(),
+            );
     }
 }
 
@@ -185,6 +199,9 @@ impl Default for LabState {
     }
 }
 
+/// The scores a character can have in the lab.
+const SCORES: std::ops::RangeInclusive<i32> = 3..=20;
+
 impl LabState {
     /// Parses `--seed <n>` (also `--seed=n`); `--lab` itself is skipped.
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<LabState, String> {
@@ -213,6 +230,11 @@ impl LabState {
         self.character = Character::roll_folk(self.character.folk, seed);
     }
 
+    /// Rolls the next seed's class and scores.
+    pub fn reroll(&mut self) {
+        self.set_seed(self.seed.wrapping_add(1));
+    }
+
     pub fn slot(&self, slot: Slot) -> &LabSlot {
         self.slots.iter().find(|s| s.slot == slot).expect("every lab slot is listed")
     }
@@ -226,6 +248,11 @@ impl LabState {
         *self.slot_mut(slot) = LabSlot { base: Some(base.to_string()), seed, ..LabSlot::empty(slot) };
     }
 
+    /// Takes whatever is in `slot` off.
+    pub fn remove(&mut self, slot: Slot) {
+        *self.slot_mut(slot) = LabSlot::empty(slot);
+    }
+
     /// Switches the affix named `affix` on `slot`'s item on or off.
     pub fn set_affix(&mut self, slot: Slot, affix: &str, on: bool) {
         let s = self.slot_mut(slot);
@@ -234,6 +261,58 @@ impl LabState {
         } else {
             s.off.insert(affix.to_string());
         }
+    }
+
+    /// Flips the affix named `affix` on `slot`'s item.
+    pub fn flip_affix(&mut self, slot: Slot, affix: &str) {
+        let on = self.slot(slot).off.contains(affix);
+        self.set_affix(slot, affix, on);
+    }
+
+    /// Sets the `which`th score (STR, DEX, CON, INT, WIS) to `score`, kept within 3 to 20.
+    pub fn set_score(&mut self, which: usize, score: i32) {
+        let a = &mut self.character.attributes;
+        let score = score.clamp(*SCORES.start(), *SCORES.end());
+        match which {
+            0 => a.strength = score,
+            1 => a.dexterity = score,
+            2 => a.constitution = score,
+            3 => a.intelligence = score,
+            4 => a.wisdom = score,
+            _ => {}
+        }
+    }
+
+    /// Raises (or with a negative `by`, lowers) the `which`th score.
+    pub fn step_score(&mut self, which: usize, by: i32) {
+        let a = &self.character.attributes;
+        let now = [a.strength, a.dexterity, a.constitution, a.intelligence, a.wisdom].get(which).copied().unwrap_or(10);
+        self.set_score(which, now + by);
+    }
+
+    /// Steps `by` folk through [`Folk::ALL`], wrapping.
+    pub fn cycle_folk(&mut self, by: isize) {
+        let at = Folk::ALL.iter().position(|&f| f == self.character.folk).unwrap_or(0);
+        self.character.folk = Folk::ALL[step(Folk::ALL.len(), at, by)];
+    }
+
+    /// Steps `by` classes through [`Class::ALL`], wrapping.
+    pub fn cycle_class(&mut self, by: isize) {
+        let at = Class::ALL.iter().position(|&c| c == self.character.class).unwrap_or(0);
+        self.character.class = Class::ALL[step(Class::ALL.len(), at, by)];
+    }
+
+    /// Steps `by` activities through [`ACTIVITIES`], wrapping.
+    pub fn cycle_activity(&mut self, by: isize) {
+        let at = ACTIVITIES.iter().position(|&a| a == self.activity).unwrap_or(0);
+        self.activity = ACTIVITIES[step(ACTIVITIES.len(), at, by)];
+    }
+
+    /// Steps `by` attackers through [`Attacker::all`], wrapping.
+    pub fn cycle_attacker(&mut self, by: isize) {
+        let all = Attacker::all();
+        let at = all.iter().position(|a| *a == self.attacker).unwrap_or(0);
+        self.attacker = all[step(all.len(), at, by)].clone();
     }
 
     /// Everything worn, rolled.
@@ -253,8 +332,13 @@ impl LabState {
     }
 }
 
+/// `at` moved `by` places along a ring of `len`.
+fn step(len: usize, at: usize, by: isize) -> usize {
+    (at as isize + by).rem_euclid(len as isize) as usize
+}
+
 /// The bases a slot can hold, by name: the ones that roll an item that fits it.
-fn bases_for(slot: Slot) -> Vec<String> {
+pub fn bases_for(slot: Slot) -> Vec<String> {
     use std::sync::LazyLock;
     static TABLE: LazyLock<Vec<(Slot, Vec<String>)>> = LazyLock::new(|| {
         let mut names: BTreeSet<&str> = ARMORY_BASES.iter().map(|(n, _)| *n).collect();
@@ -265,247 +349,180 @@ fn bases_for(slot: Slot) -> Vec<String> {
     TABLE.iter().find(|(s, _)| *s == slot).map(|(_, b)| b.clone()).unwrap_or_default()
 }
 
-/// The path prefix of a slot's fields: `gear.mainhand`.
-fn slot_key(slot: Slot) -> String {
-    format!("gear.{}", format!("{slot:?}").to_lowercase())
+/// The tab open in the middle, by its place in [`TABS`].
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LabTab(pub usize);
+
+/// The "Put on or hold an item" card: the slot, base and seed being chosen.
+#[derive(Resource, Clone, Debug, PartialEq)]
+pub struct Picker {
+    pub open: bool,
+    /// Index into [`SLOTS`].
+    pub slot: usize,
+    /// Index into the slot's [`bases_for`].
+    pub base: usize,
+    pub seed: u32,
 }
 
-fn slot_of(key: &str) -> Option<Slot> {
-    SLOTS.iter().copied().find(|&s| slot_key(s) == key)
+impl Default for Picker {
+    fn default() -> Self {
+        Picker { open: false, slot: 0, base: 0, seed: 1 }
+    }
 }
 
-fn slider(path: &str, value: f32, range: Slider) -> Field {
-    let (section, name) = path.rsplit_once('.').unwrap_or(("", path));
-    Field { path: path.into(), section: section.into(), name: name.into(), kind: FieldKind::Slider { value, range } }
-}
-
-fn choice(path: &str, value: &str, options: Vec<String>) -> Field {
-    let (section, name) = path.rsplit_once('.').unwrap_or(("", path));
-    Field { path: path.into(), section: section.into(), name: name.into(), kind: FieldKind::Choice { value: value.into(), options } }
-}
-
-/// An affix's switch: its path is the slot's, then `affix/` and the affix's name, which is
-/// the field's label.
-fn affix_switch(key: &str, affix: &str, on: bool) -> Field {
-    Field { path: format!("{key}.affix/{affix}"), section: key.into(), name: affix.into(), kind: FieldKind::Toggle { value: on } }
-}
-
-const ATTRIBUTES: [(&str, &str); 5] = [("str", "strength"), ("dex", "dexterity"), ("con", "constitution"), ("int", "intelligence"), ("wis", "wisdom")];
-const SCORE: Slider = Slider::new(3.0, 20.0, 1.0);
-const SEED: Slider = Slider::new(0.0, 65_535.0, 1.0);
-
-impl Tweak for LabState {
-    fn fields(&self) -> Vec<Field> {
-        let c = &self.character;
-        let mut fields = vec![
-            choice("character.folk", c.folk.key(), Folk::ALL.iter().map(|f| f.key().to_string()).collect()),
-            choice("character.class", c.class.word(), Class::ALL.iter().map(|c| c.word().to_string()).collect()),
-            slider("character.seed", self.seed as f32, SEED),
-        ];
-        let scores = [c.attributes.strength, c.attributes.dexterity, c.attributes.constitution, c.attributes.intelligence, c.attributes.wisdom];
-        for ((short, _), score) in ATTRIBUTES.iter().zip(scores) {
-            fields.push(slider(&format!("attributes.{short}"), score as f32, SCORE));
-        }
-        let activities = ACTIVITIES.iter().map(|&a| activity_word(a).to_string()).collect();
-        fields.push(choice("time.activity", activity_word(self.activity), activities));
-        let attackers = Attacker::all();
-        let who = attackers.iter().map(Attacker::label).collect();
-        fields.push(choice("attacker.who", &self.attacker.label(), who));
-        fields.push(slider("attacker.seed", self.strike_seed as f32, SEED));
-        for lab in &self.slots {
-            let key = slot_key(lab.slot);
-            let mut options = vec!["none".to_string()];
-            options.extend(bases_for(lab.slot));
-            fields.push(choice(&format!("{key}.base"), lab.base.as_deref().unwrap_or("none"), options));
-            if lab.base.is_none() {
-                continue;
-            }
-            fields.push(slider(&format!("{key}.seed"), lab.seed as f32, SEED));
-            if let Some(rolled) = lab.roll() {
-                fields.extend(rolled.affixes.iter().map(|a| affix_switch(&key, &a.name, !lab.off.contains(&a.name))));
-                if rolled.item.shape.lit().is_some() {
-                    fields.push(Field { path: format!("{key}.lit"), section: key.clone(), name: "lit".into(), kind: FieldKind::Toggle { value: lab.lit } });
-                }
-            }
-        }
-        fields
+impl Picker {
+    pub fn slot(&self) -> Slot {
+        SLOTS[self.slot % SLOTS.len()]
     }
 
-    fn set_slider(&mut self, path: &str, value: f32) {
-        let value = value.round().max(0.0) as u32;
-        match path.split_once('.') {
-            Some(("character", "seed")) => self.set_seed(value),
-            Some(("attacker", "seed")) => self.strike_seed = value,
-            Some(("attributes", short)) => {
-                let a = &mut self.character.attributes;
-                let score = (value as i32).clamp(3, 20);
-                match short {
-                    "str" => a.strength = score,
-                    "dex" => a.dexterity = score,
-                    "con" => a.constitution = score,
-                    "int" => a.intelligence = score,
-                    "wis" => a.wisdom = score,
-                    _ => {}
-                }
-            }
-            _ => {
-                if let Some((key, "seed")) = path.rsplit_once('.')
-                    && let Some(slot) = slot_of(key)
-                {
-                    let s = self.slot_mut(slot);
-                    s.seed = value;
-                    s.off.clear();
-                }
-            }
+    /// The base chosen, if the slot takes any.
+    pub fn base_name(&self) -> Option<String> {
+        let bases = bases_for(self.slot());
+        (!bases.is_empty()).then(|| bases[self.base % bases.len()].clone())
+    }
+
+    pub fn step_slot(&mut self, by: isize) {
+        self.slot = step(SLOTS.len(), self.slot % SLOTS.len(), by);
+        self.base = 0;
+    }
+
+    pub fn step_base(&mut self, by: isize) {
+        let len = bases_for(self.slot()).len();
+        if len > 0 {
+            self.base = step(len, self.base % len, by);
         }
     }
 
-    fn cycle(&mut self, path: &str, by: isize) {
-        let step = |len: usize, at: usize| (at as isize + by).rem_euclid(len as isize) as usize;
-        match path {
-            "character.folk" => {
-                let at = Folk::ALL.iter().position(|&f| f == self.character.folk).unwrap_or(0);
-                self.character.folk = Folk::ALL[step(Folk::ALL.len(), at)];
-            }
-            "character.class" => {
-                let at = Class::ALL.iter().position(|&c| c == self.character.class).unwrap_or(0);
-                self.character.class = Class::ALL[step(Class::ALL.len(), at)];
-            }
-            "time.activity" => {
-                let at = ACTIVITIES.iter().position(|&a| a == self.activity).unwrap_or(0);
-                self.activity = ACTIVITIES[step(ACTIVITIES.len(), at)];
-            }
-            "attacker.who" => {
-                let all = Attacker::all();
-                let at = all.iter().position(|a| *a == self.attacker).unwrap_or(0);
-                self.attacker = all[step(all.len(), at)].clone();
-            }
-            _ => {
-                if let Some((key, "base")) = path.rsplit_once('.')
-                    && let Some(slot) = slot_of(key)
-                {
-                    let mut options = vec![None];
-                    options.extend(bases_for(slot).into_iter().map(Some));
-                    let s = self.slot_mut(slot);
-                    let at = options.iter().position(|o| *o == s.base).unwrap_or(0);
-                    s.base = options[step(options.len(), at)].clone();
-                    s.off.clear();
-                }
-            }
+    pub fn step_seed(&mut self, by: i64) {
+        self.seed = (self.seed as i64 + by).clamp(0, u32::MAX as i64) as u32;
+    }
+
+    /// The item the choice rolls, to preview.
+    pub fn preview(&self) -> Option<Item> {
+        roll_item(&self.base_name()?, self.seed)
+    }
+
+    /// Puts the choice on, or into the hand, and closes the card.
+    pub fn put_on(&mut self, state: &mut LabState) {
+        if let Some(base) = self.base_name() {
+            state.equip(self.slot(), &base, self.seed);
         }
+        self.open = false;
     }
-
-    fn flip(&mut self, path: &str) {
-        let Some((key, last)) = path.rsplit_once('.') else { return };
-        let Some(slot) = slot_of(key) else { return };
-        if last == "lit" {
-            let s = self.slot_mut(slot);
-            s.lit = !s.lit;
-        } else if let Some(name) = last.strip_prefix("affix/") {
-            let on = self.slot(slot).off.contains(name);
-            self.set_affix(slot, name, on);
-        }
-    }
-
-    /// Changes with the list of fields, so the panel is rebuilt when an item's affixes change
-    /// but not as a slider moves.
-    fn structure(&self) -> u32 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for field in self.fields() {
-            field.path.hash(&mut hasher);
-        }
-        hasher.finish() as u32
-    }
-
-    fn slider(&self, path: &str) -> Option<f32> {
-        self.fields().into_iter().find(|f| f.path == path).and_then(|f| match f.kind {
-            FieldKind::Slider { value, .. } => Some(value),
-            _ => None,
-        })
-    }
-}
-
-/// One line of the sheet: what it says, and the number with the terms it is made of.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Row {
-    /// The headline: the value with its unit, and anything the terms cannot say (a band).
-    pub heading: String,
-    pub explained: Explained,
-}
-
-impl Row {
-    fn of(explained: Explained) -> Row {
-        Row { heading: format!("{} {}{}", explained.name, number(explained.value()), if explained.unit.is_empty() { String::new() } else { format!(" {}", explained.unit) }), explained }
-    }
-}
-
-/// The sheet: every derived number the lab shows for `state`, from the same rules the game
-/// reads, in the order they are listed.
-pub fn sheet(state: &LabState) -> Vec<Row> {
-    let character = &state.character;
-    let inventory = state.inventory();
-    let loadout = character.loadout(&inventory);
-    let strength = character.strength();
-    let held = inventory.worn(Slot::Mainhand).and_then(|id| inventory.item(id));
-    let weapon = Weapon::of_stats(held);
-    let range = weapon.damage_range_explained(modifier(strength));
-    let capacity = loadout.capacity(strength);
-    let load = character.load_explained(&inventory);
-    let band = LoadBand::from_load(load.value(), capacity.value());
-    let mut rows = vec![
-        Row::of(first_level_hit_points_explained_with(fb_character::rules::defaults(), character)),
-        Row::of(character.armour_class(&inventory)),
-        Row::of(range.min),
-        Row::of(range.mean),
-        Row::of(range.max),
-        Row { heading: format!("Load {} of {} lb: {}", number(load.value()), number(capacity.value()), band.word()), explained: load },
-        Row::of(capacity),
-        Row::of(loadout.darkvision()),
-        Row::of(loadout.light()),
-        Row::of(loadout.warmth()),
-    ];
-    for kind in [MeterKind::Hunger, MeterKind::Thirst, MeterKind::Sleepiness] {
-        rows.push(Row::of(loadout.rate(kind, state.activity)));
-    }
-    rows
 }
 
 /// How many times the sheet has been built, so a test can see it is not rebuilt for nothing.
 #[derive(Resource, Default)]
 pub struct SheetBuilds(pub u32);
 
-/// The window, so the right side can see how wide it is.
+/// The sheet as last built, so a tooltip reads the numbers that are on screen.
+#[derive(Resource, Default)]
+pub struct CurrentSheet(pub Option<SheetView>);
+
+/// The big number the mouse is over, by its place among the sheet's tiles, or one a demo holds
+/// up for a capture.
+#[derive(Resource, Default, Clone, Copy, PartialEq)]
+pub struct Hover {
+    pub tile: Option<usize>,
+    pinned: Option<usize>,
+}
+
+impl Hover {
+    /// Holds the `tile`th big number's tooltip up whether or not the mouse is over it.
+    pub fn pin(&mut self, tile: Option<usize>) {
+        self.pinned = tile;
+    }
+}
+
+/// What a click on a control does.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub enum Control {
+    Folk(isize),
+    Class(isize),
+    Reroll,
+    Score(usize, i32),
+    Remove(Slot),
+    Affix(Slot, String),
+    OpenPicker,
+    ClosePicker,
+    PickSlot(isize),
+    PickBase(isize),
+    PickSeed(i64),
+    PutOn,
+    Tab(usize),
+    Attacker(isize),
+    StrikeSeed(i64),
+    Activity(isize),
+}
+
+impl Control {
+    /// Does what the control says to the lab, changing only what it needs to.
+    pub fn apply(&self, state: &mut LabState, picker: &mut Picker, tab: &mut LabTab) {
+        match self {
+            Control::Folk(by) => state.cycle_folk(*by),
+            Control::Class(by) => state.cycle_class(*by),
+            Control::Reroll => state.reroll(),
+            Control::Score(which, by) => state.step_score(*which, *by),
+            Control::Remove(slot) => state.remove(*slot),
+            Control::Affix(slot, name) => state.flip_affix(*slot, name),
+            Control::OpenPicker => picker.open = true,
+            Control::ClosePicker => picker.open = false,
+            Control::PickSlot(by) => picker.step_slot(*by),
+            Control::PickBase(by) => picker.step_base(*by),
+            Control::PickSeed(by) => picker.step_seed(*by),
+            Control::PutOn => picker.put_on(state),
+            Control::Tab(i) if TABS.get(*i).is_some_and(|t| t.1) => tab.0 = *i,
+            Control::Tab(_) => {}
+            Control::Attacker(by) => state.cycle_attacker(*by),
+            Control::StrikeSeed(by) => state.strike_seed = (state.strike_seed as i64 + by).clamp(0, u32::MAX as i64) as u32,
+            Control::Activity(by) => state.cycle_activity(*by),
+        }
+    }
+}
+
+/// The window, so a test can see the three columns.
 #[derive(Component)]
 struct LabRoot;
 
-/// What is right of the panel: one column that scrolls when the window is narrow, and the
-/// sheet and the side column laid out beside each other when it is wide.
+/// The sheet's column, which scrolls.
 #[derive(Component)]
-struct RightRegion;
+pub struct SheetColumn;
 
-/// The sheet's pane.
+/// Where the sheet is built.
 #[derive(Component)]
-struct SheetColumn;
+struct SheetRows;
 
-/// The strikes above the time, in a pane of their own.
+/// The middle column's tab content, by its place in [`TABS`].
 #[derive(Component)]
-struct SideColumn;
+pub struct TabPane(pub usize);
+
+/// The rules column, which a later task fills.
+#[derive(Component)]
+pub struct RulesColumn;
 
 /// A node that scrolls its own overflow when it has any.
 #[derive(Component)]
 struct ScrollArea;
 
-/// How wide the window must be, in logical pixels, to lay the sheet and the side column out
-/// as two panes that scroll on their own.
-pub const WIDE: f32 = 1500.0;
-
-fn pane() -> Node {
-    Node { min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::axes(px(20), px(14)), ..default() }
-}
-
-/// Where the sheet's rows are built.
+/// One of the sheet's big numbers, by its place among them.
 #[derive(Component)]
-struct SheetRows;
+struct TileNode(usize);
+
+/// The tooltip over a big number.
+#[derive(Component)]
+struct TipBox;
+
+/// A tab button's place in [`TABS`], so the open one can be marked.
+#[derive(Component)]
+struct TabButton(usize);
+
+/// A text that follows the lab state outside the sheet.
+#[derive(Component, Clone, Copy, PartialEq)]
+enum ControlText {
+    Attacker,
+    StrikeSeed,
+    Activity,
+}
 
 /// Where the strike log goes.
 #[derive(Component)]
@@ -551,95 +568,429 @@ enum TimeText {
     Log,
 }
 
-fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
+/// A button in the ledger's look, with `control` on it.
+fn button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, control: Control) -> Entity {
+    let mut button = parent.spawn((
+        control,
+        Node {
+            padding: UiRect::axes(px(10), px(5)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(4)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            min_height: px(30),
+            ..default()
+        },
+        BackgroundColor(CELL),
+        BorderColor::all(LINE),
+    ));
+    button.with_child((Text::new(label), UiFonts::style(&fonts.body_medium, 16.0, INK)));
+    button.id()
+}
+
+/// A button whose words follow the lab state ([`refresh_controls`]).
+fn state_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, control: Control, words: ControlText) {
+    let id = button(parent, fonts, "", control);
+    parent.commands().entity(id).despawn_children().with_child((words, Text::new(""), UiFonts::style(&fonts.body_medium, 16.0, INK)));
+}
+
+fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) {
     commands.spawn((Camera2d, bevy::ui::IsDefaultUiCamera));
     commands.spawn((LabRoot, Node { width: percent(100), height: percent(100), flex_direction: FlexDirection::Row, ..default() })).with_children(|root| {
+        // The sheet.
         root.spawn((
-            Node { width: px(PANEL_WIDTH), flex_shrink: 0.0, flex_direction: FlexDirection::Column, border: UiRect::right(px(1)), ..default() },
-            BackgroundColor(BG),
-            BorderColor::all(LINE),
-        ))
-        .with_children(|panel| {
-            panel
-                .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::all(px(14)), border: UiRect::bottom(px(1)), ..default() }, BorderColor::all(FAINT)))
-                .with_children(|header| {
-                    header.spawn((Text::new("The Lab"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                    header.spawn((Text::new("Click a choice to step it, drag a slider, flip a switch."), UiFonts::style(&fonts.body, 16.0, MUTED)));
-                });
-            panel_body(panel);
-        });
-        root.spawn((
-            RightRegion,
+            SheetColumn,
             ScrollArea,
             ScrollPosition::default(),
-            Node { flex_grow: 1.0, min_width: px(0), flex_direction: FlexDirection::Column, overflow: Overflow::scroll_y(), ..default() },
+            Node { width: px(SHEET_WIDTH), flex_shrink: 0.0, min_height: px(0), flex_direction: FlexDirection::Column, border: UiRect::right(px(1)), overflow: Overflow::scroll_y(), ..default() },
+            BackgroundColor(BG),
+            BorderColor::all(FAINT),
         ))
-        .with_children(|right| {
-        right
-            .spawn((SheetColumn, ScrollArea, ScrollPosition::default(), pane()))
-            .with_children(|column| {
-                column.spawn((Text::new("The Sheet"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                column.spawn((SheetRows, Node { flex_direction: FlexDirection::Column, row_gap: px(10), margin: UiRect::top(px(8)), ..default() }));
-            });
-        right.spawn((SideColumn, ScrollArea, ScrollPosition::default(), pane())).with_children(|column| {
-            column.spawn((StrikeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(8), margin: UiRect::top(px(24)), ..default() })).with_children(|strikes| {
-                strikes.spawn((Text::new("Strikes"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                strikes.spawn((StrikeText::Note, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED)));
-                strikes.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
-                    chip(row, &fonts, "Strike", StrikeButton::Strike);
-                    chip(row, &fonts, "×100", StrikeButton::Hundred);
-                    chip(row, &fonts, "Heal", StrikeButton::Heal);
-                });
-                strikes.spawn((StrikeText::Hp, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
-                strikes.spawn((StrikeText::Summary, Text::new(""), UiFonts::style(&fonts.mono, 15.0, BRIGHT)));
-                strikes.spawn((StrikeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
-            });
-            column.spawn((TimeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(8), margin: UiRect::top(px(24)), padding: UiRect::bottom(px(30)), ..default() })).with_children(|time| {
-                time.spawn((Text::new("Time"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                time.spawn((TimeText::Clock, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
-                time.spawn(Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() }).with_children(|row| {
-                    for (i, (label, _)) in STEPS.iter().enumerate() {
-                        chip(row, &fonts, label, TimeButton::Pass(i));
+        .with_child((SheetRows, Node { flex_direction: FlexDirection::Column, row_gap: px(14), padding: UiRect::all(px(16)), ..default() }));
+        // The tests.
+        root.spawn(Node { flex_grow: 1.0, min_width: px(0), flex_direction: FlexDirection::Column, padding: UiRect::new(px(24), px(24), px(20), px(0)), row_gap: px(14), ..default() }).with_children(|middle| {
+            middle.spawn((Node { column_gap: px(4), border: UiRect::bottom(px(1)), flex_wrap: FlexWrap::Wrap, ..default() }, BorderColor::all(FAINT))).with_children(|bar| {
+                for (i, (label, enabled)) in TABS.iter().enumerate() {
+                    let mut tab = bar.spawn((
+                        TabButton(i),
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            padding: UiRect::axes(px(14), px(6)),
+                            border: UiRect::bottom(px(2)),
+                            border_radius: BorderRadius::top(px(6)),
+                            min_height: px(44),
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                        BorderColor::all(Color::NONE),
+                    ));
+                    if *enabled {
+                        tab.insert(Control::Tab(i));
                     }
-                    chip(row, &fonts, "Eat", TimeButton::Eat);
-                    chip(row, &fonts, "Drink", TimeButton::Drink);
-                    chip(row, &fonts, "Reset", TimeButton::Reset);
-                });
-                time.spawn((TimeText::Meters, Node { flex_direction: FlexDirection::Column, row_gap: px(8), ..default() }));
-                time.spawn((TimeText::Exhaustion, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
-                time.spawn((TimeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
+                    let ink = if *enabled { INK } else { LINE };
+                    tab.with_child((Text::new(*label), UiFonts::style(&fonts.body_medium, 17.0, ink)));
+                    if !enabled {
+                        tab.with_child((Text::new("after effects land"), UiFonts::style(&fonts.body, 12.0, LINE)));
+                    }
+                }
             });
+            for i in 0..TABS.len() {
+                middle
+                    .spawn((
+                        TabPane(i),
+                        ScrollArea,
+                        ScrollPosition::default(),
+                        Node {
+                            display: if i == 0 { Display::Flex } else { Display::None },
+                            flex_grow: 1.0,
+                            min_height: px(0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(10),
+                            overflow: Overflow::scroll_y(),
+                            padding: UiRect::bottom(px(30)),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|pane| match i {
+                        0 => {
+                            pane.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|row| {
+                                row.spawn((Text::new("They are attacked by"), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                                state_button(row, &fonts, Control::Attacker(1), ControlText::Attacker);
+                                row.spawn((Text::new("strike seed"), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                                button(row, &fonts, "\u{2212}", Control::StrikeSeed(-1));
+                                row.spawn((ControlText::StrikeSeed, Text::new(""), UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT)));
+                                button(row, &fonts, "+", Control::StrikeSeed(1));
+                            });
+                            pane.spawn((StrikeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(8), ..default() })).with_children(|strikes| {
+                                strikes.spawn((Text::new("Strikes"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
+                                strikes.spawn((StrikeText::Note, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                                strikes.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
+                                    chip(row, &fonts, "Strike", StrikeButton::Strike);
+                                    chip(row, &fonts, "×100", StrikeButton::Hundred);
+                                    chip(row, &fonts, "Heal", StrikeButton::Heal);
+                                });
+                                strikes.spawn((StrikeText::Hp, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
+                                strikes.spawn((StrikeText::Summary, Text::new(""), UiFonts::style(&fonts.mono, 15.0, BRIGHT)));
+                                strikes.spawn((StrikeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
+                            });
+                        }
+                        1 => {
+                            pane.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|row| {
+                                row.spawn((Text::new("While they are"), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                                state_button(row, &fonts, Control::Activity(1), ControlText::Activity);
+                            });
+                            pane.spawn((TimeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(8), ..default() })).with_children(|time| {
+                                time.spawn((Text::new("Time"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
+                                time.spawn((TimeText::Clock, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
+                                time.spawn(Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() }).with_children(|row| {
+                                    for (i, (label, _)) in STEPS.iter().enumerate() {
+                                        chip(row, &fonts, label, TimeButton::Pass(i));
+                                    }
+                                    chip(row, &fonts, "Eat", TimeButton::Eat);
+                                    chip(row, &fonts, "Drink", TimeButton::Drink);
+                                    chip(row, &fonts, "Reset", TimeButton::Reset);
+                                });
+                                time.spawn((TimeText::Meters, Node { flex_direction: FlexDirection::Column, row_gap: px(8), ..default() }));
+                                time.spawn((TimeText::Exhaustion, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
+                                time.spawn((TimeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
+                            });
+                        }
+                        _ => {}
+                    });
+            }
         });
+        // The rules.
+        root.spawn((
+            RulesColumn,
+            ScrollArea,
+            ScrollPosition::default(),
+            Node { width: px(RULES_WIDTH), flex_shrink: 0.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(14), padding: UiRect::all(px(20)), border: UiRect::left(px(1)), overflow: Overflow::scroll_y(), ..default() },
+            BackgroundColor(RULES_PAGE),
+            BorderColor::all(FAINT),
+        ))
+        .with_child((Text::new("Rules"), UiFonts::style(&fonts.display_bold, 26.0, INK)));
+        // The tooltip, over everything.
+        root.spawn((
+            TipBox,
+            Visibility::Hidden,
+            GlobalZIndex(20),
+            Node {
+                position_type: PositionType::Absolute,
+                width: px(260),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                padding: UiRect::axes(px(12), px(10)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(6)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.17, 0.145, 0.10)),
+            BorderColor::all(FRAME_GOLD),
+        ));
+    });
+    if std::env::var("FB_LAB_DEMO").is_ok_and(|v| v == "1") {
+        hover.pinned = Some(0);
+    }
+}
+
+/// Whether anything the sheet shows has changed.
+#[allow(clippy::too_many_arguments)]
+fn sheet_changed(state: Res<LabState>, time: Res<TimeLab>, strikes: Res<Strikes>, picker: Res<Picker>, figure: Res<LabFigure>, rules: Option<Res<GameRules>>) -> bool {
+    state.is_changed() || time.is_changed() || strikes.is_changed() || picker.is_changed() || figure.is_changed() || rules.is_some_and(|r| r.is_changed())
+}
+
+/// A line of text in the sheet.
+fn words(parent: &mut ChildSpawnerCommands, font: &Handle<Font>, size: f32, colour: Color, text: impl Into<String>) {
+    parent.spawn((Text::new(text), UiFonts::style(font, size, colour)));
+}
+
+/// A bar of `fill` in `colour`, `height` tall, with a rounded end.
+fn bar_track(parent: &mut ChildSpawnerCommands, fill: f32, colour: Color, height: f32) {
+    parent
+        .spawn((Node { flex_grow: 1.0, height: px(height), border_radius: BorderRadius::all(px(height / 2.0)), ..default() }, BackgroundColor(Color::srgb(0.165, 0.141, 0.106))))
+        .with_child((Node { width: percent(fill * 100.0), height: px(height), border_radius: BorderRadius::all(px(height / 2.0)), ..default() }, BackgroundColor(colour)));
+}
+
+/// A row of a bar: its label, the bar and the words beside it.
+fn bar_row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, bar: &lab_sheet::Bar, height: f32, word_colour: Color) {
+    parent.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), ..default() }).with_children(|row| {
+        row.spawn(Node { width: px(84), flex_shrink: 0.0, ..default() }).with_child((Text::new(bar.label), UiFonts::style(&fonts.body, 16.0, BRIGHT)));
+        bar_track(row, bar.fill, bar.colour, height);
+        row.spawn(Node { width: px(70), flex_shrink: 0.0, justify_content: JustifyContent::End, ..default() }).with_child((Text::new(bar.text.clone()), UiFonts::style(&fonts.body, 16.0, word_colour)));
+    });
+}
+
+/// A small square button with `label`.
+fn small_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, control: Control) {
+    parent
+        .spawn((control, Node { width: px(17), height: px(17), flex_shrink: 0.0, justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), ..default() }, BorderColor::all(LINE)))
+        .with_child((Text::new(label), UiFonts::style(&fonts.body_medium, 15.0, MUTED)));
+}
+
+/// The sheet's whole body.
+fn build_sheet(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, view: &SheetView, picker: &Picker, figure: &LabFigure) {
+    // Who they are.
+    sheet.spawn(Node { column_gap: px(16), align_items: AlignItems::Center, ..default() }).with_children(|head| {
+        let mut frame = head.spawn((
+            Node { width: px(crate::lab_figure::FRAME.x), height: px(crate::lab_figure::FRAME.y), flex_shrink: 0.0, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() },
+            BackgroundColor(CELL),
+            BorderColor::all(LINE),
+        ));
+        if let Some(image) = &figure.image {
+            frame.with_child((ImageNode::new(image.clone()), Node { width: percent(100), height: percent(100), ..default() }));
+        }
+        head.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), min_width: px(0), ..default() }).with_children(|who| {
+            words(who, &fonts.display_bold, 26.0, INK, view.title.clone());
+            words(who, &fonts.body, 16.0, MUTED, view.caption.clone());
+            who.spawn(Node { column_gap: px(6), row_gap: px(6), flex_wrap: FlexWrap::Wrap, margin: UiRect::top(px(6)), ..default() }).with_children(|chips| {
+                button(chips, fonts, "Next folk", Control::Folk(1));
+                button(chips, fonts, "Next class", Control::Class(1));
+                button(chips, fonts, "Reroll", Control::Reroll);
+            });
         });
     });
+    // Attributes.
+    sheet.spawn(Node { column_gap: px(4), ..default() }).with_children(|row| {
+        for (which, a) in view.attributes.iter().enumerate() {
+            row.spawn((
+                Node { flex_grow: 1.0, flex_basis: px(0), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, padding: UiRect::axes(px(0), px(7)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() },
+                BackgroundColor(CELL),
+                BorderColor::all(FAINT),
+            ))
+            .with_children(|tile| {
+                words(tile, &fonts.body, 14.0, MUTED, a.name);
+                words(tile, &fonts.mono_bold, 22.0, BRIGHT, a.score.to_string());
+                tile.spawn(Node { align_items: AlignItems::Center, column_gap: px(2), ..default() }).with_children(|line| {
+                    small_button(line, fonts, "\u{2212}", Control::Score(which, -1));
+                    let colour = match a.modifier {
+                        m if m > 0 => FRAME_GOLD,
+                        m if m < 0 => ACCENT,
+                        _ => MUTED,
+                    };
+                    line.spawn(Node { width: px(22), justify_content: JustifyContent::Center, ..default() }).with_child((Text::new(signed(a.modifier as f64)), UiFonts::style(&fonts.body_medium, 15.0, colour)));
+                    small_button(line, fonts, "+", Control::Score(which, 1));
+                });
+            });
+        }
+    });
+    // Life, stamina and mana, then the needs.
+    sheet.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(9), ..default() }).with_children(|bars| {
+        for b in [&view.life, &view.stamina, &view.mana] {
+            bar_row(bars, fonts, b, 12.0, BRIGHT);
+        }
+        bars.spawn(Node { height: px(2), ..default() });
+        for b in &view.needs {
+            bar_row(bars, fonts, b, 8.0, MUTED);
+        }
+        bars.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), ..default() }).with_children(|row| {
+            row.spawn(Node { width: px(84), flex_shrink: 0.0, ..default() }).with_child((Text::new("Exhaustion"), UiFonts::style(&fonts.body, 16.0, BRIGHT)));
+            row.spawn(Node { flex_grow: 1.0, column_gap: px(4), ..default() }).with_children(|ladder| {
+                for step in 1..=lab_sheet::EXHAUSTION_STEPS {
+                    let (fill, edge) = match (step <= view.exhaustion.0, step == lab_sheet::EXHAUSTION_STEPS) {
+                        (true, true) => (BAD, BAD),
+                        (true, false) => (ACCENT, ACCENT),
+                        (false, true) => (Color::NONE, Color::srgb(0.48, 0.23, 0.20)),
+                        (false, false) => (Color::NONE, LINE),
+                    };
+                    ladder.spawn((Node { flex_grow: 1.0, flex_basis: px(0), height: px(8), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(2)), ..default() }, BackgroundColor(fill), BorderColor::all(edge)));
+                }
+            });
+            row.spawn(Node { width: px(70), flex_shrink: 0.0, justify_content: JustifyContent::End, ..default() }).with_child((Text::new(view.exhaustion.1.clone()), UiFonts::style(&fonts.body, 16.0, MUTED)));
+        });
+    });
+    // Armour, damage and load.
+    sheet.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
+        for (i, tile) in view.tiles.iter().enumerate() {
+            row.spawn((
+                TileNode(i),
+                Node { flex_grow: 1.0, flex_basis: px(0), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, padding: UiRect::axes(px(4), px(10)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() },
+                BackgroundColor(CELL),
+                BorderColor::all(if i == 0 { FRAME_GOLD } else { FAINT }),
+            ))
+            .with_children(|t| {
+                words(t, &fonts.body, 14.0, MUTED, tile.label);
+                t.spawn(Node { align_items: AlignItems::Baseline, ..default() }).with_children(|value| {
+                    words(value, &fonts.mono_bold, 28.0, BRIGHT, tile.value.clone());
+                    if let Some(small) = &tile.small {
+                        words(value, &fonts.mono, 15.0, MUTED, small.clone());
+                    }
+                });
+            });
+        }
+    });
+    // Gear.
+    words(sheet, &fonts.display_bold, 19.0, INK, "Worn and held");
+    for card in &view.cards {
+        gear_card(sheet, fonts, card);
+    }
+    if picker.open {
+        picker_card(sheet, fonts, picker);
+    } else {
+        sheet
+            .spawn((Control::OpenPicker, Node { justify_content: JustifyContent::Center, padding: UiRect::all(px(9)), min_height: px(40), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() }, BorderColor::all(LINE)))
+            .with_child((Text::new("+ Put on or hold an item"), UiFonts::style(&fonts.body_medium, 16.0, FRAME_GOLD)));
+    }
+}
+
+/// A card for one thing worn or held: its name in its rarity's colour, the slot and what it
+/// does in plain words on the left, what it adds on the right, and a way to take it off.
+fn gear_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, card: &GearCard) {
+    parent
+        .spawn((Node { justify_content: JustifyContent::SpaceBetween, column_gap: px(8), padding: UiRect::axes(px(10), px(8)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
+        .with_children(|c| {
+            c.spawn(Node { flex_direction: FlexDirection::Column, flex_shrink: 1.0, min_width: px(0), ..default() }).with_children(|left| {
+                words(left, &fonts.body_medium, 17.0, rarity_color(card.rarity), card.title.clone());
+                if card.affixes.is_empty() {
+                    words(left, &fonts.body, 14.0, MUTED, format!("{} \u{b7} plain", card.slot_word));
+                } else {
+                    words(left, &fonts.body, 14.0, MUTED, card.slot_word.clone());
+                    for affix in &card.affixes {
+                        let colour = match (affix.on, affix.good) {
+                            (false, _) => LINE,
+                            (true, true) => MUTED,
+                            (true, false) => BAD,
+                        };
+                        let text = format!("{}: {}{}", affix.name, affix.text, if affix.on { "" } else { " (off)" });
+                        left.spawn((Control::Affix(card.slot, affix.name.clone()), Node::default())).with_child((Text::new(text), UiFonts::style(&fonts.body, 14.0, colour)));
+                    }
+                }
+            });
+            c.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::End, flex_shrink: 0.0, ..default() }).with_children(|right| {
+                for (i, add) in card.adds.iter().enumerate() {
+                    words(right, &fonts.body, 14.0, if i + 1 == card.adds.len() { MUTED } else { BRIGHT }, add.clone());
+                }
+                right.spawn(Node { margin: UiRect::top(px(4)), ..default() }).with_children(|x| small_button(x, fonts, "\u{d7}", Control::Remove(card.slot)));
+            });
+        });
+}
+
+/// The card that opens from "Put on or hold an item": a slot, a base and a seed, with the
+/// item they roll, and Put on and Cancel.
+fn picker_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, picker: &Picker) {
+    let slot = lab_sheet::slot_word(picker.slot());
+    let base = picker.base_name().unwrap_or_else(|| "nothing fits".to_string());
+    parent
+        .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(8), padding: UiRect::all(px(10)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(CELL), BorderColor::all(FRAME_GOLD)))
+        .with_children(|card| {
+            for (label, value, down, up) in [
+                ("Slot", slot, Control::PickSlot(-1), Control::PickSlot(1)),
+                ("Base", base, Control::PickBase(-1), Control::PickBase(1)),
+                ("Seed", picker.seed.to_string(), Control::PickSeed(-1), Control::PickSeed(1)),
+            ] {
+                card.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
+                    row.spawn(Node { width: px(48), ..default() }).with_child((Text::new(label), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                    button(row, fonts, "\u{2039}", down);
+                    row.spawn(Node { flex_grow: 1.0, justify_content: JustifyContent::Center, ..default() }).with_child((Text::new(value), UiFonts::style(&fonts.body_medium, 16.0, BRIGHT)));
+                    button(row, fonts, "\u{203a}", up);
+                });
+            }
+            if let Some(item) = picker.preview() {
+                words(card, &fonts.body_medium, 17.0, rarity_color(item.rarity), item.title().to_string());
+            }
+            card.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
+                button(row, fonts, "Put on", Control::PutOn);
+                button(row, fonts, "Cancel", Control::ClosePicker);
+            });
+        });
 }
 
 /// Builds the sheet again from the state.
-fn rebuild_sheet(mut builds: ResMut<SheetBuilds>, mut commands: Commands, state: Res<LabState>, fonts: Res<UiFonts>, rows: Query<Entity, With<SheetRows>>) {
+#[allow(clippy::too_many_arguments)]
+fn rebuild_sheet(
+    mut builds: ResMut<SheetBuilds>,
+    mut current: ResMut<CurrentSheet>,
+    mut commands: Commands,
+    state: Res<LabState>,
+    time: Res<TimeLab>,
+    strikes: Res<Strikes>,
+    picker: Res<Picker>,
+    figure: Res<LabFigure>,
+    rules: Option<Res<GameRules>>,
+    fonts: Res<UiFonts>,
+    rows: Query<Entity, With<SheetRows>>,
+) {
     let Ok(root) = rows.single() else { return };
     builds.0 += 1;
+    let view = lab_sheet::view(&state, &time, &strikes, GameRules::of(&rules));
     commands.entity(root).despawn_children();
-    let rows = sheet(&state);
-    commands.entity(root).with_children(|root| {
-        for row in &rows {
-            root.spawn(Node { flex_direction: FlexDirection::Column, border: UiRect::bottom(px(1)), padding: UiRect::bottom(px(6)), ..default() })
-                .insert(BorderColor::all(FAINT))
-                .with_children(|block| {
-                    block.spawn((Text::new(row.heading.clone()), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
-                    let terms = row.explained.terms_line();
-                    numbers_line(block, &fonts, &if terms.is_empty() { "= nothing adds to it".to_string() } else { format!("= {terms}") }, 15.0);
-                });
-        }
-    });
+    commands.entity(root).with_children(|root| build_sheet(root, &fonts, &view, &picker, &figure));
+    current.0 = Some(view);
 }
 
 /// With `FB_LAB_DEMO=1`, does what a few clicks would, for a capture: +8 h once and Strike
-/// three times.
+/// three times, and holds Armour's tooltip up ([`setup`]).
 fn demo(state: Res<LabState>, mut time: ResMut<TimeLab>, mut strikes: ResMut<Strikes>) {
     if std::env::var("FB_LAB_DEMO").is_ok_and(|v| v == "1") {
         time.pass(&state, 8.0);
         (0..3).for_each(|_| strikes.strike(&state));
     }
+}
+
+/// The cursor, if the window has it.
+fn cursor(window: &Option<Single<&Window, With<PrimaryWindow>>>) -> Option<Vec2> {
+    window.as_ref().and_then(|w| w.cursor_position())
+}
+
+/// A click on a control of the sheet or the tabs does what it says.
+fn press_controls(
+    buttons: Res<ButtonInput<MouseButton>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    controls: Query<(&Control, &ComputedNode, &UiGlobalTransform)>,
+    mut state: ResMut<LabState>,
+    mut picker: ResMut<Picker>,
+    mut tab: ResMut<LabTab>,
+) {
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(point) = cursor(&window) else { return };
+    let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
+    let (mut next_state, mut next_picker, mut next_tab) = (state.clone(), picker.clone(), *tab);
+    control.apply(&mut next_state, &mut next_picker, &mut next_tab);
+    state.set_if_neq(next_state);
+    picker.set_if_neq(next_picker);
+    tab.set_if_neq(next_tab);
 }
 
 /// A click on Strike, ×100 or Heal.
@@ -653,7 +1004,7 @@ fn press_strikes(
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
+    let Some(point) = cursor(&window) else { return };
     let Some((button, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
     match button {
         StrikeButton::Strike => strikes.strike(&state),
@@ -673,13 +1024,104 @@ fn press_time(
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
+    let Some(point) = cursor(&window) else { return };
     let Some((button, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
     match *button {
         TimeButton::Pass(i) => time.pass(&state, STEPS[i].1),
         TimeButton::Eat => time.eat(),
         TimeButton::Drink => time.drink(),
         TimeButton::Reset => time.reset(),
+    }
+}
+
+/// Opens the tab that is chosen and marks its button.
+fn show_tabs(tab: Res<LabTab>, mut panes: Query<(&TabPane, &mut Node)>, mut buttons: Query<(&TabButton, &mut BackgroundColor, &mut BorderColor)>) {
+    for (pane, mut node) in &mut panes {
+        node.display = if pane.0 == tab.0 { Display::Flex } else { Display::None };
+    }
+    for (button, mut background, mut border) in &mut buttons {
+        let open = button.0 == tab.0;
+        background.0 = if open { OPEN_TAB } else { Color::NONE };
+        *border = BorderColor::all(if open { FRAME_GOLD } else { Color::NONE });
+    }
+}
+
+/// Keeps the words on the middle column's own controls to the lab state.
+fn refresh_controls(state: Res<LabState>, mut texts: Query<(&ControlText, &mut Text)>) {
+    for (which, mut text) in &mut texts {
+        let line = match which {
+            ControlText::Attacker => state.attacker.label(),
+            ControlText::StrikeSeed => state.strike_seed.to_string(),
+            ControlText::Activity => activity_word(state.activity).to_string(),
+        };
+        if text.0 != line {
+            text.0 = line;
+        }
+    }
+}
+
+/// Which big number the mouse is over, or the one a demo holds up.
+fn hover_tiles(window: Option<Single<&Window, With<PrimaryWindow>>>, tiles: Query<(&TileNode, &ComputedNode, &UiGlobalTransform)>, mut hover: ResMut<Hover>) {
+    let over = cursor(&window).and_then(|point| tiles.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)).map(|(tile, ..)| tile.0));
+    let tile = over.or(hover.pinned);
+    if hover.tile != tile {
+        hover.tile = tile;
+    }
+}
+
+/// Shows the tooltip of the hovered number under it, built again only when the hover or the
+/// sheet changes.
+#[allow(clippy::too_many_arguments)]
+fn show_tip(
+    mut commands: Commands,
+    hover: Res<Hover>,
+    current: Res<CurrentSheet>,
+    fonts: Res<UiFonts>,
+    tiles: Query<(&TileNode, &ComputedNode, &UiGlobalTransform)>,
+    root: Query<&ComputedNode, With<LabRoot>>,
+    mut tip: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode), With<TipBox>>,
+    mut shown: Local<Option<(usize, u32)>>,
+    builds: Res<SheetBuilds>,
+) {
+    let Ok((entity, mut node, mut visibility, size)) = tip.single_mut() else { return };
+    let tile = hover.tile.and_then(|i| Some((i, current.0.as_ref()?.tiles.get(i)?)));
+    let Some((i, tile)) = tile else {
+        if *visibility != Visibility::Hidden {
+            *visibility = Visibility::Hidden;
+        }
+        *shown = None;
+        return;
+    };
+    if *shown != Some((i, builds.0)) {
+        *shown = Some((i, builds.0));
+        commands.entity(entity).despawn_children().with_children(|t| tip_body(t, &fonts, &tile.tip));
+    }
+    let Some(rect) = tiles.iter().find(|(t, ..)| t.0 == i).map(|(_, node, transform)| node_rect(node, transform)) else { return };
+    let window = root.single().map_or(Vec2::MAX, |r| r.size * r.inverse_scale_factor);
+    let height = size.size.y * size.inverse_scale_factor;
+    let (left, top) = (rect.min.x.min(window.x - 270.0).max(8.0), (rect.max.y + 6.0).min(window.y - height - 8.0).max(8.0));
+    if node.left != px(left) || node.top != px(top) {
+        node.left = px(left);
+        node.top = px(top);
+    }
+    if *visibility != Visibility::Visible {
+        *visibility = Visibility::Visible;
+    }
+}
+
+/// A tooltip's title and the label and value rows of each section.
+fn tip_body(tip: &mut ChildSpawnerCommands, fonts: &UiFonts, content: &lab_sheet::Tip) {
+    words(tip, &fonts.body_medium, 17.0, BRIGHT, content.title.clone());
+    for section in &content.sections {
+        if let Some(heading) = &section.heading {
+            words(tip, &fonts.body_medium, 14.0, FRAME_GOLD, heading.clone());
+        }
+        for (label, value) in &section.rows {
+            tip.spawn(Node { justify_content: JustifyContent::SpaceBetween, column_gap: px(12), ..default() }).with_children(|row| {
+                words(row, &fonts.body, 15.0, MUTED, label.clone());
+                words(row, &fonts.body_medium, 15.0, BRIGHT, value.clone());
+            });
+        }
     }
 }
 
@@ -699,8 +1141,7 @@ fn refresh_time(
                 let e = time.exhaustion;
                 format!("Exhaustion {} of 6: {}", e.level, exhaustion_effect(e))
             }
-            TimeText::Log => time.log.iter().map(|c| c.line()).collect::<Vec<_>>().join("
-"),
+            TimeText::Log => time.log.iter().map(|c| c.line()).collect::<Vec<_>>().join("\n"),
             TimeText::Meters => {
                 let meters = [(MeterKind::Hunger, time.needs.hunger), (MeterKind::Thirst, time.needs.thirst), (MeterKind::Sleepiness, time.needs.sleepiness)];
                 commands.entity(entity).despawn_children().with_children(|rows| {
@@ -742,62 +1183,22 @@ fn refresh_strikes(state: Res<LabState>, strikes: Res<Strikes>, mut texts: Query
     }
 }
 
-/// Lays the right side out for the window's width ([`WIDE`]): two panes that scroll on their
-/// own, or the panes stacked in one column that scrolls.
-fn layout_right(root: Query<&ComputedNode, With<LabRoot>>, mut right: Query<&mut Node, With<RightRegion>>, mut panes: Query<&mut Node, (Or<(With<SheetColumn>, With<SideColumn>)>, Without<RightRegion>)>) {
-    let Ok(root) = root.single() else { return };
-    let wide = is_wide(root.size.x * root.inverse_scale_factor);
-    for mut node in &mut right {
-        lay_out_right(&mut node, wide);
-    }
-    for mut node in &mut panes {
-        lay_out_pane(&mut node, wide);
-    }
-}
-
-/// Whether a window `width` logical pixels across gets two panes.
-pub fn is_wide(width: f32) -> bool {
-    width >= WIDE
-}
-
-/// The region right of the panel: its panes in a row when `wide`, else in a column that scrolls.
-fn lay_out_right(node: &mut Node, wide: bool) {
-    let (direction, overflow) = if wide { (FlexDirection::Row, Overflow::visible()) } else { (FlexDirection::Column, Overflow::scroll_y()) };
-    if node.flex_direction != direction {
-        node.flex_direction = direction;
-        node.overflow = overflow;
-    }
-}
-
-/// One pane: it scrolls and shares the width when `wide`, else it grows to its content.
-fn lay_out_pane(node: &mut Node, wide: bool) {
-    let (overflow, grow, basis) = if wide { (Overflow::scroll_y(), 1.0, px(0)) } else { (Overflow::visible(), 0.0, auto()) };
-    if node.overflow != overflow {
-        node.overflow = overflow;
-        node.flex_grow = grow;
-        node.flex_basis = basis;
-    }
-}
-
-/// Scrolling away from the panel moves the pane under the mouse, or the whole right side when
-/// it is one column.
-fn scroll_sheet(
+/// Scrolling moves the column under the mouse, if it has more than fits.
+fn scroll_columns(
     scroll: Res<AccumulatedMouseScroll>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
-    body: Query<(&ComputedNode, &UiGlobalTransform), With<PanelBody>>,
     mut areas: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform, &Node), With<ScrollArea>>,
 ) {
     let lines = match scroll.unit {
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
-    let Some(window) = window else { return };
-    let Some(point) = window.cursor_position() else { return };
-    if lines == 0.0 || over_body(&window, &body) {
+    let Some(point) = cursor(&window) else { return };
+    if lines == 0.0 {
         return;
     }
     for (mut position, node, transform, style) in &mut areas {
-        if style.overflow.y != OverflowAxis::Scroll || !node_rect(node, transform).contains(point) {
+        if style.display == Display::None || style.overflow.y != OverflowAxis::Scroll || !node_rect(node, transform).contains(point) {
             continue;
         }
         let max = ((node.content_size() - node.size()) * node.inverse_scale_factor).y.max(0.0);
@@ -813,14 +1214,6 @@ mod tests {
         line.split_whitespace().map(String::from).collect()
     }
 
-    fn line_of(state: &LabState, name: &str) -> String {
-        sheet(state).into_iter().find(|r| r.explained.name == name).unwrap_or_else(|| panic!("no {name} row")).explained.line()
-    }
-
-    fn value_of(state: &LabState, name: &str) -> f64 {
-        sheet(state).into_iter().find(|r| r.explained.name == name).unwrap().explained.value()
-    }
-
     /// A seed whose rolled `base` has the affix named `affix`.
     fn seed_with(base: &str, affix: &str) -> u32 {
         (1..2000).find(|&s| roll_item(base, s).is_some_and(|i| i.affixes.iter().any(|a| a.name == affix))).unwrap_or_else(|| panic!("no {base} of {affix}"))
@@ -831,8 +1224,6 @@ mod tests {
         let state = LabState::from_args(args("--lab")).unwrap();
         assert_eq!((state.character.folk, state.character.class), (Folk::Human, Class::Fighter));
         assert_eq!(state.character.attributes.strength, 10);
-        assert_eq!(line_of(&state, "Capacity"), "Capacity 150 lb = STR 10 × 15 (150)");
-        assert_eq!(value_of(&state, "Hit points"), 10.0);
     }
 
     #[test]
@@ -850,174 +1241,103 @@ mod tests {
         let held = state.slot(Slot::Mainhand).roll().unwrap().item;
         assert_eq!((held.base.as_str(), held.name.as_str()), ("Sword", "Messer"));
         assert_eq!(state.items().len(), 3);
-        assert_eq!(value_of(&state, "Armour class"), 15.0, "10 + sallet 2 + hauberk 3");
-        assert_eq!((value_of(&state, "Least damage"), value_of(&state, "Mean damage"), value_of(&state, "Most damage")), (1.0, 4.5, 8.0));
-        assert!(value_of(&state, "Load") > 0.0);
-        assert!(sheet(&state).iter().any(|r| r.explained.name == "Warmth"));
     }
 
     #[test]
-    fn raising_strength_to_14_lifts_capacity_and_damage() {
+    fn reroll_takes_the_next_seed_and_keeps_the_folk() {
         let mut state = LabState::default();
-        assert_eq!(value_of(&state, "Capacity"), 150.0);
-        state.set_slider("attributes.str", 14.0);
-        assert_eq!(value_of(&state, "Capacity"), 210.0);
-        assert_eq!((value_of(&state, "Least damage"), value_of(&state, "Mean damage"), value_of(&state, "Most damage")), (3.0, 6.5, 10.0));
+        state.cycle_folk(1);
+        state.reroll();
+        assert_eq!((state.seed, state.character.folk), (DEFAULT_SEED + 1, Folk::Dwarf));
+        assert_eq!(state.character, Character::roll_folk(Folk::Dwarf, DEFAULT_SEED + 1));
     }
 
     #[test]
-    fn a_belt_of_the_ox_adds_25_and_switching_it_off_removes_it() {
+    fn scores_step_within_three_and_twenty() {
         let mut state = LabState::default();
+        state.step_score(0, 4);
+        assert_eq!(state.character.attributes.strength, 14);
+        state.step_score(0, 50);
+        assert_eq!(state.character.attributes.strength, 20);
+        state.step_score(4, -50);
+        assert_eq!(state.character.attributes.wisdom, 3);
+        state.step_score(9, 1);
+    }
+
+    #[test]
+    fn folk_class_activity_and_attacker_cycle_both_ways() {
+        let mut state = LabState::default();
+        state.cycle_folk(1);
+        assert_eq!(state.character.folk, Folk::Dwarf);
+        state.cycle_folk(-2);
+        assert_eq!(state.character.folk, Folk::Pigfolk);
+        state.cycle_class(-1);
+        assert_eq!(state.character.class, Class::Cleric);
+        state.cycle_activity(-1);
+        assert_eq!(state.activity, Activity::Resting);
+        let was = state.attacker.clone();
+        state.cycle_attacker(1);
+        state.cycle_attacker(-1);
+        assert_eq!(state.attacker, was);
+    }
+
+    #[test]
+    fn a_card_can_be_taken_off_and_an_affix_flipped() {
+        let mut state = LabState::default();
+        state.remove(Slot::Head);
+        assert_eq!(state.items().len(), 2);
         state.equip(Slot::Belt, "Belt", seed_with("Belt", "of the Ox"));
-        let line = line_of(&state, "Capacity");
-        assert!(line.contains("+ ") && line.contains("of the Ox (+25)"), "{line}");
-        assert_eq!(value_of(&state, "Capacity"), 175.0);
-        state.flip(&format!("{}.affix/of the Ox", slot_key(Slot::Belt)));
-        assert_eq!(line_of(&state, "Capacity"), "Capacity 150 lb = STR 10 × 15 (150)");
-        state.flip(&format!("{}.affix/of the Ox", slot_key(Slot::Belt)));
-        assert_eq!(value_of(&state, "Capacity"), 175.0);
-    }
-
-    /// What `base` rolled from `seed` has for stats with only `kept` applied to its base
-    /// profile, in the order given: the oracle for [`LabSlot::roll`].
-    fn stats_with(base: &str, seed: u32, kept: &[&Affix]) -> fb_items::stats::Stats {
-        let mut stats = profile(base, &roll_shape(base, seed).unwrap()).stats;
-        for affix in kept {
-            affix.fx.iter().for_each(|m| m.apply_to_stats(&mut stats));
-        }
-        stats
-    }
-
-    fn slot_of_item(base: &str, seed: u32, off: &[&str]) -> LabSlot {
-        LabSlot { base: Some(base.into()), seed, off: off.iter().map(|n| n.to_string()).collect(), ..LabSlot::empty(Slot::Belt) }
+        state.flip_affix(Slot::Belt, "of the Ox");
+        assert!(state.slot(Slot::Belt).off.contains("of the Ox"));
+        state.flip_affix(Slot::Belt, "of the Ox");
+        assert!(state.slot(Slot::Belt).off.is_empty());
     }
 
     #[test]
-    fn with_no_affix_off_the_item_is_the_rolled_item() {
-        for (base, seed) in [("Belt", 2), ("Sword", 5), ("Mail", 1), ("Torch", 4)] {
-            let plain = roll_item(base, seed).unwrap();
-            let rolled = slot_of_item(base, seed, &[]).roll().unwrap();
-            assert_eq!(rolled.item.profile.stats, plain.profile.stats, "{base} {seed}");
-            assert_eq!(rolled.item.name, plain.name);
-            assert_eq!(rolled.item.profile.stats, stats_with(base, seed, &plain.affixes), "the oracle agrees with roll_item");
-        }
-    }
-
-    #[test]
-    fn switching_one_of_two_affixes_off_keeps_the_other() {
-        let (base, seed) = ["Belt", "Sword", "Mail", "Helm", "Ring", "Cloak"]
-            .iter()
-            .flat_map(|b| (1..3000).map(move |s| (*b, s)))
-            .find(|&(b, s)| roll_item(b, s).is_some_and(|i| i.affixes.len() >= 2))
-            .expect("some item rolls two affixes");
-        let plain = roll_item(base, seed).unwrap();
-        let (gone, kept) = (plain.affixes[0], &plain.affixes[1..]);
-        let rolled = slot_of_item(base, seed, &[&gone.name]).roll().unwrap();
-        assert_eq!(rolled.item.profile.stats, stats_with(base, seed, kept), "{base} {seed} without {}", gone.name);
-        assert_eq!(rolled.item.affixes, kept);
-        assert_eq!(rolled.affixes, plain.affixes, "the switch still lists what it rolled");
-        assert!(!rolled.item.name.contains(&gone.name), "{} in {}", gone.name, rolled.item.name);
-        // Every affix off is the bare base.
-        let off: Vec<&str> = plain.affixes.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(slot_of_item(base, seed, &off).roll().unwrap().item.profile.stats, stats_with(base, seed, &[]));
-    }
-
-    #[test]
-    fn the_sheet_agrees_with_the_games_own_numbers() {
+    fn the_picker_puts_a_chosen_base_and_seed_in_a_slot() {
         let mut state = LabState::default();
-        for (slot, base, seed) in [(Slot::Body, "Mail", 1), (Slot::Belt, "Belt", seed_with("Belt", "of the Ox")), (Slot::Mainhand, "Sword", 3), (Slot::Head, "Helm", 2)] {
-            state.equip(slot, base, seed);
-        }
-        let inventory = state.inventory();
-        let derived = state.character.derive(&inventory);
-        assert_eq!(value_of(&state, "Armour class"), derived.armour_class as f64);
-        assert_eq!(value_of(&state, "Capacity"), derived.capacity as f64);
-        assert!((value_of(&state, "Load") - derived.load as f64).abs() < 1e-4);
-        assert_eq!(value_of(&state, "Darkvision"), derived.darkvision as f64);
-        assert_eq!(value_of(&state, "Light"), derived.light as f64);
-        assert!((value_of(&state, "Warmth") - derived.warmth as f64).abs() < 1e-4);
-        let weapon = Weapon::in_hand(&inventory, &state.character);
-        let (least, most) = weapon.damage_range(modifier(state.character.strength()));
-        assert_eq!((value_of(&state, "Least damage") as u32, value_of(&state, "Most damage") as u32), (least, most));
+        let mut picker = Picker { open: true, ..Picker::default() };
+        picker.step_slot(SLOTS.iter().position(|&s| s == Slot::Belt).unwrap() as isize);
+        assert_eq!(picker.slot(), Slot::Belt);
+        let ox = seed_with("Belt", "of the Ox");
+        let at = bases_for(Slot::Belt).iter().position(|b| b == "Belt").unwrap();
+        picker.step_base(at as isize);
+        picker.step_seed(ox as i64 - 1);
+        assert_eq!((picker.base_name().as_deref(), picker.seed), (Some("Belt"), ox));
+        assert!(picker.preview().unwrap().name.contains("of the Ox"));
+        picker.put_on(&mut state);
+        assert!(!picker.open);
+        assert_eq!(state.slot(Slot::Belt).base.as_deref(), Some("Belt"));
+        picker.step_seed(-1_000_000);
+        assert_eq!(picker.seed, 0);
     }
 
     #[test]
-    fn the_panel_lists_folk_class_scores_and_every_slot() {
-        let mut state = LabState::default();
-        let paths: Vec<String> = state.fields().into_iter().map(|f| f.path).collect();
-        for want in ["character.folk", "character.class", "character.seed", "attributes.str", "attributes.wis", "gear.head.base", "gear.mainhand.base", "gear.belt.base"] {
-            assert!(paths.iter().any(|p| p == want), "{want} in {paths:?}");
-        }
-        assert!(!paths.iter().any(|p| p == "gear.belt.seed"), "an empty slot has no seed");
-        state.cycle("gear.belt.base", 1);
-        assert!(state.slot(Slot::Belt).base.is_some());
-        assert!(state.fields().iter().any(|f| f.path == "gear.belt.seed"));
-        state.cycle("gear.belt.base", -1);
-        assert_eq!(state.slot(Slot::Belt).base, None);
-        // Every choice offers none and bases that fit.
+    fn controls_change_only_what_they_name() {
+        let (mut state, mut picker, mut tab) = (LabState::default(), Picker::default(), LabTab::default());
+        let was = state.clone();
+        Control::Tab(1).apply(&mut state, &mut picker, &mut tab);
+        assert_eq!((tab, &state, &picker), (LabTab(1), &was, &Picker::default()));
+        Control::Tab(3).apply(&mut state, &mut picker, &mut tab);
+        assert_eq!(tab, LabTab(1), "Effects waits for effects");
+        Control::OpenPicker.apply(&mut state, &mut picker, &mut tab);
+        assert!(picker.open);
+        Control::Score(1, 2).apply(&mut state, &mut picker, &mut tab);
+        assert_eq!(state.character.attributes.dexterity, 12);
+        Control::StrikeSeed(-5).apply(&mut state, &mut picker, &mut tab);
+        assert_eq!(state.strike_seed, 0);
+    }
+
+    #[test]
+    fn every_slot_offers_a_base() {
         for slot in SLOTS {
             assert!(!bases_for(slot).is_empty(), "{slot:?}");
         }
-        state.cycle("character.folk", 1);
-        assert_eq!(state.character.folk, Folk::Dwarf);
-        state.cycle("character.class", -1);
-        assert_eq!(state.character.class, Class::Cleric);
     }
 
     #[test]
-    fn the_panel_is_rebuilt_only_when_its_rows_change() {
-        let mut state = LabState::default();
-        let structure = state.structure();
-        state.set_slider("attributes.str", 14.0);
-        assert_eq!(state.structure(), structure, "a slider only moves a value");
-        state.equip(Slot::Belt, "Belt", 2);
-        assert_ne!(state.structure(), structure);
-    }
-
-    #[test]
-    fn the_panel_offers_every_attacker_and_a_strike_seed() {
-        let mut state = LabState::default();
-        let who = state.fields().into_iter().find(|f| f.path == "attacker.who").unwrap();
-        let FieldKind::Choice { options, .. } = who.kind else { panic!("a choice") };
-        for species in Species::ALL {
-            assert!(options.contains(&species.stat_block().name.to_string()), "{options:?}");
-        }
-        assert!(options.contains(&"folk with Sword".to_string()), "{options:?}");
-        state.cycle("attacker.who", -1);
-        assert!(matches!(state.attacker, Attacker::Creature(Species::Rat)));
-        state.set_slider("attacker.seed", 42.0);
-        assert_eq!(state.strike_seed, 42);
-    }
-
-    #[test]
-    fn the_rate_rows_follow_the_chosen_activity() {
-        let mut state = LabState::default();
-        let walking = value_of(&state, "Hunger rate");
-        state.cycle("time.activity", -1);
-        assert_eq!(state.activity, Activity::Resting);
-        assert_eq!(value_of(&state, "Hunger rate"), walking * 0.5);
-        state.cycle("time.activity", 2);
-        assert_eq!(state.activity, Activity::Exerting);
-        assert_eq!(value_of(&state, "Hunger rate"), walking * 2.0);
-    }
-
-    #[test]
-    fn the_right_side_is_two_scrolling_panes_when_wide_and_one_column_when_not() {
-        assert!(is_wide(1920.0) && is_wide(WIDE) && !is_wide(WIDE - 1.0) && !is_wide(MIN_WINDOW.x));
-        let (mut right, mut pane) = (Node { flex_direction: FlexDirection::Column, overflow: Overflow::scroll_y(), ..default() }, Node::default());
-        lay_out_right(&mut right, true);
-        lay_out_pane(&mut pane, true);
-        assert_eq!((right.flex_direction, right.overflow), (FlexDirection::Row, Overflow::visible()));
-        assert_eq!((pane.overflow, pane.flex_grow), (Overflow::scroll_y(), 1.0));
-        lay_out_right(&mut right, false);
-        lay_out_pane(&mut pane, false);
-        assert_eq!((right.flex_direction, right.overflow), (FlexDirection::Column, Overflow::scroll_y()));
-        assert_eq!((pane.overflow, pane.flex_grow), (Overflow::visible(), 0.0));
-    }
-
-    #[test]
-    fn the_smallest_window_leaves_the_sheet_room() {
-        assert!(MIN_WINDOW.x - PANEL_WIDTH >= 480.0);
+    fn the_smallest_window_leaves_the_tests_room() {
+        assert!(MIN_WINDOW.x - SHEET_WIDTH - RULES_WIDTH >= 400.0);
         assert!(window().resize_constraints.min_width >= MIN_WINDOW.x);
     }
 }
