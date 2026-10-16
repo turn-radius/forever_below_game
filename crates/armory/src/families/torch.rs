@@ -856,7 +856,7 @@ mod tests {
 
     fn burning(seed: u32, style: TorchStyle, char: f32, flame: f32) -> TorchState {
         let mut s = Torch::roll_as(seed, style);
-        s.burn = TorchBurn { state: BurnState::Burning, char, flame };
+        s.burn = TorchBurn { state: BurnState::Burning, char, flame, ..s.burn };
         s
     }
 
