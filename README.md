@@ -227,7 +227,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[sound]` | `ambience_volume` | 0.3 | Ambient sounds' volume at full, 0 to 1: drips and rumbles, before your sound volume setting. |
 | `[sound]` | `rumble_interval_min` | 60.0 | The shortest time between stone rumbles, in seconds. |
 | `[sound]` | `rumble_interval_max` | 180.0 | The longest time between stone rumbles, in seconds. |
-| `[interface]` | `cell_size` | 46.0 | Inventory grid cell size, in logical pixels. |
+| `[interface]` | `cell_size` | 52.0 | Inventory grid cell size, in logical pixels. |
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
 | `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
 
