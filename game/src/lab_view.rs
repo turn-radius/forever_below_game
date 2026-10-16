@@ -1380,6 +1380,12 @@ fn mean(value: Option<f64>) -> String {
     value.map_or_else(|| "\u{2013}".to_string(), |v| format!("{v:.1}"))
 }
 
+/// The attacker's blows to down them, or "rarely wins" when it wins under 5% of fights, too few
+/// for a mean to mean anything.
+fn blows_text(summary: &FightSummary) -> String {
+    if summary.attacker_wins < 0.05 { "rarely wins".to_string() } else { mean(summary.blows_to_down) }
+}
+
 /// The four answers of a thousand fights, each with the saved rules' value when it differs:
 /// the label, the value, and `was`.
 fn fight_tiles(now: &FightSummary, was: &FightSummary) -> Vec<(String, String, Option<String>)> {
@@ -1387,7 +1393,7 @@ fn fight_tiles(now: &FightSummary, was: &FightSummary) -> Vec<(String, String, O
     let rows = [
         (format!("{name} hits them"), rate_text(now.attacker_hit_rate), rate_text(was.attacker_hit_rate)),
         ("Damage per hit".to_string(), mean(now.damage_per_hit), mean(was.damage_per_hit)),
-        (format!("{name} blows to down them"), mean(now.blows_to_down), mean(was.blows_to_down)),
+        (format!("{name} blows to down them, in fights it wins"), blows_text(now), blows_text(was)),
         ("They win".to_string(), rate_text(now.they_win), rate_text(was.they_win)),
     ];
     rows.into_iter().map(|(label, value, before)| (label, value.clone(), crate::lab_rules::was_text(&value, &before))).collect()
@@ -1409,9 +1415,15 @@ fn chart_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, title: &str,
                     plot.spawn((ImageNode::new(image.clone()), Node { flex_grow: 1.0, min_width: px(0), aspect_ratio: Some(aspect), ..default() }));
                 }
             });
-            figure.spawn(Node { justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|axis| {
-                words(axis, &fonts.body, 12.0, MUTED, chart.x_labels.0.clone());
-                words(axis, &fonts.body, 12.0, MUTED, chart.x_labels.1.clone());
+            figure.spawn(Node { ..default() }).with_children(|axis| {
+                let share = chart.draw.unwrap_or(0.0) * 100.0;
+                axis.spawn(Node { width: percent(100.0 - share), justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|ends| {
+                    words(ends, &fonts.body, 12.0, MUTED, chart.x_labels.0.clone());
+                    words(ends, &fonts.body, 12.0, MUTED, chart.x_labels.1.clone());
+                });
+                if chart.draw.is_some() {
+                    axis.spawn(Node { width: percent(share), justify_content: JustifyContent::Center, ..default() }).with_child((Text::new("draw"), UiFonts::style(&fonts.body, 12.0, MUTED)));
+                }
             });
         });
 }
@@ -1428,7 +1440,7 @@ fn refresh_fight(mut commands: Commands, lab: Res<FightLab>, images: Res<FightIm
                         row.spawn((Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
                             .with_children(|tile| {
                                 words(tile, &fonts.body, 13.0, MUTED, label);
-                                words(tile, &fonts.mono_bold, 30.0, BRIGHT, value);
+                                words(tile, &fonts.mono_bold, if value == "rarely wins" { 20.0 } else { 30.0 }, BRIGHT, value);
                                 match was {
                                     Some(was) => words(tile, &fonts.body, 13.0, FRAME_GOLD, was),
                                     None => words(tile, &fonts.body, 13.0, MUTED, format!("of {} fights", number(now.fights as f64))),
@@ -1437,8 +1449,8 @@ fn refresh_fight(mut commands: Commands, lab: Res<FightLab>, images: Res<FightIm
                     }
                 });
                 r.spawn(Node { column_gap: px(12), ..default() }).with_children(|row| {
-                    chart_figure(row, &fonts, "Their life, round by round", "gold: now \u{b7} grey: saved rules \u{b7} band: middle half of fights", life, &images.life, 960.0 / 360.0, 3.0);
-                    chart_figure(row, &fonts, "How many rounds a fight took", "gold: now \u{b7} grey: saved rules", histogram, &images.histogram, 640.0 / 360.0, 2.0);
+                    chart_figure(row, &fonts, "Their life, round by round", "gold: now \u{b7} grey: saved rules \u{b7} band: middle half of fights \u{b7} ended fights keep their final life", life, &images.life, 960.0 / 360.0, 3.0);
+                    chart_figure(row, &fonts, "How many rounds a fight took", "gold: now \u{b7} grey: saved rules \u{b7} orange: draws", histogram, &images.histogram, 640.0 / 360.0, 2.0);
                 });
             }
             _ => words(r, &fonts.body, 16.0, MUTED, "Press 1,000 fights to see how often each side hits, how long a fight lasts and who wins."),

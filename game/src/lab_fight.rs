@@ -11,13 +11,16 @@
 
 use fb_character::combat::{self as rules, Attack, creature_attack_with, folk_attack_with};
 use fb_character::explain::Explained;
-use fb_character::modifier;
+use fb_body::Folk;
+use fb_character::{Attributes, modifier};
 use fb_character::rules::Rules;
 use fb_creatures::Dice;
 use fb_items::{Slot, roll_item};
 use procgen_rng::Mulberry32;
 
+use crate::character::{Character, Class};
 use crate::combat::{Weapon, first_level_hit_points_with};
+use crate::inventory::Inventory;
 use crate::lab_strike::Attacker;
 use crate::lab_view::LabState;
 
@@ -27,8 +30,8 @@ pub const MAX_ROUNDS: u32 = 100;
 pub const CHART_ROUNDS: usize = 24;
 /// How many fights "1,000 fights" is.
 pub const THOUSAND: u32 = 1000;
-/// The Strength a folk attacker has.
-const FOLK_STRENGTH: i32 = 10;
+/// Every score a folk attacker has.
+const FOLK_SCORE: i32 = 10;
 
 /// Who won.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,7 +96,9 @@ pub struct FightSummary {
     /// Their life at the start and after each round, up to [`CHART_ROUNDS`].
     pub life: Vec<LifeBand>,
     /// How many fights took each number of rounds; the last holds [`CHART_ROUNDS`] and more.
+    /// Draws, which reached [`MAX_ROUNDS`] with neither down, are counted apart.
     pub rounds: Vec<u32>,
+    pub draws: u32,
 }
 
 /// Everything about a fight that is the same each time, worked out once from the lab state.
@@ -119,7 +124,7 @@ struct Foe {
 
 enum Strike {
     Bite { bonus: i32, bite: Dice, venom: Option<Dice> },
-    Weapon { weapon: Weapon, to_hit: i32 },
+    Weapon { weapon: Weapon, to_hit: i32, strength: i32 },
 }
 
 impl<'r> Setup<'r> {
@@ -133,9 +138,29 @@ impl<'r> Setup<'r> {
                 Foe { name: block.name.to_string(), armour: block.armour_class, life: block.hit_points as i32, strike: Strike::Bite { bonus: block.attack_bonus, bite: block.bite, venom: block.venom } }
             }
             Attacker::Folk(base) => {
-                let item = roll_item(base, state.strike_seed);
-                let to_hit = item.as_ref().map_or(0, |i| i.profile.stats.to_hit.round() as i32);
-                Foe { name: format!("Folk with {base}"), armour: rules.combat.armour_base, life: rules.combat.hit_dice.fighter as i32, strike: Strike::Weapon { weapon: Weapon::of_stats(item.as_ref()), to_hit } }
+                // A real character: a human Fighter with every score 10, wearing nothing and
+                // holding the base, so armour class and hit points come from the same rules.
+                let folk = Character {
+                    folk: Folk::Human,
+                    body_seed: 0,
+                    name: "Folk".into(),
+                    class: Class::Fighter,
+                    attributes: Attributes { strength: FOLK_SCORE, dexterity: FOLK_SCORE, constitution: FOLK_SCORE, intelligence: FOLK_SCORE, wisdom: FOLK_SCORE },
+                    dirt: 0.0,
+                };
+                let mut hands = Inventory::default();
+                if let Some(item) = roll_item(base, state.strike_seed) {
+                    let id = hands.add(item);
+                    let _ = hands.wear(id, Slot::Mainhand);
+                }
+                let held = hands.worn(Slot::Mainhand).and_then(|id| hands.item(id));
+                let to_hit = held.map_or(0, |i| i.profile.stats.to_hit.round() as i32);
+                Foe {
+                    name: format!("Folk with {base}"),
+                    armour: folk.armour_class_with(rules, &hands).value().round() as i32,
+                    life: first_level_hit_points_with(rules, &folk),
+                    strike: Strike::Weapon { weapon: Weapon::of_stats(held), to_hit, strength: modifier(folk.strength()) },
+                }
             }
         };
         Setup {
@@ -170,9 +195,9 @@ impl<'r> Setup<'r> {
                 let hurt = rules::bite_damage_with(self.rules, damage, poison, self.their_constitution, rng);
                 (attack, Some(hurt.damage))
             }
-            Strike::Weapon { weapon, to_hit } => {
-                let attack = folk_attack_with(self.rules, modifier(FOLK_STRENGTH), *to_hit, self.their_armour, rng);
-                let damage = attack.hit.then(|| weapon.roll_explained(modifier(FOLK_STRENGTH), rng));
+            Strike::Weapon { weapon, to_hit, strength } => {
+                let attack = folk_attack_with(self.rules, *strength, *to_hit, self.their_armour, rng);
+                let damage = attack.hit.then(|| weapon.roll_explained(*strength, rng));
                 (attack, damage)
             }
         }
@@ -230,7 +255,7 @@ impl<'r> Setup<'r> {
                 let line = if lines { self.line(by_attacker, &attack, &damage, before, after) } else { String::new() };
                 blows.push(Blow { by_attacker, attack, damage, life: (them, foe), line });
             }
-            life.push(them);
+            life.push(them.max(0));
         }
         let winner = if them <= 0 {
             Some(Side::Attacker)
@@ -302,8 +327,13 @@ fn summarise(setup: &Setup, records: &[FightRecord]) -> FightSummary {
         })
         .collect();
     let mut rounds = vec![0u32; CHART_ROUNDS + 1];
+    let mut draws = 0;
     for r in records {
-        rounds[(r.rounds as usize).min(CHART_ROUNDS)] += 1;
+        if r.winner.is_none() {
+            draws += 1;
+        } else {
+            rounds[(r.rounds as usize).min(CHART_ROUNDS)] += 1;
+        }
     }
     let ratio = |a: u32, b: u32| if b == 0 { 0.0 } else { a as f64 / b as f64 };
     FightSummary {
@@ -318,6 +348,7 @@ fn summarise(setup: &Setup, records: &[FightRecord]) -> FightSummary {
         attacker_wins: attacker_wins as f64 / n,
         life,
         rounds,
+        draws,
     }
 }
 
@@ -360,7 +391,8 @@ mod tests {
         assert_eq!(summary.full_life, 10);
         assert!(summary.life.iter().all(|b| b.low <= b.median && b.median <= b.high));
         assert!(summary.life.last().unwrap().median <= 10);
-        assert_eq!(summary.rounds.iter().sum::<u32>(), 500);
+        assert_eq!(summary.rounds.iter().sum::<u32>() + summary.draws, 500);
+        assert!(summary.life.iter().all(|b| b.low >= 0), "life is kept at 0 or more");
         assert!(summary.they_win + summary.attacker_wins <= 1.0 + 1e-9);
     }
 
@@ -424,5 +456,29 @@ mod tests {
         let took = started.elapsed();
         eprintln!("1,000 fights took {took:?}");
         assert!(took < std::time::Duration::from_millis(1500), "{took:?}");
+    }
+
+    #[test]
+    fn a_folk_attacker_is_a_real_character_with_armour_and_hit_points_from_the_rules() {
+        let mut state = rat();
+        state.attacker = Attacker::Folk("Sword".into());
+        let setup = Setup::new(&state, &state.ruleset.rules);
+        assert_eq!((setup.foe.armour, setup.foe.life), (10, 10), "armour base 10 + DEX 0, d10 + CON 0");
+        crate::lab_rules::set_leaf(&mut state.ruleset, "combat/armour_base", crate::lab_rules::Leaf::Int(13));
+        crate::lab_rules::set_leaf(&mut state.ruleset, "combat/hit_dice/fighter", crate::lab_rules::Leaf::Int(12));
+        let setup = Setup::new(&state, &state.ruleset.rules);
+        assert_eq!((setup.foe.armour, setup.foe.life), (13, 12));
+    }
+
+    #[test]
+    fn a_fight_that_never_ends_is_a_draw_of_its_own() {
+        let mut state = rat();
+        // Nobody can hurt anybody: the rat bites for nothing and the sword needs a natural 20 on armour 40.
+        crate::lab_rules::set_leaf(&mut state.ruleset, "creatures/Giant Rat/bite", crate::lab_rules::Leaf::Dice([0, 0, 0]));
+        crate::lab_rules::set_leaf(&mut state.ruleset, "creatures/Giant Rat/armour_class", crate::lab_rules::Leaf::Int(40));
+        crate::lab_rules::set_leaf(&mut state.ruleset, "combat/natural_hit", crate::lab_rules::Leaf::Int(21));
+        let summary = fights(&state, &state.ruleset.rules, 1, 20);
+        assert_eq!(summary.draws, 20);
+        assert_eq!(summary.rounds.iter().sum::<u32>(), 0);
     }
 }

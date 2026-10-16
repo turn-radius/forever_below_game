@@ -17,6 +17,7 @@ const BACKGROUND: Rgba = [0x1c, 0x19, 0x15, 255];
 const GRID: Rgba = [0x3a, 0x32, 0x26, 255];
 const GOLD: Rgba = [0xd9, 0xb4, 0x6a, 255];
 const FAINT: Rgba = [0x7d, 0x73, 0x5f, 255];
+const DRAW: Rgba = [0xc4, 0x8a, 0x52, 255];
 
 /// A canvas of pixels, drawn on with alpha.
 #[derive(Clone, Debug, PartialEq)]
@@ -109,6 +110,8 @@ pub struct Chart {
     pub y_labels: (String, String),
     /// The left and right of the horizontal axis.
     pub x_labels: (String, String),
+    /// For the histogram, the share of the width the "draw" column takes at the right.
+    pub draw: Option<f32>,
 }
 
 /// Their life over the rounds: the middle half of fights shaded, the median over it, and the
@@ -138,32 +141,37 @@ pub fn life_chart(now: &FightSummary, was: Option<&FightSummary>) -> Chart {
         polyline(&mut canvas, was, 3.0, FAINT, Some((12.0, 9.0)));
     }
     polyline(&mut canvas, now, 5.0, GOLD, None);
-    Chart { canvas, y_labels: (format!("{}", now.full_life), "0".to_string()), x_labels: ("start".to_string(), format!("round {rounds}")) }
+    Chart { canvas, y_labels: (format!("{}", now.full_life), "0".to_string()), x_labels: ("start".to_string(), format!("round {rounds}")), draw: None }
 }
 
-/// How many fights took each number of rounds, the saved rules' bars faint behind.
+/// How many fights took each number of rounds, the saved rules' bars faint behind, and a column
+/// of its own at the right for the draws.
 pub fn histogram_chart(now: &FightSummary, was: Option<&FightSummary>) -> Chart {
     let (w, h) = HISTOGRAM_SIZE;
     let mut canvas = Canvas::new(w, h, BACKGROUND);
     let last = |s: &FightSummary| s.rounds.iter().rposition(|&n| n > 0).unwrap_or(1);
     let shown = last(now).max(was.map_or(0, last)).clamp(6, CHART_ROUNDS);
-    let tallest = now.rounds.iter().chain(was.map_or(&[][..], |s| &s.rounds[..])).copied().max().unwrap_or(1).max(1);
+    let draws = now.draws > 0 || was.is_some_and(|s| s.draws > 0);
+    let columns = shown + draws as usize;
+    let counts = |s: &FightSummary, column: usize| if column < shown { s.rounds[column + 1] } else { s.draws };
+    let tallest = (0..columns).flat_map(|c| [Some(counts(now, c)), was.map(|s| counts(s, c))]).flatten().max().unwrap_or(1).max(1);
     for k in 0..=4 {
         canvas.hline(MARGIN, w as f32 - MARGIN, h as f32 - MARGIN - k as f32 / 4.0 * (h as f32 - 2.0 * MARGIN), GRID);
     }
-    let slot = (w as f32 - 2.0 * MARGIN) / shown as f32;
+    let slot = (w as f32 - 2.0 * MARGIN) / columns as f32;
     let top = |n: u32| h as f32 - MARGIN - n as f32 / tallest as f32 * (h as f32 - 2.0 * MARGIN);
-    for round in 1..=shown {
-        let left = MARGIN + (round - 1) as f32 * slot;
+    for column in 0..columns {
+        let left = MARGIN + column as f32 * slot;
         if let Some(was) = was {
-            canvas.rect(left + slot * 0.12, top(was.rounds[round]), left + slot * 0.88, h as f32 - MARGIN, [FAINT[0], FAINT[1], FAINT[2], 150]);
+            canvas.rect(left + slot * 0.12, top(counts(was, column)), left + slot * 0.88, h as f32 - MARGIN, [FAINT[0], FAINT[1], FAINT[2], 150]);
         }
-        canvas.rect(left + slot * 0.2, top(now.rounds[round]), left + slot * 0.8, h as f32 - MARGIN, GOLD);
+        canvas.rect(left + slot * 0.2, top(counts(now, column)), left + slot * 0.8, h as f32 - MARGIN, if column < shown { GOLD } else { DRAW });
     }
     Chart {
         canvas,
         y_labels: (format!("{tallest}"), "0".to_string()),
         x_labels: ("1 round".to_string(), if shown == CHART_ROUNDS { format!("{shown}+") } else { format!("{shown}") }),
+        draw: draws.then(|| 1.0 / columns as f32),
     }
 }
 

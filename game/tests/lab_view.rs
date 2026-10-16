@@ -182,7 +182,7 @@ fn a_thousand_fights_fill_the_tiles_and_a_rule_edit_shows_what_it_was() {
     assert!(texts(&mut app).iter().any(|t| t.starts_with("Press 1,000 fights")));
     press(&mut app, Control::Thousand);
     let shown = texts(&mut app);
-    for want in ["Giant Rat hits them", "Damage per hit", "Giant Rat blows to down them", "They win", "Their life, round by round", "How many rounds a fight took"] {
+    for want in ["Giant Rat hits them", "Damage per hit", "Giant Rat blows to down them, in fights it wins", "They win", "Their life, round by round", "How many rounds a fight took"] {
         assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
     }
     assert!((tile_percent(&shown, "Giant Rat hits them") - 50.0).abs() <= 2.0);
