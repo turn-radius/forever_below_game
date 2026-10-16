@@ -3,21 +3,30 @@
 //! bodies and fitted gear can be judged as items are.
 //!
 //! Keys: Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit
-//! (`data/outfits.json`), Space pauses the turn. Command line:
+//! (`data/outfits.json`), Space pauses the turn, W has the doll walk in place. The panel at the
+//! top right sets the walk ([`DollMotion`]): a toggle for walking or standing, and a slider for
+//! its speed as a multiple of the folk's own natural pace, so the gait, the skinned gear and the
+//! idle can be judged live. Command line:
 //! `--doll --folk dwarf --seed 7 --outfit cleric` ([`DollChoice::from_args`]).
 //!
 //! The seed rolls the body ([`BodySpec::roll`]) and the outfit ([`fb_items::outfit::Outfit::roll`]),
 //! whose items are rolled through `fb_items` like any other, so the same folk, seed and outfit
 //! always look the same.
 
-use bevy::{camera::Exposure, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera};
+use armory::reflect::{Field, FieldKind};
+use armory::slider::Slider;
+use bevy::{camera::Exposure, mesh::skinning::SkinnedMeshInverseBindposes, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera};
 use fb_body::{BodySpec, Folk};
 use fb_items::outfit::{Outfit, outfits};
 
-use crate::figure::{Figure, spawn_figure};
+use crate::figure::Figure;
+use crate::folk::Stride;
+use crate::folk_pose::{FolkAnim, FolkPosePlugin, spawn_rigged};
 use crate::light::{StudioLight, Torch, point_light};
 use crate::render::ItemSpawner;
 use crate::turntable::{PLATE, PLATE_INK, SPIN_SPEED, framing_distance};
+use crate::tweak_panel::{Tweak, TweakPanelPlugin, TweakPanelSystems, panel_body};
+use crate::ui::{BG, INK, LINE, UiFonts};
 
 /// Share of the view's height the figure fills.
 const FILL: f32 = 0.86;
@@ -34,12 +43,24 @@ pub struct DollViewPlugin;
 
 impl Plugin for DollViewPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<FolkPosePlugin>() {
+            app.add_plugins(FolkPosePlugin);
+        }
         app.init_resource::<DollChoice>()
             .init_resource::<DollSpin>()
+            .init_resource::<DollMotion>()
+            .init_resource::<UiFonts>()
             .insert_resource(ClearColor(PLATE))
             .insert_resource(StudioLight::ARMORY.ambient_light(&Exposure::INDOOR))
+            .add_plugins(TweakPanelPlugin::<DollMotion>::default())
             .add_systems(Startup, setup)
-            .add_systems(Update, (keys, show_figure.run_if(resource_changed::<DollChoice>), spin, frame_camera, show_status).chain());
+            .add_systems(
+                Update,
+                (
+                    (keys, show_figure.run_if(resource_changed::<DollChoice>)).chain().before(TweakPanelSystems),
+                    (drive_motion, spin, frame_camera, show_status).chain().after(TweakPanelSystems),
+                ),
+            );
     }
 }
 
@@ -77,7 +98,11 @@ impl DollChoice {
             };
             let mut value = || inline.clone().or_else(|| args.next()).ok_or(format!("{flag} needs a value"));
             match flag.as_str() {
-                "--doll" => {}
+                // The walk's own, read by `DollMotion::from_args`.
+                "--doll" | "--walk" => {}
+                "--speed" => {
+                    value()?;
+                }
                 "--folk" => {
                     let folk = value()?;
                     choice.folk = Folk::parse(&folk).ok_or(format!("unknown folk {folk:?}; one of human, dwarf, gnome, goblin, lizard, pig"))?;
@@ -119,10 +144,82 @@ impl DollChoice {
     }
 }
 
+/// How the doll moves, set from the panel: walking in place or standing, and how fast it walks as
+/// a multiple of its folk's natural pace ([`fb_body::Gait::natural_speed`]).
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct DollMotion {
+    pub walking: bool,
+    pub speed: f32,
+}
+
+impl Default for DollMotion {
+    fn default() -> Self {
+        DollMotion { walking: false, speed: 1.0 }
+    }
+}
+
+impl DollMotion {
+    /// Parses `--walk` (the doll walks in place from the start) and `--speed <n>` (a multiple of
+    /// its natural pace); also `--flag=value`. Other arguments are [`DollChoice::from_args`]'s.
+    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<DollMotion, String> {
+        let mut motion = DollMotion::default();
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            let (flag, inline) = match arg.split_once('=') {
+                Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
+                None => (arg, None),
+            };
+            match flag.as_str() {
+                "--walk" => motion.walking = true,
+                "--speed" => {
+                    let text = inline.or_else(|| args.next()).ok_or("--speed needs a value")?;
+                    motion.speed = DOLL_SPEEDS.clamp(text.parse().map_err(|_| format!("--speed: {text:?} is not a number"))?);
+                }
+                _ => {}
+            }
+        }
+        Ok(motion)
+    }
+}
+
+/// The speeds the panel offers, multiples of the natural pace.
+const DOLL_SPEEDS: Slider = Slider::new(0.0, 1.6, 0.05);
+
+impl Tweak for DollMotion {
+    fn fields(&self) -> Vec<Field> {
+        let field = |name: &str, kind| Field { path: format!("gait.{name}"), section: "gait".into(), name: name.into(), kind };
+        vec![field("walking", FieldKind::Toggle { value: self.walking }), field("speed", FieldKind::Slider { value: self.speed, range: DOLL_SPEEDS })]
+    }
+
+    fn set_slider(&mut self, path: &str, value: f32) {
+        if path == "gait.speed" {
+            self.speed = DOLL_SPEEDS.snap(value);
+        }
+    }
+
+    fn flip(&mut self, path: &str) {
+        if path == "gait.walking" {
+            self.walking = !self.walking;
+        }
+    }
+
+    /// The parameters never change shape.
+    fn structure(&self) -> u32 {
+        0
+    }
+}
+
 #[derive(Resource, Default)]
 struct DollSpin {
     angle: f32,
     paused: bool,
+}
+
+/// The root of the doll's figure, which carries the [`Stride`] the panel sets: `natural` is its
+/// folk's own walking pace.
+#[derive(Component)]
+struct DollFigure {
+    natural: f32,
 }
 
 /// The turning pivot under the figure, and the figure's bounds size.
@@ -137,7 +234,7 @@ struct DollCamera;
 #[derive(Component)]
 struct StatusLine;
 
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
     let exposure = Exposure::INDOOR;
     commands
         .spawn((
@@ -150,6 +247,26 @@ fn setup(mut commands: Commands) {
             Transform::from_xyz(0.0, 0.0, 60.0),
         ))
         .with_child(StudioLight::ARMORY.key_light(&exposure));
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                right: px(16),
+                top: px(16),
+                width: px(320),
+                height: px(150),
+                flex_direction: FlexDirection::Column,
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(8)),
+                ..default()
+            },
+            BackgroundColor(BG),
+            BorderColor::all(LINE),
+        ))
+        .with_children(|panel| {
+            panel.spawn((Text::new("Walk"), UiFonts::style(&fonts.display_bold, 24.0, INK), Node { padding: UiRect::new(px(14), px(14), px(10), px(0)), ..default() }));
+            panel_body(panel);
+        });
     commands.spawn((
         StatusLine,
         Text::default(),
@@ -159,7 +276,7 @@ fn setup(mut commands: Commands) {
     ));
 }
 
-fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<DollChoice>, mut spin: ResMut<DollSpin>) {
+fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<DollChoice>, mut spin: ResMut<DollSpin>, mut motion: ResMut<DollMotion>) {
     let pressed = |key| keys.just_pressed(key);
     if pressed(KeyCode::Tab) {
         let back = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -180,10 +297,29 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<DollChoice>, mut spi
     if pressed(KeyCode::Space) {
         spin.paused = !spin.paused;
     }
+    if pressed(KeyCode::KeyW) {
+        motion.walking = !motion.walking;
+    }
+}
+
+/// Sets the doll's pace from the panel: its natural pace times the slider while walking.
+fn drive_motion(motion: Res<DollMotion>, mut figures: Query<(&DollFigure, &mut Stride)>) {
+    for (figure, mut stride) in &mut figures {
+        let speed = if motion.walking { figure.natural * motion.speed } else { 0.0 };
+        if stride.speed != speed {
+            stride.speed = speed;
+        }
+    }
 }
 
 /// Redresses the figure for the current choice, on a pivot at the bounds' centre.
-fn show_figure(mut commands: Commands, choice: Res<DollChoice>, old: Query<Entity, With<Pivot>>, mut spawner: ItemSpawner) {
+fn show_figure(
+    mut commands: Commands,
+    choice: Res<DollChoice>,
+    old: Query<Entity, With<Pivot>>,
+    mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
+    mut spawner: ItemSpawner,
+) {
     for entity in &old {
         commands.entity(entity).despawn();
     }
@@ -194,14 +330,27 @@ fn show_figure(mut commands: Commands, choice: Res<DollChoice>, old: Query<Entit
     let reach = min.xz().abs().max(max.xz().abs());
     let size = Vec3::new(reach.x * 2.0, max.y - min.y, reach.y * 2.0);
     let pivot = commands.spawn((Pivot { size }, Transform::from_translation(centre), Visibility::default())).id();
-    let root = spawn_figure(&mut commands, &mut spawner, &figure);
-    commands.entity(root).insert((Transform::from_translation(-centre), ChildOf(pivot)));
+    // The figure is skinned (as the folk in the level are): its root carries the stride the panel
+    // sets, a skeleton under it the joints and meshes.
+    let root = commands
+        .spawn((
+            Name::new("Figure"),
+            DollFigure { natural: figure.gait.natural_speed() },
+            Stride::default(),
+            Transform::from_translation(-centre),
+            Visibility::default(),
+            ChildOf(pivot),
+        ))
+        .id();
+    let skeleton = commands.spawn((Name::new("Skeleton"), Transform::default(), Visibility::default(), ChildOf(root))).id();
+    let anim: FolkAnim = spawn_rigged(&mut spawner, &mut bindposes, &figure, skeleton, false, choice.seed);
     if let Some(light) = figure.light {
         let colour = Color::srgb(light.anchor.color.0, light.anchor.color.1, light.anchor.color.2);
         let range = figure.body.height * HELD_LIGHT_REACH;
         let lamp = Torch::flickering(point_light(colour, HELD_LIGHT_PEAK, range, &Exposure::INDOOR), light.anchor.flicker);
-        commands.entity(root).with_child((lamp, Transform::from_translation(light.at)));
+        spawner.commands().spawn((lamp, Transform::from_translation(anim.in_joint(light.joint, light.at)), ChildOf(anim.joint(light.joint))));
     }
+    commands.entity(skeleton).insert(anim);
 }
 
 fn spin(time: Res<Time>, mut state: ResMut<DollSpin>, mut pivots: Query<&mut Transform, With<Pivot>>) {
@@ -231,7 +380,7 @@ fn show_status(choice: Res<DollChoice>, mut status: Query<&mut Text, With<Status
         return;
     }
     let line = format!(
-        "{}   seed {}   {}\nTab folk   Left/Right seed   Up/Down outfit   Space pause",
+        "{}   seed {}   {}\nTab folk   Left/Right seed   Up/Down outfit   Space pause   W walk",
         choice.folk.race().label,
         choice.seed,
         choice.outfit().label,
@@ -259,6 +408,26 @@ mod tests {
         assert!(DollChoice::from_args(args("--folk elf")).is_err());
         assert!(DollChoice::from_args(args("--outfit wizard")).is_err());
         assert!(DollChoice::from_args(args("--seed")).is_err());
+    }
+
+    #[test]
+    fn the_walk_comes_from_the_command_line() {
+        assert_eq!(DollMotion::from_args(args("--doll --folk dwarf")).unwrap(), DollMotion { walking: false, speed: 1.0 });
+        assert_eq!(DollMotion::from_args(args("--doll --walk --speed 0.5")).unwrap(), DollMotion { walking: true, speed: 0.5 });
+        assert_eq!(DollMotion::from_args(args("--walk --speed=9")).unwrap().speed, 1.6);
+        assert!(DollMotion::from_args(args("--speed fast")).is_err());
+        // The choice leaves the walk's flags alone.
+        assert!(DollChoice::from_args(args("--doll --walk --speed 0.5 --seed 7")).is_ok());
+    }
+
+    #[test]
+    fn the_panel_sets_the_walk() {
+        let mut motion = DollMotion::default();
+        motion.flip("gait.walking");
+        motion.set_slider("gait.speed", 0.77);
+        assert_eq!(motion, DollMotion { walking: true, speed: 0.75 });
+        assert_eq!(Tweak::slider(&motion, "gait.speed"), Some(0.75));
+        assert_eq!(motion.fields().len(), 2);
     }
 
     #[test]

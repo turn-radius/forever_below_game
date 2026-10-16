@@ -11,8 +11,9 @@
 //! - Each item is drawn with its own look (palette, condition, etching) by the
 //!   [`ItemSpawner`], in the house style: toon bands, ink and decay. Skin carries the person's
 //!   dirt. A lit torch or lantern in hand lights the room round them.
-//! - Standing, they breathe and now and then shift their weight ([`Idle`]): the whole figure
-//!   moves a little about its feet, since there is no skeleton. A player within
+//! - They are skinned figures (`crate::folk_pose`): a skeleton, the body and gear bound to it.
+//!   Standing, they breathe and now and then shift their weight ([`Idle`]); walking, they stride
+//!   at the pace [`Stride`] says, which the routine that moves them sets. A player within
 //!   [`LOOK_RANGE`] draws their head round ([`look_at`]), turning about the neck; under a hood,
 //!   whose cape lies on the shoulders, the body turns a little instead.
 //! - Each stands in a circle on the floor that the player cannot walk into
@@ -26,14 +27,15 @@
 
 use std::sync::Arc;
 
-use bevy::{app::Propagate, light::NotShadowCaster, platform::collections::HashMap, prelude::*, tasks::ComputeTaskPool, ui::ComputedUiRenderTargetInfo};
-use fb_body::BodySpec;
+use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, platform::collections::HashMap, prelude::*, tasks::ComputeTaskPool, ui::ComputedUiRenderTargetInfo};
+use fb_body::{BodySpec, Joint};
 use fb_items::{Item, Rarity, Slot, roll_item};
 use fb_level::{FolkSpot, Level};
 use procgen_rng::Mulberry32;
 
 use crate::carry::{AimBuffer, Aimed, REACH, ViewModelCamera, given_light, nearest_aimed};
 use crate::figure::Figure;
+use crate::folk_pose::{FolkAnim, spawn_rigged};
 use crate::inventory::card::{CARD_WIDTH, place_under};
 use crate::level::EXPOSURE;
 use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, PlayerCamera, ScreenOpen};
@@ -44,7 +46,8 @@ pub struct FolkPlugin;
 
 impl Plugin for FolkPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<FolkFigures>()
+        app.add_plugins(crate::folk_pose::FolkPosePlugin)
+            .init_resource::<FolkFigures>()
             .init_resource::<AimedFolk>()
             .init_resource::<UiFonts>()
             .add_systems(
@@ -153,7 +156,7 @@ impl FolkFigures {
 
 /// A person standing in the level: the root of their figure, on the floor at their spot.
 #[derive(Component, Clone, Debug)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::simulate::Simulated)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::simulate::Simulated, Stride)]
 pub struct Denizen {
     pub person: Person,
     /// The circle on the floor they stand in ([`footprint`]).
@@ -163,7 +166,15 @@ pub struct Denizen {
     pub max: Vec3,
 }
 
-/// The figure under its [`Denizen`] root, moving as someone standing does ([`Idle`]).
+/// How fast a folk is walking, world units a second (10 cm each), 0 standing: set on the
+/// [`Denizen`] root by whatever moves it, and followed by its gait ([`crate::folk_pose`]), which
+/// strides by the distance covered.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Stride {
+    pub speed: f32,
+}
+
+/// The figure under its [`Denizen`] root, which the skeleton and meshes hang from.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Stance {
     pub idle: Idle,
@@ -172,65 +183,20 @@ pub struct Stance {
     pub turn: f32,
 }
 
-/// The part of a figure that turns with the head, pivoting at the neck: where it looks now as
-/// `(yaw, pitch)` radians, the yaw turning the face (+Z) toward +X, the pitch up.
+/// The head joint of a figure, which turns about the neck: where it looks now as `(yaw, pitch)`
+/// radians, the yaw turning the face (+Z) toward +X, the pitch up. The pose
+/// ([`crate::folk_pose::pose_folk`]) puts the turn on the joint.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct FolkHead {
     pub look: Vec2,
+    /// Where the head turns in the figure's space (the base of the neck), if the entity is not
+    /// itself placed there.
+    pub pivot: Option<Vec3>,
 }
 
-/// Breaths per second at rest: 15 a minute, inside the 12 to 18 the Cleveland Clinic gives for
-/// a resting adult (<https://my.clevelandclinic.org/health/articles/10881-vital-signs>), each
-/// person a little faster or slower.
-const BREATHS_PER_SECOND: f32 = 0.25;
-/// How far a breath lifts and fills the figure, as a share of its height and girth. Our own
-/// tuning: enough to see close up, never enough to read as bobbing.
-const BREATH_LIFT: f32 = 0.006;
-const BREATH_FILL: f32 = 0.004;
-/// Weight shifts from foot to foot: about one every ten seconds, leaning up to this many
-/// radians over the standing foot and moving the hips this far across. Our own tuning.
-const SHIFTS_PER_SECOND: f32 = 0.05;
-const SHIFT_LEAN: f32 = 0.012;
-const SHIFT_SWAY: f32 = 0.18;
-
-/// How someone stands still: breathing, and now and then shifting their weight. Each person's
-/// rates and phases are their own, from their seed, so a group never moves in step.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Idle {
-    pub breath_rate: f32,
-    pub breath_phase: f32,
-    pub shift_rate: f32,
-    pub shift_phase: f32,
-}
-
-/// Salt for a person's idle stream. Our own.
-const IDLE_SALT: u32 = 0x1D1E_0B0D;
-
-impl Idle {
-    pub fn of(seed: u32) -> Idle {
-        let mut rng = Mulberry32::new(seed ^ IDLE_SALT);
-        Idle {
-            breath_rate: BREATHS_PER_SECOND * rng.range_f32(0.85, 1.15),
-            breath_phase: rng.range_f32(0.0, std::f32::consts::TAU),
-            shift_rate: SHIFTS_PER_SECOND * rng.range_f32(0.7, 1.3),
-            shift_phase: rng.range_f32(0.0, std::f32::consts::TAU),
-        }
-    }
-
-    /// The figure's transform at `t` seconds, about its feet: a breath lifts and fills it, and
-    /// a weight shift leans it over one foot and moves it across. The shift dwells on each foot
-    /// (a sine through a soft clamp) rather than swaying evenly.
-    pub fn at(&self, t: f32) -> Transform {
-        let tau = std::f32::consts::TAU;
-        let breath = (tau * self.breath_rate * t + self.breath_phase).sin() * 0.5 + 0.5;
-        let shift = ((tau * self.shift_rate * t + self.shift_phase).sin() * 2.0).clamp(-1.0, 1.0);
-        Transform {
-            translation: Vec3::new(shift * SHIFT_SWAY, 0.0, 0.0),
-            rotation: Quat::from_rotation_z(-shift * SHIFT_LEAN),
-            scale: Vec3::new(1.0 + breath * BREATH_FILL, 1.0 + breath * BREATH_LIFT, 1.0 + breath * BREATH_FILL),
-        }
-    }
-}
+/// How someone stands still: breathing, and now and then shifting their weight, each person's
+/// rates and phases their own, from their seed ([`fb_body::IdleCycle`]).
+pub use fb_body::IdleCycle as Idle;
 
 /// How near the player must come before folk turn to look, in world units (4 m).
 pub const LOOK_RANGE: f32 = 40.0;
@@ -283,6 +249,7 @@ pub(crate) fn spawn_folk(
     level: Res<CurrentLevel>,
     mut figures: ResMut<FolkFigures>,
     old: Query<Entity, With<Denizen>>,
+    mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     mut spawner: ItemSpawner,
     mut shown: Local<Option<Vec<FolkSpot>>>,
 ) {
@@ -295,14 +262,21 @@ pub(crate) fn spawn_folk(
     }
     for built in figures.for_spots(&level.0.folk) {
         let (person, figure) = &*built;
-        spawn_denizen(&mut commands, &mut spawner, person, figure);
+        spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
     }
     *shown = Some(level.0.folk.clone());
 }
 
-/// Spawns one person: a root at the spot, a [`Stance`] under it carrying the figure's pieces,
-/// and the pieces that turn with the head under a pivot at the neck.
-pub fn spawn_denizen(commands: &mut Commands, spawner: &mut ItemSpawner, person: &Person, figure: &Figure) -> Entity {
+/// Spawns one person: a root at the spot, a [`Stance`] under it carrying the skeleton and the
+/// figure's skinned meshes ([`crate::folk_pose::spawn_rigged`]), and what they hold on their
+/// hands' joints.
+pub fn spawn_denizen(
+    commands: &mut Commands,
+    spawner: &mut ItemSpawner,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    person: &Person,
+    figure: &Figure,
+) -> Entity {
     let (min, max) = figure.bounds().unwrap_or((Vec3::ZERO, Vec3::ZERO));
     let root = commands
         .spawn((
@@ -314,37 +288,26 @@ pub fn spawn_denizen(commands: &mut Commands, spawner: &mut ItemSpawner, person:
         ))
         .id();
     let stance = commands.spawn((Stance { idle: Idle::of(person.spot.seed), turn: 0.0 }, Transform::default(), Visibility::default(), ChildOf(root))).id();
-    let head = figure
-        .pieces
-        .iter()
-        .any(|p| p.on_head)
-        .then(|| commands.spawn((FolkHead::default(), Transform::from_translation(figure.neck), Visibility::default(), ChildOf(stance))).id());
-    for piece in figure.pieces.iter().filter(|p| !p.mesh.parts.is_empty()) {
-        let mut entity = spawner.spawn(&piece.mesh, &piece.appearance);
-        entity.insert(Name::new(piece.name.clone()));
-        match head.filter(|_| piece.on_head) {
-            Some(head) => entity.insert((Transform::from_translation(-figure.neck), ChildOf(head))),
-            None => entity.insert(ChildOf(stance)),
-        };
-        if piece.lit {
-            entity.insert(Propagate(NotShadowCaster));
-        }
-    }
+    let turns = !figure.hooded && figure.pieces.iter().any(|p| p.on_head);
+    let anim = spawn_rigged(spawner, bindposes, figure, stance, turns, person.spot.seed);
     if let Some(light) = &figure.light {
         // A little above the flame, so the hand and the stone under it do not burn white.
         // Lit as tuned once it is spawned (`carry::relight_given_lights`).
-        commands.spawn((given_light(light.anchor, EXPOSURE, &crate::tuning::LightTuning::default()), Transform::from_translation(light.at + Vec3::Y * HELD_LIGHT_LIFT), ChildOf(stance)));
+        let at = anim.in_joint(light.joint, light.at + Vec3::Y * HELD_LIGHT_LIFT);
+        spawner.commands().spawn((given_light(light.anchor, EXPOSURE, &crate::tuning::LightTuning::default()), Transform::from_translation(at), ChildOf(anim.joint(light.joint))));
     }
+    commands.entity(stance).insert(anim);
     root
 }
 
-/// Breathes and shifts every figure's weight ([`Idle::at`]), turned toward the player as far
-/// as [`Stance::turn`] says.
-pub(crate) fn idle_folk(time: Res<Time>, mut stances: Query<(&Stance, &mut Transform)>) {
-    let t = time.elapsed_secs();
+/// Turns each figure about its feet toward the player as far as [`Stance::turn`] says (under a
+/// hood: the whole body turns). Their breathing and walking are the pose's ([`crate::folk_pose`]).
+pub(crate) fn idle_folk(mut stances: Query<(&Stance, &mut Transform)>) {
     for (stance, mut transform) in &mut stances {
-        let idle = stance.idle.at(t);
-        *transform = Transform { rotation: Quat::from_rotation_y(stance.turn) * idle.rotation, ..idle };
+        let turned = Quat::from_rotation_y(stance.turn);
+        if transform.rotation != turned {
+            *transform = Transform::from_rotation(turned);
+        }
     }
 }
 
@@ -354,7 +317,7 @@ fn turn_heads(
     time: Res<Time>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
     folk: Query<(&GlobalTransform, &Children), With<Denizen>>,
-    mut stances: Query<(&mut Stance, &Children)>,
+    mut stances: Query<(&mut Stance, &Children, Option<&FolkAnim>)>,
     mut heads: Query<(&mut FolkHead, &mut Transform)>,
 ) {
     let eye = eyes.iter().next().map(GlobalTransform::translation);
@@ -363,13 +326,20 @@ fn turn_heads(
         let from_world = root.affine().inverse();
         let eye = eye.map(|eye| from_world.transform_point3(eye));
         for &child in children {
-            let Ok((mut stance, parts)) = stances.get_mut(child) else { continue };
-            match parts.iter().find(|&e| heads.contains(e)) {
+            let Ok((mut stance, parts, anim)) = stances.get_mut(child) else { continue };
+            // A skinned figure's head is its head joint, deep in the skeleton; a stand-in's is
+            // a child of the stance.
+            let found = anim.and_then(|a| heads.contains(a.joint(Joint::Head)).then(|| a.joint(Joint::Head))).or_else(|| parts.iter().find(|&e| heads.contains(e)));
+            match found {
                 Some(head) => {
                     let Ok((mut head, mut transform)) = heads.get_mut(head) else { continue };
-                    let target = eye.and_then(|eye| look_at(transform.translation, eye)).unwrap_or(Vec2::ZERO);
+                    let pivot = head.pivot.unwrap_or(transform.translation);
+                    let target = eye.and_then(|eye| look_at(pivot, eye)).unwrap_or(Vec2::ZERO);
                     head.look.smooth_nudge(&target, HEAD_TURN_RATE, dt);
-                    transform.rotation = head_rotation(head.look);
+                    // A skeleton's pose puts the turn on its head joint.
+                    if anim.is_none() {
+                        transform.rotation = head_rotation(head.look);
+                    }
                 }
                 None => {
                     let target = eye.and_then(|eye| look_at(Vec3::ZERO, eye)).map_or(0.0, |look| (look.x * BODY_TURN_SHARE).clamp(-BODY_TURN_MAX, BODY_TURN_MAX));
@@ -585,22 +555,35 @@ mod tests {
 
     #[test]
     fn idle_motion_is_subtle_and_each_persons_own() {
-        let idles: Vec<Idle> = folk_1207().iter().map(|s| Idle::of(s.seed)).collect();
-        for (i, idle) in idles.iter().enumerate() {
-            let frames: Vec<Transform> = (0..600).map(|k| idle.at(k as f32 * 0.1)).collect();
+        let people: Vec<(Idle, fb_body::Gait)> = folk_1207()
+            .iter()
+            .map(|s| {
+                let person = Person::of(s);
+                let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+                (Idle::of(s.seed), figure.gait)
+            })
+            .collect();
+        for (i, (idle, gait)) in people.iter().enumerate() {
+            let poses: Vec<fb_body::RigPose> = (0..600).map(|k| gait.idle(idle, k as f32 * 0.1)).collect();
             // It moves...
-            let lift = frames.iter().map(|t| t.scale.y).fold(f32::MIN, f32::max) - frames.iter().map(|t| t.scale.y).fold(f32::MAX, f32::min);
-            let sway = frames.iter().map(|t| t.translation.x).fold(f32::MIN, f32::max) - frames.iter().map(|t| t.translation.x).fold(f32::MAX, f32::min);
-            assert!(lift > 0.003 && sway > 0.1, "{i}: lift {lift} sway {sway}");
-            // ...but only a little: under 2 cm across and a degree of lean, the feet staying put.
-            for t in &frames {
-                assert!(t.translation.length() <= 0.2 && t.translation.y == 0.0, "{t:?}");
-                assert!(t.rotation.angle_between(Quat::IDENTITY) < 1f32.to_radians());
-                assert!((t.scale - Vec3::ONE).abs().max_element() < 0.01);
+            let pelvis = |p: &fb_body::RigPose| p.offset[Joint::Pelvis.index()];
+            let sway = poses.iter().map(|p| pelvis(p)[0]).fold(f32::MIN, f32::max) - poses.iter().map(|p| pelvis(p)[0]).fold(f32::MAX, f32::min);
+            let lift = poses.iter().map(|p| p.offset[Joint::Chest.index()][1]).fold(f32::MIN, f32::max);
+            assert!(lift > 0.03 && sway > 0.1, "{i}: lift {lift} sway {sway}");
+            // ...but only a little: the hips shift under 2 cm either way and drop under 1.5 cm,
+            // no joint turns more than 23 degrees (the relaxed knee, the most), and the body
+            // does not walk off.
+            for pose in &poses {
+                let at = pelvis(pose);
+                assert!(at[0].abs() <= 0.2 && at[1].abs() <= 0.15 && at[2] == 0.0, "{at:?}");
+                for (joint, q) in Joint::ALL.iter().zip(pose.rotation) {
+                    let angle = 2.0 * q.0[3].abs().min(1.0).acos();
+                    assert!(angle < 0.4, "{joint:?} turns {angle} radians");
+                }
             }
-            for other in &idles[i + 1..] {
+            for (other, _) in &people[i + 1..] {
                 assert_ne!(idle, other);
-                assert!((1..50).any(|k| idle.at(k as f32 * 0.37) != other.at(k as f32 * 0.37)), "two folk move in step");
+                assert!((1..50).any(|k| idle.shift(k as f32 * 0.37) != other.shift(k as f32 * 0.37)), "two folk move in step");
             }
         }
     }

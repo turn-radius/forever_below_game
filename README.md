@@ -70,6 +70,7 @@ One folk's body, dressed in a rolled outfit and holding what it carries, turning
 
 - `--folk <name>`: human, dwarf, gnome, goblin, lizard (or lizardfolk), pig (or pigfolk). Human by default.
 - `--seed <n>` rolls the body and the outfit's items; 1207 by default.
+- `--walk` starts the doll walking in place, `--speed <n>` sets its pace as a multiple of its folk's natural one (0 to 1.6, 1 by default). W toggles the walk in the view, and the panel at the top right has the same toggle and a speed slider.
 - `--outfit <key>`: fighter (the default), ranger, mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
 
 Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
@@ -169,6 +170,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot (or `<base>@<slot>` in another it fits: `Lantern@hip`, `Sword@offhand`), after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |
 | `FB_STOW=<base>[,<base>...]` | puts one item of each named base in the carried grids, after `FB_EQUIP` (`Mail coif,Hood,Helm,Tunic`) |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
+| `FB_FOLK_WALK=<n>` | every folk in the level walks in place at `n` times its natural pace (`FB_FOLK_WALK=1`), to see the gait and measure its cost before anything moves them |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
@@ -205,6 +207,13 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[creatures]` | `snake_cooldown` | 2.5 | Seconds between a snake's strikes. |
 | `[creatures]` | `rat_chase_speed` | 2.0 | How fast a rat comes at you once it has seen you, as a multiple of its speed. |
 | `[creatures]` | `snake_chase_speed` | 1.0 | How fast a snake comes at you once it has seen you, as a multiple of its speed. |
+| `[folk]` | `walk_speed` | 11.0 | A human's unhurried walking pace, world units per second (shorter folk are slower). |
+| `[folk]` | `pause_min` | 3.0 | The least seconds folk wait between walks. |
+| `[folk]` | `pause_max` | 8.0 | The most seconds folk wait between walks. |
+| `[folk]` | `wander_radius` | 90.0 | How far from its spot a person strolls, world units. |
+| `[folk]` | `notice_distance` | 28.0 | How near the player must come, in sight, for a person to stop and face them, world units. |
+| `[folk]` | `release_distance` | 40.0 | How far the player must go before a person who faced them carries on, world units. |
+| `[folk]` | `release_delay` | 1.0 | Seconds the player must stay away before a person carries on. |
 | `[creatures.size]` | `rat` | 1.0 | How large each kind of creature is drawn, and the floor it covers (1 = as rolled). |
 | `[creatures.size]` | `giant_rat` | 1.0 | Giant rats, as a multiple. |
 | `[creatures.size]` | `viper` | 1.0 | Poisonous snakes, as a multiple. |
