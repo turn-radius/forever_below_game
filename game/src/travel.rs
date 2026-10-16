@@ -47,6 +47,7 @@ use crate::combat::vitals::Fallen;
 use crate::inventory::OpenContainer;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Player, PlayerCamera, ScreenOpen, level_has_focus, show_screen};
 use crate::player::Locomotion;
+use crate::inventory::underfoot::apply_floor_changes;
 use crate::record::{WorldRecord, record_level_left};
 use crate::ui::{BG, INK, UiFonts};
 
@@ -189,7 +190,7 @@ impl Plugin for TravelPlugin {
             .add_systems(OnExit(AppState::Delving), end_the_run)
             .init_resource::<WorldRecord>()
             .configure_sets(Update, LeavingLevel.run_if(journey_is_leaving).before(step_journey).in_set(DelveSystems))
-            .add_systems(Update, record_level_left.in_set(LeavingLevel))
+            .add_systems(Update, record_level_left.after(apply_floor_changes).in_set(LeavingLevel))
             .add_systems(Update, (take_stair.run_if(level_has_focus), begin_journey, step_journey, fade_depth_title).chain().in_set(DelveSystems));
     }
 }

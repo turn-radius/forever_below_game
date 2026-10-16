@@ -21,6 +21,7 @@ pub mod provision;
 pub mod rarity;
 pub mod stats;
 pub mod tables;
+pub mod undead;
 
 pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, roll_item, roll_loot};

@@ -253,7 +253,7 @@ fn land_blows(
             let combat = &tuning.combat;
             if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &targets) {
                 let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
-                struck.write(Struck { target, damage, from });
+                struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning });
             }
         }
         if swing.t >= SWING_TIME {

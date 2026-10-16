@@ -1,7 +1,9 @@
 //! Forever Below. It opens on the title screen; `--turntable` (or `--family`) opens the Armory
 //! turntable instead, and `--doll` the doll view (a dressed body turning on the turntable's
 //! plate: `--doll --folk dwarf --seed 7 --outfit cleric`), and `--creature` the creature view
-//! (a rat or snake on the plate: `--creature --species viper --seed 7 --motion moving`).
+//! (a rat, snake or skeleton on the plate: `--creature --species viper --seed 7 --motion
+//! moving`), and `--skeleton` the same view opened on a skeleton (`--skeleton --seed 7 --motion
+//! swing`).
 //! `--forge` the Forge view (an item beside a panel of sliders for every parameter of its
 //! state: `--forge --family lantern --seed 7`), and `--level` the level view (a whole level
 //! from above beside a panel of the generator's parameters: `--level --seed 7`), and `--lab`
@@ -55,7 +57,7 @@ fn main() -> AppExit {
     if args.iter().any(|a| a == "--doll") {
         return run_doll(&args);
     }
-    if args.iter().any(|a| a == "--creature") {
+    if args.iter().any(|a| a == "--creature" || a == "--skeleton") {
         return run_creature(&args);
     }
     let swings = args.iter().any(|a| a == "--swings");

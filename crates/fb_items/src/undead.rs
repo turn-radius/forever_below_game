@@ -1,0 +1,146 @@
+//! What the risen dead wear and carry: [`skeleton_outfit`] rolls a skeleton's gear from its
+//! seed. Our own; the plate has no undead, so this is the shape of
+//! [`crate::outfit::Outfit::roll`] with a table of its own.
+//!
+//! A skeleton is kitted (helm, body armour, gloves, boots, a weapon and usually a shield),
+//! part dressed (each piece by chance) or bare-boned (a weapon, or nothing at all). Every
+//! piece is rolled through [`roll_item`], so it has a rarity, affixes and a history like loot,
+//! and then it is worn hard: the dead have lain in it for ages, so its wear is high, iron
+//! rusts, cloth and leather rot, and weapons are nicked.
+
+use procgen_rng::Mulberry32;
+
+use crate::dress::condition_mut;
+use crate::outfit::OutfitSet;
+use crate::{Item, Slot, Tag, roll_item};
+
+/// Mixed into a skeleton's seed so its gear does not repeat the numbers its bones roll from.
+const OUTFIT_SALT: u32 = 0x0d3a_dc10;
+
+/// Weapons for the kitted dead, and for the rest (which add the spear, the bow and the club).
+const KITTED_WEAPONS: &[&str] = &["Sword", "Sword", "Sword", "Hand axe", "Mace"];
+const WEAPONS: &[&str] = &["Sword", "Sword", "Hand axe", "Mace", "Spear", "Spear", "Spear", "Bow", "Club"];
+const KITTED_BODY: &[&str] = &["Mail", "Brigandine", "Scale coat", "Cuirass"];
+const BODY: &[&str] = &["Gambeson", "Mail", "Brigandine", "Scale coat", "Cuirass", "Leather jerkin"];
+const HANDS: &[&str] = &["Gloves", "Gauntlets", "Gauntlets"];
+
+/// Rolls the gear for a skeleton from `seed`. A pure function of the seed; slots left empty
+/// are not in [`OutfitSet::worn`].
+pub fn skeleton_outfit(seed: u32) -> OutfitSet {
+    let mut rng = Mulberry32::new(seed ^ OUTFIT_SALT);
+    // Kitted 2 in 10, part dressed 4 in 10, bare-boned 4 in 10.
+    let kit = rng.int(0, 9);
+    let (kitted, bare) = (kit < 2, kit >= 6);
+    // How likely each piece is: kitted, part dressed, bare-boned.
+    let chance = |kitted_p: f64, mixed_p: f64, bare_p: f64| if kitted { kitted_p } else if bare { bare_p } else { mixed_p };
+
+    let weapon = if rng.chance(chance(1.0, 0.9, 0.6)) { Some(*rng.pick(if kitted { KITTED_WEAPONS } else { WEAPONS })) } else { None };
+    // A shield needs a hand free: not with a bow.
+    let shield = weapon.is_some_and(|w| w != "Bow") && rng.chance(chance(0.9, 0.4, 0.1));
+    let helm = rng.chance(chance(1.0, 0.45, 0.08));
+    let body = rng.chance(chance(1.0, 0.5, 0.08));
+    let gloves = rng.chance(chance(1.0, 0.3, 0.04));
+    let boots = rng.chance(chance(1.0, 0.35, 0.05));
+    let rags = !body && rng.chance(chance(0.0, 0.3, 0.15));
+    let body_base = *rng.pick(if kitted { KITTED_BODY } else { BODY });
+    let hands_base = *rng.pick(HANDS);
+
+    let mut bases: Vec<&str> = Vec::new();
+    for (wanted, base) in [(boots, "Boots"), (rags, "Tunic"), (body, body_base), (gloves, hands_base), (helm, "Helm")] {
+        if wanted {
+            bases.push(base);
+        }
+    }
+    bases.extend(weapon);
+    if shield {
+        bases.push("Shield");
+    }
+    let mut worn: Vec<(Slot, Item)> = Vec::new();
+    for base in bases {
+        let item_seed = (rng.next_f64() * 4_294_967_296.0) as u32;
+        if let Some(mut item) = roll_item(base, item_seed)
+            && let Some(slot) = item.profile.slot
+        {
+            wear_hard(&mut item, &mut rng);
+            worn.push((slot, item));
+        }
+    }
+    OutfitSet { worn, goods: Vec::new(), ground: Vec::new() }
+}
+
+/// Wears `item` as a thing the dead have lain in: heavy wear, rust on iron, rot and fray on
+/// the rest, and nicks and chips. Never lessens what the item already shows.
+fn wear_hard(item: &mut Item, rng: &mut Mulberry32) {
+    let metal = item.profile.tags.contains(&Tag::Metal);
+    let weapon = item.profile.tags.contains(&Tag::Weapon);
+    let c = condition_mut(&mut item.shape);
+    c.wear = c.wear.max(rng.range_f32(0.55, 0.95));
+    if metal {
+        c.rust = c.rust.max(rng.range_f32(1.0, 1.5));
+    } else {
+        c.fray = c.fray.max(rng.range_f32(1.0, 1.5));
+        c.rot = c.rot.max(rng.range_f32(1.0, 1.5));
+    }
+    c.damage = c.damage.max(rng.range_f32(0.15, if weapon { 0.7 } else { 0.5 }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::armory_base::ARMORY_BASES;
+
+    #[test]
+    fn the_same_seed_rolls_the_same_gear() {
+        for seed in 0..60 {
+            assert_eq!(skeleton_outfit(seed), skeleton_outfit(seed), "{seed}");
+        }
+    }
+
+    #[test]
+    fn every_base_it_names_exists() {
+        let known = |base: &&str| ARMORY_BASES.iter().any(|(name, _)| name == base);
+        for base in KITTED_WEAPONS.iter().chain(WEAPONS).chain(KITTED_BODY).chain(BODY).chain(HANDS).chain(&["Boots", "Helm", "Shield", "Tunic"]) {
+            assert!(known(base) && roll_item(base, 1).is_some(), "{base}");
+        }
+    }
+
+    #[test]
+    fn gear_goes_in_the_slot_it_is_made_for_once() {
+        for seed in 0..200 {
+            let set = skeleton_outfit(seed);
+            for (slot, item) in &set.worn {
+                assert!(item.fits(*slot), "{seed}: {} in {slot:?}", item.base);
+                assert_eq!(set.worn.iter().filter(|(s, _)| s == slot).count(), 1, "{seed}: two in {slot:?}");
+            }
+            if let Some(w) = set.item(Slot::Mainhand) {
+                assert!(w.profile.stats.is_weapon(), "{seed}: {}", w.base);
+            }
+            if let Some(s) = set.item(Slot::Offhand) {
+                assert_eq!(s.base, "Shield");
+                assert!(set.item(Slot::Mainhand).is_some_and(|w| w.base != "Bow"), "{seed}: shield with a bow");
+            }
+        }
+    }
+
+    #[test]
+    fn some_are_kitted_some_armed_only_and_some_bare() {
+        let sets: Vec<OutfitSet> = (0..200).map(skeleton_outfit).collect();
+        let has = |set: &OutfitSet, slots: &[Slot]| slots.iter().all(|s| set.item(*s).is_some());
+        let full = [Slot::Head, Slot::Body, Slot::Hands, Slot::Mainhand, Slot::Offhand];
+        assert!(sets.iter().filter(|s| has(s, &full)).count() >= 8);
+        assert!(sets.iter().any(|s| s.worn.is_empty()));
+        assert!(sets.iter().any(|s| s.worn.len() == 1 && s.item(Slot::Mainhand).is_some_and(|w| w.base == "Spear")));
+        assert!(sets.iter().any(|s| has(s, &full) && s.item(Slot::Mainhand).is_some_and(|w| w.base == "Sword")));
+    }
+
+    #[test]
+    fn it_is_worn_hard() {
+        for seed in 0..100 {
+            for (_, item) in &skeleton_outfit(seed).worn {
+                let c = item.shape.condition();
+                assert!(c.wear >= 0.55, "{seed}: {} wear {}", item.base, c.wear);
+                assert!(c.damage >= 0.15, "{seed}: {} damage {}", item.base, c.damage);
+            }
+        }
+    }
+}
