@@ -1262,9 +1262,9 @@ fn upright_held_flames(
         if up.0 != world_up {
             up.0 = world_up;
         }
-        // A flame leans away from the delver and out toward its hand's screen edge: forward
-        // along the horizontal of where the eye looks, blended with that side. Looking
-        // straight up or down leaves it where it was.
+        // A flame trails back toward the delver and out toward its hand's screen edge: against
+        // the horizontal of where the eye looks, blended with that side. Looking straight up
+        // or down leaves it where it was.
         let look = eye.forward().as_vec3();
         let ahead = Vec3::new(look.x, 0.0, look.z);
         let side = eye.right().as_vec3();
