@@ -18,7 +18,7 @@ use crate::tuning::Tuning;
 use crate::ui::OK;
 use crate::inventory::{Hovered, Inventory, ItemId, Toast};
 use crate::keymap::{Action, ActionInput};
-use crate::play::{DelveSystems, Player, Screen, ScreenOpen};
+use crate::play::{DelveSystems, Player, inventory_open};
 
 pub struct EatPlugin;
 
@@ -85,10 +85,6 @@ fn fade_heal_glow(time: Res<Time<Real>>, mut glow: ResMut<HealGlow>, mut flashes
     for mut colour in &mut flashes {
         colour.0 = OK.with_alpha(alpha);
     }
-}
-
-fn inventory_open(open: Option<Res<ScreenOpen>>) -> bool {
-    open.is_some_and(|o| o.is(Screen::Inventory))
 }
 
 /// What was eaten or drunk.
@@ -174,6 +170,7 @@ mod tests {
     use crate::tuning::Tuning;
     use bevy::input::ButtonInput;
     use bevy::state::app::StatesPlugin;
+    use crate::play::{Screen, ScreenOpen};
 
     fn item(base: &str) -> fb_items::Item {
         fb_items::roll_item(base, 5).unwrap()
