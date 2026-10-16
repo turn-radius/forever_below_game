@@ -88,14 +88,29 @@ impl LongBone {
     }
 }
 
+/// A bone whose knobs are all under this radius is drawn coarser, and which points of its
+/// profile it keeps.
+const SMALL_BONE: f32 = 0.1;
+const SMALL_PROFILE: [usize; 7] = [0, 3, 5, 7, 9, 11, 14];
+
 /// A long bone from `a` to `b`: a shaft that narrows toward its middle between two knobs, with
 /// a condyle either side of each end when `lobes` asks for them.
 pub fn long_bone(a: V3, b: V3, bone: &LongBone) -> MeshBuilder {
     let axis = vec3::sub(b, a);
     let length = vec3::length(axis).max(1e-4);
     let dir = vec3::scale(axis, 1.0 / length);
-    let profile: Vec<[f32; 2]> = bone.profile().iter().map(|&[r, t]| [r, t * length]).collect();
-    let mut mesh = lathe_bone(&profile, 12);
+    // A finger or a toe is too small to show the full profile or a round section: it takes a
+    // coarser lathe, a few hundred hands and feet's worth of vertices fewer in a hall of
+    // skeletons.
+    let small = bone.ends[0].max(bone.ends[1]) < SMALL_BONE;
+    let profile: Vec<[f32; 2]> = bone
+        .profile()
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| !small || SMALL_PROFILE.contains(&i))
+        .map(|(_, &[r, t])| [r, t * length])
+        .collect();
+    let mut mesh = lathe_bone(&profile, if small { 7 } else { 12 });
     for (end, (&lobe, &knob)) in bone.lobes.iter().zip(&bone.ends).enumerate() {
         if lobe <= 0.0 {
             continue;

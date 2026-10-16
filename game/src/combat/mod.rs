@@ -721,18 +721,17 @@ mod tests {
             app.update();
         }
         assert_eq!(on_the_floor(&mut app).len(), n);
-        // Its marker lost with a body long fallen: still no more.
-        app.world_mut().entity_mut(skeleton).remove::<crate::creatures::skeletons::Looted>();
+        // Left lying, it sheds nothing more however long it lies.
         for _ in 0..120 {
             app.update();
         }
         assert_eq!(on_the_floor(&mut app).len(), n, "an old body never drops its gear again");
-        // A dead skeleton put back as it was (what leaving a level and returning does) has
-        // dropped what it had and does not drop it a second time.
+        // A dead skeleton put back as the record has it (what leaving a level and returning
+        // does) is a body marked looted, and does not drop its kit a second time.
         let (mut app, _, restored) = skeleton_fight(seed, None);
         app.update();
         let fell = *app.world().get::<Transform>(restored).unwrap();
-        app.world_mut().entity_mut(restored).insert(Corpse { since: 30.0, fell });
+        app.world_mut().entity_mut(restored).insert((Corpse { since: 30.0, fell }, crate::creatures::skeletons::Looted));
         for _ in 0..120 {
             app.update();
         }

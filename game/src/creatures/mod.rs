@@ -281,19 +281,26 @@ fn spawn_creatures(
     debug!("spawning creatures: {:?}", level.0.creatures.iter().map(|c| c.species).collect::<Vec<_>>());
     // On a level that was left, each creature is as it was left (`crate::record`).
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
-    for (index, spot) in level.0.creatures.iter().enumerate() {
-        let root = spawn_creature(&mut commands, &mut spawner, &level.0, spot);
-        if let Some(left) = saved.and_then(|l| l.creatures.get(&index)) {
+    // A skeleton takes some hundred milliseconds to roll and fit, so the level's are built side by
+    // side before any is spawned.
+    let built = build_creatures(&level.0.creatures);
+    for (index, (spot, built)) in level.0.creatures.iter().zip(built).enumerate() {
+        let left = saved.and_then(|l| l.creatures.get(&index));
+        // A body from the record lies bare: what it wore was set down where it fell, and is on
+        // the floor (or gone) as the record has it.
+        let root = spawn_built(&mut commands, &mut spawner, &level.0, spot, built, left.is_some_and(|l| l.dead));
+        if let Some(left) = left {
             let at = left.transform();
             commands.entity(root).insert((Health { hp: left.hp, max: left.max }, at));
             if left.dead {
                 // Long fallen: lying as it lies once it has collapsed.
-                commands.entity(root).insert(Corpse { since: LONG_FALLEN, fell: at });
+                commands.entity(root).insert((Corpse { since: LONG_FALLEN, fell: at }, skeletons::Looted));
             }
         }
     }
-    for spot in dev_spots(&level.0) {
-        spawn_creature(&mut commands, &mut spawner, &level.0, &spot);
+    let dev = dev_spots(&level.0);
+    for (spot, built) in dev.iter().zip(build_creatures(&dev)) {
+        spawn_built(&mut commands, &mut spawner, &level.0, spot, built, false);
     }
     *shown = Some(level.0.creatures.clone());
 }
@@ -344,16 +351,52 @@ const LONG_FALLEN: f32 = 60.0;
 /// Spawns one creature: a root at its spot and a tree of bones carrying its parts. A skeleton
 /// is drawn in the gear its seed rolls, each piece on the bone it rides ([`WornGear`]).
 pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot) -> Entity {
+    spawn_creature_as(commands, spawner, level, spot, false)
+}
+
+/// [`spawn_creature`], a skeleton `fallen` drawn as bare bones: its gear is not put on it.
+pub fn spawn_creature_as(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot, fallen: bool) -> Entity {
+    spawn_built(commands, spawner, level, spot, build_creature(spot), fallen)
+}
+
+/// A creature worked out from its spot, ready to spawn: pure data, Bevy-free.
+pub struct Built {
+    pub creature: Creature,
+    /// A skeleton's fitted gear and the kit worked out from it.
+    pub gear: Option<fb_creatures::SkeletonGear>,
+    pub kit: Option<SkeletonKit>,
+}
+
+/// Rolls the creature at `spot`, and fits a skeleton's gear and measures its kit: the slow part
+/// of spawning one.
+pub fn build_creature(spot: &CreatureSpot) -> Built {
     let creature = spot.creature();
     let gear = match &creature {
         Creature::Skeleton(skeleton) => Some(fb_creatures::SkeletonGear::roll(skeleton)),
         _ => None,
     };
-    let rig = gear.as_ref().map_or_else(|| creature.rig(), |g| g.rig.clone());
     let kit = match (&creature, &gear) {
         (Creature::Skeleton(skeleton), Some(gear)) => Some(SkeletonKit::armed(skeleton, gear)),
         _ => None,
     };
+    Built { creature, gear, kit }
+}
+
+/// [`build_creature`] for every spot, on as many threads as there are cores.
+pub fn build_creatures(spots: &[CreatureSpot]) -> Vec<Built> {
+    if spots.len() < 2 {
+        return spots.iter().map(build_creature).collect();
+    }
+    std::thread::scope(|scope| {
+        let jobs: Vec<_> = spots.iter().map(|spot| scope.spawn(|| build_creature(spot))).collect();
+        jobs.into_iter().map(|job| job.join().expect("a creature builds")).collect()
+    })
+}
+
+/// Spawns `built`, the creature of `spot` ([`spawn_creature_as`]).
+pub fn spawn_built(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot, built: Built, fallen: bool) -> Entity {
+    let Built { creature, gear, kit } = built;
+    let rig = gear.as_ref().map_or_else(|| creature.rig(), |g| g.rig.clone());
     let (root, bones) = spawn_skeleton_with(commands, level, spot, &rig, kit);
     let appearance = ItemAppearance {
         condition: Condition { state: ConditionState::Custom, wear: Mulberry32::new(spot.seed ^ GRIME_SALT).range_f32(GRIME.0, GRIME.1), ..Condition::default() },
@@ -376,7 +419,7 @@ pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level:
             }
         }
     }
-    if let Some(gear) = &gear {
+    if let Some(gear) = gear.as_ref().filter(|_| !fallen) {
         for piece in &gear.pieces {
             spawner.spawn(&piece.mesh, &crate::carry::appearance_of(&piece.item)).insert((Name::new(piece.name.clone()), WornGear, ChildOf(bones[piece.bone])));
         }

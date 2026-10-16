@@ -404,7 +404,8 @@ fn behave(
             if !brain.bitten && since >= lands && species.is_skeleton() {
                 brain.bitten = true;
                 // The weapon's blow: only if the delver has not stepped out of its reach.
-                let within = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius) * SKELETON_SLACK);
+                // Nor around a wall: it needs sight of the delver at the moment it lands.
+                let within = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius) * SKELETON_SLACK && line_of_sight(grid(at), grid(p), &blocked));
                 if let (true, Some(kit)) = (within, critter.kit.as_ref()) {
                     let damage = kit.roll_damage(&mut brain.rng);
                     attacks.write(CreatureAttack { attacker: entity, species, damage, poison: 0, attacker_pos: at });
@@ -412,10 +413,13 @@ fn behave(
             }
             if !brain.bitten && since >= lands {
                 brain.bitten = true;
-                let block = species.stat_block();
-                let damage = block.bite.roll(&mut brain.rng);
-                let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
-                attacks.write(CreatureAttack { attacker: entity, species, damage, poison, attacker_pos: at });
+                // A bite lands only with the delver in sight at that moment, not round a wall.
+                if player.is_some_and(|p| line_of_sight(grid(at), grid(p), &blocked)) {
+                    let block = species.stat_block();
+                    let damage = block.bite.roll(&mut brain.rng);
+                    let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
+                    attacks.write(CreatureAttack { attacker: entity, species, damage, poison, attacker_pos: at });
+                }
             }
             if since >= done {
                 brain.attack = None;
@@ -504,6 +508,64 @@ mod tests {
         // Bites come on a cooldown, not every frame.
         let from_one = bitten_by.iter().filter(|(e, _)| *e == attacker).count();
         assert!((1..=7).contains(&from_one), "{from_one} bites in 10 s");
+    }
+
+    /// A skeleton with a spear mid-swing at a delver one cell of stone away, in reach (the
+    /// spear outreaches the wall's thickness): the blow lands with nothing between them and not
+    /// with a wall between them.
+    #[test]
+    fn a_blow_does_not_land_round_a_wall() {
+        use crate::creatures::skeletons::SkeletonKit;
+        use fb_level::Cell;
+        let blow = |wall: bool| {
+            let mut level = fb_level::generate(1207, 1);
+            // A run of four open cells along a row, the second of which may be stone.
+            let (x, y) = (0..level.height as i32)
+                .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
+                .find(|&(x, y)| (0..4).all(|k| level.cell(x + k, y) == Cell::Floor))
+                .expect("a straight run of floor");
+            if wall {
+                level.cells[(y as u32 * level.width + (x + 1) as u32) as usize] = Cell::Rock;
+            }
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
+                .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+                .add_plugins(BehaviourPlugin);
+            app.insert_resource(Obstacles(Vec::new()));
+            app.insert_resource(CurrentLevel(level.clone()));
+            let state = fb_creatures::SkeletonState::roll(5);
+            let outfit = fb_items::outfit::OutfitSet { worn: vec![(fb_items::Slot::Mainhand, fb_items::roll_item("Spear", 5).unwrap())], goods: Vec::new(), ground: Vec::new() };
+            let kit = SkeletonKit::new(&state, outfit, [None, None]);
+            let spot = fb_level::CreatureSpot { x: x as f32 + 0.8, y: y as f32 + 0.5, yaw: 0.0, species: Species::Skeleton, seed: 5, pack: 0 };
+            let skeleton = {
+                let mut commands = app.world_mut().commands();
+                crate::creatures::spawn_skeleton_with(&mut commands, &level, &spot, &state.build(), Some(kit)).0
+            };
+            // One cell of stone between, the delver's centre 1.4 cells from the skeleton's.
+            let player_at = Vec2::new(x as f32 + 2.2, y as f32 + 0.5) * CELL;
+            app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y)));
+            app.world_mut().flush();
+            app.update();
+            let reaches = {
+                let critter = app.world().get::<Critter>(skeleton).unwrap();
+                reach(critter, BODY_RADIUS) * SKELETON_SLACK
+            };
+            let apart = app.world().get::<Transform>(skeleton).unwrap().translation.xz().distance(player_at);
+            assert!(apart <= reaches, "the delver is within reach: {apart} of {reaches}");
+            {
+                let mut brain = app.world_mut().get_mut::<Brain>(skeleton).unwrap();
+                brain.mode = Mode::Chase { last_seen: player_at, lost: 0.0 };
+                brain.attack = Some(0.0);
+            }
+            let mut landed = false;
+            for _ in 0..180 {
+                app.update();
+                landed |= !attacks(&mut app).is_empty();
+            }
+            landed
+        };
+        assert!(blow(false), "a blow lands on a delver in reach and in sight");
+        assert!(!blow(true), "a blow does not land through a wall");
     }
 
     #[test]

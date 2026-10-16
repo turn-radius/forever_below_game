@@ -26,6 +26,9 @@
 //! - Struck down it collapses onto its back ([`fb_creatures::pose::skeleton_fallen`]) and, as it
 //!   falls, every item it wore and held is set down around it as an ordinary item on the floor
 //!   ([`shed_gear`]), once only.
+//! - A skeleton out of [`DRAW_RANGE`] (past the fog) is not drawn ([`cull_far`]), and the bones'
+//!   thin parts (fingers and toes) are drawn with fewer facets, so a hall of them holds the frame
+//!   rate, and they are rolled and fitted side by side when a level is laid out.
 //! - Its own sounds ([`BoneSounds`], `tools/synth_bones.py`): bones clatter at each step, rattle
 //!   now and then standing about, clack when struck, clash on a shield and fall in a heap.
 
@@ -244,6 +247,25 @@ impl Rattle {
     }
 }
 
+/// Past this far from the delver a skeleton is not drawn, world units (28 m): beyond the
+/// fog's end (`fog_end`, 26 m as shipped), where it would be fogged to nothing anyway. A hall
+/// of skeletons draws only the ones that can be seen. Our own.
+pub const DRAW_RANGE: f32 = 280.0;
+
+/// Hides each skeleton out of [`DRAW_RANGE`] of the delver, and shows it again on coming back.
+fn cull_far(players: Query<&Transform, With<Player>>, mut skeletons: Query<(&Critter, &Transform, &mut Visibility), Without<Player>>) {
+    let Some(player) = players.iter().next().map(|t| t.translation) else { return };
+    for (critter, at, mut visibility) in &mut skeletons {
+        if !critter.spot.species.is_skeleton() {
+            continue;
+        }
+        let wanted = if at.translation.distance(player) > DRAW_RANGE { Visibility::Hidden } else { Visibility::Inherited };
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
+    }
+}
+
 /// Now and then a living skeleton standing near enough rattles its bones.
 fn rattle_idle(
     mut commands: Commands,
@@ -274,13 +296,14 @@ fn rattle_idle(
 /// inventory as loose items and set on the floor ([`FloorChange::SetDownAt`]), which the floor
 /// machinery spawns and records like any dropped item.
 ///
-/// It fires as the body's `since` crosses the flash's hold, never for a body that is already
-/// past it, and marks the skeleton [`Looted`], so a body that is brought back later (a level
-/// left and returned to) does not drop its gear a second time.
+/// It fires the frame after the skeleton falls, so a skeleton struck down just before the
+/// delver leaves has already shed into the floor the record captures (the floor changes it makes
+/// are applied before [`crate::record::record_level_left`] reads the floor). It marks the skeleton
+/// [`Looted`], and a body brought back from the record is spawned [`Looted`] and bare, so its
+/// gear is never set down twice.
 #[allow(clippy::too_many_arguments)]
 pub fn shed_gear(
     mut commands: Commands,
-    time: Res<Time>,
     tuning: Res<Tuning>,
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
@@ -289,20 +312,15 @@ pub fn shed_gear(
     sounds: Option<Res<BoneSounds>>,
     mut inventory: ResMut<Inventory>,
     mut changes: ResMut<FloorChanges>,
-    bodies: Query<(Entity, &Critter, &Corpse, &Transform), Without<Looted>>,
+    bodies: Query<(Entity, &Critter, &Transform), (With<Corpse>, Without<Looted>)>,
     gear: Query<(Entity, &ChildOf), With<WornGear>>,
     bones: Query<&Bones>,
 ) {
-    let hold = tuning.combat.flash_hold;
     let obstacles = obstacles.as_deref().cloned().unwrap_or_default();
     let blocked = blocked_by(&level.0, &blocked_cells);
     let game = settings.as_deref().copied().unwrap_or_default();
-    for (entity, critter, corpse, at) in &bodies {
+    for (entity, critter, at) in &bodies {
         let Some(kit) = critter.kit.as_ref().filter(|_| critter.spot.species.is_skeleton()) else { continue };
-        // Only the frame the body crosses the hold; later arrivals are old bodies.
-        if corpse.since < hold || corpse.since - time.delta_secs() >= hold {
-            continue;
-        }
         commands.entity(entity).insert(Looted);
         if let Some(sounds) = &sounds {
             play_at(&mut commands, "bones fall", sounds.collapse.clone(), at.translation, &game, &tuning);
@@ -337,7 +355,7 @@ impl Plugin for SkeletonsPlugin {
         app.init_resource::<Tuning>()
             .init_resource::<FloorChanges>()
             .add_systems(Startup, load_bone_sounds)
-            .add_systems(Update, (rattle_idle, shed_gear.after(crate::combat::feedback::collapse)).in_set(DelveSystems));
+            .add_systems(Update, (rattle_idle, cull_far, shed_gear.after(crate::combat::feedback::collapse).before(crate::inventory::underfoot::apply_floor_changes)).in_set(DelveSystems));
     }
 }
 
