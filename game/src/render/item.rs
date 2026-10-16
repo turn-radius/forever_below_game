@@ -104,7 +104,8 @@ impl ItemAppearance {
     /// The toon material for one part. `Part::tint` overrides the palette colour, and
     /// `Part::pattern` is drawn over it.
     pub fn material_for(&self, part: &Part) -> ToonMaterial {
-        let colour = part.tint.or(part.material.map(|kind| self.palette.get(kind))).unwrap_or(Rgb(0.5, 0.5, 0.5));
+        // A flame takes its colour from its vertices (`part_to_mesh`), so its material is white.
+        let colour = if is_flame(part) { Rgb(1.0, 1.0, 1.0) } else { part.tint.or(part.material.map(|kind| self.palette.get(kind))).unwrap_or(Rgb(0.5, 0.5, 0.5)) };
         let decay = Decay {
             kind: part.material.map_or(0, MaterialKind::decay_type),
             amount: part.material.map_or(0.0, |kind| self.condition.decay(kind)) * light_fastness(part),
@@ -120,7 +121,18 @@ impl ItemAppearance {
         ToonMaterial {
             base: StandardMaterial {
                 base_color: Color::srgba(colour.0, colour.1, colour.2, if see_through { GLASS_OPACITY } else { 1.0 }),
-                alpha_mode: if see_through { AlphaMode::Blend } else { AlphaMode::Opaque },
+                alpha_mode: if see_through {
+                    AlphaMode::Blend
+                } else if is_flame(part) {
+                    // Mostly see-through (vertex colour alpha, `part_to_mesh`), so the burning
+                    // head shows through. Premultiplied rather than Blend, which the toon
+                    // shader premultiplies itself: Blend writes depth for glass
+                    // (`ToonExtension::specialize`), which would hide the flame's core behind
+                    // its own veil and the head behind its flame.
+                    AlphaMode::Premultiplied
+                } else {
+                    AlphaMode::Opaque
+                },
                 perceptual_roughness: 1.0,
                 reflectance: 0.0,
                 ..default()
@@ -178,7 +190,18 @@ pub fn part_to_mesh(part: &Part) -> Mesh {
     if part.uvs.len() == vertex_count {
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
     }
+    if is_flame(part) {
+        // Colour and opacity by height along the flame (`flame::flame_colour`, `flame_alpha`).
+        let layer = if part.name == "flame_core" { super::flame::FlameLayer::Core } else { super::flame::FlameLayer::Veil };
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, super::flame::flame_vertex_colours(&part.positions, layer));
+    }
     mesh
+}
+
+/// Whether a part is a flame (its veil or the core inside it): drawn fading from see-through
+/// at its base to solid at its tip.
+pub fn is_flame(part: &Part) -> bool {
+    matches!(part.name, "flame" | "flame_core")
 }
 
 /// A part's half thickness, estimated as volume over surface area (`2V / A`) so it needs no
@@ -301,6 +324,36 @@ mod tests {
         let material = ItemAppearance::default().material_for(&part);
         assert_eq!(material.base.base_color, Color::srgb(1.0, 0.0, 0.0));
         assert_eq!(material.extension.decay.kind, 5);
+    }
+
+    #[test]
+    fn a_flame_is_drawn_blended_from_its_vertices() {
+        let flame = |name| Part {
+            name,
+            material: Some(MaterialKind::Gem),
+            glow: 1.0,
+            positions: vec![[0.0, 1.0, 0.0], [0.5, 1.0, 0.0], [0.0, 3.0, 0.0]],
+            normals: vec![[0.0, 1.0, 0.0]; 3],
+            indices: vec![0, 1, 2],
+            ..default()
+        };
+        let veil = flame("flame");
+        let material = ItemAppearance::default().material_for(&veil);
+        assert!(matches!(material.base.alpha_mode, AlphaMode::Premultiplied));
+        assert_eq!(material.base.base_color, Color::srgb(1.0, 1.0, 1.0));
+        let mesh = part_to_mesh(&veil);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!("no vertex colours") };
+        assert!((colors[0][3] - 0.15).abs() < 1e-5 && colors[2][3] > colors[0][3], "{colors:?}");
+        // Yellow at the base, redder at the tip.
+        assert!(colors[0][1] > colors[2][1]);
+        // The core is paler and more opaque than the veil at the same height.
+        let core = part_to_mesh(&flame("flame_core"));
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(core)) = core.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!() };
+        assert!(core[0][2] > colors[0][2] && core[0][3] > colors[0][3]);
+        // Other glowing parts stay opaque and uncoloured.
+        let ember = flame("embers");
+        assert!(matches!(ItemAppearance::default().material_for(&ember).base.alpha_mode, AlphaMode::Opaque));
+        assert!(part_to_mesh(&ember).attribute(Mesh::ATTRIBUTE_COLOR).is_none());
     }
 
     #[test]
