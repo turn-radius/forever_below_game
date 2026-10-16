@@ -412,6 +412,9 @@ pub struct HeldKey {
     pub off: Option<ItemId>,
     /// The lit things carried in the main hand, the off hand and at the hip ([`carried_lights`]).
     pub lights: [Option<ItemId>; 3],
+    /// How burnt each of those lights looks, in twentieths of a torch's char, so a held torch
+    /// is fitted again about every 0.05 char as it burns down.
+    pub burn: [u8; 3],
     /// The lantern hung at the hip, and the belt it hangs from.
     pub hip: Option<ItemId>,
     pub belt: Option<ItemId>,
@@ -427,6 +430,8 @@ impl HeldKey {
                 let lit = carried_lights(inventory);
                 [fb_items::Slot::Mainhand, fb_items::Slot::Offhand, fb_items::Slot::Hip].map(|slot| lit.iter().find(|(s, _)| *s == slot).map(|(_, id)| *id))
             },
+            burn: [fb_items::Slot::Mainhand, fb_items::Slot::Offhand, fb_items::Slot::Hip]
+                .map(|slot| inventory.worn(slot).and_then(|id| inventory.item(id)).filter(|i| i.shape.lit() == Some(true)).map_or(0, |i| crate::inventory::char_bucket(&i.shape))),
             hip: inventory.worn(fb_items::Slot::Hip),
             belt: inventory.worn(fb_items::Slot::Belt),
             body: (character.folk, character.body_seed),
@@ -2189,5 +2194,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_held_key_changes_as_a_lit_torch_crosses_a_char_bucket() {
+        use fb_items::Slot;
+        let mut inventory = Inventory::default();
+        let mut torch = lit_torch(2);
+        if let armory::Item::Torch(s) = &mut torch.shape {
+            s.burn.char = 0.0;
+            s.burn.fuel_left = armory::kindle::TORCH_SECONDS;
+        }
+        let id = inventory.add(torch);
+        inventory.wear(id, Slot::Offhand).unwrap();
+        let character = Character::default();
+        let key = |inventory: &Inventory| HeldKey::of(inventory, &character);
+        let start = key(&inventory);
+        inventory.burn_lights(60.0);
+        assert_eq!(key(&inventory), start, "a minute is under a bucket");
+        inventory.burn_lights(armory::kindle::TORCH_SECONDS * 0.06);
+        assert_ne!(key(&inventory), start, "past 0.05 char the held torch is fitted again");
     }
 }

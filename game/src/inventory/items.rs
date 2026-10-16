@@ -69,6 +69,20 @@ impl From<Misfit> for Refusal {
 /// `containersOf`).
 pub const CARRYING_SLOTS: [Slot; 2] = [Slot::Back, Slot::Belt];
 
+/// The minute of fuel a light's card shows ("Fuel 0:42"), rounded as the card rounds it.
+fn fuel_minute(item: &Item) -> Option<u32> {
+    item.fuel_left().map(|seconds| (seconds.max(0.0) / 60.0).round() as u32)
+}
+
+/// How burnt a torch looks, in twentieths of its char, so a held torch is refitted about every
+/// 0.05 char; 0 for anything else.
+pub fn char_bucket(shape: &armory::Item) -> u8 {
+    match shape {
+        armory::Item::Torch(s) => (s.burn.char * 20.0) as u8,
+        _ => 0,
+    }
+}
+
 /// Where the item an equip displaced went: back where the equipped item came from, or, if it
 /// did not fit there, loose underfoot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +138,23 @@ impl Inventory {
     /// now; a spent torch, or anything that is not a light, is left as it was.
     pub fn toggle_light(&mut self, id: ItemId) -> Result<bool, armory::kindle::Unlit> {
         self.items.get_mut(&id).ok_or(armory::kindle::Unlit::NotALight)?.shape.toggle_lit()
+    }
+
+    /// Burns `seconds` of game time off every lit torch and lantern, wherever it is: in a hand,
+    /// at the hip, in a bag or on the floor ([`fb_items::Item::burn`]). Returns whether
+    /// anything shown changed: a light's fuel minute on its card, its state, or its char bucket
+    /// ([`char_bucket`]), so the caller can mark the inventory changed only then.
+    pub fn burn_lights(&mut self, seconds: f32) -> bool {
+        let mut shown = false;
+        for item in self.items.values_mut() {
+            if item.shape.lit() != Some(true) {
+                continue;
+            }
+            let before = (item.shape.lit(), fuel_minute(item), char_bucket(&item.shape));
+            item.burn(seconds);
+            shown |= before != (item.shape.lit(), fuel_minute(item), char_bucket(&item.shape));
+        }
+        shown
     }
 
     pub fn location(&self, id: ItemId) -> Option<Location> {

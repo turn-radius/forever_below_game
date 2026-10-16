@@ -174,6 +174,14 @@ pub struct LanternFlame {
     pub level: f32,
     /// Flame height, as a multiplier.
     pub flame: f32,
+    /// Burning time left, in game seconds ([`crate::kindle::LANTERN_SECONDS`] when full).
+    /// Runtime state: it burns down while the lantern is lit, and `level` follows it.
+    #[serde(default = "full_lantern")]
+    pub fuel_left: f32,
+}
+
+fn full_lantern() -> f32 {
+    crate::kindle::LANTERN_SECONDS
 }
 
 sliders! {
@@ -186,7 +194,7 @@ sliders! {
 impl Default for LanternFlame {
     /// The plate's lantern: alight.
     fn default() -> Self {
-        LanternFlame { fuel: LanternFuel::Candle, lit: true, level: 0.8, flame: 1.0 }
+        LanternFlame { fuel: LanternFuel::Candle, lit: true, level: 0.8, flame: 1.0, fuel_left: crate::kindle::LANTERN_SECONDS * 0.8 }
     }
 }
 
@@ -354,6 +362,8 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: LanternStyle) -> LanternState
     f.level = rng.range_f32(0.3, 1.0);
     f.flame = rng.range_f32(0.75, 1.25);
     s.fit(&LIMITS);
+    // The font is as full as the fuel it holds.
+    s.flame.fuel_left = crate::kindle::LANTERN_SECONDS * s.flame.level;
     s
 }
 

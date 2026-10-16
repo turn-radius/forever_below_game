@@ -2647,6 +2647,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fb_character"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fb_creatures"
 version = "0.1.0"
 dependencies = [
@@ -2794,6 +2802,7 @@ dependencies = [
  "armory",
  "bevy",
  "fb_body",
+ "fb_character",
  "fb_creatures",
  "fb_items",
  "fb_level",

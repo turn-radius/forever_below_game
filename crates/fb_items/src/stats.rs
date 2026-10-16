@@ -1,6 +1,12 @@
 //! The numbers an item gives the character who carries or wears it, and the names affixes
 //! use to change them.
 //!
+//! Stats split into two categories:
+//! - Item properties: Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance.
+//!   These describe the item itself.
+//! - Wearer stats: Warmth, Stealth, Carry, Darkvision, HungerRate, SleepinessRate, DiseaseRisk,
+//!   Lockpicking, HealOnKill. These affect the character wearing the item.
+//!
 //! This is the minimal set the affixes in `data/afx.json` act on: the plate's item fields
 //! (`wt`, `ac`, `dmg`, `dmgB`, `warmth`, `light`, `carry`) plus one stat for each affix the
 //! plate only described in words (stealth, to hit, darkvision...). Deriving the real values
@@ -32,8 +38,8 @@ pub struct Stats {
     pub darkvision: f32,
     /// How fast the wearer gets hungry, as a multiple of normal.
     pub hunger_rate: f32,
-    /// How fast the wearer tires, as a multiple of normal.
-    pub fatigue_rate: f32,
+    /// How fast the wearer tires (sleepiness), as a multiple of normal.
+    pub sleepiness_rate: f32,
     /// How likely the wearer is to catch a disease, as a multiple of normal.
     pub disease_risk: f32,
     pub lockpicking: f32,
@@ -59,7 +65,7 @@ impl Default for Stats {
             carry: 0.0,
             darkvision: 0.0,
             hunger_rate: 1.0,
-            fatigue_rate: 1.0,
+            sleepiness_rate: 1.0,
             disease_risk: 1.0,
             lockpicking: 0.0,
             heal_on_kill: 0.0,
@@ -72,34 +78,46 @@ impl Default for Stats {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stat {
+    // Item properties: describe the item itself
     Weight,
     Armour,
     DamageBonus,
     ToHit,
-    Warmth,
     Light,
     BurnTime,
+    BreakChance,
+    // Wearer stats: affect the character wearing the item
+    Warmth,
     Stealth,
     Carry,
     Darkvision,
     HungerRate,
-    FatigueRate,
+    SleepinessRate,
     DiseaseRisk,
     Lockpicking,
     HealOnKill,
-    BreakChance,
 }
 
 impl Stat {
     pub const ALL: [Stat; 16] = [
-        Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::Warmth, Stat::Light, Stat::BurnTime, Stat::Stealth,
-        Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::FatigueRate, Stat::DiseaseRisk, Stat::Lockpicking, Stat::HealOnKill,
-        Stat::BreakChance,
+        Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
+        Stat::Warmth, Stat::Stealth, Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::SleepinessRate, Stat::DiseaseRisk,
+        Stat::Lockpicking, Stat::HealOnKill,
     ];
+
+    /// Item properties: describe the item itself (Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance).
+    pub fn is_item_property(self) -> bool {
+        matches!(self, Stat::Weight | Stat::Armour | Stat::DamageBonus | Stat::ToHit | Stat::Light | Stat::BurnTime | Stat::BreakChance)
+    }
+
+    /// Wearer stats: affect the character wearing the item (Warmth, Stealth, Carry, Darkvision, HungerRate, SleepinessRate, DiseaseRisk, Lockpicking, HealOnKill).
+    pub fn is_wearer_stat(self) -> bool {
+        !self.is_item_property()
+    }
 
     /// Whether more of it is better for the wearer.
     pub fn higher_is_better(self) -> bool {
-        !matches!(self, Stat::Weight | Stat::HungerRate | Stat::FatigueRate | Stat::DiseaseRisk | Stat::BreakChance)
+        !matches!(self, Stat::Weight | Stat::HungerRate | Stat::SleepinessRate | Stat::DiseaseRisk | Stat::BreakChance)
     }
 
     /// The range it is kept in. Bonuses can go negative (the plate's `dmgB -= 1`); amounts,
@@ -135,18 +153,18 @@ impl Stats {
             Stat::Armour => &self.armour,
             Stat::DamageBonus => &self.damage_bonus,
             Stat::ToHit => &self.to_hit,
-            Stat::Warmth => &self.warmth,
             Stat::Light => &self.light,
             Stat::BurnTime => &self.burn_time,
+            Stat::BreakChance => &self.break_chance,
+            Stat::Warmth => &self.warmth,
             Stat::Stealth => &self.stealth,
             Stat::Carry => &self.carry,
             Stat::Darkvision => &self.darkvision,
             Stat::HungerRate => &self.hunger_rate,
-            Stat::FatigueRate => &self.fatigue_rate,
+            Stat::SleepinessRate => &self.sleepiness_rate,
             Stat::DiseaseRisk => &self.disease_risk,
             Stat::Lockpicking => &self.lockpicking,
             Stat::HealOnKill => &self.heal_on_kill,
-            Stat::BreakChance => &self.break_chance,
         }
     }
 
@@ -156,18 +174,18 @@ impl Stats {
             Stat::Armour => &mut self.armour,
             Stat::DamageBonus => &mut self.damage_bonus,
             Stat::ToHit => &mut self.to_hit,
-            Stat::Warmth => &mut self.warmth,
             Stat::Light => &mut self.light,
             Stat::BurnTime => &mut self.burn_time,
+            Stat::BreakChance => &mut self.break_chance,
+            Stat::Warmth => &mut self.warmth,
             Stat::Stealth => &mut self.stealth,
             Stat::Carry => &mut self.carry,
             Stat::Darkvision => &mut self.darkvision,
             Stat::HungerRate => &mut self.hunger_rate,
-            Stat::FatigueRate => &mut self.fatigue_rate,
+            Stat::SleepinessRate => &mut self.sleepiness_rate,
             Stat::DiseaseRisk => &mut self.disease_risk,
             Stat::Lockpicking => &mut self.lockpicking,
             Stat::HealOnKill => &mut self.heal_on_kill,
-            Stat::BreakChance => &mut self.break_chance,
         }
     }
 }

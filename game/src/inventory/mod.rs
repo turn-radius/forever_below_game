@@ -51,7 +51,7 @@ use fb_items::{Kind, Rarity, Slot, footprint::Footprint};
 pub use grid::{Grid, Placement};
 pub use icon::{IconCache, Icons};
 pub use doll::{DollAssets, DollStage, DollView, SlotView};
-pub use items::{Displaced, Inventory, ItemId, Location, Refusal};
+pub use items::{Displaced, Inventory, ItemId, Location, Refusal, char_bucket};
 pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
 use crate::carry::ViewModelCamera;

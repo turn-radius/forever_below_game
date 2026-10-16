@@ -21,6 +21,9 @@ use crate::light::point_light;
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
 use crate::launch::AppState;
+use crate::character::{Character, Load};
+use crate::exhaustion::Exhaustion;
+use crate::inventory::Inventory;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, level_has_focus};
 
 /// Radians of turn per pixel of mouse motion at a mouse sensitivity of 1.
@@ -47,7 +50,7 @@ impl Plugin for PlayerPlugin {
             .init_resource::<GameSettings>()
             .init_resource::<Tuning>()
             .add_systems(OnEnter(AppState::Delving), (spawn_player, grab_cursor))
-            .add_systems(Update, (take_cursor, look, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens).in_set(DelveSystems))
+            .add_systems(Update, (take_cursor, look, weigh_the_delver, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens).in_set(DelveSystems))
             .add_systems(Update, widen_player_view.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
     }
 }
@@ -182,6 +185,20 @@ pub(crate) fn look(
     camera.rotation = Quat::from_rotation_x(locomotion.pitch);
 }
 
+/// Keeps the delver's [`Load`] to what they wear and carry, working it out again only when the
+/// character or the inventory has changed, or for a delver just spawned.
+fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inventory>>, mut players: Query<&mut Load, With<Player>>) {
+    let (Some(character), Some(inventory)) = (character, inventory) else { return };
+    let changed = character.is_changed() || inventory.is_changed();
+    let mut band = None;
+    for mut load in &mut players {
+        if changed || load.is_added() {
+            let band = *band.get_or_insert_with(|| character.derive(&inventory).load_band);
+            load.set_if_neq(Load(band));
+        }
+    }
+}
+
 pub(crate) fn walk(
     time: Res<Time>,
     tuning: Res<Tuning>,
@@ -189,15 +206,15 @@ pub(crate) fn walk(
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Option<Res<Obstacles>>,
-    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform, Option<&Slowed>), With<Player>>,
+    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform, Option<&Slowed>, &Exhaustion, &Load), With<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP_SECONDS);
     if dt <= 0.0 {
         return;
     }
-    let (locomotion, gait, transform, slowed) = &mut *body;
+    let (locomotion, gait, transform, slowed, exhaustion, load) = &mut *body;
     let moving = &tuning.moving;
-    let speed = if input.pressed(Action::Hurry) { moving.hurry_speed } else { moving.walk_speed } * slowed.map_or(1.0, |s| s.0);
+    let speed = if input.pressed(Action::Hurry) { moving.hurry_speed } else { moving.walk_speed } * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier() * load.0.walk_multiplier();
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
@@ -326,6 +343,21 @@ mod tests {
     /// How far the body walks forward in `frames` frames of 1/60 s with W held, after
     /// `tune` changes the tuning.
     fn walked(frames: u32, tune: impl Fn(&mut Tuning)) -> f32 {
+        walked_as(frames, tune, ())
+    }
+
+    /// As [`walked`], for a delver spawned with the extra components `delver`.
+    fn walked_as(frames: u32, tune: impl Fn(&mut Tuning), delver: impl Bundle) -> f32 {
+        let (mut app, body, start) = walking(tune, delver);
+        for _ in 0..frames {
+            app.update();
+        }
+        app.world().get::<Transform>(body).unwrap().translation.distance(start)
+    }
+
+    /// A level with W held and a delver spawned with the extra components `delver`: the app, the
+    /// delver and where they started.
+    fn walking(tune: impl Fn(&mut Tuning), delver: impl Bundle) -> (App, Entity, Vec3) {
         use bevy::time::TimeUpdateStrategy;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -335,18 +367,15 @@ mod tests {
             .init_resource::<BlockedCells>()
             .init_resource::<Tuning>()
             .init_resource::<ButtonInput<KeyCode>>()
-            .add_systems(Update, walk);
+            .add_systems(Update, (weigh_the_delver, walk).chain());
         app.update();
         tune(&mut app.world_mut().resource_mut::<Tuning>());
         let (x, y, facing) = app.world().resource::<CurrentLevel>().0.start();
         let [wx, wy, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
         let start = Vec3::new(wx, wy, wz);
-        let body = app.world_mut().spawn((Player, Locomotion { yaw: facing.yaw(), ..default() }, Transform::from_translation(start).with_rotation(Quat::from_rotation_y(facing.yaw())))).id();
+        let body = app.world_mut().spawn((Player, Locomotion { yaw: facing.yaw(), ..default() }, Transform::from_translation(start).with_rotation(Quat::from_rotation_y(facing.yaw())), delver)).id();
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
-        for _ in 0..frames {
-            app.update();
-        }
-        app.world().get::<Transform>(body).unwrap().translation.distance(start)
+        (app, body, start)
     }
 
     #[test]
@@ -355,6 +384,105 @@ mod tests {
         let half = walked(10, |t| t.moving.walk_speed *= 0.5);
         assert!(usual > 1.0, "{usual}");
         assert!((half / usual - 0.5).abs() < 0.02, "half the pace walks half as far: {half} against {usual}");
+    }
+
+    fn exhausted(level: u32) -> Exhaustion {
+        Exhaustion(fb_character::Exhaustion::new(level))
+    }
+
+    #[test]
+    fn exhaustion_slows_a_delver_who_is_not_otherwise_slowed() {
+        for frames in [10, 30, 60] {
+            let usual = walked(frames, |_| {});
+            let level_2 = walked_as(frames, |_| {}, exhausted(2));
+            assert!((level_2 / usual - 0.5).abs() < 0.02, "{frames} frames: {level_2} against {usual}");
+            assert!(walked_as(frames, |_| {}, exhausted(1)) / usual > 0.99, "level 1 does not slow");
+        }
+    }
+
+    #[test]
+    fn exhaustion_multiplies_with_a_constrictors_hold_and_stays_steady() {
+        use crate::combat::vitals::HELD_PACE;
+        for frames in [10, 30, 60] {
+            let usual = walked(frames, |_| {});
+            let held = walked_as(frames, |_| {}, (exhausted(2), Slowed(HELD_PACE)));
+            assert!((held / usual - 0.5 * HELD_PACE).abs() < 0.01, "{frames} frames: {held} against {usual}");
+        }
+    }
+
+    #[test]
+    fn at_exhaustion_level_5_the_delver_cannot_move() {
+        assert!(walked(10, |_| {}) > 1.0);
+        assert_eq!(walked_as(30, |_| {}, exhausted(5)), 0.0);
+    }
+
+    use fb_character::LoadBand;
+
+    fn loaded(band: LoadBand) -> Load {
+        Load(band)
+    }
+
+    #[test]
+    fn load_slows_the_walk_and_multiplies_with_exhaustion() {
+        for frames in [10, 30] {
+            let usual = walked(frames, |_| {});
+            let burdened = walked_as(frames, |_| {}, loaded(LoadBand::Burdened));
+            let encumbered = walked_as(frames, |_| {}, loaded(LoadBand::Encumbered));
+            let both = walked_as(frames, |_| {}, (loaded(LoadBand::Encumbered), exhausted(2)));
+            assert!((burdened / usual - 0.85).abs() < 0.01, "{burdened} against {usual}");
+            assert!((encumbered / usual - 0.65).abs() < 0.01, "{encumbered} against {usual}");
+            assert!((both / usual - 0.325).abs() < 0.01, "{both} against {usual}");
+        }
+    }
+
+    #[test]
+    fn an_overloaded_delver_does_not_move() {
+        assert_eq!(walked_as(30, |_| {}, loaded(LoadBand::Overloaded)), 0.0);
+    }
+
+    /// A delver of strength 10 wearing a mail shirt made as heavy as `fraction` of what they can
+    /// carry, and the shirt.
+    fn laden(fraction: f32) -> (Character, Inventory, crate::inventory::ItemId) {
+        let attributes = fb_character::Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        let delver = Character { attributes, ..Character::roll(4) };
+        let mut mail = fb_items::roll_item("Mail", 1).unwrap();
+        mail.profile.stats.weight = (150.0 + mail.profile.stats.carry) * fraction;
+        let mut inventory = Inventory::default();
+        let mail = inventory.add(mail);
+        inventory.wear(mail, fb_items::Slot::Body).unwrap();
+        (delver, inventory, mail)
+    }
+
+    #[test]
+    fn the_real_load_sets_the_pace_and_dropping_it_lets_the_delver_move_again() {
+        let usual = walked(30, |_| {});
+        for (band, fraction, pace) in [(LoadBand::Burdened, 0.5, 0.85), (LoadBand::Encumbered, 0.8, 0.65)] {
+            let (delver, inventory, _) = laden(fraction);
+            let (mut app, body, start) = walking(|_| {}, ());
+            app.insert_resource(delver).insert_resource(inventory);
+            for _ in 0..30 {
+                app.update();
+            }
+            let walked = app.world().get::<Transform>(body).unwrap().translation.distance(start);
+            assert!((walked / usual - pace).abs() < 0.01, "{band:?}: {walked} against {usual}");
+            assert_eq!(app.world().get::<Load>(body), Some(&Load(band)));
+        }
+
+        let (delver, inventory, mail) = laden(1.2);
+        let (mut app, body, start) = walking(|_| {}, ());
+        app.insert_resource(delver).insert_resource(inventory);
+        for _ in 0..30 {
+            app.update();
+        }
+        assert_eq!(app.world().get::<Load>(body), Some(&Load(LoadBand::Overloaded)));
+        assert_eq!(app.world().get::<Transform>(body).unwrap().translation.distance(start), 0.0, "overloaded");
+        app.world_mut().resource_mut::<Inventory>().forget(mail);
+        for _ in 0..30 {
+            app.update();
+        }
+        assert_eq!(app.world().get::<Load>(body), Some(&Load(LoadBand::Light)));
+        let moved = app.world().get::<Transform>(body).unwrap().translation.distance(start);
+        assert!((moved / usual - 1.0).abs() < 0.05, "{moved} against {usual}");
     }
 
     #[test]

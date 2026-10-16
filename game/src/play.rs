@@ -24,7 +24,7 @@ use fb_level::{FloorShape, Level};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
 
-/// Every system that plays the level each frame, in `Update` and `PostUpdate`. The play plugins
+/// Every system that plays the level, in `FixedUpdate`, `Update` and `PostUpdate`. The play plugins
 /// put their systems here, and [`PlayPlugin`] runs the set only while [`AppState::Delving`];
 /// a plugin added on its own (in tests) runs its systems always. What a delve spawns at its
 /// start goes in `OnEnter(AppState::Delving)`. Everything a delve spawns, at its start or
@@ -37,9 +37,10 @@ use crate::launch::AppState;
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DelveSystems;
 
-/// Runs [`DelveSystems`] only while delving.
+/// Runs [`DelveSystems`] only while delving, in `FixedUpdate` as well as `Update` and `PostUpdate`.
 pub fn run_delve_systems_while_delving(app: &mut App) {
-    app.configure_sets(Update, DelveSystems.run_if(in_state(AppState::Delving)))
+    app.configure_sets(FixedUpdate, DelveSystems.run_if(in_state(AppState::Delving)))
+        .configure_sets(Update, DelveSystems.run_if(in_state(AppState::Delving)))
         .configure_sets(PostUpdate, DelveSystems.run_if(in_state(AppState::Delving)));
 }
 
@@ -49,7 +50,7 @@ pub struct CurrentLevel(pub Level);
 
 /// The player's body. Its `Transform` is at the feet, on the floor; the camera is a child.
 #[derive(Component, Debug, Default)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds)]
 pub struct Player;
 
 /// The first-person camera, a child of [`Player`].
@@ -242,6 +243,7 @@ impl Plugin for PlayPlugin {
             .add_plugins((
             crate::ambient::AmbientPlugin,
             crate::footsteps::FootstepsPlugin,
+            crate::game_clock::GameClockPlugin,
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,
@@ -253,6 +255,8 @@ impl Plugin for PlayPlugin {
             crate::audio::MusicPlugin,
             crate::menu::MenuPlugin,
             crate::kindle::KindlePlugin,
+            crate::eat::EatPlugin,
+            crate::simulate::SimulatePlugin,
             crate::map::MapPlugin,
         ));
     }

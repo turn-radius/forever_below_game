@@ -88,4 +88,11 @@ The script prints each file's spectral centroid and share of energy above 2 kHz 
 
 In game, the delver's steps play at 0.35 of the effects volume (creatures at 0.7 of that), each with a random gain of ±15% and playback speed of ±6%. The same sample is never played twice in a row.
 
+`tools/synth_heal.py` synthesises the healing draught's gentle rising chime (three soft bell notes, decaying sine modes at slightly inharmonic ratios), its docstring citing the source:
+
+```
+python3 tools/synth_heal.py /tmp/heal
+oggenc -q 6 -o game/assets/audio/heal.ogg /tmp/heal/heal.wav
+```
+
 Bevy loads assets from `game/assets/` under `cargo run` (it uses `CARGO_MANIFEST_DIR`). To run the binary directly, set `BEVY_ASSET_ROOT=game`.
