@@ -83,14 +83,27 @@ fn span(hours: f64) -> String {
     }
 }
 
-/// The condition one need's meter puts the character under, if it is past its first band.
+/// The band from which a need shows as a condition: once it bites, not at its mildest. Hunger
+/// from Hungry (band 2), not Peckish; thirst from Thirsty (band 1), its first band already being
+/// thirsty; sleepiness from Drowsy (band 3), the band that means sleepy, not Tired or Weary.
+/// Our own, at the user's call.
+pub const fn first_felt_band(kind: MeterKind) -> usize {
+    match kind {
+        MeterKind::Hunger => 2,
+        MeterKind::Thirst => 1,
+        MeterKind::Sleepiness => 3,
+    }
+}
+
+/// The condition one need's meter puts the character under, once it reaches its
+/// [`first_felt_band`].
 ///
 /// Famished and Dry (band 3) break the run of sleep that removes a level of exhaustion; the worst
 /// band adds levels of exhaustion after a while ([`crate::ExhaustionTimes::step`]). Below those
 /// the meter has no effect yet, and the line says what is coming.
 fn need(meter: &Meter, con_modifier: i32) -> Option<Condition> {
     let band = meter.band();
-    if band == 0 {
+    if band == 0 || band < first_felt_band(meter.kind) {
         return None;
     }
     let (kind, remedy) = match meter.kind {
@@ -246,15 +259,35 @@ mod tests {
     }
 
     #[test]
-    fn hunger_past_its_first_band_shows_and_a_worse_band_is_more_severe() {
+    fn hunger_shows_from_hungry_and_a_worse_band_is_more_severe() {
         assert_eq!(kinds(&hungry(0.2)), vec![], "Fed");
+        assert_eq!(kinds(&hungry(0.3)), vec![], "Peckish does not bite yet");
         let hungry_now = &conditions(&hungry(0.55))[0];
         assert_eq!((hungry_now.kind, hungry_now.name.as_str()), (ConditionKind::Hunger, "Hungry"));
         let famished = &conditions(&hungry(0.8))[0];
         assert_eq!(famished.name, "Famished");
         assert_eq!(famished.effect, "Sleep no longer eases exhaustion");
         assert!(famished.severity > hungry_now.severity);
-        assert!(conditions(&hungry(0.3))[0].severity < hungry_now.severity, "Peckish is milder than Hungry");
+    }
+
+    #[test]
+    fn thirst_shows_from_thirsty_and_sleepiness_from_drowsy() {
+        let at = |kind: MeterKind, value: f64| {
+            let mut now = Circumstances::default();
+            match kind {
+                MeterKind::Hunger => now.needs.hunger.value = value,
+                MeterKind::Thirst => now.needs.thirst.value = value,
+                MeterKind::Sleepiness => now.needs.sleepiness.value = value,
+            }
+            conditions(&now).into_iter().map(|c| c.name).collect::<Vec<_>>()
+        };
+        assert_eq!(at(MeterKind::Thirst, 0.1), Vec::<String>::new(), "Quenched");
+        assert_eq!(at(MeterKind::Thirst, 0.3), vec!["Thirsty"]);
+        assert_eq!(at(MeterKind::Sleepiness, 0.3), Vec::<String>::new(), "Tired");
+        assert_eq!(at(MeterKind::Sleepiness, 0.6), Vec::<String>::new(), "Weary");
+        assert_eq!(at(MeterKind::Sleepiness, 0.8), vec!["Drowsy"]);
+        assert_eq!(at(MeterKind::Sleepiness, 1.0), vec!["Spent"]);
+        assert_eq!(at(MeterKind::Hunger, 0.55), vec!["Hungry"]);
     }
 
     #[test]
