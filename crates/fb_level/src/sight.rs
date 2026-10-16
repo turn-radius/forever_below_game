@@ -139,6 +139,8 @@ mod tests {
             .collect();
         Level {
             seed: 0,
+            depth: 1,
+            style: crate::LevelStyle::RoughRock,
             width: rows[0].len() as u32,
             height: rows.len() as u32,
             cells,
@@ -150,6 +152,7 @@ mod tests {
             folk: Vec::new(),
             props: Vec::new(),
             creatures: Vec::new(),
+            stairs: Vec::new(),
         }
     }
 
@@ -224,7 +227,7 @@ mod tests {
 
     #[test]
     fn a_generated_level_is_seen_room_by_room() {
-        let level = crate::generate(1207);
+        let level = crate::generate(1207, 1);
         let (x, y, inward) = level.start();
         let (dx, dy) = inward.step();
         let mut explored = Explored::new(&level);

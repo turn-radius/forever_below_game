@@ -440,7 +440,7 @@ mod tests {
             inventory.wear(id, fb_items::Slot::Mainhand).unwrap();
         }
         app.insert_resource(inventory);
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         app.insert_resource(CurrentLevel(level.clone()));
         let roots: Vec<Entity> = {
             let mut commands = app.world_mut().commands();

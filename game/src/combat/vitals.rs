@@ -338,7 +338,7 @@ mod tests {
             .init_resource::<ScreenOpen>()
             .add_plugins(VitalsPlugin);
         let player = app.world_mut().spawn((Player, Transform::default(), Health::full(10))).id();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let spot = *level.creatures.iter().find(|c| c.species == Species::ConstrictorSnake).unwrap();
         let creature = spot.creature();
         let snake = app.world_mut().spawn((Critter::new(spot, creature), Transform::from_xyz(10.0, 0.0, 0.0))).id();

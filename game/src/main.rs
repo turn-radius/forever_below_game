@@ -81,7 +81,9 @@ fn main() -> AppExit {
     .add_plugins((SettingsPlugin, TuningPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
     .insert_resource(NewDelveSeed(launch.seed));
     if opening == AppState::Delving {
-        app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED))));
+        // `FB_DEPTH=2` plays the stone halls: the level's depth picks its style.
+        let depth = std::env::var("FB_DEPTH").ok().and_then(|d| d.parse().ok()).unwrap_or(1);
+        app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED), depth)));
     }
     if swings {
         app.add_plugins(SwingPracticePlugin);

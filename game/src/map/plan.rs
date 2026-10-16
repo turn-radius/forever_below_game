@@ -10,7 +10,7 @@
 use armory::build::scenery::Scenery;
 use fb_level::props::Prop;
 use fb_level::sight::Explored;
-use fb_level::{Cell, Level, LightKind};
+use fb_level::{Cell, Level, LightKind, StairKind};
 
 /// Cells of blank page round the level.
 pub const MARGIN: f32 = 1.5;
@@ -219,6 +219,24 @@ pub fn draw_plan(level: &Level, explored: &Explored, px: f32) -> PlanCanvas {
         }
     }
 
+    // Seen stairs: a box with three treads, narrowing toward a way down and widening toward a
+    // way up.
+    for stair in &level.stairs {
+        if !seen(stair.x as i32, stair.y as i32) {
+            continue;
+        }
+        let c = frame.at(stair.x as f32 + 0.5, stair.y as f32 + 0.5);
+        let r = px * 0.36;
+        canvas.rect([c[0] - r, c[1] - r], [c[0] + r, c[1] + r], INK, 0.9);
+        canvas.rect([c[0] - r + ink, c[1] - r + ink], [c[0] + r - ink, c[1] + r - ink], WASH, 1.0);
+        for k in 0..3 {
+            let t = (k as f32 + 0.5) / 3.0;
+            let half = r * if stair.kind == StairKind::Down { 0.85 - t * 0.5 } else { 0.35 + t * 0.5 };
+            let y = c[1] - r + t * 2.0 * r;
+            canvas.line([c[0] - half, y], [c[0] + half, y], ink, INK, 0.9);
+        }
+    }
+
     // Seen props and lights.
     for spot in &level.props {
         if !seen(spot.x.floor() as i32, spot.y.floor() as i32) {
@@ -297,7 +315,7 @@ mod tests {
 
     #[test]
     fn unseen_cells_stay_blank_and_seen_ones_are_drawn() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let px = 16.0;
         let frame = PlanFrame::of(px);
         let blank = draw_plan(&level, &Explored::new(&level), px);
@@ -315,7 +333,7 @@ mod tests {
 
     #[test]
     fn the_same_sight_draws_the_same_plan() {
-        let level = fb_level::generate(7);
+        let level = fb_level::generate(7, 1);
         let explored = Explored::all(&level);
         assert_eq!(draw_plan(&level, &explored, 12.0), draw_plan(&level, &explored, 12.0));
     }

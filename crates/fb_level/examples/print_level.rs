@@ -51,7 +51,8 @@ fn folk_mark(folk: Folk) -> char {
 
 fn main() {
     let seed = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(1207);
-    let level = fb_level::generate(seed);
+    let depth = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let level = fb_level::generate(seed, depth);
     let (sx, sy, facing) = level.start();
     let mut rows: Vec<Vec<char>> = (0..level.height as i32)
         .map(|y| {
@@ -60,6 +61,7 @@ fn main() {
                     fb_level::Cell::Rock => '#',
                     fb_level::Cell::Floor => '.',
                     fb_level::Cell::Door => '+',
+                    fb_level::Cell::Column => 'O',
                 })
                 .collect()
         })
@@ -78,6 +80,9 @@ fn main() {
     }
     for creature in &level.creatures {
         rows[creature.y as usize][creature.x as usize] = creature_mark(creature.species);
+    }
+    for stair in &level.stairs {
+        rows[stair.y as usize][stair.x as usize] = if stair.kind == fb_level::StairKind::Down { '>' } else { '<' };
     }
     rows[level.entrance.y as usize][level.entrance.x as usize] = 'E';
     rows[sy as usize][sx as usize] = '@';

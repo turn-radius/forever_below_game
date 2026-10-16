@@ -31,6 +31,7 @@ use fb_level::{CELL, Level};
 use procgen_rng::Mulberry32;
 
 use super::{Critter, Driven, Intent, tongue_flick};
+use crate::combat::feedback::Corpse;
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
 use crate::player::{blocked_by, slide_around};
@@ -156,9 +157,12 @@ fn cell(p: Vec2) -> (i32, i32) {
 }
 
 /// Gives each new creature a brain: it now acts for itself, rather than idling.
-fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &Critter, &Transform), Added<Critter>>) {
+fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &Critter, &Transform), (Added<Critter>, Without<Corpse>)>) {
     for (entity, critter, at) in &new {
-        let home = at.translation.xz();
+        // Home is where the level placed it, even when it comes back somewhere else after the
+        // delver left the level ([`crate::record`]): it wanders back to its own room.
+        let [hx, _, hz] = fb_level::Level::world(critter.spot.x, critter.spot.y);
+        let home = Vec2::new(hx, hz);
         let mut rng = Mulberry32::new(critter.spot.seed ^ 0xB4A1);
         let wait = rng.range_f32(0.5, 4.0);
         let (x, y) = cell(home);
@@ -170,7 +174,7 @@ fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &C
             attack: None,
             bitten: false,
             path: Vec::new(),
-            goal: (x, y),
+            goal: cell(at.translation.xz()),
             repath: 0.0,
             stuck: 0.0,
             rng,
@@ -412,7 +416,7 @@ mod tests {
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_plugins(BehaviourPlugin)
             .add_systems(Update, (super::super::idle, animate).chain().after(behave));
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         app.insert_resource(Obstacles(obstacles(&level)));
         app.insert_resource(CurrentLevel(level.clone()));
         let player = app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y))).id();
@@ -448,7 +452,7 @@ mod tests {
 
     #[test]
     fn a_rat_that_sees_you_reaches_you_and_attacks() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         // The first pack's room, the player standing two cells from the pack in plain sight.
         let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
         let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
@@ -472,7 +476,7 @@ mod tests {
 
     #[test]
     fn creatures_never_pass_through_walls_props_or_folk() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let walls = |x: i32, y: i32| !level.is_open(x, y);
         let obstacles = obstacles(&level);
         // The player stands where the rats must come round the dwarves and the brazier, then
@@ -510,7 +514,7 @@ mod tests {
 
     #[test]
     fn out_of_sight_they_go_back_to_wandering() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
         let near = Vec2::new(first.x + 1.0, first.y + 0.5) * CELL;
         let (mut app, roots, player) = level_app(near);
@@ -544,7 +548,7 @@ mod tests {
 
     #[test]
     fn long_snakes_keep_their_bodies_out_of_the_rock() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         // How deep a point lies in rock: 0 on open floor, else how far it is from the nearest
         // open cell beside the rock cell it is in.
         let depth = |x: f32, z: f32| {
@@ -637,7 +641,7 @@ mod tests {
     }
 
     fn rat_room_player() -> Vec2 {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
         let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
         let (cx, cy) = room.centre();

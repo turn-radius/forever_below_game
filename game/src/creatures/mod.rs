@@ -29,8 +29,10 @@ use fb_creatures::rig::{Capsule, SURFACE_PARTS};
 use fb_level::{CreatureSpot, Level};
 use procgen_rng::Mulberry32;
 
+use crate::combat::{Health, feedback::Corpse};
 use crate::level::geometry::Relief;
 use crate::play::{CurrentLevel, DelveSystems, Player};
+use crate::record::WorldRecord;
 use crate::render::{ItemAppearance, ItemSpawner};
 use crate::tuning::Tuning;
 
@@ -235,7 +237,14 @@ pub fn transform_of(place: &Placement) -> Transform {
 }
 
 /// Spawns every creature of the level once, and again only if the spots change.
-fn spawn_creatures(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<Critter>>, mut spawner: ItemSpawner, mut shown: Local<Option<Vec<CreatureSpot>>>) {
+fn spawn_creatures(
+    mut commands: Commands,
+    level: Res<CurrentLevel>,
+    old: Query<Entity, With<Critter>>,
+    record: Option<Res<WorldRecord>>,
+    mut spawner: ItemSpawner,
+    mut shown: Local<Option<Vec<CreatureSpot>>>,
+) {
     // Again only if the spots change, or every creature was cleared away (a new delve).
     if shown.as_deref() == Some(&level.0.creatures[..]) && !old.is_empty() {
         return;
@@ -243,11 +252,24 @@ fn spawn_creatures(mut commands: Commands, level: Res<CurrentLevel>, old: Query<
     for entity in &old {
         commands.entity(entity).despawn();
     }
-    for spot in &level.0.creatures {
-        spawn_creature(&mut commands, &mut spawner, &level.0, spot);
+    // On a level that was left, each creature is as it was left (`crate::record`).
+    let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
+    for (index, spot) in level.0.creatures.iter().enumerate() {
+        let root = spawn_creature(&mut commands, &mut spawner, &level.0, spot);
+        if let Some(left) = saved.and_then(|l| l.creatures.get(&index)) {
+            let at = left.transform();
+            commands.entity(root).insert((Health { hp: left.hp, max: left.max }, at));
+            if left.dead {
+                // Long fallen: lying as it lies once it has collapsed.
+                commands.entity(root).insert(Corpse { since: LONG_FALLEN, fell: at });
+            }
+        }
     }
     *shown = Some(level.0.creatures.clone());
 }
+
+/// Seconds a restored body has lain, long past its collapse.
+const LONG_FALLEN: f32 = 60.0;
 
 /// Spawns one creature: a root at its spot and a tree of bones carrying its parts.
 pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot) -> Entity {
@@ -448,7 +470,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_systems(Update, (idle, animate).chain());
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         app.insert_resource(CurrentLevel(level.clone()));
         let roots = {
             let mut commands = app.world_mut().commands();
@@ -484,7 +506,7 @@ mod tests {
     #[test]
     fn creatures_on_1207_neither_float_nor_sink_standing_or_moving() {
         let (mut app, roots) = level_app();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let relief = Relief::new(&level);
         let rigs: Vec<fb_creatures::Rig> = roots.iter().map(|&r| app.world().get::<Critter>(r).unwrap().creature.rig()).collect();
         for frame in 0..150 {
@@ -532,7 +554,7 @@ mod tests {
 
     #[test]
     fn creatures_stand_on_the_drawn_floor() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let relief = Relief::new(&level);
         for spot in &level.creatures {
             let t = stand_at(&level, spot);

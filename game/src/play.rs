@@ -190,9 +190,10 @@ impl ScreenOpen {
     }
 }
 
-/// Run condition: no screen is open over the level.
-pub fn level_has_focus(screen: Option<Res<ScreenOpen>>) -> bool {
-    !screen.is_some_and(|s| s.0.is_some())
+/// Run condition: no screen is open over the level and the delver is not between levels
+/// ([`crate::travel`]).
+pub fn level_has_focus(screen: Option<Res<ScreenOpen>>, journey: Option<Res<crate::travel::Journey>>) -> bool {
+    !screen.is_some_and(|s| s.0.is_some()) && journey.is_none()
 }
 
 /// Which leaf of the inventory screen is showing: the plate's tab bar. The outfit tab is a
@@ -258,8 +259,13 @@ pub fn switch_screens(
     input: ActionInput,
     mut open: ResMut<ScreenOpen>,
     mut tab: ResMut<SheetTab>,
+    journey: Option<Res<crate::travel::Journey>>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
 ) {
+    // No screen opens between levels.
+    if journey.is_some() {
+        return;
+    }
     let keys = ScreenKeys {
         inventory: input.just_pressed(Action::Inventory),
         character: input.just_pressed(Action::Character),
@@ -306,7 +312,7 @@ impl Plugin for PlayPlugin {
             crate::map::MapPlugin,
         ))
         // Over the plugin tuple's limit.
-        .add_plugins(crate::quickslots::QuickslotPlugin);
+        .add_plugins((crate::quickslots::QuickslotPlugin, crate::travel::TravelPlugin));
     }
 }
 

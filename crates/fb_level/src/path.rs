@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn seed_1207_joins_every_room_to_the_start() {
-        let level = crate::generate(1207);
+        let level = crate::generate(1207, 1);
         let (sx, sy, _) = level.start();
         let blocked = |x, y| !level.is_open(x, y);
         for room in &level.rooms {

@@ -241,7 +241,7 @@ fn title_controls(
     if chose || (*page == MenuPage::Main && input.just_pressed(Action::NewDelve)) {
         let seed = seed.0.unwrap_or_else(clock_seed);
         info!("title: a new delve into level {seed}");
-        commands.insert_resource(CurrentLevel(fb_level::generate(seed)));
+        commands.insert_resource(CurrentLevel(fb_level::generate(seed, 1)));
         next.set(AppState::Delving);
     } else if *page != MenuPage::Main && input.just_pressed(Action::Back) {
         *page = MenuPage::Main;

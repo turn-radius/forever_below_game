@@ -320,7 +320,7 @@ mod tests {
         use bevy::input::mouse::AccumulatedMouseMotion;
         use bevy::window::{CursorOptions, PrimaryWindow};
 
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (x, y, _) = level.start();
         let [wx, wy, wz] = fb_level::Level::world(x as f32 + 0.5, y as f32 + 0.5);
         let mut app = App::new();
