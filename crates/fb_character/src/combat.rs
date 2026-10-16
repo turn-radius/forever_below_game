@@ -223,13 +223,20 @@ pub fn attack_roll_with(to_hit: &[(&str, i32)], armour_class: i32, odds: Odds, r
     Attack { roll, natural, set_aside, armour_class, hit }
 }
 
+/// The proficiency bonus the delver and folk add to their attack rolls: +2, a character's from
+/// 1st to 4th level (SRD 5.1, "Beyond 1st Level", the Character Advancement table; "Attack
+/// Rolls", p. 96). Everyone counts as proficient with whatever they swing, as everyone is with
+/// unarmed strikes in the SRD; that every weapon counts is our own simplification until classes
+/// carry weapon proficiencies.
+pub const PROFICIENCY_BONUS: i32 = 2;
+
 /// What an attacker adds to the d20. The delver, folk and creatures all roll through it against
 /// the armour class of whatever they swing at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToHit {
-    /// Someone with abilities and a weapon (the delver, a folk): the Strength modifier and the
-    /// weapon's `ToHit`, rounded and left out when 0 (SRD 5.1 p. 96, "Attack Rolls"; the
-    /// proficiency bonus is left out, our own).
+    /// Someone with abilities and a weapon (the delver, a folk): the Strength modifier, the
+    /// proficiency bonus ([`PROFICIENCY_BONUS`]) and the weapon's `ToHit`, rounded and left out
+    /// when 0 (SRD 5.1 p. 96, "Attack Rolls").
     Strength { modifier: i32, weapon: i32 },
     /// A creature: the attack bonus its SRD stat block prints, and the `ToHit` of a weapon it
     /// carries (a skeleton's), left out when 0.
@@ -244,6 +251,9 @@ impl ToHit {
             ToHit::StatBlock { attack_bonus, weapon } => (("attack bonus", attack_bonus), weapon),
         };
         let mut terms = vec![first];
+        if matches!(self, ToHit::Strength { .. }) {
+            terms.push(("proficiency", PROFICIENCY_BONUS));
+        }
         if weapon != 0 {
             terms.push(("ToHit", weapon));
         }
@@ -277,12 +287,12 @@ mod tests {
     }
 
     #[test]
-    fn a_14_plus_str_2_plus_to_hit_1_hits_ac_15() {
+    fn a_14_plus_str_2_plus_proficiency_plus_to_hit_1_hits_ac_15() {
         let attack = folk_attack(2, 1, 15, &mut Mulberry32::new(seed_for(14)));
-        assert_eq!((attack.natural, attack.roll.value(), attack.hit), (14, 17.0, true));
-        assert_eq!(attack.line(), "d20 (14) + STR (+2) + ToHit (+1) = 17 vs AC 15: hit");
-        let miss = folk_attack(2, 1, 18, &mut Mulberry32::new(seed_for(14)));
-        assert_eq!((miss.hit, miss.line().ends_with("vs AC 18: miss")), (false, true));
+        assert_eq!((attack.natural, attack.roll.value(), attack.hit), (14, 19.0, true));
+        assert_eq!(attack.line(), "d20 (14) + STR (+2) + proficiency (+2) + ToHit (+1) = 19 vs AC 15: hit");
+        let miss = folk_attack(2, 1, 20, &mut Mulberry32::new(seed_for(14)));
+        assert_eq!((miss.hit, miss.line().ends_with("vs AC 20: miss")), (false, true));
     }
 
     #[test]
@@ -292,7 +302,7 @@ mod tests {
         assert_eq!(one.line(), "d20 (1) + attack bonus (+30) = 31 vs AC 5: miss, natural 1");
         let twenty = folk_attack(-4, 0, 30, &mut Mulberry32::new(seed_for(20)));
         assert!(twenty.hit, "{}", twenty.line());
-        assert_eq!(twenty.line(), "d20 (20) + STR (-4) = 16 vs AC 30: hit, natural 20");
+        assert_eq!(twenty.line(), "d20 (20) + STR (-4) + proficiency (+2) = 18 vs AC 30: hit, natural 20");
         let plain = folk_attack(0, 0, 10, &mut Mulberry32::new(seed_for(20)));
         assert!(plain.line().ends_with(": hit"), "a 20 that also beats the AC is just a hit");
     }
@@ -338,7 +348,7 @@ mod tests {
         });
         let attack = ToHit::Strength { modifier: 1, weapon: 0 }.roll(12, Odds::Disadvantage, &mut Mulberry32::new(seed.unwrap()));
         assert_eq!((attack.natural, attack.set_aside, attack.hit), (4, Some(15), false));
-        assert_eq!(attack.line(), "d20 with disadvantage (4) + STR (+1) = 5 vs AC 12: miss, 15 set aside");
+        assert_eq!(attack.line(), "d20 with disadvantage (4) + STR (+1) + proficiency (+2) = 7 vs AC 12: miss, 15 set aside");
         let rate = |odds| {
             let mut rng = Mulberry32::new(31);
             (0..20_000).filter(|_| ToHit::StatBlock { attack_bonus: 4, weapon: 0 }.roll(13, odds, &mut rng).hit).count() as f64 / 20_000.0
@@ -352,7 +362,7 @@ mod tests {
     #[test]
     fn a_skeletons_weapon_adds_its_to_hit_and_a_zero_is_left_out() {
         assert_eq!(ToHit::StatBlock { attack_bonus: 4, weapon: 1 }.terms(), [("attack bonus", 4), ("ToHit", 1)]);
-        assert_eq!(ToHit::Strength { modifier: -1, weapon: 0 }.terms(), [("STR", -1)]);
+        assert_eq!(ToHit::Strength { modifier: -1, weapon: 0 }.terms(), [("STR", -1), ("proficiency", 2)]);
     }
 
     /// The game's combat as it was before the dice moved here, for the same draws.
