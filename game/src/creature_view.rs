@@ -178,7 +178,7 @@ fn setup(mut commands: Commands) {
         Text::default(),
         TextFont::from_font_size(18.0),
         TextColor(PLATE_INK),
-        Node { position_type: PositionType::Absolute, top: px(16.0), left: px(20.0), ..default() },
+        Node { position_type: PositionType::Absolute, top: px(16.0), left: px(20.0), right: px(20.0), ..default() },
     ));
 }
 
