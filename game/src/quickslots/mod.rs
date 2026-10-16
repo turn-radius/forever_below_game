@@ -1,5 +1,5 @@
-//! The quickslot bar: ten slots along the bottom of the view, running right from the orbs and
-//! ending in a scrolled flourish ([`crate::combat::orbs`], [`crate::combat::eye`]).
+//! The quickslot bar: ten slots along the bottom of the view, running right from the orbs
+//! ([`crate::combat::orbs`], [`crate::combat::eye`]).
 //!
 //! An item is bound to a slot by dragging it from the inventory onto the strip of slots the
 //! inventory screen shows (the HUD bar itself hides under screens, like the rest of the HUD).
@@ -12,12 +12,7 @@
 //! when one is used up the slot moves to another of the same base that is carried, and empties
 //! when the last is gone. Binding an item to a slot takes it from any other slot it was in.
 
-use bevy::{
-    prelude::*,
-    render::render_resource::{AsBindGroup, ShaderType},
-    shader::{Shader, ShaderRef, load_shader_library},
-    text::FontSize,
-};
+use bevy::{prelude::*, text::FontSize};
 use fb_items::{Item, Slot};
 
 use crate::combat::orbs::{OrbCluster, cluster_layout};
@@ -26,9 +21,7 @@ use crate::inventory::{Dragging, FloorChanges, Icons, Inventory, ItemId, Locatio
 use crate::keymap::{Action, ActionInput};
 use crate::launch::AppState;
 use crate::play::{DelveSystems, level_has_focus};
-use crate::ui::{BAD, BRIGHT, CELL, FRAME_GOLD, LINE, OK, UiFonts};
-
-const SHADER_PATH: &str = "embedded://forever_below/quickslots/scroll.wesl";
+use crate::ui::{BAD, BRIGHT, CELL, LINE, OK, UiFonts};
 
 /// How many slots there are, as keys 1 to 0.
 pub const SLOTS: usize = 10;
@@ -37,12 +30,6 @@ pub struct QuickslotPlugin;
 
 impl Plugin for QuickslotPlugin {
     fn build(&self, app: &mut App) {
-        if app.world().contains_resource::<Assets<Shader>>() {
-            load_shader_library!(app, "scroll.wesl");
-            app.add_plugins(UiMaterialPlugin::<ScrollMaterial>::default());
-        } else if app.world().contains_resource::<AssetServer>() {
-            app.init_asset::<ScrollMaterial>();
-        }
         app.init_resource::<Quickslots>()
             .add_systems(OnExit(AppState::Delving), forget_the_bindings)
             .add_systems(
@@ -303,36 +290,19 @@ pub fn strip(parent: &mut ChildSpawnerCommands, fonts: &UiFonts) {
 }
 
 /// A slot on the strip, and the gap between them, in logical pixels.
-pub const STRIP_SIZE: f32 = 44.0;
+pub const STRIP_SIZE: f32 = 50.0;
 pub const STRIP_GAP: f32 = 6.0;
 
 /// Draws the bar into each new cluster: the ten slots starting just right of the eye and level
-/// with it, and the flourish after them, positioned from the layout
-/// ([`cluster_layout`]).
-fn spawn_bar(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>, fonts: Option<Res<UiFonts>>, materials: Option<ResMut<Assets<ScrollMaterial>>>) {
+/// with it, positioned from the layout ([`cluster_layout`]).
+fn spawn_bar(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>, fonts: Option<Res<UiFonts>>) {
     let Some(fonts) = fonts else { return };
-    let mut materials = materials;
     let layout = cluster_layout();
     for cluster in &clusters {
         commands.entity(cluster).with_children(|cluster| {
             let style = SlotStyle { size: vmin(layout.slot), gap: vmin(layout.gap), number: FontSize::VMin(layout.slot * 0.3) };
             let row = Node { position_type: PositionType::Absolute, left: vmin(layout.bar.min.x), top: vmin(layout.bar.min.y), flex_direction: FlexDirection::Row, column_gap: style.gap, ..default() };
             spawn_slots(cluster, &fonts, style, false, row);
-            if let Some(materials) = materials.as_deref_mut() {
-                cluster.spawn((
-                    Name::new("Quickslot flourish"),
-                    MaterialNode(materials.add(ScrollMaterial::default())),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: vmin(layout.scroll.min.x),
-                        top: vmin(layout.scroll.min.y),
-                        width: vmin(layout.scroll.width()),
-                        height: vmin(layout.scroll.height()),
-                        ..default()
-                    },
-                    Pickable::IGNORE,
-                ));
-            }
         });
     }
 }
@@ -398,31 +368,6 @@ fn hint_slots(dragging: Res<Dragging>, mut drops: Query<(&QuickSlot, &Shown, &mu
         if border.top != colour {
             *border = BorderColor::all(colour);
         }
-    }
-}
-
-/// The scrolled flourish that ends the bar (`scroll.wesl`).
-#[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
-pub struct ScrollMaterial {
-    #[uniform(0)]
-    pub style: ScrollStyle,
-}
-
-#[derive(ShaderType, Clone, Copy, Debug, PartialEq)]
-pub struct ScrollStyle {
-    pub gold: LinearRgba,
-    pub gold_dark: LinearRgba,
-}
-
-impl Default for ScrollMaterial {
-    fn default() -> Self {
-        ScrollMaterial { style: ScrollStyle { gold: FRAME_GOLD.into(), gold_dark: Color::srgb(0.30, 0.21, 0.08).into() } }
-    }
-}
-
-impl UiMaterial for ScrollMaterial {
-    fn fragment_shader() -> ShaderRef {
-        SHADER_PATH.into()
     }
 }
 
@@ -709,7 +654,6 @@ mod tests {
         let row = layout.bar.width();
         let slots = SLOTS as f32;
         assert!((row - (slots * layout.slot + (slots - 1.0) * layout.gap)).abs() < 1e-4);
-        assert!(layout.scroll.min.x >= layout.bar.max.x, "the flourish ends the bar");
         // In a square window, the narrowest there is: everything inside the view's 100 vmin, and
         // the slots still big enough to read at 800 x 600 (6 px a vmin).
         assert!(MARGIN + layout.size.x <= 100.0, "{}", MARGIN + layout.size.x);

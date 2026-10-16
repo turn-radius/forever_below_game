@@ -168,6 +168,12 @@ impl Plugin for CarryPlugin {
 }
 
 /// The light an Armory item gives while it burns or glows, if it is that kind of item.
+/// How high the toast line sits above the bottom of the view, in `vmin`: just clear of the orb
+/// cluster and its quick bar ([`crate::combat::orbs::cluster_layout`]).
+pub fn toast_lift() -> f32 {
+    crate::combat::orbs::MARGIN + crate::combat::orbs::cluster_layout().size.y + 1.5
+}
+
 pub fn item_light(item: &Item) -> Option<LightAnchor> {
     match item {
         Item::Torch(state) => TorchGenerator::light(state),
@@ -1188,9 +1194,10 @@ fn spawn_hud(commands: &mut Commands, camera: Entity, fonts: Option<&UiFonts>) {
             ));
             // The toast (`crate::inventory::Toast`): a line near the foot of the view, clear of
             // the card under the crosshair, saying what F equipped or why it could not. Cream
-            // with a dark shadow so it reads on lit stone and in the dark alike.
+            // with a dark shadow so it reads on lit stone and in the dark alike. It sits just above
+            // the orb cluster and quick bar, so the two never overlap at any window size.
             hud.spawn((
-                Node { position_type: PositionType::Absolute, width: percent(100), bottom: percent(7), justify_content: JustifyContent::Center, ..default() },
+                Node { position_type: PositionType::Absolute, width: percent(100), bottom: vmin(toast_lift()), justify_content: JustifyContent::Center, ..default() },
                 Pickable::IGNORE,
             ))
             .with_children(|row| {
@@ -2214,5 +2221,13 @@ mod tests {
         assert_eq!(key(&inventory), start, "a minute is under a bucket");
         inventory.burn_lights(armory::kindle::TORCH_SECONDS * 0.06);
         assert_ne!(key(&inventory), start, "past 0.05 char the held torch is fitted again");
+    }
+
+    #[test]
+    fn the_toast_sits_above_the_orbs_and_quick_bar() {
+        let layout = crate::combat::orbs::cluster_layout();
+        let cluster_top = crate::combat::orbs::MARGIN + layout.size.y;
+        assert!(toast_lift() > cluster_top, "{} over {}", toast_lift(), cluster_top);
+        assert!(toast_lift() < 40.0, "still near the foot of the view");
     }
 }

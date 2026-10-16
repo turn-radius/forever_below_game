@@ -1167,7 +1167,7 @@ mod tests {
     use super::*;
 
     /// The cell size as shipped.
-    const CELL_PX: f32 = 46.0;
+    const CELL_PX: f32 = 52.0;
 
     #[test]
     fn the_cell_size_here_is_the_shipped_one() {
