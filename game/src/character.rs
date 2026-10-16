@@ -284,6 +284,12 @@ pub struct DelverStamina(pub fb_character::Stamina);
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverMana(pub Mana);
 
+/// Venom in the delver's blood, on the [`Player`](crate::play::Player) only while it works: a
+/// failed save against a snake's venom puts it on (`crate::combat::vitals`), the game clock
+/// steps it and it comes off when it wears off (`crate::simulate::step_the_delver`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverPoison(pub fb_character::poison::Poisoned);
+
 /// How easy the delver is to see, 0 to 1 ([`fb_character::visibility`]): from the light on them,
 /// their pace, load and Stealth. Kept on the [`Player`](crate::play::Player) so the eye can show
 /// it and, later, creatures read it (`crate::combat::eye`).

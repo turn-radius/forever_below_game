@@ -105,6 +105,15 @@ pub struct Venom {
     pub damage: Explained,
 }
 
+impl Venom {
+    /// How many game hours the venom poisons the delver for ([`crate::poison::Poisoned`]):
+    /// [`crate::poison::VENOM_POISONED_HOURS`] after a failed save, none after a successful one
+    /// or with no venom. The lasting poison is our own; see that constant.
+    pub fn poisons_for(&self) -> Option<f64> {
+        self.save.as_ref().filter(|save| !save.succeeded).map(|_| crate::poison::VENOM_POISONED_HOURS)
+    }
+}
+
 /// A poisonous snake's venom after a Constitution save (d20 + modifier) against DC 10 halves
 /// it, rounded down (SRD 5.1 p. 386, "Poisonous Snake"; rounding down is our own). With no
 /// venom nothing is rolled.
@@ -331,6 +340,15 @@ mod tests {
         assert_eq!(venom.damage.value(), 3.0, "7 halved, rounded down");
         let seed = (0..500).find(|s| Mulberry32::new(*s).int(1, 20) == 9).unwrap();
         assert_eq!(venom_after_save(7, 0, &mut Mulberry32::new(seed)).damage.value(), 7.0, "9 fails");
+    }
+
+    #[test]
+    fn a_failed_save_against_venom_poisons_for_an_hour_and_a_good_one_does_not() {
+        let seed = (0..500).find(|s| Mulberry32::new(*s).int(1, 20) == 9).unwrap();
+        assert_eq!(venom_after_save(5, 0, &mut Mulberry32::new(seed)).poisons_for(), Some(1.0), "9 fails DC 10");
+        assert_eq!(venom_after_save(5, 1, &mut Mulberry32::new(seed)).poisons_for(), None, "10 saves");
+        assert_eq!(venom_after_save(0, -5, &mut Mulberry32::new(seed)).poisons_for(), None, "no venom, no poison");
+        assert_eq!(bite_damage(1, 5, 0, &mut Mulberry32::new(seed)).venom.poisons_for(), Some(1.0));
     }
 
     #[test]

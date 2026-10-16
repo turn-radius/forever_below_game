@@ -1,11 +1,12 @@
 //! The conditions a character is under right now, worked out from what the simulation already
-//! tracks: their needs, exhaustion, stamina, load and whether something holds them
+//! tracks: their needs, exhaustion, stamina, load, poison and whether something holds them
 //! ([`conditions`]). Nothing here steps or changes the simulation; it only reads it, so the HUD
 //! can show what is wrong without opening the inventory.
 //!
 //! Each condition has a [`Severity`] and a one-line description of what it does, with the
 //! numbers taken from the rules that apply it, so the line stays true when the rules change.
 
+use crate::poison::Poisoned;
 use crate::{Exhaustion, LoadBand, Meter, MeterKind, Needs, SECOND_WIND, Stamina};
 
 /// How much a condition matters, from a nudge to a danger to the run.
@@ -31,6 +32,7 @@ pub enum ConditionKind {
     Winded,
     Load,
     Held,
+    Poisoned,
 }
 
 /// One condition the character is under.
@@ -55,11 +57,13 @@ pub struct Circumstances {
     pub con_modifier: i32,
     /// The share of their pace a held character moves at, while something holds them.
     pub held_pace: Option<f64>,
+    /// Venom still in the blood, if any.
+    pub poisoned: Poisoned,
 }
 
 impl Default for Circumstances {
     fn default() -> Self {
-        Circumstances { needs: Needs::default(), exhaustion: Exhaustion::default(), stamina: Stamina::default(), load: LoadBand::Light, con_modifier: 0, held_pace: None }
+        Circumstances { needs: Needs::default(), exhaustion: Exhaustion::default(), stamina: Stamina::default(), load: LoadBand::Light, con_modifier: 0, held_pace: None, poisoned: Poisoned::default() }
     }
 }
 
@@ -173,6 +177,23 @@ fn held(pace: Option<f64>) -> Option<Condition> {
     })
 }
 
+/// Game minutes, as a span: 1 is "a minute", 52 "52 minutes".
+fn minutes(n: u32) -> String {
+    if n == 1 { "a minute".to_string() } else { format!("{n} minutes") }
+}
+
+/// Poisoned, while venom from a failed save is still working ([`Poisoned`]), and how long it has
+/// left. The SRD's disadvantage on attack rolls and ability checks has no roll to apply to yet
+/// (`crate::poison`), so the line says so.
+fn poisoned(poisoned: Poisoned) -> Option<Condition> {
+    poisoned.is_active().then(|| Condition {
+        kind: ConditionKind::Poisoned,
+        name: "Poisoned".to_string(),
+        severity: Severity::Moderate,
+        effect: format!("No effect yet; wears off in {}", minutes(poisoned.minutes_left())),
+    })
+}
+
 /// The conditions `now` puts a character under, worst first (and in a fixed order among equals,
 /// so a HUD row does not shuffle). A fresh character is under none.
 pub fn conditions(now: &Circumstances) -> Vec<Condition> {
@@ -180,6 +201,7 @@ pub fn conditions(now: &Circumstances) -> Vec<Condition> {
         held(now.held_pace),
         winded(now.stamina),
         exhaustion(now.exhaustion),
+        poisoned(now.poisoned),
         need(&now.needs.hunger, now.con_modifier),
         need(&now.needs.thirst, now.con_modifier),
         need(&now.needs.sleepiness, now.con_modifier),
@@ -268,6 +290,18 @@ mod tests {
         assert_eq!((burdened.name.as_str(), burdened.effect.as_str()), ("Burdened", "Walking at 85% pace; sprinting tires you 1.5x as fast"));
         assert_eq!(at(LoadBand::Encumbered)[0].effect, "Walking at 65% pace; sprinting tires you 2x as fast");
         assert_eq!(at(LoadBand::Overloaded)[0].severity, Severity::Grave);
+    }
+
+    #[test]
+    fn poisoned_shows_until_it_wears_off_with_the_minutes_left() {
+        let mut now = Circumstances { poisoned: Poisoned::for_hours(crate::poison::VENOM_POISONED_HOURS), ..Circumstances::default() };
+        let shown = &conditions(&now)[0];
+        assert_eq!((shown.kind, shown.name.as_str(), shown.severity), (ConditionKind::Poisoned, "Poisoned", Severity::Moderate));
+        assert_eq!(shown.effect, "No effect yet; wears off in 60 minutes");
+        now.poisoned.step(0.99);
+        assert_eq!(conditions(&now)[0].effect, "No effect yet; wears off in a minute");
+        now.poisoned.step(0.01);
+        assert_eq!(kinds(&now), vec![]);
     }
 
     #[test]

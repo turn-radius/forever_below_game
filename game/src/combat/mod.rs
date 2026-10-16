@@ -317,9 +317,11 @@ pub fn venom_after_save(poison: u32, constitution: i32, rng: &mut Mulberry32) ->
     rules::venom_after_save(poison, modifier(constitution), rng).damage.value() as u32
 }
 
-/// The damage a bite does the delver: its own, and its venom after the save.
-pub fn bite_damage(attack: &AttackOnDelver, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    rules::bite_damage(attack.damage, attack.poison, modifier(constitution), rng).damage.value() as u32
+/// What a bite does the delver: its damage (its own, and its venom after the save) and how many
+/// game hours a failed save poisons them for ([`rules::Venom::poisons_for`]).
+pub fn bite_damage(attack: &AttackOnDelver, constitution: i32, rng: &mut Mulberry32) -> (u32, Option<f64>) {
+    let bite = rules::bite_damage(attack.damage, attack.poison, modifier(constitution), rng);
+    (bite.damage.value() as u32, bite.venom.poisons_for())
 }
 
 #[cfg(test)]
