@@ -31,7 +31,8 @@
 //!   (their [`BlocksTheWay`] circle).
 //!
 //! - **Fighting.** A hostile folk (`crate::hostility`) leaves their routine where it stands and
-//!   fights (`crate::folk_combat`); the others still keep out of their circle.
+//!   fights (`crate::folk_combat`); the others still keep out of their circle. One who gives up
+//!   the fight walks back to their spot ([`Routine::head_home`]) and carries on from there.
 //!
 //! Every pace, range and wait here is our own tuning (`FolkTuning`) unless noted.
 
@@ -128,6 +129,17 @@ impl Routine {
         }
         self.phase = Phase::Held;
         self.away = 0.0;
+    }
+
+    /// Drops whatever they were doing for a short pause, after which they walk back to their
+    /// spot (a pause away from home always ends in the walk back): for one coming back to their
+    /// routine from somewhere else, as a folk who gave up a fight does.
+    pub fn head_home(&mut self) {
+        self.resume = None;
+        self.path.clear();
+        self.speed = 0.0;
+        self.stuck = 0.0;
+        self.phase = Phase::Pause { left: 0.5 };
     }
 
     /// Lets a held person carry on: back to the walk they were on, or else a short pause and a

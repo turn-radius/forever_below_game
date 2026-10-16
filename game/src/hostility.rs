@@ -9,8 +9,10 @@
 //!   clear line to them (`fb_level::path::line_of_sight`, as creatures notice the delver)
 //!   ([`who_turns`]). Other factions stay friendly. "The Ash Choir turn on you" shows low in the
 //!   view.
-//! - Hostile stays hostile: nothing here turns anyone back, and the record keeps it for the rest
-//!   of the run on that level (`crate::record`).
+//! - Hostile stays hostile while the fight goes on, and the record keeps it (`crate::record`). A
+//!   hostile folk who goes `folk.lose_interest_after` seconds without sight of the delver gives up
+//!   and turns friendly again (`crate::folk_combat::fight`); striking them again provokes them
+//!   again.
 //!
 //! Who sees, and the reach of sight in a corridor, are our own.
 
