@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::chain::{cord, thong};
 use crate::build::hafted::smoothstep;
-use crate::build::light::{CHAR, EMBER, FLAME_LIGHT, LightAnchor, add_flame, ember_ring, glowing};
+use crate::build::light::{CHAR, EMBER, FLAME_LIGHT, LightAnchor, add_flame_leaning, ember_ring, spine_offset, glowing};
 use crate::build::parts::{Look, Parts};
 use crate::build::strap::strap;
 use crate::cond::{Condition, ConditionLimits};
@@ -309,10 +309,9 @@ impl Torch {
     pub fn flame_extent(s: &TorchState) -> FlameExtent {
         let g = Geometry::of(s);
         let h = g.flame_height;
-        let lean = g.flame_lean * h;
         FlameExtent {
-            top: vec3::add(g.flame_base, [lean, h, 0.0]),
-            bulb: vec3::add(g.flame_base, [lean * FLAME_BELLY * FLAME_BELLY, h * FLAME_BELLY, 0.0]),
+            top: vec3::add(g.flame_base, [0.0, h, h * spine_offset(1.0, FLAME_TILT)]),
+            bulb: vec3::add(g.flame_base, [0.0, h * FLAME_BELLY, h * spine_offset(FLAME_BELLY, FLAME_TILT)]),
             radius: g.flame_radius,
         }
     }
@@ -341,7 +340,7 @@ impl Torch {
             TorchStyle::Cresset => 0.6,
         };
         let feet = TORCH_FEET * style * fuel * (0.9 + 0.1 * s.burn.flame);
-        let at = vec3::add(g.flame_base, [g.flame_lean * g.flame_height * FLAME_BELLY * FLAME_BELLY, g.flame_height * FLAME_BELLY, 0.0]);
+        let at = vec3::add(g.flame_base, [0.0, g.flame_height * FLAME_BELLY, g.flame_height * spine_offset(FLAME_BELLY, FLAME_TILT)]);
         Some(LightAnchor::feet(at, FLAME_LIGHT, feet, flicker))
     }
 }
@@ -359,6 +358,17 @@ pub struct FlameExtent {
 
 /// Where the widest ring of [`add_flame`]'s flame stands, as a fraction of its height.
 const FLAME_BELLY: f32 = 0.26;
+
+/// How far a torch's flame leans forward (along item +Z) at its base, in radians: 45 degrees,
+/// curling back up to vertical at the tip as a carried flame does. Our own.
+pub const FLAME_TILT: f32 = std::f32::consts::FRAC_PI_4;
+
+/// How wide a torch's flame is at its belly, as a multiple of the head's girth: the bulb
+/// wraps the burning head without swallowing it (#276, #280).
+const FLAME_GIRTH: f32 = 1.3;
+
+/// A bundle of splints fans wider than its girth, so its flame is that much wider again.
+const BUNDLE_SPLAY: f32 = 1.35;
 
 /// The torch's light in feet (`light` of `Torch` in `data/bases.json`): the SRD's torch, 20 ft
 /// of bright light (https://www.dndbeyond.com/sources/dnd/free-rules/equipment#AdventuringGear).
@@ -457,8 +467,6 @@ struct Geometry {
     flame_base: V3,
     flame_height: f32,
     flame_radius: f32,
-    /// Sideways bend of the flame's tip, as a fraction of its height.
-    flame_lean: f32,
 }
 
 impl Geometry {
@@ -480,9 +488,9 @@ impl Geometry {
         let head_top = head_base + length * (1.0 - 0.45 * b.char);
         let char_line = head_top - (head_top - head_base) * b.char.clamp(0.0, 1.0) * 0.92;
         let (height, radius) = match d.style {
-            TorchStyle::Rag => (1.6 * d.length, d.girth * 1.8),
-            TorchStyle::Bundle => (1.3 * d.length, d.girth * 2.1),
-            TorchStyle::Cresset => (1.8 * d.length, d.girth * 1.8),
+            TorchStyle::Rag => (1.35 * d.length, d.girth * FLAME_GIRTH),
+            TorchStyle::Bundle => (1.1 * d.length, d.girth * FLAME_GIRTH * BUNDLE_SPLAY),
+            TorchStyle::Cresset => (1.5 * d.length, d.girth * FLAME_GIRTH),
         };
         // The flame's belly (widest ring) stands at [`FLAME_BELLY`] of its height; seat it
         // across the upper head, with the base at or below the char line, so the flame
@@ -490,7 +498,6 @@ impl Geometry {
         let flame_height = height * b.flame;
         let belly = head_base + (head_top - head_base) * 0.6;
         let flame_base = [0.0, char_line.min(belly - FLAME_BELLY * flame_height), 0.0];
-        let lean = ((s.seed % 13) as f32 / 12.0 - 0.5) * 0.3;
         Geometry {
             butt,
             top,
@@ -499,8 +506,7 @@ impl Geometry {
             char_line,
             flame_base,
             flame_height,
-            flame_radius: radius * (0.6 + 0.4 * b.flame),
-            flame_lean: lean,
+            flame_radius: radius * (0.8 + 0.2 * b.flame),
         }
     }
 }
@@ -562,7 +568,7 @@ fn build_torch(s: &TorchState) -> ItemMesh {
         TorchStyle::Cresset => cresset_head(s, &g, fuel, &mut parts),
     }
     if burning {
-        add_flame(&mut parts, g.flame_base, g.flame_height, g.flame_radius, g.flame_lean, s.seed);
+        add_flame_leaning(&mut parts, g.flame_base, g.flame_height, g.flame_radius, 0.0, FLAME_TILT, s.seed);
     }
     parts.finish()
 }
@@ -862,6 +868,7 @@ mod tests {
 
     #[test]
     fn the_flame_engulfs_the_burning_head() {
+        let mut ratios = Vec::new();
         for style in [TorchStyle::Rag, TorchStyle::Bundle, TorchStyle::Cresset] {
             for seed in 0..120u32 {
                 for (char, flame) in [(0.0, 1.0), (0.3, 0.7), (0.5, 1.0), (0.8, 1.4), (1.0, 0.5)] {
@@ -900,14 +907,24 @@ mod tests {
                         .filter(|p| (p[1] - belly_y).abs() < 0.06)
                         .map(reach)
                         .fold(0.0f32, f32::max);
-                    assert!(belly_r > head_r, "flame {belly_r} not wider than head {head_r}: {what}");
+                    // Wider than the head, but not by much (#280): the bulb is about 1.3 times
+                    // the head's girth, and the tongues and the burn's size move it either way.
+                    assert!(belly_r > head_r * 1.02, "flame {belly_r} not wider than head {head_r}: {what}");
+                    assert!(belly_r < head_r * 2.0, "flame {belly_r} swallows head {head_r}: {what}");
+                    ratios.push(belly_r / head_r);
                     assert!(lo <= g.char_line + 0.02, "flame starts above the char line: {what}");
                     assert!(hi > g.head_top, "tip below the head top: {what}");
                     let light = Torch::light(&s).unwrap().position;
                     let (min_x, max_x) = fl.positions.iter().map(|p| p[0]).fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
                     assert!(light[1] > lo && light[1] < hi && light[0] > min_x && light[0] < max_x, "light outside the flame: {what}");
+                    let (min_z, max_z) = fl.positions.iter().map(|p| p[2]).fold((f32::MAX, f32::MIN), |(a, b), z| (a.min(z), b.max(z)));
+                    assert!(light[2] > min_z && light[2] < max_z, "light outside the flame in z: {what}");
+                    // The flame leans forward: it reaches further ahead of the wick than behind.
+                    assert!(max_z > -min_z, "flame does not lean forward: {what}");
                 }
             }
         }
+        let mean = ratios.iter().sum::<f32>() / ratios.len() as f32;
+        assert!((1.1..1.5).contains(&mean), "the bulb is about 1.3 times the head on average: {mean}");
     }
 }

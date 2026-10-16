@@ -18,7 +18,7 @@ import bevy_pbr::render::{
     view_transformations::position_world_to_clip,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, main_pass_post_lighting_processing},
-    pbr_types::PbrInput,
+    pbr_types::{PbrInput, STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS, STANDARD_MATERIAL_FLAGS_ALPHA_MODE_PREMULTIPLIED},
     pbr_lighting::getRangeFalloff,
     mesh_view_bindings as view_bindings,
     mesh_view_types,
@@ -362,18 +362,31 @@ fn fragment(
         toon.decay_seed,
     );
 
+    // A flame (premultiplied) is coloured by its vertices, by height (`flame_colour`), and here
+    // reddens toward its silhouette in three steps, so its edges read deep red-orange and its
+    // middle bright: the facing of the surface to the eye stands in for the distance from the
+    // flame's axis. Its alpha is its vertices' too, mostly see-through.
+    let flame = (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS) == STANDARD_MATERIAL_FLAGS_ALPHA_MODE_PREMULTIPLIED;
+    var tone = base;
+    if flame {
+        let to_flame_eye = normalize(view_bindings::view.world_position - pbr_input.world_position.xyz);
+        let facing = abs(dot(pbr_input.N, to_flame_eye));
+        let step_up = clamp(floor(facing * 3.0) / 2.0, 0.0, 1.0);
+        tone = mix(base * vec3(0.85, 0.4, 0.22), base, step_up);
+    }
+
     let ambient = view_bindings::lights.ambient_color.rgb * pbr_input.diffuse_occlusion;
     let light = toon_direct_light(toon, pbr_input) + ambient * view_bindings::view.exposure;
-    let lit = srgb_to_linear(base * light);
+    let lit = srgb_to_linear(tone * light);
     // Glow fades as the stone clouds over (`gemMat`).
-    let glow = srgb_to_linear(base) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
+    let glow = srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
 
     var out: FragmentOutput;
     // See-through glass (alpha below 1) stops more light where it is seen edge on, as a
     // curved pane looks thicker at its rim. A cubic of 1 - |N.V| is our own stand-in for
     // Fresnel, here only so a bottle's outline reads inside its ink line.
     var alpha = pbr_input.material.base_color.a;
-    if alpha < 1.0 {
+    if alpha < 1.0 && !flame {
         let to_eye = normalize(view_bindings::view.world_position - pbr_input.world_position.xyz);
         let edge = 1.0 - abs(dot(pbr_input.N, to_eye));
         alpha = mix(alpha, 0.85, edge * edge * edge);
@@ -390,6 +403,11 @@ fn fragment(
         dot(origin, vec3(0.37, 0.0, 0.29)),
     );
     out.color = vec4<f32>(lit + glow + shimmer, alpha);
+    if flame {
+        // Premultiplied blending adds the colour as it is, so scale it by its own opacity:
+        // result = colour * alpha + what is behind * (1 - alpha), the head behind the veil.
+        out.color = vec4<f32>(out.color.rgb * alpha, alpha);
+    }
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

@@ -1099,6 +1099,7 @@ fn show_held(
                 Name::new(format!("Held {}", hand.item.family().key())),
                 HeldItem { item: hand.item.clone(), hand: hand.hand, point: hand.point },
                 crate::render::flame::FlameUp::default(),
+                crate::render::flame::FlameFacing(Vec3::NEG_Z),
                 HeldSway::new(transform),
                 transform,
                 Propagate(view_layer.clone()),
@@ -1235,14 +1236,28 @@ fn follow_player_camera(
 fn upright_held_flames(
     view_models: Query<&ViewModelCamera>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    mut held: Query<(&ChildOf, &mut crate::render::flame::FlameUp), With<HeldItem>>,
+    mut held: Query<(&HeldItem, &ChildOf, &mut crate::render::flame::FlameUp, &mut crate::render::flame::FlameFacing)>,
 ) {
-    for (parent, mut up) in &mut held {
+    for (item, parent, mut up, mut facing) in &mut held {
         let Ok(view_model) = view_models.get(parent.parent()) else { continue };
         let Ok(eye) = eyes.get(view_model.follows) else { continue };
         let world_up = eye.rotation().inverse() * Vec3::Y;
         if up.0 != world_up {
             up.0 = world_up;
+        }
+        // A flame leans away from the delver and out toward its hand's screen edge: forward
+        // along the horizontal of where the eye looks, blended with that side. Looking
+        // straight up or down leaves it where it was.
+        let look = eye.forward().as_vec3();
+        let ahead = Vec3::new(look.x, 0.0, look.z);
+        let side = eye.right().as_vec3();
+        let right = Vec3::new(side.x, 0.0, side.z);
+        if ahead.length() > 1e-3 && right.length() > 1e-3 {
+            let outward = if item.hand == fb_items::Slot::Offhand { -1.0 } else { 1.0 };
+            let ahead = eye.rotation().inverse() * crate::render::flame::held_facing(ahead.normalize(), right.normalize(), outward);
+            if facing.0 != ahead {
+                facing.0 = ahead;
+            }
         }
     }
 }
