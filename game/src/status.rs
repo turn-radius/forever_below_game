@@ -10,6 +10,10 @@
 //! - The row is placed from the orb cluster's layout in `vmin` ([`cluster_layout`]), so it scales
 //!   with the window, and it is part of the HUD, so it hides under screens.
 //!
+//! - The character sheet lists the same conditions with the same badges
+//!   (`crate::inventory::sheet::update_conditions`, [`badge`], [`ConditionIcons`]), which is
+//!   where the player reads them while the mouse is locked.
+//!
 //! `FB_CONDITIONS` holds the delver under conditions for captures, and `FB_CONDITION_HOVER`
 //! shows one badge's card ([`DebugConditions`]).
 
@@ -36,7 +40,7 @@ pub struct StatusPlugin;
 
 impl Plugin for StatusPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ShownConditions>().insert_resource(DebugConditions::from_env()).add_systems(
+        app.init_resource::<ShownConditions>().init_resource::<ConditionIcons>().insert_resource(DebugConditions::from_env()).add_systems(
             Update,
             (spawn_row, hold_debug_conditions, read_conditions, draw_badges, show_card).chain().in_set(DelveSystems),
         );
@@ -151,8 +155,8 @@ fn draw_badges(
     shown: Res<ShownConditions>,
     mut rows: Query<(Entity, &mut Node, Ref<StatusRow>), Without<StatusBadge>>,
     badges: Query<Entity, With<StatusBadge>>,
-    images: Option<ResMut<Assets<Image>>>,
-    mut icons: Local<HashMap<ConditionKind, Handle<Image>>>,
+    mut images: Option<ResMut<Assets<Image>>>,
+    mut icons: ResMut<ConditionIcons>,
 ) {
     if !shown.is_changed() && !rows.iter().any(|(_, _, row)| row.is_added()) {
         return;
@@ -160,7 +164,6 @@ fn draw_badges(
     for badge in &badges {
         commands.entity(badge).despawn();
     }
-    let mut images = images;
     let layout = cluster_layout();
     for (row, mut node, _) in &mut rows {
         let display = if shown.0.is_empty() { Display::None } else { Display::Flex };
@@ -169,30 +172,54 @@ fn draw_badges(
         }
         commands.entity(row).with_children(|row| {
             for (n, condition) in shown.0.iter().enumerate() {
-                let colour = severity_colour(condition.severity);
-                let mut badge = row.spawn((
-                    Name::new(format!("{} badge", condition.name)),
-                    StatusBadge(n),
-                    Node {
-                        width: vmin(layout.badge),
-                        height: vmin(layout.badge),
-                        border: UiRect::all(vmin(layout.badge * 0.07)),
-                        border_radius: BorderRadius::MAX,
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BackgroundColor(colour.darker(0.55).with_alpha(0.92)),
-                    BorderColor::all(colour),
-                    Pickable::IGNORE,
-                ));
-                if let Some(images) = images.as_deref_mut() {
-                    let icon = icons.entry(condition.kind).or_insert_with(|| images.add(icon_image(condition.kind))).clone();
-                    badge.with_child((ImageNode { image: icon, color: colour.lighter(0.12), ..default() }, Node { width: percent(74), height: percent(74), ..default() }, Pickable::IGNORE));
-                }
+                let icon = icons.get(condition.kind, images.as_deref_mut());
+                badge(row, condition, vmin(layout.badge), vmin(layout.badge * 0.07), icon).insert(StatusBadge(n));
             }
         });
     }
+}
+
+/// The badge icons, drawn once a kind and shared by the HUD row and the character sheet.
+#[derive(Resource, Debug, Default)]
+pub struct ConditionIcons(HashMap<ConditionKind, Handle<Image>>);
+
+impl ConditionIcons {
+    /// The icon for `kind`, drawn into `images` the first time it is asked for. None without
+    /// images (the logic tests).
+    pub fn get(&mut self, kind: ConditionKind, images: Option<&mut Assets<Image>>) -> Option<Handle<Image>> {
+        if let Some(icon) = self.0.get(&kind) {
+            return Some(icon.clone());
+        }
+        let icon = images?.add(icon_image(kind));
+        self.0.insert(kind, icon.clone());
+        Some(icon)
+    }
+}
+
+/// Spawns one condition's badge under `parent`: a disc `size` across with a `rim` in its
+/// severity's colour and its icon (if drawn) tinted to match.
+pub fn badge<'a>(parent: &'a mut ChildSpawnerCommands, condition: &Condition, size: Val, rim: Val, icon: Option<Handle<Image>>) -> EntityCommands<'a> {
+    let colour = severity_colour(condition.severity);
+    let mut badge = parent.spawn((
+        Name::new(format!("{} badge", condition.name)),
+        Node {
+            width: size,
+            height: size,
+            flex_shrink: 0.0,
+            border: UiRect::all(rim),
+            border_radius: BorderRadius::MAX,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(colour.darker(0.55).with_alpha(0.92)),
+        BorderColor::all(colour),
+        Pickable::IGNORE,
+    ));
+    if let Some(icon) = icon {
+        badge.with_child((ImageNode { image: icon, color: colour.lighter(0.12), ..default() }, Node { width: percent(74), height: percent(74), ..default() }, Pickable::IGNORE));
+    }
+    badge
 }
 
 /// The badge under the mouse, while the mouse is free (or the one `FB_CONDITION_HOVER` names),
