@@ -137,10 +137,111 @@ pub fn bite_damage(damage: u32, poison: u32, constitution_modifier: i32, rng: &m
     Bite { damage: total, venom }
 }
 
+/// An attack roll against an armour class.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attack {
+    /// The d20 and the to-hit terms, `d20 (14) + STR (+2) + ToHit (+1)`.
+    pub roll: Explained,
+    /// The d20 alone.
+    pub natural: u32,
+    /// The armour class the attack met.
+    pub armour_class: i32,
+    pub hit: bool,
+}
+
+impl Attack {
+    /// The roll, as one line for a log: `d20 (14) + STR (+2) + ToHit (+1) = 17 vs AC 15: hit`.
+    /// A natural 20 or 1 that decided the blow against the total says so.
+    pub fn line(&self) -> String {
+        let by_total = self.roll.value() >= self.armour_class as f64;
+        let verdict = match (self.hit, self.natural) {
+            (true, 20) if !by_total => "hit, natural 20",
+            (false, 1) if by_total => "miss, natural 1",
+            (true, _) => "hit",
+            (false, _) => "miss",
+        };
+        format!("{} = {} vs AC {}: {verdict}", self.roll.terms_line(), self.roll.value(), self.armour_class)
+    }
+}
+
+/// Rolls an attack: a d20 plus `to_hit` terms (a label and an amount each) against
+/// `armour_class` (SRD 5.1 p. 96, "Attack Rolls"). A natural 20 always hits and a natural 1
+/// always misses; otherwise the total must reach the armour class. One draw.
+pub fn attack_roll(to_hit: &[(&str, i32)], armour_class: i32, rng: &mut Mulberry32) -> Attack {
+    let natural = rng.int(1, 20);
+    let mut roll = Explained::new("Attack", "").base("d20", natural as f64);
+    for (label, amount) in to_hit {
+        roll = roll.add(*label, *amount as f64);
+    }
+    let hit = match natural {
+        20 => true,
+        1 => false,
+        _ => roll.value() >= armour_class as f64,
+    };
+    Attack { roll, natural, armour_class, hit }
+}
+
+/// A folk attacker's roll: the Strength modifier and the weapon's `ToHit` (rounded, left out
+/// when 0).
+pub fn folk_attack(strength_modifier: i32, weapon_to_hit: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
+    if weapon_to_hit == 0 {
+        attack_roll(&[("STR", strength_modifier)], armour_class, rng)
+    } else {
+        attack_roll(&[("STR", strength_modifier), ("ToHit", weapon_to_hit)], armour_class, rng)
+    }
+}
+
+/// A creature's roll: the attack bonus its SRD stat block prints.
+pub fn creature_attack(attack_bonus: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
+    attack_roll(&[("attack bonus", attack_bonus)], armour_class, rng)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modifier;
+
+    /// A seed whose first d20 is `natural`.
+    fn seed_for(natural: u32) -> u32 {
+        (0..10_000).find(|s| Mulberry32::new(*s).int(1, 20) == natural).unwrap()
+    }
+
+    #[test]
+    fn a_14_plus_str_2_plus_to_hit_1_hits_ac_15() {
+        let attack = folk_attack(2, 1, 15, &mut Mulberry32::new(seed_for(14)));
+        assert_eq!((attack.natural, attack.roll.value(), attack.hit), (14, 17.0, true));
+        assert_eq!(attack.line(), "d20 (14) + STR (+2) + ToHit (+1) = 17 vs AC 15: hit");
+        let miss = folk_attack(2, 1, 18, &mut Mulberry32::new(seed_for(14)));
+        assert_eq!((miss.hit, miss.line().ends_with("vs AC 18: miss")), (false, true));
+    }
+
+    #[test]
+    fn a_natural_1_always_misses_and_a_natural_20_always_hits() {
+        let one = creature_attack(30, 5, &mut Mulberry32::new(seed_for(1)));
+        assert!(!one.hit, "{}", one.line());
+        assert_eq!(one.line(), "d20 (1) + attack bonus (+30) = 31 vs AC 5: miss, natural 1");
+        let twenty = folk_attack(-4, 0, 30, &mut Mulberry32::new(seed_for(20)));
+        assert!(twenty.hit, "{}", twenty.line());
+        assert_eq!(twenty.line(), "d20 (20) + STR (-4) = 16 vs AC 30: hit, natural 20");
+        let plain = folk_attack(0, 0, 10, &mut Mulberry32::new(seed_for(20)));
+        assert!(plain.line().ends_with(": hit"), "a 20 that also beats the AC is just a hit");
+    }
+
+    #[test]
+    fn plus_3_against_ac_13_hits_55_percent_of_10000_rolls() {
+        let mut rng = Mulberry32::new(2024);
+        let hits = (0..10_000).filter(|_| creature_attack(3, 13, &mut rng).hit).count();
+        assert!((hits as f64 / 10_000.0 - 0.55).abs() < 0.01, "{hits} hits");
+    }
+
+    #[test]
+    fn an_attack_draws_one_die() {
+        let mut rng = Mulberry32::new(5);
+        attack_roll(&[("STR", 1)], 12, &mut rng);
+        let mut reference = Mulberry32::new(5);
+        reference.next_f64();
+        assert_eq!(rng.next_f64(), reference.next_f64());
+    }
 
     /// The game's combat as it was before the dice moved here, for the same draws.
     mod old {

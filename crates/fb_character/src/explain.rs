@@ -119,25 +119,31 @@ impl Explained {
     /// reads `Darkvision 60 ft = best of Goblin 60, Belt of the Mole 10 (Goblin)`.
     pub fn line(&self) -> String {
         let unit = if self.unit.is_empty() { String::new() } else { format!(" {}", self.unit) };
-        let mut out = format!("{} {}{unit} =", self.name, number(self.value));
+        format!("{} {}{unit} = {}", self.name, number(self.value), self.terms_line())
+    }
+
+    /// The terms alone, as [`Explained::line`] prints them after the `=`: `d20 (14) + STR (+2)`.
+    pub fn terms_line(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
         let mut best = Vec::new();
         for term in &self.terms {
             match term.op {
-                Op::Base => out.push_str(&format!(" {} ({})", term.label, number(term.amount))),
-                Op::Add => out.push_str(&format!(" + {} ({}{})", term.label, if term.amount < 0.0 { "" } else { "+" }, number(term.amount))),
-                Op::Multiply => out.push_str(&format!(" × {} ({})", term.label, number(term.amount))),
+                Op::Base => parts.push(format!("{} ({})", term.label, number(term.amount))),
+                Op::Add => parts.push(format!("+ {} ({}{})", term.label, if term.amount < 0.0 { "" } else { "+" }, number(term.amount))),
+                Op::Multiply => parts.push(format!("× {} ({})", term.label, number(term.amount))),
                 Op::BestOf => best.push(format!("{} {}", term.label, number(term.amount))),
-                Op::Clamp { min, max } if max.is_infinite() => out.push_str(&format!(" at least {}", number(min))),
-                Op::Clamp { min, max } => out.push_str(&format!(" held {} within {} to {}", term.label, number(min), number(max))),
+                Op::Clamp { min, max } if max.is_infinite() => parts.push(format!("at least {}", number(min))),
+                Op::Clamp { min, max } => parts.push(format!("held {} within {} to {}", term.label, number(min), number(max))),
             }
         }
         if !best.is_empty() {
-            out.push_str(&format!(" best of {}", best.join(", ")));
+            let mut text = format!("best of {}", best.join(", "));
             if let Some(w) = self.winner() {
-                out.push_str(&format!(" ({})", w.label));
+                text.push_str(&format!(" ({})", w.label));
             }
+            parts.push(text);
         }
-        out
+        parts.join(" ")
     }
 }
 
