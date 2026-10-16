@@ -42,6 +42,7 @@ pub struct Tuning {
     pub view: ViewTuning,
     pub moving: MovingTuning,
     pub creatures: CreatureTuning,
+    pub folk: FolkTuning,
     pub combat: CombatTuning,
     pub light: LightTuning,
     pub sound: SoundTuning,
@@ -159,6 +160,27 @@ pub struct CreatureTuning {
 impl Default for CreatureTuning {
     fn default() -> Self {
         CreatureTuning { sense_scale: 1.0, rat_cooldown: 1.5, snake_cooldown: 2.5, rat_chase_speed: 2.0, snake_chase_speed: 1.0, size: CreatureSizes::default() }
+    }
+}
+
+/// How folk go about the level (`crate::folk_routine`). Where each goes is rolled from its
+/// seed; these only set how far, how fast and how long they wait.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FolkTuning {
+    /// An unhurried walking pace for a human, world units per second (1.1 m/s, a stroll under
+    /// the delver's 1.4). Shorter folk go slower, in proportion to their height. Our own.
+    pub walk_speed: f32,
+    /// The least and most seconds folk wait between walks. Our own.
+    pub pause_min: f32,
+    pub pause_max: f32,
+    /// How far from its spot a person strolls, world units (9 m). Our own.
+    pub wander_radius: f32,
+}
+
+impl Default for FolkTuning {
+    fn default() -> Self {
+        FolkTuning { walk_speed: 11.0, pause_min: 3.0, pause_max: 8.0, wander_radius: 90.0 }
     }
 }
 

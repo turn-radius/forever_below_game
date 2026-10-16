@@ -172,6 +172,12 @@ pub struct Stance {
     pub turn: f32,
 }
 
+/// How fast someone is walking now, world units per second (0 standing), for the walk animation.
+#[derive(Component, Default)]
+pub struct Stride {
+    pub speed: f32,
+}
+
 /// The part of a figure that turns with the head, pivoting at the neck: where it looks now as
 /// `(yaw, pitch)` radians, the yaw turning the face (+Z) toward +X, the pitch up.
 #[derive(Component, Clone, Copy, Debug, Default)]
@@ -309,6 +315,7 @@ pub fn spawn_denizen(commands: &mut Commands, spawner: &mut ItemSpawner, person:
             Name::new(person.name.clone()),
             Denizen { person: person.clone(), radius: footprint(figure), min, max },
             BlocksTheWay(fb_level::FloorShape::Round(footprint(figure))),
+            Stride::default(),
             stand_at(&person.spot),
             Visibility::default(),
         ))

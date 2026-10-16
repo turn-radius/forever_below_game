@@ -191,6 +191,10 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[creatures]` | `snake_cooldown` | 2.5 | Seconds between a snake's strikes. |
 | `[creatures]` | `rat_chase_speed` | 2.0 | How fast a rat comes at you once it has seen you, as a multiple of its speed. |
 | `[creatures]` | `snake_chase_speed` | 1.0 | How fast a snake comes at you once it has seen you, as a multiple of its speed. |
+| `[folk]` | `walk_speed` | 11.0 | A human's unhurried walking pace, world units per second (shorter folk are slower). |
+| `[folk]` | `pause_min` | 3.0 | The least seconds folk wait between walks. |
+| `[folk]` | `pause_max` | 8.0 | The most seconds folk wait between walks. |
+| `[folk]` | `wander_radius` | 90.0 | How far from its spot a person strolls, world units. |
 | `[creatures.size]` | `rat` | 1.0 | How large each kind of creature is drawn, and the floor it covers (1 = as rolled). |
 | `[creatures.size]` | `giant_rat` | 1.0 | Giant rats, as a multiple. |
 | `[creatures.size]` | `viper` | 1.0 | Poisonous snakes, as a multiple. |
