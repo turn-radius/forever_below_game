@@ -2,7 +2,9 @@
 //! ([`crate::combat::orbs`], [`crate::combat::eye`]).
 //!
 //! An item is bound to a slot by dragging it from the inventory onto the strip of slots the
-//! inventory screen shows (the HUD bar itself hides under screens, like the rest of the HUD).
+//! inventory screen shows (the HUD bar itself hides under screens, like the rest of the HUD), or
+//! by pressing the slot's key, 1 to 0, with the mouse over it in the inventory
+//! ([`bind_hovered`]); both go through [`bind_dropped`], with the same refusals.
 //! The keys 1 to 0 then use the item in the slot ([`use_quickslot`]): food and drink are eaten
 //! and drunk (`crate::eat`, a healing draught heals), a torch or lantern is drawn into the hand
 //! and then lit or put out (`crate::kindle`), and a weapon or shield is drawn into the hand.
@@ -17,10 +19,10 @@ use fb_items::{Item, Slot};
 
 use crate::combat::orbs::{OrbCluster, cluster_layout};
 use crate::eat::Eating;
-use crate::inventory::{Dragging, FloorChanges, Icons, Inventory, ItemId, Location, Refusal, Target, Toast};
+use crate::inventory::{Dragging, FloorChanges, Hovered, Icons, Inventory, ItemId, Location, Refusal, Target, Toast};
 use crate::keymap::{Action, ActionInput};
 use crate::launch::AppState;
-use crate::play::{DelveSystems, level_has_focus};
+use crate::play::{DelveSystems, inventory_open, level_has_focus};
 use crate::ui::{BAD, BRIGHT, CELL, LINE, OK, UiFonts};
 
 /// How many slots there are, as keys 1 to 0.
@@ -38,6 +40,7 @@ impl Plugin for QuickslotPlugin {
                     spawn_bar,
                     empty_lost_slots,
                     use_quickslot.run_if(level_has_focus),
+                    bind_hovered.run_if(inventory_open),
                     fill_slots.after(crate::inventory::build_screen),
                     hint_slots,
                 )
@@ -197,6 +200,16 @@ fn use_quickslot(
     toast.say(said, time.map_or(0.0, |t| t.elapsed_secs()));
 }
 
+/// Keys 1 to 0 in the inventory: binds the item under the mouse to that slot, as dropping it
+/// on the strip's slot would, and says so (or why not). Nothing under the mouse, nothing
+/// happens.
+fn bind_hovered(input: ActionInput, hovered: Res<Hovered>, mut slots: ResMut<Quickslots>, inventory: Res<Inventory>, mut toast: ResMut<Toast>, time: Option<Res<Time<Real>>>) {
+    let Some(slot) = input.just_pressed_index(Action::Quickslot) else { return };
+    let Some((id, _)) = hovered.0 else { return };
+    let said = bind_dropped(&mut slots, &inventory, id, slot).unwrap_or_else(|refusal| refusal.reason().to_string());
+    toast.say(said, time.map_or(0.0, |t| t.elapsed_secs()));
+}
+
 /// The delve's end forgets the bindings: its items are gone.
 fn forget_the_bindings(mut slots: ResMut<Quickslots>) {
     *slots = Quickslots::default();
@@ -273,7 +286,7 @@ pub fn check_bind(inventory: &Inventory, id: ItemId) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// Binds `id`, dropped on `slot` of the strip, and says so.
+/// Binds `id` to `slot`, dropped on the strip's slot or by the slot's key over it, and says so.
 pub fn bind_dropped(slots: &mut Quickslots, inventory: &Inventory, id: ItemId, slot: usize) -> Result<String, Refusal> {
     check_bind(inventory, id)?;
     slots.bind(slot, id);
@@ -589,6 +602,52 @@ mod tests {
         let said = bind_dropped(&mut slots, inventory, loaf, 4).unwrap();
         assert!(said.ends_with("is bound to slot 5"), "{said}");
         assert_eq!(slots.get(4), Some(loaf));
+    }
+
+    fn hover(app: &mut App, id: Option<ItemId>) {
+        app.world_mut().resource_mut::<Hovered>().0 = id.map(|id| (id, Rect::default()));
+    }
+
+    #[test]
+    fn a_number_over_an_item_in_the_inventory_binds_it_to_that_slot() {
+        let (mut app, player) = delve();
+        let loaf = give(&mut app, item("Bread"));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        hover(&mut app, Some(loaf));
+        press(&mut app, KeyCode::Digit3);
+        assert_eq!(bound(&app, 2), Some(loaf));
+        assert!(toast(&app).ends_with("is bound to slot 3"), "{}", toast(&app));
+        assert!(has(&app, loaf), "binding does not eat it");
+        assert_eq!(app.world().get::<DelverNeeds>(player).unwrap().0.hunger.value, 0.55);
+
+        press(&mut app, KeyCode::Digit0);
+        assert_eq!((bound(&app, 2), bound(&app, 9)), (None, Some(loaf)), "another number moves it");
+        press(&mut app, KeyCode::Digit0);
+        assert_eq!(bound(&app, 9), Some(loaf), "its own number leaves it");
+
+        hover(&mut app, None);
+        press(&mut app, KeyCode::Digit1);
+        assert_eq!(bound(&app, 0), None, "nothing under the mouse, nothing happens");
+        assert_eq!(bound(&app, 9), Some(loaf));
+    }
+
+    #[test]
+    fn a_number_over_a_worn_or_unusable_or_underfoot_item_acts_as_dragging_it_would() {
+        let (mut app, _) = delve();
+        let sword = app.world_mut().resource_mut::<Inventory>().add(item("Sword"));
+        app.world_mut().resource_mut::<Inventory>().wear(sword, Slot::Mainhand).unwrap();
+        let ring = give(&mut app, item("Ring"));
+        let underfoot = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        hover(&mut app, Some(sword));
+        press(&mut app, KeyCode::Digit2);
+        assert_eq!(bound(&app, 1), Some(sword), "a held weapon binds");
+        for (id, refusal) in [(ring, Refusal::NotUsable), (underfoot, Refusal::NotCarried)] {
+            hover(&mut app, Some(id));
+            press(&mut app, KeyCode::Digit5);
+            assert_eq!(bound(&app, 4), None);
+            assert_eq!(toast(&app), refusal.reason(), "the toast a drag onto the strip gives");
+        }
     }
 
     /// The vitals HUD a view model makes, for the bar to join.
