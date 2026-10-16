@@ -15,8 +15,9 @@
 //!   snakes come on at their speed and keep near their spot.
 //! - **Attacking.** In reach, it turns to the player and attacks on a cooldown: a rat lunges
 //!   and bites; a snake draws its coils in and rears, then strikes with its jaw open. At the
-//!   moment of the bite it sends a [`AttackOnDelver`] with the stat block's bite rolled, which
-//!   combat (#160) will apply; nothing here hurts anyone.
+//!   moment of the bite it rolls to hit, the stat block's attack bonus against the delver's
+//!   Armor Class ([`BlowsAtDelver`]): a hit sends an [`AttackOnDelver`] with the stat block's
+//!   bite rolled, which combat applies, and a miss a [`MissedDelver`].
 //! - **Losing the player.** Out of sight for [`LOSE_AFTER`] seconds once it has reached where
 //!   it last saw them, or led too far from home, it goes back to wandering its room.
 //!
@@ -31,7 +32,9 @@ use fb_level::{CELL, Level};
 use procgen_rng::Mulberry32;
 
 use super::{Critter, Driven, Intent, tongue_flick};
+use crate::combat::ArmourClass;
 use crate::combat::feedback::Corpse;
+use fb_character::combat::{Odds, ToHit};
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
 use crate::player::{blocked_by, slide_around};
@@ -42,6 +45,7 @@ pub struct BehaviourPlugin;
 impl Plugin for BehaviourPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<AttackOnDelver>()
+            .add_message::<MissedDelver>()
             .init_resource::<BlockedCells>()
             .init_resource::<Obstacles>()
             .init_resource::<Tuning>()
@@ -65,6 +69,44 @@ pub struct AttackOnDelver {
     /// delver's facing.
     pub attacker_pos: Vec2,
 }
+
+/// A blow aimed at the delver that missed: its attack roll fell short of their Armor Class.
+/// Combat whooshes it past them (`crate::combat::vitals`); nothing else happens.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct MissedDelver {
+    pub attacker: Entity,
+    /// The attacker's position on the floor (world `(x, z)`).
+    pub attacker_pos: Vec2,
+}
+
+/// Where every blow at the delver, a creature's or a folk's, is rolled: the attacker's to-hit
+/// against the delver's Armor Class, the same rule as the delver's swings
+/// ([`fb_character::combat::ToHit`]). A hit is sent as an [`AttackOnDelver`], a miss as a
+/// [`MissedDelver`].
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct BlowsAtDelver<'w> {
+    hits: MessageWriter<'w, AttackOnDelver>,
+    misses: MessageWriter<'w, MissedDelver>,
+}
+
+impl BlowsAtDelver<'_> {
+    /// Rolls `blow`, by `who` with `to_hit`, against `armour_class` (the delver's, or
+    /// [`ArmourClass::UNARMOURED`] when they have none), from `rng`; returns whether it landed.
+    pub fn strike(&mut self, who: &str, blow: AttackOnDelver, to_hit: ToHit, armour_class: Option<&ArmourClass>, rng: &mut Mulberry32) -> bool {
+        let ac = armour_class.copied().unwrap_or(ArmourClass::UNARMOURED).0;
+        let attack = to_hit.roll(ac, Odds::Even, rng);
+        info!("{who} attacks the delver: {}", attack.line());
+        if attack.hit {
+            self.hits.write(blow);
+        } else {
+            self.misses.write(MissedDelver { attacker: blow.attacker, attacker_pos: blow.attacker_pos });
+        }
+        attack.hit
+    }
+}
+
+/// The delver as a blow at them needs them: where they stand and their Armor Class.
+pub type DelverToStrike = (&'static Transform, Option<&'static ArmourClass>);
 
 /// What a creature is doing.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -212,9 +254,9 @@ fn behave(
     tuning: Res<Tuning>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
-    player: Query<&Transform, (With<Player>, Without<Critter>)>,
+    player: Query<DelverToStrike, (With<Player>, Without<Critter>)>,
     mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform)>,
-    mut attacks: MessageWriter<AttackOnDelver>,
+    mut attacks: BlowsAtDelver,
     mut commands: Commands,
     sounds: Option<Res<crate::combat::feedback::CreatureSounds>>,
     bone_sounds: Option<Res<super::skeletons::BoneSounds>>,
@@ -227,7 +269,8 @@ fn behave(
     let level = &level.0;
     let relief = Relief::new(level);
     let blocked = blocked_by(level, &blocked_cells);
-    let player = player.iter().next().map(|t| t.translation.xz());
+    let delver_ac = player.iter().next().and_then(|(_, ac)| ac.copied());
+    let player = player.iter().next().map(|(t, _)| t.translation.xz());
     // Every creature's circle, to keep the others out of.
     let bodies: Vec<(Entity, Vec2, f32)> = creatures.iter().map(|(e, c, _, _, t)| (e, t.translation.xz(), body_radius(c))).collect();
     let t = time.elapsed_secs();
@@ -410,7 +453,8 @@ fn behave(
                 let within = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius) * SKELETON_SLACK && line_of_sight(grid(at), grid(p), &blocked));
                 if let (true, Some(kit)) = (within, critter.kit.as_ref()) {
                     let damage = kit.roll_damage(&mut brain.rng);
-                    attacks.write(AttackOnDelver { attacker: entity, species: Some(species), damage, poison: 0, attacker_pos: at });
+                    let blow = AttackOnDelver { attacker: entity, species: Some(species), damage, poison: 0, attacker_pos: at };
+                    attacks.strike("A skeleton", blow, critter.to_hit(), delver_ac.as_ref(), &mut brain.rng);
                 }
             }
             if !brain.bitten && since >= lands {
@@ -420,7 +464,8 @@ fn behave(
                     let block = species.stat_block();
                     let damage = block.bite.roll(&mut brain.rng);
                     let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
-                    attacks.write(AttackOnDelver { attacker: entity, species: Some(species), damage, poison, attacker_pos: at });
+                    let blow = AttackOnDelver { attacker: entity, species: Some(species), damage, poison, attacker_pos: at };
+                    attacks.strike(block.name, blow, critter.to_hit(), delver_ac.as_ref(), &mut brain.rng);
                 }
             }
             if since >= done {

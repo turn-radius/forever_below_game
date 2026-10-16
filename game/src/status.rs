@@ -547,7 +547,7 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(badges(&mut app), vec!["Poisoned badge".to_string()]);
-        assert_eq!(app.world().resource::<ShownConditions>().0[0].effect, "No effect yet; wears off in 30 minutes");
+        assert_eq!(app.world().resource::<ShownConditions>().0[0].effect, "Attacking at disadvantage; wears off in 30 minutes");
         app.world_mut().entity_mut(player).remove::<DelverPoison>();
         app.update();
         app.update();

@@ -196,14 +196,13 @@ fn minutes(n: u32) -> String {
 }
 
 /// Poisoned, while venom from a failed save is still working ([`Poisoned`]), and how long it has
-/// left. The SRD's disadvantage on attack rolls and ability checks has no roll to apply to yet
-/// (`crate::poison`), so the line says so.
+/// left. Its attack rolls are thrown at disadvantage ([`Poisoned::attack_odds`]).
 fn poisoned(poisoned: Poisoned) -> Option<Condition> {
     poisoned.is_active().then(|| Condition {
         kind: ConditionKind::Poisoned,
         name: "Poisoned".to_string(),
         severity: Severity::Moderate,
-        effect: format!("No effect yet; wears off in {}", minutes(poisoned.minutes_left())),
+        effect: format!("Attacking at disadvantage; wears off in {}", minutes(poisoned.minutes_left())),
     })
 }
 
@@ -330,9 +329,9 @@ mod tests {
         let mut now = Circumstances { poisoned: Poisoned::for_hours(crate::poison::VENOM_POISONED_HOURS), ..Circumstances::default() };
         let shown = &conditions(&now)[0];
         assert_eq!((shown.kind, shown.name.as_str(), shown.severity), (ConditionKind::Poisoned, "Poisoned", Severity::Moderate));
-        assert_eq!(shown.effect, "No effect yet; wears off in 60 minutes");
+        assert_eq!(shown.effect, "Attacking at disadvantage; wears off in 60 minutes");
         now.poisoned.step(0.99);
-        assert_eq!(conditions(&now)[0].effect, "No effect yet; wears off in a minute");
+        assert_eq!(conditions(&now)[0].effect, "Attacking at disadvantage; wears off in a minute");
         now.poisoned.step(0.01);
         assert_eq!(kinds(&now), vec![]);
     }

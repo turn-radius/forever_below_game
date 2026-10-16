@@ -33,10 +33,11 @@
 //!   the wrist of their height and the weapon's length beyond, a fist an arm's length, a torch an
 //!   improvised 1d4), the blow taking a creature's swing time for the weapon
 //!   ([`crate::combat::swing_time`]) and landing as the arm comes down, if the delver is still in
-//!   reach and in sight; it rolls the weapon's dice plus the Strength modifier and is sent as an
-//!   [`AttackOnDelver`], which takes the delver's hit points as a creature's blow does (no attack
-//!   roll against the delver's Armor Class, as for every creature yet). A friendly folk never
-//!   attacks, however near the delver comes.
+//!   reach and in sight. It rolls to hit as the delver's swings do, the Strength modifier and the
+//!   weapon's `ToHit` against the delver's Armor Class ([`BlowsAtDelver`]); a hit rolls the
+//!   weapon's dice plus the Strength modifier and is sent as an [`AttackOnDelver`], which takes
+//!   the delver's hit points as a creature's blow does, and a miss whooshes past. A friendly
+//!   folk never attacks, however near the delver comes.
 //!
 //! A folk's stance while lying is the one they had standing: the skinned figure is turned as a
 //! whole, not ragdolled. Our own simplification.
@@ -56,7 +57,7 @@ use crate::combat::feedback::{Corpse, Flinches, Looted, Struck, collapse_share, 
 use crate::combat::swing::SwungAt;
 use crate::combat::{ArmourClass, Health, Weapon, first_level_hit_points_explained_for, swing_time};
 use crate::creatures::Critter;
-use crate::creatures::behaviour::{AttackOnDelver, body_radius};
+use crate::creatures::behaviour::{AttackOnDelver, BlowsAtDelver, DelverToStrike, MissedDelver, body_radius};
 use crate::figure::Figure;
 use crate::folk::{Denizen, Person, Stance, Stride};
 use crate::folk_pose::{ArmSwing, spawn_rigged};
@@ -79,6 +80,7 @@ impl Plugin for FolkCombatPlugin {
             .add_message::<Struck>()
             .add_message::<SwungAt>()
             .add_message::<AttackOnDelver>()
+            .add_message::<MissedDelver>()
             .init_resource::<Tuning>()
             .init_resource::<Obstacles>()
             .init_resource::<BlockedCells>()
@@ -399,16 +401,16 @@ pub fn fight(
     tuning: Res<Tuning>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
-    player: Query<&Transform, (With<Player>, Without<Denizen>)>,
+    player: Query<DelverToStrike, (With<Player>, Without<Denizen>)>,
     creatures: Query<(&Critter, &Transform), Standing>,
     mut folk: Query<Fighters, Without<Corpse>>,
-    mut attacks: MessageWriter<AttackOnDelver>,
+    mut attacks: BlowsAtDelver,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
         return;
     }
-    let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
+    let Some((player, delver_ac)) = player.iter().next().map(|(t, ac)| (t.translation.xz(), ac.copied())) else { return };
     let level = &level.0;
     let relief = Relief::new(level);
     let blocked = blocked_by(level, &blocked_cells);
@@ -439,8 +441,11 @@ pub fn fight(
                 fight.landed = true;
                 if sees && player.distance(at) <= reach * SLACK {
                     let damage = combatant.weapon.roll(modifier(combatant.strength), &mut fight.rng);
-                    attacks.write(AttackOnDelver { attacker: entity, species: None, damage, poison: 0, attacker_pos: at });
-                    info!("{} strikes the delver for {damage}", denizen.person.name);
+                    let blow = AttackOnDelver { attacker: entity, species: None, damage, poison: 0, attacker_pos: at };
+                    let to_hit = combatant.weapon.to_hit(combatant.strength);
+                    if attacks.strike(&denizen.person.name, blow, to_hit, delver_ac.as_ref(), &mut fight.rng) {
+                        info!("{} strikes the delver for {damage}", denizen.person.name);
+                    }
                 }
             }
             if since >= combatant.swing_time {
@@ -603,7 +608,15 @@ pub(crate) mod tests {
 
     /// How many of `swings` swings land on a folk of Armor Class `ac`.
     fn landed(ac: i32, swings: usize) -> usize {
+        landed_by(ac, swings, false)
+    }
+
+    /// [`landed`], the delver poisoned or not.
+    fn landed_by(ac: i32, swings: usize, poisoned: bool) -> usize {
         let (mut app, player, folk) = folk_fight(9.0);
+        if poisoned {
+            app.world_mut().entity_mut(player).insert(crate::character::DelverPoison(fb_character::poison::Poisoned::for_hours(10.0)));
+        }
         app.world_mut().entity_mut(folk).insert((ArmourClass(ac), Health::full(100_000)));
         // Struck, it fights back: the delver outlasts it.
         app.world_mut().entity_mut(player).insert(Health::full(100_000));
@@ -626,6 +639,31 @@ pub(crate) mod tests {
         let (light, heavy) = (landed(8, 60), landed(19, 60));
         assert!(light > heavy + 15, "AC 8: {light} of 60, AC 19: {heavy} of 60");
         assert!(heavy > 0, "a natural 20 still hits");
+    }
+
+    #[test]
+    fn a_poisoned_delver_hits_less_often() {
+        let (even, poisoned) = (landed_by(12, 60, false), landed_by(12, 60, true));
+        assert!(poisoned + 8 < even, "AC 12: {even} of 60 well, {poisoned} of 60 poisoned");
+    }
+
+    #[test]
+    fn a_folks_blows_roll_against_the_delvers_armour_class_and_a_miss_does_nothing() {
+        let (mut app, player, folk) = folk_fight(30.0);
+        app.world_mut().entity_mut(player).insert(Health::full(100_000));
+        app.world_mut().write_message(Provoked { folk });
+        let (mut hits, mut misses) = (Vec::new(), 0);
+        for _ in 0..1800 {
+            app.update();
+            hits.extend(attacks(&app));
+            misses += app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count();
+        }
+        let sheet = app.world().resource::<crate::character::Character>().armour_class(app.world().resource::<Inventory>()).value().round() as i32;
+        assert_eq!(app.world().get::<ArmourClass>(player), Some(&ArmourClass(sheet)), "the delver carries the sheet's Armor Class");
+        assert!(!hits.is_empty() && misses > 0, "{} hits, {misses} misses", hits.len());
+        let taken: u32 = hits.iter().map(|a| a.damage).sum();
+        let delver = app.world().get::<Health>(player).unwrap();
+        assert_eq!((delver.max - delver.hp) as u32, taken, "only the hits hurt");
     }
 
     #[test]

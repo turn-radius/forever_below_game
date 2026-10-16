@@ -3,11 +3,12 @@
 //!
 //! The SRD's Poisoned condition gives disadvantage on attack rolls and ability checks
 //! ([SRD 5.1 p. 358](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=358),
-//! Appendix PH-A, "Poisoned"). The delver makes neither roll yet (every swing that finds a
-//! creature hits, and there are no ability checks), so that is not applied yet; the state is
-//! tracked and shown so the rule has somewhere to land.
+//! Appendix PH-A, "Poisoned"). Every swing rolls to hit, so a poisoned character's attack rolls
+//! are thrown at disadvantage ([`Poisoned::attack_odds`]); there are no ability checks yet.
 
 use serde::{Deserialize, Serialize};
+
+use crate::combat::Odds;
 
 /// How long a failed save against a poisonous snake's venom poisons the delver, in game hours.
 ///
@@ -54,6 +55,12 @@ impl Poisoned {
         }
     }
 
+    /// How its attack rolls are thrown: at disadvantage while the poison works (SRD 5.1 p. 358,
+    /// "Poisoned"), else even.
+    pub fn attack_odds(&self) -> Odds {
+        if self.is_active() { Odds::Disadvantage } else { Odds::Even }
+    }
+
     /// Whole game minutes left, rounded up, so "1 minute" shows until it is gone.
     pub fn minutes_left(&self) -> u32 {
         (self.hours_left * 60.0 - EPSILON).ceil().max(0.0) as u32
@@ -77,6 +84,15 @@ mod tests {
         poisoned.step(1.0 / 60.0);
         assert!(!poisoned.is_active(), "{poisoned:?}");
         assert_eq!(poisoned, Poisoned::default());
+    }
+
+    #[test]
+    fn a_poisoned_character_attacks_at_disadvantage_until_it_wears_off() {
+        let mut poisoned = Poisoned::for_hours(0.5);
+        assert_eq!(poisoned.attack_odds(), Odds::Disadvantage);
+        poisoned.step(0.5);
+        assert_eq!(poisoned.attack_odds(), Odds::Even);
+        assert_eq!(Poisoned::default().attack_odds(), Odds::Even);
     }
 
     #[test]
