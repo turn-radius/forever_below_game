@@ -13,7 +13,7 @@ use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
 use crate::folk::by_door;
-use crate::generate::{item_seed, shuffle};
+use crate::generate::{is_colonnaded, item_seed, shuffle};
 use crate::{CELL, Cell, Level, Room};
 
 /// A creature in the level, at a point in grid coordinates (cells, fractional).
@@ -63,6 +63,10 @@ pub(crate) fn place_creatures(level: &Level, rng: &mut Mulberry32) -> Vec<Creatu
     let start_room = level.start_room();
     let mut rooms: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && level.rooms[i].area() >= MIN_ROOM_AREA).collect();
     shuffle(&mut rooms, rng);
+    if level.style == crate::LevelStyle::StoneHalls {
+        // Rats and snakes keep to the side rooms; the grand halls are theirs only when nothing else is left.
+        rooms.sort_by_key(|&i| is_colonnaded(level, &level.rooms[i]));
+    }
     let folk_in = |i: usize| level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == Some(i));
     // Snakes first, in the quiet rooms; rats in what is left, quiet rooms first.
     let (quiet, busy): (Vec<usize>, Vec<usize>) = rooms.iter().partition(|&&i| !folk_in(i));
@@ -81,7 +85,10 @@ pub(crate) fn place_creatures(level: &Level, rng: &mut Mulberry32) -> Vec<Creatu
             pack += 1;
         }
     }
-    let rat_rooms: Vec<usize> = quiet.chain(busy).collect();
+    let mut rat_rooms: Vec<usize> = quiet.chain(busy).collect();
+    if level.style == crate::LevelStyle::StoneHalls {
+        rat_rooms.sort_by_key(|&i| is_colonnaded(level, &level.rooms[i]));
+    }
     for &i in rat_rooms.iter().take(packs) {
         let room = &level.rooms[i];
         let species = if rng.chance(GIANT_PACK) { Species::GiantRat } else { Species::Rat };
@@ -146,6 +153,11 @@ mod tests {
 
     const SEEDS: std::ops::RangeInclusive<u32> = 1..=64;
 
+    /// Every seed on the first level and on the second, which a placement test holds for alike.
+    fn sweep() -> impl Iterator<Item = (u32, u32)> {
+        [1, 2].into_iter().flat_map(|depth| SEEDS.map(move |seed| (seed, depth)))
+    }
+
     #[test]
     fn creatures_are_deterministic() {
         for seed in [1, 1207, u32::MAX] {
@@ -157,8 +169,8 @@ mod tests {
     #[test]
     fn rats_come_in_packs_and_snakes_alone_in_quiet_rooms() {
         let mut snakes = 0;
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             let start_room = level.start_room();
             let mut packs: std::collections::HashMap<u32, Vec<&CreatureSpot>> = Default::default();
             for c in &level.creatures {
@@ -191,8 +203,8 @@ mod tests {
 
     #[test]
     fn creatures_keep_clear_of_everything_else() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             for (i, c) in level.creatures.iter().enumerate() {
                 let room = level.rooms[level.room_at(c.x as i32, c.y as i32).unwrap()];
                 assert!(fits(&level, &room, c.x, c.y, c.creature().radius(), &level.creatures[..i]), "seed {seed}: {c:?}");

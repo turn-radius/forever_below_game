@@ -273,13 +273,23 @@ fn nooks(level: &Level, room: &Room, keep_clear: &[(i32, i32)]) -> Vec<Nook> {
                     level.cell(x + dx, y + dy) == Cell::Rock
                 })
                 .collect();
-            if walls.is_empty() || by_door(level, x, y) || keep_clear.contains(&(x, y)) {
+            if walls.is_empty() || by_door(level, x, y) || keep_clear.contains(&(x, y)) || behind_a_gap(level, x, y, &walls) {
                 continue;
             }
             nooks.push(Nook { x, y, walls });
         }
     }
     nooks
+}
+
+/// Whether a cell backed by `walls` lies straight behind a gap between two columns, where a
+/// prop would block the way from the aisle to the walls.
+fn behind_a_gap(level: &Level, x: i32, y: i32, walls: &[Facing]) -> bool {
+    walls.iter().any(|w| {
+        let (dx, dy) = w.opposite().step();
+        let (gx, gy) = (x + dx, y + dy);
+        level.cell(gx, gy) == Cell::Floor && level.cell(gx + dy, gy + dx) == Cell::Column && level.cell(gx - dy, gy - dx) == Cell::Column
+    })
 }
 
 /// The prop set into `nook` if it fits there: its back to a wall (the first one, in a corner,
@@ -396,6 +406,11 @@ mod tests {
 
     const SEEDS: std::ops::RangeInclusive<u32> = 1..=64;
 
+    /// Every seed on the first level and on the second, which a placement test holds for alike.
+    fn sweep() -> impl Iterator<Item = (u32, u32)> {
+        [1, 2].into_iter().flat_map(|depth| SEEDS.map(move |seed| (seed, depth)))
+    }
+
     fn occupied(level: &Level) -> Vec<bool> {
         let mut occupied = vec![false; level.cells.len()];
         for p in &level.props {
@@ -427,8 +442,8 @@ mod tests {
     fn every_level_has_a_chest_and_some_scenery_shows_up() {
         let mut scenery = std::collections::HashSet::new();
         let mut styles = std::collections::HashSet::new();
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             assert!(level.props.iter().any(|p| matches!(p.prop, Prop::Container { style: ChestStyle::Chest, .. })), "seed {seed}: no chest");
             for p in &level.props {
                 match p.prop {
@@ -443,8 +458,8 @@ mod tests {
 
     #[test]
     fn props_stand_in_rooms_against_walls_off_doorways_and_the_way_in() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             let way_in = entrance_path(&level);
             for p in &level.props {
                 let (x, y) = (p.x.floor() as i32, p.y.floor() as i32);
@@ -481,16 +496,16 @@ mod tests {
 
     #[test]
     fn every_open_cell_stays_reachable_with_props_in_the_way() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             assert!(open_cells_reachable(&level, &occupied(&level)), "seed {seed}");
         }
     }
 
     #[test]
     fn props_keep_clear_of_each_other_and_the_rest() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             for (i, a) in level.props.iter().enumerate() {
                 let ra = a.prop.floor_shape().radius();
                 for b in &level.props[i + 1..] {

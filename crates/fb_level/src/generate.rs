@@ -670,6 +670,9 @@ fn start_light(level: &Level, rng: &mut Mulberry32) -> ItemSpot {
 /// Braziers in one or two of the larger rooms, glowcaps along the walls of a few others. The
 /// starting room and most of the rest stay dark.
 fn place_lights(level: &Level, start_room: usize, rng: &mut Mulberry32, brazier_min_area: u32) -> Vec<LightSpot> {
+    if level.style == LevelStyle::StoneHalls {
+        return hall_lights(level, start_room, rng, brazier_min_area);
+    }
     let mut lights = Vec::new();
     let mut by_size: Vec<usize> = (0..level.rooms.len()).filter(|&i| i != start_room).collect();
     by_size.sort_by_key(|&i| Reverse(level.rooms[i].area()));
@@ -692,6 +695,64 @@ fn place_lights(level: &Level, start_room: usize, rng: &mut Mulberry32, brazier_
         lights.extend(glowcaps(&level.rooms[i], rng));
     }
     lights
+}
+
+/// Whether `room` stands with columns, a colonnaded hall.
+pub(crate) fn is_colonnaded(level: &Level, room: &Room) -> bool {
+    (room.y..room.y + room.h).any(|y| (room.x..room.x + room.w).any(|x| level.cell(x as i32, y as i32) == Cell::Column))
+}
+
+/// The lights of a level of stone halls: braziers between the columns of up to three colonnaded
+/// halls, one more in a plain hall now and then, and glowcaps in only a room or two besides.
+fn hall_lights(level: &Level, start_room: usize, rng: &mut Mulberry32, brazier_min_area: u32) -> Vec<LightSpot> {
+    let mut lights = Vec::new();
+    let mut by_size: Vec<usize> = (0..level.rooms.len()).filter(|&i| i != start_room).collect();
+    by_size.sort_by_key(|&i| Reverse(level.rooms[i].area()));
+    let mut lit: Vec<usize> = by_size.iter().copied().filter(|&i| is_colonnaded(level, &level.rooms[i])).take(((level.rooms.len() + 1) / 2).saturating_sub(1).clamp(1, 3)).collect();
+    for &i in &lit {
+        lights.extend(colonnade_braziers(level, &level.rooms[i], rng));
+    }
+    if let Some(&i) = by_size.iter().find(|&&i| !lit.contains(&i) && !is_colonnaded(level, &level.rooms[i]) && level.rooms[i].area() >= brazier_min_area) {
+        if (lit.len() + 1) * 2 < level.rooms.len() && rng.chance(0.5) {
+            lights.extend(braziers(&level.rooms[i], rng));
+            lit.push(i);
+        }
+    }
+    let mut others: Vec<usize> = by_size.iter().copied().filter(|i| !lit.contains(i)).collect();
+    shuffle(&mut others, rng);
+    let room_budget = ((level.rooms.len() + 1) / 2).saturating_sub(lit.len()).max(1);
+    let glow_rooms = (rng.int(1, 2) as usize).min(room_budget).min(others.len());
+    for &i in &others[..glow_rooms] {
+        lights.extend(glowcaps(&level.rooms[i], rng));
+    }
+    lights
+}
+
+/// Two or three braziers down the aisle of a colonnaded hall, each opposite a gap between two
+/// columns and evenly spread. A hall with no such gap gets [`braziers`].
+fn colonnade_braziers(level: &Level, room: &Room, rng: &mut Mulberry32) -> Vec<LightSpot> {
+    let along_x = room.w >= room.h;
+    let (x0, y0, len, wide) = if along_x { (room.x, room.y, room.w, room.h) } else { (room.y, room.x, room.h, room.w) };
+    let row = y0 + wide / 2;
+    let column = |a: u32, r: u32| {
+        let (cx, cy) = if along_x { (a, r) } else { (r, a) };
+        level.cell(cx as i32, cy as i32) == Cell::Column
+    };
+    let gaps: Vec<u32> = (x0 + 1..x0 + len - 1)
+        .filter(|&a| [y0 + 1, y0 + wide - 2].into_iter().any(|r| column(a - 1, r) && column(a + 1, r) && !column(a, r)))
+        .collect();
+    if gaps.is_empty() {
+        return braziers(room, rng);
+    }
+    let count = (rng.int(2, 3) as usize).min(gaps.len());
+    (0..count)
+        .map(|k| {
+            let a = gaps[(2 * k + 1) * gaps.len() / (2 * count)] as f32 + 0.5;
+            let r = row as f32 + 0.5;
+            let (x, y) = if along_x { (a, r) } else { (r, a) };
+            LightSpot { x, y, kind: LightKind::Brazier }
+        })
+        .collect()
 }
 
 /// One brazier at the centre of a hall, or two along the middle of a long one.
@@ -794,6 +855,11 @@ mod tests {
 
     const SEEDS: std::ops::RangeInclusive<u32> = 1..=64;
 
+    /// Every seed on the first level and on the second, which a placement test holds for alike.
+    fn sweep() -> impl Iterator<Item = (u32, u32)> {
+        [1, 2].into_iter().flat_map(|depth| SEEDS.map(move |seed| (seed, depth)))
+    }
+
     fn cell_of(level: &Level, x: f32, y: f32) -> Cell {
         level.cell(x.floor() as i32, y.floor() as i32)
     }
@@ -856,8 +922,8 @@ mod tests {
 
     #[test]
     fn every_open_cell_is_reachable_from_the_start() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             let (x, y, _) = level.start();
             let seen = reachable_from(&level, x as i32, y as i32);
             for (i, cell) in level.cells.iter().enumerate() {
@@ -902,8 +968,8 @@ mod tests {
 
     #[test]
     fn corridors_enter_rooms_through_doors() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             for (i, room) in level.rooms.iter().enumerate() {
                 let mut doors = 0;
                 for y in room.y as i32 - 1..=(room.y + room.h) as i32 {
@@ -937,8 +1003,8 @@ mod tests {
 
     #[test]
     fn no_spot_lies_in_rock() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             let spots = level.items.iter().map(|i| (i.x, i.y)).chain(level.lights.iter().map(|l| (l.x, l.y)));
             for (x, y) in spots {
                 assert_eq!(cell_of(&level, x, y), Cell::Floor, "seed {seed}: spot ({x}, {y}) is not on floor");
@@ -949,8 +1015,8 @@ mod tests {
 
     #[test]
     fn the_starting_room_holds_only_a_light_near_the_start() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             let start_room = level.start_room().unwrap();
             let inside: Vec<&ItemSpot> =
                 level.items.iter().filter(|i| level.room_at(i.x.floor() as i32, i.y.floor() as i32) == Some(start_room)).collect();
@@ -978,14 +1044,16 @@ mod tests {
 
     #[test]
     fn levels_have_braziers_glowcaps_and_dark_rooms() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
             let lit: HashSet<usize> = level.lights.iter().filter_map(|l| level.room_at(l.x as i32, l.y as i32)).collect();
             assert!(level.lights.iter().any(|l| l.kind == LightKind::Glowcaps), "seed {seed}: no glowcaps");
             assert!(lit.len() * 2 <= level.rooms.len() + 1, "seed {seed}: {} of {} rooms lit", lit.len(), level.rooms.len());
         }
-        let braziers = SEEDS.filter(|&s| generate(s, 1).lights.iter().any(|l| l.kind == LightKind::Brazier)).count();
-        assert!(braziers > 48, "only {braziers} of 64 levels have a brazier");
+        for depth in [1, 2] {
+            let braziers = SEEDS.filter(|&s| generate(s, depth).lights.iter().any(|l| l.kind == LightKind::Brazier)).count();
+            assert!(braziers > 48, "only {braziers} of 64 levels at depth {depth} have a brazier");
+        }
     }
 
     /// FNV-1a over the debug text of everything the first level held before styles existed.
@@ -1040,6 +1108,79 @@ mod tests {
             }
         }
         n
+    }
+
+    #[test]
+    fn everything_placed_on_either_level_is_reachable_from_the_entrance() {
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            let (sx, sy, _) = level.start();
+            let seen = reachable_from(&level, sx as i32, sy as i32);
+            for (x, y) in spot_cells(&level) {
+                assert!(seen[(y as u32 * level.width + x as u32) as usize], "seed {seed} depth {depth}: ({x}, {y}) is cut off");
+            }
+            assert!(!level.items.is_empty() && !level.lights.is_empty() && !level.folk.is_empty() && !level.creatures.is_empty(), "seed {seed} depth {depth}");
+        }
+    }
+
+    #[test]
+    fn braziers_in_a_colonnade_stand_between_columns() {
+        let (mut halls, mut lamps, mut between) = (0, 0, 0);
+        for seed in 0..100 {
+            let level = generate(seed, 2);
+            for room in level.rooms.iter().filter(|r| is_colonnaded(&level, r)) {
+                let braziers: Vec<_> = level.lights.iter().filter(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32)).collect();
+                halls += !braziers.is_empty() as usize;
+                for b in braziers {
+                    let (x, y) = (b.x.floor() as i32, b.y.floor() as i32);
+                    // Columns stand either side of it along the hall, in a row beside the aisle.
+                    let along_x = room.w >= room.h;
+                    let (dx, dy) = if along_x { (1, 0) } else { (0, 1) };
+                    let column_beside = |k: i32| (-5..=5).any(|r| level.cell(x + dx * k - dy * r, y + dy * k - dx * r) == Cell::Column);
+                    lamps += 1;
+                    between += (column_beside(-1) && column_beside(1)) as usize;
+                }
+            }
+        }
+        assert!(halls >= 80, "only {halls} colonnaded halls are lit");
+        // A hall with no clear gap between two columns gets its brazier at the centre instead.
+        assert!(between * 10 >= lamps * 9, "only {between} of {lamps} braziers stand between columns");
+    }
+
+    #[test]
+    fn folk_stand_in_the_colonnades_and_creatures_mostly_keep_out() {
+        let (mut folk, mut folk_in, mut beasts, mut beasts_in, mut rooms, mut halls) = (0, 0, 0, 0, 0, 0);
+        for seed in 0..100 {
+            let level = generate(seed, 2);
+            let in_hall = |x: f32, y: f32| level.room_at(x as i32, y as i32).is_some_and(|i| is_colonnaded(&level, &level.rooms[i]));
+            let start_room = level.start_room();
+            for (_, room) in level.rooms.iter().enumerate().filter(|(i, r)| Some(*i) != start_room && r.area() >= 9) {
+                rooms += 1;
+                halls += is_colonnaded(&level, room) as usize;
+            }
+            folk += level.folk.len();
+            folk_in += level.folk.iter().filter(|f| in_hall(f.x, f.y)).count();
+            beasts += level.creatures.len();
+            beasts_in += level.creatures.iter().filter(|c| in_hall(c.x, c.y)).count();
+        }
+        assert!(folk_in * 3 >= folk, "only {folk_in} of {folk} folk stand in a colonnade");
+        // Creatures keep out of the halls more than the halls' share of the rooms they could take.
+        assert!(beasts_in * rooms * 3 <= beasts * halls * 2, "{beasts_in} of {beasts} creatures stand in a colonnade, in {halls} of {rooms} rooms");
+    }
+
+    #[test]
+    fn props_leave_the_gaps_between_columns_open() {
+        for seed in 0..100 {
+            let level = generate(seed, 2);
+            for p in &level.props {
+                let (x, y) = (p.x.floor() as i32, p.y.floor() as i32);
+                let behind_gap = Facing::ALL.iter().any(|f| {
+                    let (dx, dy) = f.step();
+                    level.cell(x + dx, y + dy) == Cell::Floor && level.cell(x + dx + dy, y + dy + dx) == Cell::Column && level.cell(x + dx - dy, y + dy - dx) == Cell::Column
+                });
+                assert!(!behind_gap, "seed {seed}: {p:?} blocks a gap between columns");
+            }
+        }
     }
 
     #[test]
