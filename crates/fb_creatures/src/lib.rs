@@ -1,14 +1,18 @@
 //! # fb_creatures
 //!
-//! Creatures of the abyss as plain data: rats and snakes for now, something simple to fight.
+//! Creatures of the abyss as plain data: rats, snakes and skeletons, something to fight.
 //!
 //! - [`rat`] and [`snake`] roll a typed state from a seed ([`RatState`], [`SnakeState`]): the
 //!   species (rat or giant rat, poisonous or constrictor snake), size, build, colouring and
 //!   pattern. [`Creature::of`] rolls one of a species chosen by the caller.
+//! - [`skeleton`] rolls a [`SkeletonState`]: a human's bones with seeded height, build, colour,
+//!   cracks and missing pieces, laid out on an `fb_body` human's joints so gear fits it as it
+//!   fits a body.
 //! - Each state builds a [`Rig`]: named bones, each carrying its own [`armory::ItemMesh`] built
 //!   from Armory geometry in the bone's own space, so the game can move the bones without a
-//!   skeleton (a rat's body, head, legs and tail; a snake's head, jaw, tongue and spine).
-//! - [`pose`] turns a gait, a slither, a coil, a rear or a bite into bone placements, so the
+//!   skeleton (a rat's body, head, legs and tail; a snake's head, jaw, tongue and spine) or a
+//!   skeleton's bones.
+//! - [`pose`] turns a gait, a slither, a coil, a rear, a bite or a swing into bone placements, so the
 //!   game only copies them onto transforms, and the rules (feet on the floor, a body that never
 //!   sinks into it) are tested here.
 //! - Each species carries its D&D 5e SRD 5.1 numbers ([`StatBlock`]): hit points, bite damage,
@@ -30,10 +34,12 @@ pub mod pose;
 pub mod rat;
 pub mod rig;
 pub mod shape;
+pub mod skeleton;
 pub mod snake;
 
 pub use rat::{RatColouring, RatPattern, RatState};
 pub use rig::{Bone, Rig};
+pub use skeleton::SkeletonState;
 pub use snake::{SnakeColouring, SnakePattern, SnakeState};
 
 use procgen_rng::Mulberry32;
@@ -132,6 +138,52 @@ pub enum Species {
     GiantRat,
     PoisonousSnake,
     ConstrictorSnake,
+    Skeleton,
+}
+
+/// The six ability scores of a stat block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Abilities {
+    pub strength: u8,
+    pub dexterity: u8,
+    pub constitution: u8,
+    pub intelligence: u8,
+    pub wisdom: u8,
+    pub charisma: u8,
+}
+
+impl Abilities {
+    /// The modifier of a score ([SRD 5.1 p. 76](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=76)):
+    /// half the score less 10, rounded down.
+    pub fn modifier(score: u8) -> i32 {
+        (score as i32 - 10).div_euclid(2)
+    }
+}
+
+/// The kinds of damage the stat blocks here mention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DamageType {
+    Bludgeoning,
+    Piercing,
+    Poison,
+}
+
+/// The conditions the stat blocks here make a creature immune to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Condition {
+    Exhaustion,
+    Poisoned,
+}
+
+/// A ranged weapon attack: to hit, damage on a hit, and the range in feet at which it is
+/// shot normally and at disadvantage.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RangedAttack {
+    pub name: &'static str,
+    pub to_hit: i32,
+    pub damage: Dice,
+    pub normal_feet: f32,
+    pub long_feet: f32,
 }
 
 /// The SRD 5.1 numbers this game uses from a creature's stat block. Placeholders for combat
@@ -141,24 +193,40 @@ pub struct StatBlock {
     /// The stat block's name.
     pub name: &'static str,
     pub size: Size,
+    /// Armor Class: the number an attack must meet to hit.
+    pub armor_class: u32,
+    pub abilities: Abilities,
     /// The average hit points the block prints, and the dice they come from.
     pub hit_points: u32,
     pub hit_dice: Dice,
     /// Walking speed in feet per 6-second round.
     pub speed_feet: f32,
-    /// The bite's damage on a hit (piercing).
+    /// Its melee attack's damage on a hit (piercing): a bite, or a skeleton's shortsword.
     pub bite: Dice,
+    /// The melee attack's bonus to hit.
+    pub attack_bonus: i32,
+    /// Its ranged weapon attack, if it has one (the skeleton's shortbow).
+    pub ranged: Option<RangedAttack>,
+    /// Damage it takes double of.
+    pub vulnerabilities: &'static [DamageType],
+    /// Damage that does nothing to it.
+    pub immunities: &'static [DamageType],
+    /// Conditions that cannot be put on it.
+    pub condition_immunities: &'static [Condition],
     /// Poison the bite adds, halved on a successful DC 10 Constitution save (the poisonous
     /// snake's), if any. Saves are not modelled yet.
     pub venom: Option<Dice>,
     /// How far it senses without light (darkvision or blindsight), feet.
     pub senses_feet: f32,
+    /// The challenge rating as the block prints it, and the experience it is worth.
+    pub challenge: &'static str,
+    pub xp: u32,
     /// The page of the SRD 5.1 the block is on.
     pub page: u32,
 }
 
 impl Species {
-    pub const ALL: [Species; 4] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake];
+    pub const ALL: [Species; 5] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton];
 
     /// The SRD 5.1 stat block, read from the CC-BY-4.0 PDF ([`SRD`]):
     ///
@@ -172,51 +240,115 @@ impl Species {
     /// - [Constrictor Snake, p. 369](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=369):
     ///   **Large**, Hit Points 13 (2d10 + 2), Speed 30 ft., blindsight 10 ft.; Bite: 5 (1d6 + 2)
     ///   piercing. Its Constrict (p. 370) is left for later.
+    /// - [Skeleton, p. 346](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=346):
+    ///   Medium undead, Armor Class 13 (armor scraps), Hit Points 13 (2d8 + 4), Speed 30 ft.,
+    ///   STR 10 DEX 14 CON 15 INT 6 WIS 8 CHA 5, vulnerable to bludgeoning, immune to poison and
+    ///   to exhaustion and being poisoned, darkvision 60 ft., Challenge 1/4 (50 XP); Shortsword:
+    ///   +4 to hit, reach 5 ft., 5 (1d6 + 2) piercing, and Shortbow: +4 to hit, range 80/320
+    ///   ft., 5 (1d6 + 2) piercing. [`StatBlock::bite`] is the shortsword's damage; the gear a
+    ///   skeleton carries sets what it actually swings.
     pub fn stat_block(self) -> StatBlock {
+        let ab = |strength, dexterity, constitution, intelligence, wisdom, charisma| Abilities { strength, dexterity, constitution, intelligence, wisdom, charisma };
         match self {
             Species::Rat => StatBlock {
                 name: "Rat",
                 size: Size::Tiny,
+                armor_class: 10,
+                abilities: ab(2, 11, 9, 2, 10, 4),
                 hit_points: 1,
                 hit_dice: Dice::new(1, 4, -1),
                 speed_feet: 20.0,
                 bite: Dice::flat(1),
+                attack_bonus: 0,
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
                 venom: None,
                 senses_feet: 30.0,
+                challenge: "0",
+                xp: 10,
                 page: 387,
             },
             Species::GiantRat => StatBlock {
                 name: "Giant Rat",
                 size: Size::Small,
+                armor_class: 12,
+                abilities: ab(7, 15, 11, 2, 10, 4),
                 hit_points: 7,
                 hit_dice: Dice::new(2, 6, 0),
                 speed_feet: 30.0,
                 bite: Dice::new(1, 4, 2),
+                attack_bonus: 4,
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
                 venom: None,
                 senses_feet: 60.0,
+                challenge: "1/8",
+                xp: 25,
                 page: 378,
             },
             Species::PoisonousSnake => StatBlock {
                 name: "Poisonous Snake",
                 size: Size::Tiny,
+                armor_class: 13,
+                abilities: ab(2, 16, 11, 1, 10, 3),
                 hit_points: 2,
                 hit_dice: Dice::new(1, 4, 0),
                 speed_feet: 30.0,
                 bite: Dice::flat(1),
+                attack_bonus: 5,
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
                 venom: Some(Dice::new(2, 4, 0)),
                 senses_feet: 10.0,
+                challenge: "1/8",
+                xp: 25,
                 page: 386,
             },
             Species::ConstrictorSnake => StatBlock {
                 name: "Constrictor Snake",
                 size: Size::Large,
+                armor_class: 12,
+                abilities: ab(15, 14, 12, 1, 10, 3),
                 hit_points: 13,
                 hit_dice: Dice::new(2, 10, 2),
                 speed_feet: 30.0,
                 bite: Dice::new(1, 6, 2),
+                attack_bonus: 4,
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
                 venom: None,
                 senses_feet: 10.0,
+                challenge: "1/4",
+                xp: 50,
                 page: 369,
+            },
+            Species::Skeleton => StatBlock {
+                name: "Skeleton",
+                size: Size::Medium,
+                armor_class: 13,
+                abilities: ab(10, 14, 15, 6, 8, 5),
+                hit_points: 13,
+                hit_dice: Dice::new(2, 8, 4),
+                speed_feet: 30.0,
+                bite: Dice::new(1, 6, 2),
+                attack_bonus: 4,
+                ranged: Some(RangedAttack { name: "Shortbow", to_hit: 4, damage: Dice::new(1, 6, 2), normal_feet: 80.0, long_feet: 320.0 }),
+                vulnerabilities: &[DamageType::Bludgeoning],
+                immunities: &[DamageType::Poison],
+                condition_immunities: &[Condition::Exhaustion, Condition::Poisoned],
+                venom: None,
+                senses_feet: 60.0,
+                challenge: "1/4",
+                xp: 50,
+                page: 346,
             },
         }
     }
@@ -226,7 +358,11 @@ impl Species {
     }
 
     pub fn is_snake(self) -> bool {
-        !self.is_rat()
+        matches!(self, Species::PoisonousSnake | Species::ConstrictorSnake)
+    }
+
+    pub fn is_skeleton(self) -> bool {
+        self == Species::Skeleton
     }
 
     /// Its walking speed in world units per second: the stat block's feet per 6-second round
@@ -237,23 +373,31 @@ impl Species {
     }
 }
 
-/// One creature: a rat or a snake, rolled from a seed.
+/// One creature: a rat, a snake or a skeleton, rolled from a seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Creature {
     Rat(RatState),
     Snake(SnakeState),
+    Skeleton(SkeletonState),
 }
 
 impl Creature {
     /// A creature of `species` rolled from `seed`.
     pub fn of(species: Species, seed: u32) -> Creature {
-        if species.is_rat() { Creature::Rat(RatState::roll_as(seed, species)) } else { Creature::Snake(SnakeState::roll_as(seed, species)) }
+        if species.is_rat() {
+            Creature::Rat(RatState::roll_as(seed, species))
+        } else if species.is_skeleton() {
+            Creature::Skeleton(SkeletonState::roll(seed))
+        } else {
+            Creature::Snake(SnakeState::roll_as(seed, species))
+        }
     }
 
     pub fn species(&self) -> Species {
         match self {
             Creature::Rat(r) => r.species,
             Creature::Snake(s) => s.species,
+            Creature::Skeleton(_) => Species::Skeleton,
         }
     }
 
@@ -261,6 +405,7 @@ impl Creature {
         match self {
             Creature::Rat(r) => r.seed,
             Creature::Snake(s) => s.seed,
+            Creature::Skeleton(s) => s.seed,
         }
     }
 
@@ -269,6 +414,7 @@ impl Creature {
         match self {
             Creature::Rat(r) => r.build(),
             Creature::Snake(s) => s.build(),
+            Creature::Skeleton(s) => s.build(),
         }
     }
 
@@ -278,6 +424,7 @@ impl Creature {
         match self {
             Creature::Rat(r) => r.radius(),
             Creature::Snake(s) => s.radius(),
+            Creature::Skeleton(s) => s.radius(),
         }
     }
 }
@@ -291,6 +438,11 @@ pub fn rat(seed: u32) -> RatState {
 /// odds.
 pub fn snake(seed: u32) -> SnakeState {
     SnakeState::roll(seed)
+}
+
+/// A skeleton rolled from `seed`.
+pub fn skeleton(seed: u32) -> SkeletonState {
+    SkeletonState::roll(seed)
 }
 
 #[cfg(test)]

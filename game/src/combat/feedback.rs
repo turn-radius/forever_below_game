@@ -98,6 +98,7 @@ pub fn knockback(creature: &Creature) -> f32 {
     let size = match creature {
         Creature::Rat(r) => r.drawn_size(),
         Creature::Snake(s) => s.drawn_size(),
+        Creature::Skeleton(s) => s.drawn_size(),
     };
     match size {
         Size::Tiny | Size::Small => 3.5,

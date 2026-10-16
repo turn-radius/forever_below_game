@@ -127,6 +127,8 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => player_radius + 0.55 * rat.length * critter.size,
         Creature::Snake(snake) => player_radius + critter.radius + 0.35 * snake.dims().neck * critter.size,
+        // Arm and weapon: about half its height, until its weapon sets the reach.
+        Creature::Skeleton(skeleton) => player_radius + 0.45 * skeleton.height() * critter.size,
     }
 }
 
@@ -138,6 +140,7 @@ pub fn body_radius(critter: &Critter) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => 0.3 * rat.length * critter.size,
         Creature::Snake(_) => critter.radius.min(SNAKE_SQUEEZE),
+        Creature::Skeleton(skeleton) => 0.12 * skeleton.height() * critter.size,
     }
 }
 

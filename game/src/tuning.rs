@@ -172,11 +172,13 @@ pub struct CreatureSizes {
     pub viper: f32,
     /// The constrictor snake.
     pub constrictor: f32,
+    /// The skeleton.
+    pub skeleton: f32,
 }
 
 impl Default for CreatureSizes {
     fn default() -> Self {
-        CreatureSizes { rat: 1.0, giant_rat: 1.0, viper: 1.0, constrictor: 1.0 }
+        CreatureSizes { rat: 1.0, giant_rat: 1.0, viper: 1.0, constrictor: 1.0, skeleton: 1.0 }
     }
 }
 
@@ -188,6 +190,7 @@ impl CreatureSizes {
             Species::GiantRat => self.giant_rat,
             Species::PoisonousSnake => self.viper,
             Species::ConstrictorSnake => self.constrictor,
+            Species::Skeleton => self.skeleton,
         }
     }
 }
@@ -589,9 +592,9 @@ mod tests {
 
     #[test]
     fn every_species_has_a_size() {
-        let sizes = CreatureSizes { rat: 1.0, giant_rat: 2.0, viper: 3.0, constrictor: 4.0 };
-        let all = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake];
-        assert_eq!(all.map(|s| sizes.of(s)), [1.0, 2.0, 3.0, 4.0]);
+        let sizes = CreatureSizes { rat: 1.0, giant_rat: 2.0, viper: 3.0, constrictor: 4.0, skeleton: 5.0 };
+        let all = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton];
+        assert_eq!(all.map(|s| sizes.of(s)), [1.0, 2.0, 3.0, 4.0, 5.0]);
     }
 
     #[test]

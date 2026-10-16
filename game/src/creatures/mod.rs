@@ -23,7 +23,7 @@
 use armory::cond::{Condition, ConditionState};
 use bevy::{app::Propagate, light::NotShadowCaster, prelude::*};
 use fb_body::Placement;
-use fb_creatures::pose::{self, RatPose, SnakePose};
+use fb_creatures::pose::{self, RatPose, SkeletonPose, SnakePose};
 use fb_creatures::Creature;
 use fb_creatures::rig::{Capsule, SURFACE_PARTS};
 use fb_level::{CreatureSpot, Level};
@@ -411,6 +411,11 @@ pub fn animate(
                 }
                 places
             }
+            Creature::Skeleton(skeleton) => {
+                let dims = skeleton.dims();
+                motion.cycle = (motion.cycle + strode / pose::skeleton_stride(&dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                pose::skeleton_with(&dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: None })
+            }
         };
         for (entity, place) in bones.0.iter().zip(&places) {
             if let Ok(mut transform) = transforms.get_mut(*entity) {
@@ -509,6 +514,7 @@ mod tests {
                 let size = match &critter.creature {
                     Creature::Rat(r) => r.length,
                     Creature::Snake(s) => s.girth * 4.0,
+                    Creature::Skeleton(s) => s.height(),
                 };
                 let (mut deepest, mut nearest) = (f32::MIN, f32::MAX);
                 for (bone, &entity) in rig.bones.iter().zip(&bones) {

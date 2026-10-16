@@ -14,14 +14,23 @@
 //!   spiral, each turn lying beside the last; rearing lifts the front off the floor in an S,
 //!   which a strike throws straight. The belly rests on the floor wherever it is not raised.
 //!
+//! - [`skeleton`]: a human's walk and a swing of the right arm. Each leg is solved with a
+//!   two-bone reach ([`two_bone`]'s cousin in the walking plane) so the planted foot rests on
+//!   the floor exactly; the pelvis rides at the height the lower of the two reaches allows (a smooth minimum), so
+//!   it dips as the weight comes onto a leading leg and rises over a standing one. The arms
+//!   swing against the legs, the ribcage turns against the hips; a swing winds the right arm up
+//!   over the shoulder, throws it through the blow and brings it back, turning the ribcage and
+//!   leaning into it with the feet planted.
+//!
 //! The gait's timing, the wave's shape and every amplitude here are our own tuning.
 
 use armory::geom::vec3::{self, Mat3, V3};
-use fb_body::Placement;
+use fb_body::{Placement, Side};
 use std::f32::consts::{PI, TAU};
 
 use crate::rat::{LEGS, RatState, TAIL_BONES, bone as rat_bone};
-use crate::shape::spine_to_creature;
+use crate::shape::{keyed, spine_to_creature};
+use crate::skeleton::{SkeletonDims, SkeletonState, arm_bone, index as skeleton_bone, leg_bone};
 use crate::snake::{SEGMENTS, SnakeState, bone as snake_bone};
 
 /// How a rat is moving at a moment.
@@ -554,4 +563,164 @@ mod tests {
         let (bent, rest) = (snake_spine(&state, &SnakePose { bend, ..SnakePose::REST }, 41), snake_spine(&state, &SnakePose::REST, 41));
         assert!(bent.iter().zip(&rest).all(|(a, b)| vec3::distance(a.0, b.0) < 1e-3));
     }
+}
+
+
+/// How a skeleton is moving at a moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SkeletonPose {
+    /// The step cycle, radians: one turn per [`skeleton_stride`] walked.
+    pub stride: f32,
+    /// Speed as a share of its walking speed: 0 standing, 1 walking.
+    pub pace: f32,
+    /// Seconds, for what it does standing: breathing and the head's idle sway.
+    pub time: f32,
+    /// How far through a swing of the right arm it is, 0 at the guard, through the wind-up and
+    /// the blow to 1 back at the guard; `None` for no swing. A swing plants both feet.
+    pub swing: Option<f32>,
+    /// How far the head turns toward its left (+X), radians.
+    pub look: f32,
+    /// The jaw's gape, 0 shut to 1 wide.
+    pub jaw: f32,
+}
+
+/// The ground a skeleton covers in one full step cycle (two steps): a step is 0.7 of its leg.
+pub fn skeleton_stride(dims: &SkeletonDims) -> f32 {
+    2.0 * 0.7 * (dims.thigh + dims.shin)
+}
+
+/// A rotation about +X in body axes: positive swings a limb hanging down toward the back.
+fn rot_x(a: f32) -> Mat3 {
+    Mat3::from_axis_angle([1.0, 0.0, 0.0], a)
+}
+
+fn rot_y(a: f32) -> Mat3 {
+    Mat3::from_axis_angle([0.0, 1.0, 0.0], a)
+}
+
+/// The turns about X of a leg's thigh and shin, relative to their rest, that bring the ankle
+/// to `target`, `(forward, up)` from the hip in the walking plane. The knee bends forward.
+fn leg_turns(dims: &SkeletonDims, k: usize, target: [f32; 2]) -> (f32, f32) {
+    let [hip, knee, ankle] = dims.legs[k];
+    let (l1, l2) = (dims.thigh, dims.shin);
+    let rest1 = (knee[2] - hip[2]).atan2(hip[1] - knee[1]);
+    let rest2 = (ankle[2] - knee[2]).atan2(knee[1] - ankle[1]);
+    let reach = target[0].hypot(target[1]).clamp((l1 - l2).abs() + 1e-3, (l1 + l2) * 0.9999);
+    let toward = target[0].atan2(-target[1]);
+    let at_hip = ((l1 * l1 + reach * reach - l2 * l2) / (2.0 * l1 * reach)).clamp(-1.0, 1.0).acos();
+    let at_ankle = ((l2 * l2 + reach * reach - l1 * l1) / (2.0 * l2 * reach)).clamp(-1.0, 1.0).acos();
+    let (thigh, shin) = (toward + at_hip, toward - at_ankle);
+    (rest1 - thigh, rest2 - shin - (rest1 - thigh))
+}
+
+/// Every bone's placement on its parent for `pose`, in the skeleton's [`crate::Rig`] order.
+/// Builds the skeleton's dimensions each call; the game keeps them ([`SkeletonState::dims`])
+/// and calls [`skeleton_with`].
+pub fn skeleton(state: &SkeletonState, pose: &SkeletonPose) -> Vec<Placement> {
+    skeleton_with(&state.dims(), pose)
+}
+
+/// [`skeleton`] on dimensions already measured.
+pub fn skeleton_with(d: &SkeletonDims, pose: &SkeletonPose) -> Vec<Placement> {
+    use skeleton_bone as bone;
+    let mut out: Vec<Placement> = (0..bone::COUNT).map(|b| Placement::translation(d.offset(b))).collect();
+    let swinging = pose.swing.map(|p| p.clamp(0.0, 1.0));
+    let moving = if swinging.is_some() { 0.0 } else { pose.pace.clamp(0.0, 1.0) };
+    let t = pose.time;
+    let leg_len = d.thigh + d.shin;
+    let stride_len = skeleton_stride(d);
+    let sweep = DUTY * stride_len;
+    let clearance = 0.1 * leg_len;
+
+    // Where each ankle is: forward of its hip, and lifted off the floor. Right then left.
+    let mut dz = [0.0f32; 2];
+    let mut lift = [0.0f32; 2];
+    let mut pelvis_z = 0.0;
+    match swinging {
+        Some(p) => {
+            // A lunge: the left foot forward, the right back, the weight going back then onto the front foot.
+            pelvis_z = keyed(&[(0.0, 0.0), (0.3, -0.35), (0.5, 0.2), (0.62, 0.75), (0.85, 0.4), (1.0, 0.0)], p);
+            let feet = [-1.3, 1.1];
+            dz = [feet[0] - pelvis_z, feet[1] - pelvis_z];
+        }
+        None => {
+            for k in 0..2 {
+                // The right and left legs half a cycle apart.
+                let c = (pose.stride / TAU + if k == 0 { 0.5 } else { 0.0 }).rem_euclid(1.0);
+                let (along, up) = if c < DUTY {
+                    (sweep * (0.5 - c / DUTY), 0.0)
+                } else {
+                    let u = (c - DUTY) / (1.0 - DUTY);
+                    (sweep * (smoothstep(u) - 0.5), clearance * (PI * u).sin())
+                };
+                dz[k] = along * moving;
+                lift[k] = up * moving;
+            }
+        }
+    }
+
+    // The pelvis rides where both ankles are within reach, a soft minimum so the dip as the
+    // weight changes legs is rounded.
+    let bend = if swinging.is_some() { 0.04 } else { 0.015 * moving };
+    let reach = (1.0 - bend) * leg_len;
+    let a0 = d.ankles[0][1];
+    let limit = |k: usize| a0 + lift[k] + (reach * reach - dz[k] * dz[k]).max(0.0).sqrt();
+    let hip_y = d.legs[0][0][1];
+    let (h0, h1) = (limit(0), limit(1));
+    // The polynomial smooth minimum (Inigo Quilez), never above either reach.
+    let round = 0.4 * moving;
+    let blend = if round > 0.0 { (round - (h0 - h1).abs()).max(0.0) / round } else { 0.0 };
+    let height = (h0.min(h1) - blend * blend * round * 0.25).min(hip_y);
+    out[bone::PELVIS] = Placement { rotation: Mat3::IDENTITY, origin: [0.0, height, pelvis_z] };
+
+    // Legs: solve each to its ankle, the foot kept level.
+    for (k, side) in Side::BOTH.into_iter().enumerate() {
+        let target = [dz[k], a0 + lift[k] - height];
+        let (thigh, shin) = leg_turns(d, k, target);
+        let b = leg_bone(side);
+        out[b].rotation = rot_x(thigh);
+        out[b + 1].rotation = rot_x(shin);
+        out[b + 2].rotation = rot_x(-(thigh + shin));
+    }
+
+    // Trunk, head and arms.
+    let breathe = (1.7 * t).sin();
+    let mut lean = 0.02 * breathe + 0.05 * moving;
+    let mut twist = 0.1 * moving * (pose.stride).sin();
+    let mut jaw = pose.jaw;
+    let mut arm_forward = [0.0f32; 2];
+    let mut arm_bend = [0.0f32; 2];
+    match swinging {
+        Some(p) => {
+            lean = keyed(&[(0.0, 0.05), (0.3, -0.08), (0.45, -0.1), (0.62, 0.32), (0.78, 0.22), (1.0, 0.05)], p);
+            twist = keyed(&[(0.0, 0.0), (0.3, -0.55), (0.45, -0.62), (0.62, 0.5), (0.78, 0.5), (1.0, 0.0)], p);
+            jaw = jaw.max(keyed(&[(0.0, 0.0), (0.3, 0.25), (0.45, 0.4), (0.62, 0.7), (0.8, 0.2), (1.0, 0.0)], p));
+            arm_forward[0] = keyed(&[(0.0, 0.5), (0.14, 0.9), (0.3, 2.5), (0.45, 2.6), (0.62, 0.95), (0.78, 0.35), (1.0, 0.5)], p);
+            arm_bend[0] = keyed(&[(0.0, 1.5), (0.3, 1.9), (0.45, 2.0), (0.62, 0.35), (0.78, 0.3), (1.0, 1.5)], p);
+            // The left arm braces across the chest.
+            arm_forward[1] = 0.25 + 0.1 * (p * TAU).sin();
+            arm_bend[1] = 0.7;
+        }
+        None => {
+            // Arms swing against the legs: the right arm forward as the left leg is.
+            for k in 0..2 {
+                let n = (dz[1 - k] / (0.5 * sweep.max(1e-3))).clamp(-1.0, 1.0);
+                arm_forward[k] = 0.4 * n * moving + 0.02 * (1.3 * t + k as f32 * 2.0).sin() * (1.0 - moving);
+                arm_bend[k] = (0.12 + 0.25 * n.max(0.0)) * moving + 0.03 * (1.0 - moving);
+            }
+        }
+    }
+    out[bone::SPINE].rotation = rot_x(0.5 * lean).mul_mat(&rot_y(0.3 * twist));
+    out[bone::RIBCAGE].rotation = rot_x(0.5 * lean).mul_mat(&rot_y(0.7 * twist));
+    // The head keeps to where it looks, whatever the trunk turns.
+    let sway = 0.05 * (0.7 * t).sin() * (1.0 - moving);
+    out[bone::NECK].rotation = rot_x(-0.5 * lean);
+    out[bone::SKULL].rotation = rot_y(pose.look + sway - twist).mul_mat(&rot_x(-0.04 + 0.01 * breathe - 0.3 * lean));
+    out[bone::JAW].rotation = rot_x(0.5 * jaw);
+    for (k, side) in Side::BOTH.into_iter().enumerate() {
+        let b = arm_bone(side);
+        out[b].rotation = rot_x(-arm_forward[k]);
+        out[b + 1].rotation = rot_x(-arm_bend[k]);
+    }
+    out
 }
