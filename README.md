@@ -82,13 +82,13 @@ cargo run -p forever_below -- --creature --species constrictor --seed 7 --motion
 cargo run -p forever_below -- --skeleton --seed 7 --motion swing
 ```
 
-One rat, snake or skeleton on the turntable's plate, posed and animated as in the level, with its SRD armor class, hit points and bite (a skeleton's shortsword). `--skeleton` is the view opened on a skeleton: roll seeds with Left and Right to see the bones' colour, cracks and missing pieces.
+One rat, snake or skeleton on the turntable's plate, posed and animated as in the level, with its SRD armor class, hit points and bite (a skeleton's shortsword). `--skeleton` is the view opened on a skeleton: roll seeds with Left and Right to see the bones' colour, cracks and missing pieces, and the gear the seed rolls it (`--bare` takes it off; G toggles it).
 
 - `--species <name>`: rat (the default), giant_rat, viper (the poisonous snake), constrictor or skeleton.
 - `--seed <n>` rolls the creature; 1207 by default.
 - `--motion <name>`: still (the default), moving (trotting, slithering or walking in place at its own speed), rearing or striking. A skeleton has three: still (`stand`), moving (`walk`) and striking (`swing`, the right arm's blow).
 
-Tab and Shift+Tab change the species, Left and Right the seed, M the motion, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
+Tab and Shift+Tab change the species, Left and Right the seed, M the motion, G a skeleton's gear, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 
 ### The Forge view
 

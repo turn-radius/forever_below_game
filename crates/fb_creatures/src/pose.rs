@@ -622,6 +622,24 @@ pub fn skeleton(state: &SkeletonState, pose: &SkeletonPose) -> Vec<Placement> {
 
 /// [`skeleton`] on dimensions already measured.
 pub fn skeleton_with(d: &SkeletonDims, pose: &SkeletonPose) -> Vec<Placement> {
+    skeleton_armed(d, pose, &[None, None])
+}
+
+/// How an arm that holds something is set: the turns (each on its parent, from the rest pose) of
+/// its upper arm, forearm and hand that bring the hand to where `fb_body` fitted what it holds,
+/// with the fingers closed on it. See `crate::gear`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArmStance {
+    pub upper: Mat3,
+    pub fore: Mat3,
+    pub hand: Mat3,
+}
+
+/// [`skeleton_with`] with the arms that hold something (right then left) in their stance. A
+/// holding arm does not swing as it walks; the right arm's swing still drives its upper arm and
+/// forearm (the hand keeps its wrist, so the weapon stays in the fist), and the left arm braces
+/// its shield through a swing, held where it is.
+pub fn skeleton_armed(d: &SkeletonDims, pose: &SkeletonPose, stance: &[Option<ArmStance>; 2]) -> Vec<Placement> {
     use skeleton_bone as bone;
     let mut out: Vec<Placement> = (0..bone::COUNT).map(|b| Placement::translation(d.offset(b))).collect();
     let swinging = pose.swing.map(|p| p.clamp(0.0, 1.0));
@@ -721,6 +739,13 @@ pub fn skeleton_with(d: &SkeletonDims, pose: &SkeletonPose) -> Vec<Placement> {
         let b = arm_bone(side);
         out[b].rotation = rot_x(-arm_forward[k]);
         out[b + 1].rotation = rot_x(-arm_bend[k]);
+        if let Some(held) = &stance[k] {
+            if swinging.is_none() || k == 1 {
+                out[b].rotation = held.upper;
+                out[b + 1].rotation = held.fore;
+            }
+            out[b + 2].rotation = held.hand;
+        }
     }
     out
 }

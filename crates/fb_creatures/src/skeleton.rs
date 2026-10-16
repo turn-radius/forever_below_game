@@ -28,7 +28,7 @@ use armory::build::bone::{self, Foot, Hand, LongBone, Pelvis, Ribcage, SOCKET, S
 use armory::geom::vec3::{self, V3};
 use armory::geom::{MeshBuilder, SweepOptions, spike, tube, uv_sphere};
 use armory::{MaterialKind, Part, Rgb};
-use fb_body::{Body, BodySpec, Folk, Placement, Side};
+use fb_body::{Body, BodySpec, Folk, HandPose, Placement, Side};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
@@ -165,11 +165,16 @@ impl SkeletonState {
     /// The human body its bones are laid out on: stature and frame from the skeleton's, the
     /// rest of the figure its own. Relaxed arms.
     pub fn body(&self) -> Body {
+        Body::new(&self.spec())
+    }
+
+    /// The spec of [`SkeletonState::body`], for fitting held gear, which poses the arms.
+    pub fn spec(&self) -> BodySpec {
         let mut spec = BodySpec::roll(Folk::Human, self.seed ^ SKELETON_SALT);
         spec.stature = self.stature;
         spec.frame = 0.12 + 0.7 * self.build;
         spec.figure = self.figure;
-        Body::new(&spec)
+        spec
     }
 
     /// The joints and measures the bones and poses are built from.
@@ -196,7 +201,14 @@ impl SkeletonState {
 
     /// Its bones and meshes, standing at rest.
     pub fn build(&self) -> Rig {
-        build(self)
+        build(self, &[None, None])
+    }
+
+    /// [`SkeletonState::build`] with the hands that hold something closed into `grips` (right
+    /// then left): the fingers lie where a gripping `fb_body` hand's do, so what is held sits in
+    /// them. A hand with no grip rests open as ever.
+    pub fn build_gripping(&self, grips: &[Option<HandPose>; 2]) -> Rig {
+        build(self, grips)
     }
 }
 
@@ -427,7 +439,7 @@ fn bone_crack(rng: &mut Mulberry32, a: V3, b: V3, shape: &LongBone) -> MeshBuild
     bone::crack_walk(rng, &surface, start, heading, steps, 0.09, 0.026)
 }
 
-fn build(state: &SkeletonState) -> Rig {
+fn build(state: &SkeletonState, grips: &[Option<HandPose>; 2]) -> Rig {
     let d = state.dims();
     let body = &d.body;
     let mut rng = Mulberry32::new(state.seed ^ SKELETON_SALT ^ 0xB0D7);
@@ -615,6 +627,11 @@ fn build(state: &SkeletonState) -> Rig {
         let frame = d.hand_frame(side);
         let spec = Hand { length: 0.105 * body.height * body.race().arm, half_width: hand_form.knuckle_half_width * 0.95, curl: state.curl, missing: state.fingers_gone[k] };
         let mut mesh = bone::hand(&spec, &mut rng);
+        // A closed hand is built on its own stream, so closing it leaves the other bones' rolls as they were.
+        if let Some(pose) = &grips[k] {
+            let mut own = Mulberry32::new(state.seed ^ SKELETON_SALT ^ 0x6219 ^ k as u32);
+            mesh = bone::hand_gripping(&spec, &hand_form, pose.fingers, pose.thumb, &mut own);
+        }
         if sg > 0.0 {
             mesh.scale([-1.0, 1.0, 1.0]);
         }

@@ -16,6 +16,7 @@ use std::f32::consts::{PI, TAU};
 
 use procgen_rng::Mulberry32;
 
+use crate::build::form::HandForm;
 use crate::geom::{
     CatmullRom, GridOptions, Hollow, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, carve_hollows, ellipsoid, grid_normals, icosphere, lathe, spike, thick_sheet, tube, uv_sphere, value_noise3, vec3,
 };
@@ -444,10 +445,29 @@ pub fn skull(spec: &SkullSpec, cracks: usize, rng: &mut Mulberry32) -> Skull {
             [side * 0.86 * w, -0.1 * hh, -0.28 * d],
         ])
         .sample_evenly(14);
-        bone.append(&tube(&arch, 7, &SweepOptions::default(), |t| 0.06 * hh * (1.0 - 0.2 * t)));
+        bone.append(&tube(&arch, 7, &SweepOptions::default(), |t| 0.085 * hh * (1.0 - 0.3 * t)));
+        // The cheekbone: a prominent knob under the socket's outer corner, where the arch starts, so the
+        // face reads as cheeks and not as a mask.
+        let (cb, cn) = front(side * 0.6 * w, -0.34 * hh);
+        let mut cheekbone = ellipsoid([0.15 * w, 0.085 * hh, 0.1 * d]);
+        cheekbone.rotate_z(side * 0.35).rotate_y(side * 0.7).translate(vec3::add(cb, vec3::scale(vec3::normalize_or(cn, vec3::Z), 0.02 * d)));
+        bone.append(&cheekbone);
         let mut mastoid = spike(0.1 * w, 0.2 * hh, 7, -0.5, Shading::SMOOTH);
         mastoid.rotate_x(PI).translate([side * 0.8 * w, -0.05 * hh, -0.32 * d]);
         bone.append(&mastoid);
+    }
+
+    // The maxilla: the block of the upper jaw between the cheekbones, under the nose, that the upper
+    // teeth set in, with the ridges of the canine roots over them.
+    let (mp, mn) = front(0.0, -0.58 * hh);
+    let mut maxilla = ellipsoid([0.36 * w, 0.17 * hh, 0.15 * d]);
+    maxilla.translate(vec3::add(mp, vec3::scale(vec3::normalize_or(mn, vec3::Z), 0.02 * d)));
+    bone.append(&maxilla);
+    for side in [-1.0, 1.0] {
+        let (rp, rn) = front(side * 0.2 * w, -0.54 * hh);
+        let mut root = ellipsoid([0.05 * w, 0.08 * hh, 0.05 * d]);
+        root.translate(vec3::add(rp, vec3::scale(vec3::normalize_or(rn, vec3::Z), 0.01 * d)));
+        bone.append(&root);
     }
 
     // Upper teeth hang from the lowest edge of the face.
@@ -520,13 +540,38 @@ pub fn mandible(spec: &SkullSpec, hinge: V3, rng: &mut Mulberry32) -> (MeshBuild
     let mut bone = tube(&path, 9, &SweepOptions::default(), |t| {
         // Slender at the condyles, thick along the body of the jaw.
         let body = ((1.0 - (2.0 * t - 1.0).abs()) / 0.3).min(1.0);
-        hh * (0.05 + 0.04 * body + 0.015 * spec.jaw * body)
+        hh * (0.06 + 0.05 * body + 0.03 * spec.jaw * body)
     });
     // Chin, coronoid processes and condyle knobs.
     let mut chin_bulge = uv_sphere(0.09 * hh, 10, 8);
-    chin_bulge.scale([1.6 + spec.jaw, 1.0, 1.0]).translate([0.0, body_y - 0.03 * hh, chin * d + 0.03 * d]);
+    chin_bulge.scale([1.8 + 1.4 * spec.jaw, 1.1 + 0.4 * spec.jaw, 1.0]).translate([0.0, body_y - 0.03 * hh, chin * d + 0.03 * d]);
     bone.append(&chin_bulge);
     for side in [-1.0, 1.0] {
+        // The ramus: the broad plate that rises from the angle of the jaw to the condyle behind and
+        // the coronoid process in front, with a notch between them.
+        let rows = 6usize;
+        let ramus: Vec<Vec<V3>> = (0..=rows)
+            .map(|r| {
+                let u = r as f32 / rows as f32;
+                let y = body_y + 0.04 * hh + u * (hinge[1] + 0.1 * hh - body_y - 0.04 * hh);
+                // Rear edge from the angle up to the condyle; front edge from the body up to the coronoid.
+                let back = -0.1 * d + (hinge[2] - 0.02 * d + 0.1 * d) * u;
+                let front = 0.3 * d + (hinge[2] + 0.17 * d - 0.3 * d) * u.powf(1.4);
+                // The notch: the middle of the top row sinks.
+                (0..=6)
+                    .map(|c| {
+                        let v = c as f32 / 6.0;
+                        let dip = if u > 0.7 { 0.5 * hh * 0.25 * (u - 0.7) / 0.3 * (PI * v).sin() } else { 0.0 };
+                        [side * (0.8 * w + 0.03 * w * (PI * v).sin()), y - dip, back + (front - back) * v]
+                    })
+                    .collect()
+            })
+            .collect();
+        bone.append(&facing_sheet(&ramus, [side, 0.0, 0.0], 0.05 * hh));
+        // The angle of the jaw, a rounded corner under the ear, bolder with a heavy jaw.
+        let mut gonion = uv_sphere(0.1 * hh * (1.0 + 0.5 * spec.jaw), 10, 8);
+        gonion.scale([0.8, 1.0, 1.0]).translate([side * 0.78 * w, body_y + 0.02 * hh, -0.1 * d]);
+        bone.append(&gonion);
         let mut condyle = uv_sphere(0.07 * hh, 10, 8);
         condyle.scale([1.0, 0.9, 1.0]).translate([side * 0.82 * w, hinge[1] + 0.12 * hh, hinge[2]]);
         bone.append(&condyle);
@@ -574,24 +619,28 @@ pub struct Pelvis {
     pub thickness: f32,
 }
 
-/// A pelvis: two hip blades flaring from the sockets up to the crests, the sacrum between them
-/// behind, and the pubic and sitting bones looping down in front and behind each socket.
+/// A pelvis: two iliac wings fanning from the sockets up to curving crests that end in a spine
+/// at the front and one at the back, the sacrum wedged between their backs (a spade of five
+/// fused vertebrae that narrows to the coccyx), and in front the pubic bones, which meet at the
+/// symphysis and leave the arch beneath it, looping with the sitting bones back round each socket.
 pub fn pelvis(spec: &Pelvis) -> MeshBuilder {
     let mut mesh = MeshBuilder::new();
-    let (hx, cx, cy) = (spec.hip_x, spec.crest_x, spec.crest_y);
+    let (hx, cx, cy, t) = (spec.hip_x, spec.crest_x, spec.crest_y, spec.thickness);
     for side in [-1.0f32, 1.0] {
-        // The blade: rows climb from the socket to the crest, columns run front to back. Its
-        // crest runs from the front spine through the top to the back spine by the sacrum.
+        // The wing: rows climb from the socket to the crest, columns run front to back. The crest
+        // runs from the front spine (which juts forward) over the iliac tubercle, high and wide,
+        // to the back spine by the sacrum; the wing is broad at the top and narrow at the socket.
         let crest = CatmullRom::centripetal(vec![
-            [side * cx * 0.93, cy * 0.8, spec.front_z * 0.95],
-            [side * cx, cy * 0.98, spec.front_z * 0.25],
-            [side * cx * 0.95, cy, spec.back_z * 0.35],
-            [side * hx * 0.8, cy * 0.84, spec.back_z * 0.95],
+            [side * cx * 0.9, cy * 0.7, spec.front_z * 1.08],
+            [side * cx * 1.02, cy * 0.92, spec.front_z * 0.4],
+            [side * cx * 1.08, cy * 1.02, spec.back_z * 0.15],
+            [side * cx * 0.9, cy * 0.98, spec.back_z * 0.6],
+            [side * hx * 0.62, cy * 0.8, spec.back_z * 1.0],
         ])
-        .sample_evenly(13);
-        let (front, back) = ([side * hx, 0.05, spec.front_z * 0.55], [side * hx * 0.75, 0.0, spec.back_z * 0.6]);
+        .sample_evenly(17);
+        let (front, back) = ([side * hx * 1.02, 0.1, spec.front_z * 0.5], [side * hx * 0.7, 0.15, spec.back_z * 0.55]);
         let last = (crest.len() - 1) as f32;
-        let rows = 8usize;
+        let rows = 10usize;
         let points: Vec<Vec<V3>> = (0..=rows)
             .map(|r| {
                 let u = r as f32 / rows as f32;
@@ -602,43 +651,68 @@ pub fn pelvis(spec: &Pelvis) -> MeshBuilder {
                         let v = c as f32 / last;
                         let bottom = vec3::lerp(front, back, v);
                         let mut p = vec3::lerp(bottom, *top, u);
-                        // The outer face bulges, the blade's middle thinner toward the notch behind the socket.
-                        p[0] += side * 0.14 * (PI * u).sin() * (1.0 - (2.0 * v - 1.0).powi(2));
+                        // The outer face bulges, the blade's middle thinner toward the notch behind
+                        // the socket; its front third turns forward and its back third in toward the sacrum.
+                        let belly = (PI * u).sin() * (1.0 - (2.0 * v - 1.0).powi(2));
+                        p[0] += side * 0.2 * belly;
+                        p[2] += 0.18 * spec.front_z * u * (1.0 - v).powi(2) - 0.1 * spec.front_z.abs() * u * v * v;
                         p
                     })
                     .collect()
             })
             .collect();
-        mesh.append(&facing_sheet(&points, [side, 0.0, 0.0], spec.thickness * 0.9));
-        mesh.append(&tube(&crest, 6, &SweepOptions::default(), |_| spec.thickness * 0.95));
+        mesh.append(&facing_sheet(&points, [side, 0.0, 0.0], t * 1.15));
+        // A thick, rounded crest, and the spine at its front end.
+        mesh.append(&tube(&crest, 7, &SweepOptions::default(), |_| t * 1.2));
+        let mut asis = uv_sphere(t * 1.7, 8, 6);
+        asis.translate(crest[0]);
+        mesh.append(&asis);
+        // The pillar of the wing, from the socket up to the middle of the crest.
+        let pillar = CatmullRom::centripetal(vec![[side * hx, 0.0, 0.0], [side * (hx + 0.35 * (cx - hx)), cy * 0.4, spec.front_z * 0.15], [side * cx * 0.98, cy * 0.9, spec.front_z * 0.1]]).sample_evenly(10);
+        mesh.append(&tube(&pillar, 8, &SweepOptions::default(), |s| t * (2.2 - 0.9 * s)));
 
-        // The sitting bone and pubis make a loop from the socket down and round.
-        let loop_points = vec![
-            [side * hx, 0.0, 0.0],
-            [side * hx * 0.98, -spec.drop * 0.7, spec.back_z * 0.65],
-            [side * hx * 0.7, -spec.drop * 1.0, spec.back_z * 0.25],
-            [side * hx * 0.38, -spec.drop * 0.95, spec.front_z * 0.35],
-            [side * hx * 0.2, -spec.drop * 0.78, spec.front_z * 0.95],
-            [side * hx * 0.62, -spec.drop * 0.3, spec.front_z * 0.8],
-        ];
-        let curve = CatmullRom::centripetal(loop_points).with_closed(true).sample_evenly(40);
-        mesh.append(&tube(&curve, 8, &SweepOptions { closed: true, ..Default::default() }, |_| spec.thickness * 1.05));
         // The socket: a thick ring the thigh's head turns in.
-        let mut socket = uv_sphere(spec.thickness * 1.9, 10, 8);
+        let mut socket = uv_sphere(t * 2.0, 10, 8);
         socket.scale([0.8, 1.0, 1.0]).translate([side * hx * 1.04, 0.0, 0.0]);
         mesh.append(&socket);
+
+        // The pubic bone runs from the socket forward and down to the symphysis; its lower branch
+        // turns back out to the sitting bone, and the ischium rises from that to the socket's back.
+        let symphysis = [side * 0.07, -spec.drop * 0.5, spec.front_z * 1.0];
+        let tuber = [side * hx * 0.88, -spec.drop * 1.0, spec.back_z * 0.2];
+        let upper = CatmullRom::centripetal(vec![[side * hx * 0.98, -0.1, spec.front_z * 0.35], [side * hx * 0.55, -spec.drop * 0.28, spec.front_z * 0.85], symphysis]).sample_evenly(14);
+        mesh.append(&tube(&upper, 8, &SweepOptions::default(), |_| t * 1.1));
+        let lower = CatmullRom::centripetal(vec![symphysis, [side * hx * 0.38, -spec.drop * 0.82, spec.front_z * 0.72], [side * hx * 0.7, -spec.drop * 1.0, spec.front_z * 0.2], tuber]).sample_evenly(16);
+        mesh.append(&tube(&lower, 8, &SweepOptions::default(), |_| t * 1.0));
+        let ischium = CatmullRom::centripetal(vec![[side * hx * 1.0, -0.1, spec.back_z * 0.3], [side * hx * 0.98, -spec.drop * 0.55, spec.back_z * 0.4], tuber]).sample_evenly(10);
+        mesh.append(&tube(&ischium, 8, &SweepOptions::default(), |_| t * 1.25));
+        let mut tuberosity = uv_sphere(t * 1.7, 8, 6);
+        tuberosity.scale([0.9, 1.1, 1.2]).translate(tuber);
+        mesh.append(&tuberosity);
     }
-    // Sacrum: a spade of fused vertebrae wedged between the blades, with a coccyx hanging from it.
-    let mut sacrum = ellipsoid([hx * 0.5, cy * 0.4, spec.thickness * 1.6]);
-    sacrum.rotate_x(-0.28).translate([0.0, cy * 0.42, spec.back_z * 0.78]);
-    mesh.append(&sacrum);
-    let mut coccyx = spike(spec.thickness * 1.2, spec.drop * 0.5, 7, 0.0, Shading::SMOOTH);
-    coccyx.rotate_x(PI + 0.35).translate([0.0, -cy * 0.02, spec.back_z * 0.95]);
-    mesh.append(&coccyx);
-    // The pubic joint closing the loops in front.
-    let mut joint = uv_sphere(spec.thickness * 1.3, 8, 6);
-    joint.scale([1.7, 1.0, 1.0]).translate([0.0, -spec.drop * 0.8, spec.front_z * 0.97]);
+    // The pubic joint: a pad of cartilage's bone closing the two pubic bones in front.
+    let mut joint = uv_sphere(t * 1.5, 8, 6);
+    joint.scale([1.6, 1.3, 1.0]).translate([0.0, -spec.drop * 0.5, spec.front_z * 1.0]);
     mesh.append(&joint);
+    // The sacrum: a spade of five fused vertebrae wedged between the backs of the wings, broad at
+    // the top, curving forward as it narrows to the tip, with the coccyx hanging on.
+    let (top, tip) = ([0.0, cy * 0.72, spec.back_z * 0.9], [0.0, -spec.drop * 0.25, spec.back_z * 0.35]);
+    let spine = CatmullRom::centripetal(vec![top, [0.0, cy * 0.4, spec.back_z * 0.96], [0.0, cy * 0.08, spec.back_z * 0.78], tip]).sample_evenly(5);
+    for (k, p) in spine.iter().enumerate() {
+        let s = k as f32 / 4.0;
+        let mut segment = ellipsoid([hx * (0.86 - 0.5 * s), cy * 0.14, t * (2.4 - 0.6 * s)]);
+        segment.rotate_x(-0.35 + 0.5 * s).translate(*p);
+        mesh.append(&segment);
+    }
+    // The wings of the sacrum reach out to the backs of the iliac wings.
+    for side in [-1.0f32, 1.0] {
+        let mut ala = ellipsoid([hx * 0.4, cy * 0.2, t * 2.0]);
+        ala.rotate_z(side * 0.25).translate([side * hx * 0.62, cy * 0.66, spec.back_z * 0.94]);
+        mesh.append(&ala);
+    }
+    let mut coccyx = spike(t * 1.3, spec.drop * 0.55, 7, 0.0, Shading::SMOOTH);
+    coccyx.rotate_x(PI + 0.55).translate(vec3::add(tip, [0.0, 0.05, 0.0]));
+    mesh.append(&coccyx);
     mesh
 }
 
@@ -699,6 +773,45 @@ pub fn hand(spec: &Hand, rng: &mut Mulberry32) -> MeshBuilder {
         let tip = [mid[0] - 0.06 * l, mid[1] + 0.1 * l, mid[2] - 0.11 * l * (0.5 + spec.curl)];
         mesh.append(&long_bone(joint, mid, &LongBone::plain([r * 1.4, r * 1.25], r * 0.9)));
         mesh.append(&long_bone(mid, tip, &LongBone::plain([r * 1.2, r * 1.0], r * 0.75)));
+    }
+    mesh
+}
+
+/// A hand closed round a grip: the same carpals and metacarpals as [`hand`], and each finger and
+/// the thumb laid along the joints of `form`'s digit curled `fingers[i]` and `thumb` radians per
+/// joint ([`Digit::joints`], the curl `fb_body`'s gripping hand and glove take), so the bony
+/// fingers lie where a gloved hand's would and a weapon in the fist sits in them. In hand space,
+/// like [`hand`]; `spec.curl` is not used.
+pub fn hand_gripping(spec: &Hand, form: &HandForm, fingers: [f32; 4], thumb: f32, rng: &mut Mulberry32) -> MeshBuilder {
+    let l = spec.length;
+    let r = 0.027 * l;
+    let mut mesh = MeshBuilder::new();
+    for k in 0..6 {
+        let x = (k as f32 - 2.5) * 0.085 * l + rng.range_f32(-0.01, 0.01);
+        let mut stone = uv_sphere(0.07 * l, 8, 6);
+        stone.scale([1.0, 0.85, 0.7]).translate([x, 0.07 * l + 0.02 * l * (k % 2) as f32, 0.0]);
+        mesh.append(&stone);
+    }
+    for (i, digit) in form.fingers.iter().enumerate() {
+        let joints = digit.joints(fingers[i]);
+        let base = [joints[0][0] * 0.45, 0.13 * l, 0.0];
+        mesh.append(&long_bone(base, joints[0], &LongBone::plain([r * 1.35, r * 1.5], r * 0.95)));
+        if spec.missing & (1 << (i + 1)) != 0 {
+            continue;
+        }
+        for (k, pair) in joints.windows(2).enumerate() {
+            let size = 1.0 - 0.12 * k as f32;
+            mesh.append(&long_bone(pair[0], pair[1], &LongBone::plain([r * 1.3 * size, r * 1.15 * size], r * 0.8 * size)));
+        }
+    }
+    let joints = form.thumb.joints(thumb);
+    let base = [-0.28 * spec.half_width, 0.1 * l, -0.01 * l];
+    mesh.append(&long_bone(base, joints[0], &LongBone::plain([r * 1.5, r * 1.5], r * 1.05)));
+    if spec.missing & 1 == 0 {
+        for (k, pair) in joints.windows(2).enumerate() {
+            let size = 1.0 - 0.14 * k as f32;
+            mesh.append(&long_bone(pair[0], pair[1], &LongBone::plain([r * 1.4 * size, r * 1.25 * size], r * 0.9 * size)));
+        }
     }
     mesh
 }
@@ -864,6 +977,75 @@ mod tests {
         // It reaches about its length from the wrist.
         let (lo, hi) = whole.bounds().unwrap();
         assert!(lo[1] > -0.2 && hi[1] > 0.8 * spec.length && hi[1] < 1.2 * spec.length, "{lo:?} {hi:?}");
+    }
+
+    #[test]
+    fn a_gripping_hand_lies_along_the_forms_curled_digits() {
+        let form = HandForm::mannequin(1.0, 0.1);
+        let spec = Hand { length: 1.77, half_width: form.knuckle_half_width, curl: 0.2, missing: 0 };
+        let open = hand(&spec, &mut rng());
+        let curls = [1.0, 1.0, 1.0, 1.0];
+        let closed = hand_gripping(&spec, &form, curls, 0.75, &mut rng());
+        valid(closed.clone(), "hand");
+        // Closed, it is shorter than the open hand and reaches toward the palm (-Z), as its fingertips do.
+        let (_, open_hi) = open.bounds().unwrap();
+        let (closed_lo, closed_hi) = closed.bounds().unwrap();
+        assert!(closed_hi[1] < open_hi[1] - 0.15, "{closed_hi:?} vs {open_hi:?}");
+        assert!(closed_lo[2] < -0.5 * form.fingers[1].length * 0.5, "{closed_lo:?}");
+        // Each fingertip bone ends at its digit's last joint, curled.
+        for (i, digit) in form.fingers.iter().enumerate() {
+            let tip = *digit.joints(curls[i]).last().unwrap();
+            let near = closed.positions.iter().map(|p| vec3::distance(*p, tip)).fold(f32::MAX, f32::min);
+            assert!(near < 0.12, "finger {i}: nothing within {near} of its tip");
+        }
+        // Missing fingers are missing here too.
+        let short = hand_gripping(&Hand { missing: 0b00110, ..spec }, &form, curls, 0.75, &mut rng());
+        assert!(short.vertex_count() < closed.vertex_count());
+    }
+
+    #[test]
+    fn a_pelvis_has_wings_a_sacrum_and_an_arch_under_the_pubic_joint() {
+        let spec = Pelvis { hip_x: 0.86, crest_x: 1.45, crest_y: 1.3, back_z: -0.6, front_z: 0.55, drop: 1.1, thickness: 0.09 };
+        let pelvis = pelvis(&spec);
+        let near = |p: V3, r: f32| pelvis.positions.iter().any(|q| vec3::distance(p, *q) < r);
+        // The crests stand wide and high above the sockets, either side.
+        for side in [-1.0f32, 1.0] {
+            assert!(near([side * spec.crest_x * 1.05, spec.crest_y, spec.back_z * 0.1], 0.25), "no wing crest on {side}");
+            // A sitting bone below and behind each socket.
+            assert!(near([side * spec.hip_x * 0.88, -spec.drop, spec.back_z * 0.2], 0.2), "no sitting bone on {side}");
+        }
+        // The sacrum between the wings at the back, narrowing to a tip low down.
+        assert!(near([0.0, spec.crest_y * 0.4, spec.back_z * 0.96], 0.3));
+        assert!(near([0.0, -spec.drop * 0.25, spec.back_z * 0.35], 0.3));
+        // The pubic joint in front, with the arch open beneath it: bone either side, none on the midline.
+        assert!(near([0.0, -spec.drop * 0.5, spec.front_z], 0.2));
+        assert!(near([spec.hip_x * 0.4, -spec.drop * 0.82, spec.front_z * 0.72], 0.2));
+        assert!(!near([0.0, -spec.drop * 0.85, spec.front_z * 0.8], 0.1), "the arch is closed");
+    }
+
+    #[test]
+    fn a_skull_has_cheekbones_and_a_jaw_with_rami() {
+        let spec = SkullSpec { half_width: 0.9, half_height: 1.17, half_depth: 1.04, jaw: 1.0, brow: 0.5, missing_teeth: 0.0 };
+        let narrow = SkullSpec { jaw: 0.0, ..spec };
+        let skull = skull(&spec, 0, &mut rng());
+        // Cheekbones stand out to either side of the face below the sockets.
+        let (lo, hi) = skull.bone.bounds().unwrap();
+        let cheek = |side: f32| skull.bone.positions.iter().filter(|p| p[2] > 0.3 * spec.half_depth && p[1] < -0.2 * spec.half_height && p[1] > -0.5 * spec.half_height).map(|p| p[0] * side).fold(f32::MIN, f32::max);
+        assert!(cheek(1.0) > 0.55 * spec.half_width && cheek(-1.0) > 0.55 * spec.half_width, "{} {}", cheek(1.0), cheek(-1.0));
+        assert!(hi[0] < 1.1 * spec.half_width && lo[0] > -1.1 * spec.half_width);
+        // A heavy jaw is bolder than a slight one: broader across the angle, heavier at the chin.
+        let hinge = skull.hinge;
+        let (heavy, _) = mandible(&spec, hinge, &mut rng());
+        let (slight, _) = mandible(&narrow, hinge, &mut rng());
+        let volume = |m: &MeshBuilder| m.positions.len();
+        assert!(volume(&heavy) >= volume(&slight));
+        // The ramus rises from the angle to the hinge on each side: bone high above the body of the jaw at the sides.
+        let (jlo, jhi) = heavy.bounds().unwrap();
+        assert!(jhi[1] > 0.1 * spec.half_height, "the rami do not reach the hinge ({jhi:?} {jlo:?})");
+        for side in [-1.0f32, 1.0] {
+            let rising = heavy.positions.iter().filter(|p| p[0] * side > 0.7 * spec.half_width && p[1] > -0.25 * spec.half_height).count();
+            assert!(rising > 30, "{side}: only {rising} vertices up the ramus");
+        }
     }
 
     #[test]

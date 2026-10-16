@@ -30,6 +30,7 @@
 //!
 //! Plain Rust, no Bevy; every creature is a pure function of its seed.
 
+pub mod gear;
 pub mod pose;
 pub mod rat;
 pub mod rig;
@@ -38,6 +39,7 @@ pub mod skeleton;
 pub mod snake;
 
 pub use rat::{RatColouring, RatPattern, RatState};
+pub use gear::{GearPiece, SkeletonGear};
 pub use rig::{Bone, Rig};
 pub use skeleton::SkeletonState;
 pub use snake::{SnakeColouring, SnakePattern, SnakeState};
