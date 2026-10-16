@@ -89,10 +89,7 @@ pub const SMALL_SHARE: f32 = 0.38;
 /// How tall the eye's box is, as a share of its width.
 pub const EYE_ASPECT: f32 = 0.65;
 /// How tall a quickslot is, as a share of the life orb's diameter.
-pub const SLOT_SHARE: f32 = 0.32;
-/// Where the scroll's rule meets its curl, as a share of its height down from the top
-/// (`scroll.wesl`): the rule runs through the middle of the slots.
-pub const SCROLL_RULE: f32 = 0.676;
+pub const SLOT_SHARE: f32 = 0.38;
 
 /// An orb: its centre and radius, in `vmin`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -128,8 +125,6 @@ pub struct ClusterLayout {
     /// A quickslot's side, and the gap between them.
     pub slot: f32,
     pub gap: f32,
-    /// The flourish at the bar's end.
-    pub scroll: Rect,
 }
 
 /// The cluster for a life orb `d` across, as the sketch has it: the life orb large at the
@@ -137,7 +132,7 @@ pub struct ClusterLayout {
 /// right; the visibility eye with its centre on the rim straight right; the mana orb with its
 /// centre on the rim at 45 degrees down and to the right, each about [`SMALL_SHARE`] of `d`
 /// across, so they overlap the life orb's frame; and the quickslot bar starting just right of the
-/// eye, level with it, [`SLOT_SHARE`] of `d` tall, ending in the scroll. Everything scales with
+/// eye, level with it, [`SLOT_SHARE`] of `d` tall. Everything scales with
 /// `d`, so it stays a cluster at any window size.
 pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
     let r = d * 0.5;
@@ -157,19 +152,15 @@ pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
     let bar_left = eye.max.x + d * 0.04;
     let slots = crate::quickslots::SLOTS as f32;
     let bar = Rect::new(bar_left, eye_centre.y - slot * 0.5, bar_left + slots * slot + (slots - 1.0) * gap, eye_centre.y + slot * 0.5);
-    let scroll_size = Vec2::new(slot * 2.75, slot * 2.1);
-    let scroll_left = bar.max.x + slot * 0.1;
-    let scroll_top = eye_centre.y - SCROLL_RULE * scroll_size.y;
-    let scroll = Rect::new(scroll_left, scroll_top, scroll_left + scroll_size.x, scroll_top + scroll_size.y);
     // The small orbs poke a little out of the life orb's box, above and below: the cluster is
     // the box round all of it.
-    let top = stamina.square().min.y.min(eye.min.y).min(scroll.min.y).min(0.0);
-    let bottom = mana.square().max.y.max(scroll.max.y).max(d);
+    let top = stamina.square().min.y.min(eye.min.y).min(bar.min.y).min(0.0);
+    let bottom = mana.square().max.y.max(bar.max.y).max(d);
     let by = Vec2::new(0.0, -top);
     let shift = |rect: Rect| Rect { min: rect.min + by, max: rect.max + by };
     let disc = |disc: Disc| Disc { centre: disc.centre + by, ..disc };
     ClusterLayout {
-        size: Vec2::new(scroll.max.x, bottom - top),
+        size: Vec2::new(bar.max.x, bottom - top),
         life: disc(life),
         stamina: disc(stamina),
         mana: disc(mana),
@@ -177,7 +168,6 @@ pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
         bar: shift(bar),
         slot,
         gap,
-        scroll: shift(scroll),
     }
 }
 
@@ -598,10 +588,10 @@ mod tests {
         assert!((layout.eye.width() - 0.38 * d).abs() < 1e-4);
         assert!((layout.eye.center() - Vec2::new(life.centre.x + r, life.centre.y)).length() < 1e-4);
         assert!(layout.eye.min.x < life.centre.x + r, "it overlaps the life orb's frame too");
-        // The bar starts just right of the eye, centred on its height, 0.32 of the life orb tall.
+        // The bar starts just right of the eye, centred on its height, 0.38 of the life orb tall.
         assert!(layout.bar.min.x > layout.eye.max.x && layout.bar.min.x - layout.eye.max.x < 0.1 * d, "just right of the eye");
         assert!((layout.bar.center().y - layout.eye.center().y).abs() < 1e-4, "at the eye's height");
-        assert!((layout.bar.height() - 0.32 * d).abs() < 1e-4);
+        assert!((layout.bar.height() - 0.38 * d).abs() < 1e-4);
         // Nothing the cluster holds overlaps anything but the life orb.
         let stamina = layout.stamina.square();
         let mana = layout.mana.square();
@@ -615,7 +605,7 @@ mod tests {
     #[test]
     fn the_cluster_bounds_everything_and_scales_with_the_life_orb() {
         let layout = orb_cluster_layout(14.0);
-        let everything = [layout.life.square(), layout.stamina.square(), layout.mana.square(), layout.eye, layout.bar, layout.scroll];
+        let everything = [layout.life.square(), layout.stamina.square(), layout.mana.square(), layout.eye, layout.bar];
         for rect in everything {
             assert!(rect.min.x >= -1e-4 && rect.min.y >= -1e-4 && rect.max.x <= layout.size.x + 1e-4 && rect.max.y <= layout.size.y + 1e-4, "{rect:?} in {:?}", layout.size);
         }

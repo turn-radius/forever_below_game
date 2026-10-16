@@ -314,7 +314,7 @@ pub struct InterfaceTuning {
 
 impl Default for InterfaceTuning {
     fn default() -> Self {
-        InterfaceTuning { cell_size: 46.0, hover_delay: 0.0 }
+        InterfaceTuning { cell_size: 52.0, hover_delay: 0.0 }
     }
 }
 
