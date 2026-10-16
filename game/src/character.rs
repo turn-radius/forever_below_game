@@ -195,6 +195,23 @@ impl Character {
         armour_class(self.dexterity(), inventory.equipped().iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)))
     }
 
+    /// Pounds worn and carried with their terms: a term for each worn item's weight and one for
+    /// what a worn container holds, counted through every bag in it.
+    pub fn load_explained(&self, inventory: &Inventory) -> Explained {
+        let mut e = Explained::new("Load", "lb");
+        let add = |e: Explained, label: String, pounds: f64| if e.terms().is_empty() { e.base(label, pounds) } else { e.add(label, pounds) };
+        for (slot, item) in inventory.equipped() {
+            if item.profile.stats.weight != 0.0 {
+                e = add(e, item.name.clone(), item.profile.stats.weight as f64);
+            }
+            let contents = inventory.worn(slot).map_or(0.0, |id| inventory.contents_weight(id));
+            if contents != 0.0 {
+                e = add(e, format!("{} contents", item.name), contents as f64);
+            }
+        }
+        if e.terms().is_empty() { e.base("nothing worn", 0.0) } else { e }
+    }
+
     /// What everything equipped adds to the delver, as the plate's `derive` adds it up; the
     /// light is the farthest reaching of the lit things carried ([`carried_lights`]), where the
     /// plate took the brightest of all its items, so an unlit torch in the pack gives none.
@@ -202,8 +219,7 @@ impl Character {
         let equipped = inventory.equipped();
         // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
         let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
-        let load = sum(|s| s.weight)
-            + equipped.iter().filter_map(|(slot, _)| inventory.worn(*slot)).map(|id| inventory.contents_weight(id)).fold(0.0, |a, b| a + b);
+        let load = self.load_explained(inventory).value() as f32;
         let gear = self.gear(inventory);
         let capacity = gear.capacity_lb(self.strength()) as f32;
         let load_band = LoadBand::from_load(load as f64, capacity as f64);

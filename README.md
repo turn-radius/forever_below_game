@@ -116,6 +116,19 @@ A whole level from above, drawn as the map draws it but with every cell shown, b
 
 Left and Right step the seed, N rolls a new one and R resets the parameters. Scrolling over the plan zooms about the mouse and dragging pans; on the panel, sliders drag and the panel scrolls. `FB_SCREENSHOT` works here too.
 
+### The lab
+
+```
+cargo run -p forever_below -- --lab
+cargo run -p forever_below -- --lab --seed 7
+```
+
+A character on the left and their sheet on the right, with no level, creatures or audio. The panel (the Forge's, `game/src/tweak_panel.rs`) holds the folk, class, the five attributes (3 to 20) and the character seed, then for each equip slot a base (or none), an item seed and a switch for each affix the item rolled; switching one off derives the item's stats again without it. The sheet lists hit points, armour class, the held weapon's least, mean and most damage, load against capacity with its band, darkvision, light and the hunger, thirst and sleepiness rates, each with the terms of its `fb_character::explain::Explained` beneath. Every number comes from the rules the game calls, so what is balanced here is what the game plays. Any change rebuilds the sheet at once. The window is no smaller than 960 by 540. Below the sheet, the strike column picks an attacker in the panel (any creature, or a folk with STR 10 holding a melee base rolled from the strike seed) and has Strike (one logged blow: the d20 against the sheet's AC, then the damage, the venom save and the hit points before and after), ×100 (hit rate, damage min, mean and max, and the mean blows to kill from full) and Heal. The strike seed sets every roll, so the same seed gives the same blows and the same hundred. Below that, the time column has an activity choice in the panel (the sheet's meter rates follow it) and buttons that pass 10 minutes, an hour, 8 hours or a day under it with the gear applied (`ExhaustionTimes::step`, as the game steps the delver), plus Eat (a bread), Drink (a tankard) and Reset. It shows the clock (days counted from 0), each meter as a percent with its band word and explained rate, the exhaustion level and what it does, and a log of the game time each band and level was crossed.
+
+- `--seed <n>` rolls the class and scores of a human from the seed; with none it opens on a human Fighter with every score 10.
+
+Scrolling over the panel moves it, and anywhere else moves the sheet. `FB_SCREENSHOT` works here too.
+
 ### Swing practice
 
 ```
@@ -218,7 +231,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[sound]` | `ambience_volume` | 0.3 | Ambient sounds' volume at full, 0 to 1: drips and rumbles, before your sound volume setting. |
 | `[sound]` | `rumble_interval_min` | 60.0 | The shortest time between stone rumbles, in seconds. |
 | `[sound]` | `rumble_interval_max` | 180.0 | The longest time between stone rumbles, in seconds. |
-| `[interface]` | `cell_size` | 46.0 | Inventory grid cell size, in logical pixels. |
+| `[interface]` | `cell_size` | 52.0 | Inventory grid cell size, in logical pixels. |
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
 | `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
 

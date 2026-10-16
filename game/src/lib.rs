@@ -3,6 +3,7 @@
 
 pub mod ambient;
 pub mod audio;
+pub mod breath;
 pub mod capture;
 pub mod carry;
 pub mod character;
@@ -22,6 +23,9 @@ pub mod game_clock;
 pub mod inventory;
 pub mod keymap;
 pub mod kindle;
+pub mod lab_strike;
+pub mod lab_time;
+pub mod lab_view;
 pub mod launch;
 pub mod level;
 pub mod level_view;
