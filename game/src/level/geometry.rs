@@ -19,8 +19,10 @@ use armory::{
         torus, tube, value_noise3, vec3,
     },
 };
-use fb_level::{CELL, Cell, Facing, Level};
+use fb_level::{CELL, Cell, Facing, Level, LevelStyle};
 use procgen_rng::Mulberry32;
+
+pub mod stone;
 
 /// Cells of passage drawn outward behind the entrance door, so the open door shows a way
 /// back into the dark rather than a rock face. Drawn only; the level data keeps them rock.
@@ -146,11 +148,13 @@ const DIRECTIONS: [Facing; 4] = [Facing::North, Facing::East, Facing::South, Fac
 pub struct Relief {
     seed: u32,
     ceiling: f32,
+    /// Whether the stone wanders at all: dressed stone is true to the grid.
+    rough: bool,
 }
 
 impl Relief {
     pub fn new(level: &Level) -> Self {
-        Relief { seed: level.seed ^ 0x5701_e5ed, ceiling: level.ceiling }
+        Relief { seed: level.seed ^ 0x5701_e5ed, ceiling: level.ceiling, rough: level.style == LevelStyle::RoughRock }
     }
 
     /// Two octaves of value noise in -0.5..0.5 for channel `channel`.
@@ -169,6 +173,9 @@ impl Relief {
 
     /// Where the drawn rock is for a point `p` on the cell grid.
     pub fn displace(&self, p: V3) -> V3 {
+        if !self.rough {
+            return p;
+        }
         let up = (p[1] / self.ceiling.max(1.0)).clamp(0.0, 1.0);
         let vertical = FLOOR_RELIEF + (CEILING_RELIEF - FLOOR_RELIEF) * up;
         [p[0] + WALL_RELIEF * self.wander(p, 1), p[1] + vertical * self.wander(p, 2), p[2] + WALL_RELIEF * self.wander(p, 3)]
@@ -268,6 +275,11 @@ pub struct Ink {
 impl Ink {
     /// A ribbon along `points` (already moved by relief) on a surface with `normals` there.
     pub fn ribbon(&mut self, points: &[V3], normals: &[V3]) {
+        self.ribbon_lifted(points, normals, INK_LIFT);
+    }
+
+    /// As [`Ink::ribbon`], standing `lift` off the surface, to clear stone that stands proud of it.
+    pub fn ribbon_lifted(&mut self, points: &[V3], normals: &[V3], lift: f32) {
         if points.len() < 2 {
             return;
         }
@@ -276,7 +288,7 @@ impl Ink {
             let (prev, next) = (points[k.saturating_sub(1)], points[(k + 1).min(points.len() - 1)]);
             let along = vec3::sub(next, prev);
             let side = vec3::normalize_or(vec3::cross(along, n), vec3::any_perpendicular(n));
-            let lifted = vec3::add(p, vec3::scale(n, INK_LIFT));
+            let lifted = vec3::add(p, vec3::scale(n, lift));
             for push in [side, vec3::neg(side)] {
                 self.positions.push(lifted);
                 self.normals.push(n);
@@ -317,6 +329,9 @@ pub struct LevelMesh {
 /// face of rock touching an open cell; the floor and ceiling cover every open cell.
 pub fn level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> LevelMesh {
     let level = view.level();
+    if level.style == LevelStyle::StoneHalls {
+        return stone::hall_mesh(view, (x0, y0, x1, y1));
+    }
     let relief = Relief::new(level);
     let (mut floor, mut ceiling, mut walls) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
     let mut ink = Ink::default();
@@ -457,15 +472,26 @@ pub fn doorways(view: &CellView) -> Vec<Doorway> {
 /// the cell's centre): a timber frame round a [`DOOR_WIDTH`] by [`DOOR_HEIGHT`] opening in a
 /// course of dressed stone blocks that closes the rest of the cell up to the ceiling.
 pub fn door_frame(ceiling: f32, seed: u32) -> ItemMesh {
+    // Past the cell's edge and the ceiling, so the blocks bed into the rock's relief.
+    let top = ceiling + CEILING_RELIEF;
+    let course: f32 = 4.6;
+    let mut courses = Vec::new();
+    let mut y = 0.0;
+    while y < top {
+        courses.push((y, course.min(top - y)));
+        y += course;
+    }
+    door_frame_in(&courses, top, CELL * 0.5 + WALL_RELIEF, seed)
+}
+
+/// A doorway's frame and masonry with the infill laid in `courses` (each a bottom and a
+/// height, from the floor up to `top`), its blocks reaching `reach` either side of the centre.
+fn door_frame_in(courses: &[(f32, f32)], top: f32, reach: f32, seed: u32) -> ItemMesh {
     let mut rng = Mulberry32::new(seed ^ 0xd00f_4a3e);
     let half_open = DOOR_WIDTH * 0.5;
     let lintel_top = DOOR_HEIGHT + FRAME_BEAM;
-    // Past the cell's edge and the ceiling, so the blocks bed into the rock's relief.
-    let reach = CELL * 0.5 + WALL_RELIEF;
-    let top = ceiling + CEILING_RELIEF;
 
     let mut masonry = MeshBuilder::new();
-    let course: f32 = 4.6;
     let gap = 0.18;
     // The frame's outer edge across the opening: blocks beside it stop here, and blocks over
     // it sit on the lintel.
@@ -479,10 +505,7 @@ pub fn door_frame(ceiling: f32, seed: u32) -> ItemMesh {
         stone.translate([(lo + hi) * 0.5, (bottom + top) * 0.5, (rng.range_f32(0.0, 1.0) - 0.5) * 0.25]);
         masonry.append(&stone);
     };
-    let mut row = 0;
-    let mut y = 0.0;
-    while y < top {
-        let h = course.min(top - y);
+    for (row, &(y, h)) in courses.iter().enumerate() {
         let (bottom, top_of_course) = (y + gap * 0.5, y + h - gap * 0.5);
         // Stagger alternate courses by half a block.
         let mut x = -reach - if row % 2 == 1 { 3.0 } else { 0.0 };
@@ -500,8 +523,6 @@ pub fn door_frame(ceiling: f32, seed: u32) -> ItemMesh {
             block(a.max(-clear), b.min(clear), lintel_top, top_of_course, &mut rng);
             block(b.min(clear).max(a), b, bottom, top_of_course, &mut rng);
         }
-        y += course;
-        row += 1;
     }
     // A thinner core of stone behind the blocks, so the mortar joints read as recesses rather
     // than slits through the wall. It beds into the floor's relief and hides its edges behind
@@ -674,6 +695,8 @@ pub fn brazier(seed: u32) -> (ItemMesh, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ROUGH_ROCK_HASHES: [(u64, u64); 2] = [(16314085765721590626, 10396788927676635465), (12820801449123820926, 9434967241214962033)];
 
     fn level() -> Level {
         fb_level::generate(1207, 1)
@@ -876,6 +899,34 @@ mod tests {
                 assert!(rays > 5_000);
             }
         }
+    }
+
+    /// FNV-1a over every position, normal and index of the parts.
+    fn hash_parts<'a>(parts: impl IntoIterator<Item = &'a Part>) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        let mut eat = |bits: u32| {
+            for b in bits.to_le_bytes() {
+                h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+            }
+        };
+        for part in parts {
+            part.positions.iter().chain(&part.normals).flatten().for_each(|c| eat(c.to_bits()));
+            part.indices.iter().for_each(|&i| eat(i));
+        }
+        h
+    }
+
+    #[test]
+    fn rough_rock_geometry_is_unchanged() {
+        let mut seen = Vec::new();
+        for seed in [1207, 2] {
+            let level = fb_level::generate(seed, 1);
+            let view = CellView::new(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            let frame = door_frame(level.ceiling, level.seed);
+            seen.push((hash_parts(mesh.surfaces.parts.iter().chain([&mesh.ink])), hash_parts(&frame.parts)));
+        }
+        assert_eq!(seen, ROUGH_ROCK_HASHES);
     }
 
     #[test]
