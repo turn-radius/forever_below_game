@@ -38,6 +38,7 @@ use crate::character::{Character, Class};
 use crate::combat::{Weapon, first_level_hit_points_explained};
 use crate::inventory::Inventory;
 use crate::lab_strike::{Attacker, Strikes};
+use crate::lab_time::{ACTIVITIES, STEPS, TimeLab, activity_word, clock_text, exhaustion_effect, percent_text};
 use crate::tweak_panel::{PanelBody, Tweak, chip, TweakPanelPlugin, TweakPanelSystems, over_body, panel_body};
 use crate::ui::{node_rect, BG, BRIGHT, FAINT, INK, LINE, MUTED, UiFonts, numbers_line};
 
@@ -85,15 +86,17 @@ impl Plugin for LabViewPlugin {
             .init_resource::<UiFonts>()
             .init_resource::<SheetBuilds>()
             .init_resource::<Strikes>()
+            .init_resource::<TimeLab>()
             .insert_resource(ClearColor(BG))
             .add_plugins(TweakPanelPlugin::<LabState>::default())
             .add_systems(Startup, setup)
             .add_systems(
             Update,
             (
-                press_strikes,
+                (press_strikes, press_time),
                 rebuild_sheet.run_if(resource_changed::<LabState>),
                 refresh_strikes.run_if(|state: Res<LabState>, strikes: Res<Strikes>| state.is_changed() || strikes.is_changed()),
+                refresh_time.run_if(|state: Res<LabState>, time: Res<TimeLab>| state.is_changed() || time.is_changed()),
                 scroll_sheet,
             )
                 .chain()
@@ -158,6 +161,9 @@ pub struct LabState {
     /// The seed the character was last rolled from.
     pub seed: u32,
     pub slots: Vec<LabSlot>,
+    /// What the character is doing while time passes ([`crate::lab_time`]); the meter rates
+    /// follow it.
+    pub activity: Activity,
     /// Who strikes the character ([`crate::lab_strike`]).
     pub attacker: Attacker,
     /// The seed every strike roll comes from.
@@ -170,7 +176,7 @@ impl Default for LabState {
     fn default() -> Self {
         let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
         let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0 };
-        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1 };
+        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), activity: Activity::Walking, attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1 };
         for (slot, base, seed) in [(Slot::Mainhand, "Sword", 4), (Slot::Head, "Helm", 9), (Slot::Body, "Mail", 9)] {
             state.equip(slot, base, seed);
         }
@@ -299,6 +305,8 @@ impl Tweak for LabState {
         for ((short, _), score) in ATTRIBUTES.iter().zip(scores) {
             fields.push(slider(&format!("attributes.{short}"), score as f32, SCORE));
         }
+        let activities = ACTIVITIES.iter().map(|&a| activity_word(a).to_string()).collect();
+        fields.push(choice("time.activity", activity_word(self.activity), activities));
         let attackers = Attacker::all();
         let who = attackers.iter().map(Attacker::label).collect();
         fields.push(choice("attacker.who", &self.attacker.label(), who));
@@ -361,6 +369,10 @@ impl Tweak for LabState {
             "character.class" => {
                 let at = Class::ALL.iter().position(|&c| c == self.character.class).unwrap_or(0);
                 self.character.class = Class::ALL[step(Class::ALL.len(), at)];
+            }
+            "time.activity" => {
+                let at = ACTIVITIES.iter().position(|&a| a == self.activity).unwrap_or(0);
+                self.activity = ACTIVITIES[step(ACTIVITIES.len(), at)];
             }
             "attacker.who" => {
                 let all = Attacker::all();
@@ -452,7 +464,7 @@ pub fn sheet(state: &LabState) -> Vec<Row> {
         Row::of(loadout.warmth()),
     ];
     for kind in [MeterKind::Hunger, MeterKind::Thirst, MeterKind::Sleepiness] {
-        rows.push(Row::of(loadout.rate(kind, Activity::Walking)));
+        rows.push(Row::of(loadout.rate(kind, state.activity)));
     }
     rows
 }
@@ -493,6 +505,25 @@ enum StrikeText {
 /// Where passing time goes.
 #[derive(Component)]
 pub struct TimeColumn;
+
+/// A button in the time column: pass the nth of [`STEPS`], eat, drink or start over.
+#[derive(Component, Clone, Copy, PartialEq)]
+enum TimeButton {
+    Pass(usize),
+    Eat,
+    Drink,
+    Reset,
+}
+
+/// A part of the time column.
+#[derive(Component, Clone, Copy, PartialEq)]
+enum TimeText {
+    Clock,
+    /// Holds the meters' rows, built again as the time changes.
+    Meters,
+    Exhaustion,
+    Log,
+}
 
 fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
     commands.spawn((Camera2d, bevy::ui::IsDefaultUiCamera));
@@ -539,7 +570,21 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
                 strikes.spawn((StrikeText::Summary, Text::new(""), UiFonts::style(&fonts.mono, 15.0, BRIGHT)));
                 strikes.spawn((StrikeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
             });
-            column.spawn((TimeColumn, Node { flex_direction: FlexDirection::Column, margin: UiRect::top(px(24)), padding: UiRect::bottom(px(30)), ..default() }));
+            column.spawn((TimeColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(8), margin: UiRect::top(px(24)), padding: UiRect::bottom(px(30)), ..default() })).with_children(|time| {
+                time.spawn((Text::new("Time"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
+                time.spawn((TimeText::Clock, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
+                time.spawn(Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() }).with_children(|row| {
+                    for (i, (label, _)) in STEPS.iter().enumerate() {
+                        chip(row, &fonts, label, TimeButton::Pass(i));
+                    }
+                    chip(row, &fonts, "Eat", TimeButton::Eat);
+                    chip(row, &fonts, "Drink", TimeButton::Drink);
+                    chip(row, &fonts, "Reset", TimeButton::Reset);
+                });
+                time.spawn((TimeText::Meters, Node { flex_direction: FlexDirection::Column, row_gap: px(8), ..default() }));
+                time.spawn((TimeText::Exhaustion, Text::new(""), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
+                time.spawn((TimeText::Log, Text::new(""), UiFonts::style(&fonts.mono, 14.0, MUTED)));
+            });
         });
     });
 }
@@ -580,6 +625,67 @@ fn press_strikes(
         StrikeButton::Strike => strikes.strike(&state),
         StrikeButton::Hundred => strikes.strike_hundred(&state),
         StrikeButton::Heal => strikes.heal(),
+    }
+}
+
+/// A click on a time button.
+fn press_time(
+    buttons: Res<ButtonInput<MouseButton>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    controls: Query<(&TimeButton, &ComputedNode, &UiGlobalTransform)>,
+    state: Res<LabState>,
+    mut time: ResMut<TimeLab>,
+) {
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
+    let Some((button, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
+    match *button {
+        TimeButton::Pass(i) => time.pass(&state, STEPS[i].1),
+        TimeButton::Eat => time.eat(),
+        TimeButton::Drink => time.drink(),
+        TimeButton::Reset => time.reset(),
+    }
+}
+
+/// Shows the clock, each meter with its band and explained rate, the exhaustion and the log.
+fn refresh_time(
+    mut commands: Commands,
+    state: Res<LabState>,
+    time: Res<TimeLab>,
+    fonts: Res<UiFonts>,
+    mut texts: Query<(Entity, &TimeText, Option<&mut Text>)>,
+) {
+    let loadout = state.character.loadout(&state.inventory());
+    for (entity, which, text) in &mut texts {
+        let line = match which {
+            TimeText::Clock => format!("{} · {}", clock_text(time.clock.hours()), activity_word(state.activity)),
+            TimeText::Exhaustion => {
+                let e = time.exhaustion;
+                format!("Exhaustion {} of 6: {}", e.level, exhaustion_effect(e))
+            }
+            TimeText::Log => time.log.iter().map(|c| c.line()).collect::<Vec<_>>().join("
+"),
+            TimeText::Meters => {
+                let meters = [(MeterKind::Hunger, time.needs.hunger), (MeterKind::Thirst, time.needs.thirst), (MeterKind::Sleepiness, time.needs.sleepiness)];
+                commands.entity(entity).despawn_children().with_children(|rows| {
+                    for (kind, meter) in meters {
+                        let rate = loadout.rate(kind, state.activity);
+                        rows.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|block| {
+                            block.spawn((Text::new(format!("{} {} · {}", rate.name.trim_end_matches(" rate"), percent_text(&meter), meter.word())), UiFonts::style(&fonts.display, 21.0, BRIGHT)));
+                            numbers_line(block, &fonts, &rate.line(), 15.0);
+                        });
+                    }
+                });
+                continue;
+            }
+        };
+        if let Some(mut text) = text {
+            if text.0 != line {
+                text.0 = line;
+            }
+        }
     }
 }
 
@@ -805,6 +911,18 @@ mod tests {
         assert!(matches!(state.attacker, Attacker::Creature(Species::Rat)));
         state.set_slider("attacker.seed", 42.0);
         assert_eq!(state.strike_seed, 42);
+    }
+
+    #[test]
+    fn the_rate_rows_follow_the_chosen_activity() {
+        let mut state = LabState::default();
+        let walking = value_of(&state, "Hunger rate");
+        state.cycle("time.activity", -1);
+        assert_eq!(state.activity, Activity::Resting);
+        assert_eq!(value_of(&state, "Hunger rate"), walking * 0.5);
+        state.cycle("time.activity", 2);
+        assert_eq!(state.activity, Activity::Exerting);
+        assert_eq!(value_of(&state, "Hunger rate"), walking * 2.0);
     }
 
     #[test]

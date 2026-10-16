@@ -11,6 +11,7 @@ use bevy::{
 };
 use fb_items::Slot;
 use forever_below::lab_strike::Strikes;
+use forever_below::lab_time::TimeLab;
 use forever_below::lab_view::{LabState, LabViewPlugin, SheetBuilds, StrikeColumn, TimeColumn};
 
 fn headless_lab() -> App {
@@ -69,4 +70,22 @@ fn strikes_show_in_the_strike_column() {
     let shown = texts(&mut app);
     assert!(shown.iter().any(|t| t.starts_with("Giant Rat: d20 (") && t.contains("vs AC 15")), "{shown:?}");
     assert!(shown.iter().any(|t| t.starts_with("100 blows vs AC 15")), "{shown:?}");
+}
+
+#[test]
+fn passing_time_shows_in_the_time_column() {
+    let mut app = headless_lab();
+    for _ in 0..3 {
+        app.update();
+    }
+    assert!(texts(&mut app).iter().any(|t| t == "Day 0 00:00 · walking"), "{:?}", texts(&mut app));
+    let state = app.world().resource::<LabState>().clone();
+    app.world_mut().resource_mut::<TimeLab>().pass(&state, 8.0);
+    app.update();
+    app.update();
+    let shown = texts(&mut app);
+    assert!(shown.iter().any(|t| t == "Day 0 08:00 · walking"), "{shown:?}");
+    assert!(shown.iter().any(|t| t == "Hunger 50% · Hungry"), "{shown:?}");
+    assert!(shown.iter().any(|t| t.contains("Day 0 08:00 Hunger → Hungry")), "{shown:?}");
+    assert!(shown.iter().any(|t| t == "Exhaustion 0 of 6: full speed"), "{shown:?}");
 }

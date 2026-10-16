@@ -23,6 +23,7 @@ pub mod inventory;
 pub mod keymap;
 pub mod kindle;
 pub mod lab_strike;
+pub mod lab_time;
 pub mod lab_view;
 pub mod launch;
 pub mod level;
