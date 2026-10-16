@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn posing_every_folk_on_1207_each_frame_is_cheap() {
-        let folk = fb_level::generate(1207).folk;
+        let folk = fb_level::generate(1207, 1).folk;
         assert!(!folk.is_empty());
         let people: Vec<(fb_body::Gait, IdleCycle)> = folk
             .iter()

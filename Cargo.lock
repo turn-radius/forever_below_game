@@ -2650,9 +2650,11 @@ dependencies = [
 name = "fb_character"
 version = "0.1.0"
 dependencies = [
+ "fb_creatures",
  "procgen_rng",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

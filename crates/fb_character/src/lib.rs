@@ -14,6 +14,9 @@
 
 pub mod combat;
 pub mod explain;
+pub mod rules;
+
+use rules::{Rules, defaults};
 
 use serde::{Deserialize, Serialize};
 
@@ -93,12 +96,12 @@ pub enum Activity {
 impl Activity {
     /// Multiplier on meter rates for this activity.
     pub fn multiplier(self) -> f32 {
-        match self {
-            Activity::Resting => 0.5,
-            Activity::Walking => 1.0,
-            Activity::Exerting => 2.0,
-            Activity::Sleeping => 1.0,
-        }
+        self.multiplier_with(defaults())
+    }
+
+    /// [`Activity::multiplier`] under `rules`.
+    pub fn multiplier_with(self, rules: &Rules) -> f32 {
+        rules.needs.activity_rate(self) as f32
     }
 }
 
@@ -116,15 +119,20 @@ pub enum LoadBand {
 impl LoadBand {
     /// Creates a load band from load and capacity (in pounds).
     pub fn from_load(load_lb: f64, capacity_lb: f64) -> Self {
+        LoadBand::from_load_with(defaults(), load_lb, capacity_lb)
+    }
+
+    /// [`LoadBand::from_load`] under `rules`.
+    pub fn from_load_with(rules: &Rules, load_lb: f64, capacity_lb: f64) -> Self {
         if capacity_lb <= 0.0 {
             return LoadBand::Overloaded;
         }
         let percent = load_lb / capacity_lb;
-        if percent > 1.0 {
+        if percent > rules.load.overloaded_over {
             LoadBand::Overloaded
-        } else if percent >= 0.67 {
+        } else if percent >= rules.load.encumbered_from {
             LoadBand::Encumbered
-        } else if percent >= 0.34 {
+        } else if percent >= rules.load.burdened_from {
             LoadBand::Burdened
         } else {
             LoadBand::Light
@@ -133,12 +141,12 @@ impl LoadBand {
 
     /// Walk speed multiplier for this load band.
     pub fn walk_multiplier(self) -> f32 {
-        match self {
-            LoadBand::Light => 1.0,
-            LoadBand::Burdened => 0.85,
-            LoadBand::Encumbered => 0.65,
-            LoadBand::Overloaded => 0.0,
-        }
+        self.walk_multiplier_with(defaults())
+    }
+
+    /// [`LoadBand::walk_multiplier`] under `rules`.
+    pub fn walk_multiplier_with(self, rules: &Rules) -> f32 {
+        rules.load.walk(self)
     }
 
     /// HUD word for this load band.
@@ -155,7 +163,12 @@ impl LoadBand {
 /// Carrying capacity in pounds (SRD p. 79).
 /// `capacity = STR × 15 + carry` where `carry` is gear-specific bonus capacity.
 pub fn capacity_lb(strength: i32, carry_bonus_lb: f64) -> f64 {
-    (strength as f64) * 15.0 + carry_bonus_lb
+    capacity_lb_with(defaults(), strength, carry_bonus_lb)
+}
+
+/// [`capacity_lb`] under `rules`.
+pub fn capacity_lb_with(rules: &Rules, strength: i32, carry_bonus_lb: f64) -> f64 {
+    (strength as f64) * rules.load.capacity_per_strength + carry_bonus_lb
 }
 
 /// What one worn or held item does for its wearer, as plain numbers (an item's stats of the
@@ -243,6 +256,11 @@ impl Gear {
     /// Carrying capacity in pounds for a delver of `strength` in this gear.
     pub fn capacity_lb(&self, strength: i32) -> f64 {
         capacity_lb(strength, self.carry)
+    }
+
+    /// [`Gear::capacity_lb`] under `rules`.
+    pub fn capacity_lb_with(&self, rules: &Rules, strength: i32) -> f64 {
+        capacity_lb_with(rules, strength, self.carry)
     }
 
     /// Sets the hunger and sleepiness meters' gear multipliers to this gear's rates.
@@ -333,11 +351,12 @@ impl Meter {
     /// Returns the band (0..=4) for this meter's current value.
     /// Bands progress at quarters: 0, 0.25, 0.5, 0.75, then max at 1.0.
     pub fn band(&self) -> usize {
-        if self.value >= 1.0 {
-            4
-        } else {
-            ((self.value * 4.0) as usize).min(4)
-        }
+        self.band_with(defaults())
+    }
+
+    /// [`Meter::band`] under `rules`.
+    pub fn band_with(&self, rules: &Rules) -> usize {
+        rules.needs.band(self.value)
     }
 
     /// Returns the HUD word for this meter at its current band.
@@ -345,19 +364,35 @@ impl Meter {
         self.kind.word(self.band())
     }
 
+    /// [`Meter::word`] under `rules`, which may name the bands otherwise.
+    pub fn word_with<'r>(&self, rules: &'r Rules) -> &'r str {
+        rules.needs.word(self.kind, self.band_with(rules))
+    }
+
     /// The meter's change per game hour at `activity`: the base rate scaled by activity and gear.
     /// Sleeping halves the rate of hunger and thirst, and sleepiness falls by 1/8 per hour instead.
     pub fn effective_rate(&self, activity: Activity) -> f64 {
+        self.effective_rate_with(defaults(), activity)
+    }
+
+    /// [`Meter::effective_rate`] under `rules`. The base rate is the meter's own
+    /// ([`Meter::rate_per_hour`]); [`Rules::apply_to`] puts the rules' on it.
+    pub fn effective_rate_with(&self, rules: &Rules, activity: Activity) -> f64 {
         match (activity, self.kind) {
-            (Activity::Sleeping, MeterKind::Hunger | MeterKind::Thirst) => self.rate_per_hour * 0.5 * self.gear,
-            (Activity::Sleeping, MeterKind::Sleepiness) => -0.125,
-            (_, _) => self.rate_per_hour * activity.multiplier() as f64 * self.gear,
+            (Activity::Sleeping, MeterKind::Hunger | MeterKind::Thirst) => self.rate_per_hour * rules.needs.sleeping_rate * self.gear,
+            (Activity::Sleeping, MeterKind::Sleepiness) => -(1.0 / rules.needs.sleep_hours_to_rested),
+            (_, _) => self.rate_per_hour * activity.multiplier_with(rules) as f64 * self.gear,
         }
     }
 
     /// Advances the meter by `delta_hours` of game time at its [`Meter::effective_rate`].
     pub fn step(&mut self, delta_hours: f64, activity: Activity) {
-        self.value = (self.value + self.effective_rate(activity) * delta_hours).clamp(0.0, 1.0);
+        self.step_with(defaults(), delta_hours, activity);
+    }
+
+    /// [`Meter::step`] under `rules`.
+    pub fn step_with(&mut self, rules: &Rules, delta_hours: f64, activity: Activity) {
+        self.value = (self.value + self.effective_rate_with(rules, activity) * delta_hours).clamp(0.0, 1.0);
     }
 
     /// Reduces the meter by the given amount (e.g., from eating or drinking). Clamped at 0.
@@ -377,15 +412,11 @@ pub enum MeterKind {
 
 impl MeterKind {
     /// The base rate of change per game hour for this meter.
-    pub const fn base_rate(self) -> f64 {
-        match self {
-            MeterKind::Hunger => 1.0 / 16.0,
-            MeterKind::Thirst => 1.0 / 10.0,
-            MeterKind::Sleepiness => 1.0 / 32.0,
-        }
+    pub fn base_rate(self) -> f64 {
+        defaults().needs.base_rate(self)
     }
 
-    /// The HUD word for this meter at the given band (0..=4).
+    /// The default HUD word for this meter at the given band (0..=4); [`Rules`] may rename them.
     pub const fn word(self, band: usize) -> &'static str {
         match (self, band) {
             (MeterKind::Hunger, 0) => "Fed",
@@ -441,9 +472,14 @@ impl Needs {
 
     /// Advances all meters by `delta_hours` of game time, with the given activity.
     pub fn step(&mut self, delta_hours: f64, activity: Activity) {
-        self.hunger.step(delta_hours, activity);
-        self.thirst.step(delta_hours, activity);
-        self.sleepiness.step(delta_hours, activity);
+        self.step_with(defaults(), delta_hours, activity);
+    }
+
+    /// [`Needs::step`] under `rules`.
+    pub fn step_with(&mut self, rules: &Rules, delta_hours: f64, activity: Activity) {
+        self.hunger.step_with(rules, delta_hours, activity);
+        self.thirst.step_with(rules, delta_hours, activity);
+        self.sleepiness.step_with(rules, delta_hours, activity);
     }
 }
 
@@ -464,10 +500,17 @@ impl Exhaustion {
     /// Speed multiplier for this exhaustion level (SRD p. 358).
     /// Level 2 is half speed, level 5 is speed 0.
     pub fn speed_multiplier(self) -> f32 {
-        match self.level {
-            2..=4 => 0.5,
-            5.. => 0.0,
-            _ => 1.0,
+        self.speed_multiplier_with(defaults())
+    }
+
+    /// [`Exhaustion::speed_multiplier`] under `rules`.
+    pub fn speed_multiplier_with(self, rules: &Rules) -> f32 {
+        if self.level >= rules.exhaustion.halted_from {
+            0.0
+        } else if self.level >= rules.exhaustion.slowed_from {
+            rules.exhaustion.slowed_speed
+        } else {
+            1.0
         }
     }
 
@@ -490,12 +533,6 @@ impl Exhaustion {
 /// Slack for float error when a time lands exactly on a threshold.
 const THRESHOLD_SLACK: f64 = 1e-9;
 
-/// Game hours of continuous sleep that remove one level.
-const SLEEP_HOURS_TO_RECOVER: f64 = 8.0;
-
-/// The meter value where Famished and Dry begin (band 3).
-const FAMISHED_AT: f64 = 0.75;
-
 /// Time one meter has spent in its worst band during the current stay, and how many levels
 /// that stay has already added. Both start over when the meter leaves the worst band; the
 /// levels it added stay on the [`Exhaustion`].
@@ -511,8 +548,8 @@ impl WorstBand {
     /// Counts the part of a step of `hours` that the meter spent at its worst, given its value
     /// `before` the step and its state after. Returns the levels newly earned: the first once
     /// `first_hours` have passed and one more every `every_hours`.
-    fn advance(&mut self, before: f64, meter: &Meter, activity: Activity, hours: f64, first_hours: f64, every_hours: f64) -> u32 {
-        self.hours += hours_at_worst(before, meter.effective_rate(activity), hours);
+    fn advance(&mut self, rules: &Rules, before: f64, meter: &Meter, activity: Activity, hours: f64, first_hours: f64, every_hours: f64) -> u32 {
+        self.hours += hours_at_worst(before, meter.effective_rate_with(rules, activity), hours);
         let earned = if self.hours + THRESHOLD_SLACK >= first_hours {
             1 + ((self.hours + THRESHOLD_SLACK - first_hours) / every_hours).floor() as u32
         } else {
@@ -540,13 +577,14 @@ fn hours_at_worst(before: f64, rate: f64, hours: f64) -> f64 {
     }
 }
 
-/// The hours of a step of `hours` before a rising meter reaches [`FAMISHED_AT`], given its value
-/// `before` the step and its rate per hour.
-fn hours_below_famished(before: f64, rate: f64, hours: f64) -> f64 {
-    if before >= FAMISHED_AT {
+/// The hours of a step of `hours` before a rising meter reaches `famished_at`
+/// ([`rules::ExhaustionRules::famished_at`]), given its value `before` the step and its rate per
+/// hour.
+fn hours_below_famished(famished_at: f64, before: f64, rate: f64, hours: f64) -> f64 {
+    if before >= famished_at {
         0.0
     } else if rate > 0.0 {
-        hours.min((FAMISHED_AT - before) / rate)
+        hours.min((famished_at - before) / rate)
     } else {
         hours
     }
@@ -573,30 +611,38 @@ impl ExhaustionTimes {
     /// that time in the worst bands has earned and removes one if a night's sleep was
     /// completed. The result is the same for one big step or many small ones.
     pub fn step(&mut self, needs: &mut Needs, exhaustion: &mut Exhaustion, activity: Activity, hours: f64, con_modifier: i32) {
-        let before = *needs;
-        needs.step(hours, activity);
-
-        let starving_days = (3 + con_modifier).max(1) as f64;
-        let mut gained = self.starving.advance(before.hunger.value, &needs.hunger, activity, hours, starving_days * 24.0, 24.0);
-        gained += self.dehydrated.advance(before.thirst.value, &needs.thirst, activity, hours, 24.0, 12.0);
-        gained += self.spent.advance(before.sleepiness.value, &needs.sleepiness, activity, hours, 24.0, 24.0);
-        exhaustion.level = (exhaustion.level + gained).min(6);
-
-        self.sleep(&before, needs, exhaustion, activity, hours);
+        self.step_with(defaults(), needs, exhaustion, activity, hours, con_modifier);
     }
 
-    /// Tracks the run of sleep through the step and removes a level once it reaches 8 hours.
-    fn sleep(&mut self, before: &Needs, needs: &Needs, exhaustion: &mut Exhaustion, activity: Activity, hours: f64) {
+    /// [`ExhaustionTimes::step`] under `rules`.
+    pub fn step_with(&mut self, rules: &Rules, needs: &mut Needs, exhaustion: &mut Exhaustion, activity: Activity, hours: f64, con_modifier: i32) {
+        let before = *needs;
+        needs.step_with(rules, hours, activity);
+
+        let r = &rules.exhaustion;
+        let starving_days = (r.starving_first_days + con_modifier as f64).max(r.starving_first_days_least);
+        let mut gained = self.starving.advance(rules, before.hunger.value, &needs.hunger, activity, hours, starving_days * 24.0, r.starving_every_hours);
+        gained += self.dehydrated.advance(rules, before.thirst.value, &needs.thirst, activity, hours, r.dehydrated_first_hours, r.dehydrated_every_hours);
+        gained += self.spent.advance(rules, before.sleepiness.value, &needs.sleepiness, activity, hours, r.spent_first_hours, r.spent_every_hours);
+        exhaustion.level = (exhaustion.level + gained).min(6);
+
+        self.sleep(rules, &before, needs, exhaustion, activity, hours);
+    }
+
+    /// Tracks the run of sleep through the step and removes a level once it reaches
+    /// [`rules::ExhaustionRules::sleep_hours_to_recover`].
+    fn sleep(&mut self, rules: &Rules, before: &Needs, needs: &Needs, exhaustion: &mut Exhaustion, activity: Activity, hours: f64) {
         if activity != Activity::Sleeping {
             self.sleep_hours = 0.0;
             self.slept_recovered = false;
             return;
         }
-        let fed = hours_below_famished(before.hunger.value, needs.hunger.effective_rate(activity), hours);
-        let watered = hours_below_famished(before.thirst.value, needs.thirst.effective_rate(activity), hours);
+        let famished_at = rules.exhaustion.famished_at;
+        let fed = hours_below_famished(famished_at, before.hunger.value, needs.hunger.effective_rate_with(rules, activity), hours);
+        let watered = hours_below_famished(famished_at, before.thirst.value, needs.thirst.effective_rate_with(rules, activity), hours);
         let comfortable = fed.min(watered);
         self.sleep_hours += comfortable;
-        if self.sleep_hours + THRESHOLD_SLACK >= SLEEP_HOURS_TO_RECOVER && !self.slept_recovered && !exhaustion.is_dead() {
+        if self.sleep_hours + THRESHOLD_SLACK >= rules.exhaustion.sleep_hours_to_recover && !self.slept_recovered && !exhaustion.is_dead() {
             exhaustion.decrease();
             self.slept_recovered = true;
         }
@@ -608,17 +654,10 @@ impl ExhaustionTimes {
     }
 }
 
-/// Seconds a full pool lasts sprinting while Light.
-const SPRINT_SECONDS: f64 = 30.0;
-/// Seconds to refill from empty standing still.
-const STAND_REFILL_SECONDS: f64 = 8.0;
-/// Seconds to refill from empty while walking.
-const WALK_REFILL_SECONDS: f64 = 12.0;
-/// Sleeping refills this many times as fast as standing.
-const SLEEP_REFILL_FACTOR: f64 = 2.0;
-/// A winded delver may sprint and swing again from this much stamina.
+/// A winded delver may sprint and swing again from this much stamina: the default of
+/// [`rules::StaminaRules::second_wind`].
 pub const SECOND_WIND: f64 = 0.2;
-/// What one swing costs, of a full pool.
+/// What one swing costs, of a full pool: the default of [`rules::StaminaRules::swing_cost`].
 pub const SWING_COST: f64 = 0.08;
 
 /// The short-term pool that sprinting and swinging drain, from 1 (full) to 0 (empty), stepping
@@ -646,18 +685,24 @@ impl Stamina {
     /// drains, by a full pool in [`SPRINT_SECONDS`] while Light, 1.5 times as fast Burdened and
     /// twice as fast Encumbered or Overloaded. Sleeping refills twice as fast as standing.
     pub fn rate_per_second(activity: Activity, load: LoadBand) -> f64 {
+        Stamina::rate_per_second_with(defaults(), activity, load)
+    }
+
+    /// [`Stamina::rate_per_second`] under `rules`.
+    pub fn rate_per_second_with(rules: &Rules, activity: Activity, load: LoadBand) -> f64 {
+        let s = &rules.stamina;
         match activity {
             Activity::Exerting => {
                 let heavier = match load {
                     LoadBand::Light => 1.0,
-                    LoadBand::Burdened => 1.5,
-                    LoadBand::Encumbered | LoadBand::Overloaded => 2.0,
+                    LoadBand::Burdened => s.burdened_drain,
+                    LoadBand::Encumbered | LoadBand::Overloaded => s.encumbered_drain,
                 };
-                -heavier / SPRINT_SECONDS
+                -heavier / s.sprint_seconds
             }
-            Activity::Walking => 1.0 / WALK_REFILL_SECONDS,
-            Activity::Resting => 1.0 / STAND_REFILL_SECONDS,
-            Activity::Sleeping => SLEEP_REFILL_FACTOR / STAND_REFILL_SECONDS,
+            Activity::Walking => 1.0 / s.walk_refill_seconds,
+            Activity::Resting => 1.0 / s.stand_refill_seconds,
+            Activity::Sleeping => s.sleep_refill_factor / s.stand_refill_seconds,
         }
     }
 
@@ -668,23 +713,33 @@ impl Stamina {
 
     /// Advances by `seconds` of real time at `activity` under `load`.
     pub fn step(&mut self, seconds: f64, activity: Activity, load: LoadBand) {
-        self.value = (self.value + Stamina::rate_per_second(activity, load) * seconds).clamp(0.0, 1.0);
-        self.settle();
+        self.step_with(defaults(), seconds, activity, load);
+    }
+
+    /// [`Stamina::step`] under `rules`.
+    pub fn step_with(&mut self, rules: &Rules, seconds: f64, activity: Activity, load: LoadBand) {
+        self.value = (self.value + Stamina::rate_per_second_with(rules, activity, load) * seconds).clamp(0.0, 1.0);
+        self.settle(rules);
     }
 
     /// Takes `cost` off the pool, never below empty.
     pub fn spend(&mut self, cost: f64) {
-        self.value = (self.value - cost).max(0.0);
-        self.settle();
+        self.spend_with(defaults(), cost);
     }
 
-    /// Winds the delver at empty and lets them recover at [`SECOND_WIND`].
-    fn settle(&mut self) {
+    /// [`Stamina::spend`] under `rules`.
+    pub fn spend_with(&mut self, rules: &Rules, cost: f64) {
+        self.value = (self.value - cost).max(0.0);
+        self.settle(rules);
+    }
+
+    /// Winds the delver at empty and lets them recover at the second wind.
+    fn settle(&mut self, rules: &Rules) {
         // A drain that lands on empty can leave float dust.
         if self.value <= 1e-9 {
             self.value = 0.0;
             self.winded = true;
-        } else if self.winded && self.value >= SECOND_WIND {
+        } else if self.winded && self.value >= rules.stamina.second_wind {
             self.winded = false;
         }
     }
@@ -702,21 +757,6 @@ pub enum Casting {
     Divine,
 }
 
-/// A small pool every character has, in mana points.
-const MARTIAL_POOL: f64 = 4.0;
-/// The pool of a caster with an ability modifier of 0, in mana points.
-const CASTER_BASE: f64 = 10.0;
-/// What each point of the ability modifier adds to a caster's pool.
-const CASTER_PER_MODIFIER: f64 = 5.0;
-/// A caster's pool is never smaller than this.
-const CASTER_FLOOR: f64 = 4.0;
-/// Of a full pool, what a Resting delver regains each game hour: empty to full in 8 hours.
-const MANA_REST_PER_HOUR: f64 = 1.0 / 8.0;
-/// Of a full pool, what a walking delver regains each game hour.
-const MANA_WALK_PER_HOUR: f64 = 1.0 / 32.0;
-/// Of a full pool, what a sleeping delver regains each game hour.
-const MANA_SLEEP_PER_HOUR: f64 = 3.0 / 8.0;
-
 /// The pool spells will draw on, in points. Its size comes from INT for [`Casting::Arcane`]
 /// or WIS for [`Casting::Divine`], through the SRD modifier ([`modifier`]), and it refills
 /// slowly with rest and faster asleep. Nothing spends it yet. Steps in game hours, closed form
@@ -731,7 +771,7 @@ pub struct Mana {
 
 impl Default for Mana {
     fn default() -> Self {
-        Mana::full(MARTIAL_POOL)
+        Mana::full(defaults().mana.martial_pool)
     }
 }
 
@@ -745,12 +785,18 @@ impl Mana {
     /// 10 points plus 5 for each point of the modifier of INT (arcane) or WIS (divine), and
     /// never fewer than 4. A martial character has 4.
     pub fn max_for(casting: Casting, attributes: &Attributes) -> f64 {
+        Mana::max_for_with(defaults(), casting, attributes)
+    }
+
+    /// [`Mana::max_for`] under `rules`.
+    pub fn max_for_with(rules: &Rules, casting: Casting, attributes: &Attributes) -> f64 {
+        let m = &rules.mana;
         let score = match casting {
-            Casting::Martial => return MARTIAL_POOL,
+            Casting::Martial => return m.martial_pool,
             Casting::Arcane => attributes.intelligence,
             Casting::Divine => attributes.wisdom,
         };
-        (CASTER_BASE + CASTER_PER_MODIFIER * modifier(score) as f64).max(CASTER_FLOOR)
+        (m.caster_base + m.caster_per_modifier * modifier(score) as f64).max(m.caster_floor)
     }
 
     /// How full the pool is, from 0 to 1.
@@ -767,17 +813,27 @@ impl Mana {
 
     /// The share of a full pool regained each game hour at `activity`: none while exerting.
     pub fn refill_per_hour(activity: Activity) -> f64 {
+        Mana::refill_per_hour_with(defaults(), activity)
+    }
+
+    /// [`Mana::refill_per_hour`] under `rules`.
+    pub fn refill_per_hour_with(rules: &Rules, activity: Activity) -> f64 {
         match activity {
             Activity::Exerting => 0.0,
-            Activity::Walking => MANA_WALK_PER_HOUR,
-            Activity::Resting => MANA_REST_PER_HOUR,
-            Activity::Sleeping => MANA_SLEEP_PER_HOUR,
+            Activity::Walking => rules.mana.walk_per_hour,
+            Activity::Resting => rules.mana.rest_per_hour,
+            Activity::Sleeping => rules.mana.sleep_per_hour,
         }
     }
 
     /// Advances by `hours` of game time at `activity`.
     pub fn step(&mut self, hours: f64, activity: Activity) {
-        self.points = (self.points + self.max * Mana::refill_per_hour(activity) * hours).clamp(0.0, self.max);
+        self.step_with(defaults(), hours, activity);
+    }
+
+    /// [`Mana::step`] under `rules`.
+    pub fn step_with(&mut self, rules: &Rules, hours: f64, activity: Activity) {
+        self.points = (self.points + self.max * Mana::refill_per_hour_with(rules, activity) * hours).clamp(0.0, self.max);
     }
 
     /// Spends `cost` points if the pool holds them; returns whether it did.
@@ -790,31 +846,26 @@ impl Mana {
     }
 }
 
-/// How visible a delver is in the dark: the eye is nearly closed.
-const SEEN_IN_DARK: f64 = 0.05;
-/// What full light on the delver adds to their visibility.
-const SEEN_IN_LIGHT: f64 = 0.8;
-/// What sprinting adds (at a [`SPRINT_PACE`]).
-const SEEN_MOVING: f64 = 0.15;
-/// The pace, as a multiple of walking pace, the game caps a delver's gait at.
-const SPRINT_PACE: f64 = 1.5;
-/// What each point of Stealth takes off.
-const STEALTH_STEP: f64 = 0.05;
-
 /// How easy the delver is to see, from 0 (not at all) to 1 (plain as day): a pure function of
 /// the `light` falling on them (0 dark to 1 fully lit), their `pace` (a multiple of walking
 /// pace, 0 still), the `load` they carry and their `stealth` (the sum of their gear's, each
 /// point worth a twentieth). They are hardly seen standing in the dark; light is what shows
 /// them most, then moving fast, then bulky gear. Creatures can read it as the delver does.
 pub fn visibility(light: f64, pace: f64, load: LoadBand, stealth: f64) -> f64 {
+    visibility_with(defaults(), light, pace, load, stealth)
+}
+
+/// [`visibility`] under `rules`.
+pub fn visibility_with(rules: &Rules, light: f64, pace: f64, load: LoadBand, stealth: f64) -> f64 {
+    let v = &rules.visibility;
     let lit = light.clamp(0.0, 1.0);
-    let moving = pace.clamp(0.0, SPRINT_PACE) / SPRINT_PACE;
+    let moving = pace.clamp(0.0, v.sprint_pace) / v.sprint_pace;
     let bulk = match load {
         LoadBand::Light => 0.0,
-        LoadBand::Burdened => 0.04,
-        LoadBand::Encumbered | LoadBand::Overloaded => 0.08,
+        LoadBand::Burdened => v.burdened_bulk,
+        LoadBand::Encumbered | LoadBand::Overloaded => v.encumbered_bulk,
     };
-    (SEEN_IN_DARK + SEEN_IN_LIGHT * lit + SEEN_MOVING * moving + bulk - STEALTH_STEP * stealth).clamp(0.0, 1.0)
+    (v.in_dark + v.in_light * lit + v.moving * moving + bulk - v.stealth_step * stealth).clamp(0.0, 1.0)
 }
 
 /// The ability modifier for a score: `floor((score - 10) / 2)` (D&D 5e SRD 5.1, p. 76).

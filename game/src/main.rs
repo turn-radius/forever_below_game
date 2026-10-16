@@ -30,6 +30,7 @@ use forever_below::{
     launch::{AppState, Launch, env_set},
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
+    rules::RulesPlugin,
     settings::SettingsPlugin,
     soak::SoakPlugin,
     swing_practice::SwingPracticePlugin,
@@ -69,16 +70,18 @@ fn main() -> AppExit {
     };
     let opening = if swings { AppState::Delving } else { launch.opening(env_set) };
     let mut app = App::new();
+    // `data/rules.toml` is read, and watched, as an asset source of its own.
+    forever_below::rules::use_data_folder(&mut app);
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin { primary_window: Some(Window { title: "Forever Below".into(), ..default() }), ..default() })
-            // Debug builds watch the assets, so saving `assets/tuning.toml` applies it live.
+            // Debug builds watch the assets, so saving `assets/tuning.toml` or `data/rules.toml` applies it live.
             .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() })
             // Spatial audio scale: positions are scaled to metres. 1 world unit is 10 cm = 0.1 m.
             .set(AudioPlugin { default_spatial_scale: bevy::audio::SpatialScale::new(0.1), ..default() }),
     )
     .insert_state(opening)
-    .add_plugins((SettingsPlugin, TuningPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
+    .add_plugins((SettingsPlugin, TuningPlugin, RulesPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
     .insert_resource(NewDelveSeed(launch.seed));
     if opening == AppState::Delving {
         // `FB_DEPTH=2` plays the stone halls: the level's depth picks its style.

@@ -46,6 +46,7 @@ pub mod soak;
 pub mod swing_practice;
 pub mod title;
 pub mod travel;
+pub mod rules;
 pub mod tuning;
 pub mod turntable;
 pub mod tweak_panel;

@@ -152,7 +152,7 @@ fn start_swing(
     tuning: Option<Res<crate::tuning::Tuning>>,
     mut dice: ResMut<RunDice>,
     mut last: Local<Option<Strike>>,
-    practice: Option<Res<SwingPractice>>,
+    (practice, rules): (Option<Res<SwingPractice>>, Option<Res<crate::rules::GameRules>>),
     mut winded: Winded,
     mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina), Ready>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -178,7 +178,8 @@ fn start_swing(
                 continue;
             }
             let mut spent = stamina.0;
-            spent.spend(fb_character::SWING_COST);
+            let rules = crate::rules::GameRules::of(&rules);
+            spent.spend_with(rules, rules.stamina.swing_cost);
             stamina.0 = spent;
         }
         let weapon = Weapon::in_hand(&inventory, &character);

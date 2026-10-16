@@ -22,7 +22,7 @@ use bevy::{
 use fb_creatures::Species;
 
 use super::feedback::{Corpse, Struck};
-use super::{Health, RunDice, bite_damage, first_level_hit_points};
+use super::{Health, RunDice, bite_damage_with, first_level_hit_points_with};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
 use crate::character::Character;
 use crate::creatures::Critter;
@@ -41,6 +41,7 @@ impl Plugin for VitalsPlugin {
         app.add_message::<CreatureAttack>()
             .add_message::<Struck>()
             .init_resource::<Pain>()
+            .init_resource::<crate::rules::GameRules>()
             .add_systems(OnExit(AppState::Delving), end_the_delve)
             .add_systems(Update, (give_player_health, take_bites, show_vitals, break_free, fall).chain().in_set(DelveSystems))
             .add_systems(Update, spawn_vitals.in_set(DelveSystems));
@@ -119,10 +120,10 @@ pub struct Constricted {
 
 /// The delver's hit points, from who they are, once they stand in the level; `FB_PLAYER_HP=<n>`
 /// starts them on `n` of those instead, to check a fall quickly.
-fn give_player_health(mut commands: Commands, character: Res<Character>, new: Query<Entity, (With<Player>, Without<Health>)>) {
+fn give_player_health(mut commands: Commands, character: Res<Character>, rules: Res<crate::rules::GameRules>, new: Query<Entity, (With<Player>, Without<Health>)>) {
     let start = std::env::var("FB_PLAYER_HP").ok().and_then(|n| n.trim().parse::<i32>().ok());
     for player in &new {
-        commands.entity(player).insert(starting_health(first_level_hit_points(&character), start));
+        commands.entity(player).insert(starting_health(first_level_hit_points_with(&rules, &character), start));
     }
 }
 
@@ -143,6 +144,7 @@ fn take_bites(
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
+    rules: Res<crate::rules::GameRules>,
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
@@ -154,7 +156,7 @@ fn take_bites(
             if health.is_down() {
                 continue;
             }
-            let damage = bite_damage(bite, character.constitution(), &mut dice.0);
+            let damage = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
             health.hurt(damage);
             pain.strike(flash_strength(damage as i32, health.max));
             // One dull thud for each blow that lands.

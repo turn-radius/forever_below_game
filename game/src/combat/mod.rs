@@ -29,6 +29,7 @@
 use bevy::prelude::*;
 use fb_body::Hold;
 use fb_character::combat as rules;
+use fb_character::rules::Rules;
 use fb_items::dice::Dice;
 use procgen_rng::Mulberry32;
 
@@ -48,7 +49,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin));
     }
 }
 
@@ -102,12 +103,24 @@ pub fn first_level_hit_points(character: &Character) -> i32 {
     first_level_hit_points_explained(character).value() as i32
 }
 
+/// [`first_level_hit_points`] under `rules`, which name each class's hit die.
+pub fn first_level_hit_points_with(rules: &Rules, character: &Character) -> i32 {
+    first_level_hit_points_explained_with(rules, character).value() as i32
+}
+
 /// [`first_level_hit_points`] with its terms: the hit die and the Constitution modifier.
 pub fn first_level_hit_points_explained(character: &Character) -> fb_character::explain::Explained {
+    first_level_hit_points_explained_with(fb_character::rules::defaults(), character)
+}
+
+/// [`first_level_hit_points_explained`] under `rules`.
+pub fn first_level_hit_points_explained_with(rules: &Rules, character: &Character) -> fb_character::explain::Explained {
+    let dice = &rules.combat.hit_dice;
     let die = match character.class {
-        Class::Fighter | Class::Ranger => 10,
-        Class::Cleric => 8,
-        Class::Mage => 6,
+        Class::Fighter => dice.fighter,
+        Class::Ranger => dice.ranger,
+        Class::Cleric => dice.cleric,
+        Class::Mage => dice.mage,
     };
     rules::first_level_hit_points(die, modifier(character.constitution()))
 }
@@ -275,7 +288,12 @@ pub fn venom_after_save(poison: u32, constitution: i32, rng: &mut Mulberry32) ->
 
 /// The damage a bite does the delver: its own, and its venom after the save.
 pub fn bite_damage(attack: &CreatureAttack, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    rules::bite_damage(attack.damage, attack.poison, modifier(constitution), rng).damage.value() as u32
+    bite_damage_with(fb_character::rules::defaults(), attack, constitution, rng)
+}
+
+/// [`bite_damage`] under `rules`, which set the venom save's difficulty class.
+pub fn bite_damage_with(rules: &Rules, attack: &CreatureAttack, constitution: i32, rng: &mut Mulberry32) -> u32 {
+    rules::bite_damage_with(rules, attack.damage, attack.poison, modifier(constitution), rng).damage.value() as u32
 }
 
 #[cfg(test)]

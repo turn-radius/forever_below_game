@@ -16,7 +16,8 @@
 
 use std::fmt;
 
-use crate::{Activity, CarriedLight, Gear, MeterKind, Worn, capacity_lb, modifier};
+use crate::rules::{Rules, defaults};
+use crate::{Activity, CarriedLight, Gear, MeterKind, Worn, capacity_lb_with, modifier};
 
 /// How a term combines with the value before it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -195,7 +196,13 @@ impl Loadout {
 
     /// Capacity in pounds: `STR × 15` plus each item's carry. Equals [`Gear::capacity_lb`].
     pub fn capacity(&self, strength: i32) -> Explained {
-        let mut e = Explained::new("Capacity", "lb").base(format!("STR {strength} × 15"), capacity_lb(strength, 0.0));
+        self.capacity_with(defaults(), strength)
+    }
+
+    /// [`Loadout::capacity`] under `rules`.
+    pub fn capacity_with(&self, rules: &Rules, strength: i32) -> Explained {
+        let per = rules.load.capacity_per_strength;
+        let mut e = Explained::new("Capacity", "lb").base(format!("STR {strength} × {}", number(per)), capacity_lb_with(rules, strength, 0.0));
         for (label, item) in self.worn.iter().filter(|(_, w)| w.carry != 0.0) {
             e = e.add(label, item.carry);
         }
@@ -206,19 +213,25 @@ impl Loadout {
     /// Equals [`crate::Meter::effective_rate`] of a meter given this gear, to rounding: the
     /// items multiply one at a time here and together there.
     pub fn rate(&self, kind: MeterKind, activity: Activity) -> Explained {
-        let (name, per_hour) = match kind {
-            MeterKind::Hunger => ("Hunger rate", "1/16"),
-            MeterKind::Thirst => ("Thirst rate", "1/10"),
-            MeterKind::Sleepiness => ("Sleepiness rate", "1/32"),
+        self.rate_with(defaults(), kind, activity)
+    }
+
+    /// [`Loadout::rate`] under `rules`.
+    pub fn rate_with(&self, rules: &Rules, kind: MeterKind, activity: Activity) -> Explained {
+        let (name, hours) = match kind {
+            MeterKind::Hunger => ("Hunger rate", rules.needs.hunger_hours_to_full),
+            MeterKind::Thirst => ("Thirst rate", rules.needs.thirst_hours_to_full),
+            MeterKind::Sleepiness => ("Sleepiness rate", rules.needs.sleepiness_hours_to_full),
         };
         let e = Explained::new(name, "per hour");
         if let (Activity::Sleeping, MeterKind::Sleepiness) = (activity, kind) {
-            return e.base("sleeping recovers 1/8 per hour", -0.125);
+            let recover = rules.needs.sleep_hours_to_rested;
+            return e.base(format!("sleeping recovers {} per hour", per_hour(recover)), -(1.0 / recover));
         }
-        let mut e = e.base(format!("{per_hour} per hour"), kind.base_rate());
+        let mut e = e.base(format!("{} per hour", per_hour(hours)), rules.needs.base_rate(kind));
         let (word, multiplier) = match activity {
-            Activity::Sleeping => ("sleeping", 0.5),
-            _ => (activity_word(activity), activity.multiplier() as f64),
+            Activity::Sleeping => ("sleeping", rules.needs.sleeping_rate),
+            _ => (activity_word(activity), activity.multiplier_with(rules) as f64),
         };
         if multiplier != 1.0 {
             e = e.times(word, multiplier);
@@ -267,6 +280,11 @@ impl Loadout {
     }
 }
 
+/// A rate of one in `hours`, as a designer reads it: `1/16` for a whole number of hours.
+fn per_hour(hours: f64) -> String {
+    if hours.fract() == 0.0 { format!("1/{}", hours as i64) } else { format!("1/{}", number(hours)) }
+}
+
 fn activity_word(activity: Activity) -> &'static str {
     match activity {
         Activity::Resting => "resting",
@@ -281,13 +299,19 @@ fn activity_word(activity: Activity) -> &'static str {
 /// game always has, shown as a term of its own when the sum is not whole. The value is whole
 /// to within rounding of the sum in `f64`, so read it with `.value().round()`.
 pub fn armour_class<S: Into<String>>(dexterity: i32, items: impl IntoIterator<Item = (S, f32)>) -> Explained {
-    let mut e = Explained::new("Armour class", "").base("base", 10.0).add(format!("DEX {dexterity}"), modifier(dexterity) as f64);
+    armour_class_with(defaults(), dexterity, items)
+}
+
+/// [`armour_class`] under `rules`, which set the base.
+pub fn armour_class_with<S: Into<String>>(rules: &Rules, dexterity: i32, items: impl IntoIterator<Item = (S, f32)>) -> Explained {
+    let base = rules.combat.armour_base;
+    let mut e = Explained::new("Armour class", "").base("base", base as f64).add(format!("DEX {dexterity}"), modifier(dexterity) as f64);
     let mut sum = 0.0_f32;
     for (label, armour) in items {
         sum += armour;
         e = e.add(label, armour as f64);
     }
-    let whole = (10 + sum.round() as i32 + modifier(dexterity)) as f64;
+    let whole = (base + sum.round() as i32 + modifier(dexterity)) as f64;
     if e.value() != whole {
         let by = whole - e.value();
         e = e.add("rounded", by);

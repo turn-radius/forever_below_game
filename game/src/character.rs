@@ -6,7 +6,8 @@
 
 use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
-use fb_character::explain::{Explained, Loadout, armour_class};
+use fb_character::explain::{Explained, Loadout, armour_class_with};
+use fb_character::rules::Rules;
 use fb_character::{Activity, Attributes, CarriedLight, Casting, Gear, LoadBand, Mana, Worn, modifier as ability_modifier};
 use procgen_rng::Mulberry32;
 
@@ -145,7 +146,12 @@ impl Character {
 
     /// Mana points their pool holds: from their class's casting ability.
     pub fn mana_pool(&self) -> f64 {
-        Mana::max_for(self.class.casting(), &self.attributes)
+        self.mana_pool_with(fb_character::rules::defaults())
+    }
+
+    /// [`Character::mana_pool`] under `rules`.
+    pub fn mana_pool_with(&self, rules: &Rules) -> f64 {
+        Mana::max_for_with(rules, self.class.casting(), &self.attributes)
     }
 }
 
@@ -192,7 +198,12 @@ impl Character {
 
     /// Their armour class with its terms: 10, the dexterity modifier and each worn item's armour.
     pub fn armour_class(&self, inventory: &Inventory) -> Explained {
-        armour_class(self.dexterity(), inventory.equipped().iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)))
+        self.armour_class_with(fb_character::rules::defaults(), inventory)
+    }
+
+    /// [`Character::armour_class`] under `rules`.
+    pub fn armour_class_with(&self, rules: &Rules, inventory: &Inventory) -> Explained {
+        armour_class_with(rules, self.dexterity(), inventory.equipped().iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)))
     }
 
     /// Pounds worn and carried with their terms: a term for each worn item's weight and one for
@@ -216,15 +227,20 @@ impl Character {
     /// light is the farthest reaching of the lit things carried ([`carried_lights`]), where the
     /// plate took the brightest of all its items, so an unlit torch in the pack gives none.
     pub fn derive(&self, inventory: &Inventory) -> Derived {
+        self.derive_with(fb_character::rules::defaults(), inventory)
+    }
+
+    /// [`Character::derive`] under `rules`.
+    pub fn derive_with(&self, rules: &Rules, inventory: &Inventory) -> Derived {
         let equipped = inventory.equipped();
         // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
         let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
         let load = self.load_explained(inventory).value() as f32;
         let gear = self.gear(inventory);
-        let capacity = gear.capacity_lb(self.strength()) as f32;
-        let load_band = LoadBand::from_load(load as f64, capacity as f64);
+        let capacity = gear.capacity_lb_with(rules, self.strength()) as f32;
+        let load_band = LoadBand::from_load_with(rules, load as f64, capacity as f64);
         Derived {
-            armour_class: self.armour_class(inventory).value().round() as i32,
+            armour_class: self.armour_class_with(rules, inventory).value().round() as i32,
             load,
             capacity,
             load_band,

@@ -1,0 +1,188 @@
+# The character rules: every number the combat dice, needs, exhaustion, stamina, mana, load and
+# visibility run on, and the creatures' stat blocks. The game loads this file and reloads it when
+# it is saved in a debug build. A key left out keeps its default, so a file may name only what it
+# changes. This file holds exactly the defaults (a test holds the two together).
+#
+# SRD 5.1 is the D&D 5e System Reference Document (CC-BY-4.0); page numbers are its PDF's.
+# https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf
+#
+# Units: rates are written as the time they take, so 16 hours to full is 1/16 of the meter each
+# game hour. Stamina is in real seconds, the exhaustion in game hours.
+
+[combat]
+# What every armour class starts from, before the DEX modifier and worn armour.
+armour_base = 10
+# A d20 that rolls this or more always hits (SRD p. 96, Attack Rolls).
+natural_hit = 20
+# A d20 that rolls this or less always misses (SRD p. 96, Attack Rolls).
+natural_miss = 1
+# The difficulty class of the Constitution save against venom (SRD p. 386, Poisonous Snake).
+venom_save_dc = 10
+
+# The sides of each class's hit die, taken at its highest at first level (SRD "Hit Points at 1st
+# Level": fighter p. 24, ranger p. 35, cleric p. 15, wizard p. 52 for the mage).
+[combat.hit_dice]
+fighter = 10
+ranger = 10
+mage = 6
+cleric = 8
+
+[needs]
+# Game hours of walking for hunger to go from empty to full.
+hunger_hours_to_full = 16.0
+# Game hours of walking for thirst to go from empty to full.
+thirst_hours_to_full = 10.0
+# Game hours of walking for sleepiness to go from empty to full.
+sleepiness_hours_to_full = 32.0
+# Multiple of those rates while resting.
+resting_rate = 0.5
+# Multiple of those rates while walking.
+walking_rate = 1.0
+# Multiple of those rates while exerting.
+exerting_rate = 2.0
+# Multiple of hunger's and thirst's rate while asleep.
+sleeping_rate = 0.5
+# Game hours of sleep for sleepiness to fall from full to empty.
+sleep_hours_to_rested = 8.0
+# Where bands 1 to 4 begin, as a share of the meter. Band 4 is the worst.
+band_edges = [0.25, 0.5, 0.75, 1.0]
+# The word for each band, best to worst.
+hunger_words = ["Fed", "Peckish", "Hungry", "Famished", "Starving"]
+thirst_words = ["Quenched", "Thirsty", "Parched", "Dry", "Dehydrated"]
+sleepiness_words = ["Rested", "Tired", "Weary", "Drowsy", "Spent"]
+
+[exhaustion]
+# The meter value where Famished and Dry begin; a sleep is broken from here.
+famished_at = 0.75
+# Game hours of unbroken sleep that remove one level.
+sleep_hours_to_recover = 8.0
+# Starving: the first level comes after this many days plus the CON modifier ...
+starving_first_days = 3.0
+# ... but never after fewer than this many days.
+starving_first_days_least = 1.0
+# Starving: one more level every this many game hours.
+starving_every_hours = 24.0
+# Dehydrated: the first level after this many game hours ...
+dehydrated_first_hours = 24.0
+# ... and one more every this many.
+dehydrated_every_hours = 12.0
+# Spent: the first level after this many game hours ...
+spent_first_hours = 24.0
+# ... and one more every this many.
+spent_every_hours = 24.0
+# From this level the delver moves at the slowed speed (SRD p. 358: level 2, speed halved).
+slowed_from = 2
+# The multiple of walking pace from that level.
+slowed_speed = 0.5
+# From this level the delver cannot move (SRD p. 358: level 5, speed 0).
+halted_from = 5
+
+[stamina]
+# Real seconds a full pool lasts sprinting while Light.
+sprint_seconds = 30.0
+# Sprinting drains this many times as fast Burdened ...
+burdened_drain = 1.5
+# ... and Encumbered or Overloaded.
+encumbered_drain = 2.0
+# Real seconds to refill from empty standing still.
+stand_refill_seconds = 8.0
+# Real seconds to refill from empty while walking.
+walk_refill_seconds = 12.0
+# Sleeping refills this many times as fast as standing.
+sleep_refill_factor = 2.0
+# A winded delver may sprint and swing again from this much of the pool.
+second_wind = 0.2
+# What one swing costs, of a full pool.
+swing_cost = 0.08
+
+[mana]
+# The small pool every martial character has, in mana points.
+martial_pool = 4.0
+# The pool of a caster with an ability modifier of 0.
+caster_base = 10.0
+# What each point of the ability modifier adds to a caster's pool.
+caster_per_modifier = 5.0
+# A caster's pool is never smaller than this.
+caster_floor = 4.0
+# Of a full pool, what a Resting delver regains each game hour: 0.125 is empty to full in 8 hours.
+rest_per_hour = 0.125
+# Of a full pool, what a walking delver regains each game hour.
+walk_per_hour = 0.03125
+# Of a full pool, what a sleeping delver regains each game hour.
+sleep_per_hour = 0.375
+
+[load]
+# Pounds of capacity for each point of STR (SRD p. 79).
+capacity_per_strength = 15.0
+# Burdened from this share of the capacity (SRD p. 79).
+burdened_from = 0.34
+# Encumbered from this share of the capacity.
+encumbered_from = 0.67
+# Overloaded above this share of the capacity.
+overloaded_over = 1.0
+# Walking pace multiple while Burdened.
+burdened_walk = 0.85
+# Walking pace multiple while Encumbered.
+encumbered_walk = 0.65
+# Walking pace multiple while Overloaded; 0 roots the delver.
+overloaded_walk = 0.0
+
+[visibility]
+# How visible a delver is in the dark, from 0 to 1: the eye is nearly closed.
+in_dark = 0.05
+# What full light on the delver adds.
+in_light = 0.8
+# What sprinting adds, at the sprint pace.
+moving = 0.15
+# The pace, as a multiple of walking pace, the gait is capped at.
+sprint_pace = 1.5
+# What each point of Stealth takes off.
+stealth_step = 0.05
+# What a Burdened load adds.
+burdened_bulk = 0.04
+# What an Encumbered or Overloaded load adds.
+encumbered_bulk = 0.08
+
+# Creatures, keyed by the name of their SRD stat block. Armour class is what an attack roll must
+# reach; the attack bonus is the block's "+N to hit". Hit points are the average the block prints
+# and the hit dice they come from; the bite is its damage on a hit. Venom is the poison a bite
+# adds, halved on a successful save; no dice and no bonus is none. Dice are a count of dice with
+# that many sides, plus a bonus; a flat amount is no dice and a bonus.
+
+# Rat, SRD p. 387: Tiny, Armor Class 10, Hit Points 1 (1d4 - 1); Bite +0 to hit, 1 piercing.
+[creatures."Rat"]
+armour_class = 10
+attack_bonus = 0
+hit_points = 1
+hit_dice = { count = 1, sides = 4, bonus = -1 }
+bite = { count = 0, sides = 0, bonus = 1 }
+venom = { count = 0, sides = 0, bonus = 0 }
+
+# Giant Rat, SRD p. 378: Small, Armor Class 12, Hit Points 7 (2d6); Bite +4 to hit, 4 (1d4 + 2).
+[creatures."Giant Rat"]
+armour_class = 12
+attack_bonus = 4
+hit_points = 7
+hit_dice = { count = 2, sides = 6, bonus = 0 }
+bite = { count = 1, sides = 4, bonus = 2 }
+venom = { count = 0, sides = 0, bonus = 0 }
+
+# Poisonous Snake, SRD p. 386: Tiny, Armor Class 13, Hit Points 2 (1d4); Bite +5 to hit, 1
+# piercing and 5 (2d4) poison on a failed DC 10 Constitution save, half on a success.
+[creatures."Poisonous Snake"]
+armour_class = 13
+attack_bonus = 5
+hit_points = 2
+hit_dice = { count = 1, sides = 4, bonus = 0 }
+bite = { count = 0, sides = 0, bonus = 1 }
+venom = { count = 2, sides = 4, bonus = 0 }
+
+# Constrictor Snake, SRD p. 369: Large, Armor Class 12, Hit Points 13 (2d10 + 2); Bite +4 to hit,
+# 5 (1d6 + 2) piercing.
+[creatures."Constrictor Snake"]
+armour_class = 12
+attack_bonus = 4
+hit_points = 13
+hit_dice = { count = 2, sides = 10, bonus = 2 }
+bite = { count = 1, sides = 6, bonus = 2 }
+venom = { count = 0, sides = 0, bonus = 0 }

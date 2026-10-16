@@ -199,6 +199,7 @@ fn behave(
     time: Res<Time>,
     level: Res<CurrentLevel>,
     tuning: Res<Tuning>,
+    rules: Option<Res<crate::rules::GameRules>>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
     player: Query<&Transform, (With<Player>, Without<Critter>)>,
@@ -380,7 +381,7 @@ fn behave(
             }
             if !brain.bitten && since >= lands {
                 brain.bitten = true;
-                let block = species.stat_block();
+                let block = crate::rules::GameRules::of(&rules).creature(species);
                 let damage = block.bite.roll(&mut brain.rng);
                 let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
                 attacks.write(CreatureAttack { attacker: entity, species, damage, poison, attacker_pos: at });
