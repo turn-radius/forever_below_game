@@ -52,19 +52,29 @@ impl LightAnchor {
     }
 }
 
-/// How far a flame's spine stands off its base line, in flame heights, at `t` of the way up
-/// (0 at the base, 1 at the tip), for a flame that leans `tilt` radians from vertical at its
-/// base. The slope falls linearly with height, `tan(tilt) * (1 - t)`, so the spine leaves the
-/// base at `tilt` and curls up to vertical at the tip, as a carried flame bends. Our own curve.
-/// The lean is along +Z, the flame frame's "forward".
-pub fn spine_offset(t: f32, tilt: f32) -> f32 {
-    tilt.tan() * (t - 0.5 * t * t)
+/// How far up the bend a leaning flame is at `t` of the way up its height, 0 at `bend` (and
+/// below) and 1 at the tip.
+fn bend_share(t: f32, bend: f32) -> f32 {
+    ((t - bend) / (1.0 - bend).max(1e-3)).clamp(0.0, 1.0)
 }
 
-/// The spine's lean from vertical at `t` of the way up, in radians: `tilt` at the base and 0
-/// at the tip.
-pub fn spine_angle(t: f32, tilt: f32) -> f32 {
-    (tilt.tan() * (1.0 - t)).atan()
+/// How far a flame's spine stands off its base line, in flame heights, at `t` of the way up
+/// (0 at the base, 1 at the tip). Below `bend` (a share of the height) the spine stands
+/// straight up, so the flame's bulb sits centred round what burns; above it the spine leans,
+/// its slope `tan(tilt) * 27/4 * s (1 - s)^2` over `s` of the way from the bend to the tip, so
+/// it eases out of vertical, leans its steepest (`tilt`) a third of the way up the bend and
+/// curls back to vertical at the tip, as a carried flame trails. No kinks. Our own curve.
+/// The lean is along +Z, the flame frame's "forward".
+pub fn spine_offset(t: f32, tilt: f32, bend: f32) -> f32 {
+    let s = bend_share(t, bend);
+    (1.0 - bend) * tilt.tan() * 6.75 * (0.5 * s * s - 2.0 / 3.0 * s * s * s + 0.25 * s * s * s * s)
+}
+
+/// The spine's lean from vertical at `t` of the way up, in radians: 0 up to `bend`, `tilt` a
+/// third of the way from there to the tip, and 0 again at the tip.
+pub fn spine_angle(t: f32, tilt: f32, bend: f32) -> f32 {
+    let s = bend_share(t, bend);
+    (tilt.tan() * 6.75 * s * (1.0 - s) * (1.0 - s)).atan()
 }
 
 /// A flame standing on y = 0: an outer veil `height` tall and `radius` wide at its belly,
@@ -72,14 +82,14 @@ pub fn spine_angle(t: f32, tilt: f32) -> f32 {
 /// height), and `seed` sets the shape of its tongues, so no two flames are alike.
 /// Returns `(outer, core)`.
 pub fn flame(height: f32, radius: f32, lean: f32, seed: u32) -> (MeshBuilder, MeshBuilder) {
-    flame_leaning(height, radius, lean, 0.0, seed)
+    flame_leaning(height, radius, lean, 0.0, 0.0, seed)
 }
 
-/// [`flame`] whose spine leans `tilt` radians forward (along +Z) at the base and curves back
-/// up to vertical at the tip ([`spine_offset`]). The curve is part of the mesh, not a runtime
-/// bend: the mesh stays a pure function of the item and needs no RNG, and the game only has
-/// to turn the flame upright and face it.
-pub fn flame_leaning(height: f32, radius: f32, lean: f32, tilt: f32, seed: u32) -> (MeshBuilder, MeshBuilder) {
+/// [`flame`] that stands straight up to `bend` of its height and then leans forward (along
+/// +Z) at up to `tilt` radians, curling back up to vertical at the tip ([`spine_offset`]).
+/// The curve is part of the mesh, not a runtime bend: the mesh stays a pure function of the
+/// item and needs no RNG, and the game only has to turn the flame upright and face it.
+pub fn flame_leaning(height: f32, radius: f32, lean: f32, tilt: f32, bend: f32, seed: u32) -> (MeshBuilder, MeshBuilder) {
     // `rise` is how far up the whole flame the veil starts, so the core follows the same spine.
     let veil = move |h: f32, r: f32, tongues: f32, rise: f32| {
         let profile = spline_profile(&[[0.0, 0.0], [r * 0.75, h * 0.08], [r, h * 0.26], [r * 0.82, h * 0.48], [r * 0.4, h * 0.76], [0.0, h]], 28);
@@ -90,7 +100,7 @@ pub fn flame_leaning(height: f32, radius: f32, lean: f32, tilt: f32, seed: u32) 
             // Tongues: the upper flame splits into licks that wander with height.
             let lick = 1.0 + 0.32 * t * (tongues * angle + so + t * 5.0).sin() + 0.12 * (value_noise3([p[0] * 6.0 + so, p[1] * 3.0, p[2] * 6.0], seed) - 0.5);
             let sway = lean * h * t * t;
-            let forward = height * spine_offset(((p[1] + rise) / height).clamp(0.0, 1.0), tilt);
+            let forward = height * spine_offset(((p[1] + rise) / height).clamp(0.0, 1.0), tilt, bend);
             [p[0] * lick + sway, p[1], p[2] * lick + forward]
         })
     };
@@ -103,12 +113,14 @@ const CORE_RISE: f32 = 0.04;
 /// Adds a [`flame`] to `parts` as `flame` and `flame_core`, glowing and unoutlined, after
 /// moving it to stand on `base`.
 pub fn add_flame(parts: &mut Parts, base: V3, height: f32, radius: f32, lean: f32, seed: u32) {
-    add_flame_leaning(parts, base, height, radius, lean, 0.0, seed);
+    add_flame_leaning(parts, base, height, radius, lean, 0.0, 0.0, seed);
 }
 
-/// [`add_flame`] for a flame that leans `tilt` radians forward at its base ([`flame_leaning`]).
-pub fn add_flame_leaning(parts: &mut Parts, base: V3, height: f32, radius: f32, lean: f32, tilt: f32, seed: u32) {
-    let (mut outer, mut core) = flame_leaning(height, radius, lean, tilt, seed);
+/// [`add_flame`] for a flame that stands straight to `bend` of its height, then leans up to
+/// `tilt` radians forward ([`flame_leaning`]).
+#[allow(clippy::too_many_arguments)]
+pub fn add_flame_leaning(parts: &mut Parts, base: V3, height: f32, radius: f32, lean: f32, tilt: f32, bend: f32, seed: u32) {
+    let (mut outer, mut core) = flame_leaning(height, radius, lean, tilt, bend, seed);
     outer.translate(base);
     // The core sits a little up inside the veil.
     core.translate([base[0], base[1] + height * CORE_RISE, base[2]]);
@@ -201,30 +213,43 @@ mod tests {
     }
 
     #[test]
-    fn the_spine_leans_forty_five_degrees_at_the_base_and_stands_up_at_the_tip() {
-        let tilt = 45f32.to_radians();
-        assert!((spine_angle(0.0, tilt) - tilt).abs() < 1e-5);
-        assert!(spine_angle(1.0, tilt).abs() < 1e-5);
-        assert_eq!(spine_offset(0.0, tilt), 0.0);
-        // The angle only falls on the way up: it curls, never kinks.
-        let angles: Vec<f32> = (0..=20).map(|i| spine_angle(i as f32 / 20.0, tilt)).collect();
-        assert!(angles.windows(2).all(|w| w[1] <= w[0]));
+    fn the_spine_stands_straight_to_the_bend_leans_its_steepest_above_and_stands_up_at_the_tip() {
+        let (tilt, bend) = (55f32.to_radians(), 0.3);
+        for t in [0.0, 0.15, 0.3] {
+            assert_eq!(spine_offset(t, tilt, bend), 0.0);
+            assert_eq!(spine_angle(t, tilt, bend), 0.0);
+        }
+        assert!((spine_angle(bend + (1.0 - bend) / 3.0, tilt, bend) - tilt).abs() < 1e-5);
+        assert!(spine_angle(1.0, tilt, bend).abs() < 1e-5);
+        // The angle rises then falls, never past `tilt`, and the spine only moves forward.
+        let angles: Vec<f32> = (0..=40).map(|i| spine_angle(i as f32 / 40.0, tilt, bend)).collect();
+        assert!(angles.iter().all(|&a| a <= tilt + 1e-5));
+        let offsets: Vec<f32> = (0..=40).map(|i| spine_offset(i as f32 / 40.0, tilt, bend)).collect();
+        assert!(offsets.windows(2).all(|w| w[1] >= w[0]));
+        // Smooth: the angle never jumps between close samples, at the bend or anywhere else.
+        let fine: Vec<f32> = (0..=1000).map(|i| spine_angle(i as f32 / 1000.0, tilt, bend)).collect();
+        assert!(fine.windows(2).all(|w| (w[1] - w[0]).abs() < 0.02));
     }
 
     #[test]
     fn a_leaning_flames_mesh_follows_its_spine() {
-        let tilt = 45f32.to_radians();
+        let (tilt, bend) = (55f32.to_radians(), 0.3);
         let height = 2.0;
         for seed in [0, 1, 77, 9999] {
-            let (outer, _) = flame_leaning(height, 0.4, 0.0, tilt, seed);
+            let (outer, _) = flame_leaning(height, 0.4, 0.0, tilt, bend, seed);
             let points: Vec<V3> = outer.clone().into_part("flame", OutlineMode::Welded).positions;
             let lean_between = |y0: f32, y1: f32| {
                 let (a, b) = (ring_centre(&points, y0), ring_centre(&points, y1));
                 ((b[2] - a[2]).atan2(b[1] - a[1])).to_degrees()
             };
-            let base = lean_between(0.02 * height, 0.12 * height);
+            // The bulb below the bend stands centred on the base.
+            for y in [0.05, 0.15, 0.25] {
+                let c = ring_centre(&points, y * height);
+                assert!(c[2].abs() < 0.04 * height, "seed {seed}: ring at {y} off centre {c:?}");
+            }
+            let steepest = lean_between(0.48 * height, 0.58 * height);
             let tip = lean_between(0.9 * height, 0.98 * height);
-            assert!((40.0..=50.0).contains(&base), "seed {seed}: base leans {base} degrees");
+            assert!((40.0..=56.0).contains(&steepest), "seed {seed}: leans {steepest} degrees at its steepest");
             assert!(tip.abs() < 10.0, "seed {seed}: tip leans {tip} degrees");
             // Forward, not back: the tip stands ahead of the base.
             let (lo, hi) = outer.bounds().unwrap();

@@ -5,8 +5,8 @@
 //! flame is turned about its base to stand upright however its item is held or lies
 //! ([`FlameUp`]), so a leaning torch's flame climbs rather than reaching out along the handle.
 //! A torch's flame also leans forward along its frame's +Z (`armory::build::light`), so it is
-//! then yawed to lean the way the item faces, or along [`FlameFacing`] (the way the delver
-//! looks) for what is held. The flame is see-through at its base and solid at its tip
+//! then yawed to lean the way the item faces, or along [`FlameFacing`] for what is held, back
+//! toward the delver as a carried flame trails. The flame is see-through at its base and solid at its tip
 //! ([`flame_alpha`]). The light it gives already flickers in the toon shader
 //! (`flame_flicker` in `toon.wesl`); this moves the flame itself. The amounts and rates are our
 //! own, kept small: a flame in still air, not one in a draught.
@@ -72,15 +72,16 @@ pub fn yaw_towards(up: Vec3, forward: Vec3, facing: Option<Vec3>) -> Option<Quat
 }
 
 /// Share of a held flame's lean that points outward, toward the screen edge its hand is on;
-/// the rest points forward. Straight ahead the lean is foreshortened to nothing in first
-/// person, so a held flame leans forward and out. Our own tuning.
+/// the rest points back toward the delver. Straight back the lean is foreshortened to nothing
+/// in first person, so a held flame leans back and out. Our own tuning.
 pub const HELD_OUTWARD: f32 = 0.45;
 
-/// The horizontal way a held flame leans, in the world: `ahead` blended with `right` (both
+/// The horizontal way a held flame leans, in the world: back against `ahead`, as a flame
+/// carried forward trails over the burning head toward its bearer, blended with `right` (both
 /// horizontal, unit), toward the right for the main hand (`outward` 1) and the left for the
-/// off hand (`outward` -1).
+/// off hand (`outward` -1). Leaning ahead put the flame on the head's far side, behind it.
 pub fn held_facing(ahead: Vec3, right: Vec3, outward: f32) -> Vec3 {
-    ((1.0 - HELD_OUTWARD) * ahead + HELD_OUTWARD * outward * right).normalize_or(ahead)
+    (-(1.0 - HELD_OUTWARD) * ahead + HELD_OUTWARD * outward * right).normalize_or(-ahead)
 }
 
 /// Which of a flame's two meshes a part is: the outer veil, or the bright core inside it.
@@ -274,18 +275,18 @@ mod tests {
     }
 
     #[test]
-    fn a_held_flame_leans_forward_and_out_by_hand() {
+    fn a_held_flame_leans_back_and_out_by_hand() {
         // World forward is -Z, right is +X.
         let main = held_facing(Vec3::NEG_Z, Vec3::X, 1.0);
         let off = held_facing(Vec3::NEG_Z, Vec3::X, -1.0);
-        assert!(main.x > 0.3 && main.z < -0.5 && (main.length() - 1.0).abs() < 1e-5, "{main}");
-        assert!(off.x < -0.3 && off.z < -0.5, "{off}");
+        assert!(main.x > 0.3 && main.z > 0.5 && (main.length() - 1.0).abs() < 1e-5, "{main}");
+        assert!(off.x < -0.3 && off.z > 0.5, "{off}");
         assert!((main.x + off.x).abs() < 1e-6);
-        // The flame yaws to it: leaning right and ahead for the main hand, left and ahead for the off hand.
+        // The flame yaws to it: leaning right and back for the main hand, left and back for the off hand.
         let flame = Flame::of(&cone()).unwrap();
         for (facing, side) in [(main, 1.0), (off, -1.0)] {
             let lean = flame.pose(0.0, Vec3::Y, Some(facing)).rotation * Vec3::Z;
-            assert!(lean.x * side > 0.3 && lean.z < -0.5, "{lean}");
+            assert!(lean.x * side > 0.3 && lean.z > 0.5, "{lean}");
         }
     }
 

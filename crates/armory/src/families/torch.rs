@@ -308,10 +308,9 @@ impl Torch {
     /// clear of the head before it is lit.
     pub fn flame_extent(s: &TorchState) -> FlameExtent {
         let g = Geometry::of(s);
-        let h = g.flame_height;
         FlameExtent {
-            top: vec3::add(g.flame_base, [0.0, h, h * spine_offset(1.0, FLAME_TILT)]),
-            bulb: vec3::add(g.flame_base, [0.0, h * FLAME_BELLY, h * spine_offset(FLAME_BELLY, FLAME_TILT)]),
+            top: g.flame_spine(1.0),
+            bulb: g.flame_spine(FLAME_BELLY),
             radius: g.flame_radius,
         }
     }
@@ -340,7 +339,7 @@ impl Torch {
             TorchStyle::Cresset => 0.6,
         };
         let feet = TORCH_FEET * style * fuel * (0.9 + 0.1 * s.burn.flame);
-        let at = vec3::add(g.flame_base, [0.0, g.flame_height * FLAME_BELLY, g.flame_height * spine_offset(FLAME_BELLY, FLAME_TILT)]);
+        let at = g.flame_spine(FLAME_BELLY);
         Some(LightAnchor::feet(at, FLAME_LIGHT, feet, flicker))
     }
 }
@@ -359,13 +358,18 @@ pub struct FlameExtent {
 /// Where the widest ring of [`add_flame`]'s flame stands, as a fraction of its height.
 const FLAME_BELLY: f32 = 0.26;
 
-/// How far a torch's flame leans forward (along item +Z) at its base, in radians: 55 degrees,
-/// curling back up to vertical at the tip as a carried flame does. Our own.
+/// How far a torch's flame leans forward (along item +Z) at its steepest, in radians: 55
+/// degrees, above the head, curling back up to vertical at the tip as a carried flame does.
+/// Our own.
 pub const FLAME_TILT: f32 = 55.0 * std::f32::consts::PI / 180.0;
 
 /// Where a torch's flame belly sits on the burning head, as a fraction of the way from the
 /// head's base to its top: high, so the flame crowns the head rather than hanging off its side.
 const FLAME_SEAT: f32 = 0.8;
+
+/// The most of a torch's flame that stands straight before it leans, so a tall head still
+/// leaves the flame room to trail. Our own.
+const FLAME_BEND_MAX: f32 = 0.6;
 
 /// How wide a torch's flame is at its belly, as a multiple of the head's girth: the bulb
 /// wraps the burning head without swallowing it (#276, #280).
@@ -471,6 +475,9 @@ struct Geometry {
     flame_base: V3,
     flame_height: f32,
     flame_radius: f32,
+    /// Share of the flame's height it stands straight before it leans: up to the head's top,
+    /// so the burning head sits inside the bulb ([`spine_offset`]).
+    flame_bend: f32,
 }
 
 impl Geometry {
@@ -511,7 +518,14 @@ impl Geometry {
             flame_base,
             flame_height,
             flame_radius: radius * (0.8 + 0.2 * b.flame),
+            flame_bend: ((head_top - flame_base[1]) / flame_height.max(1e-3)).clamp(0.0, FLAME_BEND_MAX),
         }
+    }
+
+    /// The point on the flame's spine `t` of the way up it (0 at the base, 1 at the tip).
+    fn flame_spine(&self, t: f32) -> V3 {
+        let h = self.flame_height;
+        vec3::add(self.flame_base, [0.0, h * t, h * spine_offset(t, FLAME_TILT, self.flame_bend)])
     }
 }
 
@@ -572,7 +586,7 @@ fn build_torch(s: &TorchState) -> ItemMesh {
         TorchStyle::Cresset => cresset_head(s, &g, fuel, &mut parts),
     }
     if burning {
-        add_flame_leaning(&mut parts, g.flame_base, g.flame_height, g.flame_radius, 0.0, FLAME_TILT, s.seed);
+        add_flame_leaning(&mut parts, g.flame_base, g.flame_height, g.flame_radius, 0.0, FLAME_TILT, g.flame_bend, s.seed);
     }
     parts.finish()
 }
@@ -923,8 +937,9 @@ mod tests {
                     assert!(light[1] > lo && light[1] < hi && light[0] > min_x && light[0] < max_x, "light outside the flame: {what}");
                     let (min_z, max_z) = fl.positions.iter().map(|p| p[2]).fold((f32::MAX, f32::MIN), |(a, b), z| (a.min(z), b.max(z)));
                     assert!(light[2] > min_z && light[2] < max_z, "light outside the flame in z: {what}");
-                    // The flame leans forward: it reaches further ahead of the wick than behind.
-                    assert!(max_z > -min_z, "flame does not lean forward: {what}");
+                    // The flame leans forward: its tip stands ahead of the head.
+                    let tip = fl.positions.iter().copied().max_by(|a, b| a[1].total_cmp(&b[1])).unwrap();
+                    assert!(tip[2] > 0.0, "flame does not lean forward: {what} tip {tip:?}");
                 }
             }
         }
