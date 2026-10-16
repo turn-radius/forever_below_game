@@ -209,6 +209,8 @@ const TOE_AT: f32 = 0.65;
 const LAP_ANKLE: f32 = 0.9;
 /// How far the lapped copy of a piece is set under the surface it hides beneath.
 const LAP_SINK: f32 = 0.03;
+/// A triangle of less than this twice-area (square world units) is a collapsed sliver and is dropped.
+const SLIVER: f32 = 2e-5;
 /// A bone's radius as the fit sees it, in the arm's shafts.
 const ARM_BONE: f32 = 0.09;
 /// The widest a gauntlet's cuff opens, as a multiple of the bone it wraps.
@@ -218,7 +220,7 @@ const SLEEVE_OPENING: f32 = 0.26;
 /// The widest a helm's hem opens, as a multiple of the skull's half width.
 const HEM_OPENING: f32 = 1.6;
 /// How far sleeveless body armour draws in at the waist.
-const WAIST: f32 = 0.18;
+const WAIST: f32 = 0.07;
 /// The hem is drawn fully in over this fraction of the skull's half height.
 const HEM_DRAWN: f32 = 0.4;
 /// A helm hangs below this fraction of the skull's half height under its centre before its hem
@@ -298,12 +300,13 @@ fn shape_for_bones(slot: Slot, mesh: &mut ItemMesh, posed: &Body, seams: &Seams)
             // swells over the chest, draws in at the waist and flares at the hem.
             let on_forearm = |p: V3| sides.iter().any(|&side| seams.bones_for(p).0 == arm_bone(side) + 1);
             let trunk: Vec<V3> = mesh.parts.iter().flat_map(|part| part.positions.iter().copied()).collect();
-            if slot == Slot::Body && !trunk.is_empty()&& trunk.iter().filter(|&&p| on_forearm(p)).count() * 100 < trunk.len() {
+            if slot == Slot::Body && !trunk.is_empty() && trunk.iter().filter(|&&p| on_forearm(p)).count() * 100 < trunk.len() {
                 let (hip, shoulder) = (posed.hip_y, posed.shoulder_y);
                 let centre = trunk.iter().map(|p| p[2]).sum::<f32>() / trunk.len() as f32;
                 let profile = |y: f32| {
                     let t = (y - hip) / (shoulder - hip).max(1e-3);
-                    1.0 - WAIST * (-((t - 0.28) / 0.22).powi(2)).exp() + 0.5 * WAIST * (-((t + 0.1) / 0.15).powi(2)).exp() + 0.5 * WAIST * (-((t - 0.78) / 0.2).powi(2)).exp()
+                    let k = 1.0 - WAIST * (-((t - 0.28) / 0.35).powi(2)).exp() + 0.25 * WAIST * (-((t + 0.1) / 0.15).powi(2)).exp();
+                    k.max(0.92)
                 };
                 for part in &mut mesh.parts {
                     for p in &mut part.positions {
@@ -394,7 +397,10 @@ impl Seams {
                     scored.push((d - 1.3 * radius, arm_bone(sides[k]) + 1));
                 }
                 scored.sort_by(|x, y| x.0.total_cmp(&y.0));
-                (scored[0].1, scored.get(1).filter(|s| s.0 - scored[0].0 < LAP).map(|s| s.1))
+                // A sleeve laid over the trunk or another bone of the arm is not lapped: its lapped
+                // copy swings out of the cloth with the other bone and shows as a fringe of
+                // spikes at the cuff, and the cloth is thick enough to hide a hairline seam.
+                (scored[0].1, None)
             }
         }
     }
@@ -427,6 +433,11 @@ fn cut_part(part: &Part, bones_for: impl Fn(V3) -> (usize, Option<usize>), frame
     for tri in part.indices.chunks_exact(3) {
         let tri = [tri[0], tri[1], tri[2]];
         let corners = tri.map(|i| part.positions[i as usize]);
+        // A sliver that closing in collapsed has no surface to show, only an outline spike.
+        let area = vec3::length(vec3::cross(vec3::sub(corners[1], corners[0]), vec3::sub(corners[2], corners[0])));
+        if area < SLIVER {
+            continue;
+        }
         let (bone, lap) = bones_for(vec3::centroid(&corners));
         add(bone, tri, false);
         if let Some(other) = lap {
@@ -450,9 +461,9 @@ fn cut_part(part: &Part, bones_for: impl Fn(V3) -> (usize, Option<usize>), frame
                         let sink = if sunk { LAP_SINK } else { 0.0 };
                         let place = vec3::sub(part.positions[at], vec3::scale(part.normals[at], sink));
                         cut.positions.push(back.transform(vec3::sub(place, frames[bone].0)));
-                        cut.normals.push(back.transform(part.normals[at]));
+                        cut.normals.push(vec3::normalize_or(back.transform(part.normals[at]), part.normals[at]));
                         cut.uvs.push(part.uvs[at]);
-                        cut.outline_normals.push(back.transform(part.outline_normals[at]));
+                        cut.outline_normals.push(vec3::normalize_or(back.transform(part.outline_normals[at]), part.outline_normals[at]));
                     }
                     cut.indices.push(map[at]);
                 }
@@ -757,6 +768,7 @@ mod tests {
                 assert!(width <= 2.0 * ARM_BONE, "{seed}: {} opens {width} round a forearm bone {ARM_BONE}", piece.name);
             }
             if piece.slot == Slot::Head {
+                // Only what hangs below the skull's hem is measured: a brim spreads wide above it by design.
                 let below = skull[1] - (HEM_BELOW + 0.5 * HEM_DRAWN) * head.half_height;
                 let width = points().filter(|p| p[1] < below).map(|p| (p[0] - skull[0]).hypot(p[2] - skull[2])).fold(0.0, f32::max);
                 *hem = hem.max(width / head.half_width);

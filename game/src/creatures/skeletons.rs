@@ -26,7 +26,7 @@
 //! - Struck down it collapses onto its back ([`fb_creatures::pose::skeleton_fallen`]) and, as it
 //!   falls, every item it wore and held is set down around it as an ordinary item on the floor
 //!   ([`shed_gear`]), once only.
-//! - A skeleton out of [`DRAW_RANGE`] (past the fog) is not drawn ([`cull_far`]), and the bones'
+//! - A skeleton past the fog's end is not drawn ([`cull_far`]), and the bones'
 //!   thin parts (fingers and toes) are drawn with fewer facets, so a hall of them holds the frame
 //!   rate, and they are rolled and fitted side by side when a level is laid out.
 //! - Its own sounds ([`BoneSounds`], `tools/synth_bones.py`): bones clatter at each step, rattle
@@ -247,19 +247,19 @@ impl Rattle {
     }
 }
 
-/// Past this far from the delver a skeleton is not drawn, world units (28 m): beyond the
-/// fog's end (`fog_end`, 26 m as shipped), where it would be fogged to nothing anyway. A hall
-/// of skeletons draws only the ones that can be seen. Our own.
-pub const DRAW_RANGE: f32 = 280.0;
+/// A skeleton is not drawn this much (world units, 2 m) past the fog's end (`fog_end`, 26 m as
+/// shipped), where it would be fogged to nothing anyway. A hall of skeletons draws only the
+/// ones that can be seen. Our own.
+const DRAW_MARGIN: f32 = 20.0;
 
-/// Hides each skeleton out of [`DRAW_RANGE`] of the delver, and shows it again on coming back.
-fn cull_far(players: Query<&Transform, With<Player>>, mut skeletons: Query<(&Critter, &Transform, &mut Visibility), Without<Player>>) {
+/// Hides each skeleton out of the fog's end of the delver, and shows it again on coming back.
+fn cull_far(tuning: Res<Tuning>, players: Query<&Transform, With<Player>>, mut skeletons: Query<(&Critter, &Transform, &mut Visibility), Without<Player>>) {
     let Some(player) = players.iter().next().map(|t| t.translation) else { return };
     for (critter, at, mut visibility) in &mut skeletons {
         if !critter.spot.species.is_skeleton() {
             continue;
         }
-        let wanted = if at.translation.distance(player) > DRAW_RANGE { Visibility::Hidden } else { Visibility::Inherited };
+        let wanted = if at.translation.distance(player) > tuning.light.fog_end + DRAW_MARGIN { Visibility::Hidden } else { Visibility::Inherited };
         if *visibility != wanted {
             *visibility = wanted;
         }
