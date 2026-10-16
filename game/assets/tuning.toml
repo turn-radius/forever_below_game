@@ -57,6 +57,12 @@ pause_min = 3.0
 pause_max = 8.0
 # How far from its spot a person strolls, world units.
 wander_radius = 90.0
+# How near the player must come, in sight, for a person to stop and face them, world units.
+notice_distance = 28.0
+# How far the player must go before a person who faced them carries on, world units.
+release_distance = 40.0
+# Seconds the player must stay away before a person carries on.
+release_delay = 1.0
 
 [creatures.size]
 # How large each kind of creature is drawn, and the floor it covers (1 = as rolled).

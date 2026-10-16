@@ -20,13 +20,20 @@
 //!   `play::gather_obstacles` reads it from the transform every frame, so the player and the
 //!   creatures keep out of them where they stand now.
 //! - **Gait.** [`Stride`] says how fast they actually moved this frame, for the walk animation.
-//! - **Holding.** [`Routine::hold`] stops a person where they stand (to face the player, #197)
-//!   and [`Routine::release`] lets them carry on.
+//! - **Holding.** [`Routine::hold`] stops a person where they stand and [`Routine::release`] lets
+//!   them carry on, resuming the walk that was cut short.
+//! - **Noticing.** A person who comes within `folk.notice_distance` of the player, with a clear
+//!   line of sight (`fb_level::path::line_of_sight`, as creatures notice), stops, turns their
+//!   whole body to face the player and keeps facing them while they stay near (the head, in
+//!   `folk::turn_heads`, leads and the body follows). Once the player has been further than
+//!   `folk.release_distance` (or out of sight) for `folk.release_delay` seconds they go on with
+//!   what they were doing. They stop well before contact, and the player cannot walk into them
+//!   (their [`BlocksTheWay`] circle).
 //!
 //! Every pace, range and wait here is our own tuning (`FolkTuning`) unless noted.
 
 use bevy::prelude::*;
-use fb_level::path::{find_path, steer_toward};
+use fb_level::path::{find_path, line_of_sight, steer_toward};
 use fb_level::{CELL, Cell, Level, LightKind};
 use procgen_rng::Mulberry32;
 
@@ -99,6 +106,10 @@ pub struct Routine {
     /// How many walks were set out on, and how many times a way was searched for.
     pub walks: u32,
     pub searches: u32,
+    /// The walk goal a hold cut short, resumed on release.
+    resume: Option<Vec2>,
+    /// Seconds the player has been out of reach while held.
+    away: f32,
     path: Vec<(i32, i32)>,
     stuck: f32,
     speed: f32,
@@ -108,13 +119,24 @@ pub struct Routine {
 impl Routine {
     /// Stops them where they are.
     pub fn hold(&mut self) {
+        if let Phase::Walk { goal } = self.phase {
+            self.resume = Some(goal);
+        }
         self.phase = Phase::Held;
+        self.away = 0.0;
     }
 
-    /// Lets a held person carry on: a short pause, then a new walk.
+    /// Lets a held person carry on: back to the walk they were on, or else a short pause and a
+    /// new walk.
     pub fn release(&mut self) {
         if self.phase == Phase::Held {
-            self.phase = Phase::Pause { left: 0.5 };
+            self.phase = match self.resume.take() {
+                Some(goal) => {
+                    self.stuck = 0.0;
+                    Phase::Walk { goal }
+                }
+                None => Phase::Pause { left: 0.5 },
+            };
         }
     }
 }
@@ -146,6 +168,8 @@ fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entit
             chosen: Vec::new(),
             walks: 0,
             searches: 0,
+            resume: None,
+            away: 0.0,
             path: Vec::new(),
             stuck: 0.0,
             speed: 0.0,
@@ -260,6 +284,7 @@ fn walk_routines(
     if dt <= 0.0 {
         return;
     }
+    let player_at = player.iter().next().map(|t| t.translation.xz());
     let level = &level.0;
     let tune = &tuning.folk;
     let blocked = blocked_by(level, &blocked_cells);
@@ -269,7 +294,15 @@ fn walk_routines(
     fixed.extend(level.lights.iter().filter(|l| l.kind == LightKind::Brazier).map(|l| Obstacle::Circle { centre: Vec2::new(l.x, l.y) * CELL, radius: BRAZIER_RADIUS }));
     let mut moving: Vec<Obstacle> = creatures.iter().map(|(c, t)| Obstacle::Circle { centre: t.translation.xz(), radius: body_radius(c) }).collect();
     moving.extend(player.iter().next().map(|t| Obstacle::Circle { centre: t.translation.xz(), radius: tuning.moving.body_radius }));
-    let bodies: Vec<(Entity, Vec2, f32)> = folk.iter().map(|(e, d, _, _, t)| (e, t.translation.xz(), d.radius)).collect();
+    // Everything a walker keeps out of, built once: the fixed and moving obstacles, then every
+    // person's circle (each walker sets their own aside while they step).
+    let mut shared = fixed.clone();
+    shared.extend(moving.iter().copied());
+    let mut body_of: Vec<(Entity, usize)> = Vec::new();
+    for (e, d, _, _, t) in folk.iter() {
+        body_of.push((e, shared.len()));
+        shared.push(Obstacle::Circle { centre: t.translation.xz(), radius: d.radius });
+    }
     let relief = Relief::new(level);
 
     for (entity, denizen, mut routine, mut stride, mut transform) in &mut folk {
@@ -280,8 +313,30 @@ fn walk_routines(
         let mut moved = 0.0;
         let pause = |rng: &mut Mulberry32| Phase::Pause { left: rng.range_f32(tune.pause_min, tune.pause_max.max(tune.pause_min)) };
 
+        // Notice the player, and let go of them once they are well away.
+        let near = player_at.map(|p| (p, p.distance(at)));
+        let sees = |p: Vec2| line_of_sight(grid(at), grid(p), &blocked);
+        match (routine.phase, near) {
+            (Phase::Held, Some((p, d))) => {
+                if d > tune.release_distance || !sees(p) {
+                    routine.away += dt;
+                    if routine.away >= tune.release_delay {
+                        routine.release();
+                    }
+                } else {
+                    routine.away = 0.0;
+                }
+            }
+            (Phase::Held, None) => routine.release(),
+            (_, Some((p, d))) if d <= tune.notice_distance && sees(p) => routine.hold(),
+            _ => {}
+        }
+
         match routine.phase {
-            Phase::Held => routine.speed = 0.0,
+            Phase::Held => {
+                routine.speed = 0.0;
+                face = player_at;
+            }
             Phase::Pause { left } => {
                 routine.speed = 0.0;
                 let away = at.distance(routine.home) > radius + 2.0 * ARRIVED;
@@ -328,11 +383,13 @@ fn walk_routines(
                     if direction != Vec2::ZERO && off.abs() < FACING_ENOUGH {
                         let wanted = pace(denizen, tune.walk_speed) * (remaining / (0.5 * CELL)).clamp(0.3, 1.0);
                         routine.speed += (wanted - routine.speed).clamp(-EASE * dt, EASE * dt);
-                        let mut others = fixed.clone();
-                        others.extend(moving.iter().copied());
-                        others.extend(bodies.iter().filter(|(e, _, _)| *e != entity).map(|&(_, centre, radius)| Obstacle::Circle { centre, radius }));
                         let step = (direction * routine.speed * dt).clamp_length_max((target - at).length());
-                        let to = slide_around(at, at + step, radius, &blocked, &others);
+                        let own = body_of.iter().find(|(e, _)| *e == entity).map(|&(_, i)| i);
+                        let kept = own.map(|i| std::mem::replace(&mut shared[i], Obstacle::Circle { centre: Vec2::splat(f32::MAX), radius: 0.0 }));
+                        let to = slide_around(at, at + step, radius, &blocked, &shared);
+                        if let (Some(i), Some(kept)) = (own, kept) {
+                            shared[i] = kept;
+                        }
                         let made = (to - at).dot(direction);
                         routine.stuck = if made < 0.25 * routine.speed * dt { routine.stuck + dt } else { 0.0 };
                         moved = (to - at).length();
@@ -444,10 +501,16 @@ mod tests {
             .iter()
             .map(|p| Obstacle::of(p.prop.floor_shape(), &GlobalTransform::from(Transform::from_translation(Vec3::from_array(Level::world(p.x, p.y))).with_rotation(Quat::from_rotation_y(p.yaw)))))
             .collect();
-        // The player stands in the room where the dwarves are, in the way.
-        let player = Vec2::new(26.5, 9.0) * CELL;
+        // The player stands where someone is going: the first place a person chose, found by
+        // running the level once without them (the places are the seed's, so they are the same).
+        let player = {
+            let (mut probe, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
+            run(&mut probe, 60 * 30, |_, _| {});
+            folk.iter().find_map(|&f| probe.world().get::<Routine>(f).unwrap().chosen.first().copied()).expect("someone chose a place")
+        };
         let (mut app, folk) = level_app(player);
         let mut critters = app.world_mut().query::<(&Critter, &Transform)>();
+        let mut nearest = f32::MAX;
         run(&mut app, 60 * 60, |app, frame| {
             let at: Vec<Vec2> = folk.iter().map(|&f| position(app, f)).collect();
             let creatures: Vec<(Vec2, f32)> = critters.iter(app.world()).map(|(c, t)| (t.translation.xz(), body_radius(c))).collect();
@@ -472,8 +535,11 @@ mod tests {
                     assert!(p.distance(c) >= FOOTPRINT + r - 0.1, "folk {i} at {p} overlaps a creature at {c} (frame {frame})");
                 }
                 assert!(p.distance(player) >= FOOTPRINT + 3.5 - 0.1, "folk {i} at {p} overlaps the player (frame {frame})");
+                nearest = nearest.min(p.distance(player));
             }
         });
+        let notice = crate::tuning::FolkTuning::default().notice_distance;
+        assert!(nearest <= notice + 5.0, "no one came near the player (nearest {nearest})");
     }
 
     #[test]
@@ -557,5 +623,124 @@ mod tests {
             }
         }
         assert!(tall.iter().all(|p| pace(&mk(p), 11.0) <= 11.0));
+    }
+
+    fn set_player(app: &mut App, at: Vec2) {
+        let mut q = app.world_mut().query_filtered::<&mut Transform, With<Player>>();
+        for mut t in q.iter_mut(app.world_mut()) {
+            t.translation = Vec3::new(at.x, 0.0, at.y);
+        }
+    }
+
+    fn phase(app: &App, e: Entity) -> Phase {
+        app.world().get::<Routine>(e).unwrap().phase
+    }
+
+    fn yaw_to(app: &App, e: Entity, target: Vec2) -> f32 {
+        let (yaw, _, _) = app.world().get::<Transform>(e).unwrap().rotation.to_euler(EulerRot::YXZ);
+        let to = target - position(app, e);
+        angle_between(yaw, to.x.atan2(to.y)).abs()
+    }
+
+    /// Runs until some person is walking and returns them with a spot `distance` from them, in
+    /// the open and in sight, to put the player at.
+    fn walker_with_player_near(app: &mut App, folk: &[Entity], distance: f32) -> (Entity, Vec2) {
+        let level = fb_level::generate(1207);
+        let blocked = |x: i32, y: i32| !level.is_open(x, y);
+        for _ in 0..60 * 30 {
+            app.update();
+            for &f in folk {
+                if let Phase::Walk { .. } = phase(app, f) {
+                    let at = position(app, f);
+                    for k in 0..16 {
+                        let p = at + Vec2::from_angle(k as f32 * 0.39) * distance;
+                        if level.is_open((p.x / CELL) as i32, (p.y / CELL) as i32) && line_of_sight((at.x / CELL, at.y / CELL), (p.x / CELL, p.y / CELL), blocked) {
+                            return (f, p);
+                        }
+                    }
+                }
+            }
+        }
+        panic!("nobody walked with room for the player");
+    }
+
+    #[test]
+    fn a_walking_person_stops_and_faces_a_near_player() {
+        let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
+        let (f, p) = walker_with_player_near(&mut app, &folk, 20.0);
+        set_player(&mut app, p);
+        run(&mut app, 90, |_, _| {});
+        assert_eq!(phase(&app, f), Phase::Held);
+        assert!(yaw_to(&app, f, p) < 0.1, "off by {}", yaw_to(&app, f, p));
+        assert_eq!(app.world().get::<Stride>(f).unwrap().speed, 0.0);
+        // Still facing them as they move about nearby.
+        let at = position(&app, f);
+        let q = at + (p - at).perp().normalize() * 20.0;
+        set_player(&mut app, q);
+        run(&mut app, 90, |_, _| {});
+        assert_eq!(phase(&app, f), Phase::Held);
+        assert!(yaw_to(&app, f, q) < 0.1);
+    }
+
+    #[test]
+    fn a_person_resumes_the_walk_after_the_player_leaves() {
+        let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
+        let (f, p) = walker_with_player_near(&mut app, &folk, 20.0);
+        let Phase::Walk { goal } = phase(&app, f) else { unreachable!() };
+        set_player(&mut app, p);
+        run(&mut app, 60, |_, _| {});
+        assert_eq!(phase(&app, f), Phase::Held);
+        // Between the notice and release distances they stay put.
+        let at = position(&app, f);
+        set_player(&mut app, at + (p - at).normalize() * 34.0);
+        run(&mut app, 120, |_, _| {});
+        assert_eq!(phase(&app, f), Phase::Held);
+        // Far away, they carry on to the same place.
+        set_player(&mut app, Vec2::new(1.5, 22.5) * CELL);
+        run(&mut app, 90, |_, _| {});
+        assert_eq!(phase(&app, f), Phase::Walk { goal });
+        let held_at = position(&app, f);
+        run(&mut app, 60, |_, _| {});
+        assert!(position(&app, f).distance(held_at) > 2.0, "did not move on");
+    }
+
+    #[test]
+    fn folk_never_overlap_a_player_walking_straight_at_them() {
+        let level = fb_level::generate(1207);
+        let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
+        let (f, p) = walker_with_player_near(&mut app, &folk, 30.0);
+        let mut player = p;
+        let mut closest = f32::MAX;
+        run(&mut app, 60 * 6, |app, _| {
+            let at = position(app, f);
+            // 14 units per second, straight at them, as far as the floor is open.
+            let next = player + (at - player).normalize_or_zero() * 14.0 / 60.0;
+            let others: Vec<Obstacle> = folk.iter().map(|&g| Obstacle::Circle { centre: position(app, g), radius: FOOTPRINT }).collect();
+            player = slide_around(player, next, 3.5, |x: i32, y: i32| !level.is_open(x, y), &others);
+            set_player(app, player);
+            for &g in &folk {
+                closest = closest.min(position(app, g).distance(player));
+            }
+        });
+        assert!(closest >= FOOTPRINT + 3.5 - 0.1, "closest {closest}");
+    }
+
+    #[test]
+    fn a_player_behind_a_wall_is_not_noticed() {
+        let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
+        let (f, p) = walker_with_player_near(&mut app, &folk, 26.0);
+        // The cell the player stands in is shut off, as by a door, so the way is not clear.
+        let (from, to) = (cell(position(&app, f)), cell(p));
+        assert_ne!(from, to);
+        let wall: bevy::platform::collections::HashSet<(i32, i32)> = [to].into_iter().collect();
+        app.insert_resource(BlockedCells(wall));
+        set_player(&mut app, p);
+        run(&mut app, 60, |app, _| assert_ne!(phase(app, f), Phase::Held));
+        // The same spot with the way clear is noticed.
+        app.insert_resource(BlockedCells::default());
+        let at = position(&app, f);
+        set_player(&mut app, at + (p - at).normalize() * 20.0);
+        run(&mut app, 60, |_, _| {});
+        assert_eq!(phase(&app, f), Phase::Held);
     }
 }

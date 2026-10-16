@@ -176,11 +176,19 @@ pub struct FolkTuning {
     pub pause_max: f32,
     /// How far from its spot a person strolls, world units (9 m). Our own.
     pub wander_radius: f32,
+    /// How near the player must come, in sight, for a person to stop and face them, world units
+    /// (2.8 m). Our own.
+    pub notice_distance: f32,
+    /// How far the player must go before a person who faced them carries on, world units (4 m;
+    /// beyond the notice distance so they do not flicker). Our own.
+    pub release_distance: f32,
+    /// Seconds the player must stay away before a person carries on. Our own.
+    pub release_delay: f32,
 }
 
 impl Default for FolkTuning {
     fn default() -> Self {
-        FolkTuning { walk_speed: 11.0, pause_min: 3.0, pause_max: 8.0, wander_radius: 90.0 }
+        FolkTuning { walk_speed: 11.0, pause_min: 3.0, pause_max: 8.0, wander_radius: 90.0, notice_distance: 28.0, release_distance: 40.0, release_delay: 1.0 }
     }
 }
 
