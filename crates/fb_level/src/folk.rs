@@ -243,15 +243,15 @@ mod tests {
     #[test]
     fn folk_are_deterministic() {
         for seed in [1, 1207, u32::MAX] {
-            assert_eq!(generate(seed).folk, generate(seed).folk);
+            assert_eq!(generate(seed, 1).folk, generate(seed, 1).folk);
         }
-        assert_ne!(generate(1).folk, generate(2).folk);
+        assert_ne!(generate(1, 1).folk, generate(2, 1).folk);
     }
 
     #[test]
     fn each_level_has_three_to_ten_folk() {
         for seed in SEEDS {
-            let n = generate(seed).folk.len() as u32;
+            let n = generate(seed, 1).folk.len() as u32;
             assert!((FOLK_COUNT.0..=FOLK_COUNT.1).contains(&n), "seed {seed}: {n} folk");
         }
     }
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn nobody_stands_in_the_starting_room_a_corridor_a_doorway_or_rock() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let start_room = level.start_room().unwrap();
             for f in &level.folk {
                 let (x, y) = (f.x.floor() as i32, f.y.floor() as i32);
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn folk_keep_apart_and_off_the_loot_and_lights() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             for (i, a) in level.folk.iter().enumerate() {
                 for b in &level.folk[i + 1..] {
                     assert!((a.x - b.x).hypot(a.y - b.y) >= FOLK_SPACING, "seed {seed}: {a:?} and {b:?}");
@@ -292,7 +292,7 @@ mod tests {
     fn groups_are_one_faction_to_a_room_and_mostly_its_folk() {
         let mut leaning = (0, 0);
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let mut by_room = HashMap::new();
             for f in &level.folk {
                 let room = level.room_at(f.x as i32, f.y as i32).unwrap();
@@ -306,15 +306,15 @@ mod tests {
 
     #[test]
     fn levels_show_more_than_one_faction() {
-        let factions: HashSet<Faction> = (1..=32).flat_map(|s| generate(s).folk).map(|f| f.faction).collect();
+        let factions: HashSet<Faction> = (1..=32).flat_map(|s| generate(s, 1).folk).map(|f| f.faction).collect();
         assert!(factions.len() >= 2, "{factions:?}");
-        let folk: HashSet<Folk> = (1..=32).flat_map(|s| generate(s).folk).map(|f| f.folk).collect();
+        let folk: HashSet<Folk> = (1..=32).flat_map(|s| generate(s, 1).folk).map(|f| f.folk).collect();
         assert_eq!(folk.len(), Folk::ALL.len(), "{folk:?}");
     }
 
     #[test]
     fn folk_on_1207_can_be_reached_from_the_start() {
-        let level = generate(1207);
+        let level = generate(1207, 1);
         let (x, y, _) = level.start();
         let seen = reachable_from(&level, x as i32, y as i32);
         assert!(!level.folk.is_empty());
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn folk_do_not_move_the_loot() {
         // Seed 1207's items as they lay before folk came (`print_level 1207`).
-        let level = generate(1207);
+        let level = generate(1207, 1);
         assert_eq!(level.items.len(), 13);
         assert_eq!((level.items[0].family, level.items[0].seed), (armory::Family::Torch, 3_185_309_893));
         assert_eq!((level.items[12].family, level.items[12].seed), (armory::Family::Mace, 3_024_996_869));

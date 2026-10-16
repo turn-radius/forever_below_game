@@ -1772,7 +1772,7 @@ mod tests {
 
     #[test]
     fn the_debug_pose_is_the_start_or_where_asked() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (x, y, facing) = level.start();
         let start = DebugPose::parse(&level, "1");
         assert_eq!(start.at, Vec3::new((x as f32 + 0.5) * CELL, 0.0, (y as f32 + 0.5) * CELL));
@@ -1823,7 +1823,7 @@ mod tests {
     /// An app with what picking up and setting down need, the level emptied of loot, and a
     /// pack worn on the back.
     fn delving_app() -> (App, ItemId) {
-        let mut level = fb_level::generate(1207);
+        let mut level = fb_level::generate(1207, 1);
         level.items.clear();
         let mut inventory = Inventory::default();
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
@@ -2093,7 +2093,7 @@ mod tests {
     #[test]
     fn e_picks_up_the_item_under_the_crosshair() {
         let (mut app, pack) = delving_app();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (spot, item) = level
             .items
             .iter()
@@ -2122,7 +2122,7 @@ mod tests {
 
     #[test]
     fn floor_items_on_1207_are_rolled_with_rarity() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let items: Vec<fb_items::Item> = level.items.iter().map(|s| fb_items::roll_loot(s.family, s.seed).unwrap()).collect();
         assert_eq!(items.len(), level.items.len());
         for (item, spot) in items.iter().zip(&level.items) {
@@ -2138,7 +2138,7 @@ mod tests {
     fn every_torch_and_lantern_lying_in_a_level_can_be_held_in_the_off_hand() {
         let mut lights = 0;
         for seed in 1..=32 {
-            for spot in fb_level::generate(seed).items.iter().filter(|s| matches!(s.family, Family::Torch | Family::Lantern)) {
+            for spot in fb_level::generate(seed, 1).items.iter().filter(|s| matches!(s.family, Family::Torch | Family::Lantern)) {
                 let item = fb_items::roll_loot(spot.family, spot.seed).unwrap();
                 let (base, name) = (item.base.clone(), item.title().to_string());
                 let mut inventory = Inventory::default();

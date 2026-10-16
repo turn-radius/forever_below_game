@@ -448,7 +448,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_systems(Update, (idle, animate).chain());
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         app.insert_resource(CurrentLevel(level.clone()));
         let roots = {
             let mut commands = app.world_mut().commands();
@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn creatures_on_1207_neither_float_nor_sink_standing_or_moving() {
         let (mut app, roots) = level_app();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let relief = Relief::new(&level);
         let rigs: Vec<fb_creatures::Rig> = roots.iter().map(|&r| app.world().get::<Critter>(r).unwrap().creature.rig()).collect();
         for frame in 0..150 {
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn creatures_stand_on_the_drawn_floor() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let relief = Relief::new(&level);
         for spot in &level.creatures {
             let t = stand_at(&level, spot);

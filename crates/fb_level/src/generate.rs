@@ -16,7 +16,7 @@ use procgen_rng::Mulberry32;
 use crate::creatures::{CREATURE_SALT, place_creatures};
 use crate::folk::{FOLK_SALT, place_folk};
 use crate::props::{PROP_SALT, place_props};
-use crate::{Cell, Entrance, Facing, ItemSpot, Level, LevelParams, LightKind, LightSpot, Room};
+use crate::{Cell, Entrance, Facing, ItemSpot, Level, LevelParams, LevelStyle, LightKind, LightSpot, Room};
 
 // The layout's sizes, counts, costs and chances are [`LevelParams`], so the level view can
 // move them; its defaults are the values these constants always had.
@@ -54,27 +54,29 @@ const LOOT: &[(Family, u32)] = &[
     (Family::Charm, 1),
 ];
 
-/// The level for `seed`: rooms joined by corridors one cell wide, an entrance door on the
-/// outer edge, items in every room but the first, and a few fixed lights. Most of it is dark;
-/// the light the player carries is the main light.
-pub fn generate(seed: u32) -> Level {
-    generate_with(seed, &LevelParams::default())
+/// The level for `seed` at `depth` (1 is the first level): rooms joined by corridors one cell
+/// wide, an entrance door on the outer edge, items in every room but the first, and a few
+/// fixed lights. Most of it is dark; the light the player carries is the main light. The depth
+/// picks the [`LevelStyle`] and with it the style's own parameters
+/// ([`LevelParams::for_style`]); the first level's seeds lay out exactly as they always have.
+pub fn generate(seed: u32, depth: u32) -> Level {
+    generate_with(seed, depth, &LevelParams::for_style(LevelStyle::for_depth(depth)))
 }
 
-/// The level for `seed` laid out with `params` instead of the defaults, for the level view.
-/// With the defaults it is [`generate`]'s level. Parameters out of range or out of order are
-/// fitted first ([`LevelParams::fit`]).
-pub fn generate_with(seed: u32, params: &LevelParams) -> Level {
+/// The level for `seed` at `depth` laid out with `params` instead of the style's defaults, for
+/// the level view. With the defaults it is [`generate`]'s level. Parameters out of range or
+/// out of order are fitted first ([`LevelParams::fit`]).
+pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
     let mut params = *params;
     params.fit();
-    let (mut level, layout_seed) = generate_without_creatures(seed, &params);
+    let (mut level, layout_seed) = generate_without_creatures(seed, depth, &params);
     level.creatures = place_creatures(&level, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT));
     level
 }
 
 /// The level for `seed` with its props but before its creatures, and the layout stream's seed.
-pub(crate) fn generate_without_creatures(seed: u32, params: &LevelParams) -> (Level, u32) {
-    let (mut level, layout_seed) = generate_without_props(seed, params);
+pub(crate) fn generate_without_creatures(seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
+    let (mut level, layout_seed) = generate_without_props(seed, depth, params);
     level.props = place_props(&level, &mut Mulberry32::new(layout_seed ^ PROP_SALT));
     (level, layout_seed)
 }
@@ -83,12 +85,12 @@ pub(crate) fn generate_without_creatures(seed: u32, params: &LevelParams) -> (Le
 /// that rarely lay out (many rooms, wide gaps, a small grid) are relaxed after every
 /// [`RELAX_EVERY`] failed tries, a room fewer at least and the entrance a cell deeper at most,
 /// so every level lays out in the end. No default level needs that many tries.
-pub(crate) fn generate_without_props(seed: u32, params: &LevelParams) -> (Level, u32) {
+pub(crate) fn generate_without_props(seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
     (0u32..)
         .find_map(|attempt| {
             let relax = attempt / RELAX_EVERY;
             let p = LevelParams { rooms_min: params.rooms_min.saturating_sub(relax).max(1), entrance_depth: params.entrance_depth + relax, ..*params };
-            try_generate(seed, attempt, &p)
+            try_generate(seed, depth, attempt, &p)
         })
         .expect("some attempt lays out a connected level")
 }
@@ -98,14 +100,14 @@ const RELAX_EVERY: u32 = 100;
 
 /// How many tries the level for `seed` takes with `params`, for tests.
 #[cfg(test)]
-fn tries(seed: u32, params: &LevelParams) -> u32 {
-    (0u32..).find(|&attempt| try_generate(seed, attempt, params).is_some()).unwrap_or(u32::MAX) + 1
+fn tries(seed: u32, depth: u32, params: &LevelParams) -> u32 {
+    (0u32..).find(|&attempt| try_generate(seed, depth, attempt, params).is_some()).unwrap_or(u32::MAX) + 1
 }
 
 /// One try at a level, without its props, and the seed of its layout stream. `None` if too
 /// few rooms fit or the corridors could not join them all; [`generate`] then tries again from
 /// a stream derived from the same seed.
-fn try_generate(seed: u32, attempt: u32, p: &LevelParams) -> Option<(Level, u32)> {
+fn try_generate(seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<(Level, u32)> {
     let layout_seed = seed ^ attempt.wrapping_mul(0x9E37_79B9);
     let mut rng = Mulberry32::new(layout_seed);
 
@@ -121,8 +123,11 @@ fn try_generate(seed: u32, attempt: u32, p: &LevelParams) -> Option<(Level, u32)
     let entrance = place_entrance(&mut grid, &rooms, &mut doors, &mut rng, p)?;
     connect(&mut grid, &rooms, &mut doors, &mut rng, p);
 
+    let style = LevelStyle::for_depth(depth);
     let mut level = Level {
         seed,
+        depth,
+        style,
         width: p.width,
         height: p.height,
         cells: grid.cells,
@@ -135,6 +140,15 @@ fn try_generate(seed: u32, attempt: u32, p: &LevelParams) -> Option<(Level, u32)
         props: Vec::new(),
         creatures: Vec::new(),
     };
+    if style == LevelStyle::StoneHalls {
+        // A level of stone halls has a colonnade; a layout with no hall to hold one is tried
+        // again, until the parameters are relaxed. Params that make no such hall (no halls, small
+        // rooms) then give a level without one rather than never finishing.
+        let colonnaded = colonnade_halls(&mut level);
+        if colonnaded == 0 && attempt < RELAX_EVERY {
+            return None;
+        }
+    }
     let (sx, sy, _) = level.start();
     if !reachable_from(&level, sx as i32, sy as i32).iter().zip(&level.cells).all(|(&seen, c)| seen || !c.is_open()) {
         return None;
@@ -254,11 +268,31 @@ fn place_rooms(rng: &mut Mulberry32, p: &LevelParams) -> Vec<Room> {
 /// One room: mostly small chambers, now and then a hall.
 fn roll_room(rng: &mut Mulberry32, p: &LevelParams) -> Room {
     let grow = if rng.chance(p.hall_chance) { rng.int(p.hall_grow_min, p.hall_grow_max) } else { 0 };
-    let w = rng.int(p.side_min, p.side_max) + grow;
-    let h = rng.int(p.side_min, p.side_max) + grow;
+    let mut w = rng.int(p.side_min, p.side_max) + grow;
+    let mut h = rng.int(p.side_min, p.side_max) + grow;
+    // Only drawn from when asked for, so the first level's stream is untouched.
+    if p.regular_chance > 0.0 && rng.chance(p.regular_chance) {
+        (w, h) = regular_sides(w, h, p);
+    }
     let x = rng.int(p.room_gap, p.width - p.room_gap - w);
     let y = rng.int(p.room_gap, p.height - p.room_gap - h);
     Room { x, y, w, h }
+}
+
+/// A room's sides made regular: both even, within what fits the grid, and neither more than
+/// twice the other, so it reads as a squared hall rather than a slot.
+fn regular_sides(w: u32, h: u32, p: &LevelParams) -> (u32, u32) {
+    let even = |n: u32| n & !1;
+    let (max_w, max_h) = (even(p.width - 2 * p.room_gap), even(p.height - 2 * p.room_gap));
+    let least = even(p.side_min + 1);
+    let (mut w, mut h) = (even(w).max(least).min(max_w), even(h).max(least).min(max_h));
+    if w > 2 * h {
+        w = even(2 * h);
+    }
+    if h > 2 * w {
+        h = even(2 * w);
+    }
+    (w, h)
 }
 
 /// Whether two rooms keep at least `gap` rock cells between them on some axis.
@@ -531,6 +565,58 @@ fn route(grid: &Grid, blocked: &[bool], from: (i32, i32), heading: Facing, to: (
 }
 
 // ---------------------------------------------------------------------------------------------
+// Colonnades
+// ---------------------------------------------------------------------------------------------
+
+/// The longest side a colonnaded hall needs, and the shortest: two rows of columns with an aisle
+/// down the middle and one along each wall.
+const COLONNADE_LONG: u32 = 7;
+const COLONNADE_SHORT: u32 = 5;
+
+/// Sets two rows of columns down each hall long and wide enough, apart from the starting room.
+/// The rows run one cell in from the long walls and every other cell along them, so a ring of
+/// open floor stays round the walls, the gaps between columns join it to the aisle, and nobody
+/// is walled off. The two cells straight in from each door are kept clear. Returns how many
+/// halls got columns. The columns are a pure function of the rooms, so they draw on no stream.
+fn colonnade_halls(level: &mut Level) -> usize {
+    let start_room = level.start_room();
+    let mut columns = Vec::new();
+    for (i, room) in level.rooms.iter().enumerate() {
+        let (long, short) = (room.w.max(room.h), room.w.min(room.h));
+        if Some(i) == start_room || long < COLONNADE_LONG || short < COLONNADE_SHORT {
+            continue;
+        }
+        let along_x = room.w >= room.h;
+        let (x0, y0, len, wide) = if along_x { (room.x, room.y, room.w, room.h) } else { (room.y, room.x, room.h, room.w) };
+        // Every other cell along the long side, one cell off each end for an odd length and two
+        // off the near end for an even one.
+        let first = x0 + 1 + (len + 1) % 2;
+        for row in [y0 + 1, y0 + wide - 2] {
+            for along in (first..=x0 + len - 2).step_by(2) {
+                let (cx, cy) = if along_x { (along, row) } else { (row, along) };
+                if !straight_in_from_a_door(level, cx as i32, cy as i32) {
+                    columns.push((cx, cy));
+                }
+            }
+        }
+    }
+    let mut halls = std::collections::HashSet::new();
+    for &(x, y) in &columns {
+        level.cells[(y * level.width + x) as usize] = Cell::Column;
+        halls.insert(level.room_at(x as i32, y as i32));
+    }
+    halls.len()
+}
+
+/// Whether `(x, y)` is one of the two cells straight in from a door.
+fn straight_in_from_a_door(level: &Level, x: i32, y: i32) -> bool {
+    Facing::ALL.iter().any(|f| {
+        let (dx, dy) = f.step();
+        (1..=2).any(|k| level.cell(x - dx * k, y - dy * k) == Cell::Door)
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
 // Items and lights
 // ---------------------------------------------------------------------------------------------
 
@@ -676,6 +762,9 @@ fn free_spot(level: &Level, room: &Room, taken: &[(f32, f32)], rng: &mut Mulberr
         let cy = rng.int(room.y, room.y + room.h - 1) as i32;
         let x = cx as f32 + rng.range_f32(0.25, 0.75);
         let y = cy as f32 + rng.range_f32(0.25, 0.75);
+        if level.cell(cx, cy) == Cell::Column {
+            return None;
+        }
         let by_door = Facing::ALL.iter().any(|f| {
             let (dx, dy) = f.step();
             level.cell(cx + dx, cy + dy) == Cell::Door
@@ -708,10 +797,10 @@ mod tests {
     fn the_defaults_lay_out_every_level_as_before() {
         let defaults = LevelParams::default();
         for seed in SEEDS {
-            assert_eq!(generate(seed), generate_with(seed, &defaults), "seed {seed}");
+            assert_eq!(generate(seed, 1), generate_with(seed, 1, &defaults), "seed {seed}");
         }
         // No default level is ever relaxed, so relaxing changes no existing seed.
-        let most = (0..2000).map(|seed| tries(seed, &defaults)).max().unwrap();
+        let most = (0..2000).map(|seed| tries(seed, 1, &defaults)).max().unwrap();
         assert!(most < RELAX_EVERY, "a default level took {most} tries");
     }
 
@@ -730,7 +819,7 @@ mod tests {
                 let mut params = LevelParams::default();
                 params.set_slider(name, value).unwrap();
                 for seed in [1, 1207] {
-                    let level = generate_with(seed, &params);
+                    let level = generate_with(seed, 1, &params);
                     assert!(is_whole(&level), "{name} = {value}, seed {seed}");
                     assert_eq!((level.width, level.height), (params.width, params.height), "{name} = {value}");
                 }
@@ -738,32 +827,32 @@ mod tests {
         }
         // All at once at their most crowded: many rooms, wide gaps, a small grid.
         let crowded = LevelParams { width: 32, height: 28, rooms_min: 20, rooms_max: 30, side_min: 6, side_max: 14, room_gap: 8, ..LevelParams::default() };
-        assert!(is_whole(&generate_with(7, &crowded)));
+        assert!(is_whole(&generate_with(7, 1, &crowded)));
     }
 
     #[test]
     fn asking_for_more_rooms_gives_more_rooms() {
         let few = LevelParams { rooms_min: 3, rooms_max: 4, ..LevelParams::default() };
         let many = LevelParams { width: 80, height: 70, rooms_min: 16, rooms_max: 20, ..LevelParams::default() };
-        let rooms = |p: &LevelParams| (1..=16).map(|seed| generate_with(seed, p).rooms.len()).sum::<usize>();
+        let rooms = |p: &LevelParams| (1..=16).map(|seed| generate_with(seed, 1, p).rooms.len()).sum::<usize>();
         assert!(rooms(&many) > 3 * rooms(&few), "{} against {}", rooms(&many), rooms(&few));
         // A wider grid gives a wider level.
         let wide = LevelParams { width: 90, ..LevelParams::default() };
-        assert_eq!(generate_with(3, &wide).width, 90);
+        assert_eq!(generate_with(3, 1, &wide).width, 90);
     }
 
     #[test]
     fn levels_are_deterministic() {
         for seed in [0, 1, 1207, u32::MAX] {
-            assert_eq!(generate(seed), generate(seed));
+            assert_eq!(generate(seed, 1), generate(seed, 1));
         }
-        assert_ne!(generate(1).cells, generate(2).cells);
+        assert_ne!(generate(1, 1).cells, generate(2, 1).cells);
     }
 
     #[test]
     fn every_open_cell_is_reachable_from_the_start() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let (x, y, _) = level.start();
             let seen = reachable_from(&level, x as i32, y as i32);
             for (i, cell) in level.cells.iter().enumerate() {
@@ -775,7 +864,7 @@ mod tests {
     #[test]
     fn room_count_is_in_range() {
         for seed in SEEDS {
-            let n = generate(seed).rooms.len() as u32;
+            let n = generate(seed, 1).rooms.len() as u32;
             let p = LevelParams::default();
             assert!((p.rooms_min..=p.rooms_max).contains(&n), "seed {seed}: {n} rooms");
         }
@@ -783,14 +872,14 @@ mod tests {
 
     #[test]
     fn rooms_vary_in_size() {
-        let sizes: HashSet<(u32, u32)> = SEEDS.flat_map(|s| generate(s).rooms).map(|r| (r.w, r.h)).collect();
+        let sizes: HashSet<(u32, u32)> = SEEDS.flat_map(|s| generate(s, 1).rooms).map(|r| (r.w, r.h)).collect();
         assert!(sizes.len() > 20, "only {} room sizes", sizes.len());
     }
 
     #[test]
     fn the_entrance_is_a_door_on_the_edge_opening_inward() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let e = level.entrance;
             assert_eq!(level.cell(e.x as i32, e.y as i32), Cell::Door, "seed {seed}");
             let edge = match e.inward {
@@ -809,7 +898,7 @@ mod tests {
     #[test]
     fn corridors_enter_rooms_through_doors() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             for (i, room) in level.rooms.iter().enumerate() {
                 let mut doors = 0;
                 for y in room.y as i32 - 1..=(room.y + room.h) as i32 {
@@ -830,7 +919,7 @@ mod tests {
     #[test]
     fn corridors_are_one_cell_wide() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let corridor = |x: i32, y: i32| level.is_open(x, y) && level.room_at(x, y).is_none();
             for y in 0..level.height as i32 - 1 {
                 for x in 0..level.width as i32 - 1 {
@@ -844,7 +933,7 @@ mod tests {
     #[test]
     fn no_spot_lies_in_rock() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let spots = level.items.iter().map(|i| (i.x, i.y)).chain(level.lights.iter().map(|l| (l.x, l.y)));
             for (x, y) in spots {
                 assert_eq!(cell_of(&level, x, y), Cell::Floor, "seed {seed}: spot ({x}, {y}) is not on floor");
@@ -856,7 +945,7 @@ mod tests {
     #[test]
     fn the_starting_room_holds_only_a_light_near_the_start() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let start_room = level.start_room().unwrap();
             let inside: Vec<&ItemSpot> =
                 level.items.iter().filter(|i| level.room_at(i.x.floor() as i32, i.y.floor() as i32) == Some(start_room)).collect();
@@ -871,26 +960,154 @@ mod tests {
 
     #[test]
     fn items_cover_many_families() {
-        let families: HashSet<Family> = (1..=32).flat_map(|s| generate(s).items).map(|i| i.family).collect();
+        let families: HashSet<Family> = (1..=32).flat_map(|s| generate(s, 1).items).map(|i| i.family).collect();
         assert!(families.len() >= 8, "only {} families: {families:?}", families.len());
     }
 
     #[test]
     fn no_chest_lies_loose() {
         for seed in 1..=32 {
-            assert!(generate(seed).items.iter().all(|i| i.family != Family::Chests), "seed {seed}: a loose chest");
+            assert!(generate(seed, 1).items.iter().all(|i| i.family != Family::Chests), "seed {seed}: a loose chest");
         }
     }
 
     #[test]
     fn levels_have_braziers_glowcaps_and_dark_rooms() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let lit: HashSet<usize> = level.lights.iter().filter_map(|l| level.room_at(l.x as i32, l.y as i32)).collect();
             assert!(level.lights.iter().any(|l| l.kind == LightKind::Glowcaps), "seed {seed}: no glowcaps");
             assert!(lit.len() * 2 <= level.rooms.len() + 1, "seed {seed}: {} of {} rooms lit", lit.len(), level.rooms.len());
         }
-        let braziers = SEEDS.filter(|&s| generate(s).lights.iter().any(|l| l.kind == LightKind::Brazier)).count();
+        let braziers = SEEDS.filter(|&s| generate(s, 1).lights.iter().any(|l| l.kind == LightKind::Brazier)).count();
         assert!(braziers > 48, "only {braziers} of 64 levels have a brazier");
+    }
+
+    /// FNV-1a over the debug text of everything the first level held before styles existed.
+    fn snapshot_hash(level: &Level) -> u64 {
+        let text = format!(
+            "{:?}",
+            (&level.seed, &level.width, &level.height, &level.cells, &level.ceiling, &level.entrance, &level.rooms, &level.items, &level.lights, &level.folk, &level.props, &level.creatures)
+        );
+        text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+    }
+
+    #[test]
+    fn the_first_level_is_byte_identical_to_before_styles() {
+        // Hashes taken from the generator before level styles were added.
+        let before = [
+            (0u32, 0x523bffae15ad5cb1u64),
+            (1, 0x7ee4f89ce92c028b),
+            (2, 0x5b686441f52e31ee),
+            (7, 0x9f41fc6f85f38ed5),
+            (64, 0x65919fe613c20714),
+            (1207, 0x776289fa5d0bf5c3),
+            (4242, 0x7f40d3b171ee14c7),
+            (u32::MAX, 0x05ad568d1f4a22af),
+        ];
+        for (seed, hash) in before {
+            let level = generate(seed, 1);
+            assert_eq!((level.style, level.depth), (LevelStyle::RoughRock, 1));
+            assert_eq!(snapshot_hash(&level), hash, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn depth_picks_the_style() {
+        assert_eq!(LevelStyle::for_depth(1), LevelStyle::RoughRock);
+        assert_eq!(LevelStyle::for_depth(2), LevelStyle::StoneHalls);
+        assert_eq!(LevelStyle::for_depth(3), LevelStyle::RoughRock);
+        assert_eq!(LevelStyle::for_depth(4), LevelStyle::StoneHalls);
+        let level = generate(5, 2);
+        assert_eq!((level.style, level.depth), (LevelStyle::StoneHalls, 2));
+        assert_eq!(LevelParams::for_style(LevelStyle::RoughRock), LevelParams::default());
+        let mut halls = LevelParams::for_style(LevelStyle::StoneHalls);
+        let fitted = halls;
+        halls.fit();
+        assert_eq!(halls, fitted, "the stone halls defaults already fit");
+    }
+
+    fn columns_in(level: &Level, room: &Room) -> usize {
+        let mut n = 0;
+        for y in room.y..room.y + room.h {
+            for x in room.x..room.x + room.w {
+                n += (level.cell(x as i32, y as i32) == Cell::Column) as usize;
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn stone_halls_have_a_colonnaded_hall_and_stay_whole() {
+        for seed in 0..200 {
+            let level = generate(seed, 2);
+            assert!(level.rooms.iter().any(|r| columns_in(&level, r) >= 4), "seed {seed}: no colonnade");
+            assert!(is_whole(&level), "seed {seed}: cells unreachable round the columns");
+        }
+    }
+
+    #[test]
+    fn columns_stand_only_inside_halls_and_clear_of_doors() {
+        for seed in 0..200 {
+            let level = generate(seed, 2);
+            for y in 0..level.height as i32 {
+                for x in 0..level.width as i32 {
+                    if level.cell(x, y) != Cell::Column {
+                        continue;
+                    }
+                    let room = level.room_at(x, y).unwrap_or_else(|| panic!("seed {seed}: column ({x}, {y}) outside any room"));
+                    assert_ne!(Some(room), level.start_room(), "seed {seed}: column in the starting room");
+                    assert!(!straight_in_from_a_door(&level, x, y), "seed {seed}: column ({x}, {y}) in a doorway's line");
+                    assert!(!level.is_open(x, y));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_is_placed_on_a_column() {
+        for depth in [1, 2, 3, 4] {
+            for seed in 0..200 {
+                let level = generate(seed, depth);
+                let on_column = |x: f32, y: f32| cell_of(&level, x, y) == Cell::Column;
+                assert!(!level.items.iter().any(|i| on_column(i.x, i.y)), "seed {seed} depth {depth}: item");
+                assert!(!level.lights.iter().any(|i| on_column(i.x, i.y)), "seed {seed} depth {depth}: light");
+                assert!(!level.folk.iter().any(|i| on_column(i.x, i.y)), "seed {seed} depth {depth}: folk");
+                assert!(!level.props.iter().any(|i| on_column(i.x, i.y)), "seed {seed} depth {depth}: prop");
+                assert!(!level.creatures.iter().any(|i| on_column(i.x, i.y)), "seed {seed} depth {depth}: creature");
+                assert!(is_whole(&level), "seed {seed} depth {depth}");
+            }
+        }
+    }
+
+    #[test]
+    fn rough_rock_has_no_columns_and_every_style_is_deterministic() {
+        for seed in [0, 1, 1207, u32::MAX] {
+            for depth in [1, 2, 3] {
+                assert_eq!(generate(seed, depth), generate(seed, depth), "seed {seed} depth {depth}");
+            }
+            assert!(!generate(seed, 1).cells.contains(&Cell::Column));
+        }
+        assert_ne!(generate(1207, 1).cells, generate(1207, 2).cells);
+    }
+
+    #[test]
+    fn stone_halls_run_wider_and_straighter() {
+        let wide = |depth| (0..32).map(|s| generate(s, depth).rooms.iter().map(|r| r.area()).sum::<u32>() as f32 / generate(s, depth).rooms.len() as f32).sum::<f32>();
+        assert!(wide(2) > wide(1), "{} against {}", wide(2), wide(1));
+        assert!(generate(1207, 2).ceiling > generate(1207, 1).ceiling);
+    }
+
+    #[test]
+    fn params_that_make_no_hall_still_lay_out_a_level() {
+        let mut params = LevelParams::for_style(LevelStyle::StoneHalls);
+        params.hall_chance = 0.0;
+        params.side_max = 6;
+        params.regular_chance = 0.0;
+        for seed in [1, 2, 1207] {
+            let level = generate_with(seed, 2, &params);
+            assert!(is_whole(&level), "seed {seed}");
+        }
+        assert!(tries(1, 2, &params) <= RELAX_EVERY + 1);
     }
 }

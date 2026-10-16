@@ -149,16 +149,16 @@ mod tests {
     #[test]
     fn creatures_are_deterministic() {
         for seed in [1, 1207, u32::MAX] {
-            assert_eq!(generate(seed).creatures, generate(seed).creatures);
+            assert_eq!(generate(seed, 1).creatures, generate(seed, 1).creatures);
         }
-        assert_ne!(generate(1).creatures, generate(2).creatures);
+        assert_ne!(generate(1, 1).creatures, generate(2, 1).creatures);
     }
 
     #[test]
     fn rats_come_in_packs_and_snakes_alone_in_quiet_rooms() {
         let mut snakes = 0;
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let start_room = level.start_room();
             let mut packs: std::collections::HashMap<u32, Vec<&CreatureSpot>> = Default::default();
             for c in &level.creatures {
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn creatures_keep_clear_of_everything_else() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             for (i, c) in level.creatures.iter().enumerate() {
                 let room = level.rooms[level.room_at(c.x as i32, c.y as i32).unwrap()];
                 assert!(fits(&level, &room, c.x, c.y, c.creature().radius(), &level.creatures[..i]), "seed {seed}: {c:?}");
@@ -202,20 +202,20 @@ mod tests {
 
     #[test]
     fn creatures_do_not_move_walls_items_lights_folk_or_props() {
-        let level = generate(1207);
+        let level = generate(1207, 1);
         let (sx, sy, _) = level.start();
         assert_eq!((sx, sy, level.rooms.len()), (1, 22, 6));
         assert_eq!((level.items.len(), level.folk.len(), level.props.len()), (13, 6, 16));
         assert_eq!(level.folk[5].seed, 748_339_772);
         assert_eq!(level.props[0].prop, crate::Prop::Container { style: armory::families::chests::ChestStyle::Chest, seed: 1_184_162_579, loot: 3_392_196_572 });
-        let (before, _) = crate::generate::generate_without_creatures(1207, &crate::LevelParams::default());
+        let (before, _) = crate::generate::generate_without_creatures(1207, 1, &crate::LevelParams::default());
         assert!(before.creatures.is_empty() && !level.creatures.is_empty());
         assert_eq!(Level { creatures: Vec::new(), ..level }, before);
     }
 
     #[test]
     fn rats_on_1207_can_be_reached_from_the_start() {
-        let level = generate(1207);
+        let level = generate(1207, 1);
         let (x, y, _) = level.start();
         let seen = reachable_from(&level, x as i32, y as i32);
         let rats: Vec<&CreatureSpot> = level.creatures.iter().filter(|c| c.species.is_rat()).collect();

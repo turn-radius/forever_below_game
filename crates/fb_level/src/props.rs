@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::folk::by_door;
 use crate::generate::{item_seed, shuffle};
-use crate::{CELL, Facing, Level, Room};
+use crate::{CELL, Cell, Facing, Level, Room};
 
 /// Something standing in the level that is not picked up, at a point in grid coordinates
 /// (cells, fractional).
@@ -262,11 +262,15 @@ fn nooks(level: &Level, room: &Room, keep_clear: &[(i32, i32)]) -> Vec<Nook> {
     let mut nooks = Vec::new();
     for y in room.y as i32..(room.y + room.h) as i32 {
         for x in room.x as i32..(room.x + room.w) as i32 {
+            // Props stand on floor, backed by rock; a hall's columns are not a wall to stand against.
+            if level.cell(x, y) != Cell::Floor {
+                continue;
+            }
             let walls: Vec<Facing> = Facing::ALL
                 .into_iter()
                 .filter(|f| {
                     let (dx, dy) = f.step();
-                    !level.is_open(x + dx, y + dy)
+                    level.cell(x + dx, y + dy) == Cell::Rock
                 })
                 .collect();
             if walls.is_empty() || by_door(level, x, y) || keep_clear.contains(&(x, y)) {
@@ -414,9 +418,9 @@ mod tests {
     #[test]
     fn props_are_deterministic() {
         for seed in [1, 1207, u32::MAX] {
-            assert_eq!(generate(seed).props, generate(seed).props);
+            assert_eq!(generate(seed, 1).props, generate(seed, 1).props);
         }
-        assert_ne!(generate(1).props, generate(2).props);
+        assert_ne!(generate(1, 1).props, generate(2, 1).props);
     }
 
     #[test]
@@ -424,7 +428,7 @@ mod tests {
         let mut scenery = std::collections::HashSet::new();
         let mut styles = std::collections::HashSet::new();
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             assert!(level.props.iter().any(|p| matches!(p.prop, Prop::Container { style: ChestStyle::Chest, .. })), "seed {seed}: no chest");
             for p in &level.props {
                 match p.prop {
@@ -440,7 +444,7 @@ mod tests {
     #[test]
     fn props_stand_in_rooms_against_walls_off_doorways_and_the_way_in() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             let way_in = entrance_path(&level);
             for p in &level.props {
                 let (x, y) = (p.x.floor() as i32, p.y.floor() as i32);
@@ -478,7 +482,7 @@ mod tests {
     #[test]
     fn every_open_cell_stays_reachable_with_props_in_the_way() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             assert!(open_cells_reachable(&level, &occupied(&level)), "seed {seed}");
         }
     }
@@ -486,7 +490,7 @@ mod tests {
     #[test]
     fn props_keep_clear_of_each_other_and_the_rest() {
         for seed in SEEDS {
-            let level = generate(seed);
+            let level = generate(seed, 1);
             for (i, a) in level.props.iter().enumerate() {
                 let ra = a.prop.floor_shape().radius();
                 for b in &level.props[i + 1..] {
@@ -504,7 +508,7 @@ mod tests {
     #[test]
     fn props_do_not_move_walls_items_lights_or_folk() {
         // Seed 1207 as it was before props came (`print_level 1207`).
-        let level = generate(1207);
+        let level = generate(1207, 1);
         let (sx, sy, facing) = level.start();
         assert_eq!((sx, sy, facing, level.rooms.len()), (1, 22, Facing::East, 6));
         assert_eq!((level.items.len(), level.folk.len()), (13, 6));
@@ -513,14 +517,14 @@ mod tests {
         assert_eq!(level.folk[5].seed, 748_339_772);
         assert!((level.folk[5].x - 39.5).abs() < 0.05 && (level.folk[5].y - 14.6).abs() < 0.05);
         // And everything but the props is the level as laid out before they are placed.
-        let (before, _) = crate::generate::generate_without_props(1207, &crate::LevelParams::default());
+        let (before, _) = crate::generate::generate_without_props(1207, 1, &crate::LevelParams::default());
         assert!(before.props.is_empty() && !level.props.is_empty());
         assert_eq!(Level { props: Vec::new(), creatures: Vec::new(), ..level }, before);
     }
 
     #[test]
     fn a_chest_on_1207_can_be_reached_from_the_start() {
-        let level = generate(1207);
+        let level = generate(1207, 1);
         let (x, y, _) = level.start();
         let seen = crate::generate::reachable_from(&level, x as i32, y as i32);
         let chest = level.props.iter().find(|p| matches!(p.prop, Prop::Container { style: ChestStyle::Chest, .. })).expect("a chest on 1207");

@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn lights_off_the_level_are_no_lamps() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let inside = Vec3::new(10.0 * CELL, 15.0, 10.0 * CELL);
         let lamp = lamp_of(inside, 100.0, &level).unwrap();
         assert_eq!((lamp.x, lamp.y), (10.0, 10.0));
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn standing_at_the_start_with_a_torch_maps_the_first_room() {
         let mut app = App::new();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (sx, sy, inward) = level.start();
         let (dx, dy) = inward.step();
         // Three cells in from the door, looking in, a torch in hand.

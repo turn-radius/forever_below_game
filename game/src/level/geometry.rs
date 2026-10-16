@@ -665,7 +665,7 @@ mod tests {
     use super::*;
 
     fn level() -> Level {
-        fb_level::generate(1207)
+        fb_level::generate(1207, 1)
     }
 
     #[test]
@@ -833,7 +833,7 @@ mod tests {
         // noise, each at most half its amplitude.
         let peak = 0.5 + 0.35 * 0.5;
         for seed in [1207, 2] {
-            let level = fb_level::generate(seed);
+            let level = fb_level::generate(seed, 1);
             let view = CellView::new(&level);
             let doors = doorways(&view);
             assert!(!doors.is_empty());

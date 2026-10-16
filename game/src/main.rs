@@ -75,7 +75,7 @@ fn main() -> AppExit {
     .add_plugins((SettingsPlugin, TuningPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
     .insert_resource(NewDelveSeed(launch.seed));
     if opening == AppState::Delving {
-        app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED))));
+        app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED), 1)));
     }
     if swings {
         app.add_plugins(SwingPracticePlugin);

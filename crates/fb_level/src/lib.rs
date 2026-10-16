@@ -1,8 +1,9 @@
 //! # fb_level
 //!
 //! One level of the abyss as plain data: a grid of cells, where the player comes in, the door
-//! that shuts behind them, where items and lights lie, who stands about and what lurks there. `generate(seed)` is a pure function
-//! of the seed, like every generator here, so a level is the same on every machine.
+//! that shuts behind them, where items and lights lie, who stands about and what lurks there.
+//! `generate(seed, depth)` is a pure function of the seed and depth, like every generator
+//! here, so a level is the same on every machine.
 //!
 //! Grid coordinates: `x` runs east, `y` runs south, one cell is [`CELL`] world units (1 unit =
 //! 10 cm). World position of a cell's centre is `(x + 0.5) * CELL, 0, (y + 0.5) * CELL`, with
@@ -23,11 +24,15 @@ pub enum Cell {
     Floor,
     /// A doorway: open floor with a door frame across it.
     Door,
+    /// A column standing in a hall. It takes the whole 2 m cell and is solid, so walking,
+    /// pathing and sight treat it as rock; it is not open. Unlike rock it stands inside a room,
+    /// so the walls drawn on its faces are a stand-in until the geometry draws a real column.
+    Column,
 }
 
 impl Cell {
     pub fn is_open(self) -> bool {
-        !matches!(self, Cell::Rock)
+        !matches!(self, Cell::Rock | Cell::Column)
     }
 }
 
@@ -107,10 +112,30 @@ pub struct LightSpot {
     pub kind: LightKind,
 }
 
+/// How a level is built, chosen by its depth ([`LevelStyle::for_depth`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LevelStyle {
+    /// The first level's rough rock: small chambers and winding corridors.
+    RoughRock,
+    /// Wider, more regular rooms, colonnaded halls and straighter corridors.
+    StoneHalls,
+}
+
+impl LevelStyle {
+    /// The style of the level at `depth` (1 is the first level): rough rock at odd depths and
+    /// stone halls at even ones, so the two alternate on the way down.
+    pub fn for_depth(depth: u32) -> Self {
+        if depth.max(1) % 2 == 1 { LevelStyle::RoughRock } else { LevelStyle::StoneHalls }
+    }
+}
+
 /// One level.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Level {
     pub seed: u32,
+    /// How deep this level lies, 1 for the first.
+    pub depth: u32,
+    pub style: LevelStyle,
     pub width: u32,
     pub height: u32,
     /// Row-major, `cells[y * width + x]`.

@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn unseen_cells_stay_blank_and_seen_ones_are_drawn() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let px = 16.0;
         let frame = PlanFrame::of(px);
         let blank = draw_plan(&level, &Explored::new(&level), px);
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn the_same_sight_draws_the_same_plan() {
-        let level = fb_level::generate(7);
+        let level = fb_level::generate(7, 1);
         let explored = Explored::all(&level);
         assert_eq!(draw_plan(&level, &explored, 12.0), draw_plan(&level, &explored, 12.0));
     }

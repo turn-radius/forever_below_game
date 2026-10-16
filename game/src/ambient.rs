@@ -214,9 +214,9 @@ mod tests {
 
     #[test]
     fn drip_positions_are_deterministic() {
-        let pos1 = drip_positions(&fb_level::generate(1207));
-        let pos2 = drip_positions(&fb_level::generate(1207));
-        let pos_other = drip_positions(&fb_level::generate(1208));
+        let pos1 = drip_positions(&fb_level::generate(1207, 1));
+        let pos2 = drip_positions(&fb_level::generate(1207, 1));
+        let pos_other = drip_positions(&fb_level::generate(1208, 1));
 
         assert_eq!(pos1.len(), DRIP_EMITTERS);
         assert_eq!(pos1, pos2, "same seed gives same positions");
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn drip_positions_are_open_cells() {
         for seed in [1207, 1208, 42, 7] {
-            let level = fb_level::generate(seed);
+            let level = fb_level::generate(seed, 1);
             for pos in drip_positions(&level) {
                 let x = (pos.x / fb_level::CELL).floor() as i32;
                 let y = (pos.z / fb_level::CELL).floor() as i32;
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn drips_hang_a_little_below_the_ceiling() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         for pos in drip_positions(&level) {
             assert!(pos.y < level.ceiling && pos.y > level.ceiling - 5.0, "drip at y={} under ceiling {}", pos.y, level.ceiling);
         }

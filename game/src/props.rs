@@ -296,7 +296,7 @@ mod tests {
     fn props_app() -> App {
         let mut app = App::new();
         app.add_plugins(bevy::transform::TransformPlugin)
-            .insert_resource(CurrentLevel(fb_level::generate(1207)))
+            .insert_resource(CurrentLevel(fb_level::generate(1207, 1)))
             .init_resource::<Obstacles>()
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<crate::render::ToonMaterial>>()
@@ -425,7 +425,7 @@ mod tests {
             all
         };
         let first = snapshot(&mut app);
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         assert_eq!(first.iter().filter(|r| r.2).count(), level.items.len());
         assert_eq!(first.iter().filter(|r| r.3).count(), level.props.len());
         assert_eq!(first.iter().filter(|r| r.4).count(), level.folk.len());
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn every_container_on_1207_holds_what_its_loot_rolls() {
         let app = props_app();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let inventory = app.world().resource::<Inventory>();
         for spot in &level.props {
             let Prop::Container { style, loot, .. } = spot.prop else { continue };
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn every_prop_on_1207_is_drawn() {
         let mut app = props_app();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let mut pieces = app.world_mut().query::<(&PropPiece, &Children)>();
         let drawn: Vec<(usize, usize)> = pieces.iter(app.world()).map(|(p, children)| (p.index, children.len())).collect();
         assert_eq!(drawn.len(), level.props.len());
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn containers_are_drawn_a_metre_wide_and_block_what_they_cover() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let tuning = Tuning::default();
         for spot in level.props.iter().filter(|s| s.prop.is_container()) {
             let scale = prop_scale(spot.prop, &tuning);
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn no_prop_on_1207_floats_or_sinks() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let relief = Relief::new(&level);
         for (index, spot) in level.props.iter().enumerate() {
             let (mesh, _) = prop_mesh(spot.prop, &level, false);
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn the_player_cannot_walk_through_props() {
         let app = props_app();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let obstacles = app.world().resource::<Obstacles>().0.clone();
         assert_eq!(obstacles.len(), level.props.len());
         let blocked = crate::play::BlockedCells::default();

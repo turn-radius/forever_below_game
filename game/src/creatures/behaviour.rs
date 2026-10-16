@@ -412,7 +412,7 @@ mod tests {
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_plugins(BehaviourPlugin)
             .add_systems(Update, (super::super::idle, animate).chain().after(behave));
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         app.insert_resource(Obstacles(obstacles(&level)));
         app.insert_resource(CurrentLevel(level.clone()));
         let player = app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y))).id();
@@ -448,7 +448,7 @@ mod tests {
 
     #[test]
     fn a_rat_that_sees_you_reaches_you_and_attacks() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         // The first pack's room, the player standing two cells from the pack in plain sight.
         let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
         let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn creatures_never_pass_through_walls_props_or_folk() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let walls = |x: i32, y: i32| !level.is_open(x, y);
         let obstacles = obstacles(&level);
         // The player stands where the rats must come round the dwarves and the brazier, then
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn out_of_sight_they_go_back_to_wandering() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
         let near = Vec2::new(first.x + 1.0, first.y + 0.5) * CELL;
         let (mut app, roots, player) = level_app(near);
@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn long_snakes_keep_their_bodies_out_of_the_rock() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         // How deep a point lies in rock: 0 on open floor, else how far it is from the nearest
         // open cell beside the rock cell it is in.
         let depth = |x: f32, z: f32| {
@@ -637,7 +637,7 @@ mod tests {
     }
 
     fn rat_room_player() -> Vec2 {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
         let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
         let (cx, cy) = room.centre();
