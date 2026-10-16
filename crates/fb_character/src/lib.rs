@@ -11,8 +11,11 @@
 //!
 //! `Meter` tracks hunger, thirst, and sleepiness from 0 (best) to 1 (worst), advancing each turn by
 //! a base rate scaled by activity and gear modifiers. `Character` combines these with activity state.
+//!
+//! `conditions` reads all of it into the conditions a character is under right now, for the HUD.
 
 pub mod combat;
+pub mod conditions;
 pub mod explain;
 
 use serde::{Deserialize, Serialize};
