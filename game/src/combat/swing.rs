@@ -25,12 +25,14 @@ use bevy::{
 use fb_body::Side;
 
 use super::feedback::{Corpse, Struck};
-use super::{Health, RunDice, SwingKind, Target, Weapon, target_in_reach};
+use super::{ArmourClass, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach};
 use crate::carry::{HeldItem, ViewModelCamera};
 use crate::view_model::ViewHold;
 use crate::character::{Character, DelverStamina, modifier};
 use crate::creatures::{Bones, Critter, HitShape};
 use crate::creatures::behaviour::body_radius;
+use crate::folk::Denizen;
+use crate::folk_pose::FolkAnim;
 use crate::inventory::Inventory;
 use crate::keymap::{Action, ActionInput};
 use crate::play::{DelveSystems, Player, PlayerCamera, level_has_focus};
@@ -115,24 +117,6 @@ pub struct SwingPractice {
 /// What the toast says when a winded delver tries to swing.
 const WINDED: &str = "Too winded to swing";
 
-/// The toast a refused swing speaks through.
-#[derive(bevy::ecs::system::SystemParam)]
-struct Winded<'w> {
-    toast: Option<ResMut<'w, crate::inventory::Toast>>,
-    real: Option<Res<'w, Time<Real>>>,
-}
-
-impl Winded<'_> {
-    /// Says so, but not again while the line still shows.
-    fn say(&mut self) {
-        let now = self.real.as_deref().map_or(0.0, |t| t.elapsed_secs());
-        if let Some(toast) = self.toast.as_deref_mut()
-            && (toast.text != WINDED || toast.until <= now)
-        {
-            toast.say(WINDED, now);
-        }
-    }
-}
 
 /// A delver with no swing under way.
 type Ready = (With<Player>, Without<Swing>);
@@ -153,11 +137,10 @@ fn start_swing(
     mut dice: ResMut<RunDice>,
     mut last: Local<Option<Strike>>,
     practice: Option<Res<SwingPractice>>,
-    mut winded: Winded,
+    mut toasts: crate::inventory::Toasts,
     mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina), Ready>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    creatures: Query<(Entity, &Critter, &Transform, Option<&Bones>), Without<Corpse>>,
-    shapes: Query<(&GlobalTransform, &HitShape)>,
+    strikeable: Strikeable,
 ) {
     let looking = cursor.is_none_or(|c| c.grab_mode != CursorGrabMode::None);
     let practice = practice.as_deref().copied().unwrap_or_default();
@@ -174,7 +157,7 @@ fn start_swing(
         // A winded delver cannot swing; each swing otherwise takes its bite of stamina.
         if !practising {
             if !stamina.0.can_exert() {
-                winded.say();
+                toasts.say_once(WINDED);
                 continue;
             }
             let mut spent = stamina.0;
@@ -184,11 +167,9 @@ fn start_swing(
         let weapon = Weapon::in_hand(&inventory, &character);
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
-            let targets: Vec<Target> = creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &shapes)).collect();
             let combat = &tuning.combat;
-            let target = target_in_reach(from, at.forward().as_vec3().xz(), weapon.reach * combat.reach_scale, combat.hit_cone(), &targets)?;
-            let (_, critter, root, bones) = creatures.get(target).ok()?;
-            toward_target(eye, body_points(critter, root, bones, &shapes), &tuning.view)
+            let target = target_in_reach(from, at.forward().as_vec3().xz(), weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets())?;
+            toward_target(eye, strikeable.points(target), &tuning.view)
         });
         let flourish = Vec3::new(dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0));
         let strike = practice.strike.unwrap_or_else(|| Strike::roll(weapon.kind, *last, &mut dice.0));
@@ -201,11 +182,42 @@ fn start_swing(
     }
 }
 
-/// The points of a creature's body a blow might head for: the centres of its bones' spheres
-/// where the last pose put them, or a little above its root with no shaped bones.
-fn body_points(critter: &Critter, root: &Transform, bones: Option<&Bones>, shapes: &Query<(&GlobalTransform, &HitShape)>) -> Vec<Vec3> {
-    let points: Vec<Vec3> = bones.iter().flat_map(|b| b.0.iter()).filter_map(|&bone| shapes.get(bone).ok()).flat_map(|(at, shape)| shape.spheres(at)).map(|(centre, _)| centre).collect();
-    if points.is_empty() { vec![root.translation + Vec3::Y * body_radius(critter)] } else { points }
+/// Everything standing that a swing can find: the living creatures, by their bones' hit
+/// shapes ([`body_targets`]), and the living folk, by the circle each stands in
+/// ([`Denizen::radius`]: their shoulders and clothes, which also keeps the delver off them).
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Strikeable<'w, 's> {
+    creatures: Query<'w, 's, (Entity, &'static Critter, &'static Transform, Option<&'static Bones>), Without<Corpse>>,
+    folk: Query<'w, 's, (Entity, &'static Denizen, &'static Transform, Option<&'static Children>), Without<Corpse>>,
+    anims: Query<'w, 's, &'static FolkAnim>,
+    joints: Query<'w, 's, &'static GlobalTransform, With<crate::folk_pose::FolkJoint>>,
+    shapes: Query<'w, 's, (&'static GlobalTransform, &'static HitShape)>,
+}
+
+/// The joints of a folk a blow heads for: the hips, the chest and the neck.
+const FOLK_AIM_JOINTS: [fb_body::Joint; 3] = [fb_body::Joint::Pelvis, fb_body::Joint::Chest, fb_body::Joint::Head];
+
+impl Strikeable<'_, '_> {
+    /// Every body a blow might land on, as circles on the floor.
+    pub fn targets(&self) -> Vec<Target> {
+        let creatures = self.creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes));
+        let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target { entity, centre: t.translation.xz(), radius: denizen.radius });
+        creatures.chain(folk).collect()
+    }
+
+    /// The points of `target`'s body a blow might head for: a creature's bones' spheres where
+    /// the last pose put them (a little above its root with no shaped bones), a folk's hips,
+    /// chest and neck (its middle with no skeleton).
+    pub fn points(&self, target: Entity) -> Vec<Vec3> {
+        if let Ok((_, critter, root, bones)) = self.creatures.get(target) {
+            let points: Vec<Vec3> = bones.iter().flat_map(|b| b.0.iter()).filter_map(|&bone| self.shapes.get(bone).ok()).flat_map(|(at, shape)| shape.spheres(at)).map(|(centre, _)| centre).collect();
+            return if points.is_empty() { vec![root.translation + Vec3::Y * body_radius(critter)] } else { points };
+        }
+        let Ok((_, denizen, root, children)) = self.folk.get(target) else { return Vec::new() };
+        let anim = children.into_iter().flat_map(|c| c.iter()).find_map(|c| self.anims.get(c).ok());
+        let points: Vec<Vec3> = anim.iter().flat_map(|a| FOLK_AIM_JOINTS.map(|j| a.joint(j))).filter_map(|j| self.joints.get(j).ok()).map(GlobalTransform::translation).collect();
+        if points.is_empty() { vec![root.translation + Vec3::Y * 0.6 * denizen.max.y] } else { points }
+    }
 }
 
 /// Where a blow at a creature heads in the view model: of `points` (world space), the one
@@ -228,8 +240,8 @@ pub fn toward_target(eye: &GlobalTransform, points: Vec<Vec3>, view: &crate::tun
 /// the half height. Our own.
 const TOWARD_LIMIT: f32 = 0.6;
 
-/// Moves each swing on; at [`LANDS`] its blow finds the nearest creature in reach and ahead,
-/// and rolls its damage.
+/// Moves each swing on; at [`LANDS`] its blow finds the nearest creature or folk in reach and
+/// ahead, rolls to hit if it has an [`ArmourClass`] (a folk), and rolls its damage.
 #[allow(clippy::too_many_arguments)]
 fn land_blows(
     mut commands: Commands,
@@ -238,8 +250,8 @@ fn land_blows(
     tuning: Res<crate::tuning::Tuning>,
     mut dice: ResMut<RunDice>,
     mut players: Query<(Entity, &Transform, &mut Swing), With<Player>>,
-    creatures: Query<(Entity, &Critter, &Transform, Option<&Bones>), Without<Corpse>>,
-    shapes: Query<(&GlobalTransform, &HitShape)>,
+    strikeable: Strikeable,
+    armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
 ) {
     let dt = time.delta_secs();
@@ -249,11 +261,18 @@ fn land_blows(
             swing.landed = true;
             let from = at.translation.xz();
             let forward = at.forward().as_vec3().xz();
-            let targets: Vec<Target> = creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &shapes)).collect();
             let combat = &tuning.combat;
-            if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &targets) {
-                let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
-                struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning });
+            if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
+                // Only what has an Armor Class is rolled against; every other blow lands.
+                let hits = armour.get(target).map_or(true, |ac| {
+                    let attack = attack_roll(&swing.weapon, character.strength(), ac.0, &mut dice.0);
+                    info!("swing: {}", attack.line());
+                    attack.hit
+                });
+                if hits {
+                    let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning });
+                }
             }
         }
         if swing.t >= SWING_TIME {

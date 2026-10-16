@@ -177,9 +177,7 @@ impl SkeletonKit {
 #[derive(Component, Debug)]
 pub struct WornGear;
 
-/// On a skeleton whose gear has been set down: it is never set down twice.
-#[derive(Component, Debug)]
-pub struct Looted;
+pub use crate::combat::feedback::Looted;
 
 /// Whether a blow of `damage` that is `bludgeoning` hurts a skeleton for more (double: the stat
 /// block's vulnerability) or less. Poison does nothing to it (immunity), though no blow of the
@@ -222,16 +220,7 @@ fn load_bone_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>) {
     }
 }
 
-/// Plays a bone sound from `at`.
-pub fn play_at(commands: &mut Commands, name: &'static str, sound: Handle<AudioSource>, at: Vec3, game: &GameSettings, tuning: &Tuning) {
-    commands.spawn((
-        Name::new(name),
-        AudioPlayer::new(sound),
-        crate::audio::spatial_sound_effect(game, tuning),
-        Transform::from_translation(at),
-        DespawnOnExit(crate::launch::AppState::Delving),
-    ));
-}
+pub use crate::audio::play_at;
 
 /// Seconds until a skeleton standing about rattles again.
 #[derive(Component, Clone, Debug)]

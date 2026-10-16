@@ -316,11 +316,12 @@ pub(crate) fn idle_folk(mut stances: Query<(&Stance, &mut Transform)>) {
 }
 
 /// Turns heads toward a player within [`LOOK_RANGE`] and back once they leave; under a hood,
-/// the whole body turns a little instead.
+/// the whole body turns a little instead. A body lying where it fell does not.
+#[allow(clippy::type_complexity)]
 fn turn_heads(
     time: Res<Time>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    folk: Query<(&GlobalTransform, &Children), With<Denizen>>,
+    folk: Query<(&GlobalTransform, &Children), (With<Denizen>, Without<crate::combat::feedback::Corpse>)>,
     mut stances: Query<(&mut Stance, &Children, Option<&FolkAnim>)>,
     mut heads: Query<(&mut FolkHead, &mut Transform)>,
 ) {
@@ -391,7 +392,7 @@ pub struct FolkCard;
 fn aim_at_folk(
     tuning: Res<crate::tuning::Tuning>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    folk: Query<(Entity, &GlobalTransform, &Denizen)>,
+    folk: Query<(Entity, &GlobalTransform, &Denizen), Without<crate::combat::feedback::Corpse>>,
     mut aimed: ResMut<AimedFolk>,
 ) {
     let hit = eyes.iter().next().and_then(|eye| {

@@ -174,7 +174,8 @@ fn posed_this_frame(frame: u32, entity: Entity) -> bool {
 pub fn pose_folk(
     time: Res<Time>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    strides: Query<(&Stride, &GlobalTransform)>,
+    // A body lies as it fell: it is not posed.
+    strides: Query<(&Stride, &GlobalTransform), Without<crate::combat::feedback::Corpse>>,
     looks: Query<&FolkHead>,
     mut anims: Query<(Entity, &ChildOf, &mut FolkAnim)>,
     mut joints: Query<&mut Transform, With<FolkJoint>>,

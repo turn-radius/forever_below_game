@@ -260,6 +260,11 @@ pub fn sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, Playb
 /// How far one world unit sounds: 0.1, as a unit is 10 cm.
 pub const SPATIAL_SCALE: f32 = 0.1;
 
+/// Plays `sound` from `at`, heard as a [`spatial_sound_effect`], for the length of the delve.
+pub fn play_at(commands: &mut Commands, name: &'static str, sound: Handle<AudioSource>, at: Vec3, game: &GameSettings, tuning: &Tuning) {
+    commands.spawn((Name::new(name), AudioPlayer::new(sound), spatial_sound_effect(game, tuning), Transform::from_translation(at), DespawnOnExit(crate::launch::AppState::Delving)));
+}
+
 /// [`sound_effect`], heard from where the [`AudioPlayer`]'s entity stands, by the
 /// [`SpatialListener`] on the player's eye.
 pub fn spatial_sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, PlaybackSettings) {
