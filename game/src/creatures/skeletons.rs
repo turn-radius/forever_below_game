@@ -38,15 +38,14 @@ use fb_creatures::{DamageType, SkeletonGear, SkeletonState, Species};
 use fb_creatures::pose::ArmStance;
 use fb_items::outfit::OutfitSet;
 use fb_items::{Item, Slot};
-use fb_level::CELL;
 use procgen_rng::Mulberry32;
 
 use super::{Bones, Critter};
 use crate::combat::feedback::Corpse;
-use crate::inventory::underfoot::{FloorChange, FloorChanges};
+use crate::inventory::underfoot::{FloorChanges, set_down_around};
 use crate::inventory::Inventory;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles, Player};
-use crate::player::{blocked_by, slide_around};
+use crate::player::blocked_by;
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
 
@@ -70,9 +69,6 @@ const BLOCK_PER_ARMOUR: f32 = 0.08;
 const BLOCK_MOST: f32 = 0.65;
 /// How wide in front of it a shield covers, radians each way of where it faces (60 degrees).
 const BLOCK_ARC: f32 = std::f32::consts::FRAC_PI_3;
-/// A shed item's distance from where the skeleton fell, world units, and the extra the next
-/// one out takes. Our own.
-const SHED_RING: f32 = 2.6;
 /// How near the player a skeleton must be to be heard rattling idly, world units (15 m).
 const RATTLE_RANGE: f32 = 150.0;
 
@@ -131,14 +127,7 @@ impl SkeletonKit {
             Some(w) if melee => ARM_TO_WRIST * height + length(w),
             _ => ARM_TO_FINGERTIPS * height,
         };
-        let swing_time = match family {
-            Some(Family::Dagger) => 0.9,
-            Some(Family::Sword) => 1.2,
-            Some(Family::Spear) => 1.3,
-            Some(Family::Axe | Family::Club | Family::Staff | Family::Bow) => 1.4,
-            Some(Family::Mace) => 1.5,
-            _ => 1.0,
-        };
+        let swing_time = crate::combat::swing_time(family);
         let armour: Vec<(String, f32)> = outfit.worn.iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)).filter(|(_, a)| *a != 0.0).collect();
         let armour_class = if armour.is_empty() {
             Species::Skeleton.stat_block().armour_class
@@ -177,9 +166,7 @@ impl SkeletonKit {
 #[derive(Component, Debug)]
 pub struct WornGear;
 
-/// On a skeleton whose gear has been set down: it is never set down twice.
-#[derive(Component, Debug)]
-pub struct Looted;
+pub use crate::combat::feedback::Looted;
 
 /// Whether a blow of `damage` that is `bludgeoning` hurts a skeleton for more (double: the stat
 /// block's vulnerability) or less. Poison does nothing to it (immunity), though no blow of the
@@ -222,16 +209,7 @@ fn load_bone_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>) {
     }
 }
 
-/// Plays a bone sound from `at`.
-pub fn play_at(commands: &mut Commands, name: &'static str, sound: Handle<AudioSource>, at: Vec3, game: &GameSettings, tuning: &Tuning) {
-    commands.spawn((
-        Name::new(name),
-        AudioPlayer::new(sound),
-        crate::audio::spatial_sound_effect(game, tuning),
-        Transform::from_translation(at),
-        DespawnOnExit(crate::launch::AppState::Delving),
-    ));
-}
+pub use crate::audio::play_at;
 
 /// Seconds until a skeleton standing about rattles again.
 #[derive(Component, Clone, Debug)]
@@ -293,7 +271,7 @@ fn rattle_idle(
 
 /// Sets every item a fallen skeleton wore and held down around where it fell, as the items
 /// they are, once, as it starts to collapse: they are taken off its bones and put into the
-/// inventory as loose items and set on the floor ([`FloorChange::SetDownAt`]), which the floor
+/// inventory as loose items and set on the floor ([`set_down_around`]), which the floor
 /// machinery spawns and records like any dropped item.
 ///
 /// It fires the frame after the skeleton falls, so a skeleton struck down just before the
@@ -333,18 +311,8 @@ pub fn shed_gear(
             }
         }
         // Onto the floor, round the place it fell.
-        let mut rng = Mulberry32::new(critter.spot.seed ^ 0x5ED0_6EA8);
-        let centre = at.translation.xz();
-        let count = kit.outfit.worn.len().max(1);
-        let first = rng.range_f32(0.0, std::f32::consts::TAU);
-        for (i, (_, item)) in kit.outfit.worn.iter().enumerate() {
-            let radius = crate::carry::floor_radius(&crate::carry::item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), tuning.view.floor_item_scale).min(CELL * 0.5 - 0.5);
-            let angle = first + i as f32 / count as f32 * std::f32::consts::TAU;
-            let want = centre + Vec2::from_angle(angle) * (SHED_RING + radius + 0.8 * (i % 2) as f32);
-            let spot = slide_around(centre, want, radius, &blocked, &obstacles.0);
-            let id = inventory.add(item.clone());
-            changes.0.push(FloorChange::SetDownAt(id, spot / CELL, rng.range_f32(0.0, std::f32::consts::TAU)));
-        }
+        let items = kit.outfit.worn.iter().map(|(_, item)| item);
+        set_down_around(at.translation.xz(), items, critter.spot.seed, &mut inventory, &mut changes, &blocked, &obstacles.0, tuning.view.floor_item_scale);
     }
 }
 

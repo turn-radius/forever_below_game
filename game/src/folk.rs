@@ -160,7 +160,7 @@ impl FolkFigures {
 
 /// A person standing in the level: the root of their figure, on the floor at their spot.
 #[derive(Component, Clone, Debug)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::simulate::Simulated, Stride)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::simulate::Simulated, Stride, crate::hostility::Hostility, crate::folk_pose::ArmSwing)]
 pub struct Denizen {
     pub person: Person,
     /// The circle on the floor they stand in ([`footprint`]).
@@ -247,12 +247,18 @@ pub fn stand_at(spot: &FolkSpot) -> Transform {
     Transform::from_translation(at).with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
 }
 
-/// Spawns every folk spot of the level once, and again only if the spots change.
+/// Seconds a body brought back from the record has lain, long past its fall.
+const LONG_FALLEN: f32 = 60.0;
+
+/// Spawns every folk spot of the level once, and again only if the spots change; on a level
+/// that was left, each as the record has them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_folk(
     mut commands: Commands,
     level: Res<CurrentLevel>,
     mut figures: ResMut<FolkFigures>,
     old: Query<Entity, With<Denizen>>,
+    record: Option<Res<crate::record::WorldRecord>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     mut spawner: ItemSpawner,
     mut shown: Local<Option<Vec<FolkSpot>>>,
@@ -264,9 +270,28 @@ pub(crate) fn spawn_folk(
     for entity in &old {
         commands.entity(entity).despawn();
     }
-    for built in figures.for_spots(&level.0.folk, level.0.depth) {
+    // On a level that was left, each folk is as they were left (`crate::record`).
+    let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
+    for (index, built) in figures.for_spots(&level.0.folk, level.0.depth).into_iter().enumerate() {
         let (person, figure) = &*built;
-        spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
+        let left = saved.and_then(|l| l.folk.get(&index));
+        let Some(left) = left else {
+            spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
+            continue;
+        };
+        let hostility = if left.hostile { crate::hostility::Hostility::Hostile } else { crate::hostility::Hostility::Friendly };
+        let health = crate::combat::Health { hp: left.hp, max: left.max };
+        if left.dead {
+            // A body lies bare where it fell, long fallen: what it wore is on the floor.
+            let bare = crate::folk_combat::bare(person);
+            let figure = Figure::dress(&bare.spec, &bare.gear, bare.dirt);
+            let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, &bare, &figure);
+            let fallen = crate::combat::feedback::Corpse { since: LONG_FALLEN, fell: left.transform() };
+            commands.entity(root).insert((health, hostility, fallen, crate::combat::feedback::Looted)).remove::<BlocksTheWay>();
+        } else {
+            let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
+            commands.entity(root).insert((health, hostility, left.transform()));
+        }
     }
     *shown = Some(level.0.folk.clone());
 }
@@ -316,11 +341,12 @@ pub(crate) fn idle_folk(mut stances: Query<(&Stance, &mut Transform)>) {
 }
 
 /// Turns heads toward a player within [`LOOK_RANGE`] and back once they leave; under a hood,
-/// the whole body turns a little instead.
+/// the whole body turns a little instead. A body lying where it fell does not.
+#[allow(clippy::type_complexity)]
 fn turn_heads(
     time: Res<Time>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    folk: Query<(&GlobalTransform, &Children), With<Denizen>>,
+    folk: Query<(&GlobalTransform, &Children), (With<Denizen>, Without<crate::combat::feedback::Corpse>)>,
     mut stances: Query<(&mut Stance, &Children, Option<&FolkAnim>)>,
     mut heads: Query<(&mut FolkHead, &mut Transform)>,
 ) {
@@ -391,7 +417,7 @@ pub struct FolkCard;
 fn aim_at_folk(
     tuning: Res<crate::tuning::Tuning>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    folk: Query<(Entity, &GlobalTransform, &Denizen)>,
+    folk: Query<(Entity, &GlobalTransform, &Denizen), Without<crate::combat::feedback::Corpse>>,
     mut aimed: ResMut<AimedFolk>,
 ) {
     let hit = eyes.iter().next().and_then(|eye| {

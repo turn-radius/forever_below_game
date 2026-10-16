@@ -640,7 +640,7 @@ mod tests {
         app.world_mut().get_mut::<Health>(player).unwrap().hp = max;
         run(&mut app, 3);
         let attacker = app.world_mut().spawn(Transform::default()).id();
-        app.world_mut().write_message(crate::creatures::behaviour::CreatureAttack { attacker, species: fb_creatures::Species::Rat, damage, poison: 0, attacker_pos: Vec2::ZERO });
+        app.world_mut().write_message(crate::creatures::behaviour::AttackOnDelver { attacker, species: Some(fb_creatures::Species::Rat), damage, poison: 0, attacker_pos: Vec2::ZERO });
         app.update();
         (app, player)
     }

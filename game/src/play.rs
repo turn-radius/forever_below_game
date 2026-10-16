@@ -304,7 +304,7 @@ impl Plugin for PlayPlugin {
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,
-            (crate::folk::FolkPlugin, crate::folk_routine::FolkRoutinePlugin),
+            (crate::folk::FolkPlugin, crate::folk_routine::FolkRoutinePlugin, crate::folk_combat::FolkCombatPlugin),
             crate::creatures::CreaturesPlugin,
             crate::combat::CombatPlugin,
             crate::props::PropsPlugin,

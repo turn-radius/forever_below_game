@@ -485,6 +485,53 @@ impl Toast {
         self.text = text.into();
         self.until = now + TOAST_SECONDS;
     }
+
+    /// Whether a line still shows at `now`.
+    pub fn showing(&self, now: f32) -> bool {
+        self.until > now && !self.text.is_empty()
+    }
+}
+
+/// The [`Toast`] and the real clock it runs on, for any system to say a line through. Both are
+/// optional, so a system that speaks still runs in an app without the HUD.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Toasts<'w> {
+    toast: Option<ResMut<'w, Toast>>,
+    real: Option<Res<'w, Time<Real>>>,
+}
+
+impl Toasts<'_> {
+    fn now(&self) -> f32 {
+        self.real.as_deref().map_or(0.0, |t| t.elapsed_secs())
+    }
+
+    /// Shows `text` afresh.
+    pub fn say(&mut self, text: impl Into<String>) {
+        let now = self.now();
+        if let Some(toast) = self.toast.as_deref_mut() {
+            toast.say(text, now);
+        }
+    }
+
+    /// Shows `text`, unless it is the line already showing.
+    pub fn say_once(&mut self, text: &str) {
+        let now = self.now();
+        if let Some(toast) = self.toast.as_deref_mut()
+            && (toast.text != text || !toast.showing(now))
+        {
+            toast.say(text, now);
+        }
+    }
+
+    /// Shows `text` after whatever line still shows (`"Hilda is slain · the Ash Choir turn on
+    /// you"`), or alone when nothing does.
+    pub fn add(&mut self, text: &str) {
+        let now = self.now();
+        if let Some(toast) = self.toast.as_deref_mut() {
+            let line = if toast.showing(now) && !toast.text.contains(text) { format!("{} \u{b7} {text}", toast.text) } else { text.to_string() };
+            toast.say(line, now);
+        }
+    }
 }
 
 /// Where `drag` lands in `container` with its grabbed cell over `cell`: as it lies now; or,

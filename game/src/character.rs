@@ -44,6 +44,22 @@ impl Class {
         }
     }
 
+    /// The class's hit die: d10 for fighters and rangers, d8 for clerics, d6 for mages (SRD 5.1
+    /// "Hit Points": fighter p. 24, ranger p. 35, cleric p. 15, wizard, our mage, p. 52).
+    pub fn hit_die(self) -> u32 {
+        match self {
+            Class::Fighter | Class::Ranger => 10,
+            Class::Cleric => 8,
+            Class::Mage => 6,
+        }
+    }
+
+    /// The class whose outfit is `key` in `data/outfits.json`, or `None` for a look that is no
+    /// class (the freshly fallen, the scavenger).
+    pub fn of_outfit(key: &str) -> Option<Class> {
+        Class::ALL.into_iter().find(|c| c.outfit_key() == key)
+    }
+
     /// The word the header uses, lower case as the plate's `cline` writes it.
     pub fn word(self) -> &'static str {
         self.outfit_key()

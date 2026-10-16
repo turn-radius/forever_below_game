@@ -15,6 +15,10 @@
 //! posed less often ([`NEAR_RANGE`]), so a level of folk costs the frame little.
 //!
 //! The head joint also carries the turn toward the player ([`crate::folk::FolkHead`]).
+//!
+//! A folk swinging at the delver ([`ArmSwing`], set by `crate::folk_combat::fight`) raises the
+//! main hand's arm over the shoulder and brings it down through the blow ([`swing_turn`]), on top
+//! of the gait.
 
 use bevy::{
     app::Propagate,
@@ -153,6 +157,32 @@ pub fn spawn_rigged(
     FolkAnim { rig: figure.rig.clone(), gait: figure.gait.clone(), joints, phase: 0.0, speed: 0.0, cycle: IdleCycle::of(seed) }
 }
 
+/// How far through a swing of the main hand's arm a folk is, 0 to 1, or `None` with no swing
+/// under way: on the [`crate::folk::Denizen`] root, beside its [`Stride`].
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct ArmSwing(pub Option<f32>);
+
+/// The turn of the swinging arm's shoulder `u` of the way through a swing, radians about the
+/// body's left-right axis, negative raising the arm forward and up: drawn back over the
+/// shoulder by 0.45, brought down through the blow by 0.62 (where it lands,
+/// `crate::folk_combat::LANDS`), then back to rest. Our own, after the skeleton's swing
+/// (`fb_creatures::pose::skeleton_armed`).
+pub fn swing_turn(u: f32) -> f32 {
+    const RAISED: f32 = -2.5;
+    const STRUCK: f32 = -0.45;
+    let ease = |x: f32| {
+        let x = x.clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    };
+    if u < 0.45 {
+        RAISED * ease(u / 0.45)
+    } else if u < 0.62 {
+        RAISED + (STRUCK - RAISED) * ease((u - 0.45) / 0.17)
+    } else {
+        STRUCK * (1.0 - ease((u - 0.62) / 0.38))
+    }
+}
+
 /// A joint's transform for `pose`'s rotation `q` and offset.
 fn joint_transform(rig: &Rig, joint: Joint, pose: &fb_body::RigPose) -> Transform {
     let q = pose.rotation[joint.index()].0;
@@ -174,7 +204,8 @@ fn posed_this_frame(frame: u32, entity: Entity) -> bool {
 pub fn pose_folk(
     time: Res<Time>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    strides: Query<(&Stride, &GlobalTransform)>,
+    // A body lies as it fell: it is not posed.
+    strides: Query<(&Stride, &GlobalTransform, Option<&ArmSwing>), Without<crate::combat::feedback::Corpse>>,
     looks: Query<&FolkHead>,
     mut anims: Query<(Entity, &ChildOf, &mut FolkAnim)>,
     mut joints: Query<&mut Transform, With<FolkJoint>>,
@@ -184,7 +215,8 @@ pub fn pose_folk(
     let dt = time.delta_secs();
     let eye = eyes.iter().next().map(|e| e.translation());
     for (entity, child_of, mut anim) in &mut anims {
-        let Ok((stride, at)) = strides.get(child_of.parent()) else { continue };
+        let Ok((stride, at, swing)) = strides.get(child_of.parent()) else { continue };
+        let shoulder = Joint::arm(fb_body::MAIN_HAND)[0];
         let anim = &mut *anim;
         // The walk goes on by distance whether or not it is drawn, so folk come back in step.
         let stride_length = anim.gait.stride_length().max(1e-3);
@@ -205,6 +237,12 @@ pub fn pose_folk(
                 && let Ok(head) = looks.get(anim.joint(joint))
             {
                 set.rotation *= head_rotation(head.look);
+            }
+            // The swinging arm turns about the shoulder, in its parent's axes.
+            if joint == shoulder
+                && let Some(u) = swing.and_then(|s| s.0)
+            {
+                set.rotation = Quat::from_rotation_x(swing_turn(u)) * set.rotation;
             }
             if *transform != set {
                 *transform = set;
