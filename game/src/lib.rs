@@ -15,6 +15,7 @@ pub mod exhaustion;
 pub mod figure;
 pub mod fitting;
 pub mod folk;
+pub mod folk_pose;
 pub mod folk_routine;
 pub mod footsteps;
 pub mod forge_view;

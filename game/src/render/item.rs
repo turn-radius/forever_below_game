@@ -4,9 +4,10 @@
 use armory::{ItemMesh, MaterialKind, Part, Rgb, cond::Condition, etch::Etching, palette::Palette};
 use bevy::{
     asset::RenderAssetUsages,
+    camera::visibility::DynamicSkinnedMeshBounds,
     ecs::system::SystemParam,
     light::NotShadowCaster,
-    mesh::{Indices, PrimitiveTopology},
+    mesh::{Indices, PrimitiveTopology, VertexAttributeValues, skinning::SkinnedMesh},
     platform::collections::HashMap,
     prelude::*,
     shape::Aabb3d,
@@ -181,6 +182,33 @@ pub fn part_to_mesh(part: &Part) -> Mesh {
     mesh
 }
 
+/// An octahedral encoding of the unit vector `n` in [-1, 1]^2 (decoded by `decode_octahedral` in
+/// `toon.wesl`).
+fn octahedral(n: [f32; 3]) -> [f32; 2] {
+    let l1 = (n[0].abs() + n[1].abs() + n[2].abs()).max(1e-9);
+    let (x, y) = (n[0] / l1, n[1] / l1);
+    if n[2] >= 0.0 {
+        return [x, y];
+    }
+    let sign = |v: f32| if v >= 0.0 { 1.0 } else { -1.0 };
+    [(1.0 - y.abs()) * sign(x), (1.0 - x.abs()) * sign(y)]
+}
+
+/// Converts one part to a skinned Bevy mesh: [`part_to_mesh`] with each vertex's joints and
+/// weights, and where it rests (the tangent) and its rest normal (octahedral, in the second uv
+/// set), which the toon shader paints wear and patterns from so they stay on a limb as it
+/// moves (`toon.wesl`).
+pub fn part_to_skinned_mesh(part: &Part, skin: &fb_body::PartSkin) -> Mesh {
+    let mut mesh = part_to_mesh(part);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(skin.joints.clone()));
+    mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, skin.weights.clone());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, part.positions.iter().map(|p| [p[0], p[1], p[2], 1.0]).collect::<Vec<[f32; 4]>>());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, part.normals.iter().map(|&n| octahedral(n)).collect::<Vec<[f32; 2]>>());
+    // Bounds that follow the joints, so a swung limb is not culled with its rest pose.
+    let _ = mesh.generate_skinned_mesh_bounds();
+    mesh
+}
+
 /// A part's half thickness, estimated as volume over surface area (`2V / A`) so it needs no
 /// knowledge of the part's shape: exactly the radius of a tube, and the full thickness of a
 /// thin plate, which errs on the thick side. Zero for a part with no area.
@@ -239,7 +267,7 @@ pub struct ItemSpawner<'w, 's> {
     shared_outlines: ResMut<'w, OutlineMaterials>,
 }
 
-impl ItemSpawner<'_, '_> {
+impl<'w, 's> ItemSpawner<'w, 's> {
     /// Spawns `item` as an [`ArmoryItem`] root at the origin with one [`ArmoryPart`] child
     /// per part, each with an [`InkOutline`] child unless `Part::outline` is false. Position
     /// the item by setting the root's `Transform`; parts keep an identity transform so their
@@ -248,17 +276,40 @@ impl ItemSpawner<'_, '_> {
     /// Returns the root's commands. Insert on it rather than through another `Commands` in the
     /// same system: each `Commands` has its own queue, and the other one may apply first.
     pub fn spawn(&mut self, item: &ItemMesh, appearance: &ItemAppearance) -> EntityCommands<'_> {
+        self.spawn_with(item, appearance, None)
+    }
+
+    /// [`ItemSpawner::spawn`] for an item whose parts are skinned (`skins` parallel to its
+    /// parts, from `fb_body`), each part and its ink hull bound to `skinned`'s joints. The
+    /// parts' transforms no longer place them: the joints do.
+    pub fn spawn_skinned(&mut self, item: &ItemMesh, appearance: &ItemAppearance, skins: &[fb_body::PartSkin], skinned: &SkinnedMesh) -> EntityCommands<'_> {
+        self.spawn_with(item, appearance, Some((skins, skinned)))
+    }
+
+    /// The commands this spawner queues on, so entities spawned alongside its items apply in
+    /// order with them.
+    pub fn commands(&mut self) -> &mut Commands<'w, 's> {
+        &mut self.commands
+    }
+
+    fn spawn_with(&mut self, item: &ItemMesh, appearance: &ItemAppearance, skin: Option<(&[fb_body::PartSkin], &SkinnedMesh)>) -> EntityCommands<'_> {
         let outline = self.shared_outlines.get_or_add(&mut self.outline_materials, appearance.outline);
         let glass_outline =
             self.shared_outlines.get_or_add(&mut self.outline_materials, OutlineMaterial { see_through: true, ..appearance.outline });
         let root = self.commands.spawn((ArmoryItem, Transform::default(), Visibility::default())).id();
         let mut flame = None;
-        for part in &item.parts {
-            let mesh = self.meshes.add(part_to_mesh(part));
+        for (index, part) in item.parts.iter().enumerate() {
+            let mesh = self.meshes.add(match skin {
+                Some((skins, _)) => part_to_skinned_mesh(part, &skins[index]),
+                None => part_to_mesh(part),
+            });
             let material = self.toon_materials.add(appearance.material_for(part));
             let see_through = is_see_through(part);
             let mut part_entity =
                 self.commands.spawn((ArmoryPart, Name::new(part.name), Mesh3d(mesh.clone()), MeshMaterial3d(material), ChildOf(root)));
+            if let Some((_, skinned)) = skin {
+                part_entity.insert((skinned.clone(), DynamicSkinnedMeshBounds));
+            }
             if see_through {
                 // Glass lets light through: its shadow would darken the drink inside it.
                 part_entity.insert(NotShadowCaster);
@@ -275,7 +326,10 @@ impl ItemSpawner<'_, '_> {
             let part_entity = part_entity.id();
             if part.outline {
                 let ink = if see_through { glass_outline.clone() } else { outline.clone() };
-                self.commands.spawn((InkOutline, Mesh3d(mesh), MeshMaterial3d(ink), ChildOf(part_entity)));
+                let mut hull = self.commands.spawn((InkOutline, Mesh3d(mesh), MeshMaterial3d(ink), ChildOf(part_entity)));
+                if let Some((_, skinned)) = skin {
+                    hull.insert((skinned.clone(), DynamicSkinnedMeshBounds));
+                }
             }
         }
         self.commands.entity(root)

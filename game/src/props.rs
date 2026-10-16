@@ -301,6 +301,7 @@ mod tests {
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<crate::render::ToonMaterial>>()
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
             .init_resource::<crate::render::OutlineMaterials>()
             .add_plugins(PropsPlugin)
             .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate));
