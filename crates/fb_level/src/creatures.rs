@@ -51,6 +51,9 @@ pub const PACK_SIZE: (u32, u32) = (2, 5);
 pub const SNAKES: (u32, u32) = (0, 2);
 /// Chance that a pack is of giant rats, and that a snake is a constrictor.
 const GIANT_PACK: f64 = 0.25;
+/// The shallowest level giant rats are found on. A pack of giant rats (SRD 5.1 p. 378: AC 12,
+/// +4 to hit, 1d4 + 2) is too much for a fresh delver, so the first level has only rats. Our own.
+pub const GIANTS_FROM_DEPTH: u32 = 2;
 const CONSTRICTOR: f64 = 0.35;
 /// Smallest room a pack or a snake takes.
 const MIN_ROOM_AREA: u32 = 9;
@@ -103,7 +106,9 @@ pub(crate) fn place_creatures(level: &Level, rng: &mut Mulberry32) -> Vec<Creatu
     }
     for &i in rat_rooms.iter().take(packs) {
         let room = &level.rooms[i];
-        let species = if rng.chance(GIANT_PACK) { Species::GiantRat } else { Species::Rat };
+        // The draw is made on every level, so a level's other placements do not shift with depth.
+        let giant = rng.chance(GIANT_PACK);
+        let species = if giant && level.depth >= GIANTS_FROM_DEPTH { Species::GiantRat } else { Species::Rat };
         let size = rng.int(PACK_SIZE.0, PACK_SIZE.1);
         let centre = (rng.range_f32(room.x as f32 + 1.0, (room.x + room.w) as f32 - 1.0), rng.range_f32(room.y as f32 + 1.0, (room.y + room.h) as f32 - 1.0));
         let mut members = 0;
@@ -310,6 +315,13 @@ mod tests {
     /// Every seed on the first level and on the second, which a placement test holds for alike.
     fn sweep() -> impl Iterator<Item = (u32, u32)> {
         [1, 2].into_iter().flat_map(|depth| SEEDS.map(move |seed| (seed, depth)))
+    }
+
+    #[test]
+    fn the_first_level_has_no_giant_rats_and_deeper_ones_do() {
+        let giants = |depth| (1..=40).flat_map(|seed| generate(seed, depth).creatures).filter(|c| c.species == Species::GiantRat).count();
+        assert_eq!(giants(1), 0);
+        assert!(giants(GIANTS_FROM_DEPTH) > 0);
     }
 
     #[test]
