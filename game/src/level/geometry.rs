@@ -920,7 +920,8 @@ mod tests {
     fn rough_rock_geometry_is_unchanged() {
         let mut seen = Vec::new();
         for seed in [1207, 2] {
-            let level = fb_level::generate(seed, 1);
+            // Without the stairs, which came later and leave their cells unfloored.
+            let level = Level { stairs: Vec::new(), ..fb_level::generate(seed, 1) };
             let view = CellView::new(&level);
             let mesh = level_mesh(&view, view.bounds());
             let frame = door_frame(level.ceiling, level.seed);

@@ -697,10 +697,28 @@ mod tests {
     use super::*;
     use fb_level::LevelStyle;
 
+    /// A stone halls level without its stairs, whose openings in the floor and vault are
+    /// tested on their own ([`stairs_open_the_floor_and_the_vault`]).
     fn halls(seed: u32) -> Level {
         let level = fb_level::generate(seed, 2);
         assert_eq!(level.style, LevelStyle::StoneHalls);
-        level
+        Level { stairs: Vec::new(), ..level }
+    }
+
+    #[test]
+    fn stairs_open_the_floor_and_the_vault() {
+        let level = fb_level::generate(1207, 2);
+        let view = CellView::new(&level);
+        let mesh = level_mesh(&view, view.bounds());
+        let over = |name: &str, (x, y): (u32, u32)| {
+            let (x0, z0) = (x as f32 * CELL, y as f32 * CELL);
+            part(&mesh, name).positions.iter().any(|p| p[0] > x0 + 0.5 && p[0] < x0 + CELL - 0.5 && p[2] > z0 + 0.5 && p[2] < z0 + CELL - 0.5)
+        };
+        let down = level.stair(fb_level::StairKind::Down).expect("a way down");
+        let up = level.stair(fb_level::StairKind::Up).expect("a way up");
+        assert!(!over("floor", (down.x, down.y)), "no floor over the way down");
+        assert!(!over("ceiling", (up.x, up.y)), "no vault over the way up");
+        assert!(over("ceiling", (down.x, down.y)), "the vault still covers the way down");
     }
 
     fn key(p: &[f32; 3]) -> [i64; 3] {
