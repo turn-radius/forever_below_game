@@ -306,6 +306,15 @@ impl Effects {
         })
     }
 
+    /// Puts `gear`'s rates and the effects' on `needs`' meters: each meter's multiplier is the
+    /// gear's times every effect's on it. Set afresh each step, so they never compound.
+    pub fn apply_rates(&self, defs: &BTreeMap<String, EffectDef>, needs: &mut crate::Needs, gear: &crate::Gear) {
+        gear.apply_to(needs);
+        needs.hunger.gear *= self.need_rate(defs, MeterKind::Hunger);
+        needs.thirst.gear = self.need_rate(defs, MeterKind::Thirst);
+        needs.sleepiness.gear *= self.need_rate(defs, MeterKind::Sleepiness);
+    }
+
     /// What the effects multiply how far the character sees by.
     pub fn sight(&self, defs: &BTreeMap<String, EffectDef>) -> f64 {
         self.share(defs, |i| match i {

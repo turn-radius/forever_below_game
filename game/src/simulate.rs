@@ -84,7 +84,7 @@ fn step_the_delver(
             let gear = gear.get_or_insert_with(|| character.gear(&inventory));
             // The rates a meter is made with are the defaults', so they are only put on again
             // when the rules change or a new delver is made under rules that are not the defaults.
-            if rules_changed || (needs.is_added() && **rules != *fb_character::rules::defaults()) {
+            if rules_changed || (needs.is_added() && rules.needs != fb_character::rules::defaults().needs) {
                 rules.apply_to(&mut needs.0);
             }
             gear.apply_to(&mut needs.0);
@@ -106,6 +106,13 @@ fn step_the_delver(
         let sprinting = input.pressed(Action::Hurry);
         let activity = delver_activity(locomotion.velocity, sprinting, swinging, *load);
         let (mut n, mut e, mut t) = (needs.0, exhaustion.0, times.0);
+        // Gear's rates and the effects' on them (the cold makes hunger rise faster), put on
+        // afresh each step so an effect that ends takes its share with it.
+        let worn = gear.get_or_insert_with(|| character.gear(&inventory));
+        match effects.as_deref() {
+            Some(on) => on.0.apply_rates(&rules.effects, &mut n, worn),
+            None => fb_character::effect::Effects::default().apply_rates(&rules.effects, &mut n, worn),
+        }
         t.step_with(&rules, &mut n, &mut e, activity, hours, crate::character::modifier(character.constitution()));
         needs.0 = n;
         times.0 = t;
@@ -304,6 +311,9 @@ mod tests {
             .add_plugins((GameClockPlugin, SimulatePlugin));
         run_delve_systems_while_delving(&mut app);
         app.update();
+        // Warm enough that the cold keeps out of tests about other things: a bare delver with
+        // no torch is short of warmth even on the first level.
+        app.world_mut().resource_mut::<GameRules>().0.warmth.comfort = 100.0;
         app.update();
         app
     }
@@ -350,11 +360,28 @@ mod tests {
     }
 
     #[test]
+    fn the_cold_makes_hunger_rise_faster_and_its_share_goes_when_it_does() {
+        let hunger_after = |cold: bool| {
+            let mut app = app();
+            let delver = walker(&mut app);
+            // Exactly at their need, so the cold put on them fades only at its own pace.
+            app.world_mut().resource_mut::<GameRules>().0.warmth.comfort = 6.0;
+            if cold {
+                let mut on = fb_character::effect::Effects::default();
+                on.add(&fb_character::rules::defaults().effects, crate::exposure::COLD, 1.0, None, fb_character::effect::Source::Surroundings);
+                app.world_mut().entity_mut(delver).insert(DelverEffects(on));
+            }
+            run(&mut app, 30);
+            app.world().get::<DelverNeeds>(delver).unwrap().0.hunger.value
+        };
+        let (warm, cold) = (hunger_after(false), hunger_after(true));
+        assert!(cold > warm * 1.2, "the cold made them hungrier: {warm} warm, {cold} cold");
+    }
+
+    #[test]
     fn venom_wears_off_after_a_game_hour_and_its_component_goes() {
         let mut app = app();
         let delver = walker(&mut app);
-        // Warm enough that the venom is the only thing on them (a bare delver feels the cold).
-        app.world_mut().resource_mut::<GameRules>().0.warmth.comfort = 100.0;
         app.world_mut().entity_mut(delver).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
         run(&mut app, 150);
         let half = app.world().get::<DelverEffects>(delver).expect("still poisoned half an hour on").poisoned_hours().expect("poisoned");
