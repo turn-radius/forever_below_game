@@ -646,7 +646,7 @@ pub(crate) mod tests {
     fn landed_by(ac: i32, swings: usize, poisoned: bool) -> usize {
         let (mut app, player, folk) = folk_fight(9.0);
         if poisoned {
-            app.world_mut().entity_mut(player).insert(crate::character::DelverPoison(fb_character::poison::Poisoned::for_hours(10.0)));
+            app.world_mut().entity_mut(player).insert(crate::character::DelverEffects::poisoned_for(fb_character::rules::defaults(), 10.0));
         }
         app.world_mut().entity_mut(folk).insert((ArmourClass(ac), Health::full(100_000)));
         // Struck, it fights back: the delver outlasts it.

@@ -242,7 +242,7 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64 },
             );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
@@ -369,11 +369,35 @@ pub struct DelverStamina(pub fb_character::Stamina);
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverMana(pub Mana);
 
-/// Venom in the delver's blood, on the [`Player`](crate::play::Player) only while it works: a
-/// failed save against a snake's venom puts it on (`crate::combat::vitals`), the game clock
-/// steps it and it comes off when it wears off (`crate::simulate::step_the_delver`).
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
-pub struct DelverPoison(pub fb_character::poison::Poisoned);
+/// The effects on the delver ([`fb_character::effect`]), on the [`Player`](crate::play::Player)
+/// only while they have any: a failed save against a snake's venom poisons them
+/// (`crate::combat::vitals`), the game clock steps them, and the component comes off when the
+/// last one ends (`crate::simulate::step_the_delver`). What they do is read with the loaded
+/// rules' definitions (`GameRules::effects`).
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct DelverEffects(pub fb_character::effect::Effects);
+
+impl DelverEffects {
+    /// How the delver's attack rolls are thrown under `rules`, with or without effects on them.
+    pub fn attack_odds(effects: Option<&DelverEffects>, rules: &fb_character::rules::Rules) -> fb_character::combat::Odds {
+        effects.map_or(fb_character::combat::Odds::Even, |e| e.0.attack_odds(&rules.effects))
+    }
+
+    /// Poisoned for `hours`, as venom poisons (for the status debug override and tests).
+    pub fn poisoned_for(rules: &fb_character::rules::Rules, hours: f64) -> DelverEffects {
+        let mut effects = fb_character::effect::Effects::default();
+        effects.add(&rules.effects, "poisoned", 1.0, None, fb_character::effect::Source::Bite { by: "venom".to_string() });
+        if let Some(poisoned) = effects.active.first_mut() {
+            poisoned.hours_left = Some(hours);
+        }
+        DelverEffects(effects)
+    }
+
+    /// Game hours the poison has left, while it works.
+    pub fn poisoned_hours(&self) -> Option<f64> {
+        self.0.get("poisoned", None).and_then(|poisoned| poisoned.hours_left)
+    }
+}
 
 /// Game time the delver has put toward their next hit point while fed and watered, on the
 /// [`Player`](crate::play::Player) from their spawn; the game clock steps it

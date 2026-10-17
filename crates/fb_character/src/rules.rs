@@ -23,6 +23,7 @@ use std::sync::LazyLock;
 use fb_creatures::{Dice, Species, StatBlock};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::effect::EffectDef;
 use crate::{Activity, LoadBand, MeterKind};
 
 /// Every number the character rules run on. See the [module docs](self).
@@ -36,11 +37,16 @@ pub struct Rules {
     pub mana: ManaRules,
     pub load: LoadRules,
     pub visibility: VisibilityRules,
+    pub warmth: WarmthRules,
     /// The creatures' numbers by stat block name. A partial entry keeps the rest of that
     /// creature's defaults; a name no species has is a creature of its own, flat zeros where
     /// the entry is silent.
     #[serde(deserialize_with = "creatures_over_defaults")]
     pub creatures: BTreeMap<String, CreatureRules>,
+    /// The effects by id ([`crate::effect`]), from `data/effects.json`. An entry here changes
+    /// only the keys it names; saving writes the table only when it differs from the file.
+    #[serde(deserialize_with = "effects_over_defaults", skip_serializing_if = "is_shipped")]
+    pub effects: BTreeMap<String, EffectDef>,
 }
 
 impl Default for Rules {
@@ -53,7 +59,9 @@ impl Default for Rules {
             mana: ManaRules::default(),
             load: LoadRules::default(),
             visibility: VisibilityRules::default(),
+            warmth: WarmthRules::default(),
             creatures: default_creatures(),
+            effects: crate::effect::shipped(),
         }
     }
 }
@@ -164,6 +172,27 @@ fn creatures_over_defaults<'de, D: Deserializer<'de>>(deserializer: D) -> Result
     Ok(creatures)
 }
 
+/// Reads the effects table over `data/effects.json`: an effect the file leaves out keeps its
+/// definition, one it names only in part keeps the rest, and a new id is an effect of its own.
+fn effects_over_defaults<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<String, EffectDef>, D::Error> {
+    use serde::de::Error;
+    let file = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    let mut effects = crate::effect::shipped();
+    for (id, part) in file {
+        let mut merged = effects.get(&id).map_or(serde_json::json!({}), |d| serde_json::to_value(d).expect("an effect serialises"));
+        if let (Some(into), serde_json::Value::Object(keys)) = (merged.as_object_mut(), part) {
+            into.extend(keys);
+        }
+        effects.insert(id.clone(), serde_json::from_value(merged).map_err(|e| D::Error::custom(format!("effect {id}: {e}")))?);
+    }
+    Ok(effects)
+}
+
+/// Whether `effects` is what `data/effects.json` ships, so a saved rules file leaves it out.
+fn is_shipped(effects: &BTreeMap<String, EffectDef>) -> bool {
+    *effects == crate::effect::shipped()
+}
+
 /// Armour, the natural dice and the hit points of each class.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -184,8 +213,6 @@ pub struct CombatRules {
     /// What a delver's or a folk's attack roll adds for proficiency with the weapon, a 1st-level
     /// character's +2 (SRD 5.1 p. 12, "Proficiency Bonus").
     pub proficiency_bonus: i32,
-    /// Game hours a failed save against venom leaves the delver poisoned (our own).
-    pub venom_poisoned_hours: f64,
 }
 
 impl Default for CombatRules {
@@ -197,7 +224,6 @@ impl Default for CombatRules {
             venom_save_dc: 10,
             hit_dice: HitDice::default(),
             proficiency_bonus: crate::combat::PROFICIENCY_BONUS,
-            venom_poisoned_hours: crate::poison::VENOM_POISONED_HOURS,
         }
     }
 }
@@ -450,6 +476,38 @@ impl LoadRules {
             LoadBand::Encumbered => self.encumbered_walk,
             LoadBand::Overloaded => self.overloaded_walk,
         }
+    }
+}
+
+/// How cold the abyss is and how much fire warms: worn warmth weighed against the character's
+/// need ([`WarmthRules::shortfall`]) decides whether the cold creeps in (the `cold` effect).
+/// Our own: the SRD has extreme cold (p. 86) but no warmth to wear.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WarmthRules {
+    /// Warmth the first level spares a character: their need there is this much less.
+    pub comfort: f64,
+    /// Warmth each level below the first adds to the need.
+    pub chill_per_depth: f64,
+    /// Warmth a brazier gives a character within its reach.
+    pub brazier: f64,
+    /// How far a brazier's warmth reaches, in world units (10 cm each).
+    pub brazier_reach: f64,
+    /// Warmth a lit torch or lantern in hand gives.
+    pub held_flame: f64,
+}
+
+impl Default for WarmthRules {
+    fn default() -> Self {
+        WarmthRules { comfort: 4.0, chill_per_depth: 1.0, brazier: 10.0, brazier_reach: 30.0, held_flame: 1.0 }
+    }
+}
+
+impl WarmthRules {
+    /// How much warmth a character who needs `need` is short of, on level `depth`, wearing
+    /// `worn` and warmed by `fire`: positive is cold, negative is warmth to spare.
+    pub fn shortfall(&self, need: f64, depth: u32, worn: f64, fire: f64) -> f64 {
+        need - self.comfort + self.chill_per_depth * depth.saturating_sub(1) as f64 - worn - fire
     }
 }
 

@@ -31,7 +31,7 @@ use super::feedback::{Corpse, Struck};
 use super::swing::{SwungAt, Strikeable};
 use super::{ArmourClass, Health, RunDice};
 use crate::carry::{HeldItem, ViewModelCamera, appearance_of};
-use crate::character::{Character, DelverPoison, modifier};
+use crate::character::{Character, DelverEffects, modifier};
 use crate::creatures::Critter;
 use crate::folk::Denizen;
 use crate::hostility::Hostility;
@@ -274,7 +274,8 @@ pub fn shoot(
     mut toasts: Toasts,
     mut loosed: MessageWriter<Loosed>,
     mut state: Local<(f32, bool)>,
-    players: Query<(&Transform, Option<&Health>, Option<&DelverPoison>), With<Player>>,
+    players: Query<(&Transform, Option<&Health>, Option<&DelverEffects>), With<Player>>,
+    rules: Option<Res<crate::rules::GameRules>>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
     strikeable: Strikeable,
     folk: Query<(&Transform, &Hostility, &Denizen), Without<Corpse>>,
@@ -302,7 +303,7 @@ pub fn shoot(
         marksman.reload = None;
     }
     let screens = around.screens.as_ref().is_some_and(|s| s.0.is_some()) || around.journey.is_some();
-    let Ok((at, health, poison)) = players.single() else { return };
+    let Ok((at, health, effects)) = players.single() else { return };
     if screens || health.is_some_and(Health::is_down) {
         // The screen opened mid-draw: lower the bow and put the arrow back.
         if marksman.draw.is_some() || marksman.reload.is_some() {
@@ -394,7 +395,7 @@ pub fn shoot(
         dice: stats.damage.map(|d| (d.count as u32, d.sides as u32)),
         bonus: stats.damage_bonus.round() as i32,
         draw,
-        odds: poison.map_or(Odds::Even, |p| p.0.attack_odds()),
+        odds: DelverEffects::attack_odds(effects, crate::rules::GameRules::of(&rules)),
     };
     if inventory.item(nocked.ammo).is_none() {
         return;

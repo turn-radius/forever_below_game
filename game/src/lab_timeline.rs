@@ -39,6 +39,18 @@ pub enum Step {
     Eat(&'static str),
     /// Drinks it.
     Drink(&'static str),
+    /// Puts the effect of this id on the character at an intensity ([`effect_ids`]).
+    Apply(&'static str, f64),
+}
+
+/// The ids of the effects `data/effects.json` ships, in its order, for the lab's buttons.
+pub fn effect_ids() -> &'static [&'static str] {
+    static IDS: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+        let text = include_str!("../../data/effects.json");
+        let order: serde_json::Map<String, serde_json::Value> = serde_json::from_str(text).expect("data/effects.json parses");
+        order.keys().map(|id| &*Box::leak(id.clone().into_boxed_str())).collect()
+    });
+    &IDS
 }
 
 /// A moment of the run.
@@ -49,6 +61,8 @@ pub struct Sample {
     pub thirst: f64,
     pub sleepiness: f64,
     pub exhaustion: u32,
+    /// The hit points the effects have taken so far.
+    pub hp_lost: f64,
 }
 
 /// Something done to the character in the run.
@@ -56,16 +70,26 @@ pub struct Sample {
 pub enum Event {
     Eat,
     Drink,
+    /// An effect put on them.
+    Applied,
 }
+
+/// Each effect on the character at a moment of the run: its id and intensity, and whether it
+/// shows (not still incubating).
+pub type Trace = Vec<(String, f64, bool)>;
 
 /// A run played out.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Timeline {
     pub samples: Vec<Sample>,
+    /// The effects at each sample, beside [`Timeline::samples`].
+    pub traces: Vec<Trace>,
     pub events: Vec<(f64, Event)>,
     pub crossings: Vec<Crossing>,
     /// The character at the end of the run.
     pub lab: TimeLab,
+    /// Their hit points at full, which the effects' losses are weighed against.
+    pub life: i32,
 }
 
 impl Timeline {
@@ -80,8 +104,12 @@ impl Timeline {
     }
 }
 
+fn trace(lab: &TimeLab, rules: &Rules) -> Trace {
+    lab.effects.active.iter().map(|a| (a.id.clone(), a.intensity, rules.effects.get(&a.id).is_some_and(|d| a.stage(d).is_some()))).collect()
+}
+
 fn sample(lab: &TimeLab) -> Sample {
-    Sample { hours: lab.clock.hours(), hunger: lab.needs.hunger.value, thirst: lab.needs.thirst.value, sleepiness: lab.needs.sleepiness.value, exhaustion: lab.exhaustion.level }
+    Sample { hours: lab.clock.hours(), hunger: lab.needs.hunger.value, thirst: lab.needs.thirst.value, sleepiness: lab.needs.sleepiness.value, exhaustion: lab.exhaustion.level, hp_lost: lab.hp_lost }
 }
 
 fn reached(goal: Goal, lab: &TimeLab, rules: &Rules) -> bool {
@@ -96,6 +124,7 @@ pub fn run(state: &LabState, steps: &[Step]) -> Timeline {
     let mut pace = Pace::new(state);
     let mut lab = TimeLab::default();
     let mut samples = vec![sample(&lab)];
+    let mut traces = vec![trace(&lab, &state.ruleset.rules)];
     let mut events = Vec::new();
     for step in steps {
         match *step {
@@ -104,6 +133,7 @@ pub fn run(state: &LabState, steps: &[Step]) -> Timeline {
                 for _ in 0..(hours / CHUNK).round() as u32 {
                     lab.pass_under(&pace, CHUNK);
                     samples.push(sample(&lab));
+                    traces.push(trace(&lab, &state.ruleset.rules));
                 }
             }
             Step::Until(goal, activity) => {
@@ -112,6 +142,7 @@ pub fn run(state: &LabState, steps: &[Step]) -> Timeline {
                 while lab.clock.hours() - start < LONGEST && !reached(goal, &lab, &state.ruleset.rules) {
                     lab.pass_under(&pace, CHUNK);
                     samples.push(sample(&lab));
+                    traces.push(trace(&lab, &state.ruleset.rules));
                 }
             }
             Step::Eat(base) | Step::Drink(base) => {
@@ -119,10 +150,19 @@ pub fn run(state: &LabState, steps: &[Step]) -> Timeline {
                 lab.consume(base);
                 events.push((at, if matches!(step, Step::Eat(_)) { Event::Eat } else { Event::Drink }));
                 samples.push(sample(&lab));
+                traces.push(trace(&lab, &state.ruleset.rules));
+            }
+            Step::Apply(id, intensity) => {
+                let at = lab.clock.hours();
+                lab.effects.add(&state.ruleset.rules.effects, id, intensity, None, fb_character::effect::Source::Surroundings);
+                events.push((at, Event::Applied));
+                samples.push(sample(&lab));
+                traces.push(trace(&lab, &state.ruleset.rules));
             }
         }
     }
-    Timeline { samples, events, crossings: lab.all.clone(), lab }
+    let life = crate::combat::first_level_hit_points_with(&state.ruleset.rules, &state.character);
+    Timeline { samples, traces, events, crossings: lab.all.clone(), lab, life }
 }
 
 /// A plain answer: what happened, and when.
@@ -171,6 +211,53 @@ pub fn answers(run: &Timeline, rules: &Rules) -> Vec<Answer> {
     vec![after(MeterKind::Hunger), after(MeterKind::Thirst), after(MeterKind::Sleepiness), level(1, "Exhaustion 1 on", false), level(DEATH, "Dies on", true)]
 }
 
+/// The Effects tab's answers: for each effect in the run, in the order it began, when each of
+/// its stages first showed and when it ended; then the hit points the effects took.
+pub fn effect_answers(run: &Timeline, rules: &Rules) -> Vec<Answer> {
+    let mut out = vec![];
+    for id in effects_seen(run) {
+        let id = id.as_str();
+        let Some(def) = rules.effects.get(id) else { continue };
+        let mut seen: Vec<String> = vec![];
+        let mut was_on = false;
+        for (sample, trace) in run.samples.iter().zip(&run.traces) {
+            let now = trace.iter().find(|(i, _, _)| i == id);
+            if let Some((_, intensity, true)) = now {
+                let stage = def.stages.iter().rev().find(|s| *intensity + 1e-9 >= s.at);
+                if let Some(stage) = stage.filter(|s| !seen.contains(&s.word)) {
+                    seen.push(stage.word.clone());
+                    out.push(Answer { label: format!("{} at", stage.word), value: hours_text(to_the_minute(sample.hours)), danger: stage.severity >= fb_character::conditions::Severity::Serious });
+                }
+            }
+            if was_on && now.is_none() {
+                out.push(Answer { label: format!("{} gone at", def.name), value: hours_text(to_the_minute(sample.hours)), danger: false });
+                was_on = false;
+            }
+            was_on |= now.is_some();
+        }
+    }
+    // Nothing mends in the run, so the losses add up; past their life, they are dead.
+    if run.lab.hp_lost >= 0.05 {
+        let lost = run.lab.hp_lost.min(run.life as f64);
+        out.push(Answer { label: "Hit points lost".to_string(), value: format!("{} of {}", number((lost * 10.0).round() / 10.0), run.life), danger: true });
+    }
+    if let Some(dead) = run.samples.iter().find(|s| s.hp_lost >= run.life as f64) {
+        out.push(Answer { label: "Dies of it on".to_string(), value: day_text(dead.hours), danger: true });
+    }
+    out
+}
+
+/// The ids of the effects the run had, in the order they began.
+pub fn effects_seen(run: &Timeline) -> Vec<String> {
+    let mut order: Vec<String> = vec![];
+    for (id, _, _) in run.traces.iter().flatten() {
+        if !order.contains(id) {
+            order.push(id.clone());
+        }
+    }
+    order
+}
+
 /// When the run reached death, if it did.
 pub fn death(run: &Timeline) -> Option<f64> {
     run.first(|c| c.level == Some(DEATH))
@@ -202,6 +289,45 @@ mod tests {
         assert_eq!(value(&answers, "Parched after"), "5 h");
         assert_eq!(value(&answers, "Weary after"), "16 h");
         assert_eq!(value(&answers, "Exhaustion 1 on"), "not reached");
+    }
+
+    #[test]
+    fn sewer_plague_shows_its_stages_and_its_end_as_answers() {
+        let state = bare();
+        let run = run(&state, &[Step::Apply("sewer_plague", 0.1), Step::Pass(4.0 * 24.0, Activity::Resting)]);
+        let answers = effect_answers(&run, &state.ruleset.rules);
+        assert_eq!(value(&answers, "Feverish at"), "24 h", "it shows after its day of incubation");
+        assert_eq!(value(&answers, "Wasting at"), "64 h");
+        assert_eq!(value(&answers, "Sewer plague gone at"), "4 days");
+    }
+
+    #[test]
+    fn a_chosen_level_chills_a_bare_character_and_a_brazier_keeps_it_off() {
+        let mut state = bare();
+        state.depth = Some(3);
+        let steps = [Step::Pass(6.0, Activity::Walking)];
+        let cold = effect_answers(&run(&state, &steps), &state.ruleset.rules);
+        assert!(cold.iter().any(|a| a.label == "Chilly at"), "{cold:?}");
+        assert!(cold.iter().any(|a| a.label == "Cold at"), "{cold:?}");
+        state.by_fire = true;
+        let warm = effect_answers(&run(&state, &steps), &state.ruleset.rules);
+        assert!(warm.iter().all(|a| a.label != "Chilly at"), "{warm:?}");
+        assert!(warm.iter().any(|a| a.label == "Warmed at"), "{warm:?}");
+        // Comfortable surroundings (no level) bring no cold at all.
+        assert!(effect_answers(&run(&bare(), &steps), &state.ruleset.rules).is_empty());
+    }
+
+    #[test]
+    fn freezing_shows_as_hit_points_lost_and_a_week_of_effects_equals_seven_days() {
+        let mut state = bare();
+        state.depth = Some(8);
+        let week = run(&state, &[Step::Apply("sewer_plague", 0.1), Step::Pass(7.0 * 24.0, Activity::Walking)]);
+        let answers = effect_answers(&week, &state.ruleset.rules);
+        assert_eq!(value(&answers, "Hit points lost"), format!("{} of {}", week.life, week.life), "never more than their life");
+        assert!(value(&answers, "Dies of it on").starts_with("day 1"), "{answers:?}");
+        let days = run(&state, &std::iter::once(Step::Apply("sewer_plague", 0.1)).chain(std::iter::repeat_n(Step::Pass(24.0, Activity::Walking), 7)).collect::<Vec<_>>());
+        assert_eq!(week.lab.effects, days.lab.effects);
+        assert!((week.lab.hp_lost - days.lab.hp_lost).abs() < 1e-9);
     }
 
     #[test]

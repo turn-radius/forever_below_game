@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use fb_character::rules::Rules;
 use fb_character::{Activity, Exhaustion, ExhaustionTimes, Needs};
 
-use crate::character::{Character, DelverMana, DelverNeeds, DelverPoison, DelverRecovery, DelverStamina, Load, activity_for};
+use crate::character::{Character, DelverMana, DelverEffects, DelverNeeds, DelverRecovery, DelverStamina, Load, activity_for};
 use crate::combat::Health;
 use crate::tuning::Tuning;
 use crate::combat::swing::Swing;
@@ -64,7 +64,10 @@ fn step_the_delver(
     tuning: Res<Tuning>,
     input: ActionInput,
     mut last: Local<f64>,
-    mut players: Query<(Entity, &Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana, Option<&mut DelverPoison>, &mut DelverRecovery, Option<&mut Health>), With<Player>>,
+    mut players: Query<(Entity, Option<&Transform>, &Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana, Option<&mut DelverEffects>, &mut DelverRecovery, Option<&mut Health>), With<Player>>,
+    fires: Query<(&Transform, &crate::level::FixedLight), Without<Player>>,
+    level: Option<Res<crate::play::CurrentLevel>>,
+    mut wearing_down: Local<f64>,
     mut commands: Commands,
 ) {
     let now = clock.game_seconds();
@@ -75,12 +78,13 @@ fn step_the_delver(
     let rules_changed = rules.is_changed() && !rules.is_added();
     let changed = character.is_changed() || inventory.is_changed() || rules_changed;
     let mut gear = None;
-    for (player, locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana, poison, mut recovery, health) in &mut players {
+    let mut exposures = None;
+    for (player, at, locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana, effects, mut recovery, health) in &mut players {
         if changed || needs.is_added() {
             let gear = gear.get_or_insert_with(|| character.gear(&inventory));
             // The rates a meter is made with are the defaults', so they are only put on again
             // when the rules change or a new delver is made under rules that are not the defaults.
-            if rules_changed || (needs.is_added() && **rules != *fb_character::rules::defaults()) {
+            if rules_changed || (needs.is_added() && rules.needs != fb_character::rules::defaults().needs) {
                 rules.apply_to(&mut needs.0);
             }
             gear.apply_to(&mut needs.0);
@@ -102,6 +106,13 @@ fn step_the_delver(
         let sprinting = input.pressed(Action::Hurry);
         let activity = delver_activity(locomotion.velocity, sprinting, swinging, *load);
         let (mut n, mut e, mut t) = (needs.0, exhaustion.0, times.0);
+        // Gear's rates and the effects' on them (the cold makes hunger rise faster), put on
+        // afresh each step so an effect that ends takes its share with it.
+        let worn = gear.get_or_insert_with(|| character.gear(&inventory));
+        match effects.as_deref() {
+            Some(on) => on.0.apply_rates(&rules.effects, &mut n, worn),
+            None => fb_character::effect::Effects::default().apply_rates(&rules.effects, &mut n, worn),
+        }
         t.step_with(&rules, &mut n, &mut e, activity, hours, crate::character::modifier(character.constitution()));
         needs.0 = n;
         times.0 = t;
@@ -111,24 +122,64 @@ fn step_the_delver(
         mana.set_if_neq(DelverMana(pool));
         // The level moves a few times in a run, so it is only marked changed when it does.
         exhaustion.set_if_neq(DelverExhaustion(e));
-        // Fed, watered and free of venom, they mend; the venom is read before this step wears it.
+        // Fed, watered and with nothing stopping it (venom does), they mend; the effects are read
+        // before this step wears them.
         if let Some(mut health) = health.filter(|h| !h.is_down()) {
-            let poisoned = poison.as_deref().map_or_else(Default::default, |p| p.0);
-            let recovering = fb_character::recovery::recovers(&n, &poisoned);
+            let stopped = effects.as_deref().is_some_and(|e| e.0.stops_recovery(&rules.effects));
+            let recovering = fb_character::recovery::recovers(&n, stopped);
             let mut next = recovery.0;
             let gained = next.step(hours, tuning.recovery.minutes_per_hit_point as f64, recovering, health.hp, health.max);
             recovery.set_if_neq(DelverRecovery(next));
             if gained > 0 {
                 health.heal(gained);
             }
-        }
-        // Venom wears off by game time, and its component goes with it.
-        if let Some(mut poison) = poison {
-            poison.0.step(hours);
-            if !poison.0.is_active() {
-                commands.entity(player).remove::<DelverPoison>();
+            // Effects that wear the body down (freezing) take hit points by game time, the
+            // fractions kept until they make a whole one.
+            *wearing_down += effects.as_deref().map_or(0.0, |e| e.0.hit_points_per_hour(&rules.effects)) * hours;
+            if *wearing_down >= 1.0 {
+                let lost = wearing_down.floor();
+                *wearing_down -= lost;
+                health.hurt(lost as u32);
             }
         }
+        // Effects run their course by game time under what keeps acting on the delver (a smoky
+        // light in hand), and the component comes on with the first and goes with the last.
+        let exposures = exposures.get_or_insert_with(|| {
+            let around = surroundings(&character, &inventory, &rules, at.map_or(Vec3::NAN, |t| t.translation), &fires, level.as_deref().map_or(1, |l| l.0.depth));
+            crate::exposure::exposures(&inventory, &rules.effects, &around)
+        });
+        match effects {
+            Some(mut effects) => {
+                effects.0.step(&rules.effects, hours, exposures);
+                if effects.0.active.is_empty() {
+                    commands.entity(player).remove::<DelverEffects>();
+                }
+            }
+            None if !exposures.is_empty() => {
+                let mut fresh = fb_character::effect::Effects::default();
+                fresh.step(&rules.effects, hours, exposures);
+                if !fresh.active.is_empty() {
+                    commands.entity(player).insert(DelverEffects(fresh));
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+/// The cold and the fire as they reach a delver standing at `at` on level `depth`: their worn
+/// warmth and any lit flame in hand weighed against their need and the level's chill
+/// ([`fb_character::rules::WarmthRules`]), and whether a brazier's warmth reaches them.
+fn surroundings(character: &Character, inventory: &Inventory, rules: &GameRules, at: Vec3, fires: &Query<(&Transform, &crate::level::FixedLight), Without<Player>>, depth: u32) -> crate::exposure::Surroundings {
+    let warmth = &rules.warmth;
+    let by_fire = fires.iter().any(|(fire, kind)| *kind == crate::level::FixedLight::Brazier && fire.translation.xz().distance(at.xz()) as f64 <= warmth.brazier_reach);
+    let flame = inventory.equipped().iter().any(|(slot, item)| matches!(slot, fb_items::Slot::Mainhand | fb_items::Slot::Offhand) && item.shape.lit() == Some(true));
+    let fire = if by_fire { warmth.brazier } else { 0.0 } + if flame { warmth.held_flame } else { 0.0 };
+    let worn = character.loadout(inventory).warmth().value();
+    crate::exposure::Surroundings {
+        shortfall: warmth.shortfall(character.warmth_need() as f64, depth, worn, fire),
+        by_fire,
+        cold_blooded: character.folk == fb_body::Folk::Lizardfolk,
     }
 }
 
@@ -260,6 +311,9 @@ mod tests {
             .add_plugins((GameClockPlugin, SimulatePlugin));
         run_delve_systems_while_delving(&mut app);
         app.update();
+        // Warm enough that the cold keeps out of tests about other things: a bare delver with
+        // no torch is short of warmth even on the first level.
+        app.world_mut().resource_mut::<GameRules>().0.warmth.comfort = 100.0;
         app.update();
         app
     }
@@ -306,15 +360,34 @@ mod tests {
     }
 
     #[test]
+    fn the_cold_makes_hunger_rise_faster_and_its_share_goes_when_it_does() {
+        let hunger_after = |cold: bool| {
+            let mut app = app();
+            let delver = walker(&mut app);
+            // Exactly at their need, so the cold put on them fades only at its own pace.
+            app.world_mut().resource_mut::<GameRules>().0.warmth.comfort = 6.0;
+            if cold {
+                let mut on = fb_character::effect::Effects::default();
+                on.add(&fb_character::rules::defaults().effects, crate::exposure::COLD, 1.0, None, fb_character::effect::Source::Surroundings);
+                app.world_mut().entity_mut(delver).insert(DelverEffects(on));
+            }
+            run(&mut app, 30);
+            app.world().get::<DelverNeeds>(delver).unwrap().0.hunger.value
+        };
+        let (warm, cold) = (hunger_after(false), hunger_after(true));
+        assert!(cold > warm * 1.2, "the cold made them hungrier: {warm} warm, {cold} cold");
+    }
+
+    #[test]
     fn venom_wears_off_after_a_game_hour_and_its_component_goes() {
         let mut app = app();
         let delver = walker(&mut app);
-        app.world_mut().entity_mut(delver).insert(DelverPoison(fb_character::poison::Poisoned::for_hours(1.0)));
+        app.world_mut().entity_mut(delver).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
         run(&mut app, 150);
-        let half = app.world().get::<DelverPoison>(delver).expect("still poisoned half an hour on").0;
-        assert!((half.hours_left - 0.5).abs() < 0.01, "{half:?}");
+        let half = app.world().get::<DelverEffects>(delver).expect("still poisoned half an hour on").poisoned_hours().expect("poisoned");
+        assert!((half - 0.5).abs() < 0.01, "{half:?}");
         run(&mut app, 151);
-        assert!(app.world().get::<DelverPoison>(delver).is_none(), "worn off after five real minutes");
+        assert!(app.world().get::<DelverEffects>(delver).is_none(), "worn off after five real minutes");
     }
 
     #[test]
@@ -481,7 +554,7 @@ mod tests {
                 0 => entity.get_mut::<DelverNeeds>().unwrap().0.hunger.value = 0.3,
                 1 => entity.get_mut::<DelverNeeds>().unwrap().0.thirst.value = 0.3,
                 _ => {
-                    entity.insert(DelverPoison(fb_character::poison::Poisoned::for_hours(1.0)));
+                    entity.insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
                 }
             }
             run(&mut app, 120);

@@ -4,20 +4,21 @@ use fb_items::{roll_item, stats::{Stat, Stats}, tables};
 fn stat_totals_pinned_across_base_seeds() {
     let test_cases = vec![
         // (base_name, seed, expected_stat_totals). Four changed when the affixes nothing reads
-        // were held back: Shirt and Trousers 12345 roll of Wakefulness, Hood 77 Moth-eaten and
-        // Torch 123 of Plenty in place of a held-back affix. Every total rose by 1 when Speed (1
-        // as usual) joined the stats, and the belts roll among the new slot-bound suffixes.
+        // were held back, and changed back when disease made disease risk read again: Shirt and
+        // Trousers 12345 roll of Lesser Warding, Hood 77 Lice-ridden and Torch 123 Gleaming and
+        // of the Ox. Every total rose by 1 when Speed (1 as usual) joined the stats, and the belts
+        // roll among the new slot-bound suffixes.
         ("Shirt", 1, 17.0),
         ("Shirt", 42, 7.0),
-        ("Shirt", 12345, 6.85),
+        ("Shirt", 12345, 6.5),
         ("Trousers", 1, 17.5),
         ("Trousers", 42, 7.5),
-        ("Trousers", 12345, 7.35),
+        ("Trousers", 12345, 7.0),
         ("Breeches", 1, 16.5),
         ("Breeches", 99, 31.5),
         ("Breeches", 54321, 8.5),
         ("Hood", 1, 16.5),
-        ("Hood", 77, 5.5),
+        ("Hood", 77, 7.0),
         ("Mail coif", 1, 22.0),
         ("Belt", 1, 5.85),
         ("Belt", 99, 7.0),
@@ -26,7 +27,7 @@ fn stat_totals_pinned_across_base_seeds() {
         ("Hand axe", 1, 17.0),
         ("Hand axe", 88, 7.0),
         ("Torch", 1, 36.0),
-        ("Torch", 123, 35.85),
+        ("Torch", 123, 61.0),
         ("Lantern", 1, 47.0),
         ("Lantern", 456, 37.0),
     ];

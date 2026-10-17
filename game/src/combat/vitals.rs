@@ -8,7 +8,7 @@
 //!   (`creatures::behaviour::BlowsAtDelver`); one that misses whooshes past ([`whoosh_past`]).
 //! - Each [`AttackOnDelver`] (a blow that hit) takes its bite, and a poisonous snake's venom after the delver's
 //!   Constitution save ([`super::bite_damage_with`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
-//!   A failed save also poisons the delver for a while ([`DelverPoison`],
+//!   A failed save also poisons the delver for a while ([`DelverEffects`],
 //!   [`fb_character::poison`]), which turns the life orb green ([`super::orbs`]).
 //! - A constrictor's bite also holds the delver ([`Constricted`]), who moves at a quarter of
 //!   their pace until they strike it (or it dies, or they break more than a body's length
@@ -30,7 +30,7 @@ use fb_creatures::Species;
 use super::feedback::{Corpse, Slain, Struck};
 use super::{ArmourClass, Health, RunDice, bite_damage_with, first_level_hit_points_with};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
-use crate::character::{Character, DelverPoison};
+use crate::character::{Character, DelverEffects};
 use crate::creatures::Critter;
 use crate::creatures::behaviour::{AttackOnDelver, MissedDelver, reach};
 use crate::exhaustion::Exhaustion;
@@ -237,28 +237,46 @@ fn take_bites(
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
     critters: Query<&Critter>,
-    mut players: Query<(Entity, &mut Health, Option<&DelverPoison>), With<Player>>,
+    mut players: Query<(Entity, &mut Health, Option<&DelverEffects>), With<Player>>,
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
     rules: Res<crate::rules::GameRules>,
+    inventory: Option<Res<crate::inventory::Inventory>>,
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    // What they wear and how dirty they are make catching a disease likelier.
+    let disease_risk = inventory.as_deref().map_or(1.0, |i| character.gear(i).disease_risk) * (1.0 + character.dirt.max(0.0) as f64);
     for bite in bites.read() {
         if bodies.contains(bite.attacker) {
             continue;
         }
-        for (player, mut health, poison) in &mut players {
+        for (player, mut health, effects) in &mut players {
             if health.is_down() {
                 continue;
             }
             let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
             health.hurt(damage);
-            if let Some(hours) = poisons_for {
-                let mut poison = poison.map_or_else(Default::default, |p| p.0);
-                poison.dose(hours);
-                commands.entity(player).insert(DelverPoison(poison));
+            // A failed save poisons them for the poisoned effect's hours, and a rat's bite may
+            // give them sewer plague, which shows nothing until it has incubated.
+            let by = bite.species.map_or_else(|| "a folk".to_string(), |s| s.stat_block().name.to_string());
+            let mut caught = vec![];
+            if poisons_for.is_some() {
+                caught.push(("poisoned", 1.0));
+            }
+            if let Some(plague) = bite.species.filter(|s| carries_plague(*s)).and_then(|_| rules.effects.get(SEWER_PLAGUE)) {
+                if dice.0.next_f64() < plague.catch_chance_for(disease_risk) {
+                    info!("the bite carries sewer plague");
+                    caught.push((SEWER_PLAGUE, PLAGUE_ONSET));
+                }
+            }
+            if !caught.is_empty() {
+                let mut effects = effects.map_or_else(Default::default, |e| e.0.clone());
+                for (id, intensity) in caught {
+                    effects.add(&rules.effects, id, intensity, None, fb_character::effect::Source::Bite { by: by.clone() });
+                }
+                commands.entity(player).insert(DelverEffects(effects));
             }
             pain.strike(flash_strength(damage as i32, health.max));
             // One dull thud for each blow that lands.
@@ -380,6 +398,17 @@ fn fall(
 /// quickslot bar hang from.
 #[derive(Component, Debug)]
 pub(crate) struct VitalsRoot;
+
+/// The disease a rat's bite can carry ([`carries_plague`]).
+pub const SEWER_PLAGUE: &str = "sewer_plague";
+/// How strong sewer plague is when caught, before it worsens by itself.
+const PLAGUE_ONSET: f64 = 0.1;
+
+/// Whether `species`' bite can carry sewer plague: rats, from the filth they live in (SRD 5.1
+/// p. 199, "Sewer Plague", a disease of rats and filth).
+pub fn carries_plague(species: Species) -> bool {
+    matches!(species, Species::Rat | Species::GiantRat)
+}
 
 /// The dark red edge round the view while badly hurt.
 #[derive(Component, Debug)]
@@ -571,6 +600,28 @@ mod tests {
     }
 
     #[test]
+    fn a_rats_bite_can_carry_sewer_plague_which_hides_until_it_incubates() {
+        let defs = fb_character::effect::shipped();
+        let plague = &defs[SEWER_PLAGUE];
+        // A seed whose first draw after the bite's (none: a flat bite rolls nothing) catches it.
+        let seed = (0..10_000).find(|s| procgen_rng::Mulberry32::new(*s).next_f64() < plague.catch_chance).unwrap();
+        let (mut app, player, snake) = delve();
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = 10;
+        app.world_mut().resource_mut::<RunDice>().0 = procgen_rng::Mulberry32::new(seed);
+        app.update();
+        bite(&mut app, snake, Species::Rat, 1);
+        let effects = app.world().get::<DelverEffects>(player).expect("the bite carried it");
+        let caught = effects.0.get(SEWER_PLAGUE, None).expect("sewer plague");
+        assert!(caught.stage(plague).is_none(), "nothing shows while it incubates");
+        // A snake's bite never carries it.
+        let (mut app, player, snake) = delve();
+        app.world_mut().resource_mut::<RunDice>().0 = procgen_rng::Mulberry32::new(seed);
+        app.update();
+        bite(&mut app, snake, Species::ConstrictorSnake, 1);
+        assert!(app.world().get::<DelverEffects>(player).is_none_or(|e| e.0.get(SEWER_PLAGUE, None).is_none()));
+    }
+
+    #[test]
     fn a_failed_save_against_venom_poisons_the_delver_and_a_good_one_does_not() {
         // Seeds whose first d20, the save, is a 1 (fails whatever the CON) and a 20 (saves).
         let seed_for = |natural| (0..10_000).find(|s| procgen_rng::Mulberry32::new(*s).int(1, 20) == natural).unwrap();
@@ -580,8 +631,8 @@ mod tests {
             app.update();
             app.world_mut().write_message(AttackOnDelver { attacker: snake, species: Some(Species::PoisonousSnake), damage: 1, poison: 4, attacker_pos: Vec2::ZERO });
             app.update();
-            let poison = app.world().get::<DelverPoison>(player).map(|p| p.0);
-            assert_eq!(poison, poisoned.then(|| fb_character::poison::Poisoned::for_hours(fb_character::poison::VENOM_POISONED_HOURS)), "a natural {natural}");
+            let poison = app.world().get::<DelverEffects>(player).and_then(|e| e.poisoned_hours());
+            assert_eq!(poison, poisoned.then_some(fb_character::poison::VENOM_POISONED_HOURS), "a natural {natural}");
         }
     }
 
