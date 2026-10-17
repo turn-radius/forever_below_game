@@ -333,10 +333,15 @@ pub fn wear_abilities(inventory: Option<Res<Inventory>>, character: Option<ResMu
 
 /// Rolls the delver from `seed`, or as one of the folk `FB_FOLK` names.
 pub fn character_for(seed: u32) -> Character {
-    match std::env::var("FB_FOLK").ok().and_then(|f| Folk::parse(&f)) {
+    let mut character = match std::env::var("FB_FOLK").ok().and_then(|f| Folk::parse(&f)) {
         Some(folk) => Character::roll_folk(folk, seed),
         None => Character::roll(seed),
+    };
+    // `FB_CLASS=ranger` picks the class, for trying a class's kit with `FB_DEBUG_KIT`.
+    if let Some(class) = std::env::var("FB_CLASS").ok().and_then(|c| Class::ALL.into_iter().find(|k| k.outfit_key().eq_ignore_ascii_case(c.trim()))) {
+        character.class = class;
     }
+    character
 }
 
 /// The delver's load band, kept on the [`Player`](crate::play::Player) so walking need not

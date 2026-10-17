@@ -416,7 +416,7 @@ mod tests {
             })
             .collect();
         // A hundred frames of the whole level, each person walking.
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_seconds();
         let mut sum = 0.0;
         for frame in 0..100 {
             for (gait, cycle) in &people {
@@ -424,7 +424,7 @@ mod tests {
                 sum += pose.offset[0][1];
             }
         }
-        let per_frame = start.elapsed().as_secs_f64() / 100.0;
+        let per_frame = (crate::thread_cpu_seconds() - start) / 100.0;
         assert!(sum.is_finite());
         // A sixtieth of a second is 16 ms; posing the level should take a small part of one frame
         // (a hundredth of it, with the optimisations tests get).

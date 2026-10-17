@@ -139,7 +139,7 @@ type Ready = (With<Player>, Without<Swing>);
 /// swinging.
 /// The swing heads for the creature in reach, if there is one ([`toward_target`]).
 #[allow(clippy::too_many_arguments)]
-fn start_swing(
+pub(super) fn start_swing(
     mut commands: Commands,
     input: ActionInput,
     cursor: Option<Single<&CursorOptions, With<PrimaryWindow>>>,
@@ -148,9 +148,9 @@ fn start_swing(
     sound: Option<Res<SwingSound>>,
     settings: Option<Res<GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
+    marksman: Option<Res<super::shoot::Marksman>>,
     mut dice: ResMut<RunDice>,
-    mut last: Local<Option<Strike>>,
-    mut armed: Local<bool>,
+    (mut last, mut armed): (Local<Option<Strike>>, Local<bool>),
     (practice, rules): (Option<Res<SwingPractice>>, Option<Res<crate::rules::GameRules>>),
     mut toasts: crate::inventory::Toasts,
     mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina), Ready>,
@@ -173,6 +173,10 @@ fn start_swing(
     }
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
     let practising = practice.repeat || crate::launch::env_set("FB_SWING");
+    // A bow or crossbow with something to shoot is shot, not swung (`super::shoot`).
+    if !practising && super::shoot::shoots(&inventory, marksman.as_deref()) {
+        return;
+    }
     for (player, at, health, mut stamina) in &mut players {
         if health.is_some_and(Health::is_down) {
             continue;
@@ -227,6 +231,54 @@ impl Strikeable<'_, '_> {
         let creatures = self.creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes));
         let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target { entity, centre: t.translation.xz(), radius: denizen.radius });
         creatures.chain(folk).collect()
+    }
+
+    /// Whether a living creature's body is within `reach` of `at` (world `(x, z)`): a hostile
+    /// close enough to give a ranged attack disadvantage (SRD 5.1 p. 95).
+    pub fn hostile_within(&self, at: Vec2, reach: f32) -> bool {
+        self.creatures.iter().any(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes).iter().any(|b| b.centre.distance(at) - b.radius <= reach))
+    }
+
+    /// Where segment `a` to `b` first meets a living body, as the share along it and whose body:
+    /// a creature's, by its bones' spheres as they are posed, or a folk's, by spheres up the
+    /// height of the circle they stand in. `thick` is the shaft's own thickness. Bodies in
+    /// `skip` are passed through.
+    pub fn first_body_hit(&self, a: Vec3, b: Vec3, thick: f32, skip: &[Entity]) -> Option<(f32, Entity)> {
+        let mid = (a + b) * 0.5;
+        let half = a.distance(b) * 0.5;
+        let mut best: Option<(f32, Entity)> = None;
+        let mut consider = |t: Option<f32>, entity: Entity| {
+            if let Some(t) = t
+                && best.is_none_or(|(b, _)| t < b)
+            {
+                best = Some((t, entity));
+            }
+        };
+        for (entity, critter, root, bones) in self.creatures.iter().filter(|(e, ..)| !skip.contains(e)) {
+            if root.translation.distance(mid) > half + 40.0 {
+                continue;
+            }
+            let spheres: Vec<(Vec3, f32)> = bones.iter().flat_map(|b| b.0.iter()).filter_map(|&bone| self.shapes.get(bone).ok()).flat_map(|(at, shape)| shape.spheres(at)).collect();
+            if spheres.is_empty() {
+                let r = body_radius(critter);
+                consider(super::shoot::segment_sphere(a, b, root.translation + Vec3::Y * r, r + thick), entity);
+            }
+            for (centre, radius) in spheres {
+                consider(super::shoot::segment_sphere(a, b, centre, radius + thick), entity);
+            }
+        }
+        for (entity, denizen, root, _) in self.folk.iter().filter(|(e, ..)| !skip.contains(e)) {
+            if root.translation.distance(mid) > half + denizen.max.y + denizen.radius {
+                continue;
+            }
+            let radius = denizen.radius.max(0.5);
+            let count = (denizen.max.y / radius).ceil().max(1.0) as u32;
+            for i in 0..=count {
+                let y = denizen.max.y * i as f32 / count as f32;
+                consider(super::shoot::segment_sphere(a, b, root.translation + Vec3::Y * y, radius + thick), entity);
+            }
+        }
+        best
     }
 
     /// The points of `target`'s body a blow might head for: a creature's bones' spheres where
@@ -564,7 +616,7 @@ pub fn lean(kind: SwingKind, t: f32) -> f32 {
 }
 
 /// Swings the main hand's item in the view, about its fist.
-fn swing_held(swings: Query<&Swing, With<Player>>, mut held: Query<(&HeldItem, &mut Transform, &ChildOf)>, view_models: Query<(), With<ViewModelCamera>>) {
+pub(super) fn swing_held(swings: Query<&Swing, With<Player>>, mut held: Query<(&HeldItem, &mut Transform, &ChildOf)>, view_models: Query<(), With<ViewModelCamera>>) {
     let Some(swing) = swings.iter().next() else { return };
     let Some(hold) = swing.weapon.hold else { return };
     let hold = crate::view_model::view_hold(hold, Side::Right);

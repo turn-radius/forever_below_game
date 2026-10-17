@@ -63,6 +63,15 @@ fn turn(spin: f32, roll: f32, tip: f32, yaw: f32) -> Quat {
     Quat::from_rotation_y(yaw) * Quat::from_rotation_x(tip) * Quat::from_rotation_z(roll) * Quat::from_rotation_y(spin)
 }
 
+/// How far ahead of the eye a ranged weapon in view is aimed to cross the line of sight, view
+/// units: the crosshair at about where shots land in a room.
+pub const AIM_DISTANCE: f32 = 300.0;
+
+/// The turn that points straight ahead (-Z) from `from` to the crosshair at [`AIM_DISTANCE`].
+pub fn aimed_from(from: Vec3) -> Quat {
+    Quat::from_rotation_arc(Vec3::NEG_Z, (Vec3::new(0.0, 0.0, -AIM_DISTANCE) - from).normalize())
+}
+
 /// Where `hold` sits in the view for the hand on `side`.
 ///
 /// - One-handed weapons are held low on the right, standing out of the fist with the head or
@@ -75,7 +84,8 @@ fn turn(spin: f32, roll: f32, tip: f32, yaw: f32) -> Quat {
 ///   face out toward that edge and turned a little forward, so its back is seen edge-on.
 /// - A torch stands low, leaning in and away, as the view model always held it; a lantern
 ///   hangs plumb.
-/// - A crossbow is carried with its stock along the forearm, pointing ahead.
+/// - A crossbow is shouldered low on the right: its butt (not the grip) at `fist`, its stock
+///   pointing at the crosshair (the turn is set in [`held_in_view`], not here).
 pub fn view_hold(hold: Hold, side: Side) -> ViewHold {
     const SPIN: f32 = 0.7;
     let right = match hold {
@@ -85,7 +95,7 @@ pub fn view_hold(hold: Hold, side: Side) -> ViewHold {
         Hold::Shield => ViewHold { fist: Vec3::new(6.25, -5.28, -11.0), turn: turn(0.0, 0.0, 0.0, 0.15) },
         Hold::Torch => ViewHold { fist: Vec3::new(5.0, -5.83, -9.6), turn: turn(0.0, 0.22, -0.32, 0.0) },
         Hold::Lantern => ViewHold { fist: Vec3::new(5.0, 0.56, -11.0), turn: Quat::IDENTITY },
-        Hold::Crossbow => ViewHold { fist: Vec3::new(4.44, -5.28, -12.5), turn: turn(0.0, 0.0, 1.3, 0.0) },
+        Hold::Crossbow => ViewHold { fist: Vec3::new(1.3, -2.3, -3.2), turn: Quat::IDENTITY },
     };
     if side == Side::Left { right.mirrored() } else { right }
 }
@@ -134,9 +144,19 @@ pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>, sc
             // scale. Thinning narrows a handle about its axis, so the grip sits at the same
             // point on the item as rolled.
             let fist = Vec3::from_array(hands.body.grip(side).origin);
-            let grip = placed.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale;
+            let grip = match fit.hold {
+                // Placed by its butt, at the shoulder.
+                Hold::Crossbow => Vec3::ZERO,
+                _ => placed.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale,
+            };
             let at = view_hold(fit.hold, side);
-            let rotation = at.turn * BODY_TO_VIEW * placed;
+            let rotation = match fit.hold {
+                // Shouldered and aimed: the stock level, turned in toward the line of sight,
+                // the deck up, whatever the doll's grip. Level rather than at the crosshair, so
+                // the prod stays out of the middle of the view.
+                Hold::Crossbow => aimed_from(at.fist * Vec3::new(1.0, 0.0, 1.0)) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                _ => at.turn * BODY_TO_VIEW * placed,
+            };
             let transform = Transform { translation: at.fist - rotation * grip * scale, rotation, scale: Vec3::splat(scale) };
             Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform, point: point_of(item, grip), grip, fist: at.fist })
         })

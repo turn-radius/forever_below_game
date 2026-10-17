@@ -186,5 +186,14 @@
    "Bandages",
    "Spare torch"
   ]
+ ],
+ [
+  "Ammunition",
+  [
+   "Arrow",
+   "Bolt",
+   "Quiver",
+   "Bolt case"
+  ]
  ]
 ]

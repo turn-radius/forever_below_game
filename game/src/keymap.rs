@@ -26,7 +26,8 @@ pub enum Action {
     Look,
     /// Takes the mouse back for looking round, in the level.
     TakeMouse,
-    /// Swings what the main hand holds.
+    /// Swings what the main hand holds; with a bow, draws it while held and looses on release;
+    /// with a crossbow, fires it.
     Attack,
     /// Holds a blocking guard. No gameplay yet.
     Block,
@@ -37,11 +38,11 @@ pub enum Action {
     Primary,
     /// Equips the item under the crosshair straight from the floor.
     Secondary,
-    /// No gameplay yet.
+    /// With a crossbow in hand and nothing aimed at, spans and loads it from the bolt case.
     Tertiary,
     /// No gameplay yet.
     Special,
-    /// Compares the item under the crosshair or mouse with what is worn. No gameplay yet.
+    /// Held over an item that can be worn, shows what is worn in its place beside its card.
     Compare,
     /// Lights or puts out the carried light (with Shift, the hip lantern), or in the inventory
     /// the light under the mouse.
@@ -292,14 +293,14 @@ impl Default for Keymap {
                 bind(Action::Jump, "Jump", Group::Moving, &[Key(KeyCode::Space)]),
                 bind(Action::Look, "Look round", Group::Moving, &[Input::MouseMotion]),
                 bind(Action::TakeMouse, "Take the mouse back", Group::Moving, &[Mouse(MouseButton::Left)]),
-                bind(Action::Attack, "Swing what you hold", Group::Fighting, &[Mouse(MouseButton::Left)]),
+                bind(Action::Attack, "Swing what you hold, or draw and loose a bow, or fire a crossbow", Group::Fighting, &[Mouse(MouseButton::Left)]),
                 bind(Action::Block, "Block", Group::Fighting, &[Mouse(MouseButton::Right)]).hold(),
                 bind(Action::Stab, "Stab", Group::Fighting, &[Mouse(MouseButton::Left)]).hold(),
                 bind(Action::Primary, "Primary action", Group::Items, &[Key(KeyCode::KeyF)]).in_contexts(ITEMS),
                 bind(Action::Secondary, "Secondary action", Group::Items, &[Key(KeyCode::KeyG)]).in_contexts(ITEMS),
                 bind(Action::Tertiary, "Tertiary action", Group::Items, &[Key(KeyCode::KeyR)]).in_contexts(ITEMS),
                 bind(Action::Special, "Special action", Group::Items, &[Key(KeyCode::KeyT)]).in_contexts(ITEMS),
-                bind(Action::Compare, "Compare", Group::Items, &[Key(KeyCode::AltLeft), Key(KeyCode::AltRight)]).in_contexts(ITEMS),
+                bind(Action::Compare, "Compare with what you wear (hold over an item)", Group::Items, &[Key(KeyCode::AltLeft), Key(KeyCode::AltRight)]).in_contexts(ITEMS),
                 bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]).in_contexts(ITEMS),
                 bind(
                     Action::Quickslot,

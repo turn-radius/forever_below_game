@@ -452,11 +452,11 @@ mod tests {
     #[test]
     fn a_thousand_fights_are_quick() {
         let state = rat();
-        let started = std::time::Instant::now();
+        let started = crate::thread_cpu_seconds();
         fights(&state, &state.ruleset.rules, 1, THOUSAND);
-        let took = started.elapsed();
-        eprintln!("1,000 fights took {took:?}");
-        assert!(took < std::time::Duration::from_millis(1500), "{took:?}");
+        let took = crate::thread_cpu_seconds() - started;
+        eprintln!("1,000 fights took {:.3} s of CPU", took);
+        assert!(took < 1.5, "{took:.3} s");
     }
 
     #[test]

@@ -27,7 +27,7 @@ docs/                design, rendering, items, body
 - **One item generator.** The `armory` crate makes the shape of every item. `fb_items` adds rarity, affixes, stats and history on top. Game code never builds its own one-off item shapes.
 - **Units: 1 world unit = 10 cm**, as in the prototypes. A human is about 17 units tall.
 - **Bevy 0.20.** Its APIs change every release. Check the 0.20 docs and migration guides (docs.rs/bevy/0.20, bevy.org) and do not rely on memory of older versions. Custom shaders are WESL (`.wesl`), since the old WGSL preprocessor dialect was removed in 0.20.
-- Tests: `cargo test --workspace` or `cargo nextest run --workspace` for faster parallel execution. Twelve slow fitting sweeps are `#[ignore]`, each with a default-run `_smoke` twin; run the sweeps (`cargo test --workspace -- --ignored`) before merging fitting changes. Run the game: `cargo run -p forever_below`.
+- Tests: `tools/test.sh` runs the whole suite, each test binary once and all of them side by side (arguments pass through: a name filter, `--include-ignored`). Don't use `cargo nextest` on the work machine: it starts a process per test, and its endpoint security vets every launch in one queue (about 0.27 s each), so 1,700 tests wait minutes to start. `cargo test -p <crate>` is fine for one crate. Slow sweeps are `#[ignore]`, each with a default-run `_smoke` twin; run them (`tools/test.sh --include-ignored`) before merging fitting changes. The run ends with its five slowest binaries and warns past two minutes: keep a new test out of that list, and time anything with the thread's CPU time, not the wall clock. Run the game: `cargo run -p forever_below`.
 
 ## Game decisions already made
 

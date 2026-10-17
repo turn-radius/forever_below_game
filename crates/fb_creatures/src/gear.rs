@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn a_held_weapon_sits_in_the_closed_fingers_smoke() {
-        for seed in 0..16 {
+        for seed in 0..6 {
             check_grips(seed);
         }
     }
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn gear_sits_off_the_bones_and_not_far_from_them_smoke() {
         let (mut far, mut worst, mut worst_end) = (0.0, 0.0, 0.0);
-        for seed in 0..16 {
+        for seed in 0..6 {
             check_fit(seed, &mut far, &mut worst, &mut worst_end);
         }
         eprintln!("farthest from a bone {far}, most inside {worst}, most in a hand or foot {worst_end}");
@@ -781,7 +781,7 @@ mod tests {
     #[test]
     fn cuffs_and_hems_close_in_on_the_bones_smoke() {
         let (mut cuff, mut hem) = (0.0, 0.0);
-        for seed in 0..16 {
+        for seed in 0..6 {
             check_openings(seed, &mut cuff, &mut hem);
         }
         eprintln!("widest cuff {cuff} forearm bones, widest hem {hem} skull half widths");
@@ -866,7 +866,7 @@ mod tests {
     #[test]
     fn walking_and_swinging_leave_no_gap_at_a_cuff_or_a_boot_smoke() {
         let (mut cuff, mut shaft) = (0.0, 0.0);
-        for seed in 0..16 {
+        for seed in 0..6 {
             check_seams(seed, &mut cuff, &mut shaft);
         }
         eprintln!("widest gap at a cuff {cuff}, at a boot {shaft}");
