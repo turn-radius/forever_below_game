@@ -26,6 +26,7 @@ use fb_items::Item;
 
 use crate::keymap::Action;
 use crate::inventory::{Inventory, ItemId, Location};
+use crate::keymap::{Action, Keymap};
 
 /// The four action slots, in the order they are shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -129,6 +130,24 @@ impl Verbs {
     pub fn available(&self) -> Vec<(Slot, Verb)> {
         Slot::ALL.into_iter().filter_map(|slot| Some((slot, self.get(slot)?))).collect()
     }
+}
+
+/// The key and verb pairs a prompt or card shows for `verbs`, in order Primary, Secondary,
+/// Tertiary, Special, then Compare: ("F", "Take"). A key comes from the keymap, the first input
+/// of the slot's action, so a rebind changes it. Verbs that cannot be done, and actions with no
+/// key, are left out.
+pub fn key_actions(keymap: &Keymap, verbs: &Verbs) -> Vec<(String, &'static str)> {
+    let key = |action| keymap.inputs(action).first().map(|input| input.label());
+    let mut pairs: Vec<(String, &'static str)> = verbs.available().into_iter().filter_map(|(slot, verb)| Some((key(slot.action())?, verb.name()))).collect();
+    if verbs.compare {
+        pairs.extend(key(Action::Compare).map(|k| (k, "Compare")));
+    }
+    pairs
+}
+
+/// [`key_actions`] as one line: "F Take \u{b7} G Equip \u{b7} Alt Compare". Empty if there are none.
+pub fn key_line(keymap: &Keymap, verbs: &Verbs) -> String {
+    key_actions(keymap, verbs).iter().map(|(key, name)| format!("{key} {name}")).collect::<Vec<_>>().join(" \u{b7} ")
 }
 
 /// Where an item is, as far as its verbs go.
@@ -252,6 +271,7 @@ pub fn item_target(inventory: &Inventory, id: ItemId, on_floor: bool) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::input::keyboard::KeyCode;
     use fb_items::roll_item;
 
     fn target(item: &Item, place: Place) -> Target {
@@ -358,6 +378,21 @@ mod tests {
         }
         assert_eq!(Slot::of(Action::Compare), None);
         assert_eq!(Slot::of(Action::Sprint), None);
+    }
+
+    #[test]
+    fn a_floor_dagger_lists_its_keys() {
+        let line = |v| key_line(&Keymap::default(), &v);
+        assert_eq!(line(carried("Dagger", Place::Ground)), "F Take \u{b7} G Equip \u{b7} Alt Compare");
+        assert_eq!(line(carried("Bread", Place::Carried)), "F Eat");
+        assert_eq!(line(Verbs::default()), "");
+    }
+
+    #[test]
+    fn a_rebound_key_changes_the_line() {
+        let mut keymap = Keymap::default();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![crate::keymap::Input::Key(KeyCode::KeyE)];
+        assert_eq!(key_line(&keymap, &carried("Dagger", Place::Ground)), "E Take \u{b7} G Equip \u{b7} Alt Compare");
     }
 
     #[test]

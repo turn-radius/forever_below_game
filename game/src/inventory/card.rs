@@ -38,8 +38,11 @@ pub struct CardText {
     pub stats: Vec<String>,
     /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
     pub light: Option<String>,
-    /// What F does with food or drink: "F eats it \u{b7} eases hunger 40%".
+    /// What food or drink eases: "Eases hunger 40%".
     pub consume: Option<String>,
+    /// The keys and verbs at the foot, from [`crate::interact::key_actions`]: ("F", "Take").
+    /// [`card_text`] leaves it empty; [`show_card`] fills it from the keymap and the item's place.
+    pub actions: Vec<(String, &'static str)>,
     /// A legendary's three lines of history.
     pub history: Vec<String>,
 }
@@ -66,18 +69,17 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
     Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
 }
 
-/// What F does with food or drink, and how much it eases: "F eats it \u{b7} eases hunger 40%".
-/// `None` for anything that is not eaten or drunk.
+/// How much food or drink eases: "Eases hunger 40%". `None` for anything that is not eaten or
+/// drunk, or eases nothing; the key that eats it is in the card's actions.
 pub fn consume_line(item: &Item) -> Option<String> {
-    let how = item.consume()?;
+    item.consume()?;
     let p = item.provision()?;
-    let mut line = format!("F {}s it", how.past());
-    for (meter, by) in [("hunger", p.nutrition), ("thirst", p.water)] {
-        if by > 0.0 {
-            line.push_str(&format!(" \u{b7} eases {meter} {}%", (by * 100.0).round()));
-        }
-    }
-    Some(line)
+    let eases: Vec<String> = [("hunger", p.nutrition), ("thirst", p.water)]
+        .into_iter()
+        .filter(|(_, by)| *by > 0.0)
+        .map(|(meter, by)| format!("{meter} {}%", (by * 100.0).round()))
+        .collect();
+    (!eases.is_empty()).then(|| format!("Eases {}", eases.join(" \u{b7} ")))
 }
 
 /// Burning time left as the card writes it, in game hours and minutes: "Fuel 0:42".
@@ -153,6 +155,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         stats: stat_lines(s),
         light: light_line(&item.shape),
         consume: consume_line(item),
+        actions: Vec::new(),
         history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()),
     }
 }
@@ -329,6 +332,17 @@ fn fill_card(commands: &mut Commands, card: Entity, item: &Item, text: &CardText
                 if let Some(consume) = &text.consume {
                     info.spawn((Text::new(consume.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
                 }
+                if !text.actions.is_empty() {
+                    info.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(6), margin: UiRect::top(px(2)), ..default() }).with_children(|row| {
+                        for (n, (key, name)) in text.actions.iter().enumerate() {
+                            let sep = if n == 0 { "" } else { "\u{b7} " };
+                            row.spawn((Text::new(format!("{sep}{key} ")), UiFonts::style(&fonts.mono, 12.0, GOLD))).with_child((
+                                TextSpan::new(*name),
+                                UiFonts::style(&fonts.body_medium, 14.0, INK),
+                            ));
+                        }
+                    });
+                }
                 if !text.history.is_empty() {
                     info.spawn((
                         Node {
@@ -395,6 +409,7 @@ pub fn show_card(
     floor: Query<&crate::carry::FloorItem>,
     containers: Query<&crate::props::Container>,
     inventory: Res<Inventory>,
+    keymap: Option<Res<crate::keymap::Keymap>>,
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
@@ -416,7 +431,13 @@ pub fn show_card(
         };
         if *shown != Some(id) || inventory.is_changed() {
             let item = inventory.item(id).expect("checked above");
-            fill_card(&mut commands, card, item, &card_text(item, Some((&inventory, id))), &fonts, &mut icons);
+            let mut text = card_text(item, Some((&inventory, id)));
+            // Under the crosshair an item is in the level; on the screen it is carried or worn.
+            if let Some(target) = crate::interact::item_target(&inventory, id, matches!(anchor, CardAnchor::Crosshair)) {
+                let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
+                text.actions = crate::interact::key_actions(&keymap.as_deref().cloned().unwrap_or_default(), &verbs);
+            }
+            fill_card(&mut commands, card, item, &text, &fonts, &mut icons);
             *shown = Some(id);
             *visibility = Visibility::Hidden;
             continue;
@@ -551,12 +572,27 @@ mod tests {
     }
 
     #[test]
-    fn food_and_drink_cards_say_what_u_does() {
+    fn food_and_drink_cards_say_what_they_ease() {
         let line = |base: &str| consume_line(&fb_items::roll_item(base, 3).unwrap());
-        assert_eq!(line("Bread").unwrap(), "F eats it \u{b7} eases hunger 40%");
-        assert_eq!(line("Tankard").unwrap(), "F drinks it \u{b7} eases thirst 50%");
-        assert_eq!(line("Healing draught").unwrap(), "F drinks it");
+        assert_eq!(line("Bread").unwrap(), "Eases hunger 40%");
+        assert_eq!(line("Tankard").unwrap(), "Eases thirst 50%");
+        assert_eq!(line("Healing draught"), None);
         assert_eq!(line("Torch"), None);
+    }
+
+    #[test]
+    fn the_foot_of_a_card_lists_its_keys() {
+        use crate::interact::{Delver, key_line, verbs_for};
+        let mut inventory = Inventory::default();
+        let dagger = inventory.add(fb_items::roll_item("Dagger", 7).unwrap());
+        let bread = inventory.add(fb_items::roll_item("Bread", 3).unwrap());
+        let keymap = crate::keymap::Keymap::default();
+        let line = |id, floor| {
+            let target = crate::interact::item_target(&inventory, id, floor).unwrap();
+            key_line(&keymap, &verbs_for(&target, &Delver::default()))
+        };
+        assert_eq!(line(dagger, true), "F Take \u{b7} G Equip \u{b7} Alt Compare");
+        assert_eq!(line(bread, false), "F Eat");
     }
 
     #[test]
