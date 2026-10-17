@@ -119,3 +119,7 @@ oggenc -q 6 -o game/assets/audio/heal.ogg /tmp/heal/heal.wav
 ```
 
 Bevy loads assets from `game/assets/` under `cargo run` (it uses `CARGO_MANIFEST_DIR`). To run the binary directly, set `BEVY_ASSET_ROOT=game`.
+
+**Running the tests**: `tools/test.sh` builds every test target once, then runs each test binary in its own process, all at the same time, each running its tests on threads. Anything after it goes to every binary: `tools/test.sh rarity` runs tests whose names contain "rarity", and `tools/test.sh --include-ignored` adds the slow sweeps. It prints one line per binary with its count and time, the failures in full, and names any binary over the budget (`FB_TEST_BUDGET`, 60 s by default).
+
+It exists because on the work machine every process launch waits in one queue for its endpoint security check (about 0.27 s, even for `/usr/bin/true`). `cargo nextest` starts a process per test, so 1,727 tests spent about 8 minutes waiting to start; one process per binary takes a few seconds of that.
