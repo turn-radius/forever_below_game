@@ -101,6 +101,17 @@ pub enum Input {
 }
 
 impl Input {
+    /// The input, and for a shift, ctrl or alt key the one on the other side as well: they
+    /// share a label, so they are bound together.
+    pub fn sides(self) -> Vec<Input> {
+        match self {
+            Input::Key(KeyCode::ShiftLeft | KeyCode::ShiftRight) => vec![Input::Key(KeyCode::ShiftLeft), Input::Key(KeyCode::ShiftRight)],
+            Input::Key(KeyCode::ControlLeft | KeyCode::ControlRight) => vec![Input::Key(KeyCode::ControlLeft), Input::Key(KeyCode::ControlRight)],
+            Input::Key(KeyCode::AltLeft | KeyCode::AltRight) => vec![Input::Key(KeyCode::AltLeft), Input::Key(KeyCode::AltRight)],
+            other => vec![other],
+        }
+    }
+
     /// What the key or button is called on screen: "W", "Shift", "Esc", "Right click".
     pub fn label(self) -> String {
         match self {
@@ -165,6 +176,11 @@ impl Context {
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ActiveContext(pub Context);
 
+/// Set while the options menu waits for the key or button to bind. Every action reads as not
+/// pressed meanwhile ([`ActionInput`]), so the key being captured does nothing else.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputCapture(pub bool);
+
 /// How a binding fires.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PressType {
@@ -220,6 +236,20 @@ impl Binding {
         self.contexts.iter().any(|c| other.contexts.contains(c))
     }
 
+    /// The inputs grouped by label, in order: both shift keys are one slot, as the menu shows
+    /// them. A binding has as many slots as it has distinct labels.
+    pub fn slots(&self) -> Vec<Vec<Input>> {
+        let mut slots: Vec<(String, Vec<Input>)> = Vec::new();
+        for &input in &self.inputs {
+            let label = input.label();
+            match slots.iter_mut().find(|(l, _)| *l == label) {
+                Some((_, inputs)) => inputs.push(input),
+                None => slots.push((label, vec![input])),
+            }
+        }
+        slots.into_iter().map(|(_, inputs)| inputs).collect()
+    }
+
     /// The inputs' labels, each once ("Shift" for both shift keys). A run of digit keys, as
     /// the quickslots', is one label: "1 to 0".
     pub fn labels(&self) -> Vec<String> {
@@ -241,7 +271,7 @@ impl Binding {
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct Keymap {
     pub bindings: Vec<Binding>,
-    /// Crouch held or toggled. The menu offers the choice later.
+    /// Crouch held or toggled. The options menu offers the choice.
     pub crouch: CrouchMode,
 }
 
@@ -338,6 +368,116 @@ impl Keymap {
             .filter(|b| b.press == own.press && ![action, b.action].contains(&Action::TakeMouse))
             .map(|b| b.action)
             .next()
+    }
+
+    /// Every action the options menu treats as clashing with `action` on `input` (or on the
+    /// other side of a modifier, [`Input::sides`]): those of [`Keymap::conflicts`], and also a
+    /// Press and a Hold of different actions on one input (Jump on right click, which Block
+    /// holds). The game allows that only for the designed pair, Attack and Stab, and a player
+    /// rebinding keys should not end up with two actions on one key by accident.
+    pub fn clash_all(&self, action: Action, input: Input) -> Vec<Action> {
+        let Some(own) = self.binding(action) else { return Vec::new() };
+        let sides = input.sides();
+        self.bindings
+            .iter()
+            .filter(|b| b.action != action && b.inputs.iter().any(|i| sides.contains(i)) && b.overlaps(own))
+            .filter(|b| ![action, b.action].contains(&Action::TakeMouse))
+            .filter(|b| !([action, b.action].contains(&Action::Attack) && [action, b.action].contains(&Action::Stab)))
+            .map(|b| b.action)
+            .collect()
+    }
+
+    /// The first of [`Keymap::clash_all`].
+    pub fn clash(&self, action: Action, input: Input) -> Option<Action> {
+        self.clash_all(action, input).into_iter().next()
+    }
+
+    /// Binds `input`, and the other side of it if it is a modifier, to `action`'s slot number
+    /// `slot` (see [`Binding::slots`]), in place of what the slot had; a slot past the last
+    /// adds one.
+    pub fn set_slot(&mut self, action: Action, slot: usize, input: Input) {
+        let Some(binding) = self.bindings.iter_mut().find(|b| b.action == action) else { return };
+        let slots = binding.slots();
+        let mut inputs: Vec<Input> = Vec::new();
+        for (i, own) in slots.iter().enumerate() {
+            if i == slot {
+                inputs.extend(input.sides());
+            } else {
+                inputs.extend(own.iter().copied());
+            }
+        }
+        if slot >= slots.len() {
+            inputs.extend(input.sides());
+        }
+        binding.inputs = inputs;
+    }
+
+    /// Exchanges two of `action`'s slots, which only changes the order they are listed in.
+    pub fn exchange_slots(&mut self, action: Action, a: usize, b: usize) {
+        let Some(binding) = self.bindings.iter_mut().find(|x| x.action == action) else { return };
+        let mut slots = binding.slots();
+        if a < slots.len() && b < slots.len() {
+            slots.swap(a, b);
+            binding.inputs = slots.into_iter().flatten().collect();
+        }
+    }
+
+    /// Binds `input` to `action`'s slot, and gives the slot's old inputs to `other`, which had
+    /// `input`: all of `other`'s slot that held it, both shift keys if it was one.
+    pub fn swap(&mut self, action: Action, slot: usize, input: Input, other: Action) {
+        let old = self.binding(action).and_then(|b| b.slots().get(slot).cloned()).unwrap_or_default();
+        self.set_slot(action, slot, input);
+        let sides = input.sides();
+        if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == other) {
+            let mut inputs: Vec<Input> = Vec::new();
+            for slot in binding.slots() {
+                for next in if slot.iter().any(|i| sides.contains(i)) { old.clone() } else { slot } {
+                    if !inputs.contains(&next) {
+                        inputs.push(next);
+                    }
+                }
+            }
+            binding.inputs = inputs;
+        }
+    }
+
+    /// Whether [`Keymap::swap`] would leave no two actions on one input: `input` clashes only
+    /// with `other`, `other` is left with a key, and neither action clashes with anything in
+    /// any of its contexts afterwards.
+    pub fn can_swap(&self, action: Action, slot: usize, input: Input, other: Action) -> bool {
+        if self.clash_all(action, input) != [other] {
+            return false;
+        }
+        let mut after = self.clone();
+        after.swap(action, slot, input, other);
+        !after.inputs(other).is_empty() && [action, other].iter().all(|&a| after.inputs(a).iter().all(|&i| after.clash_all(a, i).is_empty()))
+    }
+
+    /// Puts `action` back on its default inputs. An action using one of them meanwhile is put
+    /// back on its own defaults too, and so on, so no two end up on one key.
+    pub fn reset(&mut self, action: Action) {
+        let defaults = Keymap::default();
+        let mut queue = vec![action];
+        let mut done: Vec<Action> = Vec::new();
+        while let Some(next) = queue.pop() {
+            if done.contains(&next) {
+                continue;
+            }
+            done.push(next);
+            let Some(wanted) = defaults.binding(next) else { continue };
+            if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == next) {
+                binding.inputs = wanted.inputs.clone();
+            }
+            for &input in &wanted.inputs {
+                queue.extend(self.clash_all(next, input));
+            }
+        }
+    }
+
+    /// Every binding back to its default. The crouch mode is not a key and stays.
+    pub fn reset_all(&mut self) {
+        let crouch = self.crouch;
+        *self = Keymap { crouch, ..Keymap::default() };
     }
 
     /// The bindings listed under `group`, in order.
@@ -467,6 +607,7 @@ pub struct ActionInput<'w> {
     mouse: Option<Res<'w, ButtonInput<MouseButton>>>,
     holds: Option<Res<'w, InputHolds>>,
     active: Option<Res<'w, ActiveContext>>,
+    capture: Option<Res<'w, InputCapture>>,
 }
 
 impl ActionInput<'_> {
@@ -477,9 +618,10 @@ impl ActionInput<'_> {
     }
 
     /// Whether `action` applies in the open screen's context. Everything but `crouching` reads
-    /// false for an action that does not.
+    /// false for an action that does not, and for every action while a key is being captured.
     pub fn is_active(&self, action: Action) -> bool {
-        self.keymap.binding(action).is_some_and(|b| b.contexts.contains(&self.context()))
+        !self.capture.as_deref().is_some_and(|c| c.0)
+            && self.keymap.binding(action).is_some_and(|b| b.contexts.contains(&self.context()))
     }
 
     fn press_type(&self, action: Action) -> PressType {
@@ -581,7 +723,7 @@ pub struct KeymapPlugin;
 
 impl Plugin for KeymapPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Keymap>().init_resource::<InputHolds>().init_resource::<ActiveContext>().add_systems(
+        app.init_resource::<Keymap>().init_resource::<InputHolds>().init_resource::<ActiveContext>().init_resource::<InputCapture>().add_systems(
             PreUpdate,
             (track_context, track_holds.in_set(HoldSet)).after(InputSystems),
         );

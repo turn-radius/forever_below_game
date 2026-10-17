@@ -335,7 +335,7 @@ fn build_panel(
                             BackgroundColor(BG),
                             BorderColor::all(LINE),
                         ))
-                        .with_children(|panel| menu_page(panel, &fonts, shown, &keymap, &settings));
+                        .with_children(|panel| menu_page(panel, &fonts, shown, &keymap, &settings, &crate::menu::ControlsView::default()));
                 });
         }
     });
