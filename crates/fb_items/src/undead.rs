@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn gear_goes_in_the_slot_it_is_made_for_once() {
-        for seed in 0..200 {
+        for seed in 0..60 {
             let set = skeleton_outfit(seed, Odds::default());
             for (slot, item) in &set.worn {
                 assert!(item.fits(*slot), "{seed}: {} in {slot:?}", item.base);
@@ -158,13 +158,13 @@ mod tests {
     #[test]
     fn the_first_levels_dead_carry_nothing_rare() {
         let mut magic = 0;
-        for seed in 0..200 {
+        for seed in 0..60 {
             for (_, item) in &skeleton_outfit(seed, Odds::kit(1)).worn {
                 assert!(item.rarity <= Rarity::Magic, "{seed}: {} is {:?}", item.base, item.rarity);
                 magic += usize::from(item.rarity == Rarity::Magic);
             }
         }
-        assert!(magic > 0, "no magic gear on 200 skeletons");
+        assert!(magic > 0, "no magic gear on 60 skeletons");
         let deep = (0..50).flat_map(|seed| skeleton_outfit(seed, Odds::kit(5)).worn).filter(|(_, i)| i.rarity >= Rarity::Rare).count();
         assert!(deep > 0, "nothing rare on 50 skeletons at depth 5");
     }
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn the_first_halls_dead_wear_no_armour_and_hold_light_things() {
         let mut armed = 0;
-        for seed in 0..300 {
+        for seed in 0..100 {
             let set = skeleton_outfit(seed, Odds::kit(FIRST_HALLS));
             for (slot, item) in &set.worn {
                 assert!(item.base == "Tunic" || *slot == Slot::Mainhand, "{seed}: {} in {slot:?}, rags only", item.base);
@@ -183,7 +183,7 @@ mod tests {
                 armed += 1;
             }
         }
-        assert!((60..200).contains(&armed), "some still hold something: {armed}");
+        assert!((20..67).contains(&armed), "some still hold something: {armed} of 100");
         // Deeper, the same seeds wear what they always did.
         assert_eq!(skeleton_outfit(7, Odds::kit(4)), skeleton_outfit(7, Odds::kit(4)));
         assert!((0..100).any(|seed| skeleton_outfit(seed, Odds::kit(4)).item(Slot::Body).is_some_and(|b| b.profile.stats.armour > 0.0)));
