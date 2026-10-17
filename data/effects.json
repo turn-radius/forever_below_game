@@ -33,6 +33,17 @@
       { "kind": "no_recovery", "from_stage": 1 }
     ]
   },
+  "itching": {
+    "name": "Itching",
+    "stages": [
+      { "at": 0.0, "word": "Itchy", "severity": "mild" },
+      { "at": 0.5, "word": "Itching", "severity": "moderate" }
+    ],
+    "incubation_hours": 0.5,
+    "per_hour": -0.35,
+    "exposure_per_hour": 0.85,
+    "influences": [{ "kind": "noticed", "at_full": 0.15 }]
+  },
   "dazzled": {
     "name": "Dazzled",
     "stages": [{ "at": 0.0, "word": "Dazzled", "severity": "mild" }],

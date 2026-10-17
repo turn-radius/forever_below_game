@@ -16,6 +16,12 @@ pub const STINGING_EYES: &str = "stinging_eyes";
 /// The affix that makes a light smoke.
 const SMOKY: &str = "Smoky";
 
+/// The effect lice in what the delver wears bring on.
+pub const ITCHING: &str = "itching";
+
+/// The affix that puts lice in what is worn.
+const LICE: &str = "Lice-ridden";
+
 /// Every cause in `inventory` acting on the delver now, at the rates `defs` give. A cause whose
 /// effect `defs` lacks is left out.
 pub fn exposures(inventory: &Inventory, defs: &BTreeMap<String, EffectDef>) -> Vec<Exposure> {
@@ -30,6 +36,11 @@ pub fn exposures(inventory: &Inventory, defs: &BTreeMap<String, EffectDef>) -> V
         // A lit light with the Smoky affix, in hand, puts its smoke in the delver's eyes.
         if held && item.shape.lit() == Some(true) && item.affixes.iter().any(|a| a.name == SMOKY) {
             push(STINGING_EYES, None, Source::Item { name: item.name.clone() });
+        }
+        // Lice in anything worn (not merely held) get into the delver's clothes and hair. The
+        // item keeps its lice wherever it lies.
+        if !held && item.affixes.iter().any(|a| a.name == LICE) {
+            push(ITCHING, None, Source::Item { name: item.name.clone() });
         }
     }
     out
@@ -60,6 +71,39 @@ mod tests {
         assert_eq!((stinging[0].id.as_str(), stinging[0].per_hour), (STINGING_EYES, defs[STINGING_EYES].exposure_per_hour));
         assert!(exposures(&holding(true, false), &defs).is_empty(), "a doused smoky torch gives no smoke");
         assert!(exposures(&holding(false, true), &defs).is_empty(), "a clean torch gives no smoke");
+    }
+
+    /// A cloak rolled with the Lice-ridden affix, worn.
+    fn wearing_lice() -> (Inventory, crate::inventory::items::ItemId) {
+        let seed = (1..40_000).find(|&s| fb_items::roll_item("Cloak", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == LICE))).expect("some cloak has lice");
+        let mut inventory = Inventory::default();
+        let id = inventory.add(fb_items::roll_item("Cloak", seed).unwrap());
+        inventory.equip(id, Slot::Cloak).expect("a cloak goes on");
+        (inventory, id)
+    }
+
+    #[test]
+    fn a_lice_ridden_cloak_brings_on_itching_after_a_while_and_it_fades_once_off() {
+        let defs = fb_character::effect::shipped();
+        let (worn, id) = wearing_lice();
+        let lice = exposures(&worn, &defs);
+        assert_eq!(lice.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec![ITCHING]);
+        let mut effects = fb_character::effect::Effects::default();
+        let word = |e: &fb_character::effect::Effects| e.showing(&defs).next().map(|(_, _, _, s)| s.word.clone());
+        effects.step(&defs, 0.25, &lice);
+        assert_eq!(word(&effects), None, "not yet, a quarter hour in");
+        effects.step(&defs, 1.5, &lice);
+        assert_eq!(word(&effects).as_deref(), Some("Itching"), "within two hours");
+        assert!(effects.noticed(&defs) > 0.0, "easier to notice");
+        // Taken off, the cloak keeps its lice; the itch fades over a few hours.
+        let mut off = worn.clone();
+        off.take_out(id);
+        assert!(exposures(&off, &defs).is_empty());
+        assert!(off.item(id).unwrap().affixes.iter().any(|a| a.name == LICE), "the cloak keeps its lice");
+        effects.step(&defs, 1.0, &[]);
+        assert!(word(&effects).is_some(), "still itching an hour after");
+        effects.step(&defs, 3.0, &[]);
+        assert_eq!(word(&effects), None, "gone a few hours after");
     }
 
     #[test]
