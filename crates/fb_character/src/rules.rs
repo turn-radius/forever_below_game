@@ -37,6 +37,7 @@ pub struct Rules {
     pub mana: ManaRules,
     pub load: LoadRules,
     pub visibility: VisibilityRules,
+    pub warmth: WarmthRules,
     /// The creatures' numbers by stat block name. A partial entry keeps the rest of that
     /// creature's defaults; a name no species has is a creature of its own, flat zeros where
     /// the entry is silent.
@@ -58,6 +59,7 @@ impl Default for Rules {
             mana: ManaRules::default(),
             load: LoadRules::default(),
             visibility: VisibilityRules::default(),
+            warmth: WarmthRules::default(),
             creatures: default_creatures(),
             effects: crate::effect::shipped(),
         }
@@ -474,6 +476,38 @@ impl LoadRules {
             LoadBand::Encumbered => self.encumbered_walk,
             LoadBand::Overloaded => self.overloaded_walk,
         }
+    }
+}
+
+/// How cold the abyss is and how much fire warms: worn warmth weighed against the character's
+/// need ([`WarmthRules::shortfall`]) decides whether the cold creeps in (the `cold` effect).
+/// Our own: the SRD has extreme cold (p. 86) but no warmth to wear.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WarmthRules {
+    /// Warmth the first level spares a character: their need there is this much less.
+    pub comfort: f64,
+    /// Warmth each level below the first adds to the need.
+    pub chill_per_depth: f64,
+    /// Warmth a brazier gives a character within its reach.
+    pub brazier: f64,
+    /// How far a brazier's warmth reaches, in world units (10 cm each).
+    pub brazier_reach: f64,
+    /// Warmth a lit torch or lantern in hand gives.
+    pub held_flame: f64,
+}
+
+impl Default for WarmthRules {
+    fn default() -> Self {
+        WarmthRules { comfort: 4.0, chill_per_depth: 1.0, brazier: 10.0, brazier_reach: 30.0, held_flame: 1.0 }
+    }
+}
+
+impl WarmthRules {
+    /// How much warmth a character who needs `need` is short of, on level `depth`, wearing
+    /// `worn` and warmed by `fire`: positive is cold, negative is warmth to spare.
+    pub fn shortfall(&self, need: f64, depth: u32, worn: f64, fire: f64) -> f64 {
+        need - self.comfort + self.chill_per_depth * depth.saturating_sub(1) as f64 - worn - fire
     }
 }
 

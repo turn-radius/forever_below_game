@@ -215,6 +215,9 @@ fn effect_conditions(effects: &Effects, defs: &BTreeMap<String, EffectDef>) -> V
             if let Some(left) = active.hours_left {
                 lines.push(format!("wears off in {}", minutes((left * 60.0 - 1e-9).ceil().max(0.0) as u32)));
             }
+            if lines.is_empty() && !def.note.is_empty() {
+                lines.push(def.note.clone());
+            }
             let mut effect = lines.join("; ");
             if let Some(first) = effect.get_mut(0..1) {
                 first.make_ascii_uppercase();
@@ -242,7 +245,7 @@ fn influence_line(influence: &Influence, intensity: f64) -> Option<String> {
         Influence::Sight { at_full } => format!("seeing {} as far", percent(share(*at_full))),
         Influence::Pace { at_full } => format!("moving at {} pace", percent(share(*at_full))),
         Influence::Noticed { at_full } => format!("{} easier to notice", percent(at_full * intensity)),
-        Influence::HitPointsPerHour { at_full } => format!("losing {:.1} HP an hour", at_full * intensity),
+        Influence::HitPointsPerHour { at_full, .. } => format!("losing {:.1} HP an hour", at_full * intensity),
         Influence::Glare { .. } => return None,
     })
 }

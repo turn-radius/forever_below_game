@@ -44,6 +44,40 @@
     "exposure_per_hour": 0.85,
     "influences": [{ "kind": "noticed", "at_full": 0.15 }]
   },
+  "cold": {
+    "name": "Cold",
+    "stages": [
+      { "at": 0.0, "word": "Chilly", "severity": "mild" },
+      { "at": 0.34, "word": "Cold", "severity": "moderate" },
+      { "at": 0.67, "word": "Freezing", "severity": "serious" }
+    ],
+    "per_hour": -0.25,
+    "exposure_per_hour": 0.15,
+    "influences": [
+      { "kind": "need_rate", "meter": "Hunger", "at_full": 1.5 },
+      { "kind": "hit_points_per_hour", "at_full": 3.0, "from_stage": 2 }
+    ]
+  },
+  "chilled_blood": {
+    "name": "Chilled blood",
+    "stages": [
+      { "at": 0.0, "word": "Sluggish", "severity": "mild" },
+      { "at": 0.5, "word": "Torpid", "severity": "moderate" }
+    ],
+    "per_hour": -0.25,
+    "exposure_per_hour": 0.15,
+    "influences": [
+      { "kind": "pace", "at_full": 0.6 },
+      { "kind": "need_rate", "meter": "Sleepiness", "at_full": 1.5 }
+    ]
+  },
+  "warmed": {
+    "name": "Warmed",
+    "stages": [{ "at": 0.0, "word": "Warmed", "severity": "good" }],
+    "per_hour": -0.5,
+    "exposure_per_hour": 2.0,
+    "note": "Warm by the fire; the cold lifts fast"
+  },
   "dazzled": {
     "name": "Dazzled",
     "stages": [{ "at": 0.0, "word": "Dazzled", "severity": "mild" }],

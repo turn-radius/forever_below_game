@@ -130,6 +130,21 @@ encumbered_walk = 0.65
 # Walking pace multiple while Overloaded; 0 roots the delver.
 overloaded_walk = 0.0
 
+# How cold the abyss is and how much fire warms. Worn warmth is weighed against the folk's need
+# (6, or 8 for the cold-blooded lizardfolk) less the comfort, plus the chill of each level below
+# the first; a shortfall lets the cold creep in.
+[warmth]
+# Warmth the first level spares a character: their need there is this much less.
+comfort = 4.0
+# Warmth each level below the first adds to the need.
+chill_per_depth = 1.0
+# Warmth a brazier gives a character within its reach.
+brazier = 10.0
+# How far a brazier's warmth reaches, in world units (10 cm each).
+brazier_reach = 30.0
+# Warmth a lit torch or lantern in hand gives.
+held_flame = 1.0
+
 [visibility]
 # How visible a delver is in the dark, from 0 to 1: the eye is nearly closed.
 in_dark = 0.05

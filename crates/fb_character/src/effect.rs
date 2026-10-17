@@ -53,11 +53,13 @@ pub struct EffectDef {
     pub on_a_part: bool,
     /// What it does while it shows.
     pub influences: Vec<Influence>,
+    /// What the card says when no influence tells it ("Warm by the fire").
+    pub note: String,
 }
 
 impl Default for EffectDef {
     fn default() -> Self {
-        EffectDef { name: String::new(), stages: vec![], hours: None, per_hour: 0.0, exposure_per_hour: 0.0, incubation_hours: 0.0, catch_chance: 0.0, on_a_part: false, influences: vec![] }
+        EffectDef { name: String::new(), stages: vec![], hours: None, per_hour: 0.0, exposure_per_hour: 0.0, incubation_hours: 0.0, catch_chance: 0.0, on_a_part: false, influences: vec![], note: String::new() }
     }
 }
 
@@ -94,8 +96,8 @@ pub enum Influence {
     Pace { at_full: f64 },
     /// How easily the character is noticed rises by up to this much (0 to 1).
     Noticed { at_full: f64 },
-    /// Hit points lost per game hour, at full intensity.
-    HitPointsPerHour { at_full: f64 },
+    /// Hit points lost per game hour, at full intensity, from `from_stage` on.
+    HitPointsPerHour { at_full: f64, #[serde(default)] from_stage: usize },
     /// A pale glare washes over the view, up to this much (0 to 1): dazzle.
     Glare { at_full: f64 },
 }
@@ -216,7 +218,8 @@ impl Effects {
         for e in exposures {
             let Some(def) = defs.get(&e.id) else { continue };
             let part = if def.on_a_part { e.part } else { None };
-            if e.per_hour > 0.0 && self.get(&e.id, part).is_none() {
+            // Only a cause that outpaces the effect's own fading brings it on.
+            if e.per_hour + def.per_hour > 0.0 && self.get(&e.id, part).is_none() {
                 self.active.push(Active { id: e.id.clone(), intensity: 0.0, hours_left: def.hours, age: 0.0, part, source: e.source.clone() });
             }
         }
@@ -234,9 +237,11 @@ impl Effects {
         }
         self.active.retain(|a| {
             let Some(def) = defs.get(&a.id) else { return false };
-            let exposed = exposures.iter().any(|e| e.id == a.id && e.per_hour > 0.0 && (!def.on_a_part || e.part == a.part));
+            // Held up while what acts on it outpaces its fading; ended once it is gone and not.
+            let pushed: f64 = exposures.iter().filter(|e| e.id == a.id && (!def.on_a_part || e.part == a.part)).map(|e| e.per_hour).sum();
+            let rising = pushed + def.per_hour > 0.0;
             let timed_out = a.hours_left.is_some_and(|left| left <= EPSILON);
-            let faded = def.hours.is_none() && a.intensity <= EPSILON && !exposed && a.age > def.incubation_hours;
+            let faded = def.hours.is_none() && a.intensity <= EPSILON && !rising && a.age > def.incubation_hours;
             !(timed_out || faded)
         });
         let word = |a: &Active| defs.get(&a.id).and_then(|d| a.stage(d)).map(|(_, s)| s.word.clone());
@@ -271,7 +276,7 @@ impl Effects {
     fn acting<'a>(&'a self, defs: &'a BTreeMap<String, EffectDef>) -> impl Iterator<Item = (&'a Influence, f64)> + 'a {
         self.showing(defs).flat_map(|(a, def, stage, _)| {
             def.influences.iter().filter(move |i| match i {
-                Influence::AttackDisadvantage { from_stage } | Influence::NoRecovery { from_stage } => stage >= *from_stage,
+                Influence::AttackDisadvantage { from_stage } | Influence::NoRecovery { from_stage } | Influence::HitPointsPerHour { from_stage, .. } => stage >= *from_stage,
                 _ => true,
             })
             .map(move |i| (i, a.intensity))
@@ -336,7 +341,7 @@ impl Effects {
     /// Hit points the effects take per game hour now.
     pub fn hit_points_per_hour(&self, defs: &BTreeMap<String, EffectDef>) -> f64 {
         self.acting(defs).filter_map(|(i, intensity)| match i {
-            Influence::HitPointsPerHour { at_full } => Some(at_full * intensity),
+            Influence::HitPointsPerHour { at_full, .. } => Some(at_full * intensity),
             _ => None,
         }).sum()
     }
@@ -377,7 +382,7 @@ mod tests {
             stages: vec![stage(0.0, "Chilly", Severity::Mild), stage(0.34, "Cold", Severity::Moderate), stage(0.67, "Freezing", Severity::Serious)],
             per_hour: -0.25,
             on_a_part: true,
-            influences: vec![Influence::HitPointsPerHour { at_full: 2.0 }],
+            influences: vec![Influence::HitPointsPerHour { at_full: 2.0, from_stage: 0 }],
             ..EffectDef::default()
         });
         d
