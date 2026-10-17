@@ -3,7 +3,7 @@
 //! their first letter in capitals: `H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk,
 //! `P` pigfolk. Props: containers `c` chest, `b` barrel, `x` crate, `a` amphora (`s` strongbox,
 //! `f` coffer), and scenery `%` rubble, `~` bones, `o` pillar. Creatures: `r` rat, `R` giant
-//! rat, `v` poisonous snake, `S` constrictor snake.
+//! rat, `v` poisonous snake, `S` constrictor snake, `k` skeleton, `T` troll.
 
 use armory::build::scenery::Scenery;
 use armory::families::chests::ChestStyle;
@@ -19,6 +19,7 @@ fn creature_mark(species: Species) -> char {
         Species::ConstrictorSnake => 'S',
         Species::Skeleton => 'k',
         Species::GiantSpider => 'p',
+        Species::Troll => 'T',
     }
 }
 

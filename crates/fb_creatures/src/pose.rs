@@ -22,6 +22,11 @@
 //!   over the shoulder, throws it through the blow and brings it back, turning the ribcage and
 //!   leaning into it with the feet planted.
 //!
+//! - [`troll`]: the skeleton's walk and swing on a troll's stooped joints. The stoop is in the
+//!   troll's rest pose ([`crate::troll`] moves the joints), so the legs, pelvis and trunk are the
+//!   skeleton's; a swing is a two-claw rake, both arms raised and brought down one just behind
+//!   the other.
+//!
 //! The gait's timing, the wave's shape and every amplitude here are our own tuning.
 
 use armory::geom::vec3::{self, Mat3, V3};
@@ -1140,4 +1145,35 @@ mod spider_tests {
         let across = |b: ([f32; 3], [f32; 3])| (b.1[0] - b.0[0]).max(b.1[2] - b.0[2]);
         assert!(across(dead) < 0.9 * across(alive), "{} vs {}", across(dead), across(alive));
     }
+}
+
+/// The ground a troll covers in one full step cycle: a skeleton's, a step of 0.7 of its leg.
+pub fn troll_stride(dims: &SkeletonDims) -> f32 {
+    skeleton_stride(dims)
+}
+
+/// Every bone's placement on its parent for a troll moving as `pose` says (`swing` is a rake of
+/// both claws). The walk is the skeleton's; a swing keeps its lunge and the turn of the trunk
+/// and gives both arms their own throw, the left a beat behind the right. Our own timings.
+pub fn troll_with(d: &SkeletonDims, pose: &SkeletonPose) -> Vec<Placement> {
+    use skeleton_bone as bone;
+    let mut out = skeleton_with(d, pose);
+    let Some(p) = pose.swing.map(|p| p.clamp(0.0, 1.0)) else { return out };
+    for (k, side) in Side::BOTH.into_iter().enumerate() {
+        // The left arm is a beat behind.
+        let p = (p - 0.08 * k as f32).clamp(0.0, 1.0);
+        let forward = keyed(&[(0.0, 0.15), (0.14, 0.5), (0.3, 2.3), (0.45, 2.45), (0.62, 0.55), (0.78, 0.1), (1.0, 0.15)], p);
+        let bend = keyed(&[(0.0, 0.25), (0.3, 1.3), (0.45, 1.5), (0.62, 0.3), (0.78, 0.25), (1.0, 0.25)], p);
+        let b = arm_bone(side);
+        out[b].rotation = rot_x(-forward);
+        out[b + 1].rotation = rot_x(-bend);
+    }
+    let _ = bone::COUNT;
+    out
+}
+
+/// A troll `share` of the way through collapsing onto its back: the skeleton's fall, which lays
+/// the limbs out and lets the head drop back.
+pub fn troll_fallen(d: &SkeletonDims, share: f32) -> Vec<Placement> {
+    skeleton_fallen(d, share)
 }

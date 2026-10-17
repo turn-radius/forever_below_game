@@ -35,6 +35,7 @@ pub struct FeedbackPlugin;
 impl Plugin for FeedbackPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Struck>()
+            .add_message::<Burned>()
             .add_message::<Callout>()
             .add_message::<Slain>()
             .init_resource::<Tuning>()
@@ -55,6 +56,14 @@ pub struct Struck {
     pub bludgeoning: bool,
     /// Whether its attack roll was a natural 20, for its callout ([`super::callouts`]).
     pub critical: bool,
+}
+
+/// A blow of the delver's that was fire (a lit torch's, [`super::swing::flaming_blow`]) landing on
+/// `target`, sent with its [`Struck`]. A troll takes it as the fire damage that stops its
+/// regeneration (`crate::creatures::trolls`).
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Burned {
+    pub target: Entity,
 }
 
 /// A creature or a folk brought to 0 hit points by a blow of the delver's ([`Struck`]): what a
@@ -149,6 +158,7 @@ pub fn knockback(creature: &Creature) -> f32 {
         Creature::Snake(s) => s.drawn_size(),
         Creature::Skeleton(s) => s.drawn_size(),
         Creature::Spider(s) => s.drawn_size(),
+        Creature::Troll(t) => t.drawn_size(),
     };
     knockback_for(size)
 }
@@ -211,7 +221,7 @@ pub fn give_creatures_health(mut commands: Commands, rules: Option<Res<crate::ru
 /// Applies each blow: hit points down, a flash and a push, a squeak or a hiss, and at 0 a
 /// body.
 #[allow(clippy::too_many_arguments)]
-fn take_blows(
+pub fn take_blows(
     mut commands: Commands,
     mut struck: MessageReader<Struck>,
     sounds: Option<Res<CreatureSounds>>,
@@ -251,7 +261,14 @@ fn take_blows(
                 crate::creatures::skeletons::play_at(&mut commands, "bones clack", sounds.hit.clone(), at.translation, &game, &tuning);
             }
         } else if let Some(sounds) = &sounds {
-            let sound = if critter.spot.species.is_rat() { sounds.squeak.clone() } else { sounds.hiss.clone() };
+            // A troll grunts under the blow: the dull thud, never a rat's squeak or a snake's hiss.
+            let sound = if critter.spot.species.is_rat() {
+                sounds.squeak.clone()
+            } else if critter.spot.species.is_troll() {
+                sounds.thud.clone()
+            } else {
+                sounds.hiss.clone()
+            };
             commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
         }
         if fell {
@@ -328,9 +345,9 @@ fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creat
 
 /// Lays each body down once the flash's hold is over ([`collapse_share`]): a rat rolls onto its
 /// back about its middle, a snake goes slack.
-pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent)>) {
+pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent, Option<&crate::creatures::trolls::Troll>)>) {
     let hold = tuning.combat.flash_hold;
-    for (critter, mut corpse, mut transform, mut intent) in &mut bodies {
+    for (critter, mut corpse, mut transform, mut intent, troll) in &mut bodies {
         corpse.since += time.delta_secs();
         if corpse.since <= hold {
             continue;
@@ -343,6 +360,13 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
                 let share = collapse_share(corpse.since, hold);
                 intent.fallen = share.max(1e-3);
                 *transform = laid_back(critter.kit.as_ref().map_or(17.0, |k| k.height), &corpse.fell, share);
+            }
+            Creature::Troll(_) => {
+                // Over backwards like a skeleton, but with a deeper back (the hump and the
+                // seat), so it is raised twice as far to lie on the floor.
+                let share = collapse_share(corpse.since, hold);
+                intent.fallen = share.max(1e-3);
+                *transform = laid_back(2.0 * troll.map_or(25.0, |t| t.height), &corpse.fell, share);
             }
             Creature::Snake(_) => {}
             Creature::Spider(spider) => {

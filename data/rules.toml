@@ -215,3 +215,14 @@ hit_points = 13
 hit_dice = { count = 2, sides = 8, bonus = 4 }
 bite = { count = 1, sides = 6, bonus = 2 }
 venom = { count = 0, sides = 0, bonus = 0 }
+
+# Troll, SRD p. 351: Large, Armor Class 15 (natural armor), Hit Points 84 (8d10 + 40); Multiattack:
+# Bite +7 to hit, 7 (1d6 + 4) piercing, and two Claws +7 to hit, 14 (2d6 + 4) slashing each
+# (the claws are `fb_creatures::troll::CLAW`). Regeneration is `fb_creatures::troll::Regeneration`.
+[creatures."Troll"]
+armour_class = 15
+attack_bonus = 7
+hit_points = 84
+hit_dice = { count = 8, sides = 10, bonus = 40 }
+bite = { count = 1, sides = 6, bonus = 4 }
+venom = { count = 0, sides = 0, bonus = 0 }

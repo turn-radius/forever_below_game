@@ -1,5 +1,5 @@
-//! Creatures in the level (`fb_level::CreatureSpot`): rats, snakes, giant spiders and skeletons ([`skeletons`], in
-//! their gear) from `fb_creatures`, drawn
+//! Creatures in the level (`fb_level::CreatureSpot`): rats, snakes, giant spiders, skeletons ([`skeletons`], in
+//! their gear) and trolls ([`trolls`]) from `fb_creatures`, drawn
 //! in the house style (toon bands, ink and wear) and moved bone by bone without a skeleton.
 //!
 //! - Each creature is a root on the floor at its spot, facing its yaw, with one entity per bone
@@ -41,6 +41,7 @@ use crate::tuning::Tuning;
 
 pub mod behaviour;
 pub mod skeletons;
+pub mod trolls;
 
 use std::sync::Arc;
 use skeletons::{Rattle, SkeletonKit, WornGear};
@@ -49,7 +50,7 @@ pub struct CreaturesPlugin;
 
 impl Plugin for CreaturesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin))
+        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin, trolls::TrollsPlugin))
             .init_resource::<Tuning>()
             .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), size_creatures, idle, animate).chain().in_set(DelveSystems));
     }
@@ -347,8 +348,9 @@ pub fn dev_spots_for(level: &Level, spec: &str) -> Vec<CreatureSpot> {
     let (name, seeds) = spec.split_once(':').unwrap_or((spec, ""));
     let species = match name.trim() {
         "skeleton" => fb_creatures::Species::Skeleton,
+        "troll" => fb_creatures::Species::Troll,
         other => {
-            warn!("FB_SPAWN: no creature called {other:?} (try skeleton)");
+            warn!("FB_SPAWN: no creature called {other:?} (try skeleton or troll)");
             return Vec::new();
         }
     };
@@ -470,7 +472,7 @@ pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpo
 /// [`spawn_skeleton`] for a skeleton in `kit` (a skeleton given none has nothing worn or held).
 pub fn spawn_skeleton_with(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig, kit: Option<SkeletonKit>) -> (Entity, Vec<Entity>) {
     let creature = spot.creature();
-    let mut critter = Critter::new(*spot, creature);
+    let mut critter = Critter::new(*spot, creature.clone());
     if let Some(kit) = kit {
         critter = critter.with_kit(kit);
     }
@@ -504,6 +506,9 @@ pub fn spawn_skeleton_with(commands: &mut Commands, level: &Level, spot: &Creatu
     if spot.species.is_skeleton() {
         commands.entity(root).insert(Rattle::new(spot.seed));
     }
+    if let Creature::Troll(troll) = &creature {
+        commands.entity(root).insert(trolls::Troll::new(troll));
+    }
     (root, bones)
 }
 
@@ -535,7 +540,7 @@ pub fn tongue_flick(t: f32) -> f32 {
 }
 
 /// What [`animate`] reads and writes on each creature.
-type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>, Has<crate::combat::feedback::Corpse>);
+type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>, Has<crate::combat::feedback::Corpse>, Option<&'static trolls::Troll>);
 
 /// Poses every creature for this frame from how it moved and what it means to do.
 pub fn animate(
@@ -548,7 +553,7 @@ pub fn animate(
     let dt = time.delta_secs();
     let relief = Relief::new(&level.0);
     let player = players.iter().next().map(GlobalTransform::translation);
-    for (critter, root, intent, mut motion, bones, mut trail, dead) in &mut creatures {
+    for (critter, root, intent, mut motion, bones, mut trail, dead, troll_body) in &mut creatures {
         let at = root.translation.xz();
         if let (Some(trail), Creature::Snake(snake)) = (trail.as_deref_mut(), &critter.creature) {
             trail.record(at, snake.dims().body_length * root.scale.x);
@@ -622,6 +627,23 @@ pub fn animate(
                 motion.cycle = (motion.cycle + strode / pose::spider_stride(spider) * std::f32::consts::TAU) % std::f32::consts::TAU;
                 // A fallen spider's legs draw in under it as it is turned over ([`Intent::fallen`]).
                 pose::spider(spider, &SpiderPose { stride: motion.cycle, pace: motion.pace.min(2.0), time: motion.time, rear: now.rear, bite: now.strike, curl: intent.fallen })
+            }
+            Creature::Troll(troll) => {
+                // Measured once, when it appeared.
+                let measured;
+                let dims = match troll_body {
+                    Some(body) => &body.dims,
+                    None => {
+                        measured = troll.dims();
+                        &measured
+                    }
+                };
+                if intent.fallen > 0.0 {
+                    pose::troll_fallen(dims, intent.fallen)
+                } else {
+                    motion.cycle = (motion.cycle + strode / pose::troll_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                    pose::troll_with(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing })
+                }
             }
         };
         for (entity, place) in bones.0.iter().zip(&places) {
@@ -723,6 +745,7 @@ mod tests {
                     Creature::Snake(s) => s.girth * 4.0,
                     Creature::Skeleton(s) => s.height(),
                     Creature::Spider(s) => s.span,
+                    Creature::Troll(t) => t.height(),
                 };
                 let (mut deepest, mut nearest) = (f32::MIN, f32::MAX);
                 for (bone, &entity) in rig.bones.iter().zip(&bones) {

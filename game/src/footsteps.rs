@@ -187,11 +187,11 @@ fn play_creature_steps(
     game: Res<GameSettings>,
     tuning: Res<Tuning>,
     bones: Option<Res<crate::creatures::skeletons::BoneSounds>>,
-    mut creatures: Query<(&Critter, &Transform, &mut StepState), (With<Driven>, With<WalksWithSteps>, Without<crate::combat::feedback::Corpse>)>,
+    mut creatures: Query<(&Critter, &Transform, &mut StepState, Option<&crate::creatures::trolls::Troll>), (With<Driven>, With<WalksWithSteps>, Without<crate::combat::feedback::Corpse>)>,
 ) {
     const RAT_STRIDE: f32 = 0.5;  // World units per step for rats.
 
-    for (critter, transform, mut state) in &mut creatures {
+    for (critter, transform, mut state, troll) in &mut creatures {
         // Snakes don't make footsteps; they slither.
         if critter.spot.species.is_snake() {
             state.last_pos = Some(transform.translation.xz());
@@ -202,8 +202,10 @@ fn play_creature_steps(
         // its leg); rats make light, quick footsteps. Accumulate distance and step at stride
         // intervals.
         let skeleton = critter.spot.species.is_skeleton();
-        let stride = match (&critter.kit, skeleton) {
-            (Some(kit), true) => 0.7 * (kit.dims.thigh + kit.dims.shin) * critter.size,
+        let stride = match (&critter.kit, &troll, skeleton) {
+            (Some(kit), _, true) => 0.7 * (kit.dims.thigh + kit.dims.shin) * critter.size,
+            // A troll's heavy tread keeps to its own long stride.
+            (_, Some(troll), _) => 0.7 * (troll.dims.thigh + troll.dims.shin) * critter.size,
             // A spider's eight feet patter: a tick every quarter of its radius.
             _ if critter.spot.species.is_spider() => 0.25 * critter.creature.radius() * critter.size,
             _ => RAT_STRIDE,
@@ -223,12 +225,15 @@ fn play_creature_steps(
             let sample = next_sample(&mut state.rng, old_last);
             state.last_sample = sample;
 
-            // Rats use light steps always, quieter than the delver's; distance fades them.
-            let settings = step_settings(&mut state.rng, STEP_GAIN * CREATURE_STEP_SHARE, effect_volume(&game, &tuning));
+            // Rats use light steps always, quieter than the delver's; distance fades them. A troll's
+            // are the heavy ones, and a little louder.
+            let gain = if troll.is_some() { 1.4 * STEP_GAIN * CREATURE_STEP_SHARE } else { STEP_GAIN * CREATURE_STEP_SHARE };
+            let settings = step_settings(&mut state.rng, gain, effect_volume(&game, &tuning));
 
             let clip = match (&bones, skeleton) {
                 (Some(bones), true) => bones.steps[sample].clone(),
                 (None, true) => continue,
+                _ if troll.is_some() => sounds.heavy[sample].clone(),
                 _ => sounds.light[sample].clone(),
             };
             commands.spawn((

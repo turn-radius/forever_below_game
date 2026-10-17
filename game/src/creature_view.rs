@@ -1,9 +1,9 @@
-//! The creature view (`--creature`): one rat, snake or skeleton on the Armory turntable's plate
+//! The creature view (`--creature`): one rat, snake, skeleton or troll on the Armory turntable's plate
 //! under the turntable's studio light, posed and animated as in the level, so creatures can be
 //! judged close up as items and bodies are. `--skeleton` is the same view opened on a skeleton.
 //!
 //! Keys: Tab and Shift+Tab change the species, Left and Right the seed, M the motion (still,
-//! moving, rearing, striking; a skeleton stands, walks and swings), G a skeleton's gear on or
+//! moving, rearing, striking; a skeleton or a troll stands, walks and swings), G a skeleton's gear on or
 //! off, Space pauses the turn. Command line: `--creature --species giant_rat --seed 7 --motion
 //! moving`, or `--skeleton --seed 7 --motion swing [--bare]` ([`CreatureChoice::from_args`]).
 
@@ -58,9 +58,9 @@ impl ViewMotion {
         alias.or_else(|| ViewMotion::ALL.into_iter().find(|m| m.key() == name))
     }
 
-    /// The motions `species` has: a skeleton stands, walks and swings; the rest as listed.
+    /// The motions `species` has: a skeleton or a troll stands, walks and swings; the rest as listed.
     pub fn of(species: Species) -> &'static [ViewMotion] {
-        if species.is_skeleton() { &[ViewMotion::Still, ViewMotion::Moving, ViewMotion::Striking] } else { &ViewMotion::ALL }
+        if species.is_skeleton() || species.is_troll() { &[ViewMotion::Still, ViewMotion::Moving, ViewMotion::Striking] } else { &ViewMotion::ALL }
     }
 
     fn key(self) -> &'static str {
@@ -98,6 +98,7 @@ pub fn parse_species(name: &str) -> Option<Species> {
         "constrictor_snake" | "constrictor" => Some(Species::ConstrictorSnake),
         "skeleton" => Some(Species::Skeleton),
         "giant_spider" | "spider" => Some(Species::GiantSpider),
+        "troll" => Some(Species::Troll),
         _ => None,
     }
 }
@@ -122,7 +123,7 @@ impl CreatureChoice {
                 "--bare" => choice.gear = false,
                 "--species" => {
                     let name = value()?;
-                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton, giant_spider"))?;
+                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton, giant_spider, troll"))?;
                 }
                 "--seed" => {
                     let seed = value()?;
@@ -157,7 +158,7 @@ struct Shown {
     size: Vec3,
     time: f32,
     cycle: f32,
-    /// A skeleton's measured dimensions, kept so a pose each frame does not rebuild its body.
+    /// A skeleton's or a troll's measured dimensions, kept so a pose each frame does not rebuild its body.
     dims: Option<SkeletonDims>,
     /// The stance of the arms of a skeleton that holds something.
     stance: [Option<ArmStance>; 2],
@@ -263,6 +264,7 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
     }
     let dims = match &creature {
         Creature::Skeleton(skeleton) => Some(skeleton.dims()),
+        Creature::Troll(troll) => Some(troll.dims()),
         _ => None,
     };
     commands.entity(pivot).insert(Shown { creature, bones, size, time: 0.0, cycle: 0.0, dims, stance });
@@ -315,6 +317,13 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
                 let swing = (choice.motion == ViewMotion::Striking).then(|| (t % 2.4 / 1.6).min(1.0));
                 pose::skeleton_armed(dims, &SkeletonPose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, swing, look: 0.0, jaw: 0.0 }, &shown.stance)
             }
+            Creature::Troll(troll) => {
+                let dims = shown.dims.get_or_insert_with(|| troll.dims());
+                shown.cycle = (shown.cycle + speed * dt / pose::troll_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                // A rake every 2.4 seconds, as a skeleton's blow.
+                let swing = (choice.motion == ViewMotion::Striking).then(|| (t % 2.4 / 1.6).min(1.0));
+                pose::troll_with(dims, &SkeletonPose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, swing, look: 0.0, jaw: swing.unwrap_or(0.0) })
+            }
         };
         for (entity, place) in shown.bones.iter().zip(&places) {
             if let Ok(mut transform) = transforms.get_mut(*entity) {
@@ -342,7 +351,7 @@ fn frame_camera(shown: Query<&Shown>, mut cameras: Query<(&Projection, &mut Tran
         let Projection::Perspective(perspective) = projection else { continue };
         // The turntable's framing allows for the whole sweep; a creature is lower and longer.
         // A skeleton stands tall rather than long, so it is framed as the turntable frames an item.
-        let share = if matches!(shown.creature, Creature::Skeleton(_) | Creature::Spider(_)) { 0.8 } else { 0.6 };
+        let share = if matches!(shown.creature, Creature::Skeleton(_) | Creature::Spider(_) | Creature::Troll(_)) { 0.8 } else { 0.6 };
         let distance = share * framing_distance(shown.size, perspective, FILL);
         let centre = Vec3::new(0.0, shown.size.y * 0.5, 0.0);
         let target = Transform::from_translation(centre + Vec3::new(0.0, ELEVATION.sin(), ELEVATION.cos()) * distance).looking_at(centre, Vec3::Y);
@@ -363,8 +372,9 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         Creature::Snake(s) => format!("{:?}, {:?}, {:.1} m", s.colouring, s.pattern, s.length / 10.0),
         Creature::Skeleton(s) => skeleton_look(s, choice.gear),
         Creature::Spider(s) => format!("{:?}, {:?}, {:.1} m across", s.colouring, s.marking, s.span / 10.0),
+        Creature::Troll(t) => troll_look(t),
     };
-    let motion = if choice.species.is_skeleton() { skeleton_motion(choice.motion) } else { format!("{:?}", choice.motion) };
+    let motion = if choice.species.is_skeleton() || choice.species.is_troll() { skeleton_motion(choice.motion) } else { format!("{:?}", choice.motion) };
     let line = format!(
         "{}   seed {}   {}   {}\nArmor Class {}   Hit Points {} ({})   {} {}\nTab species   Left/Right seed   M motion   G gear   Space pause",
         block.name,
@@ -377,6 +387,7 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         if choice.species.is_skeleton() { "Shortsword" } else { "Bite" },
         block.bite
     );
+    let line = if choice.species.is_troll() { format!("{line}\nTwo claws {} each, Regeneration {} hit points a turn unless burned", fb_creatures::troll::CLAW, fb_creatures::troll::REGAIN) } else { line };
     for mut text in &mut status {
         text.0.clone_from(&line);
     }
@@ -412,6 +423,17 @@ fn skeleton_look(s: &fb_creatures::SkeletonState, gear: bool) -> String {
         format!(", {}", outfit.worn.iter().map(|(_, item)| item.title().to_string()).collect::<Vec<_>>().join(", "))
     };
     format!("{colour}, {:.0} cm, {} cracks{missing}{kit}", s.height() * 10.0, s.cracks)
+}
+
+/// What is special about a troll, for the status line: its skin, height and the marks on it.
+fn troll_look(t: &fb_creatures::TrollState) -> String {
+    let skin = match t.tone {
+        v if v < 0.33 => "moss green",
+        v if v < 0.66 => "grey green",
+        _ => "stone grey",
+    };
+    let tusks = if t.tusks > 0.0 { "tusked" } else { "tuskless" };
+    format!("{skin}, {:.0} cm, {} warts, {tusks}", t.height() * 10.0, t.warts)
 }
 
 fn skeleton_motion(motion: ViewMotion) -> String {

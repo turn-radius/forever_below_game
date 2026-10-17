@@ -218,12 +218,14 @@ fn whoosh_past(
 
 /// How the log names a blow that landed: "A folk strikes", a skeleton's by its weapon
 /// ("Skeleton slashes" with a sword, "Skeleton strikes" with a mace, "Skeleton claws" bare),
-/// and a beast's bite ("Rat bites").
+/// a troll's bite and claws ("Troll mauls") and a beast's bite ("Rat bites").
 pub fn blow_line(species: Option<Species>, kit: Option<&crate::creatures::skeletons::SkeletonKit>) -> String {
     match (species, kit) {
         (None, _) => "A folk strikes".to_string(),
         (Some(s), Some(kit)) if s.is_skeleton() => format!("{} {}", s.stat_block().name, kit.blow_verb()),
         (Some(s), _) if s.is_skeleton() => format!("{} strikes", s.stat_block().name),
+        // Its Multiattack is a bite and two claws in one go.
+        (Some(s), _) if s.is_troll() => format!("{} mauls", s.stat_block().name),
         (Some(s), _) => format!("{} bites", s.stat_block().name),
     }
 }

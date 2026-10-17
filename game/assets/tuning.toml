@@ -79,6 +79,8 @@ constrictor = 1.0
 skeleton = 1.0
 # Giant spiders, as a multiple.
 giant_spider = 1.0
+# Trolls, as a multiple.
+troll = 1.0
 
 [combat]
 # How far your blows reach, as a multiple of the weapon's own reach.

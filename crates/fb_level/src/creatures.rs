@@ -11,6 +11,12 @@
 //! two, facing its door. They are placed last, after every rat and snake, so a level of rough rock
 //! draws nothing new from the stream and keeps its creatures as they were.
 //!
+//! A troll stands alone in a large room on about one level in three from depth
+//! [`TROLLS_FROM_DEPTH`]. It is placed after every other creature, from a stream of its own (the
+//! level's seed mixed with [`TROLL_SALT`] and the depth), so it draws nothing from the
+//! creature stream and no wall, item, light, folk, prop, rat, snake or skeleton moves on any
+//! seed.
+//!
 //! How many, of what and where is our own proposal.
 
 use fb_creatures::{Creature, Species};
@@ -129,7 +135,51 @@ pub(crate) fn place_creatures(level: &Level, rng: &mut Mulberry32) -> Vec<Creatu
     if level.style == crate::LevelStyle::StoneHalls {
         place_skeletons(level, &mut placed, pack, rng);
     }
+    place_trolls(level, &mut placed);
     placed
+}
+
+/// The shallowest level a troll is found on. A troll (SRD 5.1 p. 351: challenge 5, 84 hit
+/// points, three attacks a turn) is far past a first-level delver. Our own.
+pub const TROLLS_FROM_DEPTH: u32 = 6;
+/// Chance that a level from [`TROLLS_FROM_DEPTH`] down holds a troll. Our own.
+const TROLL_ODDS: f64 = 1.0 / 3.0;
+/// Smallest room a troll takes, in cells: a Large creature (SRD 5.1 p. 92, ten feet across)
+/// needs a hall to move in. Our own.
+pub const TROLL_ROOM_AREA: u32 = 30;
+/// Salt for the troll's stream, mixed with the level's seed and depth.
+const TROLL_SALT: u32 = 0x7120_C47E;
+
+/// A troll in a large room of `level`, added to `placed` as a pack of its own (one past the
+/// highest pack there is), if the level's stream says there is one. Never in the starting room,
+/// and it keeps clear of everything else as the other creatures do ([`stands`]).
+fn place_trolls(level: &Level, placed: &mut Vec<CreatureSpot>) {
+    if level.depth < TROLLS_FROM_DEPTH {
+        return;
+    }
+    let mut rng = Mulberry32::new(level.seed ^ level.depth.wrapping_mul(0x9E37_79B9) ^ TROLL_SALT);
+    if !rng.chance(TROLL_ODDS) {
+        return;
+    }
+    let start_room = level.start_room();
+    let mut rooms: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && level.rooms[i].area() >= TROLL_ROOM_AREA).collect();
+    shuffle(&mut rooms, &mut rng);
+    let pack = placed.iter().map(|c| c.pack + 1).max().unwrap_or(0);
+    let seed = item_seed(&mut rng);
+    let radius = Creature::of(Species::Troll, seed).radius();
+    for i in rooms {
+        let room = &level.rooms[i];
+        let centre = room.centre();
+        for _ in 0..24 {
+            let angle = rng.range_f32(0.0, std::f32::consts::TAU);
+            let r = 2.0 * rng.range_f32(0.0, 1.0).sqrt();
+            let (x, y) = (centre.0 + angle.cos() * r, centre.1 + angle.sin() * r);
+            if stands(level, room, x, y, radius, placed) {
+                placed.push(CreatureSpot { x, y, yaw: rng.range_f32(-std::f32::consts::PI, std::f32::consts::PI), species: Species::Troll, seed, pack });
+                return;
+            }
+        }
+    }
 }
 
 /// The skeletons of a level of stone halls, added to `placed`; their packs count up from `pack`.

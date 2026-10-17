@@ -25,6 +25,10 @@
 //! - **Losing the player.** Out of sight for [`LOSE_AFTER`] seconds once it has reached where
 //!   it last saw them, or led too far from home, it goes back to wandering its room.
 //!
+//! A troll attacks as the SRD's Multiattack: in one swing of its arms it bites and claws twice,
+//! each rolled to hit on its own ([`TROLL_COOLDOWN`] between swings); its regeneration is in
+//! [`super::trolls`].
+//!
 //! Every range, rate and timing here is our own tuning unless an SRD page is named. The SRD's
 //! round is 6 seconds (p. 90); a bite every one and a half to two and a half seconds keeps a
 //! real-time fight moving.
@@ -174,6 +178,14 @@ const RAT_TURN: f32 = 10.0;
 const SNAKE_TURN: f32 = 3.0;
 const SKELETON_TURN: f32 = 5.0;
 const SPIDER_TURN: f32 = 6.0;
+const TROLL_TURN: f32 = 3.5;
+/// The wait between a troll's attacks, seconds, and how long one takes: the rake of both claws
+/// ([`fb_creatures::pose::troll_with`]), the blows landing as the arms come down. Our own.
+const TROLL_COOLDOWN: f32 = 1.2;
+const TROLL_SWING: f32 = 1.6;
+const TROLL_LANDS: f32 = 0.62;
+/// How much farther than its reach a troll's blows still land, as for a skeleton's.
+const TROLL_SLACK: f32 = 1.15;
 /// The wait between a skeleton's swings, seconds. Our own.
 const SKELETON_COOLDOWN: f32 = 0.8;
 /// How much farther than its reach a skeleton's blow still lands, in case the delver steps
@@ -221,6 +233,8 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
         Creature::Skeleton(skeleton) => player_radius + critter.kit.as_ref().map_or_else(|| 0.45 * skeleton.height(), |k| k.reach) * critter.size,
         // Its fangs, with the front legs raised over the delver.
         Creature::Spider(spider) => player_radius + 0.3 * spider.span * critter.size,
+        // The floor it covers and the arms' reach past it.
+        Creature::Troll(_) => player_radius + 1.1 * critter.radius,
     }
 }
 
@@ -235,8 +249,13 @@ pub fn body_radius(critter: &Critter) -> f32 {
         Creature::Skeleton(skeleton) => 0.12 * critter.kit.as_ref().map_or_else(|| skeleton.height(), |k| k.height) * critter.size,
         // Its body, not its legs, which fold round whatever it passes.
         Creature::Spider(spider) => 0.2 * spider.span * critter.size,
+        // Its body, not its reach, and no wider than a doorway lets through.
+        Creature::Troll(_) => (0.55 * critter.radius).min(TROLL_SQUEEZE),
     }
 }
+
+/// The widest a troll's [`body_radius`] gets, world units: under a third of a cell. Our own.
+const TROLL_SQUEEZE: f32 = 0.3 * CELL;
 
 /// The widest a snake's [`body_radius`] gets, world units: under half a cell, so it passes a
 /// one-cell doorway or corridor. Our own.
@@ -255,27 +274,32 @@ fn cell(p: Vec2) -> (i32, i32) {
 /// Gives each new creature a brain: it now acts for itself, rather than idling.
 fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &Critter, &Transform), (Added<Critter>, Without<Corpse>)>) {
     for (entity, critter, at) in &new {
-        // Home is where the level placed it, even when it comes back somewhere else after the
-        // delver left the level ([`crate::record`]): it wanders back to its own room.
-        let [hx, _, hz] = fb_level::Level::world(critter.spot.x, critter.spot.y);
-        let home = Vec2::new(hx, hz);
-        let mut rng = Mulberry32::new(critter.spot.seed ^ 0xB4A1);
-        let wait = rng.range_f32(0.5, 4.0);
-        let (x, y) = cell(home);
-        let brain = Brain {
-            mode: Mode::Wander { target: None, wait },
-            home,
-            room: level.0.room_at(x, y),
-            cooldown: 0.0,
-            attack: None,
-            bitten: false,
-            path: Vec::new(),
-            goal: cell(at.translation.xz()),
-            repath: 0.0,
-            stuck: 0.0,
-            rng,
-        };
-        commands.entity(entity).insert((brain, Driven));
+        commands.entity(entity).insert((brain_for(&level.0, critter, at.translation.xz()), Driven));
+    }
+}
+
+/// The mind of `critter` standing at `at` (world `(x, z)`) in `level`: wandering its home room,
+/// with its attack ready. A creature wakes with one, and a troll that rises gets a new one.
+pub fn brain_for(level: &Level, critter: &Critter, at: Vec2) -> Brain {
+    // Home is where the level placed it, even when it comes back somewhere else after the
+    // delver left the level ([`crate::record`]): it wanders back to its own room.
+    let [hx, _, hz] = fb_level::Level::world(critter.spot.x, critter.spot.y);
+    let home = Vec2::new(hx, hz);
+    let mut rng = Mulberry32::new(critter.spot.seed ^ 0xB4A1);
+    let wait = rng.range_f32(0.5, 4.0);
+    let (x, y) = cell(home);
+    Brain {
+        mode: Mode::Wander { target: None, wait },
+        home,
+        room: level.room_at(x, y),
+        cooldown: 0.0,
+        attack: None,
+        bitten: false,
+        path: Vec::new(),
+        goal: cell(at),
+        repath: 0.0,
+        stuck: 0.0,
+        rng,
     }
 }
 
@@ -392,7 +416,7 @@ fn behave(
                 let in_reach = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius)) && sees.is_some();
                 if !in_reach && brain.attack.is_none() {
                     heading = Some(goal);
-                    speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() { 1.0 } else if species.is_spider() { SPIDER_CHASE } else { tune.rat_chase_speed };
+                    speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() || species.is_troll() { 1.0 } else if species.is_spider() { SPIDER_CHASE } else { tune.rat_chase_speed };
                 }
                 if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 && !attacks.delver_is_down() {
                     brain.attack = Some(0.0);
@@ -404,6 +428,8 @@ fn behave(
                         if let Some(sounds) = &bone_sounds {
                             super::skeletons::play_at(&mut commands, "creature attack cue", sounds.rattle.clone(), transform.translation, &game, &tuning);
                         }
+                    } else if species.is_troll() {
+                        // The arms come up in silence: the thud of the blow is the cue.
                     } else if let Some(sounds) = &sounds {
                         // A spider's is a hiss, as it rears.
                         let cue = if snake || species.is_spider() { sounds.snake_rise.clone() } else { sounds.rat_squeal.clone() };
@@ -463,7 +489,7 @@ fn behave(
                 let wanted = to.x.atan2(to.y);
                 let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
                 let turn = (wanted - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                let rate = if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else if species.is_spider() { SPIDER_TURN } else { RAT_TURN };
+                let rate = if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else if species.is_spider() { SPIDER_TURN } else if species.is_troll() { TROLL_TURN } else { RAT_TURN };
                 transform.rotation = Quat::from_rotation_y(yaw + turn.clamp(-rate * dt, rate * dt));
             }
         }
@@ -484,12 +510,15 @@ fn behave(
             let swing_time = critter.kit.as_ref().filter(|_| species.is_skeleton()).map(|k| k.swing_time);
             let (lands, done) = match swing_time {
                 Some(time) => (super::skeletons::LANDS * time, time),
+                None if species.is_troll() => (TROLL_LANDS * TROLL_SWING, TROLL_SWING),
                 None if snake => (STRIKE_WINDUP + STRIKE_THROW, STRIKE_TIME),
                 None if species.is_spider() => (SPIDER_WINDUP + SPIDER_STAB, SPIDER_TIME),
                 None => (BITE_LANDS, BITE_TIME),
             };
             if let Some(time) = swing_time {
                 intent.swing = Some((since / time).min(1.0));
+            } else if species.is_troll() {
+                intent.swing = Some((since / TROLL_SWING).min(1.0));
             } else if snake {
                 intent.coil = 1.0;
                 intent.rear = 1.0;
@@ -515,6 +544,21 @@ fn behave(
                     attacks.strike("A skeleton", blow, critter.to_hit_with(crate::rules::GameRules::of(&rules)), delver_ac.as_ref(), &mut brain.rng);
                 }
             }
+            if !brain.bitten && since >= lands && species.is_troll() {
+                brain.bitten = true;
+                // Multiattack: a bite and two claws, each rolled on its own. Nor around a wall,
+                // nor if the delver has stepped out of its reach.
+                let within = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius) * TROLL_SLACK && line_of_sight(grid(at), grid(p), &blocked));
+                if within {
+                    let block = crate::rules::GameRules::of(&rules).creature(species);
+                    let to_hit = critter.to_hit_with(crate::rules::GameRules::of(&rules));
+                    let blows = std::iter::once(block.bite).chain(std::iter::repeat_n(fb_creatures::troll::CLAW, fb_creatures::troll::CLAWS as usize));
+                    for dice in blows {
+                        let blow = AttackOnDelver { attacker: entity, species: Some(species), damage: dice.roll(&mut brain.rng), poison: 0, attacker_pos: at };
+                        attacks.strike(block.name, blow, to_hit, delver_ac.as_ref(), &mut brain.rng);
+                    }
+                }
+            }
             if !brain.bitten && since >= lands {
                 brain.bitten = true;
                 // A bite lands only with the delver in sight at that moment, not round a wall.
@@ -528,7 +572,17 @@ fn behave(
             }
             if since >= done {
                 brain.attack = None;
-                brain.cooldown = if snake { tune.snake_cooldown } else if species.is_skeleton() { SKELETON_COOLDOWN } else if species.is_spider() { SPIDER_COOLDOWN } else { tune.rat_cooldown };
+                brain.cooldown = if snake {
+                    tune.snake_cooldown
+                } else if species.is_skeleton() {
+                    SKELETON_COOLDOWN
+                } else if species.is_spider() {
+                    SPIDER_COOLDOWN
+                } else if species.is_troll() {
+                    TROLL_COOLDOWN
+                } else {
+                    tune.rat_cooldown
+                };
             }
         }
     }

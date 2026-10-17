@@ -26,7 +26,7 @@ use fb_body::Side;
 use fb_character::combat::Odds;
 
 use super::callouts::{Callout, Outcome};
-use super::feedback::{Corpse, Struck};
+use super::feedback::{Burned, Corpse, Struck};
 use super::{ArmourClass, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach};
 use crate::carry::{HeldItem, ViewModelCamera};
 use crate::view_model::ViewHold;
@@ -45,6 +45,7 @@ pub struct SwingPlugin;
 impl Plugin for SwingPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Struck>()
+            .add_message::<Burned>()
             .add_message::<Callout>()
             .add_message::<SwungAt>()
             .add_systems(Startup, load_swing_sound)
@@ -59,6 +60,13 @@ impl Plugin for SwingPlugin {
                     .in_set(DelveSystems),
             );
     }
+}
+
+/// Whether the main hand holds a lit torch, so a blow with it is fire as well as a club's
+/// bludgeoning: a troll's regeneration stops at it (`crate::creatures::trolls`). A lantern's
+/// glass and an unlit or spent torch are not.
+pub fn flaming_blow(inventory: &Inventory) -> bool {
+    inventory.worn(fb_items::Slot::Mainhand).and_then(|id| inventory.item(id)).is_some_and(|item| item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true))
 }
 
 /// How long a swing takes, seconds, and when in it the blow lands. Our own: about two swings a
@@ -319,9 +327,11 @@ fn land_blows(
     strikeable: Strikeable,
     armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
+    mut burned: MessageWriter<Burned>,
     mut swung: MessageWriter<SwungAt>,
     mut callouts: MessageWriter<Callout>,
     rules: Option<Res<crate::rules::GameRules>>,
+    inventory: Option<Res<Inventory>>,
 ) {
     let rules = crate::rules::GameRules::of(&rules);
     let dt = time.delta_secs();
@@ -341,6 +351,9 @@ fn land_blows(
                 if attack.hit {
                     let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
                     struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20 });
+                    if inventory.as_deref().is_some_and(flaming_blow) {
+                        burned.write(Burned { target });
+                    }
                 } else {
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
