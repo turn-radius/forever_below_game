@@ -20,6 +20,7 @@ use bevy::prelude::*;
 use fb_creatures::{Creature, Size};
 
 use super::Health;
+use super::callouts::{Callout, Outcome};
 use crate::creatures::behaviour::{Brain, body_radius};
 use crate::creatures::{Critter, Intent};
 use crate::folk::Denizen;
@@ -34,6 +35,7 @@ pub struct FeedbackPlugin;
 impl Plugin for FeedbackPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Struck>()
+            .add_message::<Callout>()
             .init_resource::<Tuning>()
             .add_systems(Startup, load_creature_sounds)
             .add_systems(Update, (give_creatures_health, take_blows, knock_back, flash, collapse).chain().in_set(DelveSystems));
@@ -50,6 +52,8 @@ pub struct Struck {
     /// Whether it is a bludgeoning blow (a mace, a club, a staff, a fist), which a skeleton
     /// takes double of.
     pub bludgeoning: bool,
+    /// Whether its attack roll was a natural 20, for its callout ([`super::callouts`]).
+    pub critical: bool,
 }
 
 /// A creature or a folk at 0 hit points: its body, lying where it fell for the rest of the run.
@@ -207,6 +211,7 @@ fn take_blows(
     bone_sounds: Option<Res<crate::creatures::skeletons::BoneSounds>>,
     dice: Option<ResMut<super::RunDice>>,
     flinches: Flinches,
+    mut callouts: MessageWriter<Callout>,
 ) {
     let mut dice = dice;
     for blow in struck.read() {
@@ -219,10 +224,13 @@ fn take_blows(
                 if let Some(sounds) = &bone_sounds {
                     crate::creatures::skeletons::play_at(&mut commands, "shield blocks", sounds.block.clone(), at.translation, &game, &tuning);
                 }
+                callouts.write(Callout { target: blow.target, outcome: Outcome::Blocked });
                 continue;
             }
         }
-        let fell = health.hurt(damage_to(critter, blow));
+        let damage = damage_to(critter, blow);
+        let fell = health.hurt(damage);
+        callouts.write(Callout { target: blow.target, outcome: Outcome::Hit { damage, critical: blow.critical, fatal: fell } });
         let away = (at.translation.xz() - blow.from).normalize_or_zero();
         let push = away * knockback(&critter.creature) * tuning.combat.knockback_scale;
         commands.entity(blow.target).insert(flinches.of(blow.target, push, &tuning.combat));
