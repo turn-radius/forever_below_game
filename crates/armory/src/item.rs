@@ -101,9 +101,24 @@ ported! {
     Torch => torch::Torch(TorchState),
     Lantern => lantern::Lantern(LanternState),
     Sundry => sundry::Sundry(SundryState),
+    Arrow => ammo::Arrows(AmmoState),
+    Bolt => ammo::Bolts(AmmoState),
+    Quiver => quiver::Quivers(QuiverState),
+    BoltCase => quiver::BoltCases(QuiverState),
 }
 
 impl Item {
+    /// [`Item::roll`], but quivers and bolt cases come filled to `fullness` (0..=1) of their
+    /// capacity with matching ammunition; every other family rolls as usual. For turntables
+    /// and loot.
+    pub fn roll_stocked(family: Family, seed: u32, fullness: f32) -> Option<Item> {
+        match family {
+            Family::Quiver => Some(Item::Quiver(crate::families::quiver::Quivers::stocked(seed, fullness))),
+            Family::BoltCase => Some(Item::BoltCase(crate::families::quiver::BoltCases::stocked(seed, fullness))),
+            _ => Item::roll(family, seed),
+        }
+    }
+
     pub fn seed(&self) -> u32 {
         dispatch!(self, state => state.seed)
     }
@@ -159,7 +174,7 @@ impl Item {
             Item::Charm(s) => s.etch,
             Item::Bags(s) => s.etch,
             Item::Chests(s) => s.etch,
-            Item::Food(_) | Item::Torch(_) | Item::Lantern(_) | Item::Sundry(_) => return None,
+            Item::Food(_) | Item::Torch(_) | Item::Lantern(_) | Item::Sundry(_) | Item::Arrow(_) | Item::Bolt(_) | Item::Quiver(_) | Item::BoltCase(_) => return None,
         };
         etch.on.then_some(etch)
     }

@@ -77,6 +77,10 @@ pub struct BowState {
     pub string: Bowstring,
     pub riser: Riser,
     pub arrow: Arrow,
+    /// How far the string is drawn back, 0 (at brace) to 1 (the arrow's head at the handle).
+    /// Never rolled: the game sets it while the bow is drawn.
+    #[serde(default)]
+    pub draw: f32,
     pub etch: Etching,
     pub cond: Condition,
     pub palette: Palette,
@@ -188,10 +192,7 @@ impl Generator for Bow {
     fn build(s: &BowState) -> ItemMesh {
         let mut parts = Parts::new();
         let (l, rs) = (&s.limbs, &s.riser);
-        let half = l.length * 0.5;
-        let plane = LimbPlane { origin: vec3::ZERO, along: vec3::Y, toward_string: vec3::X };
-        let grip = LimbGrip { half_span: rs.length / l.length, width: rs.width, thickness: rs.thickness };
-        let stave = Stave::new(l, plane, grip, half, l.brace);
+        let Strung { stave, nock, arrow_dir, .. } = strung(s);
 
         let (g0, g1) = stave.grip_span(1.1);
         let mut limbs = stave.mesh(0.0, g0, 1.0);
@@ -204,11 +205,11 @@ impl Generator for Bow {
         }
         parts.add("nocks", stave.nocks_mesh(), l.nock_material);
 
-        // The string lies along the limbs' string side; the arrow nocks on it above the hand.
+        // The string lies along the limbs' string side, pulled back to the nock when drawn; the
+        // arrow nocks on it above the hand.
         let anchors = stave.string_anchors();
-        let path = stave.string_path(s.string.thickness, &[]);
-        let nock_y = rs.length * 0.45;
-        let nock = point_along(&path, &plane, nock_y);
+        let pulled: Vec<_> = if s.draw > 0.0 { vec![nock] } else { vec![] };
+        let path = stave.string_path(s.string.thickness, &pulled);
         parts.add_unoutlined("string", bowstring_mesh(&anchors, &path, &s.string), Cord);
         if s.string.serving {
             parts.add_unoutlined("serving", serving_mesh(&path, nock, 0.6, &s.string), Cord);
@@ -216,10 +217,7 @@ impl Generator for Bow {
 
         if s.arrow.on {
             let a = &s.arrow;
-            let side = rs.width * 0.5 * 1.03 + a.radius + if rs.wrap { 0.04 } else { 0.0 };
-            let rest = [0.0, nock_y + a.radius, -side];
-            let dir = vec3::normalize_or(vec3::sub(rest, nock), vec3::neg(vec3::X));
-            let arrow = arrow_meshes(a, true).placed(nock, dir, 0.0);
+            let arrow = arrow_meshes(a, true).placed(nock, arrow_dir, 0.0);
             parts.add("arrow_shaft", arrow.shaft, a.material);
             parts.add("arrow_nock", arrow.nock, Bone);
             parts.add("arrow_head", arrow.head, Iron);
@@ -227,6 +225,61 @@ impl Generator for Bow {
         }
         parts.finish()
     }
+}
+
+impl BowState {
+    /// Lays `ammo` as this bow's arrow on the string, in its own vane colour. The rolled
+    /// bow is unchanged until this is called.
+    pub fn load(&mut self, ammo: &crate::families::ammo::AmmoState) {
+        self.arrow = ammo.arrow;
+        self.arrow.on = true;
+        self.palette.fletching = ammo.palette.fletching;
+    }
+
+    /// Takes the arrow on the string off.
+    pub fn unload(&mut self) {
+        self.arrow.on = false;
+    }
+
+    /// Where the arrow on the string sits, in item space: its nock and the way its head
+    /// points, at the bow's current [`BowState::draw`]. The game aims this line at the
+    /// crosshair while drawing.
+    pub fn nocked_arrow(&self) -> ([f32; 3], [f32; 3]) {
+        let Strung { nock, arrow_dir, .. } = strung(self);
+        (nock, arrow_dir)
+    }
+
+    /// How far the nock travels back from brace at full draw: until the arrow's head comes
+    /// back to the handle.
+    pub fn draw_length(&self) -> f32 {
+        (self.arrow.length - self.limbs.brace - 0.25).max(0.0)
+    }
+}
+
+/// The stave bent to the draw, the nock on the string and the way a nocked arrow points.
+struct Strung {
+    stave: Stave,
+    nock: [f32; 3],
+    arrow_dir: [f32; 3],
+}
+
+fn strung(s: &BowState) -> Strung {
+    let (l, rs) = (&s.limbs, &s.riser);
+    let draw = s.draw.clamp(0.0, 1.0);
+    let pull = s.draw_length() * draw;
+    // Drawing bends the limbs further toward the string and pulls the tips in a little.
+    let half = l.length * 0.5 * (1.0 - 0.05 * draw);
+    let bend = l.brace + pull * 0.3;
+    let plane = LimbPlane { origin: vec3::ZERO, along: vec3::Y, toward_string: vec3::X };
+    let grip = LimbGrip { half_span: rs.length / l.length, width: rs.width, thickness: rs.thickness };
+    let stave = Stave::new(l, plane, grip, half, bend);
+    let nock_y = rs.length * 0.45;
+    let braced = point_along(&stave.string_path(s.string.thickness, &[]), &plane, nock_y);
+    let nock = vec3::add(braced, vec3::scale(vec3::X, pull));
+    let side = rs.width * 0.5 * 1.03 + s.arrow.radius + if rs.wrap { 0.04 } else { 0.0 };
+    let rest = [0.0, nock_y + s.arrow.radius, -side];
+    let arrow_dir = vec3::normalize_or(vec3::sub(rest, nock), vec3::neg(vec3::X));
+    Strung { stave, nock, arrow_dir }
 }
 
 impl Bow {

@@ -44,6 +44,7 @@ pub use rig::{Bone, Rig};
 pub use skeleton::SkeletonState;
 pub use snake::{SnakeColouring, SnakePattern, SnakeState};
 
+pub use fb_items::range::Range;
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
@@ -184,8 +185,7 @@ pub struct RangedAttack {
     pub name: &'static str,
     pub to_hit: i32,
     pub damage: Dice,
-    pub normal_feet: f32,
-    pub long_feet: f32,
+    pub range: Range,
 }
 
 /// The SRD 5.1 numbers this game uses from a creature's stat block. Placeholders for combat
@@ -345,7 +345,7 @@ impl Species {
                 armour_class: 13,
                 attack_bonus: 4,
                 bite: Dice::new(1, 6, 2),
-                ranged: Some(RangedAttack { name: "Shortbow", to_hit: 4, damage: Dice::new(1, 6, 2), normal_feet: 80.0, long_feet: 320.0 }),
+                ranged: Some(RangedAttack { name: "Shortbow", to_hit: 4, damage: Dice::new(1, 6, 2), range: Range::new(80.0, 320.0) }),
                 vulnerabilities: &[DamageType::Bludgeoning],
                 immunities: &[DamageType::Poison],
                 condition_immunities: &[Condition::Exhaustion, Condition::Poisoned],
