@@ -23,6 +23,7 @@ use armory::families::hood::Hoods;
 use armory::families::legs::Legs;
 use armory::families::sundry::{Sundry, SundryKind};
 use armory::families::torch::BurnState;
+use armory::families::writing::{Writing, WritingKind};
 use armory::fabric::FabricPattern;
 use armory::sections::boot::BootStyle;
 use armory::sections::garment::{GarmentStyle, Sleeves};
@@ -46,6 +47,7 @@ pub enum Accept {
     Bags(&'static [BagStyle]),
     Food(&'static [FoodStyle]),
     Sundry(&'static [SundryKind]),
+    Writing(&'static [WritingKind]),
     /// Axe archetypes are not stored in the state (the noun reads the head itself), so
     /// [`Accept::accepts`] cannot check them; [`Accept::roll`] only rolls these.
     Axe(&'static [AxeArchetype]),
@@ -64,6 +66,7 @@ impl Accept {
             Accept::Bags(_) => Family::Bags,
             Accept::Food(_) => Family::Food,
             Accept::Sundry(_) => Family::Sundry,
+            Accept::Writing(_) => Family::Writing,
             Accept::Axe(_) => Family::Axe,
         }
     }
@@ -81,6 +84,7 @@ impl Accept {
             Accept::Bags(s) => Item::Bags(Bags::roll_as(seed, *rng.pick(s))),
             Accept::Food(s) => Item::Food(Food::roll_as(seed, *rng.pick(s))),
             Accept::Sundry(s) => Item::Sundry(Sundry::roll_as(seed, *rng.pick(s))),
+            Accept::Writing(s) => Item::Writing(Writing::roll_as(seed, *rng.pick(s))),
             Accept::Axe(s) => Item::Axe(Axe::roll_as(seed, *rng.pick(s))),
         }
     }
@@ -98,6 +102,7 @@ impl Accept {
             (Accept::Bags(s), Item::Bags(st)) => s.contains(&st.bag.style),
             (Accept::Food(s), Item::Food(st)) => s.contains(&st.provision.style),
             (Accept::Sundry(s), Item::Sundry(st)) => s.contains(&st.article.kind),
+            (Accept::Writing(s), Item::Writing(st)) => s.contains(&st.piece.kind),
             (Accept::Axe(_), Item::Axe(_)) => true,
             _ => false,
         }
@@ -235,6 +240,9 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Lockpicks", ArmoryBase::of(A::Sundry(&[SundryKind::Lockpicks]))),
     ("Candle", ArmoryBase::of(A::Sundry(&[SundryKind::Candle]))),
     ("Bandages", ArmoryBase::of(A::Sundry(&[SundryKind::Bandages]))),
+    ("Scroll", ArmoryBase::of(A::Writing(&[WritingKind::Scroll]))),
+    ("Note", ArmoryBase::of(A::Writing(&[WritingKind::Note]))),
+    ("Book", ArmoryBase::of(A::Writing(&[WritingKind::Book]))),
     ("Spare torch", ArmoryBase::of(A::Any(Family::Torch)).tweaked(spare_torch)),
     // Ammunition and what holds it (SRD 5.1 p. 67-69).
     ("Arrow", ArmoryBase::of(A::Any(Family::Arrow))),
@@ -412,6 +420,7 @@ mod tests {
             A::Bags(s) => s.iter().map(|x| A::Bags(one(x))).collect(),
             A::Food(s) => s.iter().map(|x| A::Food(one(x))).collect(),
             A::Sundry(s) => s.iter().map(|x| A::Sundry(one(x))).collect(),
+            A::Writing(s) => s.iter().map(|x| A::Writing(one(x))).collect(),
             A::Axe(s) => s.iter().map(|x| A::Axe(one(x))).collect(),
         }
     }
@@ -428,14 +437,25 @@ mod tests {
 
     #[test]
     fn every_ported_family_has_a_base() {
-        // Writing has no bases until its loot lands (#395).
-        for &family in Item::PORTED.iter().filter(|&&f| f != Family::Writing) {
+        for &family in Item::PORTED {
             let base = base_for(family, 1207).unwrap_or_else(|| panic!("{family:?} has no base"));
             assert_eq!(armory_base(base).unwrap().accept.family(), family);
             assert_eq!(base_for(family, 1207), Some(base));
         }
         let garments: Vec<_> = (0..200).filter_map(|seed| base_for(Family::Garment, seed)).collect();
         assert!(garments.contains(&"Robe") && garments.contains(&"Shirt"));
+    }
+
+    #[test]
+    fn each_writing_base_rolls_its_own_kind() {
+        for (name, kind) in [("Scroll", WritingKind::Scroll), ("Note", WritingKind::Note), ("Book", WritingKind::Book)] {
+            for seed in 1..40 {
+                match roll_shape(name, seed) {
+                    Some(Item::Writing(s)) => assert_eq!(s.piece.kind, kind, "{name} {seed}"),
+                    other => panic!("{name} {seed}: {other:?}"),
+                }
+            }
+        }
     }
 
     #[test]

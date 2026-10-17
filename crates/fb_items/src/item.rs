@@ -295,8 +295,7 @@ mod tests {
 
     #[test]
     fn loot_rolls_a_base_of_its_family() {
-        // Writing has no bases until its loot lands (#395).
-        for &family in armory::Item::PORTED.iter().filter(|&&f| f != armory::Family::Writing) {
+        for &family in armory::Item::PORTED {
             for seed in [5, 1207] {
                 let item = roll_loot(family, seed, Odds::default()).unwrap();
                 assert_eq!(item.shape.family(), family);
