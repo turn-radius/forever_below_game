@@ -75,11 +75,33 @@ pub struct Pace<'a> {
     pub activity: Activity,
     gear: fb_character::Gear,
     constitution: i32,
+    /// What keeps acting on the character ([`crate::exposure`]): their gear, and the cold of the
+    /// lab's level when one is chosen.
+    exposures: Vec<fb_character::effect::Exposure>,
 }
 
 impl<'a> Pace<'a> {
     pub fn new(state: &'a LabState) -> Pace<'a> {
-        Pace { rules: &state.ruleset.rules, activity: state.activity, gear: state.character.gear(&state.inventory()), constitution: modifier(state.character.constitution()) }
+        let inventory = state.inventory();
+        let rules = &state.ruleset.rules;
+        let exposures = crate::exposure::exposures(&inventory, &rules.effects, &surroundings(state, &inventory));
+        Pace { rules, activity: state.activity, gear: state.character.gear(&inventory), constitution: modifier(state.character.constitution()), exposures }
+    }
+}
+
+/// The lab's surroundings: comfortable unless a level is chosen, then that level's chill against
+/// the character's worn warmth (and a lit flame in hand), and a brazier's warmth when they stand
+/// by one, as `crate::simulate` works them out for the delver.
+pub fn surroundings(state: &LabState, inventory: &crate::inventory::Inventory) -> crate::exposure::Surroundings {
+    let Some(depth) = state.depth else { return crate::exposure::Surroundings::default() };
+    let warmth = &state.ruleset.rules.warmth;
+    let flame = inventory.equipped().iter().any(|(slot, item)| matches!(slot, fb_items::Slot::Mainhand | fb_items::Slot::Offhand) && item.shape.lit() == Some(true));
+    let fire = if state.by_fire { warmth.brazier } else { 0.0 } + if flame { warmth.held_flame } else { 0.0 };
+    let worn = state.character.loadout(inventory).warmth().value();
+    crate::exposure::Surroundings {
+        shortfall: warmth.shortfall(state.character.warmth_need() as f64, depth, worn, fire),
+        by_fire: state.by_fire,
+        cold_blooded: state.character.folk == fb_body::Folk::Lizardfolk,
     }
 }
 
@@ -94,12 +116,16 @@ pub struct TimeLab {
     pub log: VecDeque<Crossing>,
     /// Every crossing since the start, for a chart of the whole run.
     pub all: Vec<Crossing>,
+    /// The effects on the character ([`fb_character::effect`]).
+    pub effects: fb_character::effect::Effects,
+    /// Hit points the effects have taken since the start (freezing), fractions and all.
+    pub hp_lost: f64,
 }
 
 impl Default for TimeLab {
     /// Fresh: the clock at 0, every meter at 0 and no exhaustion.
     fn default() -> Self {
-        TimeLab { clock: GameTime::default(), needs: Needs::default(), exhaustion: Exhaustion::default(), times: ExhaustionTimes::default(), log: VecDeque::new(), all: Vec::new() }
+        TimeLab { clock: GameTime::default(), needs: Needs::default(), exhaustion: Exhaustion::default(), times: ExhaustionTimes::default(), log: VecDeque::new(), all: Vec::new(), effects: Default::default(), hp_lost: 0.0 }
     }
 }
 
@@ -128,11 +154,14 @@ impl TimeLab {
     pub fn pass_under(&mut self, pace: &Pace, hours: f64) {
         let rules = pace.rules;
         rules.apply_to(&mut self.needs);
-        pace.gear.apply_to(&mut self.needs);
         let (activity, con) = (pace.activity, pace.constitution);
         for _ in 0..(hours / MINUTE).round() as u32 {
             let (before, level, start) = (self.needs, self.exhaustion.level, self.clock.hours());
+            // The gear's rates and the effects' on them, as the game puts them each step.
+            self.effects.apply_rates(&rules.effects, &mut self.needs, &pace.gear);
+            self.hp_lost += self.effects.hit_points_per_hour(&rules.effects) * MINUTE;
             self.times.step_with(rules, &mut self.needs, &mut self.exhaustion, activity, MINUTE, con);
+            self.effects.step(&rules.effects, MINUTE, &pace.exposures);
             self.clock.advance(MINUTE * 3600.0);
             // A minute is not exact in binary, so a meter that should land on a band's edge (0.5
             // after 8 hours) can fall a hair short of it; one within a trillionth is put on it.

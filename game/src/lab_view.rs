@@ -79,7 +79,7 @@ pub const SLOTS: [Slot; 15] = [
     Slot::Charm,
 ];
 /// The tabs in the middle and whether each can be opened yet.
-pub const TABS: [(&str, bool); 4] = [("Fight", true), ("Time and needs", true), ("Eat, drink, equip", true), ("Effects", false)];
+pub const TABS: [(&str, bool); 4] = [("Fight", true), ("Time and needs", true), ("Eat, drink, equip", true), ("Effects", true)];
 
 /// The window the lab opens in, no smaller than [`MIN_WINDOW`].
 pub fn window() -> Window {
@@ -103,6 +103,7 @@ impl Plugin for LabViewPlugin {
             .init_resource::<TimeRun>()
             .init_resource::<EquipBuilds>()
             .init_resource::<TimeImage>()
+            .init_resource::<EffectsImage>()
             .init_resource::<LabTab>()
             .init_resource::<Picker>()
             .init_resource::<LabFigure>()
@@ -113,7 +114,7 @@ impl Plugin for LabViewPlugin {
             .init_resource::<SaveNote>()
             .add_message::<ControlPressed>()
             .insert_resource(ClearColor(BG))
-            .add_systems(Startup, (setup, demo, make_chart_images, make_time_image))
+            .add_systems(Startup, (setup, demo, make_chart_images, make_time_image, make_effects_image))
             .add_systems(
                 Update,
                 (
@@ -127,7 +128,7 @@ impl Plugin for LabViewPlugin {
                     refresh_fight.run_if(resource_changed::<FightLab>),
                     rebuild_equip.run_if(resource_changed::<SheetBuilds>),
                     run_time,
-                    refresh_time_view.run_if(resource_changed::<TimeRun>),
+                    (refresh_time_view, refresh_effects_view).run_if(resource_changed::<TimeRun>),
                     refresh_controls.run_if(|state: Res<LabState>| state.is_changed()),
                     show_tabs.run_if(resource_changed::<LabTab>),
                     (hover_tiles, show_tip).chain(),
@@ -212,6 +213,13 @@ pub struct LabState {
     /// The rules and affix strengths in force: what the lab is editing, which the sheet, the
     /// strikes and the time all read.
     pub ruleset: RuleSet,
+    /// The level whose cold the character feels while time passes, or `None` for comfortable
+    /// surroundings ([`crate::lab_time::surroundings`]).
+    pub depth: Option<u32>,
+    /// Whether they stand by a brazier.
+    pub by_fire: bool,
+    /// The intensity (0 to 1) the Effects tab puts an effect on at.
+    pub apply_at: f64,
 }
 
 impl Default for LabState {
@@ -220,13 +228,18 @@ impl Default for LabState {
     fn default() -> Self {
         let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
         let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0, worn: fb_character::AbilityBonus::default() };
-        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), activity: Activity::Walking, attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1, swapped: false, ruleset: RuleSet::default() };
+        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), activity: Activity::Walking, attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1, swapped: false, ruleset: RuleSet::default(), depth: None, by_fire: false, apply_at: 0.5 };
         for (slot, base, seed) in [(Slot::Mainhand, "Sword", 4), (Slot::Head, "Helm", 9), (Slot::Body, "Mail", 9)] {
             state.equip(slot, base, seed);
         }
         state
     }
 }
+
+/// The deepest level the Effects tab offers.
+pub const DEEPEST: u32 = 8;
+/// The intensities the Effects tab puts an effect on at.
+pub const APPLY_AT: [f64; 3] = [0.25, 0.5, 1.0];
 
 /// The scores a character can have in the lab.
 const SCORES: std::ops::RangeInclusive<i32> = 3..=20;
@@ -335,6 +348,21 @@ impl LabState {
     pub fn cycle_activity(&mut self, by: isize) {
         let at = ACTIVITIES.iter().position(|&a| a == self.activity).unwrap_or(0);
         self.activity = ACTIVITIES[step(ACTIVITIES.len(), at, by)];
+    }
+
+    /// Steps `by` levels through comfortable surroundings and levels 1 to [`DEEPEST`], wrapping.
+    pub fn cycle_depth(&mut self, by: isize) {
+        let at = self.depth.map_or(0, |d| d as usize);
+        self.depth = match step(DEEPEST as usize + 1, at, by) {
+            0 => None,
+            d => Some(d as u32),
+        };
+    }
+
+    /// Steps `by` through the intensities an effect is put on at.
+    pub fn cycle_apply_at(&mut self, by: isize) {
+        let at = APPLY_AT.iter().position(|&a| a == self.apply_at).unwrap_or(0);
+        self.apply_at = APPLY_AT[step(APPLY_AT.len(), at, by)];
     }
 
     /// Steps `by` attackers through [`Attacker::all`], wrapping.
@@ -552,6 +580,11 @@ pub enum Control {
     Swap,
     /// Adds to the Time tab's run.
     Time(TimeAction),
+    /// Steps the level whose cold the character feels, flips the brazier, or steps the
+    /// intensity an effect is put on at.
+    Depth(isize),
+    Fire,
+    ApplyAt(isize),
     /// Plays one fight, or a thousand.
     OneFight,
     Thousand,
@@ -590,6 +623,9 @@ impl Control {
             Control::StrikeSeed(by) => state.strike_seed = (state.strike_seed as i64 + by).clamp(0, u32::MAX as i64) as u32,
             Control::Activity(by) => state.cycle_activity(*by),
             Control::Swap => state.swapped = !state.swapped,
+            Control::Depth(by) => state.cycle_depth(*by),
+            Control::Fire => state.by_fire = !state.by_fire,
+            Control::ApplyAt(by) => state.cycle_apply_at(*by),
             Control::OneFight | Control::Thousand | Control::Time(_) => {}
             Control::Rule(path, dir) => crate::lab_rules::step(&mut state.ruleset, path, *dir),
             Control::Dice(path, part, dir) => crate::lab_rules::step_dice(&mut state.ruleset, path, *part, *dir),
@@ -650,6 +686,9 @@ enum ControlText {
     Attacker,
     StrikeSeed,
     Activity,
+    Depth,
+    Fire,
+    ApplyAt,
 }
 
 /// What the Fight tab has run: the thousand fights under the edited rules and under the saved
@@ -750,6 +789,8 @@ pub enum TimeAction {
     /// Eats or drinks the provision of this base.
     Eat(&'static str),
     Drink(&'static str),
+    /// Puts the effect of this id on, at the lab's [`LabState::apply_at`].
+    Apply(&'static str),
     /// Starts the run over.
     Reset,
 }
@@ -763,17 +804,21 @@ pub struct TimeRun {
     pub now: Option<Timeline>,
     pub was: Option<Timeline>,
     chart: Option<Chart>,
+    /// The Effects tab's chart of the same run.
+    effects_chart: Option<Chart>,
 }
 
 impl TimeRun {
-    /// Adds what `action` says to the run, under `activity`.
-    pub fn push(&mut self, action: TimeAction, activity: Activity) {
+    /// Adds what `action` says to the run, under `state`'s activity.
+    pub fn push(&mut self, action: TimeAction, state: &LabState) {
+        let activity = state.activity;
         match action {
             TimeAction::Pass(hours) => self.steps.push(Step::Pass(hours, activity)),
             TimeAction::UntilHungry => self.steps.push(Step::Until(Goal::Hungry, activity)),
             TimeAction::UntilExhaustion => self.steps.push(Step::Until(Goal::Exhaustion, activity)),
             TimeAction::Eat(base) => self.steps.push(Step::Eat(base)),
             TimeAction::Drink(base) => self.steps.push(Step::Drink(base)),
+            TimeAction::Apply(id) => self.steps.push(Step::Apply(id, state.apply_at)),
             TimeAction::Reset => self.steps.clear(),
         }
         self.dirty = true;
@@ -783,6 +828,14 @@ impl TimeRun {
 /// The time chart's image.
 #[derive(Resource, Default)]
 pub struct TimeImage(Option<Handle<Image>>);
+
+/// The effects chart's image.
+#[derive(Resource, Default)]
+pub struct EffectsImage(Option<Handle<Image>>);
+
+/// Where the Effects tab's answers and chart are built.
+#[derive(Component)]
+pub struct EffectsColumn;
 
 /// Where the time tab's answers and chart are built.
 #[derive(Component)]
@@ -794,9 +847,16 @@ fn make_time_image(mut image: ResMut<TimeImage>, assets: Option<ResMut<Assets<Im
     image.0 = Some(assets.add(blank_chart(crate::lab_chart::TIME_SIZE)));
 }
 
+/// Makes the effects chart's image.
+fn make_effects_image(mut image: ResMut<EffectsImage>, assets: Option<ResMut<Assets<Image>>>) {
+    let Some(mut assets) = assets else { return };
+    image.0 = Some(assets.add(blank_chart(crate::lab_chart::TIME_SIZE)));
+}
+
 /// Plays the run again, under the edited rules and the saved ones, when a step is added or the
 /// state or the rules change; the sheet's needs follow the end of it.
-fn run_time(state: Res<LabState>, saved: Res<LabRules>, mut run: ResMut<TimeRun>, mut time: ResMut<TimeLab>, image: Res<TimeImage>, assets: Option<ResMut<Assets<Image>>>) {
+#[allow(clippy::too_many_arguments)]
+fn run_time(state: Res<LabState>, saved: Res<LabRules>, mut run: ResMut<TimeRun>, mut time: ResMut<TimeLab>, image: Res<TimeImage>, effects_image: Res<EffectsImage>, mut assets: Option<ResMut<Assets<Image>>>) {
     if !(run.dirty || (!run.steps.is_empty() && (state.is_changed() || saved.is_changed()))) {
         return;
     }
@@ -804,11 +864,15 @@ fn run_time(state: Res<LabState>, saved: Res<LabRules>, mut run: ResMut<TimeRun>
     let now = crate::lab_timeline::run(&state, &run.steps);
     let was = crate::lab_timeline::run(&before, &run.steps);
     let chart = crate::lab_chart::time_chart(&now, Some(&was), &state.ruleset.rules.needs.band_edges);
-    if let (Some(mut assets), Some(handle)) = (assets, &image.0)
-        && let Some(mut texture) = assets.get_mut(handle)
-    {
-        texture.data = Some(chart.canvas.pixels.clone());
+    let effects_chart = crate::lab_chart::effects_chart(&now, Some(&was), &crate::lab_timeline::effects_seen(&now), &state.ruleset.rules);
+    for (handle, drawn) in [(&image.0, &chart), (&effects_image.0, &effects_chart)] {
+        if let (Some(assets), Some(handle)) = (assets.as_mut(), handle)
+            && let Some(mut texture) = assets.get_mut(handle)
+        {
+            texture.data = Some(drawn.canvas.pixels.clone());
+        }
     }
+    run.effects_chart = Some(effects_chart);
     time.set_if_neq(now.lab.clone());
     run.chart = Some(chart);
     run.now = Some(now);
@@ -884,6 +948,62 @@ fn refresh_time_view(mut commands: Commands, run: Res<TimeRun>, image: Res<TimeI
             words(c, &fonts.body, 14.0, MUTED, format!("{} so far, {} steps. Each button adds to the run; Reset starts it over.", clock_text(now.end()), run.steps.len()));
         }
         _ => words(c, &fonts.body, 16.0, MUTED, "Press a span to pass time and see when each need and exhaustion arrive."),
+    });
+}
+
+/// The Effects tab's answers and chart, built again when the run changes: when each effect's
+/// stages showed and when it ended, against the saved rules, and its intensity over time.
+fn refresh_effects_view(mut commands: Commands, run: Res<TimeRun>, image: Res<EffectsImage>, state: Res<LabState>, saved: Res<LabRules>, fonts: Res<UiFonts>, column: Query<Entity, With<EffectsColumn>>) {
+    let Ok(column) = column.single() else { return };
+    let ink = |c: [u8; 4]| Color::srgb_u8(c[0], c[1], c[2]);
+    commands.entity(column).despawn_children().with_children(|c| match (&run.now, &run.was, &run.effects_chart) {
+        (Some(now), Some(was), Some(chart)) if !run.steps.is_empty() => {
+            let rules = &state.ruleset.rules;
+            let (here, before) = (crate::lab_timeline::effect_answers(now, rules), crate::lab_timeline::effect_answers(was, &saved.saved.rules));
+            if here.is_empty() {
+                words(c, &fonts.body, 16.0, MUTED, "No effect so far. Put one on, or choose a level whose cold they feel.");
+            }
+            c.spawn(Node { column_gap: px(12), row_gap: px(12), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|row| {
+                for a in &here {
+                    let b = before.iter().find(|b| b.label == a.label).map_or("not reached", |b| b.value.as_str());
+                    row.spawn((Node { min_width: px(150), flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(if a.danger { BAD } else { FAINT })))
+                        .with_children(|tile| {
+                            words(tile, &fonts.body, 13.0, MUTED, a.label.clone());
+                            words(tile, &fonts.mono_bold, 26.0, if a.danger { BAD } else { BRIGHT }, a.value.clone());
+                            match crate::lab_rules::was_text(&a.value, b) {
+                                Some(was) => words(tile, &fonts.body, 13.0, FRAME_GOLD, was),
+                                None => words(tile, &fonts.body, 13.0, MUTED, " "),
+                            }
+                        });
+                }
+            });
+            c.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
+                .with_children(|figure| {
+                    words(figure, &fonts.body_medium, 16.0, BRIGHT, "Effects over time");
+                    figure.spawn(Node { column_gap: px(12), flex_wrap: FlexWrap::Wrap, ..default() }).with_children(|legend| {
+                        for (i, id) in crate::lab_timeline::effects_seen(now).iter().enumerate() {
+                            let name = rules.effects.get(id).map_or(id.as_str(), |d| d.name.as_str());
+                            words(legend, &fonts.body, 12.0, ink(crate::lab_chart::EFFECT_COLOURS[i % crate::lab_chart::EFFECT_COLOURS.len()]), name.to_string());
+                        }
+                        words(legend, &fonts.body, 12.0, MUTED, "dotted: hidden (incubating) \u{b7} faint rules: where a stage begins \u{b7} faint dashed: saved rules \u{b7} ticks: put on");
+                    });
+                    figure.spawn(Node { column_gap: px(6), ..default() }).with_children(|plot| {
+                        plot.spawn(Node { flex_direction: FlexDirection::Column, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::End, ..default() }).with_children(|axis| {
+                            words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.0.clone());
+                            words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.1.clone());
+                        });
+                        if let Some(image) = &image.0 {
+                            plot.spawn((ImageNode::new(image.clone()), Node { flex_grow: 1.0, min_width: px(0), aspect_ratio: Some(1200.0 / 420.0), ..default() }));
+                        }
+                    });
+                    figure.spawn(Node { justify_content: JustifyContent::SpaceBetween, margin: UiRect::left(px(34)), ..default() }).with_children(|axis| {
+                        words(axis, &fonts.body, 12.0, MUTED, chart.x_labels.0.clone());
+                        words(axis, &fonts.body, 12.0, MUTED, chart.x_labels.1.clone());
+                    });
+                });
+            words(c, &fonts.body, 14.0, MUTED, format!("{} so far, {} steps. The run is the Time tab's: time passed there passes here.", clock_text(now.end()), run.steps.len()));
+        }
+        _ => words(c, &fonts.body, 16.0, MUTED, "Put an effect on, or choose a level whose cold they feel, then press a span to pass time."),
     });
 }
 
@@ -1067,7 +1187,7 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
                     let ink = if *enabled { INK } else { LINE };
                     tab.with_child((Text::new(*label), UiFonts::style(&fonts.body_medium, 17.0, ink)));
                     if !enabled {
-                        tab.with_child((Text::new("after effects land"), UiFonts::style(&fonts.body, 12.0, LINE)));
+                        tab.with_child((Text::new("to come"), UiFonts::style(&fonts.body, 12.0, LINE)));
                     }
                 }
             });
@@ -1125,6 +1245,32 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
                         }
                         2 => {
                             pane.spawn((EquipColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), ..default() }));
+                        }
+                        3 => {
+                            pane.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|row| {
+                                row.spawn((Text::new("In"), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                                state_button(row, &fonts, Control::Depth(1), ControlText::Depth);
+                                state_button(row, &fonts, Control::Fire, ControlText::Fire);
+                                row.spawn((Text::new("while they are"), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                                state_button(row, &fonts, Control::Activity(1), ControlText::Activity);
+                            });
+                            pane.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|row| {
+                                row.spawn((Text::new("Put on"), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                                state_button(row, &fonts, Control::ApplyAt(1), ControlText::ApplyAt);
+                                let shipped = fb_character::effect::shipped();
+                                for id in crate::lab_timeline::effect_ids() {
+                                    let name = shipped.get(*id).map_or(*id, |d| d.name.as_str());
+                                    button(row, &fonts, name, Control::Time(TimeAction::Apply(id)));
+                                }
+                            });
+                            pane.spawn(Node { column_gap: px(8), row_gap: px(8), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|row| {
+                                for (label, hours) in [("1 h", 1.0), ("8 h", 8.0), ("1 day", 24.0), ("3 days", 72.0), ("7 days", 168.0)] {
+                                    button(row, &fonts, label, Control::Time(TimeAction::Pass(hours)));
+                                }
+                                row.spawn(Node { flex_grow: 1.0, ..default() });
+                                button(row, &fonts, "Reset", Control::Time(TimeAction::Reset));
+                            });
+                            pane.spawn((EffectsColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), ..default() }));
                         }
                         _ => {}
                     });
@@ -1454,8 +1600,12 @@ fn demo(mut state: ResMut<LabState>, mut run: ResMut<TimeRun>, mut fight: ResMut
         for _ in 0..4 {
             crate::lab_rules::step(&mut state.ruleset, "needs/hunger_hours_to_full", 1);
         }
-        run.push(TimeAction::Pass(168.0), state.activity);
-        run.push(TimeAction::Pass(168.0), state.activity);
+        if std::env::var("FB_LAB_TAB").is_ok_and(|t| t == "3") {
+            state.depth = Some(3);
+            run.push(TimeAction::Apply("sewer_plague"), &state);
+        }
+        run.push(TimeAction::Pass(168.0), &state);
+        run.push(TimeAction::Pass(168.0), &state);
         fight.want_many = true;
         fight.want_one = true;
         if let Some(open) = std::env::var("FB_LAB_TAB").ok().and_then(|t| t.parse().ok()) {
@@ -1532,7 +1682,7 @@ fn apply_pressed(
 ) {
     for ControlPressed(control) in pressed.read() {
         match control {
-            Control::Time(action) => run.push(*action, state.activity),
+            Control::Time(action) => run.push(*action, &state),
             Control::OneFight => {
                 fight.want_one = true;
                 fight.ones += 1;
@@ -1695,6 +1845,9 @@ fn refresh_controls(state: Res<LabState>, mut texts: Query<(&ControlText, &mut T
             ControlText::Attacker => state.attacker.label(),
             ControlText::StrikeSeed => state.strike_seed.to_string(),
             ControlText::Activity => activity_word(state.activity).to_string(),
+            ControlText::Depth => state.depth.map_or_else(|| "comfortable surroundings".to_string(), |d| format!("level {d}")),
+            ControlText::Fire => if state.by_fire { "by a brazier" } else { "away from fire" }.to_string(),
+            ControlText::ApplyAt => format!("at {}", rate_text(state.apply_at)),
         };
         if text.0 != line {
             text.0 = line;
@@ -2046,13 +2199,31 @@ mod tests {
         press(Control::Tab(1), &mut state, &mut picker, &mut tab, &mut saved);
         assert_eq!((tab, &state, &picker), (LabTab(1), &was, &Picker::default()));
         press(Control::Tab(3), &mut state, &mut picker, &mut tab, &mut saved);
-        assert_eq!(tab, LabTab(1), "Effects waits for effects");
+        assert_eq!(tab, LabTab(3), "Effects opens");
         press(Control::OpenPicker, &mut state, &mut picker, &mut tab, &mut saved);
         assert!(picker.open);
         press(Control::Score(1, 2), &mut state, &mut picker, &mut tab, &mut saved);
         assert_eq!(state.character.attributes.dexterity, 12);
         press(Control::StrikeSeed(-5), &mut state, &mut picker, &mut tab, &mut saved);
         assert_eq!(state.strike_seed, 0);
+    }
+
+    #[test]
+    fn the_effects_controls_step_the_level_the_fire_and_the_strength_and_put_an_effect_on() {
+        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
+        press(Control::Depth(-1), &mut state, &mut picker, &mut tab, &mut saved);
+        assert_eq!(state.depth, Some(DEEPEST), "comfortable wraps round to the deepest");
+        press(Control::Depth(1), &mut state, &mut picker, &mut tab, &mut saved);
+        press(Control::Depth(1), &mut state, &mut picker, &mut tab, &mut saved);
+        assert_eq!(state.depth, Some(1));
+        press(Control::Fire, &mut state, &mut picker, &mut tab, &mut saved);
+        assert!(state.by_fire);
+        press(Control::ApplyAt(1), &mut state, &mut picker, &mut tab, &mut saved);
+        assert_eq!(state.apply_at, 1.0);
+        let mut run = TimeRun::default();
+        run.push(TimeAction::Apply("sewer_plague"), &state);
+        assert_eq!(run.steps, vec![Step::Apply("sewer_plague", 1.0)]);
+        assert!(crate::lab_timeline::effect_ids().contains(&"sewer_plague"));
     }
 
     #[test]

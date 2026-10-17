@@ -289,12 +289,13 @@ mod tests {
         let worn_clone = worn.clone();
         let mut fitting = Fitting::start((), move || Figure::dress(&spec_clone, &worn_clone, 0.3));
 
-        // Poll until done
+        // Poll until done. This checks the result, not the speed: a machine running every test
+        // binary at once can take far longer than the usual moment, so it waits up to two minutes.
         let async_result = std::iter::repeat_with(|| {
             std::thread::sleep(std::time::Duration::from_millis(5));
             fitting.poll()
         })
-        .take(1000)
+        .take(24_000)
         .flatten()
         .next()
         .expect("async fitting should complete");

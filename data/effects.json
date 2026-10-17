@@ -1,0 +1,90 @@
+{
+  "poisoned": {
+    "name": "Poisoned",
+    "stages": [{ "at": 0.0, "word": "Poisoned", "severity": "moderate" }],
+    "hours": 1.0,
+    "influences": [
+      { "kind": "attack_disadvantage" },
+      { "kind": "no_recovery" }
+    ]
+  },
+  "stinging_eyes": {
+    "name": "Stinging eyes",
+    "stages": [
+      { "at": 0.0, "word": "Smarting eyes", "severity": "mild" },
+      { "at": 0.5, "word": "Stinging eyes", "severity": "moderate" }
+    ],
+    "per_hour": -2.0,
+    "exposure_per_hour": 5.0,
+    "influences": [{ "kind": "sight", "at_full": 0.6 }]
+  },
+  "sewer_plague": {
+    "name": "Sewer plague",
+    "stages": [
+      { "at": 0.0, "word": "Feverish", "severity": "moderate" },
+      { "at": 0.6, "word": "Wasting", "severity": "serious" }
+    ],
+    "hours": 96.0,
+    "incubation_hours": 24.0,
+    "per_hour": 0.0125,
+    "catch_chance": 0.1,
+    "influences": [
+      { "kind": "need_rate", "meter": "Sleepiness", "at_full": 2.0 },
+      { "kind": "no_recovery", "from_stage": 1 }
+    ]
+  },
+  "itching": {
+    "name": "Itching",
+    "stages": [
+      { "at": 0.0, "word": "Itchy", "severity": "mild" },
+      { "at": 0.5, "word": "Itching", "severity": "moderate" }
+    ],
+    "incubation_hours": 0.5,
+    "per_hour": -0.35,
+    "exposure_per_hour": 0.85,
+    "influences": [{ "kind": "noticed", "at_full": 0.15 }]
+  },
+  "cold": {
+    "name": "Cold",
+    "stages": [
+      { "at": 0.0, "word": "Chilly", "severity": "mild" },
+      { "at": 0.34, "word": "Cold", "severity": "moderate" },
+      { "at": 0.67, "word": "Freezing", "severity": "serious" }
+    ],
+    "per_hour": -0.25,
+    "exposure_per_hour": 0.15,
+    "influences": [
+      { "kind": "need_rate", "meter": "Hunger", "at_full": 1.5 },
+      { "kind": "hit_points_per_hour", "at_full": 3.0, "from_stage": 2 }
+    ]
+  },
+  "chilled_blood": {
+    "name": "Chilled blood",
+    "stages": [
+      { "at": 0.0, "word": "Sluggish", "severity": "mild" },
+      { "at": 0.5, "word": "Torpid", "severity": "moderate" }
+    ],
+    "per_hour": -0.25,
+    "exposure_per_hour": 0.15,
+    "influences": [
+      { "kind": "pace", "at_full": 0.6 },
+      { "kind": "need_rate", "meter": "Sleepiness", "at_full": 1.5 }
+    ]
+  },
+  "warmed": {
+    "name": "Warmed",
+    "stages": [{ "at": 0.0, "word": "Warmed", "severity": "good" }],
+    "per_hour": -0.5,
+    "exposure_per_hour": 2.0,
+    "note": "Warm by the fire; the cold lifts fast"
+  },
+  "dazzled": {
+    "name": "Dazzled",
+    "stages": [{ "at": 0.0, "word": "Dazzled", "severity": "mild" }],
+    "per_hour": -60.0,
+    "influences": [
+      { "kind": "sight", "at_full": 0.5 },
+      { "kind": "glare", "at_full": 0.55 }
+    ]
+  }
+}

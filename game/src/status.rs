@@ -28,7 +28,7 @@ use bevy::{
 use fb_character::LoadBand;
 use fb_character::conditions::{Circumstances, Condition, ConditionKind, Severity, conditions};
 
-use crate::character::{Character, DelverNeeds, DelverPoison, DelverStamina, Load, modifier};
+use crate::character::{Character, DelverEffects, DelverNeeds, DelverStamina, Load, modifier};
 use crate::combat::orbs::{OrbCluster, cluster_layout};
 use crate::combat::Health;
 use crate::combat::vitals::Constricted;
@@ -84,10 +84,11 @@ pub struct StatusCard;
 fn read_conditions(
     character: Option<Res<Character>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
-    players: Query<(&DelverNeeds, &Exhaustion, &DelverStamina, &Load, Has<Constricted>, Option<&Slowed>, Option<&DelverPoison>, Option<&Health>), With<Player>>,
+    rules: Option<Res<crate::rules::GameRules>>,
+    players: Query<(&DelverNeeds, &Exhaustion, &DelverStamina, &Load, Has<Constricted>, Option<&Slowed>, Option<&DelverEffects>, Option<&Health>), With<Player>>,
     mut shown: ResMut<ShownConditions>,
 ) {
-    let Some((needs, exhaustion, stamina, load, held, slowed, poison, health)) = players.iter().next() else { return };
+    let Some((needs, exhaustion, stamina, load, held, slowed, effects, health)) = players.iter().next() else { return };
     let mending = tuning.as_deref().map_or(fb_character::recovery::MINUTES_PER_HIT_POINT, |t| t.recovery.minutes_per_hit_point as f64);
     let now = Circumstances {
         needs: needs.0,
@@ -96,10 +97,10 @@ fn read_conditions(
         load: load.0,
         con_modifier: character.map_or(0, |c| modifier(c.constitution())),
         held_pace: held.then(|| slowed.map_or(1.0, |s| s.0 as f64)),
-        poisoned: poison.map_or_else(Default::default, |p| p.0),
         wounded_mending: health.filter(|h| h.hp < h.max && !h.is_down()).map(|_| mending),
     };
-    let list = conditions(&now);
+    let none = fb_character::effect::Effects::default();
+    let list = conditions(&now, effects.map_or(&none, |e| &e.0), &crate::rules::GameRules::of(&rules).effects);
     if shown.0 != list {
         shown.0 = list;
     }
@@ -266,8 +267,9 @@ fn show_card(
 
 /// Conditions to hold the delver under, for captures: `FB_CONDITIONS` lists them, comma
 /// separated, as `hunger:<0 to 1>`, `thirst:<0 to 1>`, `sleep:<0 to 1>`, `exhaustion:<level>`,
-/// `winded`, `load:<light|burdened|encumbered|overloaded>` and `poisoned` (for an hour) or
-/// `poisoned:<minutes>`; `FB_CONDITION_HOVER=<n>` shows the
+/// `winded`, `load:<light|burdened|encumbered|overloaded>`, `poisoned` (for an hour) or
+/// `poisoned:<minutes>`, and any other effect by its id at an intensity, `stinging_eyes:0.8`;
+/// `FB_CONDITION_HOVER=<n>` shows the
 /// card of the `n`th badge.
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct DebugConditions {
@@ -279,6 +281,8 @@ pub struct DebugConditions {
     pub load: Option<LoadBand>,
     /// Game hours of poison to hold the delver at.
     pub poisoned: Option<f64>,
+    /// Any other effect by its id in `data/effects.json`, at an intensity.
+    pub effects: Vec<(String, f64)>,
     pub hover: Option<usize>,
 }
 
@@ -313,14 +317,18 @@ impl DebugConditions {
                         _ => None,
                     }
                 }
-                _ => {}
+                other => {
+                    if let Some(intensity) = share {
+                        debug.effects.push((other.to_string(), intensity));
+                    }
+                }
             }
         }
         debug
     }
 
     fn holds_anything(&self) -> bool {
-        self.hunger.is_some() || self.thirst.is_some() || self.sleepiness.is_some() || self.exhaustion.is_some() || self.winded || self.load.is_some() || self.poisoned.is_some()
+        self.hunger.is_some() || self.thirst.is_some() || self.sleepiness.is_some() || self.exhaustion.is_some() || self.winded || self.load.is_some() || self.poisoned.is_some() || !self.effects.is_empty()
     }
 }
 
@@ -330,15 +338,19 @@ impl DebugConditions {
 fn hold_debug_conditions(
     mut commands: Commands,
     debug: Res<DebugConditions>,
-    mut players: Query<(Entity, &mut DelverNeeds, &mut Exhaustion, &mut DelverStamina, &mut Load, Option<&DelverPoison>), With<Player>>,
+    mut players: Query<(Entity, &mut DelverNeeds, &mut Exhaustion, &mut DelverStamina, &mut Load, Option<&DelverEffects>), With<Player>>,
 ) {
     if !debug.holds_anything() {
         return;
     }
-    for (player, mut needs, mut exhaustion, mut stamina, mut load, poison) in &mut players {
-        if let Some(hours) = debug.poisoned {
-            let held = DelverPoison(fb_character::poison::Poisoned::for_hours(hours));
-            if poison != Some(&held) {
+    for (player, mut needs, mut exhaustion, mut stamina, mut load, effects) in &mut players {
+        if debug.poisoned.is_some() || !debug.effects.is_empty() {
+            let rules = fb_character::rules::defaults();
+            let mut held = debug.poisoned.map_or_else(DelverEffects::default, |hours| DelverEffects::poisoned_for(rules, hours));
+            for (id, intensity) in &debug.effects {
+                held.0.add(&rules.effects, id, *intensity, None, fb_character::effect::Source::Surroundings);
+            }
+            if effects != Some(&held) {
                 commands.entity(player).insert(held);
             }
         }
@@ -448,6 +460,8 @@ pub fn icon_distance(kind: ConditionKind, p: Vec2) -> f32 {
             flask.max(-bubbles)
         }
         ConditionKind::Recovering => capsule(p, v(0.0, -0.62), v(0.0, 0.62), 0.2).min(capsule(p, v(-0.62, 0.0), v(0.62, 0.0), 0.2)),
+        // Any other effect: a diamond with an open eye in it, until it has an icon of its own.
+        ConditionKind::Effect => polygon(p, &[v(0.0, -0.72), v(0.62, 0.0), v(0.0, 0.72), v(-0.62, 0.0)]).max(-circle(p, v(0.0, 0.0), 0.2)),
     }
 }
 
@@ -472,7 +486,7 @@ mod tests {
     use super::*;
     use crate::launch::AppState;
 
-    const KINDS: [ConditionKind; 9] = [
+    const KINDS: [ConditionKind; 10] = [
         ConditionKind::Hunger,
         ConditionKind::Thirst,
         ConditionKind::Sleepiness,
@@ -482,6 +496,7 @@ mod tests {
         ConditionKind::Held,
         ConditionKind::Poisoned,
         ConditionKind::Recovering,
+        ConditionKind::Effect,
     ];
 
     #[test]
@@ -551,12 +566,12 @@ mod tests {
     #[test]
     fn venom_shows_a_poisoned_badge_with_the_minutes_left_until_it_wears_off() {
         let (mut app, player) = delve();
-        app.world_mut().entity_mut(player).insert(DelverPoison(fb_character::poison::Poisoned::for_hours(0.5)));
+        app.world_mut().entity_mut(player).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 0.5));
         app.update();
         app.update();
         assert_eq!(badges(&mut app), vec!["Poisoned badge".to_string()]);
         assert_eq!(app.world().resource::<ShownConditions>().0[0].effect, "Attacking at disadvantage; wears off in 30 minutes");
-        app.world_mut().entity_mut(player).remove::<DelverPoison>();
+        app.world_mut().entity_mut(player).remove::<DelverEffects>();
         app.update();
         app.update();
         assert_eq!(badges(&mut app), Vec::<String>::new());

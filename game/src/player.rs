@@ -223,6 +223,7 @@ pub(crate) fn walk(
     blocked_cells: Res<BlockedCells>,
     obstacles: Option<Res<Obstacles>>,
     mut body: Single<Walker<'_>, With<Player>>,
+    effects: Query<&crate::character::DelverEffects, With<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP_SECONDS);
     if dt <= 0.0 {
@@ -231,7 +232,8 @@ pub(crate) fn walk(
     let (locomotion, gait, transform, slowed, exhaustion, load, stamina, gear_pace) = &mut *body;
     let moving = &tuning.moving;
     let rules = crate::rules::GameRules::of(&rules);
-    let pace = gear_pace.map_or(1.0, |p| p.0);
+    // What they wear and what is on them (the cold in a cold-blooded body) set their pace.
+    let pace = gear_pace.map_or(1.0, |p| p.0) * effects.iter().next().map_or(1.0, |e| e.0.pace(&rules.effects) as f32);
     let speed = if input.pressed(Action::Sprint) && stamina.0.can_exert() { moving.hurry_speed } else { moving.walk_speed } * pace * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier_with(rules) * load.0.walk_multiplier_with(rules);
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));

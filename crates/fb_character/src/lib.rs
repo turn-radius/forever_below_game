@@ -20,6 +20,7 @@
 
 pub mod combat;
 pub mod conditions;
+pub mod effect;
 pub mod explain;
 pub mod poison;
 pub mod recovery;
@@ -253,11 +254,14 @@ pub struct Worn {
     /// Points added to the ability scores.
     #[serde(default)]
     pub abilities: AbilityBonus,
+    /// Multiple of the chance of catching a disease (Mildewed, Lice-ridden, of Lesser Warding).
+    #[serde(default = "default_gear")]
+    pub disease_risk: f64,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default() }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0 }
     }
 }
 
@@ -296,6 +300,9 @@ pub struct Gear {
     pub block_chance: f64,
     /// Points added to the ability scores: the items' added.
     pub abilities: AbilityBonus,
+    /// Multiple of the chance of catching a disease: the items' multiplied.
+    #[serde(default = "default_gear")]
+    pub disease_risk: f64,
 }
 
 impl Default for Gear {
@@ -309,7 +316,7 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default() };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0 };
         for item in worn {
             gear.carry += item.carry;
             gear.darkvision = gear.darkvision.max(item.darkvision);
@@ -320,6 +327,7 @@ impl Gear {
             gear.speed *= item.speed;
             gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, 1.0);
             gear.abilities = gear.abilities.plus(item.abilities);
+            gear.disease_risk *= item.disease_risk;
         }
         for light in lights {
             if light.reach > gear.light {

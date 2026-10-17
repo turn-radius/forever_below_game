@@ -142,17 +142,32 @@ fn walk(path: &mut Vec<String>, value: &Value, out: &mut Vec<(String, Leaf)>) {
             walk(path, inner, out);
             path.pop();
         }
+    } else if let Value::Array(items) = value {
+        // An effect's stages and influences: each by its place.
+        for (i, inner) in items.iter().enumerate() {
+            path.push(i.to_string());
+            walk(path, inner, out);
+            path.pop();
+        }
     }
 }
 
+/// The rules as the file has them: the effects only when they differ from `data/effects.json`.
 fn tree(rules: &Rules) -> Table {
     Table::try_from(rules).expect("the rules serialise")
+}
+
+/// The rules as the lab edits them: the effects always.
+fn lab_tree(rules: &Rules) -> Table {
+    let mut root = tree(rules);
+    root.insert("effects".into(), Value::try_from(&rules.effects).expect("the effects serialise"));
+    root
 }
 
 /// Every editable number of the rules, then of the affixes, with its path.
 pub fn leaves(set: &RuleSet) -> Vec<(String, Leaf)> {
     let mut out = Vec::new();
-    walk(&mut Vec::new(), &Value::Table(tree(&set.rules)), &mut out);
+    walk(&mut Vec::new(), &Value::Table(lab_tree(&set.rules)), &mut out);
     for affix in affixes() {
         for (i, by) in set.strengths.get(&affix.name).into_iter().flatten().enumerate() {
             out.push((format!("affixes/{}/{i}", affix.name), Leaf::Float(*by as f64)));
@@ -177,15 +192,18 @@ pub fn set_leaf(set: &mut RuleSet, path: &str, to: Leaf) {
         }
         return;
     }
-    let mut root = tree(&set.rules);
+    let mut root = Value::Table(lab_tree(&set.rules));
     let mut at = &mut root;
-    for key in &keys[..keys.len() - 1] {
-        match at.get_mut(*key) {
-            Some(Value::Table(t)) => at = t,
-            _ => return,
-        }
+    for key in &keys {
+        let next = match at {
+            Value::Table(t) => t.get_mut(*key),
+            Value::Array(items) => key.parse::<usize>().ok().and_then(|i| items.get_mut(i)),
+            _ => None,
+        };
+        let Some(next) = next else { return };
+        at = next;
     }
-    at.insert(keys[keys.len() - 1].to_string(), to.value());
+    *at = to.value();
     if let Ok(rules) = root.try_into::<Rules>() {
         set.rules = rules;
     }
@@ -205,9 +223,15 @@ pub fn step_of(x: f64) -> f64 {
 pub fn step(set: &mut RuleSet, path: &str, dir: i32) {
     let round = |x: f64| (x * 10_000.0).round() / 10_000.0;
     let Some(now) = leaf(set, path) else { return };
+    // How an effect changes by itself may be a fall (below 0) as well as a rise.
+    let least = if path.starts_with("effects/") && path.ends_with("/per_hour") { f64::MIN } else { 0.0 };
     let to = match now {
         Leaf::Int(n) => Leaf::Int(n + dir as i64),
-        Leaf::Float(x) => Leaf::Float(round(x + dir as f64 * step_of(if dir < 0 && x > 0.0 { x - 1e-9 } else { x })).max(0.0)),
+        Leaf::Float(x) => {
+            // Stepping toward 0 takes the smaller step at a boundary (1 down to 0.95, not 0.5).
+            let size = step_of(if x != 0.0 && (dir < 0) == (x > 0.0) { x - 1e-9 * x.signum() } else { x });
+            Leaf::Float(round(x + dir as f64 * size).max(least))
+        }
         Leaf::Bool(b) => Leaf::Bool(!b),
         Leaf::Dice(_) => return,
     };
@@ -329,7 +353,44 @@ const LABELS: &[(&str, &str)] = &[
     ("visibility/stealth_step", "Taken off per point of Stealth"),
     ("visibility/burdened_bulk", "Added by Burdened"),
     ("visibility/encumbered_bulk", "Added by Encumbered"),
+    ("warmth/comfort", "Warmth the first level spares"),
+    ("warmth/chill_per_depth", "Warmth needed per level deeper"),
+    ("warmth/brazier", "Warmth of a brazier"),
+    ("warmth/brazier_reach", "Reach of a brazier (units)"),
+    ("warmth/held_flame", "Warmth of a flame in hand"),
 ];
+
+/// The words for an effect's field, by what follows `effects/<id>/`; `None` for one the lab
+/// does not offer (whether it sits on a body part).
+fn effect_label(def: &fb_character::effect::EffectDef, rest: &[&str]) -> Option<String> {
+    use fb_character::effect::Influence;
+    Some(match rest {
+        ["hours"] => "Lasts (hours)".into(),
+        ["per_hour"] => "Change by itself per hour".into(),
+        ["exposure_per_hour"] => "Added per hour of exposure".into(),
+        ["incubation_hours"] => "Hidden for (hours)".into(),
+        ["catch_chance"] => "Chance to catch (share)".into(),
+        ["stages", i, "at"] => format!("{} from", def.stages.get(i.parse::<usize>().ok()?)?.word),
+        ["influences", i, key] => {
+            let what = match def.influences.get(i.parse::<usize>().ok()?)? {
+                Influence::AttackDisadvantage { .. } => "Disadvantage".to_string(),
+                Influence::NoRecovery { .. } => "No recovery".into(),
+                Influence::NeedRate { meter, .. } => format!("{meter:?} rate at full (\u{d7})"),
+                Influence::Sight { .. } => "Sight at full (\u{d7})".into(),
+                Influence::Pace { .. } => "Pace at full (\u{d7})".into(),
+                Influence::Noticed { .. } => "Added to being seen at full".into(),
+                Influence::HitPointsPerHour { .. } => "HP lost per hour at full".into(),
+                Influence::Glare { .. } => "Glare at full".into(),
+            };
+            match *key {
+                "at_full" => what,
+                "from_stage" => format!("{what}: from stage"),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    })
+}
 
 const CREATURE_LABELS: &[(&str, &str)] =
     &[("armour_class", "Armour"), ("attack_bonus", "Attack bonus"), ("hit_points", "Hit points"), ("hit_dice", "Hit dice"), ("bite", "Bite"), ("venom", "Venom")];
@@ -342,6 +403,8 @@ pub fn sections(edited: &RuleSet, saved: &RuleSet) -> Vec<Section> {
         let keys: Vec<&str> = path.split('/').collect();
         let label = match keys[..] {
             ["creatures", _, key] => CREATURE_LABELS.iter().find(|(k, _)| *k == key).map(|(_, l)| l.to_string()),
+            ["effects", id, ref rest @ ..] => edited.rules.effects.get(id).and_then(|def| effect_label(def, rest)),
+            ["needs", "band_edges", i] => i.parse::<usize>().ok().map(|i| format!("Band {} begins at (share)", i + 1)),
             ["affixes", name, i] => Some(format!("{name}, effect {}", i.parse::<usize>().map_or(1, |i| i + 1))),
             _ => LABELS.iter().find(|(p, _)| *p == path).map(|(_, l)| l.to_string()),
         }
@@ -362,8 +425,13 @@ pub fn sections(edited: &RuleSet, saved: &RuleSet) -> Vec<Section> {
     for name in names {
         out.push(Section { title: name.clone(), fields: under(&format!("creatures/{name}/")) });
     }
-    for (title, key) in [("Needs", "needs"), ("Exhaustion", "exhaustion"), ("Stamina", "stamina"), ("Mana", "mana"), ("Load", "load"), ("Visibility", "visibility")] {
+    for (title, key) in [("Needs", "needs"), ("Exhaustion", "exhaustion"), ("Stamina", "stamina"), ("Mana", "mana"), ("Load", "load"), ("Visibility", "visibility"), ("Warmth", "warmth")] {
         out.push(Section { title: title.into(), fields: under(&format!("{key}/")) });
+    }
+    for (id, def) in &edited.rules.effects {
+        let offered = |p: &str| p.split('/').collect::<Vec<_>>().get(2..).is_some_and(|rest| effect_label(def, rest).is_some());
+        let fields = all.iter().filter(|(p, _)| p.starts_with(&format!("effects/{id}/")) && offered(p)).map(|(p, l)| field(p, *l)).collect();
+        out.push(Section { title: def.name.clone(), fields });
     }
     out.push(Section { title: "Affixes".into(), fields: under("affixes/") });
     out.retain(|s| !s.fields.is_empty());
@@ -395,7 +463,11 @@ pub fn write_rules_toml(text: &str, rules: &Rules) -> Result<String, String> {
     let mut doc: DocumentMut = text.parse().map_err(|e| format!("rules.toml: {e}"))?;
     let mut scalars: Vec<(Vec<String>, Leaf)> = Vec::new();
     let mut found = Vec::new();
-    walk(&mut Vec::new(), &Value::Table(tree(rules)), &mut found);
+    let mut root = tree(rules);
+    root.remove("effects");
+    let root = Value::Table(root);
+    add_missing_arrays(doc.as_item_mut(), &root);
+    walk(&mut Vec::new(), &root, &mut found);
     for (path, leaf) in found {
         let keys: Vec<String> = path.split('/').map(String::from).collect();
         match leaf {
@@ -412,7 +484,10 @@ pub fn write_rules_toml(text: &str, rules: &Rules) -> Result<String, String> {
     for (keys, leaf) in scalars {
         let mut item: &mut Item = doc.as_item_mut();
         for key in &keys {
-            item = &mut item[key.as_str()];
+            item = match key.parse::<usize>() {
+                Ok(i) if item.is_array() => &mut item[i],
+                _ => &mut item[key.as_str()],
+            };
         }
         let same = match leaf {
             Leaf::Int(n) => item.as_integer() == Some(n) || item.as_float() == Some(n as f64),
@@ -429,7 +504,65 @@ pub fn write_rules_toml(text: &str, rules: &Rules) -> Result<String, String> {
             };
         }
     }
+    write_effects(&mut doc, rules)?;
     Ok(doc.to_string())
+}
+
+/// Writes into `item` each array of `value` it does not have, whole, so its numbers can be set
+/// by their place.
+fn add_missing_arrays(item: &mut toml_edit::Item, value: &Value) {
+    match value {
+        Value::Table(table) => {
+            for (key, inner) in table {
+                if matches!(inner, Value::Table(_) | Value::Array(_)) {
+                    add_missing_arrays(&mut item[key.as_str()], inner);
+                }
+            }
+        }
+        Value::Array(_) if item.is_none() => {
+            if let Ok(array) = value.to_string().parse::<toml_edit::Value>() {
+                *item = toml_edit::Item::Value(array);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Puts in `doc` an `[effects.<id>]` table for each effect of `rules` that differs from
+/// `data/effects.json`, naming only the fields that differ (the rules read the rest from that
+/// file), and takes out the tables of effects that are back to it.
+fn write_effects(doc: &mut toml_edit::DocumentMut, rules: &Rules) -> Result<(), String> {
+    use toml_edit::{DocumentMut, Item};
+    let shipped = fb_character::effect::shipped();
+    let json = |def: &fb_character::effect::EffectDef| serde_json::to_value(def).expect("an effect serialises");
+    if !doc.contains_key("effects") {
+        let mut effects = toml_edit::Table::new();
+        effects.set_implicit(true);
+        doc.insert("effects", Item::Table(effects));
+    }
+    let effects = doc["effects"].as_table_mut().ok_or("rules.toml: effects is not a table")?;
+    for (id, def) in &rules.effects {
+        let now = json(def);
+        let was = shipped.get(id).map(json).unwrap_or_default();
+        let differ: serde_json::Map<String, serde_json::Value> =
+            now.as_object().into_iter().flatten().filter(|(k, v)| was.get(k.as_str()) != Some(*v)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        if differ.is_empty() {
+            effects.remove(id);
+            continue;
+        }
+        let text = toml::to_string(&serde_json::json!({ "effects": { id: differ } })).map_err(|e| format!("effect {id}: {e}"))?;
+        let part: DocumentMut = text.parse().map_err(|e| format!("effect {id}: {e}"))?;
+        let mut table = part["effects"][id.as_str()].clone();
+        // Keep a comment the designer wrote above the table.
+        if let (Some(old), Some(new)) = (effects.get(id).and_then(Item::as_table), table.as_table_mut()) {
+            new.decor_mut().clone_from(old.decor());
+        }
+        effects.insert(id, std::mem::take(&mut table));
+    }
+    if effects.is_empty() {
+        doc.remove("effects");
+    }
+    Ok(())
 }
 
 /// `text` (the contents of `data/afx.json`) with each effect's `by` set to `strengths`, nothing
@@ -669,6 +802,51 @@ mod tests {
     fn a_folder_without_the_files_is_an_error_not_a_panic() {
         let error = save_files(std::path::Path::new("/nonexistent/fb"), &edited(), &|a, b| std::fs::rename(a, b)).unwrap_err();
         assert!(error.contains("rules.toml"), "{error}");
+    }
+
+    #[test]
+    fn each_effect_is_a_section_of_its_numbers_and_warmth_is_one_too() {
+        let set = RuleSet::default();
+        let sections = sections(&set, &set);
+        let section = |title: &str| sections.iter().find(|s| s.title == title).unwrap_or_else(|| panic!("no {title}"));
+        let plague: Vec<(&str, &str)> = section("Sewer plague").fields.iter().map(|f| (f.label.as_str(), f.now.as_str())).collect();
+        for want in [("Lasts (hours)", "96"), ("Hidden for (hours)", "24"), ("Chance to catch (share)", "0.1"), ("Wasting from", "0.6"), ("No recovery: from stage", "1")] {
+            assert!(plague.contains(&want), "{want:?} in {plague:?}");
+        }
+        assert!(section("Cold").fields.iter().any(|f| f.label == "Change by itself per hour" && f.now == "-0.25"));
+        assert!(section("Warmth").fields.iter().any(|f| f.label == "Warmth of a brazier"));
+        assert!(sections.iter().flat_map(|s| &s.fields).all(|f| !f.path.ends_with("on_a_part")));
+        assert!(section("Needs").fields.iter().any(|f| f.label == "Band 4 begins at (share)" && f.now == "1"));
+    }
+
+    #[test]
+    fn an_effects_numbers_step_even_below_zero() {
+        let mut set = RuleSet::default();
+        step(&mut set, "effects/cold/per_hour", 1);
+        step(&mut set, "effects/sewer_plague/stages/1/at", -1);
+        step(&mut set, "effects/cold/influences/1/at_full", 1);
+        let cold = &set.rules.effects["cold"];
+        assert_eq!((cold.per_hour, cold.stages.len()), (-0.2, 3));
+        assert!((set.rules.effects["sewer_plague"].stages[1].at - 0.55).abs() < 1e-9);
+        for _ in 0..25 {
+            step(&mut set, "effects/cold/per_hour", 1);
+        }
+        assert!(set.rules.effects["cold"].per_hour > 0.0, "{}", set.rules.effects["cold"].per_hour);
+        assert_eq!(changed(&set, &RuleSet::default()).len(), 3);
+    }
+
+    #[test]
+    fn a_saved_effect_names_only_what_moved_and_reads_back() {
+        let file = text("rules.toml");
+        let mut set = RuleSet::default();
+        step(&mut set, "effects/sewer_plague/hours", 1);
+        step(&mut set, "effects/cold/stages/2/at", 1);
+        let written = write_rules_toml(&file, &set.rules).unwrap();
+        assert!(written.contains("[effects.sewer_plague]\nhours = 97"), "{written}");
+        assert!(!written.contains("incubation_hours"), "only what moved: {written}");
+        assert_eq!(toml::from_str::<Rules>(&written).unwrap(), set.rules);
+        // Set back, the tables go.
+        assert_eq!(write_rules_toml(&written, &Rules::default()).unwrap(), file);
     }
 
     #[test]

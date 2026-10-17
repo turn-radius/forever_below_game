@@ -320,9 +320,18 @@ mod tests {
     }
 
     #[test]
+    fn the_disease_affixes_roll_again_now_that_disease_is_caught() {
+        for name in ["Mildewed", "Lice-ridden", "of Lesser Warding"] {
+            assert!(affixes().iter().find(|a| a.name == name).is_some_and(|a| a.in_play()), "{name} is in play");
+        }
+        let rolled: Vec<&str> = (0..3_000).flat_map(|seed| roll_rarity(&mut game_rng(seed), TUNIC, &Odds::loot(4)).1).map(|a| a.name.as_str()).collect();
+        assert!(rolled.contains(&"Mildewed") || rolled.contains(&"Lice-ridden"), "a disease flaw rolls on some tunic");
+    }
+
+    #[test]
     fn no_rolled_item_carries_a_held_back_affix() {
         let held: Vec<&str> = affixes().iter().filter(|a| !a.in_play()).map(|a| a.name.as_str()).collect();
-        assert_eq!(held, ["Silent", "Mildewed", "Lice-ridden", "Squeaking", "Cracked", "of Thieves", "of Quiet Steps", "of Lesser Warding", "of Presence", "of the Silver Tongue"]);
+        assert_eq!(held, ["Silent", "Squeaking", "Cracked", "of Thieves", "of Quiet Steps", "of Presence", "of the Silver Tongue"]);
         let quiet = &[Tag::Quiet, Tag::Leather, Tag::Wear][..];
         for tags in [SWORD, TUNIC, PACK, quiet, &[Tag::Wood, Tag::Weapon][..], &[Tag::Trinket][..]] {
             for seed in 0..5_000 {

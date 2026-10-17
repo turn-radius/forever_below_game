@@ -233,6 +233,53 @@ pub fn time_chart(now: &Timeline, was: Option<&Timeline>, edges: &[f64]) -> Char
     Chart { canvas, y_labels: ("full".to_string(), "0".to_string()), x_labels: ("start".to_string(), hours_label(end as f64)), draw: None, marks }
 }
 
+/// The colours the effects' lines take, in the order the effects began.
+pub const EFFECT_COLOURS: [Rgba; 6] = [GOLD, THIRST, DEATH, SLEEP, [0xb5, 0x8c, 0xd9, 255], EXHAUSTION];
+
+/// Each effect's intensity (0 to 1) against game time, in [`EFFECT_COLOURS`] by the order of
+/// `ids`: solid where it shows, dotted while it hides (a disease's incubation), the edges of its
+/// stages as faint rules in its colour, and the saved rules' run faint and dashed. A tick at the
+/// bottom marks where an effect was put on.
+pub fn effects_chart(now: &Timeline, was: Option<&Timeline>, ids: &[String], rules: &fb_character::rules::Rules) -> Chart {
+    let (w, h) = TIME_SIZE;
+    let mut canvas = Canvas::new(w, h, BACKGROUND);
+    let end = now.end().max(was.map_or(0.0, |t| t.end())).max(1.0) as f32;
+    let x = |hours: f64| MARGIN + hours as f32 / end * (w as f32 - 2.0 * MARGIN);
+    let y = |share: f64| h as f32 - MARGIN - (share as f32).clamp(0.0, 1.0) * (h as f32 - 2.0 * MARGIN);
+    for share in [0.0, 1.0] {
+        canvas.hline(MARGIN, w as f32 - MARGIN, y(share), GRID);
+    }
+    let colour_of = |i: usize| EFFECT_COLOURS[i % EFFECT_COLOURS.len()];
+    for (i, id) in ids.iter().enumerate() {
+        let c = colour_of(i);
+        for stage in rules.effects.get(id).into_iter().flat_map(|d| &d.stages).filter(|s| s.at > 0.0) {
+            canvas.line((MARGIN, y(stage.at)), (w as f32 - MARGIN, y(stage.at)), 1.5, [c[0], c[1], c[2], 90], Some((4.0, 6.0)));
+        }
+    }
+    let draw = |canvas: &mut Canvas, run: &Timeline, thickness: f32, faint: bool| {
+        for (i, id) in ids.iter().enumerate() {
+            let c = colour_of(i);
+            let colour = if faint { [c[0], c[1], c[2], 120] } else { c };
+            let at = |trace: &crate::lab_timeline::Trace| trace.iter().find(|(e, _, _)| e == id).map(|(_, v, shows)| (*v, *shows));
+            for (pair, traces) in run.samples.windows(2).zip(run.traces.windows(2)) {
+                let (Some((a, _)), Some((b, shows))) = (at(&traces[0]), at(&traces[1])) else { continue };
+                let dash = if faint { Some((10.0, 8.0)) } else if shows { None } else { Some((3.0, 6.0)) };
+                canvas.line((x(pair[0].hours), y(a)), (x(pair[1].hours), y(b)), thickness, colour, dash);
+            }
+        }
+    };
+    if let Some(was) = was {
+        draw(&mut canvas, was, 3.0, true);
+    }
+    for (hours, event) in &now.events {
+        if *event == Event::Applied {
+            canvas.line((x(*hours), y(0.0)), (x(*hours), y(0.06)), 4.0, EXHAUSTION, None);
+        }
+    }
+    draw(&mut canvas, now, 4.0, false);
+    Chart { canvas, y_labels: ("full".to_string(), "0".to_string()), x_labels: ("start".to_string(), hours_label(end as f64)), draw: None, marks: Vec::new() }
+}
+
 fn hours_label(hours: f64) -> String {
     if hours >= 72.0 { format!("{} days", (hours / 24.0).round()) } else { format!("{} h", hours.round()) }
 }
@@ -273,6 +320,25 @@ mod tests {
         assert_ne!(both.canvas, life_chart(&edited, None).canvas, "the baseline is drawn");
         assert_ne!(histogram_chart(&edited, Some(&now)).canvas, histogram_chart(&edited, None).canvas);
         assert_eq!((plain.y_labels.0.as_str(), plain.y_labels.1.as_str()), ("10", "0"));
+    }
+
+    #[test]
+    fn the_effects_chart_draws_each_effect_and_the_saved_rules_faint() {
+        use crate::lab_timeline::{Step, effects_seen, run};
+        let mut state = LabState::default();
+        state.slots.iter_mut().for_each(|s| s.base = None);
+        state.depth = Some(4);
+        let steps = [Step::Apply("sewer_plague", 0.1), Step::Pass(48.0, fb_character::Activity::Walking)];
+        let now = run(&state, &steps);
+        let ids = effects_seen(&now);
+        assert!(ids.len() >= 2, "plague and the cold: {ids:?}");
+        let empty = effects_chart(&run(&state, &[]), None, &[], &state.ruleset.rules);
+        let plain = effects_chart(&now, None, &ids, &state.ruleset.rules);
+        assert!(painted(&plain.canvas) > painted(&empty.canvas) + 2_000);
+        let mut slower = state.clone();
+        crate::lab_rules::step(&mut slower.ruleset, "effects/cold/exposure_per_hour", -1);
+        let edited = run(&slower, &steps);
+        assert_ne!(effects_chart(&edited, Some(&now), &ids, &slower.ruleset.rules).canvas, effects_chart(&edited, None, &ids, &slower.ruleset.rules).canvas);
     }
 
     #[test]
