@@ -352,6 +352,7 @@ impl Loft {
         };
         let rings: Vec<Vec<V3>> = (0..=rows).map(|r| ring(a0 + (a1 - a0) * r as f32 / rows as f32)).collect();
         let mut mesh = stitch_grid(&rings, &GridOptions { wrap_around: true, ..Default::default() });
+        mesh.flip();
         mesh.push_fan_cap(&rings[0], vec3::neg(self.along(a0)));
         mesh.push_fan_cap(&rings[rows], self.along(a1));
         mesh
@@ -428,7 +429,7 @@ impl Layout {
         let neck_lean = lean_top - 0.12;
         let atlas = vec3::add(c7, [0.0, neck_lean.cos() * neck_len, neck_lean.sin() * neck_len]);
         let head_lean = (0.5 * lean_top - 0.1).max(0.05);
-        let head = (1.12 * head_form.half_width, 1.0 * head_form.half_height, 1.05 * head_form.half_depth);
+        let head = (1.45 * head_form.half_width, 1.3 * head_form.half_height, 1.4 * head_form.half_depth);
         let head_centre = vec3::add(atlas, [0.0, 0.55 * head.1 * head_lean.cos(), 0.55 * head.1 * head_lean.sin() + 0.25 * head.2]);
 
         // The skeleton's joints, moved to the troll's.
