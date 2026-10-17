@@ -16,6 +16,7 @@ use armory::sections::garment::GarmentStyle;
 use armory::sections::hand::HandStyle;
 use armory::families::helm::HelmStyle;
 use armory::{Family, Item, MaterialKind};
+use crate::range::Range;
 
 /// About 24 cm per inventory cell, in world units (10 cm).
 pub const CELL_UNITS: f32 = 2.4;
@@ -45,13 +46,29 @@ pub struct Profile {
     pub holds: Option<Grid>,
     /// How many share one cell.
     pub stack: u8,
+    /// What a bow or crossbow shoots and how far (SRD 5.1 p. 66).
+    pub ranged: Option<Ranged>,
     /// The card's line for goods ("Food · one day").
     pub description: String,
 }
 
+/// The ammunition a bow or crossbow takes and its range.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ranged {
+    /// The family it shoots: [`Family::Arrow`] or [`Family::Bolt`].
+    pub ammunition: Family,
+    pub range: Range,
+}
+
 /// The longest and second-longest extents of the shape's mesh, in world units.
 pub fn extents(shape: &Item) -> (f32, f32) {
-    let Some((lo, hi)) = shape.build().bounds() else { return (0.0, 0.0) };
+    extents_of(shape.build().bounds())
+}
+
+/// [`extents`] from bounds already measured: building the mesh is what costs, so
+/// [`profile`] builds it once for both this and [`upright_footprint`].
+fn extents_of(bounds: Option<([f32; 3], [f32; 3])>) -> (f32, f32) {
+    let Some((lo, hi)) = bounds else { return (0.0, 0.0) };
     let mut e = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
     e.sort_by(|a, b| b.total_cmp(a));
     (e[0], e[1])
@@ -98,7 +115,12 @@ pub fn stands_on_base(shape: &Item) -> bool {
 /// rows for a shape wider (along X) than tall (along Y), more rows for one taller than wide.
 /// The cell count stays the same; only which way the cells run follows the shape.
 pub fn upright_footprint(footprint: Footprint, shape: &Item) -> Footprint {
-    let Some((lo, hi)) = shape.build().bounds() else { return footprint };
+    upright_footprint_of(footprint, shape.build().bounds())
+}
+
+/// [`upright_footprint`] from bounds already measured.
+fn upright_footprint_of(footprint: Footprint, bounds: Option<([f32; 3], [f32; 3])>) -> Footprint {
+    let Some((lo, hi)) = bounds else { return footprint };
     let (wide, tall) = (hi[0] - lo[0], hi[1] - lo[1]);
     let turned = Footprint { cols: footprint.rows, rows: footprint.cols };
     if (wide > tall && footprint.cols < footprint.rows) || (tall > wide && footprint.rows < footprint.cols) { turned } else { footprint }
@@ -129,7 +151,8 @@ pub fn chest_grid(style: ChestStyle) -> (u8, u8, &'static str) {
 /// `data/bases.json` or `data/goods.json` takes its slot, tags and stats from it; the rest
 /// derive them from the shape as `saMeta` does.
 pub fn profile(base: &str, shape: &Item) -> Profile {
-    let (long, wide) = extents(shape);
+    let bounds = shape.build().bounds();
+    let (long, wide) = extents_of(bounds);
     let family = shape.family();
     let mut p = if let Some(row) = bases().get(base) {
         Profile {
@@ -141,6 +164,7 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
             packable: true,
             holds: row.holds.clone(),
             stack: 1,
+            ranged: None,
             description: String::new(),
         }
     } else if let Some(row) = goods().get(base) {
@@ -153,6 +177,7 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
             packable: true,
             holds: None,
             stack: row.stack,
+            ranged: None,
             description: row.description.clone(),
         }
     } else {
@@ -162,7 +187,10 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
         p.footprint = Footprint { cols: cells(wide), rows: cells(long) };
     }
     if stands_upright(family) {
-        p.footprint = upright_footprint(p.footprint, shape);
+        p.footprint = upright_footprint_of(p.footprint, bounds);
+    }
+    if matches!(family, Family::Arrow | Family::Bolt) {
+        p.footprint = Footprint { cols: 1, rows: 1 };
     }
     if matches!(family, Family::Staff | Family::Spear | Family::Bow) && long > PACK_LIMIT_UNITS {
         p.packable = false;
@@ -188,6 +216,7 @@ fn gear(slot: Slot, tags: &[Tag], stats: Stats, footprint: [u8; 2]) -> Profile {
         packable: true,
         holds: None,
         stack: 1,
+        ranged: None,
         description: String::new(),
     }
 }
@@ -202,6 +231,7 @@ fn good(tags: &[Tag], weight: f32, footprint: [u8; 2], description: &str) -> Pro
         packable: true,
         holds: None,
         stack: 1,
+        ranged: None,
         description: description.to_string(),
     }
 }
@@ -235,10 +265,18 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
             let long = s.shaft.length > 18.0;
             gear(Slot::Mainhand, &[Weapon, Wood], weapon(if long { 8.0 } else { 3.0 }, if long { d(1, 10) } else { d(1, 8) }), [1, 1])
         }
-        Item::Bow(s) => gear(Slot::Mainhand, &[Weapon, Wood], weapon(2.0, if s.limbs.length > 16.0 { d(1, 8) } else { d(1, 6) }), [1, 1]),
+        Item::Bow(s) => {
+            let long = s.limbs.length > 16.0;
+            let range = if long { Range::new(150.0, 600.0) } else { Range::new(80.0, 320.0) };
+            Profile { ranged: Some(Ranged { ammunition: Family::Arrow, range }), ..gear(Slot::Mainhand, &[Weapon, Wood], weapon(2.0, if long { d(1, 8) } else { d(1, 6) }), [1, 1]) }
+        }
         Item::Crossbow(s) => {
             let heavy = s.stock.length > 7.5;
-            gear(Slot::Mainhand, &[Weapon, Wood, Metal], weapon(if heavy { 8.0 } else { 5.0 }, if heavy { d(1, 10) } else { d(1, 8) }), [1, 1])
+            let range = if heavy { Range::new(100.0, 400.0) } else { Range::new(80.0, 320.0) };
+            Profile {
+                ranged: Some(Ranged { ammunition: Family::Bolt, range }),
+                ..gear(Slot::Mainhand, &[Weapon, Wood, Metal], weapon(if heavy { 8.0 } else { 5.0 }, if heavy { d(1, 10) } else { d(1, 8) }), [1, 1])
+            }
         }
         Item::Shield(s) => {
             let b = &s.body;
@@ -316,14 +354,23 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
                 BagStyle::BeltPouch => (4, 2, "Belt pouch", Slot::Belt, 1.0, [2, 2]),
             };
             let stuff = if b.fabric == Textile::Leather { Leather } else { Cloth };
-            Profile { holds: Some(Grid { cols, rows, label: label.to_string() }), ..gear(slot, &[Container, Wear, stuff], Stats { weight: wt, ..Stats::default() }, fp) }
+            Profile { holds: Some(Grid { cols, rows, label: label.to_string(), accepts: vec![] }), ..gear(slot, &[Container, Wear, stuff], Stats { weight: wt, ..Stats::default() }, fp) }
+        }
+        // SRD 5.1 p. 69: an arrow weighs 0.05 lb and a bolt 0.075 lb. Each takes one cell.
+        Item::Arrow(_) => good(&[Ammunition], 0.05, [1, 1], "Ammunition · arrow"),
+        Item::Bolt(_) => good(&[Ammunition], 0.075, [1, 1], "Ammunition · crossbow bolt"),
+        // A quiver or bolt case weighs 1 lb empty and holds 20 (SRD 5.1 p. 67-68), hung at the hip.
+        Item::Quiver(_) | Item::BoltCase(_) => {
+            let (ammunition, label) = if matches!(shape, Item::Quiver(_)) { (Family::Arrow, "Quiver") } else { (Family::Bolt, "Bolt case") };
+            let holds = Grid { cols: 5, rows: 4, label: label.to_string(), accepts: vec![ammunition] };
+            Profile { holds: Some(holds), ..gear(Slot::Hip, &[Container, Wear, Leather], Stats { weight: 1.0, ..Stats::default() }, [1, 3]) }
         }
         Item::Ring(_) => gear(Slot::Ring1, &[Trinket], Stats { weight: 0.05, ..Stats::default() }, [1, 1]),
         Item::Amulet(_) => gear(Slot::Neck, &[Trinket], Stats { weight: 0.1, ..Stats::default() }, [1, 1]),
         Item::Charm(_) => gear(Slot::Charm, &[Trinket], Stats { weight: 0.1, ..Stats::default() }, [1, 1]),
         Item::Chests(s) => {
             let (cols, rows, label) = chest_grid(s.chest.style);
-            Profile { packable: false, holds: Some(Grid { cols, rows, label: label.to_string() }), ..good(&[Container], 30.0, [4, 3], "Far too heavy to carry") }
+            Profile { packable: false, holds: Some(Grid { cols, rows, label: label.to_string(), accepts: vec![] }), ..good(&[Container], 30.0, [4, 3], "Far too heavy to carry") }
         }
         Item::Food(s) => {
             use armory::families::food::FoodStyle as F;
@@ -465,6 +512,33 @@ mod tests {
         for base in ["Crossbow", "Bow", "Shield", "Sword", "Torch", "Rope", "Tunic"] {
             assert!(!stands_on_base(&rolled(base, 3).0), "{base}");
         }
+    }
+
+    #[test]
+    fn ammunition_and_its_holders_follow_the_srd() {
+        let (arrow, bolt) = (rolled("Arrow", 3).1, rolled("Bolt", 3).1);
+        assert_eq!((arrow.stats.weight, bolt.stats.weight), (0.05, 0.075));
+        assert!(arrow.tags.contains(&Tag::Ammunition) && bolt.tags.contains(&Tag::Ammunition));
+        let (quiver, case) = (rolled("Quiver", 3).1, rolled("Bolt case", 3).1);
+        let (q, c) = (quiver.holds.unwrap(), case.holds.unwrap());
+        assert!(q.takes(Family::Arrow) && !q.takes(Family::Bolt) && !q.takes(Family::Food));
+        assert!(c.takes(Family::Bolt) && !c.takes(Family::Arrow));
+        assert!(q.cols as usize * q.rows as usize >= 20 && c.cols as usize * c.rows as usize >= 20);
+        assert_eq!((quiver.stats.weight, case.stats.weight), (1.0, 1.0));
+        // A bag takes anything.
+        assert!(rolled("Pack", 3).1.holds.unwrap().takes(Family::Bolt));
+    }
+
+    #[test]
+    fn bows_and_crossbows_name_their_ammunition_and_range() {
+        let ranged = |base: &str, seed| rolled(base, seed).1.ranged.unwrap();
+        let shorts = (1..200).map(|s| ranged("Bow", s)).collect::<Vec<_>>();
+        assert!(shorts.iter().all(|r| r.ammunition == Family::Arrow));
+        assert!(shorts.iter().any(|r| r.range == Range::new(80.0, 320.0)) && shorts.iter().any(|r| r.range == Range::new(150.0, 600.0)));
+        let xbows = (1..200).map(|s| ranged("Crossbow", s)).collect::<Vec<_>>();
+        assert!(xbows.iter().all(|r| r.ammunition == Family::Bolt));
+        assert!(xbows.iter().any(|r| r.range == Range::new(80.0, 320.0)) && xbows.iter().any(|r| r.range == Range::new(100.0, 400.0)));
+        assert!(rolled("Sword", 1).1.ranged.is_none());
     }
 
     #[test]

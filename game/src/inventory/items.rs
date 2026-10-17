@@ -34,6 +34,8 @@ pub enum Refusal {
     IntoItself,
     /// Too long to pack (a long spear, staff or bow) or too heavy (a chest).
     Unpackable,
+    /// The container takes only certain things (a quiver takes arrows).
+    NotAccepted,
     NotAContainer,
     NotWearable,
     WrongSlot,
@@ -53,6 +55,7 @@ impl Refusal {
             Refusal::NoRoom => "No room there.",
             Refusal::IntoItself => "It cannot go inside itself.",
             Refusal::Unpackable => "Too long or heavy to pack.",
+            Refusal::NotAccepted => "That does not go in there.",
             Refusal::NotAContainer => "That holds nothing.",
             Refusal::NotWearable => "That is not something you can wear.",
             Refusal::WrongSlot => "That does not go there.",
@@ -73,7 +76,7 @@ impl From<Misfit> for Refusal {
 /// Worn slots that carry a container whose grid shows on the inventory screen, in the order
 /// they show: the pack or sack on the back, then the belt's pouch (the plate's
 /// `containersOf`).
-pub const CARRYING_SLOTS: [Slot; 2] = [Slot::Back, Slot::Belt];
+pub const CARRYING_SLOTS: [Slot; 3] = [Slot::Back, Slot::Belt, Slot::Hip];
 
 /// The minute of fuel a light's card shows ("Fuel 0:42"), rounded as the card rounds it.
 fn fuel_minute(item: &Item) -> Option<u32> {
@@ -227,10 +230,24 @@ impl Inventory {
         if !item.profile.packable {
             return Err(Refusal::Unpackable);
         }
+        if !self.accepts(container, item) {
+            return Err(Refusal::NotAccepted);
+        }
         let size = super::grid::oriented(item.profile.footprint, at.turned);
         let ignoring = matches!(self.location(id), Some(Location::In { container: c, .. }) if c == container).then_some(id);
         grid.check(size, at.x as i32, at.y as i32, ignoring)?;
         Ok(())
+    }
+
+    /// Whether `container` takes `item` by its filter ([`fb_items::footprint::Grid::takes`]).
+    pub fn accepts(&self, container: ItemId, item: &Item) -> bool {
+        self.item(container).and_then(|c| c.profile.holds.as_ref()).is_none_or(|g| g.takes(item.shape.family()))
+    }
+
+    /// Mutable access to the shape of `id`, for state that changes in play (the arrow nocked
+    /// on a bow, the ammunition a quiver shows). Not for changing what the item is.
+    pub fn shape_mut(&mut self, id: ItemId) -> Option<&mut armory::Item> {
+        self.items.get_mut(&id).map(|i| &mut i.shape)
     }
 
     /// Puts `id` into `container`'s grid at `at`, taking it from wherever it was. Refused, it
@@ -252,8 +269,11 @@ impl Inventory {
             return Err(Refusal::Unpackable);
         }
         let footprint = item.profile.footprint;
-        for container in self.carried_containers() {
-            if self.holds(id, container) {
+        // A container that names what it takes (a quiver) is tried before one that takes anything.
+        let mut containers = self.carried_containers();
+        containers.sort_by_key(|c| self.item(*c).and_then(|c| c.profile.holds.as_ref()).is_none_or(|g| g.accepts.is_empty()));
+        for container in containers {
+            if self.holds(id, container) || !self.accepts(container, self.item(id).ok_or(Refusal::Unknown)?) {
                 continue;
             }
             if let Some(at) = self.grids[&container].first_free(footprint) {
@@ -272,8 +292,9 @@ impl Inventory {
         if item.profile.holds.is_some()
             && let Some(slot) = item.profile.slot.filter(|s| CARRYING_SLOTS.contains(s))
             && self.worn(slot).is_none()
+            && self.wear(id, slot).is_ok()
         {
-            return self.wear(id, slot);
+            return Ok(());
         }
         self.stow(id).map(|_| ())
     }
@@ -687,5 +708,25 @@ mod tests {
         assert_eq!(inventory.target_slot(lantern), Some(Slot::Hip));
         assert_eq!(inventory.equip(lantern, Slot::Hip), Ok(None));
         assert_eq!((inventory.worn(Slot::Mainhand), inventory.worn(Slot::Offhand)), (Some(sword), Some(dagger)));
+    }
+
+    #[test]
+    fn a_quiver_takes_only_arrows_and_a_bolt_case_only_bolts() {
+        let mut inventory = Inventory::default();
+        let (quiver, case) = (inventory.add(rolled("Quiver", 1)), inventory.add(rolled("Bolt case", 1)));
+        let (arrow, bolt, bread) = (inventory.add(rolled("Arrow", 1)), inventory.add(rolled("Bolt", 1)), inventory.add(rolled("Bread", 1)));
+        let at = Placement::new(0, 0, false);
+        assert_eq!(inventory.put(arrow, quiver, at), Ok(()));
+        assert_eq!(inventory.check_put(bolt, quiver, at), Err(Refusal::NotAccepted));
+        assert_eq!(inventory.check_put(bread, quiver, at), Err(Refusal::NotAccepted));
+        assert_eq!(inventory.check_put(bolt, case, at), Ok(()));
+        assert_eq!(inventory.check_put(arrow, case, Placement::new(1, 0, false)), Err(Refusal::NotAccepted));
+        // Twenty arrows fit, found by the quiver before a pack.
+        inventory.wear(quiver, Slot::Back).unwrap();
+        for seed in 2..21 {
+            let more = inventory.add(rolled("Arrow", seed));
+            assert_eq!(inventory.stow(more), Ok(quiver));
+        }
+        assert_eq!(inventory.contents_count(quiver), 20);
     }
 }

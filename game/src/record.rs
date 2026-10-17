@@ -277,6 +277,25 @@ mod tests {
     }
 
     #[test]
+    fn a_quiver_and_its_arrows_round_trip_and_a_loose_arrow_rolls_again() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
+        for seed in 0..20 {
+            let arrow = inventory.add(fb_items::roll_item("Arrow", seed).unwrap());
+            let at = inventory.grid(quiver).unwrap().first_free(inventory.footprint(arrow).unwrap()).unwrap();
+            inventory.put(arrow, quiver, at).unwrap();
+        }
+        let json = serde_json::to_string(&record_item(&inventory, quiver).unwrap()).unwrap();
+        let mut other = Inventory::default();
+        let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(other.contents_count(again), 20);
+        assert_eq!(other.item(again), inventory.item(quiver));
+        // A shot that came to rest is a level spot of its family and seed, which rolls the arrow again.
+        let arrow = fb_items::roll_item("Arrow", 77).unwrap();
+        assert_eq!(fb_items::roll_loot(arrow.shape.family(), arrow.seed, arrow.odds), Some(arrow));
+    }
+
+    #[test]
     fn a_deep_find_restores_with_the_rarity_it_rolled() {
         let odds = fb_items::Odds::loot(8);
         let seed = (1..500).find(|&s| fb_items::roll_item_with("Sword", s, odds).unwrap().rarity != fb_items::roll_item("Sword", s).unwrap().rarity).unwrap();

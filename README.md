@@ -4,6 +4,39 @@ A first-person delve into an endless Stygian abyss. Rust and Bevy 0.20.
 
 Start with `HANDOFF.md`. Claude Code reads `CLAUDE.md` on its own. Run tests with `cargo test --workspace` or `cargo nextest run --workspace` for faster parallel execution.
 
+## Installing
+
+### Download a release
+
+Each release on the repository's [Releases](https://github.com/turn-radius/forever_below_game/releases) page has a zip for Windows, macOS and Linux. Unzip it anywhere and keep the `assets` folder beside the game, which loads everything from there.
+
+- **Windows:** run `forever_below.exe`. If SmartScreen says it protected your PC, choose More info, then Run anyway; the build is not signed.
+- **macOS (Apple silicon):** in Terminal, in the unzipped folder, run `xattr -dr com.apple.quarantine .` once, then `./forever_below`. The build is not signed, so Gatekeeper blocks it until the quarantine flag is cleared.
+- **Linux (x86-64):** run `./forever_below`. It needs ALSA and udev, which most desktops already have (`libasound2` and `libudev1` on Debian and Ubuntu).
+
+A graphics card with Vulkan, DirectX 12 or Metal is needed, which any computer from the last several years has.
+
+### Build from source
+
+1. Install Rust with [rustup](https://rustup.rs). The repository's `rust-toolchain.toml` picks the toolchain (Rust 1.97.1 or newer), and rustup fetches it on the first build.
+2. Install the platform's build tools:
+   - **Windows:** the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload. The rustup installer offers to install them.
+   - **macOS:** `xcode-select --install`.
+   - **Linux (Debian or Ubuntu):** `sudo apt install build-essential pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev`. Other distributions are listed in Bevy's [setup guide](https://bevy.org/learn/quick-start/getting-started/setup/).
+3. Clone and run:
+
+   ```
+   git clone https://github.com/turn-radius/forever_below_game.git
+   cd forever_below_game
+   cargo run --release -p forever_below
+   ```
+
+   The first build compiles Bevy and takes several minutes; later builds are quick. `--release` plays smoothly; leave it off for a faster build while working on the code.
+
+### Making a release
+
+Push a version tag, such as `git tag v0.2.0 && git push origin v0.2.0`. The Release workflow (`.github/workflows/release.yml`) builds the game on Windows, macOS and Linux and attaches a zip for each to a new GitHub release. Running the workflow by hand from the Actions tab builds the same zips as workflow artifacts without publishing a release.
+
 ## Running the game
 
 Everything runs from the repository root with `cargo run -p forever_below -- <options>`. The `--` separates cargo's own options from the game's.
@@ -33,7 +66,9 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 | F | pick up what you're looking at, take the stairs, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
 | G | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand (or the off hand, if only that is free), a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay; a lantern goes in a free hand, else at the hip if you wear a belt, where it lights the way with both hands full |
 | Right click | block (bound, not yet acted on) |
-| R, T, Alt, J | tertiary and special actions, compare and journal (bound, not yet acted on) |
+| R | tertiary action: with a crossbow in hand and nothing aimed at, span and load it from the bolt case |
+| Alt | hold over an item to compare it with what you wear in its place |
+| T, J | special action and journal (bound, not yet acted on) |
 | L, Shift+L | light or put out the torch or lantern you carry, the one in hand first, then the one at your hip; Shift+L acts on the hip lantern alone. In the inventory, L lights or puts out the torch or lantern under the mouse, wherever it lies; its card says which. A spent torch will not light. Every lit light you carry shines |
 | M | map of the level, filled in as you explore: only cells you have seen while they were lit are drawn, as an inked plan with you marked by an amber arrow; scroll to zoom about the mouse, drag to pan; M or Esc closes it, and the body holds still while it is open |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); right click turns a dragged item; F eats or drinks the food or drink under the mouse; double-click wears or takes off; drag the doll to turn it |
@@ -46,7 +81,7 @@ Rats and snakes notice you, close in and bite. Your hit points show low on the l
 
 Small round badges just above the left end of the quickslot bar show the conditions you are under right now: hungry, thirsty or sleepy past the first band, exhausted, winded, burdened or heavier, and held by a constrictor. Each is coloured from cream to red as it gets worse and goes when the condition does; when the mouse is free (say, after switching windows), hovering one names it and says what it does.
 
-Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
+Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS, `%APPDATA%\Forever Below\settings.json` on Windows and `~/.config/forever-below/settings.json` on Linux.
 
 To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, scenery as `%` rubble, `~` bones and `o` pillar, stairs as `>` down and `<` up, and creatures as `r` rat, `R` giant rat, `v` poisonous snake, `S` constrictor snake and `k` skeleton, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
 
@@ -183,8 +218,10 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_FOLK_WALK=<n>` | every folk in the level walks in place at `n` times its natural pace (`FB_FOLK_WALK=1`), to see the gait and measure its cost before anything moves them |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
+| `FB_COMPARE=1` | holds Alt, so the hover card shows its compare card beside it |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
+| `FB_KEYBINDINGS=<file.toml>` | reads and writes keybindings from another file; default `keybindings.toml` beside the settings file |
 | `FB_FRAME_TIME=<frames>` | prints Bevy's smoothed frame time at each listed frame (`240,270,300`) and quits after the last; with `FB_DEBUG_POSE`, measures a view's frame rate in the window at vsync |
 | `FB_SOAK=<seconds>` | plays the level by itself for that long, then quits: walks random paths, fights the creatures it meets, picks up, equips and drops things, opens containers, the inventory and the menu, and logs a `soak:` line to stderr every 10 s (entities, meshes, images, materials, cameras, readbacks, icons, render phases, frame time). With `--title` it begins a new delve from the title, and after a death begins another, a second after the title shows, first logging a `soak: title` line with the entities on it, which should read the same after every death. For finding crashes and leaks that only show after a long session |
 | `FB_SOAK_SEED=<n>` | with `FB_SOAK`, seeds the autopilot's choices (1 by default), so parallel soaks on one level take different ways |
@@ -257,6 +294,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[interface]` | `cell_size` | 72.0 | Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there. |
 | `[interface]` | `min_cell_size` | 48.0 | The fewest logical pixels a cell is drawn at, however short the window. |
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
+| `[input]` | `hold_time` | 0.25 | Seconds a key or button is held before a Hold binding fires. A press let go sooner is a tap. |
 | `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
 | `[recovery]` | `minutes_per_hit_point` | 10.0 | Game minutes a fed and watered, unpoisoned delver takes to regain one hit point (10 = one every 50 real seconds at the usual clock). Our own. |
 

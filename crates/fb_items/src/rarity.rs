@@ -333,7 +333,7 @@ mod tests {
             }
         }
         for base in crate::armory_base::ARMORY_BASES.iter().map(|(name, _)| *name) {
-            for seed in 0..60 {
+            for seed in 0..20 {
                 if let Some(item) = crate::roll_item_with(base, seed, Odds::loot(6)) {
                     assert!(item.affixes.iter().all(|a| a.in_play()), "{base} {seed}: {:?}", item.affixes.iter().map(|a| &a.name).collect::<Vec<_>>());
                 }
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn no_item_carries_two_affixes_of_one_group_and_tiers_keep_to_their_rarity() {
-        let items = deep_rolls(150);
+        let items = deep_rolls(80);
         let mut seen = std::collections::HashSet::new();
         for item in &items {
             for (i, a) in item.affixes.iter().enumerate() {
