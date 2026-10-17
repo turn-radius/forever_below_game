@@ -38,7 +38,7 @@ fn the_lab_builds_its_sheet_and_rebuilds_it_on_a_change() {
     assert_eq!(app.world_mut().query::<&RulesColumn>().iter(app.world()).count(), 1);
     assert_eq!(app.world_mut().query::<&TabPane>().iter(app.world()).count(), 4);
     let shown = texts(&mut app);
-    for want in ["Human Fighter", "Life", "Hunger", "Sleepiness", "Exhaustion", "Armour", "Damage", "Load", "15", "1\u{2013}8", "27", " / 150", "Sallet", "Mail Hauberk", "Messer", "+ Put on or hold an item", "Rules", "Fight", "Time and needs", "Eat, drink, equip", "Effects", "after effects land"] {
+    for want in ["Human Fighter", "Life", "Hunger", "Sleepiness", "Exhaustion", "Armour", "Damage", "Load", "15", "1\u{2013}8", "27", " / 150", "Sallet", "Mail Hauberk", "Messer", "+ Put on or hold an item", "Rules", "Fight", "Time and needs", "Eat, drink, equip", "Effects", "Sewer plague", "comfortable surroundings", "at 50%"] {
         assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
     }
     assert!(shown.iter().all(|t| !t.contains(" = ")), "no formula: {shown:?}");
