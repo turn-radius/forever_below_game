@@ -252,6 +252,10 @@ pub fn use_of(item: &Item) -> Option<Verb> {
             fb_items::Consume::Drink => Verb::Drink,
         });
     }
+    // A waterskin with water in it is drunk from, though drinking leaves it.
+    if item.can_sip() {
+        return Some(Verb::Drink);
+    }
     // Light only a light that would catch: a spent torch or an empty lantern will not.
     item.shape.lit().and_then(|lit| {
         if lit {
@@ -502,6 +506,14 @@ mod tests {
         let mut keymap = Keymap::default();
         keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![crate::keymap::Input::Key(KeyCode::KeyE)];
         assert_eq!(key_line(&keymap, &carried("Dagger", Place::Ground)), "E Take \u{b7} G Equip \u{b7} Alt Compare");
+    }
+
+    #[test]
+    fn an_empty_waterskin_has_no_use() {
+        let mut skin = roll_item("Waterskin", 3).unwrap();
+        assert_eq!(use_of(&skin), Some(Verb::Drink));
+        while skin.sip().is_some() {}
+        assert_eq!(use_of(&skin), None);
     }
 
     #[test]

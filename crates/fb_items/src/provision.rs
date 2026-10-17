@@ -47,8 +47,8 @@ const fn drink(water: f64) -> Provision {
 }
 
 /// Every base that is used up by eating or drinking. The waterskin and the lamp oil are not:
-/// a waterskin is a vessel that stays. The potion and the healing draught are drinks that
-/// quench nothing here.
+/// a waterskin is a vessel that stays and is drunk from ([`Item::sip`]). The potion and the
+/// healing draught are drinks that quench nothing here.
 pub const PROVISIONS: &[(&str, Provision)] = &[
     ("Bread", food(0.4)),
     ("Cheese", food(0.3)),
@@ -64,6 +64,10 @@ pub const PROVISIONS: &[(&str, Provision)] = &[
     ("Potion", drink(0.0)),
     ("Healing draught", drink(0.0)),
 ];
+
+/// How much of a waterskin's fill one swallow takes, and how much thirst it quenches. A full
+/// skin is four swallows. Our own.
+pub const SWALLOW: f32 = 0.25;
 
 /// What base `base` takes off the meters, or `None` if it is not eaten or drunk.
 pub fn provision(base: &str) -> Option<Provision> {
@@ -83,6 +87,23 @@ impl Item {
             armory::Item::Food(s) if matches!(s.provision.style, FoodStyle::Tankard | FoodStyle::Bottle | FoodStyle::Potion) => Consume::Drink,
             _ => Consume::Eat,
         })
+    }
+
+    /// Whether this is a waterskin with water left to drink from.
+    pub fn can_sip(&self) -> bool {
+        matches!(&self.shape, armory::Item::Food(s) if s.provision.style == FoodStyle::Waterskin && s.provision.is_full())
+    }
+
+    /// Takes a swallow from a waterskin: its fill drops by up to [`SWALLOW`], and the water that
+    /// quenches is what came out. `None`, and nothing changed, if it is not a skin with water.
+    pub fn sip(&mut self) -> Option<Provision> {
+        if !self.can_sip() {
+            return None;
+        }
+        let armory::Item::Food(s) = &mut self.shape else { return None };
+        let taken = s.provision.fill.min(SWALLOW);
+        s.provision.fill -= taken;
+        Some(drink(taken as f64))
     }
 }
 
@@ -106,6 +127,31 @@ mod tests {
         assert_eq!(provision("Tankard").unwrap().water, 0.5);
         assert_eq!(provision("Healing draught"), Some(Provision { nutrition: 0.0, water: 0.0 }));
         assert!(provision("Torch").is_none() && provision("Waterskin").is_none());
+    }
+
+    #[test]
+    fn a_waterskin_is_drunk_from_a_swallow_at_a_time() {
+        let fill = |item: &Item| match &item.shape {
+            armory::Item::Food(s) => s.provision.fill,
+            _ => unreachable!(),
+        };
+        let mut skin = roll_item("Waterskin", 3).unwrap();
+        assert!(skin.consume().is_none() && skin.can_sip());
+        let before = fill(&skin);
+        let swallow = skin.sip().unwrap();
+        assert!((swallow.water - SWALLOW as f64).abs() < 1e-6 && swallow.nutrition == 0.0);
+        assert!((before - fill(&skin) - SWALLOW).abs() < 1e-6);
+        while skin.sip().is_some() {}
+        assert!(!skin.can_sip());
+        assert!(roll_item("Bread", 3).unwrap().sip().is_none());
+    }
+
+    #[test]
+    fn a_sipped_skins_fill_survives_a_round_trip() {
+        let mut skin = roll_item("Waterskin", 3).unwrap();
+        skin.sip().unwrap();
+        let back: armory::Item = serde_json::from_str(&serde_json::to_string(&skin.shape).unwrap()).unwrap();
+        assert_eq!(back, skin.shape);
     }
 
     #[test]
