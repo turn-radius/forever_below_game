@@ -226,3 +226,13 @@ hit_points = 84
 hit_dice = { count = 8, sides = 10, bonus = 40 }
 bite = { count = 1, sides = 6, bonus = 4 }
 venom = { count = 0, sides = 0, bonus = 0 }
+
+# Jackalope, not in the SRD (ours): Small, Armor Class 14, Hit Points 9 (2d6 + 2); Antlers +4 to
+# hit, 5 (1d6 + 2) piercing.
+[creatures."Jackalope"]
+armour_class = 14
+attack_bonus = 4
+hit_points = 9
+hit_dice = { count = 2, sides = 6, bonus = 2 }
+bite = { count = 1, sides = 6, bonus = 2 }
+venom = { count = 0, sides = 0, bonus = 0 }

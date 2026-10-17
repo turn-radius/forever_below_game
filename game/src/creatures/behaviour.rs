@@ -235,6 +235,8 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
         Creature::Spider(spider) => player_radius + 0.3 * spider.span * critter.size,
         // The floor it covers and the arms' reach past it.
         Creature::Troll(_) => player_radius + 1.1 * critter.radius,
+        // Its head lowered, the antlers a little past its nose.
+        Creature::Jackalope(jackalope) => player_radius + 0.55 * jackalope.length * critter.size,
     }
 }
 
@@ -246,6 +248,7 @@ pub fn body_radius(critter: &Critter) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => 0.3 * rat.length * critter.size,
         Creature::Snake(_) => critter.radius.min(SNAKE_SQUEEZE),
+        Creature::Jackalope(jackalope) => 0.3 * jackalope.length * critter.size,
         Creature::Skeleton(skeleton) => 0.12 * critter.kit.as_ref().map_or_else(|| skeleton.height(), |k| k.height) * critter.size,
         // Its body, not its legs, which fold round whatever it passes.
         Creature::Spider(spider) => 0.2 * spider.span * critter.size,

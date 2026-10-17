@@ -8,7 +8,7 @@
 //! moving`, or `--skeleton --seed 7 --motion swing [--bare]` ([`CreatureChoice::from_args`]).
 
 use bevy::{camera::Exposure, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera};
-use fb_creatures::pose::{self, ArmStance, RatPose, SkeletonPose, SnakePose, SpiderPose};
+use fb_creatures::pose::{self, ArmStance, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::skeleton::SkeletonDims;
 use fb_creatures::{Creature, SkeletonGear, Species};
 
@@ -99,6 +99,7 @@ pub fn parse_species(name: &str) -> Option<Species> {
         "skeleton" => Some(Species::Skeleton),
         "giant_spider" | "spider" => Some(Species::GiantSpider),
         "troll" => Some(Species::Troll),
+        "jackalope" => Some(Species::Jackalope),
         _ => None,
     }
 }
@@ -123,7 +124,7 @@ impl CreatureChoice {
                 "--bare" => choice.gear = false,
                 "--species" => {
                     let name = value()?;
-                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton, giant_spider, troll"))?;
+                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton, giant_spider, troll, jackalope"))?;
                 }
                 "--seed" => {
                     let seed = value()?;
@@ -246,6 +247,10 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
         let reach = Vec2::new(laid.0[0].abs().max(laid.1[0]), laid.0[2].abs().max(laid.1[2]));
         size = size.max(Vec3::new(reach.x * 2.0, laid.1[1] - laid.0[1], reach.y * 2.0));
     }
+    if matches!(creature, Creature::Jackalope(_)) && choice.motion == ViewMotion::Rearing {
+        // Sat up it stands well taller than at rest.
+        size.y *= 1.7;
+    }
     let appearance = ItemAppearance { seed: choice.seed, ..default() };
     let pivot = commands.spawn((Transform::from_xyz(0.0, 0.0, 0.0), Visibility::default())).id();
     let mut bones: Vec<Entity> = Vec::new();
@@ -310,6 +315,12 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
                 let rear = if matches!(choice.motion, ViewMotion::Rearing | ViewMotion::Striking) { 1.0 } else { 0.0 };
                 pose::spider(spider, &SpiderPose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, rear, bite: strike, curl: 0.0 })
             }
+            Creature::Jackalope(jackalope) => {
+                shown.cycle = (shown.cycle + speed * dt / pose::jackalope_stride(jackalope) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                // Rearing sits it up with the ears turning; striking gores.
+                let sit = if choice.motion == ViewMotion::Rearing { 1.0 } else { 0.0 };
+                pose::jackalope(jackalope, &JackalopePose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, sit, gore: strike, look: 0.0 })
+            }
             Creature::Skeleton(skeleton) => {
                 let dims = shown.dims.get_or_insert_with(|| skeleton.dims());
                 shown.cycle = (shown.cycle + speed * dt / pose::skeleton_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
@@ -351,7 +362,12 @@ fn frame_camera(shown: Query<&Shown>, mut cameras: Query<(&Projection, &mut Tran
         let Projection::Perspective(perspective) = projection else { continue };
         // The turntable's framing allows for the whole sweep; a creature is lower and longer.
         // A skeleton stands tall rather than long, so it is framed as the turntable frames an item.
-        let share = if matches!(shown.creature, Creature::Skeleton(_) | Creature::Spider(_) | Creature::Troll(_)) { 0.8 } else { 0.6 };
+        let share = match shown.creature {
+            Creature::Skeleton(_) | Creature::Spider(_) | Creature::Troll(_) => 0.8,
+            // Ears and antlers make it tall as well as long.
+            Creature::Jackalope(_) => 0.75,
+            _ => 0.6,
+        };
         let distance = share * framing_distance(shown.size, perspective, FILL);
         let centre = Vec3::new(0.0, shown.size.y * 0.5, 0.0);
         let target = Transform::from_translation(centre + Vec3::new(0.0, ELEVATION.sin(), ELEVATION.cos()) * distance).looking_at(centre, Vec3::Y);
@@ -373,6 +389,7 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         Creature::Skeleton(s) => skeleton_look(s, choice.gear),
         Creature::Spider(s) => format!("{:?}, {:?}, {:.1} m across", s.colouring, s.marking, s.span / 10.0),
         Creature::Troll(t) => troll_look(t),
+        Creature::Jackalope(j) => format!("{:?}, {:.0} cm, antlers {}+{} tines", j.colouring, j.length * 10.0, j.tines[0], j.tines[1]),
     };
     let motion = if choice.species.is_skeleton() || choice.species.is_troll() { skeleton_motion(choice.motion) } else { format!("{:?}", choice.motion) };
     let line = format!(
@@ -384,7 +401,7 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         block.armour_class,
         block.hit_points,
         block.hit_dice,
-        if choice.species.is_skeleton() { "Shortsword" } else { "Bite" },
+        if choice.species.is_skeleton() { "Shortsword" } else if choice.species.is_jackalope() { "Antlers" } else { "Bite" },
         block.bite
     );
     let line = if choice.species.is_troll() { format!("{line}\nTwo claws {} each, Regeneration {} hit points a turn unless burned", fb_creatures::troll::CLAW, fb_creatures::troll::REGAIN) } else { line };

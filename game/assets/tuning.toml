@@ -81,6 +81,8 @@ skeleton = 1.0
 giant_spider = 1.0
 # Trolls, as a multiple.
 troll = 1.0
+# Jackalopes, as a multiple.
+jackalope = 1.0
 
 [combat]
 # How far your blows reach, as a multiple of the weapon's own reach.

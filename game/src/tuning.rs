@@ -214,11 +214,13 @@ pub struct CreatureSizes {
     pub giant_spider: f32,
     /// The troll.
     pub troll: f32,
+    /// The jackalope.
+    pub jackalope: f32,
 }
 
 impl Default for CreatureSizes {
     fn default() -> Self {
-        CreatureSizes { rat: 1.0, giant_rat: 1.0, viper: 1.0, constrictor: 1.0, skeleton: 1.0, giant_spider: 1.0, troll: 1.0 }
+        CreatureSizes { rat: 1.0, giant_rat: 1.0, viper: 1.0, constrictor: 1.0, skeleton: 1.0, giant_spider: 1.0, troll: 1.0, jackalope: 1.0 }
     }
 }
 
@@ -233,6 +235,7 @@ impl CreatureSizes {
             Species::Skeleton => self.skeleton,
             Species::GiantSpider => self.giant_spider,
             Species::Troll => self.troll,
+            Species::Jackalope => self.jackalope,
         }
     }
 }
@@ -670,8 +673,8 @@ mod tests {
 
     #[test]
     fn every_species_has_a_size() {
-        let sizes = CreatureSizes { rat: 1.0, giant_rat: 2.0, viper: 3.0, constrictor: 4.0, skeleton: 5.0, giant_spider: 6.0, troll: 7.0 };
-        let all = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll];
+        let sizes = CreatureSizes { rat: 1.0, giant_rat: 2.0, viper: 3.0, constrictor: 4.0, skeleton: 5.0, giant_spider: 6.0, troll: 7.0, jackalope: 8.0 };
+        let all = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll, Species::Jackalope];
         assert_eq!(all.map(|s| sizes.of(s)).to_vec(), (1..=all.len()).map(|n| n as f32).collect::<Vec<_>>());
     }
 

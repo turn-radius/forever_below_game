@@ -159,6 +159,7 @@ pub fn knockback(creature: &Creature) -> f32 {
         Creature::Skeleton(s) => s.drawn_size(),
         Creature::Spider(s) => s.drawn_size(),
         Creature::Troll(t) => t.drawn_size(),
+        Creature::Jackalope(j) => j.drawn_size(),
     };
     knockback_for(size)
 }
@@ -262,7 +263,7 @@ pub fn take_blows(
             }
         } else if let Some(sounds) = &sounds {
             // A troll grunts under the blow: the dull thud, never a rat's squeak or a snake's hiss.
-            let sound = if critter.spot.species.is_rat() {
+            let sound = if critter.spot.species.is_rat() || critter.spot.species.is_jackalope() {
                 sounds.squeak.clone()
             } else if critter.spot.species.is_troll() {
                 sounds.thud.clone()
@@ -368,6 +369,7 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
                 intent.fallen = share.max(1e-3);
                 *transform = laid_back(2.0 * troll.map_or(25.0, |t| t.height), &corpse.fell, share);
             }
+            Creature::Jackalope(jackalope) => *transform = tipped_over(jackalope, &corpse.fell, collapse_share(corpse.since, hold)),
             Creature::Snake(_) => {}
             Creature::Spider(spider) => {
                 let share = collapse_share(corpse.since, hold);
@@ -402,6 +404,18 @@ pub fn rolled_over(rat: &fb_creatures::RatState, fell: &Transform, share: f32) -
     let roll = Quat::from_rotation_z(0.9 * std::f32::consts::PI * s);
     let middle = Vec3::Y * d.centre_height;
     let drop = (d.centre_height - d.half_height).max(0.0) * s;
+    let local = middle - roll * middle - Vec3::Y * drop;
+    Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
+}
+
+/// A jackalope that stood at `fell`, `share` of the way through toppling onto its side: turned
+/// about its length through its body's middle and lowered so its flank rests on the floor.
+pub fn tipped_over(jackalope: &fb_creatures::JackalopeState, fell: &Transform, share: f32) -> Transform {
+    let d = jackalope.dims();
+    let s = share * share * (3.0 - 2.0 * share);
+    let roll = Quat::from_rotation_z(0.5 * std::f32::consts::PI * s);
+    let middle = Vec3::Y * d.centre_height;
+    let drop = (d.centre_height - d.half_width).max(0.0) * s;
     let local = middle - roll * middle - Vec3::Y * drop;
     Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
 }

@@ -33,6 +33,7 @@ use armory::geom::vec3::{self, Mat3, V3};
 use fb_body::{Placement, Side};
 use std::f32::consts::{PI, TAU};
 
+use crate::jackalope::{EAR_SPLIT, JackalopeState, REST_PITCH, bone as jackalope_bone, ear_bow};
 use crate::rat::{LEGS, RatState, TAIL_BONES, bone as rat_bone};
 use crate::shape::{keyed, spine_to_creature};
 use crate::skeleton::{SkeletonDims, SkeletonState, arm_bone, index as skeleton_bone, leg_bone};
@@ -1176,4 +1177,315 @@ pub fn troll_with(d: &SkeletonDims, pose: &SkeletonPose) -> Vec<Placement> {
 /// the limbs out and lets the head drop back.
 pub fn troll_fallen(d: &SkeletonDims, share: f32) -> Vec<Placement> {
     skeleton_fallen(d, share)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Jackalope: a hop, a sit up with the ears turning, and a lowered head to gore.
+//
+// - Hopping is a bound. Both hind paws plant together and push off, the body stretching out and
+//   rising; the forepaws land together a little later and the body gathers over them; then the
+//   body is in the air with all four paws clear until the hind paws land ahead again. Each
+//   paw is planted on the floor through its stance and carried through its swing, the leg bent
+//   to reach it by [`two_bone`], so no paw sinks into the floor; only in flight, when no paw is
+//   down, does the body leave it.
+// - Sitting up tips the body about the hips until it stands on its haunches, the hind feet laid
+//   flat in front of it, the forepaws drawn up to the chest and the ears standing and turning
+//   to catch a sound.
+// - A gore lowers the head until the antlers point ahead, drops the chest and throws the body
+//   forward over its planted feet, the ears pinned back.
+// ---------------------------------------------------------------------------------------------
+
+/// How a jackalope is moving at a moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct JackalopePose {
+    /// The hop cycle, radians: one turn per [`jackalope_stride`] covered.
+    pub stride: f32,
+    /// Speed as a share of its walking speed: 0 standing, 1 hopping, 2 bolting.
+    pub pace: f32,
+    /// Seconds, for what it does standing: sniffing, the ears' sway and the tail's twitch.
+    pub time: f32,
+    /// 0 on all fours to 1 sat up on its haunches; only when standing still.
+    pub sit: f32,
+    /// A gore's lunge, 0 to 1 at full stretch with the head down.
+    pub gore: f32,
+    /// How far the head turns toward its left (+X), radians.
+    pub look: f32,
+}
+
+/// The ground a jackalope covers in one hop cycle, as a share of its length. Our own.
+pub const HOP_STRIDE: f32 = 1.3;
+/// The shares of the cycle the hind and the fore paws are on the floor, and when the fore paws
+/// land. The rest is flight. Our own.
+const HIND_DUTY: f32 = 0.28;
+const FORE_DUTY: f32 = 0.22;
+const FORE_LANDS: f32 = 0.4;
+/// How high the body rises in flight, and the paws in their swing, as shares of its length.
+const HOP_HEIGHT: f32 = 0.26;
+const HIND_LIFT: f32 = 0.16;
+const FORE_LIFT: f32 = 0.11;
+/// How far the body tips at full hop (radians), tips up sitting, and drops its chest to gore.
+const HOP_PITCH: f32 = 0.3;
+const SIT_PITCH: f32 = 1.05;
+const GORE_PITCH: f32 = -0.04;
+
+/// The ground a jackalope covers in one full hop cycle: [`HOP_STRIDE`] of its length.
+pub fn jackalope_stride(jackalope: &JackalopeState) -> f32 {
+    HOP_STRIDE * jackalope.length
+}
+
+/// The rotation of a vector from creature space into the spine frame of a body pitched by
+/// `pitch`: the transpose of the body's rotation.
+fn into_spine(pitch: f32) -> Mat3 {
+    let [x, y, z] = spine_to_creature().mul_mat(&rx(pitch)).cols;
+    Mat3::from_cols([x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]])
+}
+
+/// How high the hips of a jackalope sitting up must be for its haunches to rest on the floor:
+/// the lowest point of its body, with the body pitched by [`SIT_PITCH`] about the hips, lies on
+/// the floor.
+fn sit_hip_height(state: &JackalopeState) -> f32 {
+    let d = state.dims();
+    let trunk = state.body_trunk(&d);
+    let r = spine_to_creature().mul_mat(&rx(SIT_PITCH));
+    let hip = [0.0, d.hip[1], d.hip[2]];
+    let mut low = f32::MAX;
+    for i in 0..=12 {
+        for j in 0..24 {
+            let p = trunk.point(0.65 * i as f32 / 12.0, j as f32 / 24.0 * TAU, 0.0);
+            low = low.min(r.transform(vec3::sub(p, hip))[1]);
+        }
+    }
+    -low
+}
+
+/// The cycle's lift and pitch at cycle position `c` (0 as the hind paws land), as `(lift, pitch)`:
+/// the body's rise in flight, 0 to 1, and its tip, nose up +1 to nose down -1.
+fn hop_shape(c: f32) -> (f32, f32) {
+    let bump = |u: f32| 4.0 * u * (1.0 - u);
+    let fore_leaves = FORE_LANDS + FORE_DUTY;
+    let lift = if (HIND_DUTY..FORE_LANDS).contains(&c) {
+        0.2 * bump((c - HIND_DUTY) / (FORE_LANDS - HIND_DUTY))
+    } else if c >= fore_leaves {
+        bump((c - fore_leaves) / (1.0 - fore_leaves))
+    } else {
+        0.0
+    };
+    (lift, (TAU * (c - 0.15)).cos())
+}
+
+/// Every bone's placement on its parent for `pose`, in the jackalope's [`crate::Rig`] order.
+pub fn jackalope(state: &JackalopeState, pose: &JackalopePose) -> Vec<Placement> {
+    let d = state.dims();
+    let l = d.length;
+    let moving = pose.pace.clamp(0.0, 1.0);
+    let amplitude = pose.pace.clamp(0.0, 1.4);
+    let sit = pose.sit.clamp(0.0, 1.0) * (1.0 - moving);
+    let gore = pose.gore.clamp(0.0, 1.0);
+    let t = pose.time;
+    let still = 1.0 - moving;
+    let c = (pose.stride / TAU).rem_euclid(1.0);
+    let (lift, hop_pitch) = hop_shape(c);
+    let mut out = vec![Placement::IDENTITY; jackalope_bone::COUNT];
+
+    // The body: tipped by its rest, the hop, the sit and the gore; carried so the hips are
+    // where they should be, whatever it is tipped to.
+    let pitch = REST_PITCH + amplitude * HOP_PITCH * hop_pitch + sit * (SIT_PITCH - REST_PITCH) + gore * GORE_PITCH;
+    let rotation = spine_to_creature().mul_mat(&rx(pitch));
+    let hip_centre = [0.0, d.hip[1], d.hip[2]];
+    let rest_hip = spine_to_creature().mul_mat(&rx(REST_PITCH)).transform(hip_centre);
+    let stand_hip_height = d.hind.ankle + 0.8 * (d.hind.upper + d.hind.lower);
+    let breathe = 0.004 * l * (1.8 * t).sin() * still;
+    let lunge = 0.2 * l * gore;
+    let hip_height = (1.0 - sit) * (stand_hip_height - 0.04 * l * gore) + sit * (sit_hip_height(state) + 0.05 * l) + HOP_HEIGHT * l * amplitude * lift + breathe;
+    let hip_forward = rest_hip[2] + lunge - 0.1 * l * sit;
+    let offset = rotation.transform(hip_centre);
+    let origin = [0.0, hip_height - offset[1], hip_forward - offset[2]];
+    out[jackalope_bone::BODY] = Placement { rotation, origin };
+
+    // The head: sniffing about when still, up and alert when sat, down with the antlers ahead to
+    // gore. Its tip is set in the world, not on the body.
+    let sniff_pitch = still * (1.0 - 0.7 * sit) * (0.06 * (2.9 * t).sin() + 0.035 * (7.3 * t + 1.1).sin());
+    let sniff_yaw = still * (0.2 * (0.83 * t).sin() + 0.07 * (2.1 * t + 0.4).sin());
+    let head_pitch = 0.06 + 0.3 * sit + 0.2 * amplitude * moving + sniff_pitch - 0.62 * gore;
+    out[jackalope_bone::HEAD] = Placement {
+        rotation: rz(pose.look + sniff_yaw).mul_mat(&rx(head_pitch - pitch)),
+        origin: vec3::add(d.neck, [0.0, 0.1 * l * gore, 0.0]),
+    };
+
+    // The ears: standing and swaying, laid back to run, pinned to gore, and turning one way and
+    // the other to listen when sat. Each ear's tip follows its base a little late.
+    let alert = sit + 0.35 * still * (1.0 - sit);
+    for (k, side) in [-1.0f32, 1.0].into_iter().enumerate() {
+        let (root, rest) = d.ear_root(state, side);
+        let phase = if side < 0.0 { 0.0 } else { 2.3 };
+        let listen = alert * (0.5 * (1.3 * t + phase).sin() + 0.2 * (3.1 * t + 2.0 * phase).sin());
+        let flop = 0.12 * still * (0.7 * t + phase).sin() - (1.0 * moving * amplitude.min(1.0) + 1.3 * gore) - 0.25 * hop_pitch * amplitude + 0.12 * sit;
+        let twist = listen + 0.08 * still * (0.9 * t + 3.0 * phase).sin();
+        let place = Placement { rotation: rest.mul_mat(&rx(flop)).mul_mat(&ry(twist)), origin: root };
+        let tip_flop = -0.45 * moving * amplitude.min(1.0) - 0.4 * gore + 0.22 * hop_pitch * amplitude + 0.12 * (2.2 * t + phase).sin() * still;
+        let tip = Placement { rotation: rx(tip_flop), origin: [0.0, EAR_SPLIT * d.ear_length, ear_bow(EAR_SPLIT) * d.ear_length] };
+        out[jackalope_bone::EAR_LEFT + 2 * k] = place;
+        out[jackalope_bone::EAR_LEFT + 2 * k + 1] = tip;
+    }
+
+    // Legs: each paw's ankle follows its stance and swing, in the world; the leg solves to reach
+    // it from where its joint is, however the body is tipped.
+    let spine_from_creature = into_spine(pitch);
+    for k in 0..4 {
+        let (_, _, hind) = LEGS[k];
+        let leg = d.leg(k);
+        let root = d.leg_root(k);
+        let joint = vec3::add(origin, rotation.transform(root));
+        let (duty, comes, swing_lift) = if hind { (HIND_DUTY, 0.0, HIND_LIFT) } else { (FORE_DUTY, FORE_LANDS, FORE_LIFT) };
+        let phase = ((pose.stride / TAU) - comes).rem_euclid(1.0);
+        let sweep = duty * jackalope_stride(state);
+        let (along, up) = if phase < duty {
+            (sweep * (0.5 - phase / duty), 0.0)
+        } else {
+            let u = (phase - duty) / (1.0 - duty);
+            (sweep * (smoothstep(u) - 0.5), swing_lift * l * (PI * u).sin())
+        };
+        // Where it stands when still: the hind paws a little ahead of the hips, the fore under
+        // the shoulders; sat, the hind feet lie in front of the haunches.
+        let neutral = if hind { 0.07 * l + sit * 0.06 * l } else { 0.02 * l };
+        let vertical = joint[1] - (leg.ankle + up * moving);
+        let reach = 0.95 * ((leg.upper + leg.lower).powi(2) - vertical * vertical).max(0.0).sqrt();
+        let forward = (neutral + along * moving - 0.6 * lunge).clamp(-reach, reach);
+        let mut target = [0.0, leg.ankle + up * moving, joint[2] + forward];
+        if !hind && sit > 0.0 {
+            // Drawn up to the chest, hanging loose.
+            let tucked = [0.0, joint[1] - 0.78 * (leg.upper + leg.lower), joint[2] + 0.07 * l];
+            target = vec3::lerp(target, tucked, sit);
+        }
+        let local = spine_from_creature.transform(vec3::sub(target, joint));
+        let (upper, lower) = two_bone(leg.upper, leg.lower, [local[1], local[2]], hind);
+        let i = jackalope_bone::LEGS + 3 * k;
+        out[i] = Placement { rotation: rx(upper), origin: root };
+        out[i + 1] = Placement { rotation: rx(lower), origin: [0.0, 0.0, -leg.upper] };
+        // The paw stays level, flat on the floor; a sat jackalope's forepaws curl.
+        let curl = if hind { 0.0 } else { 0.9 * sit };
+        out[i + 2] = Placement { rotation: rx(-(upper + lower + pitch + curl)), origin: [0.0, 0.0, -leg.lower] };
+    }
+
+    // The tail: a tuft held low standing, flicked up to run, clear of the floor when sat.
+    let twitch = 0.08 * still * (2.4 * t).sin().max(0.0);
+    let raise = 0.12 + 0.7 * moving.max(gore) + 1.0 * sit + twitch;
+    out[jackalope_bone::TAIL] = Placement { rotation: rx(-raise), origin: d.tail_root };
+    out
+}
+
+/// A rotation about +Y (in a bone's own frame, twisting it about its length).
+fn ry(a: f32) -> Mat3 {
+    Mat3::from_axis_angle([0.0, 1.0, 0.0], a)
+}
+
+#[cfg(test)]
+mod jackalope_tests {
+    use super::*;
+
+    /// The lowest point of every part of a rig posed by `places`.
+    fn lowest(rig: &crate::Rig, places: &[Placement]) -> f32 {
+        rig.posed_mesh(places).bounds().unwrap().0[1]
+    }
+
+    /// The lowest point of one paw bone's parts, in creature space.
+    fn paw_bottom(rig: &crate::Rig, places: &[Placement], paw: usize) -> f32 {
+        let world = rig.world(places);
+        rig.bones[paw].mesh.parts.iter().flat_map(|p| &p.positions).map(|&q| world[paw].point(q)[1]).fold(f32::MAX, f32::min)
+    }
+
+    #[test]
+    fn a_hopping_jackalope_keeps_its_paws_on_the_floor_and_leaves_it_only_in_flight() {
+        for seed in [3, 11] {
+            let state = JackalopeState::roll(seed);
+            let rig = state.build();
+            let l = state.length;
+            for step in 0..48 {
+                for pace in [0.0, 0.5, 1.0, 2.0] {
+                    let stride = step as f32 / 48.0 * TAU;
+                    let places = jackalope(&state, &JackalopePose { stride, pace, time: step as f32 * 0.21, ..JackalopePose::default() });
+                    let low = lowest(&rig, &places);
+                    assert!(low > -0.02 * l, "seed {seed} sinks to {low} at step {step}, pace {pace}");
+                    let c = (stride / TAU).rem_euclid(1.0);
+                    let hind_down = c < HIND_DUTY;
+                    let fore_down = (FORE_LANDS..FORE_LANDS + FORE_DUTY).contains(&c);
+                    if pace == 0.0 || hind_down || fore_down {
+                        // A paw in stance is on the floor, and the body is where it carries it.
+                        let bottoms: Vec<f32> = (0..4)
+                            .filter(|&k| pace == 0.0 || if LEGS[k].2 { hind_down } else { fore_down })
+                            .map(|k| paw_bottom(&rig, &places, jackalope_bone::LEGS + 3 * k + 2))
+                            .collect();
+                        assert!(bottoms.iter().all(|b| b.abs() < 0.03 * l), "seed {seed} step {step} pace {pace}: paws at {bottoms:?}");
+                    } else {
+                        // In flight, the body is above the floor by no more than the hop's height.
+                        assert!(low < (HOP_HEIGHT + 0.12) * l * 1.4, "seed {seed} step {step} pace {pace}: {low}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_hopping_jackalope_stretches_and_gathers() {
+        let state = JackalopeState::roll(3);
+        let rig = state.build();
+        let spans: Vec<f32> = (0..24)
+            .map(|k| {
+                let places = jackalope(&state, &JackalopePose { stride: k as f32 / 24.0 * TAU, pace: 1.0, ..JackalopePose::default() });
+                let (lo, hi) = rig.posed_mesh(&places).bounds().unwrap();
+                hi[2] - lo[2]
+            })
+            .collect();
+        let (min, max) = (spans.iter().cloned().fold(f32::MAX, f32::min), spans.iter().cloned().fold(f32::MIN, f32::max));
+        assert!(max > 1.12 * min, "the body's length varies from {min} to {max}");
+    }
+
+    #[test]
+    fn a_sitting_jackalope_stands_up_on_its_haunches_and_rests_on_the_floor() {
+        for seed in [3, 8] {
+            let state = JackalopeState::roll(seed);
+            let rig = state.build();
+            let l = state.length;
+            let stand = jackalope(&state, &JackalopePose::default());
+            let sat = jackalope(&state, &JackalopePose { sit: 1.0, ..JackalopePose::default() });
+            let (stand_hi, sat_hi) = (rig.posed_mesh(&stand).bounds().unwrap().1[1], rig.posed_mesh(&sat).bounds().unwrap().1[1]);
+            assert!(sat_hi > 1.2 * stand_hi, "sat to {sat_hi}, standing to {stand_hi}");
+            let low = lowest(&rig, &sat);
+            assert!(low > -0.03 * l && low < 0.04 * l, "seed {seed}: sat on the floor at {low}");
+            // The hind feet are flat on it.
+            for k in [2, 3] {
+                let bottom = paw_bottom(&rig, &sat, jackalope_bone::LEGS + 3 * k + 2);
+                assert!(bottom.abs() < 0.03 * l, "seed {seed}: hind paw {k} at {bottom}");
+            }
+            // Its ears turn: they are not where they were a moment later.
+            let later = jackalope(&state, &JackalopePose { sit: 1.0, time: 1.7, ..JackalopePose::default() });
+            let turned = (0..2).any(|k| {
+                let i = jackalope_bone::EAR_LEFT + 2 * k;
+                (0..3).any(|j| vec3::distance(sat[i].rotation.cols[j], later[i].rotation.cols[j]) > 0.1)
+            });
+            assert!(turned, "seed {seed}: the ears do not turn");
+        }
+    }
+
+    #[test]
+    fn a_goring_jackalope_lowers_its_head_and_lunges() {
+        let state = JackalopeState::roll(3);
+        let rig = state.build();
+        let tip = |gore: f32| {
+            let places = jackalope(&state, &JackalopePose { gore, ..JackalopePose::default() });
+            let world = rig.world(&places);
+            // The antlers' highest point, and a point on the muzzle, in creature space.
+            let head = &rig.bones[jackalope_bone::HEAD];
+            let antlers = head.mesh.parts.iter().find(|p| p.name == "antlers").unwrap();
+            let top = antlers.positions.iter().map(|&p| world[jackalope_bone::HEAD].point(p)).fold([0.0, f32::MIN, 0.0], |a, p| if p[1] > a[1] { p } else { a });
+            (top, world[jackalope_bone::HEAD].point([0.0, 0.3 * state.length, 0.0]))
+        };
+        let (rest_antler, rest_nose) = tip(0.0);
+        let (gore_antler, gore_nose) = tip(1.0);
+        assert!(gore_nose[2] > rest_nose[2] + 0.15 * state.length, "the lunge carries the head forward");
+        assert!(gore_nose[1] < rest_nose[1] - 0.08 * state.length, "the head comes down");
+        assert!(gore_antler[1] < rest_antler[1], "the antlers come down");
+        let low = lowest(&rig, &jackalope(&state, &JackalopePose { gore: 1.0, ..JackalopePose::default() }));
+        assert!(low > -0.03 * state.length, "a goring jackalope does not sink into the floor: {low}");
+    }
 }

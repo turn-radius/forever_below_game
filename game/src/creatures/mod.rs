@@ -26,7 +26,7 @@
 use armory::cond::{Condition, ConditionState};
 use bevy::{app::Propagate, light::NotShadowCaster, prelude::*};
 use fb_body::Placement;
-use fb_creatures::pose::{self, RatPose, SkeletonPose, SnakePose, SpiderPose};
+use fb_creatures::pose::{self, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::Creature;
 use fb_creatures::rig::{Capsule, SURFACE_PARTS};
 use fb_level::{CreatureSpot, Level};
@@ -589,6 +589,11 @@ pub fn animate(
                 motion.cycle = (motion.cycle + strode / pose::rat_stride(rat) * std::f32::consts::TAU) % std::f32::consts::TAU;
                 pose::rat(rat, &RatPose { stride: motion.cycle, pace: motion.pace, time: motion.time, bite: now.strike, look: now.look })
             }
+            Creature::Jackalope(jackalope) => {
+                motion.cycle = (motion.cycle + strode / pose::jackalope_stride(jackalope) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                // Rearing sits it up; a strike gores.
+                pose::jackalope(jackalope, &JackalopePose { stride: motion.cycle, pace: motion.pace, time: motion.time, sit: now.rear, gore: now.strike, look: now.look })
+            }
             Creature::Snake(snake) => {
                 motion.cycle += strode / (pose::WAVELENGTH * snake.dims().body_length) * std::f32::consts::TAU;
                 let bend = trail.as_deref().map_or([0.0; pose::BEND_KNOTS], |trail| trail_bend(snake, trail, root));
@@ -746,6 +751,7 @@ mod tests {
                     Creature::Skeleton(s) => s.height(),
                     Creature::Spider(s) => s.span,
                     Creature::Troll(t) => t.height(),
+                    Creature::Jackalope(j) => j.length,
                 };
                 let (mut deepest, mut nearest) = (f32::MIN, f32::MAX);
                 for (bone, &entity) in rig.bones.iter().zip(&bones) {

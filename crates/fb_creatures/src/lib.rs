@@ -1,6 +1,6 @@
 //! # fb_creatures
 //!
-//! Creatures of the abyss as plain data: rats, snakes, skeletons, giant spiders and trolls, something to fight.
+//! Creatures of the abyss as plain data: rats, snakes, skeletons, giant spiders, trolls and jackalopes, something to fight.
 //!
 //! - [`rat`] and [`snake`] roll a typed state from a seed ([`RatState`], [`SnakeState`]): the
 //!   species (rat or giant rat, poisonous or constrictor snake), size, build, colouring and
@@ -13,6 +13,9 @@
 //! - [`troll`] rolls a [`TrollState`]: a stooped, long-armed giant of warty green or grey skin on
 //!   the same human joints, moving with the skeleton's walk and swing poses plus a hunch, and
 //!   carrying the regeneration rule ([`troll::Regeneration`]) that makes it hard to kill.
+//! - [`jackalope`] rolls a [`JackalopeState`]: a large hare's body, ears and tufted tail with a pair
+//!   of branching antlers, its size, ear length, antler tines and spread and fur colour from the
+//!   seed.
 //! - Each state builds a [`Rig`]: named bones, each carrying its own [`armory::ItemMesh`] built
 //!   from Armory geometry in the bone's own space, so the game can move the bones without a
 //!   skeleton (a rat's body, head, legs and tail; a snake's head, jaw, tongue and spine) or a
@@ -36,6 +39,7 @@
 //! Plain Rust, no Bevy; every creature is a pure function of its seed.
 
 pub mod gear;
+pub mod jackalope;
 pub mod pose;
 pub mod rat;
 pub mod rig;
@@ -47,6 +51,7 @@ pub mod troll;
 
 pub use rat::{RatColouring, RatPattern, RatState};
 pub use gear::{GearPiece, SkeletonGear};
+pub use jackalope::{JackalopeColouring, JackalopeState};
 pub use rig::{Bone, Rig};
 pub use skeleton::SkeletonState;
 pub use snake::{SnakeColouring, SnakePattern, SnakeState};
@@ -153,6 +158,7 @@ pub enum Species {
     Skeleton,
     GiantSpider,
     Troll,
+    Jackalope,
 }
 
 /// The six ability scores of a stat block.
@@ -242,7 +248,7 @@ pub struct StatBlock {
 }
 
 impl Species {
-    pub const ALL: [Species; 7] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll];
+    pub const ALL: [Species; 8] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll, Species::Jackalope];
 
     /// The SRD 5.1 stat block, read from the CC-BY-4.0 PDF ([`SRD`]):
     ///
@@ -278,6 +284,12 @@ impl Species {
     ///   STR 18 DEX 13 CON 20 INT 7 WIS 9 CHA 7, darkvision 60 ft., Challenge 5 (1,800 XP);
     ///   Multiattack: Bite +7 to hit, 7 (1d6 + 4) piercing, and two Claws +7 to hit, 14
     ///   (2d6 + 4) slashing each ([`troll::CLAW`]). Its Regeneration is [`troll::Regeneration`].
+    /// - Jackalope: the SRD has none, so the block is our own. Small beast, Armor Class 14, Hit
+    ///   Points 9 (2d6 + 2), Speed 50 ft., darkvision 60 ft., Challenge 1/4 (50 XP); Antlers: +4
+    ///   to hit, 5 (1d6 + 2) piercing. A giant rat's Small frame
+    ///   ([p. 378](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=378)) with a
+    ///   skeleton's Challenge ([p. 346](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=346))
+    ///   and a hare's speed. [`StatBlock::bite`] is the antlers' damage.
     pub fn stat_block(self) -> StatBlock {
         let ab = |strength, dexterity, constitution, intelligence, wisdom, charisma| Abilities { strength, dexterity, constitution, intelligence, wisdom, charisma };
         match self {
@@ -421,6 +433,27 @@ impl Species {
                 xp: 1800,
                 page: 351,
             },
+            Species::Jackalope => StatBlock {
+                name: "Jackalope",
+                size: Size::Small,
+                abilities: ab(8, 17, 12, 3, 13, 6),
+                hit_points: 9,
+                hit_dice: Dice::new(2, 6, 2),
+                speed_feet: 50.0,
+                armour_class: 14,
+                attack_bonus: 4,
+                bite: Dice::new(1, 6, 2),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: None,
+                senses_feet: 60.0,
+                challenge: "1/4",
+                xp: 50,
+                // Not in the SRD: our own, so no page.
+                page: 0,
+            },
         }
     }
 
@@ -444,6 +477,10 @@ impl Species {
         self == Species::Troll
     }
 
+    pub fn is_jackalope(self) -> bool {
+        self == Species::Jackalope
+    }
+
     /// Its walking speed in world units per second: the stat block's feet per 6-second round
     /// ([SRD 5.1 p. 90](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=90),
     /// "a round represents about 6 seconds").
@@ -452,7 +489,7 @@ impl Species {
     }
 }
 
-/// One creature: a rat, a snake, a skeleton, a spider or a troll, rolled from a seed.
+/// One creature: a rat, a snake, a skeleton, a spider, a troll or a jackalope, rolled from a seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Creature {
     Rat(RatState),
@@ -460,6 +497,7 @@ pub enum Creature {
     Skeleton(SkeletonState),
     Spider(SpiderState),
     Troll(TrollState),
+    Jackalope(JackalopeState),
 }
 
 impl Creature {
@@ -473,6 +511,8 @@ impl Creature {
             Creature::Spider(SpiderState::roll(seed))
         } else if species.is_troll() {
             Creature::Troll(TrollState::roll(seed))
+        } else if species.is_jackalope() {
+            Creature::Jackalope(JackalopeState::roll(seed))
         } else {
             Creature::Snake(SnakeState::roll_as(seed, species))
         }
@@ -485,6 +525,7 @@ impl Creature {
             Creature::Skeleton(_) => Species::Skeleton,
             Creature::Spider(_) => Species::GiantSpider,
             Creature::Troll(_) => Species::Troll,
+            Creature::Jackalope(_) => Species::Jackalope,
         }
     }
 
@@ -495,6 +536,7 @@ impl Creature {
             Creature::Skeleton(s) => s.seed,
             Creature::Spider(s) => s.seed,
             Creature::Troll(s) => s.seed,
+            Creature::Jackalope(j) => j.seed,
         }
     }
 
@@ -506,6 +548,7 @@ impl Creature {
             Creature::Skeleton(s) => s.build(),
             Creature::Spider(s) => s.build(),
             Creature::Troll(s) => s.build(),
+            Creature::Jackalope(j) => j.build(),
         }
     }
 
@@ -518,6 +561,7 @@ impl Creature {
             Creature::Skeleton(s) => s.radius(),
             Creature::Spider(s) => s.radius(),
             Creature::Troll(s) => s.radius(),
+            Creature::Jackalope(j) => j.radius(),
         }
     }
 }
@@ -546,6 +590,11 @@ pub fn spider(seed: u32) -> SpiderState {
 /// A troll rolled from `seed`.
 pub fn troll(seed: u32) -> TrollState {
     TrollState::roll(seed)
+}
+
+/// A jackalope rolled from `seed`.
+pub fn jackalope(seed: u32) -> JackalopeState {
+    JackalopeState::roll(seed)
 }
 
 #[cfg(test)]
@@ -579,6 +628,19 @@ mod tests {
         assert_eq!(Dice::new(1, 4, 2).average(), 4);
         assert_eq!(Dice::new(1, 6, 2).average(), 5);
         assert_eq!(Dice::new(2, 4, 0).average(), 5);
+    }
+
+    #[test]
+    fn the_jackalope_stat_block_is_the_issues_numbers() {
+        let block = Species::Jackalope.stat_block();
+        assert_eq!((block.name, block.size, block.armour_class, block.speed_feet, block.senses_feet), ("Jackalope", Size::Small, 14, 50.0, 60.0));
+        assert_eq!((block.hit_points, block.hit_dice, block.attack_bonus, block.bite), (9, Dice::new(2, 6, 2), 4, Dice::new(1, 6, 2)));
+        assert_eq!((block.challenge, block.xp, block.venom, block.ranged.is_none()), ("1/4", 50, None, true));
+        assert!(Species::Jackalope.is_jackalope() && !Species::Jackalope.is_rat() && !Species::Jackalope.is_snake());
+        // 50 ft a round is 2.5 m a second.
+        assert!((Species::Jackalope.speed() - 25.4).abs() < 0.01);
+        assert_eq!(Creature::of(Species::Jackalope, 5).species(), Species::Jackalope);
+        assert_eq!(Creature::of(Species::Jackalope, 5).seed(), 5);
     }
 
     #[test]
