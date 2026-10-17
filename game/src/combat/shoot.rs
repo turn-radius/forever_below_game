@@ -37,7 +37,7 @@ use crate::hostility::Hostility;
 use crate::inventory::{FloorChange, FloorChanges, Inventory, ItemId, Toasts};
 use crate::keymap::{Action, ActionInput};
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles, Player, PlayerCamera};
-use crate::render::ItemSpawner;
+use crate::render::{ArmoryPart, ItemSpawner, part_to_mesh};
 
 pub struct ShootPlugin;
 
@@ -51,7 +51,7 @@ impl Plugin for ShootPlugin {
                 show_loaded.after(shoot),
                 fly_projectiles.after(shoot),
                 release_stuck.after(fly_projectiles),
-                (draw_held.after(crate::carry::sway_held).after(super::swing::swing_held), show_ammunition_count).after(show_loaded),
+                (draw_held.after(crate::carry::sway_held).after(super::swing::swing_held), bend_held.after(crate::carry::show_held), show_ammunition_count).after(show_loaded),
             )
                 .in_set(DelveSystems),
         );
@@ -440,7 +440,7 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
     if let Some(weapon) = weapon {
         let loaded = marksman.nocked.filter(|n| n.weapon == weapon).and_then(|n| ammo_state(&inventory, n.ammo));
         let differs = match inventory.item(weapon).map(|i| &i.shape) {
-            Some(armory::Item::Bow(s)) => s.arrow.on != loaded.is_some() || draw_eighths(s.draw) != draw_eighths(marksman.drawn()),
+            Some(armory::Item::Bow(s)) => s.arrow.on != loaded.is_some(),
             Some(armory::Item::Crossbow(s)) => s.arrow.on != loaded.is_some() || s.spanned != loaded.is_some(),
             _ => false,
         };
@@ -468,13 +468,10 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
         && let Some(shape) = inventory.shape_mut(weapon)
     {
         match shape {
-            armory::Item::Bow(s) => {
-                match &loaded {
-                    Some(ammo) => s.load(ammo),
-                    None => s.unload(),
-                }
-                s.draw = draw_eighths(marksman.drawn()) as f32 / 8.0;
-            }
+            armory::Item::Bow(s) => match &loaded {
+                Some(ammo) => s.load(ammo),
+                None => s.unload(),
+            },
             armory::Item::Crossbow(s) => match &loaded {
                 Some(ammo) => {
                     s.load(ammo);
@@ -623,11 +620,6 @@ pub fn release_stuck(
     }
 }
 
-/// A bow's draw in eighths, the steps its model is built again at as the string comes back.
-pub fn draw_eighths(draw: f32) -> u8 {
-    (draw.clamp(0.0, 1.0) * 8.0).round() as u8
-}
-
 /// Where the nock of a drawn bow's arrow comes to in the view: low and a little right of the
 /// eye, as an archer anchors at the jaw. Our own.
 const ANCHOR: Vec3 = Vec3::new(0.7, -1.6, -5.0);
@@ -636,16 +628,80 @@ const CANT: f32 = 0.12;
 /// The share of the draw over which the bow is raised from the carry into the aim.
 const RAISE: f32 = 0.3;
 
-/// A drawn bow aimed: the arrow on its string running from [`ANCHOR`] to the crosshair, the
-/// limbs upright with a slight cant. `None` for anything but a bow.
-fn aimed_bow(item: &armory::Item, scale: Vec3) -> Option<(Vec3, Quat)> {
+/// A bow drawn `draw` aimed: the arrow on its string running from [`ANCHOR`] to the
+/// crosshair, the limbs upright with a slight cant. `None` for anything but a bow.
+fn aimed_bow(item: &armory::Item, draw: f32, scale: Vec3) -> Option<(Vec3, Quat)> {
     let armory::Item::Bow(bow) = item else { return None };
-    let (nock, dir) = bow.nocked_arrow();
+    let (nock, dir) = armory::families::bow::BowState { draw, ..bow.clone() }.nocked_arrow();
     let (nock, dir) = (Vec3::from_array(nock), Vec3::from_array(dir));
     // The bow on its edge: the arrow (toward -X in the bow's space) ahead, the limbs up.
     let upright = Quat::from_rotation_z(CANT) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
     let rotation = crate::view_model::aimed_from(ANCHOR) * Quat::from_rotation_arc(upright * dir, Vec3::NEG_Z) * upright;
     Some((ANCHOR - rotation * (scale * nock), rotation))
+}
+
+/// The share of a reload spent swinging the crossbow across the body, and again back.
+const RELOAD_EASE: f32 = 0.2;
+/// How far a reloaded crossbow is swung across the body, radians.
+const RELOAD_SWING: f32 = 0.9;
+
+fn smoothstep(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// What the main hand's bow or crossbow looks like this moment: a bow at its draw, a crossbow
+/// part way through spanning while reloaded. `None` for anything else.
+fn bent(item: &armory::Item, marksman: &Marksman) -> Option<(armory::Item, f32)> {
+    match item {
+        armory::Item::Bow(s) => {
+            let draw = marksman.drawn();
+            Some((armory::Item::Bow(armory::families::bow::BowState { draw, ..s.clone() }), draw))
+        }
+        armory::Item::Crossbow(s) => {
+            let span = marksman.reload.map_or(0.0, |r| (r.t / r.total).clamp(0.0, 1.0));
+            Some((armory::Item::Crossbow(armory::families::crossbow::CrossbowState { span, ..s.clone() }), span))
+        }
+        _ => None,
+    }
+}
+
+/// Bends the bow or crossbow in hand to its draw or reload as it happens: the model is built
+/// again at that draw and written over the meshes already shown, so the string comes back
+/// smoothly and nothing is spawned again. Holds what it last showed for each held entity.
+pub fn bend_held(
+    marksman: Res<Marksman>,
+    held: Query<(Entity, &HeldItem, &Children, &ChildOf)>,
+    view_models: Query<(), With<ViewModelCamera>>,
+    parts: Query<(&Name, &Mesh3d), With<ArmoryPart>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut shown: Local<Option<(Entity, f32)>>,
+) {
+    for (entity, item, children, parent) in &held {
+        if item.hand != Slot::Mainhand || !view_models.contains(parent.parent()) {
+            continue;
+        }
+        let Some((shape, amount)) = bent(&item.item, &marksman) else { continue };
+        // A freshly spawned model is built at rest.
+        let last = shown.filter(|(e, _)| *e == entity).map_or(0.0, |(_, a)| a);
+        if (amount - last).abs() < 0.002 {
+            continue;
+        }
+        let mesh = shape.build();
+        let mut built = mesh.parts.iter();
+        for child in children.iter() {
+            let Ok((name, handle)) = parts.get(child) else { continue };
+            let Some(part) = built.next() else { break };
+            if part.name != name.as_str() {
+                // A different set of parts: leave it for the next fitting.
+                break;
+            }
+            if let Some(mut target) = meshes.get_mut(&handle.0) {
+                *target = part_to_mesh(part);
+            }
+        }
+        *shown = Some((entity, amount));
+    }
 }
 
 /// Draws the bow in the view: raised into the aim at the start of the draw, the arrow pointing
@@ -661,16 +717,24 @@ pub fn draw_held(marksman: Res<Marksman>, mut held: Query<(&HeldItem, &mut Trans
             continue;
         }
         if draw > 0.0 {
-            let Some((at, turn)) = aimed_bow(&item.item, transform.scale) else { continue };
+            let Some((at, turn)) = aimed_bow(&item.item, draw, transform.scale) else { continue };
             let raised = (draw / RAISE).clamp(0.0, 1.0);
             let raised = raised * raised * (3.0 - 2.0 * raised);
             let shake = if draw >= 1.0 { (marksman.draw.unwrap_or(0.0) * 40.0).sin() * 0.03 } else { 0.0 };
             transform.translation = transform.translation.lerp(at, raised) + Vec3::Y * shake;
             transform.rotation = transform.rotation.slerp(turn, raised);
         } else {
-            let dip = (reload * std::f32::consts::PI).sin();
-            transform.translation += Vec3::new(-1.2, -0.4, 1.0) * dip;
-            transform.rotation = Quat::from_rotation_x(0.25 * dip) * transform.rotation;
+            // Swung across the body about the nut, the stock turned to the left and its nose
+            // dipped, so the deck is seen from the side as the string is hauled back to the
+            // nut; brought back to the shoulder as the bolt is laid.
+            let armory::Item::Crossbow(bow) = &item.item else { continue };
+            let dip = smoothstep((reload / RELOAD_EASE).min((1.0 - reload) / RELOAD_EASE));
+            let nut = transform.transform_point(Vec3::Y * bow.stock.length * bow.stock.nut);
+            let swing = Quat::from_rotation_y(RELOAD_SWING * dip) * Quat::from_rotation_x(-0.3 * dip);
+            // Rolled on the stock so the deck faces the eye.
+            let stock = swing * transform.rotation * Vec3::Y;
+            transform.rotate_around(nut, Quat::from_axis_angle(stock, 0.6 * dip) * swing);
+            transform.translation += Vec3::new(-0.5, 0.6, -2.5) * dip;
         }
     }
 }

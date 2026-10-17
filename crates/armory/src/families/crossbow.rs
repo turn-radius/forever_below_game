@@ -147,6 +147,10 @@ pub struct CrossbowState {
     pub string: Bowstring,
     /// Drawn back and held on the nut, ready to loose.
     pub spanned: bool,
+    /// While being spanned, how far the string has come back toward the nut, 0 to 1. Never
+    /// rolled: the game sets it during a reload. Ignored once `spanned`.
+    #[serde(default)]
+    pub span: f32,
     /// The bolt.
     pub arrow: Arrow,
     pub etch: Etching,
@@ -163,6 +167,7 @@ impl Default for CrossbowState {
             limbs: Limbs { shape: LimbShape::Recurve, length: 7.0, brace: 0.8, width: 0.16, thickness: 0.07, taper: 0.4, recurve: 0.2, nocks: NockStyle::Cap, nock_material: Iron, material: Iron, ..Limbs::default() },
             string: Bowstring { thickness: 0.022, serving: true },
             spanned: true,
+            span: 0.0,
             arrow: Arrow { length: 3.0, radius: 0.04, fletches: 2, fletch_cut: FletchCut::Triangle, fletch_length: 0.6, fletch_height: 0.11, ..Arrow::default() },
             etch: Etching::default(),
             cond: Condition::default(),
@@ -261,13 +266,10 @@ fn layout(s: &CrossbowState) -> Layout {
     // so the string rides over it.
     let grip = LimbGrip { half_span: 0.07, width: l.width * 1.15, thickness: l.thickness * 1.5 };
     let plane = LimbPlane { origin: [0.0, prod_y, deck - grip.width * 0.5 - 0.01], along: vec3::X, toward_string: vec3::neg(vec3::Y) };
-    let (half, bend) = if s.spanned {
-        // Spanning pulls the tips back a third of the way to the nut.
-        let draw = (prod_y - nut_y - l.brace).max(0.0);
-        (l.length * 0.5 * 0.96, l.brace + draw * 0.3)
-    } else {
-        (l.length * 0.5, l.brace)
-    };
+    // Spanning pulls the tips back a third of the way to the nut.
+    let span = s.span_fraction();
+    let draw = (prod_y - nut_y - l.brace).max(0.0);
+    let (half, bend) = (l.length * 0.5 * (1.0 - 0.04 * span), l.brace + draw * 0.3 * span);
     Layout { plane, stave: Stave::new(l, plane, grip, half, bend), nut_y, nut_radius: st.depth * 0.3, deck }
 }
 
@@ -308,7 +310,10 @@ impl Generator for Crossbow {
         // The string: to the nut when spanned, otherwise across the deck at rest. Either way
         // it rides up over the edges of the stock.
         let catch = [0.0, lay.nut_y + lay.nut_radius * 0.35, deck + cord];
-        let nut_point: Vec<V3> = if s.spanned { vec![catch] } else { vec![] };
+        // Part way through spanning, the string is pulled from brace toward the nut.
+        let span = s.span_fraction();
+        let catch = if s.spanned { catch } else { [0.0, catch[1] + (1.0 - span) * (lay.plane.origin[1] - s.limbs.brace - catch[1]), catch[2]] };
+        let nut_point: Vec<V3> = if span > 0.0 { vec![catch] } else { vec![] };
         let rough = lay.stave.string_path(cord, &nut_point);
         let mut extra = nut_point.clone();
         for side in [-1.0f32, 1.0] {
@@ -322,7 +327,7 @@ impl Generator for Crossbow {
         let anchors = lay.stave.string_anchors();
         parts.add_unoutlined("string", bowstring_mesh(&anchors, &path, &s.string), Cord);
         if s.string.serving {
-            let centre = if s.spanned { catch } else { point_along(&path, &lay.plane, 0.0) };
+            let centre = if span > 0.0 { catch } else { point_along(&path, &lay.plane, 0.0) };
             parts.add_unoutlined("serving", serving_mesh(&path, centre, 0.35, &s.string), Cord);
         }
 
@@ -370,7 +375,13 @@ impl CrossbowState {
     pub fn unload(&mut self) {
         self.arrow.on = false;
     }
+
+    /// How far the string is back toward the nut: 1 when spanned, else [`CrossbowState::span`].
+    pub fn span_fraction(&self) -> f32 {
+        if self.spanned { 1.0 } else { self.span.clamp(0.0, 1.0) }
+    }
 }
+
 
 impl Crossbow {
     /// "Forge new" forced to one archetype, for turntables and tests. Draws the same stream
