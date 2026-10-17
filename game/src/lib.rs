@@ -7,6 +7,7 @@ pub mod breath;
 pub mod capture;
 pub mod carry;
 pub mod character;
+pub mod dazzle;
 pub mod combat;
 pub mod creature_view;
 pub mod creatures;

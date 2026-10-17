@@ -35,6 +35,13 @@ impl Plugin for SightPlugin {
     }
 }
 
+/// The pale wash of glare over a view, while dazzled.
+#[derive(Component, Debug)]
+struct Glare;
+
+/// The glare's colour: a warm near-white.
+const GLARE: Color = Color::srgb(1.0, 0.96, 0.86);
+
 /// The shade over a view, with its gradients, shallowest first. They live on the veil, so
 /// they go with it when the delve ends.
 #[derive(Component, Debug)]
@@ -82,15 +89,32 @@ fn spawn_veil(mut commands: Commands, new: Query<Entity, Added<ViewModelCamera>>
             ImageNode { image: handles[0].clone(), color: SHADE.with_alpha(0.0), ..default() },
             Visibility::Hidden,
             Pickable::IGNORE,
+            // Under the rest of the HUD, so the orbs and badges stay readable through it.
+            GlobalZIndex(-1),
             Veil(handles),
+        ));
+        commands.spawn((
+            Name::new("Glare"),
+            Glare,
+            Hud,
+            UiTargetCamera(camera),
+            Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() },
+            BackgroundColor(GLARE.with_alpha(0.0)),
+            Pickable::IGNORE,
+            GlobalZIndex(-1),
         ));
     }
 }
 
 /// Picks the shade and its darkness for the delver's sight now.
-fn close_in(rules: Option<Res<crate::rules::GameRules>>, players: Query<Option<&DelverEffects>, With<Player>>, mut veils: Query<(&Veil, &mut ImageNode, &mut Visibility)>) {
+fn close_in(rules: Option<Res<crate::rules::GameRules>>, players: Query<Option<&DelverEffects>, With<Player>>, mut veils: Query<(&Veil, &mut ImageNode, &mut Visibility)>, mut glares: Query<&mut BackgroundColor, With<Glare>>) {
     let Some(effects) = players.iter().next() else { return };
-    let sight = effects.map_or(1.0, |e| e.0.sight(&crate::rules::GameRules::of(&rules).effects));
+    let defs = &crate::rules::GameRules::of(&rules).effects;
+    let sight = effects.map_or(1.0, |e| e.0.sight(defs));
+    let glare = effects.map_or(0.0, |e| e.0.glare(defs)) as f32;
+    for mut wash in &mut glares {
+        wash.set_if_neq(BackgroundColor(GLARE.with_alpha(glare)));
+    }
     let shown = veil(sight);
     for (shades, mut node, mut visibility) in &mut veils {
         visibility.set_if_neq(if shown.is_some() { Visibility::Inherited } else { Visibility::Hidden });
@@ -98,7 +122,8 @@ fn close_in(rules: Option<Res<crate::rules::GameRules>>, players: Query<Option<&
             if node.image != shades.0[step] {
                 node.image = shades.0[step].clone();
             }
-            let colour = SHADE.with_alpha(dark);
+            // Glare whitens the edge as darkness shades it: dazzled eyes see a bright rim.
+            let colour = if glare > 0.0 { GLARE.with_alpha(dark) } else { SHADE.with_alpha(dark) };
             if node.color != colour {
                 node.color = colour;
             }

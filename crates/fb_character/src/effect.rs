@@ -85,6 +85,8 @@ pub enum Influence {
     Noticed { at_full: f64 },
     /// Hit points lost per game hour, at full intensity.
     HitPointsPerHour { at_full: f64 },
+    /// A pale glare washes over the view, up to this much (0 to 1): dazzle.
+    Glare { at_full: f64 },
 }
 
 /// Where an effect came from, as the sheet tells it.
@@ -310,6 +312,14 @@ impl Effects {
             Influence::Noticed { at_full } => Some(at_full * intensity),
             _ => None,
         }).sum::<f64>().min(1.0)
+    }
+
+    /// How much glare washes over the view now, 0 to 1.
+    pub fn glare(&self, defs: &BTreeMap<String, EffectDef>) -> f64 {
+        self.acting(defs).filter_map(|(i, intensity)| match i {
+            Influence::Glare { at_full } => Some(at_full * intensity),
+            _ => None,
+        }).fold(0.0, f64::max)
     }
 
     /// Hit points the effects take per game hour now.

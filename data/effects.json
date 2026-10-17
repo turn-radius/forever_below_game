@@ -17,5 +17,14 @@
     "per_hour": -2.0,
     "exposure_per_hour": 5.0,
     "influences": [{ "kind": "sight", "at_full": 0.6 }]
+  },
+  "dazzled": {
+    "name": "Dazzled",
+    "stages": [{ "at": 0.0, "word": "Dazzled", "severity": "mild" }],
+    "per_hour": -60.0,
+    "influences": [
+      { "kind": "sight", "at_full": 0.5 },
+      { "kind": "glare", "at_full": 0.55 }
+    ]
   }
 }

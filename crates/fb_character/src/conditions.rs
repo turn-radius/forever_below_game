@@ -243,6 +243,7 @@ fn influence_line(influence: &Influence, intensity: f64) -> Option<String> {
         Influence::Pace { at_full } => format!("moving at {} pace", percent(share(*at_full))),
         Influence::Noticed { at_full } => format!("{} easier to notice", percent(at_full * intensity)),
         Influence::HitPointsPerHour { at_full } => format!("losing {:.1} HP an hour", at_full * intensity),
+        Influence::Glare { .. } => return None,
     })
 }
 
