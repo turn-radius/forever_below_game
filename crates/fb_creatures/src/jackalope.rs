@@ -183,7 +183,7 @@ impl JackalopeState {
             tail_length: 0.15 * l,
             tail_radius: 0.045 * l,
             ear_length,
-            ear_width: 0.072 * l,
+            ear_width: 0.1 * l,
             antler_length: 0.3 * l,
         }
     }
@@ -347,25 +347,26 @@ impl JackalopeState {
         }
         parts.push(part(nose, "nose", MaterialKind::Skin, mix(PINK, c.fur(), 0.2), true));
 
-        // Whiskers: fanning out from the muzzle, sweeping back.
+        // Whiskers: a few fine ones a side, shorter than the head, swept back along the cheek and
+        // drooping a little, as a hare's are.
         let mut whiskers = MeshBuilder::new();
         for side in [1.0f32, -1.0] {
-            for k in 0..6 {
+            for k in 0..4 {
                 let a_side = if side > 0.0 { 0.0 } else { PI };
-                let rise = -0.4 + 0.15 * k as f32;
+                let rise = -0.3 + 0.18 * k as f32;
                 let a = a_side + side * rise;
-                let t = 0.86 + 0.012 * (k % 3) as f32;
+                let t = 0.86 + 0.012 * (k % 2) as f32;
                 let root = head.point(t, a, -0.004 * l);
-                let len = 0.3 * l * rng.range_f32(0.7, 1.1);
+                let len = 0.13 * l * rng.range_f32(0.8, 1.1);
                 let out = [side, 0.0, 0.0];
                 let path: Vec<V3> = (0..=6)
                     .map(|i| {
                         let s = i as f32 / 6.0;
-                        let spread = vec3::add(vec3::scale(out, 0.75 * s), [0.0, -0.45 * s * s + 0.15 * s, (rise * 0.6 - 0.2 * s) * s]);
+                        let spread = vec3::add(vec3::scale(out, 0.6 * s), [0.0, -0.55 * s, (rise * 0.5 - 0.25 * s) * s]);
                         vec3::add(root, vec3::scale(spread, len))
                     })
                     .collect();
-                whiskers.append(&tube(&path, 4, &SweepOptions { cap_end: false, ..Default::default() }, |s| 0.0035 * l * (1.0 - 0.75 * s)));
+                whiskers.append(&tube(&path, 4, &SweepOptions { cap_end: false, ..Default::default() }, |s| 0.0022 * l * (1.0 - 0.7 * s)));
             }
         }
         parts.push(part(whiskers, "whiskers", MaterialKind::Hair, mix(c.belly(), Rgb::hex(0xffffff), 0.3), false));
@@ -548,15 +549,15 @@ fn ear_sheet(width: f32, length: f32, v0: f32, v1: f32, inner: bool) -> MeshBuil
                 .map(|c| {
                     let u = c as f32 / cols as f32 * 2.0 - 1.0;
                     // Cupped: the middle sits back from the rim.
-                    let cup = -0.38 * width * 0.5 * ear_half(v) * (1.0 - u * u);
-                    let lift = if inner { 0.007 * length } else { 0.0 };
+                    let cup = -0.8 * width * 0.5 * ear_half(v) * (1.0 - u * u);
+                    let lift = if inner { 0.012 * length } else { 0.0 };
                     let p = [u * half, v_in * length, ear_bow(v) * length + cup + lift];
                     vec3::sub(p, origin)
                 })
                 .collect()
         })
         .collect();
-    let thickness = if inner { 0.0015 * length } else { 0.012 * length };
+    let thickness = if inner { 0.0015 * length } else { 0.03 * length };
     thick_sheet(&points, &GridOptions { wrap_around: false, wrap_along: false, shading: Shading::SMOOTH, row_v: None }, thickness)
 }
 

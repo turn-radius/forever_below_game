@@ -1332,11 +1332,17 @@ pub fn jackalope(state: &JackalopeState, pose: &JackalopePose) -> Vec<Placement>
         let (root, rest) = d.ear_root(state, side);
         let phase = if side < 0.0 { 0.0 } else { 2.3 };
         let listen = alert * (0.5 * (1.3 * t + phase).sin() + 0.2 * (3.1 * t + 2.0 * phase).sin());
-        let flop = 0.12 * still * (0.7 * t + phase).sin() - (1.0 * moving * amplitude.min(1.0) + 1.3 * gore) - 0.25 * hop_pitch * amplitude + 0.12 * sit;
+        let flop = 0.12 * still * (0.7 * t + phase).sin() - (0.7 * moving * amplitude.min(1.0) + 0.85 * gore) - 0.2 * hop_pitch * amplitude + 0.12 * sit;
         let twist = listen + 0.08 * still * (0.9 * t + 3.0 * phase).sin();
-        let place = Placement { rotation: rest.mul_mat(&rx(flop)).mul_mat(&ry(twist)), origin: root };
-        let tip_flop = -0.45 * moving * amplitude.min(1.0) - 0.4 * gore + 0.22 * hop_pitch * amplitude + 0.12 * (2.2 * t + phase).sin() * still;
-        let tip = Placement { rotation: rx(tip_flop), origin: [0.0, EAR_SPLIT * d.ear_length, ear_bow(EAR_SPLIT) * d.ear_length] };
+        // Laid back and raised about the head's own side to side axis, not the ear's: the ear's
+        // hollow faces out as well as forward, so turning it about its own width would swing it
+        // out sideways rather than back along the neck.
+        let lay = rx(-flop);
+        let place = Placement { rotation: lay.mul_mat(&rest).mul_mat(&ry(twist)), origin: root };
+        let tip_flop = -0.25 * moving * amplitude.min(1.0) - 0.15 * gore + 0.15 * hop_pitch * amplitude + 0.12 * (2.2 * t + phase).sin() * still;
+        // The tip bends about that same axis, carried into the base's frame.
+        let tip_turn = transpose(&place.rotation).mul_mat(&rx(-tip_flop)).mul_mat(&place.rotation);
+        let tip = Placement { rotation: tip_turn, origin: [0.0, EAR_SPLIT * d.ear_length, ear_bow(EAR_SPLIT) * d.ear_length] };
         out[jackalope_bone::EAR_LEFT + 2 * k] = place;
         out[jackalope_bone::EAR_LEFT + 2 * k + 1] = tip;
     }
