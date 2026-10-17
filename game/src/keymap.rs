@@ -186,7 +186,7 @@ impl Default for Keymap {
                 ),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
-                bind(Action::Compare, "Compare with what you wear (hold over an item)", Group::Items, &[Key(KeyCode::ControlLeft), Key(KeyCode::ControlRight)]),
+                bind(Action::Compare, "Compare with what you wear (hold over an item)", Group::Items, &[Key(KeyCode::AltLeft), Key(KeyCode::AltRight)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),
                 bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyC)]),
                 bind(Action::Map, "Map", Group::Screens, &[Key(KeyCode::KeyM)]),

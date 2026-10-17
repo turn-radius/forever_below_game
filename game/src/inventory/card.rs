@@ -2,7 +2,7 @@
 //! where the card goes on screen. The plate's `itemInfoHTML` and `showTip`
 //! (`reference/forever-below-plate.html`): name in its rarity's colour, a legendary's title
 //! over its old name, a line of what it is and its main numbers, what each affix changes, a
-//! container's contents, and a legendary's history. Holding Ctrl over something that can be
+//! container's contents, and a legendary's history. Holding Alt over something that can be
 //! worn adds a compare card beside it: what is worn in its place, and what a swap changes.
 
 use bevy::{prelude::*, ui::ComputedUiRenderTargetInfo};
@@ -638,7 +638,7 @@ pub fn show_compare(
     }
 }
 
-/// `FB_COMPARE` holds Ctrl down for the capture tools, so a still shows the compare card.
+/// `FB_COMPARE` holds Alt down for the capture tools, so a still shows the compare card.
 fn compare_forced() -> bool {
     std::env::var("FB_COMPARE").is_ok_and(|v| !v.is_empty() && v != "0")
 }
