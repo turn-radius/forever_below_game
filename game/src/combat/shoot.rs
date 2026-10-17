@@ -258,6 +258,7 @@ pub struct Around<'w, 's> {
     tuning: Res<'w, crate::tuning::Tuning>,
     sound: Option<Res<'w, super::swing::SwingSound>>,
     settings: Option<Res<'w, crate::settings::GameSettings>>,
+    aimed: Option<Res<'w, crate::carry::Aimed>>,
 }
 
 /// The input of shooting: nocking and drawing a bow, loosing it, firing and reloading a crossbow,
@@ -327,6 +328,8 @@ pub fn shoot(
     }
     let auto = crate::launch::env_set("FB_SHOOT") && *auto_gate >= AUTO_WAIT;
     let pressed = (input.just_pressed(Action::Attack) && looking) || auto;
+    // Tertiary reloads a crossbow when nothing under the crosshair has a use for it.
+    let reload_pressed = input.just_pressed(Action::Tertiary) && !around.aimed.as_ref().is_some_and(|a| a.0.is_some());
 
     let mut loose = None;
     if crossbow {
@@ -340,7 +343,7 @@ pub fn shoot(
                     marksman.nocked = Some(Nocked { ammo, weapon: weapon_id });
                 }
             }
-        } else if marksman.nocked.is_none() && (input.just_pressed(Action::Reload) || auto) {
+        } else if marksman.nocked.is_none() && (reload_pressed || auto) {
             let has = holder_of(&inventory, ranged.ammunition).is_some_and(|h| !ammunition_in(&inventory, h).is_empty());
             if has {
                 let item = inventory.item(weapon_id);

@@ -142,7 +142,7 @@ pub struct IgnoreInput;
 
 impl Plugin for IgnoreInput {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreUpdate, ignore_input.after(InputSystems));
+        app.add_systems(PreUpdate, ignore_input.after(InputSystems).before(crate::keymap::HoldSet));
     }
 }
 

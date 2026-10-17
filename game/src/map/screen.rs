@@ -179,6 +179,7 @@ fn build_screen(
     plan: Option<Res<PlanImage>>,
     marker: Option<Res<MarkerImage>>,
     level: Option<Res<CurrentLevel>>,
+    keymap: Option<Res<crate::keymap::Keymap>>,
     mut view: ResMut<MapView>,
 ) {
     let existing = screens.iter().next();
@@ -193,6 +194,8 @@ fn build_screen(
         return;
     }
     let Some(camera) = cameras.iter().next() else { return };
+    let fallback = crate::keymap::Keymap::default();
+    let keymap = keymap.as_deref().unwrap_or(&fallback);
     if let Some(eye) = eyes.iter().next() {
         let (x, y) = to_grid(eye.translation());
         *view = MapView { centre: Vec2::new(x, y), scale: OPENING_ZOOM };
@@ -219,11 +222,22 @@ fn build_screen(
                 Node { position_type: PositionType::Absolute, left: px(28), top: px(18), ..default() },
             ));
             root.spawn((
-                Text::new("Scroll to zoom \u{b7} drag to pan \u{b7} M or Esc to close"),
+                Text::new(format!("Scroll to zoom \u{b7} drag to pan \u{b7} {} to close", close_keys(keymap))),
                 UiFonts::style(&fonts.body, 15.0, MUTED),
                 Node { position_type: PositionType::Absolute, left: px(28), bottom: px(18), ..default() },
             ));
         });
+}
+
+/// The keys that close the map: its own and Back's ("M or Esc").
+fn close_keys(keymap: &crate::keymap::Keymap) -> String {
+    let mut keys = keymap.binding(crate::keymap::Action::Map).map(|b| b.labels()).unwrap_or_default();
+    for label in keymap.binding(crate::keymap::Action::Back).map(|b| b.labels()).unwrap_or_default() {
+        if !keys.contains(&label) {
+            keys.push(label);
+        }
+    }
+    keys.join(" or ")
 }
 
 /// Scrolling zooms about the mouse; dragging with the left button pans.
@@ -324,6 +338,19 @@ pub fn player_cell(at: Vec3) -> (i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keymap::{Action, Input, Keymap};
+
+    #[test]
+    fn the_map_hint_names_its_close_keys_once() {
+        let mut keymap = Keymap::default();
+        assert_eq!(close_keys(&keymap), "M or Esc");
+        let mut rebind = |action, key| keymap.bindings.iter_mut().find(|b| b.action == action).unwrap().inputs = vec![Input::Key(key)];
+        rebind(Action::Map, KeyCode::KeyN);
+        assert_eq!(close_keys(&keymap), "N or Esc");
+        let mut rebind = |action, key| keymap.bindings.iter_mut().find(|b| b.action == action).unwrap().inputs = vec![Input::Key(key)];
+        rebind(Action::Back, KeyCode::KeyN);
+        assert_eq!(close_keys(&keymap), "N");
+    }
 
     #[test]
     fn the_view_opens_centred_and_zooms_about_the_mouse() {

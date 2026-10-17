@@ -22,10 +22,14 @@ fb_creatures = { path = "crates/fb_creatures" }
 fb_character = { path = "crates/fb_character" }
 
 # Bevy is slow in debug; optimise dependencies, keep our code debuggable.
+# Debug info is most of a build's size: dependencies build without it, and our crates keep
+# line tables, so backtraces still name files and lines.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
 
 # Optimize generator and procedural crates in test builds: their mesh and body generation
 # is compute-intensive and runs for every test. The game binary stays at opt-level = 1

@@ -47,6 +47,7 @@ pub struct Tuning {
     pub light: LightTuning,
     pub sound: SoundTuning,
     pub interface: InterfaceTuning,
+    pub input: InputTuning,
     pub clock: ClockTuning,
     pub recovery: RecoveryTuning,
 }
@@ -375,6 +376,21 @@ impl InterfaceTuning {
     /// The logical pixels a cell is drawn at in a window `height` logical pixels high.
     pub fn cell_px(&self, height: f32) -> f32 {
         self.cell_size * self.scale(height)
+    }
+}
+
+/// How the keys and buttons are read.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InputTuning {
+    /// How long a key or button is held before a Hold binding fires, seconds. A press let go
+    /// sooner is a tap.
+    pub hold_time: f32,
+}
+
+impl Default for InputTuning {
+    fn default() -> Self {
+        InputTuning { hold_time: 0.25 }
     }
 }
 

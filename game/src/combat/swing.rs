@@ -132,8 +132,11 @@ const WINDED: &str = "Too winded to swing";
 /// A delver with no swing under way.
 type Ready = (With<Player>, Without<Swing>);
 
-/// The attack key swings, if no swing is under way and the delver stands. A click while the
-/// mouse is free only takes it back (`crate::player::take_cursor`), so it never swings too.
+/// The attack key swings, if no swing is under way and the delver stands. It swings when the
+/// click is let go before the hold time, since a longer click is a stab ([`ActionInput::tapped`]).
+/// Only a click that went down with the mouse already taken swings: one that takes the mouse
+/// back (`crate::player::take_cursor`), or went down in a menu, is let go in the level without
+/// swinging.
 /// The swing heads for the creature in reach, if there is one ([`toward_target`]).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn start_swing(
@@ -147,7 +150,7 @@ pub(super) fn start_swing(
     tuning: Option<Res<crate::tuning::Tuning>>,
     marksman: Option<Res<super::shoot::Marksman>>,
     mut dice: ResMut<RunDice>,
-    mut last: Local<Option<Strike>>,
+    (mut last, mut armed): (Local<Option<Strike>>, Local<bool>),
     (practice, rules): (Option<Res<SwingPractice>>, Option<Res<crate::rules::GameRules>>),
     mut toasts: crate::inventory::Toasts,
     mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina), Ready>,
@@ -156,7 +159,15 @@ pub(super) fn start_swing(
 ) {
     let looking = cursor.is_none_or(|c| c.grab_mode != CursorGrabMode::None);
     let practice = practice.as_deref().copied().unwrap_or_default();
-    let wanted = (input.just_pressed(Action::Attack) && looking) || practice.repeat || crate::launch::env_set("FB_SWING");
+    if input.just_pressed(Action::Attack) {
+        *armed = looking;
+    }
+    let tapped = input.tapped(Action::Attack);
+    let clicked = tapped && *armed;
+    if tapped || !input.pressed(Action::Attack) {
+        *armed = false;
+    }
+    let wanted = clicked || practice.repeat || crate::launch::env_set("FB_SWING");
     if !wanted {
         return;
     }
@@ -646,6 +657,62 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
         let delver = app.world_mut().spawn((Player, Transform::default())).id();
         (app, delver)
+    }
+
+    /// A swinger with the hold tracker, a window whose mouse is free or taken, and the click not yet down.
+    fn clicker(grabbed: bool) -> (App, Entity, Entity) {
+        let (mut app, delver) = swinger();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.init_resource::<crate::keymap::InputHolds>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(50)))
+            .add_systems(Update, crate::keymap::track_holds.before(start_swing));
+        let mode = if grabbed { CursorGrabMode::Locked } else { CursorGrabMode::None };
+        let window = app.world_mut().spawn((PrimaryWindow, CursorOptions { grab_mode: mode, ..default() })).id();
+        (app, delver, window)
+    }
+
+    fn next_frame(app: &mut App) {
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.update();
+    }
+
+    #[test]
+    fn a_click_that_takes_the_mouse_back_does_not_swing() {
+        let (mut app, delver, window) = clicker(false);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        app.world_mut().get_mut::<CursorOptions>(window).unwrap().grab_mode = CursorGrabMode::Locked;
+        next_frame(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_none());
+    }
+
+    #[test]
+    fn a_short_click_swings_on_release_and_a_long_one_does_not() {
+        let (mut app, delver, _) = clicker(true);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_none(), "not on the way down");
+        next_frame(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_some());
+
+        app.world_mut().entity_mut(delver).remove::<Swing>();
+        next_frame(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        for _ in 0..8 {
+            next_frame(&mut app);
+        }
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_none(), "a long click is a stab");
     }
 
     #[test]

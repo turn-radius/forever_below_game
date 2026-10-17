@@ -59,16 +59,21 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 
 | Key | Does |
 |---|---|
-| W A S D, Shift | walk, hurry |
+| W A S D, Shift | walk, sprint |
+| Q, E, Ctrl, Space | dodge left and right, crouch, jump (bound, not yet acted on) |
 | Mouse | look round (click to take the mouse back after Esc) |
 | Left click | swing what your main hand holds (a weapon in the off hand is held but does not swing yet), each blow from one of the directions it suits and arcing to the creature in reach: mostly overhead for a mace, axe or club, from every side for a sword, flat across for a staff, a stab for a spear or dagger, a punch with nothing (a click while the mouse is free only takes it back) |
-| E | pick up what you're looking at, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
-| F | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand (or the off hand, if only that is free), a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay; a lantern goes in a free hand, else at the hip if you wear a belt, where it lights the way with both hands full |
+| F | pick up what you're looking at, take the stairs, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
+| G | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand (or the off hand, if only that is free), a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay; a lantern goes in a free hand, else at the hip if you wear a belt, where it lights the way with both hands full |
+| Right click | block (bound, not yet acted on) |
+| R | tertiary action: with a crossbow in hand and nothing aimed at, span and load it from the bolt case |
+| Alt | hold over an item to compare it with what you wear in its place |
+| T, J | special action and journal (bound, not yet acted on) |
 | L, Shift+L | light or put out the torch or lantern you carry, the one in hand first, then the one at your hip; Shift+L acts on the hip lantern alone. In the inventory, L lights or puts out the torch or lantern under the mouse, wherever it lies; its card says which. A spent torch will not light. Every lit light you carry shines |
 | M | map of the level, filled in as you explore: only cells you have seen while they were lit are drawn, as an inked plan with you marked by an amber arrow; scroll to zoom about the mouse, drag to pan; M or Esc closes it, and the body holds still while it is open |
-| I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
+| I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; F eats or drinks the food or drink under the mouse; double-click wears or takes off; drag the doll to turn it |
 | 1 to 0 | use the item in that quickslot: eat or drink it, draw a weapon or shield into the hand, or draw a torch or lantern and then light or put it out. In the inventory, the number binds the item under the mouse to that slot, as dragging it onto the strip's slot does (a worn item too; another number moves it; an item a slot cannot use, or one lying underfoot, is refused the same way) |
-| C | character: the inventory screen's character tab; C or I swaps between its tabs, and the key of the tab showing closes it |
+| K | character: the inventory screen's character tab; K or I swaps between its tabs, and the key of the tab showing closes it |
 | Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
 
@@ -216,6 +221,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_COMPARE=1` | holds Alt, so the hover card shows its compare card beside it |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
+| `FB_KEYBINDINGS=<file.toml>` | reads and writes keybindings from another file; default `keybindings.toml` beside the settings file |
 | `FB_FRAME_TIME=<frames>` | prints Bevy's smoothed frame time at each listed frame (`240,270,300`) and quits after the last; with `FB_DEBUG_POSE`, measures a view's frame rate in the window at vsync |
 | `FB_SOAK=<seconds>` | plays the level by itself for that long, then quits: walks random paths, fights the creatures it meets, picks up, equips and drops things, opens containers, the inventory and the menu, and logs a `soak:` line to stderr every 10 s (entities, meshes, images, materials, cameras, readbacks, icons, render phases, frame time). With `--title` it begins a new delve from the title, and after a death begins another, a second after the title shows, first logging a `soak: title` line with the entities on it, which should read the same after every death. For finding crashes and leaks that only show after a long session |
 | `FB_SOAK_SEED=<n>` | with `FB_SOAK`, seeds the autopilot's choices (1 by default), so parallel soaks on one level take different ways |
@@ -288,6 +294,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[interface]` | `cell_size` | 72.0 | Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there. |
 | `[interface]` | `min_cell_size` | 48.0 | The fewest logical pixels a cell is drawn at, however short the window. |
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
+| `[input]` | `hold_time` | 0.25 | Seconds a key or button is held before a Hold binding fires. A press let go sooner is a tap. |
 | `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
 | `[recovery]` | `minutes_per_hit_point` | 10.0 | Game minutes a fed and watered, unpoisoned delver takes to regain one hit point (10 = one every 50 real seconds at the usual clock). Our own. |
 

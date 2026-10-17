@@ -65,7 +65,7 @@ fn light_carried(input: ActionInput, mut inventory: ResMut<Inventory>, mut toast
     if !input.just_pressed(Action::Light) {
         return;
     }
-    let hip = input.pressed(Action::Hurry);
+    let hip = input.pressed(Action::Sprint);
     match light_to_toggle(&inventory, hip) {
         Some(id) => {
             let said = toggle_and_say(&mut inventory, id);
