@@ -298,7 +298,8 @@ impl Default for Keymap {
                 bind(Action::Stab, "Stab", Group::Fighting, &[Mouse(MouseButton::Left)]).hold(),
                 bind(Action::Primary, "Primary action", Group::Items, &[Key(KeyCode::KeyF)]).in_contexts(ITEMS),
                 bind(Action::Secondary, "Secondary action", Group::Items, &[Key(KeyCode::KeyG)]).in_contexts(ITEMS),
-                bind(Action::Tertiary, "Tertiary action", Group::Items, &[Key(KeyCode::KeyR)]).in_contexts(ITEMS),
+                // R turns a dragged item in the inventory, so Tertiary is the level's alone.
+                bind(Action::Tertiary, "Tertiary action", Group::Items, &[Key(KeyCode::KeyR)]).in_contexts(&[Context::Level]),
                 bind(Action::Special, "Special action", Group::Items, &[Key(KeyCode::KeyT)]).in_contexts(ITEMS),
                 bind(Action::Compare, "Compare with what you wear (hold over an item)", Group::Items, &[Key(KeyCode::AltLeft), Key(KeyCode::AltRight)]).in_contexts(ITEMS),
                 bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]).in_contexts(ITEMS),
@@ -321,7 +322,7 @@ impl Default for Keymap {
                 )
                 .in_contexts(ITEMS),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Inventory]),
-                bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Mouse(MouseButton::Right)]).in_contexts(&[Context::Inventory]),
+                bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]).in_contexts(&[Context::Inventory]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]).in_contexts(EVERYWHERE),
                 bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyK)]).in_contexts(EVERYWHERE),
                 bind(Action::Journal, "Journal", Group::Screens, &[Key(KeyCode::KeyJ)]).in_contexts(EVERYWHERE),
@@ -789,7 +790,7 @@ mod tests {
         assert_eq!(keymap.inputs(Action::DodgeRight), &[Input::Key(KeyCode::KeyE)]);
         assert_eq!(keymap.inputs(Action::Jump), &[Input::Key(KeyCode::Space)]);
         assert_eq!(keymap.inputs(Action::Journal), &[Input::Key(KeyCode::KeyJ)]);
-        assert_eq!(keymap.inputs(Action::TurnItem), &[Input::Mouse(MouseButton::Right)]);
+        assert_eq!(keymap.inputs(Action::TurnItem), &[Input::Key(KeyCode::KeyR), Input::Mouse(MouseButton::Right)]);
         assert_eq!(keymap.inputs(Action::Block), &[Input::Mouse(MouseButton::Right)]);
         assert_eq!(keymap.binding(Action::Sprint).unwrap().name, "Sprint");
     }

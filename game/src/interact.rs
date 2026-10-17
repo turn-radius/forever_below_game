@@ -7,7 +7,7 @@
 //!
 //! | Target | Primary | Secondary | Tertiary |
 //! |---|---|---|---|
-//! | Item on the ground | Take | Equip | |
+//! | Item on the ground, underfoot or in a container not carried | Take | Equip | |
 //! | Item carried | its use (Eat, Drink, Light, Put out) | Equip, or Take off if worn | |
 //! | Door | Open or Close | Lock or Unlock, holding its key | Pick the lock, holding lockpicks |
 //! | Container | Open | Lock or Unlock, holding its key | Pick the lock, holding lockpicks |
@@ -266,15 +266,16 @@ pub fn use_of(item: &Item) -> Option<Verb> {
     })
 }
 
-/// The target for item `id`, from where the inventory keeps it; `on_floor` if it is one of the
-/// level's floor items ([`crate::carry::FloorItem`]). `None` if the inventory does not know it.
-pub fn item_target(inventory: &Inventory, id: ItemId, on_floor: bool) -> Option<Target> {
+/// The target for item `id`, from where the inventory keeps it. An item lying loose is on the
+/// ground, aimed at in the level or shown on the inventory's underfoot grid alike, and so is one
+/// in a container that is not carried (a chest, a bag set down): both are taken, not used.
+/// `None` if the inventory does not know it.
+pub fn item_target(inventory: &Inventory, id: ItemId) -> Option<Target> {
     let item = inventory.item(id)?;
     let place = match inventory.location(id)? {
         Location::Worn(_) => Place::Worn,
-        Location::In { .. } => Place::Carried,
-        Location::Loose if on_floor => Place::Ground,
-        Location::Loose => Place::Carried,
+        Location::In { .. } if inventory.is_carried(id) => Place::Carried,
+        Location::In { .. } | Location::Loose => Place::Ground,
     };
     Some(Target::Item { place, uses: use_of(item), equippable: !item.slots().is_empty() })
 }
@@ -407,6 +408,30 @@ mod tests {
         assert_eq!(row(v), (Some(Verb::Take), Some(Verb::Equip), None, None));
         assert!(v.compare);
         assert_eq!(v.available().len(), 2);
+    }
+
+    #[test]
+    fn item_target_reads_loose_and_uncarried_items_as_ground() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(roll_item("Pack", 1).unwrap());
+        let sack = inventory.add(roll_item("Sack", 1).unwrap());
+        let loose = inventory.add(roll_item("Dagger", 7).unwrap());
+        let in_sack = inventory.add(roll_item("Dagger", 8).unwrap());
+        let at = inventory.grid(sack).unwrap().first_free(inventory.item(in_sack).unwrap().profile.footprint).unwrap();
+        inventory.put(in_sack, sack, at).unwrap();
+        let place = |inventory: &Inventory, id| match item_target(inventory, id) {
+            Some(Target::Item { place, .. }) => place,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(place(&inventory, loose), Place::Ground);
+        assert_eq!(place(&inventory, in_sack), Place::Ground);
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let carried = inventory.add(roll_item("Dagger", 9).unwrap());
+        inventory.stow(carried).unwrap();
+        assert_eq!(place(&inventory, carried), Place::Carried);
+        let worn = inventory.add(roll_item("Ring", 2).unwrap());
+        inventory.wear(worn, fb_items::Slot::Ring1).unwrap();
+        assert_eq!(place(&inventory, worn), Place::Worn);
     }
 
     #[test]

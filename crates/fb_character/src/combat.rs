@@ -108,16 +108,17 @@ pub struct Venom {
 }
 
 impl Venom {
-    /// How many game hours the venom poisons the delver for ([`crate::poison::Poisoned`]):
+    /// How many game hours the venom poisons the delver for (the `poisoned` effect, [`crate::effect`]):
     /// [`crate::poison::VENOM_POISONED_HOURS`] after a failed save, none after a successful one
     /// or with no venom. The lasting poison is our own; see that constant.
     pub fn poisons_for(&self) -> Option<f64> {
         self.poisons_for_with(defaults())
     }
 
-    /// [`Venom::poisons_for`] under `rules`, which set the hours.
+    /// [`Venom::poisons_for`] under `rules`: the poisoned effect's hours (`data/effects.json`).
     pub fn poisons_for_with(&self, rules: &Rules) -> Option<f64> {
-        self.save.as_ref().filter(|save| !save.succeeded).map(|_| rules.combat.venom_poisoned_hours)
+        let hours = rules.effects.get("poisoned").and_then(|poisoned| poisoned.hours).unwrap_or(crate::poison::VENOM_POISONED_HOURS);
+        self.save.as_ref().filter(|save| !save.succeeded).map(|_| hours)
     }
 }
 

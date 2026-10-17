@@ -1084,6 +1084,13 @@ mod tests {
     }
 
     #[test]
+    fn the_turntable_shows_writing() {
+        assert_eq!(parse_family("writing"), Ok(Family::Writing));
+        let sizes = page_sizes(&Turntable { family: Family::Writing, ..default() });
+        assert!(!sizes.is_empty() && sizes.iter().all(|s| s.x > 0.0 && s.y > 0.0));
+    }
+
+    #[test]
     fn small_sundries_fill_a_share_of_their_cells() {
         let turntable = Turntable { family: Family::Sundry, ..default() };
         let sizes = page_sizes(&turntable);

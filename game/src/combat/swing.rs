@@ -318,7 +318,7 @@ const TOWARD_LIMIT: f32 = 0.6;
 
 /// Moves each swing on; at [`LANDS`] its blow finds the nearest creature or folk in reach and
 /// ahead, rolls to hit against its [`ArmourClass`] (at disadvantage while the delver is
-/// poisoned, [`fb_character::poison::Poisoned::attack_odds`]), and on a hit rolls its damage.
+/// poisoned, [`crate::character::DelverEffects::attack_odds`]), and on a hit rolls its damage.
 #[allow(clippy::too_many_arguments)]
 fn land_blows(
     mut commands: Commands,
@@ -326,7 +326,7 @@ fn land_blows(
     character: Res<Character>,
     tuning: Res<crate::tuning::Tuning>,
     mut dice: ResMut<RunDice>,
-    mut players: Query<(Entity, &Transform, &mut Swing, Option<&crate::character::DelverPoison>), With<Player>>,
+    mut players: Query<(Entity, &Transform, &mut Swing, Option<&crate::character::DelverEffects>), With<Player>>,
     strikeable: Strikeable,
     armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
@@ -336,7 +336,7 @@ fn land_blows(
 ) {
     let rules = crate::rules::GameRules::of(&rules);
     let dt = time.delta_secs();
-    for (player, at, mut swing, poison) in &mut players {
+    for (player, at, mut swing, effects) in &mut players {
         swing.t += dt;
         if !swing.landed && swing.t >= LANDS {
             swing.landed = true;
@@ -346,7 +346,7 @@ fn land_blows(
             if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
                 swung.write(SwungAt { target });
                 let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
-                let odds = poison.map_or(Odds::Even, |p| p.0.attack_odds());
+                let odds = crate::character::DelverEffects::attack_odds(effects, rules);
                 let attack = attack_roll(rules, &swing.weapon, character.strength(), ac.0, odds, &mut dice.0);
                 info!("swing: {}", attack.line());
                 if attack.hit {

@@ -165,11 +165,11 @@ impl Stat {
     /// nobody reads are held back from rolling ([`crate::tables::Affix::in_play`]) until the
     /// system that reads it exists: then it comes off this list, and its affixes roll again.
     /// Stealth only moves the HUD's eye so far, since no creature looks at how visible the
-    /// delver is, so it waits for sneaking as lockpicking waits for locks, disease risk for
-    /// disease and break chance for breaking.
+    /// delver is, so it waits for sneaking as lockpicking waits for locks and break chance for
+    /// breaking. Disease risk is read since diseases arrived (sewer plague from rat bites).
     /// Charisma waits for a Charisma score, which the delver does not have yet.
     pub fn in_play(self) -> bool {
-        !matches!(self, Stat::Stealth | Stat::Lockpicking | Stat::DiseaseRisk | Stat::BreakChance | Stat::Charisma)
+        !matches!(self, Stat::Stealth | Stat::Lockpicking | Stat::BreakChance | Stat::Charisma)
     }
 
     /// The range it is kept in. Bonuses can go negative (the plate's `dmgB -= 1`); amounts,

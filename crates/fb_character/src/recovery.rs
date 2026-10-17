@@ -10,7 +10,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Needs;
-use crate::poison::Poisoned;
 
 /// Game minutes a recovering character takes to regain one hit point. Our own: at the default
 /// clock (12 game seconds a second) that is one hit point every 50 real seconds, so a fresh
@@ -23,10 +22,11 @@ pub fn fed_and_watered(needs: &Needs) -> bool {
     needs.hunger.band() == 0 && needs.thirst.band() == 0
 }
 
-/// Whether a character with `needs` and `poisoned` is recovering: fed and watered, and with no
-/// venom working in the blood.
-pub fn recovers(needs: &Needs, poisoned: &Poisoned) -> bool {
-    fed_and_watered(needs) && !poisoned.is_active()
+/// Whether a character with `needs` is recovering: fed and watered, unless an effect stops their
+/// mending (`mending_stopped`, [`crate::effect::Effects::stops_recovery`]; venom in the blood
+/// does).
+pub fn recovers(needs: &Needs, mending_stopped: bool) -> bool {
+    fed_and_watered(needs) && !mending_stopped
 }
 
 /// Game time put toward the next hit point. It starts over whenever the character stops
@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn a_fed_and_watered_character_regains_a_point_every_ten_minutes() {
         let needs = fed();
-        assert!(recovers(&needs, &Poisoned::default()));
+        assert!(recovers(&needs, false));
         let mut recovery = Recovery::default();
         let mut hp = 3;
         for _ in 0..9 {
@@ -99,18 +99,18 @@ mod tests {
         let mut thirsty = fed();
         thirsty.thirst.value = 0.3;
         for needs in [hungry, thirsty] {
-            assert!(!recovers(&needs, &Poisoned::default()), "{needs:?}");
+            assert!(!recovers(&needs, false), "{needs:?}");
             let mut recovery = Recovery::default();
-            assert_eq!(recovery.step(5.0, MINUTES_PER_HIT_POINT, recovers(&needs, &Poisoned::default()), 1, 8), 0);
+            assert_eq!(recovery.step(5.0, MINUTES_PER_HIT_POINT, recovers(&needs, false), 1, 8), 0);
         }
     }
 
     #[test]
     fn poisoned_regains_nothing() {
-        let poisoned = Poisoned::for_hours(1.0);
-        assert!(!recovers(&fed(), &poisoned));
+        let poisoned = true;
+        assert!(!recovers(&fed(), poisoned));
         let mut recovery = Recovery::default();
-        assert_eq!(recovery.step(0.5, MINUTES_PER_HIT_POINT, recovers(&fed(), &poisoned), 1, 8), 0);
+        assert_eq!(recovery.step(0.5, MINUTES_PER_HIT_POINT, recovers(&fed(), poisoned), 1, 8), 0);
     }
 
     #[test]
