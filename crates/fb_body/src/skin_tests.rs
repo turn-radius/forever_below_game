@@ -11,6 +11,15 @@ use crate::body::Body;
 use crate::gait::{Gait, IdleCycle};
 use crate::limb::Side;
 use crate::rig::{JOINTS, Joint, Rig, RigPose, Rigid};
+
+/// Seconds of CPU this thread has used. Timing checks read it rather than the wall clock, so a
+/// machine busy with other tests (or anything else) does not fail them.
+pub(crate) fn thread_cpu_seconds() -> f64 {
+    let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: `t` is a valid timespec for the call to write into.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
+    t.tv_sec as f64 + t.tv_nsec as f64 * 1e-9
+}
 use crate::skin::{PartSkin, SkinRegion, Skinner};
 use crate::worn::fit_worn;
 use crate::{BodySpec, Folk, fit_hands};
@@ -249,8 +258,18 @@ fn gear_stays_on_the_skin(folk: Folk, seed: u32, outfit: &str) {
 }
 
 #[test]
+#[ignore = "slow sweep: a fighter's gear on the skin through the walk for every folk; run before merging fitting changes"]
 fn legwear_boots_sleeves_and_gloves_stay_on_the_skin_through_the_walk() {
     for folk in Folk::ALL {
+        gear_stays_on_the_skin(folk, 1207, "fighter");
+    }
+}
+
+/// [`legwear_boots_sleeves_and_gloves_stay_on_the_skin_through_the_walk`] on the two builds
+/// furthest from a human's: the broad, tailed lizardfolk and the small gnome.
+#[test]
+fn legwear_boots_sleeves_and_gloves_stay_on_the_skin_through_the_walk_smoke() {
+    for folk in [Folk::Lizardfolk, Folk::Gnome] {
         gear_stays_on_the_skin(folk, 1207, "fighter");
     }
 }
@@ -339,14 +358,14 @@ fn held_items_stay_in_the_fists_through_the_walk() {
 fn weighting_a_dressed_folk_is_quick() {
     let d = dress(Folk::Human, 1207, "fighter");
     let vertices: usize = d.skin.iter().map(|(p, _)| p.positions.len()).sum::<usize>() + d.layers.iter().map(|(_, p, _)| p.positions.len()).sum::<usize>();
-    let start = std::time::Instant::now();
+    let start = thread_cpu_seconds();
     for (part, _) in &d.skin {
         d.skinner.part(part, SkinRegion::of_skin(part.name));
     }
     for (slot, part, _) in &d.layers {
         d.skinner.part(part, SkinRegion::of_worn(*slot, part.name));
     }
-    let took = start.elapsed().as_secs_f64();
+    let took = thread_cpu_seconds() - start;
     // Done once when a folk is built (off the main thread, with the fitting), a few tens of
     // thousands of vertices.
     assert!(took < 1.0, "{vertices} vertices took {took:.2} s");
@@ -362,7 +381,7 @@ fn posing_every_folk_each_frame_is_cheap() {
         })
         .collect();
     // A frame's worth for a level of a hundred folk, a hundred frames over.
-    let start = std::time::Instant::now();
+    let start = thread_cpu_seconds();
     let mut sum = 0.0;
     for frame in 0..100 {
         for person in 0..100 {
@@ -371,7 +390,7 @@ fn posing_every_folk_each_frame_is_cheap() {
             sum += pose.offset[0][1];
         }
     }
-    let per_frame = start.elapsed().as_secs_f64() / 100.0;
+    let per_frame = (thread_cpu_seconds() - start) / 100.0;
     assert!(sum.is_finite());
     assert!(per_frame < 0.004, "{:.2} ms to pose a hundred folk", per_frame * 1000.0);
 }

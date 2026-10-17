@@ -12,3 +12,7 @@ armory = { workspace = true }
 fb_items = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+# The timing checks read this thread's CPU time, which other work on the machine does not stretch.
+libc = "0.2"

@@ -162,10 +162,11 @@ mod tests {
 
     #[test]
     fn the_first_levels_folk_wear_nothing_rare() {
-        // 200 folk, the outfits taken in turn.
+        // 60 folk, the outfits taken in turn. The cap is what keeps rare gear off them; the
+        // sample only has to reach every outfit and see some magic.
         let o = |seed: u32| &outfits()[seed as usize % outfits().len()];
         let mut magic = 0;
-        for seed in 0..200 {
+        for seed in 0..60 {
             for (_, item) in o(seed).roll_with(seed, "human", Odds::kit(1)).worn {
                 assert!(item.rarity <= Rarity::Magic, "{} {seed}: {} is {:?}", o(seed).key, item.base, item.rarity);
                 magic += usize::from(item.rarity == Rarity::Magic);

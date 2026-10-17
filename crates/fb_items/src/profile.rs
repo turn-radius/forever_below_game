@@ -51,7 +51,13 @@ pub struct Profile {
 
 /// The longest and second-longest extents of the shape's mesh, in world units.
 pub fn extents(shape: &Item) -> (f32, f32) {
-    let Some((lo, hi)) = shape.build().bounds() else { return (0.0, 0.0) };
+    extents_of(shape.build().bounds())
+}
+
+/// [`extents`] from bounds already measured: building the mesh is what costs, so
+/// [`profile`] builds it once for both this and [`upright_footprint`].
+fn extents_of(bounds: Option<([f32; 3], [f32; 3])>) -> (f32, f32) {
+    let Some((lo, hi)) = bounds else { return (0.0, 0.0) };
     let mut e = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
     e.sort_by(|a, b| b.total_cmp(a));
     (e[0], e[1])
@@ -98,7 +104,12 @@ pub fn stands_on_base(shape: &Item) -> bool {
 /// rows for a shape wider (along X) than tall (along Y), more rows for one taller than wide.
 /// The cell count stays the same; only which way the cells run follows the shape.
 pub fn upright_footprint(footprint: Footprint, shape: &Item) -> Footprint {
-    let Some((lo, hi)) = shape.build().bounds() else { return footprint };
+    upright_footprint_of(footprint, shape.build().bounds())
+}
+
+/// [`upright_footprint`] from bounds already measured.
+fn upright_footprint_of(footprint: Footprint, bounds: Option<([f32; 3], [f32; 3])>) -> Footprint {
+    let Some((lo, hi)) = bounds else { return footprint };
     let (wide, tall) = (hi[0] - lo[0], hi[1] - lo[1]);
     let turned = Footprint { cols: footprint.rows, rows: footprint.cols };
     if (wide > tall && footprint.cols < footprint.rows) || (tall > wide && footprint.rows < footprint.cols) { turned } else { footprint }
@@ -129,7 +140,8 @@ pub fn chest_grid(style: ChestStyle) -> (u8, u8, &'static str) {
 /// `data/bases.json` or `data/goods.json` takes its slot, tags and stats from it; the rest
 /// derive them from the shape as `saMeta` does.
 pub fn profile(base: &str, shape: &Item) -> Profile {
-    let (long, wide) = extents(shape);
+    let bounds = shape.build().bounds();
+    let (long, wide) = extents_of(bounds);
     let family = shape.family();
     let mut p = if let Some(row) = bases().get(base) {
         Profile {
@@ -162,7 +174,7 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
         p.footprint = Footprint { cols: cells(wide), rows: cells(long) };
     }
     if stands_upright(family) {
-        p.footprint = upright_footprint(p.footprint, shape);
+        p.footprint = upright_footprint_of(p.footprint, bounds);
     }
     if matches!(family, Family::Staff | Family::Spear | Family::Bow) && long > PACK_LIMIT_UNITS {
         p.packable = false;
