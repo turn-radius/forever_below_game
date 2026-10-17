@@ -180,6 +180,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_FOLK_WALK=<n>` | every folk in the level walks in place at `n` times its natural pace (`FB_FOLK_WALK=1`), to see the gait and measure its cost before anything moves them |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
+| `FB_COMPARE=1` | holds Alt, so the hover card shows its compare card beside it |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
 | `FB_FRAME_TIME=<frames>` | prints Bevy's smoothed frame time at each listed frame (`240,270,300`) and quits after the last; with `FB_DEBUG_POSE`, measures a view's frame rate in the window at vsync |
