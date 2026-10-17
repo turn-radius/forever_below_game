@@ -110,7 +110,7 @@ pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Keymap>()
+        app.add_plugins(crate::keymap::KeymapPlugin)
             .init_resource::<UiFonts>()
             // Kept as loaded if `SettingsPlugin` came first.
             .init_resource::<GameSettings>()

@@ -2,7 +2,11 @@
 //! whether an [`Action`] is pressed rather than naming keys, and the pause menu lists the same
 //! table, so the controls it shows are the controls there are.
 
-use bevy::{ecs::system::SystemParam, prelude::*};
+use std::collections::{HashMap, HashSet};
+
+use bevy::{ecs::system::SystemParam, input::InputSystems, prelude::*};
+
+use crate::tuning::Tuning;
 
 /// Something the player does with a key or button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -130,6 +134,25 @@ fn key_label(key: KeyCode) -> String {
     debug.strip_prefix("Key").or_else(|| debug.strip_prefix("Digit")).unwrap_or(&debug).to_string()
 }
 
+/// How a binding fires.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PressType {
+    /// Once, on the frame the input goes down.
+    #[default]
+    Press,
+    /// Once the input has been down for the hold time ([`crate::tuning::InputTuning`]), and
+    /// the action ends when it is let go. Let go sooner it is a tap ([`ActionInput::tapped`]).
+    Hold,
+}
+
+/// Whether Crouch is held down or toggled by each press.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CrouchMode {
+    #[default]
+    Hold,
+    Toggle,
+}
+
 /// One action's name, group and the inputs that do it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binding {
@@ -137,9 +160,16 @@ pub struct Binding {
     pub name: &'static str,
     pub group: Group,
     pub inputs: Vec<Input>,
+    pub press: PressType,
 }
 
 impl Binding {
+    /// This binding, fired by holding rather than pressing.
+    fn hold(mut self) -> Self {
+        self.press = PressType::Hold;
+        self
+    }
+
     /// The inputs' labels, each once ("Shift" for both shift keys). A run of digit keys, as
     /// the quickslots', is one label: "1 to 0".
     pub fn labels(&self) -> Vec<String> {
@@ -161,12 +191,14 @@ impl Binding {
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct Keymap {
     pub bindings: Vec<Binding>,
+    /// Crouch held or toggled. The menu offers the choice later.
+    pub crouch: CrouchMode,
 }
 
 impl Default for Keymap {
     fn default() -> Self {
         use Input::{Key, Mouse};
-        let bind = |action, name, group, inputs: &[Input]| Binding { action, name, group, inputs: inputs.to_vec() };
+        let bind = |action, name, group, inputs: &[Input]| Binding { action, name, group, inputs: inputs.to_vec(), press: PressType::Press };
         Keymap {
             bindings: vec![
                 bind(Action::WalkForward, "Walk forward", Group::Moving, &[Key(KeyCode::KeyW)]),
@@ -181,8 +213,8 @@ impl Default for Keymap {
                 bind(Action::Look, "Look round", Group::Moving, &[Input::MouseMotion]),
                 bind(Action::TakeMouse, "Take the mouse back", Group::Moving, &[Mouse(MouseButton::Left)]),
                 bind(Action::Attack, "Swing what you hold", Group::Fighting, &[Mouse(MouseButton::Left)]),
-                bind(Action::Block, "Block", Group::Fighting, &[Mouse(MouseButton::Right)]),
-                bind(Action::Stab, "Stab", Group::Fighting, &[Mouse(MouseButton::Left)]),
+                bind(Action::Block, "Block", Group::Fighting, &[Mouse(MouseButton::Right)]).hold(),
+                bind(Action::Stab, "Stab", Group::Fighting, &[Mouse(MouseButton::Left)]).hold(),
                 bind(Action::Primary, "Primary action", Group::Items, &[Key(KeyCode::KeyF)]),
                 bind(Action::Secondary, "Secondary action", Group::Items, &[Key(KeyCode::KeyG)]),
                 bind(Action::Tertiary, "Tertiary action", Group::Items, &[Key(KeyCode::KeyR)]),
@@ -218,6 +250,7 @@ impl Default for Keymap {
                 bind(Action::MusicQuieter, "Music quieter", Group::Sound, &[Key(KeyCode::Minus)]),
                 bind(Action::MusicLouder, "Music louder", Group::Sound, &[Key(KeyCode::Equal)]),
             ],
+            crouch: CrouchMode::default(),
         }
     }
 }
@@ -232,22 +265,134 @@ impl Keymap {
         self.binding(action).map_or(&[], |b| b.inputs.as_slice())
     }
 
+    /// Whether `input` is bound as Hold to some action.
+    fn is_held_anywhere(&self, input: Input) -> bool {
+        self.bindings.iter().any(|b| b.press == PressType::Hold && b.inputs.contains(&input))
+    }
+
     /// The bindings listed under `group`, in order.
     pub fn in_group(&self, group: Group) -> impl Iterator<Item = &Binding> {
         self.bindings.iter().filter(move |b| b.group == group)
     }
 }
 
+/// How long each bound input has been down, for the Hold bindings. [`track_holds`] keeps it.
+#[derive(Resource, Debug, PartialEq)]
+pub struct InputHolds {
+    /// Seconds a press needs to become a hold.
+    hold_time: f32,
+    inputs: HashMap<Input, Held>,
+    /// Whether a toggled crouch is on.
+    crouch_toggled: bool,
+}
+
+impl Default for InputHolds {
+    fn default() -> Self {
+        InputHolds { hold_time: crate::tuning::InputTuning::default().hold_time, inputs: HashMap::new(), crouch_toggled: false }
+    }
+}
+
+/// One input's press this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Held {
+    down: bool,
+    /// Seconds down as of last frame and as of this one.
+    before: f32,
+    now: f32,
+    /// Seconds it had been down, on the frame it was let go.
+    released: Option<f32>,
+}
+
+impl InputHolds {
+    /// Down long enough to count as held, and still down.
+    fn is_held(&self, input: Input) -> bool {
+        self.inputs.get(&input).is_some_and(|h| h.down && h.now >= self.hold_time)
+    }
+
+    /// Reached the hold time this frame.
+    fn became_held(&self, input: Input) -> bool {
+        self.inputs.get(&input).is_some_and(|h| h.before < self.hold_time && h.now >= self.hold_time)
+    }
+
+    /// Let go this frame after being held.
+    fn ended_hold(&self, input: Input) -> bool {
+        self.inputs.get(&input).and_then(|h| h.released).is_some_and(|t| t >= self.hold_time)
+    }
+
+    /// Let go this frame before the hold time.
+    fn was_tapped(&self, input: Input) -> bool {
+        self.inputs.get(&input).and_then(|h| h.released).is_some_and(|t| t < self.hold_time)
+    }
+}
+
+/// Where [`track_holds`] runs, in `PreUpdate` after the input is read. Anything that drives
+/// `ButtonInput` itself runs before it.
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct HoldSet;
+
+/// Counts how long every bound input has been down, and flips a toggled crouch.
+pub(crate) fn track_holds(
+    keymap: Res<Keymap>,
+    tuning: Option<Res<Tuning>>,
+    time: Option<Res<Time<Real>>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    screen: Option<Res<crate::play::ScreenOpen>>,
+    mut holds: ResMut<InputHolds>,
+    mut bound: Local<Vec<Input>>,
+) {
+    let delta = time.map_or(0.0, |t| t.delta_secs());
+    holds.hold_time = tuning.map_or(crate::tuning::InputTuning::default().hold_time, |t| t.input.hold_time).max(0.01);
+    // Pressed, just pressed, just released.
+    let read = |input: Input| -> (bool, bool, bool) {
+        match input {
+            Input::Key(k) => keys.as_deref().map_or((false, false, false), |b| (b.pressed(k), b.just_pressed(k), b.just_released(k))),
+            Input::Mouse(m) => mouse.as_deref().map_or((false, false, false), |b| (b.pressed(m), b.just_pressed(m), b.just_released(m))),
+            Input::MouseMotion => (false, false, false),
+        }
+    };
+    // Several actions share an input, which must be counted once a frame.
+    if keymap.is_changed() || bound.is_empty() {
+        *bound = keymap.bindings.iter().flat_map(|b| b.inputs.iter().copied()).collect::<HashSet<_>>().into_iter().collect();
+    }
+    for &input in bound.iter() {
+        let (pressed, just_pressed, just_released) = read(input);
+        let held = holds.inputs.entry(input).or_default();
+        if just_pressed {
+            *held = Held { down: !just_released, released: just_released.then_some(0.0), ..Held::default() };
+        } else if held.down {
+            held.before = held.now;
+            held.now += delta;
+            held.released = (just_released || !pressed).then_some(held.now);
+            held.down = held.released.is_none();
+        } else {
+            *held = Held::default();
+        }
+    }
+    // A press in a menu or screen is not a crouch.
+    let flipped = !screen.is_some_and(|s| s.0.is_some()) && keymap.inputs(Action::Crouch).iter().any(|&i| read(i).1);
+    holds.crouch_toggled = keymap.crouch == CrouchMode::Toggle && (holds.crouch_toggled != flipped);
+}
+
 /// The keyboard and mouse read through the [`Keymap`]. Without either input resource (in
-/// tests) nothing is pressed.
+/// tests) nothing is pressed, and without [`InputHolds`] no Hold binding fires.
+///
+/// A Press binding reads the raw input. A Hold binding is `pressed` once its input has been
+/// down for the hold time, `just_pressed` on the frame it gets there and `just_released` when
+/// let go after that. Let go sooner, it is [`tapped`](ActionInput::tapped).
 #[derive(SystemParam)]
 pub struct ActionInput<'w> {
     keymap: Res<'w, Keymap>,
     keys: Option<Res<'w, ButtonInput<KeyCode>>>,
     mouse: Option<Res<'w, ButtonInput<MouseButton>>>,
+    holds: Option<Res<'w, InputHolds>>,
 }
 
 impl ActionInput<'_> {
+    fn press_type(&self, action: Action) -> PressType {
+        self.keymap.binding(action).map_or(PressType::Press, |b| b.press)
+    }
+
     fn any(&self, action: Action, key: impl Fn(&ButtonInput<KeyCode>, KeyCode) -> bool, button: impl Fn(&ButtonInput<MouseButton>, MouseButton) -> bool) -> bool {
         self.keymap.inputs(action).iter().any(|input| match *input {
             Input::Key(k) => self.keys.as_deref().is_some_and(|keys| key(keys, k)),
@@ -256,9 +401,17 @@ impl ActionInput<'_> {
         })
     }
 
-    /// Held down now.
+    /// Whether `held` is true of any of `action`'s inputs.
+    fn any_held(&self, action: Action, held: impl Fn(&InputHolds, Input) -> bool) -> bool {
+        self.holds.as_deref().is_some_and(|holds| self.keymap.inputs(action).iter().any(|&i| held(holds, i)))
+    }
+
+    /// Down now; for a Hold binding, down for the hold time.
     pub fn pressed(&self, action: Action) -> bool {
-        self.any(action, |k, c| k.pressed(c), |m, b| m.pressed(b))
+        match self.press_type(action) {
+            PressType::Press => self.any(action, |k, c| k.pressed(c), |m, b| m.pressed(b)),
+            PressType::Hold => self.any_held(action, InputHolds::is_held),
+        }
     }
 
     /// Which of `action`'s inputs was pressed this frame, as its position in the binding (the
@@ -271,19 +424,56 @@ impl ActionInput<'_> {
         })
     }
 
-    /// Pressed this frame.
+    /// Pressed this frame; for a Hold binding, held for the hold time this frame.
     pub fn just_pressed(&self, action: Action) -> bool {
-        self.any(action, |k, c| k.just_pressed(c), |m, b| m.just_pressed(b))
+        match self.press_type(action) {
+            PressType::Press => self.any(action, |k, c| k.just_pressed(c), |m, b| m.just_pressed(b)),
+            PressType::Hold => self.any_held(action, InputHolds::became_held),
+        }
     }
 
-    /// Let go this frame.
+    /// Let go this frame; for a Hold binding, let go after being held (a tap does not count).
     pub fn just_released(&self, action: Action) -> bool {
-        self.any(action, |k, c| k.just_released(c), |m, b| m.just_released(b))
+        match self.press_type(action) {
+            PressType::Press => self.any(action, |k, c| k.just_released(c), |m, b| m.just_released(b)),
+            PressType::Hold => self.any_held(action, InputHolds::ended_hold),
+        }
+    }
+
+    /// A short press: let go before the hold time. A Press binding on an input some other
+    /// action holds (Attack, with Stab held on the same click) fires here, on release, so a
+    /// click is Attack or Stab and never both; the swing waits for the click to be let go.
+    /// A Press binding on an input nothing holds fires as it goes down, as `just_pressed`.
+    pub fn tapped(&self, action: Action) -> bool {
+        let contested = self.keymap.inputs(action).iter().any(|&i| self.keymap.is_held_anywhere(i));
+        // Without the tracker (in tests) there is no hold to wait out.
+        if self.press_type(action) == PressType::Press && (!contested || self.holds.is_none()) {
+            return self.just_pressed(action);
+        }
+        self.any_held(action, InputHolds::was_tapped)
+    }
+
+    /// Whether the delver is crouching, by the keymap's [`CrouchMode`]: Crouch held down, or
+    /// the state each press of it flips.
+    pub fn crouching(&self) -> bool {
+        match self.keymap.crouch {
+            CrouchMode::Hold => self.any(Action::Crouch, |k, c| k.pressed(c), |m, b| m.pressed(b)),
+            CrouchMode::Toggle => self.holds.as_deref().is_some_and(|h| h.crouch_toggled),
+        }
     }
 
     /// 1 while `plus` is held, -1 while `minus` is, 0 for both or neither.
     pub fn axis(&self, plus: Action, minus: Action) -> f32 {
         self.pressed(plus) as i32 as f32 - self.pressed(minus) as i32 as f32
+    }
+}
+
+/// Reads how long the bound inputs are down, for the Hold bindings.
+pub struct KeymapPlugin;
+
+impl Plugin for KeymapPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Keymap>().init_resource::<InputHolds>().add_systems(PreUpdate, track_holds.in_set(HoldSet).after(InputSystems));
     }
 }
 
@@ -373,5 +563,147 @@ mod tests {
             .run_system_once(|input: ActionInput| (input.pressed(Action::Sprint), input.just_pressed(Action::TurnItem), input.pressed(Action::Primary), input.axis(Action::WalkForward, Action::WalkBack)))
             .unwrap();
         assert_eq!(read, (true, true, false, 0.0));
+    }
+
+    /// An app with the keymap, both inputs, a manual clock and the hold tracker.
+    fn held_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<Keymap>().init_resource::<InputHolds>().init_resource::<ButtonInput<KeyCode>>().init_resource::<ButtonInput<MouseButton>>().init_resource::<Time<Real>>();
+        app.add_systems(Update, track_holds);
+        app
+    }
+
+    /// Advances the clock by `seconds`, then runs the tracker.
+    fn step(app: &mut App, seconds: f32) {
+        app.world_mut().resource_mut::<Time<Real>>().advance_by(std::time::Duration::from_secs_f32(seconds));
+        app.update();
+    }
+
+    /// Ends a frame as Bevy's input system does at the start of the next: the transient flags clear.
+    fn end(app: &mut App) {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+    }
+
+    /// Pressed, just pressed, just released and tapped, for `action`.
+    fn read(app: &mut App, action: Action) -> (bool, bool, bool, bool) {
+        app.world_mut().run_system_once(move |input: ActionInput| (input.pressed(action), input.just_pressed(action), input.just_released(action), input.tapped(action))).unwrap()
+    }
+
+    #[test]
+    fn a_press_binding_fires_once_on_the_down_frame() {
+        let mut app = held_app();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
+        step(&mut app, 0.016);
+        assert!(read(&mut app, Action::Primary).1);
+        end(&mut app);
+        step(&mut app, 0.016);
+        let (pressed, just, _, _) = read(&mut app, Action::Primary);
+        assert!(pressed && !just);
+    }
+
+    #[test]
+    fn a_hold_binding_fires_once_after_the_hold_time_and_not_before() {
+        let mut app = held_app();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        step(&mut app, 0.016);
+        assert_eq!(read(&mut app, Action::Stab), (false, false, false, false));
+        end(&mut app);
+        step(&mut app, 0.2);
+        assert_eq!(read(&mut app, Action::Stab), (false, false, false, false), "0.216s is short of 0.25s");
+        end(&mut app);
+        step(&mut app, 0.05);
+        assert_eq!(read(&mut app, Action::Stab), (true, true, false, false), "fires on the frame it gets there");
+        end(&mut app);
+        step(&mut app, 0.1);
+        assert_eq!(read(&mut app, Action::Stab), (true, false, false, false), "and only once");
+    }
+
+    #[test]
+    fn letting_go_ends_a_hold() {
+        let mut app = held_app();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        step(&mut app, 0.016);
+        end(&mut app);
+        step(&mut app, 0.3);
+        assert!(read(&mut app, Action::Block).0);
+        end(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Right);
+        step(&mut app, 0.016);
+        assert_eq!(read(&mut app, Action::Block), (false, false, true, false));
+        end(&mut app);
+        step(&mut app, 0.016);
+        assert_eq!(read(&mut app, Action::Block), (false, false, false, false));
+    }
+
+    #[test]
+    fn a_short_click_is_attack_and_not_stab() {
+        let mut app = held_app();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        step(&mut app, 0.016);
+        assert!(!read(&mut app, Action::Attack).3, "the click is not decided on the way down");
+        end(&mut app);
+        step(&mut app, 0.1);
+        assert!(!read(&mut app, Action::Attack).3, "nor while it is still down and short");
+        end(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        step(&mut app, 0.016);
+        assert!(read(&mut app, Action::Attack).3);
+        assert_eq!(read(&mut app, Action::Stab), (false, false, false, true));
+        end(&mut app);
+        step(&mut app, 0.016);
+        assert!(!read(&mut app, Action::Attack).3, "once");
+    }
+
+    #[test]
+    fn a_long_click_is_stab_and_not_attack() {
+        let mut app = held_app();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        step(&mut app, 0.016);
+        end(&mut app);
+        step(&mut app, 0.3);
+        assert!(read(&mut app, Action::Stab).1);
+        assert!(!read(&mut app, Action::Attack).3);
+        end(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        step(&mut app, 0.016);
+        assert!(read(&mut app, Action::Stab).2);
+        assert!(!read(&mut app, Action::Attack).3, "letting go after the hold is not a tap");
+    }
+
+    #[test]
+    fn right_click_still_turns_a_dragged_item_at_once() {
+        let mut app = held_app();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        step(&mut app, 0.016);
+        assert!(read(&mut app, Action::TurnItem).1);
+    }
+
+    #[test]
+    fn crouch_is_held_by_default_and_can_toggle() {
+        let mut app = held_app();
+        assert_eq!(app.world().resource::<Keymap>().crouch, CrouchMode::Hold);
+        let crouching = |app: &mut App| app.world_mut().run_system_once(|input: ActionInput| input.crouching()).unwrap();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ControlLeft);
+        step(&mut app, 0.016);
+        assert!(crouching(&mut app));
+        end(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::ControlLeft);
+        step(&mut app, 0.016);
+        assert!(!crouching(&mut app), "held: let go stands up");
+
+        app.world_mut().resource_mut::<Keymap>().crouch = CrouchMode::Toggle;
+        end(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ControlLeft);
+        step(&mut app, 0.016);
+        assert!(crouching(&mut app));
+        end(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::ControlLeft);
+        step(&mut app, 0.016);
+        assert!(crouching(&mut app), "toggled: let go stays down");
+        end(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ControlLeft);
+        step(&mut app, 0.016);
+        assert!(!crouching(&mut app), "the next press stands up");
     }
 }
