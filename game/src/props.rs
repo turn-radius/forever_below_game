@@ -256,7 +256,7 @@ fn open_aimed_container(
     tuning: Option<Res<Tuning>>,
     mut spawner: ItemSpawner,
 ) {
-    if !input.just_pressed(Action::PickUp) {
+    if !input.just_pressed(Action::Primary) {
         return;
     }
     let Some(entity) = aimed.0 else { return };
@@ -338,10 +338,10 @@ mod tests {
     /// Looks at `entity` and presses the pick-up key for a frame.
     fn press_pick_up_on(app: &mut App, entity: Entity) {
         app.world_mut().resource_mut::<Aimed>().0 = Some(entity);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
         app.update();
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        keys.release(KeyCode::KeyE);
+        keys.release(KeyCode::KeyF);
         keys.clear();
     }
 
@@ -369,7 +369,7 @@ mod tests {
         let grid = app.world().resource::<Inventory>().grid(container.id).unwrap().clone();
         assert_eq!((grid.cols, grid.rows), (cols, rows));
 
-        // E on it: the inventory opens with its grid, and it stands open in the level.
+        // F on it: the inventory opens with its grid, and it stands open in the level.
         press_pick_up_on(&mut app, entity);
         assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         assert_eq!(app.world().resource::<OpenContainer>().0, Some(container.id));

@@ -205,7 +205,7 @@ fn apply_commands(
     }
 }
 
-/// One line of the controls list: an action, its name and its keys ("R or Right click").
+/// One line of the controls list: an action, its name and its keys ("Right click").
 pub type ControlLine = (Action, &'static str, String);
 
 /// The controls list: each group in turn with its bindings' lines.
@@ -647,7 +647,7 @@ mod tests {
         bound.sort_by_key(|a| Group::ALL.iter().position(|&g| keymap.binding(*a).unwrap().group == g));
         assert_eq!(listed, bound, "every binding, once, by group");
         let turn = controls(&keymap).into_iter().flat_map(|(_, rows)| rows).find(|(a, ..)| *a == Action::TurnItem).unwrap();
-        assert_eq!(turn.2, "R or Right click");
+        assert_eq!(turn.2, "Right click");
 
         // And the page shows exactly those lines, each with its keys.
         let mut app = menu_app();

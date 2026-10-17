@@ -11,26 +11,42 @@ pub enum Action {
     WalkBack,
     StepLeft,
     StepRight,
-    Hurry,
+    Sprint,
+    DodgeLeft,
+    DodgeRight,
+    Crouch,
+    Jump,
     /// Moving the mouse. Never pressed; listed so the menu shows it.
     Look,
     /// Takes the mouse back for looking round, in the level.
     TakeMouse,
     /// Swings what the main hand holds.
     Attack,
-    PickUp,
+    /// Holds a blocking guard. No gameplay yet.
+    Block,
+    /// A thrust with what the main hand holds. No gameplay yet.
+    Stab,
+    /// In the level, picks up the item under the crosshair, opens a container or takes a
+    /// stair; in the inventory, eats or drinks the item under the mouse.
+    Primary,
     /// Equips the item under the crosshair straight from the floor.
-    EquipAimed,
+    Secondary,
+    /// No gameplay yet.
+    Tertiary,
+    /// No gameplay yet.
+    Special,
+    /// Compares the item under the crosshair or mouse with what is worn. No gameplay yet.
+    Compare,
     /// Lights or puts out the carried light (with Shift, the hip lantern), or in the inventory
     /// the light under the mouse.
     Light,
-    /// Eats or drinks the food or drink under the mouse in the inventory.
-    Consume,
     /// Uses the item in a quickslot: its ten keys, 1 to 0, are the slots in order.
     Quickslot,
     DragItem,
     TurnItem,
     Inventory,
+    /// Opens the journal. No gameplay yet.
+    Journal,
     /// Opens the inventory screen on its character tab.
     Character,
     /// Opens and closes the map of the level.
@@ -157,14 +173,22 @@ impl Default for Keymap {
                 bind(Action::WalkBack, "Walk back", Group::Moving, &[Key(KeyCode::KeyS)]),
                 bind(Action::StepLeft, "Step left", Group::Moving, &[Key(KeyCode::KeyA)]),
                 bind(Action::StepRight, "Step right", Group::Moving, &[Key(KeyCode::KeyD)]),
-                bind(Action::Hurry, "Hurry", Group::Moving, &[Key(KeyCode::ShiftLeft), Key(KeyCode::ShiftRight)]),
+                bind(Action::DodgeLeft, "Dodge left", Group::Moving, &[Key(KeyCode::KeyQ)]),
+                bind(Action::DodgeRight, "Dodge right", Group::Moving, &[Key(KeyCode::KeyE)]),
+                bind(Action::Sprint, "Sprint", Group::Moving, &[Key(KeyCode::ShiftLeft), Key(KeyCode::ShiftRight)]),
+                bind(Action::Crouch, "Crouch", Group::Moving, &[Key(KeyCode::ControlLeft), Key(KeyCode::ControlRight)]),
+                bind(Action::Jump, "Jump", Group::Moving, &[Key(KeyCode::Space)]),
                 bind(Action::Look, "Look round", Group::Moving, &[Input::MouseMotion]),
                 bind(Action::TakeMouse, "Take the mouse back", Group::Moving, &[Mouse(MouseButton::Left)]),
                 bind(Action::Attack, "Swing what you hold", Group::Fighting, &[Mouse(MouseButton::Left)]),
-                bind(Action::PickUp, "Pick up or open", Group::Items, &[Key(KeyCode::KeyE)]),
-                bind(Action::EquipAimed, "Equip what you look at", Group::Items, &[Key(KeyCode::KeyF)]),
+                bind(Action::Block, "Block", Group::Fighting, &[Mouse(MouseButton::Right)]),
+                bind(Action::Stab, "Stab", Group::Fighting, &[Mouse(MouseButton::Left)]),
+                bind(Action::Primary, "Primary action", Group::Items, &[Key(KeyCode::KeyF)]),
+                bind(Action::Secondary, "Secondary action", Group::Items, &[Key(KeyCode::KeyG)]),
+                bind(Action::Tertiary, "Tertiary action", Group::Items, &[Key(KeyCode::KeyR)]),
+                bind(Action::Special, "Special action", Group::Items, &[Key(KeyCode::KeyT)]),
+                bind(Action::Compare, "Compare", Group::Items, &[Key(KeyCode::AltLeft), Key(KeyCode::AltRight)]),
                 bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]),
-                bind(Action::Consume, "Eat or drink what is under the mouse in the inventory", Group::Items, &[Key(KeyCode::KeyU)]),
                 bind(
                     Action::Quickslot,
                     "Use a quickslot, or in the inventory bind the item under the mouse to it",
@@ -183,9 +207,10 @@ impl Default for Keymap {
                     ],
                 ),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
-                bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
+                bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Mouse(MouseButton::Right)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),
-                bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyC)]),
+                bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyK)]),
+                bind(Action::Journal, "Journal", Group::Screens, &[Key(KeyCode::KeyJ)]),
                 bind(Action::Map, "Map", Group::Screens, &[Key(KeyCode::KeyM)]),
                 bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]),
                 bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]),
@@ -279,11 +304,35 @@ mod tests {
     }
 
     #[test]
-    fn the_inventory_is_i_the_character_c_and_nothing_is_tab() {
+    fn the_inventory_is_i_and_the_character_k() {
         let keymap = Keymap::default();
         assert_eq!(keymap.inputs(Action::Inventory), &[Input::Key(KeyCode::KeyI)]);
-        assert_eq!(keymap.inputs(Action::Character), &[Input::Key(KeyCode::KeyC)]);
-        assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(KeyCode::Tab))));
+        assert_eq!(keymap.inputs(Action::Character), &[Input::Key(KeyCode::KeyK)]);
+    }
+
+    #[test]
+    fn the_spare_keys_are_unbound() {
+        let keymap = Keymap::default();
+        for key in [KeyCode::KeyC, KeyCode::KeyV, KeyCode::KeyX, KeyCode::KeyZ, KeyCode::KeyB, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU, KeyCode::Tab] {
+            assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(key))), "{key:?} is bound");
+        }
+    }
+
+    #[test]
+    fn the_new_layout_binds_the_action_keys() {
+        let keymap = Keymap::default();
+        assert_eq!(keymap.inputs(Action::Primary), &[Input::Key(KeyCode::KeyF)]);
+        assert_eq!(keymap.inputs(Action::Secondary), &[Input::Key(KeyCode::KeyG)]);
+        assert_eq!(keymap.inputs(Action::Tertiary), &[Input::Key(KeyCode::KeyR)]);
+        assert_eq!(keymap.inputs(Action::Special), &[Input::Key(KeyCode::KeyT)]);
+        assert_eq!(keymap.inputs(Action::Compare), &[Input::Key(KeyCode::AltLeft), Input::Key(KeyCode::AltRight)]);
+        assert_eq!(keymap.inputs(Action::DodgeLeft), &[Input::Key(KeyCode::KeyQ)]);
+        assert_eq!(keymap.inputs(Action::DodgeRight), &[Input::Key(KeyCode::KeyE)]);
+        assert_eq!(keymap.inputs(Action::Jump), &[Input::Key(KeyCode::Space)]);
+        assert_eq!(keymap.inputs(Action::Journal), &[Input::Key(KeyCode::KeyJ)]);
+        assert_eq!(keymap.inputs(Action::TurnItem), &[Input::Mouse(MouseButton::Right)]);
+        assert_eq!(keymap.inputs(Action::Block), &[Input::Mouse(MouseButton::Right)]);
+        assert_eq!(keymap.binding(Action::Sprint).unwrap().name, "Sprint");
     }
 
     #[test]
@@ -294,7 +343,7 @@ mod tests {
         assert_eq!(Input::Key(KeyCode::Equal).label(), "=");
         assert_eq!(Keymap::default().binding(Action::NewDelve).unwrap().labels(), vec!["Enter".to_string()]);
         assert_eq!(Input::Mouse(MouseButton::Right).label(), "Right click");
-        assert_eq!(Keymap::default().binding(Action::Hurry).unwrap().labels(), vec!["Shift".to_string()]);
+        assert_eq!(Keymap::default().binding(Action::Sprint).unwrap().labels(), vec!["Shift".to_string()]);
         assert_eq!(Keymap::default().binding(Action::Quickslot).unwrap().labels(), vec!["1 to 0".to_string()], "ten digit keys are one label");
     }
 
@@ -321,7 +370,7 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
         let read = app
             .world_mut()
-            .run_system_once(|input: ActionInput| (input.pressed(Action::Hurry), input.just_pressed(Action::TurnItem), input.pressed(Action::PickUp), input.axis(Action::WalkForward, Action::WalkBack)))
+            .run_system_once(|input: ActionInput| (input.pressed(Action::Sprint), input.just_pressed(Action::TurnItem), input.pressed(Action::Primary), input.axis(Action::WalkForward, Action::WalkBack)))
             .unwrap();
         assert_eq!(read, (true, true, false, 0.0));
     }

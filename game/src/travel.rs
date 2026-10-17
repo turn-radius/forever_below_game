@@ -208,7 +208,7 @@ fn end_the_run(mut commands: Commands, mut abyss: ResMut<Abyss>) {
     commands.remove_resource::<Journey>();
 }
 
-/// E at a stair uses it.
+/// F at a stair uses it.
 fn take_stair(
     input: ActionInput,
     level: Res<CurrentLevel>,
@@ -218,7 +218,7 @@ fn take_stair(
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut used: MessageWriter<UseStair>,
 ) {
-    if journey.is_some() || fallen.is_some() || !input.just_pressed(Action::PickUp) {
+    if journey.is_some() || fallen.is_some() || !input.just_pressed(Action::Primary) {
         return;
     }
     let (Some(feet), Some(eye)) = (players.iter().next(), cameras.iter().next()) else { return };

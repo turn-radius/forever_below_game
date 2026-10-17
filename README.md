@@ -26,16 +26,19 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 
 | Key | Does |
 |---|---|
-| W A S D, Shift | walk, hurry |
+| W A S D, Shift | walk, sprint |
+| Q, E, Ctrl, Space | dodge left and right, crouch, jump (bound, not yet acted on) |
 | Mouse | look round (click to take the mouse back after Esc) |
 | Left click | swing what your main hand holds (a weapon in the off hand is held but does not swing yet), each blow from one of the directions it suits and arcing to the creature in reach: mostly overhead for a mace, axe or club, from every side for a sword, flat across for a staff, a stab for a spear or dagger, a punch with nothing (a click while the mouse is free only takes it back) |
-| E | pick up what you're looking at, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
-| F | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand (or the off hand, if only that is free), a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay; a lantern goes in a free hand, else at the hip if you wear a belt, where it lights the way with both hands full |
+| F | pick up what you're looking at, take the stairs, or open the chest, barrel, crate or amphora you're looking at (its contents show beside what lies underfoot) |
+| G | equip what you're looking at straight from the floor: worn gear in its slot, a weapon in the main hand (or the off hand, if only that is free), a torch, lantern or shield in the off hand, a ring on a free finger; what it replaces goes into a bag, or down where the new thing lay; a lantern goes in a free hand, else at the hip if you wear a belt, where it lights the way with both hands full |
+| Right click | block (bound, not yet acted on) |
+| R, T, Alt, J | tertiary and special actions, compare and journal (bound, not yet acted on) |
 | L, Shift+L | light or put out the torch or lantern you carry, the one in hand first, then the one at your hip; Shift+L acts on the hip lantern alone. In the inventory, L lights or puts out the torch or lantern under the mouse, wherever it lies; its card says which. A spent torch will not light. Every lit light you carry shines |
 | M | map of the level, filled in as you explore: only cells you have seen while they were lit are drawn, as an inked plan with you marked by an amber arrow; scroll to zoom about the mouse, drag to pan; M or Esc closes it, and the body holds still while it is open |
-| I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
+| I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); right click turns a dragged item; F eats or drinks the food or drink under the mouse; double-click wears or takes off; drag the doll to turn it |
 | 1 to 0 | use the item in that quickslot: eat or drink it, draw a weapon or shield into the hand, or draw a torch or lantern and then light or put it out. In the inventory, the number binds the item under the mouse to that slot, as dragging it onto the strip's slot does (a worn item too; another number moves it; an item a slot cannot use, or one lying underfoot, is refused the same way) |
-| C | character: the inventory screen's character tab; C or I swaps between its tabs, and the key of the tab showing closes it |
+| K | character: the inventory screen's character tab; K or I swaps between its tabs, and the key of the tab showing closes it |
 | Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
 

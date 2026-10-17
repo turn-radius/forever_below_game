@@ -1,4 +1,4 @@
-//! Eating and drinking from the inventory (#228). With the screen open, U eats or drinks the
+//! Eating and drinking from the inventory (#228). With the screen open, F eats or drinks the
 //! food or drink under the mouse: the item is used up and its nutrition and water come off the
 //! delver's hunger and thirst ([`fb_items::Provision`], `docs/items.md`). The inventory keeps no
 //! counts, so a stack of bread is several items and one is eaten at a time.
@@ -115,7 +115,7 @@ pub fn say(done: &Consumed) -> String {
 }
 
 /// What eating needs from the world: the delver's needs and hit points, the run's dice, the
-/// green flash and the chime. [`Eating::eat`] is what U in the inventory and a quickslot share.
+/// green flash and the chime. [`Eating::eat`] is what F in the inventory and a quickslot share.
 #[derive(SystemParam)]
 pub struct Eating<'w, 's> {
     commands: Commands<'w, 's>,
@@ -151,9 +151,9 @@ impl Eating<'_, '_> {
     }
 }
 
-/// U in the inventory: eats or drinks the item under the mouse.
+/// F in the inventory: eats or drinks the item under the mouse.
 fn consume_hovered(input: ActionInput, hovered: Res<Hovered>, mut inventory: ResMut<Inventory>, mut eating: Eating, mut toast: ResMut<Toast>, time: Option<Res<Time<Real>>>) {
-    if !input.just_pressed(Action::Consume) {
+    if !input.just_pressed(Action::Primary) {
         return;
     }
     let Some((id, _)) = hovered.0 else { return };
@@ -272,9 +272,9 @@ mod tests {
     }
 
     fn press_u(app: &mut App) {
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyU);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyU);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyF);
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
     }
 

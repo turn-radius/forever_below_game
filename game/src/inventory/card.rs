@@ -38,7 +38,7 @@ pub struct CardText {
     pub stats: Vec<String>,
     /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
     pub light: Option<String>,
-    /// What U does with food or drink: "U eats it \u{b7} eases hunger 40%".
+    /// What F does with food or drink: "F eats it \u{b7} eases hunger 40%".
     pub consume: Option<String>,
     /// A legendary's three lines of history.
     pub history: Vec<String>,
@@ -66,12 +66,12 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
     Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
 }
 
-/// What U does with food or drink, and how much it eases: "U eats it \u{b7} eases hunger 40%".
+/// What F does with food or drink, and how much it eases: "F eats it \u{b7} eases hunger 40%".
 /// `None` for anything that is not eaten or drunk.
 pub fn consume_line(item: &Item) -> Option<String> {
     let how = item.consume()?;
     let p = item.provision()?;
-    let mut line = format!("U {}s it", how.past());
+    let mut line = format!("F {}s it", how.past());
     for (meter, by) in [("hunger", p.nutrition), ("thirst", p.water)] {
         if by > 0.0 {
             line.push_str(&format!(" \u{b7} eases {meter} {}%", (by * 100.0).round()));
@@ -553,9 +553,9 @@ mod tests {
     #[test]
     fn food_and_drink_cards_say_what_u_does() {
         let line = |base: &str| consume_line(&fb_items::roll_item(base, 3).unwrap());
-        assert_eq!(line("Bread").unwrap(), "U eats it \u{b7} eases hunger 40%");
-        assert_eq!(line("Tankard").unwrap(), "U drinks it \u{b7} eases thirst 50%");
-        assert_eq!(line("Healing draught").unwrap(), "U drinks it");
+        assert_eq!(line("Bread").unwrap(), "F eats it \u{b7} eases hunger 40%");
+        assert_eq!(line("Tankard").unwrap(), "F drinks it \u{b7} eases thirst 50%");
+        assert_eq!(line("Healing draught").unwrap(), "F drinks it");
         assert_eq!(line("Torch"), None);
     }
 
