@@ -190,6 +190,17 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
     if s.break_chance > 0.0 {
         lines.push(format!("{}% chance to break on a hard blow", number(s.break_chance * 100.0)));
     }
+    if s.speed != plain.speed {
+        lines.push(format!("{:+}% speed", ((s.speed - 1.0) * 100.0).round()));
+    }
+    if s.block_chance > 0.0 {
+        lines.push(format!("{}% chance to block a blow", number((s.block_chance * 100.0).round())));
+    }
+    for (value, name) in [(s.strength, "STR"), (s.dexterity, "DEX"), (s.constitution, "CON"), (s.intelligence, "INT"), (s.wisdom, "WIS"), (s.charisma, "CHA")] {
+        if value != 0.0 {
+            lines.push(format!("{} {name}", signed(value)));
+        }
+    }
     lines
 }
 
