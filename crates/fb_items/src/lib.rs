@@ -26,7 +26,7 @@ pub mod undead;
 pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, roll_item, roll_item_with, roll_loot};
 pub use rarity::Odds;
-pub use provision::{Consume, Provision, provision};
+pub use provision::{Consume, Provision, SWALLOW, provision};
 
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
