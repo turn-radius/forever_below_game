@@ -57,7 +57,8 @@ fn the_lab_builds_its_sheet_and_rebuilds_it_on_a_change() {
     assert_eq!(app.world().resource::<SheetBuilds>().0, builds + 1);
     let shown = texts(&mut app);
     assert!(shown.iter().any(|t| t == " / 175"), "{shown:?}");
-    assert!(shown.iter().any(|t| t.contains("Belt of the Ox")), "{shown:?}");
+    // Its noun follows its shape (a belt, a girdle); the affix names it either way.
+    assert!(shown.iter().any(|t| t.ends_with("of the Ox") && !t.contains(':')), "{shown:?}");
 }
 
 #[test]

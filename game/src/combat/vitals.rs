@@ -242,9 +242,12 @@ fn take_bites(
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
     rules: Res<crate::rules::GameRules>,
+    inventory: Option<Res<crate::inventory::Inventory>>,
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    // What they wear and how dirty they are make catching a disease likelier.
+    let disease_risk = inventory.as_deref().map_or(1.0, |i| character.gear(i).disease_risk) * (1.0 + character.dirt.max(0.0) as f64);
     for bite in bites.read() {
         if bodies.contains(bite.attacker) {
             continue;
@@ -255,11 +258,24 @@ fn take_bites(
             }
             let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
             health.hurt(damage);
-            // A failed save poisons them for the poisoned effect's hours.
+            // A failed save poisons them for the poisoned effect's hours, and a rat's bite may
+            // give them sewer plague, which shows nothing until it has incubated.
+            let by = bite.species.map_or_else(|| "a folk".to_string(), |s| s.stat_block().name.to_string());
+            let mut caught = vec![];
             if poisons_for.is_some() {
+                caught.push(("poisoned", 1.0));
+            }
+            if let Some(plague) = bite.species.filter(|s| carries_plague(*s)).and_then(|_| rules.effects.get(SEWER_PLAGUE)) {
+                if dice.0.next_f64() < plague.catch_chance_for(disease_risk) {
+                    info!("the bite carries sewer plague");
+                    caught.push((SEWER_PLAGUE, PLAGUE_ONSET));
+                }
+            }
+            if !caught.is_empty() {
                 let mut effects = effects.map_or_else(Default::default, |e| e.0.clone());
-                let by = bite.species.map_or_else(|| "a folk".to_string(), |s| s.stat_block().name.to_string());
-                effects.add(&rules.effects, "poisoned", 1.0, None, fb_character::effect::Source::Bite { by });
+                for (id, intensity) in caught {
+                    effects.add(&rules.effects, id, intensity, None, fb_character::effect::Source::Bite { by: by.clone() });
+                }
                 commands.entity(player).insert(DelverEffects(effects));
             }
             pain.strike(flash_strength(damage as i32, health.max));
@@ -382,6 +398,17 @@ fn fall(
 /// quickslot bar hang from.
 #[derive(Component, Debug)]
 pub(crate) struct VitalsRoot;
+
+/// The disease a rat's bite can carry ([`carries_plague`]).
+pub const SEWER_PLAGUE: &str = "sewer_plague";
+/// How strong sewer plague is when caught, before it worsens by itself.
+const PLAGUE_ONSET: f64 = 0.1;
+
+/// Whether `species`' bite can carry sewer plague: rats, from the filth they live in (SRD 5.1
+/// p. 199, "Sewer Plague", a disease of rats and filth).
+pub fn carries_plague(species: Species) -> bool {
+    matches!(species, Species::Rat | Species::GiantRat)
+}
 
 /// The dark red edge round the view while badly hurt.
 #[derive(Component, Debug)]
@@ -570,6 +597,28 @@ mod tests {
             app.update();
         }
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 10, "never above the maximum");
+    }
+
+    #[test]
+    fn a_rats_bite_can_carry_sewer_plague_which_hides_until_it_incubates() {
+        let defs = fb_character::effect::shipped();
+        let plague = &defs[SEWER_PLAGUE];
+        // A seed whose first draw after the bite's (none: a flat bite rolls nothing) catches it.
+        let seed = (0..10_000).find(|s| procgen_rng::Mulberry32::new(*s).next_f64() < plague.catch_chance).unwrap();
+        let (mut app, player, snake) = delve();
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = 10;
+        app.world_mut().resource_mut::<RunDice>().0 = procgen_rng::Mulberry32::new(seed);
+        app.update();
+        bite(&mut app, snake, Species::Rat, 1);
+        let effects = app.world().get::<DelverEffects>(player).expect("the bite carried it");
+        let caught = effects.0.get(SEWER_PLAGUE, None).expect("sewer plague");
+        assert!(caught.stage(plague).is_none(), "nothing shows while it incubates");
+        // A snake's bite never carries it.
+        let (mut app, player, snake) = delve();
+        app.world_mut().resource_mut::<RunDice>().0 = procgen_rng::Mulberry32::new(seed);
+        app.update();
+        bite(&mut app, snake, Species::ConstrictorSnake, 1);
+        assert!(app.world().get::<DelverEffects>(player).is_none_or(|e| e.0.get(SEWER_PLAGUE, None).is_none()));
     }
 
     #[test]

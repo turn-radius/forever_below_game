@@ -46,6 +46,9 @@ pub struct EffectDef {
     /// Game hours after onset during which it shows nothing and does nothing (a disease's
     /// incubation).
     pub incubation_hours: f64,
+    /// The chance one meeting with its cause (a bite, a drink) gives it to a character with the
+    /// usual risk ([`EffectDef::catch_chance_for`]); 0 for an effect nothing catches.
+    pub catch_chance: f64,
     /// Whether it sits on one body part (named by the equipment slot that covers it).
     pub on_a_part: bool,
     /// What it does while it shows.
@@ -54,7 +57,15 @@ pub struct EffectDef {
 
 impl Default for EffectDef {
     fn default() -> Self {
-        EffectDef { name: String::new(), stages: vec![], hours: None, per_hour: 0.0, exposure_per_hour: 0.0, incubation_hours: 0.0, on_a_part: false, influences: vec![] }
+        EffectDef { name: String::new(), stages: vec![], hours: None, per_hour: 0.0, exposure_per_hour: 0.0, incubation_hours: 0.0, catch_chance: 0.0, on_a_part: false, influences: vec![] }
+    }
+}
+
+impl EffectDef {
+    /// The chance one meeting with its cause gives it to a character with `risk` times the usual
+    /// risk (`DiseaseRisk` from what they wear, and their dirt): twice the risk, twice the chance.
+    pub fn catch_chance_for(&self, risk: f64) -> f64 {
+        (self.catch_chance * risk.max(0.0)).clamp(0.0, 1.0)
     }
 }
 
@@ -511,6 +522,37 @@ mod tests {
         assert_eq!(back, e);
         let defs_back: BTreeMap<String, EffectDef> = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
         assert_eq!(defs_back, d);
+    }
+
+    #[test]
+    fn twice_the_disease_risk_catches_twice_as_often() {
+        let plague = &shipped()["sewer_plague"];
+        let caught = |risk: f64| {
+            let mut rng = procgen_rng::Mulberry32::new(7);
+            (0..20_000).filter(|_| rng.next_f64() < plague.catch_chance_for(risk)).count() as f64
+        };
+        let ratio = caught(2.0) / caught(1.0);
+        assert!((ratio - 2.0).abs() < 0.15, "{ratio}");
+        assert_eq!(plague.catch_chance_for(0.0), 0.0, "warded off entirely");
+    }
+
+    #[test]
+    fn sewer_plague_hides_for_a_day_then_feverish_then_wasting_then_it_is_over() {
+        let defs = shipped();
+        let mut e = Effects::default();
+        e.add(&defs, "sewer_plague", 0.1, None, bitten());
+        let word = |e: &Effects| e.showing(&defs).next().map(|(_, _, _, s)| s.word.clone());
+        e.step(&defs, 23.0, &[]);
+        assert_eq!(word(&e), None, "incubating, no symptoms");
+        e.step(&defs, 2.0, &[]);
+        assert_eq!(word(&e).as_deref(), Some("Feverish"));
+        assert!(e.need_rate(&defs, MeterKind::Sleepiness) > 1.0, "the fever tires them");
+        assert!(!e.stops_recovery(&defs));
+        e.step(&defs, 48.0, &[]);
+        assert_eq!(word(&e).as_deref(), Some("Wasting"));
+        assert!(e.stops_recovery(&defs), "poor rest: no mending");
+        e.step(&defs, 24.0, &[]);
+        assert!(e.active.is_empty(), "over after four days");
     }
 
     #[test]
