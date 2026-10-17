@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::{ecs::system::SystemParam, input::InputSystems, prelude::*};
 
+use crate::launch::AppState;
+use crate::play::{Screen, ScreenOpen};
 use crate::tuning::Tuning;
 
 /// Something the player does with a key or button.
@@ -134,6 +136,35 @@ fn key_label(key: KeyCode) -> String {
     debug.strip_prefix("Key").or_else(|| debug.strip_prefix("Digit")).unwrap_or(&debug).to_string()
 }
 
+/// Which part of the game reads a binding: the level, the inventory screen, or the menus (the
+/// title, the pause menu and the map). Two actions may share an input only in different
+/// contexts, and [`ActionInput`] reads only the open screen's context.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Context {
+    #[default]
+    Level,
+    Inventory,
+    Menus,
+}
+
+impl Context {
+    /// The context of the title (`app`) or the screen open over the level, if any. The map
+    /// reads as a menu: nothing in it but the keys that swap screens.
+    pub fn of(app: Option<AppState>, open: Option<Screen>) -> Context {
+        match (app, open) {
+            (Some(AppState::Title), _) | (_, Some(Screen::Menu | Screen::Map)) => Context::Menus,
+            (_, Some(Screen::Inventory)) => Context::Inventory,
+            (_, None) => Context::Level,
+        }
+    }
+}
+
+/// The context [`ActionInput`] reads, kept by [`track_context`] from the screen open (a frame
+/// behind a screen that opens or closes in `Update`). It is a resource of its own so that the
+/// systems that open screens can still take [`ScreenOpen`] mutably beside `ActionInput`.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ActiveContext(pub Context);
+
 /// How a binding fires.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PressType {
@@ -161,13 +192,32 @@ pub struct Binding {
     pub group: Group,
     pub inputs: Vec<Input>,
     pub press: PressType,
+    /// Where it applies. One entry covers an action that does the same kind of thing in more
+    /// than one place, as Primary does (takes in the level, uses in the inventory).
+    pub contexts: &'static [Context],
 }
+
+/// Every context, for the keys that work on any screen.
+const EVERYWHERE: &[Context] = &[Context::Level, Context::Inventory, Context::Menus];
+/// The item keys, which act on the crosshair's item in the level and the mouse's in the inventory.
+const ITEMS: &[Context] = &[Context::Level, Context::Inventory];
 
 impl Binding {
     /// This binding, fired by holding rather than pressing.
     fn hold(mut self) -> Self {
         self.press = PressType::Hold;
         self
+    }
+
+    /// This binding, applying in `contexts` rather than the level alone.
+    fn in_contexts(mut self, contexts: &'static [Context]) -> Self {
+        self.contexts = contexts;
+        self
+    }
+
+    /// Whether the two bindings apply in some context together.
+    fn overlaps(&self, other: &Binding) -> bool {
+        self.contexts.iter().any(|c| other.contexts.contains(c))
     }
 
     /// The inputs' labels, each once ("Shift" for both shift keys). A run of digit keys, as
@@ -198,7 +248,7 @@ pub struct Keymap {
 impl Default for Keymap {
     fn default() -> Self {
         use Input::{Key, Mouse};
-        let bind = |action, name, group, inputs: &[Input]| Binding { action, name, group, inputs: inputs.to_vec(), press: PressType::Press };
+        let bind = |action, name, group, inputs: &[Input]| Binding { action, name, group, inputs: inputs.to_vec(), press: PressType::Press, contexts: &[Context::Level] };
         Keymap {
             bindings: vec![
                 bind(Action::WalkForward, "Walk forward", Group::Moving, &[Key(KeyCode::KeyW)]),
@@ -215,12 +265,12 @@ impl Default for Keymap {
                 bind(Action::Attack, "Swing what you hold", Group::Fighting, &[Mouse(MouseButton::Left)]),
                 bind(Action::Block, "Block", Group::Fighting, &[Mouse(MouseButton::Right)]).hold(),
                 bind(Action::Stab, "Stab", Group::Fighting, &[Mouse(MouseButton::Left)]).hold(),
-                bind(Action::Primary, "Primary action", Group::Items, &[Key(KeyCode::KeyF)]),
-                bind(Action::Secondary, "Secondary action", Group::Items, &[Key(KeyCode::KeyG)]),
-                bind(Action::Tertiary, "Tertiary action", Group::Items, &[Key(KeyCode::KeyR)]),
-                bind(Action::Special, "Special action", Group::Items, &[Key(KeyCode::KeyT)]),
-                bind(Action::Compare, "Compare", Group::Items, &[Key(KeyCode::AltLeft), Key(KeyCode::AltRight)]),
-                bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]),
+                bind(Action::Primary, "Primary action", Group::Items, &[Key(KeyCode::KeyF)]).in_contexts(ITEMS),
+                bind(Action::Secondary, "Secondary action", Group::Items, &[Key(KeyCode::KeyG)]).in_contexts(ITEMS),
+                bind(Action::Tertiary, "Tertiary action", Group::Items, &[Key(KeyCode::KeyR)]).in_contexts(ITEMS),
+                bind(Action::Special, "Special action", Group::Items, &[Key(KeyCode::KeyT)]).in_contexts(ITEMS),
+                bind(Action::Compare, "Compare", Group::Items, &[Key(KeyCode::AltLeft), Key(KeyCode::AltRight)]).in_contexts(ITEMS),
+                bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]).in_contexts(ITEMS),
                 bind(
                     Action::Quickslot,
                     "Use a quickslot, or in the inventory bind the item under the mouse to it",
@@ -237,18 +287,19 @@ impl Default for Keymap {
                         Key(KeyCode::Digit9),
                         Key(KeyCode::Digit0),
                     ],
-                ),
-                bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
-                bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Mouse(MouseButton::Right)]),
-                bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),
-                bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyK)]),
-                bind(Action::Journal, "Journal", Group::Screens, &[Key(KeyCode::KeyJ)]),
-                bind(Action::Map, "Map", Group::Screens, &[Key(KeyCode::KeyM)]),
-                bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]),
-                bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]),
-                bind(Action::NewDelve, "New delve, on the title", Group::Screens, &[Key(KeyCode::Enter), Key(KeyCode::NumpadEnter)]),
-                bind(Action::MusicQuieter, "Music quieter", Group::Sound, &[Key(KeyCode::Minus)]),
-                bind(Action::MusicLouder, "Music louder", Group::Sound, &[Key(KeyCode::Equal)]),
+                )
+                .in_contexts(ITEMS),
+                bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Inventory]),
+                bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Mouse(MouseButton::Right)]).in_contexts(&[Context::Inventory]),
+                bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]).in_contexts(EVERYWHERE),
+                bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyK)]).in_contexts(EVERYWHERE),
+                bind(Action::Journal, "Journal", Group::Screens, &[Key(KeyCode::KeyJ)]).in_contexts(EVERYWHERE),
+                bind(Action::Map, "Map", Group::Screens, &[Key(KeyCode::KeyM)]).in_contexts(EVERYWHERE),
+                bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]).in_contexts(EVERYWHERE),
+                bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Menus]),
+                bind(Action::NewDelve, "New delve, on the title", Group::Screens, &[Key(KeyCode::Enter), Key(KeyCode::NumpadEnter)]).in_contexts(&[Context::Menus]),
+                bind(Action::MusicQuieter, "Music quieter", Group::Sound, &[Key(KeyCode::Minus)]).in_contexts(EVERYWHERE),
+                bind(Action::MusicLouder, "Music louder", Group::Sound, &[Key(KeyCode::Equal)]).in_contexts(EVERYWHERE),
             ],
             crouch: CrouchMode::default(),
         }
@@ -265,9 +316,28 @@ impl Keymap {
         self.binding(action).map_or(&[], |b| b.inputs.as_slice())
     }
 
-    /// Whether `input` is bound as Hold to some action.
-    fn is_held_anywhere(&self, input: Input) -> bool {
-        self.bindings.iter().any(|b| b.press == PressType::Hold && b.inputs.contains(&input))
+    /// Whether some other action in one of `action`'s contexts holds `input`.
+    fn is_held_by_another(&self, action: Action, input: Input) -> bool {
+        let Some(own) = self.binding(action) else { return false };
+        self.bindings.iter().any(|b| b.action != action && b.press == PressType::Hold && b.inputs.contains(&input) && b.overlaps(own))
+    }
+
+    /// The action already using `input` in a context `action` shares, if any: what rebinding
+    /// `action` to `input` would clash with. Two actions may share an input in different
+    /// contexts, so left click is Attack in the level and DragItem in the inventory.
+    ///
+    /// Two pairs share an input in one context by design and never clash. A Press and a Hold
+    /// of different actions on one input are a tap and a hold (Attack and Stab on left click,
+    /// [`ActionInput::tapped`]). And TakeMouse only takes the mouse back, so the click that
+    /// does it is free to do its own job as well, whatever that is.
+    pub fn conflicts(&self, action: Action, input: Input) -> Option<Action> {
+        let own = self.binding(action)?;
+        self.bindings
+            .iter()
+            .filter(|b| b.action != action && b.inputs.contains(&input) && b.overlaps(own))
+            .filter(|b| b.press == own.press && ![action, b.action].contains(&Action::TakeMouse))
+            .map(|b| b.action)
+            .next()
     }
 
     /// The bindings listed under `group`, in order.
@@ -330,6 +400,13 @@ impl InputHolds {
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HoldSet;
 
+/// Keeps [`ActiveContext`] to the screen open, or the title. It runs in `PreUpdate`, so a
+/// screen opened or closed this frame changes the context only next frame. That lag is what
+/// keeps the click that closes a menu (Resume) from arming a swing in `combat::swing`.
+pub(crate) fn track_context(screen: Option<Res<ScreenOpen>>, app: Option<Res<State<AppState>>>, mut active: ResMut<ActiveContext>) {
+    active.set_if_neq(ActiveContext(Context::of(app.map(|s| *s.get()), screen.and_then(|s| s.0))));
+}
+
 /// Counts how long every bound input has been down, and flips a toggled crouch.
 pub(crate) fn track_holds(
     keymap: Res<Keymap>,
@@ -380,15 +457,31 @@ pub(crate) fn track_holds(
 /// A Press binding reads the raw input. A Hold binding is `pressed` once its input has been
 /// down for the hold time, `just_pressed` on the frame it gets there and `just_released` when
 /// let go after that. Let go sooner, it is [`tapped`](ActionInput::tapped).
+///
+/// An action reads only while its binding's [`Context`] is the open screen's
+/// ([`ActionInput::context`]), so left click is Attack in the level and DragItem in the inventory.
 #[derive(SystemParam)]
 pub struct ActionInput<'w> {
     keymap: Res<'w, Keymap>,
     keys: Option<Res<'w, ButtonInput<KeyCode>>>,
     mouse: Option<Res<'w, ButtonInput<MouseButton>>>,
     holds: Option<Res<'w, InputHolds>>,
+    active: Option<Res<'w, ActiveContext>>,
 }
 
 impl ActionInput<'_> {
+    /// The context of the open screen: the title and the menus, the inventory, or the level.
+    /// Without the resource (in tests) it is the level.
+    pub fn context(&self) -> Context {
+        self.active.as_deref().map_or(Context::Level, |a| a.0)
+    }
+
+    /// Whether `action` applies in the open screen's context. Everything but `crouching` reads
+    /// false for an action that does not.
+    pub fn is_active(&self, action: Action) -> bool {
+        self.keymap.binding(action).is_some_and(|b| b.contexts.contains(&self.context()))
+    }
+
     fn press_type(&self, action: Action) -> PressType {
         self.keymap.binding(action).map_or(PressType::Press, |b| b.press)
     }
@@ -408,6 +501,9 @@ impl ActionInput<'_> {
 
     /// Down now; for a Hold binding, down for the hold time.
     pub fn pressed(&self, action: Action) -> bool {
+        if !self.is_active(action) {
+            return false;
+        }
         match self.press_type(action) {
             PressType::Press => self.any(action, |k, c| k.pressed(c), |m, b| m.pressed(b)),
             PressType::Hold => self.any_held(action, InputHolds::is_held),
@@ -417,6 +513,9 @@ impl ActionInput<'_> {
     /// Which of `action`'s inputs was pressed this frame, as its position in the binding (the
     /// first if several were): the slot a quickslot key names.
     pub fn just_pressed_index(&self, action: Action) -> Option<usize> {
+        if !self.is_active(action) {
+            return None;
+        }
         self.keymap.inputs(action).iter().position(|input| match *input {
             Input::Key(k) => self.keys.as_deref().is_some_and(|keys| keys.just_pressed(k)),
             Input::Mouse(b) => self.mouse.as_deref().is_some_and(|mouse| mouse.just_pressed(b)),
@@ -426,6 +525,9 @@ impl ActionInput<'_> {
 
     /// Pressed this frame; for a Hold binding, held for the hold time this frame.
     pub fn just_pressed(&self, action: Action) -> bool {
+        if !self.is_active(action) {
+            return false;
+        }
         match self.press_type(action) {
             PressType::Press => self.any(action, |k, c| k.just_pressed(c), |m, b| m.just_pressed(b)),
             PressType::Hold => self.any_held(action, InputHolds::became_held),
@@ -434,6 +536,9 @@ impl ActionInput<'_> {
 
     /// Let go this frame; for a Hold binding, let go after being held (a tap does not count).
     pub fn just_released(&self, action: Action) -> bool {
+        if !self.is_active(action) {
+            return false;
+        }
         match self.press_type(action) {
             PressType::Press => self.any(action, |k, c| k.just_released(c), |m, b| m.just_released(b)),
             PressType::Hold => self.any_held(action, InputHolds::ended_hold),
@@ -445,7 +550,10 @@ impl ActionInput<'_> {
     /// click is Attack or Stab and never both; the swing waits for the click to be let go.
     /// A Press binding on an input nothing holds fires as it goes down, as `just_pressed`.
     pub fn tapped(&self, action: Action) -> bool {
-        let contested = self.keymap.inputs(action).iter().any(|&i| self.keymap.is_held_anywhere(i));
+        if !self.is_active(action) {
+            return false;
+        }
+        let contested = self.keymap.inputs(action).iter().any(|&i| self.keymap.is_held_by_another(action, i));
         // Without the tracker (in tests) there is no hold to wait out.
         if self.press_type(action) == PressType::Press && (!contested || self.holds.is_none()) {
             return self.just_pressed(action);
@@ -473,7 +581,10 @@ pub struct KeymapPlugin;
 
 impl Plugin for KeymapPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Keymap>().init_resource::<InputHolds>().add_systems(PreUpdate, track_holds.in_set(HoldSet).after(InputSystems));
+        app.init_resource::<Keymap>().init_resource::<InputHolds>().init_resource::<ActiveContext>().add_systems(
+            PreUpdate,
+            (track_context, track_holds.in_set(HoldSet)).after(InputSystems),
+        );
     }
 }
 
@@ -558,11 +669,12 @@ mod tests {
         app.init_resource::<Keymap>().init_resource::<ButtonInput<KeyCode>>().init_resource::<ButtonInput<MouseButton>>();
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftRight);
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.insert_resource(ActiveContext(Context::Inventory));
         let read = app
             .world_mut()
             .run_system_once(|input: ActionInput| (input.pressed(Action::Sprint), input.just_pressed(Action::TurnItem), input.pressed(Action::Primary), input.axis(Action::WalkForward, Action::WalkBack)))
             .unwrap();
-        assert_eq!(read, (true, true, false, 0.0));
+        assert_eq!(read, (false, true, false, 0.0), "Sprint is the level's, so the inventory does not read it");
     }
 
     /// An app with the keymap, both inputs, a manual clock and the hold tracker.
@@ -674,6 +786,7 @@ mod tests {
     #[test]
     fn right_click_still_turns_a_dragged_item_at_once() {
         let mut app = held_app();
+        app.insert_resource(ActiveContext(Context::Inventory));
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
         step(&mut app, 0.016);
         assert!(read(&mut app, Action::TurnItem).1);
@@ -705,5 +818,70 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ControlLeft);
         step(&mut app, 0.016);
         assert!(!crouching(&mut app), "the next press stands up");
+    }
+
+    #[test]
+    fn the_defaults_have_no_conflicts() {
+        let keymap = Keymap::default();
+        for binding in &keymap.bindings {
+            for &input in &binding.inputs {
+                assert_eq!(keymap.conflicts(binding.action, input), None, "{:?} on {input:?}", binding.action);
+            }
+        }
+    }
+
+    #[test]
+    fn left_click_is_attack_in_the_level_and_drag_in_the_inventory() {
+        let keymap = Keymap::default();
+        let click = Input::Mouse(MouseButton::Left);
+        assert_eq!(keymap.conflicts(Action::Attack, click), None);
+        assert_eq!(keymap.conflicts(Action::DragItem, click), None);
+        // Binding drag to a level key clashes with the item keys, which reach into the inventory.
+        assert_eq!(keymap.conflicts(Action::DragItem, Input::Key(KeyCode::KeyF)), Some(Action::Primary));
+    }
+
+    #[test]
+    fn binding_jump_to_f_in_the_level_conflicts_with_primary() {
+        let keymap = Keymap::default();
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyF)), Some(Action::Primary));
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyC)), None);
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::Space)), None, "its own key is no clash");
+    }
+
+    #[test]
+    fn a_press_and_a_hold_may_share_an_input() {
+        let keymap = Keymap::default();
+        assert_eq!(keymap.conflicts(Action::Stab, Input::Mouse(MouseButton::Left)), None);
+        // Block holds right click and nothing in the level presses it, but a press would clash.
+        assert_eq!(keymap.conflicts(Action::Sprint, Input::Mouse(MouseButton::Right)), None);
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Left)), Some(Action::Attack));
+    }
+
+    /// A single frame of `action` in `screen`, with `keys` and the left button down.
+    fn read_in(screen: Option<Screen>, keys: &[KeyCode], actions: &[Action]) -> Vec<bool> {
+        let mut app = App::new();
+        app.init_resource::<Keymap>().init_resource::<ButtonInput<KeyCode>>().init_resource::<ButtonInput<MouseButton>>().insert_resource(ActiveContext(Context::of(None, screen)));
+        for &key in keys {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        }
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        let actions = actions.to_vec();
+        app.world_mut().run_system_once(move |input: ActionInput| actions.iter().map(|&a| input.just_pressed(a)).collect::<Vec<_>>()).unwrap()
+    }
+
+    #[test]
+    fn the_inventory_reads_its_own_context() {
+        let all = [Action::Primary, Action::DragItem, Action::Attack, Action::Jump];
+        // Inventory open: F is still Primary, and left click is a drag, not a swing.
+        assert_eq!(read_in(Some(Screen::Inventory), &[KeyCode::KeyF, KeyCode::Space], &all), [true, true, false, false]);
+        // In the level: left click swings and does not drag; F is Primary.
+        assert_eq!(read_in(None, &[KeyCode::KeyF, KeyCode::Space], &all), [true, false, true, true]);
+    }
+
+    #[test]
+    fn menus_read_only_the_menu_keys() {
+        let all = [Action::Choose, Action::Attack, Action::DragItem, Action::Back];
+        assert_eq!(read_in(Some(Screen::Menu), &[KeyCode::Escape], &all), [true, false, false, true]);
+        assert_eq!(read_in(None, &[KeyCode::Escape], &all), [false, true, false, true]);
     }
 }

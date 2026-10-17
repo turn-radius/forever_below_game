@@ -1379,6 +1379,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<Keymap>()
+            .init_resource::<crate::keymap::ActiveContext>()
             .init_resource::<Inventory>()
             .init_resource::<IconCache>()
             .init_resource::<UiFonts>()
@@ -1396,6 +1397,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
+            .add_systems(PreUpdate, crate::keymap::track_context)
             .add_systems(Update, (switch_screens, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
