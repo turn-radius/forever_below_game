@@ -579,7 +579,9 @@ pub fn show_card(
     on_screen.set_if_neq(ShownCard(None));
     let aimed_entity = aimed.and_then(|a| a.0);
     let aimed_item = aimed_entity.and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
-    // A container under the crosshair has its own prompt (`crate::props`), so its card lists no keys.
+    // A container under the crosshair has its own prompt (`crate::props`), so its card lists no
+    // keys. Only the crosshair's card: the crosshair still holds the container after the screen
+    // opens on it, and the cards of the items in the screen are theirs.
     let aimed_container = aimed_entity.is_some_and(|entity| containers.contains(entity));
     // No card over the menu.
     let subject = if open.is(Screen::Menu) { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
@@ -596,9 +598,8 @@ pub fn show_card(
             let fallback = crate::keymap::Keymap::default();
             let keymap = keymap.as_deref().unwrap_or(&fallback);
             let mut text = card_text(item, Some((&inventory, id)));
-            // Under the crosshair an item is in the level; on the screen it is carried or worn.
-            if !aimed_container
-                && let Some(target) = crate::interact::item_target(&inventory, id, matches!(anchor, CardAnchor::Crosshair))
+            if !(aimed_container && matches!(anchor, CardAnchor::Crosshair))
+                && let Some(target) = crate::interact::item_target(&inventory, id)
             {
                 let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
                 text.actions = crate::interact::key_actions(keymap, &verbs);
@@ -887,12 +888,15 @@ mod tests {
         let dagger = inventory.add(fb_items::roll_item("Dagger", 7).unwrap());
         let bread = inventory.add(fb_items::roll_item("Bread", 3).unwrap());
         let keymap = crate::keymap::Keymap::default();
-        let line = |id, floor| {
-            let target = crate::interact::item_target(&inventory, id, floor).unwrap();
+        let line = |inventory: &Inventory, id| {
+            let target = crate::interact::item_target(inventory, id).unwrap();
             key_line(&keymap, &verbs_for(&target, &Delver::default()))
         };
-        assert_eq!(line(dagger, true), "F Take \u{b7} G Equip \u{b7} Alt Compare");
-        assert_eq!(line(bread, false), "F Eat");
+        assert_eq!(line(&inventory, dagger), "F Take \u{b7} G Equip \u{b7} Alt Compare");
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        inventory.stow(bread).unwrap();
+        assert_eq!(line(&inventory, bread), "F Eat");
     }
 
     #[test]
@@ -928,6 +932,64 @@ mod tests {
         let texts = keys(&mut app);
         assert!(texts.iter().any(|t| t == "E "), "{texts:?}");
         assert!(!texts.iter().any(|t| t == "F "), "{texts:?}");
+    }
+
+    /// The text of every node in the world, for the card's keys.
+    fn card_texts(app: &mut App) -> Vec<String> {
+        let mut texts = app.world_mut().query::<&Text>();
+        let mut spans = app.world_mut().query::<&TextSpan>();
+        let mut all: Vec<String> = texts.iter(app.world()).map(|t| t.0.clone()).collect();
+        all.extend(spans.iter(app.world()).map(|t| t.0.clone()));
+        all
+    }
+
+    /// The inventory open, the crosshair still on the chest it opened, a card showing for `id`.
+    fn card_over(inventory: Inventory, ids: impl Fn(&Inventory) -> ItemId) -> Vec<String> {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<Hovered>()
+            .init_resource::<Dragging>()
+            .init_resource::<ShownCard>()
+            .init_resource::<UiFonts>()
+            .init_resource::<crate::inventory::icon::IconCache>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<crate::carry::Aimed>()
+            .insert_resource(inventory)
+            .add_systems(Update, show_card);
+        let chest = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Chest", 1).unwrap());
+        let prop = app.world_mut().spawn(crate::props::Container { id: chest, opened: true }).id();
+        app.world_mut().resource_mut::<crate::carry::Aimed>().0 = Some(prop);
+        let id = ids(app.world().resource::<Inventory>());
+        app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<Hovered>().0 = Some((id, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        app.update();
+        app.update();
+        card_texts(&mut app)
+    }
+
+    #[test]
+    fn cards_in_the_screen_list_their_keys_though_the_crosshair_holds_a_chest() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let bread = inventory.add(fb_items::roll_item("Bread", 3).unwrap());
+        inventory.stow(bread).unwrap();
+        let ring = inventory.add(fb_items::roll_item("Ring", 3).unwrap());
+        inventory.wear(ring, fb_items::Slot::Ring1).unwrap();
+        let dagger = inventory.add(fb_items::roll_item("Dagger", 7).unwrap());
+        let (b, r, d) = (bread, ring, dagger);
+        let texts = card_over(inventory.clone(), |_| b);
+        assert!(texts.iter().any(|t| t == "F ") && texts.iter().any(|t| t == "Eat"), "{texts:?}");
+        let texts = card_over(inventory.clone(), |_| r);
+        assert!(texts.iter().any(|t| t == "G ") && texts.iter().any(|t| t == "Take off"), "{texts:?}");
+        // Underfoot, the dagger is taken or equipped.
+        let texts = card_over(inventory, |_| d);
+        for want in ["F ", "Take", "\u{b7} G ", "Equip", "\u{b7} Alt ", "Compare"] {
+            assert!(texts.iter().any(|t| t == want), "{want}: {texts:?}");
+        }
     }
 
     #[test]

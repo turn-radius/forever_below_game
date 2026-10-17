@@ -746,7 +746,7 @@ mod tests {
     fn an_action_is_labelled_by_its_inputs() {
         let keymap = Keymap::default();
         assert_eq!(keymap.label(Action::Quickslot), "1 to 0");
-        assert_eq!(keymap.label(Action::TurnItem), "Right click");
+        assert_eq!(keymap.label(Action::TurnItem), "R or Right click");
         let mut keymap = keymap;
         keymap.bindings.iter_mut().find(|b| b.action == Action::TurnItem).unwrap().inputs.clear();
         assert_eq!(keymap.label(Action::TurnItem), "");
