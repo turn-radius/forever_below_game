@@ -1350,7 +1350,7 @@ fn aim(
 
 /// What `slot` does to the floor item `id`, from the Interactable lookup ([`crate::interact`]).
 fn floor_verb(inventory: &Inventory, id: ItemId, slot: crate::interact::Slot) -> Option<crate::interact::Verb> {
-    let target = crate::interact::item_target(inventory, id, true)?;
+    let target = crate::interact::item_target(inventory, id)?;
     crate::interact::verbs_for(&target, &crate::interact::Delver::default()).get(slot)
 }
 
