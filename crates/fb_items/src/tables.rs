@@ -117,6 +117,12 @@ impl Affix {
         self.on.matches(tags)
     }
 
+    /// Whether it rolls: some effect of it changes a stat the game reads ([`Modifier::in_play`]).
+    /// The rest are held back until their systems exist (`crate::rarity::pick_affix`).
+    pub fn in_play(&self) -> bool {
+        self.fx.iter().any(Modifier::in_play)
+    }
+
     /// Applies every effect, in order.
     pub fn apply(&self, stats: &mut Stats, condition: &mut Condition) {
         self.apply_to_stats(stats);

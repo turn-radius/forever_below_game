@@ -12,6 +12,8 @@ use crate::{Exhaustion, LoadBand, Meter, MeterKind, Needs, SECOND_WIND, Stamina}
 /// How much a condition matters, from a nudge to a danger to the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Severity {
+    /// It is doing the character good (recovering).
+    Good,
     /// Worth knowing; no effect yet.
     Mild,
     /// It is starting to cost something.
@@ -33,6 +35,7 @@ pub enum ConditionKind {
     Load,
     Held,
     Poisoned,
+    Recovering,
 }
 
 /// One condition the character is under.
@@ -59,11 +62,14 @@ pub struct Circumstances {
     pub held_pace: Option<f64>,
     /// Venom still in the blood, if any.
     pub poisoned: Poisoned,
+    /// Game minutes a hit point takes to mend ([`crate::recovery`]), while the character is
+    /// below their maximum hit points; `None` when whole.
+    pub wounded_mending: Option<f64>,
 }
 
 impl Default for Circumstances {
     fn default() -> Self {
-        Circumstances { needs: Needs::default(), exhaustion: Exhaustion::default(), stamina: Stamina::default(), load: LoadBand::Light, con_modifier: 0, held_pace: None, poisoned: Poisoned::default() }
+        Circumstances { needs: Needs::default(), exhaustion: Exhaustion::default(), stamina: Stamina::default(), load: LoadBand::Light, con_modifier: 0, held_pace: None, poisoned: Poisoned::default(), wounded_mending: None }
     }
 }
 
@@ -206,6 +212,18 @@ fn poisoned(poisoned: Poisoned) -> Option<Condition> {
     })
 }
 
+/// Recovering, while a wounded character is fed, watered and unpoisoned
+/// ([`crate::recovery::recovers`]), and how fast.
+fn recovering(now: &Circumstances) -> Option<Condition> {
+    let per = now.wounded_mending?;
+    crate::recovery::recovers(&now.needs, &now.poisoned).then(|| Condition {
+        kind: ConditionKind::Recovering,
+        name: "Recovering".to_string(),
+        severity: Severity::Good,
+        effect: format!("+1 HP every {} while fed and watered", minutes(per.round().max(1.0) as u32)),
+    })
+}
+
 /// The conditions `now` puts a character under, worst first (and in a fixed order among equals,
 /// so a HUD row does not shuffle). A fresh character is under none.
 pub fn conditions(now: &Circumstances) -> Vec<Condition> {
@@ -218,6 +236,7 @@ pub fn conditions(now: &Circumstances) -> Vec<Condition> {
         need(&now.needs.thirst, now.con_modifier),
         need(&now.needs.sleepiness, now.con_modifier),
         load(now.load),
+        recovering(now),
     ]
     .into_iter()
     .flatten()
@@ -341,5 +360,22 @@ mod tests {
         let now = Circumstances { held_pace: Some(0.25), load: LoadBand::Burdened, exhaustion: Exhaustion::new(5), ..Circumstances::default() };
         assert_eq!(kinds(&now), vec![ConditionKind::Exhaustion, ConditionKind::Held, ConditionKind::Load]);
         assert_eq!(conditions(&now)[1].effect, "Moving at 25% pace until you strike what holds you");
+    }
+
+    #[test]
+    fn a_wounded_fed_and_watered_delver_shows_recovering_last() {
+        let wounded = Circumstances { wounded_mending: Some(crate::recovery::MINUTES_PER_HIT_POINT), ..Circumstances::default() };
+        let shown = conditions(&wounded);
+        assert_eq!(shown.len(), 1);
+        assert_eq!((shown[0].kind, shown[0].name.as_str(), shown[0].severity), (ConditionKind::Recovering, "Recovering", Severity::Good));
+        assert_eq!(shown[0].effect, "+1 HP every 10 minutes while fed and watered");
+        assert_eq!(kinds(&Circumstances::default()), vec![], "whole, nothing to mend");
+        let mut thirsty = wounded;
+        thirsty.needs.thirst.value = 0.3;
+        assert_eq!(kinds(&thirsty), vec![ConditionKind::Thirst]);
+        let poisoned = Circumstances { poisoned: Poisoned::for_hours(1.0), ..wounded };
+        assert_eq!(kinds(&poisoned), vec![ConditionKind::Poisoned]);
+        let burdened = Circumstances { load: LoadBand::Burdened, ..wounded };
+        assert_eq!(kinds(&burdened), vec![ConditionKind::Load, ConditionKind::Recovering], "good news comes last");
     }
 }

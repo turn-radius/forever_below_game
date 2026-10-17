@@ -27,7 +27,7 @@ use bevy::{
 };
 use fb_creatures::Species;
 
-use super::feedback::{Corpse, Struck};
+use super::feedback::{Corpse, Slain, Struck};
 use super::{ArmourClass, Health, RunDice, bite_damage, first_level_hit_points};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
 use crate::character::{Character, DelverPoison};
@@ -47,9 +47,10 @@ impl Plugin for VitalsPlugin {
         app.add_message::<AttackOnDelver>()
             .add_message::<MissedDelver>()
             .add_message::<Struck>()
+            .add_message::<Slain>()
             .init_resource::<Pain>()
             .add_systems(OnExit(AppState::Delving), end_the_delve)
-            .add_systems(Update, (give_player_health, armour_the_delver, take_bites, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
+            .add_systems(Update, (give_player_health, armour_the_delver, take_bites, heal_on_kill, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
             .add_systems(Update, spawn_vitals.in_set(DelveSystems));
     }
 }
@@ -168,6 +169,18 @@ fn whoosh_past(
     }
 }
 
+/// How the log names a blow that landed: "A folk strikes", a skeleton's by its weapon
+/// ("Skeleton slashes" with a sword, "Skeleton strikes" with a mace, "Skeleton claws" bare),
+/// and a beast's bite ("Rat bites").
+pub fn blow_line(species: Option<Species>, kit: Option<&crate::creatures::skeletons::SkeletonKit>) -> String {
+    match (species, kit) {
+        (None, _) => "A folk strikes".to_string(),
+        (Some(s), Some(kit)) if s.is_skeleton() => format!("{} {}", s.stat_block().name, kit.blow_verb()),
+        (Some(s), _) if s.is_skeleton() => format!("{} strikes", s.stat_block().name),
+        (Some(s), _) => format!("{} bites", s.stat_block().name),
+    }
+}
+
 /// Each bite takes its damage from the delver; a constrictor's holds them.
 fn take_bites(
     mut commands: Commands,
@@ -176,6 +189,7 @@ fn take_bites(
     mut dice: ResMut<RunDice>,
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
+    critters: Query<&Critter>,
     mut players: Query<(Entity, &mut Health, Option<&DelverPoison>), With<Player>>,
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
@@ -203,11 +217,35 @@ fn take_bites(
             if let Some(sounds) = &sounds {
                 commands.spawn((Name::new("blow lands"), AudioPlayer::new(sounds.thud.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(AppState::Delving)));
             }
-            let who = bite.species.map_or_else(|| "A folk strikes".to_string(), |s| format!("{s:?} bites"));
+            let who = blow_line(bite.species, critters.get(bite.attacker).ok().and_then(|c| c.kit.as_deref()));
             info!("{who} for {damage}: {} of {} hit points left", health.hp, health.max);
             if bite.species == Some(Species::ConstrictorSnake) && !health.is_down() {
                 commands.entity(player).insert((Constricted { by: bite.attacker }, Slowed(HELD_PACE)));
             }
+        }
+    }
+}
+
+/// Each kill heals the delver by what the weapon in their main hand gives on a kill (an affix "of
+/// the Leech"'s `HealOnKill`, [`crate::character::Derived::heal_on_kill`]), never above their
+/// maximum. A fallen delver heals nothing.
+fn heal_on_kill(mut slain: MessageReader<Slain>, character: Res<Character>, inventory: Option<Res<Inventory>>, mut players: Query<&mut Health, With<Player>>) {
+    let kills = slain.read().count();
+    if kills == 0 {
+        return;
+    }
+    let none = Inventory::default();
+    let heal = character.gear(inventory.as_deref().unwrap_or(&none)).heal_on_kill.round().max(0.0) as u32;
+    if heal == 0 {
+        return;
+    }
+    for mut health in &mut players {
+        if health.is_down() {
+            continue;
+        }
+        let healed = health.heal(heal * kills as u32);
+        if healed > 0 {
+            info!("The kill heals the delver for {healed}: {} of {} hit points", health.hp, health.max);
         }
     }
 }
@@ -409,6 +447,51 @@ mod tests {
         bite(&mut app, snake, Species::Rat, 3);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 7);
         assert!(app.world().resource::<Pain>().alpha() > 0.0);
+    }
+
+    #[test]
+    fn a_skeletons_blow_is_logged_by_its_weapon_and_a_rats_as_a_bite() {
+        use crate::creatures::skeletons::SkeletonKit;
+        let state = fb_creatures::SkeletonState::roll(3);
+        let armed = |base: &str| {
+            let item = fb_items::roll_item(base, 41).unwrap();
+            SkeletonKit::new(&state, fb_items::outfit::OutfitSet { worn: vec![(fb_items::Slot::Mainhand, item)], goods: Vec::new(), ground: Vec::new() }, [None, None])
+        };
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&armed("Sword"))), "Skeleton slashes");
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&armed("Mace"))), "Skeleton strikes");
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&SkeletonKit::bare(&state))), "Skeleton claws");
+        assert_eq!(blow_line(Some(Species::Rat), None), "Rat bites");
+        assert_eq!(blow_line(None, None), "A folk strikes");
+        for line in [armed("Sword"), armed("Mace"), armed("Dagger"), SkeletonKit::bare(&state)].iter().map(|k| blow_line(Some(Species::Skeleton), Some(k))) {
+            assert!(!line.contains("bites"), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_kill_with_a_leech_weapon_heals_the_delver_and_without_one_does_not() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::Rat, 4);
+        app.world_mut().write_message(Slain { target: snake });
+        app.update();
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 6, "a plain fist heals nothing");
+        let mut inventory = Inventory::default();
+        let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+        let leech = fb_items::tables::affixes().iter().find(|a| a.name == "of the Leech").unwrap();
+        leech.apply_to_stats(&mut sword.profile.stats);
+        let id = inventory.add(sword);
+        inventory.wear(id, fb_items::Slot::Mainhand).unwrap();
+        app.insert_resource(inventory);
+        for _ in 0..2 {
+            app.world_mut().write_message(Slain { target: snake });
+            app.update();
+        }
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 8, "one each kill");
+        for _ in 0..5 {
+            app.world_mut().write_message(Slain { target: snake });
+            app.update();
+        }
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 10, "never above the maximum");
     }
 
     #[test]

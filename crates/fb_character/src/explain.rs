@@ -236,6 +236,16 @@ impl Loadout {
         e
     }
 
+    /// Hit points regained on a kill: the sum of what each item gives. Equals
+    /// [`Gear::heal_on_kill`].
+    pub fn heal_on_kill(&self) -> Explained {
+        let mut e = Explained::new("Heal on a kill", "HP").base("nothing", 0.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.heal_on_kill != 0.0) {
+            e = e.add(label, item.heal_on_kill);
+        }
+        e
+    }
+
     /// Warmth: the sum of what each worn item gives.
     pub fn warmth(&self) -> Explained {
         let mut e = Explained::new("Warmth", "");
@@ -370,7 +380,7 @@ mod tests {
 
     #[test]
     fn explained_values_equal_the_plain_functions() {
-        let worn = [("A", Worn { carry: 10.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.9, stealth: 0.0, warmth: 2.0 }), ("B", Worn { carry: 5.0, darkvision: 70.0, hunger_rate: 0.85, sleepiness_rate: 1.0, stealth: 0.0, warmth: 1.5 })];
+        let worn = [("A", Worn { carry: 10.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.9, stealth: 0.0, warmth: 2.0, heal_on_kill: 1.0 }), ("B", Worn { carry: 5.0, darkvision: 70.0, hunger_rate: 0.85, sleepiness_rate: 1.0, stealth: 0.0, warmth: 1.5, heal_on_kill: 0.0 })];
         let lights = [("Torch", CarriedLight { reach: 30.0, burn_time: 1.0 }), ("Lantern", CarriedLight { reach: 50.0, burn_time: 2.0 })];
         for with in [0, 1, 2] {
             let mut loadout = Loadout::new("Dwarf", 60.0);
@@ -386,6 +396,7 @@ mod tests {
             }
             assert_eq!(loadout.darkvision().value(), gear.darkvision);
             assert_eq!(loadout.light().value(), gear.light);
+            assert_eq!(loadout.heal_on_kill().value(), gear.heal_on_kill);
             let mut needs = Needs::default();
             gear.apply_to(&mut needs);
             for activity in [Activity::Resting, Activity::Walking, Activity::Exerting, Activity::Sleeping] {

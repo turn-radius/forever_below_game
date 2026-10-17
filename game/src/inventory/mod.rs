@@ -1684,6 +1684,34 @@ mod tests {
     }
 
     #[test]
+    fn plenty_wakefulness_and_the_leech_show_on_the_sheet_with_their_breakdowns() {
+        use sheet::{GEAR_ROWS, breakdown};
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyC);
+        assert_eq!(&GEAR_ROWS[5..], ["Hunger rate", "Sleepiness rate", "Heal on a kill"]);
+        assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("usual".to_string(), "usual".to_string(), "none".to_string()));
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(weighed_with("Belt", 4, Some("of Plenty"), 1.0));
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+            let ring = inventory.add(weighed_with("Ring", 4, Some("of Wakefulness"), 0.0));
+            equip(&mut inventory, ring, Slot::Ring1).unwrap();
+            let sword = inventory.add(weighed_with("Sword", 3, Some("of the Leech"), 3.0));
+            equip(&mut inventory, sword, Slot::Mainhand).unwrap();
+        }
+        app.update();
+        assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("\u{d7}0.85".to_string(), "\u{d7}0.85".to_string(), "+1 HP".to_string()));
+        let character = app.world().resource::<Character>().clone();
+        let inventory = app.world().resource::<Inventory>();
+        let hunger = breakdown(&character, inventory, 5).join(" ");
+        assert!(hunger.starts_with("Hunger rate") && hunger.contains("(0.85)"), "{hunger}");
+        let sleepiness = breakdown(&character, inventory, 6).join(" ");
+        assert!(sleepiness.starts_with("Sleepiness rate") && sleepiness.contains("(0.85)"), "{sleepiness}");
+        let leech = breakdown(&character, inventory, 7).join(" ");
+        assert!(leech.starts_with("Heal on a kill 1") && leech.contains("(+1)"), "{leech}");
+    }
+
+    #[test]
     fn a_goblin_shows_60_ft_of_darkvision_and_a_lizardfolk_needs_more_warmth() {
         let mut app = screen_app();
         *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Goblin, ..Character::roll(4) };

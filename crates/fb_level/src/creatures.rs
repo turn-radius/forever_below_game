@@ -67,6 +67,10 @@ const CLEARANCE: f32 = 6.0;
 /// Skeletons standing in the gaps of each colonnaded hall (up to three halls), inclusive, and
 /// the side rooms with a skeleton or a pair, inclusive.
 pub const HALL_GUARDS: (u32, u32) = (1, 3);
+/// In the first stone halls (depth 2, `fb_items::undead::FIRST_HALLS`), at most two stand in
+/// each hall, so a fresh delver meets them a pair at a time (#354). Our own.
+pub const FIRST_HALLS_GUARDS: (u32, u32) = (1, 2);
+pub const FIRST_HALLS_DEPTH: u32 = 2;
 pub const GUARDED_HALLS: usize = 3;
 pub const SIDE_GUARDS: (u32, u32) = (1, 2);
 /// Chance that a guarded side room holds a pair.
@@ -145,7 +149,8 @@ fn place_skeletons(level: &Level, placed: &mut Vec<CreatureSpot>, mut pack: u32,
         let room = &level.rooms[i];
         let mut gaps = column_gaps(level, room);
         shuffle(&mut gaps, rng);
-        let want = rng.int(HALL_GUARDS.0, HALL_GUARDS.1) as usize;
+        let (least, most) = if level.depth <= FIRST_HALLS_DEPTH { FIRST_HALLS_GUARDS } else { HALL_GUARDS };
+        let want = rng.int(least, most) as usize;
         let mut members = 0;
         for (x, y, aisle) in gaps {
             if members == want {
@@ -485,8 +490,9 @@ mod tests {
 
     #[test]
     fn skeleton_packs_stay_in_one_room_and_small() {
-        for seed in SEEDS {
-            let level = generate(seed, 2);
+        for (seed, depth) in SEEDS.flat_map(|s| [(s, 2), (s, 4)]) {
+            let level = generate(seed, depth);
+            let most = if depth <= FIRST_HALLS_DEPTH { FIRST_HALLS_GUARDS.1 } else { HALL_GUARDS.1 };
             let mut packs: std::collections::HashMap<u32, Vec<&CreatureSpot>> = Default::default();
             for g in skeletons(&level) {
                 packs.entry(g.pack).or_default().push(g);
@@ -494,7 +500,7 @@ mod tests {
             for members in packs.values() {
                 let room = level.room_at(members[0].x as i32, members[0].y as i32);
                 assert!(members.iter().all(|m| level.room_at(m.x as i32, m.y as i32) == room), "seed {seed}: a pack across rooms");
-                assert!(members.len() <= HALL_GUARDS.1 as usize, "seed {seed}: {} in a pack", members.len());
+                assert!(members.len() <= most as usize, "seed {seed} depth {depth}: {} in a pack", members.len());
             }
             assert!(packs.len() <= GUARDED_HALLS + SIDE_GUARDS.1 as usize, "seed {seed}");
         }

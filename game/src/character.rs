@@ -181,6 +181,11 @@ pub struct Derived {
     pub light: f32,
     /// How far they see without light, in feet: their folk's, or a worn item's if further.
     pub darkvision: f32,
+    /// Multiples of the usual hunger and sleepiness rates, from what they wear.
+    pub hunger_rate: f32,
+    pub sleepiness_rate: f32,
+    /// Hit points regained on each kill, from the weapon in the main hand.
+    pub heal_on_kill: f32,
 }
 
 impl Character {
@@ -196,9 +201,11 @@ impl Character {
     /// ([`Loadout::capacity`] and the rest).
     pub fn loadout(&self, inventory: &Inventory) -> Loadout {
         let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
-        for (_, item) in inventory.equipped() {
+        for (slot, item) in inventory.equipped() {
             let s = &item.profile.stats;
-            loadout = loadout.wearing(&item.name, Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64 });
+            // Only the main hand strikes, so only its weapon heals on a kill.
+            let heal_on_kill = if slot == fb_items::Slot::Mainhand { s.heal_on_kill as f64 } else { 0.0 };
+            loadout = loadout.wearing(&item.name, Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill });
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
             loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
@@ -247,6 +254,9 @@ impl Character {
             warmth: sum(|s| s.warmth),
             light: gear.light as f32,
             darkvision: gear.darkvision as f32,
+            hunger_rate: gear.hunger_rate as f32,
+            sleepiness_rate: gear.sleepiness_rate as f32,
+            heal_on_kill: gear.heal_on_kill as f32,
         }
     }
 }
@@ -289,6 +299,12 @@ pub struct DelverMana(pub Mana);
 /// steps it and it comes off when it wears off (`crate::simulate::step_the_delver`).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverPoison(pub fb_character::poison::Poisoned);
+
+/// Game time the delver has put toward their next hit point while fed and watered, on the
+/// [`Player`](crate::play::Player) from their spawn; the game clock steps it
+/// (`crate::simulate::step_the_delver`, [`fb_character::recovery`]).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverRecovery(pub fb_character::recovery::Recovery);
 
 /// How easy the delver is to see, 0 to 1 ([`fb_character::visibility`]): from the light on them,
 /// their pace, load and Stealth. Kept on the [`Player`](crate::play::Player) so the eye can show
@@ -448,9 +464,9 @@ mod tests {
         use fb_items::Slot;
         let delver = Character::roll(4);
         let mut inventory = Inventory::default();
-        let belt = inventory.add(with_affix("Belt", 2, "of Plenty"));
+        let belt = inventory.add(with_affix("Belt", 4, "of Plenty"));
         inventory.wear(belt, Slot::Belt).unwrap();
-        let ring = inventory.add(with_affix("Ring", 3, "of Wakefulness"));
+        let ring = inventory.add(with_affix("Ring", 4, "of Wakefulness"));
         inventory.wear(ring, Slot::Ring1).unwrap();
         let gear = delver.gear(&inventory);
         assert!((gear.hunger_rate - 0.85).abs() < 1e-6 && (gear.sleepiness_rate - 0.85).abs() < 1e-6, "{gear:?}");
@@ -460,6 +476,21 @@ mod tests {
         assert_eq!(needs.hunger.word(), "Peckish");
         needs.step(0.002, Activity::Walking);
         assert_eq!(needs.hunger.word(), "Hungry");
+    }
+
+    #[test]
+    fn a_leech_weapon_heals_on_a_kill_only_in_the_main_hand() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0);
+        let sword = inventory.add(with_affix("Sword", 3, "of the Leech"));
+        inventory.wear(sword, Slot::Offhand).unwrap();
+        assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0, "the off hand does not strike");
+        inventory.take_out(sword);
+        inventory.wear(sword, Slot::Mainhand).unwrap();
+        assert_eq!(delver.derive(&inventory).heal_on_kill, 1.0);
+        assert_eq!(delver.loadout(&inventory).heal_on_kill().value(), 1.0);
     }
 
     #[test]

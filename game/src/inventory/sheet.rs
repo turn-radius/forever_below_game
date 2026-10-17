@@ -137,7 +137,7 @@ const TIP_WIDTH: f32 = 380.0;
 pub const ATTRIBUTES: [&str; 5] = ["STR", "DEX", "CON", "INT", "WIS"];
 
 /// The rows of what the delver's gear makes of them.
-pub const GEAR_ROWS: [&str; 5] = ["Load", "Warmth", "Light", "Darkvision", "Armour class"];
+pub const GEAR_ROWS: [&str; 8] = ["Load", "Warmth", "Light", "Darkvision", "Armour class", "Hunger rate", "Sleepiness rate", "Heal on a kill"];
 
 /// "STR 14 (+2)": the score and its SRD modifier.
 pub fn attribute_text(name: &str, score: i32) -> String {
@@ -152,15 +152,19 @@ pub fn attribute_lines(character: &Character) -> [String; 5] {
 }
 
 /// The values of [`GEAR_ROWS`], from `derived` (so they agree with the header): "55 / 150 lb
-/// \u{b7} Burdened", "4 / 6", "20 ft", "60 ft", "13".
-pub fn gear_values(character: &Character, derived: &Derived) -> [String; 5] {
+/// \u{b7} Burdened", "4 / 6", "20 ft", "60 ft", "13", "\u{d7}0.85", "usual", "+1 HP".
+pub fn gear_values(character: &Character, derived: &Derived) -> [String; 8] {
     let feet = |f: f32| if f > 0.0 { format!("{f:.0} ft") } else { "none".to_string() };
+    let rate = |r: f32| if (r - 1.0).abs() < 1e-6 { "usual".to_string() } else { format!("\u{d7}{}", fb_character::explain::number(r as f64)) };
     [
         format!("{:.0} / {:.0} lb \u{b7} {}", derived.load, derived.capacity, derived.load_band.word()),
         format!("{:.0} / {:.0}", derived.warmth, character.warmth_need()),
         feet(derived.light),
         feet(derived.darkvision),
         derived.armour_class.to_string(),
+        rate(derived.hunger_rate),
+        rate(derived.sleepiness_rate),
+        if derived.heal_on_kill > 0.0 { format!("+{} HP", fb_character::explain::number(derived.heal_on_kill as f64)) } else { "none".to_string() },
     ]
 }
 
@@ -289,7 +293,10 @@ pub fn breakdown(character: &Character, inventory: &Inventory, row: usize) -> Ve
         1 => vec![loadout.warmth().line(), format!("Warmth needed {}", character.warmth_need())],
         2 => vec![loadout.light().line()],
         3 => vec![loadout.darkvision().line()],
-        _ => vec![character.armour_class(inventory).line()],
+        4 => vec![character.armour_class(inventory).line()],
+        5 => vec![loadout.rate(MeterKind::Hunger, fb_character::Activity::Walking).line()],
+        6 => vec![loadout.rate(MeterKind::Sleepiness, fb_character::Activity::Walking).line()],
+        _ => vec![loadout.heal_on_kill().line()],
     }
 }
 

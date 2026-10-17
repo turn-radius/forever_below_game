@@ -14,12 +14,15 @@
 //!
 //! `poison` tracks the lasting Poisoned state a failed save against venom leaves.
 //!
+//! `recovery` mends a fed and watered character's hit points over game time.
+//!
 //! `conditions` reads all of it into the conditions a character is under right now, for the HUD.
 
 pub mod combat;
 pub mod conditions;
 pub mod explain;
 pub mod poison;
+pub mod recovery;
 
 use serde::{Deserialize, Serialize};
 
@@ -181,11 +184,15 @@ pub struct Worn {
     /// Warmth the wearer is given.
     #[serde(default)]
     pub warmth: f64,
+    /// Hit points the wearer regains on each kill (a weapon "of the Leech"'s). Only what the
+    /// delver strikes with counts, which the game decides when it builds the [`Worn`].
+    #[serde(default)]
+    pub heal_on_kill: f64,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0 }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0 }
     }
 }
 
@@ -216,6 +223,8 @@ pub struct Gear {
     pub light: f64,
     /// How long the carried light burns, as a multiple of its base's.
     pub burn_time: f64,
+    /// Hit points regained on a kill: the worn items' added.
+    pub heal_on_kill: f64,
 }
 
 impl Default for Gear {
@@ -229,13 +238,14 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0 };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0 };
         for item in worn {
             gear.carry += item.carry;
             gear.darkvision = gear.darkvision.max(item.darkvision);
             gear.hunger_rate *= item.hunger_rate;
             gear.sleepiness_rate *= item.sleepiness_rate;
             gear.stealth += item.stealth;
+            gear.heal_on_kill += item.heal_on_kill;
         }
         for light in lights {
             if light.reach > gear.light {
@@ -1449,7 +1459,7 @@ mod tests {
     fn gear_adds_carry_multiplies_rates_and_takes_the_best_darkvision() {
         let worn = [
             Worn { carry: 25.0, darkvision: 10.0, hunger_rate: 0.85, ..Worn::default() },
-            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85, stealth: 0.0, warmth: 0.0 },
+            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0 },
         ];
         let gear = Gear::new(20.0, worn, []);
         assert_eq!(gear.carry, 50.0);

@@ -3,18 +3,20 @@ use fb_items::{roll_item, stats::{Stat, Stats}, tables};
 #[test]
 fn stat_totals_pinned_across_base_seeds() {
     let test_cases = vec![
-        // (base_name, seed, expected_stat_totals)
+        // (base_name, seed, expected_stat_totals). Four changed when the affixes nothing reads
+        // were held back: Shirt and Trousers 12345 roll of Wakefulness, Hood 77 Moth-eaten and
+        // Torch 123 of Plenty in place of a held-back affix.
         ("Shirt", 1, 16.0),
         ("Shirt", 42, 6.0),
-        ("Shirt", 12345, 5.5),
+        ("Shirt", 12345, 5.85),
         ("Trousers", 1, 16.5),
         ("Trousers", 42, 6.5),
-        ("Trousers", 12345, 6.0),
+        ("Trousers", 12345, 6.35),
         ("Breeches", 1, 15.5),
         ("Breeches", 99, 30.5),
         ("Breeches", 54321, 7.5),
         ("Hood", 1, 15.5),
-        ("Hood", 77, 6.0),
+        ("Hood", 77, 4.5),
         ("Mail coif", 1, 21.0),
         ("Belt", 1, 15.0),
         ("Belt", 99, 30.0),
@@ -23,7 +25,7 @@ fn stat_totals_pinned_across_base_seeds() {
         ("Hand axe", 1, 16.0),
         ("Hand axe", 88, 6.0),
         ("Torch", 1, 35.0),
-        ("Torch", 123, 37.0),
+        ("Torch", 123, 34.85),
         ("Lantern", 1, 46.0),
         ("Lantern", 456, 36.0),
     ];
