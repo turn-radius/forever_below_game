@@ -413,6 +413,8 @@ fn card_frame(camera: Entity) -> impl Bundle {
 /// changes under it.
 struct Comparison<'a> {
     banner: &'a str,
+    /// Names the hovered item, so the changes read as what it gives over what is worn.
+    heading: &'a str,
     changes: &'a [Change],
 }
 
@@ -433,7 +435,7 @@ fn fill_card(commands: &mut Commands, card: Entity, shown: Option<(&Item, &CardT
                 BorderColor::all(FAINT),
             ))
             .with_children(|list| {
-                list.spawn((Text::new("Wearing this instead"), UiFonts::style(&fonts.body_italic, 13.5, MUTED)));
+                list.spawn((Text::new(comparison.heading.to_string()), UiFonts::style(&fonts.body_italic, 13.5, GOLD)));
                 if comparison.changes.is_empty() {
                     list.spawn((Text::new("No change"), UiFonts::style(&fonts.mono, 13.0, MUTED)));
                 }
@@ -624,7 +626,8 @@ pub fn show_compare(
             let text = old.map(|old| (old, card_text(old, worn.map(|w| (&*inventory, w)))));
             let banner = compare_banner(slot, old.is_some());
             let changes = swap_changes(new, old);
-            let comparison = Comparison { banner: &banner, changes: &changes };
+            let heading = format!("Swapping in the {}", new.title());
+            let comparison = Comparison { banner: &banner, heading: &heading, changes: &changes };
             fill_card(&mut commands, entity, text.as_ref().map(|(item, text)| (*item, text)), Some(comparison), &fonts, &mut icons);
             *shown = Some((id, slot, worn));
             *visibility = Visibility::Hidden;
@@ -763,6 +766,54 @@ mod tests {
         assert!(by > 0);
         assert_eq!(swap_changes(&pack, Some(&sack))[0], Change { text: format!("+{by} cells inside"), better: true });
         assert_eq!(swap_changes(&sack, Some(&pack))[0], Change { text: format!("\u{2212}{by} cells inside"), better: false });
+    }
+
+    #[test]
+    fn changes_are_what_the_new_thing_gives_over_the_old() {
+        let worse = Stats {
+            armour: 1.0, warmth: 1.0, light: 20.0, to_hit: 1.0, carry: 10.0, darkvision: 30.0, weight: 3.0, burn_time: 1.0, break_chance: 0.1, ..Stats::default()
+        };
+        let better = Stats {
+            armour: 2.0, warmth: 2.0, light: 30.0, to_hit: 2.0, carry: 15.0, darkvision: 60.0, weight: 2.0, burn_time: 2.0, break_chance: 0.05, ..Stats::default()
+        };
+        let text = |c: &[Change]| c.iter().map(|c| (c.text.clone(), c.better)).collect::<Vec<_>>();
+        // The better thing over the worse: gains read plus and green, less weight and breakage minus and green.
+        assert_eq!(
+            text(&changes(&better, Some(&worse))),
+            vec![
+                ("+1 armour".into(), true),
+                ("+1 warmth".into(), true),
+                ("+10 ft light".into(), true),
+                ("+1 to hit".into(), true),
+                ("+5 lb carry".into(), true),
+                ("+30 ft darkvision".into(), true),
+                ("+1\u{d7} burn time".into(), true),
+                ("\u{2212}5% chance to break".into(), true),
+                ("\u{2212}1 lb weight".into(), true),
+            ]
+        );
+        // And the other way round, every line flips both sign and colour.
+        assert_eq!(
+            text(&changes(&worse, Some(&better))),
+            vec![
+                ("\u{2212}1 armour".into(), false),
+                ("\u{2212}1 warmth".into(), false),
+                ("\u{2212}10 ft light".into(), false),
+                ("\u{2212}1 to hit".into(), false),
+                ("\u{2212}5 lb carry".into(), false),
+                ("\u{2212}30 ft darkvision".into(), false),
+                ("\u{2212}1\u{d7} burn time".into(), false),
+                ("+5% chance to break".into(), false),
+                ("+1 lb weight".into(), false),
+            ]
+        );
+        // Items: the hovered +2 helmet over the worn +1 one reads "+1 armour", green.
+        let mut worn = fb_items::roll_item("Helm", 3).unwrap();
+        let mut hovered = worn.clone();
+        worn.profile.stats.armour = 1.0;
+        hovered.profile.stats.armour = 2.0;
+        assert_eq!(swap_changes(&hovered, Some(&worn)), vec![Change { text: "+1 armour".into(), better: true }]);
+        assert_eq!(swap_changes(&worn, Some(&hovered)), vec![Change { text: "\u{2212}1 armour".into(), better: false }]);
     }
 
     #[test]
