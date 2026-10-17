@@ -20,6 +20,9 @@
 //!   opens with its grid beside what lies underfoot ([`OpenContainer`]). A chest, strongbox or
 //!   coffer then stands open in the level, its lid raised, for good.
 //!
+//! - Aimed at, a container also puts its verbs over the crosshair ([`prompt_aimed_container`]):
+//!   "F Open" while shut, nothing once it stands open.
+//!
 //! `FB_OPEN_CONTAINER=<n>` opens the level's `n`th container (0 the first, in `print_level`'s
 //! order) a few frames in, for captures.
 
@@ -33,6 +36,7 @@ use fb_level::{CELL, Level, Prop, PropSpot, chest_state};
 
 use crate::carry::{Aimed, appearance_of, item_points};
 use crate::inventory::{Inventory, ItemId, OpenContainer};
+use crate::interact::{CrosshairPrompt, Delver, Lock, Target, key_line, verbs_for};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::level::{LevelPiece, fixture_appearance, geometry::Relief};
 use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, Screen, ScreenOpen, level_has_focus, show_screen};
@@ -44,7 +48,8 @@ pub struct PropsPlugin;
 
 impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Inventory>()
+        app.add_plugins(crate::interact::InteractPlugin)
+            .init_resource::<Inventory>()
             .init_resource::<Aimed>()
             .init_resource::<Keymap>()
             .init_resource::<ScreenOpen>()
@@ -55,6 +60,7 @@ impl Plugin for PropsPlugin {
                     lay_out_props.run_if(resource_exists_and_changed::<CurrentLevel>),
                     rescale_props.run_if(resource_exists_and_changed::<Tuning>),
                     open_aimed_container.run_if(level_has_focus),
+                    prompt_aimed_container,
                     open_for_capture.run_if(|| std::env::var("FB_OPEN_CONTAINER").is_ok()),
                 )
                     .chain()
@@ -267,6 +273,29 @@ fn open_aimed_container(
     open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut open, &mut showing, cursor, &tuning);
 }
 
+/// Says what the aimed container's verbs are over the crosshair. Containers have no locks yet,
+/// so a shut one is opened and an open one has nothing to say.
+fn prompt_aimed_container(
+    aimed: Res<Aimed>,
+    containers: Query<&Container>,
+    keymap: Res<Keymap>,
+    mut prompt: ResMut<CrosshairPrompt>,
+    mut said: Local<Option<String>>,
+) {
+    let line = aimed.0.and_then(|entity| containers.get(entity).ok()).map(|container| {
+        let target = Target::Container { open: container.opened, lock: Lock::NONE };
+        key_line(&keymap, &verbs_for(&target, &Delver::default()))
+    });
+    let line = line.filter(|line| !line.is_empty());
+    // Clear only what this system set: other aimed things (folk) have their own say.
+    if line.is_some() || said.is_some() {
+        if prompt.0 != line {
+            prompt.0.clone_from(&line);
+        }
+        *said = line;
+    }
+}
+
 /// For captures (`FB_OPEN_CONTAINER=<n>`): a few frames in, opens the level's `n`th container.
 #[allow(clippy::too_many_arguments)]
 fn open_for_capture(
@@ -348,6 +377,28 @@ mod tests {
     fn contents(app: &App, container: ItemId) -> Vec<(ItemId, String)> {
         let inventory = app.world().resource::<Inventory>();
         inventory.grid(container).unwrap().entries().iter().map(|e| (e.id, inventory.item(e.id).unwrap().title().to_string())).collect()
+    }
+
+    #[test]
+    fn aiming_at_a_shut_container_prompts_to_open_it() {
+        let mut app = props_app();
+        let (entity, container) = chest(&mut app);
+        assert_eq!(app.world().resource::<CrosshairPrompt>().0, None);
+        app.world_mut().resource_mut::<Aimed>().0 = Some(entity);
+        app.update();
+        assert_eq!(app.world().resource::<CrosshairPrompt>().0.as_deref(), Some("F Open"));
+        // Rebound, the prompt follows.
+        let mut keymap = app.world_mut().resource_mut::<Keymap>();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![crate::keymap::Input::Key(KeyCode::KeyE)];
+        app.update();
+        assert_eq!(app.world().resource::<CrosshairPrompt>().0.as_deref(), Some("E Open"));
+        // Standing open it has no verb; looking away clears nothing else's line.
+        app.world_mut().entity_mut(entity).insert(Container { opened: true, ..container });
+        app.update();
+        assert_eq!(app.world().resource::<CrosshairPrompt>().0, None);
+        app.world_mut().resource_mut::<Aimed>().0 = None;
+        app.update();
+        assert_eq!(app.world().resource::<CrosshairPrompt>().0, None);
     }
 
     #[test]

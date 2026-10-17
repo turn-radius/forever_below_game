@@ -19,14 +19,21 @@
 //! and crouching out of sight. Those are plain fields ([`Lock`], [`Delver`]) with no gameplay
 //! behind them; whatever adds them fills the fields in. Steal is only offered, nothing steals.
 //!
-//! The slots are not bound to keys here; [`Slot`] is mapped to the keymap's actions where the
-//! input reads this.
+//! The slots are not bound to keys here; [`Slot::action`] maps a [`Slot`] to the keymap's action,
+//! and [`key_line`] writes a target's verbs with the keys bound to them: "F Open · R Pick
+//! the lock". Aimed at a container within reach, [`CrosshairPrompt`] shows that line over the
+//! crosshair ([`InteractPlugin`]); a folk's line goes on its card (`crate::folk`). Doors have
+//! no prompt: the only one, the entrance, never opens for the delver, so it has no verb to say.
 
+use bevy::{prelude::*, ui::ComputedUiRenderTargetInfo};
 use fb_items::Item;
 
-use crate::keymap::Action;
+use crate::carry::ViewModelCamera;
 use crate::inventory::{Inventory, ItemId, Location};
+use crate::inventory::card::{CARD_GAP, keep_on_screen};
 use crate::keymap::{Action, Keymap};
+use crate::play::{DelveSystems, ScreenOpen};
+use crate::ui::{BG, LINE, MUTED, UiFonts};
 
 /// The four action slots, in the order they are shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -268,11 +275,113 @@ pub fn item_target(inventory: &Inventory, id: ItemId, on_floor: bool) -> Option<
     Some(Target::Item { place, uses: use_of(item), equippable: !item.slots().is_empty() })
 }
 
+/// The line shown over the crosshair for what is aimed at; `None` shows nothing.
+#[derive(Resource, Debug, Default, PartialEq)]
+pub struct CrosshairPrompt(pub Option<String>);
+
+/// The node that shows the [`CrosshairPrompt`].
+#[derive(Component, Debug)]
+struct PromptNode;
+
+pub struct InteractPlugin;
+
+impl Plugin for InteractPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<CrosshairPrompt>().add_systems(Update, (spawn_prompt, show_prompt).chain().in_set(DelveSystems));
+    }
+}
+
+/// Spawns the prompt, hidden, once there is a camera drawing over the held torch to draw it
+/// (as the item card is).
+fn spawn_prompt(mut commands: Commands, nodes: Query<(), With<PromptNode>>, cameras: Query<Entity, With<ViewModelCamera>>) {
+    if !nodes.is_empty() {
+        return;
+    }
+    let Some(camera) = cameras.iter().next() else { return };
+    commands.spawn((
+        Name::new("Crosshair prompt"),
+        DespawnOnExit(crate::launch::AppState::Delving),
+        PromptNode,
+        UiTargetCamera(camera),
+        Node {
+            position_type: PositionType::Absolute,
+            padding: UiRect::new(px(12), px(12), px(6), px(7)),
+            border: UiRect::all(px(1.5)),
+            border_radius: BorderRadius::all(px(10)),
+            ..default()
+        },
+        BackgroundColor(BG),
+        BorderColor::all(LINE),
+        GlobalZIndex(40),
+        Visibility::Hidden,
+        Pickable::IGNORE,
+        Text::default(),
+    ));
+}
+
+/// Shows the prompt just above the crosshair (the item card hangs below it) while the level has
+/// focus. A prompt whose text changed waits a frame to be measured.
+#[allow(clippy::type_complexity)]
+fn show_prompt(
+    mut commands: Commands,
+    prompt: Res<CrosshairPrompt>,
+    open: Option<Res<ScreenOpen>>,
+    fonts: Option<Res<UiFonts>>,
+    mut nodes: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<PromptNode>>,
+    mut shown: Local<Option<String>>,
+) {
+    let Some(fonts) = fonts else { return };
+    let text = prompt.0.clone().filter(|_| !open.is_some_and(|o| o.0.is_some()));
+    for (entity, mut node, mut visibility, computed, target) in &mut nodes {
+        let Some(text) = &text else {
+            *visibility = Visibility::Hidden;
+            *shown = None;
+            continue;
+        };
+        if shown.as_ref() != Some(text) {
+            commands.entity(entity).insert((Text::new(text.clone()), UiFonts::style(&fonts.mono, 13.0, MUTED)));
+            *shown = Some(text.clone());
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+        let size = computed.size * computed.inverse_scale_factor;
+        let screen = target.logical_size();
+        let centre = screen * 0.5;
+        let at = keep_on_screen(Vec2::new(centre.x - size.x * 0.5, centre.y - size.y - CARD_GAP), size, screen);
+        node.left = px(at.x);
+        node.top = px(at.y);
+        *visibility = Visibility::Inherited;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keymap::Input;
     use bevy::input::keyboard::KeyCode;
     use fb_items::roll_item;
+
+    #[test]
+    fn the_prompt_names_the_bound_keys() {
+        let keymap = Keymap::default();
+        let line = |target: Target, delver: Delver| key_line(&keymap, &verbs_for(&target, &delver));
+        let strongbox = Target::Container { open: false, lock: Lock::LOCKED };
+        assert_eq!(line(strongbox, Delver { has_lockpicks: true, ..Delver::default() }), "F Open \u{b7} R Pick the lock");
+        assert_eq!(line(Target::Folk, Delver::default()), "F Talk \u{b7} G Barter");
+        assert_eq!(line(Target::Folk, Delver { hidden: true, ..Delver::default() }), "F Talk \u{b7} G Barter \u{b7} R Steal");
+        let open = Target::Container { open: true, lock: Lock::NONE };
+        assert_eq!(line(open, Delver::default()), "");
+    }
+
+    #[test]
+    fn the_prompt_follows_a_rebinding_and_adds_compare() {
+        let mut keymap = Keymap::default();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
+        assert_eq!(key_line(&keymap, &verbs_for(&Target::Folk, &Delver::default())), "E Talk \u{b7} G Barter");
+        let dagger = roll_item("Dagger", 7).unwrap();
+        let on_floor = Target::Item { place: Place::Ground, uses: None, equippable: !dagger.slots().is_empty() };
+        assert_eq!(key_line(&Keymap::default(), &verbs_for(&on_floor, &Delver::default())), "F Take \u{b7} G Equip \u{b7} Alt Compare");
+    }
 
     fn target(item: &Item, place: Place) -> Target {
         Target::Item { place, uses: use_of(item), equippable: !item.slots().is_empty() }
