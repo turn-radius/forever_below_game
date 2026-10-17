@@ -243,7 +243,7 @@ impl Weapon {
 
     /// [`Weapon::damage_range`] with the terms of its least, mean and most.
     pub fn damage_range_explained(&self, strength: i32) -> rules::DamageRange {
-        rules::damage_range(self.dice_sides(), self.bonus, strength)
+        rules::damage_range(self.dice_sides(), self.bonus, "STR", strength)
     }
 
     /// The dice as the rules take them: a count and the sides.
@@ -261,12 +261,12 @@ impl Weapon {
     /// What swinging it adds to the d20 for someone of `strength` (the score): the Strength
     /// modifier and its `ToHit`.
     pub fn to_hit(&self, strength: i32) -> rules::ToHit {
-        rules::ToHit::Strength { modifier: modifier(strength), weapon: self.to_hit }
+        rules::ToHit::strength(modifier(strength), self.to_hit)
     }
 
     /// [`Weapon::roll`] with every die and bonus listed.
     pub fn roll_explained(&self, strength: i32, rng: &mut Mulberry32) -> fb_character::explain::Explained {
-        rules::weapon_damage(self.dice_sides(), self.bonus, strength, rng)
+        rules::weapon_damage(self.dice_sides(), self.bonus, "STR", strength, rng)
     }
 }
 
@@ -292,7 +292,7 @@ pub fn arm_creatures(mut commands: Commands, new: Query<(Entity, &Critter), With
 
 /// An attack roll with `weapon` by someone of `strength` against `armour_class`, thrown with
 /// `odds`: a d20, the Strength modifier and the weapon's `ToHit` (SRD 5.1 p. 96, "Attack Rolls";
-/// [`rules::ToHit::Strength`], as a folk's blows roll).
+/// [`rules::ToHit::strength`], as a folk's blows roll).
 pub fn attack_roll(weapon: &Weapon, strength: i32, armour_class: i32, odds: rules::Odds, rng: &mut Mulberry32) -> rules::Attack {
     weapon.to_hit(strength).roll(armour_class, odds, rng)
 }

@@ -25,9 +25,10 @@ fn at_least_one(e: Explained) -> Explained {
 }
 
 /// One blow's damage (SRD 5.1 p. 96, "Damage Rolls"): `count` dice of `sides` (`None` for a
-/// bare fist, which rolls nothing and counts as 1), plus `bonus` and the Strength modifier,
+/// bare fist, which rolls nothing and counts as 1), plus `bonus` and the `ability` modifier
+/// (`STR` for a melee blow, `DEX` for a ranged one, SRD 5.1 p. 80; the label names the term),
 /// and never below 1. One draw per die, in order.
-pub fn weapon_damage(dice: Option<(u32, u32)>, bonus: i32, strength_modifier: i32, rng: &mut Mulberry32) -> Explained {
+pub fn weapon_damage(dice: Option<(u32, u32)>, bonus: i32, ability: &str, ability_modifier: i32, rng: &mut Mulberry32) -> Explained {
     let mut e = Explained::new("Damage", "");
     match dice {
         None => e = e.base("fist", 1.0),
@@ -41,7 +42,7 @@ pub fn weapon_damage(dice: Option<(u32, u32)>, bonus: i32, strength_modifier: i3
     if bonus != 0 {
         e = e.add("bonus", bonus as f64);
     }
-    at_least_one(e.add("STR", strength_modifier as f64))
+    at_least_one(e.add(ability, ability_modifier as f64))
 }
 
 /// The range a blow's damage falls in: the fewest, the mean and the most.
@@ -54,7 +55,7 @@ pub struct DamageRange {
 
 /// The [`DamageRange`] of [`weapon_damage`] for the same arguments. The mean is the dice's
 /// average plus the bonuses, held at 1 as a blow is.
-pub fn damage_range(dice: Option<(u32, u32)>, bonus: i32, strength_modifier: i32) -> DamageRange {
+pub fn damage_range(dice: Option<(u32, u32)>, bonus: i32, ability: &str, ability_modifier: i32) -> DamageRange {
     let (lo, mean, hi, label) = match dice {
         Some((count, sides)) => (count as f64, count as f64 * (sides as f64 + 1.0) / 2.0, (count * sides) as f64, format!("{count}d{sides}")),
         None => (1.0, 1.0, 1.0, "fist".to_string()),
@@ -64,7 +65,7 @@ pub fn damage_range(dice: Option<(u32, u32)>, bonus: i32, strength_modifier: i32
         if bonus != 0 {
             e = e.add("bonus", bonus as f64);
         }
-        at_least_one(e.add("STR", strength_modifier as f64))
+        at_least_one(e.add(ability, ability_modifier as f64))
     };
     DamageRange {
         min: build("Least damage", format!("{label} least"), lo),
@@ -234,24 +235,35 @@ pub const PROFICIENCY_BONUS: i32 = 2;
 /// the armour class of whatever they swing at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToHit {
-    /// Someone with abilities and a weapon (the delver, a folk): the Strength modifier, the
-    /// proficiency bonus ([`PROFICIENCY_BONUS`]) and the weapon's `ToHit`, rounded and left out
-    /// when 0 (SRD 5.1 p. 96, "Attack Rolls").
-    Strength { modifier: i32, weapon: i32 },
+    /// Someone with abilities and a weapon (the delver, a folk): the `ability` modifier
+    /// (`STR` for melee, `DEX` for ranged, SRD 5.1 p. 80), the proficiency bonus
+    /// ([`PROFICIENCY_BONUS`]) and the weapon's `ToHit`, rounded and left out when 0
+    /// (SRD 5.1 p. 96, "Attack Rolls").
+    Ability { ability: &'static str, modifier: i32, weapon: i32 },
     /// A creature: the attack bonus its SRD stat block prints, and the `ToHit` of a weapon it
     /// carries (a skeleton's), left out when 0.
     StatBlock { attack_bonus: i32, weapon: i32 },
 }
 
 impl ToHit {
+    /// A melee attack: the Strength modifier ([`ToHit::Ability`]).
+    pub fn strength(modifier: i32, weapon: i32) -> Self {
+        ToHit::Ability { ability: "STR", modifier, weapon }
+    }
+
+    /// A ranged attack: the Dexterity modifier ([`ToHit::Ability`]).
+    pub fn dexterity(modifier: i32, weapon: i32) -> Self {
+        ToHit::Ability { ability: "DEX", modifier, weapon }
+    }
+
     /// The terms it adds to the d20, each with its label.
     pub fn terms(self) -> Vec<(&'static str, i32)> {
         let (first, weapon) = match self {
-            ToHit::Strength { modifier, weapon } => (("STR", modifier), weapon),
+            ToHit::Ability { ability, modifier, weapon } => ((ability, modifier), weapon),
             ToHit::StatBlock { attack_bonus, weapon } => (("attack bonus", attack_bonus), weapon),
         };
         let mut terms = vec![first];
-        if matches!(self, ToHit::Strength { .. }) {
+        if matches!(self, ToHit::Ability { .. }) {
             terms.push(("proficiency", PROFICIENCY_BONUS));
         }
         if weapon != 0 {
@@ -266,14 +278,146 @@ impl ToHit {
     }
 }
 
-/// A folk attacker's roll: the Strength modifier and the weapon's `ToHit` ([`ToHit::Strength`]).
+/// A folk attacker's roll: the Strength modifier and the weapon's `ToHit` ([`ToHit::strength`]).
 pub fn folk_attack(strength_modifier: i32, weapon_to_hit: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
-    ToHit::Strength { modifier: strength_modifier, weapon: weapon_to_hit }.roll(armour_class, Odds::Even, rng)
+    ToHit::strength(strength_modifier, weapon_to_hit).roll(armour_class, Odds::Even, rng)
 }
 
 /// A creature's roll: the attack bonus its SRD stat block prints ([`ToHit::StatBlock`]).
 pub fn creature_attack(attack_bonus: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
     ToHit::StatBlock { attack_bonus, weapon: 0 }.roll(armour_class, Odds::Even, rng)
+}
+
+/// Feet to world units: 1 world unit is 10 cm, so a foot (30.48 cm) is 3.048 units.
+pub const FEET_TO_UNITS: f32 = 3.048;
+
+/// A distance in world units as feet.
+pub fn units_to_feet(units: f32) -> f32 {
+    units / FEET_TO_UNITS
+}
+
+/// A ranged weapon's range in feet (SRD 5.1 p. 95, "Range"): shot normally out to `normal_feet`
+/// and at disadvantage out to `long_feet`, never beyond.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Range {
+    pub normal_feet: f32,
+    pub long_feet: f32,
+}
+
+impl Range {
+    pub const fn new(normal_feet: f32, long_feet: f32) -> Self {
+        Range { normal_feet, long_feet }
+    }
+
+    /// The band `distance_feet` falls in ([`range_band`]).
+    pub fn band(self, distance_feet: f32) -> RangeBand {
+        range_band(self, distance_feet)
+    }
+}
+
+/// Where a target stands against a [`Range`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RangeBand {
+    /// Within normal range: no penalty.
+    Normal,
+    /// Beyond normal, within long range: disadvantage.
+    Long,
+    /// Beyond long range: the weapon cannot hit.
+    Out,
+}
+
+/// The [`RangeBand`] of a target `distance_feet` away: normal out to and including the normal
+/// range, long out to and including the long range, and out beyond (SRD 5.1 p. 95).
+pub fn range_band(range: Range, distance_feet: f32) -> RangeBand {
+    if distance_feet <= range.normal_feet {
+        RangeBand::Normal
+    } else if distance_feet <= range.long_feet {
+        RangeBand::Long
+    } else {
+        RangeBand::Out
+    }
+}
+
+/// A hostile this close (feet) that can act gives a ranged attack disadvantage (SRD 5.1 p. 95,
+/// "Ranged Attacks in Close Combat").
+pub const CLOSE_COMBAT_FEET: f32 = 5.0;
+
+impl Odds {
+    /// Two sources of odds together: advantage and disadvantage cancel to a straight roll
+    /// whatever else is stacked (SRD 5.1 p. 76), and like sources do not stack.
+    pub fn and(self, other: Odds) -> Odds {
+        match (self, other) {
+            (a, Odds::Even) => a,
+            (Odds::Even, b) => b,
+            (a, b) if a == b => a,
+            _ => Odds::Even,
+        }
+    }
+}
+
+/// How a ranged shot is thrown, and why.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RangedShot {
+    pub band: RangeBand,
+    pub odds: Odds,
+    /// Each source of disadvantage, for the log: `long range`, `hostile within 5 ft`.
+    pub reasons: Vec<&'static str>,
+}
+
+/// The shot at a target `distance_feet` away: `None` beyond long range, else disadvantage for
+/// long range and for a hostile within 5 feet ([`CLOSE_COMBAT_FEET`]); the two do not stack.
+pub fn ranged_shot(range: Range, distance_feet: f32, hostile_within_5ft: bool) -> Option<RangedShot> {
+    let band = range_band(range, distance_feet);
+    let mut reasons = Vec::new();
+    match band {
+        RangeBand::Out => return None,
+        RangeBand::Long => reasons.push("long range"),
+        RangeBand::Normal => {}
+    }
+    if hostile_within_5ft {
+        reasons.push("hostile within 5 ft");
+    }
+    let odds = if reasons.is_empty() { Odds::Even } else { Odds::Disadvantage };
+    Some(RangedShot { band, odds, reasons })
+}
+
+/// [`ranged_shot`]'s odds alone: `None` when the target is out of range, so no shot.
+pub fn ranged_odds(range: Range, distance_feet: f32, hostile_within_5ft: bool) -> Option<Odds> {
+    ranged_shot(range, distance_feet, hostile_within_5ft).map(|shot| shot.odds)
+}
+
+/// A crossbow-like weapon's loading (SRD 5.1 p. 65, "Loading"): one bolt per span. Spanning the
+/// string loads one bolt, and firing spends both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Loading {
+    pub spanned: bool,
+    pub loaded: bool,
+}
+
+impl Loading {
+    /// Spans the string and sets a bolt.
+    pub fn span_and_load(&mut self) {
+        *self = Loading { spanned: true, loaded: true };
+    }
+
+    pub fn can_fire(self) -> bool {
+        self.spanned && self.loaded
+    }
+
+    /// Fires if it can, leaving the weapon unspanned and empty. Returns whether it fired.
+    pub fn fire(&mut self) -> bool {
+        let fired = self.can_fire();
+        if fired {
+            *self = Loading::default();
+        }
+        fired
+    }
+}
+
+/// Whether the ammunition of `attack` breaks (our own rule, not the SRD's): a hit breaks it when
+/// the natural d20 is even, so it costs no extra draw. A miss leaves it to be picked up.
+pub fn ammunition_breaks(attack: &Attack) -> bool {
+    attack.hit && attack.natural % 2 == 0
 }
 
 #[cfg(test)]
@@ -325,7 +469,7 @@ mod tests {
 
     #[test]
     fn an_ordinary_swing_hits_ac_30_only_on_a_natural_20_and_ac_0_but_for_a_natural_1() {
-        let to_hit = ToHit::Strength { modifier: 2, weapon: 1 };
+        let to_hit = ToHit::strength(2, 1);
         let mut rng = Mulberry32::new(77);
         let (mut high_hits, mut low_misses) = (0, 0);
         for _ in 0..2_000 {
@@ -346,7 +490,7 @@ mod tests {
             let mut r = Mulberry32::new(*s);
             (r.int(1, 20), r.int(1, 20)) == (15, 4)
         });
-        let attack = ToHit::Strength { modifier: 1, weapon: 0 }.roll(12, Odds::Disadvantage, &mut Mulberry32::new(seed.unwrap()));
+        let attack = ToHit::strength(1, 0).roll(12, Odds::Disadvantage, &mut Mulberry32::new(seed.unwrap()));
         assert_eq!((attack.natural, attack.set_aside, attack.hit), (4, Some(15), false));
         assert_eq!(attack.line(), "d20 with disadvantage (4) + STR (+1) + proficiency (+2) = 7 vs AC 12: miss, 15 set aside");
         let rate = |odds| {
@@ -362,7 +506,51 @@ mod tests {
     #[test]
     fn a_skeletons_weapon_adds_its_to_hit_and_a_zero_is_left_out() {
         assert_eq!(ToHit::StatBlock { attack_bonus: 4, weapon: 1 }.terms(), [("attack bonus", 4), ("ToHit", 1)]);
-        assert_eq!(ToHit::Strength { modifier: -1, weapon: 0 }.terms(), [("STR", -1), ("proficiency", 2)]);
+        assert_eq!(ToHit::strength(-1, 0).terms(), [("STR", -1), ("proficiency", 2)]);
+    }
+
+    #[test]
+    fn a_shortbow_shoots_even_to_80_feet_with_disadvantage_to_320_and_not_beyond() {
+        let bow = Range::new(80.0, 320.0);
+        assert_eq!(ranged_odds(bow, 50.0, false), Some(Odds::Even));
+        assert_eq!(ranged_odds(bow, 200.0, false), Some(Odds::Disadvantage));
+        assert_eq!(ranged_odds(bow, 400.0, false), None);
+        assert_eq!(ranged_odds(bow, 4.0, true), Some(Odds::Disadvantage), "a goblin 4 ft away");
+        assert_eq!(ranged_odds(bow, 200.0, true), Some(Odds::Disadvantage), "disadvantage does not stack");
+        assert_eq!(ranged_shot(bow, 200.0, true).unwrap().reasons, ["long range", "hostile within 5 ft"]);
+        assert_eq!((range_band(bow, 80.0), range_band(bow, 320.0)), (RangeBand::Normal, RangeBand::Long));
+        assert!((units_to_feet(3.048 * 50.0) - 50.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn advantage_and_disadvantage_cancel() {
+        assert_eq!(Odds::Advantage.and(Odds::Disadvantage), Odds::Even);
+        assert_eq!(Odds::Even.and(Odds::Disadvantage), Odds::Disadvantage);
+        assert_eq!(Odds::Advantage.and(Odds::Even), Odds::Advantage);
+        assert_eq!(Odds::Disadvantage.and(Odds::Disadvantage), Odds::Disadvantage);
+    }
+
+    #[test]
+    fn dex_labels_the_ranged_terms() {
+        let attack = ToHit::dexterity(3, 1).roll(10, Odds::Even, &mut Mulberry32::new(seed_for(12)));
+        assert_eq!(attack.line(), "d20 (12) + DEX (+3) + proficiency (+2) + ToHit (+1) = 18 vs AC 10: hit");
+        assert_eq!(ToHit::dexterity(3, 0).terms(), [("DEX", 3), ("proficiency", 2)]);
+        let seed = (0..200).find(|s| Mulberry32::new(*s).int(1, 6) == 4).unwrap();
+        assert_eq!(weapon_damage(Some((1, 6)), 0, "DEX", 3, &mut Mulberry32::new(seed)).line(), "Damage 7 = d6 (4) + DEX (+3)");
+        assert!(damage_range(Some((1, 6)), 0, "DEX", 3).max.line().contains("DEX (+3)"));
+    }
+
+    #[test]
+    fn a_bolt_is_loaded_per_span_and_ammunition_breaks_on_an_even_hit() {
+        let mut crossbow = Loading::default();
+        assert!(!crossbow.fire());
+        crossbow.span_and_load();
+        assert!(crossbow.fire());
+        assert!(!crossbow.fire(), "one bolt per span");
+        let even = ToHit::dexterity(0, 0).roll(5, Odds::Even, &mut Mulberry32::new(seed_for(12)));
+        let odd = ToHit::dexterity(0, 0).roll(5, Odds::Even, &mut Mulberry32::new(seed_for(13)));
+        let missed = ToHit::dexterity(0, 0).roll(30, Odds::Even, &mut Mulberry32::new(seed_for(12)));
+        assert_eq!((ammunition_breaks(&even), ammunition_breaks(&odd), ammunition_breaks(&missed)), (true, false, false));
     }
 
     /// The game's combat as it was before the dice moved here, for the same draws.
@@ -407,11 +595,11 @@ mod tests {
     fn a_1d8_plus_1_weapon_with_str_14_explains_as_die_plus_1_plus_2() {
         // Find a seed whose d8 is 5, as the spec's example rolls.
         let seed = (0..200).find(|s| Mulberry32::new(*s).int(1, 8) == 5).unwrap();
-        let e = weapon_damage(Some((1, 8)), 1, modifier(14), &mut Mulberry32::new(seed));
+        let e = weapon_damage(Some((1, 8)), 1, "STR", modifier(14), &mut Mulberry32::new(seed));
         assert_eq!(e.value(), 8.0);
         assert_eq!(amounts(&e), [5.0, 1.0, 2.0]);
         assert_eq!(e.line(), "Damage 8 = d8 (5) + bonus (+1) + STR (+2)");
-        let range = damage_range(Some((1, 8)), 1, 2);
+        let range = damage_range(Some((1, 8)), 1, "STR", 2);
         assert_eq!((range.min.value(), range.max.value()), (4.0, 11.0));
         assert_eq!(range.mean.value(), 7.5);
         assert_eq!((range.min.value() as u32, range.max.value() as u32), old::range(Some((1, 8)), 1, 2));
@@ -419,16 +607,16 @@ mod tests {
 
     #[test]
     fn a_fist_and_a_clamped_blow_read_plainly() {
-        assert_eq!(weapon_damage(None, 0, 2, &mut Mulberry32::new(1)).line(), "Damage 3 = fist (1) + STR (+2)");
+        assert_eq!(weapon_damage(None, 0, "STR", 2, &mut Mulberry32::new(1)).line(), "Damage 3 = fist (1) + STR (+2)");
         let seed = (0..200).find(|s| Mulberry32::new(*s).int(1, 4) == 2).unwrap();
-        let e = weapon_damage(Some((1, 4)), 0, -4, &mut Mulberry32::new(seed));
+        let e = weapon_damage(Some((1, 4)), 0, "STR", -4, &mut Mulberry32::new(seed));
         assert_eq!(e.line(), "Damage 1 = d4 (2) + STR (-4) at least 1");
         assert_eq!(bite_damage(2, 0, 0, &mut Mulberry32::new(1)).damage.line(), "Bite 2 = bite (2)");
     }
 
     #[test]
     fn every_die_is_a_term() {
-        let e = weapon_damage(Some((3, 6)), 0, 0, &mut Mulberry32::new(9));
+        let e = weapon_damage(Some((3, 6)), 0, "STR", 0, &mut Mulberry32::new(9));
         assert_eq!(e.terms().len(), 4);
         assert_eq!(e.terms()[..3].iter().map(|t| t.label.as_str()).collect::<Vec<_>>(), ["d6", "d6", "d6"]);
     }
@@ -479,7 +667,7 @@ mod tests {
             for i in 0..300i32 {
                 let dice = [None, Some((1, 4)), Some((1, 8)), Some((2, 6)), Some((3, 4))][i as usize % 5];
                 let (bonus, strength) = (i % 3 - 1, i % 9 - 4);
-                let rolled = weapon_damage(dice, bonus, strength, &mut new);
+                let rolled = weapon_damage(dice, bonus, "STR", strength, &mut new);
                 assert_eq!(rolled.value() as u32, old::roll(dice, bonus, strength, &mut old_rng), "seed {seed} roll {i}");
                 let (poison, con) = ([0, 2, 5, 8][i as usize % 4], i % 7 - 3);
                 let bitten = bite_damage(damage_of(i), poison, con, &mut new);
@@ -492,7 +680,7 @@ mod tests {
             assert_eq!(first_level_hit_points(die as u32, con).value() as i32, old::hit_points(die, con));
         }
         for strength in -4..=4 {
-            let range = damage_range(Some((2, 6)), 1, strength);
+            let range = damage_range(Some((2, 6)), 1, "STR", strength);
             assert_eq!((range.min.value() as u32, range.max.value() as u32), old::range(Some((2, 6)), 1, strength));
         }
     }

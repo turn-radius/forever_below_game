@@ -935,7 +935,7 @@ mod tests {
         // Shortsword: +4 to hit, 5 (1d6 + 2) piercing. Shortbow: +4, 5 (1d6 + 2), range 80/320.
         assert_eq!((block.attack_bonus, block.bite, block.bite.average()), (4, crate::Dice::new(1, 6, 2), 5));
         let bow = block.ranged.unwrap();
-        assert_eq!((bow.to_hit, bow.damage, bow.normal_feet, bow.long_feet), (4, crate::Dice::new(1, 6, 2), 80.0, 320.0));
+        assert_eq!((bow.to_hit, bow.damage, bow.range.normal_feet, bow.range.long_feet), (4, crate::Dice::new(1, 6, 2), 80.0, 320.0));
         assert_eq!((block.challenge, block.xp), ("1/4", 50));
         assert!(Species::Skeleton.is_skeleton() && !Species::Skeleton.is_snake() && !Species::Skeleton.is_rat());
         assert!((Species::Skeleton.speed() - 15.24).abs() < 0.01);
