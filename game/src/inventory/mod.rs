@@ -111,7 +111,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Character>()
             .init_resource::<Tuning>()
             .add_systems(OnExit(AppState::Delving), leave_the_delve)
-            .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD")), give_for_capture).chain())
+            .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD")), give_ammunition.run_if(|| debug_kit_wanted() || env_flag("FB_HOLD")), give_for_capture).chain())
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
             .add_systems(
                 Update,
@@ -257,6 +257,36 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
         let id = inventory.add(item);
         if inventory.stow(id).is_err() {
             inventory.forget(id);
+        }
+    }
+}
+
+/// For captures and trying the game: a bow or crossbow in the main hand comes with a full quiver
+/// or bolt case ([`fb_items::outfit::AMMUNITION_CARRIED`]), at the hip if a belt is worn, else on
+/// the back, else carried. One the kit already gave is filled up.
+fn give_ammunition(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLevel>>) {
+    let Some((_, ranged)) = crate::combat::shoot::ranged_in_hand(&inventory) else { return };
+    let (holder_base, ammo_base) = if ranged.ammunition == armory::Family::Bolt { ("Bolt case", "Bolt") } else { ("Quiver", "Arrow") };
+    let holder = match crate::combat::shoot::holder_of(&inventory, ranged.ammunition) {
+        Some(holder) => holder,
+        None => {
+            let Some(item) = fb_items::roll_item_with(holder_base, kit_seed(level.as_deref(), 0xa770), starting_odds()) else { return };
+            let holder = inventory.add(item);
+            if [Slot::Hip, Slot::Back].into_iter().all(|slot| inventory.wear(holder, slot).is_err()) && inventory.stow(holder).is_err() {
+                inventory.forget(holder);
+                return;
+            }
+            holder
+        }
+    };
+    let have = inventory.contents_count(holder);
+    for k in have..fb_items::outfit::AMMUNITION_CARRIED {
+        let Some(item) = fb_items::roll_item_with(ammo_base, kit_seed(level.as_deref(), 0xa770 + 1 + k as u32), starting_odds()) else { return };
+        let id = inventory.add(item);
+        let at = inventory.grid(holder).and_then(|g| g.first_free(fb_items::footprint::Footprint { cols: 1, rows: 1 }));
+        if at.is_none_or(|at| inventory.put(id, holder, at).is_err()) {
+            inventory.forget(id);
+            break;
         }
     }
 }

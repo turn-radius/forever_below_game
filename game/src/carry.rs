@@ -425,6 +425,9 @@ pub struct HeldKey {
     /// The lantern hung at the hip, and the belt it hangs from.
     pub hip: Option<ItemId>,
     pub belt: Option<ItemId>,
+    /// What the main hand's bow or crossbow has loaded: 1 for an arrow on the string, a bolt on
+    /// the deck, +2 for a spanned crossbow, so the view model is fitted again when it changes.
+    pub loaded: u8,
     pub body: (fb_body::Folk, u32),
 }
 
@@ -441,6 +444,11 @@ impl HeldKey {
                 .map(|slot| inventory.worn(slot).and_then(|id| inventory.item(id)).filter(|i| i.shape.lit() == Some(true)).map_or(0, |i| crate::inventory::char_bucket(&i.shape))),
             hip: inventory.worn(fb_items::Slot::Hip),
             belt: inventory.worn(fb_items::Slot::Belt),
+            loaded: inventory.worn(fb_items::Slot::Mainhand).and_then(|id| inventory.item(id)).map_or(0, |i| match &i.shape {
+                armory::Item::Bow(s) => u8::from(s.arrow.on),
+                armory::Item::Crossbow(s) => u8::from(s.arrow.on) + 2 * u8::from(s.spanned),
+                _ => 0,
+            }),
             body: (character.folk, character.body_seed),
         }
     }
@@ -490,6 +498,24 @@ pub struct HeldBuilt {
 }
 
 impl HeldBuilt {
+    /// This view model drawn for `wanted`, if only what the main hand's bow or crossbow has
+    /// loaded differs ([`HeldKey::loaded`]): the same fitting with that weapon's mesh built
+    /// again, which is quick, where fitting from scratch takes a while. `None` if anything
+    /// else differs.
+    fn with_loaded(&self, wanted: HeldWanted, inventory: &Inventory) -> Option<HeldBuilt> {
+        let same_but_loaded = HeldKey { loaded: wanted.key.loaded, ..self.wanted.key } == wanted.key;
+        if !same_but_loaded || self.wanted.key.loaded == wanted.key.loaded {
+            return None;
+        }
+        let shape = inventory.item(wanted.key.main?)?.shape.clone();
+        let mut built = self.clone();
+        built.wanted = wanted;
+        let hand = built.hands.iter_mut().find(|h| h.hand == fb_items::Slot::Mainhand)?;
+        hand.mesh = shape.build();
+        hand.item = shape;
+        Some(built)
+    }
+
     /// Fits and builds what `wanted` holds on a body of `spec` wearing `worn` (a list that
     /// holds the items in the hands and at the hip).
     fn fit(wanted: HeldWanted, spec: &BodySpec, worn: &[(fb_items::Slot, Item)]) -> HeldBuilt {
@@ -1077,8 +1103,12 @@ fn show_held(
         if carrying.fitting.as_ref().is_some_and(|f| *f.key() != wanted) {
             carrying.fitting = None;
         }
-        let mut fresh = None;
-        if carrying.built.as_ref().is_none_or(|b| b.wanted != wanted) && carrying.fitting.is_none() {
+        let quick = carrying.built.as_ref().filter(|b| b.wanted != wanted).and_then(|b| b.with_loaded(wanted, &inventory));
+        if quick.is_some() {
+            carrying.fitting = None;
+        }
+        let mut fresh = quick;
+        if fresh.is_none() && carrying.built.as_ref().is_none_or(|b| b.wanted != wanted) && carrying.fitting.is_none() {
             let worn: Vec<(fb_items::Slot, Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.shape.clone())).collect();
             let spec = character.spec();
             if wanted.key.main.is_none() && wanted.key.off.is_none() && wanted.key.hip.is_none() {

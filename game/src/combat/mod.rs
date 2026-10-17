@@ -47,6 +47,7 @@ pub mod feedback;
 pub mod eye;
 pub mod kick;
 pub mod orbs;
+pub mod shoot;
 pub mod swing;
 pub mod vitals;
 
@@ -54,7 +55,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, shoot::ShootPlugin));
     }
 }
 
@@ -936,5 +937,220 @@ mod tests {
         };
         assert!(weapon("Mace").bludgeoning && weapon("Club").bludgeoning && Weapon::fist().bludgeoning);
         assert!(!weapon("Sword").bludgeoning && !weapon("Spear").bludgeoning && !weapon("Hand axe").bludgeoning);
+    }
+
+    // Shooting: bows, crossbows and what they loose.
+
+    /// `fight`, with the delver holding `weapon` (rolled from `weapon_seed`), a worn `holder`
+    /// of `count` pieces of `ammo`, an eye, and the drawing assets and input shooting reads.
+    fn archer(weapon: &str, weapon_seed: u32, holder: &str, ammo: &str, count: usize, away: f32) -> (App, Entity, Entity, crate::inventory::ItemId) {
+        use crate::inventory::ItemId;
+        let (mut app, player, rat) = fight(None, away);
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<crate::render::ToonMaterial>>()
+            .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<crate::render::OutlineMaterials>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>();
+        app.world_mut().spawn((crate::play::PlayerCamera, Transform::from_xyz(0.0, 16.0, 0.0), ChildOf(player)));
+        let holder: ItemId = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let weapon = inventory.add(fb_items::roll_item(weapon, weapon_seed).unwrap());
+            inventory.wear(weapon, fb_items::Slot::Mainhand).unwrap();
+            let holder = inventory.add(fb_items::roll_item(holder, 3).unwrap());
+            inventory.wear(holder, fb_items::Slot::Back).unwrap();
+            for seed in 0..count {
+                let piece = inventory.add(fb_items::roll_item(ammo, 100 + seed as u32).unwrap());
+                inventory.stow(piece).unwrap();
+            }
+            holder
+        };
+        (app, player, rat, holder)
+    }
+
+    fn left_mouse(app: &mut App, down: bool) {
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        if down { mouse.press(MouseButton::Left) } else { mouse.release(MouseButton::Left) }
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+    }
+
+    fn frames(app: &mut App, n: usize) {
+        for _ in 0..n {
+            app.update();
+        }
+    }
+
+    fn held(app: &App, holder: crate::inventory::ItemId) -> usize {
+        app.world().resource::<Inventory>().contents_count(holder)
+    }
+
+    #[test]
+    fn a_bow_draws_on_a_hold_looses_on_release_and_the_twenty_first_attack_swings() {
+        let (mut app, player, _, quiver) = archer("Bow", 7, "Quiver", "Arrow", 20, 60.0);
+        frames(&mut app, 2);
+        for shot in 0..20 {
+            left_mouse(&mut app, true);
+            assert_eq!(held(&app, quiver), 19 - shot, "the arrow is drawn from the quiver as the bow is nocked");
+            assert!(app.world().get::<swing::Swing>(player).is_none(), "drawn, not swung");
+            frames(&mut app, 30);
+            assert!(app.world().resource::<shoot::Marksman>().drawn() > 0.4);
+            left_mouse(&mut app, false);
+            assert!(app.world().resource::<shoot::Marksman>().nocked.is_none());
+            frames(&mut app, 2);
+        }
+        assert_eq!(held(&app, quiver), 0, "all twenty were loosed");
+        assert_eq!(app.world().resource::<Inventory>().item(app.world().resource::<Inventory>().worn(fb_items::Slot::Mainhand).unwrap()).map(|i| matches!(&i.shape, armory::Item::Bow(b) if !b.arrow.on)), Some(true), "no arrow on the string");
+        left_mouse(&mut app, true);
+        assert!(app.world().get::<swing::Swing>(player).is_some(), "with none left it swings as a club");
+    }
+
+    #[test]
+    fn a_loosed_arrow_is_a_real_item_that_ends_up_on_the_floor_of_an_open_cell() {
+        use crate::inventory::{FloorChange, FloorChanges};
+        let (mut app, player, rat, quiver) = archer("Bow", 7, "Quiver", "Arrow", 1, 60.0);
+        // The rat is out of the way of what the delver faces.
+        app.world_mut().entity_mut(rat).despawn();
+        // At the start, facing down its corridor.
+        let (sx, sy, facing) = app.world().resource::<crate::play::CurrentLevel>().0.start();
+        let start = Vec3::from_array(fb_level::Level::world(sx as f32 + 0.5, sy as f32 + 0.5));
+        *app.world_mut().get_mut::<Transform>(player).unwrap() = Transform::from_translation(start).with_rotation(Quat::from_rotation_y(facing.yaw()));
+        frames(&mut app, 2);
+        let arrow = app.world().resource::<Inventory>().grid(quiver).unwrap().entries()[0].id;
+        left_mouse(&mut app, true);
+        frames(&mut app, 70);
+        left_mouse(&mut app, false);
+        frames(&mut app, 400);
+        let changes = &app.world().resource::<FloorChanges>().0;
+        let Some(FloorChange::SetDownAt(id, at, _)) = changes.iter().find(|c| matches!(c, FloorChange::SetDownAt(id, ..) if *id == arrow)).copied() else { panic!("the arrow never came to rest: {changes:?}") };
+        assert_eq!(id, arrow);
+        let level = &app.world().resource::<crate::play::CurrentLevel>().0;
+        assert!(level.is_open(at.x.floor() as i32, at.y.floor() as i32), "{at}");
+        assert!(app.world().resource::<Inventory>().item(arrow).is_some(), "the same item");
+        assert_eq!(app.world().resource::<Inventory>().location(arrow), Some(crate::inventory::Location::Loose));
+        let flying = app.world_mut().query::<&shoot::Projectile>().iter(app.world()).count();
+        assert_eq!(flying, 0);
+    }
+
+    #[test]
+    fn no_speed_carries_a_shot_through_a_wall() {
+        use crate::inventory::{FloorChange, FloorChanges};
+        for speed in [300.0, 600.0, 2400.0, 9000.0] {
+            let (mut app, _, rat, _) = archer("Bow", 7, "Quiver", "Arrow", 0, 60.0);
+            app.world_mut().entity_mut(rat).despawn();
+            let (sx, sy, _) = app.world().resource::<crate::play::CurrentLevel>().0.start();
+            let start = Vec3::from_array(fb_level::Level::world(sx as f32 + 0.5, sy as f32 + 0.5)) + Vec3::Y * 8.0;
+            for (i, dir) in [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z].into_iter().enumerate() {
+                let item = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Arrow", i as u32).unwrap());
+                let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 0, to_hit: 0, dice: Some((1, 6)), bonus: 0, draw: 1.0, odds: fb_character::combat::Odds::Even };
+                app.world_mut().spawn((shoot::Projectile { item, velocity: dir * speed, origin: start, age: 0.0, shot, passed: vec![] }, Transform::from_translation(start)));
+            }
+            frames(&mut app, 600);
+            let level = app.world().resource::<crate::play::CurrentLevel>().0.clone();
+            let changes = app.world().resource::<FloorChanges>().0.clone();
+            assert_eq!(changes.len(), 4, "speed {speed}: {changes:?}");
+            for change in changes {
+                let FloorChange::SetDownAt(_, at, _) = change else { panic!() };
+                assert!(level.is_open(at.x.floor() as i32, at.y.floor() as i32), "speed {speed}: came to rest inside rock at {at}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_arrow_into_a_rat_rolls_the_ranged_attack_sticks_and_lies_beside_the_corpse() {
+        use crate::inventory::{FloorChange, FloorChanges};
+        let (mut app, _, rat, _) = archer("Bow", 7, "Quiver", "Arrow", 0, 60.0);
+        frames(&mut app, 2);
+        easy_to_hit(&mut app, rat);
+        let at = app.world().get::<Transform>(rat).unwrap().translation;
+        let arrow = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Arrow", 4).unwrap());
+        let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 3, to_hit: 0, dice: Some((1, 6)), bonus: 0, draw: 1.0, odds: fb_character::combat::Odds::Even };
+        let origin = at - Vec3::X * 12.0 + Vec3::Y * 1.0;
+        app.world_mut().spawn((shoot::Projectile { item: arrow, velocity: Vec3::X * 600.0, origin, age: 0.0, shot, passed: vec![] }, Transform::from_translation(origin)));
+        let mut frames_run = 0;
+        while app.world().get::<feedback::Corpse>(rat).is_none() {
+            app.update();
+            frames_run += 1;
+            assert!(frames_run < 120, "the arrow never felled the rat");
+        }
+        let stuck: Vec<_> = app.world_mut().query::<(&shoot::Stuck, &ChildOf)>().iter(app.world()).map(|(s, c)| (*s, c.parent())).collect();
+        // It is in the body, then, as the body falls, beside it.
+        frames(&mut app, 4);
+        let stuck_now = app.world_mut().query::<&shoot::Stuck>().iter(app.world()).count();
+        assert_eq!(stuck_now, 0, "it drops with the body");
+        let inventory = app.world().resource::<Inventory>();
+        let changes = &app.world().resource::<FloorChanges>().0;
+        match stuck.as_slice() {
+            [(s, parent)] => {
+                assert_eq!((s.item, *parent), (arrow, rat));
+                if s.broken {
+                    assert!(inventory.item(arrow).is_none(), "a broken one is gone");
+                    assert!(changes.is_empty());
+                } else {
+                    assert!(changes.iter().any(|c| matches!(c, FloorChange::SetDownAt(..))), "a whole one lies beside the body");
+                }
+            }
+            // Already dropped by the time the rat showed as a corpse.
+            [] => assert!(inventory.item(arrow).is_none() || changes.iter().any(|c| matches!(c, FloorChange::SetDownAt(..)))),
+            more => panic!("{more:?}"),
+        }
+    }
+
+    #[test]
+    fn a_crossbow_fires_on_a_press_then_waits_for_a_reload_and_a_heavy_one_takes_longer() {
+        let sides = |seed: u32| fb_items::roll_item("Crossbow", seed).unwrap().profile.stats.damage.unwrap().sides;
+        let light = (1..300).find(|&s| sides(s) == 8).expect("a light crossbow");
+        let heavy = (1..300).find(|&s| sides(s) == 10).expect("a heavy crossbow");
+        let (mut app, player, _, case) = archer("Crossbow", light, "Bolt case", "Bolt", 5, 60.0);
+        frames(&mut app, 2);
+        // Loaded by nothing yet: a press only says so.
+        left_mouse(&mut app, true);
+        assert!(app.world().get::<swing::Swing>(player).is_none(), "with bolts worn it does not club");
+        assert!(app.world().resource::<shoot::Marksman>().nocked.is_none());
+        assert_eq!(held(&app, case), 5);
+        left_mouse(&mut app, false);
+        let reload = |app: &mut App| -> f32 {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyR);
+            app.update();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::KeyR);
+            keys.clear();
+            let total = app.world().resource::<shoot::Marksman>().reload.expect("reloading").total;
+            let mut frames_run = 0;
+            while app.world().resource::<shoot::Marksman>().nocked.is_none() {
+                app.update();
+                frames_run += 1;
+                assert!(frames_run < 400);
+            }
+            total
+        };
+        let light_time = reload(&mut app);
+        assert_eq!(held(&app, case), 4, "a bolt is laid from the case");
+        let crossbow = |app: &App| {
+            let inventory = app.world().resource::<Inventory>();
+            match inventory.item(inventory.worn(fb_items::Slot::Mainhand).unwrap()).map(|i| &i.shape) {
+                Some(armory::Item::Crossbow(c)) => (c.spanned, c.arrow.on),
+                other => panic!("{other:?}"),
+            }
+        };
+        frames(&mut app, 2);
+        assert_eq!(crossbow(&app), (true, true), "spanned with a bolt on the deck");
+        left_mouse(&mut app, true);
+        left_mouse(&mut app, false);
+        frames(&mut app, 2);
+        assert!(app.world().resource::<shoot::Marksman>().nocked.is_none(), "it fired at the press");
+        assert_eq!(crossbow(&app), (false, false), "and is unspanned and empty");
+        // A second press does nothing until it is reloaded.
+        left_mouse(&mut app, true);
+        left_mouse(&mut app, false);
+        assert_eq!(held(&app, case), 4);
+        reload(&mut app);
+        left_mouse(&mut app, true);
+        assert_eq!(held(&app, case), 3, "firing, reloading and firing again spent two bolts");
+        // A heavy one takes longer.
+        let (mut app, _, _, _) = archer("Crossbow", heavy, "Bolt case", "Bolt", 5, 60.0);
+        frames(&mut app, 2);
+        let heavy_time = reload(&mut app);
+        assert!(heavy_time > light_time, "{heavy_time} vs {light_time}");
     }
 }
