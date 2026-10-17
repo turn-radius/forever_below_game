@@ -1317,8 +1317,14 @@ fn aim(
     }
 }
 
-/// F picks up the item under the crosshair ([`Inventory::pick_up`]). Something with no room for
-/// it stays where it lies.
+/// What `slot` does to the floor item `id`, from the Interactable lookup ([`crate::interact`]).
+fn floor_verb(inventory: &Inventory, id: ItemId, slot: crate::interact::Slot) -> Option<crate::interact::Verb> {
+    let target = crate::interact::item_target(inventory, id, true)?;
+    crate::interact::verbs_for(&target, &crate::interact::Delver::default()).get(slot)
+}
+
+/// Primary takes the item under the crosshair if its verb is Take ([`Inventory::pick_up`]).
+/// Something with no room for it stays where it lies.
 pub(crate) fn pick_up(
     mut commands: Commands,
     input: ActionInput,
@@ -1332,6 +1338,9 @@ pub(crate) fn pick_up(
     }
     let Some(entity) = aimed.0 else { return };
     let Ok(floor) = items.get(entity) else { return };
+    if floor_verb(&inventory, floor.id, crate::interact::Slot::Primary) != Some(crate::interact::Verb::Take) {
+        return;
+    }
     match inventory.pick_up(floor.id) {
         Ok(()) => {
             aimed.0 = None;
@@ -1341,7 +1350,7 @@ pub(crate) fn pick_up(
     }
 }
 
-/// F equips the item under the crosshair straight from the floor, without the inventory
+/// Secondary, if its verb is Equip, equips the item under the crosshair straight from the floor, without the inventory
 /// screen ([`equip_from_floor`]): into its slot, a hand or a free ring slot, swapping out what
 /// was there into a bag, or onto the floor where the new item lay. The toast says what
 /// happened, or why not.
@@ -1359,6 +1368,9 @@ pub(crate) fn equip_aimed(
         return;
     }
     let Some(floor) = aimed.0.and_then(|entity| items.get(entity).ok()) else { return };
+    if floor_verb(&inventory, floor.id, crate::interact::Slot::Secondary) != Some(crate::interact::Verb::Equip) {
+        return;
+    }
     let now = time.map_or(0.0, |t| t.elapsed_secs());
     match equip_from_floor(&mut inventory, floor.id, Vec2::new(floor.spot.x, floor.spot.y), floor.spot.yaw) {
         Ok(equipped) => {
@@ -2059,14 +2071,40 @@ mod tests {
     }
 
     #[test]
-    fn f_on_something_with_no_slot_does_nothing_and_says_so() {
+    fn g_on_something_with_no_slot_does_nothing() {
         let (mut app, _) = equipping_app();
         let (entity, bread, _) = lay_ahead(&mut app, fb_items::roll_item("Bread", 1).unwrap());
         press_g(&mut app);
         assert!(app.world().get_entity(entity).is_ok());
         assert_eq!(app.world().resource::<Inventory>().location(bread), Some(crate::inventory::Location::Loose));
         assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), 1);
-        assert_eq!(app.world().resource::<Toast>().text, crate::inventory::Refusal::NotWearable.reason());
+        assert_eq!(app.world().resource::<Toast>().text, "");
+    }
+
+    #[test]
+    fn tertiary_and_special_do_nothing_to_an_item_and_nothing_aimed_does_nothing() {
+        let (mut app, _) = equipping_app();
+        let (entity, sword, _) = lay_ahead(&mut app, fb_items::roll_item("Shortsword", 1).or_else(|| fb_items::roll_item("Dagger", 1)).unwrap());
+        for key in [KeyCode::KeyR, KeyCode::KeyT] {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.update();
+        }
+        assert!(app.world().get_entity(entity).is_ok());
+        assert_eq!(app.world().resource::<Inventory>().location(sword), Some(crate::inventory::Location::Loose));
+        // Looking away, F and G have nothing to act on either.
+        let camera = app.world_mut().query_filtered::<Entity, With<PlayerCamera>>().single(app.world()).unwrap();
+        *app.world_mut().get_mut::<Transform>(camera).unwrap() = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, EYE_HEIGHT, 10.0), Vec3::Y);
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Aimed>().0, None);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        for key in [KeyCode::KeyF, KeyCode::KeyG] {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        }
+        app.update();
+        app.update();
+        assert!(app.world().get_entity(entity).is_ok());
+        assert_eq!(app.world().resource::<Inventory>().location(sword), Some(crate::inventory::Location::Loose));
     }
 
     #[test]

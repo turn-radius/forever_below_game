@@ -24,6 +24,7 @@
 
 use fb_items::Item;
 
+use crate::keymap::Action;
 use crate::inventory::{Inventory, ItemId, Location};
 
 /// The four action slots, in the order they are shown.
@@ -37,6 +38,27 @@ pub enum Slot {
 
 impl Slot {
     pub const ALL: [Slot; 4] = [Slot::Primary, Slot::Secondary, Slot::Tertiary, Slot::Special];
+
+    /// The slot an action fires; `None` for every other action, Compare included.
+    pub fn of(action: Action) -> Option<Slot> {
+        match action {
+            Action::Primary => Some(Slot::Primary),
+            Action::Secondary => Some(Slot::Secondary),
+            Action::Tertiary => Some(Slot::Tertiary),
+            Action::Special => Some(Slot::Special),
+            _ => None,
+        }
+    }
+
+    /// The action that fires this slot.
+    pub fn action(self) -> Action {
+        match self {
+            Slot::Primary => Action::Primary,
+            Slot::Secondary => Action::Secondary,
+            Slot::Tertiary => Action::Tertiary,
+            Slot::Special => Action::Special,
+        }
+    }
 }
 
 /// What a slot can do to a target.
@@ -327,6 +349,15 @@ mod tests {
         let hidden = verbs_for(&Target::Folk, &Delver { hidden: true, ..Delver::default() });
         assert_eq!(row(hidden), (Some(Verb::Talk), Some(Verb::Barter), Some(Verb::Steal), None));
         assert!(!hidden.compare);
+    }
+
+    #[test]
+    fn slots_and_actions_map_both_ways() {
+        for slot in Slot::ALL {
+            assert_eq!(Slot::of(slot.action()), Some(slot));
+        }
+        assert_eq!(Slot::of(Action::Compare), None);
+        assert_eq!(Slot::of(Action::Sprint), None);
     }
 
     #[test]

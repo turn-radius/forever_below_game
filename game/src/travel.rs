@@ -208,17 +208,20 @@ fn end_the_run(mut commands: Commands, mut abyss: ResMut<Abyss>) {
     commands.remove_resource::<Journey>();
 }
 
-/// F at a stair uses it.
+/// F at a stair uses it, unless an item or container is under the crosshair.
 fn take_stair(
     input: ActionInput,
     level: Res<CurrentLevel>,
     journey: Option<Res<Journey>>,
     fallen: Option<Res<Fallen>>,
+    aimed: Option<Res<crate::carry::Aimed>>,
     players: Query<&Transform, With<Player>>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut used: MessageWriter<UseStair>,
 ) {
-    if journey.is_some() || fallen.is_some() || !input.just_pressed(Action::Primary) {
+    // An item or container under the crosshair takes the press instead.
+    let aiming = aimed.is_some_and(|a| a.0.is_some());
+    if journey.is_some() || fallen.is_some() || aiming || !input.just_pressed(Action::Primary) {
         return;
     }
     let (Some(feet), Some(eye)) = (players.iter().next(), cameras.iter().next()) else { return };
