@@ -592,7 +592,7 @@ mod tests {
         assert_eq!(app.world().get::<Slowed>(player), Some(&Slowed(HELD_PACE)));
         app.update();
         assert!(app.world().get::<Constricted>(player).is_some(), "still held");
-        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false });
+        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false, critical: false });
         app.update();
         assert!(app.world().get::<Constricted>(player).is_none());
         assert!(app.world().get::<Slowed>(player).is_none());

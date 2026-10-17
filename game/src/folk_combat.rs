@@ -54,6 +54,7 @@ use procgen_rng::Mulberry32;
 use crate::character::Class;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 
+use crate::combat::callouts::{Callout, Outcome};
 use crate::combat::feedback::{Corpse, Flinches, Looted, Struck, collapse_share, knockback_for, laid_back};
 use crate::combat::swing::SwungAt;
 use crate::combat::{ArmourClass, Health, Weapon, first_level_hit_points_explained_for, swing_time};
@@ -79,6 +80,7 @@ impl Plugin for FolkCombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(HostilityPlugin)
             .add_message::<Struck>()
+            .add_message::<Callout>()
             .add_message::<crate::combat::feedback::Slain>()
             .add_message::<SwungAt>()
             .add_message::<AttackOnDelver>()
@@ -142,7 +144,7 @@ fn debug_provoke(
         && *since >= SLAY_AT
         && let Some((entity, _, at)) = find(index)
     {
-        struck.write(Struck { target: entity, damage: 1000, from: at.translation.xz() + (at.rotation * Vec3::Z).xz() * 10.0, bludgeoning: false });
+        struck.write(Struck { target: entity, damage: 1000, from: at.translation.xz() + (at.rotation * Vec3::Z).xz() * 10.0, bludgeoning: false, critical: false });
         debug.done[1] = true;
     }
 }
@@ -291,11 +293,13 @@ pub fn take_folk_blows(
     flinches: Flinches,
     mut slain: MessageWriter<crate::combat::feedback::Slain>,
     mut folk: Query<(&Denizen, &Transform, &mut Health), Without<Corpse>>,
+    mut callouts: MessageWriter<Callout>,
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     for blow in struck.read() {
         let Ok((denizen, at, mut health)) = folk.get_mut(blow.target) else { continue };
         let fell = health.hurt(blow.damage);
+        callouts.write(Callout { target: blow.target, outcome: Outcome::Hit { damage: blow.damage, critical: blow.critical, fatal: fell } });
         let away = (at.translation.xz() - blow.from).normalize_or_zero();
         let push = away * knockback_for(fb_creatures::Size::Medium) * tuning.combat.knockback_scale;
         commands.entity(blow.target).insert(flinches.of(blow.target, push, &tuning.combat));
@@ -697,7 +701,7 @@ pub(crate) mod tests {
     fn at_0_hit_points_a_folk_dies_and_falls_where_it_stood() {
         let (mut app, _, folk) = folk_fight(9.0);
         let stood = *app.world().get::<Transform>(folk).unwrap();
-        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: stood.translation.xz() - Vec2::X * 9.0, bludgeoning: false });
+        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: stood.translation.xz() - Vec2::X * 9.0, bludgeoning: false, critical: false });
         for _ in 0..90 {
             app.update();
         }
@@ -772,7 +776,7 @@ pub(crate) mod tests {
         let expected = crate::hostility::who_turns(first, &kin, &level, |x, y| !level.is_open(x, y));
         assert!(expected.len() > 1, "someone of the faction sees it");
         let at = app.world().get::<Transform>(first).unwrap().translation.xz();
-        app.world_mut().write_message(Struck { target: first, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false });
+        app.world_mut().write_message(Struck { target: first, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false });
         for _ in 0..3 {
             app.update();
         }
@@ -865,7 +869,7 @@ pub(crate) mod tests {
         assert!(matches!(routine.phase, crate::folk_routine::Phase::Walk { goal } if goal == home) || app.world().get::<Transform>(folk).unwrap().translation.xz().distance(home) < 2.0 * CELL, "{:?}", routine.phase);
         // Struck again, they turn again.
         let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
-        app.world_mut().write_message(Struck { target: folk, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false });
+        app.world_mut().write_message(Struck { target: folk, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false });
         for _ in 0..3 {
             app.update();
         }
@@ -919,7 +923,7 @@ pub(crate) mod tests {
 
     fn strike_down(app: &mut App, folk: Entity) {
         let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
-        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: at - Vec2::X * 9.0, bludgeoning: false });
+        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false });
         for _ in 0..120 {
             app.update();
         }
