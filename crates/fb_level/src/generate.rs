@@ -32,6 +32,7 @@ const LOOT: &[(Family, u32)] = &[
     (Family::Lantern, 2),
     (Family::Bags, 6),
     (Family::Sundry, 6),
+    (Family::Writing, 4),
     (Family::Dagger, 5),
     (Family::Club, 4),
     (Family::Sword, 4),
@@ -1036,6 +1037,12 @@ mod tests {
     }
 
     #[test]
+    fn writing_lies_in_generated_levels() {
+        let found = (1..=32).flat_map(|s| generate(s, 1).items).filter(|i| i.family == Family::Writing).count();
+        assert!(found > 0, "no writing in 32 first levels");
+    }
+
+    #[test]
     fn no_chest_lies_loose() {
         for seed in 1..=32 {
             assert!(generate(seed, 1).items.iter().all(|i| i.family != Family::Chests), "seed {seed}: a loose chest");
@@ -1069,16 +1076,17 @@ mod tests {
     fn the_first_level_is_byte_identical_to_before_styles() {
         // Hashes taken from the generator before level styles were added. Seeds 7, 64, 4242 and
         // u32::MAX were retaken when giant rats left the first level (`GIANTS_FROM_DEPTH`): their
-        // giant packs are rats now.
+        // giant packs are rats now. All eight were retaken when writing joined the loot table
+        // (`Family::Writing`), which moves the weighted pick of every floor item.
         let before = [
-            (0u32, 0x523bffae15ad5cb1u64),
-            (1, 0x7ee4f89ce92c028b),
-            (2, 0x5b686441f52e31ee),
-            (7, 0xb6d25e179d033b45),
-            (64, 0x25e194f996828a82),
-            (1207, 0x776289fa5d0bf5c3),
-            (4242, 0x5552bc2d769f9908),
-            (u32::MAX, 0xf2b661221fd9b474),
+            (0u32, 0xcd1207f1bef25959u64),
+            (1, 0xf0a8fcd72c82b8fd),
+            (2, 0xbf0eb1176c236a9e),
+            (7, 0x8bec21761e49023e),
+            (64, 0x6deb8de4209e00f2),
+            (1207, 0x2a9bbf9ffefaea60),
+            (4242, 0x983da587e949876d),
+            (u32::MAX, 0xeae23577e303ef18),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

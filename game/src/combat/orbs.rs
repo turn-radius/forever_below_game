@@ -29,7 +29,7 @@ use bevy::{
 
 use super::Health;
 use super::vitals::{FLASH_CAP, VitalsRoot, flash_strength};
-use crate::character::{DelverMana, DelverPoison, DelverStamina};
+use crate::character::{DelverEffects, DelverMana, DelverStamina};
 use crate::play::{DelveSystems, Player};
 use crate::ui::FRAME_GOLD;
 
@@ -368,8 +368,9 @@ fn spawn_orbs(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>
 /// pools. Stamina stays full until the delver has one. Orbs are only touched when a value
 /// differs.
 #[allow(clippy::type_complexity)]
-fn read_vitals(players: Query<(Option<&Health>, Option<&DelverStamina>, Option<&DelverMana>, Has<DelverPoison>), With<Player>>, mut orbs: Query<&mut Orb>) {
-    let Some((health, stamina, mana, poisoned)) = players.iter().next() else { return };
+fn read_vitals(players: Query<(Option<&Health>, Option<&DelverStamina>, Option<&DelverMana>, Option<&DelverEffects>), With<Player>>, mut orbs: Query<&mut Orb>) {
+    let Some((health, stamina, mana, effects)) = players.iter().next() else { return };
+    let poisoned = effects.is_some_and(|e| e.poisoned_hours().is_some());
     for mut orb in &mut orbs {
         let poisoned = poisoned && orb.kind == OrbKind::Life;
         if orb.poisoned != poisoned {
@@ -561,7 +562,7 @@ mod tests {
     fn a_poisoned_delvers_life_orb_turns_green_and_eases_back_to_red() {
         let (mut app, player) = delve();
         let red = orb(&mut app, OrbKind::Life).1.surface;
-        app.world_mut().entity_mut(player).insert(DelverPoison(fb_character::poison::Poisoned::for_hours(1.0)));
+        app.world_mut().entity_mut(player).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
         run(&mut app, 10);
         let turning = orb(&mut app, OrbKind::Life);
         assert!(turning.0.poison > 0.0 && turning.0.poison < 1.0, "easing, not jumping: {}", turning.0.poison);
@@ -571,7 +572,7 @@ mod tests {
         assert_eq!((poisoned.poison, style.surface), (1.0, green));
         assert!(style.surface.green > style.surface.red, "green: {:?}", style.surface);
         assert_eq!(orb(&mut app, OrbKind::Stamina).1.surface, OrbKind::Stamina.liquids_at(0.0).0, "only the life orb turns");
-        app.world_mut().entity_mut(player).remove::<DelverPoison>();
+        app.world_mut().entity_mut(player).remove::<DelverEffects>();
         run(&mut app, 240);
         let (cured, style) = orb(&mut app, OrbKind::Life);
         assert_eq!((cured.poison, style.surface), (0.0, red), "back to red when it wears off");
