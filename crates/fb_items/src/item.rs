@@ -60,6 +60,10 @@ impl Item {
         if self.shape.family() == armory::Family::Lantern {
             return vec![made_for, Slot::Mainhand, Slot::Hip];
         }
+        // A quiver or bolt case hangs from the belt at the hip, or rides on the back.
+        if matches!(self.shape.family(), armory::Family::Quiver | armory::Family::BoltCase) {
+            return vec![Slot::Hip, Slot::Back];
+        }
         match made_for {
             Slot::Ring1 | Slot::Ring2 => vec![Slot::Ring1, Slot::Ring2],
             Slot::Mainhand if self.profile.tags.contains(&Tag::Weapon) => vec![Slot::Mainhand, Slot::Offhand],
@@ -291,9 +295,7 @@ mod tests {
 
     #[test]
     fn loot_rolls_a_base_of_its_family() {
-        // Ammunition and its holders have no loot base in `data/` yet.
-        let loot = |f: &&armory::Family| !matches!(f, armory::Family::Arrow | armory::Family::Bolt | armory::Family::Quiver | armory::Family::BoltCase);
-        for &family in armory::Item::PORTED.iter().filter(loot) {
+        for &family in armory::Item::PORTED.iter() {
             for seed in [5, 1207] {
                 let item = roll_loot(family, seed, Odds::default()).unwrap();
                 assert_eq!(item.shape.family(), family);

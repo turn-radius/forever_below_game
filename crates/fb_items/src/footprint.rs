@@ -30,4 +30,15 @@ pub struct Grid {
     pub rows: u8,
     /// What the grid is called on screen ("Belt pouch").
     pub label: String,
+    /// The families it takes; empty takes anything. A quiver takes arrows and a bolt case
+    /// bolts, and later holders (scabbards, key rings, scroll cases) can name theirs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepts: Vec<armory::Family>,
+}
+
+impl Grid {
+    /// Whether an item of `family` may be put in this grid.
+    pub fn takes(&self, family: armory::Family) -> bool {
+        self.accepts.is_empty() || self.accepts.contains(&family)
+    }
 }

@@ -291,10 +291,10 @@ mod tests {
         // The hip sits beside the belt, on its side of the doll and level with it.
         let (belt, hip) = (slot_places().iter().find(|p| p.slot == Slot::Belt).unwrap(), slot_places().iter().find(|p| p.slot == Slot::Hip).unwrap());
         assert_eq!((hip.side, hip.y_percent, hip.size), (belt.side, belt.y_percent, belt.size));
-        assert_eq!(base_groups().len(), 25);
+        assert_eq!(base_groups().len(), 26);
         assert_eq!(food_descriptions().len(), 12);
         assert_eq!((syllables().len(), factions().len(), places().len()), (6, 7, 9));
-        assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 63);
+        assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 67);
     }
 
     #[test]
