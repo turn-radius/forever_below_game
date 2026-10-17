@@ -8,7 +8,7 @@
 //! moving`, or `--skeleton --seed 7 --motion swing [--bare]` ([`CreatureChoice::from_args`]).
 
 use bevy::{camera::Exposure, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera};
-use fb_creatures::pose::{self, ArmStance, CentipedePose, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
+use fb_creatures::pose::{self, ArmStance, BatPose, CentipedePose, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::skeleton::SkeletonDims;
 use fb_creatures::{Creature, SkeletonGear, Species};
 
@@ -52,7 +52,10 @@ impl ViewMotion {
         let alias = match name {
             "stand" => Some(ViewMotion::Still),
             "walk" => Some(ViewMotion::Moving),
-            "swing" | "swinging" => Some(ViewMotion::Striking),
+            "swing" | "swinging" | "bite" => Some(ViewMotion::Striking),
+            "hang" | "roost" => Some(ViewMotion::Still),
+            "glide" => Some(ViewMotion::Rearing),
+            "flap" | "fly" => Some(ViewMotion::Moving),
             _ => None,
         };
         alias.or_else(|| ViewMotion::ALL.into_iter().find(|m| m.key() == name))
@@ -101,6 +104,8 @@ pub fn parse_species(name: &str) -> Option<Species> {
         "troll" => Some(Species::Troll),
         "jackalope" => Some(Species::Jackalope),
         "giant_centipede" | "centipede" => Some(Species::GiantCentipede),
+        "bat" => Some(Species::Bat),
+        "giant_bat" => Some(Species::GiantBat),
         _ => None,
     }
 }
@@ -125,7 +130,7 @@ impl CreatureChoice {
                 "--bare" => choice.gear = false,
                 "--species" => {
                     let name = value()?;
-                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton, giant_spider, troll, jackalope, giant_centipede"))?;
+                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton, giant_spider, troll, jackalope, giant_centipede, bat, giant_bat"))?;
                 }
                 "--seed" => {
                     let seed = value()?;
@@ -252,6 +257,10 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
         // Sat up it stands well taller than at rest.
         size.y *= 1.7;
     }
+    // A bat is shown in the air, its middle at 1.5 body lengths up.
+    if let Creature::Bat(bat) = &creature {
+        size.y = 3.0 * bat.length;
+    }
     let appearance = ItemAppearance { seed: choice.seed, ..default() };
     let pivot = commands.spawn((Transform::from_xyz(0.0, 0.0, 0.0), Visibility::default())).id();
     let mut bones: Vec<Entity> = Vec::new();
@@ -331,6 +340,18 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
                 };
                 pose::centipede(centipede, &CentipedePose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, rear, bite: strike, jaw: strike, look: 0.0 })
             }
+            Creature::Bat(bat) => {
+                // Still hangs, moving beats its wings, rearing glides, striking beats and bites.
+                let hz = pose::bat_beat_hz(bat);
+                shown.cycle = (shown.cycle + dt * hz * std::f32::consts::TAU) % std::f32::consts::TAU;
+                let (roost, power) = match choice.motion {
+                    ViewMotion::Still => (1.0, 0.0),
+                    ViewMotion::Moving | ViewMotion::Striking => (0.0, 1.0),
+                    ViewMotion::Rearing => (0.0, 0.0),
+                };
+                let height = 1.5 * bat.length;
+                pose::bat(bat, &BatPose { flap: shown.cycle, power, roost, height, bite: strike, time: t, ..default() })
+            }
             Creature::Skeleton(skeleton) => {
                 let dims = shown.dims.get_or_insert_with(|| skeleton.dims());
                 shown.cycle = (shown.cycle + speed * dt / pose::skeleton_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
@@ -401,6 +422,7 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         Creature::Troll(t) => troll_look(t),
         Creature::Jackalope(j) => format!("{:?}, {:.0} cm, antlers {}+{} tines", j.colouring, j.length * 10.0, j.tines[0], j.tines[1]),
         Creature::Centipede(c) => format!("{:?}, {:?}, {} plates, {:.0} cm", c.colouring, c.banding, c.segments, c.length * 10.0),
+        Creature::Bat(b) => format!("{:?}, {:?} wings, {:?} ears, {:?} nose, wingspan {:.0} cm", b.colouring, b.membrane, b.ear_shape, b.nose, b.wingspan * 10.0),
     };
     let motion = if choice.species.is_skeleton() || choice.species.is_troll() { skeleton_motion(choice.motion) } else { format!("{:?}", choice.motion) };
     let line = format!(

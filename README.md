@@ -262,6 +262,12 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[creatures.size]` | `viper` | 1.0 | Poisonous snakes, as a multiple. |
 | `[creatures.size]` | `constrictor` | 1.0 | Constrictor snakes, as a multiple. |
 | `[creatures.size]` | `skeleton` | 1.0 | Skeletons, as a multiple. |
+| `[creatures.size]` | `giant_spider` | 1.0 | Giant spiders, as a multiple. |
+| `[creatures.size]` | `troll` | 1.0 | Trolls, as a multiple. |
+| `[creatures.size]` | `jackalope` | 1.0 | Jackalopes, as a multiple. |
+| `[creatures.size]` | `giant_centipede` | 1.0 | Giant centipedes, as a multiple. |
+| `[creatures.size]` | `bat` | 1.0 | Bats, as a multiple. |
+| `[creatures.size]` | `giant_bat` | 1.0 | Giant bats, as a multiple. |
 | `[combat]` | `reach_scale` | 1.0 | How far your blows reach, as a multiple of the weapon's own reach. |
 | `[combat]` | `hit_cone_degrees` | 50.0 | Half the angle of the cone ahead a blow can land in, in degrees either side of the crosshair. |
 | `[combat]` | `flash_hold` | 0.12 | Seconds a struck creature's flash holds at full. |

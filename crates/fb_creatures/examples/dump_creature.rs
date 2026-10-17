@@ -17,8 +17,10 @@ fn main() {
         Some("troll") => Species::Troll,
         Some("jackalope") => Species::Jackalope,
         Some("centipede") => Species::GiantCentipede,
+        Some("bat") => Species::Bat,
+        Some("giant_bat") => Species::GiantBat,
         _ => {
-            eprintln!("usage: dump_creature <rat|giant_rat|viper|constrictor|skeleton|giant_spider|troll|jackalope|centipede> [seed]");
+            eprintln!("usage: dump_creature <rat|giant_rat|viper|constrictor|skeleton|giant_spider|troll|jackalope|centipede|bat|giant_bat> [seed]");
             std::process::exit(2);
         }
     };

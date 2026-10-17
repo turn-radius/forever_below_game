@@ -85,6 +85,10 @@ troll = 1.0
 jackalope = 1.0
 # Giant centipedes, as a multiple.
 giant_centipede = 1.0
+# Bats, as a multiple.
+bat = 1.0
+# Giant bats, as a multiple.
+giant_bat = 1.0
 
 [combat]
 # How far your blows reach, as a multiple of the weapon's own reach.

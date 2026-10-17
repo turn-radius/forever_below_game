@@ -244,6 +244,7 @@ pub fn notice_range(species: Species, scale: f32) -> f32 {
 pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => player_radius + 0.55 * rat.length * critter.size,
+        Creature::Bat(bat) => player_radius + 0.55 * bat.length * critter.size,
         Creature::Snake(snake) => player_radius + critter.radius + 0.35 * snake.dims().neck * critter.size,
         // Arm and what it holds, as worked out once at spawn: a spear outreaches a dagger.
         Creature::Skeleton(skeleton) => player_radius + critter.kit.as_ref().map_or_else(|| 0.45 * skeleton.height(), |k| k.reach) * critter.size,
@@ -265,6 +266,7 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
 pub fn body_radius(critter: &Critter) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => 0.3 * rat.length * critter.size,
+        Creature::Bat(bat) => 0.25 * bat.wingspan * critter.size,
         Creature::Snake(_) => critter.radius.min(SNAKE_SQUEEZE),
         Creature::Jackalope(jackalope) => 0.3 * jackalope.length * critter.size,
         Creature::Skeleton(skeleton) => 0.12 * critter.kit.as_ref().map_or_else(|| skeleton.height(), |k| k.height) * critter.size,

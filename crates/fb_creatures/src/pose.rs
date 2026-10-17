@@ -28,6 +28,10 @@
 //!   swing against the legs, the ribcage turns against the hips; a swing winds the right arm up
 //!   over the shoulder, throws it through the blow and brings it back, turning the ribcage and
 //!   leaning into it with the feet planted.
+//! - [`bat`]: a wingbeat, a glide, a hang and a bite. The arm turns up and down on the shoulder
+//!   while the forearm and the hand fold on hinges along the membrane's own seams, so the wing
+//!   folds in on the upstroke and spreads on the downstroke without opening a gap; a roosting
+//!   bat hangs head down by its feet with its wings folded flat against it.
 //!
 //! - [`troll`]: the skeleton's walk and swing on a troll's stooped joints. The stoop is in the
 //!   troll's rest pose ([`crate::troll`] moves the joints), so the legs, pelvis and trunk are the
@@ -40,6 +44,7 @@ use armory::geom::vec3::{self, Mat3, V3};
 use fb_body::{Placement, Side};
 use std::f32::consts::{PI, TAU};
 
+use crate::bat::{BatState, bone as bat_bone};
 use crate::centipede::{CentipedeState, bone as centipede_bone};
 use crate::jackalope::{EAR_SPLIT, JackalopeState, REST_PITCH, bone as jackalope_bone, ear_bow};
 use crate::rat::{LEGS, RatState, TAIL_BONES, bone as rat_bone};
@@ -1816,4 +1821,129 @@ mod centipede_tests {
         assert_eq!(centipede(&state, &pose).len(), state.bone_count());
         assert!(centipede_stride(&state) > state.girth);
     }
+}
+
+// Bats
+
+/// How a bat is flying or roosting at a moment.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BatPose {
+    /// The wingbeat's phase, radians: 0 the top of the upstroke, half a turn the bottom of the
+    /// downstroke. One turn per beat ([`bat_beat_hz`] beats a second).
+    pub flap: f32,
+    /// How hard it beats: 0 gliding on spread wings, 1 beating.
+    pub power: f32,
+    /// 0 flying, 1 hanging head down by its feet with its wings folded round it.
+    pub roost: f32,
+    /// How folded the wings are: 0 spread, 1 folded (a roosting bat's, whatever its roost).
+    pub tuck: f32,
+    /// Height of the body's middle over the creature's root, world units.
+    pub height: f32,
+    /// A bite's lunge, 0 to 1 at full stretch: the head thrown forward and the jaw open.
+    pub bite: f32,
+    /// How far the nose is raised, radians (negative dives).
+    pub pitch: f32,
+    /// How far it banks toward its left (+X), radians; turned over (a fallen bat) at pi.
+    pub bank: f32,
+    /// How far the head turns toward its left, radians.
+    pub look: f32,
+    /// Seconds, for what it does hanging and gliding: breathing, the head's sway.
+    pub time: f32,
+}
+
+impl Default for BatPose {
+    /// Gliding level on spread wings: the rest pose.
+    fn default() -> Self {
+        BatPose { flap: 0.0, power: 0.0, roost: 0.0, tuck: 0.0, height: 0.0, bite: 0.0, pitch: 0.0, bank: 0.0, look: 0.0, time: 0.0 }
+    }
+}
+
+/// Wingbeats a second when it beats flat out: the small bat's quick, the giant bat's slow. Our
+/// own, set so a beat reads at sixty frames a second.
+pub fn bat_beat_hz(state: &BatState) -> f32 {
+    if state.species == crate::Species::GiantBat { 2.2 } else { 4.2 }
+}
+
+/// How far the nose points down hanging: just short of straight down, radians.
+const ROOST_PITCH: f32 = 1.5;
+/// A gliding wing's rise from level, radians: a shallow V.
+const GLIDE_DIHEDRAL: f32 = 0.2;
+/// A beating wing's middle rise from level and its swing either side, radians.
+const BEAT_MIDDLE: f32 = 0.1;
+const BEAT_SWING: f32 = 0.85;
+
+/// Reflects a rotation across the plane x = 0: the left side's twin of a right side's turn.
+fn mirrored(m: &Mat3) -> Mat3 {
+    let flip = Mat3::from_scale([-1.0, 1.0, 1.0]);
+    flip.mul_mat(m).mul_mat(&flip)
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+/// Every bone's placement on its parent for `pose`, in the bat's [`crate::Rig`] order.
+///
+/// A wing beats about the line of the body: the arm turns up and down on the shoulder while the
+/// forearm and the hand fold on their hinges ([`crate::bat::WingDims`]), so the upstroke folds
+/// the wing in and the downstroke spreads it, the hand lagging a little behind the arm. Gliding,
+/// the wings are held in a shallow V. Roosting, the body hangs head down by its feet, the head
+/// curled up to look out, and the wings fold flat against the body.
+pub fn bat(state: &BatState, pose: &BatPose) -> Vec<Placement> {
+    let d = state.dims();
+    let l = d.length;
+    let roost = pose.roost.clamp(0.0, 1.0);
+    let tuck = pose.tuck.clamp(0.0, 1.0).max(roost);
+    let power = pose.power.clamp(0.0, 1.0) * (1.0 - tuck);
+    let t = pose.time;
+    let (s, c) = pose.flap.sin_cos();
+    let mut out = vec![Placement::IDENTITY; bat_bone::COUNT];
+
+    // The body: heaved up by the downstroke, nosing about its flight path, or hung upside down.
+    let heave = 0.05 * l * power * s;
+    let nose = lerp(pose.pitch + 0.05 * power * c, -ROOST_PITCH, roost);
+    let sway = roost * 0.05 * (0.9 * t).sin() + (1.0 - roost) * (1.0 - power) * 0.03 * (0.7 * t).sin();
+    // Nose up is a turn about creature X that takes +Z toward +Y, a negative one.
+    let rotation = Mat3::from_axis_angle(vec3::Z, -(pose.bank + sway)).mul_mat(&Mat3::from_axis_angle(vec3::X, -nose)).mul_mat(&spine_to_creature());
+    out[bat_bone::BODY] = Placement { rotation, origin: [0.0, pose.height + heave, 0.0] };
+
+    // The head: nose a little down flying, thrown forward to bite, curled up hanging.
+    let breath = roost * 0.05 * (1.7 * t + 0.6).sin();
+    let head_pitch = lerp(-0.12 - 0.3 * pose.bite, 1.2, roost) + breath;
+    let look = pose.look + roost * 0.5 * (0.31 * t).sin();
+    out[bat_bone::HEAD] = Placement { rotation: Mat3::from_axis_angle(vec3::Z, look).mul_mat(&Mat3::from_axis_angle(vec3::X, head_pitch)), origin: vec3::add(d.neck, [0.0, 0.12 * l * pose.bite, 0.0]) };
+    let (_, hinge) = state.mouth(&d);
+    let gape = 0.06 + 0.85 * pose.bite.clamp(0.0, 1.0).sqrt();
+    out[bat_bone::JAW] = Placement { rotation: Mat3::from_axis_angle(vec3::X, -gape), origin: hinge };
+
+    // The right wing; the left is its mirror.
+    let w = d.wing;
+    let flight_flap = lerp(GLIDE_DIHEDRAL + 0.04 * (1.3 * t).sin(), BEAT_MIDDLE + BEAT_SWING * c, power);
+    let flight_sweep = lerp(0.15, 0.18 - 0.2 * s, power);
+    let lag = (pose.flap - 0.7).sin();
+    let flight_elbow = lerp(-0.06, 0.3 * s.max(0.0) + 0.9 * s.min(0.0), power);
+    let flight_wrist = lerp(-0.12, 0.4 * lag.max(0.0) + 1.1 * lag.min(0.0), power);
+    let up = lerp(flight_flap, -1.45, tuck);
+    let back = lerp(flight_sweep, 1.1, tuck);
+    let elbow = lerp(flight_elbow, 2.9, tuck);
+    let wrist = lerp(flight_wrist, 2.9, tuck);
+    let arm = Mat3::from_axis_angle(vec3::Y, -up).mul_mat(&Mat3::from_axis_angle(vec3::Z, -back));
+    let right = [
+        Placement { rotation: arm, origin: d.shoulder },
+        Placement { rotation: Mat3::from_axis_angle(w.elbow_axis(), elbow), origin: w.elbow },
+        Placement { rotation: Mat3::from_axis_angle(w.wrist_axis(), wrist), origin: vec3::sub(w.wrist, w.elbow) },
+    ];
+    for (k, p) in right.iter().enumerate() {
+        out[bat_bone::wing(0) + k] = *p;
+        out[bat_bone::wing(1) + k] = Placement { rotation: mirrored(&p.rotation), origin: [-p.origin[0], p.origin[1], p.origin[2]] };
+    }
+
+    // The hind legs: trailing behind, splayed a little, or gripping above.
+    let flutter = (1.0 - roost) * 0.06 * power * (pose.flap + 0.5).sin();
+    let splay = lerp(0.28, 0.5, roost);
+    let tilt = lerp(0.3, -0.15, roost) + flutter;
+    let leg = Mat3::from_axis_angle(vec3::Z, splay).mul_mat(&Mat3::from_axis_angle(vec3::X, tilt));
+    out[bat_bone::LEGS] = Placement { rotation: leg, origin: d.hip };
+    out[bat_bone::LEGS + 1] = Placement { rotation: mirrored(&leg), origin: [-d.hip[0], d.hip[1], d.hip[2]] };
+    out
 }

@@ -28,7 +28,7 @@
 use armory::cond::{Condition, ConditionState};
 use bevy::{app::Propagate, light::NotShadowCaster, prelude::*};
 use fb_body::Placement;
-use fb_creatures::pose::{self, CentipedePose, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
+use fb_creatures::pose::{self, BatPose, CentipedePose, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::Creature;
 use fb_creatures::rig::{Capsule, SURFACE_PARTS};
 use fb_level::{CreatureSpot, Level};
@@ -676,6 +676,12 @@ pub fn animate(
                 }
                 places
             }
+            // Flight comes with the bats' behaviour; until then one beats its wings in place at
+            // head height.
+            Creature::Bat(bat) => {
+                let flap = (motion.time * pose::bat_beat_hz(bat) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                pose::bat(bat, &BatPose { flap, power: 1.0, height: 14.0, bite: now.strike, look: now.look, time: motion.time, ..default() })
+            }
         };
         for (entity, place) in bones.0.iter().zip(&places) {
             if let Ok(mut transform) = transforms.get_mut(*entity) {
@@ -779,6 +785,7 @@ mod tests {
                     Creature::Troll(t) => t.height(),
                     Creature::Jackalope(j) => j.length,
                     Creature::Centipede(c) => c.girth * 4.0,
+                    Creature::Bat(b) => b.length,
                 };
                 let (mut deepest, mut nearest) = (f32::MIN, f32::MAX);
                 for (bone, &entity) in rig.bones.iter().zip(&bones) {
