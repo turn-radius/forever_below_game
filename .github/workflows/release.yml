@@ -9,7 +9,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-    branches: ["chore/release-builds"]
   workflow_dispatch:
 
 permissions:
