@@ -193,7 +193,7 @@ pub struct FolkTuning {
 
 impl Default for FolkTuning {
     fn default() -> Self {
-        FolkTuning { walk_speed: 11.0, pause_min: 3.0, pause_max: 8.0, wander_radius: 90.0, notice_distance: 28.0, release_distance: 40.0, release_delay: 1.0, lose_interest_after: 25.0 }
+        FolkTuning { walk_speed: 14.0, pause_min: 3.0, pause_max: 8.0, wander_radius: 90.0, notice_distance: 28.0, release_distance: 40.0, release_delay: 1.0, lose_interest_after: 25.0 }
     }
 }
 

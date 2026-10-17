@@ -50,7 +50,7 @@ snake_chase_speed = 1.0
 
 [folk]
 # A human's unhurried walking pace, world units per second (shorter folk are slower).
-walk_speed = 11.0
+walk_speed = 14.0
 # The least seconds folk wait between walks.
 pause_min = 3.0
 # The most seconds folk wait between walks.
