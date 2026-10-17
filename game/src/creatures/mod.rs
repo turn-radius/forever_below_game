@@ -92,14 +92,24 @@ impl Critter {
     /// as its SRD 5.1 stat block prints it ([`fb_creatures::StatBlock`]: rat 10, p. 387; giant
     /// rat 12, p. 378; poisonous snake 13, p. 386; constrictor snake 12, p. 369).
     pub fn armour_class(&self) -> i32 {
-        self.kit.as_ref().map_or_else(|| self.spot.species.stat_block().armour_class, |k| k.armour_class)
+        self.armour_class_with(fb_character::rules::defaults())
+    }
+
+    /// [`Critter::armour_class`] with the stat block as `rules` have it (`data/rules.toml`).
+    pub fn armour_class_with(&self, rules: &fb_character::rules::Rules) -> i32 {
+        self.kit.as_ref().map_or_else(|| rules.creature(self.spot.species).armour_class, |k| k.armour_class)
     }
 
     /// What its bite or blow adds to the d20: the stat block's attack bonus, and the `ToHit` of a
     /// skeleton's weapon.
     pub fn to_hit(&self) -> fb_character::combat::ToHit {
+        self.to_hit_with(fb_character::rules::defaults())
+    }
+
+    /// [`Critter::to_hit`] with the attack bonus as `rules` have it.
+    pub fn to_hit_with(&self, rules: &fb_character::rules::Rules) -> fb_character::combat::ToHit {
         let weapon = self.kit.as_ref().map_or(0, |k| k.to_hit);
-        fb_character::combat::ToHit::StatBlock { attack_bonus: self.spot.species.stat_block().attack_bonus, weapon }
+        fb_character::combat::ToHit::StatBlock { attack_bonus: rules.creature(self.spot.species).attack_bonus, weapon }
     }
 
     /// Draws it `size` times as large as rolled, covering that much more floor.

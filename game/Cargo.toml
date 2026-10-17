@@ -20,3 +20,5 @@ procgen_rng = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
+# Saving the rules writes `data/rules.toml` with its comments kept.
+toml_edit = "0.25"

@@ -95,6 +95,7 @@ impl UiMaterial for EyeMaterial {
 fn watch_the_delver(
     character: Option<Res<Character>>,
     inventory: Option<Res<Inventory>>,
+    rules: Option<Res<crate::rules::GameRules>>,
     lights: Query<(&GlobalTransform, &PointLight)>,
     mut players: Query<(&Transform, Option<&Gait>, &Load, &mut DelverVisibility), With<Player>>,
     mut stealth: Local<Option<f64>>,
@@ -109,7 +110,7 @@ fn watch_the_delver(
         // The light falls on the body, about half the height of the eye.
         let body = at.translation + Vec3::Y * crate::play::EYE_HEIGHT * 0.5;
         let lit = lit_level(body, lights.iter().map(|(t, l)| (t.translation(), l)), exposure);
-        let visible = fb_character::visibility(lit as f64, gait.map_or(0.0, |g| g.pace) as f64, load.0, stealth);
+        let visible = fb_character::visibility_with(crate::rules::GameRules::of(&rules), lit as f64, gait.map_or(0.0, |g| g.pace) as f64, load.0, stealth);
         seen.set_if_neq(DelverVisibility((visible * 100.0).round() as f32 / 100.0));
     }
 }

@@ -12,6 +12,7 @@
 
 use bevy::prelude::*;
 use fb_character::explain::Explained;
+use fb_character::rules::Rules;
 use fb_character::{Exhaustion as ExhaustionLevel, Mana, Meter, MeterKind, Needs, Stamina, modifier};
 
 use super::card::place_beside;
@@ -20,6 +21,7 @@ use crate::carry::ViewModelCamera;
 use crate::character::{Character, DelverMana, DelverNeeds, DelverStamina, Derived};
 use crate::exhaustion::Exhaustion;
 use crate::play::{Player, Screen, ScreenOpen, SheetTab};
+use crate::rules::GameRules;
 use crate::status::{ConditionIcons, ShownConditions, badge, severity_colour};
 use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, node_rect};
 use bevy::window::PrimaryWindow;
@@ -199,22 +201,26 @@ pub fn need_colour(meter: &Meter) -> Color {
     }
 }
 
-/// What an exhaustion level does, in the words the game plays by: only the slowing is simulated.
-pub fn exhaustion_effect(exhaustion: ExhaustionLevel) -> &'static str {
+/// What an exhaustion level does under `rules`, in the words the game plays by: only the
+/// slowing is simulated. Half speed is said so; any other slowing gives its multiple.
+pub fn exhaustion_effect(exhaustion: ExhaustionLevel, rules: &Rules) -> String {
+    let speed = exhaustion.speed_multiplier_with(rules);
     if exhaustion.is_dead() {
-        "death"
-    } else if exhaustion.speed_multiplier() <= 0.0 {
-        "cannot move"
-    } else if exhaustion.speed_multiplier() < 1.0 {
-        "half speed"
+        "death".to_string()
+    } else if speed <= 0.0 {
+        "cannot move".to_string()
+    } else if speed == 0.5 {
+        "half speed".to_string()
+    } else if speed < 1.0 {
+        format!("speed ×{}", fb_character::explain::number(speed as f64))
     } else {
-        "no ill effect"
+        "no ill effect".to_string()
     }
 }
 
 /// "Exhaustion 2: half speed".
-pub fn exhaustion_text(exhaustion: ExhaustionLevel) -> String {
-    format!("Exhaustion {}: {}", exhaustion.level, exhaustion_effect(exhaustion))
+pub fn exhaustion_text(exhaustion: ExhaustionLevel, rules: &Rules) -> String {
+    format!("Exhaustion {}: {}", exhaustion.level, exhaustion_effect(exhaustion, rules))
 }
 
 /// A heading over a section, in the display face with a rule beneath.
@@ -237,7 +243,7 @@ fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Op
 }
 
 /// Builds the character tab's body: the status section.
-pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel, vitals: Vitals) {
+pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel, vitals: Vitals) {
     parent.spawn((CharacterSheet, Name::new("CharacterSheet"), Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() })).with_children(|sheet| {
         heading(sheet, fonts, "attributes");
         sheet.spawn(Node { column_gap: px(18), flex_wrap: FlexWrap::Wrap, row_gap: px(4), ..default() }).with_children(|line| {
@@ -248,7 +254,7 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Cha
         heading(sheet, fonts, "conditions");
         sheet.spawn((ConditionList, Name::new("Conditions"), Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }));
         heading(sheet, fonts, "what your gear makes of you");
-        let values = gear_values(character, &character.derive(inventory));
+        let values = gear_values(character, &character.derive_with(rules, inventory));
         for (i, label) in GEAR_ROWS.into_iter().enumerate() {
             row(sheet, fonts, label, Some(i), |row| {
                 row.spawn((GearLine(i), Text::new(values[i].clone()), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
@@ -264,11 +270,11 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Cha
                     BorderColor::all(LINE),
                 ))
                 .with_child((NeedFill(kind), Node { width: percent(fill(meter) * 100.0), height: percent(100), ..default() }, BackgroundColor(need_colour(meter))));
-                row.spawn((NeedWord(kind), Text::new(meter.word()), UiFonts::style(&fonts.mono_bold, 14.0, need_colour(meter))));
+                row.spawn((NeedWord(kind), Text::new(meter.word_with(rules)), UiFonts::style(&fonts.mono_bold, 14.0, need_colour(meter))));
             });
         }
         row(sheet, fonts, "Exhaustion", None, |row| {
-            row.spawn((ExhaustionLine, Text::new(exhaustion_text(exhaustion)), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
+            row.spawn((ExhaustionLine, Text::new(exhaustion_text(exhaustion, rules)), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
         });
         for (vital, label) in [(Vital::Stamina, "Stamina"), (Vital::Mana, "Mana")] {
             row(sheet, fonts, label, None, |row| {
@@ -287,7 +293,7 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Cha
 /// Where each gear number comes from, one line per term set, for the row `row` of
 /// [`GEAR_ROWS`]: the folk, each item and each affix that gave to it, from the same
 /// [`Character::loadout`] and [`Character::armour_class`] the game plays by.
-pub fn breakdown(character: &Character, inventory: &Inventory, row: usize) -> Vec<String> {
+pub fn breakdown(rules: &Rules, character: &Character, inventory: &Inventory, row: usize) -> Vec<String> {
     let loadout = character.loadout(inventory);
     match row {
         0 => {
@@ -296,14 +302,14 @@ pub fn breakdown(character: &Character, inventory: &Inventory, row: usize) -> Ve
                 let weight = item.profile.stats.weight + inventory.worn(slot).map_or(0.0, |id| inventory.contents_weight(id));
                 load = if load.terms().is_empty() { load.base(&item.name, weight as f64) } else { load.add(&item.name, weight as f64) };
             }
-            vec![load.line(), loadout.capacity(character.strength()).line()]
+            vec![load.line(), loadout.capacity_with(rules, character.strength()).line()]
         }
         1 => vec![loadout.warmth().line(), format!("Warmth needed {}", character.warmth_need())],
         2 => vec![loadout.light().line()],
         3 => vec![loadout.darkvision().line()],
-        4 => vec![character.armour_class(inventory).line()],
-        5 => vec![loadout.rate(MeterKind::Hunger, fb_character::Activity::Walking).line()],
-        6 => vec![loadout.rate(MeterKind::Sleepiness, fb_character::Activity::Walking).line()],
+        4 => vec![character.armour_class_with(rules, inventory).line()],
+        5 => vec![loadout.rate_with(rules, MeterKind::Hunger, fb_character::Activity::Walking).line()],
+        6 => vec![loadout.rate_with(rules, MeterKind::Sleepiness, fb_character::Activity::Walking).line()],
         7 => vec![loadout.heal_on_kill().line()],
         8 => vec![loadout.speed().line()],
         9 => vec![loadout.block_chance().line()],
@@ -374,10 +380,12 @@ pub fn show_breakdown(
     hovered: Res<HoveredNumber>,
     character: Res<Character>,
     inventory: Res<Inventory>,
+    rules: Option<Res<GameRules>>,
     fonts: Res<UiFonts>,
     mut tips: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, Option<&ComputedUiRenderTargetInfo>), With<BreakdownTip>>,
     mut shown: Local<Option<usize>>,
 ) {
+    let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
     for (tip, mut node, mut visibility, computed, target) in &mut tips {
         let over = hovered.0.filter(|_| open.is(Screen::Inventory) && *tab == SheetTab::Character);
         let Some((row, rect)) = over else {
@@ -385,10 +393,10 @@ pub fn show_breakdown(
             *shown = None;
             continue;
         };
-        if *shown != Some(row) || hovered.is_changed() || character.is_changed() || inventory.is_changed() {
+        if *shown != Some(row) || hovered.is_changed() || character.is_changed() || inventory.is_changed() || rules_changed {
             commands.entity(tip).despawn_children().with_children(|tip| {
                 tip.spawn((Text::new(GEAR_ROWS[row]), UiFonts::style(&fonts.display, 18.0, INK)));
-                for line in breakdown(&character, &inventory, row) {
+                for line in breakdown(GameRules::of(&rules), &character, &inventory, row) {
                     tip.spawn((Text::new(line), UiFonts::style(&fonts.mono, 12.0, MUTED)));
                 }
             });
@@ -410,10 +418,12 @@ pub fn show_breakdown(
 pub fn update_gear(
     character: Res<Character>,
     inventory: Res<Inventory>,
+    rules: Option<Res<GameRules>>,
     mut attributes: Query<(&AttributeLine, &mut Text), Without<GearLine>>,
     mut gear: Query<(&GearLine, &mut Text), Without<AttributeLine>>,
 ) {
-    if !character.is_changed() && !inventory.is_changed() {
+    let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
+    if !character.is_changed() && !inventory.is_changed() && !rules_changed {
         return;
     }
     let lines = attribute_lines(&character);
@@ -422,7 +432,7 @@ pub fn update_gear(
             text.0 = lines[*i].clone();
         }
     }
-    let values = gear_values(&character, &character.derive(&inventory));
+    let values = gear_values(&character, &character.derive_with(GameRules::of(&rules), &inventory));
     for (GearLine(i), mut text) in &mut gear {
         if text.0 != values[*i] {
             text.0 = values[*i].clone();
@@ -433,15 +443,18 @@ pub fn update_gear(
 /// Keeps the open sheet's need bars, words and exhaustion line true to the delver, writing
 /// only what changed.
 pub fn update_status(
+    rules: Option<Res<GameRules>>,
     players: Query<(Ref<DelverNeeds>, Ref<Exhaustion>), With<Player>>,
     mut fills: Query<(&NeedFill, &mut Node, &mut BackgroundColor)>,
     mut words: Query<(&NeedWord, &mut Text, &mut TextColor), Without<ExhaustionLine>>,
     mut exhaustions: Query<&mut Text, (With<ExhaustionLine>, Without<NeedWord>)>,
 ) {
     let Ok((needs, exhaustion)) = players.single() else { return };
-    if !needs.is_changed() && !exhaustion.is_changed() {
+    let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
+    if !needs.is_changed() && !exhaustion.is_changed() && !rules_changed {
         return;
     }
+    let rules = GameRules::of(&rules);
     for (NeedFill(kind), mut node, mut colour) in &mut fills {
         let meter = meter(&needs.0, *kind);
         let width = percent(fill(meter) * 100.0);
@@ -452,12 +465,12 @@ pub fn update_status(
     }
     for (NeedWord(kind), mut text, mut colour) in &mut words {
         let meter = meter(&needs.0, *kind);
-        if text.0 != meter.word() {
-            text.0 = meter.word().to_string();
+        if text.0 != meter.word_with(rules) {
+            text.0 = meter.word_with(rules).to_string();
         }
         colour.set_if_neq(TextColor(need_colour(meter)));
     }
-    let line = exhaustion_text(exhaustion.0);
+    let line = exhaustion_text(exhaustion.0, rules);
     for mut text in &mut exhaustions {
         if text.0 != line {
             text.0 = line.clone();
@@ -538,6 +551,34 @@ mod tests {
     }
 
     #[test]
+    fn the_sheets_armour_class_follows_the_loaded_rules() {
+        let mut app = App::new();
+        app.init_resource::<Character>().init_resource::<Inventory>().init_resource::<GameRules>().add_systems(Update, update_gear);
+        let ac = app.world_mut().spawn((GearLine(4), Text::new(""))).id();
+        let tip = |app: &App| app.world().get::<Text>(ac).unwrap().0.clone();
+        app.update();
+        let before: i32 = tip(&app).parse().unwrap();
+        app.world_mut().resource_mut::<GameRules>().combat.armour_base = 14;
+        app.update();
+        assert_eq!(tip(&app), (before + 4).to_string());
+        // The tooltip's breakdown reads the same rules.
+        let rules = app.world().resource::<GameRules>().0.clone();
+        let (character, inventory) = (app.world().resource::<Character>(), app.world().resource::<Inventory>());
+        assert!(breakdown(&rules, character, inventory, 4)[0].contains("base (14)"), "{:?}", breakdown(&rules, character, inventory, 4));
+    }
+
+    #[test]
+    fn exhaustion_is_worded_from_the_rules() {
+        let mut rules = Rules::default();
+        rules.exhaustion.slowed_from = 1;
+        rules.exhaustion.slowed_speed = 0.75;
+        rules.exhaustion.halted_from = 4;
+        assert_eq!(exhaustion_text(ExhaustionLevel::new(1), &rules), "Exhaustion 1: speed ×0.75");
+        assert_eq!(exhaustion_text(ExhaustionLevel::new(3), &rules), "Exhaustion 3: speed ×0.75");
+        assert_eq!(exhaustion_text(ExhaustionLevel::new(4), &rules), "Exhaustion 4: cannot move");
+    }
+
+    #[test]
     fn the_words_follow_the_bands() {
         assert_eq!(meter_at(MeterKind::Hunger, 0.0).word(), "Fed");
         assert_eq!(meter_at(MeterKind::Hunger, 0.3).word(), "Peckish");
@@ -597,9 +638,9 @@ mod tests {
 
     #[test]
     fn exhaustion_says_what_it_does() {
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(0)), "Exhaustion 0: no ill effect");
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(2)), "Exhaustion 2: half speed");
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(5)), "Exhaustion 5: cannot move");
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(6)), "Exhaustion 6: death");
+        assert_eq!(exhaustion_text(ExhaustionLevel::new(0), &Rules::default()), "Exhaustion 0: no ill effect");
+        assert_eq!(exhaustion_text(ExhaustionLevel::new(2), &Rules::default()), "Exhaustion 2: half speed");
+        assert_eq!(exhaustion_text(ExhaustionLevel::new(5), &Rules::default()), "Exhaustion 5: cannot move");
+        assert_eq!(exhaustion_text(ExhaustionLevel::new(6), &Rules::default()), "Exhaustion 6: death");
     }
 }

@@ -6,6 +6,7 @@
 //! step is exact for any length.
 
 use bevy::prelude::*;
+use fb_character::rules::Rules;
 use fb_character::{Activity, Exhaustion, ExhaustionTimes, Needs};
 
 use crate::character::{Character, DelverMana, DelverNeeds, DelverPoison, DelverRecovery, DelverStamina, Load, activity_for};
@@ -17,13 +18,14 @@ use crate::game_clock::{GameClock, advance_game_clock};
 use crate::inventory::Inventory;
 use crate::keymap::{Action, ActionInput};
 use crate::play::{DelveSystems, Player, ScreenOpen};
+use crate::rules::GameRules;
 use crate::player::Locomotion;
 
 pub struct SimulatePlugin;
 
 impl Plugin for SimulatePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, (step_the_delver, step_folk).after(advance_game_clock).in_set(DelveSystems))
+        app.init_resource::<GameRules>().add_systems(FixedUpdate, (step_the_delver, step_folk).after(advance_game_clock).in_set(DelveSystems))
             .add_systems(FixedUpdate, step_stamina.in_set(DelveSystems));
     }
 }
@@ -50,14 +52,15 @@ pub fn delver_activity(velocity: Vec2, sprinting: bool, swinging: bool, load: Lo
 
 /// Steps the delver's needs and exhaustion by the game time since the last step, and mends
 /// their hit points while they are fed, watered and unpoisoned ([`fb_character::recovery`], at
-/// the tuning's `recovery.minutes_per_hit_point`). Gear's rates
-/// are put on the meters only when the character or the inventory changes (or the delver is new),
+/// the tuning's `recovery.minutes_per_hit_point`). The rules' rates and gear's are put on the
+/// meters only when the character, the inventory or the rules change (or the delver is new),
 /// and stay there. Steps nothing while the clock holds still (a screen is open).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn step_the_delver(
     clock: Res<GameClock>,
     character: Res<Character>,
     inventory: Res<Inventory>,
+    rules: Res<GameRules>,
     tuning: Res<Tuning>,
     input: ActionInput,
     mut last: Local<f64>,
@@ -69,14 +72,20 @@ fn step_the_delver(
     let passed = if now < *last { now } else { now - *last };
     *last = now;
     let hours = passed / 3600.0;
-    let changed = character.is_changed() || inventory.is_changed();
+    let rules_changed = rules.is_changed() && !rules.is_added();
+    let changed = character.is_changed() || inventory.is_changed() || rules_changed;
     let mut gear = None;
     for (player, locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana, poison, mut recovery, health) in &mut players {
         if changed || needs.is_added() {
             let gear = gear.get_or_insert_with(|| character.gear(&inventory));
+            // The rates a meter is made with are the defaults', so they are only put on again
+            // when the rules change or a new delver is made under rules that are not the defaults.
+            if rules_changed || (needs.is_added() && **rules != *fb_character::rules::defaults()) {
+                rules.apply_to(&mut needs.0);
+            }
             gear.apply_to(&mut needs.0);
             // The pool follows the character's casting ability, a new delver's starting full.
-            let max = character.mana_pool();
+            let max = character.mana_pool_with(&rules);
             if mana.0.max != max {
                 let mut pool = mana.0;
                 if mana.is_added() {
@@ -93,12 +102,12 @@ fn step_the_delver(
         let sprinting = input.pressed(Action::Hurry);
         let activity = delver_activity(locomotion.velocity, sprinting, swinging, *load);
         let (mut n, mut e, mut t) = (needs.0, exhaustion.0, times.0);
-        t.step(&mut n, &mut e, activity, hours, crate::character::modifier(character.constitution()));
+        t.step_with(&rules, &mut n, &mut e, activity, hours, crate::character::modifier(character.constitution()));
         needs.0 = n;
         times.0 = t;
         // Only written when the pool changes, so a full one marks nothing.
         let mut pool = mana.0;
-        pool.step(hours, activity);
+        pool.step_with(&rules, hours, activity);
         mana.set_if_neq(DelverMana(pool));
         // The level moves a few times in a run, so it is only marked changed when it does.
         exhaustion.set_if_neq(DelverExhaustion(e));
@@ -146,6 +155,7 @@ pub fn stamina_activity(velocity: Vec2, sprinting: bool, winded: bool) -> Activi
 fn step_stamina(
     time: Res<Time<Fixed>>,
     screen: Res<ScreenOpen>,
+    rules: Res<GameRules>,
     input: ActionInput,
     mut players: Query<(&Locomotion, &Load, &mut DelverStamina), With<Player>>,
 ) {
@@ -157,7 +167,7 @@ fn step_stamina(
     for (locomotion, load, mut stamina) in &mut players {
         let activity = stamina_activity(locomotion.velocity, sprinting, !stamina.0.can_exert());
         let mut next = stamina.0;
-        next.step(seconds, activity, load.0);
+        next.step_with(&rules, seconds, activity, load.0);
         stamina.set_if_neq(DelverStamina(next));
     }
 }
@@ -176,8 +186,14 @@ pub struct Simulated {
 impl Simulated {
     /// Steps by `hours` of game time resting, then eats a ration if Hungry.
     pub fn advance(&mut self, hours: f64) {
-        self.times.step(&mut self.needs, &mut self.exhaustion, Activity::Resting, hours, 0);
-        if self.needs.hunger.band() >= HUNGRY_BAND {
+        self.advance_with(fb_character::rules::defaults(), hours);
+    }
+
+    /// [`Simulated::advance`] under `rules`, whose rates go on their meters first.
+    pub fn advance_with(&mut self, rules: &Rules, hours: f64) {
+        rules.apply_to(&mut self.needs);
+        self.times.step_with(rules, &mut self.needs, &mut self.exhaustion, Activity::Resting, hours, 0);
+        if self.needs.hunger.band_with(rules) >= HUNGRY_BAND {
             self.needs.consume(RATION, 0.0);
         }
     }
@@ -190,22 +206,27 @@ impl Simulated {
 
     /// Brings them up to game hour `now`, by all the time since their last step.
     pub fn catch_up(&mut self, now: f64) {
+        self.catch_up_with(fb_character::rules::defaults(), now);
+    }
+
+    /// [`Simulated::catch_up`] under `rules`.
+    pub fn catch_up_with(&mut self, rules: &Rules, now: f64) {
         let last = self.last.replace(now).unwrap_or(now);
         if now > last {
-            self.advance(now - last);
+            self.advance_with(rules, now - last);
         }
     }
 }
 
 /// Steps every [`Simulated`] person: near the delver every step, far ones once a game minute.
-fn step_folk(clock: Res<GameClock>, players: Query<&Transform, With<Player>>, mut folk: Query<(&Transform, &mut Simulated)>) {
+fn step_folk(clock: Res<GameClock>, rules: Res<GameRules>, players: Query<&Transform, With<Player>>, mut folk: Query<(&Transform, &mut Simulated)>) {
     let now = clock.time.hours();
     let delver = players.iter().next().map(|t| t.translation.xz());
     for (transform, mut simulated) in &mut folk {
         let far = delver.is_some_and(|d| d.distance(transform.translation.xz()) > NEAR_FOLK);
         // Nothing is marked changed for one that is not due.
         if simulated.due(now, far) {
-            simulated.catch_up(now);
+            simulated.catch_up_with(&rules, now);
         } else if simulated.last.is_none_or(|last| now < last) {
             // First seen, or a new delve has restarted the clock.
             simulated.last = Some(now);
@@ -541,6 +562,23 @@ mod tests {
         assert_eq!(app.world().get::<DelverExhaustion>(delver).unwrap().0.level, 0);
         run(&mut app, 2);
         assert_eq!(app.world().get::<DelverExhaustion>(delver).unwrap().0.level, 1);
+    }
+
+    #[test]
+    fn editing_the_rules_changes_the_needs_rates_in_a_running_game() {
+        let mut app = app();
+        let delver = walker(&mut app);
+        app.world_mut().resource_mut::<Tuning>().clock.game_seconds_per_second = 3600.0;
+        run(&mut app, 1);
+        let hunger = |app: &App| app.world().get::<DelverNeeds>(delver).unwrap().0.hunger.rate_per_hour;
+        assert_eq!(hunger(&app), 1.0 / 16.0);
+        app.world_mut().resource_mut::<GameRules>().needs.hunger_hours_to_full = 8.0;
+        run(&mut app, 1);
+        assert_eq!(hunger(&app), 1.0 / 8.0);
+        let before = app.world().get::<DelverNeeds>(delver).unwrap().0.hunger.value;
+        run(&mut app, 1);
+        let after = app.world().get::<DelverNeeds>(delver).unwrap().0.hunger.value;
+        assert!((after - before - 1.0 / 8.0).abs() < 1e-9, "{before} -> {after}");
     }
 
     #[test]

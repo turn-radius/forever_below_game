@@ -101,6 +101,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Keymap>()
             .init_resource::<ScreenOpen>()
             .init_resource::<SheetTab>()
+            .init_resource::<crate::rules::GameRules>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
             .init_resource::<Quickslots>()
@@ -742,6 +743,7 @@ pub(crate) fn build_screen(
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
     tuning: Res<Tuning>,
+    rules: Option<Res<crate::rules::GameRules>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
     mut icons: Icons,
 ) {
@@ -752,7 +754,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -797,13 +799,13 @@ pub(crate) fn build_screen(
                     // and a bag set down beside it.
                     .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(LEAF_MAX_PX), ..default() })
                     .with_children(|leaf| {
-                        header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone(), *tab);
+                        header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab == SheetTab::Character {
                             let (needs, exhaustion, vitals) = players.single().map_or_else(
                                 |_| Default::default(),
                                 |(needs, exhaustion, stamina, mana)| (needs.0, exhaustion.0, sheet::Vitals { stamina: stamina.map_or_else(Default::default, |s| s.0), mana: mana.map_or_else(Default::default, |m| m.0) }),
                             );
-                            sheet::sheet(leaf, &fonts, &character, &inventory, &needs, exhaustion, vitals);
+                            sheet::sheet(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, &needs, exhaustion, vitals);
                             return;
                         }
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
@@ -1704,11 +1706,11 @@ mod tests {
         assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("\u{d7}0.85".to_string(), "\u{d7}0.85".to_string(), "+1 HP".to_string()));
         let character = app.world().resource::<Character>().clone();
         let inventory = app.world().resource::<Inventory>();
-        let hunger = breakdown(&character, inventory, 5).join(" ");
+        let hunger = breakdown(fb_character::rules::defaults(), &character, inventory, 5).join(" ");
         assert!(hunger.starts_with("Hunger rate") && hunger.contains("(0.85)"), "{hunger}");
-        let sleepiness = breakdown(&character, inventory, 6).join(" ");
+        let sleepiness = breakdown(fb_character::rules::defaults(), &character, inventory, 6).join(" ");
         assert!(sleepiness.starts_with("Sleepiness rate") && sleepiness.contains("(0.85)"), "{sleepiness}");
-        let leech = breakdown(&character, inventory, 7).join(" ");
+        let leech = breakdown(fb_character::rules::defaults(), &character, inventory, 7).join(" ");
         assert!(leech.starts_with("Heal on a kill 1") && leech.contains("(+1)"), "{leech}");
     }
 

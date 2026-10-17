@@ -1,13 +1,13 @@
 //! The delver's hit points: bites take them, the view shows them, and at 0 the run ends.
 //!
 //! - The delver starts with a 1st-level character's hit points
-//!   ([`super::first_level_hit_points`]).
+//!   ([`super::first_level_hit_points_with`]).
 //! - The delver carries an [`ArmourClass`], the one the sheet shows (10, the Dexterity modifier
 //!   and what they wear, `Character::armour_class`), kept up as they dress ([`armour_the_delver`]).
 //!   Every creature's and folk's blow rolls to hit against it
 //!   (`creatures::behaviour::BlowsAtDelver`); one that misses whooshes past ([`whoosh_past`]).
 //! - Each [`AttackOnDelver`] (a blow that hit) takes its bite, and a poisonous snake's venom after the delver's
-//!   Constitution save ([`super::bite_damage`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
+//!   Constitution save ([`super::bite_damage_with`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
 //!   A failed save also poisons the delver for a while ([`DelverPoison`],
 //!   [`fb_character::poison`]), which turns the life orb green ([`super::orbs`]).
 //! - A constrictor's bite also holds the delver ([`Constricted`]), who moves at a quarter of
@@ -28,7 +28,7 @@ use bevy::{
 use fb_creatures::Species;
 
 use super::feedback::{Corpse, Slain, Struck};
-use super::{ArmourClass, Health, RunDice, bite_damage, first_level_hit_points};
+use super::{ArmourClass, Health, RunDice, bite_damage_with, first_level_hit_points_with};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
 use crate::character::{Character, DelverPoison};
 use crate::creatures::Critter;
@@ -49,6 +49,7 @@ impl Plugin for VitalsPlugin {
             .add_message::<Struck>()
             .add_message::<Slain>()
             .init_resource::<Pain>()
+            .init_resource::<crate::rules::GameRules>()
             .add_systems(OnExit(AppState::Delving), end_the_delve)
             .add_systems(Update, (give_player_health, fit_hit_points, armour_the_delver, take_bites, heal_on_kill, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
             .add_systems(Update, spawn_vitals.in_set(DelveSystems));
@@ -127,10 +128,10 @@ pub struct Constricted {
 
 /// The delver's hit points, from who they are, once they stand in the level; `FB_PLAYER_HP=<n>`
 /// starts them on `n` of those instead, to check a fall quickly.
-fn give_player_health(mut commands: Commands, character: Res<Character>, new: Query<Entity, (With<Player>, Without<Health>)>) {
+fn give_player_health(mut commands: Commands, character: Res<Character>, rules: Res<crate::rules::GameRules>, new: Query<Entity, (With<Player>, Without<Health>)>) {
     let start = std::env::var("FB_PLAYER_HP").ok().and_then(|n| n.trim().parse::<i32>().ok());
     for player in &new {
-        commands.entity(player).insert(starting_health(first_level_hit_points(&character), start));
+        commands.entity(player).insert(starting_health(first_level_hit_points_with(&rules, &character), start));
     }
 }
 
@@ -179,11 +180,11 @@ impl BlockChance {
 /// moving their maximum and hit points by as much as the first-level hit points moved, never
 /// below 1 for one still standing. `last` is the first-level hit points last seen; the first
 /// look only notes them, so a delver started on other hit points keeps them.
-fn fit_hit_points(character: Res<Character>, mut last: Local<Option<i32>>, mut players: Query<&mut Health, With<Player>>) {
-    if !character.is_changed() {
+fn fit_hit_points(character: Res<Character>, rules: Option<Res<crate::rules::GameRules>>, mut last: Local<Option<i32>>, mut players: Query<&mut Health, With<Player>>) {
+    if !character.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) {
         return;
     }
-    let now = first_level_hit_points(&character);
+    let now = first_level_hit_points_with(crate::rules::GameRules::of(&rules), &character);
     let Some(was) = last.replace(now) else { return };
     let by = now - was;
     if by == 0 {
@@ -240,6 +241,7 @@ fn take_bites(
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
+    rules: Res<crate::rules::GameRules>,
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
@@ -251,7 +253,7 @@ fn take_bites(
             if health.is_down() {
                 continue;
             }
-            let (damage, poisons_for) = bite_damage(bite, character.constitution(), &mut dice.0);
+            let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
             health.hurt(damage);
             if let Some(hours) = poisons_for {
                 let mut poison = poison.map_or_else(Default::default, |p| p.0);

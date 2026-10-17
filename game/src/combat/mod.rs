@@ -36,6 +36,7 @@
 use bevy::prelude::*;
 use fb_body::Hold;
 use fb_character::combat as rules;
+use fb_character::rules::Rules;
 use fb_items::dice::Dice;
 use procgen_rng::Mulberry32;
 
@@ -57,7 +58,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin));
     }
 }
 
@@ -107,19 +108,29 @@ impl Health {
 /// the Constitution modifier (SRD 5.1 "Hit Points at 1st Level": fighter 10 + Con, p. 24;
 /// ranger 10 + Con, p. 35; cleric 8 + Con, p. 15; wizard, our mage, 6 + Con, p. 52), and never
 /// below 1 (our own floor for a very frail delver).
+pub fn first_level_hit_points_with(rules: &Rules, character: &Character) -> i32 {
+    first_level_hit_points_explained_with(rules, character).value() as i32
+}
+
+/// [`first_level_hit_points_with`] under the default rules.
 pub fn first_level_hit_points(character: &Character) -> i32 {
-    first_level_hit_points_explained(character).value() as i32
+    first_level_hit_points_with(fb_character::rules::defaults(), character)
 }
 
-/// [`first_level_hit_points`] with its terms: the hit die and the Constitution modifier.
-pub fn first_level_hit_points_explained(character: &Character) -> fb_character::explain::Explained {
-    first_level_hit_points_explained_for(character.class, character.constitution())
+/// [`first_level_hit_points_with`] with its terms: the hit die and the Constitution modifier.
+pub fn first_level_hit_points_explained_with(rules: &Rules, character: &Character) -> fb_character::explain::Explained {
+    first_level_hit_points_explained_for_with(rules, character.class, character.constitution())
 }
 
-/// [`first_level_hit_points_explained`] for anyone of `class` with a Constitution of
-/// `constitution` (a folk as well as the delver).
+/// [`first_level_hit_points_explained_with`] for anyone of `class` with a Constitution of
+/// `constitution` (a folk as well as the delver), the hit die from the rules.
+pub fn first_level_hit_points_explained_for_with(rules: &Rules, class: crate::character::Class, constitution: i32) -> fb_character::explain::Explained {
+    rules::first_level_hit_points(class.hit_die_with(rules), modifier(constitution))
+}
+
+/// [`first_level_hit_points_explained_for_with`] under the default rules.
 pub fn first_level_hit_points_explained_for(class: crate::character::Class, constitution: i32) -> fb_character::explain::Explained {
-    rules::first_level_hit_points(class.hit_die(), modifier(constitution))
+    first_level_hit_points_explained_for_with(fb_character::rules::defaults(), class, constitution)
 }
 
 /// Whether things of `family` are swung as melee weapons (anything else held is improvised).
@@ -287,17 +298,18 @@ impl ArmourClass {
 }
 
 /// Gives each creature its Armor Class once it stands in the level ([`Critter::armour_class`]).
-pub fn arm_creatures(mut commands: Commands, new: Query<(Entity, &Critter), Without<ArmourClass>>) {
+pub fn arm_creatures(mut commands: Commands, new: Query<(Entity, &Critter), Without<ArmourClass>>, rules: Option<Res<crate::rules::GameRules>>) {
+    let rules = crate::rules::GameRules::of(&rules);
     for (entity, critter) in &new {
-        commands.entity(entity).insert(ArmourClass(critter.armour_class()));
+        commands.entity(entity).insert(ArmourClass(critter.armour_class_with(rules)));
     }
 }
 
 /// An attack roll with `weapon` by someone of `strength` against `armour_class`, thrown with
-/// `odds`: a d20, the Strength modifier and the weapon's `ToHit` (SRD 5.1 p. 96, "Attack Rolls";
-/// [`rules::ToHit::Strength`], as a folk's blows roll).
-pub fn attack_roll(weapon: &Weapon, strength: i32, armour_class: i32, odds: rules::Odds, rng: &mut Mulberry32) -> rules::Attack {
-    weapon.to_hit(strength).roll(armour_class, odds, rng)
+/// `odds` under `rules`: a d20, the Strength modifier, the proficiency bonus and the weapon's
+/// `ToHit` (SRD 5.1 p. 96, "Attack Rolls"; [`rules::ToHit::Strength`], as a folk's blows roll).
+pub fn attack_roll(rules: &Rules, weapon: &Weapon, strength: i32, armour_class: i32, odds: rules::Odds, rng: &mut Mulberry32) -> rules::Attack {
+    weapon.to_hit(strength).roll_with(rules, armour_class, odds, rng)
 }
 
 /// A creature a blow might land on: its entity, its centre on the floor (world `(x, z)`) and
@@ -336,19 +348,13 @@ pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, cone: f32, targets
         .map(|(_, e)| e)
 }
 
-/// A poisonous snake's venom after the delver's save: a Constitution saving throw (d20 +
-/// Constitution modifier) against DC 10 halves it, rounded down (SRD 5.1 p. 386, "Poisonous
-/// Snake"; rounding down is our own). A placeholder until the character simulation has
-/// poison of its own.
-pub fn venom_after_save(poison: u32, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    rules::venom_after_save(poison, modifier(constitution), rng).damage.value() as u32
-}
-
-/// What a bite does the delver: its damage (its own, and its venom after the save) and how many
-/// game hours a failed save poisons them for ([`rules::Venom::poisons_for`]).
-pub fn bite_damage(attack: &AttackOnDelver, constitution: i32, rng: &mut Mulberry32) -> (u32, Option<f64>) {
-    let bite = rules::bite_damage(attack.damage, attack.poison, modifier(constitution), rng);
-    (bite.damage.value() as u32, bite.venom.poisons_for())
+/// What a bite does the delver under `rules`: its damage (its own, and its venom after a
+/// Constitution save against the rules' difficulty class, halved and rounded down on a success:
+/// SRD 5.1 p. 386, "Poisonous Snake"; rounding down is our own) and how many game hours a
+/// failed save poisons them for ([`rules::Venom::poisons_for_with`]).
+pub fn bite_damage_with(rules: &Rules, attack: &AttackOnDelver, constitution: i32, rng: &mut Mulberry32) -> (u32, Option<f64>) {
+    let bite = rules::bite_damage_with(rules, attack.damage, attack.poison, modifier(constitution), rng);
+    (bite.damage.value() as u32, bite.venom.poisons_for_with(rules))
 }
 
 #[cfg(test)]
@@ -405,10 +411,10 @@ mod tests {
 
     #[test]
     fn hit_points_follow_the_srd_at_first_level() {
-        assert_eq!(first_level_hit_points(&delver(Class::Fighter, 14)), 12);
-        assert_eq!(first_level_hit_points(&delver(Class::Ranger, 10)), 10);
-        assert_eq!(first_level_hit_points(&delver(Class::Cleric, 9)), 7);
-        assert_eq!(first_level_hit_points(&delver(Class::Mage, 3)), 2);
+        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Fighter, 14)), 12);
+        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Ranger, 10)), 10);
+        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Cleric, 9)), 7);
+        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Mage, 3)), 2);
     }
 
     #[test]
@@ -507,6 +513,11 @@ mod tests {
         // A big body off to the side is still caught by its near edge.
         let big = Target { entity: e(5), centre: Vec2::new(8.0, -4.0), radius: 7.0 };
         assert_eq!(target_in_reach(Vec2::ZERO, forward, 10.0, CONE, &[big]), Some(e(5)));
+    }
+
+    /// A poisonous snake's venom after the delver's save under the default rules.
+    fn venom_after_save(poison: u32, constitution: i32, rng: &mut Mulberry32) -> u32 {
+        rules::venom_after_save(poison, modifier(constitution), rng).damage.value() as u32
     }
 
     #[test]

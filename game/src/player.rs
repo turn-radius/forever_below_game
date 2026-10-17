@@ -187,13 +187,13 @@ pub(crate) fn look(
 
 /// Keeps the delver's [`Load`] to what they wear and carry, working it out again only when the
 /// character or the inventory has changed, or for a delver just spawned.
-fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inventory>>, mut players: Query<(&mut Load, &mut GearPace), With<Player>>) {
+fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inventory>>, rules: Option<Res<crate::rules::GameRules>>, mut players: Query<(&mut Load, &mut GearPace), With<Player>>) {
     let (Some(character), Some(inventory)) = (character, inventory) else { return };
-    let changed = character.is_changed() || inventory.is_changed();
+    let changed = character.is_changed() || inventory.is_changed() || rules.as_ref().is_some_and(|r| r.is_changed());
     let mut derived = None;
     for (mut load, mut pace) in &mut players {
         if changed || load.is_added() {
-            let derived = *derived.get_or_insert_with(|| character.derive(&inventory));
+            let derived = *derived.get_or_insert_with(|| character.derive_with(crate::rules::GameRules::of(&rules), &inventory));
             load.set_if_neq(Load(derived.load_band));
             pace.set_if_neq(GearPace(derived.speed));
         }
@@ -217,6 +217,7 @@ type Walker<'a> = (&'a mut Locomotion, &'a mut Gait, &'a mut Transform, Option<&
 pub(crate) fn walk(
     time: Res<Time>,
     tuning: Res<Tuning>,
+    rules: Option<Res<crate::rules::GameRules>>,
     input: ActionInput,
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
@@ -229,8 +230,9 @@ pub(crate) fn walk(
     }
     let (locomotion, gait, transform, slowed, exhaustion, load, stamina, gear_pace) = &mut *body;
     let moving = &tuning.moving;
+    let rules = crate::rules::GameRules::of(&rules);
     let pace = gear_pace.map_or(1.0, |p| p.0);
-    let speed = if input.pressed(Action::Hurry) && stamina.0.can_exert() { moving.hurry_speed } else { moving.walk_speed } * pace * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier() * load.0.walk_multiplier();
+    let speed = if input.pressed(Action::Hurry) && stamina.0.can_exert() { moving.hurry_speed } else { moving.walk_speed } * pace * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier_with(rules) * load.0.walk_multiplier_with(rules);
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;

@@ -2650,9 +2650,11 @@ dependencies = [
 name = "fb_character"
 version = "0.1.0"
 dependencies = [
+ "fb_creatures",
  "procgen_rng",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -2812,6 +2814,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]
@@ -5413,6 +5416,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

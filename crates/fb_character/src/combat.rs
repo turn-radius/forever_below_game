@@ -13,6 +13,7 @@
 use procgen_rng::Mulberry32;
 
 use crate::explain::Explained;
+use crate::rules::{Rules, defaults};
 
 /// The die term's label: `d8`.
 fn die_label(sides: u32) -> String {
@@ -110,7 +111,12 @@ impl Venom {
     /// [`crate::poison::VENOM_POISONED_HOURS`] after a failed save, none after a successful one
     /// or with no venom. The lasting poison is our own; see that constant.
     pub fn poisons_for(&self) -> Option<f64> {
-        self.save.as_ref().filter(|save| !save.succeeded).map(|_| crate::poison::VENOM_POISONED_HOURS)
+        self.poisons_for_with(defaults())
+    }
+
+    /// [`Venom::poisons_for`] under `rules`, which set the hours.
+    pub fn poisons_for_with(&self, rules: &Rules) -> Option<f64> {
+        self.save.as_ref().filter(|save| !save.succeeded).map(|_| rules.combat.venom_poisoned_hours)
     }
 }
 
@@ -118,11 +124,16 @@ impl Venom {
 /// it, rounded down (SRD 5.1 p. 386, "Poisonous Snake"; rounding down is our own). With no
 /// venom nothing is rolled.
 pub fn venom_after_save(poison: u32, constitution_modifier: i32, rng: &mut Mulberry32) -> Venom {
+    venom_after_save_with(defaults(), poison, constitution_modifier, rng)
+}
+
+/// [`venom_after_save`] under `rules`, which set the difficulty class.
+pub fn venom_after_save_with(rules: &Rules, poison: u32, constitution_modifier: i32, rng: &mut Mulberry32) -> Venom {
     let damage = Explained::new("Venom", "").base("venom", poison as f64);
     if poison == 0 {
         return Venom { save: None, damage };
     }
-    let save = saving_throw("CON", constitution_modifier, 10, rng);
+    let save = saving_throw("CON", constitution_modifier, rules.combat.venom_save_dc, rng);
     let damage = if save.succeeded { damage.add("halved by the save", -((poison - poison / 2) as f64)) } else { damage };
     Venom { save: Some(save), damage }
 }
@@ -138,7 +149,12 @@ pub struct Bite {
 /// What a bite of `damage` and `poison` does a delver with `constitution_modifier`: the bite's
 /// damage plus [`venom_after_save`].
 pub fn bite_damage(damage: u32, poison: u32, constitution_modifier: i32, rng: &mut Mulberry32) -> Bite {
-    let venom = venom_after_save(poison, constitution_modifier, rng);
+    bite_damage_with(defaults(), damage, poison, constitution_modifier, rng)
+}
+
+/// [`bite_damage`] under `rules`.
+pub fn bite_damage_with(rules: &Rules, damage: u32, poison: u32, constitution_modifier: i32, rng: &mut Mulberry32) -> Bite {
+    let venom = venom_after_save_with(rules, poison, constitution_modifier, rng);
     let mut total = Explained::new("Bite", "").base("bite", damage as f64);
     if poison > 0 {
         total = total.add("venom", venom.damage.value());
@@ -179,10 +195,10 @@ impl Attack {
     pub fn line(&self) -> String {
         let by_total = self.roll.value() >= self.armour_class as f64;
         let verdict = match (self.hit, self.natural) {
-            (true, 20) if !by_total => "hit, natural 20",
-            (false, 1) if by_total => "miss, natural 1",
-            (true, _) => "hit",
-            (false, _) => "miss",
+            (true, natural) if !by_total => format!("hit, natural {natural}"),
+            (false, natural) if by_total => format!("miss, natural {natural}"),
+            (true, _) => "hit".to_string(),
+            (false, _) => "miss".to_string(),
         };
         let aside = self.set_aside.map_or(String::new(), |d| format!(", {d} set aside"));
         format!("{} = {} vs AC {}: {verdict}{aside}", self.roll.terms_line(), self.roll.value(), self.armour_class)
@@ -193,12 +209,13 @@ impl Attack {
 /// `armour_class` (SRD 5.1 p. 96, "Attack Rolls"). A natural 20 always hits and a natural 1
 /// always misses; otherwise the total must reach the armour class. One draw.
 pub fn attack_roll(to_hit: &[(&str, i32)], armour_class: i32, rng: &mut Mulberry32) -> Attack {
-    attack_roll_with(to_hit, armour_class, Odds::Even, rng)
+    attack_roll_with(defaults(), to_hit, armour_class, Odds::Even, rng)
 }
 
-/// [`attack_roll`] thrown with `odds` ([`Odds`]): one draw when even, two otherwise, keeping the
-/// higher with advantage and the lower with disadvantage.
-pub fn attack_roll_with(to_hit: &[(&str, i32)], armour_class: i32, odds: Odds, rng: &mut Mulberry32) -> Attack {
+/// [`attack_roll`] under `rules` (which say which d20 always hits and which always misses),
+/// thrown with `odds` ([`Odds`]): one draw when even, two otherwise, keeping the higher with
+/// advantage and the lower with disadvantage.
+pub fn attack_roll_with(rules: &Rules, to_hit: &[(&str, i32)], armour_class: i32, odds: Odds, rng: &mut Mulberry32) -> Attack {
     let first = rng.int(1, 20);
     let (natural, set_aside, label) = match odds {
         Odds::Even => (first, None, "d20"),
@@ -215,10 +232,13 @@ pub fn attack_roll_with(to_hit: &[(&str, i32)], armour_class: i32, odds: Odds, r
     for (label, amount) in to_hit {
         roll = roll.add(*label, *amount as f64);
     }
-    let hit = match natural {
-        20 => true,
-        1 => false,
-        _ => roll.value() >= armour_class as f64,
+    // A natural 1 is checked first, so a file that sets both to the same number misses.
+    let hit = if natural <= rules.combat.natural_miss {
+        false
+    } else if natural >= rules.combat.natural_hit {
+        true
+    } else {
+        roll.value() >= armour_class as f64
     };
     Attack { roll, natural, set_aside, armour_class, hit }
 }
@@ -227,7 +247,7 @@ pub fn attack_roll_with(to_hit: &[(&str, i32)], armour_class: i32, odds: Odds, r
 /// 1st to 4th level (SRD 5.1, "Beyond 1st Level", the Character Advancement table; "Attack
 /// Rolls", p. 96). Everyone counts as proficient with whatever they swing, as everyone is with
 /// unarmed strikes in the SRD; that every weapon counts is our own simplification until classes
-/// carry weapon proficiencies.
+/// carry weapon proficiencies. This is the default of [`crate::rules::CombatRules::proficiency_bonus`].
 pub const PROFICIENCY_BONUS: i32 = 2;
 
 /// What an attacker adds to the d20. The delver, folk and creatures all roll through it against
@@ -246,13 +266,18 @@ pub enum ToHit {
 impl ToHit {
     /// The terms it adds to the d20, each with its label.
     pub fn terms(self) -> Vec<(&'static str, i32)> {
+        self.terms_with(defaults())
+    }
+
+    /// [`ToHit::terms`] under `rules`, which set the proficiency bonus.
+    pub fn terms_with(self, rules: &Rules) -> Vec<(&'static str, i32)> {
         let (first, weapon) = match self {
             ToHit::Strength { modifier, weapon } => (("STR", modifier), weapon),
             ToHit::StatBlock { attack_bonus, weapon } => (("attack bonus", attack_bonus), weapon),
         };
         let mut terms = vec![first];
         if matches!(self, ToHit::Strength { .. }) {
-            terms.push(("proficiency", PROFICIENCY_BONUS));
+            terms.push(("proficiency", rules.combat.proficiency_bonus));
         }
         if weapon != 0 {
             terms.push(("ToHit", weapon));
@@ -262,18 +287,33 @@ impl ToHit {
 
     /// An attack with these terms against `armour_class`, thrown with `odds` ([`attack_roll_with`]).
     pub fn roll(self, armour_class: i32, odds: Odds, rng: &mut Mulberry32) -> Attack {
-        attack_roll_with(&self.terms(), armour_class, odds, rng)
+        self.roll_with(defaults(), armour_class, odds, rng)
+    }
+
+    /// [`ToHit::roll`] under `rules`.
+    pub fn roll_with(self, rules: &Rules, armour_class: i32, odds: Odds, rng: &mut Mulberry32) -> Attack {
+        attack_roll_with(rules, &self.terms_with(rules), armour_class, odds, rng)
     }
 }
 
 /// A folk attacker's roll: the Strength modifier and the weapon's `ToHit` ([`ToHit::Strength`]).
 pub fn folk_attack(strength_modifier: i32, weapon_to_hit: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
-    ToHit::Strength { modifier: strength_modifier, weapon: weapon_to_hit }.roll(armour_class, Odds::Even, rng)
+    folk_attack_with(defaults(), strength_modifier, weapon_to_hit, armour_class, rng)
+}
+
+/// [`folk_attack`] under `rules`.
+pub fn folk_attack_with(rules: &Rules, strength_modifier: i32, weapon_to_hit: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
+    ToHit::Strength { modifier: strength_modifier, weapon: weapon_to_hit }.roll_with(rules, armour_class, Odds::Even, rng)
 }
 
 /// A creature's roll: the attack bonus its SRD stat block prints ([`ToHit::StatBlock`]).
 pub fn creature_attack(attack_bonus: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
-    ToHit::StatBlock { attack_bonus, weapon: 0 }.roll(armour_class, Odds::Even, rng)
+    creature_attack_with(defaults(), attack_bonus, armour_class, rng)
+}
+
+/// [`creature_attack`] under `rules`.
+pub fn creature_attack_with(rules: &Rules, attack_bonus: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
+    ToHit::StatBlock { attack_bonus, weapon: 0 }.roll_with(rules, armour_class, Odds::Even, rng)
 }
 
 #[cfg(test)]

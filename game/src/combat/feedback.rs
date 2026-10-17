@@ -200,9 +200,10 @@ fn load_creature_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>
 }
 
 /// Each creature's hit points: its stat block's (the average the SRD prints).
-pub fn give_creatures_health(mut commands: Commands, new: Query<(Entity, &Critter), Without<Health>>) {
+pub fn give_creatures_health(mut commands: Commands, rules: Option<Res<crate::rules::GameRules>>, new: Query<(Entity, &Critter), Without<Health>>) {
+    let rules = crate::rules::GameRules::of(&rules);
     for (entity, critter) in &new {
-        commands.entity(entity).insert(Health::full(critter.spot.species.stat_block().hit_points as i32));
+        commands.entity(entity).insert(Health::full(rules.creature(critter.spot.species).hit_points as i32));
     }
 }
 
