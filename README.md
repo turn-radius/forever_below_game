@@ -156,6 +156,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_SCREENSHOT=<file.png>` | renders offscreen, saves one frame and quits; keyboard and mouse are ignored |
 | `FB_SCREENSHOT_FRAMES=<from>..<to>` | with `FB_SCREENSHOT=shot.png`, saves each frame from `from` up to (not including) `to` as `shot_<frame>.png` (`120..136` saves `shot_120.png` to `shot_135.png`; `120..=135` and a single `120` also work), to compare consecutive frames |
 | `FB_SCREENSHOT_EVERY=<n>` | with `FB_SCREENSHOT_FRAMES`, saves only every `n`th frame of the run (`1..900` every `15` saves `shot_1.png`, `shot_16.png`, ...), for long runs such as a fall, the title and the next delve |
+| `FB_SCREENSHOT_SIZE=<width>x<height>` | with `FB_SCREENSHOT`, renders at that size instead of 1920x1080 (`1280x720`), to check a layout at another resolution |
 | `FB_WEAR=<state>` | turntable starting condition (`--wear` wins) |
 | `FB_CLOSEUP=<0–11>` | turntable opens on a close-up of that grid slot |
 | `FB_DEBUG_POSE=x,y,yaw,pitch` | holds the player at a grid point (cells), turned `yaw` degrees from north and tilted `pitch` degrees |
@@ -214,7 +215,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[creatures]` | `snake_cooldown` | 2.5 | Seconds between a snake's strikes. |
 | `[creatures]` | `rat_chase_speed` | 2.0 | How fast a rat comes at you once it has seen you, as a multiple of its speed. |
 | `[creatures]` | `snake_chase_speed` | 1.0 | How fast a snake comes at you once it has seen you, as a multiple of its speed. |
-| `[folk]` | `walk_speed` | 11.0 | A human's unhurried walking pace, world units per second (shorter folk are slower). |
+| `[folk]` | `walk_speed` | 14.0 | A human's unhurried walking pace, world units per second (shorter folk are slower). |
 | `[folk]` | `pause_min` | 3.0 | The least seconds folk wait between walks. |
 | `[folk]` | `pause_max` | 8.0 | The most seconds folk wait between walks. |
 | `[folk]` | `wander_radius` | 90.0 | How far from its spot a person strolls, world units. |
@@ -250,9 +251,11 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[sound]` | `ambience_volume` | 0.3 | Ambient sounds' volume at full, 0 to 1: drips and rumbles, before your sound volume setting. |
 | `[sound]` | `rumble_interval_min` | 60.0 | The shortest time between stone rumbles, in seconds. |
 | `[sound]` | `rumble_interval_max` | 180.0 | The longest time between stone rumbles, in seconds. |
-| `[interface]` | `cell_size` | 52.0 | Inventory grid cell size, in logical pixels. |
+| `[interface]` | `cell_size` | 72.0 | Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there. |
+| `[interface]` | `min_cell_size` | 48.0 | The fewest logical pixels a cell is drawn at, however short the window. |
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
 | `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
+| `[recovery]` | `minutes_per_hit_point` | 10.0 | Game minutes a fed and watered, unpoisoned delver takes to regain one hit point (10 = one every 50 real seconds at the usual clock). Our own. |
 
 The shipped values are the defaults in `game/src/tuning.rs`; a test keeps the two, and this list, in step.
 

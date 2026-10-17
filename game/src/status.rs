@@ -30,6 +30,7 @@ use fb_character::conditions::{Circumstances, Condition, ConditionKind, Severity
 
 use crate::character::{Character, DelverNeeds, DelverPoison, DelverStamina, Load, modifier};
 use crate::combat::orbs::{OrbCluster, cluster_layout};
+use crate::combat::Health;
 use crate::combat::vitals::Constricted;
 use crate::exhaustion::Exhaustion;
 use crate::play::{DelveSystems, Player};
@@ -51,9 +52,10 @@ impl Plugin for StatusPlugin {
 pub const ICON_PX: u32 = 64;
 
 /// The colour of a badge of `severity`: a calm cream for a nudge, amber, orange, and red for a
-/// danger to the run. Our own.
+/// danger to the run; a soft green for one doing good. Our own.
 pub fn severity_colour(severity: Severity) -> Color {
     match severity {
+        Severity::Good => Color::srgb(0.46, 0.74, 0.42),
         Severity::Mild => Color::srgb(0.86, 0.80, 0.66),
         Severity::Moderate => Color::srgb(0.88, 0.66, 0.26),
         Severity::Serious => Color::srgb(0.92, 0.45, 0.20),
@@ -81,10 +83,12 @@ pub struct StatusCard;
 #[allow(clippy::type_complexity)]
 fn read_conditions(
     character: Option<Res<Character>>,
-    players: Query<(&DelverNeeds, &Exhaustion, &DelverStamina, &Load, Has<Constricted>, Option<&Slowed>, Option<&DelverPoison>), With<Player>>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
+    players: Query<(&DelverNeeds, &Exhaustion, &DelverStamina, &Load, Has<Constricted>, Option<&Slowed>, Option<&DelverPoison>, Option<&Health>), With<Player>>,
     mut shown: ResMut<ShownConditions>,
 ) {
-    let Some((needs, exhaustion, stamina, load, held, slowed, poison)) = players.iter().next() else { return };
+    let Some((needs, exhaustion, stamina, load, held, slowed, poison, health)) = players.iter().next() else { return };
+    let mending = tuning.as_deref().map_or(fb_character::recovery::MINUTES_PER_HIT_POINT, |t| t.recovery.minutes_per_hit_point as f64);
     let now = Circumstances {
         needs: needs.0,
         exhaustion: exhaustion.0,
@@ -93,6 +97,7 @@ fn read_conditions(
         con_modifier: character.map_or(0, |c| modifier(c.constitution())),
         held_pace: held.then(|| slowed.map_or(1.0, |s| s.0 as f64)),
         poisoned: poison.map_or_else(Default::default, |p| p.0),
+        wounded_mending: health.filter(|h| h.hp < h.max && !h.is_down()).map(|_| mending),
     };
     let list = conditions(&now);
     if shown.0 != list {
@@ -403,7 +408,7 @@ fn polygon(p: Vec2, corners: &[Vec2]) -> f32 {
 
 /// The signed distance from `p` (from -1 to 1 across, y down) to the icon for `kind`. The
 /// shapes are our own: a loaf, a drop, a crescent moon, an hourglass, gusts of wind, a weight,
-/// two links of a chain and a bubbling flask.
+/// two links of a chain, a bubbling flask and a cross for mending.
 pub fn icon_distance(kind: ConditionKind, p: Vec2) -> f32 {
     let v = Vec2::new;
     match kind {
@@ -442,6 +447,7 @@ pub fn icon_distance(kind: ConditionKind, p: Vec2) -> f32 {
             let bubbles = circle(p, v(-0.16, 0.36), 0.13).min(circle(p, v(0.2, 0.16), 0.09)).min(circle(p, v(0.08, 0.5), 0.07));
             flask.max(-bubbles)
         }
+        ConditionKind::Recovering => capsule(p, v(0.0, -0.62), v(0.0, 0.62), 0.2).min(capsule(p, v(-0.62, 0.0), v(0.62, 0.0), 0.2)),
     }
 }
 
@@ -466,7 +472,7 @@ mod tests {
     use super::*;
     use crate::launch::AppState;
 
-    const KINDS: [ConditionKind; 8] = [
+    const KINDS: [ConditionKind; 9] = [
         ConditionKind::Hunger,
         ConditionKind::Thirst,
         ConditionKind::Sleepiness,
@@ -475,6 +481,7 @@ mod tests {
         ConditionKind::Load,
         ConditionKind::Held,
         ConditionKind::Poisoned,
+        ConditionKind::Recovering,
     ];
 
     #[test]
@@ -494,6 +501,7 @@ mod tests {
             let c = severity_colour(s).to_srgba();
             c.red - c.green
         };
+        assert!(red_share(Severity::Good) < red_share(Severity::Mild));
         assert!(red_share(Severity::Mild) < red_share(Severity::Moderate));
         assert!(red_share(Severity::Moderate) < red_share(Severity::Serious));
         assert!(red_share(Severity::Serious) < red_share(Severity::Grave));

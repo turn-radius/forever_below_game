@@ -50,7 +50,7 @@ snake_chase_speed = 1.0
 
 [folk]
 # A human's unhurried walking pace, world units per second (shorter folk are slower).
-walk_speed = 11.0
+walk_speed = 14.0
 # The least seconds folk wait between walks.
 pause_min = 3.0
 # The most seconds folk wait between walks.
@@ -131,11 +131,17 @@ rumble_interval_min = 60.0
 rumble_interval_max = 180.0
 
 [interface]
-# Inventory grid cell size, in logical pixels.
-cell_size = 52.0
+# Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there.
+cell_size = 72.0
+# The fewest logical pixels a cell is drawn at, however short the window.
+min_cell_size = 48.0
 # Seconds the mouse rests on an item before its card shows.
 hover_delay = 0.0
 
 [clock]
 # How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes).
 game_seconds_per_second = 12.0
+
+[recovery]
+# Game minutes a fed and watered delver takes to regain one hit point (10 = one every 50 real seconds at the usual clock). Our own.
+minutes_per_hit_point = 10.0

@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
 use fb_character::explain::{Explained, Loadout, armour_class};
-use fb_character::{Activity, Attributes, CarriedLight, Casting, Gear, LoadBand, Mana, Worn, modifier as ability_modifier};
+use fb_character::{AbilityBonus, Activity, Attributes, CarriedLight, Casting, Gear, LoadBand, Mana, Worn, modifier as ability_modifier};
 use procgen_rng::Mulberry32;
 
 use crate::carry::carried_lights;
@@ -82,9 +82,13 @@ pub struct Character {
     /// Rolled from the folk's syllables in `data/syl.json` (the plate's `genName`).
     pub name: String,
     pub class: Class,
+    /// The ability scores they were rolled with; [`Character::scores`] adds what they wear.
     pub attributes: Attributes,
     /// How dirty they are, 0 clean to 1 filthy (the plate's `C.dirt`).
     pub dirt: f32,
+    /// What their worn items add to their ability scores, kept up from the inventory
+    /// ([`wear_abilities`]).
+    pub worn: AbilityBonus,
 }
 
 impl Default for Character {
@@ -134,7 +138,7 @@ impl Character {
             wisdom: roll(wis_base),
         };
         let dirt = 0.3 + rng.next_f64() as f32 * 0.2;
-        Character { folk, body_seed, name, class, attributes, dirt }
+        Character { folk, body_seed, name, class, attributes, dirt, worn: AbilityBonus::default() }
     }
 
     /// Their body's spec.
@@ -147,21 +151,28 @@ impl Character {
         if self.folk == Folk::Lizardfolk { 8.0 } else { 6.0 }
     }
 
+    /// Their ability scores as they stand: the rolled ones with what they wear added, within 1
+    /// to 30. Every rule that uses a score (to hit, damage, Armor Class, hit points, saves, the
+    /// mana pool, capacity) reads these.
+    pub fn scores(&self) -> Attributes {
+        self.worn.on(&self.attributes)
+    }
+
     pub fn strength(&self) -> i32 {
-        self.attributes.strength
+        self.scores().strength
     }
 
     pub fn dexterity(&self) -> i32 {
-        self.attributes.dexterity
+        self.scores().dexterity
     }
 
     pub fn constitution(&self) -> i32 {
-        self.attributes.constitution
+        self.scores().constitution
     }
 
     /// Mana points their pool holds: from their class's casting ability.
     pub fn mana_pool(&self) -> f64 {
-        Mana::max_for(self.class.casting(), &self.attributes)
+        Mana::max_for(self.class.casting(), &self.scores())
     }
 }
 
@@ -181,6 +192,17 @@ pub struct Derived {
     pub light: f32,
     /// How far they see without light, in feet: their folk's, or a worn item's if further.
     pub darkvision: f32,
+    /// Multiples of the usual hunger and sleepiness rates, from what they wear.
+    pub hunger_rate: f32,
+    pub sleepiness_rate: f32,
+    /// Hit points regained on each kill, from the weapon in the main hand.
+    pub heal_on_kill: f32,
+    /// Multiple of their pace, from what they wear.
+    pub speed: f32,
+    /// Chance the shield in their off hand turns aside a blow that would hit.
+    pub block_chance: f32,
+    /// What worn items add to their ability scores.
+    pub abilities: AbilityBonus,
 }
 
 impl Character {
@@ -196,9 +218,18 @@ impl Character {
     /// ([`Loadout::capacity`] and the rest).
     pub fn loadout(&self, inventory: &Inventory) -> Loadout {
         let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
-        for (_, item) in inventory.equipped() {
+        for (slot, item) in inventory.equipped() {
             let s = &item.profile.stats;
-            loadout = loadout.wearing(&item.name, Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64 });
+            // Only the main hand strikes, so only its weapon heals on a kill; only a shield held
+            // in the off hand blocks.
+            let heal_on_kill = if slot == fb_items::Slot::Mainhand { s.heal_on_kill as f64 } else { 0.0 };
+            let block_chance = if is_shield(slot, item) { s.block_chance as f64 } else { 0.0 };
+            let point = |v: f32| v.round() as i32;
+            let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
+            loadout = loadout.wearing(
+                &item.name,
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities },
+            );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
             loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
@@ -247,7 +278,32 @@ impl Character {
             warmth: sum(|s| s.warmth),
             light: gear.light as f32,
             darkvision: gear.darkvision as f32,
+            hunger_rate: gear.hunger_rate as f32,
+            sleepiness_rate: gear.sleepiness_rate as f32,
+            heal_on_kill: gear.heal_on_kill as f32,
+            speed: gear.speed as f32,
+            block_chance: gear.block_chance as f32,
+            abilities: gear.abilities,
         }
+    }
+}
+
+/// Whether `item` in `slot` is a shield held: armour in the off hand (a torch or a lantern there
+/// is not armour).
+pub fn is_shield(slot: fb_items::Slot, item: &fb_items::Item) -> bool {
+    slot == fb_items::Slot::Offhand && item.profile.tags.contains(&fb_items::Tag::Armor)
+}
+
+/// Keeps [`Character::worn`] to what the worn items add to the ability scores, changing the
+/// character only when it differs, so every rule that reads a score sees it.
+pub fn wear_abilities(inventory: Option<Res<Inventory>>, character: Option<ResMut<Character>>) {
+    let (Some(inventory), Some(mut character)) = (inventory, character) else { return };
+    if !inventory.is_changed() && !character.is_added() {
+        return;
+    }
+    let worn = character.gear(&inventory).abilities;
+    if character.worn != worn {
+        character.worn = worn;
     }
 }
 
@@ -289,6 +345,12 @@ pub struct DelverMana(pub Mana);
 /// steps it and it comes off when it wears off (`crate::simulate::step_the_delver`).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverPoison(pub fb_character::poison::Poisoned);
+
+/// Game time the delver has put toward their next hit point while fed and watered, on the
+/// [`Player`](crate::play::Player) from their spawn; the game clock steps it
+/// (`crate::simulate::step_the_delver`, [`fb_character::recovery`]).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverRecovery(pub fb_character::recovery::Recovery);
 
 /// How easy the delver is to see, 0 to 1 ([`fb_character::visibility`]): from the light on them,
 /// their pace, load and Stealth. Kept on the [`Player`](crate::play::Player) so the eye can show
@@ -448,9 +510,9 @@ mod tests {
         use fb_items::Slot;
         let delver = Character::roll(4);
         let mut inventory = Inventory::default();
-        let belt = inventory.add(with_affix("Belt", 2, "of Plenty"));
+        let belt = inventory.add(with_affix("Belt", 4, "of Plenty"));
         inventory.wear(belt, Slot::Belt).unwrap();
-        let ring = inventory.add(with_affix("Ring", 3, "of Wakefulness"));
+        let ring = inventory.add(with_affix("Ring", 4, "of Wakefulness"));
         inventory.wear(ring, Slot::Ring1).unwrap();
         let gear = delver.gear(&inventory);
         assert!((gear.hunger_rate - 0.85).abs() < 1e-6 && (gear.sleepiness_rate - 0.85).abs() < 1e-6, "{gear:?}");
@@ -460,6 +522,53 @@ mod tests {
         assert_eq!(needs.hunger.word(), "Peckish");
         needs.step(0.002, Activity::Walking);
         assert_eq!(needs.hunger.word(), "Hungry");
+    }
+
+    #[test]
+    fn a_leech_weapon_heals_on_a_kill_only_in_the_main_hand() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0);
+        let sword = inventory.add(with_affix("Sword", 3, "of the Leech"));
+        inventory.wear(sword, Slot::Offhand).unwrap();
+        assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0, "the off hand does not strike");
+        inventory.take_out(sword);
+        inventory.wear(sword, Slot::Mainhand).unwrap();
+        assert_eq!(delver.derive(&inventory).heal_on_kill, 1.0);
+        assert_eq!(delver.loadout(&inventory).heal_on_kill().value(), 1.0);
+    }
+
+    #[test]
+    fn a_ring_of_the_giant_raises_strength_and_its_modifier() {
+        use fb_items::Slot;
+        let attributes = Attributes { strength: 13, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        let mut delver = Character { attributes, ..Character::roll(4) };
+        let mut inventory = Inventory::default();
+        let ring = inventory.add(with_affix("Ring", 4, "of the Giant"));
+        inventory.wear(ring, Slot::Ring2).unwrap();
+        delver.worn = delver.gear(&inventory).abilities;
+        assert_eq!((delver.attributes.strength, delver.strength(), modifier(delver.strength())), (13, 15, 2), "+1 to +2");
+        assert_eq!(delver.derive(&inventory).capacity, 15.0 * 15.0, "capacity follows");
+        let frail = inventory.add(with_affix("Amulet", 4, "Frail"));
+        inventory.wear(frail, Slot::Neck).unwrap();
+        delver.worn = delver.gear(&inventory).abilities;
+        assert_eq!(delver.constitution(), 9);
+    }
+
+    #[test]
+    fn only_a_held_shield_blocks_and_boots_of_haste_quicken() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let shield = inventory.add(with_affix("Shield", 4, "of the Rampart"));
+        inventory.wear(shield, Slot::Offhand).unwrap();
+        assert!((delver.derive(&inventory).block_chance - 0.2).abs() < 1e-6);
+        let boots = inventory.add(with_affix("Boots", 4, "of Haste"));
+        inventory.wear(boots, Slot::Feet).unwrap();
+        assert!((delver.derive(&inventory).speed - 1.2).abs() < 1e-6);
+        inventory.take_out(shield);
+        assert_eq!(delver.derive(&inventory).block_chance, 0.0);
     }
 
     #[test]

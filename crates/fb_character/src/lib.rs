@@ -14,12 +14,15 @@
 //!
 //! `poison` tracks the lasting Poisoned state a failed save against venom leaves.
 //!
+//! `recovery` mends a fed and watered character's hit points over game time.
+//!
 //! `conditions` reads all of it into the conditions a character is under right now, for the HUD.
 
 pub mod combat;
 pub mod conditions;
 pub mod explain;
 pub mod poison;
+pub mod recovery;
 
 use serde::{Deserialize, Serialize};
 
@@ -158,6 +161,48 @@ impl LoadBand {
     }
 }
 
+/// Points worn items add to the five ability scores (an affix "of Might"'s +1 STR), summed.
+/// The default adds nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbilityBonus {
+    pub strength: i32,
+    pub dexterity: i32,
+    pub constitution: i32,
+    pub intelligence: i32,
+    pub wisdom: i32,
+}
+
+impl AbilityBonus {
+    /// The scores `base` has with this added, each held within 1 to 30, the range a score can
+    /// have ([SRD 5.1 p. 76](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=76),
+    /// "Ability Scores and Modifiers").
+    pub fn on(self, base: &Attributes) -> Attributes {
+        let add = |score: i32, by: i32| (score + by).clamp(1, 30);
+        Attributes {
+            strength: add(base.strength, self.strength),
+            dexterity: add(base.dexterity, self.dexterity),
+            constitution: add(base.constitution, self.constitution),
+            intelligence: add(base.intelligence, self.intelligence),
+            wisdom: add(base.wisdom, self.wisdom),
+        }
+    }
+
+    /// Each score's bonus with its name, for a sheet: `[("STR", 2), ...]`.
+    pub fn named(self) -> [(&'static str, i32); 5] {
+        [("STR", self.strength), ("DEX", self.dexterity), ("CON", self.constitution), ("INT", self.intelligence), ("WIS", self.wisdom)]
+    }
+
+    fn plus(self, other: AbilityBonus) -> AbilityBonus {
+        AbilityBonus {
+            strength: self.strength + other.strength,
+            dexterity: self.dexterity + other.dexterity,
+            constitution: self.constitution + other.constitution,
+            intelligence: self.intelligence + other.intelligence,
+            wisdom: self.wisdom + other.wisdom,
+        }
+    }
+}
+
 /// Carrying capacity in pounds (SRD p. 79).
 /// `capacity = STR × 15 + carry` where `carry` is gear-specific bonus capacity.
 pub fn capacity_lb(strength: i32, carry_bonus_lb: f64) -> f64 {
@@ -181,11 +226,25 @@ pub struct Worn {
     /// Warmth the wearer is given.
     #[serde(default)]
     pub warmth: f64,
+    /// Hit points the wearer regains on each kill (a weapon "of the Leech"'s). Only what the
+    /// delver strikes with counts, which the game decides when it builds the [`Worn`].
+    #[serde(default)]
+    pub heal_on_kill: f64,
+    /// Multiple of the wearer's pace.
+    #[serde(default = "default_gear")]
+    pub speed: f64,
+    /// Chance to turn aside a blow that would hit: a held shield's. Only a shield in the off
+    /// hand counts, which the game decides when it builds the [`Worn`].
+    #[serde(default)]
+    pub block_chance: f64,
+    /// Points added to the ability scores.
+    #[serde(default)]
+    pub abilities: AbilityBonus,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0 }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default() }
     }
 }
 
@@ -216,6 +275,14 @@ pub struct Gear {
     pub light: f64,
     /// How long the carried light burns, as a multiple of its base's.
     pub burn_time: f64,
+    /// Hit points regained on a kill: the worn items' added.
+    pub heal_on_kill: f64,
+    /// Multiple of the delver's pace: the items' multiplied.
+    pub speed: f64,
+    /// Chance to turn aside a blow that would hit: the items' added, at most 1.
+    pub block_chance: f64,
+    /// Points added to the ability scores: the items' added.
+    pub abilities: AbilityBonus,
 }
 
 impl Default for Gear {
@@ -229,13 +296,17 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0 };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default() };
         for item in worn {
             gear.carry += item.carry;
             gear.darkvision = gear.darkvision.max(item.darkvision);
             gear.hunger_rate *= item.hunger_rate;
             gear.sleepiness_rate *= item.sleepiness_rate;
             gear.stealth += item.stealth;
+            gear.heal_on_kill += item.heal_on_kill;
+            gear.speed *= item.speed;
+            gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, 1.0);
+            gear.abilities = gear.abilities.plus(item.abilities);
         }
         for light in lights {
             if light.reach > gear.light {
@@ -1449,7 +1520,7 @@ mod tests {
     fn gear_adds_carry_multiplies_rates_and_takes_the_best_darkvision() {
         let worn = [
             Worn { carry: 25.0, darkvision: 10.0, hunger_rate: 0.85, ..Worn::default() },
-            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85, stealth: 0.0, warmth: 0.0 },
+            Worn { carry: 25.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.85, stealth: 0.0, warmth: 0.0, ..Worn::default() },
         ];
         let gear = Gear::new(20.0, worn, []);
         assert_eq!(gear.carry, 50.0);

@@ -81,6 +81,7 @@ impl Plugin for FolkCombatPlugin {
         app.add_plugins(HostilityPlugin)
             .add_message::<Struck>()
             .add_message::<Callout>()
+            .add_message::<crate::combat::feedback::Slain>()
             .add_message::<SwungAt>()
             .add_message::<AttackOnDelver>()
             .add_message::<MissedDelver>()
@@ -290,6 +291,7 @@ pub fn take_folk_blows(
     sounds: Option<Res<crate::combat::feedback::CreatureSounds>>,
     mut toasts: Toasts,
     flinches: Flinches,
+    mut slain: MessageWriter<crate::combat::feedback::Slain>,
     mut folk: Query<(&Denizen, &Transform, &mut Health), Without<Corpse>>,
     mut callouts: MessageWriter<Callout>,
 ) {
@@ -306,6 +308,7 @@ pub fn take_folk_blows(
         }
         info!("{} takes {}: {} of {} hit points", denizen.person.name, blow.damage, health.hp, health.max);
         if fell {
+            slain.write(crate::combat::feedback::Slain { target: blow.target });
             commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<(BlocksTheWay, Routine)>();
             toasts.add(&format!("{} is slain", denizen.person.name));
             info!("{} falls", denizen.person.name);

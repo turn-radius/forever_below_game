@@ -64,6 +64,16 @@ pub enum Modifier {
 }
 
 impl Modifier {
+    /// Whether it changes a stat something reads ([`Stat::in_play`]). The wear a
+    /// [`Modifier::Condition`] leaves is only a look, so it does not count.
+    pub fn in_play(&self) -> bool {
+        match *self {
+            Modifier::Add { stat, .. } | Modifier::Scale { stat, .. } => stat.in_play(),
+            Modifier::DamageOrArmour { .. } => true,
+            Modifier::Condition { .. } => false,
+        }
+    }
+
     pub fn apply(&self, stats: &mut Stats, condition: &mut Condition) {
         self.apply_to_stats(stats);
         self.apply_to_condition(condition);

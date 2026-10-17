@@ -3,29 +3,32 @@ use fb_items::{roll_item, stats::{Stat, Stats}, tables};
 #[test]
 fn stat_totals_pinned_across_base_seeds() {
     let test_cases = vec![
-        // (base_name, seed, expected_stat_totals)
-        ("Shirt", 1, 16.0),
-        ("Shirt", 42, 6.0),
-        ("Shirt", 12345, 5.5),
-        ("Trousers", 1, 16.5),
-        ("Trousers", 42, 6.5),
-        ("Trousers", 12345, 6.0),
-        ("Breeches", 1, 15.5),
-        ("Breeches", 99, 30.5),
-        ("Breeches", 54321, 7.5),
-        ("Hood", 1, 15.5),
-        ("Hood", 77, 6.0),
-        ("Mail coif", 1, 21.0),
-        ("Belt", 1, 15.0),
-        ("Belt", 99, 30.0),
-        ("Club", 1, 16.0),
-        ("Club", 42, 6.0),
-        ("Hand axe", 1, 16.0),
-        ("Hand axe", 88, 6.0),
-        ("Torch", 1, 35.0),
-        ("Torch", 123, 37.0),
-        ("Lantern", 1, 46.0),
-        ("Lantern", 456, 36.0),
+        // (base_name, seed, expected_stat_totals). Four changed when the affixes nothing reads
+        // were held back: Shirt and Trousers 12345 roll of Wakefulness, Hood 77 Moth-eaten and
+        // Torch 123 of Plenty in place of a held-back affix. Every total rose by 1 when Speed (1
+        // as usual) joined the stats, and the belts roll among the new slot-bound suffixes.
+        ("Shirt", 1, 17.0),
+        ("Shirt", 42, 7.0),
+        ("Shirt", 12345, 6.85),
+        ("Trousers", 1, 17.5),
+        ("Trousers", 42, 7.5),
+        ("Trousers", 12345, 7.35),
+        ("Breeches", 1, 16.5),
+        ("Breeches", 99, 31.5),
+        ("Breeches", 54321, 8.5),
+        ("Hood", 1, 16.5),
+        ("Hood", 77, 5.5),
+        ("Mail coif", 1, 22.0),
+        ("Belt", 1, 5.85),
+        ("Belt", 99, 7.0),
+        ("Club", 1, 17.0),
+        ("Club", 42, 7.0),
+        ("Hand axe", 1, 17.0),
+        ("Hand axe", 88, 7.0),
+        ("Torch", 1, 36.0),
+        ("Torch", 123, 35.85),
+        ("Lantern", 1, 47.0),
+        ("Lantern", 456, 37.0),
     ];
 
     for (base, seed, expected_total) in &test_cases {
