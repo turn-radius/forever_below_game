@@ -62,7 +62,7 @@ use crate::launch::AppState;
 use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, SheetTab, show_screen, switch_screens};
 use crate::quickslots::{QuickslotDrop, Quickslots};
 pub use crate::ui::node_rect;
-use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color, ui_cursor};
+use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, rarity_color, ui_cursor};
 use header::ToastText;
 use crate::tuning::Tuning;
 
@@ -870,33 +870,15 @@ struct ScreenLayout<'a> {
 }
 
 impl ScreenLayout<'_> {
-    /// The floor within reach, as a paler grid under its name; bare, a dashed box the grid's
-    /// size that says so, and takes what is dropped on it all the same.
+    /// The floor within reach, as a paler grid under its name, always there to drop things on;
+    /// bare, its empty cells and a line under the name that says so.
     fn underfoot(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, underfoot: &Underfoot) {
-        if underfoot.grid.is_empty() {
-            let size = grid_size(&underfoot.grid, self.cell);
-            parent
-                .spawn((
-                    GridView::Underfoot,
-                    Node {
-                        width: px(size.x),
-                        height: px(size.y),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: px(6),
-                        padding: UiRect::axes(px(16), px(12)),
-                        ..default()
-                    },
-                ))
-                .with_children(|bare| {
-                    dashed_outline(bare, size, GRID_RADIUS_PX, LINE_PX, 7.0, 5.0, LINE);
-                    bare.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
-                    bare.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 14.0, MUTED)));
-                });
-            return;
-        }
         parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
-            column.spawn(Node { align_items: AlignItems::Center, height: px(36), ..default() }).with_children(|head| {
+            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), height: px(36), ..default() }).with_children(|head| {
                 head.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
+                if underfoot.grid.is_empty() {
+                    head.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 14.0, MUTED)));
+                }
             });
             self.grid(column, icons, GridView::Underfoot, &underfoot.grid, true);
         });
@@ -1858,15 +1840,20 @@ mod tests {
     }
 
     #[test]
-    fn bare_stone_underfoot_is_a_box_the_grid_s_size_that_says_so() {
+    fn bare_stone_underfoot_shows_its_empty_grid() {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyI);
         let size = grid_size(&app.world().resource::<Underfoot>().grid, CELL_PX);
         let mut views = app.world_mut().query::<(&GridView, &Node, &Children)>();
-        let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot drop zone");
+        let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot grid");
         assert_eq!((node.width, node.height), (px(size.x), px(size.y)));
-        let said: Vec<String> = children.iter().filter_map(|c| app.world().get::<Text>(c)).map(|t| t.0.clone()).collect();
-        assert_eq!(said, vec!["underfoot".to_string(), "Bare stone. Drop things here.".to_string()]);
+        // In an empty corridor: 18 empty cells, 6 by 3, and nothing in them.
+        let children = children.to_vec();
+        assert_eq!(children.len(), 18);
+        assert!(children.iter().all(|c| app.world().get::<ItemView>(*c).is_none()));
+        let mut texts = app.world_mut().query::<&Text>();
+        let said: Vec<String> = texts.iter(app.world()).map(|t| t.0.clone()).collect();
+        assert!(said.contains(&"underfoot".to_string()) && said.contains(&"Bare stone. Drop things here.".to_string()), "{said:?}");
     }
 
     /// The header's line of numbers, as read from its spans.
