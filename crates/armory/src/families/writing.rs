@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::chain::{bead, twisted_cord};
 use crate::build::fitting::rounded_rect;
+use crate::build::note::{NoteSpec, note as build_note};
 use crate::build::parts::{Look, Parts};
 use crate::build::strap::strap;
 use crate::cond::{Condition, ConditionLimits};
@@ -41,6 +42,8 @@ use crate::geom::{
 use crate::material::{MaterialKind, Rgb};
 use crate::palette::Palette;
 use crate::slider::{Sliders, sliders};
+
+pub use crate::build::note::NoteForm;
 
 use MaterialKind::{Bone, Brass, Cloth, Cord, Leather, Paint, Wood};
 
@@ -158,6 +161,59 @@ pub struct ScrollOpts {
     pub sigil: u32,
 }
 
+/// A paper note's own options.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NoteOpts {
+    pub form: NoteForm,
+    /// The long side of the whole sheet: a scrap to a full page.
+    pub length: f32,
+    /// Short side over long side.
+    pub aspect: f32,
+    pub thick: f32,
+    /// Waviness of a flat sheet.
+    pub cockle: f32,
+    /// How far a flat sheet bows up at its sides.
+    pub curl: f32,
+    /// How far a flat sheet's corners lift.
+    pub lift: f32,
+    /// How far folded panels spring open.
+    pub spring: f32,
+    /// 0 straight edges, 1 torn all round.
+    pub tear: f32,
+    /// Lines of ink scrawl.
+    pub scrawl: u32,
+    /// How uneven the scrawl is.
+    pub wild: f32,
+    /// Size of an ink blot; 0 for none.
+    pub blot: f32,
+    /// Size of a bloodstain; 0 for none.
+    pub blood: f32,
+    /// How hard a crumpled note is crushed.
+    pub crush: f32,
+    pub seal_color: Rgb,
+    pub sigil: u32,
+}
+
+sliders! {
+    NoteLimits for NoteOpts {
+        length: 0.6, 3.0, 0.01;
+        aspect: 0.6, 1.0, 0.01;
+        thick: 0.006, 0.02, 0.001;
+        cockle: 0.0, 1.0, 0.01;
+        curl: 0.0, 1.0, 0.01;
+        lift: 0.0, 1.0, 0.01;
+        spring: 0.0, 0.5, 0.01;
+        tear: 0.0, 1.0, 0.01;
+        scrawl: 0.0, 8.0, 1.0;
+        wild: 0.0, 1.0, 0.01;
+        blot: 0.0, 1.0, 0.01;
+        blood: 0.0, 1.0, 0.01;
+        crush: 0.3, 1.0, 0.01;
+        sigil: 3.0, 9.0, 1.0;
+    }
+}
+
 sliders! {
     PieceLimits for Piece {
         size: 0.9, 1.25, 0.01;
@@ -209,6 +265,29 @@ impl Default for ScrollOpts {
     }
 }
 
+impl Default for NoteOpts {
+    fn default() -> Self {
+        NoteOpts {
+            form: NoteForm::Flat,
+            length: 1.6,
+            aspect: 0.75,
+            thick: 0.01,
+            cockle: 0.4,
+            curl: 0.3,
+            lift: 0.3,
+            spring: 0.15,
+            tear: 0.0,
+            scrawl: 4,
+            wild: 0.5,
+            blot: 0.0,
+            blood: 0.0,
+            crush: 0.7,
+            seal_color: SEALS[0],
+            sigil: 5,
+        }
+    }
+}
+
 impl ScrollOpts {
     /// Rolled shut, not partly unrolled.
     pub fn is_shut(&self) -> bool {
@@ -225,6 +304,7 @@ pub struct WritingState {
     pub seed: u32,
     pub piece: Piece,
     pub scroll: ScrollOpts,
+    pub note: NoteOpts,
     pub cond: Condition,
     pub palette: Palette,
 }
@@ -234,17 +314,19 @@ pub struct WritingState {
 pub struct WritingLimits {
     pub piece: PieceLimits,
     pub scroll: ScrollLimits,
+    pub note: NoteLimits,
     pub cond: ConditionLimits,
 }
 
 /// The writing sliders' ranges (new: the prototypes have none).
-pub const LIMITS: WritingLimits = WritingLimits { piece: PieceLimits::SLIDERS, scroll: ScrollLimits::SLIDERS, cond: ConditionLimits::SLIDERS };
+pub const LIMITS: WritingLimits = WritingLimits { piece: PieceLimits::SLIDERS, scroll: ScrollLimits::SLIDERS, note: NoteLimits::SLIDERS, cond: ConditionLimits::SLIDERS };
 
 impl WritingState {
     /// Clamp and snap every slider into `limits`.
     pub fn fit(&mut self, limits: &WritingLimits) {
         self.piece.fit(&limits.piece);
         self.scroll.fit(&limits.scroll);
+        self.note.fit(&limits.note);
         self.cond.fit(&limits.cond);
     }
 
@@ -254,6 +336,7 @@ impl WritingState {
         [
             tag("piece", self.piece.out_of_range(&limits.piece)),
             tag("scroll", self.scroll.out_of_range(&limits.scroll)),
+            tag("note", self.note.out_of_range(&limits.note)),
             tag("cond", self.cond.out_of_range(&limits.cond)),
         ]
         .concat()
@@ -277,7 +360,14 @@ impl Generator for Writing {
             WritingKind::Scroll if p.paper == Paper::Papyrus => "Papyrus Scroll",
             WritingKind::Scroll if p.paper == Paper::Vellum => "Vellum Scroll",
             WritingKind::Scroll => "Scroll",
-            WritingKind::Note => "Note",
+            WritingKind::Note => match s.note.form {
+                NoteForm::Sealed => "Sealed letter",
+                NoteForm::Crumpled => "Crumpled note",
+                NoteForm::Folded | NoteForm::FoldedTwice => "Folded note",
+                NoteForm::Flat if s.note.length < 1.0 => "Scrap of paper",
+                NoteForm::Flat if s.note.tear > 0.35 => "Torn page",
+                NoteForm::Flat => "Note",
+            },
             WritingKind::Book => "Book",
         }
         .to_string()
@@ -327,8 +417,33 @@ fn compose(rng: &mut Mulberry32, seed: u32, kind: WritingKind) -> WritingState {
         sc.tie = tie;
         sc.seal = seal;
     }
+    roll_note(rng, &mut s.note);
     s.fit(&LIMITS);
     s
+}
+
+/// The note's draws, made after every scroll draw so scroll rolls never shift.
+fn roll_note(rng: &mut Mulberry32, nt: &mut NoteOpts) {
+    nt.form = *rng.weighted(&[(NoteForm::Flat, 3), (NoteForm::Folded, 2), (NoteForm::FoldedTwice, 2), (NoteForm::Sealed, 2), (NoteForm::Crumpled, 2)]);
+    nt.length = match rng.weighted(&[(0, 2), (1, 4), (2, 3)]) {
+        0 => rng.range_f32(0.6, 1.0),
+        1 => rng.range_f32(1.0, 1.9),
+        _ => rng.range_f32(1.9, 2.6),
+    };
+    nt.aspect = rng.range_f32(0.65, 0.95);
+    nt.thick = rng.range_f32(0.008, 0.014);
+    nt.cockle = rng.range_f32(0.1, 0.8);
+    nt.curl = rng.range_f32(0.0, 0.7);
+    nt.lift = rng.range_f32(0.0, 0.8);
+    nt.spring = rng.range_f32(0.05, 0.35);
+    nt.tear = if rng.chance(0.4) { rng.range_f32(0.35, 1.0) } else { 0.0 };
+    nt.scrawl = rng.int(1, 6);
+    nt.wild = rng.range_f32(0.2, 1.0);
+    nt.blot = if rng.chance(0.3) { rng.range_f32(0.2, 1.0) } else { 0.0 };
+    nt.blood = if rng.chance(0.25) { rng.range_f32(0.2, 1.0) } else { 0.0 };
+    nt.crush = rng.range_f32(0.5, 1.0);
+    nt.seal_color = *rng.weighted(&[(SEALS[0], 4), (SEALS[1], 2), (SEALS[2], 1), (SEALS[3], 1), (SEALS[4], 2)]);
+    nt.sigil = rng.int(4, 8);
 }
 
 // ───────────────────────── Geometry ─────────────────────────
@@ -344,13 +459,36 @@ fn build_writing(s: &WritingState) -> ItemMesh {
     parts.finish()
 }
 
-/// A flat stand-in for a note until its builder lands: one sheet of paper.
+/// A paper note: see [`crate::build::note`].
 fn note(s: &WritingState, parts: &mut Parts) {
-    let p = &s.piece;
-    let (w, d, t) = (1.2 * p.size, 1.6 * p.size, 0.012 * p.size);
-    let mut sheet = bevelled_slab(&rounded_rect(0.0, 0.0, w, d, 0.02), &[], &SlabOptions::rounded(t, t * 0.3));
-    sheet.rotate_x(-FRAC_PI_2).translate([0.0, t * 0.5, 0.0]);
-    parts.add_look("sheet", sheet, Look::of(Cloth).tinted(p.color));
+    let (p, nt) = (&s.piece, &s.note);
+    let decay = Decay::of(&s.cond);
+    let grime = (s.cond.wear * 0.5).clamp(0.0, 1.0);
+    let tint = mix(mix(p.color, Rgb::hex(0x7a5a30), 0.4 * decay.fox), Rgb::hex(0x3b3226), 0.4 * grime);
+    let spec = NoteSpec {
+        form: nt.form,
+        length: nt.length * p.size,
+        aspect: nt.aspect,
+        thick: nt.thick,
+        cockle: nt.cockle,
+        curl: nt.curl,
+        lift: nt.lift,
+        spring: nt.spring,
+        tear: (nt.tear + 0.5 * decay.ragged).min(1.0),
+        scrawl: nt.scrawl,
+        wild: nt.wild,
+        blot: nt.blot,
+        blood: nt.blood,
+        crush: nt.crush,
+        size: p.size,
+        tint,
+        ink: p.ink,
+        fox: (decay.fox * 14.0).round() as u32,
+        scorch: decay.scorch,
+        seed: s.seed,
+    };
+    let seal = (nt.form == NoteForm::Sealed).then(|| (wax_seal(nt.sigil, p.size, s.seed), nt.seal_color));
+    build_note(&spec, seal, parts);
 }
 
 /// A slab for a book until its builder lands: boards with a page block between them.
@@ -888,7 +1026,13 @@ fn valley(l: &Layout) -> f32 {
 /// A puck of wax with an uneven edge, a raised rim and a star pressed in the middle, set with
 /// its base at `at`.
 fn seal(sc: &ScrollOpts, l: &Layout, at: V3, seed: u32) -> MeshBuilder {
-    let s = l.size;
+    let mut puck = wax_seal(sc.sigil, l.size, seed);
+    puck.translate(at);
+    puck
+}
+
+/// The wax puck with its base at the origin.
+fn wax_seal(sigil: u32, s: f32, seed: u32) -> MeshBuilder {
     let profile: Vec<[f32; 2]> = [
         [0.0, 0.0], [0.19, 0.0], [0.21, 0.012], [0.185, 0.035], [0.178, 0.07], [0.16, 0.082], [0.12, 0.076], [0.1, 0.06], [0.0, 0.058],
     ]
@@ -901,7 +1045,7 @@ fn seal(sc: &ScrollOpts, l: &Layout, at: V3, seed: u32) -> MeshBuilder {
         let wobble = 1.0 + 0.07 * (3.0 * a + phase).sin() + 0.04 * (7.0 * a + phase * 1.7).sin();
         [p[0] * wobble, p[1], p[2] * wobble]
     });
-    let points = sc.sigil.clamp(3, 9) as usize;
+    let points = sigil.clamp(3, 9) as usize;
     let star: Vec<P2> = (0..points * 2)
         .map(|i| {
             let a = PI * i as f32 / points as f32;
@@ -910,9 +1054,8 @@ fn seal(sc: &ScrollOpts, l: &Layout, at: V3, seed: u32) -> MeshBuilder {
         })
         .collect();
     let depth = 0.014 * s;
-    let mut sigil = extrude(&star, &[], depth);
-    sigil.rotate_x(-FRAC_PI_2).translate([0.0, 0.058 * s + depth * 0.5, 0.0]);
-    puck.append(&sigil);
-    puck.translate(at);
+    let mut sigil_mesh = extrude(&star, &[], depth);
+    sigil_mesh.rotate_x(-FRAC_PI_2).translate([0.0, 0.058 * s + depth * 0.5, 0.0]);
+    puck.append(&sigil_mesh);
     puck
 }

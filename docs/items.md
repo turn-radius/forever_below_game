@@ -92,11 +92,12 @@ Torches and lanterns are Armory families (`armory::families::torch`, `armory::fa
 
 ### Writing
 
-`armory::families::writing` makes written goods: scrolls, notes and books. It is new; no prototype draws any of them, so every slider is this port's own. One state holds the three kinds (`WritingKind`): a `piece` section every kind shares (kind, size, paper, ink, lines of ink) and one section of options per kind. Only the scroll is built so far (`scroll`); a note and a book are flat stand-ins until their builders land. Each rests on the ground, centred over the origin, its long side along X, and writing is never etched.
+`armory::families::writing` makes written goods: scrolls, notes and books. It is new; no prototype draws any of them, so every slider is this port's own. One state holds the three kinds (`WritingKind`): a `piece` section every kind shares (kind, size, paper, ink, lines of ink) and one section of options per kind. The scroll (`scroll`) and the note (`note`) are built; a book is a flat stand-in until its builder lands. Each rests on the ground, centred over the origin, its long side along X, and writing is never etched.
 
 - A scroll's sheet is one thick sheet along a single path: a spiral wound on a roll, a rippled flat span with a curling free end, and, on two rollers, a second spiral wound back in. Rolled shut it is only the spirals; partly unrolled (`unroll` of 0.12 or more) the span shows rows of ink as thin strips lying on the paper. When the span is long the scroll is turned so its long side lies along X.
 - Paper is parchment, vellum (paler) or papyrus (its fibres show). Rollers are none, one or two turned dowels with wood, bone or brass knobs. A scroll rolled shut can be tied with ribbon or cord and sealed with wax (a colour, and a star of 3 to 9 points pressed in it); an open scroll never is.
 - Condition drives the wear rather than a slider of its own: `damage` ragged and bitten edges and a torn end, `wear` times `rot` foxing and a browner sheet, and wear with damage scorched edges.
+- A note (`build::note`) is one thick sheet from a scrap (0.6 units) to a full page (about 2.2 by 3). Its `form` is flat (cockled, bowed at the sides, corners lifted), folded once, folded in thirds (the creases are rounded geometry and the panels spring a little open), a folded letter closed with a wax seal (the scroll's seal, shared), or crumpled into a displaced, faceted ball. `tear` pulls the sides and ends in by noise for torn edges; `scrawl` lays a few uneven strips of ink on the top face, with an optional ink `blot` and `blood` stain. Condition adds tears, foxing, grime and scorch. Nouns: Note, Scrap of paper, Torn page, Folded note, Sealed letter, Crumpled note.
 
 ## Rarity and affixes
 

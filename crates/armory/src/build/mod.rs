@@ -42,6 +42,7 @@
 //! - [`hat`]: hats, crown and brim, on a head form.
 //! - [`belt`]: a belt buckled round a torso form, with frogs, loops and rings.
 //! - [`key`]: keys with ring, trefoil or lozenge bows and warded bits.
+//! - [`note`]: paper notes: flat, folded, sealed or crumpled sheets with ink and stains.
 //! - [`roll`]: rolled sheets and the straps round them (bedrolls, bandages).
 //! - [`scenery`]: what lies about a level and is never an item: rubble, bones, pillars.
 //! - [`light`]: carried light ([`light::LightAnchor`]), flames and embers (torches,
@@ -74,6 +75,7 @@ pub mod legwear;
 pub mod light;
 pub mod limb;
 pub mod parts;
+pub mod note;
 pub mod plank;
 pub mod plate;
 pub mod roll;
