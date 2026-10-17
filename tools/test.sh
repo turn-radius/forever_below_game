@@ -47,40 +47,45 @@ done <"$out/bins.tsv"
 wait
 finished=$(date +%s)
 
-failed=0
-passed=0
+# One line per binary, sorted; then each failure in full.
 for code in "$out"/*.code; do
   n="$(basename "$code" .code)"
   label="$(cat "$out/$n.label")"
-  result="$(grep -E '^test result:' "$out/$n.log" | tail -1)"
   if [ "$(cat "$code")" != 0 ]; then
-    failed=$((failed + 1))
-    echo "FAILED  $label"
-    # The failures section libtest prints, else the whole log.
-    if grep -q '^failures:$' "$out/$n.log"; then
-      sed -n '/^failures:$/,$p' "$out/$n.log"
-    else
-      cat "$out/$n.log"
-    fi
+    printf '%-40s FAILED\n' "$label"
   else
-    passed=$((passed + 1))
-    count="$(echo "$result" | sed -E 's/.*ok\. ([0-9]+ passed).*([0-9]+ ignored).*finished in ([0-9.]+s).*/\1, \2, \3/')"
-    printf '%-40s %s\n' "$label" "$count"
+    result="$(grep -E '^test result:' "$out/$n.log" | tail -1)"
+    printf '%-40s %s\n' "$label" "$(echo "$result" | sed -E 's/.*ok\. ([0-9]+ passed).*([0-9]+ ignored).*finished in ([0-9.]+s).*/\1, \2, \3/')"
   fi
-done | sort -s -k1,1
+done | sort
+for code in "$out"/*.code; do
+  n="$(basename "$code" .code)"
+  [ "$(cat "$code")" = 0 ] && continue
+  echo
+  echo "=== $(cat "$out/$n.label")"
+  # The failures section libtest prints, else the whole log (a crash, say).
+  if grep -q '^failures:$' "$out/$n.log"; then
+    sed -n '/^failures:$/,$p' "$out/$n.log"
+  else
+    cat "$out/$n.log"
+  fi
+done
 
 total="$(cat "$out"/*.log | grep -E '^test result:' | sed -E 's/.* ([0-9]+) passed; ([0-9]+) failed; ([0-9]+) ignored.*/\1 \2 \3/' \
   | awk '{p += $1; f += $2; g += $3} END {printf "%d passed, %d failed, %d ignored", p, f, g}')"
 bad="$(grep -L '^0$' "$out"/*.code | wc -l | tr -d ' ')"
+took=$((finished - built))
 echo
-echo "$total across $i binaries; build $((built - started)) s, tests $((finished - built)) s"
-# A binary past the budget holds the whole run up: name it, so a new slow test is noticed in
-# the change that adds it. Put a slow sweep behind #[ignore] with a quick _smoke twin.
-budget="${FB_TEST_BUDGET:-60}"
+echo "$total across $i binaries; build $((built - started)) s, tests $took s"
+# The slowest binaries bound the run, so name them, and say when the run is over budget: a new
+# slow test is then noticed in the change that adds it. Put a slow sweep behind #[ignore] with a
+# quick _smoke twin.
 for n in $(seq 1 "$i"); do
-  secs="$(grep -E '^test result:' "$out/$n.log" | tail -1 | sed -nE 's/.*finished in ([0-9]+)\..*/\1/p')"
-  if [ -n "$secs" ] && [ "$secs" -gt "$budget" ]; then
-    echo "slow: $(cat "$out/$n.label") took ${secs} s (budget ${budget} s)"
-  fi
-done
+  secs="$(grep -E '^test result:' "$out/$n.log" | tail -1 | sed -nE 's/.*finished in ([0-9.]+)s.*/\1/p')"
+  [ -n "$secs" ] && echo "$secs $(cat "$out/$n.label")"
+done | sort -rn | head -5 | awk '{t = $1; $1 = ""; printf "  slowest:%s, %s s\n", $0, t}'
+budget="${FB_TEST_BUDGET:-120}"
+if [ "$took" -gt "$budget" ]; then
+  echo "over budget: the tests took $took s against $budget s"
+fi
 [ "$bad" = 0 ]

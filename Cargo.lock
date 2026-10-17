@@ -2641,6 +2641,7 @@ version = "0.1.0"
 dependencies = [
  "armory",
  "fb_items",
+ "libc",
  "procgen_rng",
  "serde",
  "serde_json",
@@ -2810,6 +2811,7 @@ dependencies = [
  "fb_creatures",
  "fb_items",
  "fb_level",
+ "libc",
  "procgen_rng",
  "serde",
  "serde_json",
