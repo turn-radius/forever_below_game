@@ -18,8 +18,10 @@ use fb_character::{Activity, Attributes, Casting, Exhaustion, ExhaustionTimes, L
 use procgen_rng::Mulberry32;
 use scenario::{Book, run};
 
-/// The digest of the scenario's 3028 numbers on the code before the move.
-const GOLDEN: u64 = 0x40ea_fa2a_21e0_cd72;
+/// The digest of the scenario's 3028 numbers on the code before the move. Taken again from
+/// main's plain functions when main added the proficiency bonus to attacks (#359): the rules
+/// file must play as main does, not as the code did before that change.
+const GOLDEN: u64 = 0xaf7d_518a_2584_fa0f;
 const GOLDEN_LEN: usize = 3028;
 
 /// The scenario through the `_with` functions, under a rules table.

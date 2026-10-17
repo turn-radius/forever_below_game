@@ -106,6 +106,20 @@ pub struct Venom {
     pub damage: Explained,
 }
 
+impl Venom {
+    /// How many game hours the venom poisons the delver for ([`crate::poison::Poisoned`]):
+    /// [`crate::poison::VENOM_POISONED_HOURS`] after a failed save, none after a successful one
+    /// or with no venom. The lasting poison is our own; see that constant.
+    pub fn poisons_for(&self) -> Option<f64> {
+        self.poisons_for_with(defaults())
+    }
+
+    /// [`Venom::poisons_for`] under `rules`, which set the hours.
+    pub fn poisons_for_with(&self, rules: &Rules) -> Option<f64> {
+        self.save.as_ref().filter(|save| !save.succeeded).map(|_| rules.combat.venom_poisoned_hours)
+    }
+}
+
 /// A poisonous snake's venom after a Constitution save (d20 + modifier) against DC 10 halves
 /// it, rounded down (SRD 5.1 p. 386, "Poisonous Snake"; rounding down is our own). With no
 /// venom nothing is rolled.
@@ -148,13 +162,27 @@ pub fn bite_damage_with(rules: &Rules, damage: u32, poison: u32, constitution_mo
     Bite { damage: total, venom }
 }
 
+/// How the d20 of an attack roll is thrown: once, or twice keeping the higher (advantage) or the
+/// lower (disadvantage)
+/// ([SRD 5.1 p. 76](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=76),
+/// "Advantage and Disadvantage").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Odds {
+    #[default]
+    Even,
+    Advantage,
+    Disadvantage,
+}
+
 /// An attack roll against an armour class.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attack {
     /// The d20 and the to-hit terms, `d20 (14) + STR (+2) + ToHit (+1)`.
     pub roll: Explained,
-    /// The d20 alone.
+    /// The d20 kept.
     pub natural: u32,
+    /// The other d20, set aside, when the roll had advantage or disadvantage.
+    pub set_aside: Option<u32>,
     /// The armour class the attack met.
     pub armour_class: i32,
     pub hit: bool,
@@ -162,7 +190,8 @@ pub struct Attack {
 
 impl Attack {
     /// The roll, as one line for a log: `d20 (14) + STR (+2) + ToHit (+1) = 17 vs AC 15: hit`.
-    /// A natural 20 or 1 that decided the blow against the total says so.
+    /// A natural 20 or 1 that decided the blow against the total says so, and a roll with
+    /// advantage or disadvantage names the die it set aside.
     pub fn line(&self) -> String {
         let by_total = self.roll.value() >= self.armour_class as f64;
         let verdict = match (self.hit, self.natural) {
@@ -171,7 +200,8 @@ impl Attack {
             (true, _) => "hit".to_string(),
             (false, _) => "miss".to_string(),
         };
-        format!("{} = {} vs AC {}: {verdict}", self.roll.terms_line(), self.roll.value(), self.armour_class)
+        let aside = self.set_aside.map_or(String::new(), |d| format!(", {d} set aside"));
+        format!("{} = {} vs AC {}: {verdict}{aside}", self.roll.terms_line(), self.roll.value(), self.armour_class)
     }
 }
 
@@ -179,13 +209,26 @@ impl Attack {
 /// `armour_class` (SRD 5.1 p. 96, "Attack Rolls"). A natural 20 always hits and a natural 1
 /// always misses; otherwise the total must reach the armour class. One draw.
 pub fn attack_roll(to_hit: &[(&str, i32)], armour_class: i32, rng: &mut Mulberry32) -> Attack {
-    attack_roll_with(defaults(), to_hit, armour_class, rng)
+    attack_roll_with(defaults(), to_hit, armour_class, Odds::Even, rng)
 }
 
-/// [`attack_roll`] under `rules`, which say which d20 always hits and which always misses.
-pub fn attack_roll_with(rules: &Rules, to_hit: &[(&str, i32)], armour_class: i32, rng: &mut Mulberry32) -> Attack {
-    let natural = rng.int(1, 20);
-    let mut roll = Explained::new("Attack", "").base("d20", natural as f64);
+/// [`attack_roll`] under `rules` (which say which d20 always hits and which always misses),
+/// thrown with `odds` ([`Odds`]): one draw when even, two otherwise, keeping the higher with
+/// advantage and the lower with disadvantage.
+pub fn attack_roll_with(rules: &Rules, to_hit: &[(&str, i32)], armour_class: i32, odds: Odds, rng: &mut Mulberry32) -> Attack {
+    let first = rng.int(1, 20);
+    let (natural, set_aside, label) = match odds {
+        Odds::Even => (first, None, "d20"),
+        Odds::Advantage => {
+            let second = rng.int(1, 20);
+            (first.max(second), Some(first.min(second)), "d20 with advantage")
+        }
+        Odds::Disadvantage => {
+            let second = rng.int(1, 20);
+            (first.min(second), Some(first.max(second)), "d20 with disadvantage")
+        }
+    };
+    let mut roll = Explained::new("Attack", "").base(label, natural as f64);
     for (label, amount) in to_hit {
         roll = roll.add(*label, *amount as f64);
     }
@@ -197,32 +240,80 @@ pub fn attack_roll_with(rules: &Rules, to_hit: &[(&str, i32)], armour_class: i32
     } else {
         roll.value() >= armour_class as f64
     };
-    Attack { roll, natural, armour_class, hit }
+    Attack { roll, natural, set_aside, armour_class, hit }
 }
 
-/// A folk attacker's roll: the Strength modifier and the weapon's `ToHit` (rounded, left out
-/// when 0).
+/// The proficiency bonus the delver and folk add to their attack rolls: +2, a character's from
+/// 1st to 4th level (SRD 5.1, "Beyond 1st Level", the Character Advancement table; "Attack
+/// Rolls", p. 96). Everyone counts as proficient with whatever they swing, as everyone is with
+/// unarmed strikes in the SRD; that every weapon counts is our own simplification until classes
+/// carry weapon proficiencies. This is the default of [`crate::rules::CombatRules::proficiency_bonus`].
+pub const PROFICIENCY_BONUS: i32 = 2;
+
+/// What an attacker adds to the d20. The delver, folk and creatures all roll through it against
+/// the armour class of whatever they swing at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToHit {
+    /// Someone with abilities and a weapon (the delver, a folk): the Strength modifier, the
+    /// proficiency bonus ([`PROFICIENCY_BONUS`]) and the weapon's `ToHit`, rounded and left out
+    /// when 0 (SRD 5.1 p. 96, "Attack Rolls").
+    Strength { modifier: i32, weapon: i32 },
+    /// A creature: the attack bonus its SRD stat block prints, and the `ToHit` of a weapon it
+    /// carries (a skeleton's), left out when 0.
+    StatBlock { attack_bonus: i32, weapon: i32 },
+}
+
+impl ToHit {
+    /// The terms it adds to the d20, each with its label.
+    pub fn terms(self) -> Vec<(&'static str, i32)> {
+        self.terms_with(defaults())
+    }
+
+    /// [`ToHit::terms`] under `rules`, which set the proficiency bonus.
+    pub fn terms_with(self, rules: &Rules) -> Vec<(&'static str, i32)> {
+        let (first, weapon) = match self {
+            ToHit::Strength { modifier, weapon } => (("STR", modifier), weapon),
+            ToHit::StatBlock { attack_bonus, weapon } => (("attack bonus", attack_bonus), weapon),
+        };
+        let mut terms = vec![first];
+        if matches!(self, ToHit::Strength { .. }) {
+            terms.push(("proficiency", rules.combat.proficiency_bonus));
+        }
+        if weapon != 0 {
+            terms.push(("ToHit", weapon));
+        }
+        terms
+    }
+
+    /// An attack with these terms against `armour_class`, thrown with `odds` ([`attack_roll_with`]).
+    pub fn roll(self, armour_class: i32, odds: Odds, rng: &mut Mulberry32) -> Attack {
+        self.roll_with(defaults(), armour_class, odds, rng)
+    }
+
+    /// [`ToHit::roll`] under `rules`.
+    pub fn roll_with(self, rules: &Rules, armour_class: i32, odds: Odds, rng: &mut Mulberry32) -> Attack {
+        attack_roll_with(rules, &self.terms_with(rules), armour_class, odds, rng)
+    }
+}
+
+/// A folk attacker's roll: the Strength modifier and the weapon's `ToHit` ([`ToHit::Strength`]).
 pub fn folk_attack(strength_modifier: i32, weapon_to_hit: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
     folk_attack_with(defaults(), strength_modifier, weapon_to_hit, armour_class, rng)
 }
 
 /// [`folk_attack`] under `rules`.
 pub fn folk_attack_with(rules: &Rules, strength_modifier: i32, weapon_to_hit: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
-    if weapon_to_hit == 0 {
-        attack_roll_with(rules, &[("STR", strength_modifier)], armour_class, rng)
-    } else {
-        attack_roll_with(rules, &[("STR", strength_modifier), ("ToHit", weapon_to_hit)], armour_class, rng)
-    }
+    ToHit::Strength { modifier: strength_modifier, weapon: weapon_to_hit }.roll_with(rules, armour_class, Odds::Even, rng)
 }
 
-/// A creature's roll: the attack bonus its SRD stat block prints.
+/// A creature's roll: the attack bonus its SRD stat block prints ([`ToHit::StatBlock`]).
 pub fn creature_attack(attack_bonus: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
     creature_attack_with(defaults(), attack_bonus, armour_class, rng)
 }
 
 /// [`creature_attack`] under `rules`.
 pub fn creature_attack_with(rules: &Rules, attack_bonus: i32, armour_class: i32, rng: &mut Mulberry32) -> Attack {
-    attack_roll_with(rules, &[("attack bonus", attack_bonus)], armour_class, rng)
+    ToHit::StatBlock { attack_bonus, weapon: 0 }.roll_with(rules, armour_class, Odds::Even, rng)
 }
 
 #[cfg(test)]
@@ -236,12 +327,12 @@ mod tests {
     }
 
     #[test]
-    fn a_14_plus_str_2_plus_to_hit_1_hits_ac_15() {
+    fn a_14_plus_str_2_plus_proficiency_plus_to_hit_1_hits_ac_15() {
         let attack = folk_attack(2, 1, 15, &mut Mulberry32::new(seed_for(14)));
-        assert_eq!((attack.natural, attack.roll.value(), attack.hit), (14, 17.0, true));
-        assert_eq!(attack.line(), "d20 (14) + STR (+2) + ToHit (+1) = 17 vs AC 15: hit");
-        let miss = folk_attack(2, 1, 18, &mut Mulberry32::new(seed_for(14)));
-        assert_eq!((miss.hit, miss.line().ends_with("vs AC 18: miss")), (false, true));
+        assert_eq!((attack.natural, attack.roll.value(), attack.hit), (14, 19.0, true));
+        assert_eq!(attack.line(), "d20 (14) + STR (+2) + proficiency (+2) + ToHit (+1) = 19 vs AC 15: hit");
+        let miss = folk_attack(2, 1, 20, &mut Mulberry32::new(seed_for(14)));
+        assert_eq!((miss.hit, miss.line().ends_with("vs AC 20: miss")), (false, true));
     }
 
     #[test]
@@ -251,7 +342,7 @@ mod tests {
         assert_eq!(one.line(), "d20 (1) + attack bonus (+30) = 31 vs AC 5: miss, natural 1");
         let twenty = folk_attack(-4, 0, 30, &mut Mulberry32::new(seed_for(20)));
         assert!(twenty.hit, "{}", twenty.line());
-        assert_eq!(twenty.line(), "d20 (20) + STR (-4) = 16 vs AC 30: hit, natural 20");
+        assert_eq!(twenty.line(), "d20 (20) + STR (-4) + proficiency (+2) = 18 vs AC 30: hit, natural 20");
         let plain = folk_attack(0, 0, 10, &mut Mulberry32::new(seed_for(20)));
         assert!(plain.line().ends_with(": hit"), "a 20 that also beats the AC is just a hit");
     }
@@ -270,6 +361,48 @@ mod tests {
         let mut reference = Mulberry32::new(5);
         reference.next_f64();
         assert_eq!(rng.next_f64(), reference.next_f64());
+    }
+
+    #[test]
+    fn an_ordinary_swing_hits_ac_30_only_on_a_natural_20_and_ac_0_but_for_a_natural_1() {
+        let to_hit = ToHit::Strength { modifier: 2, weapon: 1 };
+        let mut rng = Mulberry32::new(77);
+        let (mut high_hits, mut low_misses) = (0, 0);
+        for _ in 0..2_000 {
+            let high = to_hit.roll(30, Odds::Even, &mut rng);
+            assert_eq!(high.hit, high.natural == 20, "{}", high.line());
+            high_hits += high.hit as usize;
+            let low = to_hit.roll(0, Odds::Even, &mut rng);
+            assert_eq!(low.hit, low.natural != 1, "{}", low.line());
+            low_misses += !low.hit as usize;
+        }
+        // One in twenty each way.
+        assert!((60..140).contains(&high_hits) && (60..140).contains(&low_misses), "{high_hits} {low_misses}");
+    }
+
+    #[test]
+    fn disadvantage_keeps_the_lower_die_and_hits_less_often() {
+        let seed = (0..10_000u32).find(|s| {
+            let mut r = Mulberry32::new(*s);
+            (r.int(1, 20), r.int(1, 20)) == (15, 4)
+        });
+        let attack = ToHit::Strength { modifier: 1, weapon: 0 }.roll(12, Odds::Disadvantage, &mut Mulberry32::new(seed.unwrap()));
+        assert_eq!((attack.natural, attack.set_aside, attack.hit), (4, Some(15), false));
+        assert_eq!(attack.line(), "d20 with disadvantage (4) + STR (+1) + proficiency (+2) = 7 vs AC 12: miss, 15 set aside");
+        let rate = |odds| {
+            let mut rng = Mulberry32::new(31);
+            (0..20_000).filter(|_| ToHit::StatBlock { attack_bonus: 4, weapon: 0 }.roll(13, odds, &mut rng).hit).count() as f64 / 20_000.0
+        };
+        // +4 against 13 needs a 9: 60% straight, 36% at disadvantage, 84% with advantage.
+        assert!((rate(Odds::Even) - 0.60).abs() < 0.015, "{}", rate(Odds::Even));
+        assert!((rate(Odds::Disadvantage) - 0.36).abs() < 0.015, "{}", rate(Odds::Disadvantage));
+        assert!((rate(Odds::Advantage) - 0.84).abs() < 0.015, "{}", rate(Odds::Advantage));
+    }
+
+    #[test]
+    fn a_skeletons_weapon_adds_its_to_hit_and_a_zero_is_left_out() {
+        assert_eq!(ToHit::StatBlock { attack_bonus: 4, weapon: 1 }.terms(), [("attack bonus", 4), ("ToHit", 1)]);
+        assert_eq!(ToHit::Strength { modifier: -1, weapon: 0 }.terms(), [("STR", -1), ("proficiency", 2)]);
     }
 
     /// The game's combat as it was before the dice moved here, for the same draws.
@@ -360,6 +493,15 @@ mod tests {
         assert_eq!(venom.damage.value(), 3.0, "7 halved, rounded down");
         let seed = (0..500).find(|s| Mulberry32::new(*s).int(1, 20) == 9).unwrap();
         assert_eq!(venom_after_save(7, 0, &mut Mulberry32::new(seed)).damage.value(), 7.0, "9 fails");
+    }
+
+    #[test]
+    fn a_failed_save_against_venom_poisons_for_an_hour_and_a_good_one_does_not() {
+        let seed = (0..500).find(|s| Mulberry32::new(*s).int(1, 20) == 9).unwrap();
+        assert_eq!(venom_after_save(5, 0, &mut Mulberry32::new(seed)).poisons_for(), Some(1.0), "9 fails DC 10");
+        assert_eq!(venom_after_save(5, 1, &mut Mulberry32::new(seed)).poisons_for(), None, "10 saves");
+        assert_eq!(venom_after_save(0, -5, &mut Mulberry32::new(seed)).poisons_for(), None, "no venom, no poison");
+        assert_eq!(bite_damage(1, 5, 0, &mut Mulberry32::new(seed)).venom.poisons_for(), Some(1.0));
     }
 
     #[test]

@@ -181,11 +181,24 @@ pub struct CombatRules {
     /// "Hit Points at 1st Level": fighter p. 24, ranger p. 35, cleric p. 15, wizard p. 52 for
     /// the mage).
     pub hit_dice: HitDice,
+    /// What a delver's or a folk's attack roll adds for proficiency with the weapon, a 1st-level
+    /// character's +2 (SRD 5.1 p. 12, "Proficiency Bonus").
+    pub proficiency_bonus: i32,
+    /// Game hours a failed save against venom leaves the delver poisoned (our own).
+    pub venom_poisoned_hours: f64,
 }
 
 impl Default for CombatRules {
     fn default() -> Self {
-        CombatRules { armour_base: 10, natural_hit: 20, natural_miss: 1, venom_save_dc: 10, hit_dice: HitDice::default() }
+        CombatRules {
+            armour_base: 10,
+            natural_hit: 20,
+            natural_miss: 1,
+            venom_save_dc: 10,
+            hit_dice: HitDice::default(),
+            proficiency_bonus: crate::combat::PROFICIENCY_BONUS,
+            venom_poisoned_hours: crate::poison::VENOM_POISONED_HOURS,
+        }
     }
 }
 

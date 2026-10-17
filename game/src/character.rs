@@ -45,6 +45,30 @@ impl Class {
         }
     }
 
+    /// The class's hit die under the default rules: d10 for fighters and rangers, d8 for
+    /// clerics, d6 for mages (SRD 5.1 "Hit Points": fighter p. 24, ranger p. 35, cleric p. 15,
+    /// wizard, our mage, p. 52).
+    pub fn hit_die(self) -> u32 {
+        self.hit_die_with(fb_character::rules::defaults())
+    }
+
+    /// The class's hit die from `rules` (`combat.hit_dice` in `data/rules.toml`).
+    pub fn hit_die_with(self, rules: &fb_character::rules::Rules) -> u32 {
+        let dice = &rules.combat.hit_dice;
+        match self {
+            Class::Fighter => dice.fighter,
+            Class::Ranger => dice.ranger,
+            Class::Cleric => dice.cleric,
+            Class::Mage => dice.mage,
+        }
+    }
+
+    /// The class whose outfit is `key` in `data/outfits.json`, or `None` for a look that is no
+    /// class (the freshly fallen, the scavenger).
+    pub fn of_outfit(key: &str) -> Option<Class> {
+        Class::ALL.into_iter().find(|c| c.outfit_key() == key)
+    }
+
     /// The word the header uses, lower case as the plate's `cline` writes it.
     pub fn word(self) -> &'static str {
         self.outfit_key()
@@ -283,6 +307,12 @@ pub struct DelverStamina(pub fb_character::Stamina);
 /// Nothing spends it yet.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverMana(pub Mana);
+
+/// Venom in the delver's blood, on the [`Player`](crate::play::Player) only while it works: a
+/// failed save against a snake's venom puts it on (`crate::combat::vitals`), the game clock
+/// steps it and it comes off when it wears off (`crate::simulate::step_the_delver`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverPoison(pub fb_character::poison::Poisoned);
 
 /// How easy the delver is to see, 0 to 1 ([`fb_character::visibility`]): from the light on them,
 /// their pace, load and Stealth. Kept on the [`Player`](crate::play::Player) so the eye can show

@@ -30,6 +30,10 @@
 //!   what they were doing. They stop well before contact, and the player cannot walk into them
 //!   (their [`BlocksTheWay`] circle).
 //!
+//! - **Fighting.** A hostile folk (`crate::hostility`) leaves their routine where it stands and
+//!   fights (`crate::folk_combat`); the others still keep out of their circle. One who gives up
+//!   the fight walks back to their spot ([`Routine::head_home`]) and carries on from there.
+//!
 //! Every pace, range and wait here is our own tuning (`FolkTuning`) unless noted.
 
 use bevy::prelude::*;
@@ -40,6 +44,7 @@ use procgen_rng::Mulberry32;
 use crate::creatures::Critter;
 use crate::creatures::behaviour::body_radius;
 use crate::folk::{Denizen, Stride};
+use crate::hostility::Hostility;
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, BlocksTheWay, CurrentLevel, DelveSystems, Obstacle, Player};
 use crate::player::{blocked_by, slide_around};
@@ -126,6 +131,17 @@ impl Routine {
         self.away = 0.0;
     }
 
+    /// Drops whatever they were doing for a short pause, after which they walk back to their
+    /// spot (a pause away from home always ends in the walk back): for one coming back to their
+    /// routine from somewhere else, as a folk who gave up a fight does.
+    pub fn head_home(&mut self) {
+        self.resume = None;
+        self.path.clear();
+        self.speed = 0.0;
+        self.stuck = 0.0;
+        self.phase = Phase::Pause { left: 0.5 };
+    }
+
     /// Lets a held person carry on: back to the walk they were on, or else a short pause and a
     /// new walk.
     pub fn release(&mut self) {
@@ -155,15 +171,18 @@ fn cell(p: Vec2) -> (i32, i32) {
     ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32)
 }
 
-/// Gives each new person a routine.
-fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entity, &Denizen, &Transform), Added<Denizen>>) {
-    for (entity, denizen, at) in &new {
+/// Gives each new person a routine (a body brought back from the record has none).
+#[allow(clippy::type_complexity)]
+fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entity, &Denizen), (Added<Denizen>, Without<crate::combat::feedback::Corpse>)>) {
+    for (entity, denizen) in &new {
         let mut rng = Mulberry32::new(denizen.person.spot.seed ^ ROUTINE_SALT);
         let first = rng.range_f32(0.0, tuning.folk.pause_max.max(tuning.folk.pause_min));
-        let facing = (at.rotation * Vec3::Z).xz().normalize_or_zero();
+        // Home is their spot, even for someone brought back from the record somewhere else.
+        let placed = crate::folk::stand_at(&denizen.person.spot);
+        let facing = (placed.rotation * Vec3::Z).xz().normalize_or_zero();
         commands.entity(entity).insert(Routine {
             phase: Phase::Pause { left: first },
-            home: at.translation.xz(),
+            home: placed.translation.xz(),
             facing,
             chosen: Vec::new(),
             walks: 0,
@@ -269,6 +288,7 @@ fn inset(room: &fb_level::Room, margin: f32) -> (Vec2, Vec2) {
 
 /// One frame of every person's routine: pause, choose a place and its way, then step along it
 /// round whatever is in the way, turning to face where they go.
+#[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
 fn walk_routines(
     time: Res<Time>,
@@ -278,7 +298,7 @@ fn walk_routines(
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
     creatures: Query<(&Critter, &Transform), Without<Denizen>>,
     props: Query<(&BlocksTheWay, &GlobalTransform), Without<Denizen>>,
-    mut folk: Query<(Entity, &Denizen, &mut Routine, &mut Stride, &mut Transform)>,
+    mut folk: Query<(Entity, &Denizen, &mut Routine, &mut Stride, &mut Transform, Option<&Hostility>)>,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
@@ -299,13 +319,18 @@ fn walk_routines(
     let mut shared = fixed.clone();
     shared.extend(moving.iter().copied());
     let mut body_of: Vec<(Entity, usize)> = Vec::new();
-    for (e, d, _, _, t) in folk.iter() {
+    for (e, d, _, _, t, _) in folk.iter() {
         body_of.push((e, shared.len()));
         shared.push(Obstacle::Circle { centre: t.translation.xz(), radius: d.radius });
     }
     let relief = Relief::new(level);
 
-    for (entity, denizen, mut routine, mut stride, mut transform) in &mut folk {
+    for (entity, denizen, mut routine, mut stride, mut transform, hostility) in &mut folk {
+        // A hostile folk has left their routine to fight (`crate::folk_combat::fight`), though
+        // the others still keep out of where they stand.
+        if hostility.is_some_and(|h| h.is_hostile()) {
+            continue;
+        }
         let routine = &mut *routine;
         let at = transform.translation.xz();
         let radius = denizen.radius;
@@ -450,7 +475,7 @@ mod tests {
             .folk
             .iter()
             .map(|spot| {
-                let denizen = Denizen { person: crate::folk::Person::of(spot), radius: FOOTPRINT, min: Vec3::ZERO, max: Vec3::ZERO };
+                let denizen = Denizen { person: crate::folk::Person::of(spot, 1), radius: FOOTPRINT, min: Vec3::ZERO, max: Vec3::ZERO };
                 app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(FOOTPRINT)), Stride::default(), crate::folk::stand_at(spot))).id()
             })
             .collect();
@@ -613,7 +638,7 @@ mod tests {
 
     #[test]
     fn shorter_folk_walk_slower() {
-        let tall = fb_level::generate(1207, 1).folk.into_iter().map(|s| crate::folk::Person::of(&s)).collect::<Vec<_>>();
+        let tall = fb_level::generate(1207, 1).folk.into_iter().map(|s| crate::folk::Person::of(&s, 1)).collect::<Vec<_>>();
         let mk = |p: &crate::folk::Person| Denizen { person: p.clone(), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO };
         for a in &tall {
             for b in &tall {

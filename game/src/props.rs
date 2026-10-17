@@ -159,13 +159,13 @@ fn rescale_props(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut props: Query
     }
 }
 
-/// Keeps track of a container prop in `inventory`, loose, holding what its loot rolls: each
-/// thing at its first free spot, upright first and then turned, and anything with no room
-/// left out. `None` for scenery.
-pub fn stock_container(inventory: &mut Inventory, prop: Prop) -> Option<ItemId> {
+/// Keeps track of a container prop in `inventory`, loose, holding what its loot rolls at the
+/// odds of a level `depth` down: each thing at its first free spot, upright first and then
+/// turned, and anything with no room left out. `None` for scenery.
+pub fn stock_container(inventory: &mut Inventory, prop: Prop, depth: u32) -> Option<ItemId> {
     let Prop::Container { style, seed, loot } = prop else { return None };
     let container = inventory.add(fb_items::container_item(chest_state(style, seed, false)));
-    for item in fb_items::roll_contents(style, loot) {
+    for item in fb_items::roll_contents(style, loot, fb_items::Odds::loot(depth)) {
         let id = inventory.add(item);
         let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
         let at = inventory.grid(container).and_then(|g| g.first_free(footprint));
@@ -205,7 +205,7 @@ fn lay_out_props(
                 restore_contents(&mut inventory, container, &left.contents);
                 Some(container)
             }
-            _ => stock_container(&mut inventory, spot.prop),
+            _ => stock_container(&mut inventory, spot.prop, level.0.depth),
         };
         let opened = left.is_some_and(|c| c.opened);
         if let Some(mut root) = spawn_prop(&mut spawner, &level.0, index, opened, &tuning)
@@ -481,7 +481,7 @@ mod tests {
         let inventory = app.world().resource::<Inventory>();
         for spot in &level.props {
             let Prop::Container { style, loot, .. } = spot.prop else { continue };
-            let rolled = fb_items::roll_contents(style, loot);
+            let rolled = fb_items::roll_contents(style, loot, fb_items::Odds::loot(level.depth));
             assert!(!rolled.is_empty());
             // Some container in the inventory holds exactly these, by title, in roll order.
             let titles: Vec<String> = rolled.iter().map(|i| i.title().to_string()).collect();

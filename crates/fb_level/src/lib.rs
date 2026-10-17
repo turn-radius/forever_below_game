@@ -267,7 +267,7 @@ pub mod sight;
 pub mod path;
 pub mod props;
 pub mod stairs;
-pub use creatures::CreatureSpot;
+pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
 pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use generate::{generate, generate_with};

@@ -167,7 +167,7 @@ impl Default for Keymap {
                 bind(Action::Consume, "Eat or drink what is under the mouse in the inventory", Group::Items, &[Key(KeyCode::KeyU)]),
                 bind(
                     Action::Quickslot,
-                    "Use the item in a quickslot",
+                    "Use a quickslot, or in the inventory bind the item under the mouse to it",
                     Group::Items,
                     &[
                         Key(KeyCode::Digit1),

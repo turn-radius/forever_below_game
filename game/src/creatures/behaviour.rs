@@ -15,8 +15,9 @@
 //!   snakes come on at their speed and keep near their spot.
 //! - **Attacking.** In reach, it turns to the player and attacks on a cooldown: a rat lunges
 //!   and bites; a snake draws its coils in and rears, then strikes with its jaw open. At the
-//!   moment of the bite it sends a [`CreatureAttack`] with the stat block's bite rolled, which
-//!   combat (#160) will apply; nothing here hurts anyone.
+//!   moment of the bite it rolls to hit, the stat block's attack bonus against the delver's
+//!   Armor Class ([`BlowsAtDelver`]): a hit sends an [`AttackOnDelver`] with the stat block's
+//!   bite rolled, which combat applies, and a miss a [`MissedDelver`].
 //! - **Losing the player.** Out of sight for [`LOSE_AFTER`] seconds once it has reached where
 //!   it last saw them, or led too far from home, it goes back to wandering its room.
 //!
@@ -31,7 +32,9 @@ use fb_level::{CELL, Level};
 use procgen_rng::Mulberry32;
 
 use super::{Critter, Driven, Intent, tongue_flick};
+use crate::combat::ArmourClass;
 use crate::combat::feedback::Corpse;
+use fb_character::combat::{Odds, ToHit};
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
 use crate::player::{blocked_by, slide_around};
@@ -41,7 +44,8 @@ pub struct BehaviourPlugin;
 
 impl Plugin for BehaviourPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<CreatureAttack>()
+        app.add_message::<AttackOnDelver>()
+            .add_message::<MissedDelver>()
             .init_resource::<BlockedCells>()
             .init_resource::<Obstacles>()
             .init_resource::<Tuning>()
@@ -49,11 +53,13 @@ impl Plugin for BehaviourPlugin {
     }
 }
 
-/// A creature's bite landing, for combat to apply.
+/// A blow landing on the delver, for combat to apply: a creature's bite or blow, or a hostile
+/// folk's (`crate::folk_combat`).
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
-pub struct CreatureAttack {
+pub struct AttackOnDelver {
     pub attacker: Entity,
-    pub species: Species,
+    /// The attacking creature's species, `None` for a folk.
+    pub species: Option<Species>,
     /// The bite's damage, rolled from the stat block ([`fb_creatures::StatBlock::bite`]).
     pub damage: u32,
     /// Poison rolled from the stat block's venom (the poisonous snake's 2d4), before the DC 10
@@ -63,6 +69,58 @@ pub struct CreatureAttack {
     /// delver's facing.
     pub attacker_pos: Vec2,
 }
+
+/// A blow aimed at the delver that missed: its attack roll fell short of their Armor Class.
+/// Combat whooshes it past them (`crate::combat::vitals`); nothing else happens.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct MissedDelver {
+    pub attacker: Entity,
+    /// The attacker's position on the floor (world `(x, z)`).
+    pub attacker_pos: Vec2,
+}
+
+/// Where every blow at the delver, a creature's or a folk's, is rolled: the attacker's to-hit
+/// against the delver's Armor Class, the same rule as the delver's swings
+/// ([`fb_character::combat::ToHit`]). A hit is sent as an [`AttackOnDelver`], a miss as a
+/// [`MissedDelver`]. Once the delver is down nothing is rolled or sent, and nobody starts a
+/// blow at them ([`BlowsAtDelver::delver_is_down`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct BlowsAtDelver<'w, 's> {
+    hits: MessageWriter<'w, AttackOnDelver>,
+    misses: MessageWriter<'w, MissedDelver>,
+    fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
+    delver: Query<'w, 's, &'static crate::combat::Health, With<Player>>,
+    rules: Option<Res<'w, crate::rules::GameRules>>,
+}
+
+impl BlowsAtDelver<'_, '_> {
+    /// Whether the delver has fallen (at 0 hit points, or the run ending): there is nothing left
+    /// to fight.
+    pub fn delver_is_down(&self) -> bool {
+        self.fallen.is_some() || self.delver.iter().any(|health| health.is_down())
+    }
+
+    /// Rolls `blow`, by `who` with `to_hit`, against `armour_class` (the delver's, or
+    /// [`ArmourClass::UNARMOURED`] when they have none), from `rng`; returns whether it landed.
+    /// Against a fallen delver nothing is rolled and it does not land.
+    pub fn strike(&mut self, who: &str, blow: AttackOnDelver, to_hit: ToHit, armour_class: Option<&ArmourClass>, rng: &mut Mulberry32) -> bool {
+        if self.delver_is_down() {
+            return false;
+        }
+        let ac = armour_class.copied().unwrap_or(ArmourClass::UNARMOURED).0;
+        let attack = to_hit.roll_with(crate::rules::GameRules::of(&self.rules), ac, Odds::Even, rng);
+        info!("{who} attacks the delver: {}", attack.line());
+        if attack.hit {
+            self.hits.write(blow);
+        } else {
+            self.misses.write(MissedDelver { attacker: blow.attacker, attacker_pos: blow.attacker_pos });
+        }
+        attack.hit
+    }
+}
+
+/// The delver as a blow at them needs them: where they stand and their Armor Class.
+pub type DelverToStrike = (&'static Transform, Option<&'static ArmourClass>);
 
 /// What a creature is doing.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -211,9 +269,9 @@ fn behave(
     rules: Option<Res<crate::rules::GameRules>>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
-    player: Query<&Transform, (With<Player>, Without<Critter>)>,
+    player: Query<DelverToStrike, (With<Player>, Without<Critter>)>,
     mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform)>,
-    mut attacks: MessageWriter<CreatureAttack>,
+    mut attacks: BlowsAtDelver,
     mut commands: Commands,
     sounds: Option<Res<crate::combat::feedback::CreatureSounds>>,
     bone_sounds: Option<Res<super::skeletons::BoneSounds>>,
@@ -226,7 +284,8 @@ fn behave(
     let level = &level.0;
     let relief = Relief::new(level);
     let blocked = blocked_by(level, &blocked_cells);
-    let player = player.iter().next().map(|t| t.translation.xz());
+    let delver_ac = player.iter().next().and_then(|(_, ac)| ac.copied());
+    let player = player.iter().next().map(|(t, _)| t.translation.xz());
     // Every creature's circle, to keep the others out of.
     let bodies: Vec<(Entity, Vec2, f32)> = creatures.iter().map(|(e, c, _, _, t)| (e, t.translation.xz(), body_radius(c))).collect();
     let t = time.elapsed_secs();
@@ -298,7 +357,7 @@ fn behave(
                     heading = Some(goal);
                     speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() { 1.0 } else { tune.rat_chase_speed };
                 }
-                if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 {
+                if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 && !attacks.delver_is_down() {
                     brain.attack = Some(0.0);
                     brain.bitten = false;
                     // The cue sounds from the creature as the lunge or rear begins, before the bite.
@@ -409,7 +468,8 @@ fn behave(
                 let within = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius) * SKELETON_SLACK && line_of_sight(grid(at), grid(p), &blocked));
                 if let (true, Some(kit)) = (within, critter.kit.as_ref()) {
                     let damage = kit.roll_damage(&mut brain.rng);
-                    attacks.write(CreatureAttack { attacker: entity, species, damage, poison: 0, attacker_pos: at });
+                    let blow = AttackOnDelver { attacker: entity, species: Some(species), damage, poison: 0, attacker_pos: at };
+                    attacks.strike("A skeleton", blow, critter.to_hit_with(crate::rules::GameRules::of(&rules)), delver_ac.as_ref(), &mut brain.rng);
                 }
             }
             if !brain.bitten && since >= lands {
@@ -419,7 +479,8 @@ fn behave(
                     let block = crate::rules::GameRules::of(&rules).creature(species);
                     let damage = block.bite.roll(&mut brain.rng);
                     let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
-                    attacks.write(CreatureAttack { attacker: entity, species, damage, poison, attacker_pos: at });
+                    let blow = AttackOnDelver { attacker: entity, species: Some(species), damage, poison, attacker_pos: at };
+                    attacks.strike(block.name, blow, critter.to_hit_with(crate::rules::GameRules::of(&rules)), delver_ac.as_ref(), &mut brain.rng);
                 }
             }
             if since >= done {
@@ -482,9 +543,32 @@ mod tests {
         app.world().get::<Transform>(entity).unwrap().translation.xz()
     }
 
-    fn attacks(app: &mut App) -> Vec<CreatureAttack> {
-        let messages = app.world().resource::<Messages<CreatureAttack>>();
+    fn attacks(app: &mut App) -> Vec<AttackOnDelver> {
+        let messages = app.world().resource::<Messages<AttackOnDelver>>();
         messages.iter_current_update_messages().copied().collect()
+    }
+
+    #[test]
+    fn nothing_attacks_a_fallen_delver() {
+        let level = fb_level::generate(1207, 1);
+        let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
+        let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
+        let (cx, cy) = room.centre();
+        let player_at = Vec2::new(cx, cy) * CELL + Vec2::new(-1.0, 1.3) * CELL;
+        let (mut app, _, player) = level_app(player_at);
+        // Bitten a while first, then down.
+        let mut before = 0;
+        for _ in 0..600 {
+            app.update();
+            before += attacks(&mut app).len() + app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count();
+        }
+        assert!(before > 0, "the rats never went for the delver");
+        app.world_mut().entity_mut(player).insert(crate::combat::Health { hp: 0, max: 10 });
+        for frame in 0..600 {
+            app.update();
+            assert!(attacks(&mut app).is_empty(), "bitten after the fall, at frame {frame}");
+            assert_eq!(app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count(), 0, "a blow at the fallen, at frame {frame}");
+        }
     }
 
     #[test]

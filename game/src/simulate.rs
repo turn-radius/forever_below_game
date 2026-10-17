@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use fb_character::rules::Rules;
 use fb_character::{Activity, Exhaustion, ExhaustionTimes, Needs};
 
-use crate::character::{Character, DelverMana, DelverNeeds, DelverStamina, Load, activity_for};
+use crate::character::{Character, DelverMana, DelverNeeds, DelverPoison, DelverStamina, Load, activity_for};
 use crate::combat::swing::Swing;
 use crate::exhaustion::{Exhaustion as DelverExhaustion, ExhaustionTimes as DelverTimes};
 use crate::game_clock::{GameClock, advance_game_clock};
@@ -60,7 +60,8 @@ fn step_the_delver(
     rules: Res<GameRules>,
     input: ActionInput,
     mut last: Local<f64>,
-    mut players: Query<(&Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana), With<Player>>,
+    mut players: Query<(Entity, &Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana, Option<&mut DelverPoison>), With<Player>>,
+    mut commands: Commands,
 ) {
     let now = clock.game_seconds();
     // A new delve restarts the clock below where this last stood.
@@ -70,7 +71,7 @@ fn step_the_delver(
     let rules_changed = rules.is_changed() && !rules.is_added();
     let changed = character.is_changed() || inventory.is_changed() || rules_changed;
     let mut gear = None;
-    for (locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana) in &mut players {
+    for (player, locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana, poison) in &mut players {
         if changed || needs.is_added() {
             let gear = gear.get_or_insert_with(|| character.gear(&inventory));
             // The rates a meter is made with are the defaults', so they are only put on again
@@ -106,6 +107,13 @@ fn step_the_delver(
         mana.set_if_neq(DelverMana(pool));
         // The level moves a few times in a run, so it is only marked changed when it does.
         exhaustion.set_if_neq(DelverExhaustion(e));
+        // Venom wears off by game time, and its component goes with it.
+        if let Some(mut poison) = poison {
+            poison.0.step(hours);
+            if !poison.0.is_active() {
+                commands.entity(player).remove::<DelverPoison>();
+            }
+        }
     }
 }
 
@@ -280,6 +288,18 @@ mod tests {
         app.world_mut().get_mut::<Locomotion>(delver).unwrap().velocity = Vec2::ZERO;
         run(&mut app, 8);
         assert!(stamina(&app, delver).value > 0.98 && !stamina(&app, delver).winded);
+    }
+
+    #[test]
+    fn venom_wears_off_after_a_game_hour_and_its_component_goes() {
+        let mut app = app();
+        let delver = walker(&mut app);
+        app.world_mut().entity_mut(delver).insert(DelverPoison(fb_character::poison::Poisoned::for_hours(1.0)));
+        run(&mut app, 150);
+        let half = app.world().get::<DelverPoison>(delver).expect("still poisoned half an hour on").0;
+        assert!((half.hours_left - 0.5).abs() < 0.01, "{half:?}");
+        run(&mut app, 151);
+        assert!(app.world().get::<DelverPoison>(delver).is_none(), "worn off after five real minutes");
     }
 
     #[test]

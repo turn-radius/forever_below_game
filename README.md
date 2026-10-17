@@ -34,11 +34,14 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 | L, Shift+L | light or put out the torch or lantern you carry, the one in hand first, then the one at your hip; Shift+L acts on the hip lantern alone. In the inventory, L lights or puts out the torch or lantern under the mouse, wherever it lies; its card says which. A spent torch will not light. Every lit light you carry shines |
 | M | map of the level, filled in as you explore: only cells you have seen while they were lit are drawn, as an inked plan with you marked by an amber arrow; scroll to zoom about the mouse, drag to pan; M or Esc closes it, and the body holds still while it is open |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
+| 1 to 0 | use the item in that quickslot: eat or drink it, draw a weapon or shield into the hand, or draw a torch or lantern and then light or put it out. In the inventory, the number binds the item under the mouse to that slot, as dragging it onto the strip's slot does (a worn item too; another number moves it; an item a slot cannot use, or one lying underfoot, is refused the same way) |
 | C | character: the inventory screen's character tab; C or I swaps between its tabs, and the key of the tab showing closes it |
 | Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
 
 Rats and snakes notice you, close in and bite. Your hit points show low on the left ("HP 8/12", a 1st-level character's from the SRD), and the edge of the view flashes red when you are bitten; a poisonous snake's venom is halved on a Constitution save, and a constrictor holds you, slowed, until you strike it. A blow lands on the nearest creature whose body (head, legs, tail, any part of a snake) is within your weapon's reach ahead, for its damage dice; a thrust drives the point at the crosshair. Struck creatures flash, flinch and squeak or hiss, and at 0 they fall and their bodies stay where they lie. At 0 hit points you fall in the abyss and go back to the title. Combat is a placeholder until the character simulation is designed.
+
+Small round badges just above the left end of the quickslot bar show the conditions you are under right now: hungry, thirsty or sleepy past the first band, exhausted, winded, burdened or heavier, and held by a constrictor. Each is coloured from cream to red as it gets worse and goes when the condition does; when the mouse is free (say, after switching windows), hovering one names it and says what it does.
 
 Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
 
@@ -158,13 +161,17 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_POSE=x,y,yaw,pitch` | holds the player at a grid point (cells), turned `yaw` degrees from north and tilted `pitch` degrees |
 | `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps` | a lit camera at a fixed view of the level |
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera, and on what is held |
-| `FB_OPEN_INVENTORY=1` | opens the inventory at the start |
+| `FB_OPEN_INVENTORY=1` | opens the inventory at the start (`=character` on the character tab) |
 | `FB_OPEN_MAP=<frame>` | opens the map that many frames into the delve, once the start has been looked round (`FB_OPEN_MAP=120`) |
 | `FB_OPEN_CONTAINER=<n>` | opens the level's `n`th container (0 the first, in `print_level`'s order) a moment in, with the inventory showing what it holds |
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
 | `FB_DROP=<base>[:<rarity>][,...]` | sets an item of each named base down in front of you a moment in, of that rarity if one is named (`Sword:legendary,Sword:common`), spread left to right; for captures of floor items such as a legendary's shimmer |
 | `FB_SWING=1` | swings the main hand over and over, for captures of the swing and of blows landing (with `FB_HOLD` and `FB_DEBUG_POSE`) |
 | `FB_HOLD=<main>[,<off>]` | puts an item of each named base in that hand, after the starting or debug kit (`Mace,Torch`, `Sword,Shield`, `Staff,none`; a torch or lantern is lit, `none` empties the hand) |
+| `FB_CONDITIONS=<list>` | holds the delver under conditions for the status badges, comma separated: `hunger:<0 to 1>`, `thirst:<0 to 1>`, `sleep:<0 to 1>`, `exhaustion:<level>`, `winded`, `load:<light\|burdened\|encumbered\|overloaded>`, `poisoned` (an hour) or `poisoned:<minutes>` (`FB_CONDITIONS=hunger:0.8,winded,load:encumbered`) |
+| `FB_CONDITION_HOVER=<n>` | shows the card of the `n`th status badge (0 the first, worst first) as if hovered |
+| `FB_PROVOKE=<n>` | a second in, gives the level's `n`th folk (0 the first, in `print_level`'s order) cause to fight: they and the kin who see it turn hostile, for captures of folk fighting (with `FB_DEBUG_POSE`) |
+| `FB_SLAY=<n>` | two seconds in, strikes the level's `n`th folk down, for captures of a body and the gear it drops |
 | `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |
 | `FB_NEW_DELVE=<seconds>` | the title chooses New delve by itself after that many seconds, each time it shows; with `FB_PLAYER_HP=1` and `FB_SCREENSHOT_FRAMES`, captures a fall, the title and the next delve without input |
 | `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot (or `<base>@<slot>` in another it fits: `Lantern@hip`, `Sword@offhand`), after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |
@@ -214,6 +221,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[folk]` | `notice_distance` | 28.0 | How near the player must come, in sight, for a person to stop and face them, world units. |
 | `[folk]` | `release_distance` | 40.0 | How far the player must go before a person who faced them carries on, world units. |
 | `[folk]` | `release_delay` | 1.0 | Seconds the player must stay away before a person carries on. |
+| `[folk]` | `lose_interest_after` | 25.0 | Seconds a hostile person goes without seeing the player before giving up the fight, friendly again, and going home. Our own. |
 | `[creatures.size]` | `rat` | 1.0 | How large each kind of creature is drawn, and the floor it covers (1 = as rolled). |
 | `[creatures.size]` | `giant_rat` | 1.0 | Giant rats, as a multiple. |
 | `[creatures.size]` | `viper` | 1.0 | Poisonous snakes, as a multiple. |

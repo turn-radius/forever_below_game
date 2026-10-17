@@ -4,7 +4,9 @@
 //! The record holds, for each visited depth, how that level stands now where it differs from how
 //! it was generated: the items lying on its floor (dropped, moved, worn down, with the full
 //! contents of every bag set down), the containers (opened or not, and what is left in them) and
-//! the creatures (hit points, where they stand, or the body where they fell). A depth never
+//! the creatures (hit points, where they stand, or the body where they fell) and the folk (hit
+//! points, where they stand or the body where they fell, and whether they have turned on the
+//! delver). A depth never
 //! visited has no entry and is exactly its generated state.
 //!
 //! Leaving a level writes it into the record ([`record_level_left`], in
@@ -18,8 +20,8 @@
 //! the Armory state it has now (its wear, how far it has burned, what was eaten) and what is in
 //! it, so rebuilding it gives the item as it was.
 //!
-//! Not recorded, because the game has no such state yet: folk (they do not move, fight, change
-//! mood or earn standing), the level's own lights (glowcaps and braziers burn without end), and
+//! Not recorded, because the game has no such state yet: folk standing beyond hostility (moods,
+//! earned favour), the level's own lights (glowcaps and braziers burn without end), and
 //! what a creature is doing this moment (it wakes afresh).
 
 use std::collections::BTreeMap;
@@ -33,6 +35,8 @@ use crate::carry::FloorItem;
 use crate::combat::Health;
 use crate::combat::feedback::Corpse;
 use crate::creatures::Critter;
+use crate::folk::Denizen;
+use crate::hostility::Hostility;
 use crate::inventory::{Inventory, ItemId, Placement};
 use crate::play::CurrentLevel;
 use crate::props::{Container, PropPiece};
@@ -52,6 +56,33 @@ pub struct LevelRecord {
     pub containers: BTreeMap<usize, ContainerRecord>,
     /// Each creature, by its index in the level's creatures.
     pub creatures: BTreeMap<usize, CreatureRecord>,
+    /// Each folk, by their index in the level's folk.
+    #[serde(default)]
+    pub folk: BTreeMap<usize, FolkRecord>,
+}
+
+/// A folk as they were left.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FolkRecord {
+    pub hp: i32,
+    pub max: i32,
+    /// Where they stand, or where they stood as they fell (world units), turned by this
+    /// quaternion.
+    pub at: [f32; 3],
+    pub turn: [f32; 4],
+    /// They have turned on the delver, and stay so.
+    pub hostile: bool,
+    /// Fallen: this is their body, bare (what they wore was set down where they fell, and is on
+    /// the floor, or gone, as the record has it).
+    #[serde(default)]
+    pub dead: bool,
+}
+
+impl FolkRecord {
+    /// The transform they stand at.
+    pub fn transform(&self) -> Transform {
+        Transform { translation: Vec3::from_array(self.at), rotation: Quat::from_array(self.turn), scale: Vec3::ONE }
+    }
 }
 
 /// An item lying where it was left.
@@ -70,6 +101,9 @@ pub struct ItemRecord {
     /// A purse's gold, silver and copper.
     pub coins: Option<[u32; 3]>,
     pub contents: Vec<Stowed>,
+    /// The odds it was rolled against; records from before odds roll at the first level's.
+    #[serde(default)]
+    pub odds: fb_items::Odds,
 }
 
 /// An item in a container's grid.
@@ -133,6 +167,7 @@ pub fn record_item(inventory: &Inventory, id: ItemId) -> Option<ItemRecord> {
         shape: item.shape.clone(),
         coins: item.coins.map(|c| [c.gp, c.sp, c.cp]),
         contents: record_contents(inventory, id),
+        odds: item.odds,
     })
 }
 
@@ -148,7 +183,7 @@ pub fn record_contents(inventory: &Inventory, container: ItemId) -> Vec<Stowed> 
 /// Keeps track of the item `record` describes in `inventory`, loose, with its contents where
 /// they lay. `None` for a base no table knows.
 pub fn restore_item(inventory: &mut Inventory, record: &ItemRecord) -> Option<ItemId> {
-    let mut item = fb_items::roll_item(&record.base, record.seed)?;
+    let mut item = fb_items::roll_item_with(&record.base, record.seed, record.odds)?;
     item.shape = record.shape.clone();
     item.coins = record.coins.map(|[gp, sp, cp]| Coins { gp, sp, cp });
     let id = inventory.add(item);
@@ -168,6 +203,7 @@ pub fn restore_contents(inventory: &mut Inventory, container: ItemId, contents: 
 
 /// Writes the level being left into the record. Runs in [`crate::travel::LeavingLevel`], when
 /// the level is still whole.
+#[allow(clippy::type_complexity)]
 pub fn record_level_left(
     level: Res<CurrentLevel>,
     inventory: Res<Inventory>,
@@ -175,6 +211,7 @@ pub fn record_level_left(
     floor: Query<&FloorItem>,
     containers: Query<(&PropPiece, &Container)>,
     creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>)>,
+    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>)>,
 ) {
     let mut left = LevelRecord::default();
     let mut lying: Vec<&FloorItem> = floor.iter().collect();
@@ -195,6 +232,22 @@ pub fn record_level_left(
                 at: stood.translation.to_array(),
                 turn: stood.rotation.to_array(),
                 scale: stood.scale.x,
+                dead: corpse.is_some(),
+            },
+        );
+    }
+    for (denizen, transform, health, hostility, corpse) in &folk {
+        let Some(index) = level.0.folk.iter().position(|s| *s == denizen.person.spot) else { continue };
+        let Some(health) = health else { continue };
+        let stood = corpse.map_or(*transform, |c| c.fell);
+        left.folk.insert(
+            index,
+            FolkRecord {
+                hp: health.hp,
+                max: health.max,
+                at: stood.translation.to_array(),
+                turn: stood.rotation.to_array(),
+                hostile: hostility.is_some_and(|h| h.is_hostile()),
                 dead: corpse.is_some(),
             },
         );
@@ -224,16 +277,29 @@ mod tests {
     }
 
     #[test]
+    fn a_deep_find_restores_with_the_rarity_it_rolled() {
+        let odds = fb_items::Odds::loot(8);
+        let seed = (1..500).find(|&s| fb_items::roll_item_with("Sword", s, odds).unwrap().rarity != fb_items::roll_item("Sword", s).unwrap().rarity).unwrap();
+        let mut inventory = Inventory::default();
+        let sword = inventory.add(fb_items::roll_item_with("Sword", seed, odds).unwrap());
+        let json = serde_json::to_string(&record_item(&inventory, sword).unwrap()).unwrap();
+        let mut other = Inventory::default();
+        let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(other.item(again), inventory.item(sword));
+    }
+
+    #[test]
     fn the_world_record_round_trips_through_serde_unchanged() {
         let mut record = WorldRecord::default();
         let item = fb_items::roll_item("Purse", 11).unwrap();
         let mut level = LevelRecord::default();
         level.floor.push(FloorRecord {
             spot: ItemSpot { x: 3.25, y: 4.5, yaw: 0.3, family: item.shape.family(), seed: item.seed },
-            item: ItemRecord { base: item.base.clone(), seed: item.seed, shape: item.shape.clone(), coins: Some([1, 2, 3]), contents: vec![] },
+            item: ItemRecord { base: item.base.clone(), seed: item.seed, shape: item.shape.clone(), coins: Some([1, 2, 3]), contents: vec![], odds: fb_items::Odds::kit(4) },
         });
         level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
         level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false });
+        level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true, dead: false });
         record.levels.insert(1, level);
         record.levels.insert(4, LevelRecord::default());
         let json = serde_json::to_string(&record).unwrap();

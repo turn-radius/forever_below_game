@@ -196,6 +196,11 @@ pub fn level_has_focus(screen: Option<Res<ScreenOpen>>, journey: Option<Res<crat
     !screen.is_some_and(|s| s.0.is_some()) && journey.is_none()
 }
 
+/// Run condition: the inventory screen is open, for keys that act on the item under the mouse.
+pub fn inventory_open(open: Option<Res<ScreenOpen>>) -> bool {
+    open.is_some_and(|o| o.is(Screen::Inventory))
+}
+
 /// Which leaf of the inventory screen is showing: the plate's tab bar. The outfit tab is a
 /// label only for now.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -299,7 +304,7 @@ impl Plugin for PlayPlugin {
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,
-            (crate::folk::FolkPlugin, crate::folk_routine::FolkRoutinePlugin),
+            (crate::folk::FolkPlugin, crate::folk_routine::FolkRoutinePlugin, crate::folk_combat::FolkCombatPlugin),
             crate::creatures::CreaturesPlugin,
             crate::combat::CombatPlugin,
             crate::props::PropsPlugin,
@@ -312,7 +317,7 @@ impl Plugin for PlayPlugin {
             crate::map::MapPlugin,
         ))
         // Over the plugin tuple's limit.
-        .add_plugins((crate::quickslots::QuickslotPlugin, crate::travel::TravelPlugin));
+        .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin));
     }
 }
 

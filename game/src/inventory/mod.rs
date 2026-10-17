@@ -24,7 +24,7 @@
 //! fallen" outfit of `data/outfits.json` (a tunic and trousers), with a belt whose pouch is
 //! their first grid (`docs/items.md`, "Slots"; the plate's belt is a container), and a burning
 //! torch in the off hand, which is their carried light (`crate::carry::carried_light`). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
-//! captures; `FB_DEBUG_KIT=1` dresses the delver in their class's outfit with a lit light in the
+//! captures (`=character` on the character tab); `FB_DEBUG_KIT=1` dresses the delver in their class's outfit with a lit light in the
 //! off hand, starts them with a pack full of things, and sets a sack holding a few more, and a
 //! shield, down in front of them. `FB_HOLD=<main>[,<off>]` puts items of those bases in the hands
 //! (a torch or lantern lit; `none` empties a hand), after either kit. `FB_DEBUG_HOVER=<n>` holds the
@@ -126,7 +126,7 @@ impl Plugin for InventoryPlugin {
                         build_screen,
                         drag_items,
                         unhang_without_belt,
-                        (sheet::update_status, sheet::update_vitals, sheet::update_gear).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
@@ -181,33 +181,40 @@ fn roll_character(mut character: ResMut<Character>, level: Option<Res<CurrentLev
     *character = character_for(kit_seed(level.as_deref(), 0xc4a7));
 }
 
-/// The delver starts in the [`STARTING_OUTFIT`], wearing a belt whose pouch is their first
-/// grid, with a burning torch in the off hand so they start with a carried light. What the
-/// outfit leaves at their feet goes in the pouch if it fits; its spare torch is unlit, so the
-/// burning one is a torch of its own.
+/// The delver starts with almost nothing: the [`STARTING_OUTFIT`]'s clothes, a belt whose pouch
+/// is their first grid, and a burning torch in the off hand so they start with a carried light.
+/// All of it is common. The outfit's goods and the things it leaves at its wearer's feet (a
+/// spare torch, bread) are not given; folk in the same outfit still carry them.
 fn give_starting_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, level: Option<Res<CurrentLevel>>) {
     if inventory.worn(Slot::Belt).is_some() {
         return;
     }
-    let Some(belt) = fb_items::roll_item("Belt", kit_seed(level.as_deref(), 0xbe17)) else { return };
+    let odds = starting_odds();
+    let Some(belt) = fb_items::roll_item_with("Belt", kit_seed(level.as_deref(), 0xbe17), odds) else { return };
     let belt = inventory.add(belt);
     inventory.wear(belt, Slot::Belt).expect("a belt goes on the belt slot");
     let Some(outfit) = fb_items::outfit::outfit(STARTING_OUTFIT) else { return };
-    let set = outfit.roll(kit_seed(level.as_deref(), 0x0f17), character.folk.key());
-    for (slot, item) in set.worn {
+    for (slot, item) in outfit.roll_with(kit_seed(level.as_deref(), 0x0f17), character.folk.key(), odds).worn {
         let id = inventory.add(item);
         if inventory.wear(id, slot).is_err() {
             inventory.forget(id);
         }
     }
-    let torch = inventory.add(crate::carry::lit_torch(kit_seed(level.as_deref(), 0x70c4)));
+    let torch = inventory.add(starting_torch(kit_seed(level.as_deref(), 0x70c4)));
     inventory.wear(torch, Slot::Offhand).expect("a torch goes in the off hand");
-    for item in set.goods.into_iter().chain(set.ground) {
-        let id = inventory.add(item);
-        if inventory.stow(id).is_err() {
-            inventory.forget(id);
-        }
-    }
+}
+
+/// The odds the starting kit rolls at: the first level's, but common only.
+fn starting_odds() -> fb_items::Odds {
+    fb_items::Odds::loot(1).capped(Rarity::Common)
+}
+
+/// The first burning common torch rolled at or after `seed`.
+fn starting_torch(seed: u32) -> fb_items::Item {
+    (0..u32::MAX)
+        .map(|k| seed.wrapping_add(k))
+        .find_map(|s| fb_items::roll_item_with("Torch", s, starting_odds()).filter(|item| crate::carry::item_light(&item.shape).is_some()))
+        .expect("some seed rolls a burning torch")
 }
 
 /// Equips `item` in `slot`; whatever it displaces is stowed, or forgotten if there is no room.
@@ -357,8 +364,11 @@ fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
     }
 }
 
-fn open_for_capture(mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
+fn open_for_capture(mut open: ResMut<ScreenOpen>, mut tab: ResMut<SheetTab>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
     show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
+    if std::env::var("FB_OPEN_INVENTORY").is_ok_and(|v| v.eq_ignore_ascii_case("character")) {
+        *tab = SheetTab::Character;
+    }
 }
 
 /// The whole screen, over the level.
@@ -478,6 +488,53 @@ impl Toast {
     pub fn say(&mut self, text: impl Into<String>, now: f32) {
         self.text = text.into();
         self.until = now + TOAST_SECONDS;
+    }
+
+    /// Whether a line still shows at `now`.
+    pub fn showing(&self, now: f32) -> bool {
+        self.until > now && !self.text.is_empty()
+    }
+}
+
+/// The [`Toast`] and the real clock it runs on, for any system to say a line through. Both are
+/// optional, so a system that speaks still runs in an app without the HUD.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Toasts<'w> {
+    toast: Option<ResMut<'w, Toast>>,
+    real: Option<Res<'w, Time<Real>>>,
+}
+
+impl Toasts<'_> {
+    fn now(&self) -> f32 {
+        self.real.as_deref().map_or(0.0, |t| t.elapsed_secs())
+    }
+
+    /// Shows `text` afresh.
+    pub fn say(&mut self, text: impl Into<String>) {
+        let now = self.now();
+        if let Some(toast) = self.toast.as_deref_mut() {
+            toast.say(text, now);
+        }
+    }
+
+    /// Shows `text`, unless it is the line already showing.
+    pub fn say_once(&mut self, text: &str) {
+        let now = self.now();
+        if let Some(toast) = self.toast.as_deref_mut()
+            && (toast.text != text || !toast.showing(now))
+        {
+            toast.say(text, now);
+        }
+    }
+
+    /// Shows `text` after whatever line still shows (`"Hilda is slain · the Ash Choir turn on
+    /// you"`), or alone when nothing does.
+    pub fn add(&mut self, text: &str) {
+        let now = self.now();
+        if let Some(toast) = self.toast.as_deref_mut() {
+            let line = if toast.showing(now) && !toast.text.contains(text) { format!("{} \u{b7} {text}", toast.text) } else { text.to_string() };
+            toast.say(line, now);
+        }
     }
 }
 
@@ -599,9 +656,20 @@ pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, 
             let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
             equip(inventory, id, slot)
         }
+        _ => take_up(inventory, id),
+    }
+}
+
+/// Takes `id` into the carried grids if it is not carried: lying underfoot it is picked up
+/// ([`Inventory::pick_up`], lifted from the level), and in a container not carried (a chest
+/// standing in the level, a bag set down) it is stowed ([`Inventory::stow`]). Something
+/// carried or worn stays where it is. Refused (no room), it stays where it was.
+pub fn take_up(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
+    match inventory.location(id) {
         Some(Location::Loose) => inventory.pick_up(id).map(|()| vec![FloorChange::Lifted(id)]),
         Some(Location::In { .. }) if !inventory.is_carried(id) => inventory.stow(id).map(|_| vec![]),
-        _ => Ok(vec![]),
+        Some(_) => Ok(vec![]),
+        None => Err(Refusal::Unknown),
     }
 }
 
@@ -1170,6 +1238,22 @@ mod tests {
 
     /// The cell size as shipped.
     const CELL_PX: f32 = 52.0;
+
+    #[test]
+    fn the_delver_starts_with_clothes_a_belt_and_a_burning_torch() {
+        let mut app = App::new();
+        app.init_resource::<Inventory>().init_resource::<Character>().add_systems(Update, give_starting_kit);
+        app.update();
+        let inventory = app.world().resource::<Inventory>();
+        // Only what is worn and held, the folk's own headwear among it: nothing in the pouch.
+        assert!(inventory.ids().all(|id| inventory.equipped().iter().any(|(slot, _)| inventory.worn(*slot) == Some(id))));
+        for base in ["Belt", "Tunic", "Trousers", "Torch"] {
+            assert!(inventory.ids().filter_map(|id| inventory.item(id)).any(|item| item.base == base), "{base}");
+        }
+        assert!(inventory.ids().filter_map(|id| inventory.item(id)).all(|item| item.rarity == Rarity::Common));
+        let torch = inventory.worn(Slot::Offhand).and_then(|id| inventory.item(id)).expect("a torch in the off hand");
+        assert!(crate::carry::item_light(&torch.shape).is_some());
+    }
 
     #[test]
     fn the_cell_size_here_is_the_shipped_one() {

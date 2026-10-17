@@ -2,8 +2,14 @@
 //!
 //! - The delver starts with a 1st-level character's hit points
 //!   ([`super::first_level_hit_points_with`]).
-//! - Each [`CreatureAttack`] takes its bite, and a poisonous snake's venom after the delver's
-//!   Constitution save ([`super::bite_damage`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
+//! - The delver carries an [`ArmourClass`], the one the sheet shows (10, the Dexterity modifier
+//!   and what they wear, `Character::armour_class`), kept up as they dress ([`armour_the_delver`]).
+//!   Every creature's and folk's blow rolls to hit against it
+//!   (`creatures::behaviour::BlowsAtDelver`); one that misses whooshes past ([`whoosh_past`]).
+//! - Each [`AttackOnDelver`] (a blow that hit) takes its bite, and a poisonous snake's venom after the delver's
+//!   Constitution save ([`super::bite_damage_with`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
+//!   A failed save also poisons the delver for a while ([`DelverPoison`],
+//!   [`fb_character::poison`]), which turns the life orb green ([`super::orbs`]).
 //! - A constrictor's bite also holds the delver ([`Constricted`]), who moves at a quarter of
 //!   their pace until they strike it (or it dies, or they break more than a body's length
 //!   away). The SRD's constrictor grapples with a separate Constrict attack and restrains its
@@ -22,11 +28,11 @@ use bevy::{
 use fb_creatures::Species;
 
 use super::feedback::{Corpse, Struck};
-use super::{Health, RunDice, bite_damage_with, first_level_hit_points_with};
+use super::{ArmourClass, Health, RunDice, bite_damage_with, first_level_hit_points_with};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
-use crate::character::Character;
+use crate::character::{Character, DelverPoison};
 use crate::creatures::Critter;
-use crate::creatures::behaviour::{CreatureAttack, reach};
+use crate::creatures::behaviour::{AttackOnDelver, MissedDelver, reach};
 use crate::exhaustion::Exhaustion;
 use crate::inventory::Inventory;
 use crate::launch::AppState;
@@ -38,12 +44,13 @@ pub struct VitalsPlugin;
 
 impl Plugin for VitalsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<CreatureAttack>()
+        app.add_message::<AttackOnDelver>()
+            .add_message::<MissedDelver>()
             .add_message::<Struck>()
             .init_resource::<Pain>()
             .init_resource::<crate::rules::GameRules>()
             .add_systems(OnExit(AppState::Delving), end_the_delve)
-            .add_systems(Update, (give_player_health, take_bites, show_vitals, break_free, fall).chain().in_set(DelveSystems))
+            .add_systems(Update, (give_player_health, armour_the_delver, take_bites, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
             .add_systems(Update, spawn_vitals.in_set(DelveSystems));
     }
 }
@@ -132,15 +139,45 @@ pub fn starting_health(max: i32, start: Option<i32>) -> Health {
     Health { hp: start.map_or(max, |n| n.clamp(1, max)), max }
 }
 
+/// The delver's Armor Class, as the sheet works it out from who they are and what they wear,
+/// on the delver for every blow at them to roll against.
+fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, players: Query<(Entity, Option<&ArmourClass>), With<Player>>) {
+    let none = Inventory::default();
+    let ac = ArmourClass(character.armour_class(inventory.as_deref().unwrap_or(&none)).value().round() as i32);
+    for (player, had) in &players {
+        if had != Some(&ac) {
+            commands.entity(player).insert(ac);
+        }
+    }
+}
+
+/// A blow that misses the delver whooshes past them, from the side it came.
+fn whoosh_past(
+    mut commands: Commands,
+    mut misses: MessageReader<MissedDelver>,
+    sound: Option<Res<super::swing::SwingSound>>,
+    players: Query<&Transform, With<Player>>,
+    settings: Option<Res<crate::settings::GameSettings>>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
+) {
+    let game = settings.as_deref().copied().unwrap_or_default();
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    for miss in misses.read() {
+        let (Some(sound), Some(delver)) = (&sound, players.iter().next()) else { continue };
+        let at = Vec3::new(miss.attacker_pos.x, delver.translation.y, miss.attacker_pos.y);
+        crate::audio::play_at(&mut commands, "blow misses", sound.0.clone(), at, &game, &tuning);
+    }
+}
+
 /// Each bite takes its damage from the delver; a constrictor's holds them.
 fn take_bites(
     mut commands: Commands,
-    mut bites: MessageReader<CreatureAttack>,
+    mut bites: MessageReader<AttackOnDelver>,
     character: Res<Character>,
     mut dice: ResMut<RunDice>,
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
-    mut players: Query<(Entity, &mut Health), With<Player>>,
+    mut players: Query<(Entity, &mut Health, Option<&DelverPoison>), With<Player>>,
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
@@ -152,19 +189,25 @@ fn take_bites(
         if bodies.contains(bite.attacker) {
             continue;
         }
-        for (player, mut health) in &mut players {
+        for (player, mut health, poison) in &mut players {
             if health.is_down() {
                 continue;
             }
-            let damage = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
+            let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
             health.hurt(damage);
+            if let Some(hours) = poisons_for {
+                let mut poison = poison.map_or_else(Default::default, |p| p.0);
+                poison.dose(hours);
+                commands.entity(player).insert(DelverPoison(poison));
+            }
             pain.strike(flash_strength(damage as i32, health.max));
             // One dull thud for each blow that lands.
             if let Some(sounds) = &sounds {
                 commands.spawn((Name::new("blow lands"), AudioPlayer::new(sounds.thud.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(AppState::Delving)));
             }
-            info!("{:?} bites for {damage}: {} of {} hit points left", bite.species, health.hp, health.max);
-            if bite.species == Species::ConstrictorSnake && !health.is_down() {
+            let who = bite.species.map_or_else(|| "A folk strikes".to_string(), |s| format!("{s:?} bites"));
+            info!("{who} for {damage}: {} of {} hit points left", health.hp, health.max);
+            if bite.species == Some(Species::ConstrictorSnake) && !health.is_down() {
                 commands.entity(player).insert((Constricted { by: bite.attacker }, Slowed(HELD_PACE)));
             }
         }
@@ -349,7 +392,7 @@ mod tests {
 
     fn bite(app: &mut App, attacker: Entity, species: Species, damage: u32) {
         let attacker_pos = app.world().get::<Transform>(attacker).map(|t| t.translation.xz()).unwrap_or_default();
-        app.world_mut().write_message(CreatureAttack { attacker, species, damage, poison: 0, attacker_pos });
+        app.world_mut().write_message(AttackOnDelver { attacker, species: Some(species), damage, poison: 0, attacker_pos });
         app.update();
     }
 
@@ -368,6 +411,21 @@ mod tests {
         bite(&mut app, snake, Species::Rat, 3);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 7);
         assert!(app.world().resource::<Pain>().alpha() > 0.0);
+    }
+
+    #[test]
+    fn a_failed_save_against_venom_poisons_the_delver_and_a_good_one_does_not() {
+        // Seeds whose first d20, the save, is a 1 (fails whatever the CON) and a 20 (saves).
+        let seed_for = |natural| (0..10_000).find(|s| procgen_rng::Mulberry32::new(*s).int(1, 20) == natural).unwrap();
+        for (natural, poisoned) in [(1, true), (20, false)] {
+            let (mut app, player, snake) = delve();
+            app.world_mut().resource_mut::<RunDice>().0 = procgen_rng::Mulberry32::new(seed_for(natural));
+            app.update();
+            app.world_mut().write_message(AttackOnDelver { attacker: snake, species: Some(Species::PoisonousSnake), damage: 1, poison: 4, attacker_pos: Vec2::ZERO });
+            app.update();
+            let poison = app.world().get::<DelverPoison>(player).map(|p| p.0);
+            assert_eq!(poison, poisoned.then(|| fb_character::poison::Poisoned::for_hours(fb_character::poison::VENOM_POISONED_HOURS)), "a natural {natural}");
+        }
     }
 
     #[test]
@@ -556,7 +614,7 @@ mod tests {
     fn bite_all(app: &mut App, attacker: Entity, damages: &[u32]) {
         let attacker_pos = app.world().get::<Transform>(attacker).map(|t| t.translation.xz()).unwrap_or_default();
         for &damage in damages {
-            app.world_mut().write_message(CreatureAttack { attacker, species: Species::Rat, damage, poison: 0, attacker_pos });
+            app.world_mut().write_message(AttackOnDelver { attacker, species: Some(Species::Rat), damage, poison: 0, attacker_pos });
         }
         app.update();
     }

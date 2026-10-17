@@ -10,7 +10,7 @@ use fb_items::Slot;
 use crate::game_clock::{GameClock, advance_game_clock};
 use crate::inventory::{Hovered, Inventory, ItemId, Toast};
 use crate::keymap::{Action, ActionInput};
-use crate::play::{DelveSystems, Screen, ScreenOpen, level_has_focus};
+use crate::play::{DelveSystems, inventory_open, level_has_focus};
 
 pub struct KindlePlugin;
 
@@ -19,10 +19,6 @@ impl Plugin for KindlePlugin {
         app.add_systems(FixedUpdate, burn_fuel.after(advance_game_clock).in_set(DelveSystems));
         app.add_systems(Update, (light_carried.run_if(level_has_focus), light_hovered.run_if(inventory_open)).in_set(DelveSystems));
     }
-}
-
-fn inventory_open(open: Option<Res<ScreenOpen>>) -> bool {
-    open.is_some_and(|o| o.is(Screen::Inventory))
 }
 
 /// The carried light L acts on: the main hand's torch or lantern, else the off hand's, else
@@ -94,6 +90,7 @@ fn light_hovered(input: ActionInput, hovered: Res<Hovered>, mut inventory: ResMu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::play::{Screen, ScreenOpen};
     use armory::families::torch::BurnState;
 
     fn torch(state: BurnState) -> fb_items::Item {

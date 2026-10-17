@@ -1067,16 +1067,18 @@ mod tests {
 
     #[test]
     fn the_first_level_is_byte_identical_to_before_styles() {
-        // Hashes taken from the generator before level styles were added.
+        // Hashes taken from the generator before level styles were added. Seeds 7, 64, 4242 and
+        // u32::MAX were retaken when giant rats left the first level (`GIANTS_FROM_DEPTH`): their
+        // giant packs are rats now.
         let before = [
             (0u32, 0x523bffae15ad5cb1u64),
             (1, 0x7ee4f89ce92c028b),
             (2, 0x5b686441f52e31ee),
-            (7, 0x9f41fc6f85f38ed5),
-            (64, 0x65919fe613c20714),
+            (7, 0xb6d25e179d033b45),
+            (64, 0x25e194f996828a82),
             (1207, 0x776289fa5d0bf5c3),
-            (4242, 0x7f40d3b171ee14c7),
-            (u32::MAX, 0x05ad568d1f4a22af),
+            (4242, 0x5552bc2d769f9908),
+            (u32::MAX, 0xf2b661221fd9b474),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

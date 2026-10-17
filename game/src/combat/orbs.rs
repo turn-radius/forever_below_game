@@ -6,7 +6,8 @@
 //! drawn by one shader ([`OrbMaterial`], `orb.wesl`): the liquid's surface sloshes on its own
 //! (from the shader's clock, so nothing is rewritten each frame), and the fill the shader is
 //! given eases toward the real value, written only while it is moving. A winded delver's stamina
-//! orb darkens.
+//! orb darkens, and a poisoned delver's life turns green ([`POISONED_LIQUIDS`]), easing back to
+//! red when the poison wears off.
 //!
 //! The layout follows the sketch, as one cluster anchored at the bottom left ([`OrbCluster`]):
 //! the large life orb, the small stamina orb on its rim up and to the right, the visibility eye
@@ -28,7 +29,7 @@ use bevy::{
 
 use super::Health;
 use super::vitals::{FLASH_CAP, VitalsRoot, flash_strength};
-use crate::character::{DelverMana, DelverStamina};
+use crate::character::{DelverMana, DelverPoison, DelverStamina};
 use crate::play::{DelveSystems, Player};
 use crate::ui::FRAME_GOLD;
 
@@ -70,6 +71,19 @@ impl OrbKind {
         }
     }
 
+    /// The liquid as it is drawn, `poison` of the way (0 to 1) from its own colours to
+    /// [`POISONED_LIQUIDS`]. Only the life orb turns.
+    pub fn liquids_at(self, poison: f32) -> (LinearRgba, LinearRgba) {
+        let (surface, deep) = self.liquids();
+        let (surface, deep): (LinearRgba, LinearRgba) = (surface.into(), deep.into());
+        if self != OrbKind::Life || poison <= 0.0 {
+            return (surface, deep);
+        }
+        let (green, dark) = POISONED_LIQUIDS;
+        let t = poison.clamp(0.0, 1.0);
+        (surface.mix(&green.into(), t), deep.mix(&dark.into(), t))
+    }
+
     /// Where in its slosh the orb starts, so the three do not move together.
     fn phase(self) -> f32 {
         match self {
@@ -79,6 +93,11 @@ impl OrbKind {
         }
     }
 }
+
+/// A poisoned delver's life liquid, at its surface and at the bottom: a venom green. Our own.
+pub const POISONED_LIQUIDS: (Color, Color) = (Color::srgb(0.46, 0.86, 0.22), Color::srgb(0.07, 0.30, 0.05));
+/// How quickly the life orb turns green or back, per second: about a second either way. Our own.
+const POISON_RATE: f32 = 3.0;
 
 /// The life orb's diameter in `vmin`, which sizes the whole cluster.
 pub const LIFE_DIAMETER: f32 = 14.0;
@@ -90,6 +109,8 @@ pub const SMALL_SHARE: f32 = 0.38;
 pub const EYE_ASPECT: f32 = 0.65;
 /// How tall a quickslot is, as a share of the life orb's diameter.
 pub const SLOT_SHARE: f32 = 0.38;
+/// A status badge's diameter, as a share of the life orb's diameter. Our own.
+pub const BADGE_SHARE: f32 = 0.22;
 
 /// An orb: its centre and radius, in `vmin`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -125,6 +146,10 @@ pub struct ClusterLayout {
     /// A quickslot's side, and the gap between them.
     pub slot: f32,
     pub gap: f32,
+    /// The row of status badges, just above the left end of the bar (`crate::status`).
+    pub status: Rect,
+    /// A status badge's diameter.
+    pub badge: f32,
 }
 
 /// The cluster for a life orb `d` across, as the sketch has it: the life orb large at the
@@ -132,7 +157,8 @@ pub struct ClusterLayout {
 /// right; the visibility eye with its centre on the rim straight right; the mana orb with its
 /// centre on the rim at 45 degrees down and to the right, each about [`SMALL_SHARE`] of `d`
 /// across, so they overlap the life orb's frame; and the quickslot bar starting just right of the
-/// eye, level with it, [`SLOT_SHARE`] of `d` tall. Everything scales with
+/// eye, level with it, [`SLOT_SHARE`] of `d` tall; and the row of status badges, [`BADGE_SHARE`]
+/// of `d` across, sitting just above the bar from its left end. Everything scales with
 /// `d`, so it stays a cluster at any window size.
 pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
     let r = d * 0.5;
@@ -152,9 +178,11 @@ pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
     let bar_left = eye.max.x + d * 0.04;
     let slots = crate::quickslots::SLOTS as f32;
     let bar = Rect::new(bar_left, eye_centre.y - slot * 0.5, bar_left + slots * slot + (slots - 1.0) * gap, eye_centre.y + slot * 0.5);
+    let badge = d * BADGE_SHARE;
+    let status = Rect::new(bar.min.x, bar.min.y - gap - badge, bar.max.x, bar.min.y - gap);
     // The small orbs poke a little out of the life orb's box, above and below: the cluster is
     // the box round all of it.
-    let top = stamina.square().min.y.min(eye.min.y).min(bar.min.y).min(0.0);
+    let top = stamina.square().min.y.min(eye.min.y).min(status.min.y).min(0.0);
     let bottom = mana.square().max.y.max(bar.max.y).max(d);
     let by = Vec2::new(0.0, -top);
     let shift = |rect: Rect| Rect { min: rect.min + by, max: rect.max + by };
@@ -168,6 +196,8 @@ pub fn orb_cluster_layout(d: f32) -> ClusterLayout {
         bar: shift(bar),
         slot,
         gap,
+        status: shift(status),
+        badge,
     }
 }
 
@@ -189,6 +219,10 @@ pub struct Orb {
     pub target: Option<f32>,
     /// Whether the orb is darkened (a winded delver's stamina).
     pub dim: bool,
+    /// Whether the delver is poisoned, which turns the life orb green.
+    pub poisoned: bool,
+    /// How green the life orb is drawn now, 0 to 1, easing toward `poisoned`.
+    pub poison: f32,
     /// Whether the next settle jumps to the target instead of easing (the first reading).
     snap: bool,
     /// The pulse of a blow, on the life orb.
@@ -199,7 +233,7 @@ pub struct Orb {
 
 impl Orb {
     pub fn new(kind: OrbKind) -> Orb {
-        Orb { kind, target: None, dim: false, snap: false, pulse: Pulse::default(), last_hp: None }
+        Orb { kind, target: None, dim: false, poisoned: false, poison: 0.0, snap: false, pulse: Pulse::default(), last_hp: None }
     }
 }
 
@@ -333,9 +367,14 @@ fn spawn_orbs(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>
 /// How full each orb should be: life from the delver's hit points, stamina and mana from their
 /// pools. Stamina stays full until the delver has one. Orbs are only touched when a value
 /// differs.
-fn read_vitals(players: Query<(Option<&Health>, Option<&DelverStamina>, Option<&DelverMana>), With<Player>>, mut orbs: Query<&mut Orb>) {
-    let Some((health, stamina, mana)) = players.iter().next() else { return };
+#[allow(clippy::type_complexity)]
+fn read_vitals(players: Query<(Option<&Health>, Option<&DelverStamina>, Option<&DelverMana>, Has<DelverPoison>), With<Player>>, mut orbs: Query<&mut Orb>) {
+    let Some((health, stamina, mana, poisoned)) = players.iter().next() else { return };
     for mut orb in &mut orbs {
+        let poisoned = poisoned && orb.kind == OrbKind::Life;
+        if orb.poisoned != poisoned {
+            orb.poisoned = poisoned;
+        }
         let (fill, dim) = match orb.kind {
             OrbKind::Life => (health.map_or(1.0, |h| h.hp.max(0) as f32 / h.max.max(1) as f32), false),
             OrbKind::Stamina => (stamina.map_or(1.0, |s| s.0.value as f32), stamina.is_some_and(|s| !s.0.can_exert())),
@@ -367,10 +406,16 @@ fn read_vitals(players: Query<(Option<&Health>, Option<&DelverStamina>, Option<&
 
 /// The fill that is one step of `dt` seconds nearer `target` than `shown`.
 pub fn ease(shown: f32, target: f32, dt: f32) -> f32 {
+    ease_at(shown, target, dt, EASE_RATE)
+}
+
+/// `shown` one step of `dt` seconds nearer `target`, closing at `rate` per second
+/// (exponentially), and on it once closer than [`SETTLED`].
+pub fn ease_at(shown: f32, target: f32, dt: f32, rate: f32) -> f32 {
     if (target - shown).abs() <= SETTLED {
         return target;
     }
-    target + (shown - target) * (-EASE_RATE * dt).exp()
+    target + (shown - target) * (-rate * dt).exp()
 }
 
 /// Eases each orb's drawn fill toward its target, and sets its darkening and its pulse (the
@@ -388,11 +433,17 @@ fn settle_orbs(time: Res<Time>, mut orbs: Query<(&mut Orb, &MaterialNode<OrbMate
         let shown = if orb.snap { target } else { ease(material.style.fill, target, dt) };
         let dim = if orb.dim { DIMMED } else { 0.0 };
         let heat = orb.pulse.heat();
-        if material.style.fill != shown || material.style.dim != dim || material.style.pulse != heat {
+        let poison = if orb.snap { f32::from(u8::from(orb.poisoned)) } else { ease_at(orb.poison, f32::from(u8::from(orb.poisoned)), dt, POISON_RATE) };
+        let recolour = poison != orb.poison;
+        if recolour {
+            orb.poison = poison;
+        }
+        if material.style.fill != shown || material.style.dim != dim || material.style.pulse != heat || recolour {
             if let Some(mut material) = materials.get_mut(&handle.0) {
                 material.style.fill = shown;
                 material.style.dim = dim;
                 material.style.pulse = heat;
+                (material.style.surface, material.style.deep) = orb.kind.liquids_at(poison);
             }
         }
         let scale = Vec2::splat(orb.pulse.scale());
@@ -506,6 +557,26 @@ mod tests {
         assert!((orb(&mut app, OrbKind::Mana).1.fill - 0.25).abs() < 1e-3);
     }
 
+    #[test]
+    fn a_poisoned_delvers_life_orb_turns_green_and_eases_back_to_red() {
+        let (mut app, player) = delve();
+        let red = orb(&mut app, OrbKind::Life).1.surface;
+        app.world_mut().entity_mut(player).insert(DelverPoison(fb_character::poison::Poisoned::for_hours(1.0)));
+        run(&mut app, 10);
+        let turning = orb(&mut app, OrbKind::Life);
+        assert!(turning.0.poison > 0.0 && turning.0.poison < 1.0, "easing, not jumping: {}", turning.0.poison);
+        run(&mut app, 240);
+        let green: LinearRgba = POISONED_LIQUIDS.0.into();
+        let (poisoned, style) = orb(&mut app, OrbKind::Life);
+        assert_eq!((poisoned.poison, style.surface), (1.0, green));
+        assert!(style.surface.green > style.surface.red, "green: {:?}", style.surface);
+        assert_eq!(orb(&mut app, OrbKind::Stamina).1.surface, OrbKind::Stamina.liquids_at(0.0).0, "only the life orb turns");
+        app.world_mut().entity_mut(player).remove::<DelverPoison>();
+        run(&mut app, 240);
+        let (cured, style) = orb(&mut app, OrbKind::Life);
+        assert_eq!((cured.poison, style.surface), (0.0, red), "back to red when it wears off");
+    }
+
     /// How many times the orb materials have been modified.
     #[derive(Resource, Default)]
     struct Rewrites(usize);
@@ -595,17 +666,21 @@ mod tests {
         // Nothing the cluster holds overlaps anything but the life orb.
         let stamina = layout.stamina.square();
         let mana = layout.mana.square();
-        for (name, other) in [("eye", layout.eye), ("bar", layout.bar)] {
+        for (name, other) in [("eye", layout.eye), ("bar", layout.bar), ("status row", layout.status)] {
             assert!(stamina.intersect(other).is_empty() && mana.intersect(other).is_empty(), "{name} clear of the small orbs");
         }
         assert!(stamina.intersect(mana).is_empty());
         assert!(layout.eye.intersect(layout.bar).is_empty());
+        // The status row sits just above the bar from its left end, a badge tall.
+        assert_eq!(layout.status.min.x, layout.bar.min.x);
+        assert!(layout.status.max.y < layout.bar.min.y && layout.bar.min.y - layout.status.max.y < 0.1 * d, "just above the bar");
+        assert!((layout.status.height() - layout.badge).abs() < 1e-4);
     }
 
     #[test]
     fn the_cluster_bounds_everything_and_scales_with_the_life_orb() {
         let layout = orb_cluster_layout(14.0);
-        let everything = [layout.life.square(), layout.stamina.square(), layout.mana.square(), layout.eye, layout.bar];
+        let everything = [layout.life.square(), layout.stamina.square(), layout.mana.square(), layout.eye, layout.bar, layout.status];
         for rect in everything {
             assert!(rect.min.x >= -1e-4 && rect.min.y >= -1e-4 && rect.max.x <= layout.size.x + 1e-4 && rect.max.y <= layout.size.y + 1e-4, "{rect:?} in {:?}", layout.size);
         }
@@ -625,7 +700,7 @@ mod tests {
         app.world_mut().get_mut::<Health>(player).unwrap().hp = max;
         run(&mut app, 3);
         let attacker = app.world_mut().spawn(Transform::default()).id();
-        app.world_mut().write_message(crate::creatures::behaviour::CreatureAttack { attacker, species: fb_creatures::Species::Rat, damage, poison: 0, attacker_pos: Vec2::ZERO });
+        app.world_mut().write_message(crate::creatures::behaviour::AttackOnDelver { attacker, species: Some(fb_creatures::Species::Rat), damage, poison: 0, attacker_pos: Vec2::ZERO });
         app.update();
         (app, player)
     }

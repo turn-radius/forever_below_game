@@ -18,6 +18,11 @@ natural_hit = 20
 natural_miss = 1
 # The difficulty class of the Constitution save against venom (SRD p. 386, Poisonous Snake).
 venom_save_dc = 10
+# What a delver's or a folk's attack roll adds for proficiency with the weapon: a first-level
+# character's +2 (SRD p. 12, Proficiency Bonus).
+proficiency_bonus = 2
+# Game hours a failed save against venom leaves the delver poisoned (our own).
+venom_poisoned_hours = 1.0
 
 # The sides of each class's hit die, taken at its highest at first level (SRD "Hit Points at 1st
 # Level": fighter p. 24, ranger p. 35, cleric p. 15, wizard p. 52 for the mage).

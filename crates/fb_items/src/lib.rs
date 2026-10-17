@@ -24,13 +24,15 @@ pub mod tables;
 pub mod undead;
 
 pub use contents::{container_item, roll_contents};
-pub use item::{Coins, Item, roll_item, roll_loot};
+pub use item::{Coins, Item, roll_item, roll_item_with, roll_loot};
+pub use rarity::Odds;
 pub use provision::{Consume, Provision, provision};
 
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Ordered from common to legendary, so a cap is a `min`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Rarity { Common, Magic, Rare, Legendary }
 

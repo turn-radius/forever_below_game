@@ -11,13 +11,18 @@
 //!   crosshair ([`swing::SwingPath`]). Partway through,
 //!   the blow lands on the nearest creature whose body, as its bones are posed
 //!   ([`swing::body_targets`]), is within the weapon's reach in a cone ahead
-//!   ([`target_in_reach`]), for the weapon's damage dice ([`Weapon::roll`]).
-//!   Every swing that finds a creature hits: no attack roll against its Armor Class yet.
+//!   ([`target_in_reach`]), for the weapon's damage dice ([`Weapon::roll`]). Folk are struck
+//!   the same way (`crate::folk_combat`), at the circle they stand in.
+//!   Every swing that finds something rolls to hit against its [`ArmourClass`] first
+//!   ([`attack_roll`]): a creature's from its SRD stat block ([`arm_creatures`]), a folk's or a
+//!   skeleton's from what they wear. A poisoned delver rolls at disadvantage.
 //! - **Taking hits** ([`feedback`]): a struck creature flashes, twitches back and squeaks or
 //!   hisses. At 0 hit points it holds, flashing, for a moment, then collapses, a rat rolling over and a snake going limp along the
 //!   floor, and its body stays for the run. Bodies block nothing: they lie flat (a rat on its
 //!   back, a snake stretched out), low enough to step over.
-//! - **Being bitten** ([`vitals`]): a creature's bite ([`CreatureAttack`]) takes the delver's
+//! - **Being bitten** ([`vitals`]): a creature's bite or a folk's blow rolls to hit against the
+//!   delver's [`ArmourClass`] as theirs is rolled against; a miss whooshes past and does nothing
+//!   ([`MissedDelver`](crate::creatures::behaviour::MissedDelver)). One that lands ([`AttackOnDelver`]) takes the delver's
 //!   hit points, which show low on the left of the view with a red flash round its edge. A
 //!   poisonous snake's venom is halved by a Constitution save; a constrictor's bite holds the
 //!   delver, slowed, until they strike it. At 0 the run ends: "You fall in the abyss", then the
@@ -33,8 +38,9 @@ use fb_character::rules::Rules;
 use fb_items::dice::Dice;
 use procgen_rng::Mulberry32;
 
-use crate::character::{Character, Class, modifier};
-use crate::creatures::behaviour::CreatureAttack;
+use crate::character::{Character, modifier};
+use crate::creatures::Critter;
+use crate::creatures::behaviour::AttackOnDelver;
 use crate::inventory::Inventory;
 use crate::tuning::Tuning;
 
@@ -49,7 +55,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin));
     }
 }
 
@@ -105,20 +111,39 @@ pub fn first_level_hit_points_with(rules: &Rules, character: &Character) -> i32 
 
 /// [`first_level_hit_points_with`] with its terms: the hit die and the Constitution modifier.
 pub fn first_level_hit_points_explained_with(rules: &Rules, character: &Character) -> fb_character::explain::Explained {
-    let dice = &rules.combat.hit_dice;
-    let die = match character.class {
-        Class::Fighter => dice.fighter,
-        Class::Ranger => dice.ranger,
-        Class::Cleric => dice.cleric,
-        Class::Mage => dice.mage,
-    };
-    rules::first_level_hit_points(die, modifier(character.constitution()))
+    first_level_hit_points_explained_for_with(rules, character.class, character.constitution())
+}
+
+/// [`first_level_hit_points_explained_with`] for anyone of `class` with a Constitution of
+/// `constitution` (a folk as well as the delver), the hit die from the rules.
+pub fn first_level_hit_points_explained_for_with(rules: &Rules, class: crate::character::Class, constitution: i32) -> fb_character::explain::Explained {
+    rules::first_level_hit_points(class.hit_die_with(rules), modifier(constitution))
+}
+
+/// [`first_level_hit_points_explained_for_with`] under the default rules.
+pub fn first_level_hit_points_explained_for(class: crate::character::Class, constitution: i32) -> fb_character::explain::Explained {
+    first_level_hit_points_explained_for_with(fb_character::rules::defaults(), class, constitution)
 }
 
 /// Whether things of `family` are swung as melee weapons (anything else held is improvised).
 pub fn is_melee(family: armory::Family) -> bool {
     use armory::Family;
     matches!(family, Family::Sword | Family::Mace | Family::Axe | Family::Club | Family::Spear | Family::Dagger | Family::Staff)
+}
+
+/// How long a creature's or a folk's swing with something of `family` takes, seconds, from the
+/// wind-up to the follow-through (`None`, bare-handed): a heavy weapon is swung slower than a
+/// light one. Our own, where the delver's swings all take [`swing::SWING_TIME`].
+pub fn swing_time(family: Option<armory::Family>) -> f32 {
+    use armory::Family;
+    match family {
+        Some(Family::Dagger) => 0.9,
+        Some(Family::Sword) => 1.2,
+        Some(Family::Spear) => 1.3,
+        Some(Family::Axe | Family::Club | Family::Staff | Family::Bow) => 1.4,
+        Some(Family::Mace) => 1.5,
+        _ => 1.0,
+    }
 }
 
 /// How a held thing is swung.
@@ -173,13 +198,15 @@ pub struct Weapon {
     pub hold: Option<Hold>,
     /// Whether it bludgeons (a mace, a club, a staff, a fist): a skeleton takes double.
     pub bludgeoning: bool,
+    /// Added to the attack roll (the item's `ToHit`, rounded).
+    pub to_hit: i32,
 }
 
 impl Weapon {
     /// A bare fist: 1 + Strength modifier, bludgeoning (SRD 5.1 p. 95, "Unarmed strike"),
     /// reaching an arm's length.
     pub fn fist() -> Weapon {
-        Weapon { kind: SwingKind::Punch, dice: None, bonus: 0, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: true }
+        Weapon { kind: SwingKind::Punch, dice: None, bonus: 0, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: true, to_hit: 0 }
     }
 
     /// What the delver's main hand swings. A melee weapon rolls its own damage dice
@@ -189,9 +216,18 @@ impl Weapon {
     /// 5-foot reach for most creatures (p. 95), and a long spear further.
     pub fn in_hand(inventory: &Inventory, character: &Character) -> Weapon {
         let Some(item) = inventory.worn(fb_items::Slot::Mainhand).and_then(|id| inventory.item(id)) else { return Weapon::fist() };
-        let length = item.shape.build().bounds().map_or(0.0, |(lo, hi)| (0..3).map(|i| hi[i] - lo[i]).fold(0.0, f32::max));
         let hold = Hold::of(&item.shape, &fb_body::Body::new(&character.spec()));
-        Weapon { reach: ARM_TO_WRIST * STATURE + length, hold, ..Weapon::of_stats(Some(item)) }
+        Weapon { hold, ..Weapon::wielded(Some(item), STATURE) }
+    }
+
+    /// What `item` in the main hand of someone `stature` world units tall swings (a fist with
+    /// `None`), as [`Weapon::in_hand`] works it out for the delver: the reach is the arm to the
+    /// wrist, as a share of stature, and the item's length beyond it; a fist reaches the
+    /// fingertips. No hold: nobody draws it in first person.
+    pub fn wielded(item: Option<&fb_items::Item>, stature: f32) -> Weapon {
+        let Some(item) = item else { return Weapon { reach: ARM_TO_FINGERTIPS * stature, ..Weapon::fist() } };
+        let length = item.shape.build().bounds().map_or(0.0, |(lo, hi)| (0..3).map(|i| hi[i] - lo[i]).fold(0.0, f32::max));
+        Weapon { reach: ARM_TO_WRIST * stature + length, ..Weapon::of_stats(Some(item)) }
     }
 
     /// What `item` in the main hand rolls, without its reach or hold (which need its built
@@ -202,7 +238,7 @@ impl Weapon {
         let melee = is_melee(item.shape.family());
         let stats = &item.profile.stats;
         let dice = if melee { stats.damage.unwrap_or(Dice::new(1, 4)) } else { Dice::new(1, 4) };
-        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: matches!(item.shape.family(), armory::Family::Mace | armory::Family::Club | armory::Family::Staff) || !melee }
+        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: matches!(item.shape.family(), armory::Family::Mace | armory::Family::Club | armory::Family::Staff) || !melee, to_hit: stats.to_hit.round() as i32 }
     }
 
     /// The range a blow's damage falls in with a Strength modifier of `strength`.
@@ -228,10 +264,44 @@ impl Weapon {
         self.roll_explained(strength, rng).value() as u32
     }
 
+    /// What swinging it adds to the d20 for someone of `strength` (the score): the Strength
+    /// modifier and its `ToHit`.
+    pub fn to_hit(&self, strength: i32) -> rules::ToHit {
+        rules::ToHit::Strength { modifier: modifier(strength), weapon: self.to_hit }
+    }
+
     /// [`Weapon::roll`] with every die and bonus listed.
     pub fn roll_explained(&self, strength: i32, rng: &mut Mulberry32) -> fb_character::explain::Explained {
         rules::weapon_damage(self.dice_sides(), self.bonus, strength, rng)
     }
+}
+
+/// Armor Class: what an attack roll against this must reach to land ([`attack_roll`]). On
+/// everything that is struck or strikes back: folk (`crate::folk_combat::arm_folk`), creatures
+/// ([`arm_creatures`], from their SRD stat block or a skeleton's gear) and the delver
+/// ([`vitals`], from what they wear, as the sheet shows it).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArmourClass(pub i32);
+
+impl ArmourClass {
+    /// The Armor Class of anything with none given: 10, unarmoured with no Dexterity modifier
+    /// (as [`fb_character::explain::armour_class`] starts). Our own fallback.
+    pub const UNARMOURED: ArmourClass = ArmourClass(10);
+}
+
+/// Gives each creature its Armor Class once it stands in the level ([`Critter::armour_class`]).
+pub fn arm_creatures(mut commands: Commands, new: Query<(Entity, &Critter), Without<ArmourClass>>, rules: Option<Res<crate::rules::GameRules>>) {
+    let rules = crate::rules::GameRules::of(&rules);
+    for (entity, critter) in &new {
+        commands.entity(entity).insert(ArmourClass(critter.armour_class_with(rules)));
+    }
+}
+
+/// An attack roll with `weapon` by someone of `strength` against `armour_class`, thrown with
+/// `odds` under `rules`: a d20, the Strength modifier, the proficiency bonus and the weapon's
+/// `ToHit` (SRD 5.1 p. 96, "Attack Rolls"; [`rules::ToHit::Strength`], as a folk's blows roll).
+pub fn attack_roll(rules: &Rules, weapon: &Weapon, strength: i32, armour_class: i32, odds: rules::Odds, rng: &mut Mulberry32) -> rules::Attack {
+    weapon.to_hit(strength).roll_with(rules, armour_class, odds, rng)
 }
 
 /// A creature a blow might land on: its entity, its centre on the floor (world `(x, z)`) and
@@ -270,16 +340,19 @@ pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, cone: f32, targets
         .map(|(_, e)| e)
 }
 
-/// The damage a bite does the delver: its own, and its venom after a Constitution save
-/// against the rules' difficulty class (SRD 5.1 p. 386, "Poisonous Snake"; rounding the half
-/// down is our own).
-pub fn bite_damage_with(rules: &Rules, attack: &CreatureAttack, constitution: i32, rng: &mut Mulberry32) -> u32 {
-    rules::bite_damage_with(rules, attack.damage, attack.poison, modifier(constitution), rng).damage.value() as u32
+/// What a bite does the delver under `rules`: its damage (its own, and its venom after a
+/// Constitution save against the rules' difficulty class, halved and rounded down on a success:
+/// SRD 5.1 p. 386, "Poisonous Snake"; rounding down is our own) and how many game hours a
+/// failed save poisons them for ([`rules::Venom::poisons_for_with`]).
+pub fn bite_damage_with(rules: &Rules, attack: &AttackOnDelver, constitution: i32, rng: &mut Mulberry32) -> (u32, Option<f64>) {
+    let bite = rules::bite_damage_with(rules, attack.damage, attack.poison, modifier(constitution), rng);
+    (bite.damage.value() as u32, bite.venom.poisons_for_with(rules))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::character::Class;
     use fb_character::Attributes;
 
     /// The hit cone as shipped.
@@ -292,6 +365,40 @@ mod tests {
 
     fn delver(class: Class, con: i32) -> Character {
         Character { class, attributes: Attributes { strength: 12, dexterity: 12, constitution: con, intelligence: 10, wisdom: 10 }, ..Character::roll(3) }
+    }
+
+    #[test]
+    fn a_heavily_armoured_delver_is_bitten_less_often_by_rats() {
+        let character = delver(Class::Fighter, 12);
+        let bare = character.armour_class(&Inventory::default()).value().round() as i32;
+        let mut kitted = Inventory::default();
+        for (base, slot) in [("Mail", fb_items::Slot::Body), ("Shield", fb_items::Slot::Offhand), ("Helm", fb_items::Slot::Head), ("Gloves", fb_items::Slot::Hands)] {
+            let id = kitted.add(fb_items::roll_item(base, 7).unwrap());
+            kitted.wear(id, slot).unwrap();
+        }
+        let armoured = character.armour_class(&kitted).value().round() as i32;
+        assert!(armoured >= bare + 4, "AC {bare} bare, {armoured} kitted");
+        let level = fb_level::generate(1207, 1);
+        for species in [fb_creatures::Species::Rat, fb_creatures::Species::GiantRat] {
+            let Some(spot) = level.creatures.iter().find(|c| c.species == species).copied().or_else(|| level.creatures.first().map(|c| fb_level::CreatureSpot { species, ..*c })) else { continue };
+            let rat = Critter::new(spot, spot.creature());
+            let bites = |ac: i32| {
+                let mut rng = Mulberry32::new(11);
+                (0..4_000).filter(|_| rat.to_hit().roll(ac, rules::Odds::Even, &mut rng).hit).count()
+            };
+            let (on_bare, on_armoured) = (bites(bare), bites(armoured));
+            assert!(on_armoured + 600 < on_bare, "{species:?}: {on_bare} of 4000 on AC {bare}, {on_armoured} on AC {armoured}");
+            assert!(on_armoured > 0, "a natural 20 still bites");
+        }
+    }
+
+    #[test]
+    fn every_creature_has_its_stat_blocks_armour_class() {
+        let level = fb_level::generate(1207, 1);
+        for spot in level.creatures.iter().filter(|c| !c.species.is_skeleton()) {
+            let critter = Critter::new(*spot, spot.creature());
+            assert_eq!(critter.armour_class(), spot.species.stat_block().armour_class, "{:?}", spot.species);
+        }
     }
 
     #[test]
@@ -342,7 +449,7 @@ mod tests {
     #[test]
     fn damage_rolls_stay_within_their_dice() {
         let mut rng = Mulberry32::new(5);
-        let sword = Weapon { kind: SwingKind::Slash, dice: Some(Dice::new(1, 8)), bonus: 1, reach: 14.0, hold: None, bludgeoning: false };
+        let sword = Weapon { kind: SwingKind::Slash, dice: Some(Dice::new(1, 8)), bonus: 1, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0 };
         let greatsword = Weapon { dice: Some(Dice::new(2, 6)), bonus: 0, ..sword };
         let mut seen = std::collections::HashSet::new();
         for _ in 0..2000 {
@@ -364,7 +471,7 @@ mod tests {
         let mut rng = Mulberry32::new(11);
         let inventory_sword = fb_items::roll_item("Sword", 7).unwrap();
         let dice = inventory_sword.profile.stats.damage.unwrap();
-        let sword = Weapon { kind: SwingKind::Slash, dice: Some(dice), bonus: 0, reach: 14.0, hold: None, bludgeoning: false };
+        let sword = Weapon { kind: SwingKind::Slash, dice: Some(dice), bonus: 0, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0 };
         for species in [Species::Rat, Species::GiantRat] {
             let mut most = 0;
             for _ in 0..500 {
@@ -459,6 +566,11 @@ mod tests {
         (app, player, rat)
     }
 
+    /// An Armor Class only a natural 1 misses, on `target`, for a test of what a landed blow does.
+    fn easy_to_hit(app: &mut App, target: Entity) {
+        app.world_mut().entity_mut(target).insert(ArmourClass(-100));
+    }
+
     fn swing_at(app: &mut App, player: Entity, frames: usize) {
         let weapon = Weapon::in_hand(app.world().resource::<Inventory>(), app.world().resource::<Character>());
         app.world_mut().entity_mut(player).insert(swing::Swing::new(weapon));
@@ -476,6 +588,8 @@ mod tests {
         app.update();
         let hp = app.world().get::<Health>(rat).unwrap().hp;
         assert_eq!(hp, 1, "a rat has the SRD's 1 hit point");
+        assert_eq!(app.world().get::<ArmourClass>(rat), Some(&ArmourClass(10)), "and its Armor Class of 10");
+        easy_to_hit(&mut app, rat);
         swing_at(&mut app, player, 60);
         assert!(app.world().get::<Corpse>(rat).is_some(), "the rat fell to one blow");
         let fell = app.world().get::<Transform>(rat).unwrap().translation;
@@ -497,6 +611,7 @@ mod tests {
         let death_hold = combat.flash_hold;
         let (mut app, player, rat) = fight(Some("Sword"), 9.0);
         app.update();
+        easy_to_hit(&mut app, rat);
         let weapon = Weapon::in_hand(app.world().resource::<Inventory>(), app.world().resource::<Character>());
         app.world_mut().entity_mut(player).insert(swing::Swing::new(weapon));
         let mut frames = 0;
@@ -565,6 +680,7 @@ mod tests {
             .expect("nowhere beside its body out of reach of its root");
         let floor = Vec3::new(from.x, root.translation.y, from.y);
         app.world_mut().entity_mut(player).insert(Transform::from_translation(floor).looking_at(Vec3::new(mid.x, root.translation.y, mid.z), Vec3::Y));
+        easy_to_hit(&mut app, snake);
         let before = app.world().get::<Health>(snake).unwrap().hp;
         swing_at(&mut app, player, 40);
         assert!(app.world().get::<Health>(snake).unwrap().hp < before, "the blow to its body landed");
@@ -621,7 +737,7 @@ mod tests {
         let spot = dev_spots_for(&level, &format!("skeleton:{seed}")).remove(0);
         app.insert_resource(CurrentLevel(level.clone()));
         let state = fb_creatures::SkeletonState::roll(seed);
-        let kit = SkeletonKit::new(&state, outfit.unwrap_or_else(|| fb_items::undead::skeleton_outfit(seed)), [None, None]);
+        let kit = SkeletonKit::new(&state, outfit.unwrap_or_else(|| fb_items::undead::skeleton_outfit(seed, fb_items::Odds::default())), [None, None]);
         let skeleton = {
             let mut commands = app.world_mut().commands();
             spawn_skeleton_with(&mut commands, &level, &spot, &state.build(), Some(kit)).0
@@ -640,7 +756,7 @@ mod tests {
 
     /// A seed whose skeleton rolls most of a kit of gear.
     fn kitted_seed() -> u32 {
-        (0..400).find(|&s| fb_items::undead::skeleton_outfit(s).worn.len() >= 5).expect("some skeleton is kitted")
+        (0..400).find(|&s| fb_items::undead::skeleton_outfit(s, fb_items::Odds::default()).worn.len() >= 5).expect("some skeleton is kitted")
     }
 
     fn strike_down(app: &mut App, skeleton: Entity) {
@@ -664,7 +780,7 @@ mod tests {
         use crate::inventory::{FloorChange, FloorChanges};
         use crate::play::CurrentLevel;
         let seed = kitted_seed();
-        let gear = fb_items::undead::skeleton_outfit(seed);
+        let gear = fb_items::undead::skeleton_outfit(seed, fb_items::Odds::default());
         let (mut app, _, skeleton) = skeleton_fight(seed, None);
         app.update();
         assert!(on_the_floor(&mut app).is_empty(), "nothing lies there while it stands");
@@ -715,7 +831,7 @@ mod tests {
     fn a_skeletons_gear_is_dropped_once_and_a_body_brought_back_drops_none() {
         use feedback::Corpse;
         let seed = kitted_seed();
-        let n = fb_items::undead::skeleton_outfit(seed).worn.len();
+        let n = fb_items::undead::skeleton_outfit(seed, fb_items::Odds::default()).worn.len();
         let (mut app, _, skeleton) = skeleton_fight(seed, None);
         app.update();
         strike_down(&mut app, skeleton);
@@ -758,13 +874,13 @@ mod tests {
 
     /// The distance from the delver at which a skeleton in `base` first lands a blow.
     fn reach_in_use(base: &str) -> f32 {
-        use crate::creatures::behaviour::CreatureAttack;
+        use crate::creatures::behaviour::AttackOnDelver;
         let outfit = fb_items::outfit::OutfitSet { worn: vec![(fb_items::Slot::Mainhand, fb_items::roll_item(base, 5).unwrap())], goods: Vec::new(), ground: Vec::new() };
         let (mut app, player, skeleton) = skeleton_fight(3, Some(outfit));
         let me = app.world().get::<Transform>(player).unwrap().translation.xz();
         for _ in 0..900 {
             app.update();
-            let attacks: Vec<CreatureAttack> = app.world().resource::<Messages<CreatureAttack>>().iter_current_update_messages().copied().collect();
+            let attacks: Vec<AttackOnDelver> = app.world().resource::<Messages<AttackOnDelver>>().iter_current_update_messages().copied().collect();
             if let Some(attack) = attacks.first() {
                 assert_eq!(attack.attacker, skeleton);
                 assert!(attack.damage >= 1);
