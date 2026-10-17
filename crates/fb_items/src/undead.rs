@@ -7,6 +7,10 @@
 //! piece is rolled through [`roll_item_with`], so it has a rarity, affixes and a history like loot,
 //! and then it is worn hard: the dead have lain in it for ages, so its wear is high, iron
 //! rusts, cloth and leather rot, and weapons are nicked.
+//!
+//! The dead of the first stone halls ([`FIRST_HALLS`]) are poorer: they wear no armour at all,
+//! only rags, and hold a dagger or a club if anything, so a fresh delver with what the
+//! first level gives can stand against them (#354). Our own.
 
 use procgen_rng::Mulberry32;
 
@@ -23,6 +27,13 @@ const WEAPONS: &[&str] = &["Sword", "Sword", "Hand axe", "Mace", "Spear", "Spear
 const KITTED_BODY: &[&str] = &["Mail", "Brigandine", "Scale coat", "Cuirass"];
 const BODY: &[&str] = &["Gambeson", "Mail", "Brigandine", "Scale coat", "Cuirass", "Leather jerkin"];
 const HANDS: &[&str] = &["Gloves", "Gauntlets", "Gauntlets"];
+/// The depth of the first stone halls, the shallowest level the dead stand in
+/// (`fb_level::LevelStyle::for_depth`). Our own.
+pub const FIRST_HALLS: u32 = 2;
+/// What the dead of the first halls hold, whether they would have been kitted or not: light
+/// things, 1d4 each (a dagger or a club), or, three times in five, nothing
+/// but their claws after all. Our own.
+const FIRST_HALLS_WEAPONS: &[Option<&str>] = &[Some("Dagger"), Some("Club"), None, None, None];
 
 /// Rolls the gear for a skeleton from `seed`, each piece's rarity against `odds` (a skeleton
 /// met at a depth carries [`Odds::kit`] for it). A pure function of its arguments; slots left
@@ -35,13 +46,22 @@ pub fn skeleton_outfit(seed: u32, odds: Odds) -> OutfitSet {
     // How likely each piece is: kitted, part dressed, bare-boned.
     let chance = |kitted_p: f64, mixed_p: f64, bare_p: f64| if kitted { kitted_p } else if bare { bare_p } else { mixed_p };
 
-    let weapon = if rng.chance(chance(1.0, 0.9, 0.6)) { Some(*rng.pick(if kitted { KITTED_WEAPONS } else { WEAPONS })) } else { None };
+    // The first halls' dead draw as the others do, so a deeper skeleton's gear does not
+    // change, and then go without the armour.
+    let poor = odds.depth == FIRST_HALLS;
+    let weapon = if !rng.chance(chance(1.0, 0.9, 0.6)) {
+        None
+    } else if poor {
+        *rng.pick(FIRST_HALLS_WEAPONS)
+    } else {
+        Some(*rng.pick(if kitted { KITTED_WEAPONS } else { WEAPONS }))
+    };
     // A shield needs a hand free: not with a bow.
-    let shield = weapon.is_some_and(|w| w != "Bow") && rng.chance(chance(0.9, 0.4, 0.1));
-    let helm = rng.chance(chance(1.0, 0.45, 0.08));
-    let body = rng.chance(chance(1.0, 0.5, 0.08));
-    let gloves = rng.chance(chance(1.0, 0.3, 0.04));
-    let boots = rng.chance(chance(1.0, 0.35, 0.05));
+    let shield = weapon.is_some_and(|w| w != "Bow") && rng.chance(chance(0.9, 0.4, 0.1)) && !poor;
+    let helm = rng.chance(chance(1.0, 0.45, 0.08)) && !poor;
+    let body = rng.chance(chance(1.0, 0.5, 0.08)) && !poor;
+    let gloves = rng.chance(chance(1.0, 0.3, 0.04)) && !poor;
+    let boots = rng.chance(chance(1.0, 0.35, 0.05)) && !poor;
     let rags = !body && rng.chance(chance(0.0, 0.3, 0.15));
     let body_base = *rng.pick(if kitted { KITTED_BODY } else { BODY });
     let hands_base = *rng.pick(HANDS);
@@ -147,6 +167,26 @@ mod tests {
         assert!(magic > 0, "no magic gear on 200 skeletons");
         let deep = (0..50).flat_map(|seed| skeleton_outfit(seed, Odds::kit(5)).worn).filter(|(_, i)| i.rarity >= Rarity::Rare).count();
         assert!(deep > 0, "nothing rare on 50 skeletons at depth 5");
+    }
+
+    #[test]
+    fn the_first_halls_dead_wear_no_armour_and_hold_light_things() {
+        let mut armed = 0;
+        for seed in 0..300 {
+            let set = skeleton_outfit(seed, Odds::kit(FIRST_HALLS));
+            for (slot, item) in &set.worn {
+                assert!(item.base == "Tunic" || *slot == Slot::Mainhand, "{seed}: {} in {slot:?}, rags only", item.base);
+                assert_eq!(item.profile.stats.armour, 0.0, "{seed}: {}", item.base);
+            }
+            if let Some(w) = set.item(Slot::Mainhand) {
+                assert!(FIRST_HALLS_WEAPONS.contains(&Some(w.base.as_str())), "{seed}: {}", w.base);
+                armed += 1;
+            }
+        }
+        assert!((60..200).contains(&armed), "some still hold something: {armed}");
+        // Deeper, the same seeds wear what they always did.
+        assert_eq!(skeleton_outfit(7, Odds::kit(4)), skeleton_outfit(7, Odds::kit(4)));
+        assert!((0..100).any(|seed| skeleton_outfit(seed, Odds::kit(4)).item(Slot::Body).is_some_and(|b| b.profile.stats.armour > 0.0)));
     }
 
     #[test]

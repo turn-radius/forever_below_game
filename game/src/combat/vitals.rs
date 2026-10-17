@@ -169,6 +169,18 @@ fn whoosh_past(
     }
 }
 
+/// How the log names a blow that landed: "A folk strikes", a skeleton's by its weapon
+/// ("Skeleton slashes" with a sword, "Skeleton strikes" with a mace, "Skeleton claws" bare),
+/// and a beast's bite ("Rat bites").
+pub fn blow_line(species: Option<Species>, kit: Option<&crate::creatures::skeletons::SkeletonKit>) -> String {
+    match (species, kit) {
+        (None, _) => "A folk strikes".to_string(),
+        (Some(s), Some(kit)) if s.is_skeleton() => format!("{} {}", s.stat_block().name, kit.blow_verb()),
+        (Some(s), _) if s.is_skeleton() => format!("{} strikes", s.stat_block().name),
+        (Some(s), _) => format!("{} bites", s.stat_block().name),
+    }
+}
+
 /// Each bite takes its damage from the delver; a constrictor's holds them.
 fn take_bites(
     mut commands: Commands,
@@ -177,6 +189,7 @@ fn take_bites(
     mut dice: ResMut<RunDice>,
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
+    critters: Query<&Critter>,
     mut players: Query<(Entity, &mut Health, Option<&DelverPoison>), With<Player>>,
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
@@ -204,7 +217,7 @@ fn take_bites(
             if let Some(sounds) = &sounds {
                 commands.spawn((Name::new("blow lands"), AudioPlayer::new(sounds.thud.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(AppState::Delving)));
             }
-            let who = bite.species.map_or_else(|| "A folk strikes".to_string(), |s| format!("{s:?} bites"));
+            let who = blow_line(bite.species, critters.get(bite.attacker).ok().and_then(|c| c.kit.as_deref()));
             info!("{who} for {damage}: {} of {} hit points left", health.hp, health.max);
             if bite.species == Some(Species::ConstrictorSnake) && !health.is_down() {
                 commands.entity(player).insert((Constricted { by: bite.attacker }, Slowed(HELD_PACE)));
@@ -434,6 +447,24 @@ mod tests {
         bite(&mut app, snake, Species::Rat, 3);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 7);
         assert!(app.world().resource::<Pain>().alpha() > 0.0);
+    }
+
+    #[test]
+    fn a_skeletons_blow_is_logged_by_its_weapon_and_a_rats_as_a_bite() {
+        use crate::creatures::skeletons::SkeletonKit;
+        let state = fb_creatures::SkeletonState::roll(3);
+        let armed = |base: &str| {
+            let item = fb_items::roll_item(base, 41).unwrap();
+            SkeletonKit::new(&state, fb_items::outfit::OutfitSet { worn: vec![(fb_items::Slot::Mainhand, item)], goods: Vec::new(), ground: Vec::new() }, [None, None])
+        };
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&armed("Sword"))), "Skeleton slashes");
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&armed("Mace"))), "Skeleton strikes");
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&SkeletonKit::bare(&state))), "Skeleton claws");
+        assert_eq!(blow_line(Some(Species::Rat), None), "Rat bites");
+        assert_eq!(blow_line(None, None), "A folk strikes");
+        for line in [armed("Sword"), armed("Mace"), armed("Dagger"), SkeletonKit::bare(&state)].iter().map(|k| blow_line(Some(Species::Skeleton), Some(k))) {
+            assert!(!line.contains("bites"), "{line}");
+        }
     }
 
     #[test]
