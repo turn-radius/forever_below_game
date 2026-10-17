@@ -42,7 +42,8 @@
     }
    }
   ],
-  "t": "+1 armour"
+  "t": "+1 armour",
+  "grp": "armour"
  },
  {
   "n": "Silent",
@@ -72,7 +73,8 @@
     }
    }
   ],
-  "t": "+1 damage"
+  "t": "+1 damage",
+  "grp": "damage"
  },
  {
   "n": "Balanced",
@@ -87,7 +89,8 @@
     }
    }
   ],
-  "t": "+1 to hit"
+  "t": "+1 to hit",
+  "grp": "to_hit"
  },
  {
   "n": "Gleaming",
@@ -314,7 +317,8 @@
     }
    }
   ],
-  "t": "Darkvision 10 ft"
+  "t": "Darkvision 10 ft",
+  "grp": "darkvision"
  },
  {
   "n": "of Plenty",
@@ -384,12 +388,12 @@
   "fx": [
    {
     "scale": {
-     "stat": "fatigue_rate",
+     "stat": "sleepiness_rate",
      "by": 0.85
     }
    }
   ],
-  "t": "Fatigue 15% slower"
+  "t": "Sleep 15% slower"
  },
  {
   "n": "of Quiet Steps",
@@ -435,5 +439,590 @@
    }
   ],
   "t": "Heal 1 on a kill"
+ },
+ {
+  "n": "Fleet",
+  "k": "pre",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "speed",
+     "by": 1.1
+    }
+   }
+  ],
+  "t": "+10% speed",
+  "grp": "speed",
+  "at": [
+   "feet",
+   "legs",
+   "charm"
+  ]
+ },
+ {
+  "n": "Vicious",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "add": {
+     "stat": "damage_bonus",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 damage",
+  "grp": "damage",
+  "r": "rare"
+ },
+ {
+  "n": "Accurate",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "add": {
+     "stat": "to_hit",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 to hit",
+  "grp": "to_hit",
+  "r": "rare"
+ },
+ {
+  "n": "Reinforced",
+  "k": "pre",
+  "g": 1,
+  "on": "armor",
+  "fx": [
+   {
+    "add": {
+     "stat": "armour",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 armour",
+  "grp": "armour",
+  "r": "rare"
+ },
+ {
+  "n": "Sluggish",
+  "k": "pre",
+  "g": 0,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "speed",
+     "by": 0.9
+    }
+   }
+  ],
+  "t": "−10% speed",
+  "grp": "speed",
+  "at": [
+   "feet",
+   "legs",
+   "charm"
+  ]
+ },
+ {
+  "n": "Feeble",
+  "k": "pre",
+  "g": 0,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "strength",
+     "by": -1
+    }
+   }
+  ],
+  "t": "−1 STR",
+  "grp": "strength",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "Clumsy",
+  "k": "pre",
+  "g": 0,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "dexterity",
+     "by": -1
+    }
+   }
+  ],
+  "t": "−1 DEX",
+  "grp": "dexterity",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "Frail",
+  "k": "pre",
+  "g": 0,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "constitution",
+     "by": -1
+    }
+   }
+  ],
+  "t": "−1 CON",
+  "grp": "constitution",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of Haste",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "speed",
+     "by": 1.2
+    }
+   }
+  ],
+  "t": "+20% speed",
+  "grp": "speed",
+  "r": "rare",
+  "at": [
+   "feet",
+   "legs",
+   "charm"
+  ]
+ },
+ {
+  "n": "of Carnage",
+  "k": "suf",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "add": {
+     "stat": "damage_bonus",
+     "by": 3
+    }
+   }
+  ],
+  "t": "+3 damage",
+  "grp": "damage",
+  "r": "legendary"
+ },
+ {
+  "n": "of Precision",
+  "k": "suf",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "add": {
+     "stat": "to_hit",
+     "by": 3
+    }
+   }
+  ],
+  "t": "+3 to hit",
+  "grp": "to_hit",
+  "r": "legendary"
+ },
+ {
+  "n": "of the Bulwark",
+  "k": "suf",
+  "g": 1,
+  "on": "armor",
+  "fx": [
+   {
+    "add": {
+     "stat": "armour",
+     "by": 3
+    }
+   }
+  ],
+  "t": "+3 armour",
+  "grp": "armour",
+  "r": "legendary"
+ },
+ {
+  "n": "of Deflection",
+  "k": "suf",
+  "g": 1,
+  "on": "armor",
+  "fx": [
+   {
+    "add": {
+     "stat": "block_chance",
+     "by": 0.1
+    }
+   }
+  ],
+  "t": "10% chance to block a blow",
+  "grp": "block",
+  "at": [
+   "offhand"
+  ]
+ },
+ {
+  "n": "of the Rampart",
+  "k": "suf",
+  "g": 1,
+  "on": "armor",
+  "fx": [
+   {
+    "add": {
+     "stat": "block_chance",
+     "by": 0.2
+    }
+   }
+  ],
+  "t": "20% chance to block a blow",
+  "grp": "block",
+  "r": "rare",
+  "at": [
+   "offhand"
+  ]
+ },
+ {
+  "n": "of the Owl",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "darkvision",
+     "by": 30
+    }
+   }
+  ],
+  "t": "Darkvision 30 ft",
+  "grp": "darkvision",
+  "r": "rare",
+  "at": [
+   "head",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Bat",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "darkvision",
+     "by": 60
+    }
+   }
+  ],
+  "t": "Darkvision 60 ft",
+  "grp": "darkvision",
+  "r": "legendary",
+  "at": [
+   "head",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of Might",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "strength",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 STR",
+  "grp": "strength",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of the Giant",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "strength",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 STR",
+  "grp": "strength",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of Deftness",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "dexterity",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 DEX",
+  "grp": "dexterity",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of the Fox",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "dexterity",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 DEX",
+  "grp": "dexterity",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of Vigour",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "constitution",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 CON",
+  "grp": "constitution",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of the Bear",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "constitution",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 CON",
+  "grp": "constitution",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of Wit",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "intelligence",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 INT",
+  "grp": "intelligence",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of the Sage",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "intelligence",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 INT",
+  "grp": "intelligence",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of Insight",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "wisdom",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 WIS",
+  "grp": "wisdom",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of the Seer",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "wisdom",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 WIS",
+  "grp": "wisdom",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of Presence",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "charisma",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 CHA",
+  "grp": "charisma",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
+ },
+ {
+  "n": "of the Silver Tongue",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "charisma",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 CHA",
+  "grp": "charisma",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
  }
 ]

@@ -24,11 +24,17 @@ pub enum Action {
     /// Lights or puts out the carried light (with Shift, the hip lantern), or in the inventory
     /// the light under the mouse.
     Light,
+    /// Eats or drinks the food or drink under the mouse in the inventory.
+    Consume,
+    /// Uses the item in a quickslot: its ten keys, 1 to 0, are the slots in order.
+    Quickslot,
     DragItem,
     TurnItem,
     /// Held over an item that can be worn, shows what is worn in its place beside its card.
     Compare,
     Inventory,
+    /// Opens the inventory screen on its character tab.
+    Character,
     /// Opens and closes the map of the level.
     Map,
     /// Closes the open screen or page, or opens the menu over the level.
@@ -120,13 +126,18 @@ pub struct Binding {
 }
 
 impl Binding {
-    /// The inputs' labels, each once ("Shift" for both shift keys).
+    /// The inputs' labels, each once ("Shift" for both shift keys). A run of digit keys, as
+    /// the quickslots', is one label: "1 to 0".
     pub fn labels(&self) -> Vec<String> {
         let mut labels: Vec<String> = Vec::new();
         for label in self.inputs.iter().map(|i| i.label()) {
             if !labels.contains(&label) {
                 labels.push(label);
             }
+        }
+        let digits = self.inputs.iter().all(|i| matches!(i, Input::Key(k) if format!("{k:?}").starts_with("Digit")));
+        if digits && labels.len() >= 4 {
+            return vec![format!("{} to {}", labels[0], labels[labels.len() - 1])];
         }
         labels
     }
@@ -155,10 +166,29 @@ impl Default for Keymap {
                 bind(Action::PickUp, "Pick up or open", Group::Items, &[Key(KeyCode::KeyE)]),
                 bind(Action::EquipAimed, "Equip what you look at", Group::Items, &[Key(KeyCode::KeyF)]),
                 bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]),
+                bind(Action::Consume, "Eat or drink what is under the mouse in the inventory", Group::Items, &[Key(KeyCode::KeyU)]),
+                bind(
+                    Action::Quickslot,
+                    "Use a quickslot, or in the inventory bind the item under the mouse to it",
+                    Group::Items,
+                    &[
+                        Key(KeyCode::Digit1),
+                        Key(KeyCode::Digit2),
+                        Key(KeyCode::Digit3),
+                        Key(KeyCode::Digit4),
+                        Key(KeyCode::Digit5),
+                        Key(KeyCode::Digit6),
+                        Key(KeyCode::Digit7),
+                        Key(KeyCode::Digit8),
+                        Key(KeyCode::Digit9),
+                        Key(KeyCode::Digit0),
+                    ],
+                ),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]),
                 bind(Action::Compare, "Compare with what you wear (hold over an item)", Group::Items, &[Key(KeyCode::ControlLeft), Key(KeyCode::ControlRight)]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]),
+                bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyC)]),
                 bind(Action::Map, "Map", Group::Screens, &[Key(KeyCode::KeyM)]),
                 bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]),
                 bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]),
@@ -209,6 +239,16 @@ impl ActionInput<'_> {
         self.any(action, |k, c| k.pressed(c), |m, b| m.pressed(b))
     }
 
+    /// Which of `action`'s inputs was pressed this frame, as its position in the binding (the
+    /// first if several were): the slot a quickslot key names.
+    pub fn just_pressed_index(&self, action: Action) -> Option<usize> {
+        self.keymap.inputs(action).iter().position(|input| match *input {
+            Input::Key(k) => self.keys.as_deref().is_some_and(|keys| keys.just_pressed(k)),
+            Input::Mouse(b) => self.mouse.as_deref().is_some_and(|mouse| mouse.just_pressed(b)),
+            Input::MouseMotion => false,
+        })
+    }
+
     /// Pressed this frame.
     pub fn just_pressed(&self, action: Action) -> bool {
         self.any(action, |k, c| k.just_pressed(c), |m, b| m.just_pressed(b))
@@ -242,9 +282,10 @@ mod tests {
     }
 
     #[test]
-    fn the_inventory_is_i_and_nothing_is_tab() {
+    fn the_inventory_is_i_the_character_c_and_nothing_is_tab() {
         let keymap = Keymap::default();
         assert_eq!(keymap.inputs(Action::Inventory), &[Input::Key(KeyCode::KeyI)]);
+        assert_eq!(keymap.inputs(Action::Character), &[Input::Key(KeyCode::KeyC)]);
         assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(KeyCode::Tab))));
     }
 
@@ -257,6 +298,22 @@ mod tests {
         assert_eq!(Keymap::default().binding(Action::NewDelve).unwrap().labels(), vec!["Enter".to_string()]);
         assert_eq!(Input::Mouse(MouseButton::Right).label(), "Right click");
         assert_eq!(Keymap::default().binding(Action::Hurry).unwrap().labels(), vec!["Shift".to_string()]);
+        assert_eq!(Keymap::default().binding(Action::Quickslot).unwrap().labels(), vec!["1 to 0".to_string()], "ten digit keys are one label");
+    }
+
+    #[test]
+    fn the_quickslot_key_pressed_is_the_slot_it_names() {
+        let mut app = App::new();
+        app.init_resource::<Keymap>().init_resource::<ButtonInput<KeyCode>>();
+        let slot = |app: &mut App| {
+            app.world_mut().run_system_once(|input: ActionInput| input.just_pressed_index(Action::Quickslot)).unwrap()
+        };
+        assert_eq!(slot(&mut app), None);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit3);
+        assert_eq!(slot(&mut app), Some(2));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit0);
+        assert_eq!(slot(&mut app), Some(9));
     }
 
     #[test]

@@ -34,14 +34,18 @@ You come through a door into the first level, and it shuts behind you. Folk of t
 | L, Shift+L | light or put out the torch or lantern you carry, the one in hand first, then the one at your hip; Shift+L acts on the hip lantern alone. In the inventory, L lights or puts out the torch or lantern under the mouse, wherever it lies; its card says which. A spent torch will not light. Every lit light you carry shines |
 | M | map of the level, filled in as you explore: only cells you have seen while they were lit are drawn, as an inked plan with you marked by an amber arrow; scroll to zoom about the mouse, drag to pan; M or Esc closes it, and the body holds still while it is open |
 | I | inventory: drag items between your bags, the floor and your slots (or onto the doll to wear them); R or right click turns a dragged item; double-click wears or takes off; drag the doll to turn it |
+| 1 to 0 | use the item in that quickslot: eat or drink it, draw a weapon or shield into the hand, or draw a torch or lantern and then light or put it out. In the inventory, the number binds the item under the mouse to that slot, as dragging it onto the strip's slot does (a worn item too; another number moves it; an item a slot cannot use, or one lying underfoot, is refused the same way) |
+| C | character: the inventory screen's character tab; C or I swaps between its tabs, and the key of the tab showing closes it |
 | Esc | go back: close a screen or page, or open the menu (Resume, Controls, Settings, Quit) |
 | − and = | music quieter and louder |
 
 Rats and snakes notice you, close in and bite. Your hit points show low on the left ("HP 8/12", a 1st-level character's from the SRD), and the edge of the view flashes red when you are bitten; a poisonous snake's venom is halved on a Constitution save, and a constrictor holds you, slowed, until you strike it. A blow lands on the nearest creature whose body (head, legs, tail, any part of a snake) is within your weapon's reach ahead, for its damage dice; a thrust drives the point at the crosshair. Struck creatures flash, flinch and squeak or hiss, and at 0 they fall and their bodies stay where they lie. At 0 hit points you fall in the abyss and go back to the title. Combat is a placeholder until the character simulation is designed.
 
+Small round badges just above the left end of the quickslot bar show the conditions you are under right now: hungry, thirsty or sleepy past the first band, exhausted, winded, burdened or heavier, and held by a constrictor. Each is coloured from cream to red as it gets worse and goes when the condition does; when the mouse is free (say, after switching windows), hovering one names it and says what it does.
+
 Settings (music and sound volume, mouse sensitivity, invert Y, fullscreen) are saved in `~/Library/Application Support/Forever Below/settings.json` on macOS.
 
-To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, scenery as `%` rubble, `~` bones and `o` pillar, and creatures as `r` rat, `R` giant rat, `v` poisonous snake and `S` constrictor snake, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
+To print a level's map without running the game: `cargo run -p fb_level --example print_level -- <seed>`. It marks folk by their initial in capitals (`H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk, `P` pigfolk), containers as `c` chest, `b` barrel, `x` crate and `a` amphora, scenery as `%` rubble, `~` bones and `o` pillar, stairs as `>` down and `<` up, and creatures as `r` rat, `R` giant rat, `v` poisonous snake, `S` constrictor snake and `k` skeleton, and lists where each stands, which is handy for `FB_DEBUG_POSE`.
 
 ### The Armory turntable
 
@@ -69,6 +73,7 @@ One folk's body, dressed in a rolled outfit and holding what it carries, turning
 
 - `--folk <name>`: human, dwarf, gnome, goblin, lizard (or lizardfolk), pig (or pigfolk). Human by default.
 - `--seed <n>` rolls the body and the outfit's items; 1207 by default.
+- `--walk` starts the doll walking in place, `--speed <n>` sets its pace as a multiple of its folk's natural one (0 to 1.6, 1 by default). W toggles the walk in the view, and the panel at the top right has the same toggle and a speed slider.
 - `--outfit <key>`: fighter (the default), ranger, mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
 
 Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
@@ -78,15 +83,16 @@ Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outf
 ```
 cargo run -p forever_below -- --creature
 cargo run -p forever_below -- --creature --species constrictor --seed 7 --motion rearing
+cargo run -p forever_below -- --skeleton --seed 7 --motion swing
 ```
 
-One rat or snake on the turntable's plate, posed and animated as in the level, with its SRD hit points and bite.
+One rat, snake or skeleton on the turntable's plate, posed and animated as in the level, with its SRD armor class, hit points and bite (a skeleton's shortsword). `--skeleton` is the view opened on a skeleton: roll seeds with Left and Right to see the bones' colour, cracks and missing pieces, and the gear the seed rolls it (`--bare` takes it off; G toggles it).
 
-- `--species <name>`: rat (the default), giant_rat, viper (the poisonous snake) or constrictor.
+- `--species <name>`: rat (the default), giant_rat, viper (the poisonous snake), constrictor or skeleton.
 - `--seed <n>` rolls the creature; 1207 by default.
-- `--motion <name>`: still (the default), moving (trotting or slithering in place at its own speed), rearing or striking.
+- `--motion <name>`: still (the default), moving (trotting, slithering or walking in place at its own speed), rearing or striking. A skeleton has three: still (`stand`), moving (`walk`) and striking (`swing`, the right arm's blow).
 
-Tab and Shift+Tab change the species, Left and Right the seed, M the motion, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
+Tab and Shift+Tab change the species, Left and Right the seed, M the motion, G a skeleton's gear, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 
 ### The Forge view
 
@@ -115,6 +121,19 @@ A whole level from above, drawn as the map draws it but with every cell shown, b
 
 Left and Right step the seed, N rolls a new one and R resets the parameters. Scrolling over the plan zooms about the mouse and dragging pans; on the panel, sliders drag and the panel scrolls. `FB_SCREENSHOT` works here too.
 
+### The lab
+
+```
+cargo run -p forever_below -- --lab
+cargo run -p forever_below -- --lab --seed 7
+```
+
+A character on the left and their sheet on the right, with no level, creatures or audio. The panel (the Forge's, `game/src/tweak_panel.rs`) holds the folk, class, the five attributes (3 to 20) and the character seed, then for each equip slot a base (or none), an item seed and a switch for each affix the item rolled; switching one off derives the item's stats again without it. The sheet lists hit points, armour class, the held weapon's least, mean and most damage, load against capacity with its band, darkvision, light and the hunger, thirst and sleepiness rates, each with the terms of its `fb_character::explain::Explained` beneath. Every number comes from the rules the game calls, so what is balanced here is what the game plays. Any change rebuilds the sheet at once. The window is no smaller than 960 by 540. Below the sheet, the strike column picks an attacker in the panel (any creature, or a folk with STR 10 holding a melee base rolled from the strike seed) and has Strike (one logged blow: the d20 against the sheet's AC, then the damage, the venom save and the hit points before and after), ×100 (hit rate, damage min, mean and max, and the mean blows to kill from full) and Heal. The strike seed sets every roll, so the same seed gives the same blows and the same hundred. Below that, the time column has an activity choice in the panel (the sheet's meter rates follow it) and buttons that pass 10 minutes, an hour, 8 hours or a day under it with the gear applied (`ExhaustionTimes::step`, as the game steps the delver), plus Eat (a bread), Drink (a tankard) and Reset. It shows the clock (days counted from 0), each meter as a percent with its band word and explained rate, the exhaustion level and what it does, and a log of the game time each band and level was crossed.
+
+- `--seed <n>` rolls the class and scores of a human from the seed; with none it opens on a human Fighter with every score 10.
+
+Scrolling over the panel moves it, and anywhere else moves the sheet. `FB_SCREENSHOT` works here too.
+
 ### Swing practice
 
 ```
@@ -137,23 +156,29 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_SCREENSHOT=<file.png>` | renders offscreen, saves one frame and quits; keyboard and mouse are ignored |
 | `FB_SCREENSHOT_FRAMES=<from>..<to>` | with `FB_SCREENSHOT=shot.png`, saves each frame from `from` up to (not including) `to` as `shot_<frame>.png` (`120..136` saves `shot_120.png` to `shot_135.png`; `120..=135` and a single `120` also work), to compare consecutive frames |
 | `FB_SCREENSHOT_EVERY=<n>` | with `FB_SCREENSHOT_FRAMES`, saves only every `n`th frame of the run (`1..900` every `15` saves `shot_1.png`, `shot_16.png`, ...), for long runs such as a fall, the title and the next delve |
+| `FB_SCREENSHOT_SIZE=<width>x<height>` | with `FB_SCREENSHOT`, renders at that size instead of 1920x1080 (`1280x720`), to check a layout at another resolution |
 | `FB_WEAR=<state>` | turntable starting condition (`--wear` wins) |
 | `FB_CLOSEUP=<0–11>` | turntable opens on a close-up of that grid slot |
 | `FB_DEBUG_POSE=x,y,yaw,pitch` | holds the player at a grid point (cells), turned `yaw` degrees from north and tilted `pitch` degrees |
 | `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps` | a lit camera at a fixed view of the level |
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera, and on what is held |
-| `FB_OPEN_INVENTORY=1` | opens the inventory at the start |
+| `FB_OPEN_INVENTORY=1` | opens the inventory at the start (`=character` on the character tab) |
 | `FB_OPEN_MAP=<frame>` | opens the map that many frames into the delve, once the start has been looked round (`FB_OPEN_MAP=120`) |
 | `FB_OPEN_CONTAINER=<n>` | opens the level's `n`th container (0 the first, in `print_level`'s order) a moment in, with the inventory showing what it holds |
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
 | `FB_DROP=<base>[:<rarity>][,...]` | sets an item of each named base down in front of you a moment in, of that rarity if one is named (`Sword:legendary,Sword:common`), spread left to right; for captures of floor items such as a legendary's shimmer |
 | `FB_SWING=1` | swings the main hand over and over, for captures of the swing and of blows landing (with `FB_HOLD` and `FB_DEBUG_POSE`) |
 | `FB_HOLD=<main>[,<off>]` | puts an item of each named base in that hand, after the starting or debug kit (`Mace,Torch`, `Sword,Shield`, `Staff,none`; a torch or lantern is lit, `none` empties the hand) |
+| `FB_CONDITIONS=<list>` | holds the delver under conditions for the status badges, comma separated: `hunger:<0 to 1>`, `thirst:<0 to 1>`, `sleep:<0 to 1>`, `exhaustion:<level>`, `winded`, `load:<light\|burdened\|encumbered\|overloaded>`, `poisoned` (an hour) or `poisoned:<minutes>` (`FB_CONDITIONS=hunger:0.8,winded,load:encumbered`) |
+| `FB_CONDITION_HOVER=<n>` | shows the card of the `n`th status badge (0 the first, worst first) as if hovered |
+| `FB_PROVOKE=<n>` | a second in, gives the level's `n`th folk (0 the first, in `print_level`'s order) cause to fight: they and the kin who see it turn hostile, for captures of folk fighting (with `FB_DEBUG_POSE`) |
+| `FB_SLAY=<n>` | two seconds in, strikes the level's `n`th folk down, for captures of a body and the gear it drops |
 | `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |
 | `FB_NEW_DELVE=<seconds>` | the title chooses New delve by itself after that many seconds, each time it shows; with `FB_PLAYER_HP=1` and `FB_SCREENSHOT_FRAMES`, captures a fall, the title and the next delve without input |
 | `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot (or `<base>@<slot>` in another it fits: `Lantern@hip`, `Sword@offhand`), after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |
 | `FB_STOW=<base>[,<base>...]` | puts one item of each named base in the carried grids, after `FB_EQUIP` (`Mail coif,Hood,Helm,Tunic`) |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
+| `FB_FOLK_WALK=<n>` | every folk in the level walks in place at `n` times its natural pace (`FB_FOLK_WALK=1`), to see the gait and measure its cost before anything moves them |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
 | `FB_COMPARE=1` | holds Ctrl, so the hover card shows its compare card beside it |
 | `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
@@ -191,10 +216,19 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[creatures]` | `snake_cooldown` | 2.5 | Seconds between a snake's strikes. |
 | `[creatures]` | `rat_chase_speed` | 2.0 | How fast a rat comes at you once it has seen you, as a multiple of its speed. |
 | `[creatures]` | `snake_chase_speed` | 1.0 | How fast a snake comes at you once it has seen you, as a multiple of its speed. |
+| `[folk]` | `walk_speed` | 14.0 | A human's unhurried walking pace, world units per second (shorter folk are slower). |
+| `[folk]` | `pause_min` | 3.0 | The least seconds folk wait between walks. |
+| `[folk]` | `pause_max` | 8.0 | The most seconds folk wait between walks. |
+| `[folk]` | `wander_radius` | 90.0 | How far from its spot a person strolls, world units. |
+| `[folk]` | `notice_distance` | 28.0 | How near the player must come, in sight, for a person to stop and face them, world units. |
+| `[folk]` | `release_distance` | 40.0 | How far the player must go before a person who faced them carries on, world units. |
+| `[folk]` | `release_delay` | 1.0 | Seconds the player must stay away before a person carries on. |
+| `[folk]` | `lose_interest_after` | 25.0 | Seconds a hostile person goes without seeing the player before giving up the fight, friendly again, and going home. Our own. |
 | `[creatures.size]` | `rat` | 1.0 | How large each kind of creature is drawn, and the floor it covers (1 = as rolled). |
 | `[creatures.size]` | `giant_rat` | 1.0 | Giant rats, as a multiple. |
 | `[creatures.size]` | `viper` | 1.0 | Poisonous snakes, as a multiple. |
 | `[creatures.size]` | `constrictor` | 1.0 | Constrictor snakes, as a multiple. |
+| `[creatures.size]` | `skeleton` | 1.0 | Skeletons, as a multiple. |
 | `[combat]` | `reach_scale` | 1.0 | How far your blows reach, as a multiple of the weapon's own reach. |
 | `[combat]` | `hit_cone_degrees` | 50.0 | Half the angle of the cone ahead a blow can land in, in degrees either side of the crosshair. |
 | `[combat]` | `flash_hold` | 0.12 | Seconds a struck creature's flash holds at full. |
@@ -215,8 +249,14 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[sound]` | `silence_min` | 45.0 | The shortest silence between tracks, in seconds. |
 | `[sound]` | `silence_max` | 75.0 | The longest silence between tracks, in seconds. |
 | `[sound]` | `effects_volume` | 1.0 | Sound effects' volume at full, 0 to 1, before your sound volume setting. |
-| `[interface]` | `cell_size` | 46.0 | Inventory grid cell size, in logical pixels. |
+| `[sound]` | `ambience_volume` | 0.3 | Ambient sounds' volume at full, 0 to 1: drips and rumbles, before your sound volume setting. |
+| `[sound]` | `rumble_interval_min` | 60.0 | The shortest time between stone rumbles, in seconds. |
+| `[sound]` | `rumble_interval_max` | 180.0 | The longest time between stone rumbles, in seconds. |
+| `[interface]` | `cell_size` | 72.0 | Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there. |
+| `[interface]` | `min_cell_size` | 48.0 | The fewest logical pixels a cell is drawn at, however short the window. |
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
+| `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
+| `[recovery]` | `minutes_per_hit_point` | 10.0 | Game minutes a fed and watered, unpoisoned delver takes to regain one hit point (10 = one every 50 real seconds at the usual clock). Our own. |
 
 The shipped values are the defaults in `game/src/tuning.rs`; a test keeps the two, and this list, in step.
 
@@ -235,5 +275,5 @@ cargo nextest run --workspace --run-ignored only
 
 - `cargo run -p armory --example dump_obj -- [family] <seed> [out.obj]` writes an Armory item as OBJ.
 - `cargo run -p fb_body --example dump_body -- <folk> <seed> > body.obj` writes a folk body as OBJ (human, dwarf, gnome, goblin, lizard, pig).
-- `cargo run -p fb_creatures --example dump_creature -- <rat|giant_rat|viper|constrictor> <seed> > rat.obj` writes a creature at rest as OBJ.
+- `cargo run -p fb_creatures --example dump_creature -- <rat|giant_rat|viper|constrictor|skeleton> <seed> > rat.obj` writes a creature at rest as OBJ.
 - `tools/README.md` covers regenerating the data tables and the soundtrack.

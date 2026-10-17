@@ -15,8 +15,9 @@
 //!   snakes come on at their speed and keep near their spot.
 //! - **Attacking.** In reach, it turns to the player and attacks on a cooldown: a rat lunges
 //!   and bites; a snake draws its coils in and rears, then strikes with its jaw open. At the
-//!   moment of the bite it sends a [`CreatureAttack`] with the stat block's bite rolled, which
-//!   combat (#160) will apply; nothing here hurts anyone.
+//!   moment of the bite it rolls to hit, the stat block's attack bonus against the delver's
+//!   Armor Class ([`BlowsAtDelver`]): a hit sends an [`AttackOnDelver`] with the stat block's
+//!   bite rolled, which combat applies, and a miss a [`MissedDelver`].
 //! - **Losing the player.** Out of sight for [`LOSE_AFTER`] seconds once it has reached where
 //!   it last saw them, or led too far from home, it goes back to wandering its room.
 //!
@@ -31,6 +32,9 @@ use fb_level::{CELL, Level};
 use procgen_rng::Mulberry32;
 
 use super::{Critter, Driven, Intent, tongue_flick};
+use crate::combat::ArmourClass;
+use crate::combat::feedback::Corpse;
+use fb_character::combat::{Odds, ToHit};
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
 use crate::player::{blocked_by, slide_around};
@@ -40,7 +44,8 @@ pub struct BehaviourPlugin;
 
 impl Plugin for BehaviourPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<CreatureAttack>()
+        app.add_message::<AttackOnDelver>()
+            .add_message::<MissedDelver>()
             .init_resource::<BlockedCells>()
             .init_resource::<Obstacles>()
             .init_resource::<Tuning>()
@@ -48,11 +53,13 @@ impl Plugin for BehaviourPlugin {
     }
 }
 
-/// A creature's bite landing, for combat to apply.
+/// A blow landing on the delver, for combat to apply: a creature's bite or blow, or a hostile
+/// folk's (`crate::folk_combat`).
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
-pub struct CreatureAttack {
+pub struct AttackOnDelver {
     pub attacker: Entity,
-    pub species: Species,
+    /// The attacking creature's species, `None` for a folk.
+    pub species: Option<Species>,
     /// The bite's damage, rolled from the stat block ([`fb_creatures::StatBlock::bite`]).
     pub damage: u32,
     /// Poison rolled from the stat block's venom (the poisonous snake's 2d4), before the DC 10
@@ -62,6 +69,64 @@ pub struct CreatureAttack {
     /// delver's facing.
     pub attacker_pos: Vec2,
 }
+
+/// A blow aimed at the delver that missed: its attack roll fell short of their Armor Class.
+/// Combat whooshes it past them (`crate::combat::vitals`); nothing else happens.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct MissedDelver {
+    pub attacker: Entity,
+    /// The attacker's position on the floor (world `(x, z)`).
+    pub attacker_pos: Vec2,
+}
+
+/// Where every blow at the delver, a creature's or a folk's, is rolled: the attacker's to-hit
+/// against the delver's Armor Class, the same rule as the delver's swings
+/// ([`fb_character::combat::ToHit`]). A hit is sent as an [`AttackOnDelver`], a miss as a
+/// [`MissedDelver`]. Once the delver is down nothing is rolled or sent, and nobody starts a
+/// blow at them ([`BlowsAtDelver::delver_is_down`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct BlowsAtDelver<'w, 's> {
+    hits: MessageWriter<'w, AttackOnDelver>,
+    misses: MessageWriter<'w, MissedDelver>,
+    fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
+    delver: Query<'w, 's, (&'static crate::combat::Health, Option<&'static crate::combat::vitals::BlockChance>), With<Player>>,
+    rules: Option<Res<'w, crate::rules::GameRules>>,
+}
+
+impl BlowsAtDelver<'_, '_> {
+    /// Whether the delver has fallen (at 0 hit points, or the run ending): there is nothing left
+    /// to fight.
+    pub fn delver_is_down(&self) -> bool {
+        self.fallen.is_some() || self.delver.iter().any(|(health, _)| health.is_down())
+    }
+
+    /// Rolls `blow`, by `who` with `to_hit`, against `armour_class` (the delver's, or
+    /// [`ArmourClass::UNARMOURED`] when they have none), from `rng`; returns whether it landed.
+    /// Against a fallen delver nothing is rolled and it does not land.
+    pub fn strike(&mut self, who: &str, blow: AttackOnDelver, to_hit: ToHit, armour_class: Option<&ArmourClass>, rng: &mut Mulberry32) -> bool {
+        if self.delver_is_down() {
+            return false;
+        }
+        let ac = armour_class.copied().unwrap_or(ArmourClass::UNARMOURED).0;
+        let attack = to_hit.roll_with(crate::rules::GameRules::of(&self.rules), ac, Odds::Even, rng);
+        // A hit the delver's shield turns aside is blocked: a miss in all but name. Nothing is
+        // drawn without a shield that blocks, so the dice run as they always did.
+        let block = self.delver.iter().next().and_then(|(_, b)| b.copied()).unwrap_or_default();
+        let blocked = attack.hit && block.turns_aside(rng);
+        let verdict = if blocked { ", blocked" } else { "" };
+        info!("{who} attacks the delver: {}{verdict}", attack.line());
+        let lands = attack.hit && !blocked;
+        if lands {
+            self.hits.write(blow);
+        } else {
+            self.misses.write(MissedDelver { attacker: blow.attacker, attacker_pos: blow.attacker_pos });
+        }
+        lands
+    }
+}
+
+/// The delver as a blow at them needs them: where they stand and their Armor Class.
+pub type DelverToStrike = (&'static Transform, Option<&'static ArmourClass>);
 
 /// What a creature is doing.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,6 +168,12 @@ const REPATH: f32 = 0.5;
 /// Turning rates, radians per second.
 const RAT_TURN: f32 = 10.0;
 const SNAKE_TURN: f32 = 3.0;
+const SKELETON_TURN: f32 = 5.0;
+/// The wait between a skeleton's swings, seconds. Our own.
+const SKELETON_COOLDOWN: f32 = 0.8;
+/// How much farther than its reach a skeleton's blow still lands, in case the delver steps
+/// back as it falls. Our own.
+const SKELETON_SLACK: f32 = 1.15;
 /// A rat's bite: the lunge takes this long, landing partway through. The wait between bites is
 /// tuned (`rat_cooldown`, [`crate::tuning::CreatureTuning`]).
 const BITE_TIME: f32 = 0.35;
@@ -127,6 +198,8 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => player_radius + 0.55 * rat.length * critter.size,
         Creature::Snake(snake) => player_radius + critter.radius + 0.35 * snake.dims().neck * critter.size,
+        // Arm and what it holds, as worked out once at spawn: a spear outreaches a dagger.
+        Creature::Skeleton(skeleton) => player_radius + critter.kit.as_ref().map_or_else(|| 0.45 * skeleton.height(), |k| k.reach) * critter.size,
     }
 }
 
@@ -138,6 +211,7 @@ pub fn body_radius(critter: &Critter) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => 0.3 * rat.length * critter.size,
         Creature::Snake(_) => critter.radius.min(SNAKE_SQUEEZE),
+        Creature::Skeleton(skeleton) => 0.12 * critter.kit.as_ref().map_or_else(|| skeleton.height(), |k| k.height) * critter.size,
     }
 }
 
@@ -156,9 +230,12 @@ fn cell(p: Vec2) -> (i32, i32) {
 }
 
 /// Gives each new creature a brain: it now acts for itself, rather than idling.
-fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &Critter, &Transform), Added<Critter>>) {
+fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &Critter, &Transform), (Added<Critter>, Without<Corpse>)>) {
     for (entity, critter, at) in &new {
-        let home = at.translation.xz();
+        // Home is where the level placed it, even when it comes back somewhere else after the
+        // delver left the level ([`crate::record`]): it wanders back to its own room.
+        let [hx, _, hz] = fb_level::Level::world(critter.spot.x, critter.spot.y);
+        let home = Vec2::new(hx, hz);
         let mut rng = Mulberry32::new(critter.spot.seed ^ 0xB4A1);
         let wait = rng.range_f32(0.5, 4.0);
         let (x, y) = cell(home);
@@ -170,7 +247,7 @@ fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &C
             attack: None,
             bitten: false,
             path: Vec::new(),
-            goal: (x, y),
+            goal: cell(at.translation.xz()),
             repath: 0.0,
             stuck: 0.0,
             rng,
@@ -195,13 +272,15 @@ fn behave(
     time: Res<Time>,
     level: Res<CurrentLevel>,
     tuning: Res<Tuning>,
+    rules: Option<Res<crate::rules::GameRules>>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
-    player: Query<&Transform, (With<Player>, Without<Critter>)>,
+    player: Query<DelverToStrike, (With<Player>, Without<Critter>)>,
     mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform)>,
-    mut attacks: MessageWriter<CreatureAttack>,
+    mut attacks: BlowsAtDelver,
     mut commands: Commands,
     sounds: Option<Res<crate::combat::feedback::CreatureSounds>>,
+    bone_sounds: Option<Res<super::skeletons::BoneSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
 ) {
     let dt = time.delta_secs().min(0.1);
@@ -211,7 +290,8 @@ fn behave(
     let level = &level.0;
     let relief = Relief::new(level);
     let blocked = blocked_by(level, &blocked_cells);
-    let player = player.iter().next().map(|t| t.translation.xz());
+    let delver_ac = player.iter().next().and_then(|(_, ac)| ac.copied());
+    let player = player.iter().next().map(|(t, _)| t.translation.xz());
     // Every creature's circle, to keep the others out of.
     let bodies: Vec<(Entity, Vec2, f32)> = creatures.iter().map(|(e, c, _, _, t)| (e, t.translation.xz(), body_radius(c))).collect();
     let t = time.elapsed_secs();
@@ -281,15 +361,20 @@ fn behave(
                 let in_reach = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius)) && sees.is_some();
                 if !in_reach && brain.attack.is_none() {
                     heading = Some(goal);
-                    speed = species.speed() * if snake { tune.snake_chase_speed } else { tune.rat_chase_speed };
+                    speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() { 1.0 } else { tune.rat_chase_speed };
                 }
-                if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 {
+                if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 && !attacks.delver_is_down() {
                     brain.attack = Some(0.0);
                     brain.bitten = false;
                     // The cue sounds from the creature as the lunge or rear begins, before the bite.
-                    if let Some(sounds) = &sounds {
+                    // A skeleton's is its own: a rattle of bone as the arm goes back.
+                    let game = settings.as_deref().copied().unwrap_or_default();
+                    if species.is_skeleton() {
+                        if let Some(sounds) = &bone_sounds {
+                            super::skeletons::play_at(&mut commands, "creature attack cue", sounds.rattle.clone(), transform.translation, &game, &tuning);
+                        }
+                    } else if let Some(sounds) = &sounds {
                         let cue = if snake { sounds.snake_rise.clone() } else { sounds.rat_squeal.clone() };
-                        let game = settings.as_deref().copied().unwrap_or_default();
                         commands.spawn((
                             Name::new("creature attack cue"),
                             AudioPlayer::new(cue),
@@ -346,7 +431,7 @@ fn behave(
                 let wanted = to.x.atan2(to.y);
                 let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
                 let turn = (wanted - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                let rate = if snake { SNAKE_TURN } else { RAT_TURN };
+                let rate = if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else { RAT_TURN };
                 transform.rotation = Quat::from_rotation_y(yaw + turn.clamp(-rate * dt, rate * dt));
             }
         }
@@ -363,8 +448,16 @@ fn behave(
         if let Some(since) = brain.attack.as_mut() {
             *since += dt;
             let since = *since;
-            let (lands, done) = if snake { (STRIKE_WINDUP + STRIKE_THROW, STRIKE_TIME) } else { (BITE_LANDS, BITE_TIME) };
-            if snake {
+            // A skeleton swings its weapon: its own time, the blow landing as the arm comes down.
+            let swing_time = critter.kit.as_ref().filter(|_| species.is_skeleton()).map(|k| k.swing_time);
+            let (lands, done) = match swing_time {
+                Some(time) => (super::skeletons::LANDS * time, time),
+                None if snake => (STRIKE_WINDUP + STRIKE_THROW, STRIKE_TIME),
+                None => (BITE_LANDS, BITE_TIME),
+            };
+            if let Some(time) = swing_time {
+                intent.swing = Some((since / time).min(1.0));
+            } else if snake {
                 intent.coil = 1.0;
                 intent.rear = 1.0;
                 let thrown = (STRIKE_WINDUP..STRIKE_WINDUP + 0.35).contains(&since);
@@ -374,16 +467,31 @@ fn behave(
             } else {
                 intent.strike = if since < BITE_TIME * 0.6 { 1.0 } else { 0.0 };
             }
+            if !brain.bitten && since >= lands && species.is_skeleton() {
+                brain.bitten = true;
+                // The weapon's blow: only if the delver has not stepped out of its reach.
+                // Nor around a wall: it needs sight of the delver at the moment it lands.
+                let within = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius) * SKELETON_SLACK && line_of_sight(grid(at), grid(p), &blocked));
+                if let (true, Some(kit)) = (within, critter.kit.as_ref()) {
+                    let damage = kit.roll_damage(&mut brain.rng);
+                    let blow = AttackOnDelver { attacker: entity, species: Some(species), damage, poison: 0, attacker_pos: at };
+                    attacks.strike("A skeleton", blow, critter.to_hit_with(crate::rules::GameRules::of(&rules)), delver_ac.as_ref(), &mut brain.rng);
+                }
+            }
             if !brain.bitten && since >= lands {
                 brain.bitten = true;
-                let block = species.stat_block();
-                let damage = block.bite.roll(&mut brain.rng);
-                let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
-                attacks.write(CreatureAttack { attacker: entity, species, damage, poison, attacker_pos: at });
+                // A bite lands only with the delver in sight at that moment, not round a wall.
+                if player.is_some_and(|p| line_of_sight(grid(at), grid(p), &blocked)) {
+                    let block = crate::rules::GameRules::of(&rules).creature(species);
+                    let damage = block.bite.roll(&mut brain.rng);
+                    let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
+                    let blow = AttackOnDelver { attacker: entity, species: Some(species), damage, poison, attacker_pos: at };
+                    attacks.strike(block.name, blow, critter.to_hit_with(crate::rules::GameRules::of(&rules)), delver_ac.as_ref(), &mut brain.rng);
+                }
             }
             if since >= done {
                 brain.attack = None;
-                brain.cooldown = if snake { tune.snake_cooldown } else { tune.rat_cooldown };
+                brain.cooldown = if snake { tune.snake_cooldown } else if species.is_skeleton() { SKELETON_COOLDOWN } else { tune.rat_cooldown };
             }
         }
     }
@@ -412,7 +520,7 @@ mod tests {
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_plugins(BehaviourPlugin)
             .add_systems(Update, (super::super::idle, animate).chain().after(behave));
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         app.insert_resource(Obstacles(obstacles(&level)));
         app.insert_resource(CurrentLevel(level.clone()));
         let player = app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y))).id();
@@ -441,14 +549,37 @@ mod tests {
         app.world().get::<Transform>(entity).unwrap().translation.xz()
     }
 
-    fn attacks(app: &mut App) -> Vec<CreatureAttack> {
-        let messages = app.world().resource::<Messages<CreatureAttack>>();
+    fn attacks(app: &mut App) -> Vec<AttackOnDelver> {
+        let messages = app.world().resource::<Messages<AttackOnDelver>>();
         messages.iter_current_update_messages().copied().collect()
     }
 
     #[test]
+    fn nothing_attacks_a_fallen_delver() {
+        let level = fb_level::generate(1207, 1);
+        let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
+        let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
+        let (cx, cy) = room.centre();
+        let player_at = Vec2::new(cx, cy) * CELL + Vec2::new(-1.0, 1.3) * CELL;
+        let (mut app, _, player) = level_app(player_at);
+        // Bitten a while first, then down.
+        let mut before = 0;
+        for _ in 0..600 {
+            app.update();
+            before += attacks(&mut app).len() + app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count();
+        }
+        assert!(before > 0, "the rats never went for the delver");
+        app.world_mut().entity_mut(player).insert(crate::combat::Health { hp: 0, max: 10 });
+        for frame in 0..600 {
+            app.update();
+            assert!(attacks(&mut app).is_empty(), "bitten after the fall, at frame {frame}");
+            assert_eq!(app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count(), 0, "a blow at the fallen, at frame {frame}");
+        }
+    }
+
+    #[test]
     fn a_rat_that_sees_you_reaches_you_and_attacks() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         // The first pack's room, the player standing two cells from the pack in plain sight.
         let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
         let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
@@ -470,9 +601,67 @@ mod tests {
         assert!((1..=7).contains(&from_one), "{from_one} bites in 10 s");
     }
 
+    /// A skeleton with a spear mid-swing at a delver one cell of stone away, in reach (the
+    /// spear outreaches the wall's thickness): the blow lands with nothing between them and not
+    /// with a wall between them.
+    #[test]
+    fn a_blow_does_not_land_round_a_wall() {
+        use crate::creatures::skeletons::SkeletonKit;
+        use fb_level::Cell;
+        let blow = |wall: bool| {
+            let mut level = fb_level::generate(1207, 1);
+            // A run of four open cells along a row, the second of which may be stone.
+            let (x, y) = (0..level.height as i32)
+                .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
+                .find(|&(x, y)| (0..4).all(|k| level.cell(x + k, y) == Cell::Floor))
+                .expect("a straight run of floor");
+            if wall {
+                level.cells[(y as u32 * level.width + (x + 1) as u32) as usize] = Cell::Rock;
+            }
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
+                .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+                .add_plugins(BehaviourPlugin);
+            app.insert_resource(Obstacles(Vec::new()));
+            app.insert_resource(CurrentLevel(level.clone()));
+            let state = fb_creatures::SkeletonState::roll(5);
+            let outfit = fb_items::outfit::OutfitSet { worn: vec![(fb_items::Slot::Mainhand, fb_items::roll_item("Spear", 5).unwrap())], goods: Vec::new(), ground: Vec::new() };
+            let kit = SkeletonKit::new(&state, outfit, [None, None]);
+            let spot = fb_level::CreatureSpot { x: x as f32 + 0.8, y: y as f32 + 0.5, yaw: 0.0, species: Species::Skeleton, seed: 5, pack: 0 };
+            let skeleton = {
+                let mut commands = app.world_mut().commands();
+                crate::creatures::spawn_skeleton_with(&mut commands, &level, &spot, &state.build(), Some(kit)).0
+            };
+            // One cell of stone between, the delver's centre 1.4 cells from the skeleton's.
+            let player_at = Vec2::new(x as f32 + 2.2, y as f32 + 0.5) * CELL;
+            app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y)));
+            app.world_mut().flush();
+            app.update();
+            let reaches = {
+                let critter = app.world().get::<Critter>(skeleton).unwrap();
+                reach(critter, BODY_RADIUS) * SKELETON_SLACK
+            };
+            let apart = app.world().get::<Transform>(skeleton).unwrap().translation.xz().distance(player_at);
+            assert!(apart <= reaches, "the delver is within reach: {apart} of {reaches}");
+            {
+                let mut brain = app.world_mut().get_mut::<Brain>(skeleton).unwrap();
+                brain.mode = Mode::Chase { last_seen: player_at, lost: 0.0 };
+                brain.attack = Some(0.0);
+            }
+            let mut landed = false;
+            for _ in 0..180 {
+                app.update();
+                landed |= !attacks(&mut app).is_empty();
+            }
+            landed
+        };
+        assert!(blow(false), "a blow lands on a delver in reach and in sight");
+        assert!(!blow(true), "a blow does not land through a wall");
+    }
+
     #[test]
     fn creatures_never_pass_through_walls_props_or_folk() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let walls = |x: i32, y: i32| !level.is_open(x, y);
         let obstacles = obstacles(&level);
         // The player stands where the rats must come round the dwarves and the brazier, then
@@ -510,7 +699,7 @@ mod tests {
 
     #[test]
     fn out_of_sight_they_go_back_to_wandering() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
         let near = Vec2::new(first.x + 1.0, first.y + 0.5) * CELL;
         let (mut app, roots, player) = level_app(near);
@@ -544,7 +733,7 @@ mod tests {
 
     #[test]
     fn long_snakes_keep_their_bodies_out_of_the_rock() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         // How deep a point lies in rock: 0 on open floor, else how far it is from the nearest
         // open cell beside the rock cell it is in.
         let depth = |x: f32, z: f32| {
@@ -637,7 +826,7 @@ mod tests {
     }
 
     fn rat_room_player() -> Vec2 {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
         let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
         let (cx, cy) = room.centre();

@@ -6,6 +6,9 @@
 
 use bevy::prelude::*;
 use fb_body::{BodySpec, Folk};
+use fb_character::explain::{Explained, Loadout, armour_class_with};
+use fb_character::rules::Rules;
+use fb_character::{AbilityBonus, Activity, Attributes, CarriedLight, Casting, Gear, LoadBand, Mana, Worn, modifier as ability_modifier};
 use procgen_rng::Mulberry32;
 
 use crate::carry::carried_lights;
@@ -33,20 +36,50 @@ impl Class {
         }
     }
 
+    /// How the class casts: Mages from INT, Clerics from WIS, Fighters and Rangers hardly at all.
+    pub fn casting(self) -> Casting {
+        match self {
+            Class::Fighter | Class::Ranger => Casting::Martial,
+            Class::Mage => Casting::Arcane,
+            Class::Cleric => Casting::Divine,
+        }
+    }
+
+    /// The class's hit die under the default rules: d10 for fighters and rangers, d8 for
+    /// clerics, d6 for mages (SRD 5.1 "Hit Points": fighter p. 24, ranger p. 35, cleric p. 15,
+    /// wizard, our mage, p. 52).
+    pub fn hit_die(self) -> u32 {
+        self.hit_die_with(fb_character::rules::defaults())
+    }
+
+    /// The class's hit die from `rules` (`combat.hit_dice` in `data/rules.toml`).
+    pub fn hit_die_with(self, rules: &fb_character::rules::Rules) -> u32 {
+        let dice = &rules.combat.hit_dice;
+        match self {
+            Class::Fighter => dice.fighter,
+            Class::Ranger => dice.ranger,
+            Class::Cleric => dice.cleric,
+            Class::Mage => dice.mage,
+        }
+    }
+
+    /// The class whose outfit is `key` in `data/outfits.json`, or `None` for a look that is no
+    /// class (the freshly fallen, the scavenger).
+    pub fn of_outfit(key: &str) -> Option<Class> {
+        Class::ALL.into_iter().find(|c| c.outfit_key() == key)
+    }
+
     /// The word the header uses, lower case as the plate's `cline` writes it.
     pub fn word(self) -> &'static str {
         self.outfit_key()
     }
 }
 
-/// Strength, dexterity, constitution and intelligence, in that order (the plate's `C.stats`).
-pub type Abilities = [i32; 4];
-
 /// The ability modifier for a score, `floor((score - 10) / 2)` (the plate's `md`, as in the
 /// [D&D 5e SRD 5.1](https://media.wizards.com/2016/downloads/DND/SRD-OGL_V5.1.pdf), "Ability
 /// Scores and Modifiers").
 pub fn modifier(score: i32) -> i32 {
-    (score - 10).div_euclid(2)
+    ability_modifier(score)
 }
 
 /// Who the delver is.
@@ -58,9 +91,13 @@ pub struct Character {
     /// Rolled from the folk's syllables in `data/syl.json` (the plate's `genName`).
     pub name: String,
     pub class: Class,
-    pub abilities: Abilities,
+    /// The ability scores they were rolled with; [`Character::scores`] adds what they wear.
+    pub attributes: Attributes,
     /// How dirty they are, 0 clean to 1 filthy (the plate's `C.dirt`).
     pub dirt: f32,
+    /// What their worn items add to their ability scores, kept up from the inventory
+    /// ([`wear_abilities`]).
+    pub worn: AbilityBonus,
 }
 
 impl Default for Character {
@@ -94,12 +131,23 @@ impl Character {
         let class = *rng.pick(&Class::ALL);
         let name = fb_items::naming::folk_name(rng, folk.key());
         let race = folk.race();
-        let abilities = race.stats.map(|v| {
+        let [str_base, dex_base, con_base, int_base, wis_base] = race.stats;
+        // Roll each attribute: nudge and clamp to 3–18. WIS is drawn last, so existing seeds
+        // produce the same first four scores; only the WIS roll and dirt shift.
+        let mut roll = |base: i32| {
             let nudge = ((rng.next_f64() + rng.next_f64() + rng.next_f64() - 1.5) * 3.0).round() as i32;
-            (v + nudge).clamp(3, 18)
-        });
+            (base + nudge).clamp(3, 18)
+        };
+        // Fields evaluated in written order: strength, dexterity, constitution, intelligence, wisdom.
+        let attributes = Attributes {
+            strength: roll(str_base),
+            dexterity: roll(dex_base),
+            constitution: roll(con_base),
+            intelligence: roll(int_base),
+            wisdom: roll(wis_base),
+        };
         let dirt = 0.3 + rng.next_f64() as f32 * 0.2;
-        Character { folk, body_seed, name, class, abilities, dirt }
+        Character { folk, body_seed, name, class, attributes, dirt, worn: AbilityBonus::default() }
     }
 
     /// Their body's spec.
@@ -107,16 +155,38 @@ impl Character {
         BodySpec::roll(self.folk, self.body_seed)
     }
 
+    /// The warmth the delver needs from their gear: 6, or 8 for the cold-blooded lizardfolk.
+    pub fn warmth_need(&self) -> f32 {
+        if self.folk == Folk::Lizardfolk { 8.0 } else { 6.0 }
+    }
+
+    /// Their ability scores as they stand: the rolled ones with what they wear added, within 1
+    /// to 30. Every rule that uses a score (to hit, damage, Armor Class, hit points, saves, the
+    /// mana pool, capacity) reads these.
+    pub fn scores(&self) -> Attributes {
+        self.worn.on(&self.attributes)
+    }
+
     pub fn strength(&self) -> i32 {
-        self.abilities[0]
+        self.scores().strength
     }
 
     pub fn dexterity(&self) -> i32 {
-        self.abilities[1]
+        self.scores().dexterity
     }
 
     pub fn constitution(&self) -> i32 {
-        self.abilities[2]
+        self.scores().constitution
+    }
+
+    /// Mana points their pool holds: from their class's casting ability.
+    pub fn mana_pool(&self) -> f64 {
+        self.mana_pool_with(fb_character::rules::defaults())
+    }
+
+    /// [`Character::mana_pool`] under `rules`.
+    pub fn mana_pool_with(&self, rules: &Rules) -> f64 {
+        Mana::max_for_with(rules, self.class.casting(), &self.scores())
     }
 }
 
@@ -129,33 +199,135 @@ pub struct Derived {
     pub load: f32,
     /// Pounds they can carry: strength times 15 plus what worn items add.
     pub capacity: f32,
+    /// Load band (Light, Burdened, Encumbered, Overloaded).
+    pub load_band: LoadBand,
     pub warmth: f32,
     /// How far the carried light reaches, in feet; 0 with none.
     pub light: f32,
     /// How far they see without light, in feet: their folk's, or a worn item's if further.
     pub darkvision: f32,
+    /// Multiples of the usual hunger and sleepiness rates, from what they wear.
+    pub hunger_rate: f32,
+    pub sleepiness_rate: f32,
+    /// Hit points regained on each kill, from the weapon in the main hand.
+    pub heal_on_kill: f32,
+    /// Multiple of their pace, from what they wear.
+    pub speed: f32,
+    /// Chance the shield in their off hand turns aside a blow that would hit.
+    pub block_chance: f32,
+    /// What worn items add to their ability scores.
+    pub abilities: AbilityBonus,
 }
 
 impl Character {
+    /// What they wear and carry means for the simulation: the one place capacity, the meter
+    /// rates, darkvision and the carried light come from. Their folk's darkvision counts with
+    /// the items' as the best of them, and the carried light is the farthest reaching of the
+    /// lit things carried ([`carried_lights`]).
+    pub fn gear(&self, inventory: &Inventory) -> Gear {
+        self.loadout(inventory).gear()
+    }
+
+    /// [`Character::gear`] with each item's name, so the numbers it sums can be explained
+    /// ([`Loadout::capacity`] and the rest).
+    pub fn loadout(&self, inventory: &Inventory) -> Loadout {
+        let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
+        for (slot, item) in inventory.equipped() {
+            let s = &item.profile.stats;
+            // Only the main hand strikes, so only its weapon heals on a kill; only a shield held
+            // in the off hand blocks.
+            let heal_on_kill = if slot == fb_items::Slot::Mainhand { s.heal_on_kill as f64 } else { 0.0 };
+            let block_chance = if is_shield(slot, item) { s.block_chance as f64 } else { 0.0 };
+            let point = |v: f32| v.round() as i32;
+            let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
+            loadout = loadout.wearing(
+                &item.name,
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities },
+            );
+        }
+        for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
+            loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
+        }
+        loadout
+    }
+
+    /// Their armour class with its terms: 10, the dexterity modifier and each worn item's armour.
+    pub fn armour_class(&self, inventory: &Inventory) -> Explained {
+        self.armour_class_with(fb_character::rules::defaults(), inventory)
+    }
+
+    /// [`Character::armour_class`] under `rules`.
+    pub fn armour_class_with(&self, rules: &Rules, inventory: &Inventory) -> Explained {
+        armour_class_with(rules, self.dexterity(), inventory.equipped().iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)))
+    }
+
+    /// Pounds worn and carried with their terms: a term for each worn item's weight and one for
+    /// what a worn container holds, counted through every bag in it.
+    pub fn load_explained(&self, inventory: &Inventory) -> Explained {
+        let mut e = Explained::new("Load", "lb");
+        let add = |e: Explained, label: String, pounds: f64| if e.terms().is_empty() { e.base(label, pounds) } else { e.add(label, pounds) };
+        for (slot, item) in inventory.equipped() {
+            if item.profile.stats.weight != 0.0 {
+                e = add(e, item.name.clone(), item.profile.stats.weight as f64);
+            }
+            let contents = inventory.worn(slot).map_or(0.0, |id| inventory.contents_weight(id));
+            if contents != 0.0 {
+                e = add(e, format!("{} contents", item.name), contents as f64);
+            }
+        }
+        if e.terms().is_empty() { e.base("nothing worn", 0.0) } else { e }
+    }
+
     /// What everything equipped adds to the delver, as the plate's `derive` adds it up; the
     /// light is the farthest reaching of the lit things carried ([`carried_lights`]), where the
     /// plate took the brightest of all its items, so an unlit torch in the pack gives none.
     pub fn derive(&self, inventory: &Inventory) -> Derived {
+        self.derive_with(fb_character::rules::defaults(), inventory)
+    }
+
+    /// [`Character::derive`] under `rules`.
+    pub fn derive_with(&self, rules: &Rules, inventory: &Inventory) -> Derived {
         let equipped = inventory.equipped();
         // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
         let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
-        let load = sum(|s| s.weight)
-            + equipped.iter().filter_map(|(slot, _)| inventory.worn(*slot)).map(|id| inventory.contents_weight(id)).fold(0.0, |a, b| a + b);
-        let light = carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)).map(|item| item.profile.stats.light).fold(0.0, f32::max);
-        let darkvision = equipped.iter().map(|(_, item)| item.profile.stats.darkvision).fold(self.folk.race().dv as f32, f32::max);
+        let load = self.load_explained(inventory).value() as f32;
+        let gear = self.gear(inventory);
+        let capacity = gear.capacity_lb_with(rules, self.strength()) as f32;
+        let load_band = LoadBand::from_load_with(rules, load as f64, capacity as f64);
         Derived {
-            armour_class: 10 + sum(|s| s.armour).round() as i32 + modifier(self.dexterity()),
+            armour_class: self.armour_class_with(rules, inventory).value().round() as i32,
             load,
-            capacity: (self.strength() * 15) as f32 + sum(|s| s.carry),
+            capacity,
+            load_band,
             warmth: sum(|s| s.warmth),
-            light,
-            darkvision,
+            light: gear.light as f32,
+            darkvision: gear.darkvision as f32,
+            hunger_rate: gear.hunger_rate as f32,
+            sleepiness_rate: gear.sleepiness_rate as f32,
+            heal_on_kill: gear.heal_on_kill as f32,
+            speed: gear.speed as f32,
+            block_chance: gear.block_chance as f32,
+            abilities: gear.abilities,
         }
+    }
+}
+
+/// Whether `item` in `slot` is a shield held: armour in the off hand (a torch or a lantern there
+/// is not armour).
+pub fn is_shield(slot: fb_items::Slot, item: &fb_items::Item) -> bool {
+    slot == fb_items::Slot::Offhand && item.profile.tags.contains(&fb_items::Tag::Armor)
+}
+
+/// Keeps [`Character::worn`] to what the worn items add to the ability scores, changing the
+/// character only when it differs, so every rule that reads a score sees it.
+pub fn wear_abilities(inventory: Option<Res<Inventory>>, character: Option<ResMut<Character>>) {
+    let (Some(inventory), Some(mut character)) = (inventory, character) else { return };
+    if !inventory.is_changed() && !character.is_added() {
+        return;
+    }
+    let worn = character.gear(&inventory).abilities;
+    if character.worn != worn {
+        character.worn = worn;
     }
 }
 
@@ -164,6 +336,69 @@ pub fn character_for(seed: u32) -> Character {
     match std::env::var("FB_FOLK").ok().and_then(|f| Folk::parse(&f)) {
         Some(folk) => Character::roll_folk(folk, seed),
         None => Character::roll(seed),
+    }
+}
+
+/// The delver's load band, kept on the [`Player`](crate::play::Player) so walking need not
+/// work out [`Character::derive`] every frame. `player::weigh_the_delver` refreshes it when
+/// the character or the inventory changes.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Load(pub LoadBand);
+
+/// The delver's hunger, thirst and sleepiness, on the [`Player`](crate::play::Player) from their
+/// spawn, so a new delve starts Fed. Eating and drinking take from it (`crate::eat`); the game
+/// clock steps it in #229.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverNeeds(pub fb_character::Needs);
+
+/// The delver's stamina, on the [`Player`](crate::play::Player) from their spawn, so a new delve
+/// starts with a full pool. Sprinting and swinging drain it, and it refills in seconds
+/// (`crate::simulate::step_stamina`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverStamina(pub fb_character::Stamina);
+
+/// The delver's mana, on the [`Player`](crate::play::Player) from their spawn. The pool's size
+/// is set from the character when the delver is new and again whenever the character changes,
+/// keeping how full it is; the game clock refills it (`crate::simulate::step_the_delver`).
+/// Nothing spends it yet.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverMana(pub Mana);
+
+/// Venom in the delver's blood, on the [`Player`](crate::play::Player) only while it works: a
+/// failed save against a snake's venom puts it on (`crate::combat::vitals`), the game clock
+/// steps it and it comes off when it wears off (`crate::simulate::step_the_delver`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverPoison(pub fb_character::poison::Poisoned);
+
+/// Game time the delver has put toward their next hit point while fed and watered, on the
+/// [`Player`](crate::play::Player) from their spawn; the game clock steps it
+/// (`crate::simulate::step_the_delver`, [`fb_character::recovery`]).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverRecovery(pub fb_character::recovery::Recovery);
+
+/// How easy the delver is to see, 0 to 1 ([`fb_character::visibility`]): from the light on them,
+/// their pace, load and Stealth. Kept on the [`Player`](crate::play::Player) so the eye can show
+/// it and, later, creatures read it (`crate::combat::eye`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverVisibility(pub f32);
+
+/// Determines the delver's activity from movement and load state.
+/// Moving while Burdened or Encumbered counts as Exerting. An Overloaded delver cannot move
+/// (`player::walk`), so wanting to move while Overloaded is reported as Resting, as is
+/// standing still.
+pub fn activity_for(moving: bool, sprinting: bool, swinging: bool, load_band: LoadBand) -> Activity {
+    match (moving, sprinting, swinging) {
+        (false, _, _) => Activity::Resting,
+        (true, _, true) => Activity::Exerting,
+        (true, true, _) => Activity::Exerting,
+        (true, false, false) => {
+            // Moving while Burdened or Encumbered counts as Exerting
+            match load_band {
+                LoadBand::Light => Activity::Walking,
+                LoadBand::Burdened | LoadBand::Encumbered => Activity::Exerting,
+                LoadBand::Overloaded => Activity::Resting, // Can't move anyway
+            }
+        }
     }
 }
 
@@ -176,12 +411,35 @@ mod tests {
         for seed in [1, 7, 1207] {
             let delver = Character::roll(seed);
             assert_eq!(delver, Character::roll(seed));
-            assert!(delver.abilities.iter().all(|a| (3..=18).contains(a)));
+            for attr in [delver.attributes.strength, delver.attributes.dexterity, delver.attributes.constitution, delver.attributes.intelligence, delver.attributes.wisdom] {
+                assert!((3..=18).contains(&attr));
+            }
             assert!((0.3..0.5).contains(&delver.dirt));
             assert!(!delver.name.is_empty());
         }
         let folk: std::collections::HashSet<Folk> = (0..60).map(|s| Character::roll(s).folk).collect();
         assert_eq!(folk.len(), Folk::ALL.len(), "every folk turns up");
+    }
+
+    #[test]
+    fn every_folk_has_five_attributes() {
+        for folk in Folk::ALL {
+            let race = folk.race();
+            assert_eq!(race.stats.len(), 5, "folk {folk:?} has stat array of length {}", race.stats.len());
+            for stat in race.stats {
+                assert!((3..=18).contains(&stat), "folk {folk:?} stat {stat} out of range");
+            }
+        }
+    }
+
+    #[test]
+    fn rolling_preserves_rng_stream_with_wis_last() {
+        // Pinning the first four scores ensures WIS is drawn last: existing seeds give the
+        // same STR, DEX, CON, INT but different WIS and dirt (shifted by the WIS roll).
+        let delver1 = Character::roll(1);
+        assert_eq!((delver1.attributes.strength, delver1.attributes.dexterity, delver1.attributes.constitution, delver1.attributes.intelligence), (7, 12, 16, 7));
+        let delver7 = Character::roll(7);
+        assert_eq!((delver7.attributes.strength, delver7.attributes.dexterity, delver7.attributes.constitution, delver7.attributes.intelligence), (12, 9, 8, 12));
     }
 
     #[test]
@@ -194,7 +452,8 @@ mod tests {
     #[test]
     fn equipped_stats_add_to_the_delver() {
         use fb_items::Slot;
-        let delver = Character { abilities: [11, 12, 10, 10], folk: Folk::Human, ..Character::roll(4) };
+        let test_attrs = Attributes { strength: 11, dexterity: 12, constitution: 10, intelligence: 10, wisdom: 10 };
+        let delver = Character { attributes: test_attrs, folk: Folk::Human, ..Character::roll(4) };
         let mut inventory = Inventory::default();
         let bare = delver.derive(&inventory);
         assert_eq!((bare.armour_class, bare.load, bare.capacity, bare.light), (11, 0.0, 165.0, 0.0));
@@ -235,8 +494,161 @@ mod tests {
         assert_eq!(crate::carry::carried_light(&inventory).map(|(slot, _)| slot), Some(Slot::Offhand));
     }
 
+    /// A rolled `base` with the real affix `name` applied to its stats.
+    fn with_affix(base: &str, seed: u32, name: &str) -> fb_items::Item {
+        let mut item = fb_items::roll_item(base, seed).unwrap();
+        let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+        affix.apply_to_stats(&mut item.profile.stats);
+        item.affixes.push(affix);
+        item
+    }
+
+    #[test]
+    fn a_belt_of_the_ox_lifts_a_human_to_175_lb() {
+        use fb_items::Slot;
+        let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        let human = Character { folk: Folk::Human, attributes, ..Character::roll(4) };
+        let mut inventory = Inventory::default();
+        let belt = inventory.add(with_affix("Belt", 2, "of the Ox"));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let derived = human.derive(&inventory);
+        assert_eq!(derived.capacity, 175.0);
+        assert_eq!(derived.capacity as f64, human.gear(&inventory).capacity_lb(10), "one source");
+    }
+
+    #[test]
+    fn the_mole_gives_a_human_10_ft_of_darkvision_and_a_goblin_60() {
+        use fb_items::Slot;
+        for (folk, feet) in [(Folk::Human, 10.0), (Folk::Goblin, 60.0)] {
+            let delver = Character { folk, ..Character::roll(4) };
+            let mut inventory = Inventory::default();
+            assert_eq!(delver.derive(&inventory).darkvision, folk.race().dv as f32);
+            let belt = inventory.add(with_affix("Belt", 2, "of the Mole"));
+            inventory.wear(belt, Slot::Belt).unwrap();
+            assert_eq!(delver.derive(&inventory).darkvision, feet, "{folk:?}: the best, not the sum");
+        }
+    }
+
+    #[test]
+    fn plenty_and_wakefulness_slow_the_meters_through_the_gear() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let belt = inventory.add(with_affix("Belt", 4, "of Plenty"));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let ring = inventory.add(with_affix("Ring", 4, "of Wakefulness"));
+        inventory.wear(ring, Slot::Ring1).unwrap();
+        let gear = delver.gear(&inventory);
+        assert!((gear.hunger_rate - 0.85).abs() < 1e-6 && (gear.sleepiness_rate - 0.85).abs() < 1e-6, "{gear:?}");
+        let mut needs = fb_character::Needs::default();
+        gear.apply_to(&mut needs);
+        needs.step(8.0 / 0.85 - 0.001, Activity::Walking);
+        assert_eq!(needs.hunger.word(), "Peckish");
+        needs.step(0.002, Activity::Walking);
+        assert_eq!(needs.hunger.word(), "Hungry");
+    }
+
+    #[test]
+    fn a_leech_weapon_heals_on_a_kill_only_in_the_main_hand() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0);
+        let sword = inventory.add(with_affix("Sword", 3, "of the Leech"));
+        inventory.wear(sword, Slot::Offhand).unwrap();
+        assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0, "the off hand does not strike");
+        inventory.take_out(sword);
+        inventory.wear(sword, Slot::Mainhand).unwrap();
+        assert_eq!(delver.derive(&inventory).heal_on_kill, 1.0);
+        assert_eq!(delver.loadout(&inventory).heal_on_kill().value(), 1.0);
+    }
+
+    #[test]
+    fn a_ring_of_the_giant_raises_strength_and_its_modifier() {
+        use fb_items::Slot;
+        let attributes = Attributes { strength: 13, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        let mut delver = Character { attributes, ..Character::roll(4) };
+        let mut inventory = Inventory::default();
+        let ring = inventory.add(with_affix("Ring", 4, "of the Giant"));
+        inventory.wear(ring, Slot::Ring2).unwrap();
+        delver.worn = delver.gear(&inventory).abilities;
+        assert_eq!((delver.attributes.strength, delver.strength(), modifier(delver.strength())), (13, 15, 2), "+1 to +2");
+        assert_eq!(delver.derive(&inventory).capacity, 15.0 * 15.0, "capacity follows");
+        let frail = inventory.add(with_affix("Amulet", 4, "Frail"));
+        inventory.wear(frail, Slot::Neck).unwrap();
+        delver.worn = delver.gear(&inventory).abilities;
+        assert_eq!(delver.constitution(), 9);
+    }
+
+    #[test]
+    fn only_a_held_shield_blocks_and_boots_of_haste_quicken() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let shield = inventory.add(with_affix("Shield", 4, "of the Rampart"));
+        inventory.wear(shield, Slot::Offhand).unwrap();
+        assert!((delver.derive(&inventory).block_chance - 0.2).abs() < 1e-6);
+        let boots = inventory.add(with_affix("Boots", 4, "of Haste"));
+        inventory.wear(boots, Slot::Feet).unwrap();
+        assert!((delver.derive(&inventory).speed - 1.2).abs() < 1e-6);
+        inventory.take_out(shield);
+        assert_eq!(delver.derive(&inventory).block_chance, 0.0);
+    }
+
+    #[test]
+    fn light_affixes_change_the_carried_light_and_its_burn_time() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let reach_with = |affix: Option<&str>| {
+            let mut torch = crate::carry::lit_torch(2);
+            if let Some(name) = affix {
+                let a = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+                a.apply_to_stats(&mut torch.profile.stats);
+            }
+            let mut inventory = Inventory::default();
+            let id = inventory.add(torch);
+            inventory.wear(id, Slot::Offhand).unwrap();
+            delver.gear(&inventory)
+        };
+        let plain = reach_with(None);
+        assert!(plain.light > 0.0 && plain.burn_time == 1.0);
+        assert_eq!(reach_with(Some("Gleaming")).light, plain.light + 10.0);
+        assert_eq!(reach_with(Some("Smoky")).light, plain.light - 5.0);
+        let long = reach_with(Some("Long-burning"));
+        assert_eq!((long.burn_time, long.light), (2.0, plain.light));
+    }
+
+    #[test]
+    fn featherlight_lowers_the_load_through_weight() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let load = |affix: Option<&str>| {
+            let item = match affix {
+                Some(name) => with_affix("Mail", 1, name),
+                None => fb_items::roll_item("Mail", 1).unwrap(),
+            };
+            let mut inventory = Inventory::default();
+            let id = inventory.add(item);
+            inventory.wear(id, Slot::Body).unwrap();
+            delver.derive(&inventory).load
+        };
+        let (plain, light) = (load(None), load(Some("Featherlight")));
+        assert!(plain > 0.0 && (light - plain * 0.6).abs() < 1e-3, "{light} against {plain}");
+    }
+
     #[test]
     fn modifiers_follow_the_srd() {
         assert_eq!([modifier(3), modifier(9), modifier(10), modifier(11), modifier(18)], [-4, -1, 0, 0, 4]);
+    }
+
+    #[test]
+    fn activity_for_determines_exertion_from_load() {
+        assert_eq!(activity_for(false, false, false, LoadBand::Light), Activity::Resting);
+        assert_eq!(activity_for(true, false, false, LoadBand::Light), Activity::Walking);
+        assert_eq!(activity_for(true, false, false, LoadBand::Burdened), Activity::Exerting);
+        assert_eq!(activity_for(true, false, false, LoadBand::Encumbered), Activity::Exerting);
+        assert_eq!(activity_for(true, false, false, LoadBand::Overloaded), Activity::Resting);
+        assert_eq!(activity_for(true, true, false, LoadBand::Light), Activity::Exerting);
+        assert_eq!(activity_for(true, false, true, LoadBand::Light), Activity::Exerting);
     }
 }

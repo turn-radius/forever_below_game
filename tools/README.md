@@ -31,6 +31,9 @@ ffmpeg -i "reference/audio/Unreachable Home.m4a" -vn -f wav - | oggenc --ignorel
 ffmpeg -i "reference/audio/Cavern Descent.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/cavern-descent.ogg -
 ffmpeg -i "reference/audio/I'm not alone.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/im-not-alone.ogg -
 ffmpeg -i "reference/audio/Untitled.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/untitled.ogg -
+ffmpeg -i "reference/audio/Let  me think.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/let-me-think.ogg -
+ffmpeg -i "reference/audio/Meant to be here.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/meant-to-be-here.ogg -
+ffmpeg -i "reference/audio/What am I doing?.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/what-am-i-doing.ogg -
 ```
 
 **Sound effects**: there are no recorded sound effects. `tools/synth_door_shut.py` synthesises the entrance door's slam and latch by modal synthesis (decaying sine modes struck by filtered noise; the script's docstring cites the sources) with Python's standard library alone, the same on every run, and `oggenc` encodes it:
@@ -50,6 +53,69 @@ oggenc -q 6 -o game/assets/audio/whoosh.ogg /tmp/combat/whoosh.wav
 oggenc -q 6 -o game/assets/audio/rat-squeal.ogg /tmp/combat/rat_squeal.wav
 oggenc -q 6 -o game/assets/audio/snake-rise.ogg /tmp/combat/snake_rise.wav
 oggenc -q 6 -o game/assets/audio/thud.ogg /tmp/combat/thud.wav
+```
+
+**Ambient sounds**: `tools/synth_ambience.py` synthesises ambient sounds as mono 16-bit WAVs: water drips and a deep stony rumble, by oscillators, noise and filters (the technique of Andy Farnell's "Designing Sound"), the same on every run, and `oggenc` encodes them:
+
+```
+python3 tools/synth_ambience.py /tmp/ambience
+oggenc -q 6 -o game/assets/audio/drip.ogg /tmp/ambience/drip.wav
+oggenc -q 6 -o game/assets/audio/rumble.ogg /tmp/ambience/rumble.wav
+```
+
+The drip is a rising sine sweep decaying over about 150 ms with proper phase accumulation, plus faint splash noise. The rumble is a deep rolling sound from decaying sine modes in the 40–120 Hz range.
+
+**Footsteps**: `tools/synth_footsteps.py` synthesises soft, dull footfalls, like a leather or cloth sole on stone in a quiet cave: a low sine thump (80–180 Hz, rounded 4–5 ms fade-in, 60–120 ms decay) over a very faint scuff, all through a 4-pole low-pass near 700 Hz, with no broadband noise. There are 3 light variants and 3 heavy variants (lower and slightly longer, not brighter), normalised to -12 dBFS, the same on every run. `oggenc` encodes them:
+
+```
+python3 tools/synth_footsteps.py /tmp/footsteps
+oggenc -q 6 -o game/assets/audio/step_light_1.ogg /tmp/footsteps/step_light_1.wav
+oggenc -q 6 -o game/assets/audio/step_light_2.ogg /tmp/footsteps/step_light_2.wav
+oggenc -q 6 -o game/assets/audio/step_light_3.ogg /tmp/footsteps/step_light_3.wav
+oggenc -q 6 -o game/assets/audio/step_heavy_1.ogg /tmp/footsteps/step_heavy_1.wav
+oggenc -q 6 -o game/assets/audio/step_heavy_2.ogg /tmp/footsteps/step_heavy_2.wav
+oggenc -q 6 -o game/assets/audio/step_heavy_3.ogg /tmp/footsteps/step_heavy_3.wav
+python3 tools/synth_footsteps.py --measure /tmp/footsteps
+```
+
+The script prints each file's spectral centroid and share of energy above 2 kHz (targets: centroid under 400 Hz, under 2% above 2 kHz). The earlier noisy steps measured centroids of 2600–4700 Hz with 30–52% of energy above 2 kHz. Now:
+
+| File | Centroid | Above 2 kHz |
+| --- | --- | --- |
+| step_light_1 | 163 Hz | 0.00% |
+| step_light_2 | 172 Hz | 0.00% |
+| step_light_3 | 183 Hz | 0.00% |
+| step_heavy_1 | 109 Hz | 0.00% |
+| step_heavy_2 | 115 Hz | 0.00% |
+| step_heavy_3 | 122 Hz | 0.00% |
+
+In game, the delver's steps play at 0.35 of the effects volume (creatures at 0.7 of that), each with a random gain of ±15% and playback speed of ±6%. The same sample is never played twice in a row.
+
+**Breathing**: `tools/synth_breath.py` synthesises the delver's breath as three seamless loops, each a run of soft inhales and exhales: noise band-limited to about 300–1500 Hz (a high-pass at 300 Hz, a 4-pole low-pass and a gentle extra low-pass, so no hiss) under smooth raised-cosine envelopes, normalised to -16 dBFS, the same on every run. Steady is a slow, even breath every 4.2 s (12.6 s loop), harder is a deeper breath every 2.4 s (12.0 s) and ragged is fast and uneven with catches and a slight flutter (9.5 s). The strengths differ in pace and character, not brightness.
+
+```
+python3 tools/synth_breath.py /tmp/breath
+oggenc -q 6 -o game/assets/audio/breath_steady.ogg /tmp/breath/breath_steady.wav
+oggenc -q 6 -o game/assets/audio/breath_harder.ogg /tmp/breath/breath_harder.wav
+oggenc -q 6 -o game/assets/audio/breath_ragged.ogg /tmp/breath/breath_ragged.wav
+python3 tools/synth_breath.py --measure /tmp/breath
+```
+
+The script prints each file's peak, spectral centroid and share of energy above 2 kHz (targets: centroid under 900 Hz, under 2% above 2 kHz):
+
+| File | Centroid | Above 2 kHz |
+| --- | --- | --- |
+| breath_steady | 578 Hz | 0.004% |
+| breath_harder | 691 Hz | 0.04% |
+| breath_ragged | 776 Hz | 0.17% |
+
+In game (`game/src/breath.rs`) the loops are non-spatial and play at 0.25 of the effects volume, scaled up 15% per exhaustion level. Stamina below 70% breathes steadily, below 45% harder, and winded or below 20% raggedly, settling as stamina refills. Exhaustion from level 1 keeps a slow loop going under everything (steady at levels 1–2, harder at 3–4, ragged at 5–6) until the level returns to 0. Loops crossfade over 1.5 s and pause while a screen is open.
+
+`tools/synth_heal.py` synthesises the healing draught's gentle rising chime (three soft bell notes, decaying sine modes at slightly inharmonic ratios), its docstring citing the source:
+
+```
+python3 tools/synth_heal.py /tmp/heal
+oggenc -q 6 -o game/assets/audio/heal.ogg /tmp/heal/heal.wav
 ```
 
 Bevy loads assets from `game/assets/` under `cargo run` (it uses `CARGO_MANIFEST_DIR`). To run the binary directly, set `BEVY_ASSET_ROOT=game`.

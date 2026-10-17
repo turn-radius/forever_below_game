@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn random_paths_run_over_open_floor() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (x, y, _) = level.start();
         let path = random_path(&mut Mulberry32::new(3), &level, (x as i32, y as i32)).expect("a way");
         assert!(path.iter().all(|&(x, y)| level.is_open(x, y)));

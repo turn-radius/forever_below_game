@@ -178,8 +178,8 @@ pub struct Race {
     pub ears: Ears,
     pub nose: Nose,
     pub eyes: EyeKind,
-    /// Strength, dexterity, intelligence, constitution before rolling.
-    pub stats: [i32; 4],
+    /// Strength, dexterity, constitution, intelligence, wisdom before rolling.
+    pub stats: [i32; 5],
     /// Darkvision, in feet.
     pub dv: u32,
     /// 1 for a tail (lizardfolk).

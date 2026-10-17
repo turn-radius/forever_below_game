@@ -41,7 +41,7 @@ use crate::fitting::Fitting;
 use crate::light::{StudioLight, Torch, point_light, reach_falloff};
 use crate::play::{Screen, ScreenOpen};
 use crate::render::ItemSpawner;
-use crate::ui::{BG, BRIGHT, GLOW, GOLD, INK, LINE, UiFonts, node_rect, rarity_color};
+use crate::ui::{BG, BRIGHT, GLOW, GOLD, INK, LINE, UiFonts, node_rect, rarity_color, ui_cursor};
 
 /// Render layer the doll's camera and the doll are on.
 pub const DOLL_LAYER: usize = 3;
@@ -422,6 +422,7 @@ pub fn turn_doll(
     buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
     views: Query<(&ComputedNode, &UiGlobalTransform), With<DollView>>,
     slots: Query<(&ComputedNode, &UiGlobalTransform), With<SlotView>>,
     dragging: Res<super::Dragging>,
@@ -434,7 +435,7 @@ pub fn turn_doll(
         return;
     }
     if buttons.just_pressed(MouseButton::Left) {
-        let cursor = window.and_then(|w| w.cursor_position());
+        let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
         let on = |rect: Rect| cursor.is_some_and(|c| rect.contains(c));
         *turning = dragging.0.is_none() && views.iter().any(|(n, t)| on(node_rect(n, t))) && !slots.iter().any(|(n, t)| on(node_rect(n, t)));
     }

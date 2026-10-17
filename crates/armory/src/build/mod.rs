@@ -15,6 +15,8 @@
 //! - [`arrow`]: arrows and crossbow bolts.
 //! - [`parts`]: [`parts::Parts`], collecting meshes and their looks into an item.
 //! - [`blade`]: blades of every profile and section (swords, daggers, spears).
+//! - [`bone`]: long bones, vertebrae, ribs, a skull and jaw, a pelvis, hands and feet
+//!   (skeletons).
 //! - [`guard`]: crosses, bars, discs and lobes, with terminals, langets and stones (swords,
 //!   daggers, spears).
 //! - [`hilt`]: a whole hilted blade, handle to point (swords, daggers).
@@ -49,6 +51,7 @@ pub mod arrow;
 pub mod axe_head;
 pub mod belt;
 pub mod blade;
+pub mod bone;
 pub mod boot;
 pub mod chain;
 pub mod container;

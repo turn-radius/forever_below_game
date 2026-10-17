@@ -1,16 +1,21 @@
 //! The delver's hit points: bites take them, the view shows them, and at 0 the run ends.
 //!
 //! - The delver starts with a 1st-level character's hit points
-//!   ([`super::first_level_hit_points`]).
-//! - Each [`CreatureAttack`] takes its bite, and a poisonous snake's venom after the delver's
-//!   Constitution save ([`super::bite_damage`]). The view's edge flashes red.
+//!   ([`super::first_level_hit_points_with`]).
+//! - The delver carries an [`ArmourClass`], the one the sheet shows (10, the Dexterity modifier
+//!   and what they wear, `Character::armour_class`), kept up as they dress ([`armour_the_delver`]).
+//!   Every creature's and folk's blow rolls to hit against it
+//!   (`creatures::behaviour::BlowsAtDelver`); one that misses whooshes past ([`whoosh_past`]).
+//! - Each [`AttackOnDelver`] (a blow that hit) takes its bite, and a poisonous snake's venom after the delver's
+//!   Constitution save ([`super::bite_damage_with`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
+//!   A failed save also poisons the delver for a while ([`DelverPoison`],
+//!   [`fb_character::poison`]), which turns the life orb green ([`super::orbs`]).
 //! - A constrictor's bite also holds the delver ([`Constricted`]), who moves at a quarter of
 //!   their pace until they strike it (or it dies, or they break more than a body's length
 //!   away). The SRD's constrictor grapples with a separate Constrict attack and restrains its
 //!   target, whose speed becomes 0 (SRD 5.1 p. 370, "Constrict"; p. 358, "Grappled"); the
 //!   slowing, and breaking free by a blow, are our own placeholder.
-//! - The hit points show low on the left of the view, "HP 8/12" in mono over a thin bar, in
-//!   the page's colours.
+//! - The hit points show as the life orb at the bottom left of the view ([`super::orbs`]).
 //! - At 0 the run ends ([`Fallen`]): the delver stops, the view fades to near black with "You
 //!   fall in the abyss", and after [`FALL_TIME`] seconds the game goes back to the title, where
 //!   New delve begins again. Leaving the delve clears everything it spawned (each is scoped
@@ -22,35 +27,41 @@ use bevy::{
 };
 use fb_creatures::Species;
 
-use super::feedback::{Corpse, Struck};
-use super::{Health, RunDice, bite_damage, first_level_hit_points};
+use super::feedback::{Corpse, Slain, Struck};
+use super::{ArmourClass, Health, RunDice, bite_damage_with, first_level_hit_points_with};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
-use crate::character::Character;
+use crate::character::{Character, DelverPoison};
 use crate::creatures::Critter;
-use crate::creatures::behaviour::{CreatureAttack, reach};
+use crate::creatures::behaviour::{AttackOnDelver, MissedDelver, reach};
+use crate::exhaustion::Exhaustion;
 use crate::inventory::Inventory;
 use crate::launch::AppState;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles, Player, ScreenOpen};
 use crate::player::Slowed;
-use crate::ui::{BAD, BG, BRIGHT, FAINT, MUTED, UiFonts};
+use crate::ui::{BAD, BG, BRIGHT, UiFonts};
 
 pub struct VitalsPlugin;
 
 impl Plugin for VitalsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<CreatureAttack>()
+        app.add_message::<AttackOnDelver>()
+            .add_message::<MissedDelver>()
             .add_message::<Struck>()
+            .add_message::<Slain>()
             .init_resource::<Pain>()
+            .init_resource::<crate::rules::GameRules>()
             .add_systems(OnExit(AppState::Delving), end_the_delve)
-            .add_systems(Update, (give_player_health, take_bites, show_vitals, break_free, fall).chain().in_set(DelveSystems))
+            .add_systems(Update, (give_player_health, fit_hit_points, armour_the_delver, take_bites, heal_on_kill, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
             .add_systems(Update, spawn_vitals.in_set(DelveSystems));
     }
 }
 
-/// How long the view's edge flashes red after a bite, seconds. Our own.
-pub const PAIN_TIME: f32 = 0.45;
-/// How long an attack marker fades over, seconds. Our own.
-pub const MARKER_FADE_TIME: f32 = 1.0;
+/// How long the red flash over the whole view fades out after a blow, seconds. Our own.
+pub const FLASH_TIME: f32 = 0.33;
+/// The faintest red flash, for a blow of next to no damage. Our own.
+pub const FLASH_FLOOR: f32 = 0.08;
+/// The strongest red flash, however hard the blow. Our own.
+pub const FLASH_CAP: f32 = 0.6;
 /// How long "You fall in the abyss" shows before the title, seconds. Our own.
 pub const FALL_TIME: f32 = 3.5;
 /// How fast a held delver moves, as a share of their pace. Our own placeholder.
@@ -76,9 +87,34 @@ pub fn vignette_strength(hp: i32, max: i32, seconds: f32) -> f32 {
     base * pulse
 }
 
-/// Seconds left of the red flash round the view's edge.
+/// How opaque the red flash over the view starts, 0 to 1, for a blow of `damage` against `max`
+/// hit points: [`FLASH_FLOOR`] for a scratch, rising with the share of hit points taken, up to
+/// [`FLASH_CAP`]. Our own.
+pub fn flash_strength(damage: i32, max: i32) -> f32 {
+    let share = damage.max(0) as f32 / max.max(1) as f32;
+    (FLASH_FLOOR + 0.9 * share).clamp(FLASH_FLOOR, FLASH_CAP)
+}
+
+/// The red flash over the whole view: how strong it began and how many seconds it has left.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
-pub struct Pain(pub f32);
+pub struct Pain {
+    pub strength: f32,
+    pub left: f32,
+}
+
+impl Pain {
+    /// The flash's opacity now: its strength, fading linearly to nothing over [`FLASH_TIME`].
+    pub fn alpha(&self) -> f32 {
+        self.strength * (self.left / FLASH_TIME).clamp(0.0, 1.0)
+    }
+
+    /// A blow of `strength` flashes afresh unless a stronger flash is still showing.
+    fn strike(&mut self, strength: f32) {
+        if strength >= self.alpha() {
+            *self = Pain { strength, left: FLASH_TIME };
+        }
+    }
+}
 
 /// The run has ended: seconds left before the title.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -90,34 +126,12 @@ pub struct Constricted {
     pub by: Entity,
 }
 
-/// An attack marker on the HUD: a full-view, centred container turned to point toward an
-/// attacker, with a red arc ([`MarkerArc`]) near its top edge.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct AttackMarker {
-    /// The attacker, to refresh the marker on subsequent bites.
-    pub attacker: Entity,
-    /// Damage this bite did, which sets the marker's strength.
-    pub damage: u32,
-    /// Seconds left until the marker fades away.
-    pub left: f32,
-    /// The attacker's position on the floor when the bite landed.
-    pub attacker_pos: Vec2,
-}
-
-/// The red arc inside an [`AttackMarker`].
-#[derive(Component, Debug)]
-struct MarkerArc;
-
-/// The HUD root the vitals draw into, which attack markers hang from.
-#[derive(Component, Debug)]
-struct VitalsRoot;
-
 /// The delver's hit points, from who they are, once they stand in the level; `FB_PLAYER_HP=<n>`
 /// starts them on `n` of those instead, to check a fall quickly.
-fn give_player_health(mut commands: Commands, character: Res<Character>, new: Query<Entity, (With<Player>, Without<Health>)>) {
+fn give_player_health(mut commands: Commands, character: Res<Character>, rules: Res<crate::rules::GameRules>, new: Query<Entity, (With<Player>, Without<Health>)>) {
     let start = std::env::var("FB_PLAYER_HP").ok().and_then(|n| n.trim().parse::<i32>().ok());
     for player in &new {
-        commands.entity(player).insert(starting_health(first_level_hit_points(&character), start));
+        commands.entity(player).insert(starting_health(first_level_hit_points_with(&rules, &character), start));
     }
 }
 
@@ -126,18 +140,108 @@ pub fn starting_health(max: i32, start: Option<i32>) -> Health {
     Health { hp: start.map_or(max, |n| n.clamp(1, max)), max }
 }
 
+/// The delver's Armor Class, as the sheet works it out from who they are and what they wear,
+/// on the delver for every blow at them to roll against, and the chance their shield turns a
+/// hit aside ([`BlockChance`]).
+#[allow(clippy::type_complexity)]
+fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, players: Query<(Entity, Option<&ArmourClass>, Option<&BlockChance>), With<Player>>) {
+    let none = Inventory::default();
+    let inventory = inventory.as_deref().unwrap_or(&none);
+    let ac = ArmourClass(character.armour_class(inventory).value().round() as i32);
+    let block = BlockChance(character.gear(inventory).block_chance as f32);
+    for (player, had, blocked) in &players {
+        if had != Some(&ac) {
+            commands.entity(player).insert(ac);
+        }
+        if blocked.copied().unwrap_or_default() != block {
+            commands.entity(player).insert(block);
+        }
+    }
+}
+
+/// The chance, 0 to 1, that the shield the delver holds turns aside a blow that would hit them
+/// (an affix "of Deflection"'s, `fb_items::stats::Stats::block_chance`). Our own mechanic,
+/// standing in for the hold-to-block still to come: a blow turned aside does nothing and
+/// whooshes past as a miss (`creatures::behaviour::BlowsAtDelver`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct BlockChance(pub f32);
+
+impl BlockChance {
+    /// Whether the shield turns aside a blow that hit, from one draw of `rng`; with no chance
+    /// nothing is drawn.
+    pub fn turns_aside(self, rng: &mut procgen_rng::Mulberry32) -> bool {
+        self.0 > 0.0 && rng.next_f64() < self.0 as f64
+    }
+}
+
+/// Keeps the delver's maximum hit points to their Constitution as it stands (a ring "of Vigour"
+/// raises it; SRD 5.1, "Using Each Ability", Constitution, "Hit Points": when the modifier
+/// changes, so does the hit point maximum, as though it had been the modifier from 1st level),
+/// moving their maximum and hit points by as much as the first-level hit points moved, never
+/// below 1 for one still standing. `last` is the first-level hit points last seen; the first
+/// look only notes them, so a delver started on other hit points keeps them.
+fn fit_hit_points(character: Res<Character>, rules: Option<Res<crate::rules::GameRules>>, mut last: Local<Option<i32>>, mut players: Query<&mut Health, With<Player>>) {
+    if !character.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) {
+        return;
+    }
+    let now = first_level_hit_points_with(crate::rules::GameRules::of(&rules), &character);
+    let Some(was) = last.replace(now) else { return };
+    let by = now - was;
+    if by == 0 {
+        return;
+    }
+    for mut health in &mut players {
+        if !health.is_down() {
+            let max = (health.max + by).max(1);
+            *health = Health { hp: (health.hp + by).clamp(1, max), max };
+        }
+    }
+}
+
+/// A blow that misses the delver whooshes past them, from the side it came.
+fn whoosh_past(
+    mut commands: Commands,
+    mut misses: MessageReader<MissedDelver>,
+    sound: Option<Res<super::swing::SwingSound>>,
+    players: Query<&Transform, With<Player>>,
+    settings: Option<Res<crate::settings::GameSettings>>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
+) {
+    let game = settings.as_deref().copied().unwrap_or_default();
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    for miss in misses.read() {
+        let (Some(sound), Some(delver)) = (&sound, players.iter().next()) else { continue };
+        let at = Vec3::new(miss.attacker_pos.x, delver.translation.y, miss.attacker_pos.y);
+        crate::audio::play_at(&mut commands, "blow misses", sound.0.clone(), at, &game, &tuning);
+    }
+}
+
+/// How the log names a blow that landed: "A folk strikes", a skeleton's by its weapon
+/// ("Skeleton slashes" with a sword, "Skeleton strikes" with a mace, "Skeleton claws" bare),
+/// and a beast's bite ("Rat bites").
+pub fn blow_line(species: Option<Species>, kit: Option<&crate::creatures::skeletons::SkeletonKit>) -> String {
+    match (species, kit) {
+        (None, _) => "A folk strikes".to_string(),
+        (Some(s), Some(kit)) if s.is_skeleton() => format!("{} {}", s.stat_block().name, kit.blow_verb()),
+        (Some(s), _) if s.is_skeleton() => format!("{} strikes", s.stat_block().name),
+        (Some(s), _) => format!("{} bites", s.stat_block().name),
+    }
+}
+
 /// Each bite takes its damage from the delver; a constrictor's holds them.
 fn take_bites(
     mut commands: Commands,
-    mut bites: MessageReader<CreatureAttack>,
+    mut bites: MessageReader<AttackOnDelver>,
     character: Res<Character>,
     mut dice: ResMut<RunDice>,
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
-    mut players: Query<(Entity, &mut Health), With<Player>>,
+    critters: Query<&Critter>,
+    mut players: Query<(Entity, &mut Health, Option<&DelverPoison>), With<Player>>,
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
+    rules: Res<crate::rules::GameRules>,
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
@@ -145,21 +249,51 @@ fn take_bites(
         if bodies.contains(bite.attacker) {
             continue;
         }
-        for (player, mut health) in &mut players {
+        for (player, mut health, poison) in &mut players {
             if health.is_down() {
                 continue;
             }
-            let damage = bite_damage(bite, character.constitution(), &mut dice.0);
+            let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
             health.hurt(damage);
-            pain.0 = PAIN_TIME;
+            if let Some(hours) = poisons_for {
+                let mut poison = poison.map_or_else(Default::default, |p| p.0);
+                poison.dose(hours);
+                commands.entity(player).insert(DelverPoison(poison));
+            }
+            pain.strike(flash_strength(damage as i32, health.max));
             // One dull thud for each blow that lands.
             if let Some(sounds) = &sounds {
                 commands.spawn((Name::new("blow lands"), AudioPlayer::new(sounds.thud.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(AppState::Delving)));
             }
-            info!("{:?} bites for {damage}: {} of {} hit points left", bite.species, health.hp, health.max);
-            if bite.species == Species::ConstrictorSnake && !health.is_down() {
+            let who = blow_line(bite.species, critters.get(bite.attacker).ok().and_then(|c| c.kit.as_deref()));
+            info!("{who} for {damage}: {} of {} hit points left", health.hp, health.max);
+            if bite.species == Some(Species::ConstrictorSnake) && !health.is_down() {
                 commands.entity(player).insert((Constricted { by: bite.attacker }, Slowed(HELD_PACE)));
             }
+        }
+    }
+}
+
+/// Each kill heals the delver by what the weapon in their main hand gives on a kill (an affix "of
+/// the Leech"'s `HealOnKill`, [`crate::character::Derived::heal_on_kill`]), never above their
+/// maximum. A fallen delver heals nothing.
+fn heal_on_kill(mut slain: MessageReader<Slain>, character: Res<Character>, inventory: Option<Res<Inventory>>, mut players: Query<&mut Health, With<Player>>) {
+    let kills = slain.read().count();
+    if kills == 0 {
+        return;
+    }
+    let none = Inventory::default();
+    let heal = character.gear(inventory.as_deref().unwrap_or(&none)).heal_on_kill.round().max(0.0) as u32;
+    if heal == 0 {
+        return;
+    }
+    for mut health in &mut players {
+        if health.is_down() {
+            continue;
+        }
+        let healed = health.heal(heal * kills as u32);
+        if healed > 0 {
+            info!("The kill heals the delver for {healed}: {} of {} hit points", health.hp, health.max);
         }
     }
 }
@@ -187,7 +321,7 @@ fn break_free(
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct FallOverlay;
 
-/// At 0 hit points the delver stops and the view fades out to "You fall in the abyss"; then
+/// At 0 hit points, or exhaustion level 6, the delver stops and the view fades out to "You fall in the abyss"; then
 /// back to the title.
 #[allow(clippy::too_many_arguments)]
 fn fall(
@@ -195,7 +329,7 @@ fn fall(
     time: Res<Time>,
     fallen: Option<ResMut<Fallen>>,
     fonts: Option<Res<UiFonts>>,
-    players: Query<(Entity, &Health), With<Player>>,
+    players: Query<(Entity, &Health, &Exhaustion), With<Player>>,
     view_models: Query<Entity, With<ViewModelCamera>>,
     mut overlay: Query<(&mut BackgroundColor, &Children), With<FallOverlay>>,
     mut words: Query<&mut TextColor>,
@@ -203,7 +337,7 @@ fn fall(
     next: Option<ResMut<NextState<AppState>>>,
 ) {
     let Some(mut fallen) = fallen else {
-        let Some((player, _)) = players.iter().find(|(_, h)| h.is_down()) else { return };
+        let Some((player, ..)) = players.iter().find(|(_, health, exhaustion)| health.is_down() || exhaustion.0.is_dead()) else { return };
         commands.insert_resource(Fallen(FALL_TIME));
         commands.entity(player).insert(Slowed(0.0)).remove::<Constricted>();
         if let Some(screen) = screen.as_deref_mut() {
@@ -242,161 +376,59 @@ fn fall(
     }
 }
 
-/// The hit points readout.
+/// The HUD root the vitals draw into, which the orbs ([`super::orbs`]), the eye and the
+/// quickslot bar hang from.
 #[derive(Component, Debug)]
-struct HitPointsText;
-/// The bar's filled part.
-#[derive(Component, Debug)]
-struct HitPointsBar;
-/// The red edge round the view.
+pub(crate) struct VitalsRoot;
+
+/// The dark red edge round the view while badly hurt.
 #[derive(Component, Debug)]
 struct PainEdge;
+/// The red flash over the whole view when a blow lands.
+#[derive(Component, Debug)]
+struct PainFlash;
 
-/// The bar's width, logical pixels.
-const BAR_WIDTH: f32 = 140.0;
-
-/// Draws the hit points and the pain edge over each new view model, as part of the HUD.
-fn spawn_vitals(mut commands: Commands, fonts: Option<Res<UiFonts>>, new: Query<Entity, Added<ViewModelCamera>>) {
+/// Draws the pain flash and the dark edge over each new view model, as part of the HUD that the
+/// orbs, the eye and the quickslot bar join.
+fn spawn_vitals(mut commands: Commands, new: Query<Entity, Added<ViewModelCamera>>) {
     for camera in &new {
-        let mono = fonts.as_deref().map(|f| f.mono.clone()).unwrap_or_default();
         commands
             .spawn((Name::new("Vitals"), Hud, VitalsRoot, UiTargetCamera(camera), Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() }, Pickable::IGNORE))
             .with_children(|hud| {
+                hud.spawn((PainFlash, Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() }, BackgroundColor(BAD.with_alpha(0.0)), Pickable::IGNORE));
                 hud.spawn((PainEdge, Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, border: UiRect::all(px(28)), ..default() }, BorderColor::all(BAD.with_alpha(0.0))));
-                hud.spawn(Node { position_type: PositionType::Absolute, left: px(28), bottom: px(24), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() }).with_children(|corner| {
-                    corner.spawn((HitPointsText, Text::new("HP"), TextFont::from_font_size(17.0).with_font(mono), TextColor(BRIGHT.with_alpha(0.9))));
-                    corner
-                        .spawn((Node { width: px(BAR_WIDTH), height: px(5), border: UiRect::all(px(1)), ..default() }, BackgroundColor(FAINT.with_alpha(0.8)), BorderColor::all(MUTED.with_alpha(0.5))))
-                        .with_child((HitPointsBar, Node { width: percent(100), height: percent(100), ..default() }, BackgroundColor(BAD.with_alpha(0.9))));
-                });
             });
     }
 }
 
-/// Keeps the readout and bar to the delver's hit points, fades the pain edge, and keeps the attack
-/// markers: one per attacker, made or refreshed by its bite, turned toward it, fading to nothing.
-#[allow(clippy::too_many_arguments)]
+/// Fades the red flash over the view, and draws the dark edge while badly hurt.
 fn show_vitals(
     time: Res<Time>,
-    mut commands: Commands,
     mut pain: ResMut<Pain>,
-    mut bites: MessageReader<CreatureAttack>,
-    players: Query<(&Health, &Transform), With<Player>>,
-    mut texts: Query<&mut Text, With<HitPointsText>>,
-    mut bars: Query<&mut Node, With<HitPointsBar>>,
+    players: Query<&Health, With<Player>>,
     mut edges: Query<&mut BorderColor, With<PainEdge>>,
-    mut markers: Query<(Entity, &mut AttackMarker, &mut UiTransform, &Children)>,
-    mut arcs: Query<&mut BackgroundColor, With<MarkerArc>>,
-    roots: Query<Entity, With<VitalsRoot>>,
+    mut flashes: Query<&mut BackgroundColor, With<PainFlash>>,
 ) {
-    let dt = time.delta_secs();
-    pain.0 = (pain.0 - dt).max(0.0);
-    // Read the bites even with no delver yet, so they do not pile up.
-    let mut fresh: Vec<CreatureAttack> = Vec::new();
-    for bite in bites.read() {
-        // Bites from one attacker in a frame make one marker: the hardest, at the last place.
-        match fresh.iter_mut().find(|b| b.attacker == bite.attacker) {
-            Some(b) => {
-                b.damage = b.damage.max(bite.damage);
-                b.attacker_pos = bite.attacker_pos;
-            }
-            None => fresh.push(*bite),
-        }
+    pain.left = (pain.left - time.delta_secs()).max(0.0);
+    let flash = pain.alpha();
+    for mut colour in &mut flashes {
+        colour.set_if_neq(BackgroundColor(BAD.with_alpha(flash)));
     }
-    let Some((health, player)) = players.iter().next() else { return };
-    let line = hit_points_line(health);
-    for mut text in &mut texts {
-        if text.0 != line {
-            text.0 = line.clone();
-        }
-    }
-    for mut bar in &mut bars {
-        bar.width = percent(100.0 * health.hp.max(0) as f32 / health.max.max(1) as f32);
-    }
-    let flash = 0.55 * (pain.0 / PAIN_TIME).clamp(0.0, 1.0);
+    let Some(health) = players.iter().next() else { return };
     let dark = 0.7 * vignette_strength(health.hp, health.max, time.elapsed_secs());
-    // A fresh blow's red flash shows over the dark edge, whichever is stronger.
-    let edge_colour = if flash > 0.0 { BAD.with_alpha(flash.max(dark)) } else { VIGNETTE_COLOUR.with_alpha(dark) };
     for mut edge in &mut edges {
-        *edge = BorderColor::all(edge_colour);
-    }
-
-    for bite in fresh {
-        if let Some((_, mut marker, _, _)) = markers.iter_mut().find(|(_, m, _, _)| m.attacker == bite.attacker) {
-            marker.damage = bite.damage;
-            marker.left = MARKER_FADE_TIME;
-            marker.attacker_pos = bite.attacker_pos;
-        } else if let Some(root) = roots.iter().next() {
-            let marker = AttackMarker { attacker: bite.attacker, damage: bite.damage, left: MARKER_FADE_TIME, attacker_pos: bite.attacker_pos };
-            commands.entity(root).with_children(|hud| {
-                hud.spawn((marker, Name::new("AttackMarker"), attack_marker_node(), UiTransform::IDENTITY, Pickable::IGNORE)).with_child((
-                    MarkerArc,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: percent(50),
-                        top: vmin(1.5),
-                        width: vmin(34),
-                        height: vmin(7),
-                        margin: UiRect::left(vmin(-17)),
-                        border_radius: BorderRadius::all(percent(50)),
-                        ..default()
-                    },
-                    BackgroundColor(BAD.with_alpha(0.0)),
-                    Pickable::IGNORE,
-                ));
-            });
-        }
-    }
-
-    let player_pos = player.translation.xz();
-    let (yaw, _, _) = player.rotation.to_euler(EulerRot::YXZ);
-    let max_hp = health.max.max(1) as f32;
-    for (entity, mut marker, mut transform, children) in &mut markers {
-        marker.left -= dt;
-        if marker.left <= 0.0 {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        // UI turns clockwise on screen for a positive angle, as the angle from facing does.
-        transform.rotation = Rot2::radians(marker_angle(player_pos, yaw, marker.attacker_pos));
-        // A faint arc for a light bite, a strong one for a hard bite, fading to nothing.
-        let strength = 0.3 + 0.7 * (marker.damage as f32 / max_hp).min(1.0);
-        let fade = (marker.left / MARKER_FADE_TIME).clamp(0.0, 1.0);
-        for &child in children {
-            if let Ok(mut colour) = arcs.get_mut(child) {
-                colour.0 = BAD.with_alpha(strength * fade);
-            }
-        }
+        edge.set_if_neq(BorderColor::all(VIGNETTE_COLOUR.with_alpha(dark)));
     }
 }
 
-/// A marker's container: a square as big as the view's short side, centred, which the arc sits at
-/// the top of; turning it about its middle carries the arc round the view.
-fn attack_marker_node() -> Node {
-    Node {
-        position_type: PositionType::Absolute,
-        left: percent(50),
-        top: percent(50),
-        width: vmin(100),
-        height: vmin(100),
-        margin: UiRect { left: vmin(-50), top: vmin(-50), ..default() },
-        ..default()
-    }
-}
-
-/// Calculates the clockwise-from-forward angle to an attacker, accounting for the delver's facing.
+/// The clockwise-from-forward angle to an attacker, accounting for the delver's facing.
 /// `player_pos` and `attacker_pos` are xz coordinates on the floor; `yaw` is the delver's rotation
-/// around the y axis. Returns the angle in radians, normalized to [0, 2π): 0° is in front,
-/// 90° is to the right, 180° is behind, 270° is to the left.
-/// Our own.
-pub fn marker_angle(player_pos: Vec2, yaw: f32, attacker_pos: Vec2) -> f32 {
+/// around the y axis. Returns the angle in radians, normalized to [0, 2π): 0 is in front,
+/// π/2 is to the right, π is behind, 3π/2 is to the left. The view jolt uses it to push away
+/// from the attacker. Our own.
+pub fn bearing_from_facing(player_pos: Vec2, yaw: f32, attacker_pos: Vec2) -> f32 {
     let (dx, dz) = (attacker_pos.x - player_pos.x, attacker_pos.y - player_pos.y);
     (dx.atan2(-dz) + yaw).rem_euclid(std::f32::consts::TAU)
-}
-
-/// "HP 8/12".
-pub fn hit_points_line(health: &Health) -> String {
-    format!("HP {}/{}", health.hp.max(0), health.max)
 }
 
 /// Leaving the delve clears what it kept besides its entities: the level, what the delver
@@ -435,7 +467,7 @@ mod tests {
             .init_resource::<ScreenOpen>()
             .add_plugins(VitalsPlugin);
         let player = app.world_mut().spawn((Player, Transform::default(), Health::full(10))).id();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let spot = *level.creatures.iter().find(|c| c.species == Species::ConstrictorSnake).unwrap();
         let creature = spot.creature();
         let snake = app.world_mut().spawn((Critter::new(spot, creature), Transform::from_xyz(10.0, 0.0, 0.0))).id();
@@ -444,7 +476,7 @@ mod tests {
 
     fn bite(app: &mut App, attacker: Entity, species: Species, damage: u32) {
         let attacker_pos = app.world().get::<Transform>(attacker).map(|t| t.translation.xz()).unwrap_or_default();
-        app.world_mut().write_message(CreatureAttack { attacker, species, damage, poison: 0, attacker_pos });
+        app.world_mut().write_message(AttackOnDelver { attacker, species: Some(species), damage, poison: 0, attacker_pos });
         app.update();
     }
 
@@ -457,13 +489,100 @@ mod tests {
     }
 
     #[test]
-    fn bites_take_hit_points_and_flash_the_edge() {
+    fn bites_take_hit_points_and_start_the_flash() {
         let (mut app, player, snake) = delve();
         app.update();
         bite(&mut app, snake, Species::Rat, 3);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 7);
-        assert!(app.world().resource::<Pain>().0 > 0.0);
-        assert_eq!(hit_points_line(app.world().get::<Health>(player).unwrap()), "HP 7/10");
+        assert!(app.world().resource::<Pain>().alpha() > 0.0);
+    }
+
+    #[test]
+    fn a_skeletons_blow_is_logged_by_its_weapon_and_a_rats_as_a_bite() {
+        use crate::creatures::skeletons::SkeletonKit;
+        let state = fb_creatures::SkeletonState::roll(3);
+        let armed = |base: &str| {
+            let item = fb_items::roll_item(base, 41).unwrap();
+            SkeletonKit::new(&state, fb_items::outfit::OutfitSet { worn: vec![(fb_items::Slot::Mainhand, item)], goods: Vec::new(), ground: Vec::new() }, [None, None])
+        };
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&armed("Sword"))), "Skeleton slashes");
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&armed("Mace"))), "Skeleton strikes");
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&SkeletonKit::bare(&state))), "Skeleton claws");
+        assert_eq!(blow_line(Some(Species::Rat), None), "Rat bites");
+        assert_eq!(blow_line(None, None), "A folk strikes");
+        for line in [armed("Sword"), armed("Mace"), armed("Dagger"), SkeletonKit::bare(&state)].iter().map(|k| blow_line(Some(Species::Skeleton), Some(k))) {
+            assert!(!line.contains("bites"), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_shield_of_the_rampart_turns_aside_a_fifth_of_the_hits() {
+        let mut rng = procgen_rng::Mulberry32::new(17);
+        let turned = (0..10_000).filter(|_| BlockChance(0.2).turns_aside(&mut rng)).count();
+        assert!((turned as f64 / 10_000.0 - 0.2).abs() < 0.015, "{turned}");
+        let mut none = procgen_rng::Mulberry32::new(17);
+        assert!(!BlockChance(0.0).turns_aside(&mut none));
+        assert_eq!(none.next_f64(), procgen_rng::Mulberry32::new(17).next_f64(), "no shield, no draw");
+    }
+
+    #[test]
+    fn a_ring_of_vigour_raises_the_hit_point_maximum_and_taking_it_off_lowers_it() {
+        let (mut app, player, _) = delve();
+        app.update();
+        let max = app.world().get::<Health>(player).unwrap().max;
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = max - 3;
+        // CON +2 is +1 modifier.
+        let con = app.world().resource::<Character>().constitution();
+        let bonus = if con % 2 == 0 { 2 } else { 1 };
+        app.world_mut().resource_mut::<Character>().worn.constitution = bonus;
+        app.update();
+        let raised = *app.world().get::<Health>(player).unwrap();
+        assert_eq!((raised.hp, raised.max), (max - 2, max + 1));
+        app.world_mut().resource_mut::<Character>().worn.constitution = 0;
+        app.update();
+        assert_eq!(*app.world().get::<Health>(player).unwrap(), Health { hp: max - 3, max });
+    }
+
+    #[test]
+    fn a_kill_with_a_leech_weapon_heals_the_delver_and_without_one_does_not() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::Rat, 4);
+        app.world_mut().write_message(Slain { target: snake });
+        app.update();
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 6, "a plain fist heals nothing");
+        let mut inventory = Inventory::default();
+        let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+        let leech = fb_items::tables::affixes().iter().find(|a| a.name == "of the Leech").unwrap();
+        leech.apply_to_stats(&mut sword.profile.stats);
+        let id = inventory.add(sword);
+        inventory.wear(id, fb_items::Slot::Mainhand).unwrap();
+        app.insert_resource(inventory);
+        for _ in 0..2 {
+            app.world_mut().write_message(Slain { target: snake });
+            app.update();
+        }
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 8, "one each kill");
+        for _ in 0..5 {
+            app.world_mut().write_message(Slain { target: snake });
+            app.update();
+        }
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 10, "never above the maximum");
+    }
+
+    #[test]
+    fn a_failed_save_against_venom_poisons_the_delver_and_a_good_one_does_not() {
+        // Seeds whose first d20, the save, is a 1 (fails whatever the CON) and a 20 (saves).
+        let seed_for = |natural| (0..10_000).find(|s| procgen_rng::Mulberry32::new(*s).int(1, 20) == natural).unwrap();
+        for (natural, poisoned) in [(1, true), (20, false)] {
+            let (mut app, player, snake) = delve();
+            app.world_mut().resource_mut::<RunDice>().0 = procgen_rng::Mulberry32::new(seed_for(natural));
+            app.update();
+            app.world_mut().write_message(AttackOnDelver { attacker: snake, species: Some(Species::PoisonousSnake), damage: 1, poison: 4, attacker_pos: Vec2::ZERO });
+            app.update();
+            let poison = app.world().get::<DelverPoison>(player).map(|p| p.0);
+            assert_eq!(poison, poisoned.then(|| fb_character::poison::Poisoned::for_hours(fb_character::poison::VENOM_POISONED_HOURS)), "a natural {natural}");
+        }
     }
 
     #[test]
@@ -475,7 +594,7 @@ mod tests {
         assert_eq!(app.world().get::<Slowed>(player), Some(&Slowed(HELD_PACE)));
         app.update();
         assert!(app.world().get::<Constricted>(player).is_some(), "still held");
-        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO });
+        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false, critical: false });
         app.update();
         assert!(app.world().get::<Constricted>(player).is_none());
         assert!(app.world().get::<Slowed>(player).is_none());
@@ -501,6 +620,30 @@ mod tests {
     }
 
     #[test]
+    fn at_exhaustion_level_6_the_run_ends_as_at_zero_hit_points() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::ConstrictorSnake, 2);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(crate::play::Screen::Inventory);
+        app.update();
+        assert!(app.world().get_resource::<Fallen>().is_none(), "level 0 does not fall");
+        app.world_mut().get_mut::<Exhaustion>(player).unwrap().0 = fb_character::Exhaustion::new(6);
+        app.update();
+        assert!(app.world().get_resource::<Fallen>().is_some());
+        assert_eq!(app.world().get::<Slowed>(player), Some(&Slowed(0.0)), "the delver stops");
+        assert!(app.world().get::<Constricted>(player).is_none(), "the grip lets go");
+        assert_eq!(app.world().resource::<ScreenOpen>().0, None, "the screens close");
+        assert!(app.world().get::<Health>(player).unwrap().hp > 0, "hit points were not what ended it");
+        assert_eq!(app.world_mut().query::<&FallOverlay>().iter(app.world()).count(), 1, "the overlay shows");
+        for _ in 0..((FALL_TIME * 60.0) as usize + 5) {
+            app.update();
+        }
+        assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
+        assert!(app.world().get_entity(player).is_err(), "the delver is gone");
+        assert!(app.world().get_resource::<Fallen>().is_none());
+    }
+
+    #[test]
     fn a_new_delve_after_a_fall_starts_clean() {
         use crate::inventory::{Hovered, OpenContainer, leave_the_delve};
         let (mut app, player, snake) = delve();
@@ -521,7 +664,7 @@ mod tests {
         }
         assert_eq!(*app.world().resource::<OpenContainer>(), OpenContainer(None));
         assert_eq!(*app.world().resource::<Hovered>(), Hovered(None));
-        assert_eq!(*app.world().resource::<Pain>(), Pain(0.0));
+        assert_eq!(*app.world().resource::<Pain>(), Pain::default());
         // New delve: a fresh delver stands up whole, and nothing of the last run is left over.
         app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
         app.update();
@@ -535,81 +678,81 @@ mod tests {
     }
 
     #[test]
-    fn marker_angle_with_yaw_0_places_attacker_on_the_right_at_90_degrees() {
+    fn bearing_from_facing_with_yaw_0_places_attacker_on_the_right_at_90_degrees() {
         let player_pos = Vec2::ZERO;
         let yaw = 0.0;
         let attacker_pos = Vec2::new(5.0, 0.0);
-        let angle = marker_angle(player_pos, yaw, attacker_pos);
+        let angle = bearing_from_facing(player_pos, yaw, attacker_pos);
         // Should be π/2 (90 degrees).
         assert!((angle - std::f32::consts::FRAC_PI_2).abs() < 1e-5, "angle {}", angle);
     }
 
     #[test]
-    fn marker_angle_with_yaw_0_places_attacker_on_the_left_at_270_degrees() {
+    fn bearing_from_facing_with_yaw_0_places_attacker_on_the_left_at_270_degrees() {
         let player_pos = Vec2::ZERO;
         let yaw = 0.0;
         let attacker_pos = Vec2::new(-5.0, 0.0);
-        let angle = marker_angle(player_pos, yaw, attacker_pos);
+        let angle = bearing_from_facing(player_pos, yaw, attacker_pos);
         // Should be 3π/2 (270 degrees).
         let expected = 3.0 * std::f32::consts::FRAC_PI_2;
         assert!((angle - expected).abs() < 1e-5, "angle {}", angle);
     }
 
     #[test]
-    fn marker_angle_with_yaw_0_places_attacker_behind_at_180_degrees() {
+    fn bearing_from_facing_with_yaw_0_places_attacker_behind_at_180_degrees() {
         let player_pos = Vec2::ZERO;
         let yaw = 0.0;
         let attacker_pos = Vec2::new(0.0, 5.0);
-        let angle = marker_angle(player_pos, yaw, attacker_pos);
+        let angle = bearing_from_facing(player_pos, yaw, attacker_pos);
         // Should be π (180 degrees).
         assert!((angle - std::f32::consts::PI).abs() < 1e-5, "angle {}", angle);
     }
 
     #[test]
-    fn marker_angle_with_yaw_90_rotates_the_perspective() {
+    fn bearing_from_facing_with_yaw_90_rotates_the_perspective() {
         let player_pos = Vec2::ZERO;
         let yaw = std::f32::consts::FRAC_PI_2; // 90 degrees
         // Attacker to the player's right in world space (5, 0) is behind in rotated perspective.
         let attacker_pos = Vec2::new(5.0, 0.0);
-        let angle = marker_angle(player_pos, yaw, attacker_pos);
+        let angle = bearing_from_facing(player_pos, yaw, attacker_pos);
         // Should be π (180 degrees, behind).
         assert!((angle - std::f32::consts::PI).abs() < 1e-5, "angle {}", angle);
     }
 
     #[test]
-    fn marker_angle_with_yaw_negative_90_places_attacker_behind() {
+    fn bearing_from_facing_with_yaw_negative_90_places_attacker_behind() {
         let player_pos = Vec2::ZERO;
         let yaw = -std::f32::consts::FRAC_PI_2; // -90 degrees
         // Attacker to the left in world space (-5, 0) is behind when facing right (-90°).
         let attacker_pos = Vec2::new(-5.0, 0.0);
-        let angle = marker_angle(player_pos, yaw, attacker_pos);
+        let angle = bearing_from_facing(player_pos, yaw, attacker_pos);
         // Should be π (180 degrees, behind).
         assert!((angle - std::f32::consts::PI).abs() < 1e-5, "angle {}", angle);
     }
 
     #[test]
-    fn marker_angle_with_yaw_180_reverses_direction() {
+    fn bearing_from_facing_with_yaw_180_reverses_direction() {
         let player_pos = Vec2::ZERO;
         let yaw = std::f32::consts::PI; // 180 degrees (facing backward)
         // Attacker ahead in world space (0, -5) is behind from reversed perspective.
         let attacker_pos = Vec2::new(0.0, -5.0);
-        let angle = marker_angle(player_pos, yaw, attacker_pos);
+        let angle = bearing_from_facing(player_pos, yaw, attacker_pos);
         // Should be π (180 degrees, behind).
         assert!((angle - std::f32::consts::PI).abs() < 1e-5, "angle {}", angle);
     }
 
     #[test]
-    fn marker_angle_with_yaw_90_and_attacker_ahead_in_world() {
+    fn bearing_from_facing_with_yaw_90_and_attacker_ahead_in_world() {
         let player_pos = Vec2::ZERO;
         let yaw = std::f32::consts::FRAC_PI_2; // 90 degrees (facing right)
         // Attacker ahead in world space (0, -5) is to the right from rightward perspective.
         let attacker_pos = Vec2::new(0.0, -5.0);
-        let angle = marker_angle(player_pos, yaw, attacker_pos);
+        let angle = bearing_from_facing(player_pos, yaw, attacker_pos);
         // Should be π/2 (90 degrees, right).
         assert!((angle - std::f32::consts::FRAC_PI_2).abs() < 1e-5, "angle {}", angle);
     }
 
-    /// A delve with a view model camera, so the vitals root (and attack markers) exist.
+    /// A delve with a view model camera, so the vitals HUD exists.
     fn delve_with_hud() -> (App, Entity, Entity) {
         let (mut app, player, snake) = delve();
         let follows = app.world_mut().spawn_empty().id();
@@ -619,80 +762,105 @@ mod tests {
         (app, player, snake)
     }
 
-    fn markers(app: &mut App) -> Vec<(AttackMarker, f32)> {
-        let mut query = app.world_mut().query::<(&AttackMarker, &UiTransform)>();
-        query.iter(app.world()).map(|(m, t)| (*m, t.rotation.as_radians())).collect()
+    /// The flash over the view: its red and opacity.
+    fn flash_colour(app: &mut App) -> Srgba {
+        let mut query = app.world_mut().query_filtered::<&BackgroundColor, With<PainFlash>>();
+        query.single(app.world()).unwrap().0.to_srgba()
     }
 
-    fn spare_attacker(app: &mut App, at: Vec3) -> Entity {
-        app.world_mut().spawn(Transform::from_translation(at)).id()
+    fn bite_all(app: &mut App, attacker: Entity, damages: &[u32]) {
+        let attacker_pos = app.world().get::<Transform>(attacker).map(|t| t.translation.xz()).unwrap_or_default();
+        for &damage in damages {
+            app.world_mut().write_message(AttackOnDelver { attacker, species: Some(Species::Rat), damage, poison: 0, attacker_pos });
+        }
+        app.update();
     }
 
     #[test]
-    fn a_bite_makes_one_marker_and_a_repeat_refreshes_it() {
+    fn the_flash_is_faint_for_a_scratch_strong_for_a_hard_blow_and_capped() {
+        assert_eq!(flash_strength(0, 12), FLASH_FLOOR);
+        let rat = flash_strength(1, 12);
+        let constrictor = flash_strength(5, 12);
+        assert!(rat > FLASH_FLOOR && rat < 0.2, "a rat's bite is faint: {rat}");
+        assert!(constrictor > 0.4 && constrictor <= FLASH_CAP, "a constrictor's is strong: {constrictor}");
+        assert!(constrictor > rat);
+        assert_eq!(flash_strength(50, 12), FLASH_CAP);
+        assert_eq!(flash_strength(3, 0), FLASH_CAP, "no divide by zero");
+    }
+
+    #[test]
+    fn the_flash_fades_linearly_over_its_time() {
+        let pain = Pain { strength: 0.4, left: FLASH_TIME };
+        assert_eq!(pain.alpha(), 0.4);
+        assert!((Pain { left: FLASH_TIME / 2.0, ..pain }.alpha() - 0.2).abs() < 1e-6);
+        assert_eq!(Pain { left: 0.0, ..pain }.alpha(), 0.0);
+        assert_eq!(Pain::default().alpha(), 0.0);
+    }
+
+    #[test]
+    fn a_bite_flashes_the_whole_view_and_thuds() {
         let (mut app, _player, snake) = delve_with_hud();
+        app.insert_resource(super::super::feedback::CreatureSounds::default()).init_resource::<crate::tuning::Tuning>();
+        assert_eq!(flash_colour(&mut app).alpha, 0.0);
         bite(&mut app, snake, Species::Rat, 1);
-        app.update();
-        assert_eq!(markers(&mut app).len(), 1);
-        for _ in 0..30 {
+        let flash = flash_colour(&mut app);
+        assert!(flash.alpha > 0.0 && flash.red > flash.blue, "a red flash: {flash:?}");
+        assert_eq!(playing(&mut app).len(), 1, "one thud");
+        // It covers the view, and clicks pass through it.
+        let mut query = app.world_mut().query_filtered::<(&Node, &Pickable), With<PainFlash>>();
+        let (node, pickable) = query.single(app.world()).unwrap();
+        assert_eq!((node.width, node.height, node.position_type), (percent(100), percent(100), PositionType::Absolute));
+        assert_eq!(*pickable, Pickable::IGNORE);
+    }
+
+    #[test]
+    fn a_harder_bite_flashes_stronger() {
+        let (mut soft, _p, snake) = delve_with_hud();
+        bite(&mut soft, snake, Species::Rat, 1);
+        let (mut hard, _p, snake) = delve_with_hud();
+        bite(&mut hard, snake, Species::Rat, 5);
+        assert!(flash_colour(&mut hard).alpha > flash_colour(&mut soft).alpha);
+    }
+
+    #[test]
+    fn two_bites_in_a_frame_flash_once_at_the_stronger_and_thud_twice() {
+        let (mut app, _player, snake) = delve_with_hud();
+        app.insert_resource(super::super::feedback::CreatureSounds::default()).init_resource::<crate::tuning::Tuning>();
+        bite_all(&mut app, snake, &[1, 5]);
+        let both = flash_colour(&mut app).alpha;
+        assert_eq!(playing(&mut app).len(), 2, "a thud each");
+        let mut flashes = app.world_mut().query_filtered::<(), With<PainFlash>>();
+        assert_eq!(flashes.iter(app.world()).count(), 1, "one flash");
+        // The stronger of the two, whichever order they came in.
+        let (mut lone, _p, snake) = delve_with_hud();
+        bite(&mut lone, snake, Species::Rat, 5);
+        assert_eq!(both, flash_colour(&mut lone).alpha);
+        let (mut reversed, _p, snake) = delve_with_hud();
+        bite_all(&mut reversed, snake, &[5, 1]);
+        assert_eq!(flash_colour(&mut reversed).alpha, both);
+    }
+
+    #[test]
+    fn the_flash_is_gone_after_a_third_of_a_second() {
+        let (mut app, _player, snake) = delve_with_hud();
+        bite(&mut app, snake, Species::Rat, 5);
+        let start = flash_colour(&mut app).alpha;
+        for _ in 0..10 {
             app.update();
         }
-        let before = markers(&mut app)[0].0.left;
-        bite(&mut app, snake, Species::Rat, 2);
-        app.update();
-        let after = markers(&mut app);
-        assert_eq!(after.len(), 1, "a repeat bite refreshes, not adds");
-        assert!(after[0].0.left > before + 0.3, "{} then {}", before, after[0].0.left);
-        assert_eq!(after[0].0.damage, 2);
-    }
-
-    #[test]
-    fn two_attackers_make_two_markers() {
-        let (mut app, _player, snake) = delve_with_hud();
-        let other = spare_attacker(&mut app, Vec3::new(-10.0, 0.0, 0.0));
-        bite(&mut app, snake, Species::Rat, 1);
-        bite(&mut app, other, Species::Rat, 1);
-        app.update();
-        assert_eq!(markers(&mut app).len(), 2);
-    }
-
-    #[test]
-    fn two_bites_in_a_frame_from_one_attacker_make_one_marker() {
-        let (mut app, _player, snake) = delve_with_hud();
-        let attacker_pos = Vec2::new(10.0, 0.0);
-        for damage in [1, 3] {
-            app.world_mut().write_message(CreatureAttack { attacker: snake, species: Species::Rat, damage, poison: 0, attacker_pos });
-        }
-        app.update();
-        app.update();
-        let found = markers(&mut app);
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].0.damage, 3, "the harder bite sets the strength");
-    }
-
-    #[test]
-    fn a_marker_is_gone_after_a_second() {
-        let (mut app, _player, snake) = delve_with_hud();
-        bite(&mut app, snake, Species::Rat, 1);
-        app.update();
-        assert_eq!(markers(&mut app).len(), 1);
-        for _ in 0..62 {
+        let mid = flash_colour(&mut app).alpha;
+        assert!(mid > 0.0 && mid < start, "fading: {start} then {mid}");
+        for _ in 0..12 {
             app.update();
         }
-        assert!(markers(&mut app).is_empty());
+        assert_eq!(flash_colour(&mut app).alpha, 0.0);
     }
 
     #[test]
-    fn the_marker_turns_to_the_right_for_an_attacker_on_the_right() {
-        let (mut app, player, _snake) = delve_with_hud();
+    fn the_jolt_bearing_is_clockwise_from_the_facing() {
         // Turned 90 degrees to face -x, an attacker at -z is on the delver's right.
-        app.world_mut().get_mut::<Transform>(player).unwrap().rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
-        let attacker = spare_attacker(&mut app, Vec3::new(0.0, 0.0, -10.0));
-        bite(&mut app, attacker, Species::Rat, 2);
-        app.update();
-        let found = markers(&mut app);
-        assert_eq!(found.len(), 1);
-        assert!((found[0].1 - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "rotation {}", found[0].1);
+        let right = bearing_from_facing(Vec2::ZERO, std::f32::consts::FRAC_PI_2, Vec2::new(0.0, -10.0));
+        assert!((right - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "bearing {right}");
     }
 
     /// The volumes of the sound effects playing, loudest last.
@@ -769,24 +937,29 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_blow_flashes_over_the_dark_edge() {
+    fn the_low_health_edge_remains_when_the_flash_is_gone() {
         let (mut app, player, snake) = delve_with_hud();
         *app.world_mut().get_mut::<Health>(player).unwrap() = Health { hp: 20, max: 100 };
-        app.update();
-        let dark = edge_colour(&mut app);
         bite(&mut app, snake, Species::Rat, 1);
-        let flash = edge_colour(&mut app);
-        assert!(flash.red > dark.red, "the flash is the brighter red: {flash:?} over {dark:?}");
-        assert!(flash.alpha >= dark.alpha);
+        assert!(app.world().get::<Health>(player).unwrap().hp < 25);
+        assert!(flash_colour(&mut app).alpha > 0.0);
+        for _ in 0..25 {
+            app.update();
+        }
+        assert_eq!(flash_colour(&mut app).alpha, 0.0);
+        let edge = edge_colour(&mut app);
+        assert!(edge.alpha > 0.0 && edge.red < 0.5, "the dark edge stays: {edge:?}");
     }
 
     #[test]
-    fn the_edge_is_part_of_the_hud_and_hides_under_screens() {
+    fn the_flash_and_edge_are_part_of_the_hud_and_hide_under_screens() {
         use crate::carry::hide_hud_under_screens;
         let (mut app, _player, _snake) = delve_with_hud();
         app.add_systems(Update, hide_hud_under_screens);
         let mut query = app.world_mut().query_filtered::<&ChildOf, With<PainEdge>>();
         let root = query.single(app.world()).unwrap().parent();
+        let mut flash = app.world_mut().query_filtered::<&ChildOf, With<PainFlash>>();
+        assert_eq!(flash.single(app.world()).unwrap().parent(), root, "the flash hangs from the same HUD");
         assert!(app.world().get::<Hud>(root).is_some());
         assert!(app.world().get::<DespawnOnExit<AppState>>(root).is_some(), "scoped to the delve");
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(crate::play::Screen::Inventory);

@@ -1,0 +1,375 @@
+//! Taking the stairs between levels (#201): the delver goes down to the level below and back up,
+//! and what is theirs goes with them while what belongs to a level stays with it.
+//!
+//! The whole game runs here without a window or a GPU (as in `delve_scope.rs`), stepped a 60th
+//! of a second a frame, from the title through New delve into level 1207.
+
+use std::collections::BTreeMap;
+
+use bevy::{
+    ecs::{entity_disabling::Disabled, query::Allow},
+    input::{ButtonState, keyboard::{Key, KeyboardInput}},
+    prelude::*,
+    render::{RenderPlugin, settings::WgpuSettings},
+    time::TimeUpdateStrategy,
+    window::ExitCondition,
+    winit::WinitPlugin,
+};
+use fb_level::{Level, StairKind, depth_seed};
+use forever_below::{
+    carry::FloorItem,
+    combat::{Health, vitals::FALL_TIME},
+    inventory::{Inventory, ItemId},
+    launch::AppState,
+    level::{DoorSwing, EntranceDoor, LevelPiece},
+    menu::MenuCommand,
+    play::{BlockedCells, CurrentLevel, PlayPlugin, Player, PlayerCamera, Screen, ScreenOpen},
+    player::Locomotion,
+    props::PropPiece,
+    render::ArmoryRenderPlugin,
+    settings::SettingsPlugin,
+    title::{NewDelveSeed, TitlePlugin},
+    travel::{Abyss, Arrival, DepthTitle, Journey, LeavingLevel, UseStair},
+    tuning::TuningPlugin,
+};
+
+fn headless_game() -> App {
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+            .set(RenderPlugin { render_creation: WgpuSettings { backends: None, ..default() }.into(), ..default() })
+            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), ..default() })
+            .disable::<WinitPlugin>(),
+    )
+    .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+    .insert_state(AppState::Title)
+    .add_plugins((SettingsPlugin, TuningPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
+    .insert_resource(NewDelveSeed(Some(1207)));
+    app
+}
+
+fn run(app: &mut App, frames: usize) {
+    for _ in 0..frames {
+        app.update();
+    }
+}
+
+fn begin_delve(app: &mut App) {
+    run(app, 30);
+    app.world_mut().write_message(MenuCommand::NewDelve);
+    run(app, 90);
+    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
+}
+
+fn level(app: &App) -> &Level {
+    &app.world().resource::<CurrentLevel>().0
+}
+
+fn player(app: &mut App) -> Entity {
+    let world = app.world_mut();
+    world.query_filtered::<Entity, With<Player>>().single(world).expect("one delver")
+}
+
+/// Stands the delver in the middle of cell `(x, y)` turned to `yaw`.
+fn stand(app: &mut App, (x, y): (u32, u32), yaw: f32) {
+    let body = player(app);
+    let [wx, _, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
+    let mut at = app.world_mut().entity_mut(body);
+    // (The looking system needs a window to run, which this app has none of, so the body is
+    // turned as well.)
+    let mut transform = at.get_mut::<Transform>().unwrap();
+    transform.translation = Vec3::new(wx, 0.0, wz);
+    transform.rotation = Quat::from_rotation_y(yaw);
+    let mut locomotion = at.get_mut::<Locomotion>().unwrap();
+    locomotion.yaw = yaw;
+    locomotion.velocity = Vec2::ZERO;
+}
+
+/// Presses and releases E, as typing into the window does.
+fn press_e(app: &mut App) {
+    press(app, KeyCode::KeyE, "e");
+}
+
+fn press(app: &mut App, key_code: KeyCode, text: &str) {
+    for state in [ButtonState::Pressed, ButtonState::Released] {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key: Key::Character(text.into()),
+            state,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+    }
+}
+
+/// What belongs to the delver: their hit points, what they wear and everything they carry.
+#[derive(Debug, PartialEq)]
+struct Delver {
+    hp: Health,
+    worn: Vec<String>,
+    carried: Vec<ItemId>,
+}
+
+fn delver(app: &mut App) -> Delver {
+    let body = player(app);
+    let hp = *app.world().get::<Health>(body).expect("the delver has hit points");
+    let inventory = app.world().resource::<Inventory>();
+    let mut worn: Vec<String> = inventory.equipped().iter().map(|(slot, item)| format!("{slot:?} {}", item.title())).collect();
+    worn.sort();
+    let mut carried: Vec<_> = inventory.ids().filter(|&id| inventory.is_carried(id)).collect();
+    carried.sort();
+    Delver { hp, worn, carried }
+}
+
+/// Every piece of the level by name, how many of each, besides sounds, which come and go.
+fn census(app: &mut App) -> BTreeMap<String, usize> {
+    let world = app.world_mut();
+    let mut counts = BTreeMap::new();
+    let mut query = world.query_filtered::<(Option<&Name>, Has<AudioPlayer>), (With<LevelPiece>, Allow<Disabled>)>();
+    for (name, audio) in query.iter(world) {
+        if !audio {
+            *counts.entry(name.map_or("unnamed".to_string(), |n| n.to_string())).or_default() += 1;
+        }
+    }
+    counts
+}
+
+fn count<T: Component>(app: &mut App) -> usize {
+    let world = app.world_mut();
+    world.query_filtered::<(), With<T>>().iter(world).count()
+}
+
+fn named(app: &mut App, name: &str) -> usize {
+    let world = app.world_mut();
+    world.query::<&Name>().iter(world).filter(|n| n.as_str() == name).count()
+}
+
+fn assert_at(app: &mut App, (x, y): (u32, u32), facing: fb_level::Facing, what: &str) {
+    let body = player(app);
+    let at = app.world().get::<Transform>(body).unwrap();
+    let [wx, _, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
+    assert!((at.translation.x - wx).abs() < 0.01 && (at.translation.z - wz).abs() < 0.01 && at.translation.y == 0.0, "{what}: arrived at {}", at.translation);
+    let looking = at.forward().as_vec3();
+    let (dx, dy) = facing.step();
+    assert!((looking.x - dx as f32).abs() < 0.01 && (looking.z - dy as f32).abs() < 0.01, "{what}: looks {looking}, not {facing:?}");
+}
+
+#[test]
+fn the_stairs_carry_the_delver_down_and_back_up_and_leave_each_level_whole() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+
+    // Level 1 of run 1207 has a way down and, being the first, no way up.
+    let first = level(&app).clone();
+    assert_eq!((first.seed, first.depth), (1207, 1));
+    assert_eq!(*app.world().resource::<Abyss>(), Abyss { run_seed: 1207, depth: 1, arrival: Arrival::Entered });
+    let down = *first.stair(StairKind::Down).expect("a way down");
+    assert!(first.stair(StairKind::Up).is_none());
+    assert_eq!((named(&mut app, "stair down"), named(&mut app, "stair up")), (1, 0));
+    assert!(app.world().resource::<BlockedCells>().0.contains(&(down.x as i32, down.y as i32)), "the stair cannot be walked onto");
+
+    // Hurt a little, so hit points are seen to carry over.
+    let body = player(&mut app);
+    app.world_mut().get_mut::<Health>(body).unwrap().hp -= 3;
+    let before = delver(&mut app);
+    assert!(!before.worn.is_empty() && !before.carried.is_empty(), "the delver starts with gear: {before:?}");
+
+    // Walk to the way down (standing before it, looking at it) and press E.
+    stand(&mut app, down.approach(), down.facing.yaw());
+    run(&mut app, 90);
+    let level_one = census(&mut app);
+    assert!(level_one.contains_key("stair down"), "{level_one:?}");
+    press_e(&mut app);
+    run(&mut app, 3);
+    assert!(app.world().get_resource::<Journey>().is_some(), "the screen is fading");
+    assert_eq!(app.world().resource::<Abyss>().depth, 1, "still on the first level while it fades out");
+    run(&mut app, 50);
+    assert_eq!(count::<DepthTitle>(&mut app), 1, "the depth shows on arrival");
+    run(&mut app, 60);
+    assert!(app.world().get_resource::<Journey>().is_none(), "the journey is over");
+
+    // Level 2: its own seed, standing at its way up, everything of the delver's with them.
+    let second = level(&app).clone();
+    assert_eq!((second.depth, second.seed), (2, depth_seed(1207, 2)));
+    assert_eq!(*app.world().resource::<Abyss>(), Abyss { run_seed: 1207, depth: 2, arrival: Arrival::FromAbove });
+    let up = *second.stair(StairKind::Up).expect("a way up");
+    let (sx, sy, facing) = second.start();
+    assert_eq!((sx, sy), up.approach());
+    assert_at(&mut app, (sx, sy), facing, "level 2");
+    assert_eq!(delver(&mut app), before, "the delver, their gear and their hit points are as they were");
+    assert!(app.world().resource::<BlockedCells>().0.contains(&(up.x as i32, up.y as i32)));
+    assert_eq!((named(&mut app, "stair down"), named(&mut app, "stair up"), named(&mut app, "entrance door")), (1, 1, 0), "this level's stairs and none of the first's");
+    // Nothing of level 1 is left standing in level 2.
+    let world = app.world_mut();
+    let items: Vec<_> = world.query::<&FloorItem>().iter(world).map(|f| f.spot).collect();
+    assert!(items.iter().all(|spot| second.items.contains(spot)), "an item of another level lies here");
+    let mut props: Vec<_> = world.query::<&PropPiece>().iter(world).map(|p| (p.index, p.spot)).collect();
+    props.sort_by_key(|p| p.0);
+    assert_eq!(props.into_iter().map(|p| p.1).collect::<Vec<_>>(), second.props, "the props are this level's");
+    assert_eq!(count::<Player>(&mut app), 1);
+    assert_eq!(count::<PlayerCamera>(&mut app), 1);
+
+    // And back up: the way up, then the first level again beside its way down.
+    stand(&mut app, up.approach(), up.facing.yaw());
+    run(&mut app, 30);
+    press_e(&mut app);
+    run(&mut app, 3);
+    assert!(app.world().get_resource::<Journey>().is_some());
+    run(&mut app, 200);
+    assert!(app.world().get_resource::<Journey>().is_none());
+    assert_eq!(*level(&app), first, "a depth is always the same level");
+    assert_eq!(*app.world().resource::<Abyss>(), Abyss { run_seed: 1207, depth: 1, arrival: Arrival::FromBelow });
+    let (ax, ay, away) = down.arrival();
+    assert_at(&mut app, (ax, ay), away, "level 1");
+    assert_eq!(delver(&mut app), before);
+    // The door shut behind the delver on the way in and does not swing again.
+    let world = app.world_mut();
+    let doors: Vec<_> = world.query::<&EntranceDoor>().iter(world).map(|d| (d.swing, d.cell)).collect();
+    assert_eq!(doors, vec![(DoorSwing::Shut, (first.entrance.x as i32, first.entrance.y as i32))]);
+    assert!(app.world().resource::<BlockedCells>().0.contains(&(first.entrance.x as i32, first.entrance.y as i32)));
+    // Level 1 stands as it did, with nothing from level 2 in it.
+    assert_eq!(census(&mut app), level_one, "the first level is laid out as before");
+}
+
+#[test]
+fn a_stair_is_not_used_with_the_back_turned_or_from_afar() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    let down = *level(&app).stair(StairKind::Down).expect("a way down");
+    // Beside it but looking away: E does nothing.
+    stand(&mut app, down.approach(), down.facing.opposite().yaw());
+    run(&mut app, 5);
+    press_e(&mut app);
+    run(&mut app, 5);
+    assert!(app.world().get_resource::<Journey>().is_none());
+    // In the starting cell, a long way off: nothing either.
+    let (sx, sy, facing) = level(&app).start();
+    stand(&mut app, (sx, sy), facing.yaw());
+    run(&mut app, 5);
+    press_e(&mut app);
+    run(&mut app, 5);
+    assert!(app.world().get_resource::<Journey>().is_none());
+    assert_eq!(app.world().resource::<Abyss>().depth, 1);
+}
+
+#[test]
+fn a_fall_on_any_depth_starts_the_next_delve_at_the_first_level_entrance() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    let first = level(&app).clone();
+    let down = *first.stair(StairKind::Down).expect("a way down");
+    stand(&mut app, down.approach(), down.facing.yaw());
+    run(&mut app, 30);
+    press_e(&mut app);
+    run(&mut app, 200);
+    assert_eq!(app.world().resource::<Abyss>().depth, 2);
+
+    // Fall on the second level.
+    let body = player(&mut app);
+    app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
+    run(&mut app, (FALL_TIME * 60.0) as usize + 30);
+    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
+    run(&mut app, 30);
+    assert_eq!(*app.world().resource::<Abyss>(), Abyss::default(), "the run is over");
+
+    // A new delve begins at the first level's entrance, whose door shuts behind the delver.
+    app.world_mut().write_message(MenuCommand::NewDelve);
+    run(&mut app, 90);
+    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
+    assert_eq!(*app.world().resource::<Abyss>(), Abyss { run_seed: 1207, depth: 1, arrival: Arrival::Entered });
+    assert_eq!(*level(&app), first);
+    let (sx, sy, facing) = level(&app).start();
+    assert_at(&mut app, (sx, sy), facing, "the new delve");
+    let world = app.world_mut();
+    let doors: Vec<_> = world.query::<&EntranceDoor>().iter(world).map(|d| d.swing).collect();
+    assert_eq!(doors, vec![DoorSwing::Open]);
+    // Walking in shuts it.
+    stand(&mut app, (sx, sy), facing.yaw());
+    let (dx, dy) = facing.step();
+    stand(&mut app, ((sx as i32 + dx * 2) as u32, (sy as i32 + dy * 2) as u32), facing.yaw());
+    run(&mut app, 120);
+    let world = app.world_mut();
+    let doors: Vec<_> = world.query::<&EntranceDoor>().iter(world).map(|d| d.swing).collect();
+    assert_eq!(doors, vec![DoorSwing::Shut]);
+}
+
+#[test]
+fn no_screen_is_open_while_the_level_changes_under_it() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    // The inventory is open when the way down is taken (as a message can arrive from anywhere):
+    // the journey closes it.
+    app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+    run(&mut app, 20);
+    app.world_mut().write_message(UseStair(StairKind::Down));
+    run(&mut app, 3);
+    assert!(app.world().get_resource::<Journey>().is_some());
+    assert_eq!(app.world().resource::<ScreenOpen>().0, None, "the screen is closed as the journey begins");
+    // And I, C, M and Esc open nothing until it is over, through the swap and the fade in.
+    for (key, text) in [(KeyCode::KeyI, "i"), (KeyCode::KeyC, "c"), (KeyCode::KeyM, "m"), (KeyCode::Escape, "")] {
+        press(&mut app, key, text);
+        assert_eq!(app.world().resource::<ScreenOpen>().0, None, "{key:?} opened a screen mid-journey");
+    }
+    for _ in 0..120 {
+        run(&mut app, 1);
+        assert_eq!(app.world().resource::<ScreenOpen>().0, None);
+    }
+    assert!(app.world().get_resource::<Journey>().is_none());
+    assert_eq!(app.world().resource::<Abyss>().depth, 2);
+    // Once it is over they open again.
+    press(&mut app, KeyCode::KeyI, "i");
+    assert_eq!(app.world().resource::<ScreenOpen>().0, Some(Screen::Inventory));
+}
+
+#[test]
+fn a_fallen_delver_takes_no_stairs() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    let down = *level(&app).stair(StairKind::Down).expect("a way down");
+    stand(&mut app, down.approach(), down.facing.yaw());
+    run(&mut app, 10);
+    let body = player(&mut app);
+    app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
+    run(&mut app, 10);
+    press_e(&mut app);
+    app.world_mut().write_message(UseStair(StairKind::Down));
+    run(&mut app, 30);
+    assert!(app.world().get_resource::<Journey>().is_none(), "the fallen cannot take the stairs");
+    assert_eq!(app.world().resource::<Abyss>().depth, 1);
+}
+
+#[derive(Resource, Default, Debug)]
+struct Seen(Vec<(u32, u32, usize, usize)>);
+
+#[test]
+fn the_old_level_is_whole_for_the_frame_it_is_left() {
+    let mut app = headless_game();
+    app.init_resource::<Seen>().add_systems(
+        Update,
+        (|level: Res<CurrentLevel>, abyss: Res<Abyss>, journey: Res<Journey>, items: Query<&FloorItem>, props: Query<&PropPiece>, mut seen: ResMut<Seen>| {
+            let _ = journey;
+            seen.0.push((level.0.depth, abyss.depth, items.iter().count(), props.iter().count()));
+        })
+        .in_set(LeavingLevel),
+    );
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    let first = level(&app).clone();
+    app.world_mut().write_message(UseStair(StairKind::Down));
+    run(&mut app, 200);
+    assert_eq!(app.world().resource::<Abyss>().depth, 2);
+    let seen = &app.world().resource::<Seen>().0;
+    assert_eq!(seen.len(), 1, "it runs once, for the one frame at black: {seen:?}");
+    let (level_depth, abyss_depth, items, props) = seen[0];
+    assert_eq!((level_depth, abyss_depth), (1, 1), "still the level being left");
+    assert!(items > 0 && items <= first.items.len(), "its floor items are all still there: {items}");
+    assert_eq!(props, first.props.len(), "and its props");
+}

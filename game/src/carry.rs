@@ -62,6 +62,7 @@ use crate::launch::AppState;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, level_has_focus};
 use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
+use crate::record::{WorldRecord, restore_item};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, Shimmer, ToonMaterial};
 use crate::tuning::{LightTuning, Tuning};
 use crate::ui::{BG, BRIGHT, UiFonts, rarity_color};
@@ -168,6 +169,12 @@ impl Plugin for CarryPlugin {
 }
 
 /// The light an Armory item gives while it burns or glows, if it is that kind of item.
+/// How high the toast line sits above the bottom of the view, in `vmin`: just clear of the orb
+/// cluster and its quick bar ([`crate::combat::orbs::cluster_layout`]).
+pub fn toast_lift() -> f32 {
+    crate::combat::orbs::MARGIN + crate::combat::orbs::cluster_layout().size.y + 1.5
+}
+
 pub fn item_light(item: &Item) -> Option<LightAnchor> {
     match item {
         Item::Torch(state) => TorchGenerator::light(state),
@@ -412,6 +419,9 @@ pub struct HeldKey {
     pub off: Option<ItemId>,
     /// The lit things carried in the main hand, the off hand and at the hip ([`carried_lights`]).
     pub lights: [Option<ItemId>; 3],
+    /// How burnt each of those lights looks, in twentieths of a torch's char, so a held torch
+    /// is fitted again about every 0.05 char as it burns down.
+    pub burn: [u8; 3],
     /// The lantern hung at the hip, and the belt it hangs from.
     pub hip: Option<ItemId>,
     pub belt: Option<ItemId>,
@@ -427,6 +437,8 @@ impl HeldKey {
                 let lit = carried_lights(inventory);
                 [fb_items::Slot::Mainhand, fb_items::Slot::Offhand, fb_items::Slot::Hip].map(|slot| lit.iter().find(|(s, _)| *s == slot).map(|(_, id)| *id))
             },
+            burn: [fb_items::Slot::Mainhand, fb_items::Slot::Offhand, fb_items::Slot::Hip]
+                .map(|slot| inventory.worn(slot).and_then(|id| inventory.item(id)).filter(|i| i.shape.lit() == Some(true)).map_or(0, |i| crate::inventory::char_bucket(&i.shape))),
             hip: inventory.worn(fb_items::Slot::Hip),
             belt: inventory.worn(fb_items::Slot::Belt),
             body: (character.folk, character.body_seed),
@@ -717,16 +729,32 @@ pub(crate) fn lay_out_items(
     old: Query<(Entity, &FloorItem)>,
     mut inventory: ResMut<Inventory>,
     tuning: Option<Res<Tuning>>,
+    record: Option<Res<WorldRecord>>,
     mut spawner: ItemSpawner,
 ) {
     for (entity, floor) in &old {
         inventory.forget(floor.id);
         commands.entity(entity).despawn();
     }
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    // A level that was left lays out what lay on its floor then (`crate::record`), else what it
+    // generated. Once a depth is recorded its record is the truth: rolling its loot again would
+    // bring back what was taken.
+    if let Some(saved) = record.as_deref().and_then(|r| r.level(level.0.depth)) {
+        if saved.floor.iter().map(|f| f.spot).ne(level.0.items.iter().copied()) {
+            warn!("the floor of depth {} disagrees with its record; laying out the record", level.0.depth);
+        }
+        for lying in &saved.floor {
+            if let Some(id) = restore_item(&mut inventory, &lying.item) {
+                spawn_floor_item(&mut spawner, &inventory, id, lying.spot, &tuning);
+            }
+        }
+        return;
+    }
     for spot in &level.0.items {
-        if let Some(item) = fb_items::roll_loot(spot.family, spot.seed) {
+        if let Some(item) = fb_items::roll_loot(spot.family, spot.seed, fb_items::Odds::loot(level.0.depth)) {
             let id = inventory.add(item);
-            spawn_floor_item(&mut spawner, &inventory, id, *spot, &tuning.as_deref().cloned().unwrap_or_default());
+            spawn_floor_item(&mut spawner, &inventory, id, *spot, &tuning);
         }
     }
 }
@@ -1088,6 +1116,7 @@ fn show_held(
                 Name::new(format!("Held {}", hand.item.family().key())),
                 HeldItem { item: hand.item.clone(), hand: hand.hand, point: hand.point },
                 crate::render::flame::FlameUp::default(),
+                crate::render::flame::FlameFacing(Vec3::NEG_Z),
                 HeldSway::new(transform),
                 transform,
                 Propagate(view_layer.clone()),
@@ -1183,9 +1212,10 @@ fn spawn_hud(commands: &mut Commands, camera: Entity, fonts: Option<&UiFonts>) {
             ));
             // The toast (`crate::inventory::Toast`): a line near the foot of the view, clear of
             // the card under the crosshair, saying what F equipped or why it could not. Cream
-            // with a dark shadow so it reads on lit stone and in the dark alike.
+            // with a dark shadow so it reads on lit stone and in the dark alike. It sits just above
+            // the orb cluster and quick bar, so the two never overlap at any window size.
             hud.spawn((
-                Node { position_type: PositionType::Absolute, width: percent(100), bottom: percent(7), justify_content: JustifyContent::Center, ..default() },
+                Node { position_type: PositionType::Absolute, width: percent(100), bottom: vmin(toast_lift()), justify_content: JustifyContent::Center, ..default() },
                 Pickable::IGNORE,
             ))
             .with_children(|row| {
@@ -1223,14 +1253,28 @@ fn follow_player_camera(
 fn upright_held_flames(
     view_models: Query<&ViewModelCamera>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    mut held: Query<(&ChildOf, &mut crate::render::flame::FlameUp), With<HeldItem>>,
+    mut held: Query<(&HeldItem, &ChildOf, &mut crate::render::flame::FlameUp, &mut crate::render::flame::FlameFacing)>,
 ) {
-    for (parent, mut up) in &mut held {
+    for (item, parent, mut up, mut facing) in &mut held {
         let Ok(view_model) = view_models.get(parent.parent()) else { continue };
         let Ok(eye) = eyes.get(view_model.follows) else { continue };
         let world_up = eye.rotation().inverse() * Vec3::Y;
         if up.0 != world_up {
             up.0 = world_up;
+        }
+        // A flame trails back toward the delver and out toward its hand's screen edge: against
+        // the horizontal of where the eye looks, blended with that side. Looking straight up
+        // or down leaves it where it was.
+        let look = eye.forward().as_vec3();
+        let ahead = Vec3::new(look.x, 0.0, look.z);
+        let side = eye.right().as_vec3();
+        let right = Vec3::new(side.x, 0.0, side.z);
+        if ahead.length() > 1e-3 && right.length() > 1e-3 {
+            let outward = if item.hand == fb_items::Slot::Offhand { -1.0 } else { 1.0 };
+            let ahead = eye.rotation().inverse() * crate::render::flame::held_facing(ahead.normalize(), right.normalize(), outward);
+            if facing.0 != ahead {
+                facing.0 = ahead;
+            }
         }
     }
 }
@@ -1373,12 +1417,12 @@ mod tests {
     fn crossbows_bows_and_shields_rest_flat_and_bags_stand() {
         for seed in 1..=16u32 {
             for family in [Family::Crossbow, Family::Bow, Family::Shield] {
-                let item = fb_items::roll_loot(family, seed).unwrap();
+                let item = fb_items::roll_loot(family, seed, fb_items::Odds::default()).unwrap();
                 let (size, _) = laid_size(&item);
                 assert!(size.y <= size.x.min(size.z) + 1e-3, "{family:?} {seed}: stands {size}");
             }
             for family in [Family::Bags, Family::Feet, Family::Lantern] {
-                let item = fb_items::roll_loot(family, seed).unwrap();
+                let item = fb_items::roll_loot(family, seed, fb_items::Odds::default()).unwrap();
                 let (_, transform) = laid_size(&item);
                 assert!((transform.rotation * Vec3::Y).y > 0.99, "{family:?} {seed}: laid down");
             }
@@ -1767,7 +1811,7 @@ mod tests {
 
     #[test]
     fn the_debug_pose_is_the_start_or_where_asked() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (x, y, facing) = level.start();
         let start = DebugPose::parse(&level, "1");
         assert_eq!(start.at, Vec3::new((x as f32 + 0.5) * CELL, 0.0, (y as f32 + 0.5) * CELL));
@@ -1818,7 +1862,7 @@ mod tests {
     /// An app with what picking up and setting down need, the level emptied of loot, and a
     /// pack worn on the back.
     fn delving_app() -> (App, ItemId) {
-        let mut level = fb_level::generate(1207);
+        let mut level = fb_level::generate(1207, 1);
         level.items.clear();
         let mut inventory = Inventory::default();
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
@@ -2088,11 +2132,11 @@ mod tests {
     #[test]
     fn e_picks_up_the_item_under_the_crosshair() {
         let (mut app, pack) = delving_app();
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (spot, item) = level
             .items
             .iter()
-            .map(|s| (*s, fb_items::roll_loot(s.family, s.seed).unwrap()))
+            .map(|s| (*s, fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth)).unwrap()))
             .find(|(_, i)| i.profile.packable && i.profile.holds.is_none())
             .unwrap();
         app.world_mut().resource_mut::<CurrentLevel>().0.items.push(spot);
@@ -2117,8 +2161,8 @@ mod tests {
 
     #[test]
     fn floor_items_on_1207_are_rolled_with_rarity() {
-        let level = fb_level::generate(1207);
-        let items: Vec<fb_items::Item> = level.items.iter().map(|s| fb_items::roll_loot(s.family, s.seed).unwrap()).collect();
+        let level = fb_level::generate(1207, 1);
+        let items: Vec<fb_items::Item> = level.items.iter().map(|s| fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth)).unwrap()).collect();
         assert_eq!(items.len(), level.items.len());
         for (item, spot) in items.iter().zip(&level.items) {
             assert_eq!(item.shape.family(), spot.family);
@@ -2133,8 +2177,8 @@ mod tests {
     fn every_torch_and_lantern_lying_in_a_level_can_be_held_in_the_off_hand() {
         let mut lights = 0;
         for seed in 1..=32 {
-            for spot in fb_level::generate(seed).items.iter().filter(|s| matches!(s.family, Family::Torch | Family::Lantern)) {
-                let item = fb_items::roll_loot(spot.family, spot.seed).unwrap();
+            for spot in fb_level::generate(seed, 1).items.iter().filter(|s| matches!(s.family, Family::Torch | Family::Lantern)) {
+                let item = fb_items::roll_loot(spot.family, spot.seed, fb_items::Odds::default()).unwrap();
                 let (base, name) = (item.base.clone(), item.title().to_string());
                 let mut inventory = Inventory::default();
                 let id = inventory.add(item);
@@ -2189,5 +2233,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_held_key_changes_as_a_lit_torch_crosses_a_char_bucket() {
+        use fb_items::Slot;
+        let mut inventory = Inventory::default();
+        let mut torch = lit_torch(2);
+        if let armory::Item::Torch(s) = &mut torch.shape {
+            s.burn.char = 0.0;
+            s.burn.fuel_left = armory::kindle::TORCH_SECONDS;
+        }
+        let id = inventory.add(torch);
+        inventory.wear(id, Slot::Offhand).unwrap();
+        let character = Character::default();
+        let key = |inventory: &Inventory| HeldKey::of(inventory, &character);
+        let start = key(&inventory);
+        inventory.burn_lights(60.0);
+        assert_eq!(key(&inventory), start, "a minute is under a bucket");
+        inventory.burn_lights(armory::kindle::TORCH_SECONDS * 0.06);
+        assert_ne!(key(&inventory), start, "past 0.05 char the held torch is fitted again");
+    }
+
+    #[test]
+    fn the_toast_sits_above_the_orbs_and_quick_bar() {
+        let layout = crate::combat::orbs::cluster_layout();
+        let cluster_top = crate::combat::orbs::MARGIN + layout.size.y;
+        assert!(toast_lift() > cluster_top, "{} over {}", toast_lift(), cluster_top);
+        assert!(toast_lift() < 40.0, "still near the foot of the view");
     }
 }

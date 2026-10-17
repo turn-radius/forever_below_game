@@ -14,7 +14,7 @@ use armory::{
     cond::{Condition, ConditionState},
 };
 use bevy::prelude::*;
-use fb_body::{Body, BodySpec, Side, fit_hands, fit_hip, fit_worn};
+use fb_body::{Body, BodySpec, Gait, Joint, PartSkin, Rig, Side, SkinRegion, Skinner, fit_hands, fit_hip, fit_worn};
 use fb_items::Slot;
 
 use crate::carry::{appearance_of, item_light};
@@ -32,6 +32,12 @@ pub struct Piece {
     /// Whether it gives light (a lit torch or lantern in hand). Drawn without a shadow, or its
     /// own flame and body would black out its light, as for lit things on the floor.
     pub lit: bool,
+    /// How each part's vertices follow the rig's joints (`fb_body::Skinner`), parallel to the
+    /// mesh's parts. `None` for what rides a joint rigidly ([`Piece::attach`]).
+    pub skin: Option<Vec<PartSkin>>,
+    /// The joint a held item rides on, rigidly, in place of weights: the wrist of its hand, or
+    /// the pelvis for something hung at the hip.
+    pub attach: Option<Joint>,
 }
 
 /// A lit thing a figure holds: where its light is in body space, the light, and the hand.
@@ -40,6 +46,8 @@ pub struct HeldLight {
     pub at: Vec3,
     pub anchor: LightAnchor,
     pub side: Side,
+    /// The joint it rides on: the hand's wrist, or the pelvis for a lantern at the hip.
+    pub joint: Joint,
 }
 
 /// A body dressed and holding its items, as pieces to draw.
@@ -54,6 +62,11 @@ pub struct Figure {
     pub light: Option<HeldLight>,
     /// Where the head turns, in body space: the base of the neck.
     pub neck: Vec3,
+    /// The body's joints at rest, and how it walks and stands ([`crate::folk_pose`] poses them).
+    pub rig: Rig,
+    pub gait: Gait,
+    /// Whether a hood is worn: the head and hood then turn with the body, not about the neck.
+    pub hooded: bool,
 }
 
 impl Figure {
@@ -74,25 +87,47 @@ impl Figure {
         let condition = Condition { state: ConditionState::Custom, wear: dirt.clamp(0.0, 1.0), ..Condition::default() };
         let flesh = ItemAppearance { condition, seed: spec.seed, ..default() };
         let hooded = matches!(held(Slot::Head), Some(armory::Item::Hood(_)));
+        // Every vertex of the skin and the gear follows the rig's joints, by where it rests; what
+        // is held rides a joint rigidly. The head and the hood turn with the body under a hood.
+        let skinner = Skinner::new(&body);
+        let head_region = if hooded { SkinRegion::Chest } else { SkinRegion::Head };
+        let weights = |mesh: &ItemMesh, region: &dyn Fn(&str) -> SkinRegion| Some(skinner.mesh(mesh, region));
         let mut pieces = vec![
-            Piece { name: "Body".into(), mesh: skin, appearance: flesh, on_head: false, lit: false },
-            Piece { name: "Head".into(), mesh: head, appearance: flesh, on_head: !hooded, lit: false },
+            Piece { name: "Body".into(), appearance: flesh, on_head: false, lit: false, skin: weights(&skin, &SkinRegion::of_skin), attach: None, mesh: skin },
+            Piece { name: "Head".into(), appearance: flesh, on_head: !hooded, lit: false, skin: weights(&head, &|_| head_region), attach: None, mesh: head },
         ];
         for layer in &fit.layers {
             let Some((_, item)) = worn.iter().find(|(slot, _)| *slot == layer.slot) else { continue };
             let on_head = layer.slot == Slot::Head && !hooded;
-            pieces.push(Piece { name: item.title().to_string(), mesh: layer.mesh.clone(), appearance: appearance_of(&item.shape), on_head, lit: false });
+            let region = |name: &str| if layer.slot == Slot::Head && hooded { SkinRegion::Chest } else { SkinRegion::of_worn(layer.slot, name) };
+            pieces.push(Piece {
+                name: item.title().to_string(),
+                mesh: layer.mesh.clone(),
+                appearance: appearance_of(&item.shape),
+                on_head,
+                lit: false,
+                skin: weights(&layer.mesh, &region),
+                attach: None,
+            });
         }
         let mut light = None;
         for (slot, fit) in [(Slot::Mainhand, &hands.main), (Slot::Offhand, &hands.off)] {
             let (Some(fit), Some((_, item))) = (fit, worn.iter().find(|(s, _)| *s == slot)) else { continue };
             let anchor = item_light(&fit.item);
-            pieces.push(Piece { name: item.title().to_string(), mesh: fit.mesh.clone(), appearance: appearance_of(&fit.item), on_head: false, lit: anchor.is_some() });
+            let side = if slot == Slot::Mainhand { fb_body::MAIN_HAND } else { fb_body::OFF_HAND };
+            pieces.push(Piece {
+                name: item.title().to_string(),
+                mesh: fit.mesh.clone(),
+                appearance: appearance_of(&fit.item),
+                on_head: false,
+                lit: anchor.is_some(),
+                skin: None,
+                attach: Some(Joint::wrist(side)),
+            });
             if light.is_none()
                 && let Some(anchor) = anchor
             {
-                let side = if slot == Slot::Mainhand { fb_body::MAIN_HAND } else { fb_body::OFF_HAND };
-                light = Some(HeldLight { at: Vec3::from_array(fit.to_body(anchor.position)), anchor, side });
+                light = Some(HeldLight { at: Vec3::from_array(fit.to_body(anchor.position)), anchor, side, joint: Joint::wrist(side) });
             }
         }
         // A lantern hung at the hip, from the belt; the carried light if no hand holds one.
@@ -101,15 +136,25 @@ impl Figure {
             && let Some(hip) = fit_hip(&body, &item.shape, &belt.mesh)
         {
             let anchor = item_light(&hip.item);
-            pieces.push(Piece { name: item.title().to_string(), mesh: hip.mesh.clone(), appearance: appearance_of(&hip.item), on_head: false, lit: anchor.is_some() });
+            pieces.push(Piece {
+                name: item.title().to_string(),
+                mesh: hip.mesh.clone(),
+                appearance: appearance_of(&hip.item),
+                on_head: false,
+                lit: anchor.is_some(),
+                skin: None,
+                attach: Some(Joint::Pelvis),
+            });
             if light.is_none()
                 && let Some(anchor) = anchor
             {
-                light = Some(HeldLight { at: Vec3::from_array(hip.to_body(anchor.position)), anchor, side: hip.side });
+                light = Some(HeldLight { at: Vec3::from_array(hip.to_body(anchor.position)), anchor, side: hip.side, joint: Joint::Pelvis });
             }
         }
         let neck = Vec3::from_array(body.neck_base().origin);
-        Figure { body, pieces, light, neck }
+        let rig = Rig::of(&body);
+        let gait = Gait::new(&body, &rig);
+        Figure { body, pieces, light, neck, rig, gait, hooded }
     }
 
     /// The figure's bounds in body space, every piece included.

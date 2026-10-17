@@ -23,14 +23,18 @@ use bevy::{
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use fb_body::Side;
+use fb_character::combat::Odds;
 
+use super::callouts::{Callout, Outcome};
 use super::feedback::{Corpse, Struck};
-use super::{Health, RunDice, SwingKind, Target, Weapon, target_in_reach};
+use super::{ArmourClass, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach};
 use crate::carry::{HeldItem, ViewModelCamera};
 use crate::view_model::ViewHold;
-use crate::character::{Character, modifier};
+use crate::character::{Character, DelverStamina, modifier};
 use crate::creatures::{Bones, Critter, HitShape};
 use crate::creatures::behaviour::body_radius;
+use crate::folk::Denizen;
+use crate::folk_pose::FolkAnim;
 use crate::inventory::Inventory;
 use crate::keymap::{Action, ActionInput};
 use crate::play::{DelveSystems, Player, PlayerCamera, level_has_focus};
@@ -40,7 +44,10 @@ pub struct SwingPlugin;
 
 impl Plugin for SwingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_swing_sound)
+        app.add_message::<Struck>()
+            .add_message::<Callout>()
+            .add_message::<SwungAt>()
+            .add_systems(Startup, load_swing_sound)
             .add_systems(
                 Update,
                 (
@@ -63,6 +70,12 @@ pub const LANDS: f32 = 0.24;
 /// the second, then recovered.
 const DRAWN: f32 = 0.34;
 const THROWN: f32 = 0.52;
+
+/// A swing's blow finding `target` in reach, whether or not it lands: the delver attacked it.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SwungAt {
+    pub target: Entity,
+}
 
 /// A swing under way, on the [`Player`].
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -112,6 +125,10 @@ pub struct SwingPractice {
     pub repeat: bool,
 }
 
+/// What the toast says when a winded delver tries to swing.
+const WINDED: &str = "Too winded to swing";
+
+
 /// A delver with no swing under way.
 type Ready = (With<Player>, Without<Swing>);
 
@@ -130,11 +147,11 @@ fn start_swing(
     tuning: Option<Res<crate::tuning::Tuning>>,
     mut dice: ResMut<RunDice>,
     mut last: Local<Option<Strike>>,
-    practice: Option<Res<SwingPractice>>,
-    players: Query<(Entity, &Transform, Option<&Health>), Ready>,
+    (practice, rules): (Option<Res<SwingPractice>>, Option<Res<crate::rules::GameRules>>),
+    mut toasts: crate::inventory::Toasts,
+    mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina), Ready>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    creatures: Query<(Entity, &Critter, &Transform, Option<&Bones>), Without<Corpse>>,
-    shapes: Query<(&GlobalTransform, &HitShape)>,
+    strikeable: Strikeable,
 ) {
     let looking = cursor.is_none_or(|c| c.grab_mode != CursorGrabMode::None);
     let practice = practice.as_deref().copied().unwrap_or_default();
@@ -143,18 +160,28 @@ fn start_swing(
         return;
     }
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
-    for (player, at, health) in &players {
+    let practising = practice.repeat || crate::launch::env_set("FB_SWING");
+    for (player, at, health, mut stamina) in &mut players {
         if health.is_some_and(Health::is_down) {
             continue;
+        }
+        // A winded delver cannot swing; each swing otherwise takes its bite of stamina.
+        if !practising {
+            if !stamina.0.can_exert() {
+                toasts.say_once(WINDED);
+                continue;
+            }
+            let mut spent = stamina.0;
+            let rules = crate::rules::GameRules::of(&rules);
+            spent.spend_with(rules, rules.stamina.swing_cost);
+            stamina.0 = spent;
         }
         let weapon = Weapon::in_hand(&inventory, &character);
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
-            let targets: Vec<Target> = creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &shapes)).collect();
             let combat = &tuning.combat;
-            let target = target_in_reach(from, at.forward().as_vec3().xz(), weapon.reach * combat.reach_scale, combat.hit_cone(), &targets)?;
-            let (_, critter, root, bones) = creatures.get(target).ok()?;
-            toward_target(eye, body_points(critter, root, bones, &shapes), &tuning.view)
+            let target = target_in_reach(from, at.forward().as_vec3().xz(), weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets())?;
+            toward_target(eye, strikeable.points(target), &tuning.view)
         });
         let flourish = Vec3::new(dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0));
         let strike = practice.strike.unwrap_or_else(|| Strike::roll(weapon.kind, *last, &mut dice.0));
@@ -167,11 +194,42 @@ fn start_swing(
     }
 }
 
-/// The points of a creature's body a blow might head for: the centres of its bones' spheres
-/// where the last pose put them, or a little above its root with no shaped bones.
-fn body_points(critter: &Critter, root: &Transform, bones: Option<&Bones>, shapes: &Query<(&GlobalTransform, &HitShape)>) -> Vec<Vec3> {
-    let points: Vec<Vec3> = bones.iter().flat_map(|b| b.0.iter()).filter_map(|&bone| shapes.get(bone).ok()).flat_map(|(at, shape)| shape.spheres(at)).map(|(centre, _)| centre).collect();
-    if points.is_empty() { vec![root.translation + Vec3::Y * body_radius(critter)] } else { points }
+/// Everything standing that a swing can find: the living creatures, by their bones' hit
+/// shapes ([`body_targets`]), and the living folk, by the circle each stands in
+/// ([`Denizen::radius`]: their shoulders and clothes, which also keeps the delver off them).
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Strikeable<'w, 's> {
+    creatures: Query<'w, 's, (Entity, &'static Critter, &'static Transform, Option<&'static Bones>), Without<Corpse>>,
+    folk: Query<'w, 's, (Entity, &'static Denizen, &'static Transform, Option<&'static Children>), Without<Corpse>>,
+    anims: Query<'w, 's, &'static FolkAnim>,
+    joints: Query<'w, 's, &'static GlobalTransform, With<crate::folk_pose::FolkJoint>>,
+    shapes: Query<'w, 's, (&'static GlobalTransform, &'static HitShape)>,
+}
+
+/// The joints of a folk a blow heads for: the hips, the chest and the neck.
+const FOLK_AIM_JOINTS: [fb_body::Joint; 3] = [fb_body::Joint::Pelvis, fb_body::Joint::Chest, fb_body::Joint::Head];
+
+impl Strikeable<'_, '_> {
+    /// Every body a blow might land on, as circles on the floor.
+    pub fn targets(&self) -> Vec<Target> {
+        let creatures = self.creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes));
+        let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target { entity, centre: t.translation.xz(), radius: denizen.radius });
+        creatures.chain(folk).collect()
+    }
+
+    /// The points of `target`'s body a blow might head for: a creature's bones' spheres where
+    /// the last pose put them (a little above its root with no shaped bones), a folk's hips,
+    /// chest and neck (its middle with no skeleton).
+    pub fn points(&self, target: Entity) -> Vec<Vec3> {
+        if let Ok((_, critter, root, bones)) = self.creatures.get(target) {
+            let points: Vec<Vec3> = bones.iter().flat_map(|b| b.0.iter()).filter_map(|&bone| self.shapes.get(bone).ok()).flat_map(|(at, shape)| shape.spheres(at)).map(|(centre, _)| centre).collect();
+            return if points.is_empty() { vec![root.translation + Vec3::Y * body_radius(critter)] } else { points };
+        }
+        let Ok((_, denizen, root, children)) = self.folk.get(target) else { return Vec::new() };
+        let anim = children.into_iter().flat_map(|c| c.iter()).find_map(|c| self.anims.get(c).ok());
+        let points: Vec<Vec3> = anim.iter().flat_map(|a| FOLK_AIM_JOINTS.map(|j| a.joint(j))).filter_map(|j| self.joints.get(j).ok()).map(GlobalTransform::translation).collect();
+        if points.is_empty() { vec![root.translation + Vec3::Y * 0.6 * denizen.max.y] } else { points }
+    }
 }
 
 /// Where a blow at a creature heads in the view model: of `points` (world space), the one
@@ -194,8 +252,9 @@ pub fn toward_target(eye: &GlobalTransform, points: Vec<Vec3>, view: &crate::tun
 /// the half height. Our own.
 const TOWARD_LIMIT: f32 = 0.6;
 
-/// Moves each swing on; at [`LANDS`] its blow finds the nearest creature in reach and ahead,
-/// and rolls its damage.
+/// Moves each swing on; at [`LANDS`] its blow finds the nearest creature or folk in reach and
+/// ahead, rolls to hit against its [`ArmourClass`] (at disadvantage while the delver is
+/// poisoned, [`fb_character::poison::Poisoned::attack_odds`]), and on a hit rolls its damage.
 #[allow(clippy::too_many_arguments)]
 fn land_blows(
     mut commands: Commands,
@@ -203,23 +262,35 @@ fn land_blows(
     character: Res<Character>,
     tuning: Res<crate::tuning::Tuning>,
     mut dice: ResMut<RunDice>,
-    mut players: Query<(Entity, &Transform, &mut Swing), With<Player>>,
-    creatures: Query<(Entity, &Critter, &Transform, Option<&Bones>), Without<Corpse>>,
-    shapes: Query<(&GlobalTransform, &HitShape)>,
+    mut players: Query<(Entity, &Transform, &mut Swing, Option<&crate::character::DelverPoison>), With<Player>>,
+    strikeable: Strikeable,
+    armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
+    mut swung: MessageWriter<SwungAt>,
+    mut callouts: MessageWriter<Callout>,
+    rules: Option<Res<crate::rules::GameRules>>,
 ) {
+    let rules = crate::rules::GameRules::of(&rules);
     let dt = time.delta_secs();
-    for (player, at, mut swing) in &mut players {
+    for (player, at, mut swing, poison) in &mut players {
         swing.t += dt;
         if !swing.landed && swing.t >= LANDS {
             swing.landed = true;
             let from = at.translation.xz();
             let forward = at.forward().as_vec3().xz();
-            let targets: Vec<Target> = creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &shapes)).collect();
             let combat = &tuning.combat;
-            if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &targets) {
-                let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
-                struck.write(Struck { target, damage, from });
+            if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
+                swung.write(SwungAt { target });
+                let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
+                let odds = poison.map_or(Odds::Even, |p| p.0.attack_odds());
+                let attack = attack_roll(rules, &swing.weapon, character.strength(), ac.0, odds, &mut dice.0);
+                info!("swing: {}", attack.line());
+                if attack.hit {
+                    let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20 });
+                } else {
+                    callouts.write(Callout { target, outcome: Outcome::Miss });
+                }
             }
         }
         if swing.t >= SWING_TIME {
@@ -507,6 +578,64 @@ pub(crate) fn lean_into_blow(swings: Query<&Swing, With<Player>>, mut cameras: Q
 mod tests {
     use super::*;
     use crate::view_model::{held_in_view, view_hold};
+
+    /// A delver at a table with nothing to hit, and the attack key pressed.
+    fn swinger() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<Inventory>()
+            .init_resource::<Character>()
+            .init_resource::<RunDice>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<crate::inventory::Toast>()
+            .add_systems(Update, start_swing);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        let delver = app.world_mut().spawn((Player, Transform::default())).id();
+        (app, delver)
+    }
+
+    #[test]
+    fn each_swing_takes_a_fixed_bite_of_stamina() {
+        let (mut app, delver) = swinger();
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_some());
+        let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
+        assert!((value - (1.0 - fb_character::SWING_COST)).abs() < 1e-9, "{value}");
+        app.world_mut().entity_mut(delver).remove::<Swing>();
+        app.update();
+        let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
+        assert!((value - (1.0 - 2.0 * fb_character::SWING_COST)).abs() < 1e-9, "{value}");
+    }
+
+    #[test]
+    fn a_winded_delver_cannot_swing() {
+        let (mut app, delver) = swinger();
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.05, winded: true };
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_none());
+        assert_eq!(app.world().get::<DelverStamina>(delver).unwrap().0.value, 0.05, "refused, so no bite");
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.25, winded: false };
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_some());
+    }
+
+    #[test]
+    fn a_winded_swing_says_so_once_while_the_line_shows() {
+        let (mut app, delver) = swinger();
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.05, winded: true };
+        app.update();
+        let (text, until) = {
+            let toast = app.world().resource::<crate::inventory::Toast>();
+            (toast.text.clone(), toast.until)
+        };
+        assert_eq!(text, WINDED);
+        assert!(until > 0.0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(app.world().resource::<crate::inventory::Toast>().until, until, "not said again while showing");
+    }
 
     const STRIKES: [Strike; 6] = [Strike::Overhead, Strike::HighRight, Strike::HighLeft, Strike::FromRight, Strike::FromLeft, Strike::Rising];
 

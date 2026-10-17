@@ -339,6 +339,7 @@ fn spare_torch(item: &mut Item, _: &mut Mulberry32) {
     if let Item::Torch(s) = item {
         s.burn.state = BurnState::Fresh;
         s.burn.char = 0.0;
+        s.burn.fuel_left = armory::kindle::TORCH_SECONDS;
     }
 }
 

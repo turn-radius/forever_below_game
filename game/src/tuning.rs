@@ -42,10 +42,13 @@ pub struct Tuning {
     pub view: ViewTuning,
     pub moving: MovingTuning,
     pub creatures: CreatureTuning,
+    pub folk: FolkTuning,
     pub combat: CombatTuning,
     pub light: LightTuning,
     pub sound: SoundTuning,
     pub interface: InterfaceTuning,
+    pub clock: ClockTuning,
+    pub recovery: RecoveryTuning,
 }
 
 /// How the first-person view draws.
@@ -161,6 +164,40 @@ impl Default for CreatureTuning {
     }
 }
 
+/// How folk go about the level (`crate::folk_routine`). Where each goes is rolled from its
+/// seed; these only set how far, how fast and how long they wait.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FolkTuning {
+    /// An unhurried walking pace for a human, world units per second (1.1 m/s, a stroll under
+    /// the delver's 1.4). Shorter folk go slower, in proportion to their height. Our own.
+    pub walk_speed: f32,
+    /// The least and most seconds folk wait between walks. Our own.
+    pub pause_min: f32,
+    pub pause_max: f32,
+    /// How far from its spot a person strolls, world units (9 m). Our own.
+    pub wander_radius: f32,
+    /// How near the player must come, in sight, for a person to stop and face them, world units
+    /// (2.8 m). Our own.
+    pub notice_distance: f32,
+    /// How far the player must go before a person who faced them carries on, world units (4 m;
+    /// beyond the notice distance so they do not flicker). Our own.
+    pub release_distance: f32,
+    /// Seconds the player must stay away before a person carries on. Our own.
+    pub release_delay: f32,
+    /// Seconds a hostile folk goes without sight of the delver before giving up the fight and
+    /// going back to their routine, friendly again (`crate::folk_combat::fight`). Our own: long
+    /// enough to search a room or two for someone who ducked round a corner, short enough that
+    /// slipping away works.
+    pub lose_interest_after: f32,
+}
+
+impl Default for FolkTuning {
+    fn default() -> Self {
+        FolkTuning { walk_speed: 14.0, pause_min: 3.0, pause_max: 8.0, wander_radius: 90.0, notice_distance: 28.0, release_distance: 40.0, release_delay: 1.0, lose_interest_after: 25.0 }
+    }
+}
+
 /// A size multiplier for each species, 1 as rolled.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -171,11 +208,13 @@ pub struct CreatureSizes {
     pub viper: f32,
     /// The constrictor snake.
     pub constrictor: f32,
+    /// The skeleton.
+    pub skeleton: f32,
 }
 
 impl Default for CreatureSizes {
     fn default() -> Self {
-        CreatureSizes { rat: 1.0, giant_rat: 1.0, viper: 1.0, constrictor: 1.0 }
+        CreatureSizes { rat: 1.0, giant_rat: 1.0, viper: 1.0, constrictor: 1.0, skeleton: 1.0 }
     }
 }
 
@@ -187,6 +226,7 @@ impl CreatureSizes {
             Species::GiantRat => self.giant_rat,
             Species::PoisonousSnake => self.viper,
             Species::ConstrictorSnake => self.constrictor,
+            Species::Skeleton => self.skeleton,
         }
     }
 }
@@ -287,11 +327,17 @@ pub struct SoundTuning {
     pub silence_max: f32,
     /// Sound effects' linear volume at full, 0 to 1.
     pub effects_volume: f32,
+    /// Ambient sounds' linear volume at full, 0 to 1: drips and rumbles.
+    pub ambience_volume: f32,
+    /// The shortest time between stone rumbles, seconds.
+    pub rumble_interval_min: f32,
+    /// The longest time between stone rumbles, seconds.
+    pub rumble_interval_max: f32,
 }
 
 impl Default for SoundTuning {
     fn default() -> Self {
-        SoundTuning { music_mix: 0.35, silence_min: 45.0, silence_max: 75.0, effects_volume: 1.0 }
+        SoundTuning { music_mix: 0.35, silence_min: 45.0, silence_max: 75.0, effects_volume: 1.0, ambience_volume: 0.3, rumble_interval_min: 60.0, rumble_interval_max: 180.0 }
     }
 }
 
@@ -299,15 +345,66 @@ impl Default for SoundTuning {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InterfaceTuning {
-    /// Logical pixels from one grid line to the next (the plate's `--cs`).
+    /// Logical pixels from one grid line to the next (the plate's `--cs`) in a window
+    /// [`InterfaceTuning::REFERENCE_HEIGHT`] lines high. The whole screen scales with the
+    /// window's height from there ([`InterfaceTuning::scale`]).
     pub cell_size: f32,
+    /// The fewest logical pixels a cell is drawn at, however short the window.
+    pub min_cell_size: f32,
     /// How long the mouse rests on an item before its card shows, seconds.
     pub hover_delay: f32,
 }
 
 impl Default for InterfaceTuning {
     fn default() -> Self {
-        InterfaceTuning { cell_size: 46.0, hover_delay: 0.0 }
+        InterfaceTuning { cell_size: 72.0, min_cell_size: 48.0, hover_delay: 0.0 }
+    }
+}
+
+impl InterfaceTuning {
+    /// The window height, in logical pixels, at which the screen is drawn at its own size.
+    pub const REFERENCE_HEIGHT: f32 = 1080.0;
+
+    /// How much the inventory screen is scaled (Bevy's `UiScale`) in a window `height`
+    /// logical pixels high: in step with the height, so the screen keeps one layout at any
+    /// resolution, but never so far down that a cell is drawn under `min_cell_size`. Our own.
+    pub fn scale(&self, height: f32) -> f32 {
+        (height / Self::REFERENCE_HEIGHT).max(self.min_cell_size / self.cell_size.max(1.0))
+    }
+
+    /// The logical pixels a cell is drawn at in a window `height` logical pixels high.
+    pub fn cell_px(&self, height: f32) -> f32 {
+        self.cell_size * self.scale(height)
+    }
+}
+
+/// How game time advances.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClockTuning {
+    /// How many game seconds pass per real second: 12 means 1 game hour takes 300 real seconds
+    /// (5 minutes). The clock only advances while delving and not paused.
+    pub game_seconds_per_second: f32,
+}
+
+impl Default for ClockTuning {
+    fn default() -> Self {
+        ClockTuning { game_seconds_per_second: 12.0 }
+    }
+}
+
+/// How the delver mends.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecoveryTuning {
+    /// Game minutes a fed and watered delver takes to regain one hit point
+    /// ([`fb_character::recovery`]). Our own.
+    pub minutes_per_hit_point: f32,
+}
+
+impl Default for RecoveryTuning {
+    fn default() -> Self {
+        RecoveryTuning { minutes_per_hit_point: fb_character::recovery::MINUTES_PER_HIT_POINT as f32 }
     }
 }
 
@@ -567,9 +664,9 @@ mod tests {
 
     #[test]
     fn every_species_has_a_size() {
-        let sizes = CreatureSizes { rat: 1.0, giant_rat: 2.0, viper: 3.0, constrictor: 4.0 };
-        let all = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake];
-        assert_eq!(all.map(|s| sizes.of(s)), [1.0, 2.0, 3.0, 4.0]);
+        let sizes = CreatureSizes { rat: 1.0, giant_rat: 2.0, viper: 3.0, constrictor: 4.0, skeleton: 5.0 };
+        let all = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton];
+        assert_eq!(all.map(|s| sizes.of(s)), [1.0, 2.0, 3.0, 4.0, 5.0]);
     }
 
     #[test]

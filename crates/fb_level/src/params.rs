@@ -11,6 +11,8 @@ use armory::reflect::{Field, FieldKind};
 use armory::slider::Slider;
 use serde::{Deserialize, Serialize};
 
+use crate::LevelStyle;
+
 /// Declares [`LevelParams`], its defaults and its sliders from one table:
 /// `section: field: type = default, min, max, step; "what it is"`.
 macro_rules! level_params {
@@ -63,6 +65,7 @@ level_params! {
         hall_chance: f64 = 0.2, 0.0, 1.0, 0.01; "Chance a room is a hall, grown on both sides."
         hall_grow_min: u32 = 3, 0.0, 8.0, 1.0; "Least a hall grows."
         hall_grow_max: u32 = 5, 0.0, 12.0, 1.0; "Most a hall grows."
+        regular_chance: f64 = 0.0, 0.0, 1.0, 0.01; "Chance a room is made regular: both sides even, no longer than twice the other."
         room_gap: u32 = 3, 3.0, 8.0, 1.0; "Rock kept between rooms and the edge: three leaves a door each side and a corridor between."
         placement_tries: u32 = 400, 20.0, 2000.0, 10.0; "Rooms tried before settling for those placed."
         entrance_depth: u32 = 6, 1.0, 20.0, 1.0; "Deepest rock between the entrance edge and the first room."
@@ -83,6 +86,32 @@ level_params! {
 }
 
 impl LevelParams {
+    /// The defaults of `style`: rough rock's are [`LevelParams::default`], the values the
+    /// generator has always used; stone halls lay out wider, more regular rooms, more halls,
+    /// straighter corridors and a higher ceiling.
+    pub fn for_style(style: LevelStyle) -> Self {
+        match style {
+            LevelStyle::RoughRock => Self::default(),
+            LevelStyle::StoneHalls => Self {
+                width: 64,
+                height: 52,
+                ceiling: 40.0,
+                rooms_min: 5,
+                rooms_max: 9,
+                side_min: 4,
+                side_max: 8,
+                hall_chance: 0.45,
+                hall_grow_min: 3,
+                hall_grow_max: 5,
+                regular_chance: 0.8,
+                turn_cost: 12,
+                loop_chance: 0.4,
+                brazier_min_area: 30,
+                ..Self::default()
+            },
+        }
+    }
+
     /// Every parameter as a slider [`Field`], in declaration order.
     pub fn fields(&self) -> Vec<Field> {
         Self::SLIDERS

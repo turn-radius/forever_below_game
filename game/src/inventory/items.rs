@@ -39,6 +39,10 @@ pub enum Refusal {
     WrongSlot,
     /// The hip with no belt to hang from.
     NoBelt,
+    /// A quickslot has nothing to do with it.
+    NotUsable,
+    /// Not carried: a quickslot only takes what the delver has with them.
+    NotCarried,
     Unknown,
 }
 
@@ -53,6 +57,8 @@ impl Refusal {
             Refusal::NotWearable => "That is not something you can wear.",
             Refusal::WrongSlot => "That does not go there.",
             Refusal::NoBelt => "It hangs from a belt. Wear one first.",
+            Refusal::NotUsable => "A quickslot cannot use that.",
+            Refusal::NotCarried => "Pick it up first.",
             Refusal::Unknown => "That is not here.",
         }
     }
@@ -68,6 +74,20 @@ impl From<Misfit> for Refusal {
 /// they show: the pack or sack on the back, then the belt's pouch (the plate's
 /// `containersOf`).
 pub const CARRYING_SLOTS: [Slot; 2] = [Slot::Back, Slot::Belt];
+
+/// The minute of fuel a light's card shows ("Fuel 0:42"), rounded as the card rounds it.
+fn fuel_minute(item: &Item) -> Option<u32> {
+    item.fuel_left().map(|seconds| (seconds.max(0.0) / 60.0).round() as u32)
+}
+
+/// How burnt a torch looks, in twentieths of its char, so a held torch is refitted about every
+/// 0.05 char; 0 for anything else.
+pub fn char_bucket(shape: &armory::Item) -> u8 {
+    match shape {
+        armory::Item::Torch(s) => (s.burn.char * 20.0) as u8,
+        _ => 0,
+    }
+}
 
 /// Where the item an equip displaced went: back where the equipped item came from, or, if it
 /// did not fit there, loose underfoot.
@@ -124,6 +144,23 @@ impl Inventory {
     /// now; a spent torch, or anything that is not a light, is left as it was.
     pub fn toggle_light(&mut self, id: ItemId) -> Result<bool, armory::kindle::Unlit> {
         self.items.get_mut(&id).ok_or(armory::kindle::Unlit::NotALight)?.shape.toggle_lit()
+    }
+
+    /// Burns `seconds` of game time off every lit torch and lantern, wherever it is: in a hand,
+    /// at the hip, in a bag or on the floor ([`fb_items::Item::burn`]). Returns whether
+    /// anything shown changed: a light's fuel minute on its card, its state, or its char bucket
+    /// ([`char_bucket`]), so the caller can mark the inventory changed only then.
+    pub fn burn_lights(&mut self, seconds: f32) -> bool {
+        let mut shown = false;
+        for item in self.items.values_mut() {
+            if item.shape.lit() != Some(true) {
+                continue;
+            }
+            let before = (item.shape.lit(), fuel_minute(item), char_bucket(&item.shape));
+            item.burn(seconds);
+            shown |= before != (item.shape.lit(), fuel_minute(item), char_bucket(&item.shape));
+        }
+        shown
     }
 
     pub fn location(&self, id: ItemId) -> Option<Location> {

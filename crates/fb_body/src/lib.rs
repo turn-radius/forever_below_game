@@ -9,9 +9,13 @@
 //!   [`Body::hand_form`], [`Body::head_form`]), where each sits ([`Placement`]s), the anchors
 //!   gear hangs from, and its skin ([`Body::skin_mesh`]).
 //!
+//! - [`Rig`], [`Skinner`] and [`Gait`]: the joints a body is posed by, the weights that bind
+//!   its skin and gear to them, and its walk and idle ([`RigPose`]).
+//!
 //! Plain Rust, no Bevy; every body is a pure function of its spec.
 
 pub mod body;
+pub mod gait;
 pub mod folk;
 pub mod hair;
 pub mod hand;
@@ -19,10 +23,15 @@ pub mod head;
 pub mod held;
 pub mod limb;
 pub mod place;
+pub mod rig;
+pub mod skin;
+#[cfg(test)]
+mod skin_tests;
 pub mod spec;
 pub mod worn;
 
 pub use body::{ArmPose, Body, GRIP_MAX, Pose};
+pub use gait::{Gait, IdleCycle};
 pub use folk::{Beard, EyeKind, Ears, Folk, HairStyle, Nose, Race};
 pub use hair::HairFit;
 pub use head::{HeadFit, StandingFeatures};
@@ -30,5 +39,7 @@ pub use hand::HandPose;
 pub use held::{HIP_SIDE, Hands, HeldFit, HipFit, Hold, MAIN_HAND, OFF_HAND, fit_hands, fit_held, fit_hip};
 pub use limb::{Limb, Side};
 pub use place::Placement;
+pub use rig::{JOINTS, Joint, Quat, Rig, RigPose, Rigid};
+pub use skin::{PartSkin, SkinRegion, Skinner};
 pub use spec::BodySpec;
 pub use worn::{Covered, LAYER_ORDER, WornFit, WornLayer, fit_worn};

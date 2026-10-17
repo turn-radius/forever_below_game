@@ -1,15 +1,18 @@
-//! The creature view (`--creature`): one rat or snake on the Armory turntable's plate under the
-//! turntable's studio light, posed and animated as in the level, so creatures can be judged
-//! close up as items and bodies are.
+//! The creature view (`--creature`): one rat, snake or skeleton on the Armory turntable's plate
+//! under the turntable's studio light, posed and animated as in the level, so creatures can be
+//! judged close up as items and bodies are. `--skeleton` is the same view opened on a skeleton.
 //!
 //! Keys: Tab and Shift+Tab change the species, Left and Right the seed, M the motion (still,
-//! moving, rearing, striking), Space pauses the turn. Command line:
-//! `--creature --species giant_rat --seed 7 --motion moving` ([`CreatureChoice::from_args`]).
+//! moving, rearing, striking; a skeleton stands, walks and swings), G a skeleton's gear on or
+//! off, Space pauses the turn. Command line: `--creature --species giant_rat --seed 7 --motion
+//! moving`, or `--skeleton --seed 7 --motion swing [--bare]` ([`CreatureChoice::from_args`]).
 
 use bevy::{camera::Exposure, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera};
-use fb_creatures::pose::{self, RatPose, SnakePose};
-use fb_creatures::{Creature, Species};
+use fb_creatures::pose::{self, ArmStance, RatPose, SkeletonPose, SnakePose};
+use fb_creatures::skeleton::SkeletonDims;
+use fb_creatures::{Creature, SkeletonGear, Species};
 
+use crate::carry::appearance_of;
 use crate::creatures::{transform_of, tongue_flick};
 use crate::light::StudioLight;
 use crate::render::{ItemAppearance, ItemSpawner};
@@ -46,7 +49,18 @@ impl ViewMotion {
     pub const ALL: [ViewMotion; 4] = [ViewMotion::Still, ViewMotion::Moving, ViewMotion::Rearing, ViewMotion::Striking];
 
     fn parse(name: &str) -> Option<ViewMotion> {
-        ViewMotion::ALL.into_iter().find(|m| m.key() == name)
+        let alias = match name {
+            "stand" => Some(ViewMotion::Still),
+            "walk" => Some(ViewMotion::Moving),
+            "swing" | "swinging" => Some(ViewMotion::Striking),
+            _ => None,
+        };
+        alias.or_else(|| ViewMotion::ALL.into_iter().find(|m| m.key() == name))
+    }
+
+    /// The motions `species` has: a skeleton stands, walks and swings; the rest as listed.
+    pub fn of(species: Species) -> &'static [ViewMotion] {
+        if species.is_skeleton() { &[ViewMotion::Still, ViewMotion::Moving, ViewMotion::Striking] } else { &ViewMotion::ALL }
     }
 
     fn key(self) -> &'static str {
@@ -65,11 +79,13 @@ pub struct CreatureChoice {
     pub species: Species,
     pub seed: u32,
     pub motion: ViewMotion,
+    /// Whether a skeleton wears and holds the gear its seed rolls.
+    pub gear: bool,
 }
 
 impl Default for CreatureChoice {
     fn default() -> Self {
-        CreatureChoice { species: Species::Rat, seed: 1207, motion: ViewMotion::Still }
+        CreatureChoice { species: Species::Rat, seed: 1207, motion: ViewMotion::Still, gear: true }
     }
 }
 
@@ -80,13 +96,16 @@ pub fn parse_species(name: &str) -> Option<Species> {
         "giant_rat" | "giant" => Some(Species::GiantRat),
         "poisonous_snake" | "snake" | "viper" => Some(Species::PoisonousSnake),
         "constrictor_snake" | "constrictor" => Some(Species::ConstrictorSnake),
+        "skeleton" => Some(Species::Skeleton),
         _ => None,
     }
 }
 
 impl CreatureChoice {
     /// Parses `--species <name>`, `--seed <n>` and `--motion <still|moving|rearing|striking>`
-    /// (also `--flag=value`); `--creature` itself is skipped.
+    /// (also `--flag=value`; a skeleton's motions also go by stand, walk and swing);
+    /// `--creature` itself is skipped, `--skeleton` chooses a skeleton and `--bare` takes its
+    /// gear off.
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<CreatureChoice, String> {
         let mut choice = CreatureChoice::default();
         let mut args = args.into_iter();
@@ -98,9 +117,11 @@ impl CreatureChoice {
             let mut value = || inline.clone().or_else(|| args.next()).ok_or(format!("{flag} needs a value"));
             match flag.as_str() {
                 "--creature" => {}
+                "--skeleton" => choice.species = Species::Skeleton,
+                "--bare" => choice.gear = false,
                 "--species" => {
                     let name = value()?;
-                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor"))?;
+                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton"))?;
                 }
                 "--seed" => {
                     let seed = value()?;
@@ -108,7 +129,7 @@ impl CreatureChoice {
                 }
                 "--motion" => {
                     let name = value()?;
-                    choice.motion = ViewMotion::parse(&name).ok_or(format!("unknown motion {name:?}; one of still, moving, rearing, striking"))?;
+                    choice.motion = ViewMotion::parse(&name).ok_or(format!("unknown motion {name:?}; one of still, moving, rearing, striking (stand, walk, swing)"))?;
                 }
                 other => return Err(format!("unknown argument {other:?}")),
             }
@@ -135,6 +156,10 @@ struct Shown {
     size: Vec3,
     time: f32,
     cycle: f32,
+    /// A skeleton's measured dimensions, kept so a pose each frame does not rebuild its body.
+    dims: Option<SkeletonDims>,
+    /// The stance of the arms of a skeleton that holds something.
+    stance: [Option<ArmStance>; 2],
 }
 
 #[derive(Component)]
@@ -153,7 +178,7 @@ fn setup(mut commands: Commands) {
         Text::default(),
         TextFont::from_font_size(18.0),
         TextColor(PLATE_INK),
-        Node { position_type: PositionType::Absolute, top: px(16.0), left: px(20.0), ..default() },
+        Node { position_type: PositionType::Absolute, top: px(16.0), left: px(20.0), right: px(20.0), ..default() },
     ));
 }
 
@@ -163,6 +188,9 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<CreatureChoice>, mut
         let back = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
         let at = Species::ALL.iter().position(|&s| s == choice.species).unwrap_or(0) as isize;
         choice.species = Species::ALL[(at + if back { -1 } else { 1 }).rem_euclid(Species::ALL.len() as isize) as usize];
+        if !ViewMotion::of(choice.species).contains(&choice.motion) {
+            choice.motion = ViewMotion::Still;
+        }
     }
     if pressed(KeyCode::ArrowRight) {
         choice.seed = choice.seed.wrapping_add(1);
@@ -171,8 +199,12 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<CreatureChoice>, mut
         choice.seed = choice.seed.wrapping_sub(1);
     }
     if pressed(KeyCode::KeyM) {
-        let at = ViewMotion::ALL.iter().position(|&m| m == choice.motion).unwrap_or(0);
-        choice.motion = ViewMotion::ALL[(at + 1) % ViewMotion::ALL.len()];
+        let motions = ViewMotion::of(choice.species);
+        let at = motions.iter().position(|&m| m == choice.motion).unwrap_or(0);
+        choice.motion = motions[(at + 1) % motions.len()];
+    }
+    if pressed(KeyCode::KeyG) && choice.species.is_skeleton() {
+        choice.gear = !choice.gear;
     }
     if pressed(KeyCode::Space) {
         spin.paused = !spin.paused;
@@ -184,8 +216,24 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
         commands.entity(entity).despawn();
     }
     let creature = choice.creature();
-    let rig = creature.rig();
+    // A skeleton wears and holds what its seed rolls: its rig is the gear's, with the hands closed.
+    let gear = match &creature {
+        Creature::Skeleton(skeleton) if choice.gear => Some(SkeletonGear::roll(skeleton, fb_items::Odds::kit(1))),
+        _ => None,
+    };
+    let rig = gear.as_ref().map_or_else(|| creature.rig(), |g| g.rig.clone());
+    let stance = gear.as_ref().map_or([None, None], |g| g.stance);
     let Some((lo, hi)) = rig.rest_mesh().bounds() else { return };
+    // Gear in the stance can reach beyond the bones: a raised shield, a weapon's length.
+    let (lo, hi) = match (&gear, &creature) {
+        (Some(gear), Creature::Skeleton(skeleton)) => {
+            let at_rest = pose::skeleton_armed(&skeleton.dims(), &SkeletonPose::default(), &gear.stance);
+            let mut meshes = gear.posed(&at_rest);
+            meshes.push(rig.posed_mesh(&at_rest));
+            meshes.iter().filter_map(|m| m.bounds()).fold((lo, hi), |(lo, hi), (l, h)| ([0, 1, 2].map(|i| lo[i].min(l[i])), [0, 1, 2].map(|i| hi[i].max(h[i]))))
+        }
+        _ => (lo, hi),
+    };
     let reach = Vec2::new(lo[0].abs().max(hi[0]), lo[2].abs().max(hi[2]));
     let mut size = Vec3::new(reach.x * 2.0, hi[1] - lo[1], reach.y * 2.0);
     if let Creature::Snake(snake) = &creature
@@ -207,7 +255,16 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
         }
         bones.push(entity);
     }
-    commands.entity(pivot).insert(Shown { creature, bones, size, time: 0.0, cycle: 0.0 });
+    if let Some(gear) = &gear {
+        for piece in &gear.pieces {
+            spawner.spawn(&piece.mesh, &appearance_of(&piece.item)).insert((Name::new(piece.name.clone()), ChildOf(bones[piece.bone])));
+        }
+    }
+    let dims = match &creature {
+        Creature::Skeleton(skeleton) => Some(skeleton.dims()),
+        _ => None,
+    };
+    commands.entity(pivot).insert(Shown { creature, bones, size, time: 0.0, cycle: 0.0, dims, stance });
 }
 
 fn spin(time: Res<Time>, mut state: ResMut<ViewSpin>, mut pivots: Query<&mut Transform, With<Shown>>) {
@@ -245,6 +302,13 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
                 };
                 pose::snake(snake, &SnakePose { phase: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, coil, rear, strike, jaw: strike, tongue: tongue_flick(t), look: 0.0, ..SnakePose::REST })
             }
+            Creature::Skeleton(skeleton) => {
+                let dims = shown.dims.get_or_insert_with(|| skeleton.dims());
+                shown.cycle = (shown.cycle + speed * dt / pose::skeleton_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                // A blow every 2.4 seconds: wound up and thrown over 1.6, then held at the guard.
+                let swing = (choice.motion == ViewMotion::Striking).then(|| (t % 2.4 / 1.6).min(1.0));
+                pose::skeleton_armed(dims, &SkeletonPose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, swing, look: 0.0, jaw: 0.0 }, &shown.stance)
+            }
         };
         for (entity, place) in shown.bones.iter().zip(&places) {
             if let Ok(mut transform) = transforms.get_mut(*entity) {
@@ -271,7 +335,9 @@ fn frame_camera(shown: Query<&Shown>, mut cameras: Query<(&Projection, &mut Tran
     for (projection, mut transform) in &mut cameras {
         let Projection::Perspective(perspective) = projection else { continue };
         // The turntable's framing allows for the whole sweep; a creature is lower and longer.
-        let distance = 0.6 * framing_distance(shown.size, perspective, FILL);
+        // A skeleton stands tall rather than long, so it is framed as the turntable frames an item.
+        let share = if matches!(shown.creature, Creature::Skeleton(_)) { 0.8 } else { 0.6 };
+        let distance = share * framing_distance(shown.size, perspective, FILL);
         let centre = Vec3::new(0.0, shown.size.y * 0.5, 0.0);
         let target = Transform::from_translation(centre + Vec3::new(0.0, ELEVATION.sin(), ELEVATION.cos()) * distance).looking_at(centre, Vec3::Y);
         if *transform != target {
@@ -289,14 +355,65 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
     let look = match &creature {
         Creature::Rat(r) => format!("{:?}, {:?}, {:.0} cm", r.colouring, r.pattern, r.length * 10.0),
         Creature::Snake(s) => format!("{:?}, {:?}, {:.1} m", s.colouring, s.pattern, s.length / 10.0),
+        Creature::Skeleton(s) => skeleton_look(s, choice.gear),
     };
+    let motion = if choice.species.is_skeleton() { skeleton_motion(choice.motion) } else { format!("{:?}", choice.motion) };
     let line = format!(
-        "{}   seed {}   {}   {:?}\nHit Points {} ({})   Bite {}\nTab species   Left/Right seed   M motion   Space pause",
-        block.name, choice.seed, look, choice.motion, block.hit_points, block.hit_dice, block.bite
+        "{}   seed {}   {}   {}\nArmor Class {}   Hit Points {} ({})   {} {}\nTab species   Left/Right seed   M motion   G gear   Space pause",
+        block.name,
+        choice.seed,
+        look,
+        motion,
+        block.armour_class,
+        block.hit_points,
+        block.hit_dice,
+        if choice.species.is_skeleton() { "Shortsword" } else { "Bite" },
+        block.bite
     );
     for mut text in &mut status {
         text.0.clone_from(&line);
     }
+}
+
+/// What is special about a skeleton, for the status line: its bone colour, height, cracks and
+/// what is missing.
+fn skeleton_look(s: &fb_creatures::SkeletonState, gear: bool) -> String {
+    let colour = match s.tone {
+        t if t < 0.25 => "bleached",
+        t if t < 0.65 => "yellowed",
+        _ => "dark",
+    };
+    let mut missing = Vec::new();
+    if s.jaw_gone {
+        missing.push("jaw".to_string());
+    }
+    let ribs = s.ribs_gone[0].count_ones() + s.ribs_gone[1].count_ones();
+    if ribs > 0 {
+        missing.push(format!("{ribs} ribs"));
+    }
+    let fingers = s.fingers_gone[0].count_ones() + s.fingers_gone[1].count_ones();
+    if fingers > 0 {
+        missing.push(format!("{fingers} fingers"));
+    }
+    let missing = if missing.is_empty() { String::new() } else { format!(", missing {}", missing.join(", ")) };
+    let outfit = fb_items::undead::skeleton_outfit(s.seed, fb_items::Odds::kit(1));
+    let kit = if !gear {
+        ", gear off".to_string()
+    } else if outfit.worn.is_empty() {
+        ", bare-boned".to_string()
+    } else {
+        format!(", {}", outfit.worn.iter().map(|(_, item)| item.title().to_string()).collect::<Vec<_>>().join(", "))
+    };
+    format!("{colour}, {:.0} cm, {} cracks{missing}{kit}", s.height() * 10.0, s.cracks)
+}
+
+fn skeleton_motion(motion: ViewMotion) -> String {
+    match motion {
+        ViewMotion::Still | ViewMotion::Rearing => "standing",
+        ViewMotion::Moving => "walking",
+        ViewMotion::Striking => "swinging",
+    }
+    .to_string()
 }
 
 #[cfg(test)]
@@ -314,6 +431,8 @@ mod tests {
         assert_eq!(CreatureChoice::from_args(args("--species=constrictor")).unwrap().species, Species::ConstrictorSnake);
         assert!(CreatureChoice::from_args(args("--species dragon")).is_err());
         assert!(CreatureChoice::from_args(args("--motion flying")).is_err());
+        let skeleton = CreatureChoice::from_args(args("--skeleton --seed 9 --motion swing")).unwrap();
+        assert_eq!((skeleton.species, skeleton.seed, skeleton.motion), (Species::Skeleton, 9, ViewMotion::Striking));
     }
 
     #[test]

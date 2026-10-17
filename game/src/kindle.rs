@@ -7,20 +7,18 @@ use armory::kindle::Unlit;
 use bevy::prelude::*;
 use fb_items::Slot;
 
+use crate::game_clock::{GameClock, advance_game_clock};
 use crate::inventory::{Hovered, Inventory, ItemId, Toast};
 use crate::keymap::{Action, ActionInput};
-use crate::play::{DelveSystems, Screen, ScreenOpen, level_has_focus};
+use crate::play::{DelveSystems, inventory_open, level_has_focus};
 
 pub struct KindlePlugin;
 
 impl Plugin for KindlePlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(FixedUpdate, burn_fuel.after(advance_game_clock).in_set(DelveSystems));
         app.add_systems(Update, (light_carried.run_if(level_has_focus), light_hovered.run_if(inventory_open)).in_set(DelveSystems));
     }
-}
-
-fn inventory_open(open: Option<Res<ScreenOpen>>) -> bool {
-    open.is_some_and(|o| o.is(Screen::Inventory))
 }
 
 /// The carried light L acts on: the main hand's torch or lantern, else the off hand's, else
@@ -38,7 +36,23 @@ pub fn toggle_and_say(inventory: &mut Inventory, id: ItemId) -> String {
         Ok(true) => format!("You light the {what}"),
         Ok(false) => format!("You put out the {what}"),
         Err(Unlit::Spent) => format!("The {what} is spent and will not light"),
+        Err(Unlit::Empty) => format!("The {what} is out of fuel and will not light"),
         Err(Unlit::NotALight) => format!("The {what} cannot be lit"),
+    }
+}
+
+/// Burns every lit light's fuel by the game time that passed since the last step, wherever
+/// the light is.
+fn burn_fuel(clock: Res<GameClock>, mut inventory: ResMut<Inventory>, mut last: Local<f64>) {
+    let now = clock.game_seconds();
+    let passed = now - *last;
+    *last = now;
+    if passed > 0.0 {
+        // Burning is not a change anyone sees until a card's minute, a state or a held torch's
+        // char moves, so only then is the inventory marked changed.
+        if inventory.bypass_change_detection().burn_lights(passed as f32) {
+            inventory.set_changed();
+        }
     }
 }
 
@@ -76,6 +90,7 @@ fn light_hovered(input: ActionInput, hovered: Res<Hovered>, mut inventory: ResMu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::play::{Screen, ScreenOpen};
     use armory::families::torch::BurnState;
 
     fn torch(state: BurnState) -> fb_items::Item {
@@ -142,5 +157,184 @@ mod tests {
         let mut elsewhere = Inventory::default();
         let again = elsewhere.add(carried);
         assert_eq!(lit(&elsewhere, again), Some(true));
+    }
+
+    mod fuel {
+        use std::time::Duration;
+
+        use bevy::state::app::StatesPlugin;
+
+        use super::*;
+        use crate::game_clock::GameClockPlugin;
+        use crate::launch::AppState;
+        use crate::play::run_delve_systems_while_delving;
+        use crate::tuning::Tuning;
+
+        fn app() -> App {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, StatesPlugin))
+                .insert_state(AppState::Delving)
+                .init_resource::<Tuning>()
+                .init_resource::<ScreenOpen>()
+                .init_resource::<Inventory>()
+                .add_plugins(GameClockPlugin)
+                .add_systems(FixedUpdate, burn_fuel.after(advance_game_clock).in_set(DelveSystems));
+            run_delve_systems_while_delving(&mut app);
+            app.update();
+            app.update();
+            app
+        }
+
+        /// Runs `seconds` of fixed time, one second per step; at the default ratio of 12, five
+        /// minutes of it are a game hour.
+        fn run(app: &mut App, seconds: u32) {
+            for _ in 0..seconds {
+                app.world_mut().resource_mut::<Time<Fixed>>().advance_by(Duration::from_secs(1));
+                app.world_mut().run_schedule(FixedUpdate);
+            }
+        }
+
+        fn fresh_torch(burn_time: f32) -> fb_items::Item {
+            let mut item = fb_items::roll_item("Spare torch", 3).unwrap();
+            item.profile.stats.burn_time = burn_time;
+            item.shape.scale_fuel(burn_time);
+            item
+        }
+
+        fn light(app: &mut App, item: fb_items::Item, lit: bool) -> ItemId {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(item);
+            inventory.toggle_light(id).unwrap();
+            if !lit {
+                inventory.toggle_light(id).unwrap();
+            }
+            id
+        }
+
+        fn left(app: &App, id: ItemId) -> f32 {
+            app.world().resource::<Inventory>().item(id).unwrap().fuel_left().unwrap()
+        }
+
+        fn spent(app: &App, id: ItemId) -> bool {
+            matches!(&app.world().resource::<Inventory>().item(id).unwrap().shape, armory::Item::Torch(s) if s.burn.state == BurnState::Spent)
+        }
+
+        #[test]
+        fn a_plain_torch_is_spent_after_a_game_hour() {
+            let mut app = app();
+            let id = light(&mut app, fresh_torch(1.0), true);
+            run(&mut app, 290);
+            assert!(!spent(&app, id), "ten game minutes left");
+            run(&mut app, 12);
+            assert!(spent(&app, id));
+            assert_eq!(left(&app, id), 0.0);
+        }
+
+        #[test]
+        fn a_long_burning_torch_burns_for_two_game_hours() {
+            let mut app = app();
+            let id = light(&mut app, fresh_torch(2.0), true);
+            run(&mut app, 300);
+            assert!(!spent(&app, id), "still burning at an hour");
+            assert!((left(&app, id) - 3_600.0).abs() < 60.0, "{}", left(&app, id));
+            run(&mut app, 305);
+            assert!(spent(&app, id));
+        }
+
+        #[test]
+        fn dousing_at_twenty_minutes_and_relighting_leaves_forty() {
+            let mut app = app();
+            let id = light(&mut app, fresh_torch(1.0), true);
+            run(&mut app, 100);
+            app.world_mut().resource_mut::<Inventory>().toggle_light(id).unwrap();
+            run(&mut app, 300);
+            app.world_mut().resource_mut::<Inventory>().toggle_light(id).unwrap();
+            let minutes = left(&app, id) / 60.0;
+            assert!((minutes - 40.0).abs() < 0.5, "{minutes}");
+        }
+
+        #[test]
+        fn a_lit_torch_on_the_floor_burns_and_a_doused_one_in_a_bag_does_not() {
+            let mut app = app();
+            let floor = light(&mut app, fresh_torch(1.0), true);
+            let bagged = light(&mut app, fresh_torch(1.0), false);
+            {
+                let mut inventory = app.world_mut().resource_mut::<Inventory>();
+                let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+                inventory.wear(pack, Slot::Back).unwrap();
+                inventory.stow(bagged).unwrap();
+                assert!(matches!(inventory.location(bagged), Some(crate::inventory::Location::In { .. })));
+            }
+            run(&mut app, 150);
+            assert!((left(&app, floor) - 1_800.0).abs() < 60.0, "{}", left(&app, floor));
+            assert_eq!(left(&app, bagged), 3_600.0);
+        }
+
+        #[test]
+        fn burning_marks_the_inventory_changed_only_when_something_shown_changes() {
+            let mut app = app();
+            let changed = |app: &mut App| app.world_mut().resource_ref::<Inventory>().is_changed();
+            let settle = |app: &mut App| {
+                app.world_mut().clear_trackers();
+            };
+            run(&mut app, 5);
+            settle(&mut app);
+            run(&mut app, 1);
+            assert!(!changed(&mut app), "nothing lit");
+            let id = light(&mut app, fresh_torch(1.0), true);
+            settle(&mut app);
+            // One step is 12 game seconds: the minute (and the char bucket) hold for a few.
+            run(&mut app, 1);
+            assert!(!changed(&mut app), "a lit torch within the same minute");
+            let minute = |app: &App| (left(app, id) / 60.0).round() as u32;
+            let start = minute(&app);
+            let mut crossed = false;
+            for _ in 0..20 {
+                settle(&mut app);
+                run(&mut app, 1);
+                let now = minute(&app);
+                if now != start {
+                    assert!(changed(&mut app), "crossed a minute");
+                    crossed = true;
+                    break;
+                }
+                assert!(!changed(&mut app));
+            }
+            assert!(crossed);
+            // Burning the rest down: going spent is a shown change.
+            settle(&mut app);
+            run(&mut app, 400);
+            assert!(spent(&app, id));
+        }
+
+        #[test]
+        fn going_spent_marks_the_inventory_changed() {
+            let mut app = app();
+            let id = light(&mut app, fresh_torch(1.0), true);
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            assert!(inventory.bypass_change_detection().burn_lights(1.0e6), "spent is a shown change");
+            assert!(spent(&app, id));
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            assert!(!inventory.bypass_change_detection().burn_lights(10.0), "nothing lit now");
+        }
+
+        #[test]
+        fn an_open_screen_burns_nothing() {
+            let mut app = app();
+            let id = light(&mut app, fresh_torch(1.0), true);
+            app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+            run(&mut app, 300);
+            assert_eq!(left(&app, id), 3_600.0);
+        }
+
+        #[test]
+        fn an_empty_lantern_will_not_light() {
+            let mut inventory = Inventory::default();
+            let mut item = fb_items::roll_item("Lantern", 7).unwrap();
+            item.shape.set_lit(true).unwrap();
+            item.burn(1.0e9);
+            let id = inventory.add(item);
+            assert_eq!(toggle_and_say(&mut inventory, id), "The lantern is out of fuel and will not light");
+        }
     }
 }

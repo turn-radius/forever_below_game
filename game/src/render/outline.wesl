@@ -6,6 +6,7 @@
 
 import bevy_pbr::render::{
     mesh_functions::{get_world_from_local, mesh_normal_local_to_world},
+    skinning,
     view_transformations::position_world_to_clip,
 };
 import super::screen::reference_pixel;
@@ -24,6 +25,10 @@ struct Vertex {
     @builtin(instance_index) instance_index: u32,
     @location(0) position: vec3<f32>,
     @location(1) outline_normal: vec3<f32>,
+    @if(SKINNED)
+    @location(6) joint_indices: vec4<u32>,
+    @if(SKINNED)
+    @location(7) joint_weights: vec4<f32>,
 }
 
 struct VertexOutput {
@@ -32,8 +37,16 @@ struct VertexOutput {
 
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
+@if(SKINNED)
+    let world_from_local = skinning::skin_model(vertex.joint_indices, vertex.joint_weights, vertex.instance_index);
+@else
     let world_from_local = get_world_from_local(vertex.instance_index);
     let world_position = (world_from_local * vec4<f32>(vertex.position, 1.0)).xyz;
+@if(SKINNED)
+    // Skinned like a direction, not with Bevy's `skin_normals` (the inverse transpose, for
+    // lighting): on a hull it threw ink spikes a unit long off every blended joint.
+    let normal = normalize((world_from_local * vec4<f32>(vertex.outline_normal, 0.0)).xyz);
+@else
     let normal = normalize(mesh_normal_local_to_world(vertex.outline_normal, vertex.instance_index));
 
     let width = min(outline.width_px * reference_pixel(world_position), outline.max_width);

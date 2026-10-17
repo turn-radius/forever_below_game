@@ -61,6 +61,9 @@ impl Default for Playlist {
                 "audio/cavern-descent.ogg",
                 "audio/im-not-alone.ogg",
                 "audio/untitled.ogg",
+                "audio/let-me-think.ogg",
+                "audio/meant-to-be-here.ogg",
+                "audio/what-am-i-doing.ogg",
             ]
             .map(String::from)
             .into(),
@@ -242,6 +245,12 @@ pub fn effect_volume(game: &GameSettings, tuning: &Tuning) -> f32 {
     tuning.sound.effects_volume.clamp(0.0, 1.0) * game.sound_volume.clamp(0.0, 1.0)
 }
 
+/// How loud ambient sound plays: the tuning's `ambience_volume` times the player's
+/// [`GameSettings::sound_volume`].
+pub fn ambience_volume(game: &GameSettings, tuning: &Tuning) -> f32 {
+    tuning.sound.ambience_volume.clamp(0.0, 1.0) * game.sound_volume.clamp(0.0, 1.0)
+}
+
 /// What a sound effect's [`AudioPlayer`] is spawned with: played once and despawned, at
 /// [`effect_volume`].
 pub fn sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, PlaybackSettings) {
@@ -250,6 +259,11 @@ pub fn sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, Playb
 
 /// How far one world unit sounds: 0.1, as a unit is 10 cm.
 pub const SPATIAL_SCALE: f32 = 0.1;
+
+/// Plays `sound` from `at`, heard as a [`spatial_sound_effect`], for the length of the delve.
+pub fn play_at(commands: &mut Commands, name: &'static str, sound: Handle<AudioSource>, at: Vec3, game: &GameSettings, tuning: &Tuning) {
+    commands.spawn((Name::new(name), AudioPlayer::new(sound), spatial_sound_effect(game, tuning), Transform::from_translation(at), DespawnOnExit(crate::launch::AppState::Delving)));
+}
 
 /// [`sound_effect`], heard from where the [`AudioPlayer`]'s entity stands, by the
 /// [`SpatialListener`] on the player's eye.
@@ -362,24 +376,25 @@ mod tests {
     const FADE: f32 = 3.0;
 
     #[test]
-    fn playlist_opens_on_forever_below_and_holds_all_eight_tracks() {
+    fn playlist_opens_on_forever_below_and_holds_all_eleven_tracks() {
         let tracks = Playlist::default().tracks;
-        assert_eq!(tracks.len(), 8);
+        assert_eq!(tracks.len(), 11);
         assert_eq!(tracks[0], "audio/forever-below.ogg");
     }
 
     #[test]
     fn tracks_are_drawn_at_random_and_never_twice_running() {
         let mut rng = Mulberry32::new(7);
-        let mut seen = [0usize; 8];
+        let len = Playlist::default().tracks.len();
+        let mut seen = vec![0usize; len];
         let mut last = Some(0);
-        for _ in 0..4000 {
-            let next = pick_track(&mut rng, 8, last).unwrap();
+        for _ in 0..500 * len {
+            let next = pick_track(&mut rng, len, last).unwrap();
             assert_ne!(Some(next), last);
             seen[next] += 1;
             last = Some(next);
         }
-        // Every track turns up, each roughly an eighth of the time.
+        // Every track turns up, each about 500 times.
         assert!(seen.iter().all(|&n| (350..650).contains(&n)), "{seen:?}");
         assert_eq!(pick_track(&mut rng, 1, Some(0)), Some(0));
         assert_eq!(pick_track(&mut rng, 0, None), None);

@@ -11,7 +11,7 @@ mod toon;
 
 pub use item::{
     ArmoryItem, ArmoryPart, InkOutline, ItemAppearance, ItemPalette, ItemSpawner, OutlineMaterials,
-    half_thickness, item_bounds, part_to_mesh,
+    half_thickness, item_bounds, part_to_mesh, part_to_skinned_mesh,
 };
 pub use outline::{ARMORY_INK, ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
 pub use toon::{Decay, Etch, EtchStyle, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial, ToonUniform};

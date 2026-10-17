@@ -1,10 +1,14 @@
 //! Forever Below. It opens on the title screen; `--turntable` (or `--family`) opens the Armory
 //! turntable instead, and `--doll` the doll view (a dressed body turning on the turntable's
 //! plate: `--doll --folk dwarf --seed 7 --outfit cleric`), and `--creature` the creature view
-//! (a rat or snake on the plate: `--creature --species viper --seed 7 --motion moving`).
+//! (a rat, snake or skeleton on the plate: `--creature --species viper --seed 7 --motion
+//! moving`), and `--skeleton` the same view opened on a skeleton (`--skeleton --seed 7 --motion
+//! swing`).
 //! `--forge` the Forge view (an item beside a panel of sliders for every parameter of its
 //! state: `--forge --family lantern --seed 7`), and `--level` the level view (a whole level
-//! from above beside a panel of the generator's parameters: `--level --seed 7`). `--swings`
+//! from above beside a panel of the generator's parameters: `--level --seed 7`), and `--lab`
+//! the character lab (a character and their gear beside their sheet of explained numbers:
+//! `--lab --seed 7`). `--swings`
 //! plays the level with keys for trying every melee weapon's swings
 //! ([`forever_below::swing_practice`]).
 //!
@@ -16,17 +20,20 @@
 //! starting condition (the `--wear` flag wins); `FB_CLOSEUP=<slot>` opens on a close-up of
 //! grid slot 0 to 11.
 
-use bevy::prelude::*;
+use bevy::{audio::AudioPlugin, prelude::*};
 use forever_below::{
     capture::FrameCapturePlugin,
     creature_view::{CreatureChoice, CreatureViewPlugin},
     frame_time::FrameTimeProbe,
-    doll_view::{DollChoice, DollViewPlugin},
+    doll_view::{DollChoice, DollMotion, DollViewPlugin},
     forge_view::{Forge, ForgeViewPlugin},
     level_view::{LevelForge, LevelViewPlugin},
+    lab_figure::LabFigurePlugin,
+    lab_view::{LabState, LabViewPlugin},
     launch::{AppState, Launch, env_set},
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
+    rules::RulesPlugin,
     settings::SettingsPlugin,
     soak::SoakPlugin,
     swing_practice::SwingPracticePlugin,
@@ -40,6 +47,9 @@ fn main() -> AppExit {
     if args.iter().any(|a| a == "--forge") {
         return run_forge(&args);
     }
+    if args.iter().any(|a| a == "--lab") {
+        return run_lab(&args);
+    }
     if args.iter().any(|a| a == "--level") {
         return run_level_view(&args);
     }
@@ -49,7 +59,7 @@ fn main() -> AppExit {
     if args.iter().any(|a| a == "--doll") {
         return run_doll(&args);
     }
-    if args.iter().any(|a| a == "--creature") {
+    if args.iter().any(|a| a == "--creature" || a == "--skeleton") {
         return run_creature(&args);
     }
     let swings = args.iter().any(|a| a == "--swings");
@@ -63,17 +73,23 @@ fn main() -> AppExit {
     };
     let opening = if swings { AppState::Delving } else { launch.opening(env_set) };
     let mut app = App::new();
+    // `data/rules.toml` is read, and watched, as an asset source of its own.
+    forever_below::rules::use_data_folder(&mut app);
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin { primary_window: Some(Window { title: "Forever Below".into(), ..default() }), ..default() })
-            // Debug builds watch the assets, so saving `assets/tuning.toml` applies it live.
-            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() }),
+            // Debug builds watch the assets, so saving `assets/tuning.toml` or `data/rules.toml` applies it live.
+            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() })
+            // Spatial audio scale: positions are scaled to metres. 1 world unit is 10 cm = 0.1 m.
+            .set(AudioPlugin { default_spatial_scale: bevy::audio::SpatialScale::new(0.1), ..default() }),
     )
     .insert_state(opening)
-    .add_plugins((SettingsPlugin, TuningPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
+    .add_plugins((SettingsPlugin, TuningPlugin, RulesPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
     .insert_resource(NewDelveSeed(launch.seed));
     if opening == AppState::Delving {
-        app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED))));
+        // `FB_DEPTH=2` plays the stone halls: the level's depth picks its style.
+        let depth = std::env::var("FB_DEPTH").ok().and_then(|d| d.parse().ok()).unwrap_or(1);
+        app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED), depth)));
     }
     if swings {
         app.add_plugins(SwingPracticePlugin);
@@ -120,13 +136,21 @@ fn run_doll(args: &[String]) -> AppExit {
             return AppExit::error();
         }
     };
+    let motion = match DollMotion::from_args(args.iter().cloned()) {
+        Ok(motion) => motion,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
         ..default()
     }))
     .add_plugins((ArmoryRenderPlugin, DollViewPlugin))
-    .insert_resource(choice);
+    .insert_resource(choice)
+    .insert_resource(motion);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -169,6 +193,30 @@ fn run_forge(args: &[String]) -> AppExit {
     }))
     .add_plugins((ArmoryRenderPlugin, ForgeViewPlugin))
     .insert_resource(forge);
+    if let Some(capture) = FrameCapturePlugin::from_env() {
+        app.add_plugins(capture);
+    }
+    app.run()
+}
+
+fn run_lab(args: &[String]) -> AppExit {
+    let lab = match LabState::from_args(args.iter().cloned()) {
+        Ok(lab) => lab,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
+    let mut app = App::new();
+    // The lab reads the rules the game runs on, and watches them in a debug build.
+    forever_below::rules::use_data_folder(&mut app);
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin { primary_window: Some(forever_below::lab_view::window()), ..default() })
+            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() }),
+    )
+    .add_plugins((RulesPlugin, ArmoryRenderPlugin, LabFigurePlugin, LabViewPlugin))
+    .insert_resource(lab);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }

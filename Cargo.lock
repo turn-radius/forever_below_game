@@ -2647,11 +2647,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fb_character"
+version = "0.1.0"
+dependencies = [
+ "fb_creatures",
+ "procgen_rng",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "fb_creatures"
 version = "0.1.0"
 dependencies = [
  "armory",
  "fb_body",
+ "fb_items",
  "procgen_rng",
  "serde",
 ]
@@ -2794,6 +2806,7 @@ dependencies = [
  "armory",
  "bevy",
  "fb_body",
+ "fb_character",
  "fb_creatures",
  "fb_items",
  "fb_level",
@@ -2801,6 +2814,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]
@@ -5402,6 +5416,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

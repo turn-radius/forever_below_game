@@ -1,11 +1,11 @@
 //! Camera jolts when a blow lands: a brief push and tilt that springs back, scaled by damage.
 //!
 //! The kick is applied to the [`PlayerCamera`] child's local transform, never moving the player's
-//! actual position. It uses [`marker_angle`] to push the view away from the attacker in local space.
+//! actual position. It uses [`bearing_from_facing`] to push the view away from the attacker in local space.
 
 use bevy::prelude::*;
-use crate::combat::{Health, vitals::marker_angle};
-use crate::creatures::behaviour::CreatureAttack;
+use crate::combat::{Health, vitals::bearing_from_facing};
+use crate::creatures::behaviour::AttackOnDelver;
 use crate::combat::swing::lean_into_blow;
 use crate::play::{DelveSystems, Player, PlayerCamera, level_has_focus};
 use crate::player::{bob_head, look};
@@ -55,7 +55,7 @@ struct CameraKick {
 /// Read creature attacks and apply camera kicks to the player.
 fn apply_kick(
     mut commands: Commands,
-    mut attacks: MessageReader<CreatureAttack>,
+    mut attacks: MessageReader<AttackOnDelver>,
     tuning: Option<Res<Tuning>>,
     player: Single<(Entity, &Transform, &Health), With<Player>>,
 ) {
@@ -67,11 +67,11 @@ fn apply_kick(
     let (player_entity, player_transform, health) = player.into_inner();
 
     for attack in attacks.read() {
-        // Calculate direction to push: away from the attacker. marker_angle points to the
+        // Calculate direction to push: away from the attacker. bearing_from_facing points to the
         // attacker; we use it directly with the formula Vec3::new(-sin(a), 0, cos(a)) which
         // produces a vector pointing away from an attacker at angle a.
         let player_yaw = player_transform.rotation.to_euler(EulerRot::YXZ).0;
-        let away_angle = marker_angle(player_transform.translation.xz(), player_yaw, attack.attacker_pos);
+        let away_angle = bearing_from_facing(player_transform.translation.xz(), player_yaw, attack.attacker_pos);
 
         // Scale kick magnitude by damage relative to max HP, capped at 1.0.
         let magnitude = (attack.damage as f32 / health.max.max(1) as f32).min(1.0) * scale;
@@ -109,7 +109,7 @@ fn update_kick(
         let progress = (KICK_DURATION - kick.left) / KICK_DURATION;
         let remaining = kick.magnitude * (1.0 - ease_out_cubic(progress));
 
-        // `marker_angle` is clockwise from ahead (0 ahead, π/2 right), so the view moves by
+        // `bearing_from_facing` is clockwise from ahead (0 ahead, π/2 right), so the view moves by
         // (-sin, cos) in local x and z: left for a bite on the right, back for one in front.
         let a = kick.push_yaw;
         camera_transform.translation += Vec3::new(-a.sin(), 0.0, a.cos()) * remaining * MAX_KICK_DISTANCE;
@@ -187,9 +187,9 @@ mod tests {
         let rest_translation = app.world().get::<Transform>(camera).unwrap().translation;
 
         // Send an attack from the right.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 5,
             poison: 0,
             attacker_pos: Vec2::new(5.0, 0.0), // Right of the player
@@ -210,9 +210,9 @@ mod tests {
         let rest_translation = app.world().get::<Transform>(camera).unwrap().translation;
 
         // Send an attack from the front. With yaw=0 facing -z, an attacker at (0, -5) is ahead.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 5,
             poison: 0,
             attacker_pos: Vec2::new(0.0, -5.0), // Ahead of the player
@@ -233,9 +233,9 @@ mod tests {
         let base_y = app.world().get::<Transform>(camera).unwrap().translation.y;
 
         // Apply a kick and update.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 3,
             poison: 0,
             attacker_pos: Vec2::new(5.0, 0.0),
@@ -265,9 +265,9 @@ mod tests {
         app.update();
 
         // Send an attack.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 5,
             poison: 0,
             attacker_pos: Vec2::new(5.0, 0.0),
@@ -286,9 +286,9 @@ mod tests {
         app.update();
 
         // Send an attack.
-        app.world_mut().write_message(CreatureAttack {
+        app.world_mut().write_message(AttackOnDelver {
             attacker: Entity::PLACEHOLDER,
-            species: Species::Rat,
+            species: Some(Species::Rat),
             damage: 5,
             poison: 0,
             attacker_pos: Vec2::new(5.0, 0.0),
@@ -320,7 +320,7 @@ mod tests {
         use bevy::input::mouse::AccumulatedMouseMotion;
         use bevy::window::{CursorOptions, PrimaryWindow};
 
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (x, y, _) = level.start();
         let [wx, wy, wz] = fb_level::Level::world(x as f32 + 0.5, y as f32 + 0.5);
         let mut app = App::new();
@@ -355,7 +355,7 @@ mod tests {
                 let at = app.world().get::<Transform>(player).unwrap();
                 let right = at.right().as_vec3();
                 let attacker_pos = Vec2::new(at.translation.x + right.x * 5.0, at.translation.z + right.z * 5.0);
-                app.world_mut().write_message(CreatureAttack { attacker: Entity::PLACEHOLDER, species: Species::Rat, damage: 5, poison: 0, attacker_pos });
+                app.world_mut().write_message(AttackOnDelver { attacker: Entity::PLACEHOLDER, species: Some(Species::Rat), damage: 5, poison: 0, attacker_pos });
             }
             app.update();
             let pose = app.world().get::<Transform>(camera).unwrap();

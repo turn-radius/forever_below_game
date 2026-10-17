@@ -40,6 +40,8 @@ pub struct CardText {
     pub stats: Vec<String>,
     /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
     pub light: Option<String>,
+    /// What U does with food or drink: "U eats it \u{b7} eases hunger 40%".
+    pub consume: Option<String>,
     /// A legendary's three lines of history.
     pub history: Vec<String>,
 }
@@ -48,6 +50,7 @@ pub struct CardText {
 /// that is not a light.
 pub fn light_line(item: &armory::Item) -> Option<String> {
     use armory::families::torch::BurnState;
+    let fuel = item.fuel_left().map(fuel_text);
     let (state, lit) = match item {
         armory::Item::Torch(s) => (
             match s.burn.state {
@@ -58,10 +61,31 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
             },
             s.burn.state == BurnState::Burning,
         ),
+        armory::Item::Lantern(s) if s.flame.fuel_left <= 0.0 => return Some("Empty".into()),
         armory::Item::Lantern(s) => (if s.flame.lit { "Lit" } else { "Unlit" }, s.flame.lit),
         _ => return None,
     };
-    Some(format!("{state} \u{b7} L {}", if lit { "puts it out" } else { "lights it" }))
+    Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
+}
+
+/// What U does with food or drink, and how much it eases: "U eats it \u{b7} eases hunger 40%".
+/// `None` for anything that is not eaten or drunk.
+pub fn consume_line(item: &Item) -> Option<String> {
+    let how = item.consume()?;
+    let p = item.provision()?;
+    let mut line = format!("U {}s it", how.past());
+    for (meter, by) in [("hunger", p.nutrition), ("thirst", p.water)] {
+        if by > 0.0 {
+            line.push_str(&format!(" \u{b7} eases {meter} {}%", (by * 100.0).round()));
+        }
+    }
+    Some(line)
+}
+
+/// Burning time left as the card writes it, in game hours and minutes: "Fuel 0:42".
+pub fn fuel_text(seconds: f32) -> String {
+    let minutes = (seconds.max(0.0) / 60.0).round() as u32;
+    format!("Fuel {}:{:02}", minutes / 60, minutes % 60)
 }
 
 /// A number as the card writes it: at most two decimals, no trailing zeros.
@@ -130,6 +154,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         affixes: item.affixes.iter().map(|a| AffixLine { text: a.text.clone(), name: a.name.clone(), good: a.good }).collect(),
         stats: stat_lines(s),
         light: light_line(&item.shape),
+        consume: consume_line(item),
         history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()),
     }
 }
@@ -168,9 +193,21 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     // Rates are multiples of normal, written as the change in that multiple.
     differ(new.burn_time, old.burn_time, "burn time", "\u{d7}", true);
     differ(new.hunger_rate, old.hunger_rate, "hunger", "\u{d7}", false);
-    differ(new.fatigue_rate, old.fatigue_rate, "fatigue", "\u{d7}", false);
+    differ(new.sleepiness_rate, old.sleepiness_rate, "sleepiness", "\u{d7}", false);
     differ(new.disease_risk, old.disease_risk, "disease risk", "\u{d7}", false);
+    differ(new.speed * 100.0, old.speed * 100.0, "speed", "%", true);
+    differ(new.block_chance * 100.0, old.block_chance * 100.0, "chance to block", "%", true);
     differ(new.break_chance * 100.0, old.break_chance * 100.0, "chance to break", "%", false);
+    for (new, old, name) in [
+        (new.strength, old.strength, "STR"),
+        (new.dexterity, old.dexterity, "DEX"),
+        (new.constitution, old.constitution, "CON"),
+        (new.intelligence, old.intelligence, "INT"),
+        (new.wisdom, old.wisdom, "WIS"),
+        (new.charisma, old.charisma, "CHA"),
+    ] {
+        differ(new, old, name, "", true);
+    }
     differ(new.weight, old.weight, "weight", " lb", false);
     lines
 }
@@ -241,10 +278,21 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
     };
     rate(s.burn_time, plain.burn_time, "burns");
     rate(s.hunger_rate, plain.hunger_rate, "hunger");
-    rate(s.fatigue_rate, plain.fatigue_rate, "fatigue");
+    rate(s.sleepiness_rate, plain.sleepiness_rate, "sleepiness");
     rate(s.disease_risk, plain.disease_risk, "disease risk");
     if s.break_chance > 0.0 {
         lines.push(format!("{}% chance to break on a hard blow", number(s.break_chance * 100.0)));
+    }
+    if s.speed != plain.speed {
+        lines.push(format!("{:+}% speed", ((s.speed - 1.0) * 100.0).round()));
+    }
+    if s.block_chance > 0.0 {
+        lines.push(format!("{}% chance to block a blow", number((s.block_chance * 100.0).round())));
+    }
+    for (value, name) in [(s.strength, "STR"), (s.dexterity, "DEX"), (s.constitution, "CON"), (s.intelligence, "INT"), (s.wisdom, "WIS"), (s.charisma, "CHA")] {
+        if value != 0.0 {
+            lines.push(format!("{} {name}", signed(value)));
+        }
     }
     lines
 }
@@ -436,6 +484,9 @@ fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, font
             }
             if let Some(light) = &text.light {
                 info.spawn((Text::new(light.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
+            }
+            if let Some(consume) = &text.consume {
+                info.spawn((Text::new(consume.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
             }
             if !text.history.is_empty() {
                 info.spawn((
@@ -696,6 +747,14 @@ mod tests {
         let sword = Stats { damage: Some(fb_items::dice::Dice::new(1, 8)), damage_bonus: 1.0, ..Stats::default() };
         let knife = Stats { damage: Some(fb_items::dice::Dice::new(1, 6)), ..Stats::default() };
         assert_eq!(text(&changes(&sword, Some(&knife))), vec![("+2 damage a blow".into(), true)]);
+        // Speed and block as percentages, and the ability scores by name.
+        let boots = Stats { speed: 1.1, sleepiness_rate: 1.2, dexterity: 1.0, ..Stats::default() };
+        let shield = Stats { block_chance: 0.15, strength: -1.0, ..Stats::default() };
+        assert_eq!(
+            text(&changes(&boots, None)),
+            vec![("+0.2\u{d7} sleepiness".into(), false), ("+10% speed".into(), true), ("+1 DEX".into(), true)]
+        );
+        assert_eq!(text(&changes(&shield, None)), vec![("+15% chance to block".into(), true), ("\u{2212}1 STR".into(), false)]);
         // A bag also by the room inside: a pack holds 8x5, a sack less.
         let pack = fb_items::roll_item("Pack", 7).unwrap();
         let sack = fb_items::roll_item("Sack", 7).unwrap();
@@ -783,5 +842,27 @@ mod tests {
         assert!(inside(place_under(Vec2::new(5.0, 1075.0), size, screen)));
         // Bigger than the screen: pinned to the top left.
         assert_eq!(keep_on_screen(Vec2::new(50.0, 50.0), Vec2::new(2000.0, 2000.0), screen), Vec2::splat(CARD_MARGIN));
+    }
+
+    #[test]
+    fn food_and_drink_cards_say_what_u_does() {
+        let line = |base: &str| consume_line(&fb_items::roll_item(base, 3).unwrap());
+        assert_eq!(line("Bread").unwrap(), "U eats it \u{b7} eases hunger 40%");
+        assert_eq!(line("Tankard").unwrap(), "U drinks it \u{b7} eases thirst 50%");
+        assert_eq!(line("Healing draught").unwrap(), "U drinks it");
+        assert_eq!(line("Torch"), None);
+    }
+
+    #[test]
+    fn a_light_card_shows_fuel_left_in_game_time() {
+        assert_eq!(fuel_text(42.0 * 60.0), "Fuel 0:42");
+        assert_eq!(fuel_text(6.0 * 3_600.0), "Fuel 6:00");
+        assert_eq!(fuel_text(3_600.0 + 5.0 * 60.0), "Fuel 1:05");
+        let mut torch = fb_items::roll_item("Spare torch", 3).unwrap();
+        torch.shape.set_lit(true).unwrap();
+        torch.burn(18.0 * 60.0);
+        assert_eq!(light_line(&torch.shape).unwrap(), "Burning \u{b7} Fuel 0:42 \u{b7} L puts it out");
+        torch.burn(1.0e6);
+        assert_eq!(light_line(&torch.shape).unwrap(), "Spent");
     }
 }

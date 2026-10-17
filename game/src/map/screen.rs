@@ -178,6 +178,7 @@ fn build_screen(
     fonts: Res<UiFonts>,
     plan: Option<Res<PlanImage>>,
     marker: Option<Res<MarkerImage>>,
+    level: Option<Res<CurrentLevel>>,
     mut view: ResMut<MapView>,
 ) {
     let existing = screens.iter().next();
@@ -213,7 +214,7 @@ fn build_screen(
                 UiTransform::IDENTITY,
             ));
             root.spawn((
-                Text::new("Map"),
+                Text::new(level.map_or("Map".to_string(), |l| format!("Map \u{b7} Depth {}", l.0.depth))),
                 UiFonts::style(&fonts.display, 30.0, crate::ui::INK),
                 Node { position_type: PositionType::Absolute, left: px(28), top: px(18), ..default() },
             ));
@@ -357,7 +358,7 @@ mod tests {
 
     #[test]
     fn the_plan_covers_the_level_and_its_margin() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let view = MapView { centre: Vec2::new(level.width as f32 * 0.5, level.height as f32 * 0.5), scale: 10.0 };
         let size = Vec2::new(1000.0, 800.0);
         let (corner, extent) = view.plan_rect(&level, size);
@@ -368,7 +369,7 @@ mod tests {
     /// An app with the map screen's systems, the level for 1207 and the eye at `at` looking
     /// along `look`, with the map open on a screen 1600 by 900.
     fn open_map(at: Vec3, look: Vec3) -> (App, Level, Entity) {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Assets<Image>>()
@@ -402,7 +403,7 @@ mod tests {
 
     #[test]
     fn the_marker_follows_the_delver_while_the_map_is_open() {
-        let (sx, sy, inward) = fb_level::generate(1207).start();
+        let (sx, sy, inward) = fb_level::generate(1207, 1).start();
         let (dx, dy) = inward.step();
         let cell_at = |k: f32| Vec3::new((sx as f32 + 0.5 + dx as f32 * k) * CELL, 15.0, (sy as f32 + 0.5 + dy as f32 * k) * CELL);
         let ahead = Vec3::new(dx as f32, 0.0, dy as f32);
@@ -420,7 +421,7 @@ mod tests {
 
     #[test]
     fn the_plan_shows_everything_seen_and_grows_while_open() {
-        let level = fb_level::generate(1207);
+        let level = fb_level::generate(1207, 1);
         let (mut app, _, _) = open_map(Vec3::ZERO, Vec3::NEG_Z);
         let drawn = |app: &App| app.world().resource::<PlanImage>().drawn;
         assert_eq!(drawn(&app), Some((level.seed, 0)), "nothing seen yet");
