@@ -27,7 +27,7 @@ use bevy::{
 };
 use fb_creatures::Species;
 
-use super::feedback::{Corpse, Struck};
+use super::feedback::{Corpse, Slain, Struck};
 use super::{ArmourClass, Health, RunDice, bite_damage, first_level_hit_points};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
 use crate::character::{Character, DelverPoison};
@@ -47,9 +47,10 @@ impl Plugin for VitalsPlugin {
         app.add_message::<AttackOnDelver>()
             .add_message::<MissedDelver>()
             .add_message::<Struck>()
+            .add_message::<Slain>()
             .init_resource::<Pain>()
             .add_systems(OnExit(AppState::Delving), end_the_delve)
-            .add_systems(Update, (give_player_health, armour_the_delver, take_bites, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
+            .add_systems(Update, (give_player_health, armour_the_delver, take_bites, heal_on_kill, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
             .add_systems(Update, spawn_vitals.in_set(DelveSystems));
     }
 }
@@ -208,6 +209,30 @@ fn take_bites(
             if bite.species == Some(Species::ConstrictorSnake) && !health.is_down() {
                 commands.entity(player).insert((Constricted { by: bite.attacker }, Slowed(HELD_PACE)));
             }
+        }
+    }
+}
+
+/// Each kill heals the delver by what the weapon in their main hand gives on a kill (an affix "of
+/// the Leech"'s `HealOnKill`, [`crate::character::Derived::heal_on_kill`]), never above their
+/// maximum. A fallen delver heals nothing.
+fn heal_on_kill(mut slain: MessageReader<Slain>, character: Res<Character>, inventory: Option<Res<Inventory>>, mut players: Query<&mut Health, With<Player>>) {
+    let kills = slain.read().count();
+    if kills == 0 {
+        return;
+    }
+    let none = Inventory::default();
+    let heal = character.gear(inventory.as_deref().unwrap_or(&none)).heal_on_kill.round().max(0.0) as u32;
+    if heal == 0 {
+        return;
+    }
+    for mut health in &mut players {
+        if health.is_down() {
+            continue;
+        }
+        let healed = health.heal(heal * kills as u32);
+        if healed > 0 {
+            info!("The kill heals the delver for {healed}: {} of {} hit points", health.hp, health.max);
         }
     }
 }
@@ -409,6 +434,33 @@ mod tests {
         bite(&mut app, snake, Species::Rat, 3);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 7);
         assert!(app.world().resource::<Pain>().alpha() > 0.0);
+    }
+
+    #[test]
+    fn a_kill_with_a_leech_weapon_heals_the_delver_and_without_one_does_not() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::Rat, 4);
+        app.world_mut().write_message(Slain { target: snake });
+        app.update();
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 6, "a plain fist heals nothing");
+        let mut inventory = Inventory::default();
+        let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+        let leech = fb_items::tables::affixes().iter().find(|a| a.name == "of the Leech").unwrap();
+        leech.apply_to_stats(&mut sword.profile.stats);
+        let id = inventory.add(sword);
+        inventory.wear(id, fb_items::Slot::Mainhand).unwrap();
+        app.insert_resource(inventory);
+        for _ in 0..2 {
+            app.world_mut().write_message(Slain { target: snake });
+            app.update();
+        }
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 8, "one each kill");
+        for _ in 0..5 {
+            app.world_mut().write_message(Slain { target: snake });
+            app.update();
+        }
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 10, "never above the maximum");
     }
 
     #[test]
