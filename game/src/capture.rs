@@ -55,30 +55,27 @@ impl FrameCapturePlugin {
         FrameCapturePlugin { path: path.into(), size: UVec2::new(1920, 1080), frames, every: 1, exit_frame }
     }
 
-    /// The same, drawn at `size` pixels.
-    pub fn sized(self, size: UVec2) -> Self {
-        FrameCapturePlugin { size, ..self }
-    }
-
-    /// The plugin when `FB_SCREENSHOT` is set, saving the frames `FB_SCREENSHOT_FRAMES` names,
-    /// at the size `FB_SCREENSHOT_SIZE` names (`1280x720`; 1920x1080 without it).
+    /// The plugin when `FB_SCREENSHOT` is set, saving the frames `FB_SCREENSHOT_FRAMES` names.
     pub fn from_env() -> Option<Self> {
-        let size = std::env::var("FB_SCREENSHOT_SIZE").ok().and_then(|s| parse_size(&s));
-        FrameCapturePlugin::from_env_frames().map(|plugin| size.map_or(plugin.clone(), |size| plugin.sized(size)))
-    }
-
-    fn from_env_frames() -> Option<Self> {
         let path = std::env::var("FB_SCREENSHOT").ok().filter(|path| !path.is_empty())?;
         let frames = std::env::var("FB_SCREENSHOT_FRAMES").ok().filter(|f| !f.is_empty());
         let every = std::env::var("FB_SCREENSHOT_EVERY").ok().and_then(|n| n.trim().parse::<u32>().ok()).unwrap_or(1).max(1);
-        match frames.as_deref().map(parse_frames) {
-            None => Some(FrameCapturePlugin::new(path)),
-            Some(Ok(frames)) => Some(FrameCapturePlugin { every, ..FrameCapturePlugin::frames(path, frames) }),
+        let plugin = match frames.as_deref().map(parse_frames) {
+            None => FrameCapturePlugin::new(path),
+            Some(Ok(frames)) => FrameCapturePlugin { every, ..FrameCapturePlugin::frames(path, frames) },
             Some(Err(error)) => {
                 warn!("FB_SCREENSHOT_FRAMES: {error}; saving one frame");
-                Some(FrameCapturePlugin::new(path))
+                FrameCapturePlugin::new(path)
             }
-        }
+        };
+        let size = std::env::var("FB_SCREENSHOT_SIZE").ok().filter(|s| !s.is_empty()).and_then(|spec| {
+            let size = parse_size(&spec);
+            if size.is_none() {
+                warn!("FB_SCREENSHOT_SIZE: {spec:?} is not <width>x<height>; capturing at 1920x1080");
+            }
+            size
+        });
+        Some(FrameCapturePlugin { size: size.unwrap_or(plugin.size), ..plugin })
     }
 
     /// Whether frame `frame` is one to save.
@@ -102,11 +99,11 @@ impl FrameCapturePlugin {
     }
 }
 
-/// A size written `1280x720`.
+/// A capture size written `<width>x<height>` (`1280x720`), each at least 1.
 pub fn parse_size(spec: &str) -> Option<UVec2> {
-    let (w, h) = spec.split_once('x')?;
-    let (w, h) = (w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?);
-    (w > 0 && h > 0).then_some(UVec2::new(w, h))
+    let (width, height) = spec.trim().split_once(['x', 'X'])?;
+    let size = UVec2::new(width.trim().parse().ok()?, height.trim().parse().ok()?);
+    (size.min_element() > 0).then_some(size)
 }
 
 /// Frames to capture written as a Rust range: `120..136` (120 to 135), `120..=135`, or one
@@ -228,20 +225,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sizes_read_as_width_by_height() {
+        assert_eq!(parse_size("1280x720"), Some(UVec2::new(1280, 720)));
+        assert_eq!(parse_size(" 800 X 600 "), Some(UVec2::new(800, 600)));
+        assert_eq!(parse_size("0x720"), None);
+        assert_eq!(parse_size("1280"), None);
+    }
+
+    #[test]
     fn frames_read_as_rust_ranges() {
         assert_eq!(parse_frames("120..136"), Ok(120..136));
         assert_eq!(parse_frames("120..=135"), Ok(120..136));
         assert_eq!(parse_frames("150"), Ok(150..151));
         assert!(parse_frames("136..120").is_err());
         assert!(parse_frames("soon").is_err());
-    }
-
-    #[test]
-    fn a_size_is_written_width_x_height() {
-        assert_eq!(parse_size("1280x720"), Some(UVec2::new(1280, 720)));
-        assert_eq!(parse_size("1280"), None);
-        assert_eq!(parse_size("0x720"), None);
-        assert_eq!(FrameCapturePlugin::new("a.png").sized(UVec2::new(640, 360)).size, UVec2::new(640, 360));
     }
 
     #[test]

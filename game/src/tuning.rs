@@ -193,7 +193,7 @@ pub struct FolkTuning {
 
 impl Default for FolkTuning {
     fn default() -> Self {
-        FolkTuning { walk_speed: 11.0, pause_min: 3.0, pause_max: 8.0, wander_radius: 90.0, notice_distance: 28.0, release_distance: 40.0, release_delay: 1.0, lose_interest_after: 25.0 }
+        FolkTuning { walk_speed: 14.0, pause_min: 3.0, pause_max: 8.0, wander_radius: 90.0, notice_distance: 28.0, release_distance: 40.0, release_delay: 1.0, lose_interest_after: 25.0 }
     }
 }
 
@@ -344,15 +344,36 @@ impl Default for SoundTuning {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InterfaceTuning {
-    /// Logical pixels from one grid line to the next (the plate's `--cs`).
+    /// Logical pixels from one grid line to the next (the plate's `--cs`) in a window
+    /// [`InterfaceTuning::REFERENCE_HEIGHT`] lines high. The whole screen scales with the
+    /// window's height from there ([`InterfaceTuning::scale`]).
     pub cell_size: f32,
+    /// The fewest logical pixels a cell is drawn at, however short the window.
+    pub min_cell_size: f32,
     /// How long the mouse rests on an item before its card shows, seconds.
     pub hover_delay: f32,
 }
 
 impl Default for InterfaceTuning {
     fn default() -> Self {
-        InterfaceTuning { cell_size: 52.0, hover_delay: 0.0 }
+        InterfaceTuning { cell_size: 72.0, min_cell_size: 48.0, hover_delay: 0.0 }
+    }
+}
+
+impl InterfaceTuning {
+    /// The window height, in logical pixels, at which the screen is drawn at its own size.
+    pub const REFERENCE_HEIGHT: f32 = 1080.0;
+
+    /// How much the inventory screen is scaled (Bevy's `UiScale`) in a window `height`
+    /// logical pixels high: in step with the height, so the screen keeps one layout at any
+    /// resolution, but never so far down that a cell is drawn under `min_cell_size`. Our own.
+    pub fn scale(&self, height: f32) -> f32 {
+        (height / Self::REFERENCE_HEIGHT).max(self.min_cell_size / self.cell_size.max(1.0))
+    }
+
+    /// The logical pixels a cell is drawn at in a window `height` logical pixels high.
+    pub fn cell_px(&self, height: f32) -> f32 {
+        self.cell_size * self.scale(height)
     }
 }
 

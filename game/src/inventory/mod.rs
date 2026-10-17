@@ -62,12 +62,15 @@ use crate::launch::AppState;
 use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, SheetTab, show_screen, switch_screens};
 use crate::quickslots::{QuickslotDrop, Quickslots};
 pub use crate::ui::node_rect;
-use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
+use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, rarity_color, ui_cursor};
 use header::ToastText;
 use crate::tuning::Tuning;
 
 /// Width of a grid line, in logical pixels.
 const LINE_PX: f32 = 2.0;
+/// The widest the left leaf grows, in logical pixels: a pack and a belt pouch side by side at
+/// the shipped 72-pixel cells (8 + 4 cells and the gap between).
+const LEAF_MAX_PX: f32 = 900.0;
 /// Radius of a grid's rounded corners, in logical pixels (the plate's `.grid`).
 const GRID_RADIUS_PX: f32 = 12.0;
 /// How far the mouse moves with the button down before a press becomes a drag, in logical
@@ -123,6 +126,7 @@ impl Plugin for InventoryPlugin {
                         // Screens open and close in `switch_screens`.
                         underfoot::track_underfoot,
                         close_container_with_screen,
+                        scale_screen,
                         build_screen,
                         drag_items,
                         unhang_without_belt,
@@ -706,6 +710,22 @@ pub fn cell_under(rect: Rect, point: Vec2, cell: f32) -> IVec2 {
     IVec2::new(x, y)
 }
 
+/// Scales the UI (Bevy's `UiScale`) with the height of the view the inventory screen is drawn
+/// in while it is open ([`crate::tuning::InterfaceTuning::scale`]), so the screen keeps one
+/// layout at any resolution with its cells `cell_size` apart at 1080 lines; back to 1 when it
+/// closes, so no other screen is scaled.
+pub(crate) fn scale_screen(open: Res<ScreenOpen>, cameras: Query<&Camera, With<ViewModelCamera>>, tuning: Res<Tuning>, scale: Option<ResMut<UiScale>>) {
+    let Some(mut scale) = scale else { return };
+    let height = cameras.iter().next().and_then(Camera::logical_viewport_size).map(|size| size.y);
+    let wanted = match height {
+        Some(height) if open.is(Screen::Inventory) && height > 0.0 => tuning.interface.scale(height),
+        _ => 1.0,
+    };
+    if scale.0 != wanted {
+        scale.0 = wanted;
+    }
+}
+
 /// Builds the screen when it opens and rebuilds it whenever what is in it changes, or the
 /// tuning does; takes it down when it closes.
 #[allow(clippy::too_many_arguments)]
@@ -774,7 +794,9 @@ pub(crate) fn build_screen(
             ))
             .with_children(|ledger| {
                 ledger
-                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(700), ..default() })
+                    // Wide enough for a pack and a belt pouch side by side, and for underfoot
+                    // and a bag set down beside it.
+                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(LEAF_MAX_PX), ..default() })
                     .with_children(|leaf| {
                         header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab == SheetTab::Character {
@@ -808,13 +830,22 @@ pub(crate) fn build_screen(
                                     screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
                                 }
                             });
+                    });
+                // The doll, with the quickslots and the help under it, leaving the left leaf's
+                // height to the grids.
+                ledger
+                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(doll::FRAME.x), ..default() })
+                    .with_children(|leaf| {
+                        doll::doll_leaf(leaf, &doll_assets, &inventory, &fonts, &mut icons);
+                        if *tab == SheetTab::Character {
+                            return;
+                        }
                         leaf.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
                             column.spawn((Text::new("quickslots"), UiFonts::style(&fonts.display, 18.0, INK)));
                             crate::quickslots::strip(column, &fonts);
                         });
                         leaf.spawn((Text::new(HELP), UiFonts::style(&fonts.body, 14.0, MUTED)));
                     });
-                doll::doll_leaf(ledger, &doll_assets, &inventory, &fonts, &mut icons);
             });
             root.spawn((
                 DragGhost,
@@ -841,33 +872,15 @@ struct ScreenLayout<'a> {
 }
 
 impl ScreenLayout<'_> {
-    /// The floor within reach, as a paler grid under its name; bare, a dashed box the grid's
-    /// size that says so, and takes what is dropped on it all the same.
+    /// The floor within reach, as a paler grid under its name, always there to drop things on;
+    /// bare, its empty cells and a line under the name that says so.
     fn underfoot(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, underfoot: &Underfoot) {
-        if underfoot.grid.is_empty() {
-            let size = grid_size(&underfoot.grid, self.cell);
-            parent
-                .spawn((
-                    GridView::Underfoot,
-                    Node {
-                        width: px(size.x),
-                        height: px(size.y),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: px(6),
-                        padding: UiRect::axes(px(16), px(12)),
-                        ..default()
-                    },
-                ))
-                .with_children(|bare| {
-                    dashed_outline(bare, size, GRID_RADIUS_PX, LINE_PX, 7.0, 5.0, LINE);
-                    bare.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
-                    bare.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 14.0, MUTED)));
-                });
-            return;
-        }
         parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
-            column.spawn(Node { align_items: AlignItems::Center, height: px(36), ..default() }).with_children(|head| {
+            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), height: px(36), ..default() }).with_children(|head| {
                 head.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
+                if underfoot.grid.is_empty() {
+                    head.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 14.0, MUTED)));
+                }
             });
             self.grid(column, icons, GridView::Underfoot, &underfoot.grid, true);
         });
@@ -1030,12 +1043,12 @@ fn drag_items(
     underfoot: Res<Underfoot>,
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
-    (time, tuning): (Res<Time<Real>>, Res<Tuning>),
+    (time, tuning, ui_scale): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>),
     (drops, mut quickslots): (Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>, ResMut<Quickslots>),
     mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
     let cell_px = tuning.interface.cell_size;
-    let cursor = window.and_then(|w| w.cursor_position());
+    let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     if !open.is(Screen::Inventory) {
         dragging.0 = None;
         return;
@@ -1151,12 +1164,12 @@ fn show_drag(
     mut views: Query<(&ItemView, &mut BackgroundColor, &Children), Without<DropHint>>,
     mut item_icons: Query<&mut ImageNode, (With<ItemIcon>, Without<DragGhost>)>,
     mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>)>,
-    tuning: Res<Tuning>,
+    (tuning, ui_scale): (Res<Tuning>, Option<Res<UiScale>>),
     mut icons: Icons,
 ) {
     let cell_px = tuning.interface.cell_size;
     let drag = dragging.0.filter(|d| d.active);
-    let cursor = window.and_then(|w| w.cursor_position());
+    let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     for (mut node, mut image, mut visibility) in &mut ghosts {
         let (Some(drag), Some(point), Some(item)) = (drag, cursor, drag.and_then(|d| inventory.item(d.id))) else {
             *visibility = Visibility::Hidden;
@@ -1237,7 +1250,7 @@ mod tests {
     use super::*;
 
     /// The cell size as shipped.
-    const CELL_PX: f32 = 52.0;
+    const CELL_PX: f32 = 72.0;
 
     #[test]
     fn the_delver_starts_with_clothes_a_belt_and_a_burning_torch() {
@@ -1258,6 +1271,35 @@ mod tests {
     #[test]
     fn the_cell_size_here_is_the_shipped_one() {
         assert_eq!(Tuning::default().interface.cell_size, CELL_PX);
+    }
+
+    #[test]
+    fn cells_scale_with_the_window_height() {
+        let interface = Tuning::default().interface;
+        // At 1920 by 1080 the screen is at its own size: a 1 by 3 dagger is 72 by 216.
+        let dagger = Grid::<ItemId>::new(1, 3);
+        assert_eq!(interface.scale(1080.0), 1.0);
+        assert_eq!(grid_size(&dagger, interface.cell_px(1080.0)) - LINE_PX, Vec2::new(72.0, 216.0));
+        // At 720 lines it is two thirds the size, cells at their 48 floor; never under it.
+        assert!((interface.cell_px(720.0) - 48.0).abs() < 1e-4);
+        assert!((interface.cell_px(480.0) - 48.0).abs() < 1e-4);
+        assert!((interface.cell_px(1440.0) - 96.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_screen_scales_only_while_open() {
+        let mut app = App::new();
+        app.init_resource::<ScreenOpen>().init_resource::<Tuning>().init_resource::<UiScale>().add_systems(Update, scale_screen);
+        let camera = Camera { computed: bevy::camera::ComputedCameraValues { target_info: Some(bevy::camera::RenderTargetInfo { physical_size: UVec2::new(1280, 720), scale_factor: 1.0 }), ..default() }, ..default() };
+        app.world_mut().spawn((ViewModelCamera { follows: Entity::PLACEHOLDER }, camera));
+        app.update();
+        assert_eq!(app.world().resource::<UiScale>().0, 1.0);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.update();
+        assert!((app.world().resource::<UiScale>().0 - 2.0 / 3.0).abs() < 1e-4);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.update();
+        assert_eq!(app.world().resource::<UiScale>().0, 1.0);
     }
 
     #[test]
@@ -1800,15 +1842,20 @@ mod tests {
     }
 
     #[test]
-    fn bare_stone_underfoot_is_a_box_the_grid_s_size_that_says_so() {
+    fn bare_stone_underfoot_shows_its_empty_grid() {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyI);
         let size = grid_size(&app.world().resource::<Underfoot>().grid, CELL_PX);
         let mut views = app.world_mut().query::<(&GridView, &Node, &Children)>();
-        let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot drop zone");
+        let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot grid");
         assert_eq!((node.width, node.height), (px(size.x), px(size.y)));
-        let said: Vec<String> = children.iter().filter_map(|c| app.world().get::<Text>(c)).map(|t| t.0.clone()).collect();
-        assert_eq!(said, vec!["underfoot".to_string(), "Bare stone. Drop things here.".to_string()]);
+        // In an empty corridor: 18 empty cells, 6 by 3, and nothing in them.
+        let children = children.to_vec();
+        assert_eq!(children.len(), 18);
+        assert!(children.iter().all(|c| app.world().get::<ItemView>(*c).is_none()));
+        let mut texts = app.world_mut().query::<&Text>();
+        let said: Vec<String> = texts.iter(app.world()).map(|t| t.0.clone()).collect();
+        assert!(said.contains(&"underfoot".to_string()) && said.contains(&"Bare stone. Drop things here.".to_string()), "{said:?}");
     }
 
     /// The header's line of numbers, as read from its spans.
