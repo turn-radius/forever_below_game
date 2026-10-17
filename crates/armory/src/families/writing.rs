@@ -11,7 +11,7 @@
 //!   second spiral wound the other way. Rolled shut it is just the spirals; partly unrolled
 //!   the span shows rows of ink, drawn as thin strips lying on the sheet.
 //! - Rollers are turned dowels with knobs of wood, bone or brass, none, one or two. A rolled
-//!   shut scroll can be tied with ribbon or cord and sealed with wax pressed with a sigil.
+//!   shut scroll can be tied with ribbon or cord and sealed with wax raised with a sigil.
 //! - [`Condition`] drives the wear: `damage` ragged and tattered edges (bites out of the
 //!   sides, a torn end), `wear` and `rot` foxing and a browner sheet, and wear with damage
 //!   scorched edges.
@@ -126,6 +126,7 @@ pub use crate::build::book::{BookOpts, CLOTHS, Centre, Closure, Cover, Edge, Met
 
 /// What every kind of writing shares.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Piece {
     pub kind: WritingKind,
     /// Overall scale.
@@ -139,6 +140,7 @@ pub struct Piece {
 
 /// A scroll's own options.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ScrollOpts {
     /// Rollers: none, one, or two (the sheet wound on both).
     pub rollers: u32,
@@ -158,7 +160,7 @@ pub struct ScrollOpts {
     /// A wax seal, on a rolled-shut scroll.
     pub seal: bool,
     pub seal_color: Rgb,
-    /// Points on the star pressed into the wax.
+    /// Points on the star raised on the wax.
     pub sigil: u32,
 }
 
@@ -395,6 +397,8 @@ impl Writing {
 }
 
 fn compose(rng: &mut Mulberry32, seed: u32, kind: WritingKind) -> WritingState {
+    // Draws are in a fixed order and saved items depend on it: add new ones only after the
+    // scroll block below (the note's follow it, and a book has a stream of its own).
     let mut s = WritingState { seed, ..WritingState::default() };
     s.palette = *rng.pick(&Palette::PRESETS);
     let p = &mut s.piece;
@@ -787,7 +791,8 @@ fn sheet(l: &Layout, surface: &Surface, path: &[[f32; 2]], cum: &[f32], flat: (u
             (0..COLS)
                 .map(|c| {
                     let cf = c as f32 / (COLS - 1) as f32;
-                    let s = ends[c] * f;
+                    // The tear only trims the tail: the rest of the column is the whole sheet's.
+                    let s = total * f - (total - ends[c]) * smooth(0.9, 1.0, f);
                     let [z, y] = at(s);
                     let lo = -l.w * 0.5 + edge_inset(s, 0.0, decay.ragged, seed);
                     let hi = l.w * 0.5 - edge_inset(s, 1.0, decay.ragged, seed);
@@ -1016,7 +1021,7 @@ fn valley(l: &Layout) -> f32 {
     l.cy + (rt * rt - half * half).max(0.0).sqrt()
 }
 
-/// A puck of wax with an uneven edge, a raised rim and a star pressed in the middle, set with
+/// A puck of wax with an uneven edge, a raised rim and a star raised in the middle, set with
 /// its base at `at`.
 fn seal(sc: &ScrollOpts, l: &Layout, at: V3, seed: u32) -> MeshBuilder {
     let mut puck = wax_seal(sc.sigil, l.size, seed);

@@ -124,3 +124,27 @@ fn note_and_book_stand_ins_build() {
         }
     }
 }
+
+#[test]
+fn a_torn_end_leaves_the_rest_of_the_sheet_unsheared() {
+    let mut s = Writing::roll_as(5, WritingKind::Scroll);
+    s.scroll.rollers = 1;
+    s.scroll.unroll = 0.8;
+    let clean = Writing::build(&s);
+    s.cond = Condition::of(ConditionState::GraveFind);
+    let worn = Writing::build(&s);
+    let (c, w) = (&part(&clean, "sheet").unwrap().positions, &part(&worn, "sheet").unwrap().positions);
+    assert_eq!(c.len(), w.len());
+    // Whatever the whole scroll is recentred by, vertices away from the tail move together.
+    let dz: Vec<f32> = c.iter().zip(w).map(|(a, b)| b[2] - a[2]).collect();
+    let dy: Vec<f32> = c.iter().zip(w).map(|(a, b)| b[1] - a[1]).collect();
+    let same = |d: &[f32]| {
+        let mode = d[d.len() / 2];
+        d.iter().filter(|v| (**v - mode).abs() < 1e-4).count()
+    };
+    let n = c.len();
+    assert!(same(&dy) * 10 > n * 8, "{} of {n} keep their height", same(&dy));
+    assert!(same(&dz) * 10 > n * 8, "{} of {n} keep their place along the sheet", same(&dz));
+    // And the tear is real: some of the tail did move.
+    assert!(same(&dz) < n, "nothing was torn");
+}

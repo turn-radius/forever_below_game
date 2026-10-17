@@ -1,7 +1,7 @@
 //! Writing "Forge new": deterministic, in range, varied and coherent.
 
 use armory::families::Generator;
-use armory::families::writing::{INKS, Knob, LIMITS, Paper, SEALS, Tie, Writing, WritingKind, WritingState};
+use armory::families::writing::{Cover, Edge, INKS,Knob, LIMITS, Paper, SEALS, Tie, Writing, WritingKind, WritingState};
 
 fn rolls(range: std::ops::RangeInclusive<u32>) -> Vec<WritingState> {
     range.map(Writing::roll).collect()
@@ -97,4 +97,29 @@ fn nouns() {
     assert_eq!(Writing::noun(&s), "Note");
     s.piece.kind = WritingKind::Book;
     assert_eq!(Writing::noun(&s), "Book");
+}
+
+/// Saved items depend on the draw order: edits to the roll must not move these.
+#[test]
+fn golden_rolls_stay_put() {
+    use armory::families::writing::NoteForm;
+    let near = |a: f32, b: f32| assert!((a - b).abs() < 1e-4, "{a} != {b}");
+
+    let s = Writing::roll_as(1207, WritingKind::Scroll);
+    assert_eq!((s.piece.paper, s.piece.lines), (Paper::Parchment, 9));
+    assert_eq!((s.scroll.rollers, s.scroll.knob, s.scroll.sigil, s.scroll.tie, s.scroll.seal), (1, Knob::Bone, 6, Tie::None, false));
+    near(s.piece.size, 1.13);
+    near(s.scroll.turns, 6.2);
+    near(s.scroll.unroll, 0.7);
+    near(s.scroll.curl, 0.35);
+
+    let s = Writing::roll_as(42, WritingKind::Note);
+    assert_eq!((s.piece.paper, s.piece.lines, s.note.form, s.note.scrawl), (Paper::Vellum, 5, NoteForm::Sealed, 5));
+    near(s.note.length, 1.1);
+    near(s.note.aspect, 0.68);
+
+    let s = Writing::roll_as(42, WritingKind::Book);
+    assert_eq!((s.book.cover, s.book.bands, s.book.edge, s.book.ribbon), (Cover::Leather, 4, Edge::Red, true));
+    near(s.book.length, 3.45);
+    near(s.book.thick, 0.57);
 }

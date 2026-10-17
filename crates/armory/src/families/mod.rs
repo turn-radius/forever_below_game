@@ -30,9 +30,9 @@ pub mod shield;
 pub mod spear;
 pub mod staff;
 pub mod sundry;
-pub mod writing;
 pub mod sword;
 pub mod torch;
+pub mod writing;
 
 pub(crate) mod hilted;
 
