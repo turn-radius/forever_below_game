@@ -25,6 +25,7 @@ use bevy::{
 use fb_body::Side;
 use fb_character::combat::Odds;
 
+use super::callouts::{Callout, Outcome};
 use super::feedback::{Corpse, Struck};
 use super::{ArmourClass, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach};
 use crate::carry::{HeldItem, ViewModelCamera};
@@ -44,6 +45,7 @@ pub struct SwingPlugin;
 impl Plugin for SwingPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Struck>()
+            .add_message::<Callout>()
             .add_message::<SwungAt>()
             .add_systems(Startup, load_swing_sound)
             .add_systems(
@@ -146,7 +148,7 @@ pub(super) fn start_swing(
     marksman: Option<Res<super::shoot::Marksman>>,
     mut dice: ResMut<RunDice>,
     mut last: Local<Option<Strike>>,
-    practice: Option<Res<SwingPractice>>,
+    (practice, rules): (Option<Res<SwingPractice>>, Option<Res<crate::rules::GameRules>>),
     mut toasts: crate::inventory::Toasts,
     mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina), Ready>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -175,7 +177,8 @@ pub(super) fn start_swing(
                 continue;
             }
             let mut spent = stamina.0;
-            spent.spend(fb_character::SWING_COST);
+            let rules = crate::rules::GameRules::of(&rules);
+            spent.spend_with(rules, rules.stamina.swing_cost);
             stamina.0 = spent;
         }
         let weapon = Weapon::in_hand(&inventory, &character);
@@ -317,7 +320,10 @@ fn land_blows(
     armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
     mut swung: MessageWriter<SwungAt>,
+    mut callouts: MessageWriter<Callout>,
+    rules: Option<Res<crate::rules::GameRules>>,
 ) {
+    let rules = crate::rules::GameRules::of(&rules);
     let dt = time.delta_secs();
     for (player, at, mut swing, poison) in &mut players {
         swing.t += dt;
@@ -330,11 +336,13 @@ fn land_blows(
                 swung.write(SwungAt { target });
                 let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
                 let odds = poison.map_or(Odds::Even, |p| p.0.attack_odds());
-                let attack = attack_roll(&swing.weapon, character.strength(), ac.0, odds, &mut dice.0);
+                let attack = attack_roll(rules, &swing.weapon, character.strength(), ac.0, odds, &mut dice.0);
                 info!("swing: {}", attack.line());
                 if attack.hit {
                     let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning });
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20 });
+                } else {
+                    callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
             }
         }

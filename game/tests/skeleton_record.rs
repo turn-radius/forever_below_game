@@ -105,7 +105,8 @@ fn skeleton_at(app: &mut App, spot: CreatureSpot) -> Option<Entity> {
     world.query::<(Entity, &Critter)>().iter(world).find(|(_, c)| c.spot == spot).map(|(e, _)| e)
 }
 
-/// A skeleton of the level that wears at least two things, the first by seed.
+/// A skeleton of the level that wears or holds something, the first by seed (the first halls' dead
+/// wear little, `fb_items::undead::FIRST_HALLS`).
 fn a_kitted_skeleton(app: &mut App) -> (CreatureSpot, Vec<(String, u32)>) {
     let world = app.world_mut();
     let mut kitted: Vec<(CreatureSpot, Vec<(String, u32)>)> = world
@@ -115,11 +116,11 @@ fn a_kitted_skeleton(app: &mut App) -> (CreatureSpot, Vec<(String, u32)>) {
         .filter_map(|c| {
             let kit = c.kit.as_ref()?;
             let worn: Vec<(String, u32)> = kit.outfit.worn.iter().map(|(_, i)| (i.base.to_string(), i.seed)).collect();
-            (worn.len() >= 2).then_some((c.spot, worn))
+            (!worn.is_empty()).then_some((c.spot, worn))
         })
         .collect();
     kitted.sort_by_key(|(spot, _)| spot.seed);
-    kitted.into_iter().next().expect("the stone halls have a kitted skeleton")
+    kitted.into_iter().next().expect("the stone halls have a skeleton with gear")
 }
 
 /// How many of `gear` lie on the floor, counting each piece.
@@ -141,7 +142,7 @@ fn worn_pieces(app: &mut App, skeleton: Entity) -> usize {
 }
 
 fn strike_dead(app: &mut App, skeleton: Entity) {
-    app.world_mut().write_message(Struck { target: skeleton, damage: 10_000, from: Vec2::ZERO, bludgeoning: false });
+    app.world_mut().write_message(Struck { target: skeleton, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false });
 }
 
 #[test]
@@ -197,13 +198,25 @@ fn a_living_skeleton_comes_back_in_its_gear_where_it_stood_and_as_hurt() {
     app.world_mut().get_mut::<Health>(skeleton).unwrap().hp -= 3;
     let hp = app.world().get::<Health>(skeleton).unwrap().hp;
     let index = level(&app).creatures.iter().position(|s| *s == spot).unwrap();
-    round_trip(&mut app);
+    go(&mut app, StairKind::Down);
+    // Back up, looked at the first frame it stands again, before it can wander off.
+    app.world_mut().write_message(UseStair(StairKind::Up));
+    let mut again = None;
+    for _ in 0..200 {
+        app.update();
+        if depth(&app) == 2 {
+            again = skeleton_at(&mut app, spot);
+            if again.is_some() {
+                break;
+            }
+        }
+    }
     // It wandered while the delver left; it comes back where the record has it.
     let stood = Vec3::from_array(app.world().resource::<WorldRecord>().level(2).unwrap().creatures[&index].at);
-    let again = skeleton_at(&mut app, spot).expect("it is still there");
+    let again = again.expect("it is still there");
     assert!(app.world().get::<Corpse>(again).is_none() && app.world().get::<Looted>(again).is_none());
     assert_eq!(worn_pieces(&mut app, again), worn, "it wears what it wore");
     assert_eq!(app.world().get::<Health>(again).unwrap().hp, hp, "as hurt as it was");
-    assert!(app.world().get::<Transform>(again).unwrap().translation.distance(stood) < 1e-3, "where it stood");
+    assert!(app.world().get::<Transform>(again).unwrap().translation.distance(stood) < 1e-3, "where it stood: {} from {stood}", app.world().get::<Transform>(again).unwrap().translation);
     assert_eq!(gear_on_the_floor(&mut app, &gear), 0, "none of its gear lies about");
 }

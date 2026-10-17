@@ -18,6 +18,7 @@ pub mod naming;
 pub mod outfit;
 pub mod profile;
 pub mod provision;
+pub mod range;
 pub mod rarity;
 pub mod stats;
 pub mod tables;

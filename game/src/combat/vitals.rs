@@ -1,13 +1,13 @@
 //! The delver's hit points: bites take them, the view shows them, and at 0 the run ends.
 //!
 //! - The delver starts with a 1st-level character's hit points
-//!   ([`super::first_level_hit_points`]).
+//!   ([`super::first_level_hit_points_with`]).
 //! - The delver carries an [`ArmourClass`], the one the sheet shows (10, the Dexterity modifier
 //!   and what they wear, `Character::armour_class`), kept up as they dress ([`armour_the_delver`]).
 //!   Every creature's and folk's blow rolls to hit against it
 //!   (`creatures::behaviour::BlowsAtDelver`); one that misses whooshes past ([`whoosh_past`]).
 //! - Each [`AttackOnDelver`] (a blow that hit) takes its bite, and a poisonous snake's venom after the delver's
-//!   Constitution save ([`super::bite_damage`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
+//!   Constitution save ([`super::bite_damage_with`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
 //!   A failed save also poisons the delver for a while ([`DelverPoison`],
 //!   [`fb_character::poison`]), which turns the life orb green ([`super::orbs`]).
 //! - A constrictor's bite also holds the delver ([`Constricted`]), who moves at a quarter of
@@ -27,8 +27,8 @@ use bevy::{
 };
 use fb_creatures::Species;
 
-use super::feedback::{Corpse, Struck};
-use super::{ArmourClass, Health, RunDice, bite_damage, first_level_hit_points};
+use super::feedback::{Corpse, Slain, Struck};
+use super::{ArmourClass, Health, RunDice, bite_damage_with, first_level_hit_points_with};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
 use crate::character::{Character, DelverPoison};
 use crate::creatures::Critter;
@@ -47,9 +47,11 @@ impl Plugin for VitalsPlugin {
         app.add_message::<AttackOnDelver>()
             .add_message::<MissedDelver>()
             .add_message::<Struck>()
+            .add_message::<Slain>()
             .init_resource::<Pain>()
+            .init_resource::<crate::rules::GameRules>()
             .add_systems(OnExit(AppState::Delving), end_the_delve)
-            .add_systems(Update, (give_player_health, armour_the_delver, take_bites, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
+            .add_systems(Update, (give_player_health, fit_hit_points, armour_the_delver, take_bites, heal_on_kill, whoosh_past, show_vitals, break_free, fall).chain().in_set(DelveSystems))
             .add_systems(Update, spawn_vitals.in_set(DelveSystems));
     }
 }
@@ -126,10 +128,10 @@ pub struct Constricted {
 
 /// The delver's hit points, from who they are, once they stand in the level; `FB_PLAYER_HP=<n>`
 /// starts them on `n` of those instead, to check a fall quickly.
-fn give_player_health(mut commands: Commands, character: Res<Character>, new: Query<Entity, (With<Player>, Without<Health>)>) {
+fn give_player_health(mut commands: Commands, character: Res<Character>, rules: Res<crate::rules::GameRules>, new: Query<Entity, (With<Player>, Without<Health>)>) {
     let start = std::env::var("FB_PLAYER_HP").ok().and_then(|n| n.trim().parse::<i32>().ok());
     for player in &new {
-        commands.entity(player).insert(starting_health(first_level_hit_points(&character), start));
+        commands.entity(player).insert(starting_health(first_level_hit_points_with(&rules, &character), start));
     }
 }
 
@@ -139,13 +141,59 @@ pub fn starting_health(max: i32, start: Option<i32>) -> Health {
 }
 
 /// The delver's Armor Class, as the sheet works it out from who they are and what they wear,
-/// on the delver for every blow at them to roll against.
-fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, players: Query<(Entity, Option<&ArmourClass>), With<Player>>) {
+/// on the delver for every blow at them to roll against, and the chance their shield turns a
+/// hit aside ([`BlockChance`]).
+#[allow(clippy::type_complexity)]
+fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, players: Query<(Entity, Option<&ArmourClass>, Option<&BlockChance>), With<Player>>) {
     let none = Inventory::default();
-    let ac = ArmourClass(character.armour_class(inventory.as_deref().unwrap_or(&none)).value().round() as i32);
-    for (player, had) in &players {
+    let inventory = inventory.as_deref().unwrap_or(&none);
+    let ac = ArmourClass(character.armour_class(inventory).value().round() as i32);
+    let block = BlockChance(character.gear(inventory).block_chance as f32);
+    for (player, had, blocked) in &players {
         if had != Some(&ac) {
             commands.entity(player).insert(ac);
+        }
+        if blocked.copied().unwrap_or_default() != block {
+            commands.entity(player).insert(block);
+        }
+    }
+}
+
+/// The chance, 0 to 1, that the shield the delver holds turns aside a blow that would hit them
+/// (an affix "of Deflection"'s, `fb_items::stats::Stats::block_chance`). Our own mechanic,
+/// standing in for the hold-to-block still to come: a blow turned aside does nothing and
+/// whooshes past as a miss (`creatures::behaviour::BlowsAtDelver`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct BlockChance(pub f32);
+
+impl BlockChance {
+    /// Whether the shield turns aside a blow that hit, from one draw of `rng`; with no chance
+    /// nothing is drawn.
+    pub fn turns_aside(self, rng: &mut procgen_rng::Mulberry32) -> bool {
+        self.0 > 0.0 && rng.next_f64() < self.0 as f64
+    }
+}
+
+/// Keeps the delver's maximum hit points to their Constitution as it stands (a ring "of Vigour"
+/// raises it; SRD 5.1, "Using Each Ability", Constitution, "Hit Points": when the modifier
+/// changes, so does the hit point maximum, as though it had been the modifier from 1st level),
+/// moving their maximum and hit points by as much as the first-level hit points moved, never
+/// below 1 for one still standing. `last` is the first-level hit points last seen; the first
+/// look only notes them, so a delver started on other hit points keeps them.
+fn fit_hit_points(character: Res<Character>, rules: Option<Res<crate::rules::GameRules>>, mut last: Local<Option<i32>>, mut players: Query<&mut Health, With<Player>>) {
+    if !character.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) {
+        return;
+    }
+    let now = first_level_hit_points_with(crate::rules::GameRules::of(&rules), &character);
+    let Some(was) = last.replace(now) else { return };
+    let by = now - was;
+    if by == 0 {
+        return;
+    }
+    for mut health in &mut players {
+        if !health.is_down() {
+            let max = (health.max + by).max(1);
+            *health = Health { hp: (health.hp + by).clamp(1, max), max };
         }
     }
 }
@@ -168,6 +216,18 @@ fn whoosh_past(
     }
 }
 
+/// How the log names a blow that landed: "A folk strikes", a skeleton's by its weapon
+/// ("Skeleton slashes" with a sword, "Skeleton strikes" with a mace, "Skeleton claws" bare),
+/// and a beast's bite ("Rat bites").
+pub fn blow_line(species: Option<Species>, kit: Option<&crate::creatures::skeletons::SkeletonKit>) -> String {
+    match (species, kit) {
+        (None, _) => "A folk strikes".to_string(),
+        (Some(s), Some(kit)) if s.is_skeleton() => format!("{} {}", s.stat_block().name, kit.blow_verb()),
+        (Some(s), _) if s.is_skeleton() => format!("{} strikes", s.stat_block().name),
+        (Some(s), _) => format!("{} bites", s.stat_block().name),
+    }
+}
+
 /// Each bite takes its damage from the delver; a constrictor's holds them.
 fn take_bites(
     mut commands: Commands,
@@ -176,10 +236,12 @@ fn take_bites(
     mut dice: ResMut<RunDice>,
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
+    critters: Query<&Critter>,
     mut players: Query<(Entity, &mut Health, Option<&DelverPoison>), With<Player>>,
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
+    rules: Res<crate::rules::GameRules>,
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
@@ -191,7 +253,7 @@ fn take_bites(
             if health.is_down() {
                 continue;
             }
-            let (damage, poisons_for) = bite_damage(bite, character.constitution(), &mut dice.0);
+            let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
             health.hurt(damage);
             if let Some(hours) = poisons_for {
                 let mut poison = poison.map_or_else(Default::default, |p| p.0);
@@ -203,11 +265,35 @@ fn take_bites(
             if let Some(sounds) = &sounds {
                 commands.spawn((Name::new("blow lands"), AudioPlayer::new(sounds.thud.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(AppState::Delving)));
             }
-            let who = bite.species.map_or_else(|| "A folk strikes".to_string(), |s| format!("{s:?} bites"));
+            let who = blow_line(bite.species, critters.get(bite.attacker).ok().and_then(|c| c.kit.as_deref()));
             info!("{who} for {damage}: {} of {} hit points left", health.hp, health.max);
             if bite.species == Some(Species::ConstrictorSnake) && !health.is_down() {
                 commands.entity(player).insert((Constricted { by: bite.attacker }, Slowed(HELD_PACE)));
             }
+        }
+    }
+}
+
+/// Each kill heals the delver by what the weapon in their main hand gives on a kill (an affix "of
+/// the Leech"'s `HealOnKill`, [`crate::character::Derived::heal_on_kill`]), never above their
+/// maximum. A fallen delver heals nothing.
+fn heal_on_kill(mut slain: MessageReader<Slain>, character: Res<Character>, inventory: Option<Res<Inventory>>, mut players: Query<&mut Health, With<Player>>) {
+    let kills = slain.read().count();
+    if kills == 0 {
+        return;
+    }
+    let none = Inventory::default();
+    let heal = character.gear(inventory.as_deref().unwrap_or(&none)).heal_on_kill.round().max(0.0) as u32;
+    if heal == 0 {
+        return;
+    }
+    for mut health in &mut players {
+        if health.is_down() {
+            continue;
+        }
+        let healed = health.heal(heal * kills as u32);
+        if healed > 0 {
+            info!("The kill heals the delver for {healed}: {} of {} hit points", health.hp, health.max);
         }
     }
 }
@@ -412,6 +498,79 @@ mod tests {
     }
 
     #[test]
+    fn a_skeletons_blow_is_logged_by_its_weapon_and_a_rats_as_a_bite() {
+        use crate::creatures::skeletons::SkeletonKit;
+        let state = fb_creatures::SkeletonState::roll(3);
+        let armed = |base: &str| {
+            let item = fb_items::roll_item(base, 41).unwrap();
+            SkeletonKit::new(&state, fb_items::outfit::OutfitSet { worn: vec![(fb_items::Slot::Mainhand, item)], goods: Vec::new(), ground: Vec::new() }, [None, None])
+        };
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&armed("Sword"))), "Skeleton slashes");
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&armed("Mace"))), "Skeleton strikes");
+        assert_eq!(blow_line(Some(Species::Skeleton), Some(&SkeletonKit::bare(&state))), "Skeleton claws");
+        assert_eq!(blow_line(Some(Species::Rat), None), "Rat bites");
+        assert_eq!(blow_line(None, None), "A folk strikes");
+        for line in [armed("Sword"), armed("Mace"), armed("Dagger"), SkeletonKit::bare(&state)].iter().map(|k| blow_line(Some(Species::Skeleton), Some(k))) {
+            assert!(!line.contains("bites"), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_shield_of_the_rampart_turns_aside_a_fifth_of_the_hits() {
+        let mut rng = procgen_rng::Mulberry32::new(17);
+        let turned = (0..10_000).filter(|_| BlockChance(0.2).turns_aside(&mut rng)).count();
+        assert!((turned as f64 / 10_000.0 - 0.2).abs() < 0.015, "{turned}");
+        let mut none = procgen_rng::Mulberry32::new(17);
+        assert!(!BlockChance(0.0).turns_aside(&mut none));
+        assert_eq!(none.next_f64(), procgen_rng::Mulberry32::new(17).next_f64(), "no shield, no draw");
+    }
+
+    #[test]
+    fn a_ring_of_vigour_raises_the_hit_point_maximum_and_taking_it_off_lowers_it() {
+        let (mut app, player, _) = delve();
+        app.update();
+        let max = app.world().get::<Health>(player).unwrap().max;
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = max - 3;
+        // CON +2 is +1 modifier.
+        let con = app.world().resource::<Character>().constitution();
+        let bonus = if con % 2 == 0 { 2 } else { 1 };
+        app.world_mut().resource_mut::<Character>().worn.constitution = bonus;
+        app.update();
+        let raised = *app.world().get::<Health>(player).unwrap();
+        assert_eq!((raised.hp, raised.max), (max - 2, max + 1));
+        app.world_mut().resource_mut::<Character>().worn.constitution = 0;
+        app.update();
+        assert_eq!(*app.world().get::<Health>(player).unwrap(), Health { hp: max - 3, max });
+    }
+
+    #[test]
+    fn a_kill_with_a_leech_weapon_heals_the_delver_and_without_one_does_not() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::Rat, 4);
+        app.world_mut().write_message(Slain { target: snake });
+        app.update();
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 6, "a plain fist heals nothing");
+        let mut inventory = Inventory::default();
+        let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+        let leech = fb_items::tables::affixes().iter().find(|a| a.name == "of the Leech").unwrap();
+        leech.apply_to_stats(&mut sword.profile.stats);
+        let id = inventory.add(sword);
+        inventory.wear(id, fb_items::Slot::Mainhand).unwrap();
+        app.insert_resource(inventory);
+        for _ in 0..2 {
+            app.world_mut().write_message(Slain { target: snake });
+            app.update();
+        }
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 8, "one each kill");
+        for _ in 0..5 {
+            app.world_mut().write_message(Slain { target: snake });
+            app.update();
+        }
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 10, "never above the maximum");
+    }
+
+    #[test]
     fn a_failed_save_against_venom_poisons_the_delver_and_a_good_one_does_not() {
         // Seeds whose first d20, the save, is a 1 (fails whatever the CON) and a 20 (saves).
         let seed_for = |natural| (0..10_000).find(|s| procgen_rng::Mulberry32::new(*s).int(1, 20) == natural).unwrap();
@@ -435,7 +594,7 @@ mod tests {
         assert_eq!(app.world().get::<Slowed>(player), Some(&Slowed(HELD_PACE)));
         app.update();
         assert!(app.world().get::<Constricted>(player).is_some(), "still held");
-        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false });
+        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false, critical: false });
         app.update();
         assert!(app.world().get::<Constricted>(player).is_none());
         assert!(app.world().get::<Slowed>(player).is_none());

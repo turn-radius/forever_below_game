@@ -89,14 +89,15 @@ pub struct BlowsAtDelver<'w, 's> {
     hits: MessageWriter<'w, AttackOnDelver>,
     misses: MessageWriter<'w, MissedDelver>,
     fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
-    delver: Query<'w, 's, &'static crate::combat::Health, With<Player>>,
+    delver: Query<'w, 's, (&'static crate::combat::Health, Option<&'static crate::combat::vitals::BlockChance>), With<Player>>,
+    rules: Option<Res<'w, crate::rules::GameRules>>,
 }
 
 impl BlowsAtDelver<'_, '_> {
     /// Whether the delver has fallen (at 0 hit points, or the run ending): there is nothing left
     /// to fight.
     pub fn delver_is_down(&self) -> bool {
-        self.fallen.is_some() || self.delver.iter().any(|health| health.is_down())
+        self.fallen.is_some() || self.delver.iter().any(|(health, _)| health.is_down())
     }
 
     /// Rolls `blow`, by `who` with `to_hit`, against `armour_class` (the delver's, or
@@ -107,14 +108,20 @@ impl BlowsAtDelver<'_, '_> {
             return false;
         }
         let ac = armour_class.copied().unwrap_or(ArmourClass::UNARMOURED).0;
-        let attack = to_hit.roll(ac, Odds::Even, rng);
-        info!("{who} attacks the delver: {}", attack.line());
-        if attack.hit {
+        let attack = to_hit.roll_with(crate::rules::GameRules::of(&self.rules), ac, Odds::Even, rng);
+        // A hit the delver's shield turns aside is blocked: a miss in all but name. Nothing is
+        // drawn without a shield that blocks, so the dice run as they always did.
+        let block = self.delver.iter().next().and_then(|(_, b)| b.copied()).unwrap_or_default();
+        let blocked = attack.hit && block.turns_aside(rng);
+        let verdict = if blocked { ", blocked" } else { "" };
+        info!("{who} attacks the delver: {}{verdict}", attack.line());
+        let lands = attack.hit && !blocked;
+        if lands {
             self.hits.write(blow);
         } else {
             self.misses.write(MissedDelver { attacker: blow.attacker, attacker_pos: blow.attacker_pos });
         }
-        attack.hit
+        lands
     }
 }
 
@@ -265,6 +272,7 @@ fn behave(
     time: Res<Time>,
     level: Res<CurrentLevel>,
     tuning: Res<Tuning>,
+    rules: Option<Res<crate::rules::GameRules>>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
     player: Query<DelverToStrike, (With<Player>, Without<Critter>)>,
@@ -467,18 +475,18 @@ fn behave(
                 if let (true, Some(kit)) = (within, critter.kit.as_ref()) {
                     let damage = kit.roll_damage(&mut brain.rng);
                     let blow = AttackOnDelver { attacker: entity, species: Some(species), damage, poison: 0, attacker_pos: at };
-                    attacks.strike("A skeleton", blow, critter.to_hit(), delver_ac.as_ref(), &mut brain.rng);
+                    attacks.strike("A skeleton", blow, critter.to_hit_with(crate::rules::GameRules::of(&rules)), delver_ac.as_ref(), &mut brain.rng);
                 }
             }
             if !brain.bitten && since >= lands {
                 brain.bitten = true;
                 // A bite lands only with the delver in sight at that moment, not round a wall.
                 if player.is_some_and(|p| line_of_sight(grid(at), grid(p), &blocked)) {
-                    let block = species.stat_block();
+                    let block = crate::rules::GameRules::of(&rules).creature(species);
                     let damage = block.bite.roll(&mut brain.rng);
                     let poison = block.venom.map_or(0, |v| v.roll(&mut brain.rng));
                     let blow = AttackOnDelver { attacker: entity, species: Some(species), damage, poison, attacker_pos: at };
-                    attacks.strike(block.name, blow, critter.to_hit(), delver_ac.as_ref(), &mut brain.rng);
+                    attacks.strike(block.name, blow, critter.to_hit_with(crate::rules::GameRules::of(&rules)), delver_ac.as_ref(), &mut brain.rng);
                 }
             }
             if since >= done {

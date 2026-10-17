@@ -125,6 +125,7 @@ fn play_delver_steps(
     tuning: Res<Tuning>,
     character: Option<Res<Character>>,
     inventory: Option<Res<Inventory>>,
+    rules: Option<Res<crate::rules::GameRules>>,
     mut delver: Query<(&Gait, &mut StepState), With<Player>>,
 ) {
     let Ok((gait, mut state)) = delver.single_mut() else {
@@ -151,7 +152,7 @@ fn play_delver_steps(
 
     let is_burdened = match (character, inventory) {
         (Some(character), Some(inventory)) => {
-            let derived = character.derive(&inventory);
+            let derived = character.derive_with(crate::rules::GameRules::of(&rules), &inventory);
             burden_threshold(derived.load, derived.capacity)
         }
         _ => false,

@@ -5,7 +5,8 @@
 //! - Item properties: Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance.
 //!   These describe the item itself.
 //! - Wearer stats: Warmth, Stealth, Carry, Darkvision, HungerRate, SleepinessRate, DiseaseRisk,
-//!   Lockpicking, HealOnKill. These affect the character wearing the item.
+//!   Lockpicking, HealOnKill, Speed, BlockChance and the six ability scores. These affect the
+//!   character wearing the item.
 //!
 //! This is the minimal set the affixes in `data/afx.json` act on: the plate's item fields
 //! (`wt`, `ac`, `dmg`, `dmgB`, `warmth`, `light`, `carry`) plus one stat for each affix the
@@ -47,6 +48,29 @@ pub struct Stats {
     pub heal_on_kill: f32,
     /// Chance of breaking on a hard blow, 0..=1.
     pub break_chance: f32,
+    /// How fast the wearer moves, as a multiple of their pace.
+    #[serde(default = "one")]
+    pub speed: f32,
+    /// Chance a shield turns aside a blow that would hit, 0..=1, while it is held.
+    #[serde(default)]
+    pub block_chance: f32,
+    /// Points added to the wearer's ability scores.
+    #[serde(default)]
+    pub strength: f32,
+    #[serde(default)]
+    pub dexterity: f32,
+    #[serde(default)]
+    pub constitution: f32,
+    #[serde(default)]
+    pub intelligence: f32,
+    #[serde(default)]
+    pub wisdom: f32,
+    #[serde(default)]
+    pub charisma: f32,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 impl Default for Stats {
@@ -70,6 +94,14 @@ impl Default for Stats {
             lockpicking: 0.0,
             heal_on_kill: 0.0,
             break_chance: 0.0,
+            speed: 1.0,
+            block_chance: 0.0,
+            strength: 0.0,
+            dexterity: 0.0,
+            constitution: 0.0,
+            intelligence: 0.0,
+            wisdom: 0.0,
+            charisma: 0.0,
         }
     }
 }
@@ -96,13 +128,22 @@ pub enum Stat {
     DiseaseRisk,
     Lockpicking,
     HealOnKill,
+    Speed,
+    BlockChance,
+    Strength,
+    Dexterity,
+    Constitution,
+    Intelligence,
+    Wisdom,
+    Charisma,
 }
 
 impl Stat {
-    pub const ALL: [Stat; 16] = [
+    pub const ALL: [Stat; 24] = [
         Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
         Stat::Warmth, Stat::Stealth, Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::SleepinessRate, Stat::DiseaseRisk,
-        Stat::Lockpicking, Stat::HealOnKill,
+        Stat::Lockpicking, Stat::HealOnKill, Stat::Speed, Stat::BlockChance, Stat::Strength, Stat::Dexterity, Stat::Constitution,
+        Stat::Intelligence, Stat::Wisdom, Stat::Charisma,
     ];
 
     /// Item properties: describe the item itself (Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance).
@@ -120,12 +161,24 @@ impl Stat {
         !matches!(self, Stat::Weight | Stat::HungerRate | Stat::SleepinessRate | Stat::DiseaseRisk | Stat::BreakChance)
     }
 
+    /// Whether anything in the game reads it yet. Affixes whose every effect is on a stat
+    /// nobody reads are held back from rolling ([`crate::tables::Affix::in_play`]) until the
+    /// system that reads it exists: then it comes off this list, and its affixes roll again.
+    /// Stealth only moves the HUD's eye so far, since no creature looks at how visible the
+    /// delver is, so it waits for sneaking as lockpicking waits for locks, disease risk for
+    /// disease and break chance for breaking.
+    /// Charisma waits for a Charisma score, which the delver does not have yet.
+    pub fn in_play(self) -> bool {
+        !matches!(self, Stat::Stealth | Stat::Lockpicking | Stat::DiseaseRisk | Stat::BreakChance | Stat::Charisma)
+    }
+
     /// The range it is kept in. Bonuses can go negative (the plate's `dmgB -= 1`); amounts,
     /// distances and rates cannot (its `Math.max(0, it.warmth - 1)`).
     pub fn range(self) -> (f32, f32) {
         match self {
             Stat::DamageBonus | Stat::ToHit | Stat::Stealth | Stat::Lockpicking => (f32::NEG_INFINITY, f32::INFINITY),
-            Stat::BreakChance => (0.0, 1.0),
+            Stat::Strength | Stat::Dexterity | Stat::Constitution | Stat::Intelligence | Stat::Wisdom | Stat::Charisma => (f32::NEG_INFINITY, f32::INFINITY),
+            Stat::BreakChance | Stat::BlockChance => (0.0, 1.0),
             _ => (0.0, f32::INFINITY),
         }
     }
@@ -165,6 +218,14 @@ impl Stats {
             Stat::DiseaseRisk => &self.disease_risk,
             Stat::Lockpicking => &self.lockpicking,
             Stat::HealOnKill => &self.heal_on_kill,
+            Stat::Speed => &self.speed,
+            Stat::BlockChance => &self.block_chance,
+            Stat::Strength => &self.strength,
+            Stat::Dexterity => &self.dexterity,
+            Stat::Constitution => &self.constitution,
+            Stat::Intelligence => &self.intelligence,
+            Stat::Wisdom => &self.wisdom,
+            Stat::Charisma => &self.charisma,
         }
     }
 
@@ -186,6 +247,14 @@ impl Stats {
             Stat::DiseaseRisk => &mut self.disease_risk,
             Stat::Lockpicking => &mut self.lockpicking,
             Stat::HealOnKill => &mut self.heal_on_kill,
+            Stat::Speed => &mut self.speed,
+            Stat::BlockChance => &mut self.block_chance,
+            Stat::Strength => &mut self.strength,
+            Stat::Dexterity => &mut self.dexterity,
+            Stat::Constitution => &mut self.constitution,
+            Stat::Intelligence => &mut self.intelligence,
+            Stat::Wisdom => &mut self.wisdom,
+            Stat::Charisma => &mut self.charisma,
         }
     }
 }

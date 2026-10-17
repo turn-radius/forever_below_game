@@ -44,7 +44,7 @@ pub use rig::{Bone, Rig};
 pub use skeleton::SkeletonState;
 pub use snake::{SnakeColouring, SnakePattern, SnakeState};
 
-pub use fb_character::combat::Range;
+pub use fb_items::range::Range;
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 

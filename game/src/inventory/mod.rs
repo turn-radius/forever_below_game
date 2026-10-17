@@ -62,12 +62,15 @@ use crate::launch::AppState;
 use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, SheetTab, show_screen, switch_screens};
 use crate::quickslots::{QuickslotDrop, Quickslots};
 pub use crate::ui::node_rect;
-use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, dashed_outline, rarity_color};
+use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, rarity_color, ui_cursor};
 use header::ToastText;
 use crate::tuning::Tuning;
 
 /// Width of a grid line, in logical pixels.
 const LINE_PX: f32 = 2.0;
+/// The widest the left leaf grows, in logical pixels: a pack and a belt pouch side by side at
+/// the shipped 72-pixel cells (8 + 4 cells and the gap between).
+const LEAF_MAX_PX: f32 = 900.0;
 /// Radius of a grid's rounded corners, in logical pixels (the plate's `.grid`).
 const GRID_RADIUS_PX: f32 = 12.0;
 /// How far the mouse moves with the button down before a press becomes a drag, in logical
@@ -98,6 +101,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Keymap>()
             .init_resource::<ScreenOpen>()
             .init_resource::<SheetTab>()
+            .init_resource::<crate::rules::GameRules>()
             .init_resource::<Dragging>()
             .init_resource::<Hovered>()
             .init_resource::<Quickslots>()
@@ -122,9 +126,11 @@ impl Plugin for InventoryPlugin {
                         // Screens open and close in `switch_screens`.
                         underfoot::track_underfoot,
                         close_container_with_screen,
+                        scale_screen,
                         build_screen,
                         drag_items,
                         unhang_without_belt,
+                        crate::character::wear_abilities,
                         (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
@@ -735,6 +741,22 @@ pub fn cell_under(rect: Rect, point: Vec2, cell: f32) -> IVec2 {
     IVec2::new(x, y)
 }
 
+/// Scales the UI (Bevy's `UiScale`) with the height of the view the inventory screen is drawn
+/// in while it is open ([`crate::tuning::InterfaceTuning::scale`]), so the screen keeps one
+/// layout at any resolution with its cells `cell_size` apart at 1080 lines; back to 1 when it
+/// closes, so no other screen is scaled.
+pub(crate) fn scale_screen(open: Res<ScreenOpen>, cameras: Query<&Camera, With<ViewModelCamera>>, tuning: Res<Tuning>, scale: Option<ResMut<UiScale>>) {
+    let Some(mut scale) = scale else { return };
+    let height = cameras.iter().next().and_then(Camera::logical_viewport_size).map(|size| size.y);
+    let wanted = match height {
+        Some(height) if open.is(Screen::Inventory) && height > 0.0 => tuning.interface.scale(height),
+        _ => 1.0,
+    };
+    if scale.0 != wanted {
+        scale.0 = wanted;
+    }
+}
+
 /// Builds the screen when it opens and rebuilds it whenever what is in it changes, or the
 /// tuning does; takes it down when it closes.
 #[allow(clippy::too_many_arguments)]
@@ -751,6 +773,7 @@ pub(crate) fn build_screen(
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
     tuning: Res<Tuning>,
+    rules: Option<Res<crate::rules::GameRules>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
     mut icons: Icons,
 ) {
@@ -761,7 +784,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -802,15 +825,17 @@ pub(crate) fn build_screen(
             ))
             .with_children(|ledger| {
                 ledger
-                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(700), ..default() })
+                    // Wide enough for a pack and a belt pouch side by side, and for underfoot
+                    // and a bag set down beside it.
+                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(LEAF_MAX_PX), ..default() })
                     .with_children(|leaf| {
-                        header::header(leaf, &fonts, &character, &inventory, doll_assets.portrait.clone(), *tab);
+                        header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab == SheetTab::Character {
                             let (needs, exhaustion, vitals) = players.single().map_or_else(
                                 |_| Default::default(),
                                 |(needs, exhaustion, stamina, mana)| (needs.0, exhaustion.0, sheet::Vitals { stamina: stamina.map_or_else(Default::default, |s| s.0), mana: mana.map_or_else(Default::default, |m| m.0) }),
                             );
-                            sheet::sheet(leaf, &fonts, &character, &inventory, &needs, exhaustion, vitals);
+                            sheet::sheet(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, &needs, exhaustion, vitals);
                             return;
                         }
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
@@ -836,13 +861,22 @@ pub(crate) fn build_screen(
                                     screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
                                 }
                             });
+                    });
+                // The doll, with the quickslots and the help under it, leaving the left leaf's
+                // height to the grids.
+                ledger
+                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(doll::FRAME.x), ..default() })
+                    .with_children(|leaf| {
+                        doll::doll_leaf(leaf, &doll_assets, &inventory, &fonts, &mut icons);
+                        if *tab == SheetTab::Character {
+                            return;
+                        }
                         leaf.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
                             column.spawn((Text::new("quickslots"), UiFonts::style(&fonts.display, 18.0, INK)));
                             crate::quickslots::strip(column, &fonts);
                         });
                         leaf.spawn((Text::new(HELP), UiFonts::style(&fonts.body, 14.0, MUTED)));
                     });
-                doll::doll_leaf(ledger, &doll_assets, &inventory, &fonts, &mut icons);
             });
             root.spawn((
                 DragGhost,
@@ -869,33 +903,15 @@ struct ScreenLayout<'a> {
 }
 
 impl ScreenLayout<'_> {
-    /// The floor within reach, as a paler grid under its name; bare, a dashed box the grid's
-    /// size that says so, and takes what is dropped on it all the same.
+    /// The floor within reach, as a paler grid under its name, always there to drop things on;
+    /// bare, its empty cells and a line under the name that says so.
     fn underfoot(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, underfoot: &Underfoot) {
-        if underfoot.grid.is_empty() {
-            let size = grid_size(&underfoot.grid, self.cell);
-            parent
-                .spawn((
-                    GridView::Underfoot,
-                    Node {
-                        width: px(size.x),
-                        height: px(size.y),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: px(6),
-                        padding: UiRect::axes(px(16), px(12)),
-                        ..default()
-                    },
-                ))
-                .with_children(|bare| {
-                    dashed_outline(bare, size, GRID_RADIUS_PX, LINE_PX, 7.0, 5.0, LINE);
-                    bare.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
-                    bare.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 14.0, MUTED)));
-                });
-            return;
-        }
         parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
-            column.spawn(Node { align_items: AlignItems::Center, height: px(36), ..default() }).with_children(|head| {
+            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), height: px(36), ..default() }).with_children(|head| {
                 head.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
+                if underfoot.grid.is_empty() {
+                    head.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 14.0, MUTED)));
+                }
             });
             self.grid(column, icons, GridView::Underfoot, &underfoot.grid, true);
         });
@@ -1058,12 +1074,12 @@ fn drag_items(
     underfoot: Res<Underfoot>,
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
-    (time, tuning): (Res<Time<Real>>, Res<Tuning>),
+    (time, tuning, ui_scale): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>),
     (drops, mut quickslots): (Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>, ResMut<Quickslots>),
     mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
     let cell_px = tuning.interface.cell_size;
-    let cursor = window.and_then(|w| w.cursor_position());
+    let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     if !open.is(Screen::Inventory) {
         dragging.0 = None;
         return;
@@ -1179,12 +1195,12 @@ fn show_drag(
     mut views: Query<(&ItemView, &mut BackgroundColor, &Children), Without<DropHint>>,
     mut item_icons: Query<&mut ImageNode, (With<ItemIcon>, Without<DragGhost>)>,
     mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>)>,
-    tuning: Res<Tuning>,
+    (tuning, ui_scale): (Res<Tuning>, Option<Res<UiScale>>),
     mut icons: Icons,
 ) {
     let cell_px = tuning.interface.cell_size;
     let drag = dragging.0.filter(|d| d.active);
-    let cursor = window.and_then(|w| w.cursor_position());
+    let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     for (mut node, mut image, mut visibility) in &mut ghosts {
         let (Some(drag), Some(point), Some(item)) = (drag, cursor, drag.and_then(|d| inventory.item(d.id))) else {
             *visibility = Visibility::Hidden;
@@ -1265,7 +1281,7 @@ mod tests {
     use super::*;
 
     /// The cell size as shipped.
-    const CELL_PX: f32 = 52.0;
+    const CELL_PX: f32 = 72.0;
 
     #[test]
     fn the_delver_starts_with_clothes_a_belt_and_a_burning_torch() {
@@ -1286,6 +1302,35 @@ mod tests {
     #[test]
     fn the_cell_size_here_is_the_shipped_one() {
         assert_eq!(Tuning::default().interface.cell_size, CELL_PX);
+    }
+
+    #[test]
+    fn cells_scale_with_the_window_height() {
+        let interface = Tuning::default().interface;
+        // At 1920 by 1080 the screen is at its own size: a 1 by 3 dagger is 72 by 216.
+        let dagger = Grid::<ItemId>::new(1, 3);
+        assert_eq!(interface.scale(1080.0), 1.0);
+        assert_eq!(grid_size(&dagger, interface.cell_px(1080.0)) - LINE_PX, Vec2::new(72.0, 216.0));
+        // At 720 lines it is two thirds the size, cells at their 48 floor; never under it.
+        assert!((interface.cell_px(720.0) - 48.0).abs() < 1e-4);
+        assert!((interface.cell_px(480.0) - 48.0).abs() < 1e-4);
+        assert!((interface.cell_px(1440.0) - 96.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_screen_scales_only_while_open() {
+        let mut app = App::new();
+        app.init_resource::<ScreenOpen>().init_resource::<Tuning>().init_resource::<UiScale>().add_systems(Update, scale_screen);
+        let camera = Camera { computed: bevy::camera::ComputedCameraValues { target_info: Some(bevy::camera::RenderTargetInfo { physical_size: UVec2::new(1280, 720), scale_factor: 1.0 }), ..default() }, ..default() };
+        app.world_mut().spawn((ViewModelCamera { follows: Entity::PLACEHOLDER }, camera));
+        app.update();
+        assert_eq!(app.world().resource::<UiScale>().0, 1.0);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.update();
+        assert!((app.world().resource::<UiScale>().0 - 2.0 / 3.0).abs() < 1e-4);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.update();
+        assert_eq!(app.world().resource::<UiScale>().0, 1.0);
     }
 
     #[test]
@@ -1381,7 +1426,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
-            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
+            .add_systems(Update, (switch_screens, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -1672,6 +1717,57 @@ mod tests {
     }
 
     #[test]
+    fn plenty_wakefulness_and_the_leech_show_on_the_sheet_with_their_breakdowns() {
+        use sheet::{GEAR_ROWS, breakdown};
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyC);
+        assert_eq!(&GEAR_ROWS[5..8], ["Hunger rate", "Sleepiness rate", "Heal on a kill"]);
+        assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("usual".to_string(), "usual".to_string(), "none".to_string()));
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(weighed_with("Belt", 4, Some("of Plenty"), 1.0));
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+            let ring = inventory.add(weighed_with("Ring", 4, Some("of Wakefulness"), 0.0));
+            equip(&mut inventory, ring, Slot::Ring1).unwrap();
+            let sword = inventory.add(weighed_with("Sword", 3, Some("of the Leech"), 3.0));
+            equip(&mut inventory, sword, Slot::Mainhand).unwrap();
+        }
+        app.update();
+        assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("\u{d7}0.85".to_string(), "\u{d7}0.85".to_string(), "+1 HP".to_string()));
+        let character = app.world().resource::<Character>().clone();
+        let inventory = app.world().resource::<Inventory>();
+        let hunger = breakdown(fb_character::rules::defaults(), &character, inventory, 5).join(" ");
+        assert!(hunger.starts_with("Hunger rate") && hunger.contains("(0.85)"), "{hunger}");
+        let sleepiness = breakdown(fb_character::rules::defaults(), &character, inventory, 6).join(" ");
+        assert!(sleepiness.starts_with("Sleepiness rate") && sleepiness.contains("(0.85)"), "{sleepiness}");
+        let leech = breakdown(fb_character::rules::defaults(), &character, inventory, 7).join(" ");
+        assert!(leech.starts_with("Heal on a kill 1") && leech.contains("(+1)"), "{leech}");
+    }
+
+    #[test]
+    fn a_ring_of_the_giant_boots_of_haste_and_a_shield_of_the_rampart_show_on_the_sheet() {
+        let mut app = screen_app();
+        let attributes = fb_character::Attributes { strength: 13, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        *app.world_mut().resource_mut::<Character>() = Character { attributes, ..Character::roll(4) };
+        press(&mut app, KeyCode::KeyC);
+        assert_eq!((gear_row(&mut app, 8), gear_row(&mut app, 9), gear_row(&mut app, 10)), ("usual".to_string(), "none".to_string(), "none".to_string()));
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let ring = inventory.add(weighed_with("Ring", 4, Some("of the Giant"), 0.0));
+            equip(&mut inventory, ring, Slot::Ring1).unwrap();
+            let boots = inventory.add(weighed_with("Boots", 4, Some("of Haste"), 1.0));
+            equip(&mut inventory, boots, Slot::Feet).unwrap();
+            let shield = inventory.add(weighed_with("Shield", 4, Some("of the Rampart"), 4.0));
+            equip(&mut inventory, shield, Slot::Offhand).unwrap();
+        }
+        app.update();
+        app.update();
+        assert_eq!((gear_row(&mut app, 8), gear_row(&mut app, 9), gear_row(&mut app, 10)), ("\u{d7}1.2".to_string(), "20%".to_string(), "+2 STR".to_string()));
+        assert_eq!(app.world().resource::<Character>().strength(), 15);
+        assert!(sheet_text(&mut app).iter().any(|t| t == "STR 15 (+2)"), "the attribute line shows the score as it stands");
+    }
+
+    #[test]
     fn a_goblin_shows_60_ft_of_darkvision_and_a_lizardfolk_needs_more_warmth() {
         let mut app = screen_app();
         *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Goblin, ..Character::roll(4) };
@@ -1828,15 +1924,20 @@ mod tests {
     }
 
     #[test]
-    fn bare_stone_underfoot_is_a_box_the_grid_s_size_that_says_so() {
+    fn bare_stone_underfoot_shows_its_empty_grid() {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyI);
         let size = grid_size(&app.world().resource::<Underfoot>().grid, CELL_PX);
         let mut views = app.world_mut().query::<(&GridView, &Node, &Children)>();
-        let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot drop zone");
+        let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot grid");
         assert_eq!((node.width, node.height), (px(size.x), px(size.y)));
-        let said: Vec<String> = children.iter().filter_map(|c| app.world().get::<Text>(c)).map(|t| t.0.clone()).collect();
-        assert_eq!(said, vec!["underfoot".to_string(), "Bare stone. Drop things here.".to_string()]);
+        // In an empty corridor: 18 empty cells, 6 by 3, and nothing in them.
+        let children = children.to_vec();
+        assert_eq!(children.len(), 18);
+        assert!(children.iter().all(|c| app.world().get::<ItemView>(*c).is_none()));
+        let mut texts = app.world_mut().query::<&Text>();
+        let said: Vec<String> = texts.iter(app.world()).map(|t| t.0.clone()).collect();
+        assert!(said.contains(&"underfoot".to_string()) && said.contains(&"Bare stone. Drop things here.".to_string()), "{said:?}");
     }
 
     /// The header's line of numbers, as read from its spans.

@@ -8,7 +8,6 @@ rust-version.workspace = true
 
 [dependencies]
 armory = { workspace = true }
-fb_character = { workspace = true }
 procgen_rng = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -14,7 +14,7 @@ use crate::dice::Dice;
 use crate::footprint::{Footprint, Grid};
 use crate::modifier::Modifier;
 use crate::stats::Stats;
-use crate::{Slot, Tag};
+use crate::{Rarity, Slot, Tag};
 use armory::cond::Condition;
 use armory::families::food::FoodStyle;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -109,12 +109,44 @@ pub struct Affix {
     /// The card's line ("+2 warmth").
     #[serde(rename = "t")]
     pub text: String,
+    /// Its kind of effect ("speed", "armour"): no item carries two affixes of one group, so a
+    /// stronger tier does not stack with a weaker. With none, it is only kept from itself.
+    #[serde(default, rename = "grp")]
+    pub group: Option<String>,
+    /// The least rarity it rolls on, so the stronger tiers come only on rarer items.
+    #[serde(default = "least_rarity", rename = "r")]
+    pub least: Rarity,
+    /// The slots it rolls on, as well as its `on` tag; with none, any slot.
+    #[serde(default, rename = "at")]
+    pub slots: Vec<Slot>,
+}
+
+fn least_rarity() -> Rarity {
+    Rarity::Common
 }
 
 impl Affix {
-    /// Whether it can roll on an item with `tags`.
+    /// Whether it can roll on an item with `tags`, whatever its slot.
     pub fn fits(&self, tags: &[Tag]) -> bool {
         self.on.matches(tags)
+    }
+
+    /// Whether it can roll on an item with `tags` worn in `slot` (`None` for a thing not worn):
+    /// its tag, and its slots when it names any. A ring rolled for either ring slot is
+    /// [`Slot::Ring1`].
+    pub fn fits_item(&self, tags: &[Tag], slot: Option<Slot>) -> bool {
+        self.fits(tags) && (self.slots.is_empty() || slot.is_some_and(|s| self.slots.contains(&if s == Slot::Ring2 { Slot::Ring1 } else { s })))
+    }
+
+    /// Whether it may sit on one item with `other`: not the same affix, nor one of its group.
+    pub fn stacks_with(&self, other: &Affix) -> bool {
+        self.name != other.name && (self.group.is_none() || self.group != other.group)
+    }
+
+    /// Whether it rolls: some effect of it changes a stat the game reads ([`Modifier::in_play`]).
+    /// The rest are held back until their systems exist (`crate::rarity::pick_affix`).
+    pub fn in_play(&self) -> bool {
+        self.fx.iter().any(Modifier::in_play)
     }
 
     /// Applies every effect, in order.
@@ -282,7 +314,7 @@ mod tests {
     fn every_table_parses_with_its_entries() {
         assert_eq!(bases().len(), 13);
         assert_eq!(goods().len(), 13);
-        assert_eq!(affixes().len(), 24);
+        assert_eq!(affixes().len(), 52);
         assert_eq!(slot_places().len(), 16);
         let head = &slot_places()[0];
         assert_eq!((head.slot, head.label.as_str(), head.size, head.side, head.x_percent, head.y_percent), (Slot::Head, "Head", SlotSize::Big, SlotSide::Left, 4.0, 5.0));
@@ -402,6 +434,46 @@ mod tests {
                     assert!(c.get(&after.1) > c.get(&before.1), "{}: {c:?} fell", a.name);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn each_new_affix_changes_its_stat_by_its_amount() {
+        let cases: &[(&str, Stat, f32)] = &[
+            ("Fleet", Stat::Speed, 1.1),
+            ("of Haste", Stat::Speed, 1.2),
+            ("Sluggish", Stat::Speed, 0.9),
+            ("Vicious", Stat::DamageBonus, 2.0),
+            ("of Carnage", Stat::DamageBonus, 3.0),
+            ("Accurate", Stat::ToHit, 2.0),
+            ("of Precision", Stat::ToHit, 3.0),
+            ("Reinforced", Stat::Armour, 4.0),
+            ("of the Bulwark", Stat::Armour, 5.0),
+            ("of Deflection", Stat::BlockChance, 0.1),
+            ("of the Rampart", Stat::BlockChance, 0.2),
+            ("of the Owl", Stat::Darkvision, 30.0),
+            ("of the Bat", Stat::Darkvision, 60.0),
+            ("of Might", Stat::Strength, 1.0),
+            ("of the Giant", Stat::Strength, 2.0),
+            ("Feeble", Stat::Strength, -1.0),
+            ("of Deftness", Stat::Dexterity, 1.0),
+            ("of the Fox", Stat::Dexterity, 2.0),
+            ("Clumsy", Stat::Dexterity, -1.0),
+            ("of Vigour", Stat::Constitution, 1.0),
+            ("of the Bear", Stat::Constitution, 2.0),
+            ("Frail", Stat::Constitution, -1.0),
+            ("of Wit", Stat::Intelligence, 1.0),
+            ("of the Sage", Stat::Intelligence, 2.0),
+            ("of Insight", Stat::Wisdom, 1.0),
+            ("of the Seer", Stat::Wisdom, 2.0),
+            ("of Presence", Stat::Charisma, 1.0),
+            ("of the Silver Tongue", Stat::Charisma, 2.0),
+        ];
+        for &(name, stat, want) in cases {
+            let a = affixes().iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name}"));
+            let (mut s, mut c) = baseline(stat == Stat::DamageBonus || stat == Stat::ToHit);
+            a.apply(&mut s, &mut c);
+            assert!((s.get(stat) - want).abs() < 1e-6, "{name}: {stat:?} is {}", s.get(stat));
         }
     }
 

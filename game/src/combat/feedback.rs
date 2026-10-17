@@ -20,6 +20,7 @@ use bevy::prelude::*;
 use fb_creatures::{Creature, Size};
 
 use super::Health;
+use super::callouts::{Callout, Outcome};
 use crate::creatures::behaviour::{Brain, body_radius};
 use crate::creatures::{Critter, Intent};
 use crate::folk::Denizen;
@@ -34,6 +35,8 @@ pub struct FeedbackPlugin;
 impl Plugin for FeedbackPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Struck>()
+            .add_message::<Callout>()
+            .add_message::<Slain>()
             .init_resource::<Tuning>()
             .add_systems(Startup, load_creature_sounds)
             .add_systems(Update, (give_creatures_health, take_blows, knock_back, flash, collapse).chain().in_set(DelveSystems));
@@ -50,6 +53,15 @@ pub struct Struck {
     /// Whether it is a bludgeoning blow (a mace, a club, a staff, a fist), which a skeleton
     /// takes double of.
     pub bludgeoning: bool,
+    /// Whether its attack roll was a natural 20, for its callout ([`super::callouts`]).
+    pub critical: bool,
+}
+
+/// A creature or a folk brought to 0 hit points by a blow of the delver's ([`Struck`]): what a
+/// weapon "of the Leech" heals on (`crate::combat::vitals`).
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct Slain {
+    pub target: Entity,
 }
 
 /// A creature or a folk at 0 hit points: its body, lying where it fell for the rest of the run.
@@ -188,9 +200,10 @@ fn load_creature_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>
 }
 
 /// Each creature's hit points: its stat block's (the average the SRD prints).
-pub fn give_creatures_health(mut commands: Commands, new: Query<(Entity, &Critter), Without<Health>>) {
+pub fn give_creatures_health(mut commands: Commands, rules: Option<Res<crate::rules::GameRules>>, new: Query<(Entity, &Critter), Without<Health>>) {
+    let rules = crate::rules::GameRules::of(&rules);
     for (entity, critter) in &new {
-        commands.entity(entity).insert(Health::full(critter.spot.species.stat_block().hit_points as i32));
+        commands.entity(entity).insert(Health::full(rules.creature(critter.spot.species).hit_points as i32));
     }
 }
 
@@ -207,6 +220,8 @@ fn take_blows(
     bone_sounds: Option<Res<crate::creatures::skeletons::BoneSounds>>,
     dice: Option<ResMut<super::RunDice>>,
     flinches: Flinches,
+    mut callouts: MessageWriter<Callout>,
+    mut slain: MessageWriter<Slain>,
 ) {
     let mut dice = dice;
     for blow in struck.read() {
@@ -219,10 +234,13 @@ fn take_blows(
                 if let Some(sounds) = &bone_sounds {
                     crate::creatures::skeletons::play_at(&mut commands, "shield blocks", sounds.block.clone(), at.translation, &game, &tuning);
                 }
+                callouts.write(Callout { target: blow.target, outcome: Outcome::Blocked });
                 continue;
             }
         }
-        let fell = health.hurt(damage_to(critter, blow));
+        let damage = damage_to(critter, blow);
+        let fell = health.hurt(damage);
+        callouts.write(Callout { target: blow.target, outcome: Outcome::Hit { damage, critical: blow.critical, fatal: fell } });
         let away = (at.translation.xz() - blow.from).normalize_or_zero();
         let push = away * knockback(&critter.creature) * tuning.combat.knockback_scale;
         commands.entity(blow.target).insert(flinches.of(blow.target, push, &tuning.combat));
@@ -236,6 +254,7 @@ fn take_blows(
             commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
         }
         if fell {
+            slain.write(Slain { target: blow.target });
             commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<Brain>();
             info!("{} falls", critter.spot.species.stat_block().name);
         }

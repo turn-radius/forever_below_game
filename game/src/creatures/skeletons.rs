@@ -59,6 +59,11 @@ const IMPROVISED: (u32, u32) = (1, 4);
 /// 4.1), as `combat::Weapon` takes them.
 const ARM_TO_WRIST: f32 = 0.332;
 const ARM_TO_FINGERTIPS: f32 = 0.44;
+/// The least time a skeleton's blow takes to land after its swing starts, seconds: the dagger's
+/// 0.9 s swing lands in 0.56 s. Our own floor for a wind-up the eye can read: more than twice
+/// the mean simple reaction time to a light, about 0.2 s (R. J. Kosinski, "A Literature Review
+/// on Reaction Time", Clemson University, 2013).
+pub const MIN_WIND_UP: f32 = 0.5;
 /// How far through its swing the blow lands (`fb_creatures::pose::skeleton_armed` throws the arm
 /// down at 0.62).
 pub const LANDS: f32 = 0.62;
@@ -141,6 +146,26 @@ impl SkeletonKit {
         let block = outfit.item(Slot::Offhand).map_or(0.0, |shield| (BLOCK_BASE + BLOCK_PER_ARMOUR * shield.profile.stats.armour).clamp(0.0, BLOCK_MOST));
         let bludgeons = matches!(family, None | Some(Family::Mace | Family::Club | Family::Staff | Family::Bow));
         SkeletonKit { dims, height, radius, stance, outfit, reach, dice, bonus, swing_time, to_hit, armour_class, block, bludgeons }
+    }
+
+    /// What its blow is called in the log, by what it swings: a sword slashes, a dagger or a
+    /// spear stabs, an axe hacks, a mace, a club, a staff or a bow swung as a club strikes, and
+    /// bare bones claw. Never a bite.
+    pub fn blow_verb(&self) -> &'static str {
+        use armory::Family;
+        match self.outfit.item(Slot::Mainhand).map(|w| w.shape.family()) {
+            None => "claws",
+            Some(Family::Sword) => "slashes",
+            Some(Family::Dagger | Family::Spear) => "stabs",
+            Some(Family::Axe) => "hacks",
+            Some(_) => "strikes",
+        }
+    }
+
+    /// Seconds from the start of its swing, when its rattle sounds and its arm goes back, to
+    /// the blow landing: the wind-up the delver has to see it coming.
+    pub fn wind_up(&self) -> f32 {
+        LANDS * self.swing_time
     }
 
     /// One blow's damage: the weapon's dice and bonus, at least 1.
@@ -378,6 +403,26 @@ mod tests {
     }
 
     #[test]
+    fn a_skeleton_names_its_blow_by_its_weapon_and_never_bites() {
+        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Sword")]).blow_verb(), "slashes");
+        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Mace")]).blow_verb(), "strikes");
+        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Club")]).blow_verb(), "strikes");
+        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Dagger")]).blow_verb(), "stabs");
+        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Spear")]).blow_verb(), "stabs");
+        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Hand axe")]).blow_verb(), "hacks");
+        assert_eq!(kit_in(1, &[]).blow_verb(), "claws");
+    }
+
+    #[test]
+    fn every_skeleton_winds_up_for_at_least_half_a_second() {
+        for base in ["Dagger", "Sword", "Spear", "Hand axe", "Mace", "Club", "Bow"] {
+            let kit = kit_in(2, &[(Slot::Mainhand, base)]);
+            assert!(kit.wind_up() >= MIN_WIND_UP, "{base}: {}", kit.wind_up());
+        }
+        assert!(kit_in(2, &[]).wind_up() >= MIN_WIND_UP);
+    }
+
+    #[test]
     fn worn_armour_raises_armour_class_over_the_stat_blocks_13() {
         let bare = kit_in(2, &[(Slot::Mainhand, "Sword")]);
         assert_eq!(bare.armour_class, 13, "armor scraps");
@@ -423,5 +468,104 @@ mod tests {
         let critter = Critter::new(fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species: Species::Skeleton, seed: 9, pack: 0 }, fb_creatures::Creature::Skeleton(state));
         assert!(critter.kit.is_some(), "a skeleton always has its kit");
         assert_eq!(critter.radius, kit.radius);
+    }
+}
+
+/// How a fresh delver fares against the guards of the stone halls: the numbers #354's specs
+/// are measured by, from real delvers (`Character::roll`) and the skeletons real levels place
+/// with their gear for the depth.
+#[cfg(test)]
+mod against_a_fresh_delver {
+    use super::*;
+    use crate::character::{Character, modifier};
+
+    /// The fresh delvers of seeds 1 to 399.
+    fn delvers() -> Vec<Character> {
+        (1..400).map(Character::roll).collect()
+    }
+
+    /// The guards of the first `levels` level seeds at `depth`, and how many each level holds.
+    fn guards(depth: u32, levels: u32) -> (Vec<SkeletonKit>, Vec<usize>) {
+        let mut kits = Vec::new();
+        let mut counts = Vec::new();
+        for seed in 1..=levels {
+            let spots: Vec<_> = fb_level::generate(seed, depth).creatures.into_iter().filter(|c| c.species.is_skeleton()).collect();
+            counts.push(spots.len());
+            kits.extend(spots.iter().map(|s| SkeletonKit::new(&SkeletonState::roll(s.seed), fb_items::undead::skeleton_outfit(s.seed, fb_items::Odds::kit(depth)), [None, None])));
+        }
+        (kits, counts)
+    }
+
+    /// The chance a d20 plus `bonus` meets `ac`, a natural 1 always missing and a 20 hitting.
+    fn chance(bonus: i32, ac: i32) -> f64 {
+        (21 - (ac - bonus)).clamp(1, 19) as f64 / 20.0
+    }
+
+    /// The mean blows that land before the delver is down: each delver against a guard in turn,
+    /// twenty fights each.
+    fn blows_to_down(delvers: &[Character], kits: &[SkeletonKit]) -> f64 {
+        let mut rng = Mulberry32::new(5);
+        let (mut blows, mut fights) = (0u32, 0u32);
+        for (i, delver) in delvers.iter().enumerate() {
+            let kit = &kits[i % kits.len()];
+            for _ in 0..20 {
+                let mut left = crate::combat::first_level_hit_points(delver);
+                while left > 0 {
+                    left -= kit.roll_damage(&mut rng) as i32;
+                    blows += 1;
+                }
+                fights += 1;
+            }
+        }
+        blows as f64 / fights as f64
+    }
+
+    /// The delver's mean chance to hit a guard: the Strength modifier and the proficiency bonus,
+    /// with a weapon of no ToHit (most of what the first level gives) against each guard's AC.
+    fn delver_hits(delvers: &[Character], kits: &[SkeletonKit]) -> f64 {
+        let all: f64 = delvers.iter().flat_map(|d| kits.iter().map(move |k| chance(modifier(d.strength()) + fb_character::combat::PROFICIENCY_BONUS, k.armour_class))).sum();
+        all / (delvers.len() * kits.len()) as f64
+    }
+
+    #[test]
+    fn a_fresh_delver_survives_three_blows_of_a_first_halls_guard_and_hits_half_the_time() {
+        let delvers = delvers();
+        let (kits, _) = guards(fb_items::undead::FIRST_HALLS, 8);
+        let blows = blows_to_down(&delvers, &kits);
+        assert!(blows >= 4.0, "down on blow {blows:.2} on average, so not three survived");
+        let hits = delver_hits(&delvers, &kits);
+        assert!(hits >= 0.5, "hits {:.0}%", hits * 100.0);
+    }
+
+    /// Prints the table of #354's numbers at depths 2 and 4.
+    #[test]
+    #[ignore = "a report: run with --ignored --nocapture"]
+    fn report_the_stone_halls() {
+        let delvers = delvers();
+        let hp: Vec<i32> = delvers.iter().map(crate::combat::first_level_hit_points).collect();
+        let mean = |v: &[i32]| v.iter().sum::<i32>() as f64 / v.len() as f64;
+        let ac: Vec<i32> = delvers.iter().map(|c| 10 + modifier(c.dexterity())).collect();
+        println!("delver: hit points {:.1} (least {}, most {}); bare AC {:.1}", mean(&hp), hp.iter().min().unwrap(), hp.iter().max().unwrap(), mean(&ac));
+        for depth in [2, 4] {
+            let (kits, counts) = guards(depth, 24);
+            let n = kits.len() as f64;
+            let mut acs: Vec<i32> = kits.iter().map(|k| k.armour_class).collect();
+            acs.sort();
+            let damage = kits.iter().map(|k| (k.dice.0 as f64 * (k.dice.1 as f64 + 1.0) / 2.0 + k.bonus as f64).max(1.0)).sum::<f64>() / n;
+            let most = kits.iter().map(|k| (k.dice.0 * k.dice.1) as i32 + k.bonus).max().unwrap();
+            let hits_delver = delvers.iter().enumerate().map(|(i, d)| chance(4 + kits[i % kits.len()].to_hit, 10 + modifier(d.dexterity()))).sum::<f64>() / delvers.len() as f64;
+            println!(
+                "depth {depth}: guards a level {:.1} ({}-{}); AC mean {:.1}, median {}, 90th {}; damage a blow {damage:.2} (most {most}); blows to down {:.2}; delver hits {:.0}%; guard hits {:.0}%",
+                counts.iter().sum::<usize>() as f64 / counts.len() as f64,
+                counts.iter().min().unwrap(),
+                counts.iter().max().unwrap(),
+                acs.iter().sum::<i32>() as f64 / n,
+                acs[acs.len() / 2],
+                acs[acs.len() * 9 / 10],
+                blows_to_down(&delvers, &kits),
+                delver_hits(&delvers, &kits) * 100.0,
+                hits_delver * 100.0,
+            );
+        }
     }
 }

@@ -16,7 +16,7 @@ use armory::sections::garment::GarmentStyle;
 use armory::sections::hand::HandStyle;
 use armory::families::helm::HelmStyle;
 use armory::{Family, Item, MaterialKind};
-use fb_character::combat::Range;
+use crate::range::Range;
 
 /// About 24 cm per inventory cell, in world units (10 cm).
 pub const CELL_UNITS: f32 = 2.4;

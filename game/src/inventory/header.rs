@@ -79,7 +79,7 @@ fn backdrop() -> BackgroundGradient {
 }
 
 /// Builds the header and the tab bar.
-pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Character, inventory: &Inventory, portrait: Handle<Image>, showing: SheetTab) {
+pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &fb_character::rules::Rules, character: &Character, inventory: &Inventory, portrait: Handle<Image>, showing: SheetTab) {
     parent.spawn(Node { column_gap: px(16), align_items: AlignItems::Center, ..default() }).with_children(|ident| {
         ident
             .spawn((
@@ -100,7 +100,7 @@ pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, character: &Ch
             text.spawn((Text::new(character.name.clone()), UiFonts::style(&fonts.display, 34.0, INK)));
             text.spawn((Text::new(identity_line(character)), UiFonts::style(&fonts.body, 14.0, MUTED)));
             text.spawn((HeaderStats, Node { margin: UiRect::top(px(2)), ..default() })).with_children(|line| {
-                numbers_line(line, fonts, &stats_line(&character.derive(inventory)), 13.0);
+                numbers_line(line, fonts, &stats_line(&character.derive_with(rules, inventory)), 13.0);
             });
         });
     });
@@ -136,7 +136,7 @@ mod tests {
         let delver = Character { folk: Folk::Human, class: Class::Cleric, ..Character::roll(2) };
         let line = identity_line(&delver);
         assert!(line.starts_with("Human \u{b7} ") && line.ends_with(" \u{b7} cleric"), "{line}");
-        let derived = Derived { armour_class: 11, load: 34.4, capacity: 165.0, load_band: LoadBand::Light, warmth: 2.0, light: 25.0, darkvision: 0.0 };
+        let derived = Derived { armour_class: 11, load: 34.4, capacity: 165.0, load_band: LoadBand::Light, warmth: 2.0, light: 25.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: Default::default() };
         assert_eq!(stats_line(&derived), "AC 11   Load 34/165 lb   Light 25 ft");
         assert_eq!(stats_line(&Derived { light: 0.0, darkvision: 60.0, ..derived }), "AC 11   Load 34/165 lb   Darkvision 60 ft");
         assert_eq!(stats_line(&Derived { light: 0.0, ..derived }), "AC 11   Load 34/165 lb   No light");

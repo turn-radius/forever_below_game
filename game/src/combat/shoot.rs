@@ -26,6 +26,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use fb_character::combat::{self as rules, FEET_TO_UNITS, Odds, Range, ToHit};
 use fb_items::Slot;
 
+use super::callouts::{Callout, Outcome};
 use super::feedback::{Corpse, Struck};
 use super::swing::{SwungAt, Strikeable};
 use super::{ArmourClass, Health, RunDice};
@@ -51,7 +52,7 @@ impl Plugin for ShootPlugin {
                 show_loaded.after(shoot),
                 fly_projectiles.after(shoot),
                 release_stuck.after(fly_projectiles),
-                (draw_held.after(crate::carry::sway_held).after(super::swing::swing_held), bend_held.after(crate::carry::show_held), show_ammunition_count).after(show_loaded),
+                (draw_held.after(crate::carry::sway_held).after(super::swing::swing_held), bend_held.after(crate::carry::show_held).run_if(resource_exists::<Assets<Mesh>>), show_ammunition_count).after(show_loaded),
             )
                 .in_set(DelveSystems),
         );
@@ -506,6 +507,8 @@ pub fn fly_projectiles(
     mut changes: ResMut<FloorChanges>,
     mut struck: MessageWriter<Struck>,
     mut swung: MessageWriter<SwungAt>,
+    mut callouts: MessageWriter<Callout>,
+    rules: Option<Res<crate::rules::GameRules>>,
     mut shots: Query<(Entity, &mut Projectile, &mut Transform), (Without<Critter>, Without<Denizen>)>,
     strikeable: Strikeable,
     armour: Query<&ArmourClass>,
@@ -536,12 +539,12 @@ pub fn fly_projectiles(
                         swung.write(SwungAt { target });
                         let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
                         let odds = roll.odds.and(shot.shot.odds);
-                        let attack = ToHit::dexterity(shot.shot.dexterity, shot.shot.to_hit).roll(ac.0, odds, &mut dice.0);
+                        let attack = ToHit::dexterity(shot.shot.dexterity, shot.shot.to_hit).roll_with(crate::rules::GameRules::of(&rules), ac.0, odds, &mut dice.0);
                         info!("shot: {} ({})", attack.line(), flown.round());
                         if attack.hit {
                             let full = rules::weapon_damage(shot.shot.dice, shot.shot.bonus, "DEX", shot.shot.dexterity, &mut dice.0).value() as f32;
                             let damage = ((full * draw_damage_share(shot.shot.draw)).round() as u32).max(1);
-                            struck.write(Struck { target, damage, from: shot.origin.xz(), bludgeoning: false });
+                            struck.write(Struck { target, damage, from: shot.origin.xz(), bludgeoning: false, critical: attack.natural == 20 });
                             let broken = rules::ammunition_breaks(&attack);
                             if let Ok(body) = globals.get(target) {
                                 let world = Transform { translation: at, rotation: Quat::from_rotation_arc(Vec3::X, incoming), scale: transform.scale };
@@ -553,6 +556,8 @@ pub fn fly_projectiles(
                             done = true;
                             break;
                         }
+                        // A miss flies on past.
+                        callouts.write(Callout { target, outcome: Outcome::Miss });
                     }
                     _ => {}
                 }
