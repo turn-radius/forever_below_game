@@ -3,6 +3,7 @@
 
 use crate::geom::ItemMesh;
 
+pub mod ammo;
 pub mod amulet;
 pub mod axe;
 pub mod bags;
@@ -23,6 +24,7 @@ pub mod hood;
 pub mod lantern;
 pub mod legs;
 pub mod mace;
+pub mod quiver;
 pub mod ring;
 pub mod shield;
 pub mod spear;

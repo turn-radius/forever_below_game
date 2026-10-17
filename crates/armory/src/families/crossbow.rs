@@ -357,6 +357,21 @@ impl Generator for Crossbow {
     }
 }
 
+impl CrossbowState {
+    /// Lays `ammo` as this crossbow's bolt on the deck, in its own vane colour. The rolled
+    /// crossbow is unchanged until this is called.
+    pub fn load(&mut self, ammo: &crate::families::ammo::AmmoState) {
+        self.arrow = ammo.arrow;
+        self.arrow.on = true;
+        self.palette.fletching = ammo.palette.fletching;
+    }
+
+    /// Takes the bolt on the deck off.
+    pub fn unload(&mut self) {
+        self.arrow.on = false;
+    }
+}
+
 impl Crossbow {
     /// "Forge new" forced to one archetype, for turntables and tests. Draws the same stream
     /// as [`Generator::roll`], so `roll(s)` equals `roll_as(s, a)` when `a` is what `s` rolls.
