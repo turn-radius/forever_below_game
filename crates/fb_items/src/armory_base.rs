@@ -236,6 +236,11 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Candle", ArmoryBase::of(A::Sundry(&[SundryKind::Candle]))),
     ("Bandages", ArmoryBase::of(A::Sundry(&[SundryKind::Bandages]))),
     ("Spare torch", ArmoryBase::of(A::Any(Family::Torch)).tweaked(spare_torch)),
+    // Ammunition and what holds it (SRD 5.1 p. 67-69).
+    ("Arrow", ArmoryBase::of(A::Any(Family::Arrow))),
+    ("Bolt", ArmoryBase::of(A::Any(Family::Bolt))),
+    ("Quiver", ArmoryBase::of(A::Any(Family::Quiver))),
+    ("Bolt case", ArmoryBase::of(A::Any(Family::BoltCase))),
 ];
 
 // ── Tweaks ───────────────────────────────────────────────────────────────────────────────
@@ -423,7 +428,7 @@ mod tests {
 
     #[test]
     fn every_ported_family_has_a_base() {
-        for &family in Item::PORTED {
+        for &family in Item::PORTED.iter() {
             let base = base_for(family, 1207).unwrap_or_else(|| panic!("{family:?} has no base"));
             assert_eq!(armory_base(base).unwrap().accept.family(), family);
             assert_eq!(base_for(family, 1207), Some(base));

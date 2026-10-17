@@ -623,7 +623,7 @@ fn show_page(
     for entity in &old {
         commands.entity(entity).despawn();
     }
-    let items: Vec<(u32, Option<Item>)> = turntable.seeds().map(|seed| (seed, Item::roll(turntable.family, seed))).collect();
+    let items: Vec<(u32, Option<Item>)> = turntable.seeds().map(|seed| (seed, roll_for_page(turntable.family, seed))).collect();
     let meshes: Vec<_> = items.iter().map(|(_, item)| item.as_ref().map(Item::build).unwrap_or_default()).collect();
     let bounds: Vec<_> = meshes.iter().map(item_bounds).collect();
     let sizes: Vec<Vec3> = bounds.iter().map(|b| b.map_or(FALLBACK_ITEM_SIZE, |b| Vec3::from(b.max - b.min))).collect();
@@ -685,6 +685,14 @@ fn page_box(sizes: &[Vec3]) -> Vec2 {
     sizes.iter().map(|&s| grid_box(s, grid_tilt(s))).reduce(Vec2::max).unwrap_or(grid_box(FALLBACK_ITEM_SIZE, 0.0))
 }
 
+/// How full quivers and bolt cases are on the page: full, half, empty, by seed.
+const STOCKING: [f32; 3] = [1.0, 0.5, 0.0];
+
+/// [`Item::roll`], with quivers and bolt cases stocked so the page shows full, half and empty.
+fn roll_for_page(family: Family, seed: u32) -> Option<Item> {
+    Item::roll_stocked(family, seed, STOCKING[seed as usize % STOCKING.len()])
+}
+
 fn item_name(family: Family, item: Option<&Item>) -> String {
     item.map_or_else(|| format!("{} (not ported)", family.key()), Item::noun)
 }
@@ -697,7 +705,7 @@ fn show_status(turntable: Res<Turntable>, focus: Res<Focus>, mut status: Query<&
         let seed = turntable.seed(focus.slot);
         format!(
             "{}   seed {seed}   {}\nLeft/Right item   Drag orbit   Scroll zoom   W wear   Space pause   Enter or Esc back",
-            item_name(turntable.family, Item::roll(turntable.family, seed).as_ref()),
+            item_name(turntable.family, roll_for_page(turntable.family, seed).as_ref()),
             wear_name(turntable.wear),
         )
     } else {

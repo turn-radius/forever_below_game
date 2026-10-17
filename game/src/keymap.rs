@@ -16,8 +16,11 @@ pub enum Action {
     Look,
     /// Takes the mouse back for looking round, in the level.
     TakeMouse,
-    /// Swings what the main hand holds.
+    /// Swings what the main hand holds; with a bow, draws it while held and looses on release;
+    /// with a crossbow, fires it.
     Attack,
+    /// Spans and loads a crossbow from the bolt case.
+    Reload,
     PickUp,
     /// Equips the item under the crosshair straight from the floor.
     EquipAimed,
@@ -162,7 +165,8 @@ impl Default for Keymap {
                 bind(Action::Hurry, "Hurry", Group::Moving, &[Key(KeyCode::ShiftLeft), Key(KeyCode::ShiftRight)]),
                 bind(Action::Look, "Look round", Group::Moving, &[Input::MouseMotion]),
                 bind(Action::TakeMouse, "Take the mouse back", Group::Moving, &[Mouse(MouseButton::Left)]),
-                bind(Action::Attack, "Swing what you hold", Group::Fighting, &[Mouse(MouseButton::Left)]),
+                bind(Action::Attack, "Swing what you hold, or draw and loose a bow, or fire a crossbow", Group::Fighting, &[Mouse(MouseButton::Left)]),
+                bind(Action::Reload, "Reload a crossbow", Group::Fighting, &[Key(KeyCode::KeyR)]),
                 bind(Action::PickUp, "Pick up or open", Group::Items, &[Key(KeyCode::KeyE)]),
                 bind(Action::EquipAimed, "Equip what you look at", Group::Items, &[Key(KeyCode::KeyF)]),
                 bind(Action::Light, "Light or put out your light (Shift: the hip lantern; in the inventory, the one under the mouse)", Group::Items, &[Key(KeyCode::KeyL)]),
