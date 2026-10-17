@@ -335,7 +335,7 @@ fn build_panel(
                             BackgroundColor(BG),
                             BorderColor::all(LINE),
                         ))
-                        .with_children(|panel| menu_page(panel, &fonts, shown, &keymap, &settings));
+                        .with_children(|panel| menu_page(panel, &fonts, shown, &keymap, &settings, &crate::menu::ControlsView::default()));
                 });
         }
     });
@@ -369,6 +369,8 @@ mod tests {
             .insert_state(AppState::Title)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Keymap>()
+            .init_resource::<crate::keymap::ActiveContext>()
+            .add_systems(PreUpdate, crate::keymap::track_context)
             .init_resource::<MenuPage>()
             .insert_resource(NewDelveSeed(seed))
             .add_message::<MenuCommand>()

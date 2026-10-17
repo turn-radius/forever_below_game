@@ -10,6 +10,7 @@ rust-version.workspace = true
 serde = { workspace = true }
 procgen_rng = { workspace = true }
 fb_creatures = { workspace = true }
+fb_items = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

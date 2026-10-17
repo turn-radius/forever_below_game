@@ -20,6 +20,10 @@
 //! starting condition (the `--wear` flag wins); `FB_CLOSEUP=<slot>` opens on a close-up of
 //! grid slot 0 to 11.
 
+// A release build on Windows opens as a window alone, without a console behind it; debug
+// builds keep the console for the log.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use bevy::{audio::AudioPlugin, prelude::*};
 use forever_below::{
     capture::FrameCapturePlugin,
@@ -34,6 +38,7 @@ use forever_below::{
     render::ArmoryRenderPlugin,
     play::{CurrentLevel, PlayPlugin},
     rules::RulesPlugin,
+    keybindings::KeybindingsPlugin,
     settings::SettingsPlugin,
     soak::SoakPlugin,
     swing_practice::SwingPracticePlugin,
@@ -84,7 +89,7 @@ fn main() -> AppExit {
             .set(AudioPlugin { default_spatial_scale: bevy::audio::SpatialScale::new(0.1), ..default() }),
     )
     .insert_state(opening)
-    .add_plugins((SettingsPlugin, TuningPlugin, RulesPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
+    .add_plugins((SettingsPlugin, KeybindingsPlugin, TuningPlugin, RulesPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
     .insert_resource(NewDelveSeed(launch.seed));
     if opening == AppState::Delving {
         // `FB_DEPTH=2` plays the stone halls: the level's depth picks its style.

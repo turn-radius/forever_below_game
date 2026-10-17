@@ -348,6 +348,14 @@ fn spawn_bar(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>,
             let style = SlotStyle { size: vmin(layout.slot), gap: vmin(layout.gap), number: FontSize::VMin(layout.slot * 0.3) };
             let row = Node { position_type: PositionType::Absolute, left: vmin(layout.bar.min.x), top: vmin(layout.bar.min.y), flex_direction: FlexDirection::Row, column_gap: style.gap, ..default() };
             spawn_slots(cluster, &fonts, style, false, row);
+            // The arrows or bolts left, over the bar's left end.
+            cluster.spawn((
+                crate::combat::shoot::AmmunitionCount,
+                Text::new(""),
+                UiFonts::style(&fonts.body, 16.0, BRIGHT),
+                Node { position_type: PositionType::Absolute, left: vmin(layout.bar.min.x), top: vmin(layout.bar.min.y - layout.slot * 0.45), ..default() },
+                Pickable::IGNORE,
+            ));
         });
     }
 }

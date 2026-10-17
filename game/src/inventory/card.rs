@@ -2,16 +2,18 @@
 //! where the card goes on screen. The plate's `itemInfoHTML` and `showTip`
 //! (`reference/forever-below-plate.html`): name in its rarity's colour, a legendary's title
 //! over its old name, a line of what it is and its main numbers, what each affix changes, a
-//! container's contents, and a legendary's history.
+//! container's contents, and a legendary's history. Holding Alt over something that can be
+//! worn adds a compare card beside it: what is worn in its place, and what a swap changes.
 
 use bevy::{prelude::*, ui::ComputedUiRenderTargetInfo};
-use fb_items::{Item, Kind, Rarity, stats::Stats};
+use fb_items::{Item, Kind, Rarity, Slot, stats::Stats, tables::slot_places};
 
 use super::icon::Icons;
-use super::items::{Inventory, ItemId};
+use super::items::{Inventory, ItemId, Location};
 use super::{Dragging, Hovered};
+use crate::keymap::{Action, ActionInput};
 use crate::play::{Screen, ScreenOpen};
-use crate::ui::{BAD, BG, FAINT, GOLD, INK, LINE, MUTED, UiFonts, numbers_line, rarity_color};
+use crate::ui::{BAD, BG, FAINT, GOLD, INK, LINE, MUTED, OK, UiFonts, numbers_line, rarity_color};
 
 /// One affix on the card: what it changes, its name, and whether it is a flaw.
 #[derive(Clone, Debug, PartialEq)]
@@ -160,6 +162,97 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     }
 }
 
+/// What wearing one thing instead of another changes: "+2 armour", and whether that is better.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Change {
+    pub text: String,
+    pub better: bool,
+}
+
+/// What wearing `new` in place of `old` (or of nothing) changes, stat by stat, leaving out
+/// what stays the same. A weapon's damage is compared by its average blow.
+pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
+    let plain = Stats::default();
+    let old = old.unwrap_or(&plain);
+    let mut lines = Vec::new();
+    // `higher` says whether more is better; `unit` follows the number.
+    let mut differ = |new: f32, old: f32, name: &str, unit: &str, higher: bool| {
+        let by = new - old;
+        if by.abs() >= 0.005 {
+            lines.push(Change { text: format!("{}{unit} {name}", signed(by)), better: (by > 0.0) == higher });
+        }
+    };
+    let blow = |s: &Stats| s.damage.map_or(0.0, |d| d.mean() + s.damage_bonus);
+    differ(blow(new), blow(old), "damage a blow", "", true);
+    differ(new.armour, old.armour, "armour", "", true);
+    differ(new.warmth, old.warmth, "warmth", "", true);
+    differ(new.light, old.light, "light", " ft", true);
+    differ(new.to_hit, old.to_hit, "to hit", "", true);
+    differ(new.stealth, old.stealth, "stealth", "", true);
+    differ(new.lockpicking, old.lockpicking, "lockpicking", "", true);
+    differ(new.carry, old.carry, "carry", " lb", true);
+    differ(new.darkvision, old.darkvision, "darkvision", " ft", true);
+    differ(new.heal_on_kill, old.heal_on_kill, "heal on a kill", "", true);
+    // Rates are multiples of normal, written as the change in that multiple.
+    differ(new.burn_time, old.burn_time, "burn time", "\u{d7}", true);
+    differ(new.hunger_rate, old.hunger_rate, "hunger", "\u{d7}", false);
+    differ(new.sleepiness_rate, old.sleepiness_rate, "sleepiness", "\u{d7}", false);
+    differ(new.disease_risk, old.disease_risk, "disease risk", "\u{d7}", false);
+    differ(new.speed * 100.0, old.speed * 100.0, "speed", "%", true);
+    differ(new.block_chance * 100.0, old.block_chance * 100.0, "chance to block", "%", true);
+    differ(new.break_chance * 100.0, old.break_chance * 100.0, "chance to break", "%", false);
+    for (new, old, name) in [
+        (new.strength, old.strength, "STR"),
+        (new.dexterity, old.dexterity, "DEX"),
+        (new.constitution, old.constitution, "CON"),
+        (new.intelligence, old.intelligence, "INT"),
+        (new.wisdom, old.wisdom, "WIS"),
+        (new.charisma, old.charisma, "CHA"),
+    ] {
+        differ(new, old, name, "", true);
+    }
+    differ(new.weight, old.weight, "weight", " lb", false);
+    lines
+}
+
+/// What wearing `new` in place of `old` changes: its [`changes`], and for a bag or belt the
+/// room inside.
+pub fn swap_changes(new: &Item, old: Option<&Item>) -> Vec<Change> {
+    let mut lines = changes(&new.profile.stats, old.map(|o| &o.profile.stats));
+    let room = |item: Option<&Item>| item.and_then(|i| i.profile.holds.as_ref()).map_or(0, |g| g.cols as i32 * g.rows as i32);
+    let by = room(Some(new)) - room(old);
+    if by != 0 {
+        lines.insert(0, Change { text: format!("{} cells inside", signed(by as f32)), better: by > 0 });
+    }
+    lines
+}
+
+/// What an item that can be worn is compared with: the slot it would go in, and what is worn
+/// there. That is the first of its slots ([`Item::slots`]) with something in it, so a sword
+/// is held up against the main hand's weapon and a ring against a worn ring; with all its
+/// slots empty, the one it would be worn in. `None` for goods and for what is already worn.
+pub fn compare_with(inventory: &Inventory, id: ItemId) -> Option<(Slot, Option<ItemId>)> {
+    let item = inventory.item(id)?;
+    item.profile.slot?;
+    if matches!(inventory.location(id), Some(Location::Worn(_))) {
+        return None;
+    }
+    if let Some((slot, worn)) = item.slots().into_iter().find_map(|slot| Some((slot, inventory.worn(slot)?))) {
+        return Some((slot, Some(worn)));
+    }
+    Some((inventory.target_slot(id)?, None))
+}
+
+/// The slot's name as the doll labels it.
+fn slot_label(slot: Slot) -> String {
+    slot_places().iter().find(|p| p.slot == slot).map_or_else(|| format!("{slot:?}"), |p| p.label.clone())
+}
+
+/// The compare card's banner: "Worn \u{b7} Head", or "Nothing worn \u{b7} Head".
+pub fn compare_banner(slot: Slot, worn: bool) -> String {
+    format!("{} \u{b7} {}", if worn { "Worn" } else { "Nothing worn" }, slot_label(slot))
+}
+
 /// The stats the meta line leaves out, where they differ from an ordinary thing's.
 pub fn stat_lines(s: &Stats) -> Vec<String> {
     let plain = Stats::default();
@@ -236,6 +329,22 @@ pub fn place_under(point: Vec2, size: Vec2, screen: Vec2) -> Vec2 {
     keep_on_screen(Vec2::new(point.x - size.x * 0.5, point.y + 2.0 * CARD_GAP), size, screen)
 }
 
+/// Where the compare card of `size` goes beside the `card` it compares with: on the side away
+/// from the `item` the card describes (the right, under the crosshair), else the other side,
+/// kept on the screen.
+pub fn place_compare(card: Rect, item: Option<Rect>, size: Vec2, screen: Vec2) -> Vec2 {
+    let right = card.max.x + CARD_GAP;
+    let left = card.min.x - CARD_GAP - size.x;
+    let fits_right = right + size.x <= screen.x - CARD_MARGIN;
+    let fits_left = left >= CARD_MARGIN;
+    let card_on_left = item.is_some_and(|item| item.center().x > card.center().x);
+    let x = match (card_on_left, fits_left, fits_right) {
+        (true, true, _) | (false, true, false) => left,
+        _ => right,
+    };
+    keep_on_screen(Vec2::new(x, card.min.y), size, screen)
+}
+
 /// `at` moved so a card of `size` there lies inside `screen`, [`CARD_MARGIN`] from its edges
 /// where it fits, at the top left where it does not.
 pub fn keep_on_screen(at: Vec2, size: Vec2, screen: Vec2) -> Vec2 {
@@ -250,6 +359,16 @@ pub const CARD_WIDTH: f32 = 300.0;
 /// screen, or the item under the crosshair in the level.
 #[derive(Component, Debug)]
 pub struct ItemCard;
+
+/// The compare card, shown beside the hover card while [`Action::Compare`] is held over
+/// something that can be worn: what is worn in its place, and what swapping would change.
+#[derive(Component, Debug)]
+pub struct CompareCard;
+
+/// The hover card as it stands on the screen: its item, where it is, and the item's own
+/// rectangle when it sits beside one. Written by [`show_card`].
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct ShownCard(pub Option<(ItemId, Rect, Option<Rect>)>);
 
 /// Where a card goes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -266,10 +385,14 @@ pub fn spawn_card(mut commands: Commands, cards: Query<(), With<ItemCard>>, came
         return;
     }
     let Some(camera) = cameras.iter().next() else { return };
-    commands.spawn((
-        Name::new("Item card"),
+    commands.spawn((card_frame(camera), Name::new("Item card"), ItemCard));
+    commands.spawn((card_frame(camera), Name::new("Compare card"), CompareCard));
+}
+
+/// A card's frame, hidden, drawn by `camera`.
+fn card_frame(camera: Entity) -> impl Bundle {
+    (
         DespawnOnExit(crate::launch::AppState::Delving),
-        ItemCard,
         UiTargetCamera(camera),
         Node {
             position_type: PositionType::Absolute,
@@ -286,83 +409,118 @@ pub fn spawn_card(mut commands: Commands, cards: Query<(), With<ItemCard>>, came
         GlobalZIndex(40),
         Visibility::Hidden,
         Pickable::IGNORE,
-    ));
+    )
 }
 
-/// Fills `card` with what [`card_text`] says, under the item's picture.
-fn fill_card(commands: &mut Commands, card: Entity, item: &Item, text: &CardText, fonts: &UiFonts, icons: &mut Icons) {
+/// What the compare card adds to a card: a banner over it naming the slot, and what a swap
+/// changes under it.
+struct Comparison<'a> {
+    banner: &'a str,
+    changes: &'a [Change],
+}
+
+/// Fills `card` with what [`card_text`] says, under the item's picture. A compare card puts
+/// its banner on top and the swap's changes at the foot, and with nothing worn has only those.
+fn fill_card(commands: &mut Commands, card: Entity, shown: Option<(&Item, &CardText)>, comparison: Option<Comparison>, fonts: &UiFonts, icons: &mut Icons) {
+    commands.entity(card).despawn_children().with_children(|card| {
+        if let Some(comparison) = &comparison {
+            card.spawn((Node { padding: UiRect::new(px(14), px(14), px(8), px(8)), ..default() }, BackgroundColor(BG.mix(&GOLD, 0.28))))
+                .with_child((Text::new(comparison.banner.to_string()), UiFonts::style(&fonts.display, 15.0, INK)));
+        }
+        if let Some((item, text)) = shown {
+            fill_item(card, item, text, fonts, icons);
+        }
+        if let Some(comparison) = &comparison {
+            card.spawn((
+                Node { flex_direction: FlexDirection::Column, row_gap: px(3), padding: UiRect::new(px(14), px(14), px(10), px(12)), border: UiRect::top(px(1)), ..default() },
+                BorderColor::all(FAINT),
+            ))
+            .with_children(|list| {
+                list.spawn((Text::new("Wearing this instead"), UiFonts::style(&fonts.body_italic, 13.5, MUTED)));
+                if comparison.changes.is_empty() {
+                    list.spawn((Text::new("No change"), UiFonts::style(&fonts.mono, 13.0, MUTED)));
+                }
+                for change in comparison.changes {
+                    let ink = if change.better { OK } else { BAD };
+                    list.spawn((Text::new(change.text.clone()), UiFonts::style(&fonts.mono_bold, 13.0, ink)));
+                }
+            });
+        }
+    });
+}
+
+/// The item's picture and what [`card_text`] says of it.
+fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, fonts: &UiFonts, icons: &mut Icons) {
     let footprint = item.profile.footprint;
     // The plate's `viewH`: the picture's height follows the item's shape, within limits.
     let picture = (CARD_WIDTH * 0.62 * footprint.rows as f32 / footprint.cols.max(1) as f32).clamp(110.0, 230.0);
     let size = super::icon::icon_size(item, false).as_vec2();
     let scale = ((CARD_WIDTH - 40.0) / size.x).min((picture - 20.0) / size.y);
     let colour = rarity_color(text.rarity);
-    commands.entity(card).despawn_children().with_children(|card| {
-        card.spawn((
-            Node { height: px(picture), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
-            BackgroundColor(BG.mix(&GOLD, 0.12)),
-        ))
-        .with_children(|frame| {
-            icons.spawn(frame, item, false, Node { width: px(size.x * scale), height: px(size.y * scale), ..default() }, 48.0);
-        });
-        card.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::new(px(14), px(14), px(10), px(12)), ..default() })
-            .with_children(|info| {
-                info.spawn((Text::new(text.title.clone()), UiFonts::style(&fonts.display, 22.0, colour)));
-                if let Some(subtitle) = &text.subtitle {
-                    info.spawn((Text::new(subtitle.clone()), UiFonts::style(&fonts.body_italic, 15.0, colour)));
-                }
-                numbers_line(info, fonts, &text.meta, 12.0);
-                if let Some(contents) = &text.contents {
-                    numbers_line(info, fonts, contents, 12.0);
-                }
-                for affix in &text.affixes {
-                    let ink = if affix.good { INK } else { BAD };
-                    info.spawn((Text::new(format!("\u{2022} {} ", affix.text)), UiFonts::style(&fonts.body, 14.0, ink))).with_child((
-                        TextSpan::new(format!("({})", affix.name)),
-                        UiFonts::style(&fonts.mono, 12.0, MUTED),
-                    ));
-                }
-                // The totals, with every affix counted, on one line under them.
-                if !text.stats.is_empty() {
-                    numbers_line(info, fonts, &text.stats.join(" \u{b7} "), 12.0);
-                }
-                if let Some(light) = &text.light {
-                    info.spawn((Text::new(light.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
-                }
-                if let Some(consume) = &text.consume {
-                    info.spawn((Text::new(consume.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
-                }
-                if !text.actions.is_empty() {
-                    info.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(6), margin: UiRect::top(px(2)), ..default() }).with_children(|row| {
-                        for (n, (key, name)) in text.actions.iter().enumerate() {
-                            let sep = if n == 0 { "" } else { "\u{b7} " };
-                            row.spawn((Text::new(format!("{sep}{key} ")), UiFonts::style(&fonts.mono, 12.0, GOLD))).with_child((
-                                TextSpan::new(*name),
-                                UiFonts::style(&fonts.body_medium, 14.0, INK),
-                            ));
-                        }
-                    });
-                }
-                if !text.history.is_empty() {
-                    info.spawn((
-                        Node {
-                            flex_direction: FlexDirection::Column,
-                            row_gap: px(3),
-                            margin: UiRect::top(px(4)),
-                            padding: UiRect::left(px(10)),
-                            border: UiRect::left(px(2)),
-                            ..default()
-                        },
-                        BorderColor::all(FAINT),
-                    ))
-                    .with_children(|history| {
-                        for line in &text.history {
-                            history.spawn((Text::new(line.clone()), UiFonts::style(&fonts.body_italic, 13.5, MUTED)));
-                        }
-                    });
-                }
-            });
+    card.spawn((
+        Node { height: px(picture), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
+        BackgroundColor(BG.mix(&GOLD, 0.12)),
+    ))
+    .with_children(|frame| {
+        icons.spawn(frame, item, false, Node { width: px(size.x * scale), height: px(size.y * scale), ..default() }, 48.0);
     });
+    card.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::new(px(14), px(14), px(10), px(12)), ..default() })
+        .with_children(|info| {
+            info.spawn((Text::new(text.title.clone()), UiFonts::style(&fonts.display, 22.0, colour)));
+            if let Some(subtitle) = &text.subtitle {
+                info.spawn((Text::new(subtitle.clone()), UiFonts::style(&fonts.body_italic, 15.0, colour)));
+            }
+            numbers_line(info, fonts, &text.meta, 12.0);
+            if let Some(contents) = &text.contents {
+                numbers_line(info, fonts, contents, 12.0);
+            }
+            for affix in &text.affixes {
+                let ink = if affix.good { INK } else { BAD };
+                info.spawn((Text::new(format!("\u{2022} {} ", affix.text)), UiFonts::style(&fonts.body, 14.0, ink))).with_child((
+                    TextSpan::new(format!("({})", affix.name)),
+                    UiFonts::style(&fonts.mono, 12.0, MUTED),
+                ));
+            }
+            // The totals, with every affix counted, on one line under them.
+            if !text.stats.is_empty() {
+                numbers_line(info, fonts, &text.stats.join(" \u{b7} "), 12.0);
+            }
+            if let Some(light) = &text.light {
+                info.spawn((Text::new(light.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
+            }
+            if let Some(consume) = &text.consume {
+                info.spawn((Text::new(consume.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
+            }
+            if !text.actions.is_empty() {
+                info.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(6), margin: UiRect::top(px(2)), ..default() }).with_children(|row| {
+                    for (n, (key, name)) in text.actions.iter().enumerate() {
+                        let sep = if n == 0 { "" } else { "\u{b7} " };
+                        row.spawn((Text::new(format!("{sep}{key} ")), UiFonts::style(&fonts.mono, 12.0, GOLD))).with_child((
+                            TextSpan::new(*name),
+                            UiFonts::style(&fonts.body_medium, 14.0, INK),
+                        ));
+                    }
+                });
+            }
+            if !text.history.is_empty() {
+                info.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(3),
+                        margin: UiRect::top(px(4)),
+                        padding: UiRect::left(px(10)),
+                        border: UiRect::left(px(2)),
+                        ..default()
+                    },
+                    BorderColor::all(FAINT),
+                ))
+                .with_children(|history| {
+                    for line in &text.history {
+                        history.spawn((Text::new(line.clone()), UiFonts::style(&fonts.body_italic, 13.5, MUTED)));
+                    }
+                });
+            }
+        });
 }
 
 /// What the card shows now: the item under the mouse on the screen, unless one is being
@@ -413,12 +571,16 @@ pub fn show_card(
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
-    tuning: Option<Res<crate::tuning::Tuning>>,
-    time: Option<Res<Time<Real>>>,
+    (tuning, time): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>),
     mut shown: Local<Option<ItemId>>,
     mut hovered_since: Local<Option<(ItemId, f32)>>,
+    mut on_screen: ResMut<ShownCard>,
 ) {
-    let aimed_item = aimed.and_then(|a| a.0).and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
+    on_screen.set_if_neq(ShownCard(None));
+    let aimed_entity = aimed.and_then(|a| a.0);
+    let aimed_item = aimed_entity.and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
+    // A container under the crosshair has its own prompt (`crate::props`), so its card lists no keys.
+    let aimed_container = aimed_entity.is_some_and(|entity| containers.contains(entity));
     // No card over the menu.
     let subject = if open.is(Screen::Menu) { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
     let delay = tuning.map_or(0.0, |t| t.interface.hover_delay);
@@ -435,25 +597,77 @@ pub fn show_card(
             let keymap = keymap.as_deref().unwrap_or(&fallback);
             let mut text = card_text(item, Some((&inventory, id)));
             // Under the crosshair an item is in the level; on the screen it is carried or worn.
-            if let Some(target) = crate::interact::item_target(&inventory, id, matches!(anchor, CardAnchor::Crosshair)) {
+            if !aimed_container
+                && let Some(target) = crate::interact::item_target(&inventory, id, matches!(anchor, CardAnchor::Crosshair))
+            {
                 let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
                 text.actions = crate::interact::key_actions(keymap, &verbs);
             }
-            fill_card(&mut commands, card, item, &text, &fonts, &mut icons);
+            fill_card(&mut commands, card, Some((item, &text)), None, &fonts, &mut icons);
             *shown = Some(id);
             *visibility = Visibility::Hidden;
             continue;
         }
         let size = computed.size * computed.inverse_scale_factor;
         let screen = target.logical_size();
-        let at = match anchor {
-            CardAnchor::Beside(rect) => place_beside(rect, size, screen),
-            CardAnchor::Crosshair => place_under(screen * 0.5, size, screen),
+        let (at, beside) = match anchor {
+            CardAnchor::Beside(rect) => (place_beside(rect, size, screen), Some(rect)),
+            CardAnchor::Crosshair => (place_under(screen * 0.5, size, screen), None),
         };
         node.left = px(at.x);
         node.top = px(at.y);
         *visibility = Visibility::Inherited;
+        on_screen.set_if_neq(ShownCard(Some((id, Rect::from_corners(at, at + size), beside))));
     }
+}
+
+/// Shows, fills and places the compare card beside the hover card while [`Action::Compare`]
+/// is held over something that can be worn ([`compare_with`]). Like the hover card, one
+/// filled this frame waits a frame to be measured.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn show_compare(
+    mut commands: Commands,
+    input: ActionInput,
+    on_screen: Res<ShownCard>,
+    inventory: Res<Inventory>,
+    fonts: Res<UiFonts>,
+    mut icons: Icons,
+    mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<CompareCard>>,
+    mut shown: Local<Option<(ItemId, Slot, Option<ItemId>)>>,
+) {
+    let subject = on_screen
+        .0
+        .filter(|_| input.pressed(Action::Compare) || compare_forced())
+        .and_then(|(id, card, beside)| Some((id, compare_with(&inventory, id)?, card, beside)));
+    for (entity, mut node, mut visibility, computed, target) in &mut cards {
+        let Some((id, (slot, worn), card, beside)) = subject else {
+            *visibility = Visibility::Hidden;
+            *shown = None;
+            continue;
+        };
+        if *shown != Some((id, slot, worn)) || inventory.is_changed() {
+            let new = inventory.item(id).expect("compare_with found it");
+            let old = worn.and_then(|w| inventory.item(w));
+            let text = old.map(|old| (old, card_text(old, worn.map(|w| (&*inventory, w)))));
+            let banner = compare_banner(slot, old.is_some());
+            let changes = swap_changes(new, old);
+            let comparison = Comparison { banner: &banner, changes: &changes };
+            fill_card(&mut commands, entity, text.as_ref().map(|(item, text)| (*item, text)), Some(comparison), &fonts, &mut icons);
+            *shown = Some((id, slot, worn));
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+        let size = computed.size * computed.inverse_scale_factor;
+        let at = place_compare(card, beside, size, target.logical_size());
+        node.left = px(at.x);
+        node.top = px(at.y);
+        *visibility = Visibility::Inherited;
+    }
+}
+
+/// `FB_COMPARE` holds Alt down for the capture tools, so a still shows the compare card.
+fn compare_forced() -> bool {
+    std::env::var("FB_COMPARE").is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
 #[cfg(test)]
@@ -544,6 +758,90 @@ mod tests {
     }
 
     #[test]
+    fn a_swap_lists_what_it_changes_and_which_way_is_better() {
+        let worn = Stats { armour: 2.0, weight: 4.0, stealth: -1.0, ..Stats::default() };
+        let new = Stats { armour: 3.5, weight: 6.0, stealth: -1.0, hunger_rate: 0.9, ..Stats::default() };
+        let text = |c: &[Change]| c.iter().map(|c| (c.text.clone(), c.better)).collect::<Vec<_>>();
+        assert_eq!(
+            text(&changes(&new, Some(&worn))),
+            vec![("+1.5 armour".into(), true), ("\u{2212}0.1\u{d7} hunger".into(), true), ("+2 lb weight".into(), false)],
+            "stealth stays the same, so it is left out"
+        );
+        assert!(changes(&worn, Some(&worn)).is_empty());
+        // Against nothing worn, everything it brings is a change.
+        assert_eq!(text(&changes(&worn, None)), vec![("+2 armour".into(), true), ("\u{2212}1 stealth".into(), false), ("+4 lb weight".into(), false)]);
+        // Weapons by their average blow: 1d8+1 is 5.5, 1d6 is 3.5.
+        let sword = Stats { damage: Some(fb_items::dice::Dice::new(1, 8)), damage_bonus: 1.0, ..Stats::default() };
+        let knife = Stats { damage: Some(fb_items::dice::Dice::new(1, 6)), ..Stats::default() };
+        assert_eq!(text(&changes(&sword, Some(&knife))), vec![("+2 damage a blow".into(), true)]);
+        // Speed and block as percentages, and the ability scores by name.
+        let boots = Stats { speed: 1.1, sleepiness_rate: 1.2, dexterity: 1.0, ..Stats::default() };
+        let shield = Stats { block_chance: 0.15, strength: -1.0, ..Stats::default() };
+        assert_eq!(
+            text(&changes(&boots, None)),
+            vec![("+0.2\u{d7} sleepiness".into(), false), ("+10% speed".into(), true), ("+1 DEX".into(), true)]
+        );
+        assert_eq!(text(&changes(&shield, None)), vec![("+15% chance to block".into(), true), ("\u{2212}1 STR".into(), false)]);
+        // A bag also by the room inside: a pack holds 8x5, a sack less.
+        let pack = fb_items::roll_item("Pack", 7).unwrap();
+        let sack = fb_items::roll_item("Sack", 7).unwrap();
+        let room = |i: &Item| i.profile.holds.as_ref().map_or(0, |g| g.cols as i32 * g.rows as i32);
+        let by = room(&pack) - room(&sack);
+        assert!(by > 0);
+        assert_eq!(swap_changes(&pack, Some(&sack))[0], Change { text: format!("+{by} cells inside"), better: true });
+        assert_eq!(swap_changes(&sack, Some(&pack))[0], Change { text: format!("\u{2212}{by} cells inside"), better: false });
+    }
+
+    #[test]
+    fn wearable_things_compare_with_what_is_worn_in_their_place() {
+        let mut inventory = Inventory::default();
+        let roll = |base| fb_items::roll_item(base, 11).unwrap();
+        let helm = inventory.add(roll("Helm"));
+        let other_helm = inventory.add(roll("Helm"));
+        let bread = inventory.add(roll("Bread"));
+        // Nothing on the head yet: compared with the empty slot.
+        assert_eq!(compare_with(&inventory, helm), Some((Slot::Head, None)));
+        inventory.wear(helm, Slot::Head).unwrap();
+        assert_eq!(compare_with(&inventory, other_helm), Some((Slot::Head, Some(helm))));
+        assert_eq!(compare_with(&inventory, helm), None, "what is worn has nothing to compare with");
+        assert_eq!(compare_with(&inventory, bread), None, "goods are not worn");
+        // A second ring is held up against the worn one, not the empty ring slot.
+        let ring = inventory.add(roll("Ring"));
+        let other_ring = inventory.add(roll("Ring"));
+        inventory.wear(ring, Slot::Ring2).unwrap();
+        assert_eq!(compare_with(&inventory, other_ring), Some((Slot::Ring2, Some(ring))));
+        // A weapon against the main hand's.
+        let sword = inventory.add(roll("Sword"));
+        let mace = inventory.add(roll("Mace"));
+        inventory.wear(mace, Slot::Mainhand).unwrap();
+        assert_eq!(compare_with(&inventory, sword), Some((Slot::Mainhand, Some(mace))));
+        assert_eq!(compare_banner(Slot::Head, true), format!("Worn \u{b7} {}", slot_label(Slot::Head)));
+        assert!(compare_banner(Slot::Head, false).starts_with("Nothing worn \u{b7} "));
+    }
+
+    #[test]
+    fn the_compare_card_sits_beside_the_card_away_from_the_item() {
+        let screen = Vec2::new(1920.0, 1080.0);
+        let size = Vec2::new(300.0, 400.0);
+        // The card to the item's right: the compare card further right.
+        let item = Rect::new(500.0, 300.0, 546.0, 392.0);
+        let card = Rect::new(556.0, 300.0, 856.0, 700.0);
+        assert_eq!(place_compare(card, Some(item), size, screen), Vec2::new(866.0, 300.0));
+        // The card flipped to the item's left: the compare card further left.
+        let item = Rect::new(1700.0, 300.0, 1746.0, 392.0);
+        let card = Rect::new(1390.0, 300.0, 1690.0, 700.0);
+        assert_eq!(place_compare(card, Some(item), size, screen), Vec2::new(1080.0, 300.0));
+        // Under the crosshair it goes right, or left with no room on the right.
+        let card = Rect::new(810.0, 560.0, 1110.0, 960.0);
+        assert_eq!(place_compare(card, None, size, screen).x, 1120.0);
+        let card = Rect::new(1600.0, 560.0, 1900.0, 960.0);
+        assert_eq!(place_compare(card, None, size, screen).x, 1290.0);
+        // Never off the screen.
+        let at = place_compare(Rect::new(8.0, 900.0, 308.0, 1300.0), None, size, Vec2::new(400.0, 1080.0));
+        assert!(at.x >= CARD_MARGIN && at.y + size.y <= 1080.0 - CARD_MARGIN, "{at}");
+    }
+
+    #[test]
     fn the_card_stays_on_screen_at_the_edges() {
         let screen = Vec2::new(1920.0, 1080.0);
         let size = Vec2::new(300.0, 400.0);
@@ -606,6 +904,7 @@ mod tests {
             .init_resource::<ScreenOpen>()
             .init_resource::<Hovered>()
             .init_resource::<Dragging>()
+            .init_resource::<ShownCard>()
             .init_resource::<UiFonts>()
             .init_resource::<crate::inventory::icon::IconCache>()
             .init_resource::<Assets<Image>>()

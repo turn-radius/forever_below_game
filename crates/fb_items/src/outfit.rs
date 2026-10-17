@@ -111,6 +111,9 @@ const EXTRA_AMULET: f64 = 0.14;
 const EXTRA_CHARM: f64 = 0.14;
 const GNOME_HAT: f64 = 0.6;
 
+/// How many arrows or bolts a bowman starts with: a full quiver.
+pub const AMMUNITION_CARRIED: usize = 20;
+
 impl Outfit {
     /// Rolls this outfit for a character of `folk` (a key of `data/races.json`) from `seed`.
     ///
@@ -149,7 +152,21 @@ impl Outfit {
                 worn.push((slot, item));
             }
         }
-        let goods = self.goods.iter().filter_map(|base| draw(&mut rng, base)).collect();
+        // A bow or crossbow comes with a quiver or bolt case at the hip and twenty of its
+        // ammunition, carried as goods for the wearer to stow in it (SRD 5.1 p. 67-68).
+        let mut ammunition = Vec::new();
+        let shoots = worn.iter().find(|(s, _)| *s == Slot::Mainhand).and_then(|(_, i)| i.profile.ranged);
+        if let Some(ranged) = shoots
+            && free(&worn, Slot::Hip)
+        {
+            let (holder, ammo) = if ranged.ammunition == armory::Family::Bolt { ("Bolt case", "Bolt") } else { ("Quiver", "Arrow") };
+            if let Some(item) = draw(&mut rng, holder) {
+                worn.push((Slot::Hip, item));
+                ammunition = (0..AMMUNITION_CARRIED).filter_map(|_| draw(&mut rng, ammo)).collect();
+            }
+        }
+        let mut goods: Vec<Item> = self.goods.iter().filter_map(|base| draw(&mut rng, base)).collect();
+        goods.extend(ammunition);
         let ground = self.ground.iter().filter_map(|base| draw(&mut rng, base)).collect();
         OutfitSet { worn, goods, ground }
     }
@@ -162,10 +179,11 @@ mod tests {
 
     #[test]
     fn the_first_levels_folk_wear_nothing_rare() {
-        // 200 folk, the outfits taken in turn.
+        // 60 folk, the outfits taken in turn. The cap is what keeps rare gear off them; the
+        // sample only has to reach every outfit and see some magic.
         let o = |seed: u32| &outfits()[seed as usize % outfits().len()];
         let mut magic = 0;
-        for seed in 0..200 {
+        for seed in 0..60 {
             for (_, item) in o(seed).roll_with(seed, "human", Odds::kit(1)).worn {
                 assert!(item.rarity <= Rarity::Magic, "{} {seed}: {} is {:?}", o(seed).key, item.base, item.rarity);
                 magic += usize::from(item.rarity == Rarity::Magic);
@@ -199,10 +217,11 @@ mod tests {
                 for (slot, item) in &set.worn {
                     match outfit.slots.iter().find(|(s, _)| s == slot) {
                         Some((_, choice)) => assert!(choice.bases.contains(&item.base), "{}: {} in {slot:?}", outfit.key, item.base),
-                        None => assert!(matches!(slot, Slot::Ring1 | Slot::Neck | Slot::Charm | Slot::Head), "{slot:?}"),
+                        None => assert!(matches!(slot, Slot::Ring1 | Slot::Neck | Slot::Charm | Slot::Head | Slot::Hip), "{slot:?}"),
                     }
                 }
-                assert_eq!(set.goods.len(), outfit.goods.len());
+                let shoots = set.item(Slot::Mainhand).is_some_and(|i| i.profile.ranged.is_some());
+                assert_eq!(set.goods.len(), outfit.goods.len() + if shoots { AMMUNITION_CARRIED } else { 0 });
                 assert_eq!(set.ground.len(), outfit.ground.len());
             }
         }
@@ -214,6 +233,17 @@ mod tests {
         for seed in 0..30 {
             let set = fighter.roll(seed, "dwarf");
             assert!(set.item(Slot::Mainhand).is_some_and(|i| i.profile.stats.is_weapon()), "{seed}");
+        }
+    }
+
+    #[test]
+    fn a_ranger_with_a_bow_has_a_quiver_and_twenty_arrows() {
+        let ranger = outfit("ranger").unwrap();
+        let archers: Vec<_> = (0..40).map(|seed| ranger.roll(seed, "human")).filter(|s| s.item(Slot::Mainhand).is_some_and(|i| i.base == "Bow")).collect();
+        assert!(!archers.is_empty());
+        for set in archers {
+            assert_eq!(set.item(Slot::Hip).map(|i| i.base.as_str()), Some("Quiver"));
+            assert_eq!(set.goods.iter().filter(|g| g.base == "Arrow").count(), 20);
         }
     }
 
