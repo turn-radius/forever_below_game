@@ -20,7 +20,7 @@
 //!   ([`BlocksTheWay`], gathered into `play::Obstacles`).
 //! - Looked at within reach, a card under the crosshair says who they are ([`folk_card_text`]):
 //!   name, folk and faction, and what they wear and hold, item names in their rarity's colour,
-//!   styled as the item card.
+//!   styled as the item card, and the keys for talking and bartering ([`crate::interact::key_line`]).
 //!
 //! Figures are built once per spot, in parallel, and kept in [`FolkFigures`], so the same
 //! level shows the same people without building them again.
@@ -36,7 +36,9 @@ use procgen_rng::Mulberry32;
 use crate::carry::{AimBuffer, Aimed, REACH, ViewModelCamera, given_light, nearest_aimed};
 use crate::figure::Figure;
 use crate::folk_pose::{FolkAnim, spawn_rigged};
+use crate::interact::{Delver, Target, key_line, verbs_for};
 use crate::inventory::card::{CARD_WIDTH, place_under};
+use crate::keymap::Keymap;
 use crate::level::EXPOSURE;
 use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, PlayerCamera, ScreenOpen};
 use crate::ui::{BG, FAINT, INK, LINE, MUTED, UiFonts, rarity_color};
@@ -462,8 +464,9 @@ fn spawn_folk_card(mut commands: Commands, cards: Query<(), With<FolkCard>>, cam
 }
 
 /// Fills the card: the name in the display face, folk and faction under it, then what they
-/// wear and hold, each item's name in its rarity's colour.
-fn fill_folk_card(commands: &mut Commands, card: Entity, text: &FolkCardText, fonts: &UiFonts) {
+/// wear and hold, each item's name in its rarity's colour, and last the keys for what can be
+/// done with them (`crate::interact::key_line`).
+fn fill_folk_card(commands: &mut Commands, card: Entity, text: &FolkCardText, prompt: &str, fonts: &UiFonts) {
     commands.entity(card).despawn_children().with_children(|card| {
         card.spawn((Text::new(text.name.clone()), UiFonts::style(&fonts.display, 22.0, INK)));
         card.spawn((Text::new(text.line.clone()), UiFonts::style(&fonts.body_italic, 15.0, MUTED)));
@@ -481,6 +484,9 @@ fn fill_folk_card(commands: &mut Commands, card: Entity, text: &FolkCardText, fo
                 }
             });
         }
+        if !prompt.is_empty() {
+            card.spawn((Node { margin: UiRect::top(px(4)), ..default() }, Text::new(prompt), UiFonts::style(&fonts.mono, 13.0, MUTED)));
+        }
     });
 }
 
@@ -492,6 +498,7 @@ fn show_folk_card(
     open: Option<Res<ScreenOpen>>,
     aimed: Res<AimedFolk>,
     aimed_item: Option<Res<Aimed>>,
+    keymap: Option<Res<Keymap>>,
     folk: Query<&Denizen>,
     fonts: Res<UiFonts>,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<FolkCard>>,
@@ -506,8 +513,11 @@ fn show_folk_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(entity) {
-            fill_folk_card(&mut commands, card, &folk_card_text(&denizen.person), &fonts);
+        if *shown != Some(entity) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
+            // Nobody hides from the delver yet, so no steal.
+            let fallback = Keymap::default();
+            let prompt = key_line(keymap.as_deref().unwrap_or(&fallback), &verbs_for(&Target::Folk, &Delver::default()));
+            fill_folk_card(&mut commands, card, &folk_card_text(&denizen.person), &prompt, &fonts);
             *shown = Some(entity);
             *visibility = Visibility::Hidden;
             continue;
@@ -689,6 +699,28 @@ mod tests {
                 assert!(person.gear.iter().any(|(_, item)| item.title() == name && item.rarity == *rarity), "{name}");
             }
         }
+    }
+
+    #[test]
+    fn a_shown_folk_card_follows_a_rebinding() {
+        use crate::keymap::{Action, Input};
+        let (mut app, _, _) = looking_app(Vec3::ZERO);
+        app.init_resource::<Keymap>().init_resource::<UiFonts>().init_resource::<Aimed>().init_resource::<AimedFolk>().add_systems(Update, show_folk_card);
+        let folk = app.world_mut().query_filtered::<Entity, With<Denizen>>().single(app.world()).unwrap();
+        app.world_mut().resource_mut::<AimedFolk>().0 = Some(folk);
+        app.world_mut().spawn((FolkCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        let line = |app: &mut App| {
+            let mut texts = app.world_mut().query::<&Text>();
+            texts.iter(app.world()).map(|t| t.0.clone()).find(|t| t.contains("Talk")).unwrap_or_default()
+        };
+        app.update();
+        app.update();
+        assert!(line(&mut app).starts_with("F Talk"), "{}", line(&mut app));
+        let mut keymap = app.world_mut().resource_mut::<Keymap>();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
+        app.update();
+        app.update();
+        assert!(line(&mut app).starts_with("E Talk"), "{}", line(&mut app));
     }
 
     #[test]

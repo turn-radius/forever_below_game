@@ -149,6 +149,12 @@ impl Inventory {
         self.items.get_mut(&id).ok_or(armory::kindle::Unlit::NotALight)?.shape.toggle_lit()
     }
 
+    /// Takes a swallow from the waterskin `id` ([`fb_items::Item::sip`]), wherever it is, and
+    /// returns what it quenches.
+    pub fn sip(&mut self, id: ItemId) -> Option<fb_items::Provision> {
+        self.items.get_mut(&id)?.sip()
+    }
+
     /// Burns `seconds` of game time off every lit torch and lantern, wherever it is: in a hand,
     /// at the hip, in a bag or on the floor ([`fb_items::Item::burn`]). Returns whether
     /// anything shown changed: a light's fuel minute on its card, its state, or its char bucket

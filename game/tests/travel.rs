@@ -86,9 +86,9 @@ fn stand(app: &mut App, (x, y): (u32, u32), yaw: f32) {
     locomotion.velocity = Vec2::ZERO;
 }
 
-/// Presses and releases E, as typing into the window does.
-fn press_e(app: &mut App) {
-    press(app, KeyCode::KeyE, "e");
+/// Presses and releases F, as typing into the window does.
+fn press_f(app: &mut App) {
+    press(app, KeyCode::KeyF, "f");
 }
 
 fn press(app: &mut App, key_code: KeyCode, text: &str) {
@@ -178,12 +178,12 @@ fn the_stairs_carry_the_delver_down_and_back_up_and_leave_each_level_whole() {
     let before = delver(&mut app);
     assert!(!before.worn.is_empty() && !before.carried.is_empty(), "the delver starts with gear: {before:?}");
 
-    // Walk to the way down (standing before it, looking at it) and press E.
+    // Walk to the way down (standing before it, looking at it) and press F.
     stand(&mut app, down.approach(), down.facing.yaw());
     run(&mut app, 90);
     let level_one = census(&mut app);
     assert!(level_one.contains_key("stair down"), "{level_one:?}");
-    press_e(&mut app);
+    press_f(&mut app);
     run(&mut app, 3);
     assert!(app.world().get_resource::<Journey>().is_some(), "the screen is fading");
     assert_eq!(app.world().resource::<Abyss>().depth, 1, "still on the first level while it fades out");
@@ -216,7 +216,7 @@ fn the_stairs_carry_the_delver_down_and_back_up_and_leave_each_level_whole() {
     // And back up: the way up, then the first level again beside its way down.
     stand(&mut app, up.approach(), up.facing.yaw());
     run(&mut app, 30);
-    press_e(&mut app);
+    press_f(&mut app);
     run(&mut app, 3);
     assert!(app.world().get_resource::<Journey>().is_some());
     run(&mut app, 200);
@@ -241,17 +241,17 @@ fn a_stair_is_not_used_with_the_back_turned_or_from_afar() {
     begin_delve(&mut app);
     run(&mut app, 60);
     let down = *level(&app).stair(StairKind::Down).expect("a way down");
-    // Beside it but looking away: E does nothing.
+    // Beside it but looking away: F does nothing.
     stand(&mut app, down.approach(), down.facing.opposite().yaw());
     run(&mut app, 5);
-    press_e(&mut app);
+    press_f(&mut app);
     run(&mut app, 5);
     assert!(app.world().get_resource::<Journey>().is_none());
     // In the starting cell, a long way off: nothing either.
     let (sx, sy, facing) = level(&app).start();
     stand(&mut app, (sx, sy), facing.yaw());
     run(&mut app, 5);
-    press_e(&mut app);
+    press_f(&mut app);
     run(&mut app, 5);
     assert!(app.world().get_resource::<Journey>().is_none());
     assert_eq!(app.world().resource::<Abyss>().depth, 1);
@@ -266,7 +266,7 @@ fn a_fall_on_any_depth_starts_the_next_delve_at_the_first_level_entrance() {
     let down = *first.stair(StairKind::Down).expect("a way down");
     stand(&mut app, down.approach(), down.facing.yaw());
     run(&mut app, 30);
-    press_e(&mut app);
+    press_f(&mut app);
     run(&mut app, 200);
     assert_eq!(app.world().resource::<Abyss>().depth, 2);
 
@@ -312,8 +312,8 @@ fn no_screen_is_open_while_the_level_changes_under_it() {
     run(&mut app, 3);
     assert!(app.world().get_resource::<Journey>().is_some());
     assert_eq!(app.world().resource::<ScreenOpen>().0, None, "the screen is closed as the journey begins");
-    // And I, C, M and Esc open nothing until it is over, through the swap and the fade in.
-    for (key, text) in [(KeyCode::KeyI, "i"), (KeyCode::KeyC, "c"), (KeyCode::KeyM, "m"), (KeyCode::Escape, "")] {
+    // And I, K, M and Esc open nothing until it is over, through the swap and the fade in.
+    for (key, text) in [(KeyCode::KeyI, "i"), (KeyCode::KeyK, "k"), (KeyCode::KeyM, "m"), (KeyCode::Escape, "")] {
         press(&mut app, key, text);
         assert_eq!(app.world().resource::<ScreenOpen>().0, None, "{key:?} opened a screen mid-journey");
     }
@@ -339,7 +339,7 @@ fn a_fallen_delver_takes_no_stairs() {
     let body = player(&mut app);
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
     run(&mut app, 10);
-    press_e(&mut app);
+    press_f(&mut app);
     app.world_mut().write_message(UseStair(StairKind::Down));
     run(&mut app, 30);
     assert!(app.world().get_resource::<Journey>().is_none(), "the fallen cannot take the stairs");

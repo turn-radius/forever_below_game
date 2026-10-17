@@ -40,8 +40,11 @@ pub struct CardText {
     pub stats: Vec<String>,
     /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
     pub light: Option<String>,
-    /// What U does with food or drink: "U eats it \u{b7} eases hunger 40%".
+    /// What food or drink eases: "Eases hunger 40%".
     pub consume: Option<String>,
+    /// The keys and verbs at the foot, from [`crate::interact::key_actions`]: ("F", "Take").
+    /// [`card_text`] leaves it empty; [`show_card`] fills it from the keymap and the item's place.
+    pub actions: Vec<(String, &'static str)>,
     /// A legendary's three lines of history.
     pub history: Vec<String>,
 }
@@ -68,18 +71,17 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
     Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
 }
 
-/// What U does with food or drink, and how much it eases: "U eats it \u{b7} eases hunger 40%".
-/// `None` for anything that is not eaten or drunk.
+/// How much food or drink eases: "Eases hunger 40%". `None` for anything that is not eaten or
+/// drunk, or eases nothing; the key that eats it is in the card's actions.
 pub fn consume_line(item: &Item) -> Option<String> {
-    let how = item.consume()?;
+    item.consume()?;
     let p = item.provision()?;
-    let mut line = format!("U {}s it", how.past());
-    for (meter, by) in [("hunger", p.nutrition), ("thirst", p.water)] {
-        if by > 0.0 {
-            line.push_str(&format!(" \u{b7} eases {meter} {}%", (by * 100.0).round()));
-        }
-    }
-    Some(line)
+    let eases: Vec<String> = [("hunger", p.nutrition), ("thirst", p.water)]
+        .into_iter()
+        .filter(|(_, by)| *by > 0.0)
+        .map(|(meter, by)| format!("{meter} {}%", (by * 100.0).round()))
+        .collect();
+    (!eases.is_empty()).then(|| format!("Eases {}", eases.join(" \u{b7} ")))
 }
 
 /// Burning time left as the card writes it, in game hours and minutes: "Fuel 0:42".
@@ -155,6 +157,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         stats: stat_lines(s),
         light: light_line(&item.shape),
         consume: consume_line(item),
+        actions: Vec::new(),
         history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()),
     }
 }
@@ -488,6 +491,17 @@ fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, font
             if let Some(consume) = &text.consume {
                 info.spawn((Text::new(consume.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
             }
+            if !text.actions.is_empty() {
+                info.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(6), margin: UiRect::top(px(2)), ..default() }).with_children(|row| {
+                    for (n, (key, name)) in text.actions.iter().enumerate() {
+                        let sep = if n == 0 { "" } else { "\u{b7} " };
+                        row.spawn((Text::new(format!("{sep}{key} ")), UiFonts::style(&fonts.mono, 12.0, GOLD))).with_child((
+                            TextSpan::new(*name),
+                            UiFonts::style(&fonts.body_medium, 14.0, INK),
+                        ));
+                    }
+                });
+            }
             if !text.history.is_empty() {
                 info.spawn((
                     Node {
@@ -553,17 +567,22 @@ pub fn show_card(
     floor: Query<&crate::carry::FloorItem>,
     containers: Query<&crate::props::Container>,
     inventory: Res<Inventory>,
+    keymap: Option<Res<crate::keymap::Keymap>>,
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
-    tuning: Option<Res<crate::tuning::Tuning>>,
-    time: Option<Res<Time<Real>>>,
+    (tuning, time): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>),
     mut shown: Local<Option<ItemId>>,
     mut hovered_since: Local<Option<(ItemId, f32)>>,
     mut on_screen: ResMut<ShownCard>,
 ) {
     on_screen.set_if_neq(ShownCard(None));
-    let aimed_item = aimed.and_then(|a| a.0).and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
+    let aimed_entity = aimed.and_then(|a| a.0);
+    let aimed_item = aimed_entity.and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
+    // A container under the crosshair has its own prompt (`crate::props`), so its card lists no
+    // keys. Only the crosshair's card: the crosshair still holds the container after the screen
+    // opens on it, and the cards of the items in the screen are theirs.
+    let aimed_container = aimed_entity.is_some_and(|entity| containers.contains(entity));
     // No card over the menu.
     let subject = if open.is(Screen::Menu) { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
     let delay = tuning.map_or(0.0, |t| t.interface.hover_delay);
@@ -574,9 +593,18 @@ pub fn show_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(id) || inventory.is_changed() {
+        if *shown != Some(id) || inventory.is_changed() || keymap.as_ref().is_some_and(|k| k.is_changed()) {
             let item = inventory.item(id).expect("checked above");
-            fill_card(&mut commands, card, Some((item, &card_text(item, Some((&inventory, id))))), None, &fonts, &mut icons);
+            let fallback = crate::keymap::Keymap::default();
+            let keymap = keymap.as_deref().unwrap_or(&fallback);
+            let mut text = card_text(item, Some((&inventory, id)));
+            if !(aimed_container && matches!(anchor, CardAnchor::Crosshair))
+                && let Some(target) = crate::interact::item_target(&inventory, id)
+            {
+                let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
+                text.actions = crate::interact::key_actions(keymap, &verbs);
+            }
+            fill_card(&mut commands, card, Some((item, &text)), None, &fonts, &mut icons);
             *shown = Some(id);
             *visibility = Visibility::Hidden;
             continue;
@@ -845,12 +873,123 @@ mod tests {
     }
 
     #[test]
-    fn food_and_drink_cards_say_what_u_does() {
+    fn food_and_drink_cards_say_what_they_ease() {
         let line = |base: &str| consume_line(&fb_items::roll_item(base, 3).unwrap());
-        assert_eq!(line("Bread").unwrap(), "U eats it \u{b7} eases hunger 40%");
-        assert_eq!(line("Tankard").unwrap(), "U drinks it \u{b7} eases thirst 50%");
-        assert_eq!(line("Healing draught").unwrap(), "U drinks it");
+        assert_eq!(line("Bread").unwrap(), "Eases hunger 40%");
+        assert_eq!(line("Tankard").unwrap(), "Eases thirst 50%");
+        assert_eq!(line("Healing draught"), None);
         assert_eq!(line("Torch"), None);
+    }
+
+    #[test]
+    fn the_foot_of_a_card_lists_its_keys() {
+        use crate::interact::{Delver, key_line, verbs_for};
+        let mut inventory = Inventory::default();
+        let dagger = inventory.add(fb_items::roll_item("Dagger", 7).unwrap());
+        let bread = inventory.add(fb_items::roll_item("Bread", 3).unwrap());
+        let keymap = crate::keymap::Keymap::default();
+        let line = |inventory: &Inventory, id| {
+            let target = crate::interact::item_target(inventory, id).unwrap();
+            key_line(&keymap, &verbs_for(&target, &Delver::default()))
+        };
+        assert_eq!(line(&inventory, dagger), "F Take \u{b7} G Equip \u{b7} Alt Compare");
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        inventory.stow(bread).unwrap();
+        assert_eq!(line(&inventory, bread), "F Eat");
+    }
+
+    #[test]
+    fn a_shown_card_follows_a_rebinding() {
+        use crate::keymap::{Action, Input, Keymap};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Keymap>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<Hovered>()
+            .init_resource::<Dragging>()
+            .init_resource::<ShownCard>()
+            .init_resource::<UiFonts>()
+            .init_resource::<crate::inventory::icon::IconCache>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(Inventory::default())
+            .add_systems(Update, show_card);
+        let dagger = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Bread", 3).unwrap());
+        app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<Hovered>().0 = Some((dagger, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        let keys = |app: &mut App| {
+            let mut texts = app.world_mut().query::<&Text>();
+            texts.iter(app.world()).map(|t| t.0.clone()).collect::<Vec<_>>()
+        };
+        app.update();
+        app.update();
+        assert!(keys(&mut app).iter().any(|t| t == "F "), "{:?}", keys(&mut app));
+        let mut keymap = app.world_mut().resource_mut::<Keymap>();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
+        app.update();
+        app.update();
+        let texts = keys(&mut app);
+        assert!(texts.iter().any(|t| t == "E "), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "F "), "{texts:?}");
+    }
+
+    /// The text of every node in the world, for the card's keys.
+    fn card_texts(app: &mut App) -> Vec<String> {
+        let mut texts = app.world_mut().query::<&Text>();
+        let mut spans = app.world_mut().query::<&TextSpan>();
+        let mut all: Vec<String> = texts.iter(app.world()).map(|t| t.0.clone()).collect();
+        all.extend(spans.iter(app.world()).map(|t| t.0.clone()));
+        all
+    }
+
+    /// The inventory open, the crosshair still on the chest it opened, a card showing for `id`.
+    fn card_over(inventory: Inventory, ids: impl Fn(&Inventory) -> ItemId) -> Vec<String> {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<Hovered>()
+            .init_resource::<Dragging>()
+            .init_resource::<ShownCard>()
+            .init_resource::<UiFonts>()
+            .init_resource::<crate::inventory::icon::IconCache>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<crate::carry::Aimed>()
+            .insert_resource(inventory)
+            .add_systems(Update, show_card);
+        let chest = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Chest", 1).unwrap());
+        let prop = app.world_mut().spawn(crate::props::Container { id: chest, opened: true }).id();
+        app.world_mut().resource_mut::<crate::carry::Aimed>().0 = Some(prop);
+        let id = ids(app.world().resource::<Inventory>());
+        app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<Hovered>().0 = Some((id, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        app.update();
+        app.update();
+        card_texts(&mut app)
+    }
+
+    #[test]
+    fn cards_in_the_screen_list_their_keys_though_the_crosshair_holds_a_chest() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let bread = inventory.add(fb_items::roll_item("Bread", 3).unwrap());
+        inventory.stow(bread).unwrap();
+        let ring = inventory.add(fb_items::roll_item("Ring", 3).unwrap());
+        inventory.wear(ring, fb_items::Slot::Ring1).unwrap();
+        let dagger = inventory.add(fb_items::roll_item("Dagger", 7).unwrap());
+        let (b, r, d) = (bread, ring, dagger);
+        let texts = card_over(inventory.clone(), |_| b);
+        assert!(texts.iter().any(|t| t == "F ") && texts.iter().any(|t| t == "Eat"), "{texts:?}");
+        let texts = card_over(inventory.clone(), |_| r);
+        assert!(texts.iter().any(|t| t == "G ") && texts.iter().any(|t| t == "Take off"), "{texts:?}");
+        // Underfoot, the dagger is taken or equipped.
+        let texts = card_over(inventory, |_| d);
+        for want in ["F ", "Take", "\u{b7} G ", "Equip", "\u{b7} Alt ", "Compare"] {
+            assert!(texts.iter().any(|t| t == want), "{want}: {texts:?}");
+        }
     }
 
     #[test]

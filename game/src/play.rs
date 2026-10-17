@@ -413,8 +413,8 @@ mod tests {
         assert_eq!(next_screen(None, Grids, keys(false, true, false, false)), (Some(Inventory), Character));
         assert_eq!(next_screen(None, Grids, keys(true, false, false, false)), (Some(Inventory), Grids));
         assert_eq!(next_screen(Some(Inventory), Character, keys(true, false, false, false)), (Some(Inventory), Grids), "I swaps to the inventory tab");
-        assert_eq!(next_screen(Some(Inventory), Grids, keys(false, true, false, false)), (Some(Inventory), Character), "C swaps to the character tab");
-        assert_eq!(next_screen(Some(Inventory), Character, keys(false, true, false, false)), (None, Grids), "C closes its own tab");
+        assert_eq!(next_screen(Some(Inventory), Grids, keys(false, true, false, false)), (Some(Inventory), Character), "K swaps to the character tab");
+        assert_eq!(next_screen(Some(Inventory), Character, keys(false, true, false, false)), (None, Grids), "K closes its own tab");
         assert_eq!(next_screen(Some(Inventory), Character, keys(false, false, false, true)), (None, Grids), "Esc closes it");
         assert_eq!(next_screen(Some(Inventory), Character, none), (Some(Inventory), Character));
         assert_eq!(next_screen(Some(Screen::Map), Grids, keys(false, true, false, false)), (Some(Inventory), Character));
