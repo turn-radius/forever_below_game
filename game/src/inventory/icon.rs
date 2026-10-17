@@ -49,9 +49,11 @@ use super::grid::oriented;
 /// Render layer the icon cameras and the items they draw are on.
 pub const ICON_LAYER: usize = 2;
 
-/// Pixels per grid cell in an icon: twice the screen's cell, so icons stay sharp on a
-/// high-density display and in the card.
-pub const ICON_CELL_PX: u32 = 92;
+/// Pixels per grid cell in an icon: twice the screen's 72-pixel cell at 1080 lines
+/// (`[interface] cell_size`), so an icon is drawn at its full resolution on a display of twice
+/// the density and is only ever shrunk, never enlarged, on one of ordinary density, in the
+/// card and up to 2160 lines. Our own.
+pub const ICON_CELL_PX: u32 = 144;
 
 /// Where icons are drawn: far below the level and the view model's stage.
 const ICON_STAGE: Vec3 = Vec3::new(0.0, -50_000.0, 0.0);
@@ -485,6 +487,14 @@ mod tests {
         assert!(!any_pixel_shows(&data, 2, 2));
         data[8 * 4 + 4 + 3] = 40;
         assert!(any_pixel_shows(&data, 2, 2));
+    }
+
+    #[test]
+    fn icons_are_drawn_for_the_cells_they_fill() {
+        let interface = crate::tuning::Tuning::default().interface;
+        // Twice the cell at 1080 lines, so never enlarged up to 2160 lines at one pixel a point.
+        assert!(ICON_CELL_PX as f32 >= interface.cell_px(2160.0));
+        assert!(ICON_CELL_PX as f32 >= 2.0 * interface.cell_px(1080.0));
     }
 
     #[test]
