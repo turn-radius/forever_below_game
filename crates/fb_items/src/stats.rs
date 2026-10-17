@@ -120,6 +120,16 @@ impl Stat {
         !matches!(self, Stat::Weight | Stat::HungerRate | Stat::SleepinessRate | Stat::DiseaseRisk | Stat::BreakChance)
     }
 
+    /// Whether anything in the game reads it yet. Affixes whose every effect is on a stat
+    /// nobody reads are held back from rolling ([`crate::tables::Affix::in_play`]) until the
+    /// system that reads it exists: then it comes off this list, and its affixes roll again.
+    /// Stealth only moves the HUD's eye so far, since no creature looks at how visible the
+    /// delver is, so it waits for sneaking as lockpicking waits for locks, disease risk for
+    /// disease and break chance for breaking.
+    pub fn in_play(self) -> bool {
+        !matches!(self, Stat::Stealth | Stat::Lockpicking | Stat::DiseaseRisk | Stat::BreakChance)
+    }
+
     /// The range it is kept in. Bonuses can go negative (the plate's `dmgB -= 1`); amounts,
     /// distances and rates cannot (its `Math.max(0, it.warmth - 1)`).
     pub fn range(self) -> (f32, f32) {

@@ -110,14 +110,30 @@ impl Rarity {
     }
 }
 
-/// A uniform pick among the affixes of `kind` and goodness that fit `tags` and are not
-/// already `taken` (`pickAffix`). `None` when none fit.
+/// A uniform pick among the affixes of `kind` and goodness that fit `tags`, are not already
+/// `taken` and are in play ([`Affix::in_play`]); `None` when none fit (`pickAffix`).
+///
+/// The draw is made against every fitting affix, held back or not, as it was before any were
+/// held back, so an item that rolled an affix in play still rolls the same one. A draw that lands
+/// on a held-back affix takes the same place among those in play instead, and with none in play
+/// the slot stays empty. When a held-back affix comes back into play, only the items that land
+/// on it change.
 pub fn pick_affix(rng: &mut Mulberry32, tags: &[Tag], kind: AffixKind, good: bool, taken: &[&Affix]) -> Option<&'static Affix> {
     let pool: Vec<&'static Affix> = affixes()
         .iter()
         .filter(|a| a.kind == kind && a.good == good && a.fits(tags) && !taken.iter().any(|t| t.name == a.name))
         .collect();
-    (!pool.is_empty()).then(|| *rng.pick(&pool))
+    if pool.is_empty() {
+        return None;
+    }
+    let x = rng.next_f64();
+    let at = |len: usize| ((x * len as f64).floor() as usize).min(len - 1);
+    let drawn = pool[at(pool.len())];
+    if drawn.in_play() {
+        return Some(drawn);
+    }
+    let rolling: Vec<&'static Affix> = pool.into_iter().filter(|a| a.in_play()).collect();
+    (!rolling.is_empty()).then(|| rolling[at(rolling.len())])
 }
 
 /// The affixes a `rarity` rolls on an item with `tags`. Common: a flaw prefix 30% of the
@@ -202,7 +218,7 @@ mod tests {
                 names.dedup();
                 assert_eq!(names.len(), chosen.len(), "an affix rolled twice");
             }
-            if affixes().iter().any(|a| !a.good && a.fits(tags)) {
+            if affixes().iter().any(|a| !a.good && a.fits(tags) && a.in_play()) {
                 let share = flaws as f64 / commons as f64;
                 assert!((share - 0.3).abs() < 0.04, "{tags:?}: {share}");
             }
@@ -276,6 +292,45 @@ mod tests {
             for seed in 0..500 {
                 let roll = || roll_rarity(&mut game_rng(seed), SWORD, &Odds::loot(depth));
                 assert_eq!(roll(), roll(), "depth {depth} seed {seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn no_rolled_item_carries_a_held_back_affix() {
+        let held: Vec<&str> = affixes().iter().filter(|a| !a.in_play()).map(|a| a.name.as_str()).collect();
+        assert_eq!(held, ["Silent", "Mildewed", "Lice-ridden", "Squeaking", "Cracked", "of Thieves", "of Quiet Steps", "of Lesser Warding"]);
+        let quiet = &[Tag::Quiet, Tag::Leather, Tag::Wear][..];
+        for tags in [SWORD, TUNIC, PACK, quiet, &[Tag::Wood, Tag::Weapon][..], &[Tag::Trinket][..]] {
+            for seed in 0..5_000 {
+                for depth in [1, 4] {
+                    let (_, chosen) = roll_rarity(&mut game_rng(seed), tags, &Odds::loot(depth));
+                    assert!(chosen.iter().all(|a| a.in_play()), "{tags:?} seed {seed}: {:?}", chosen.iter().map(|a| &a.name).collect::<Vec<_>>());
+                }
+            }
+        }
+        for base in crate::armory_base::ARMORY_BASES.iter().map(|(name, _)| *name) {
+            for seed in 0..60 {
+                if let Some(item) = crate::roll_item_with(base, seed, Odds::loot(6)) {
+                    assert!(item.affixes.iter().all(|a| a.in_play()), "{base} {seed}: {:?}", item.affixes.iter().map(|a| &a.name).collect::<Vec<_>>());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_item_that_rolled_an_affix_in_play_still_rolls_it() {
+        // The draw against the whole pool, as before any were held back.
+        let before = |seed: u32, tags: &[Tag]| {
+            let mut rng = game_rng(seed);
+            let pool: Vec<&Affix> = affixes().iter().filter(|a| a.kind == AffixKind::Suffix && a.good && a.fits(tags)).collect();
+            *rng.pick(&pool)
+        };
+        for seed in 0..2_000 {
+            let was = before(seed, TUNIC);
+            let now = pick_affix(&mut game_rng(seed), TUNIC, AffixKind::Suffix, true, &[]).unwrap();
+            if was.in_play() {
+                assert_eq!(now.name, was.name, "seed {seed}");
             }
         }
     }

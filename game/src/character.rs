@@ -464,9 +464,9 @@ mod tests {
         use fb_items::Slot;
         let delver = Character::roll(4);
         let mut inventory = Inventory::default();
-        let belt = inventory.add(with_affix("Belt", 2, "of Plenty"));
+        let belt = inventory.add(with_affix("Belt", 4, "of Plenty"));
         inventory.wear(belt, Slot::Belt).unwrap();
-        let ring = inventory.add(with_affix("Ring", 3, "of Wakefulness"));
+        let ring = inventory.add(with_affix("Ring", 4, "of Wakefulness"));
         inventory.wear(ring, Slot::Ring1).unwrap();
         let gear = delver.gear(&inventory);
         assert!((gear.hunger_rate - 0.85).abs() < 1e-6 && (gear.sleepiness_rate - 0.85).abs() < 1e-6, "{gear:?}");
