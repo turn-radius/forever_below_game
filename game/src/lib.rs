@@ -25,6 +25,7 @@ pub mod forge_view;
 pub mod frame_time;
 pub mod game_clock;
 pub mod inventory;
+pub mod keybindings;
 pub mod keymap;
 pub mod kindle;
 pub mod lab_chart;

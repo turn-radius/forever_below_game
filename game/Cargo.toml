@@ -8,8 +8,9 @@ rust-version.workspace = true
 
 [dependencies]
 # `file_watcher` reloads `assets/tuning.toml` when it is saved; `main` turns watching on only
-# in debug builds (`AssetPlugin::watch_for_changes_override`).
-bevy = { workspace = true, features = ["file_watcher"] }
+# in debug builds (`AssetPlugin::watch_for_changes_override`). `serialize` gives `KeyCode` serde,
+# which `keybindings.toml` writes its keys with.
+bevy = { workspace = true, features = ["file_watcher", "serialize"] }
 armory = { workspace = true }
 fb_items = { workspace = true }
 fb_body = { workspace = true }
