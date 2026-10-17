@@ -232,6 +232,11 @@ impl Keymap {
         self.binding(action).map_or(&[], |b| b.inputs.as_slice())
     }
 
+    /// What `action` is called on screen: its inputs' labels joined with " or " ("Esc", "M or Esc"), empty if unbound.
+    pub fn label(&self, action: Action) -> String {
+        self.binding(action).map_or(String::new(), |b| b.labels().join(" or "))
+    }
+
     /// The bindings listed under `group`, in order.
     pub fn in_group(&self, group: Group) -> impl Iterator<Item = &Binding> {
         self.bindings.iter().filter(move |b| b.group == group)
@@ -291,6 +296,16 @@ impl ActionInput<'_> {
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn an_action_is_labelled_by_its_inputs() {
+        let keymap = Keymap::default();
+        assert_eq!(keymap.label(Action::Quickslot), "1 to 0");
+        assert_eq!(keymap.label(Action::TurnItem), "Right click");
+        let mut keymap = keymap;
+        keymap.bindings.iter_mut().find(|b| b.action == Action::TurnItem).unwrap().inputs.clear();
+        assert_eq!(keymap.label(Action::TurnItem), "");
+    }
 
     #[test]
     fn every_action_is_bound_once_and_named() {

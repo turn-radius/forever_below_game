@@ -60,7 +60,7 @@ impl Plugin for PropsPlugin {
                     lay_out_props.run_if(resource_exists_and_changed::<CurrentLevel>),
                     rescale_props.run_if(resource_exists_and_changed::<Tuning>),
                     open_aimed_container.run_if(level_has_focus),
-                    prompt_aimed_container,
+                    prompt_aimed_container.after(crate::carry::aim),
                     open_for_capture.run_if(|| std::env::var("FB_OPEN_CONTAINER").is_ok()),
                 )
                     .chain()
@@ -275,7 +275,7 @@ fn open_aimed_container(
 
 /// Says what the aimed container's verbs are over the crosshair. Containers have no locks yet,
 /// so a shut one is opened and an open one has nothing to say.
-fn prompt_aimed_container(
+pub(crate) fn prompt_aimed_container(
     aimed: Res<Aimed>,
     containers: Query<&Container>,
     keymap: Res<Keymap>,

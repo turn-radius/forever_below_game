@@ -513,9 +513,10 @@ fn show_folk_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(entity) {
+        if *shown != Some(entity) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
             // Nobody hides from the delver yet, so no steal.
-            let prompt = key_line(&keymap.as_deref().cloned().unwrap_or_default(), &verbs_for(&Target::Folk, &Delver::default()));
+            let fallback = Keymap::default();
+            let prompt = key_line(keymap.as_deref().unwrap_or(&fallback), &verbs_for(&Target::Folk, &Delver::default()));
             fill_folk_card(&mut commands, card, &folk_card_text(&denizen.person), &prompt, &fonts);
             *shown = Some(entity);
             *visibility = Visibility::Hidden;
@@ -698,6 +699,28 @@ mod tests {
                 assert!(person.gear.iter().any(|(_, item)| item.title() == name && item.rarity == *rarity), "{name}");
             }
         }
+    }
+
+    #[test]
+    fn a_shown_folk_card_follows_a_rebinding() {
+        use crate::keymap::{Action, Input};
+        let (mut app, _, _) = looking_app(Vec3::ZERO);
+        app.init_resource::<Keymap>().init_resource::<UiFonts>().init_resource::<Aimed>().init_resource::<AimedFolk>().add_systems(Update, show_folk_card);
+        let folk = app.world_mut().query_filtered::<Entity, With<Denizen>>().single(app.world()).unwrap();
+        app.world_mut().resource_mut::<AimedFolk>().0 = Some(folk);
+        app.world_mut().spawn((FolkCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        let line = |app: &mut App| {
+            let mut texts = app.world_mut().query::<&Text>();
+            texts.iter(app.world()).map(|t| t.0.clone()).find(|t| t.contains("Talk")).unwrap_or_default()
+        };
+        app.update();
+        app.update();
+        assert!(line(&mut app).starts_with("F Talk"), "{}", line(&mut app));
+        let mut keymap = app.world_mut().resource_mut::<Keymap>();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
+        app.update();
+        app.update();
+        assert!(line(&mut app).starts_with("E Talk"), "{}", line(&mut app));
     }
 
     #[test]

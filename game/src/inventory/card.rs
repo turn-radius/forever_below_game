@@ -429,13 +429,15 @@ pub fn show_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(id) || inventory.is_changed() {
+        if *shown != Some(id) || inventory.is_changed() || keymap.as_ref().is_some_and(|k| k.is_changed()) {
             let item = inventory.item(id).expect("checked above");
+            let fallback = crate::keymap::Keymap::default();
+            let keymap = keymap.as_deref().unwrap_or(&fallback);
             let mut text = card_text(item, Some((&inventory, id)));
             // Under the crosshair an item is in the level; on the screen it is carried or worn.
             if let Some(target) = crate::interact::item_target(&inventory, id, matches!(anchor, CardAnchor::Crosshair)) {
                 let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
-                text.actions = crate::interact::key_actions(&keymap.as_deref().cloned().unwrap_or_default(), &verbs);
+                text.actions = crate::interact::key_actions(keymap, &verbs);
             }
             fill_card(&mut commands, card, item, &text, &fonts, &mut icons);
             *shown = Some(id);
@@ -593,6 +595,40 @@ mod tests {
         };
         assert_eq!(line(dagger, true), "F Take \u{b7} G Equip \u{b7} Alt Compare");
         assert_eq!(line(bread, false), "F Eat");
+    }
+
+    #[test]
+    fn a_shown_card_follows_a_rebinding() {
+        use crate::keymap::{Action, Input, Keymap};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Keymap>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<Hovered>()
+            .init_resource::<Dragging>()
+            .init_resource::<UiFonts>()
+            .init_resource::<crate::inventory::icon::IconCache>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(Inventory::default())
+            .add_systems(Update, show_card);
+        let dagger = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Bread", 3).unwrap());
+        app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<Hovered>().0 = Some((dagger, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        let keys = |app: &mut App| {
+            let mut texts = app.world_mut().query::<&Text>();
+            texts.iter(app.world()).map(|t| t.0.clone()).collect::<Vec<_>>()
+        };
+        app.update();
+        app.update();
+        assert!(keys(&mut app).iter().any(|t| t == "F "), "{:?}", keys(&mut app));
+        let mut keymap = app.world_mut().resource_mut::<Keymap>();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
+        app.update();
+        app.update();
+        let texts = keys(&mut app);
+        assert!(texts.iter().any(|t| t == "E "), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "F "), "{texts:?}");
     }
 
     #[test]

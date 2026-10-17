@@ -79,7 +79,13 @@ const DRAG_START_PX: f32 = 6.0;
 /// How long a refusal stays on the screen, in seconds (the plate's `toast`, 3.6 s).
 const TOAST_SECONDS: f32 = 3.6;
 /// What the help line under the grids says (the plate's `.hint`).
-pub const HELP: &str = "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. Right-click while dragging to turn an item. Double-click to wear or take off. Drop food, a light or a weapon on a quickslot to bind it, and the keys 1 to 0 use it.";
+pub fn help_text(keymap: &Keymap) -> String {
+    format!(
+        "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. {turn} while dragging to turn an item. Double-click to wear or take off. Drop food, a light or a weapon on a quickslot to bind it, and the keys {slots} use it.",
+        turn = keymap.label(Action::TurnItem),
+        slots = keymap.label(Action::Quickslot),
+    )
+}
 /// Longest gap between the two clicks of a double-click, in seconds: Windows' default of
 /// 500 ms (`SetDoubleClickTime`,
 /// <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdoubleclicktime>).
@@ -744,6 +750,7 @@ pub(crate) fn build_screen(
     character: Res<Character>,
     tuning: Res<Tuning>,
     rules: Option<Res<crate::rules::GameRules>>,
+    keymap: Option<Res<Keymap>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
     mut icons: Icons,
 ) {
@@ -754,7 +761,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -762,6 +769,8 @@ pub(crate) fn build_screen(
     if let Some(screen) = existing {
         commands.entity(screen).despawn();
     }
+    let fallback = Keymap::default();
+    let keymap = keymap.as_deref().unwrap_or(&fallback);
     let screen = ScreenLayout { inventory: &inventory, fonts: &fonts, cell: tuning.interface.cell_size };
     commands
         .spawn((
@@ -845,7 +854,7 @@ pub(crate) fn build_screen(
                             column.spawn((Text::new("quickslots"), UiFonts::style(&fonts.display, 18.0, INK)));
                             crate::quickslots::strip(column, &fonts);
                         });
-                        leaf.spawn((Text::new(HELP), UiFonts::style(&fonts.body, 14.0, MUTED)));
+                        leaf.spawn((Text::new(help_text(keymap)), UiFonts::style(&fonts.body, 14.0, MUTED)));
                     });
             });
             root.spawn((
@@ -1248,6 +1257,16 @@ fn show_toast(toast: Res<Toast>, time: Res<Time<Real>>, mut texts: Query<&mut Te
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_help_names_the_bound_keys() {
+        use crate::keymap::Input;
+        let help = help_text(&Keymap::default());
+        assert!(help.contains("Right click while dragging") && help.contains("the keys 1 to 0 use it"), "{help}");
+        let mut keymap = Keymap::default();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::TurnItem).unwrap().inputs = vec![Input::Key(KeyCode::KeyR)];
+        assert!(help_text(&keymap).contains("R while dragging"));
+    }
+
     use super::*;
 
     /// The cell size as shipped.

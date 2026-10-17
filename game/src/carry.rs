@@ -631,7 +631,7 @@ pub struct ViewModelCamera {
 
 /// A [`PlayerCamera`] that already has its torch and HUD.
 #[derive(Component, Debug)]
-struct Equipped;
+pub(crate) struct Equipped;
 
 /// The floor item, or container standing in the level (`crate::props`), under the crosshair
 /// and in reach, if any.
@@ -1296,7 +1296,7 @@ pub(crate) fn sway_held(
     }
 }
 
-fn aim(
+pub(crate) fn aim(
     tuning: Res<Tuning>,
     camera: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
     items: Query<(Entity, &GlobalTransform, &FloorItem)>,

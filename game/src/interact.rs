@@ -291,7 +291,7 @@ pub struct InteractPlugin;
 
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CrosshairPrompt>().add_systems(Update, (spawn_prompt, show_prompt).chain().in_set(DelveSystems));
+        app.init_resource::<CrosshairPrompt>().add_systems(Update, (spawn_prompt, show_prompt.after(crate::props::prompt_aimed_container)).chain().in_set(DelveSystems));
     }
 }
 
@@ -330,12 +330,13 @@ fn show_prompt(
     mut commands: Commands,
     prompt: Res<CrosshairPrompt>,
     open: Option<Res<ScreenOpen>>,
+    journey: Option<Res<crate::travel::Journey>>,
     fonts: Option<Res<UiFonts>>,
     mut nodes: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<PromptNode>>,
     mut shown: Local<Option<String>>,
 ) {
     let Some(fonts) = fonts else { return };
-    let text = prompt.0.clone().filter(|_| !open.is_some_and(|o| o.0.is_some()));
+    let text = prompt.0.clone().filter(|_| !open.is_some_and(|o| o.0.is_some()) && journey.is_none());
     for (entity, mut node, mut visibility, computed, target) in &mut nodes {
         let Some(text) = &text else {
             *visibility = Visibility::Hidden;
