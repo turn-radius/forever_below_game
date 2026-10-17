@@ -10,7 +10,9 @@
 //!   into a pose (`fb_creatures::pose`) each frame and copies it onto the bones: a rat trots
 //!   with its body bobbing, legs stepping and tail swinging, sniffs about when still and lunges
 //!   to bite; a snake slithers with a wave travelling down its spine, coils when it rests,
-//!   rears, strikes, gapes and flicks its tongue. Snake segments follow the floor's relief, and
+//!   rears, strikes, gapes and flicks its tongue; a giant centipede scuttles on a wave of
+//!   stepping legs down its body, feels about with its antennae, rears and bites with
+//!   its forcipules. Snake segments follow the floor's relief, and
 //!   a laid-out snake's body follows the way it came ([`Trail`]) rather than swinging round
 //!   as a whole when it turns.
 //!   A giant spider walks on all eight legs in an alternating tetrapod, each foot planted on the
@@ -26,7 +28,7 @@
 use armory::cond::{Condition, ConditionState};
 use bevy::{app::Propagate, light::NotShadowCaster, prelude::*};
 use fb_body::Placement;
-use fb_creatures::pose::{self, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
+use fb_creatures::pose::{self, CentipedePose, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::Creature;
 use fb_creatures::rig::{Capsule, SURFACE_PARTS};
 use fb_level::{CreatureSpot, Level};
@@ -514,14 +516,22 @@ pub fn spawn_skeleton_with(commands: &mut Commands, level: &Level, spot: &Creatu
 
 /// Idling: what a creature does standing still, when nothing else drives it. Snakes lie
 /// coiled and now and then raise their heads; every few seconds they taste the air with a
-/// flick or two of the tongue. Rats' sniffing is in their pose.
+/// flick or two of the tongue. Rats' sniffing and a centipede's feeling about with its
+/// antennae are in their poses.
 pub fn idle(mut creatures: Query<(&Critter, &Idle, &Motion, &mut Intent), Without<Driven>>) {
     for (critter, idle, motion, mut intent) in &mut creatures {
+        let t = motion.time * idle.rate + idle.phase;
+        // A centipede feels about with its antennae (in its pose), turns its head now and then and
+        // lifts its front a little.
+        if critter.spot.species.is_centipede() {
+            intent.look = 0.3 * (t * 0.31).sin();
+            intent.rear = 0.12 * (0.5 + 0.5 * (t * 0.23).sin());
+            continue;
+        }
         // Only a snake idles like this: rats sniff in their pose, and a skeleton stands.
         if !critter.spot.species.is_snake() {
             continue;
         }
-        let t = motion.time * idle.rate + idle.phase;
         intent.coil = 1.0;
         intent.rear = 0.3 + 0.35 * (0.5 + 0.5 * (t * 0.35).sin());
         intent.tongue = tongue_flick(t);
@@ -650,6 +660,22 @@ pub fn animate(
                     pose::troll_with(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing })
                 }
             }
+            Creature::Centipede(centipede) => {
+                // The legs step once a stride, and the body's wave goes with them.
+                motion.cycle = (motion.cycle + strode / pose::centipede_stride(centipede) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                let mut places = pose::centipede(
+                    centipede,
+                    &CentipedePose { stride: motion.cycle, pace: motion.pace, time: motion.time, rear: now.rear, bite: now.strike, jaw: now.jaw, look: now.look },
+                );
+                // Each plate, and the head, rests on the floor under it; the legs hang from the
+                // plates and go with them.
+                for i in std::iter::once(fb_creatures::centipede::bone::HEAD).chain((0..centipede.segments).map(|k| centipede.segment_bone(k))) {
+                    let place = &mut places[i];
+                    let world = root.transform_point(Vec3::from_array(place.origin));
+                    place.origin[1] += (relief.floor_height(world.x, world.z) - root.translation.y) / root.scale.y.max(1e-3);
+                }
+                places
+            }
         };
         for (entity, place) in bones.0.iter().zip(&places) {
             if let Ok(mut transform) = transforms.get_mut(*entity) {
@@ -752,6 +778,7 @@ mod tests {
                     Creature::Spider(s) => s.span,
                     Creature::Troll(t) => t.height(),
                     Creature::Jackalope(j) => j.length,
+                    Creature::Centipede(c) => c.girth * 4.0,
                 };
                 let (mut deepest, mut nearest) = (f32::MIN, f32::MAX);
                 for (bone, &entity) in rig.bones.iter().zip(&bones) {

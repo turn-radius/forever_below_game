@@ -2,6 +2,13 @@
 //! its motion. The game works out the motion (how far it has walked, whether it is biting) and
 //! copies these placements onto the bones' transforms.
 //!
+//! - [`centipede`]: the plates laid along a shallow wave, as the snake's spine is, with a pair of
+//!   legs hung from each. Every leg stands its claw on the floor through its stance and lifts
+//!   through its swing, each plate's legs a little later in the cycle than the one ahead's, so a
+//!   wave of stepping ripples down the body (the metachronal wave), the two sides half a cycle
+//!   apart. The front rises in an arc to rear, its legs waving, and the head lunges with the
+//!   forcipules thrown wide to bite.
+//!
 //! - [`rat`]: a trot. Diagonal legs move together; each paw is planted flat on the floor
 //!   through its stance and lifted through its swing, the leg bent to reach it by a two-bone
 //!   solve ([`two_bone`]), so no paw sinks into the floor or floats over it. The body bobs, the
@@ -33,6 +40,7 @@ use armory::geom::vec3::{self, Mat3, V3};
 use fb_body::{Placement, Side};
 use std::f32::consts::{PI, TAU};
 
+use crate::centipede::{CentipedeState, bone as centipede_bone};
 use crate::jackalope::{EAR_SPLIT, JackalopeState, REST_PITCH, bone as jackalope_bone, ear_bow};
 use crate::rat::{LEGS, RatState, TAIL_BONES, bone as rat_bone};
 use crate::shape::{keyed, spine_to_creature};
@@ -1487,5 +1495,325 @@ mod jackalope_tests {
         assert!(gore_antler[1] < rest_antler[1], "the antlers come down");
         let low = lowest(&rig, &jackalope(&state, &JackalopePose { gore: 1.0, ..JackalopePose::default() }));
         assert!(low > -0.03 * state.length, "a goring jackalope does not sink into the floor: {low}");
+    }
+}
+
+/// How a giant centipede is moving at a moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CentipedePose {
+    /// The step cycle, radians: one turn per [`centipede_stride`] walked. It also times the
+    /// body's wave, so the body sways with the legs.
+    pub stride: f32,
+    /// Speed as a share of its walking speed: 0 standing, 1 walking, 2 running.
+    pub pace: f32,
+    /// Seconds, for what it does standing: the antennae's search and the forcipules' twitch.
+    pub time: f32,
+    /// 0 flat on the floor, 1 the front of the body raised off it, the first legs waving.
+    pub rear: f32,
+    /// A bite's lunge, 0 to 1 at full stretch.
+    pub bite: f32,
+    /// The forcipules' gape, 0 shut to 1 wide.
+    pub jaw: f32,
+    /// How far the head turns toward its left (+X), radians.
+    pub look: f32,
+}
+
+impl CentipedePose {
+    /// Lying flat, still.
+    pub const REST: CentipedePose = CentipedePose { stride: 0.0, pace: 0.0, time: 0.0, rear: 0.0, bite: 0.0, jaw: 0.0, look: 0.0 };
+}
+
+/// Share of the cycle each leg is on the floor. Lower than most walkers': a centipede's many
+/// legs each spend about half the cycle in the air.
+pub const LEG_DUTY: f32 = 0.55;
+/// How much later in the cycle each plate's legs are than the plate ahead's, radians: a wave of
+/// stepping runs down the body, from the tail toward the head (the metachronal wave), a wave
+/// about thirteen plates long.
+const LEG_LAG: f32 = 0.48;
+/// How far a leg swings either side of its neutral heading through its stance, radians, and how
+/// far it lifts (a roll about the leg's own axis) through its swing.
+const LEG_SWEEP: f32 = 0.5;
+const LEG_LIFT: f32 = 0.6;
+/// The body's wave: its greatest heading off straight, radians, and its wavelength as a share of
+/// the body's length. A shallow wave.
+const BODY_WAVE: f32 = 0.2;
+const BODY_WAVELENGTH: f32 = 0.6;
+/// The rearing front's greatest pitch off the floor, radians, and how many plates long the
+/// raised front is.
+const RAISE_PITCH: f32 = 1.1;
+const RAISED_PLATES: f32 = 6.0;
+
+/// The ground a centipede covers in one full step cycle: what its legs sweep through their
+/// stance, over the share of the cycle they spend in it.
+pub fn centipede_stride(state: &CentipedeState) -> f32 {
+    let mid = state.segments / 2;
+    2.0 * state.leg_reach(mid) * LEG_SWEEP.sin() / LEG_DUTY
+}
+
+/// Where plate `k`'s leg on `side` (1 right, -1 left) is in the cycle at `stride`, 0 to 1: on
+/// the floor before [`LEG_DUTY`], in the air after. The two sides step half a cycle apart.
+pub fn leg_cycle(k: usize, side: f32, stride: f32) -> f32 {
+    ((stride + LEG_LAG * k as f32) / TAU + if side < 0.0 { 0.5 } else { 0.0 }).rem_euclid(1.0)
+}
+
+/// Every bone's placement on its parent for `pose`, in the giant centipede's [`crate::Rig`]
+/// order. The plates are laid along a shallow wave (a serpenoid curve, as [`snake`]'s, with a
+/// small heading) the way the snake's spine is, centred on the origin; the front rises in an
+/// arc to rear. Each leg stands its claw on the floor through its stance, swinging back about
+/// its hip with the plate level so the claw neither slides up nor sinks, and lifts through its
+/// swing; the legs of the raised plates wave in the air.
+pub fn centipede(state: &CentipedeState, pose: &CentipedePose) -> Vec<Placement> {
+    let d = state.dims();
+    let n = state.segments;
+    let l = d.segment;
+    let per = 4;
+    let samples = n * per + 1;
+    let step = l / per as f32;
+    let moving = pose.pace.clamp(0.0, 1.0);
+    let raise = pose.rear.clamp(0.0, 1.0);
+    let t = pose.time;
+    let lambda = BODY_WAVELENGTH * d.body_length;
+    let amplitude = BODY_WAVE * (0.3 + 0.7 * moving);
+    let neck = (RAISED_PLATES * l).min(d.body_length);
+    let pitch_at = |s: f32| RAISE_PITCH * raise * (1.0 - smoothstep(s / neck));
+    let heading = |s: f32| amplitude * (TAU * s / lambda + pose.stride).sin();
+    // Height of the centre line, built up from the tail so every step keeps its length.
+    let mut lift = vec![0.0f32; samples + 1];
+    for j in (0..samples).rev() {
+        lift[j] = lift[j + 1] + step * pitch_at((j as f32 + 0.5) * step).sin();
+    }
+    let mut points: Vec<V3> = Vec::with_capacity(samples);
+    let mut p = [0.0f32, 0.0];
+    for j in 0..samples {
+        points.push([p[0], lift[j], p[1]]);
+        let mid = (j as f32 + 0.5) * step;
+        let level = step * pitch_at(mid).cos();
+        let h = heading(mid);
+        p = [p[0] - level * h.sin(), p[1] - level * h.cos()];
+    }
+    let mean = points.iter().fold([0.0f32; 2], |m, q| [m[0] + q[0], m[1] + q[2]]);
+    for q in &mut points {
+        q[0] -= mean[0] / samples as f32;
+        q[2] -= mean[1] / samples as f32;
+    }
+    let mut out = vec![Placement::IDENTITY; state.bone_count()];
+
+    // The plates, each on the line through its neighbours' points.
+    for k in 0..n {
+        let j = k * per + per / 2;
+        let forward = vec3::sub(points[j - 1], points[j + 1]);
+        let mut origin = points[j];
+        origin[1] += state.centre_height(k);
+        out[state.segment_bone(k)] = Placement { rotation: along(forward), origin };
+    }
+
+    // The head at the neck, carried on the line, turned to look, lunging and tipped down to bite.
+    let forward = vec3::normalize_or(vec3::sub(points[0], points[1]), [0.0, 0.0, 1.0]);
+    let mut head_at = points[0];
+    head_at[1] += d.clearance + state.head_depth();
+    head_at = vec3::add(head_at, vec3::scale(forward, 0.9 * d.girth * pose.bite));
+    let sniff = 0.12 * (1.0 - moving) * (0.9 * t).sin();
+    let tip = -0.5 * raise - 0.3 * pose.bite;
+    let rotation = along(forward).mul_mat(&rz(pose.look + sniff)).mul_mat(&rx(tip));
+    let mut head_place = Placement { rotation, origin: head_at };
+    // Forcipules: shut, twitching a little, thrown wide to bite.
+    let mut forcipules = [Placement::IDENTITY; 2];
+    for (i, side) in [1.0f32, -1.0].into_iter().enumerate() {
+        let open = 0.8 * pose.jaw.clamp(0.0, 1.0) + 0.05 * (2.3 * t + 2.0 * i as f32).sin() * (1.0 - pose.jaw);
+        let rotation = rz(-side * open).mul_mat(&rx(-0.2 * pose.jaw));
+        forcipules[i] = Placement { rotation, origin: state.forcipule_hinge(side) };
+        out[centipede_bone::FORCIPULE + i] = forcipules[i];
+    }
+    // Neither its chin nor a fang's tip goes through the floor.
+    let head = state.head_trunk();
+    let chin = (0..=12).flat_map(|i| (0..=6).map(move |j| (i as f32 / 12.0, j as f32 / 6.0))).map(|(u, v)| head_place.point(head.point(u, PI + v * PI, 0.0))[1]);
+    let fangs = [1.0f32, -1.0].into_iter().enumerate().flat_map(|(i, side)| {
+        let at = head_place.then(&forcipules[i]);
+        let path = state.forcipule_path(side);
+        // The tip carries on past the curve's end by a third of a girth, and the fang is thick.
+        let end = path[path.len() - 1];
+        let tip = vec3::add(end, vec3::scale(vec3::normalize_or(vec3::sub(end, path[path.len() - 3]), vec3::Y), 0.34 * d.girth));
+        path.into_iter().step_by(4).chain([tip]).map(move |p| at.point(p)[1] - 0.04 * d.girth)
+    });
+    let low = chin.chain(fangs).fold(f32::MAX, f32::min);
+    if low < 0.0 {
+        head_place.origin[1] -= low;
+    }
+    out[centipede_bone::HEAD] = head_place;
+
+    // Antennae: held out and forward, feeling about; they sweep faster on the move.
+    for (i, side) in [1.0f32, -1.0].into_iter().enumerate() {
+        let rate = 1.6 + 2.4 * moving;
+        let sway = (0.16 + 0.1 * moving) * (rate * t + 1.7 * i as f32).sin() + 0.1 * (0.5 * t + 3.0 * i as f32).sin();
+        let flick = 0.12 * (rate * 1.3 * t + 0.6 * i as f32).sin();
+        out[centipede_bone::ANTENNA + i] = Placement { rotation: rz(-side * (0.3 + sway)).mul_mat(&rx(0.08 + flick - 0.15 * pose.bite)), origin: state.antenna_root(side) };
+    }
+
+    // The legs.
+    for k in 0..n {
+        let s = (k as f32 + 0.5) * l;
+        let front = (1.0 - smoothstep(s / neck)) * raise;
+        let along_body = k as f32 / (n - 1).max(1) as f32;
+        for side in [1.0f32, -1.0] {
+            let i = state.leg_bone(k, side);
+            let (yaw, roll) = if state.is_last(k) {
+                // The trailing pair trail, swaying a little with the wave.
+                (0.1 * (1.3 * t + pose.stride + if side < 0.0 { PI } else { 0.0 }).sin() * (0.4 + 0.6 * moving), 0.0)
+            } else {
+                // Neutral: the front legs reach forward, the rear legs back.
+                let neutral = 0.2 - 0.5 * along_body;
+                let c = leg_cycle(k, side, pose.stride);
+                let (sweep, up) = if c < LEG_DUTY {
+                    (LEG_SWEEP * (1.0 - 2.0 * c / LEG_DUTY), 0.0)
+                } else {
+                    let u = (c - LEG_DUTY) / (1.0 - LEG_DUTY);
+                    (LEG_SWEEP * (2.0 * smoothstep(u) - 1.0), LEG_LIFT * (PI * u).sin())
+                };
+                let (mut yaw, mut up) = (neutral + moving * sweep, moving * up);
+                // The raised front's legs wave in the air, clawing forward.
+                if front > 0.0 {
+                    up += front * (0.7 + 0.25 * (7.0 * t + 1.1 * k as f32 + side).sin());
+                    yaw += front * (0.5 + 0.3 * (5.0 * t + 0.8 * k as f32).sin());
+                }
+                (yaw, up)
+            };
+            out[i] = Placement { rotation: rz(side * yaw).mul_mat(&rot_y(-side * roll)), origin: state.hip(k, side) };
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod centipede_tests {
+    use super::*;
+    use crate::centipede::CentipedeState;
+
+    fn lowest(rig: &crate::Rig, places: &[Placement]) -> f32 {
+        rig.posed_mesh(places).bounds().unwrap().0[1]
+    }
+
+    /// The lowest point of one leg's mesh in creature space.
+    fn claw(rig: &crate::Rig, world: &[Placement], bone: usize) -> f32 {
+        rig.bones[bone].mesh.parts.iter().flat_map(|p| &p.positions).map(|&q| world[bone].point(q)[1]).fold(f32::MAX, f32::min)
+    }
+
+    #[test]
+    fn a_walking_centipede_keeps_its_belly_off_and_its_claws_on_the_floor() {
+        for seed in [3, 8, 21] {
+            let state = CentipedeState::roll(seed);
+            let rig = state.build();
+            let g = state.girth;
+            for step in 0..24 {
+                for pace in [0.0, 1.0, 2.0] {
+                    let pose = CentipedePose { stride: step as f32 / 24.0 * TAU, pace, time: step as f32 * 0.21, ..CentipedePose::REST };
+                    let places = centipede(&state, &pose);
+                    let low = lowest(&rig, &places);
+                    assert!(low > -0.03 * g, "{seed}: sinks to {low} at step {step}, pace {pace}");
+                    assert!(low < 0.03 * g, "{seed}: floats at {low} at step {step}, pace {pace}");
+                    let world = rig.world(&places);
+                    for k in 0..state.segments - 1 {
+                        for side in [1.0, -1.0] {
+                            let c = leg_cycle(k, side, pose.stride);
+                            let bottom = claw(&rig, &world, state.leg_bone(k, side));
+                            if c < LEG_DUTY || pace == 0.0 {
+                                assert!(bottom.abs() < 0.03 * g, "{seed}: leg {k}/{side} claw at {bottom}, step {step}, pace {pace}");
+                            } else {
+                                assert!(bottom > -0.03 * g, "{seed}: leg {k}/{side} sinks to {bottom} in its swing");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_legs_ripple_down_the_body_in_a_wave() {
+        let state = CentipedeState::roll(5);
+        let at = |k: usize| leg_cycle(k, 1.0, 1.0);
+        // Neighbours are a little apart in the cycle and the two sides half a cycle apart.
+        for k in 0..state.segments - 1 {
+            let lag = (at(k + 1) - at(k)).rem_euclid(1.0);
+            assert!((lag - LEG_LAG / TAU).abs() < 1e-4, "{lag}");
+            let across = (leg_cycle(k, -1.0, 1.0) - at(k)).rem_euclid(1.0);
+            assert!((across - 0.5).abs() < 1e-4, "{across}");
+        }
+        // At one moment some legs are planted and others lifted.
+        let planted = (0..state.segments).filter(|&k| at(k) < LEG_DUTY).count();
+        assert!(planted > 0 && planted < state.segments, "{planted} of {}", state.segments);
+        // A lifted leg rolls up; a planted one hangs where it did.
+        let pose = CentipedePose { stride: 1.0, pace: 1.0, ..CentipedePose::REST };
+        let places = centipede(&state, &pose);
+        let tip_up = |k: usize| places[state.leg_bone(k, 1.0)].rotation.transform([1.0, 0.0, 0.0])[2];
+        let lifted = (0..state.segments - 1).find(|&k| at(k) > LEG_DUTY + 0.2).unwrap();
+        let down = (0..state.segments - 1).find(|&k| at(k) < LEG_DUTY - 0.1).unwrap();
+        assert!(tip_up(lifted) > 0.05 && tip_up(down).abs() < 1e-5, "{} {}", tip_up(lifted), tip_up(down));
+    }
+
+    #[test]
+    fn the_body_follows_a_shallow_wave_and_keeps_its_length() {
+        let state = CentipedeState::roll(2);
+        let d = state.dims();
+        let walk = |stride: f32| centipede(&state, &CentipedePose { stride, pace: 1.0, ..CentipedePose::REST });
+        let a = walk(0.0);
+        let b = walk(1.6);
+        let sway = (0..state.segments).map(|k| (a[state.segment_bone(k)].origin[0] - b[state.segment_bone(k)].origin[0]).abs()).fold(0.0, f32::max);
+        assert!(sway > 0.02 * d.girth && sway < 2.0 * d.girth, "{sway}");
+        // Plates keep their spacing along the body.
+        for places in [&a, &b] {
+            for k in 0..state.segments - 1 {
+                let gap = vec3::distance(places[state.segment_bone(k)].origin, places[state.segment_bone(k + 1)].origin);
+                assert!((gap - d.segment).abs() < 0.08 * d.segment, "plate {k}: {gap} vs {}", d.segment);
+            }
+        }
+        // And the whole is centred on the origin.
+        let centre = (0..state.segments).fold([0.0f32; 2], |m, k| {
+            let o = a[state.segment_bone(k)].origin;
+            [m[0] + o[0], m[1] + o[2]]
+        });
+        assert!(centre[0].abs() < 0.1 * state.segments as f32 && centre[1].abs() < 0.1 * state.segments as f32, "{centre:?}");
+    }
+
+    #[test]
+    fn rearing_lifts_the_front_and_a_bite_lunges() {
+        let state = CentipedeState::roll(4);
+        let rig = state.build();
+        let head = |pose: CentipedePose| centipede(&state, &pose)[centipede_bone::HEAD].origin;
+        let flat = head(CentipedePose::REST);
+        let reared = head(CentipedePose { rear: 1.0, ..CentipedePose::REST });
+        assert!(reared[1] > flat[1] + 1.5 * state.girth, "{flat:?} {reared:?}");
+        // The rest of the body stays down, the back plates on the floor.
+        let places = centipede(&state, &CentipedePose { rear: 1.0, ..CentipedePose::REST });
+        let last = state.segment_bone(state.segments - 1);
+        assert!((places[last].origin[1] - state.centre_height(state.segments - 1)).abs() < 1e-3);
+        assert!(lowest(&rig, &places) > -0.03 * state.girth);
+        // A bite throws the head forward along the body.
+        let drawn = head(CentipedePose::REST);
+        let lunged = head(CentipedePose { bite: 1.0, jaw: 1.0, ..CentipedePose::REST });
+        assert!(lunged[2] > drawn[2] + 0.5 * state.girth, "{drawn:?} {lunged:?}");
+        let places = centipede(&state, &CentipedePose { bite: 1.0, jaw: 1.0, ..CentipedePose::REST });
+        assert!(lowest(&rig, &places) > -0.03 * state.girth);
+        // The forcipules open apart.
+        let tips = |pose: CentipedePose| {
+            let places = centipede(&state, &pose);
+            let world = rig.world(&places);
+            let tip = |bone: &str| {
+                let i = rig.index(bone).unwrap();
+                rig.bones[i].mesh.parts.iter().flat_map(|p| &p.positions).map(|&q| world[i].point(q)).fold([0.0f32, 0.0, f32::MIN], |m, q| if q[2] > m[2] { q } else { m })
+            };
+            (tip("forcipule_right"), tip("forcipule_left"))
+        };
+        let (shut, wide) = (tips(CentipedePose::REST), tips(CentipedePose { jaw: 1.0, ..CentipedePose::REST }));
+        // Creature space has the left toward +X: shut, the fangs cross; open, each is on its own side.
+        assert!(wide.1[0] - wide.0[0] > shut.1[0] - shut.0[0] + 0.5 * state.girth, "{shut:?} {wide:?}");
+    }
+
+    #[test]
+    fn a_centipede_is_a_pure_function_of_its_pose() {
+        let state = CentipedeState::roll(9);
+        let pose = CentipedePose { stride: 2.0, pace: 0.7, time: 3.0, rear: 0.4, bite: 0.2, jaw: 0.3, look: 0.2 };
+        assert_eq!(centipede(&state, &pose), centipede(&state, &pose));
+        assert_eq!(centipede(&state, &pose).len(), state.bone_count());
+        assert!(centipede_stride(&state) > state.girth);
     }
 }

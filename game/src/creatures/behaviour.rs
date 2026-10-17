@@ -13,7 +13,9 @@
 //!   never passes through them. Rats run at twice their speed, as the SRD's Dash action gives
 //!   ([SRD 5.1 p. 93](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=93));
 //!   snakes come on at their speed and keep near their spot; a spider rushes at twice its speed
-//!   too.
+//!   too. A giant centipede scuttles in
+//!   quick bursts with pauses between while it wanders ([`scuttling`]), and comes on at twice
+//!   its speed, without pause, once it has noticed the delver.
 //! - **Attacking.** In reach, it turns to the player and attacks on a cooldown: a rat lunges
 //!   and bites; a snake draws its coils in and rears, then strikes with its jaw open; a spider
 //!   rears up on its back legs with the front pair raised, then lunges with its fangs. At the
@@ -186,6 +188,20 @@ const TROLL_SWING: f32 = 1.6;
 const TROLL_LANDS: f32 = 0.62;
 /// How much farther than its reach a troll's blows still land, as for a skeleton's.
 const TROLL_SLACK: f32 = 1.15;
+const CENTIPEDE_TURN: f32 = 7.0;
+/// A centipede's chase speed as a multiple of its walking speed (the Dash action, as a rat's),
+/// and the wait between its bites, seconds. Our own cooldown, like the rat's.
+const CENTIPEDE_CHASE: f32 = 2.0;
+const CENTIPEDE_COOLDOWN: f32 = 1.6;
+/// A wandering centipede runs for this share of each period and is still for the rest. Our own.
+const SCUTTLE_PERIOD: f32 = 1.7;
+const SCUTTLE_SHARE: f32 = 0.4;
+
+/// Whether a wandering centipede with `seed` is in a burst of running at `t` seconds, rather
+/// than pausing: each has its own timing, so a room's centipedes do not scuttle in step.
+pub fn scuttling(t: f32, seed: u32) -> bool {
+    ((t + (seed % 97) as f32 * 0.07) / SCUTTLE_PERIOD).fract() < SCUTTLE_SHARE
+}
 /// The wait between a skeleton's swings, seconds. Our own.
 const SKELETON_COOLDOWN: f32 = 0.8;
 /// How much farther than its reach a skeleton's blow still lands, in case the delver steps
@@ -237,6 +253,8 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
         Creature::Troll(_) => player_radius + 1.1 * critter.radius,
         // Its head lowered, the antlers a little past its nose.
         Creature::Jackalope(jackalope) => player_radius + 0.55 * jackalope.length * critter.size,
+        // Its head leads the body from its middle: it bites when that reaches the delver.
+        Creature::Centipede(centipede) => player_radius + 0.5 * centipede.length * critter.size,
     }
 }
 
@@ -254,6 +272,8 @@ pub fn body_radius(critter: &Critter) -> f32 {
         Creature::Spider(spider) => 0.2 * spider.span * critter.size,
         // Its body, not its reach, and no wider than a doorway lets through.
         Creature::Troll(_) => (0.55 * critter.radius).min(TROLL_SQUEEZE),
+        // A third of its length from its middle, no wider than a snake's, so it passes a doorway.
+        Creature::Centipede(centipede) => (0.35 * centipede.length * critter.size).min(SNAKE_SQUEEZE),
     }
 }
 

@@ -21,6 +21,7 @@ fn creature_mark(species: Species) -> char {
         Species::GiantSpider => 'p',
         Species::Troll => 'T',
         Species::Jackalope => 'j',
+        Species::GiantCentipede => 'c',
     }
 }
 

@@ -1,7 +1,10 @@
 //! # fb_creatures
 //!
-//! Creatures of the abyss as plain data: rats, snakes, skeletons, giant spiders, trolls and jackalopes, something to fight.
+//! Creatures of the abyss as plain data: rats, snakes, skeletons, giant spiders, trolls, jackalopes and giant
+//! centipedes, something to fight.
 //!
+//! - [`centipede`] rolls a [`CentipedeState`]: a spine of plates, each with a pair of legs, a
+//!   head with antennae, simple eyes and forcipules, in a colouring and banding.
 //! - [`rat`] and [`snake`] roll a typed state from a seed ([`RatState`], [`SnakeState`]): the
 //!   species (rat or giant rat, poisonous or constrictor snake), size, build, colouring and
 //!   pattern. [`Creature::of`] rolls one of a species chosen by the caller.
@@ -38,6 +41,7 @@
 //!
 //! Plain Rust, no Bevy; every creature is a pure function of its seed.
 
+pub mod centipede;
 pub mod gear;
 pub mod jackalope;
 pub mod pose;
@@ -49,6 +53,7 @@ pub mod snake;
 pub mod spider;
 pub mod troll;
 
+pub use centipede::{CentipedeBanding, CentipedeColouring, CentipedeState};
 pub use rat::{RatColouring, RatPattern, RatState};
 pub use gear::{GearPiece, SkeletonGear};
 pub use jackalope::{JackalopeColouring, JackalopeState};
@@ -159,6 +164,7 @@ pub enum Species {
     GiantSpider,
     Troll,
     Jackalope,
+    GiantCentipede,
 }
 
 /// The six ability scores of a stat block.
@@ -248,7 +254,7 @@ pub struct StatBlock {
 }
 
 impl Species {
-    pub const ALL: [Species; 8] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll, Species::Jackalope];
+    pub const ALL: [Species; 9] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll, Species::Jackalope, Species::GiantCentipede];
 
     /// The SRD 5.1 stat block, read from the CC-BY-4.0 PDF ([`SRD`]):
     ///
@@ -290,6 +296,12 @@ impl Species {
     ///   ([p. 378](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=378)) with a
     ///   skeleton's Challenge ([p. 346](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=346))
     ///   and a hare's speed. [`StatBlock::bite`] is the antlers' damage.
+    /// - [Giant Centipede, p. 374](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=374):
+    ///   Small beast, Armor Class 13, Hit Points 4 (1d6 + 1), Speed 30 ft. (and climb 30 ft.,
+    ///   which is not modelled), STR 5 DEX 14 CON 12 INT 1 WIS 7 CHA 3, blindsight 30 ft.,
+    ///   Challenge 1/4 (50 XP); Bite: +4 to hit, 4 (1d4 + 2) piercing, and 10 (3d6) poison on a
+    ///   failed DC 11 Constitution save. [`StatBlock::venom`] is the 3d6; the save the game
+    ///   rolls for any venom is shared, not this block's own DC.
     pub fn stat_block(self) -> StatBlock {
         let ab = |strength, dexterity, constitution, intelligence, wisdom, charisma| Abilities { strength, dexterity, constitution, intelligence, wisdom, charisma };
         match self {
@@ -454,6 +466,26 @@ impl Species {
                 // Not in the SRD: our own, so no page.
                 page: 0,
             },
+            Species::GiantCentipede => StatBlock {
+                name: "Giant Centipede",
+                size: Size::Small,
+                abilities: ab(5, 14, 12, 1, 7, 3),
+                hit_points: 4,
+                hit_dice: Dice::new(1, 6, 1),
+                speed_feet: 30.0,
+                armour_class: 13,
+                attack_bonus: 4,
+                bite: Dice::new(1, 4, 2),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: Some(Dice::new(3, 6, 0)),
+                senses_feet: 30.0,
+                challenge: "1/4",
+                xp: 50,
+                page: 374,
+            },
         }
     }
 
@@ -481,6 +513,10 @@ impl Species {
         self == Species::Jackalope
     }
 
+    pub fn is_centipede(self) -> bool {
+        self == Species::GiantCentipede
+    }
+
     /// Its walking speed in world units per second: the stat block's feet per 6-second round
     /// ([SRD 5.1 p. 90](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=90),
     /// "a round represents about 6 seconds").
@@ -489,7 +525,7 @@ impl Species {
     }
 }
 
-/// One creature: a rat, a snake, a skeleton, a spider, a troll or a jackalope, rolled from a seed.
+/// One creature: a rat, a snake, a skeleton, a spider, a troll, a jackalope or a centipede, rolled from a seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Creature {
     Rat(RatState),
@@ -498,6 +534,7 @@ pub enum Creature {
     Spider(SpiderState),
     Troll(TrollState),
     Jackalope(JackalopeState),
+    Centipede(CentipedeState),
 }
 
 impl Creature {
@@ -513,6 +550,8 @@ impl Creature {
             Creature::Troll(TrollState::roll(seed))
         } else if species.is_jackalope() {
             Creature::Jackalope(JackalopeState::roll(seed))
+        } else if species.is_centipede() {
+            Creature::Centipede(CentipedeState::roll(seed))
         } else {
             Creature::Snake(SnakeState::roll_as(seed, species))
         }
@@ -526,6 +565,7 @@ impl Creature {
             Creature::Spider(_) => Species::GiantSpider,
             Creature::Troll(_) => Species::Troll,
             Creature::Jackalope(_) => Species::Jackalope,
+            Creature::Centipede(c) => c.species,
         }
     }
 
@@ -537,6 +577,7 @@ impl Creature {
             Creature::Spider(s) => s.seed,
             Creature::Troll(s) => s.seed,
             Creature::Jackalope(j) => j.seed,
+            Creature::Centipede(c) => c.seed,
         }
     }
 
@@ -549,6 +590,7 @@ impl Creature {
             Creature::Spider(s) => s.build(),
             Creature::Troll(s) => s.build(),
             Creature::Jackalope(j) => j.build(),
+            Creature::Centipede(c) => c.build(),
         }
     }
 
@@ -562,6 +604,7 @@ impl Creature {
             Creature::Spider(s) => s.radius(),
             Creature::Troll(s) => s.radius(),
             Creature::Jackalope(j) => j.radius(),
+            Creature::Centipede(c) => c.radius(),
         }
     }
 }
@@ -595,6 +638,11 @@ pub fn troll(seed: u32) -> TrollState {
 /// A jackalope rolled from `seed`.
 pub fn jackalope(seed: u32) -> JackalopeState {
     JackalopeState::roll(seed)
+}
+
+/// A giant centipede rolled from `seed`.
+pub fn centipede(seed: u32) -> CentipedeState {
+    CentipedeState::roll(seed)
 }
 
 #[cfg(test)]

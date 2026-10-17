@@ -193,7 +193,8 @@ mod tests {
                 let rig = Creature::of(species, seed).rig();
                 for bone in &rig.bones {
                     let hit = bone.hit();
-                    assert_eq!(hit.is_some(), bone.name != "tongue", "{species:?} {}", bone.name);
+                    assert_eq!(hit.is_some(), bone.mesh.parts.iter().any(|p| SURFACE_PARTS.contains(&p.name)), "{species:?} {}", bone.name);
+                    assert!(hit.is_some() || ["tongue", "antenna", "leg"].iter().any(|n| bone.name.starts_with(n)), "{species:?} {}", bone.name);
                     let Some(hit) = hit else { continue };
                     // Its surface lies round the capsule's skin, not far outside it.
                     let surface: Vec<V3> = bone.mesh.parts.iter().filter(|p| SURFACE_PARTS.contains(&p.name)).flat_map(|p| p.positions.clone()).collect();

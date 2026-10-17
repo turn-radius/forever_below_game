@@ -8,7 +8,7 @@
 //! moving`, or `--skeleton --seed 7 --motion swing [--bare]` ([`CreatureChoice::from_args`]).
 
 use bevy::{camera::Exposure, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera};
-use fb_creatures::pose::{self, ArmStance, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
+use fb_creatures::pose::{self, ArmStance, CentipedePose, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::skeleton::SkeletonDims;
 use fb_creatures::{Creature, SkeletonGear, Species};
 
@@ -100,6 +100,7 @@ pub fn parse_species(name: &str) -> Option<Species> {
         "giant_spider" | "spider" => Some(Species::GiantSpider),
         "troll" => Some(Species::Troll),
         "jackalope" => Some(Species::Jackalope),
+        "giant_centipede" | "centipede" => Some(Species::GiantCentipede),
         _ => None,
     }
 }
@@ -124,7 +125,7 @@ impl CreatureChoice {
                 "--bare" => choice.gear = false,
                 "--species" => {
                     let name = value()?;
-                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton, giant_spider, troll, jackalope"))?;
+                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton, giant_spider, troll, jackalope, giant_centipede"))?;
                 }
                 "--seed" => {
                     let seed = value()?;
@@ -321,6 +322,15 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
                 let sit = if choice.motion == ViewMotion::Rearing { 1.0 } else { 0.0 };
                 pose::jackalope(jackalope, &JackalopePose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, sit, gore: strike, look: 0.0 })
             }
+            Creature::Centipede(centipede) => {
+                shown.cycle = (shown.cycle + speed * dt / pose::centipede_stride(centipede) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                let rear = match choice.motion {
+                    ViewMotion::Still | ViewMotion::Moving => 0.0,
+                    ViewMotion::Rearing => 0.9,
+                    ViewMotion::Striking => 0.6,
+                };
+                pose::centipede(centipede, &CentipedePose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, rear, bite: strike, jaw: strike, look: 0.0 })
+            }
             Creature::Skeleton(skeleton) => {
                 let dims = shown.dims.get_or_insert_with(|| skeleton.dims());
                 shown.cycle = (shown.cycle + speed * dt / pose::skeleton_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
@@ -390,6 +400,7 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         Creature::Spider(s) => format!("{:?}, {:?}, {:.1} m across", s.colouring, s.marking, s.span / 10.0),
         Creature::Troll(t) => troll_look(t),
         Creature::Jackalope(j) => format!("{:?}, {:.0} cm, antlers {}+{} tines", j.colouring, j.length * 10.0, j.tines[0], j.tines[1]),
+        Creature::Centipede(c) => format!("{:?}, {:?}, {} plates, {:.0} cm", c.colouring, c.banding, c.segments, c.length * 10.0),
     };
     let motion = if choice.species.is_skeleton() || choice.species.is_troll() { skeleton_motion(choice.motion) } else { format!("{:?}", choice.motion) };
     let line = format!(

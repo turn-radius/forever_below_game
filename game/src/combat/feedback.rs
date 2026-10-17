@@ -160,6 +160,7 @@ pub fn knockback(creature: &Creature) -> f32 {
         Creature::Spider(s) => s.drawn_size(),
         Creature::Troll(t) => t.drawn_size(),
         Creature::Jackalope(j) => j.drawn_size(),
+        Creature::Centipede(c) => c.drawn_size(),
     };
     knockback_for(size)
 }
@@ -376,6 +377,7 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
                 intent.fallen = share.max(1e-3);
                 *transform = flipped_over(spider, &corpse.fell, share);
             }
+            Creature::Centipede(centipede) => *transform = turned_over(centipede, &corpse.fell, collapse_share(corpse.since, hold)),
         }
     }
 }
@@ -416,6 +418,19 @@ pub fn tipped_over(jackalope: &fb_creatures::JackalopeState, fell: &Transform, s
     let roll = Quat::from_rotation_z(0.5 * std::f32::consts::PI * s);
     let middle = Vec3::Y * d.centre_height;
     let drop = (d.centre_height - d.half_width).max(0.0) * s;
+    let local = middle - roll * middle - Vec3::Y * drop;
+    Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
+}
+
+/// A centipede that stood at `fell`, `share` of the way through turning onto its back, legs in
+/// the air: rolled about its length through its plates' middle, and lowered so its back rests on
+/// the floor.
+pub fn turned_over(centipede: &fb_creatures::CentipedeState, fell: &Transform, share: f32) -> Transform {
+    let s = share * share * (3.0 - 2.0 * share);
+    let roll = Quat::from_rotation_z(0.95 * std::f32::consts::PI * s);
+    let middle_height = centipede.centre_height(centipede.segments / 2);
+    let middle = Vec3::Y * middle_height;
+    let drop = (middle_height - 0.6 * centipede.girth).max(0.0) * s;
     let local = middle - roll * middle - Vec3::Y * drop;
     Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
 }
