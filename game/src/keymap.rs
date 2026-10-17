@@ -288,7 +288,8 @@ impl Default for Keymap {
                 bind(Action::StepRight, "Step right", Group::Moving, &[Key(KeyCode::KeyD)]),
                 bind(Action::DodgeLeft, "Dodge left", Group::Moving, &[Key(KeyCode::KeyQ)]),
                 bind(Action::DodgeRight, "Dodge right", Group::Moving, &[Key(KeyCode::KeyE)]),
-                bind(Action::Sprint, "Sprint", Group::Moving, &[Key(KeyCode::ShiftLeft), Key(KeyCode::ShiftRight)]),
+                // Shift also steps the compare card through an item's slots in the inventory.
+                bind(Action::Sprint, "Sprint", Group::Moving, &[Key(KeyCode::ShiftLeft), Key(KeyCode::ShiftRight)]).in_contexts(ITEMS),
                 bind(Action::Crouch, "Crouch", Group::Moving, &[Key(KeyCode::ControlLeft), Key(KeyCode::ControlRight)]),
                 bind(Action::Jump, "Jump", Group::Moving, &[Key(KeyCode::Space)]),
                 bind(Action::Look, "Look round", Group::Moving, &[Input::MouseMotion]),
@@ -833,7 +834,7 @@ mod tests {
             .world_mut()
             .run_system_once(|input: ActionInput| (input.pressed(Action::Sprint), input.just_pressed(Action::TurnItem), input.pressed(Action::Primary), input.axis(Action::WalkForward, Action::WalkBack)))
             .unwrap();
-        assert_eq!(read, (false, true, false, 0.0), "Sprint is the level's, so the inventory does not read it");
+        assert_eq!(read, (true, true, false, 0.0), "Shift reads in the inventory, walking does not");
     }
 
     /// An app with the keymap, both inputs, a manual clock and the hold tracker.
@@ -1012,7 +1013,7 @@ mod tests {
         let keymap = Keymap::default();
         assert_eq!(keymap.conflicts(Action::Stab, Input::Mouse(MouseButton::Left)), None);
         // Block holds right click and nothing in the level presses it, but a press would clash.
-        assert_eq!(keymap.conflicts(Action::Sprint, Input::Mouse(MouseButton::Right)), None);
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Right)), None);
         assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Left)), Some(Action::Attack));
     }
 

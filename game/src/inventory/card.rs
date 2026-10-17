@@ -227,20 +227,32 @@ pub fn swap_changes(new: &Item, old: Option<&Item>) -> Vec<Change> {
     lines
 }
 
-/// What an item that can be worn is compared with: the slot it would go in, and what is worn
-/// there. That is the first of its slots ([`Item::slots`]) with something in it, so a sword
-/// is held up against the main hand's weapon and a ring against a worn ring; with all its
-/// slots empty, the one it would be worn in. `None` for goods and for what is already worn.
-pub fn compare_with(inventory: &Inventory, id: ItemId) -> Option<(Slot, Option<ItemId>)> {
+/// The slots an item is held up against, in the order Shift steps through them: its own
+/// ([`Item::slots`]), and for a torch the hip too, where a lantern may hang. A torch cannot
+/// hang there, but what lights the way is worth weighing against it.
+fn compare_slots(item: &Item) -> Vec<Slot> {
+    let mut slots = item.slots();
+    if item.shape.family() == armory::Family::Torch && !slots.contains(&Slot::Hip) {
+        slots.push(Slot::Hip);
+    }
+    slots
+}
+
+/// What an item that can be worn is compared with: a slot it fits, and what is worn there.
+/// `step` 0 is the first of its slots with something in it, so a sword is held up against the
+/// main hand's weapon and a ring against a worn ring; with all its slots empty, the one it
+/// would be worn in. Each step on is the next of its slots after that, wrapping round. `None`
+/// for goods and for what is already worn.
+pub fn compare_with(inventory: &Inventory, id: ItemId, step: usize) -> Option<(Slot, Option<ItemId>)> {
     let item = inventory.item(id)?;
     item.profile.slot?;
     if matches!(inventory.location(id), Some(Location::Worn(_))) {
         return None;
     }
-    if let Some((slot, worn)) = item.slots().into_iter().find_map(|slot| Some((slot, inventory.worn(slot)?))) {
-        return Some((slot, Some(worn)));
-    }
-    Some((inventory.target_slot(id)?, None))
+    let slots = compare_slots(item);
+    let first = slots.iter().position(|&slot| inventory.worn(slot).is_some()).or_else(|| slots.iter().position(|&slot| Some(slot) == inventory.target_slot(id)))?;
+    let slot = slots[(first + step) % slots.len()];
+    Some((slot, inventory.worn(slot)))
 }
 
 /// The slot's name as the doll labels it.
@@ -416,6 +428,8 @@ fn card_frame(camera: Entity) -> impl Bundle {
 /// changes under it.
 struct Comparison<'a> {
     banner: &'a str,
+    /// Names the hovered item, so the changes read as what it gives over what is worn.
+    heading: &'a str,
     changes: &'a [Change],
 }
 
@@ -436,7 +450,7 @@ fn fill_card(commands: &mut Commands, card: Entity, shown: Option<(&Item, &CardT
                 BorderColor::all(FAINT),
             ))
             .with_children(|list| {
-                list.spawn((Text::new("Wearing this instead"), UiFonts::style(&fonts.body_italic, 13.5, MUTED)));
+                list.spawn((Text::new(comparison.heading.to_string()), UiFonts::style(&fonts.body_italic, 13.5, GOLD)));
                 if comparison.changes.is_empty() {
                     list.spawn((Text::new("No change"), UiFonts::style(&fonts.mono, 13.0, MUTED)));
                 }
@@ -622,9 +636,22 @@ pub fn show_card(
     }
 }
 
+/// How many times Shift has stepped the comparison of the `hovered` item on, kept in
+/// `stepped` with the item it is for. Shift counts only while Alt is held (`comparing`), and
+/// another item, or letting go of Alt, starts again.
+fn compare_step(stepped: &mut (Option<ItemId>, usize), hovered: Option<ItemId>, comparing: bool, shift: bool) -> usize {
+    if !comparing || stepped.0 != hovered {
+        *stepped = (hovered, 0);
+    } else if shift {
+        stepped.1 += 1;
+    }
+    stepped.1
+}
+
 /// Shows, fills and places the compare card beside the hover card while [`Action::Compare`]
-/// is held over something that can be worn ([`compare_with`]). Like the hover card, one
-/// filled this frame waits a frame to be measured.
+/// is held over something that can be worn ([`compare_with`]), Shift stepping on to the next
+/// slot it fits. Like the hover card,
+/// one filled this frame waits a frame to be measured.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn show_compare(
     mut commands: Commands,
@@ -635,11 +662,15 @@ pub fn show_compare(
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<CompareCard>>,
     mut shown: Local<Option<(ItemId, Slot, Option<ItemId>)>>,
+    // The item the step is for, and how many times Shift has stepped on from its first slot.
+    mut stepped: Local<(Option<ItemId>, usize)>,
 ) {
+    let comparing = input.pressed(Action::Compare) || compare_forced();
+    let step = compare_step(&mut stepped, on_screen.0.map(|(id, ..)| id), comparing, input.just_pressed(Action::Sprint));
     let subject = on_screen
         .0
-        .filter(|_| input.pressed(Action::Compare) || compare_forced())
-        .and_then(|(id, card, beside)| Some((id, compare_with(&inventory, id)?, card, beside)));
+        .filter(|_| comparing)
+        .and_then(|(id, card, beside)| Some((id, compare_with(&inventory, id, step)?, card, beside)));
     for (entity, mut node, mut visibility, computed, target) in &mut cards {
         let Some((id, (slot, worn), card, beside)) = subject else {
             *visibility = Visibility::Hidden;
@@ -652,7 +683,8 @@ pub fn show_compare(
             let text = old.map(|old| (old, card_text(old, worn.map(|w| (&*inventory, w)))));
             let banner = compare_banner(slot, old.is_some());
             let changes = swap_changes(new, old);
-            let comparison = Comparison { banner: &banner, changes: &changes };
+            let heading = format!("Swapping in the {}", new.title());
+            let comparison = Comparison { banner: &banner, heading: &heading, changes: &changes };
             fill_card(&mut commands, entity, text.as_ref().map(|(item, text)| (*item, text)), Some(comparison), &fonts, &mut icons);
             *shown = Some((id, slot, worn));
             *visibility = Visibility::Hidden;
@@ -794,6 +826,54 @@ mod tests {
     }
 
     #[test]
+    fn changes_are_what_the_new_thing_gives_over_the_old() {
+        let worse = Stats {
+            armour: 1.0, warmth: 1.0, light: 20.0, to_hit: 1.0, carry: 10.0, darkvision: 30.0, weight: 3.0, burn_time: 1.0, break_chance: 0.1, ..Stats::default()
+        };
+        let better = Stats {
+            armour: 2.0, warmth: 2.0, light: 30.0, to_hit: 2.0, carry: 15.0, darkvision: 60.0, weight: 2.0, burn_time: 2.0, break_chance: 0.05, ..Stats::default()
+        };
+        let text = |c: &[Change]| c.iter().map(|c| (c.text.clone(), c.better)).collect::<Vec<_>>();
+        // The better thing over the worse: gains read plus and green, less weight and breakage minus and green.
+        assert_eq!(
+            text(&changes(&better, Some(&worse))),
+            vec![
+                ("+1 armour".into(), true),
+                ("+1 warmth".into(), true),
+                ("+10 ft light".into(), true),
+                ("+1 to hit".into(), true),
+                ("+5 lb carry".into(), true),
+                ("+30 ft darkvision".into(), true),
+                ("+1\u{d7} burn time".into(), true),
+                ("\u{2212}5% chance to break".into(), true),
+                ("\u{2212}1 lb weight".into(), true),
+            ]
+        );
+        // And the other way round, every line flips both sign and colour.
+        assert_eq!(
+            text(&changes(&worse, Some(&better))),
+            vec![
+                ("\u{2212}1 armour".into(), false),
+                ("\u{2212}1 warmth".into(), false),
+                ("\u{2212}10 ft light".into(), false),
+                ("\u{2212}1 to hit".into(), false),
+                ("\u{2212}5 lb carry".into(), false),
+                ("\u{2212}30 ft darkvision".into(), false),
+                ("\u{2212}1\u{d7} burn time".into(), false),
+                ("+5% chance to break".into(), false),
+                ("+1 lb weight".into(), false),
+            ]
+        );
+        // Items: the hovered +2 helmet over the worn +1 one reads "+1 armour", green.
+        let mut worn = fb_items::roll_item("Helm", 3).unwrap();
+        let mut hovered = worn.clone();
+        worn.profile.stats.armour = 1.0;
+        hovered.profile.stats.armour = 2.0;
+        assert_eq!(swap_changes(&hovered, Some(&worn)), vec![Change { text: "+1 armour".into(), better: true }]);
+        assert_eq!(swap_changes(&worn, Some(&hovered)), vec![Change { text: "\u{2212}1 armour".into(), better: false }]);
+    }
+
+    #[test]
     fn wearable_things_compare_with_what_is_worn_in_their_place() {
         let mut inventory = Inventory::default();
         let roll = |base| fb_items::roll_item(base, 11).unwrap();
@@ -801,23 +881,69 @@ mod tests {
         let other_helm = inventory.add(roll("Helm"));
         let bread = inventory.add(roll("Bread"));
         // Nothing on the head yet: compared with the empty slot.
-        assert_eq!(compare_with(&inventory, helm), Some((Slot::Head, None)));
+        assert_eq!(compare_with(&inventory, helm, 0), Some((Slot::Head, None)));
         inventory.wear(helm, Slot::Head).unwrap();
-        assert_eq!(compare_with(&inventory, other_helm), Some((Slot::Head, Some(helm))));
-        assert_eq!(compare_with(&inventory, helm), None, "what is worn has nothing to compare with");
-        assert_eq!(compare_with(&inventory, bread), None, "goods are not worn");
+        assert_eq!(compare_with(&inventory, other_helm, 0), Some((Slot::Head, Some(helm))));
+        assert_eq!(compare_with(&inventory, helm, 0), None, "what is worn has nothing to compare with");
+        assert_eq!(compare_with(&inventory, bread, 0), None, "goods are not worn");
         // A second ring is held up against the worn one, not the empty ring slot.
         let ring = inventory.add(roll("Ring"));
         let other_ring = inventory.add(roll("Ring"));
         inventory.wear(ring, Slot::Ring2).unwrap();
-        assert_eq!(compare_with(&inventory, other_ring), Some((Slot::Ring2, Some(ring))));
+        assert_eq!(compare_with(&inventory, other_ring, 0), Some((Slot::Ring2, Some(ring))));
         // A weapon against the main hand's.
         let sword = inventory.add(roll("Sword"));
         let mace = inventory.add(roll("Mace"));
         inventory.wear(mace, Slot::Mainhand).unwrap();
-        assert_eq!(compare_with(&inventory, sword), Some((Slot::Mainhand, Some(mace))));
+        assert_eq!(compare_with(&inventory, sword, 0), Some((Slot::Mainhand, Some(mace))));
         assert_eq!(compare_banner(Slot::Head, true), format!("Worn \u{b7} {}", slot_label(Slot::Head)));
         assert!(compare_banner(Slot::Head, false).starts_with("Nothing worn \u{b7} "));
+    }
+
+    #[test]
+    fn shift_steps_the_comparison_on_through_the_slots_an_item_fits() {
+        let mut inventory = Inventory::default();
+        let roll = |base| fb_items::roll_item(base, 11).unwrap();
+        // A torch in the pack, a torch in the off hand and a lantern at the hip.
+        let belt = inventory.add(roll("Belt"));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let lantern = inventory.add(roll("Lantern"));
+        inventory.wear(lantern, Slot::Hip).unwrap();
+        let held = inventory.add(roll("Torch"));
+        inventory.wear(held, Slot::Offhand).unwrap();
+        let spare = inventory.add(roll("Torch"));
+        assert_eq!(compare_with(&inventory, spare, 0), Some((Slot::Offhand, Some(held))));
+        assert_eq!(compare_with(&inventory, spare, 1), Some((Slot::Hip, Some(lantern))));
+        assert_eq!(compare_with(&inventory, spare, 2), Some((Slot::Offhand, Some(held))), "wraps round");
+        // Nothing at the hip: the banner says so.
+        inventory.take_out(lantern);
+        assert_eq!(compare_with(&inventory, spare, 1), Some((Slot::Hip, None)));
+        // Both ring fingers worn: the first ring, then the second.
+        let (ring1, ring2, third) = (inventory.add(roll("Ring")), inventory.add(roll("Ring")), inventory.add(roll("Ring")));
+        inventory.wear(ring1, Slot::Ring1).unwrap();
+        inventory.wear(ring2, Slot::Ring2).unwrap();
+        assert_eq!(compare_with(&inventory, third, 0), Some((Slot::Ring1, Some(ring1))));
+        assert_eq!(compare_with(&inventory, third, 1), Some((Slot::Ring2, Some(ring2))));
+        assert_eq!(compare_with(&inventory, third, 2), Some((Slot::Ring1, Some(ring1))));
+        // One slot only: every step shows the head.
+        let helm = inventory.add(roll("Helm"));
+        let other = inventory.add(roll("Helm"));
+        inventory.wear(helm, Slot::Head).unwrap();
+        assert_eq!([0, 1, 2].map(|step| compare_with(&inventory, other, step)), [Some((Slot::Head, Some(helm))); 3]);
+    }
+
+    #[test]
+    fn shift_with_alt_steps_on_and_a_new_item_starts_again() {
+        let mut stepped: (Option<ItemId>, usize) = (None, 0);
+        let mut step = |hovered: Option<u32>, comparing, shift| compare_step(&mut stepped, hovered.map(ItemId), comparing, shift);
+        assert_eq!(step(Some(1), true, false), 0);
+        assert_eq!(step(Some(1), true, true), 1);
+        assert_eq!(step(Some(1), true, false), 1, "the step stays while Alt is held");
+        assert_eq!(step(Some(1), true, true), 2);
+        assert_eq!(step(Some(2), true, true), 0, "another item starts at its first slot");
+        assert_eq!(step(Some(2), false, true), 0, "Shift alone does not step");
+        assert_eq!(step(Some(2), true, true), 1);
+        assert_eq!(step(Some(2), false, false), 0, "letting go of Alt starts again");
     }
 
     #[test]
