@@ -7,5 +7,15 @@
       { "kind": "attack_disadvantage" },
       { "kind": "no_recovery" }
     ]
+  },
+  "stinging_eyes": {
+    "name": "Stinging eyes",
+    "stages": [
+      { "at": 0.0, "word": "Smarting eyes", "severity": "mild" },
+      { "at": 0.5, "word": "Stinging eyes", "severity": "moderate" }
+    ],
+    "per_hour": -2.0,
+    "exposure_per_hour": 5.0,
+    "influences": [{ "kind": "sight", "at_full": 0.6 }]
   }
 }

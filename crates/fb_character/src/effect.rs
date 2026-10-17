@@ -40,6 +40,9 @@ pub struct EffectDef {
     pub hours: Option<f64>,
     /// How its intensity changes by itself, per game hour: negative fades, positive worsens.
     pub per_hour: f64,
+    /// What a cause that keeps acting (a smoky light held, lice worn) adds per game hour while
+    /// it acts, on top of `per_hour`: the [`Exposure`] the game passes for it.
+    pub exposure_per_hour: f64,
     /// Game hours after onset during which it shows nothing and does nothing (a disease's
     /// incubation).
     pub incubation_hours: f64,
@@ -51,7 +54,7 @@ pub struct EffectDef {
 
 impl Default for EffectDef {
     fn default() -> Self {
-        EffectDef { name: String::new(), stages: vec![], hours: None, per_hour: 0.0, incubation_hours: 0.0, on_a_part: false, influences: vec![] }
+        EffectDef { name: String::new(), stages: vec![], hours: None, per_hour: 0.0, exposure_per_hour: 0.0, incubation_hours: 0.0, on_a_part: false, influences: vec![] }
     }
 }
 

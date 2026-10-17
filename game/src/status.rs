@@ -267,8 +267,9 @@ fn show_card(
 
 /// Conditions to hold the delver under, for captures: `FB_CONDITIONS` lists them, comma
 /// separated, as `hunger:<0 to 1>`, `thirst:<0 to 1>`, `sleep:<0 to 1>`, `exhaustion:<level>`,
-/// `winded`, `load:<light|burdened|encumbered|overloaded>` and `poisoned` (for an hour) or
-/// `poisoned:<minutes>`; `FB_CONDITION_HOVER=<n>` shows the
+/// `winded`, `load:<light|burdened|encumbered|overloaded>`, `poisoned` (for an hour) or
+/// `poisoned:<minutes>`, and any other effect by its id at an intensity, `stinging_eyes:0.8`;
+/// `FB_CONDITION_HOVER=<n>` shows the
 /// card of the `n`th badge.
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct DebugConditions {
@@ -280,6 +281,8 @@ pub struct DebugConditions {
     pub load: Option<LoadBand>,
     /// Game hours of poison to hold the delver at.
     pub poisoned: Option<f64>,
+    /// Any other effect by its id in `data/effects.json`, at an intensity.
+    pub effects: Vec<(String, f64)>,
     pub hover: Option<usize>,
 }
 
@@ -314,14 +317,18 @@ impl DebugConditions {
                         _ => None,
                     }
                 }
-                _ => {}
+                other => {
+                    if let Some(intensity) = share {
+                        debug.effects.push((other.to_string(), intensity));
+                    }
+                }
             }
         }
         debug
     }
 
     fn holds_anything(&self) -> bool {
-        self.hunger.is_some() || self.thirst.is_some() || self.sleepiness.is_some() || self.exhaustion.is_some() || self.winded || self.load.is_some() || self.poisoned.is_some()
+        self.hunger.is_some() || self.thirst.is_some() || self.sleepiness.is_some() || self.exhaustion.is_some() || self.winded || self.load.is_some() || self.poisoned.is_some() || !self.effects.is_empty()
     }
 }
 
@@ -336,10 +343,14 @@ fn hold_debug_conditions(
     if !debug.holds_anything() {
         return;
     }
-    for (player, mut needs, mut exhaustion, mut stamina, mut load, poison) in &mut players {
-        if let Some(hours) = debug.poisoned {
-            let held = DelverEffects::poisoned_for(fb_character::rules::defaults(), hours);
-            if poison != Some(&held) {
+    for (player, mut needs, mut exhaustion, mut stamina, mut load, effects) in &mut players {
+        if debug.poisoned.is_some() || !debug.effects.is_empty() {
+            let rules = fb_character::rules::defaults();
+            let mut held = debug.poisoned.map_or_else(DelverEffects::default, |hours| DelverEffects::poisoned_for(rules, hours));
+            for (id, intensity) in &debug.effects {
+                held.0.add(&rules.effects, id, *intensity, None, fb_character::effect::Source::Surroundings);
+            }
+            if effects != Some(&held) {
                 commands.entity(player).insert(held);
             }
         }

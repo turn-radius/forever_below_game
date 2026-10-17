@@ -75,6 +75,7 @@ fn step_the_delver(
     let rules_changed = rules.is_changed() && !rules.is_added();
     let changed = character.is_changed() || inventory.is_changed() || rules_changed;
     let mut gear = None;
+    let mut exposures = None;
     for (player, locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana, effects, mut recovery, health) in &mut players {
         if changed || needs.is_added() {
             let gear = gear.get_or_insert_with(|| character.gear(&inventory));
@@ -123,12 +124,24 @@ fn step_the_delver(
                 health.heal(gained);
             }
         }
-        // Effects run their course by game time, and the component goes with the last one.
-        if let Some(mut effects) = effects {
-            effects.0.step(&rules.effects, hours, &[]);
-            if effects.0.active.is_empty() {
-                commands.entity(player).remove::<DelverEffects>();
+        // Effects run their course by game time under what keeps acting on the delver (a smoky
+        // light in hand), and the component comes on with the first and goes with the last.
+        let exposures = exposures.get_or_insert_with(|| crate::exposure::exposures(&inventory, &rules.effects));
+        match effects {
+            Some(mut effects) => {
+                effects.0.step(&rules.effects, hours, exposures);
+                if effects.0.active.is_empty() {
+                    commands.entity(player).remove::<DelverEffects>();
+                }
             }
+            None if !exposures.is_empty() => {
+                let mut fresh = fb_character::effect::Effects::default();
+                fresh.step(&rules.effects, hours, exposures);
+                if !fresh.active.is_empty() {
+                    commands.entity(player).insert(DelverEffects(fresh));
+                }
+            }
+            None => {}
         }
     }
 }
