@@ -204,6 +204,8 @@ fn play_creature_steps(
         let skeleton = critter.spot.species.is_skeleton();
         let stride = match (&critter.kit, skeleton) {
             (Some(kit), true) => 0.7 * (kit.dims.thigh + kit.dims.shin) * critter.size,
+            // A spider's eight feet patter: a tick every quarter of its radius.
+            _ if critter.spot.species.is_spider() => 0.25 * critter.creature.radius() * critter.size,
             _ => RAT_STRIDE,
         };
         let current_pos = transform.translation.xz();

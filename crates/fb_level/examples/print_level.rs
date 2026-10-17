@@ -18,6 +18,7 @@ fn creature_mark(species: Species) -> char {
         Species::PoisonousSnake => 'v',
         Species::ConstrictorSnake => 'S',
         Species::Skeleton => 'k',
+        Species::GiantSpider => 'p',
     }
 }
 

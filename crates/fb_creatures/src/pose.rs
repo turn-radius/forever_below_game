@@ -801,3 +801,343 @@ pub fn skeleton_armed(d: &SkeletonDims, pose: &SkeletonPose, stance: &[Option<Ar
     }
     out
 }
+
+use crate::spider::{LEG_COUNT, LEG_PAIRS, SpiderState, bone as spider_bone, leg_side};
+
+/// How a giant spider is moving at a moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SpiderPose {
+    /// The step cycle, radians: one turn per [`spider_stride`] walked.
+    pub stride: f32,
+    /// Speed as a share of its walking speed: 0 standing, 1 walking, 2 running.
+    pub pace: f32,
+    /// Seconds, for what it does standing: breathing, and the pedipalps' fidgeting.
+    pub time: f32,
+    /// 0 on all eight legs, 1 reared up on the back four with the front legs raised.
+    pub rear: f32,
+    /// A bite's stab, 0 to 1 at full stretch: the body lunges, the fangs open and swing in.
+    pub bite: f32,
+    /// 0 alive, 1 dead: the legs drawn in under the belly.
+    pub curl: f32,
+}
+
+/// The ground a spider covers in one full step cycle: a third of its leg span.
+pub fn spider_stride(state: &SpiderState) -> f32 {
+    0.3 * state.span
+}
+
+/// Share of the cycle each foot is on the floor, so at least four are down at any moment.
+const SPIDER_DUTY: f32 = 0.62;
+/// Each leg's offset in the cycle, in bone order (front pair first, left before right): an
+/// alternating tetrapod, legs L1 R2 L3 R4 moving together and R1 L2 R3 L4 against them.
+pub const SPIDER_PHASE: [f32; LEG_COUNT] = [0.0, PI, PI, 0.0, 0.0, PI, PI, 0.0];
+/// How far each pair is raised by a full rear: the front pair held up, the rest planted.
+const RAISED: [f32; LEG_PAIRS] = [1.0, 0.0, 0.0, 0.0];
+/// How far a planted tarsus leans outward from straight down, radians.
+const TARSUS_LEAN: f32 = 0.43;
+/// How high the body is tipped, nose up, when fully reared, radians.
+const REAR_PITCH: f32 = 0.6;
+/// The belly and abdomen never come nearer the floor than this share of the leg span.
+const BELLY_CLEARANCE: f32 = 0.02;
+
+/// The transpose of `m`: its inverse for a rotation.
+fn transpose(m: &Mat3) -> Mat3 {
+    let [x, y, z] = m.cols;
+    Mat3::from_cols([x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]])
+}
+
+/// A bone's rotation with its +Y along `dir` and its +Z as near `hint` as that allows.
+fn aim(dir: V3, hint: V3) -> Mat3 {
+    let y = vec3::normalize_or(dir, vec3::Y);
+    let z = vec3::normalize_or(vec3::sub(hint, vec3::scale(y, vec3::dot(hint, y))), vec3::any_perpendicular(y));
+    Mat3::from_cols(vec3::cross(y, z), y, z)
+}
+
+/// The knee of a leg of two bones `upper` and `lower` long reaching from `hip` toward `ankle`,
+/// bent toward `hint`, and the ankle itself pulled in to what the bones can reach: a spider's
+/// three-dimensional counterpart of [`two_bone`].
+pub fn knee_for(hip: V3, ankle: V3, upper: f32, lower: f32, hint: V3) -> (V3, V3) {
+    let to = vec3::sub(ankle, hip);
+    let d = vec3::length(to).clamp((upper - lower).abs() + 1e-3, (upper + lower) * 0.999);
+    let dir = vec3::normalize_or(to, vec3::Y);
+    let cos_a = ((upper * upper + d * d - lower * lower) / (2.0 * upper * d)).clamp(-1.0, 1.0);
+    let sin_a = (1.0 - cos_a * cos_a).max(0.0).sqrt();
+    let n = vec3::normalize_or(vec3::sub(hint, vec3::scale(dir, vec3::dot(hint, dir))), vec3::any_perpendicular(dir));
+    let knee = vec3::add(hip, vec3::add(vec3::scale(dir, upper * cos_a), vec3::scale(n, upper * sin_a)));
+    (knee, vec3::add(hip, vec3::scale(dir, d)))
+}
+
+/// The depth below its centre of an ellipsoid with half axes `half` along the axes of a frame
+/// turned by `rotation`: its lowest point under the world's up.
+fn ellipsoid_drop(rotation: &Mat3, half: V3) -> f32 {
+    let up = transpose(rotation).transform([0.0, 1.0, 0.0]);
+    ((half[0] * up[0]).powi(2) + (half[1] * up[1]).powi(2) + (half[2] * up[2]).powi(2)).sqrt()
+}
+
+/// Every bone's placement on its parent for `pose`, in the giant spider's [`crate::Rig`] order.
+///
+/// Each foot's planted place on the floor is worked out in creature space (a rest place under
+/// its hip, swept fore and aft by the gait), the ankle above it found from the tarsus's lean,
+/// and the femur and tibia solved to reach it with the knee bent up ([`knee_for`]): so a planted
+/// foot rests on the floor exactly while the body bobs, rears or lunges over it. Rearing tips
+/// the body up about the third pair's hips, lifts the front pair and waves it in the air;
+/// the abdomen hangs behind, lifted so it clears the floor.
+pub fn spider(state: &SpiderState, pose: &SpiderPose) -> Vec<Placement> {
+    let d = state.dims();
+    let s = d.span;
+    let moving = pose.pace.clamp(0.0, 1.0);
+    let (rear, bite, curl) = (pose.rear.clamp(0.0, 1.0), pose.bite.clamp(0.0, 1.0), pose.curl.clamp(0.0, 1.0));
+    let t = pose.time;
+    let still = 1.0 - moving;
+    let mut out = vec![Placement::IDENTITY; spider_bone::COUNT];
+
+    // The body bobs twice a cycle, breathes standing, tips up to rear and dives into a bite.
+    let bob = 0.012 * s * pose.pace.min(1.5) * (0.5 - 0.5 * (2.0 * pose.stride).cos()) + 0.004 * s * still * (1.7 * t).sin();
+    let pitch = REAR_PITCH * rear * (1.0 - 0.55 * bite);
+    let lunge = 0.07 * s * bite;
+    let rotation = spine_to_creature().mul_mat(&rx(pitch));
+    let rest_body = Placement { rotation: spine_to_creature(), origin: [0.0, d.centre_height + bob, 0.0] };
+    // It tips about the third pair's hips, which stay where they were.
+    let pivot = d.hip(4);
+    let sway = 0.05 * (1.3 * t).sin() * still + 0.05 * moving * pose.stride.sin();
+    let abdomen_local = Placement { rotation: rz(sway).mul_mat(&rx(d.abdomen_tilt - 0.45 * pitch + 0.03 * (2.1 * t).sin() * still)), origin: d.abdomen_root };
+    let body_at = |lift: f32| {
+        let pivot_c = vec3::add(rest_body.point(pivot), [0.0, lift, lunge]);
+        Placement { rotation, origin: vec3::sub(pivot_c, rotation.transform(pivot)) }
+    };
+    // Lifted just enough that neither the abdomen nor the carapace comes down into the floor.
+    let low = |body: &Placement| {
+        let abdomen = body.then(&abdomen_local);
+        let a = &d.abdomen_trunk;
+        let a_drop = ellipsoid_drop(&abdomen.rotation, [a.half_width(0.38), 0.5 * a.length, a.half_height(0.38)]);
+        let c = &d.carapace_trunk;
+        let c_drop = ellipsoid_drop(&body.rotation, [c.half_width(0.4), 0.5 * c.length, 0.5 * c.half_height(0.45)]);
+        (abdomen.origin[1] - a_drop).min(body.origin[1] - c_drop)
+    };
+    let lift = (BELLY_CLEARANCE * s - low(&body_at(0.0))).max(0.0);
+    let body = body_at(lift);
+    out[spider_bone::BODY] = body;
+    out[spider_bone::ABDOMEN] = abdomen_local;
+    let inverse = transpose(&body.rotation);
+    let to_body = |p: V3| inverse.transform(vec3::sub(p, body.origin));
+
+    // Fangs open and swing in to bite; pedipalps tap, and spread as it bites.
+    for (k, side) in [-1.0f32, 1.0].into_iter().enumerate() {
+        let flex = 0.04 * (2.3 * t + k as f32 * 1.9).sin() * still;
+        let open = 0.05 + 0.55 * bite + flex;
+        let forward = 0.1 + 0.8 * bite;
+        out[spider_bone::FANG + k] = Placement { rotation: Mat3::from_axis_angle(vec3::Y, -side * open).mul_mat(&rx(forward)), origin: [side * d.fang_root[0], d.fang_root[1], d.fang_root[2]] };
+        let tap = 0.12 * (3.1 * t + 2.0 * k as f32).sin() * still + 0.05 * (9.0 * pose.stride + k as f32 * PI).sin() * moving;
+        out[spider_bone::PALP + k] = Placement { rotation: rz(-side * 0.3 * bite).mul_mat(&rx(0.05 + tap + 0.3 * bite)), origin: [side * d.palp_root[0], d.palp_root[1], d.palp_root[2]] };
+    }
+
+    // Legs.
+    for k in 0..LEG_COUNT {
+        let pair = k / 2;
+        let side = leg_side(k);
+        let leg = d.legs[pair];
+        let reach_total = leg.femur + leg.tibia;
+        let hip = d.hip(k);
+        let hip_c = body.point(hip);
+        // The foot's rest place under the hip (the body upright), and the way it points across
+        // the floor: creature space has +X to the left, where the spine frame has it to the right.
+        let phi = d.azimuth[pair];
+        let out_c = [-side * phi.sin(), 0.0, phi.cos()];
+        let hip_rest = rest_body.point(hip);
+        let c = ((pose.stride + SPIDER_PHASE[k]) / TAU).rem_euclid(1.0);
+        let sweep = SPIDER_DUTY * spider_stride(state);
+        let (along, up) = if c < SPIDER_DUTY {
+            (sweep * (0.5 - c / SPIDER_DUTY), 0.0)
+        } else {
+            let u = (c - SPIDER_DUTY) / (1.0 - SPIDER_DUTY);
+            (sweep * (smoothstep(u) - 0.5), 0.06 * s * (PI * u).sin())
+        };
+        let foot = [hip_rest[0] + out_c[0] * leg.reach, up * moving, hip_rest[2] + out_c[2] * leg.reach + along * moving];
+        let tip = [out_c[0] * TARSUS_LEAN.sin(), -TARSUS_LEAN.cos(), out_c[2] * TARSUS_LEAN.sin()];
+        let mut ankle_c = vec3::sub(foot, vec3::scale(tip, leg.tarsus));
+        // Feet stay within reach: past it a planted foot slides in across the floor rather than
+        // leaving it.
+        let dy = ankle_c[1] - hip_c[1];
+        let far = (0.985 * reach_total).powi(2) - dy * dy;
+        let max_h = far.max(0.0).sqrt();
+        let (dx, dz) = (ankle_c[0] - hip_c[0], ankle_c[2] - hip_c[2]);
+        let h = dx.hypot(dz);
+        if h > max_h && h > 1e-6 {
+            ankle_c[0] = hip_c[0] + dx * max_h / h;
+            ankle_c[2] = hip_c[2] + dz * max_h / h;
+        }
+        let planted = to_body(ankle_c);
+        let planted_dir = inverse.transform(tip);
+
+        // Raised: held up and forward in front of it, waving.
+        let raise = rear * RAISED[pair];
+        let wave = 0.05 * s * (2.3 * t + 1.7 * k as f32).sin();
+        let raised = vec3::add(hip, [side * 0.3 * reach_total, (0.58 + 0.25 * bite) * reach_total, 0.4 * reach_total + wave]);
+        let raised_dir = vec3::normalize_or([side * 0.3, 0.45, -0.85], vec3::neg(vec3::Z));
+        // Dead: drawn in under the belly.
+        let drawn = [side * 0.3 * reach_total, hip[1] * 0.7, -0.5 * reach_total];
+        let drawn_dir = vec3::normalize_or([-side * 0.6, 0.0, 0.5], vec3::Z);
+
+        let ankle = vec3::lerp(vec3::lerp(planted, raised, raise), drawn, curl);
+        let tarsus_dir = vec3::normalize_or(vec3::lerp(vec3::lerp(planted_dir, raised_dir, raise), drawn_dir, curl), planted_dir);
+        let hint = vec3::normalize_or([side * 0.35, 0.0, 1.0 - 2.0 * curl], vec3::Z);
+        let (knee, ankle) = knee_for(hip, ankle, leg.femur, leg.tibia, hint);
+        let (femur, tibia, tarsus) = (aim(vec3::sub(knee, hip), hint), aim(vec3::sub(ankle, knee), hint), aim(tarsus_dir, hint));
+        let i = spider_bone::LEGS + 3 * k;
+        out[i] = Placement { rotation: femur, origin: hip };
+        out[i + 1] = Placement { rotation: transpose(&femur).mul_mat(&tibia), origin: [0.0, leg.femur, 0.0] };
+        out[i + 2] = Placement { rotation: transpose(&tibia).mul_mat(&tarsus), origin: [0.0, leg.tibia, 0.0] };
+    }
+    out
+}
+
+#[cfg(test)]
+mod spider_tests {
+    use super::*;
+    use crate::spider::bone;
+
+    fn rig_and_state(seed: u32) -> (crate::Rig, SpiderState) {
+        let state = SpiderState::roll(seed);
+        (state.build(), state)
+    }
+
+    /// The lowest point of the tarsus of leg `k`, in creature space.
+    fn tip_height(rig: &crate::Rig, places: &[Placement], k: usize) -> f32 {
+        let world = rig.world(places);
+        let tarsus = bone::LEGS + 3 * k + 2;
+        rig.bones[tarsus].mesh.parts.iter().flat_map(|p| &p.positions).map(|&q| world[tarsus].point(q)[1]).fold(f32::MAX, f32::min)
+    }
+
+    #[test]
+    fn a_walking_spider_keeps_eight_feet_on_the_floor_in_stance() {
+        let (rig, state) = rig_and_state(3);
+        let s = state.span;
+        for step in 0..24 {
+            for pace in [0.0, 1.0, 2.0] {
+                let pose = SpiderPose { stride: step as f32 / 24.0 * TAU, pace, time: step as f32 * 0.21, ..SpiderPose::default() };
+                let places = spider(&state, &pose);
+                let low = rig.posed_mesh(&places).bounds().unwrap().0[1];
+                assert!(low > -0.012 * s, "sinks to {low} at step {step}, pace {pace}");
+                assert!(low < 0.012 * s, "floats at {low} at step {step}, pace {pace}");
+                let mut down = 0;
+                for k in 0..LEG_COUNT {
+                    let c = ((pose.stride + SPIDER_PHASE[k]) / TAU).rem_euclid(1.0);
+                    let planted = c < SPIDER_DUTY || pace == 0.0;
+                    let bottom = tip_height(&rig, &places, k);
+                    if planted {
+                        assert!(bottom.abs() < 0.012 * s, "leg {k} at {bottom}, step {step}, pace {pace}");
+                        down += 1;
+                    } else {
+                        assert!(bottom > -0.012 * s, "leg {k} sinks to {bottom}");
+                    }
+                }
+                assert!(down >= 4, "only {down} feet down at step {step}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_gait_is_an_alternating_tetrapod() {
+        // L1 R2 L3 R4 together (bone order: L1 R1 L2 R2 L3 R3 L4 R4), the others half a cycle on.
+        let group = |k: usize| SPIDER_PHASE[k] == 0.0;
+        for k in [0, 3, 4, 7] {
+            assert!(group(k), "leg {k}");
+        }
+        for k in [1, 2, 5, 6] {
+            assert!(!group(k), "leg {k}");
+        }
+        assert_eq!((0..8).filter(|&k| group(k)).count(), 4);
+    }
+
+    #[test]
+    fn legs_are_solved_to_their_bones_lengths() {
+        let (_, state) = rig_and_state(5);
+        let d = state.dims();
+        for pose in [SpiderPose::default(), SpiderPose { stride: 1.0, pace: 1.0, ..SpiderPose::default() }, SpiderPose { rear: 1.0, ..SpiderPose::default() }] {
+            let places = spider(&state, &pose);
+            for k in 0..LEG_COUNT {
+                let i = bone::LEGS + 3 * k;
+                assert!((places[i + 1].origin[1] - d.leg(k).femur).abs() < 1e-4);
+                for m in 0..3 {
+                    let r = places[i + m].rotation;
+                    assert!((r.determinant() - 1.0).abs() < 1e-3, "leg {k} bone {m} is not a proper rotation");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_standing_spider_has_its_knees_over_its_body() {
+        let (rig, state) = rig_and_state(7);
+        let places = spider(&state, &SpiderPose::default());
+        let world = rig.world(&places);
+        for k in 0..LEG_COUNT {
+            let tibia = bone::LEGS + 3 * k + 1;
+            let knee = world[tibia].origin;
+            assert!(knee[1] > world[bone::BODY].origin[1] + 0.06 * state.span, "leg {k}'s knee is at {}", knee[1]);
+        }
+    }
+
+    #[test]
+    fn rearing_raises_the_front_legs_and_keeps_the_back_six_planted() {
+        let (rig, state) = rig_and_state(3);
+        let s = state.span;
+        let places = spider(&state, &SpiderPose { rear: 1.0, time: 0.4, ..SpiderPose::default() });
+        let low = rig.posed_mesh(&places).bounds().unwrap().0[1];
+        assert!(low > -0.012 * s && low < 0.012 * s, "lowest point {low}");
+        for k in 0..LEG_COUNT {
+            let bottom = tip_height(&rig, &places, k);
+            if k < 2 {
+                assert!(bottom > 0.2 * s, "front leg {k} is only {bottom} up");
+            } else {
+                assert!(bottom.abs() < 0.012 * s, "leg {k} at {bottom}");
+            }
+        }
+        // The nose is up: the front of the body is higher than its back.
+        let world = rig.world(&places);
+        let front = world[bone::BODY].point([0.0, 0.1 * s, 0.0])[1];
+        let back = world[bone::BODY].point([0.0, -0.1 * s, 0.0])[1];
+        assert!(front > back + 0.05 * s, "{front} vs {back}");
+    }
+
+    #[test]
+    fn a_biting_spider_lunges_and_swings_its_fangs_in() {
+        let (rig, state) = rig_and_state(3);
+        let fang_tip = |bite: f32| {
+            let places = spider(&state, &SpiderPose { rear: 1.0, bite, ..SpiderPose::default() });
+            let world = rig.world(&places);
+            world[bone::FANG + 1].point([0.0, 0.0, -0.1 * state.span])
+        };
+        let shut = fang_tip(0.0);
+        let struck = fang_tip(1.0);
+        assert!(struck[2] > shut[2] + 0.03 * state.span, "{struck:?} vs {shut:?}");
+        // Dived: below where the reared head was.
+        assert!(struck[1] < shut[1], "{struck:?} vs {shut:?}");
+    }
+
+    #[test]
+    fn the_belly_and_abdomen_clear_the_floor_in_every_pose() {
+        for seed in 0..6 {
+            let (rig, state) = rig_and_state(seed);
+            for rear in [0.0, 0.5, 1.0] {
+                for bite in [0.0, 1.0] {
+                    let places = spider(&state, &SpiderPose { rear, bite, stride: 2.0, pace: 1.0, ..SpiderPose::default() });
+                    let world = rig.world(&places);
+                    for b in [bone::BODY, bone::ABDOMEN] {
+                        let low = rig.bones[b].mesh.parts.iter().flat_map(|p| &p.positions).map(|&q| world[b].point(q)[1]).fold(f32::MAX, f32::min);
+                        assert!(low > 0.0, "{seed}: bone {b} at {low}, rear {rear}, bite {bite}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_dead_spider_draws_its_legs_in_under_the_belly() {
+        let (rig, state) = rig_and_state(3);
+        let alive = rig.posed_mesh(&spider(&state, &SpiderPose::default())).bounds().unwrap();
+        let dead = rig.posed_mesh(&spider(&state, &SpiderPose { curl: 1.0, ..SpiderPose::default() })).bounds().unwrap();
+        let across = |b: ([f32; 3], [f32; 3])| (b.1[0] - b.0[0]).max(b.1[2] - b.0[2]);
+        assert!(across(dead) < 0.9 * across(alive), "{} vs {}", across(dead), across(alive));
+    }
+}

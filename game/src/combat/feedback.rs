@@ -148,6 +148,7 @@ pub fn knockback(creature: &Creature) -> f32 {
         Creature::Rat(r) => r.drawn_size(),
         Creature::Snake(s) => s.drawn_size(),
         Creature::Skeleton(s) => s.drawn_size(),
+        Creature::Spider(s) => s.drawn_size(),
     };
     knockback_for(size)
 }
@@ -344,8 +345,27 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
                 *transform = laid_back(critter.kit.as_ref().map_or(17.0, |k| k.height), &corpse.fell, share);
             }
             Creature::Snake(_) => {}
+            Creature::Spider(spider) => {
+                let share = collapse_share(corpse.since, hold);
+                intent.fallen = share.max(1e-3);
+                *transform = flipped_over(spider, &corpse.fell, share);
+            }
         }
     }
+}
+
+/// A giant spider that stood at `fell`, `share` of the way through turning onto its back: rolled
+/// about its own length through its body's middle, its legs drawing in under the belly as it
+/// goes (`fb_creatures::pose::SpiderPose::curl`), and lowered so its back rests on the floor,
+/// at the size it is drawn.
+pub fn flipped_over(spider: &fb_creatures::SpiderState, fell: &Transform, share: f32) -> Transform {
+    let d = spider.dims();
+    let s = share * share * (3.0 - 2.0 * share);
+    let roll = Quat::from_rotation_z(std::f32::consts::PI * s);
+    let middle = Vec3::Y * d.centre_height;
+    let drop = (d.centre_height - d.back_height()).max(0.0) * s;
+    let local = middle - roll * middle - Vec3::Y * drop;
+    Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
 }
 
 /// A rat that stood at `fell`, `share` of the way through rolling onto its back: turned about

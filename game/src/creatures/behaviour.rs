@@ -12,12 +12,16 @@
 //!   other creatures (`player::slide_around` with `play::Obstacles` and the others), so it
 //!   never passes through them. Rats run at twice their speed, as the SRD's Dash action gives
 //!   ([SRD 5.1 p. 93](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=93));
-//!   snakes come on at their speed and keep near their spot.
+//!   snakes come on at their speed and keep near their spot; a spider rushes at twice its speed
+//!   too.
 //! - **Attacking.** In reach, it turns to the player and attacks on a cooldown: a rat lunges
-//!   and bites; a snake draws its coils in and rears, then strikes with its jaw open. At the
+//!   and bites; a snake draws its coils in and rears, then strikes with its jaw open; a spider
+//!   rears up on its back legs with the front pair raised, then lunges with its fangs. At the
 //!   moment of the bite it rolls to hit, the stat block's attack bonus against the delver's
 //!   Armor Class ([`BlowsAtDelver`]): a hit sends an [`AttackOnDelver`] with the stat block's
 //!   bite rolled, which combat applies, and a miss a [`MissedDelver`].
+//!   A giant spider lies in wait: it never wanders, and notices the delver only within
+//!   [`SPIDER_AMBUSH_FEET`], then rushes at twice its speed.
 //! - **Losing the player.** Out of sight for [`LOSE_AFTER`] seconds once it has reached where
 //!   it last saw them, or led too far from home, it goes back to wandering its room.
 //!
@@ -169,6 +173,7 @@ const REPATH: f32 = 0.5;
 const RAT_TURN: f32 = 10.0;
 const SNAKE_TURN: f32 = 3.0;
 const SKELETON_TURN: f32 = 5.0;
+const SPIDER_TURN: f32 = 6.0;
 /// The wait between a skeleton's swings, seconds. Our own.
 const SKELETON_COOLDOWN: f32 = 0.8;
 /// How much farther than its reach a skeleton's blow still lands, in case the delver steps
@@ -184,11 +189,25 @@ const STRIKE_WINDUP: f32 = 0.7;
 const STRIKE_THROW: f32 = 0.12;
 const STRIKE_TIME: f32 = 1.4;
 
+/// A giant spider's attack: it rears for [`SPIDER_WINDUP`], stabs for a moment as the bite lands
+/// and settles by [`SPIDER_TIME`]. The wait between bites is [`SPIDER_COOLDOWN`]. Our own.
+const SPIDER_WINDUP: f32 = 0.6;
+const SPIDER_STAB: f32 = 0.12;
+const SPIDER_TIME: f32 = 1.2;
+const SPIDER_COOLDOWN: f32 = 2.0;
+/// A spider rushes at twice its walking speed, as the SRD's Dash action gives (p. 93).
+const SPIDER_CHASE: f32 = 2.0;
+/// How near the delver must come for a spider waiting still to spring, feet: well inside its
+/// darkvision of 60 ft, so it lies in wait until they are close. Our own.
+pub const SPIDER_AMBUSH_FEET: f32 = 25.0;
+
 /// How far it notices the player, world units: the stat block's darkvision or blindsight, but
 /// at least 20 ft (a snake's blindsight of 10 ft would only notice someone standing on it, and
-/// the player carries a light), times `scale` (the tuning's `sense_scale`).
+/// the player carries a light), times `scale` (the tuning's `sense_scale`). A spider in wait
+/// springs only within [`SPIDER_AMBUSH_FEET`].
 pub fn notice_range(species: Species, scale: f32) -> f32 {
-    species.stat_block().senses_feet.max(20.0) * UNITS_PER_FOOT * scale
+    let feet = if species.is_spider() { SPIDER_AMBUSH_FEET } else { species.stat_block().senses_feet.max(20.0) };
+    feet * UNITS_PER_FOOT * scale
 }
 
 /// How near its centre must come to the centre of a player of `player_radius` to bite, world
@@ -200,6 +219,8 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
         Creature::Snake(snake) => player_radius + critter.radius + 0.35 * snake.dims().neck * critter.size,
         // Arm and what it holds, as worked out once at spawn: a spear outreaches a dagger.
         Creature::Skeleton(skeleton) => player_radius + critter.kit.as_ref().map_or_else(|| 0.45 * skeleton.height(), |k| k.reach) * critter.size,
+        // Its fangs, with the front legs raised over the delver.
+        Creature::Spider(spider) => player_radius + 0.3 * spider.span * critter.size,
     }
 }
 
@@ -212,6 +233,8 @@ pub fn body_radius(critter: &Critter) -> f32 {
         Creature::Rat(rat) => 0.3 * rat.length * critter.size,
         Creature::Snake(_) => critter.radius.min(SNAKE_SQUEEZE),
         Creature::Skeleton(skeleton) => 0.12 * critter.kit.as_ref().map_or_else(|| skeleton.height(), |k| k.height) * critter.size,
+        // Its body, not its legs, which fold round whatever it passes.
+        Creature::Spider(spider) => 0.2 * spider.span * critter.size,
     }
 }
 
@@ -327,6 +350,13 @@ fn behave(
             brain.mode = Mode::Wander { target: Some(brain.home), wait: 0.0 };
         }
 
+        // A spider that has lost the delver goes back to where it lay in wait.
+        if species.is_spider() && brain.stuck <= 1.5 && at.distance(brain.home) > radius + 1.0 {
+            if let Mode::Wander { target: target @ None, .. } = &mut brain.mode {
+                *target = Some(brain.home);
+            }
+        }
+
         // Where to go, how fast.
         let mut heading: Option<Vec2> = None;
         let mut speed = 0.0;
@@ -335,7 +365,8 @@ fn behave(
             Mode::Wander { target, wait } => {
                 if target.is_none() {
                     *wait -= dt;
-                    if *wait <= 0.0 {
+                    // A spider lies in wait where it is.
+                    if *wait <= 0.0 && !species.is_spider() {
                         let goal = if snake {
                             brain.home + Vec2::from_angle(brain.rng.range_f32(0.0, std::f32::consts::TAU)) * brain.rng.range_f32(0.0, 0.8 * CELL)
                         } else {
@@ -361,7 +392,7 @@ fn behave(
                 let in_reach = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius)) && sees.is_some();
                 if !in_reach && brain.attack.is_none() {
                     heading = Some(goal);
-                    speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() { 1.0 } else { tune.rat_chase_speed };
+                    speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() { 1.0 } else if species.is_spider() { SPIDER_CHASE } else { tune.rat_chase_speed };
                 }
                 if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 && !attacks.delver_is_down() {
                     brain.attack = Some(0.0);
@@ -374,7 +405,8 @@ fn behave(
                             super::skeletons::play_at(&mut commands, "creature attack cue", sounds.rattle.clone(), transform.translation, &game, &tuning);
                         }
                     } else if let Some(sounds) = &sounds {
-                        let cue = if snake { sounds.snake_rise.clone() } else { sounds.rat_squeal.clone() };
+                        // A spider's is a hiss, as it rears.
+                        let cue = if snake || species.is_spider() { sounds.snake_rise.clone() } else { sounds.rat_squeal.clone() };
                         commands.spawn((
                             Name::new("creature attack cue"),
                             AudioPlayer::new(cue),
@@ -431,7 +463,7 @@ fn behave(
                 let wanted = to.x.atan2(to.y);
                 let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
                 let turn = (wanted - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                let rate = if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else { RAT_TURN };
+                let rate = if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else if species.is_spider() { SPIDER_TURN } else { RAT_TURN };
                 transform.rotation = Quat::from_rotation_y(yaw + turn.clamp(-rate * dt, rate * dt));
             }
         }
@@ -453,6 +485,7 @@ fn behave(
             let (lands, done) = match swing_time {
                 Some(time) => (super::skeletons::LANDS * time, time),
                 None if snake => (STRIKE_WINDUP + STRIKE_THROW, STRIKE_TIME),
+                None if species.is_spider() => (SPIDER_WINDUP + SPIDER_STAB, SPIDER_TIME),
                 None => (BITE_LANDS, BITE_TIME),
             };
             if let Some(time) = swing_time {
@@ -464,6 +497,10 @@ fn behave(
                 intent.strike = if thrown { 1.0 } else { 0.0 };
                 intent.jaw = intent.strike;
                 intent.tongue = 0.0;
+            } else if species.is_spider() {
+                // Reared on its back legs, then the stab.
+                intent.rear = 1.0;
+                intent.strike = if (SPIDER_WINDUP..SPIDER_WINDUP + 0.35).contains(&since) { 1.0 } else { 0.0 };
             } else {
                 intent.strike = if since < BITE_TIME * 0.6 { 1.0 } else { 0.0 };
             }
@@ -491,7 +528,7 @@ fn behave(
             }
             if since >= done {
                 brain.attack = None;
-                brain.cooldown = if snake { tune.snake_cooldown } else if species.is_skeleton() { SKELETON_COOLDOWN } else { tune.rat_cooldown };
+                brain.cooldown = if snake { tune.snake_cooldown } else if species.is_skeleton() { SKELETON_COOLDOWN } else if species.is_spider() { SPIDER_COOLDOWN } else { tune.rat_cooldown };
             }
         }
     }

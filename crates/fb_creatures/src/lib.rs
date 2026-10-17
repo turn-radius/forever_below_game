@@ -1,6 +1,6 @@
 //! # fb_creatures
 //!
-//! Creatures of the abyss as plain data: rats, snakes and skeletons, something to fight.
+//! Creatures of the abyss as plain data: rats, snakes, skeletons and giant spiders, something to fight.
 //!
 //! - [`rat`] and [`snake`] roll a typed state from a seed ([`RatState`], [`SnakeState`]): the
 //!   species (rat or giant rat, poisonous or constrictor snake), size, build, colouring and
@@ -8,6 +8,8 @@
 //! - [`skeleton`] rolls a [`SkeletonState`]: a human's bones with seeded height, build, colour,
 //!   cracks and missing pieces, laid out on an `fb_body` human's joints so gear fits it as it
 //!   fits a body.
+//! - [`spider`] rolls a [`SpiderState`]: a giant spider's leg span, abdomen, colouring, markings and
+//!   hair, with eight jointed legs that [`pose`] plants on the floor one by one.
 //! - Each state builds a [`Rig`]: named bones, each carrying its own [`armory::ItemMesh`] built
 //!   from Armory geometry in the bone's own space, so the game can move the bones without a
 //!   skeleton (a rat's body, head, legs and tail; a snake's head, jaw, tongue and spine) or a
@@ -37,12 +39,14 @@ pub mod rig;
 pub mod shape;
 pub mod skeleton;
 pub mod snake;
+pub mod spider;
 
 pub use rat::{RatColouring, RatPattern, RatState};
 pub use gear::{GearPiece, SkeletonGear};
 pub use rig::{Bone, Rig};
 pub use skeleton::SkeletonState;
 pub use snake::{SnakeColouring, SnakePattern, SnakeState};
+pub use spider::{SpiderColouring, SpiderMarking, SpiderState};
 
 pub use fb_items::range::Range;
 use procgen_rng::Mulberry32;
@@ -142,6 +146,7 @@ pub enum Species {
     PoisonousSnake,
     ConstrictorSnake,
     Skeleton,
+    GiantSpider,
 }
 
 /// The six ability scores of a stat block.
@@ -228,7 +233,7 @@ pub struct StatBlock {
 }
 
 impl Species {
-    pub const ALL: [Species; 5] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton];
+    pub const ALL: [Species; 6] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider];
 
     /// The SRD 5.1 stat block, read from the CC-BY-4.0 PDF ([`SRD`]):
     ///
@@ -252,6 +257,13 @@ impl Species {
     ///   +4 to hit, reach 5 ft., 5 (1d6 + 2) piercing, and Shortbow: +4 to hit, range 80/320
     ///   ft., 5 (1d6 + 2) piercing. [`StatBlock::bite`] is the shortsword's damage; the gear a
     ///   skeleton carries sets what it actually swings.
+    /// - [Giant Spider, p. 379](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=379):
+    ///   Large beast, Armor Class 14, Hit Points 26 (4d10 + 4), Speed 30 ft. and climb 30 ft.,
+    ///   STR 14 DEX 16 CON 12 INT 2 WIS 11 CHA 4, blindsight 10 ft. and darkvision 60 ft.,
+    ///   Challenge 1 (200 XP); Bite: +5 to hit, reach 5 ft., 7 (1d8 + 3) piercing, and the
+    ///   target makes a DC 11 Constitution saving throw, taking 9 (2d8) poison damage on a
+    ///   failure or half as much on a success. Its Web attack and its climbing walls wait for
+    ///   later.
     pub fn stat_block(self) -> StatBlock {
         let ab = |strength, dexterity, constitution, intelligence, wisdom, charisma| Abilities { strength, dexterity, constitution, intelligence, wisdom, charisma };
         match self {
@@ -355,6 +367,26 @@ impl Species {
                 xp: 50,
                 page: 346,
             },
+            Species::GiantSpider => StatBlock {
+                name: "Giant Spider",
+                size: Size::Large,
+                abilities: ab(14, 16, 12, 2, 11, 4),
+                hit_points: 26,
+                hit_dice: Dice::new(4, 10, 4),
+                speed_feet: 30.0,
+                armour_class: 14,
+                attack_bonus: 5,
+                bite: Dice::new(1, 8, 3),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: Some(Dice::new(2, 8, 0)),
+                senses_feet: 60.0,
+                challenge: "1",
+                xp: 200,
+                page: 379,
+            },
         }
     }
 
@@ -370,6 +402,10 @@ impl Species {
         self == Species::Skeleton
     }
 
+    pub fn is_spider(self) -> bool {
+        self == Species::GiantSpider
+    }
+
     /// Its walking speed in world units per second: the stat block's feet per 6-second round
     /// ([SRD 5.1 p. 90](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=90),
     /// "a round represents about 6 seconds").
@@ -378,12 +414,13 @@ impl Species {
     }
 }
 
-/// One creature: a rat, a snake or a skeleton, rolled from a seed.
+/// One creature: a rat, a snake, a skeleton or a spider, rolled from a seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Creature {
     Rat(RatState),
     Snake(SnakeState),
     Skeleton(SkeletonState),
+    Spider(SpiderState),
 }
 
 impl Creature {
@@ -393,6 +430,8 @@ impl Creature {
             Creature::Rat(RatState::roll_as(seed, species))
         } else if species.is_skeleton() {
             Creature::Skeleton(SkeletonState::roll(seed))
+        } else if species.is_spider() {
+            Creature::Spider(SpiderState::roll(seed))
         } else {
             Creature::Snake(SnakeState::roll_as(seed, species))
         }
@@ -403,6 +442,7 @@ impl Creature {
             Creature::Rat(r) => r.species,
             Creature::Snake(s) => s.species,
             Creature::Skeleton(_) => Species::Skeleton,
+            Creature::Spider(_) => Species::GiantSpider,
         }
     }
 
@@ -411,6 +451,7 @@ impl Creature {
             Creature::Rat(r) => r.seed,
             Creature::Snake(s) => s.seed,
             Creature::Skeleton(s) => s.seed,
+            Creature::Spider(s) => s.seed,
         }
     }
 
@@ -420,6 +461,7 @@ impl Creature {
             Creature::Rat(r) => r.build(),
             Creature::Snake(s) => s.build(),
             Creature::Skeleton(s) => s.build(),
+            Creature::Spider(s) => s.build(),
         }
     }
 
@@ -430,6 +472,7 @@ impl Creature {
             Creature::Rat(r) => r.radius(),
             Creature::Snake(s) => s.radius(),
             Creature::Skeleton(s) => s.radius(),
+            Creature::Spider(s) => s.radius(),
         }
     }
 }
@@ -448,6 +491,11 @@ pub fn snake(seed: u32) -> SnakeState {
 /// A skeleton rolled from `seed`.
 pub fn skeleton(seed: u32) -> SkeletonState {
     SkeletonState::roll(seed)
+}
+
+/// A giant spider rolled from `seed`.
+pub fn spider(seed: u32) -> SpiderState {
+    SpiderState::roll(seed)
 }
 
 #[cfg(test)]

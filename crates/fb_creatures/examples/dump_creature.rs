@@ -13,6 +13,7 @@ fn main() {
         Some("viper") => Species::PoisonousSnake,
         Some("constrictor") => Species::ConstrictorSnake,
         Some("skeleton") => Species::Skeleton,
+        Some("giant_spider") => Species::GiantSpider,
         _ => {
             eprintln!("usage: dump_creature <rat|giant_rat|viper|constrictor|skeleton> [seed]");
             std::process::exit(2);

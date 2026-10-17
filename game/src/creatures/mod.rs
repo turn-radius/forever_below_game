@@ -1,4 +1,4 @@
-//! Creatures in the level (`fb_level::CreatureSpot`): rats, snakes and skeletons ([`skeletons`], in
+//! Creatures in the level (`fb_level::CreatureSpot`): rats, snakes, giant spiders and skeletons ([`skeletons`], in
 //! their gear) from `fb_creatures`, drawn
 //! in the house style (toon bands, ink and wear) and moved bone by bone without a skeleton.
 //!
@@ -13,6 +13,8 @@
 //!   rears, strikes, gapes and flicks its tongue. Snake segments follow the floor's relief, and
 //!   a laid-out snake's body follows the way it came ([`Trail`]) rather than swinging round
 //!   as a whole when it turns.
+//!   A giant spider walks on all eight legs in an alternating tetrapod, each foot planted on the
+//!   floor, rears up on its back legs with the front pair held high, and stabs with its fangs.
 //! - Standing about, a creature idles ([`idle`]): rats sniff and sway their tails, snakes lie
 //!   coiled, now and then raising their heads and tasting the air.
 //! - Each bone carries the capsule it presents to a blow ([`HitShape`], from
@@ -24,7 +26,7 @@
 use armory::cond::{Condition, ConditionState};
 use bevy::{app::Propagate, light::NotShadowCaster, prelude::*};
 use fb_body::Placement;
-use fb_creatures::pose::{self, RatPose, SkeletonPose, SnakePose};
+use fb_creatures::pose::{self, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::Creature;
 use fb_creatures::rig::{Capsule, SURFACE_PARTS};
 use fb_level::{CreatureSpot, Level};
@@ -616,6 +618,11 @@ pub fn animate(
                     pose::skeleton_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)
                 }
             }
+            Creature::Spider(spider) => {
+                motion.cycle = (motion.cycle + strode / pose::spider_stride(spider) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                // A fallen spider's legs draw in under it as it is turned over ([`Intent::fallen`]).
+                pose::spider(spider, &SpiderPose { stride: motion.cycle, pace: motion.pace.min(2.0), time: motion.time, rear: now.rear, bite: now.strike, curl: intent.fallen })
+            }
         };
         for (entity, place) in bones.0.iter().zip(&places) {
             if let Ok(mut transform) = transforms.get_mut(*entity) {
@@ -715,6 +722,7 @@ mod tests {
                     Creature::Rat(r) => r.length,
                     Creature::Snake(s) => s.girth * 4.0,
                     Creature::Skeleton(s) => s.height(),
+                    Creature::Spider(s) => s.span,
                 };
                 let (mut deepest, mut nearest) = (f32::MIN, f32::MAX);
                 for (bone, &entity) in rig.bones.iter().zip(&bones) {

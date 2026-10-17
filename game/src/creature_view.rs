@@ -8,7 +8,7 @@
 //! moving`, or `--skeleton --seed 7 --motion swing [--bare]` ([`CreatureChoice::from_args`]).
 
 use bevy::{camera::Exposure, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera};
-use fb_creatures::pose::{self, ArmStance, RatPose, SkeletonPose, SnakePose};
+use fb_creatures::pose::{self, ArmStance, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::skeleton::SkeletonDims;
 use fb_creatures::{Creature, SkeletonGear, Species};
 
@@ -97,6 +97,7 @@ pub fn parse_species(name: &str) -> Option<Species> {
         "poisonous_snake" | "snake" | "viper" => Some(Species::PoisonousSnake),
         "constrictor_snake" | "constrictor" => Some(Species::ConstrictorSnake),
         "skeleton" => Some(Species::Skeleton),
+        "giant_spider" | "spider" => Some(Species::GiantSpider),
         _ => None,
     }
 }
@@ -121,7 +122,7 @@ impl CreatureChoice {
                 "--bare" => choice.gear = false,
                 "--species" => {
                     let name = value()?;
-                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton"))?;
+                    choice.species = parse_species(&name).ok_or(format!("unknown species {name:?}; one of rat, giant_rat, viper, constrictor, skeleton, giant_spider"))?;
                 }
                 "--seed" => {
                     let seed = value()?;
@@ -302,6 +303,11 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
                 };
                 pose::snake(snake, &SnakePose { phase: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, coil, rear, strike, jaw: strike, tongue: tongue_flick(t), look: 0.0, ..SnakePose::REST })
             }
+            Creature::Spider(spider) => {
+                shown.cycle = (shown.cycle + speed * dt / pose::spider_stride(spider) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                let rear = if matches!(choice.motion, ViewMotion::Rearing | ViewMotion::Striking) { 1.0 } else { 0.0 };
+                pose::spider(spider, &SpiderPose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, rear, bite: strike, curl: 0.0 })
+            }
             Creature::Skeleton(skeleton) => {
                 let dims = shown.dims.get_or_insert_with(|| skeleton.dims());
                 shown.cycle = (shown.cycle + speed * dt / pose::skeleton_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
@@ -336,7 +342,7 @@ fn frame_camera(shown: Query<&Shown>, mut cameras: Query<(&Projection, &mut Tran
         let Projection::Perspective(perspective) = projection else { continue };
         // The turntable's framing allows for the whole sweep; a creature is lower and longer.
         // A skeleton stands tall rather than long, so it is framed as the turntable frames an item.
-        let share = if matches!(shown.creature, Creature::Skeleton(_)) { 0.8 } else { 0.6 };
+        let share = if matches!(shown.creature, Creature::Skeleton(_) | Creature::Spider(_)) { 0.8 } else { 0.6 };
         let distance = share * framing_distance(shown.size, perspective, FILL);
         let centre = Vec3::new(0.0, shown.size.y * 0.5, 0.0);
         let target = Transform::from_translation(centre + Vec3::new(0.0, ELEVATION.sin(), ELEVATION.cos()) * distance).looking_at(centre, Vec3::Y);
@@ -356,6 +362,7 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         Creature::Rat(r) => format!("{:?}, {:?}, {:.0} cm", r.colouring, r.pattern, r.length * 10.0),
         Creature::Snake(s) => format!("{:?}, {:?}, {:.1} m", s.colouring, s.pattern, s.length / 10.0),
         Creature::Skeleton(s) => skeleton_look(s, choice.gear),
+        Creature::Spider(s) => format!("{:?}, {:?}, {:.1} m across", s.colouring, s.marking, s.span / 10.0),
     };
     let motion = if choice.species.is_skeleton() { skeleton_motion(choice.motion) } else { format!("{:?}", choice.motion) };
     let line = format!(
