@@ -2,9 +2,8 @@
 //!
 //! Nothing in the prototypes draws them, so the whole family and its sliders are new. One state
 //! holds all three kinds: a [`Piece`] section every kind shares (its kind, size, paper and
-//! ink) and one section of options per kind ([`ScrollOpts`] now; notes and books add theirs
-//! as they are built). Only the scroll has its real shape so far; a note and a book are plain
-//! stand-ins until their builders land.
+//! ink) and one section of options per kind ([`ScrollOpts`], [`NoteOpts`] and [`BookOpts`]).
+//! Notes and books are built in `build::note` and `build::book`.
 //!
 //! The scroll:
 //! - The sheet is one thick sheet laid along a single path: a spiral wound on a roll, a flat
@@ -27,8 +26,8 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use procgen_rng::{Mulberry32, armory_stream_seed};
 use serde::{Deserialize, Serialize};
 
+use crate::build::book::{BookLimits, book_noun, build_book, roll_book};
 use crate::build::chain::{bead, twisted_cord};
-use crate::build::fitting::rounded_rect;
 use crate::build::note::{NoteSpec, note as build_note};
 use crate::build::parts::{Look, Parts};
 use crate::build::strap::strap;
@@ -36,7 +35,7 @@ use crate::cond::{Condition, ConditionLimits};
 use crate::families::Generator;
 use crate::geom::polygon::P2;
 use crate::geom::{
-    GridOptions, ItemMesh, LatheOptions, MeshBuilder, Shading, SlabOptions, V3, bevelled_slab, cylinder, ellipsoid, extrude, lathe,
+    GridOptions, ItemMesh, LatheOptions, MeshBuilder, Shading, V3, cylinder, ellipsoid, extrude, lathe,
     lathe_warped, spline_profile, stitch_grid, thick_sheet, value_noise3,
 };
 use crate::material::{MaterialKind, Rgb};
@@ -45,7 +44,7 @@ use crate::slider::{Sliders, sliders};
 
 pub use crate::build::note::NoteForm;
 
-use MaterialKind::{Bone, Brass, Cloth, Cord, Leather, Paint, Wood};
+use MaterialKind::{Bone, Brass, Cloth, Cord, Paint, Wood};
 
 /// The writing generator.
 pub struct Writing;
@@ -122,6 +121,8 @@ pub enum Tie {
 impl Tie {
     pub const ALL: [Tie; 3] = [Tie::None, Tie::Ribbon, Tie::Cord];
 }
+
+pub use crate::build::book::{BookOpts, CLOTHS, Centre, Closure, Cover, Edge, Metal};
 
 /// What every kind of writing shares.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -305,6 +306,7 @@ pub struct WritingState {
     pub piece: Piece,
     pub scroll: ScrollOpts,
     pub note: NoteOpts,
+    pub book: BookOpts,
     pub cond: Condition,
     pub palette: Palette,
 }
@@ -315,11 +317,12 @@ pub struct WritingLimits {
     pub piece: PieceLimits,
     pub scroll: ScrollLimits,
     pub note: NoteLimits,
+    pub book: BookLimits,
     pub cond: ConditionLimits,
 }
 
 /// The writing sliders' ranges (new: the prototypes have none).
-pub const LIMITS: WritingLimits = WritingLimits { piece: PieceLimits::SLIDERS, scroll: ScrollLimits::SLIDERS, note: NoteLimits::SLIDERS, cond: ConditionLimits::SLIDERS };
+pub const LIMITS: WritingLimits = WritingLimits { piece: PieceLimits::SLIDERS, scroll: ScrollLimits::SLIDERS, note: NoteLimits::SLIDERS, book: BookLimits::SLIDERS, cond: ConditionLimits::SLIDERS };
 
 impl WritingState {
     /// Clamp and snap every slider into `limits`.
@@ -327,6 +330,7 @@ impl WritingState {
         self.piece.fit(&limits.piece);
         self.scroll.fit(&limits.scroll);
         self.note.fit(&limits.note);
+        self.book.fit(&limits.book);
         self.cond.fit(&limits.cond);
     }
 
@@ -337,6 +341,7 @@ impl WritingState {
             tag("piece", self.piece.out_of_range(&limits.piece)),
             tag("scroll", self.scroll.out_of_range(&limits.scroll)),
             tag("note", self.note.out_of_range(&limits.note)),
+            tag("book", self.book.out_of_range(&limits.book)),
             tag("cond", self.cond.out_of_range(&limits.cond)),
         ]
         .concat()
@@ -368,7 +373,7 @@ impl Generator for Writing {
                 NoteForm::Flat if s.note.tear > 0.35 => "Torn page",
                 NoteForm::Flat => "Note",
             },
-            WritingKind::Book => "Book",
+            WritingKind::Book => book_noun(&s.book),
         }
         .to_string()
     }
@@ -418,6 +423,8 @@ fn compose(rng: &mut Mulberry32, seed: u32, kind: WritingKind) -> WritingState {
         sc.seal = seal;
     }
     roll_note(rng, &mut s.note);
+    // A book rolls from a stream of its own, so adding it never moves another kind's draws.
+    s.book = roll_book(&mut Mulberry32::new(armory_stream_seed(seed ^ 0x626f_6f6b)));
     s.fit(&LIMITS);
     s
 }
@@ -453,7 +460,7 @@ fn build_writing(s: &WritingState) -> ItemMesh {
     match s.piece.kind {
         WritingKind::Scroll => scroll(s, &mut parts),
         WritingKind::Note => note(s, &mut parts),
-        WritingKind::Book => book(s, &mut parts),
+        WritingKind::Book => build_book(&s.book, &s.piece, &s.cond, &s.palette, s.seed, &mut parts),
     }
     parts.rest_on_ground();
     parts.finish()
@@ -489,20 +496,6 @@ fn note(s: &WritingState, parts: &mut Parts) {
     };
     let seal = (nt.form == NoteForm::Sealed).then(|| (wax_seal(nt.sigil, p.size, s.seed), nt.seal_color));
     build_note(&spec, seal, parts);
-}
-
-/// A slab for a book until its builder lands: boards with a page block between them.
-fn book(s: &WritingState, parts: &mut Parts) {
-    let p = &s.piece;
-    let (w, d, h) = (2.2 * p.size, 1.6 * p.size, 0.4 * p.size);
-    let slab = |w: f32, d: f32, h: f32, y: f32| {
-        let mut m = bevelled_slab(&rounded_rect(0.0, 0.0, w, d, 0.04), &[], &SlabOptions::rounded(h, h * 0.15));
-        m.rotate_x(-FRAC_PI_2).translate([0.0, y + h * 0.5, 0.0]);
-        m
-    };
-    let boards = MeshBuilder::merged([&slab(w, d, h * 0.14, 0.0), &slab(w, d, h * 0.14, h * 0.86)]);
-    parts.add("cover", boards, Leather);
-    parts.add_look("pages", slab(w * 0.95, d * 0.94, h * 0.72, h * 0.14), Look::of(Cloth).tinted(p.color));
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {

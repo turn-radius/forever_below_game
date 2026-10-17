@@ -41,6 +41,9 @@
 //! - [`hood`]: hoods, cowls and coifs on a head form and the shoulders.
 //! - [`hat`]: hats, crown and brim, on a head form.
 //! - [`belt`]: a belt buckled round a torso form, with frogs, loops and rings.
+//! - [`book`]: bound books, shut or open, with bands, fittings, a chain and a ribbon
+//!   (writing).
+//! - [`pages`]: a block of separate leaves following any surface (books).
 //! - [`key`]: keys with ring, trefoil or lozenge bows and warded bits.
 //! - [`note`]: paper notes: flat, folded, sealed or crumpled sheets with ink and stains.
 //! - [`roll`]: rolled sheets and the straps round them (bedrolls, bandages).
@@ -52,6 +55,7 @@ pub mod arrow;
 pub mod axe_head;
 pub mod belt;
 pub mod blade;
+pub mod book;
 pub mod bone;
 pub mod boot;
 pub mod chain;
@@ -74,6 +78,7 @@ pub mod key;
 pub mod legwear;
 pub mod light;
 pub mod limb;
+pub mod pages;
 pub mod parts;
 pub mod note;
 pub mod plank;
