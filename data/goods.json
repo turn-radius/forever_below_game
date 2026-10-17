@@ -111,5 +111,30 @@
   ],
   "wt": 0.5,
   "desc": "Restores 2d4 + 2 health"
+ },
+ "Scroll": {
+  "fp": [
+   1,
+   2
+  ],
+  "wt": 0.1,
+  "desc": "Rolled sheet · about 1 gp"
+ },
+ "Note": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.05,
+  "desc": "A sheet of paper · about 2 sp",
+  "stack": 4
+ },
+ "Book": {
+  "fp": [
+   2,
+   2
+  ],
+  "wt": 3,
+  "desc": "Bound pages · about 25 gp"
  }
 }
