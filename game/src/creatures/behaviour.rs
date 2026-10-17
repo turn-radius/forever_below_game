@@ -89,14 +89,14 @@ pub struct BlowsAtDelver<'w, 's> {
     hits: MessageWriter<'w, AttackOnDelver>,
     misses: MessageWriter<'w, MissedDelver>,
     fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
-    delver: Query<'w, 's, &'static crate::combat::Health, With<Player>>,
+    delver: Query<'w, 's, (&'static crate::combat::Health, Option<&'static crate::combat::vitals::BlockChance>), With<Player>>,
 }
 
 impl BlowsAtDelver<'_, '_> {
     /// Whether the delver has fallen (at 0 hit points, or the run ending): there is nothing left
     /// to fight.
     pub fn delver_is_down(&self) -> bool {
-        self.fallen.is_some() || self.delver.iter().any(|health| health.is_down())
+        self.fallen.is_some() || self.delver.iter().any(|(health, _)| health.is_down())
     }
 
     /// Rolls `blow`, by `who` with `to_hit`, against `armour_class` (the delver's, or
@@ -108,13 +108,19 @@ impl BlowsAtDelver<'_, '_> {
         }
         let ac = armour_class.copied().unwrap_or(ArmourClass::UNARMOURED).0;
         let attack = to_hit.roll(ac, Odds::Even, rng);
-        info!("{who} attacks the delver: {}", attack.line());
-        if attack.hit {
+        // A hit the delver's shield turns aside is blocked: a miss in all but name. Nothing is
+        // drawn without a shield that blocks, so the dice run as they always did.
+        let block = self.delver.iter().next().and_then(|(_, b)| b.copied()).unwrap_or_default();
+        let blocked = attack.hit && block.turns_aside(rng);
+        let verdict = if blocked { ", blocked" } else { "" };
+        info!("{who} attacks the delver: {}{verdict}", attack.line());
+        let lands = attack.hit && !blocked;
+        if lands {
             self.hits.write(blow);
         } else {
             self.misses.write(MissedDelver { attacker: blow.attacker, attacker_pos: blow.attacker_pos });
         }
-        attack.hit
+        lands
     }
 }
 

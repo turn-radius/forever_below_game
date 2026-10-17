@@ -137,7 +137,7 @@ const TIP_WIDTH: f32 = 380.0;
 pub const ATTRIBUTES: [&str; 5] = ["STR", "DEX", "CON", "INT", "WIS"];
 
 /// The rows of what the delver's gear makes of them.
-pub const GEAR_ROWS: [&str; 8] = ["Load", "Warmth", "Light", "Darkvision", "Armour class", "Hunger rate", "Sleepiness rate", "Heal on a kill"];
+pub const GEAR_ROWS: [&str; 11] = ["Load", "Warmth", "Light", "Darkvision", "Armour class", "Hunger rate", "Sleepiness rate", "Heal on a kill", "Speed", "Block chance", "Abilities"];
 
 /// "STR 14 (+2)": the score and its SRD modifier.
 pub fn attribute_text(name: &str, score: i32) -> String {
@@ -146,14 +146,16 @@ pub fn attribute_text(name: &str, score: i32) -> String {
 
 /// The five attribute lines.
 pub fn attribute_lines(character: &Character) -> [String; 5] {
-    let a = &character.attributes;
+    // As they stand, with what they wear (the Abilities row says how much that is).
+    let a = character.scores();
     let scores = [a.strength, a.dexterity, a.constitution, a.intelligence, a.wisdom];
     std::array::from_fn(|i| attribute_text(ATTRIBUTES[i], scores[i]))
 }
 
 /// The values of [`GEAR_ROWS`], from `derived` (so they agree with the header): "55 / 150 lb
-/// \u{b7} Burdened", "4 / 6", "20 ft", "60 ft", "13", "\u{d7}0.85", "usual", "+1 HP".
-pub fn gear_values(character: &Character, derived: &Derived) -> [String; 8] {
+/// \u{b7} Burdened", "4 / 6", "20 ft", "60 ft", "13", "\u{d7}0.85", "usual", "+1 HP", "\u{d7}1.2",
+/// "20%", "+2 STR, -1 CON".
+pub fn gear_values(character: &Character, derived: &Derived) -> [String; 11] {
     let feet = |f: f32| if f > 0.0 { format!("{f:.0} ft") } else { "none".to_string() };
     let rate = |r: f32| if (r - 1.0).abs() < 1e-6 { "usual".to_string() } else { format!("\u{d7}{}", fb_character::explain::number(r as f64)) };
     [
@@ -165,6 +167,12 @@ pub fn gear_values(character: &Character, derived: &Derived) -> [String; 8] {
         rate(derived.hunger_rate),
         rate(derived.sleepiness_rate),
         if derived.heal_on_kill > 0.0 { format!("+{} HP", fb_character::explain::number(derived.heal_on_kill as f64)) } else { "none".to_string() },
+        rate(derived.speed),
+        if derived.block_chance > 0.0 { format!("{}%", (derived.block_chance * 100.0).round()) } else { "none".to_string() },
+        {
+            let given: Vec<String> = derived.abilities.named().into_iter().filter(|(_, by)| *by != 0).map(|(name, by)| format!("{by:+} {name}")).collect();
+            if given.is_empty() { "none".to_string() } else { given.join(", ") }
+        },
     ]
 }
 
@@ -296,7 +304,13 @@ pub fn breakdown(character: &Character, inventory: &Inventory, row: usize) -> Ve
         4 => vec![character.armour_class(inventory).line()],
         5 => vec![loadout.rate(MeterKind::Hunger, fb_character::Activity::Walking).line()],
         6 => vec![loadout.rate(MeterKind::Sleepiness, fb_character::Activity::Walking).line()],
-        _ => vec![loadout.heal_on_kill().line()],
+        7 => vec![loadout.heal_on_kill().line()],
+        8 => vec![loadout.speed().line()],
+        9 => vec![loadout.block_chance().line()],
+        _ => {
+            let lines: Vec<String> = ["STR", "DEX", "CON", "INT", "WIS"].into_iter().map(|a| loadout.ability(a)).filter(|e| e.value() != 0.0).map(|e| e.line()).collect();
+            if lines.is_empty() { vec!["Nothing worn adds to an ability score".to_string()] } else { lines }
+        }
     }
 }
 

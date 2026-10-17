@@ -3,7 +3,7 @@
 //! with odds that improve with depth ([`Odds`], our own).
 
 use crate::tables::{Affix, AffixKind, affixes};
-use crate::{Rarity, Tag};
+use crate::{Rarity, Slot, Tag};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
@@ -118,10 +118,14 @@ impl Rarity {
 /// on a held-back affix takes the same place among those in play instead, and with none in play
 /// the slot stays empty. When a held-back affix comes back into play, only the items that land
 /// on it change.
-pub fn pick_affix(rng: &mut Mulberry32, tags: &[Tag], kind: AffixKind, good: bool, taken: &[&Affix]) -> Option<&'static Affix> {
+///
+/// Only affixes for an item of `rarity` or better ([`Affix::least`]) that fit its tags and slot
+/// ([`Affix::fits_item`]) and do not share a group with one `taken` ([`Affix::stacks_with`]) are
+/// in the pool.
+pub fn pick_affix(rng: &mut Mulberry32, item: Rolling, kind: AffixKind, good: bool, taken: &[&Affix]) -> Option<&'static Affix> {
     let pool: Vec<&'static Affix> = affixes()
         .iter()
-        .filter(|a| a.kind == kind && a.good == good && a.fits(tags) && !taken.iter().any(|t| t.name == a.name))
+        .filter(|a| a.kind == kind && a.good == good && a.least <= item.rarity && a.fits_item(item.tags, item.slot) && taken.iter().all(|t| a.stacks_with(t)))
         .collect();
     if pool.is_empty() {
         return None;
@@ -136,10 +140,24 @@ pub fn pick_affix(rng: &mut Mulberry32, tags: &[Tag], kind: AffixKind, good: boo
     (!rolling.is_empty()).then(|| rolling[at(rolling.len())])
 }
 
-/// The affixes a `rarity` rolls on an item with `tags`. Common: a flaw prefix 30% of the
-/// time. Magic: one good prefix or suffix, even odds. Rare: a good prefix and a good suffix.
-/// Legendary: a good prefix and two good suffixes. Slots with nothing that fits stay empty.
+/// What an affix is being rolled for: the item's tags and slot, and the rarity it came up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rolling<'a> {
+    pub tags: &'a [Tag],
+    pub slot: Option<Slot>,
+    pub rarity: Rarity,
+}
+
+/// [`roll_affixes_for`] an item with `tags` in no particular slot.
 pub fn roll_affixes(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag]) -> Vec<&'static Affix> {
+    roll_affixes_for(rng, rarity, tags, None)
+}
+
+/// The affixes a `rarity` rolls on an item with `tags` worn in `slot`. Common: a flaw prefix 30%
+/// of the time. Magic: one good prefix or suffix, even odds. Rare: a good prefix and a good
+/// suffix. Legendary: a good prefix and two good suffixes. Slots with nothing that fits stay
+/// empty.
+pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot: Option<Slot>) -> Vec<&'static Affix> {
     use AffixKind::{Prefix, Suffix};
     let wanted: Vec<(AffixKind, bool)> = match rarity {
         Rarity::Common => if rng.chance(0.3) { vec![(Prefix, false)] } else { vec![] },
@@ -149,17 +167,22 @@ pub fn roll_affixes(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag]) -> Vec<&
     };
     let mut chosen = Vec::new();
     for (kind, good) in wanted {
-        if let Some(a) = pick_affix(rng, tags, kind, good, &chosen) {
+        if let Some(a) = pick_affix(rng, Rolling { tags, slot, rarity }, kind, good, &chosen) {
             chosen.push(a);
         }
     }
     chosen
 }
 
-/// Rarity against `odds`, then its affixes, from one stream.
+/// Rarity against `odds`, then its affixes, from one stream, for an item in no particular slot.
 pub fn roll_rarity(rng: &mut Mulberry32, tags: &[Tag], odds: &Odds) -> (Rarity, Vec<&'static Affix>) {
+    roll_rarity_for(rng, tags, None, odds)
+}
+
+/// [`roll_rarity`] for an item worn in `slot`, so slot-bound affixes can fit it.
+pub fn roll_rarity_for(rng: &mut Mulberry32, tags: &[Tag], slot: Option<Slot>, odds: &Odds) -> (Rarity, Vec<&'static Affix>) {
     let rarity = Rarity::roll(rng, tags, odds);
-    let chosen = roll_affixes(rng, rarity, tags);
+    let chosen = roll_affixes_for(rng, rarity, tags, slot);
     (rarity, chosen)
 }
 
@@ -218,7 +241,7 @@ mod tests {
                 names.dedup();
                 assert_eq!(names.len(), chosen.len(), "an affix rolled twice");
             }
-            if affixes().iter().any(|a| !a.good && a.fits(tags) && a.in_play()) {
+            if affixes().iter().any(|a| !a.good && a.fits_item(tags, None) && a.in_play()) {
                 let share = flaws as f64 / commons as f64;
                 assert!((share - 0.3).abs() < 0.04, "{tags:?}: {share}");
             }
@@ -299,7 +322,7 @@ mod tests {
     #[test]
     fn no_rolled_item_carries_a_held_back_affix() {
         let held: Vec<&str> = affixes().iter().filter(|a| !a.in_play()).map(|a| a.name.as_str()).collect();
-        assert_eq!(held, ["Silent", "Mildewed", "Lice-ridden", "Squeaking", "Cracked", "of Thieves", "of Quiet Steps", "of Lesser Warding"]);
+        assert_eq!(held, ["Silent", "Mildewed", "Lice-ridden", "Squeaking", "Cracked", "of Thieves", "of Quiet Steps", "of Lesser Warding", "of Presence", "of the Silver Tongue"]);
         let quiet = &[Tag::Quiet, Tag::Leather, Tag::Wear][..];
         for tags in [SWORD, TUNIC, PACK, quiet, &[Tag::Wood, Tag::Weapon][..], &[Tag::Trinket][..]] {
             for seed in 0..5_000 {
@@ -323,16 +346,55 @@ mod tests {
         // The draw against the whole pool, as before any were held back.
         let before = |seed: u32, tags: &[Tag]| {
             let mut rng = game_rng(seed);
-            let pool: Vec<&Affix> = affixes().iter().filter(|a| a.kind == AffixKind::Suffix && a.good && a.fits(tags)).collect();
+            let pool: Vec<&Affix> = affixes().iter().filter(|a| a.kind == AffixKind::Suffix && a.good && a.least == Rarity::Common && a.fits_item(tags, None)).collect();
             *rng.pick(&pool)
         };
         for seed in 0..2_000 {
             let was = before(seed, TUNIC);
-            let now = pick_affix(&mut game_rng(seed), TUNIC, AffixKind::Suffix, true, &[]).unwrap();
+            let now = pick_affix(&mut game_rng(seed), Rolling { tags: TUNIC, slot: None, rarity: Rarity::Common }, AffixKind::Suffix, true, &[]).unwrap();
             if was.in_play() {
                 assert_eq!(now.name, was.name, "seed {seed}");
             }
         }
+    }
+
+    /// Every armory base rolled `seeds` times at depth 12, where every rarity turns up.
+    fn deep_rolls(seeds: u32) -> Vec<crate::Item> {
+        crate::armory_base::ARMORY_BASES.iter().flat_map(|(base, _)| (0..seeds).filter_map(move |seed| crate::roll_item_with(base, seed, Odds::loot(12)))).collect()
+    }
+
+    #[test]
+    fn no_item_carries_two_affixes_of_one_group_and_tiers_keep_to_their_rarity() {
+        let items = deep_rolls(150);
+        let mut seen = std::collections::HashSet::new();
+        for item in &items {
+            for (i, a) in item.affixes.iter().enumerate() {
+                seen.insert(a.name.clone());
+                assert!(a.least <= item.rarity, "{} on a {:?} {}", a.name, item.rarity, item.base);
+                assert!(a.fits_item(&item.profile.tags, item.profile.slot), "{} on {}", a.name, item.base);
+                for b in &item.affixes[i + 1..] {
+                    assert!(a.stacks_with(b), "{} and {} on one {}", a.name, b.name, item.base);
+                }
+            }
+        }
+        for name in ["Fleet", "of Haste", "Vicious", "of Carnage", "Accurate", "of Precision", "Reinforced", "of the Bulwark", "of Deflection", "of the Rampart", "of the Owl", "of the Bat", "of Might", "of the Giant", "of Vigour", "of the Bear", "Sluggish", "Frail"] {
+            assert!(seen.contains(name), "{name} never rolled");
+        }
+    }
+
+    #[test]
+    fn slot_bound_affixes_roll_only_in_their_slots() {
+        let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
+        let fleet = by_name("Fleet");
+        assert!(fleet.fits_item(&[Tag::Leather, Tag::Wear, Tag::Quiet], Some(Slot::Feet)));
+        assert!(!fleet.fits_item(&[Tag::Leather, Tag::Wear, Tag::Quiet], Some(Slot::Hands)));
+        let might = by_name("of Might");
+        assert!(might.fits_item(&[Tag::Trinket], Some(Slot::Ring2)), "either ring");
+        assert!(!might.fits_item(&[Tag::Trinket], None));
+        let rampart = by_name("of the Rampart");
+        assert!(rampart.fits_item(&[Tag::Armor, Tag::Wood], Some(Slot::Offhand)), "a shield");
+        assert!(!rampart.fits_item(&[Tag::Metal, Tag::Armor, Tag::Wear], Some(Slot::Head)), "not a helm");
+        assert!(!rampart.fits_item(&[Tag::Wood], Some(Slot::Offhand)), "not a torch");
     }
 
     #[test]
