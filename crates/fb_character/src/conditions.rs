@@ -10,7 +10,8 @@ use crate::poison::Poisoned;
 use crate::{Exhaustion, LoadBand, Meter, MeterKind, Needs, SECOND_WIND, Stamina};
 
 /// How much a condition matters, from a nudge to a danger to the run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Severity {
     /// It is doing the character good (recovering).
     Good,

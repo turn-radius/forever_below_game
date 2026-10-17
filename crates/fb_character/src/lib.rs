@@ -20,6 +20,7 @@
 
 pub mod combat;
 pub mod conditions;
+pub mod effect;
 pub mod explain;
 pub mod poison;
 pub mod recovery;

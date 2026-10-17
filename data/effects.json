@@ -1,0 +1,11 @@
+{
+  "poisoned": {
+    "name": "Poisoned",
+    "stages": [{ "at": 0.0, "word": "Poisoned", "severity": "serious" }],
+    "hours": 1.0,
+    "influences": [
+      { "kind": "attack_disadvantage" },
+      { "kind": "no_recovery" }
+    ]
+  }
+}

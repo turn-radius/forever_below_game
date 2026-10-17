@@ -23,6 +23,7 @@ use std::sync::LazyLock;
 use fb_creatures::{Dice, Species, StatBlock};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::effect::EffectDef;
 use crate::{Activity, LoadBand, MeterKind};
 
 /// Every number the character rules run on. See the [module docs](self).
@@ -41,6 +42,10 @@ pub struct Rules {
     /// the entry is silent.
     #[serde(deserialize_with = "creatures_over_defaults")]
     pub creatures: BTreeMap<String, CreatureRules>,
+    /// The effects by id ([`crate::effect`]), from `data/effects.json`. An entry here changes
+    /// only the keys it names; saving writes the table only when it differs from the file.
+    #[serde(deserialize_with = "effects_over_defaults", skip_serializing_if = "is_shipped")]
+    pub effects: BTreeMap<String, EffectDef>,
 }
 
 impl Default for Rules {
@@ -54,6 +59,7 @@ impl Default for Rules {
             load: LoadRules::default(),
             visibility: VisibilityRules::default(),
             creatures: default_creatures(),
+            effects: crate::effect::shipped(),
         }
     }
 }
@@ -162,6 +168,27 @@ fn creatures_over_defaults<'de, D: Deserializer<'de>>(deserializer: D) -> Result
         own.venom = part.venom.unwrap_or(own.venom);
     }
     Ok(creatures)
+}
+
+/// Reads the effects table over `data/effects.json`: an effect the file leaves out keeps its
+/// definition, one it names only in part keeps the rest, and a new id is an effect of its own.
+fn effects_over_defaults<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<String, EffectDef>, D::Error> {
+    use serde::de::Error;
+    let file = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    let mut effects = crate::effect::shipped();
+    for (id, part) in file {
+        let mut merged = effects.get(&id).map_or(serde_json::json!({}), |d| serde_json::to_value(d).expect("an effect serialises"));
+        if let (Some(into), serde_json::Value::Object(keys)) = (merged.as_object_mut(), part) {
+            into.extend(keys);
+        }
+        effects.insert(id.clone(), serde_json::from_value(merged).map_err(|e| D::Error::custom(format!("effect {id}: {e}")))?);
+    }
+    Ok(effects)
+}
+
+/// Whether `effects` is what `data/effects.json` ships, so a saved rules file leaves it out.
+fn is_shipped(effects: &BTreeMap<String, EffectDef>) -> bool {
+    *effects == crate::effect::shipped()
 }
 
 /// Armour, the natural dice and the hit points of each class.
