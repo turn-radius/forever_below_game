@@ -25,6 +25,7 @@ use bevy::{
 use fb_body::Side;
 use fb_character::combat::Odds;
 
+use super::callouts::{Callout, Outcome};
 use super::feedback::{Corpse, Struck};
 use super::{ArmourClass, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach};
 use crate::carry::{HeldItem, ViewModelCamera};
@@ -44,6 +45,7 @@ pub struct SwingPlugin;
 impl Plugin for SwingPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Struck>()
+            .add_message::<Callout>()
             .add_message::<SwungAt>()
             .add_systems(Startup, load_swing_sound)
             .add_systems(
@@ -265,6 +267,7 @@ fn land_blows(
     armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
     mut swung: MessageWriter<SwungAt>,
+    mut callouts: MessageWriter<Callout>,
     rules: Option<Res<crate::rules::GameRules>>,
 ) {
     let rules = crate::rules::GameRules::of(&rules);
@@ -284,7 +287,9 @@ fn land_blows(
                 info!("swing: {}", attack.line());
                 if attack.hit {
                     let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning });
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20 });
+                } else {
+                    callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
             }
         }

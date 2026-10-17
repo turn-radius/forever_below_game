@@ -209,7 +209,7 @@ fn a_creature_killed_stays_dead_and_one_hurt_stays_hurt() {
     let (hurt, hurt_spot) = critters[1];
     app.world_mut().get_mut::<Health>(hurt).unwrap().hp -= 1;
     let hp = app.world().get::<Health>(hurt).unwrap().hp;
-    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false });
+    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false });
     run(&mut app, 60);
     assert!(app.world().get::<Corpse>(dead).is_some());
     for _ in 0..2 {

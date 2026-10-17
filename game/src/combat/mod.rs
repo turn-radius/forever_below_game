@@ -20,6 +20,8 @@
 //!   hisses. At 0 hit points it holds, flashing, for a moment, then collapses, a rat rolling over and a snake going limp along the
 //!   floor, and its body stays for the run. Bodies block nothing: they lie flat (a rat on its
 //!   back, a snake stretched out), low enough to step over.
+//! - **Callouts** ([`callouts`]): each of the delver's blows is written over its target's
+//!   head for a moment, as the log has it: "Miss", "Blocked", "Hit 5", "Critical 9".
 //! - **Being bitten** ([`vitals`]): a creature's bite or a folk's blow rolls to hit against the
 //!   delver's [`ArmourClass`] as theirs is rolled against; a miss whooshes past and does nothing
 //!   ([`MissedDelver`](crate::creatures::behaviour::MissedDelver)). One that lands ([`AttackOnDelver`]) takes the delver's
@@ -44,6 +46,7 @@ use crate::creatures::behaviour::AttackOnDelver;
 use crate::inventory::Inventory;
 use crate::tuning::Tuning;
 
+pub mod callouts;
 pub mod feedback;
 pub mod eye;
 pub mod kick;
@@ -55,7 +58,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin));
     }
 }
 
@@ -770,7 +773,7 @@ mod tests {
             if app.world().get::<Corpse>(skeleton).is_some() {
                 return;
             }
-            app.world_mut().write_message(Struck { target: skeleton, damage: 30, from: Vec2::new(-30.0, 0.0), bludgeoning: false });
+            app.world_mut().write_message(Struck { target: skeleton, damage: 30, from: Vec2::new(-30.0, 0.0), bludgeoning: false, critical: false });
             app.update();
         }
         panic!("the skeleton never fell");
@@ -911,7 +914,7 @@ mod tests {
         for _ in 0..240 {
             app.update();
         }
-        app.world_mut().write_message(feedback::Struck { target: skeleton, damage: 1, from: Vec2::new(-30.0, 0.0), bludgeoning: false });
+        app.world_mut().write_message(feedback::Struck { target: skeleton, damage: 1, from: Vec2::new(-30.0, 0.0), bludgeoning: false, critical: false });
         for _ in 0..30 {
             app.update();
         }
@@ -935,7 +938,7 @@ mod tests {
         use feedback::{Struck, damage_to};
         let (app, _, skeleton) = skeleton_fight(kitted_seed(), None);
         let critter = app.world().get::<crate::creatures::Critter>(skeleton).unwrap();
-        let blow = |bludgeoning| Struck { target: skeleton, damage: 4, from: Vec2::ZERO, bludgeoning };
+        let blow = |bludgeoning| Struck { target: skeleton, damage: 4, from: Vec2::ZERO, bludgeoning, critical: false };
         assert_eq!((damage_to(critter, &blow(false)), damage_to(critter, &blow(true))), (4, 8));
         // The delver's mace and club bludgeon, a sword does not.
         let delver = Character::roll(3);
@@ -947,5 +950,71 @@ mod tests {
         };
         assert!(weapon("Mace").bludgeoning && weapon("Club").bludgeoning && Weapon::fist().bludgeoning);
         assert!(!weapon("Sword").bludgeoning && !weapon("Spear").bludgeoning && !weapon("Hand axe").bludgeoning);
+    }
+
+    /// Every callout written, for a test to read back.
+    #[derive(Resource, Default)]
+    struct Called(Vec<callouts::Callout>);
+
+    fn collect_callouts(mut read: MessageReader<callouts::Callout>, mut called: ResMut<Called>) {
+        called.0.extend(read.read().copied());
+    }
+
+    fn calling_out(app: &mut App) {
+        app.init_resource::<Called>().add_systems(Update, collect_callouts);
+    }
+
+    #[test]
+    fn a_landed_blow_is_called_out_over_the_rat_for_the_damage_it_took() {
+        use callouts::{Floating, Outcome};
+        let (mut app, player, rat) = fight(Some("Sword"), 9.0);
+        calling_out(&mut app);
+        app.update();
+        easy_to_hit(&mut app, rat);
+        let head = app.world().get::<Transform>(rat).unwrap().translation;
+        swing_at(&mut app, player, 30);
+        let called = &app.world().resource::<Called>().0;
+        assert_eq!(called.len(), 1, "{called:?}");
+        assert_eq!(called[0].target, rat);
+        let Outcome::Hit { damage, fatal, .. } = called[0].outcome else { panic!("{:?}", called[0]) };
+        assert!(damage >= 1 && fatal, "a rat's 1 hit point goes to the blow");
+        let floating: Vec<Vec3> = app.world_mut().query::<&Floating>().iter(app.world()).map(|f| f.anchor).collect();
+        assert_eq!(floating.len(), 1);
+        assert!(floating[0].y > head.y && floating[0].xz().distance(head.xz()) < 3.0, "over the rat: {} at {head}", floating[0]);
+    }
+
+    #[test]
+    fn a_missed_swing_is_called_out_as_a_miss() {
+        use callouts::Outcome;
+        let (mut app, player, rat) = fight(Some("Sword"), 9.0);
+        calling_out(&mut app);
+        app.update();
+        // Only a natural 20 lands.
+        app.world_mut().entity_mut(rat).insert(ArmourClass(100));
+        swing_at(&mut app, player, 30);
+        let called = &app.world().resource::<Called>().0;
+        assert_eq!(called.len(), 1, "{called:?}");
+        assert!(matches!(called[0].outcome, Outcome::Miss | Outcome::Hit { critical: true, .. }), "{:?}", called[0]);
+    }
+
+    #[test]
+    fn a_shield_turning_a_blow_is_called_out_as_blocked() {
+        use callouts::Outcome;
+        let shielded = (0..400).find(|&s| fb_items::undead::skeleton_outfit(s, fb_items::Odds::default()).item(fb_items::Slot::Offhand).is_some()).expect("some skeleton has a shield");
+        let (mut app, _, skeleton) = skeleton_fight(shielded, None);
+        calling_out(&mut app);
+        app.update();
+        for _ in 0..40 {
+            let at = *app.world().get::<Transform>(skeleton).unwrap();
+            let front = at.translation.xz() + (at.rotation * Vec3::Z).xz() * 10.0;
+            app.world_mut().write_message(feedback::Struck { target: skeleton, damage: 0, from: front, bludgeoning: false, critical: false });
+            app.update();
+        }
+        // The last blow's callout, read the frame after.
+        app.update();
+        let called = &app.world().resource::<Called>().0;
+        assert_eq!(called.len(), 40);
+        assert!(called.iter().any(|c| c.outcome == Outcome::Blocked), "some blows from the front are turned");
+        assert!(called.iter().any(|c| matches!(c.outcome, Outcome::Hit { damage: 0, .. })), "and some land");
     }
 }
