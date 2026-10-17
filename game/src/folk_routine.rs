@@ -515,7 +515,8 @@ mod tests {
         });
         let left = away.iter().filter(|&&d| d > 2.0 * CELL * 0.25).count();
         assert!(left * 2 > folk.len(), "{left} of {} left their spots: {away:?}", folk.len());
-        assert!(fastest > 4.0 && fastest <= 11.0 + 0.5, "fastest pace {fastest}");
+        let walk = crate::tuning::FolkTuning::default().walk_speed;
+        assert!(fastest > 4.0 && fastest <= walk + 0.5, "fastest pace {fastest}");
     }
 
     #[test]
