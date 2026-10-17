@@ -622,8 +622,10 @@ mod tests {
         use fb_character::conditions::{Circumstances, conditions};
         let (_, empty) = sheet_with(vec![]);
         assert_eq!(empty, vec![NO_CONDITIONS.to_string()]);
-        let now = Circumstances { poisoned: fb_character::poison::Poisoned::for_hours(1.0), held_pace: Some(0.25), ..Circumstances::default() };
-        let (mut app, lines) = sheet_with(conditions(&now));
+        let now = Circumstances { held_pace: Some(0.25), ..Circumstances::default() };
+        let rules = fb_character::rules::defaults();
+        let poisoned = crate::character::DelverEffects::poisoned_for(rules, 1.0);
+        let (mut app, lines) = sheet_with(conditions(&now, &poisoned.0, &rules.effects));
         assert_eq!(lines, ["Held", "Moving at 25% pace until you strike what holds you", "Poisoned", "Attacking at disadvantage; wears off in 60 minutes"]);
         let mut badges = app.world_mut().query::<(&Name, &BorderColor)>();
         let rims: Vec<(String, BorderColor)> = badges.iter(app.world()).map(|(n, c)| (n.to_string(), *c)).collect();

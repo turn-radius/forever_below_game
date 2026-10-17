@@ -8,7 +8,7 @@
 //!   (`creatures::behaviour::BlowsAtDelver`); one that misses whooshes past ([`whoosh_past`]).
 //! - Each [`AttackOnDelver`] (a blow that hit) takes its bite, and a poisonous snake's venom after the delver's
 //!   Constitution save ([`super::bite_damage_with`]). The whole view flashes red, harder for a harder blow ([`flash_strength`]).
-//!   A failed save also poisons the delver for a while ([`DelverPoison`],
+//!   A failed save also poisons the delver for a while ([`DelverEffects`],
 //!   [`fb_character::poison`]), which turns the life orb green ([`super::orbs`]).
 //! - A constrictor's bite also holds the delver ([`Constricted`]), who moves at a quarter of
 //!   their pace until they strike it (or it dies, or they break more than a body's length
@@ -30,7 +30,7 @@ use fb_creatures::Species;
 use super::feedback::{Corpse, Slain, Struck};
 use super::{ArmourClass, Health, RunDice, bite_damage_with, first_level_hit_points_with};
 use crate::carry::{Aimed, Hud, ViewModelCamera};
-use crate::character::{Character, DelverPoison};
+use crate::character::{Character, DelverEffects};
 use crate::creatures::Critter;
 use crate::creatures::behaviour::{AttackOnDelver, MissedDelver, reach};
 use crate::exhaustion::Exhaustion;
@@ -237,7 +237,7 @@ fn take_bites(
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
     critters: Query<&Critter>,
-    mut players: Query<(Entity, &mut Health, Option<&DelverPoison>), With<Player>>,
+    mut players: Query<(Entity, &mut Health, Option<&DelverEffects>), With<Player>>,
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
@@ -249,16 +249,18 @@ fn take_bites(
         if bodies.contains(bite.attacker) {
             continue;
         }
-        for (player, mut health, poison) in &mut players {
+        for (player, mut health, effects) in &mut players {
             if health.is_down() {
                 continue;
             }
             let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
             health.hurt(damage);
-            if let Some(hours) = poisons_for {
-                let mut poison = poison.map_or_else(Default::default, |p| p.0);
-                poison.dose(hours);
-                commands.entity(player).insert(DelverPoison(poison));
+            // A failed save poisons them for the poisoned effect's hours.
+            if poisons_for.is_some() {
+                let mut effects = effects.map_or_else(Default::default, |e| e.0.clone());
+                let by = bite.species.map_or_else(|| "a folk".to_string(), |s| s.stat_block().name.to_string());
+                effects.add(&rules.effects, "poisoned", 1.0, None, fb_character::effect::Source::Bite { by });
+                commands.entity(player).insert(DelverEffects(effects));
             }
             pain.strike(flash_strength(damage as i32, health.max));
             // One dull thud for each blow that lands.
@@ -580,8 +582,8 @@ mod tests {
             app.update();
             app.world_mut().write_message(AttackOnDelver { attacker: snake, species: Some(Species::PoisonousSnake), damage: 1, poison: 4, attacker_pos: Vec2::ZERO });
             app.update();
-            let poison = app.world().get::<DelverPoison>(player).map(|p| p.0);
-            assert_eq!(poison, poisoned.then(|| fb_character::poison::Poisoned::for_hours(fb_character::poison::VENOM_POISONED_HOURS)), "a natural {natural}");
+            let poison = app.world().get::<DelverEffects>(player).and_then(|e| e.poisoned_hours());
+            assert_eq!(poison, poisoned.then_some(fb_character::poison::VENOM_POISONED_HOURS), "a natural {natural}");
         }
     }
 

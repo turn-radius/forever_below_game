@@ -1,12 +1,14 @@
 //! The conditions a character is under right now, worked out from what the simulation already
-//! tracks: their needs, exhaustion, stamina, load, poison and whether something holds them
-//! ([`conditions`]). Nothing here steps or changes the simulation; it only reads it, so the HUD
-//! can show what is wrong without opening the inventory.
+//! tracks: their needs, exhaustion, stamina, load, whether something holds them, and every
+//! effect that shows ([`crate::effect`]) ([`conditions`]). Nothing here steps or changes the
+//! simulation; it only reads it, so the HUD can show what is wrong without opening the inventory.
 //!
 //! Each condition has a [`Severity`] and a one-line description of what it does, with the
 //! numbers taken from the rules that apply it, so the line stays true when the rules change.
 
-use crate::poison::Poisoned;
+use std::collections::BTreeMap;
+
+use crate::effect::{EffectDef, Effects, Influence};
 use crate::{Exhaustion, LoadBand, Meter, MeterKind, Needs, SECOND_WIND, Stamina};
 
 /// How much a condition matters, from a nudge to a danger to the run.
@@ -37,6 +39,8 @@ pub enum ConditionKind {
     Held,
     Poisoned,
     Recovering,
+    /// Any other effect ([`crate::effect`]): its name says which.
+    Effect,
 }
 
 /// One condition the character is under.
@@ -61,8 +65,6 @@ pub struct Circumstances {
     pub con_modifier: i32,
     /// The share of their pace a held character moves at, while something holds them.
     pub held_pace: Option<f64>,
-    /// Venom still in the blood, if any.
-    pub poisoned: Poisoned,
     /// Game minutes a hit point takes to mend ([`crate::recovery`]), while the character is
     /// below their maximum hit points; `None` when whole.
     pub wounded_mending: Option<f64>,
@@ -70,7 +72,7 @@ pub struct Circumstances {
 
 impl Default for Circumstances {
     fn default() -> Self {
-        Circumstances { needs: Needs::default(), exhaustion: Exhaustion::default(), stamina: Stamina::default(), load: LoadBand::Light, con_modifier: 0, held_pace: None, poisoned: Poisoned::default(), wounded_mending: None }
+        Circumstances { needs: Needs::default(), exhaustion: Exhaustion::default(), stamina: Stamina::default(), load: LoadBand::Light, con_modifier: 0, held_pace: None, wounded_mending: None }
     }
 }
 
@@ -202,22 +204,53 @@ fn minutes(n: u32) -> String {
     if n == 1 { "a minute".to_string() } else { format!("{n} minutes") }
 }
 
-/// Poisoned, while venom from a failed save is still working ([`Poisoned`]), and how long it has
-/// left. Its attack rolls are thrown at disadvantage ([`Poisoned::attack_odds`]).
-fn poisoned(poisoned: Poisoned) -> Option<Condition> {
-    poisoned.is_active().then(|| Condition {
-        kind: ConditionKind::Poisoned,
-        name: "Poisoned".to_string(),
-        severity: Severity::Moderate,
-        effect: format!("Attacking at disadvantage; wears off in {}", minutes(poisoned.minutes_left())),
+/// One condition for each effect that shows: its stage's word and severity, what it does now
+/// (each influence at the effect's intensity), and how long it has left. Poison keeps its own
+/// kind, so the HUD keeps its flask.
+fn effect_conditions(effects: &Effects, defs: &BTreeMap<String, EffectDef>) -> Vec<Condition> {
+    effects
+        .showing(defs)
+        .map(|(active, def, _, stage)| {
+            let mut lines: Vec<String> = def.influences.iter().filter_map(|influence| influence_line(influence, active.intensity)).collect();
+            if let Some(left) = active.hours_left {
+                lines.push(format!("wears off in {}", minutes((left * 60.0 - 1e-9).ceil().max(0.0) as u32)));
+            }
+            let mut effect = lines.join("; ");
+            if let Some(first) = effect.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            Condition { kind: if active.id == "poisoned" { ConditionKind::Poisoned } else { ConditionKind::Effect }, name: stage.word.clone(), severity: stage.severity, effect }
+        })
+        .collect()
+}
+
+/// What `influence` does at `intensity`, in a few words, or `None` for one another condition
+/// already tells (mending stopped shows as no Recovering).
+fn influence_line(influence: &Influence, intensity: f64) -> Option<String> {
+    let share = |at_full: f64| 1.0 + (at_full - 1.0) * intensity;
+    Some(match influence {
+        Influence::AttackDisadvantage { .. } => "Attacking at disadvantage".to_string(),
+        Influence::NoRecovery { .. } => return None,
+        Influence::NeedRate { meter, at_full } => {
+            let need = match meter {
+                MeterKind::Hunger => "hunger",
+                MeterKind::Thirst => "thirst",
+                MeterKind::Sleepiness => "sleepiness",
+            };
+            format!("{need} rising at {} the rate", percent(share(*at_full)))
+        }
+        Influence::Sight { at_full } => format!("seeing {} as far", percent(share(*at_full))),
+        Influence::Pace { at_full } => format!("moving at {} pace", percent(share(*at_full))),
+        Influence::Noticed { at_full } => format!("{} easier to notice", percent(at_full * intensity)),
+        Influence::HitPointsPerHour { at_full } => format!("losing {:.1} HP an hour", at_full * intensity),
     })
 }
 
-/// Recovering, while a wounded character is fed, watered and unpoisoned
+/// Recovering, while a wounded character is fed, watered and nothing stops their mending
 /// ([`crate::recovery::recovers`]), and how fast.
-fn recovering(now: &Circumstances) -> Option<Condition> {
+fn recovering(now: &Circumstances, mending_stopped: bool) -> Option<Condition> {
     let per = now.wounded_mending?;
-    crate::recovery::recovers(&now.needs, &now.poisoned).then(|| Condition {
+    crate::recovery::recovers(&now.needs, mending_stopped).then(|| Condition {
         kind: ConditionKind::Recovering,
         name: "Recovering".to_string(),
         severity: Severity::Good,
@@ -225,23 +258,22 @@ fn recovering(now: &Circumstances) -> Option<Condition> {
     })
 }
 
-/// The conditions `now` puts a character under, worst first (and in a fixed order among equals,
-/// so a HUD row does not shuffle). A fresh character is under none.
-pub fn conditions(now: &Circumstances) -> Vec<Condition> {
-    let mut all: Vec<Condition> = [
-        held(now.held_pace),
-        winded(now.stamina),
-        exhaustion(now.exhaustion),
-        poisoned(now.poisoned),
-        need(&now.needs.hunger, now.con_modifier),
-        need(&now.needs.thirst, now.con_modifier),
-        need(&now.needs.sleepiness, now.con_modifier),
-        load(now.load),
-        recovering(now),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+/// The conditions `now` and `effects` (read by `defs`) put a character under, worst first (and in
+/// a fixed order among equals, so a HUD row does not shuffle). A fresh character is under none.
+pub fn conditions(now: &Circumstances, effects: &Effects, defs: &BTreeMap<String, EffectDef>) -> Vec<Condition> {
+    let mut all: Vec<Condition> = [held(now.held_pace), winded(now.stamina), exhaustion(now.exhaustion)].into_iter().flatten().collect();
+    all.extend(effect_conditions(effects, defs));
+    all.extend(
+        [
+            need(&now.needs.hunger, now.con_modifier),
+            need(&now.needs.thirst, now.con_modifier),
+            need(&now.needs.sleepiness, now.con_modifier),
+            load(now.load),
+            recovering(now, effects.stops_recovery(defs)),
+        ]
+        .into_iter()
+        .flatten(),
+    );
     // A stable sort keeps the order above among equals.
     all.sort_by_key(|condition| std::cmp::Reverse(condition.severity));
     all
@@ -250,6 +282,19 @@ pub fn conditions(now: &Circumstances) -> Vec<Condition> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::effect::Source;
+
+    /// The conditions with no effects on the character.
+    fn conditions(now: &Circumstances) -> Vec<Condition> {
+        super::conditions(now, &Effects::default(), &crate::effect::shipped())
+    }
+
+    /// Poisoned by a snake's bite, as venom poisons.
+    fn bitten() -> Effects {
+        let mut effects = Effects::default();
+        effects.add(&crate::effect::shipped(), "poisoned", 1.0, None, Source::Bite { by: "Poisonous Snake".into() });
+        effects
+    }
 
     fn kinds(now: &Circumstances) -> Vec<ConditionKind> {
         conditions(now).iter().map(|c| c.kind).collect()
@@ -346,14 +391,33 @@ mod tests {
 
     #[test]
     fn poisoned_shows_until_it_wears_off_with_the_minutes_left() {
-        let mut now = Circumstances { poisoned: Poisoned::for_hours(crate::poison::VENOM_POISONED_HOURS), ..Circumstances::default() };
-        let shown = &conditions(&now)[0];
+        let defs = crate::effect::shipped();
+        let now = Circumstances::default();
+        let mut effects = bitten();
+        let shown = &super::conditions(&now, &effects, &defs)[0];
         assert_eq!((shown.kind, shown.name.as_str(), shown.severity), (ConditionKind::Poisoned, "Poisoned", Severity::Moderate));
         assert_eq!(shown.effect, "Attacking at disadvantage; wears off in 60 minutes");
-        now.poisoned.step(0.99);
-        assert_eq!(conditions(&now)[0].effect, "Attacking at disadvantage; wears off in a minute");
-        now.poisoned.step(0.01);
-        assert_eq!(kinds(&now), vec![]);
+        effects.step(&defs, 0.99, &[]);
+        assert_eq!(super::conditions(&now, &effects, &defs)[0].effect, "Attacking at disadvantage; wears off in a minute");
+        effects.step(&defs, 0.01, &[]);
+        assert_eq!(super::conditions(&now, &effects, &defs), vec![]);
+    }
+
+    #[test]
+    fn any_effect_shows_its_stage_and_what_it_does_now() {
+        let mut defs = crate::effect::shipped();
+        defs.insert("stinging".into(), crate::effect::EffectDef {
+            name: "Stinging eyes".into(),
+            stages: vec![crate::effect::Stage { at: 0.0, word: "Stinging eyes".into(), severity: Severity::Mild }],
+            per_hour: -1.0,
+            influences: vec![Influence::Sight { at_full: 0.5 }],
+            ..crate::effect::EffectDef::default()
+        });
+        let mut effects = Effects::default();
+        effects.add(&defs, "stinging", 0.5, None, Source::Surroundings);
+        let shown = super::conditions(&Circumstances::default(), &effects, &defs);
+        assert_eq!(shown.len(), 1);
+        assert_eq!((shown[0].kind, shown[0].name.as_str(), shown[0].effect.as_str()), (ConditionKind::Effect, "Stinging eyes", "Seeing 75% as far"));
     }
 
     #[test]
@@ -374,8 +438,8 @@ mod tests {
         let mut thirsty = wounded;
         thirsty.needs.thirst.value = 0.3;
         assert_eq!(kinds(&thirsty), vec![ConditionKind::Thirst]);
-        let poisoned = Circumstances { poisoned: Poisoned::for_hours(1.0), ..wounded };
-        assert_eq!(kinds(&poisoned), vec![ConditionKind::Poisoned]);
+        let poisoned = super::conditions(&wounded, &bitten(), &crate::effect::shipped());
+        assert_eq!(poisoned.iter().map(|c| c.kind).collect::<Vec<_>>(), vec![ConditionKind::Poisoned], "poison stops the mending");
         let burdened = Circumstances { load: LoadBand::Burdened, ..wounded };
         assert_eq!(kinds(&burdened), vec![ConditionKind::Load, ConditionKind::Recovering], "good news comes last");
     }

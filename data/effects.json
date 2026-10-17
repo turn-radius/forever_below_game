@@ -1,7 +1,7 @@
 {
   "poisoned": {
     "name": "Poisoned",
-    "stages": [{ "at": 0.0, "word": "Poisoned", "severity": "serious" }],
+    "stages": [{ "at": 0.0, "word": "Poisoned", "severity": "moderate" }],
     "hours": 1.0,
     "influences": [
       { "kind": "attack_disadvantage" },
