@@ -426,7 +426,8 @@ pub struct HeldKey {
     pub hip: Option<ItemId>,
     pub belt: Option<ItemId>,
     /// What the main hand's bow or crossbow has loaded: 1 for an arrow on the string, a bolt on
-    /// the deck, +2 for a spanned crossbow, so the view model is fitted again when it changes.
+    /// the deck, +2 for a spanned crossbow, and for a bow +2 per eighth of its draw, so the view
+    /// model is fitted again when it changes.
     pub loaded: u8,
     pub body: (fb_body::Folk, u32),
 }
@@ -445,7 +446,7 @@ impl HeldKey {
             hip: inventory.worn(fb_items::Slot::Hip),
             belt: inventory.worn(fb_items::Slot::Belt),
             loaded: inventory.worn(fb_items::Slot::Mainhand).and_then(|id| inventory.item(id)).map_or(0, |i| match &i.shape {
-                armory::Item::Bow(s) => u8::from(s.arrow.on),
+                armory::Item::Bow(s) => u8::from(s.arrow.on) + 2 * crate::combat::shoot::draw_eighths(s.draw),
                 armory::Item::Crossbow(s) => u8::from(s.arrow.on) + 2 * u8::from(s.spanned),
                 _ => 0,
             }),

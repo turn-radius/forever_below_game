@@ -440,7 +440,7 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
     if let Some(weapon) = weapon {
         let loaded = marksman.nocked.filter(|n| n.weapon == weapon).and_then(|n| ammo_state(&inventory, n.ammo));
         let differs = match inventory.item(weapon).map(|i| &i.shape) {
-            Some(armory::Item::Bow(s)) => s.arrow.on != loaded.is_some(),
+            Some(armory::Item::Bow(s)) => s.arrow.on != loaded.is_some() || draw_eighths(s.draw) != draw_eighths(marksman.drawn()),
             Some(armory::Item::Crossbow(s)) => s.arrow.on != loaded.is_some() || s.spanned != loaded.is_some(),
             _ => false,
         };
@@ -468,10 +468,13 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
         && let Some(shape) = inventory.shape_mut(weapon)
     {
         match shape {
-            armory::Item::Bow(s) => match &loaded {
-                Some(ammo) => s.load(ammo),
-                None => s.unload(),
-            },
+            armory::Item::Bow(s) => {
+                match &loaded {
+                    Some(ammo) => s.load(ammo),
+                    None => s.unload(),
+                }
+                s.draw = draw_eighths(marksman.drawn()) as f32 / 8.0;
+            }
             armory::Item::Crossbow(s) => match &loaded {
                 Some(ammo) => {
                     s.load(ammo);
@@ -620,8 +623,33 @@ pub fn release_stuck(
     }
 }
 
-/// Draws the bow in the view: pulled in toward the eye over the draw, trembling at the end of it;
-/// a crossbow dips as it is reloaded. Our own.
+/// A bow's draw in eighths, the steps its model is built again at as the string comes back.
+pub fn draw_eighths(draw: f32) -> u8 {
+    (draw.clamp(0.0, 1.0) * 8.0).round() as u8
+}
+
+/// Where the nock of a drawn bow's arrow comes to in the view: low and a little right of the
+/// eye, as an archer anchors at the jaw. Our own.
+const ANCHOR: Vec3 = Vec3::new(0.7, -1.6, -5.0);
+/// How far a drawn bow leans its top in toward the crosshair, radians.
+const CANT: f32 = 0.12;
+/// The share of the draw over which the bow is raised from the carry into the aim.
+const RAISE: f32 = 0.3;
+
+/// A drawn bow aimed: the arrow on its string running from [`ANCHOR`] to the crosshair, the
+/// limbs upright with a slight cant. `None` for anything but a bow.
+fn aimed_bow(item: &armory::Item, scale: Vec3) -> Option<(Vec3, Quat)> {
+    let armory::Item::Bow(bow) = item else { return None };
+    let (nock, dir) = bow.nocked_arrow();
+    let (nock, dir) = (Vec3::from_array(nock), Vec3::from_array(dir));
+    // The bow on its edge: the arrow (toward -X in the bow's space) ahead, the limbs up.
+    let upright = Quat::from_rotation_z(CANT) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+    let rotation = crate::view_model::aimed_from(ANCHOR) * Quat::from_rotation_arc(upright * dir, Vec3::NEG_Z) * upright;
+    Some((ANCHOR - rotation * (scale * nock), rotation))
+}
+
+/// Draws the bow in the view: raised into the aim at the start of the draw, the arrow pointing
+/// at the crosshair, trembling at full draw; a crossbow dips as it is reloaded. Our own.
 pub fn draw_held(marksman: Res<Marksman>, mut held: Query<(&HeldItem, &mut Transform, &ChildOf)>, view_models: Query<(), With<ViewModelCamera>>) {
     let draw = marksman.drawn();
     let reload = marksman.reload.map_or(0.0, |r| (r.t / r.total).clamp(0.0, 1.0));
@@ -633,9 +661,12 @@ pub fn draw_held(marksman: Res<Marksman>, mut held: Query<(&HeldItem, &mut Trans
             continue;
         }
         if draw > 0.0 {
-            let shake = if draw >= 1.0 { (marksman.draw.unwrap_or(0.0) * 40.0).sin() * 0.05 } else { 0.0 };
-            transform.translation += Vec3::new(-2.2, 1.6 + shake, 3.2) * draw;
-            transform.rotation = Quat::from_rotation_z(-0.12 * draw) * transform.rotation;
+            let Some((at, turn)) = aimed_bow(&item.item, transform.scale) else { continue };
+            let raised = (draw / RAISE).clamp(0.0, 1.0);
+            let raised = raised * raised * (3.0 - 2.0 * raised);
+            let shake = if draw >= 1.0 { (marksman.draw.unwrap_or(0.0) * 40.0).sin() * 0.03 } else { 0.0 };
+            transform.translation = transform.translation.lerp(at, raised) + Vec3::Y * shake;
+            transform.rotation = transform.rotation.slerp(turn, raised);
         } else {
             let dip = (reload * std::f32::consts::PI).sin();
             transform.translation += Vec3::new(-1.2, -0.4, 1.0) * dip;
