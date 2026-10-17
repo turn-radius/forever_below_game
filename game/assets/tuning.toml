@@ -141,3 +141,7 @@ hover_delay = 0.0
 [clock]
 # How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes).
 game_seconds_per_second = 12.0
+
+[recovery]
+# Game minutes a fed and watered delver takes to regain one hit point (10 = one every 50 real seconds at the usual clock). Our own.
+minutes_per_hit_point = 10.0

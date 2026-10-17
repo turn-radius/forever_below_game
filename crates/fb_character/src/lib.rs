@@ -14,12 +14,15 @@
 //!
 //! `poison` tracks the lasting Poisoned state a failed save against venom leaves.
 //!
+//! `recovery` mends a fed and watered character's hit points over game time.
+//!
 //! `conditions` reads all of it into the conditions a character is under right now, for the HUD.
 
 pub mod combat;
 pub mod conditions;
 pub mod explain;
 pub mod poison;
+pub mod recovery;
 
 use serde::{Deserialize, Serialize};
 

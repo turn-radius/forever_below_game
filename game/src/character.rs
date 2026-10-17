@@ -290,6 +290,12 @@ pub struct DelverMana(pub Mana);
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DelverPoison(pub fb_character::poison::Poisoned);
 
+/// Game time the delver has put toward their next hit point while fed and watered, on the
+/// [`Player`](crate::play::Player) from their spawn; the game clock steps it
+/// (`crate::simulate::step_the_delver`, [`fb_character::recovery`]).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DelverRecovery(pub fb_character::recovery::Recovery);
+
 /// How easy the delver is to see, 0 to 1 ([`fb_character::visibility`]): from the light on them,
 /// their pace, load and Stealth. Kept on the [`Player`](crate::play::Player) so the eye can show
 /// it and, later, creatures read it (`crate::combat::eye`).

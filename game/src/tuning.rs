@@ -48,6 +48,7 @@ pub struct Tuning {
     pub sound: SoundTuning,
     pub interface: InterfaceTuning,
     pub clock: ClockTuning,
+    pub recovery: RecoveryTuning,
 }
 
 /// How the first-person view draws.
@@ -389,6 +390,21 @@ pub struct ClockTuning {
 impl Default for ClockTuning {
     fn default() -> Self {
         ClockTuning { game_seconds_per_second: 12.0 }
+    }
+}
+
+/// How the delver mends.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecoveryTuning {
+    /// Game minutes a fed and watered delver takes to regain one hit point
+    /// ([`fb_character::recovery`]). Our own.
+    pub minutes_per_hit_point: f32,
+}
+
+impl Default for RecoveryTuning {
+    fn default() -> Self {
+        RecoveryTuning { minutes_per_hit_point: fb_character::recovery::MINUTES_PER_HIT_POINT as f32 }
     }
 }
 
