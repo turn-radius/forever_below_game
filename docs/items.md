@@ -90,6 +90,14 @@ Torches and lanterns are Armory families (`armory::families::torch`, `armory::fa
 - Keys, the tinderbox and the bedroll are new; the plate's text names them (lockpicking, "fever took them in their bedroll") but never drew them. A bedroll is the same rolled, strapped blanket a backpack carries (`armory::build::roll`).
 - A candle can stand in a chamberstick, carry runs of wax, burn down and be lit, and `Sundry::light` gives its 5 ft light from the flame. The rope is one twisted rope laid in a coil and tied, not four stacked rings, and the lockpicks are hooks, rakes, diamonds and a tension wrench in an open leather roll.
 
+### Writing
+
+`armory::families::writing` makes written goods: scrolls, notes and books. It is new; no prototype draws any of them, so every slider is this port's own. One state holds the three kinds (`WritingKind`): a `piece` section every kind shares (kind, size, paper, ink, lines of ink) and one section of options per kind. Only the scroll is built so far (`scroll`); a note and a book are flat stand-ins until their builders land. Each rests on the ground, centred over the origin, its long side along X, and writing is never etched.
+
+- A scroll's sheet is one thick sheet along a single path: a spiral wound on a roll, a rippled flat span with a curling free end, and, on two rollers, a second spiral wound back in. Rolled shut it is only the spirals; partly unrolled (`unroll` of 0.12 or more) the span shows rows of ink as thin strips lying on the paper. When the span is long the scroll is turned so its long side lies along X.
+- Paper is parchment, vellum (paler) or papyrus (its fibres show). Rollers are none, one or two turned dowels with wood, bone or brass knobs. A scroll rolled shut can be tied with ribbon or cord and sealed with wax (a colour, and a star of 3 to 9 points pressed in it); an open scroll never is.
+- Condition drives the wear rather than a slider of its own: `damage` ragged and bitten edges and a torn end, `wear` times `rot` foxing and a browner sheet, and wear with damage scorched edges.
+
 ## Rarity and affixes
 
 - Roll `x` against the find's **odds** (`fb_items::Odds`: a depth and a cap). On the first level these are the plate's: `x < .58` common, `< .85` magic, `< .97` rare, otherwise legendary. Containers cap at rare.
