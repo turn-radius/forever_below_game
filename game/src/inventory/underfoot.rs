@@ -387,6 +387,25 @@ mod tests {
     }
 
     #[test]
+    fn a_torch_on_the_third_column_of_bare_stone_lands_straight_ahead() {
+        let (mut app, pack, eye) = floor_app();
+        assert!(floor_items(&mut app).is_empty(), "an empty corridor");
+        let torch = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let torch = inventory.add(fb_items::roll_item("Torch", 1).unwrap());
+            inventory.put(torch, pack, Placement::new(0, 0, false)).unwrap();
+            torch
+        };
+        drop(&mut app, torch, Target::Cell { view: GridView::Underfoot, cell: IVec2::new(2, 0) });
+        let floor = floor_items(&mut app);
+        assert_eq!(floor.len(), 1);
+        let to = floor[0].2.translation - eye.translation();
+        let (ahead, aside) = (to.dot(eye.forward().as_vec3()), to.dot(eye.right().as_vec3()));
+        // In front, within a tenth of a metre of the line straight ahead.
+        assert!(ahead > 1.0 && aside.abs() <= 1.0, "ahead {ahead}, aside {aside}");
+    }
+
+    #[test]
     fn columns_spread_drops_left_to_right() {
         assert!(aside_for_column(0, 6) < 0.0 && aside_for_column(5, 6) > 0.0);
         assert!(aside_for_column(0, 6).abs() <= crate::carry::DROP_SPREAD);

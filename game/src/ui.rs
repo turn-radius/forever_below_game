@@ -115,6 +115,14 @@ pub fn node_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Rect {
     Rect::from_center_size(transform.translation * node.inverse_scale_factor, node.size * node.inverse_scale_factor)
 }
 
+/// The cursor in the UI's logical pixels, those of [`node_rect`]: the window's divided by
+/// Bevy's `UiScale`, which the UI is laid out under (`ComputedUiRenderTargetInfo` takes the
+/// target's scale factor times `UiScale`, `bevy_ui` 0.20 `update.rs`). With no `UiScale`
+/// resource, the window's own.
+pub fn ui_cursor(window: &Window, scale: Option<&UiScale>) -> Option<Vec2> {
+    window.cursor_position().map(|c| c / scale.map_or(1.0, |s| s.0.max(f32::EPSILON)))
+}
+
 /// `text` cut into runs of words, each marked whether it is a value: a word with a digit in
 /// it ("3", "1d8+1", "2×3", "×0.85"). Spaces stay with the word before them.
 pub fn value_runs(text: &str) -> Vec<(String, bool)> {
