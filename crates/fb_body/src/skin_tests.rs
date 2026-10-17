@@ -249,8 +249,18 @@ fn gear_stays_on_the_skin(folk: Folk, seed: u32, outfit: &str) {
 }
 
 #[test]
+#[ignore = "slow sweep: a fighter's gear on the skin through the walk for every folk; run before merging fitting changes"]
 fn legwear_boots_sleeves_and_gloves_stay_on_the_skin_through_the_walk() {
     for folk in Folk::ALL {
+        gear_stays_on_the_skin(folk, 1207, "fighter");
+    }
+}
+
+/// [`legwear_boots_sleeves_and_gloves_stay_on_the_skin_through_the_walk`] on the two builds
+/// furthest from a human's: the broad, tailed lizardfolk and the small gnome.
+#[test]
+fn legwear_boots_sleeves_and_gloves_stay_on_the_skin_through_the_walk_smoke() {
+    for folk in [Folk::Lizardfolk, Folk::Gnome] {
         gear_stays_on_the_skin(folk, 1207, "fighter");
     }
 }

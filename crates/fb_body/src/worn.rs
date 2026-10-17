@@ -1726,6 +1726,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "a diagnostic dump, not a check: prints where a lizardfolk's tail crosses its shirt and cloak"]
     fn zz_tail_debug() {
         let body = Body::new(&BodySpec::roll(Folk::Lizardfolk, 3));
         let tail = body.skin_mesh().parts.into_iter().find(|p| p.name == "tail").unwrap();
