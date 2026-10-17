@@ -131,8 +131,10 @@ rumble_interval_min = 60.0
 rumble_interval_max = 180.0
 
 [interface]
-# Inventory grid cell size, in logical pixels.
-cell_size = 52.0
+# Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there.
+cell_size = 72.0
+# The fewest logical pixels a cell is drawn at, however short the window.
+min_cell_size = 48.0
 # Seconds the mouse rests on an item before its card shows.
 hover_delay = 0.0
 

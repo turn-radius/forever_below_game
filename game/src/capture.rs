@@ -60,14 +60,22 @@ impl FrameCapturePlugin {
         let path = std::env::var("FB_SCREENSHOT").ok().filter(|path| !path.is_empty())?;
         let frames = std::env::var("FB_SCREENSHOT_FRAMES").ok().filter(|f| !f.is_empty());
         let every = std::env::var("FB_SCREENSHOT_EVERY").ok().and_then(|n| n.trim().parse::<u32>().ok()).unwrap_or(1).max(1);
-        match frames.as_deref().map(parse_frames) {
-            None => Some(FrameCapturePlugin::new(path)),
-            Some(Ok(frames)) => Some(FrameCapturePlugin { every, ..FrameCapturePlugin::frames(path, frames) }),
+        let plugin = match frames.as_deref().map(parse_frames) {
+            None => FrameCapturePlugin::new(path),
+            Some(Ok(frames)) => FrameCapturePlugin { every, ..FrameCapturePlugin::frames(path, frames) },
             Some(Err(error)) => {
                 warn!("FB_SCREENSHOT_FRAMES: {error}; saving one frame");
-                Some(FrameCapturePlugin::new(path))
+                FrameCapturePlugin::new(path)
             }
-        }
+        };
+        let size = std::env::var("FB_SCREENSHOT_SIZE").ok().filter(|s| !s.is_empty()).and_then(|spec| {
+            let size = parse_size(&spec);
+            if size.is_none() {
+                warn!("FB_SCREENSHOT_SIZE: {spec:?} is not <width>x<height>; capturing at 1920x1080");
+            }
+            size
+        });
+        Some(FrameCapturePlugin { size: size.unwrap_or(plugin.size), ..plugin })
     }
 
     /// Whether frame `frame` is one to save.
@@ -89,6 +97,13 @@ impl FrameCapturePlugin {
         };
         path.with_file_name(name).to_string_lossy().into_owned()
     }
+}
+
+/// A capture size written `<width>x<height>` (`1280x720`), each at least 1.
+pub fn parse_size(spec: &str) -> Option<UVec2> {
+    let (width, height) = spec.trim().split_once(['x', 'X'])?;
+    let size = UVec2::new(width.trim().parse().ok()?, height.trim().parse().ok()?);
+    (size.min_element() > 0).then_some(size)
 }
 
 /// Frames to capture written as a Rust range: `120..136` (120 to 135), `120..=135`, or one
@@ -208,6 +223,14 @@ fn capture_and_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_read_as_width_by_height() {
+        assert_eq!(parse_size("1280x720"), Some(UVec2::new(1280, 720)));
+        assert_eq!(parse_size(" 800 X 600 "), Some(UVec2::new(800, 600)));
+        assert_eq!(parse_size("0x720"), None);
+        assert_eq!(parse_size("1280"), None);
+    }
 
     #[test]
     fn frames_read_as_rust_ranges() {
