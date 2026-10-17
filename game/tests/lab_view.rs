@@ -261,15 +261,15 @@ fn the_equip_tab_feeds_and_dresses_the_character() {
     // The sheet's own bar shows the word.
     let shown = texts(&mut app);
     assert!(shown.iter().any(|t| t == "Fed"), "{shown:?}");
-    // A lice-ridden cloak: pick the cloak slot, its base and the seed, and the preview shows its affix.
-    let seed = (1..4000).find(|&s| fb_items::roll_item("Cloak", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "Lice-ridden"))).unwrap();
+    // A moth-eaten cloak (Lice-ridden is held back until disease is simulated): pick the cloak slot, its base and the seed, and the preview shows its affix.
+    let seed = (1..4000).find(|&s| fb_items::roll_item("Cloak", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "Moth-eaten"))).unwrap();
     let base = forever_below::lab_view::bases_for(Slot::Cloak).iter().position(|b| b == "Cloak").unwrap();
     press(&mut app, Control::PickSlotAt(3));
     press(&mut app, Control::PickBaseAt(base));
     press(&mut app, Control::PickSeed(seed as i64 - 1));
     assert_eq!(app.world().resource::<Picker>().seed, seed);
     let shown = texts(&mut app);
-    assert!(shown.iter().any(|t| t.starts_with("Lice-ridden: ")), "the preview card: {shown:?}");
+    assert!(shown.iter().any(|t| t.starts_with("Moth-eaten: ")), "the preview card: {shown:?}");
     press(&mut app, Control::PutOn);
     assert!(app.world().resource::<LabState>().slot(Slot::Cloak).base.is_some());
     // The mail comes off: armour 15 to 12, load 27 to 7 or so.

@@ -5,7 +5,7 @@ use crate::armory_base::{base_for, roll_shape};
 use crate::dress::dress;
 use crate::naming::{Legend, item_name, legendize, noun};
 use crate::profile::{Profile, profile};
-use crate::rarity::{Odds, roll_rarity};
+use crate::rarity::{Odds, roll_rarity_for};
 use crate::tables::Affix;
 use crate::{Kind, Rarity, Slot, Tag, game_rng};
 use std::fmt;
@@ -124,7 +124,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
         return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds });
     }
 
-    let (rarity, affixes) = roll_rarity(&mut rng, &profile.tags, &odds);
+    let (rarity, affixes) = roll_rarity_for(&mut rng, &profile.tags, profile.slot, &odds);
     for a in &affixes {
         a.apply_to_stats(&mut profile.stats);
     }
@@ -155,7 +155,7 @@ mod tests {
                 assert_eq!(item, roll_item(base, seed).unwrap(), "{base} {seed}: not deterministic");
                 assert!(!item.name.is_empty());
                 for a in &item.affixes {
-                    assert!(a.fits(&item.profile.tags), "{base}: {} on {:?}", a.name, item.profile.tags);
+                    assert!(a.fits_item(&item.profile.tags, item.profile.slot) && a.least <= item.rarity, "{base}: {} on {:?}", a.name, item.profile.tags);
                 }
                 assert_eq!(item.legend.is_some(), item.rarity == Rarity::Legendary, "{base}");
                 if item.profile.kind == Kind::Good {

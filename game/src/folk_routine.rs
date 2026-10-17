@@ -515,9 +515,8 @@ mod tests {
         });
         let left = away.iter().filter(|&&d| d > 2.0 * CELL * 0.25).count();
         assert!(left * 2 > folk.len(), "{left} of {} left their spots: {away:?}", folk.len());
-        // No faster than the tuned walking pace (a human's; shorter folk walk slower).
-        let walk = Tuning::default().folk.walk_speed;
-        assert!(fastest > 4.0 && fastest <= walk + 0.5, "fastest pace {fastest} against a walk of {walk}");
+        let walk = crate::tuning::FolkTuning::default().walk_speed;
+        assert!(fastest > 4.0 && fastest <= walk + 0.5, "fastest pace {fastest}");
     }
 
     #[test]

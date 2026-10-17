@@ -34,6 +34,7 @@ pub struct FeedbackPlugin;
 impl Plugin for FeedbackPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Struck>()
+            .add_message::<Slain>()
             .init_resource::<Tuning>()
             .add_systems(Startup, load_creature_sounds)
             .add_systems(Update, (give_creatures_health, take_blows, knock_back, flash, collapse).chain().in_set(DelveSystems));
@@ -50,6 +51,13 @@ pub struct Struck {
     /// Whether it is a bludgeoning blow (a mace, a club, a staff, a fist), which a skeleton
     /// takes double of.
     pub bludgeoning: bool,
+}
+
+/// A creature or a folk brought to 0 hit points by a blow of the delver's ([`Struck`]): what a
+/// weapon "of the Leech" heals on (`crate::combat::vitals`).
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct Slain {
+    pub target: Entity,
 }
 
 /// A creature or a folk at 0 hit points: its body, lying where it fell for the rest of the run.
@@ -208,6 +216,7 @@ fn take_blows(
     bone_sounds: Option<Res<crate::creatures::skeletons::BoneSounds>>,
     dice: Option<ResMut<super::RunDice>>,
     flinches: Flinches,
+    mut slain: MessageWriter<Slain>,
 ) {
     let mut dice = dice;
     for blow in struck.read() {
@@ -237,6 +246,7 @@ fn take_blows(
             commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
         }
         if fell {
+            slain.write(Slain { target: blow.target });
             commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<Brain>();
             info!("{} falls", critter.spot.species.stat_block().name);
         }

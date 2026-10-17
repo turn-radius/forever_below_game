@@ -9,7 +9,9 @@ use bevy::prelude::*;
 use fb_character::rules::Rules;
 use fb_character::{Activity, Exhaustion, ExhaustionTimes, Needs};
 
-use crate::character::{Character, DelverMana, DelverNeeds, DelverPoison, DelverStamina, Load, activity_for};
+use crate::character::{Character, DelverMana, DelverNeeds, DelverPoison, DelverRecovery, DelverStamina, Load, activity_for};
+use crate::combat::Health;
+use crate::tuning::Tuning;
 use crate::combat::swing::Swing;
 use crate::exhaustion::{Exhaustion as DelverExhaustion, ExhaustionTimes as DelverTimes};
 use crate::game_clock::{GameClock, advance_game_clock};
@@ -48,19 +50,21 @@ pub fn delver_activity(velocity: Vec2, sprinting: bool, swinging: bool, load: Lo
     activity_for(velocity.length() > STANDING, sprinting, swinging, load.0)
 }
 
-/// Steps the delver's needs and exhaustion by the game time since the last step. The rules' rates
-/// and gear's are put on the meters only when the character, the inventory or the rules change
-/// (or the delver is new), and stay there. Steps nothing while the clock holds still (a screen
-/// is open).
-#[allow(clippy::type_complexity)]
+/// Steps the delver's needs and exhaustion by the game time since the last step, and mends
+/// their hit points while they are fed, watered and unpoisoned ([`fb_character::recovery`], at
+/// the tuning's `recovery.minutes_per_hit_point`). The rules' rates and gear's are put on the
+/// meters only when the character, the inventory or the rules change (or the delver is new),
+/// and stay there. Steps nothing while the clock holds still (a screen is open).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn step_the_delver(
     clock: Res<GameClock>,
     character: Res<Character>,
     inventory: Res<Inventory>,
     rules: Res<GameRules>,
+    tuning: Res<Tuning>,
     input: ActionInput,
     mut last: Local<f64>,
-    mut players: Query<(Entity, &Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana, Option<&mut DelverPoison>), With<Player>>,
+    mut players: Query<(Entity, &Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana, Option<&mut DelverPoison>, &mut DelverRecovery, Option<&mut Health>), With<Player>>,
     mut commands: Commands,
 ) {
     let now = clock.game_seconds();
@@ -71,7 +75,7 @@ fn step_the_delver(
     let rules_changed = rules.is_changed() && !rules.is_added();
     let changed = character.is_changed() || inventory.is_changed() || rules_changed;
     let mut gear = None;
-    for (player, locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana, poison) in &mut players {
+    for (player, locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana, poison, mut recovery, health) in &mut players {
         if changed || needs.is_added() {
             let gear = gear.get_or_insert_with(|| character.gear(&inventory));
             // The rates a meter is made with are the defaults', so they are only put on again
@@ -107,6 +111,17 @@ fn step_the_delver(
         mana.set_if_neq(DelverMana(pool));
         // The level moves a few times in a run, so it is only marked changed when it does.
         exhaustion.set_if_neq(DelverExhaustion(e));
+        // Fed, watered and free of venom, they mend; the venom is read before this step wears it.
+        if let Some(mut health) = health.filter(|h| !h.is_down()) {
+            let poisoned = poison.as_deref().map_or_else(Default::default, |p| p.0);
+            let recovering = fb_character::recovery::recovers(&n, &poisoned);
+            let mut next = recovery.0;
+            let gained = next.step(hours, tuning.recovery.minutes_per_hit_point as f64, recovering, health.hp, health.max);
+            recovery.set_if_neq(DelverRecovery(next));
+            if gained > 0 {
+                health.heal(gained);
+            }
+        }
         // Venom wears off by game time, and its component goes with it.
         if let Some(mut poison) = poison {
             poison.0.step(hours);
@@ -438,6 +453,40 @@ mod tests {
         affix.apply_to_stats(&mut item.profile.stats);
         item.affixes.push(affix);
         item
+    }
+
+    #[test]
+    fn a_fed_and_watered_delver_mends_a_point_every_ten_game_minutes_up_to_the_maximum() {
+        let mut app = app();
+        let delver = walker(&mut app);
+        app.world_mut().entity_mut(delver).insert(Health { hp: 3, max: 8 });
+        // Ten game minutes are fifty real seconds at the usual clock.
+        run(&mut app, 45);
+        assert_eq!(app.world().get::<Health>(delver).unwrap().hp, 3);
+        run(&mut app, 6);
+        assert_eq!(app.world().get::<Health>(delver).unwrap().hp, 4);
+        run(&mut app, 600);
+        assert_eq!(app.world().get::<Health>(delver).unwrap().hp, 8, "never above the maximum");
+    }
+
+    #[test]
+    fn a_hungry_thirsty_or_poisoned_delver_does_not_mend() {
+        for case in 0..3 {
+            let mut app = app();
+            let delver = walker(&mut app);
+            app.world_mut().entity_mut(delver).insert(Health { hp: 3, max: 8 });
+            app.world_mut().run_schedule(FixedUpdate);
+            let mut entity = app.world_mut().entity_mut(delver);
+            match case {
+                0 => entity.get_mut::<DelverNeeds>().unwrap().0.hunger.value = 0.3,
+                1 => entity.get_mut::<DelverNeeds>().unwrap().0.thirst.value = 0.3,
+                _ => {
+                    entity.insert(DelverPoison(fb_character::poison::Poisoned::for_hours(1.0)));
+                }
+            }
+            run(&mut app, 120);
+            assert_eq!(app.world().get::<Health>(delver).unwrap().hp, 3, "case {case}");
+        }
     }
 
     #[test]

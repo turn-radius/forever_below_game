@@ -187,17 +187,32 @@ pub(crate) fn look(
 
 /// Keeps the delver's [`Load`] to what they wear and carry, working it out again only when the
 /// character or the inventory has changed, or for a delver just spawned.
-fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inventory>>, rules: Option<Res<crate::rules::GameRules>>, mut players: Query<&mut Load, With<Player>>) {
+fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inventory>>, rules: Option<Res<crate::rules::GameRules>>, mut players: Query<(&mut Load, &mut GearPace), With<Player>>) {
     let (Some(character), Some(inventory)) = (character, inventory) else { return };
     let changed = character.is_changed() || inventory.is_changed() || rules.as_ref().is_some_and(|r| r.is_changed());
-    let mut band = None;
-    for mut load in &mut players {
+    let mut derived = None;
+    for (mut load, mut pace) in &mut players {
         if changed || load.is_added() {
-            let band = *band.get_or_insert_with(|| character.derive_with(crate::rules::GameRules::of(&rules), &inventory).load_band);
-            load.set_if_neq(Load(band));
+            let derived = *derived.get_or_insert_with(|| character.derive_with(crate::rules::GameRules::of(&rules), &inventory));
+            load.set_if_neq(Load(derived.load_band));
+            pace.set_if_neq(GearPace(derived.speed));
         }
     }
 }
+
+/// What the delver's gear makes of their pace, as a multiple (boots "of Haste" 1.2), kept up
+/// with their [`Load`] by `weigh_the_delver`. It scales walking and sprinting alike.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct GearPace(pub f32);
+
+impl Default for GearPace {
+    fn default() -> Self {
+        GearPace(1.0)
+    }
+}
+
+/// What walking moves and reads on the delver.
+type Walker<'a> = (&'a mut Locomotion, &'a mut Gait, &'a mut Transform, Option<&'a Slowed>, &'a Exhaustion, &'a Load, &'a DelverStamina, Option<&'a GearPace>);
 
 pub(crate) fn walk(
     time: Res<Time>,
@@ -207,16 +222,17 @@ pub(crate) fn walk(
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Option<Res<Obstacles>>,
-    mut body: Single<(&mut Locomotion, &mut Gait, &mut Transform, Option<&Slowed>, &Exhaustion, &Load, &DelverStamina), With<Player>>,
+    mut body: Single<Walker<'_>, With<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP_SECONDS);
     if dt <= 0.0 {
         return;
     }
-    let (locomotion, gait, transform, slowed, exhaustion, load, stamina) = &mut *body;
+    let (locomotion, gait, transform, slowed, exhaustion, load, stamina, gear_pace) = &mut *body;
     let moving = &tuning.moving;
     let rules = crate::rules::GameRules::of(&rules);
-    let speed = if input.pressed(Action::Hurry) && stamina.0.can_exert() { moving.hurry_speed } else { moving.walk_speed } * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier_with(rules) * load.0.walk_multiplier_with(rules);
+    let pace = gear_pace.map_or(1.0, |p| p.0);
+    let speed = if input.pressed(Action::Hurry) && stamina.0.can_exert() { moving.hurry_speed } else { moving.walk_speed } * pace * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier_with(rules) * load.0.walk_multiplier_with(rules);
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
@@ -378,6 +394,21 @@ mod tests {
         let body = app.world_mut().spawn((Player, Locomotion { yaw: facing.yaw(), ..default() }, Transform::from_translation(start).with_rotation(Quat::from_rotation_y(facing.yaw())), delver)).id();
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
         (app, body, start)
+    }
+
+    #[test]
+    fn boots_of_haste_walk_a_fifth_farther() {
+        let (mut usual_app, usual_body, start) = walking(|_| {}, ());
+        let (mut quick_app, quick_body, _) = walking(|_| {}, GearPace(1.2));
+        // The gear's pace is kept from the inventory; with none it is put back to 1, so hold it.
+        for _ in 0..10 {
+            usual_app.update();
+            quick_app.world_mut().get_mut::<GearPace>(quick_body).unwrap().0 = 1.2;
+            quick_app.update();
+        }
+        let usual = usual_app.world().get::<Transform>(usual_body).unwrap().translation.distance(start);
+        let quick = quick_app.world().get::<Transform>(quick_body).unwrap().translation.distance(start);
+        assert!((quick / usual - 1.2).abs() < 0.03, "{quick} against {usual}");
     }
 
     #[test]

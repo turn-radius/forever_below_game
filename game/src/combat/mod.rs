@@ -109,6 +109,11 @@ pub fn first_level_hit_points_with(rules: &Rules, character: &Character) -> i32 
     first_level_hit_points_explained_with(rules, character).value() as i32
 }
 
+/// [`first_level_hit_points_with`] under the default rules.
+pub fn first_level_hit_points(character: &Character) -> i32 {
+    first_level_hit_points_with(fb_character::rules::defaults(), character)
+}
+
 /// [`first_level_hit_points_with`] with its terms: the hit die and the Constitution modifier.
 pub fn first_level_hit_points_explained_with(rules: &Rules, character: &Character) -> fb_character::explain::Explained {
     first_level_hit_points_explained_for_with(rules, character.class, character.constitution())

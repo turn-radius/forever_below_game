@@ -130,6 +130,7 @@ impl Plugin for InventoryPlugin {
                         build_screen,
                         drag_items,
                         unhang_without_belt,
+                        crate::character::wear_abilities,
                         (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
@@ -1395,7 +1396,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
-            .add_systems(Update, (switch_screens, build_screen, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
+            .add_systems(Update, (switch_screens, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -1683,6 +1684,57 @@ mod tests {
         assert_eq!(gear_row(&mut app, 4), derived.armour_class.to_string());
         assert_eq!(gear_row(&mut app, 2), "none");
         assert!(header_stats(&mut app).contains(&format!("AC {}", derived.armour_class)));
+    }
+
+    #[test]
+    fn plenty_wakefulness_and_the_leech_show_on_the_sheet_with_their_breakdowns() {
+        use sheet::{GEAR_ROWS, breakdown};
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyC);
+        assert_eq!(&GEAR_ROWS[5..8], ["Hunger rate", "Sleepiness rate", "Heal on a kill"]);
+        assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("usual".to_string(), "usual".to_string(), "none".to_string()));
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(weighed_with("Belt", 4, Some("of Plenty"), 1.0));
+            equip(&mut inventory, belt, Slot::Belt).unwrap();
+            let ring = inventory.add(weighed_with("Ring", 4, Some("of Wakefulness"), 0.0));
+            equip(&mut inventory, ring, Slot::Ring1).unwrap();
+            let sword = inventory.add(weighed_with("Sword", 3, Some("of the Leech"), 3.0));
+            equip(&mut inventory, sword, Slot::Mainhand).unwrap();
+        }
+        app.update();
+        assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("\u{d7}0.85".to_string(), "\u{d7}0.85".to_string(), "+1 HP".to_string()));
+        let character = app.world().resource::<Character>().clone();
+        let inventory = app.world().resource::<Inventory>();
+        let hunger = breakdown(fb_character::rules::defaults(), &character, inventory, 5).join(" ");
+        assert!(hunger.starts_with("Hunger rate") && hunger.contains("(0.85)"), "{hunger}");
+        let sleepiness = breakdown(fb_character::rules::defaults(), &character, inventory, 6).join(" ");
+        assert!(sleepiness.starts_with("Sleepiness rate") && sleepiness.contains("(0.85)"), "{sleepiness}");
+        let leech = breakdown(fb_character::rules::defaults(), &character, inventory, 7).join(" ");
+        assert!(leech.starts_with("Heal on a kill 1") && leech.contains("(+1)"), "{leech}");
+    }
+
+    #[test]
+    fn a_ring_of_the_giant_boots_of_haste_and_a_shield_of_the_rampart_show_on_the_sheet() {
+        let mut app = screen_app();
+        let attributes = fb_character::Attributes { strength: 13, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        *app.world_mut().resource_mut::<Character>() = Character { attributes, ..Character::roll(4) };
+        press(&mut app, KeyCode::KeyC);
+        assert_eq!((gear_row(&mut app, 8), gear_row(&mut app, 9), gear_row(&mut app, 10)), ("usual".to_string(), "none".to_string(), "none".to_string()));
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let ring = inventory.add(weighed_with("Ring", 4, Some("of the Giant"), 0.0));
+            equip(&mut inventory, ring, Slot::Ring1).unwrap();
+            let boots = inventory.add(weighed_with("Boots", 4, Some("of Haste"), 1.0));
+            equip(&mut inventory, boots, Slot::Feet).unwrap();
+            let shield = inventory.add(weighed_with("Shield", 4, Some("of the Rampart"), 4.0));
+            equip(&mut inventory, shield, Slot::Offhand).unwrap();
+        }
+        app.update();
+        app.update();
+        assert_eq!((gear_row(&mut app, 8), gear_row(&mut app, 9), gear_row(&mut app, 10)), ("\u{d7}1.2".to_string(), "20%".to_string(), "+2 STR".to_string()));
+        assert_eq!(app.world().resource::<Character>().strength(), 15);
+        assert!(sheet_text(&mut app).iter().any(|t| t == "STR 15 (+2)"), "the attribute line shows the score as it stands");
     }
 
     #[test]

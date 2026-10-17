@@ -147,6 +147,7 @@ impl<'r> Setup<'r> {
                     class: Class::Fighter,
                     attributes: Attributes { strength: FOLK_SCORE, dexterity: FOLK_SCORE, constitution: FOLK_SCORE, intelligence: FOLK_SCORE, wisdom: FOLK_SCORE },
                     dirt: 0.0,
+                    worn: Default::default(),
                 };
                 let mut hands = Inventory::default();
                 if let Some(item) = roll_item(base, state.strike_seed) {

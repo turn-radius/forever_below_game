@@ -249,6 +249,48 @@ impl Loadout {
         e
     }
 
+    /// Hit points regained on a kill: the sum of what each item gives. Equals
+    /// [`Gear::heal_on_kill`].
+    pub fn heal_on_kill(&self) -> Explained {
+        let mut e = Explained::new("Heal on a kill", "HP").base("nothing", 0.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.heal_on_kill != 0.0) {
+            e = e.add(label, item.heal_on_kill);
+        }
+        e
+    }
+
+    /// Pace as a multiple of the usual: each item's speed multiplied. Equals [`Gear::speed`].
+    pub fn speed(&self) -> Explained {
+        let mut e = Explained::new("Speed", "").base("usual pace", 1.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.speed != 1.0) {
+            e = e.times(label, item.speed);
+        }
+        e
+    }
+
+    /// The chance a held shield turns aside a blow that would hit, the items' added, at most 1.
+    /// Equals [`Gear::block_chance`].
+    pub fn block_chance(&self) -> Explained {
+        let mut e = Explained::new("Block chance", "").base("no shield", 0.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.block_chance != 0.0) {
+            e = e.add(label, item.block_chance);
+        }
+        if e.value() > 1.0 { e.clamp("at most 1", 0.0, 1.0) } else { e }
+    }
+
+    /// What worn items add to the ability score named `ability` ("STR", "DEX", "CON", "INT" or
+    /// "WIS"), item by item. Equals that score's part of [`Gear::abilities`].
+    pub fn ability(&self, ability: &str) -> Explained {
+        let mut e = Explained::new(format!("{ability} from gear"), "").base("nothing worn", 0.0);
+        for (label, item) in &self.worn {
+            let by = item.abilities.named().into_iter().find(|(name, _)| *name == ability).map_or(0, |(_, by)| by);
+            if by != 0 {
+                e = e.add(label, by as f64);
+            }
+        }
+        e
+    }
+
     /// Warmth: the sum of what each worn item gives.
     pub fn warmth(&self) -> Explained {
         let mut e = Explained::new("Warmth", "");
@@ -394,7 +436,7 @@ mod tests {
 
     #[test]
     fn explained_values_equal_the_plain_functions() {
-        let worn = [("A", Worn { carry: 10.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.9, stealth: 0.0, warmth: 2.0 }), ("B", Worn { carry: 5.0, darkvision: 70.0, hunger_rate: 0.85, sleepiness_rate: 1.0, stealth: 0.0, warmth: 1.5 })];
+        let worn = [("A", Worn { carry: 10.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.9, stealth: 0.0, warmth: 2.0, heal_on_kill: 1.0, speed: 1.1, block_chance: 0.1, abilities: crate::AbilityBonus { strength: 2, ..Default::default() } }), ("B", Worn { carry: 5.0, darkvision: 70.0, hunger_rate: 0.85, sleepiness_rate: 1.0, stealth: 0.0, warmth: 1.5, ..Worn::default() })];
         let lights = [("Torch", CarriedLight { reach: 30.0, burn_time: 1.0 }), ("Lantern", CarriedLight { reach: 50.0, burn_time: 2.0 })];
         for with in [0, 1, 2] {
             let mut loadout = Loadout::new("Dwarf", 60.0);
@@ -410,6 +452,10 @@ mod tests {
             }
             assert_eq!(loadout.darkvision().value(), gear.darkvision);
             assert_eq!(loadout.light().value(), gear.light);
+            assert_eq!(loadout.heal_on_kill().value(), gear.heal_on_kill);
+            assert!((loadout.speed().value() - gear.speed).abs() < 1e-12);
+            assert_eq!(loadout.block_chance().value(), gear.block_chance);
+            assert_eq!(loadout.ability("STR").value(), gear.abilities.strength as f64);
             let mut needs = Needs::default();
             gear.apply_to(&mut needs);
             for activity in [Activity::Resting, Activity::Walking, Activity::Exerting, Activity::Sleeping] {

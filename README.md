@@ -255,6 +255,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[interface]` | `min_cell_size` | 48.0 | The fewest logical pixels a cell is drawn at, however short the window. |
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
 | `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
+| `[recovery]` | `minutes_per_hit_point` | 10.0 | Game minutes a fed and watered, unpoisoned delver takes to regain one hit point (10 = one every 50 real seconds at the usual clock). Our own. |
 
 The shipped values are the defaults in `game/src/tuning.rs`; a test keeps the two, and this list, in step.
 

@@ -470,15 +470,15 @@ mod tests {
     }
 
     #[test]
-    fn a_lice_ridden_cloak_shows_its_affix_on_its_card() {
-        let seed = (1..4000).find(|&s| roll_item("Cloak", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "Lice-ridden"))).expect("some cloak is lice-ridden");
+    fn a_moth_eaten_cloak_shows_its_flaw_on_its_card() {
+        let seed = (1..4000).find(|&s| roll_item("Cloak", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "Moth-eaten"))).expect("some cloak is moth-eaten");
         let item = roll_item("Cloak", seed).unwrap();
         let preview = preview_card(Slot::Cloak, &item);
-        assert!(preview.affixes.iter().any(|a| a.name == "Lice-ridden" && !a.good && a.on), "{:?}", preview.affixes);
+        assert!(preview.affixes.iter().any(|a| a.name == "Moth-eaten" && !a.good && a.on), "{:?}", preview.affixes);
         let mut state = LabState::default();
         state.equip(Slot::Cloak, "Cloak", seed);
         let view = view(&state, &TimeLab::default(), defaults());
         let worn = view.cards.iter().find(|c| c.slot == Slot::Cloak).unwrap();
-        assert!(worn.affixes.iter().any(|a| a.name == "Lice-ridden"), "{:?}", worn.affixes);
+        assert!(worn.affixes.iter().any(|a| a.name == "Moth-eaten"), "{:?}", worn.affixes);
     }
 }
