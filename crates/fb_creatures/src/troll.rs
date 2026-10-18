@@ -134,7 +134,7 @@ pub struct TrollState {
     pub seed: u32,
     /// Height as a share of a typical human's before it stoops, 1.42..1.58.
     pub stature: f32,
-    /// 0 gaunt to 1 bloated: the belly and the limbs' girth.
+    /// 0.55 heavy to 1 very heavy: the belly and the limbs' girth.
     pub build: f32,
     /// How far it stoops, 0..=1.
     pub stoop: f32,
@@ -169,7 +169,7 @@ impl TrollState {
     pub fn roll(seed: u32) -> TrollState {
         let mut rng = Mulberry32::new(seed ^ TROLL_SALT);
         let stature = rng.range_f32(1.42, 1.58);
-        let build = rng.next_f64() as f32;
+        let build = 0.55 + 0.45 * rng.next_f64() as f32;
         let stoop = rng.next_f64() as f32;
         let reach = rng.range_f32(1.25, 1.45);
         let tone = rng.next_f64() as f32;
@@ -233,7 +233,7 @@ impl TrollState {
     pub fn spec(&self) -> BodySpec {
         let mut spec = BodySpec::roll(Folk::Human, self.seed ^ TROLL_SALT);
         spec.stature = self.stature;
-        spec.frame = 0.4 + 0.55 * self.build;
+        spec.frame = 0.6 + 0.45 * self.build;
         spec.figure = 0.0;
         spec
     }
@@ -387,7 +387,7 @@ impl Layout {
         let hip_y = body.hip_y;
         let sw = body.shoulder_half_width;
         let (hip, waist, chest) = (body.hip, body.waist, body.chest);
-        let belly = 0.55 * state.build;
+        let belly = 0.95 * state.build;
         // The stations along the torso's line, from the crotch.
         let a_h = 0.16 * t;
         let a_s = a_h + 0.30 * t;
@@ -398,32 +398,35 @@ impl Layout {
         let half_width = vec![
             (0.0, 0.5 * hip.half_width),
             (a_h, 1.05 * hip.half_width),
-            (a_s, waist.half_width * (1.12 + 0.3 * state.build)),
-            (a_r, chest.half_width * 1.22),
-            (a_n - 0.2 * t, sw * 0.98),
-            (a_n, 0.62 * sw),
+            (a_s, waist.half_width * (1.3 + 0.35 * state.build)),
+            (a_r, chest.half_width * (1.3 + 0.1 * state.build)),
+            (a_n - 0.2 * t, sw * 1.12),
+            (a_n - 0.08 * t, sw * 0.95),
+            (a_n, 0.7 * sw),
         ];
         let front = vec![
             (0.0, 0.5 * hip.half_depth),
             (a_h, 1.1 * hip.half_depth),
             (a_s, waist.half_depth * (1.15 + belly)),
-            (a_r, chest.half_depth * (1.0 + 0.4 * belly)),
-            (a_n - 0.2 * t, chest.half_depth * 0.78),
-            (a_n, chest.half_depth * 0.5),
+            (a_r, chest.half_depth * (1.1 + 0.45 * belly)),
+            (a_n - 0.2 * t, chest.half_depth * 0.9),
+            (a_n - 0.08 * t, chest.half_depth * 0.75),
+            (a_n, chest.half_depth * 0.6),
         ];
         let back = vec![
             (0.0, 0.7 * hip.half_depth),
             (a_h, 1.35 * hip.half_depth),
             (a_s, waist.half_depth * 1.0),
             (a_r, chest.half_depth * 1.18),
-            (a_n - 0.22 * t, chest.half_depth * (1.5 + 0.3 * state.stoop)),
-            (a_n, chest.half_depth * 0.95),
+            (a_n - 0.22 * t, chest.half_depth * (1.7 + 0.3 * state.stoop)),
+            (a_n - 0.08 * t, chest.half_depth * (1.45 + 0.2 * state.stoop)),
+            (a_n, chest.half_depth * 1.05),
         ];
         let torso = Loft::new([0.0, hip_y - a_h, 0.0], a_n, tilt, half_width, front, back, 2.4);
 
         // The neck rises from the hump, thicker than a human's, and thrusts the head forward.
         let head_form = body.head;
-        let neck_radius = 1.45 * body.neck_radius;
+        let neck_radius = 1.8 * body.neck_radius;
         let c7 = torso.centre(a_n);
         let neck_len = 1.1 * head_form.half_height;
         let neck_lean = lean_top - 0.12;
@@ -435,12 +438,12 @@ impl Layout {
         // The skeleton's joints, moved to the troll's.
         let mut dims = SkeletonDims::of(body.clone());
         let a_sh = a_n - 0.16 * t;
-        let limb = 0.5 * (body.arm(Side::Right).radius + body.arm(Side::Left).radius) * (1.1 + 0.35 * state.build);
+        let limb = 0.5 * (body.arm(Side::Right).radius + body.arm(Side::Left).radius) * (1.3 + 0.4 * state.build);
         let mut arms = dims.arms;
         for (k, side) in Side::BOTH.into_iter().enumerate() {
             let [s0, e0, w0] = body.arm(side).joints;
             let c = torso.centre(a_sh);
-            let shoulder = vec3::add(c, [side.sign() * (sw * 1.04 + 0.2 * limb), -0.1 * t, 0.12 * t]);
+            let shoulder = vec3::add(c, [side.sign() * (sw * 0.98 + 0.1 * limb), -0.1 * t, 0.12 * t]);
             let elbow = vec3::add(shoulder, vec3::scale(vec3::sub(e0, s0), state.reach));
             let wrist = vec3::add(elbow, vec3::scale(vec3::sub(w0, e0), state.reach));
             arms[k] = [shoulder, elbow, wrist];
@@ -538,7 +541,23 @@ fn build(state: &TrollState) -> Rig {
     let dip = 0.07 * girth;
     meshes[index::PELVIS] = vec![kit.skin(about(l.torso.mesh(0.0, a_s, 22, 40, 0.0, 0.0), d.origins[index::PELVIS]), "skin")];
     meshes[index::SPINE] = vec![kit.skin(about(l.torso.mesh(a_s - overlap, a_r, 22, 40, overlap, dip), d.origins[index::SPINE]), "skin")];
-    meshes[index::RIBCAGE] = vec![kit.skin(about(l.torso.mesh(a_r - overlap, a_n, 26, 40, overlap, dip), d.origins[index::RIBCAGE]), "skin")];
+    let mut ribs = l.torso.mesh(a_r - overlap, a_n, 26, 40, overlap, dip);
+    // Muscle and fat over the shoulders: a trapezius each side sloping from the neck out over the
+    // arm's root, and a hump high on the back, so the stoop reads massive and the arms join it.
+    {
+        let t = l.body.trunk_length;
+        let a_t = a_n - 0.14 * t;
+        let c = l.torso.centre(a_t);
+        let (fwd, up) = (l.torso.forward(a_t), l.torso.along(a_t));
+        let sw = l.body.shoulder_half_width;
+        for sg in [-1.0, 1.0] {
+            let at = vec3::add(vec3::add(c, [sg * 0.62 * sw, 0.0, 0.0]), vec3::add(vec3::scale(up, 0.02 * t), vec3::scale(fwd, -0.05 * t)));
+            ribs.append(&ball(at, 0.5 * sw, [1.15, 0.7, 1.0]));
+        }
+        let hump = vec3::add(c, vec3::add(vec3::scale(up, 0.03 * t), vec3::scale(fwd, -0.12 * t)));
+        ribs.append(&ball(hump, 0.62 * sw, [1.1, 0.85, 0.95]));
+    }
+    meshes[index::RIBCAGE] = vec![kit.skin(about(ribs, d.origins[index::RIBCAGE]), "skin")];
     // The legs' tops are part of the pelvis: the thighs' roots swell out of the hips.
     let _ = a_h;
 
@@ -546,7 +565,8 @@ fn build(state: &TrollState) -> Rig {
     let total_marks = state.warts as usize;
     for k in 0..total_marks + (state.mottle * 14.0) as usize {
         let wart = k < total_marks;
-        let a = rng.range_f32(0.1 * a_n, a_n - 0.02 * a_n);
+        // Below the hump and the trapezius, which cover the top of the back.
+        let a = rng.range_f32(0.1 * a_n, a_n - 0.2 * (a_n - a_r) - 0.12 * l.body.trunk_length);
         // Mostly the back and the shoulders, some the belly.
         let phi = if rng.chance(0.55) { rng.range_f32(-PI + 0.3, -0.3) } else { rng.range_f32(0.2, PI - 0.2) };
         let n = l.torso.normal(a, phi);
@@ -581,6 +601,9 @@ fn build(state: &TrollState) -> Rig {
         let root = vec3::sub(shoulder, vec3::add(vec3::scale(up, 0.3 * r0), [sg * 0.5 * r0, 0.0, 0.0]));
         let mut mesh = limb_tube(&[root, shoulder, vec3::lerp(shoulder, elbow, 0.5), elbow], 20, |t| r0 * (1.15 - 0.4 * t + 0.14 * (PI * t).sin()));
         mesh.append(&ball(shoulder, 1.22 * r0, [1.0, 1.0, 1.0]));
+        // A deltoid reaching in over the trunk and up under the trapezius, so the shoulder stays
+        // covered however the arm swings.
+        mesh.append(&ball(vec3::add(shoulder, [-sg * 0.45 * r0, 0.3 * r0, -0.05 * r0]), 1.5 * r0, [1.0, 1.0, 1.0]));
         mesh.append(&ball(elbow, 0.8 * r0, [1.0, 1.0, 1.0]));
         for _ in 0..(state.warts / 8) {
             let t = rng.range_f32(0.2, 0.9);
@@ -619,7 +642,7 @@ fn build(state: &TrollState) -> Rig {
         let sg = side.sign();
         let [hip, knee, ankle] = d.legs[k];
         let tb = leg_bone(side);
-        let leg_r = l.body.leg(side).radius * (1.18 + 0.3 * state.build);
+        let leg_r = l.body.leg(side).radius * (1.3 + 0.35 * state.build);
         // Thigh: from inside the hip, a heavy swell to the knee.
         let root = vec3::add(hip, [-sg * 0.3 * leg_r, 0.5 * leg_r, 0.0]);
         let mut mesh = limb_tube(&[root, hip, vec3::lerp(hip, knee, 0.5), knee], 22, |t| leg_r * (1.12 - 0.34 * t));
