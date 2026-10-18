@@ -2,8 +2,11 @@
 # whole test suite. There is no `cargo fmt --check`; the repo is not fmt-clean.
 name: Check
 
+# Draft pull requests are skipped: agents push a commit per task to them, and a cold run takes
+# about 40 minutes of the plan's Actions minutes. Marking one ready for review runs it.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
@@ -19,8 +22,10 @@ env:
 
 jobs:
   check:
+    if: github.event_name == 'push' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # A run with a cold cache builds for about 20 minutes and tests for about 15.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +38,10 @@ jobs:
       - name: Toolchain
         run: rustup show
 
+      # Saved even when a step fails, so a failing test doesn't send the next run back to a cold build.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
