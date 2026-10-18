@@ -7,11 +7,12 @@ use crate::{Rarity, Slot, Tag};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
-/// The plate's rarity thresholds, which are the odds on the first level: below 0.58 common,
-/// below 0.85 magic, below 0.97 rare, otherwise legendary.
-const SHALLOW: [f64; 3] = [0.58, 0.85, 0.97];
+/// The rarity thresholds on the first level: below 0.83 common, below 0.95 magic, otherwise
+/// rare, never legendary. Our own, lower than the plate's (0.58, 0.85, 0.97), so the first
+/// level gives out less.
+const SHALLOW: [f64; 3] = [0.83, 0.95, 1.0];
 /// The thresholds the odds tend to far below: 7% common, 33% magic, 48% rare, 12% legendary.
-/// Our own proposal, chosen so that depth 5 doubles the first level's rare and legendary odds.
+/// Our own proposal.
 const DEEP: [f64; 3] = [0.07, 0.40, 0.88];
 /// How far toward [`DEEP`] the odds are four levels down. Our own proposal.
 const FOUR_LEVELS_DOWN: f64 = 1.0 / 3.0;
@@ -28,16 +29,31 @@ pub struct Odds {
 }
 
 impl Default for Odds {
-    /// The first level, uncapped: the plate's odds.
+    /// The first level's loot.
     fn default() -> Odds {
         Odds::loot(1)
     }
 }
 
 impl Odds {
-    /// Loot found at `depth`, on the floor or in a container: uncapped.
+    /// Loot found at `depth`, on the floor or in a container: at most rare on the first level,
+    /// uncapped below it. The cap holds however much deeper the find rolls ([`Odds::deeper`]),
+    /// so nothing found on the first level is legendary.
     pub fn loot(depth: u32) -> Odds {
-        Odds { depth, cap: Rarity::Legendary }
+        let cap = if depth <= 1 { Rarity::Rare } else { Rarity::Legendary };
+        Odds { depth, cap }
+    }
+
+    /// These odds rolled `levels` deeper, keeping their cap: a find that should roll better
+    /// than its level, such as a jackalope's drop.
+    pub fn deeper(self, levels: u32) -> Odds {
+        Odds { depth: self.depth + levels, ..self }
+    }
+
+    /// These odds for a finder with `luck` (the worn affixes' [`crate::stats::Stat::Luck`]):
+    /// each whole point rolls one level deeper, keeping the cap.
+    pub fn with_luck(self, luck: f32) -> Odds {
+        self.deeper(luck.max(0.0).floor() as u32)
     }
 
     /// The gear folk and the risen dead carry at `depth`: as loot, but common or magic only on
@@ -57,7 +73,7 @@ impl Odds {
         Odds { cap: self.cap.min(cap), ..self }
     }
 
-    /// The upper bounds of common, magic and rare for a uniform roll. Depth 1 is the plate's
+    /// The upper bounds of common, magic and rare for a uniform roll. Depth 1 is
     /// [`SHALLOW`]; each level deeper moves them along a curve that never quite reaches
     /// [`DEEP`], a third of the way there four levels down (`1 - (2/3)^((depth - 1) / 4)`).
     /// The curve is our own proposal; no source.
@@ -75,8 +91,8 @@ impl Odds {
 }
 
 impl Rarity {
-    /// The rarity for a uniform roll `x` in `[0, 1)` at the first level: below 0.58 common,
-    /// below 0.85 magic, below 0.97 rare, otherwise legendary.
+    /// The rarity for a uniform roll `x` in `[0, 1)` at the first level: below 0.83 common,
+    /// below 0.95 magic, otherwise rare.
     pub fn from_roll(x: f64) -> Rarity {
         Rarity::from_roll_at(x, &Odds::default())
     }
@@ -153,23 +169,34 @@ pub fn roll_affixes(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag]) -> Vec<&
     roll_affixes_for(rng, rarity, tags, None)
 }
 
-/// The affixes a `rarity` rolls on an item with `tags` worn in `slot`. Common: a flaw prefix 30%
-/// of the time. Magic: one good prefix or suffix, even odds. Rare: a good prefix and a good
-/// suffix. Legendary: a good prefix and two good suffixes. Slots with nothing that fits stay
-/// empty.
+/// The chance an item of each rarity, common first, rolls a flaw prefix besides its good affixes:
+/// the plate's 30% for common, and our own, falling with rarity, for the rest.
+const FLAW_CHANCE: [f64; 4] = [0.3, 0.2, 0.1, 0.05];
+
+/// The affixes a `rarity` rolls on an item with `tags` worn in `slot`. Common: no good affix.
+/// Magic: one good prefix or suffix, even odds. Rare: a good prefix and a good suffix.
+/// Legendary: a good prefix and two good suffixes. Then a flaw prefix, at [`FLAW_CHANCE`] for the
+/// rarity, after the good ones so it never takes their place or their name, and never of a
+/// group they have. Slots with nothing that fits stay empty.
 pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot: Option<Slot>) -> Vec<&'static Affix> {
     use AffixKind::{Prefix, Suffix};
-    let wanted: Vec<(AffixKind, bool)> = match rarity {
-        Rarity::Common => if rng.chance(0.3) { vec![(Prefix, false)] } else { vec![] },
-        Rarity::Magic => vec![(if rng.chance(0.5) { Prefix } else { Suffix }, true)],
-        Rarity::Rare => vec![(Prefix, true), (Suffix, true)],
-        Rarity::Legendary => vec![(Prefix, true), (Suffix, true), (Suffix, true)],
+    let good: Vec<AffixKind> = match rarity {
+        Rarity::Common => vec![],
+        Rarity::Magic => vec![if rng.chance(0.5) { Prefix } else { Suffix }],
+        Rarity::Rare => vec![Prefix, Suffix],
+        Rarity::Legendary => vec![Prefix, Suffix, Suffix],
     };
+    let rolling = Rolling { tags, slot, rarity };
     let mut chosen = Vec::new();
-    for (kind, good) in wanted {
-        if let Some(a) = pick_affix(rng, Rolling { tags, slot, rarity }, kind, good, &chosen) {
+    for kind in good {
+        if let Some(a) = pick_affix(rng, rolling, kind, true, &chosen) {
             chosen.push(a);
         }
+    }
+    if rng.chance(FLAW_CHANCE[rarity as usize])
+        && let Some(a) = pick_affix(rng, rolling, Prefix, false, &chosen)
+    {
+        chosen.push(a);
     }
     chosen
 }
@@ -202,7 +229,7 @@ mod tests {
             let (r, _) = roll_rarity(&mut game_rng(seed), SWORD, &Odds::default());
             counts[r as usize] += 1;
         }
-        for (i, odds) in [0.58, 0.27, 0.12, 0.03].into_iter().enumerate() {
+        for (i, odds) in [0.83, 0.12, 0.05, 0.0].into_iter().enumerate() {
             let share = counts[i] as f64 / 10_000.0;
             assert!((share - odds).abs() < 0.01, "rarity {i}: {share} against {odds}");
         }
@@ -211,46 +238,47 @@ mod tests {
     #[test]
     fn containers_cap_at_rare() {
         for seed in 0..5_000 {
-            assert_ne!(roll_rarity(&mut game_rng(seed), PACK, &Odds::default()).0, Rarity::Legendary);
+            assert_ne!(roll_rarity(&mut game_rng(seed), PACK, &Odds::loot(8)).0, Rarity::Legendary);
         }
     }
 
     #[test]
     fn affixes_fit_their_rarity_and_tags() {
         for tags in [SWORD, TUNIC, PACK, &[Tag::Light, Tag::Wood][..], &[Tag::Trinket][..]] {
-            let mut flaws = 0;
-            let mut commons = 0;
+            // Items and flaws rolled, by rarity.
+            let (mut items, mut flaws) = ([0u32; 4], [0u32; 4]);
             for seed in 0..3_000 {
-                let (rarity, chosen) = roll_rarity(&mut game_rng(seed), tags, &Odds::default());
+                let (rarity, chosen) = roll_rarity(&mut game_rng(seed), tags, &Odds::loot(8));
                 for a in &chosen {
                     assert!(a.fits(tags), "{} on {tags:?}", a.name);
                 }
-                let good = chosen.iter().filter(|a| a.good).count();
-                let prefixes = chosen.iter().filter(|a| a.kind == AffixKind::Prefix).count();
-                match rarity {
-                    Rarity::Common => {
-                        commons += 1;
-                        flaws += chosen.len();
-                        assert!(good == 0 && chosen.len() <= 1);
-                    }
-                    Rarity::Magic => assert!(good == chosen.len() && chosen.len() <= 1),
-                    Rarity::Rare => assert!(good == chosen.len() && prefixes <= 1 && chosen.len() <= 2),
-                    Rarity::Legendary => assert!(good == chosen.len() && prefixes <= 1 && chosen.len() <= 3),
-                }
+                let good: Vec<_> = chosen.iter().filter(|a| a.good).collect();
+                let flawed = chosen.len() - good.len();
+                assert!(good.len() <= rarity as usize && flawed <= 1, "{rarity:?}: {chosen:?}");
+                assert!(good.iter().filter(|a| a.kind == AffixKind::Prefix).count() <= 1);
+                assert!(chosen.iter().take(good.len()).all(|a| a.good), "the flaw comes last, so the name keeps the good prefix");
+                assert!(chosen.iter().filter(|a| !a.good).all(|a| a.kind == AffixKind::Prefix), "flaws are prefixes");
+                items[rarity as usize] += 1;
+                flaws[rarity as usize] += flawed as u32;
                 let mut names: Vec<_> = chosen.iter().map(|a| &a.name).collect();
                 names.dedup();
                 assert_eq!(names.len(), chosen.len(), "an affix rolled twice");
             }
-            if affixes().iter().any(|a| !a.good && a.fits_item(tags, None) && a.in_play()) {
-                let share = flaws as f64 / commons as f64;
-                assert!((share - 0.3).abs() < 0.04, "{tags:?}: {share}");
+            // Where every flaw that fits is ungrouped, nothing keeps a flaw from its slot, so each
+            // rarity rolls flaws at its chance.
+            let fitting: Vec<_> = affixes().iter().filter(|a| !a.good && a.fits_item(tags, None) && a.in_play()).collect();
+            if !fitting.is_empty() && fitting.iter().all(|a| a.group.is_none()) {
+                for (i, chance) in FLAW_CHANCE.into_iter().enumerate() {
+                    let share = flaws[i] as f64 / items[i].max(1) as f64;
+                    assert!((share - chance).abs() < 0.05, "{tags:?} rarity {i}: {share} against {chance}");
+                }
             }
         }
     }
 
     #[test]
     fn a_sword_rolls_full_rare_and_legendary_sets() {
-        let full = (0..3_000).map(|seed| roll_rarity(&mut game_rng(seed), SWORD, &Odds::default())).find(|(r, _)| *r == Rarity::Legendary).unwrap();
+        let full = (0..3_000).map(|seed| roll_rarity(&mut game_rng(seed), SWORD, &Odds::loot(8))).find(|(r, _)| *r == Rarity::Legendary).unwrap();
         assert_eq!(full.1.len(), 3);
     }
 
@@ -264,26 +292,45 @@ mod tests {
     }
 
     #[test]
-    fn depth_1_rolls_the_plate_odds() {
+    fn depth_1_rolls_no_legendary() {
         assert_eq!(Odds::loot(1).thresholds(), SHALLOW);
         for x in (0..1_000).map(|i| i as f64 / 1_000.0) {
-            let plate = match x {
-                x if x < 0.58 => Rarity::Common,
-                x if x < 0.85 => Rarity::Magic,
-                x if x < 0.97 => Rarity::Rare,
-                _ => Rarity::Legendary,
+            let wanted = match x {
+                x if x < 0.83 => Rarity::Common,
+                x if x < 0.95 => Rarity::Magic,
+                _ => Rarity::Rare,
             };
-            assert_eq!(Rarity::from_roll_at(x, &Odds::loot(1)), plate, "{x}");
+            assert_eq!(Rarity::from_roll_at(x, &Odds::loot(1)), wanted, "{x}");
         }
     }
 
     #[test]
-    fn depth_5_doubles_rare_and_legendary() {
+    fn no_luck_finds_a_legendary_on_the_first_level() {
+        for luck in [0.0, 1.0, 3.0, 9.0, 40.0] {
+            let odds = Odds::loot(1).with_luck(luck);
+            assert_eq!(measured(odds)[3], 0.0, "luck {luck}");
+        }
+        assert!(measured(Odds::loot(2))[3] > 0.0, "the second level can");
+    }
+
+    #[test]
+    fn luck_rolls_a_level_deeper_a_point() {
+        assert_eq!(Odds::loot(3).with_luck(2.0), Odds { depth: 5, cap: Rarity::Legendary });
+        assert_eq!(Odds::loot(3).with_luck(1.9), Odds::loot(4), "only whole points count");
+        assert_eq!(Odds::loot(3).with_luck(-2.0), Odds::loot(3), "no luck is never bad luck");
+        assert_eq!(Odds::kit(2).with_luck(3.0).cap, Rarity::Rare, "the cap holds");
+        let [c0, _, r0, _] = measured(Odds::loot(1));
+        let [c3, _, r3, _] = measured(Odds::loot(1).with_luck(3.0));
+        assert!(c3 < c0 && r3 > 2.0 * r0, "common {c0} to {c3}, rare {r0} to {r3}");
+    }
+
+    #[test]
+    fn depth_5_rolls_rare_or_better_four_times_as_often() {
         let [_, _, r1, l1] = measured(Odds::loot(1));
         let [_, _, r5, l5] = measured(Odds::loot(5));
         let ratio = (r5 + l5) / (r1 + l1);
-        assert!((1.8..2.2).contains(&ratio), "rare and legendary: {} at depth 1, {} at depth 5", r1 + l1, r5 + l5);
-        assert!(l5 > 1.6 * l1, "legendary: {l1} at depth 1, {l5} at depth 5");
+        assert!((3.5..5.0).contains(&ratio), "rare and legendary: {} at depth 1, {} at depth 5", r1 + l1, r5 + l5);
+        assert!(l5 > 0.03, "legendary at depth 5: {l5}");
     }
 
     #[test]
@@ -293,7 +340,8 @@ mod tests {
             let ([c0, m0, r0, l0], [c1, m1, r1, l1]) = (pair[0], pair[1]);
             assert!(c1 < c0 && m1 > m0 && r1 > r0 && l1 > l0, "{pair:?}");
         }
-        assert!(shares.iter().flatten().all(|&s| s > 0.0));
+        assert_eq!(shares[0][3], 0.0, "no legendary on the first level");
+        assert!(shares[1..].iter().flatten().all(|&s| s > 0.0));
     }
 
     #[test]

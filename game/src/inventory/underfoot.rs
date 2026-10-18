@@ -200,9 +200,9 @@ pub fn set_down_debug_kit(mut inventory: ResMut<Inventory>, mut changes: ResMut<
 }
 
 /// The items `FB_DROP` asks for, as `base[:rarity]` separated by commas (`Sword:legendary`,
-/// `Helm:rare,Ring`): for each, the first seed from 1 whose roll of that base has that rarity
-/// (any rarity if none is named). Names that roll nothing, or a rarity no seed gives, are
-/// skipped.
+/// `Helm:rare,Ring`): for each, the first seed from 1 whose roll of that base, eight levels
+/// down (where every rarity rolls), has that rarity (any rarity if none is named). Names that
+/// roll nothing, or a rarity no seed gives, are skipped.
 pub fn drops_for_capture(spec: &str) -> Vec<fb_items::Item> {
     use fb_items::Rarity;
     spec.split(',')
@@ -219,7 +219,7 @@ pub fn drops_for_capture(spec: &str) -> Vec<fb_items::Item> {
                     return None;
                 }
             };
-            (1..20_000).filter_map(|seed| fb_items::roll_item(base.trim(), seed)).find(|item| wanted.is_none_or(|r| item.rarity == r))
+            (1..20_000).filter_map(|seed| fb_items::roll_item_with(base.trim(), seed, fb_items::Odds::loot(8))).find(|item| wanted.is_none_or(|r| item.rarity == r))
         })
         .collect()
 }

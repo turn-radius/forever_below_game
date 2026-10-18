@@ -1024,5 +1024,70 @@
    "charm",
    "belt"
   ]
+ },
+ {
+  "n": "of Chance",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "luck",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 luck",
+  "grp": "luck",
+  "at": [
+   "ring1",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of Fortune",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "luck",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 luck",
+  "grp": "luck",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of Luck",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "luck",
+     "by": 3
+    }
+   }
+  ],
+  "t": "+3 luck",
+  "grp": "luck",
+  "r": "legendary",
+  "at": [
+   "ring1",
+   "neck",
+   "charm"
+  ]
  }
 ]

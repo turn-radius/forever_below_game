@@ -215,8 +215,19 @@ pub struct Derived {
     pub speed: f32,
     /// Chance the shield in their off hand, raised, turns aside a blow that would hit.
     pub block_chance: f32,
+    /// Points of luck from what they wear: each rolls the loot of a level they come to a level
+    /// deeper.
+    pub luck: f32,
     /// What worn items add to their ability scores.
     pub abilities: AbilityBonus,
+}
+
+/// The odds the loot of a level `depth` down rolls against for the delver: the level's, with the
+/// luck `character` wears in `inventory` ([`fb_items::Odds::with_luck`]); the level's alone
+/// with no character.
+pub fn loot_odds(character: Option<&Character>, inventory: Option<&Inventory>, depth: u32) -> fb_items::Odds {
+    let luck = character.zip(inventory).map_or(0.0, |(c, i)| c.gear(i).luck);
+    fb_items::Odds::loot(depth).with_luck(luck as f32)
 }
 
 impl Character {
@@ -242,7 +253,7 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64 },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64 },
             );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
@@ -307,6 +318,7 @@ impl Character {
             heal_on_kill: gear.heal_on_kill as f32,
             speed: gear.speed as f32,
             block_chance: gear.block_chance as f32,
+            luck: gear.luck as f32,
             abilities: gear.abilities,
         }
     }
@@ -612,6 +624,22 @@ mod tests {
         inventory.wear(frail, Slot::Neck).unwrap();
         delver.worn = delver.gear(&inventory).abilities;
         assert_eq!(delver.constitution(), 9);
+    }
+
+    #[test]
+    fn worn_luck_rolls_the_loot_deeper_but_never_legendary_on_the_first_level() {
+        use fb_items::{Odds, Rarity, Slot};
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        assert_eq!(loot_odds(Some(&delver), Some(&inventory), 3), Odds::loot(3));
+        let ring = inventory.add(with_affix("Ring", 4, "of Fortune"));
+        inventory.wear(ring, Slot::Ring1).unwrap();
+        let charm = inventory.add(with_affix("Charm", 4, "of Chance"));
+        inventory.wear(charm, Slot::Charm).unwrap();
+        assert_eq!(delver.derive(&inventory).luck, 3.0);
+        assert_eq!(loot_odds(Some(&delver), Some(&inventory), 3), Odds::loot(6));
+        assert_eq!(loot_odds(Some(&delver), Some(&inventory), 1).cap, Rarity::Rare);
+        assert_eq!(loot_odds(None, Some(&inventory), 3), Odds::loot(3), "no character, no luck");
     }
 
     #[test]

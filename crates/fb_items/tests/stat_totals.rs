@@ -1,27 +1,30 @@
-use fb_items::{roll_item, stats::{Stat, Stats}, tables};
+use fb_items::{Odds, roll_item_with, stats::{Stat, Stats}, tables};
 
 #[test]
 fn stat_totals_pinned_across_base_seeds() {
     let test_cases = vec![
-        // (base_name, seed, expected_stat_totals). Four changed when the affixes nothing reads
+        // (base_name, seed, expected_stat_totals), rolled eight levels down, since the first
+        // level now rolls nearly everything common. Four changed when the affixes nothing reads
         // were held back, and changed back when disease made disease risk read again: Shirt and
         // Trousers 12345 roll of Lesser Warding, Hood 77 Lice-ridden and Torch 123 Gleaming and
         // of the Ox. Every total rose by 1 when Speed (1 as usual) joined the stats, and the belts
-        // roll among the new slot-bound suffixes.
+        // roll among the new slot-bound suffixes. Shirt 12345, Trousers 12345 and Breeches 54321 changed
+        // when the rolls moved eight levels down: they come up rare there. Breeches 99 (Mildewed)
+        // and Belt 99 (Feeble) changed when flaws could roll on magic items.
         ("Shirt", 1, 17.0),
         ("Shirt", 42, 7.0),
-        ("Shirt", 12345, 6.5),
+        ("Shirt", 12345, 6.1),
         ("Trousers", 1, 17.5),
         ("Trousers", 42, 7.5),
-        ("Trousers", 12345, 7.0),
+        ("Trousers", 12345, 7.1),
         ("Breeches", 1, 16.5),
-        ("Breeches", 99, 31.5),
-        ("Breeches", 54321, 8.5),
+        ("Breeches", 99, 32.0),
+        ("Breeches", 54321, 10.5),
         ("Hood", 1, 16.5),
         ("Hood", 77, 7.0),
         ("Mail coif", 1, 22.0),
         ("Belt", 1, 5.85),
-        ("Belt", 99, 7.0),
+        ("Belt", 99, 8.0),
         ("Club", 1, 17.0),
         ("Club", 42, 7.0),
         ("Hand axe", 1, 17.0),
@@ -33,7 +36,7 @@ fn stat_totals_pinned_across_base_seeds() {
     ];
 
     for (base, seed, expected_total) in &test_cases {
-        let item = roll_item(base, *seed).unwrap_or_else(|| panic!("Failed to roll item: {}", base));
+        let item = roll_item_with(base, *seed, Odds::loot(8)).unwrap_or_else(|| panic!("Failed to roll item: {}", base));
 
         // Sum all stat values for comparison
         let mut total = 0.0;

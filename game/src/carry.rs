@@ -759,6 +759,7 @@ pub(crate) fn lay_out_items(
     tuning: Option<Res<Tuning>>,
     record: Option<Res<WorldRecord>>,
     mut staged: Option<ResMut<crate::staged::Staged>>,
+    character: Option<Res<crate::character::Character>>,
     mut spawner: ItemSpawner,
 ) {
     for (entity, floor) in &old {
@@ -783,11 +784,13 @@ pub(crate) fn lay_out_items(
     // (A level with a record returned above: it is never staged, as its record sets its floor.)
     // The loot and its shapes were rolled ahead of time if the level was made in the background
     // (`crate::staged`).
-    let mut ahead = staged.as_mut().and_then(|s| s.take_items(&level.0)).map(Vec::into_iter);
+    // It rolls for the luck the delver wears as they come to the level.
+    let odds = crate::character::loot_odds(character.as_deref(), Some(&inventory), level.0.depth);
+    let mut ahead = staged.as_mut().and_then(|s| s.take_items(&level.0, odds)).map(Vec::into_iter);
     for spot in &level.0.items {
         let rolled = match ahead.as_mut() {
             Some(ahead) => ahead.next().flatten(),
-            None => fb_items::roll_loot(spot.family, spot.seed, fb_items::Odds::loot(level.0.depth)).map(|item| {
+            None => fb_items::roll_loot(spot.family, spot.seed, odds).map(|item| {
                 let mesh = item.shape.build();
                 (item, mesh)
             }),
@@ -2249,7 +2252,8 @@ mod tests {
 
     #[test]
     fn floor_items_on_1207_are_rolled_with_rarity() {
-        let level = fb_level::generate(1207, 1);
+        // Four levels down, as the first rolls nearly everything common.
+        let level = fb_level::generate(fb_level::depth_seed(1207, 4), 4);
         let items: Vec<fb_items::Item> = level.items.iter().map(|s| fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth)).unwrap()).collect();
         assert_eq!(items.len(), level.items.len());
         for (item, spot) in items.iter().zip(&level.items) {
@@ -2259,6 +2263,9 @@ mod tests {
             }
         }
         assert!(items.iter().any(|i| i.rarity != Rarity::Common), "a level of nothing but common items");
+        let first = fb_level::generate(1207, 1);
+        let firsts = first.items.iter().filter_map(|s| fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(1)));
+        assert!(firsts.into_iter().all(|i| i.rarity < Rarity::Legendary), "a legendary on the first level");
     }
 
     #[test]

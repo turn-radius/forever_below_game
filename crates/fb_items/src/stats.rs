@@ -5,7 +5,7 @@
 //! - Item properties: Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance.
 //!   These describe the item itself.
 //! - Wearer stats: Warmth, Stealth, Carry, Darkvision, HungerRate, SleepinessRate, DiseaseRisk,
-//!   Lockpicking, HealOnKill, Speed, BlockChance and the six ability scores. These affect the
+//!   Lockpicking, HealOnKill, Speed, BlockChance, Luck and the six ability scores. These affect the
 //!   character wearing the item.
 //!
 //! This is the minimal set the affixes in `data/afx.json` act on: the plate's item fields
@@ -54,6 +54,10 @@ pub struct Stats {
     /// Chance a shield turns aside a blow that would hit, 0..=1, while it is held.
     #[serde(default)]
     pub block_chance: f32,
+    /// Points of luck: each rolls the loot the wearer finds a level deeper
+    /// ([`crate::Odds::with_luck`]).
+    #[serde(default)]
+    pub luck: f32,
     /// Points added to the wearer's ability scores.
     #[serde(default)]
     pub strength: f32,
@@ -96,6 +100,7 @@ impl Default for Stats {
             break_chance: 0.0,
             speed: 1.0,
             block_chance: 0.0,
+            luck: 0.0,
             strength: 0.0,
             dexterity: 0.0,
             constitution: 0.0,
@@ -130,6 +135,7 @@ pub enum Stat {
     HealOnKill,
     Speed,
     BlockChance,
+    Luck,
     Strength,
     Dexterity,
     Constitution,
@@ -139,10 +145,10 @@ pub enum Stat {
 }
 
 impl Stat {
-    pub const ALL: [Stat; 24] = [
+    pub const ALL: [Stat; 25] = [
         Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
         Stat::Warmth, Stat::Stealth, Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::SleepinessRate, Stat::DiseaseRisk,
-        Stat::Lockpicking, Stat::HealOnKill, Stat::Speed, Stat::BlockChance, Stat::Strength, Stat::Dexterity, Stat::Constitution,
+        Stat::Lockpicking, Stat::HealOnKill, Stat::Speed, Stat::BlockChance, Stat::Luck, Stat::Strength, Stat::Dexterity, Stat::Constitution,
         Stat::Intelligence, Stat::Wisdom, Stat::Charisma,
     ];
 
@@ -220,6 +226,7 @@ impl Stats {
             Stat::HealOnKill => &self.heal_on_kill,
             Stat::Speed => &self.speed,
             Stat::BlockChance => &self.block_chance,
+            Stat::Luck => &self.luck,
             Stat::Strength => &self.strength,
             Stat::Dexterity => &self.dexterity,
             Stat::Constitution => &self.constitution,
@@ -249,6 +256,7 @@ impl Stats {
             Stat::HealOnKill => &mut self.heal_on_kill,
             Stat::Speed => &mut self.speed,
             Stat::BlockChance => &mut self.block_chance,
+            Stat::Luck => &mut self.luck,
             Stat::Strength => &mut self.strength,
             Stat::Dexterity => &mut self.dexterity,
             Stat::Constitution => &mut self.constitution,

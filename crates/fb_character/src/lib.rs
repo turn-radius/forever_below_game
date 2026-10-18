@@ -257,11 +257,15 @@ pub struct Worn {
     /// Multiple of the chance of catching a disease (Mildewed, Lice-ridden, of Lesser Warding).
     #[serde(default = "default_gear")]
     pub disease_risk: f64,
+    /// Points of luck: each rolls the loot the wearer finds a level deeper (of Chance, of
+    /// Fortune, of Luck).
+    #[serde(default)]
+    pub luck: f64,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0 }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0 }
     }
 }
 
@@ -303,6 +307,9 @@ pub struct Gear {
     /// Multiple of the chance of catching a disease: the items' multiplied.
     #[serde(default = "default_gear")]
     pub disease_risk: f64,
+    /// Points of luck: the worn items' added.
+    #[serde(default)]
+    pub luck: f64,
 }
 
 impl Default for Gear {
@@ -316,8 +323,9 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0 };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0 };
         for item in worn {
+            gear.luck += item.luck;
             gear.carry += item.carry;
             gear.darkvision = gear.darkvision.max(item.darkvision);
             gear.hunger_rate *= item.hunger_rate;

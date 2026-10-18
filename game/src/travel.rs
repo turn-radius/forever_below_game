@@ -131,12 +131,13 @@ pub struct Prepared {
 }
 
 impl Prepared {
-    /// The level at `depth` of the abyss of `run_seed`, with its stone and folk.
-    pub fn make(run_seed: u32, depth: u32) -> Self {
+    /// The level at `depth` of the abyss of `run_seed`, with its stone and folk, its loot rolled
+    /// against `odds`.
+    pub fn make(run_seed: u32, depth: u32, odds: fb_items::Odds) -> Self {
         let level = Abyss::new(run_seed).level_at(depth);
         let stone = stone_chunks(&level);
         let folk = build_figures(&level.folk, depth);
-        let staging = Staging::make(&level);
+        let staging = Staging::make(&level, odds);
         Prepared { level, stone, folk, staging }
     }
 }
@@ -272,12 +273,15 @@ const PREFETCH_DELAY_FRAMES: u32 = 10;
 
 /// Starts making the level below the one the delver is on, unless it is under way already or the
 /// delver has been there (a visited level is rebuilt from the record, not from the prefetch).
+#[allow(clippy::too_many_arguments)]
 fn prefetch_below(
     mut commands: Commands,
     abyss: Res<Abyss>,
     level: Res<CurrentLevel>,
     record: Res<WorldRecord>,
     below: Option<Res<Below>>,
+    character: Option<Res<crate::character::Character>>,
+    inventory: Option<Res<crate::inventory::Inventory>>,
     mut waited: Local<(u32, u32)>,
 ) {
     // The abyss follows the level a frame after the delve opens on it.
@@ -296,7 +300,10 @@ fn prefetch_below(
     if below.is_some_and(|below| *below.0.key() == key) || record.level(key.1).is_some() {
         return;
     }
-    commands.insert_resource(Below(Fitting::start(key, move || Prepared::make(key.0, key.1))));
+    // Its loot rolls for the luck worn now; if that changes before the stair down, the level's
+    // loot is rolled again on arrival (`crate::staged::Staged::take_items`).
+    let odds = crate::character::loot_odds(character.as_deref(), inventory.as_deref(), key.1);
+    commands.insert_resource(Below(Fitting::start(key, move || Prepared::make(key.0, key.1, odds))));
 }
 
 /// F at a stair uses it, unless an item or container is under the crosshair.
@@ -531,7 +538,7 @@ mod tests {
 
     #[test]
     fn the_level_made_in_the_background_is_the_one_made_in_place() {
-        let background = Fitting::start((1207, 2), || Prepared::make(1207, 2)).wait().expect("the job runs");
+        let background = Fitting::start((1207, 2), || Prepared::make(1207, 2, fb_items::Odds::loot(2))).wait().expect("the job runs");
         let level = Abyss::new(1207).level_at(2);
         assert_eq!(background.level, level);
         assert_eq!(background.stone, stone_chunks(&level));
