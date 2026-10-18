@@ -96,7 +96,7 @@ const COBBLE: Kind = Kind {
     round: [(0.55, 0.9), (0.88, 0.5)],
     flat: [(0.6, 1.0), (0.9, 0.82)],
     gap: (0.1, 0.75),
-    budget: 1500,
+    budget: 900,
     tones: &COBBLE_TONES,
     wears: true,
 };

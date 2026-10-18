@@ -87,13 +87,13 @@ level_params! {
         items_per_room_max: u32 = 5, 1.0, 12.0, 1.0; "Most loot in one room, before the odd extra."
     }
     finish {
-        moss_amount: f32 = 1.0, 0.0, 1.0, 0.05; "How strongly the damp field grows moss: none at 0."
-        grotto_chance: f64 = 0.15, 0.0, 1.0, 0.01; "Chance a room is a grotto, mossy throughout, whatever its quarter."
-        strata_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Weight of layered quarters (strata walls, timber frames) in rough rock, against plain ones."
-        rubble_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Weight of timbered quarters (rubble walls, cobbles, timber frames) in the stone halls, against plain ones."
-        cobble_chance: f64 = 0.2, 0.0, 1.0, 0.01; "Weight of timbered quarters (cobbled or bare floor, timber frames) in rough rock, against plain ones; the halls' timbered quarters follow rubble_chance."
+        moss_amount: f32 = 1.0, 0.0, 1.0, 0.05; "How strongly the damp field grows moss: none at 0. The first level has none whatever this is."
+        grotto_chance: f64 = 0.04, 0.0, 1.0, 0.01; "Chance a room is a grotto, patchily mossy throughout, whatever its quarter; rare by default."
+        strata_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Weight of the layered character (strata walls, timber frames) in rough rock, against plain ones; the first level is always plain, and a level's dominant character and its one second character are drawn by these weights, easing in by depth."
+        rubble_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Weight of the timbered character (rubble walls, cobbles, timber frames) in the stone halls, against plain ones, as a level's dominant or second character."
+        cobble_chance: f64 = 0.2, 0.0, 1.0, 0.01; "Weight of the timbered character (cobbled or bare floor, timber frames) in rough rock, against plain ones; the halls' timbered quarters follow rubble_chance."
         flagstone_chance: f64 = 0.25, 0.0, 1.0, 0.01; "Chance a hewn quarter in rough rock is paved with rough flagstones rather than left bare."
-        arch_chance: f64 = 0.6, 0.0, 1.0, 0.01; "Weight of vaulted quarters (round or pointed arches) in the stone halls, against plain ones; hewn quarters (rock-cut arches) in rough rock take a third of it."
+        arch_chance: f64 = 0.6, 0.0, 1.0, 0.01; "Weight of the vaulted character (round or pointed arches) in the stone halls, against plain ones; hewn quarters (rock-cut arches) in rough rock take a third of it."
     }
 }
 
