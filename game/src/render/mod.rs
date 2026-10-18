@@ -7,6 +7,7 @@ pub mod flame;
 mod indirect;
 mod item;
 mod outline;
+mod screen_ink;
 mod toon;
 
 pub use item::{
@@ -14,11 +15,12 @@ pub use item::{
     half_thickness, item_bounds, part_to_mesh, part_to_skinned_mesh,
 };
 pub use outline::{ARMORY_INK, ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
+pub use screen_ink::{InkStyle, ScreenInk};
 pub use toon::{Decay, Etch, EtchStyle, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
 
-use bevy::{light::cluster::GlobalClusterSettings, prelude::*, shader::load_shader_library};
+use bevy::{asset::embedded_asset, light::cluster::GlobalClusterSettings, prelude::*, shader::load_shader_library};
 
-/// Registers the toon and outline materials and their WESL shaders, and has every view draw
+/// Registers the toon and outline materials and their WESL shaders, the screen-space ink pass (`screen_ink`, #434), and has every view draw
 /// directly rather than through Bevy's GPU-built indirect draws (`indirect`, #163), with lights
 /// clustered on the CPU ([`cluster_lights_on_the_cpu`], #171).
 pub struct ArmoryRenderPlugin;
@@ -34,12 +36,14 @@ impl Plugin for ArmoryRenderPlugin {
         load_shader_library!(app, "shimmer.wesl");
         load_shader_library!(app, "toon.wesl");
         load_shader_library!(app, "outline.wesl");
+        embedded_asset!(app, "screen_ink.wesl");
 
         app.add_plugins((MaterialPlugin::<ToonMaterial>::default(), MaterialPlugin::<OutlineMaterial>::default()))
             .init_resource::<OutlineMaterials>()
             .add_systems(Startup, cluster_lights_on_the_cpu)
             .add_systems(Update, flame::flicker_flames);
         indirect::add(app);
+        screen_ink::add(app);
     }
 }
 
