@@ -50,6 +50,23 @@ impl Item {
         self.legend.as_ref().map_or(&self.name, |l| &l.title)
     }
 
+    /// How far its light reaches against its base's: 1.5 for a Gleaming torch (+10 ft on 20),
+    /// 0.75 for a Smoky one, 1 for a light with no affix on its reach or a thing that gives
+    /// none. The game scales the Armory's light by it, which knows only the shape.
+    pub fn light_factor(&self) -> f32 {
+        let added: f32 = self
+            .affixes
+            .iter()
+            .flat_map(|a| &a.fx)
+            .filter_map(|m| match *m {
+                crate::modifier::Modifier::Add { stat: crate::stats::Stat::Light, by } => Some(by),
+                _ => None,
+            })
+            .sum();
+        let base = self.profile.stats.light - added;
+        if base > 0.0 { self.profile.stats.light.max(0.0) / base } else { 1.0 }
+    }
+
     /// Every slot it can be worn or held in, the one it is made for first; none for goods. A
     /// ring goes on either ring slot (the plate's `targetSlot`), and a weapon in either hand,
     /// the main hand first (the user's call: the plate held weapons only in the main hand). A
@@ -185,6 +202,27 @@ mod tests {
     }
 
     #[test]
+    fn every_magic_item_has_an_affix_that_does_something() {
+        use armory::Family;
+        let bases = [Family::Ring, Family::Amulet, Family::Charm, Family::Sword, Family::Garment].into_iter().flat_map(crate::armory_base::bases_of);
+        for base in bases.chain(["Torch", "Belt", "Hood"]) {
+            let magic: Vec<Item> = (0..120).filter_map(|seed| roll_item_with(base, seed, Odds::loot(1))).filter(|i| i.rarity == Rarity::Magic).collect();
+            for item in &magic {
+                assert!(item.affixes.iter().any(|a| a.in_play()), "{base} seed {}: magic with nothing in play: {:?}", item.seed, item.affixes.iter().map(|a| &a.name).collect::<Vec<_>>());
+            }
+        }
+    }
+
+    #[test]
+    fn a_gleaming_light_reaches_further_and_a_smoky_one_less() {
+        // A torch with that affix alone, since any rarity can also roll a flaw such as Smoky.
+        let factor = |name: &str| (0..2000).filter_map(|seed| roll_item("Torch", seed)).find(|i| i.affixes.len() == 1 && i.affixes[0].name == name).map(|i| i.light_factor());
+        assert_eq!(factor("Gleaming"), Some(1.5));
+        assert_eq!(factor("Smoky"), Some(0.75));
+        assert_eq!(factor("Long-burning"), Some(1.0));
+    }
+
+    #[test]
     fn the_same_base_seed_and_depth_roll_the_same_item() {
         for depth in [1, 3, 5, 8] {
             for seed in [1, 2, 1207, 65_537] {
@@ -194,7 +232,7 @@ mod tests {
             }
         }
         for seed in 0..300 {
-            assert_eq!(roll_item("Sword", seed), roll_item_with("Sword", seed, Odds::loot(1)), "{seed}");
+            assert_eq!(roll_item("Sword", seed), roll_item_with("Sword", seed, Odds::default()), "{seed}");
         }
     }
 

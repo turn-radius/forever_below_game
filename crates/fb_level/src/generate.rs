@@ -1086,16 +1086,17 @@ mod tests {
         // Hashes taken from the generator before level styles were added. Seeds 7, 64, 4242 and
         // u32::MAX were retaken when giant rats left the first level (`GIANTS_FROM_DEPTH`): their
         // giant packs are rats now. All eight were retaken when writing joined the loot table
-        // (`Family::Writing`), which moves the weighted pick of every floor item.
+        // (`Family::Writing`), which moves the weighted pick of every floor item, and again when
+        // folk left half the rooms to the creatures, which no longer share a room with them.
         let before = [
-            (0u32, 0xcd1207f1bef25959u64),
-            (1, 0xf0a8fcd72c82b8fd),
-            (2, 0xbf0eb1176c236a9e),
-            (7, 0x8bec21761e49023e),
-            (64, 0x6deb8de4209e00f2),
-            (1207, 0x2a9bbf9ffefaea60),
-            (4242, 0x983da587e949876d),
-            (u32::MAX, 0xeae23577e303ef18),
+            (0u32, 0xd77b14195ea9c72fu64),
+            (1, 0xdb3d6856815aae),
+            (2, 0x656d0a8084e337db),
+            (7, 0xdc542a7a27bfe92a),
+            (64, 0x19736091b7defee3),
+            (1207, 0xc92acba876935670),
+            (4242, 0xf59b93e28826d3fb),
+            (u32::MAX, 0x9dd24d93fe3a2923),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

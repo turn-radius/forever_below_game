@@ -588,7 +588,9 @@ mod tests {
             let holds = person.held().filter(|(_, item)| names.contains(&item.title())).count();
             assert!(holds > 0, "{} holds nothing: {names:?}", person.name);
             assert!(person.worn().any(|(_, item)| names.contains(&item.title())), "{} wears nothing: {names:?}", person.name);
-            assert!(figure.pieces.iter().any(|p| p.on_head), "{}: nothing turns with the head", person.name);
+            // Under a hood the head turns with the body ([`Figure::dress`]).
+            let hooded = person.worn().any(|(slot, item)| *slot == fb_items::Slot::Head && matches!(item.shape, armory::Item::Hood(_)));
+            assert!(hooded || figure.pieces.iter().any(|p| p.on_head), "{}: nothing turns with the head", person.name);
             // Standing on the floor, about as tall as their folk.
             let (lo, hi) = figure.bounds().unwrap();
             assert!(lo.y > -0.5 && lo.y < 0.5, "{}: lowest point {}", person.name, lo.y);

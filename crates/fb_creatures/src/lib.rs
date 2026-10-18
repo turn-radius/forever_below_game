@@ -601,6 +601,16 @@ impl Species {
         self == Species::GiantCentipede
     }
 
+    /// Whether its venom leaves a victim it would drop to 0 hit points alive (at 1, and
+    /// poisoned) rather than dead: the giant centipede's and the giant spider's bites, "If the
+    /// poison damage reduces the target to 0 hit points, the target is stable but poisoned"
+    /// ([SRD 5.1 p. 374](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=374),
+    /// [p. 379](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=379)). The
+    /// bite's own damage can still kill.
+    pub fn venom_spares(self) -> bool {
+        matches!(self, Species::GiantCentipede | Species::GiantSpider)
+    }
+
     /// Its walking speed in world units per second: the stat block's feet per 6-second round
     /// ([SRD 5.1 p. 90](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=90),
     /// "a round represents about 6 seconds").

@@ -1,5 +1,6 @@
 //! Choosing finishes must not move anything else: a hash of every level for seeds 1..50 at
-//! depths 1..4, taken before finishes existed.
+//! depths 1..4, taken before finishes existed, and taken again when creatures were kept out of
+//! the rooms folk hold and centipedes moved to the second level (#448).
 
 use fb_level::generate;
 
@@ -18,5 +19,5 @@ fn all_levels_hash() -> u64 {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 4133262373390105476, "snapshot taken before finishes");
+    assert_eq!(all_levels_hash(), 9655374591779838816, "snapshot taken before finishes");
 }

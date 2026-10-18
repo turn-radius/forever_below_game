@@ -3,8 +3,9 @@
 //!
 //! Creatures come from a fifth stream of the level seed, after the layout, the furnishing, the
 //! folk and the props, so adding or changing creatures never moves a wall, an item, a light,
-//! anyone standing about or a prop. They keep out of the starting room, doorways (and the cells
-//! beside them) and corridors, clear of every item, light, folk and prop.
+//! anyone standing about or a prop. They keep out of the starting room, any room folk stand in
+//! ([`has_folk`]), doorways (and the cells beside them) and corridors, clear of every item,
+//! light and prop.
 //!
 //! Skeletons stand guard in the levels of stone halls and nowhere else: among the columns of the
 //! colonnaded halls, each in a gap between two columns facing the aisle, and in a side room or
@@ -82,24 +83,30 @@ pub const SIDE_GUARDS: (u32, u32) = (1, 2);
 /// Chance that a guarded side room holds a pair.
 const PAIR: f64 = 0.4;
 
+/// Whether any folk stand in room `i`. No creature is placed there: folk and the things that
+/// would bite them do not share a room.
+pub(crate) fn has_folk(level: &Level, i: usize) -> bool {
+    level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == Some(i))
+}
+
 /// Lays out the level's creatures: a few rat packs, each in a room of its own, and maybe a
-/// snake or two, each alone in a room nobody stands in. Never in the starting room.
+/// snake or two, each alone in a room. Never in the starting room nor a room with folk.
 pub(crate) fn place_creatures(level: &Level, rng: &mut Mulberry32) -> Vec<CreatureSpot> {
     let start_room = level.start_room();
-    let mut rooms: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && level.rooms[i].area() >= MIN_ROOM_AREA).collect();
+    let mut rooms: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && level.rooms[i].area() >= MIN_ROOM_AREA && !has_folk(level, i)).collect();
     shuffle(&mut rooms, rng);
     if level.style == crate::LevelStyle::StoneHalls {
         // Rats and snakes keep to the side rooms; the grand halls are theirs only when nothing else is left.
         rooms.sort_by_key(|&i| is_colonnaded(level, &level.rooms[i]));
     }
-    let folk_in = |i: usize| level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == Some(i));
-    // Snakes first, in the quiet rooms; rats in what is left, quiet rooms first.
-    let (quiet, busy): (Vec<usize>, Vec<usize>) = rooms.iter().partition(|&&i| !folk_in(i));
-    let snakes = rng.int(SNAKES.0, SNAKES.1) as usize;
+    // Snakes first; rats in what is left.
+    // Snakes leave a room for the rats, and in the stone halls one more for the skeletons.
+    let spare = if level.style == crate::LevelStyle::StoneHalls { 2 } else { 1 };
+    let snakes = (rng.int(SNAKES.0, SNAKES.1) as usize).min(rooms.len().saturating_sub(spare));
     let packs = rng.int(RAT_PACKS.0, RAT_PACKS.1) as usize;
     let mut placed: Vec<CreatureSpot> = Vec::new();
     let mut pack = 0;
-    let mut quiet = quiet.into_iter();
+    let mut quiet = rooms.into_iter();
     for _ in 0..snakes {
         let Some(i) = quiet.next() else { break };
         let species = if rng.chance(CONSTRICTOR) { Species::ConstrictorSnake } else { Species::PoisonousSnake };
@@ -110,10 +117,7 @@ pub(crate) fn place_creatures(level: &Level, rng: &mut Mulberry32) -> Vec<Creatu
             pack += 1;
         }
     }
-    let mut rat_rooms: Vec<usize> = quiet.chain(busy).collect();
-    if level.style == crate::LevelStyle::StoneHalls {
-        rat_rooms.sort_by_key(|&i| is_colonnaded(level, &level.rooms[i]));
-    }
+    let rat_rooms: Vec<usize> = quiet.collect();
     for &i in rat_rooms.iter().take(packs) {
         let room = &level.rooms[i];
         // The draw is made on every level, so a level's other placements do not shift with depth.
@@ -162,7 +166,7 @@ fn place_trolls(level: &Level, placed: &mut Vec<CreatureSpot>) {
         return;
     }
     let start_room = level.start_room();
-    let mut rooms: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && level.rooms[i].area() >= TROLL_ROOM_AREA).collect();
+    let mut rooms: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && level.rooms[i].area() >= TROLL_ROOM_AREA && !has_folk(level, i)).collect();
     shuffle(&mut rooms, &mut rng);
     let pack = placed.iter().map(|c| c.pack + 1).max().unwrap_or(0);
     let seed = item_seed(&mut rng);
@@ -191,7 +195,7 @@ fn place_skeletons(level: &Level, placed: &mut Vec<CreatureSpot>, mut pack: u32,
     let start_room = level.start_room();
     let snake_rooms: Vec<usize> = placed.iter().filter(|c| c.species.is_snake()).filter_map(|c| level.room_at(c.x as i32, c.y as i32)).collect();
     let snake_room = |i: usize| snake_rooms.contains(&i);
-    let mut halls: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && is_colonnaded(level, &level.rooms[i]) && !snake_room(i)).collect();
+    let mut halls: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && is_colonnaded(level, &level.rooms[i]) && !snake_room(i) && !has_folk(level, i)).collect();
     halls.sort_by_key(|&i| std::cmp::Reverse(level.rooms[i].area()));
     halls.truncate(GUARDED_HALLS);
     let mut guarded = 0;
@@ -218,7 +222,7 @@ fn place_skeletons(level: &Level, placed: &mut Vec<CreatureSpot>, mut pack: u32,
             guarded += 1;
         }
     }
-    let mut sides: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && !is_colonnaded(level, &level.rooms[i]) && level.rooms[i].area() >= MIN_ROOM_AREA && !snake_room(i)).collect();
+    let mut sides: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && !is_colonnaded(level, &level.rooms[i]) && level.rooms[i].area() >= MIN_ROOM_AREA && !snake_room(i) && !has_folk(level, i)).collect();
     shuffle(&mut sides, rng);
     let rooms = (rng.int(SIDE_GUARDS.0, SIDE_GUARDS.1) as usize).max(if guarded == 0 { 1 } else { 0 });
     let mut filled = 0;
@@ -393,6 +397,19 @@ mod tests {
     }
 
     #[test]
+    fn no_creature_shares_a_room_with_folk() {
+        for depth in [1, 2, 4, 6] {
+            for seed in 1..=40 {
+                let level = generate(seed, depth);
+                for c in &level.creatures {
+                    let room = level.room_at(c.x.floor() as i32, c.y.floor() as i32);
+                    assert!(room.is_none_or(|i| !has_folk(&level, i)), "seed {seed} depth {depth}: {c:?} is in a room with folk");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn rats_come_in_packs_and_snakes_alone_in_quiet_rooms() {
         let mut snakes = 0;
         for (seed, depth) in sweep() {
@@ -444,7 +461,7 @@ mod tests {
         let (sx, sy, _) = level.start();
         assert_eq!((sx, sy, level.rooms.len()), (1, 22, 6));
         assert_eq!((level.items.len(), level.folk.len(), level.props.len()), (13, 6, 16));
-        assert_eq!(level.folk[5].seed, 748_339_772);
+        assert_eq!(level.folk[5].seed, 1_600_447_687);
         assert_eq!(level.props[0].prop, crate::Prop::Container { style: armory::families::chests::ChestStyle::Chest, seed: 1_184_162_579, loot: 3_392_196_572 });
         let (before, _) = crate::generate::generate_without_creatures(1207, 1, &crate::LevelParams::default());
         assert!(before.creatures.is_empty() && !level.creatures.is_empty());

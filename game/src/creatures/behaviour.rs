@@ -998,12 +998,17 @@ mod tests {
     /// Seed 1207's creatures as bones (no drawing), thinking and moving, with folk and props in
     /// the way and a player, stepped 1/60 s a frame.
     fn level_app(player_at: Vec2) -> (App, Vec<Entity>, Entity) {
+        level_app_on(1207, player_at)
+    }
+
+    /// [`level_app`] on the first level of `seed`.
+    fn level_app_on(seed: u32, player_at: Vec2) -> (App, Vec<Entity>, Entity) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_plugins(BehaviourPlugin)
             .add_systems(Update, (super::super::idle, animate).chain().after(behave));
-        let level = fb_level::generate(1207, 1);
+        let level = fb_level::generate(seed, 1);
         app.insert_resource(Obstacles(obstacles(&level)));
         app.insert_resource(CurrentLevel(level.clone()));
         let player = app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y))).id();
@@ -1216,7 +1221,8 @@ mod tests {
 
     #[test]
     fn long_snakes_keep_their_bodies_out_of_the_rock() {
-        let level = fb_level::generate(1207, 1);
+        let seed = crate::creatures::seed_holding(&[Species::ConstrictorSnake, Species::PoisonousSnake]);
+        let level = fb_level::generate(seed, 1);
         // How deep a point lies in rock: 0 on open floor, else how far it is from the nearest
         // open cell beside the rock cell it is in.
         let depth = |x: f32, z: f32| {
@@ -1233,10 +1239,19 @@ mod tests {
             }
             nearest
         };
-        // The player walks round the constrictor's room and out of its door, then round the
-        // viper's, so each snake rears, turns and follows.
-        let spots = [Vec2::new(11.0, 10.0), Vec2::new(13.5, 14.5), Vec2::new(10.5, 14.0), Vec2::new(16.0, 11.5), Vec2::new(23.0, 29.0), Vec2::new(27.5, 32.5), Vec2::new(23.0, 32.0)];
-        let (mut app, roots, player) = level_app(spots[0] * CELL);
+        // The player walks round each snake's room, corner to corner, so each snake rears,
+        // turns and follows.
+        let spots: Vec<Vec2> = level
+            .creatures
+            .iter()
+            .filter(|c| c.species.is_snake())
+            .flat_map(|c| {
+                let room = level.rooms[level.room_at(c.x as i32, c.y as i32).unwrap()];
+                let (x0, y0, x1, y1) = (room.x as f32 + 1.0, room.y as f32 + 1.0, (room.x + room.w) as f32 - 1.0, (room.y + room.h) as f32 - 1.0);
+                [Vec2::new(x0, y0), Vec2::new(x1, y1), Vec2::new(x0, y1), Vec2::new(x1, y0)]
+            })
+            .collect();
+        let (mut app, roots, player) = level_app_on(seed, spots[0] * CELL);
         let snakes: Vec<Entity> = roots.iter().copied().filter(|&r| app.world().get::<Critter>(r).unwrap().spot.species.is_snake()).collect();
         assert!(snakes.len() >= 2);
         let mut moved = 0.0;

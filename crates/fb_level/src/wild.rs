@@ -5,8 +5,8 @@
 //! They are placed last, after the stairs, each species from a stream of its own (the level's
 //! seed and depth mixed with the species' salt). Nothing is drawn from the creature stream, so no
 //! wall, item, light, folk, prop, stair or earlier creature moves on any seed. Each keeps out of
-//! the starting room, doorways (and the cells beside them), corridors, the stairs and their
-//! approach cells, and clear of everything else ([`crate::creatures::fits`]). A species takes a
+//! the starting room, any room folk stand in, doorways (and the cells beside them), corridors,
+//! the stairs and their approach cells, and clear of everything else ([`crate::creatures::fits`]). A species takes a
 //! room no other creature holds when one is left; only when none is does it share.
 //!
 //! A bat's spot is on the floor grid; the game hangs it from the ceiling. The room where giant
@@ -21,7 +21,7 @@ use fb_creatures::{Creature, Species};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
-use crate::creatures::{CreatureSpot, fits};
+use crate::creatures::{CreatureSpot, fits, has_folk};
 use crate::folk::by_door;
 use crate::generate::{is_colonnaded, item_seed, shuffle, straight_in_from_a_door};
 use crate::{CELL, Cell, Level, Room};
@@ -33,8 +33,12 @@ pub const SPIDER_SALT: u32 = 0x5B1D_E250;
 pub const JACKALOPE_SALT: u32 = 0x4A4C_A10E;
 
 /// Giant centipedes: rooms that hold some, inclusive, and centipedes in each room, inclusive.
-/// From the first level (SRD 5.1 p. 374, challenge 1/4).
+/// SRD 5.1 p. 374, challenge 1/4.
 pub const CENTIPEDE_ROOMS: (u32, u32) = (1, 2);
+/// The shallowest level giant centipedes are found on. A bite with its 3d6 venom (about 14 on a
+/// failed save) outdoes a fresh delver's 6 to 12 hit points, so the first level has none, as it
+/// has no giant rats ([`crate::GIANTS_FROM_DEPTH`]). Our own.
+pub const CENTIPEDES_FROM_DEPTH: u32 = 2;
 pub const CENTIPEDES_PER_ROOM: (u32, u32) = (1, 2);
 /// Chance a level has a roost of bats, and the bats in a flock, inclusive. Large rooms only.
 pub const BAT_ODDS: f64 = 0.5;
@@ -113,9 +117,9 @@ struct Placer<'a> {
 }
 
 impl Placer<'_> {
-    /// Rooms of at least `area` that are not the starting room (and, if `quiet`, hold no folk),
-    /// shuffled, those no creature stands in first and colonnaded halls last.
-    fn rooms(&self, area: u32, quiet: bool, rng: &mut Mulberry32) -> Vec<usize> {
+    /// Rooms of at least `area` that are not the starting room and hold no folk, shuffled,
+    /// those no creature stands in first and colonnaded halls last.
+    fn rooms(&self, area: u32, rng: &mut Mulberry32) -> Vec<usize> {
         let level = self.level;
         // Never a room with a stair in it, nor the one a stair opens into: whoever comes down
         // or up arrives clear of anything waiting for them.
@@ -126,8 +130,7 @@ impl Placer<'_> {
             })
         };
         let mut rooms: Vec<usize> = (0..level.rooms.len())
-            .filter(|&i| Some(i) != self.start_room && level.rooms[i].area() >= area && !by_stair(i))
-            .filter(|&i| !quiet || !level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == Some(i)))
+            .filter(|&i| Some(i) != self.start_room && level.rooms[i].area() >= area && !by_stair(i) && !has_folk(level, i))
             .collect();
         shuffle(&mut rooms, rng);
         let held = |i: usize| self.placed.iter().any(|c| level.room_at(c.x as i32, c.y as i32) == Some(i));
@@ -185,7 +188,7 @@ pub(crate) fn place_wild(level: &Level) -> (Vec<CreatureSpot>, Vec<WebSpot>) {
         let mut rng = stream(level, SPIDER_SALT);
         if rng.chance(SPIDER_ODDS) {
             let count = if rng.chance(SPIDER_PAIR) { 2 } else { 1 };
-            let rooms = p.rooms(MIN_ROOM_AREA, true, &mut rng);
+            let rooms = p.rooms(MIN_ROOM_AREA, &mut rng);
             let before = p.placed.len();
             if let Some(i) = p.group(&rooms, count, 1.2, Species::GiantSpider, &mut rng) {
                 let spiders: Vec<(f32, f32)> = p.placed[before..].iter().map(|c| (c.x, c.y)).collect();
@@ -196,13 +199,13 @@ pub(crate) fn place_wild(level: &Level) -> (Vec<CreatureSpot>, Vec<WebSpot>) {
     // A jackalope, alone in a quiet room, from depth 1.
     let mut rng = stream(level, JACKALOPE_SALT);
     if rng.chance(JACKALOPE_ODDS) {
-        let rooms = p.rooms(MIN_ROOM_AREA, true, &mut rng);
+        let rooms = p.rooms(MIN_ROOM_AREA, &mut rng);
         p.group(&rooms, 1, 1.5, Species::Jackalope, &mut rng);
     }
     // Bats in a flock, or giant bats from depth 4 under a high enough ceiling, in a large room.
     let mut rng = stream(level, BAT_SALT);
     if rng.chance(BAT_ODDS) {
-        let rooms = p.rooms(BAT_ROOM_AREA, false, &mut rng);
+        let rooms = p.rooms(BAT_ROOM_AREA, &mut rng);
         if level.depth >= GIANT_BATS_FROM_DEPTH && level.ceiling >= GIANT_BAT_CEILING {
             let count = rng.int(GIANT_BATS.0, GIANT_BATS.1);
             p.group(&rooms, count, 2.0, Species::GiantBat, &mut rng);
@@ -211,10 +214,10 @@ pub(crate) fn place_wild(level: &Level) -> (Vec<CreatureSpot>, Vec<WebSpot>) {
             p.group(&rooms, count, 2.0, Species::Bat, &mut rng);
         }
     }
-    // Giant centipedes, one or two in each of a room or two.
+    // Giant centipedes, one or two in each of a room or two, from depth 2.
     let mut rng = stream(level, CENTIPEDE_SALT);
-    let wanted = rng.int(CENTIPEDE_ROOMS.0, CENTIPEDE_ROOMS.1);
-    let mut rooms = p.rooms(MIN_ROOM_AREA, false, &mut rng);
+    let wanted = if level.depth >= CENTIPEDES_FROM_DEPTH { rng.int(CENTIPEDE_ROOMS.0, CENTIPEDE_ROOMS.1) } else { 0 };
+    let mut rooms = p.rooms(MIN_ROOM_AREA, &mut rng);
     for _ in 0..wanted {
         let count = rng.int(CENTIPEDES_PER_ROOM.0, CENTIPEDES_PER_ROOM.1);
         if let Some(i) = p.group(&rooms, count, 1.5, Species::GiantCentipede, &mut rng) {

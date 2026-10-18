@@ -174,10 +174,11 @@ pub fn roll_affixes(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag]) -> Vec<&
 const FLAW_CHANCE: [f64; 4] = [0.3, 0.2, 0.1, 0.05];
 
 /// The affixes a `rarity` rolls on an item with `tags` worn in `slot`. Common: no good affix.
-/// Magic: one good prefix or suffix, even odds. Rare: a good prefix and a good suffix.
-/// Legendary: a good prefix and two good suffixes. Then a flaw prefix, at [`FLAW_CHANCE`] for the
-/// rarity, after the good ones so it never takes their place or their name, and never of a
-/// group they have. Slots with nothing that fits stay empty.
+/// Magic: one good prefix or suffix, even odds, or the other when nothing of the one drawn fits
+/// (a ring has no prefix), so a magic item always does something. Rare: a good prefix and a good
+/// suffix. Legendary: a good prefix and two good suffixes. Then a flaw prefix, at
+/// [`FLAW_CHANCE`] for the rarity, after the good ones so it never takes their place or their
+/// name, and never of a group they have. Slots with nothing that fits stay empty.
 pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot: Option<Slot>) -> Vec<&'static Affix> {
     use AffixKind::{Prefix, Suffix};
     let good: Vec<AffixKind> = match rarity {
@@ -189,7 +190,11 @@ pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot
     let rolling = Rolling { tags, slot, rarity };
     let mut chosen = Vec::new();
     for kind in good {
-        if let Some(a) = pick_affix(rng, rolling, kind, true, &chosen) {
+        let picked = pick_affix(rng, rolling, kind, true, &chosen).or_else(|| {
+            let other = if kind == Prefix { Suffix } else { Prefix };
+            (rarity == Rarity::Magic).then(|| pick_affix(rng, rolling, other, true, &chosen)).flatten()
+        });
+        if let Some(a) = picked {
             chosen.push(a);
         }
     }

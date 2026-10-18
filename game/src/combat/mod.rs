@@ -604,6 +604,11 @@ mod tests {
     /// nothing) standing `away` world units from the first rat and facing it, stepped 1/60 s a
     /// frame with the whole of combat but the drawing.
     fn fight(base: Option<&str>, away: f32) -> (App, Entity, Entity) {
+        fight_on(1207, base, away)
+    }
+
+    /// [`fight`] on the first level of `seed`.
+    fn fight_on(seed: u32, base: Option<&str>, away: f32) -> (App, Entity, Entity) {
         use crate::creatures::{Critter, animate, behaviour::BehaviourPlugin, idle, spawn_skeleton};
         use crate::play::{CurrentLevel, Player};
         use bevy::time::TimeUpdateStrategy;
@@ -623,7 +628,7 @@ mod tests {
             inventory.wear(id, fb_items::Slot::Mainhand).unwrap();
         }
         app.insert_resource(inventory);
-        let level = fb_level::generate(1207, 1);
+        let level = fb_level::generate(seed, 1);
         app.insert_resource(CurrentLevel(level.clone()));
         let roots: Vec<Entity> = {
             let mut commands = app.world_mut().commands();
@@ -727,7 +732,15 @@ mod tests {
     fn a_blow_to_a_laid_out_snakes_mid_body_lands() {
         use crate::creatures::{Bones, Critter, Driven, Intent, behaviour::{Brain, body_radius}};
         use fb_creatures::Creature;
-        let (mut app, player, _) = fight(Some("Sword"), 9.0);
+        // A first level with a rat, and a constrictor in a room with space to lie out in.
+        let seed = (1..=500)
+            .find(|&s| {
+                let level = fb_level::generate(s, 1);
+                let roomy = |c: &fb_level::CreatureSpot| level.room_at(c.x as i32, c.y as i32).is_some_and(|i| level.rooms[i].area() >= 30);
+                level.creatures.iter().any(|c| c.species.is_rat()) && level.creatures.iter().any(|c| c.species == fb_creatures::Species::ConstrictorSnake && roomy(c))
+            })
+            .unwrap();
+        let (mut app, player, _) = fight_on(seed, Some("Sword"), 9.0);
         app.update();
         let snake = {
             let mut q = app.world_mut().query::<(Entity, &Critter)>();

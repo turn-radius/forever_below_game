@@ -858,6 +858,16 @@ pub fn animate(
     }
 }
 
+/// The first seed whose first level holds each of `species`, for a test that needs them
+/// placed on a real level, so it does not hang on what one seed holds.
+#[cfg(test)]
+pub fn seed_holding(species: &[fb_creatures::Species]) -> u32 {
+    (1..=500).find(|&s| {
+        let level = fb_level::generate(s, 1);
+        species.iter().all(|&k| level.creatures.iter().any(|c| c.species == k))
+    }).expect("some first level holds them all")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -910,7 +920,7 @@ mod tests {
     #[test]
     fn each_newer_species_spawns_and_animates_on_a_level_that_holds_it() {
         use fb_creatures::Species::*;
-        for (species, depth) in [(GiantCentipede, 1), (Bat, 1), (Jackalope, 1), (GiantSpider, 3), (GiantBat, 4), (Troll, 7)] {
+        for (species, depth) in [(GiantCentipede, 2), (Bat, 1), (Jackalope, 1), (GiantSpider, 3), (GiantBat, 4), (Troll, 7)] {
             let seed = (1..=60).find(|&s| fb_level::generate(s, depth).creatures.iter().any(|c| c.species == species)).unwrap_or_else(|| panic!("no level holds {species:?} at depth {depth}"));
             let (mut app, roots) = level_app_of(seed, depth);
             assert!(roots.iter().any(|&r| app.world().get::<Critter>(r).unwrap().spot.species == species));
@@ -1003,14 +1013,15 @@ mod tests {
         let level = fb_level::generate(1207, 1);
         let skeleton = dev_spots_for(&level, "skeleton:5").remove(0);
         assert_eq!(skeleton.species, fb_creatures::Species::Skeleton);
-        let snake = *level.creatures.iter().find(|c| c.species.is_snake()).unwrap();
+        let snakes = fb_level::generate(seed_holding(&[fb_creatures::Species::PoisonousSnake]), 1);
+        let snake = *snakes.creatures.iter().find(|c| c.species.is_snake()).unwrap();
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_systems(Update, idle);
         let (skeleton, snake) = {
             let mut commands = app.world_mut().commands();
-            (spawn_skeleton(&mut commands, &level, &skeleton, &skeleton.creature().rig()).0, spawn_skeleton(&mut commands, &level, &snake, &snake.creature().rig()).0)
+            (spawn_skeleton(&mut commands, &level, &skeleton, &skeleton.creature().rig()).0, spawn_skeleton(&mut commands, &snakes, &snake, &snake.creature().rig()).0)
         };
         app.world_mut().flush();
         for _ in 0..90 {
