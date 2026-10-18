@@ -185,6 +185,13 @@ pub fn shoots(inventory: &Inventory, marksman: Option<&Marksman>) -> bool {
     }
 }
 
+/// Whether the block key, right click, shoots as the attack key does: with the off hand free
+/// to draw. Anything held there (a shield to raise, a dagger or torch to swing) is the off
+/// hand's own (`super::guard`, `super::swing::start_swing`).
+pub fn block_shoots(inventory: &Inventory) -> bool {
+    inventory.worn(fb_items::Slot::Offhand).is_none()
+}
+
 /// How fast a shot leaves the weapon: a bow's by how far it was drawn, a crossbow's always full.
 pub fn launch_speed(crossbow: bool, draw: f32) -> f32 {
     if crossbow { BOLT_SPEED } else { FULL_DRAW_SPEED * (SLOWEST + (1.0 - SLOWEST) * draw.clamp(0.0, 1.0)) }
@@ -327,8 +334,7 @@ pub fn shoot(
         *auto_gate = 0.0;
     }
     let auto = crate::launch::env_set("FB_SHOOT") && *auto_gate >= AUTO_WAIT;
-    // Without a shield to raise, the block key shoots as the attack key does.
-    let block_shoots = !super::guard::holds_shield(&inventory);
+    let block_shoots = block_shoots(&inventory);
     let pressed = ((input.just_pressed(Action::Attack) || (block_shoots && input.just_pressed(Action::Block))) && looking) || auto;
     // Tertiary reloads a crossbow when nothing under the crosshair has a use for it.
     let reload_pressed = input.just_pressed(Action::Tertiary) && !around.aimed.as_ref().is_some_and(|a| a.0.is_some());
