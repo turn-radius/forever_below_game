@@ -15,7 +15,8 @@
 //! A slot keeps pointing at its item until the item is used up or leaves the inventory
 //! ([`empty_lost_slots`]). The inventory keeps no counts, so a stack of bread is several items:
 //! when one is used up the slot moves to another of the same base that is carried, and empties
-//! when the last is gone. Binding an item to a slot takes it from any other slot it was in.
+//! when the last is gone. It moves only to one bound to no other slot, so using one slot never
+//! moves or empties another. Binding an item to a slot takes it from any other slot it was in.
 
 use bevy::{prelude::*, text::FontSize};
 use fb_items::{Item, Slot};
@@ -139,9 +140,10 @@ fn empty_lost_slots(inventory: Res<Inventory>, mut slots: ResMut<Quickslots>) {
     }
 }
 
-/// Another carried item of the same base and use as `id`, which has just been used up.
-fn next_of_a_kind(inventory: &Inventory, base: &str, use_: QuickUse) -> Option<ItemId> {
-    let mut ids: Vec<ItemId> = inventory.ids().filter(|&other| inventory.is_carried(other)).collect();
+/// Another carried item of the same base and use as `id`, which has just been used up, and bound
+/// to no slot: a slot never refills by taking another slot's item.
+fn next_of_a_kind(inventory: &Inventory, slots: &Quickslots, base: &str, use_: QuickUse) -> Option<ItemId> {
+    let mut ids: Vec<ItemId> = inventory.ids().filter(|&other| inventory.is_carried(other) && slots.slot_of(other).is_none()).collect();
     ids.sort();
     ids.into_iter().find(|&other| inventory.item(other).is_some_and(|item| item.base == base && quick_use(item) == Some(use_)))
 }
@@ -159,7 +161,7 @@ pub fn use_slot(slot: usize, slots: &mut Quickslots, inventory: &mut Inventory, 
         Some(QuickUse::Consume) => {
             let said = eating.eat(inventory, id).unwrap_or_else(|| "You cannot eat that now".to_string());
             if inventory.item(id).is_none() {
-                match next_of_a_kind(inventory, &base, QuickUse::Consume) {
+                match next_of_a_kind(inventory, slots, &base, QuickUse::Consume) {
                     Some(next) => slots.bind(slot, next),
                     None => slots.clear(slot),
                 }
@@ -171,7 +173,7 @@ pub fn use_slot(slot: usize, slots: &mut Quickslots, inventory: &mut Inventory, 
             // An emptied flask is kept, as a drained waterskin is, but the slot moves to a full one,
             // or empties after the last.
             if !inventory.item(id).is_some_and(Item::has_oil) {
-                match next_of_a_kind(inventory, &base, QuickUse::Refill) {
+                match next_of_a_kind(inventory, slots, &base, QuickUse::Refill) {
                     Some(next) => slots.bind(slot, next),
                     None => slots.clear(slot),
                 }
@@ -574,6 +576,20 @@ mod tests {
         assert_eq!(bound(&app, 2), None, "and empties after the last");
         press(&mut app, KeyCode::Digit3);
         assert_eq!(toast(&app), "Nothing is bound to slot 3");
+    }
+
+    #[test]
+    fn eating_from_one_slot_leaves_the_other_slots_alone() {
+        let (mut app, _) = delve();
+        let (a, b, c) = (give(&mut app, item("Bread")), give(&mut app, item("Bread")), give(&mut app, item("Bread")));
+        bind(&mut app, 0, a);
+        bind(&mut app, 1, b);
+        press(&mut app, KeyCode::Digit1);
+        assert!(!has(&app, a));
+        assert_eq!((bound(&app, 0), bound(&app, 1)), (Some(c), Some(b)), "slot 1 moves to the loaf no slot holds, and slot 2 keeps its own");
+        press(&mut app, KeyCode::Digit1);
+        assert!(!has(&app, c));
+        assert_eq!((bound(&app, 0), bound(&app, 1)), (None, Some(b)), "with only slot 2's loaf left, slot 1 empties rather than take it");
     }
 
     #[test]
