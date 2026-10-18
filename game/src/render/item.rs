@@ -192,7 +192,7 @@ pub fn part_to_mesh(part: &Part) -> Mesh {
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
     }
     if part.uvs_b.len() == vertex_count {
-        // The level's stone keeps its moss here (`toon.wesl`); skinned meshes overwrite the slot.
+        // The level's stone keeps its damp here (`toon.wesl`); skinned meshes overwrite the slot.
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, part.uvs_b.clone());
     }
     if is_flame(part) {

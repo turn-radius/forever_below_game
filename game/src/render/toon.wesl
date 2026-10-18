@@ -29,7 +29,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::{apply_decay, apply_moss, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
+import super::decay::{apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -403,11 +403,11 @@ fn fragment(
         base = base * rock.tone;
     }
 }
-    // Moss grows over the level's stone, which carries it per vertex (not skinned: folk keep
+    // Lichen grows over the level's stone, which carries it per vertex (not skinned: folk keep
     // their rest normals in that slot). Sampled in the world, since columns and doors are items
     // with their own transforms, and measured in height from item space (their origin is the floor).
 @if(VERTEX_UVS_B && !SKINNED) {
-    base = apply_moss(base, vertex_output.world_position.xyz, item_position.y, item_normal, pixel, vertex_output.uv_b.x, toon.decay_seed);
+    base = apply_lichen(base, vertex_output.world_position.xyz, item_position.y, item_normal, pixel, vertex_output.uv_b.x, toon.decay_seed);
 }
 
     // A flame (premultiplied) is coloured by its vertices, by height (`flame_colour`), and here

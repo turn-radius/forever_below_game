@@ -376,38 +376,80 @@ fn strata_shade(position: vec3<f32>, normal: vec3<f32>, pixel: f32, seed: f32) -
 }
 
 
-// Moss over stone (ours; greener and brighter than the plain 0x3f4f24 to 0x6f7f3a, since a warm
-// torch takes the green out of what it lights) where `moss` (0..1, carried per vertex) is above
-// zero. It gathers on up-facing surfaces (floors, block tops, ledges) and at the foot of walls
-// (fading out by about 1.2 m), and only flecks the upper walls and ceilings; modest damp gives
-// small cushions there, a grotto most of floor and wall foot. Patches are band-limited noise,
-// deep to light green with fine speckle, and the bare stone between turns a little greener
-// grey. `position` is in world units of 10 cm and sampled in the world, so every column and
-// door of a shape grows its own moss; `height` is the surface's height above the floor.
-// Moss at zero leaves the colour alone.
-fn apply_moss(color: vec3<f32>, position: vec3<f32>, height: f32, normal: vec3<f32>, pixel: f32, moss: f32, seed: f32) -> vec3<f32> {
-    if moss <= 0.0 {
+// One layer of lichen colonies (ours): flat crustose rosettes, roughly round with lobed edges,
+// each a disc round the nearest point of a jittered lattice `scale` units apart. A colony has a
+// paler growth rim, a darker mottled centre and sometimes a ring between, in one of a few muted
+// tones: sage and grey-green mostly, some mustard, now and then a rusty crust. `density` is the
+// share of lattice points that grow one and `wet` (0..1) how big they get.
+fn lichen_layer(color: vec3<f32>, position: vec3<f32>, pixel: f32, scale: f32, density: f32, wet: f32, offset: f32, visible: f32) -> vec3<f32> {
+    let cells = nearest_cells(position / scale + vec3(offset));
+    let id = cells.id1;
+    if hash3(id + vec3(1.3)) >= density {
         return color;
     }
-    let damp = clamp(moss, 0.0, 1.0);
-    let c = mix(color, color * vec3(0.9, 1.0, 0.86), damp * 0.6);
+    // Radius in lattice cells; a colony is a few centimetres to some twenty across.
+    let radius = (0.1 + 0.2 * hash3(id + vec3(2.9))) * (0.5 + 0.75 * wet);
+    let lobed = radius * (0.85 + 0.3 * value_noise(position * 1.7 + id * 3.1));
+    let x = cells.f1 / lobed;
+    let edge = clamp(pixel / (lobed * scale), 0.03, 0.5);
+    let inside = 1.0 - smoothstep(1.0 - edge, 1.0, x);
+    if inside <= 0.0 {
+        return color;
+    }
+    let pick = hash3(id + vec3(7.7));
+    let along = hash3(id + vec3(3.3));
+    var tone = mix(vec3(0.435, 0.541, 0.416), vec3(0.663, 0.722, 0.604), along);
+    if pick > 0.55 {
+        tone = vec3(0.561, 0.647, 0.541);
+    }
+    if pick > 0.86 {
+        tone = vec3(0.722, 0.635, 0.29);
+    }
+    if pick > 0.97 {
+        tone = vec3(0.69, 0.44, 0.227);
+    }
+    let rim = smoothstep(0.6, 0.8, x);
+    let heart = 1.0 - smoothstep(0.15, 0.5, x);
+    let mottle = filtered_noise(position * 3.4 + id, pixel * 3.4);
+    let ring = step(0.6, hash3(id + vec3(4.4))) * (1.0 - smoothstep(0.0, 0.07, abs(x - 0.5)));
+    let shaded = tone * (0.82 + 0.16 * mottle + 0.32 * rim - 0.1 * heart - 0.14 * ring);
+    return mix(color, shaded, inside * 0.95 * visible);
+}
+
+// Lichen on stone (ours) where `damp` (0..1, carried per vertex) is above zero: crustose
+// colonies on any face, more of them and bigger the damper it is, a few more at the foot of a
+// wall (to about 1.2 m) and on block tops and ledges, fewer overhead. A grotto grows two layers
+// of dense, overlapping colonies; ordinary damp is a sprinkling in clusters. Far off, where a
+// colony spans only a pixel or two, they fade to a mean tint of the colonies' share. `position`
+// is in world units of 10 cm and sampled in the world, so every column and door of a shape
+// grows its own; `height` is the surface's height above the floor. Damp at zero leaves the
+// colour alone.
+fn apply_lichen(color: vec3<f32>, position: vec3<f32>, height: f32, normal: vec3<f32>, pixel: f32, damp: f32, seed: f32) -> vec3<f32> {
+    if damp <= 0.0 {
+        return color;
+    }
+    let wet = clamp(damp, 0.0, 1.0);
+    // Stone in damp places greys a little green between the colonies.
+    var c = mix(color, color * vec3(0.94, 1.0, 0.92), wet * 0.5);
     let up = smoothstep(0.3, 0.85, normal.y);
-    let foot = 1.0 - smoothstep(4.0, 12.0, height);
     let down = smoothstep(0.3, 0.85, -normal.y);
-    // Sparse where only a little damp, so modest damp is a few cushions and a grotto is green.
-    let reach = mix(0.03 + 0.9 * max(up, foot * 0.85), 0.02, down);
-    let coverage = clamp(damp * damp * (1.2 - 0.2 * damp) * reach, 0.0, 0.95);
+    let foot = 1.0 - smoothstep(4.0, 12.0, height);
+    let reach = mix(0.5 + 0.25 * foot + 0.25 * up, 0.15, down);
+    // Colonies gather in clusters.
+    let cluster = 0.35 + 1.3 * value_noise(position * 0.11 + vec3(seed * 0.9));
+    let density = clamp(pow(wet, 1.25) * reach * cluster * 2.6, 0.0, 0.97);
 
-    let k = 0.24;
-    let p = position * k + vec3(seed * 0.7);
-    let cell = pixel * k;
-    let field = patch_field(fbm(p, cell), fbm(p * 3.1 + vec3(2.9), cell * 3.1));
-    let mask = patches(field, coverage, 0.45);
-
-    let tuft = smoothstep(0.42, 0.58, fbm(p * 2.4 + vec3(6.1), cell * 2.4));
-    let speckle = filtered_noise(position * 1.1 + vec3(seed), pixel * 1.1);
-    let deep = vec3(0.15, 0.42, 0.1);
-    let light = vec3(0.42, 0.82, 0.14);
-    let green = mix(deep, light, clamp(tuft * 0.8 + (speckle - 0.5) * 0.9 + 0.1, 0.0, 1.0));
-    return mix(c, green, mask * 0.92);
+    let visible = 1.0 - smoothstep(0.12, 0.3, pixel);
+    if visible > 0.0 {
+        c = lichen_layer(c, position, pixel, 3.6, density, wet, seed * 0.7, visible);
+        // A grotto's colonies overlap, from a second lattice.
+        let second = smoothstep(0.45, 0.9, wet);
+        if second > 0.0 {
+            c = lichen_layer(c, position, pixel, 2.4, density * second * 1.5, wet, seed * 0.7 + 31.0, visible);
+            c = lichen_layer(c, position, pixel, 1.6, density * second, wet, seed * 0.7 + 67.0, visible);
+        }
+    }
+    // Far off the colonies are a mean tint of their share of the surface.
+    let share = density * (0.2 + 0.2 * wet) * (1.0 - visible);
+    return mix(c, vec3(0.55, 0.62, 0.5), share * 0.6);
 }
