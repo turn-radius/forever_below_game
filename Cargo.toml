@@ -8,6 +8,17 @@ version = "0.1.0"
 license = "UNLICENSED"
 rust-version = "1.97.1"
 
+# One lint table for every crate (each crate opts in with `[lints] workspace = true`).
+# `cargo clippy --workspace --all-targets -- -D warnings` runs in CI. Bevy systems take many
+# parameters and long query types, so those two allows stay on the single systems that need them.
+# `clippy::float_cmp` is left off: it flags over a hundred exact comparisons the tests rely on.
+[workspace.lints.rust]
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
 [workspace.dependencies]
 bevy = "0.20"
 serde = { version = "1", features = ["derive"] }
