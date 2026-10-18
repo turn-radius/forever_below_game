@@ -348,15 +348,15 @@ fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creat
 
 /// Lays each body down once the flash's hold is over ([`collapse_share`]): a rat rolls onto its
 /// back about its middle, a snake goes slack.
-pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent, Option<&crate::creatures::trolls::Troll>)>) {
+pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent, Option<&crate::creatures::trolls::Troll>, Option<&mut crate::creatures::Flight>)>) {
     let hold = tuning.combat.flash_hold;
-    for (critter, mut corpse, mut transform, mut intent, troll) in &mut bodies {
+    for (critter, mut corpse, mut transform, mut intent, troll, flight) in &mut bodies {
         corpse.since += time.delta_secs();
         if corpse.since <= hold {
             continue;
         }
         // Limp: uncoiled and flat, the jaw a little open, the tongue lolling.
-        *intent = Intent { coil: 0.0, rear: 0.0, strike: 0.0, jaw: 0.35, tongue: 0.6, look: 0.0, swing: None, fallen: 0.0 };
+        *intent = Intent { jaw: 0.35, tongue: 0.6, ..default() };
         match &critter.creature {
             Creature::Rat(rat) => *transform = rolled_over(rat, &corpse.fell, collapse_share(corpse.since, hold)),
             Creature::Skeleton(_) => {
@@ -378,9 +378,30 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
                 *transform = flipped_over(spider, &corpse.fell, share);
             }
             Creature::Centipede(centipede) => *transform = turned_over(centipede, &corpse.fell, collapse_share(corpse.since, hold)),
-            Creature::Snake(_) | Creature::Bat(_) => {}
+            Creature::Bat(_) => {
+                if let Some(mut flight) = flight {
+                    let (altitude, wings) = fallen_bat(&mut flight, corpse.since - hold);
+                    flight.altitude = altitude;
+                    intent.wings = wings;
+                }
+            }
+            Creature::Snake(_) => {}
         }
     }
+}
+
+/// How fast a fallen bat drops, world units a second squared: the 9.8 m/s of gravity, in
+/// tenths of a metre.
+const GRAVITY: f32 = 98.0;
+
+/// A bat `since` seconds after it was struck down: where it has dropped to from the height it
+/// was at, and how it lies (wings folded, turned over). It falls as anything does and stops on
+/// the floor with its back to it.
+pub fn fallen_bat(flight: &mut crate::creatures::Flight, since: f32) -> (f32, crate::creatures::Wings) {
+    let from = *flight.fell_from.get_or_insert(flight.altitude);
+    let rest = flight.lie;
+    let altitude = (from - 0.5 * GRAVITY * since.max(0.0).powi(2)).max(rest);
+    (altitude, crate::creatures::Wings { altitude, roost: 0.0, power: 0.0, pitch: 0.0, bank: std::f32::consts::PI, tuck: 1.0 })
 }
 
 /// A giant spider that stood at `fell`, `share` of the way through turning onto its back: rolled
@@ -497,5 +518,35 @@ mod tests {
         let push = |species, seed| knockback(&Creature::of(species, seed));
         assert!(push(Species::Rat, 1) > push(Species::GiantRat, 1));
         assert!(push(Species::PoisonousSnake, 1) > push(Species::ConstrictorSnake, 1));
+    }
+
+    #[test]
+    fn a_slain_bat_falls_to_the_floor_and_lies_there() {
+        use crate::creatures::{Flight, Wings};
+        use fb_creatures::{BatState, pose};
+        for species in [Species::Bat, Species::GiantBat] {
+            let bat = BatState::roll_as(4, species);
+            let rig = bat.build();
+            let mut flight = Flight::roosting(&bat, &rig, 30.0, 4);
+            flight.altitude = 14.0;
+            let mut last = f32::MAX;
+            for k in 0..=40 {
+                let since = k as f32 * 0.05;
+                let (altitude, wings) = fallen_bat(&mut flight, since);
+                assert!(altitude <= last, "it only falls");
+                last = altitude;
+                if since == 0.0 {
+                    assert_eq!(altitude, 14.0);
+                }
+                let Wings { bank, tuck, .. } = wings;
+                let world = rig.world(&pose::bat(&bat, &pose::BatPose { height: altitude, bank, tuck, time: 3.0, ..default() }));
+                let lowest = rig.bones.iter().zip(&world).flat_map(|(b, p)| b.mesh.parts.iter().flat_map(move |part| part.positions.iter().map(move |&v| p.point(v)[1]))).fold(f32::MAX, f32::min);
+                if since >= 2.0 {
+                    // Two seconds on it lies on the floor: its lowest point on it, none through it.
+                    assert_eq!(altitude, flight.lie);
+                    assert!((-0.5..=1.0).contains(&lowest), "{species:?} lies with its lowest point {lowest} off the floor");
+                }
+            }
+        }
     }
 }

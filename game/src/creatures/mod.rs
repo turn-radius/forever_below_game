@@ -186,6 +186,104 @@ pub struct Intent {
     pub swing: Option<f32>,
     /// A skeleton's collapse, how far through it (0 to 1), used as it is.
     pub fallen: f32,
+    /// A bat's wings and body in the air.
+    pub wings: Wings,
+}
+
+/// How a bat holds itself in the air: what [`Intent`] asks of the pose (`BatPose`). Everything
+/// is eased from frame to frame except the altitude, which is where the bat is.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Wings {
+    /// The height of the body's middle over the floor under the creature's root, world units.
+    pub altitude: f32,
+    /// 0 flying, 1 hanging head down by its feet.
+    pub roost: f32,
+    /// 0 gliding on spread wings, 1 beating.
+    pub power: f32,
+    /// How far the nose is raised, radians.
+    pub pitch: f32,
+    /// How far it banks toward its left, radians; pi turned over.
+    pub bank: f32,
+    /// How folded the wings are, 0 spread to 1 folded.
+    pub tuck: f32,
+}
+
+/// A bat's flight: where it is in the air and what it is doing there, on the bat beside its
+/// [`behaviour::Brain`]. The root stays on the floor; the bat's height over it is
+/// [`Flight::altitude`], which the pose raises its body by.
+#[derive(Component, Clone, Debug)]
+pub struct Flight {
+    /// The height of the body's middle over the floor under the root, world units.
+    pub altitude: f32,
+    /// How fast it is climbing, world units a second (negative diving).
+    pub climb: f32,
+    /// What it is doing.
+    pub phase: Wing,
+    /// Seconds left in a wheel, a pull away or a swoop.
+    pub timer: f32,
+    /// Where it is on its circle about the delver, radians.
+    pub angle: f32,
+    /// Which way it circles: 1 or -1.
+    pub spin: f32,
+    /// How far it turns a second, radians, signed toward its left (for banking).
+    pub turning: f32,
+    /// How far its pose reaches below the body's middle in flight, and above it in flight and
+    /// roosting, world units (`BatState::flight_extent`, `roost_extent`).
+    pub below: f32,
+    pub above: f32,
+    pub roost_above: f32,
+    /// The height it dropped from, once it has fallen.
+    pub fell_from: Option<f32>,
+    /// The height of its body's middle lying fallen on the floor, folded and turned over.
+    pub lie: f32,
+}
+
+/// What a bat is doing in the air.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wing {
+    /// Hanging from the ceiling at its spot.
+    Roosting,
+    /// Flying back to its spot to hang there again.
+    Returning,
+    /// Wheeling round the delver between head height and the ceiling.
+    Wheeling,
+    /// Diving at the delver to bite.
+    Swooping,
+    /// Pulling up and away after a bite.
+    Away,
+}
+
+impl Flight {
+    /// A bat of `rig` hanging from the ceiling `ceiling` over its root (world units): its
+    /// reaches flying and roosting, and how it lies when it falls, measured from its rig.
+    pub fn roosting(bat: &fb_creatures::BatState, rig: &fb_creatures::Rig, ceiling: f32, seed: u32) -> Flight {
+        let (below, above) = bat.flight_extent(rig);
+        let roost_above = bat.roost_extent(rig).1;
+        // Lying on its back with its wings folded: how far its lowest point is under its middle.
+        let lying = pose::bat(bat, &BatPose { bank: std::f32::consts::PI, tuck: 1.0, ..default() });
+        let lowest = rig.world(&lying).iter().zip(&rig.bones).flat_map(|(place, bone)| bone.mesh.parts.iter().flat_map(move |part| part.positions.iter().map(move |&p| place.point(p)[1]))).fold(f32::MAX, f32::min);
+        Flight {
+            altitude: ceiling - roost_above,
+            climb: 0.0,
+            phase: Wing::Roosting,
+            timer: 0.0,
+            angle: (seed % 628) as f32 * 0.01,
+            spin: if seed & 1 == 0 { 1.0 } else { -1.0 },
+            turning: 0.0,
+            below: -below,
+            above,
+            roost_above,
+            fell_from: None,
+            lie: -lowest,
+        }
+    }
+
+    /// The wings and body it holds this moment, beating its wings as hard as `power`.
+    pub fn wings(&self, power: f32) -> Wings {
+        let roosting = self.phase == Wing::Roosting;
+        let pitch = if roosting { 0.0 } else { (self.climb * 0.08).clamp(-0.7, 0.5) };
+        Wings { altitude: self.altitude, roost: if roosting { 1.0 } else { 0.0 }, power, pitch, bank: (self.turning * 0.12).clamp(-0.6, 0.6), tuck: if roosting { 1.0 } else { 0.0 } }
+    }
 }
 
 /// The pose's moving parts, eased from frame to frame.
@@ -359,8 +457,10 @@ pub fn dev_spots_for(level: &Level, spec: &str) -> Vec<CreatureSpot> {
     let species = match name.trim() {
         "skeleton" => fb_creatures::Species::Skeleton,
         "troll" => fb_creatures::Species::Troll,
+        "bat" => fb_creatures::Species::Bat,
+        "giant_bat" => fb_creatures::Species::GiantBat,
         other => {
-            warn!("FB_SPAWN: no creature called {other:?} (try skeleton or troll)");
+            warn!("FB_SPAWN: no creature called {other:?} (try skeleton, troll, bat or giant_bat)");
             return Vec::new();
         }
     };
@@ -503,7 +603,19 @@ pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &Creatu
     }
     let mut rng = Mulberry32::new(spot.seed ^ 0x1D1E);
     let snake = spot.species.is_snake();
-    let rest = Intent { coil: if snake { 1.0 } else { 0.0 }, rear: if snake { 0.45 } else { 0.0 }, ..default() };
+    let mut rest = Intent { coil: if snake { 1.0 } else { 0.0 }, rear: if snake { 0.45 } else { 0.0 }, ..default() };
+    // A bat starts hanging from the ceiling over its spot.
+    let flight = if let Creature::Bat(bat) = &creature {
+        let [x, _, z] = Level::world(spot.x, spot.y);
+        let relief = Relief::new(level);
+        let vaults = (level.style == fb_level::LevelStyle::StoneHalls).then(|| crate::level::geometry::stone::Vaults::new(level));
+        let ceiling = behaviour::ceiling_over(level, vaults.as_ref(), &relief, Vec2::new(x, z));
+        let flight = Flight::roosting(bat, rig, ceiling, spot.seed);
+        rest.wings = flight.wings(0.0);
+        Some(flight)
+    } else {
+        None
+    };
     let root = commands
         .spawn((
             Name::new(spot.species.stat_block().name),
@@ -525,6 +637,9 @@ pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &Creatu
         bones.push(entity.id());
     }
     commands.entity(root).insert(Bones(bones.clone()));
+    if let Some(flight) = flight {
+        commands.entity(root).insert(flight);
+    }
     if snake {
         commands.entity(root).insert(Trail::default());
     }
@@ -615,6 +730,13 @@ pub fn animate(
             now.jaw.smooth_nudge(&intent.jaw, EASE_FAST, dt);
             now.tongue.smooth_nudge(&intent.tongue, EASE_FAST, dt);
             now.look.smooth_nudge(&intent.look, 4.0, dt);
+            // A bat's height is where it is; the rest of how it holds itself is eased.
+            now.wings.altitude = intent.wings.altitude;
+            now.wings.roost.smooth_nudge(&intent.wings.roost, 4.0, dt);
+            now.wings.tuck.smooth_nudge(&intent.wings.tuck, 6.0, dt);
+            now.wings.power.smooth_nudge(&intent.wings.power, 5.0, dt);
+            now.wings.pitch.smooth_nudge(&intent.wings.pitch, 5.0, dt);
+            now.wings.bank.smooth_nudge(&intent.wings.bank, 4.0, dt);
         }
         let now = motion.now;
         let places = match &critter.creature {
@@ -700,11 +822,11 @@ pub fn animate(
                 }
                 places
             }
-            // Flight comes with the bats' behaviour; until then one beats its wings in place at
-            // head height.
+            // Roosting, wheeling, gliding or fallen, at the height its flight puts it.
             Creature::Bat(bat) => {
                 let flap = (motion.time * pose::bat_beat_hz(bat) * std::f32::consts::TAU) % std::f32::consts::TAU;
-                pose::bat(bat, &BatPose { flap, power: 1.0, height: 14.0, bite: now.strike, look: now.look, time: motion.time, ..default() })
+                let w = now.wings;
+                pose::bat(bat, &BatPose { flap, power: w.power, roost: w.roost, tuck: w.tuck, height: w.altitude, pitch: w.pitch, bank: w.bank, bite: now.strike, look: now.look, time: motion.time })
             }
         };
         for (entity, place) in bones.0.iter().zip(&places) {
@@ -819,7 +941,7 @@ mod tests {
             }
             for (&root, rig) in roots.iter().zip(&rigs) {
                 let critter = app.world().get::<Critter>(root).unwrap().clone();
-                // A bat hangs or flies, off the floor by design.
+                // What flies is meant to be off the floor.
                 if critter.spot.species.is_flying() {
                     continue;
                 }

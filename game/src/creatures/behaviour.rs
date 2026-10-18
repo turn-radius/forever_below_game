@@ -41,12 +41,13 @@ use fb_level::path::{find_path, line_of_sight, steer_toward};
 use fb_level::{CELL, Level};
 use procgen_rng::Mulberry32;
 
-use super::{Critter, Driven, Intent, tongue_flick};
+use super::{Critter, Driven, Flight, Intent, Wing, tongue_flick};
 use crate::combat::ArmourClass;
 use crate::combat::feedback::Corpse;
 use fb_character::combat::{Odds, ToHit};
 use crate::level::geometry::Relief;
-use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
+use crate::level::geometry::stone::Vaults;
+use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player};
 use crate::player::{blocked_by, slide_around};
 use crate::tuning::Tuning;
 
@@ -204,6 +205,13 @@ pub fn scuttling(t: f32, seed: u32) -> bool {
 }
 /// How far past its own body a bat darts to bite, world units. Our own.
 const BAT_DART: f32 = 2.0;
+/// How fast a bat and a giant bat turn, radians a second: the giant is slower. Our own.
+const BAT_TURN: f32 = 7.0;
+const GIANT_BAT_TURN: f32 = 3.0;
+/// How far from the delver's eye a bat's body may be and still bite, world units. Our own.
+const BITE_BAND: f32 = 7.0;
+/// How long a bat looks for a way back to its spot before it hangs wherever it is, seconds.
+const RETURN_GIVE_UP: f32 = 15.0;
 /// The wait between a skeleton's swings, seconds. Our own.
 const SKELETON_COOLDOWN: f32 = 0.8;
 /// How much farther than its reach a skeleton's blow still lands, in case the delver steps
@@ -352,7 +360,8 @@ fn behave(
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
     player: Query<DelverToStrike, (With<Player>, Without<Critter>)>,
-    mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform)>,
+    mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform, Option<&mut Flight>)>,
+    mut vaults: Local<Option<((u32, u32), Vaults)>>,
     mut attacks: BlowsAtDelver,
     mut commands: Commands,
     sounds: Option<Res<crate::combat::feedback::CreatureSounds>>,
@@ -369,13 +378,19 @@ fn behave(
     let delver_ac = player.iter().next().and_then(|(_, ac)| ac.copied());
     let player = player.iter().next().map(|(t, _)| t.translation.xz());
     // Every creature's circle, to keep the others out of.
-    let bodies: Vec<(Entity, Vec2, f32)> = creatures.iter().map(|(e, c, _, _, t)| (e, t.translation.xz(), body_radius(c))).collect();
+    let bodies: Vec<(Entity, Vec2, f32)> = creatures.iter().map(|(e, c, _, _, t, _)| (e, t.translation.xz(), body_radius(c))).collect();
+    // A stone hall's vaults, worked out once for the level, for the bats that fly under them.
+    if level.style == fb_level::LevelStyle::StoneHalls && vaults.as_ref().is_none_or(|(key, _)| *key != (level.seed, level.depth)) && creatures.iter().any(|(_, c, ..)| c.spot.species.is_bat()) {
+        *vaults = Some(((level.seed, level.depth), Vaults::new(level)));
+    }
+    let vaults = vaults.as_ref().filter(|_| level.style == fb_level::LevelStyle::StoneHalls).map(|(_, v)| v);
     let t = time.elapsed_secs();
     let (tune, player_radius) = (&tuning.creatures, tuning.moving.body_radius);
-    for (entity, critter, mut brain, mut intent, mut transform) in &mut creatures {
+    for (entity, critter, mut brain, mut intent, mut transform, mut flight) in &mut creatures {
         let brain = &mut *brain;
         let species = critter.spot.species;
         let snake = species.is_snake();
+        let bat = species.is_bat();
         let at = transform.translation.xz();
         let radius = body_radius(critter);
         let sees = player.filter(|p| p.distance(at) <= notice_range(species, tune.sense_scale) && line_of_sight(grid(at), grid(*p), &blocked));
@@ -396,6 +411,22 @@ fn behave(
             }
             (Mode::Wander { .. }, Some(p)) => brain.mode = Mode::Chase { last_seen: p, lost: 0.0 },
             (Mode::Wander { .. }, None) => {}
+        }
+        // A bat gets going the moment it notices the delver, and goes back to its spot when it
+        // loses them.
+        if let Some(flight) = flight.as_deref_mut() {
+            let chasing = matches!(brain.mode, Mode::Chase { .. });
+            match (chasing, flight.phase) {
+                (true, Wing::Roosting | Wing::Returning) => {
+                    flight.phase = Wing::Wheeling;
+                    flight.timer = brain.rng.range_f32(0.5, 1.5);
+                }
+                (false, Wing::Wheeling | Wing::Swooping | Wing::Away) => {
+                    flight.phase = Wing::Returning;
+                    flight.timer = RETURN_GIVE_UP;
+                }
+                _ => {}
+            }
         }
         if snake && let Mode::Chase { last_seen, .. } = brain.mode
             && last_seen.distance(brain.home) > SNAKE_LEASH + reach(critter, player_radius)
@@ -447,7 +478,9 @@ fn behave(
                     heading = Some(goal);
                     speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() || species.is_troll() { 1.0 } else if species.is_spider() { SPIDER_CHASE } else { tune.rat_chase_speed };
                 }
-                if in_reach && brain.attack.is_none() && brain.cooldown <= 0.0 && !attacks.delver_is_down() {
+                // A bat bites only swooping at the delver's head.
+                let at_height = flight.as_deref().is_none_or(|f| f.phase == Wing::Swooping && (f.altitude - EYE_HEIGHT).abs() <= BITE_BAND);
+                if in_reach && at_height && brain.attack.is_none() && brain.cooldown <= 0.0 && !attacks.delver_is_down() {
                     brain.attack = Some(0.0);
                     brain.bitten = false;
                     // The cue sounds from the creature as the lunge or rear begins, before the bite.
@@ -474,6 +507,25 @@ fn behave(
             }
         }
 
+        // A bat flies where it likes: wheeling, swooping, pulling away or going home, at its
+        // own height under the ceiling.
+        let mut flying = None;
+        if let Some(flight) = flight.as_deref_mut() {
+            let goal = match brain.mode {
+                Mode::Chase { last_seen, .. } => Some(sees.unwrap_or(last_seen)),
+                Mode::Wander { .. } => None,
+            };
+            let ceiling = ceiling_over(level, vaults, &relief, at);
+            let air = Air { ceiling, giant: species == Species::GiantBat, fly: species.fly_speed() };
+            let bitten = brain.attack.is_some() && brain.bitten;
+            let cues = FlightCues { at, home: brain.home, goal, sees: sees.is_some(), bitten };
+            let plan = fly(flight, &air, &cues, &blocked, &mut brain.rng, dt);
+            heading = plan.heading;
+            speed = plan.speed;
+            face = None;
+            flying = Some(plan.power);
+        }
+
         // The way there: straight if it can be walked, else along a path round the rock.
         if let Some(goal) = heading {
             let (from_cell, goal_cell) = (cell(at), cell(goal));
@@ -491,7 +543,13 @@ fn behave(
                 let (x, y) = steer_toward(grid(at), grid(goal), &brain.path, clearance, &blocked);
                 Vec2::new(x, y) * CELL
             };
-            let direction = (target - at).normalize_or_zero();
+            let mut direction = (target - at).normalize_or_zero();
+            // A bat carries on the way it faces, coming round as fast as it can turn.
+            if flying.is_some() && direction != Vec2::ZERO {
+                let ahead = (transform.rotation * Vec3::Z).xz();
+                speed *= 0.35 + 0.65 * ahead.dot(direction).max(0.0);
+                direction = (ahead + direction).normalize_or(direction);
+            }
             if direction != Vec2::ZERO {
                 let others: Vec<Obstacle> = bodies
                     .iter()
@@ -518,13 +576,20 @@ fn behave(
                 let wanted = to.x.atan2(to.y);
                 let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
                 let turn = (wanted - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                let rate = if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else if species.is_spider() { SPIDER_TURN } else if species.is_troll() { TROLL_TURN } else { RAT_TURN };
-                transform.rotation = Quat::from_rotation_y(yaw + turn.clamp(-rate * dt, rate * dt));
+                let rate = if bat { if species == Species::GiantBat { GIANT_BAT_TURN } else { BAT_TURN } } else if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else if species.is_spider() { SPIDER_TURN } else if species.is_troll() { TROLL_TURN } else { RAT_TURN };
+                let turned = turn.clamp(-rate * dt, rate * dt);
+                transform.rotation = Quat::from_rotation_y(yaw + turned);
+                if let Some(flight) = flight.as_deref_mut() {
+                    flight.turning = turned / dt;
+                }
             }
         }
 
         // The attack under way, and what it looks like.
         *intent = Intent::default();
+        if let (Some(flight), Some(power)) = (flight.as_deref(), flying) {
+            intent.wings = flight.wings(power);
+        }
         let chasing = matches!(brain.mode, Mode::Chase { .. });
         if snake {
             let moving = speed > 0.0;
@@ -619,6 +684,164 @@ fn behave(
             }
         }
     }
+}
+
+/// The ceiling over world `(x, z)` as a height over the floor there: a stone hall's vault
+/// (`vaults`), or the rough rock's flat ceiling less the most its relief comes down.
+pub fn ceiling_over(level: &Level, vaults: Option<&Vaults>, relief: &Relief, at: Vec2) -> f32 {
+    let top = vaults.map_or(level.ceiling - ROCK_CEILING_RELIEF, |v| v.height(at.x, at.y));
+    top - relief.floor_height(at.x, at.y)
+}
+
+/// How far a rough rock ceiling wanders down from its nominal height, at most, world units.
+const ROCK_CEILING_RELIEF: f32 = 1.2;
+/// How near a flying bat's body comes to the floor and the ceiling beyond what its pose reaches,
+/// world units. Our own.
+const AIR_MARGIN: f32 = 0.6;
+/// How high above the floor a bat wheels at its lowest and swoops to, world units: head height
+/// for a bat, lower for a giant bat. Our own.
+const BAT_WHEEL_LOW: f32 = 14.0;
+const GIANT_WHEEL_LOW: f32 = 10.0;
+const BAT_SWOOP: f32 = 14.0;
+const GIANT_SWOOP: f32 = 11.0;
+/// How wide a bat circles the delver, in cells; a giant bat wheels wider. Our own.
+const BAT_CIRCLE: f32 = 0.9;
+const GIANT_CIRCLE: f32 = 1.3;
+/// A bat's wheeling speed as a share of its flying speed; swooping and pulling away are flat out.
+const WHEEL_PACE: f32 = 0.55;
+
+/// The room a flying bat has: how high the ceiling is over the floor under it, whether it is
+/// a giant, and its flying speed.
+#[derive(Clone, Copy, Debug)]
+pub struct Air {
+    pub ceiling: f32,
+    pub giant: bool,
+    pub fly: f32,
+}
+
+/// What a flying bat senses this frame.
+#[derive(Clone, Copy, Debug)]
+pub struct FlightCues {
+    /// Where it is on the floor plan and where it roosts (world `(x, z)`).
+    pub at: Vec2,
+    pub home: Vec2,
+    /// The delver, or where it last saw them, while it is after them.
+    pub goal: Option<Vec2>,
+    /// Whether it sees them this moment.
+    pub sees: bool,
+    /// Whether its bite has landed this attack.
+    pub bitten: bool,
+}
+
+/// Where a bat means to go this frame, and how hard it beats its wings.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Course {
+    pub heading: Option<Vec2>,
+    pub speed: f32,
+    pub power: f32,
+}
+
+/// The heights a bat flies between in `air` as `flight` reaches: the lowest it wheels, the
+/// highest, and what it swoops to bite at, all for the middle of its body over the floor.
+pub fn flying_heights(flight: &Flight, air: &Air) -> (f32, f32, f32) {
+    let floor = flight.below + AIR_MARGIN;
+    let high = (air.ceiling - flight.above - AIR_MARGIN).max(floor);
+    let low = (if air.giant { GIANT_WHEEL_LOW } else { BAT_WHEEL_LOW }).clamp(floor, high);
+    let swoop = (if air.giant { GIANT_SWOOP } else { BAT_SWOOP }).clamp(floor, high);
+    (low, high, swoop)
+}
+
+/// One frame of a bat's flight: which phase it is in and what comes next, where it heads, and
+/// its height over the floor, moved toward the height it wants and held between the floor and
+/// the ceiling whatever else happens. It roosts hanging from the ceiling until the delver is
+/// noticed ([`Wing::Wheeling`] is set by the caller), wheels round them at head height and
+/// above, swoops in to bite, pulls up and away, and comes round again; when it loses them it
+/// returns to its spot and roosts. Our own tuning throughout.
+pub fn fly(flight: &mut Flight, air: &Air, cues: &FlightCues, blocked: &impl Fn(i32, i32) -> bool, rng: &mut Mulberry32, dt: f32) -> Course {
+    let (low, high, swoop) = flying_heights(flight, air);
+    let roost = air.ceiling - flight.roost_above;
+    let at = cues.at;
+    let mut course = Course { heading: None, speed: 0.0, power: 0.0 };
+    let mut want = roost;
+    flight.timer -= dt;
+    match flight.phase {
+        Wing::Roosting => {}
+        Wing::Returning => {
+            let there = cues.home.distance(at);
+            // Out of time to find the way: hang wherever it is.
+            let home = if flight.timer <= 0.0 { at } else { cues.home };
+            if there > 1.5 && flight.timer > 0.0 {
+                course = Course { heading: Some(home), speed: (WHEEL_PACE * air.fly).min(there * 4.0).max(1.0), power: 0.8 };
+                want = 0.5 * (low + high);
+            } else if flight.altitude >= roost - 0.3 {
+                flight.phase = Wing::Roosting;
+                flight.climb = 0.0;
+            } else {
+                course.power = 1.0;
+            }
+        }
+        Wing::Wheeling => {
+            let Some(goal) = cues.goal else { return course };
+            let circle = (if air.giant { GIANT_CIRCLE } else { BAT_CIRCLE }) * CELL;
+            let pace = WHEEL_PACE * air.fly;
+            flight.angle = (flight.angle + flight.spin * dt * pace / circle) % std::f32::consts::TAU;
+            let mut aim = goal + Vec2::from_angle(flight.angle) * circle;
+            if !line_of_sight(grid(goal), grid(aim), blocked) {
+                // Rock in the way of the circle: round the other way, and straight at them.
+                flight.spin = -flight.spin;
+                aim = goal;
+            }
+            let climb = 0.5 * (high - low);
+            want = 0.5 * (low + high) + climb * (2.0 * flight.angle).sin();
+            course = Course { heading: Some(aim), speed: pace, power: if want > flight.altitude + 0.5 { 1.0 } else { 0.4 } };
+            if flight.timer <= 0.0 && cues.sees {
+                flight.phase = Wing::Swooping;
+                flight.timer = 3.0;
+            }
+        }
+        Wing::Swooping => {
+            let Some(goal) = cues.goal else { return course };
+            want = swoop;
+            course = Course { heading: Some(goal), speed: air.fly, power: 0.0 };
+            if cues.bitten || flight.timer <= 0.0 {
+                flight.phase = Wing::Away;
+                flight.timer = rng.range_f32(1.0, 1.8);
+            }
+        }
+        Wing::Away => {
+            let Some(goal) = cues.goal else { return course };
+            want = high;
+            // Straight away from them, or the nearest way that is open, or home.
+            let from = (at - goal).normalize_or(Vec2::X);
+            let run = 3.0 * CELL;
+            let way = [0.0f32, 0.9, -0.9, 1.9, -1.9].into_iter().map(|turn| at + Vec2::from_angle(turn).rotate(from) * run).find(|&to| line_of_sight(grid(at), grid(to), blocked));
+            course = Course { heading: Some(way.unwrap_or(cues.home)), speed: air.fly, power: 1.0 };
+            if flight.timer <= 0.0 {
+                flight.phase = Wing::Wheeling;
+                flight.timer = rng.range_f32(1.0, 2.4);
+                if rng.chance(0.5) {
+                    flight.spin = -flight.spin;
+                }
+            }
+        }
+    }
+    // Up and down: eased toward the height wanted, never past the floor or the ceiling.
+    let vertical = air.fly.max(6.0);
+    let target = ((want - flight.altitude) * 3.0).clamp(-1.5 * vertical, vertical);
+    flight.climb += (target - flight.climb) * (1.0 - (-8.0 * dt).exp());
+    let before = flight.altitude;
+    flight.altitude += flight.climb * dt;
+    // Hanging it may reach right up; in the air its wings need their room, but a bat just
+    // let go of the roof comes down from where it was rather than being snapped there.
+    let hung = matches!(flight.phase, Wing::Roosting | Wing::Returning);
+    let top_roost = air.ceiling - flight.roost_above.min(flight.above);
+    let top = if hung { top_roost } else { (air.ceiling - flight.above).max(before.min(top_roost)) };
+    let bottom = flight.below;
+    if flight.altitude < bottom || flight.altitude > top.max(bottom) {
+        flight.altitude = flight.altitude.clamp(bottom, top.max(bottom));
+        flight.climb = 0.0;
+    }
+    course
 }
 
 #[cfg(test)]
@@ -979,4 +1202,179 @@ mod tests {
         let scale = query.iter(app.world()).next().unwrap().spatial_scale.unwrap();
         assert_eq!(scale.0, Vec3::splat(0.1));
     }
+
+    // Bats
+
+    use fb_creatures::BatState;
+    use fb_level::CreatureSpot;
+
+    /// A bat of `species` rolled from `seed`, hanging in a room `ceiling` high.
+    fn roosting_bat(species: Species, seed: u32, ceiling: f32) -> (Flight, Air) {
+        let bat = BatState::roll_as(seed, species);
+        let rig = bat.build();
+        let flight = Flight::roosting(&bat, &rig, ceiling, seed);
+        (flight, Air { ceiling, giant: species == Species::GiantBat, fly: species.fly_speed() })
+    }
+
+    #[test]
+    fn a_bat_stays_between_the_floor_and_the_ceiling_over_a_long_flight() {
+        for ceiling in [30.0, 40.0, 60.0] {
+            for species in [Species::Bat, Species::GiantBat] {
+                for seed in 0..4 {
+                    let (mut flight, air) = roosting_bat(species, seed, ceiling);
+                    let mut rng = Mulberry32::new(seed);
+                    let (mut at, home) = (Vec2::new(100.0, 100.0), Vec2::new(100.0, 100.0));
+                    let mut delver = Vec2::new(140.0, 100.0);
+                    let open = |_: i32, _: i32| false;
+                    let (mut flew, mut reached_head, mut reached_roof) = (0, false, false);
+                    let (low, high, _) = flying_heights(&flight, &air);
+                    flight.phase = Wing::Wheeling;
+                    flight.timer = 1.0;
+                    // Two minutes: wheeling round a delver who wanders, swooping and biting.
+                    for frame in 0..7200 {
+                        let t = frame as f32 / 60.0;
+                        delver = Vec2::new(140.0, 100.0) + Vec2::from_angle(t * 0.3) * 15.0;
+                        let bitten = flight.phase == Wing::Swooping && at.distance(delver) < 4.0;
+                        let cues = FlightCues { at, home, goal: Some(delver), sees: true, bitten };
+                        let course = fly(&mut flight, &air, &cues, &open, &mut rng, 1.0 / 60.0);
+                        if let Some(to) = course.heading {
+                            at += (to - at).normalize_or_zero() * course.speed / 60.0;
+                        }
+                        let (bottom, top) = (flight.below, ceiling - flight.roost_above.min(flight.above));
+                        assert!(flight.altitude >= bottom - 1e-4 && flight.altitude <= top + 1e-4, "{species:?} {seed} under a {ceiling} ceiling: altitude {} at frame {frame}", flight.altitude);
+                        if frame > 120 {
+                            // In the air it keeps its wings off the stone: within the heights it flies at.
+                            assert!(flight.altitude >= flight.below, "wings in the floor");
+                            assert!(flight.altitude + flight.above <= ceiling + 0.5, "{species:?} {seed} under a {ceiling} ceiling: wings through it at {}", flight.altitude);
+                        }
+                        flew += (flight.phase == Wing::Swooping) as u32;
+                        reached_head |= flight.altitude <= low + 1.5;
+                        reached_roof |= flight.altitude >= high - 1.5;
+                    }
+                    let _ = delver;
+                    assert!(flew > 0, "{species:?} {seed} never swooped");
+                    assert!(reached_head && reached_roof, "{species:?} {seed} under a {ceiling} ceiling kept to one height ({low}..{high})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_roosting_bat_does_not_stir_and_a_returning_one_hangs_again() {
+        let (mut flight, air) = roosting_bat(Species::Bat, 3, 30.0);
+        let hung = flight.altitude;
+        let mut rng = Mulberry32::new(1);
+        let (mut at, home) = (Vec2::new(40.0, 40.0), Vec2::new(100.0, 40.0));
+        let open = |_: i32, _: i32| false;
+        for _ in 0..300 {
+            let cues = FlightCues { at: home, home, goal: None, sees: false, bitten: false };
+            let course = fly(&mut flight, &air, &cues, &open, &mut rng, 1.0 / 60.0);
+            assert_eq!(course.heading, None);
+        }
+        assert_eq!(flight.altitude, hung);
+        assert_eq!(flight.phase, Wing::Roosting);
+        // Lost the delver away from its spot: it flies home and hangs again.
+        flight.phase = Wing::Returning;
+        flight.timer = RETURN_GIVE_UP;
+        flight.altitude = 15.0;
+        for _ in 0..1800 {
+            let cues = FlightCues { at, home, goal: None, sees: false, bitten: false };
+            let course = fly(&mut flight, &air, &cues, &open, &mut rng, 1.0 / 60.0);
+            if let Some(to) = course.heading {
+                at += (to - at).normalize_or_zero() * course.speed / 60.0;
+            }
+        }
+        assert_eq!(flight.phase, Wing::Roosting);
+        assert!(at.distance(home) < 2.0 && (flight.altitude - hung).abs() < 0.5, "{at} {}", flight.altitude);
+    }
+
+    #[test]
+    fn a_giant_bat_flies_lower_and_turns_slower() {
+        let (small, small_air) = roosting_bat(Species::Bat, 1, 30.0);
+        let (giant, giant_air) = roosting_bat(Species::GiantBat, 1, 30.0);
+        let (small_low, _, small_swoop) = flying_heights(&small, &small_air);
+        let (giant_low, _, giant_swoop) = flying_heights(&giant, &giant_air);
+        assert!(giant_low < small_low && giant_swoop < small_swoop, "{giant_low} {small_low}");
+        assert!(GIANT_BAT_TURN < BAT_TURN);
+    }
+
+    /// An app of bats and a player only, thinking and moving, in the largest room of seed 1207.
+    fn bat_app(species: Species, count: u32) -> (App, Vec<Entity>, Entity, Vec2) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .add_plugins(BehaviourPlugin)
+            .add_systems(Update, (super::super::idle, animate).chain().after(behave));
+        let level = fb_level::generate(1207, 1);
+        let room = *level.rooms.iter().max_by_key(|r| r.w * r.h).unwrap();
+        let (cx, cy) = room.centre();
+        app.insert_resource(Obstacles(Vec::new()));
+        app.insert_resource(CurrentLevel(level.clone()));
+        let player_at = Vec2::new(cx, cy) * CELL + Vec2::new(-1.5, 1.0) * CELL;
+        let player = app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y))).id();
+        let roots = {
+            let mut commands = app.world_mut().commands();
+            (0..count)
+                .map(|i| {
+                    let spot = CreatureSpot { x: cx + 0.3 * i as f32, y: cy, yaw: 0.0, species, seed: 11 + i, pack: 0 };
+                    spawn_skeleton(&mut commands, &level, &spot, &spot.creature().rig()).0
+                })
+                .collect()
+        };
+        app.world_mut().flush();
+        (app, roots, player, player_at)
+    }
+
+    fn flight(app: &App, bat: Entity) -> Flight {
+        app.world().get::<Flight>(bat).unwrap().clone()
+    }
+
+    #[test]
+    fn bats_hang_until_the_delver_comes_then_wheel_swoop_and_bite_then_roost_again() {
+        let (mut app, bats, player, near) = bat_app(Species::Bat, 3);
+        let level = fb_level::generate(1207, 1);
+        let relief = Relief::new(&level);
+        let hung: Vec<f32> = bats.iter().map(|&b| flight(&app, b).altitude).collect();
+        // The delver far away across the level, out of sight: they hang.
+        let far = {
+            let (x, y) = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter(|&(x, y)| level.is_open(x, y)).max_by_key(|&(x, y)| (x * 20 - near.x as i32).abs() + (y * 20 - near.y as i32).abs()).unwrap();
+            Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * CELL
+        };
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = Vec3::new(far.x, 0.0, far.y);
+        for _ in 0..300 {
+            app.update();
+        }
+        for (&b, &h) in bats.iter().zip(&hung) {
+            let f = flight(&app, b);
+            assert_eq!(f.phase, Wing::Roosting);
+            assert_eq!(f.altitude, h);
+        }
+        // The delver walks in: they leave the ceiling, stay in the air and out of the rock, and bite.
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = Vec3::new(near.x, 0.0, near.y);
+        let (mut blows, mut swooped, mut came_down) = (0, false, false);
+        for frame in 0..1500 {
+            app.update();
+            blows += attacks(&mut app).len() + app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count();
+            for &b in &bats {
+                let f = flight(&app, b);
+                let at = position(&app, b);
+                assert!(level.is_open((at.x / CELL).floor() as i32, (at.y / CELL).floor() as i32), "a bat in the rock at frame {frame}");
+                let ceiling = crate::level::geometry::stone::ceiling_at(&level, at.x, at.y) - relief.floor_height(at.x, at.y);
+                assert!(f.altitude >= f.below - 1e-3 && f.altitude + f.roost_above.min(f.above) <= ceiling + 1e-3, "bat out of bounds: {} in {ceiling}", f.altitude);
+                swooped |= f.phase == Wing::Swooping;
+                came_down |= f.altitude < 20.0;
+            }
+        }
+        assert!(swooped && came_down, "they never swooped");
+        assert!(blows > 0, "they never bit");
+        // The delver leaves again: out of sight, they fly back and hang.
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = Vec3::new(far.x, 0.0, far.y);
+        for _ in 0..3600 {
+            app.update();
+        }
+        for &b in &bats {
+            assert_eq!(flight(&app, b).phase, Wing::Roosting, "a bat has not gone back to roost");
+        }
+    }
+
 }

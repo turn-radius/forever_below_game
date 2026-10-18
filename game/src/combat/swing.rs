@@ -27,7 +27,7 @@ use fb_character::combat::Odds;
 
 use super::callouts::{Callout, Outcome};
 use super::feedback::{Burned, Corpse, Struck};
-use super::{ArmourClass, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach};
+use super::{ArmourClass, HAND_HEIGHT, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach_from};
 use crate::carry::{HeldItem, ViewModelCamera};
 use crate::view_model::ViewHold;
 use crate::character::{Character, DelverStamina, modifier};
@@ -193,7 +193,7 @@ pub(super) fn start_swing(
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
             let combat = &tuning.combat;
-            let target = target_in_reach(from, at.forward().as_vec3().xz(), weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets())?;
+            let target = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), at.forward().as_vec3().xz(), weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets())?;
             toward_target(eye, strikeable.points(target), &tuning.view)
         });
         let flourish = Vec3::new(dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0));
@@ -226,7 +226,7 @@ impl Strikeable<'_, '_> {
     /// Every body a blow might land on, as circles on the floor.
     pub fn targets(&self) -> Vec<Target> {
         let creatures = self.creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes));
-        let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target { entity, centre: t.translation.xz(), radius: denizen.radius });
+        let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target::on_floor(entity, t.translation.xz(), denizen.radius));
         creatures.chain(folk).collect()
     }
 
@@ -342,7 +342,7 @@ fn land_blows(
             let from = at.translation.xz();
             let forward = at.forward().as_vec3().xz();
             let combat = &tuning.combat;
-            if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
+            if let Some(target) = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
                 swung.write(SwungAt { target });
                 let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
                 let odds = crate::character::DelverEffects::attack_odds(effects, rules);
@@ -374,9 +374,10 @@ pub fn body_targets(entity: Entity, critter: &Critter, root: &Transform, bones: 
         .flat_map(|b| b.0.iter())
         .filter_map(|&bone| shapes.get(bone).ok())
         .flat_map(|(at, shape)| shape.spheres(at))
-        .map(|(centre, radius)| Target { entity, centre: centre.xz(), radius })
+        // What flies is reached up and down as well as across: its spheres carry their height.
+        .map(|(centre, radius)| Target { entity, centre: centre.xz(), radius, height: critter.spot.species.is_flying().then_some(centre.y) })
         .collect();
-    if targets.is_empty() { vec![Target { entity, centre: root.translation.xz(), radius: body_radius(critter) }] } else { targets }
+    if targets.is_empty() { vec![Target::on_floor(entity, root.translation.xz(), body_radius(critter))] } else { targets }
 }
 
 fn smoothstep(x: f32) -> f32 {

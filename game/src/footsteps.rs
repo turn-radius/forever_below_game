@@ -171,6 +171,10 @@ fn play_delver_steps(
 /// Add step state to creatures when they become Driven (active in behaviour).
 fn init_creature_steps(mut commands: Commands, new: Query<(Entity, &Critter, &Transform), Added<Driven>>) {
     for (entity, critter, transform) in &new {
+        // What flies makes no footsteps.
+        if critter.spot.species.is_flying() {
+            continue;
+        }
         let rng = Mulberry32::new(critter.spot.seed ^ 0x5733_7570);
         let pos = transform.translation.xz();
         commands.entity(entity).insert((
@@ -250,6 +254,21 @@ fn play_creature_steps(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_flies_makes_no_footsteps_and_what_walks_does() {
+        let mut app = App::new();
+        app.add_systems(Update, init_creature_steps);
+        let spot = |species| fb_level::CreatureSpot { x: 1.0, y: 1.0, yaw: 0.0, species, seed: 3, pack: 0 };
+        let mut spawn = |species| {
+            let spot = spot(species);
+            app.world_mut().spawn((Critter::new(spot, spot.creature()), Transform::default(), Driven)).id()
+        };
+        let (bat, giant, rat) = (spawn(fb_creatures::Species::Bat), spawn(fb_creatures::Species::GiantBat), spawn(fb_creatures::Species::Rat));
+        app.update();
+        assert!(!app.world().entity(bat).contains::<WalksWithSteps>() && !app.world().entity(giant).contains::<WalksWithSteps>());
+        assert!(app.world().entity(rat).contains::<WalksWithSteps>());
+    }
 
     #[test]
     fn burden_threshold_is_34_percent() {

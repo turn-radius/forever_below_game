@@ -320,12 +320,33 @@ pub struct Target {
     pub entity: Entity,
     pub centre: Vec2,
     pub radius: f32,
+    /// How high its centre is over the floor, when it flies: a blow must reach up to it as well
+    /// as across. `None` for what stands on the floor, which a blow reaches at any height.
+    pub height: Option<f32>,
 }
+
+impl Target {
+    /// A body on the floor.
+    pub const fn on_floor(entity: Entity, centre: Vec2, radius: f32) -> Target {
+        Target { entity, centre, radius, height: None }
+    }
+}
+
+/// How high over the delver's feet a blow starts from, world units: the hand, about shoulder
+/// height. Our own.
+pub const HAND_HEIGHT: f32 = 12.0;
 
 /// The nearest of `targets` a blow from `from` facing `forward` (both on the floor) reaches:
 /// its body's edge within `reach`, and some of it within `cone` radians of straight ahead
 /// (`hit_cone_degrees`, [`crate::tuning::CombatTuning`]).
 pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, cone: f32, targets: &[Target]) -> Option<Entity> {
+    target_in_reach_from(from, None, forward, reach, cone, targets)
+}
+
+/// [`target_in_reach`] for a blow from `hand` high (over the floor) that reaches in the air as
+/// well: a flying body is in reach only if its nearest point to the hand, across and up or
+/// down, is within `reach`. With no `hand`, height is ignored.
+pub fn target_in_reach_from(from: Vec2, hand: Option<f32>, forward: Vec2, reach: f32, cone: f32, targets: &[Target]) -> Option<Entity> {
     let forward = forward.normalize_or_zero();
     targets
         .iter()
@@ -333,7 +354,12 @@ pub fn target_in_reach(from: Vec2, forward: Vec2, reach: f32, cone: f32, targets
             let to = t.centre - from;
             let distance = to.length();
             let edge = distance - t.radius;
-            if edge > reach {
+            let gap = match (hand, t.height) {
+                (Some(hand), Some(height)) => ((height - hand).abs() - t.radius).max(0.0),
+                _ => 0.0,
+            };
+            let out = if gap > 0.0 { edge.max(0.0).hypot(gap) > reach } else { edge > reach };
+            if out {
                 return None;
             }
             // Standing on it counts; otherwise the angle to its nearest side.
@@ -498,13 +524,49 @@ mod tests {
         }
     }
 
+    /// Where a bat's hit spheres are with its body `height` up: the centres of each bone's
+    /// capsule as the pose puts them, roosting or flying, as targets standing at `at`.
+    fn bat_targets(at: Vec2, height: f32, roosting: bool) -> Vec<Target> {
+        use fb_creatures::{BatState, Species, pose};
+        let bat = BatState::roll_as(5, Species::Bat);
+        let rig = bat.build();
+        let pose = pose::BatPose { roost: if roosting { 1.0 } else { 0.0 }, power: 1.0, height, ..default() };
+        let world = rig.world(&pose::bat(&bat, &pose));
+        rig.bones
+            .iter()
+            .zip(&world)
+            .filter_map(|(bone, place)| bone.hit().map(|c| (place.point(c.a), place.point(c.b), c.radius)))
+            .flat_map(|(a, b, radius)| [a, b].map(move |p| Target { entity: Entity::from_raw_u32(9).unwrap(), centre: at + Vec2::new(p[0], p[2]), radius, height: Some(p[1]) }))
+            .collect()
+    }
+
+    #[test]
+    fn a_swooping_bat_at_head_height_can_be_struck_and_one_roosting_high_cannot_unless_the_weapon_reaches() {
+        let (forward, hand) = (Vec2::NEG_Y, HAND_HEIGHT);
+        let ahead = Vec2::new(0.0, -6.0);
+        // A dagger's reach: a bat swooping at head height (14 up) a short way ahead is found.
+        let dagger = 9.5;
+        let swooping = bat_targets(ahead, 14.0, false);
+        assert!(target_in_reach_from(Vec2::ZERO, Some(hand), forward, dagger, CONE, &swooping).is_some());
+        // Hanging from the ceiling of a 30-unit room, straight ahead and as near, it is out of reach.
+        let roosting = bat_targets(ahead, 28.0, true);
+        assert!(roosting.iter().all(|t| t.height.unwrap() > hand + 8.0));
+        assert_eq!(target_in_reach_from(Vec2::ZERO, Some(hand), forward, dagger, CONE, &roosting), None);
+        // A long spear reaches it.
+        assert!(target_in_reach_from(Vec2::ZERO, Some(hand), forward, 24.0, CONE, &roosting).is_some());
+        // Height is ignored with no hand, and for what stands on the floor.
+        assert!(target_in_reach(Vec2::ZERO, forward, dagger, CONE, &roosting).is_some());
+        let rat = Target::on_floor(Entity::from_raw_u32(1).unwrap(), ahead, 1.5);
+        assert!(target_in_reach_from(Vec2::ZERO, Some(hand), forward, dagger, CONE, &[rat]).is_some());
+    }
+
     #[test]
     fn blows_land_only_in_reach_and_ahead() {
         let e = |i| Entity::from_raw_u32(i).unwrap();
-        let near_ahead = Target { entity: e(1), centre: Vec2::new(0.0, -8.0), radius: 1.5 };
-        let far_ahead = Target { entity: e(2), centre: Vec2::new(0.0, -30.0), radius: 1.5 };
-        let behind = Target { entity: e(3), centre: Vec2::new(0.0, 6.0), radius: 1.5 };
-        let beside = Target { entity: e(4), centre: Vec2::new(9.0, -1.0), radius: 1.5 };
+        let near_ahead = Target { entity: e(1), centre: Vec2::new(0.0, -8.0), radius: 1.5, height: None };
+        let far_ahead = Target { entity: e(2), centre: Vec2::new(0.0, -30.0), radius: 1.5, height: None };
+        let behind = Target { entity: e(3), centre: Vec2::new(0.0, 6.0), radius: 1.5, height: None };
+        let beside = Target { entity: e(4), centre: Vec2::new(9.0, -1.0), radius: 1.5, height: None };
         let forward = Vec2::new(0.0, -1.0);
         assert_eq!(target_in_reach(Vec2::ZERO, forward, 14.0, CONE, &[far_ahead, behind, beside, near_ahead]), Some(e(1)));
         assert_eq!(target_in_reach(Vec2::ZERO, forward, 14.0, CONE, &[far_ahead, behind, beside]), None);
@@ -512,7 +574,7 @@ mod tests {
         assert_eq!(target_in_reach(Vec2::ZERO, forward, 30.0, CONE, &[far_ahead]), Some(e(2)));
         assert_eq!(target_in_reach(Vec2::ZERO, forward, 5.0, CONE, &[near_ahead]), None);
         // A big body off to the side is still caught by its near edge.
-        let big = Target { entity: e(5), centre: Vec2::new(8.0, -4.0), radius: 7.0 };
+        let big = Target { entity: e(5), centre: Vec2::new(8.0, -4.0), radius: 7.0, height: None };
         assert_eq!(target_in_reach(Vec2::ZERO, forward, 10.0, CONE, &[big]), Some(e(5)));
     }
 
@@ -681,7 +743,7 @@ mod tests {
         // The segment of its body farthest from its root, and a place beside it, facing it,
         // in the sword's reach of it but not of one circle at the root.
         let mid = *spine.iter().max_by(|a, b| a.xz().distance(root.translation.xz()).total_cmp(&b.xz().distance(root.translation.xz()))).unwrap();
-        let at_root = Target { entity: snake, centre: root.translation.xz(), radius: body_radius(&critter) };
+        let at_root = Target { entity: snake, centre: root.translation.xz(), radius: body_radius(&critter), height: None };
         let from = (0..24)
             .map(|i| mid.xz() + Vec2::from_angle(i as f32 * std::f32::consts::TAU / 24.0) * 0.6 * weapon.reach)
             .filter(|p| spine.iter().all(|s| s.xz().distance(*p) > critter.radius))
