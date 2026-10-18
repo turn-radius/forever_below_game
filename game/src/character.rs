@@ -215,6 +215,9 @@ pub struct Derived {
     pub speed: f32,
     /// Chance the shield in their off hand turns aside a blow that would hit.
     pub block_chance: f32,
+    /// Points of luck from what they wear: each rolls the loot of a level they come to a level
+    /// deeper.
+    pub luck: f32,
     /// What worn items add to their ability scores.
     pub abilities: AbilityBonus,
 }
@@ -242,7 +245,7 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64 },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64 },
             );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
@@ -307,6 +310,7 @@ impl Character {
             heal_on_kill: gear.heal_on_kill as f32,
             speed: gear.speed as f32,
             block_chance: gear.block_chance as f32,
+            luck: gear.luck as f32,
             abilities: gear.abilities,
         }
     }
