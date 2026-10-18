@@ -9,7 +9,8 @@
 //! place with room as a pickup would, and binds it ([`pick_up_and_bind`]).
 //! The keys 1 to 0 then use the item in the slot ([`use_quickslot`]): food and drink are eaten
 //! and drunk (`crate::eat`, a healing draught heals), a torch or lantern is drawn into the hand
-//! and then lit or put out (`crate::kindle`), and a weapon or shield is drawn into the hand.
+//! and then lit or put out (`crate::kindle`), a flask of lamp oil fills the lanterns held or at
+//! the hip (`crate::kindle::refill_and_say`), and a weapon or shield is drawn into the hand.
 //!
 //! A slot keeps pointing at its item until the item is used up or leaves the inventory
 //! ([`empty_lost_slots`]). The inventory keeps no counts, so a stack of bread is several items:
@@ -96,6 +97,8 @@ pub enum QuickUse {
     Consume,
     /// Draw it into the hand, and then light it or put it out.
     Light,
+    /// Fill the lanterns held or at the hip from it.
+    Refill,
     /// Draw it into the hand.
     Draw,
 }
@@ -106,6 +109,8 @@ pub fn quick_use(item: &Item) -> Option<QuickUse> {
         Some(QuickUse::Consume)
     } else if item.shape.lit().is_some() {
         Some(QuickUse::Light)
+    } else if item.has_oil() {
+        Some(QuickUse::Refill)
     } else if item.slots().iter().any(|s| matches!(s, Slot::Mainhand | Slot::Offhand)) {
         Some(QuickUse::Draw)
     } else {
@@ -155,6 +160,18 @@ pub fn use_slot(slot: usize, slots: &mut Quickslots, inventory: &mut Inventory, 
             let said = eating.eat(inventory, id).unwrap_or_else(|| "You cannot eat that now".to_string());
             if inventory.item(id).is_none() {
                 match next_of_a_kind(inventory, &base, QuickUse::Consume) {
+                    Some(next) => slots.bind(slot, next),
+                    None => slots.clear(slot),
+                }
+            }
+            said
+        }
+        Some(QuickUse::Refill) => {
+            let said = crate::kindle::refill_and_say(inventory, id);
+            // An emptied flask is kept, as a drained waterskin is, but the slot moves to a full one,
+            // or empties after the last.
+            if !inventory.item(id).is_some_and(Item::has_oil) {
+                match next_of_a_kind(inventory, &base, QuickUse::Refill) {
                     Some(next) => slots.bind(slot, next),
                     None => slots.clear(slot),
                 }
@@ -576,6 +593,38 @@ mod tests {
         assert_eq!(toast(&app), "You put out the torch");
         press(&mut app, KeyCode::Digit1);
         assert_eq!(lit(&app), Some(true));
+    }
+
+    #[test]
+    fn lamp_oil_on_a_slot_fills_the_held_lantern_and_moves_to_the_next_flask() {
+        let (mut app, _) = delve();
+        let full_flask = || {
+            let mut flask = item(fb_items::LAMP_OIL);
+            if let armory::Item::Food(s) = &mut flask.shape {
+                s.provision.fill = 1.0;
+            }
+            flask
+        };
+        let (first, second) = (give(&mut app, full_flask()), give(&mut app, full_flask()));
+        let mut lantern = item("Lantern");
+        lantern.shape.set_lit(true).unwrap();
+        lantern.burn(1.0e9);
+        let lantern = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(lantern);
+            inventory.equip(id, Slot::Offhand).unwrap();
+            id
+        };
+        assert_eq!(quick_use(&item(fb_items::LAMP_OIL)), Some(QuickUse::Refill));
+        bind(&mut app, 4, first);
+        press(&mut app, KeyCode::Digit5);
+        assert_eq!(toast(&app), "You fill the lantern");
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!(inventory.item(lantern).unwrap().fuel_left(), inventory.item(lantern).unwrap().fuel_capacity());
+        assert!(has(&app, first), "the empty flask is kept");
+        assert_eq!(bound(&app, 4), Some(second), "the slot moves to the full flask");
+        press(&mut app, KeyCode::Digit5);
+        assert_eq!(toast(&app), "Your lantern is already full");
     }
 
     #[test]
