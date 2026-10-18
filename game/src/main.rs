@@ -68,7 +68,8 @@ fn main() -> AppExit {
         return run_creature(&args);
     }
     let swings = args.iter().any(|a| a == "--swings");
-    let args: Vec<String> = args.into_iter().filter(|a| a != "--swings").collect();
+    let inspect = args.iter().any(|a| a == "--inspect");
+    let args: Vec<String> = args.into_iter().filter(|a| a != "--swings" && a != "--inspect").collect();
     let launch = match Launch::parse(&args) {
         Ok(launch) => launch,
         Err(error) => {
@@ -99,6 +100,11 @@ fn main() -> AppExit {
     if swings {
         app.add_plugins(SwingPracticePlugin);
     }
+    // F12 (or `--inspect`) opens the component inspector; release builds leave it out.
+    #[cfg(feature = "inspector")]
+    app.add_plugins(forever_below::inspect::InspectPlugin { open: inspect });
+    #[cfg(not(feature = "inspector"))]
+    let _ = inspect;
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }

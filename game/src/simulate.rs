@@ -225,10 +225,14 @@ fn step_stamina(
 
 /// A person's simulation: their needs and the time they have spent in the worst of them. Folk
 /// stand still, so they are always Resting.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
 pub struct Simulated {
+    #[reflect(remote = crate::inspect::remote::NeedsDef)]
     pub needs: Needs,
+    #[reflect(remote = crate::inspect::remote::ExhaustionTimesDef)]
     pub times: ExhaustionTimes,
+    #[reflect(remote = crate::inspect::remote::ExhaustionDef)]
     pub exhaustion: Exhaustion,
     /// The game hour they were last stepped to; none until the first step sees the clock.
     pub last: Option<f64>,

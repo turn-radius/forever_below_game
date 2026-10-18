@@ -57,12 +57,14 @@ impl Plugin for PlayerPlugin {
 
 /// On the [`Player`] while something slows them: their pace is multiplied by this (0 stops
 /// them). A constrictor's hold, or a fall (`crate::combat`).
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
 pub struct Slowed(pub f32);
 
 /// How the body is moving and looking. Yaw and pitch are kept here so the transforms can be
 /// rebuilt from them without drift.
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug, Default, Reflect)]
+#[reflect(Component)]
 #[require(Gait)]
 pub struct Locomotion {
     pub yaw: f32,
@@ -73,7 +75,8 @@ pub struct Locomotion {
 
 /// The player's step cycle, for whatever moves with their steps: the head bob here, what is held
 /// in the hands in [`crate::carry`].
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
 pub struct Gait {
     /// Step cycle, radians; one turn per [`STRIDE`] walked (two steps).
     pub phase: f32,
@@ -202,7 +205,8 @@ fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inv
 
 /// What the delver's gear makes of their pace, as a multiple (boots "of Haste" 1.2), kept up
 /// with their [`Load`] by `weigh_the_delver`. It scales walking and sprinting alike.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
 pub struct GearPace(pub f32);
 
 impl Default for GearPace {

@@ -347,27 +347,31 @@ pub fn character_for(seed: u32) -> Character {
 /// The delver's load band, kept on the [`Player`](crate::play::Player) so walking need not
 /// work out [`Character::derive`] every frame. `player::weigh_the_delver` refreshes it when
 /// the character or the inventory changes.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
-pub struct Load(pub LoadBand);
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct Load(#[reflect(remote = crate::inspect::remote::LoadBandDef)] pub LoadBand);
 
 /// The delver's hunger, thirst and sleepiness, on the [`Player`](crate::play::Player) from their
 /// spawn, so a new delve starts Fed. Eating and drinking take from it (`crate::eat`); the game
 /// clock steps it in #229.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
-pub struct DelverNeeds(pub fb_character::Needs);
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct DelverNeeds(#[reflect(remote = crate::inspect::remote::NeedsDef)] pub fb_character::Needs);
 
 /// The delver's stamina, on the [`Player`](crate::play::Player) from their spawn, so a new delve
 /// starts with a full pool. Sprinting and swinging drain it, and it refills in seconds
 /// (`crate::simulate::step_stamina`).
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
-pub struct DelverStamina(pub fb_character::Stamina);
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct DelverStamina(#[reflect(remote = crate::inspect::remote::StaminaDef)] pub fb_character::Stamina);
 
 /// The delver's mana, on the [`Player`](crate::play::Player) from their spawn. The pool's size
 /// is set from the character when the delver is new and again whenever the character changes,
 /// keeping how full it is; the game clock refills it (`crate::simulate::step_the_delver`).
 /// Nothing spends it yet.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
-pub struct DelverMana(pub Mana);
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct DelverMana(#[reflect(remote = crate::inspect::remote::ManaDef)] pub Mana);
 
 /// The effects on the delver ([`fb_character::effect`]), on the [`Player`](crate::play::Player)
 /// only while they have any: a failed save against a snake's venom poisons them
@@ -408,7 +412,8 @@ pub struct DelverRecovery(pub fb_character::recovery::Recovery);
 /// How easy the delver is to see, 0 to 1 ([`fb_character::visibility`]): from the light on them,
 /// their pace, load and Stealth. Kept on the [`Player`](crate::play::Player) so the eye can show
 /// it and, later, creatures read it (`crate::combat::eye`).
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
 pub struct DelverVisibility(pub f32);
 
 /// Determines the delver's activity from movement and load state.

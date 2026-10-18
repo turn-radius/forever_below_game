@@ -231,6 +231,12 @@ A soak of twenty minutes: `RUST_BACKTRACE=1 BEVY_ASSET_ROOT=game FB_SOAK=1200 ./
 
 Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_ASSET_ROOT=game` so it finds the music and fonts; `cargo run` finds them on its own.
 
+### Inspecting the game
+
+In a debug build, F12 (or `--inspect` on the command line) opens a World Inspector window, from `bevy-inspector-egui`. It lists every entity with its components: the player's `Locomotion`, needs, stamina and exhaustion, each creature's `Critter` and `Intent`, each folk's `Denizen`, `Hostility` and `Simulated` needs, and Bevy's own `Transform` and lights. Edit a value and it changes in the game. While it is open the delver stands still and the mouse is free; F12 closes it and takes the mouse back. Values that live in the generator crates (a creature's roll, a person's body) are not shown, as those crates do not depend on Bevy.
+
+The inspector is the `inspector` feature, part of `dev`, which is on by default. Release builds pass `--no-default-features` and do not include it.
+
 ### Tuning
 
 `game/assets/tuning.toml` holds how the game looks and feels: how large held and dropped things are drawn, how fast you walk, how big creatures are and how they fight, how bright the lights burn, the sound mix and the inventory's layout. Edit a value and save; in a debug build (`cargo run`) the game watches the file and applies the change within a second, while it runs. A key left out, misspelt or given the wrong kind of value keeps its default, and the log names it in a warning; nothing in the file can stop the game. A release build reads the file once at startup. 1 world unit is 10 cm; times are in seconds.
