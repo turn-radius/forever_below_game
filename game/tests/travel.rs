@@ -21,7 +21,7 @@ use forever_below::{
     combat::{Health, vitals::FALL_TIME},
     inventory::{Inventory, ItemId},
     launch::AppState,
-    level::{DoorSwing, EntranceDoor, LevelPiece},
+    level::{DoorSwing, EntranceDoor, LevelPiece, PreparedStone, stone_chunks},
     menu::MenuCommand,
     play::{BlockedCells, CurrentLevel, PlayPlugin, Player, PlayerCamera, Screen, ScreenOpen},
     player::Locomotion,
@@ -233,6 +233,36 @@ fn the_stairs_carry_the_delver_down_and_back_up_and_leave_each_level_whole() {
     assert!(app.world().resource::<BlockedCells>().0.contains(&(first.entrance.x as i32, first.entrance.y as i32)));
     // Level 1 stands as it did, with nothing from level 2 in it.
     assert_eq!(census(&mut app), level_one, "the first level is laid out as before");
+}
+
+/// The level below is made in the background from the moment a level is entered. Going down at
+/// once, before it can have finished, waits for it and lands on the same level and stone as
+/// one made in place.
+#[test]
+fn going_down_at_once_waits_for_the_level_made_in_the_background() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    let first = level(&app).clone();
+    let down = *first.stair(StairKind::Down).expect("a way down");
+    stand(&mut app, down.approach(), down.facing.yaw());
+    run(&mut app, 2);
+    press_f(&mut app);
+    run(&mut app, 150);
+    assert!(app.world().get_resource::<Journey>().is_none(), "the journey is over");
+
+    let second = level(&app).clone();
+    assert_eq!(second, fb_level::generate(depth_seed(1207, 2), 2), "the level made in the background is the one made in place");
+    // Its stone is laid out whole, from the background's chunks, which are used up.
+    let chunks = stone_chunks(&second);
+    let expected = |name: &str| chunks.iter().map(|c| match name {
+        "ink" => usize::from(!c.ink.indices.is_empty()),
+        "joints" => usize::from(!c.joints.indices.is_empty()),
+        _ => c.surfaces.parts.iter().filter(|p| p.name == name).count(),
+    }).sum::<usize>();
+    for name in ["floor", "ink", "joints"] {
+        assert_eq!(named(&mut app, name), expected(name), "{name}");
+    }
+    assert!(app.world().resource::<PreparedStone>().0.is_none());
 }
 
 #[test]

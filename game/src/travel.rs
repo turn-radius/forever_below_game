@@ -19,6 +19,13 @@
 //! mana; the character; the inventory with its equipped items and containers; the quickslots,
 //! the clock and the map's record of what was seen of each level.
 //!
+//! The level below is made ahead of time. Once a level is entered, [`prefetch_below`] starts
+//! [`Prepared::make`] for the next depth on the async compute pool: the level itself, its
+//! stone as plain mesh data (corner shading is most of that) and the figures of its folk, the
+//! costliest part. Taking the stair down
+//! uses the result, waiting for it if it is not done; any other journey makes its level in
+//! place, as before.
+//!
 //! Persisting what happens on a level (#285) slots in at two places:
 //!
 //! - The [`LeavingLevel`] system set runs for one frame, with the screen black, after the fade
@@ -40,6 +47,10 @@ use bevy::{
 use fb_level::{CELL, Level, Stair, StairKind, depth_seed};
 
 use crate::carry::Aimed;
+use crate::figure::Figure;
+use crate::fitting::Fitting;
+use crate::folk::{FolkFigures, Person, build_figures};
+use crate::level::{PreparedStone, geometry::LevelMesh, stone_chunks};
 use crate::folk::AimedFolk;
 use crate::keymap::{Action, ActionInput};
 use crate::launch::AppState;
@@ -104,6 +115,30 @@ impl Abyss {
         fb_level::generate(depth_seed(self.run_seed, depth), depth)
     }
 }
+
+/// A level, its stone and its folk, made off the main thread.
+#[derive(Debug)]
+pub struct Prepared {
+    pub level: Level,
+    pub stone: Vec<LevelMesh>,
+    /// The people of the level and their figures, which take most of a second to build.
+    pub folk: Vec<(Person, Figure)>,
+}
+
+impl Prepared {
+    /// The level at `depth` of the abyss of `run_seed`, with its stone and folk.
+    pub fn make(run_seed: u32, depth: u32) -> Self {
+        let level = Abyss::new(run_seed).level_at(depth);
+        let stone = stone_chunks(&level);
+        let folk = build_figures(&level.folk, depth);
+        Prepared { level, stone, folk }
+    }
+}
+
+/// The level below the one the delver is on, being made: the run's seed and the depth it is for,
+/// and the job. Dropped with the delve, which cancels it.
+#[derive(Resource, Debug)]
+pub struct Below(Fitting<(u32, u32), Prepared>);
 
 /// Written when the delver takes a stair.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,13 +220,17 @@ pub struct TravelPlugin;
 impl Plugin for TravelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Abyss>()
+            .init_resource::<FolkFigures>()
             .add_message::<UseStair>()
             .add_systems(OnEnter(AppState::Delving), begin_the_run)
             .add_systems(OnExit(AppState::Delving), end_the_run)
             .init_resource::<WorldRecord>()
             .configure_sets(Update, LeavingLevel.run_if(journey_is_leaving).before(step_journey).in_set(DelveSystems))
             .add_systems(Update, record_level_left.after(apply_floor_changes).in_set(LeavingLevel))
-            .add_systems(Update, (take_stair.run_if(level_has_focus), begin_journey, step_journey, fade_depth_title).chain().in_set(DelveSystems));
+            .add_systems(
+                Update,
+                (take_stair.run_if(level_has_focus), begin_journey, step_journey, fade_depth_title, prefetch_below.run_if(resource_exists::<CurrentLevel>)).chain().in_set(DelveSystems),
+            );
     }
 }
 
@@ -206,6 +245,20 @@ fn begin_the_run(level: Option<Res<CurrentLevel>>, mut abyss: ResMut<Abyss>, mut
 fn end_the_run(mut commands: Commands, mut abyss: ResMut<Abyss>) {
     *abyss = Abyss::default();
     commands.remove_resource::<Journey>();
+    commands.remove_resource::<Below>();
+}
+
+/// Starts making the level below the one the delver is on, unless it is under way already.
+fn prefetch_below(mut commands: Commands, abyss: Res<Abyss>, level: Res<CurrentLevel>, below: Option<Res<Below>>) {
+    // The abyss follows the level a frame after the delve opens on it.
+    if abyss.depth != level.0.depth {
+        return;
+    }
+    let key = (abyss.run_seed, abyss.depth + 1);
+    if below.is_some_and(|below| *below.0.key() == key) {
+        return;
+    }
+    commands.insert_resource(Below(Fitting::start(key, move || Prepared::make(key.0, key.1))));
 }
 
 /// F at a stair uses it, unless an item or container is under the crosshair.
@@ -278,6 +331,9 @@ fn step_journey(
     mut abyss: ResMut<Abyss>,
     record: Res<WorldRecord>,
     mut level: ResMut<CurrentLevel>,
+    mut below: Option<ResMut<Below>>,
+    mut prepared: ResMut<PreparedStone>,
+    mut figures: ResMut<FolkFigures>,
     mut blocked: ResMut<BlockedCells>,
     mut aimed: ResMut<Aimed>,
     mut aimed_folk: Option<ResMut<AimedFolk>>,
@@ -293,8 +349,20 @@ fn step_journey(
         }
         Phase::Leaving => {
             let to = depth_after(abyss.depth, journey.by);
-            // Making the level (a few tens of milliseconds) is a hitch the black hides.
-            let mut next = abyss.level_at(to);
+            // The level below was started when this one was entered; wait for it if it is not
+            // done. Any other level (up, or one the prefetch missed) is made here, which the
+            // black hides.
+            let made = (journey.by == StairKind::Down)
+                .then(|| below.as_mut().filter(|below| *below.0.key() == (abyss.run_seed, to)).and_then(|below| below.0.wait()))
+                .flatten();
+            let mut next = match made {
+                Some(Prepared { level, stone, folk }) => {
+                    prepared.set(level.seed, level.depth, stone);
+                    figures.keep(folk);
+                    level
+                }
+                None => abyss.level_at(to),
+            };
             // A level visited before is as it was left.
             record.apply_to(&mut next);
             // Down arrives at the level below's way up, which is where it starts; up arrives
@@ -382,6 +450,17 @@ mod tests {
         assert_ne!(abyss.level_at(2).seed, abyss.level_at(3).seed);
         assert_eq!(abyss.level_at(2).depth, 2);
         assert_ne!(Abyss::new(1208).level_at(2), abyss.level_at(2));
+    }
+
+    #[test]
+    fn the_level_made_in_the_background_is_the_one_made_in_place() {
+        let background = Fitting::start((1207, 2), || Prepared::make(1207, 2)).wait().expect("the job runs");
+        let level = Abyss::new(1207).level_at(2);
+        assert_eq!(background.level, level);
+        assert_eq!(background.stone, stone_chunks(&level));
+        let in_place = build_figures(&level.folk, 2);
+        assert!(!in_place.is_empty(), "the level has folk to make");
+        assert_eq!(background.folk.iter().map(|(person, _)| person).collect::<Vec<_>>(), in_place.iter().map(|(person, _)| person).collect::<Vec<_>>());
     }
 
     #[test]

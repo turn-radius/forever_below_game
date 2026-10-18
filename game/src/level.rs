@@ -25,7 +25,7 @@ use armory::{
     },
 };
 use bevy::{camera::{Exposure, ShadowLodOrigin, visibility::{RenderLayers, VisibilityRange}}, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
-use fb_level::{CELL, LightKind, StairKind};
+use fb_level::{CELL, Level, LightKind, StairKind};
 
 use crate::capture::FrameCapturePlugin;
 use crate::light::{Torch, cast_shadows, point_light};
@@ -44,6 +44,7 @@ pub struct LevelPlugin;
 impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Tuning>()
+            .init_resource::<PreparedStone>()
             .insert_resource(abyss_ambient(&LightTuning::default()))
             .insert_resource(ClearColor(FOG_COLOR))
             // The level's stone is laid out for each level the delver comes to: the first of a
@@ -63,6 +64,32 @@ impl Plugin for LevelPlugin {
 
 /// Cells of the level drawn as one mesh per surface, so far stone can be culled.
 pub const CHUNK_CELLS: i32 = 16;
+
+/// The stone of `level` as plain mesh data, one [`LevelMesh`] per chunk. This is the costly part
+/// of laying a level out (corner shading included), and it has no Bevy in it, so it can be made
+/// on another thread ahead of time ([`crate::travel`]).
+pub fn stone_chunks(level: &Level) -> Vec<LevelMesh> {
+    let view = CellView::new(level);
+    geometry::chunks(&view, CHUNK_CELLS).into_iter().map(|range| geometry::level_mesh(&view, range)).collect()
+}
+
+/// The stone of a level made ahead of time: [`spawn_stone`] uses it when it is the stone of the
+/// level coming in, and makes its own otherwise.
+#[derive(Resource, Debug, Default)]
+pub struct PreparedStone(pub Option<(u32, u32, Vec<LevelMesh>)>);
+
+impl PreparedStone {
+    /// Keeps `chunks` as the stone of the level of `seed` at `depth`.
+    pub fn set(&mut self, seed: u32, depth: u32, chunks: Vec<LevelMesh>) {
+        self.0 = Some((seed, depth, chunks));
+    }
+
+    /// The stone made ahead for `level`, if that is the level it was made for. Whatever was
+    /// kept is used up either way.
+    fn take_for(&mut self, level: &Level) -> Option<Vec<LevelMesh>> {
+        self.0.take().filter(|(seed, depth, _)| (*seed, *depth) == (level.seed, level.depth)).map(|(_, _, chunks)| chunks)
+    }
+}
 
 /// The exposure the level's light levels are set for: the camera's, `Exposure::INDOOR`.
 pub const EXPOSURE: Exposure = Exposure::INDOOR;
@@ -360,20 +387,20 @@ fn clear_stone(mut commands: Commands, old: Query<Entity, With<StonePiece>>) {
 fn spawn_stone(
     mut commands: Commands,
     level: Res<CurrentLevel>,
+    mut prepared: ResMut<PreparedStone>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut toon_materials: ResMut<Assets<ToonMaterial>>,
     mut outline_materials: ResMut<Assets<OutlineMaterial>>,
 ) {
     let level = &level.0;
-    let view = CellView::new(level);
+    let chunks = prepared.take_for(level).unwrap_or_else(|| stone_chunks(level));
     let stone = stone_appearance(level.seed);
 
     // The rock: one entity per surface per chunk, each surface kind sharing one material.
     let fine_ink = outline_materials.add(OutlineMaterial { color: STONE_JOINT_INK.into(), width_px: 1.0, ..stone.outline });
     let ink = outline_materials.add(stone.outline);
     let mut materials: Vec<(&'static str, Handle<ToonMaterial>)> = Vec::new();
-    for range in geometry::chunks(&view, CHUNK_CELLS) {
-        let LevelMesh { surfaces, ink: lines, joints } = geometry::level_mesh(&view, range);
+    for LevelMesh { surfaces, ink: lines, joints } in &chunks {
         for part in &surfaces.parts {
             let material = match materials.iter().find(|(name, _)| *name == part.name) {
                 Some((_, handle)) => handle.clone(),
@@ -394,10 +421,10 @@ fn spawn_stone(
             commands.spawn((StonePiece, Name::new(part.name), Mesh3d(meshes.add(part_to_mesh(part))), MeshMaterial3d(material)));
         }
         if !lines.indices.is_empty() {
-            commands.spawn((StonePiece, Name::new("ink"), Mesh3d(meshes.add(part_to_mesh(&lines))), MeshMaterial3d(ink.clone())));
+            commands.spawn((StonePiece, Name::new("ink"), Mesh3d(meshes.add(part_to_mesh(lines))), MeshMaterial3d(ink.clone())));
         }
         if !joints.indices.is_empty() {
-            commands.spawn((StonePiece, Name::new("joints"), Mesh3d(meshes.add(part_to_mesh(&joints))), MeshMaterial3d(fine_ink.clone())));
+            commands.spawn((StonePiece, Name::new("joints"), Mesh3d(meshes.add(part_to_mesh(joints))), MeshMaterial3d(fine_ink.clone())));
         }
     }
 
