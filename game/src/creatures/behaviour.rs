@@ -558,6 +558,8 @@ fn behave(
                     .chain(player.map(|centre| Obstacle::Circle { centre, radius: player_radius }))
                     .chain(obstacles.0.iter().copied())
                     .collect();
+                // Webs on the floor hold back all but the spiders that spun them.
+                let speed = speed * fb_level::webs::web_pace(&level.webs, at.x, at.y, radius, Some(species), tuning.moving.web_pace);
                 let step = (direction * speed * dt).clamp_length_max((target - at).length());
                 let to = slide_around(at, at + step, radius, &blocked, &others);
                 let made = (to - at).dot(direction);

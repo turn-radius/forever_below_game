@@ -35,6 +35,8 @@ hurry_speed = 45.0
 acceleration = 10.0
 # Your body's radius on the floor, in world units (3.5 = 35 cm).
 body_radius = 3.5
+# The share of its pace a walker keeps in a floor web in a spider's nest (spiders cross them at full speed).
+web_pace = 0.65
 
 [creatures]
 # How far creatures notice you, as a multiple of their senses.

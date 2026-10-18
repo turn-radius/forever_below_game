@@ -234,7 +234,8 @@ pub(crate) fn walk(
     let rules = crate::rules::GameRules::of(&rules);
     // What they wear and what is on them (the cold in a cold-blooded body) set their pace.
     let pace = gear_pace.map_or(1.0, |p| p.0) * effects.iter().next().map_or(1.0, |e| e.0.pace(&rules.effects) as f32);
-    let speed = if input.pressed(Action::Hurry) && stamina.0.can_exert() { moving.hurry_speed } else { moving.walk_speed } * pace * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier_with(rules) * load.0.walk_multiplier_with(rules);
+    let web = fb_level::webs::web_pace(&level.0.webs, transform.translation.x, transform.translation.z, moving.body_radius, None, moving.web_pace);
+    let speed = if input.pressed(Action::Hurry) && stamina.0.can_exert() { moving.hurry_speed } else { moving.walk_speed } * pace * web * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier_with(rules) * load.0.walk_multiplier_with(rules);
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
@@ -411,6 +412,30 @@ mod tests {
         let usual = usual_app.world().get::<Transform>(usual_body).unwrap().translation.distance(start);
         let quick = quick_app.world().get::<Transform>(quick_body).unwrap().translation.distance(start);
         assert!((quick / usual - 1.2).abs() < 0.03, "{quick} against {usual}");
+    }
+
+    /// How far the delver walks in `frames` frames, with a floor web laid along their way if
+    /// `web` and none otherwise.
+    fn walked_through(frames: u32, web: bool) -> f32 {
+        let (mut app, body, start) = walking(|_| {}, ());
+        if web {
+            let level = &mut app.world_mut().resource_mut::<CurrentLevel>().0;
+            let (x, y, facing) = level.start();
+            // Along the way they are walking, from before their feet to well past them.
+            let spot = fb_level::WebSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, height: 0.0, yaw: facing.yaw(), size: 400.0, kind: fb_level::WebKind::Floor };
+            level.webs.push(spot);
+        }
+        for _ in 0..frames {
+            app.update();
+        }
+        app.world().get::<Transform>(body).unwrap().translation.distance(start)
+    }
+
+    #[test]
+    fn a_delver_in_a_floor_web_covers_less_ground() {
+        let (free, webbed) = (walked_through(30, false), walked_through(30, true));
+        assert!(webbed < free, "{webbed} in the web, {free} out of it");
+        assert!((webbed / free - Tuning::default().moving.web_pace).abs() < 0.1, "{webbed} against {free}");
     }
 
     #[test]

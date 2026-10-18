@@ -244,6 +244,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[moving]` | `hurry_speed` | 45.0 | Pace with Shift held, in world units per second. |
 | `[moving]` | `acceleration` | 10.0 | How quickly you reach your pace and stop, per second (higher is snappier). |
 | `[moving]` | `body_radius` | 3.5 | Your body's radius on the floor, in world units (3.5 = 35 cm). |
+| `[moving]` | `web_pace` | 0.65 | The share of its pace a walker keeps in a floor web in a spider's nest. Spiders cross webs at full speed. |
 | `[creatures]` | `sense_scale` | 1.0 | How far creatures notice you, as a multiple of their senses. |
 | `[creatures]` | `rat_cooldown` | 1.5 | Seconds between a rat's bites. |
 | `[creatures]` | `snake_cooldown` | 2.5 | Seconds between a snake's strikes. |

@@ -269,6 +269,7 @@ pub mod sight;
 pub mod path;
 pub mod props;
 pub mod stairs;
+pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};

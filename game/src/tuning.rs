@@ -127,11 +127,14 @@ pub struct MovingTuning {
     pub acceleration: f32,
     /// The body's radius on the floor, world units (35 cm).
     pub body_radius: f32,
+    /// The share of its pace a walker keeps in a floor web in a spider's nest, other than a
+    /// spider (`fb_level::webs::WEB_PACE`, our own).
+    pub web_pace: f32,
 }
 
 impl Default for MovingTuning {
     fn default() -> Self {
-        MovingTuning { walk_speed: 14.0, hurry_speed: 45.0, acceleration: 10.0, body_radius: 3.5 }
+        MovingTuning { walk_speed: 14.0, hurry_speed: 45.0, acceleration: 10.0, body_radius: 3.5, web_pace: fb_level::webs::WEB_PACE }
     }
 }
 
