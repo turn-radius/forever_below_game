@@ -19,9 +19,14 @@ use armory::{
         torus, tube, value_noise3, vec3,
     },
 };
-use fb_level::{CELL, Cell, Facing, Level, LevelStyle};
+use fb_level::{
+    CELL, Cell, DoorStyle, Facing, FloorFinish, Level, LevelParams, LevelStyle, WallFinish,
+    finish::{Finishes, finishes},
+};
 use procgen_rng::Mulberry32;
 
+pub mod arch;
+pub mod cobble;
 pub mod occlusion;
 pub mod stone;
 
@@ -65,6 +70,8 @@ pub const LEAF_THICKNESS: f32 = 1.0;
 pub const WALL_STONE: Rgb = Rgb::hex(0x7f817c);
 pub const FLOOR_STONE: Rgb = Rgb::hex(0x6e6c66);
 pub const CEILING_STONE: Rgb = Rgb::hex(0x5c5e5c);
+/// The floor under cobbles and slabs: the dark of their joints.
+pub const GROUT_STONE: Rgb = Rgb::hex(0x3b3a37);
 
 /// The level's cells as drawn: the level's own, plus [`ENTRANCE_PASSAGE`] cells of floor
 /// carved outward behind the entrance where the rock there is solid.
@@ -72,15 +79,57 @@ pub const CEILING_STONE: Rgb = Rgb::hex(0x5c5e5c);
 pub struct CellView<'a> {
     level: &'a Level,
     passage: Vec<(i32, i32)>,
+    finishes: Finishes,
 }
 
 impl<'a> CellView<'a> {
     pub fn new(level: &'a Level) -> Self {
-        CellView { level, passage: entrance_passage(level) }
+        Self::with_finishes(level, level_finishes(level))
+    }
+
+    /// The view of `level` with its stone finished as `finishes` say.
+    pub fn with_finishes(level: &'a Level, finishes: Finishes) -> Self {
+        CellView { level, passage: entrance_passage(level), finishes }
+    }
+
+    /// The view with the finishes `params` choose.
+    pub fn with_params(level: &'a Level, params: &LevelParams) -> Self {
+        Self::with_finishes(level, finishes(level, params))
+    }
+
+    /// The view with every finish at its plain: no paving, layered or rubble walls and no arches,
+    /// for tests of the plain stone.
+    #[cfg(test)]
+    pub fn uncobbled(level: &'a Level) -> Self {
+        Self::with_params(level, &LevelParams { cobble_chance: 0.0, flagstone_chance: 0.0, strata_chance: 0.0, rubble_chance: 0.0, arch_chance: 0.0, ..LevelParams::for_style(level.style) })
+    }
+
+    /// What each room's and corridor's stone is finished with, and how damp it is.
+    pub fn finishes(&self) -> &Finishes {
+        &self.finishes
     }
 
     pub fn level(&self) -> &Level {
         self.level
+    }
+
+    /// Whether the floor of cell `(x, y)` is laid with cobbles.
+    pub fn is_cobbled(&self, x: i32, y: i32) -> bool {
+        self.finishes.at(x, y).is_some_and(|f| f.floor == FloorFinish::Cobble)
+    }
+
+    /// Whether the cells west, east, north and south of `(cx, cy)` are open, for [`CellView::floor_wear`].
+    pub fn neighbours_open(&self, cx: i32, cy: i32) -> [bool; 4] {
+        [self.is_open(cx - 1, cy), self.is_open(cx + 1, cy), self.is_open(cx, cy - 1), self.is_open(cx, cy + 1)]
+    }
+
+    /// How worn the floor is at world `(x, z)` in cell `(cx, cy)`, 0 to 1: more by a wall, where
+    /// the stone is trodden and broken, and wherever moss grows.
+    pub fn floor_wear(&self, cx: i32, cy: i32, open: [bool; 4], x: f32, z: f32) -> f32 {
+        let (lx, lz) = (x - cx as f32 * CELL, z - cy as f32 * CELL);
+        let by_wall = |open: bool, distance: f32| if open { 0.0 } else { (1.0 - distance / 5.0).max(0.0) };
+        let wall = by_wall(open[0], lx).max(by_wall(open[1], CELL - lx)).max(by_wall(open[2], lz)).max(by_wall(open[3], CELL - lz));
+        (wall * 0.7).max(self.finishes.moss_at(x, z) * 0.8)
     }
 
     /// The drawn-only cells behind the entrance, nearest first.
@@ -104,6 +153,17 @@ impl<'a> CellView<'a> {
         }
         (x0, y0, x1, y1)
     }
+}
+
+/// The finishes of `level` at its style's default odds: the levels carry no odds of their own.
+pub fn level_finishes(level: &Level) -> Finishes {
+    finishes(level, &LevelParams::for_style(level.style))
+}
+
+/// Sets each vertex's moss, the finish's smooth value at its world position, in the part's
+/// second channel (`Part::uvs_b`), for the toon shader to paint over the stone.
+pub fn bake_moss(part: &mut Part, finishes: &Finishes) {
+    part.uvs_b = part.positions.iter().map(|p| [finishes.moss_at(p[0], p[2]), 0.0]).collect();
 }
 
 /// The cells behind the entrance to carve, nearest first: straight outward, stopping before
@@ -337,6 +397,7 @@ pub fn level_mesh(view: &CellView, range: (i32, i32, i32, i32)) -> LevelMesh {
     let enclosure = occlusion::Enclosure::new(view, range);
     for part in &mut mesh.surfaces.parts {
         enclosure.bake(part);
+        bake_moss(part, view.finishes());
     }
     mesh
 }
@@ -348,7 +409,9 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
         return stone::hall_mesh(view, (x0, y0, x1, y1));
     }
     let relief = Relief::new(level);
-    let (mut floor, mut ceiling, mut walls) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    let (mut floor, mut ceiling, mut walls, mut strata) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    let mut paving = cobble::Stones::default();
+    let mut grout = MeshBuilder::new();
     let mut ink = Ink::default();
     let rows = (level.ceiling / ROW).ceil().max(1.0) as usize;
     let up = [0.0, 1.0, 0.0];
@@ -370,7 +433,20 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
             // ceiling over a way up.
             let stair = level.stair_at(x, y);
             if !super::stairs::opens_floor(stair) {
-                flat(0.0, up).build(&relief, &mut floor);
+                let on_relief = |px: f32, pz: f32| relief.floor_height(px, pz);
+                // Under paving the shell is the dark of the joints, so the stones stand out of it.
+                match view.finishes().at(x, y).map(|f| f.floor) {
+                    Some(FloorFinish::Cobble) => {
+                        flat(0.0, up).build(&relief, &mut grout);
+                        let open = view.neighbours_open(x, y);
+                        cobble::cobbles(level.seed, x, y, &on_relief, &|px, pz| view.floor_wear(x, y, open, px, pz), &mut paving);
+                    }
+                    Some(FloorFinish::Flagstone) => {
+                        flat(0.0, up).build(&relief, &mut grout);
+                        cobble::paving(level.seed, x, y, &on_relief, &mut paving);
+                    }
+                    _ => flat(0.0, up).build(&relief, &mut floor),
+                }
             }
             if !super::stairs::opens_ceiling(stair) {
                 flat(level.ceiling, vec3::neg(up)).build(&relief, &mut ceiling);
@@ -388,7 +464,9 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
                 let centre = cell_centre(x, y);
                 let origin = vec3::sub(vec3::add(centre, vec3::scale(d, CELL * 0.5)), vec3::scale(u, CELL * 0.5));
                 let face = Face { origin, u, v: up, size: [CELL, level.ceiling], steps: [SEGMENTS, rows], facing: inward };
-                face.build(&relief, &mut walls);
+                // Layered rooms have a part of their own, so the shader gives them beds.
+                let layered = view.finishes().at(x, y).is_some_and(|f| f.walls == WallFinish::Strata);
+                face.build(&relief, if layered { &mut strata } else { &mut walls });
 
                 // Seams with the floor and ceiling: a ribbon on the wall and one on the flat.
                 for (edge, flat_facing) in [(Edge::Bottom, up), (Edge::Top, vec3::neg(up))] {
@@ -417,7 +495,14 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
     let mut parts = Parts::new();
     let stone = |tint: Rgb| Look::of(MaterialKind::Stone).tinted(tint).without_outline();
     parts.add_look("floor", floor, stone(FLOOR_STONE));
+    if grout.vertex_count() > 0 {
+        parts.add_look("grout", grout, stone(GROUT_STONE));
+    }
+    paving.add_parts(&mut parts, cobble::stone_look);
     parts.add_look("walls", walls, stone(WALL_STONE));
+    if !strata.is_empty() {
+        parts.add_look("strata", strata, stone(WALL_STONE));
+    }
     parts.add_look("ceiling", ceiling, stone(CEILING_STONE));
     LevelMesh { surfaces: parts.finish(), ink: ink.into_part(), joints: Part::default() }
 }
@@ -485,8 +570,9 @@ pub fn doorways(view: &CellView) -> Vec<Doorway> {
 
 /// A doorway's frame in its own space (`x` across, `y` up, `z` through, origin on the floor at
 /// the cell's centre): a timber frame round a [`DOOR_WIDTH`] by [`DOOR_HEIGHT`] opening in a
-/// course of dressed stone blocks that closes the rest of the cell up to the ceiling.
-pub fn door_frame(ceiling: f32, seed: u32) -> ItemMesh {
+/// course of dressed stone blocks that closes the rest of the cell up to the ceiling. A
+/// rock-cut `style` swaps the timber for an arch cut in the blocks.
+pub fn door_frame(ceiling: f32, style: DoorStyle, seed: u32) -> ItemMesh {
     // Past the cell's edge and the ceiling, so the blocks bed into the rock's relief.
     let top = ceiling + CEILING_RELIEF;
     let course: f32 = 4.6;
@@ -496,13 +582,16 @@ pub fn door_frame(ceiling: f32, seed: u32) -> ItemMesh {
         courses.push((y, course.min(top - y)));
         y += course;
     }
-    door_frame_in(&courses, top, CELL * 0.5 + WALL_RELIEF, (0.18, 0.35), seed)
+    door_frame_in(style, &courses, top, CELL * 0.5 + WALL_RELIEF, (0.18, 0.35), seed)
 }
 
 /// A doorway's frame and masonry with the infill laid in `courses` (each a bottom and a
 /// height, from the floor up to `top`), its blocks reaching `reach` either side of the centre,
-/// with `joint` between them and a `chamfer` on their edges.
-fn door_frame_in(courses: &[(f32, f32)], top: f32, reach: f32, (joint, chamfer): (f32, f32), seed: u32) -> ItemMesh {
+/// with `joint` between them and a `chamfer` on their edges. Any style but timber is an arch.
+fn door_frame_in(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32, (joint, chamfer): (f32, f32), seed: u32) -> ItemMesh {
+    if style != DoorStyle::Timber {
+        return arch::door_arch(style, courses, top, reach, (joint, chamfer), seed);
+    }
     let mut rng = Mulberry32::new(seed ^ 0xd00f_4a3e);
     let half_open = DOOR_WIDTH * 0.5;
     let lintel_top = DOOR_HEIGHT + FRAME_BEAM;
@@ -755,20 +844,56 @@ mod tests {
     #[test]
     fn the_stone_is_deterministic_and_drawable() {
         let level = level();
-        let view = CellView::new(&level);
+        let view = CellView::uncobbled(&level);
         let a = level_mesh(&view, view.bounds());
         assert_eq!(a, level_mesh(&view, view.bounds()));
         for part in a.surfaces.parts.iter().chain([&a.ink]) {
             part.validate().unwrap();
         }
+        // Plain stone: no paving and no layered walls, which have parts of their own.
         assert_eq!(a.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(), ["floor", "walls", "ceiling"]);
         assert!(a.surfaces.parts.iter().all(|p| p.material == Some(MaterialKind::Stone) && !p.outline));
     }
 
     #[test]
+    fn cobbled_floors_are_laid_and_split_exactly() {
+        // A cave with a cobbled or flagged quarter.
+        let paved = |l: &Level| {
+            let view = CellView::new(l);
+            (0..l.height as i32).flat_map(|y| (0..l.width as i32).map(move |x| (x, y))).any(|(x, y)| view.finishes().at(x, y).is_some_and(|f| matches!(f.floor, FloorFinish::Cobble | FloorFinish::Flagstone)))
+        };
+        let level = (1..200).map(|seed| fb_level::generate(seed, 1)).find(paved).expect("some cave has paving");
+        let view = CellView::new(&level);
+        let cobbled = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter(|&(x, y)| view.finishes().at(x, y).is_some_and(|f| matches!(f.floor, FloorFinish::Cobble | FloorFinish::Flagstone))).count();
+        assert!(cobbled > 0);
+        let whole = level_mesh(&view, view.bounds());
+        assert!(whole.surfaces.parts.iter().any(|p| p.name.starts_with("stones_")));
+        let plain = level_mesh(&CellView::uncobbled(&level), view.bounds());
+        let tris = |m: &LevelMesh| m.surfaces.parts.iter().map(|p| p.indices.len() / 3).sum::<usize>();
+        let per_cell = (tris(&whole) - tris(&plain)) / cobbled;
+        assert!((300..=1600).contains(&per_cell), "{per_cell} triangles per cobbled cell");
+        for part in &whole.surfaces.parts {
+            part.validate().unwrap();
+        }
+        // Laid in chunks that cut across the rooms, every vertex of every part comes out the same.
+        let points = |meshes: &[LevelMesh]| {
+            let mut out: Vec<(&'static str, [i64; 3])> = meshes
+                .iter()
+                .flat_map(|m| m.surfaces.parts.iter())
+                .filter(|p| p.name.starts_with("stones_") || p.name == "grout")
+                .flat_map(|p| p.positions.iter().map(|v| (p.name, v.map(|c| (c * 1000.0).round() as i64))))
+                .collect();
+            out.sort_unstable();
+            out
+        };
+        let pieces: Vec<LevelMesh> = chunks(&view, 4).iter().map(|&c| level_mesh(&view, c)).collect();
+        assert_eq!(points(&[whole]), points(&pieces));
+    }
+
+    #[test]
     fn every_open_cell_is_floored_and_walled() {
         let level = level();
-        let view = CellView::new(&level);
+        let view = CellView::uncobbled(&level);
         let (x0, y0, x1, y1) = view.bounds();
         // A way down has no floor under it and a way up no ceiling over it.
         let (mut open, mut floors, mut ceilings, mut faces) = (0, 0, 0, 0);
@@ -783,12 +908,12 @@ mod tests {
             }
         }
         let mesh = level_mesh(&view, view.bounds());
-        let quads = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).unwrap().indices.len() / 6;
+        let quads = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).map_or(0, |p| p.indices.len() / 6);
         assert!(floors < open, "the way down leaves its cell unfloored");
         assert_eq!(quads("floor"), floors * SEGMENTS * SEGMENTS);
         assert_eq!(quads("ceiling"), ceilings * SEGMENTS * SEGMENTS);
         let rows = (level.ceiling / ROW).ceil() as usize;
-        assert_eq!(quads("walls"), faces * SEGMENTS * rows);
+        assert_eq!(quads("walls") + quads("strata"), faces * SEGMENTS * rows);
     }
 
     #[test]
@@ -805,7 +930,7 @@ mod tests {
     fn walls_meet_the_floor_on_shared_points() {
         // Without the stairs, which leave their cells unfloored.
         let level = Level { stairs: Vec::new(), ..level() };
-        let view = CellView::new(&level);
+        let view = CellView::uncobbled(&level);
         let mesh = level_mesh(&view, view.bounds());
         let key = |p: &[f32; 3]| p.map(|c| (c * 1000.0).round() as i64);
         let floor: std::collections::HashSet<_> = mesh.surfaces.parts[0].positions.iter().map(key).collect();
@@ -846,7 +971,7 @@ mod tests {
 
     #[test]
     fn fixtures_are_drawable() {
-        let frame = door_frame(30.0, 1207);
+        let frame = door_frame(30.0, DoorStyle::Timber, 1207);
         let leaf = entrance_leaf(1207);
         let (brazier, flame) = brazier(1207);
         for part in frame.parts.iter().chain(&leaf.parts).chain(&brazier.parts) {
@@ -894,7 +1019,7 @@ mod tests {
             let doors = doorways(&view);
             assert!(!doors.is_empty());
             for door in doors {
-                let frame = door_frame(level.ceiling, level.seed ^ ((door.x as u32) << 16 | door.y as u32));
+                let frame = door_frame(level.ceiling, DoorStyle::Timber, level.seed ^ ((door.x as u32) << 16 | door.y as u32));
                 // Out to where the walls and ceiling can stand, and down into the floor's dip.
                 let (across, low, high) = (CELL * 0.5 + WALL_RELIEF * peak, -FLOOR_RELIEF * peak, level.ceiling + CEILING_RELIEF * peak);
                 let mut rays = 0;
@@ -938,12 +1063,51 @@ mod tests {
         for (seed, expected) in ROUGH_ROCK_HASHES {
             // Without the stairs, which came later and leave their cells unfloored.
             let level = Level { stairs: Vec::new(), ..fb_level::generate(seed, 1) };
-            let view = CellView::new(&level);
+            // With no cobbled or flagged floors and no layered walls, which came later.
+            let view = CellView::uncobbled(&level);
             let mesh = level_mesh(&view, view.bounds());
-            let frame = door_frame(level.ceiling, level.seed);
+            let frame = door_frame(level.ceiling, DoorStyle::Timber, level.seed);
             let seen = (hash_parts(mesh.surfaces.parts.iter().chain([&mesh.ink])), hash_parts(&frame.parts));
             assert_eq!(seen, expected, "rough rock changed for seed {seed}");
         }
+    }
+
+    #[test]
+    fn stone_vertices_carry_the_finishes_moss() {
+        // Both styles: rough rock at depth 1, stone halls at depth 2.
+        for depth in [1, 2] {
+            let level = fb_level::generate(1207, depth);
+            let view = CellView::new(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            let mut damp = 0;
+            for part in &mesh.surfaces.parts {
+                assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
+                assert!(part.validate().is_ok());
+                for (p, uv) in part.positions.iter().zip(&part.uvs_b) {
+                    assert_eq!(uv[0], view.finishes().moss_at(p[0], p[2]));
+                    assert!((0.0..=1.0).contains(&uv[0]));
+                    damp += (uv[0] > 0.2) as usize;
+                }
+            }
+            assert!(damp > 0, "no moss anywhere at depth {depth}");
+        }
+    }
+
+    #[test]
+    fn layered_rooms_have_their_own_walls() {
+        // A cave with a layered quarter.
+        let layered = |l: &Level| CellView::new(l).finishes().quarters().iter().any(|q| q.walls == fb_level::WallFinish::Strata);
+        let level = (1..200).map(|seed| fb_level::generate(seed, 1)).find(layered).expect("some cave has strata");
+        let view = CellView::new(&level);
+        let mesh = level_mesh(&view, view.bounds());
+        let walls = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).map_or(0, |p| p.indices.len());
+        assert!(walls("strata") > 0, "a layered room");
+        assert!(walls("walls") > 0);
+        // Splitting the walls loses none: the unlayered total is the two together.
+        let plain = CellView::with_finishes(&level, finishes(&level, &LevelParams { strata_chance: 0.0, ..LevelParams::for_style(level.style) }));
+        let unsplit = level_mesh(&plain, plain.bounds());
+        let total = unsplit.surfaces.parts.iter().find(|p| p.name == "walls").unwrap().indices.len();
+        assert_eq!(walls("walls") + walls("strata"), total);
     }
 
     #[test]

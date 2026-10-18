@@ -29,7 +29,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::apply_decay;
+import super::decay::{apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -379,7 +379,7 @@ fn fragment(
         toon.decay_scale,
         toon.decay_seed,
     );
-    let base = apply_decay(
+    var base = apply_decay(
         etched,
         item_position,
         pixel,
@@ -388,6 +388,32 @@ fn fragment(
         toon.decay_scale,
         toon.decay_seed,
     );
+    // Cave rock breaks the shading normal into facets or beds before the light reads it. Rock
+    // is level stone, drawn in world space with no transform of its own, so item space is world
+    // space and a change of the normal there is a change of the world normal.
+@if(!SKINNED) {
+    if toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA {
+        var rock: RockShade;
+        if toon.decay_type == DECAY_STRATA {
+            rock = strata_shade(item_position, item_normal, pixel, toon.decay_seed);
+        } else {
+            rock = rock_shade(item_position, item_normal, pixel, toon.decay_seed);
+        }
+        pbr_input.N = normalize(pbr_input.N + (rock.normal - item_normal));
+        base = base * rock.tone;
+    }
+}
+    // Lichen grows over the level's stone, which carries it per vertex (not skinned: folk keep
+    // their rest normals in that slot). Sampled in the world, since columns and doors are items
+    // with their own transforms, and measured in height from item space (their origin is the floor).
+@if(VERTEX_UVS_B && !SKINNED) {
+    // Where the stone is shut in (the baked corner shading, in the vertex colour's alpha) or cut
+    // (the surface normal turning over a few pixels) lichen takes hold best.
+    var crease = smoothstep(0.03, 0.2, length(fwidth(item_normal)));
+    @if(VERTEX_COLORS)
+    crease = max(crease, 2.2 * (1.0 - vertex_output.color.a));
+    base = apply_lichen(base, vertex_output.world_position.xyz, item_position.y, item_normal, pixel, vertex_output.uv_b.x, toon.decay_seed, clamp(crease, 0.0, 1.0));
+}
 
     // A flame (premultiplied) is coloured by its vertices, by height (`flame_colour`), and here
     // reddens toward its silhouette in three steps, so its edges read deep red-orange and its

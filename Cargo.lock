@@ -2749,6 +2749,7 @@ dependencies = [
  "fb_items",
  "procgen_rng",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

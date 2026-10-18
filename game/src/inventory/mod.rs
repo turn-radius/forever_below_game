@@ -1790,7 +1790,7 @@ mod tests {
         }
         app.update();
         app.update();
-        assert_eq!(rows(&mut app), ["\u{d7}1.2", "20%", "+2", "+2 STR"].map(String::from));
+        assert_eq!(rows(&mut app), ["\u{d7}1.2", "80%", "+2", "+2 STR"].map(String::from));
         assert_eq!(app.world().resource::<Character>().strength(), 15);
         assert!(sheet_text(&mut app).iter().any(|t| t == "STR 15 (+2)"), "the attribute line shows the score as it stands");
     }

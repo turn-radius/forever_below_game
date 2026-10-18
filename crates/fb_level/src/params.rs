@@ -18,7 +18,10 @@ use crate::LevelStyle;
 macro_rules! level_params {
     ($($section:ident { $($field:ident: $ty:ty = $default:expr, $min:expr, $max:expr, $step:expr; $doc:literal)* })*) => {
         /// The parameters of a level's layout and furnishing.
+        ///
+        /// A saved set without a field takes its default, so older ones still load.
         #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+        #[serde(default)]
         pub struct LevelParams {
             $($(#[doc = $doc] pub $field: $ty,)*)*
         }
@@ -82,6 +85,15 @@ level_params! {
         bare_room_chance: f64 = 0.15, 0.0, 1.0, 0.01; "Chance a room holds no loot."
         cells_per_item: u32 = 10, 2.0, 40.0, 1.0; "Room cells for each item of loot."
         items_per_room_max: u32 = 5, 1.0, 12.0, 1.0; "Most loot in one room, before the odd extra."
+    }
+    finish {
+        moss_amount: f32 = 1.0, 0.0, 1.0, 0.05; "How strongly the damp field grows moss: none at 0."
+        grotto_chance: f64 = 0.15, 0.0, 1.0, 0.01; "Chance a room is a grotto, mossy throughout, whatever its quarter."
+        strata_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Weight of layered quarters (strata walls, timber frames) in rough rock, against plain ones."
+        rubble_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Weight of timbered quarters (rubble walls, cobbles, timber frames) in the stone halls, against plain ones."
+        cobble_chance: f64 = 0.2, 0.0, 1.0, 0.01; "Weight of timbered quarters (cobbled or bare floor, timber frames) in rough rock, against plain ones; the halls' timbered quarters follow rubble_chance."
+        flagstone_chance: f64 = 0.25, 0.0, 1.0, 0.01; "Chance a hewn quarter in rough rock is paved with rough flagstones rather than left bare."
+        arch_chance: f64 = 0.6, 0.0, 1.0, 0.01; "Weight of vaulted quarters (round or pointed arches) in the stone halls, against plain ones; hewn quarters (rock-cut arches) in rough rock take a third of it."
     }
 }
 

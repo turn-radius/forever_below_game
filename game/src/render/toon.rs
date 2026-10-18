@@ -64,7 +64,7 @@ impl Default for ToonBands {
 /// Procedural wear for one material (`docs/rendering.md`, "Wear, rust and grime").
 #[derive(Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Decay {
-    /// `armory::MaterialKind::decay_type()`, 1..=13; 0 draws no wear.
+    /// `armory::MaterialKind::decay_type()`, 1..=13, or 14 and 15 for the level's cave rock and strata; 0 draws no wear.
     pub kind: u32,
     /// 0 = as made, up to 1.2 = ruinous.
     pub amount: f32,
