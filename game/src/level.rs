@@ -927,10 +927,14 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             transform,
         ))
         // Something to see by until the player brings a torch; `FB_DEBUG_LIGHT=cool` swaps its
-        // warmth for a neutral light, to judge colours the torch's orange would hide.
+        // warmth for a neutral light, to judge colours the torch's orange would hide, and
+        // `FB_DEBUG_LIGHT=lantern` for a steady, whiter lantern twice as bright and reaching
+        // twice as far, to show a room whole.
         .with_child((
             if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "cool") {
                 Torch::flickering(point_light(Color::srgb(0.85, 0.95, 1.0), 1.0, 120.0, &EXPOSURE), 0.0)
+            } else if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "lantern") {
+                Torch::flickering(point_light(Color::srgb(1.0, 0.9, 0.74), 2.0, 240.0, &EXPOSURE), 0.0)
             } else if mode == "corridor" {
                 // A corridor's arches stand further apart than the usual light reaches.
                 Torch::light(2.5, 260.0, &EXPOSURE)
