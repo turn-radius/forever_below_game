@@ -372,6 +372,11 @@ mod tests {
         [1, 2].into_iter().flat_map(|depth| SEEDS.map(move |seed| (seed, depth)))
     }
 
+    /// The species placed from the creature stream, before the newer ones ([`crate::wild`]).
+    fn original(species: Species) -> bool {
+        species.is_rat() || species.is_snake() || species.is_skeleton() || species.is_troll()
+    }
+
     #[test]
     fn the_first_level_has_no_giant_rats_and_deeper_ones_do() {
         let giants = |depth| (1..=40).flat_map(|seed| generate(seed, depth).creatures).filter(|c| c.species == Species::GiantRat).count();
@@ -394,7 +399,7 @@ mod tests {
             let level = generate(seed, depth);
             let start_room = level.start_room();
             let mut packs: std::collections::HashMap<u32, Vec<&CreatureSpot>> = Default::default();
-            for c in &level.creatures {
+            for c in level.creatures.iter().filter(|c| original(c.species)) {
                 packs.entry(c.pack).or_default().push(c);
                 let (x, y) = (c.x.floor() as i32, c.y.floor() as i32);
                 let room = level.room_at(x, y);
@@ -412,7 +417,7 @@ mod tests {
                     snakes += 1;
                     assert_eq!(members.len(), 1, "seed {seed}: snakes are alone");
                     assert!(!level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == room), "seed {seed}: a snake in a room with folk");
-                    assert!(level.creatures.iter().filter(|c| level.room_at(c.x as i32, c.y as i32) == room).count() == 1, "seed {seed}: a snake shares its room");
+                    assert!(level.creatures.iter().filter(|c| original(c.species) && level.room_at(c.x as i32, c.y as i32) == room).count() == 1, "seed {seed}: a snake shares its room");
                 } else {
                     assert!(members.len() as u32 <= PACK_SIZE.1, "seed {seed}: {} rats", members.len());
                 }
@@ -443,7 +448,7 @@ mod tests {
         assert_eq!(level.props[0].prop, crate::Prop::Container { style: armory::families::chests::ChestStyle::Chest, seed: 1_184_162_579, loot: 3_392_196_572 });
         let (before, _) = crate::generate::generate_without_creatures(1207, 1, &crate::LevelParams::default());
         assert!(before.creatures.is_empty() && !level.creatures.is_empty());
-        assert_eq!(Level { creatures: Vec::new(), stairs: Vec::new(), ..level }, before);
+        assert_eq!(Level { creatures: Vec::new(), stairs: Vec::new(), webs: Vec::new(), ..level }, before);
     }
 
     #[test]

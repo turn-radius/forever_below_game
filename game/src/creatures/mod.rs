@@ -738,12 +738,16 @@ mod tests {
     /// An app with every creature of seed 1207 spawned as bones (no drawing), idling and
     /// animating, stepped 1/60 s a frame.
     fn level_app() -> (App, Vec<Entity>) {
+        level_app_of(1207, 1)
+    }
+
+    fn level_app_of(seed: u32, depth: u32) -> (App, Vec<Entity>) {
         use bevy::time::TimeUpdateStrategy;
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_systems(Update, (idle, animate).chain());
-        let level = fb_level::generate(1207, 1);
+        let level = fb_level::generate(seed, depth);
         app.insert_resource(CurrentLevel(level.clone()));
         let roots = {
             let mut commands = app.world_mut().commands();
@@ -756,6 +760,21 @@ mod tests {
     fn bone_transforms(app: &App, root: Entity) -> Vec<Transform> {
         let bones = &app.world().get::<Bones>(root).unwrap().0;
         bones.iter().map(|&b| *app.world().get::<Transform>(b).unwrap()).collect()
+    }
+
+    /// Each newer species spawns and animates without a panic on a level that holds it: the first
+    /// seed in 1..=60 at a depth where it is placed (deep enough for the troll and the giant bats).
+    #[test]
+    fn each_newer_species_spawns_and_animates_on_a_level_that_holds_it() {
+        use fb_creatures::Species::*;
+        for (species, depth) in [(GiantCentipede, 1), (Bat, 1), (Jackalope, 1), (GiantSpider, 3), (GiantBat, 4), (Troll, 7)] {
+            let seed = (1..=60).find(|&s| fb_level::generate(s, depth).creatures.iter().any(|c| c.species == species)).unwrap_or_else(|| panic!("no level holds {species:?} at depth {depth}"));
+            let (mut app, roots) = level_app_of(seed, depth);
+            assert!(roots.iter().any(|&r| app.world().get::<Critter>(r).unwrap().spot.species == species));
+            for _ in 0..30 {
+                app.update();
+            }
+        }
     }
 
     #[test]
@@ -800,6 +819,10 @@ mod tests {
             }
             for (&root, rig) in roots.iter().zip(&rigs) {
                 let critter = app.world().get::<Critter>(root).unwrap().clone();
+                // A bat hangs or flies, off the floor by design.
+                if critter.spot.species.is_flying() {
+                    continue;
+                }
                 let bones = app.world().get::<Bones>(root).unwrap().0.clone();
                 let size = match &critter.creature {
                     Creature::Rat(r) => r.length,
