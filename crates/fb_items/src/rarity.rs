@@ -169,23 +169,34 @@ pub fn roll_affixes(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag]) -> Vec<&
     roll_affixes_for(rng, rarity, tags, None)
 }
 
-/// The affixes a `rarity` rolls on an item with `tags` worn in `slot`. Common: a flaw prefix 30%
-/// of the time. Magic: one good prefix or suffix, even odds. Rare: a good prefix and a good
-/// suffix. Legendary: a good prefix and two good suffixes. Slots with nothing that fits stay
-/// empty.
+/// The chance an item of each rarity, common first, rolls a flaw prefix besides its good affixes:
+/// the plate's 30% for common, and our own, falling with rarity, for the rest.
+const FLAW_CHANCE: [f64; 4] = [0.3, 0.2, 0.1, 0.05];
+
+/// The affixes a `rarity` rolls on an item with `tags` worn in `slot`. Common: no good affix.
+/// Magic: one good prefix or suffix, even odds. Rare: a good prefix and a good suffix.
+/// Legendary: a good prefix and two good suffixes. Then a flaw prefix, at [`FLAW_CHANCE`] for the
+/// rarity, after the good ones so it never takes their place or their name, and never of a
+/// group they have. Slots with nothing that fits stay empty.
 pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot: Option<Slot>) -> Vec<&'static Affix> {
     use AffixKind::{Prefix, Suffix};
-    let wanted: Vec<(AffixKind, bool)> = match rarity {
-        Rarity::Common => if rng.chance(0.3) { vec![(Prefix, false)] } else { vec![] },
-        Rarity::Magic => vec![(if rng.chance(0.5) { Prefix } else { Suffix }, true)],
-        Rarity::Rare => vec![(Prefix, true), (Suffix, true)],
-        Rarity::Legendary => vec![(Prefix, true), (Suffix, true), (Suffix, true)],
+    let good: Vec<AffixKind> = match rarity {
+        Rarity::Common => vec![],
+        Rarity::Magic => vec![if rng.chance(0.5) { Prefix } else { Suffix }],
+        Rarity::Rare => vec![Prefix, Suffix],
+        Rarity::Legendary => vec![Prefix, Suffix, Suffix],
     };
+    let rolling = Rolling { tags, slot, rarity };
     let mut chosen = Vec::new();
-    for (kind, good) in wanted {
-        if let Some(a) = pick_affix(rng, Rolling { tags, slot, rarity }, kind, good, &chosen) {
+    for kind in good {
+        if let Some(a) = pick_affix(rng, rolling, kind, true, &chosen) {
             chosen.push(a);
         }
+    }
+    if rng.chance(FLAW_CHANCE[rarity as usize])
+        && let Some(a) = pick_affix(rng, rolling, Prefix, false, &chosen)
+    {
+        chosen.push(a);
     }
     chosen
 }
@@ -234,32 +245,33 @@ mod tests {
     #[test]
     fn affixes_fit_their_rarity_and_tags() {
         for tags in [SWORD, TUNIC, PACK, &[Tag::Light, Tag::Wood][..], &[Tag::Trinket][..]] {
-            let mut flaws = 0;
-            let mut commons = 0;
+            // Items and flaws rolled, by rarity.
+            let (mut items, mut flaws) = ([0u32; 4], [0u32; 4]);
             for seed in 0..3_000 {
                 let (rarity, chosen) = roll_rarity(&mut game_rng(seed), tags, &Odds::loot(8));
                 for a in &chosen {
                     assert!(a.fits(tags), "{} on {tags:?}", a.name);
                 }
-                let good = chosen.iter().filter(|a| a.good).count();
-                let prefixes = chosen.iter().filter(|a| a.kind == AffixKind::Prefix).count();
-                match rarity {
-                    Rarity::Common => {
-                        commons += 1;
-                        flaws += chosen.len();
-                        assert!(good == 0 && chosen.len() <= 1);
-                    }
-                    Rarity::Magic => assert!(good == chosen.len() && chosen.len() <= 1),
-                    Rarity::Rare => assert!(good == chosen.len() && prefixes <= 1 && chosen.len() <= 2),
-                    Rarity::Legendary => assert!(good == chosen.len() && prefixes <= 1 && chosen.len() <= 3),
-                }
+                let good: Vec<_> = chosen.iter().filter(|a| a.good).collect();
+                let flawed = chosen.len() - good.len();
+                assert!(good.len() <= rarity as usize && flawed <= 1, "{rarity:?}: {chosen:?}");
+                assert!(good.iter().filter(|a| a.kind == AffixKind::Prefix).count() <= 1);
+                assert!(chosen.iter().take(good.len()).all(|a| a.good), "the flaw comes last, so the name keeps the good prefix");
+                assert!(chosen.iter().filter(|a| !a.good).all(|a| a.kind == AffixKind::Prefix), "flaws are prefixes");
+                items[rarity as usize] += 1;
+                flaws[rarity as usize] += flawed as u32;
                 let mut names: Vec<_> = chosen.iter().map(|a| &a.name).collect();
                 names.dedup();
                 assert_eq!(names.len(), chosen.len(), "an affix rolled twice");
             }
-            if affixes().iter().any(|a| !a.good && a.fits_item(tags, None) && a.in_play()) {
-                let share = flaws as f64 / commons as f64;
-                assert!((share - 0.3).abs() < 0.04, "{tags:?}: {share}");
+            // Where every flaw that fits is ungrouped, nothing keeps a flaw from its slot, so each
+            // rarity rolls flaws at its chance.
+            let fitting: Vec<_> = affixes().iter().filter(|a| !a.good && a.fits_item(tags, None) && a.in_play()).collect();
+            if !fitting.is_empty() && fitting.iter().all(|a| a.group.is_none()) {
+                for (i, chance) in FLAW_CHANCE.into_iter().enumerate() {
+                    let share = flaws[i] as f64 / items[i].max(1) as f64;
+                    assert!((share - chance).abs() < 0.05, "{tags:?} rarity {i}: {share} against {chance}");
+                }
             }
         }
     }
