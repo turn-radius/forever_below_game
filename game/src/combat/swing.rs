@@ -25,8 +25,8 @@ use bevy::{
 use fb_body::Side;
 
 use super::callouts::{Callout, Outcome};
-use super::feedback::{Corpse, Struck};
-use super::{ArmourClass, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach};
+use super::feedback::{Burned, Corpse, Struck};
+use super::{ArmourClass, HAND_HEIGHT, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach_from};
 use crate::carry::{HeldItem, ViewModelCamera};
 use crate::view_model::ViewHold;
 use crate::character::{Character, DelverStamina, modifier};
@@ -44,6 +44,7 @@ pub struct SwingPlugin;
 impl Plugin for SwingPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Struck>()
+            .add_message::<Burned>()
             .add_message::<Callout>()
             .add_message::<SwungAt>()
             .add_systems(Startup, load_swing_sound)
@@ -58,6 +59,13 @@ impl Plugin for SwingPlugin {
                     .in_set(DelveSystems),
             );
     }
+}
+
+/// Whether the main hand holds a lit torch, so a blow with it is fire as well as a club's
+/// bludgeoning: a troll's regeneration stops at it (`crate::creatures::trolls`). A lantern's
+/// glass and an unlit or spent torch are not.
+pub fn flaming_blow(inventory: &Inventory) -> bool {
+    inventory.worn(fb_items::Slot::Mainhand).and_then(|id| inventory.item(id)).is_some_and(|item| item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true))
 }
 
 /// How long a swing takes, seconds, and when in it the blow lands. Our own: about two swings a
@@ -195,7 +203,7 @@ pub(super) fn start_swing(
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
             let combat = &tuning.combat;
-            let target = target_in_reach(from, at.forward().as_vec3().xz(), weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets())?;
+            let target = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), at.forward().as_vec3().xz(), weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets())?;
             toward_target(eye, strikeable.points(target), &tuning.view)
         });
         let flourish = Vec3::new(dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0));
@@ -213,9 +221,11 @@ pub(super) fn start_swing(
 /// shapes ([`body_targets`]), and the living folk, by the circle each stands in
 /// ([`Denizen::radius`]: their shoulders and clothes, which also keeps the delver off them).
 #[derive(bevy::ecs::system::SystemParam)]
+#[allow(clippy::type_complexity)]
 pub struct Strikeable<'w, 's> {
     creatures: Query<'w, 's, (Entity, &'static Critter, &'static Transform, Option<&'static Bones>), Without<Corpse>>,
     folk: Query<'w, 's, (Entity, &'static Denizen, &'static Transform, Option<&'static Children>), Without<Corpse>>,
+    fallen_trolls: Query<'w, 's, (Entity, &'static Critter, &'static Transform, Option<&'static Bones>, &'static crate::creatures::trolls::Troll), With<Corpse>>,
     anims: Query<'w, 's, &'static FolkAnim>,
     joints: Query<'w, 's, &'static GlobalTransform, With<crate::folk_pose::FolkJoint>>,
     shapes: Query<'w, 's, (&'static GlobalTransform, &'static HitShape)>,
@@ -228,8 +238,14 @@ impl Strikeable<'_, '_> {
     /// Every body a blow might land on, as circles on the floor.
     pub fn targets(&self) -> Vec<Target> {
         let creatures = self.creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes));
-        let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target { entity, centre: t.translation.xz(), radius: denizen.radius });
+        let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target::on_floor(entity, t.translation.xz(), denizen.radius));
         creatures.chain(folk).collect()
+    }
+
+    /// The bodies of trolls that lie down and may yet rise, which a flame can still reach: fire
+    /// stops their regeneration ([`crate::creatures::trolls`]). No other blow finds them.
+    pub fn fallen_trolls(&self) -> Vec<Target> {
+        self.fallen_trolls.iter().filter(|(.., troll)| !troll.spent).flat_map(|(entity, critter, t, bones, _)| body_targets(entity, critter, t, bones, &self.shapes)).collect()
     }
 
     /// Whether a living creature's body is within `reach` of `at` (world `(x, z)`): a hostile
@@ -329,9 +345,11 @@ fn land_blows(
     strikeable: Strikeable,
     armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
+    mut burned: MessageWriter<Burned>,
     mut swung: MessageWriter<SwungAt>,
     mut callouts: MessageWriter<Callout>,
     rules: Option<Res<crate::rules::GameRules>>,
+    inventory: Option<Res<Inventory>>,
 ) {
     let rules = crate::rules::GameRules::of(&rules);
     let dt = time.delta_secs();
@@ -342,7 +360,7 @@ fn land_blows(
             let from = at.translation.xz();
             let forward = at.forward().as_vec3().xz();
             let combat = &tuning.combat;
-            if let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
+            if let Some(target) = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
                 swung.write(SwungAt { target });
                 let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
                 let odds = crate::character::DelverEffects::attack_odds(effects, rules);
@@ -351,9 +369,18 @@ fn land_blows(
                 if attack.hit {
                     let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
                     struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20 });
+                    if inventory.as_deref().is_some_and(flaming_blow) {
+                        burned.write(Burned { target });
+                    }
                 } else {
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
+            } else if inventory.as_deref().is_some_and(flaming_blow)
+                && let Some(target) = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.fallen_trolls())
+            {
+                // A lit torch put to a troll lying down: nothing to roll against, it burns.
+                swung.write(SwungAt { target });
+                burned.write(Burned { target });
             }
         }
         if swing.t >= SWING_TIME {
@@ -371,9 +398,10 @@ pub fn body_targets(entity: Entity, critter: &Critter, root: &Transform, bones: 
         .flat_map(|b| b.0.iter())
         .filter_map(|&bone| shapes.get(bone).ok())
         .flat_map(|(at, shape)| shape.spheres(at))
-        .map(|(centre, radius)| Target { entity, centre: centre.xz(), radius })
+        // What flies is reached up and down as well as across: its spheres carry their height.
+        .map(|(centre, radius)| Target { entity, centre: centre.xz(), radius, height: critter.spot.species.is_flying().then_some(centre.y) })
         .collect();
-    if targets.is_empty() { vec![Target { entity, centre: root.translation.xz(), radius: body_radius(critter) }] } else { targets }
+    if targets.is_empty() { vec![Target::on_floor(entity, root.translation.xz(), body_radius(critter))] } else { targets }
 }
 
 fn smoothstep(x: f32) -> f32 {

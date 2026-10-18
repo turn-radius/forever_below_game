@@ -583,6 +583,25 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let aim = if mode == "vault" { dir * 60.0 + Vec3::Y * 45.0 } else { dir * 60.0 };
             Transform::from_translation(at).looking_at(at + aim, Vec3::Y)
         }
+        "web" => {
+            // The first web of the kind `FB_DEBUG_WEB` names (corner, ceiling or floor), from a
+            // few steps off in the direction it faces, looking at it.
+            let kind = match std::env::var("FB_DEBUG_WEB").as_deref() {
+                Ok("ceiling") => fb_level::WebKind::Ceiling,
+                Ok("floor") => fb_level::WebKind::Floor,
+                _ => fb_level::WebKind::Corner,
+            };
+            let Some(web) = level.webs.iter().find(|w| w.kind == kind) else { return };
+            let at = v3(fb_level::Level::world(web.x, web.y));
+            let facing = Quat::from_rotation_y(web.yaw) * Vec3::NEG_Z;
+            let (target, back) = match kind {
+                fb_level::WebKind::Corner => (at + facing * web.size * 0.35 + Vec3::Y * web.height * 0.55, facing * CELL * 1.5),
+                fb_level::WebKind::Ceiling => (at + Vec3::Y * web.height, Quat::from_rotation_y(web.yaw + 1.57) * Vec3::NEG_Z * CELL * 0.5),
+                fb_level::WebKind::Floor => (at + Vec3::Y * 1.0, Quat::from_rotation_y(web.yaw + 1.57) * Vec3::NEG_Z * CELL * 0.45),
+            };
+            let from = if kind == fb_level::WebKind::Corner { at + back + eye } else { target + back + Vec3::Y * if kind == fb_level::WebKind::Floor { 9.0 } else { -4.0 } };
+            Transform::from_translation(from).looking_at(target, Vec3::Y)
+        }
         "brazier" | "glowcaps" => {
             let kind = if mode == "brazier" { LightKind::Brazier } else { LightKind::Glowcaps };
             let Some(spot) = level.lights.iter().find(|l| l.kind == kind) else { return };

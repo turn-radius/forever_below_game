@@ -18,10 +18,10 @@
 //!   [`Corpse`]: it stops its routine, no longer turns its head, blocks nobody and shows no card.
 //!   "Name is slain" shows low in the view.
 //!
-//! - **What they leave** ([`shed_folk_gear`]): as they fall, every item they wore and held is set
-//!   down round where they fell as the item it is (its rarity, affixes and wear), through the
-//!   floor machinery, as a skeleton's is (`inventory::underfoot::set_down_around`), and their
-//!   body is drawn again bare. The body is marked [`Looted`] at once, and one brought back from
+//! - **What they leave** ([`crate::belongings::drop_belongings`]): as they fall, every item they
+//!   wore and held is set down round where they fell as the item it is (its rarity, affixes and
+//!   wear), through the floor machinery, as a skeleton's is, and their body is drawn again bare
+//!   ([`bare_the_fallen`]). The body is marked [`Looted`] at once, and one brought back from
 //!   the record comes back bare and [`Looted`] (`crate::folk::spawn_folk`), so nothing is set down
 //!   twice.
 //! - **Fighting back** ([`fight`]): a folk given cause turns hostile (`crate::hostility`, with the
@@ -65,8 +65,8 @@ use crate::folk::{Denizen, Person, Stance, Stride};
 use crate::folk_pose::{ArmSwing, spawn_rigged};
 use crate::folk_routine::{Routine, pace};
 use crate::hostility::{Hostility, HostilityPlugin, Provoked};
-use crate::inventory::underfoot::{FloorChanges, apply_floor_changes, set_down_around};
-use crate::inventory::{Inventory, Toasts};
+use crate::inventory::underfoot::FloorChanges;
+use crate::inventory::Toasts;
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, BlocksTheWay, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
 use crate::player::{blocked_by, slide_around};
@@ -78,6 +78,9 @@ pub struct FolkCombatPlugin;
 
 impl Plugin for FolkCombatPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<crate::belongings::BelongingsPlugin>() {
+            app.add_plugins(crate::belongings::BelongingsPlugin);
+        }
         app.add_plugins(HostilityPlugin)
             .add_message::<Struck>()
             .add_message::<Callout>()
@@ -91,11 +94,12 @@ impl Plugin for FolkCombatPlugin {
             .init_resource::<FloorChanges>()
             .add_systems(
                 Update,
-                (arm_folk, provoke_when_attacked, take_folk_blows, shed_folk_gear.before(apply_floor_changes), collapse_folk, fight)
+                (arm_folk, provoke_when_attacked, take_folk_blows, collapse_folk, fight)
                     .chain()
                     .before(crate::hostility::turn_on_the_delver)
                     .in_set(DelveSystems),
-            );
+            )
+            .add_systems(Update, bare_the_fallen.after(crate::belongings::drop_belongings).in_set(DelveSystems));
         // `FB_PROVOKE=<n>` and `FB_SLAY=<n>`, for captures (README, "Debug switches").
         let index = |name: &str| std::env::var(name).ok().and_then(|v| v.trim().parse::<usize>().ok());
         if let Some(folk) = index("FB_PROVOKE") {
@@ -329,33 +333,21 @@ pub fn redraw(spawner: &mut ItemSpawner, bindposes: &mut Assets<SkinnedMeshInver
     spawner.commands().entity(stance).insert(anim);
 }
 
-/// Sets everything a fallen folk wore and held down round where they fell, once, as they start
-/// to fall ([`set_down_around`]), and draws their body again bare. They are marked [`Looted`]
-/// and their gear taken off them, so it is never set down twice; the floor changes are applied
-/// this frame, before the record could read the floor (as a skeleton's are).
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn shed_folk_gear(
-    tuning: Res<Tuning>,
-    level: Res<CurrentLevel>,
-    blocked_cells: Res<BlockedCells>,
-    obstacles: Res<Obstacles>,
-    mut inventory: ResMut<Inventory>,
-    mut changes: ResMut<FloorChanges>,
-    mut bodies: Query<(Entity, &mut Denizen, &Transform, Option<&Children>), (With<Corpse>, Without<Looted>)>,
+/// Draws each fallen folk's body again bare, once their things are set down
+/// ([`crate::belongings::drop_belongings`]): their gear is taken off them, so what they wore
+/// is not drawn and not set down twice. One brought back from the record comes bare already.
+#[allow(clippy::type_complexity)]
+pub fn bare_the_fallen(
+    mut bodies: Query<(&mut Denizen, Option<&Children>), (With<Corpse>, With<Looted>)>,
     stances: Query<(), With<Stance>>,
     bindposes: Option<ResMut<Assets<SkinnedMeshInverseBindposes>>>,
     mut spawner: ItemSpawner,
 ) {
-    let blocked = blocked_by(&level.0, &blocked_cells);
     let mut bindposes = bindposes;
-    for (entity, mut denizen, at, children) in &mut bodies {
-        spawner.commands().entity(entity).insert(Looted);
-        let items = denizen.person.gear.iter().map(|(_, item)| item);
-        // Not round the circle they stood in: they no longer block it.
-        let own = |o: &&Obstacle| matches!(o, Obstacle::Circle { centre, radius } if centre.distance(at.translation.xz()) < 0.5 * denizen.radius && *radius == denizen.radius);
-        let others: Vec<Obstacle> = obstacles.0.iter().filter(|o| !own(o)).copied().collect();
-        set_down_around(at.translation.xz(), items, denizen.person.spot.seed, &mut inventory, &mut changes, &blocked, &others, tuning.view.floor_item_scale);
-        info!("{} drops {} things", denizen.person.name, denizen.person.gear.len());
+    for (mut denizen, children) in &mut bodies {
+        if denizen.person.gear.is_empty() {
+            continue;
+        }
         denizen.person = bare(&denizen.person);
         // Drawn again with nothing on.
         let stance = children.into_iter().flat_map(|c| c.iter()).find(|&c| stances.contains(c));
@@ -528,6 +520,7 @@ pub fn fight(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::inventory::underfoot::apply_floor_changes;
     use crate::combat::{CombatPlugin, RunDice, Weapon, swing::Swing};
     use crate::inventory::Inventory;
     use crate::play::{CurrentLevel, Player};
@@ -567,7 +560,7 @@ pub(crate) mod tests {
     /// A stand-in (no figure) for the folk at `spot`, standing there.
     fn stand_in(app: &mut App, spot: &fb_level::FolkSpot) -> Entity {
         let denizen = Denizen { person: Person::of(spot, 1), radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
-        app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(3.0)), crate::folk::stand_at(spot))).id()
+        app.world_mut().spawn((denizen.belongings(), denizen, BlocksTheWay(fb_level::FloorShape::Round(3.0)), crate::folk::stand_at(spot))).id()
     }
 
     /// The delver `away` world units west of `at`, facing it.

@@ -13,6 +13,7 @@ pub mod dice;
 pub mod dress;
 pub mod footprint;
 pub mod item;
+pub mod jackalope;
 pub mod modifier;
 pub mod naming;
 pub mod outfit;
@@ -22,6 +23,7 @@ pub mod range;
 pub mod rarity;
 pub mod stats;
 pub mod tables;
+pub mod troll;
 pub mod undead;
 
 pub use contents::{container_item, roll_contents};

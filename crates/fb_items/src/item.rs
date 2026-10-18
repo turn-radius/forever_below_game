@@ -60,6 +60,11 @@ impl Item {
         if self.shape.family() == armory::Family::Lantern {
             return vec![made_for, Slot::Mainhand, Slot::Hip];
         }
+        // A torch is held in either hand, the off hand first, so it can be swung: a lit torch's
+        // blow is fire, which stops a troll's regeneration.
+        if self.shape.family() == armory::Family::Torch {
+            return vec![made_for, Slot::Mainhand];
+        }
         // A quiver or bolt case hangs from the belt at the hip, or rides on the back.
         if matches!(self.shape.family(), armory::Family::Quiver | armory::Family::BoltCase) {
             return vec![Slot::Hip, Slot::Back];
@@ -150,6 +155,12 @@ pub fn roll_loot(family: armory::Family, seed: u32, odds: Odds) -> Option<Item> 
 mod tests {
     use super::*;
     use crate::armory_base::ARMORY_BASES;
+
+    #[test]
+    fn a_torch_is_held_in_either_hand_the_off_hand_first_so_it_can_be_swung() {
+        let torch = roll_item("Torch", 3).unwrap();
+        assert_eq!(torch.slots(), vec![Slot::Offhand, Slot::Mainhand]);
+    }
 
     #[test]
     fn every_base_rolls() {

@@ -1,13 +1,27 @@
 //! # fb_creatures
 //!
-//! Creatures of the abyss as plain data: rats, snakes and skeletons, something to fight.
+//! Creatures of the abyss as plain data: rats, snakes, skeletons, giant spiders, trolls, jackalopes, giant
+//! centipedes and bats, something to fight.
 //!
+//! - [`centipede`] rolls a [`CentipedeState`]: a spine of plates, each with a pair of legs, a
+//!   head with antennae, simple eyes and forcipules, in a colouring and banding.
 //! - [`rat`] and [`snake`] roll a typed state from a seed ([`RatState`], [`SnakeState`]): the
 //!   species (rat or giant rat, poisonous or constrictor snake), size, build, colouring and
 //!   pattern. [`Creature::of`] rolls one of a species chosen by the caller.
 //! - [`skeleton`] rolls a [`SkeletonState`]: a human's bones with seeded height, build, colour,
 //!   cracks and missing pieces, laid out on an `fb_body` human's joints so gear fits it as it
 //!   fits a body.
+//! - [`spider`] rolls a [`SpiderState`]: a giant spider's leg span, abdomen, colouring, markings and
+//!   hair, with eight jointed legs that [`pose`] plants on the floor one by one.
+//! - [`troll`] rolls a [`TrollState`]: a stooped, long-armed giant of warty green or grey skin on
+//!   the same human joints, moving with the skeleton's walk and swing poses plus a hunch, and
+//!   carrying the regeneration rule ([`troll::Regeneration`]) that makes it hard to kill.
+//! - [`jackalope`] rolls a [`JackalopeState`]: a large hare's body, ears and tufted tail with a pair
+//!   of branching antlers, its size, ear length, antler tines and spread and fur colour from the
+//!   seed.
+//! - [`bat`] rolls a [`BatState`]: a bat or a giant bat with its wingspan, ear and nose shape,
+//!   coat and wing membrane; the first creatures that fly, hanging from the ceiling or beating
+//!   their wings at a height above the floor ([`pose::BatPose`]).
 //! - Each state builds a [`Rig`]: named bones, each carrying its own [`armory::ItemMesh`] built
 //!   from Armory geometry in the bone's own space, so the game can move the bones without a
 //!   skeleton (a rat's body, head, legs and tail; a snake's head, jaw, tongue and spine) or a
@@ -30,19 +44,29 @@
 //!
 //! Plain Rust, no Bevy; every creature is a pure function of its seed.
 
+pub mod bat;
+pub mod centipede;
 pub mod gear;
+pub mod jackalope;
 pub mod pose;
 pub mod rat;
 pub mod rig;
 pub mod shape;
 pub mod skeleton;
 pub mod snake;
+pub mod spider;
+pub mod troll;
 
+pub use bat::{BatColouring, BatEars, BatMembrane, BatNose, BatState};
+pub use centipede::{CentipedeBanding, CentipedeColouring, CentipedeState};
 pub use rat::{RatColouring, RatPattern, RatState};
 pub use gear::{GearPiece, SkeletonGear};
+pub use jackalope::{JackalopeColouring, JackalopeState};
 pub use rig::{Bone, Rig};
 pub use skeleton::SkeletonState;
 pub use snake::{SnakeColouring, SnakePattern, SnakeState};
+pub use spider::{SpiderColouring, SpiderMarking, SpiderState};
+pub use troll::TrollState;
 
 pub use fb_items::range::Range;
 use procgen_rng::Mulberry32;
@@ -142,6 +166,12 @@ pub enum Species {
     PoisonousSnake,
     ConstrictorSnake,
     Skeleton,
+    GiantSpider,
+    Troll,
+    Jackalope,
+    GiantCentipede,
+    Bat,
+    GiantBat,
 }
 
 /// The six ability scores of a stat block.
@@ -169,6 +199,9 @@ pub enum DamageType {
     Bludgeoning,
     Piercing,
     Poison,
+    Slashing,
+    Fire,
+    Acid,
 }
 
 /// The conditions the stat blocks here make a creature immune to.
@@ -201,6 +234,8 @@ pub struct StatBlock {
     pub hit_dice: Dice,
     /// Walking speed in feet per 6-second round.
     pub speed_feet: f32,
+    /// Flying speed in feet per 6-second round; 0 for a creature that cannot fly.
+    pub fly_speed_feet: f32,
     /// Armour Class: what an attack roll must reach to hit it.
     pub armour_class: i32,
     /// What the bite adds to its attack roll (the block's "+N to hit").
@@ -228,7 +263,7 @@ pub struct StatBlock {
 }
 
 impl Species {
-    pub const ALL: [Species; 5] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton];
+    pub const ALL: [Species; 11] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll, Species::Jackalope, Species::GiantCentipede, Species::Bat, Species::GiantBat];
 
     /// The SRD 5.1 stat block, read from the CC-BY-4.0 PDF ([`SRD`]):
     ///
@@ -252,6 +287,39 @@ impl Species {
     ///   +4 to hit, reach 5 ft., 5 (1d6 + 2) piercing, and Shortbow: +4 to hit, range 80/320
     ///   ft., 5 (1d6 + 2) piercing. [`StatBlock::bite`] is the shortsword's damage; the gear a
     ///   skeleton carries sets what it actually swings.
+    /// - [Giant Spider, p. 379](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=379):
+    ///   Large beast, Armor Class 14, Hit Points 26 (4d10 + 4), Speed 30 ft. and climb 30 ft.,
+    ///   STR 14 DEX 16 CON 12 INT 2 WIS 11 CHA 4, blindsight 10 ft. and darkvision 60 ft.,
+    ///   Challenge 1 (200 XP); Bite: +5 to hit, reach 5 ft., 7 (1d8 + 3) piercing, and the
+    ///   target makes a DC 11 Constitution saving throw, taking 9 (2d8) poison damage on a
+    ///   failure or half as much on a success. Its Web attack and its climbing walls wait for
+    ///   later.
+    /// - [Troll, p. 351](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=351):
+    ///   Large giant, Armor Class 15 (natural armor), Hit Points 84 (8d10 + 40), Speed 30 ft.,
+    ///   STR 18 DEX 13 CON 20 INT 7 WIS 9 CHA 7, darkvision 60 ft., Challenge 5 (1,800 XP);
+    ///   Multiattack: Bite +7 to hit, 7 (1d6 + 4) piercing, and two Claws +7 to hit, 14
+    ///   (2d6 + 4) slashing each ([`troll::CLAW`]). Its Regeneration is [`troll::Regeneration`].
+    /// - Jackalope: the SRD has none, so the block is our own. Small beast, Armor Class 14, Hit
+    ///   Points 9 (2d6 + 2), Speed 50 ft., darkvision 60 ft., Challenge 1/4 (50 XP); Antlers: +4
+    ///   to hit, 5 (1d6 + 2) piercing. A giant rat's Small frame
+    ///   ([p. 378](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=378)) with a
+    ///   skeleton's Challenge ([p. 346](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=346))
+    ///   and a hare's speed. [`StatBlock::bite`] is the antlers' damage.
+    /// - [Giant Centipede, p. 374](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=374):
+    ///   Small beast, Armor Class 13, Hit Points 4 (1d6 + 1), Speed 30 ft. (and climb 30 ft.,
+    ///   which is not modelled), STR 5 DEX 14 CON 12 INT 1 WIS 7 CHA 3, blindsight 30 ft.,
+    ///   Challenge 1/4 (50 XP); Bite: +4 to hit, 4 (1d4 + 2) piercing, and 10 (3d6) poison on a
+    ///   failed DC 11 Constitution save. [`StatBlock::venom`] is the 3d6; the save the game
+    ///   rolls for any venom is shared, not this block's own DC.
+    /// - [Bat, p. 367](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=367):
+    ///   Tiny beast, Armor Class 12, Hit Points 1 (1d4 − 1), Speed 5 ft., fly 30 ft., STR 2 DEX
+    ///   15 CON 8 INT 2 WIS 12 CHA 4, blindsight 60 ft., Challenge 0 (10 XP); Bite: +0 to hit,
+    ///   1 piercing damage.
+    /// - [Giant Bat, p. 373](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=373):
+    ///   **Large** beast, Armor Class 13, Hit Points 22 (4d10), Speed 10 ft., fly 60 ft., STR 15
+    ///   DEX 16 CON 11 INT 2 WIS 12 CHA 6, blindsight 60 ft., Challenge 1/4 (50 XP); Bite: +4 to
+    ///   hit, 5 (1d6 + 2) piercing. Its Echolocation (no blindsight while deafened) is left for
+    ///   later.
     pub fn stat_block(self) -> StatBlock {
         let ab = |strength, dexterity, constitution, intelligence, wisdom, charisma| Abilities { strength, dexterity, constitution, intelligence, wisdom, charisma };
         match self {
@@ -262,6 +330,7 @@ impl Species {
                 hit_points: 1,
                 hit_dice: Dice::new(1, 4, -1),
                 speed_feet: 20.0,
+                fly_speed_feet: 0.0,
                 armour_class: 10,
                 attack_bonus: 0,
                 bite: Dice::flat(1),
@@ -282,6 +351,7 @@ impl Species {
                 hit_points: 7,
                 hit_dice: Dice::new(2, 6, 0),
                 speed_feet: 30.0,
+                fly_speed_feet: 0.0,
                 armour_class: 12,
                 attack_bonus: 4,
                 bite: Dice::new(1, 4, 2),
@@ -302,6 +372,7 @@ impl Species {
                 hit_points: 2,
                 hit_dice: Dice::new(1, 4, 0),
                 speed_feet: 30.0,
+                fly_speed_feet: 0.0,
                 armour_class: 13,
                 attack_bonus: 5,
                 bite: Dice::flat(1),
@@ -322,6 +393,7 @@ impl Species {
                 hit_points: 13,
                 hit_dice: Dice::new(2, 10, 2),
                 speed_feet: 30.0,
+                fly_speed_feet: 0.0,
                 armour_class: 12,
                 attack_bonus: 4,
                 bite: Dice::new(1, 6, 2),
@@ -342,6 +414,7 @@ impl Species {
                 hit_points: 13,
                 hit_dice: Dice::new(2, 8, 4),
                 speed_feet: 30.0,
+                fly_speed_feet: 0.0,
                 armour_class: 13,
                 attack_bonus: 4,
                 bite: Dice::new(1, 6, 2),
@@ -355,7 +428,149 @@ impl Species {
                 xp: 50,
                 page: 346,
             },
+            Species::GiantSpider => StatBlock {
+                name: "Giant Spider",
+                size: Size::Large,
+                abilities: ab(14, 16, 12, 2, 11, 4),
+                hit_points: 26,
+                hit_dice: Dice::new(4, 10, 4),
+                speed_feet: 30.0,
+                fly_speed_feet: 0.0,
+                armour_class: 14,
+                attack_bonus: 5,
+                bite: Dice::new(1, 8, 3),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: Some(Dice::new(2, 8, 0)),
+                senses_feet: 60.0,
+                challenge: "1",
+                xp: 200,
+                page: 379,
+            },
+            Species::Troll => StatBlock {
+                name: "Troll",
+                size: Size::Large,
+                abilities: ab(18, 13, 20, 7, 9, 7),
+                hit_points: 84,
+                hit_dice: Dice::new(8, 10, 40),
+                speed_feet: 30.0,
+                fly_speed_feet: 0.0,
+                armour_class: 15,
+                attack_bonus: 7,
+                bite: Dice::new(1, 6, 4),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: None,
+                senses_feet: 60.0,
+                challenge: "5",
+                xp: 1800,
+                page: 351,
+            },
+            Species::Jackalope => StatBlock {
+                name: "Jackalope",
+                size: Size::Small,
+                abilities: ab(8, 17, 12, 3, 13, 6),
+                hit_points: 9,
+                hit_dice: Dice::new(2, 6, 2),
+                speed_feet: 50.0,
+                fly_speed_feet: 0.0,
+                armour_class: 14,
+                attack_bonus: 4,
+                bite: Dice::new(1, 6, 2),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: None,
+                senses_feet: 60.0,
+                challenge: "1/4",
+                xp: 50,
+                // Not in the SRD: our own, so no page.
+                page: 0,
+            },
+            Species::GiantCentipede => StatBlock {
+                name: "Giant Centipede",
+                size: Size::Small,
+                abilities: ab(5, 14, 12, 1, 7, 3),
+                hit_points: 4,
+                hit_dice: Dice::new(1, 6, 1),
+                speed_feet: 30.0,
+                fly_speed_feet: 0.0,
+                armour_class: 13,
+                attack_bonus: 4,
+                bite: Dice::new(1, 4, 2),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: Some(Dice::new(3, 6, 0)),
+                senses_feet: 30.0,
+                challenge: "1/4",
+                xp: 50,
+                page: 374,
+            },
+            Species::Bat => StatBlock {
+                name: "Bat",
+                size: Size::Tiny,
+                abilities: ab(2, 15, 8, 2, 12, 4),
+                hit_points: 1,
+                hit_dice: Dice::new(1, 4, -1),
+                speed_feet: 5.0,
+                fly_speed_feet: 30.0,
+                armour_class: 12,
+                attack_bonus: 0,
+                bite: Dice::flat(1),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: None,
+                senses_feet: 60.0,
+                challenge: "0",
+                xp: 10,
+                page: 367,
+            },
+            Species::GiantBat => StatBlock {
+                name: "Giant Bat",
+                size: Size::Large,
+                abilities: ab(15, 16, 11, 2, 12, 6),
+                hit_points: 22,
+                hit_dice: Dice::new(4, 10, 0),
+                speed_feet: 10.0,
+                fly_speed_feet: 60.0,
+                armour_class: 13,
+                attack_bonus: 4,
+                bite: Dice::new(1, 6, 2),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: None,
+                senses_feet: 60.0,
+                challenge: "1/4",
+                xp: 50,
+                page: 373,
+            },
         }
+    }
+
+    pub fn is_bat(self) -> bool {
+        matches!(self, Species::Bat | Species::GiantBat)
+    }
+
+    /// Whether it flies: it has a height above the floor, and no footsteps.
+    pub fn is_flying(self) -> bool {
+        self.stat_block().fly_speed_feet > 0.0
+    }
+
+    /// Its flying speed in world units per second, as [`Species::speed`] gives its walking
+    /// speed; 0 for a creature that cannot fly.
+    pub fn fly_speed(self) -> f32 {
+        self.stat_block().fly_speed_feet * UNITS_PER_FOOT / 6.0
     }
 
     pub fn is_rat(self) -> bool {
@@ -370,6 +585,22 @@ impl Species {
         self == Species::Skeleton
     }
 
+    pub fn is_spider(self) -> bool {
+        self == Species::GiantSpider
+    }
+
+    pub fn is_troll(self) -> bool {
+        self == Species::Troll
+    }
+
+    pub fn is_jackalope(self) -> bool {
+        self == Species::Jackalope
+    }
+
+    pub fn is_centipede(self) -> bool {
+        self == Species::GiantCentipede
+    }
+
     /// Its walking speed in world units per second: the stat block's feet per 6-second round
     /// ([SRD 5.1 p. 90](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=90),
     /// "a round represents about 6 seconds").
@@ -378,21 +609,36 @@ impl Species {
     }
 }
 
-/// One creature: a rat, a snake or a skeleton, rolled from a seed.
+/// One creature: a rat, a snake, a skeleton, a spider, a troll, a jackalope or a centipede, rolled from a seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Creature {
     Rat(RatState),
     Snake(SnakeState),
     Skeleton(SkeletonState),
+    Spider(SpiderState),
+    Troll(TrollState),
+    Jackalope(JackalopeState),
+    Centipede(CentipedeState),
+    Bat(BatState),
 }
 
 impl Creature {
     /// A creature of `species` rolled from `seed`.
     pub fn of(species: Species, seed: u32) -> Creature {
-        if species.is_rat() {
+        if species.is_bat() {
+            Creature::Bat(BatState::roll_as(seed, species))
+        } else if species.is_rat() {
             Creature::Rat(RatState::roll_as(seed, species))
         } else if species.is_skeleton() {
             Creature::Skeleton(SkeletonState::roll(seed))
+        } else if species.is_spider() {
+            Creature::Spider(SpiderState::roll(seed))
+        } else if species.is_troll() {
+            Creature::Troll(TrollState::roll(seed))
+        } else if species.is_jackalope() {
+            Creature::Jackalope(JackalopeState::roll(seed))
+        } else if species.is_centipede() {
+            Creature::Centipede(CentipedeState::roll(seed))
         } else {
             Creature::Snake(SnakeState::roll_as(seed, species))
         }
@@ -403,6 +649,11 @@ impl Creature {
             Creature::Rat(r) => r.species,
             Creature::Snake(s) => s.species,
             Creature::Skeleton(_) => Species::Skeleton,
+            Creature::Spider(_) => Species::GiantSpider,
+            Creature::Troll(_) => Species::Troll,
+            Creature::Jackalope(_) => Species::Jackalope,
+            Creature::Centipede(c) => c.species,
+            Creature::Bat(b) => b.species,
         }
     }
 
@@ -411,6 +662,11 @@ impl Creature {
             Creature::Rat(r) => r.seed,
             Creature::Snake(s) => s.seed,
             Creature::Skeleton(s) => s.seed,
+            Creature::Spider(s) => s.seed,
+            Creature::Troll(s) => s.seed,
+            Creature::Jackalope(j) => j.seed,
+            Creature::Centipede(c) => c.seed,
+            Creature::Bat(b) => b.seed,
         }
     }
 
@@ -420,6 +676,11 @@ impl Creature {
             Creature::Rat(r) => r.build(),
             Creature::Snake(s) => s.build(),
             Creature::Skeleton(s) => s.build(),
+            Creature::Spider(s) => s.build(),
+            Creature::Troll(s) => s.build(),
+            Creature::Jackalope(j) => j.build(),
+            Creature::Centipede(c) => c.build(),
+            Creature::Bat(b) => b.build(),
         }
     }
 
@@ -430,6 +691,11 @@ impl Creature {
             Creature::Rat(r) => r.radius(),
             Creature::Snake(s) => s.radius(),
             Creature::Skeleton(s) => s.radius(),
+            Creature::Spider(s) => s.radius(),
+            Creature::Troll(s) => s.radius(),
+            Creature::Jackalope(j) => j.radius(),
+            Creature::Centipede(c) => c.radius(),
+            Creature::Bat(b) => b.radius(),
         }
     }
 }
@@ -450,9 +716,50 @@ pub fn skeleton(seed: u32) -> SkeletonState {
     SkeletonState::roll(seed)
 }
 
+/// A giant spider rolled from `seed`.
+pub fn spider(seed: u32) -> SpiderState {
+    SpiderState::roll(seed)
+}
+
+/// A troll rolled from `seed`.
+pub fn troll(seed: u32) -> TrollState {
+    TrollState::roll(seed)
+}
+
+/// A jackalope rolled from `seed`.
+pub fn jackalope(seed: u32) -> JackalopeState {
+    JackalopeState::roll(seed)
+}
+
+/// A giant centipede rolled from `seed`.
+pub fn centipede(seed: u32) -> CentipedeState {
+    CentipedeState::roll(seed)
+}
+
+/// A bat or a giant bat rolled from `seed`; one in five is a giant bat. Our own odds.
+pub fn bat(seed: u32) -> BatState {
+    BatState::roll(seed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bats_stat_blocks_are_the_srd_numbers() {
+        let bat = Species::Bat.stat_block();
+        assert_eq!((bat.size, bat.armour_class, bat.hit_points, bat.hit_dice, bat.speed_feet, bat.fly_speed_feet), (Size::Tiny, 12, 1, Dice::new(1, 4, -1), 5.0, 30.0));
+        assert_eq!((bat.abilities.strength, bat.abilities.dexterity, bat.abilities.constitution, bat.abilities.intelligence, bat.abilities.wisdom, bat.abilities.charisma), (2, 15, 8, 2, 12, 4));
+        assert_eq!((bat.senses_feet, bat.challenge, bat.xp, bat.attack_bonus, bat.bite, bat.page), (60.0, "0", 10, 0, Dice::flat(1), 367));
+        let giant = Species::GiantBat.stat_block();
+        assert_eq!((giant.size, giant.armour_class, giant.hit_points, giant.hit_dice, giant.speed_feet, giant.fly_speed_feet), (Size::Large, 13, 22, Dice::new(4, 10, 0), 10.0, 60.0));
+        assert_eq!((giant.abilities.strength, giant.abilities.dexterity, giant.abilities.constitution, giant.abilities.intelligence, giant.abilities.wisdom, giant.abilities.charisma), (15, 16, 11, 2, 12, 6));
+        assert_eq!((giant.senses_feet, giant.challenge, giant.xp, giant.attack_bonus, giant.bite, giant.page), (60.0, "1/4", 50, 4, Dice::new(1, 6, 2), 373));
+        // Only bats fly; a bat flies at its fly speed, 30 ft. a round being 15 units a second.
+        assert!(Species::ALL.iter().all(|s| s.is_flying() == s.is_bat()));
+        assert!((Species::Bat.fly_speed() - 15.24).abs() < 0.01 && (Species::GiantBat.fly_speed() - 30.48).abs() < 0.01);
+        assert_eq!(Species::Rat.fly_speed(), 0.0);
+    }
 
     #[test]
     fn stat_blocks_carry_the_srd_armour_class_and_attack_bonus() {
@@ -481,6 +788,19 @@ mod tests {
         assert_eq!(Dice::new(1, 4, 2).average(), 4);
         assert_eq!(Dice::new(1, 6, 2).average(), 5);
         assert_eq!(Dice::new(2, 4, 0).average(), 5);
+    }
+
+    #[test]
+    fn the_jackalope_stat_block_is_the_issues_numbers() {
+        let block = Species::Jackalope.stat_block();
+        assert_eq!((block.name, block.size, block.armour_class, block.speed_feet, block.senses_feet), ("Jackalope", Size::Small, 14, 50.0, 60.0));
+        assert_eq!((block.hit_points, block.hit_dice, block.attack_bonus, block.bite), (9, Dice::new(2, 6, 2), 4, Dice::new(1, 6, 2)));
+        assert_eq!((block.challenge, block.xp, block.venom, block.ranged.is_none()), ("1/4", 50, None, true));
+        assert!(Species::Jackalope.is_jackalope() && !Species::Jackalope.is_rat() && !Species::Jackalope.is_snake());
+        // 50 ft a round is 2.5 m a second.
+        assert!((Species::Jackalope.speed() - 25.4).abs() < 0.01);
+        assert_eq!(Creature::of(Species::Jackalope, 5).species(), Species::Jackalope);
+        assert_eq!(Creature::of(Species::Jackalope, 5).seed(), 5);
     }
 
     #[test]

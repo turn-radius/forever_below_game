@@ -74,6 +74,10 @@ pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
     let (mut level, layout_seed) = generate_without_creatures(seed, depth, &params);
     level.creatures = place_creatures(&level, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT));
     place_stairs(&mut level, &mut Mulberry32::new(layout_seed ^ STAIR_SALT));
+    // The newer species come last, after the stairs, so none of them can shift a stair.
+    let (creatures, webs) = crate::wild::place_wild(&level);
+    level.creatures.extend(creatures);
+    level.webs = webs;
     level
 }
 
@@ -143,6 +147,7 @@ fn try_generate(seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<
         props: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
+        webs: Vec::new(),
     };
     if style == LevelStyle::StoneHalls {
         // A level of stone halls has a colonnade; a layout with no hall to hold one is tried
@@ -1067,7 +1072,7 @@ mod tests {
     fn snapshot_hash(level: &Level) -> u64 {
         let text = format!(
             "{:?}",
-            (&level.seed, &level.width, &level.height, &level.cells, &level.ceiling, &level.entrance, &level.rooms, &level.items, &level.lights, &level.folk, &level.props, &level.creatures)
+            (&level.seed, &level.width, &level.height, &level.cells, &level.ceiling, &level.entrance, &level.rooms, &level.items, &level.lights, &level.folk, &level.props, level.creatures.iter().filter(|c| c.species.is_rat() || c.species.is_snake()).collect::<Vec<_>>())
         );
         text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
     }

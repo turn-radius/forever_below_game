@@ -11,6 +11,12 @@
 //! two, facing its door. They are placed last, after every rat and snake, so a level of rough rock
 //! draws nothing new from the stream and keeps its creatures as they were.
 //!
+//! A troll stands alone in a large room on about one level in three from depth
+//! [`TROLLS_FROM_DEPTH`]. It is placed after every other creature, from a stream of its own (the
+//! level's seed mixed with [`TROLL_SALT`] and the depth), so it draws nothing from the
+//! creature stream and no wall, item, light, folk, prop, rat, snake or skeleton moves on any
+//! seed.
+//!
 //! How many, of what and where is our own proposal.
 
 use fb_creatures::{Creature, Species};
@@ -129,7 +135,51 @@ pub(crate) fn place_creatures(level: &Level, rng: &mut Mulberry32) -> Vec<Creatu
     if level.style == crate::LevelStyle::StoneHalls {
         place_skeletons(level, &mut placed, pack, rng);
     }
+    place_trolls(level, &mut placed);
     placed
+}
+
+/// The shallowest level a troll is found on. A troll (SRD 5.1 p. 351: challenge 5, 84 hit
+/// points, three attacks a turn) is far past a first-level delver. Our own.
+pub const TROLLS_FROM_DEPTH: u32 = 6;
+/// Chance that a level from [`TROLLS_FROM_DEPTH`] down holds a troll. Our own.
+const TROLL_ODDS: f64 = 1.0 / 3.0;
+/// Smallest room a troll takes, in cells: a Large creature (SRD 5.1 p. 92, ten feet across)
+/// needs a hall to move in. Our own.
+pub const TROLL_ROOM_AREA: u32 = 30;
+/// Salt for the troll's stream, mixed with the level's seed and depth.
+const TROLL_SALT: u32 = 0x7120_C47E;
+
+/// A troll in a large room of `level`, added to `placed` as a pack of its own (one past the
+/// highest pack there is), if the level's stream says there is one. Never in the starting room,
+/// and it keeps clear of everything else as the other creatures do ([`stands`]).
+fn place_trolls(level: &Level, placed: &mut Vec<CreatureSpot>) {
+    if level.depth < TROLLS_FROM_DEPTH {
+        return;
+    }
+    let mut rng = Mulberry32::new(level.seed ^ level.depth.wrapping_mul(0x9E37_79B9) ^ TROLL_SALT);
+    if !rng.chance(TROLL_ODDS) {
+        return;
+    }
+    let start_room = level.start_room();
+    let mut rooms: Vec<usize> = (0..level.rooms.len()).filter(|&i| Some(i) != start_room && level.rooms[i].area() >= TROLL_ROOM_AREA).collect();
+    shuffle(&mut rooms, &mut rng);
+    let pack = placed.iter().map(|c| c.pack + 1).max().unwrap_or(0);
+    let seed = item_seed(&mut rng);
+    let radius = Creature::of(Species::Troll, seed).radius();
+    for i in rooms {
+        let room = &level.rooms[i];
+        let centre = room.centre();
+        for _ in 0..24 {
+            let angle = rng.range_f32(0.0, std::f32::consts::TAU);
+            let r = 2.0 * rng.range_f32(0.0, 1.0).sqrt();
+            let (x, y) = (centre.0 + angle.cos() * r, centre.1 + angle.sin() * r);
+            if stands(level, room, x, y, radius, placed) {
+                placed.push(CreatureSpot { x, y, yaw: rng.range_f32(-std::f32::consts::PI, std::f32::consts::PI), species: Species::Troll, seed, pack });
+                return;
+            }
+        }
+    }
 }
 
 /// The skeletons of a level of stone halls, added to `placed`; their packs count up from `pack`.
@@ -322,6 +372,11 @@ mod tests {
         [1, 2].into_iter().flat_map(|depth| SEEDS.map(move |seed| (seed, depth)))
     }
 
+    /// The species placed from the creature stream, before the newer ones ([`crate::wild`]).
+    fn original(species: Species) -> bool {
+        species.is_rat() || species.is_snake() || species.is_skeleton() || species.is_troll()
+    }
+
     #[test]
     fn the_first_level_has_no_giant_rats_and_deeper_ones_do() {
         let giants = |depth| (1..=40).flat_map(|seed| generate(seed, depth).creatures).filter(|c| c.species == Species::GiantRat).count();
@@ -344,7 +399,7 @@ mod tests {
             let level = generate(seed, depth);
             let start_room = level.start_room();
             let mut packs: std::collections::HashMap<u32, Vec<&CreatureSpot>> = Default::default();
-            for c in &level.creatures {
+            for c in level.creatures.iter().filter(|c| original(c.species)) {
                 packs.entry(c.pack).or_default().push(c);
                 let (x, y) = (c.x.floor() as i32, c.y.floor() as i32);
                 let room = level.room_at(x, y);
@@ -362,7 +417,7 @@ mod tests {
                     snakes += 1;
                     assert_eq!(members.len(), 1, "seed {seed}: snakes are alone");
                     assert!(!level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == room), "seed {seed}: a snake in a room with folk");
-                    assert!(level.creatures.iter().filter(|c| level.room_at(c.x as i32, c.y as i32) == room).count() == 1, "seed {seed}: a snake shares its room");
+                    assert!(level.creatures.iter().filter(|c| original(c.species) && level.room_at(c.x as i32, c.y as i32) == room).count() == 1, "seed {seed}: a snake shares its room");
                 } else {
                     assert!(members.len() as u32 <= PACK_SIZE.1, "seed {seed}: {} rats", members.len());
                 }
@@ -393,7 +448,7 @@ mod tests {
         assert_eq!(level.props[0].prop, crate::Prop::Container { style: armory::families::chests::ChestStyle::Chest, seed: 1_184_162_579, loot: 3_392_196_572 });
         let (before, _) = crate::generate::generate_without_creatures(1207, 1, &crate::LevelParams::default());
         assert!(before.creatures.is_empty() && !level.creatures.is_empty());
-        assert_eq!(Level { creatures: Vec::new(), stairs: Vec::new(), ..level }, before);
+        assert_eq!(Level { creatures: Vec::new(), stairs: Vec::new(), webs: Vec::new(), ..level }, before);
     }
 
     #[test]

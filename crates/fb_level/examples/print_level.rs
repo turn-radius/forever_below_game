@@ -3,7 +3,8 @@
 //! their first letter in capitals: `H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk,
 //! `P` pigfolk. Props: containers `c` chest, `b` barrel, `x` crate, `a` amphora (`s` strongbox,
 //! `f` coffer), and scenery `%` rubble, `~` bones, `o` pillar. Creatures: `r` rat, `R` giant
-//! rat, `v` poisonous snake, `S` constrictor snake.
+//! rat, `v` poisonous snake, `S` constrictor snake, `k` skeleton, `T` troll, `p` giant spider, `j` jackalope, `c` giant centipede, `b` bat, `B` giant
+//! bat. Webs in a spider's nest: `w`.
 
 use armory::build::scenery::Scenery;
 use armory::families::chests::ChestStyle;
@@ -18,6 +19,12 @@ fn creature_mark(species: Species) -> char {
         Species::PoisonousSnake => 'v',
         Species::ConstrictorSnake => 'S',
         Species::Skeleton => 'k',
+        Species::GiantSpider => 'p',
+        Species::Troll => 'T',
+        Species::Jackalope => 'j',
+        Species::GiantCentipede => 'c',
+        Species::Bat => 'b',
+        Species::GiantBat => 'B',
     }
 }
 
@@ -79,6 +86,9 @@ fn main() {
     for folk in &level.folk {
         rows[folk.y as usize][folk.x as usize] = folk_mark(folk.folk);
     }
+    for web in &level.webs {
+        rows[web.y as usize][web.x as usize] = 'w';
+    }
     for creature in &level.creatures {
         rows[creature.y as usize][creature.x as usize] = creature_mark(creature.species);
     }
@@ -95,6 +105,7 @@ fn main() {
         level.props.len(),
         level.creatures.len()
     );
+    println!("{} webs", level.webs.len());
     for row in rows {
         println!("{}", row.into_iter().collect::<String>());
     }

@@ -1,7 +1,7 @@
 //! Writes one creature, in its rest pose, as Wavefront OBJ on stdout, one group per bone and
 //! part, for a look in any 3D viewer.
 //!
-//! `cargo run -p fb_creatures --example dump_creature -- <rat|giant_rat|viper|constrictor|skeleton> <seed> > rat.obj`
+//! `cargo run -p fb_creatures --example dump_creature -- <rat|giant_rat|viper|constrictor|skeleton|giant_spider|troll|jackalope> <seed> > rat.obj`
 
 use fb_creatures::{Creature, Species};
 
@@ -13,8 +13,14 @@ fn main() {
         Some("viper") => Species::PoisonousSnake,
         Some("constrictor") => Species::ConstrictorSnake,
         Some("skeleton") => Species::Skeleton,
+        Some("giant_spider") => Species::GiantSpider,
+        Some("troll") => Species::Troll,
+        Some("jackalope") => Species::Jackalope,
+        Some("centipede") => Species::GiantCentipede,
+        Some("bat") => Species::Bat,
+        Some("giant_bat") => Species::GiantBat,
         _ => {
-            eprintln!("usage: dump_creature <rat|giant_rat|viper|constrictor|skeleton> [seed]");
+            eprintln!("usage: dump_creature <rat|giant_rat|viper|constrictor|skeleton|giant_spider|troll|jackalope|centipede|bat|giant_bat> [seed]");
             std::process::exit(2);
         }
     };

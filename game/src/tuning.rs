@@ -128,11 +128,14 @@ pub struct MovingTuning {
     pub acceleration: f32,
     /// The body's radius on the floor, world units (35 cm).
     pub body_radius: f32,
+    /// The share of its pace a walker keeps in a floor web in a spider's nest, other than a
+    /// spider (`fb_level::webs::WEB_PACE`, our own).
+    pub web_pace: f32,
 }
 
 impl Default for MovingTuning {
     fn default() -> Self {
-        MovingTuning { walk_speed: 14.0, hurry_speed: 45.0, acceleration: 10.0, body_radius: 3.5 }
+        MovingTuning { walk_speed: 14.0, hurry_speed: 45.0, acceleration: 10.0, body_radius: 3.5, web_pace: fb_level::webs::WEB_PACE }
     }
 }
 
@@ -211,11 +214,21 @@ pub struct CreatureSizes {
     pub constrictor: f32,
     /// The skeleton.
     pub skeleton: f32,
+    /// The giant spider.
+    pub giant_spider: f32,
+    /// The troll.
+    pub troll: f32,
+    /// The jackalope.
+    pub jackalope: f32,
+    /// The giant centipede.
+    pub giant_centipede: f32,
+    pub bat: f32,
+    pub giant_bat: f32,
 }
 
 impl Default for CreatureSizes {
     fn default() -> Self {
-        CreatureSizes { rat: 1.0, giant_rat: 1.0, viper: 1.0, constrictor: 1.0, skeleton: 1.0 }
+        CreatureSizes { rat: 1.0, giant_rat: 1.0, viper: 1.0, constrictor: 1.0, skeleton: 1.0, giant_spider: 1.0, troll: 1.0, jackalope: 1.0, giant_centipede: 1.0, bat: 1.0, giant_bat: 1.0 }
     }
 }
 
@@ -228,6 +241,12 @@ impl CreatureSizes {
             Species::PoisonousSnake => self.viper,
             Species::ConstrictorSnake => self.constrictor,
             Species::Skeleton => self.skeleton,
+            Species::GiantSpider => self.giant_spider,
+            Species::Troll => self.troll,
+            Species::Jackalope => self.jackalope,
+            Species::GiantCentipede => self.giant_centipede,
+            Species::Bat => self.bat,
+            Species::GiantBat => self.giant_bat,
         }
     }
 }
@@ -680,9 +699,10 @@ mod tests {
 
     #[test]
     fn every_species_has_a_size() {
-        let sizes = CreatureSizes { rat: 1.0, giant_rat: 2.0, viper: 3.0, constrictor: 4.0, skeleton: 5.0 };
-        let all = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton];
-        assert_eq!(all.map(|s| sizes.of(s)), [1.0, 2.0, 3.0, 4.0, 5.0]);
+        let sizes = CreatureSizes { rat: 1.0, giant_rat: 2.0, viper: 3.0, constrictor: 4.0, skeleton: 5.0, giant_spider: 6.0, troll: 7.0, jackalope: 8.0, giant_centipede: 9.0, bat: 10.0, giant_bat: 11.0 };
+        // Every species, so one added without a size fails here.
+        let all = Species::ALL;
+        assert_eq!(all.map(|s| sizes.of(s)).to_vec(), (1..=all.len()).map(|n| n as f32).collect::<Vec<_>>());
     }
 
     #[test]
