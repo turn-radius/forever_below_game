@@ -1203,12 +1203,20 @@ mod tests {
             CellView::with_params(level, &params)
         }
         let walls_triangles = |m: &LevelMesh| ["walls", "damp"].iter().map(|n| part(m, n).indices.len() / 3).sum::<usize>();
-        for seed in [1207, 7, 31] {
+        let styles = |view: &CellView, level: &Level| -> std::collections::HashSet<WallFinish> {
+            (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter_map(|(x, y)| view.finishes().at(x, y)).map(|f| f.walls).collect()
+        };
+        // Styles go by quarter, so not every level mixes them: take the first three that do.
+        let mixing: Vec<u32> = (1..200).filter(|&seed| {
+            let level = halls(seed);
+            let both = styles(&with(&level, 0.5), &level);
+            both.contains(&WallFinish::Rubble) && both.contains(&WallFinish::Ashlar)
+        }).take(3).collect();
+        assert_eq!(mixing.len(), 3, "levels that mix rubble and ashlar: {mixing:?}");
+        for seed in mixing {
             let level = halls(seed);
             let (ashlar, rubble, mixed) = (with(&level, 0.0), with(&level, 1.0), with(&level, 0.5));
             let (a, r) = (level_mesh(&ashlar, ashlar.bounds()), level_mesh(&rubble, rubble.bounds()));
-            let styles: std::collections::HashSet<_> = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter_map(|(x, y)| mixed.finishes().at(x, y)).map(|f| f.walls).collect();
-            assert!(styles.contains(&WallFinish::Rubble) && styles.contains(&WallFinish::Ashlar), "seed {seed}: the mixed view has both styles");
             // Smaller stones in shorter courses: more of them over the same walls.
             assert!(walls_triangles(&r) as f32 > 1.15 * walls_triangles(&a) as f32, "seed {seed}: {} against {}", walls_triangles(&r), walls_triangles(&a));
             for p in &r.surfaces.parts {
