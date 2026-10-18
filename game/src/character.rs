@@ -222,6 +222,14 @@ pub struct Derived {
     pub abilities: AbilityBonus,
 }
 
+/// The odds the loot of a level `depth` down rolls against for the delver: the level's, with the
+/// luck `character` wears in `inventory` ([`fb_items::Odds::with_luck`]); the level's alone
+/// with no character.
+pub fn loot_odds(character: Option<&Character>, inventory: Option<&Inventory>, depth: u32) -> fb_items::Odds {
+    let luck = character.zip(inventory).map_or(0.0, |(c, i)| c.gear(i).luck);
+    fb_items::Odds::loot(depth).with_luck(luck as f32)
+}
+
 impl Character {
     /// What they wear and carry means for the simulation: the one place capacity, the meter
     /// rates, darkvision and the carried light come from. Their folk's darkvision counts with
@@ -616,6 +624,22 @@ mod tests {
         inventory.wear(frail, Slot::Neck).unwrap();
         delver.worn = delver.gear(&inventory).abilities;
         assert_eq!(delver.constitution(), 9);
+    }
+
+    #[test]
+    fn worn_luck_rolls_the_loot_deeper_but_never_legendary_on_the_first_level() {
+        use fb_items::{Odds, Rarity, Slot};
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        assert_eq!(loot_odds(Some(&delver), Some(&inventory), 3), Odds::loot(3));
+        let ring = inventory.add(with_affix("Ring", 4, "of Fortune"));
+        inventory.wear(ring, Slot::Ring1).unwrap();
+        let charm = inventory.add(with_affix("Charm", 4, "of Chance"));
+        inventory.wear(charm, Slot::Charm).unwrap();
+        assert_eq!(delver.derive(&inventory).luck, 3.0);
+        assert_eq!(loot_odds(Some(&delver), Some(&inventory), 3), Odds::loot(6));
+        assert_eq!(loot_odds(Some(&delver), Some(&inventory), 1).cap, Rarity::Rare);
+        assert_eq!(loot_odds(None, Some(&inventory), 3), Odds::loot(3), "no character, no luck");
     }
 
     #[test]

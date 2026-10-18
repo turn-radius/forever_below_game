@@ -34,16 +34,19 @@ pub struct Staging {
     /// Parallel to the level's props.
     pub props: Vec<StagedProp>,
     pub fixtures: FixtureShapes,
+    /// What the loot was rolled against: the level's odds with the delver's luck then.
+    pub odds: Odds,
 }
 
 impl Staging {
-    pub fn make(level: &Level) -> Self {
+    /// The parts of `level`, its floor items and containers' loot rolled against `odds`.
+    pub fn make(level: &Level, odds: Odds) -> Self {
         let creatures = build_creatures(&level.creatures, level.depth);
         let items = level
             .items
             .iter()
             .map(|spot| {
-                let item = fb_items::roll_loot(spot.family, spot.seed, Odds::loot(level.depth))?;
+                let item = fb_items::roll_loot(spot.family, spot.seed, odds)?;
                 let mesh = item.shape.build();
                 Some((item, mesh))
             })
@@ -53,14 +56,18 @@ impl Staging {
             .iter()
             .map(|spot| {
                 let (mesh, appearance) = prop_mesh(spot, level, false);
-                let contents = match spot.prop {
-                    Prop::Container { style, loot, .. } => fb_items::roll_contents(style, loot, Odds::loot(level.depth)),
-                    Prop::Scenery { .. } => Vec::new(),
-                };
-                StagedProp { mesh, appearance, contents }
+                StagedProp { mesh, appearance, contents: contents_of(spot.prop, odds) }
             })
             .collect();
-        Staging { creatures, items, props, fixtures: FixtureShapes::make(level) }
+        Staging { creatures, items, props, fixtures: FixtureShapes::make(level), odds }
+    }
+}
+
+/// What `prop` holds when its loot rolls against `odds`: nothing for scenery.
+fn contents_of(prop: Prop, odds: Odds) -> Vec<Item> {
+    match prop {
+        Prop::Container { style, loot, .. } => fb_items::roll_contents(style, loot, odds),
+        Prop::Scenery { .. } => Vec::new(),
     }
 }
 
@@ -68,6 +75,8 @@ impl Staging {
 #[derive(Resource, Default)]
 pub struct Staged {
     for_level: Option<(u32, u32)>,
+    /// The odds its loot was rolled against.
+    odds: Odds,
     creatures: Option<Vec<Built>>,
     items: Option<Vec<Option<(Item, ItemMesh)>>>,
     props: Option<Vec<StagedProp>>,
@@ -79,8 +88,8 @@ pub struct Staged {
 impl Staged {
     /// Keeps `staging` as the parts of `level`, in place of whatever was kept.
     pub fn set(&mut self, level: &Level, staging: Staging) {
-        let Staging { creatures, items, props, fixtures } = staging;
-        *self = Staged { for_level: Some((level.seed, level.depth)), creatures: Some(creatures), items: Some(items), props: Some(props), fixtures: Some(fixtures), taken: 0 };
+        let Staging { creatures, items, props, fixtures, odds } = staging;
+        *self = Staged { for_level: Some((level.seed, level.depth)), odds, creatures: Some(creatures), items: Some(items), props: Some(props), fixtures: Some(fixtures), taken: 0 };
     }
 
     fn is_for(&self, level: &Level) -> bool {
@@ -103,14 +112,23 @@ impl Staged {
         self.take_with(level, |s| &mut s.creatures, |c| c.len() == level.creatures.len())
     }
 
-    /// The floor items made ahead for `level`, once.
-    pub fn take_items(&mut self, level: &Level) -> Option<Vec<Option<(Item, ItemMesh)>>> {
-        self.take_with(level, |s| &mut s.items, |i| i.len() == level.items.len())
+    /// The floor items made ahead for `level`, once, if they were rolled against `odds` (the
+    /// delver's luck may have changed since).
+    pub fn take_items(&mut self, level: &Level, odds: Odds) -> Option<Vec<Option<(Item, ItemMesh)>>> {
+        let rolled_at = self.odds;
+        self.take_with(level, |s| &mut s.items, |i| i.len() == level.items.len() && rolled_at == odds)
     }
 
-    /// The props made ahead for `level`, once.
-    pub fn take_props(&mut self, level: &Level) -> Option<Vec<StagedProp>> {
-        self.take_with(level, |s| &mut s.props, |p| p.len() == level.props.len())
+    /// The props made ahead for `level`, once, their containers holding what rolls against
+    /// `odds`: rolled again here if the luck changed since they were made.
+    pub fn take_props(&mut self, level: &Level, odds: Odds) -> Option<Vec<StagedProp>> {
+        let mut props = self.take_with(level, |s| &mut s.props, |p| p.len() == level.props.len())?;
+        if self.odds != odds {
+            for (staged, spot) in props.iter_mut().zip(&level.props) {
+                staged.contents = contents_of(spot.prop, odds);
+            }
+        }
+        Some(props)
     }
 
     /// The door and brazier shapes made ahead for `level`, once.
@@ -127,15 +145,29 @@ mod tests {
     fn staging_is_used_once_and_only_for_its_level() {
         let level = fb_level::generate(fb_level::depth_seed(1207, 2), 2);
         let other = fb_level::generate(fb_level::depth_seed(1207, 3), 3);
+        let odds = Odds::loot(2);
         let mut staged = Staged::default();
-        staged.set(&level, Staging::make(&level));
-        assert!(staged.take_items(&other).is_none(), "not the level it was made for");
-        let items = staged.take_items(&level).expect("made for this level");
+        staged.set(&level, Staging::make(&level, odds));
+        assert!(staged.take_items(&other, odds).is_none(), "not the level it was made for");
+        let items = staged.take_items(&level, odds).expect("made for this level");
         assert_eq!(items.len(), level.items.len());
-        assert!(staged.take_items(&level).is_none(), "used up");
-        assert_eq!(staged.take_props(&level).map(|p| p.len()), Some(level.props.len()));
+        assert!(staged.take_items(&level, odds).is_none(), "used up");
+        assert_eq!(staged.take_props(&level, odds).map(|p| p.len()), Some(level.props.len()));
         assert_eq!(staged.take_creatures(&level).map(|c| c.len()), Some(level.creatures.len()));
         assert!(staged.take_fixtures(&level).is_some());
+    }
+
+    #[test]
+    fn loot_staged_before_the_luck_changed_is_rolled_again() {
+        let level = fb_level::generate(fb_level::depth_seed(1207, 2), 2);
+        let (before, after) = (Odds::loot(2), Odds::loot(2).with_luck(3.0));
+        let mut staged = Staged::default();
+        staged.set(&level, Staging::make(&level, before));
+        assert!(staged.take_items(&level, after).is_none(), "the floor is rolled in place");
+        let props = staged.take_props(&level, after).expect("the shapes still serve");
+        for (spot, prop) in level.props.iter().zip(&props) {
+            assert_eq!(prop.contents, contents_of(spot.prop, after), "{spot:?}");
+        }
     }
 
     #[test]
@@ -148,7 +180,7 @@ mod tests {
         let (mut items, mut creatures, mut containers) = (0, 0, 0);
         for depth in 1..=4 {
             let level = fb_level::generate(fb_level::depth_seed(1207, depth), depth);
-            let staging = Staging::make(&level);
+            let staging = Staging::make(&level, Odds::loot(depth));
 
             assert_eq!(staging.items.len(), level.items.len());
             for (spot, staged) in level.items.iter().zip(&staging.items) {
@@ -173,7 +205,7 @@ mod tests {
                 // A container stocked from the staged contents holds what one stocked in place does.
                 let (mut ahead, mut here) = (Inventory::default(), Inventory::default());
                 let stocked_ahead = stock_container_with(&mut ahead, spot.prop, staged.contents.clone());
-                let stocked_here = stock_container(&mut here, spot.prop, depth);
+                let stocked_here = stock_container(&mut here, spot.prop, Odds::loot(depth));
                 assert_eq!(stocked_ahead.is_some(), stocked_here.is_some());
                 if let (Some(a), Some(h)) = (stocked_ahead, stocked_here) {
                     let (a, h) = (record_contents(&ahead, a), record_contents(&here, h));

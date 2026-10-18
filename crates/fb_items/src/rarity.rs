@@ -50,6 +50,12 @@ impl Odds {
         Odds { depth: self.depth + levels, ..self }
     }
 
+    /// These odds for a finder with `luck` (the worn affixes' [`crate::stats::Stat::Luck`]):
+    /// each whole point rolls one level deeper, keeping the cap.
+    pub fn with_luck(self, luck: f32) -> Odds {
+        self.deeper(luck.max(0.0).floor() as u32)
+    }
+
     /// The gear folk and the risen dead carry at `depth`: as loot, but common or magic only on
     /// the first level and at most rare on the second, so that they grow better equipped as one
     /// descends.
@@ -284,6 +290,26 @@ mod tests {
             };
             assert_eq!(Rarity::from_roll_at(x, &Odds::loot(1)), wanted, "{x}");
         }
+    }
+
+    #[test]
+    fn no_luck_finds_a_legendary_on_the_first_level() {
+        for luck in [0.0, 1.0, 3.0, 9.0, 40.0] {
+            let odds = Odds::loot(1).with_luck(luck);
+            assert_eq!(measured(odds)[3], 0.0, "luck {luck}");
+        }
+        assert!(measured(Odds::loot(2))[3] > 0.0, "the second level can");
+    }
+
+    #[test]
+    fn luck_rolls_a_level_deeper_a_point() {
+        assert_eq!(Odds::loot(3).with_luck(2.0), Odds { depth: 5, cap: Rarity::Legendary });
+        assert_eq!(Odds::loot(3).with_luck(1.9), Odds::loot(4), "only whole points count");
+        assert_eq!(Odds::loot(3).with_luck(-2.0), Odds::loot(3), "no luck is never bad luck");
+        assert_eq!(Odds::kit(2).with_luck(3.0).cap, Rarity::Rare, "the cap holds");
+        let [c0, _, r0, _] = measured(Odds::loot(1));
+        let [c3, _, r3, _] = measured(Odds::loot(1).with_luck(3.0));
+        assert!(c3 < c0 && r3 > 2.0 * r0, "common {c0} to {c3}, rare {r0} to {r3}");
     }
 
     #[test]

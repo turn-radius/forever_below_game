@@ -171,12 +171,12 @@ fn rescale_props(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut props: Query
     }
 }
 
-/// Keeps track of a container prop in `inventory`, loose, holding what its loot rolls at the
-/// odds of a level `depth` down: each thing at its first free spot, upright first and then
-/// turned, and anything with no room left out. `None` for scenery.
-pub fn stock_container(inventory: &mut Inventory, prop: Prop, depth: u32) -> Option<ItemId> {
+/// Keeps track of a container prop in `inventory`, loose, holding what its loot rolls against
+/// `odds`: each thing at its first free spot, upright first and then turned, and anything with
+/// no room left out. `None` for scenery.
+pub fn stock_container(inventory: &mut Inventory, prop: Prop, odds: fb_items::Odds) -> Option<ItemId> {
     let Prop::Container { style, loot, .. } = prop else { return None };
-    stock_container_with(inventory, prop, fb_items::roll_contents(style, loot, fb_items::Odds::loot(depth)))
+    stock_container_with(inventory, prop, fb_items::roll_contents(style, loot, odds))
 }
 
 /// [`stock_container`] with the `contents` it rolled already (`crate::staged`).
@@ -206,10 +206,13 @@ fn lay_out_props(
     tuning: Option<Res<Tuning>>,
     record: Option<Res<WorldRecord>>,
     mut staged: Option<ResMut<crate::staged::Staged>>,
+    character: Option<Res<crate::character::Character>>,
     mut spawner: ItemSpawner,
 ) {
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
-    let mut ahead = staged.as_mut().and_then(|s| s.take_props(&level.0)).map(Vec::into_iter);
+    // Chests hold what rolls for the luck the delver wears as they come to the level.
+    let odds = crate::character::loot_odds(character.as_deref(), Some(&inventory), level.0.depth);
+    let mut ahead = staged.as_mut().and_then(|s| s.take_props(&level.0, odds)).map(Vec::into_iter);
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     for (entity, container) in &old {
         if let Some(container) = container {
@@ -230,7 +233,7 @@ fn lay_out_props(
             }
             _ => match &ahead {
                 Some(ahead) => stock_container_with(&mut inventory, spot.prop, ahead.contents.clone()),
-                None => stock_container(&mut inventory, spot.prop, level.0.depth),
+                None => stock_container(&mut inventory, spot.prop, odds),
             },
         };
         let opened = left.is_some_and(|c| c.opened);
