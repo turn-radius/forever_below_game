@@ -45,8 +45,8 @@ const BLOCK_LENGTH: (f32, f32) = (5.5, 11.5);
 /// Rubble: the height of a course, a stone's length, how far it stands proud and how big its
 /// chamfer is, the gap between stones, how much shorter than its course a stone may fall, the
 /// share of stones that are two, and how high the base ink floats to clear the lowest course.
-const RUBBLE_COURSE: (f32, f32) = (1.6, 4.4);
-const RUBBLE_LENGTH: (f32, f32) = (1.8, 9.0);
+const RUBBLE_COURSE: (f32, f32) = (2.8, 5.0);
+const RUBBLE_LENGTH: (f32, f32) = (3.5, 10.0);
 const RUBBLE_PROUD: (f32, f32) = (0.2, 1.6);
 const RUBBLE_CHAMFER: (f32, f32) = (0.25, 0.8);
 const RUBBLE_JOINT: f32 = 0.35;
