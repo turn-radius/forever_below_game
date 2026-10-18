@@ -3,7 +3,7 @@
 //! judged close up as items and bodies are. `--skeleton` is the same view opened on a skeleton.
 //!
 //! Keys: Tab and Shift+Tab change the species, Left and Right the seed, M the motion (still,
-//! moving, rearing, striking; a skeleton or a troll stands, walks and swings), G a skeleton's gear on or
+//! moving, rearing, striking; a skeleton or a troll stands, walks and swings), G a skeleton's gear or a troll's weapon on or
 //! off, Space pauses the turn. Command line: `--creature --species giant_rat --seed 7 --motion
 //! moving`, or `--skeleton --seed 7 --motion swing [--bare]` ([`CreatureChoice::from_args`]).
 
@@ -212,7 +212,7 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<CreatureChoice>, mut
         let at = motions.iter().position(|&m| m == choice.motion).unwrap_or(0);
         choice.motion = motions[(at + 1) % motions.len()];
     }
-    if pressed(KeyCode::KeyG) && choice.species.is_skeleton() {
+    if pressed(KeyCode::KeyG) && (choice.species.is_skeleton() || choice.species.is_troll()) {
         choice.gear = !choice.gear;
     }
     if pressed(KeyCode::Space) {
@@ -228,6 +228,8 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
     // A skeleton wears and holds what its seed rolls: its rig is the gear's, with the hands closed.
     let gear = match &creature {
         Creature::Skeleton(skeleton) if choice.gear => Some(SkeletonGear::roll(skeleton, fb_items::Odds::kit(1))),
+        // A troll holds the weapon its seed rolls, if any.
+        Creature::Troll(troll) if choice.gear => Some(SkeletonGear::roll_troll(troll, fb_items::Odds::kit(1))),
         _ => None,
     };
     let rig = gear.as_ref().map_or_else(|| creature.rig(), |g| g.rig.clone());
@@ -237,6 +239,12 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
     let (lo, hi) = match (&gear, &creature) {
         (Some(gear), Creature::Skeleton(skeleton)) => {
             let at_rest = pose::skeleton_armed(&skeleton.dims(), &SkeletonPose::default(), &gear.stance);
+            let mut meshes = gear.posed(&at_rest);
+            meshes.push(rig.posed_mesh(&at_rest));
+            meshes.iter().filter_map(|m| m.bounds()).fold((lo, hi), |(lo, hi), (l, h)| ([0, 1, 2].map(|i| lo[i].min(l[i])), [0, 1, 2].map(|i| hi[i].max(h[i]))))
+        }
+        (Some(gear), Creature::Troll(troll)) => {
+            let at_rest = pose::troll_armed(&troll.dims(), &SkeletonPose::default(), &gear.stance);
             let mut meshes = gear.posed(&at_rest);
             meshes.push(rig.posed_mesh(&at_rest));
             meshes.iter().filter_map(|m| m.bounds()).fold((lo, hi), |(lo, hi), (l, h)| ([0, 1, 2].map(|i| lo[i].min(l[i])), [0, 1, 2].map(|i| hi[i].max(h[i]))))
@@ -364,7 +372,7 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
                 shown.cycle = (shown.cycle + speed * dt / pose::troll_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
                 // A rake every 2.4 seconds, as a skeleton's blow.
                 let swing = (choice.motion == ViewMotion::Striking).then(|| (t % 2.4 / 1.6).min(1.0));
-                pose::troll_with(dims, &SkeletonPose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, swing, look: 0.0, jaw: swing.unwrap_or(0.0) })
+                pose::troll_armed(dims, &SkeletonPose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, swing, look: 0.0, jaw: swing.unwrap_or(0.0) }, &shown.stance)
             }
         };
         for (entity, place) in shown.bones.iter().zip(&places) {
@@ -419,7 +427,7 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         Creature::Snake(s) => format!("{:?}, {:?}, {:.1} m", s.colouring, s.pattern, s.length / 10.0),
         Creature::Skeleton(s) => skeleton_look(s, choice.gear),
         Creature::Spider(s) => format!("{:?}, {:?}, {:.1} m across", s.colouring, s.marking, s.span / 10.0),
-        Creature::Troll(t) => troll_look(t),
+        Creature::Troll(t) => troll_look(t, choice.gear),
         Creature::Jackalope(j) => format!("{:?}, {:.0} cm, antlers {}+{} tines", j.colouring, j.length * 10.0, j.tines[0], j.tines[1]),
         Creature::Centipede(c) => format!("{:?}, {:?}, {} plates, {:.0} cm", c.colouring, c.banding, c.segments, c.length * 10.0),
         Creature::Bat(b) => format!("{:?}, {:?} wings, {:?} ears, {:?} nose, wingspan {:.0} cm", b.colouring, b.membrane, b.ear_shape, b.nose, b.wingspan * 10.0),
@@ -437,7 +445,13 @@ fn show_status(choice: Res<CreatureChoice>, mut status: Query<&mut Text, With<St
         if choice.species.is_skeleton() { "Shortsword" } else if choice.species.is_jackalope() { "Antlers" } else { "Bite" },
         block.bite
     );
-    let line = if choice.species.is_troll() { format!("{line}\nTwo claws {} each, Regeneration {} hit points a turn unless burned", fb_creatures::troll::CLAW, fb_creatures::troll::REGAIN) } else { line };
+    let armed = choice.gear && choice.species.is_troll() && fb_items::troll::troll_outfit(choice.seed, fb_items::Odds::kit(1)).item(fb_items::Slot::Mainhand).is_some();
+    let line = if choice.species.is_troll() {
+        let hands = if armed { format!("A claw {} and its weapon's dice + {}", fb_creatures::troll::CLAW, crate::creatures::trolls::STRENGTH_BONUS) } else { format!("Two claws {} each", fb_creatures::troll::CLAW) };
+        format!("{line}\n{hands}, Regeneration {} hit points a turn unless burned", fb_creatures::troll::REGAIN)
+    } else {
+        line
+    };
     for mut text in &mut status {
         text.0.clone_from(&line);
     }
@@ -476,14 +490,19 @@ fn skeleton_look(s: &fb_creatures::SkeletonState, gear: bool) -> String {
 }
 
 /// What is special about a troll, for the status line: its skin, height and the marks on it.
-fn troll_look(t: &fb_creatures::TrollState) -> String {
+fn troll_look(t: &fb_creatures::TrollState, gear: bool) -> String {
     let skin = match t.tone {
         v if v < 0.33 => "moss green",
         v if v < 0.66 => "grey green",
         _ => "stone grey",
     };
     let tusks = if t.tusks > 0.0 { "tusked" } else { "tuskless" };
-    format!("{skin}, {:.0} cm, {} warts, {tusks}", t.height() * 10.0, t.warts)
+    let weapon = match fb_items::troll::troll_outfit(t.seed, fb_items::Odds::kit(1)).item(fb_items::Slot::Mainhand) {
+        _ if !gear => ", weapon off".to_string(),
+        Some(weapon) => format!(", {}", weapon.title()),
+        None => ", unarmed".to_string(),
+    };
+    format!("{skin}, {:.0} cm, {} warts, {tusks}{weapon}", t.height() * 10.0, t.warts)
 }
 
 fn skeleton_motion(motion: ViewMotion) -> String {

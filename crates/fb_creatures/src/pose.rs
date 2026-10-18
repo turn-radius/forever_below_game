@@ -1170,8 +1170,14 @@ pub fn troll_stride(dims: &SkeletonDims) -> f32 {
 /// both claws). The walk is the skeleton's; a swing keeps its lunge and the turn of the trunk
 /// and gives both arms their own throw, the left a beat behind the right. Our own timings.
 pub fn troll_with(d: &SkeletonDims, pose: &SkeletonPose) -> Vec<Placement> {
-    use skeleton_bone as bone;
-    let mut out = skeleton_with(d, pose);
+    troll_armed(d, pose, &[None, None])
+}
+
+/// [`troll_with`] with the arms that hold something (right then left) in their stance, as
+/// [`skeleton_armed`] does: a holding arm does not swing as it walks, and in a swing its throw
+/// carries the weapon while the hand keeps its wrist turned, so the weapon stays in the fist.
+pub fn troll_armed(d: &SkeletonDims, pose: &SkeletonPose, stance: &[Option<ArmStance>; 2]) -> Vec<Placement> {
+    let mut out = skeleton_armed(d, pose, stance);
     let Some(p) = pose.swing.map(|p| p.clamp(0.0, 1.0)) else { return out };
     for (k, side) in Side::BOTH.into_iter().enumerate() {
         // The left arm is a beat behind.
@@ -1182,7 +1188,6 @@ pub fn troll_with(d: &SkeletonDims, pose: &SkeletonPose) -> Vec<Placement> {
         out[b].rotation = rot_x(-forward);
         out[b + 1].rotation = rot_x(-bend);
     }
-    let _ = bone::COUNT;
     out
 }
 

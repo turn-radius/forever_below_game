@@ -22,6 +22,7 @@ pub mod range;
 pub mod rarity;
 pub mod stats;
 pub mod tables;
+pub mod troll;
 pub mod undead;
 
 pub use contents::{container_item, roll_contents};

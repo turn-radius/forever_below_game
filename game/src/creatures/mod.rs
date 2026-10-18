@@ -72,6 +72,8 @@ pub struct Critter {
     /// A skeleton's measures, weapon, armour and gear, worked out once when it appears, so
     /// nothing rebuilds its body each frame. `None` for the other creatures.
     pub kit: Option<Arc<SkeletonKit>>,
+    /// What a troll holds, if it holds anything ([`trolls::TrollArms`]). `None` for the rest.
+    pub arms: Option<Arc<trolls::TrollArms>>,
 }
 
 impl Critter {
@@ -83,13 +85,19 @@ impl Critter {
             _ => None,
         };
         let radius = kit.as_ref().map_or_else(|| creature.radius(), |k| k.radius);
-        Critter { spot, radius, creature, size: 1.0, kit }
+        Critter { spot, radius, creature, size: 1.0, kit, arms: None }
     }
 
     /// This skeleton in its `kit` of gear.
     pub fn with_kit(mut self, kit: SkeletonKit) -> Critter {
         self.radius = kit.radius * self.size;
         self.kit = Some(Arc::new(kit));
+        self
+    }
+
+    /// This troll holding `arms`.
+    pub fn with_arms(mut self, arms: trolls::TrollArms) -> Critter {
+        self.arms = Some(Arc::new(arms));
         self
     }
 
@@ -395,6 +403,8 @@ pub struct Built {
     /// A skeleton's fitted gear and the kit worked out from it.
     pub gear: Option<fb_creatures::SkeletonGear>,
     pub kit: Option<SkeletonKit>,
+    /// What a troll holds, when it holds a weapon.
+    pub arms: Option<trolls::TrollArms>,
 }
 
 /// Rolls the creature at `spot` on a level `depth` down, and fits a skeleton's gear (rolled
@@ -404,13 +414,18 @@ pub fn build_creature(spot: &CreatureSpot, depth: u32) -> Built {
     let creature = spot.creature();
     let gear = match &creature {
         Creature::Skeleton(skeleton) => Some(fb_creatures::SkeletonGear::roll(skeleton, fb_items::Odds::kit(depth))),
+        Creature::Troll(troll) => Some(fb_creatures::SkeletonGear::roll_troll(troll, fb_items::Odds::kit(depth))),
         _ => None,
     };
     let kit = match (&creature, &gear) {
         (Creature::Skeleton(skeleton), Some(gear)) => Some(SkeletonKit::armed(skeleton, gear)),
         _ => None,
     };
-    Built { creature, gear, kit }
+    let arms = match (&creature, &gear) {
+        (Creature::Troll(_), Some(gear)) => trolls::TrollArms::of(gear),
+        _ => None,
+    };
+    Built { creature, gear, kit, arms }
 }
 
 /// [`build_creature`] for every spot, on as many threads as there are cores.
@@ -426,9 +441,9 @@ pub fn build_creatures(spots: &[CreatureSpot], depth: u32) -> Vec<Built> {
 
 /// Spawns `built`, the creature of `spot` ([`spawn_creature_as`]).
 pub fn spawn_built(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot, built: Built, fallen: bool) -> Entity {
-    let Built { creature, gear, kit } = built;
+    let Built { creature, gear, kit, arms } = built;
     let rig = gear.as_ref().map_or_else(|| creature.rig(), |g| g.rig.clone());
-    let (root, bones) = spawn_skeleton_with(commands, level, spot, &rig, kit);
+    let (root, bones) = spawn_creature_with(commands, level, spot, &rig, kit, arms.filter(|_| !fallen));
     let appearance = ItemAppearance {
         condition: Condition { state: ConditionState::Custom, wear: Mulberry32::new(spot.seed ^ GRIME_SALT).range_f32(GRIME.0, GRIME.1), ..Condition::default() },
         seed: spot.seed,
@@ -473,10 +488,18 @@ pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpo
 
 /// [`spawn_skeleton`] for a skeleton in `kit` (a skeleton given none has nothing worn or held).
 pub fn spawn_skeleton_with(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig, kit: Option<SkeletonKit>) -> (Entity, Vec<Entity>) {
+    spawn_creature_with(commands, level, spot, rig, kit, None)
+}
+
+/// [`spawn_skeleton_with`] for a troll holding `arms`.
+pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig, kit: Option<SkeletonKit>, arms: Option<trolls::TrollArms>) -> (Entity, Vec<Entity>) {
     let creature = spot.creature();
     let mut critter = Critter::new(*spot, creature.clone());
     if let Some(kit) = kit {
         critter = critter.with_kit(kit);
+    }
+    if let Some(arms) = arms {
+        critter = critter.with_arms(arms);
     }
     let mut rng = Mulberry32::new(spot.seed ^ 0x1D1E);
     let snake = spot.species.is_snake();
@@ -657,7 +680,8 @@ pub fn animate(
                     pose::troll_fallen(dims, intent.fallen)
                 } else {
                     motion.cycle = (motion.cycle + strode / pose::troll_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
-                    pose::troll_with(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing })
+                    let stance = critter.arms.as_ref().map_or([None, None], |a| a.stance);
+                    pose::troll_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)
                 }
             }
             Creature::Centipede(centipede) => {

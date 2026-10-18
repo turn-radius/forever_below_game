@@ -28,8 +28,8 @@
 //!   it last saw them, or led too far from home, it goes back to wandering its room.
 //!
 //! A troll attacks as the SRD's Multiattack: in one swing of its arms it bites and claws twice,
-//! each rolled to hit on its own ([`TROLL_COOLDOWN`] between swings); its regeneration is in
-//! [`super::trolls`].
+//! each rolled to hit on its own ([`TROLL_COOLDOWN`] between swings); an armed troll swings its
+//! weapon in place of the right claw; its regeneration is in [`super::trolls`].
 //!
 //! Every range, rate and timing here is our own tuning unless an SRD page is named. The SRD's
 //! round is 6 seconds (p. 90); a bite every one and a half to two and a half seconds keeps a
@@ -577,7 +577,11 @@ fn behave(
                 if within {
                     let block = crate::rules::GameRules::of(&rules).creature(species);
                     let to_hit = critter.to_hit_with(crate::rules::GameRules::of(&rules));
-                    let blows = std::iter::once(block.bite).chain(std::iter::repeat_n(fb_creatures::troll::CLAW, fb_creatures::troll::CLAWS as usize));
+                    // Armed, the weapon takes the place of the right claw.
+                    let blows: Vec<fb_creatures::Dice> = match critter.arms.as_ref() {
+                        Some(arms) => arms.attack(block.bite).to_vec(),
+                        None => std::iter::once(block.bite).chain(std::iter::repeat_n(fb_creatures::troll::CLAW, fb_creatures::troll::CLAWS as usize)).collect(),
+                    };
                     for dice in blows {
                         let blow = AttackOnDelver { attacker: entity, species: Some(species), damage: dice.roll(&mut brain.rng), poison: 0, attacker_pos: at };
                         attacks.strike(block.name, blow, to_hit, delver_ac.as_ref(), &mut brain.rng);

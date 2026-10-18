@@ -25,14 +25,16 @@
 
 use armory::geom::vec3::{self, Mat3, V3};
 use armory::{ItemMesh, Part};
-use fb_body::{Body, HandPose, Placement, Side, fit_hands, fit_worn};
+use fb_body::{Body, BodySpec, HandPose, Placement, Side, fit_hands, fit_worn};
 use fb_items::outfit::OutfitSet;
+use fb_items::troll::troll_outfit;
 use fb_items::undead::skeleton_outfit;
 use fb_items::{Odds, Slot};
 
 use crate::pose::ArmStance;
 use crate::rig::Rig;
-use crate::skeleton::{SkeletonState, arm_bone, index, leg_bone};
+use crate::troll::TrollState;
+use crate::skeleton::{SkeletonDims, SkeletonState, arm_bone, index, leg_bone};
 
 /// One piece of gear on one bone.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,11 +75,30 @@ impl SkeletonGear {
 
     /// `outfit` fitted to the skeleton `state`.
     pub fn fit(state: &SkeletonState, outfit: OutfitSet) -> SkeletonGear {
-        let dims = state.dims();
+        SkeletonGear::fit_on(&state.dims(), &state.spec(), outfit, 1.0, |grips| state.build_gripping(grips))
+    }
+
+    /// The weapon a troll rolls from its own seed against `odds` ([`troll_outfit`]), fitted.
+    pub fn roll_troll(state: &TrollState, odds: Odds) -> SkeletonGear {
+        SkeletonGear::fit_troll(state, troll_outfit(state.seed, odds))
+    }
+
+    /// `outfit` fitted to the troll `state`, through the same fitting as a skeleton's: the
+    /// troll is built on a human's joints, so the arm that holds the weapon is posed as a
+    /// human's is and the weapon is kept in the hand bone's own space. The troll's hands are not
+    /// closed on it; its rig is as it stands. What it holds is made as large again as the troll
+    /// is of a man ([`TrollState::stature`]), about the grip, so it fits the larger fist.
+    pub fn fit_troll(state: &TrollState, outfit: OutfitSet) -> SkeletonGear {
+        SkeletonGear::fit_on(&state.dims(), &state.spec(), outfit, state.stature, |_| state.build())
+    }
+
+    /// `outfit` fitted to the body `spec` laid out as `dims`, the rig being whatever `rig` makes
+    /// of the grips the holding hands are closed in. Held items are drawn `held_scale` times as
+    /// large, about the grip.
+    fn fit_on(dims: &SkeletonDims, spec: &BodySpec, outfit: OutfitSet, held_scale: f32, rig: impl FnOnce(&[Option<HandPose>; 2]) -> Rig) -> SkeletonGear {
         let rest = &dims.body;
-        let spec = state.spec();
         let held = |slot| outfit.item(slot).map(|i| &i.shape);
-        let hands = fit_hands(&spec, held(Slot::Mainhand), held(Slot::Offhand));
+        let hands = fit_hands(spec, held(Slot::Mainhand), held(Slot::Offhand));
         let posed = &hands.body;
         let fits = [hands.main.as_ref(), hands.off.as_ref()];
         let worn: Vec<(Slot, armory::Item)> = outfit.worn.iter().filter(|(s, _)| !matches!(s, Slot::Mainhand | Slot::Offhand)).map(|(s, i)| (*s, i.shape.clone())).collect();
@@ -127,14 +148,19 @@ impl SkeletonGear {
             let bone = arm_bone(side) + 2;
             let mut mesh = ItemMesh::default();
             for part in &fit.mesh.parts {
-                for (_, cut) in cut_part(part, |_| (bone, None), &frames) {
+                for (_, mut cut) in cut_part(part, |_| (bone, None), &frames) {
+                    if let (true, Some(grip)) = (held_scale != 1.0, grip_points[k]) {
+                        for p in &mut cut.positions {
+                            *p = vec3::add(grip, vec3::scale(vec3::sub(*p, grip), held_scale));
+                        }
+                    }
                     mesh.parts.push(cut);
                 }
             }
             pieces.push(GearPiece { slot, bone, name: item.title().to_string(), item: fit.item.clone(), mesh });
         }
 
-        let mut rig = state.build_gripping(&grips);
+        let mut rig = rig(&grips);
         // Gloves and boots hold the bones inside them: the bare hand and foot are not drawn.
         if fit.covered.hands {
             for side in Side::BOTH {
@@ -880,5 +906,72 @@ mod tests {
             check_seams(seed, &mut cuff, &mut shaft);
         }
         eprintln!("widest gap at a cuff {cuff}, at a boot {shaft}");
+    }
+
+    /// The troll seeds below 40 that hold a weapon.
+    fn armed_trolls() -> Vec<(TrollState, SkeletonGear)> {
+        (0..40)
+            .map(|seed| TrollState::roll(seed))
+            .map(|state| {
+                let gear = SkeletonGear::roll_troll(&state, Odds::default());
+                (state, gear)
+            })
+            .filter(|(_, gear)| !gear.is_bare())
+            .collect()
+    }
+
+    #[test]
+    fn a_troll_holds_what_it_rolled_in_its_right_hand_only() {
+        let armed = armed_trolls();
+        assert!(armed.len() >= 10, "{} of 40 armed", armed.len());
+        for (state, gear) in &armed {
+            assert_eq!(gear.outfit, fb_items::troll::troll_outfit(state.seed, Odds::default()), "{}", state.seed);
+            assert!(gear.stance[0].is_some() && gear.stance[1].is_none(), "{}: right hand only", state.seed);
+            assert_eq!(gear.pieces.len(), 1, "{}", state.seed);
+            assert_eq!((gear.pieces[0].slot, gear.pieces[0].bone), (Slot::Mainhand, arm_bone(Side::Right) + 2), "{}", state.seed);
+        }
+        // The same seed is the same weapon.
+        let (state, gear) = &armed[0];
+        assert_eq!(SkeletonGear::roll_troll(state, Odds::default()).outfit, gear.outfit);
+    }
+
+    #[test]
+    fn a_trolls_grip_stays_in_the_hands_grasp_through_the_walk_and_the_swing() {
+        use crate::pose::troll_armed;
+        let hand = arm_bone(Side::Right) + 2;
+        for (state, gear) in armed_trolls().iter().take(8) {
+            let dims = state.dims();
+            let grip = gear.grip_points[0].expect("a grip");
+            // The grip lies in the hand: within its mesh, to a finger's width.
+            let hand_points = points(&gear.rig.bones[hand].mesh);
+            assert!(nearest(grip, &hand_points) < 0.6, "{}: grip {:?} is {} from the hand", state.seed, grip, nearest(grip, &hand_points));
+            // The weapon passes through the grip, in the hand's own space, in every pose.
+            let weapon = points(&gear.pieces[0].mesh);
+            assert!(nearest(grip, &weapon) < 0.35, "{}: grip {} from the weapon", state.seed, nearest(grip, &weapon));
+            let poses: Vec<SkeletonPose> = (0..8)
+                .map(|k| SkeletonPose { stride: k as f32 * std::f32::consts::TAU / 8.0, pace: 1.0, ..SkeletonPose::default() })
+                .chain((0..=8).map(|k| SkeletonPose { swing: Some(k as f32 / 8.0), ..SkeletonPose::default() }))
+                .collect();
+            let rest = gear.rig.world(&troll_armed(&dims, &SkeletonPose::default(), &gear.stance));
+            let wrist_to_grip = vec3::distance(rest[hand].point(grip), rest[hand].origin);
+            for pose in &poses {
+                let local = troll_armed(&dims, pose, &gear.stance);
+                let world = gear.rig.world(&local);
+                let held = gear.posed(&local);
+                let at = world[hand].point(grip);
+                assert!((vec3::distance(at, world[hand].origin) - wrist_to_grip).abs() < 1e-3, "{}: the grip slips in the hand", state.seed);
+                assert!(nearest(at, &points(&held[0])) < 0.35, "{}: the weapon leaves the grip in {pose:?}", state.seed);
+            }
+        }
+    }
+
+    #[test]
+    fn an_unarmed_trolls_arms_are_as_they_were() {
+        use crate::pose::{troll_armed, troll_with};
+        let state = TrollState::roll(5);
+        let dims = state.dims();
+        for pose in [SkeletonPose::default(), SkeletonPose { swing: Some(0.4), ..SkeletonPose::default() }, SkeletonPose { stride: 1.0, pace: 1.0, ..SkeletonPose::default() }] {
+            assert_eq!(troll_armed(&dims, &pose, &[None, None]), troll_with(&dims, &pose));
+        }
     }
 }
