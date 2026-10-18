@@ -839,7 +839,8 @@ mod tests {
         for part in a.surfaces.parts.iter().chain([&a.ink]) {
             part.validate().unwrap();
         }
-        assert_eq!(a.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(), ["floor", "walls", "strata", "ceiling"]);
+        // Plain stone: no paving and no layered walls, which have parts of their own.
+        assert_eq!(a.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(), ["floor", "walls", "ceiling"]);
         assert!(a.surfaces.parts.iter().all(|p| p.material == Some(MaterialKind::Stone) && !p.outline));
     }
 
