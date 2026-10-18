@@ -471,24 +471,25 @@ impl BatState {
         parts.push(part(mouth_lining(&head, line, 1.0), "mouth", MaterialKind::Skin, MOUTH, false));
         let _ = hinge;
 
-        // Ears: large and cupped, standing from the crown.
+        // Ears: large and cupped, standing clear of the crown and the sides of the head, each on
+        // its own base with a pale pink hollow facing forward.
         let mut ears = MeshBuilder::new();
         let mut inner = MeshBuilder::new();
         let (width, height) = (0.26 * l * self.ears, 0.4 * l * self.ears * if self.ear_shape == BatEars::Tall { 1.35 } else { 1.0 });
         let width = if self.ear_shape == BatEars::Tall { 0.72 * width } else { width };
         for side in [1.0f32, -1.0] {
-            let a = FRAC_PI_2 - 0.78 * side;
+            let a = FRAC_PI_2 - 0.95 * side;
             let t = 0.3;
             let n = head.normal(t, a);
-            let root = head.point(t, a, -0.025 * l);
-            let up = vec3::normalize_or(vec3::add(vec3::scale(n, 0.45), [0.2 * side, -0.05, 0.9]), n);
+            let root = head.point(t, a, 0.012 * l);
+            let up = vec3::normalize_or(vec3::add(vec3::scale(n, 0.3), [0.55 * side, -0.1, 0.8]), n);
             let facing = vec3::normalize_or([0.5 * side, 1.0, 0.1], vec3::Y);
-            ears.append(&ear_sheet(self.ear_shape, width, height, 0.012 * l, 1.0).place_basis(root, up, facing).clone());
-            let inward = vec3::add(root, vec3::scale(facing, 0.012 * l));
-            inner.append(&ear_sheet(self.ear_shape, 0.68 * width, 0.72 * height, 0.006 * l, 0.8).place_basis(inward, up, facing).clone());
+            ears.append(&ear_sheet(self.ear_shape, width, height, 0.02 * l, 1.0).place_basis(root, up, facing).clone());
+            let inward = vec3::add(root, vec3::scale(facing, 0.02 * l));
+            inner.append(&ear_sheet(self.ear_shape, 0.74 * width, 0.78 * height, 0.006 * l, 0.8).place_basis(inward, up, facing).clone());
         }
-        parts.push(part(ears, "ears", MaterialKind::Skin, mix(c.skin(), c.fur(), 0.35), true));
-        parts.push(part(inner, "ears_inner", MaterialKind::Skin, mix(c.skin(), Rgb::hex(0xc79a94), 0.5), false));
+        parts.push(part(ears, "ears", MaterialKind::Skin, mix(c.skin(), c.fur(), 0.2), true));
+        parts.push(part(inner, "ears_inner", MaterialKind::Skin, mix(c.skin(), Rgb::hex(0xe0958f), 0.75), false));
 
         // Eyes: small, black and bright, set high on the side of the head.
         let (mut balls, mut glints) = (MeshBuilder::new(), MeshBuilder::new());
