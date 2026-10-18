@@ -48,12 +48,12 @@ const BLOCK_LENGTH: (f32, f32) = (5.5, 11.5);
 const RUBBLE_COURSE: (f32, f32) = (1.6, 4.4);
 const RUBBLE_LENGTH: (f32, f32) = (1.8, 9.0);
 const RUBBLE_PROUD: (f32, f32) = (0.2, 1.6);
-const RUBBLE_CHAMFER: (f32, f32) = (0.3, 1.2);
-const RUBBLE_JOINT: f32 = 0.5;
-const RUBBLE_DROP: f32 = 0.6;
+const RUBBLE_CHAMFER: (f32, f32) = (0.25, 0.8);
+const RUBBLE_JOINT: f32 = 0.35;
+const RUBBLE_DROP: f32 = 0.2;
 const RUBBLE_SPLIT: f32 = 0.15;
 /// How far in a rubble stone's corners may be drawn.
-const RUBBLE_CUT: f32 = 1.7;
+const RUBBLE_CUT: f32 = 0.8;
 /// The shares of rubble stones that stop short for a pinning stone and that are through-stones.
 const RUBBLE_PIN: f32 = 0.22;
 const RUBBLE_TALL: f32 = 0.12;
