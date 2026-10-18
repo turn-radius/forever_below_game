@@ -26,7 +26,7 @@ use crate::menu::{ButtonInk, MenuButton, MenuCommand};
 use crate::play::CurrentLevel;
 use crate::title::NewDelveSeed;
 use crate::title::last_delver::LastDelver;
-use crate::ui::{BG, BRIGHT, FRAME_GOLD, GOLD, INK, LINE, MUTED, UiFonts};
+use crate::ui::{BG, BRIGHT, FAINT, FRAME_GOLD, GOLD, INK, LINE, MUTED, UiFonts};
 
 /// The longest name the creator takes, in characters.
 pub const NAME_MAX: usize = 24;
@@ -267,56 +267,68 @@ fn class_note(class: Class) -> String {
     format!("d{} hit die, {casting}", class.hit_die())
 }
 
-/// Builds the creator's page under `parent`.
-pub fn creator_page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft) {
+/// Builds the creator's page under `parent`, the form beside the delver's `figure`
+/// ([`super::preview`]).
+pub fn creator_page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft, figure: Handle<Image>) {
     parent.spawn((Text::new("Who goes below?"), UiFonts::style(&fonts.display, 40.0, INK)));
-    parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(16), width: percent(100), ..default() }).with_children(|form| {
-        row(form, fonts, "Folk", |line| {
-            for folk in Folk::ALL {
-                chip(line, fonts, &folk.race().label, CreatorCommand::Folk(folk), draft.folk == folk);
-            }
-        });
-        row(form, fonts, "Class", |line| {
-            for class in Class::ALL {
-                let word = class.word();
-                let label = word[..1].to_uppercase() + &word[1..];
-                chip(line, fonts, &label, CreatorCommand::Class(class), draft.class == class);
-            }
-            line.spawn((Text::new(class_note(draft.class)), UiFonts::style(&fonts.body_italic, 18.0, MUTED)));
-        });
-        row(form, fonts, "Name", |line| {
-            line.spawn((
-                Node { width: px(300), padding: UiRect::axes(px(10), px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
-                BackgroundColor(BG),
-                BorderColor::all(if draft.can_begin() { LINE } else { GOLD }),
-            ))
-            .with_child((Text::new(draft.name.clone()), UiFonts::style(&fonts.display, 24.0, BRIGHT), children![(TextSpan::new("_"), UiFonts::style(&fonts.display, 24.0, GOLD))]));
-            chip(line, fonts, "Roll a name", CreatorCommand::RollName, false);
-        });
-        row(form, fonts, "Scores", |line| {
-            line.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|table| {
-                let scores = Character::scores_from(draft.folk, draft.nudges);
-                let values = [scores.strength, scores.dexterity, scores.constitution, scores.intelligence, scores.wisdom];
-                for (i, ability) in ABILITIES.into_iter().enumerate() {
-                    let base = draft.folk.race().stats[i];
-                    table.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Baseline, column_gap: px(14), ..default() }).with_children(|line| {
-                        let cell = |width: f32| Node { width: px(width), ..default() };
-                        line.spawn((cell(130.0), children![(Text::new(ability), UiFonts::style(&fonts.body, 20.0, INK))]));
-                        line.spawn((cell(36.0), children![(Text::new(format!("{:>2}", values[i])), UiFonts::style(&fonts.mono_bold, 20.0, BRIGHT))]));
-                        line.spawn((cell(40.0), children![(Text::new(format!("{:+}", modifier(values[i]))), UiFonts::style(&fonts.mono, 18.0, MUTED))]));
-                        let note = format!("{} {base}, rolled {:+}", draft.folk.race().label.to_lowercase(), draft.nudges[i]);
-                        line.spawn((Text::new(note), UiFonts::style(&fonts.body_italic, 16.0, MUTED)));
-                    });
-                }
-            });
-            chip(line, fonts, "Roll scores", CreatorCommand::RollScores, false);
-        });
-        row(form, fonts, "Look", |line| chip(line, fonts, "Roll a look", CreatorCommand::RollLook, false));
+    let mut body = parent.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(24), width: percent(100), ..default() });
+    body.with_children(|body| {
+        body.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(16), flex_grow: 1.0, ..default() }).with_children(|form| creator_form(form, fonts, draft));
+        body.spawn((
+            ImageNode::new(figure),
+            Node { width: px(super::preview::PREVIEW.x), height: px(super::preview::PREVIEW.y), flex_shrink: 0.0, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
+            BorderColor::all(FAINT),
+        ));
     });
     parent.spawn(Node { flex_direction: FlexDirection::Row, column_gap: px(16), margin: UiRect::top(px(8)), ..default() }).with_children(|buttons| {
         chip(buttons, fonts, "Back", CreatorCommand::Back, false);
         chip(buttons, fonts, "Begin the delve", CreatorCommand::Begin, draft.can_begin());
     });
+}
+
+/// The creator's choices, a row each.
+fn creator_form(form: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft) {
+    row(form, fonts, "Folk", |line| {
+        for folk in Folk::ALL {
+            chip(line, fonts, &folk.race().label, CreatorCommand::Folk(folk), draft.folk == folk);
+        }
+    });
+    row(form, fonts, "Class", |line| {
+        for class in Class::ALL {
+            let word = class.word();
+            let label = word[..1].to_uppercase() + &word[1..];
+            chip(line, fonts, &label, CreatorCommand::Class(class), draft.class == class);
+        }
+        line.spawn((Text::new(class_note(draft.class)), UiFonts::style(&fonts.body_italic, 18.0, MUTED)));
+    });
+    row(form, fonts, "Name", |line| {
+        line.spawn((
+            Node { width: px(300), padding: UiRect::axes(px(10), px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
+            BackgroundColor(BG),
+            BorderColor::all(if draft.can_begin() { LINE } else { GOLD }),
+        ))
+        .with_child((Text::new(draft.name.clone()), UiFonts::style(&fonts.display, 24.0, BRIGHT), children![(TextSpan::new("_"), UiFonts::style(&fonts.display, 24.0, GOLD))]));
+        chip(line, fonts, "Roll a name", CreatorCommand::RollName, false);
+    });
+    row(form, fonts, "Scores", |line| {
+        line.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|table| {
+            let scores = Character::scores_from(draft.folk, draft.nudges);
+            let values = [scores.strength, scores.dexterity, scores.constitution, scores.intelligence, scores.wisdom];
+            for (i, ability) in ABILITIES.into_iter().enumerate() {
+                let base = draft.folk.race().stats[i];
+                table.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Baseline, column_gap: px(14), ..default() }).with_children(|line| {
+                    let cell = |width: f32| Node { width: px(width), ..default() };
+                    line.spawn((cell(130.0), children![(Text::new(ability), UiFonts::style(&fonts.body, 20.0, INK))]));
+                    line.spawn((cell(36.0), children![(Text::new(format!("{:>2}", values[i])), UiFonts::style(&fonts.mono_bold, 20.0, BRIGHT))]));
+                    line.spawn((cell(40.0), children![(Text::new(format!("{:+}", modifier(values[i]))), UiFonts::style(&fonts.mono, 18.0, MUTED))]));
+                    let note = format!("{} {base}, rolled {:+}", draft.folk.race().label.to_lowercase(), draft.nudges[i]);
+                    line.spawn((Text::new(note), UiFonts::style(&fonts.body_italic, 16.0, MUTED)));
+                });
+            }
+        });
+        chip(line, fonts, "Roll scores", CreatorCommand::RollScores, false);
+    });
+    row(form, fonts, "Look", |line| chip(line, fonts, "Roll a look", CreatorCommand::RollLook, false));
 }
 
 #[cfg(test)]

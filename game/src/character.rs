@@ -346,7 +346,8 @@ pub fn wear_abilities(inventory: Option<Res<Inventory>>, character: Option<ResMu
 }
 
 /// The delver the next delve begins as, made in the creator or continued from the last delve
-/// ([`crate::title`]). Without one, a delve rolls its delver from the level ([`character_for`]).
+/// ([`crate::title`]); the delve takes it up as it begins. Without one, a delve rolls its delver
+/// from the level ([`character_for`]).
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct ChosenDelver(pub Character);
 

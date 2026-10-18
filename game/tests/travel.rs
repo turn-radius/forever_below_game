@@ -30,7 +30,7 @@ use forever_below::{
     props::PropPiece,
     render::ArmoryRenderPlugin,
     settings::SettingsPlugin,
-    title::{NewDelveSeed, TitlePlugin},
+    title::{NewDelveSeed, TitlePlugin, creator::CreatorCommand},
     travel::{Abyss, Arrival, Below, DepthTitle, Journey, LeavingLevel, UseStair},
     tuning::TuningPlugin,
 };
@@ -59,7 +59,7 @@ fn run(app: &mut App, frames: usize) {
 
 fn begin_delve(app: &mut App) {
     run(app, 30);
-    app.world_mut().write_message(MenuCommand::NewDelve);
+    app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(app, 90);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
 }
@@ -323,7 +323,7 @@ fn a_fall_on_any_depth_starts_the_next_delve_at_the_first_level_entrance() {
     assert_eq!(*app.world().resource::<Abyss>(), Abyss::default(), "the run is over");
 
     // A new delve begins at the first level's entrance, whose door shuts behind the delver.
-    app.world_mut().write_message(MenuCommand::NewDelve);
+    app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
     assert_eq!(*app.world().resource::<Abyss>(), Abyss { run_seed: 1207, depth: 1, arrival: Arrival::Entered });

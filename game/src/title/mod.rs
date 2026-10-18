@@ -15,6 +15,7 @@
 
 pub mod creator;
 pub mod last_delver;
+pub mod preview;
 
 use bevy::{
     camera::RenderTarget,
@@ -117,6 +118,7 @@ impl Plugin for TitlePlugin {
         if !app.is_plugin_added::<LastDelverPlugin>() {
             app.add_plugins(LastDelverPlugin);
         }
+        app.add_plugins(preview::PreviewPlugin);
         app.add_plugins(UiMaterialPlugin::<LetteringMaterial>::default())
             .init_resource::<UiFonts>()
             .init_resource::<Keymap>()
@@ -277,7 +279,7 @@ fn ledger_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str
 }
 
 /// The width of the creator's panel in logical pixels.
-const CREATOR_PX: f32 = 900.0;
+const CREATOR_PX: f32 = 1160.0;
 
 /// A dark ledger panel `width` across in the middle of the screen, holding what `fill` builds.
 fn centred_panel(screen: &mut ChildSpawnerCommands, width: f32, fill: impl FnOnce(&mut ChildSpawnerCommands)) {
@@ -316,6 +318,7 @@ fn build_panel(
     page: Res<MenuPage>,
     draft: Option<Res<Draft>>,
     last: Option<Res<LastDelver>>,
+    figure: Res<preview::PreviewStage>,
     keymap: Res<Keymap>,
     settings: Res<GameSettings>,
     fonts: Res<UiFonts>,
@@ -338,7 +341,7 @@ fn build_panel(
         shown.set_if_neq(if *page == MenuPage::Main && !drafting { Visibility::Inherited } else { Visibility::Hidden });
     }
     commands.entity(screen).with_children(|screen| match (draft.as_deref(), *page) {
-        (Some(draft), _) => centred_panel(screen, CREATOR_PX, |panel| creator_page(panel, &fonts, draft)),
+        (Some(draft), _) => centred_panel(screen, CREATOR_PX, |panel| creator_page(panel, &fonts, draft, figure.image.clone())),
         (None, MenuPage::Main) => {
             screen
                 .spawn((

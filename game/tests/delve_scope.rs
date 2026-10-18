@@ -23,7 +23,7 @@ use forever_below::{
     play::{CurrentLevel, PlayPlugin, Player, Screen, ScreenOpen},
     render::ArmoryRenderPlugin,
     settings::SettingsPlugin,
-    title::{NewDelveSeed, TitlePlugin},
+    title::{NewDelveSeed, TitlePlugin, creator::CreatorCommand},
     tuning::TuningPlugin,
 };
 
@@ -54,9 +54,9 @@ fn state(app: &App) -> AppState {
     *app.world().resource::<State<AppState>>().get()
 }
 
-/// Chooses New delve on the title and lets the delve set itself up.
+/// Begins a delve from the title, past the creator, and lets the delve set itself up.
 fn begin_delve(app: &mut App) {
-    app.world_mut().write_message(MenuCommand::NewDelve);
+    app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(app, 90);
     assert_eq!(state(app), AppState::Delving);
 }
