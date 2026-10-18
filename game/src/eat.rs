@@ -1,11 +1,13 @@
-//! Eating and drinking from the inventory (#228). With the screen open, U eats or drinks the
-//! food or drink under the mouse: the item is used up and its nutrition and water come off the
-//! delver's hunger and thirst ([`fb_items::Provision`], `docs/items.md`). The inventory keeps no
-//! counts, so a stack of bread is several items and one is eaten at a time.
+//! Eating and drinking from the inventory (#228). With the screen open, the item under the mouse
+//! is the target of [`act_on_hovered`], which reads its verbs from [`crate::interact`]: F (Primary)
+//! uses it, G (Secondary) equips it or takes it off. F eats or drinks the food or drink: the item
+//! is used up and its nutrition and water come off the delver's hunger and thirst
+//! ([`fb_items::Provision`], `docs/items.md`). The inventory keeps no counts, so a stack of bread is several items and one is eaten at a time. A waterskin stays: each
+//! F is a swallow ([`fb_items::SWALLOW`]) out of its fill, until it is empty.
 //!
 //! [`consume`] does the work and says what it did, so the healing draught adds its cure to it
-//! (#235): 2d4 + 2 hit points from the run's dice, a green flash and a soft chime. The delver's needs are the [`DelverNeeds`] on the player; the game clock steps
-//! them in #229.
+//! (#235): 2d4 + 2 hit points from the run's dice, a green flash and a soft chime. The delver's needs are the [`DelverNeeds`] on the
+//! player; the game clock steps them in #229.
 
 use bevy::{ecs::system::SystemParam, prelude::*};
 use fb_items::{Consume, Provision};
@@ -16,7 +18,9 @@ use crate::combat::{Health, RunDice};
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
 use crate::ui::OK;
-use crate::inventory::{Hovered, Inventory, ItemId, Toast};
+use crate::inventory::{FloorChanges, Hovered, Inventory, ItemId, Toast};
+use crate::carry::FloorItem;
+use crate::interact::{self, Slot, Verb};
 use crate::keymap::{Action, ActionInput};
 use crate::play::{DelveSystems, Player, inventory_open};
 
@@ -26,7 +30,7 @@ impl Plugin for EatPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HealGlow>()
             .add_systems(Startup, load_heal_sound)
-            .add_systems(Update, consume_hovered.run_if(inventory_open).in_set(DelveSystems))
+            .add_systems(Update, act_on_hovered.run_if(inventory_open).in_set(DelveSystems))
             .add_systems(Update, (spawn_heal_glow, fade_heal_glow).chain().in_set(DelveSystems));
     }
 }
@@ -96,14 +100,23 @@ pub struct Consumed {
     pub provision: Provision,
     /// The item's base, so a rule keyed on it (the healing draught's cure) can follow.
     pub base: String,
+    /// A swallow from a waterskin that stays, not an item used up.
+    pub sipped: bool,
 }
 
 /// Eats or drinks `id`: takes it out of the inventory, wherever it lies, and takes its
-/// nutrition and water off `needs`. `None`, and nothing changed, if it is not food or drink.
+/// nutrition and water off `needs`. A waterskin is drunk from instead: a swallow comes out of its
+/// fill and it stays. `None`, and nothing changed, if it is not food or drink.
 pub fn consume(inventory: &mut Inventory, needs: &mut fb_character::Needs, id: ItemId) -> Option<Consumed> {
     let item = inventory.item(id)?;
+    if item.can_sip() {
+        let (name, base) = (item.title().to_string(), item.base.clone());
+        let provision = inventory.sip(id)?;
+        needs.consume(provision.nutrition, provision.water);
+        return Some(Consumed { how: Consume::Drink, name, provision, base, sipped: true });
+    }
     let (how, provision) = (item.consume()?, item.provision()?);
-    let done = Consumed { how, name: item.title().to_string(), provision, base: item.base.clone() };
+    let done = Consumed { how, name: item.title().to_string(), provision, base: item.base.clone(), sipped: false };
     inventory.forget(id);
     needs.consume(provision.nutrition, provision.water);
     Some(done)
@@ -111,11 +124,14 @@ pub fn consume(inventory: &mut Inventory, needs: &mut fb_character::Needs, id: I
 
 /// "You eat the bread".
 pub fn say(done: &Consumed) -> String {
+    if done.sipped {
+        return format!("You drink from the {}", done.name.to_lowercase());
+    }
     format!("You {} the {}", done.how.past(), done.name.to_lowercase())
 }
 
 /// What eating needs from the world: the delver's needs and hit points, the run's dice, the
-/// green flash and the chime. [`Eating::eat`] is what U in the inventory and a quickslot share.
+/// green flash and the chime. [`Eating::eat`] is what F in the inventory and a quickslot share.
 #[derive(SystemParam)]
 pub struct Eating<'w, 's> {
     commands: Commands<'w, 's>,
@@ -151,14 +167,66 @@ impl Eating<'_, '_> {
     }
 }
 
-/// U in the inventory: eats or drinks the item under the mouse.
-fn consume_hovered(input: ActionInput, hovered: Res<Hovered>, mut inventory: ResMut<Inventory>, mut eating: Eating, mut toast: ResMut<Toast>, time: Option<Res<Time<Real>>>) {
-    if !input.just_pressed(Action::Consume) {
+/// F and G in the inventory, on the item under the mouse. Its verbs come from
+/// [`interact::verbs_for`], the same lookup the prompts read. F does its use: Eat and Drink
+/// ([`Eating::eat`]), Light and Put out ([`crate::kindle::toggle_and_say`]), or Take for an item
+/// underfoot or in a container not carried, into the first bag with room ([`crate::inventory::take_up`]).
+/// G equips it in the slot it is made for, or takes it off if worn, back to the pack or underfoot
+/// if that is full ([`crate::inventory::quick`], the double-click). An item lying underfoot is
+/// equipped as it is from the level ([`crate::inventory::equip_from_floor`]): what it displaces
+/// goes into a bag, or is set down where the item lay. An item with no such verb does nothing.
+#[allow(clippy::too_many_arguments)]
+fn act_on_hovered(
+    input: ActionInput,
+    hovered: Res<Hovered>,
+    mut inventory: ResMut<Inventory>,
+    mut eating: Eating,
+    mut floor_changes: ResMut<FloorChanges>,
+    mut toast: ResMut<Toast>,
+    floor: Query<&FloorItem>,
+    time: Option<Res<Time<Real>>>,
+) {
+    let primary = input.just_pressed(Action::Primary);
+    if !primary && !input.just_pressed(Action::Secondary) {
         return;
     }
     let Some((id, _)) = hovered.0 else { return };
-    if let Some(line) = eating.eat(&mut inventory, id) {
-        toast.say(line, time.map_or(0.0, |t| t.elapsed_secs()));
+    let Some(target) = interact::item_target(&inventory, id) else { return };
+    let verbs = interact::verbs_for(&target, &interact::Delver::default());
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    if primary {
+        match verbs.get(Slot::Primary) {
+            Some(Verb::Eat | Verb::Drink) => {
+                if let Some(line) = eating.eat(&mut inventory, id) {
+                    toast.say(line, now);
+                }
+            }
+            Some(Verb::Light | Verb::PutOut) => {
+                let said = crate::kindle::toggle_and_say(&mut inventory, id);
+                toast.say(said, now);
+            }
+            Some(Verb::Take) => match crate::inventory::take_up(&mut inventory, id) {
+                Ok(changes) => floor_changes.0.extend(changes),
+                Err(refusal) => toast.say(refusal.reason(), now),
+            },
+            _ => {}
+        }
+    } else if verbs.get(Slot::Secondary) == Some(Verb::Equip)
+        && inventory.location(id) == Some(crate::inventory::Location::Loose)
+    {
+        let (at, yaw) = floor.iter().find(|f| f.id == id).map_or((Vec2::ZERO, 0.0), |f| (Vec2::new(f.spot.x, f.spot.y), f.spot.yaw));
+        match crate::inventory::equip_from_floor(&mut inventory, id, at, yaw) {
+            Ok(equipped) => {
+                toast.say(equipped.message(&inventory, id), now);
+                floor_changes.0.extend(equipped.changes);
+            }
+            Err(refusal) => toast.say(refusal.reason(), now),
+        }
+    } else if matches!(verbs.get(Slot::Secondary), Some(Verb::Equip | Verb::TakeOff)) {
+        match crate::inventory::quick(&mut inventory, id) {
+            Ok(changes) => floor_changes.0.extend(changes),
+            Err(refusal) => toast.say(refusal.reason(), now),
+        }
     }
 }
 
@@ -259,6 +327,7 @@ mod tests {
             .init_resource::<Inventory>()
             .init_resource::<Hovered>()
             .init_resource::<Toast>()
+            .init_resource::<FloorChanges>()
             .insert_resource(RunDice(Mulberry32::new(11)))
             .insert_resource(HealSound(Handle::default()))
             .init_resource::<ButtonInput<KeyCode>>()
@@ -271,18 +340,118 @@ mod tests {
         (app, player)
     }
 
-    fn press_u(app: &mut App) {
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyU);
+    fn press_key(app: &mut App, key: KeyCode) {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyU);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+    }
+
+    fn press_u(app: &mut App) {
+        press_key(app, KeyCode::KeyF);
+    }
+
+    /// `base` in the pack, wearing one first if need be; an item added loose lies underfoot.
+    fn carry(app: &mut App, base: &str) -> ItemId {
+        let mut inventory = app.world_mut().resource_mut::<Inventory>();
+        if inventory.worn(fb_items::Slot::Back).is_none() {
+            let pack = inventory.add(item("Pack"));
+            inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        }
+        let id = inventory.add(item(base));
+        inventory.stow(id).unwrap();
+        id
+    }
+
+    fn hover(app: &mut App, id: ItemId) {
+        app.world_mut().resource_mut::<Hovered>().0 = Some((id, Rect::default()));
+    }
+
+    #[test]
+    fn g_over_a_ring_puts_it_on_a_free_finger_and_takes_it_off_again() {
+        let (mut app, _) = app();
+        let (pack, ring) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(item("Pack"));
+            inventory.wear(pack, fb_items::Slot::Back).unwrap();
+            let ring = inventory.add(item("Ring"));
+            inventory.stow(ring).unwrap();
+            (pack, ring)
+        };
+        hover(&mut app, ring);
+        press_key(&mut app, KeyCode::KeyG);
+        let worn = app.world().resource::<Inventory>().location(ring);
+        assert!(matches!(worn, Some(crate::inventory::Location::Worn(fb_items::Slot::Ring1 | fb_items::Slot::Ring2))), "{worn:?}");
+        press_key(&mut app, KeyCode::KeyG);
+        let back = app.world().resource::<Inventory>().location(ring);
+        assert!(matches!(back, Some(crate::inventory::Location::In { container, .. }) if container == pack), "{back:?}");
+    }
+
+    #[test]
+    fn g_over_a_worn_item_with_a_full_pack_sets_it_down_underfoot() {
+        let (mut app, _) = app();
+        let ring = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let ring = inventory.add(item("Ring"));
+            inventory.wear(ring, fb_items::Slot::Ring1).unwrap();
+            ring
+        };
+        hover(&mut app, ring);
+        press_key(&mut app, KeyCode::KeyG);
+        assert_eq!(app.world().resource::<FloorChanges>().0, vec![crate::inventory::FloorChange::SetDown(ring, 0.0)]);
+        assert_eq!(app.world().resource::<Inventory>().location(ring), Some(crate::inventory::Location::Loose));
+    }
+
+    #[test]
+    fn g_over_a_good_that_cannot_be_worn_does_nothing() {
+        let (mut app, _) = app();
+        let bread = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
+        let before = app.world().resource::<Inventory>().location(bread);
+        hover(&mut app, bread);
+        press_key(&mut app, KeyCode::KeyG);
+        assert_eq!(app.world().resource::<Inventory>().location(bread), before);
+        assert!(app.world().resource::<FloorChanges>().0.is_empty());
+    }
+
+    #[test]
+    fn f_over_a_waterskin_drinks_a_swallow_and_keeps_the_skin() {
+        let (mut app, player) = app();
+        app.world_mut().get_mut::<DelverNeeds>(player).unwrap().0.thirst.value = 0.8;
+        let skin = carry(&mut app, "Waterskin");
+        hover(&mut app, skin);
+        press_u(&mut app);
+        let thirst = app.world().get::<DelverNeeds>(player).unwrap().0.thirst.value;
+        assert!((thirst - 0.55).abs() < 1e-6, "{thirst}");
+        assert!(app.world().resource::<Inventory>().item(skin).is_some());
+        assert_eq!(app.world().resource::<Toast>().text, "You drink from the waterskin");
+    }
+
+    #[test]
+    fn f_over_an_unlit_torch_lights_it() {
+        let (mut app, _) = app();
+        let torch = carry(&mut app, "Spare torch");
+        hover(&mut app, torch);
+        press_u(&mut app);
+        assert_eq!(app.world().resource::<Inventory>().item(torch).unwrap().shape.lit(), Some(true));
+        press_u(&mut app);
+        assert_eq!(app.world().resource::<Inventory>().item(torch).unwrap().shape.lit(), Some(false));
+    }
+
+    #[test]
+    fn f_over_a_tankard_quenches_thirst() {
+        let (mut app, player) = app();
+        app.world_mut().get_mut::<DelverNeeds>(player).unwrap().0.thirst.value = 0.8;
+        let tankard = carry(&mut app, "Tankard");
+        hover(&mut app, tankard);
+        press_u(&mut app);
+        assert!((app.world().get::<DelverNeeds>(player).unwrap().0.thirst.value - 0.3).abs() < 1e-6);
     }
 
     #[test]
     fn u_over_a_loaf_in_the_inventory_eats_it() {
         let (mut app, player) = app();
-        let loaf = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
-        let torch = app.world_mut().resource_mut::<Inventory>().add(item("Torch"));
+        let loaf = carry(&mut app, "Bread");
+        let torch = carry(&mut app, "Torch");
         // Over a torch: nothing happens.
         app.world_mut().resource_mut::<Hovered>().0 = Some((torch, Rect::default()));
         press_u(&mut app);
@@ -295,6 +464,99 @@ mod tests {
         let hunger = app.world().get::<DelverNeeds>(player).unwrap().0.hunger;
         assert!((hunger.value - 0.15).abs() < 1e-9, "{}", hunger.value);
         assert!(app.world().resource::<Toast>().text.starts_with("You eat the "), "{}", app.world().resource::<Toast>().text);
+    }
+
+    fn lying(app: &mut App, base: &str) -> ItemId {
+        app.world_mut().resource_mut::<Inventory>().add(item(base))
+    }
+
+    #[test]
+    fn f_over_a_dagger_underfoot_takes_it_into_the_pack() {
+        let (mut app, _) = app();
+        let bread = carry(&mut app, "Bread");
+        let pack = app.world().resource::<Inventory>().location(bread);
+        let dagger = lying(&mut app, "Dagger");
+        hover(&mut app, dagger);
+        press_u(&mut app);
+        let taken = app.world().resource::<Inventory>().location(dagger);
+        assert!(matches!((taken, pack), (Some(crate::inventory::Location::In { container, .. }), Some(crate::inventory::Location::In { container: bag, .. })) if container == bag), "{taken:?}");
+        assert_eq!(app.world().resource::<FloorChanges>().0, vec![crate::inventory::FloorChange::Lifted(dagger)]);
+    }
+
+    #[test]
+    fn f_over_underfoot_bread_takes_it_rather_than_eating_it() {
+        let (mut app, player) = app();
+        carry(&mut app, "Torch");
+        let bread = lying(&mut app, "Bread");
+        hover(&mut app, bread);
+        press_u(&mut app);
+        assert!(matches!(app.world().resource::<Inventory>().location(bread), Some(crate::inventory::Location::In { .. })));
+        assert!((app.world().get::<DelverNeeds>(player).unwrap().0.hunger.value - 0.55).abs() < 1e-9);
+    }
+
+    #[test]
+    fn f_with_no_room_leaves_the_item_underfoot_and_says_why() {
+        let (mut app, _) = app();
+        let dagger = lying(&mut app, "Dagger");
+        hover(&mut app, dagger);
+        press_u(&mut app);
+        assert_eq!(app.world().resource::<Inventory>().location(dagger), Some(crate::inventory::Location::Loose));
+        assert!(!app.world().resource::<Toast>().text.is_empty());
+    }
+
+    #[test]
+    fn f_over_an_item_in_a_set_down_bag_takes_it_into_the_pack() {
+        let (mut app, _) = app();
+        carry(&mut app, "Torch");
+        let (sack, dagger) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let sack = inventory.add(item("Sack"));
+            let dagger = inventory.add(item("Dagger"));
+            let at = inventory.grid(sack).and_then(|g| g.first_free(inventory.item(dagger).unwrap().profile.footprint)).unwrap();
+            inventory.put(dagger, sack, at).unwrap();
+            (sack, dagger)
+        };
+        hover(&mut app, dagger);
+        press_u(&mut app);
+        let taken = app.world().resource::<Inventory>().location(dagger);
+        assert!(matches!(taken, Some(crate::inventory::Location::In { container, .. }) if container != sack), "{taken:?}");
+    }
+
+    #[test]
+    fn g_over_a_helmet_underfoot_wears_it_and_sends_the_old_one_to_the_pack() {
+        let (mut app, _) = app();
+        carry(&mut app, "Torch");
+        let (old, new) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let old = inventory.add(item("Helm"));
+            inventory.wear(old, fb_items::Slot::Head).unwrap();
+            (old, inventory.add(item("Helm")))
+        };
+        hover(&mut app, new);
+        press_key(&mut app, KeyCode::KeyG);
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!(inventory.location(new), Some(crate::inventory::Location::Worn(fb_items::Slot::Head)));
+        assert!(matches!(inventory.location(old), Some(crate::inventory::Location::In { .. })), "{:?}", inventory.location(old));
+        assert!(app.world().resource::<Toast>().text.starts_with("Wearing "), "{}", app.world().resource::<Toast>().text);
+    }
+
+    #[test]
+    fn g_over_a_helmet_underfoot_with_a_full_pack_sets_the_old_one_down_where_it_lay() {
+        let (mut app, _) = app();
+        let (old, new) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let old = inventory.add(item("Helm"));
+            inventory.wear(old, fb_items::Slot::Head).unwrap();
+            (old, inventory.add(item("Helm")))
+        };
+        let shape = app.world().resource::<Inventory>().item(new).unwrap();
+        let spot = fb_level::ItemSpot { x: 3.0, y: 4.0, yaw: 0.5, family: shape.shape.family(), seed: shape.seed };
+        app.world_mut().spawn(FloorItem { id: new, spot, min: Vec3::ZERO, max: Vec3::ONE });
+        hover(&mut app, new);
+        press_key(&mut app, KeyCode::KeyG);
+        let changes = app.world().resource::<FloorChanges>().0.clone();
+        assert!(changes.contains(&crate::inventory::FloorChange::SetDownAt(old, Vec2::new(3.0, 4.0), 0.5)), "{changes:?}");
+        assert!(changes.contains(&crate::inventory::FloorChange::Lifted(new)), "{changes:?}");
     }
 
     fn hurt(hp: i32) -> Health {
@@ -355,7 +617,7 @@ mod tests {
         // A view for the flash to sit over.
         app.world_mut().spawn(crate::carry::ViewModelCamera { follows: Entity::PLACEHOLDER });
         app.update();
-        let draught = app.world_mut().resource_mut::<Inventory>().add(item("Healing draught"));
+        let draught = carry(&mut app, "Healing draught");
         app.world_mut().resource_mut::<Hovered>().0 = Some((draught, Rect::default()));
         press_u(&mut app);
         let hp = app.world().get::<Health>(player).unwrap().hp;
@@ -395,7 +657,7 @@ mod tests {
     fn a_draught_at_full_health_is_still_used_up_and_a_potion_is_a_mystery() {
         let (mut app, player) = app();
         app.world_mut().entity_mut(player).insert(Health::full(12));
-        let draught = app.world_mut().resource_mut::<Inventory>().add(item("Healing draught"));
+        let draught = carry(&mut app, "Healing draught");
         app.world_mut().resource_mut::<Hovered>().0 = Some((draught, Rect::default()));
         press_u(&mut app);
         assert!(app.world().resource::<Inventory>().item(draught).is_none());

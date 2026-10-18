@@ -152,6 +152,10 @@ min_cell_size = 48.0
 # Seconds the mouse rests on an item before its card shows.
 hover_delay = 0.0
 
+[input]
+# Seconds a key or button is held before a Hold binding fires. A press let go sooner is a tap.
+hold_time = 0.25
+
 [clock]
 # How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes).
 game_seconds_per_second = 12.0

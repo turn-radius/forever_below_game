@@ -271,6 +271,7 @@ fn cull_far(tuning: Res<Tuning>, players: Query<&Transform, With<Player>>, mut s
 }
 
 /// Now and then a living skeleton standing near enough rattles its bones.
+#[allow(clippy::type_complexity)]
 fn rattle_idle(
     mut commands: Commands,
     time: Res<Time>,

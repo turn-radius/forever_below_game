@@ -122,6 +122,7 @@ fn init_delver_steps(mut commands: Commands, new: Query<Entity, Added<Player>>) 
 /// Play footsteps for the delver: one per footfall of the gait, at the pace they walk. The
 /// delver stays on the floor (there is no jump, and a fall only slows them), so there is no
 /// airborne case.
+#[allow(clippy::too_many_arguments)]
 fn play_delver_steps(
     mut commands: Commands,
     sounds: Res<FootstepSounds>,
@@ -189,6 +190,7 @@ fn init_creature_steps(mut commands: Commands, new: Query<(Entity, &Critter, &Tr
 }
 
 /// Play spatial footsteps for creatures: rats step, snakes slither (no steps).
+#[allow(clippy::type_complexity)]
 fn play_creature_steps(
     mut commands: Commands,
     sounds: Res<FootstepSounds>,
@@ -257,7 +259,7 @@ fn play_creature_steps(
                 Name::new("creature step"),
                 AudioPlayer::new(clip),
                 settings.with_spatial(true),
-                transform.clone(),
+                *transform,
                 DespawnOnExit(AppState::Delving),
             ));
         }

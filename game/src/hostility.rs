@@ -35,7 +35,8 @@ impl Plugin for HostilityPlugin {
 }
 
 /// Whether a folk will fight the delver.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(Component)]
 pub enum Hostility {
     #[default]
     Friendly,

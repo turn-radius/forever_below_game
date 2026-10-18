@@ -30,7 +30,7 @@
 //!   down keeps its contents and the inventory screen can show what lies underfoot.
 //! - The crosshair's line picks the item or container in reach nearest it, within a small
 //!   buffer round it ([`nearest_aimed`], [`AimBuffer`]), as folk are picked ([`Aimed`]), which the
-//!   hover card describes (`crate::inventory::card`); E picks an item up into the inventory
+//!   hover card describes (`crate::inventory::card`); F picks an item up into the inventory
 //!   ([`Inventory::pick_up`]) and opens a container (`crate::props`). Things are set down from the
 //!   inventory screen ([`set_down`], [`drop_spot`]), and rest like any other floor item.
 //!
@@ -658,7 +658,7 @@ pub struct ViewModelCamera {
 
 /// A [`PlayerCamera`] that already has its torch and HUD.
 #[derive(Component, Debug)]
-struct Equipped;
+pub(crate) struct Equipped;
 
 /// The floor item, or container standing in the level (`crate::props`), under the crosshair
 /// and in reach, if any.
@@ -1327,7 +1327,7 @@ pub(crate) fn sway_held(
     }
 }
 
-fn aim(
+pub(crate) fn aim(
     tuning: Res<Tuning>,
     camera: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
     items: Query<(Entity, &GlobalTransform, &FloorItem)>,
@@ -1348,8 +1348,14 @@ fn aim(
     }
 }
 
-/// E picks up the item under the crosshair ([`Inventory::pick_up`]). Something with no room for
-/// it stays where it lies.
+/// What `slot` does to the floor item `id`, from the Interactable lookup ([`crate::interact`]).
+fn floor_verb(inventory: &Inventory, id: ItemId, slot: crate::interact::Slot) -> Option<crate::interact::Verb> {
+    let target = crate::interact::item_target(inventory, id)?;
+    crate::interact::verbs_for(&target, &crate::interact::Delver::default()).get(slot)
+}
+
+/// Primary takes the item under the crosshair if its verb is Take ([`Inventory::pick_up`]).
+/// Something with no room for it stays where it lies.
 pub(crate) fn pick_up(
     mut commands: Commands,
     input: ActionInput,
@@ -1358,11 +1364,14 @@ pub(crate) fn pick_up(
     mut inventory: ResMut<Inventory>,
     mut level: ResMut<CurrentLevel>,
 ) {
-    if !input.just_pressed(Action::PickUp) {
+    if !input.just_pressed(Action::Primary) {
         return;
     }
     let Some(entity) = aimed.0 else { return };
     let Ok(floor) = items.get(entity) else { return };
+    if floor_verb(&inventory, floor.id, crate::interact::Slot::Primary) != Some(crate::interact::Verb::Take) {
+        return;
+    }
     match inventory.pick_up(floor.id) {
         Ok(()) => {
             aimed.0 = None;
@@ -1372,7 +1381,7 @@ pub(crate) fn pick_up(
     }
 }
 
-/// F equips the item under the crosshair straight from the floor, without the inventory
+/// Secondary, if its verb is Equip, equips the item under the crosshair straight from the floor, without the inventory
 /// screen ([`equip_from_floor`]): into its slot, a hand or a free ring slot, swapping out what
 /// was there into a bag, or onto the floor where the new item lay. The toast says what
 /// happened, or why not.
@@ -1386,10 +1395,13 @@ pub(crate) fn equip_aimed(
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
 ) {
-    if !input.just_pressed(Action::EquipAimed) {
+    if !input.just_pressed(Action::Secondary) {
         return;
     }
     let Some(floor) = aimed.0.and_then(|entity| items.get(entity).ok()) else { return };
+    if floor_verb(&inventory, floor.id, crate::interact::Slot::Secondary) != Some(crate::interact::Verb::Equip) {
+        return;
+    }
     let now = time.map_or(0.0, |t| t.elapsed_secs());
     match equip_from_floor(&mut inventory, floor.id, Vec2::new(floor.spot.x, floor.spot.y), floor.spot.yaw) {
         Ok(equipped) => {
@@ -1953,7 +1965,7 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(app.world().resource::<Aimed>().0, Some(dropped));
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
         app.update();
         let inventory = app.world().resource::<Inventory>();
         assert!(matches!(inventory.location(id), Some(crate::inventory::Location::In { container, .. }) if container == pack));
@@ -1974,8 +1986,8 @@ mod tests {
         app.world_mut().spawn((PlayerCamera, Equipped, eye, GlobalTransform::from(eye)));
         app.update();
         assert_eq!(app.world().resource::<Aimed>().0, Some(chest));
-        // E picks nothing up: the chest is never carried off (`crate::props` opens it).
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        // F picks nothing up: the chest is never carried off (`crate::props` opens it).
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
         app.update();
         assert!(app.world().get_entity(chest).is_ok());
         assert_eq!(app.world().resource::<Inventory>().location(id), Some(crate::inventory::Location::Loose));
@@ -2007,11 +2019,11 @@ mod tests {
         (entity, id, spot)
     }
 
-    fn press_f(app: &mut App) {
+    fn press_g(app: &mut App) {
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        keys.release(KeyCode::KeyF);
+        keys.release(KeyCode::KeyG);
         keys.clear();
-        keys.press(KeyCode::KeyF);
+        keys.press(KeyCode::KeyG);
         app.update();
     }
 
@@ -2031,7 +2043,7 @@ mod tests {
         let character = Character::default();
         let before = HeldKey::of(app.world().resource::<Inventory>(), &character);
         let (entity, sword, _) = lay_ahead(&mut app, fb_items::roll_item("Sword", 3).unwrap());
-        press_f(&mut app);
+        press_g(&mut app);
         let inventory = app.world().resource::<Inventory>();
         assert_eq!(inventory.worn(Slot::Mainhand), Some(sword));
         assert!(matches!(inventory.location(mace), Some(crate::inventory::Location::In { container, .. }) if container == pack));
@@ -2055,7 +2067,7 @@ mod tests {
             sword
         };
         let (_, dagger, _) = lay_ahead(&mut app, fb_items::roll_item("Dagger", 4).unwrap());
-        press_f(&mut app);
+        press_g(&mut app);
         let inventory = app.world().resource::<Inventory>();
         assert_eq!((inventory.worn(Slot::Mainhand), inventory.worn(Slot::Offhand)), (Some(sword), Some(dagger)));
         let toast = &app.world().resource::<Toast>().text;
@@ -2075,7 +2087,7 @@ mod tests {
             old
         };
         let (_, new, spot) = lay_ahead(&mut app, fb_items::roll_item("Helm", 9).unwrap());
-        press_f(&mut app);
+        press_g(&mut app);
         let inventory = app.world().resource::<Inventory>();
         assert_eq!(inventory.worn(Slot::Head), Some(new));
         assert_eq!(inventory.location(old), Some(crate::inventory::Location::Loose));
@@ -2090,14 +2102,40 @@ mod tests {
     }
 
     #[test]
-    fn f_on_something_with_no_slot_does_nothing_and_says_so() {
+    fn g_on_something_with_no_slot_does_nothing() {
         let (mut app, _) = equipping_app();
         let (entity, bread, _) = lay_ahead(&mut app, fb_items::roll_item("Bread", 1).unwrap());
-        press_f(&mut app);
+        press_g(&mut app);
         assert!(app.world().get_entity(entity).is_ok());
         assert_eq!(app.world().resource::<Inventory>().location(bread), Some(crate::inventory::Location::Loose));
         assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), 1);
-        assert_eq!(app.world().resource::<Toast>().text, crate::inventory::Refusal::NotWearable.reason());
+        assert_eq!(app.world().resource::<Toast>().text, "");
+    }
+
+    #[test]
+    fn tertiary_and_special_do_nothing_to_an_item_and_nothing_aimed_does_nothing() {
+        let (mut app, _) = equipping_app();
+        let (entity, sword, _) = lay_ahead(&mut app, fb_items::roll_item("Shortsword", 1).or_else(|| fb_items::roll_item("Dagger", 1)).unwrap());
+        for key in [KeyCode::KeyR, KeyCode::KeyT] {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.update();
+        }
+        assert!(app.world().get_entity(entity).is_ok());
+        assert_eq!(app.world().resource::<Inventory>().location(sword), Some(crate::inventory::Location::Loose));
+        // Looking away, F and G have nothing to act on either.
+        let camera = app.world_mut().query_filtered::<Entity, With<PlayerCamera>>().single(app.world()).unwrap();
+        *app.world_mut().get_mut::<Transform>(camera).unwrap() = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, EYE_HEIGHT, 10.0), Vec3::Y);
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Aimed>().0, None);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        for key in [KeyCode::KeyF, KeyCode::KeyG] {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        }
+        app.update();
+        app.update();
+        assert!(app.world().get_entity(entity).is_ok());
+        assert_eq!(app.world().resource::<Inventory>().location(sword), Some(crate::inventory::Location::Loose));
     }
 
     #[test]
@@ -2181,7 +2219,7 @@ mod tests {
 
         app.update();
         assert_eq!(app.world().resource::<Aimed>().0, Some(floor));
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
         app.update();
         assert!(app.world().get_entity(floor).is_err());
         let inventory = app.world().resource::<Inventory>();
@@ -2231,7 +2269,6 @@ mod tests {
 
     #[test]
     fn grip_point_stays_at_hand_regardless_of_held_scale() {
-        use fb_items::Slot;
         let spec = Character::default().spec();
         let sword = (1..400).filter_map(|s| fb_items::roll_item("Sword", s)).find(|i| i.shape.family() == Family::Sword).unwrap().shape;
         let torch = lit_torch(1207).shape;

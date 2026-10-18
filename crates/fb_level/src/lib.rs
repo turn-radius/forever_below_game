@@ -3,7 +3,7 @@
 //! One level of the abyss as plain data: a grid of cells, where the player comes in, the door
 //! that shuts behind them, where items and lights lie, who stands about and what lurks there.
 //! `generate(seed, depth)` is a pure function of the seed and depth, like every generator
-//! here, so a level is the same on every machine.
+//! here, so a level is the same every time on a platform.
 //!
 //! Grid coordinates: `x` runs east, `y` runs south, one cell is [`CELL`] world units (1 unit =
 //! 10 cm). World position of a cell's centre is `(x + 0.5) * CELL, 0, (y + 0.5) * CELL`, with

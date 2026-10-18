@@ -195,7 +195,7 @@ struct Skin<'a> {
 /// `mesh` turned to face along `out`.
 fn faced(mut mesh: MeshBuilder, out: V3) -> MeshBuilder {
     let mut sum = 0.0;
-    for t in mesh.indices.chunks_exact(3) {
+    for t in mesh.indices.as_chunks::<3>().0 {
         let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
         let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
         let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
@@ -219,6 +219,7 @@ fn strip_on(sk: &Skin, a0: f32, a1: f32, b: impl Fn(f32) -> f32, width: f32, seg
 }
 
 /// An irregular patch about `(ca, cb)`, `rx` by `rz` big.
+#[allow(clippy::too_many_arguments)]
 fn patch(sk: &Skin, ca: f32, cb: f32, rx: f32, rz: f32, wobble: f32, phase: f32, eps: f32) -> MeshBuilder {
     const COLS: usize = 18;
     let rows: Vec<Vec<V3>> = [0.0f32, 0.4, 0.75, 1.0]

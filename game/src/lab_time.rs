@@ -394,8 +394,7 @@ mod tests {
     fn a_night_of_sleep_removes_a_level_and_the_lab_logs_it() {
         let mut state = bare();
         state.activity = Activity::Sleeping;
-        let mut lab = TimeLab::default();
-        lab.exhaustion = Exhaustion::new(1);
+        let mut lab = TimeLab { exhaustion: Exhaustion::new(1), ..Default::default() };
         lab.pass(&state, 7.0);
         assert_eq!(lab.exhaustion.level, 1, "not before 8 hours");
         lab.pass(&state, 1.0);

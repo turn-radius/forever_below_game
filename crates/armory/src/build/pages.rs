@@ -35,7 +35,7 @@ pub fn leaf_stack(spec: &LeafStack, side: f32, reach: &dyn Fn(usize) -> f32, sha
     let rows = spec.rows.max(2);
     for i in 0..spec.count {
         let f = i as f32;
-        let n = |k: f32| value_noise3([f * 0.83 + k, k * 1.7, 0.4], spec.seed ^ 0x0b00_c5);
+        let n = |k: f32| value_noise3([f * 0.83 + k, k * 1.7, 0.4], spec.seed ^ 0x000b_00c5);
         let trim_len = spec.uneven * 0.012 * n(0.0);
         let bite = if n(7.0) > 0.82 { 0.02 } else { 0.0 };
         let trim_u = spec.uneven * (0.022 * n(3.0) + bite);

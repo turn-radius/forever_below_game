@@ -115,9 +115,7 @@ impl SkeletonGear {
             }
             let (arm, frame) = arm_stance(rest, posed, side);
             let b = arm_bone(side);
-            for j in 0..3 {
-                frames[b + j] = frame[j];
-            }
+            frames[b..b + 3].copy_from_slice(&frame[..3]);
             stance[k] = Some(arm);
             grips[k] = Some(posed.hand_pose(side));
             let hand = frame[2];
@@ -444,6 +442,7 @@ fn distance_to_segment(p: V3, a: V3, b: V3) -> (f32, f32) {
 /// to, each in that bone's own space (`frames` gives every bone's place in body space). A
 /// triangle near a seam is also given to the neighbouring bone, sunk a little under the surface,
 /// so the pieces overlap there.
+#[allow(clippy::type_complexity)]
 fn cut_part(part: &Part, bones_for: impl Fn(V3) -> (usize, Option<usize>), frames: &[(V3, Mat3)]) -> Vec<(usize, Part)> {
     // Per bone: the triangles it owns, then the triangles it laps.
     let mut groups: Vec<(usize, Vec<[u32; 3]>, Vec<[u32; 3]>)> = Vec::new();
@@ -457,7 +456,7 @@ fn cut_part(part: &Part, bones_for: impl Fn(V3) -> (usize, Option<usize>), frame
         };
         if lap { groups[at].2.push(tri) } else { groups[at].1.push(tri) }
     };
-    for tri in part.indices.chunks_exact(3) {
+    for tri in part.indices.as_chunks::<3>().0 {
         let tri = [tri[0], tri[1], tri[2]];
         let corners = tri.map(|i| part.positions[i as usize]);
         // A sliver that closing in collapsed has no surface to show, only an outline spike.
@@ -511,7 +510,7 @@ mod tests {
         let mut out = Vec::new();
         for part in &mesh.parts {
             out.extend(part.positions.iter().copied());
-            for tri in part.indices.chunks_exact(3) {
+            for tri in part.indices.as_chunks::<3>().0 {
                 for (a, b) in [(0, 1), (1, 2), (2, 0)] {
                     out.push(vec3::lerp(part.positions[tri[a] as usize], part.positions[tri[b] as usize], 0.5));
                 }
@@ -831,7 +830,7 @@ mod tests {
     fn dense(mesh: &ItemMesh) -> Vec<V3> {
         let mut out = points(mesh);
         for part in &mesh.parts {
-            for tri in part.indices.chunks_exact(3) {
+            for tri in part.indices.as_chunks::<3>().0 {
                 let corners = [0, 1, 2].map(|k| part.positions[tri[k] as usize]);
                 let centre = vec3::centroid(&corners);
                 out.push(centre);

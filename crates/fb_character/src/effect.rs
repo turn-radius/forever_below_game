@@ -254,11 +254,10 @@ impl Effects {
         }
         // Effects an exposure began during the step, that already show.
         for a in &self.active {
-            if !before.iter().any(|(id, part, _)| *id == a.id && *part == a.part) {
-                if let Some(now) = word(a) {
+            if !before.iter().any(|(id, part, _)| *id == a.id && *part == a.part)
+                && let Some(now) = word(a) {
                     changes.push(StageChange { id: a.id.clone(), part: a.part, was: None, now: Some(now) });
                 }
-            }
         }
         changes
     }

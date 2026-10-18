@@ -79,7 +79,7 @@ impl Plugin for SoakPlugin {
         let seed = std::env::var("FB_SOAK_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
         app.insert_resource(Soak::new(self.seconds, self.churn_icons, seed))
             .init_resource::<RenderCounts>()
-            .add_systems(PreUpdate, (start_from_title.run_if(in_state(AppState::Title)), drive.run_if(in_state(AppState::Delving))).after(InputSystems))
+            .add_systems(PreUpdate, (start_from_title.run_if(in_state(AppState::Title)), drive.run_if(in_state(AppState::Delving))).after(InputSystems).before(crate::keymap::HoldSet))
             .add_systems(Update, act.run_if(in_state(AppState::Delving)))
             .add_systems(Last, report);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {

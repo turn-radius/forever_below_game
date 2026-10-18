@@ -40,8 +40,11 @@ pub struct CardText {
     pub stats: Vec<String>,
     /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
     pub light: Option<String>,
-    /// What U does with food or drink: "U eats it \u{b7} eases hunger 40%".
+    /// What food or drink eases: "Eases hunger 40%".
     pub consume: Option<String>,
+    /// The keys and verbs at the foot, from [`crate::interact::key_actions`]: ("F", "Take").
+    /// [`card_text`] leaves it empty; [`show_card`] fills it from the keymap and the item's place.
+    pub actions: Vec<(String, &'static str)>,
     /// A legendary's three lines of history.
     pub history: Vec<String>,
 }
@@ -68,18 +71,17 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
     Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
 }
 
-/// What U does with food or drink, and how much it eases: "U eats it \u{b7} eases hunger 40%".
-/// `None` for anything that is not eaten or drunk.
+/// How much food or drink eases: "Eases hunger 40%". `None` for anything that is not eaten or
+/// drunk, or eases nothing; the key that eats it is in the card's actions.
 pub fn consume_line(item: &Item) -> Option<String> {
-    let how = item.consume()?;
+    item.consume()?;
     let p = item.provision()?;
-    let mut line = format!("U {}s it", how.past());
-    for (meter, by) in [("hunger", p.nutrition), ("thirst", p.water)] {
-        if by > 0.0 {
-            line.push_str(&format!(" \u{b7} eases {meter} {}%", (by * 100.0).round()));
-        }
-    }
-    Some(line)
+    let eases: Vec<String> = [("hunger", p.nutrition), ("thirst", p.water)]
+        .into_iter()
+        .filter(|(_, by)| *by > 0.0)
+        .map(|(meter, by)| format!("{meter} {}%", (by * 100.0).round()))
+        .collect();
+    (!eases.is_empty()).then(|| format!("Eases {}", eases.join(" \u{b7} ")))
 }
 
 /// Burning time left as the card writes it, in game hours and minutes: "Fuel 0:42".
@@ -155,6 +157,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         stats: stat_lines(s),
         light: light_line(&item.shape),
         consume: consume_line(item),
+        actions: Vec::new(),
         history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()),
     }
 }
@@ -224,20 +227,32 @@ pub fn swap_changes(new: &Item, old: Option<&Item>) -> Vec<Change> {
     lines
 }
 
-/// What an item that can be worn is compared with: the slot it would go in, and what is worn
-/// there. That is the first of its slots ([`Item::slots`]) with something in it, so a sword
-/// is held up against the main hand's weapon and a ring against a worn ring; with all its
-/// slots empty, the one it would be worn in. `None` for goods and for what is already worn.
-pub fn compare_with(inventory: &Inventory, id: ItemId) -> Option<(Slot, Option<ItemId>)> {
+/// The slots an item is held up against, in the order Shift steps through them: its own
+/// ([`Item::slots`]), and for a torch the hip too, where a lantern may hang. A torch cannot
+/// hang there, but what lights the way is worth weighing against it.
+fn compare_slots(item: &Item) -> Vec<Slot> {
+    let mut slots = item.slots();
+    if item.shape.family() == armory::Family::Torch && !slots.contains(&Slot::Hip) {
+        slots.push(Slot::Hip);
+    }
+    slots
+}
+
+/// What an item that can be worn is compared with: a slot it fits, and what is worn there.
+/// `step` 0 is the first of its slots with something in it, so a sword is held up against the
+/// main hand's weapon and a ring against a worn ring; with all its slots empty, the one it
+/// would be worn in. Each step on is the next of its slots after that, wrapping round. `None`
+/// for goods and for what is already worn.
+pub fn compare_with(inventory: &Inventory, id: ItemId, step: usize) -> Option<(Slot, Option<ItemId>)> {
     let item = inventory.item(id)?;
     item.profile.slot?;
     if matches!(inventory.location(id), Some(Location::Worn(_))) {
         return None;
     }
-    if let Some((slot, worn)) = item.slots().into_iter().find_map(|slot| Some((slot, inventory.worn(slot)?))) {
-        return Some((slot, Some(worn)));
-    }
-    Some((inventory.target_slot(id)?, None))
+    let slots = compare_slots(item);
+    let first = slots.iter().position(|&slot| inventory.worn(slot).is_some()).or_else(|| slots.iter().position(|&slot| Some(slot) == inventory.target_slot(id)))?;
+    let slot = slots[(first + step) % slots.len()];
+    Some((slot, inventory.worn(slot)))
 }
 
 /// The slot's name as the doll labels it.
@@ -413,6 +428,8 @@ fn card_frame(camera: Entity) -> impl Bundle {
 /// changes under it.
 struct Comparison<'a> {
     banner: &'a str,
+    /// Names the hovered item, so the changes read as what it gives over what is worn.
+    heading: &'a str,
     changes: &'a [Change],
 }
 
@@ -433,7 +450,7 @@ fn fill_card(commands: &mut Commands, card: Entity, shown: Option<(&Item, &CardT
                 BorderColor::all(FAINT),
             ))
             .with_children(|list| {
-                list.spawn((Text::new("Wearing this instead"), UiFonts::style(&fonts.body_italic, 13.5, MUTED)));
+                list.spawn((Text::new(comparison.heading.to_string()), UiFonts::style(&fonts.body_italic, 13.5, GOLD)));
                 if comparison.changes.is_empty() {
                     list.spawn((Text::new("No change"), UiFonts::style(&fonts.mono, 13.0, MUTED)));
                 }
@@ -487,6 +504,17 @@ fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, font
             }
             if let Some(consume) = &text.consume {
                 info.spawn((Text::new(consume.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
+            }
+            if !text.actions.is_empty() {
+                info.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(6), margin: UiRect::top(px(2)), ..default() }).with_children(|row| {
+                    for (n, (key, name)) in text.actions.iter().enumerate() {
+                        let sep = if n == 0 { "" } else { "\u{b7} " };
+                        row.spawn((Text::new(format!("{sep}{key} ")), UiFonts::style(&fonts.mono, 12.0, GOLD))).with_child((
+                            TextSpan::new(*name),
+                            UiFonts::style(&fonts.body_medium, 14.0, INK),
+                        ));
+                    }
+                });
             }
             if !text.history.is_empty() {
                 info.spawn((
@@ -553,17 +581,22 @@ pub fn show_card(
     floor: Query<&crate::carry::FloorItem>,
     containers: Query<&crate::props::Container>,
     inventory: Res<Inventory>,
+    keymap: Option<Res<crate::keymap::Keymap>>,
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
-    tuning: Option<Res<crate::tuning::Tuning>>,
-    time: Option<Res<Time<Real>>>,
+    (tuning, time): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>),
     mut shown: Local<Option<ItemId>>,
     mut hovered_since: Local<Option<(ItemId, f32)>>,
     mut on_screen: ResMut<ShownCard>,
 ) {
     on_screen.set_if_neq(ShownCard(None));
-    let aimed_item = aimed.and_then(|a| a.0).and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
+    let aimed_entity = aimed.and_then(|a| a.0);
+    let aimed_item = aimed_entity.and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
+    // A container under the crosshair has its own prompt (`crate::props`), so its card lists no
+    // keys. Only the crosshair's card: the crosshair still holds the container after the screen
+    // opens on it, and the cards of the items in the screen are theirs.
+    let aimed_container = aimed_entity.is_some_and(|entity| containers.contains(entity));
     // No card over the menu.
     let subject = if open.is(Screen::Menu) { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
     let delay = tuning.map_or(0.0, |t| t.interface.hover_delay);
@@ -574,9 +607,18 @@ pub fn show_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(id) || inventory.is_changed() {
+        if *shown != Some(id) || inventory.is_changed() || keymap.as_ref().is_some_and(|k| k.is_changed()) {
             let item = inventory.item(id).expect("checked above");
-            fill_card(&mut commands, card, Some((item, &card_text(item, Some((&inventory, id))))), None, &fonts, &mut icons);
+            let fallback = crate::keymap::Keymap::default();
+            let keymap = keymap.as_deref().unwrap_or(&fallback);
+            let mut text = card_text(item, Some((&inventory, id)));
+            if !(aimed_container && matches!(anchor, CardAnchor::Crosshair))
+                && let Some(target) = crate::interact::item_target(&inventory, id)
+            {
+                let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
+                text.actions = crate::interact::key_actions(keymap, &verbs);
+            }
+            fill_card(&mut commands, card, Some((item, &text)), None, &fonts, &mut icons);
             *shown = Some(id);
             *visibility = Visibility::Hidden;
             continue;
@@ -594,9 +636,22 @@ pub fn show_card(
     }
 }
 
+/// How many times Shift has stepped the comparison of the `hovered` item on, kept in
+/// `stepped` with the item it is for. Shift counts only while Alt is held (`comparing`), and
+/// another item, or letting go of Alt, starts again.
+fn compare_step(stepped: &mut (Option<ItemId>, usize), hovered: Option<ItemId>, comparing: bool, shift: bool) -> usize {
+    if !comparing || stepped.0 != hovered {
+        *stepped = (hovered, 0);
+    } else if shift {
+        stepped.1 += 1;
+    }
+    stepped.1
+}
+
 /// Shows, fills and places the compare card beside the hover card while [`Action::Compare`]
-/// is held over something that can be worn ([`compare_with`]). Like the hover card, one
-/// filled this frame waits a frame to be measured.
+/// is held over something that can be worn ([`compare_with`]), Shift stepping on to the next
+/// slot it fits. Like the hover card,
+/// one filled this frame waits a frame to be measured.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn show_compare(
     mut commands: Commands,
@@ -607,11 +662,15 @@ pub fn show_compare(
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<CompareCard>>,
     mut shown: Local<Option<(ItemId, Slot, Option<ItemId>)>>,
+    // The item the step is for, and how many times Shift has stepped on from its first slot.
+    mut stepped: Local<(Option<ItemId>, usize)>,
 ) {
+    let comparing = input.pressed(Action::Compare) || compare_forced();
+    let step = compare_step(&mut stepped, on_screen.0.map(|(id, ..)| id), comparing, input.just_pressed(Action::Sprint));
     let subject = on_screen
         .0
-        .filter(|_| input.pressed(Action::Compare) || compare_forced())
-        .and_then(|(id, card, beside)| Some((id, compare_with(&inventory, id)?, card, beside)));
+        .filter(|_| comparing)
+        .and_then(|(id, card, beside)| Some((id, compare_with(&inventory, id, step)?, card, beside)));
     for (entity, mut node, mut visibility, computed, target) in &mut cards {
         let Some((id, (slot, worn), card, beside)) = subject else {
             *visibility = Visibility::Hidden;
@@ -624,7 +683,8 @@ pub fn show_compare(
             let text = old.map(|old| (old, card_text(old, worn.map(|w| (&*inventory, w)))));
             let banner = compare_banner(slot, old.is_some());
             let changes = swap_changes(new, old);
-            let comparison = Comparison { banner: &banner, changes: &changes };
+            let heading = format!("Swapping in the {}", new.title());
+            let comparison = Comparison { banner: &banner, heading: &heading, changes: &changes };
             fill_card(&mut commands, entity, text.as_ref().map(|(item, text)| (*item, text)), Some(comparison), &fonts, &mut icons);
             *shown = Some((id, slot, worn));
             *visibility = Visibility::Hidden;
@@ -766,6 +826,54 @@ mod tests {
     }
 
     #[test]
+    fn changes_are_what_the_new_thing_gives_over_the_old() {
+        let worse = Stats {
+            armour: 1.0, warmth: 1.0, light: 20.0, to_hit: 1.0, carry: 10.0, darkvision: 30.0, weight: 3.0, burn_time: 1.0, break_chance: 0.1, ..Stats::default()
+        };
+        let better = Stats {
+            armour: 2.0, warmth: 2.0, light: 30.0, to_hit: 2.0, carry: 15.0, darkvision: 60.0, weight: 2.0, burn_time: 2.0, break_chance: 0.05, ..Stats::default()
+        };
+        let text = |c: &[Change]| c.iter().map(|c| (c.text.clone(), c.better)).collect::<Vec<_>>();
+        // The better thing over the worse: gains read plus and green, less weight and breakage minus and green.
+        assert_eq!(
+            text(&changes(&better, Some(&worse))),
+            vec![
+                ("+1 armour".into(), true),
+                ("+1 warmth".into(), true),
+                ("+10 ft light".into(), true),
+                ("+1 to hit".into(), true),
+                ("+5 lb carry".into(), true),
+                ("+30 ft darkvision".into(), true),
+                ("+1\u{d7} burn time".into(), true),
+                ("\u{2212}5% chance to break".into(), true),
+                ("\u{2212}1 lb weight".into(), true),
+            ]
+        );
+        // And the other way round, every line flips both sign and colour.
+        assert_eq!(
+            text(&changes(&worse, Some(&better))),
+            vec![
+                ("\u{2212}1 armour".into(), false),
+                ("\u{2212}1 warmth".into(), false),
+                ("\u{2212}10 ft light".into(), false),
+                ("\u{2212}1 to hit".into(), false),
+                ("\u{2212}5 lb carry".into(), false),
+                ("\u{2212}30 ft darkvision".into(), false),
+                ("\u{2212}1\u{d7} burn time".into(), false),
+                ("+5% chance to break".into(), false),
+                ("+1 lb weight".into(), false),
+            ]
+        );
+        // Items: the hovered +2 helmet over the worn +1 one reads "+1 armour", green.
+        let mut worn = fb_items::roll_item("Helm", 3).unwrap();
+        let mut hovered = worn.clone();
+        worn.profile.stats.armour = 1.0;
+        hovered.profile.stats.armour = 2.0;
+        assert_eq!(swap_changes(&hovered, Some(&worn)), vec![Change { text: "+1 armour".into(), better: true }]);
+        assert_eq!(swap_changes(&worn, Some(&hovered)), vec![Change { text: "\u{2212}1 armour".into(), better: false }]);
+    }
+
+    #[test]
     fn wearable_things_compare_with_what_is_worn_in_their_place() {
         let mut inventory = Inventory::default();
         let roll = |base| fb_items::roll_item(base, 11).unwrap();
@@ -773,23 +881,69 @@ mod tests {
         let other_helm = inventory.add(roll("Helm"));
         let bread = inventory.add(roll("Bread"));
         // Nothing on the head yet: compared with the empty slot.
-        assert_eq!(compare_with(&inventory, helm), Some((Slot::Head, None)));
+        assert_eq!(compare_with(&inventory, helm, 0), Some((Slot::Head, None)));
         inventory.wear(helm, Slot::Head).unwrap();
-        assert_eq!(compare_with(&inventory, other_helm), Some((Slot::Head, Some(helm))));
-        assert_eq!(compare_with(&inventory, helm), None, "what is worn has nothing to compare with");
-        assert_eq!(compare_with(&inventory, bread), None, "goods are not worn");
+        assert_eq!(compare_with(&inventory, other_helm, 0), Some((Slot::Head, Some(helm))));
+        assert_eq!(compare_with(&inventory, helm, 0), None, "what is worn has nothing to compare with");
+        assert_eq!(compare_with(&inventory, bread, 0), None, "goods are not worn");
         // A second ring is held up against the worn one, not the empty ring slot.
         let ring = inventory.add(roll("Ring"));
         let other_ring = inventory.add(roll("Ring"));
         inventory.wear(ring, Slot::Ring2).unwrap();
-        assert_eq!(compare_with(&inventory, other_ring), Some((Slot::Ring2, Some(ring))));
+        assert_eq!(compare_with(&inventory, other_ring, 0), Some((Slot::Ring2, Some(ring))));
         // A weapon against the main hand's.
         let sword = inventory.add(roll("Sword"));
         let mace = inventory.add(roll("Mace"));
         inventory.wear(mace, Slot::Mainhand).unwrap();
-        assert_eq!(compare_with(&inventory, sword), Some((Slot::Mainhand, Some(mace))));
+        assert_eq!(compare_with(&inventory, sword, 0), Some((Slot::Mainhand, Some(mace))));
         assert_eq!(compare_banner(Slot::Head, true), format!("Worn \u{b7} {}", slot_label(Slot::Head)));
         assert!(compare_banner(Slot::Head, false).starts_with("Nothing worn \u{b7} "));
+    }
+
+    #[test]
+    fn shift_steps_the_comparison_on_through_the_slots_an_item_fits() {
+        let mut inventory = Inventory::default();
+        let roll = |base| fb_items::roll_item(base, 11).unwrap();
+        // A torch in the pack, a torch in the off hand and a lantern at the hip.
+        let belt = inventory.add(roll("Belt"));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let lantern = inventory.add(roll("Lantern"));
+        inventory.wear(lantern, Slot::Hip).unwrap();
+        let held = inventory.add(roll("Torch"));
+        inventory.wear(held, Slot::Offhand).unwrap();
+        let spare = inventory.add(roll("Torch"));
+        assert_eq!(compare_with(&inventory, spare, 0), Some((Slot::Offhand, Some(held))));
+        assert_eq!(compare_with(&inventory, spare, 1), Some((Slot::Hip, Some(lantern))));
+        assert_eq!(compare_with(&inventory, spare, 2), Some((Slot::Offhand, Some(held))), "wraps round");
+        // Nothing at the hip: the banner says so.
+        inventory.take_out(lantern);
+        assert_eq!(compare_with(&inventory, spare, 1), Some((Slot::Hip, None)));
+        // Both ring fingers worn: the first ring, then the second.
+        let (ring1, ring2, third) = (inventory.add(roll("Ring")), inventory.add(roll("Ring")), inventory.add(roll("Ring")));
+        inventory.wear(ring1, Slot::Ring1).unwrap();
+        inventory.wear(ring2, Slot::Ring2).unwrap();
+        assert_eq!(compare_with(&inventory, third, 0), Some((Slot::Ring1, Some(ring1))));
+        assert_eq!(compare_with(&inventory, third, 1), Some((Slot::Ring2, Some(ring2))));
+        assert_eq!(compare_with(&inventory, third, 2), Some((Slot::Ring1, Some(ring1))));
+        // One slot only: every step shows the head.
+        let helm = inventory.add(roll("Helm"));
+        let other = inventory.add(roll("Helm"));
+        inventory.wear(helm, Slot::Head).unwrap();
+        assert_eq!([0, 1, 2].map(|step| compare_with(&inventory, other, step)), [Some((Slot::Head, Some(helm))); 3]);
+    }
+
+    #[test]
+    fn shift_with_alt_steps_on_and_a_new_item_starts_again() {
+        let mut stepped: (Option<ItemId>, usize) = (None, 0);
+        let mut step = |hovered: Option<u32>, comparing, shift| compare_step(&mut stepped, hovered.map(ItemId), comparing, shift);
+        assert_eq!(step(Some(1), true, false), 0);
+        assert_eq!(step(Some(1), true, true), 1);
+        assert_eq!(step(Some(1), true, false), 1, "the step stays while Alt is held");
+        assert_eq!(step(Some(1), true, true), 2);
+        assert_eq!(step(Some(2), true, true), 0, "another item starts at its first slot");
+        assert_eq!(step(Some(2), false, true), 0, "Shift alone does not step");
+        assert_eq!(step(Some(2), true, true), 1);
+        assert_eq!(step(Some(2), false, false), 0, "letting go of Alt starts again");
     }
 
     #[test]
@@ -845,12 +999,123 @@ mod tests {
     }
 
     #[test]
-    fn food_and_drink_cards_say_what_u_does() {
+    fn food_and_drink_cards_say_what_they_ease() {
         let line = |base: &str| consume_line(&fb_items::roll_item(base, 3).unwrap());
-        assert_eq!(line("Bread").unwrap(), "U eats it \u{b7} eases hunger 40%");
-        assert_eq!(line("Tankard").unwrap(), "U drinks it \u{b7} eases thirst 50%");
-        assert_eq!(line("Healing draught").unwrap(), "U drinks it");
+        assert_eq!(line("Bread").unwrap(), "Eases hunger 40%");
+        assert_eq!(line("Tankard").unwrap(), "Eases thirst 50%");
+        assert_eq!(line("Healing draught"), None);
         assert_eq!(line("Torch"), None);
+    }
+
+    #[test]
+    fn the_foot_of_a_card_lists_its_keys() {
+        use crate::interact::{Delver, key_line, verbs_for};
+        let mut inventory = Inventory::default();
+        let dagger = inventory.add(fb_items::roll_item("Dagger", 7).unwrap());
+        let bread = inventory.add(fb_items::roll_item("Bread", 3).unwrap());
+        let keymap = crate::keymap::Keymap::default();
+        let line = |inventory: &Inventory, id| {
+            let target = crate::interact::item_target(inventory, id).unwrap();
+            key_line(&keymap, &verbs_for(&target, &Delver::default()))
+        };
+        assert_eq!(line(&inventory, dagger), "F Take \u{b7} G Equip \u{b7} Alt Compare");
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        inventory.stow(bread).unwrap();
+        assert_eq!(line(&inventory, bread), "F Eat");
+    }
+
+    #[test]
+    fn a_shown_card_follows_a_rebinding() {
+        use crate::keymap::{Action, Input, Keymap};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Keymap>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<Hovered>()
+            .init_resource::<Dragging>()
+            .init_resource::<ShownCard>()
+            .init_resource::<UiFonts>()
+            .init_resource::<crate::inventory::icon::IconCache>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(Inventory::default())
+            .add_systems(Update, show_card);
+        let dagger = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Bread", 3).unwrap());
+        app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<Hovered>().0 = Some((dagger, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        let keys = |app: &mut App| {
+            let mut texts = app.world_mut().query::<&Text>();
+            texts.iter(app.world()).map(|t| t.0.clone()).collect::<Vec<_>>()
+        };
+        app.update();
+        app.update();
+        assert!(keys(&mut app).iter().any(|t| t == "F "), "{:?}", keys(&mut app));
+        let mut keymap = app.world_mut().resource_mut::<Keymap>();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
+        app.update();
+        app.update();
+        let texts = keys(&mut app);
+        assert!(texts.iter().any(|t| t == "E "), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "F "), "{texts:?}");
+    }
+
+    /// The text of every node in the world, for the card's keys.
+    fn card_texts(app: &mut App) -> Vec<String> {
+        let mut texts = app.world_mut().query::<&Text>();
+        let mut spans = app.world_mut().query::<&TextSpan>();
+        let mut all: Vec<String> = texts.iter(app.world()).map(|t| t.0.clone()).collect();
+        all.extend(spans.iter(app.world()).map(|t| t.0.clone()));
+        all
+    }
+
+    /// The inventory open, the crosshair still on the chest it opened, a card showing for `id`.
+    fn card_over(inventory: Inventory, ids: impl Fn(&Inventory) -> ItemId) -> Vec<String> {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<Hovered>()
+            .init_resource::<Dragging>()
+            .init_resource::<ShownCard>()
+            .init_resource::<UiFonts>()
+            .init_resource::<crate::inventory::icon::IconCache>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<crate::carry::Aimed>()
+            .insert_resource(inventory)
+            .add_systems(Update, show_card);
+        let chest = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Chest", 1).unwrap());
+        let prop = app.world_mut().spawn(crate::props::Container { id: chest, opened: true }).id();
+        app.world_mut().resource_mut::<crate::carry::Aimed>().0 = Some(prop);
+        let id = ids(app.world().resource::<Inventory>());
+        app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<Hovered>().0 = Some((id, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        app.update();
+        app.update();
+        card_texts(&mut app)
+    }
+
+    #[test]
+    fn cards_in_the_screen_list_their_keys_though_the_crosshair_holds_a_chest() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let bread = inventory.add(fb_items::roll_item("Bread", 3).unwrap());
+        inventory.stow(bread).unwrap();
+        let ring = inventory.add(fb_items::roll_item("Ring", 3).unwrap());
+        inventory.wear(ring, fb_items::Slot::Ring1).unwrap();
+        let dagger = inventory.add(fb_items::roll_item("Dagger", 7).unwrap());
+        let (b, r, d) = (bread, ring, dagger);
+        let texts = card_over(inventory.clone(), |_| b);
+        assert!(texts.iter().any(|t| t == "F ") && texts.iter().any(|t| t == "Eat"), "{texts:?}");
+        let texts = card_over(inventory.clone(), |_| r);
+        assert!(texts.iter().any(|t| t == "G ") && texts.iter().any(|t| t == "Take off"), "{texts:?}");
+        // Underfoot, the dagger is taken or equipped.
+        let texts = card_over(inventory, |_| d);
+        for want in ["F ", "Take", "\u{b7} G ", "Equip", "\u{b7} Alt ", "Compare"] {
+            assert!(texts.iter().any(|t| t == want), "{want}: {texts:?}");
+        }
     }
 
     #[test]

@@ -378,6 +378,7 @@ fn cell(p: Vec2) -> (i32, i32) {
 }
 
 /// Gives each new creature a brain: it now acts for itself, rather than idling.
+#[allow(clippy::type_complexity)]
 fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &Critter, &Transform), (Added<Critter>, Without<Corpse>)>) {
     for (entity, critter, at) in &new {
         commands.entity(entity).insert((brain_for(&level.0, critter, at.translation.xz()), Driven));

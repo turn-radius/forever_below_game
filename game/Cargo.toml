@@ -6,10 +6,32 @@ version.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
+[features]
+default = ["dev"]
+# Saving a `.wesl` file reloads it in a running debug build. The shaders are embedded with
+# `load_shader_library!`, which the file watcher does not see; `embedded_watcher` does. It watches
+# the source files under `CARGO_MANIFEST_DIR`, so start the game with `cargo run -p forever_below`
+# from the repository root (the binary run on its own watches nothing). Release builds pass
+# `--no-default-features` and neither include nor run it (`main` also turns watching off
+# without debug assertions).
+dev = ["bevy/embedded_watcher", "inspector"]
+# An in-game inspector for components and resources, opened with F12 or `--inspect` (see
+# `inspect.rs`). Debug only: `main` adds it with debug assertions only, and release builds pass
+# `--no-default-features` to leave out egui as well.
+inspector = ["dep:bevy-inspector-egui"]
+# Streams frame and system timings to the Tracy profiler (see "Profiling" in docs/rendering.md).
+# Off by default, so ordinary builds do not compile tracy.
+tracy = ["bevy/trace_tracy"]
+
 [dependencies]
+bevy-inspector-egui = { version = "0.38", default-features = false, features = ["bevy"], optional = true }
 # `file_watcher` reloads `assets/tuning.toml` when it is saved; `main` turns watching on only
-# in debug builds (`AssetPlugin::watch_for_changes_override`).
-bevy = { workspace = true, features = ["file_watcher"] }
+# in debug builds (`AssetPlugin::watch_for_changes_override`). `serialize` gives `KeyCode` serde,
+# which `keybindings.toml` writes its keys with.
+bevy = { workspace = true, features = ["file_watcher", "serialize"] }
 armory = { workspace = true }
 fb_items = { workspace = true }
 fb_body = { workspace = true }

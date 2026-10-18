@@ -103,7 +103,7 @@ fn step_the_delver(
         if hours <= 0.0 {
             continue;
         }
-        let sprinting = input.pressed(Action::Hurry);
+        let sprinting = input.pressed(Action::Sprint);
         let activity = delver_activity(locomotion.velocity, sprinting, swinging, *load);
         let (mut n, mut e, mut t) = (needs.0, exhaustion.0, times.0);
         // Gear's rates and the effects' on them (the cold makes hunger rise faster), put on
@@ -214,7 +214,7 @@ fn step_stamina(
     if screen.0.is_some() || seconds <= 0.0 {
         return;
     }
-    let sprinting = input.pressed(Action::Hurry);
+    let sprinting = input.pressed(Action::Sprint);
     for (locomotion, load, mut stamina) in &mut players {
         let activity = stamina_activity(locomotion.velocity, sprinting, !stamina.0.can_exert());
         let mut next = stamina.0;
@@ -225,10 +225,14 @@ fn step_stamina(
 
 /// A person's simulation: their needs and the time they have spent in the worst of them. Folk
 /// stand still, so they are always Resting.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
 pub struct Simulated {
+    #[reflect(remote = crate::inspect::remote::NeedsDef)]
     pub needs: Needs,
+    #[reflect(remote = crate::inspect::remote::ExhaustionTimesDef)]
     pub times: ExhaustionTimes,
+    #[reflect(remote = crate::inspect::remote::ExhaustionDef)]
     pub exhaustion: Exhaustion,
     /// The game hour they were last stepped to; none until the first step sees the clock.
     pub last: Option<f64>,
@@ -417,7 +421,7 @@ mod tests {
         let delver = walker(&mut app);
         app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.0, winded: true };
         run(&mut app, 4);
-        // Walking refills while Hurry is still held.
+        // Walking refills while Sprint is still held.
         assert!(stamina(&app, delver).value > 0.2, "{:?}", stamina(&app, delver));
     }
 

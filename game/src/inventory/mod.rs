@@ -79,7 +79,13 @@ const DRAG_START_PX: f32 = 6.0;
 /// How long a refusal stays on the screen, in seconds (the plate's `toast`, 3.6 s).
 const TOAST_SECONDS: f32 = 3.6;
 /// What the help line under the grids says (the plate's `.hint`).
-pub const HELP: &str = "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. Press R while dragging to turn an item. Double-click to wear or take off. Drop food, a light or a weapon on a quickslot to bind it, and the keys 1 to 0 use it.";
+pub fn help_text(keymap: &Keymap) -> String {
+    format!(
+        "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. {turn} while dragging to turn an item. Double-click to wear or take off. Drop food, a light or a weapon on a quickslot to bind it, and the keys {slots} use it.",
+        turn = keymap.label(Action::TurnItem),
+        slots = keymap.label(Action::Quickslot),
+    )
+}
 /// Longest gap between the two clicks of a double-click, in seconds: Windows' default of
 /// 500 ms (`SetDoubleClickTime`,
 /// <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdoubleclicktime>).
@@ -762,7 +768,7 @@ pub(crate) fn scale_screen(open: Res<ScreenOpen>, cameras: Query<&Camera, With<V
 
 /// Builds the screen when it opens and rebuilds it whenever what is in it changes, or the
 /// tuning does; takes it down when it closes.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn build_screen(
     mut commands: Commands,
     open: Res<ScreenOpen>,
@@ -777,6 +783,7 @@ pub(crate) fn build_screen(
     character: Res<Character>,
     tuning: Res<Tuning>,
     rules: Option<Res<crate::rules::GameRules>>,
+    keymap: Option<Res<Keymap>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
     mut icons: Icons,
 ) {
@@ -787,7 +794,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -795,6 +802,8 @@ pub(crate) fn build_screen(
     if let Some(screen) = existing {
         commands.entity(screen).despawn();
     }
+    let fallback = Keymap::default();
+    let keymap = keymap.as_deref().unwrap_or(&fallback);
     let screen = ScreenLayout { inventory: &inventory, fonts: &fonts, cell: tuning.interface.cell_size };
     commands
         .spawn((
@@ -878,7 +887,7 @@ pub(crate) fn build_screen(
                             column.spawn((Text::new("quickslots"), UiFonts::style(&fonts.display, 18.0, INK)));
                             crate::quickslots::strip(column, &fonts);
                         });
-                        leaf.spawn((Text::new(HELP), UiFonts::style(&fonts.body, 14.0, MUTED)));
+                        leaf.spawn((Text::new(help_text(keymap)), UiFonts::style(&fonts.body, 14.0, MUTED)));
                     });
             });
             root.spawn((
@@ -1281,6 +1290,16 @@ fn show_toast(toast: Res<Toast>, time: Res<Time<Real>>, mut texts: Query<&mut Te
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_help_names_the_bound_keys() {
+        use crate::keymap::Input;
+        let help = help_text(&Keymap::default());
+        assert!(help.contains("Right click while dragging") && help.contains("the keys 1 to 0 use it"), "{help}");
+        let mut keymap = Keymap::default();
+        keymap.bindings.iter_mut().find(|b| b.action == Action::TurnItem).unwrap().inputs = vec![Input::Key(KeyCode::KeyR)];
+        assert!(help_text(&keymap).contains("R while dragging"));
+    }
+
     use super::*;
 
     /// The cell size as shipped.
@@ -1412,6 +1431,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<Keymap>()
+            .init_resource::<crate::keymap::ActiveContext>()
             .init_resource::<Inventory>()
             .init_resource::<IconCache>()
             .init_resource::<UiFonts>()
@@ -1430,6 +1450,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
+            .add_systems(PreUpdate, crate::keymap::track_context)
             .add_systems(Update, (switch_screens, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
@@ -1606,7 +1627,7 @@ mod tests {
     #[test]
     fn c_opens_the_character_tab_and_i_the_inventory_tab() {
         let mut app = screen_app();
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Character);
         assert!(sheet_showing(&mut app));
@@ -1616,11 +1637,11 @@ mod tests {
         assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory), "I swaps to the inventory tab");
         assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory);
         assert!(!sheet_showing(&mut app));
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         assert!(sheet_showing(&mut app));
-        press(&mut app, KeyCode::KeyC);
-        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "C closes the character tab");
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
+        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "K closes the character tab");
+        press(&mut app, KeyCode::KeyK);
         press(&mut app, KeyCode::Escape);
         assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "Esc closes it");
         press(&mut app, KeyCode::KeyI);
@@ -1673,7 +1694,7 @@ mod tests {
     fn the_attributes_read_with_their_modifiers() {
         let mut app = screen_app();
         app.world_mut().resource_mut::<Character>().attributes = fb_character::Attributes { strength: 14, dexterity: 9, constitution: 10, intelligence: 18, wisdom: 3 };
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         let text = sheet_text(&mut app);
         for want in ["STR 14 (+2)", "DEX 9 (-1)", "CON 10 (+0)", "INT 18 (+4)", "WIS 3 (-4)"] {
             assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
@@ -1696,7 +1717,7 @@ mod tests {
             inventory.put(belt, pack, Placement::new(4, 0, false)).unwrap();
             belt
         };
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         assert_eq!(GEAR_ROWS[0], "Load");
         assert_eq!(gear_row(&mut app, 0), "55 / 150 lb \u{b7} Burdened");
         {
@@ -1711,7 +1732,7 @@ mod tests {
     #[test]
     fn the_gear_rows_agree_with_the_header() {
         let mut app = screen_app();
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         let character = app.world().resource::<Character>().clone();
         let derived = character.derive(app.world().resource::<Inventory>());
         assert_eq!(gear_row(&mut app, 1), format!("{:.0} / {:.0}", derived.warmth, character.warmth_need()));
@@ -1724,7 +1745,7 @@ mod tests {
     fn plenty_wakefulness_and_the_leech_show_on_the_sheet_with_their_breakdowns() {
         use sheet::{GEAR_ROWS, breakdown};
         let mut app = screen_app();
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         assert_eq!(&GEAR_ROWS[5..8], ["Hunger rate", "Sleepiness rate", "Heal on a kill"]);
         assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("usual".to_string(), "usual".to_string(), "none".to_string()));
         {
@@ -1753,7 +1774,7 @@ mod tests {
         let mut app = screen_app();
         let attributes = fb_character::Attributes { strength: 13, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
         *app.world_mut().resource_mut::<Character>() = Character { attributes, ..Character::roll(4) };
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         assert_eq!((gear_row(&mut app, 8), gear_row(&mut app, 9), gear_row(&mut app, 10)), ("usual".to_string(), "none".to_string(), "none".to_string()));
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
@@ -1775,7 +1796,7 @@ mod tests {
     fn a_goblin_shows_60_ft_of_darkvision_and_a_lizardfolk_needs_more_warmth() {
         let mut app = screen_app();
         *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Goblin, ..Character::roll(4) };
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         assert_eq!(gear_row(&mut app, 3), "60 ft");
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
@@ -1813,7 +1834,7 @@ mod tests {
             let belt = inventory.add(weighed_with("Belt", 2, Some("of the Ox"), 1.0));
             equip(&mut inventory, belt, Slot::Belt).unwrap();
         }
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         assert!(tip_text(&mut app).is_empty());
         hover_row(&mut app, Some(0));
         let tip = tip_text(&mut app);
@@ -1834,7 +1855,7 @@ mod tests {
             let belt = inventory.add(weighed_with("Belt", 2, Some("of the Mole"), 1.0));
             equip(&mut inventory, belt, Slot::Belt).unwrap();
         }
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         hover_row(&mut app, Some(3));
         let tip = tip_text(&mut app);
         assert!(tip.iter().any(|l| l.starts_with("Darkvision 60 ft = best of Goblin 60, ") && l.contains("Belt") && l.ends_with("(Goblin)")), "{tip:?}");
@@ -1843,7 +1864,7 @@ mod tests {
     #[test]
     fn hovering_warmth_and_armour_class_explain_them() {
         let mut app = screen_app();
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         hover_row(&mut app, Some(1));
         let tip = tip_text(&mut app);
         assert!(tip.iter().any(|l| l.starts_with("Warmth ")) && tip.iter().any(|l| l == "Warmth needed 6"), "{tip:?}");
@@ -1863,7 +1884,7 @@ mod tests {
     fn the_status_reads_the_needs_exhaustion_and_load() {
         let mut app = screen_app();
         delver_with(&mut app, 0.0, 2);
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         let text = sheet_text(&mut app);
         for want in ["Hunger", "Thirst", "Sleepiness", "Fed", "Quenched", "Rested", "Exhaustion 2: half speed"] {
             assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
@@ -1874,7 +1895,7 @@ mod tests {
     fn the_status_changes_while_the_screen_stays_open() {
         let mut app = screen_app();
         let delver = delver_with(&mut app, 0.0, 0);
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         let before = {
             let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
             sheets.single(app.world()).unwrap()
@@ -1897,7 +1918,7 @@ mod tests {
     fn stamina_and_mana_show_on_the_sheet_and_move_live() {
         let mut app = screen_app();
         let delver = delver_with(&mut app, 0.0, 0);
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         let text = sheet_text(&mut app);
         for want in ["Stamina", "Mana", "Fresh", "4 / 4"] {
             assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
@@ -1920,7 +1941,7 @@ mod tests {
     fn eating_with_the_sheet_open_shows_fed() {
         let mut app = screen_app();
         let delver = delver_with(&mut app, 0.6, 0);
-        press(&mut app, KeyCode::KeyC);
+        press(&mut app, KeyCode::KeyK);
         assert!(sheet_text(&mut app).contains(&"Hungry".to_string()));
         app.world_mut().get_mut::<crate::character::DelverNeeds>(delver).unwrap().0.consume(1.0, 0.0);
         app.update();
