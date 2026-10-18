@@ -63,6 +63,8 @@ pub enum MenuCommand {
     Quit,
     /// Opens the character creator, from the title ([`crate::title`] carries it out).
     NewDelve,
+    /// Begins a new delve as the last delver, from the title ([`crate::title::last_delver`]).
+    Continue,
     /// A button of the character creator ([`crate::title::creator`]).
     Creator(crate::title::creator::CreatorCommand),
     /// Waits for the key or button to put in this slot of the action.
@@ -332,7 +334,7 @@ fn apply_rebinds(
                     *rebinding = Rebinding::Idle;
                 }
             }
-            MenuCommand::Quit | MenuCommand::NewDelve | MenuCommand::Creator(_) => {}
+            MenuCommand::Quit | MenuCommand::NewDelve | MenuCommand::Continue | MenuCommand::Creator(_) => {}
         }
     }
 }

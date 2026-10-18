@@ -25,6 +25,7 @@ use crate::launch::{AppState, clock_seed};
 use crate::menu::{ButtonInk, MenuButton, MenuCommand};
 use crate::play::CurrentLevel;
 use crate::title::NewDelveSeed;
+use crate::title::last_delver::LastDelver;
 use crate::ui::{BG, BRIGHT, FRAME_GOLD, GOLD, INK, LINE, MUTED, UiFonts};
 
 /// The longest name the creator takes, in characters.
@@ -166,10 +167,14 @@ pub fn begin_delve(commands: &mut Commands, next: &mut NextState<AppState>, seed
     next.set(AppState::Delving);
 }
 
-/// Carries out the creator's buttons, the typed name, Enter (Begin) and Esc (Back).
+/// Carries out the creator's buttons, the typed name, Enter (Begin) and Esc (Back), and the
+/// title's Continue. Beginning from the creator or continuing remembers the delver as the
+/// [`LastDelver`].
+#[allow(clippy::too_many_arguments)]
 pub fn run_creator(
     mut commands: Commands,
     draft: Option<ResMut<Draft>>,
+    last: Option<ResMut<LastDelver>>,
     input: ActionInput,
     mut chosen: MessageReader<MenuCommand>,
     mut typed: MessageReader<KeyboardInput>,
@@ -177,9 +182,17 @@ pub fn run_creator(
     mut next: ResMut<NextState<AppState>>,
 ) {
     let Some(mut draft) = draft else {
-        // `FB_NEW_DELVE` begins without the creator, as a delver rolled from the clock.
-        if chosen.read().any(|c| *c == MenuCommand::Creator(CreatorCommand::Begin)) {
-            begin_delve(&mut commands, &mut next, &seed, Draft::roll(clock_seed()).character());
+        for command in chosen.read() {
+            match command {
+                // `FB_NEW_DELVE` begins without the creator, as a delver rolled from the clock.
+                MenuCommand::Creator(CreatorCommand::Begin) => begin_delve(&mut commands, &mut next, &seed, Draft::roll(clock_seed()).character()),
+                MenuCommand::Continue => {
+                    if let Some(delver) = last.as_ref().and_then(|l| l.0.clone()) {
+                        begin_delve(&mut commands, &mut next, &seed, delver);
+                    }
+                }
+                _ => {}
+            }
         }
         typed.clear();
         return;
@@ -213,7 +226,11 @@ pub fn run_creator(
     if back {
         commands.remove_resource::<Draft>();
     } else if begin && draft.can_begin() {
-        begin_delve(&mut commands, &mut next, &seed, draft.character());
+        let delver = draft.character();
+        if let Some(mut last) = last {
+            last.0 = Some(delver.clone());
+        }
+        begin_delve(&mut commands, &mut next, &seed, delver);
     }
 }
 

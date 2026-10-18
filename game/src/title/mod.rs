@@ -14,6 +14,7 @@
 //! the buttons are the pause menu's [`MenuButton`]s, so choosing and hovering work as there.
 
 pub mod creator;
+pub mod last_delver;
 
 use bevy::{
     camera::RenderTarget,
@@ -28,6 +29,7 @@ use crate::menu::{ButtonInk, MENU_PX, MenuButton, MenuCommand, MenuPage, capture
 use crate::settings::GameSettings;
 use crate::ui::{BG, FRAME_GOLD, INK, LINE, UiFonts};
 use creator::{CreatorCommand, Draft, creator_page, open_creator, run_creator};
+use last_delver::{LastDelver, LastDelverPlugin};
 
 const SHADER_PATH: &str = "embedded://forever_below/title/lettering.wesl";
 
@@ -112,6 +114,9 @@ pub struct TitlePlugin;
 impl Plugin for TitlePlugin {
     fn build(&self, app: &mut App) {
         load_shader_library!(app, "lettering.wesl");
+        if !app.is_plugin_added::<LastDelverPlugin>() {
+            app.add_plugins(LastDelverPlugin);
+        }
         app.add_plugins(UiMaterialPlugin::<LetteringMaterial>::default())
             .init_resource::<UiFonts>()
             .init_resource::<Keymap>()
@@ -258,7 +263,7 @@ fn ledger_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str
             MenuButton(command),
             ButtonInk { idle: INK, hover: FRAME_GOLD },
             Node {
-                width: px(240),
+                min_width: px(240),
                 padding: UiRect::axes(px(18), px(8)),
                 justify_content: JustifyContent::Center,
                 border: UiRect::all(px(1)),
@@ -302,13 +307,15 @@ fn centred_panel(screen: &mut ChildSpawnerCommands, width: f32, fill: impl FnOnc
         });
 }
 
-/// Builds the buttons, the settings page or the character creator in a dark panel, when the
+/// Builds the buttons (Continue as the [`LastDelver`] first, when there is one), the settings
+/// page or the character creator in a dark panel, when the
 /// page or the [`Draft`] changes; the lettering steps aside for the panels.
 #[allow(clippy::too_many_arguments)]
 fn build_panel(
     mut commands: Commands,
     page: Res<MenuPage>,
     draft: Option<Res<Draft>>,
+    last: Option<Res<LastDelver>>,
     keymap: Res<Keymap>,
     settings: Res<GameSettings>,
     fonts: Res<UiFonts>,
@@ -346,6 +353,9 @@ fn build_panel(
                     },
                 ))
                 .with_children(|list| {
+                    if let Some(delver) = last.as_ref().and_then(|l| l.0.as_ref()) {
+                        ledger_button(list, &fonts, &format!("Continue as {}", delver.name), MenuCommand::Continue);
+                    }
                     ledger_button(list, &fonts, "New delve", MenuCommand::NewDelve);
                     ledger_button(list, &fonts, "Settings", MenuCommand::Show(MenuPage::Settings));
                     ledger_button(list, &fonts, "Quit", MenuCommand::Quit);
@@ -484,6 +494,48 @@ mod tests {
         assert!(app.world().get_resource::<Draft>().is_none());
         assert_eq!(*app.world().resource::<MenuPage>(), MenuPage::Main);
         assert_eq!(state(&app), AppState::Title);
+    }
+
+    #[test]
+    fn continue_goes_down_again_as_the_last_delver_into_a_new_level() {
+        let mut app = title_app(None);
+        let last = crate::character::Character { name: "Brakka".into(), ..crate::character::Character::roll(6) };
+        app.insert_resource(LastDelver(Some(last.clone())));
+        let mut levels = Vec::new();
+        for _ in 0..2 {
+            app.update();
+            app.world_mut().write_message(MenuCommand::Continue);
+            app.update();
+            app.update();
+            assert_eq!(state(&app), AppState::Delving);
+            assert_eq!(chosen(&app), Some(last.clone()));
+            levels.push(app.world().resource::<CurrentLevel>().0.seed);
+            app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Title);
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_ne!(levels[0], levels[1], "each continue is a fresh level from the clock");
+    }
+
+    #[test]
+    fn continue_without_a_last_delver_does_nothing() {
+        let mut app = title_app(None);
+        app.insert_resource(LastDelver(None));
+        app.update();
+        app.world_mut().write_message(MenuCommand::Continue);
+        app.update();
+        app.update();
+        assert_eq!(state(&app), AppState::Title);
+    }
+
+    #[test]
+    fn beginning_from_the_creator_remembers_the_delver() {
+        let mut app = title_app(Some(3));
+        app.insert_resource(LastDelver(None));
+        tap(&mut app, KeyCode::Enter);
+        let made = app.world().resource::<Draft>().character();
+        tap(&mut app, KeyCode::Enter);
+        assert_eq!(app.world().resource::<LastDelver>().0, Some(made));
     }
 
     #[test]
