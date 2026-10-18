@@ -155,6 +155,38 @@ impl Inventory {
         self.items.get_mut(&id)?.sip()
     }
 
+    /// The lanterns held or hung at the hip, the main hand's first, then the off hand's, then the
+    /// hip's: the ones a flask of lamp oil fills.
+    pub fn equipped_lanterns(&self) -> Vec<ItemId> {
+        [Slot::Mainhand, Slot::Offhand, Slot::Hip]
+            .into_iter()
+            .filter_map(|slot| self.worn(slot))
+            .filter(|&id| self.item(id).is_some_and(|item| item.oil_room().is_some()))
+            .collect()
+    }
+
+    /// Whether a lantern held or at the hip has room for more oil.
+    pub fn lantern_wants_oil(&self) -> bool {
+        self.equipped_lanterns().into_iter().any(|id| self.item(id).and_then(Item::oil_room).is_some_and(|room| room > 0.0))
+    }
+
+    /// Pours the lamp-oil flask `flask` into the lanterns held or at the hip, in the order of
+    /// [`Inventory::equipped_lanterns`], each as full as the oil goes
+    /// ([`fb_items::Item::refill_from`]). Returns the lanterns that took any.
+    pub fn refill_lanterns(&mut self, flask: ItemId) -> Vec<ItemId> {
+        let Some(mut oil) = self.items.get(&flask).cloned() else { return vec![] };
+        let mut filled = vec![];
+        for id in self.equipped_lanterns() {
+            if let Some(lantern) = self.items.get_mut(&id)
+                && lantern.refill_from(&mut oil) > 0.0
+            {
+                filled.push(id);
+            }
+        }
+        self.items.insert(flask, oil);
+        filled
+    }
+
     /// Burns `seconds` of game time off every lit torch and lantern, wherever it is: in a hand,
     /// at the hip, in a bag or on the floor ([`fb_items::Item::burn`]). Returns whether
     /// anything shown changed: a light's fuel minute on its card, its state, or its char bucket

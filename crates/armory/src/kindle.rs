@@ -93,6 +93,21 @@ impl Item {
         }
     }
 
+    /// Pours up to `seconds` of burning into a lantern whose full fuel is `capacity` seconds,
+    /// never past full, and returns the seconds it took. The level follows the fuel, as in
+    /// [`Item::burn`]. Whether it is lit is left alone. Anything that is not a lantern takes
+    /// nothing: a torch is not refilled.
+    pub fn refuel(&mut self, seconds: f32, capacity: f32) -> f32 {
+        let Item::Lantern(s) = self else { return 0.0 };
+        let f = &mut s.flame;
+        let taken = seconds.min(capacity - f.fuel_left).max(0.0);
+        if taken > 0.0 {
+            f.fuel_left += taken;
+            f.level = (f.fuel_left / capacity).clamp(0.1, 1.0);
+        }
+        taken
+    }
+
     /// Lights it, or puts it out. Putting out a burning torch leaves it doused, charred and
     /// cold; a fresh or doused one lights. A spent torch will not light, and putting out what is
     /// already out changes nothing.
@@ -207,6 +222,22 @@ mod tests {
         assert_eq!(l.lit(), Some(false));
         assert_eq!(l.fuel_left(), Some(0.0));
         assert_eq!(l.set_lit(true), Err(Unlit::Empty));
+    }
+
+    #[test]
+    fn a_lantern_refuels_up_to_full_and_a_torch_not_at_all() {
+        let mut l = Item::Lantern(Lantern::roll(3));
+        l.set_lit(true).unwrap();
+        l.burn(LANTERN_SECONDS * 2.0, LANTERN_SECONDS);
+        assert_eq!(l.refuel(LANTERN_SECONDS / 4.0, LANTERN_SECONDS), LANTERN_SECONDS / 4.0);
+        assert_eq!(l.fuel_left(), Some(LANTERN_SECONDS / 4.0));
+        assert!(matches!(&l, Item::Lantern(s) if (s.flame.level - 0.25).abs() < 1e-6));
+        assert_eq!(l.refuel(LANTERN_SECONDS, LANTERN_SECONDS), LANTERN_SECONDS * 0.75, "only what it has room for");
+        assert_eq!(l.refuel(1.0, LANTERN_SECONDS), 0.0, "full");
+        assert_eq!(l.lit(), Some(false), "refilling does not light it");
+        assert_eq!(l.set_lit(true), Ok(()));
+        let mut t = torch(BurnState::Spent);
+        assert_eq!(t.refuel(600.0, TORCH_SECONDS), 0.0);
     }
 
     #[test]

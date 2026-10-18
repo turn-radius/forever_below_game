@@ -8,7 +8,7 @@
 //! | Target | Primary | Secondary | Tertiary |
 //! |---|---|---|---|
 //! | Item on the ground, underfoot or in a container not carried | Take | Equip | |
-//! | Item carried | its use (Eat, Drink, Light, Put out) | Equip, or Take off if worn | |
+//! | Item carried | its use (Eat, Drink, Light, Put out, Refill) | Equip, or Take off if worn | |
 //! | Door | Open or Close | Lock or Unlock, holding its key | Pick the lock, holding lockpicks |
 //! | Container | Open, or Look in once it stands open | Lock or Unlock, holding its key | Pick the lock, holding lockpicks |
 //! | Folk | Talk | Barter | Steal, while hidden |
@@ -81,6 +81,7 @@ pub enum Verb {
     Drink,
     Light,
     PutOut,
+    Refill,
     Open,
     LookIn,
     Close,
@@ -105,6 +106,7 @@ impl Verb {
             Verb::Drink => "Drink",
             Verb::Light => "Light",
             Verb::PutOut => "Put out",
+            Verb::Refill => "Refill",
             Verb::Open => "Open",
             Verb::LookIn => "Look in",
             Verb::Close => "Close",
@@ -195,7 +197,7 @@ impl Lock {
 pub enum Target {
     Item {
         place: Place,
-        /// What using it does, if anything: Eat, Drink, Light or Put out.
+        /// What using it does, if anything: Eat, Drink, Light, Put out or Refill.
         uses: Option<Verb>,
         /// Whether it can be worn or held.
         equippable: bool,
@@ -257,7 +259,7 @@ fn locks(lock: Lock, delver: &Delver) -> Verbs {
     }
 }
 
-/// What using `item` does: eat or drink it, light it or put it out.
+/// What using `item` does: eat or drink it, light it or put it out, or refill a lantern from it.
 pub fn use_of(item: &Item) -> Option<Verb> {
     if let Some(how) = item.consume() {
         return Some(match how {
@@ -268,6 +270,11 @@ pub fn use_of(item: &Item) -> Option<Verb> {
     // A waterskin with water in it is drunk from, though drinking leaves it.
     if item.can_sip() {
         return Some(Verb::Drink);
+    }
+    // A flask of lamp oil fills a lantern; [`item_target`] offers it only while a lantern held
+    // or at the hip has room.
+    if item.has_oil() {
+        return Some(Verb::Refill);
     }
     // Light only a light that would catch: a spent torch or an empty lantern will not.
     item.shape.lit().and_then(|lit| {
@@ -290,7 +297,8 @@ pub fn item_target(inventory: &Inventory, id: ItemId) -> Option<Target> {
         Location::In { .. } if inventory.is_carried(id) => Place::Carried,
         Location::In { .. } | Location::Loose => Place::Ground,
     };
-    Some(Target::Item { place, uses: use_of(item), equippable: !item.slots().is_empty() })
+    let uses = use_of(item).filter(|&verb| verb != Verb::Refill || inventory.lantern_wants_oil());
+    Some(Target::Item { place, uses, equippable: !item.slots().is_empty() })
 }
 
 /// The line shown over the crosshair for what is aimed at; `None` shows nothing.
@@ -555,6 +563,30 @@ mod tests {
         assert_eq!(use_of(&skin), Some(Verb::Drink));
         while skin.sip().is_some() {}
         assert_eq!(use_of(&skin), None);
+    }
+
+    #[test]
+    fn lamp_oil_refills_only_while_a_held_lantern_has_room() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let oil = inventory.add(roll_item(fb_items::LAMP_OIL, 4).unwrap());
+        inventory.stow(oil).unwrap();
+        let uses = |inventory: &Inventory| match item_target(inventory, oil) {
+            Some(Target::Item { uses, .. }) => uses,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(uses(&inventory), None, "no lantern to fill");
+        let mut lantern = roll_item("Lantern", 7).unwrap();
+        let capacity = lantern.fuel_capacity().unwrap();
+        lantern.shape.refuel(capacity, capacity);
+        let lantern = inventory.add(lantern);
+        inventory.equip(lantern, fb_items::Slot::Offhand).unwrap();
+        assert_eq!(uses(&inventory), None, "the lantern is full");
+        inventory.toggle_light(lantern).unwrap();
+        inventory.burn_lights(600.0);
+        assert_eq!(uses(&inventory), Some(Verb::Refill));
+        assert_eq!(key_line(&Keymap::default(), &verbs_for(&item_target(&inventory, oil).unwrap(), &Delver::default())), "F Refill");
     }
 
     #[test]

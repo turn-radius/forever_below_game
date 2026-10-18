@@ -169,7 +169,8 @@ impl Eating<'_, '_> {
 
 /// F and G in the inventory, on the item under the mouse. Its verbs come from
 /// [`interact::verbs_for`], the same lookup the prompts read. F does its use: Eat and Drink
-/// ([`Eating::eat`]), Light and Put out ([`crate::kindle::toggle_and_say`]), or Take for an item
+/// ([`Eating::eat`]), Light and Put out ([`crate::kindle::toggle_and_say`]), Refill from lamp oil
+/// ([`crate::kindle::refill_and_say`]), or Take for an item
 /// underfoot or in a container not carried, into the first bag with room ([`crate::inventory::take_up`]).
 /// G equips it in the slot it is made for, or takes it off if worn, back to the pack or underfoot
 /// if that is full ([`crate::inventory::quick`], the double-click). An item lying underfoot is
@@ -203,6 +204,10 @@ fn act_on_hovered(
             }
             Some(Verb::Light | Verb::PutOut) => {
                 let said = crate::kindle::toggle_and_say(&mut inventory, id);
+                toast.say(said, now);
+            }
+            Some(Verb::Refill) => {
+                let said = crate::kindle::refill_and_say(&mut inventory, id);
                 toast.say(said, now);
             }
             Some(Verb::Take) => match crate::inventory::take_up(&mut inventory, id) {

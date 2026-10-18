@@ -16,6 +16,7 @@ pub mod item;
 pub mod jackalope;
 pub mod modifier;
 pub mod naming;
+pub mod oil;
 pub mod outfit;
 pub mod profile;
 pub mod provision;
@@ -28,6 +29,7 @@ pub mod undead;
 
 pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, roll_item, roll_item_with, roll_loot};
+pub use oil::LAMP_OIL;
 pub use rarity::Odds;
 pub use provision::{Consume, Provision, SWALLOW, provision};
 

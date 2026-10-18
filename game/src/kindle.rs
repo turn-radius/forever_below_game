@@ -2,6 +2,8 @@
 //! the light carried: the main hand's, else the off hand's, else the lantern at the hip; with
 //! Shift, the hip lantern alone. With the inventory open, L acts on the light under the mouse,
 //! wherever it lies. The toast says what happened, or that a spent torch will not light.
+//! A flask of lamp oil, used from the inventory or a quickslot, fills the lanterns held or at
+//! the hip ([`refill_and_say`]), so an empty one lights again.
 
 use armory::kindle::Unlit;
 use bevy::prelude::*;
@@ -38,6 +40,29 @@ pub fn toggle_and_say(inventory: &mut Inventory, id: ItemId) -> String {
         Err(Unlit::Spent) => format!("The {what} is spent and will not light"),
         Err(Unlit::Empty) => format!("The {what} is out of fuel and will not light"),
         Err(Unlit::NotALight) => format!("The {what} cannot be lit"),
+    }
+}
+
+/// Fills the lanterns held or at the hip from the lamp-oil flask `flask`
+/// ([`Inventory::refill_lanterns`]), and says so: that they are filled, that the flask ran out
+/// first, or that there is no lantern to fill or room in it.
+pub fn refill_and_say(inventory: &mut Inventory, flask: ItemId) -> String {
+    let lanterns = inventory.equipped_lanterns();
+    let what = if lanterns.len() > 1 { "lanterns" } else { "lantern" };
+    if lanterns.is_empty() {
+        return "You hold no lantern to fill".to_string();
+    }
+    if !inventory.item(flask).is_some_and(fb_items::Item::has_oil) {
+        return "The flask is empty".to_string();
+    }
+    let filled = inventory.refill_lanterns(flask);
+    let what_filled = if filled.len() > 1 { "lanterns" } else { "lantern" };
+    if filled.is_empty() {
+        format!("Your {what} {} already full", if lanterns.len() > 1 { "are" } else { "is" })
+    } else if inventory.lantern_wants_oil() {
+        format!("You pour the last of the oil into the {what_filled}")
+    } else {
+        format!("You fill the {what_filled}")
     }
 }
 
@@ -145,6 +170,68 @@ mod tests {
         let id = equip(&mut inventory, torch(BurnState::Spent), Slot::Offhand);
         assert_eq!(toggle_and_say(&mut inventory, id), "The torch is spent and will not light");
         assert_eq!(lit(&inventory, id), Some(false));
+    }
+
+    /// A flask of lamp oil holding `fill` of a full lantern.
+    fn oil(fill: f32) -> fb_items::Item {
+        let mut flask = fb_items::roll_item(fb_items::LAMP_OIL, 7).unwrap();
+        if let armory::Item::Food(s) = &mut flask.shape {
+            s.provision.fill = fill;
+        }
+        flask
+    }
+
+    /// A lantern with `share` of a full one's oil, out.
+    fn lantern_at(share: f32) -> fb_items::Item {
+        let mut item = lantern(true);
+        item.burn(1.0e9);
+        let capacity = item.fuel_capacity().unwrap();
+        item.shape.refuel(capacity * share, capacity);
+        item
+    }
+
+    fn share(inventory: &Inventory, id: ItemId) -> f32 {
+        let item = inventory.item(id).unwrap();
+        item.fuel_left().unwrap() / item.fuel_capacity().unwrap()
+    }
+
+    #[test]
+    fn lamp_oil_fills_an_empty_held_lantern_so_it_lights_again() {
+        let mut inventory = Inventory::default();
+        let id = equip(&mut inventory, lantern_at(0.0), Slot::Offhand);
+        assert_eq!(toggle_and_say(&mut inventory, id), "The lantern is out of fuel and will not light");
+        let flask = inventory.add(oil(1.0));
+        assert_eq!(refill_and_say(&mut inventory, flask), "You fill the lantern");
+        assert!((share(&inventory, id) - 1.0).abs() < 1e-6);
+        assert!(!inventory.item(flask).unwrap().has_oil());
+        assert_eq!(toggle_and_say(&mut inventory, id), "You light the lantern");
+        assert_eq!(refill_and_say(&mut inventory, flask), "The flask is empty");
+    }
+
+    #[test]
+    fn lamp_oil_fills_the_hand_first_then_the_hip_until_it_runs_out() {
+        let mut inventory = Inventory::default();
+        equip(&mut inventory, fb_items::roll_item("Belt", 1).unwrap(), Slot::Belt);
+        let hip = equip(&mut inventory, lantern_at(0.0), Slot::Hip);
+        let hand = equip(&mut inventory, lantern_at(0.5), Slot::Mainhand);
+        let flask = inventory.add(oil(0.8));
+        assert_eq!(refill_and_say(&mut inventory, flask), "You pour the last of the oil into the lanterns");
+        assert!((share(&inventory, hand) - 1.0).abs() < 1e-4, "the hand first");
+        assert!((share(&inventory, hip) - 0.3).abs() < 1e-4, "the hip takes the rest");
+        assert!(!inventory.item(flask).unwrap().has_oil());
+    }
+
+    #[test]
+    fn lamp_oil_needs_a_lantern_with_room() {
+        let mut inventory = Inventory::default();
+        let flask = inventory.add(oil(1.0));
+        assert_eq!(refill_and_say(&mut inventory, flask), "You hold no lantern to fill");
+        let bagged = inventory.add(lantern_at(0.0));
+        assert_eq!(refill_and_say(&mut inventory, flask), "You hold no lantern to fill", "a lantern on the floor or in a bag is not filled");
+        assert_eq!(share(&inventory, bagged), 0.0);
+        equip(&mut inventory, lantern_at(1.0), Slot::Offhand);
+        assert_eq!(refill_and_say(&mut inventory, flask), "Your lantern is already full");
+        assert!(inventory.item(flask).unwrap().has_oil());
     }
 
     #[test]
