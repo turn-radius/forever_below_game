@@ -435,7 +435,8 @@ fn spawn_stone(
                         material.extension.decay.scale *= CEILING_PATTERN_FINER;
                     }
                     // Cave rock breaks into facets under the light, or beds where it is layered.
-                    if level.style == LevelStyle::RoughRock {
+                    // Laid stones keep plain stone's wear, so they read apart from the rock they lie on.
+                    if level.style == LevelStyle::RoughRock && !part.name.starts_with("stones_") {
                         material.extension.decay.kind = if part.name == "strata" { DECAY_STRATA } else { DECAY_ROCK };
                     }
                     let handle = toon_materials.add(material);

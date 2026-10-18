@@ -45,16 +45,19 @@ const BLOCK_LENGTH: (f32, f32) = (5.5, 11.5);
 /// Rubble: the height of a course, a stone's length, how far it stands proud and how big its
 /// chamfer is, the gap between stones, how much shorter than its course a stone may fall, the
 /// share of stones that are two, and how high the base ink floats to clear the lowest course.
-const RUBBLE_COURSE: (f32, f32) = (2.0, 3.5);
-const RUBBLE_LENGTH: (f32, f32) = (2.5, 6.0);
-const RUBBLE_PROUD: (f32, f32) = (0.3, 1.2);
-const RUBBLE_CHAMFER: (f32, f32) = (0.35, 0.85);
+const RUBBLE_COURSE: (f32, f32) = (1.6, 4.4);
+const RUBBLE_LENGTH: (f32, f32) = (1.8, 9.0);
+const RUBBLE_PROUD: (f32, f32) = (0.2, 1.6);
+const RUBBLE_CHAMFER: (f32, f32) = (0.3, 1.2);
 const RUBBLE_JOINT: f32 = 0.5;
-const RUBBLE_DROP: f32 = 0.4;
+const RUBBLE_DROP: f32 = 0.6;
 const RUBBLE_SPLIT: f32 = 0.15;
 /// How far in a rubble stone's corners may be drawn.
-const RUBBLE_CUT: f32 = 0.9;
-const RUBBLE_BASE_INK: f32 = 1.4;
+const RUBBLE_CUT: f32 = 1.7;
+/// The shares of rubble stones that stop short for a pinning stone and that are through-stones.
+const RUBBLE_PIN: f32 = 0.22;
+const RUBBLE_TALL: f32 = 0.12;
+const RUBBLE_BASE_INK: f32 = 1.9;
 /// Blocks stop this far short of a wall that meets theirs at an inside corner, clear of the
 /// perpendicular wall's own blocks.
 const INSIDE_CORNER: f32 = 1.0;
@@ -466,7 +469,8 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
                 }
                 .build(&flat, &mut floor);
                 if view.is_cobbled(x, y) {
-                    super::cobble::cobbles(level.seed, x, y, &|_, _| 0.0, &|px, pz| view.floor_wear(x, y, px, pz), &mut cobbles);
+                    let open = view.neighbours_open(x, y);
+                    super::cobble::cobbles(level.seed, x, y, &|_, _| 0.0, &|px, pz| view.floor_wear(x, y, open, px, pz), &mut cobbles);
                 } else {
                     flagstones(level.seed, x, y, &mut floor);
                 }
@@ -584,7 +588,7 @@ fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [boo
     }
 }
 
-/// The courses of rubble along a run, `(bottom, height)` from the floor to `top`: 2 to 3.5
+/// The courses of rubble along a run, `(bottom, height)` from the floor to `top`: 1.6 to 4.4
 /// units each, wandering. Drawn from the run's seed, not the level's, so each run's courses
 /// meet its neighbours' only by chance, as rubble does.
 fn rubble_courses(key: u32, top: f32) -> Vec<(f32, f32)> {
@@ -645,6 +649,7 @@ fn lay_blocks(
             let (long, short_chance, short, proud) =
                 (rng.range_f32(BLOCK_LENGTH.0, BLOCK_LENGTH.1), rng.range_f32(0.0, 1.0), rng.range_f32(3.4, 4.8), rng.range_f32(PROUD.0, PROUD.1));
             let cut: [f32; 8] = std::array::from_fn(|_| rough.range_f32(0.0, RUBBLE_CUT));
+            let (r_pin, r_gap, r_pin_y, r_tall) = (rough.range_f32(0.0, 1.0), rough.range_f32(1.3, 2.2), rough.range_f32(0.0, 1.0), rough.range_f32(0.0, 1.0));
             let (r_long, r_split, r_chamfer, r_drop, r_proud) = (
                 rough.range_f32(RUBBLE_LENGTH.0, RUBBLE_LENGTH.1),
                 rough.range_f32(0.0, 1.0),
@@ -654,7 +659,9 @@ fn lay_blocks(
             );
             let rubble = rubble_at(s);
             let (mut l, absorb) = if rubble {
-                (r_long, 2.5)
+                // Many short stones and a few long ones.
+                let u = (r_long - RUBBLE_LENGTH.0) / (RUBBLE_LENGTH.1 - RUBBLE_LENGTH.0);
+                (RUBBLE_LENGTH.0 + (RUBBLE_LENGTH.1 - RUBBLE_LENGTH.0) * u.powf(1.7), RUBBLE_LENGTH.0)
             } else if short_chance < 0.12 {
                 (short, 3.0)
             } else {
@@ -671,11 +678,20 @@ fn lay_blocks(
             let Some((y0, h)) = course(rubble, k) else { continue };
             let (joint, proud) = if rubble { (RUBBLE_JOINT, r_proud) } else { (JOINT, proud) };
             let lo = a + if a < 1e-3 { run.margin[0] } else { joint * 0.5 };
-            let hi = b - if b > len - 1e-3 { run.margin[1] } else { joint * 0.5 };
+            let mut hi = b - if b > len - 1e-3 { run.margin[1] } else { joint * 0.5 };
+            // Now and then a long stone stops short, and a small pinning stone is wedged in the gap.
+            let pin = (rubble && r_pin < RUBBLE_PIN && hi - lo > 4.5).then(|| {
+                hi -= r_gap;
+                [hi + joint, hi + r_gap]
+            });
             let lowest = (0..=4).map(|i| height_at(lo + (hi - lo) * i as f32 / 4.0)).fold(f32::MAX, f32::min);
             // A rubble stone is a little shorter than its course, and a different amount each time.
             let drop = if rubble { r_drop * RUBBLE_DROP } else { 0.0 };
-            let (bottom, top) = (y0 + joint * 0.5, (y0 + h - joint * 0.5 - drop).min(lowest - UNDER_SOFFIT));
+            // A few stones are through-stones, as tall as two courses and standing further out.
+            let tall = rubble && k > 0 && r_tall < RUBBLE_TALL;
+            let reach = if tall { course(true, k + 1).map_or(0.0, |(_, h2)| h2) } else { 0.0 };
+            let proud = if reach > 0.0 { proud + 0.3 } else { proud };
+            let (bottom, top) = (y0 + joint * 0.5, (y0 + h + reach - joint * 0.5 - drop).min(lowest - UNDER_SOFFIT));
             if hi - lo < 2.0 || top - bottom < 1.4 {
                 continue;
             }
@@ -687,7 +703,7 @@ fn lay_blocks(
                 }
                 let room = ((ar[1] - ar[0]).min(br[1] - br[0])).max(0.0);
                 let chamfer = r_chamfer.min(depth * 0.95).min(room * 0.2);
-                let tame = (room * 0.15 / RUBBLE_CUT).min(1.0);
+                let tame = (room * 0.22 / RUBBLE_CUT).min(1.0);
                 slab_rough(out, &frame, ar, br, depth, chamfer, true, cut.map(|c| c * tame));
             };
             // The ink in the joint below this block (the base of the wall for the lowest), and the
@@ -703,6 +719,11 @@ fn lay_blocks(
                 joints.ribbon_lifted(&[at(bottom), at(top)], &[run.n; 2], JOINT_INK_LIFT);
             }
             let out = if k == 0 { &mut *damp } else { &mut *mesh };
+            if let Some(wedge) = pin {
+                let height = ((top - bottom) * 0.5).min((wedge[1] - wedge[0]) * 1.4 + 0.4);
+                let at = bottom + (top - bottom - height) * r_pin_y;
+                dress(out, wedge, [at, at + height], proud * 0.7);
+            }
             // Now and then a rubble stone is two, one on the other.
             if rubble && r_split < RUBBLE_SPLIT && top - bottom > 2.6 {
                 let mid = (bottom + top) * 0.5 + (r_drop - 0.5) * 0.6;
@@ -1183,8 +1204,10 @@ mod tests {
             let level = halls(seed);
             let (ashlar, rubble, mixed) = (with(&level, 0.0), with(&level, 1.0), with(&level, 0.5));
             let (a, r) = (level_mesh(&ashlar, ashlar.bounds()), level_mesh(&rubble, rubble.bounds()));
-            // Smaller stones in shorter courses: far more of them over the same walls.
-            assert!(walls_triangles(&r) as f32 > 1.5 * walls_triangles(&a) as f32, "seed {seed}");
+            let styles: std::collections::HashSet<_> = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter_map(|(x, y)| mixed.finishes().at(x, y)).map(|f| f.walls).collect();
+            assert!(styles.contains(&WallFinish::Rubble) && styles.contains(&WallFinish::Ashlar), "seed {seed}: the mixed view has both styles");
+            // Smaller stones in shorter courses: more of them over the same walls.
+            assert!(walls_triangles(&r) as f32 > 1.15 * walls_triangles(&a) as f32, "seed {seed}: {} against {}", walls_triangles(&r), walls_triangles(&a));
             for p in &r.surfaces.parts {
                 p.validate().unwrap();
             }

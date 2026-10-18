@@ -96,7 +96,7 @@ const COBBLE: Kind = Kind {
     round: [(0.55, 0.9), (0.88, 0.5)],
     flat: [(0.6, 1.0), (0.9, 0.82)],
     gap: (0.1, 0.75),
-    budget: 2450,
+    budget: 1500,
     tones: &COBBLE_TONES,
     wears: true,
 };
@@ -214,7 +214,7 @@ impl Stone {
 }
 
 /// How far a stone's foot sinks under the floor.
-const SINK: f32 = 0.12;
+const SINK: f32 = 0.25;
 /// How far from the cell's edge a stone stays, so a joint runs along every edge.
 const EDGE: f32 = 0.3;
 
@@ -229,7 +229,9 @@ fn lay(kind: &Kind, seed: u32, x: i32, y: i32, base: &impl Fn(f32, f32) -> f32, 
     let mut triangles = 0;
     for &(attempts, r_lo, r_hi) in kind.classes {
         for _ in 0..attempts {
-            // The same draws for every attempt, taken or not.
+            // Each attempt draws these numbers whether or not it is kept. The per-side wobble is drawn
+            // after the early rejections, which depend only on the cell, so the layout is still a
+            // pure function of the seed.
             let d: [f32; 14] = std::array::from_fn(|_| rng.range_f32(0.0, 1.0));
             let r = r_lo + (r_hi - r_lo) * d[0];
             let ratio = if d[1] < kind.long_share { kind.long.0 + (kind.long.1 - kind.long.0) * d[2] } else { kind.plain.0 + (kind.plain.1 - kind.plain.0) * d[2] };
