@@ -275,7 +275,7 @@ pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
 pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
-pub use finish::{DoorStyle, Finish, Finishes, FloorFinish, WallFinish, finishes};
+pub use finish::{Character, DoorStyle, Finish, Finishes, FloorFinish, Quarter, WallFinish, finishes};
 pub use generate::{generate, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;

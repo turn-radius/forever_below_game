@@ -97,11 +97,11 @@ impl<'a> CellView<'a> {
         Self::with_finishes(level, finishes(level, params))
     }
 
-    /// The view with no cobbled or flagged cave floors and no layered walls, for tests of the
-    /// plain stone.
+    /// The view with every finish at its plain: no paving, layered or rubble walls and no arches,
+    /// for tests of the plain stone.
     #[cfg(test)]
     pub fn uncobbled(level: &'a Level) -> Self {
-        Self::with_params(level, &LevelParams { cobble_chance: 0.0, flagstone_chance: 0.0, strata_chance: 0.0, ..LevelParams::for_style(level.style) })
+        Self::with_params(level, &LevelParams { cobble_chance: 0.0, flagstone_chance: 0.0, strata_chance: 0.0, rubble_chance: 0.0, arch_chance: 0.0, ..LevelParams::for_style(level.style) })
     }
 
     /// What each room's and corridor's stone is finished with, and how damp it is.
@@ -857,10 +857,15 @@ mod tests {
 
     #[test]
     fn cobbled_floors_are_laid_and_split_exactly() {
-        let level = level();
+        // A cave with a cobbled or flagged quarter.
+        let paved = |l: &Level| {
+            let view = CellView::new(l);
+            (0..l.height as i32).flat_map(|y| (0..l.width as i32).map(move |x| (x, y))).any(|(x, y)| view.finishes().at(x, y).is_some_and(|f| matches!(f.floor, FloorFinish::Cobble | FloorFinish::Flagstone)))
+        };
+        let level = (1..200).map(|seed| fb_level::generate(seed, 1)).find(paved).expect("some cave has paving");
         let view = CellView::new(&level);
         let cobbled = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter(|&(x, y)| view.finishes().at(x, y).is_some_and(|f| matches!(f.floor, FloorFinish::Cobble | FloorFinish::Flagstone))).count();
-        assert!(cobbled > 0, "seed 1207 has a cobbled room");
+        assert!(cobbled > 0);
         let whole = level_mesh(&view, view.bounds());
         assert!(whole.surfaces.parts.iter().any(|p| p.name.starts_with("stones_")));
         let plain = level_mesh(&CellView::uncobbled(&level), view.bounds());

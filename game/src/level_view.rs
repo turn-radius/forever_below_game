@@ -49,7 +49,7 @@ impl Plugin for LevelViewPlugin {
                 Update,
                 (
                     (keys, press_controls).before(TweakPanelSystems),
-                    (draw_level.run_if(resource_changed::<LevelForge>), refresh_header.run_if(resource_changed::<LevelForge>), zoom_and_pan, place_plan).chain().after(TweakPanelSystems),
+                    (draw_level.run_if(resource_changed::<LevelForge>), refresh_header.run_if(resource_changed::<LevelForge>), refresh_quarter_legend.run_if(resource_changed::<LevelForge>), zoom_and_pan, place_plan).chain().after(TweakPanelSystems),
                 ),
             );
     }
@@ -182,6 +182,10 @@ struct PlanView {
 #[derive(Component)]
 struct PlanNode;
 
+/// The legend's column of quarters, rebuilt for each level: an outline colour and a character.
+#[derive(Component)]
+struct QuarterLegend;
+
 /// The stage the plan is drawn on: the window less the panel.
 #[derive(Component)]
 struct Stage;
@@ -226,6 +230,7 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut images: ResMut<Assets<
                         row.spawn((Text::new(label), UiFonts::style(&fonts.body, 15.0, MUTED)));
                     });
                 }
+                legend.spawn((QuarterLegend, Node { flex_direction: FlexDirection::Column, row_gap: px(5), margin: UiRect::top(px(8)), ..default() }));
             });
         });
     commands
@@ -374,6 +379,25 @@ fn draw_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, para
             canvas.rect(a, b, MOSS_TINT, finish.moss * 0.8);
         }
     }
+    // Each quarter outlined in its own colour along the edges where it meets another quarter, or
+    // rock, so the groups of rooms read at a glance.
+    let edge = (frame.px * 0.14).max(2.0);
+    for y in 0..level.height as i32 {
+        for x in 0..level.width as i32 {
+            let Some(q) = f.quarter(x, y) else { continue };
+            let (a, b) = (frame.at(x as f32, y as f32), frame.at(x as f32 + 1.0, y as f32 + 1.0));
+            canvas.rect(a, b, quarter_tint(q), 0.13);
+            // Each side of a cell that meets another quarter, drawn a little inside so both
+            // quarters show their own colour. Rock has no quarter; its walls are drawn already.
+            let inset = edge * 0.5;
+            let sides = [((0, -1), [a[0], a[1] + inset], [b[0], a[1] + inset]), ((0, 1), [a[0], b[1] - inset], [b[0], b[1] - inset]), ((-1, 0), [a[0] + inset, a[1]], [a[0] + inset, b[1]]), ((1, 0), [b[0] - inset, a[1]], [b[0] - inset, b[1]])];
+            for ((dx, dy), p, r) in sides {
+                if f.quarter(x + dx, y + dy).is_some_and(|n| n != q) {
+                    canvas.line(p, r, edge, quarter_tint(q), 0.95);
+                }
+            }
+        }
+    }
     let ink = (frame.px * 0.09).max(1.2);
     for room in &level.rooms {
         let (cx, cy) = room.centre();
@@ -400,6 +424,37 @@ fn draw_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, para
             }
         }
     }
+}
+
+/// The outline colour of quarter `q`, cycling through colours that stand apart from the floors'.
+fn quarter_tint(q: usize) -> [f32; 3] {
+    const TINTS: [[f32; 3]; 6] = [[0.95, 0.35, 0.35], [0.35, 0.85, 0.95], [0.95, 0.55, 0.95], [0.95, 0.95, 0.40], [0.55, 0.60, 1.0], [1.0, 0.65, 0.30]];
+    TINTS[q % TINTS.len()]
+}
+
+/// Rebuilds the legend's quarters: each outline colour with its character.
+fn refresh_quarter_legend(mut commands: Commands, forge: Res<LevelForge>, fonts: Res<UiFonts>, legend: Query<(Entity, Option<&Children>), With<QuarterLegend>>) {
+    let Ok((entity, children)) = legend.single() else { return };
+    for child in children.into_iter().flatten() {
+        commands.entity(*child).despawn();
+    }
+    let f = finishes(&forge.level, &forge.params);
+    commands.entity(entity).with_children(|column| {
+        column.spawn((Text::new(format!("quarters, leaning {}", f.lean().name())), UiFonts::style(&fonts.body, 15.0, MUTED)));
+        for (q, quarter) in f.quarters().iter().enumerate() {
+            let tint = quarter_tint(q);
+            let door = match quarter.door {
+                fb_level::DoorStyle::Timber => "timber doors",
+                fb_level::DoorStyle::RoundArch => "round arches",
+                fb_level::DoorStyle::PointedArch => "pointed arches",
+                fb_level::DoorStyle::RockCut => "rock-cut arches",
+            };
+            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
+                row.spawn((Node { width: px(14), height: px(4), ..default() }, BackgroundColor(Color::srgb(tint[0], tint[1], tint[2]))));
+                row.spawn((Text::new(format!("{}, {} rooms, {door}", quarter.character.name(), quarter.rooms.len())), UiFonts::style(&fonts.body, 15.0, MUTED)));
+            });
+        }
+    });
 }
 
 /// The legend's rows: a swatch colour and what it shows.

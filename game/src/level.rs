@@ -513,8 +513,9 @@ fn spawn_columns(
     }
 }
 
-/// The arches that span the hall's corridors: one mesh shared by every arch, turned to run
-/// across its corridor, so a long corridor of arches costs the same as one.
+/// The arches that span the corridors of the halls' vaulted quarters: one mesh per rib shape,
+/// shared by every arch, turned to run across its corridor, so a long corridor of arches costs
+/// the same as one.
 fn spawn_corridor_arches(
     mut commands: Commands,
     level: Res<CurrentLevel>,
@@ -523,21 +524,26 @@ fn spawn_corridor_arches(
     mut outline_materials: ResMut<Assets<OutlineMaterial>>,
 ) {
     let level = &level.0;
-    let arches = geometry::arch::corridor_arches(level);
+    let arches = geometry::arch::corridor_arches(level, &geometry::level_finishes(level));
     let Some(soffit) = arches.first().map(|a| a.soffit) else { return };
-    let Some(shape) = geometry::arch::corridor_arch(soffit, level.seed) else { return };
     let stone = stone_appearance(level.seed);
     let ink = outline_materials.add(stone.outline);
-    let parts: Vec<_> = shape
-        .parts
-        .iter()
-        .map(|part| {
-            let mut material = stone.material_for(part);
-            material.extension.min_width = MinWidth::default();
-            (part.name, meshes.add(part_to_mesh(part)), toon_materials.add(material), part.outline)
-        })
-        .collect();
+    let mut shapes = Vec::new();
+    for pointed in [false, true] {
+        let Some(shape) = geometry::arch::corridor_arch(soffit, level.seed, pointed) else { continue };
+        let parts: Vec<_> = shape
+            .parts
+            .iter()
+            .map(|part| {
+                let mut material = stone.material_for(part);
+                material.extension.min_width = MinWidth::default();
+                (part.name, meshes.add(part_to_mesh(part)), toon_materials.add(material), part.outline)
+            })
+            .collect();
+        shapes.push((pointed, parts));
+    }
     for arch in arches {
+        let Some((_, parts)) = shapes.iter().find(|(pointed, _)| *pointed == arch.pointed) else { continue };
         let at = v3(geometry::cell_centre(arch.cell.0, arch.cell.1));
         // The shape runs along z; a corridor along x turns it a quarter.
         let turn = Quat::from_rotation_y(if arch.along_x { std::f32::consts::FRAC_PI_2 } else { 0.0 });
@@ -842,7 +848,7 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
         }
         "corridor" => {
             // The corridor run with the most arches, from its end looking down it.
-            let arches = geometry::arch::corridor_arches(level);
+            let arches = geometry::arch::corridor_arches(level, &geometry::level_finishes(level));
             let runs = geometry::arch::corridor_runs(level);
             let count = |run: &geometry::arch::CorridorRun| arches.iter().filter(|a| run.cells.contains(&a.cell)).count();
             let Some(run) = runs.iter().max_by_key(|r| (count(r), r.cells.len())) else { return };

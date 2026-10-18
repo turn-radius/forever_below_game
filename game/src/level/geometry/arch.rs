@@ -11,7 +11,7 @@ use armory::{
     },
     geom::{MeshBuilder, P2, extrude, signed_area},
 };
-use fb_level::{CELL, Cell, DoorStyle, Level, LevelStyle};
+use fb_level::{CELL, Cell, Character, DoorStyle, Finishes, Level, LevelStyle};
 use procgen_rng::Mulberry32;
 
 use super::{DOOR_HEIGHT, DOOR_WIDTH, FLOOR_RELIEF, INFILL_DEPTH, stone};
@@ -359,6 +359,8 @@ pub struct CorridorArch {
     pub along_x: bool,
     /// The height of the corridor's flat soffit over the cell.
     pub soffit: f32,
+    /// Whether its rib comes to a point, as its quarter's doorways do, rather than round.
+    pub pointed: bool,
 }
 
 /// Which way the corridor through `(x, y)` runs, if it is a plain cell of one: open floor
@@ -398,8 +400,9 @@ pub fn corridor_runs(level: &Level) -> Vec<CorridorRun> {
 
 /// The corridor arches of a level of stone halls: along each straight run one arch every two to
 /// four cells from the level's seed, never in a cell beside a door, a room, a turn or a stair, nor
-/// where the soffit is not flat. A pure function of the level. Rough rock has none.
-pub fn corridor_arches(level: &Level) -> Vec<CorridorArch> {
+/// where the soffit is not flat, and only in the corridors of a Vaulted quarter, in that
+/// quarter's one arch shape. A pure function of the level and its finishes. Rough rock has none.
+pub fn corridor_arches(level: &Level, finishes: &Finishes) -> Vec<CorridorArch> {
     if level.style != LevelStyle::StoneHalls {
         return Vec::new();
     }
@@ -420,8 +423,14 @@ pub fn corridor_arches(level: &Level) -> Vec<CorridorArch> {
         while i < run.cells.len() {
             let (x, y) = run.cells[i];
             let (dx, dy) = if run.along_x { (1, 0) } else { (0, 1) };
-            if plain(x - dx, y - dy) && plain(x + dx, y + dy) && flat(x, y) && !near_stair(x, y) {
-                out.push(CorridorArch { cell: (x, y), along_x: run.along_x, soffit });
+            let vaulted = finishes.quarter(x, y).map(|q| &finishes.quarters()[q]).filter(|q| q.character == Character::Vaulted);
+            if let Some(quarter) = vaulted
+                && plain(x - dx, y - dy)
+                && plain(x + dx, y + dy)
+                && flat(x, y)
+                && !near_stair(x, y)
+            {
+                out.push(CorridorArch { cell: (x, y), along_x: run.along_x, soffit, pointed: quarter.door == DoorStyle::PointedArch });
             }
             i += rng.int(ARCH_SPACING.0, ARCH_SPACING.1) as usize;
         }
@@ -433,19 +442,22 @@ pub fn corridor_arches(level: &Level) -> Vec<CorridorArch> {
 /// the corridor, `y` up, `z` along it, centred on the cell. A pilaster against each wall on a
 /// plinth, an impost, and a round rib of voussoirs with a keystone springing from the imposts
 /// to just under the soffit. `None` where the soffit is too low for a rib the height of a door.
-pub fn corridor_arch(soffit: f32, seed: u32) -> Option<ItemMesh> {
+pub fn corridor_arch(soffit: f32, seed: u32, pointed: bool) -> Option<ItemMesh> {
     let mut rng = Mulberry32::new(seed ^ 0xa4c4_b1b5);
     let face = CELL * 0.5 - PILASTER_DEPTH;
     // The rib springs from imposts that stand out from the pilasters' faces, and its stones
     // end in the wall.
     let radius = face - IMPOST_PROJECTION;
-    let spring = soffit - SOFFIT_GAP - RIB_THICK - radius;
+    // A pointed rib's arcs have the span for their radius, and its extrados crowns higher.
+    let r = if pointed { radius * 2.0 } else { radius };
+    let outer_rise = ((r + RIB_THICK).powi(2) - (r - radius).powi(2)).sqrt();
+    let spring = soffit - SOFFIT_GAP - outer_rise;
     let impost_bottom = spring - IMPOST_HEIGHT;
-    if spring + radius < DOOR_HEIGHT || impost_bottom < PLINTH_HEIGHT + 4.0 {
+    if spring + outer_rise - RIB_THICK < DOOR_HEIGHT || impost_bottom < PLINTH_HEIGHT + 4.0 {
         return None;
     }
     let (joint, chamfer) = RIB_STONE;
-    let arch = Arch { hw: radius, spring, r: radius };
+    let arch = Arch { hw: radius, spring, r };
     let mut stone = voussoirs(&arch, (joint, chamfer), (RIB_THICK, RIB_ALONG), RIB_KEY_RISE, false, &mut rng);
 
     // Into the wall, so the pilasters bed behind its blocks.
@@ -558,10 +570,14 @@ mod tests {
         let mut total = 0;
         for seed in 1..=30 {
             let level = fb_level::generate(seed, 2);
-            let arches = corridor_arches(&level);
-            assert_eq!(arches, corridor_arches(&level), "seed {seed}");
+            let finishes = fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
+            let arches = corridor_arches(&level, &finishes);
+            assert_eq!(arches, corridor_arches(&level, &finishes), "seed {seed}");
             for a in &arches {
                 let (x, y) = a.cell;
+                let quarter = &finishes.quarters()[finishes.quarter(x, y).unwrap()];
+                assert_eq!(quarter.character, Character::Vaulted, "seed {seed}: arch outside a vaulted quarter at {x},{y}");
+                assert_eq!(a.pointed, quarter.door == DoorStyle::PointedArch, "seed {seed}: arch shape differs from its quarter's at {x},{y}");
                 assert_eq!(level.cell(x, y), Cell::Floor);
                 assert!(level.room_at(x, y).is_none(), "seed {seed}: arch in a room at {x},{y}");
                 assert_eq!(straight(&level, x, y), Some(a.along_x), "seed {seed}: arch in a turn or junction at {x},{y}");
@@ -582,7 +598,7 @@ mod tests {
         let mut rhythmic = 0;
         for seed in 1..=30 {
             let level = fb_level::generate(seed, 2);
-            let arches = corridor_arches(&level);
+            let arches = corridor_arches(&level, &fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style)));
             for run in corridor_runs(&level) {
                 let at: Vec<usize> = run.cells.iter().enumerate().filter(|(_, c)| arches.iter().any(|a| a.cell == **c)).map(|(i, _)| i).collect();
                 for pair in at.windows(2) {
@@ -599,7 +615,8 @@ mod tests {
     #[test]
     fn rough_rock_has_no_corridor_arches() {
         for seed in 1..=20 {
-            assert!(corridor_arches(&fb_level::generate(seed, 1)).is_empty());
+            let level = fb_level::generate(seed, 1);
+            assert!(corridor_arches(&level, &fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style))).is_empty());
         }
     }
 
@@ -607,24 +624,31 @@ mod tests {
     fn a_corridor_arch_spans_the_corridor_without_blocking_it() {
         let level = fb_level::generate(1207, 2);
         let soffit = level.ceiling;
-        let mesh = corridor_arch(soffit, 1).expect("the halls' soffit is high enough");
+        for pointed in [false, true] {
+            corridor_arch_spans(soffit, pointed);
+        }
+        assert!(corridor_arch(20.0, 1, false).is_none());
+        assert!(corridor_arch(20.0, 1, true).is_none());
+    }
+
+    fn corridor_arch_spans(soffit: f32, pointed: bool) {
+        let mesh = corridor_arch(soffit, 1, pointed).expect("the halls' soffit is high enough");
         let (lo, hi) = mesh.bounds().unwrap();
         // Inside the cell's width and up to just under the soffit.
         assert!(lo[0] >= -(CELL * 0.5 + 0.3) && hi[0] <= CELL * 0.5 + 0.3, "{lo:?} {hi:?}");
         assert!(hi[1] < soffit && hi[1] > soffit - 1.0, "tops out at {} under a soffit at {soffit}", hi[1]);
         // Nothing across the middle of the cell under the rib's clear height.
         let radius = CELL * 0.5 - PILASTER_DEPTH - IMPOST_PROJECTION;
-        let spring = soffit - SOFFIT_GAP - RIB_THICK - radius;
-        assert!(spring + radius >= DOOR_HEIGHT);
+        let r = if pointed { radius * 2.0 } else { radius };
+        let spring = soffit - SOFFIT_GAP - ((r + RIB_THICK).powi(2) - (r - radius).powi(2)).sqrt();
+        assert!(spring + (r * r - (r - radius).powi(2)).sqrt() >= DOOR_HEIGHT);
         for part in &mesh.parts {
             for p in &part.positions {
-                let clear = if p[1] < spring { f32::MAX } else { (radius * radius - p[0] * p[0]).max(0.0).sqrt() + spring };
+                let clear = if p[1] < spring { f32::MAX } else { (r * r - (p[0].abs() - (radius - r)).powi(2)).max(0.0).sqrt() + spring };
                 assert!(p[0].abs() >= radius - 0.02 || p[1] >= clear - 0.3, "{p:?} stands in the way");
             }
         }
         // And it is the same arch from the same seed.
-        assert_eq!(Some(mesh), corridor_arch(soffit, 1));
-        // A low soffit has no room for one.
-        assert!(corridor_arch(20.0, 1).is_none());
+        assert_eq!(Some(mesh), corridor_arch(soffit, 1, pointed));
     }
 }

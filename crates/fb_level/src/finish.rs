@@ -3,9 +3,12 @@
 //! its [`LevelParams`], drawn from a stream of its own, so choosing finishes never moves a
 //! layout, item, light or creature. The game and the level view draw from it.
 //!
-//! A room's cells share one finish; the corridors share the level's corridor finish. Moss is the
+//! Rooms are grouped into quarters of two to four neighbours along the corridors, and each quarter
+//! has one [`Character`] that fixes its walls, its floor and its doorways together. A corridor
+//! cell takes the quarter of the nearest room, and a doorway the style of the room it opens into.
+//! The level rolls a lean first, so one level favours one character over the rest. Moss is the
 //! one thing that varies cell by cell: a low-frequency damp field over the level, a few rooms
-//! that are grottos, and corridors that stay mostly dry.
+//! that are grottos, and corridors that stay mostly dry. It ignores quarters.
 
 use procgen_rng::Mulberry32;
 
@@ -53,6 +56,56 @@ pub enum DoorStyle {
     RockCut,
 }
 
+/// What a quarter of rooms is like: its walls, floor and doorways, fixed together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Character {
+    /// The style's plain look: ashlar and flagstone in the halls, bare rock in the caves; timber
+    /// doorways.
+    Plain,
+    /// A worked, mine-like feel: timber frames over cobbles, with rubble walls in the halls.
+    Timbered,
+    /// Stone halls: ashlar, flagstones and one shape of arch, round or pointed, with arches
+    /// across its corridors.
+    Vaulted,
+    /// Rough rock: rock walls, rock or flagstone floors and rock-cut arches.
+    Hewn,
+    /// Rough rock: strata walls and rock floors, with timber frames.
+    Layered,
+}
+
+impl Character {
+    /// Its name, for the level view's legend.
+    pub fn name(self) -> &'static str {
+        match self {
+            Character::Plain => "plain",
+            Character::Timbered => "timbered",
+            Character::Vaulted => "vaulted",
+            Character::Hewn => "hewn",
+            Character::Layered => "layered",
+        }
+    }
+
+    /// The characters a level of `style` draws from.
+    pub fn of_style(style: LevelStyle) -> &'static [Character] {
+        match style {
+            LevelStyle::StoneHalls => &[Character::Plain, Character::Timbered, Character::Vaulted],
+            LevelStyle::RoughRock => &[Character::Plain, Character::Timbered, Character::Hewn, Character::Layered],
+        }
+    }
+}
+
+/// A group of neighbouring rooms that share one look.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Quarter {
+    /// Indices into the level's rooms.
+    pub rooms: Vec<usize>,
+    pub character: Character,
+    pub walls: WallFinish,
+    pub floor: FloorFinish,
+    /// How the doorways of its rooms and corridors are framed.
+    pub door: DoorStyle,
+}
+
 /// The finish of one open cell.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Finish {
@@ -73,6 +126,10 @@ pub struct Finishes {
     moss: Vec<f32>,
     /// The style of each door cell, `None` elsewhere.
     doors: Vec<Option<DoorStyle>>,
+    /// The quarter of each open cell.
+    quarter_of: Vec<Option<usize>>,
+    quarters: Vec<Quarter>,
+    lean: Character,
 }
 
 impl Finishes {
@@ -90,6 +147,27 @@ impl Finishes {
     /// The style of the doorway in cell `(x, y)`, the entrance included; `None` for any other cell.
     pub fn door_style(&self, x: i32, y: i32) -> Option<DoorStyle> {
         self.doors[self.index(x, y)?]
+    }
+
+    /// The quarter of open cell `(x, y)`; `None` for rock, columns, outside the grid and cells no
+    /// room reaches.
+    pub fn quarter(&self, x: i32, y: i32) -> Option<usize> {
+        self.quarter_of[self.index(x, y)?]
+    }
+
+    /// The level's quarters, in the order of their first rooms.
+    pub fn quarters(&self) -> &[Quarter] {
+        &self.quarters
+    }
+
+    /// The character of the quarter holding cell `(x, y)`.
+    pub fn character_at(&self, x: i32, y: i32) -> Option<Character> {
+        self.quarter(x, y).map(|q| self.quarters[q].character)
+    }
+
+    /// The character this level favours, rolled before its quarters'.
+    pub fn lean(&self) -> Character {
+        self.lean
     }
 
     /// Moss at a world position (x east, z south, units as the level's): the cells' moss
@@ -134,35 +212,172 @@ fn damp(seed: u32, x: f32, y: f32) -> f32 {
     top * (1.0 - ty) + bottom * ty
 }
 
+/// How much more often the favoured character is drawn than it would be.
+const LEAN_WEIGHT: f64 = 3.0;
+/// The plain character's own weight against the sliders' for the rest.
+const PLAIN_WEIGHT: f64 = 0.4;
+/// The fewest and most rooms in a quarter.
+const QUARTER_SIZE: (u32, u32) = (2, 4);
+/// Salt for the quarters' grouping, a stream apart from the finish stream.
+const GROUP_SALT: u32 = 0x9A17_E125;
+
+/// Shortest path length, in open cells, from the cells of `from` to every cell; `u32::MAX` where
+/// unreachable.
+fn distances(level: &Level, from: &[(i32, i32)]) -> Vec<u32> {
+    let (w, h) = (level.width as i32, level.height as i32);
+    let mut dist = vec![u32::MAX; (w * h) as usize];
+    let mut queue = std::collections::VecDeque::new();
+    for &(x, y) in from {
+        dist[(y * w + x) as usize] = 0;
+        queue.push_back((x, y));
+    }
+    while let Some((x, y)) = queue.pop_front() {
+        let d = dist[(y * w + x) as usize];
+        for (dx, dy) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+            let (nx, ny) = (x + dx, y + dy);
+            if level.is_open(nx, ny) && dist[(ny * w + nx) as usize] == u32::MAX {
+                dist[(ny * w + nx) as usize] = d + 1;
+                queue.push_back((nx, ny));
+            }
+        }
+    }
+    dist
+}
+
+/// The rooms grouped into quarters of two to four that lie near each other by path distance. The
+/// start room's quarter comes first; each quarter grows from its first unassigned room by the
+/// nearest unassigned room to any of its members. A level of three rooms or fewer is one quarter.
+fn group_rooms(level: &Level) -> Vec<Vec<usize>> {
+    let n = level.rooms.len();
+    if n <= 3 {
+        return if n == 0 { Vec::new() } else { vec![(0..n).collect()] };
+    }
+    let cells_of = |r: usize| {
+        let room = level.rooms[r];
+        (room.y..room.y + room.h).flat_map(move |y| (room.x..room.x + room.w).map(move |x| (x as i32, y as i32))).collect::<Vec<_>>()
+    };
+    let w = level.width as i32;
+    // dist[a][b]: path length from room a to the nearest cell of room b.
+    let dist: Vec<Vec<u32>> = (0..n)
+        .map(|a| {
+            let d = distances(level, &cells_of(a));
+            (0..n).map(|b| cells_of(b).iter().map(|&(x, y)| d[(y * w + x) as usize]).min().unwrap_or(u32::MAX)).collect()
+        })
+        .collect();
+    let mut rng = Mulberry32::new(level.seed ^ level.depth.wrapping_mul(0x9E37_79B9) ^ GROUP_SALT);
+    let mut left: Vec<usize> = (0..n).collect();
+    if let Some(start) = level.start_room() {
+        left.retain(|&r| r != start);
+        left.insert(0, start);
+    }
+    let mut groups = Vec::new();
+    while !left.is_empty() {
+        let mut size = rng.int(QUARTER_SIZE.0, QUARTER_SIZE.1) as usize;
+        if left.len() <= QUARTER_SIZE.1 as usize {
+            size = left.len();
+        } else if left.len() - size == 1 {
+            size = if size > QUARTER_SIZE.0 as usize { size - 1 } else { size + 1 };
+        }
+        let mut group = vec![left.remove(0)];
+        while group.len() < size {
+            let next = (0..left.len()).min_by_key(|&i| (group.iter().map(|&m| dist[m][left[i]]).min().unwrap_or(u32::MAX), left[i])).unwrap();
+            group.push(left.remove(next));
+        }
+        group.sort_unstable();
+        groups.push(group);
+    }
+    groups
+}
+
+/// The walls, floor and doorway a quarter of `character` has, from its own draws: `floor` varies
+/// the floor and `arch` picks a vaulted quarter's one arch shape.
+fn dress(character: Character, rock: bool, floor: f64, arch: f64, params: &LevelParams) -> (WallFinish, FloorFinish, DoorStyle) {
+    use {DoorStyle as D, FloorFinish as F, WallFinish as W};
+    match (rock, character) {
+        (false, Character::Timbered) => (W::Rubble, F::Cobble, D::Timber),
+        (false, Character::Vaulted) => (W::Ashlar, F::Flagstone, if arch < 0.5 { D::RoundArch } else { D::PointedArch }),
+        (false, _) => (W::Ashlar, F::Flagstone, D::Timber),
+        (true, Character::Timbered) => (W::Rock, if floor < 0.7 { F::Cobble } else { F::Rock }, D::Timber),
+        (true, Character::Hewn) => (W::Rock, if floor < params.flagstone_chance * 2.0 { F::Flagstone } else { F::Rock }, D::RockCut),
+        (true, Character::Layered) => (W::Strata, F::Rock, D::Timber),
+        (true, _) => (W::Rock, if floor < params.cobble_chance * 0.4 { F::Cobble } else { F::Rock }, D::Timber),
+    }
+}
+
 /// The finishes of `level` under `params`. Deterministic: the same level, seed and depth give
-/// the same finishes, and what is drawn per room, per door and for the corridors does not
-/// depend on the odds, so moving a slider changes only what that slider governs.
+/// the same finishes. The draws are a fixed number whatever the odds (one for the lean, three per
+/// quarter, one per room), so moving a slider changes only what that slider governs.
 pub fn finishes(level: &Level, params: &LevelParams) -> Finishes {
     let seed = level.seed ^ level.depth.wrapping_mul(0x9E37_79B9) ^ FINISH_SALT;
     let mut rng = Mulberry32::new(seed);
     let rock = level.style == LevelStyle::RoughRock;
-    let pick = |rng: &mut Mulberry32| {
-        // Walls, floor, then the grotto roll: always three draws, whatever the odds.
-        let (w, f, g) = (rng.next_f64(), rng.next_f64(), rng.next_f64());
-        let walls = match (rock, w) {
-            (true, w) if w < params.strata_chance => WallFinish::Strata,
-            (true, _) => WallFinish::Rock,
-            (false, w) if w < params.rubble_chance => WallFinish::Rubble,
-            (false, _) => WallFinish::Ashlar,
+
+    // The level's lean, then each quarter's character: the sliders weigh the characters, the lean
+    // multiplies one of them.
+    let characters = Character::of_style(level.style);
+    let lean = characters[((rng.next_f64() * characters.len() as f64) as usize).min(characters.len() - 1)];
+    let weight = |c: Character| {
+        let base = match (rock, c) {
+            (_, Character::Plain) => PLAIN_WEIGHT,
+            (false, Character::Timbered) => params.rubble_chance,
+            (false, _) => params.arch_chance,
+            (true, Character::Timbered) => params.cobble_chance,
+            (true, Character::Hewn) => params.arch_chance * ROCK_CUT_SHARE,
+            (true, _) => params.strata_chance,
         };
-        let floor = match (f < params.cobble_chance, rock) {
-            (true, _) => FloorFinish::Cobble,
-            // Past the cobbled share of the draw come the flagged rooms, then the bare ones.
-            (false, true) if f < params.cobble_chance + params.flagstone_chance => FloorFinish::Flagstone,
-            (false, true) => FloorFinish::Rock,
-            (false, false) => FloorFinish::Flagstone,
-        };
-        (walls, floor, g < params.grotto_chance)
+        base * if c == lean { LEAN_WEIGHT } else { 1.0 }
     };
-    let (corridor_walls, corridor_floor, _) = pick(&mut rng);
-    let rooms: Vec<_> = level.rooms.iter().map(|_| pick(&mut rng)).collect();
+    let total: f64 = characters.iter().map(|&c| weight(c)).sum();
+    let quarters: Vec<Quarter> = group_rooms(level)
+        .into_iter()
+        .map(|rooms| {
+            let (u, f, a) = (rng.next_f64(), rng.next_f64(), rng.next_f64());
+            let mut left = u * total;
+            let character = characters
+                .iter()
+                .copied()
+                .find(|&c| {
+                    left -= weight(c);
+                    left < 0.0
+                })
+                .unwrap_or(Character::Plain);
+            let (walls, floor, door) = dress(character, rock, f, a, params);
+            Quarter { rooms, character, walls, floor, door }
+        })
+        .collect();
+    let grottos: Vec<bool> = level.rooms.iter().map(|_| rng.next_f64() < params.grotto_chance).collect();
 
     let (w, h) = (level.width as i32, level.height as i32);
+    let mut quarter_of_room = vec![0usize; level.rooms.len()];
+    for (q, quarter) in quarters.iter().enumerate() {
+        for &r in &quarter.rooms {
+            quarter_of_room[r] = q;
+        }
+    }
+    // Every open cell takes the quarter of the nearest room along the open cells, the first
+    // room reached winning a tie.
+    let mut quarter_of = vec![None; (w * h) as usize];
+    let mut queue = std::collections::VecDeque::new();
+    for y in 0..h {
+        for x in 0..w {
+            if let Some(r) = level.room_at(x, y).filter(|_| level.is_open(x, y)) {
+                quarter_of[(y * w + x) as usize] = Some(quarter_of_room[r]);
+                queue.push_back((x, y));
+            }
+        }
+    }
+    while let Some((x, y)) = queue.pop_front() {
+        let q = quarter_of[(y * w + x) as usize];
+        for (dx, dy) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+            let (nx, ny) = (x + dx, y + dy);
+            if level.is_open(nx, ny) && quarter_of[(ny * w + nx) as usize].is_none() {
+                quarter_of[(ny * w + nx) as usize] = q;
+                queue.push_back((nx, ny));
+            }
+        }
+    }
+
+    let plain = dress(Character::Plain, rock, 1.0, 1.0, params);
     let mut cells = vec![None; (w * h) as usize];
     let mut moss = vec![0.0f32; (w * h) as usize];
     let mut doors = vec![None; (w * h) as usize];
@@ -173,13 +388,11 @@ pub fn finishes(level: &Level, params: &LevelParams) -> Finishes {
             }
             let i = (y * w + x) as usize;
             let wet = smoothstep(0.5, 0.95, damp(seed, x as f32 + 0.5, y as f32 + 0.5)) * params.moss_amount;
-            let (walls, floor, level_moss) = match level.room_at(x, y) {
-                Some(r) => {
-                    let (walls, floor, grotto) = rooms[r];
-                    let grotto_moss = if grotto { (0.7 + 0.3 * wet) * params.moss_amount } else { 0.0 };
-                    (walls, floor, wet.max(grotto_moss))
-                }
-                None => (corridor_walls, corridor_floor, wet * CORRIDOR_DRYNESS),
+            let (walls, floor) = quarter_of[i].map_or((plain.0, plain.1), |q| (quarters[q].walls, quarters[q].floor));
+            let level_moss = match level.room_at(x, y) {
+                Some(r) if grottos[r] => wet.max((0.7 + 0.3 * wet) * params.moss_amount),
+                Some(_) => wet,
+                None => wet * CORRIDOR_DRYNESS,
             };
             cells[i] = Some((walls, floor));
             moss[i] = level_moss.clamp(0.0, 1.0);
@@ -197,32 +410,24 @@ pub fn finishes(level: &Level, params: &LevelParams) -> Finishes {
             moss[(y * w + x) as usize] = near.filter(|&(nx, ny)| level.is_open(nx, ny)).map(|(nx, ny)| open_moss[(ny * w + nx) as usize]).fold(0.0, f32::max);
         }
     }
-    // Doorways in cell order, two draws each; the entrance keeps its timber frame, which its
-    // door hangs from.
+    // A doorway takes the style of the room it opens into (the first room beside it, when it
+    // joins two); the entrance keeps its timber frame, which its door hangs from.
     let entrance = (level.entrance.x as i32, level.entrance.y as i32);
     for y in 0..h {
         for x in 0..w {
             if level.cell(x, y) != Cell::Door {
                 continue;
             }
-            let i = (y * w + x) as usize;
-            let (a, b) = (rng.next_f64(), rng.next_f64());
-            doors[i] = Some(if (x, y) == entrance {
-                DoorStyle::Timber
-            } else if rock {
-                if a < params.arch_chance * ROCK_CUT_SHARE { DoorStyle::RockCut } else { DoorStyle::Timber }
-            } else if a < params.arch_chance {
-                if b < 0.5 { DoorStyle::RoundArch } else { DoorStyle::PointedArch }
-            } else {
-                DoorStyle::Timber
-            });
+            let beside = [(0, -1), (1, 0), (0, 1), (-1, 0)].iter().find_map(|&(dx, dy)| level.room_at(x + dx, y + dy)).map(|r| quarter_of_room[r]);
+            let q = beside.or(quarter_of[(y * w + x) as usize]);
+            doors[(y * w + x) as usize] = Some(if (x, y) == entrance { DoorStyle::Timber } else { q.map_or(plain.2, |q| quarters[q].door) });
         }
     }
     // The entrance's doorway is not a door cell, but it has its timber frame all the same.
     if let Some(entry) = doors.get_mut((entrance.1 * w + entrance.0) as usize) {
         *entry = Some(DoorStyle::Timber);
     }
-    Finishes { width: level.width, height: level.height, cells, moss, doors }
+    Finishes { width: level.width, height: level.height, cells, moss, doors, quarter_of, quarters, lean }
 }
 
 #[cfg(test)]
@@ -261,31 +466,150 @@ mod tests {
     }
 
     #[test]
-    fn a_room_shares_one_finish_and_corridors_share_another() {
+    fn a_quarters_rooms_share_walls_floor_and_doors() {
         for depth in 1..=2 {
-            for seed in 1..=20 {
+            for seed in 1..=50 {
                 let (level, params) = level_at(seed, depth);
                 let f = finishes(&level, &params);
-                let mut rooms: Vec<Option<(WallFinish, FloorFinish)>> = vec![None; level.rooms.len()];
-                let mut corridor = None;
+                let n = level.rooms.len();
+                let mut seen = vec![0; n];
+                for (q, quarter) in f.quarters().iter().enumerate() {
+                    assert!(n <= 3 || (2..=4).contains(&quarter.rooms.len()), "seed {seed} depth {depth}: {} rooms in a quarter of {n}", quarter.rooms.len());
+                    for &r in &quarter.rooms {
+                        seen[r] += 1;
+                        let room = level.rooms[r];
+                        for y in room.y..room.y + room.h {
+                            for x in room.x..room.x + room.w {
+                                let Some(c) = f.at(x as i32, y as i32) else { continue };
+                                assert_eq!((c.walls, c.floor), (quarter.walls, quarter.floor), "seed {seed} depth {depth} room {r}");
+                                assert_eq!(f.quarter(x as i32, y as i32), Some(q));
+                            }
+                        }
+                    }
+                }
+                assert!(seen.iter().all(|&s| s == 1), "every room is in one quarter");
+                // Every open cell has a quarter and wears its finish; corridors beside a room
+                // wear that room's.
                 for y in 0..level.height as i32 {
                     for x in 0..level.width as i32 {
-                        let Some(c) = f.at(x, y) else {
-                            assert!(!level.is_open(x, y));
-                            continue;
-                        };
-                        let kind = (c.walls, c.floor);
-                        let slot = match level.room_at(x, y) {
-                            Some(r) => &mut rooms[r],
-                            None => &mut corridor,
-                        };
-                        assert_eq!(*slot.get_or_insert(kind), kind, "seed {seed} depth {depth} at {x},{y}");
+                        if let Some(c) = f.at(x, y) {
+                            let q = &f.quarters()[f.quarter(x, y).expect("an open cell has a quarter")];
+                            assert_eq!((c.walls, c.floor), (q.walls, q.floor));
+                        } else {
+                            assert_eq!(f.quarter(x, y), None);
+                        }
                     }
                 }
             }
         }
     }
 
+    #[test]
+    fn a_doorway_matches_a_room_it_opens_into_except_the_entrance() {
+        let entrance_at = |l: &Level| (l.entrance.x as i32, l.entrance.y as i32);
+        for depth in 1..=2 {
+            for seed in 1..=50 {
+                let (level, params) = level_at(seed, depth);
+                let f = finishes(&level, &params);
+                for y in 0..level.height as i32 {
+                    for x in 0..level.width as i32 {
+                        if level.cell(x, y) != Cell::Door || (x, y) == entrance_at(&level) {
+                            continue;
+                        }
+                        let beside: Vec<DoorStyle> = [(0, -1), (1, 0), (0, 1), (-1, 0)].iter().filter_map(|&(dx, dy)| level.room_at(x + dx, y + dy)).map(|r| f.quarters().iter().find(|q| q.rooms.contains(&r)).unwrap().door).collect();
+                        let style = f.door_style(x, y).unwrap();
+                        assert!(beside.is_empty() || beside.contains(&style), "seed {seed} depth {depth} door at {x},{y}: {style:?} not in {beside:?}");
+                        // A single quarter's doors never mix arch shapes.
+                        let q = &f.quarters()[f.quarter(x, y).unwrap()];
+                        if q.character == Character::Vaulted && beside.len() == 1 {
+                            assert_eq!(style, q.door);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_vaulted_quarter_has_one_arch_shape() {
+        let mut vaulted = 0;
+        for seed in 1..=50 {
+            let (level, params) = level_at(seed, 2);
+            let f = finishes(&level, &params);
+            for q in f.quarters() {
+                if q.character == Character::Vaulted {
+                    vaulted += 1;
+                    assert!(matches!(q.door, DoorStyle::RoundArch | DoorStyle::PointedArch));
+                    assert_eq!((q.walls, q.floor), (WallFinish::Ashlar, FloorFinish::Flagstone));
+                } else {
+                    assert!(!matches!(q.door, DoorStyle::RoundArch | DoorStyle::PointedArch), "{:?}", q.character);
+                }
+            }
+            // Every arched door in the level belongs to a vaulted quarter, in its one shape.
+            for y in 0..level.height as i32 {
+                for x in 0..level.width as i32 {
+                    if let Some(DoorStyle::RoundArch | DoorStyle::PointedArch) = f.door_style(x, y) {
+                        let q = &f.quarters()[f.quarter(x, y).unwrap()];
+                        assert_eq!(q.character, Character::Vaulted, "seed {seed}");
+                        assert_eq!(f.door_style(x, y), Some(q.door));
+                    }
+                }
+            }
+        }
+        assert!(vaulted > 10, "{vaulted} vaulted quarters");
+    }
+
+    #[test]
+    fn every_character_appears_in_its_style() {
+        for depth in [1, 2] {
+            let mut seen = HashSet::new();
+            for seed in 1..=50 {
+                let (level, params) = level_at(seed, depth);
+                seen.extend(finishes(&level, &params).quarters().iter().map(|q| q.character));
+            }
+            assert_eq!(seen, Character::of_style(LevelStyle::for_depth(depth)).iter().copied().collect(), "depth {depth}");
+        }
+    }
+
+    #[test]
+    fn levels_differ_in_lean() {
+        for depth in [1, 2] {
+            let mut leans = HashSet::new();
+            let mut timber_shares = Vec::new();
+            for seed in 1..=50 {
+                let (level, params) = level_at(seed, depth);
+                let f = finishes(&level, &params);
+                leans.insert(f.lean());
+                let doors: Vec<_> = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter_map(|(x, y)| f.door_style(x, y)).collect();
+                if !doors.is_empty() {
+                    timber_shares.push(doors.iter().filter(|&&d| d == DoorStyle::Timber).count() as f32 / doors.len() as f32);
+                }
+            }
+            assert_eq!(leans.len(), Character::of_style(LevelStyle::for_depth(depth)).len(), "depth {depth}");
+            let (lo, hi) = timber_shares.iter().fold((1.0f32, 0.0f32), |(lo, hi), &s| (lo.min(s), hi.max(s)));
+            assert!(hi - lo > 0.5, "depth {depth}: timber doors range {lo} to {hi}");
+        }
+    }
+
+    #[test]
+    fn corridors_take_the_nearest_rooms_quarter() {
+        for depth in 1..=2 {
+            for seed in 1..=20 {
+                let (level, params) = level_at(seed, depth);
+                let f = finishes(&level, &params);
+                // Neighbouring open cells are in the same quarter or on a frontier where
+                // quarters meet; a cell inside a room is never on the far side of one.
+                for y in 0..level.height as i32 {
+                    for x in 0..level.width as i32 {
+                        if let Some(r) = level.room_at(x, y).filter(|_| level.is_open(x, y)) {
+                            let q = f.quarters().iter().position(|q| q.rooms.contains(&r));
+                            assert_eq!(f.quarter(x, y), q);
+                        }
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn every_style_shows_each_of_its_finishes_and_moss_gathers() {
         for depth in [1, 2] {

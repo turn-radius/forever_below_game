@@ -1063,9 +1063,9 @@ mod tests {
 
     #[test]
     fn cobbles_replace_the_flagstones_in_a_cobbled_cell() {
-        let level = halls(1207);
+        // A level with a timbered quarter, whose floors are cobbled.
+        let level = (1..200).map(halls).find(|l| l.rooms.iter().any(|r| CellView::new(l).is_cobbled(r.x as i32, r.y as i32))).expect("some hall has a cobbled room");
         let view = CellView::new(&level);
-        assert!(level.rooms.iter().any(|r| view.is_cobbled(r.x as i32, r.y as i32)), "seed 1207 has a cobbled room");
         let mesh = level_mesh(&view, view.bounds());
         assert!(mesh.surfaces.parts.iter().any(|p| p.name.starts_with("stones_")));
         let flags = part(&level_mesh(&CellView::uncobbled(&level), view.bounds()), "floor").indices.len();
@@ -1196,7 +1196,10 @@ mod tests {
     #[test]
     fn rubble_is_rougher_than_ashlar_and_tiles_across_stretches() {
         fn with(level: &Level, rubble_chance: f64) -> CellView<'_> {
-            let params = fb_level::LevelParams { rubble_chance, cobble_chance: 0.0, ..fb_level::LevelParams::for_style(level.style) };
+            // The chances weigh the quarters' characters against the plain one: all rubble needs a
+            // weight that swamps it, and half of them one near its own.
+            let rubble_chance = if rubble_chance >= 1.0 { 1e6 } else if rubble_chance > 0.0 { 0.4 } else { 0.0 };
+            let params = fb_level::LevelParams { rubble_chance, cobble_chance: 0.0, arch_chance: 0.0, ..fb_level::LevelParams::for_style(level.style) };
             CellView::with_params(level, &params)
         }
         let walls_triangles = |m: &LevelMesh| ["walls", "damp"].iter().map(|n| part(m, n).indices.len() / 3).sum::<usize>();
