@@ -224,7 +224,11 @@ pub fn turned_volume(volume: f32, steps: i32) -> f32 {
     ((volume * tenths).round() + steps as f32).clamp(0.0, tenths) / tenths
 }
 
-pub fn turn_music_volume(input: ActionInput, mut settings: ResMut<GameSettings>) {
+pub fn turn_music_volume(input: ActionInput, mut settings: ResMut<GameSettings>, naming: Option<Res<crate::title::creator::Draft>>) {
+    // Minus and Equal type into the creator's name field while it is open.
+    if naming.is_some() {
+        return;
+    }
     let steps = input.just_pressed(Action::MusicLouder) as i32 - input.just_pressed(Action::MusicQuieter) as i32;
     if steps != 0 {
         let volume = turned_volume(settings.music_volume, steps);
@@ -513,6 +517,16 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Minus);
         app.update();
         assert!((app.world().resource::<GameSettings>().music_volume - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn volume_keys_type_into_the_creator_instead() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>().init_resource::<Keymap>().init_resource::<GameSettings>().add_systems(Update, turn_music_volume);
+        app.insert_resource(crate::title::creator::Draft::roll(1));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Minus);
+        app.update();
+        assert_eq!(app.world().resource::<GameSettings>().music_volume, GameSettings::default().music_volume);
     }
 
     #[test]
