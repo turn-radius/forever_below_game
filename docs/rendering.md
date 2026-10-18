@@ -117,7 +117,7 @@ Where the Rust renderer (`game/src/render/`) departs from the prototypes:
 
 Frame and system timings come from [Tracy](https://github.com/wolfpld/tracy). The `tracy` feature turns on Bevy's `trace_tracy`, which is off in ordinary builds.
 
-1. Build with the `profiling` profile (release speed, line tables and symbols kept) and the feature: `cargo build --profile profiling -p forever_below --features tracy`.
+1. Build with the `profiling` profile (release speed, line tables and symbols kept) and the feature: `cargo build --profile profiling -p forever_below --no-default-features --features tracy`.
 2. Install the Tracy profiler, version 0.14 (the release `tracy-client-sys` 0.30 in Bevy 0.20 embeds; the versions must match) and open it.
 3. Run `target/profiling/forever_below` from the repo root (any view switch works) and press Connect in Tracy. Bevy's systems, schedules and render passes show as zones.
 
