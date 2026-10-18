@@ -334,7 +334,7 @@ pub struct LevelMesh {
 /// by.
 pub fn level_mesh(view: &CellView, range: (i32, i32, i32, i32)) -> LevelMesh {
     let mut mesh = bare_level_mesh(view, range);
-    let enclosure = occlusion::Enclosure::new(view);
+    let enclosure = occlusion::Enclosure::new(view, range);
     for part in &mut mesh.surfaces.parts {
         enclosure.bake(part);
     }

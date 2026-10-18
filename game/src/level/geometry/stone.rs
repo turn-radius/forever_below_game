@@ -207,6 +207,19 @@ impl Vaults {
         top
     }
 
+    /// Only the rooms that can set the ceiling anywhere within `reach` of the box `lo..hi` over
+    /// the floor plan (a room's slope falls to the soffit a cell beyond it), so a ceiling asked
+    /// about again and again in one place need not visit every room.
+    pub fn near(&self, lo: [f32; 2], hi: [f32; 2], reach: f32) -> Vaults {
+        let rooms = self
+            .rooms
+            .iter()
+            .filter(|r| r.lo[0] - CELL - reach <= hi[0] && r.hi[0] + CELL + reach >= lo[0] && r.lo[1] - CELL - reach <= hi[1] && r.hi[1] + CELL + reach >= lo[1])
+            .copied()
+            .collect();
+        Vaults { rooms, spring: self.spring }
+    }
+
     /// The soffit's height, and where every vault springs from.
     pub fn spring(&self) -> f32 {
         self.spring
