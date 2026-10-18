@@ -30,6 +30,8 @@ use fb_items::{
     tables::{SlotSide, SlotSize, slot_places},
 };
 
+use std::sync::Arc;
+
 use super::icon::Icons;
 use super::items::Inventory;
 use super::seal::{Canvas, Glyph, Seal, SealInks, TURN_SECONDS};
@@ -37,7 +39,7 @@ use crate::launch::AppState;
 use crate::carry::item_light;
 use crate::character::Character;
 use crate::figure::{Figure, spawn_figure};
-use crate::fitting::Fitting;
+use crate::fitting::{FitCache, Fitting, figure_key};
 use crate::light::{StudioLight, Torch, point_light, reach_falloff};
 use crate::play::{Screen, ScreenOpen};
 use crate::render::ItemSpawner;
@@ -195,8 +197,9 @@ impl FromWorld for DollAssets {
     }
 }
 
-/// Who the doll was dressed as, and each worn item by slot, base and seed.
-type Dressed = (Character, Vec<(Slot, String, u32)>);
+/// What the doll was dressed for: the key of its body and every worn item, wear included
+/// ([`crate::fitting::figure_key`]).
+type Dressed = String;
 
 /// The doll's stage: what it was last dressed in, its figure, camera and key light, and how
 /// far it is turned.
@@ -210,9 +213,9 @@ pub struct DollStage {
     /// Radians the doll is turned from facing the viewer.
     pub turn: f32,
     /// The figure as last dressed.
-    pub built: Option<Figure>,
+    pub built: Option<Arc<Figure>>,
     /// An async fitting job running off the main thread, if any.
-    fitting: Option<Fitting<Dressed, Figure>>,
+    fitting: Option<Fitting<Dressed, Arc<Figure>>>,
 }
 
 impl Default for DollStage {
@@ -267,12 +270,19 @@ pub fn start_doll_fitting(
     character: Res<Character>,
     open: Res<ScreenOpen>,
     mut stage: ResMut<DollStage>,
+    mut cache: ResMut<FitCache>,
 ) {
     if open.0 != Some(Screen::Inventory) {
         return;
     }
-    let worn = inventory.equipped();
-    let key = (character.clone(), worn.iter().map(|(slot, item)| (*slot, item.base.clone(), item.seed)).collect::<Vec<_>>());
+    // Keys spell out every item's state, so they are made only when something may have moved.
+    if !(inventory.is_changed() || character.is_changed() || open.is_changed()) {
+        return;
+    }
+    let spec = character.spec();
+    let dirt = character.dirt;
+    let worn: Vec<(Slot, fb_items::Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.clone())).collect();
+    let key = figure_key(&spec, &worn, dirt);
     if stage.dressed.as_ref() == Some(&key) {
         // Already dressed for this equipment; drop any in-flight fit
         stage.fitting = None;
@@ -281,12 +291,12 @@ pub fn start_doll_fitting(
     if stage.fitting.as_ref().is_some_and(|f| f.key() == &key) {
         return;
     }
-    let spec = character.spec();
-    let dirt = character.dirt;
-    let worn_cloned: Vec<(Slot, fb_items::Item)> = worn.into_iter().map(|(slot, item)| (slot, item.clone())).collect();
-    stage.fitting = Some(Fitting::start(key, move || {
-        Figure::dress(&spec, &worn_cloned, dirt)
-    }));
+    // Dressed in this a moment ago: no job.
+    if let Some(figure) = cache.figure(&key) {
+        stage.fitting = Some(Fitting::ready(key, figure));
+        return;
+    }
+    stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &worn, dirt))));
 }
 
 /// Poll the fitting task and spawn the figure when it's ready.
@@ -294,10 +304,12 @@ pub fn poll_doll_fitting(
     mut commands: Commands,
     assets: Res<DollAssets>,
     mut stage: ResMut<DollStage>,
+    mut cache: ResMut<FitCache>,
     mut spawner: ItemSpawner,
 ) {
     let Some(mut fitting) = stage.fitting.take() else { return };
     if let Some(figure) = fitting.poll() {
+        cache.store_figure(fitting.key(), figure.clone());
         stage.dressed = Some(fitting.key().clone());
         spawn_doll_figure(&mut commands, &mut spawner, &assets, &mut stage, &figure);
     } else {
@@ -311,7 +323,7 @@ fn spawn_doll_figure(
     spawner: &mut ItemSpawner,
     assets: &DollAssets,
     stage: &mut DollStage,
-    figure: &Figure,
+    figure: &Arc<Figure>,
 ) {
     if let Some(old) = stage.figure.take() {
         commands.entity(old).despawn();
@@ -692,6 +704,7 @@ mod tests {
             .init_resource::<Inventory>()
             .init_resource::<Character>()
             .init_resource::<DollStage>()
+            .init_resource::<FitCache>()
             .init_resource::<super::super::Dragging>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<AccumulatedMouseMotion>()
@@ -768,6 +781,32 @@ mod tests {
         assert!(to_head.dot(at.forward().as_vec3()) > 0.99, "looks at the head");
         let (view, _) = portrait_view(head, r);
         assert!(view.y >= 3.2 * r && view.y < 5.0 * r, "{view}");
+    }
+
+    #[test]
+    fn swapping_between_two_outfits_a_second_time_starts_no_fit() {
+        let mut app = stage_app();
+        let (a, b) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            (inventory.add(fb_items::roll_item("Helm", 5).unwrap()), inventory.add(fb_items::roll_item("Helm", 6).unwrap()))
+        };
+        let wear = |app: &mut App, id| app.world_mut().resource_mut::<Inventory>().equip(id, Slot::Head).unwrap();
+        wear(&mut app, a);
+        wait_for_doll_fitting(&mut app);
+        let first = worn_names(&app);
+        wear(&mut app, b);
+        wait_for_doll_fitting(&mut app);
+        let second = worn_names(&app);
+        assert_ne!(first, second);
+        let misses = app.world().resource::<FitCache>().misses;
+        for (id, names) in [(a, &first), (b, &second), (a, &first)] {
+            wear(&mut app, id);
+            app.update();
+            assert!(app.world().resource::<DollStage>().fitting.is_none(), "no fit started");
+            assert_eq!(&worn_names(&app), names);
+        }
+        let cache = app.world().resource::<FitCache>();
+        assert_eq!((cache.misses, cache.hits), (misses, 3));
     }
 
     #[test]

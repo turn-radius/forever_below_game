@@ -119,6 +119,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<OpenContainer>()
             .init_resource::<DollAssets>()
             .init_resource::<DollStage>()
+            .init_resource::<crate::fitting::FitCache>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
             .add_systems(OnExit(AppState::Delving), leave_the_delve)
@@ -161,10 +162,11 @@ impl Plugin for InventoryPlugin {
 
 /// Leaving the delve clears what the screens kept of it: the doll stage's record of its figure
 /// and cameras (despawned with the delve), the icons still being drawn, what lay underfoot, a
-/// container left open, a hovered item and a toast, none of which belong to the next delve's
+/// container left open, a hovered item, a toast and the fits kept ([`crate::fitting::FitCache`]), none of which belong to the next delve's
 /// delver and items.
 pub fn leave_the_delve(mut commands: Commands, mut stage: ResMut<DollStage>, mut icons: ResMut<icon::IconCache>) {
     *stage = DollStage::default();
+    commands.insert_resource(crate::fitting::FitCache::default());
     icons.abandon_drawing();
     commands.insert_resource(Underfoot::default());
     commands.insert_resource(FloorChanges::default());
