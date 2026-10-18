@@ -23,7 +23,6 @@ use bevy::{
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use fb_body::Side;
-use fb_character::combat::Odds;
 
 use super::callouts::{Callout, Outcome};
 use super::feedback::{Corpse, Struck};

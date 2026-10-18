@@ -768,7 +768,7 @@ pub(crate) fn scale_screen(open: Res<ScreenOpen>, cameras: Query<&Camera, With<V
 
 /// Builds the screen when it opens and rebuilds it whenever what is in it changes, or the
 /// tuning does; takes it down when it closes.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn build_screen(
     mut commands: Commands,
     open: Res<ScreenOpen>,

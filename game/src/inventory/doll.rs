@@ -816,7 +816,7 @@ mod tests {
         // Equip while closed
         let sword = fb_items::roll_item("Sword", 11).unwrap();
         let name = sword.title().to_string();
-        let old_figure = app.world().resource::<DollStage>().built.clone();
+        let _old_figure = app.world().resource::<DollStage>().built.clone();
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let id = inventory.add(sword);

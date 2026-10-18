@@ -709,19 +709,18 @@ fn hall_lights(level: &Level, start_room: usize, rng: &mut Mulberry32, brazier_m
     let mut lights = Vec::new();
     let mut by_size: Vec<usize> = (0..level.rooms.len()).filter(|&i| i != start_room).collect();
     by_size.sort_by_key(|&i| Reverse(level.rooms[i].area()));
-    let mut lit: Vec<usize> = by_size.iter().copied().filter(|&i| is_colonnaded(level, &level.rooms[i])).take(((level.rooms.len() + 1) / 2).saturating_sub(1).clamp(1, 3)).collect();
+    let mut lit: Vec<usize> = by_size.iter().copied().filter(|&i| is_colonnaded(level, &level.rooms[i])).take(level.rooms.len().div_ceil(2).saturating_sub(1).clamp(1, 3)).collect();
     for &i in &lit {
         lights.extend(colonnade_braziers(level, &level.rooms[i], rng));
     }
-    if let Some(&i) = by_size.iter().find(|&&i| !lit.contains(&i) && !is_colonnaded(level, &level.rooms[i]) && level.rooms[i].area() >= brazier_min_area) {
-        if (lit.len() + 1) * 2 < level.rooms.len() && rng.chance(0.5) {
+    if let Some(&i) = by_size.iter().find(|&&i| !lit.contains(&i) && !is_colonnaded(level, &level.rooms[i]) && level.rooms[i].area() >= brazier_min_area)
+        && (lit.len() + 1) * 2 < level.rooms.len() && rng.chance(0.5) {
             lights.extend(braziers(&level.rooms[i], rng));
             lit.push(i);
         }
-    }
     let mut others: Vec<usize> = by_size.iter().copied().filter(|i| !lit.contains(i)).collect();
     shuffle(&mut others, rng);
-    let room_budget = ((level.rooms.len() + 1) / 2).saturating_sub(lit.len()).max(1);
+    let room_budget = level.rooms.len().div_ceil(2).saturating_sub(lit.len()).max(1);
     let glow_rooms = (rng.int(1, 2) as usize).min(room_budget).min(others.len());
     for &i in &others[..glow_rooms] {
         lights.extend(glowcaps(&level.rooms[i], rng));

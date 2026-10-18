@@ -351,10 +351,10 @@ pub fn parent_of(bone: usize) -> Option<usize> {
         SKULL => Some(NECK),
         JAW => Some(SKULL),
         b if (ARMS..ARMS + 6).contains(&b) => {
-            if (b - ARMS) % 3 == 0 { Some(RIBCAGE) } else { Some(b - 1) }
+            if (b - ARMS).is_multiple_of(3) { Some(RIBCAGE) } else { Some(b - 1) }
         }
         b => {
-            if (b - LEGS) % 3 == 0 { Some(PELVIS) } else { Some(b - 1) }
+            if (b - LEGS).is_multiple_of(3) { Some(PELVIS) } else { Some(b - 1) }
         }
     }
 }
@@ -476,9 +476,7 @@ fn build(state: &SkeletonState, grips: &[Option<HandPose>; 2]) -> Rig {
         };
         let mut mesh = bone::pelvis(&spec);
         // Pelvis space is centred between the sockets; the bone's origin is exactly that.
-        let mut parts = Vec::new();
-        parts.push(kit.bone(std::mem::take(&mut mesh), 11));
-        meshes[index::PELVIS] = parts;
+        meshes[index::PELVIS] = vec![kit.bone(std::mem::take(&mut mesh), 11)];
     }
 
     // ── Spine: five lumbar vertebrae ──

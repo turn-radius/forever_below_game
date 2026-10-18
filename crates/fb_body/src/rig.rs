@@ -154,6 +154,7 @@ impl Quat {
     }
 
     /// `self` applied after `other`.
+    #[allow(clippy::should_implement_trait)]
     pub fn mul(self, other: Quat) -> Quat {
         let [ax, ay, az, aw] = self.0;
         let [bx, by, bz, bw] = other.0;

@@ -451,8 +451,7 @@ mod tests {
 
     #[test]
     fn exhaustion_at_the_death_level_reads_dead() {
-        let mut time = TimeLab::default();
-        time.exhaustion = fb_character::Exhaustion::new(5);
+        let mut time = TimeLab { exhaustion: fb_character::Exhaustion::new(5), ..Default::default() };
         assert_eq!(view(&LabState::default(), &time, defaults()).exhaustion, (5, "5 of 6".to_string()));
         time.exhaustion = fb_character::Exhaustion::new(6);
         assert_eq!(view(&LabState::default(), &time, defaults()).exhaustion, (6, "Dead".to_string()));

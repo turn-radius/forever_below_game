@@ -636,6 +636,7 @@ impl WorstBand {
     /// Counts the part of a step of `hours` that the meter spent at its worst, given its value
     /// `before` the step and its state after. Returns the levels newly earned: the first once
     /// `first_hours` have passed and one more every `every_hours`.
+    #[allow(clippy::too_many_arguments)]
     fn advance(&mut self, rules: &Rules, before: f64, meter: &Meter, activity: Activity, hours: f64, first_hours: f64, every_hours: f64) -> u32 {
         self.hours += hours_at_worst(before, meter.effective_rate_with(rules, activity), hours);
         let earned = if self.hours + THRESHOLD_SLACK >= first_hours {

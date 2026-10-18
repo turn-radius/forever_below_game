@@ -214,6 +214,7 @@ impl Default for GearPace {
 /// What walking moves and reads on the delver.
 type Walker<'a> = (&'a mut Locomotion, &'a mut Gait, &'a mut Transform, Option<&'a Slowed>, &'a Exhaustion, &'a Load, &'a DelverStamina, Option<&'a GearPace>);
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn walk(
     time: Res<Time>,
     tuning: Res<Tuning>,
