@@ -284,7 +284,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 | `[light]` | `ambient_lux` | 4.0 | The abyss's own light where no flame reaches, in lux. |
 | `[light]` | `fog_start` | 40.0 | Where the dark starts to swallow far stone, in world units. |
 | `[light]` | `fog_end` | 260.0 | Where the dark is complete, in world units. |
-| `[light]` | `shadowed_lights` | 4 | How many of the lights nearest you cast shadows at once (the rest light without shadows). |
+| `[light]` | `shadowed_lights` | 4 | How many of the level's lights nearest you cast shadows at once (the rest light without shadows). Your own torch and lantern always do. |
 | `[light]` | `shadow_map_size` | 512 | Size of each face of a light's shadow map, in texels (smaller is faster and softer-edged). |
 | `[sound]` | `music_mix` | 0.35 | The music's volume at full, 0 to 1, before your music volume setting. |
 | `[sound]` | `silence_min` | 45.0 | The shortest silence between tracks, in seconds. |

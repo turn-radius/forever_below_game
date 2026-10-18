@@ -17,9 +17,10 @@ use bevy::{
 };
 
 use crate::{
+    carry::GivenLight,
     level::DebugCamera,
     play::{DelveSystems, PlayerCamera},
-    tuning::{LightTuning, Tuning},
+    tuning::Tuning,
 };
 
 /// Fraction of a light's range inside which its falloff stops climbing: the inverse square is
@@ -107,6 +108,20 @@ pub fn is_shadowable(light: &PointLight) -> bool {
 /// player walks by. Our own tuning: a little under a cell (a cell is 40 units).
 pub const SHADOW_STICKINESS: f32 = 12.0;
 
+/// How near the camera, in world units, a lit thing's light ([`GivenLight`]) is to count as
+/// the player's own: the torch in hand, a lantern at the hip, a lit thing underfoot. Our own
+/// choice: about two metres.
+pub const OWN_LIGHT_REACH: f32 = 20.0;
+
+/// Whether a light `distance` from the camera, lit by a [`GivenLight`] or not, is the
+/// player's own, which always casts and takes no slot from the budget.
+pub fn is_own_light(given: bool, distance: f32) -> bool {
+    given && distance <= OWN_LIGHT_REACH
+}
+
+/// The least and most a shadow map's face may be, in texels, whatever the tuning says.
+pub const SHADOW_MAP_SIZES: (usize, usize) = (128, 2048);
+
 /// Which of `lights` (each its distance from the camera, and whether it casts shadows now)
 /// cast shadows next: the `budget` nearest, a light that already does counting
 /// [`SHADOW_STICKINESS`] nearer. Ties go to the earlier light.
@@ -144,13 +159,21 @@ impl Plugin for ShadowBudgetPlugin {
 fn budget_shadows(
     tuning: Res<Tuning>,
     cameras: Query<(&Camera, &GlobalTransform), Or<(With<PlayerCamera>, With<DebugCamera>)>>,
-    mut lights: Query<(&GlobalTransform, &mut PointLight)>,
+    mut lights: Query<(&GlobalTransform, &mut PointLight, Has<GivenLight>)>,
 ) {
     let Some((_, eye)) = cameras.iter().find(|(camera, _)| camera.is_active) else { return };
     let eye = eye.translation();
-    let mut shadowable: Vec<_> = lights.iter_mut().filter(|(_, light)| is_shadowable(light)).collect();
-    let ranked: Vec<(f32, bool)> = shadowable.iter().map(|(at, light)| (at.translation().distance(eye), light.shadow_maps_enabled)).collect();
-    for ((_, light), cast) in shadowable.iter_mut().zip(shadow_casters(&ranked, tuning.light.shadowed_lights)) {
+    let mut shadowable: Vec<_> = lights.iter_mut().filter(|(_, light, _)| is_shadowable(light)).collect();
+    let distances: Vec<f32> = shadowable.iter().map(|(at, _, _)| at.translation().distance(eye)).collect();
+    // The player's own lights always cast; the budget is for the level's.
+    let own: Vec<bool> = shadowable.iter().zip(&distances).map(|((_, _, given), &d)| is_own_light(*given, d)).collect();
+    let level: Vec<usize> = (0..shadowable.len()).filter(|&i| !own[i]).collect();
+    let ranked: Vec<(f32, bool)> = level.iter().map(|&i| (distances[i], shadowable[i].1.shadow_maps_enabled)).collect();
+    let mut casts = vec![true; shadowable.len()];
+    for (&i, cast) in level.iter().zip(shadow_casters(&ranked, tuning.light.shadowed_lights)) {
+        casts[i] = cast;
+    }
+    for ((_, light, _), cast) in shadowable.iter_mut().zip(casts) {
         if light.shadow_maps_enabled != cast {
             light.shadow_maps_enabled = cast;
         }
@@ -158,9 +181,10 @@ fn budget_shadows(
 }
 
 fn size_shadow_maps(tuning: Res<Tuning>, mut map: ResMut<PointLightShadowMap>) {
-    let LightTuning { shadow_map_size, .. } = tuning.light;
-    if map.size != shadow_map_size {
-        map.size = shadow_map_size;
+    // Zero, or a size no device holds, must never reach the GPU.
+    let size = tuning.light.shadow_map_size.clamp(SHADOW_MAP_SIZES.0, SHADOW_MAP_SIZES.1);
+    if map.size != size {
+        map.size = size;
     }
 }
 
@@ -265,6 +289,7 @@ impl StudioLight {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tuning::LightTuning;
 
     #[test]
     fn flicker_stays_in_band() {
@@ -400,9 +425,37 @@ mod tests {
         let mut shadowed: Vec<f32> = query.iter(app.world()).filter(|(l, _)| l.shadow_maps_enabled && is_shadowable(l)).map(|(_, t)| t.translation.x).collect();
         shadowed.sort_by(f32::total_cmp);
         assert_eq!(shadowed, vec![20.0, 40.0, 60.0, 80.0]);
-        assert!(query.iter(app.world()).all(|(l, _)| l.shadow_depth_bias == SHADOW_DEPTH_BIAS || l.shadow_maps_enabled), "biases kept");
+        assert!(query.iter(app.world()).filter(|(l, _)| is_shadowable(l)).all(|(l, _)| l.shadow_depth_bias == SHADOW_DEPTH_BIAS && l.shadow_normal_bias == SHADOW_NORMAL_BIAS), "biases kept");
         assert_eq!(query.iter(app.world()).filter(|(l, _)| is_shadowable(l)).count(), 10);
         assert!(app.world().get::<PointLight>(plain).unwrap().shadow_maps_enabled);
+    }
+
+    #[test]
+    fn the_players_own_lights_cast_without_taking_a_slot() {
+        assert!(is_own_light(true, 5.0));
+        assert!(!is_own_light(true, OWN_LIGHT_REACH + 1.0));
+        assert!(!is_own_light(false, 5.0));
+        let mut app = App::new();
+        app.add_plugins(bevy::transform::TransformPlugin)
+            .init_resource::<Tuning>()
+            .add_systems(PostUpdate, budget_shadows.after(TransformSystems::Propagate));
+        app.world_mut().spawn((Camera::default(), PlayerCamera, Transform::default()));
+        let exposure = Exposure::INDOOR;
+        let light = cast_shadows(point_light(Torch::COLOR, 1.0, 60.0, &exposure));
+        let anchor = crate::carry::item_light(&crate::carry::lit_torch(1207).shape).unwrap();
+        // A held torch and a lantern at the hip, and ten braziers further off.
+        for x in [2.0, 8.0] {
+            app.world_mut().spawn((crate::carry::given_light(anchor, exposure, &LightTuning::default()), Transform::from_xyz(x, 0.0, 0.0)));
+        }
+        for i in 0..10 {
+            app.world_mut().spawn((light, Transform::from_xyz(40.0 + 20.0 * i as f32, 0.0, 0.0)));
+        }
+        app.update();
+        let mut query = app.world_mut().query::<(&PointLight, &Transform)>();
+        let near = query.iter(app.world()).filter(|(_, t)| t.translation.x < 20.0 && t.translation.x > 0.0).filter(|(l, _)| l.shadow_maps_enabled).count();
+        let far = query.iter(app.world()).filter(|(l, t)| t.translation.x >= 40.0 && l.shadow_maps_enabled).count();
+        assert_eq!(near, 2);
+        assert_eq!(far, 4);
     }
 
     #[test]
