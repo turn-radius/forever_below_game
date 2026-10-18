@@ -10,6 +10,7 @@
 //!   `rules.stamina.block_cost` of their stamina ([`take_blocks`]);
 //! - they cannot swing, and the guard drops once they are winded, so a delver who only blocks
 //!   runs out of breath;
+//! - they walk at [`GUARD_PACE`] of their pace and cannot sprint (`crate::player::walk`);
 //! - the shield comes up across the left of the view, its face toward what is ahead
 //!   ([`guard_held`]).
 //!
@@ -45,6 +46,8 @@ impl Plugin for GuardPlugin {
 /// How far to either side of where the delver faces a raised shield covers, radians: a blow
 /// from within it can be turned aside.
 pub const GUARD_ARC: f32 = std::f32::consts::FRAC_PI_3;
+/// How fast a delver with their guard up moves, as a share of their pace. Our own.
+pub const GUARD_PACE: f32 = 0.5;
 /// Seconds the shield takes to come up, and to go down again.
 pub const RAISE_TIME: f32 = 0.12;
 
