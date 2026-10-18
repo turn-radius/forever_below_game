@@ -29,7 +29,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::{apply_decay, apply_moss, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
+import super::decay::{apply_decay, apply_moss, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -388,23 +388,26 @@ fn fragment(
         toon.decay_scale,
         toon.decay_seed,
     );
-    // Cave rock breaks the shading normal into facets or beds before the light reads it. Level
-    // stone sits at the world origin, so item space is world space and a change of the normal
-    // there is a change of the world normal.
+    // Cave rock breaks the shading normal into facets or beds before the light reads it. Rock
+    // is level stone, drawn in world space with no transform of its own, so item space is world
+    // space and a change of the normal there is a change of the world normal.
 @if(!SKINNED) {
     if toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA {
-        var rock = rock_shade(item_position, item_normal, pixel, toon.decay_seed);
+        var rock: RockShade;
         if toon.decay_type == DECAY_STRATA {
             rock = strata_shade(item_position, item_normal, pixel, toon.decay_seed);
+        } else {
+            rock = rock_shade(item_position, item_normal, pixel, toon.decay_seed);
         }
         pbr_input.N = normalize(pbr_input.N + (rock.normal - item_normal));
         base = base * rock.tone;
     }
 }
     // Moss grows over the level's stone, which carries it per vertex (not skinned: folk keep
-    // their rest normals in that slot). Stone sits at the world origin, so item space is world space.
+    // their rest normals in that slot). Sampled in the world, since columns and doors are items
+    // with their own transforms, and measured in height from item space (their origin is the floor).
 @if(VERTEX_UVS_B && !SKINNED) {
-    base = apply_moss(base, item_position, item_normal, pixel, vertex_output.uv_b.x, toon.decay_seed);
+    base = apply_moss(base, vertex_output.world_position.xyz, item_position.y, item_normal, pixel, vertex_output.uv_b.x, toon.decay_seed);
 }
 
     // A flame (premultiplied) is coloured by its vertices, by height (`flame_colour`), and here

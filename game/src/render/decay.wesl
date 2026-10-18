@@ -275,13 +275,14 @@ struct RockShade {
     tone: vec3<f32>,
 }
 
-// Gradient of value noise at `q` by central differences, `e` apart.
+// Gradient of value noise at `q` by forward differences `e` apart: four samples.
 fn noise_gradient(q: vec3<f32>, e: f32) -> vec3<f32> {
+    let v = value_noise(q);
     return vec3(
-        value_noise(q + vec3(e, 0.0, 0.0)) - value_noise(q - vec3(e, 0.0, 0.0)),
-        value_noise(q + vec3(0.0, e, 0.0)) - value_noise(q - vec3(0.0, e, 0.0)),
-        value_noise(q + vec3(0.0, 0.0, e)) - value_noise(q - vec3(0.0, 0.0, e)),
-    ) / (2.0 * e);
+        value_noise(q + vec3(e, 0.0, 0.0)) - v,
+        value_noise(q + vec3(0.0, e, 0.0)) - v,
+        value_noise(q + vec3(0.0, 0.0, e)) - v,
+    ) / e;
 }
 
 // Craggy cave rock (ours), in world units of 10 cm: voronoi facets 50 to 80 cm across, each
@@ -289,44 +290,63 @@ fn noise_gradient(q: vec3<f32>, e: f32) -> vec3<f32> {
 // some facet borders, and a fine bump over the facets. Floors (and ceilings) get flatter,
 // smaller facets, like gravel. Everything fades to plain stone as it shrinks on screen: a
 // facet is whole at 40 pixels across and gone by 20, a fissure at about three pixels wide and
-// gone by one, so far rock settles to the stone's bands without shimmering.
+// gone by one, so far rock settles to the stone's bands without shimmering. Once facets and
+// fissures are both gone the voronoi is skipped altogether, which is most of a far view.
 fn rock_shade(position: vec3<f32>, normal: vec3<f32>, pixel: f32, seed: f32) -> RockShade {
     let flat_amount = smoothstep(0.5, 0.8, abs(normal.y));
     let size = mix(6.5, 3.0, flat_amount);
-    // Warped, so facet borders wander instead of running straight.
-    var p = position / size + vec3(seed * 1.3);
-    p = p + (vec3(value_noise(p * 1.3), value_noise(p * 1.3 + vec3(5.2)), value_noise(p * 1.3 + vec3(9.7))) - 0.5) * 0.25;
-    let cells = nearest_cells(p);
+    var n = normal;
+    var tone = 1.0;
+    var fissure = 0.0;
 
-    // Some facets are split again into smaller ones, so they are not all of a size.
-    let finer = nearest_cells(p * 1.9 + vec3(4.3));
-    let split = step(0.72, hash3(cells.id1 + vec3(1.7)));
-    let id = select(cells.id1, finer.id1 + vec3(64.0), split > 0.5);
-    let facets = select(1.0 - smoothstep(0.025, 0.05, pixel / size), 1.0 - smoothstep(0.025, 0.05, pixel / size * 1.9), split > 0.5);
-    let tilt_dir = hash33(id) * 2.0 - 1.0;
-    let tilt = tilt_dir - normal * dot(tilt_dir, normal);
-    let lean = 0.8 + 2.4 * hash3(id + vec3(5.5));
-    var n = normalize(normal + tilt * lean * mix(1.0, 0.35, flat_amount) * facets);
+    if pixel / size * 1.9 < 0.05 || pixel < 0.25 {
+        // Warped, so facet borders wander instead of running straight.
+        var p = position / size + vec3(seed * 1.3);
+        p = p + (vec3(value_noise(p * 1.3), value_noise(p * 1.3 + vec3(5.2)), value_noise(p * 1.3 + vec3(9.7))) - 0.5) * 0.25;
+        let cells = nearest_cells(p);
+
+        // Some facets are split again into smaller ones, so they are not all of a size.
+        let split = step(0.72, hash3(cells.id1 + vec3(1.7))) > 0.5;
+        var id = cells.id1;
+        var facets = 1.0 - smoothstep(0.025, 0.05, pixel / size);
+        var rim = (cells.f2 - cells.f1) * size;
+        if split {
+            let finer = nearest_cells(p * 1.9 + vec3(4.3));
+            id = finer.id1 + vec3(64.0);
+            facets = 1.0 - smoothstep(0.025, 0.05, pixel / size * 1.9);
+            rim = min(rim, (finer.f2 - finer.f1) * size * 0.48);
+        }
+        let tilt_dir = hash33(id) * 2.0 - 1.0;
+        let tilt = tilt_dir - normal * dot(tilt_dir, normal);
+        let lean = 0.8 + 2.4 * hash3(id + vec3(5.5));
+        n = normalize(normal + tilt * lean * mix(1.0, 0.35, flat_amount) * facets);
+
+        // Fissures run along the border between two facets, where the two nearest points are
+        // equally far, on about one in seven borders, and broken along their length. Each
+        // facet's edge is also a little darker, as a chip's is.
+        let border = (cells.f2 - cells.f1) * size;
+        let keeps = step(0.86, hash3(cells.id1 + cells.id2 + vec3(3.3)));
+        let broken = smoothstep(0.35, 0.55, value_noise(position * 0.45 + vec3(seed)));
+        fissure = (1.0 - smoothstep(0.05, 0.2, border)) * keeps * broken * (1.0 - 0.7 * flat_amount) * (1.0 - smoothstep(0.1, 0.25, pixel));
+        let edge = mix(1.0, 0.94 + 0.06 * smoothstep(0.0, 0.15, rim), facets);
+        tone = mix(1.0, 0.94 + 0.12 * hash3(id + vec3(9.1)), facets) * edge;
+        // A facet leaning away from the normal also takes less light as a broad face would,
+        // which shows even where the torch is head on and every facet stays in its top band.
+        tone = tone * mix(1.0, mix(0.68, 1.05, smoothstep(0.55, 1.0, dot(n, normal))), facets);
+    }
 
     // The bump rides over the facets, finer than they are.
     let q = position * 0.9 + vec3(seed);
-    let bump = noise_gradient(q, 0.15) * 0.13 * detail(0.9, pixel) + noise_gradient(q * 2.6 + vec3(3.7), 0.15) * 0.08 * detail(2.34, pixel);
-    n = normalize(n + bump - normal * dot(bump, normal));
-
-    // Fissures run along the border between two facets, where the two nearest points are
-    // equally far, on about one in five borders, and broken along their length. Each facet's
-    // edge is also a little darker, as a chip's is.
-    let border = (cells.f2 - cells.f1) * size;
-    let keeps = step(0.86, hash3(cells.id1 + cells.id2 + vec3(3.3)));
-    let broken = smoothstep(0.35, 0.55, value_noise(position * 0.45 + vec3(seed)));
-    let fissure = (1.0 - smoothstep(0.05, 0.2, border)) * keeps * broken * (1.0 - 0.7 * flat_amount) * (1.0 - smoothstep(0.1, 0.25, pixel));
-    let rim = select(border, min(border, (finer.f2 - finer.f1) * size * 0.48), split > 0.5);
-    let edge = mix(1.0, 0.94 + 0.06 * smoothstep(0.0, 0.15, rim), facets);
-    let tone = mix(1.0, 0.94 + 0.12 * hash3(id + vec3(9.1)), facets) * edge;
-    // A facet leaning away from the normal also takes less light as a broad face would, which
-    // shows even where the torch is head on and every facet stays in its top band.
-    let leaning = mix(1.0, mix(0.68, 1.05, smoothstep(0.55, 1.0, dot(n, normal))), facets);
-    return RockShade(n, vec3(tone * leaning * (1.0 - 0.8 * fissure)));
+    let coarse = detail(0.9, pixel);
+    if coarse > 0.0 {
+        var bump = noise_gradient(q, 0.15) * 0.13 * coarse;
+        let fine = detail(2.34, pixel);
+        if fine > 0.0 {
+            bump = bump + noise_gradient(q * 2.6 + vec3(3.7), 0.15) * 0.08 * fine;
+        }
+        n = normalize(n + bump - normal * dot(bump, normal));
+    }
+    return RockShade(n, vec3(tone * (1.0 - 0.8 * fissure)));
 }
 
 // Layered cave rock (ours): horizontal beds 30 to 60 cm thick that wobble with height, in
@@ -357,23 +377,28 @@ fn strata_shade(position: vec3<f32>, normal: vec3<f32>, pixel: f32, seed: f32) -
 
 
 // Moss over stone (ours; greener and brighter than the plain 0x3f4f24 to 0x6f7f3a, since a warm
-// torch takes the green out of what it lights) where `moss` (0..1, carried per vertex) is above zero: thickest on
-// up-facing surfaces and the lower walls (about the first 1.2 m), flecked higher up and on
-// ceilings, in patches of band-limited noise, deep to light green with fine speckle. The bare
-// stone between the patches turns a little greener grey. `position` is in world units of 10 cm.
+// torch takes the green out of what it lights) where `moss` (0..1, carried per vertex) is above
+// zero. It gathers on up-facing surfaces (floors, block tops, ledges) and at the foot of walls
+// (fading out by about 1.2 m), and only flecks the upper walls and ceilings; modest damp gives
+// small cushions there, a grotto most of floor and wall foot. Patches are band-limited noise,
+// deep to light green with fine speckle, and the bare stone between turns a little greener
+// grey. `position` is in world units of 10 cm and sampled in the world, so every column and
+// door of a shape grows its own moss; `height` is the surface's height above the floor.
 // Moss at zero leaves the colour alone.
-fn apply_moss(color: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, pixel: f32, moss: f32, seed: f32) -> vec3<f32> {
+fn apply_moss(color: vec3<f32>, position: vec3<f32>, height: f32, normal: vec3<f32>, pixel: f32, moss: f32, seed: f32) -> vec3<f32> {
     if moss <= 0.0 {
         return color;
     }
-    let c = mix(color, color * vec3(0.9, 1.0, 0.86), clamp(moss, 0.0, 1.0) * 0.6);
+    let damp = clamp(moss, 0.0, 1.0);
+    let c = mix(color, color * vec3(0.9, 1.0, 0.86), damp * 0.6);
     let up = smoothstep(0.3, 0.85, normal.y);
-    let low = 1.0 - smoothstep(6.0, 14.0, position.y);
+    let foot = 1.0 - smoothstep(4.0, 12.0, height);
     let down = smoothstep(0.3, 0.85, -normal.y);
-    let reach = mix(0.14 + 0.8 * max(up, low), 0.06, down);
-    let coverage = clamp(moss * reach * 1.15, 0.0, 0.97);
+    // Sparse where only a little damp, so modest damp is a few cushions and a grotto is green.
+    let reach = mix(0.03 + 0.9 * max(up, foot * 0.85), 0.02, down);
+    let coverage = clamp(damp * damp * (1.2 - 0.2 * damp) * reach, 0.0, 0.95);
 
-    let k = 0.16;
+    let k = 0.24;
     let p = position * k + vec3(seed * 0.7);
     let cell = pixel * k;
     let field = patch_field(fbm(p, cell), fbm(p * 3.1 + vec3(2.9), cell * 3.1));

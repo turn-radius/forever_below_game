@@ -482,11 +482,7 @@ fn spawn_columns(
         let [cx, _, cz] = geometry::cell_centre(spot.cell.0, spot.cell.1);
         let moss = (finishes.moss_at(cx, cz) * 4.0).round() as u32;
         let parts = shapes.entry((spot.seat as i32, spot.top as i32, spot.variant, moss)).or_insert_with(|| {
-            let mut column = geometry::stone::column(spot.seat, spot.top, spot.variant, level.seed);
-            for part in &mut column.parts {
-                part.uvs_b = vec![[moss as f32 / 4.0, 0.0]; part.positions.len()];
-            }
-            column
+            mossy_column(&spot, level.seed, moss)
                 .parts
                 .iter()
                 .map(|part| {
@@ -554,6 +550,15 @@ fn spawn_corridor_arches(
             }
         }
     }
+}
+
+/// The column at `spot` with `quarters` quarters of full moss on every vertex.
+fn mossy_column(spot: &geometry::stone::ColumnSpot, seed: u32, quarters: u32) -> ItemMesh {
+    let mut column = geometry::stone::column(spot.seat, spot.top, spot.variant, seed);
+    for part in &mut column.parts {
+        part.uvs_b = vec![[quarters as f32 / 4.0, 0.0]; part.positions.len()];
+    }
+    column
 }
 
 /// The shapes of a level's doorways and braziers: each doorway with its frame and, at the
@@ -977,6 +982,31 @@ fn debug_camera_takes_over(
 mod tests {
     use super::*;
     use armory::MaterialKind;
+
+    #[test]
+    fn door_masonry_and_columns_carry_moss_and_timber_does_not() {
+        let level = fb_level::generate(1207, 2);
+        let doors = FixtureShapes::make(&level).doors;
+        assert!(!doors.is_empty());
+        let mut stone = 0;
+        for (_, frame, _) in &doors {
+            for part in &frame.parts {
+                if part.material == Some(MaterialKind::Stone) {
+                    stone += 1;
+                    assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
+                    assert!(!part.uvs_b.is_empty());
+                } else {
+                    assert!(part.uvs_b.is_empty(), "{} is not stone", part.name);
+                }
+            }
+        }
+        assert!(stone > 0, "doorway masonry");
+        let spot = geometry::stone::columns(&level).into_iter().next().expect("a hall with columns at depth 2");
+        for part in &mossy_column(&spot, level.seed, 3).parts {
+            assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
+            assert!(part.uvs_b.iter().all(|uv| uv[0] == 0.75));
+        }
+    }
 
     #[test]
     fn the_rock_decay_types_match_the_shader() {
