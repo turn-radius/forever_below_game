@@ -202,6 +202,8 @@ const SCUTTLE_SHARE: f32 = 0.4;
 pub fn scuttling(t: f32, seed: u32) -> bool {
     ((t + (seed % 97) as f32 * 0.07) / SCUTTLE_PERIOD).fract() < SCUTTLE_SHARE
 }
+/// How far past its own body a bat darts to bite, world units. Our own.
+const BAT_DART: f32 = 2.0;
 /// The wait between a skeleton's swings, seconds. Our own.
 const SKELETON_COOLDOWN: f32 = 0.8;
 /// How much farther than its reach a skeleton's blow still lands, in case the delver steps
@@ -244,7 +246,8 @@ pub fn notice_range(species: Species, scale: f32) -> f32 {
 pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => player_radius + 0.55 * rat.length * critter.size,
-        Creature::Bat(bat) => player_radius + 0.55 * bat.length * critter.size,
+        // A bat darts in past its own body to bite. The dart is our own.
+        Creature::Bat(bat) => player_radius + (0.5 * bat.length + BAT_DART) * critter.size,
         Creature::Snake(snake) => player_radius + critter.radius + 0.35 * snake.dims().neck * critter.size,
         // Arm and what it holds, as worked out once at spawn: a spear outreaches a dagger.
         Creature::Skeleton(skeleton) => player_radius + critter.kit.as_ref().map_or_else(|| 0.45 * skeleton.height(), |k| k.reach) * critter.size,
@@ -266,7 +269,8 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
 pub fn body_radius(critter: &Critter) -> f32 {
     match &critter.creature {
         Creature::Rat(rat) => 0.3 * rat.length * critter.size,
-        Creature::Bat(bat) => 0.25 * bat.wingspan * critter.size,
+        // Its body, not its wings, which fold and flex past what they meet.
+        Creature::Bat(bat) => 0.5 * bat.length * critter.size,
         Creature::Snake(_) => critter.radius.min(SNAKE_SQUEEZE),
         Creature::Jackalope(jackalope) => 0.3 * jackalope.length * critter.size,
         Creature::Skeleton(skeleton) => 0.12 * critter.kit.as_ref().map_or_else(|| skeleton.height(), |k| k.height) * critter.size,
