@@ -185,6 +185,17 @@ pub fn item_light(item: &Item) -> Option<LightAnchor> {
     }
 }
 
+/// [`item_light`] of a rolled item, its reach scaled by its light affixes (Gleaming, Smoky:
+/// [`fb_items::Item::light_factor`]), as it lights the level.
+pub fn rolled_light(item: &fb_items::Item) -> Option<LightAnchor> {
+    item_light(&item.shape).map(|anchor| LightAnchor { radius: anchor.radius * item.light_factor(), ..anchor })
+}
+
+/// The [`fb_items::Item::light_factor`] of what is worn in `slot`, 1 with nothing there.
+fn light_factor_in(inventory: &Inventory, slot: fb_items::Slot) -> f32 {
+    inventory.worn(slot).and_then(|id| inventory.item(id)).map_or(1.0, fb_items::Item::light_factor)
+}
+
 /// The first burning torch rolled at or after `seed` ([`fb_items::roll_item`]).
 pub fn lit_torch(seed: u32) -> fb_items::Item {
     (0..u32::MAX)
@@ -801,7 +812,7 @@ pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: It
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
     let transform = rest_on_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, tuning.view.floor_item_scale)?;
     let (min, max) = bounds(points.iter().copied())?;
-    let light = item_light(&item.shape);
+    let light = rolled_light(item);
     let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
     let mut root = spawner.spawn(&mesh, &appearance);
     root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }));
@@ -1160,7 +1171,8 @@ pub(crate) fn show_held(
             let Some(anchor) = item_light(&hand.item) else { continue };
             let at = stage_light_at(&anchor, transform, hand.hand);
             let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light), Transform::from_translation(at), view_layer.clone(), ChildOf(view_model))).id();
-            let world = commands.spawn((given_light(anchor, exposure, &tuning.light), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
+            let reach = LightAnchor { radius: anchor.radius * light_factor_in(&inventory, hand.hand), ..anchor };
+            let world = commands.spawn((given_light(reach, exposure, &tuning.light), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
             carrying.entities.extend([stage_light, world]);
         }
         // A lantern at the hip hangs from the body in the level, not on the stage; lit and
@@ -1177,7 +1189,8 @@ pub(crate) fn show_held(
             let mut lantern = spawner.spawn(mesh, &appearance_of(&hip.item));
             lantern.insert((hip.transform, Propagate(NotShadowCaster), ChildOf(pivot)));
             if let Some(anchor) = carried {
-                lantern.with_child((given_light(anchor, exposure, &tuning.light), Transform::from_translation(Vec3::from_array(anchor.position))));
+                let reach = LightAnchor { radius: anchor.radius * light_factor_in(&inventory, fb_items::Slot::Hip), ..anchor };
+                lantern.with_child((given_light(reach, exposure, &tuning.light),Transform::from_translation(Vec3::from_array(anchor.position))));
             }
             carrying.entities.push(pivot);
             let Some(anchor) = carried else { continue };

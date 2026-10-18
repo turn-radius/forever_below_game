@@ -1750,11 +1750,13 @@ mod tests {
         assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("usual".to_string(), "usual".to_string(), "none".to_string()));
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            let belt = inventory.add(weighed_with("Belt", 4, Some("of Plenty"), 1.0));
+            // Seeds that roll no affix of their own, so each shows only the one added.
+            let plain = |base: &str| (0..).find(|&s| fb_items::roll_item(base, s).unwrap().affixes.is_empty()).unwrap();
+            let belt = inventory.add(weighed_with("Belt", plain("Belt"), Some("of Plenty"), 1.0));
             equip(&mut inventory, belt, Slot::Belt).unwrap();
-            let ring = inventory.add(weighed_with("Ring", 4, Some("of Wakefulness"), 0.0));
+            let ring = inventory.add(weighed_with("Ring", plain("Ring"), Some("of Wakefulness"), 0.0));
             equip(&mut inventory, ring, Slot::Ring1).unwrap();
-            let sword = inventory.add(weighed_with("Sword", 3, Some("of the Leech"), 3.0));
+            let sword = inventory.add(weighed_with("Sword", plain("Sword"), Some("of the Leech"), 3.0));
             equip(&mut inventory, sword, Slot::Mainhand).unwrap();
         }
         app.update();

@@ -167,9 +167,11 @@ impl Stat {
     /// Stealth only moves the HUD's eye so far, since no creature looks at how visible the
     /// delver is, so it waits for sneaking as lockpicking waits for locks and break chance for
     /// breaking. Disease risk is read since diseases arrived (sewer plague from rat bites).
-    /// Charisma waits for a Charisma score, which the delver does not have yet.
+    /// Charisma waits for a Charisma score, which the delver does not have yet. Darkvision only
+    /// shows on the sheet, since the dark is not drawn by it yet, and Intelligence and Wisdom
+    /// only fill a mana pool no spell spends, so they wait for those.
     pub fn in_play(self) -> bool {
-        !matches!(self, Stat::Stealth | Stat::Lockpicking | Stat::BreakChance | Stat::Charisma)
+        !matches!(self, Stat::Stealth | Stat::Lockpicking | Stat::BreakChance | Stat::Charisma | Stat::Darkvision | Stat::Intelligence | Stat::Wisdom)
     }
 
     /// The range it is kept in. Bonuses can go negative (the plate's `dmgB -= 1`); amounts,

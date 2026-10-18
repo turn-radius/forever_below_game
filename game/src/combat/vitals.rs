@@ -230,6 +230,14 @@ pub fn blow_line(species: Option<Species>, kit: Option<&crate::creatures::skelet
     }
 }
 
+/// The damage a bite takes from a delver at `hp`: all of it, unless its venom `spares` them
+/// ([`Species::venom_spares`]) and it is the venom, not the `bite`'s own damage, that would drop
+/// them to 0. Then they are left at 1 hit point (the SRD's "stable", which the game has no
+/// state for).
+fn spared_by_venom(hp: i32, bite: u32, total: u32, spares: bool) -> u32 {
+    if spares && hp > bite as i32 && hp <= total as i32 { (hp - 1) as u32 } else { total }
+}
+
 /// Each bite takes its damage from the delver; a constrictor's holds them.
 #[allow(clippy::too_many_arguments)]
 fn take_bites(
@@ -260,6 +268,7 @@ fn take_bites(
                 continue;
             }
             let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
+            let damage = spared_by_venom(health.hp, bite.damage, damage, bite.species.is_some_and(Species::venom_spares));
             health.hurt(damage);
             // A failed save poisons them for the poisoned effect's hours, and a rat's bite may
             // give them sewer plague, which shows nothing until it has incubated.
@@ -498,7 +507,7 @@ mod tests {
             .init_resource::<ScreenOpen>()
             .add_plugins(VitalsPlugin);
         let player = app.world_mut().spawn((Player, Transform::default(), Health::full(10))).id();
-        let level = fb_level::generate(1207, 1);
+        let level = fb_level::generate(crate::creatures::seed_holding(&[Species::ConstrictorSnake]), 1);
         let spot = *level.creatures.iter().find(|c| c.species == Species::ConstrictorSnake).unwrap();
         let creature = spot.creature();
         let snake = app.world_mut().spawn((Critter::new(spot, creature), Transform::from_xyz(10.0, 0.0, 0.0))).id();
@@ -623,6 +632,19 @@ mod tests {
         app.update();
         bite(&mut app, snake, Species::ConstrictorSnake, 1);
         assert!(app.world().get::<DelverEffects>(player).is_none_or(|e| e.0.get(SEWER_PLAGUE, None).is_none()));
+    }
+
+    #[test]
+    fn a_centipedes_venom_leaves_the_delver_at_one_hit_point_but_its_bite_can_kill() {
+        // 10 hit points, a bite of 4 and 14 with its venom: spared, they keep 1.
+        assert_eq!(spared_by_venom(10, 4, 14, true), 9);
+        // A snake's venom spares no one.
+        assert_eq!(spared_by_venom(10, 4, 14, false), 14);
+        // The bite alone fells them.
+        assert_eq!(spared_by_venom(4, 5, 15, true), 15);
+        // Not enough to fell them: all of it lands.
+        assert_eq!(spared_by_venom(20, 4, 14, true), 14);
+        assert!(Species::GiantCentipede.venom_spares() && Species::GiantSpider.venom_spares() && !Species::PoisonousSnake.venom_spares());
     }
 
     #[test]

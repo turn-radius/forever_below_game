@@ -127,6 +127,9 @@ pub(crate) fn place_folk(level: &Level, start_room: usize, rng: &mut Mulberry32)
     } else {
         rooms.sort_by_key(|i| !lit(i));
     }
+    // Folk gather in at most half the rooms, leaving the rest to the creatures, which never
+    // share a room with them ([`crate::creatures::has_folk`]).
+    rooms.truncate(rooms.len().div_ceil(2));
 
     let mut factions: Vec<Faction> = Faction::all().collect();
     shuffle(&mut factions, rng);

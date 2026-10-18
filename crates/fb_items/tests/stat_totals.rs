@@ -7,28 +7,29 @@ fn stat_totals_pinned_across_base_seeds() {
         // were held back, and changed back when disease made disease risk read again: Shirt and
         // Trousers 12345 roll of Lesser Warding, Hood 77 Lice-ridden and Torch 123 Gleaming and
         // of the Ox. Every total rose by 1 when Speed (1 as usual) joined the stats, and the belts
-        // roll among the new slot-bound suffixes.
-        ("Shirt", 1, 17.0),
+        // roll among the new slot-bound suffixes. Every seed 1 rolled of the Mole until darkvision
+        // was held back; it rolls of Plenty now.
+        ("Shirt", 1, 6.85),
         ("Shirt", 42, 7.0),
         ("Shirt", 12345, 6.5),
-        ("Trousers", 1, 17.5),
+        ("Trousers", 1, 7.35),
         ("Trousers", 42, 7.5),
         ("Trousers", 12345, 7.0),
-        ("Breeches", 1, 16.5),
+        ("Breeches", 1, 6.35),
         ("Breeches", 99, 31.5),
         ("Breeches", 54321, 8.5),
-        ("Hood", 1, 16.5),
+        ("Hood", 1, 6.35),
         ("Hood", 77, 7.0),
-        ("Mail coif", 1, 22.0),
+        ("Mail coif", 1, 11.85),
         ("Belt", 1, 5.85),
         ("Belt", 99, 7.0),
-        ("Club", 1, 17.0),
+        ("Club", 1, 6.85),
         ("Club", 42, 7.0),
-        ("Hand axe", 1, 17.0),
+        ("Hand axe", 1, 6.85),
         ("Hand axe", 88, 7.0),
-        ("Torch", 1, 36.0),
+        ("Torch", 1, 25.85),
         ("Torch", 123, 61.0),
-        ("Lantern", 1, 47.0),
+        ("Lantern", 1, 36.85),
         ("Lantern", 456, 37.0),
     ];
 

@@ -51,9 +51,11 @@ fn nothing_that_was_there_before_moves() {
 fn each_species_appears_only_from_its_depth() {
     let found = |species: Species, depth: u32| (1..=60).any(|seed| count(&generate(seed, depth), species) > 0);
     let none = |species: Species, depths: std::ops::Range<u32>| depths.for_each(|d| (1..=60).for_each(|s| assert_eq!(count(&generate(s, d), species), 0, "{species:?} at seed {s} depth {d}")));
-    for species in [Species::GiantCentipede, Species::Bat, Species::Jackalope] {
+    for species in [Species::Bat, Species::Jackalope] {
         assert!(found(species, 1), "{species:?} on the first level");
     }
+    none(Species::GiantCentipede, 1..CENTIPEDES_FROM_DEPTH);
+    assert!(found(Species::GiantCentipede, CENTIPEDES_FROM_DEPTH));
     none(Species::GiantSpider, 1..SPIDERS_FROM_DEPTH);
     assert!(found(Species::GiantSpider, SPIDERS_FROM_DEPTH));
     none(Species::GiantBat, 1..GIANT_BATS_FROM_DEPTH);
@@ -155,9 +157,10 @@ fn jackalope_and_troll_frequencies_smoke() {
 #[test]
 #[ignore = "sweeps hundreds of levels"]
 fn jackalope_and_troll_frequencies() {
-    // About one level in ten, and about one in three.
+    // About one level in ten, and a little under one in three: a troll's odds are one in three,
+    // but now and then folk hold the only hall large enough for it.
     let jackalopes = holding(1..401, 2, Species::Jackalope);
     assert!((20..=62).contains(&jackalopes), "{jackalopes} of 400 levels hold a jackalope");
     let trolls = holding(1..401, 7, Species::Troll);
-    assert!((100..=160).contains(&trolls), "{trolls} of 400 levels hold a troll");
+    assert!((75..=160).contains(&trolls), "{trolls} of 400 levels hold a troll");
 }

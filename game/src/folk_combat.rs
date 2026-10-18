@@ -799,6 +799,8 @@ pub(crate) mod tests {
     #[test]
     fn a_hostile_folk_closes_in_and_deals_damage_and_stays_hostile() {
         let (mut app, player, folk) = folk_fight(30.0);
+        // Enough to stand through ten seconds of blows, so the run does not end mid-test.
+        app.world_mut().entity_mut(player).insert(Health::full(500));
         app.world_mut().write_message(Provoked { folk });
         let mut struck = Vec::new();
         for _ in 0..600 {

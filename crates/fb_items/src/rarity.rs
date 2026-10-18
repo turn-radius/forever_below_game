@@ -28,16 +28,19 @@ pub struct Odds {
 }
 
 impl Default for Odds {
-    /// The first level, uncapped: the plate's odds.
+    /// The first level, uncapped: the plate's odds, for the views that roll any item from a
+    /// seed. Loot on the first level is capped ([`Odds::loot`]).
     fn default() -> Odds {
-        Odds::loot(1)
+        Odds { depth: 1, cap: Rarity::Legendary }
     }
 }
 
 impl Odds {
-    /// Loot found at `depth`, on the floor or in a container: uncapped.
+    /// Loot found at `depth`, on the floor or in a container: common or magic only on the first
+    /// level, so a fresh delver finds nothing rare or legendary there; uncapped below it.
     pub fn loot(depth: u32) -> Odds {
-        Odds { depth, cap: Rarity::Legendary }
+        let cap = if depth <= 1 { Rarity::Magic } else { Rarity::Legendary };
+        Odds { depth, cap }
     }
 
     /// The gear folk and the risen dead carry at `depth`: as loot, but common or magic only on
@@ -154,9 +157,10 @@ pub fn roll_affixes(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag]) -> Vec<&
 }
 
 /// The affixes a `rarity` rolls on an item with `tags` worn in `slot`. Common: a flaw prefix 30%
-/// of the time. Magic: one good prefix or suffix, even odds. Rare: a good prefix and a good
-/// suffix. Legendary: a good prefix and two good suffixes. Slots with nothing that fits stay
-/// empty.
+/// of the time. Magic: one good prefix or suffix, even odds, or the other when nothing of the
+/// one drawn fits (a ring has no prefix), so a magic item always does something. Rare: a good
+/// prefix and a good suffix. Legendary: a good prefix and two good suffixes. Slots with nothing
+/// that fits stay empty.
 pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot: Option<Slot>) -> Vec<&'static Affix> {
     use AffixKind::{Prefix, Suffix};
     let wanted: Vec<(AffixKind, bool)> = match rarity {
@@ -167,7 +171,12 @@ pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot
     };
     let mut chosen = Vec::new();
     for (kind, good) in wanted {
-        if let Some(a) = pick_affix(rng, Rolling { tags, slot, rarity }, kind, good, &chosen) {
+        let item = Rolling { tags, slot, rarity };
+        let picked = pick_affix(rng, item, kind, good, &chosen).or_else(|| {
+            let other = if kind == Prefix { Suffix } else { Prefix };
+            (rarity == Rarity::Magic).then(|| pick_affix(rng, item, other, good, &chosen)).flatten()
+        });
+        if let Some(a) = picked {
             chosen.push(a);
         }
     }
@@ -273,13 +282,17 @@ mod tests {
                 x if x < 0.97 => Rarity::Rare,
                 _ => Rarity::Legendary,
             };
-            assert_eq!(Rarity::from_roll_at(x, &Odds::loot(1)), plate, "{x}");
+            assert_eq!(Rarity::from_roll_at(x, &Odds::default()), plate, "{x}");
+            // Loot lying on the first level is never better than magic.
+            assert_eq!(Rarity::from_roll_at(x, &Odds::loot(1)), plate.min(Rarity::Magic), "{x}");
         }
+        assert_eq!(Odds::loot(2).cap, Rarity::Legendary);
     }
 
     #[test]
     fn depth_5_doubles_rare_and_legendary() {
-        let [_, _, r1, l1] = measured(Odds::loot(1));
+        // Against the first level's uncapped odds: its loot is capped at magic.
+        let [_, _, r1, l1] = measured(Odds::default());
         let [_, _, r5, l5] = measured(Odds::loot(5));
         let ratio = (r5 + l5) / (r1 + l1);
         assert!((1.8..2.2).contains(&ratio), "rare and legendary: {} at depth 1, {} at depth 5", r1 + l1, r5 + l5);
@@ -331,7 +344,7 @@ mod tests {
     #[test]
     fn no_rolled_item_carries_a_held_back_affix() {
         let held: Vec<&str> = affixes().iter().filter(|a| !a.in_play()).map(|a| a.name.as_str()).collect();
-        assert_eq!(held, ["Silent", "Squeaking", "Cracked", "of Thieves", "of Quiet Steps", "of Presence", "of the Silver Tongue"]);
+        assert_eq!(held, ["Silent", "Squeaking", "Cracked", "of the Mole", "of Thieves", "of Quiet Steps", "of the Owl", "of the Bat", "of Wit", "of the Sage", "of Insight", "of the Seer", "of Presence", "of the Silver Tongue"]);
         let quiet = &[Tag::Quiet, Tag::Leather, Tag::Wear][..];
         for tags in [SWORD, TUNIC, PACK, quiet, &[Tag::Wood, Tag::Weapon][..], &[Tag::Trinket][..]] {
             for seed in 0..5_000 {
@@ -386,7 +399,7 @@ mod tests {
                 }
             }
         }
-        for name in ["Fleet", "of Haste", "Vicious", "of Carnage", "Accurate", "of Precision", "Reinforced", "of the Bulwark", "of Deflection", "of the Rampart", "of the Owl", "of the Bat", "of Might", "of the Giant", "of Vigour", "of the Bear", "Sluggish", "Frail"] {
+        for name in ["Fleet", "of Haste", "Vicious", "of Carnage", "Accurate", "of Precision", "Reinforced", "of the Bulwark", "of Deflection", "of the Rampart", "of Might", "of the Giant", "of Vigour", "of the Bear", "Sluggish", "Frail"] {
             assert!(seen.contains(name), "{name} never rolled");
         }
     }
