@@ -341,6 +341,7 @@ fn spawn_doll_figure(
     let portrait = commands
         .spawn((
             Name::new("Portrait camera"),
+            crate::render::ScreenInkExempt,
             Camera3d::default(),
             Camera { order: -4, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },
             RenderTarget::Image(assets.portrait.clone().into()),
@@ -383,6 +384,7 @@ fn spawn_doll_figure(
             let camera = commands
                 .spawn((
                     Name::new("Doll camera"),
+                    crate::render::ScreenInkExempt,
                     DespawnOnExit(AppState::Delving),
                     Camera3d::default(),
                     Camera { order: -3, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },

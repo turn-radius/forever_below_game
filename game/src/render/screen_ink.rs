@@ -67,14 +67,26 @@ pub struct ScreenInk {
     /// Line width in pixels on a 1080-pixel-tall viewport; scales with the viewport, as the
     /// hull's does.
     pub width_px: f32,
-    /// Whether this plugin added the camera's [`DepthPrepass`], and so removes it again.
-    pub added_depth_prepass: bool,
 }
+
+/// Keeps a camera out of the screen pass: the held item's overlay and the inventory's icon,
+/// portrait and doll cameras, whose images are drawn on their own.
+#[derive(Component, Debug, Default)]
+pub struct ScreenInkExempt;
+
+/// The camera's [`DepthPrepass`] was added with its [`ScreenInk`], and goes with it. One
+/// someone else added carries no marker and stays.
+#[derive(Component, Debug)]
+struct ScreenInkAddedDepth;
+
+/// As [`ScreenInkAddedDepth`], for the [`NormalPrepass`].
+#[derive(Component, Debug)]
+struct ScreenInkAddedNormal;
 
 impl ScreenInk {
     /// The same 2 px of Armory ink as the hull's default.
     pub fn new() -> Self {
-        ScreenInk { color: ARMORY_INK.into(), width_px: 2.0, added_depth_prepass: false }
+        ScreenInk { color: ARMORY_INK.into(), width_px: 2.0 }
     }
 }
 
@@ -113,7 +125,7 @@ fn apply_ink_style(
     style: Res<InkStyle>,
     mut commands: Commands,
     mut hulls: Query<&mut Visibility, With<InkOutline>>,
-    cameras: Query<(Entity, Option<&ScreenInk>, Has<DepthPrepass>), With<Camera3d>>,
+    cameras: Query<CameraInk, (With<Camera3d>, Without<ScreenInkExempt>)>,
 ) {
     if !style.is_changed() {
         return;
@@ -122,8 +134,8 @@ fn apply_ink_style(
     for mut visibility in &mut hulls {
         visibility.set_if_neq(if screen { Visibility::Hidden } else { Visibility::Inherited });
     }
-    for (camera, ink, has_depth_prepass) in &cameras {
-        set_camera_ink(&mut commands, camera, ink, has_depth_prepass, screen);
+    for camera in &cameras {
+        set_camera_ink(&mut commands, camera, screen);
     }
 }
 
@@ -140,30 +152,37 @@ fn hide_new_hulls(style: Res<InkStyle>, mut hulls: Query<&mut Visibility, Added<
 fn add_ink_to_new_cameras(
     style: Res<InkStyle>,
     mut commands: Commands,
-    cameras: Query<(Entity, Option<&ScreenInk>, Has<DepthPrepass>), Added<Camera3d>>,
+    cameras: Query<CameraInk, (Added<Camera3d>, Without<ScreenInkExempt>)>,
 ) {
     if *style == InkStyle::Screen {
-        for (camera, ink, has_depth_prepass) in &cameras {
-            set_camera_ink(&mut commands, camera, ink, has_depth_prepass, true);
+        for camera in &cameras {
+            set_camera_ink(&mut commands, camera, true);
         }
     }
 }
 
-/// Puts the screen pass and the prepasses it reads on `camera`, or takes them off. A depth
-/// prepass something else added is left alone.
-fn set_camera_ink(commands: &mut Commands, camera: Entity, ink: Option<&ScreenInk>, has_depth_prepass: bool, screen: bool) {
-    let mut camera = commands.entity(camera);
-    if screen {
-        if ink.is_none() {
-            camera.insert((ScreenInk { added_depth_prepass: !has_depth_prepass, ..default() }, NormalPrepass));
-            if !has_depth_prepass {
-                camera.insert(DepthPrepass);
-            }
+type CameraInk = (Entity, Has<ScreenInk>, Has<DepthPrepass>, Has<NormalPrepass>, Has<ScreenInkAddedDepth>, Has<ScreenInkAddedNormal>);
+
+/// Puts the screen pass and the prepasses it reads on a camera, or takes them off. Only a
+/// prepass the pass added (it carries a marker) is taken off.
+fn set_camera_ink(commands: &mut Commands, camera: <CameraInk as bevy::ecs::query::QueryData>::Item<'_, '_>, screen: bool) {
+    let (entity, has_ink, has_depth, has_normal, added_depth, added_normal) = camera;
+    let mut camera = commands.entity(entity);
+    if screen && !has_ink {
+        camera.insert(ScreenInk::new());
+        if !has_depth {
+            camera.insert((DepthPrepass, ScreenInkAddedDepth));
         }
-    } else if let Some(ink) = ink {
-        camera.remove::<(ScreenInk, NormalPrepass)>();
-        if ink.added_depth_prepass {
-            camera.remove::<DepthPrepass>();
+        if !has_normal {
+            camera.insert((NormalPrepass, ScreenInkAddedNormal));
+        }
+    } else if !screen && has_ink {
+        camera.remove::<ScreenInk>();
+        if added_depth {
+            camera.remove::<(DepthPrepass, ScreenInkAddedDepth)>();
+        }
+        if added_normal {
+            camera.remove::<(NormalPrepass, ScreenInkAddedNormal)>();
         }
     }
 }
@@ -386,5 +405,28 @@ mod tests {
         }
         assert!(app.world().get::<DepthPrepass>(bare).is_none(), "the depth prepass the pass added goes with it");
         assert!(app.world().get::<DepthPrepass>(with_depth).is_some(), "a depth prepass something else added stays");
+    }
+
+    #[test]
+    fn prepasses_someone_else_added_survive_the_switch_back() {
+        let mut app = app(InkStyle::Hull);
+        let both = app.world_mut().spawn((Camera3d::default(), DepthPrepass, NormalPrepass)).id();
+        let normal = app.world_mut().spawn((Camera3d::default(), NormalPrepass)).id();
+        *app.world_mut().resource_mut::<InkStyle>() = InkStyle::Screen;
+        app.update();
+        *app.world_mut().resource_mut::<InkStyle>() = InkStyle::Hull;
+        app.update();
+        assert!(app.world().get::<NormalPrepass>(both).is_some() && app.world().get::<DepthPrepass>(both).is_some());
+        assert!(app.world().get::<NormalPrepass>(normal).is_some(), "a normal prepass something else added stays");
+        assert!(app.world().get::<DepthPrepass>(normal).is_none(), "the depth prepass the pass added goes");
+        assert!(app.world().get::<ScreenInkAddedDepth>(normal).is_none());
+    }
+
+    #[test]
+    fn exempt_cameras_get_nothing() {
+        let mut app = app(InkStyle::Screen);
+        let overlay = app.world_mut().spawn((Camera3d::default(), ScreenInkExempt)).id();
+        app.update();
+        assert!(app.world().get::<ScreenInk>(overlay).is_none() && app.world().get::<NormalPrepass>(overlay).is_none());
     }
 }

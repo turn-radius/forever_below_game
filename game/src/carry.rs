@@ -999,6 +999,7 @@ fn equip_player_camera(
         let view_model = commands
             .spawn((
                 ViewModelCamera { follows: camera },
+                crate::render::ScreenInkExempt,
                 Camera3d::default(),
                 Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
                 view_model_projection(&tuning),

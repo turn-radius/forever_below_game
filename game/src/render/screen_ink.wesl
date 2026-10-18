@@ -98,7 +98,8 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let here = depth_at(p);
     let line = max(i32(round(ink.width)), 1);
     if depth_edge(p, line, here) || normal_edge(p, max(line / 2, 1), here) {
-        return vec4<f32>(ink.color.rgb, source.a);
+        // Opaque, so a camera cleared to transparent keeps its ink.
+        return vec4<f32>(ink.color.rgb, 1.0);
     }
     return source;
 }

@@ -15,7 +15,7 @@ pub use item::{
     half_thickness, item_bounds, part_to_mesh, part_to_skinned_mesh,
 };
 pub use outline::{ARMORY_INK, ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
-pub use screen_ink::{InkStyle, ScreenInk};
+pub use screen_ink::{InkStyle, ScreenInk, ScreenInkExempt};
 pub use toon::{Decay, Etch, EtchStyle, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
 
 use bevy::{asset::embedded_asset, light::cluster::GlobalClusterSettings, prelude::*, shader::load_shader_library};
