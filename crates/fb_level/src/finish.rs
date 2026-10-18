@@ -290,7 +290,8 @@ fn group_rooms(level: &Level) -> Vec<Vec<usize>> {
 }
 
 /// The walls, floor and doorway a quarter of `character` has, from its own draws: `floor` varies
-/// the floor and `arch` picks a vaulted quarter's one arch shape.
+/// the floor (Timbered caves, and Hewn ones against `flagstone_chance`) and `arch` picks a
+/// vaulted quarter's one arch shape. The plain character is the style's plain, with no draw.
 fn dress(character: Character, rock: bool, floor: f64, arch: f64, params: &LevelParams) -> (WallFinish, FloorFinish, DoorStyle) {
     use {DoorStyle as D, FloorFinish as F, WallFinish as W};
     match (rock, character) {
@@ -298,9 +299,9 @@ fn dress(character: Character, rock: bool, floor: f64, arch: f64, params: &Level
         (false, Character::Vaulted) => (W::Ashlar, F::Flagstone, if arch < 0.5 { D::RoundArch } else { D::PointedArch }),
         (false, _) => (W::Ashlar, F::Flagstone, D::Timber),
         (true, Character::Timbered) => (W::Rock, if floor < 0.7 { F::Cobble } else { F::Rock }, D::Timber),
-        (true, Character::Hewn) => (W::Rock, if floor < params.flagstone_chance * 2.0 { F::Flagstone } else { F::Rock }, D::RockCut),
+        (true, Character::Hewn) => (W::Rock, if floor < params.flagstone_chance { F::Flagstone } else { F::Rock }, D::RockCut),
         (true, Character::Layered) => (W::Strata, F::Rock, D::Timber),
-        (true, _) => (W::Rock, if floor < params.cobble_chance * 0.4 { F::Cobble } else { F::Rock }, D::Timber),
+        (true, _) => (W::Rock, F::Rock, D::Timber),
     }
 }
 
@@ -594,22 +595,40 @@ mod tests {
     #[test]
     fn corridors_take_the_nearest_rooms_quarter() {
         for depth in 1..=2 {
-            for seed in 1..=20 {
+            for seed in 1..=40 {
                 let (level, params) = level_at(seed, depth);
                 let f = finishes(&level, &params);
-                // Neighbouring open cells are in the same quarter or on a frontier where
-                // quarters meet; a cell inside a room is never on the far side of one.
+                // Rooms' cells are their quarter's; every other open cell is in the quarter of
+                // some room at the least path distance from it.
+                let w = level.width as i32;
+                let from_room: Vec<Vec<u32>> = level
+                    .rooms
+                    .iter()
+                    .map(|room| {
+                        let cells: Vec<_> = (room.y..room.y + room.h).flat_map(|y| (room.x..room.x + room.w).map(move |x| (x as i32, y as i32))).filter(|&(x, y)| level.is_open(x, y)).collect();
+                        distances(&level, &cells)
+                    })
+                    .collect();
+                let quarter_of_room = |r: usize| f.quarters().iter().position(|q| q.rooms.contains(&r));
                 for y in 0..level.height as i32 {
-                    for x in 0..level.width as i32 {
-                        if let Some(r) = level.room_at(x, y).filter(|_| level.is_open(x, y)) {
-                            let q = f.quarters().iter().position(|q| q.rooms.contains(&r));
-                            assert_eq!(f.quarter(x, y), q);
+                    for x in 0..w {
+                        if !level.is_open(x, y) {
+                            continue;
                         }
+                        let i = (y * w + x) as usize;
+                        if let Some(r) = level.room_at(x, y) {
+                            assert_eq!(f.quarter(x, y), quarter_of_room(r));
+                            continue;
+                        }
+                        let least = from_room.iter().map(|d| d[i]).min().unwrap();
+                        let nearest: Vec<_> = (0..level.rooms.len()).filter(|&r| from_room[r][i] == least).map(quarter_of_room).collect();
+                        assert!(nearest.contains(&f.quarter(x, y)), "seed {seed} depth {depth}: corridor cell {x},{y} is in {:?}, nearest rooms are in {nearest:?}", f.quarter(x, y));
                     }
                 }
             }
         }
     }
+
     #[test]
     fn every_style_shows_each_of_its_finishes_and_moss_gathers() {
         for depth in [1, 2] {

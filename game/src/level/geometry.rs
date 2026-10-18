@@ -1095,11 +1095,13 @@ mod tests {
 
     #[test]
     fn layered_rooms_have_their_own_walls() {
-        let level = fb_level::generate(1207, 1);
+        // A cave with a layered quarter.
+        let layered = |l: &Level| CellView::new(l).finishes().quarters().iter().any(|q| q.walls == fb_level::WallFinish::Strata);
+        let level = (1..200).map(|seed| fb_level::generate(seed, 1)).find(layered).expect("some cave has strata");
         let view = CellView::new(&level);
         let mesh = level_mesh(&view, view.bounds());
         let walls = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).map_or(0, |p| p.indices.len());
-        assert!(walls("strata") > 0, "a layered room in seed 1207");
+        assert!(walls("strata") > 0, "a layered room");
         assert!(walls("walls") > 0);
         // Splitting the walls loses none: the unlayered total is the two together.
         let plain = CellView::with_finishes(&level, finishes(&level, &LevelParams { strata_chance: 0.0, ..LevelParams::for_style(level.style) }));

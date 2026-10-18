@@ -88,12 +88,12 @@ level_params! {
     }
     finish {
         moss_amount: f32 = 1.0, 0.0, 1.0, 0.05; "How strongly the damp field grows moss: none at 0."
-        grotto_chance: f64 = 0.15, 0.0, 1.0, 0.01; "Chance a room is a grotto, mossy throughout."
-        strata_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Chance a rough rock room shows layered strata instead of craggy rock."
-        rubble_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Chance a stone hall room is built of rubble instead of ashlar."
-        cobble_chance: f64 = 0.2, 0.0, 1.0, 0.01; "Chance a room, or the corridors, are cobbled rather than bare rock or flagstone."
-        flagstone_chance: f64 = 0.25, 0.0, 1.0, 0.01; "Chance a rough rock room, or the corridors, are paved with rough flagstones rather than bare, if not cobbled."
-        arch_chance: f64 = 0.6, 0.0, 1.0, 0.01; "Chance a stone hall doorway is an arch; rough rock doorways are cut arches a third as often."
+        grotto_chance: f64 = 0.15, 0.0, 1.0, 0.01; "Chance a room is a grotto, mossy throughout, whatever its quarter."
+        strata_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Weight of layered quarters (strata walls, timber frames) in rough rock, against plain ones."
+        rubble_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Weight of timbered quarters (rubble walls, cobbles, timber frames) in the stone halls, against plain ones."
+        cobble_chance: f64 = 0.2, 0.0, 1.0, 0.01; "Weight of timbered quarters (cobbled or bare floor, timber frames) in rough rock, against plain ones; the halls' timbered quarters follow rubble_chance."
+        flagstone_chance: f64 = 0.25, 0.0, 1.0, 0.01; "Chance a hewn quarter in rough rock is paved with rough flagstones rather than left bare."
+        arch_chance: f64 = 0.6, 0.0, 1.0, 0.01; "Weight of vaulted quarters (round or pointed arches) in the stone halls, against plain ones; hewn quarters (rock-cut arches) in rough rock take a third of it."
     }
 }
 

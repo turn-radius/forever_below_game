@@ -440,8 +440,8 @@ pub fn corridor_arches(level: &Level, finishes: &Finishes) -> Vec<CorridorArch> 
 
 /// An arch across a corridor under a flat soffit `soffit` high, in its own space: `x` across
 /// the corridor, `y` up, `z` along it, centred on the cell. A pilaster against each wall on a
-/// plinth, an impost, and a round rib of voussoirs with a keystone springing from the imposts
-/// to just under the soffit. `None` where the soffit is too low for a rib the height of a door.
+/// plinth, an impost, and a rib of voussoirs, round or `pointed`, with a keystone springing from
+/// the imposts to just under the soffit. `None` where the soffit is too low for a rib the height of a door.
 pub fn corridor_arch(soffit: f32, seed: u32, pointed: bool) -> Option<ItemMesh> {
     let mut rng = Mulberry32::new(seed ^ 0xa4c4_b1b5);
     let face = CELL * 0.5 - PILASTER_DEPTH;
@@ -451,9 +451,10 @@ pub fn corridor_arch(soffit: f32, seed: u32, pointed: bool) -> Option<ItemMesh> 
     // A pointed rib's arcs have the span for their radius, and its extrados crowns higher.
     let r = if pointed { radius * 2.0 } else { radius };
     let outer_rise = ((r + RIB_THICK).powi(2) - (r - radius).powi(2)).sqrt();
+    let inner_rise = (r * r - (r - radius).powi(2)).sqrt();
     let spring = soffit - SOFFIT_GAP - outer_rise;
     let impost_bottom = spring - IMPOST_HEIGHT;
-    if spring + outer_rise - RIB_THICK < DOOR_HEIGHT || impost_bottom < PLINTH_HEIGHT + 4.0 {
+    if spring + inner_rise < DOOR_HEIGHT || impost_bottom < PLINTH_HEIGHT + 4.0 {
         return None;
     }
     let (joint, chamfer) = RIB_STONE;
@@ -626,6 +627,12 @@ mod tests {
         let soffit = level.ceiling;
         for pointed in [false, true] {
             corridor_arch_spans(soffit, pointed);
+            // Other ceilings: where a rib is made at all it clears a door and fits its soffit.
+            let made: Vec<f32> = [30.0, 34.0, 38.0, 44.0, 52.0, 64.0].into_iter().filter(|&s| corridor_arch(s, 1, pointed).is_some()).collect();
+            assert!(!made.is_empty(), "no ceiling takes a pointed={pointed} rib");
+            for s in made {
+                corridor_arch_spans(s, pointed);
+            }
         }
         assert!(corridor_arch(20.0, 1, false).is_none());
         assert!(corridor_arch(20.0, 1, true).is_none());

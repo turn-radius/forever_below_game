@@ -386,7 +386,8 @@ fn draw_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, para
         for x in 0..level.width as i32 {
             let Some(q) = f.quarter(x, y) else { continue };
             let (a, b) = (frame.at(x as f32, y as f32), frame.at(x as f32 + 1.0, y as f32 + 1.0));
-            canvas.rect(a, b, quarter_tint(q), 0.13);
+            // Corridors are tinted harder than rooms, so a quarter's corridors read as its own.
+            canvas.rect(a, b, quarter_tint(q), if level.room_at(x, y).is_some() { 0.13 } else { 0.30 });
             // Each side of a cell that meets another quarter, drawn a little inside so both
             // quarters show their own colour. Rock has no quarter; its walls are drawn already.
             let inset = edge * 0.5;
@@ -395,6 +396,17 @@ fn draw_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, para
                 if f.quarter(x + dx, y + dy).is_some_and(|n| n != q) {
                     canvas.line(p, r, edge, quarter_tint(q), 0.95);
                 }
+            }
+        }
+    }
+    // Each room outlined in its quarter's colour.
+    for (q, quarter) in f.quarters().iter().enumerate() {
+        for &r in &quarter.rooms {
+            let room = level.rooms[r];
+            let (a, b) = (frame.at(room.x as f32, room.y as f32), frame.at((room.x + room.w) as f32, (room.y + room.h) as f32));
+            let (a, b) = ([a[0] + edge * 0.5, a[1] + edge * 0.5], [b[0] - edge * 0.5, b[1] - edge * 0.5]);
+            for (p, s) in [(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a)] {
+                canvas.line(p, s, edge, quarter_tint(q), 0.9);
             }
         }
     }
