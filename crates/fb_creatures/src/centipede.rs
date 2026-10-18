@@ -412,7 +412,7 @@ impl CentipedeState {
     /// stout fang curling in toward the middle, and the point its dark tip ends at.
     pub fn forcipule_path(&self, side: f32) -> Vec<V3> {
         let g = self.girth;
-        let pts = [[0.0, 0.0, 0.0], [0.0, 0.32, -0.04], [-0.07, 0.62, -0.1], [-0.24, 0.84, -0.17], [-0.5, 0.94, -0.2]];
+        let pts = [[0.0, 0.0, 0.0], [0.0, 0.32, -0.04], [-0.03, 0.62, -0.1], [-0.08, 0.84, -0.17], [-0.16, 0.98, -0.2]];
         (0..=12).map(|i| curve(&pts, i as f32 / 12.0)).map(|p| [side * p[0] * g, p[1] * g, p[2] * g]).collect()
     }
 
