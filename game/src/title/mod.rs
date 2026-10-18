@@ -13,6 +13,8 @@
 //! (`OnEnter(AppState::Delving)`). Settings is the pause menu's own page ([`menu_page`]), and
 //! the buttons are the pause menu's [`MenuButton`]s, so choosing and hovering work as there.
 
+pub mod creator;
+
 use bevy::{
     camera::RenderTarget,
     prelude::*,
@@ -21,11 +23,11 @@ use bevy::{
 };
 
 use crate::keymap::{Action, ActionInput, Keymap};
-use crate::launch::{AppState, clock_seed};
+use crate::launch::AppState;
 use crate::menu::{ButtonInk, MENU_PX, MenuButton, MenuCommand, MenuPage, capture_page, menu_page};
-use crate::play::CurrentLevel;
 use crate::settings::GameSettings;
 use crate::ui::{BG, FRAME_GOLD, INK, LINE, UiFonts};
+use creator::{CreatorCommand, Draft, creator_page, open_creator, run_creator};
 
 const SHADER_PATH: &str = "embedded://forever_below/title/lettering.wesl";
 
@@ -118,7 +120,8 @@ impl Plugin for TitlePlugin {
             .init_resource::<NewDelveSeed>()
             .add_message::<MenuCommand>()
             .add_systems(OnEnter(AppState::Title), spawn_title)
-            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), title_controls, fit_card, build_panel).chain().run_if(in_state(AppState::Title)));
+            .add_systems(OnExit(AppState::Title), |mut commands: Commands| commands.remove_resource::<Draft>())
+            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), title_controls, run_creator, fit_card, build_panel).chain().run_if(in_state(AppState::Title)));
     }
 }
 
@@ -139,9 +142,14 @@ fn spawn_title(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<LetteringMaterial>>,
     mut page: ResMut<MenuPage>,
+    seed: Res<NewDelveSeed>,
 ) {
-    // `FB_OPEN_MENU=settings` with `--title` opens on the settings page, for captures.
+    // `FB_OPEN_MENU=settings` with `--title` opens on the settings page, for captures, and
+    // `FB_OPEN_MENU=creator` on the creator, drafting from `--seed` (or 1).
     *page = capture_page().filter(|&p| p != MenuPage::Controls).unwrap_or_default();
+    if std::env::var("FB_OPEN_MENU").is_ok_and(|name| name == "creator") {
+        commands.insert_resource(Draft::roll(seed.0.unwrap_or(1)));
+    }
     let glyphs = images.add(Image::new_target_texture(LETTERING_SIZE.x, LETTERING_SIZE.y, TextureFormat::Rgba8Unorm, Some(TextureFormat::Rgba8UnormSrgb)));
     let scribe = commands
         .spawn((
@@ -211,38 +219,31 @@ fn fit_card(images: Res<Assets<Image>>, mut cards: Query<(&mut ImageNode, &Compu
     }
 }
 
-/// `FB_NEW_DELVE=<seconds>`: how long the title waits before choosing New delve by itself, for
-/// captures of a run going back to the title and on into the next delve.
+/// `FB_NEW_DELVE=<seconds>`: how long the title waits before beginning a delve by itself, past
+/// the creator, for captures of a run going back to the title and on into the next delve.
 fn new_delve_wait() -> Option<f32> {
     std::env::var("FB_NEW_DELVE").ok().and_then(|s| s.trim().parse::<f32>().ok())
 }
 
-/// Chooses New delve once the title has shown for [`new_delve_wait`] seconds, each time it
-/// shows.
+/// Begins a delve once the title has shown for [`new_delve_wait`] seconds, each time it shows.
 fn choose_new_delve_after(time: Res<Time>, mut shown: Local<f32>, mut chosen: MessageWriter<MenuCommand>) {
     *shown += time.delta_secs();
     if *shown >= new_delve_wait().unwrap_or(f32::MAX) {
         *shown = 0.0;
-        chosen.write(MenuCommand::NewDelve);
+        chosen.write(MenuCommand::Creator(CreatorCommand::Begin));
     }
 }
 
-/// New delve (its button, or Enter on the main page) begins the delve; Esc on the settings page
-/// goes back to the buttons.
-fn title_controls(
-    mut commands: Commands,
-    input: ActionInput,
-    mut chosen: MessageReader<MenuCommand>,
-    mut page: ResMut<MenuPage>,
-    seed: Res<NewDelveSeed>,
-    mut next: ResMut<NextState<AppState>>,
-) {
+/// New delve (its button, or Enter on the main page) opens the character creator
+/// ([`creator`]), which begins the delve; Esc on the settings page goes back to the buttons.
+fn title_controls(mut commands: Commands, input: ActionInput, mut chosen: MessageReader<MenuCommand>, mut page: ResMut<MenuPage>, draft: Option<Res<Draft>>) {
     let chose = chosen.read().filter(|c| **c == MenuCommand::NewDelve).count() > 0;
+    if draft.is_some() {
+        return;
+    }
     if chose || (*page == MenuPage::Main && input.just_pressed(Action::NewDelve)) {
-        let seed = seed.0.unwrap_or_else(clock_seed);
-        info!("title: a new delve into level {seed}");
-        commands.insert_resource(CurrentLevel(fb_level::generate(seed, 1)));
-        next.set(AppState::Delving);
+        *page = MenuPage::Main;
+        open_creator(&mut commands);
     } else if *page != MenuPage::Main && input.just_pressed(Action::Back) {
         *page = MenuPage::Main;
     }
@@ -270,31 +271,68 @@ fn ledger_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str
         .with_child((Text::new(label), UiFonts::style(&fonts.body_medium, 24.0, INK)));
 }
 
-/// Builds the buttons, or the settings page in a dark panel, when the page changes; the
-/// lettering steps aside for the settings.
+/// The width of the creator's panel in logical pixels.
+const CREATOR_PX: f32 = 900.0;
+
+/// A dark ledger panel `width` across in the middle of the screen, holding what `fill` builds.
+fn centred_panel(screen: &mut ChildSpawnerCommands, width: f32, fill: impl FnOnce(&mut ChildSpawnerCommands)) {
+    screen
+        .spawn((
+            TitlePanel,
+            Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
+        ))
+        .with_children(|centre| {
+            centre
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: px(18),
+                        width: px(width),
+                        max_width: percent(96),
+                        padding: UiRect::all(px(32)),
+                        border: UiRect::all(px(1)),
+                        border_radius: BorderRadius::all(px(6)),
+                        ..default()
+                    },
+                    BackgroundColor(BG),
+                    BorderColor::all(LINE),
+                ))
+                .with_children(fill);
+        });
+}
+
+/// Builds the buttons, the settings page or the character creator in a dark panel, when the
+/// page or the [`Draft`] changes; the lettering steps aside for the panels.
 #[allow(clippy::too_many_arguments)]
 fn build_panel(
     mut commands: Commands,
     page: Res<MenuPage>,
+    draft: Option<Res<Draft>>,
     keymap: Res<Keymap>,
     settings: Res<GameSettings>,
     fonts: Res<UiFonts>,
     screens: Query<Entity, With<TitleScreen>>,
     panels: Query<Entity, With<TitlePanel>>,
     mut lettering: Query<&mut Visibility, With<TitleLettering>>,
+    mut drafted: Local<bool>,
 ) {
     let Some(screen) = screens.iter().next() else { return };
-    if panels.iter().next().is_some() && !page.is_changed() {
+    let drafting = draft.is_some();
+    let changed = page.is_changed() || draft.as_ref().is_some_and(|d| d.is_changed()) || *drafted != drafting;
+    if panels.iter().next().is_some() && !changed {
         return;
     }
+    *drafted = drafting;
     for panel in &panels {
         commands.entity(panel).despawn();
     }
     for mut shown in &mut lettering {
-        shown.set_if_neq(if *page == MenuPage::Main { Visibility::Inherited } else { Visibility::Hidden });
+        shown.set_if_neq(if *page == MenuPage::Main && !drafting { Visibility::Inherited } else { Visibility::Hidden });
     }
-    commands.entity(screen).with_children(|screen| match *page {
-        MenuPage::Main => {
+    commands.entity(screen).with_children(|screen| match (draft.as_deref(), *page) {
+        (Some(draft), _) => centred_panel(screen, CREATOR_PX, |panel| creator_page(panel, &fonts, draft)),
+        (None, MenuPage::Main) => {
             screen
                 .spawn((
                     TitlePanel,
@@ -313,37 +351,14 @@ fn build_panel(
                     ledger_button(list, &fonts, "Quit", MenuCommand::Quit);
                 });
         }
-        shown => {
-            screen
-                .spawn((
-                    TitlePanel,
-                    Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
-                ))
-                .with_children(|centre| {
-                    centre
-                        .spawn((
-                            Node {
-                                flex_direction: FlexDirection::Column,
-                                align_items: AlignItems::Center,
-                                row_gap: px(18),
-                                width: px(MENU_PX + 64.0),
-                                padding: UiRect::all(px(32)),
-                                border: UiRect::all(px(1)),
-                                border_radius: BorderRadius::all(px(6)),
-                                ..default()
-                            },
-                            BackgroundColor(BG),
-                            BorderColor::all(LINE),
-                        ))
-                        .with_children(|panel| menu_page(panel, &fonts, shown, &keymap, &settings, &crate::menu::ControlsView::default()));
-                });
-        }
+        (None, shown) => centred_panel(screen, MENU_PX + 64.0, |panel| menu_page(panel, &fonts, shown, &keymap, &settings, &crate::menu::ControlsView::default())),
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::play::CurrentLevel;
     use bevy::state::app::StatesPlugin;
 
     #[test]
@@ -374,7 +389,8 @@ mod tests {
             .init_resource::<MenuPage>()
             .insert_resource(NewDelveSeed(seed))
             .add_message::<MenuCommand>()
-            .add_systems(Update, title_controls.run_if(in_state(AppState::Title)));
+            .add_message::<bevy::input::keyboard::KeyboardInput>()
+            .add_systems(Update, (title_controls, run_creator).chain().run_if(in_state(AppState::Title)));
         app
     }
 
@@ -382,27 +398,103 @@ mod tests {
         *app.world().resource::<State<AppState>>().get()
     }
 
+    fn tap(app: &mut App, key: KeyCode) {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        app.update();
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(key);
+        keys.clear();
+        app.update();
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        use bevy::input::{ButtonState, keyboard::{Key, KeyboardInput}};
+        for c in text.chars() {
+            app.world_mut().write_message(KeyboardInput {
+                key_code: KeyCode::KeyA,
+                logical_key: Key::Character(c.to_string().into()),
+                state: ButtonState::Pressed,
+                text: Some(c.to_string().into()),
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            });
+        }
+        app.update();
+    }
+
+    fn chosen(app: &App) -> Option<crate::character::Character> {
+        app.world().get_resource::<crate::character::ChosenDelver>().map(|c| c.0.clone())
+    }
+
     #[test]
-    fn new_delve_leaves_the_title_for_the_level() {
+    fn new_delve_opens_the_creator_and_begin_goes_down() {
         let mut app = title_app(Some(42));
         app.update();
-        assert_eq!(state(&app), AppState::Title);
-        assert!(app.world().get_resource::<CurrentLevel>().is_none(), "no level is made for the title");
         app.world_mut().write_message(MenuCommand::NewDelve);
+        app.update();
+        app.update();
+        assert_eq!(state(&app), AppState::Title, "the creator comes first");
+        assert!(app.world().get_resource::<CurrentLevel>().is_none(), "no level is made for the title");
+        app.world_mut().resource_mut::<Draft>().apply(CreatorCommand::Folk(fb_body::Folk::Dwarf));
+        app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Class(crate::character::Class::Cleric)));
+        app.update();
+        type_text(&mut app, "Brakka");
+        let made = app.world().resource::<Draft>().character();
+        app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
         app.update();
         app.update();
         assert_eq!(state(&app), AppState::Delving);
         assert_eq!(app.world().resource::<CurrentLevel>().0.seed, 42);
+        let delver = chosen(&app).expect("the delve begins as the drafted delver");
+        assert_eq!(delver, made);
+        assert_eq!((delver.folk, delver.class, delver.name.as_str()), (fb_body::Folk::Dwarf, crate::character::Class::Cleric, "Brakka"));
+        assert!(app.world().get_resource::<Draft>().is_none());
     }
 
     #[test]
-    fn enter_begins_a_delve_from_the_clock() {
+    fn enter_opens_the_creator_and_enter_again_begins() {
         let mut app = title_app(None);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
-        app.update();
+        tap(&mut app, KeyCode::Enter);
+        assert_eq!(state(&app), AppState::Title, "the press that opens the creator does not begin");
+        assert!(app.world().get_resource::<Draft>().is_some());
+        tap(&mut app, KeyCode::Enter);
         app.update();
         assert_eq!(state(&app), AppState::Delving);
         assert!(app.world().get_resource::<CurrentLevel>().is_some());
+    }
+
+    #[test]
+    fn an_empty_name_does_not_begin() {
+        let mut app = title_app(None);
+        tap(&mut app, KeyCode::Enter);
+        let mut draft = app.world_mut().resource_mut::<Draft>();
+        while !draft.name.is_empty() {
+            draft.backspace();
+        }
+        tap(&mut app, KeyCode::Enter);
+        app.update();
+        assert_eq!(state(&app), AppState::Title);
+    }
+
+    #[test]
+    fn escape_leaves_the_creator_for_the_buttons() {
+        let mut app = title_app(None);
+        tap(&mut app, KeyCode::Enter);
+        tap(&mut app, KeyCode::Escape);
+        assert!(app.world().get_resource::<Draft>().is_none());
+        assert_eq!(*app.world().resource::<MenuPage>(), MenuPage::Main);
+        assert_eq!(state(&app), AppState::Title);
+    }
+
+    #[test]
+    fn begin_without_the_creator_rolls_a_delver() {
+        let mut app = title_app(Some(7));
+        app.update();
+        app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
+        app.update();
+        app.update();
+        assert_eq!(state(&app), AppState::Delving);
+        assert!(chosen(&app).is_some());
     }
 
     #[test]
