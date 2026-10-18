@@ -407,7 +407,12 @@ fn fragment(
     // their rest normals in that slot). Sampled in the world, since columns and doors are items
     // with their own transforms, and measured in height from item space (their origin is the floor).
 @if(VERTEX_UVS_B && !SKINNED) {
-    base = apply_lichen(base, vertex_output.world_position.xyz, item_position.y, item_normal, pixel, vertex_output.uv_b.x, toon.decay_seed);
+    // Where the stone is shut in (the baked corner shading, in the vertex colour's alpha) or cut
+    // (the surface normal turning over a few pixels) lichen takes hold best.
+    var crease = smoothstep(0.03, 0.2, length(fwidth(item_normal)));
+    @if(VERTEX_COLORS)
+    crease = max(crease, 2.2 * (1.0 - vertex_output.color.a));
+    base = apply_lichen(base, vertex_output.world_position.xyz, item_position.y, item_normal, pixel, vertex_output.uv_b.x, toon.decay_seed, clamp(crease, 0.0, 1.0));
 }
 
     // A flame (premultiplied) is coloured by its vertices, by height (`flame_colour`), and here
