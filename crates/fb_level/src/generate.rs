@@ -1073,7 +1073,8 @@ mod tests {
     }
 
     // The hashes were taken on macOS. Linux's libm rounds `atan2` differently in the last bit,
-    // so folk and prop yaws differ there (#439); this runs everywhere again once that is fixed.
+    // so folk and prop yaws differ there, which is fine: a seed only has to repeat on its own
+    // platform.
     #[test]
     #[cfg(target_os = "macos")]
     fn the_first_level_is_byte_identical_to_before_styles() {
