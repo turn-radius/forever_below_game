@@ -1,6 +1,6 @@
 //! Corner shading baked into the level's stone: how shut in each vertex is, worked out from the
 //! floor plan alone (no rays), and stored on the part (`Part::occlusion`) for the toon shader to
-//! darken the light by before it cuts it into bands (`docs/rendering.md`, "Corner shading").
+//! scale the banded light by (`docs/rendering.md`, "Corner shading").
 //!
 //! The level is a signed distance field: the nearest of the floor, the ceiling and the walls
 //! (the edges of the cells that are not open), positive in the air and negative in the rock. A

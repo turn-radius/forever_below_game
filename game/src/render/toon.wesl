@@ -215,7 +215,7 @@ fn flame_flicker(position_radius: vec4<f32>) -> f32 {
 // Radiance from every point, spot and directional light reaching this fragment, banded per
 // light, times the view's exposure. Same light data and units as Bevy's
 // `apply_pbr_lighting`, with a Lambert lobe.
-fn toon_direct_light(toon: ToonUniform, in: PbrInput, openness: f32) -> vec3<f32> {
+fn toon_direct_light(toon: ToonUniform, in: PbrInput) -> vec3<f32> {
     let N = in.N;
     let P = in.world_position.xyz;
     let receives_shadows = (in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u;
@@ -273,7 +273,7 @@ fn toon_direct_light(toon: ToonUniform, in: PbrInput, openness: f32) -> vec3<f32
 
         // Lambert: the band stands in for N.L, 1/PI as in Bevy's diffuse lobe.
         let radiance = (*clustered).color_inverse_square_range.rgb * attenuation * cone * (exposure / PI);
-        light += reach_step(radiance) * flame_flicker((*clustered).position_radius) * toon_band(toon, dot(N, L), shadow * openness);
+        light += reach_step(radiance) * flame_flicker((*clustered).position_radius) * toon_band(toon, dot(N, L), shadow);
     }
 
     for (var i: u32 = 0u; i < view_bindings::lights.n_directional_lights; i = i + 1u) {
@@ -284,7 +284,7 @@ fn toon_direct_light(toon: ToonUniform, in: PbrInput, openness: f32) -> vec3<f32
             shadow = shadows::fetch_directional_shadow(i, in.world_position, in.world_normal, view_z, in.frag_coord.xy);
             shadow *= in.directional_shadow_factor;
         }
-        light += (*directional).color.rgb * (exposure / PI) * toon_band(toon, dot(N, (*directional).direction_to_light), shadow * openness);
+        light += (*directional).color.rgb * (exposure / PI) * toon_band(toon, dot(N, (*directional).direction_to_light), shadow);
     }
 
     return light;
@@ -403,13 +403,13 @@ fn fragment(
     }
 
     // Corners and creases of the level's stone carry how shut in they are in the vertex colour's
-    // alpha (`part_to_mesh`); it darkens the light before it is banded, so a corner drops a
-    // whole step at a crisp edge, and the ambient with it. Everything else is open.
+    // alpha (`part_to_mesh`); it scales the banded light and the ambient, a smooth ramp that follows
+    // no band edge (before the bands it put a contour along every mesh triangle). Everything else is open.
     var openness = 1.0;
     @if(VERTEX_COLORS)
     openness = select(vertex_output.color.a, 1.0, flame);
     let ambient = view_bindings::lights.ambient_color.rgb * pbr_input.diffuse_occlusion * openness;
-    let light = toon_direct_light(toon, pbr_input, openness) + ambient * view_bindings::view.exposure;
+    let light = toon_direct_light(toon, pbr_input) * openness + ambient * view_bindings::view.exposure;
     let lit = srgb_to_linear(tone * light);
     // Glow fades as the stone clouds over (`gemMat`).
     let glow = srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
