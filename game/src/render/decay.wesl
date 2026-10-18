@@ -19,6 +19,10 @@ const DECAY_STONE: u32 = 9u;
 const DECAY_CLOTH: u32 = 10u;
 const DECAY_PAINT: u32 = 11u;
 const DECAY_SKIN: u32 = 13u;
+// Cave rock and layered cave rock (ours): stone that also breaks into facets or beds
+// (`rock_shade`, `strata_shade`), weathered as type 9 is.
+const DECAY_ROCK: u32 = 14u;
+const DECAY_STRATA: u32 = 15u;
 
 fn hash3(p_in: vec3<f32>) -> f32 {
     var p = fract(p_in * 0.3183099 + 0.1);
@@ -189,7 +193,7 @@ fn apply_decay(
         c = mix(c, vec3(0.42, 0.3, 0.18), stain * 0.8);
         let crack = 1.0 - smoothstep(0.0, 0.012 * a + 0.001, abs(n2 - 0.5));
         c = c * (1.0 - 0.6 * crack * step(0.25, a));
-    } else if decay_type == DECAY_STONE {
+    } else if decay_type == DECAY_STONE || decay_type == DECAY_ROCK || decay_type == DECAY_STRATA {
         // Weathering, lichen.
         c = mix(c, c * 0.78, a * 0.4);
         let lichen = smoothstep(0.8 - a * 0.18, 0.84 - a * 0.18, n2) * min(1.0, a * 1.5);
@@ -226,6 +230,131 @@ fn apply_decay(
     }
     return c;
 }
+
+// A 3D hash into three channels, 0..1 each.
+fn hash33(c: vec3<f32>) -> vec3<f32> {
+    return vec3(hash3(c), hash3(c + vec3(31.7, 12.3, 5.1)), hash3(c + vec3(7.9, 41.1, 23.3)));
+}
+
+// The nearest two points of a jittered lattice (one point in each unit cell) to `p`: their
+// distances and the cells they sit in.
+struct Cells {
+    f1: f32,
+    f2: f32,
+    id1: vec3<f32>,
+    id2: vec3<f32>,
+}
+
+fn nearest_cells(p: vec3<f32>) -> Cells {
+    let base = floor(p);
+    var out = Cells(8.0, 8.0, vec3(0.0), vec3(0.0));
+    for (var z = -1; z <= 1; z = z + 1) {
+        for (var y = -1; y <= 1; y = y + 1) {
+            for (var x = -1; x <= 1; x = x + 1) {
+                let id = base + vec3(f32(x), f32(y), f32(z));
+                let d = distance(p, id + 0.1 + 0.8 * hash33(id));
+                if d < out.f1 {
+                    out.f2 = out.f1;
+                    out.id2 = out.id1;
+                    out.f1 = d;
+                    out.id1 = id;
+                } else if d < out.f2 {
+                    out.f2 = d;
+                    out.id2 = id;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+// How rock shades differently from plain stone: a shading normal broken into facets or beds,
+// and a tone per facet or bed with dark fissures or seams in it.
+struct RockShade {
+    normal: vec3<f32>,
+    tone: vec3<f32>,
+}
+
+// Gradient of value noise at `q` by central differences, `e` apart.
+fn noise_gradient(q: vec3<f32>, e: f32) -> vec3<f32> {
+    return vec3(
+        value_noise(q + vec3(e, 0.0, 0.0)) - value_noise(q - vec3(e, 0.0, 0.0)),
+        value_noise(q + vec3(0.0, e, 0.0)) - value_noise(q - vec3(0.0, e, 0.0)),
+        value_noise(q + vec3(0.0, 0.0, e)) - value_noise(q - vec3(0.0, 0.0, e)),
+    ) / (2.0 * e);
+}
+
+// Craggy cave rock (ours), in world units of 10 cm: voronoi facets 50 to 80 cm across, each
+// tilted its own way so the toon bands step from facet to facet, dark narrow fissures along
+// some facet borders, and a fine bump over the facets. Floors (and ceilings) get flatter,
+// smaller facets, like gravel. Everything fades to plain stone as it shrinks on screen: a
+// facet is whole at 40 pixels across and gone by 20, a fissure at about three pixels wide and
+// gone by one, so far rock settles to the stone's bands without shimmering.
+fn rock_shade(position: vec3<f32>, normal: vec3<f32>, pixel: f32, seed: f32) -> RockShade {
+    let flat_amount = smoothstep(0.5, 0.8, abs(normal.y));
+    let size = mix(6.5, 3.0, flat_amount);
+    // Warped, so facet borders wander instead of running straight.
+    var p = position / size + vec3(seed * 1.3);
+    p = p + (vec3(value_noise(p * 1.3), value_noise(p * 1.3 + vec3(5.2)), value_noise(p * 1.3 + vec3(9.7))) - 0.5) * 0.25;
+    let cells = nearest_cells(p);
+
+    // Some facets are split again into smaller ones, so they are not all of a size.
+    let finer = nearest_cells(p * 1.9 + vec3(4.3));
+    let split = step(0.72, hash3(cells.id1 + vec3(1.7)));
+    let id = select(cells.id1, finer.id1 + vec3(64.0), split > 0.5);
+    let facets = select(1.0 - smoothstep(0.025, 0.05, pixel / size), 1.0 - smoothstep(0.025, 0.05, pixel / size * 1.9), split > 0.5);
+    let tilt_dir = hash33(id) * 2.0 - 1.0;
+    let tilt = tilt_dir - normal * dot(tilt_dir, normal);
+    let lean = 0.8 + 2.4 * hash3(id + vec3(5.5));
+    var n = normalize(normal + tilt * lean * mix(1.0, 0.35, flat_amount) * facets);
+
+    // The bump rides over the facets, finer than they are.
+    let q = position * 0.9 + vec3(seed);
+    let bump = noise_gradient(q, 0.15) * 0.13 * detail(0.9, pixel) + noise_gradient(q * 2.6 + vec3(3.7), 0.15) * 0.08 * detail(2.34, pixel);
+    n = normalize(n + bump - normal * dot(bump, normal));
+
+    // Fissures run along the border between two facets, where the two nearest points are
+    // equally far, on about one in five borders, and broken along their length. Each facet's
+    // edge is also a little darker, as a chip's is.
+    let border = (cells.f2 - cells.f1) * size;
+    let keeps = step(0.86, hash3(cells.id1 + cells.id2 + vec3(3.3)));
+    let broken = smoothstep(0.35, 0.55, value_noise(position * 0.45 + vec3(seed)));
+    let fissure = (1.0 - smoothstep(0.05, 0.2, border)) * keeps * broken * (1.0 - 0.7 * flat_amount) * (1.0 - smoothstep(0.1, 0.25, pixel));
+    let rim = select(border, min(border, (finer.f2 - finer.f1) * size * 0.48), split > 0.5);
+    let edge = mix(1.0, 0.94 + 0.06 * smoothstep(0.0, 0.15, rim), facets);
+    let tone = mix(1.0, 0.94 + 0.12 * hash3(id + vec3(9.1)), facets) * edge;
+    // A facet leaning away from the normal also takes less light as a broad face would, which
+    // shows even where the torch is head on and every facet stays in its top band.
+    let leaning = mix(1.0, mix(0.68, 1.05, smoothstep(0.55, 1.0, dot(n, normal))), facets);
+    return RockShade(n, vec3(tone * leaning * (1.0 - 0.8 * fissure)));
+}
+
+// Layered cave rock (ours): horizontal beds 30 to 60 cm thick that wobble with height, in
+// alternating tones, each topped by a ledge (the normal tilts up at its top and down at its
+// foot) with a dark seam between beds. Fades to plain stone as a bed shrinks under about six
+// pixels.
+fn strata_shade(position: vec3<f32>, normal: vec3<f32>, pixel: f32, seed: f32) -> RockShade {
+    let wobble = value_noise(vec3(position.x * 0.06, position.y * 0.1, position.z * 0.06) + vec3(seed)) - 0.5;
+    let wander = value_noise(vec3(position.x * 0.17, 0.0, position.z * 0.17) + vec3(seed + 5.0)) - 0.5;
+    let u = position.y / 3.8 + wobble * 1.6 + wander * 0.9;
+    let bed = floor(u);
+    let f = fract(u);
+    let beds = 1.0 - smoothstep(0.35, 0.75, pixel);
+    let wall = 1.0 - abs(normal.y);
+
+    let ledge = smoothstep(0.76, 0.96, f) - (1.0 - smoothstep(0.03, 0.24, f));
+    let grain = (value_noise(vec3(position.x * 1.2, position.y * 6.0, position.z * 1.2) + vec3(seed)) - 0.5) * 0.35 * detail(6.0, pixel);
+    let n = normalize(normal + vec3(0.0, (ledge * 1.5 * beds + grain) * wall, 0.0));
+
+    let h = hash3(vec3(bed, seed, 2.0));
+    let warm = mix(vec3(1.0, 0.98, 0.94), vec3(0.95, 0.98, 1.02), hash3(vec3(bed, 7.0, seed)));
+    let seam = (1.0 - smoothstep(0.008, 0.035, f)) * (1.0 - smoothstep(0.12, 0.3, pixel));
+    let streak = 0.9 + 0.2 * value_noise(vec3(position.x * 0.5, position.y * 7.0, position.z * 0.5) + vec3(seed + 11.0));
+    let lip = 1.0 + 0.18 * smoothstep(0.8, 0.95, f) * (1.0 - smoothstep(0.97, 1.0, f));
+    let tone = mix(vec3(1.0), warm * (0.82 + 0.3 * h) * mix(1.0, streak, detail(7.0, pixel)) * lip, beds) * (1.0 - 0.55 * seam);
+    return RockShade(n, tone);
+}
+
 
 // Moss over stone (ours; greener and brighter than the plain 0x3f4f24 to 0x6f7f3a, since a warm
 // torch takes the green out of what it lights) where `moss` (0..1, carried per vertex) is above zero: thickest on

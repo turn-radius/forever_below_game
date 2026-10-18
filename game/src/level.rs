@@ -161,6 +161,10 @@ impl FixedLight {
 /// The stone's weathering: wear 0.5 on stone (decay type 9), its pattern a few metres across
 /// in world space rather than an item's few centimetres.
 pub const STONE_WEAR: f32 = 0.5;
+/// Decay types for cave rock and layered cave rock (`decay.wesl`): stone that also shades as
+/// facets or beds.
+const DECAY_ROCK: u32 = 14;
+const DECAY_STRATA: u32 = 15;
 const STONE_PATTERN_SCALE: f32 = 0.06;
 /// How much finer the decay pattern runs over a stone hall's ceiling than over its walls.
 const CEILING_PATTERN_FINER: f32 = 2.6;
@@ -429,6 +433,10 @@ fn spawn_stone(
                     // soffit this size would otherwise read as flat patches.
                     if part.name == "ceiling" && level.style == LevelStyle::StoneHalls {
                         material.extension.decay.scale *= CEILING_PATTERN_FINER;
+                    }
+                    // Cave rock breaks into facets under the light, or beds where it is layered.
+                    if level.style == LevelStyle::RoughRock {
+                        material.extension.decay.kind = if part.name == "strata" { DECAY_STRATA } else { DECAY_ROCK };
                     }
                     let handle = toon_materials.add(material);
                     materials.push((part.name, handle.clone()));
@@ -889,7 +897,7 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
                             continue;
                         }
                         let run = (1..=12).take_while(|k| level.is_open(x - dx * k, y - dy * k)).count() as f32;
-                        let score = wanted(x, y) * 100.0 + run.min(back / CELL);
+                        let score = if mode == "rock-far" { run } else { wanted(x, y) * 100.0 + run.min(back / CELL) };
                         if best.is_none_or(|(b, ..)| score > b) {
                             best = Some((score, x, y, facing));
                         }
@@ -965,6 +973,13 @@ fn debug_camera_takes_over(
 mod tests {
     use super::*;
     use armory::MaterialKind;
+
+    #[test]
+    fn the_rock_decay_types_match_the_shader() {
+        let shader = include_str!("render/decay.wesl");
+        assert!(shader.contains(&format!("const DECAY_ROCK: u32 = {DECAY_ROCK}u;")));
+        assert!(shader.contains(&format!("const DECAY_STRATA: u32 = {DECAY_STRATA}u;")));
+    }
 
     fn door() -> EntranceDoor {
         EntranceDoor { shut: Quat::IDENTITY, centre: Vec3::new(110.0, 0.0, 190.0), cell: (5, 9), swing: DoorSwing::Open }

@@ -29,7 +29,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::{apply_decay, apply_moss};
+import super::decay::{apply_decay, apply_moss, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -388,6 +388,19 @@ fn fragment(
         toon.decay_scale,
         toon.decay_seed,
     );
+    // Cave rock breaks the shading normal into facets or beds before the light reads it. Level
+    // stone sits at the world origin, so item space is world space and a change of the normal
+    // there is a change of the world normal.
+@if(!SKINNED) {
+    if toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA {
+        var rock = rock_shade(item_position, item_normal, pixel, toon.decay_seed);
+        if toon.decay_type == DECAY_STRATA {
+            rock = strata_shade(item_position, item_normal, pixel, toon.decay_seed);
+        }
+        pbr_input.N = normalize(pbr_input.N + (rock.normal - item_normal));
+        base = base * rock.tone;
+    }
+}
     // Moss grows over the level's stone, which carries it per vertex (not skinned: folk keep
     // their rest normals in that slot). Stone sits at the world origin, so item space is world space.
 @if(VERTEX_UVS_B && !SKINNED) {
