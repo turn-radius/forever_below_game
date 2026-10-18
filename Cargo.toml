@@ -59,3 +59,15 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.fb_character]
 opt-level = 3
+
+# Release builds ship with thin LTO and one codegen unit; they take longer to build for a faster game.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Release speed with line tables kept and symbols unstripped, for profilers (see docs/rendering.md):
+# `cargo build --profile profiling -p forever_below`.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
