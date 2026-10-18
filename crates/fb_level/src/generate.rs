@@ -1063,6 +1063,7 @@ mod tests {
     }
 
     /// FNV-1a over the debug text of everything the first level held before styles existed.
+    #[cfg(target_os = "macos")]
     fn snapshot_hash(level: &Level) -> u64 {
         let text = format!(
             "{:?}",
@@ -1071,7 +1072,10 @@ mod tests {
         text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
     }
 
+    // The hashes were taken on macOS. Linux's libm rounds `atan2` differently in the last bit,
+    // so folk and prop yaws differ there (#439); this runs everywhere again once that is fixed.
     #[test]
+    #[cfg(target_os = "macos")]
     fn the_first_level_is_byte_identical_to_before_styles() {
         // Hashes taken from the generator before level styles were added. Seeds 7, 64, 4242 and
         // u32::MAX were retaken when giant rats left the first level (`GIANTS_FROM_DEPTH`): their
