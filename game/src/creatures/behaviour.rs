@@ -194,6 +194,8 @@ const CENTIPEDE_TURN: f32 = 7.0;
 /// and the wait between its bites, seconds. Our own cooldown, like the rat's.
 const CENTIPEDE_CHASE: f32 = 2.0;
 const CENTIPEDE_COOLDOWN: f32 = 1.6;
+/// How fast a centipede runs in a wandering burst, as a share of its walking speed. Our own.
+const CENTIPEDE_BURST: f32 = 0.9;
 /// A wandering centipede runs for this share of each period and is still for the rest. Our own.
 const SCUTTLE_PERIOD: f32 = 1.7;
 const SCUTTLE_SHARE: f32 = 0.4;
@@ -465,8 +467,16 @@ fn behave(
                         *target = None;
                         *wait = if snake { brain.rng.range_f32(5.0, 12.0) } else { brain.rng.range_f32(1.0, 4.0) };
                     } else {
+                        // A centipede runs in bursts with pauses between them.
+                        let pace = if snake {
+                            0.35
+                        } else if species.is_centipede() {
+                            if scuttling(t, critter.spot.seed) { CENTIPEDE_BURST } else { 0.0 }
+                        } else {
+                            0.45
+                        };
                         heading = Some(goal);
-                        speed = species.speed() * if snake { 0.35 } else { 0.45 };
+                        speed = species.speed() * pace;
                     }
                 }
             }
@@ -476,7 +486,7 @@ fn behave(
                 let in_reach = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius)) && sees.is_some();
                 if !in_reach && brain.attack.is_none() {
                     heading = Some(goal);
-                    speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() || species.is_troll() { 1.0 } else if species.is_spider() { SPIDER_CHASE } else { tune.rat_chase_speed };
+                    speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() || species.is_troll() { 1.0 } else if species.is_spider() { SPIDER_CHASE } else if species.is_centipede() { CENTIPEDE_CHASE } else { tune.rat_chase_speed };
                 }
                 // A bat bites only swooping at the delver's head.
                 let at_height = flight.as_deref().is_none_or(|f| f.phase == Wing::Swooping && (f.altitude - EYE_HEIGHT).abs() <= BITE_BAND);
@@ -490,8 +500,9 @@ fn behave(
                         if let Some(sounds) = &bone_sounds {
                             super::skeletons::play_at(&mut commands, "creature attack cue", sounds.rattle.clone(), transform.translation, &game, &tuning);
                         }
-                    } else if species.is_troll() {
-                        // The arms come up in silence: the thud of the blow is the cue.
+                    } else if species.is_troll() || species.is_centipede() {
+                        // The arms come up in silence: the thud of the blow is the cue. A centipede
+                        // makes no sound at all, which is worse.
                     } else if let Some(sounds) = &sounds {
                         // A spider's is a hiss, as it rears.
                         let cue = if snake || species.is_spider() { sounds.snake_rise.clone() } else { sounds.rat_squeal.clone() };
@@ -578,7 +589,7 @@ fn behave(
                 let wanted = to.x.atan2(to.y);
                 let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
                 let turn = (wanted - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                let rate = if bat { if species == Species::GiantBat { GIANT_BAT_TURN } else { BAT_TURN } } else if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else if species.is_spider() { SPIDER_TURN } else if species.is_troll() { TROLL_TURN } else { RAT_TURN };
+                let rate = if bat { if species == Species::GiantBat { GIANT_BAT_TURN } else { BAT_TURN } } else if snake { SNAKE_TURN } else if species.is_skeleton() { SKELETON_TURN } else if species.is_spider() { SPIDER_TURN } else if species.is_troll() { TROLL_TURN } else if species.is_centipede() { CENTIPEDE_TURN } else { RAT_TURN };
                 let turned = turn.clamp(-rate * dt, rate * dt);
                 transform.rotation = Quat::from_rotation_y(yaw + turned);
                 if let Some(flight) = flight.as_deref_mut() {
@@ -598,6 +609,10 @@ fn behave(
             intent.coil = if moving { 0.0 } else { 1.0 };
             intent.rear = if chasing { 1.0 } else { 0.3 + 0.35 * (0.5 + 0.5 * (t * 0.35 + critter.spot.seed as f32).sin()) };
             intent.tongue = tongue_flick(t + (critter.spot.seed % 97) as f32 * 0.1);
+        }
+        if species.is_centipede() {
+            // Its front lifts a little as it comes on.
+            intent.rear = if chasing { 0.3 } else { 0.0 };
         }
         if let Some(since) = brain.attack.as_mut() {
             *since += dt;
@@ -680,6 +695,8 @@ fn behave(
                     SPIDER_COOLDOWN
                 } else if species.is_troll() {
                     TROLL_COOLDOWN
+                } else if species.is_centipede() {
+                    CENTIPEDE_COOLDOWN
                 } else {
                     tune.rat_cooldown
                 };
@@ -1147,6 +1164,88 @@ mod tests {
                 assert!(reach(&critter, BODY_RADIUS) > body_radius(&critter) + BODY_RADIUS + 1.0, "{species:?} {seed}");
             }
         }
+    }
+
+    /// The roomiest room of seed 1207's level: its level, centre (world `(x, z)`) and half the
+    /// width of floor it has clear on each side, world units.
+    fn big_room() -> (Level, Vec2, f32) {
+        let level = fb_level::generate(1207, 1);
+        let room = *level.rooms.iter().max_by_key(|r| r.w.min(r.h)).unwrap();
+        let (cx, cy) = room.centre();
+        let half = (room.w.min(room.h) as f32 * 0.5 - 0.8) * CELL;
+        (level, Vec2::new(cx, cy) * CELL, half)
+    }
+
+    /// One creature of `species` and `seed` alone in the big room's middle, thinking and moving
+    /// with a player at `player_at` (world `(x, z)`), stepped 1/60 s a frame.
+    fn solo_app(species: Species, seed: u32, level: &Level, at: Vec2, player_at: Vec2) -> (App, Entity, Entity) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .add_plugins(BehaviourPlugin)
+            .add_systems(Update, (super::super::idle, animate).chain().after(behave));
+        app.insert_resource(Obstacles(Vec::new()));
+        app.insert_resource(CurrentLevel(level.clone()));
+        let player = app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y))).id();
+        let spot = fb_level::CreatureSpot { x: at.x / CELL, y: at.y / CELL, yaw: 0.0, species, seed, pack: 0 };
+        let creature = {
+            let mut commands = app.world_mut().commands();
+            spawn_skeleton(&mut commands, level, &spot, &spot.creature().rig()).0
+        };
+        app.world_mut().flush();
+        (app, creature, player)
+    }
+
+    #[test]
+    fn a_centipede_wanders_in_bursts_and_chases_at_twice_its_speed_without_pause() {
+        let (level, middle, half) = big_room();
+        let speed = Species::GiantCentipede.speed();
+        // Far from the delver: in bursts with pauses between.
+        let (mut app, centipede, player) = solo_app(Species::GiantCentipede, 3, &level, middle, Vec2::new(5.0, 5.0));
+        let (mut last, mut bursts, mut pauses, mut fastest) = (position(&app, centipede), 0, 0, 0.0f32);
+        for _ in 0..(60 * 40) {
+            app.update();
+            let now = position(&app, centipede);
+            let v = now.distance(last) * 60.0;
+            last = now;
+            fastest = fastest.max(v);
+            if app.world().get::<Brain>(centipede).is_some_and(|b| matches!(b.mode, Mode::Wander { target: Some(_), .. })) {
+                if v > 0.5 * speed { bursts += 1 } else if v < 0.01 { pauses += 1 }
+            }
+        }
+        assert!(bursts > 60 && pauses > 60, "{bursts} frames of running and {pauses} of pausing on the way");
+        assert!(fastest < 1.2 * speed, "a wandering burst is no faster than its walk: {fastest}");
+        // Noticing the delver: twice its speed, and never still on the way.
+        let range = notice_range(Species::GiantCentipede, 1.0);
+        let _ = player;
+        let (mut app, centipede, _) = solo_app(Species::GiantCentipede, 3, &level, middle, middle + Vec2::X * (0.8 * range).min(half));
+        let (mut still, mut quick) = (0, 0);
+        let mut last = position(&app, centipede);
+        for _ in 0..40 {
+            app.update();
+            let now = position(&app, centipede);
+            let v = now.distance(last) * 60.0;
+            last = now;
+            if app.world().get::<Brain>(centipede).is_some_and(|b| matches!(b.mode, Mode::Chase { .. })) && !app.world().get::<Brain>(centipede).unwrap().attack.is_some() {
+                if v < 0.1 * speed { still += 1 }
+                if v > 1.7 * speed { quick += 1 }
+            }
+        }
+        assert!(quick > 10, "it chases at twice its speed ({quick} quick frames)");
+        assert_eq!(still, 0, "and never pauses while it comes on");
+    }
+
+    #[test]
+    fn a_centipede_bite_carries_its_venom() {
+        let (level, middle, half) = big_room();
+        let (mut app, _, _) = solo_app(Species::GiantCentipede, 3, &level, middle, middle + Vec2::X * half);
+        let mut bites = Vec::new();
+        for _ in 0..(60 * 20) {
+            app.update();
+            bites.extend(attacks(&mut app));
+        }
+        assert!(!bites.is_empty(), "the centipede never bit");
+        assert!(bites.iter().all(|b| b.species == Some(Species::GiantCentipede) && (3..=18).contains(&b.poison) && (3..=6).contains(&b.damage)), "{bites:?}");
     }
 
     /// The attack cues playing: where each stands, how loud it plays and whether it is spatial.
