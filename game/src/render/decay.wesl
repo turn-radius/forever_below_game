@@ -299,7 +299,7 @@ fn rock_shade(position: vec3<f32>, normal: vec3<f32>, pixel: f32, seed: f32) -> 
     var tone = 1.0;
     var fissure = 0.0;
 
-    if pixel / size * 1.9 < 0.05 || pixel < 0.25 {
+    if pixel / size < 0.05 || pixel < 0.25 {
         // Warped, so facet borders wander instead of running straight.
         var p = position / size + vec3(seed * 1.3);
         p = p + (vec3(value_noise(p * 1.3), value_noise(p * 1.3 + vec3(5.2)), value_noise(p * 1.3 + vec3(9.7))) - 0.5) * 0.25;
