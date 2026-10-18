@@ -298,6 +298,13 @@ pub struct LightTuning {
     /// Where the dark starts to swallow far stone, and where it is complete, world units.
     pub fog_start: f32,
     pub fog_end: f32,
+    /// How many of the lights nearest the camera cast shadows at once; the rest shine without
+    /// (`crate::light::ShadowBudgetPlugin`). Each shadowed point light draws the level six
+    /// times a frame.
+    pub shadowed_lights: usize,
+    /// Width and height of each face of a point light's shadow cube, in texels. Banded light
+    /// hides the soft edge a smaller map gives, and each step down quarters the fill.
+    pub shadow_map_size: usize,
 }
 
 impl Default for LightTuning {
@@ -313,6 +320,8 @@ impl Default for LightTuning {
             ambient_lux: 4.0,
             fog_start: 40.0,
             fog_end: 260.0,
+            shadowed_lights: 4,
+            shadow_map_size: 512,
         }
     }
 }
