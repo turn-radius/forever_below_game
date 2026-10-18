@@ -76,18 +76,34 @@ pub fn stone_chunks(level: &Level) -> Vec<LevelMesh> {
 /// The stone of a level made ahead of time: [`spawn_stone`] uses it when it is the stone of the
 /// level coming in, and makes its own otherwise.
 #[derive(Resource, Debug, Default)]
-pub struct PreparedStone(pub Option<(u32, u32, Vec<LevelMesh>)>);
+pub struct PreparedStone {
+    ready: Option<(u32, u32, Vec<LevelMesh>)>,
+    /// How many times it was used, which tests read to see the stone was made ahead.
+    pub used: u32,
+}
 
 impl PreparedStone {
     /// Keeps `chunks` as the stone of the level of `seed` at `depth`.
     pub fn set(&mut self, seed: u32, depth: u32, chunks: Vec<LevelMesh>) {
-        self.0 = Some((seed, depth, chunks));
+        self.ready = Some((seed, depth, chunks));
     }
 
     /// The stone made ahead for `level`, if that is the level it was made for. Whatever was
     /// kept is used up either way.
     fn take_for(&mut self, level: &Level) -> Option<Vec<LevelMesh>> {
-        self.0.take().filter(|(seed, depth, _)| (*seed, *depth) == (level.seed, level.depth)).map(|(_, _, chunks)| chunks)
+        let chunks = self.ready.take().filter(|(seed, depth, _)| (*seed, *depth) == (level.seed, level.depth)).map(|(_, _, chunks)| chunks);
+        self.used += u32::from(chunks.is_some());
+        chunks
+    }
+
+    /// Forgets what was kept.
+    pub fn clear(&mut self) {
+        self.ready = None;
+    }
+
+    /// Whether stone is kept, not yet used.
+    pub fn is_kept(&self) -> bool {
+        self.ready.is_some()
     }
 }
 
@@ -482,11 +498,12 @@ fn spawn_columns(
     }
 }
 
-/// The shapes of a level's doorways and braziers: for each doorway its frame and, at the
+/// The shapes of a level's doorways and braziers: each doorway with its frame and, at the
 /// entrance, the door's leaf; for each fixed light a brazier's body and flame height, `None` for
 /// the other kinds. Plain data, so it can be made ahead of time ([`crate::staged`]).
+#[derive(Debug, PartialEq)]
 pub struct FixtureShapes {
-    pub doors: Vec<(ItemMesh, Option<ItemMesh>)>,
+    pub doors: Vec<(Doorway, ItemMesh, Option<ItemMesh>)>,
     pub braziers: Vec<Option<(ItemMesh, f32)>>,
 }
 
@@ -503,7 +520,7 @@ impl FixtureShapes {
                     LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), seed),
                 };
                 let leaf = ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
-                (frame, leaf)
+                (doorway, frame, leaf)
             })
             .collect();
         let braziers = level
@@ -537,12 +554,11 @@ fn spawn_fixtures(
     // The door shut behind the delver when they came in; coming back to it from below finds it
     // shut already, and it does not swing again.
     let shut_already = abyss.is_some_and(|a| a.arrival == Arrival::FromBelow);
-    let view = CellView::new(level);
     let FixtureShapes { doors, braziers } = staged.as_mut().and_then(|s| s.take_fixtures(level)).unwrap_or_else(|| FixtureShapes::make(level));
 
     // Door frames, and the entrance door hung in its own.
     let entrance = (level.entrance.x as i32, level.entrance.y as i32);
-    for (doorway, (frame, leaf)) in geometry::doorways(&view).into_iter().zip(doors) {
+    for (doorway, frame, leaf) in doors {
         let seed = door_seed(level, &doorway);
         let transform = doorway_transform(&doorway);
         spawner.spawn(&frame, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
@@ -561,13 +577,13 @@ fn spawn_fixtures(
     }
 
     // Fixed lights.
-    for (i, spot) in level.lights.iter().enumerate() {
+    for (i, (spot, brazier)) in level.lights.iter().zip(braziers).enumerate() {
         let at = v3(fb_level::Level::world(spot.x, spot.y));
         let seed = light_seed(level, i);
         match spot.kind {
             LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light),
             LightKind::Brazier => {
-                let (mesh, flame) = braziers[i].clone().expect("a brazier has a shape");
+                let (mesh, flame) = brazier.expect("a brazier has a shape");
                 spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Transform::from_translation(at)));
                 let light = FixedLight::Brazier.light(&tuning.light);
                 commands.spawn((StonePiece, Name::new("brazier light"), FixedLight::Brazier, light, Transform::from_translation(at + Vec3::Y * flame)));

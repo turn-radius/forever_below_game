@@ -779,6 +779,7 @@ pub(crate) fn lay_out_items(
         }
         return;
     }
+    // (A level with a record returned above: it is never staged, as its record sets its floor.)
     // The loot and its shapes were rolled ahead of time if the level was made in the background
     // (`crate::staged`).
     let mut ahead = staged.as_mut().and_then(|s| s.take_items(&level.0)).map(Vec::into_iter);

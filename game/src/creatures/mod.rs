@@ -385,6 +385,7 @@ pub fn spawn_creature_as(commands: &mut Commands, spawner: &mut ItemSpawner, lev
 }
 
 /// A creature worked out from its spot, ready to spawn: pure data, Bevy-free.
+#[derive(Debug)]
 pub struct Built {
     pub creature: Creature,
     /// A skeleton's fitted gear and the kit worked out from it.

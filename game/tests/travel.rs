@@ -21,7 +21,9 @@ use forever_below::{
     combat::{Health, vitals::FALL_TIME},
     inventory::{Inventory, ItemId},
     launch::AppState,
+    folk::FolkFigures,
     level::{DoorSwing, EntranceDoor, LevelPiece, PreparedStone, stone_chunks},
+    staged::Staged,
     menu::MenuCommand,
     play::{BlockedCells, CurrentLevel, PlayPlugin, Player, PlayerCamera, Screen, ScreenOpen},
     player::Locomotion,
@@ -29,7 +31,7 @@ use forever_below::{
     render::ArmoryRenderPlugin,
     settings::SettingsPlugin,
     title::{NewDelveSeed, TitlePlugin},
-    travel::{Abyss, Arrival, DepthTitle, Journey, LeavingLevel, UseStair},
+    travel::{Abyss, Arrival, Below, DepthTitle, Journey, LeavingLevel, UseStair},
     tuning::TuningPlugin,
 };
 
@@ -235,20 +237,32 @@ fn the_stairs_carry_the_delver_down_and_back_up_and_leave_each_level_whole() {
     assert_eq!(census(&mut app), level_one, "the first level is laid out as before");
 }
 
-/// The level below is made in the background from the moment a level is entered. Going down at
-/// once, before it can have finished, waits for it and lands on the same level and stone as
+/// The level below is made in the background soon after a level is entered. Going down soon
+/// after, before it can have finished, waits for it and lands on the same level and stone as
 /// one made in place.
 #[test]
 fn going_down_at_once_waits_for_the_level_made_in_the_background() {
     let mut app = headless_game();
     begin_delve(&mut app);
+    // (A few frames in, as the one below is started a few frames after an arrival.)
+    run(&mut app, 20);
     let first = level(&app).clone();
     let down = *first.stair(StairKind::Down).expect("a way down");
+    assert_eq!(app.world().get_resource::<Below>().map(Below::key), Some((1207, 2)), "the level below is being made");
+    let built_here = app.world().resource::<FolkFigures>().built_here;
     stand(&mut app, down.approach(), down.facing.yaw());
     run(&mut app, 2);
     press_f(&mut app);
+    // (The fades take 72 frames of the game's fixed time step, however long the work takes.)
     run(&mut app, 90);
     assert!(app.world().get_resource::<Journey>().is_none(), "the journey is over");
+    assert_eq!(app.world().get_resource::<Below>().map(Below::key), Some((1207, 3)), "the one below this is started in turn");
+
+    // Everything laid out came from the background: no folk figure was built here, and the
+    // stone, creatures, items, props and fixtures were each taken once.
+    assert_eq!(app.world().resource::<FolkFigures>().built_here, built_here);
+    assert_eq!(app.world().resource::<PreparedStone>().used, 1);
+    assert_eq!(app.world().resource::<Staged>().taken, 4);
 
     let second = level(&app).clone();
     assert_eq!(second, fb_level::generate(depth_seed(1207, 2), 2), "the level made in the background is the one made in place");
@@ -262,7 +276,7 @@ fn going_down_at_once_waits_for_the_level_made_in_the_background() {
     for name in ["floor", "ink", "joints"] {
         assert_eq!(named(&mut app, name), expected(name), "{name}");
     }
-    assert!(app.world().resource::<PreparedStone>().0.is_none());
+    assert!(!app.world().resource::<PreparedStone>().is_kept());
 }
 
 #[test]

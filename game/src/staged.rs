@@ -18,6 +18,7 @@ use crate::props::prop_mesh;
 use crate::render::ItemAppearance;
 
 /// A prop's shut shape, and what a container holds.
+#[derive(Debug)]
 pub struct StagedProp {
     pub mesh: ItemMesh,
     pub appearance: ItemAppearance,
@@ -71,37 +72,50 @@ pub struct Staged {
     items: Option<Vec<Option<(Item, ItemMesh)>>>,
     props: Option<Vec<StagedProp>>,
     fixtures: Option<FixtureShapes>,
+    /// How many parts have been taken, which tests read to see the staging was used.
+    pub taken: u32,
 }
 
 impl Staged {
     /// Keeps `staging` as the parts of `level`, in place of whatever was kept.
     pub fn set(&mut self, level: &Level, staging: Staging) {
         let Staging { creatures, items, props, fixtures } = staging;
-        *self = Staged { for_level: Some((level.seed, level.depth)), creatures: Some(creatures), items: Some(items), props: Some(props), fixtures: Some(fixtures) };
+        *self = Staged { for_level: Some((level.seed, level.depth)), creatures: Some(creatures), items: Some(items), props: Some(props), fixtures: Some(fixtures), taken: 0 };
     }
 
     fn is_for(&self, level: &Level) -> bool {
         self.for_level == Some((level.seed, level.depth))
     }
 
+    /// Takes the part `slot` picks, if it is for `level` and `fits` it (a part that does not is
+    /// dropped, and the system makes its own).
+    fn take_with<T>(&mut self, level: &Level, slot: impl FnOnce(&mut Self) -> &mut Option<T>, fits: impl FnOnce(&T) -> bool) -> Option<T> {
+        if !self.is_for(level) {
+            return None;
+        }
+        let part = slot(self).take().filter(fits);
+        self.taken += u32::from(part.is_some());
+        part
+    }
+
     /// The creatures made ahead for `level`, once, if that is the level they were made for.
     pub fn take_creatures(&mut self, level: &Level) -> Option<Vec<Built>> {
-        if self.is_for(level) { self.creatures.take().filter(|c| c.len() == level.creatures.len()) } else { None }
+        self.take_with(level, |s| &mut s.creatures, |c| c.len() == level.creatures.len())
     }
 
     /// The floor items made ahead for `level`, once.
     pub fn take_items(&mut self, level: &Level) -> Option<Vec<Option<(Item, ItemMesh)>>> {
-        if self.is_for(level) { self.items.take().filter(|i| i.len() == level.items.len()) } else { None }
+        self.take_with(level, |s| &mut s.items, |i| i.len() == level.items.len())
     }
 
     /// The props made ahead for `level`, once.
     pub fn take_props(&mut self, level: &Level) -> Option<Vec<StagedProp>> {
-        if self.is_for(level) { self.props.take().filter(|p| p.len() == level.props.len()) } else { None }
+        self.take_with(level, |s| &mut s.props, |p| p.len() == level.props.len())
     }
 
     /// The door and brazier shapes made ahead for `level`, once.
     pub fn take_fixtures(&mut self, level: &Level) -> Option<FixtureShapes> {
-        if self.is_for(level) { self.fixtures.take() } else { None }
+        self.take_with(level, |s| &mut s.fixtures, |f| f.braziers.len() == level.lights.len())
     }
 }
 
@@ -125,12 +139,51 @@ mod tests {
     }
 
     #[test]
-    fn staged_loot_is_the_loot_rolled_in_place() {
-        let level = fb_level::generate(fb_level::depth_seed(1207, 2), 2);
-        let staging = Staging::make(&level);
-        for (spot, staged) in level.items.iter().zip(&staging.items) {
-            let rolled = fb_items::roll_loot(spot.family, spot.seed, Odds::loot(level.depth));
-            assert_eq!(rolled.as_ref().map(|i| i.title().to_string()), staged.as_ref().map(|(i, _)| i.title().to_string()));
+    fn staged_parts_are_the_parts_made_in_place() {
+        use crate::creatures::build_creature;
+        use crate::inventory::Inventory;
+        use crate::props::{stock_container, stock_container_with};
+        use crate::record::record_contents;
+
+        let (mut items, mut creatures, mut containers) = (0, 0, 0);
+        for depth in 1..=4 {
+            let level = fb_level::generate(fb_level::depth_seed(1207, depth), depth);
+            let staging = Staging::make(&level);
+
+            assert_eq!(staging.items.len(), level.items.len());
+            for (spot, staged) in level.items.iter().zip(&staging.items) {
+                let rolled = fb_items::roll_loot(spot.family, spot.seed, Odds::loot(depth));
+                assert_eq!(rolled.as_ref(), staged.as_ref().map(|(item, _)| item), "depth {depth}: the loot");
+                if let (Some(item), Some((_, mesh))) = (&rolled, staged) {
+                    assert_eq!(&item.shape.build(), mesh, "depth {depth}: its shape");
+                    items += 1;
+                }
+            }
+
+            assert_eq!(staging.creatures.len(), level.creatures.len());
+            for (spot, staged) in level.creatures.iter().zip(&staging.creatures) {
+                assert_eq!(format!("{staged:?}"), format!("{:?}", build_creature(spot, depth)), "depth {depth}: the creature");
+                creatures += 1;
+            }
+
+            assert_eq!(staging.props.len(), level.props.len());
+            for (spot, staged) in level.props.iter().zip(&staging.props) {
+                let (mesh, appearance) = prop_mesh(spot, &level, false);
+                assert_eq!((&mesh, &appearance), (&staged.mesh, &staged.appearance), "depth {depth}: the prop");
+                // A container stocked from the staged contents holds what one stocked in place does.
+                let (mut ahead, mut here) = (Inventory::default(), Inventory::default());
+                let stocked_ahead = stock_container_with(&mut ahead, spot.prop, staged.contents.clone());
+                let stocked_here = stock_container(&mut here, spot.prop, depth);
+                assert_eq!(stocked_ahead.is_some(), stocked_here.is_some());
+                if let (Some(a), Some(h)) = (stocked_ahead, stocked_here) {
+                    let (a, h) = (record_contents(&ahead, a), record_contents(&here, h));
+                    assert_eq!(format!("{a:?}"), format!("{h:?}"), "depth {depth}: the contents");
+                    containers += 1;
+                }
+            }
+
+            assert_eq!(staging.fixtures, FixtureShapes::make(&level), "depth {depth}: the fixtures");
         }
+        assert!(items > 0 && creatures > 0 && containers > 0, "the comparison covered something: {items} items, {creatures} creatures, {containers} containers");
     }
 }
