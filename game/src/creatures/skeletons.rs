@@ -44,6 +44,7 @@ use super::{Bones, Critter};
 use crate::combat::feedback::Corpse;
 use crate::inventory::underfoot::{FloorChanges, set_down_around};
 use crate::inventory::Inventory;
+use crate::level::draw_end;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles, Player};
 use crate::player::blocked_by;
 use crate::settings::GameSettings;
@@ -254,19 +255,14 @@ impl Rattle {
     }
 }
 
-/// A skeleton is not drawn this much (world units, 2 m) past the fog's end (`fog_end`, 26 m as
-/// shipped), where it would be fogged to nothing anyway. A hall of skeletons draws only the
-/// ones that can be seen. Our own.
-const DRAW_MARGIN: f32 = 20.0;
-
-/// Hides each skeleton out of the fog's end of the delver, and shows it again on coming back.
+/// Hides each skeleton out of the draw distance ([`draw_end`], the fog's end and a margin) of the delver, and shows it again on coming back.
 fn cull_far(tuning: Res<Tuning>, players: Query<&Transform, With<Player>>, mut skeletons: Query<(&Critter, &Transform, &mut Visibility), Without<Player>>) {
     let Some(player) = players.iter().next().map(|t| t.translation) else { return };
     for (critter, at, mut visibility) in &mut skeletons {
         if !critter.spot.species.is_skeleton() {
             continue;
         }
-        let wanted = if at.translation.distance(player) > tuning.light.fog_end + DRAW_MARGIN { Visibility::Hidden } else { Visibility::Inherited };
+        let wanted = if at.translation.distance(player) > draw_end(&tuning.light) { Visibility::Hidden } else { Visibility::Inherited };
         if *visibility != wanted {
             *visibility = wanted;
         }

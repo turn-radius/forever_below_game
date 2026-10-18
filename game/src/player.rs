@@ -17,6 +17,7 @@ use bevy::{
 use fb_level::{CELL, Level};
 
 use crate::keymap::{Action, ActionInput, Keymap};
+use crate::level::draw_end;
 use crate::light::point_light;
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
@@ -93,17 +94,19 @@ impl Gait {
 
 /// The world camera's projection for `tuning`.
 pub fn world_projection(tuning: &Tuning) -> Projection {
-    Projection::from(PerspectiveProjection { fov: tuning.view.world_fov_degrees.to_radians(), near: NEAR, ..default() })
+    Projection::from(PerspectiveProjection { fov: tuning.view.world_fov_degrees.to_radians(), near: NEAR, far: draw_end(&tuning.light), ..default() })
 }
 
-/// Keeps every player camera's field of view to the tuning's.
+/// Keeps every player camera's field of view and far plane to the tuning's.
 fn widen_player_view(tuning: Res<Tuning>, mut cameras: Query<&mut Projection, With<PlayerCamera>>) {
     let fov = tuning.view.world_fov_degrees.to_radians();
+    let far = draw_end(&tuning.light);
     for mut projection in &mut cameras {
         if let Projection::Perspective(perspective) = &mut *projection
-            && perspective.fov != fov
+            && (perspective.fov != fov || perspective.far != far)
         {
             perspective.fov = fov;
+            perspective.far = far;
         }
     }
 }
@@ -396,6 +399,25 @@ mod tests {
         let body = app.world_mut().spawn((Player, Locomotion { yaw: facing.yaw(), ..default() }, Transform::from_translation(start).with_rotation(Quat::from_rotation_y(facing.yaw())), delver)).id();
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
         (app, body, start)
+    }
+
+    #[test]
+    fn the_far_plane_sits_just_past_the_fogs_end() {
+        let mut tuning = Tuning::default();
+        let far = |tuning: &Tuning| match world_projection(tuning) {
+            Projection::Perspective(p) => p.far,
+            other => panic!("not a perspective: {other:?}"),
+        };
+        assert!(far(&tuning) > tuning.light.fog_end && far(&tuning) < tuning.light.fog_end + 100.0);
+        // And it follows the tuning on a camera already spawned.
+        let mut app = App::new();
+        app.insert_resource(tuning.clone()).add_systems(Update, widen_player_view);
+        let camera = app.world_mut().spawn((PlayerCamera, world_projection(&tuning))).id();
+        tuning.light.fog_end = 120.0;
+        app.insert_resource(tuning.clone());
+        app.update();
+        let Projection::Perspective(p) = app.world().get::<Projection>(camera).unwrap() else { panic!("not a perspective") };
+        assert_eq!(p.far, far(&tuning));
     }
 
     #[test]

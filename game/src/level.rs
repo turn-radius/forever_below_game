@@ -24,7 +24,7 @@ use armory::{
         food::{Food, FoodStyle},
     },
 };
-use bevy::{camera::Exposure, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
+use bevy::{camera::{Exposure, visibility::VisibilityRange}, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
 use fb_level::{CELL, LightKind, StairKind};
 
 use crate::capture::FrameCapturePlugin;
@@ -54,7 +54,7 @@ impl Plugin for LevelPlugin {
             )
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
-            .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames).in_set(DelveSystems))
+            .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames, limit_far_parts).in_set(DelveSystems))
             .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
     }
 }
@@ -77,6 +77,17 @@ pub const AMBIENT_COLOR: Color = Color::srgb(0.55, 0.6, 0.72);
 /// The dark that swallows far stone: a near-black blue, thickening from `fog_start` to
 /// `fog_end` (4 m to 26 m as shipped).
 pub const FOG_COLOR: Color = Color::srgb(0.012, 0.016, 0.024);
+
+/// How far past the fog's end (world units, 3 m) a thing's centre may lie and still be drawn:
+/// room for a big prop or a creature whose near edge is inside the fog while its middle is not.
+const DRAW_MARGIN: f32 = 30.0;
+
+/// The distance past which nothing is drawn: the fog's end (`fog_end`, 26 m as shipped) and a
+/// margin. The player camera's far plane sits here and so do the [`VisibilityRange`]s of
+/// props, items, creatures and folk, so what the fog has swallowed is not drawn at all.
+pub fn draw_end(light: &LightTuning) -> f32 {
+    light.fog_end + DRAW_MARGIN
+}
 
 /// Glowcaps: faint cold cyan, a pool reaching about three metres (`glowcap_peak` and
 /// `glowcap_reach`). Braziers burn in the torch colour, brighter and further than a torch in
@@ -133,6 +144,7 @@ fn apply_light_tuning(
     mut ambient: ResMut<GlobalAmbientLight>,
     mut fogs: Query<&mut DistanceFog>,
     mut lights: Query<(&FixedLight, &mut PointLight)>,
+    mut ranges: Query<&mut VisibilityRange>,
     debug: Query<&DebugCamera>,
 ) {
     let light = &tuning.light;
@@ -145,6 +157,30 @@ fn apply_light_tuning(
     }
     for (kind, mut point) in &mut lights {
         *point = kind.light(light);
+    }
+    for mut range in &mut ranges {
+        *range = draw_range(light);
+    }
+}
+
+/// Where a part is drawn: from the camera out to [`draw_end`], measured to the middle of its
+/// box. The edge is abrupt, since the fog has already faded what lies there to nothing.
+fn draw_range(light: &LightTuning) -> VisibilityRange {
+    VisibilityRange { use_aabb: true, ..VisibilityRange::abrupt(0.0, draw_end(light)) }
+}
+
+/// A part just spawned, with no draw range yet.
+type NewPart = (Or<(Added<ArmoryPart>, Added<InkOutline>)>, Without<VisibilityRange>);
+
+/// Gives each new part of a prop, item, creature or folk a [`draw_range`], so a camera does not
+/// queue what the fog hides. The level's own stone is left to the camera's far plane, and the
+/// view from above (`FB_DEBUG_CAMERA=top`) looks from further than the fog and draws all.
+fn limit_far_parts(mut commands: Commands, tuning: Res<Tuning>, parts: Query<Entity, NewPart>, debug: Query<&DebugCamera>) {
+    if debug.iter().any(|d| !d.fog) {
+        return;
+    }
+    for part in &parts {
+        commands.entity(part).insert(draw_range(&tuning.light));
     }
 }
 
@@ -646,6 +682,46 @@ mod tests {
 
     fn door() -> EntranceDoor {
         EntranceDoor { shut: Quat::IDENTITY, centre: Vec3::new(110.0, 0.0, 190.0), cell: (5, 9), swing: DoorSwing::Open }
+    }
+
+    /// An app that limits new parts, and one part that has just appeared.
+    fn limiting() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Tuning>().add_systems(Update, limit_far_parts);
+        let part = app.world_mut().spawn(ArmoryPart).id();
+        (app, part)
+    }
+
+    #[test]
+    fn a_new_part_is_drawn_out_to_the_fogs_end_and_a_margin() {
+        let (mut app, part) = limiting();
+        app.update();
+        let range = app.world().get::<VisibilityRange>(part).expect("the part has a range").clone();
+        let fog_end = app.world().resource::<Tuning>().light.fog_end;
+        assert!(range.is_visible_at_all(fog_end), "a part at the fog's end is drawn");
+        assert!(range.is_culled(fog_end + DRAW_MARGIN + 1.0), "a part past the margin is not");
+        assert!(range.is_abrupt());
+    }
+
+    #[test]
+    fn the_range_follows_the_fog_when_it_is_tuned() {
+        let (mut app, part) = limiting();
+        app.add_systems(Update, apply_light_tuning.after(limit_far_parts));
+        app.init_resource::<GlobalAmbientLight>();
+        app.update();
+        app.world_mut().resource_mut::<Tuning>().light.fog_end = 100.0;
+        app.update();
+        let range = app.world().get::<VisibilityRange>(part).unwrap();
+        assert!(range.is_visible_at_all(100.0 + DRAW_MARGIN - 1.0));
+        assert!(range.is_culled(100.0 + DRAW_MARGIN + 1.0));
+    }
+
+    #[test]
+    fn the_view_from_above_draws_every_part() {
+        let (mut app, part) = limiting();
+        app.world_mut().spawn(DebugCamera { walk_in: false, fog: false });
+        app.update();
+        assert!(app.world().get::<VisibilityRange>(part).is_none());
     }
 
     #[test]
