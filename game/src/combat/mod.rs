@@ -408,7 +408,7 @@ mod tests {
         let bare = character.armour_class(&Inventory::default()).value().round() as i32;
         let mut kitted = Inventory::default();
         for (base, slot) in [("Mail", fb_items::Slot::Body), ("Shield", fb_items::Slot::Offhand), ("Helm", fb_items::Slot::Head), ("Gloves", fb_items::Slot::Hands)] {
-            let id = kitted.add(fb_items::roll_item(base, 7).unwrap());
+            let id = kitted.add(fb_items::roll_item_with(base, 7, fb_items::Odds::loot(8)).unwrap());
             kitted.wear(id, slot).unwrap();
         }
         let armoured = character.armour_class(&kitted).value().round() as i32;

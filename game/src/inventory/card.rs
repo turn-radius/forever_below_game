@@ -745,7 +745,7 @@ mod tests {
 
     #[test]
     fn a_legendary_shows_its_title_old_name_and_history() {
-        let legend = (1..5_000).filter_map(|s| fb_items::roll_item("Sword", s)).find(|i| i.rarity == Rarity::Legendary).unwrap();
+        let legend = (1..5_000).filter_map(|s| fb_items::roll_item_with("Sword", s, fb_items::Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).unwrap();
         let l = legend.legend.as_ref().unwrap();
         let card = card_text(&legend, None);
         assert_eq!(card.title, l.title);

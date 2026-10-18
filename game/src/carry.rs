@@ -2249,7 +2249,8 @@ mod tests {
 
     #[test]
     fn floor_items_on_1207_are_rolled_with_rarity() {
-        let level = fb_level::generate(1207, 1);
+        // Four levels down, as the first rolls nearly everything common.
+        let level = fb_level::generate(fb_level::depth_seed(1207, 4), 4);
         let items: Vec<fb_items::Item> = level.items.iter().map(|s| fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth)).unwrap()).collect();
         assert_eq!(items.len(), level.items.len());
         for (item, spot) in items.iter().zip(&level.items) {
@@ -2259,6 +2260,9 @@ mod tests {
             }
         }
         assert!(items.iter().any(|i| i.rarity != Rarity::Common), "a level of nothing but common items");
+        let first = fb_level::generate(1207, 1);
+        let firsts = first.items.iter().filter_map(|s| fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(1)));
+        assert!(firsts.into_iter().all(|i| i.rarity < Rarity::Legendary), "a legendary on the first level");
     }
 
     #[test]

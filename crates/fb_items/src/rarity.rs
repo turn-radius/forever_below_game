@@ -7,11 +7,12 @@ use crate::{Rarity, Slot, Tag};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
-/// The plate's rarity thresholds, which are the odds on the first level: below 0.58 common,
-/// below 0.85 magic, below 0.97 rare, otherwise legendary.
-const SHALLOW: [f64; 3] = [0.58, 0.85, 0.97];
+/// The rarity thresholds on the first level: below 0.83 common, below 0.95 magic, otherwise
+/// rare, never legendary. Our own, lower than the plate's (0.58, 0.85, 0.97), so the first
+/// level gives out less.
+const SHALLOW: [f64; 3] = [0.83, 0.95, 1.0];
 /// The thresholds the odds tend to far below: 7% common, 33% magic, 48% rare, 12% legendary.
-/// Our own proposal, chosen so that depth 5 doubles the first level's rare and legendary odds.
+/// Our own proposal.
 const DEEP: [f64; 3] = [0.07, 0.40, 0.88];
 /// How far toward [`DEEP`] the odds are four levels down. Our own proposal.
 const FOUR_LEVELS_DOWN: f64 = 1.0 / 3.0;
@@ -28,16 +29,25 @@ pub struct Odds {
 }
 
 impl Default for Odds {
-    /// The first level, uncapped: the plate's odds.
+    /// The first level's loot.
     fn default() -> Odds {
         Odds::loot(1)
     }
 }
 
 impl Odds {
-    /// Loot found at `depth`, on the floor or in a container: uncapped.
+    /// Loot found at `depth`, on the floor or in a container: at most rare on the first level,
+    /// uncapped below it. The cap holds however much deeper the find rolls ([`Odds::deeper`]),
+    /// so nothing found on the first level is legendary.
     pub fn loot(depth: u32) -> Odds {
-        Odds { depth, cap: Rarity::Legendary }
+        let cap = if depth <= 1 { Rarity::Rare } else { Rarity::Legendary };
+        Odds { depth, cap }
+    }
+
+    /// These odds rolled `levels` deeper, keeping their cap: a find that should roll better
+    /// than its level, such as a jackalope's drop.
+    pub fn deeper(self, levels: u32) -> Odds {
+        Odds { depth: self.depth + levels, ..self }
     }
 
     /// The gear folk and the risen dead carry at `depth`: as loot, but common or magic only on
@@ -57,7 +67,7 @@ impl Odds {
         Odds { cap: self.cap.min(cap), ..self }
     }
 
-    /// The upper bounds of common, magic and rare for a uniform roll. Depth 1 is the plate's
+    /// The upper bounds of common, magic and rare for a uniform roll. Depth 1 is
     /// [`SHALLOW`]; each level deeper moves them along a curve that never quite reaches
     /// [`DEEP`], a third of the way there four levels down (`1 - (2/3)^((depth - 1) / 4)`).
     /// The curve is our own proposal; no source.
@@ -75,8 +85,8 @@ impl Odds {
 }
 
 impl Rarity {
-    /// The rarity for a uniform roll `x` in `[0, 1)` at the first level: below 0.58 common,
-    /// below 0.85 magic, below 0.97 rare, otherwise legendary.
+    /// The rarity for a uniform roll `x` in `[0, 1)` at the first level: below 0.83 common,
+    /// below 0.95 magic, otherwise rare.
     pub fn from_roll(x: f64) -> Rarity {
         Rarity::from_roll_at(x, &Odds::default())
     }
@@ -202,7 +212,7 @@ mod tests {
             let (r, _) = roll_rarity(&mut game_rng(seed), SWORD, &Odds::default());
             counts[r as usize] += 1;
         }
-        for (i, odds) in [0.58, 0.27, 0.12, 0.03].into_iter().enumerate() {
+        for (i, odds) in [0.83, 0.12, 0.05, 0.0].into_iter().enumerate() {
             let share = counts[i] as f64 / 10_000.0;
             assert!((share - odds).abs() < 0.01, "rarity {i}: {share} against {odds}");
         }
@@ -211,7 +221,7 @@ mod tests {
     #[test]
     fn containers_cap_at_rare() {
         for seed in 0..5_000 {
-            assert_ne!(roll_rarity(&mut game_rng(seed), PACK, &Odds::default()).0, Rarity::Legendary);
+            assert_ne!(roll_rarity(&mut game_rng(seed), PACK, &Odds::loot(8)).0, Rarity::Legendary);
         }
     }
 
@@ -221,7 +231,7 @@ mod tests {
             let mut flaws = 0;
             let mut commons = 0;
             for seed in 0..3_000 {
-                let (rarity, chosen) = roll_rarity(&mut game_rng(seed), tags, &Odds::default());
+                let (rarity, chosen) = roll_rarity(&mut game_rng(seed), tags, &Odds::loot(8));
                 for a in &chosen {
                     assert!(a.fits(tags), "{} on {tags:?}", a.name);
                 }
@@ -250,7 +260,7 @@ mod tests {
 
     #[test]
     fn a_sword_rolls_full_rare_and_legendary_sets() {
-        let full = (0..3_000).map(|seed| roll_rarity(&mut game_rng(seed), SWORD, &Odds::default())).find(|(r, _)| *r == Rarity::Legendary).unwrap();
+        let full = (0..3_000).map(|seed| roll_rarity(&mut game_rng(seed), SWORD, &Odds::loot(8))).find(|(r, _)| *r == Rarity::Legendary).unwrap();
         assert_eq!(full.1.len(), 3);
     }
 
@@ -264,26 +274,25 @@ mod tests {
     }
 
     #[test]
-    fn depth_1_rolls_the_plate_odds() {
+    fn depth_1_rolls_no_legendary() {
         assert_eq!(Odds::loot(1).thresholds(), SHALLOW);
         for x in (0..1_000).map(|i| i as f64 / 1_000.0) {
-            let plate = match x {
-                x if x < 0.58 => Rarity::Common,
-                x if x < 0.85 => Rarity::Magic,
-                x if x < 0.97 => Rarity::Rare,
-                _ => Rarity::Legendary,
+            let wanted = match x {
+                x if x < 0.83 => Rarity::Common,
+                x if x < 0.95 => Rarity::Magic,
+                _ => Rarity::Rare,
             };
-            assert_eq!(Rarity::from_roll_at(x, &Odds::loot(1)), plate, "{x}");
+            assert_eq!(Rarity::from_roll_at(x, &Odds::loot(1)), wanted, "{x}");
         }
     }
 
     #[test]
-    fn depth_5_doubles_rare_and_legendary() {
+    fn depth_5_rolls_rare_or_better_four_times_as_often() {
         let [_, _, r1, l1] = measured(Odds::loot(1));
         let [_, _, r5, l5] = measured(Odds::loot(5));
         let ratio = (r5 + l5) / (r1 + l1);
-        assert!((1.8..2.2).contains(&ratio), "rare and legendary: {} at depth 1, {} at depth 5", r1 + l1, r5 + l5);
-        assert!(l5 > 1.6 * l1, "legendary: {l1} at depth 1, {l5} at depth 5");
+        assert!((3.5..5.0).contains(&ratio), "rare and legendary: {} at depth 1, {} at depth 5", r1 + l1, r5 + l5);
+        assert!(l5 > 0.03, "legendary at depth 5: {l5}");
     }
 
     #[test]
@@ -293,7 +302,8 @@ mod tests {
             let ([c0, m0, r0, l0], [c1, m1, r1, l1]) = (pair[0], pair[1]);
             assert!(c1 < c0 && m1 > m0 && r1 > r0 && l1 > l0, "{pair:?}");
         }
-        assert!(shares.iter().flatten().all(|&s| s > 0.0));
+        assert_eq!(shares[0][3], 0.0, "no legendary on the first level");
+        assert!(shares[1..].iter().flatten().all(|&s| s > 0.0));
     }
 
     #[test]

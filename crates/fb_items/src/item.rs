@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn legendaries_have_titles() {
-        let legend = (1..2_000).filter_map(|seed| roll_item("Sword", seed)).find(|i| i.rarity == Rarity::Legendary).expect("no legendary sword");
+        let legend = (1..2_000).filter_map(|seed| roll_item_with("Sword", seed, Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).expect("no legendary sword");
         let l = legend.legend.as_ref().unwrap();
         assert_eq!(legend.title(), l.title);
         assert_eq!(l.subtitle, legend.name);
