@@ -19,9 +19,10 @@ use armory::{
         torus, tube, value_noise3, vec3,
     },
 };
-use fb_level::{CELL, Cell, Facing, Level, LevelStyle};
+use fb_level::{CELL, Cell, DoorStyle, Facing, Level, LevelStyle};
 use procgen_rng::Mulberry32;
 
+pub mod arch;
 pub mod occlusion;
 pub mod stone;
 
@@ -485,8 +486,9 @@ pub fn doorways(view: &CellView) -> Vec<Doorway> {
 
 /// A doorway's frame in its own space (`x` across, `y` up, `z` through, origin on the floor at
 /// the cell's centre): a timber frame round a [`DOOR_WIDTH`] by [`DOOR_HEIGHT`] opening in a
-/// course of dressed stone blocks that closes the rest of the cell up to the ceiling.
-pub fn door_frame(ceiling: f32, seed: u32) -> ItemMesh {
+/// course of dressed stone blocks that closes the rest of the cell up to the ceiling. A
+/// rock-cut `style` swaps the timber for an arch cut in the blocks.
+pub fn door_frame(ceiling: f32, style: DoorStyle, seed: u32) -> ItemMesh {
     // Past the cell's edge and the ceiling, so the blocks bed into the rock's relief.
     let top = ceiling + CEILING_RELIEF;
     let course: f32 = 4.6;
@@ -496,13 +498,16 @@ pub fn door_frame(ceiling: f32, seed: u32) -> ItemMesh {
         courses.push((y, course.min(top - y)));
         y += course;
     }
-    door_frame_in(&courses, top, CELL * 0.5 + WALL_RELIEF, (0.18, 0.35), seed)
+    door_frame_in(style, &courses, top, CELL * 0.5 + WALL_RELIEF, (0.18, 0.35), seed)
 }
 
 /// A doorway's frame and masonry with the infill laid in `courses` (each a bottom and a
 /// height, from the floor up to `top`), its blocks reaching `reach` either side of the centre,
-/// with `joint` between them and a `chamfer` on their edges.
-fn door_frame_in(courses: &[(f32, f32)], top: f32, reach: f32, (joint, chamfer): (f32, f32), seed: u32) -> ItemMesh {
+/// with `joint` between them and a `chamfer` on their edges. Any style but timber is an arch.
+fn door_frame_in(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32, (joint, chamfer): (f32, f32), seed: u32) -> ItemMesh {
+    if style != DoorStyle::Timber {
+        return arch::door_arch(style, courses, top, reach, (joint, chamfer), seed);
+    }
     let mut rng = Mulberry32::new(seed ^ 0xd00f_4a3e);
     let half_open = DOOR_WIDTH * 0.5;
     let lintel_top = DOOR_HEIGHT + FRAME_BEAM;
@@ -846,7 +851,7 @@ mod tests {
 
     #[test]
     fn fixtures_are_drawable() {
-        let frame = door_frame(30.0, 1207);
+        let frame = door_frame(30.0, DoorStyle::Timber, 1207);
         let leaf = entrance_leaf(1207);
         let (brazier, flame) = brazier(1207);
         for part in frame.parts.iter().chain(&leaf.parts).chain(&brazier.parts) {
@@ -894,7 +899,7 @@ mod tests {
             let doors = doorways(&view);
             assert!(!doors.is_empty());
             for door in doors {
-                let frame = door_frame(level.ceiling, level.seed ^ ((door.x as u32) << 16 | door.y as u32));
+                let frame = door_frame(level.ceiling, DoorStyle::Timber, level.seed ^ ((door.x as u32) << 16 | door.y as u32));
                 // Out to where the walls and ceiling can stand, and down into the floor's dip.
                 let (across, low, high) = (CELL * 0.5 + WALL_RELIEF * peak, -FLOOR_RELIEF * peak, level.ceiling + CEILING_RELIEF * peak);
                 let mut rays = 0;
@@ -940,7 +945,7 @@ mod tests {
             let level = Level { stairs: Vec::new(), ..fb_level::generate(seed, 1) };
             let view = CellView::new(&level);
             let mesh = level_mesh(&view, view.bounds());
-            let frame = door_frame(level.ceiling, level.seed);
+            let frame = door_frame(level.ceiling, DoorStyle::Timber, level.seed);
             let seen = (hash_parts(mesh.surfaces.parts.iter().chain([&mesh.ink])), hash_parts(&frame.parts));
             assert_eq!(seen, expected, "rough rock changed for seed {seed}");
         }

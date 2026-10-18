@@ -513,13 +513,15 @@ impl FixtureShapes {
     pub fn make(level: &Level) -> Self {
         let view = CellView::new(level);
         let entrance = (level.entrance.x as i32, level.entrance.y as i32);
+        let finishes = fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
         let doors = geometry::doorways(&view)
             .into_iter()
             .map(|doorway| {
                 let seed = door_seed(level, &doorway);
+                let style = finishes.door_style(doorway.x, doorway.y).unwrap_or(fb_level::DoorStyle::Timber);
                 let frame = match level.style {
-                    LevelStyle::RoughRock => geometry::door_frame(level.ceiling, seed),
-                    LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), seed),
+                    LevelStyle::RoughRock => geometry::door_frame(level.ceiling, style, seed),
+                    LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), style, seed),
                 };
                 let leaf = ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
                 (doorway, frame, leaf)
@@ -740,6 +742,29 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let at = v3(fb_level::Level::world(from.0, from.1)) + eye;
             let aim = if mode == "vault" { dir * 60.0 + Vec3::Y * 45.0 } else { dir * 60.0 };
             Transform::from_translation(at).looking_at(at + aim, Vec3::Y)
+        }
+        mode if mode.starts_with("arch") => {
+            // The first doorway of the style after `arch:` (round, pointed or rock), from the
+            // room side two and a half cells back, looking at the opening.
+            let want = match mode.strip_prefix("arch:") {
+                Some("pointed") => fb_level::DoorStyle::PointedArch,
+                Some("rock") => fb_level::DoorStyle::RockCut,
+                _ => fb_level::DoorStyle::RoundArch,
+            };
+            let finishes = fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
+            let view = geometry::CellView::new(level);
+            // Prefer one with a room on a side, so the view is of a hall and not a passage.
+            let styled: Vec<_> = geometry::doorways(&view).into_iter().filter(|d| finishes.door_style(d.x, d.y) == Some(want)).collect();
+            let roomy = |d: &geometry::Doorway| [-1, 1].iter().any(|&s| level.room_at(d.x + (d.through[0] as i32) * s, d.y + (d.through[2] as i32) * s).is_some());
+            let Some(doorway) = styled.iter().copied().find(roomy).or(styled.first().copied()) else { return };
+            let centre = v3(geometry::cell_centre(doorway.x, doorway.y));
+            let through = v3(doorway.through);
+            // Stand on whichever side has the longer open run.
+            let step = |dir: Vec3, k: i32| (doorway.x + (dir.x * k as f32).round() as i32, doorway.y + (dir.z * k as f32).round() as i32);
+            let score = |dir: Vec3| (1..=3).take_while(|&k| level.is_open(step(dir, k).0, step(dir, k).1)).count() * 2 + level.room_at(step(dir, 1).0, step(dir, 1).1).is_some() as usize * 10;
+            let from_dir = if score(-through) >= score(through) { -through } else { through };
+            let at = centre + from_dir * CELL * 2.5 + eye;
+            Transform::from_translation(at).looking_at(centre + Vec3::Y * 11.0, Vec3::Y)
         }
         "web" => {
             // The first web of the kind `FB_DEBUG_WEB` names (corner, ceiling or floor), from a
@@ -1002,5 +1027,25 @@ mod tests {
         assert_eq!(decay.kind, 9);
         assert!((decay.amount - STONE_WEAR).abs() < 1e-6);
         assert!((decay.scale - STONE_PATTERN_SCALE).abs() < 1e-6);
+    }
+
+    #[test]
+    fn doorways_are_built_in_their_finish_style_and_deterministically() {
+        let mut arched = [0, 0];
+        for (depth, slot) in [(1, 0), (2, 1)] {
+            for seed in 1..=12 {
+                let level = fb_level::generate(seed, depth);
+                let (a, b) = (FixtureShapes::make(&level), FixtureShapes::make(&level));
+                assert_eq!(a, b, "seed {seed} depth {depth}");
+                let finishes = fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
+                for (doorway, frame, _) in &a.doors {
+                    let timber = frame.parts.iter().any(|p| p.name == "frame");
+                    let style = finishes.door_style(doorway.x, doorway.y);
+                    assert_eq!(timber, style == Some(fb_level::DoorStyle::Timber), "seed {seed} depth {depth} at {},{}", doorway.x, doorway.y);
+                    arched[slot] += !timber as u32;
+                }
+            }
+        }
+        assert!(arched[0] > 0 && arched[1] > 0, "arched doorways at depth 1 and 2: {arched:?}");
     }
 }

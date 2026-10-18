@@ -24,7 +24,7 @@ use armory::{
     },
     geom::{LatheOptions, MeshBuilder, Shading, V3, lathe, value_noise3, vec3},
 };
-use fb_level::{CELL, Cell, Facing, Level, LevelStyle};
+use fb_level::{CELL, Cell, DoorStyle, Facing, Level, LevelStyle};
 use procgen_rng::Mulberry32;
 
 use super::{
@@ -665,11 +665,11 @@ fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
 
 /// A doorway's frame and masonry in a hall: the rock one's, with the infill coursed with the
 /// walls and reaching up to the highest crown over the doorway's cell.
-pub fn door_frame(level: &Level, (x, y): (i32, i32), seed: u32) -> ItemMesh {
+pub fn door_frame(level: &Level, (x, y): (i32, i32), style: DoorStyle, seed: u32) -> ItemMesh {
     let vaults = Vaults::new(level);
     let top = vaults.highest_over(x, y) + 1.5;
     let courses: Vec<(f32, f32)> = courses(level.seed, level.ceiling).into_iter().filter(|&(bottom, _)| bottom < top).collect();
-    door_frame_in(&courses, top, CELL * 0.5 + 1.0, (JOINT, CHAMFER), seed)
+    door_frame_in(style, &courses, top, CELL * 0.5 + 1.0, (JOINT, CHAMFER), seed)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1099,7 +1099,7 @@ mod tests {
         let doors = super::super::doorways(&view);
         assert!(!doors.is_empty());
         for door in doors {
-            let frame = door_frame(&level, (door.x, door.y), level.seed);
+            let frame = door_frame(&level, (door.x, door.y), DoorStyle::Timber, level.seed);
             for p in &frame.parts {
                 p.validate().unwrap();
             }
