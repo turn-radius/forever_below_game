@@ -65,7 +65,14 @@ fn fbm(p_in: vec3<f32>, cell: f32) -> f32 {
     var frequency = 1.0;
     var sum = 0.0;
     for (var k = 0; k < 4; k = k + 1) {
-        sum = sum + amplitude * mix(0.5, value_noise(p), detail(frequency, cell));
+        // An octave faded out entirely is its mean: skip sampling it, which far stone does
+        // for most of its octaves.
+        let keep = detail(frequency, cell);
+        if keep > 0.0 {
+            sum = sum + amplitude * mix(0.5, value_noise(p), keep);
+        } else {
+            sum = sum + amplitude * 0.5;
+        }
         p = p * 2.03 + vec3(1.7, 9.2, 3.1);
         amplitude = amplitude * 0.5;
         frequency = frequency * 2.03;
