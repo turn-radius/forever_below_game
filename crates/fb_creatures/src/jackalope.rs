@@ -1,16 +1,18 @@
 //! Jackalopes: [`JackalopeState`] from a seed, and its [`Rig`].
 //!
-//! A jackalope is a large hare with a pair of branching antlers: long hind legs and a long hind
-//! foot, short forelegs, a deep chest and round haunches, a rump that stands higher than the
-//! shoulders, long ears and a short tufted tail. The rig is a body, a head carrying the
+//! A jackalope is a large rabbit with a pair of branching antlers: a compact rounded body with a
+//! big round haunch, long hind legs and a long hind foot that lies flat, short thick forelegs, a
+//! rump that stands higher than the shoulders, a round head with a short blunt muzzle, long
+//! ears and a ball of a cotton tail. The rig is a body, a head carrying the
 //! antlers, two ears of two bones each (a base and a tip, so they can lie back and flop), four
-//! legs of three bones each (upper leg, shin and paw, as a rat's) and the tail's tuft, so the
+//! legs of three bones each (upper leg, shin and paw, as a rat's) and the tail's cotton ball, so the
 //! game can hop it, sit it up with its ears turning and lower its head to gore without a
 //! skeleton.
 //!
-//! Fur is the body's own colour with tufts standing out of it, a paler belly and a darker saddle
-//! down the back; the ears are lined with pink skin and tipped dark; the eyes are large amber
-//! rounds with a dark pupil and a glint, set high on the sides of the head; the incisors are
+//! The coat is smooth, toon-shaded surface with no fur modelled: the body's own colour, a paler
+//! belly and a darker saddle down the back; the ears are thick, cupped and lined with pink skin,
+//! joined into the head and tipped dark; the eyes are large amber rounds with a dark pupil and a
+//! glint, set on the sides of the head; the incisors are
 //! ivory; the antlers are pale bone, a beam on each side with a brow tine and as many more
 //! tines as the seed gives.
 //!
@@ -104,7 +106,7 @@ impl JackalopeColouring {
 const PINK: Rgb = Rgb::hex(0xd9958f);
 /// The ears' tips, and a snow-white coat's dark ear tips.
 const EAR_TIP: Rgb = Rgb::hex(0x2c2622);
-/// The tail's tuft: white, as a hare's scut is underneath.
+/// The tail's cotton ball: white.
 const COTTON: Rgb = Rgb::hex(0xf0ece2);
 const IRIS: Rgb = Rgb::hex(0xc98a2a);
 const PUPIL: Rgb = Rgb::hex(0x0e0b0a);
@@ -156,9 +158,9 @@ impl JackalopeState {
         let girth = 0.9 + 0.2 * self.build;
         let half_width = 0.12 * l * girth;
         let half_height = 0.15 * l * (0.95 + 0.1 * self.build);
-        let body_length = 0.7 * l;
+        let body_length = 0.66 * l;
         let hind = Leg { upper: 0.19 * l, lower: 0.2 * l, ankle: 0.05 * l, paw: 0.27 * l };
-        let fore = Leg { upper: 0.15 * l, lower: 0.15 * l, ankle: 0.035 * l, paw: 0.1 * l };
+        let fore = Leg { upper: 0.15 * l, lower: 0.15 * l, ankle: 0.045 * l, paw: 0.1 * l };
         let hip = [0.62 * half_width, -0.30 * body_length, -0.30 * half_height];
         let shoulder = [0.5 * half_width, 0.26 * body_length, -0.30 * half_height];
         // The hind legs stand a little bent: the hip is four fifths of the legs' reach above the
@@ -172,7 +174,7 @@ impl JackalopeState {
             half_width,
             half_height,
             body_length,
-            head_length: 0.29 * l,
+            head_length: 0.26 * l,
             centre_height,
             hip,
             shoulder,
@@ -180,10 +182,10 @@ impl JackalopeState {
             hind,
             fore,
             tail_root: [0.0, -0.485 * body_length, 0.45 * half_height],
-            tail_length: 0.15 * l,
-            tail_radius: 0.045 * l,
+            tail_length: 0.12 * l,
+            tail_radius: 0.07 * l,
             ear_length,
-            ear_width: 0.1 * l,
+            ear_width: 0.095 * l,
             antler_length: 0.3 * l,
         }
     }
@@ -221,16 +223,15 @@ impl JackalopeState {
         let rest = crate::pose::jackalope(self, &crate::pose::JackalopePose::default());
         let mut rig = Rig::default();
 
-        // Body: fur with tufts standing out of it, a pale belly and a dark saddle.
+        // Body: a smooth coat, a pale belly and a dark saddle.
         let trunk = self.body_trunk(&d);
-        let mut fur = trunk.mesh(24, 30);
-        fur.append(&trunk.tufts(150, 0.07 * d.length, &mut rng, |t, a| (0.05..0.93).contains(&t) && a.sin() > -0.35));
-        let mut body = vec![part(fur, "fur", MaterialKind::Hair, c.fur(), true)];
+        let coat = trunk.mesh(32, 36);
+        let mut body = vec![part(coat, "fur", MaterialKind::Hair, c.fur(), true)];
         let off = 0.006 * d.length;
         if let Some(m) = trunk.patch(0.1, 0.92, -FRAC_PI_2, |t| 0.95 * bell(t, 0.1, 0.92), off, false) {
             body.push(part(m, "belly", MaterialKind::Hair, c.belly(), false));
         }
-        if let Some(m) = trunk.patch(0.14, 0.9, FRAC_PI_2, |t| 0.34 * bell(t, 0.14, 0.9).sqrt(), off * 1.5, false) {
+        if let Some(m) = trunk.patch(0.14, 0.9, FRAC_PI_2, |t| 0.3 * bell(t, 0.14, 0.9).sqrt(), off * 1.5, false) {
             body.push(part(m, "saddle", MaterialKind::Hair, c.saddle(), false));
         }
         let body_bone = rig.add("body", None, rest[bone::BODY], body);
@@ -246,10 +247,10 @@ impl JackalopeState {
             rig.add(format!("{name}_tip"), Some(base_bone), rest[bone::EAR_LEFT + 2 * k + 1], tip);
         }
 
-        // Legs: upper leg (fur), shin (fur) and paw (furred foot, toes and claws).
+        // Legs: upper leg, shin and paw (a foot, toes and claws).
         for (k, &(name, _, hind)) in LEGS.iter().enumerate() {
             let leg = if hind { d.hind } else { d.fore };
-            let girth = if hind { 0.62 } else { 0.4 } * d.half_width;
+            let girth = if hind { 0.7 } else { 0.62 } * d.half_width;
             let upper = rig.add(name, Some(body_bone), rest[bone::LEGS + 3 * k], vec![part(upper_leg(leg.upper, girth, hind), "fur", MaterialKind::Hair, c.fur(), true)]);
             let shin_tint = if hind { c.fur() } else { mix(c.fur(), c.belly(), 0.35) };
             let shin = rig.add(format!("{name}_shin"), Some(upper), rest[bone::LEGS + 3 * k + 1], vec![part(shin_mesh(leg.lower, girth, hind), "fur", MaterialKind::Hair, shin_tint, true)]);
@@ -262,20 +263,8 @@ impl JackalopeState {
             );
         }
 
-        // Tail: a short tuft, white.
-        let mut tail = tail_tuft(d.tail_length, d.tail_radius);
-        let mut cotton = MeshBuilder::new();
-        let mut tufts = Mulberry32::new(self.seed ^ JACKALOPE_SALT ^ 0x7A11);
-        for _ in 0..34 {
-            let (u, a) = (tufts.range_f32(0.1, 0.95), tufts.range_f32(0.0, 2.0 * PI));
-            let r = d.tail_radius * tail_profile(u);
-            let root = [r * a.cos(), -u * d.tail_length, r * a.sin()];
-            let out = vec3::normalize_or([a.cos(), -0.9, a.sin()], vec3::neg(vec3::Y));
-            let mut tuft = spike(0.011 * d.length, 0.05 * d.length * tufts.range_f32(0.8, 1.3), 5, 0.6, Shading::SMOOTH);
-            tuft.place(root, out);
-            cotton.append(&tuft);
-        }
-        tail.append(&cotton);
+        // Tail: a round cotton ball, white.
+        let tail = tail_ball(d.tail_radius);
         rig.add("tail", Some(body_bone), rest[bone::TAIL], vec![part(tail, "fur", MaterialKind::Hair, COTTON, true)]);
         debug_assert_eq!(rig.bones.len(), bone::COUNT);
         rig
@@ -288,24 +277,24 @@ impl JackalopeState {
         Trunk {
             start: -0.5 * d.body_length,
             length: d.body_length,
-            width: vec![(0.0, 0.0), (0.03, 0.45 * w), (0.12, 0.92 * w), (0.26, w), (0.45, 0.76 * w), (0.62, 0.8 * w), (0.8, 0.9 * w), (0.93, 0.62 * w), (1.0, 0.0)],
-            height: vec![(0.0, 0.0), (0.03, 0.5 * h), (0.12, 0.92 * h), (0.26, h), (0.45, 0.7 * h), (0.62, 0.8 * h), (0.8, 0.95 * h), (0.93, 0.66 * h), (1.0, 0.0)],
+            width: vec![(0.0, 0.0), (0.03, 0.5 * w), (0.12, 0.96 * w), (0.26, 1.08 * w), (0.42, 0.96 * w), (0.6, 0.8 * w), (0.8, 0.8 * w), (0.93, 0.56 * w), (1.0, 0.0)],
+            height: vec![(0.0, 0.0), (0.03, 0.55 * h), (0.12, 0.98 * h), (0.26, 1.1 * h), (0.45, 0.92 * h), (0.62, 0.82 * h), (0.8, 0.84 * h), (0.93, 0.6 * h), (1.0, 0.0)],
             lift: vec![(0.0, 0.05 * h), (0.25, 0.18 * h), (0.5, 0.1 * h), (0.8, 0.08 * h), (1.0, -0.1 * h)],
-            squareness: 2.1,
+            squareness: 2.0,
             belly: 0.6,
         }
     }
 
     /// The head's trunk in the head bone's frame (the neck at its origin, snout along +Y).
     pub fn head_trunk(&self, d: &JackalopeDims) -> Trunk {
-        let (w, h, l) = (0.092 * d.length * (0.95 + 0.1 * self.build), 0.112 * d.length, d.head_length);
+        let (w, h, l) = (0.1 * d.length * (0.95 + 0.1 * self.build), 0.115 * d.length, d.head_length);
         Trunk {
             start: -0.07 * d.length,
             length: l,
-            width: vec![(0.0, 0.0), (0.07, 0.62 * w), (0.25, w), (0.45, 0.9 * w), (0.7, 0.56 * w), (0.9, 0.34 * w), (0.975, 0.22 * w), (1.0, 0.0)],
-            height: vec![(0.0, 0.0), (0.07, 0.66 * h), (0.3, h), (0.5, 0.86 * h), (0.75, 0.56 * h), (0.92, 0.36 * h), (0.975, 0.24 * h), (1.0, 0.0)],
-            lift: vec![(0.0, 0.0), (0.3, 0.04 * h), (0.75, -0.1 * h), (1.0, -0.25 * h)],
-            squareness: 2.1,
+            width: vec![(0.0, 0.0), (0.06, 0.6 * w), (0.22, 0.98 * w), (0.42, w), (0.62, 0.8 * w), (0.82, 0.56 * w), (0.95, 0.4 * w), (0.99, 0.26 * w), (1.0, 0.0)],
+            height: vec![(0.0, 0.0), (0.06, 0.66 * h), (0.25, 0.98 * h), (0.45, 0.94 * h), (0.65, 0.76 * h), (0.85, 0.58 * h), (0.95, 0.46 * h), (0.99, 0.3 * h), (1.0, 0.0)],
+            lift: vec![(0.0, 0.0), (0.3, 0.03 * h), (0.75, -0.06 * h), (1.0, -0.12 * h)],
+            squareness: 2.0,
             belly: 0.7,
         }
     }
@@ -314,66 +303,79 @@ impl JackalopeState {
         let c = self.colouring;
         let head = self.head_trunk(d);
         let l = d.length;
-        let mut skin = head.mesh(22, 26);
-        skin.append(&head.tufts(34, 0.05 * l, rng, |t, a| (0.12..0.58).contains(&t) && a.sin() > -0.3));
-        let mut parts = vec![part(skin, "fur", MaterialKind::Hair, c.fur(), true)];
+        let mut parts = vec![part(head.mesh(28, 32), "fur", MaterialKind::Hair, c.fur(), true)];
 
-        // Eyes: large amber rounds set high on the sides of the head, a dark pupil looking
-        // along the head and a glint, so the eye reads from the front and the side.
+        // Cheeks: two soft pads either side of the short muzzle, paler than the coat.
+        let mut cheeks = MeshBuilder::new();
+        for side in [1.0f32, -1.0] {
+            let mut pad = uv_sphere(0.03 * l, 14, 10);
+            pad.scale([1.0, 1.15, 0.9]).translate(vec3::add(head.point(0.84, if side > 0.0 { -0.1 } else { PI + 0.1 }, 0.0), [-side * 0.012 * l, 0.0, -0.004 * l]));
+            cheeks.append(&pad);
+        }
+        parts.push(part(cheeks, "cheeks", MaterialKind::Hair, mix(c.fur(), c.belly(), 0.12), true));
+
+        // Eyes: large amber rounds set on the sides of the head, a dark pupil looking along the
+        // head and a glint, so the eye reads from the front and the side.
         let (mut irises, mut pupils, mut glints) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
-        let r = 0.03 * l;
-        for a in [0.62f32, PI - 0.62] {
-            let t = 0.5;
+        let r = 0.04 * l;
+        for a in [0.34f32, PI - 0.34] {
+            let t = 0.52;
             let n = head.normal(t, a);
-            let at = head.point(t, a, -0.4 * r);
-            let look = vec3::normalize_or(vec3::add(vec3::scale(n, 0.85), [0.0, 0.5, 0.0]), n);
+            let at = head.point(t, a, -0.45 * r);
+            let look = vec3::normalize_or(vec3::add(vec3::scale(n, 0.9), [0.0, 0.4, 0.0]), n);
             let (ball, glint) = eye(at, r, look, [0.0, 0.5, 0.85]);
             irises.append(&ball);
             glints.append(&glint);
-            let mut pupil = uv_sphere(0.62 * r, 12, 8);
-            pupil.scale([1.0, 1.0, 1.0]).translate(vec3::add(at, vec3::scale(look, 0.42 * r)));
+            let mut pupil = uv_sphere(0.64 * r, 12, 8);
+            pupil.translate(vec3::add(at, vec3::scale(look, 0.4 * r)));
             pupils.append(&pupil);
         }
         parts.push(part(irises, "eyes", MaterialKind::Gem, IRIS, true));
         parts.push(part(pupils, "pupils", MaterialKind::Gem, PUPIL, false));
         parts.push(part(glints, "glints", MaterialKind::Gem, GLINT, false).with_glow(0.5));
 
-        // Nose: a small cleft pad at the muzzle's tip.
+        // Nose: a small cleft pad at the muzzle's tip, and the lip's cleft running down from it.
+        let tip_y = head.point(1.0, FRAC_PI_2, 0.0)[1];
+        let nose_z = head.point(0.985, FRAC_PI_2, 0.0)[2] - 0.012 * l;
         let mut nose = MeshBuilder::new();
         for side in [1.0f32, -1.0] {
             let mut half = uv_sphere(0.017 * l, 10, 7);
-            half.scale([1.0, 0.9, 0.8]).translate(vec3::add(head.point(0.99, FRAC_PI_2, -0.008 * l), [side * 0.009 * l, 0.0, 0.0]));
+            half.scale([1.0, 0.9, 0.8]).translate([side * 0.009 * l, tip_y - 0.004 * l, nose_z]);
             nose.append(&half);
         }
         parts.push(part(nose, "nose", MaterialKind::Skin, mix(PINK, c.fur(), 0.2), true));
+        let mouth_z = head.point(0.97, -FRAC_PI_2, 0.0)[2] + 0.012 * l;
+        let cleft: Vec<V3> = (0..=4)
+            .map(|i| {
+                let s = i as f32 / 4.0;
+                [0.0, tip_y - 0.003 * l + 0.002 * l * (PI * s).sin(), nose_z - 0.008 * l + (mouth_z - nose_z + 0.008 * l) * s]
+            })
+            .collect();
+        parts.push(part(tube(&cleft, 5, &SweepOptions::default(), |_| 0.0022 * l), "lip", MaterialKind::Skin, mix(PINK, EAR_TIP, 0.55), false));
 
-        // Whiskers: a few fine ones a side, shorter than the head, swept back along the cheek and
-        // drooping a little, as a hare's are.
+        // Whiskers: a few fine, short ones a side, swept out and back from the muzzle.
         let mut whiskers = MeshBuilder::new();
         for side in [1.0f32, -1.0] {
-            for k in 0..4 {
-                let a_side = if side > 0.0 { 0.0 } else { PI };
-                let rise = -0.3 + 0.18 * k as f32;
-                let a = a_side + side * rise;
-                let t = 0.86 + 0.012 * (k % 2) as f32;
-                let root = head.point(t, a, -0.004 * l);
-                let len = 0.13 * l * rng.range_f32(0.8, 1.1);
-                let out = [side, 0.0, 0.0];
-                let path: Vec<V3> = (0..=6)
+            for k in 0..3 {
+                let rise = 0.06 * (k as f32 - 1.0);
+                let root = head.point(0.9, if side > 0.0 { -0.12 } else { PI + 0.12 }, -0.003 * l);
+                let root = vec3::add(root, [0.0, 0.0, rise * 0.4 * l]);
+                let len = 0.1 * l * rng.range_f32(0.85, 1.1);
+                let path: Vec<V3> = (0..=4)
                     .map(|i| {
-                        let s = i as f32 / 6.0;
-                        let spread = vec3::add(vec3::scale(out, 0.6 * s), [0.0, -0.55 * s, (rise * 0.5 - 0.25 * s) * s]);
-                        vec3::add(root, vec3::scale(spread, len))
+                        let s = i as f32 / 4.0;
+                        let dir = [side * 0.7 * s, -0.3 * s, (k as f32 - 1.0) * 0.3 * s - 0.18 * s * s];
+                        vec3::add(root, vec3::scale(dir, len))
                     })
                     .collect();
-                whiskers.append(&tube(&path, 4, &SweepOptions { cap_end: false, ..Default::default() }, |s| 0.0022 * l * (1.0 - 0.7 * s)));
+                whiskers.append(&tube(&path, 4, &SweepOptions { cap_end: false, ..Default::default() }, |s| 0.0016 * l * (1.0 - 0.6 * s)));
             }
         }
         parts.push(part(whiskers, "whiskers", MaterialKind::Hair, mix(c.belly(), Rgb::hex(0xffffff), 0.3), false));
 
         // Incisors: two ivory teeth under the muzzle's tip.
         let mut teeth = MeshBuilder::new();
-        let tip = head.point(0.93, -FRAC_PI_2, -0.004 * l);
+        let tip = head.point(0.95, -FRAC_PI_2, -0.004 * l);
         for side in [1.0f32, -1.0] {
             let mut tooth = armory::geom::cuboid([0.009 * l, 0.007 * l, 0.028 * l]);
             tooth.rotate_x(-0.25).translate(vec3::add(tip, [side * 0.006 * l, 0.0, -0.012 * l]));
@@ -437,20 +439,30 @@ impl JackalopeState {
     }
 
     /// An ear's two bones' parts, in each bone's own space: the base (from the head) and the tip.
+    /// The two overlap a little across the joint, so the ear bends without a gap or a seam.
     fn ear_parts(&self, d: &JackalopeDims) -> (Vec<Part>, Vec<Part>) {
         let c = self.colouring;
         let tip_tint = if c == JackalopeColouring::Snow { EAR_TIP } else { mix(c.saddle(), EAR_TIP, 0.5) };
-        let base = |inner: bool| ear_sheet(d.ear_width, d.ear_length, 0.0, EAR_SPLIT, inner);
-        let tip = |inner: bool| ear_sheet(d.ear_width, d.ear_length, EAR_SPLIT, 1.0, inner);
+        let (w, l) = (d.ear_width, d.ear_length);
+        let base = |inner: bool| ear_sheet(w, l, 0.0, 0.0, if inner { EAR_SPLIT } else { EAR_SPLIT + EAR_OVERLAP }, inner);
+        let tip = |inner: bool| ear_sheet(w, l, EAR_SPLIT, if inner { EAR_SPLIT } else { EAR_SPLIT - EAR_OVERLAP }, EAR_DARK, inner);
         (
             vec![part(base(false), "fur", MaterialKind::Hair, c.fur(), true), part(base(true), "inner", MaterialKind::Skin, PINK, false)],
-            vec![part(tip(false), "fur", MaterialKind::Hair, tip_tint, true), part(tip(true), "inner", MaterialKind::Skin, mix(PINK, tip_tint, 0.35), false)],
+            vec![
+                part(tip(false), "fur", MaterialKind::Hair, c.fur(), true),
+                part(ear_sheet(w, l, EAR_SPLIT, EAR_DARK, 1.0, false), "tip", MaterialKind::Hair, tip_tint, true),
+                part(tip(true), "inner", MaterialKind::Skin, mix(PINK, tip_tint, 0.2), false),
+            ],
         )
     }
 }
 
 /// Where along an ear (0 its root, 1 its tip) the tip bone begins.
 pub const EAR_SPLIT: f32 = 0.55;
+/// How far either ear bone's sheet runs past the joint into the other's, and where the dark tip
+/// begins.
+const EAR_OVERLAP: f32 = 0.025;
+const EAR_DARK: f32 = 0.84;
 
 /// A jackalope's proportions: everything its rig and poses share.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -522,9 +534,9 @@ fn bell(t: f32, t0: f32, t1: f32) -> f32 {
 }
 
 /// An ear's outline: its half width at `v` along it (0 root, 1 tip), as a share of the half
-/// width at its widest. Rolled narrow at the root, widest a third up, a rounded tip.
+/// width at its widest. Rolled narrow at the root, widest two fifths up, a rounded tip.
 fn ear_half(v: f32) -> f32 {
-    if v < 0.35 { 0.62 + 0.38 * (PI * v / 0.7).sin() } else { (1.0 - ((v - 0.35) / 0.65).powf(2.2)).max(0.0).sqrt() }
+    if v < 0.4 { 0.55 + 0.45 * (PI * v / 0.8).sin() } else { (1.0 - ((v - 0.4) / 0.6).powf(2.0)).max(0.0).sqrt() }
 }
 
 /// How far an ear curves back from straight at `v` along it, world units per ear length: it
@@ -534,55 +546,44 @@ pub(crate) fn ear_bow(v: f32) -> f32 {
 }
 
 /// The part of an ear from `v0` to `v1` along it (0 root, 1 tip), in the space of a bone
-/// whose origin is the ear's point at `v0`: the cupped, thin sheet, or with `inner` the pink
-/// lining lying just on its hollow side.
-fn ear_sheet(width: f32, length: f32, v0: f32, v1: f32, inner: bool) -> MeshBuilder {
-    let (cols, rows) = (9usize, 9usize);
-    let origin = [0.0, v0 * length, ear_bow(v0) * length];
-    let shrink = if inner { 0.72 } else { 1.0 };
+/// whose origin is the ear's point at `origin_v`: the cupped, thick sheet, or with `inner` the
+/// pink lining lying just on its hollow side.
+fn ear_sheet(width: f32, length: f32, origin_v: f32, v0: f32, v1: f32, inner: bool) -> MeshBuilder {
+    let (cols, rows) = (10usize, ((v1 - v0).abs() * 22.0).ceil().max(2.0) as usize);
+    let origin = [0.0, origin_v * length, ear_bow(origin_v) * length];
+    let shrink = if inner { 0.74 } else { 1.0 };
     let points: Vec<Vec<V3>> = (0..=rows)
         .map(|r| {
             let v = v0 + (v1 - v0) * r as f32 / rows as f32;
             let half = width * 0.5 * ear_half(v) * shrink;
-            let v_in = if inner { v0 + (v1 - v0) * (0.03 + 0.94 * r as f32 / rows as f32) } else { v };
+            let v_in = v;
             (0..=cols)
                 .map(|c| {
                     let u = c as f32 / cols as f32 * 2.0 - 1.0;
                     // Cupped: the middle sits back from the rim.
                     let cup = -0.8 * width * 0.5 * ear_half(v) * (1.0 - u * u);
-                    let lift = if inner { 0.012 * length } else { 0.0 };
+                    let lift = if inner { 0.01 * length } else { 0.0 };
                     let p = [u * half, v_in * length, ear_bow(v) * length + cup + lift];
                     vec3::sub(p, origin)
                 })
                 .collect()
         })
         .collect();
-    let thickness = if inner { 0.0015 * length } else { 0.03 * length };
+    let thickness = if inner { 0.0015 * length } else { 0.022 * length };
     thick_sheet(&points, &GridOptions { wrap_around: false, wrap_along: false, shading: Shading::SMOOTH, row_v: None }, thickness)
 }
 
-/// The tuft's radius at `u` (0 its root, 1 its tip), as a share of the tail's radius.
-fn tail_profile(u: f32) -> f32 {
-    (PI * (0.18 + 0.78 * u)).sin().clamp(0.0, 1.0)
-}
-
-/// The tail: a rounded tuft from its joint back along -Y.
-fn tail_tuft(length: f32, radius: f32) -> MeshBuilder {
-    let mut profile = vec![[0.0, -length - 0.5 * radius]];
-    for k in (0..=8).rev() {
-        let u = k as f32 / 8.0;
-        profile.push([radius * tail_profile(u).max(0.12 * (1.0 - u)), -length * u]);
-    }
-    profile.push([0.0, 0.5 * radius]);
-    let mut m = lathe(&profile, &LatheOptions::new(12, Shading::SMOOTH));
-    m.scale([1.0, 1.0, 1.15]);
+/// The tail: a smooth ball from its joint back along -Y.
+fn tail_ball(radius: f32) -> MeshBuilder {
+    let mut m = uv_sphere(radius, 20, 14);
+    m.translate([0.0, -0.8 * radius, 0.0]);
     m
 }
 
 /// An upper leg hanging down -Z from its joint, `length` long: a haunch or shoulder bulging
 /// into the body, tapering to the knee.
 fn upper_leg(length: f32, girth: f32, hind: bool) -> MeshBuilder {
-    let top = if hind { 1.25 } else { 0.85 };
+    let top = if hind { 1.45 } else { 0.95 };
     let profile = armory::geom::spline_profile(
         &[[0.0, -length - 0.35 * girth], [0.42 * girth, -length], [0.6 * girth, -0.55 * length], [top * girth, -0.15 * length], [0.8 * top * girth, 0.28 * girth], [0.0, 0.7 * girth]],
         18,
@@ -590,7 +591,7 @@ fn upper_leg(length: f32, girth: f32, hind: bool) -> MeshBuilder {
     let mut m = lathe(&profile, &LatheOptions::new(12, Shading::SMOOTH));
     m.transform(&Mat3::from_cols([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]));
     // The thigh is longer front to back than across.
-    m.scale([0.75, if hind { 1.3 } else { 1.0 }, 1.0]);
+    m.scale([0.8, if hind { 1.3 } else { 1.0 }, 1.0]);
     m
 }
 
@@ -608,12 +609,12 @@ fn shin_mesh(length: f32, girth: f32, hind: bool) -> MeshBuilder {
 /// small claws, lying on the floor `leg.ankle` under the ankle joint at its origin. Returns the
 /// paw and its claws.
 fn paw_mesh(leg: &Leg, girth: f32, hind: bool) -> (MeshBuilder, MeshBuilder) {
-    let (len, wide, thick) = (leg.paw, if hind { 0.34 } else { 0.4 } * girth, leg.ankle);
+    let (len, wide, thick) = (leg.paw, if hind { 1.0 } else { 0.85 } * girth, leg.ankle);
     let mut paw = MeshBuilder::new();
     let heel = if hind { -0.1 * len } else { -0.2 * len };
     let path = [[0.0, heel, -0.45 * thick], [0.0, 0.25 * len, -0.64 * thick], [0.0, 0.62 * len, -0.7 * thick]];
     paw.append(&tube(&path, 10, &SweepOptions::default(), |s| (0.55 + 0.45 * (PI * (0.2 + 0.8 * s)).sin()) * wide * 0.5));
-    paw.scale([1.0, 1.0, 0.8]);
+    paw.scale([1.0, 1.0, if hind { 0.6 } else { 0.8 }]);
     let mut ankle = uv_sphere(0.55 * wide, 10, 7);
     ankle.scale([1.0, 1.0, 1.2]).translate([0.0, 0.0, -0.2 * thick]);
     paw.append(&ankle);
@@ -622,7 +623,7 @@ fn paw_mesh(leg: &Leg, girth: f32, hind: bool) -> (MeshBuilder, MeshBuilder) {
     for i in 0..toes {
         let u = i as f32 / (toes - 1) as f32 * 2.0 - 1.0;
         let spread = u * 0.32;
-        let reach = if hind { 0.34 } else { 0.5 } * len * (1.0 - 0.2 * u * u);
+        let reach = if hind { 0.14 } else { 0.28 } * len * (1.0 - 0.2 * u * u);
         let base = [u * wide * 0.32, 0.6 * len, -0.7 * thick];
         let dir = vec3::normalize_or([spread.sin(), spread.cos(), -0.1], vec3::Y);
         let tip = vec3::add(base, vec3::scale(dir, reach));
@@ -669,17 +670,16 @@ mod tests {
     }
 
     #[test]
-    fn jackalopes_have_fur_ears_eyes_and_antlers_that_read() {
+    fn jackalopes_have_a_coat_ears_eyes_and_antlers_that_read() {
         let rig = JackalopeState::roll(5).build();
         let head = rig.bone("head").unwrap();
         let names: HashSet<&str> = head.mesh.parts.iter().map(|p| p.name).collect();
         for name in ["fur", "eyes", "pupils", "glints", "nose", "whiskers", "teeth", "antlers", "burrs"] {
             assert!(names.contains(name), "{name}");
         }
-        // Fur tufts make the body much more than a smooth blob, and the antlers are well
-        // modelled.
-        let fur = &rig.bone("body").unwrap().mesh.parts[0];
-        assert!(fur.indices.len() / 3 > 3000, "{} triangles", fur.indices.len() / 3);
+        // The coat is smooth and the antlers are well modelled.
+        let coat = &rig.bone("body").unwrap().mesh.parts[0];
+        assert!(coat.indices.len() / 3 > 1500, "{} triangles", coat.indices.len() / 3);
         let antlers = head.mesh.parts.iter().find(|p| p.name == "antlers").unwrap();
         assert!(antlers.indices.len() / 3 > 400, "{} triangles", antlers.indices.len() / 3);
         assert!(head.mesh.parts.iter().any(|p| p.name == "glints" && p.glow > 0.0));
