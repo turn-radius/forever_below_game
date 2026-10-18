@@ -64,7 +64,7 @@ fn step_the_delver(
     tuning: Res<Tuning>,
     input: ActionInput,
     mut last: Local<f64>,
-    mut players: Query<(Entity, Option<&Transform>, &Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana, Option<&mut DelverEffects>, &mut DelverRecovery, Option<&mut Health>), With<Player>>,
+    mut players: Query<(Entity, Option<&Transform>, &Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana, Option<&mut DelverEffects>, &mut DelverRecovery, Option<&mut Health>, Has<crate::combat::guard::Guard>), With<Player>>,
     fires: Query<(&Transform, &crate::level::FixedLight), Without<Player>>,
     level: Option<Res<crate::play::CurrentLevel>>,
     mut wearing_down: Local<f64>,
@@ -79,7 +79,7 @@ fn step_the_delver(
     let changed = character.is_changed() || inventory.is_changed() || rules_changed;
     let mut gear = None;
     let mut exposures = None;
-    for (player, at, locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana, effects, mut recovery, health) in &mut players {
+    for (player, at, locomotion, swinging, load, mut needs, mut exhaustion, mut times, mut mana, effects, mut recovery, health, guarding) in &mut players {
         if changed || needs.is_added() {
             let gear = gear.get_or_insert_with(|| character.gear(&inventory));
             // The rates a meter is made with are the defaults', so they are only put on again
@@ -103,7 +103,8 @@ fn step_the_delver(
         if hours <= 0.0 {
             continue;
         }
-        let sprinting = input.pressed(Action::Sprint);
+        // No sprint with a shield raised (`crate::player::walk`).
+        let sprinting = input.pressed(Action::Sprint) && !guarding;
         let activity = delver_activity(locomotion.velocity, sprinting, swinging, *load);
         let (mut n, mut e, mut t) = (needs.0, exhaustion.0, times.0);
         // Gear's rates and the effects' on them (the cold makes hunger rise faster), put on
@@ -208,15 +209,15 @@ fn step_stamina(
     screen: Res<ScreenOpen>,
     rules: Res<GameRules>,
     input: ActionInput,
-    mut players: Query<(&Locomotion, &Load, &mut DelverStamina), With<Player>>,
+    mut players: Query<(&Locomotion, &Load, &mut DelverStamina, Has<crate::combat::guard::Guard>), With<Player>>,
 ) {
     let seconds = time.delta_secs_f64();
     if screen.0.is_some() || seconds <= 0.0 {
         return;
     }
     let sprinting = input.pressed(Action::Sprint);
-    for (locomotion, load, mut stamina) in &mut players {
-        let activity = stamina_activity(locomotion.velocity, sprinting, !stamina.0.can_exert());
+    for (locomotion, load, mut stamina, guarding) in &mut players {
+        let activity = stamina_activity(locomotion.velocity, sprinting && !guarding, !stamina.0.can_exert());
         let mut next = stamina.0;
         next.step_with(&rules, seconds, activity, load.0);
         stamina.set_if_neq(DelverStamina(next));

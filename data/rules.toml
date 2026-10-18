@@ -97,6 +97,8 @@ sleep_refill_factor = 2.0
 second_wind = 0.2
 # What one swing costs, of a full pool.
 swing_cost = 0.08
+# What turning a blow aside on a raised shield costs, of a full pool.
+block_cost = 0.1
 
 [mana]
 # The small pool every martial character has, in mana points.

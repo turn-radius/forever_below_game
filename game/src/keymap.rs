@@ -29,7 +29,8 @@ pub enum Action {
     /// Swings what the main hand holds; with a bow, draws it while held and looses on release;
     /// with a crossbow, fires it.
     Attack,
-    /// Holds a blocking guard. No gameplay yet.
+    /// With a shield in the off hand, raises it as a guard while held (`crate::combat::guard`);
+    /// with none, swings as Attack does.
     Block,
     /// A thrust with what the main hand holds. No gameplay yet.
     Stab,
@@ -295,7 +296,7 @@ impl Default for Keymap {
                 bind(Action::Look, "Look round", Group::Moving, &[Input::MouseMotion]),
                 bind(Action::TakeMouse, "Take the mouse back", Group::Moving, &[Mouse(MouseButton::Left)]),
                 bind(Action::Attack, "Swing what you hold, or draw and loose a bow, or fire a crossbow", Group::Fighting, &[Mouse(MouseButton::Left)]),
-                bind(Action::Block, "Block", Group::Fighting, &[Mouse(MouseButton::Right)]).hold(),
+                bind(Action::Block, "Block with a shield held, or swing without one", Group::Fighting, &[Mouse(MouseButton::Right)]),
                 bind(Action::Stab, "Stab", Group::Fighting, &[Mouse(MouseButton::Left)]).hold(),
                 bind(Action::Primary, "Primary action", Group::Items, &[Key(KeyCode::KeyF)]).in_contexts(ITEMS),
                 bind(Action::Secondary, "Secondary action", Group::Items, &[Key(KeyCode::KeyG)]).in_contexts(ITEMS),
@@ -380,7 +381,7 @@ impl Keymap {
 
     /// Every action the options menu treats as clashing with `action` on `input` (or on the
     /// other side of a modifier, [`Input::sides`]): those of [`Keymap::conflicts`], and also a
-    /// Press and a Hold of different actions on one input (Jump on right click, which Block
+    /// Press and a Hold of different actions on one input (Jump on left click, which Stab
     /// holds). The game allows that only for the designed pair, Attack and Stab, and a player
     /// rebinding keys should not end up with two actions on one key by accident.
     pub fn clash_all(&self, action: Action, input: Input) -> Vec<Action> {
@@ -895,18 +896,18 @@ mod tests {
     #[test]
     fn letting_go_ends_a_hold() {
         let mut app = held_app();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
         step(&mut app, 0.016);
         end(&mut app);
         step(&mut app, 0.3);
-        assert!(read(&mut app, Action::Block).0);
+        assert!(read(&mut app, Action::Stab).0);
         end(&mut app);
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Right);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
         step(&mut app, 0.016);
-        assert_eq!(read(&mut app, Action::Block), (false, false, true, false));
+        assert_eq!(read(&mut app, Action::Stab), (false, false, true, false));
         end(&mut app);
         step(&mut app, 0.016);
-        assert_eq!(read(&mut app, Action::Block), (false, false, false, false));
+        assert_eq!(read(&mut app, Action::Stab), (false, false, false, false));
     }
 
     #[test]
@@ -1013,8 +1014,8 @@ mod tests {
     fn a_press_and_a_hold_may_share_an_input() {
         let keymap = Keymap::default();
         assert_eq!(keymap.conflicts(Action::Stab, Input::Mouse(MouseButton::Left)), None);
-        // Block holds right click and nothing in the level presses it, but a press would clash.
-        assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Right)), None);
+        // Block presses right click, so a press there clashes.
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Right)), Some(Action::Block));
         assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Left)), Some(Action::Attack));
     }
 

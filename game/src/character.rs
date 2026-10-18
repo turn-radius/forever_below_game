@@ -213,7 +213,7 @@ pub struct Derived {
     pub heal_on_kill: f32,
     /// Multiple of their pace, from what they wear.
     pub speed: f32,
-    /// Chance the shield in their off hand turns aside a blow that would hit.
+    /// Chance the shield in their off hand, raised, turns aside a blow that would hit.
     pub block_chance: f32,
     /// What worn items add to their ability scores.
     pub abilities: AbilityBonus,
@@ -619,9 +619,13 @@ mod tests {
         use fb_items::Slot;
         let delver = Character::roll(4);
         let mut inventory = Inventory::default();
-        let shield = inventory.add(with_affix("Shield", 4, "of the Rampart"));
+        // The shield's own chance, by its size, with the affix's 20% on top.
+        let rampart = with_affix("Shield", 4, "of the Rampart");
+        let chance = rampart.profile.stats.block_chance;
+        assert!(chance > 0.2, "{chance}");
+        let shield = inventory.add(rampart);
         inventory.wear(shield, Slot::Offhand).unwrap();
-        assert!((delver.derive(&inventory).block_chance - 0.2).abs() < 1e-6);
+        assert!((delver.derive(&inventory).block_chance - chance).abs() < 1e-6);
         let boots = inventory.add(with_affix("Boots", 4, "of Haste"));
         inventory.wear(boots, Slot::Feet).unwrap();
         assert!((delver.derive(&inventory).speed - 1.2).abs() < 1e-6);

@@ -141,11 +141,13 @@ type Ready = (With<Player>, Without<Swing>);
 
 /// The attack key swings, if no swing is under way and the delver stands. It swings when the
 /// click is let go before the hold time, since a longer click is a stab ([`ActionInput::tapped`]).
+/// The block key swings too, as it goes down, when the off hand holds no shield to raise
+/// ([`super::guard`]); with the guard up nothing swings.
 /// Only a click that went down with the mouse already taken swings: one that takes the mouse
 /// back (`crate::player::take_cursor`), or went down in a menu, is let go in the level without
 /// swinging.
 /// The swing heads for the creature in reach, if there is one ([`toward_target`]).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn start_swing(
     mut commands: Commands,
     input: ActionInput,
@@ -160,7 +162,7 @@ pub(super) fn start_swing(
     (mut last, mut armed): (Local<Option<Strike>>, Local<bool>),
     (practice, rules): (Option<Res<SwingPractice>>, Option<Res<crate::rules::GameRules>>),
     mut toasts: crate::inventory::Toasts,
-    mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina), Ready>,
+    mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina, Has<super::guard::Guard>), Ready>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
     strikeable: Strikeable,
 ) {
@@ -170,7 +172,8 @@ pub(super) fn start_swing(
         *armed = looking;
     }
     let tapped = input.tapped(Action::Attack);
-    let clicked = tapped && *armed;
+    let block_key = input.just_pressed(Action::Block) && looking && !super::guard::holds_shield(&inventory);
+    let clicked = (tapped && *armed) || block_key;
     if tapped || !input.pressed(Action::Attack) {
         *armed = false;
     }
@@ -184,8 +187,8 @@ pub(super) fn start_swing(
     if !practising && super::shoot::shoots(&inventory, marksman.as_deref()) {
         return;
     }
-    for (player, at, health, mut stamina) in &mut players {
-        if health.is_some_and(Health::is_down) {
+    for (player, at, health, mut stamina, guarding) in &mut players {
+        if health.is_some_and(Health::is_down) || (guarding && !practising) {
             continue;
         }
         // A winded delver cannot swing; each swing otherwise takes its bite of stamina.
