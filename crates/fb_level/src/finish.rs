@@ -87,7 +87,7 @@ impl Finishes {
         Some(Finish { walls, floor, moss: self.moss[i] })
     }
 
-    /// The style of the doorway in cell `(x, y)`; `None` if that cell is not a door.
+    /// The style of the doorway in cell `(x, y)`, the entrance included; `None` for any other cell.
     pub fn door_style(&self, x: i32, y: i32) -> Option<DoorStyle> {
         self.doors[self.index(x, y)?]
     }
@@ -388,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn a_grotto_is_mossy_and_fades_into_the_corridor() {
+    fn a_grotto_is_mossy() {
         let params = LevelParams { grotto_chance: 1.0, ..LevelParams::for_style(LevelStyle::RoughRock) };
         let level = generate_with(3, 1, &params);
         let f = finishes(&level, &params);
