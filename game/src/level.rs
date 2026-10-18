@@ -17,7 +17,7 @@ pub mod geometry;
 pub mod stairs;
 
 use armory::{
-    Rgb,
+    ItemMesh, Rgb,
     cond::{Condition, ConditionState},
     families::{
         Generator,
@@ -482,11 +482,54 @@ fn spawn_columns(
     }
 }
 
+/// The shapes of a level's doorways and braziers: for each doorway its frame and, at the
+/// entrance, the door's leaf; for each fixed light a brazier's body and flame height, `None` for
+/// the other kinds. Plain data, so it can be made ahead of time ([`crate::staged`]).
+pub struct FixtureShapes {
+    pub doors: Vec<(ItemMesh, Option<ItemMesh>)>,
+    pub braziers: Vec<Option<(ItemMesh, f32)>>,
+}
+
+impl FixtureShapes {
+    pub fn make(level: &Level) -> Self {
+        let view = CellView::new(level);
+        let entrance = (level.entrance.x as i32, level.entrance.y as i32);
+        let doors = geometry::doorways(&view)
+            .into_iter()
+            .map(|doorway| {
+                let seed = door_seed(level, &doorway);
+                let frame = match level.style {
+                    LevelStyle::RoughRock => geometry::door_frame(level.ceiling, seed),
+                    LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), seed),
+                };
+                let leaf = ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
+                (frame, leaf)
+            })
+            .collect();
+        let braziers = level
+            .lights
+            .iter()
+            .enumerate()
+            .map(|(i, spot)| (spot.kind == LightKind::Brazier).then(|| geometry::brazier(light_seed(level, i))))
+            .collect();
+        FixtureShapes { doors, braziers }
+    }
+}
+
+fn door_seed(level: &Level, doorway: &Doorway) -> u32 {
+    level.seed ^ ((doorway.x as u32) << 16 | doorway.y as u32)
+}
+
+fn light_seed(level: &Level, index: usize) -> u32 {
+    level.seed.wrapping_add(0x11 * index as u32 + 1)
+}
+
 fn spawn_fixtures(
     mut commands: Commands,
     level: Res<CurrentLevel>,
     abyss: Option<Res<Abyss>>,
     tuning: Res<Tuning>,
+    mut staged: Option<ResMut<crate::staged::Staged>>,
     mut blocked: ResMut<BlockedCells>,
     mut spawner: crate::render::ItemSpawner,
 ) {
@@ -495,15 +538,12 @@ fn spawn_fixtures(
     // shut already, and it does not swing again.
     let shut_already = abyss.is_some_and(|a| a.arrival == Arrival::FromBelow);
     let view = CellView::new(level);
+    let FixtureShapes { doors, braziers } = staged.as_mut().and_then(|s| s.take_fixtures(level)).unwrap_or_else(|| FixtureShapes::make(level));
 
     // Door frames, and the entrance door hung in its own.
     let entrance = (level.entrance.x as i32, level.entrance.y as i32);
-    for doorway in geometry::doorways(&view) {
-        let seed = level.seed ^ ((doorway.x as u32) << 16 | doorway.y as u32);
-        let frame = match level.style {
-            LevelStyle::RoughRock => geometry::door_frame(level.ceiling, seed),
-            LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), seed),
-        };
+    for (doorway, (frame, leaf)) in geometry::doorways(&view).into_iter().zip(doors) {
+        let seed = door_seed(level, &doorway);
         let transform = doorway_transform(&doorway);
         spawner.spawn(&frame, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
         if (doorway.x, doorway.y) == entrance {
@@ -513,7 +553,7 @@ fn spawn_fixtures(
                 blocked.0.insert(entrance);
             }
             let door = EntranceDoor { shut: transform.rotation, centre: transform.translation, cell: entrance, swing };
-            let leaf = geometry::entrance_leaf(seed);
+            let leaf = leaf.expect("the entrance doorway has a leaf");
             spawner
                 .spawn(&leaf, &fixture_appearance(seed, ConditionState::Serviceable))
                 .insert((StonePiece, Name::new("entrance door"), door, Transform::from_translation(hinge).with_rotation(door.rotation())));
@@ -523,11 +563,11 @@ fn spawn_fixtures(
     // Fixed lights.
     for (i, spot) in level.lights.iter().enumerate() {
         let at = v3(fb_level::Level::world(spot.x, spot.y));
-        let seed = level.seed.wrapping_add(0x11 * i as u32 + 1);
+        let seed = light_seed(level, i);
         match spot.kind {
             LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light),
             LightKind::Brazier => {
-                let (mesh, flame) = geometry::brazier(seed);
+                let (mesh, flame) = braziers[i].clone().expect("a brazier has a shape");
                 spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Transform::from_translation(at)));
                 let light = FixedLight::Brazier.light(&tuning.light);
                 commands.spawn((StonePiece, Name::new("brazier light"), FixedLight::Brazier, light, Transform::from_translation(at + Vec3::Y * flame)));

@@ -292,6 +292,7 @@ fn spawn_creatures(
     level: Res<CurrentLevel>,
     old: Query<Entity, With<Critter>>,
     record: Option<Res<WorldRecord>>,
+    mut staged: Option<ResMut<crate::staged::Staged>>,
     mut spawner: ItemSpawner,
     mut shown: Local<Option<Vec<CreatureSpot>>>,
 ) {
@@ -306,8 +307,8 @@ fn spawn_creatures(
     // On a level that was left, each creature is as it was left (`crate::record`).
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     // A skeleton takes some hundred milliseconds to roll and fit, so the level's are built side by
-    // side before any is spawned.
-    let built = build_creatures(&level.0.creatures, level.0.depth);
+    // side before any is spawned, or ahead of time (`crate::staged`).
+    let built = staged.as_mut().and_then(|s| s.take_creatures(&level.0)).unwrap_or_else(|| build_creatures(&level.0.creatures, level.0.depth));
     for (index, (spot, built)) in level.0.creatures.iter().zip(built).enumerate() {
         let left = saved.and_then(|l| l.creatures.get(&index));
         // A body from the record lies bare: what it wore was set down where it fell, and is on

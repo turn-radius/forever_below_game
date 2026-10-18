@@ -52,6 +52,7 @@ use crate::fitting::Fitting;
 use crate::folk::{FolkFigures, Person, build_figures};
 use crate::level::{PreparedStone, geometry::LevelMesh, stone_chunks};
 use crate::folk::AimedFolk;
+use crate::staged::{Staged, Staging};
 use crate::keymap::{Action, ActionInput};
 use crate::launch::AppState;
 use crate::combat::vitals::Fallen;
@@ -117,12 +118,13 @@ impl Abyss {
 }
 
 /// A level, its stone and its folk, made off the main thread.
-#[derive(Debug)]
 pub struct Prepared {
     pub level: Level,
     pub stone: Vec<LevelMesh>,
     /// The people of the level and their figures, which take most of a second to build.
     pub folk: Vec<(Person, Figure)>,
+    /// Its creatures, floor items and props, rolled and shaped.
+    pub staging: Staging,
 }
 
 impl Prepared {
@@ -131,7 +133,8 @@ impl Prepared {
         let level = Abyss::new(run_seed).level_at(depth);
         let stone = stone_chunks(&level);
         let folk = build_figures(&level.folk, depth);
-        Prepared { level, stone, folk }
+        let staging = Staging::make(&level);
+        Prepared { level, stone, folk, staging }
     }
 }
 
@@ -221,6 +224,7 @@ impl Plugin for TravelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Abyss>()
             .init_resource::<FolkFigures>()
+            .init_resource::<Staged>()
             .add_message::<UseStair>()
             .add_systems(OnEnter(AppState::Delving), begin_the_run)
             .add_systems(OnExit(AppState::Delving), end_the_run)
@@ -334,6 +338,7 @@ fn step_journey(
     mut below: Option<ResMut<Below>>,
     mut prepared: ResMut<PreparedStone>,
     mut figures: ResMut<FolkFigures>,
+    mut staged: ResMut<Staged>,
     mut blocked: ResMut<BlockedCells>,
     mut aimed: ResMut<Aimed>,
     mut aimed_folk: Option<ResMut<AimedFolk>>,
@@ -356,7 +361,8 @@ fn step_journey(
                 .then(|| below.as_mut().filter(|below| *below.0.key() == (abyss.run_seed, to)).and_then(|below| below.0.wait()))
                 .flatten();
             let mut next = match made {
-                Some(Prepared { level, stone, folk }) => {
+                Some(Prepared { level, stone, folk, staging }) => {
+                    staged.set(&level, staging);
                     prepared.set(level.seed, level.depth, stone);
                     figures.keep(folk);
                     level

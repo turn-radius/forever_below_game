@@ -247,7 +247,7 @@ fn going_down_at_once_waits_for_the_level_made_in_the_background() {
     stand(&mut app, down.approach(), down.facing.yaw());
     run(&mut app, 2);
     press_f(&mut app);
-    run(&mut app, 150);
+    run(&mut app, 90);
     assert!(app.world().get_resource::<Journey>().is_none(), "the journey is over");
 
     let second = level(&app).clone();

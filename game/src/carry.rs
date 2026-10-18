@@ -757,6 +757,7 @@ pub(crate) fn lay_out_items(
     mut inventory: ResMut<Inventory>,
     tuning: Option<Res<Tuning>>,
     record: Option<Res<WorldRecord>>,
+    mut staged: Option<ResMut<crate::staged::Staged>>,
     mut spawner: ItemSpawner,
 ) {
     for (entity, floor) in &old {
@@ -778,10 +779,20 @@ pub(crate) fn lay_out_items(
         }
         return;
     }
+    // The loot and its shapes were rolled ahead of time if the level was made in the background
+    // (`crate::staged`).
+    let mut ahead = staged.as_mut().and_then(|s| s.take_items(&level.0)).map(Vec::into_iter);
     for spot in &level.0.items {
-        if let Some(item) = fb_items::roll_loot(spot.family, spot.seed, fb_items::Odds::loot(level.0.depth)) {
+        let rolled = match ahead.as_mut() {
+            Some(ahead) => ahead.next().flatten(),
+            None => fb_items::roll_loot(spot.family, spot.seed, fb_items::Odds::loot(level.0.depth)).map(|item| {
+                let mesh = item.shape.build();
+                (item, mesh)
+            }),
+        };
+        if let Some((item, mesh)) = rolled {
             let id = inventory.add(item);
-            spawn_floor_item(&mut spawner, &inventory, id, *spot, &tuning);
+            spawn_floor_item_shaped(&mut spawner, &inventory, id, mesh, *spot, &tuning);
         }
     }
 }
@@ -795,8 +806,13 @@ pub fn item_points(mesh: &armory::ItemMesh) -> Vec<Vec3> {
 /// palette, dressed condition and etching at the tuning's floor scale, with its light if it
 /// gives one. `None` for an item with no vertices or one the inventory does not know.
 pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: ItemId, spot: ItemSpot, tuning: &Tuning) -> Option<Entity> {
+    let mesh = inventory.item(id)?.shape.build();
+    spawn_floor_item_shaped(spawner, inventory, id, mesh, spot, tuning)
+}
+
+/// [`spawn_floor_item`] for an item whose `mesh` is built already.
+pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory, id: ItemId, mesh: armory::ItemMesh, spot: ItemSpot, tuning: &Tuning) -> Option<Entity> {
     let item = inventory.item(id)?;
-    let mesh = item.shape.build();
     let points = item_points(&mesh);
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
     let transform = rest_on_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, tuning.view.floor_item_scale)?;

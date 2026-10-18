@@ -49,6 +49,7 @@ pub mod menu;
 pub mod play;
 pub mod player;
 pub mod props;
+pub mod staged;
 pub mod quickslots;
 pub mod record;
 pub mod render;
