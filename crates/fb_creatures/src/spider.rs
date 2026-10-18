@@ -134,12 +134,25 @@ pub struct SpiderState {
     pub elongation: f32,
     /// 0 lean to 1 stout, in the legs and the carapace.
     pub build: f32,
-    /// How much hair it grows, 0 sparse to 1 shaggy.
+    /// How much hair it grows: 0 smooth and glossy like a widow or a huntsman, about 0.15 to 0.45
+    /// lightly haired, 0.6 to 1 a heavy coat like a tarantula's.
     pub hair: f32,
     pub colouring: SpiderColouring,
     pub marking: SpiderMarking,
     /// Whether pale rings mark its legs at the knees.
     pub banded: bool,
+}
+
+/// The hairiness a roll of `h` in 0..1 gives: nearly half of spiders are smooth (45%), about two in
+/// five lightly haired (40%), and the rest (15%) heavily haired.
+fn hairiness(h: f32) -> f32 {
+    if h < 0.45 {
+        0.0
+    } else if h < 0.85 {
+        0.15 + 0.3 * (h - 0.45) / 0.4
+    } else {
+        0.6 + 0.4 * (h - 0.85) / 0.15
+    }
 }
 
 /// Salt for the spider stream, so a spider and a rat from one seed are unrelated. Our own.
@@ -155,7 +168,7 @@ impl SpiderState {
             abdomen: rng.range_f32(0.88, 1.15),
             elongation: rng.range_f32(0.0, 1.0),
             build: rng.range_f32(0.0, 1.0),
-            hair: rng.range_f32(0.4, 1.0),
+            hair: hairiness(rng.range_f32(0.0, 1.0)),
             colouring: *rng.weighted(&[(SpiderColouring::Brown, 5), (SpiderColouring::Black, 3), (SpiderColouring::Ash, 3), (SpiderColouring::Rust, 2), (SpiderColouring::Cave, 1)]),
             marking: *rng.weighted(&[(SpiderMarking::Plain, 3), (SpiderMarking::Stripe, 2), (SpiderMarking::Diamonds, 3), (SpiderMarking::Spots, 2), (SpiderMarking::Bands, 2)]),
             banded: rng.chance(0.5),
@@ -239,10 +252,10 @@ impl SpiderState {
         let rest = crate::pose::spider(self, &crate::pose::SpiderPose::default());
         let mut rig = Rig::default();
 
-        // The cephalothorax: a smooth carapace with a few bristles, and its eight eyes.
+        // The cephalothorax: a carapace, bristled only on a hairy spider, and its eight eyes.
         let body = rig.add("body", None, rest[bone::BODY], self.carapace_parts(&d, &mut rng));
 
-        // The abdomen: hair over the skin, with the markings laid on it.
+        // The abdomen: hair over the skin if it has any, with the markings laid on it.
         rig.add("abdomen", Some(body), rest[bone::ABDOMEN], self.abdomen_parts(&d, &mut rng));
 
         // Fangs and pedipalps, left then right.
@@ -260,23 +273,25 @@ impl SpiderState {
         // Legs: femur, tibia and tarsus, each bone a tube along its own +Y with a knob at its end.
         let leg_tint = c.legs();
         let pale = c.pale();
+        // A smooth spider's legs are glossy shell, a hairy one's are furred.
+        let leg_material = if self.hair > 0.0 { MaterialKind::Hair } else { MaterialKind::Skin };
         for k in 0..LEG_COUNT {
             let pair = k / 2;
             let leg = d.legs[pair];
             let name = format!("leg_{}_{}", pair + 1, if k % 2 == 0 { "left" } else { "right" });
             let r0 = 0.03 * s * leg.girth;
-            let (femur_r, tibia_r, tarsus_r) = ((r0, 0.78 * r0), (0.8 * r0, 0.5 * r0), (0.5 * r0, 0.26 * r0));
+            let (femur_r, tibia_r, tarsus_r) = ((r0, 0.7 * r0), (0.7 * r0, 0.38 * r0), (0.38 * r0, 0.2 * r0));
             let bands = self.banded;
 
             let (fur, ring) = limb(leg.femur, femur_r.0, femur_r.1, 0.2, self.hair, s, &mut rng, bands);
-            let mut parts = vec![part(fur, "fur", MaterialKind::Hair, leg_tint, true)];
+            let mut parts = vec![part(fur, "fur", leg_material, leg_tint, true)];
             if let Some(ring) = ring {
                 parts.push(part(ring, "bands", MaterialKind::Hair, pale, false));
             }
             let femur = rig.add(name.clone(), Some(body), rest[bone::LEGS + 3 * k], parts);
 
             let (fur, ring) = limb(leg.tibia, tibia_r.0, tibia_r.1, 0.08, self.hair, s, &mut rng, bands);
-            let mut parts = vec![part(fur, "fur", MaterialKind::Hair, leg_tint, true)];
+            let mut parts = vec![part(fur, "fur", leg_material, leg_tint, true)];
             if let Some(ring) = ring {
                 parts.push(part(ring, "bands", MaterialKind::Hair, pale, false));
             }
@@ -300,7 +315,9 @@ impl SpiderState {
         let s = self.span;
         let trunk = &d.carapace_trunk;
         let mut shell = trunk.mesh(26, 30);
-        shell.append(&trunk.tufts(60, 0.026 * s, rng, |t, a| (0.1..0.95).contains(&t) && a.sin() > 0.1));
+        if self.hair > 0.0 {
+            shell.append(&trunk.tufts((70.0 * self.hair) as usize + 6, (0.012 + 0.008 * self.hair) * s, rng, |t, a| (0.1..0.95).contains(&t) && a.sin() > 0.1));
+        }
         let mut parts = vec![part(shell, "head", MaterialKind::Skin, c.carapace(), true)];
 
         // A pale band of hair round the front of the carapace, and the groove down the middle of
@@ -345,9 +362,12 @@ impl SpiderState {
         let s = self.span;
         let trunk = &d.abdomen_trunk;
         let mut fur = trunk.mesh(28, 34);
-        let count = (60.0 + 260.0 * self.hair) as usize;
-        fur.append(&trunk.tufts(count, (0.028 + 0.016 * self.hair) * s, rng, |t, a| (0.05..0.96).contains(&t) && a.sin() > -0.45));
-        let mut parts = vec![part(fur, "fur", MaterialKind::Hair, c.abdomen(), true)];
+        if self.hair > 0.0 {
+            let count = (40.0 + 240.0 * self.hair) as usize;
+            fur.append(&trunk.tufts(count, (0.013 + 0.009 * self.hair) * s, rng, |t, a| (0.05..0.96).contains(&t) && a.sin() > -0.45));
+        }
+        let skin = if self.hair > 0.0 { MaterialKind::Hair } else { MaterialKind::Skin };
+        let mut parts = vec![part(fur, "fur", skin, c.abdomen(), true)];
 
         let off = 0.005 * s;
         let mark = c.markings();
@@ -449,17 +469,18 @@ impl SpiderState {
         bulb.scale([1.0, 1.2, 1.0]).translate([0.0, 0.074 * s, -0.062 * s]);
         m.append(&bulb);
         let mut hair = MeshBuilder::new();
-        for _ in 0..16 {
+        let tufts = if self.hair > 0.0 { (6.0 + 12.0 * self.hair) as usize } else { 0 };
+        for _ in 0..tufts {
             let i = rng.range_f32(0.1, 1.0);
             let p = CatmullRom::centripetal(vec![[0.0, 0.0, 0.0], [side * 0.004 * s, 0.03 * s, -0.012 * s], [side * 0.002 * s, 0.056 * s, -0.036 * s], [0.0, 0.07 * s, -0.056 * s]]).point(i * 2.9);
             let a = rng.range_f32(0.0, PI * 2.0);
             let dir = vec3::normalize_or([a.cos(), 0.7, a.sin() - 0.5], vec3::Y);
-            let mut tuft = spike(0.0018 * s, rng.range_f32(0.014, 0.024) * s, 4, 0.6, armory::geom::Shading::SMOOTH);
+            let mut tuft = spike(0.0013 * s, rng.range_f32(0.008, 0.014) * s, 4, 0.6, armory::geom::Shading::SMOOTH);
             tuft.place(p, dir);
             hair.append(&tuft);
         }
         m.append(&hair);
-        vec![part(m, "fur", MaterialKind::Hair, mix(c.legs(), c.pale(), 0.2), true)]
+        vec![part(m, "fur", if self.hair > 0.0 { MaterialKind::Hair } else { MaterialKind::Skin }, mix(c.legs(), c.pale(), 0.2), true)]
     }
 }
 
@@ -534,8 +555,8 @@ fn bell(t: f32, t0: f32, t1: f32) -> f32 {
 }
 
 /// A limb segment along +Y from its joint to `len`, radius `r0` at the joint falling to `r1`,
-/// swelling `swell` of the radius in the middle, with a knob at each end and bristles standing
-/// out of it combed toward the tip. With `bands`, also returns pale rings round the far end.
+/// swelling `swell` of the radius in the middle, with a knob at each end and, when `hair` is above
+/// 0, fine bristles standing out of it combed toward the tip. With `bands`, also returns pale rings round the far end.
 #[allow(clippy::too_many_arguments)]
 fn limb(len: f32, r0: f32, r1: f32, swell: f32, hair: f32, span: f32, rng: &mut Mulberry32, bands: bool) -> (MeshBuilder, Option<MeshBuilder>) {
     let radius = |t: f32| (r0 + (r1 - r0) * t.powf(0.8)) * (1.0 + swell * (PI * t).sin().max(0.0));
@@ -544,12 +565,12 @@ fn limb(len: f32, r0: f32, r1: f32, swell: f32, hair: f32, span: f32, rng: &mut 
     // Knobs at the joints, so a bent leg stays whole.
     let mut start = uv_sphere(radius(0.0) * 1.02, 12, 8);
     start.translate(path[0]);
-    let mut end = uv_sphere(radius(1.0) * 1.06, 12, 8);
+    let mut end = uv_sphere(radius(1.0) * 1.1, 12, 8);
     end.translate(path[10]);
     m.append(&start);
     m.append(&end);
-    // Bristles.
-    let count = ((18.0 + 34.0 * hair) * len / (0.25 * span)) as usize;
+    // Bristles, none at all on a smooth spider.
+    let count = if hair > 0.0 { ((12.0 + 36.0 * hair) * len / (0.25 * span)) as usize } else { 0 };
     for _ in 0..count {
         let t = rng.range_f32(0.04, 0.98);
         let a = rng.range_f32(0.0, 2.0 * PI);
@@ -557,8 +578,8 @@ fn limb(len: f32, r0: f32, r1: f32, swell: f32, hair: f32, span: f32, rng: &mut 
         let out = [a.cos(), 0.0, a.sin()];
         let root = vec3::add([0.0, len * t, 0.0], vec3::scale(out, 0.8 * r));
         let dir = vec3::normalize_or(vec3::add(vec3::scale(out, 1.0), [0.0, 0.7, 0.0]), out);
-        let length = rng.range_f32(0.7, 1.3) * (0.018 + 0.012 * hair) * span;
-        let mut bristle = spike(0.0036 * span, length, 4, 0.7, armory::geom::Shading::SMOOTH);
+        let length = rng.range_f32(0.7, 1.3) * (0.009 + 0.008 * hair) * span;
+        let mut bristle = spike(0.0022 * span, length, 4, 0.7, armory::geom::Shading::SMOOTH);
         bristle.place(root, dir);
         m.append(&bristle);
     }
@@ -630,11 +651,29 @@ mod tests {
         let one = uv_sphere(1.0, 14, 10).vertex_count();
         assert_eq!(eyes.positions.len(), 8 * one);
         assert!(body.mesh.parts.iter().any(|p| p.name == "glints" && p.glow > 0.0));
-        // Bristles make a leg much more than a smooth tube.
-        let femur = &rig.bone("leg_1_left").unwrap().mesh.parts[0];
-        assert!(femur.indices.len() / 3 > 600, "{} triangles", femur.indices.len() / 3);
+        // Bristles make a hairy leg much more than a smooth tube.
+        let hairy = (0..200).map(SpiderState::roll).find(|s| s.hair > 0.6).unwrap();
+        let femur = &hairy.build().bone("leg_1_left").unwrap().mesh.parts[0].indices.len() / 3;
+        assert!(femur > 700, "{femur} triangles");
         let names: HashSet<&str> = rig.bone("abdomen").unwrap().mesh.parts.iter().map(|p| p.name).collect();
         assert!(names.contains("fur") && names.contains("spinnerets"));
+    }
+
+    #[test]
+    fn many_spiders_are_smooth_some_light_and_few_heavy() {
+        let spiders: Vec<SpiderState> = (0..400).map(SpiderState::roll).collect();
+        let smooth = spiders.iter().filter(|s| s.hair == 0.0).count();
+        let heavy = spiders.iter().filter(|s| s.hair >= 0.6).count();
+        let light = spiders.len() - smooth - heavy;
+        assert!((140..220).contains(&smooth), "{smooth} smooth");
+        assert!((100..220).contains(&light), "{light} light");
+        assert!((30..90).contains(&heavy), "{heavy} heavy");
+        // A smooth spider has no bristle on its legs: its femur is a plain tube and two knobs.
+        let plain = spiders.iter().find(|s| s.hair == 0.0).unwrap();
+        let femur = &plain.build().bone("leg_1_left").unwrap().mesh.parts[0].indices.len() / 3;
+        let hairy = spiders.iter().find(|s| s.hair >= 0.6).unwrap();
+        let fur = &hairy.build().bone("leg_1_left").unwrap().mesh.parts[0].indices.len() / 3;
+        assert!(fur > femur + 300, "{fur} against {femur} triangles");
     }
 
     #[test]
