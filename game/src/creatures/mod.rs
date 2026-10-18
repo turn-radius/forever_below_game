@@ -1,5 +1,5 @@
-//! Creatures in the level (`fb_level::CreatureSpot`): rats, snakes and skeletons ([`skeletons`], in
-//! their gear) from `fb_creatures`, drawn
+//! Creatures in the level (`fb_level::CreatureSpot`): rats, snakes, giant spiders, skeletons ([`skeletons`], in
+//! their gear) and trolls ([`trolls`]) from `fb_creatures`, drawn
 //! in the house style (toon bands, ink and wear) and moved bone by bone without a skeleton.
 //!
 //! - Each creature is a root on the floor at its spot, facing its yaw, with one entity per bone
@@ -10,9 +10,13 @@
 //!   into a pose (`fb_creatures::pose`) each frame and copies it onto the bones: a rat trots
 //!   with its body bobbing, legs stepping and tail swinging, sniffs about when still and lunges
 //!   to bite; a snake slithers with a wave travelling down its spine, coils when it rests,
-//!   rears, strikes, gapes and flicks its tongue. Snake segments follow the floor's relief, and
+//!   rears, strikes, gapes and flicks its tongue; a giant centipede scuttles on a wave of
+//!   stepping legs down its body, feels about with its antennae, rears and bites with
+//!   its forcipules. Snake segments follow the floor's relief, and
 //!   a laid-out snake's body follows the way it came ([`Trail`]) rather than swinging round
 //!   as a whole when it turns.
+//!   A giant spider walks on all eight legs in an alternating tetrapod, each foot planted on the
+//!   floor, rears up on its back legs with the front pair held high, and stabs with its fangs.
 //! - Standing about, a creature idles ([`idle`]): rats sniff and sway their tails, snakes lie
 //!   coiled, now and then raising their heads and tasting the air.
 //! - Each bone carries the capsule it presents to a blow ([`HitShape`], from
@@ -24,7 +28,7 @@
 use armory::cond::{Condition, ConditionState};
 use bevy::{app::Propagate, light::NotShadowCaster, prelude::*};
 use fb_body::Placement;
-use fb_creatures::pose::{self, RatPose, SkeletonPose, SnakePose};
+use fb_creatures::pose::{self, BatPose, CentipedePose, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::Creature;
 use fb_creatures::rig::{Capsule, SURFACE_PARTS};
 use fb_level::{CreatureSpot, Level};
@@ -39,15 +43,20 @@ use crate::tuning::Tuning;
 
 pub mod behaviour;
 pub mod skeletons;
+pub mod trolls;
 
 use std::sync::Arc;
+use crate::belongings::Belongings;
 use skeletons::{Rattle, SkeletonKit, WornGear};
 
 pub struct CreaturesPlugin;
 
 impl Plugin for CreaturesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin))
+        if !app.is_plugin_added::<crate::belongings::BelongingsPlugin>() {
+            app.add_plugins(crate::belongings::BelongingsPlugin);
+        }
+        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin, trolls::TrollsPlugin))
             .init_resource::<Tuning>()
             .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), size_creatures, idle, animate).chain().in_set(DelveSystems));
     }
@@ -71,6 +80,9 @@ pub struct Critter {
     /// nothing rebuilds its body each frame. `None` for the other creatures.
     #[reflect(ignore)]
     pub kit: Option<Arc<SkeletonKit>>,
+    /// What a troll holds, if it holds anything ([`trolls::TrollArms`]). `None` for the rest.
+    #[reflect(ignore)]
+    pub arms: Option<Arc<trolls::TrollArms>>,
 }
 
 impl Critter {
@@ -82,13 +94,19 @@ impl Critter {
             _ => None,
         };
         let radius = kit.as_ref().map_or_else(|| creature.radius(), |k| k.radius);
-        Critter { spot, radius, creature, size: 1.0, kit }
+        Critter { spot, radius, creature, size: 1.0, kit, arms: None }
     }
 
     /// This skeleton in its `kit` of gear.
     pub fn with_kit(mut self, kit: SkeletonKit) -> Critter {
         self.radius = kit.radius * self.size;
         self.kit = Some(Arc::new(kit));
+        self
+    }
+
+    /// This troll holding `arms`.
+    pub fn with_arms(mut self, arms: trolls::TrollArms) -> Critter {
+        self.arms = Some(Arc::new(arms));
         self
     }
 
@@ -178,6 +196,104 @@ pub struct Intent {
     pub swing: Option<f32>,
     /// A skeleton's collapse, how far through it (0 to 1), used as it is.
     pub fallen: f32,
+    /// A bat's wings and body in the air.
+    pub wings: Wings,
+}
+
+/// How a bat holds itself in the air: what [`Intent`] asks of the pose (`BatPose`). Everything
+/// is eased from frame to frame except the altitude, which is where the bat is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct Wings {
+    /// The height of the body's middle over the floor under the creature's root, world units.
+    pub altitude: f32,
+    /// 0 flying, 1 hanging head down by its feet.
+    pub roost: f32,
+    /// 0 gliding on spread wings, 1 beating.
+    pub power: f32,
+    /// How far the nose is raised, radians.
+    pub pitch: f32,
+    /// How far it banks toward its left, radians; pi turned over.
+    pub bank: f32,
+    /// How folded the wings are, 0 spread to 1 folded.
+    pub tuck: f32,
+}
+
+/// A bat's flight: where it is in the air and what it is doing there, on the bat beside its
+/// [`behaviour::Brain`]. The root stays on the floor; the bat's height over it is
+/// [`Flight::altitude`], which the pose raises its body by.
+#[derive(Component, Clone, Debug)]
+pub struct Flight {
+    /// The height of the body's middle over the floor under the root, world units.
+    pub altitude: f32,
+    /// How fast it is climbing, world units a second (negative diving).
+    pub climb: f32,
+    /// What it is doing.
+    pub phase: Wing,
+    /// Seconds left in a wheel, a pull away or a swoop.
+    pub timer: f32,
+    /// Where it is on its circle about the delver, radians.
+    pub angle: f32,
+    /// Which way it circles: 1 or -1.
+    pub spin: f32,
+    /// How far it turns a second, radians, signed toward its left (for banking).
+    pub turning: f32,
+    /// How far its pose reaches below the body's middle in flight, and above it in flight and
+    /// roosting, world units (`BatState::flight_extent`, `roost_extent`).
+    pub below: f32,
+    pub above: f32,
+    pub roost_above: f32,
+    /// The height it dropped from, once it has fallen.
+    pub fell_from: Option<f32>,
+    /// The height of its body's middle lying fallen on the floor, folded and turned over.
+    pub lie: f32,
+}
+
+/// What a bat is doing in the air.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wing {
+    /// Hanging from the ceiling at its spot.
+    Roosting,
+    /// Flying back to its spot to hang there again.
+    Returning,
+    /// Wheeling round the delver between head height and the ceiling.
+    Wheeling,
+    /// Diving at the delver to bite.
+    Swooping,
+    /// Pulling up and away after a bite.
+    Away,
+}
+
+impl Flight {
+    /// A bat of `rig` hanging from the ceiling `ceiling` over its root (world units): its
+    /// reaches flying and roosting, and how it lies when it falls, measured from its rig.
+    pub fn roosting(bat: &fb_creatures::BatState, rig: &fb_creatures::Rig, ceiling: f32, seed: u32) -> Flight {
+        let (below, above) = bat.flight_extent(rig);
+        let roost_above = bat.roost_extent(rig).1;
+        // Lying on its back with its wings folded: how far its lowest point is under its middle.
+        let lying = pose::bat(bat, &BatPose { bank: std::f32::consts::PI, tuck: 1.0, ..default() });
+        let lowest = rig.world(&lying).iter().zip(&rig.bones).flat_map(|(place, bone)| bone.mesh.parts.iter().flat_map(move |part| part.positions.iter().map(move |&p| place.point(p)[1]))).fold(f32::MAX, f32::min);
+        Flight {
+            altitude: ceiling - roost_above,
+            climb: 0.0,
+            phase: Wing::Roosting,
+            timer: 0.0,
+            angle: (seed % 628) as f32 * 0.01,
+            spin: if seed & 1 == 0 { 1.0 } else { -1.0 },
+            turning: 0.0,
+            below: -below,
+            above,
+            roost_above,
+            fell_from: None,
+            lie: -lowest,
+        }
+    }
+
+    /// The wings and body it holds this moment, beating its wings as hard as `power`.
+    pub fn wings(&self, power: f32) -> Wings {
+        let roosting = self.phase == Wing::Roosting;
+        let pitch = if roosting { 0.0 } else { (self.climb * 0.08).clamp(-0.7, 0.5) };
+        Wings { altitude: self.altitude, roost: if roosting { 1.0 } else { 0.0 }, power, pitch, bank: (self.turning * 0.12).clamp(-0.6, 0.6), tuck: if roosting { 1.0 } else { 0.0 } }
+    }
 }
 
 /// The pose's moving parts, eased from frame to frame.
@@ -337,8 +453,8 @@ fn spawn_creatures(
     *shown = Some(level.0.creatures.clone());
 }
 
-/// Creatures `FB_SPAWN` asks for, for captures and for trying a fight: `skeleton` or
-/// `skeleton:<seed>[,<seed>...]` (`skeleton` alone is seed 1207), each [`DEV_AHEAD`] cells
+/// Creatures `FB_SPAWN` asks for, for captures and for trying a fight: `skeleton`, `troll`, `jackalope`
+/// or `centipede`, or `skeleton:<seed>[,<seed>...]` (`skeleton` alone is seed 1207), each [`DEV_AHEAD`] cells
 /// ahead of the level's start and spread across the way, facing the start. None when unset.
 pub fn dev_spots(level: &Level) -> Vec<CreatureSpot> {
     let Some(spec) = std::env::var("FB_SPAWN").ok().filter(|s| !s.is_empty()) else { return Vec::new() };
@@ -353,8 +469,13 @@ pub fn dev_spots_for(level: &Level, spec: &str) -> Vec<CreatureSpot> {
     let (name, seeds) = spec.split_once(':').unwrap_or((spec, ""));
     let species = match name.trim() {
         "skeleton" => fb_creatures::Species::Skeleton,
+        "troll" => fb_creatures::Species::Troll,
+        "bat" => fb_creatures::Species::Bat,
+        "giant_bat" => fb_creatures::Species::GiantBat,
+        "jackalope" => fb_creatures::Species::Jackalope,
+        "centipede" => fb_creatures::Species::GiantCentipede,
         other => {
-            warn!("FB_SPAWN: no creature called {other:?} (try skeleton)");
+            warn!("FB_SPAWN: no creature called {other:?} (try skeleton, troll, bat, giant_bat, jackalope or centipede)");
             return Vec::new();
         }
     };
@@ -398,6 +519,8 @@ pub struct Built {
     /// A skeleton's fitted gear and the kit worked out from it.
     pub gear: Option<fb_creatures::SkeletonGear>,
     pub kit: Option<SkeletonKit>,
+    /// What a troll holds, when it holds a weapon.
+    pub arms: Option<trolls::TrollArms>,
 }
 
 /// Rolls the creature at `spot` on a level `depth` down, and fits a skeleton's gear (rolled
@@ -407,13 +530,18 @@ pub fn build_creature(spot: &CreatureSpot, depth: u32) -> Built {
     let creature = spot.creature();
     let gear = match &creature {
         Creature::Skeleton(skeleton) => Some(fb_creatures::SkeletonGear::roll(skeleton, fb_items::Odds::kit(depth))),
+        Creature::Troll(troll) => Some(fb_creatures::SkeletonGear::roll_troll(troll, fb_items::Odds::kit(depth))),
         _ => None,
     };
     let kit = match (&creature, &gear) {
         (Creature::Skeleton(skeleton), Some(gear)) => Some(SkeletonKit::armed(skeleton, gear)),
         _ => None,
     };
-    Built { creature, gear, kit }
+    let arms = match (&creature, &gear) {
+        (Creature::Troll(_), Some(gear)) => trolls::TrollArms::of(gear),
+        _ => None,
+    };
+    Built { creature, gear, kit, arms }
 }
 
 /// [`build_creature`] for every spot, on as many threads as there are cores.
@@ -429,9 +557,9 @@ pub fn build_creatures(spots: &[CreatureSpot], depth: u32) -> Vec<Built> {
 
 /// Spawns `built`, the creature of `spot` ([`spawn_creature_as`]).
 pub fn spawn_built(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot, built: Built, fallen: bool) -> Entity {
-    let Built { creature, gear, kit } = built;
+    let Built { creature, gear, kit, arms } = built;
     let rig = gear.as_ref().map_or_else(|| creature.rig(), |g| g.rig.clone());
-    let (root, bones) = spawn_skeleton_with(commands, level, spot, &rig, kit);
+    let (root, bones) = spawn_creature_with(commands, level, spot, &rig, kit, arms.filter(|_| !fallen));
     let appearance = ItemAppearance {
         condition: Condition { state: ConditionState::Custom, wear: Mulberry32::new(spot.seed ^ GRIME_SALT).range_f32(GRIME.0, GRIME.1), ..Condition::default() },
         seed: spot.seed,
@@ -476,14 +604,35 @@ pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpo
 
 /// [`spawn_skeleton`] for a skeleton in `kit` (a skeleton given none has nothing worn or held).
 pub fn spawn_skeleton_with(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig, kit: Option<SkeletonKit>) -> (Entity, Vec<Entity>) {
+    spawn_creature_with(commands, level, spot, rig, kit, None)
+}
+
+/// [`spawn_skeleton_with`] for a troll holding `arms`.
+pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig, kit: Option<SkeletonKit>, arms: Option<trolls::TrollArms>) -> (Entity, Vec<Entity>) {
     let creature = spot.creature();
-    let mut critter = Critter::new(*spot, creature);
+    let mut critter = Critter::new(*spot, creature.clone());
     if let Some(kit) = kit {
         critter = critter.with_kit(kit);
     }
+    if let Some(arms) = arms {
+        critter = critter.with_arms(arms);
+    }
+    let belongings = Belongings::of(&critter, level.depth);
     let mut rng = Mulberry32::new(spot.seed ^ 0x1D1E);
     let snake = spot.species.is_snake();
-    let rest = Intent { coil: if snake { 1.0 } else { 0.0 }, rear: if snake { 0.45 } else { 0.0 }, ..default() };
+    let mut rest = Intent { coil: if snake { 1.0 } else { 0.0 }, rear: if snake { 0.45 } else { 0.0 }, ..default() };
+    // A bat starts hanging from the ceiling over its spot.
+    let flight = if let Creature::Bat(bat) = &creature {
+        let [x, _, z] = Level::world(spot.x, spot.y);
+        let relief = Relief::new(level);
+        let vaults = (level.style == fb_level::LevelStyle::StoneHalls).then(|| crate::level::geometry::stone::Vaults::new(level));
+        let ceiling = behaviour::ceiling_over(level, vaults.as_ref(), &relief, Vec2::new(x, z));
+        let flight = Flight::roosting(bat, rig, ceiling, spot.seed);
+        rest.wings = flight.wings(0.0);
+        Some(flight)
+    } else {
+        None
+    };
     let root = commands
         .spawn((
             Name::new(spot.species.stat_block().name),
@@ -505,25 +654,42 @@ pub fn spawn_skeleton_with(commands: &mut Commands, level: &Level, spot: &Creatu
         bones.push(entity.id());
     }
     commands.entity(root).insert(Bones(bones.clone()));
+    if let Some(belongings) = belongings {
+        commands.entity(root).insert(belongings);
+    }
+    if let Some(flight) = flight {
+        commands.entity(root).insert(flight);
+    }
     if snake {
         commands.entity(root).insert(Trail::default());
     }
     if spot.species.is_skeleton() {
         commands.entity(root).insert(Rattle::new(spot.seed));
     }
+    if let Creature::Troll(troll) = &creature {
+        commands.entity(root).insert(trolls::Troll::new(troll));
+    }
     (root, bones)
 }
 
 /// Idling: what a creature does standing still, when nothing else drives it. Snakes lie
 /// coiled and now and then raise their heads; every few seconds they taste the air with a
-/// flick or two of the tongue. Rats' sniffing is in their pose.
+/// flick or two of the tongue. Rats' sniffing and a centipede's feeling about with its
+/// antennae are in their poses.
 pub fn idle(mut creatures: Query<(&Critter, &Idle, &Motion, &mut Intent), Without<Driven>>) {
     for (critter, idle, motion, mut intent) in &mut creatures {
+        let t = motion.time * idle.rate + idle.phase;
+        // A centipede feels about with its antennae (in its pose), turns its head now and then and
+        // lifts its front a little.
+        if critter.spot.species.is_centipede() {
+            intent.look = 0.3 * (t * 0.31).sin();
+            intent.rear = 0.12 * (0.5 + 0.5 * (t * 0.23).sin());
+            continue;
+        }
         // Only a snake idles like this: rats sniff in their pose, and a skeleton stands.
         if !critter.spot.species.is_snake() {
             continue;
         }
-        let t = motion.time * idle.rate + idle.phase;
         intent.coil = 1.0;
         intent.rear = 0.3 + 0.35 * (0.5 + 0.5 * (t * 0.35).sin());
         intent.tongue = tongue_flick(t);
@@ -543,7 +709,7 @@ pub fn tongue_flick(t: f32) -> f32 {
 }
 
 /// What [`animate`] reads and writes on each creature.
-type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>, Has<crate::combat::feedback::Corpse>);
+type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>, Has<crate::combat::feedback::Corpse>, Option<&'static trolls::Troll>);
 
 /// Poses every creature for this frame from how it moved and what it means to do.
 pub fn animate(
@@ -556,7 +722,7 @@ pub fn animate(
     let dt = time.delta_secs();
     let relief = Relief::new(&level.0);
     let player = players.iter().next().map(GlobalTransform::translation);
-    for (critter, root, intent, mut motion, bones, mut trail, dead) in &mut creatures {
+    for (critter, root, intent, mut motion, bones, mut trail, dead, troll_body) in &mut creatures {
         let at = root.translation.xz();
         if let (Some(trail), Creature::Snake(snake)) = (trail.as_deref_mut(), &critter.creature) {
             trail.record(at, snake.dims().body_length * root.scale.x);
@@ -585,12 +751,24 @@ pub fn animate(
             now.jaw.smooth_nudge(&intent.jaw, EASE_FAST, dt);
             now.tongue.smooth_nudge(&intent.tongue, EASE_FAST, dt);
             now.look.smooth_nudge(&intent.look, 4.0, dt);
+            // A bat's height is where it is; the rest of how it holds itself is eased.
+            now.wings.altitude = intent.wings.altitude;
+            now.wings.roost.smooth_nudge(&intent.wings.roost, 4.0, dt);
+            now.wings.tuck.smooth_nudge(&intent.wings.tuck, 6.0, dt);
+            now.wings.power.smooth_nudge(&intent.wings.power, 5.0, dt);
+            now.wings.pitch.smooth_nudge(&intent.wings.pitch, 5.0, dt);
+            now.wings.bank.smooth_nudge(&intent.wings.bank, 4.0, dt);
         }
         let now = motion.now;
         let places = match &critter.creature {
             Creature::Rat(rat) => {
                 motion.cycle = (motion.cycle + strode / pose::rat_stride(rat) * std::f32::consts::TAU) % std::f32::consts::TAU;
                 pose::rat(rat, &RatPose { stride: motion.cycle, pace: motion.pace, time: motion.time, bite: now.strike, look: now.look })
+            }
+            Creature::Jackalope(jackalope) => {
+                motion.cycle = (motion.cycle + strode / pose::jackalope_stride(jackalope) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                // Rearing sits it up; a strike gores.
+                pose::jackalope(jackalope, &JackalopePose { stride: motion.cycle, pace: motion.pace, time: motion.time, sit: now.rear, gore: now.strike, look: now.look })
             }
             Creature::Snake(snake) => {
                 motion.cycle += strode / (pose::WAVELENGTH * snake.dims().body_length) * std::f32::consts::TAU;
@@ -626,6 +804,51 @@ pub fn animate(
                     pose::skeleton_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)
                 }
             }
+            Creature::Spider(spider) => {
+                motion.cycle = (motion.cycle + strode / pose::spider_stride(spider) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                // A fallen spider's legs draw in under it as it is turned over ([`Intent::fallen`]).
+                pose::spider(spider, &SpiderPose { stride: motion.cycle, pace: motion.pace.min(2.0), time: motion.time, rear: now.rear, bite: now.strike, curl: intent.fallen })
+            }
+            Creature::Troll(troll) => {
+                // Measured once, when it appeared.
+                let measured;
+                let dims = match troll_body {
+                    Some(body) => &body.dims,
+                    None => {
+                        measured = troll.dims();
+                        &measured
+                    }
+                };
+                if intent.fallen > 0.0 {
+                    pose::troll_fallen(dims, intent.fallen)
+                } else {
+                    motion.cycle = (motion.cycle + strode / pose::troll_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                    let stance = critter.arms.as_ref().map_or([None, None], |a| a.stance);
+                    pose::troll_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)
+                }
+            }
+            Creature::Centipede(centipede) => {
+                // The legs step once a stride, and the body's wave goes with them.
+                motion.cycle = (motion.cycle + strode / pose::centipede_stride(centipede) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                let mut places = pose::centipede(
+                    centipede,
+                    &CentipedePose { stride: motion.cycle, pace: motion.pace, time: motion.time, rear: now.rear, bite: now.strike, jaw: now.jaw, look: now.look },
+                );
+                // Each plate, and the head, rests on the floor under it; the legs hang from the
+                // plates and go with them.
+                for i in std::iter::once(fb_creatures::centipede::bone::HEAD).chain((0..centipede.segments).map(|k| centipede.segment_bone(k))) {
+                    let place = &mut places[i];
+                    let world = root.transform_point(Vec3::from_array(place.origin));
+                    place.origin[1] += (relief.floor_height(world.x, world.z) - root.translation.y) / root.scale.y.max(1e-3);
+                }
+                places
+            }
+            // Roosting, wheeling, gliding or fallen, at the height its flight puts it.
+            Creature::Bat(bat) => {
+                let flap = (motion.time * pose::bat_beat_hz(bat) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                let w = now.wings;
+                pose::bat(bat, &BatPose { flap, power: w.power, roost: w.roost, tuck: w.tuck, height: w.altitude, pitch: w.pitch, bank: w.bank, bite: now.strike, look: now.look, time: motion.time })
+            }
         };
         for (entity, place) in bones.0.iter().zip(&places) {
             if let Ok(mut transform) = transforms.get_mut(*entity) {
@@ -658,12 +881,16 @@ mod tests {
     /// An app with every creature of seed 1207 spawned as bones (no drawing), idling and
     /// animating, stepped 1/60 s a frame.
     fn level_app() -> (App, Vec<Entity>) {
+        level_app_of(1207, 1)
+    }
+
+    fn level_app_of(seed: u32, depth: u32) -> (App, Vec<Entity>) {
         use bevy::time::TimeUpdateStrategy;
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
             .add_systems(Update, (idle, animate).chain());
-        let level = fb_level::generate(1207, 1);
+        let level = fb_level::generate(seed, depth);
         app.insert_resource(CurrentLevel(level.clone()));
         let roots = {
             let mut commands = app.world_mut().commands();
@@ -676,6 +903,21 @@ mod tests {
     fn bone_transforms(app: &App, root: Entity) -> Vec<Transform> {
         let bones = &app.world().get::<Bones>(root).unwrap().0;
         bones.iter().map(|&b| *app.world().get::<Transform>(b).unwrap()).collect()
+    }
+
+    /// Each newer species spawns and animates without a panic on a level that holds it: the first
+    /// seed in 1..=60 at a depth where it is placed (deep enough for the troll and the giant bats).
+    #[test]
+    fn each_newer_species_spawns_and_animates_on_a_level_that_holds_it() {
+        use fb_creatures::Species::*;
+        for (species, depth) in [(GiantCentipede, 1), (Bat, 1), (Jackalope, 1), (GiantSpider, 3), (GiantBat, 4), (Troll, 7)] {
+            let seed = (1..=60).find(|&s| fb_level::generate(s, depth).creatures.iter().any(|c| c.species == species)).unwrap_or_else(|| panic!("no level holds {species:?} at depth {depth}"));
+            let (mut app, roots) = level_app_of(seed, depth);
+            assert!(roots.iter().any(|&r| app.world().get::<Critter>(r).unwrap().spot.species == species));
+            for _ in 0..30 {
+                app.update();
+            }
+        }
     }
 
     #[test]
@@ -720,11 +962,20 @@ mod tests {
             }
             for (&root, rig) in roots.iter().zip(&rigs) {
                 let critter = app.world().get::<Critter>(root).unwrap().clone();
+                // What flies is meant to be off the floor.
+                if critter.spot.species.is_flying() {
+                    continue;
+                }
                 let bones = app.world().get::<Bones>(root).unwrap().0.clone();
                 let size = match &critter.creature {
                     Creature::Rat(r) => r.length,
                     Creature::Snake(s) => s.girth * 4.0,
                     Creature::Skeleton(s) => s.height(),
+                    Creature::Spider(s) => s.span,
+                    Creature::Troll(t) => t.height(),
+                    Creature::Jackalope(j) => j.length,
+                    Creature::Centipede(c) => c.girth * 4.0,
+                    Creature::Bat(b) => b.length,
                 };
                 let (mut deepest, mut nearest) = (f32::MIN, f32::MAX);
                 for (bone, &entity) in rig.bones.iter().zip(&bones) {

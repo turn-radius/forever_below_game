@@ -10,10 +10,10 @@ use armory::geom::vec3::V3;
 use armory::{ItemMesh, Part};
 use fb_body::Placement;
 
-/// The names of the parts that are a bone's main surface (fur, skin, scales, a skeleton's bone), as opposed to
+/// The names of the parts that are a bone's main surface (fur, skin, scales, a skeleton's bone, a troll's skin), as opposed to
 /// its details: eyes, whiskers, claws, teeth, tongue, markings and bellies lying on or inside
 /// that surface.
-pub const SURFACE_PARTS: [&str; 7] = ["fur", "spine", "head", "jaw", "tail", "paw", "bone"];
+pub const SURFACE_PARTS: [&str; 8] = ["fur", "spine", "head", "jaw", "tail", "paw", "bone", "skin"];
 
 /// The points within `radius` of the segment from `a` to `b`: a body part as a blow finds it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -193,7 +193,8 @@ mod tests {
                 let rig = Creature::of(species, seed).rig();
                 for bone in &rig.bones {
                     let hit = bone.hit();
-                    assert_eq!(hit.is_some(), bone.name != "tongue", "{species:?} {}", bone.name);
+                    assert_eq!(hit.is_some(), bone.mesh.parts.iter().any(|p| SURFACE_PARTS.contains(&p.name)), "{species:?} {}", bone.name);
+                    assert!(hit.is_some() || ["tongue", "antenna", "leg"].iter().any(|n| bone.name.starts_with(n)), "{species:?} {}", bone.name);
                     let Some(hit) = hit else { continue };
                     // Its surface lies round the capsule's skin, not far outside it.
                     let surface: Vec<V3> = bone.mesh.parts.iter().filter(|p| SURFACE_PARTS.contains(&p.name)).flat_map(|p| p.positions.clone()).collect();

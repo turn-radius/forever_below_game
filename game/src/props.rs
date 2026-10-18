@@ -298,7 +298,7 @@ fn open_aimed_container(
 }
 
 /// Says what the aimed container's verbs are over the crosshair. Containers have no locks yet,
-/// so a shut one is opened and an open one has nothing to say.
+/// so a shut one is opened and an open one looked in.
 pub(crate) fn prompt_aimed_container(
     aimed: Res<Aimed>,
     containers: Query<&Container>,
@@ -416,10 +416,10 @@ mod tests {
         keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![crate::keymap::Input::Key(KeyCode::KeyE)];
         app.update();
         assert_eq!(app.world().resource::<CrosshairPrompt>().0.as_deref(), Some("E Open"));
-        // Standing open it has no verb; looking away clears nothing else's line.
+        // Standing open, the same key looks in it again; looking away clears the line.
         app.world_mut().entity_mut(entity).insert(Container { opened: true, ..container });
         app.update();
-        assert_eq!(app.world().resource::<CrosshairPrompt>().0, None);
+        assert_eq!(app.world().resource::<CrosshairPrompt>().0.as_deref(), Some("E Look in"));
         app.world_mut().resource_mut::<Aimed>().0 = None;
         app.update();
         assert_eq!(app.world().resource::<CrosshairPrompt>().0, None);

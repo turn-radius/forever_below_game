@@ -5,7 +5,8 @@
 //! depth give ([`fb_level::depth_seed`], the run's own seed at the first depth). A level is
 //! rebuilt from that seed each time the delver comes to it ([`Abyss::level_at`]).
 //!
-//! Using a stair (E, close to it and looking at it) writes a [`UseStair`]. The screen fades to
+//! Using a stair (Primary, F by default, close to it and looking at it) writes a [`UseStair`],
+//! and while it can be used [`prompt_stair`] names the key over the crosshair. The screen fades to
 //! black, the level is swapped for the next one ([`Journey`]) and the screen fades in on the
 //! delver standing at the matching stair: down arrives at the level below's way up, turned
 //! into the level, and up arrives beside the level above's way down, turned away from it. The
@@ -52,9 +53,10 @@ use crate::carry::Aimed;
 use crate::figure::Figure;
 use crate::fitting::Fitting;
 use crate::folk::{AimedFolk, FolkFigures, Person, build_figures};
+use crate::interact::{CrosshairPrompt, Delver, Target, key_line, verbs_for};
+use crate::keymap::{Action, ActionInput, Keymap};
 use crate::level::{PreparedStone, geometry::LevelMesh, stone_chunks};
 use crate::staged::{Staged, Staging};
-use crate::keymap::{Action, ActionInput};
 use crate::launch::AppState;
 use crate::combat::vitals::Fallen;
 use crate::inventory::OpenContainer;
@@ -243,7 +245,8 @@ impl Plugin for TravelPlugin {
             .add_systems(
                 Update,
                 (take_stair.run_if(level_has_focus), begin_journey, step_journey, fade_depth_title, prefetch_below.run_if(resource_exists::<CurrentLevel>)).chain().in_set(DelveSystems),
-            );
+            )
+            .add_systems(Update, prompt_stair.after(crate::props::prompt_aimed_container).in_set(DelveSystems));
     }
 }
 
@@ -317,6 +320,39 @@ fn take_stair(
     let looking = eye.forward().as_vec3();
     if let Some(stair) = stair_in_reach(&level.0, feet.translation.xz(), looking.xz()) {
         used.write(UseStair(stair.kind));
+    }
+}
+
+/// Says the stair's verb over the crosshair while [`take_stair`] would take it: close, faced,
+/// and nothing else aimed at. Runs after the container's prompt and clears only its own line,
+/// so an aimed container's stands.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prompt_stair(
+    level: Res<CurrentLevel>,
+    fallen: Option<Res<Fallen>>,
+    aimed: Option<Res<crate::carry::Aimed>>,
+    keymap: Option<Res<Keymap>>,
+    players: Query<&Transform, With<Player>>,
+    cameras: Query<&GlobalTransform, With<PlayerCamera>>,
+    mut prompt: ResMut<CrosshairPrompt>,
+    mut said: Local<Option<String>>,
+) {
+    let aiming = aimed.is_some_and(|a| a.0.is_some());
+    let line = (|| {
+        if fallen.is_some() || aiming {
+            return None;
+        }
+        let (feet, eye) = (players.iter().next()?, cameras.iter().next()?);
+        let stair = stair_in_reach(&level.0, feet.translation.xz(), eye.forward().as_vec3().xz())?;
+        let fallback = Keymap::default();
+        let target = Target::Stair { down: stair.kind == StairKind::Down };
+        Some(key_line(keymap.as_deref().unwrap_or(&fallback), &verbs_for(&target, &Delver::default()))).filter(|line| !line.is_empty())
+    })();
+    if *said != line {
+        if line.is_some() || prompt.0 == *said {
+            prompt.0.clone_from(&line);
+        }
+        *said = line;
     }
 }
 
@@ -529,6 +565,38 @@ mod tests {
         assert_eq!(stair_in_reach(&level, feet, -toward), None, "with their back to it");
         assert_eq!(stair_in_reach(&level, feet + toward * -3.0 * CELL, toward), None, "too far off");
         assert_eq!(stair_in_reach(&level, feet, Vec2::ZERO), None);
+    }
+
+    #[test]
+    fn a_stair_in_reach_names_its_key_unless_something_is_aimed_at() {
+        let level = Abyss::new(1207).level_at(1);
+        let down = *level.stair(StairKind::Down).unwrap();
+        let (ax, ay, facing) = down.arrival();
+        let feet = Vec3::new((ax as f32 + 0.5) * CELL, 0.0, (ay as f32 + 0.5) * CELL);
+        let toward = Vec3::new(-facing.step().0 as f32, 0.0, -facing.step().1 as f32);
+        let mut app = App::new();
+        app.insert_resource(CurrentLevel(level))
+            .init_resource::<CrosshairPrompt>()
+            .init_resource::<Aimed>()
+            .init_resource::<Keymap>()
+            .add_systems(Update, prompt_stair);
+        app.world_mut().spawn((Player, Transform::from_translation(feet)));
+        let eye = app.world_mut().spawn((PlayerCamera, GlobalTransform::from(Transform::from_translation(feet).looking_to(toward, Vec3::Y)))).id();
+        let prompt = |app: &App| app.world().resource::<CrosshairPrompt>().0.clone();
+        app.update();
+        assert_eq!(prompt(&app).as_deref(), Some("F Go down"));
+        // Something aimed at takes the press, and its own line is left standing.
+        app.world_mut().resource_mut::<Aimed>().0 = Some(eye);
+        app.world_mut().resource_mut::<CrosshairPrompt>().0 = Some("F Open".into());
+        app.update();
+        assert_eq!(prompt(&app).as_deref(), Some("F Open"));
+        app.world_mut().resource_mut::<Aimed>().0 = None;
+        app.update();
+        assert_eq!(prompt(&app).as_deref(), Some("F Go down"));
+        // Turned away, the line goes.
+        app.world_mut().entity_mut(eye).insert(GlobalTransform::from(Transform::from_translation(feet).looking_to(-toward, Vec3::Y)));
+        app.update();
+        assert_eq!(prompt(&app), None);
     }
 
     #[test]

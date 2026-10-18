@@ -153,6 +153,7 @@ mod tests {
             props: Vec::new(),
             creatures: Vec::new(),
             stairs: Vec::new(),
+            webs: Vec::new(),
         }
     }
 

@@ -913,11 +913,13 @@ mod tests {
         inventory.wear(held, Slot::Offhand).unwrap();
         let spare = inventory.add(roll("Torch"));
         assert_eq!(compare_with(&inventory, spare, 0), Some((Slot::Offhand, Some(held))));
-        assert_eq!(compare_with(&inventory, spare, 1), Some((Slot::Hip, Some(lantern))));
-        assert_eq!(compare_with(&inventory, spare, 2), Some((Slot::Offhand, Some(held))), "wraps round");
+        // A torch fits either hand, the off hand first, and then the hip.
+        assert_eq!(compare_with(&inventory, spare, 1), Some((Slot::Mainhand, None)));
+        assert_eq!(compare_with(&inventory, spare, 2), Some((Slot::Hip, Some(lantern))));
+        assert_eq!(compare_with(&inventory, spare, 3), Some((Slot::Offhand, Some(held))), "wraps round");
         // Nothing at the hip: the banner says so.
         inventory.take_out(lantern);
-        assert_eq!(compare_with(&inventory, spare, 1), Some((Slot::Hip, None)));
+        assert_eq!(compare_with(&inventory, spare, 2), Some((Slot::Hip, None)));
         // Both ring fingers worn: the first ring, then the second.
         let (ring1, ring2, third) = (inventory.add(roll("Ring")), inventory.add(roll("Ring")), inventory.add(roll("Ring")));
         inventory.wear(ring1, Slot::Ring1).unwrap();

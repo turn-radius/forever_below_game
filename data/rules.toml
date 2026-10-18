@@ -215,3 +215,63 @@ hit_points = 13
 hit_dice = { count = 2, sides = 8, bonus = 4 }
 bite = { count = 1, sides = 6, bonus = 2 }
 venom = { count = 0, sides = 0, bonus = 0 }
+
+# Troll, SRD p. 351: Large, Armor Class 15 (natural armor), Hit Points 84 (8d10 + 40); Multiattack:
+# Bite +7 to hit, 7 (1d6 + 4) piercing, and two Claws +7 to hit, 14 (2d6 + 4) slashing each
+# (the claws are `fb_creatures::troll::CLAW`). Regeneration is `fb_creatures::troll::Regeneration`.
+[creatures."Troll"]
+armour_class = 15
+attack_bonus = 7
+hit_points = 84
+hit_dice = { count = 8, sides = 10, bonus = 40 }
+bite = { count = 1, sides = 6, bonus = 4 }
+venom = { count = 0, sides = 0, bonus = 0 }
+
+# Jackalope, not in the SRD (ours): Small, Armor Class 14, Hit Points 9 (2d6 + 2); Antlers +4 to
+# hit, 5 (1d6 + 2) piercing.
+[creatures."Jackalope"]
+armour_class = 14
+attack_bonus = 4
+hit_points = 9
+hit_dice = { count = 2, sides = 6, bonus = 2 }
+bite = { count = 1, sides = 6, bonus = 2 }
+venom = { count = 0, sides = 0, bonus = 0 }
+
+# Giant Spider, SRD p. 379: Large, Armor Class 14, Hit Points 26 (4d10 + 4); Bite +5 to hit,
+# 7 (1d8 + 3) piercing and 9 (2d8) poison on a failed Constitution save, half on a success.
+[creatures."Giant Spider"]
+armour_class = 14
+attack_bonus = 5
+hit_points = 26
+hit_dice = { count = 4, sides = 10, bonus = 4 }
+bite = { count = 1, sides = 8, bonus = 3 }
+venom = { count = 2, sides = 8, bonus = 0 }
+
+# Giant Centipede, SRD p. 374: Small, Armor Class 13, Hit Points 4 (1d6 + 1); Bite +4 to hit,
+# 4 (1d4 + 2) piercing and 10 (3d6) poison on a failed Constitution save.
+[creatures."Giant Centipede"]
+armour_class = 13
+attack_bonus = 4
+hit_points = 4
+hit_dice = { count = 1, sides = 6, bonus = 1 }
+bite = { count = 1, sides = 4, bonus = 2 }
+venom = { count = 3, sides = 6, bonus = 0 }
+
+# Bat, SRD p. 367: Tiny, Armor Class 12, Hit Points 1 (1d4 - 1); Bite +0 to hit, 1 piercing.
+[creatures."Bat"]
+armour_class = 12
+attack_bonus = 0
+hit_points = 1
+hit_dice = { count = 1, sides = 4, bonus = -1 }
+bite = { count = 0, sides = 0, bonus = 1 }
+venom = { count = 0, sides = 0, bonus = 0 }
+
+# Giant Bat, SRD p. 373: Large, Armor Class 13, Hit Points 22 (4d10); Bite +4 to hit, 5 (1d6 + 2)
+# piercing.
+[creatures."Giant Bat"]
+armour_class = 13
+attack_bonus = 4
+hit_points = 22
+hit_dice = { count = 4, sides = 10, bonus = 0 }
+bite = { count = 1, sides = 6, bonus = 2 }
+venom = { count = 0, sides = 0, bonus = 0 }

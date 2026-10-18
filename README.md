@@ -256,6 +256,7 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[moving]` | `hurry_speed` | 45.0 | Pace with Shift held, in world units per second. |
 | `[moving]` | `acceleration` | 10.0 | How quickly you reach your pace and stop, per second (higher is snappier). |
 | `[moving]` | `body_radius` | 3.5 | Your body's radius on the floor, in world units (3.5 = 35 cm). |
+| `[moving]` | `web_pace` | 0.65 | The share of its pace a walker keeps in a floor web in a spider's nest. Spiders cross webs at full speed. |
 | `[creatures]` | `sense_scale` | 1.0 | How far creatures notice you, as a multiple of their senses. |
 | `[creatures]` | `rat_cooldown` | 1.5 | Seconds between a rat's bites. |
 | `[creatures]` | `snake_cooldown` | 2.5 | Seconds between a snake's strikes. |
@@ -274,6 +275,12 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[creatures.size]` | `viper` | 1.0 | Poisonous snakes, as a multiple. |
 | `[creatures.size]` | `constrictor` | 1.0 | Constrictor snakes, as a multiple. |
 | `[creatures.size]` | `skeleton` | 1.0 | Skeletons, as a multiple. |
+| `[creatures.size]` | `giant_spider` | 1.0 | Giant spiders, as a multiple. |
+| `[creatures.size]` | `troll` | 1.0 | Trolls, as a multiple. |
+| `[creatures.size]` | `jackalope` | 1.0 | Jackalopes, as a multiple. |
+| `[creatures.size]` | `giant_centipede` | 1.0 | Giant centipedes, as a multiple. |
+| `[creatures.size]` | `bat` | 1.0 | Bats, as a multiple. |
+| `[creatures.size]` | `giant_bat` | 1.0 | Giant bats, as a multiple. |
 | `[combat]` | `reach_scale` | 1.0 | How far your blows reach, as a multiple of the weapon's own reach. |
 | `[combat]` | `hit_cone_degrees` | 50.0 | Half the angle of the cone ahead a blow can land in, in degrees either side of the crosshair. |
 | `[combat]` | `flash_hold` | 0.12 | Seconds a struck creature's flash holds at full. |

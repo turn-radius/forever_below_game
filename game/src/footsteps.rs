@@ -49,6 +49,10 @@ const STEP_GAIN: f32 = 0.35;
 /// (scale 0.1, so a rat 20 units away is 2 m off and plays at a quarter of this), which keeps a
 /// rat's step quieter than the delver's own but present at a few metres.
 const CREATURE_STEP_SHARE: f32 = 0.7;
+/// A centipede's patter: world units per step as a share of its radius, and how loud against a
+/// rat's step. Our own.
+const CENTIPEDE_PATTER: f32 = 0.2;
+const CENTIPEDE_SOFTNESS: f32 = 0.5;
 
 /// Per-step random spread of gain (a fraction either way) and playback speed, so repeats of the
 /// same sample do not sound identical.
@@ -172,6 +176,10 @@ fn play_delver_steps(
 /// Add step state to creatures when they become Driven (active in behaviour).
 fn init_creature_steps(mut commands: Commands, new: Query<(Entity, &Critter, &Transform), Added<Driven>>) {
     for (entity, critter, transform) in &new {
+        // What flies makes no footsteps.
+        if critter.spot.species.is_flying() {
+            continue;
+        }
         let rng = Mulberry32::new(critter.spot.seed ^ 0x5733_7570);
         let pos = transform.translation.xz();
         commands.entity(entity).insert((
@@ -189,11 +197,11 @@ fn play_creature_steps(
     game: Res<GameSettings>,
     tuning: Res<Tuning>,
     bones: Option<Res<crate::creatures::skeletons::BoneSounds>>,
-    mut creatures: Query<(&Critter, &Transform, &mut StepState), (With<Driven>, With<WalksWithSteps>, Without<crate::combat::feedback::Corpse>)>,
+    mut creatures: Query<(&Critter, &Transform, &mut StepState, Option<&crate::creatures::trolls::Troll>), (With<Driven>, With<WalksWithSteps>, Without<crate::combat::feedback::Corpse>)>,
 ) {
     const RAT_STRIDE: f32 = 0.5;  // World units per step for rats.
 
-    for (critter, transform, mut state) in &mut creatures {
+    for (critter, transform, mut state, troll) in &mut creatures {
         // Snakes don't make footsteps; they slither.
         if critter.spot.species.is_snake() {
             state.last_pos = Some(transform.translation.xz());
@@ -204,8 +212,14 @@ fn play_creature_steps(
         // its leg); rats make light, quick footsteps. Accumulate distance and step at stride
         // intervals.
         let skeleton = critter.spot.species.is_skeleton();
-        let stride = match (&critter.kit, skeleton) {
-            (Some(kit), true) => 0.7 * (kit.dims.thigh + kit.dims.shin) * critter.size,
+        let stride = match (&critter.kit, &troll, skeleton) {
+            (Some(kit), _, true) => 0.7 * (kit.dims.thigh + kit.dims.shin) * critter.size,
+            // A troll's heavy tread keeps to its own long stride.
+            (_, Some(troll), _) => 0.7 * (troll.dims.thigh + troll.dims.shin) * critter.size,
+            // A spider's eight feet patter: a tick every quarter of its radius.
+            _ if critter.spot.species.is_spider() => 0.25 * critter.creature.radius() * critter.size,
+            // A centipede's many feet patter: a quick tick every tenth of its length.
+            _ if critter.spot.species.is_centipede() => CENTIPEDE_PATTER * critter.creature.radius() * critter.size,
             _ => RAT_STRIDE,
         };
         let current_pos = transform.translation.xz();
@@ -223,12 +237,22 @@ fn play_creature_steps(
             let sample = next_sample(&mut state.rng, old_last);
             state.last_sample = sample;
 
-            // Rats use light steps always, quieter than the delver's; distance fades them.
-            let settings = step_settings(&mut state.rng, STEP_GAIN * CREATURE_STEP_SHARE, effect_volume(&game, &tuning));
+            // Rats use light steps always, quieter than the delver's; distance fades them. A troll's
+            // are the heavy ones, and a little louder.
+            let gain = if troll.is_some() {
+                1.4 * STEP_GAIN * CREATURE_STEP_SHARE
+            } else if critter.spot.species.is_centipede() {
+                // Soft: a patter, quieter than a rat's.
+                CENTIPEDE_SOFTNESS * STEP_GAIN * CREATURE_STEP_SHARE
+            } else {
+                STEP_GAIN * CREATURE_STEP_SHARE
+            };
+            let settings = step_settings(&mut state.rng, gain, effect_volume(&game, &tuning));
 
             let clip = match (&bones, skeleton) {
                 (Some(bones), true) => bones.steps[sample].clone(),
                 (None, true) => continue,
+                _ if troll.is_some() => sounds.heavy[sample].clone(),
                 _ => sounds.light[sample].clone(),
             };
             commands.spawn((
@@ -245,6 +269,21 @@ fn play_creature_steps(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_flies_makes_no_footsteps_and_what_walks_does() {
+        let mut app = App::new();
+        app.add_systems(Update, init_creature_steps);
+        let spot = |species| fb_level::CreatureSpot { x: 1.0, y: 1.0, yaw: 0.0, species, seed: 3, pack: 0 };
+        let mut spawn = |species| {
+            let spot = spot(species);
+            app.world_mut().spawn((Critter::new(spot, spot.creature()), Transform::default(), Driven)).id()
+        };
+        let (bat, giant, rat) = (spawn(fb_creatures::Species::Bat), spawn(fb_creatures::Species::GiantBat), spawn(fb_creatures::Species::Rat));
+        app.update();
+        assert!(!app.world().entity(bat).contains::<WalksWithSteps>() && !app.world().entity(giant).contains::<WalksWithSteps>());
+        assert!(app.world().entity(rat).contains::<WalksWithSteps>());
+    }
 
     #[test]
     fn burden_threshold_is_34_percent() {
@@ -560,5 +599,70 @@ mod tests {
         let heard: Vec<Handle<AudioSource>> = app.world_mut().query::<&AudioPlayer<AudioSource>>().iter(app.world()).map(|p| p.0.clone()).collect();
         assert_eq!(heard.len(), 1, "one step for a stride walked");
         assert!(bone_steps.contains(&heard[0]), "bone, not the delver's or a rat's light step");
+    }
+
+    #[test]
+    fn a_centipede_patters_softer_than_a_rat() {
+        use bevy::state::app::StatesPlugin;
+        use fb_creatures::Species;
+
+        let heard = |species: Species| {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, StatesPlugin)).insert_state(AppState::Delving).init_resource::<GameSettings>().init_resource::<Tuning>().init_resource::<FootstepSounds>();
+            let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species, seed: 42, pack: 0 };
+            let critter = Critter::new(spot, spot.creature());
+            let radius = critter.creature.radius();
+            let id = app
+                .world_mut()
+                .spawn((critter, Driven, Transform::default(), Visibility::default(), StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: Some(Vec2::ZERO) }, WalksWithSteps))
+                .id();
+            app.add_systems(Update, play_creature_steps);
+            app.world_mut().get_mut::<Transform>(id).unwrap().translation = Vec3::new(CENTIPEDE_PATTER * radius * 3.5, 0.0, 0.0);
+            app.update();
+            let mut query = app.world_mut().query::<&PlaybackSettings>();
+            let volumes: Vec<f32> = query.iter(app.world()).map(|p| p.volume.to_linear()).collect();
+            volumes
+        };
+        let patter = heard(Species::GiantCentipede);
+        assert!(!patter.is_empty(), "a centipede on the move patters");
+        let rat = heard(Species::Rat);
+        assert!(patter[0] < rat[0], "softer than a rat's step: {patter:?} against {rat:?}");
+    }
+
+    #[test]
+    fn a_troll_treads_heavy_on_its_own_long_stride() {
+        use bevy::state::app::StatesPlugin;
+        use fb_creatures::Species;
+
+        let handle = |n: u128| Handle::<AudioSource>::Uuid(bevy::asset::uuid::Uuid::from_u128(n), std::marker::PhantomData);
+        let light = [0x10, 0x11, 0x12].map(handle);
+        let heavy = [0x20, 0x21, 0x22].map(handle);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin)).insert_state(AppState::Delving).init_resource::<GameSettings>().init_resource::<Tuning>().insert_resource(FootstepSounds { light: light.clone(), heavy: heavy.clone() });
+        app.add_systems(Update, play_creature_steps);
+        let spawn = |app: &mut App, species: Species| {
+            let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species, seed: 42, pack: 0 };
+            let critter = Critter::new(spot, spot.creature());
+            let mut entity = app.world_mut().spawn((critter.clone(), Driven, Transform::default(), Visibility::default(), StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: Some(Vec2::ZERO) }, WalksWithSteps));
+            if let fb_creatures::Creature::Troll(state) = &critter.creature {
+                entity.insert(crate::creatures::trolls::Troll::new(state));
+            }
+            entity.id()
+        };
+        let troll = spawn(&mut app, Species::Troll);
+        let stride = {
+            let body = app.world().get::<crate::creatures::trolls::Troll>(troll).unwrap();
+            0.7 * (body.dims.thigh + body.dims.shin)
+        };
+        assert!(stride > 2.0, "a troll's stride is long: {stride}");
+        // A rat's half unit is nowhere near a step for it.
+        app.world_mut().get_mut::<Transform>(troll).unwrap().translation = Vec3::new(0.6, 0.0, 0.0);
+        app.update();
+        assert_eq!(app.world_mut().query::<&AudioPlayer>().iter(app.world()).count(), 0, "not yet a stride");
+        app.world_mut().get_mut::<Transform>(troll).unwrap().translation = Vec3::new(stride + 1.0, 0.0, 0.0);
+        app.update();
+        let heard: Vec<(Handle<AudioSource>, f32)> = app.world_mut().query::<(&AudioPlayer<AudioSource>, &PlaybackSettings)>().iter(app.world()).map(|(p, s)| (p.0.clone(), s.volume.to_linear())).collect();
+        assert_eq!(heard.len(), 1, "one tread for a stride walked");
+        assert!(heavy.contains(&heard[0].0), "the heavy tread, not a rat's light one");
     }
 }

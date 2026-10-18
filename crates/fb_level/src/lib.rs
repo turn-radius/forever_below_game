@@ -154,6 +154,8 @@ pub struct Level {
     pub creatures: Vec<CreatureSpot>,
     /// The ways to the levels above and below ([`stairs`]).
     pub stairs: Vec<Stair>,
+    /// Webs hung in the room where giant spiders nest ([`wild`]).
+    pub webs: Vec<WebSpot>,
 }
 
 impl Level {
@@ -267,9 +269,12 @@ pub mod sight;
 pub mod path;
 pub mod props;
 pub mod stairs;
+pub mod webs;
+pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
 pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use generate::{generate, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;
+pub use wild::{WebKind, WebSpot};

@@ -241,7 +241,13 @@ pub struct SkeletonDims {
 
 impl SkeletonDims {
     fn new(state: &SkeletonState) -> SkeletonDims {
-        let body = state.body();
+        SkeletonDims::of(state.body())
+    }
+
+    /// The joints and measures of `body`, laid out as a skeleton's: the walk and swing poses
+    /// ([`crate::pose::skeleton_with`]) read these, so a creature built on a human's joints (a
+    /// troll's, [`crate::troll`]) takes them and moves the joints it changes.
+    pub fn of(body: Body) -> SkeletonDims {
         let arm_of = |s: Side| body.arm(s).joints;
         let leg_of = |s: Side| body.leg(s).joints;
         let arms = [arm_of(Side::Right), arm_of(Side::Left)];
