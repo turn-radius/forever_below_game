@@ -24,7 +24,7 @@ use armory::{
         food::{Food, FoodStyle},
     },
 };
-use bevy::{camera::{Exposure, visibility::VisibilityRange}, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
+use bevy::{camera::{Exposure, ShadowLodOrigin, visibility::{RenderLayers, VisibilityRange}}, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
 use fb_level::{CELL, LightKind, StairKind};
 
 use crate::capture::FrameCapturePlugin;
@@ -54,7 +54,9 @@ impl Plugin for LevelPlugin {
             )
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
-            .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames, limit_far_parts).in_set(DelveSystems))
+            .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames).in_set(DelveSystems))
+            // After the render layers have propagated down, which `Update` does.
+            .add_systems(PostUpdate, limit_far_parts.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
             .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
     }
 }
@@ -169,18 +171,54 @@ fn draw_range(light: &LightTuning) -> VisibilityRange {
     VisibilityRange { use_aabb: true, ..VisibilityRange::abrupt(0.0, draw_end(light)) }
 }
 
-/// A part just spawned, with no draw range yet.
-type NewPart = (Or<(Added<ArmoryPart>, Added<InkOutline>)>, Without<VisibilityRange>);
+/// A part of the level's world: not drawn by a camera of its own (an inventory icon, the doll
+/// or the held item's stage), which a part's [`RenderLayers`] tell once they have propagated
+/// down to it.
+type WorldPart = (Or<(With<ArmoryPart>, With<InkOutline>)>, Without<RenderLayers>);
 
-/// Gives each new part of a prop, item, creature or folk a [`draw_range`], so a camera does not
-/// queue what the fog hides. The level's own stone is left to the camera's far plane, and the
-/// view from above (`FB_DEBUG_CAMERA=top`) looks from further than the fog and draws all.
-fn limit_far_parts(mut commands: Commands, tuning: Res<Tuning>, parts: Query<Entity, NewPart>, debug: Query<&DebugCamera>) {
-    if debug.iter().any(|d| !d.fog) {
-        return;
+/// Bevy tracks the draw ranges of only the first 32 cameras (`check_visibility_ranges` takes 32),
+/// and culls a ranged thing for any view past them.
+const RANGED_VIEWS: usize = 32;
+
+/// Gives each part of a prop, item, creature or folk in the world a [`draw_range`], so a camera
+/// does not queue what the fog hides. The level's own stone is left to the camera's far plane.
+/// It leaves out:
+/// - the parts drawn by other cameras (icons, the doll, the held item), by their render layers.
+///   Those arrive a frame after a part does, so a part is given its range a frame after it
+///   appears;
+/// - everything while the view from above (`FB_DEBUG_CAMERA=top`), which looks from further
+///   than the fog, is up;
+/// - everything while there are more cameras than Bevy tracks ranges for (a full inventory
+///   makes up to 64 icon cameras), so the player's view is never one of those that culls them.
+fn limit_far_parts(
+    mut commands: Commands,
+    tuning: Res<Tuning>,
+    new: Query<Entity, Or<(Added<ArmoryPart>, Added<InkOutline>)>>,
+    parts: Query<(Entity, Has<VisibilityRange>), WorldPart>,
+    views: Query<(), Or<(With<Camera>, With<ShadowLodOrigin>)>>,
+    debug: Query<&DebugCamera>,
+    mut waiting: Local<Vec<Entity>>,
+    mut limiting: Local<bool>,
+) {
+    let limit = views.iter().count() <= RANGED_VIEWS && debug.iter().all(|d| d.fog);
+    let due = std::mem::take(&mut *waiting);
+    waiting.extend(new.iter());
+    if limit != *limiting {
+        *limiting = limit;
+        for (part, ranged) in &parts {
+            if limit && !ranged && !waiting.contains(&part) && !due.contains(&part) {
+                commands.entity(part).insert(draw_range(&tuning.light));
+            } else if !limit && ranged {
+                commands.entity(part).remove::<VisibilityRange>();
+            }
+        }
     }
-    for part in &parts {
-        commands.entity(part).insert(draw_range(&tuning.light));
+    if limit {
+        for part in due {
+            if let Ok((part, false)) = parts.get(part) {
+                commands.entity(part).insert(draw_range(&tuning.light));
+            }
+        }
     }
 }
 
@@ -692,10 +730,45 @@ mod tests {
         (app, part)
     }
 
+    /// Frames enough for a part's range to be given.
+    fn settle(app: &mut App) {
+        for _ in 0..3 {
+            app.update();
+        }
+    }
+
+    #[test]
+    fn parts_on_another_cameras_layer_get_no_range() {
+        // An icon, the doll or the held item, whose layer reaches the part a frame after it
+        // appears, as `Propagate<RenderLayers>` does.
+        for layer in [crate::inventory::icon::ICON_LAYER, crate::inventory::doll::DOLL_LAYER, crate::carry::VIEW_MODEL_LAYER] {
+            let (mut app, part) = limiting();
+            app.update();
+            app.world_mut().entity_mut(part).insert(RenderLayers::layer(layer));
+            settle(&mut app);
+            assert!(app.world().get::<VisibilityRange>(part).is_none(), "layer {layer}");
+        }
+    }
+
+    #[test]
+    fn a_crowd_of_cameras_leaves_every_part_unranged_and_the_world_gets_it_back() {
+        let (mut app, part) = limiting();
+        settle(&mut app);
+        assert!(app.world().get::<VisibilityRange>(part).is_some());
+        let cameras: Vec<Entity> = (0..RANGED_VIEWS + 1).map(|_| app.world_mut().spawn(Camera::default()).id()).collect();
+        settle(&mut app);
+        assert!(app.world().get::<VisibilityRange>(part).is_none());
+        for camera in cameras {
+            app.world_mut().entity_mut(camera).despawn();
+        }
+        settle(&mut app);
+        assert!(app.world().get::<VisibilityRange>(part).is_some());
+    }
+
     #[test]
     fn a_new_part_is_drawn_out_to_the_fogs_end_and_a_margin() {
         let (mut app, part) = limiting();
-        app.update();
+        settle(&mut app);
         let range = app.world().get::<VisibilityRange>(part).expect("the part has a range").clone();
         let fog_end = app.world().resource::<Tuning>().light.fog_end;
         assert!(range.is_visible_at_all(fog_end), "a part at the fog's end is drawn");
@@ -708,7 +781,7 @@ mod tests {
         let (mut app, part) = limiting();
         app.add_systems(Update, apply_light_tuning.after(limit_far_parts));
         app.init_resource::<GlobalAmbientLight>();
-        app.update();
+        settle(&mut app);
         app.world_mut().resource_mut::<Tuning>().light.fog_end = 100.0;
         app.update();
         let range = app.world().get::<VisibilityRange>(part).unwrap();
@@ -720,7 +793,7 @@ mod tests {
     fn the_view_from_above_draws_every_part() {
         let (mut app, part) = limiting();
         app.world_mut().spawn(DebugCamera { walk_in: false, fog: false });
-        app.update();
+        settle(&mut app);
         assert!(app.world().get::<VisibilityRange>(part).is_none());
     }
 
