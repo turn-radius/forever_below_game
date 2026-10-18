@@ -29,7 +29,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::apply_decay;
+import super::decay::{apply_decay, apply_moss};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -379,7 +379,7 @@ fn fragment(
         toon.decay_scale,
         toon.decay_seed,
     );
-    let base = apply_decay(
+    var base = apply_decay(
         etched,
         item_position,
         pixel,
@@ -388,6 +388,11 @@ fn fragment(
         toon.decay_scale,
         toon.decay_seed,
     );
+    // Moss grows over the level's stone, which carries it per vertex (not skinned: folk keep
+    // their rest normals in that slot). Stone sits at the world origin, so item space is world space.
+@if(VERTEX_UVS_B && !SKINNED) {
+    base = apply_moss(base, item_position, item_normal, pixel, vertex_output.uv_b.x, toon.decay_seed);
+}
 
     // A flame (premultiplied) is coloured by its vertices, by height (`flame_colour`), and here
     // reddens toward its silhouette in three steps, so its edges read deep red-orange and its

@@ -226,3 +226,34 @@ fn apply_decay(
     }
     return c;
 }
+
+// Moss over stone (ours; greener and brighter than the plain 0x3f4f24 to 0x6f7f3a, since a warm
+// torch takes the green out of what it lights) where `moss` (0..1, carried per vertex) is above zero: thickest on
+// up-facing surfaces and the lower walls (about the first 1.2 m), flecked higher up and on
+// ceilings, in patches of band-limited noise, deep to light green with fine speckle. The bare
+// stone between the patches turns a little greener grey. `position` is in world units of 10 cm.
+// Moss at zero leaves the colour alone.
+fn apply_moss(color: vec3<f32>, position: vec3<f32>, normal: vec3<f32>, pixel: f32, moss: f32, seed: f32) -> vec3<f32> {
+    if moss <= 0.0 {
+        return color;
+    }
+    let c = mix(color, color * vec3(0.9, 1.0, 0.86), clamp(moss, 0.0, 1.0) * 0.6);
+    let up = smoothstep(0.3, 0.85, normal.y);
+    let low = 1.0 - smoothstep(6.0, 14.0, position.y);
+    let down = smoothstep(0.3, 0.85, -normal.y);
+    let reach = mix(0.14 + 0.8 * max(up, low), 0.06, down);
+    let coverage = clamp(moss * reach * 1.15, 0.0, 0.97);
+
+    let k = 0.16;
+    let p = position * k + vec3(seed * 0.7);
+    let cell = pixel * k;
+    let field = patch_field(fbm(p, cell), fbm(p * 3.1 + vec3(2.9), cell * 3.1));
+    let mask = patches(field, coverage, 0.45);
+
+    let tuft = smoothstep(0.42, 0.58, fbm(p * 2.4 + vec3(6.1), cell * 2.4));
+    let speckle = filtered_noise(position * 1.1 + vec3(seed), pixel * 1.1);
+    let deep = vec3(0.15, 0.42, 0.1);
+    let light = vec3(0.42, 0.82, 0.14);
+    let green = mix(deep, light, clamp(tuft * 0.8 + (speckle - 0.5) * 0.9 + 0.1, 0.0, 1.0));
+    return mix(c, green, mask * 0.92);
+}

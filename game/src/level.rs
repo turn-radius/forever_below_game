@@ -17,7 +17,7 @@ pub mod geometry;
 pub mod stairs;
 
 use armory::{
-    ItemMesh, Rgb,
+    ItemMesh, MaterialKind, Rgb,
     cond::{Condition, ConditionState},
     families::{
         Generator,
@@ -464,13 +464,21 @@ fn spawn_columns(
         return;
     }
     let stone = stone_appearance(level.seed);
+    let finishes = geometry::level_finishes(level);
     let ink = outline_materials.add(stone.outline);
-    let mut shapes: std::collections::HashMap<(i32, i32, u32), Vec<(&'static str, Handle<Mesh>, Handle<ToonMaterial>, bool)>> = Default::default();
+    let mut shapes: std::collections::HashMap<(i32, i32, u32, u32), Vec<(&'static str, Handle<Mesh>, Handle<ToonMaterial>, bool)>> = Default::default();
     // One material for every shape's part of a name: they differ only in their meshes.
     let mut materials: std::collections::HashMap<&'static str, Handle<ToonMaterial>> = Default::default();
     for spot in spots {
-        let parts = shapes.entry((spot.seat as i32, spot.top as i32, spot.variant)).or_insert_with(|| {
-            geometry::stone::column(spot.seat, spot.top, spot.variant, level.seed)
+        // A column is one moss all over, in quarters, so columns of a shape still share a mesh.
+        let [cx, _, cz] = geometry::cell_centre(spot.cell.0, spot.cell.1);
+        let moss = (finishes.moss_at(cx, cz) * 4.0).round() as u32;
+        let parts = shapes.entry((spot.seat as i32, spot.top as i32, spot.variant, moss)).or_insert_with(|| {
+            let mut column = geometry::stone::column(spot.seat, spot.top, spot.variant, level.seed);
+            for part in &mut column.parts {
+                part.uvs_b = vec![[moss as f32 / 4.0, 0.0]; part.positions.len()];
+            }
+            column
                 .parts
                 .iter()
                 .map(|part| {
@@ -553,16 +561,28 @@ impl FixtureShapes {
     pub fn make(level: &Level) -> Self {
         let view = CellView::new(level);
         let entrance = (level.entrance.x as i32, level.entrance.y as i32);
-        let finishes = fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
         let doors = geometry::doorways(&view)
             .into_iter()
             .map(|doorway| {
                 let seed = door_seed(level, &doorway);
-                let style = finishes.door_style(doorway.x, doorway.y).unwrap_or(fb_level::DoorStyle::Timber);
-                let frame = match level.style {
+                let style = view.finishes().door_style(doorway.x, doorway.y).unwrap_or(fb_level::DoorStyle::Timber);
+                let mut frame = match level.style {
                     LevelStyle::RoughRock => geometry::door_frame(level.ceiling, style, seed),
                     LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), style, seed),
                 };
+                // The masonry round the frame grows moss as the wall beside it does; the timber does not.
+                let [across, up, through] = doorway.basis();
+                let centre = geometry::cell_centre(doorway.x, doorway.y);
+                for part in frame.parts.iter_mut().filter(|p| p.material == Some(MaterialKind::Stone)) {
+                    part.uvs_b = part
+                        .positions
+                        .iter()
+                        .map(|p| {
+                            let world = [0, 1, 2].map(|k| centre[k] + across[k] * p[0] + up[k] * p[1] + through[k] * p[2]);
+                            [view.finishes().moss_at(world[0], world[2]), 0.0]
+                        })
+                        .collect();
+                }
                 let leaf = ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
                 (doorway, frame, leaf)
             })
@@ -850,6 +870,42 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let from = at + v3(geometry::facing_vector(side)) * CELL * 1.4 + eye;
             Transform::from_translation(from).looking_at(at + Vec3::Y * 4.0, Vec3::Y)
         }
+        "moss" | "rock" | "rock-far" | "strata" => {
+            let finishes = geometry::level_finishes(level);
+            let (back, wanted): (f32, Box<dyn Fn(i32, i32) -> f32>) = match mode.as_str() {
+                // Where the moss is thickest, a few steps off, taking in floor and wall foot.
+                "moss" => (CELL * 1.6, Box::new(|x, y| finishes.moss_at((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL))),
+                "strata" => (CELL * 1.0, Box::new(|x, y| finishes.at(x, y).map_or(0.0, |f| (f.walls == fb_level::WallFinish::Strata) as u32 as f32))),
+                // Close under the torch, or from across the level.
+                _ => (if mode == "rock" { CELL } else { CELL * 10.0 }, Box::new(|x, y| finishes.at(x, y).map_or(0.0, |f| (f.walls == fb_level::WallFinish::Rock) as u32 as f32))),
+            };
+            // A wall seen from an open run of cells: the best score, then the longest run.
+            let mut best: Option<(f32, i32, i32, fb_level::Facing)> = None;
+            for y in 0..level.height as i32 {
+                for x in 0..level.width as i32 {
+                    for facing in [fb_level::Facing::North, fb_level::Facing::East, fb_level::Facing::South, fb_level::Facing::West] {
+                        let (dx, dy) = facing.step();
+                        if !level.is_open(x, y) || level.is_open(x + dx, y + dy) {
+                            continue;
+                        }
+                        let run = (1..=12).take_while(|k| level.is_open(x - dx * k, y - dy * k)).count() as f32;
+                        let score = wanted(x, y) * 100.0 + run.min(back / CELL);
+                        if best.is_none_or(|(b, ..)| score > b) {
+                            best = Some((score, x, y, facing));
+                        }
+                    }
+                }
+            }
+            let Some((_, x, y, facing)) = best else { return };
+            let (dx, dy) = facing.step();
+            let run = (1..=12).take_while(|k| level.is_open(x - dx * k, y - dy * k)).count() as f32;
+            let d = v3(geometry::facing_vector(facing));
+            let wall = v3(geometry::cell_centre(x, y)) + d * CELL * 0.5;
+            let stand = (back).min(run * CELL + CELL * 0.5 - 2.0);
+            let drop = if mode == "moss" { 12.0 } else { 1.0 };
+            let from = wall - d * stand + eye;
+            Transform::from_translation(from).looking_at(wall + Vec3::Y * (EYE_HEIGHT - drop), Vec3::Y)
+        }
         _ => Transform::from_translation(start + eye).looking_to(inward, Vec3::Y),
     };
     commands
@@ -862,10 +918,17 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             Tonemapping::Linear,
             transform,
         ))
-        // Something to see by until the player brings a torch.
+        // Something to see by until the player brings a torch; `FB_DEBUG_LIGHT=cool` swaps its
+        // warmth for a neutral light, to judge colours the torch's orange would hide.
         .with_child((
-            // A corridor's arches stand further apart than the usual light reaches.
-            if mode == "corridor" { Torch::light(2.5, 260.0, &EXPOSURE) } else { Torch::light(1.0, 120.0, &EXPOSURE) },
+            if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "cool") {
+                Torch::flickering(point_light(Color::srgb(0.85, 0.95, 1.0), 1.0, 120.0, &EXPOSURE), 0.0)
+            } else if mode == "corridor" {
+                // A corridor's arches stand further apart than the usual light reaches.
+                Torch::light(2.5, 260.0, &EXPOSURE)
+            } else {
+                Torch::light(1.0, 120.0, &EXPOSURE)
+            },
             Transform::from_xyz(4.0, -3.0, 2.0),
         ));
     if mode == "top" {

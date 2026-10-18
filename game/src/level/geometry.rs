@@ -19,7 +19,10 @@ use armory::{
         torus, tube, value_noise3, vec3,
     },
 };
-use fb_level::{CELL, Cell, DoorStyle, Facing, Level, LevelStyle};
+use fb_level::{
+    CELL, Cell, DoorStyle, Facing, Level, LevelParams, LevelStyle,
+    finish::{Finishes, finishes},
+};
 use procgen_rng::Mulberry32;
 
 pub mod arch;
@@ -73,11 +76,17 @@ pub const CEILING_STONE: Rgb = Rgb::hex(0x5c5e5c);
 pub struct CellView<'a> {
     level: &'a Level,
     passage: Vec<(i32, i32)>,
+    finishes: Finishes,
 }
 
 impl<'a> CellView<'a> {
     pub fn new(level: &'a Level) -> Self {
-        CellView { level, passage: entrance_passage(level) }
+        CellView { level, passage: entrance_passage(level), finishes: level_finishes(level) }
+    }
+
+    /// What each room's and corridor's stone is finished with, and how damp it is.
+    pub fn finishes(&self) -> &Finishes {
+        &self.finishes
     }
 
     pub fn level(&self) -> &Level {
@@ -105,6 +114,17 @@ impl<'a> CellView<'a> {
         }
         (x0, y0, x1, y1)
     }
+}
+
+/// The finishes of `level` at its style's default odds: the levels carry no odds of their own.
+pub fn level_finishes(level: &Level) -> Finishes {
+    finishes(level, &LevelParams::for_style(level.style))
+}
+
+/// Sets each vertex's moss, the finish's smooth value at its world position, in the part's
+/// second channel (`Part::uvs_b`), for the toon shader to paint over the stone.
+pub fn bake_moss(part: &mut Part, finishes: &Finishes) {
+    part.uvs_b = part.positions.iter().map(|p| [finishes.moss_at(p[0], p[2]), 0.0]).collect();
 }
 
 /// The cells behind the entrance to carve, nearest first: straight outward, stopping before
@@ -338,6 +358,7 @@ pub fn level_mesh(view: &CellView, range: (i32, i32, i32, i32)) -> LevelMesh {
     let enclosure = occlusion::Enclosure::new(view, range);
     for part in &mut mesh.surfaces.parts {
         enclosure.bake(part);
+        bake_moss(part, view.finishes());
     }
     mesh
 }
@@ -948,6 +969,27 @@ mod tests {
             let frame = door_frame(level.ceiling, DoorStyle::Timber, level.seed);
             let seen = (hash_parts(mesh.surfaces.parts.iter().chain([&mesh.ink])), hash_parts(&frame.parts));
             assert_eq!(seen, expected, "rough rock changed for seed {seed}");
+        }
+    }
+
+    #[test]
+    fn stone_vertices_carry_the_finishes_moss() {
+        // Both styles: rough rock at depth 1, stone halls at depth 2.
+        for depth in [1, 2] {
+            let level = fb_level::generate(1207, depth);
+            let view = CellView::new(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            let mut damp = 0;
+            for part in &mesh.surfaces.parts {
+                assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
+                assert!(part.validate().is_ok());
+                for (p, uv) in part.positions.iter().zip(&part.uvs_b) {
+                    assert_eq!(uv[0], view.finishes().moss_at(p[0], p[2]));
+                    assert!((0.0..=1.0).contains(&uv[0]));
+                    damp += (uv[0] > 0.2) as usize;
+                }
+            }
+            assert!(damp > 0, "no moss anywhere at depth {depth}");
         }
     }
 
