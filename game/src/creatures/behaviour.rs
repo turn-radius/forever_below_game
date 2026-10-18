@@ -167,6 +167,11 @@ pub struct Brain {
     repath: f32,
     /// How long it has made no headway toward a wander target.
     stuck: f32,
+    /// A fleeing jackalope's goal cell, and the seconds until it picks again ([`flee_goal`]).
+    flee: Option<(i32, i32)>,
+    flee_in: f32,
+    /// Whether it found nowhere farther to run to.
+    cornered: bool,
     rng: Mulberry32,
 }
 
@@ -205,6 +210,68 @@ const SCUTTLE_SHARE: f32 = 0.4;
 pub fn scuttling(t: f32, seed: u32) -> bool {
     ((t + (seed % 97) as f32 * 0.07) / SCUTTLE_PERIOD).fract() < SCUTTLE_SHARE
 }
+/// A jackalope bolts at this multiple of its walking speed once it has noticed the delver, and
+/// gores only when cornered: pinned against rock or a prop with the delver in reach. Our own.
+const JACKALOPE_BOLT: f32 = 1.5;
+/// How long it keeps a place to flee to before choosing again, seconds, and how long it must
+/// have made no headway before it counts as cornered.
+const FLEE_REPLAN: f32 = 0.75;
+const CORNERED_AFTER: f32 = 0.25;
+/// How far a fleeing jackalope looks for somewhere to run to, cells either way.
+const FLEE_RADIUS: i32 = 28;
+/// A jackalope's gore: it lands this far into the lunge, which takes this long, and the wait
+/// between gores, seconds. Our own.
+const GORE_LANDS: f32 = 0.18;
+const GORE_TIME: f32 = 0.5;
+const JACKALOPE_COOLDOWN: f32 = 1.4;
+/// A standing jackalope sits up for this share of each period, seconds. Our own.
+const SIT_PERIOD: f32 = 13.0;
+const SIT_SHARE: f32 = 0.35;
+
+/// Whether a standing jackalope with `seed` is sat up on its haunches at `t` seconds (its ears
+/// turning) rather than on all fours: each has its own timing.
+pub fn sitting_up(t: f32, seed: u32) -> bool {
+    ((t + (seed % 89) as f32 * 0.37) / SIT_PERIOD).fract() < SIT_SHARE
+}
+
+/// Steps from `start` to every cell within [`FLEE_RADIUS`] of it that can be walked (four ways
+/// at a time).
+fn steps_from(start: (i32, i32), blocked: &impl Fn(i32, i32) -> bool) -> std::collections::HashMap<(i32, i32), u32> {
+    let mut steps = std::collections::HashMap::from([(start, 0)]);
+    let mut frontier = std::collections::VecDeque::from([start]);
+    while let Some(at) = frontier.pop_front() {
+        let next_steps = steps[&at] + 1;
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let next = (at.0 + dx, at.1 + dy);
+            if (next.0 - start.0).abs() > FLEE_RADIUS || (next.1 - start.1).abs() > FLEE_RADIUS || blocked(next.0, next.1) || steps.contains_key(&next) {
+                continue;
+            }
+            steps.insert(next, next_steps);
+            frontier.push_back(next);
+        }
+    }
+    steps
+}
+
+/// Where a creature at cell `from` runs to, away from the delver at cell `threat`: the cell
+/// farthest from the delver by the way they would walk, of those it can reach no later than they can
+/// (so its way never passes them). With a way on past a door or a prop that is somewhere
+/// through it, not the corner of the room it is in. `None` when nowhere it can reach is farther
+/// from them than it is: it is cornered.
+pub fn flee_goal(from: (i32, i32), threat: (i32, i32), blocked: impl Fn(i32, i32) -> bool) -> Option<(i32, i32)> {
+    let (mine, theirs) = (steps_from(from, &blocked), steps_from(threat, &blocked));
+    // Cells the delver's search never got to are far indeed.
+    let far = 4 * FLEE_RADIUS as u32;
+    let by_them = |cell: &(i32, i32)| theirs.get(cell).copied().unwrap_or(far);
+    let here = by_them(&from);
+    mine.iter()
+        .filter(|(cell, steps)| **steps <= by_them(cell))
+        .map(|(&cell, &steps)| (by_them(&cell), std::cmp::Reverse(steps), cell))
+        .max()
+        .filter(|(farthest, ..)| *farthest > here)
+        .map(|(.., cell)| cell)
+}
+
 /// How far past its own body a bat darts to bite, world units. Our own.
 const BAT_DART: f32 = 2.0;
 /// How fast a bat and a giant bat turn, radians a second: the giant is slower. Our own.
@@ -338,6 +405,9 @@ pub fn brain_for(level: &Level, critter: &Critter, at: Vec2) -> Brain {
         goal: cell(at),
         repath: 0.0,
         stuck: 0.0,
+        flee: None,
+        flee_in: 0.0,
+        cornered: false,
         rng,
     }
 }
@@ -406,12 +476,17 @@ fn behave(
             }
             (Mode::Chase { last_seen, lost }, None) => {
                 *lost += dt;
-                let there = last_seen.distance(at) < reach(critter, player_radius) + CELL * 0.25;
+                // A jackalope has nothing to go back to: it stops running once it has lost them.
+                let there = species.is_jackalope() || last_seen.distance(at) < reach(critter, player_radius) + CELL * 0.25;
                 if (*lost > LOSE_AFTER && there) || *lost > 3.0 * LOSE_AFTER {
                     brain.mode = Mode::Wander { target: None, wait: brain.rng.range_f32(0.5, 2.0) };
                 }
             }
-            (Mode::Wander { .. }, Some(p)) => brain.mode = Mode::Chase { last_seen: p, lost: 0.0 },
+            (Mode::Wander { .. }, Some(p)) => {
+                brain.mode = Mode::Chase { last_seen: p, lost: 0.0 };
+                brain.stuck = 0.0;
+                brain.flee_in = 0.0;
+            }
             (Mode::Wander { .. }, None) => {}
         }
         // A bat gets going the moment it notices the delver, and goes back to its spot when it
@@ -484,13 +559,34 @@ fn behave(
                 let goal = sees.unwrap_or(*last_seen);
                 face = Some(goal);
                 let in_reach = player.is_some_and(|p| p.distance(at) <= reach(critter, player_radius)) && sees.is_some();
-                if !in_reach && brain.attack.is_none() {
+                // A jackalope runs from the delver to the farthest place it can reach first, and
+                // turns on them only when it can run no farther.
+                let mut strikes = in_reach;
+                if species.is_jackalope() {
+                    brain.flee_in -= dt;
+                    if brain.flee_in <= 0.0 || brain.flee.is_some_and(|goal| goal == cell(at)) {
+                        brain.flee = flee_goal(cell(at), cell(goal), &blocked);
+                        brain.flee_in = FLEE_REPLAN;
+                        brain.cornered = brain.flee.is_none();
+                    }
+                    strikes = in_reach && (brain.cornered || brain.stuck > CORNERED_AFTER);
+                    if !strikes && brain.attack.is_none() {
+                        if let Some((x, y)) = brain.flee {
+                            heading = Some((Vec2::new(x as f32, y as f32) + Vec2::splat(0.5)) * CELL);
+                            speed = species.speed() * JACKALOPE_BOLT;
+                        }
+                    }
+                    // Running, it looks where it goes; cornered, it faces the delver.
+                    if !strikes {
+                        face = None;
+                    }
+                } else if !in_reach && brain.attack.is_none() {
                     heading = Some(goal);
                     speed = species.speed() * if snake { tune.snake_chase_speed } else if species.is_skeleton() || species.is_troll() { 1.0 } else if species.is_spider() { SPIDER_CHASE } else if species.is_centipede() { CENTIPEDE_CHASE } else { tune.rat_chase_speed };
                 }
                 // A bat bites only swooping at the delver's head.
                 let at_height = flight.as_deref().is_none_or(|f| f.phase == Wing::Swooping && (f.altitude - EYE_HEIGHT).abs() <= BITE_BAND);
-                if in_reach && at_height && brain.attack.is_none() && brain.cooldown <= 0.0 && !attacks.delver_is_down() {
+                if strikes && at_height && brain.attack.is_none() && brain.cooldown <= 0.0 && !attacks.delver_is_down() {
                     brain.attack = Some(0.0);
                     brain.bitten = false;
                     // The cue sounds from the creature as the lunge or rear begins, before the bite.
@@ -610,6 +706,10 @@ fn behave(
             intent.rear = if chasing { 1.0 } else { 0.3 + 0.35 * (0.5 + 0.5 * (t * 0.35 + critter.spot.seed as f32).sin()) };
             intent.tongue = tongue_flick(t + (critter.spot.seed % 97) as f32 * 0.1);
         }
+        if species.is_jackalope() && speed == 0.0 && !chasing {
+            // Standing, it sometimes sits up with its ears turning.
+            intent.rear = if sitting_up(t, critter.spot.seed) { 1.0 } else { 0.0 };
+        }
         if species.is_centipede() {
             // Its front lifts a little as it comes on.
             intent.rear = if chasing { 0.3 } else { 0.0 };
@@ -624,6 +724,7 @@ fn behave(
                 None if species.is_troll() => (TROLL_LANDS * TROLL_SWING, TROLL_SWING),
                 None if snake => (STRIKE_WINDUP + STRIKE_THROW, STRIKE_TIME),
                 None if species.is_spider() => (SPIDER_WINDUP + SPIDER_STAB, SPIDER_TIME),
+                None if species.is_jackalope() => (GORE_LANDS, GORE_TIME),
                 None => (BITE_LANDS, BITE_TIME),
             };
             if let Some(time) = swing_time {
@@ -641,6 +742,9 @@ fn behave(
                 // Reared on its back legs, then the stab.
                 intent.rear = 1.0;
                 intent.strike = if (SPIDER_WINDUP..SPIDER_WINDUP + 0.35).contains(&since) { 1.0 } else { 0.0 };
+            } else if species.is_jackalope() {
+                // Head down, antlers ahead, thrown forward.
+                intent.strike = if since < GORE_TIME * 0.7 { 1.0 } else { 0.0 };
             } else {
                 intent.strike = if since < BITE_TIME * 0.6 { 1.0 } else { 0.0 };
             }
@@ -697,6 +801,8 @@ fn behave(
                     TROLL_COOLDOWN
                 } else if species.is_centipede() {
                     CENTIPEDE_COOLDOWN
+                } else if species.is_jackalope() {
+                    JACKALOPE_COOLDOWN
                 } else {
                     tune.rat_cooldown
                 };
@@ -1246,6 +1352,121 @@ mod tests {
         }
         assert!(!bites.is_empty(), "the centipede never bit");
         assert!(bites.iter().all(|b| b.species == Some(Species::GiantCentipede) && (3..=18).contains(&b.poison) && (3..=6).contains(&b.damage)), "{bites:?}");
+    }
+
+    /// Walks `player` toward `to` at `pace` world units a second for one frame.
+    fn walk_toward(app: &mut App, player: Entity, to: Vec2, pace: f32) {
+        let mut t = app.world_mut().get_mut::<Transform>(player).unwrap();
+        let at = t.translation.xz();
+        let step = (to - at).normalize_or_zero() * pace / 60.0;
+        t.translation += Vec3::new(step.x, 0.0, step.y);
+    }
+
+    #[test]
+    fn a_jackalope_moves_away_from_a_delver_walking_toward_it_and_does_not_gore() {
+        let (level, middle, half) = big_room();
+        let start = middle + Vec2::X * half;
+        let (mut app, jackalope, player) = solo_app(Species::Jackalope, 5, &level, middle, start);
+        let (mut gored, mut closest) = (false, f32::MAX);
+        let mut gaps = Vec::new();
+        for frame in 0..(60 * 6) {
+            let here = position(&app, jackalope);
+            walk_toward(&mut app, player, here, 12.0);
+            app.update();
+            gored |= !attacks(&mut app).is_empty() || app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count() > 0;
+            let gap = position(&app, jackalope).distance(position(&app, player));
+            closest = closest.min(gap);
+            if frame % 60 == 59 {
+                gaps.push(gap);
+            }
+        }
+        assert!(!gored, "it gored a delver it could run from");
+        // The delver walks at 12 a second and the jackalope bolts at 1.5 times its 25: the gap
+        // opens in the first seconds, while there is floor to run over.
+        assert!(gaps[1] > gaps[0] || gaps[2] > gaps[0], "the gap never opened: {gaps:?}");
+        assert!(closest > 0.5 * half, "it let the delver within {closest} of it");
+    }
+
+    /// A jackalope in a pocket of one cell, its neighbours blocked, with the delver in reach of it
+    /// (`pocket`), or the same with the room open round it.
+    fn gores(pocket: bool) -> bool {
+        let (level, middle, _) = big_room();
+        let cell_at = (middle / CELL).floor();
+        let at = (cell_at + Vec2::splat(0.5)) * CELL;
+        let reaches = {
+            let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species: Species::Jackalope, seed: 5, pack: 0 };
+            reach(&Critter::new(spot, spot.creature()), BODY_RADIUS)
+        };
+        let player_at = at + Vec2::X * 0.8 * reaches;
+        let (mut app, _, _) = solo_app(Species::Jackalope, 5, &level, at, player_at);
+        if pocket {
+            let mut blocked = app.world_mut().resource_mut::<BlockedCells>();
+            for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                blocked.0.insert((cell_at.x as i32 + dx, cell_at.y as i32 + dy));
+            }
+        }
+        let mut gored = false;
+        for _ in 0..(60 * 4) {
+            app.update();
+            gored |= attacks(&mut app).iter().any(|a| a.species == Some(Species::Jackalope)) || app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count() > 0;
+        }
+        gored
+    }
+
+    #[test]
+    fn a_jackalope_gores_only_when_it_is_cornered_within_reach() {
+        assert!(gores(true), "cornered with the delver in reach, it gores");
+        assert!(!gores(false), "in the open, it runs instead");
+    }
+
+    #[test]
+    fn a_fleeing_jackalopes_hops_show_in_its_pose_and_a_standing_ones_sit_up() {
+        let (level, middle, half) = big_room();
+        let body = |app: &App, jackalope: Entity| {
+            let bones = app.world().get::<crate::creatures::Bones>(jackalope).unwrap();
+            app.world().get::<Transform>(bones.0[fb_creatures::jackalope::bone::BODY]).unwrap().translation.y
+        };
+        let (mut app, jackalope, player) = solo_app(Species::Jackalope, 5, &level, middle, middle + Vec2::X * half);
+        let Creature::Jackalope(state) = app.world().get::<Critter>(jackalope).unwrap().creature.clone() else { unreachable!() };
+        let (mut low, mut high) = (f32::MAX, f32::MIN);
+        for frame in 0..(60 * 3) {
+            let here = position(&app, jackalope);
+            walk_toward(&mut app, player, here, 5.0);
+            app.update();
+            if frame > 30 {
+                let y = body(&app, jackalope);
+                (low, high) = (low.min(y), high.max(y));
+            }
+        }
+        assert!(high - low > 0.1 * state.length, "its body rises and falls with each hop: {low} to {high}");
+
+        // Standing about far from the delver, it sits up now and then, and is on all fours between.
+        let (mut app, jackalope, _) = solo_app(Species::Jackalope, 5, &level, middle, Vec2::new(5.0, 5.0));
+        let (mut sat, mut stood) = (0, 0);
+        for _ in 0..(60 * 40) {
+            app.update();
+            let rear = app.world().get::<Intent>(jackalope).unwrap().rear;
+            if rear > 0.95 {
+                sat += 1;
+            } else if rear < 0.05 {
+                stood += 1;
+            }
+        }
+        assert!(sat > 60 && stood > 60, "{sat} frames sat up and {stood} on all fours");
+    }
+
+    #[test]
+    fn it_flees_to_the_farthest_cell_it_reaches_first() {
+        // A corridor along the top with a side branch at its sixth cell.
+        let open = |x: i32, y: i32| ((0..=12).contains(&x) && y == 0) || (x == 6 && (1..=5).contains(&y));
+        let blocked = |x: i32, y: i32| !open(x, y);
+        // The delver at cell 4 and the jackalope past them at 8: it runs on to the far end.
+        assert_eq!(flee_goal((8, 0), (4, 0), blocked), Some((12, 0)));
+        // The delver beyond the far end: the other end, the nearer one only by getting past
+        // the branch where it is closer than they are.
+        assert_eq!(flee_goal((8, 0), (12, 0), blocked), Some((0, 0)));
+        // Pinned against the end with the delver at its heels: nowhere farther to go.
+        assert_eq!(flee_goal((12, 0), (11, 0), blocked), None);
     }
 
     /// The attack cues playing: where each stands, how loud it plays and whether it is spatial.

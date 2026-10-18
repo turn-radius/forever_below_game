@@ -42,6 +42,7 @@ use crate::render::{ItemAppearance, ItemSpawner};
 use crate::tuning::Tuning;
 
 pub mod behaviour;
+pub mod jackalopes;
 pub mod skeletons;
 pub mod trolls;
 
@@ -52,7 +53,7 @@ pub struct CreaturesPlugin;
 
 impl Plugin for CreaturesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin, trolls::TrollsPlugin))
+        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin, trolls::TrollsPlugin, jackalopes::JackalopesPlugin))
             .init_resource::<Tuning>()
             .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), size_creatures, idle, animate).chain().in_set(DelveSystems));
     }
@@ -440,8 +441,8 @@ fn spawn_creatures(
     *shown = Some(level.0.creatures.clone());
 }
 
-/// Creatures `FB_SPAWN` asks for, for captures and for trying a fight: `skeleton` or
-/// `skeleton:<seed>[,<seed>...]` (`skeleton` alone is seed 1207), each [`DEV_AHEAD`] cells
+/// Creatures `FB_SPAWN` asks for, for captures and for trying a fight: `skeleton`, `troll`, `jackalope`
+/// or `centipede`, or `skeleton:<seed>[,<seed>...]` (`skeleton` alone is seed 1207), each [`DEV_AHEAD`] cells
 /// ahead of the level's start and spread across the way, facing the start. None when unset.
 pub fn dev_spots(level: &Level) -> Vec<CreatureSpot> {
     let Some(spec) = std::env::var("FB_SPAWN").ok().filter(|s| !s.is_empty()) else { return Vec::new() };
@@ -459,8 +460,10 @@ pub fn dev_spots_for(level: &Level, spec: &str) -> Vec<CreatureSpot> {
         "troll" => fb_creatures::Species::Troll,
         "bat" => fb_creatures::Species::Bat,
         "giant_bat" => fb_creatures::Species::GiantBat,
+        "jackalope" => fb_creatures::Species::Jackalope,
+        "centipede" => fb_creatures::Species::GiantCentipede,
         other => {
-            warn!("FB_SPAWN: no creature called {other:?} (try skeleton, troll, bat or giant_bat)");
+            warn!("FB_SPAWN: no creature called {other:?} (try skeleton, troll, bat, giant_bat, jackalope or centipede)");
             return Vec::new();
         }
     };
