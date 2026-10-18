@@ -230,6 +230,7 @@ fn cell(p: Vec2) -> (i32, i32) {
 }
 
 /// Gives each new creature a brain: it now acts for itself, rather than idling.
+#[allow(clippy::type_complexity)]
 fn wake(mut commands: Commands, level: Res<CurrentLevel>, new: Query<(Entity, &Critter, &Transform), (Added<Critter>, Without<Corpse>)>) {
     for (entity, critter, at) in &new {
         // Home is where the level placed it, even when it comes back somewhere else after the

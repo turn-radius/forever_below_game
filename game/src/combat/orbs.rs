@@ -439,14 +439,13 @@ fn settle_orbs(time: Res<Time>, mut orbs: Query<(&mut Orb, &MaterialNode<OrbMate
         if recolour {
             orb.poison = poison;
         }
-        if material.style.fill != shown || material.style.dim != dim || material.style.pulse != heat || recolour {
-            if let Some(mut material) = materials.get_mut(&handle.0) {
+        if (material.style.fill != shown || material.style.dim != dim || material.style.pulse != heat || recolour)
+            && let Some(mut material) = materials.get_mut(&handle.0) {
                 material.style.fill = shown;
                 material.style.dim = dim;
                 material.style.pulse = heat;
                 (material.style.surface, material.style.deep) = orb.kind.liquids_at(poison);
             }
-        }
         let scale = Vec2::splat(orb.pulse.scale());
         if transform.scale != scale {
             transform.scale = scale;

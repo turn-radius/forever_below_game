@@ -49,12 +49,14 @@ pub fn run_delve_systems_while_delving(app: &mut App) {
 pub struct CurrentLevel(pub Level);
 
 /// The player's body. Its `Transform` is at the feet, on the floor; the camera is a child.
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug, Default, Reflect)]
+#[reflect(Component)]
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds, crate::character::DelverStamina, crate::character::DelverMana, crate::character::DelverVisibility, crate::character::DelverRecovery, crate::player::GearPace)]
 pub struct Player;
 
 /// The first-person camera, a child of [`Player`].
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug, Default, Reflect)]
+#[reflect(Component)]
 pub struct PlayerCamera;
 
 /// Eye height above the floor in world units (1.6 m, a human's eyes at 17 units tall).
@@ -190,10 +192,10 @@ impl ScreenOpen {
     }
 }
 
-/// Run condition: no screen is open over the level and the delver is not between levels
-/// ([`crate::travel`]).
-pub fn level_has_focus(screen: Option<Res<ScreenOpen>>, journey: Option<Res<crate::travel::Journey>>) -> bool {
-    !screen.is_some_and(|s| s.0.is_some()) && journey.is_none()
+/// Run condition: no screen is open over the level, the delver is not between levels
+/// ([`crate::travel`]) and the debug inspector is closed ([`crate::inspect`]).
+pub fn level_has_focus(screen: Option<Res<ScreenOpen>>, journey: Option<Res<crate::travel::Journey>>, inspector: Option<Res<crate::inspect::InspectorOpen>>) -> bool {
+    !screen.is_some_and(|s| s.0.is_some()) && journey.is_none() && !inspector.is_some_and(|i| i.0)
 }
 
 /// Run condition: the inventory screen is open, for keys that act on the item under the mouse.
@@ -266,9 +268,10 @@ pub fn switch_screens(
     mut tab: ResMut<SheetTab>,
     journey: Option<Res<crate::travel::Journey>>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+    inspector: Option<Res<crate::inspect::InspectorOpen>>,
 ) {
-    // No screen opens between levels.
-    if journey.is_some() {
+    // No screen opens between levels, nor while the debug inspector has the keyboard.
+    if journey.is_some() || inspector.is_some_and(|i| i.0) {
         return;
     }
     let keys = ScreenKeys {

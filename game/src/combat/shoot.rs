@@ -263,7 +263,7 @@ pub struct Around<'w, 's> {
 
 /// The input of shooting: nocking and drawing a bow, loosing it, firing and reloading a crossbow,
 /// and putting the ammunition back when the weapon is put away or the screen opens.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn shoot(
     mut commands: Commands,
     time: Res<Time>,
@@ -500,7 +500,7 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
 
 /// Flies every shot a step: against bodies as they are posed, then the walls, props, floor and
 /// ceiling. A hit rolls the attack; what stops is set down on the floor or stuck in the body.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn fly_projectiles(
     mut commands: Commands,
     time: Res<Time>,

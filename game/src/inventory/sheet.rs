@@ -243,6 +243,7 @@ fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Op
 }
 
 /// Builds the character tab's body: the status section.
+#[allow(clippy::too_many_arguments)]
 pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel, vitals: Vitals) {
     parent.spawn((CharacterSheet, Name::new("CharacterSheet"), Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() })).with_children(|sheet| {
         heading(sheet, fonts, "attributes");
@@ -372,7 +373,7 @@ pub fn spawn_tip(mut commands: Commands, tips: Query<(), With<BreakdownTip>>, ca
 /// Fills the tooltip with the hovered number's breakdown and places it beside the row. It is
 /// refilled only when the hovered row, the character or the inventory changed, and waits a
 /// frame to be measured before it shows.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn show_breakdown(
     mut commands: Commands,
     open: Res<ScreenOpen>,
@@ -516,6 +517,7 @@ pub fn update_conditions(
 
 /// Keeps the open sheet's stamina and mana bars and words true to the delver, writing only
 /// what changed.
+#[allow(clippy::type_complexity)]
 pub fn update_vitals(
     players: Query<(Option<Ref<DelverStamina>>, Option<Ref<DelverMana>>), With<Player>>,
     mut fills: Query<(&VitalFill, &mut Node, &mut BackgroundColor)>,

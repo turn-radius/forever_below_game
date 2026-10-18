@@ -26,6 +26,7 @@ pub mod footsteps;
 pub mod forge_view;
 pub mod frame_time;
 pub mod game_clock;
+pub mod inspect;
 pub mod interact;
 pub mod inventory;
 pub mod keybindings;

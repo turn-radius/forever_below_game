@@ -2269,7 +2269,6 @@ mod tests {
 
     #[test]
     fn grip_point_stays_at_hand_regardless_of_held_scale() {
-        use fb_items::Slot;
         let spec = Character::default().spec();
         let sword = (1..400).filter_map(|s| fb_items::roll_item("Sword", s)).find(|i| i.shape.family() == Family::Sword).unwrap().shape;
         let torch = lit_torch(1207).shape;

@@ -229,6 +229,7 @@ pub fn blow_line(species: Option<Species>, kit: Option<&crate::creatures::skelet
 }
 
 /// Each bite takes its damage from the delver; a constrictor's holds them.
+#[allow(clippy::too_many_arguments)]
 fn take_bites(
     mut commands: Commands,
     mut bites: MessageReader<AttackOnDelver>,
@@ -265,12 +266,11 @@ fn take_bites(
             if poisons_for.is_some() {
                 caught.push(("poisoned", 1.0));
             }
-            if let Some(plague) = bite.species.filter(|s| carries_plague(*s)).and_then(|_| rules.effects.get(SEWER_PLAGUE)) {
-                if dice.0.next_f64() < plague.catch_chance_for(disease_risk) {
+            if let Some(plague) = bite.species.filter(|s| carries_plague(*s)).and_then(|_| rules.effects.get(SEWER_PLAGUE))
+                && dice.0.next_f64() < plague.catch_chance_for(disease_risk) {
                     info!("the bite carries sewer plague");
                     caught.push((SEWER_PLAGUE, PLAGUE_ONSET));
                 }
-            }
             if !caught.is_empty() {
                 let mut effects = effects.map_or_else(Default::default, |e| e.0.clone());
                 for (id, intensity) in caught {

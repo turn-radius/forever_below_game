@@ -184,7 +184,7 @@ impl Quivers {
     /// length sized to them. Pure in `(seed, fullness)`.
     pub fn stocked(seed: u32, fullness: f32) -> QuiverState {
         let mut s = Quivers::roll(seed);
-        stock(&mut s, Arrows::roll(seed ^ 0x51ED_A770), fullness, 0.72, |s| Quivers::capacity(s));
+        stock(&mut s, Arrows::roll(seed ^ 0x51ED_A770), fullness, 0.72, Quivers::capacity);
         s
     }
 }
@@ -199,7 +199,7 @@ impl BoltCases {
     /// Pure in `(seed, fullness)`.
     pub fn stocked(seed: u32, fullness: f32) -> QuiverState {
         let mut s = BoltCases::roll(seed);
-        stock(&mut s, Bolts::roll(seed ^ 0xB017_5EED), fullness, 0.78, |s| BoltCases::capacity(s));
+        stock(&mut s, Bolts::roll(seed ^ 0xB017_5EED), fullness, 0.78, BoltCases::capacity);
         s
     }
 }
