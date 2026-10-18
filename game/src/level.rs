@@ -1229,8 +1229,8 @@ mod tests {
     #[test]
     fn doorways_are_built_in_their_finish_style_and_deterministically() {
         let mut arched = [0, 0];
-        for (depth, slot) in [(1, 0), (2, 1)] {
-            for seed in 1..=12 {
+        for (depth, slot) in [(5, 0), (4, 1)] {
+            for seed in 1..=40 {
                 let level = fb_level::generate(seed, depth);
                 let (a, b) = (FixtureShapes::make(&level), FixtureShapes::make(&level));
                 assert_eq!(a, b, "seed {seed} depth {depth}");
@@ -1243,6 +1243,6 @@ mod tests {
                 }
             }
         }
-        assert!(arched[0] > 0 && arched[1] > 0, "arched doorways at depth 1 and 2: {arched:?}");
+        assert!(arched[0] > 0 && arched[1] > 0, "arched doorways at depth 5 and 4: {arched:?}");
     }
 }

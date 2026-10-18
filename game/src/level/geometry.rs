@@ -857,12 +857,13 @@ mod tests {
 
     #[test]
     fn cobbled_floors_are_laid_and_split_exactly() {
-        // A cave with a cobbled or flagged quarter.
+        // A cave with a cobbled quarter and no flagged one, so the per-cell cost is the cobbles'.
         let paved = |l: &Level| {
             let view = CellView::new(l);
-            (0..l.height as i32).flat_map(|y| (0..l.width as i32).map(move |x| (x, y))).any(|(x, y)| view.finishes().at(x, y).is_some_and(|f| matches!(f.floor, FloorFinish::Cobble | FloorFinish::Flagstone)))
+            let floors: Vec<_> = (0..l.height as i32).flat_map(|y| (0..l.width as i32).map(move |x| (x, y))).filter_map(|(x, y)| view.finishes().at(x, y).map(|f| f.floor)).collect();
+            floors.contains(&FloorFinish::Cobble) && !floors.contains(&FloorFinish::Flagstone)
         };
-        let level = (1..200).map(|seed| fb_level::generate(seed, 1)).find(paved).expect("some cave has paving");
+        let level = (1..400).map(|seed| fb_level::generate(seed, 5)).find(paved).expect("some cave has paving");
         let view = CellView::new(&level);
         let cobbled = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter(|&(x, y)| view.finishes().at(x, y).is_some_and(|f| matches!(f.floor, FloorFinish::Cobble | FloorFinish::Flagstone))).count();
         assert!(cobbled > 0);
@@ -1074,12 +1075,13 @@ mod tests {
 
     #[test]
     fn stone_vertices_carry_the_finishes_moss() {
-        // Both styles: rough rock at depth 1, stone halls at depth 2.
-        for depth in [1, 2] {
-            let level = fb_level::generate(1207, depth);
+        // Both styles: rough rock at depth 3, stone halls at depth 4 (the first level is dry).
+        for depth in [3, 4] {
+            let mut damp = 0;
+            for seed in 1207..1237 {
+            let level = fb_level::generate(seed, depth);
             let view = CellView::new(&level);
             let mesh = level_mesh(&view, view.bounds());
-            let mut damp = 0;
             for part in &mesh.surfaces.parts {
                 assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
                 assert!(part.validate().is_ok());
@@ -1089,6 +1091,7 @@ mod tests {
                     damp += (uv[0] > 0.2) as usize;
                 }
             }
+            }
             assert!(damp > 0, "no moss anywhere at depth {depth}");
         }
     }
@@ -1097,12 +1100,11 @@ mod tests {
     fn layered_rooms_have_their_own_walls() {
         // A cave with a layered quarter.
         let layered = |l: &Level| CellView::new(l).finishes().quarters().iter().any(|q| q.walls == fb_level::WallFinish::Strata);
-        let level = (1..200).map(|seed| fb_level::generate(seed, 1)).find(layered).expect("some cave has strata");
+        let level = (1..400).map(|seed| fb_level::generate(seed, 5)).find(layered).expect("some cave has strata");
         let view = CellView::new(&level);
         let mesh = level_mesh(&view, view.bounds());
         let walls = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).map_or(0, |p| p.indices.len());
         assert!(walls("strata") > 0, "a layered room");
-        assert!(walls("walls") > 0);
         // Splitting the walls loses none: the unlayered total is the two together.
         let plain = CellView::with_finishes(&level, finishes(&level, &LevelParams { strata_chance: 0.0, ..LevelParams::for_style(level.style) }));
         let unsplit = level_mesh(&plain, plain.bounds());

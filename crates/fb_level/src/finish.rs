@@ -6,9 +6,12 @@
 //! Rooms are grouped into quarters of two to four neighbours along the corridors, and each quarter
 //! has one [`Character`] that fixes its walls, its floor and its doorways together. A corridor
 //! cell takes the quarter of the nearest room, and a doorway the style of the room it opens into.
-//! The level rolls a lean first, so one level favours one character over the rest. Moss is the
-//! one thing that varies cell by cell: a low-frequency damp field over the level, a few rooms
-//! that are grottos, and corridors that stay mostly dry. It ignores quarters.
+//! A level has one dominant character that every quarter takes, bar at most one quarter (holding
+//! a third of the rooms or fewer) that may take a second; the odds of a second character and of a
+//! non-plain dominant one grow with depth, and the first level is plain throughout. Moss is the
+//! one thing that varies cell by cell, and it is faint: a low-frequency damp field over the
+//! level, a rare grotto, and corridors that stay mostly dry. It ignores quarters, and the first
+//! level has none.
 
 use procgen_rng::Mulberry32;
 
@@ -212,10 +215,17 @@ fn damp(seed: u32, x: f32, y: f32) -> f32 {
     top * (1.0 - ty) + bottom * ty
 }
 
-/// How much more often the favoured character is drawn than it would be.
-const LEAN_WEIGHT: f64 = 3.0;
 /// The plain character's own weight against the sliders' for the rest.
-const PLAIN_WEIGHT: f64 = 0.4;
+const PLAIN_WEIGHT: f64 = 0.6;
+/// How much of the sliders' weight each depth below the first brings in: a quarter per depth, so
+/// depth 2 is mostly plain and the fifth is at full weight.
+const DEPTH_EASE: f64 = 0.25;
+/// The chance of a second character at depth 2, how much it grows per depth, and its ceiling.
+const SECOND_CHANCE: (f64, f64, f64) = (0.15, 0.1, 0.6);
+/// How strongly the damp field grows moss at its fullest: faint, so most rooms have none.
+const DAMP_STRENGTH: f32 = 0.6;
+/// A grotto's moss: patchy, never solid.
+const GROTTO_MOSS: f32 = 0.5;
 /// The fewest and most rooms in a quarter.
 const QUARTER_SIZE: (u32, u32) = (2, 4);
 /// Salt for the quarters' grouping, a stream apart from the finish stream.
@@ -306,42 +316,55 @@ fn dress(character: Character, rock: bool, floor: f64, arch: f64, params: &Level
 }
 
 /// The finishes of `level` under `params`. Deterministic: the same level, seed and depth give
-/// the same finishes. The draws are a fixed number whatever the odds (one for the lean, three per
+/// the same finishes. The draws are a fixed number whatever the odds (four for the level, two per
 /// quarter, one per room), so moving a slider changes only what that slider governs.
 pub fn finishes(level: &Level, params: &LevelParams) -> Finishes {
     let seed = level.seed ^ level.depth.wrapping_mul(0x9E37_79B9) ^ FINISH_SALT;
     let mut rng = Mulberry32::new(seed);
     let rock = level.style == LevelStyle::RoughRock;
 
-    // The level's lean, then each quarter's character: the sliders weigh the characters, the lean
-    // multiplies one of them.
+    // The level has one dominant character and, now and then, one second character on one
+    // quarter. Depth 1 is plain whatever the sliders say. The draws are fixed in number: four for
+    // the level, two per quarter.
     let characters = Character::of_style(level.style);
-    let lean = characters[((rng.next_f64() * characters.len() as f64) as usize).min(characters.len() - 1)];
+    let ease = (level.depth.saturating_sub(1) as f64 * DEPTH_EASE).min(1.0);
     let weight = |c: Character| {
-        let base = match (rock, c) {
-            (_, Character::Plain) => PLAIN_WEIGHT,
+        let slider = match (rock, c) {
+            (_, Character::Plain) => return PLAIN_WEIGHT,
             (false, Character::Timbered) => params.rubble_chance,
             (false, _) => params.arch_chance,
             (true, Character::Timbered) => params.cobble_chance,
             (true, Character::Hewn) => params.arch_chance * ROCK_CUT_SHARE,
             (true, _) => params.strata_chance,
         };
-        base * if c == lean { LEAN_WEIGHT } else { 1.0 }
+        slider * ease
     };
-    let total: f64 = characters.iter().map(|&c| weight(c)).sum();
-    let quarters: Vec<Quarter> = group_rooms(level)
+    let (u_lean, u_second, u_pick, u_which) = (rng.next_f64(), rng.next_f64(), rng.next_f64(), rng.next_f64());
+    let pick = |u: f64, weights: &[(Character, f64)]| {
+        let mut left = u * weights.iter().map(|w| w.1).sum::<f64>();
+        weights.iter().find(|w| { left -= w.1; left < 0.0 }).map(|w| w.0)
+    };
+    let all: Vec<_> = characters.iter().map(|&c| (c, weight(c))).collect();
+    let lean = if level.depth <= 1 { Character::Plain } else { pick(u_lean, &all).unwrap_or(Character::Plain) };
+    let groups = group_rooms(level);
+    // The second character takes one quarter that holds at most a third of the rooms, so the
+    // dominant one keeps at least two thirds.
+    let small: Vec<usize> = (0..groups.len()).filter(|&q| groups[q].len() * 3 <= level.rooms.len()).collect();
+    let others: Vec<_> = all.iter().copied().filter(|w| w.0 != lean).collect();
+    let second_chance = (SECOND_CHANCE.0 + SECOND_CHANCE.1 * level.depth.saturating_sub(2) as f64).min(SECOND_CHANCE.2);
+    let second = (level.depth > 1 && u_second < second_chance && !small.is_empty())
+        .then(|| pick(u_pick, &others))
+        .flatten()
+        .map(|c| (small[((u_which * small.len() as f64) as usize).min(small.len() - 1)], c));
+    let quarters: Vec<Quarter> = groups
         .into_iter()
-        .map(|rooms| {
-            let (u, f, a) = (rng.next_f64(), rng.next_f64(), rng.next_f64());
-            let mut left = u * total;
-            let character = characters
-                .iter()
-                .copied()
-                .find(|&c| {
-                    left -= weight(c);
-                    left < 0.0
-                })
-                .unwrap_or(Character::Plain);
+        .enumerate()
+        .map(|(q, rooms)| {
+            let (f, a) = (rng.next_f64(), rng.next_f64());
+            let character = match second {
+                Some((sq, c)) if sq == q => c,
+                _ => lean,
+            };
             let (walls, floor, door) = dress(character, rock, f, a, params);
             Quarter { rooms, character, walls, floor, door }
         })
@@ -388,10 +411,10 @@ pub fn finishes(level: &Level, params: &LevelParams) -> Finishes {
                 continue;
             }
             let i = (y * w + x) as usize;
-            let wet = smoothstep(0.5, 0.95, damp(seed, x as f32 + 0.5, y as f32 + 0.5)) * params.moss_amount;
+            let wet = if level.depth <= 1 { 0.0 } else { smoothstep(0.62, 1.0, damp(seed, x as f32 + 0.5, y as f32 + 0.5)) * params.moss_amount * DAMP_STRENGTH };
             let (walls, floor) = quarter_of[i].map_or((plain.0, plain.1), |q| (quarters[q].walls, quarters[q].floor));
             let level_moss = match level.room_at(x, y) {
-                Some(r) if grottos[r] => wet.max((0.7 + 0.3 * wet) * params.moss_amount),
+                Some(r) if grottos[r] && level.depth > 1 => wet.max((GROTTO_MOSS + 0.2 * wet) * params.moss_amount),
                 Some(_) => wet,
                 None => wet * CORRIDOR_DRYNESS,
             };
@@ -560,36 +583,71 @@ mod tests {
         assert!(vaulted > 10, "{vaulted} vaulted quarters");
     }
 
+    /// The depths past the first, by style: halls on even depths, caves on odd ones.
+    const HALL_DEPTHS: [u32; 4] = [2, 4, 6, 8];
+    const CAVE_DEPTHS: [u32; 3] = [3, 5, 7];
+
     #[test]
     fn every_character_appears_in_its_style() {
-        for depth in [1, 2] {
+        for (depths, style) in [(&HALL_DEPTHS[..], LevelStyle::StoneHalls), (&CAVE_DEPTHS[..], LevelStyle::RoughRock)] {
             let mut seen = HashSet::new();
-            for seed in 1..=50 {
-                let (level, params) = level_at(seed, depth);
-                seen.extend(finishes(&level, &params).quarters().iter().map(|q| q.character));
+            for &depth in depths {
+                for seed in 1..=60 {
+                    let (level, params) = level_at(seed, depth);
+                    seen.extend(finishes(&level, &params).quarters().iter().map(|q| q.character));
+                }
             }
-            assert_eq!(seen, Character::of_style(LevelStyle::for_depth(depth)).iter().copied().collect(), "depth {depth}");
+            assert_eq!(seen, Character::of_style(style).iter().copied().collect(), "{style:?}");
         }
     }
 
     #[test]
-    fn levels_differ_in_lean() {
-        for depth in [1, 2] {
-            let mut leans = HashSet::new();
-            let mut timber_shares = Vec::new();
-            for seed in 1..=50 {
-                let (level, params) = level_at(seed, depth);
+    fn the_first_level_is_plain_and_dry_on_every_seed_whatever_the_sliders() {
+        let loud = |p: LevelParams| LevelParams { moss_amount: 1.0, grotto_chance: 1.0, strata_chance: 1.0, cobble_chance: 1.0, flagstone_chance: 1.0, arch_chance: 1.0, ..p };
+        for seed in 1..=100 {
+            let (level, defaults) = level_at(seed, 1);
+            for params in [defaults.clone(), loud(defaults)] {
                 let f = finishes(&level, &params);
-                leans.insert(f.lean());
-                let doors: Vec<_> = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter_map(|(x, y)| f.door_style(x, y)).collect();
-                if !doors.is_empty() {
-                    timber_shares.push(doors.iter().filter(|&&d| d == DoorStyle::Timber).count() as f32 / doors.len() as f32);
+                assert!(f.quarters().iter().all(|q| (q.character, q.walls, q.floor, q.door) == (Character::Plain, WallFinish::Rock, FloorFinish::Rock, DoorStyle::Timber)), "seed {seed}");
+                for y in 0..level.height as i32 {
+                    for x in 0..level.width as i32 {
+                        assert_eq!(f.moss_at((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL), 0.0, "seed {seed}");
+                        if let Some(c) = f.at(x, y) {
+                            assert_eq!((c.walls, c.floor, c.moss), (WallFinish::Rock, FloorFinish::Rock, 0.0));
+                        }
+                    }
                 }
             }
-            assert_eq!(leans.len(), Character::of_style(LevelStyle::for_depth(depth)).len(), "depth {depth}");
-            let (lo, hi) = timber_shares.iter().fold((1.0f32, 0.0f32), |(lo, hi), &s| (lo.min(s), hi.max(s)));
-            assert!(hi - lo > 0.5, "depth {depth}: timber doors range {lo} to {hi}");
         }
+    }
+
+    #[test]
+    fn a_level_has_at_most_two_characters_and_the_dominant_one_holds_two_thirds() {
+        let (mut second, mut non_plain) = ([0u32; 9], [0u32; 9]);
+        for depth in 2..=8 {
+            for seed in 1..=100 {
+                let (level, params) = level_at(seed, depth);
+                let f = finishes(&level, &params);
+                let mut rooms: Vec<(Character, usize)> = Vec::new();
+                for q in f.quarters() {
+                    match rooms.iter_mut().find(|r| r.0 == q.character) {
+                        Some(r) => r.1 += q.rooms.len(),
+                        None => rooms.push((q.character, q.rooms.len())),
+                    }
+                }
+                assert!(rooms.len() <= 2, "seed {seed} depth {depth}: {rooms:?}");
+                let total: usize = rooms.iter().map(|r| r.1).sum();
+                let most = rooms.iter().map(|r| r.1).max().unwrap_or(0);
+                assert!(most * 3 >= total * 2, "seed {seed} depth {depth}: {rooms:?}");
+                second[depth as usize] += (rooms.len() == 2) as u32;
+                non_plain[depth as usize] += (f.lean() != Character::Plain) as u32;
+            }
+        }
+        // Variety grows with depth and plain leads at the shallow end.
+        assert!(second[2] < second[8], "second characters: {second:?}");
+        assert!(non_plain[2] < non_plain[8], "non-plain dominants: {non_plain:?}");
+        assert!(non_plain[2] < 50 && non_plain[3] < 60, "plain should lead early: {non_plain:?}");
+        assert!(second[8] > 0 && second[2] > 0, "second characters: {second:?}");
     }
 
     #[test]
@@ -631,43 +689,62 @@ mod tests {
 
     #[test]
     fn every_style_shows_each_of_its_finishes_and_moss_gathers() {
-        for depth in [1, 2] {
+        for (depths, rock) in [(&HALL_DEPTHS[..], false), (&CAVE_DEPTHS[..], true)] {
             let mut walls = HashSet::new();
             let mut floors = HashSet::new();
             let mut doors = HashSet::new();
             let (mut mossy, mut corridor, mut dry_corridor) = (0, 0, 0);
-            for seed in 1..=50 {
-                let (level, params) = level_at(seed, depth);
-                let f = finishes(&level, &params);
-                for y in 0..level.height as i32 {
-                    for x in 0..level.width as i32 {
-                        if let Some(c) = f.at(x, y) {
-                            walls.insert(c.walls);
-                            floors.insert(c.floor);
-                            if c.moss > 0.6 {
-                                mossy += 1;
+            for &depth in depths {
+                for seed in 1..=60 {
+                    let (level, params) = level_at(seed, depth);
+                    let f = finishes(&level, &params);
+                    for y in 0..level.height as i32 {
+                        for x in 0..level.width as i32 {
+                            if let Some(c) = f.at(x, y) {
+                                walls.insert(c.walls);
+                                floors.insert(c.floor);
+                                if c.moss > 0.35 {
+                                    mossy += 1;
+                                }
+                                if level.room_at(x, y).is_none() {
+                                    corridor += 1;
+                                    dry_corridor += (c.moss < 0.3) as u32;
+                                }
                             }
-                            if level.room_at(x, y).is_none() {
-                                corridor += 1;
-                                dry_corridor += (c.moss < 0.3) as u32;
-                            }
+                            doors.extend(f.door_style(x, y));
                         }
-                        doors.extend(f.door_style(x, y));
                     }
                 }
             }
-            let (want_walls, want_floors): (&[_], &[_]) = if depth == 1 {
+            let (want_walls, want_floors): (&[_], &[_]) = if rock {
                 (&[WallFinish::Rock, WallFinish::Strata], &[FloorFinish::Rock, FloorFinish::Flagstone, FloorFinish::Cobble])
             } else {
                 (&[WallFinish::Ashlar, WallFinish::Rubble], &[FloorFinish::Flagstone, FloorFinish::Cobble])
             };
-            assert_eq!(walls, want_walls.iter().copied().collect(), "depth {depth} walls");
-            assert_eq!(floors, want_floors.iter().copied().collect(), "depth {depth} floors");
-            assert!(mossy > 0, "depth {depth} has no moss above 0.6");
-            assert!(dry_corridor as f32 > 0.8 * corridor as f32, "depth {depth}: {dry_corridor} of {corridor} corridor cells dry");
-            let want_doors: HashSet<_> = if depth == 1 { [DoorStyle::Timber, DoorStyle::RockCut].into() } else { [DoorStyle::Timber, DoorStyle::RoundArch, DoorStyle::PointedArch].into() };
-            assert_eq!(doors, want_doors, "depth {depth} doors");
+            assert_eq!(walls, want_walls.iter().copied().collect(), "rock {rock} walls");
+            assert_eq!(floors, want_floors.iter().copied().collect(), "rock {rock} floors");
+            assert!(mossy > 0, "rock {rock} has no moss above 0.35");
+            assert!(dry_corridor as f32 > 0.9 * corridor as f32, "rock {rock}: {dry_corridor} of {corridor} corridor cells dry");
+            let want_doors: HashSet<_> = if rock { [DoorStyle::Timber, DoorStyle::RockCut].into() } else { [DoorStyle::Timber, DoorStyle::RoundArch, DoorStyle::PointedArch].into() };
+            assert_eq!(doors, want_doors, "rock {rock} doors");
         }
+    }
+
+    #[test]
+    fn most_rooms_have_no_noticeable_moss() {
+        let (mut rooms, mut mossy) = (0, 0);
+        for depth in 2..=8 {
+            for seed in 1..=40 {
+                let (level, params) = level_at(seed, depth);
+                let f = finishes(&level, &params);
+                for room in &level.rooms {
+                    let (cx, cy) = room.centre();
+                    rooms += 1;
+                    mossy += (f.moss_at(cx * CELL, cy * CELL) > 0.2) as u32;
+                }
+            }
+        }
+        assert!((mossy as f32) < 0.2 * rooms as f32, "{mossy} of {rooms} room centres are mossy");
     }
 
     #[test]
@@ -736,12 +813,12 @@ mod tests {
     #[test]
     fn a_grotto_is_mossy() {
         let params = LevelParams { grotto_chance: 1.0, ..LevelParams::for_style(LevelStyle::RoughRock) };
-        let level = generate_with(3, 1, &params);
+        let level = generate_with(3, 3, &params);
         let f = finishes(&level, &params);
         let room = level.rooms[0];
         let (cx, cy) = room.centre();
-        assert!(f.at(cx as i32, cy as i32).unwrap().moss >= 0.7);
-        assert!(f.moss_at(cx * CELL, cy * CELL) >= 0.7);
+        assert!(f.at(cx as i32, cy as i32).unwrap().moss >= GROTTO_MOSS);
+        assert!(f.moss_at(cx * CELL, cy * CELL) >= GROTTO_MOSS);
     }
 
     #[test]
