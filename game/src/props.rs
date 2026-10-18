@@ -140,7 +140,13 @@ pub fn prop_transform(level: &Level, spot: &PropSpot, low: f32, scale: f32) -> T
 pub fn spawn_prop<'a>(spawner: &'a mut ItemSpawner, level: &Level, index: usize, opened: bool, tuning: &Tuning) -> Option<EntityCommands<'a>> {
     let spot = *level.props.get(index)?;
     let (mesh, appearance) = prop_mesh(&spot, level, opened);
-    let points = item_points(&mesh);
+    spawn_prop_shaped(spawner, level, index, &mesh, &appearance, tuning)
+}
+
+/// [`spawn_prop`] for a prop whose `mesh` and `appearance` are made already (`crate::staged`).
+pub fn spawn_prop_shaped<'a>(spawner: &'a mut ItemSpawner, level: &Level, index: usize, mesh: &armory::ItemMesh, appearance: &crate::render::ItemAppearance, tuning: &Tuning) -> Option<EntityCommands<'a>> {
+    let spot = *level.props.get(index)?;
+    let points = item_points(mesh);
     let (min, max) = points.iter().fold(None, |acc: Option<(Vec3, Vec3)>, &p| Some(acc.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p)))))?;
     let scale = prop_scale(spot.prop, tuning);
     let transform = prop_transform(level, &spot, min.y, scale);
@@ -148,7 +154,7 @@ pub fn spawn_prop<'a>(spawner: &'a mut ItemSpawner, level: &Level, index: usize,
         Prop::Container { style, .. } => format!("{style:?}"),
         Prop::Scenery { kind, .. } => format!("{kind:?}"),
     };
-    let mut root = spawner.spawn(&mesh, &appearance);
+    let mut root = spawner.spawn(mesh, appearance);
     root.insert((LevelPiece, Name::new(name), transform, PropPiece { index, spot, min, max }, BlocksTheWay(prop_floor_shape(spot.prop, scale))));
     Some(root)
 }
@@ -169,9 +175,15 @@ fn rescale_props(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut props: Query
 /// odds of a level `depth` down: each thing at its first free spot, upright first and then
 /// turned, and anything with no room left out. `None` for scenery.
 pub fn stock_container(inventory: &mut Inventory, prop: Prop, depth: u32) -> Option<ItemId> {
-    let Prop::Container { style, seed, loot } = prop else { return None };
+    let Prop::Container { style, loot, .. } = prop else { return None };
+    stock_container_with(inventory, prop, fb_items::roll_contents(style, loot, fb_items::Odds::loot(depth)))
+}
+
+/// [`stock_container`] with the `contents` it rolled already (`crate::staged`).
+pub fn stock_container_with(inventory: &mut Inventory, prop: Prop, contents: Vec<fb_items::Item>) -> Option<ItemId> {
+    let Prop::Container { style, seed, .. } = prop else { return None };
     let container = inventory.add(fb_items::container_item(chest_state(style, seed, false)));
-    for item in fb_items::roll_contents(style, loot, fb_items::Odds::loot(depth)) {
+    for item in contents {
         let id = inventory.add(item);
         let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
         let at = inventory.grid(container).and_then(|g| g.first_free(footprint));
@@ -185,6 +197,7 @@ pub fn stock_container(inventory: &mut Inventory, prop: Prop, depth: u32) -> Opt
 /// Spawns (or respawns, when the level changes) every prop the level lays out, each container
 /// stocked in the inventory, with what was left in it and open or shut as it was left if the
 /// level was visited before (`crate::record`).
+#[allow(clippy::too_many_arguments)]
 fn lay_out_props(
     mut commands: Commands,
     level: Res<CurrentLevel>,
@@ -192,9 +205,11 @@ fn lay_out_props(
     mut inventory: ResMut<Inventory>,
     tuning: Option<Res<Tuning>>,
     record: Option<Res<WorldRecord>>,
+    mut staged: Option<ResMut<crate::staged::Staged>>,
     mut spawner: ItemSpawner,
 ) {
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    let mut ahead = staged.as_mut().and_then(|s| s.take_props(&level.0)).map(Vec::into_iter);
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     for (entity, container) in &old {
         if let Some(container) = container {
@@ -203,6 +218,8 @@ fn lay_out_props(
         commands.entity(entity).despawn();
     }
     for (index, spot) in level.0.props.iter().enumerate() {
+        // What was made ahead of time, in step with the props.
+        let ahead = ahead.as_mut().and_then(Iterator::next);
         // A container that was left holds what was left in it, and stands open if it was opened.
         let left = saved.and_then(|l| l.containers.get(&index));
         let stocked = match (left, spot.prop) {
@@ -211,10 +228,17 @@ fn lay_out_props(
                 restore_contents(&mut inventory, container, &left.contents);
                 Some(container)
             }
-            _ => stock_container(&mut inventory, spot.prop, level.0.depth),
+            _ => match &ahead {
+                Some(ahead) => stock_container_with(&mut inventory, spot.prop, ahead.contents.clone()),
+                None => stock_container(&mut inventory, spot.prop, level.0.depth),
+            },
         };
         let opened = left.is_some_and(|c| c.opened);
-        if let Some(mut root) = spawn_prop(&mut spawner, &level.0, index, opened, &tuning)
+        let root = match &ahead {
+            Some(ahead) if !opened => spawn_prop_shaped(&mut spawner, &level.0, index, &ahead.mesh, &ahead.appearance, &tuning),
+            _ => spawn_prop(&mut spawner, &level.0, index, opened, &tuning),
+        };
+        if let Some(mut root) = root
             && let Some(id) = stocked
         {
             root.insert(Container { id, opened });

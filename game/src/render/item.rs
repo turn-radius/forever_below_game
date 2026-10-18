@@ -196,6 +196,13 @@ pub fn part_to_mesh(part: &Part) -> Mesh {
         let layer = if part.name == "flame_core" { super::flame::FlameLayer::Core } else { super::flame::FlameLayer::Veil };
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, super::flame::flame_vertex_colours(&part.positions, layer));
     }
+    if part.occlusion.len() == vertex_count && !is_flame(part) {
+        // Openness lives in vertex alpha, harmless only because stone is `AlphaMode::Opaque`.
+        // How open each vertex is, in the colour's alpha (`toon.wesl` reads it back): white
+        // leaves the albedo alone and an opaque material ignores the alpha, so it shades
+        // nothing but the light. Items and creatures carry none and are drawn unshaded.
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, part.occlusion.iter().map(|&open| [1.0, 1.0, 1.0, open]).collect::<Vec<[f32; 4]>>());
+    }
     mesh
 }
 

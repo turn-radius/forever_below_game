@@ -362,6 +362,7 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
     let camera = commands
         .spawn((
             Name::new("Icon camera"),
+            crate::render::ScreenInkExempt,
             DespawnOnExit(AppState::Delving),
             Camera3d::default(),
             Camera { order: -10 - stage as isize, clear_color: ClearColorConfig::Custom(Color::NONE), ..default() },

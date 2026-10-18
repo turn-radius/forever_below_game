@@ -402,8 +402,14 @@ fn fragment(
         tone = mix(base * vec3(0.85, 0.4, 0.22), base, step_up);
     }
 
-    let ambient = view_bindings::lights.ambient_color.rgb * pbr_input.diffuse_occlusion;
-    let light = toon_direct_light(toon, pbr_input) + ambient * view_bindings::view.exposure;
+    // Corners and creases of the level's stone carry how shut in they are in the vertex colour's
+    // alpha (`part_to_mesh`); it scales the banded light and the ambient, a smooth ramp that follows
+    // no band edge (before the bands it put a contour along every mesh triangle). Everything else is open.
+    var openness = 1.0;
+    @if(VERTEX_COLORS)
+    openness = select(vertex_output.color.a, 1.0, flame);
+    let ambient = view_bindings::lights.ambient_color.rgb * pbr_input.diffuse_occlusion * openness;
+    let light = toon_direct_light(toon, pbr_input) * openness + ambient * view_bindings::view.exposure;
     let lit = srgb_to_linear(tone * light);
     // Glow fades as the stone clouds over (`gemMat`).
     let glow = srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
