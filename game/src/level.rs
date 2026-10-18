@@ -434,10 +434,15 @@ fn spawn_stone(
                     if part.name == "ceiling" && level.style == LevelStyle::StoneHalls {
                         material.extension.decay.scale *= CEILING_PATTERN_FINER;
                     }
-                    // Cave rock breaks into facets under the light, or beds where it is layered.
-                    // Laid stones keep plain stone's wear, so they read apart from the rock they lie on.
-                    if level.style == LevelStyle::RoughRock && !part.name.starts_with("stones_") {
-                        material.extension.decay.kind = if part.name == "strata" { DECAY_STRATA } else { DECAY_ROCK };
+                    // Only hewn walls break into facets under the light, and layered ones into beds.
+                    // Plain cave rock keeps plain stone's wear and shading, as it did before the
+                    // levels' characters, and so do laid stones, which read apart from the rock.
+                    if level.style == LevelStyle::RoughRock {
+                        match part.name {
+                            "strata" => material.extension.decay.kind = DECAY_STRATA,
+                            "hewn" => material.extension.decay.kind = DECAY_ROCK,
+                            _ => {}
+                        }
                     }
                     let handle = toon_materials.add(material);
                     materials.push((part.name, handle.clone()));
@@ -912,12 +917,14 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let from = at + v3(geometry::facing_vector(side)) * CELL * 1.4 + eye;
             Transform::from_translation(from).looking_at(at + Vec3::Y * 4.0, Vec3::Y)
         }
-        "moss" | "rock" | "rock-far" | "strata" => {
+        "moss" | "rock" | "rock-far" | "strata" | "hewn" => {
             let finishes = geometry::level_finishes(level);
             let (back, wanted): (f32, Box<dyn Fn(i32, i32) -> f32>) = match mode.as_str() {
                 // Where the moss is thickest, a few steps off, taking in floor and wall foot.
                 "moss" => (CELL * 1.6, Box::new(|x, y| finishes.moss_at((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL))),
                 "strata" => (CELL * 1.0, Box::new(|x, y| finishes.at(x, y).map_or(0.0, |f| (f.walls == fb_level::WallFinish::Strata) as u32 as f32))),
+                // A hewn quarter's craggy rock.
+                "hewn" => (CELL * 1.0, Box::new(|x, y| (finishes.character_at(x, y) == Some(fb_level::Character::Hewn)) as u32 as f32)),
                 // Close under the torch, or from across the level.
                 _ => (if mode == "rock" { CELL } else { CELL * 10.0 }, Box::new(|x, y| finishes.at(x, y).map_or(0.0, |f| (f.walls == fb_level::WallFinish::Rock) as u32 as f32))),
             };

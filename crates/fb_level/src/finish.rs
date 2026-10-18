@@ -606,7 +606,7 @@ mod tests {
         let loud = |p: LevelParams| LevelParams { moss_amount: 1.0, grotto_chance: 1.0, strata_chance: 1.0, cobble_chance: 1.0, flagstone_chance: 1.0, arch_chance: 1.0, ..p };
         for seed in 1..=100 {
             let (level, defaults) = level_at(seed, 1);
-            for params in [defaults.clone(), loud(defaults)] {
+            for params in [defaults, loud(defaults)] {
                 let f = finishes(&level, &params);
                 assert!(f.quarters().iter().all(|q| (q.character, q.walls, q.floor, q.door) == (Character::Plain, WallFinish::Rock, FloorFinish::Rock, DoorStyle::Timber)), "seed {seed}");
                 for y in 0..level.height as i32 {

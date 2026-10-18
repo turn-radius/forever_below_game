@@ -409,7 +409,7 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
         return stone::hall_mesh(view, (x0, y0, x1, y1));
     }
     let relief = Relief::new(level);
-    let (mut floor, mut ceiling, mut walls, mut strata) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    let (mut floor, mut ceiling, mut walls, mut strata, mut hewn) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
     let mut paving = cobble::Stones::default();
     let mut grout = MeshBuilder::new();
     let mut ink = Ink::default();
@@ -464,9 +464,11 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
                 let centre = cell_centre(x, y);
                 let origin = vec3::sub(vec3::add(centre, vec3::scale(d, CELL * 0.5)), vec3::scale(u, CELL * 0.5));
                 let face = Face { origin, u, v: up, size: [CELL, level.ceiling], steps: [SEGMENTS, rows], facing: inward };
-                // Layered rooms have a part of their own, so the shader gives them beds.
+                // Layered rooms have a part of their own, so the shader gives them beds, and hewn
+                // ones another, so it gives them craggy facets. Every other wall is plain stone.
                 let layered = view.finishes().at(x, y).is_some_and(|f| f.walls == WallFinish::Strata);
-                face.build(&relief, if layered { &mut strata } else { &mut walls });
+                let carved = view.finishes().character_at(x, y) == Some(fb_level::Character::Hewn) && !layered;
+                face.build(&relief, if layered { &mut strata } else if carved { &mut hewn } else { &mut walls });
 
                 // Seams with the floor and ceiling: a ribbon on the wall and one on the flat.
                 for (edge, flat_facing) in [(Edge::Bottom, up), (Edge::Top, vec3::neg(up))] {
@@ -502,6 +504,9 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
     parts.add_look("walls", walls, stone(WALL_STONE));
     if !strata.is_empty() {
         parts.add_look("strata", strata, stone(WALL_STONE));
+    }
+    if !hewn.is_empty() {
+        parts.add_look("hewn", hewn, stone(WALL_STONE));
     }
     parts.add_look("ceiling", ceiling, stone(CEILING_STONE));
     LevelMesh { surfaces: parts.finish(), ink: ink.into_part(), joints: Part::default() }
@@ -914,7 +919,7 @@ mod tests {
         assert_eq!(quads("floor"), floors * SEGMENTS * SEGMENTS);
         assert_eq!(quads("ceiling"), ceilings * SEGMENTS * SEGMENTS);
         let rows = (level.ceiling / ROW).ceil() as usize;
-        assert_eq!(quads("walls") + quads("strata"), faces * SEGMENTS * rows);
+        assert_eq!(quads("walls") + quads("strata") + quads("hewn"), faces * SEGMENTS * rows);
     }
 
     #[test]
@@ -1074,6 +1079,33 @@ mod tests {
     }
 
     #[test]
+    fn the_first_level_draws_plain_stone_parts_only() {
+        for seed in 1..=30 {
+            let level = Level { stairs: Vec::new(), ..fb_level::generate(seed, 1) };
+            let drawn = level_mesh(&CellView::new(&level), CellView::new(&level).bounds());
+            let plain = CellView::uncobbled(&level);
+            let bare = level_mesh(&plain, plain.bounds());
+            assert_eq!(drawn.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(), ["floor", "walls", "ceiling"], "seed {seed}");
+            assert_eq!(hash_parts(drawn.surfaces.parts.iter().chain([&drawn.ink])), hash_parts(bare.surfaces.parts.iter().chain([&bare.ink])), "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn only_hewn_quarters_walls_are_split_off_for_the_craggy_shader() {
+        let hewn = |l: &Level| CellView::new(l).finishes().quarters().iter().any(|q| q.character == fb_level::Character::Hewn);
+        let level = (1..400).map(|seed| fb_level::generate(seed, 5)).find(hewn).expect("some cave has a hewn quarter");
+        let view = CellView::new(&level);
+        let mesh = level_mesh(&view, view.bounds());
+        let tris = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).map_or(0, |p| p.indices.len());
+        assert!(tris("hewn") > 0, "hewn walls have a part of their own");
+        // Floors and ceilings stay plain stone, and the walls split lose nothing.
+        let plain = CellView::with_finishes(&level, finishes(&level, &LevelParams { arch_chance: 0.0, strata_chance: 0.0, cobble_chance: 0.0, flagstone_chance: 0.0, ..LevelParams::for_style(level.style) }));
+        let bare = level_mesh(&plain, plain.bounds());
+        let walls = |m: &LevelMesh| m.surfaces.parts.iter().filter(|p| ["walls", "hewn", "strata"].contains(&p.name)).map(|p| p.indices.len()).sum::<usize>();
+        assert_eq!(walls(&mesh), walls(&bare));
+    }
+
+    #[test]
     fn stone_vertices_carry_the_finishes_moss() {
         // Both styles: rough rock at depth 3, stone halls at depth 4 (the first level is dry).
         for depth in [3, 4] {
@@ -1108,8 +1140,8 @@ mod tests {
         // Splitting the walls loses none: the unlayered total is the two together.
         let plain = CellView::with_finishes(&level, finishes(&level, &LevelParams { strata_chance: 0.0, ..LevelParams::for_style(level.style) }));
         let unsplit = level_mesh(&plain, plain.bounds());
-        let total = unsplit.surfaces.parts.iter().find(|p| p.name == "walls").unwrap().indices.len();
-        assert_eq!(walls("walls") + walls("strata"), total);
+        let total: usize = unsplit.surfaces.parts.iter().filter(|p| ["walls", "hewn", "strata"].contains(&p.name)).map(|p| p.indices.len()).sum();
+        assert_eq!(walls("walls") + walls("strata") + walls("hewn"), total);
     }
 
     #[test]
