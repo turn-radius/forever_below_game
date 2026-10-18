@@ -540,6 +540,8 @@ mod tests {
         assert_eq!(blow_line(Some(Species::Skeleton), Some(&armed("Mace"))), "Skeleton strikes");
         assert_eq!(blow_line(Some(Species::Skeleton), Some(&SkeletonKit::bare(&state))), "Skeleton claws");
         assert_eq!(blow_line(Some(Species::Rat), None), "Rat bites");
+        // A troll's swing is a bite and two claws at once, which reads as a mauling.
+        assert_eq!(blow_line(Some(Species::Troll), None), "Troll mauls");
         assert_eq!(blow_line(None, None), "A folk strikes");
         for line in [armed("Sword"), armed("Mace"), armed("Dagger"), SkeletonKit::bare(&state)].iter().map(|k| blow_line(Some(Species::Skeleton), Some(k))) {
             assert!(!line.contains("bites"), "{line}");

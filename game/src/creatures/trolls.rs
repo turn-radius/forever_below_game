@@ -6,7 +6,9 @@
 //! - **Regaining.** Every [`TURN_SECONDS`](fb_creatures::troll::TURN_SECONDS) a living troll
 //!   regains [`REGAIN`](fb_creatures::troll::REGAIN) hit points, up to its maximum.
 //! - **Burning.** A blow from a lit torch counts as fire ([`crate::combat::swing::flaming_blow`]
-//!   sends a [`Burned`] with it): the troll's next regeneration is stopped.
+//!   sends a [`Burned`] with it): the troll's next regeneration is stopped. A torch is held in
+//!   either hand to be swung, and its flame reaches a troll lying down as well as one on its
+//!   feet ([`crate::combat::swing::Strikeable::fallen_trolls`]).
 //! - **Falling and rising.** At 0 hit points it falls like any creature ([`Corpse`], its mind
 //!   gone). A turn after, unless it was burned since, it rises with the hit points it
 //!   regenerated: its collapse is undone, its [`Corpse`] removed and a new mind given
@@ -290,5 +292,192 @@ mod tests {
         assert_eq!(second, Dice::new(dice.count as u32, dice.sides as u32, 4), "the weapon's dice and the Strength modifier");
         assert_eq!(third, fb_creatures::troll::CLAW);
         assert_eq!(Species::Troll.stat_block().attack_bonus, 7);
+    }
+
+    // The troll in play: spawned with the whole of combat running, struck, burned and left.
+
+    use crate::combat::feedback::Struck;
+    use crate::combat::swing::Swing;
+    use crate::combat::{CombatPlugin, RunDice, Weapon};
+    use crate::creatures::behaviour::{AttackOnDelver, BehaviourPlugin, Brain, MissedDelver};
+    use crate::creatures::{animate, idle, spawn_creature_with};
+    use crate::inventory::underfoot::apply_floor_changes;
+    use crate::play::Player;
+    use bevy::time::TimeUpdateStrategy;
+    use crate::character::Character;
+
+    /// How far from the troll the delver stands, world units: a club's swing from its hide.
+    const AWAY: f32 = 12.0;
+    /// Out of its senses, and of its reach.
+    const FAR: f32 = 600.0;
+
+    /// The troll of `seed` in the level's start, in an app that runs the whole of combat and the
+    /// trolls, stepped 1/60 s a frame, with a delver holding a torch (lit or not) `AWAY` from it
+    /// and facing it. The app, the delver and the troll.
+    fn troll_fight(seed: u32, torch_lit: bool, away: f32) -> (App, Entity, Entity) {
+        let weak = |n: u128| Handle::<AudioSource>::Uuid(bevy::asset::uuid::Uuid::from_u128(n), std::marker::PhantomData);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin, bevy::state::app::StatesPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .insert_state(crate::launch::AppState::Delving)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<Character>()
+            .init_resource::<crate::play::ScreenOpen>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<crate::render::ToonMaterial>>()
+            .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<crate::render::OutlineMaterials>()
+            .init_resource::<FloorChanges>()
+            .add_plugins((BehaviourPlugin, CombatPlugin, TrollsPlugin))
+            .insert_resource(RunDice(procgen_rng::Mulberry32::new(9)))
+            .insert_resource(crate::combat::feedback::CreatureSounds { squeak: weak(1), hiss: weak(2), rat_squeal: weak(3), snake_rise: weak(4), thud: weak(5) })
+            .add_systems(Update, (idle, animate, apply_floor_changes).chain());
+        let mut level = fb_level::generate(1207, 1);
+        level.items.clear();
+        level.creatures.clear();
+        let spot = crate::creatures::dev_spots_for(&level, &format!("troll:{seed}")).remove(0);
+        app.insert_resource(CurrentLevel(level.clone()));
+        let built = crate::creatures::build_creature(&spot, level.depth);
+        let rig = built.gear.as_ref().map_or_else(|| built.creature.rig(), |g| g.rig.clone());
+        let troll = {
+            let mut commands = app.world_mut().commands();
+            spawn_creature_with(&mut commands, &level, &spot, &rig, None, built.arms).0
+        };
+        app.world_mut().flush();
+        let mut inventory = Inventory::default();
+        let torch = inventory.add(fb_items::roll_item("Torch", 7).unwrap());
+        inventory.wear(torch, Slot::Mainhand).unwrap();
+        if torch_lit {
+            inventory.toggle_light(torch).unwrap();
+        }
+        app.insert_resource(inventory);
+        app.update();
+        let at = app.world().get::<Transform>(troll).unwrap().translation;
+        let from = at + Vec3::X * away;
+        let player = app.world_mut().spawn((Player, Transform::from_translation(from).looking_at(at, Vec3::Y))).id();
+        (app, player, troll)
+    }
+
+    fn strike_down(app: &mut App, troll: Entity) {
+        for _ in 0..400 {
+            if app.world().get::<Corpse>(troll).is_some() {
+                return;
+            }
+            app.world_mut().write_message(Struck { target: troll, damage: 500, from: Vec2::new(0.0, 0.0), bludgeoning: true, critical: false });
+            app.update();
+        }
+        panic!("the troll never fell");
+    }
+
+    fn run(app: &mut App, seconds: f32) {
+        for _ in 0..(seconds * 60.0) as usize {
+            app.update();
+        }
+    }
+
+    /// The delver swings what they hold at the troll in front of them and the blow lands.
+    fn swing(app: &mut App, player: Entity, troll: Entity) {
+        app.world_mut().entity_mut(troll).insert(crate::combat::ArmourClass(-100));
+        let weapon = Weapon::in_hand(app.world().resource::<Inventory>(), app.world().resource::<Character>());
+        app.world_mut().entity_mut(player).insert(Swing::new(weapon));
+        run(app, 0.6);
+    }
+
+    fn health(app: &App, troll: Entity) -> i32 {
+        app.world().get::<Health>(troll).unwrap().hp
+    }
+
+    #[test]
+    fn a_troll_struck_down_rises_after_its_regeneration_with_its_mind_and_body_back() {
+        let (mut app, player, troll) = troll_fight(unarmed_seed(), false, FAR);
+        assert_eq!(health(&app, troll), 84, "the SRD's 84 hit points");
+        strike_down(&mut app, troll);
+        run(&mut app, 1.0);
+        assert_eq!(health(&app, troll), 0);
+        assert!(app.world().get::<Brain>(troll).is_none(), "a body has no mind");
+        let lying = app.world().get::<Transform>(troll).unwrap().rotation * Vec3::Y;
+        assert!(lying.y.abs() < 0.3, "laid on its back: {lying}");
+        assert!(app.world().get::<Intent>(troll).unwrap().fallen > 0.9);
+        // A whole turn after it fell, it rises.
+        run(&mut app, 6.0);
+        assert!(app.world().get::<Corpse>(troll).is_none(), "it got up");
+        assert_eq!(health(&app, troll), 10, "with the hit points it regenerated");
+        assert!(app.world().get::<Brain>(troll).is_some(), "with its mind back");
+        let up = app.world().get::<Transform>(troll).unwrap().rotation * Vec3::Y;
+        assert!(up.y > 0.95, "on its feet: {up}");
+        assert_eq!(app.world().get::<Intent>(troll).unwrap().fallen, 0.0);
+        assert!(!app.world().get::<Troll>(troll).unwrap().spent);
+        // And it fights: with the delver brought to its side it goes for them.
+        let at = app.world().get::<Transform>(troll).unwrap().translation;
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = at + Vec3::X * AWAY;
+        // (It stops at its first blow: a delver it fells ends the run.)
+        let mut blows = 0;
+        for _ in 0..600 {
+            app.update();
+            blows = app.world().resource::<Messages<AttackOnDelver>>().iter_current_update_messages().count() + app.world().resource::<Messages<MissedDelver>>().iter_current_update_messages().count();
+            if blows > 0 {
+                break;
+            }
+        }
+        assert_eq!(blows, 3, "a risen troll goes for the delver, a bite and two claws (or its weapon) in one swing");
+        // And it can be struck down again.
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = at + Vec3::X * FAR;
+        strike_down(&mut app, troll);
+        assert_eq!(health(&app, troll), 0);
+    }
+
+    /// A seed whose troll holds nothing.
+    fn unarmed_seed() -> u32 {
+        (0..40).find(|&s| fb_items::troll::troll_outfit(s, fb_items::Odds::kit(1)).worn.is_empty()).expect("some troll is unarmed")
+    }
+
+    #[test]
+    fn a_lit_torch_blow_stops_the_next_regeneration() {
+        let burned = |lit: bool| {
+            let (mut app, player, troll) = troll_fight(unarmed_seed(), lit, AWAY);
+            // Wounded first, so there is something to regain; the torch's blow does the little it does.
+            app.world_mut().get_mut::<Health>(troll).unwrap().hp = 50;
+            swing(&mut app, player, troll);
+            let after_blow = health(&app, troll);
+            assert!(after_blow <= 50, "the blow landed: {after_blow}");
+            assert_eq!(app.world().get::<Troll>(troll).unwrap().regeneration.is_stopped(), lit, "lit: {lit}");
+            // Out of its reach, so only its turn changes its health.
+            app.world_mut().get_mut::<Transform>(player).unwrap().translation += Vec3::X * 400.0;
+            run(&mut app, 6.5);
+            health(&app, troll) - after_blow
+        };
+        assert_eq!(burned(false), 10, "a troll regains 10 each turn");
+        assert_eq!(burned(true), 0, "burned, it regains nothing");
+    }
+
+    #[test]
+    fn a_troll_burned_while_down_stays_dead_and_drops_its_weapon_once() {
+        let seed = armed_seed();
+        let (mut app, player, troll) = troll_fight(seed, true, AWAY);
+        strike_down(&mut app, troll);
+        run(&mut app, 1.5);
+        // The delver puts the lit torch to the fallen troll.
+        swing(&mut app, player, troll);
+        assert!(app.world().get::<Troll>(troll).unwrap().regeneration.is_stopped(), "the fire caught it where it lay");
+        run(&mut app, 6.5);
+        assert!(app.world().get::<Corpse>(troll).is_some(), "it did not rise");
+        assert!(app.world().get::<Troll>(troll).unwrap().spent, "dead for good");
+        assert_eq!(health(&app, troll), 0);
+        let on_the_floor = |app: &mut App| app.world_mut().query::<&crate::carry::FloorItem>().iter(app.world()).count();
+        assert_eq!(on_the_floor(&mut app), 1, "its weapon lies where it fell");
+        assert!(app.world().get::<Looted>(troll).is_some());
+        run(&mut app, 20.0);
+        assert!(app.world().get::<Corpse>(troll).is_some() && health(&app, troll) == 0);
+        assert_eq!(on_the_floor(&mut app), 1, "set down once and never again");
+    }
+
+    #[test]
+    fn a_troll_felled_and_left_to_burn_by_other_means_is_just_as_dead() {
+        // The message itself, as any fire would send it.
+        let (mut app, _, troll) = troll_fight(armed_seed(), false, FAR);
+        strike_down(&mut app, troll);
+        app.world_mut().write_message(Burned { target: troll });
+        run(&mut app, 7.5);
+        assert!(app.world().get::<Corpse>(troll).is_some() && app.world().get::<Troll>(troll).unwrap().spent);
     }
 }

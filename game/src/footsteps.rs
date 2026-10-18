@@ -626,4 +626,41 @@ mod tests {
         let rat = heard(Species::Rat);
         assert!(patter[0] < rat[0], "softer than a rat's step: {patter:?} against {rat:?}");
     }
+
+    #[test]
+    fn a_troll_treads_heavy_on_its_own_long_stride() {
+        use bevy::state::app::StatesPlugin;
+        use fb_creatures::Species;
+
+        let handle = |n: u128| Handle::<AudioSource>::Uuid(bevy::asset::uuid::Uuid::from_u128(n), std::marker::PhantomData);
+        let light = [0x10, 0x11, 0x12].map(handle);
+        let heavy = [0x20, 0x21, 0x22].map(handle);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin)).insert_state(AppState::Delving).init_resource::<GameSettings>().init_resource::<Tuning>().insert_resource(FootstepSounds { light: light.clone(), heavy: heavy.clone() });
+        app.add_systems(Update, play_creature_steps);
+        let spawn = |app: &mut App, species: Species| {
+            let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species, seed: 42, pack: 0 };
+            let critter = Critter::new(spot, spot.creature());
+            let mut entity = app.world_mut().spawn((critter.clone(), Driven, Transform::default(), Visibility::default(), StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: Some(Vec2::ZERO) }, WalksWithSteps));
+            if let fb_creatures::Creature::Troll(state) = &critter.creature {
+                entity.insert(crate::creatures::trolls::Troll::new(state));
+            }
+            entity.id()
+        };
+        let troll = spawn(&mut app, Species::Troll);
+        let stride = {
+            let body = app.world().get::<crate::creatures::trolls::Troll>(troll).unwrap();
+            0.7 * (body.dims.thigh + body.dims.shin)
+        };
+        assert!(stride > 2.0, "a troll's stride is long: {stride}");
+        // A rat's half unit is nowhere near a step for it.
+        app.world_mut().get_mut::<Transform>(troll).unwrap().translation = Vec3::new(0.6, 0.0, 0.0);
+        app.update();
+        assert_eq!(app.world_mut().query::<&AudioPlayer>().iter(app.world()).count(), 0, "not yet a stride");
+        app.world_mut().get_mut::<Transform>(troll).unwrap().translation = Vec3::new(stride + 1.0, 0.0, 0.0);
+        app.update();
+        let heard: Vec<(Handle<AudioSource>, f32)> = app.world_mut().query::<(&AudioPlayer<AudioSource>, &PlaybackSettings)>().iter(app.world()).map(|(p, s)| (p.0.clone(), s.volume.to_linear())).collect();
+        assert_eq!(heard.len(), 1, "one tread for a stride walked");
+        assert!(heavy.contains(&heard[0].0), "the heavy tread, not a rat's light one");
+    }
 }

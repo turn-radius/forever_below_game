@@ -214,6 +214,7 @@ pub(super) fn start_swing(
 pub struct Strikeable<'w, 's> {
     creatures: Query<'w, 's, (Entity, &'static Critter, &'static Transform, Option<&'static Bones>), Without<Corpse>>,
     folk: Query<'w, 's, (Entity, &'static Denizen, &'static Transform, Option<&'static Children>), Without<Corpse>>,
+    fallen_trolls: Query<'w, 's, (Entity, &'static Critter, &'static Transform, Option<&'static Bones>, &'static crate::creatures::trolls::Troll), With<Corpse>>,
     anims: Query<'w, 's, &'static FolkAnim>,
     joints: Query<'w, 's, &'static GlobalTransform, With<crate::folk_pose::FolkJoint>>,
     shapes: Query<'w, 's, (&'static GlobalTransform, &'static HitShape)>,
@@ -228,6 +229,12 @@ impl Strikeable<'_, '_> {
         let creatures = self.creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes));
         let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target::on_floor(entity, t.translation.xz(), denizen.radius));
         creatures.chain(folk).collect()
+    }
+
+    /// The bodies of trolls that lie down and may yet rise, which a flame can still reach: fire
+    /// stops their regeneration ([`crate::creatures::trolls`]). No other blow finds them.
+    pub fn fallen_trolls(&self) -> Vec<Target> {
+        self.fallen_trolls.iter().filter(|(.., troll)| !troll.spent).flat_map(|(entity, critter, t, bones, _)| body_targets(entity, critter, t, bones, &self.shapes)).collect()
     }
 
     /// Whether a living creature's body is within `reach` of `at` (world `(x, z)`): a hostile
@@ -357,6 +364,12 @@ fn land_blows(
                 } else {
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
+            } else if inventory.as_deref().is_some_and(flaming_blow)
+                && let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.fallen_trolls())
+            {
+                // A lit torch put to a troll lying down: nothing to roll against, it burns.
+                swung.write(SwungAt { target });
+                burned.write(Burned { target });
             }
         }
         if swing.t >= SWING_TIME {
