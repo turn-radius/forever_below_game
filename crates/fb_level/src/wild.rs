@@ -42,6 +42,9 @@ pub const FLOCK: (u32, u32) = (3, 8);
 /// From this depth giant bats (one or two) take the flock's place.
 pub const GIANT_BATS_FROM_DEPTH: u32 = 4;
 pub const GIANT_BATS: (u32, u32) = (1, 2);
+/// The lowest ceiling, world units, a giant bat flies under: its wings reach about 12 above and
+/// below its body, so under the rough rock's 3 m it would clip. Lower levels keep a flock. Our own.
+pub const GIANT_BAT_CEILING: f32 = 35.0;
 /// Smallest room a flock or a giant bat takes, in cells.
 pub const BAT_ROOM_AREA: u32 = 24;
 /// The shallowest level with a spider's nest, the chance a level from there on has one, and the
@@ -188,11 +191,11 @@ pub(crate) fn place_wild(level: &Level) -> (Vec<CreatureSpot>, Vec<WebSpot>) {
         let rooms = p.rooms(MIN_ROOM_AREA, true, &mut rng);
         p.group(&rooms, 1, 1.5, Species::Jackalope, &mut rng);
     }
-    // Bats in a flock, or giant bats from depth 4, in a large room.
+    // Bats in a flock, or giant bats from depth 4 under a high enough ceiling, in a large room.
     let mut rng = stream(level, BAT_SALT);
     if rng.chance(BAT_ODDS) {
         let rooms = p.rooms(BAT_ROOM_AREA, false, &mut rng);
-        if level.depth >= GIANT_BATS_FROM_DEPTH {
+        if level.depth >= GIANT_BATS_FROM_DEPTH && level.ceiling >= GIANT_BAT_CEILING {
             let count = rng.int(GIANT_BATS.0, GIANT_BATS.1);
             p.group(&rooms, count, 2.0, Species::GiantBat, &mut rng);
         } else {

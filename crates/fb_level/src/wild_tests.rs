@@ -58,8 +58,14 @@ fn each_species_appears_only_from_its_depth() {
     assert!(found(Species::GiantSpider, SPIDERS_FROM_DEPTH));
     none(Species::GiantBat, 1..GIANT_BATS_FROM_DEPTH);
     assert!(found(Species::GiantBat, GIANT_BATS_FROM_DEPTH));
-    // Giant bats take the flock's place.
-    none(Species::Bat, GIANT_BATS_FROM_DEPTH..GIANT_BATS_FROM_DEPTH + 3);
+    // Giant bats take the flock's place under a high ceiling; under a low one the flock stays.
+    for depth in GIANT_BATS_FROM_DEPTH..GIANT_BATS_FROM_DEPTH + 3 {
+        for seed in 1..=60 {
+            let level = generate(seed, depth);
+            let shut_out = if level.ceiling >= GIANT_BAT_CEILING { Species::Bat } else { Species::GiantBat };
+            assert_eq!(count(&level, shut_out), 0, "{shut_out:?} at seed {seed} depth {depth} under a {} ceiling", level.ceiling);
+        }
+    }
     none(Species::Troll, 1..TROLLS_FROM_DEPTH);
     assert!(found(Species::Troll, TROLLS_FROM_DEPTH));
 }
