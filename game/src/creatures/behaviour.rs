@@ -424,7 +424,7 @@ fn point_in_room(level: &Level, room: Option<usize>, near: Vec2, margin: f32, rn
 
 /// One frame of every creature's mind: notice, choose where to go, step there round what is in
 /// the way, and attack in reach.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn behave(
     time: Res<Time>,
     level: Res<CurrentLevel>,
@@ -513,10 +513,12 @@ fn behave(
         }
 
         // A spider that has lost the delver goes back to where it lay in wait.
-        if species.is_spider() && brain.stuck <= 1.5 && at.distance(brain.home) > radius + 1.0 {
-            if let Mode::Wander { target: target @ None, .. } = &mut brain.mode {
-                *target = Some(brain.home);
-            }
+        if species.is_spider()
+            && brain.stuck <= 1.5
+            && at.distance(brain.home) > radius + 1.0
+            && let Mode::Wander { target: target @ None, .. } = &mut brain.mode
+        {
+            *target = Some(brain.home);
         }
 
         // Where to go, how fast.
@@ -571,11 +573,12 @@ fn behave(
                         brain.cornered = brain.flee.is_none();
                     }
                     strikes = in_reach && (brain.cornered || brain.stuck > CORNERED_AFTER);
-                    if !strikes && brain.attack.is_none() {
-                        if let Some((x, y)) = brain.flee {
-                            heading = Some((Vec2::new(x as f32, y as f32) + Vec2::splat(0.5)) * CELL);
-                            speed = species.speed() * JACKALOPE_BOLT;
-                        }
+                    if !strikes
+                        && brain.attack.is_none()
+                        && let Some((x, y)) = brain.flee
+                    {
+                        heading = Some((Vec2::new(x as f32, y as f32) + Vec2::splat(0.5)) * CELL);
+                        speed = species.speed() * JACKALOPE_BOLT;
                     }
                     // Running, it looks where it goes; cornered, it faces the delver.
                     if !strikes {
@@ -1618,7 +1621,7 @@ mod tests {
         let (small_low, _, small_swoop) = flying_heights(&small, &small_air);
         let (giant_low, _, giant_swoop) = flying_heights(&giant, &giant_air);
         assert!(giant_low < small_low && giant_swoop < small_swoop, "{giant_low} {small_low}");
-        assert!(GIANT_BAT_TURN < BAT_TURN);
+        const { assert!(GIANT_BAT_TURN < BAT_TURN) };
     }
 
     /// An app of bats and a player only, thinking and moving, in the largest room of seed 1207.

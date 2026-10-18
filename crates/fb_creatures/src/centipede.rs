@@ -359,10 +359,10 @@ impl CentipedeState {
                 marks.append(&m);
             }
         }
-        if self.banding == CentipedeBanding::Striped {
-            if let Some(m) = trunk.patch(t_of(-0.4 * l), t_of(0.4 * l), FRAC_PI_2, |_| 0.2, 1.4 * off, false) {
-                marks.append(&m);
-            }
+        if self.banding == CentipedeBanding::Striped
+            && let Some(m) = trunk.patch(t_of(-0.4 * l), t_of(0.4 * l), FRAC_PI_2, |_| 0.2, 1.4 * off, false)
+        {
+            marks.append(&m);
         }
         if !marks.is_empty() {
             parts.push(part(marks, "markings", MaterialKind::Skin, c.rim(), false));

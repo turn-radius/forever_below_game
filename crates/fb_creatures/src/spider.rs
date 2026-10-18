@@ -49,7 +49,7 @@ pub mod bone {
 
 /// Which side leg `k` (in bone order) is on, in the spine frame's x: -1 the left, +1 the right.
 pub fn leg_side(k: usize) -> f32 {
-    if k % 2 == 0 { -1.0 } else { 1.0 }
+    if k.is_multiple_of(2) { -1.0 } else { 1.0 }
 }
 
 /// A spider's colouring: carapace, abdomen, legs, pale hair, markings, eyes and fangs.

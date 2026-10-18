@@ -221,6 +221,7 @@ pub(super) fn start_swing(
 /// shapes ([`body_targets`]), and the living folk, by the circle each stands in
 /// ([`Denizen::radius`]: their shoulders and clothes, which also keeps the delver off them).
 #[derive(bevy::ecs::system::SystemParam)]
+#[allow(clippy::type_complexity)]
 pub struct Strikeable<'w, 's> {
     creatures: Query<'w, 's, (Entity, &'static Critter, &'static Transform, Option<&'static Bones>), Without<Corpse>>,
     folk: Query<'w, 's, (Entity, &'static Denizen, &'static Transform, Option<&'static Children>), Without<Corpse>>,

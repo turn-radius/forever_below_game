@@ -910,7 +910,7 @@ mod tests {
     /// The troll seeds below 40 that hold a weapon.
     fn armed_trolls() -> Vec<(TrollState, SkeletonGear)> {
         (0..40)
-            .map(|seed| TrollState::roll(seed))
+            .map(TrollState::roll)
             .map(|state| {
                 let gear = SkeletonGear::roll_troll(&state, Odds::default());
                 (state, gear)

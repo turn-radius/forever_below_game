@@ -951,7 +951,7 @@ pub fn spider(state: &SpiderState, pose: &SpiderPose) -> Vec<Placement> {
     }
 
     // Legs.
-    for k in 0..LEG_COUNT {
+    for (k, &phase_offset) in SPIDER_PHASE.iter().enumerate() {
         let pair = k / 2;
         let side = leg_side(k);
         let leg = d.legs[pair];
@@ -963,7 +963,7 @@ pub fn spider(state: &SpiderState, pose: &SpiderPose) -> Vec<Placement> {
         let phi = d.azimuth[pair];
         let out_c = [-side * phi.sin(), 0.0, phi.cos()];
         let hip_rest = rest_body.point(hip);
-        let c = ((pose.stride + SPIDER_PHASE[k]) / TAU).rem_euclid(1.0);
+        let c = ((pose.stride + phase_offset) / TAU).rem_euclid(1.0);
         let sweep = SPIDER_DUTY * spider_stride(state);
         let (along, up) = if c < SPIDER_DUTY {
             (sweep * (0.5 - c / SPIDER_DUTY), 0.0)
@@ -1039,8 +1039,8 @@ mod spider_tests {
                 assert!(low > -0.012 * s, "sinks to {low} at step {step}, pace {pace}");
                 assert!(low < 0.012 * s, "floats at {low} at step {step}, pace {pace}");
                 let mut down = 0;
-                for k in 0..LEG_COUNT {
-                    let c = ((pose.stride + SPIDER_PHASE[k]) / TAU).rem_euclid(1.0);
+                for (k, &phase_offset) in SPIDER_PHASE.iter().enumerate() {
+                    let c = ((pose.stride + phase_offset) / TAU).rem_euclid(1.0);
                     let planted = c < SPIDER_DUTY || pace == 0.0;
                     let bottom = tip_height(&rig, &places, k);
                     if planted {
@@ -1355,8 +1355,7 @@ pub fn jackalope(state: &JackalopeState, pose: &JackalopePose) -> Vec<Placement>
     // Legs: each paw's ankle follows its stance and swing, in the world; the leg solves to reach
     // it from where its joint is, however the body is tipped.
     let spine_from_creature = into_spine(pitch);
-    for k in 0..4 {
-        let (_, _, hind) = LEGS[k];
+    for (k, &(_, _, hind)) in LEGS.iter().enumerate() {
         let leg = d.leg(k);
         let root = d.leg_root(k);
         let joint = vec3::add(origin, rotation.transform(root));
@@ -1610,8 +1609,8 @@ pub fn centipede(state: &CentipedeState, pose: &CentipedePose) -> Vec<Placement>
     }
     let mut points: Vec<V3> = Vec::with_capacity(samples);
     let mut p = [0.0f32, 0.0];
-    for j in 0..samples {
-        points.push([p[0], lift[j], p[1]]);
+    for (j, &height) in lift.iter().take(samples).enumerate() {
+        points.push([p[0], height, p[1]]);
         let mid = (j as f32 + 0.5) * step;
         let level = step * pitch_at(mid).cos();
         let h = heading(mid);

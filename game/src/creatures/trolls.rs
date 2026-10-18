@@ -103,6 +103,7 @@ pub fn take_turn(troll: &mut Troll, health: &mut Health, dt: f32) -> Option<Turn
 }
 
 /// Each troll's turns: living ones regain, a fallen one rises or stays down.
+#[allow(clippy::type_complexity)]
 pub(crate) fn regenerate(
     mut commands: Commands,
     time: Res<Time>,

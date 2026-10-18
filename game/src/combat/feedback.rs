@@ -348,6 +348,7 @@ fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creat
 
 /// Lays each body down once the flash's hold is over ([`collapse_share`]): a rat rolls onto its
 /// back about its middle, a snake goes slack.
+#[allow(clippy::type_complexity)]
 pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent, Option<&crate::creatures::trolls::Troll>, Option<&mut crate::creatures::Flight>)>) {
     let hold = tuning.combat.flash_hold;
     for (critter, mut corpse, mut transform, mut intent, troll, flight) in &mut bodies {

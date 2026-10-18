@@ -460,9 +460,9 @@ impl Layout {
         dims.origins[index::NECK] = c7;
         dims.origins[index::SKULL] = atlas;
         dims.origins[index::JAW] = hinge;
-        for (k, side) in Side::BOTH.into_iter().enumerate() {
-            for j in 0..3 {
-                dims.origins[arm_bone(side) + j] = arms[k][j];
+        for (side, arm) in Side::BOTH.into_iter().zip(arms) {
+            for (j, &origin) in arm.iter().enumerate() {
+                dims.origins[arm_bone(side) + j] = origin;
             }
         }
         let hand_length = 0.105 * body.height * body.race().arm * 1.2;
@@ -865,7 +865,6 @@ fn head(l: &Layout, state: &TrollState, kit: &Kit, rng: &mut Mulberry32, meshes:
                 .collect();
             hair.append(&tube(&path, 5, &SweepOptions::default(), |s| 0.05 * hh * (1.0 - 0.8 * s)));
         }
-        let mut hair = hair;
         hair.translate(vec3::neg(d.origins[index::SKULL]));
         parts.push(part(hair, "hair", MaterialKind::Hair, state.hair_colour(), false));
     }
@@ -974,7 +973,7 @@ fn hand(state: &TrollState, length: f32, wrist: f32, side: u32, rng: &mut Mulber
         let _ = i;
     }
     // The thumb: from the base of the palm out and forward.
-    let thumb = [[-0.28 * half, 0.1 * l, -0.02 * l], [-1.0 * half, 0.28 * l, -0.07 * l], [-1.25 * half, 0.44 * l, -0.16 * l], [-1.2 * half, 0.56 * l, -0.26 * l]];
+    let thumb = [[-0.28 * half, 0.1 * l, -0.02 * l], [-half, 0.28 * l, -0.07 * l], [-1.25 * half, 0.44 * l, -0.16 * l], [-1.2 * half, 0.56 * l, -0.26 * l]];
     flesh.append(&limb_tube(&thumb, 9, |t| 1.15 * fr * (1.0 - 0.4 * t)));
     for p in &thumb[1..] {
         flesh.append(&ball(*p, fr * 0.95, [1.0, 1.0, 1.0]));
