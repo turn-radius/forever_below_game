@@ -84,6 +84,9 @@ fn the_newcomers_keep_to_their_rules() {
                 assert!(!by_door(&level, x, y) && level.cell(x, y) == Cell::Floor, "{what} by a door");
                 assert!(level.stair_at(x, y).is_none(), "{what} on a stair");
                 assert!(!level.stairs.iter().any(|s| s.approach() == (x as u32, y as u32)), "{what} on a stair's approach");
+                // Nobody arriving by a stair walks straight into one.
+                let stair_rooms: Vec<Option<usize>> = level.stairs.iter().flat_map(|s| [level.room_at(s.x as i32, s.y as i32), level.room_at(s.approach().0 as i32, s.approach().1 as i32)]).collect();
+                assert!(!stair_rooms.contains(&Some(room)), "{what} in a stair's room");
                 assert!(fits(&level, &level.rooms[room], c.x, c.y, c.creature().radius(), &level.creatures[..i]), "{what} crowds something");
                 if c.species.is_spider() || c.species.is_jackalope() {
                     assert!(!level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == Some(room)), "{what} in a room with folk");

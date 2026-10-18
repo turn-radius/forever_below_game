@@ -117,8 +117,16 @@ impl Placer<'_> {
     /// shuffled, those no creature stands in first and colonnaded halls last.
     fn rooms(&self, area: u32, quiet: bool, rng: &mut Mulberry32) -> Vec<usize> {
         let level = self.level;
+        // Never a room with a stair in it, nor the one a stair opens into: whoever comes down
+        // or up arrives clear of anything waiting for them.
+        let by_stair = |i: usize| {
+            level.stairs.iter().any(|s| {
+                let (ax, ay) = s.approach();
+                level.room_at(s.x as i32, s.y as i32) == Some(i) || level.room_at(ax as i32, ay as i32) == Some(i)
+            })
+        };
         let mut rooms: Vec<usize> = (0..level.rooms.len())
-            .filter(|&i| Some(i) != self.start_room && level.rooms[i].area() >= area)
+            .filter(|&i| Some(i) != self.start_room && level.rooms[i].area() >= area && !by_stair(i))
             .filter(|&i| !quiet || !level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == Some(i)))
             .collect();
         shuffle(&mut rooms, rng);
