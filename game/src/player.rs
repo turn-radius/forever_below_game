@@ -17,6 +17,7 @@ use bevy::{
 use fb_level::{CELL, Level};
 
 use crate::keymap::{Action, ActionInput, Keymap};
+use crate::level::draw_end;
 use crate::light::point_light;
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
@@ -96,17 +97,19 @@ impl Gait {
 
 /// The world camera's projection for `tuning`.
 pub fn world_projection(tuning: &Tuning) -> Projection {
-    Projection::from(PerspectiveProjection { fov: tuning.view.world_fov_degrees.to_radians(), near: NEAR, ..default() })
+    Projection::from(PerspectiveProjection { fov: tuning.view.world_fov_degrees.to_radians(), near: NEAR, far: draw_end(&tuning.light), ..default() })
 }
 
-/// Keeps every player camera's field of view to the tuning's.
+/// Keeps every player camera's field of view and far plane to the tuning's.
 fn widen_player_view(tuning: Res<Tuning>, mut cameras: Query<&mut Projection, With<PlayerCamera>>) {
     let fov = tuning.view.world_fov_degrees.to_radians();
+    let far = draw_end(&tuning.light);
     for mut projection in &mut cameras {
         if let Projection::Perspective(perspective) = &mut *projection
-            && perspective.fov != fov
+            && (perspective.fov != fov || perspective.far != far)
         {
             perspective.fov = fov;
+            perspective.far = far;
         }
     }
 }
@@ -136,6 +139,9 @@ fn spawn_player(mut commands: Commands, level: Res<CurrentLevel>, tuning: Res<Tu
                 Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
                 // Ears 20 cm apart, for sounds from the creatures round them.
                 SpatialListener::new(2.0),
+                // The point lights' shadow maps cull from this camera, not from whichever
+                // window camera has the lowest id (the view model's, far below the level).
+                bevy::camera::ShadowLodOrigin,
             ));
             // A dim light at the eye for looking at the level before the torch exists.
             if std::env::var_os("FB_DEBUG_LIGHT").is_some() {
@@ -216,7 +222,7 @@ impl Default for GearPace {
 }
 
 /// What walking moves and reads on the delver.
-type Walker<'a> = (&'a mut Locomotion, &'a mut Gait, &'a mut Transform, Option<&'a Slowed>, &'a Exhaustion, &'a Load, &'a DelverStamina, Option<&'a GearPace>);
+type Walker<'a> = (&'a mut Locomotion, &'a mut Gait, &'a mut Transform, Option<&'a Slowed>, &'a Exhaustion, &'a Load, &'a DelverStamina, Option<&'a GearPace>, Has<crate::combat::guard::Guard>);
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn walk(
@@ -234,13 +240,16 @@ pub(crate) fn walk(
     if dt <= 0.0 {
         return;
     }
-    let (locomotion, gait, transform, slowed, exhaustion, load, stamina, gear_pace) = &mut *body;
+    let (locomotion, gait, transform, slowed, exhaustion, load, stamina, gear_pace, guarding) = &mut *body;
     let moving = &tuning.moving;
     let rules = crate::rules::GameRules::of(&rules);
     // What they wear and what is on them (the cold in a cold-blooded body) set their pace.
     let pace = gear_pace.map_or(1.0, |p| p.0) * effects.iter().next().map_or(1.0, |e| e.0.pace(&rules.effects) as f32);
     let web = fb_level::webs::web_pace(&level.0.webs, transform.translation.x, transform.translation.z, moving.body_radius, None, moving.web_pace);
-    let speed = if input.pressed(Action::Sprint) && stamina.0.can_exert() { moving.hurry_speed } else { moving.walk_speed } * pace * web * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier_with(rules) * load.0.walk_multiplier_with(rules);
+    // A raised shield slows them to a guarded walk, with no sprinting (`crate::combat::guard`).
+    let guard = if *guarding { crate::combat::guard::GUARD_PACE } else { 1.0 };
+    let sprinting = input.pressed(Action::Sprint) && stamina.0.can_exert() && !*guarding;
+    let speed = if sprinting { moving.hurry_speed } else { moving.walk_speed } * pace * web * guard * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier_with(rules) * load.0.walk_multiplier_with(rules);
     let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
     let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
@@ -405,6 +414,25 @@ mod tests {
     }
 
     #[test]
+    fn the_far_plane_sits_just_past_the_fogs_end() {
+        let mut tuning = Tuning::default();
+        let far = |tuning: &Tuning| match world_projection(tuning) {
+            Projection::Perspective(p) => p.far,
+            other => panic!("not a perspective: {other:?}"),
+        };
+        assert!(far(&tuning) > tuning.light.fog_end && far(&tuning) < tuning.light.fog_end + 100.0);
+        // And it follows the tuning on a camera already spawned.
+        let mut app = App::new();
+        app.insert_resource(tuning.clone()).add_systems(Update, widen_player_view);
+        let camera = app.world_mut().spawn((PlayerCamera, world_projection(&tuning))).id();
+        tuning.light.fog_end = 120.0;
+        app.insert_resource(tuning.clone());
+        app.update();
+        let Projection::Perspective(p) = app.world().get::<Projection>(camera).unwrap() else { panic!("not a perspective") };
+        assert_eq!(p.far, far(&tuning));
+    }
+
+    #[test]
     fn boots_of_haste_walk_a_fifth_farther() {
         let (mut usual_app, usual_body, start) = walking(|_| {}, ());
         let (mut quick_app, quick_body, _) = walking(|_| {}, GearPace(1.2));
@@ -484,6 +512,22 @@ mod tests {
             assert!((level_2 / usual - 0.5).abs() < 0.02, "{frames} frames: {level_2} against {usual}");
             assert!(walked_as(frames, |_| {}, exhausted(1)) / usual > 0.99, "level 1 does not slow");
         }
+    }
+
+    #[test]
+    fn a_raised_shield_slows_the_delver_and_stops_a_sprint() {
+        use crate::combat::guard::{GUARD_PACE, Guard};
+        let guard = Guard { at: Vec2::ZERO, facing: Vec2::NEG_Y };
+        let usual = walked(30, |_| {});
+        let guarded = walked_as(30, |_| {}, guard);
+        assert!((guarded / usual - GUARD_PACE).abs() < 0.02, "{guarded} against {usual}");
+        let (mut app, body, start) = walking(|_| {}, guard);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftLeft);
+        for _ in 0..30 {
+            app.update();
+        }
+        let sprinted = app.world().get::<Transform>(body).unwrap().translation.distance(start);
+        assert!((sprinted / usual - GUARD_PACE).abs() < 0.02, "no sprint with the guard up: {sprinted} against {usual}");
     }
 
     #[test]

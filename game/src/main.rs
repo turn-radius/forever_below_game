@@ -83,7 +83,7 @@ fn main() -> AppExit {
     forever_below::rules::use_data_folder(&mut app);
     app.add_plugins(
         DefaultPlugins
-            .set(WindowPlugin { primary_window: Some(Window { title: "Forever Below".into(), ..default() }), ..default() })
+            .set(WindowPlugin { primary_window: Some(Window { title: "Forever Below".into(), present_mode: forever_below::frame_time::present_mode(), ..default() }), ..default() })
             // Debug builds watch the assets, so saving `assets/tuning.toml` or `data/rules.toml` applies it live.
             .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() })
             // Spatial audio scale: positions are scaled to metres. 1 world unit is 10 cm = 0.1 m.

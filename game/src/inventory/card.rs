@@ -200,6 +200,7 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     differ(new.disease_risk, old.disease_risk, "disease risk", "\u{d7}", false);
     differ(new.speed * 100.0, old.speed * 100.0, "speed", "%", true);
     differ(new.block_chance * 100.0, old.block_chance * 100.0, "chance to block", "%", true);
+    differ(new.luck, old.luck, "luck", "", true);
     differ(new.break_chance * 100.0, old.break_chance * 100.0, "chance to break", "%", false);
     for (new, old, name) in [
         (new.strength, old.strength, "STR"),
@@ -303,6 +304,9 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
     }
     if s.block_chance > 0.0 {
         lines.push(format!("{}% chance to block a blow", number((s.block_chance * 100.0).round())));
+    }
+    if s.luck != 0.0 {
+        lines.push(format!("{} luck", signed(s.luck)));
     }
     for (value, name) in [(s.strength, "STR"), (s.dexterity, "DEX"), (s.constitution, "CON"), (s.intelligence, "INT"), (s.wisdom, "WIS"), (s.charisma, "CHA")] {
         if value != 0.0 {
@@ -745,7 +749,7 @@ mod tests {
 
     #[test]
     fn a_legendary_shows_its_title_old_name_and_history() {
-        let legend = (1..5_000).filter_map(|s| fb_items::roll_item("Sword", s)).find(|i| i.rarity == Rarity::Legendary).unwrap();
+        let legend = (1..5_000).filter_map(|s| fb_items::roll_item_with("Sword", s, fb_items::Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).unwrap();
         let l = legend.legend.as_ref().unwrap();
         let card = card_text(&legend, None);
         assert_eq!(card.title, l.title);

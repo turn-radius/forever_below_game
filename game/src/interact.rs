@@ -10,8 +10,9 @@
 //! | Item on the ground, underfoot or in a container not carried | Take | Equip | |
 //! | Item carried | its use (Eat, Drink, Light, Put out) | Equip, or Take off if worn | |
 //! | Door | Open or Close | Lock or Unlock, holding its key | Pick the lock, holding lockpicks |
-//! | Container | Open | Lock or Unlock, holding its key | Pick the lock, holding lockpicks |
+//! | Container | Open, or Look in once it stands open | Lock or Unlock, holding its key | Pick the lock, holding lockpicks |
 //! | Folk | Talk | Barter | Steal, while hidden |
+//! | Stair | Go down or Go up | | |
 //!
 //! The core is pure: a [`Target`] and a [`Delver`] in, [`Verbs`] out. [`item_target`] builds an
 //! item's target from the real inventory. Not wired yet, because the game has none of it: doors
@@ -21,8 +22,9 @@
 //!
 //! The slots are not bound to keys here; [`Slot::action`] maps a [`Slot`] to the keymap's action,
 //! and [`key_line`] writes a target's verbs with the keys bound to them: "F Open · R Pick
-//! the lock". Aimed at a container within reach, [`CrosshairPrompt`] shows that line over the
-//! crosshair ([`InteractPlugin`]); a folk's line goes on its card (`crate::folk`). Doors have
+//! the lock". Aimed at a container within reach, or at a stair with nothing else aimed at
+//! (`crate::travel`), [`CrosshairPrompt`] shows that line over the crosshair
+//! ([`InteractPlugin`]); a folk's line goes on its card (`crate::folk`). Doors have
 //! no prompt: the only one, the entrance, never opens for the delver, so it has no verb to say.
 
 use bevy::{prelude::*, ui::ComputedUiRenderTargetInfo};
@@ -80,6 +82,7 @@ pub enum Verb {
     Light,
     PutOut,
     Open,
+    LookIn,
     Close,
     Lock,
     Unlock,
@@ -87,6 +90,8 @@ pub enum Verb {
     Talk,
     Barter,
     Steal,
+    GoDown,
+    GoUp,
 }
 
 impl Verb {
@@ -101,6 +106,7 @@ impl Verb {
             Verb::Light => "Light",
             Verb::PutOut => "Put out",
             Verb::Open => "Open",
+            Verb::LookIn => "Look in",
             Verb::Close => "Close",
             Verb::Lock => "Lock",
             Verb::Unlock => "Unlock",
@@ -108,6 +114,8 @@ impl Verb {
             Verb::Talk => "Talk",
             Verb::Barter => "Barter",
             Verb::Steal => "Steal",
+            Verb::GoDown => "Go down",
+            Verb::GoUp => "Go up",
         }
     }
 }
@@ -201,6 +209,9 @@ pub enum Target {
         lock: Lock,
     },
     Folk,
+    Stair {
+        down: bool,
+    },
 }
 
 /// What the lookup needs of the delver. Keys, lockpicks and hiding are not in the game yet, so
@@ -226,8 +237,10 @@ pub fn verbs_for(target: &Target, delver: &Delver) -> Verbs {
             }
         }
         Target::Door { open, lock } => Verbs { primary: Some(if open { Verb::Close } else { Verb::Open }), ..locks(lock, delver) },
-        Target::Container { open, lock } => Verbs { primary: (!open).then_some(Verb::Open), ..locks(lock, delver) },
+        // A container left standing open is looked in again with the same key.
+        Target::Container { open, lock } => Verbs { primary: Some(if open { Verb::LookIn } else { Verb::Open }), ..locks(lock, delver) },
         Target::Folk => Verbs { primary: Some(Verb::Talk), secondary: Some(Verb::Barter), tertiary: delver.hidden.then_some(Verb::Steal), ..Verbs::default() },
+        Target::Stair { down } => Verbs { primary: Some(if down { Verb::GoDown } else { Verb::GoUp }), ..Verbs::default() },
     }
 }
 
@@ -292,7 +305,7 @@ pub struct InteractPlugin;
 
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CrosshairPrompt>().add_systems(Update, (spawn_prompt, show_prompt.after(crate::props::prompt_aimed_container)).chain().in_set(DelveSystems));
+        app.init_resource::<CrosshairPrompt>().add_systems(Update, (spawn_prompt, show_prompt.after(crate::props::prompt_aimed_container).after(crate::travel::prompt_stair)).chain().in_set(DelveSystems));
     }
 }
 
@@ -376,7 +389,9 @@ mod tests {
         assert_eq!(line(Target::Folk, Delver::default()), "F Talk \u{b7} G Barter");
         assert_eq!(line(Target::Folk, Delver { hidden: true, ..Delver::default() }), "F Talk \u{b7} G Barter \u{b7} R Steal");
         let open = Target::Container { open: true, lock: Lock::NONE };
-        assert_eq!(line(open, Delver::default()), "");
+        assert_eq!(line(open, Delver::default()), "F Look in");
+        assert_eq!(line(Target::Stair { down: true }, Delver::default()), "F Go down");
+        assert_eq!(line(Target::Stair { down: false }, Delver::default()), "F Go up");
     }
 
     #[test]

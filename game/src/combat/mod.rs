@@ -49,6 +49,7 @@ use crate::tuning::Tuning;
 pub mod callouts;
 pub mod feedback;
 pub mod eye;
+pub mod guard;
 pub mod kick;
 pub mod orbs;
 pub mod shoot;
@@ -59,7 +60,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin, shoot::ShootPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin, shoot::ShootPlugin, guard::GuardPlugin));
     }
 }
 
@@ -408,7 +409,7 @@ mod tests {
         let bare = character.armour_class(&Inventory::default()).value().round() as i32;
         let mut kitted = Inventory::default();
         for (base, slot) in [("Mail", fb_items::Slot::Body), ("Shield", fb_items::Slot::Offhand), ("Helm", fb_items::Slot::Head), ("Gloves", fb_items::Slot::Hands)] {
-            let id = kitted.add(fb_items::roll_item(base, 7).unwrap());
+            let id = kitted.add(fb_items::roll_item_with(base, 7, fb_items::Odds::loot(8)).unwrap());
             kitted.wear(id, slot).unwrap();
         }
         let armoured = character.armour_class(&kitted).value().round() as i32;

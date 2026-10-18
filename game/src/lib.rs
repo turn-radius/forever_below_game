@@ -58,6 +58,7 @@ pub mod settings;
 pub mod sight;
 pub mod simulate;
 pub mod soak;
+pub mod staged;
 pub mod status;
 pub mod swing_practice;
 pub mod title;

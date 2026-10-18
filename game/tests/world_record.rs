@@ -143,6 +143,34 @@ fn a_dropped_sword_lies_where_it_was_dropped_after_round_trips_and_is_never_dupl
     }
 }
 
+/// The level below is made ahead of time on the way down; coming back to it after a visit is
+/// from the record, which the loot rolled ahead must not override.
+#[test]
+fn an_item_dropped_on_the_level_below_is_still_there_after_up_and_down_again() {
+    let mut app = delving();
+    go(&mut app, StairKind::Down);
+    assert!(app.world().resource::<forever_below::staged::Staged>().taken > 0, "the first visit used what was made ahead");
+    let at = start_cell(&app);
+    let sword = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Sword", 40_002).unwrap());
+    set_down_at(&mut app, sword, at, 0.3);
+    // (What burns, a lit lantern, burns on while its level is left, so what is compared is
+    // what lies where: each thing's base and seed, and the sword in full.)
+    let floor = |app: &mut App| {
+        let mut items = lying(app);
+        by_spot(&mut items);
+        items.into_iter().map(|(spot, item)| (spot, item.base.clone(), item.seed)).collect::<Vec<_>>()
+    };
+    let before = floor(&mut app);
+    let total = app.world().resource::<Inventory>().ids().count();
+    for trip in 0..2 {
+        go(&mut app, StairKind::Up);
+        go(&mut app, StairKind::Down);
+        assert_eq!(floor(&mut app), before, "trip {trip}: the floor is the record, not loot rolled again");
+        assert_eq!(kept(&app, "Sword", 40_002), 1, "trip {trip}: one sword");
+        assert_eq!(app.world().resource::<Inventory>().ids().count(), total, "trip {trip}: nothing made or lost");
+    }
+}
+
 #[test]
 fn a_torch_burnt_on_the_floor_is_as_burnt_when_the_delver_returns() {
     let mut app = delving();

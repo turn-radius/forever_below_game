@@ -13,6 +13,8 @@ use bevy::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::render::InkStyle;
+
 /// Settings the player chooses, saved between runs. Fields missing from the file take their
 /// defaults, so older files keep loading as settings are added.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -28,11 +30,14 @@ pub struct GameSettings {
     pub invert_mouse_y: bool,
     /// Borderless fullscreen on the window's monitor, rather than a window.
     pub fullscreen: bool,
+    /// Ink outlines drawn as one screen-space pass over the lit image, rather than as a hull
+    /// round every part (`render::InkStyle`).
+    pub screen_ink: bool,
 }
 
 impl Default for GameSettings {
     fn default() -> Self {
-        GameSettings { music_volume: 1.0, sound_volume: 1.0, mouse_sensitivity: 1.0, invert_mouse_y: false, fullscreen: false }
+        GameSettings { music_volume: 1.0, sound_volume: 1.0, mouse_sensitivity: 1.0, invert_mouse_y: false, fullscreen: false, screen_ink: false }
     }
 }
 
@@ -44,11 +49,13 @@ pub enum Setting {
     MouseSensitivity,
     InvertMouseY,
     Fullscreen,
+    ScreenInk,
 }
 
 impl Setting {
     /// Every setting, in the order the menu lists them.
-    pub const ALL: [Setting; 5] = [Setting::MusicVolume, Setting::SoundVolume, Setting::MouseSensitivity, Setting::InvertMouseY, Setting::Fullscreen];
+    pub const ALL: [Setting; 6] =
+        [Setting::MusicVolume, Setting::SoundVolume, Setting::MouseSensitivity, Setting::InvertMouseY, Setting::Fullscreen, Setting::ScreenInk];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -57,6 +64,7 @@ impl Setting {
             Setting::MouseSensitivity => "Mouse sensitivity",
             Setting::InvertMouseY => "Invert mouse Y",
             Setting::Fullscreen => "Fullscreen",
+            Setting::ScreenInk => "Screen ink",
         }
     }
 
@@ -65,7 +73,7 @@ impl Setting {
         match self {
             Setting::MusicVolume | Setting::SoundVolume => Some((0.0, 1.0)),
             Setting::MouseSensitivity => Some((0.25, 3.0)),
-            Setting::InvertMouseY | Setting::Fullscreen => None,
+            Setting::InvertMouseY | Setting::Fullscreen | Setting::ScreenInk => None,
         }
     }
 
@@ -77,6 +85,7 @@ impl Setting {
             Setting::MouseSensitivity => settings.mouse_sensitivity,
             Setting::InvertMouseY => settings.invert_mouse_y as u8 as f32,
             Setting::Fullscreen => settings.fullscreen as u8 as f32,
+            Setting::ScreenInk => settings.screen_ink as u8 as f32,
         }
     }
 
@@ -94,6 +103,7 @@ impl Setting {
             Setting::MouseSensitivity => settings.mouse_sensitivity = value,
             Setting::InvertMouseY => settings.invert_mouse_y = value >= 0.5,
             Setting::Fullscreen => settings.fullscreen = value >= 0.5,
+            Setting::ScreenInk => settings.screen_ink = value >= 0.5,
         }
     }
 
@@ -115,7 +125,7 @@ impl Setting {
         match self {
             Setting::MusicVolume | Setting::SoundVolume => format!("{:.0}%", value * 100.0),
             Setting::MouseSensitivity => format!("{value:.2}\u{d7}"),
-            Setting::InvertMouseY | Setting::Fullscreen => if value >= 0.5 { "On" } else { "Off" }.into(),
+            Setting::InvertMouseY | Setting::Fullscreen | Setting::ScreenInk => if value >= 0.5 { "On" } else { "Off" }.into(),
         }
     }
 }
@@ -200,7 +210,7 @@ impl Plugin for SettingsPlugin {
         }
         let file = app.world().resource::<SettingsFile>().clone();
         let settings = file.0.as_deref().map(GameSettings::load).unwrap_or_default();
-        app.insert_resource(settings).add_systems(Update, apply_window_settings).add_systems(Last, save_settings);
+        app.insert_resource(settings).add_systems(Update, (apply_window_settings, apply_ink_setting)).add_systems(Last, save_settings);
     }
 }
 
@@ -208,6 +218,15 @@ impl Plugin for SettingsPlugin {
 /// keeps the desktop's resolution and switches without a mode change.
 pub fn window_mode(fullscreen: bool) -> WindowMode {
     if fullscreen { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed }
+}
+
+/// Switches the ink outlines to the style the settings ask for, at the start and whenever they
+/// change. `FB_INK` for the run (`InkStyle::from_env`) wins over the setting.
+fn apply_ink_setting(settings: Res<GameSettings>, style: Option<ResMut<InkStyle>>) {
+    let Some(mut style) = style else { return };
+    if settings.is_changed() && InkStyle::from_env().is_none() {
+        style.set_if_neq(if settings.screen_ink { InkStyle::Screen } else { InkStyle::Hull });
+    }
 }
 
 /// Puts the window in the mode the settings ask for, at the start and whenever they change.
@@ -305,6 +324,21 @@ mod tests {
     }
 
     #[test]
+    fn screen_ink_switches_the_ink_style() {
+        let mut app = App::new();
+        app.insert_resource(SettingsFile(None)).insert_resource(InkStyle::Hull).add_plugins(SettingsPlugin);
+        app.update();
+        assert_eq!(*app.world().resource::<InkStyle>(), InkStyle::Hull);
+        app.world_mut().resource_mut::<GameSettings>().screen_ink = true;
+        app.update();
+        assert_eq!(*app.world().resource::<InkStyle>(), InkStyle::Screen);
+        assert_eq!(Setting::ScreenInk.shown(app.world().resource::<GameSettings>()), "On");
+        app.world_mut().resource_mut::<GameSettings>().screen_ink = false;
+        app.update();
+        assert_eq!(*app.world().resource::<InkStyle>(), InkStyle::Hull);
+    }
+
+    #[test]
     fn settings_survive_a_restart() {
         let path = scratch("restart");
         let file = SettingsFile(Some(path.clone()));
@@ -312,7 +346,7 @@ mod tests {
         first.insert_resource(file.clone()).add_plugins(SettingsPlugin);
         first.update();
         assert!(!path.exists(), "nothing written until something changes");
-        let chosen = GameSettings { music_volume: 0.3, sound_volume: 0.6, mouse_sensitivity: 1.5, invert_mouse_y: true, fullscreen: true };
+        let chosen = GameSettings { music_volume: 0.3, sound_volume: 0.6, mouse_sensitivity: 1.5, invert_mouse_y: true, fullscreen: true, screen_ink: true };
         *first.world_mut().resource_mut::<GameSettings>() = chosen;
         first.update();
         assert!(path.exists());

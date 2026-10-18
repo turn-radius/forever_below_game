@@ -81,13 +81,17 @@ pub struct AttackOnDelver {
     pub attacker_pos: Vec2,
 }
 
-/// A blow aimed at the delver that missed: its attack roll fell short of their Armor Class.
-/// Combat whooshes it past them (`crate::combat::vitals`); nothing else happens.
+/// A blow aimed at the delver that missed: its attack roll fell short of their Armor Class, or
+/// it hit and their raised shield turned it aside. Combat whooshes a miss past them
+/// (`crate::combat::vitals`) and clangs a blocked one on the shield, which costs them stamina
+/// (`crate::combat::guard`); nothing else happens.
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub struct MissedDelver {
     pub attacker: Entity,
     /// The attacker's position on the floor (world `(x, z)`).
     pub attacker_pos: Vec2,
+    /// Whether it hit and the shield turned it aside.
+    pub blocked: bool,
 }
 
 /// Where every blow at the delver, a creature's or a folk's, is rolled: the attacker's to-hit
@@ -100,7 +104,8 @@ pub struct BlowsAtDelver<'w, 's> {
     hits: MessageWriter<'w, AttackOnDelver>,
     misses: MessageWriter<'w, MissedDelver>,
     fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
-    delver: Query<'w, 's, (&'static crate::combat::Health, Option<&'static crate::combat::vitals::BlockChance>), With<Player>>,
+    #[allow(clippy::type_complexity)]
+    delver: Query<'w, 's, (&'static crate::combat::Health, Option<&'static crate::combat::vitals::BlockChance>, Option<&'static crate::combat::guard::Guard>), With<Player>>,
     rules: Option<Res<'w, crate::rules::GameRules>>,
 }
 
@@ -108,7 +113,7 @@ impl BlowsAtDelver<'_, '_> {
     /// Whether the delver has fallen (at 0 hit points, or the run ending): there is nothing left
     /// to fight.
     pub fn delver_is_down(&self) -> bool {
-        self.fallen.is_some() || self.delver.iter().any(|(health, _)| health.is_down())
+        self.fallen.is_some() || self.delver.iter().any(|(health, ..)| health.is_down())
     }
 
     /// Rolls `blow`, by `who` with `to_hit`, against `armour_class` (the delver's, or
@@ -120,9 +125,11 @@ impl BlowsAtDelver<'_, '_> {
         }
         let ac = armour_class.copied().unwrap_or(ArmourClass::UNARMOURED).0;
         let attack = to_hit.roll_with(crate::rules::GameRules::of(&self.rules), ac, Odds::Even, rng);
-        // A hit the delver's shield turns aside is blocked: a miss in all but name. Nothing is
-        // drawn without a shield that blocks, so the dice run as they always did.
-        let block = self.delver.iter().next().and_then(|(_, b)| b.copied()).unwrap_or_default();
+        // A hit the delver's raised shield turns aside is blocked: a miss in all but name. It
+        // covers only blows from ahead; nothing is drawn with the guard down or the blow
+        // outside it, so the dice run as they always did.
+        let covered = self.delver.iter().next().and_then(|(_, _, guard)| guard).is_some_and(|guard| guard.covers(blow.attacker_pos));
+        let block = self.delver.iter().next().and_then(|(_, b, ..)| b.copied()).filter(|_| covered).unwrap_or_default();
         let blocked = attack.hit && block.turns_aside(rng);
         let verdict = if blocked { ", blocked" } else { "" };
         info!("{who} attacks the delver: {}{verdict}", attack.line());
@@ -130,7 +137,7 @@ impl BlowsAtDelver<'_, '_> {
         if lands {
             self.hits.write(blow);
         } else {
-            self.misses.write(MissedDelver { attacker: blow.attacker, attacker_pos: blow.attacker_pos });
+            self.misses.write(MissedDelver { attacker: blow.attacker, attacker_pos: blow.attacker_pos, blocked });
         }
         lands
     }

@@ -332,6 +332,7 @@ const LABELS: &[(&str, &str)] = &[
     ("stamina/sleep_refill_factor", "Refill asleep (\u{d7})"),
     ("stamina/second_wind", "Second wind at (share)"),
     ("stamina/swing_cost", "Cost of a swing (share)"),
+    ("stamina/block_cost", "Cost of a block (share)"),
     ("mana/martial_pool", "Mana of a fighter or ranger"),
     ("mana/caster_base", "Caster mana at modifier 0"),
     ("mana/caster_per_modifier", "Mana per point of modifier"),

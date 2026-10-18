@@ -49,7 +49,7 @@ const TRIES: u32 = 200;
 
 /// The odds a jackalope's drop at `depth` is rolled against.
 pub fn drop_odds(depth: u32) -> Odds {
-    Odds::loot(depth + BOOST)
+    Odds::loot(depth).deeper(BOOST)
 }
 
 /// One or two pieces of the level's loot at `depth`, rolled from `seed`: none below magic, and

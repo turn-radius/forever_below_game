@@ -1777,7 +1777,8 @@ mod tests {
         let attributes = fb_character::Attributes { strength: 13, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
         *app.world_mut().resource_mut::<Character>() = Character { attributes, ..Character::roll(4) };
         press(&mut app, KeyCode::KeyK);
-        assert_eq!((gear_row(&mut app, 8), gear_row(&mut app, 9), gear_row(&mut app, 10)), ("usual".to_string(), "none".to_string(), "none".to_string()));
+        let rows = |app: &mut App| [8, 9, 10, 11].map(|row| gear_row(app, row));
+        assert_eq!(rows(&mut app), ["usual", "none", "none", "none"].map(String::from));
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let ring = inventory.add(weighed_with("Ring", 4, Some("of the Giant"), 0.0));
@@ -1786,10 +1787,12 @@ mod tests {
             equip(&mut inventory, boots, Slot::Feet).unwrap();
             let shield = inventory.add(weighed_with("Shield", 4, Some("of the Rampart"), 4.0));
             equip(&mut inventory, shield, Slot::Offhand).unwrap();
+            let amulet = inventory.add(weighed_with("Amulet", 4, Some("of Fortune"), 0.0));
+            equip(&mut inventory, amulet, Slot::Neck).unwrap();
         }
         app.update();
         app.update();
-        assert_eq!((gear_row(&mut app, 8), gear_row(&mut app, 9), gear_row(&mut app, 10)), ("\u{d7}1.2".to_string(), "20%".to_string(), "+2 STR".to_string()));
+        assert_eq!(rows(&mut app), ["\u{d7}1.2", "80%", "+2", "+2 STR"].map(String::from));
         assert_eq!(app.world().resource::<Character>().strength(), 15);
         assert!(sheet_text(&mut app).iter().any(|t| t == "STR 15 (+2)"), "the attribute line shows the score as it stands");
     }

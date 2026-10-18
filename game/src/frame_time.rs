@@ -1,12 +1,23 @@
 //! `FB_FRAME_TIME=240,270,300`: prints Bevy's smoothed frame time
-//! ([`FrameTimeDiagnosticsPlugin`]) at each listed frame and quits after the last, to measure
+//! ([`FrameTimeDiagnosticsPlugin`]) at each listed frame, with the median frame time since the
+//! frame listed before it, and quits after the last, to measure
 //! a scene's frame rate in the window, vsync and all. Pair it with `FB_DEBUG_POSE` to hold the
-//! view still.
+//! view still. `FB_NO_VSYNC=1` presents without waiting for the display, so a frame time under
+//! 16.7 ms (60 Hz) shows.
+
+use std::any::TypeId;
 
 use bevy::{
+    camera::visibility::{CubemapVisibleEntities, VisibleEntities},
     diagnostic::{DiagnosticsStore, FrameCount, FrameTimeDiagnosticsPlugin},
     prelude::*,
+    window::PresentMode,
 };
+
+/// The window's present mode: vsync, or none with `FB_NO_VSYNC` set.
+pub fn present_mode() -> PresentMode {
+    if std::env::var_os("FB_NO_VSYNC").is_some_and(|v| !v.is_empty()) { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync }
+}
 
 /// Logs the smoothed frame time at [`FrameTimeProbe::frames`] and exits after the last.
 pub struct FrameTimeProbe {
@@ -41,12 +52,34 @@ impl Plugin for FrameTimeProbe {
     }
 }
 
-fn report(frame: Res<FrameCount>, frames: Res<ProbeFrames>, store: Res<DiagnosticsStore>, mut exit: MessageWriter<AppExit>) {
+#[allow(clippy::too_many_arguments)]
+fn report(
+    frame: Res<FrameCount>,
+    frames: Res<ProbeFrames>,
+    store: Res<DiagnosticsStore>,
+    time: Res<Time<Real>>,
+    views: Query<&VisibleEntities, With<crate::play::PlayerCamera>>,
+    shadows: Query<&CubemapVisibleEntities>,
+    mut since: Local<Vec<f32>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    since.push(time.delta_secs() * 1000.0);
     if !frames.0.contains(&frame.0) {
         return;
     }
     let smoothed = store.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME).and_then(|d| d.smoothed());
-    println!("frame {}: smoothed frame time {}", frame.0, smoothed.map_or("unknown".into(), |ms| format!("{ms:.1} ms")));
+    since.sort_by(f32::total_cmp);
+    let median = since[since.len() / 2];
+    since.clear();
+    // What the frame queued, which a vsynced frame time hides: meshes in the player camera's
+    // view, and meshes across every face of every point light's shadow map.
+    let drawn: usize = views.iter().map(|v| v.get(TypeId::of::<Mesh3d>()).len()).sum();
+    let shadowed: usize = shadows.iter().flat_map(|faces| faces.iter()).map(|face| face.entities.len()).sum();
+    println!(
+        "frame {}: smoothed frame time {}, median since the last listed frame {median:.1} ms, {drawn} meshes in view, {shadowed} in shadow maps",
+        frame.0,
+        smoothed.map_or("unknown".into(), |ms| format!("{ms:.1} ms"))
+    );
     if frames.0.last() == Some(&frame.0) {
         exit.write(AppExit::Success);
     }

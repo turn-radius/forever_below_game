@@ -280,14 +280,16 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
         }
         Item::Shield(s) => {
             let b = &s.body;
-            // The plate had only tower, buckler and the rest; a pavise counts as a tower.
-            let (ac, wt) = match b.shape {
-                ShieldShape::Tower | ShieldShape::Pavise => (3.0, 15.0),
-                ShieldShape::Buckler => (1.0, 2.0),
-                _ => (2.0, 6.0),
+            // The plate had only tower, buckler and the rest; a pavise counts as a tower. The
+            // chance to turn a hit aside while the guard is up is our own: the more shield, the
+            // more it covers.
+            let (ac, wt, block) = match b.shape {
+                ShieldShape::Tower | ShieldShape::Pavise => (3.0, 15.0, 0.6),
+                ShieldShape::Buckler => (1.0, 2.0, 0.3),
+                _ => (2.0, 6.0, 0.45),
             };
             let stuff = if b.material == MaterialKind::Wood { Wood } else { Metal };
-            gear(Slot::Offhand, &[Armor, stuff], worn(wt, ac, 0.0), [1, 1])
+            gear(Slot::Offhand, &[Armor, stuff], Stats { block_chance: block, ..worn(wt, ac, 0.0) }, [1, 1])
         }
         Item::Helm(s) => {
             let st = s.shell.style;
@@ -512,6 +514,22 @@ mod tests {
         for base in ["Crossbow", "Bow", "Shield", "Sword", "Torch", "Rope", "Tunic"] {
             assert!(!stands_on_base(&rolled(base, 3).0), "{base}");
         }
+    }
+
+    #[test]
+    fn every_shield_blocks_and_the_bigger_ones_more() {
+        let block = |seed| {
+            let (shape, p) = rolled("Shield", seed);
+            let Item::Shield(s) = shape else { unreachable!() };
+            (s.body.shape, p.stats.block_chance)
+        };
+        let rolled: Vec<_> = (1..60).map(block).collect();
+        for &(shape, chance) in &rolled {
+            assert!(chance > 0.0, "{shape:?}");
+        }
+        let of = |want: ShieldShape| rolled.iter().find(|(s, _)| *s == want).map(|(_, c)| *c);
+        let (buckler, tower) = (of(ShieldShape::Buckler).unwrap(), of(ShieldShape::Tower).or(of(ShieldShape::Pavise)).unwrap());
+        assert!(buckler < tower);
     }
 
     #[test]

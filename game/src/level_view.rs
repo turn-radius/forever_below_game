@@ -17,10 +17,10 @@ use bevy::{
     window::PrimaryWindow,
 };
 use fb_level::sight::Explored;
-use fb_level::{Cell, Level, LevelParams, LevelStyle, generate_with};
+use fb_level::{Cell, FloorFinish, Level, LevelParams, LevelStyle, WallFinish, finishes, generate_with};
 
 use crate::forge_view::fresh_seed;
-use crate::map::plan::{MARGIN, draw_plan};
+use crate::map::plan::{MARGIN, PlanCanvas, PlanFrame, draw_plan_with};
 use crate::map::screen::{MapView, ZOOM};
 use crate::tweak_panel::{PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, chip, over_body, panel_body};
 use crate::ui::{BG, BRIGHT, FAINT, INK, LINE, MUTED, UiFonts, node_rect};
@@ -49,7 +49,7 @@ impl Plugin for LevelViewPlugin {
                 Update,
                 (
                     (keys, press_controls).before(TweakPanelSystems),
-                    (draw_level.run_if(resource_changed::<LevelForge>), refresh_header.run_if(resource_changed::<LevelForge>), zoom_and_pan, place_plan).chain().after(TweakPanelSystems),
+                    (draw_level.run_if(resource_changed::<LevelForge>), refresh_header.run_if(resource_changed::<LevelForge>), refresh_quarter_legend.run_if(resource_changed::<LevelForge>), zoom_and_pan, place_plan).chain().after(TweakPanelSystems),
                 ),
             );
     }
@@ -182,6 +182,10 @@ struct PlanView {
 #[derive(Component)]
 struct PlanNode;
 
+/// The legend's column of quarters, rebuilt for each level: an outline colour and a character.
+#[derive(Component)]
+struct QuarterLegend;
+
 /// The stage the plan is drawn on: the window less the panel.
 #[derive(Component)]
 struct Stage;
@@ -219,6 +223,15 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut images: ResMut<Assets<
                 UiFonts::style(&fonts.body_medium, 17.0, MUTED),
                 Node { position_type: PositionType::Absolute, left: px(20), bottom: px(16), ..default() },
             ));
+            stage.spawn(Node { position_type: PositionType::Absolute, left: px(20), top: px(16), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() }).with_children(|legend| {
+                for (tint, label) in legend_rows() {
+                    legend.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
+                        row.spawn((Node { width: px(14), height: px(14), ..default() }, BackgroundColor(Color::srgb(tint[0], tint[1], tint[2]))));
+                        row.spawn((Text::new(label), UiFonts::style(&fonts.body, 15.0, MUTED)));
+                    });
+                }
+                legend.spawn((QuarterLegend, Node { flex_direction: FlexDirection::Column, row_gap: px(5), margin: UiRect::top(px(8)), ..default() }));
+            });
         });
     commands
         .spawn((
@@ -331,7 +344,7 @@ pub fn plan_px(level: &Level) -> f32 {
 
 /// Draws the whole level into the plan's picture.
 fn draw_level(forge: Res<LevelForge>, plan: Res<PlanView>, mut images: ResMut<Assets<Image>>) {
-    let canvas = draw_plan(&forge.level, &Explored::all(&forge.level), plan_px(&forge.level));
+    let canvas = draw_plan_with(&forge.level, &Explored::all(&forge.level), plan_px(&forge.level), |canvas, frame| draw_finishes(canvas, frame, &forge.level, &forge.params));
     let image = Image::new(
         Extent3d { width: canvas.width, height: canvas.height, depth_or_array_layers: 1 },
         TextureDimension::D2,
@@ -340,6 +353,133 @@ fn draw_level(forge: Res<LevelForge>, plan: Res<PlanView>, mut images: ResMut<As
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
     );
     let _ = images.insert(&plan.image, image);
+}
+
+/// What a floor finish is tinted on the plan.
+const fn floor_tint(floor: FloorFinish) -> [f32; 3] {
+    match floor {
+        FloorFinish::Rock => [0.55, 0.42, 0.30],
+        FloorFinish::Flagstone => [0.42, 0.52, 0.66],
+        FloorFinish::Cobble => [0.80, 0.62, 0.25],
+    }
+}
+
+const MOSS_TINT: [f32; 3] = [0.30, 0.78, 0.30];
+const MARK_INK: [f32; 3] = [0.902, 0.863, 0.776];
+
+/// The level's finishes over the plan's floor: each floor tinted by how it is laid, moss in
+/// green by how thick it grows, and a mark at the middle of each room for its walls.
+fn draw_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, params: &LevelParams) {
+    let f = finishes(level, params);
+    for y in 0..level.height as i32 {
+        for x in 0..level.width as i32 {
+            let Some(finish) = f.at(x, y) else { continue };
+            let (a, b) = (frame.at(x as f32, y as f32), frame.at(x as f32 + 1.0, y as f32 + 1.0));
+            canvas.rect(a, b, floor_tint(finish.floor), 0.5);
+            canvas.rect(a, b, MOSS_TINT, finish.moss * 0.8);
+        }
+    }
+    // Each quarter outlined in its own colour along the edges where it meets another quarter, or
+    // rock, so the groups of rooms read at a glance.
+    let edge = (frame.px * 0.14).max(2.0);
+    for y in 0..level.height as i32 {
+        for x in 0..level.width as i32 {
+            let Some(q) = f.quarter(x, y) else { continue };
+            let (a, b) = (frame.at(x as f32, y as f32), frame.at(x as f32 + 1.0, y as f32 + 1.0));
+            // Corridors are tinted harder than rooms, so a quarter's corridors read as its own.
+            canvas.rect(a, b, quarter_tint(q), if level.room_at(x, y).is_some() { 0.13 } else { 0.30 });
+            // Each side of a cell that meets another quarter, drawn a little inside so both
+            // quarters show their own colour. Rock has no quarter; its walls are drawn already.
+            let inset = edge * 0.5;
+            let sides = [((0, -1), [a[0], a[1] + inset], [b[0], a[1] + inset]), ((0, 1), [a[0], b[1] - inset], [b[0], b[1] - inset]), ((-1, 0), [a[0] + inset, a[1]], [a[0] + inset, b[1]]), ((1, 0), [b[0] - inset, a[1]], [b[0] - inset, b[1]])];
+            for ((dx, dy), p, r) in sides {
+                if f.quarter(x + dx, y + dy).is_some_and(|n| n != q) {
+                    canvas.line(p, r, edge, quarter_tint(q), 0.95);
+                }
+            }
+        }
+    }
+    // Each room outlined in its quarter's colour.
+    for (q, quarter) in f.quarters().iter().enumerate() {
+        for &r in &quarter.rooms {
+            let room = level.rooms[r];
+            let (a, b) = (frame.at(room.x as f32, room.y as f32), frame.at((room.x + room.w) as f32, (room.y + room.h) as f32));
+            let (a, b) = ([a[0] + edge * 0.5, a[1] + edge * 0.5], [b[0] - edge * 0.5, b[1] - edge * 0.5]);
+            for (p, s) in [(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a)] {
+                canvas.line(p, s, edge, quarter_tint(q), 0.9);
+            }
+        }
+    }
+    let ink = (frame.px * 0.09).max(1.2);
+    for room in &level.rooms {
+        let (cx, cy) = room.centre();
+        let c = frame.at(cx, cy);
+        let r = frame.px * 0.32;
+        let Some(finish) = f.at(cx as i32, cy as i32).or_else(|| f.at(room.x as i32, room.y as i32)) else { continue };
+        match finish.walls {
+            WallFinish::Rock => canvas.ring(c, r, ink, MARK_INK, 0.9),
+            WallFinish::Strata => {
+                for k in [-0.5, 0.0, 0.5] {
+                    canvas.line([c[0] - r, c[1] + k * r], [c[0] + r, c[1] + k * r], ink, MARK_INK, 0.9);
+                }
+            }
+            WallFinish::Ashlar => {
+                let (a, b) = ([c[0] - r, c[1] - r], [c[0] + r, c[1] + r]);
+                for (p, q) in [(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a), ([a[0], c[1]], [b[0], c[1]])] {
+                    canvas.line(p, q, ink, MARK_INK, 0.9);
+                }
+            }
+            WallFinish::Rubble => {
+                for (dx, dy) in [(-0.6, 0.4), (0.6, 0.4), (0.0, -0.5)] {
+                    canvas.disc([c[0] + dx * r, c[1] + dy * r], ink * 1.4, MARK_INK, 0.9);
+                }
+            }
+        }
+    }
+}
+
+/// The outline colour of quarter `q`, cycling through colours that stand apart from the floors'.
+fn quarter_tint(q: usize) -> [f32; 3] {
+    const TINTS: [[f32; 3]; 6] = [[0.95, 0.35, 0.35], [0.35, 0.85, 0.95], [0.95, 0.55, 0.95], [0.95, 0.95, 0.40], [0.55, 0.60, 1.0], [1.0, 0.65, 0.30]];
+    TINTS[q % TINTS.len()]
+}
+
+/// Rebuilds the legend's quarters: each outline colour with its character.
+fn refresh_quarter_legend(mut commands: Commands, forge: Res<LevelForge>, fonts: Res<UiFonts>, legend: Query<(Entity, Option<&Children>), With<QuarterLegend>>) {
+    let Ok((entity, children)) = legend.single() else { return };
+    for child in children.into_iter().flatten() {
+        commands.entity(*child).despawn();
+    }
+    let f = finishes(&forge.level, &forge.params);
+    commands.entity(entity).with_children(|column| {
+        column.spawn((Text::new(format!("quarters, leaning {}", f.lean().name())), UiFonts::style(&fonts.body, 15.0, MUTED)));
+        for (q, quarter) in f.quarters().iter().enumerate() {
+            let tint = quarter_tint(q);
+            let door = match quarter.door {
+                fb_level::DoorStyle::Timber => "timber doors",
+                fb_level::DoorStyle::RoundArch => "round arches",
+                fb_level::DoorStyle::PointedArch => "pointed arches",
+                fb_level::DoorStyle::RockCut => "rock-cut arches",
+            };
+            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
+                row.spawn((Node { width: px(14), height: px(4), ..default() }, BackgroundColor(Color::srgb(tint[0], tint[1], tint[2]))));
+                row.spawn((Text::new(format!("{}, {} rooms, {door}", quarter.character.name(), quarter.rooms.len())), UiFonts::style(&fonts.body, 15.0, MUTED)));
+            });
+        }
+    });
+}
+
+/// The legend's rows: a swatch colour and what it shows.
+fn legend_rows() -> [([f32; 3], &'static str); 7] {
+    [
+        (floor_tint(FloorFinish::Rock), "bare rock floor"),
+        (floor_tint(FloorFinish::Flagstone), "flagstone floor"),
+        (floor_tint(FloorFinish::Cobble), "cobble floor"),
+        (MOSS_TINT, "moss"),
+        (MARK_INK, "ring rock   lines strata"),
+        (MARK_INK, "square ashlar   dots rubble"),
+        (MARK_INK, "walls are marked at each room's middle"),
+    ]
 }
 
 fn refresh_header(forge: Res<LevelForge>, mut readouts: Query<(&Readout, &mut Text)>) {

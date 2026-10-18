@@ -18,3 +18,4 @@ serde = { workspace = true }
 
 [dev-dependencies]
 fb_items = { workspace = true }
+serde_json = { workspace = true }

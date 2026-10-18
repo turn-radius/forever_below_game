@@ -27,7 +27,7 @@
 
 use std::sync::Arc;
 
-use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, platform::collections::HashMap, prelude::*, tasks::ComputeTaskPool, ui::ComputedUiRenderTargetInfo};
+use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, platform::collections::HashMap, prelude::*, tasks::{AsyncComputeTaskPool, TaskPool}, ui::ComputedUiRenderTargetInfo};
 use fb_body::{BodySpec, Joint};
 use fb_items::{Item, Rarity, Slot, roll_item_with};
 use fb_level::{FolkSpot, Level};
@@ -137,27 +137,44 @@ pub fn footprint(figure: &Figure) -> f32 {
 
 /// Figures already built, by spot seed, so a level drawn again reuses them.
 #[derive(Resource, Default)]
-pub struct FolkFigures(HashMap<u32, Arc<(Person, Figure)>>);
+pub struct FolkFigures {
+    built: HashMap<u32, Arc<(Person, Figure)>>,
+    /// How many figures [`Self::for_spots`] has had to build itself, which tests read to see
+    /// figures were built ahead of time.
+    pub built_here: usize,
+}
 
 impl FolkFigures {
     /// The person and figure for every spot in `spots` on a level `depth` down, building (in
     /// parallel) those not yet built.
     pub fn for_spots(&mut self, spots: &[FolkSpot], depth: u32) -> Vec<Arc<(Person, Figure)>> {
-        let missing: Vec<FolkSpot> = spots.iter().filter(|s| !self.0.get(&s.seed).is_some_and(|built| built.0.spot == **s && built.0.depth == depth)).copied().collect();
-        let built = ComputeTaskPool::get_or_init(Default::default).scope(|scope| {
-            for spot in &missing {
-                scope.spawn(async move {
-                    let person = Person::of(spot, depth);
-                    let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
-                    (person, figure)
-                });
-            }
-        });
-        for pair in built {
-            self.0.insert(pair.0.spot.seed, Arc::new(pair));
-        }
-        spots.iter().filter_map(|s| self.0.get(&s.seed).cloned()).collect()
+        let missing: Vec<FolkSpot> = spots.iter().filter(|s| !self.built.get(&s.seed).is_some_and(|built| built.0.spot == **s && built.0.depth == depth)).copied().collect();
+        self.built_here += missing.len();
+        self.keep(build_figures(&missing, depth));
+        spots.iter().filter_map(|s| self.built.get(&s.seed).cloned()).collect()
     }
+
+    /// Keeps figures built elsewhere (see [`build_figures`]), so [`Self::for_spots`] finds them.
+    pub fn keep(&mut self, built: Vec<(Person, Figure)>) {
+        for pair in built {
+            self.built.insert(pair.0.spot.seed, Arc::new(pair));
+        }
+    }
+}
+
+/// A person and figure for every spot in `spots` on a level `depth` down, built in parallel.
+/// Plain data, so it can be done ahead of time on another thread ([`crate::travel`]); it runs on
+/// the async compute pool so that, ahead of time, it leaves the frame's own pool free.
+pub fn build_figures(spots: &[FolkSpot], depth: u32) -> Vec<(Person, Figure)> {
+    AsyncComputeTaskPool::get_or_init(TaskPool::default).scope(|scope| {
+        for spot in spots {
+            scope.spawn(async move {
+                let person = Person::of(spot, depth);
+                let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+                (person, figure)
+            });
+        }
+    })
 }
 
 /// A person standing in the level: the root of their figure, on the floor at their spot.

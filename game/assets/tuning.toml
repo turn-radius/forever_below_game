@@ -127,6 +127,10 @@ ambient_lux = 4.0
 fog_start = 40.0
 # Where the dark is complete, in world units.
 fog_end = 260.0
+# How many of the level's lights nearest you cast shadows at once (the rest light without shadows). Your own torch and lantern always do.
+shadowed_lights = 4
+# Size of each face of a light's shadow map, in texels (smaller is faster and softer-edged).
+shadow_map_size = 512
 
 [sound]
 # The music's volume at full, 0 to 1, before your music volume setting.

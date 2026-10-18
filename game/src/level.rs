@@ -17,15 +17,15 @@ pub mod geometry;
 pub mod stairs;
 
 use armory::{
-    Rgb,
+    ItemMesh, MaterialKind, Rgb,
     cond::{Condition, ConditionState},
     families::{
         Generator,
         food::{Food, FoodStyle},
     },
 };
-use bevy::{camera::Exposure, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
-use fb_level::{CELL, LightKind, StairKind};
+use bevy::{camera::{Exposure, ShadowLodOrigin, visibility::{RenderLayers, VisibilityRange}}, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
+use fb_level::{CELL, Level, LightKind, StairKind};
 
 use crate::capture::FrameCapturePlugin;
 use crate::light::{Torch, cast_shadows, point_light};
@@ -44,23 +44,68 @@ pub struct LevelPlugin;
 impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Tuning>()
+            .init_resource::<PreparedStone>()
             .insert_resource(abyss_ambient(&LightTuning::default()))
             .insert_resource(ClearColor(FOG_COLOR))
             // The level's stone is laid out for each level the delver comes to: the first of a
             // delve, then each one they travel to ([`crate::travel`]), as the folk and props are.
             .add_systems(
                 Update,
-                (clear_stone, spawn_stone, spawn_columns, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
+                (clear_stone, spawn_stone, spawn_columns, spawn_corridor_arches, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
             )
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
             .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames).in_set(DelveSystems))
+            // After the render layers have propagated down, which `Update` does.
+            .add_systems(PostUpdate, limit_far_parts.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
             .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
     }
 }
 
 /// Cells of the level drawn as one mesh per surface, so far stone can be culled.
 pub const CHUNK_CELLS: i32 = 16;
+
+/// The stone of `level` as plain mesh data, one [`LevelMesh`] per chunk. This is the costly part
+/// of laying a level out (corner shading included), and it has no Bevy in it, so it can be made
+/// on another thread ahead of time ([`crate::travel`]).
+pub fn stone_chunks(level: &Level) -> Vec<LevelMesh> {
+    let view = CellView::new(level);
+    geometry::chunks(&view, CHUNK_CELLS).into_iter().map(|range| geometry::level_mesh(&view, range)).collect()
+}
+
+/// The stone of a level made ahead of time: [`spawn_stone`] uses it when it is the stone of the
+/// level coming in, and makes its own otherwise.
+#[derive(Resource, Debug, Default)]
+pub struct PreparedStone {
+    ready: Option<(u32, u32, Vec<LevelMesh>)>,
+    /// How many times it was used, which tests read to see the stone was made ahead.
+    pub used: u32,
+}
+
+impl PreparedStone {
+    /// Keeps `chunks` as the stone of the level of `seed` at `depth`.
+    pub fn set(&mut self, seed: u32, depth: u32, chunks: Vec<LevelMesh>) {
+        self.ready = Some((seed, depth, chunks));
+    }
+
+    /// The stone made ahead for `level`, if that is the level it was made for. Whatever was
+    /// kept is used up either way.
+    fn take_for(&mut self, level: &Level) -> Option<Vec<LevelMesh>> {
+        let chunks = self.ready.take().filter(|(seed, depth, _)| (*seed, *depth) == (level.seed, level.depth)).map(|(_, _, chunks)| chunks);
+        self.used += u32::from(chunks.is_some());
+        chunks
+    }
+
+    /// Forgets what was kept.
+    pub fn clear(&mut self) {
+        self.ready = None;
+    }
+
+    /// Whether stone is kept, not yet used.
+    pub fn is_kept(&self) -> bool {
+        self.ready.is_some()
+    }
+}
 
 /// The exposure the level's light levels are set for: the camera's, `Exposure::INDOOR`.
 pub const EXPOSURE: Exposure = Exposure::INDOOR;
@@ -77,6 +122,17 @@ pub const AMBIENT_COLOR: Color = Color::srgb(0.55, 0.6, 0.72);
 /// The dark that swallows far stone: a near-black blue, thickening from `fog_start` to
 /// `fog_end` (4 m to 26 m as shipped).
 pub const FOG_COLOR: Color = Color::srgb(0.012, 0.016, 0.024);
+
+/// How far past the fog's end (world units, 3 m) a thing's centre may lie and still be drawn:
+/// room for a big prop or a creature whose near edge is inside the fog while its middle is not.
+const DRAW_MARGIN: f32 = 30.0;
+
+/// The distance past which nothing is drawn: the fog's end (`fog_end`, 26 m as shipped) and a
+/// margin. The player camera's far plane sits here and so do the [`VisibilityRange`]s of
+/// props, items, creatures and folk, so what the fog has swallowed is not drawn at all.
+pub fn draw_end(light: &LightTuning) -> f32 {
+    light.fog_end + DRAW_MARGIN
+}
 
 /// Glowcaps: faint cold cyan, a pool reaching about three metres (`glowcap_peak` and
 /// `glowcap_reach`). Braziers burn in the torch colour, brighter and further than a torch in
@@ -105,6 +161,10 @@ impl FixedLight {
 /// The stone's weathering: wear 0.5 on stone (decay type 9), its pattern a few metres across
 /// in world space rather than an item's few centimetres.
 pub const STONE_WEAR: f32 = 0.5;
+/// Decay types for cave rock and layered cave rock (`decay.wesl`): stone that also shades as
+/// facets or beds.
+const DECAY_ROCK: u32 = 14;
+const DECAY_STRATA: u32 = 15;
 const STONE_PATTERN_SCALE: f32 = 0.06;
 /// How much finer the decay pattern runs over a stone hall's ceiling than over its walls.
 const CEILING_PATTERN_FINER: f32 = 2.6;
@@ -133,6 +193,7 @@ fn apply_light_tuning(
     mut ambient: ResMut<GlobalAmbientLight>,
     mut fogs: Query<&mut DistanceFog>,
     mut lights: Query<(&FixedLight, &mut PointLight)>,
+    mut ranges: Query<&mut VisibilityRange>,
     debug: Query<&DebugCamera>,
 ) {
     let light = &tuning.light;
@@ -145,6 +206,67 @@ fn apply_light_tuning(
     }
     for (kind, mut point) in &mut lights {
         *point = kind.light(light);
+    }
+    for mut range in &mut ranges {
+        *range = draw_range(light);
+    }
+}
+
+/// Where a part is drawn: from the camera out to [`draw_end`], measured to the middle of its
+/// box. The edge is abrupt, since the fog has already faded what lies there to nothing.
+fn draw_range(light: &LightTuning) -> VisibilityRange {
+    VisibilityRange { use_aabb: true, ..VisibilityRange::abrupt(0.0, draw_end(light)) }
+}
+
+/// A part of the level's world: not drawn by a camera of its own (an inventory icon, the doll
+/// or the held item's stage), which a part's [`RenderLayers`] tell once they have propagated
+/// down to it.
+type WorldPart = (Or<(With<ArmoryPart>, With<InkOutline>)>, Without<RenderLayers>);
+
+/// Bevy tracks the draw ranges of only the first 32 cameras (`check_visibility_ranges` takes 32),
+/// and culls a ranged thing for any view past them.
+const RANGED_VIEWS: usize = 32;
+
+/// Gives each part of a prop, item, creature or folk in the world a [`draw_range`], so a camera
+/// does not queue what the fog hides. The level's own stone is left to the camera's far plane.
+/// It leaves out:
+/// - the parts drawn by other cameras (icons, the doll, the held item), by their render layers.
+///   Those arrive a frame after a part does, so a part is given its range a frame after it
+///   appears;
+/// - everything while the view from above (`FB_DEBUG_CAMERA=top`), which looks from further
+///   than the fog, is up;
+/// - everything while there are more cameras than Bevy tracks ranges for (a full inventory
+///   makes up to 64 icon cameras), so the player's view is never one of those that culls them.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn limit_far_parts(
+    mut commands: Commands,
+    tuning: Res<Tuning>,
+    new: Query<Entity, Or<(Added<ArmoryPart>, Added<InkOutline>)>>,
+    parts: Query<(Entity, Has<VisibilityRange>), WorldPart>,
+    views: Query<(), Or<(With<Camera>, With<ShadowLodOrigin>)>>,
+    debug: Query<&DebugCamera>,
+    mut waiting: Local<Vec<Entity>>,
+    mut limiting: Local<bool>,
+) {
+    let limit = views.iter().count() <= RANGED_VIEWS && debug.iter().all(|d| d.fog);
+    let due = std::mem::take(&mut *waiting);
+    waiting.extend(new.iter());
+    if limit != *limiting {
+        *limiting = limit;
+        for (part, ranged) in &parts {
+            if limit && !ranged && !waiting.contains(&part) && !due.contains(&part) {
+                commands.entity(part).insert(draw_range(&tuning.light));
+            } else if !limit && ranged {
+                commands.entity(part).remove::<VisibilityRange>();
+            }
+        }
+    }
+    if limit {
+        for part in due {
+            if let Ok((part, false)) = parts.get(part) {
+                commands.entity(part).insert(draw_range(&tuning.light));
+            }
+        }
     }
 }
 
@@ -286,20 +408,20 @@ fn clear_stone(mut commands: Commands, old: Query<Entity, With<StonePiece>>) {
 fn spawn_stone(
     mut commands: Commands,
     level: Res<CurrentLevel>,
+    mut prepared: ResMut<PreparedStone>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut toon_materials: ResMut<Assets<ToonMaterial>>,
     mut outline_materials: ResMut<Assets<OutlineMaterial>>,
 ) {
     let level = &level.0;
-    let view = CellView::new(level);
+    let chunks = prepared.take_for(level).unwrap_or_else(|| stone_chunks(level));
     let stone = stone_appearance(level.seed);
 
     // The rock: one entity per surface per chunk, each surface kind sharing one material.
     let fine_ink = outline_materials.add(OutlineMaterial { color: STONE_JOINT_INK.into(), width_px: 1.0, ..stone.outline });
     let ink = outline_materials.add(stone.outline);
     let mut materials: Vec<(&'static str, Handle<ToonMaterial>)> = Vec::new();
-    for range in geometry::chunks(&view, CHUNK_CELLS) {
-        let LevelMesh { surfaces, ink: lines, joints } = geometry::level_mesh(&view, range);
+    for LevelMesh { surfaces, ink: lines, joints } in &chunks {
         for part in &surfaces.parts {
             let material = match materials.iter().find(|(name, _)| *name == part.name) {
                 Some((_, handle)) => handle.clone(),
@@ -312,6 +434,11 @@ fn spawn_stone(
                     if part.name == "ceiling" && level.style == LevelStyle::StoneHalls {
                         material.extension.decay.scale *= CEILING_PATTERN_FINER;
                     }
+                    // Cave rock breaks into facets under the light, or beds where it is layered.
+                    // Laid stones keep plain stone's wear, so they read apart from the rock they lie on.
+                    if level.style == LevelStyle::RoughRock && !part.name.starts_with("stones_") {
+                        material.extension.decay.kind = if part.name == "strata" { DECAY_STRATA } else { DECAY_ROCK };
+                    }
                     let handle = toon_materials.add(material);
                     materials.push((part.name, handle.clone()));
                     handle
@@ -320,10 +447,10 @@ fn spawn_stone(
             commands.spawn((StonePiece, Name::new(part.name), Mesh3d(meshes.add(part_to_mesh(part))), MeshMaterial3d(material)));
         }
         if !lines.indices.is_empty() {
-            commands.spawn((StonePiece, Name::new("ink"), Mesh3d(meshes.add(part_to_mesh(&lines))), MeshMaterial3d(ink.clone())));
+            commands.spawn((StonePiece, Name::new("ink"), Mesh3d(meshes.add(part_to_mesh(lines))), MeshMaterial3d(ink.clone())));
         }
         if !joints.indices.is_empty() {
-            commands.spawn((StonePiece, Name::new("joints"), Mesh3d(meshes.add(part_to_mesh(&joints))), MeshMaterial3d(fine_ink.clone())));
+            commands.spawn((StonePiece, Name::new("joints"), Mesh3d(meshes.add(part_to_mesh(joints))), MeshMaterial3d(fine_ink.clone())));
         }
     }
 
@@ -346,13 +473,17 @@ fn spawn_columns(
         return;
     }
     let stone = stone_appearance(level.seed);
+    let finishes = geometry::level_finishes(level);
     let ink = outline_materials.add(stone.outline);
-    let mut shapes: std::collections::HashMap<(i32, i32, u32), Vec<(&'static str, Handle<Mesh>, Handle<ToonMaterial>, bool)>> = Default::default();
+    let mut shapes: std::collections::HashMap<(i32, i32, u32, u32), Vec<(&'static str, Handle<Mesh>, Handle<ToonMaterial>, bool)>> = Default::default();
     // One material for every shape's part of a name: they differ only in their meshes.
     let mut materials: std::collections::HashMap<&'static str, Handle<ToonMaterial>> = Default::default();
     for spot in spots {
-        let parts = shapes.entry((spot.seat as i32, spot.top as i32, spot.variant)).or_insert_with(|| {
-            geometry::stone::column(spot.seat, spot.top, spot.variant, level.seed)
+        // A column is one moss all over, in quarters, so columns of a shape still share a mesh.
+        let [cx, _, cz] = geometry::cell_centre(spot.cell.0, spot.cell.1);
+        let moss = (finishes.moss_at(cx, cz) * 4.0).round() as u32;
+        let parts = shapes.entry((spot.seat as i32, spot.top as i32, spot.variant, moss)).or_insert_with(|| {
+            mossy_column(&spot, level.seed, moss)
                 .parts
                 .iter()
                 .map(|part| {
@@ -382,11 +513,124 @@ fn spawn_columns(
     }
 }
 
+/// The arches that span the corridors of the halls' vaulted quarters: one mesh per rib shape,
+/// shared by every arch, turned to run across its corridor, so a long corridor of arches costs
+/// the same as one.
+fn spawn_corridor_arches(
+    mut commands: Commands,
+    level: Res<CurrentLevel>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut toon_materials: ResMut<Assets<ToonMaterial>>,
+    mut outline_materials: ResMut<Assets<OutlineMaterial>>,
+) {
+    let level = &level.0;
+    let arches = geometry::arch::corridor_arches(level, &geometry::level_finishes(level));
+    let Some(soffit) = arches.first().map(|a| a.soffit) else { return };
+    let stone = stone_appearance(level.seed);
+    let ink = outline_materials.add(stone.outline);
+    let mut shapes = Vec::new();
+    for pointed in [false, true] {
+        let Some(shape) = geometry::arch::corridor_arch(soffit, level.seed, pointed) else { continue };
+        let parts: Vec<_> = shape
+            .parts
+            .iter()
+            .map(|part| {
+                let mut material = stone.material_for(part);
+                material.extension.min_width = MinWidth::default();
+                (part.name, meshes.add(part_to_mesh(part)), toon_materials.add(material), part.outline)
+            })
+            .collect();
+        shapes.push((pointed, parts));
+    }
+    for arch in arches {
+        let Some((_, parts)) = shapes.iter().find(|(pointed, _)| *pointed == arch.pointed) else { continue };
+        let at = v3(geometry::cell_centre(arch.cell.0, arch.cell.1));
+        // The shape runs along z; a corridor along x turns it a quarter.
+        let turn = Quat::from_rotation_y(if arch.along_x { std::f32::consts::FRAC_PI_2 } else { 0.0 });
+        let root = commands
+            .spawn((StonePiece, ArmoryItem, Name::new("corridor arch"), Transform::from_translation(at).with_rotation(turn), Visibility::default()))
+            .id();
+        for (name, mesh, material, outlined) in parts.iter() {
+            let part = commands.spawn((ArmoryPart, Name::new(*name), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), ChildOf(root))).id();
+            if *outlined {
+                commands.spawn((InkOutline, Mesh3d(mesh.clone()), MeshMaterial3d(ink.clone()), ChildOf(part)));
+            }
+        }
+    }
+}
+
+/// The column at `spot` with `quarters` quarters of full moss on every vertex.
+fn mossy_column(spot: &geometry::stone::ColumnSpot, seed: u32, quarters: u32) -> ItemMesh {
+    let mut column = geometry::stone::column(spot.seat, spot.top, spot.variant, seed);
+    for part in &mut column.parts {
+        part.uvs_b = vec![[quarters as f32 / 4.0, 0.0]; part.positions.len()];
+    }
+    column
+}
+
+/// The shapes of a level's doorways and braziers: each doorway with its frame and, at the
+/// entrance, the door's leaf; for each fixed light a brazier's body and flame height, `None` for
+/// the other kinds. Plain data, so it can be made ahead of time ([`crate::staged`]).
+#[derive(Debug, PartialEq)]
+pub struct FixtureShapes {
+    pub doors: Vec<(Doorway, ItemMesh, Option<ItemMesh>)>,
+    pub braziers: Vec<Option<(ItemMesh, f32)>>,
+}
+
+impl FixtureShapes {
+    pub fn make(level: &Level) -> Self {
+        let view = CellView::new(level);
+        let entrance = (level.entrance.x as i32, level.entrance.y as i32);
+        let doors = geometry::doorways(&view)
+            .into_iter()
+            .map(|doorway| {
+                let seed = door_seed(level, &doorway);
+                let style = view.finishes().door_style(doorway.x, doorway.y).unwrap_or(fb_level::DoorStyle::Timber);
+                let mut frame = match level.style {
+                    LevelStyle::RoughRock => geometry::door_frame(level.ceiling, style, seed),
+                    LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), style, seed),
+                };
+                // The masonry round the frame grows moss as the wall beside it does; the timber does not.
+                let [across, up, through] = doorway.basis();
+                let centre = geometry::cell_centre(doorway.x, doorway.y);
+                for part in frame.parts.iter_mut().filter(|p| p.material == Some(MaterialKind::Stone)) {
+                    part.uvs_b = part
+                        .positions
+                        .iter()
+                        .map(|p| {
+                            let world = [0, 1, 2].map(|k| centre[k] + across[k] * p[0] + up[k] * p[1] + through[k] * p[2]);
+                            [view.finishes().moss_at(world[0], world[2]), 0.0]
+                        })
+                        .collect();
+                }
+                let leaf = ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
+                (doorway, frame, leaf)
+            })
+            .collect();
+        let braziers = level
+            .lights
+            .iter()
+            .enumerate()
+            .map(|(i, spot)| (spot.kind == LightKind::Brazier).then(|| geometry::brazier(light_seed(level, i))))
+            .collect();
+        FixtureShapes { doors, braziers }
+    }
+}
+
+fn door_seed(level: &Level, doorway: &Doorway) -> u32 {
+    level.seed ^ ((doorway.x as u32) << 16 | doorway.y as u32)
+}
+
+fn light_seed(level: &Level, index: usize) -> u32 {
+    level.seed.wrapping_add(0x11 * index as u32 + 1)
+}
+
 fn spawn_fixtures(
     mut commands: Commands,
     level: Res<CurrentLevel>,
     abyss: Option<Res<Abyss>>,
     tuning: Res<Tuning>,
+    mut staged: Option<ResMut<crate::staged::Staged>>,
     mut blocked: ResMut<BlockedCells>,
     mut spawner: crate::render::ItemSpawner,
 ) {
@@ -394,16 +638,12 @@ fn spawn_fixtures(
     // The door shut behind the delver when they came in; coming back to it from below finds it
     // shut already, and it does not swing again.
     let shut_already = abyss.is_some_and(|a| a.arrival == Arrival::FromBelow);
-    let view = CellView::new(level);
+    let FixtureShapes { doors, braziers } = staged.as_mut().and_then(|s| s.take_fixtures(level)).unwrap_or_else(|| FixtureShapes::make(level));
 
     // Door frames, and the entrance door hung in its own.
     let entrance = (level.entrance.x as i32, level.entrance.y as i32);
-    for doorway in geometry::doorways(&view) {
-        let seed = level.seed ^ ((doorway.x as u32) << 16 | doorway.y as u32);
-        let frame = match level.style {
-            LevelStyle::RoughRock => geometry::door_frame(level.ceiling, seed),
-            LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), seed),
-        };
+    for (doorway, frame, leaf) in doors {
+        let seed = door_seed(level, &doorway);
         let transform = doorway_transform(&doorway);
         spawner.spawn(&frame, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
         if (doorway.x, doorway.y) == entrance {
@@ -413,7 +653,7 @@ fn spawn_fixtures(
                 blocked.0.insert(entrance);
             }
             let door = EntranceDoor { shut: transform.rotation, centre: transform.translation, cell: entrance, swing };
-            let leaf = geometry::entrance_leaf(seed);
+            let leaf = leaf.expect("the entrance doorway has a leaf");
             spawner
                 .spawn(&leaf, &fixture_appearance(seed, ConditionState::Serviceable))
                 .insert((StonePiece, Name::new("entrance door"), door, Transform::from_translation(hinge).with_rotation(door.rotation())));
@@ -421,13 +661,13 @@ fn spawn_fixtures(
     }
 
     // Fixed lights.
-    for (i, spot) in level.lights.iter().enumerate() {
+    for (i, (spot, brazier)) in level.lights.iter().zip(braziers).enumerate() {
         let at = v3(fb_level::Level::world(spot.x, spot.y));
-        let seed = level.seed.wrapping_add(0x11 * i as u32 + 1);
+        let seed = light_seed(level, i);
         match spot.kind {
             LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light),
             LightKind::Brazier => {
-                let (mesh, flame) = geometry::brazier(seed);
+                let (mesh, flame) = brazier.expect("a brazier has a shape");
                 spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Transform::from_translation(at)));
                 let light = FixedLight::Brazier.light(&tuning.light);
                 commands.spawn((StonePiece, Name::new("brazier light"), FixedLight::Brazier, light, Transform::from_translation(at + Vec3::Y * flame)));
@@ -583,6 +823,63 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let aim = if mode == "vault" { dir * 60.0 + Vec3::Y * 45.0 } else { dir * 60.0 };
             Transform::from_translation(at).looking_at(at + aim, Vec3::Y)
         }
+        mode if mode.starts_with("arch") => {
+            // The first doorway of the style after `arch:` (round, pointed or rock), from the
+            // room side two and a half cells back, looking at the opening.
+            let want = match mode.strip_prefix("arch:") {
+                Some("pointed") => fb_level::DoorStyle::PointedArch,
+                Some("rock") => fb_level::DoorStyle::RockCut,
+                _ => fb_level::DoorStyle::RoundArch,
+            };
+            let finishes = fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
+            let view = geometry::CellView::new(level);
+            // Prefer one with a room on a side, so the view is of a hall and not a passage.
+            let styled: Vec<_> = geometry::doorways(&view).into_iter().filter(|d| finishes.door_style(d.x, d.y) == Some(want)).collect();
+            let roomy = |d: &geometry::Doorway| [-1, 1].iter().any(|&s| level.room_at(d.x + (d.through[0] as i32) * s, d.y + (d.through[2] as i32) * s).is_some());
+            let Some(doorway) = styled.iter().copied().find(roomy).or(styled.first().copied()) else { return };
+            let centre = v3(geometry::cell_centre(doorway.x, doorway.y));
+            let through = v3(doorway.through);
+            // Stand on whichever side has the longer open run.
+            let step = |dir: Vec3, k: i32| (doorway.x + (dir.x * k as f32).round() as i32, doorway.y + (dir.z * k as f32).round() as i32);
+            let score = |dir: Vec3| (1..=3).take_while(|&k| level.is_open(step(dir, k).0, step(dir, k).1)).count() * 2 + level.room_at(step(dir, 1).0, step(dir, 1).1).is_some() as usize * 10;
+            let from_dir = if score(-through) >= score(through) { -through } else { through };
+            let at = centre + from_dir * CELL * 2.5 + eye;
+            Transform::from_translation(at).looking_at(centre + Vec3::Y * 11.0, Vec3::Y)
+        }
+        "corridor" => {
+            // The corridor run with the most arches, from its end looking down it.
+            let arches = geometry::arch::corridor_arches(level, &geometry::level_finishes(level));
+            let runs = geometry::arch::corridor_runs(level);
+            let count = |run: &geometry::arch::CorridorRun| arches.iter().filter(|a| run.cells.contains(&a.cell)).count();
+            let Some(run) = runs.iter().max_by_key(|r| (count(r), r.cells.len())) else { return };
+            let (from, to) = (run.cells[0], *run.cells.last().unwrap());
+            let dir = Vec3::new((to.0 - from.0).signum() as f32, 0.0, (to.1 - from.1).signum() as f32);
+            let dir = if dir == Vec3::ZERO { if run.along_x { Vec3::X } else { Vec3::Z } } else { dir };
+            let at = v3(geometry::cell_centre(from.0, from.1)) - dir * CELL * 0.5 + eye;
+            Transform::from_translation(at).looking_to(dir, Vec3::Y)
+        }
+        "cobble" | "flagstone" | "rubble" => {
+            // The first room with cobbled or flagged floor, or rubble walls, looking east: down
+            // at the floor ahead for the floors, level at the far wall for rubble.
+            let finishes = fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
+            let wanted = |r: &fb_level::Room| {
+                (r.y..r.y + r.h).flat_map(|y| (r.x..r.x + r.w).map(move |x| (x, y))).find_map(|(x, y)| finishes.at(x as i32, y as i32)).is_some_and(|f| match mode.as_str() {
+                    "cobble" => f.floor == fb_level::FloorFinish::Cobble,
+                    "flagstone" => f.floor == fb_level::FloorFinish::Flagstone,
+                    _ => f.walls == fb_level::WallFinish::Rubble,
+                })
+            };
+            let Some(room) = level.rooms.iter().find(|r| wanted(r)) else { return };
+            let (cx, cy) = room.centre();
+            let from = match mode.as_str() {
+                "cobble" => (room.x as f32 + 0.8, cy),
+                "flagstone" => (cx - 0.7, cy),
+                _ => (cx, cy),
+            };
+            let at = v3(fb_level::Level::world(from.0, from.1)) + eye;
+            let pitch = if mode == "rubble" { -1.0 } else { -9.0 };
+            Transform::from_translation(at).looking_at(at + Vec3::X * 30.0 + Vec3::Y * pitch, Vec3::Y)
+        }
         "web" => {
             // The first web of the kind `FB_DEBUG_WEB` names (corner, ceiling or floor), from a
             // few steps off in the direction it faces, looking at it.
@@ -615,6 +912,42 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let from = at + v3(geometry::facing_vector(side)) * CELL * 1.4 + eye;
             Transform::from_translation(from).looking_at(at + Vec3::Y * 4.0, Vec3::Y)
         }
+        "moss" | "rock" | "rock-far" | "strata" => {
+            let finishes = geometry::level_finishes(level);
+            let (back, wanted): (f32, Box<dyn Fn(i32, i32) -> f32>) = match mode.as_str() {
+                // Where the moss is thickest, a few steps off, taking in floor and wall foot.
+                "moss" => (CELL * 1.6, Box::new(|x, y| finishes.moss_at((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL))),
+                "strata" => (CELL * 1.0, Box::new(|x, y| finishes.at(x, y).map_or(0.0, |f| (f.walls == fb_level::WallFinish::Strata) as u32 as f32))),
+                // Close under the torch, or from across the level.
+                _ => (if mode == "rock" { CELL } else { CELL * 10.0 }, Box::new(|x, y| finishes.at(x, y).map_or(0.0, |f| (f.walls == fb_level::WallFinish::Rock) as u32 as f32))),
+            };
+            // A wall seen from an open run of cells: the best score, then the longest run.
+            let mut best: Option<(f32, i32, i32, fb_level::Facing)> = None;
+            for y in 0..level.height as i32 {
+                for x in 0..level.width as i32 {
+                    for facing in [fb_level::Facing::North, fb_level::Facing::East, fb_level::Facing::South, fb_level::Facing::West] {
+                        let (dx, dy) = facing.step();
+                        if !level.is_open(x, y) || level.is_open(x + dx, y + dy) {
+                            continue;
+                        }
+                        let run = (1..=12).take_while(|k| level.is_open(x - dx * k, y - dy * k)).count() as f32;
+                        let score = if mode == "rock-far" { run } else { wanted(x, y) * 100.0 + run.min(back / CELL) };
+                        if best.is_none_or(|(b, ..)| score > b) {
+                            best = Some((score, x, y, facing));
+                        }
+                    }
+                }
+            }
+            let Some((_, x, y, facing)) = best else { return };
+            let (dx, dy) = facing.step();
+            let run = (1..=12).take_while(|k| level.is_open(x - dx * k, y - dy * k)).count() as f32;
+            let d = v3(geometry::facing_vector(facing));
+            let wall = v3(geometry::cell_centre(x, y)) + d * CELL * 0.5;
+            let stand = (back).min(run * CELL + CELL * 0.5 - 2.0);
+            let drop = if mode == "moss" { 12.0 } else { 1.0 };
+            let from = wall - d * stand + eye;
+            Transform::from_translation(from).looking_at(wall + Vec3::Y * (EYE_HEIGHT - drop), Vec3::Y)
+        }
         _ => Transform::from_translation(start + eye).looking_to(inward, Vec3::Y),
     };
     commands
@@ -627,8 +960,23 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             Tonemapping::Linear,
             transform,
         ))
-        // Something to see by until the player brings a torch.
-        .with_child((Torch::light(1.0, 120.0, &EXPOSURE), Transform::from_xyz(4.0, -3.0, 2.0)));
+        // Something to see by until the player brings a torch; `FB_DEBUG_LIGHT=cool` swaps its
+        // warmth for a neutral light, to judge colours the torch's orange would hide, and
+        // `FB_DEBUG_LIGHT=lantern` for a steady, whiter lantern twice as bright and reaching
+        // twice as far, to show a room whole.
+        .with_child((
+            if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "cool") {
+                Torch::flickering(point_light(Color::srgb(0.85, 0.95, 1.0), 1.0, 120.0, &EXPOSURE), 0.0)
+            } else if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "lantern") {
+                Torch::flickering(point_light(Color::srgb(1.0, 0.9, 0.74), 2.0, 240.0, &EXPOSURE), 0.0)
+            } else if mode == "corridor" {
+                // A corridor's arches stand further apart than the usual light reaches.
+                Torch::light(2.5, 260.0, &EXPOSURE)
+            } else {
+                Torch::light(1.0, 120.0, &EXPOSURE)
+            },
+            Transform::from_xyz(4.0, -3.0, 2.0),
+        ));
     if mode == "top" {
         commands.insert_resource(GlobalAmbientLight { brightness: 120.0, ..abyss_ambient(&LightTuning::default()) });
     }
@@ -664,8 +1012,115 @@ mod tests {
     use super::*;
     use armory::MaterialKind;
 
+    #[test]
+    fn door_masonry_and_columns_carry_moss_and_timber_does_not() {
+        let level = fb_level::generate(1207, 2);
+        let doors = FixtureShapes::make(&level).doors;
+        assert!(!doors.is_empty());
+        let mut stone = 0;
+        for (_, frame, _) in &doors {
+            for part in &frame.parts {
+                if part.material == Some(MaterialKind::Stone) {
+                    stone += 1;
+                    assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
+                    assert!(!part.uvs_b.is_empty());
+                } else {
+                    assert!(part.uvs_b.is_empty(), "{} is not stone", part.name);
+                }
+            }
+        }
+        assert!(stone > 0, "doorway masonry");
+        let spot = geometry::stone::columns(&level).into_iter().next().expect("a hall with columns at depth 2");
+        for part in &mossy_column(&spot, level.seed, 3).parts {
+            assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
+            assert!(part.uvs_b.iter().all(|uv| uv[0] == 0.75));
+        }
+    }
+
+    #[test]
+    fn the_rock_decay_types_match_the_shader() {
+        let shader = include_str!("render/decay.wesl");
+        assert!(shader.contains(&format!("const DECAY_ROCK: u32 = {DECAY_ROCK}u;")));
+        assert!(shader.contains(&format!("const DECAY_STRATA: u32 = {DECAY_STRATA}u;")));
+    }
+
     fn door() -> EntranceDoor {
         EntranceDoor { shut: Quat::IDENTITY, centre: Vec3::new(110.0, 0.0, 190.0), cell: (5, 9), swing: DoorSwing::Open }
+    }
+
+    /// An app that limits new parts, and one part that has just appeared.
+    fn limiting() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Tuning>().add_systems(Update, limit_far_parts);
+        let part = app.world_mut().spawn(ArmoryPart).id();
+        (app, part)
+    }
+
+    /// Frames enough for a part's range to be given.
+    fn settle(app: &mut App) {
+        for _ in 0..3 {
+            app.update();
+        }
+    }
+
+    #[test]
+    fn parts_on_another_cameras_layer_get_no_range() {
+        // An icon, the doll or the held item, whose layer reaches the part a frame after it
+        // appears, as `Propagate<RenderLayers>` does.
+        for layer in [crate::inventory::icon::ICON_LAYER, crate::inventory::doll::DOLL_LAYER, crate::carry::VIEW_MODEL_LAYER] {
+            let (mut app, part) = limiting();
+            app.update();
+            app.world_mut().entity_mut(part).insert(RenderLayers::layer(layer));
+            settle(&mut app);
+            assert!(app.world().get::<VisibilityRange>(part).is_none(), "layer {layer}");
+        }
+    }
+
+    #[test]
+    fn a_crowd_of_cameras_leaves_every_part_unranged_and_the_world_gets_it_back() {
+        let (mut app, part) = limiting();
+        settle(&mut app);
+        assert!(app.world().get::<VisibilityRange>(part).is_some());
+        let cameras: Vec<Entity> = (0..RANGED_VIEWS + 1).map(|_| app.world_mut().spawn(Camera::default()).id()).collect();
+        settle(&mut app);
+        assert!(app.world().get::<VisibilityRange>(part).is_none());
+        for camera in cameras {
+            app.world_mut().entity_mut(camera).despawn();
+        }
+        settle(&mut app);
+        assert!(app.world().get::<VisibilityRange>(part).is_some());
+    }
+
+    #[test]
+    fn a_new_part_is_drawn_out_to_the_fogs_end_and_a_margin() {
+        let (mut app, part) = limiting();
+        settle(&mut app);
+        let range = app.world().get::<VisibilityRange>(part).expect("the part has a range").clone();
+        let fog_end = app.world().resource::<Tuning>().light.fog_end;
+        assert!(range.is_visible_at_all(fog_end), "a part at the fog's end is drawn");
+        assert!(range.is_culled(fog_end + DRAW_MARGIN + 1.0), "a part past the margin is not");
+        assert!(range.is_abrupt());
+    }
+
+    #[test]
+    fn the_range_follows_the_fog_when_it_is_tuned() {
+        let (mut app, part) = limiting();
+        app.add_systems(Update, apply_light_tuning.after(limit_far_parts));
+        app.init_resource::<GlobalAmbientLight>();
+        settle(&mut app);
+        app.world_mut().resource_mut::<Tuning>().light.fog_end = 100.0;
+        app.update();
+        let range = app.world().get::<VisibilityRange>(part).unwrap();
+        assert!(range.is_visible_at_all(100.0 + DRAW_MARGIN - 1.0));
+        assert!(range.is_culled(100.0 + DRAW_MARGIN + 1.0));
+    }
+
+    #[test]
+    fn the_view_from_above_draws_every_part() {
+        let (mut app, part) = limiting();
+        app.world_mut().spawn(DebugCamera { walk_in: false, fog: false });
+        settle(&mut app);
+        assert!(app.world().get::<VisibilityRange>(part).is_none());
     }
 
     #[test]
@@ -769,5 +1224,25 @@ mod tests {
         assert_eq!(decay.kind, 9);
         assert!((decay.amount - STONE_WEAR).abs() < 1e-6);
         assert!((decay.scale - STONE_PATTERN_SCALE).abs() < 1e-6);
+    }
+
+    #[test]
+    fn doorways_are_built_in_their_finish_style_and_deterministically() {
+        let mut arched = [0, 0];
+        for (depth, slot) in [(1, 0), (2, 1)] {
+            for seed in 1..=12 {
+                let level = fb_level::generate(seed, depth);
+                let (a, b) = (FixtureShapes::make(&level), FixtureShapes::make(&level));
+                assert_eq!(a, b, "seed {seed} depth {depth}");
+                let finishes = fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
+                for (doorway, frame, _) in &a.doors {
+                    let timber = frame.parts.iter().any(|p| p.name == "frame");
+                    let style = finishes.door_style(doorway.x, doorway.y);
+                    assert_eq!(timber, style == Some(fb_level::DoorStyle::Timber), "seed {seed} depth {depth} at {},{}", doorway.x, doorway.y);
+                    arched[slot] += !timber as u32;
+                }
+            }
+        }
+        assert!(arched[0] > 0 && arched[1] > 0, "arched doorways at depth 1 and 2: {arched:?}");
     }
 }

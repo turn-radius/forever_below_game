@@ -27,6 +27,11 @@ impl<K, T: Send + 'static> Fitting<K, T> {
         &self.key
     }
 
+    /// The result, waiting for the job if it has not finished. `None` if it was already taken.
+    pub fn wait(&mut self) -> Option<T> {
+        self.task.take().map(block_on)
+    }
+
     /// The result, if the job has finished. Takes it once: call again and it is `None`.
     pub fn poll(&mut self) -> Option<T> {
         let task = self.task.as_ref()?;

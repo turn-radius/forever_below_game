@@ -23,6 +23,14 @@ pub struct Part {
     pub uvs: Vec<[f32; 2]>,
     /// Normals smoothed across hard edges, for the inverted-hull outline.
     pub outline_normals: Vec<[f32; 3]>,
+    /// How open each vertex is to the light, 1 for open and lower in a corner or crease, which
+    /// the shader darkens by (the level's stone bakes it). Empty for a part with none, which
+    /// the shader draws unshaded.
+    pub occlusion: Vec<f32>,
+    /// A second per-vertex channel for the shader, empty for a part with none. The level's
+    /// stone keeps how mossy each vertex is in `x` (`y` is spare); skinned folk use the same
+    /// slot for their rest normals, which `part_to_skinned_mesh` writes over it.
+    pub uvs_b: Vec<[f32; 2]>,
     /// Triangle list, counter-clockwise front faces.
     pub indices: Vec<u32>,
 }
@@ -61,6 +69,12 @@ impl Part {
         let name = self.name;
         if self.normals.len() != n || self.uvs.len() != n || self.outline_normals.len() != n {
             return Err(format!("{name}: buffer lengths differ"));
+        }
+        if !self.occlusion.is_empty() && self.occlusion.len() != n {
+            return Err(format!("{name}: occlusion length differs"));
+        }
+        if !self.uvs_b.is_empty() && self.uvs_b.len() != n {
+            return Err(format!("{name}: second uv length differs"));
         }
         if !self.indices.len().is_multiple_of(3) {
             return Err(format!("{name}: index count is not a multiple of 3"));
