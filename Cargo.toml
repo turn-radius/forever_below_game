@@ -20,7 +20,33 @@ dbg_macro = "warn"
 todo = "warn"
 
 [workspace.dependencies]
-bevy = "0.20"
+# Only the features the game uses. They are the `3d`, `ui` and `audio` collections written out
+# (each adds the window, input, assets, PNG, text and the default font) minus what the game never
+# touches: `2d` sprites, glTF, scenes, gamepads (`bevy_gilrs`), mesh and sprite picking (UI picking
+# stays, and `Pickable` with it), custom cursors, `sysinfo_plugin`, UI widgets and WebGL.
+# The 2D cameras that carry the UI on the title, level and lab views live in the core pipeline.
+bevy = { version = "0.20", default-features = false, features = [
+    "default_app",
+    "std",
+    "multi_threaded",
+    "bevy_winit",
+    "bevy_clipboard",
+    "default_font",
+    "x11",
+    "wayland",
+    "3d_api",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_anti_alias",
+    "bevy_post_process",
+    "bevy_gizmos_render",
+    "ui_api",
+    "bevy_ui_render",
+    "audio",
+    "bevy_picking",
+    "ui_picking",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 toml = "1"
