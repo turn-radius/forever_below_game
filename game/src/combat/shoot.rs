@@ -327,7 +327,9 @@ pub fn shoot(
         *auto_gate = 0.0;
     }
     let auto = crate::launch::env_set("FB_SHOOT") && *auto_gate >= AUTO_WAIT;
-    let pressed = (input.just_pressed(Action::Attack) && looking) || auto;
+    // Without a shield to raise, the block key shoots as the attack key does.
+    let block_shoots = !super::guard::holds_shield(&inventory);
+    let pressed = ((input.just_pressed(Action::Attack) || (block_shoots && input.just_pressed(Action::Block))) && looking) || auto;
     // Tertiary reloads a crossbow when nothing under the crosshair has a use for it.
     let reload_pressed = input.just_pressed(Action::Tertiary) && !around.aimed.as_ref().is_some_and(|a| a.0.is_some());
 
@@ -371,7 +373,7 @@ pub fn shoot(
             }
         }
         if let Some(t) = marksman.draw {
-            if input.pressed(Action::Attack) || (crate::launch::env_set("FB_SHOOT") && t < DRAW_SECONDS) {
+            if input.pressed(Action::Attack) || (block_shoots && input.pressed(Action::Block)) || (crate::launch::env_set("FB_SHOOT") && t < DRAW_SECONDS) {
                 marksman.draw = Some(t + dt);
             } else {
                 loose = Some(marksman.drawn());

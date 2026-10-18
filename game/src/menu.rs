@@ -1037,11 +1037,15 @@ mod tests {
 
     #[test]
     fn the_menu_is_stricter_than_the_game_about_a_press_on_a_held_input() {
-        let keymap = Keymap::default();
-        assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Right)), None);
+        let mut keymap = Keymap::default();
         assert_eq!(keymap.clash(Action::Jump, Input::Mouse(MouseButton::Right)), Some(Action::Block));
         assert_eq!(keymap.clash(Action::Stab, Input::Mouse(MouseButton::Left)), None, "Attack and Stab share the click by design");
         assert_eq!(keymap.clash(Action::Jump, Input::Mouse(MouseButton::Left)), Some(Action::Attack));
+        // With Attack moved off it, only Stab holds left click: the game lets Jump press it too,
+        // the menu does not.
+        keymap.set_slot(Action::Attack, 0, Input::Key(KeyCode::KeyH));
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Left)), None);
+        assert_eq!(keymap.clash(Action::Jump, Input::Mouse(MouseButton::Left)), Some(Action::Stab));
         assert_eq!(keymap.clash(Action::Jump, Input::Key(KeyCode::KeyB)), None);
     }
 

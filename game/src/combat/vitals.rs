@@ -160,9 +160,10 @@ fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventor
 }
 
 /// The chance, 0 to 1, that the shield the delver holds turns aside a blow that would hit them
-/// (an affix "of Deflection"'s, `fb_items::stats::Stats::block_chance`). Our own mechanic,
-/// standing in for the hold-to-block still to come: a blow turned aside does nothing and
-/// whooshes past as a miss (`creatures::behaviour::BlowsAtDelver`).
+/// while it is raised and the blow comes from ahead (`super::guard`): the shield's own, by its
+/// size, and an affix "of Deflection"'s on top (`fb_items::stats::Stats::block_chance`). Our own
+/// mechanic: a blow turned aside does nothing but clang on the shield
+/// (`creatures::behaviour::BlowsAtDelver`).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct BlockChance(pub f32);
 
@@ -198,7 +199,8 @@ fn fit_hit_points(character: Res<Character>, rules: Option<Res<crate::rules::Gam
     }
 }
 
-/// A blow that misses the delver whooshes past them, from the side it came.
+/// A blow that misses the delver whooshes past them, from the side it came; one their shield
+/// turned aside clangs on it instead (`super::guard`).
 fn whoosh_past(
     mut commands: Commands,
     mut misses: MessageReader<MissedDelver>,
@@ -209,7 +211,7 @@ fn whoosh_past(
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
-    for miss in misses.read() {
+    for miss in misses.read().filter(|m| !m.blocked) {
         let (Some(sound), Some(delver)) = (&sound, players.iter().next()) else { continue };
         let at = Vec3::new(miss.attacker_pos.x, delver.translation.y, miss.attacker_pos.y);
         crate::audio::play_at(&mut commands, "blow misses", sound.0.clone(), at, &game, &tuning);

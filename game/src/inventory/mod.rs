@@ -1787,7 +1787,7 @@ mod tests {
         }
         app.update();
         app.update();
-        assert_eq!((gear_row(&mut app, 8), gear_row(&mut app, 9), gear_row(&mut app, 10)), ("\u{d7}1.2".to_string(), "20%".to_string(), "+2 STR".to_string()));
+        assert_eq!((gear_row(&mut app, 8), gear_row(&mut app, 9), gear_row(&mut app, 10)), ("\u{d7}1.2".to_string(), "80%".to_string(), "+2 STR".to_string()));
         assert_eq!(app.world().resource::<Character>().strength(), 15);
         assert!(sheet_text(&mut app).iter().any(|t| t == "STR 15 (+2)"), "the attribute line shows the score as it stands");
     }

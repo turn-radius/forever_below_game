@@ -398,6 +398,8 @@ pub struct StaminaRules {
     pub second_wind: f64,
     /// What one swing costs, of a full pool.
     pub swing_cost: f64,
+    /// What turning a blow aside on a raised shield costs, of a full pool.
+    pub block_cost: f64,
 }
 
 impl Default for StaminaRules {
@@ -411,6 +413,7 @@ impl Default for StaminaRules {
             sleep_refill_factor: 2.0,
             second_wind: 0.2,
             swing_cost: 0.08,
+            block_cost: 0.1,
         }
     }
 }
