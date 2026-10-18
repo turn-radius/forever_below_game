@@ -47,13 +47,13 @@ const BLOCK_LENGTH: (f32, f32) = (5.5, 11.5);
 /// share of stones that are two, and how high the base ink floats to clear the lowest course.
 const RUBBLE_COURSE: (f32, f32) = (2.8, 5.0);
 const RUBBLE_LENGTH: (f32, f32) = (3.5, 10.0);
-const RUBBLE_PROUD: (f32, f32) = (0.2, 1.6);
+const RUBBLE_PROUD: (f32, f32) = (0.25, 0.6);
 const RUBBLE_CHAMFER: (f32, f32) = (0.25, 0.8);
 const RUBBLE_JOINT: f32 = 0.35;
 const RUBBLE_DROP: f32 = 0.2;
 const RUBBLE_SPLIT: f32 = 0.15;
 /// How far in a rubble stone's corners may be drawn.
-const RUBBLE_CUT: f32 = 0.8;
+const RUBBLE_CUT: f32 = 0.5;
 /// The shares of rubble stones that stop short for a pinning stone and that are through-stones.
 const RUBBLE_PIN: f32 = 0.22;
 const RUBBLE_TALL: f32 = 0.12;
@@ -690,7 +690,7 @@ fn lay_blocks(
             // A few stones are through-stones, as tall as two courses and standing further out.
             let tall = rubble && k > 0 && r_tall < RUBBLE_TALL;
             let reach = if tall { course(true, k + 1).map_or(0.0, |(_, h2)| h2) } else { 0.0 };
-            let proud = if reach > 0.0 { proud + 0.3 } else { proud };
+            let proud = if reach > 0.0 { proud + 0.15 } else { proud };
             let (bottom, top) = (y0 + joint * 0.5, (y0 + h + reach - joint * 0.5 - drop).min(lowest - UNDER_SOFFIT));
             if hi - lo < 2.0 || top - bottom < 1.4 {
                 continue;
