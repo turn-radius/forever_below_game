@@ -22,6 +22,7 @@ use armory::{
 use fb_level::{CELL, Cell, Facing, Level, LevelStyle};
 use procgen_rng::Mulberry32;
 
+pub mod occlusion;
 pub mod stone;
 
 /// Cells of passage drawn outward behind the entrance door, so the open door shows a way
@@ -328,8 +329,20 @@ pub struct LevelMesh {
 }
 
 /// The stone of every drawn cell in `x0..x1`, `y0..y1`, in world space. Walls stand on each
-/// face of rock touching an open cell; the floor and ceiling cover every open cell.
-pub fn level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> LevelMesh {
+/// face of rock touching an open cell; the floor and ceiling cover every open cell. Each
+/// surface carries how shut in its vertices are (`occlusion`), which the shader shades corners
+/// by.
+pub fn level_mesh(view: &CellView, range: (i32, i32, i32, i32)) -> LevelMesh {
+    let mut mesh = bare_level_mesh(view, range);
+    let enclosure = occlusion::Enclosure::new(view);
+    for part in &mut mesh.surfaces.parts {
+        enclosure.bake(part);
+    }
+    mesh
+}
+
+/// [`level_mesh`] before corner shading.
+fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> LevelMesh {
     let level = view.level();
     if level.style == LevelStyle::StoneHalls {
         return stone::hall_mesh(view, (x0, y0, x1, y1));

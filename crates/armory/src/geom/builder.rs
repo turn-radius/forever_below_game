@@ -276,6 +276,7 @@ impl MeshBuilder {
             normals: self.normals,
             uvs: self.uvs,
             outline_normals,
+            occlusion: Vec::new(),
             indices: self.indices,
         }
     }
