@@ -851,6 +851,28 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let at = v3(geometry::cell_centre(from.0, from.1)) - dir * CELL * 0.5 + eye;
             Transform::from_translation(at).looking_to(dir, Vec3::Y)
         }
+        "cobble" | "flagstone" | "rubble" => {
+            // The first room with cobbled or flagged floor, or rubble walls, looking east: down
+            // at the floor ahead for the floors, level at the far wall for rubble.
+            let finishes = fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
+            let wanted = |r: &fb_level::Room| {
+                (r.y..r.y + r.h).flat_map(|y| (r.x..r.x + r.w).map(move |x| (x, y))).find_map(|(x, y)| finishes.at(x as i32, y as i32)).is_some_and(|f| match mode.as_str() {
+                    "cobble" => f.floor == fb_level::FloorFinish::Cobble,
+                    "flagstone" => f.floor == fb_level::FloorFinish::Flagstone,
+                    _ => f.walls == fb_level::WallFinish::Rubble,
+                })
+            };
+            let Some(room) = level.rooms.iter().find(|r| wanted(r)) else { return };
+            let (cx, cy) = room.centre();
+            let from = match mode.as_str() {
+                "cobble" => (room.x as f32 + 0.8, cy),
+                "flagstone" => (cx - 0.7, cy),
+                _ => (cx, cy),
+            };
+            let at = v3(fb_level::Level::world(from.0, from.1)) + eye;
+            let pitch = if mode == "rubble" { -1.0 } else { -9.0 };
+            Transform::from_translation(at).looking_at(at + Vec3::X * 30.0 + Vec3::Y * pitch, Vec3::Y)
+        }
         "web" => {
             // The first web of the kind `FB_DEBUG_WEB` names (corner, ceiling or floor), from a
             // few steps off in the direction it faces, looking at it.

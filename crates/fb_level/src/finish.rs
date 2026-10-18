@@ -152,6 +152,8 @@ pub fn finishes(level: &Level, params: &LevelParams) -> Finishes {
         };
         let floor = match (f < params.cobble_chance, rock) {
             (true, _) => FloorFinish::Cobble,
+            // Past the cobbled share of the draw come the flagged rooms, then the bare ones.
+            (false, true) if f < params.cobble_chance + params.flagstone_chance => FloorFinish::Flagstone,
             (false, true) => FloorFinish::Rock,
             (false, false) => FloorFinish::Flagstone,
         };
@@ -242,6 +244,7 @@ mod tests {
             strata_chance: 0.0,
             rubble_chance: 0.0,
             cobble_chance: 0.0,
+            flagstone_chance: 0.0,
             arch_chance: 0.0,
             ..LevelParams::for_style(LevelStyle::for_depth(depth))
         }
@@ -311,7 +314,7 @@ mod tests {
                 }
             }
             let (want_walls, want_floors): (&[_], &[_]) = if depth == 1 {
-                (&[WallFinish::Rock, WallFinish::Strata], &[FloorFinish::Rock, FloorFinish::Cobble])
+                (&[WallFinish::Rock, WallFinish::Strata], &[FloorFinish::Rock, FloorFinish::Flagstone, FloorFinish::Cobble])
             } else {
                 (&[WallFinish::Ashlar, WallFinish::Rubble], &[FloorFinish::Flagstone, FloorFinish::Cobble])
             };
@@ -401,7 +404,7 @@ mod tests {
     #[test]
     fn old_params_without_the_finish_section_still_load() {
         let mut value = serde_json::to_value(LevelParams::default()).unwrap();
-        for name in ["moss_amount", "grotto_chance", "strata_chance", "rubble_chance", "cobble_chance", "arch_chance"] {
+        for name in ["moss_amount", "grotto_chance", "strata_chance", "rubble_chance", "cobble_chance", "flagstone_chance", "arch_chance"] {
             value.as_object_mut().unwrap().remove(name);
         }
         let old: LevelParams = serde_json::from_value(value).unwrap();
