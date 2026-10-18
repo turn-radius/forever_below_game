@@ -170,6 +170,14 @@ pub struct Denizen {
     pub max: Vec3,
 }
 
+impl Denizen {
+    /// What they leave when they fall: everything they wear and hold, set down round the circle
+    /// they stand in ([`crate::belongings::drop_belongings`]).
+    pub fn belongings(&self) -> crate::belongings::Belongings {
+        crate::belongings::Belongings::new(self.person.spot.seed, self.person.gear.iter().map(|(_, item)| item.clone())).standing_in(self.radius)
+    }
+}
+
 /// How fast a folk is walking, world units a second (10 cm each), 0 standing: set on the
 /// [`Denizen`] root by whatever moves it, and followed by its gait ([`crate::folk_pose`]), which
 /// strides by the distance covered.
@@ -307,10 +315,12 @@ pub fn spawn_denizen(
     figure: &Figure,
 ) -> Entity {
     let (min, max) = figure.bounds().unwrap_or((Vec3::ZERO, Vec3::ZERO));
+    let denizen = Denizen { person: person.clone(), radius: footprint(figure), min, max };
     let root = commands
         .spawn((
             Name::new(person.name.clone()),
-            Denizen { person: person.clone(), radius: footprint(figure), min, max },
+            denizen.belongings(),
+            denizen,
             BlocksTheWay(fb_level::FloorShape::Round(footprint(figure))),
             stand_at(&person.spot),
             Visibility::default(),

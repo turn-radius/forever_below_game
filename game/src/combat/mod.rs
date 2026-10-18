@@ -802,7 +802,7 @@ mod tests {
             .init_resource::<Assets<crate::render::ToonMaterial>>()
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
             .init_resource::<crate::render::OutlineMaterials>()
-            .add_plugins((BehaviourPlugin, CombatPlugin, SkeletonsPlugin))
+            .add_plugins((BehaviourPlugin, CombatPlugin, SkeletonsPlugin, crate::belongings::BelongingsPlugin))
             .insert_resource(RunDice(Mulberry32::new(9)))
             // The rat's and the snake's voices are all distinct handles, to tell if one is used.
             .insert_resource(feedback::CreatureSounds { squeak: weak(1), hiss: weak(2), rat_squeal: weak(3), snake_rise: weak(4), thud: weak(5) })

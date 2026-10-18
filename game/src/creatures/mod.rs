@@ -42,18 +42,21 @@ use crate::render::{ItemAppearance, ItemSpawner};
 use crate::tuning::Tuning;
 
 pub mod behaviour;
-pub mod jackalopes;
 pub mod skeletons;
 pub mod trolls;
 
 use std::sync::Arc;
+use crate::belongings::Belongings;
 use skeletons::{Rattle, SkeletonKit, WornGear};
 
 pub struct CreaturesPlugin;
 
 impl Plugin for CreaturesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin, trolls::TrollsPlugin, jackalopes::JackalopesPlugin))
+        if !app.is_plugin_added::<crate::belongings::BelongingsPlugin>() {
+            app.add_plugins(crate::belongings::BelongingsPlugin);
+        }
+        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin, trolls::TrollsPlugin))
             .init_resource::<Tuning>()
             .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), size_creatures, idle, animate).chain().in_set(DelveSystems));
     }
@@ -604,6 +607,7 @@ pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &Creatu
     if let Some(arms) = arms {
         critter = critter.with_arms(arms);
     }
+    let belongings = Belongings::of(&critter, level.depth);
     let mut rng = Mulberry32::new(spot.seed ^ 0x1D1E);
     let snake = spot.species.is_snake();
     let mut rest = Intent { coil: if snake { 1.0 } else { 0.0 }, rear: if snake { 0.45 } else { 0.0 }, ..default() };
@@ -640,6 +644,9 @@ pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &Creatu
         bones.push(entity.id());
     }
     commands.entity(root).insert(Bones(bones.clone()));
+    if let Some(belongings) = belongings {
+        commands.entity(root).insert(belongings);
+    }
     if let Some(flight) = flight {
         commands.entity(root).insert(flight);
     }

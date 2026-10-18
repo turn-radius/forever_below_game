@@ -25,7 +25,7 @@
 //!   immunity; [`bludgeoning_damage`]).
 //! - Struck down it collapses onto its back ([`fb_creatures::pose::skeleton_fallen`]) and, as it
 //!   falls, every item it wore and held is set down around it as an ordinary item on the floor
-//!   ([`shed_gear`]), once only.
+//!   ([`crate::belongings::drop_belongings`]), once only.
 //! - A skeleton past the fog's end is not drawn ([`cull_far`]), and the bones'
 //!   thin parts (fingers and toes) are drawn with fewer facets, so a hall of them holds the frame
 //!   rate, and they are rolled and fitted side by side when a level is laid out.
@@ -40,12 +40,9 @@ use fb_items::outfit::OutfitSet;
 use fb_items::{Item, Slot};
 use procgen_rng::Mulberry32;
 
-use super::{Bones, Critter};
+use super::Critter;
 use crate::combat::feedback::Corpse;
-use crate::inventory::underfoot::{FloorChanges, set_down_around};
-use crate::inventory::Inventory;
-use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles, Player};
-use crate::player::blocked_by;
+use crate::play::{DelveSystems, Player};
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
 
@@ -298,61 +295,13 @@ fn rattle_idle(
     }
 }
 
-/// Sets every item a fallen skeleton wore and held down around where it fell, as the items
-/// they are, once, as it starts to collapse: they are taken off its bones and put into the
-/// inventory as loose items and set on the floor ([`set_down_around`]), which the floor
-/// machinery spawns and records like any dropped item.
-///
-/// It fires the frame after the skeleton falls, so a skeleton struck down just before the
-/// delver leaves has already shed into the floor the record captures (the floor changes it makes
-/// are applied before [`crate::record::record_level_left`] reads the floor). It marks the skeleton
-/// [`Looted`], and a body brought back from the record is spawned [`Looted`] and bare, so its
-/// gear is never set down twice.
-#[allow(clippy::too_many_arguments)]
-pub fn shed_gear(
-    mut commands: Commands,
-    tuning: Res<Tuning>,
-    level: Res<CurrentLevel>,
-    blocked_cells: Res<BlockedCells>,
-    obstacles: Option<Res<Obstacles>>,
-    settings: Option<Res<GameSettings>>,
-    sounds: Option<Res<BoneSounds>>,
-    mut inventory: ResMut<Inventory>,
-    mut changes: ResMut<FloorChanges>,
-    bodies: Query<(Entity, &Critter, &Transform), (With<Corpse>, Without<Looted>)>,
-    gear: Query<(Entity, &ChildOf), With<WornGear>>,
-    bones: Query<&Bones>,
-) {
-    let obstacles = obstacles.as_deref().cloned().unwrap_or_default();
-    let blocked = blocked_by(&level.0, &blocked_cells);
-    let game = settings.as_deref().copied().unwrap_or_default();
-    for (entity, critter, at) in &bodies {
-        let Some(kit) = critter.kit.as_ref().filter(|_| critter.spot.species.is_skeleton()) else { continue };
-        commands.entity(entity).insert(Looted);
-        if let Some(sounds) = &sounds {
-            play_at(&mut commands, "bones fall", sounds.collapse.clone(), at.translation, &game, &tuning);
-        }
-        // Off the bones.
-        let own: Vec<Entity> = bones.get(entity).map(|b| b.0.clone()).unwrap_or_default();
-        for (piece, parent) in &gear {
-            if own.contains(&parent.parent()) {
-                commands.entity(piece).despawn();
-            }
-        }
-        // Onto the floor, round the place it fell.
-        let items = kit.outfit.worn.iter().map(|(_, item)| item);
-        set_down_around(at.translation.xz(), items, critter.spot.seed, &mut inventory, &mut changes, &blocked, &obstacles.0, tuning.view.floor_item_scale);
-    }
-}
-
 pub struct SkeletonsPlugin;
 
 impl Plugin for SkeletonsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Tuning>()
-            .init_resource::<FloorChanges>()
             .add_systems(Startup, load_bone_sounds)
-            .add_systems(Update, (rattle_idle, cull_far, shed_gear.after(crate::combat::feedback::collapse).before(crate::inventory::underfoot::apply_floor_changes)).in_set(DelveSystems));
+            .add_systems(Update, (rattle_idle, cull_far).in_set(DelveSystems));
     }
 }
 

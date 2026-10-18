@@ -17,7 +17,7 @@
 //! - A body brought back from the record (a level left behind) is long past rising, and stays.
 //! - **Arms.** About half of trolls hold a crude weapon ([`TrollArms`], `fb_items::troll`) in the
 //!   right hand, fitted as a skeleton's is (`fb_creatures::SkeletonGear`). Dead for good, a troll
-//!   sets it down on the floor once ([`drop_weapon`]), as a skeleton sheds its gear.
+//!   sets it down on the floor once ([`crate::belongings::drop_belongings`]), as a skeleton sheds its gear.
 
 use bevy::prelude::*;
 use fb_creatures::pose::ArmStance;
@@ -27,15 +27,10 @@ use fb_creatures::{Creature, Dice, SkeletonGear};
 use fb_items::{Item, Slot};
 
 use super::behaviour::brain_for;
-use super::skeletons::{Looted, WornGear};
-use super::{Bones, Critter, Intent};
+use super::{Critter, Intent};
 use crate::combat::Health;
 use crate::combat::feedback::{Burned, Corpse, take_blows};
-use crate::inventory::Inventory;
-use crate::inventory::underfoot::{FloorChanges, set_down_around};
-use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles};
-use crate::player::blocked_by;
-use crate::tuning::Tuning;
+use crate::play::{CurrentLevel, DelveSystems};
 
 /// What a troll's weapon adds to its damage: its Strength modifier, 4 (SRD 5.1 p. 351, "Claw:
 /// 2d6 + 4"). The weapon hits at the stat block's attack bonus, +7, as the claw does.
@@ -47,7 +42,7 @@ impl Plugin for TrollsPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Burned>().add_systems(
             Update,
-            (burn, fall, regenerate, drop_weapon.before(crate::inventory::underfoot::apply_floor_changes)).chain().after(take_blows).in_set(DelveSystems),
+            (burn, fall, regenerate).chain().after(take_blows).in_set(DelveSystems),
         );
     }
 }
@@ -108,7 +103,7 @@ pub fn take_turn(troll: &mut Troll, health: &mut Health, dt: f32) -> Option<Turn
 }
 
 /// Each troll's turns: living ones regain, a fallen one rises or stays down.
-fn regenerate(
+pub(crate) fn regenerate(
     mut commands: Commands,
     time: Res<Time>,
     level: Res<CurrentLevel>,
@@ -159,125 +154,16 @@ impl TrollArms {
     }
 }
 
-/// Sets down the weapon of a troll dead for good, once, where it fell: taken off its hand and
-/// put on the floor as the item it is ([`set_down_around`]). The troll is marked [`Looted`], and
-/// a body brought back from the record is spawned [`Looted`] with empty hands, so the weapon is
-/// never set down twice.
-#[allow(clippy::too_many_arguments)]
-fn drop_weapon(
-    mut commands: Commands,
-    tuning: Res<Tuning>,
-    level: Res<CurrentLevel>,
-    blocked_cells: Res<BlockedCells>,
-    obstacles: Option<Res<Obstacles>>,
-    mut inventory: ResMut<Inventory>,
-    mut changes: ResMut<FloorChanges>,
-    bodies: Query<(Entity, &Critter, &Troll, &Transform), (With<Corpse>, Without<Looted>)>,
-    gear: Query<(Entity, &ChildOf), With<WornGear>>,
-    bones: Query<&Bones>,
-) {
-    let obstacles = obstacles.as_deref().cloned().unwrap_or_default();
-    let blocked = blocked_by(&level.0, &blocked_cells);
-    for (entity, critter, troll, at) in &bodies {
-        if !troll.spent {
-            continue;
-        }
-        commands.entity(entity).insert(Looted);
-        let Some(arms) = critter.arms.as_ref() else { continue };
-        // Out of its hand.
-        let own: Vec<Entity> = bones.get(entity).map(|b| b.0.clone()).unwrap_or_default();
-        for (piece, parent) in &gear {
-            if own.contains(&parent.parent()) {
-                commands.entity(piece).despawn();
-            }
-        }
-        // Onto the floor beside it.
-        set_down_around(at.translation.xz(), std::iter::once(&arms.weapon), critter.spot.seed, &mut inventory, &mut changes, &blocked, &obstacles.0, tuning.view.floor_item_scale);
-        info!("The troll's {} falls to the floor", arms.weapon.title());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use fb_creatures::{Species, TrollState};
-    use fb_level::CreatureSpot;
+    use crate::creatures::skeletons::Looted;
+    use crate::inventory::{FloorChanges, Inventory};
 
     /// A seed whose troll holds a weapon.
     fn armed_seed() -> u32 {
         (0..40).find(|&s| !fb_items::troll::troll_outfit(s, fb_items::Odds::kit(1)).worn.is_empty()).expect("some troll is armed")
-    }
-
-    /// A troll of `seed`, armed as it rolled, lying as a body with `spent` and `looted` as given,
-    /// in an app that runs only [`drop_weapon`]. The app and the troll.
-    fn body(seed: u32, spent: bool, looted: bool) -> (App, Entity) {
-        let state = TrollState::roll(seed);
-        let spot = CreatureSpot { x: 20.5, y: 20.5, yaw: 0.0, species: Species::Troll, seed, pack: 0 };
-        let gear = SkeletonGear::roll_troll(&state, fb_items::Odds::kit(1));
-        let mut critter = Critter::new(spot, Creature::Troll(state.clone()));
-        if let Some(arms) = TrollArms::of(&gear) {
-            critter = critter.with_arms(arms);
-        }
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<Tuning>()
-            .init_resource::<BlockedCells>()
-            .init_resource::<Inventory>()
-            .init_resource::<FloorChanges>()
-            .insert_resource(CurrentLevel(fb_level::generate(1207, 1)))
-            .add_systems(Update, drop_weapon);
-        let at = Transform::from_xyz(30.0, 0.0, 30.0);
-        let mut troll = Troll::new(&state);
-        troll.spent = spent;
-        let id = app.world_mut().spawn((critter, troll, Corpse { since: 30.0, fell: at }, at, Bones(Vec::new()))).id();
-        if looted {
-            app.world_mut().entity_mut(id).insert(Looted);
-        }
-        (app, id)
-    }
-
-    fn set_down(app: &App) -> usize {
-        app.world().resource::<FloorChanges>().0.len()
-    }
-
-    #[test]
-    fn a_troll_dead_for_good_sets_its_weapon_down_once() {
-        let (mut app, troll) = body(armed_seed(), true, false);
-        app.update();
-        assert_eq!(set_down(&app), 1, "the weapon falls");
-        assert!(app.world().get::<Looted>(troll).is_some());
-        for _ in 0..30 {
-            app.update();
-        }
-        assert_eq!(set_down(&app), 1, "and never again");
-    }
-
-    #[test]
-    fn a_troll_that_will_rise_keeps_its_weapon() {
-        let (mut app, _) = body(armed_seed(), false, false);
-        for _ in 0..30 {
-            app.update();
-        }
-        assert_eq!(set_down(&app), 0);
-    }
-
-    #[test]
-    fn a_troll_brought_back_from_the_record_drops_nothing() {
-        // A restored body is spawned looted, and without its weapon in its hand.
-        let (mut app, _) = body(armed_seed(), true, true);
-        for _ in 0..30 {
-            app.update();
-        }
-        assert_eq!(set_down(&app), 0);
-    }
-
-    #[test]
-    fn an_unarmed_troll_has_nothing_to_drop() {
-        let seed = (0..40).find(|&s| fb_items::troll::troll_outfit(s, fb_items::Odds::kit(1)).worn.is_empty()).unwrap();
-        let (mut app, troll) = body(seed, true, false);
-        app.update();
-        assert_eq!(set_down(&app), 0);
-        assert!(app.world().get::<Looted>(troll).is_some());
     }
 
     #[test]
@@ -328,7 +214,7 @@ mod tests {
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
             .init_resource::<crate::render::OutlineMaterials>()
             .init_resource::<FloorChanges>()
-            .add_plugins((BehaviourPlugin, CombatPlugin, TrollsPlugin))
+            .add_plugins((BehaviourPlugin, CombatPlugin, TrollsPlugin, crate::belongings::BelongingsPlugin))
             .insert_resource(RunDice(procgen_rng::Mulberry32::new(9)))
             .insert_resource(crate::combat::feedback::CreatureSounds { squeak: weak(1), hiss: weak(2), rat_squeal: weak(3), snake_rise: weak(4), thud: weak(5) })
             .add_systems(Update, (idle, animate, apply_floor_changes).chain());
