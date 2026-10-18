@@ -18,7 +18,10 @@ use crate::LevelStyle;
 macro_rules! level_params {
     ($($section:ident { $($field:ident: $ty:ty = $default:expr, $min:expr, $max:expr, $step:expr; $doc:literal)* })*) => {
         /// The parameters of a level's layout and furnishing.
+        ///
+        /// A saved set without a field takes its default, so older ones still load.
         #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+        #[serde(default)]
         pub struct LevelParams {
             $($(#[doc = $doc] pub $field: $ty,)*)*
         }
@@ -82,6 +85,14 @@ level_params! {
         bare_room_chance: f64 = 0.15, 0.0, 1.0, 0.01; "Chance a room holds no loot."
         cells_per_item: u32 = 10, 2.0, 40.0, 1.0; "Room cells for each item of loot."
         items_per_room_max: u32 = 5, 1.0, 12.0, 1.0; "Most loot in one room, before the odd extra."
+    }
+    finish {
+        moss_amount: f32 = 1.0, 0.0, 1.0, 0.05; "How strongly the damp field grows moss: none at 0."
+        grotto_chance: f64 = 0.15, 0.0, 1.0, 0.01; "Chance a room is a grotto, mossy throughout."
+        strata_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Chance a rough rock room shows layered strata instead of craggy rock."
+        rubble_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Chance a stone hall room is built of rubble instead of ashlar."
+        cobble_chance: f64 = 0.2, 0.0, 1.0, 0.01; "Chance a room, or the corridors, are cobbled rather than bare rock or flagstone."
+        arch_chance: f64 = 0.6, 0.0, 1.0, 0.01; "Chance a stone hall doorway is an arch; rough rock doorways are cut arches a third as often."
     }
 }
 
