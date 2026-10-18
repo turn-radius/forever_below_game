@@ -51,7 +51,7 @@ impl Plugin for LevelPlugin {
             // delve, then each one they travel to ([`crate::travel`]), as the folk and props are.
             .add_systems(
                 Update,
-                (clear_stone, spawn_stone, spawn_columns, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
+                (clear_stone, spawn_stone, spawn_columns, spawn_corridor_arches, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
             )
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
@@ -500,6 +500,46 @@ fn spawn_columns(
     }
 }
 
+/// The arches that span the hall's corridors: one mesh shared by every arch, turned to run
+/// across its corridor, so a long corridor of arches costs the same as one.
+fn spawn_corridor_arches(
+    mut commands: Commands,
+    level: Res<CurrentLevel>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut toon_materials: ResMut<Assets<ToonMaterial>>,
+    mut outline_materials: ResMut<Assets<OutlineMaterial>>,
+) {
+    let level = &level.0;
+    let arches = geometry::arch::corridor_arches(level);
+    let Some(soffit) = arches.first().map(|a| a.soffit) else { return };
+    let Some(shape) = geometry::arch::corridor_arch(soffit, level.seed) else { return };
+    let stone = stone_appearance(level.seed);
+    let ink = outline_materials.add(stone.outline);
+    let parts: Vec<_> = shape
+        .parts
+        .iter()
+        .map(|part| {
+            let mut material = stone.material_for(part);
+            material.extension.min_width = MinWidth::default();
+            (part.name, meshes.add(part_to_mesh(part)), toon_materials.add(material), part.outline)
+        })
+        .collect();
+    for arch in arches {
+        let at = v3(geometry::cell_centre(arch.cell.0, arch.cell.1));
+        // The shape runs along z; a corridor along x turns it a quarter.
+        let turn = Quat::from_rotation_y(if arch.along_x { std::f32::consts::FRAC_PI_2 } else { 0.0 });
+        let root = commands
+            .spawn((StonePiece, ArmoryItem, Name::new("corridor arch"), Transform::from_translation(at).with_rotation(turn), Visibility::default()))
+            .id();
+        for (name, mesh, material, outlined) in parts.iter() {
+            let part = commands.spawn((ArmoryPart, Name::new(*name), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), ChildOf(root))).id();
+            if *outlined {
+                commands.spawn((InkOutline, Mesh3d(mesh.clone()), MeshMaterial3d(ink.clone()), ChildOf(part)));
+            }
+        }
+    }
+}
+
 /// The shapes of a level's doorways and braziers: each doorway with its frame and, at the
 /// entrance, the door's leaf; for each fixed light a brazier's body and flame height, `None` for
 /// the other kinds. Plain data, so it can be made ahead of time ([`crate::staged`]).
@@ -766,6 +806,18 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let at = centre + from_dir * CELL * 2.5 + eye;
             Transform::from_translation(at).looking_at(centre + Vec3::Y * 11.0, Vec3::Y)
         }
+        "corridor" => {
+            // The corridor run with the most arches, from its end looking down it.
+            let arches = geometry::arch::corridor_arches(level);
+            let runs = geometry::arch::corridor_runs(level);
+            let count = |run: &geometry::arch::CorridorRun| arches.iter().filter(|a| run.cells.contains(&a.cell)).count();
+            let Some(run) = runs.iter().max_by_key(|r| (count(r), r.cells.len())) else { return };
+            let (from, to) = (run.cells[0], *run.cells.last().unwrap());
+            let dir = Vec3::new((to.0 - from.0).signum() as f32, 0.0, (to.1 - from.1).signum() as f32);
+            let dir = if dir == Vec3::ZERO { if run.along_x { Vec3::X } else { Vec3::Z } } else { dir };
+            let at = v3(geometry::cell_centre(from.0, from.1)) - dir * CELL * 0.5 + eye;
+            Transform::from_translation(at).looking_to(dir, Vec3::Y)
+        }
         "web" => {
             // The first web of the kind `FB_DEBUG_WEB` names (corner, ceiling or floor), from a
             // few steps off in the direction it faces, looking at it.
@@ -811,7 +863,11 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             transform,
         ))
         // Something to see by until the player brings a torch.
-        .with_child((Torch::light(1.0, 120.0, &EXPOSURE), Transform::from_xyz(4.0, -3.0, 2.0)));
+        .with_child((
+            // A corridor's arches stand further apart than the usual light reaches.
+            if mode == "corridor" { Torch::light(2.5, 260.0, &EXPOSURE) } else { Torch::light(1.0, 120.0, &EXPOSURE) },
+            Transform::from_xyz(4.0, -3.0, 2.0),
+        ));
     if mode == "top" {
         commands.insert_resource(GlobalAmbientLight { brightness: 120.0, ..abyss_ambient(&LightTuning::default()) });
     }
