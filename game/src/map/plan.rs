@@ -153,6 +153,12 @@ impl PlanFrame {
 
 /// `level` as far as `explored` has seen it, `px` pixels to a cell.
 pub fn draw_plan(level: &Level, explored: &Explored, px: f32) -> PlanCanvas {
+    draw_plan_with(level, explored, px, |_, _| {})
+}
+
+/// [`draw_plan`], with `under` drawn on the floor's wash and beneath the walls, for the level
+/// view's finishes.
+pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl FnOnce(&mut PlanCanvas, &PlanFrame)) -> PlanCanvas {
     let frame = PlanFrame::of(px);
     let (w, h) = frame.size(level);
     let mut canvas = PlanCanvas::new(w, h);
@@ -178,6 +184,8 @@ pub fn draw_plan(level: &Level, explored: &Explored, px: f32) -> PlanCanvas {
             }
         }
     }
+
+    under(&mut canvas, &frame);
 
     // Walls: each side of a seen cell that faces rock, in three wandering strokes.
     for y in 0..level.height as i32 {
