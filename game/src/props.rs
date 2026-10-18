@@ -197,6 +197,7 @@ pub fn stock_container_with(inventory: &mut Inventory, prop: Prop, contents: Vec
 /// Spawns (or respawns, when the level changes) every prop the level lays out, each container
 /// stocked in the inventory, with what was left in it and open or shut as it was left if the
 /// level was visited before (`crate::record`).
+#[allow(clippy::too_many_arguments)]
 fn lay_out_props(
     mut commands: Commands,
     level: Res<CurrentLevel>,

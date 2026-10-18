@@ -556,6 +556,7 @@ pub(crate) fn track_context(screen: Option<Res<ScreenOpen>>, app: Option<Res<Sta
 }
 
 /// Counts how long every bound input has been down, and flips a toggled crouch.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn track_holds(
     keymap: Res<Keymap>,
     tuning: Option<Res<Tuning>>,

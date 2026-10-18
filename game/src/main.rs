@@ -68,7 +68,8 @@ fn main() -> AppExit {
         return run_creature(&args);
     }
     let swings = args.iter().any(|a| a == "--swings");
-    let args: Vec<String> = args.into_iter().filter(|a| a != "--swings").collect();
+    let inspect = args.iter().any(|a| a == "--inspect");
+    let args: Vec<String> = args.into_iter().filter(|a| a != "--swings" && a != "--inspect").collect();
     let launch = match Launch::parse(&args) {
         Ok(launch) => launch,
         Err(error) => {
@@ -99,6 +100,11 @@ fn main() -> AppExit {
     if swings {
         app.add_plugins(SwingPracticePlugin);
     }
+    // F12 (or `--inspect`) opens the component inspector, in debug builds only.
+    #[cfg(all(feature = "inspector", debug_assertions))]
+    app.add_plugins(forever_below::inspect::InspectPlugin { open: inspect });
+    #[cfg(not(all(feature = "inspector", debug_assertions)))]
+    let _ = inspect;
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -111,6 +117,14 @@ fn main() -> AppExit {
     app.run()
 }
 
+/// The plugins of the single-view tools (`--turntable`, `--doll`, `--creature`, `--forge`,
+/// `--level`): a debug build watches the assets, shaders included, and a release build does not.
+fn view_plugins() -> bevy::app::PluginGroupBuilder {
+    DefaultPlugins
+        .set(WindowPlugin { primary_window: Some(Window { title: "Forever Below".into(), ..default() }), ..default() })
+        .set(AssetPlugin { watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() })
+}
+
 fn run_turntable() -> AppExit {
     let (turntable, focus) = match turntable_from_env().and_then(|t| Ok((t, focus_from_env()?))) {
         Ok(view) => view,
@@ -120,10 +134,7 @@ fn run_turntable() -> AppExit {
         }
     };
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
-        ..default()
-    }))
+    app.add_plugins(view_plugins())
     .add_plugins((ArmoryRenderPlugin, TurntablePlugin))
     .insert_resource(turntable)
     .insert_resource(focus);
@@ -149,10 +160,7 @@ fn run_doll(args: &[String]) -> AppExit {
         }
     };
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
-        ..default()
-    }))
+    app.add_plugins(view_plugins())
     .add_plugins((ArmoryRenderPlugin, DollViewPlugin))
     .insert_resource(choice)
     .insert_resource(motion);
@@ -171,10 +179,7 @@ fn run_creature(args: &[String]) -> AppExit {
         }
     };
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
-        ..default()
-    }))
+    app.add_plugins(view_plugins())
     .add_plugins((ArmoryRenderPlugin, CreatureViewPlugin))
     .insert_resource(choice);
     if let Some(capture) = FrameCapturePlugin::from_env() {
@@ -192,10 +197,7 @@ fn run_forge(args: &[String]) -> AppExit {
         }
     };
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
-        ..default()
-    }))
+    app.add_plugins(view_plugins())
     .add_plugins((ArmoryRenderPlugin, ForgeViewPlugin))
     .insert_resource(forge);
     if let Some(capture) = FrameCapturePlugin::from_env() {
@@ -237,10 +239,7 @@ fn run_level_view(args: &[String]) -> AppExit {
         }
     };
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window { title: "Forever Below".into(), ..default() }),
-        ..default()
-    }))
+    app.add_plugins(view_plugins())
     .add_plugins(LevelViewPlugin)
     .insert_resource(forge);
     if let Some(capture) = FrameCapturePlugin::from_env() {

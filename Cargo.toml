@@ -8,8 +8,45 @@ version = "0.1.0"
 license = "UNLICENSED"
 rust-version = "1.97.1"
 
+# One lint table for every crate (each crate opts in with `[lints] workspace = true`).
+# `cargo clippy --workspace --all-targets -- -D warnings` runs in CI. Bevy systems take many
+# parameters and long query types, so those two allows stay on the single systems that need them.
+# `clippy::float_cmp` is left off: it flags over a hundred exact comparisons the tests rely on.
+[workspace.lints.rust]
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
 [workspace.dependencies]
-bevy = "0.20"
+# Only the features the game uses. They are the `3d`, `ui` and `audio` collections written out
+# (each adds the window, input, assets, PNG, text and the default font) minus what the game never
+# touches: `2d` sprites, glTF, scenes, gamepads (`bevy_gilrs`), mesh and sprite picking (UI picking
+# stays, and `Pickable` with it), custom cursors, `sysinfo_plugin`, UI widgets and WebGL.
+# The 2D cameras that carry the UI on the title, level and lab views live in the core pipeline.
+bevy = { version = "0.20", default-features = false, features = [
+    "default_app",
+    "std",
+    "multi_threaded",
+    "bevy_winit",
+    "bevy_clipboard",
+    "default_font",
+    "x11",
+    "wayland",
+    "3d_api",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_anti_alias",
+    "bevy_post_process",
+    "bevy_gizmos_render",
+    "ui_api",
+    "bevy_ui_render",
+    "audio",
+    "bevy_picking",
+    "ui_picking",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 toml = "1"
@@ -48,3 +85,15 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.fb_character]
 opt-level = 3
+
+# Release builds ship with thin LTO and one codegen unit; they take longer to build for a faster game.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Release speed with line tables kept and symbols unstripped, for profilers (see docs/rendering.md):
+# `cargo build --profile profiling -p forever_below`.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false

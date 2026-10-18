@@ -54,10 +54,13 @@ impl Plugin for CreaturesPlugin {
 }
 
 /// A creature in the level: which spot it came from and what it is.
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Debug, Reflect)]
+#[reflect(Component, from_reflect = false)]
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct Critter {
+    #[reflect(ignore)]
     pub spot: CreatureSpot,
+    #[reflect(ignore)]
     pub creature: Creature,
     /// The circle it covers on the floor, world units, at the size it is drawn.
     pub radius: f32,
@@ -66,6 +69,7 @@ pub struct Critter {
     pub size: f32,
     /// A skeleton's measures, weapon, armour and gear, worked out once when it appears, so
     /// nothing rebuilds its body each frame. `None` for the other creatures.
+    #[reflect(ignore)]
     pub kit: Option<Arc<SkeletonKit>>,
 }
 
@@ -155,7 +159,8 @@ pub struct Bones(pub Vec<Entity>);
 
 /// What a creature means to do this moment, which the animation eases toward. Each is 0 to 1
 /// except `look`, a head turn in radians toward its left.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
 pub struct Intent {
     /// A snake coiled up (1) or laid out to move (0).
     pub coil: f32,
@@ -176,7 +181,8 @@ pub struct Intent {
 }
 
 /// The pose's moving parts, eased from frame to frame.
-#[derive(Component, Clone, Copy, Debug, Default)]
+#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
+#[reflect(Component)]
 pub struct Motion {
     /// The rat's step cycle or the snake's wave, radians.
     pub cycle: f32,
@@ -256,7 +262,8 @@ pub fn trail_bend(snake: &fb_creatures::SnakeState, trail: &Trail, root: &Transf
 }
 
 /// How a creature idles: its own rates, from its seed.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component)]
 pub struct Idle {
     pub phase: f32,
     pub rate: f32,
@@ -525,7 +532,8 @@ pub fn idle(mut creatures: Query<(&Critter, &Idle, &Motion, &mut Intent), Withou
 }
 
 /// On a creature whose intent something else sets (its behaviour), so [`idle`] leaves it be.
-#[derive(Component, Clone, Copy, Debug, Default)]
+#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
+#[reflect(Component)]
 pub struct Driven;
 
 /// A snake's tongue at `t` seconds: two quick flicks every three seconds or so, in between.

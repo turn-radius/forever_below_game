@@ -52,6 +52,7 @@ impl Plugin for FrameTimeProbe {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn report(
     frame: Res<FrameCount>,
     frames: Res<ProbeFrames>,

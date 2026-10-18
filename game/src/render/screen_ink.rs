@@ -266,6 +266,7 @@ impl SpecializedRenderPipeline for ScreenInkPipeline {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn prepare_pipelines(
     mut commands: Commands,
     pipeline_cache: Res<PipelineCache>,

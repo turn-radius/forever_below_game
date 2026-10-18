@@ -196,7 +196,7 @@ fn joint_transform(rig: &Rig, joint: Joint, pose: &fb_body::RigPose) -> Transfor
 /// Whether a figure between [`NEAR_RANGE`] and [`POSE_RANGE`] is posed this frame: one frame in
 /// three, staggered by entity. Each is taken mod 3 before adding, so nothing overflows.
 fn posed_this_frame(frame: u32, entity: Entity) -> bool {
-    (frame % 3 + entity.index_u32() % 3) % 3 == 0
+    (frame % 3 + entity.index_u32() % 3).is_multiple_of(3)
 }
 
 /// Poses every figure: advances its gait by the distance its parent's [`Stride`] covers and writes

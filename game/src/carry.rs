@@ -750,6 +750,7 @@ fn hold_debug_pose(
 
 /// Spawns (or respawns, when the level changes) every item the level lays out, each kept
 /// track of in the inventory, loose.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lay_out_items(
     mut commands: Commands,
     level: Res<CurrentLevel>,
@@ -2287,7 +2288,6 @@ mod tests {
 
     #[test]
     fn grip_point_stays_at_hand_regardless_of_held_scale() {
-        use fb_items::Slot;
         let spec = Character::default().spec();
         let sword = (1..400).filter_map(|s| fb_items::roll_item("Sword", s)).find(|i| i.shape.family() == Family::Sword).unwrap().shape;
         let torch = lit_torch(1207).shape;

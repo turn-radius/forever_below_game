@@ -297,6 +297,7 @@ fn prefetch_below(
 }
 
 /// F at a stair uses it, unless an item or container is under the crosshair.
+#[allow(clippy::too_many_arguments)]
 fn take_stair(
     input: ActionInput,
     level: Res<CurrentLevel>,
@@ -320,6 +321,7 @@ fn take_stair(
 }
 
 /// Starts the journey a [`UseStair`] asks for, if the level has that stair and none is under way.
+#[allow(clippy::too_many_arguments)]
 fn begin_journey(
     mut commands: Commands,
     mut used: MessageReader<UseStair>,

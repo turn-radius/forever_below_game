@@ -410,7 +410,7 @@ impl Loading {
 /// Whether the ammunition of `attack` breaks (our own rule, not the SRD's): a hit breaks it when
 /// the natural d20 is even, so it costs no extra draw. A miss leaves it to be picked up.
 pub fn ammunition_breaks(attack: &Attack) -> bool {
-    attack.hit && attack.natural % 2 == 0
+    attack.hit && attack.natural.is_multiple_of(2)
 }
 
 #[cfg(test)]

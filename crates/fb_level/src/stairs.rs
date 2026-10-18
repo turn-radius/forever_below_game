@@ -171,7 +171,7 @@ pub(crate) fn place_stairs(level: &mut Level, rng: &mut Mulberry32) {
         let first = rng.int(0, reach as u32 - 1) as usize;
         // From the pick on through the far cells, round to the pick, then the rest.
         let order = (0..reach).map(|k| (first + k) % reach).chain(reach..pool.len());
-        let chosen = order.map(|k| pool[k]).find(|&(_, y, x, _)| whole_without(x as i32, y as i32));
+        let chosen = order.map(|k| pool[k]).find(|&(_, y, x, _)| whole_without(x, y));
         if let Some((_, y, x, n)) = chosen {
             stairs.push(Stair { x: x as u32, y: y as u32, facing: Facing::ALL[n], kind: StairKind::Down });
             break;

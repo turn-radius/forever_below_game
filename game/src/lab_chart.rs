@@ -48,8 +48,8 @@ impl Canvas {
         }
         let at = ((y as u32 * self.width + x as u32) * 4) as usize;
         let a = coverage.clamp(0.0, 1.0) * colour[3] as f32 / 255.0;
-        for c in 0..3 {
-            self.pixels[at + c] = (self.pixels[at + c] as f32 * (1.0 - a) + colour[c] as f32 * a).round() as u8;
+        for (c, &tone) in colour.iter().take(3).enumerate() {
+            self.pixels[at + c] = (self.pixels[at + c] as f32 * (1.0 - a) + tone as f32 * a).round() as u8;
         }
     }
 
@@ -189,6 +189,7 @@ pub fn histogram_chart(now: &FightSummary, was: Option<&FightSummary>) -> Chart 
 /// The needs against game time, 0 to 1, with the band edges as faint rules; exhaustion as a
 /// step line on its own scale (level 0 to 6 over the same height); the saved rules' run faint
 /// and dashed; and a tick at the bottom where something was eaten or drunk.
+#[allow(clippy::type_complexity)]
 pub fn time_chart(now: &Timeline, was: Option<&Timeline>, edges: &[f64]) -> Chart {
     let (w, h) = TIME_SIZE;
     let mut canvas = Canvas::new(w, h, BACKGROUND);

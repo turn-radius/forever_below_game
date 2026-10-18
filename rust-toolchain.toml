@@ -1,4 +1,6 @@
-# Bevy 0.20 needs Rust 1.97.1 or newer. rustup installs this automatically on first build.
+# Bevy 0.20 needs Rust 1.97.1 or newer, and this pins it (the workspace `rust-version`), so a newer
+# stable's new lints cannot turn CI red on their own. Raise it on purpose, with the lint fixes it
+# brings. rustup installs this automatically on first build.
 [toolchain]
-channel = "stable"
+channel = "1.97.1"
 components = ["rustfmt", "clippy"]

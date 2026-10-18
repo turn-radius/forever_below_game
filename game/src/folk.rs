@@ -178,9 +178,11 @@ pub fn build_figures(spots: &[FolkSpot], depth: u32) -> Vec<(Person, Figure)> {
 }
 
 /// A person standing in the level: the root of their figure, on the floor at their spot.
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Debug, Reflect)]
+#[reflect(Component, from_reflect = false)]
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::simulate::Simulated, Stride, crate::hostility::Hostility, crate::folk_pose::ArmSwing)]
 pub struct Denizen {
+    #[reflect(ignore)]
     pub person: Person,
     /// The circle on the floor they stand in ([`footprint`]).
     pub radius: f32,
@@ -192,14 +194,17 @@ pub struct Denizen {
 /// How fast a folk is walking, world units a second (10 cm each), 0 standing: set on the
 /// [`Denizen`] root by whatever moves it, and followed by its gait ([`crate::folk_pose`]), which
 /// strides by the distance covered.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
 pub struct Stride {
     pub speed: f32,
 }
 
 /// The figure under its [`Denizen`] root, which the skeleton and meshes hang from.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component, from_reflect = false)]
 pub struct Stance {
+    #[reflect(ignore)]
     pub idle: Idle,
     /// How far the whole body has turned toward someone near, yaw radians: only when the head
     /// cannot turn on its own (under a hood).
@@ -209,7 +214,8 @@ pub struct Stance {
 /// The head joint of a figure, which turns about the neck: where it looks now as `(yaw, pitch)`
 /// radians, the yaw turning the face (+Z) toward +X, the pitch up. The pose
 /// ([`crate::folk_pose::pose_folk`]) puts the turn on the joint.
-#[derive(Component, Clone, Copy, Debug, Default)]
+#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
+#[reflect(Component)]
 pub struct FolkHead {
     pub look: Vec2,
     /// Where the head turns in the figure's space (the base of the neck), if the entity is not

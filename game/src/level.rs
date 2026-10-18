@@ -233,6 +233,7 @@ const RANGED_VIEWS: usize = 32;
 ///   than the fog, is up;
 /// - everything while there are more cameras than Bevy tracks ranges for (a full inventory
 ///   makes up to 64 icon cameras), so the player's view is never one of those that culls them.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn limit_far_parts(
     mut commands: Commands,
     tuning: Res<Tuning>,
@@ -449,6 +450,7 @@ fn spawn_stone(
 /// The columns of a hall: one mesh for each shape (height and variant) shared by every column
 /// of that shape, so a colonnade costs a few meshes however long it is. Each is turned a
 /// quarter at a time so repeats do not wear alike.
+#[allow(clippy::type_complexity)]
 fn spawn_columns(
     mut commands: Commands,
     level: Res<CurrentLevel>,

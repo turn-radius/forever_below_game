@@ -1472,19 +1472,19 @@ mod tests {
         let mut failures = vec![];
         let mut compared = 0;
         for (body, seed) in bodies.iter().flat_map(|b| kits.iter().map(move |&s| (b, s))) {
-            let fit = fit_worn(&body, &outfit(seed));
+            let fit = fit_worn(body, &outfit(seed));
             let torso = [Slot::Legs, Slot::Shirt, Slot::Body, Slot::Belt, Slot::Cloak];
             let layers: Vec<&WornLayer> = fit.layers.iter().filter(|l| torso.contains(&l.slot)).collect();
-            let env = Envelope::new(&body);
+            let env = Envelope::new(body);
             for (li, outer) in layers.iter().enumerate().skip(1) {
-                let under = Radial::of(layers[..li].iter().flat_map(|l| trunk_points(&body, l)));
+                let under = Radial::of(layers[..li].iter().flat_map(|l| trunk_points(body, l)));
                 let mut worst = (0.0f32, [0.0; 3], Slot::Legs);
                 let mut count = 0;
                 let mut total = 0;
                 // Every garment's neckline is cut at the neck itself, so their top edges meet
                 // there by design: compare from just below it down.
                 let neck = body.shoulder_y + 0.11 * body.trunk_length - 0.2 * body.scale;
-                for p in trunk_points(&body, outer).filter(|p| p[1] < neck) {
+                for p in trunk_points(body, outer).filter(|p| p[1] < neck) {
                     total += 1;
                     let (i, j) = bin(p);
                     if let Some(&r) = under.bins.get(&(i, j)) {

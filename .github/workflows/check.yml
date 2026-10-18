@@ -1,0 +1,54 @@
+# Checks every pull request, and main after each merge: clippy with warnings denied, then the
+# whole test suite. There is no `cargo fmt --check`; the repo is not fmt-clean.
+name: Check
+
+# Draft pull requests are skipped: agents push a commit per task to them, and a cold run takes
+# about 40 minutes of the plan's Actions minutes. Marking one ready for review runs it.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    if: github.event_name == 'push' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    # A run with a cold cache builds for about 20 minutes and tests for about 15.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Bevy's audio and input on Linux (https://bevy.org/learn/quick-start/getting-started/setup/).
+      # jq, which tools/test.sh reads cargo's output with, is already on the runner image.
+      - name: Linux libraries
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      # rust-toolchain.toml picks the toolchain and its clippy; rustup installs it on first use.
+      - name: Toolchain
+        run: rustup show
+
+      # Saved even when a step fails, so a failing test doesn't send the next run back to a cold build.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The configuration the release workflow ships.
+      - name: Clippy without the dev features
+        run: cargo clippy -p forever_below --no-default-features --all-targets -- -D warnings
+
+      - name: Tests
+        run: tools/test.sh

@@ -270,6 +270,7 @@ fn cull_far(tuning: Res<Tuning>, players: Query<&Transform, With<Player>>, mut s
 }
 
 /// Now and then a living skeleton standing near enough rattles its bones.
+#[allow(clippy::type_complexity)]
 fn rattle_idle(
     mut commands: Commands,
     time: Res<Time>,
@@ -304,7 +305,7 @@ fn rattle_idle(
 /// are applied before [`crate::record::record_level_left`] reads the floor). It marks the skeleton
 /// [`Looted`], and a body brought back from the record is spawned [`Looted`] and bare, so its
 /// gear is never set down twice.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn shed_gear(
     mut commands: Commands,
     tuning: Res<Tuning>,

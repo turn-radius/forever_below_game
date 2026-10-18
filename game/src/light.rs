@@ -156,6 +156,7 @@ impl Plugin for ShadowBudgetPlugin {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn budget_shadows(
     tuning: Res<Tuning>,
     cameras: Query<(&Camera, &GlobalTransform), Or<(With<PlayerCamera>, With<DebugCamera>)>>,
@@ -400,7 +401,7 @@ mod tests {
                 // The player sways, so the other is sometimes a little nearer.
                 lights[1 - held].0 = 50.0 - SHADOW_STICKINESS * 0.9 * (step % 2) as f32;
                 let casts = shadow_casters(&lights, 1);
-                assert_eq!(casts[held], true, "step {step}");
+                assert!(casts[held], "step {step}");
             }
         }
         // But one clearly nearer takes it.

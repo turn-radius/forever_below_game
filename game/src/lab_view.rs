@@ -1885,6 +1885,7 @@ fn fight_tiles(now: &FightSummary, was: &FightSummary) -> Vec<(String, String, O
 }
 
 /// A chart with its caption, the words at its edges and the image.
+#[allow(clippy::too_many_arguments)]
 fn chart_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, title: &str, note: &str, chart: &Chart, image: &Option<Handle<Image>>, aspect: f32, grow: f32) {
     parent
         .spawn((Node { flex_grow: grow, flex_basis: px(0), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
@@ -2298,7 +2299,7 @@ mod tests {
 
     #[test]
     fn the_smallest_window_leaves_the_tests_room() {
-        assert!(MIN_WINDOW.x - SHEET_WIDTH - RULES_WIDTH >= 400.0);
+        const { assert!(MIN_WINDOW.x - SHEET_WIDTH - RULES_WIDTH >= 400.0) };
         assert!(window().resize_constraints.min_width >= MIN_WINDOW.x);
     }
 

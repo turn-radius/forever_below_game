@@ -6,6 +6,9 @@ version.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 procgen_rng = { workspace = true }
 serde = { workspace = true }

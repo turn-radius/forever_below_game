@@ -208,10 +208,10 @@ fn turn_ambience_volume(
         let volume = Volume::Linear(global.volume.to_linear() * ambience_volume(&game, &tuning));
         for mut sink in &mut sinks {
             // Bevy applies `GlobalVolume` only when it creates a sink, so it's folded in here.
-            sink.set_volume(volume.clone());
+            sink.set_volume(volume);
         }
         for mut sink in &mut spatial_sinks {
-            sink.set_volume(volume.clone());
+            sink.set_volume(volume);
         }
     }
 }
@@ -295,8 +295,7 @@ mod tests {
         assert_eq!(new_rumble_schedule(5, &sound).timer.duration().as_secs_f32(), 7.0);
         // The system reads the resource, not the defaults.
         let mut app = App::new();
-        let mut tuning = Tuning::default();
-        tuning.sound = sound;
+        let tuning = Tuning { sound, ..Default::default() };
         app.insert_resource(tuning).add_systems(Update, spawn_rumble_schedule);
         app.update();
         assert_eq!(app.world().resource::<RumbleSchedule>().timer.duration().as_secs_f32(), 7.0);
