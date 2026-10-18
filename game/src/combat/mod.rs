@@ -626,7 +626,14 @@ mod tests {
         app.insert_resource(CurrentLevel(level.clone()));
         let roots: Vec<Entity> = {
             let mut commands = app.world_mut().commands();
-            level.creatures.iter().map(|spot| spawn_skeleton(&mut commands, &level, spot, &spot.creature().rig()).0).collect()
+            // Only the rats, snakes and skeletons these fights were written against: the level's
+            // bats or centipedes would come for a delver who stands about for ten seconds.
+            level
+                .creatures
+                .iter()
+                .filter(|spot| spot.species.is_rat() || spot.species.is_snake() || spot.species.is_skeleton())
+                .map(|spot| spawn_skeleton(&mut commands, &level, spot, &spot.creature().rig()).0)
+                .collect()
         };
         app.world_mut().flush();
         let rat = *roots.iter().find(|&&r| app.world().get::<Critter>(r).unwrap().spot.species == fb_creatures::Species::Rat).unwrap();

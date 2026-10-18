@@ -365,7 +365,7 @@ fn land_blows(
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
             } else if inventory.as_deref().is_some_and(flaming_blow)
-                && let Some(target) = target_in_reach(from, forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.fallen_trolls())
+                && let Some(target) = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.fallen_trolls())
             {
                 // A lit torch put to a troll lying down: nothing to roll against, it burns.
                 swung.write(SwungAt { target });
