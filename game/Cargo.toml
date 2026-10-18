@@ -19,7 +19,8 @@ default = ["dev"]
 # without debug assertions).
 dev = ["bevy/embedded_watcher", "inspector"]
 # An in-game inspector for components and resources, opened with F12 or `--inspect` (see
-# `inspect.rs`). Debug only: release builds pass `--no-default-features` and leave out egui.
+# `inspect.rs`). Debug only: `main` adds it with debug assertions only, and release builds pass
+# `--no-default-features` to leave out egui as well.
 inspector = ["dep:bevy-inspector-egui"]
 # Streams frame and system timings to the Tracy profiler (see "Profiling" in docs/rendering.md).
 # Off by default, so ordinary builds do not compile tracy.

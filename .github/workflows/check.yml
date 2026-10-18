@@ -11,12 +11,16 @@ concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_INCREMENTAL: 0
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +37,10 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The configuration the release workflow ships.
+      - name: Clippy without the dev features
+        run: cargo clippy -p forever_below --no-default-features --all-targets -- -D warnings
 
       - name: Tests
         run: tools/test.sh

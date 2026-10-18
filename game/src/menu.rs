@@ -344,8 +344,13 @@ fn capture_input(
     mut rebinding: ResMut<Rebinding>,
     mut keymap: ResMut<Keymap>,
     file: Option<Res<KeybindingsFile>>,
+    inspector: Option<Res<crate::inspect::InspectorOpen>>,
 ) {
     let Rebinding::Capturing { action, slot, fresh } = *rebinding else { return };
+    // The debug inspector has the keyboard while it is open.
+    if inspector.is_some_and(|i| i.0) {
+        return;
+    }
     if fresh {
         *rebinding = Rebinding::Capturing { action, slot, fresh: false };
         return;

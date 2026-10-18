@@ -235,7 +235,7 @@ Running the built binary directly (`./target/debug/forever_below`) needs `BEVY_A
 
 In a debug build, F12 (or `--inspect` on the command line) opens a World Inspector window, from `bevy-inspector-egui`. It lists every entity with its components: the player's `Locomotion`, needs, stamina and exhaustion, each creature's `Critter` and `Intent`, each folk's `Denizen`, `Hostility` and `Simulated` needs, and Bevy's own `Transform` and lights. Edit a value and it changes in the game. While it is open the delver stands still and the mouse is free; F12 closes it and takes the mouse back. Values that live in the generator crates (a creature's roll, a person's body) are not shown, as those crates do not depend on Bevy.
 
-The inspector is the `inspector` feature, part of `dev`, which is on by default. Release builds pass `--no-default-features` and do not include it.
+The inspector is the `inspector` feature, part of `dev`, which is on by default, and it is added only when debug assertions are on, so `cargo run --release` has none. A release build passes `--no-default-features`, which also leaves egui out of the binary.
 
 ### Tuning
 

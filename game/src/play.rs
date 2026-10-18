@@ -268,9 +268,10 @@ pub fn switch_screens(
     mut tab: ResMut<SheetTab>,
     journey: Option<Res<crate::travel::Journey>>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+    inspector: Option<Res<crate::inspect::InspectorOpen>>,
 ) {
-    // No screen opens between levels.
-    if journey.is_some() {
+    // No screen opens between levels, nor while the debug inspector has the keyboard.
+    if journey.is_some() || inspector.is_some_and(|i| i.0) {
         return;
     }
     let keys = ScreenKeys {

@@ -1,4 +1,4 @@
-//! Looking at the game's components while it runs (#428), in debug builds.
+//! Looking at the game's components while it runs (#428), in debug builds only.
 //!
 //! F12, or `--inspect` on the command line, opens a World Inspector window (egui, through
 //! `bevy-inspector-egui`) listing every entity with the components that derive `Reflect`: the
@@ -6,8 +6,9 @@
 //! game. While the window is open the level has no focus ([`crate::play::level_has_focus`]), so
 //! the mouse is free for it and the delver stands still; F12 closes it and takes the mouse back.
 //!
-//! The inspector is the `inspector` feature, on with `dev` (so on by default); release builds pass
-//! `--no-default-features` and leave out egui. The `Reflect` derives stay in every build, as the
+//! The inspector is the `inspector` feature, on with `dev` (so on by default), and `main` adds it
+//! only with debug assertions, so `cargo run --release` has no inspector. Release builds should
+//! still pass `--no-default-features`, which also leaves egui out of the binary. The `Reflect` derives stay in every build, as the
 //! types they sit on are small, and [`remote`] mirrors the `fb_character` types, which cannot
 //! derive `Reflect` themselves (the generator crates do not depend on Bevy).
 
@@ -145,13 +146,13 @@ pub fn register_gameplay_types(app: &mut App) {
         .register_type::<Simulated>();
 }
 
-#[cfg(feature = "inspector")]
+#[cfg(all(feature = "inspector", debug_assertions))]
 pub use window::InspectPlugin;
 
-#[cfg(feature = "inspector")]
+#[cfg(all(feature = "inspector", debug_assertions))]
 mod window {
     use super::{InspectorOpen, register_gameplay_types};
-    use crate::{launch::AppState, player::set_grab};
+    use crate::{launch::AppState, play::ScreenOpen, player::set_grab};
     use bevy::{
         camera::{ClearColorConfig, visibility::RenderLayers},
         prelude::*,
@@ -184,13 +185,16 @@ mod window {
         }
     }
 
-    /// Opens or closes the window on F12 and frees or retakes the mouse with it. The egui camera
+    /// Opens or closes the window on F12 and frees or retakes the mouse with it (not when a screen
+    /// or the menu is open, which hold the mouse themselves). The egui camera
     /// is made the first time it is wanted, draws over everything and clears nothing.
+    #[allow(clippy::too_many_arguments)]
     fn toggle(
         keys: Res<ButtonInput<KeyCode>>,
         mut open: ResMut<InspectorOpen>,
         mut was: Local<bool>,
         state: Res<State<AppState>>,
+        screen: Option<Res<ScreenOpen>>,
         egui: Query<(), With<PrimaryEguiContext>>,
         mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
         mut commands: Commands,
@@ -214,7 +218,7 @@ mod window {
                 ));
             }
             set_grab(&mut cursor, false);
-        } else if *state.get() == AppState::Delving {
+        } else if *state.get() == AppState::Delving && !screen.is_some_and(|s| s.0.is_some()) {
             set_grab(&mut cursor, true);
         }
     }
