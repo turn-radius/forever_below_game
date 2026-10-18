@@ -8,7 +8,7 @@
 //! its tooltips does not refit, only folk, body, dirt and gear do. Add [`LabFigurePlugin`] with
 //! [`crate::render::ArmoryRenderPlugin`]; without it the sheet has an empty frame.
 
-use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use bevy::{
     app::{HierarchyPropagatePlugin, Propagate},
@@ -21,7 +21,7 @@ use bevy::{
 use fb_items::{Item, Slot};
 
 use crate::figure::{Figure, spawn_figure};
-use crate::fitting::Fitting;
+use crate::fitting::{FitCache, Fitting, figure_key};
 use crate::inventory::doll::{DOLL_LAYER, DOLL_STAGE};
 use crate::lab_view::LabState;
 use crate::light::{StudioLight, Torch, point_light, reach_falloff};
@@ -44,15 +44,15 @@ pub struct LabFigure {
     pub image: Option<Handle<Image>>,
 }
 
-/// What the figure was last dressed for: a hash of the body and everything worn.
-type Dressed = u64;
+/// What the figure was last dressed for: the key of the body and everything worn.
+type Dressed = String;
 
 #[derive(Resource, Default)]
 struct Stage {
     dressed: Option<Dressed>,
     figure: Option<Entity>,
     camera: Option<Entity>,
-    fitting: Option<Fitting<Dressed, Figure>>,
+    fitting: Option<Fitting<Dressed, Arc<Figure>>>,
 }
 
 pub struct LabFigurePlugin;
@@ -68,6 +68,7 @@ impl Plugin for LabFigurePlugin {
         }
         app.init_resource::<LabFigure>()
             .init_resource::<Stage>()
+            .init_resource::<FitCache>()
             .insert_resource(StudioLight::ARMORY.ambient_light(&Exposure::INDOOR))
             .add_systems(PreStartup, make_image)
             .add_systems(Update, (start_fitting.run_if(resource_changed::<LabState>), show_figure).chain());
@@ -84,37 +85,37 @@ fn make_image(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 /// What the figure depends on: the body, and each worn thing as rolled and dressed.
 fn dressing(state: &LabState) -> (Dressed, Vec<(Slot, Item)>) {
     let worn: Vec<(Slot, Item)> = state.items().into_iter().map(|(slot, rolled)| (slot, rolled.item)).collect();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let c = &state.character;
-    (c.folk.key(), c.body_seed, c.dirt.to_bits()).hash(&mut hasher);
-    for (slot, item) in &worn {
-        (slot, &item.base, item.seed, &item.name, item.shape.lit()).hash(&mut hasher);
-    }
-    (hasher.finish(), worn)
+    (figure_key(&state.character.spec(), &worn, state.character.dirt), worn)
 }
 
-/// Starts fitting the figure when the body or the gear has changed.
-fn start_fitting(state: Res<LabState>, mut stage: ResMut<Stage>) {
+/// Starts fitting the figure when the body or the gear has changed, or takes it from the cache
+/// when it was dressed so a moment ago.
+fn start_fitting(state: Res<LabState>, mut stage: ResMut<Stage>, mut cache: ResMut<FitCache>) {
     let (key, worn) = dressing(&state);
-    if stage.dressed == Some(key) {
+    if stage.dressed.as_ref() == Some(&key) {
         stage.fitting = None;
         return;
     }
     if stage.fitting.as_ref().is_some_and(|f| *f.key() == key) {
         return;
     }
+    if let Some(figure) = cache.figure(&key) {
+        stage.fitting = Some(Fitting::ready(key, figure));
+        return;
+    }
     let (spec, dirt) = (state.character.spec(), state.character.dirt);
-    stage.fitting = Some(Fitting::start(key, move || Figure::dress(&spec, &worn, dirt)));
+    stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &worn, dirt))));
 }
 
 /// Puts the fitted figure on the stage and points the camera at it.
-fn show_figure(mut commands: Commands, figure: Res<LabFigure>, mut stage: ResMut<Stage>, mut spawner: ItemSpawner) {
+fn show_figure(mut commands: Commands, figure: Res<LabFigure>, mut stage: ResMut<Stage>, mut cache: ResMut<FitCache>, mut spawner: ItemSpawner) {
     let Some(mut fitting) = stage.fitting.take() else { return };
     let Some(dressed) = fitting.poll() else {
         stage.fitting = Some(fitting);
         return;
     };
-    stage.dressed = Some(*fitting.key());
+    cache.store_figure(fitting.key(), dressed.clone());
+    stage.dressed = Some(fitting.key().clone());
     if let Some(old) = stage.figure.take() {
         commands.entity(old).despawn();
     }

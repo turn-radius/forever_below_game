@@ -142,6 +142,7 @@ impl Plugin for CarryPlugin {
             .init_resource::<Keymap>()
             .init_resource::<Aimed>()
             .init_resource::<Tuning>()
+            .init_resource::<crate::fitting::FitCache>()
             .init_resource::<Toast>()
             .init_resource::<FloorChanges>()
             // Only a delve that opens at startup can lack a player; one begun from the title
@@ -501,12 +502,43 @@ struct BuiltHand {
 }
 
 /// A view model's items fitted and built off the main thread: each hand's, and the lantern
-/// at the hip with the body's fitted belt it hangs from.
+/// at the hip with the body's fitted belt it hangs from. Shared (and kept in the
+/// [`crate::fitting::FitCache`]), since what it holds depends on the items and the body, not
+/// on the ids the inventory gave them.
+#[derive(Clone, Debug)]
+pub struct HeldFit {
+    hands: Vec<BuiltHand>,
+    hip: Option<(HipInView, armory::ItemMesh)>,
+}
+
+/// What a [`HeldFit`] was fitted for, with it.
 #[derive(Clone, Debug)]
 pub struct HeldBuilt {
     wanted: HeldWanted,
-    hands: Vec<BuiltHand>,
-    hip: Option<(HipInView, armory::ItemMesh)>,
+    fit: std::sync::Arc<HeldFit>,
+}
+
+impl std::ops::Deref for HeldBuilt {
+    type Target = HeldFit;
+
+    fn deref(&self) -> &HeldFit {
+        &self.fit
+    }
+}
+
+/// Everything [`HeldFit::fit`] depends on: the body, the items in the hands, and with a lantern
+/// at the hip the whole worn kit it is fitted over (each shape as [`crate::fitting::shape_key`]).
+pub fn held_key(spec: &BodySpec, worn: &[(fb_items::Slot, Item)]) -> String {
+    use fb_items::Slot;
+    let mut key = format!("held|{spec:?}");
+    let hung = worn.iter().any(|(slot, _)| *slot == Slot::Hip);
+    for (slot, item) in worn {
+        if hung || matches!(slot, Slot::Mainhand | Slot::Offhand) {
+            key.push('|');
+            key.push_str(&format!("{slot:?}/{}", crate::fitting::shape_key(item)));
+        }
+    }
+    key
 }
 
 impl HeldBuilt {
@@ -520,17 +552,24 @@ impl HeldBuilt {
             return None;
         }
         let shape = inventory.item(wanted.key.main?)?.shape.clone();
-        let mut built = self.clone();
-        built.wanted = wanted;
-        let hand = built.hands.iter_mut().find(|h| h.hand == fb_items::Slot::Mainhand)?;
+        let mut fit = (*self.fit).clone();
+        let hand = fit.hands.iter_mut().find(|h| h.hand == fb_items::Slot::Mainhand)?;
         hand.mesh = shape.build();
         hand.item = shape;
-        Some(built)
+        Some(HeldBuilt { wanted, fit: std::sync::Arc::new(fit) })
     }
 
     /// Fits and builds what `wanted` holds on a body of `spec` wearing `worn` (a list that
     /// holds the items in the hands and at the hip).
     fn fit(wanted: HeldWanted, spec: &BodySpec, worn: &[(fb_items::Slot, Item)]) -> HeldBuilt {
+        HeldBuilt { wanted, fit: std::sync::Arc::new(HeldFit::fit(spec, worn)) }
+    }
+}
+
+impl HeldFit {
+    /// Fits and builds what `wanted` holds on a body of `spec` wearing `worn` (a list that
+    /// holds the items in the hands and at the hip).
+    pub fn fit(spec: &BodySpec, worn: &[(fb_items::Slot, Item)]) -> HeldFit {
         use fb_items::Slot;
         let held = |slot| worn.iter().find(|(s, _)| *s == slot).map(|(_, item)| item.clone());
 
@@ -579,7 +618,7 @@ impl HeldBuilt {
             let mesh = hip.item.build();
             (hip, mesh)
         });
-        HeldBuilt { wanted, hands, hip }
+        HeldFit { hands, hip }
     }
 }
 
@@ -591,8 +630,10 @@ pub struct Carrying {
     entities: Vec<Entity>,
     /// What was fitted for the view model last, kept to respawn from when only the tuning moves.
     built: Option<std::sync::Arc<HeldBuilt>>,
-    /// What is being fitted off the main thread, while `built` stays on show.
-    fitting: Option<Fitting<HeldWanted, HeldBuilt>>,
+    /// What is being fitted off the main thread, while `built` stays on show, and the
+    /// [`crate::fitting::FitCache`] key to keep it under when it finishes.
+    fitting: Option<Fitting<HeldWanted, std::sync::Arc<HeldFit>>>,
+    fit_key: String,
 }
 
 impl Carrying {
@@ -1120,12 +1161,13 @@ fn held_items_of(spec: &BodySpec, main: Option<Item>, off: Option<Item>, scale: 
 /// worn kit), so it runs off the main thread ([`Fitting`]) and the old view model stays until
 /// the new one is ready. A fitting for hands that have changed since is dropped. A tuning
 /// change alone respawns from what was last fitted.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn show_held(
     mut commands: Commands,
     inventory: Res<Inventory>,
     character: Res<Character>,
     tuning: Res<Tuning>,
+    mut cache: ResMut<crate::fitting::FitCache>,
     mut cameras: Query<(Entity, &mut Carrying, Option<&Exposure>, Option<&ChildOf>), With<PlayerCamera>>,
     view_models: Query<(Entity, &ViewModelCamera)>,
     mut spawner: ItemSpawner,
@@ -1149,10 +1191,22 @@ pub(crate) fn show_held(
                 // Nothing to fit: no wait.
                 fresh = Some(HeldBuilt::fit(wanted, &spec, &worn));
             } else {
-                carrying.fitting = Some(Fitting::start(wanted, move || HeldBuilt::fit(wanted, &spec, &worn)));
+                // What was held a moment ago is kept: no job.
+                let key = held_key(&spec, &worn);
+                if let Some(fit) = cache.held(&key) {
+                    fresh = Some(HeldBuilt { wanted, fit });
+                } else {
+                    carrying.fit_key = key;
+                    carrying.fitting = Some(Fitting::start(wanted, move || std::sync::Arc::new(HeldFit::fit(&spec, &worn))));
+                }
             }
         }
-        fresh = fresh.or_else(|| carrying.fitting.as_mut().and_then(|f| f.poll()));
+        if fresh.is_none()
+            && let Some(fit) = carrying.fitting.as_mut().and_then(|f| f.poll())
+        {
+            cache.store_held(&carrying.fit_key, fit.clone());
+            fresh = Some(HeldBuilt { wanted, fit });
+        }
         if fresh.is_some() {
             carrying.fitting = None;
         } else if !tuning.is_changed() || carrying.built.is_none() {
@@ -1680,6 +1734,7 @@ mod tests {
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
             .init_resource::<crate::render::OutlineMaterials>()
             .init_resource::<Tuning>()
+            .init_resource::<crate::fitting::FitCache>()
             .add_systems(Update, show_held);
         let camera = app.world_mut().spawn((PlayerCamera, Carrying::default())).id();
         let view_model = app.world_mut().spawn(ViewModelCamera { follows: camera }).id();
@@ -1730,6 +1785,78 @@ mod tests {
     }
 
     #[test]
+    fn re_equipping_a_sword_held_a_moment_ago_starts_no_fitting() {
+        use fb_items::Slot;
+        let mut app = App::new();
+        app.init_resource::<Inventory>()
+            .init_resource::<Character>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<crate::render::ToonMaterial>>()
+            .init_resource::<Assets<crate::render::OutlineMaterial>>()
+            .init_resource::<crate::render::OutlineMaterials>()
+            .init_resource::<Tuning>()
+            .init_resource::<crate::fitting::FitCache>()
+            .add_systems(Update, show_held);
+        let camera = app.world_mut().spawn((PlayerCamera, Carrying::default())).id();
+        let view_model = app.world_mut().spawn(ViewModelCamera { follows: camera }).id();
+        let (sword, mace) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let sword = inventory.add(fb_items::roll_item("Sword", 3).unwrap());
+            let mace = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Mace", s)).find(|i| i.shape.family() == Family::Mace).unwrap());
+            inventory.equip(sword, Slot::Mainhand).unwrap();
+            (sword, mace)
+        };
+        let drawn = |app: &mut App| {
+            let mut query = app.world_mut().query::<(&HeldItem, &ChildOf)>();
+            query.iter(app.world()).filter(|(_, c)| c.parent() == view_model).map(|(h, _)| h.item.family()).collect::<Vec<_>>()
+        };
+        wait_for_held_fitting(&mut app);
+        assert_eq!(drawn(&mut app), vec![Family::Sword]);
+        app.world_mut().resource_mut::<Inventory>().equip(mace, Slot::Mainhand).unwrap();
+        wait_for_held_fitting(&mut app);
+        assert_eq!(drawn(&mut app), vec![Family::Mace]);
+        let misses = app.world().resource::<crate::fitting::FitCache>().misses;
+
+        // The sword again: drawn on the next frame, from the cache, with no job.
+        app.world_mut().resource_mut::<Inventory>().equip(sword, Slot::Mainhand).unwrap();
+        app.update();
+        let carrying = app.world().get::<Carrying>(camera).unwrap();
+        assert!(carrying.fitting.is_none(), "no fitting job started");
+        let cache = app.world().resource::<crate::fitting::FitCache>();
+        assert_eq!((cache.misses, cache.hits), (misses, 1));
+        assert_eq!(drawn(&mut app), vec![Family::Sword]);
+    }
+
+    #[test]
+    fn a_cached_held_kit_is_the_one_a_fresh_fit_makes() {
+        let spec = Character::default().spec();
+        let worn = vec![(fb_items::Slot::Mainhand, fb_items::roll_item("Sword", 3).unwrap().shape), (fb_items::Slot::Offhand, lit_torch(5).shape)];
+        let key = held_key(&spec, &worn);
+        assert_eq!(key, held_key(&spec, &worn));
+        let mut cache = crate::fitting::FitCache::default();
+        cache.store_held(&key, std::sync::Arc::new(HeldFit::fit(&spec, &worn)));
+        let cached = cache.held(&key).unwrap();
+        assert_eq!(format!("{:?}", *cached), format!("{:?}", HeldFit::fit(&spec, &worn)));
+    }
+
+    #[test]
+    fn a_held_kit_whose_item_state_changed_has_another_key() {
+        let spec = Character::default().spec();
+        let mut torch = lit_torch(5);
+        let before = held_key(&spec, &[(fb_items::Slot::Offhand, torch.shape.clone())]);
+        if let armory::Item::Torch(s) = &mut torch.shape {
+            s.burn.char += if s.burn.char > 0.5 { -0.1 } else { 0.1 };
+        }
+        assert_ne!(held_key(&spec, &[(fb_items::Slot::Offhand, torch.shape)]), before, "a torch burning down");
+        let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+        let before = held_key(&spec, &[(fb_items::Slot::Mainhand, sword.shape.clone())]);
+        let mut condition = sword.shape.condition();
+        condition.wear += if condition.wear > 0.5 { -0.1 } else { 0.1 };
+        sword.shape.set_condition(condition);
+        assert_ne!(held_key(&spec, &[(fb_items::Slot::Mainhand, sword.shape)]), before, "a sword worn");
+    }
+
+    #[test]
     fn every_lit_carried_light_shines_and_putting_one_out_takes_its_light() {
         use fb_items::Slot;
         let mut app = App::new();
@@ -1740,6 +1867,7 @@ mod tests {
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
             .init_resource::<crate::render::OutlineMaterials>()
             .init_resource::<Tuning>()
+            .init_resource::<crate::fitting::FitCache>()
             .add_systems(Update, show_held);
         let body = app.world_mut().spawn(Transform::default()).id();
         let camera = app.world_mut().spawn((PlayerCamera, Carrying::default(), ChildOf(body))).id();
