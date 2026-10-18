@@ -294,8 +294,8 @@ fn noise_gradient(q: vec3<f32>, e: f32) -> vec3<f32> {
 
 // Craggy cave rock (ours), for hewn walls only, in world units of 10 cm: one voronoi pass of
 // facets 50 to 80 cm across, each tilted its own way (gently, so the toon bands step from facet
-// to facet without the wall turning busy), a few dark narrow fissures along facet borders, and
-// a faint bump over the facets. Floors (and ceilings) get flatter, smaller facets. Everything
+// to facet without the wall turning busy) and a few dark narrow fissures along facet borders.
+// Only the walls of hewn quarters take it; their floors and ceilings are plain stone. Everything
 // fades to plain stone as it shrinks on screen: a facet is whole at 66 pixels across and gone
 // by 33, a fissure at about three pixels wide and gone by one, and past that distance the
 // voronoi is skipped altogether, which is most of a view.

@@ -1111,18 +1111,18 @@ mod tests {
         for depth in [3, 4] {
             let mut damp = 0;
             for seed in 1207..1237 {
-            let level = fb_level::generate(seed, depth);
-            let view = CellView::new(&level);
-            let mesh = level_mesh(&view, view.bounds());
-            for part in &mesh.surfaces.parts {
-                assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
-                assert!(part.validate().is_ok());
-                for (p, uv) in part.positions.iter().zip(&part.uvs_b) {
-                    assert_eq!(uv[0], view.finishes().moss_at(p[0], p[2]));
-                    assert!((0.0..=1.0).contains(&uv[0]));
-                    damp += (uv[0] > 0.2) as usize;
+                let level = fb_level::generate(seed, depth);
+                let view = CellView::new(&level);
+                let mesh = level_mesh(&view, view.bounds());
+                for part in &mesh.surfaces.parts {
+                    assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
+                    assert!(part.validate().is_ok());
+                    for (p, uv) in part.positions.iter().zip(&part.uvs_b) {
+                        assert_eq!(uv[0], view.finishes().moss_at(p[0], p[2]));
+                        assert!((0.0..=1.0).contains(&uv[0]));
+                        damp += (uv[0] > 0.2) as usize;
+                    }
                 }
-            }
             }
             assert!(damp > 0, "no moss anywhere at depth {depth}");
         }
