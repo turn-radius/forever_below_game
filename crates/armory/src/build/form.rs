@@ -28,6 +28,7 @@ pub fn signed_pow(c: f32, e: f32) -> f32 {
     c.signum() * c.abs().powf(e)
 }
 
+
 /// The angle (lathe convention) of the front of a form.
 pub const FRONT: f32 = 1.5 * PI;
 /// The angle (lathe convention) of the back of a form.
@@ -167,14 +168,14 @@ impl Bulge {
         }
     }
 
-    /// The same bulge as cloth drapes over it. Over a dome (a bust) it is fitted: it dips part
-    /// way into the cleft and comes back in under each crest within about the dome's own depth
-    /// below it, rather than following the crease. Bridged flat and hanging well below the
+    /// The same bulge as cloth drapes over it. Over a dome (a bust) it is fitted: it dips most
+    /// of the way into the cleft and comes back in close under each crest, rather than right
+    /// into the crease. Bridged flat and hanging well below the
     /// crest, a tunic tented from the bust and the wearer looked bloated. Other bulges (a seat)
     /// are bridged across their cleft.
     pub fn bridged(self) -> Bulge {
         if self.dome > 0.0 {
-            Bulge { cleft: 0.55, hang: 0.7 * self.spread * (1.0 + self.fall), ..self }
+            Bulge { cleft: 0.9, hang: 0.15 * self.spread * (1.0 + self.fall), ..self }
         } else {
             Bulge { cleft: 0.0, ..self }
         }

@@ -572,6 +572,10 @@ pub struct Fitting<'a> {
     pub over: Option<Underlay<'a>>,
     /// A slit cut up from the hem (where a tail passes through).
     pub notch: Option<Notch>,
+    /// Draws the cloth in toward the body below the chest at least this fast (per unit of
+    /// drop) whatever its style's own tuck: cloth cut to a real body's waist rather than
+    /// falling from the chest.
+    pub tuck: Option<f32>,
 }
 
 /// [`garment_parts`] fitted to a real body as `fitting` describes.
@@ -583,7 +587,8 @@ fn build_garment(form: &TorsoForm, fitting: &Fitting, g: &GarmentCut, hem: &Hem,
     let mut parts = Parts::new();
     let arms = fitting.arms;
     let form = form.eased(g.fit);
-    let drape = Drape { notch: fitting.notch, ..garment_drape(&form, g, belt, plates, seed) };
+    let drape = garment_drape(&form, g, belt, plates, seed);
+    let drape = Drape { notch: fitting.notch, tuck: fitting.tuck.map_or(drape.tuck, |t| drape.tuck.max(t)), ..drape };
     let (thickness, _, _, _) = style_drape(g.style);
     let mut surface = DrapedSurface::over(&form, drape, fitting.over, thickness);
     let mut look = body_look(g, plates);

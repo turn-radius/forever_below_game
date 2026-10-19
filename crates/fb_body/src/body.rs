@@ -146,7 +146,7 @@ impl Body {
         let waist_y = hip_y + 0.3 * t;
         let chest_y = hip_y + 0.7 * t;
         // Muscle narrows the waist under a broad chest; weight fills it.
-        let waist = FormRing::new(waist_y, 1.38 * ws * (1.0 - fem * 0.1) * (1.05 - 0.1 * mu) * (0.95 + 0.12 * spec.frame), 0.95 * ws);
+        let waist = FormRing::new(waist_y, 1.38 * ws * (1.0 - fem * 0.3) * (1.05 - 0.1 * mu) * (0.95 + 0.12 * spec.frame), 0.95 * ws);
         let chest = FormRing::new(chest_y, 1.72 * ws * (0.97 + 0.06 * mu), 1.14 * ws * (0.97 + 0.06 * mu));
         let neck_radius = 0.42 * ws * race.neck_r * (0.92 + 0.16 * mu);
         let belly = Bulge { y: waist_y, spread: 0.3 * t, depth: (race.belly * (0.3 + spec.frame * 0.9) + 0.25 * spec.frame.powi(2)) * ws, sharpness: 2, toward: FRONT, fall: -0.35, ..Bulge::NONE };

@@ -31,6 +31,7 @@
 use std::f32::consts::{PI, TAU};
 
 use armory::build::boot::boot_parts;
+use armory::build::hafted::smoothstep;
 use armory::build::form::{BACK, FRONT, HeadForm, LimbForm, TorsoForm, TorsoProfile};
 use armory::build::garment::{Fitting, Notch, Underlay, garment_drape, garment_parts_fitted};
 use armory::build::hand::hand_parts_fitted;
@@ -72,6 +73,10 @@ pub const LAYER_ORDER: [Slot; 10] = [Slot::Legs, Slot::Feet, Slot::Shirt, Slot::
 
 /// Clearance kept between a layer and the one under it, over the outer layer's own ease.
 const GAP: f32 = 0.04;
+/// How fast fitted cloth draws in toward the body below the chest, per unit of drop
+/// ([`Fitting::tuck`]): eight times a tunic's own loose fall, so it follows the body in under a
+/// bust and to the waist.
+const FITTED_TUCK: f32 = 1.2;
 /// How far above the ankle a robe's hem hangs, in multiples of the wearer's scale: 1.5 cm on
 /// a human, just clear of the top of the foot.
 const ROBE_CLEARANCE: f32 = 0.15;
@@ -964,6 +969,17 @@ impl Cover {
 /// cloth pressed under cloth, which the layering otherwise takes at its fullest.
 fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> ItemMesh {
     let mut s = state.clone();
+    // Cut to the wearer (our own): a tunic, and a robe on a body with a bust, are cut close
+    // and fold less, and every garment but a cloak draws in to the waist below the chest. The
+    // Armory's cut fell straight from the chest, which tented from a bust.
+    let fitted = match s.cut.style {
+        GarmentStyle::Tunic => 1.0,
+        GarmentStyle::Robe => smoothstep(0.05, 0.4, body.spec.bust),
+        _ => 0.0,
+    };
+    s.cut.fit = 1.0 + (s.cut.fit - 1.0) * (1.0 - 0.8 * fitted);
+    s.cut.folds *= 1.0 - 0.5 * fitted;
+    let tuck = (!s.cut.style.is_open()).then_some(FITTED_TUCK * if s.cut.style == GarmentStyle::Robe { fitted } else { 1.0 });
     let room = body.waist_y - body.ankle_y - 0.35 * body.scale;
     s.cut.length = if s.cut.style == GarmentStyle::Robe {
         // A robe is cut to its wearer and hangs to just above the feet (our own). Scaled as
@@ -1012,7 +1028,7 @@ fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> 
     }
     let arms = env.arm_forms();
     let under = |a: f32, y: f32| env.outline.at(a, y) + GAP;
-    let mut fitting = Fitting { arms: Some(&arms), over: open.then_some(&under as Underlay), notch: None };
+    let mut fitting = Fitting { arms: Some(&arms), over: open.then_some(&under as Underlay), notch: None, tuck };
     let mut mesh = on_body(body, garment_parts_fitted(&form, &fitting, &s.cut, &s.hem, &s.belt, &s.plates, s.seed).finish());
     // A tail passing out through the skirt (of a cloak, a robe, a tunic) gets a vent cut up
     // from the hem round it.
