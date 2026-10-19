@@ -118,7 +118,14 @@ impl Plugin for TitlePlugin {
         if !app.is_plugin_added::<LastDelverPlugin>() {
             app.add_plugins(LastDelverPlugin);
         }
-        app.add_plugins(preview::PreviewPlugin);
+        // The creator's paper doll draws its slots' icons and turns its seal as the inventory's does.
+        app.add_plugins(preview::PreviewPlugin)
+            .init_resource::<crate::inventory::IconCache>()
+            .init_resource::<crate::inventory::DollAssets>()
+            .add_systems(
+                Update,
+                (crate::inventory::icon::draw_icons, crate::inventory::icon::reveal_icons, crate::inventory::doll::turn_seal).run_if(in_state(AppState::Title)).run_if(resource_exists::<Draft>),
+            );
         app.add_plugins(UiMaterialPlugin::<LetteringMaterial>::default())
             .init_resource::<UiFonts>()
             .init_resource::<Keymap>()
@@ -128,7 +135,7 @@ impl Plugin for TitlePlugin {
             .add_message::<MenuCommand>()
             .add_systems(OnEnter(AppState::Title), spawn_title)
             .add_systems(OnExit(AppState::Title), |mut commands: Commands| commands.remove_resource::<Draft>())
-            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), title_controls, run_creator, fit_card, build_panel).chain().run_if(in_state(AppState::Title)));
+            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), creator::roll_look_every.run_if(|| creator::roll_look_wait().is_some()), title_controls, run_creator, fit_card, build_panel).chain().run_if(in_state(AppState::Title)));
     }
 }
 
@@ -279,7 +286,7 @@ fn ledger_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str
 }
 
 /// The width of the creator's panel in logical pixels.
-const CREATOR_PX: f32 = 1160.0;
+const CREATOR_PX: f32 = 1400.0;
 
 /// A dark ledger panel `width` across in the middle of the screen, holding what `fill` builds.
 fn centred_panel(screen: &mut ChildSpawnerCommands, width: f32, fill: impl FnOnce(&mut ChildSpawnerCommands)) {
@@ -318,7 +325,8 @@ fn build_panel(
     page: Res<MenuPage>,
     draft: Option<Res<Draft>>,
     last: Option<Res<LastDelver>>,
-    figure: Res<preview::PreviewStage>,
+    dolls: Res<crate::inventory::DollAssets>,
+    mut icons: crate::inventory::Icons,
     keymap: Res<Keymap>,
     settings: Res<GameSettings>,
     fonts: Res<UiFonts>,
@@ -341,7 +349,7 @@ fn build_panel(
         shown.set_if_neq(if *page == MenuPage::Main && !drafting { Visibility::Inherited } else { Visibility::Hidden });
     }
     commands.entity(screen).with_children(|screen| match (draft.as_deref(), *page) {
-        (Some(draft), _) => centred_panel(screen, CREATOR_PX, |panel| creator_page(panel, &fonts, draft, figure.image.clone())),
+        (Some(draft), _) => centred_panel(screen, CREATOR_PX, |panel| creator_page(panel, &fonts, draft, &dolls, &mut icons)),
         (None, MenuPage::Main) => {
             screen
                 .spawn((

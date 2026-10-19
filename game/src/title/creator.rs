@@ -25,8 +25,11 @@ use crate::launch::{AppState, clock_seed};
 use crate::menu::{ButtonInk, MenuButton, MenuCommand};
 use crate::play::CurrentLevel;
 use crate::title::NewDelveSeed;
+use crate::inventory::doll::doll_leaf;
+use crate::inventory::{DollAssets, Icons};
 use crate::title::last_delver::LastDelver;
-use crate::ui::{BG, BRIGHT, FAINT, FRAME_GOLD, GOLD, INK, LINE, MUTED, UiFonts};
+use crate::title::preview::preview_inventory;
+use crate::ui::{BG, BRIGHT, FRAME_GOLD, GOLD, INK, LINE, MUTED, UiFonts};
 
 /// The longest name the creator takes, in characters.
 pub const NAME_MAX: usize = 24;
@@ -234,6 +237,24 @@ pub fn run_creator(
     }
 }
 
+/// `FB_ROLL_LOOK=<seconds>`: how often the creator rolls a look by itself, for captures of
+/// the doll changing.
+pub fn roll_look_wait() -> Option<f32> {
+    std::env::var("FB_ROLL_LOOK").ok().and_then(|s| s.trim().parse::<f32>().ok())
+}
+
+/// Chooses Roll a look every [`roll_look_wait`] seconds while the creator is open.
+pub fn roll_look_every(time: Res<Time>, draft: Option<Res<Draft>>, mut waited: Local<f32>, mut chosen: MessageWriter<MenuCommand>) {
+    if draft.is_none() {
+        return;
+    }
+    *waited += time.delta_secs();
+    if *waited >= roll_look_wait().unwrap_or(f32::MAX) {
+        *waited = 0.0;
+        chosen.write(MenuCommand::Creator(CreatorCommand::RollLook));
+    }
+}
+
 /// A choice among several: gold and ruled in gold when it is the one chosen.
 fn chip(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, command: CreatorCommand, chosen: bool) {
     let idle = if chosen { FRAME_GOLD } else { MUTED };
@@ -267,18 +288,14 @@ fn class_note(class: Class) -> String {
     format!("d{} hit die, {casting}", class.hit_die())
 }
 
-/// Builds the creator's page under `parent`, the form beside the delver's `figure`
+/// Builds the creator's page under `parent`: the form beside the delver's paper doll
 /// ([`super::preview`]).
-pub fn creator_page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft, figure: Handle<Image>) {
+pub fn creator_page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft, dolls: &DollAssets, icons: &mut Icons) {
     parent.spawn((Text::new("Who goes below?"), UiFonts::style(&fonts.display, 40.0, INK)));
     let mut body = parent.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(24), width: percent(100), ..default() });
     body.with_children(|body| {
         body.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(16), flex_grow: 1.0, ..default() }).with_children(|form| creator_form(form, fonts, draft));
-        body.spawn((
-            ImageNode::new(figure),
-            Node { width: px(super::preview::PREVIEW.x), height: px(super::preview::PREVIEW.y), flex_shrink: 0.0, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
-            BorderColor::all(FAINT),
-        ));
+        doll_leaf(body, dolls, &preview_inventory(draft), fonts, icons);
     });
     parent.spawn(Node { flex_direction: FlexDirection::Row, column_gap: px(16), margin: UiRect::top(px(8)), ..default() }).with_children(|buttons| {
         chip(buttons, fonts, "Back", CreatorCommand::Back, false);
