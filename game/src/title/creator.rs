@@ -139,6 +139,8 @@ impl Draft {
             attributes: Character::scores_from(self.folk, self.nudges),
             dirt: self.dirt,
             worn: default(),
+            learned: default(),
+            books_read: Vec::new(),
         }
     }
 

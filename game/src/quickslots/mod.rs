@@ -100,6 +100,8 @@ pub enum QuickUse {
     Light,
     /// Fill the lanterns held or at the hip from it.
     Refill,
+    /// Read it: a book.
+    Read,
     /// Draw it into the hand.
     Draw,
 }
@@ -112,6 +114,8 @@ pub fn quick_use(item: &Item) -> Option<QuickUse> {
         Some(QuickUse::Light)
     } else if item.has_oil() {
         Some(QuickUse::Refill)
+    } else if item.lesson().is_some() {
+        Some(QuickUse::Read)
     } else if item.slots().iter().any(|s| matches!(s, Slot::Mainhand | Slot::Offhand)) {
         Some(QuickUse::Draw)
     } else {
@@ -180,6 +184,7 @@ pub fn use_slot(slot: usize, slots: &mut Quickslots, inventory: &mut Inventory, 
             }
             said
         }
+        Some(QuickUse::Read) => eating.read(inventory, id).unwrap_or_else(|| format!("You cannot read the {name} now")),
         Some(QuickUse::Light) if in_hand(inventory, id) => crate::kindle::toggle_and_say(inventory, id),
         Some(QuickUse::Light | QuickUse::Draw) => {
             if matches!(use_, Some(QuickUse::Draw)) && matches!(inventory.location(id), Some(Location::Worn(Slot::Mainhand | Slot::Offhand))) {
@@ -632,6 +637,8 @@ mod tests {
             id
         };
         assert_eq!(quick_use(&item(fb_items::LAMP_OIL)), Some(QuickUse::Refill));
+        assert_eq!(quick_use(&item("Book")), Some(QuickUse::Read));
+        assert_eq!(quick_use(&item("Scroll")), None, "a scroll does nothing yet");
         bind(&mut app, 4, first);
         press(&mut app, KeyCode::Digit5);
         assert_eq!(toast(&app), "You fill the lantern");

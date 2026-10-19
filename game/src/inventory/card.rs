@@ -40,7 +40,7 @@ pub struct CardText {
     pub stats: Vec<String>,
     /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
     pub light: Option<String>,
-    /// What food or drink eases: "Eases hunger 40%".
+    /// What food or drink eases, or what a book teaches: "Eases hunger 40%", "Teaches +1 WIS".
     pub consume: Option<String>,
     /// The keys and verbs at the foot, from [`crate::interact::key_actions`]: ("F", "Take").
     /// [`card_text`] leaves it empty; [`show_card`] fills it from the keymap and the item's place.
@@ -71,9 +71,13 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
     Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
 }
 
-/// How much food or drink eases: "Eases hunger 40%". `None` for anything that is not eaten or
-/// drunk, or eases nothing; the key that eats it is in the card's actions.
+/// How much food or drink eases, "Eases hunger 40%", or what a book teaches, "Teaches +1 WIS".
+/// `None` for anything that is not eaten, drunk or read, or eases nothing; the key that uses it
+/// is in the card's actions.
 pub fn consume_line(item: &Item) -> Option<String> {
+    if let Some(stat) = item.lesson() {
+        return Some(format!("Teaches {:+} {}", fb_items::lesson::LESSON_POINTS, fb_items::lesson::short_name(stat)));
+    }
     item.consume()?;
     let p = item.provision()?;
     let eases: Vec<String> = [("hunger", p.nutrition), ("thirst", p.water)]

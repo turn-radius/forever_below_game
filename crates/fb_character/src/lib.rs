@@ -201,7 +201,8 @@ impl AbilityBonus {
         [("STR", self.strength), ("DEX", self.dexterity), ("CON", self.constitution), ("INT", self.intelligence), ("WIS", self.wisdom)]
     }
 
-    fn plus(self, other: AbilityBonus) -> AbilityBonus {
+    /// This and `other` added, score by score.
+    pub fn plus(self, other: AbilityBonus) -> AbilityBonus {
         AbilityBonus {
             strength: self.strength + other.strength,
             dexterity: self.dexterity + other.dexterity,

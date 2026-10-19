@@ -13,7 +13,7 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use fb_items::{Consume, Provision};
 use procgen_rng::Mulberry32;
 
-use crate::character::DelverNeeds;
+use crate::character::{Character, DelverNeeds, Reading};
 use crate::combat::{Health, RunDice};
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
@@ -142,6 +142,7 @@ pub struct Eating<'w, 's> {
     sound: Option<Res<'w, HealSound>>,
     settings: Option<Res<'w, GameSettings>>,
     tuning: Res<'w, Tuning>,
+    character: Option<ResMut<'w, Character>>,
 }
 
 impl Eating<'_, '_> {
@@ -165,12 +166,29 @@ impl Eating<'_, '_> {
         }
         Some(line)
     }
+
+    /// Reads book `id` ([`Character::read`]): the score it teaches rises for good, once per
+    /// delver. Returns what the toast says; `None` if it is not a book or there is no delver.
+    pub fn read(&mut self, inventory: &Inventory, id: ItemId) -> Option<String> {
+        let book = inventory.item(id)?;
+        let character = self.character.as_mut()?;
+        book.lesson()?;
+        let name = book.title().to_lowercase();
+        // Only a lesson learned changes the delver, so a book read before marks nothing.
+        if character.books_read.contains(&book.seed) {
+            return Some(format!("The {name} has nothing more to teach you"));
+        }
+        Some(match character.read(book) {
+            Reading::Learned { stat, score } => format!("You study the {name}. Your {} rises to {score}", fb_items::lesson::long_name(stat)),
+            Reading::AlreadyRead | Reading::NothingToLearn => format!("The {name} has nothing more to teach you"),
+        })
+    }
 }
 
 /// F and G in the inventory, on the item under the mouse. Its verbs come from
 /// [`interact::verbs_for`], the same lookup the prompts read. F does its use: Eat and Drink
 /// ([`Eating::eat`]), Light and Put out ([`crate::kindle::toggle_and_say`]), Refill from lamp oil
-/// ([`crate::kindle::refill_and_say`]), or Take for an item
+/// ([`crate::kindle::refill_and_say`]), Read a book ([`Eating::read`]), or Take for an item
 /// underfoot or in a container not carried, into the first bag with room ([`crate::inventory::take_up`]).
 /// G equips it in the slot it is made for, or takes it off if worn, back to the pack or underfoot
 /// if that is full ([`crate::inventory::quick`], the double-click). An item lying underfoot is
@@ -209,6 +227,11 @@ fn act_on_hovered(
             Some(Verb::Refill) => {
                 let said = crate::kindle::refill_and_say(&mut inventory, id);
                 toast.say(said, now);
+            }
+            Some(Verb::Read) => {
+                if let Some(line) = eating.read(&inventory, id) {
+                    toast.say(line, now);
+                }
             }
             Some(Verb::Take) => match crate::inventory::take_up(&mut inventory, id) {
                 Ok(changes) => floor_changes.0.extend(changes),
@@ -370,6 +393,41 @@ mod tests {
 
     fn hover(app: &mut App, id: ItemId) {
         app.world_mut().resource_mut::<Hovered>().0 = Some((id, Rect::default()));
+    }
+
+    #[test]
+    fn f_over_a_book_teaches_its_score_once() {
+        let (mut app, _) = app();
+        app.insert_resource(Character::roll(3));
+        let book = carry(&mut app, "Book");
+        let stat = item("Book").lesson().unwrap();
+        let score = |app: &App| {
+            let a = app.world().resource::<Character>().scores();
+            [a.strength, a.dexterity, a.constitution, a.intelligence, a.wisdom][fb_items::lesson::LESSONS.iter().position(|&s| s == stat).unwrap()]
+        };
+        let before = score(&app);
+        hover(&mut app, book);
+        press_u(&mut app);
+        assert_eq!(score(&app), before + 1);
+        let said = app.world().resource::<Toast>().text.clone();
+        assert!(said.contains(fb_items::lesson::long_name(stat)) && said.contains(&format!("rises to {}", before + 1)), "{said}");
+        assert!(app.world().resource::<Inventory>().item(book).is_some(), "the book is kept");
+        press_u(&mut app);
+        assert_eq!(score(&app), before + 1, "a book teaches a delver once");
+        assert!(app.world().resource::<Toast>().text.ends_with("has nothing more to teach you"));
+    }
+
+    #[test]
+    fn f_over_a_scroll_or_note_does_nothing() {
+        let (mut app, _) = app();
+        app.insert_resource(Character::roll(3));
+        for base in ["Scroll", "Note"] {
+            let id = carry(&mut app, base);
+            hover(&mut app, id);
+            press_u(&mut app);
+            assert_eq!(app.world().resource::<Character>().learned, fb_character::AbilityBonus::default(), "{base}");
+            assert!(app.world().resource::<Inventory>().item(id).is_some(), "{base}");
+        }
     }
 
     #[test]

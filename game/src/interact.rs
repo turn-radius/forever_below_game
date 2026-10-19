@@ -82,6 +82,7 @@ pub enum Verb {
     Light,
     PutOut,
     Refill,
+    Read,
     Open,
     LookIn,
     Close,
@@ -107,6 +108,7 @@ impl Verb {
             Verb::Light => "Light",
             Verb::PutOut => "Put out",
             Verb::Refill => "Refill",
+            Verb::Read => "Read",
             Verb::Open => "Open",
             Verb::LookIn => "Look in",
             Verb::Close => "Close",
@@ -259,8 +261,12 @@ fn locks(lock: Lock, delver: &Delver) -> Verbs {
     }
 }
 
-/// What using `item` does: eat or drink it, light it or put it out, or refill a lantern from it.
+/// What using `item` does: eat or drink it, light it or put it out, refill a lantern from it, or
+/// read it if it is a book.
 pub fn use_of(item: &Item) -> Option<Verb> {
+    if item.lesson().is_some() {
+        return Some(Verb::Read);
+    }
     if let Some(how) = item.consume() {
         return Some(match how {
             fb_items::Consume::Eat => Verb::Eat,

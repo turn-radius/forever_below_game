@@ -14,6 +14,7 @@ pub mod dress;
 pub mod footprint;
 pub mod item;
 pub mod jackalope;
+pub mod lesson;
 pub mod modifier;
 pub mod naming;
 pub mod oil;
