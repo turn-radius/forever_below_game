@@ -676,6 +676,12 @@ impl FloorEquip {
 /// goes is this build's own rule.
 pub fn equip_from_floor(inventory: &mut Inventory, id: ItemId, at: Vec2, yaw: f32) -> Result<FloorEquip, Refusal> {
     let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
+    equip_from_floor_in(inventory, id, slot, at, yaw)
+}
+
+/// [`equip_from_floor`] into `slot` rather than the one it is made for: Hang at hip sends a
+/// lantern to the hip ([`crate::interact::Verb::HangAtHip`]).
+pub fn equip_from_floor_in(inventory: &mut Inventory, id: ItemId, slot: Slot, at: Vec2, yaw: f32) -> Result<FloorEquip, Refusal> {
     let mut changes = equip(inventory, id, slot)?;
     let slot = match inventory.location(id) {
         Some(Location::Worn(worn)) => worn,

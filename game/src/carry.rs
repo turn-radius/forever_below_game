@@ -55,7 +55,7 @@ use fb_level::{CELL, ItemSpot, Level};
 
 use crate::character::Character;
 use crate::fitting::Fitting;
-use crate::inventory::{FloorChanges, Inventory, ItemId, Toast, doll::lit_slot, equip_from_floor, header::ToastText, underfoot::apply_floor_changes};
+use crate::inventory::{FloorChanges, Inventory, ItemId, Toast, doll::lit_slot, equip_from_floor, equip_from_floor_in, header::ToastText, underfoot::apply_floor_changes};
 use crate::light::{Torch, cast_shadows, point_light};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
@@ -1472,8 +1472,9 @@ pub(crate) fn pick_up(
 
 /// Secondary, if its verb is Equip, equips the item under the crosshair straight from the floor, without the inventory
 /// screen ([`equip_from_floor`]): into its slot, a hand or a free ring slot, swapping out what
-/// was there into a bag, or onto the floor where the new item lay. The toast says what
-/// happened, or why not.
+/// was there into a bag, or onto the floor where the new item lay. Special, if its verb is Hang
+/// at hip, does the same into the hip ([`crate::inventory::equip_from_floor_in`]). The toast says
+/// what happened, or why not.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn equip_aimed(
     input: ActionInput,
@@ -1484,15 +1485,20 @@ pub(crate) fn equip_aimed(
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
 ) {
-    if !input.just_pressed(Action::Secondary) {
+    use crate::interact::{Slot as Act, Verb};
+    let hang = input.just_pressed(Action::Special);
+    if !hang && !input.just_pressed(Action::Secondary) {
         return;
     }
     let Some(floor) = aimed.0.and_then(|entity| items.get(entity).ok()) else { return };
-    if floor_verb(&inventory, floor.id, crate::interact::Slot::Secondary) != Some(crate::interact::Verb::Equip) {
+    let (act, verb) = if hang { (Act::Special, Verb::HangAtHip) } else { (Act::Secondary, Verb::Equip) };
+    if floor_verb(&inventory, floor.id, act) != Some(verb) {
         return;
     }
     let now = time.map_or(0.0, |t| t.elapsed_secs());
-    match equip_from_floor(&mut inventory, floor.id, Vec2::new(floor.spot.x, floor.spot.y), floor.spot.yaw) {
+    let (at, yaw) = (Vec2::new(floor.spot.x, floor.spot.y), floor.spot.yaw);
+    let equipped = if hang { equip_from_floor_in(&mut inventory, floor.id, fb_items::Slot::Hip, at, yaw) } else { equip_from_floor(&mut inventory, floor.id, at, yaw) };
+    match equipped {
         Ok(equipped) => {
             aimed.0 = None;
             toast.say(equipped.message(&inventory, floor.id), now);
@@ -2320,6 +2326,24 @@ mod tests {
         assert_eq!(equipped.displaced, Some((torch, None)));
         assert_eq!(equipped.changes, vec![crate::inventory::FloorChange::Lifted(shield), crate::inventory::FloorChange::SetDownAt(torch, Vec2::new(2.0, 3.0), 0.5)]);
         assert_eq!(carried_light(&inventory), None, "the carried light follows the hands");
+    }
+
+    #[test]
+    fn hang_at_hip_sends_a_floor_lantern_to_the_hip_and_swaps_out_what_hung_there() {
+        use fb_items::Slot;
+        let mut inventory = Inventory::default();
+        let belt = inventory.add(fb_items::roll_item("Belt", 1).unwrap());
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let old = inventory.add(fb_items::roll_item("Lantern", 2).unwrap());
+        inventory.wear(old, Slot::Hip).unwrap();
+        let lantern = inventory.add(fb_items::roll_item("Lantern", 3).unwrap());
+        assert_eq!(floor_verb(&inventory, lantern, crate::interact::Slot::Special), Some(crate::interact::Verb::HangAtHip));
+        let hung = equip_from_floor_in(&mut inventory, lantern, Slot::Hip, Vec2::new(1.0, 2.0), 0.3).unwrap();
+        assert_eq!((hung.slot, inventory.worn(Slot::Hip), inventory.worn(Slot::Offhand)), (Slot::Hip, Some(lantern), None));
+        // The belt's own pouch takes the lantern that hung there.
+        assert_eq!(hung.displaced, Some((old, Some(belt))));
+        let title = |id| inventory.item(id).unwrap().title().to_string();
+        assert_eq!(hung.message(&inventory, lantern), format!("{} hangs from the belt. {} went into the {}.", title(lantern), title(old), title(belt)));
     }
 
     #[test]

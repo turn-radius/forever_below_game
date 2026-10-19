@@ -175,7 +175,9 @@ impl Eating<'_, '_> {
 /// G equips it in the slot it is made for, or takes it off if worn, back to the pack or underfoot
 /// if that is full ([`crate::inventory::quick`], the double-click). An item lying underfoot is
 /// equipped as it is from the level ([`crate::inventory::equip_from_floor`]): what it displaces
-/// goes into a bag, or is set down where the item lay. An item with no such verb does nothing.
+/// goes into a bag, or is set down where the item lay. T, Hang at hip, does the same into the hip
+/// ([`crate::inventory::equip`], [`crate::inventory::equip_from_floor_in`]). An item with no such
+/// verb does nothing.
 #[allow(clippy::too_many_arguments)]
 fn act_on_hovered(
     input: ActionInput,
@@ -188,7 +190,8 @@ fn act_on_hovered(
     time: Option<Res<Time<Real>>>,
 ) {
     let primary = input.just_pressed(Action::Primary);
-    if !primary && !input.just_pressed(Action::Secondary) {
+    let special = input.just_pressed(Action::Special);
+    if !primary && !special && !input.just_pressed(Action::Secondary) {
         return;
     }
     let Some((id, _)) = hovered.0 else { return };
@@ -215,6 +218,20 @@ fn act_on_hovered(
                 Err(refusal) => toast.say(refusal.reason(), now),
             },
             _ => {}
+        }
+    } else if special {
+        if verbs.get(Slot::Special) != Some(Verb::HangAtHip) {
+            return;
+        }
+        let hung = if inventory.location(id) == Some(crate::inventory::Location::Loose) {
+            let (at, yaw) = floor.iter().find(|f| f.id == id).map_or((Vec2::ZERO, 0.0), |f| (Vec2::new(f.spot.x, f.spot.y), f.spot.yaw));
+            crate::inventory::equip_from_floor_in(&mut inventory, id, fb_items::Slot::Hip, at, yaw).map(|equipped| equipped.changes)
+        } else {
+            crate::inventory::equip(&mut inventory, id, fb_items::Slot::Hip)
+        };
+        match hung {
+            Ok(changes) => floor_changes.0.extend(changes),
+            Err(refusal) => toast.say(refusal.reason(), now),
         }
     } else if verbs.get(Slot::Secondary) == Some(Verb::Equip)
         && inventory.location(id) == Some(crate::inventory::Location::Loose)
