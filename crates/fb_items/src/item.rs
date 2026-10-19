@@ -82,10 +82,6 @@ impl Item {
         if self.shape.family() == armory::Family::Torch {
             return vec![made_for, Slot::Mainhand];
         }
-        // A quiver or bolt case hangs from the belt at the hip, or rides on the back.
-        if matches!(self.shape.family(), armory::Family::Quiver | armory::Family::BoltCase) {
-            return vec![Slot::Hip, Slot::Back];
-        }
         match made_for {
             Slot::Ring1 | Slot::Ring2 => vec![Slot::Ring1, Slot::Ring2],
             Slot::Mainhand if self.profile.tags.contains(&Tag::Weapon) => vec![Slot::Mainhand, Slot::Offhand],
@@ -389,6 +385,8 @@ mod tests {
         assert!(roll_item("Bread", 1).unwrap().slots().is_empty());
         assert_eq!(roll_item("Lantern", 1).unwrap().slots(), vec![Slot::Offhand, Slot::Mainhand, Slot::Hip]);
         assert!(!roll_item("Torch", 1).unwrap().fits(Slot::Hip));
+        assert_eq!(roll_item("Quiver", 1).unwrap().slots(), vec![Slot::Quiver]);
+        assert_eq!(roll_item("Bolt case", 1).unwrap().slots(), vec![Slot::Quiver]);
     }
 
     #[test]

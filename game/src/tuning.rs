@@ -363,11 +363,26 @@ pub struct SoundTuning {
     pub rumble_interval_min: f32,
     /// The longest time between stone rumbles, seconds.
     pub rumble_interval_max: f32,
+    /// How many rooms off a troll is heard in the music: the troll theme loops while one is
+    /// this many rooms away or fewer.
+    pub troll_rooms: u32,
+    /// How long the troll theme plays on after the last troll is out of range, seconds.
+    pub troll_linger: f32,
 }
 
 impl Default for SoundTuning {
     fn default() -> Self {
-        SoundTuning { music_mix: 0.35, silence_min: 45.0, silence_max: 75.0, effects_volume: 1.0, ambience_volume: 0.3, rumble_interval_min: 60.0, rumble_interval_max: 180.0 }
+        SoundTuning {
+            music_mix: 0.35,
+            silence_min: 45.0,
+            silence_max: 75.0,
+            effects_volume: 1.0,
+            ambience_volume: 0.3,
+            rumble_interval_min: 60.0,
+            rumble_interval_max: 180.0,
+            troll_rooms: 2,
+            troll_linger: 10.0,
+        }
     }
 }
 
