@@ -606,6 +606,47 @@ mod tests {
         let arm_dir = down[arm].rotation.transform([0.0, -1.0, 0.0]);
         assert!(arm_dir[0] < -0.3, "flung out to its right, {arm_dir:?}");
     }
+
+    #[test]
+    fn a_felled_skeleton_falls_into_a_heap_of_bones_at_its_feet() {
+        use crate::skeleton::{SkeletonState, parent_of};
+        let world = |local: &[Placement]| {
+            let mut out: Vec<Placement> = Vec::new();
+            for (b, place) in local.iter().enumerate() {
+                out.push(parent_of(b).map_or(*place, |p| out[p].then(place)));
+            }
+            out
+        };
+        for seed in [1, 5, 77, 4040] {
+            let state = SkeletonState::roll(seed);
+            let d = state.dims();
+            let h = d.body.height;
+            // Not yet falling, it stands as it did.
+            let standing = skeleton_with(&d, &SkeletonPose::default());
+            for (a, b) in skeleton_heap(&d, seed, 0.0).iter().zip(&standing) {
+                assert!(vec3::distance(a.origin, b.origin) < 1e-4, "{seed}");
+            }
+            // Down, every bone lies low and near the feet, the long bones flat along the floor.
+            let pieces = heap_pieces(&d);
+            let down = world(&skeleton_heap(&d, seed, 1.0));
+            for (b, (place, piece)) in down.iter().zip(&pieces).enumerate() {
+                let centre = place.point(piece.centre);
+                assert!(centre[1] < 0.15 * h && centre[1] > 0.0, "{seed} bone {b} at {centre:?}");
+                assert!(centre[0].hypot(centre[2]) < 0.22 * h, "{seed} bone {b} at {centre:?}");
+                let along = vec3::normalize_or(place.direction(piece.along), vec3::Y);
+                assert!(along[1].abs() < 1e-3, "{seed} bone {b} not flat: {along:?}");
+            }
+            // The same seed makes the same heap, and another seed another.
+            assert_eq!(skeleton_heap(&d, seed, 1.0), skeleton_heap(&d, seed, 1.0));
+            assert_ne!(skeleton_heap(&d, seed, 1.0), skeleton_heap(&d, seed + 1, 1.0));
+            // Partway down, the feet have landed before the skull.
+            let mid = world(&skeleton_heap(&d, seed, 0.4));
+            let foot = leg_bone(Side::Right) + 2;
+            let skull = crate::skeleton::index::SKULL;
+            assert!(mid[foot].point(pieces[foot].centre)[1] < 0.05 * h);
+            assert!(mid[skull].point(pieces[skull].centre)[1] > 0.3 * h);
+        }
+    }
 }
 
 
@@ -694,6 +735,143 @@ pub fn skeleton_fallen(d: &SkeletonDims, share: f32) -> Vec<Placement> {
     out[bone::SKULL].rotation = rot_y(0.4 * s).mul_mat(&rot_x(0.25 * s));
     out[bone::JAW].rotation = rot_x(0.5 * 0.7 * s);
     out
+}
+
+/// A skeleton `share` of the way (0 to 1) through falling to pieces, for the bones: with
+/// nothing left to hold it together every joint gives at once, and each bone drops straight
+/// down, tumbling to lie flat in a heap round where its feet stood. The feet and shins land
+/// first and the skull last (a bone falls for as long as it was high), each lying over those
+/// that fell before it; the jaw is knocked loose and the skull rolls off to one side. Where
+/// each bone comes to rest, and how it lies, is rolled from `seed`, so a skeleton always makes
+/// the same heap. The body's root stays standing where it fell: the heap is all in the bones.
+/// Our own.
+pub fn skeleton_heap(d: &SkeletonDims, seed: u32, share: f32) -> Vec<Placement> {
+    use skeleton_bone as bone;
+    let share = share.clamp(0.0, 1.0);
+    let h = d.body.height;
+    let standing = skeleton_with(d, &SkeletonPose::default());
+    let mut start: Vec<Placement> = Vec::with_capacity(bone::COUNT);
+    for (b, place) in standing.iter().enumerate() {
+        let world = match crate::skeleton::parent_of(b) {
+            Some(p) => start[p].then(place),
+            None => *place,
+        };
+        start.push(world);
+    }
+    let pieces = heap_pieces(d);
+    let mut rng = procgen_rng::Mulberry32::new(seed ^ HEAP_SALT);
+    let mut world = Vec::with_capacity(bone::COUNT);
+    for (b, piece) in pieces.iter().enumerate() {
+        // Where it comes to rest: anywhere in a small ring round the feet, the ribcage and
+        // pelvis near the middle and the skull rolled out to the edge, over what landed first.
+        let (near, far) = match b {
+            bone::RIBCAGE | bone::PELVIS => (0.0, 0.04),
+            bone::SKULL => (0.12, 0.2),
+            bone::JAW => (0.06, 0.16),
+            _ => (0.0, HEAP_RADIUS),
+        };
+        let angle = rng.range_f32(0.0, TAU);
+        let out = h * rng.range_f32(near, far);
+        let order = HEAP_ORDER.iter().position(|&o| o == b).unwrap_or(0) as f32 / bone::COUNT as f32;
+        let lift = if b == bone::SKULL { 0.0 } else { HEAP_HEIGHT * h * order };
+        let rest_at = [out * angle.sin(), piece.radius + lift, out * angle.cos()];
+        // How it lies: along the floor some way round, turned about its own length.
+        let heading = rng.range_f32(0.0, TAU);
+        let lie = [heading.sin(), 0.0, heading.cos()];
+        let roll = rng.range_f32(-PI, PI);
+        // A bone falls for as long as it was high, so the lowest have landed well before the
+        // skull: under gravity the time to fall goes as the root of the height.
+        let from = start[b];
+        let centre_from = from.point(piece.centre);
+        let height_share = (centre_from[1] / h).clamp(0.0, 1.0);
+        let t = (share / (0.35 + 0.65 * height_share.sqrt())).min(1.0);
+        let turn = t * t * (3.0 - 2.0 * t);
+        let along = vec3::normalize_or(from.direction(piece.along), vec3::Y);
+        let axis = vec3::cross(along, lie);
+        let tip = vec3::dot(along, lie).clamp(-1.0, 1.0).acos();
+        let tilt = if vec3::length(axis) < 1e-5 { Mat3::IDENTITY } else { Mat3::from_axis_angle(axis, tip * turn) };
+        let rotation = Mat3::from_axis_angle(lie, roll * turn).mul_mat(&tilt).mul_mat(&from.rotation);
+        // Its middle drops as anything dropped does, slow then fast, and slides across to
+        // where it lands.
+        let centre = [
+            centre_from[0] + (rest_at[0] - centre_from[0]) * turn,
+            centre_from[1] + (rest_at[1] - centre_from[1]) * t * t,
+            centre_from[2] + (rest_at[2] - centre_from[2]) * turn,
+        ];
+        world.push(Placement { rotation, origin: vec3::sub(centre, rotation.transform(piece.centre)) });
+    }
+    // Back onto each bone's parent, as the rig takes it.
+    (0..bone::COUNT)
+        .map(|b| match crate::skeleton::parent_of(b) {
+            Some(p) => {
+                let to_parent = transpose(&world[p].rotation);
+                Placement { rotation: to_parent.mul_mat(&world[b].rotation), origin: to_parent.transform(vec3::sub(world[b].origin, world[p].origin)) }
+            }
+            None => world[b],
+        })
+        .collect()
+}
+
+/// Mixed into a skeleton's seed for the heap it falls into.
+const HEAP_SALT: u32 = 0x4ea9_b0e5;
+/// How far from the feet a bone may come to rest, as a share of the skeleton's height.
+const HEAP_RADIUS: f32 = 0.1;
+/// How high the heap is piled, as a share of the skeleton's height: the last bone down lies
+/// about this far over the floor.
+const HEAP_HEIGHT: f32 = 0.05;
+/// The order the bones land in, bottom of the heap first.
+const HEAP_ORDER: [usize; skeleton_bone::COUNT] = {
+    use skeleton_bone::*;
+    [
+        LEGS + 2, LEGS + 5, LEGS + 1, LEGS + 4, LEGS, LEGS + 3,
+        PELVIS, SPINE,
+        ARMS + 2, ARMS + 5, ARMS + 1, ARMS + 4, ARMS, ARMS + 3,
+        RIBCAGE, NECK, JAW, SKULL,
+    ]
+};
+
+/// A bone measured for lying in a heap: its middle and the direction of its length, in its
+/// own space, and how high its middle lies over the floor (half its thickness).
+#[derive(Clone, Copy, Debug)]
+struct HeapPiece {
+    centre: V3,
+    along: V3,
+    radius: f32,
+}
+
+/// Each bone of a skeleton measured for lying in a heap, in rig order. A bone's rest rotation
+/// is the identity, so its own space is body space about its joint.
+fn heap_pieces(d: &SkeletonDims) -> [HeapPiece; skeleton_bone::COUNT] {
+    use skeleton_bone as bone;
+    let h = d.body.height;
+    let o = &d.origins;
+    let head = d.body.head;
+    let between = |b: usize, a: V3, z: V3, radius: f32| HeapPiece { centre: vec3::sub(vec3::scale(vec3::add(a, z), 0.5), o[b]), along: vec3::sub(z, a), radius };
+    let mut pieces = [HeapPiece { centre: vec3::ZERO, along: vec3::Y, radius: 0.0 }; bone::COUNT];
+    pieces[bone::PELVIS] = HeapPiece { centre: vec3::ZERO, along: vec3::X, radius: 0.05 * h };
+    pieces[bone::SPINE] = between(bone::SPINE, o[bone::SPINE], o[bone::RIBCAGE], 0.02 * h);
+    pieces[bone::RIBCAGE] = HeapPiece {
+        centre: [0.0, 0.5 * (o[bone::NECK][1] - o[bone::RIBCAGE][1]), -o[bone::RIBCAGE][2]],
+        along: vec3::Y,
+        radius: 0.85 * d.body.chest.half_depth,
+    };
+    pieces[bone::NECK] = between(bone::NECK, o[bone::NECK], o[bone::SKULL], 0.02 * h);
+    pieces[bone::SKULL] = HeapPiece { centre: vec3::sub(head.centre, o[bone::SKULL]), along: vec3::Y, radius: 0.85 * head.half_width.min(head.half_depth) };
+    pieces[bone::JAW] = HeapPiece { centre: [0.0, -0.35 * head.half_height, 0.5 * head.half_depth], along: vec3::Z, radius: 0.025 * h };
+    for (k, side) in Side::BOTH.into_iter().enumerate() {
+        let [shoulder, elbow, wrist] = d.arms[k];
+        let a = arm_bone(side);
+        pieces[a] = between(a, shoulder, elbow, 0.018 * h);
+        pieces[a + 1] = between(a + 1, elbow, wrist, 0.015 * h);
+        let reach = vec3::normalize_or(vec3::sub(wrist, elbow), [0.0, -1.0, 0.0]);
+        pieces[a + 2] = between(a + 2, wrist, vec3::add(wrist, vec3::scale(reach, 0.1 * h)), 0.015 * h);
+        let [hip, knee, ankle] = d.legs[k];
+        let l = leg_bone(side);
+        pieces[l] = between(l, hip, knee, 0.02 * h);
+        pieces[l + 1] = between(l + 1, knee, ankle, 0.017 * h);
+        pieces[l + 2] = HeapPiece { centre: [0.0, -0.5 * ankle[1], 0.35 * d.foot_length], along: vec3::Z, radius: 0.02 * h };
+    }
+    pieces
 }
 
 /// How an arm that holds something is set: the turns (each on its parent, from the rest pose) of

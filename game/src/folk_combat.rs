@@ -14,7 +14,7 @@
 //!   lands takes its damage from their [`Health`], flashes them and knocks them back a step as it
 //!   does a creature ([`Flinches`], a Medium creature's push), with a thud from where they stand.
 //! - **Felled**: at 0 they hold, flashing, for the flash's hold, then fall onto their back about
-//!   their feet ([`collapse_folk`], `feedback::laid_back`, as a skeleton falls). The body is a
+//!   their feet ([`collapse_folk`], `feedback::laid_back`, as a troll falls). The body is a
 //!   [`Corpse`]: it stops its routine, no longer turns its head, blocks nobody and shows no card.
 //!   "Name is slain" shows low in the view.
 //!
@@ -320,9 +320,9 @@ pub fn take_folk_blows(
     }
 }
 
-/// `person` with nothing worn or held: a body whose gear has been set down.
+/// `person` with nothing worn, held or carried: a body whose gear has been set down.
 pub fn bare(person: &Person) -> Person {
-    Person { gear: Vec::new(), ..person.clone() }
+    Person { gear: Vec::new(), goods: Vec::new(), ..person.clone() }
 }
 
 /// Draws the figure under `stance` again as `figure`: its skeleton and meshes, and any light it

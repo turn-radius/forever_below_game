@@ -4,7 +4,9 @@
 //! Neither the seed doc nor the plate fills a chest, so what each kind holds is our own
 //! proposal: chests keep coin and gear, barrels and amphorae keep food and drink, crates keep
 //! supplies. Each is a weighted table of bases, rolled through [`roll_item`] like any loot, so
-//! gear among the contents takes rarity and affixes as it would anywhere.
+//! gear among the contents takes rarity and affixes as it would anywhere. Chests keep quivers
+//! and bolt cases, and chests and crates keep arrows and bolts by the sheaf ([`SHEAF`]), since
+//! one arrow is no use to anyone and a bow shoots only from a quiver.
 
 use armory::families::chests::{ChestState, ChestStyle};
 use procgen_rng::Mulberry32;
@@ -16,6 +18,14 @@ use crate::Rarity;
 /// The base a container standing in a level is (`data/goods.json` has none; `Chest` is the
 /// plate's own Armory base for the family).
 const CONTAINER_BASE: &str = "Chest";
+
+/// How many pieces one pick of ammunition is, inclusive: a sheaf tied together. Our own.
+const SHEAF: (u32, u32) = (6, 12);
+
+/// Whether a pick of `base` is a sheaf of [`SHEAF`] pieces rather than one thing.
+fn by_the_sheaf(base: &str) -> bool {
+    matches!(base, "Arrow" | "Bolt")
+}
 
 /// A container's shape as an item: common, plain, too heavy to carry, and holding its grid
 /// ([`crate::profile::chest_grid`]). Its shape is used as it is, shut or open.
@@ -46,6 +56,10 @@ fn stock(style: ChestStyle) -> (&'static [(&'static str, u32)], (u32, u32)) {
                 ("Healing draught", 3),
                 ("Candle", 2),
                 ("Lockpicks", 1),
+                ("Quiver", 1),
+                ("Bolt case", 1),
+                ("Arrow", 2),
+                ("Bolt", 1),
             ],
             (2, 5),
         ),
@@ -67,6 +81,8 @@ fn stock(style: ChestStyle) -> (&'static [(&'static str, u32)], (u32, u32)) {
                 ("Trousers", 1),
                 ("Hand axe", 1),
                 ("Lantern", 1),
+                ("Arrow", 3),
+                ("Bolt", 2),
             ],
             (2, 4),
         ),
@@ -74,18 +90,24 @@ fn stock(style: ChestStyle) -> (&'static [(&'static str, u32)], (u32, u32)) {
     }
 }
 
-/// What a container of `style` holds, rolled from `loot`: a few things from its kind's table,
-/// each rolled from its own seed off the loot stream against `odds`. Pure in its arguments.
+/// What a container of `style` holds, rolled from `loot`: a few picks from its kind's table,
+/// each rolled from its own seed off the loot stream against `odds`, and ammunition by the
+/// sheaf. Pure in its arguments.
 pub fn roll_contents(style: ChestStyle, loot: u32, odds: crate::Odds) -> Vec<Item> {
     let mut rng = Mulberry32::new(loot ^ 0xC07E_5755);
     let (table, count) = stock(style);
-    (0..rng.int(count.0, count.1))
-        .filter_map(|_| {
-            let base = *rng.weighted(table);
-            let seed = (rng.next_f64() * 4_294_967_296.0) as u32;
-            roll_item_with(base, seed, odds)
-        })
-        .collect()
+    let mut contents = Vec::new();
+    for _ in 0..rng.int(count.0, count.1) {
+        let base = *rng.weighted(table);
+        let seed = (rng.next_f64() * 4_294_967_296.0) as u32;
+        if by_the_sheaf(base) {
+            let mut sheaf = Mulberry32::new(seed);
+            contents.extend((0..sheaf.int(SHEAF.0, SHEAF.1)).filter_map(|_| roll_item_with(base, (sheaf.next_f64() * 4_294_967_296.0) as u32, odds)));
+        } else {
+            contents.extend(roll_item_with(base, seed, odds));
+        }
+    }
+    contents
 }
 
 #[cfg(test)]
@@ -116,7 +138,7 @@ mod tests {
             for loot in [1, 1207, 65_537, u32::MAX] {
                 let contents = roll_contents(style, loot, crate::Odds::default());
                 assert_eq!(contents, roll_contents(style, loot, crate::Odds::default()), "{style:?} {loot}");
-                assert!((count.0..=count.1).contains(&(contents.len() as u32)), "{style:?} {loot}: {}", contents.len());
+                assert!((count.0..=count.1 * SHEAF.1).contains(&(contents.len() as u32)), "{style:?} {loot}: {}", contents.len());
                 assert!(contents.iter().all(|i| table.iter().any(|(b, _)| *b == i.base) && i.profile.packable), "{style:?}");
             }
         }
@@ -127,6 +149,24 @@ mod tests {
     fn chests_now_and_then_hold_treasure() {
         let rich = (1..200).filter(|&loot| holds_treasure(&roll_contents(ChestStyle::Chest, loot, crate::Odds::default()))).count();
         assert!(rich > 100, "only {rich} of 199 chests hold coin or magic");
+    }
+
+    #[test]
+    fn chests_and_crates_now_and_then_hold_something_to_shoot() {
+        let shoots = |style: ChestStyle, base: &str| (1..200).filter(|&loot| roll_contents(style, loot, crate::Odds::default()).iter().any(|i| i.base == base)).count();
+        for (style, base) in [(ChestStyle::Chest, "Quiver"), (ChestStyle::Chest, "Bolt case"), (ChestStyle::Chest, "Arrow"), (ChestStyle::Crate, "Arrow"), (ChestStyle::Crate, "Bolt")] {
+            let found = shoots(style, base);
+            assert!((10..120).contains(&found), "{style:?}: {base} in {found} of 199");
+        }
+    }
+
+    #[test]
+    fn arrows_and_bolts_come_by_the_sheaf() {
+        for loot in 1..200 {
+            let contents = roll_contents(ChestStyle::Crate, loot, crate::Odds::default());
+            let arrows = contents.iter().filter(|i| i.base == "Arrow").count() as u32;
+            assert!(arrows == 0 || arrows >= SHEAF.0, "crate {loot}: {arrows} arrows");
+        }
     }
 
     #[test]

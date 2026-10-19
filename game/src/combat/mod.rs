@@ -954,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn a_skeleton_collapses_onto_its_back_where_it_fell() {
+    fn a_skeleton_falls_to_pieces_where_it_stood() {
         let (mut app, _, skeleton) = skeleton_fight(kitted_seed(), None);
         app.update();
         let stood = app.world().get::<Transform>(skeleton).unwrap().translation;
@@ -963,8 +963,9 @@ mod tests {
             app.update();
         }
         let down = app.world().get::<Transform>(skeleton).unwrap();
-        // Its up now points along the floor (it lies down), and it is where it stood.
-        assert!((down.rotation * Vec3::Y).y.abs() < 0.2, "lying down");
+        // The body stays upright where it stood: the heap is all in the bones
+        // (`fb_creatures::pose::skeleton_heap`).
+        assert!((down.rotation * Vec3::Y).y > 0.99, "not tipped over");
         assert!(down.translation.xz().distance(stood.xz()) < 6.0);
         assert_eq!(app.world().get::<crate::creatures::Intent>(skeleton).unwrap().fallen, 1.0);
     }
@@ -1060,7 +1061,7 @@ mod tests {
             let weapon = inventory.add(fb_items::roll_item(weapon, weapon_seed).unwrap());
             inventory.wear(weapon, fb_items::Slot::Mainhand).unwrap();
             let holder = inventory.add(fb_items::roll_item(holder, 3).unwrap());
-            inventory.wear(holder, fb_items::Slot::Back).unwrap();
+            inventory.wear(holder, fb_items::Slot::Quiver).unwrap();
             for seed in 0..count {
                 let piece = inventory.add(fb_items::roll_item(ammo, 100 + seed as u32).unwrap());
                 inventory.stow(piece).unwrap();

@@ -269,6 +269,7 @@ pub mod params;
 pub mod sight;
 pub mod path;
 pub mod props;
+pub mod rooms;
 pub mod stairs;
 pub mod webs;
 pub mod wild;
@@ -279,4 +280,5 @@ pub use finish::{Character, DoorStyle, Finish, Finishes, FloorFinish, Quarter, W
 pub use generate::{generate, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;
+pub use rooms::RoomGraph;
 pub use wild::{WebKind, WebSpot};
