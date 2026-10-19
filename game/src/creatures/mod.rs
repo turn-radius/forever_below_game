@@ -832,9 +832,9 @@ pub fn animate(
                 motion.cycle = (motion.cycle + strode / pose::centipede_stride(centipede) * std::f32::consts::TAU) % std::f32::consts::TAU;
                 let mut places = pose::centipede(
                     centipede,
-                    &CentipedePose { stride: motion.cycle, pace: motion.pace, time: motion.time, rear: now.rear, bite: now.strike, jaw: now.jaw, look: now.look },
+                    &CentipedePose { stride: motion.cycle, pace: motion.pace, time: motion.time, rear: now.rear, bite: now.strike, jaw: now.jaw, look: now.look, curl: intent.fallen },
                 );
-                // Each plate, and the head, rests on the floor under it; the legs hang from the
+                // A felled one curls up ([`Intent::fallen`]). Each plate, and the head, rests on the floor under it; the legs hang from the
                 // plates and go with them.
                 for i in std::iter::once(fb_creatures::centipede::bone::HEAD).chain((0..centipede.segments).map(|k| centipede.segment_bone(k))) {
                     let place = &mut places[i];

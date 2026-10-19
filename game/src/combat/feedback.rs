@@ -9,7 +9,7 @@
 //!   rock and props as it walks; less the bigger it is.
 //! - **Sound**: a rat squeaks, a snake hisses (`tools/synth_combat.py`).
 //! - **Collapse**: after the flash's hold, so a creature felled by one blow is
-//!   seen to be struck before it falls, a rat rolls onto its back, legs up; a snake uncoils and
+//!   seen to be struck before it falls, a rat rolls onto its back, legs up; a centipede curls up into a flat spiral; a snake uncoils and
 //!   lies limp along the floor, jaw slack. Its mind stops ([`Corpse`]): it no longer moves, bites or keeps others
 //!   off, and it blocks nobody.
 //!
@@ -347,7 +347,7 @@ fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creat
 }
 
 /// Lays each body down once the flash's hold is over ([`collapse_share`]): a rat rolls onto its
-/// back about its middle, a snake goes slack.
+/// back about its middle, a centipede curls up where it stood, a snake goes slack.
 #[allow(clippy::type_complexity)]
 pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent, Option<&crate::creatures::trolls::Troll>, Option<&mut crate::creatures::Flight>)>) {
     let hold = tuning.combat.flash_hold;
@@ -378,7 +378,13 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
                 intent.fallen = share.max(1e-3);
                 *transform = flipped_over(spider, &corpse.fell, share);
             }
-            Creature::Centipede(centipede) => *transform = turned_over(centipede, &corpse.fell, collapse_share(corpse.since, hold)),
+            Creature::Centipede(_) => {
+                // It stays upright and curls up where it stood ([`pose::centipede`]'s curl).
+                let share = collapse_share(corpse.since, hold);
+                intent.fallen = share * share * (3.0 - 2.0 * share);
+                intent.fallen = intent.fallen.max(1e-3);
+                *transform = corpse.fell;
+            }
             Creature::Bat(_) => {
                 if let Some(mut flight) = flight {
                     let (altitude, wings) = fallen_bat(&mut flight, corpse.since - hold);
@@ -441,19 +447,6 @@ pub fn tipped_over(jackalope: &fb_creatures::JackalopeState, fell: &Transform, s
     let roll = Quat::from_rotation_z(0.5 * std::f32::consts::PI * s);
     let middle = Vec3::Y * d.centre_height;
     let drop = (d.centre_height - d.half_width).max(0.0) * s;
-    let local = middle - roll * middle - Vec3::Y * drop;
-    Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
-}
-
-/// A centipede that stood at `fell`, `share` of the way through turning onto its back, legs in
-/// the air: rolled about its length through its plates' middle, and lowered so its back rests on
-/// the floor.
-pub fn turned_over(centipede: &fb_creatures::CentipedeState, fell: &Transform, share: f32) -> Transform {
-    let s = share * share * (3.0 - 2.0 * share);
-    let roll = Quat::from_rotation_z(0.95 * std::f32::consts::PI * s);
-    let middle_height = centipede.centre_height(centipede.segments / 2);
-    let middle = Vec3::Y * middle_height;
-    let drop = (middle_height - 0.6 * centipede.girth).max(0.0) * s;
     let local = middle - roll * middle - Vec3::Y * drop;
     Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
 }
