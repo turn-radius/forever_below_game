@@ -1,5 +1,7 @@
-//! Swinging what the main hand holds: the attack key starts a swing, the view model swings the
-//! item in a shape that suits its hold, and partway through the blow lands on the nearest
+//! Swinging what a hand holds: the attack key (left click) starts a swing of the main hand,
+//! the block key (right click) one of the off hand when it holds no shield, the view model
+//! swings the item in a shape that suits its hold (mirrored for the off hand, on the left of
+//! the view), and partway through the blow lands on the nearest
 //! creature in reach ([`super::target_in_reach`]), sent as a [`Struck`]. A creature's body is
 //! where its bones are posed this moment ([`body_targets`]): a rat's body, head, legs and tail,
 //! a snake's head and every segment of it, laid out along the floor or reared.
@@ -23,6 +25,7 @@ use bevy::{
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use fb_body::Side;
+use fb_items::Slot;
 
 use super::callouts::{Callout, Outcome};
 use super::feedback::{Burned, Corpse, Struck};
@@ -61,11 +64,11 @@ impl Plugin for SwingPlugin {
     }
 }
 
-/// Whether the main hand holds a lit torch, so a blow with it is fire as well as a club's
+/// Whether `hand` holds a lit torch, so a blow with it is fire as well as a club's
 /// bludgeoning: a troll's regeneration stops at it (`crate::creatures::trolls`). A lantern's
 /// glass and an unlit or spent torch are not.
-pub fn flaming_blow(inventory: &Inventory) -> bool {
-    inventory.worn(fb_items::Slot::Mainhand).and_then(|id| inventory.item(id)).is_some_and(|item| item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true))
+pub fn flaming_blow(inventory: &Inventory, hand: Slot) -> bool {
+    inventory.worn(hand).and_then(|id| inventory.item(id)).is_some_and(|item| item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true))
 }
 
 /// How long a swing takes, seconds, and when in it the blow lands. Our own: about two swings a
@@ -99,18 +102,33 @@ pub struct Swing {
     pub toward: Vec3,
     /// This swing's own wobble on its kind's path, each part in -1..1.
     pub flourish: Vec3,
+    /// The hand that throws it: the main hand on left click, the off hand on right click.
+    pub hand: Slot,
 }
 
 impl Swing {
-    /// A swing at the crosshair with no wobble, thrown as its kind's commonest strike.
+    /// A main hand's swing at the crosshair with no wobble, thrown as its kind's commonest
+    /// strike.
     pub fn new(weapon: Weapon) -> Swing {
         let strike = Strike::choices(weapon.kind)[0].0;
-        Swing { weapon, t: 0.0, landed: false, strike, toward: CROSSHAIR_AIM, flourish: Vec3::ZERO }
+        Swing { weapon, t: 0.0, landed: false, strike, toward: CROSSHAIR_AIM, flourish: Vec3::ZERO, hand: Slot::Mainhand }
+    }
+
+    /// The side of the view its hand is on.
+    pub fn side(&self) -> Side {
+        if self.hand == Slot::Offhand { Side::Left } else { Side::Right }
+    }
+
+    /// The ability modifier its damage adds, from the Strength modifier: all of it for the main
+    /// hand, and for the off hand only a penalty, as a two-weapon fighter's bonus attack has it
+    /// (SRD 5.1 p. 95, "Two-Weapon Fighting").
+    pub fn damage_modifier(&self, strength: i32) -> i32 {
+        if self.hand == Slot::Offhand { strength.min(0) } else { strength }
     }
 
     /// The path an item held as `grip` follows.
     pub fn path(&self, grip: Grip) -> SwingPath {
-        SwingPath::new(self.strike, grip, self.toward, self.flourish)
+        SwingPath::new(self.strike, self.side(), grip, self.toward, self.flourish)
     }
 }
 
@@ -141,8 +159,9 @@ type Ready = (With<Player>, Without<Swing>);
 
 /// The attack key swings, if no swing is under way and the delver stands. It swings when the
 /// click is let go before the hold time, since a longer click is a stab ([`ActionInput::tapped`]).
-/// The block key swings too, as it goes down, when the off hand holds no shield to raise
-/// ([`super::guard`]); with the guard up nothing swings.
+/// The block key, right click, is the off hand's: as it goes down it swings what the off hand
+/// holds, or punches with it empty, unless it holds a shield to raise ([`super::guard`]) or is
+/// empty beside a bow to shoot (`super::shoot`); with the guard up nothing swings.
 /// Only a click that went down with the mouse already taken swings: one that takes the mouse
 /// back (`crate::player::take_cursor`), or went down in a menu, is let go in the level without
 /// swinging.
@@ -172,19 +191,24 @@ pub(super) fn start_swing(
         *armed = looking;
     }
     let tapped = input.tapped(Action::Attack);
-    let block_key = input.just_pressed(Action::Block) && looking && !super::guard::holds_shield(&inventory);
-    let clicked = (tapped && *armed) || block_key;
+    let main = tapped && *armed;
+    let off = input.just_pressed(Action::Block) && looking && !super::guard::holds_shield(&inventory);
     if tapped || !input.pressed(Action::Attack) {
         *armed = false;
     }
-    let wanted = clicked || practice.repeat || crate::launch::env_set("FB_SWING");
-    if !wanted {
-        return;
-    }
-    let tuning = tuning.as_deref().cloned().unwrap_or_default();
     let practising = practice.repeat || crate::launch::env_set("FB_SWING");
-    // A bow or crossbow with something to shoot is shot, not swung (`super::shoot`).
-    if !practising && super::shoot::shoots(&inventory, marksman.as_deref()) {
+    // The main hand's click comes first; practice swings the main hand.
+    let hand = if main || practising {
+        Slot::Mainhand
+    } else if off {
+        Slot::Offhand
+    } else {
+        return;
+    };
+    let tuning = tuning.as_deref().cloned().unwrap_or_default();
+    // A bow or crossbow with something to shoot is shot, not swung (`super::shoot`), by left
+    // click, or by right click with the off hand free to draw it.
+    if !practising && super::shoot::shoots(&inventory, marksman.as_deref()) && (hand == Slot::Mainhand || super::shoot::block_shoots(&inventory)) {
         return;
     }
     for (player, at, health, mut stamina, guarding) in &mut players {
@@ -202,7 +226,7 @@ pub(super) fn start_swing(
             spent.spend_with(rules, rules.stamina.swing_cost);
             stamina.0 = spent;
         }
-        let weapon = Weapon::in_hand(&inventory, &character);
+        let weapon = Weapon::held_in(hand, &inventory, &character);
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
             let combat = &tuning.combat;
@@ -212,7 +236,7 @@ pub(super) fn start_swing(
         let flourish = Vec3::new(dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0));
         let strike = practice.strike.unwrap_or_else(|| Strike::roll(weapon.kind, *last, &mut dice.0));
         *last = Some(strike);
-        commands.entity(player).insert(Swing { strike, toward: toward.unwrap_or(CROSSHAIR_AIM), flourish, ..Swing::new(weapon) });
+        commands.entity(player).insert(Swing { strike, toward: toward.unwrap_or(CROSSHAIR_AIM), flourish, hand, ..Swing::new(weapon) });
         if let Some(sound) = &sound {
             let game = settings.as_deref().copied().unwrap_or_default();
             commands.spawn((Name::new("swing"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
@@ -370,15 +394,15 @@ fn land_blows(
                 let attack = attack_roll(rules, &swing.weapon, character.strength(), ac.0, odds, &mut dice.0);
                 info!("swing: {}", attack.line());
                 if attack.hit {
-                    let damage = swing.weapon.roll(modifier(character.strength()), &mut dice.0);
+                    let damage = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
                     struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20 });
-                    if inventory.as_deref().is_some_and(flaming_blow) {
+                    if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
                         burned.write(Burned { target });
                     }
                 } else {
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
-            } else if inventory.as_deref().is_some_and(flaming_blow)
+            } else if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand))
                 && let Some(target) = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.fallen_trolls())
             {
                 // A lit torch put to a troll lying down: nothing to roll against, it burns.
@@ -582,10 +606,13 @@ pub struct SwingPath {
 impl SwingPath {
     /// The path of a `strike` from an item held as `grip` to `toward` (view model camera space),
     /// with its own `flourish` (each part -1..1): the way it travels turned a little, drawn back
-    /// a little more or less, swung a little wider or tighter.
-    pub fn new(strike: Strike, grip: Grip, toward: Vec3, flourish: Vec3) -> SwingPath {
+    /// a little more or less, swung a little wider or tighter. A strike thrown by the hand on
+    /// the left `side` is mirrored: its forehand comes from the upper left.
+    pub fn new(strike: Strike, side: Side, grip: Grip, toward: Vec3, flourish: Vec3) -> SwingPath {
         let aim = (toward - grip.fist).normalize_or(Vec3::NEG_Z);
-        let travel = Vec2::from_angle(flourish.x * 0.3).rotate(strike.travel()).extend(0.0);
+        let travel = strike.travel();
+        let travel = if side == Side::Left { Vec2::new(-travel.x, travel.y) } else { travel };
+        let travel = Vec2::from_angle(flourish.x * 0.3).rotate(travel).extend(0.0);
         let travel = travel.reject_from_normalized(aim).normalize_or(aim.any_orthonormal_vector());
         let square = grip.turn_to(aim, travel);
         let (back, through, sweep, hook) = if strike == Strike::Stab {
@@ -645,13 +672,13 @@ pub fn lean(kind: SwingKind, t: f32) -> f32 {
     peak * rise.min(fall)
 }
 
-/// Swings the main hand's item in the view, about its fist.
+/// Swings the swinging hand's item in the view, about its fist.
 pub(super) fn swing_held(swings: Query<&Swing, With<Player>>, mut held: Query<(&HeldItem, &mut Transform, &ChildOf)>, view_models: Query<(), With<ViewModelCamera>>) {
     let Some(swing) = swings.iter().next() else { return };
     let Some(hold) = swing.weapon.hold else { return };
-    let hold = crate::view_model::view_hold(hold, Side::Right);
+    let hold = crate::view_model::view_hold(hold, swing.side());
     for (item, mut transform, parent) in &mut held {
-        if item.hand == fb_items::Slot::Mainhand && view_models.contains(parent.parent()) {
+        if item.hand == swing.hand && view_models.contains(parent.parent()) {
             let grip = Grip::of(*transform, hold, item.point);
             *transform = swing.path(grip).at(swing.t).apply(*transform, hold.fist);
         }
@@ -745,6 +772,55 @@ mod tests {
         assert!(app.world().get::<Swing>(delver).is_none(), "a long click is a stab");
     }
 
+    /// A clicker holding `main` and `off` (bases, or empty hands), right click pressed once.
+    fn right_click(main: Option<&str>, off: Option<&str>) -> Option<Swing> {
+        let (mut app, delver, _) = clicker(true);
+        let mut inventory = app.world_mut().resource_mut::<Inventory>();
+        for (base, hand) in [(main, Slot::Mainhand), (off, Slot::Offhand)] {
+            if let Some(base) = base {
+                let id = inventory.add(fb_items::roll_item(base, 3).unwrap());
+                inventory.wear(id, hand).unwrap();
+            }
+        }
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.update();
+        app.world().get::<Swing>(delver).copied()
+    }
+
+    #[test]
+    fn right_click_swings_what_the_off_hand_holds() {
+        let swing = right_click(Some("Sword"), Some("Dagger")).expect("right click swings");
+        assert_eq!((swing.hand, swing.side(), swing.weapon.kind), (Slot::Offhand, Side::Left, SwingKind::Thrust), "the dagger, not the sword");
+        let torch = right_click(Some("Sword"), Some("Torch")).expect("a torch swings too");
+        assert_eq!(torch.hand, Slot::Offhand);
+        assert_eq!(torch.weapon.kind, SwingKind::of(Some(&fb_items::roll_item("Torch", 3).unwrap().shape)));
+        let empty = right_click(Some("Sword"), None).expect("an empty off hand punches");
+        assert_eq!((empty.hand, empty.weapon.kind), (Slot::Offhand, SwingKind::Punch));
+        assert_eq!(right_click(Some("Sword"), Some("Shield")), None, "a shield is raised, not swung");
+    }
+
+    #[test]
+    fn the_left_hand_throws_each_strike_mirrored() {
+        let grip = Grip { fist: Vec3::new(0.0, -5.0, -10.0), pointing: Vec3::Y, edge: Vec3::NEG_Z, reach: 5.0 };
+        for strike in [Strike::HighRight, Strike::FromRight, Strike::Rising, Strike::Stab] {
+            let right = SwingPath::new(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::ZERO);
+            let left = SwingPath::new(strike, Side::Left, grip, CROSSHAIR_AIM, Vec3::ZERO);
+            for t in [0.1, 0.2, 0.3, 0.4] {
+                let (r, l) = (right.at(t).offset, left.at(t).offset);
+                assert!((r.x + l.x).abs() < 1e-4 && (r.y - l.y).abs() < 1e-4 && (r.z - l.z).abs() < 1e-4, "{strike:?} at {t}: {r} vs {l}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_off_hand_blow_adds_no_strength_bonus_but_keeps_a_penalty() {
+        let main = Swing::new(Weapon::fist());
+        let off = Swing { hand: Slot::Offhand, ..main };
+        assert_eq!((main.damage_modifier(3), off.damage_modifier(3)), (3, 0));
+        assert_eq!((main.damage_modifier(-1), off.damage_modifier(-1)), (-1, -1));
+    }
+
     #[test]
     fn each_swing_takes_a_fixed_bite_of_stamina() {
         let (mut app, delver) = swinger();
@@ -818,7 +894,7 @@ mod tests {
     fn every_strike_draws_back_throws_through_and_comes_to_rest() {
         let (_, grip, _) = held("Sword", 9);
         for strike in STRIKES.into_iter().chain([Strike::Stab]) {
-            let path = SwingPath::new(strike, grip, CROSSHAIR_AIM, Vec3::new(0.7, -0.4, 0.5));
+            let path = SwingPath::new(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::new(0.7, -0.4, 0.5));
             assert_eq!(path.at(0.0), SwingPose::REST, "{strike:?}");
             let end = path.at(SWING_TIME);
             assert!(end.offset.length() < 1e-4 && end.turn.angle_between(Quat::IDENTITY) < 1e-3, "{strike:?}");
@@ -831,7 +907,7 @@ mod tests {
     fn a_strike_comes_from_its_side_and_sweeps_across() {
         let (rest, grip, point) = held("Sword", 9);
         for strike in STRIKES {
-            let path = SwingPath::new(strike, grip, CROSSHAIR_AIM, Vec3::ZERO);
+            let path = SwingPath::new(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::ZERO);
             let (back, through) = (tip(&path, DRAWN * SWING_TIME, rest, grip, point), tip(&path, THROWN * SWING_TIME, rest, grip, point));
             // The point travels across the screen the strike's way, from drawn back to thrown.
             let moved = (through - back).xy().normalize();
@@ -846,7 +922,7 @@ mod tests {
     fn the_edge_leads_through_the_sweep() {
         let (rest, grip, point) = held("Sword", 9);
         for strike in STRIKES {
-            let path = SwingPath::new(strike, grip, CROSSHAIR_AIM, Vec3::ZERO);
+            let path = SwingPath::new(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::ZERO);
             let t = (DRAWN + THROWN) * 0.5 * SWING_TIME;
             let going = (tip(&path, t + 0.005, rest, grip, point) - tip(&path, t, rest, grip, point)).normalize();
             let edge = path.at(t).turn * grip.edge;
@@ -859,7 +935,7 @@ mod tests {
         let (rest, grip, point) = held("Mace", 3);
         let left = Vec3::new(-8.0, 4.0, CROSSHAIR_AIM.z);
         for strike in STRIKES {
-            let at = |toward| tip(&SwingPath::new(strike, grip, toward, Vec3::ZERO), LANDS, rest, grip, point);
+            let at = |toward| tip(&SwingPath::new(strike, Side::Right, grip, toward, Vec3::ZERO), LANDS, rest, grip, point);
             let (ahead, aside) = (at(CROSSHAIR_AIM), at(left));
             assert!(aside.x < ahead.x - 1.0 && aside.y > ahead.y, "{strike:?}: {aside} against {ahead}");
         }
@@ -878,7 +954,7 @@ mod tests {
             }
             // Drawn back, it is already turned point first down the line; thrown through, the
             // point is driven along it, and a spear's reaches the crosshair.
-            let path = SwingPath::new(Strike::Stab, grip, CROSSHAIR_AIM, Vec3::new(0.5, 0.5, 0.5));
+            let path = SwingPath::new(Strike::Stab, Side::Right, grip, CROSSHAIR_AIM, Vec3::new(0.5, 0.5, 0.5));
             for phase in [DRAWN, THROWN] {
                 let pose = path.at(phase * SWING_TIME);
                 assert!(off_line(pose.apply(rest, grip.fist), grip.fist + pose.offset) < 0.02, "{base} {seed} at {phase}");

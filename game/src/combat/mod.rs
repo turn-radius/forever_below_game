@@ -225,7 +225,12 @@ impl Weapon {
     /// the wrist and the item's length beyond it: a sword reaches about 1.5 m, near the SRD's
     /// 5-foot reach for most creatures (p. 95), and a long spear further.
     pub fn in_hand(inventory: &Inventory, character: &Character) -> Weapon {
-        let Some(item) = inventory.worn(fb_items::Slot::Mainhand).and_then(|id| inventory.item(id)) else { return Weapon::fist() };
+        Weapon::held_in(fb_items::Slot::Mainhand, inventory, character)
+    }
+
+    /// What the delver swings with `hand`, as [`Weapon::in_hand`] works it out for the main hand.
+    pub fn held_in(hand: fb_items::Slot, inventory: &Inventory, character: &Character) -> Weapon {
+        let Some(item) = inventory.worn(hand).and_then(|id| inventory.item(id)) else { return Weapon::fist() };
         let hold = Hold::of(&item.shape, &fb_body::Body::new(&character.spec()));
         Weapon { hold, ..Weapon::wielded(Some(item), STATURE) }
     }

@@ -1,6 +1,6 @@
 //! Raising a shield. With a shield in the off hand, holding the block key (right click) raises
-//! it as a guard ([`Guard`]); with none, the same key swings as the attack key does
-//! (`super::swing::start_swing`). While the guard is up:
+//! it as a guard ([`Guard`]); with none, the same key swings what the off hand holds, or
+//! punches with it empty (`super::swing::start_swing`). While the guard is up:
 //!
 //! - a blow that would hit the delver from ahead of them, within [`GUARD_ARC`] of where they
 //!   face, is turned aside at the shield's block chance (its base by size, `fb_items::profile`,
