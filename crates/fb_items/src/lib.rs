@@ -47,11 +47,11 @@ pub enum Rarity { Common, Magic, Rare, Legendary }
 #[serde(rename_all = "lowercase")]
 pub enum Kind { Gear, Good }
 
-/// Equipment slots on the doll, as in the prototype, and the hip a lantern hangs at from the
-/// belt (our own; the plate had none).
+/// Equipment slots on the doll, as in the prototype, the hip a lantern hangs at from the belt,
+/// and the quiver slot a quiver or bolt case is slung in (both our own; the plate had neither).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, Legs, Feet, Back, Ring1, Ring2, Charm, Hip }
+pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, Legs, Feet, Back, Ring1, Ring2, Charm, Hip, Quiver }
 
 /// What an item is made of and how it is used. Affixes roll only on items with their tag
 /// (`docs/items.md`, "Rarity and affixes").

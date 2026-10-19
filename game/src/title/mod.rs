@@ -1,17 +1,15 @@
-//! The title screen: the title card's sunlit valley, the game's name in striped gold, and New
-//! delve, Settings and Quit.
+//! The title screen: the game's name in striped gold on the dark of the abyss, and below it New
+//! delve, Continue, Settings and Quit.
 //!
-//! The valley is the user's concept art (`reference/concept/forever-below-title-card.jpg`),
-//! standing in until there is a rendered scene. It is cropped above the card's own lettering
-//! (`assets/ui/title-card.png`) and drawn to cover the screen without stretching
-//! ([`cover_rect`]). The lettering is real text in Almendra Bold, laid out as on the card (a
-//! tall F beside both lines) by an offscreen camera into an image, which [`LetteringMaterial`]
-//! rules in gold bands with a solid rim, as the card's letters are.
+//! The lettering is real text in Almendra Bold, set on one line by an offscreen camera into an
+//! image, which [`LetteringMaterial`] rules in gold bands with a solid rim, as the concept
+//! card's letters are. The options are plain words, centred under it; the chosen one, under the
+//! mouse or else New delve (which Enter begins), is brighter and set between two gold diamonds.
 //!
 //! New delve rolls a level from the clock (or `--seed`'s, with `--title`) and enters
 //! [`AppState::Delving`], where the level, the player and their character are made
 //! (`OnEnter(AppState::Delving)`). Settings is the pause menu's own page ([`menu_page`]), and
-//! the buttons are the pause menu's [`MenuButton`]s, so choosing and hovering work as there.
+//! the options are the pause menu's [`MenuButton`]s, so choosing and hovering work as there.
 
 pub mod creator;
 pub mod last_delver;
@@ -22,46 +20,50 @@ use bevy::{
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType, TextureFormat},
     shader::{ShaderRef, load_shader_library},
+    window::PrimaryWindow,
 };
 
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
-use crate::menu::{ButtonInk, MENU_PX, MenuButton, MenuCommand, MenuPage, capture_page, menu_page};
+use crate::menu::{ButtonInk, MENU_PX, MenuButton, MenuCommand, MenuPage, capture_page, hovered_button, light_hovered, menu_page};
 use crate::settings::GameSettings;
-use crate::ui::{BG, FRAME_GOLD, INK, LINE, UiFonts};
+use crate::ui::{BG, BRIGHT, LINE, MUTED, UiFonts};
 use creator::{CreatorCommand, Draft, creator_page, open_creator, run_creator};
 use last_delver::{LastDelver, LastDelverPlugin};
 
 const SHADER_PATH: &str = "embedded://forever_below/title/lettering.wesl";
 
-/// The title card, cropped above its own lettering.
-pub const CARD_PATH: &str = "ui/title-card.png";
-
 /// The lettering image's size in pixels. Its aspect is the lettering node's.
-const LETTERING_SIZE: UVec2 = UVec2::new(1800, 860);
+const LETTERING_SIZE: UVec2 = UVec2::new(2560, 440);
+
+/// The lettering's font size in texels of the lettering image.
+const LETTERING_FONT: f32 = 320.0;
 
 /// The title's gold, matched by eye to the card's letters.
 pub const LETTERING_GOLD: Color = Color::srgb(0.96, 0.77, 0.43);
+
+/// The dark the title stands on, a near-black with a little blue in it.
+pub const ABYSS: Color = Color::srgb(0.020, 0.024, 0.031);
 
 /// The seed New delve plays; a fresh one from the clock when `None`.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NewDelveSeed(pub Option<u32>);
 
-/// The title card image, sized to cover the screen.
-#[derive(Component, Debug)]
-pub struct TitleCard;
-
 /// The striped lettering.
 #[derive(Component, Debug)]
 pub struct TitleLettering;
 
-/// The buttons, or the settings page, whichever the [`MenuPage`] shows.
+/// The options, or the settings page, whichever the [`MenuPage`] shows.
 #[derive(Component, Debug)]
 pub struct TitlePanel;
 
 /// The root of the title screen, which the panel is built under.
 #[derive(Component, Debug)]
 pub struct TitleScreen;
+
+/// One of the gold diamonds either side of the chosen option.
+#[derive(Component, Debug)]
+pub struct OptionMark;
 
 /// Gold bands across white text drawn into `glyphs` (`lettering.wesl`).
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -88,18 +90,19 @@ pub struct LetteringStyle {
 
 impl Default for LetteringStyle {
     /// The card's proportions: about eleven bands to the x-height, each a little under half
-    /// gold, and a rim a twentieth of the x-height. Measured from the card; the shade between
-    /// bands and the shadow are our own, for the brighter sky the title sits on here.
+    /// gold, and a rim a twentieth of the x-height. Measured from the card. On the dark the
+    /// gaps between bands are only faintly shaded and there is no shadow.
     fn default() -> Self {
+        let x_height = LETTERING_FONT / 457.0;
         LetteringStyle {
             gold: LETTERING_GOLD.into(),
-            shade: Color::srgba(0.30, 0.19, 0.07, 0.55).into(),
-            shadow: Color::srgba(0.05, 0.035, 0.02, 0.65).into(),
-            band_period: 20.0,
+            shade: Color::srgba(0.30, 0.19, 0.07, 0.2).into(),
+            shadow: Color::NONE.into(),
+            band_period: 20.0 * x_height,
             band_fill: 0.5,
-            rim: 8.0,
+            rim: 8.0 * x_height,
             shadow_blur: 10.0,
-            shadow_offset: Vec2::new(5.0, 7.0),
+            shadow_offset: Vec2::ZERO,
         }
     }
 }
@@ -135,23 +138,13 @@ impl Plugin for TitlePlugin {
             .add_message::<MenuCommand>()
             .add_systems(OnEnter(AppState::Title), spawn_title)
             .add_systems(OnExit(AppState::Title), |mut commands: Commands| commands.remove_resource::<Draft>())
-            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), creator::roll_look_every.run_if(|| creator::roll_look_wait().is_some()), title_controls, run_creator, fit_card, build_panel).chain().run_if(in_state(AppState::Title)));
+            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), creator::roll_look_every.run_if(|| creator::roll_look_wait().is_some()), title_controls, run_creator, build_panel).chain().run_if(in_state(AppState::Title)))
+            .add_systems(Update, mark_chosen.before(light_hovered).run_if(in_state(AppState::Title)));
     }
-}
-
-/// The part of an image `image` pixels across that covers a viewport `viewport` across
-/// without stretching: all of the image's narrower side, centred along the other.
-pub fn cover_rect(image: Vec2, viewport: Vec2) -> Rect {
-    if image.min_element() <= 0.0 || viewport.min_element() <= 0.0 {
-        return Rect::from_corners(Vec2::ZERO, image.max(Vec2::ZERO));
-    }
-    let scale = (viewport.x / image.x).max(viewport.y / image.y);
-    Rect::from_center_size(image * 0.5, viewport / scale)
 }
 
 fn spawn_title(
     mut commands: Commands,
-    assets: Res<AssetServer>,
     fonts: Res<UiFonts>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<LetteringMaterial>>,
@@ -174,7 +167,13 @@ fn spawn_title(
             RenderTarget::Image(glyphs.clone().into()),
         ))
         .id();
-    lay_out_lettering(&mut commands, &fonts, scribe);
+    commands
+        .spawn((
+            DespawnOnExit(AppState::Title),
+            UiTargetCamera(scribe),
+            Node { width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
+        ))
+        .with_child((Text::new("Forever Below"), UiFonts::style(&fonts.display_bold, LETTERING_FONT, Color::WHITE)));
 
     let camera = commands.spawn((Name::new("Title camera"), DespawnOnExit(AppState::Title), Camera2d, IsDefaultUiCamera)).id();
     let material = materials.add(LetteringMaterial { style: LetteringStyle::default(), glyphs });
@@ -185,52 +184,17 @@ fn spawn_title(
             DespawnOnExit(AppState::Title),
             UiTargetCamera(camera),
             Node { width: percent(100), height: percent(100), ..default() },
-            BackgroundColor(BG),
+            BackgroundColor(ABYSS),
         ))
         .with_children(|screen| {
-            screen.spawn((
-                TitleCard,
-                ImageNode { image: assets.load(CARD_PATH), image_mode: NodeImageMode::Stretch, ..default() },
-                Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() },
-            ));
-            screen.spawn((
-                TitleLettering,
-                MaterialNode(material),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: vw(4),
-                    top: vh(6),
-                    width: vw(62),
-                    aspect_ratio: Some(LETTERING_SIZE.x as f32 / LETTERING_SIZE.y as f32),
-                    ..default()
-                },
-            ));
+            screen
+                .spawn(Node { position_type: PositionType::Absolute, top: vh(22), width: percent(100), justify_content: JustifyContent::Center, ..default() })
+                .with_child((
+                    TitleLettering,
+                    MaterialNode(material),
+                    Node { width: vw(62), max_width: px(1600), aspect_ratio: Some(LETTERING_SIZE.x as f32 / LETTERING_SIZE.y as f32), ..default() },
+                ));
         });
-}
-
-/// The name as the card sets it, in the lettering image's pixels: a tall F whose stem runs
-/// down beside both lines, "orever" beside its top and "Below" tucked under, in from the F.
-fn lay_out_lettering(commands: &mut Commands, fonts: &UiFonts, scribe: Entity) {
-    let white = Color::WHITE;
-    let placed = |left: f32, top: f32| Node { position_type: PositionType::Absolute, left: px(left), top: px(top), ..default() };
-    commands
-        .spawn((DespawnOnExit(AppState::Title), UiTargetCamera(scribe), Node { width: percent(100), height: percent(100), ..default() }))
-        .with_children(|page| {
-            page.spawn((Text::new("F"), UiFonts::style(&fonts.display_bold, 748.0, white), placed(24.0, -130.0)));
-            page.spawn((Text::new("orever"), UiFonts::style(&fonts.display_bold, 457.0, white), placed(430.0, 12.0)));
-            page.spawn((Text::new("Below"), UiFonts::style(&fonts.display_bold, 450.0, white), placed(236.0, 372.0)));
-        });
-}
-
-/// Keeps the card covering the screen as the window changes.
-fn fit_card(images: Res<Assets<Image>>, mut cards: Query<(&mut ImageNode, &ComputedNode), With<TitleCard>>) {
-    for (mut card, node) in &mut cards {
-        let Some(image) = images.get(&card.image) else { continue };
-        let rect = Some(cover_rect(image.size_f32(), node.size));
-        if card.rect != rect {
-            card.rect = rect;
-        }
-    }
 }
 
 /// `FB_NEW_DELVE=<seconds>`: how long the title waits before beginning a delve by itself, past
@@ -248,8 +212,8 @@ fn choose_new_delve_after(time: Res<Time>, mut shown: Local<f32>, mut chosen: Me
     }
 }
 
-/// New delve (its button, or Enter on the main page) opens the character creator
-/// ([`creator`]), which begins the delve; Esc on the settings page goes back to the buttons.
+/// New delve (its option, or Enter on the main page) opens the character creator
+/// ([`creator`]), which begins the delve; Esc on the settings page goes back to the options.
 fn title_controls(mut commands: Commands, input: ActionInput, mut chosen: MessageReader<MenuCommand>, mut page: ResMut<MenuPage>, draft: Option<Res<Draft>>) {
     let chose = chosen.read().filter(|c| **c == MenuCommand::NewDelve).count() > 0;
     if draft.is_some() {
@@ -263,26 +227,52 @@ fn title_controls(mut commands: Commands, input: ActionInput, mut chosen: Messag
     }
 }
 
-/// A button for the bright card: a box of the ledger's page ruled in tan, its word cream, gold
-/// under the mouse. The page is opaque: Bevy blends UI in linear light, where even 4% of the
-/// card's white sky washes the near-black page to grey.
-fn ledger_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, command: MenuCommand) {
+/// An option: its word in muted tan between two gold diamonds, which show while it is chosen
+/// ([`mark_chosen`]).
+fn title_option(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, command: MenuCommand) {
+    let mark = || {
+        (
+            OptionMark,
+            Node { width: px(6), height: px(6), ..default() },
+            UiTransform::from_rotation(Rot2::degrees(45.0)),
+            BackgroundColor(LETTERING_GOLD),
+            Visibility::Hidden,
+        )
+    };
     parent
         .spawn((
             MenuButton(command),
-            ButtonInk { idle: INK, hover: FRAME_GOLD },
-            Node {
-                min_width: px(240),
-                padding: UiRect::axes(px(18), px(8)),
-                justify_content: JustifyContent::Center,
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(px(4)),
-                ..default()
-            },
-            BackgroundColor(BG),
-            BorderColor::all(LINE),
+            ButtonInk { idle: MUTED, hover: BRIGHT },
+            Node { align_items: AlignItems::Center, column_gap: px(16), padding: UiRect::axes(px(16), px(4)), ..default() },
         ))
-        .with_child((Text::new(label), UiFonts::style(&fonts.body_medium, 24.0, INK)));
+        .with_children(|option| {
+            option.spawn(mark());
+            option.spawn((Text::new(label), UiFonts::style(&fonts.display, 30.0, MUTED)));
+            option.spawn(mark());
+        });
+}
+
+/// The chosen option is the one under the mouse, or New delve, which Enter begins: its word is
+/// bright and its diamonds show.
+fn mark_chosen(
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    mut options: Query<(&MenuButton, &mut ButtonInk, &ComputedNode, &UiGlobalTransform, &Children)>,
+    mut marks: Query<&mut Visibility, With<OptionMark>>,
+) {
+    let over = hovered_button(window.as_deref().copied(), options.iter().map(|(b, _, n, t, _)| (b, n, t)));
+    let chosen = over.or(Some(MenuCommand::NewDelve));
+    for (button, mut ink, .., children) in &mut options {
+        let is_chosen = chosen == Some(button.0);
+        let idle = if is_chosen { BRIGHT } else { MUTED };
+        if ink.idle != idle {
+            ink.idle = idle;
+        }
+        for child in children {
+            if let Ok(mut shown) = marks.get_mut(*child) {
+                shown.set_if_neq(if is_chosen { Visibility::Inherited } else { Visibility::Hidden });
+            }
+        }
+    }
 }
 
 /// The width of the creator's panel in logical pixels.
@@ -316,9 +306,9 @@ fn centred_panel(screen: &mut ChildSpawnerCommands, width: f32, fill: impl FnOnc
         });
 }
 
-/// Builds the buttons (Continue as the [`LastDelver`] first, when there is one), the settings
-/// page or the character creator in a dark panel, when the
-/// page or the [`Draft`] changes; the lettering steps aside for the panels.
+/// Builds the options (Continue as the [`LastDelver`] after New delve, when there is one), the
+/// settings page or the character creator in a dark panel, when the page or the [`Draft`]
+/// changes; the lettering steps aside for the panels.
 #[allow(clippy::too_many_arguments)]
 fn build_panel(
     mut commands: Commands,
@@ -356,20 +346,21 @@ fn build_panel(
                     TitlePanel,
                     Node {
                         position_type: PositionType::Absolute,
-                        right: vw(7),
-                        bottom: vh(12),
+                        top: vh(50),
+                        width: percent(100),
                         flex_direction: FlexDirection::Column,
-                        row_gap: px(12),
+                        align_items: AlignItems::Center,
+                        row_gap: px(10),
                         ..default()
                     },
                 ))
                 .with_children(|list| {
+                    title_option(list, &fonts, "New delve", MenuCommand::NewDelve);
                     if let Some(delver) = last.as_ref().and_then(|l| l.0.as_ref()) {
-                        ledger_button(list, &fonts, &format!("Continue as {}", delver.name), MenuCommand::Continue);
+                        title_option(list, &fonts, &format!("Continue as {}", delver.name), MenuCommand::Continue);
                     }
-                    ledger_button(list, &fonts, "New delve", MenuCommand::NewDelve);
-                    ledger_button(list, &fonts, "Settings", MenuCommand::Show(MenuPage::Settings));
-                    ledger_button(list, &fonts, "Quit", MenuCommand::Quit);
+                    title_option(list, &fonts, "Settings", MenuCommand::Show(MenuPage::Settings));
+                    title_option(list, &fonts, "Quit", MenuCommand::Quit);
                 });
         }
         (None, shown) => centred_panel(screen, MENU_PX + 64.0, |panel| menu_page(panel, &fonts, shown, &keymap, &settings, &crate::menu::ControlsView::default())),
@@ -381,23 +372,6 @@ mod tests {
     use super::*;
     use crate::play::CurrentLevel;
     use bevy::state::app::StatesPlugin;
-
-    #[test]
-    fn the_card_covers_the_screen_without_stretching() {
-        let card = Vec2::new(1842.0, 1036.0);
-        // A wider screen shows the card's full width and crops top and bottom evenly.
-        let wide = cover_rect(card, Vec2::new(2560.0, 1080.0));
-        assert!((wide.width() - card.x).abs() < 1e-3);
-        assert!((wide.width() / wide.height() - 2560.0 / 1080.0).abs() < 1e-4);
-        assert!((wide.min.y - (card.y - wide.max.y)).abs() < 1e-3);
-        // A taller one shows its full height.
-        let tall = cover_rect(card, Vec2::new(1080.0, 1350.0));
-        assert!((tall.height() - card.y).abs() < 1e-3);
-        assert!((tall.width() / tall.height() - 1080.0 / 1350.0).abs() < 1e-4);
-        assert!(tall.min.x >= 0.0 && tall.max.x <= card.x);
-        // Before layout, the whole card.
-        assert_eq!(cover_rect(card, Vec2::ZERO), Rect::from_corners(Vec2::ZERO, card));
-    }
 
     fn title_app(seed: Option<u32>) -> App {
         let mut app = App::new();
@@ -445,6 +419,24 @@ mod tests {
 
     fn chosen(app: &App) -> Option<crate::character::Character> {
         app.world().get_resource::<crate::character::ChosenDelver>().map(|c| c.0.clone())
+    }
+
+    #[test]
+    fn new_delve_is_chosen_while_the_mouse_is_off_the_options() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_systems(Update, mark_chosen);
+        let mut option = |command| {
+            let marks = [app.world_mut().spawn((OptionMark, Visibility::Hidden)).id(), app.world_mut().spawn((OptionMark, Visibility::Hidden)).id()];
+            app.world_mut().spawn((MenuButton(command), ComputedNode::default(), UiGlobalTransform::default())).add_children(&marks).id()
+        };
+        let (new_delve, quit) = (option(MenuCommand::NewDelve), option(MenuCommand::Quit));
+        app.update();
+        let world = app.world();
+        let shown = |option: Entity| world.get::<Children>(option).unwrap().iter().all(|m| world.get::<Visibility>(m) == Some(&Visibility::Inherited));
+        assert!(shown(new_delve));
+        assert_eq!(world.get::<ButtonInk>(new_delve).unwrap().idle, BRIGHT);
+        assert!(world.get::<Children>(quit).unwrap().iter().all(|m| world.get::<Visibility>(m) == Some(&Visibility::Hidden)));
+        assert_eq!(world.get::<ButtonInk>(quit).unwrap().idle, MUTED);
     }
 
     #[test]

@@ -23,8 +23,9 @@
 //!   the more.
 //! - Bludgeoning hurts it double and poison does nothing (the stat block's vulnerability and
 //!   immunity; [`bludgeoning_damage`]).
-//! - Struck down it collapses onto its back ([`fb_creatures::pose::skeleton_fallen`]) and, as it
-//!   falls, every item it wore and held is set down around it as an ordinary item on the floor
+//! - Struck down it falls to pieces: every joint gives and its bones drop into a heap round its
+//!   feet, the skull rolled off to one side ([`fb_creatures::pose::skeleton_heap`], the same
+//!   heap for the same skeleton). As it falls, every item it wore and held is set down around it as an ordinary item on the floor
 //!   ([`crate::belongings::drop_belongings`]), once only.
 //! - A skeleton past the fog's end is not drawn ([`cull_far`]), and the bones'
 //!   thin parts (fingers and toes) are drawn with fewer facets, so a hall of them holds the frame

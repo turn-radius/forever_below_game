@@ -11,6 +11,9 @@
 //! The dead of the first stone halls ([`FIRST_HALLS`]) are poorer: they wear no armour at all,
 //! only rags, and hold a dagger or a club if anything, so a fresh delver with what the
 //! first level gives can stand against them (#354). Our own.
+//!
+//! An archer among them still has its quiver, carried rather than drawn on the bones, with
+//! what is left of its arrows ([`ARROWS_LEFT`]), so a bow taken off the dead can be shot.
 
 use procgen_rng::Mulberry32;
 
@@ -30,6 +33,11 @@ const HANDS: &[&str] = &["Gloves", "Gauntlets", "Gauntlets"];
 /// The depth of the first stone halls, the shallowest level the dead stand in
 /// (`fb_level::LevelStyle::for_depth`). Our own.
 pub const FIRST_HALLS: u32 = 2;
+/// Mixed into a skeleton's seed for its quiver and arrows, after the rest of its gear.
+const QUIVER_SALT: u32 = 0x0d3a_a770;
+/// How many arrows a dead archer's quiver still holds, inclusive. Our own: fewer than the
+/// living carry (`crate::outfit::AMMUNITION_CARRIED`).
+pub const ARROWS_LEFT: (u32, u32) = (4, 12);
 /// What the dead of the first halls hold, whether they would have been kitted or not: light
 /// things, 1d4 each (a dagger or a club), or, three times in five, nothing
 /// but their claws after all. Our own.
@@ -86,7 +94,23 @@ pub fn skeleton_outfit(seed: u32, odds: Odds) -> OutfitSet {
             worn.push((slot, item));
         }
     }
-    OutfitSet { worn, goods: Vec::new(), ground: Vec::new() }
+    // Its own stream, so the gear above rolls as it did before archers kept their quivers.
+    let mut goods = Vec::new();
+    if worn.iter().any(|(_, item)| item.profile.ranged.is_some()) {
+        let mut rng = Mulberry32::new(seed ^ QUIVER_SALT);
+        let draw = |rng: &mut Mulberry32, base: &str| {
+            let mut item = roll_item_with(base, (rng.next_f64() * 4_294_967_296.0) as u32, odds)?;
+            wear_hard(&mut item, rng);
+            Some(item)
+        };
+        if let Some(quiver) = draw(&mut rng, "Quiver") {
+            goods.push(quiver);
+            for _ in 0..rng.int(ARROWS_LEFT.0, ARROWS_LEFT.1) {
+                goods.extend(draw(&mut rng, "Arrow"));
+            }
+        }
+    }
+    OutfitSet { worn, goods, ground: Vec::new() }
 }
 
 /// Wears `item` as a thing the dead have lain in: heavy wear, rust on iron, rot and fray on
@@ -187,6 +211,25 @@ mod tests {
         // Deeper, the same seeds wear what they always did.
         assert_eq!(skeleton_outfit(7, Odds::kit(4)), skeleton_outfit(7, Odds::kit(4)));
         assert!((0..100).any(|seed| skeleton_outfit(seed, Odds::kit(4)).item(Slot::Body).is_some_and(|b| b.profile.stats.armour > 0.0)));
+    }
+
+    #[test]
+    fn an_archer_keeps_its_quiver_and_some_arrows() {
+        let mut archers = 0;
+        for seed in 0..300 {
+            let set = skeleton_outfit(seed, Odds::default());
+            let bow = set.item(Slot::Mainhand).is_some_and(|w| w.base == "Bow");
+            if !bow {
+                assert!(set.goods.is_empty(), "{seed}: carries {:?} with no bow", set.goods.iter().map(|i| &i.base).collect::<Vec<_>>());
+                continue;
+            }
+            archers += 1;
+            assert_eq!(set.goods[0].base, "Quiver", "{seed}");
+            let arrows = set.goods[1..].iter().filter(|i| i.base == "Arrow").count() as u32;
+            assert_eq!(arrows as usize, set.goods.len() - 1, "{seed}");
+            assert!((ARROWS_LEFT.0..=ARROWS_LEFT.1).contains(&arrows), "{seed}: {arrows}");
+        }
+        assert!(archers > 5, "only {archers} archers in 300");
     }
 
     #[test]

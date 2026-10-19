@@ -361,11 +361,12 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
         // SRD 5.1 p. 69: an arrow weighs 0.05 lb and a bolt 0.075 lb. Each takes one cell.
         Item::Arrow(_) => good(&[Ammunition], 0.05, [1, 1], "Ammunition · arrow"),
         Item::Bolt(_) => good(&[Ammunition], 0.075, [1, 1], "Ammunition · crossbow bolt"),
-        // A quiver or bolt case weighs 1 lb empty and holds 20 (SRD 5.1 p. 67-68), hung at the hip.
+        // A quiver or bolt case weighs 1 lb empty and holds 20 (SRD 5.1 p. 67-68), slung in a slot
+        // of its own so it never vies with the lantern at the hip or the pack on the back.
         Item::Quiver(_) | Item::BoltCase(_) => {
             let (ammunition, label) = if matches!(shape, Item::Quiver(_)) { (Family::Arrow, "Quiver") } else { (Family::Bolt, "Bolt case") };
             let holds = Grid { cols: 5, rows: 4, label: label.to_string(), accepts: vec![ammunition] };
-            Profile { holds: Some(holds), ..gear(Slot::Hip, &[Container, Wear, Leather], Stats { weight: 1.0, ..Stats::default() }, [1, 3]) }
+            Profile { holds: Some(holds), ..gear(Slot::Quiver, &[Container, Wear, Leather], Stats { weight: 1.0, ..Stats::default() }, [1, 3]) }
         }
         Item::Ring(_) => gear(Slot::Ring1, &[Trinket], Stats { weight: 0.05, ..Stats::default() }, [1, 1]),
         Item::Amulet(_) => gear(Slot::Neck, &[Trinket], Stats { weight: 0.1, ..Stats::default() }, [1, 1]),

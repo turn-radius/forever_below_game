@@ -147,6 +147,10 @@ ambience_volume = 0.3
 rumble_interval_min = 60.0
 # The longest time between stone rumbles, in seconds.
 rumble_interval_max = 180.0
+# The troll theme plays while a troll is this many rooms away or fewer. 0 is the same room.
+troll_rooms = 2
+# How long the troll theme plays on after the last troll is out of range, in seconds.
+troll_linger = 10.0
 
 [interface]
 # Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there.

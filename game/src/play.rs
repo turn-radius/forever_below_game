@@ -19,7 +19,7 @@ use bevy::{
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
-use fb_level::{FloorShape, Level};
+use fb_level::{FloorShape, Level, RoomGraph};
 
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
@@ -47,6 +47,14 @@ pub fn run_delve_systems_while_delving(app: &mut App) {
 /// The level being played. Inserted before the play plugins run.
 #[derive(Resource, Clone, Debug)]
 pub struct CurrentLevel(pub Level);
+
+/// Which rooms of the [`CurrentLevel`] open into each other, mapped again whenever it changes.
+#[derive(Resource, Clone, Debug)]
+pub struct LevelRooms(pub RoomGraph);
+
+fn map_rooms(mut commands: Commands, level: Res<CurrentLevel>) {
+    commands.insert_resource(LevelRooms(RoomGraph::new(&level.0)));
+}
 
 /// The player's body. Its `Transform` is at the feet, on the floor; the camera is a child.
 #[derive(Component, Debug, Default, Reflect)]
@@ -300,7 +308,7 @@ impl Plugin for PlayPlugin {
             .init_resource::<ScreenOpen>()
             .init_resource::<SheetTab>()
             .init_resource::<Keymap>()
-            .add_systems(Update, switch_screens.in_set(DelveSystems))
+            .add_systems(Update, (switch_screens, map_rooms.run_if(resource_exists_and_changed::<CurrentLevel>)).in_set(DelveSystems))
             .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate).in_set(DelveSystems))
             .add_plugins((
             (crate::ambient::AmbientPlugin, crate::footsteps::FootstepsPlugin, crate::breath::BreathPlugin, crate::game_clock::GameClockPlugin),

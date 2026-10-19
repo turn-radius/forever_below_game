@@ -798,7 +798,7 @@ pub fn animate(
                     }
                 };
                 if intent.fallen > 0.0 {
-                    pose::skeleton_fallen(dims, intent.fallen)
+                    pose::skeleton_heap(dims, skeleton.seed, intent.fallen)
                 } else {
                     motion.cycle = (motion.cycle + strode / pose::skeleton_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
                     pose::skeleton_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)

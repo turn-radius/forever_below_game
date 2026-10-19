@@ -69,13 +69,13 @@ impl Belongings {
     }
 
     /// What `critter` carries on a level `depth` deep, or `None` for a creature that carries
-    /// nothing: a skeleton's outfit, a troll's weapon, a jackalope's drop.
+    /// nothing: a skeleton's outfit and what it carries, a troll's weapon, a jackalope's drop.
     pub fn of(critter: &Critter, depth: u32) -> Option<Belongings> {
         let seed = critter.spot.seed;
         let species = critter.spot.species;
         if species.is_skeleton() {
             let kit = critter.kit.as_ref()?;
-            Some(Belongings::new(seed, kit.outfit.worn.iter().map(|(_, item)| item.clone())))
+            Some(Belongings::new(seed, kit.outfit.worn.iter().map(|(_, item)| item).chain(&kit.outfit.goods).cloned()))
         } else if species.is_jackalope() {
             Some(Belongings::new(seed, fb_items::jackalope::jackalope_drop(seed, depth)))
         } else {
@@ -223,22 +223,44 @@ mod tests {
         let Creature::Skeleton(state) = spot.creature() else { panic!("a skeleton") };
         let gear = SkeletonGear::roll(&state, fb_items::Odds::kit(1));
         let kit = SkeletonKit::armed(&state, &gear);
-        let worn = kit.outfit.worn.len();
+        // What it wears, and the quiver an archer carries (its arrows fall in it).
+        let shed = kit.outfit.worn.len() + kit.outfit.goods.iter().filter(|i| i.base == "Quiver").count();
         let (app, id) = body_of(Critter::new(spot, spot.creature()).with_kit(kit), looted);
-        (app, id, worn)
+        (app, id, shed)
     }
 
     #[test]
     fn a_slain_skeleton_sets_everything_it_wore_down_once() {
-        let (mut app, skeleton, worn) = armed_skeleton(false);
-        assert!(worn > 0, "this skeleton wears something");
+        let (mut app, skeleton, shed) = armed_skeleton(false);
+        assert!(shed > 0, "this skeleton wears something");
         app.update();
-        assert_eq!(set_down(&app), worn);
+        assert_eq!(set_down(&app), shed);
         assert!(app.world().get::<Looted>(skeleton).is_some());
         for _ in 0..30 {
             app.update();
         }
-        assert_eq!(set_down(&app), worn, "and never again");
+        assert_eq!(set_down(&app), shed, "and never again");
+    }
+
+    #[test]
+    fn a_slain_skeleton_archer_leaves_its_arrows_in_its_quiver() {
+        let odds = fb_items::Odds::kit(1);
+        let seed = (0..400).find(|&s| fb_items::undead::skeleton_outfit(s, odds).item(fb_items::Slot::Mainhand).is_some_and(|w| w.base == "Bow")).expect("some skeleton holds a bow");
+        let spot = spot(Species::Skeleton, seed);
+        let Creature::Skeleton(state) = spot.creature() else { panic!("a skeleton") };
+        let kit = SkeletonKit::armed(&state, &SkeletonGear::roll(&state, odds));
+        let arrows = kit.outfit.goods.iter().filter(|i| i.base == "Arrow").count();
+        assert!(arrows > 0, "an archer carries arrows");
+        let (mut app, _) = body_of(Critter::new(spot, spot.creature()).with_kit(kit), false);
+        app.update();
+        let lying = things(&app);
+        assert!(lying.iter().all(|(base, ..)| base != "Arrow"), "no arrow lies loose: {lying:?}");
+        let inventory = app.world().resource::<Inventory>();
+        let quiver = app.world().resource::<FloorChanges>().0.iter().find_map(|c| match c {
+            FloorChange::SetDownAt(id, ..) if inventory.item(*id).is_some_and(|i| i.base == "Quiver") => Some(*id),
+            _ => None,
+        });
+        assert_eq!(quiver.map(|q| inventory.contents_count(q)), Some(arrows), "the quiver falls with every arrow in it");
     }
 
     #[test]

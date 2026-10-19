@@ -38,7 +38,7 @@ use crate::creatures::behaviour::{AttackOnDelver, MissedDelver, reach};
 use crate::exhaustion::Exhaustion;
 use crate::inventory::Inventory;
 use crate::launch::AppState;
-use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacles, Player, ScreenOpen};
+use crate::play::{BlockedCells, CurrentLevel, DelveSystems, LevelRooms, Obstacles, Player, ScreenOpen};
 use crate::player::Slowed;
 use crate::ui::{BAD, BG, BRIGHT, UiFonts};
 
@@ -513,6 +513,7 @@ pub fn bearing_from_facing(player_pos: Vec2, yaw: f32, attacker_pos: Vec2) -> f3
 /// (<https://docs.rs/bevy/0.20.0/bevy/state/state_scoped/struct.DespawnOnExit.html>).
 pub fn end_the_delve(mut commands: Commands, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
     commands.remove_resource::<CurrentLevel>();
+    commands.remove_resource::<LevelRooms>();
     commands.insert_resource(Inventory::default());
     commands.insert_resource(ScreenOpen::default());
     commands.insert_resource(Obstacles::default());

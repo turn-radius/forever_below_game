@@ -84,6 +84,10 @@ pub struct Person {
     pub outfit: &'static str,
     /// Everything worn and held, by slot.
     pub gear: Vec<(Slot, Item)>,
+    /// What they carry that is not worn: an archer's arrows or bolts, which fall into the
+    /// quiver or case they wear when they are slain. (The rest of the outfit's goods are not
+    /// theirs yet.)
+    pub goods: Vec<Item>,
     /// How dirty their skin is, 0 clean to about 0.85 (the plate's `C.dirt`).
     pub dirt: f32,
 }
@@ -97,7 +101,11 @@ impl Person {
         let mut rng = Mulberry32::new(spot.seed ^ NAME_SALT);
         let name = fb_items::naming::folk_name(&mut rng, spot.folk.key());
         let outfit = *rng.pick(faction.outfits);
-        let mut gear = fb_items::outfit::outfit(outfit).map_or_else(Vec::new, |o| o.roll_with(spot.seed, spot.folk.key(), odds).worn);
+        let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
+            let set = o.roll_with(spot.seed, spot.folk.key(), odds);
+            let ammunition = set.goods.into_iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).collect();
+            (set.worn, ammunition)
+        });
         let has = |gear: &[(Slot, Item)], slot| gear.iter().any(|(s, _)| *s == slot);
         // Nobody stands about empty-handed: a torch if the outfit gave nothing to hold.
         if !has(&gear, Slot::Mainhand) && !has(&gear, Slot::Offhand) {
@@ -111,7 +119,7 @@ impl Person {
             "fallen" => dirt_rng.range_f32(0.3, 0.5),
             _ => dirt_rng.range_f32(0.08, 0.38),
         };
-        Person { spot: *spot, depth, name, spec: BodySpec::roll(spot.folk, spot.seed), outfit, gear, dirt }
+        Person { spot: *spot, depth, name, spec: BodySpec::roll(spot.folk, spot.seed), outfit, gear, goods, dirt }
     }
 
     /// What they wear, innermost slots first as listed.
@@ -192,10 +200,11 @@ pub struct Denizen {
 }
 
 impl Denizen {
-    /// What they leave when they fall: everything they wear and hold, set down round the circle
-    /// they stand in ([`crate::belongings::drop_belongings`]).
+    /// What they leave when they fall: everything they wear, hold and carry, set down round the
+    /// circle they stand in ([`crate::belongings::drop_belongings`]).
     pub fn belongings(&self) -> crate::belongings::Belongings {
-        crate::belongings::Belongings::new(self.person.spot.seed, self.person.gear.iter().map(|(_, item)| item.clone())).standing_in(self.radius)
+        let items = self.person.gear.iter().map(|(_, item)| item).chain(&self.person.goods).cloned();
+        crate::belongings::Belongings::new(self.person.spot.seed, items).standing_in(self.radius)
     }
 }
 
@@ -596,6 +605,26 @@ mod tests {
             assert!(lo.y > -0.5 && lo.y < 0.5, "{}: lowest point {}", person.name, lo.y);
             assert!(hi.y > spot.folk.race().h * 0.85, "{}: {} tall", person.name, hi.y);
         }
+    }
+
+    #[test]
+    fn an_archer_carries_what_it_shoots_and_no_one_else_carries_anything() {
+        let mut archers = 0;
+        for spot in folk_1207() {
+            for seed in 0..12 {
+                let person = Person::of(&FolkSpot { seed, ..spot }, 1);
+                let shoots = person.item(Slot::Mainhand).and_then(|w| w.profile.ranged).map(|r| r.ammunition);
+                match shoots {
+                    Some(ammunition) if person.item(Slot::Quiver).is_some_and(|h| h.profile.holds.as_ref().is_some_and(|g| g.accepts.contains(&ammunition))) => {
+                        archers += 1;
+                        assert_eq!(person.goods.len(), fb_items::outfit::AMMUNITION_CARRIED, "{}", person.name);
+                        assert!(person.goods.iter().all(|i| i.shape.family() == ammunition), "{}", person.name);
+                    }
+                    _ => assert!(person.goods.is_empty(), "{} carries {} things", person.name, person.goods.len()),
+                }
+            }
+        }
+        assert!(archers > 0, "no archers among the folk");
     }
 
     #[test]

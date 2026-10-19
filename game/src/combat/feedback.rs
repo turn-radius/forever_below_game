@@ -10,7 +10,8 @@
 //! - **Sound**: a rat squeaks, a snake hisses (`tools/synth_combat.py`).
 //! - **Collapse**: after the flash's hold, so a creature felled by one blow is
 //!   seen to be struck before it falls, a rat rolls onto its back, legs up; a snake uncoils and
-//!   lies limp along the floor, jaw slack. Its mind stops ([`Corpse`]): it no longer moves, bites or keeps others
+//!   lies limp along the floor, jaw slack; a skeleton falls to pieces, its bones dropping into a
+//!   heap where it stood. Its mind stops ([`Corpse`]): it no longer moves, bites or keeps others
 //!   off, and it blocks nobody.
 //!
 //! The flash's length, hold, colour and strength, the knockback distances and the collapse are
@@ -360,14 +361,15 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
         *intent = Intent { jaw: 0.35, tongue: 0.6, ..default() };
         match &critter.creature {
             Creature::Rat(rat) => *transform = rolled_over(rat, &corpse.fell, collapse_share(corpse.since, hold)),
+            // It falls to pieces where it stood: the heap is all in the bones
+            // (`fb_creatures::pose::skeleton_heap`), and the body stays upright on its feet.
             Creature::Skeleton(_) => {
-                let share = collapse_share(corpse.since, hold);
-                intent.fallen = share.max(1e-3);
-                *transform = laid_back(critter.kit.as_ref().map_or(17.0, |k| k.height), &corpse.fell, share);
+                intent.fallen = collapse_share(corpse.since, hold).max(1e-3);
+                *transform = corpse.fell;
             }
             Creature::Troll(_) => {
-                // Over backwards like a skeleton, but with a deeper back (the hump and the
-                // seat), so it is raised twice as far to lie on the floor.
+                // Over backwards onto its back, raised by its deep back (the hump and the
+                // seat) so it lies on the floor.
                 let share = collapse_share(corpse.since, hold);
                 intent.fallen = share.max(1e-3);
                 *transform = laid_back(2.0 * troll.map_or(25.0, |t| t.height), &corpse.fell, share);
@@ -458,8 +460,8 @@ pub fn turned_over(centipede: &fb_creatures::CentipedeState, fell: &Transform, s
     Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
 }
 
-/// A skeleton of `height` that stood at `fell`, `share` of the way through falling onto its
-/// back: turned about its feet, away from where it faced, and raised by half its body's depth so
+/// A body of `height` (a folk's, a troll's) that stood at `fell`, `share` of the way through
+/// falling onto its back: turned about its feet, away from where it faced, and raised by half its body's depth so
 /// its back rests on the floor and not in it.
 pub fn laid_back(height: f32, fell: &Transform, share: f32) -> Transform {
     let s = share * share * (3.0 - 2.0 * share);
@@ -468,7 +470,7 @@ pub fn laid_back(height: f32, fell: &Transform, share: f32) -> Transform {
     Transform { translation: fell.translation + lift, rotation: fell.rotation * fall, ..*fell }
 }
 
-/// How deep a lying skeleton's back is below its centre line, as a share of its height. Our own.
+/// How deep a lying body's back is below its centre line, as a share of its height. Our own.
 const BACK_DEPTH: f32 = 0.07;
 
 #[cfg(test)]
