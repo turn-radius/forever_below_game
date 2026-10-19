@@ -16,7 +16,9 @@
 //!   target, whose speed becomes 0 (SRD 5.1 p. 370, "Constrict"; p. 358, "Grappled"); the
 //!   slowing, and breaking free by a blow, are our own placeholder.
 //! - The hit points show as the life orb at the bottom left of the view ([`super::orbs`]).
-//! - At 0 the run ends ([`Fallen`]): the delver stops, the view fades to near black with "You
+//! - At 0 they have a last gasp ([`Dying`], [`LAST_GASP`] seconds) to drink a healing draught;
+//!   healed above 0 they stand on. Otherwise the run ends ([`Fallen`]): the delver stops, can no
+//!   longer swing, shoot or guard, the view fades to near black with "You
 //!   fall in the abyss", and after [`FALL_TIME`] seconds the game goes back to the title, where
 //!   New delve begins again. Leaving the delve clears everything it spawned (each is scoped
 //!   to it, [`crate::play::DelveSystems`]) and what it kept ([`end_the_delve`]). The SRD's death saving throws (p. 97) are left out.
@@ -64,6 +66,9 @@ pub const FLASH_FLOOR: f32 = 0.08;
 pub const FLASH_CAP: f32 = 0.6;
 /// How long "You fall in the abyss" shows before the title, seconds. Our own.
 pub const FALL_TIME: f32 = 3.5;
+/// How long a delver at 0 hit points has to drink a healing draught before they fall, seconds.
+/// Our own, to give the player room to react.
+pub const LAST_GASP: f32 = 0.5;
 /// How fast a held delver moves, as a share of their pace. Our own placeholder.
 pub const HELD_PACE: f32 = 0.25;
 
@@ -115,6 +120,10 @@ impl Pain {
         }
     }
 }
+
+/// The delver is at 0 hit points but has not fallen yet: seconds left to heal ([`LAST_GASP`]).
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct Dying(pub f32);
 
 /// The run has ended: seconds left before the title.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -352,13 +361,15 @@ fn break_free(
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct FallOverlay;
 
-/// At 0 hit points, or exhaustion level 6, the delver stops and the view fades out to "You fall in the abyss"; then
-/// back to the title.
+/// At exhaustion level 6, or [`LAST_GASP`] seconds at 0 hit points, the delver stops and the
+/// view fades out to "You fall in the abyss"; then back to the title. A delver healed above 0
+/// within the gasp stands on.
 #[allow(clippy::too_many_arguments)]
 fn fall(
     mut commands: Commands,
     time: Res<Time>,
     fallen: Option<ResMut<Fallen>>,
+    dying: Option<ResMut<Dying>>,
     fonts: Option<Res<UiFonts>>,
     players: Query<(Entity, &Health, &Exhaustion), With<Player>>,
     view_models: Query<Entity, With<ViewModelCamera>>,
@@ -368,9 +379,28 @@ fn fall(
     next: Option<ResMut<NextState<AppState>>>,
 ) {
     let Some(mut fallen) = fallen else {
-        let Some((player, ..)) = players.iter().find(|(_, health, exhaustion)| health.is_down() || exhaustion.0.is_dead()) else { return };
+        let down = players.iter().find(|(_, health, _)| health.is_down()).map(|(player, ..)| player);
+        let spent = players.iter().find(|(.., exhaustion)| exhaustion.0.is_dead()).map(|(player, ..)| player);
+        // At 0 hit points the gasp runs down; a draught that heals them in time ends it.
+        let gasped = match (down, dying) {
+            (None, None) => None,
+            (None, Some(_)) => {
+                commands.remove_resource::<Dying>();
+                None
+            }
+            (Some(_), None) => {
+                commands.insert_resource(Dying(LAST_GASP));
+                None
+            }
+            (Some(player), Some(mut dying)) => {
+                dying.0 -= time.delta_secs();
+                (dying.0 <= 0.0).then_some(player)
+            }
+        };
+        let Some(player) = spent.or(gasped) else { return };
+        commands.remove_resource::<Dying>();
         commands.insert_resource(Fallen(FALL_TIME));
-        commands.entity(player).insert(Slowed(0.0)).remove::<Constricted>();
+        commands.entity(player).insert(Slowed(0.0)).remove::<(Constricted, super::swing::Swing, super::guard::Guard)>();
         if let Some(screen) = screen.as_deref_mut() {
             screen.0 = None;
         }
@@ -487,6 +517,7 @@ pub fn end_the_delve(mut commands: Commands, mut cursor: Option<Single<&mut Curs
     commands.insert_resource(Aimed::default());
     commands.insert_resource(Pain::default());
     commands.remove_resource::<Fallen>();
+    commands.remove_resource::<Dying>();
     if let Some(cursor) = cursor.as_deref_mut() {
         crate::player::set_grab(cursor, false);
     }
@@ -686,7 +717,13 @@ mod tests {
         bite(&mut app, snake, Species::Rat, 25);
         assert!(app.world().get::<Health>(player).unwrap().is_down());
         app.update();
+        assert!(app.world().get_resource::<Fallen>().is_none(), "a last gasp first");
+        assert!(app.world().get_resource::<Dying>().is_some());
+        for _ in 0..((LAST_GASP * 60.0) as usize + 2) {
+            app.update();
+        }
         assert!(app.world().get_resource::<Fallen>().is_some());
+        assert!(app.world().get_resource::<Dying>().is_none());
         assert_eq!(app.world().get::<Slowed>(player), Some(&Slowed(0.0)), "the delver stops");
         for _ in 0..((FALL_TIME * 60.0) as usize + 5) {
             app.update();
@@ -696,6 +733,46 @@ mod tests {
         assert!(app.world().get_entity(player).is_err(), "the delver is gone");
         assert!(app.world().get_entity(snake).is_err(), "the creatures are gone");
         assert!(app.world().get_resource::<Fallen>().is_none());
+    }
+
+    #[test]
+    fn the_last_gasp_lasts_half_a_second() {
+        let (mut app, _, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::Rat, 25);
+        for _ in 0..((LAST_GASP * 60.0) as usize - 2) {
+            app.update();
+        }
+        assert!(app.world().get_resource::<Fallen>().is_none(), "still gasping");
+        assert_eq!(app.world_mut().query::<&FallOverlay>().iter(app.world()).count(), 0, "no overlay yet");
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(app.world().get_resource::<Fallen>().is_some());
+        assert_eq!(app.world_mut().query::<&FallOverlay>().iter(app.world()).count(), 1);
+    }
+
+    #[test]
+    fn a_draught_drunk_in_the_last_gasp_keeps_the_delver_standing() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::Rat, 25);
+        for _ in 0..10 {
+            app.update();
+        }
+        let mut dice = procgen_rng::Mulberry32::new(1);
+        assert!(crate::eat::drink_healing(&mut app.world_mut().get_mut::<Health>(player).unwrap(), &mut dice) > 0);
+        for _ in 0..60 {
+            app.update();
+        }
+        assert!(app.world().get_resource::<Fallen>().is_none(), "healed in time");
+        assert!(app.world().get_resource::<Dying>().is_none(), "the gasp is over");
+        assert_eq!(app.world().get::<Slowed>(player), None, "they still move");
+        // Down again, the gasp starts afresh.
+        bite(&mut app, snake, Species::Rat, 25);
+        app.update();
+        let left = app.world().get_resource::<Dying>().unwrap().0;
+        assert!(left > LAST_GASP - 0.05, "{left}");
     }
 
     #[test]
@@ -734,7 +811,7 @@ mod tests {
         let card = app.world_mut().spawn((Node::default(), DespawnOnExit(AppState::Delving))).id();
         app.update();
         bite(&mut app, snake, Species::Rat, 25);
-        for _ in 0..((FALL_TIME * 60.0) as usize + 5) {
+        for _ in 0..(((LAST_GASP + FALL_TIME) * 60.0) as usize + 5) {
             app.update();
         }
         assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);

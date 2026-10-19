@@ -58,7 +58,7 @@ use crate::keymap::{Action, ActionInput, Keymap};
 use crate::level::{PreparedStone, geometry::LevelMesh, stone_chunks};
 use crate::staged::{Staged, Staging};
 use crate::launch::AppState;
-use crate::combat::vitals::Fallen;
+use crate::combat::vitals::{Dying, Fallen};
 use crate::inventory::OpenContainer;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Player, PlayerCamera, ScreenOpen, level_has_focus, show_screen};
 use crate::player::Locomotion;
@@ -306,13 +306,15 @@ fn prefetch_below(
     commands.insert_resource(Below(Fitting::start(key, move || Prepared::make(key.0, key.1, odds))));
 }
 
-/// F at a stair uses it, unless an item or container is under the crosshair.
+/// F at a stair uses it, unless an item or container is under the crosshair. A delver at 0 hit
+/// points takes no stair, even in their last gasp ([`Dying`]): it is for a draught, not an escape.
 #[allow(clippy::too_many_arguments)]
 fn take_stair(
     input: ActionInput,
     level: Res<CurrentLevel>,
     journey: Option<Res<Journey>>,
     fallen: Option<Res<Fallen>>,
+    dying: Option<Res<Dying>>,
     aimed: Option<Res<crate::carry::Aimed>>,
     players: Query<&Transform, With<Player>>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -320,7 +322,7 @@ fn take_stair(
 ) {
     // An item or container under the crosshair takes the press instead.
     let aiming = aimed.is_some_and(|a| a.0.is_some());
-    if journey.is_some() || fallen.is_some() || aiming || !input.just_pressed(Action::Primary) {
+    if journey.is_some() || fallen.is_some() || dying.is_some() || aiming || !input.just_pressed(Action::Primary) {
         return;
     }
     let (Some(feet), Some(eye)) = (players.iter().next(), cameras.iter().next()) else { return };
@@ -337,6 +339,7 @@ fn take_stair(
 pub(crate) fn prompt_stair(
     level: Res<CurrentLevel>,
     fallen: Option<Res<Fallen>>,
+    dying: Option<Res<Dying>>,
     aimed: Option<Res<crate::carry::Aimed>>,
     keymap: Option<Res<Keymap>>,
     players: Query<&Transform, With<Player>>,
@@ -346,7 +349,7 @@ pub(crate) fn prompt_stair(
 ) {
     let aiming = aimed.is_some_and(|a| a.0.is_some());
     let line = (|| {
-        if fallen.is_some() || aiming {
+        if fallen.is_some() || dying.is_some() || aiming {
             return None;
         }
         let (feet, eye) = (players.iter().next()?, cameras.iter().next()?);
@@ -371,12 +374,13 @@ fn begin_journey(
     level: Res<CurrentLevel>,
     journey: Option<Res<Journey>>,
     fallen: Option<Res<Fallen>>,
+    dying: Option<Res<Dying>>,
     mut open: ResMut<ScreenOpen>,
     mut container: Option<ResMut<OpenContainer>>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
 ) {
     let Some(UseStair(by)) = used.read().last().copied() else { return };
-    if journey.is_some() || fallen.is_some() || level.0.stair(by).is_none() {
+    if journey.is_some() || fallen.is_some() || dying.is_some() || level.0.stair(by).is_none() {
         return;
     }
     // No screen stays open over a level that is about to go: its grids show items the swap
