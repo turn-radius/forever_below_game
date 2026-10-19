@@ -44,12 +44,16 @@ const KEY_LEVEL: f32 = 0.6;
 /// What the figure was dressed for ([`figure_key`]).
 type Dressed = String;
 
+/// What the draft wants dressed next: its key, the body, the kit and the dirt.
+type Wanted = (Dressed, fb_body::BodySpec, Vec<(Slot, fb_items::Item)>, f32);
+
 /// The figure's stage: what it was dressed for, the figure and camera, the job dressing the
-/// next one, and how far it is turned.
+/// next one and what is wanted after it, and how far it is turned.
 #[derive(Resource, Default)]
 pub struct PreviewStage {
     dressed: Option<Dressed>,
     fitting: Option<Fitting<Dressed, Arc<Figure>>>,
+    wanted: Option<Wanted>,
     figure: Option<Entity>,
     camera: Option<Entity>,
     turn: f32,
@@ -91,7 +95,9 @@ impl Plugin for PreviewPlugin {
 }
 
 /// Starts dressing the figure when the draft's body or kit changes, shows it when it is ready,
-/// and takes it away when the creator closes. The camera comes with the creator, so the doll's
+/// and takes it away when the creator closes. While a slider is dragged the draft changes
+/// every frame: the fit in flight is finished and shown, then the latest body is fitted, so
+/// the doll follows the drag instead of waiting for it to stop. The camera comes with the creator, so the doll's
 /// image is cleared of whatever the inventory last drew there before the first figure shows.
 fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, assets: Res<DollAssets>, mut stage: ResMut<PreviewStage>, mut spawner: ItemSpawner) {
     let Some(draft) = draft else {
@@ -108,22 +114,24 @@ fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, assets: Res<Do
     }
     if draft.is_changed() {
         let spec = draft.character().spec();
-        let dirt = draft.dirt;
         let kit = preview_kit(&draft);
-        let key = figure_key(&spec, &kit, dirt);
-        if stage.dressed.as_ref() == Some(&key) {
-            stage.fitting = None;
-        } else if stage.fitting.as_ref().is_none_or(|f| f.key() != &key) {
-            stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &kit, dirt))));
+        let key = figure_key(&spec, &kit, draft.dirt);
+        stage.wanted = Some((key, spec, kit, draft.dirt));
+    }
+    if let Some(mut fitting) = stage.fitting.take() {
+        match fitting.poll() {
+            Some(figure) => {
+                stage.dressed = Some(fitting.key().clone());
+                show_figure(&mut commands, &mut spawner, &mut stage, &figure);
+            }
+            None => stage.fitting = Some(fitting),
         }
     }
-    let Some(mut fitting) = stage.fitting.take() else { return };
-    match fitting.poll() {
-        Some(figure) => {
-            stage.dressed = Some(fitting.key().clone());
-            show_figure(&mut commands, &mut spawner, &mut stage, &figure);
-        }
-        None => stage.fitting = Some(fitting),
+    if stage.fitting.is_none()
+        && let Some((key, spec, kit, dirt)) = stage.wanted.take()
+        && stage.dressed.as_ref() != Some(&key)
+    {
+        stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &kit, dirt))));
     }
 }
 
