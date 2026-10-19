@@ -40,6 +40,9 @@ pub struct BodySpec {
     pub hair: HairStyle,
     pub hair_colour: Rgb,
     pub beard: Beard,
+    /// How far the beard hangs, 0 none to 1 down to mid-chest (further on a dwarf): what the
+    /// creator's Beard slider sets. A rolled beard takes its style's length.
+    pub beard_length: f32,
 }
 
 /// The fields of a [`BodySpec`] that shape the body rather than the face and hair: what the
@@ -53,6 +56,9 @@ pub struct BodyShape {
     pub figure: f32,
     pub bust: f32,
     pub bust_round: f32,
+    /// The beard's length ([`BodySpec::beard_length`]); delvers saved without one have none.
+    #[serde(default)]
+    pub beard: f32,
 }
 
 /// One of the creator's body sliders: its key (as [`BodyShape::parse`] takes it), its label and
@@ -66,7 +72,7 @@ pub struct ShapeSlider {
 }
 
 impl BodyShape {
-    pub const SLIDERS: [ShapeSlider; 7] = [
+    pub const SLIDERS: [ShapeSlider; 8] = [
         ShapeSlider { key: "height", label: "Height", low: STATURE.0, high: STATURE.1 },
         ShapeSlider { key: "build", label: "Build", low: 0.0, high: 1.0 },
         ShapeSlider { key: "slender", label: "Slenderness", low: 0.0, high: 1.0 },
@@ -74,6 +80,7 @@ impl BodyShape {
         ShapeSlider { key: "figure", label: "Shoulders to hips", low: 0.0, high: 1.0 },
         ShapeSlider { key: "bust", label: "Bust", low: 0.0, high: 1.0 },
         ShapeSlider { key: "round", label: "Bust roundness", low: 0.0, high: 1.0 },
+        ShapeSlider { key: "beard", label: "Beard", low: 0.0, high: 1.0 },
     ];
 
     fn field(&mut self, key: &str) -> Option<&mut f32> {
@@ -85,6 +92,7 @@ impl BodyShape {
             "figure" => &mut self.figure,
             "bust" => &mut self.bust,
             "round" => &mut self.bust_round,
+            "beard" => &mut self.beard,
             _ => return None,
         })
     }
@@ -121,13 +129,24 @@ impl BodyShape {
 impl BodySpec {
     /// The fields that shape the body.
     pub fn shape(&self) -> BodyShape {
-        BodyShape { stature: self.stature, frame: self.frame, slender: self.slender, muscle: self.muscle, figure: self.figure, bust: self.bust, bust_round: self.bust_round }
+        BodyShape {
+            stature: self.stature,
+            frame: self.frame,
+            slender: self.slender,
+            muscle: self.muscle,
+            figure: self.figure,
+            bust: self.bust,
+            bust_round: self.bust_round,
+            beard: self.beard_length,
+        }
     }
 
-    /// The same face and hair on a body of `shape`.
+    /// The same face and hair on a body of `shape`. The beard is cut to the shape's length: none
+    /// at 0, then stubble, short, full, and long (or forked, if it was) as it grows.
     pub fn with_shape(self, shape: BodyShape) -> BodySpec {
-        let BodyShape { stature, frame, slender, muscle, figure, bust, bust_round } = shape;
-        BodySpec { stature, frame, slender, muscle, figure, bust, bust_round, ..self }
+        let BodyShape { stature, frame, slender, muscle, figure, bust, bust_round, beard } = shape;
+        let style = beard_cut(self.beard, beard);
+        BodySpec { stature, frame, slender, muscle, figure, bust, bust_round, beard: style, beard_length: beard, ..self }
     }
 
     /// A body of `folk` rolled from `seed`: the same seed always gives the same body.
@@ -158,7 +177,8 @@ impl BodySpec {
         let slender = rng.range_f32(0.15, 0.85);
         let bust = (1.7 * (figure - 0.42) + rng.range_f32(-0.2, 0.2)).clamp(0.0, 1.0);
         let bust_round = rng.next_f64() as f32;
-        BodySpec { folk, seed, figure, frame, stature, muscle, slender, bust, bust_round, jaw, brow, nose, skin, eyes, hair, hair_colour, beard }
+        let beard_length = beard_reach(beard);
+        BodySpec { folk, seed, figure, frame, stature, muscle, slender, bust, bust_round, jaw, brow, nose, skin, eyes, hair, hair_colour, beard, beard_length }
     }
 
     /// The folk's midpoint body: average build, typical height, the first skin and hair.
@@ -182,7 +202,33 @@ impl BodySpec {
             hair: race.hairs[0],
             hair_colour: hair_colours(folk)[0],
             beard: Beard::None,
+            beard_length: 0.0,
         }
+    }
+}
+
+/// The length a rolled beard of `style` hangs to ([`BodySpec::beard_length`]).
+pub fn beard_reach(style: Beard) -> f32 {
+    match style {
+        Beard::None => 0.0,
+        Beard::Stubble => 0.05,
+        Beard::Short => 0.2,
+        Beard::Full => 0.45,
+        Beard::Long => 0.9,
+        Beard::Forked => 0.85,
+    }
+}
+
+/// The style a beard of `length` is cut to, from the style it had: a long beard stays forked if
+/// it was forked.
+pub fn beard_cut(was: Beard, length: f32) -> Beard {
+    match length {
+        l if l <= 0.0 => Beard::None,
+        l if l < 0.1 => Beard::Stubble,
+        l if l < 0.3 => Beard::Short,
+        l if l < 0.6 => Beard::Full,
+        _ if was == Beard::Forked => Beard::Forked,
+        _ => Beard::Long,
     }
 }
 
@@ -218,6 +264,13 @@ mod tests {
         assert_eq!(shaped.shape(), shape);
         assert_eq!((shaped.jaw, shaped.hair, shaped.skin), (spec.jaw, spec.hair, spec.skin));
         assert_eq!(spec.clone().with_shape(spec.shape()), spec);
+        for beard in Beard::ALL {
+            let spec = BodySpec { beard, beard_length: beard_reach(beard), ..BodySpec::typical(Folk::Human) };
+            assert_eq!(spec.clone().with_shape(spec.shape()).beard, beard, "a rolled beard keeps its cut");
+        }
+        let shaved = spec.clone().with_shape(spec.shape().parse("beard=0").unwrap());
+        assert_eq!(shaved.beard, Beard::None);
+        assert_eq!(spec.clone().with_shape(spec.shape().parse("beard=1").unwrap()).beard, Beard::Long);
         assert!(spec.shape().parse("wings=1").is_err() && spec.shape().parse("muscle").is_err());
         for slider in BodyShape::SLIDERS {
             assert!(spec.shape().get(slider.key).is_some(), "{}", slider.key);

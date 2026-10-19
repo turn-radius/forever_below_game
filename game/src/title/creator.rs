@@ -115,6 +115,12 @@ impl Draft {
         shape
     }
 
+    /// The body sliders the chosen sex shows: a woman has no beard to cut.
+    pub fn sliders(&self) -> impl Iterator<Item = &'static ShapeSlider> {
+        let sex = self.sex;
+        BodyShape::SLIDERS.iter().filter(move |s| !(sex == Sex::Female && s.key == "beard"))
+    }
+
     /// Makes them `sex`: the hips and bust take the sex's range, other sliders stay.
     pub fn set_sex(&mut self, sex: Sex) {
         if self.sex != sex {
@@ -409,6 +415,7 @@ fn shape_ends(slider: &ShapeSlider) -> (&'static str, &'static str) {
         "muscle" => ("soft", "strong"),
         "figure" => ("shoulders", "hips"),
         "bust" => ("flat", "full"),
+        "beard" => ("none", "long"),
         _ => ("high", "round"),
     }
 }
@@ -416,7 +423,7 @@ fn shape_ends(slider: &ShapeSlider) -> (&'static str, &'static str) {
 /// The body sliders, a line each: label, the low end's word, the bar, the high end's, the value.
 fn shape_sliders(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft) {
     parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|table| {
-        for slider in &BodyShape::SLIDERS {
+        for slider in draft.sliders() {
             let value = draft.shape.get(slider.key).unwrap_or(0.0);
             let fraction = ((value - slider.low) / (slider.high - slider.low)).clamp(0.0, 1.0);
             let (low, high) = shape_ends(slider);
@@ -666,14 +673,23 @@ mod tests {
             draft.roll_look();
             assert_eq!(draft.character().spec().bust, 0.0, "lizardfolk have none");
         }
-        // A dwarf woman may be bearded.
+        // No woman is bearded, a dwarf neither, and she has no Beard slider.
         let mut dwarf = Draft::roll(3);
         dwarf.set_folk(Folk::Dwarf);
         dwarf.set_sex(Sex::Female);
-        assert!((1..40).any(|s| {
+        assert!((1..40).all(|s| {
             dwarf.body_seed = s;
-            dwarf.character().spec().beard != fb_body::Beard::None
+            dwarf.character().spec().beard == fb_body::Beard::None
         }));
+        assert!(dwarf.sliders().all(|s| s.key != "beard"));
+        // A man's beard follows its slider: none at 0, to mid-chest at 1.
+        dwarf.set_sex(Sex::Male);
+        assert!(dwarf.sliders().any(|s| s.key == "beard"));
+        dwarf.set_shape("beard", 0.0);
+        assert_eq!(dwarf.character().spec().beard, fb_body::Beard::None);
+        dwarf.set_shape("beard", 1.0);
+        assert_eq!(dwarf.character().spec().beard_length, 1.0);
+        assert_ne!(dwarf.character().spec().beard, fb_body::Beard::None);
     }
 
     #[test]

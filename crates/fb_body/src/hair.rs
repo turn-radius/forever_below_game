@@ -502,15 +502,11 @@ impl Body {
             return out;
         }
         let r = face.r;
+        // At full length the tip hangs from the chin to mid-chest, a dwarf's further; the spec's
+        // length is a share of that (the plate's lengths were fixed per style).
         let dwarf = if self.folk() == Folk::Dwarf { 1.45 } else { 1.0 };
-        let length = match style {
-            Beard::Stubble | Beard::None => 0.0,
-            Beard::Short => 0.3,
-            Beard::Full => 0.75,
-            Beard::Long => 1.7,
-            Beard::Forked => 1.5,
-        } * r
-            * dwarf;
+        let reach = (self.chin_y - (self.chest_y + 0.1 * self.trunk_length)).max(0.5 * r) * dwarf;
+        let length = if style == Beard::Stubble { 0.0 } else { self.spec.beard_length * reach };
         let thick = match style {
             Beard::Stubble => 0.02,
             Beard::Short => 0.07,

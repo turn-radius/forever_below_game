@@ -183,9 +183,9 @@ impl Character {
             Some(shape) => rolled.with_shape(shape),
             None => rolled,
         };
-        // Women are beardless, but for dwarves.
-        if self.sex == Some(Sex::Female) && self.folk != Folk::Dwarf {
-            spec.beard = fb_body::Beard::None;
+        // Women are beardless.
+        if self.sex == Some(Sex::Female) {
+            (spec.beard, spec.beard_length) = (fb_body::Beard::None, 0.0);
         }
         spec
     }
