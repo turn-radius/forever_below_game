@@ -79,22 +79,45 @@ impl FormRing {
 pub struct Bulge {
     pub y: f32,
     pub spread: f32,
+    /// How far it swells out at its crest; below 0 it draws the form in (the small of the back).
     pub depth: f32,
     pub sharpness: i32,
     pub toward: f32,
+    /// Two lobes this far (radians) either side of `toward` instead of one: breasts, buttocks.
+    pub pair: f32,
+    /// How much further it reaches below its crest than above: a fuller underside, 0 even.
+    pub fall: f32,
+    /// How far a pair dips between its lobes: 1 to each lobe's own falloff (skin), 0 bridged
+    /// flat at the crest's depth (cloth drawn across the cleft).
+    pub cleft: f32,
 }
 
 impl Bulge {
-    pub const NONE: Bulge = Bulge { y: 0.0, spread: 1.0, depth: 0.0, sharpness: 2, toward: FRONT };
+    pub const NONE: Bulge = Bulge { y: 0.0, spread: 1.0, depth: 0.0, sharpness: 2, toward: FRONT, pair: 0.0, fall: 0.0, cleft: 0.0 };
 
     /// How far the form swells at `angle` (lathe convention) and height `y`.
     pub fn at(&self, angle: f32, y: f32) -> f32 {
-        if self.depth <= 0.0 {
+        if self.depth == 0.0 {
             return 0.0;
         }
-        let facing = (angle - self.toward).cos().max(0.0);
-        let d = (y - self.y) / self.spread.max(1e-3);
-        self.depth * (-d * d).exp() * facing.powi(self.sharpness)
+        let lobe = |toward: f32| (angle - toward).cos().max(0.0).powi(self.sharpness);
+        let facing = if self.pair > 0.0 {
+            let lobes = lobe(self.toward - self.pair).max(lobe(self.toward + self.pair));
+            // Between the lobes, the cleft blends from the lobes' dip to their crest.
+            let off = (angle - self.toward).sin_cos();
+            let between = off.1 > 0.0 && off.0.abs() < self.pair.sin();
+            if between { lobes + (1.0 - lobes) * (1.0 - self.cleft) } else { lobes }
+        } else {
+            lobe(self.toward)
+        };
+        let spread = if y < self.y { self.spread * (1.0 + self.fall) } else { self.spread };
+        let d = (y - self.y) / spread.max(1e-3);
+        self.depth * (-d * d).exp() * facing
+    }
+
+    /// The same bulge with its cleft bridged, as cloth drapes over it.
+    pub fn bridged(self) -> Bulge {
+        Bulge { cleft: 0.0, ..self }
     }
 
     /// The same swelling `dy` higher.

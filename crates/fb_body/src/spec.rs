@@ -3,21 +3,34 @@
 
 use armory::Rgb;
 use procgen_rng::Mulberry32;
+use serde::{Deserialize, Serialize};
 
 use crate::folk::{Beard, Folk, GREY_HAIR, HairStyle, eye_colours, hair_colours};
+
+/// The heights the creator offers, as shares of the folk's typical height.
+pub const STATURE: (f32, f32) = (0.9, 1.1);
 
 /// One character's body: its folk, build, face and hair.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BodySpec {
     pub folk: Folk,
     pub seed: u32,
-    /// 0 broad shoulders and narrow hips, 1 narrow shoulders, wide hips and a bust (the
-    /// plate's "Shoulders · hips" slider, `C.form`).
+    /// 0 broad shoulders and narrow hips, 1 narrow shoulders and wide hips (the plate's
+    /// "Shoulders · hips" slider, `C.form`).
     pub figure: f32,
-    /// 0 lean, 1 heavy (the plate's "Frame").
+    /// 0 lean, 1 heavy (the plate's "Frame"): girth, belly and softness.
     pub frame: f32,
-    /// Height as a share of the folk's typical height, 0.95..=1.05 (`C.hs`).
+    /// Height as a share of the folk's typical height (`C.hs`): rolled within 0.95..=1.05,
+    /// and [`STATURE`] lets the creator go further.
     pub stature: f32,
+    /// 0 soft, 1 muscular: shoulders, chest, deltoids, arms, thighs and calves (our own).
+    pub muscle: f32,
+    /// 0 stocky, 1 slender: the girth of trunk and limbs at the same height (our own).
+    pub slender: f32,
+    /// 0 a flat chest, 1 a full bust (the plate swelled one only past figure 0.55).
+    pub bust: f32,
+    /// 0 high and narrow, 1 round, full and lower.
+    pub bust_round: f32,
     /// 0..=1 nudges to the jaw, the brow's tilt (and the mouth's set), the nose's size.
     pub jaw: f32,
     pub brow: f32,
@@ -29,7 +42,94 @@ pub struct BodySpec {
     pub beard: Beard,
 }
 
+/// The fields of a [`BodySpec`] that shape the body rather than the face and hair: what the
+/// creator's sliders set ([`BodyShape::SLIDERS`]), saved with a delver.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BodyShape {
+    pub stature: f32,
+    pub frame: f32,
+    pub slender: f32,
+    pub muscle: f32,
+    pub figure: f32,
+    pub bust: f32,
+    pub bust_round: f32,
+}
+
+/// One of the creator's body sliders: its key (as [`BodyShape::parse`] takes it), its label and
+/// its range.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeSlider {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub low: f32,
+    pub high: f32,
+}
+
+impl BodyShape {
+    pub const SLIDERS: [ShapeSlider; 7] = [
+        ShapeSlider { key: "height", label: "Height", low: STATURE.0, high: STATURE.1 },
+        ShapeSlider { key: "build", label: "Build", low: 0.0, high: 1.0 },
+        ShapeSlider { key: "slender", label: "Slenderness", low: 0.0, high: 1.0 },
+        ShapeSlider { key: "muscle", label: "Muscle", low: 0.0, high: 1.0 },
+        ShapeSlider { key: "figure", label: "Shoulders to hips", low: 0.0, high: 1.0 },
+        ShapeSlider { key: "bust", label: "Bust", low: 0.0, high: 1.0 },
+        ShapeSlider { key: "round", label: "Bust roundness", low: 0.0, high: 1.0 },
+    ];
+
+    fn field(&mut self, key: &str) -> Option<&mut f32> {
+        Some(match key {
+            "height" => &mut self.stature,
+            "build" => &mut self.frame,
+            "slender" => &mut self.slender,
+            "muscle" => &mut self.muscle,
+            "figure" => &mut self.figure,
+            "bust" => &mut self.bust,
+            "round" => &mut self.bust_round,
+            _ => return None,
+        })
+    }
+
+    /// The value of the slider `key`.
+    pub fn get(&self, key: &str) -> Option<f32> {
+        let mut shape = *self;
+        shape.field(key).map(|v| *v)
+    }
+
+    /// Sets the slider `key` to `value`, held within its range.
+    pub fn set(&mut self, key: &str, value: f32) {
+        if let (Some(slider), Some(field)) = (Self::SLIDERS.iter().find(|s| s.key == key), self.field(key)) {
+            *field = value.clamp(slider.low, slider.high);
+        }
+    }
+
+    /// This shape with `key=value` pairs, comma separated, set on it ("muscle=1,bust=0.4").
+    pub fn parse(mut self, text: &str) -> Result<BodyShape, String> {
+        for pair in text.split(',').filter(|p| !p.trim().is_empty()) {
+            let (key, value) = pair.split_once('=').ok_or(format!("{pair:?} is not key=value"))?;
+            let value: f32 = value.trim().parse().map_err(|_| format!("{value:?} is not a number"))?;
+            let key = key.trim();
+            if self.get(key).is_none() {
+                let keys: Vec<_> = Self::SLIDERS.iter().map(|s| s.key).collect();
+                return Err(format!("unknown body field {key:?}; one of {}", keys.join(", ")));
+            }
+            self.set(key, value);
+        }
+        Ok(self)
+    }
+}
+
 impl BodySpec {
+    /// The fields that shape the body.
+    pub fn shape(&self) -> BodyShape {
+        BodyShape { stature: self.stature, frame: self.frame, slender: self.slender, muscle: self.muscle, figure: self.figure, bust: self.bust, bust_round: self.bust_round }
+    }
+
+    /// The same face and hair on a body of `shape`.
+    pub fn with_shape(self, shape: BodyShape) -> BodySpec {
+        let BodyShape { stature, frame, slender, muscle, figure, bust, bust_round } = shape;
+        BodySpec { stature, frame, slender, muscle, figure, bust, bust_round, ..self }
+    }
+
     /// A body of `folk` rolled from `seed`: the same seed always gives the same body.
     pub fn roll(folk: Folk, seed: u32) -> BodySpec {
         let race = folk.race();
@@ -52,7 +152,13 @@ impl BodySpec {
         } else {
             Beard::None
         };
-        BodySpec { folk, seed, figure, frame, stature, jaw, brow, nose, skin, eyes, hair, hair_colour, beard }
+        // Our own fields, rolled after the plate's so those stay as they were. A bust is
+        // likelier with a wider-hipped figure, as the plate's was.
+        let muscle = rng.range_f32(0.1, 0.9);
+        let slender = rng.range_f32(0.15, 0.85);
+        let bust = (1.7 * (figure - 0.42) + rng.range_f32(-0.2, 0.2)).clamp(0.0, 1.0);
+        let bust_round = rng.next_f64() as f32;
+        BodySpec { folk, seed, figure, frame, stature, muscle, slender, bust, bust_round, jaw, brow, nose, skin, eyes, hair, hair_colour, beard }
     }
 
     /// The folk's midpoint body: average build, typical height, the first skin and hair.
@@ -64,6 +170,10 @@ impl BodySpec {
             figure: 0.3,
             frame: 0.5,
             stature: 1.0,
+            muscle: 0.5,
+            slender: 0.5,
+            bust: 0.0,
+            bust_round: 0.5,
             jaw: 0.5,
             brow: 0.5,
             nose: 0.5,
@@ -88,11 +198,29 @@ mod tests {
                 assert_eq!(a, BodySpec::roll(folk, seed));
                 assert!(folk.race().hairs.contains(&a.hair));
                 assert!((0.95..=1.05).contains(&a.stature));
+                for v in [a.muscle, a.slender, a.bust, a.bust_round] {
+                    assert!((0.0..=1.0).contains(&v));
+                }
                 if matches!(folk, Folk::Goblin | Folk::Lizardfolk) {
                     assert_eq!(a.beard, Beard::None);
                 }
             }
         }
         assert!((1..40).all(|s| BodySpec::roll(Folk::Dwarf, s).beard != Beard::None), "dwarves are always bearded");
+    }
+
+    #[test]
+    fn a_shape_sets_only_the_body() {
+        let spec = BodySpec::roll(Folk::Gnome, 9);
+        let shape = spec.shape().parse("muscle=1, bust=0.25,height=2").unwrap();
+        assert_eq!((shape.muscle, shape.bust, shape.stature), (1.0, 0.25, STATURE.1), "held within range");
+        let shaped = spec.clone().with_shape(shape);
+        assert_eq!(shaped.shape(), shape);
+        assert_eq!((shaped.jaw, shaped.hair, shaped.skin), (spec.jaw, spec.hair, spec.skin));
+        assert_eq!(spec.clone().with_shape(spec.shape()), spec);
+        assert!(spec.shape().parse("wings=1").is_err() && spec.shape().parse("muscle").is_err());
+        for slider in BodyShape::SLIDERS {
+            assert!(spec.shape().get(slider.key).is_some(), "{}", slider.key);
+        }
     }
 }

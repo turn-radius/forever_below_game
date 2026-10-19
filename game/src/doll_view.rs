@@ -3,7 +3,8 @@
 //! bodies and fitted gear can be judged as items are.
 //!
 //! Keys: Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit
-//! (`data/outfits.json`), Space pauses the turn, W has the doll walk in place. The panel at the
+//! (`data/outfits.json`), B shows the body bare (`--bare`; `--body muscle=1,bust=0.5` sets body
+//! fields over the rolled ones), Space pauses the turn (`--turn <radians>` starts it still at that turn), W has the doll walk in place. The panel at the
 //! top right sets the walk ([`DollMotion`]): a toggle for walking or standing, and a slider for
 //! its speed as a multiple of the folk's own natural pace, so the gait, the skinned gear and the
 //! idle can be judged live. Command line:
@@ -65,18 +66,22 @@ impl Plugin for DollViewPlugin {
 }
 
 /// What the doll view shows. Changing it redresses the figure.
-#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct DollChoice {
     pub folk: Folk,
     pub seed: u32,
     /// Index into [`outfits`].
     pub outfit: usize,
+    /// Show the body bare, without the outfit (`--bare`, or B), to judge its form.
+    pub bare: bool,
+    /// Body fields set over the rolled body's (`--body muscle=1,bust=0.5`; [`BodyShape::parse`]).
+    pub body: Option<&'static str>,
 }
 
 impl Default for DollChoice {
     /// A human fighter from seed 1207: a class outfit, so the doll holds a weapon.
     fn default() -> Self {
-        DollChoice { folk: Folk::Human, seed: 1207, outfit: outfit_index("fighter").unwrap_or(0) }
+        DollChoice { folk: Folk::Human, seed: 1207, outfit: outfit_index("fighter").unwrap_or(0), bare: false, body: None }
     }
 }
 
@@ -100,7 +105,13 @@ impl DollChoice {
             match flag.as_str() {
                 // The walk's own, read by `DollMotion::from_args`.
                 "--doll" | "--walk" => {}
-                "--speed" => {
+                "--bare" => choice.bare = true,
+                "--body" => {
+                    let text = value()?;
+                    BodySpec::typical(Folk::Human).shape().parse(&text)?;
+                    choice.body = Some(Box::leak(text.into_boxed_str()));
+                }
+                "--speed" | "--turn" => {
                     value()?;
                 }
                 "--folk" => {
@@ -128,8 +139,17 @@ impl DollChoice {
 
     /// The figure for this choice.
     pub fn figure(&self) -> Figure {
-        let worn = self.outfit().roll(self.seed, self.folk.key()).worn;
-        Figure::dress(&BodySpec::roll(self.folk, self.seed), &worn, DIRT)
+        let worn = if self.bare { vec![] } else { self.outfit().roll(self.seed, self.folk.key()).worn };
+        Figure::dress(&self.spec(), &worn, DIRT)
+    }
+
+    /// The body: rolled from the seed, with `--body`'s fields over it.
+    pub fn spec(&self) -> BodySpec {
+        let spec = BodySpec::roll(self.folk, self.seed);
+        match self.body.and_then(|text| spec.shape().parse(text).ok()) {
+            Some(shape) => spec.with_shape(shape),
+            None => spec,
+        }
     }
 
     /// Steps `by` folk through [`Folk::ALL`], wrapping.
@@ -209,10 +229,31 @@ impl Tweak for DollMotion {
     }
 }
 
-#[derive(Resource, Default)]
-struct DollSpin {
+/// How far the doll is turned, and whether it holds still.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DollSpin {
     angle: f32,
     paused: bool,
+}
+
+impl DollSpin {
+    /// Parses `--turn <radians>` (also `--turn=<radians>`): the doll starts still at that turn,
+    /// 0 facing the camera, for captures. Without it the doll turns from 0.
+    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<DollSpin, String> {
+        let mut spin = DollSpin::default();
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            let (flag, inline) = match arg.split_once('=') {
+                Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
+                None => (arg, None),
+            };
+            if flag == "--turn" {
+                let text = inline.or_else(|| args.next()).ok_or("--turn needs a value")?;
+                spin = DollSpin { angle: text.parse().map_err(|_| format!("--turn: {text:?} is not a number"))?, paused: true };
+            }
+        }
+        Ok(spin)
+    }
 }
 
 /// The root of the doll's figure, which carries the [`Stride`] the panel sets: `natural` is its
@@ -293,6 +334,9 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<DollChoice>, mut spi
     }
     if pressed(KeyCode::ArrowUp) {
         choice.step_outfit(-1);
+    }
+    if pressed(KeyCode::KeyB) {
+        choice.bare = !choice.bare;
     }
     if pressed(KeyCode::Space) {
         spin.paused = !spin.paused;
@@ -380,10 +424,10 @@ fn show_status(choice: Res<DollChoice>, mut status: Query<&mut Text, With<Status
         return;
     }
     let line = format!(
-        "{}   seed {}   {}\nTab folk   Left/Right seed   Up/Down outfit   Space pause   W walk",
+        "{}   seed {}   {}\nTab folk   Left/Right seed   Up/Down outfit   B bare   Space pause   W walk",
         choice.folk.race().label,
         choice.seed,
-        choice.outfit().label,
+        if choice.bare { "Bare" } else { &choice.outfit().label },
     );
     for mut text in &mut status {
         text.0.clone_from(&line);
@@ -416,6 +460,13 @@ mod tests {
         assert_eq!(DollMotion::from_args(args("--doll --walk --speed 0.5")).unwrap(), DollMotion { walking: true, speed: 0.5 });
         assert_eq!(DollMotion::from_args(args("--walk --speed=9")).unwrap().speed, 1.6);
         assert!(DollMotion::from_args(args("--speed fast")).is_err());
+        assert_eq!(DollSpin::from_args(args("--doll --turn 1.5")).unwrap(), DollSpin { angle: 1.5, paused: true });
+        assert!(!DollSpin::from_args(args("--doll")).unwrap().paused);
+        assert!(DollChoice::from_args(args("--turn=0.5 --seed 7")).is_ok());
+        assert!(DollChoice::from_args(args("--bare")).unwrap().bare);
+        let shaped = DollChoice::from_args(args("--body muscle=1,bust=0.5")).unwrap();
+        assert_eq!((shaped.spec().muscle, shaped.spec().bust), (1.0, 0.5));
+        assert!(DollChoice::from_args(args("--body wings=1")).is_err());
         // The choice leaves the walk's flags alone.
         assert!(DollChoice::from_args(args("--doll --walk --speed 0.5 --seed 7")).is_ok());
     }
@@ -457,7 +508,7 @@ mod tests {
 
     #[test]
     fn a_choice_looks_the_same_every_time() {
-        let choice = DollChoice { folk: Folk::Gnome, seed: 31, outfit: outfit_index("mage").unwrap() };
+        let choice = DollChoice { folk: Folk::Gnome, seed: 31, outfit: outfit_index("mage").unwrap(), bare: false, body: None };
         assert_eq!(choice.figure().pieces, choice.figure().pieces);
     }
 }
