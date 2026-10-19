@@ -642,6 +642,9 @@ pub struct LegForm {
     pub calf: f32,
     /// Height of the knee above the sole.
     pub knee_height: f32,
+    /// How far a shaft stands off the leg over what is worn under it (trousers), at the ankle
+    /// and at the knee: added after the calf's swell, so it is not swollen with it.
+    pub ease: [f32; 2],
 }
 
 impl LegForm {
@@ -662,6 +665,7 @@ impl LegForm {
             shin_half_depth: 0.35 * s * width,
             calf: 0.22,
             knee_height: 4.6 * s,
+            ease: [0.0; 2],
         }
     }
 
@@ -770,12 +774,15 @@ impl LegForm {
     }
 
     /// A point on the leg `y` above the sole at `angle` (0 toward the toe, lathe convention),
-    /// `inflate` further out. `height` is the shaft's top, for the calf's placement; `ridge`
-    /// raises a crest down the shin (a greave).
+    /// `inflate` further out. `height` is the shaft's top, for its flare; `ridge` raises a crest
+    /// down the shin (a greave).
     pub fn shin_point(&self, angle: f32, y: f32, height: f32, ridge: f32, inflate: f32) -> V3 {
         let t = (y / height.max(0.01)).clamp(0.0, 1.0);
         let tall = height > 2.0 * self.foot_length / 2.6;
-        let calf = if tall { self.calf * (-((t - 0.55) / 0.22).powi(2)).exp() } else { 0.0 };
+        // The calf swells where the leg's own calf is, a little under three quarters of the way
+        // to the knee, whatever the shaft's height: placed by share of the shaft, a tall boot
+        // swelled below the calf and stood off the shin like a bucket.
+        let calf = self.calf * (-((y - 0.72 * self.knee_height) / (0.2 * self.knee_height)).powi(2)).exp();
         let a = (angle + PI).rem_euclid(2.0 * PI) - PI;
         // Only a tall shaft flares at its top, over the calf; a short one closes on the ankle.
         let flare = if tall { 0.06 * smoothstep(0.85, 1.0, t) } else { 0.0 };
@@ -783,7 +790,8 @@ impl LegForm {
         // The leg fills out by height, not by share of the shaft, and only above the ankle, so
         // a short shaft hugs the ankle instead of flaring like a bucket.
         let depth = self.shin_half_depth * (1.0 + 0.2 * smoothstep(0.2, 0.45, y / self.knee_height));
-        let [x, z] = section_point(angle, self.shin_half_width * k + inflate, depth * k + inflate, 2.0 / 2.2, 1.0);
+        let ease = self.ease[0] + (self.ease[1] - self.ease[0]) * smoothstep(0.1, 0.9, y / self.knee_height);
+        let [x, z] = section_point(angle, self.shin_half_width * k + ease + inflate, depth * k + ease + inflate, 2.0 / 2.2, 1.0);
         // Above the heel the back of the leg (the Achilles tendon) stands forward of the heel's
         // back, easing out again toward the calf.
         let heel_top = self.instep_height;

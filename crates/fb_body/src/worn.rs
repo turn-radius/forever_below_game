@@ -72,6 +72,9 @@ pub const LAYER_ORDER: [Slot; 10] = [Slot::Legs, Slot::Feet, Slot::Shirt, Slot::
 
 /// Clearance kept between a layer and the one under it, over the outer layer's own ease.
 const GAP: f32 = 0.04;
+/// How far above the ankle a robe's hem hangs, in multiples of the wearer's scale: 1.5 cm on
+/// a human, just clear of the top of the foot.
+const ROBE_CLEARANCE: f32 = 0.15;
 /// A forearm whose direction points further down than this (the downward share of its unit
 /// direction) hangs by the body, under a cloak. Our own threshold: about 37 degrees off the
 /// vertical, so an arm hanging relaxed counts and one bent forward to hold something does not.
@@ -956,7 +959,14 @@ impl Cover {
 fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> ItemMesh {
     let mut s = state.clone();
     let room = body.waist_y - body.ankle_y - 0.35 * body.scale;
-    s.cut.length = (s.cut.length * body.scale * 0.95).min(room);
+    s.cut.length = if s.cut.style == GarmentStyle::Robe {
+        // A robe is cut to its wearer and hangs to just above the feet (our own). Scaled as
+        // other lengths are, the longest robe rolled ended at mid-shin on a human, and none
+        // could reach below 19 cm off the ground.
+        body.waist_y - body.ankle_y - ROBE_CLEARANCE * body.scale
+    } else {
+        (s.cut.length * body.scale * 0.95).min(room)
+    };
     s.belt.width *= body.scale.sqrt();
     if cover.garment {
         s.cut.flare = 0.0;
@@ -1139,10 +1149,13 @@ fn boots(body: &Body, env: &Envelope, state: &FeetState) -> ItemMesh {
     for side in Side::BOTH {
         let mut f = form;
         let leg = body.leg(side);
-        if let Some(d) = Envelope::limb_clearance(&env.legs[index(side)], leg.t_joints[1] - 0.1, 1.0) {
-            f.shin_half_width += d;
-            f.shin_half_depth += d;
-        }
+        // Eased over what is worn under it from the knee down to mid-shin, and from there to
+        // the ankle, where trousers taper in.
+        let tk = leg.t_joints[1];
+        let mid = tk + 0.5 * (1.0 - tk);
+        let clearance = |t0: f32, t1: f32| Envelope::limb_clearance(&env.legs[index(side)], t0, t1).unwrap_or(0.0);
+        let knee = clearance(tk - 0.1, mid);
+        f.ease = [clearance(mid, 1.0).min(knee.max(GAP)), knee];
         let mut mesh = boot_parts(&f, &b, &state.hem).finish();
         body.foot_placement(side).apply_to_item(&mut mesh);
         out.parts.extend(mesh.parts);
@@ -2364,5 +2377,79 @@ mod tests {
     #[test]
     fn a_lizards_snout_and_brow_clear_helms_smoke() {
         a_lizards_snout_and_brow_clear_helms_check(&[1207], &[HelmStyle::Bascinet], 0..1, 10);
+    }
+
+    /// How far `part` reaches from the left leg's line at height `y` (body space), if it is there.
+    fn reach_from_leg(body: &Body, part: &Part, y: f32) -> Option<f32> {
+        let sections = body.leg_sections();
+        let s = sections.iter().min_by(|a, b| (a.y - y).abs().total_cmp(&(b.y - y).abs()))?;
+        part.positions.iter().filter(|p| p[0] > 0.0 && (p[1] - y).abs() < 0.08).map(|p| (p[0] - s.x).hypot(p[2] - s.z)).reduce(f32::max)
+    }
+
+    /// How wide `mesh`'s foot and sole are across the left foot, below `below`.
+    fn across_foot(body: &Body, mesh: &ItemMesh, below: f32) -> f32 {
+        let at = body.foot_placement(Side::Left);
+        let side = at.z();
+        let (lo, hi) = mesh
+            .parts
+            .iter()
+            .filter(|p| matches!(p.name, "foot" | "sole"))
+            .flat_map(|p| &p.positions)
+            .filter(|p| p[0] > 0.0 && p[1] < below)
+            .map(|p| vec3::dot(vec3::sub(*p, at.origin), side))
+            .fold((f32::MAX, f32::MIN), |(lo, hi), d| (lo.min(d), hi.max(d)));
+        hi - lo
+    }
+
+    #[test]
+    fn boots_fit_close_to_the_foot_and_shin() {
+        use armory::families::feet::Feet;
+        use armory::families::legs::Legs;
+        for folk in Folk::ALL {
+            for seed in [3u32, 1207] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                let mut boot = Feet::roll_as(seed, BootStyle::Boot);
+                boot.boot.height = 3.6;
+                boot.boot.cuff = 0.0;
+                let width = boot.boot.width;
+                let worn = [(Slot::Legs, Item::Legs(Legs::roll_as(seed, LegwearStyle::Trousers))), (Slot::Feet, Item::Feet(boot))];
+                let fit = fit_worn(&body, &worn);
+                let feet = &fit.layer(Slot::Feet).unwrap().mesh;
+                let trousers = &fit.layer(Slot::Legs).unwrap().mesh;
+                let shafts: Vec<&Part> = feet.parts.iter().filter(|p| p.name == "shaft").collect();
+                let top = shafts.iter().flat_map(|p| &p.positions).map(|p| p[1]).fold(f32::MIN, f32::max);
+                let form = body.leg_form();
+                // Up the shaft, above the heel, it stands no more than 2 cm off the trousers under it.
+                for k in 1..8 {
+                    let y0 = 1.6 * form.instep_height;
+                    let y = y0 + (top - 0.3 * body.scale - y0) * k as f32 / 8.0;
+                    let boot = shafts.iter().filter_map(|p| reach_from_leg(&body, p, y)).fold(0.0f32, f32::max);
+                    let cloth = trousers.parts.iter().filter_map(|p| reach_from_leg(&body, p, y)).fold(0.0f32, f32::max);
+                    assert!(boot - cloth < 0.2, "{folk:?} {seed} at {y:.2}: boot {boot:.3}, trousers {cloth:.3}");
+                }
+                // Across the foot, within 2.5 cm of the bare foot at the boot's own width.
+                let mut bare = ItemMesh { parts: vec![armory::build::boot::foot_mesh(&form, 0.0).into_part("foot", armory::geom::OutlineMode::Welded)] };
+                body.foot_placement(Side::Left).apply_to_item(&mut bare);
+                let (shod, bare) = (across_foot(&body, feet, form.instep_height), across_foot(&body, &bare, form.instep_height));
+                assert!(shod - bare * width < 0.25, "{folk:?} {seed}: boot {shod:.3} across, bare foot {bare:.3} x {width:.2}");
+            }
+        }
+    }
+
+    #[test]
+    fn robes_hang_to_just_above_the_feet() {
+        for folk in Folk::ALL {
+            for seed in [3u32, 1207] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                for kit in [1u32, 40] {
+                    let robe = Item::Garment(Garment::roll_as(kit, GarmentStyle::Robe));
+                    let fit = fit_worn(&body, &[(Slot::Shirt, robe)]);
+                    let skirt = &fit.layer(Slot::Shirt).unwrap().mesh;
+                    let hem = skirt.parts.iter().filter(|p| p.name == "body").flat_map(|p| &p.positions).map(|p| p[1]).fold(f32::MAX, f32::min);
+                    // Below the ankle's top, the folds' wave aside, and clear of the sole.
+                    assert!(hem > 0.5 * body.ankle_y && hem < body.ankle_y + 0.35 * body.scale, "{folk:?} {seed} robe {kit}: hem at {hem:.2}, ankle {:.2}", body.ankle_y);
+                }
+            }
+        }
     }
 }
