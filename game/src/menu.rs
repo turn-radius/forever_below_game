@@ -241,7 +241,7 @@ fn pause_while_open(open: Res<ScreenOpen>, time: Option<ResMut<Time<Virtual>>>, 
 }
 
 /// The button under the mouse, if any.
-fn hovered_button<'a>(
+pub(crate) fn hovered_button<'a>(
     window: Option<&Window>,
     buttons: impl IntoIterator<Item = (&'a MenuButton, &'a ComputedNode, &'a UiGlobalTransform)>,
 ) -> Option<MenuCommand> {
@@ -778,7 +778,7 @@ fn show_settings(
 }
 
 /// Brightens the button under the mouse.
-fn light_hovered(
+pub(crate) fn light_hovered(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     buttons: Query<(&MenuButton, &ButtonInk, &ComputedNode, &UiGlobalTransform, &Children)>,
     mut colours: Query<&mut TextColor>,
