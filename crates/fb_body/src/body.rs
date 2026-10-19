@@ -23,8 +23,9 @@ use crate::limb::{Limb, Side};
 use crate::place::Placement;
 use crate::spec::BodySpec;
 
-/// The superellipse exponent of the trunk's sections (`tSurf`): a little boxy, carved.
-pub const TRUNK_EXPONENT: f32 = 0.77;
+/// The superellipse exponent of the trunk's sections: nearly an ellipse. The plate's `tSurf`
+/// used 0.77, a boxy, carved section that read as a block.
+pub const TRUNK_EXPONENT: f32 = 0.9;
 /// The back's depth relative to the front (`tSurf`'s 0.92).
 pub const TRUNK_BACK: f32 = 0.92;
 
@@ -129,7 +130,9 @@ impl Body {
         let race = spec.folk.race();
         let h = race.h * spec.stature;
         let s = h / 17.5;
-        let ws = s.powf(0.72) * race.girth * (0.88 + spec.frame * 0.3);
+        let (mu, slim) = (spec.muscle, 1.12 - 0.24 * spec.slender);
+        // Slenderness thins trunk and limbs alike at the same height; 0.5 is the plate's girth.
+        let ws = s.powf(0.72) * race.girth * (0.88 + spec.frame * 0.3) * slim;
         let fem = spec.figure;
         let head_r = race.head_r * s.powf(0.35);
         let half_height = head_r * race.hh;
@@ -138,19 +141,42 @@ impl Body {
         let shoulder_y = chin_y - race.neck * s * 0.55;
         let hip_y = h * race.leg;
         let t = shoulder_y - hip_y;
-        let sw = 2.1 * ws * (1.07 - fem * 0.15);
+        let sw = 2.1 * ws * (1.07 - fem * 0.15) * (0.92 + 0.16 * mu);
         let hip = FormRing::new(hip_y, 1.66 * ws * (0.95 + fem * 0.13), 1.12 * ws);
         let waist_y = hip_y + 0.3 * t;
         let chest_y = hip_y + 0.7 * t;
-        let waist = FormRing::new(waist_y, 1.42 * ws * (1.0 - fem * 0.06), 0.98 * ws);
-        let chest = FormRing::new(chest_y, 1.72 * ws, 1.1 * ws);
-        let neck_radius = 0.42 * ws * race.neck_r;
-        let belly = Bulge { y: waist_y, spread: 0.3 * t, depth: race.belly * (0.3 + spec.frame * 0.9) * ws, sharpness: 2, toward: FRONT };
-        // The plate swells a bust only past figure 0.55; the breast muscles' slight swell
-        // under it and the seat are our own, so the trunk is not flat front and back.
-        let bust_depth = if fem > 0.55 { (fem - 0.55) * 0.5 * ws } else { 0.0 };
-        let bust = Bulge { y: chest_y, spread: 0.14 * t, depth: 0.05 * ws + bust_depth, sharpness: 4, toward: FRONT };
-        let seat = Bulge { y: hip_y - 0.04 * t, spread: 0.15 * t, depth: 0.14 * ws * (1.0 + 0.4 * fem), sharpness: 2, toward: BACK };
+        // Muscle narrows the waist under a broad chest; weight fills it.
+        let waist = FormRing::new(waist_y, 1.38 * ws * (1.0 - fem * 0.3) * (1.05 - 0.1 * mu) * (0.95 + 0.12 * spec.frame), 0.95 * ws);
+        let chest = FormRing::new(chest_y, 1.72 * ws * (0.97 + 0.06 * mu), 1.14 * ws * (0.97 + 0.06 * mu));
+        let neck_radius = 0.42 * ws * race.neck_r * (0.92 + 0.16 * mu);
+        let belly = Bulge { y: waist_y, spread: 0.3 * t, depth: (race.belly * (0.3 + spec.frame * 0.9) + 0.25 * spec.frame.powi(2)) * ws, sharpness: 2, toward: FRONT, fall: -0.35, ..Bulge::NONE };
+        // The chest is two forms either side of the breastbone, the breast muscles (more with
+        // muscle) and a bust over them that sits lower and fuller as it rounds. The plate swelled
+        // one shelf across the front, past figure 0.55. The seat is two lobes as well, and the
+        // small of the back draws in above it (skin only): our own, so the side view has an S.
+        let (b, round) = (spec.bust, spec.bust_round);
+        // Each breast is a dome of its own either side of the breastbone, with a definite edge
+        // and a crease under it: a long slope from the collarbone down to its crest and a short,
+        // rounded underside (fuller and a little lower as it rounds). It widens and reaches
+        // round toward the side as it grows. Flat, the domes are the breast muscles: squarish
+        // plates with a crisp lower edge. A Gaussian swell there blended down into the belly and
+        // read as a gut; narrow pointed domes read as cones.
+        let bust = Bulge {
+            y: chest_y + (0.02 - 0.05 * round * b) * t,
+            spread: (0.22 + 0.06 * b) * t,
+            depth: (0.08 + 0.14 * mu) * ws + 0.8 * b * ws,
+            toward: FRONT,
+            pair: 0.43 + 0.06 * b,
+            fall: -0.65 + b * (0.2 + 0.15 * round),
+            cleft: 1.0,
+            dome: 0.41 + 0.1 * b,
+            power: 0.3 + b * (0.6 - 0.3 * round),
+            upper: 0.6 + 0.7 * b,
+            square: 4.0 - 2.0 * b,
+            ..Bulge::NONE
+        };
+        let seat = Bulge { y: hip_y - 0.02 * t, spread: 0.15 * t, depth: 0.17 * ws * (1.0 + 0.4 * fem), sharpness: 5, toward: BACK, pair: 0.55, fall: -0.3, cleft: 1.0, ..Bulge::NONE };
+        let lumbar = Bulge { y: waist_y + 0.05 * t, spread: 0.2 * t, depth: -0.09 * ws, sharpness: 2, toward: BACK, ..Bulge::NONE };
         let ankle_y = 0.048 * h;
         let head = HeadForm {
             centre: [0.0, head_y, 0.12 * s],
@@ -165,7 +191,7 @@ impl Body {
         };
         let skin = TorsoProfile::new(
             &[
-                FormRing::new(hip_y - 0.14 * t, hip.half_width * 0.58, hip.half_depth * 0.66),
+                FormRing::new(hip_y - 0.14 * t, hip.half_width * 0.62, hip.half_depth * 0.8),
                 hip,
                 waist,
                 chest,
@@ -176,10 +202,10 @@ impl Body {
             ],
             TRUNK_EXPONENT,
             TRUNK_BACK,
-            vec![belly, bust, seat],
+            vec![belly, bust, seat, lumbar],
         );
-        let arm = |side: Side| arm_limb(race, h, ws, fem, sw, shoulder_y, side, pose.arm(side));
-        let leg = |side: Side| leg_limb(race, s, ws, fem, &hip, ankle_y, side);
+        let arm = |side: Side| arm_limb(race, h, ws, fem, mu, sw, shoulder_y, side, pose.arm(side));
+        let leg = |side: Side| leg_limb(race, s, ws, fem, mu, &hip, ankle_y, side);
         Body {
             spec: spec.clone(),
             pose,
@@ -301,8 +327,9 @@ impl Body {
             exponent: TRUNK_EXPONENT,
             back: TRUNK_BACK,
             belly: self.belly.raised(-w),
-            bust: self.bust.raised(-w),
-            seat: self.seat.raised(-w),
+            // Cloth is drawn across the cleft between the lobes, not into it.
+            bust: self.bust.bridged().raised(-w),
+            seat: self.seat.bridged().raised(-w),
         }
     }
 
@@ -357,16 +384,20 @@ impl Body {
         for ring in &mut rings[2..=4] {
             *ring = ring.inflated(0.05, 0.03);
         }
+        // At the crotch the cloth takes in the leg's own top section, which fills out under the
+        // seat behind.
+        let sections = self.leg_sections();
+        let top = sections[LEG_SECTIONS - 1];
         LowerBodyForm {
             torso: torso.with_rings(rings),
             leg: self.leg_form(),
             waist_height: self.waist_y,
             // Where the trunk's skin rounds under between the thighs, so the seat covers it.
             crotch_height: self.hip_y - 0.14 * self.trunk_length - 0.25 * self.scale,
-            thigh_half_width: (self.hip.half_width * 0.47).max(leg.radius * 0.9),
-            thigh_half_depth: leg.radius * 1.08,
+            thigh_half_width: (self.hip.half_width * 0.47).max(leg.radius * 0.9).max(top.half_width * 1.02),
+            thigh_half_depth: (leg.radius * 1.08).max(top.front.max(top.back) * 1.04),
             stance: leg.joints[2][0].abs(),
-            sections: Some(self.leg_sections()),
+            sections: Some(sections),
         }
     }
 
@@ -558,11 +589,14 @@ impl Body {
         let [th, tk] = leg.t_joints;
         let calf_t = tk + 0.3 * (1.0 - tk);
         let front = a.cos();
-        let calf = 0.1 * (-((t - calf_t) / 0.12).powi(2)).exp() * (-front).max(0.0).powi(2);
+        let calf = (0.06 + 0.1 * self.spec.muscle) * (-((t - calf_t) / 0.12).powi(2)).exp() * (-front).max(0.0).powi(2);
         let knee = 0.05 * (-((t - tk) / 0.05).powi(2)).exp() * front.max(0.0).powi(3);
         // The thigh is a little deeper front to back than across, below the seat.
         let thigh = 0.05 * smoothstep(0.0, th, t) * (1.0 - smoothstep(th, tk, t)) * (front * front - 0.5);
-        leg.radius_at(t) * (1.0 + calf + knee + thigh)
+        // The back of the thigh's top fills out under the seat, so the buttock rounds into the
+        // thigh in a fold instead of overhanging it as a rim.
+        let under_seat = 0.28 * (-((t - 1.5 * th) / (0.9 * th)).powi(2)).exp() * (-front).max(0.0).powi(2);
+        leg.radius_at(t) * (1.0 + calf + knee + thigh + under_seat)
     }
 
     /// The left leg's skin in horizontal sections from the ankle up to the crotch, for
@@ -589,6 +623,9 @@ impl Body {
                 lo = [lo[0].min(p[0]), lo[1].min(p[2])];
                 hi = [hi[0].max(p[0]), hi[1].max(p[2])];
             }
+            // Full thighs meet at the midline near the crotch: the cloth of each leg stops there
+            // rather than crossing into the other's.
+            lo[0] = lo[0].max(0.0);
             let (x, z) = (0.5 * (lo[0] + hi[0]), c[2]);
             LegSection { y, x, z, half_width: 0.5 * (hi[0] - lo[0]), front: hi[1] - z, back: z - lo[1] }
         })
@@ -671,9 +708,9 @@ pub(crate) fn lighten(c: Rgb, k: f32) -> Rgb {
 /// the radius swells over the upper arm, narrows at the elbow, fills the forearm and
 /// tapers to the wrist.
 #[allow(clippy::too_many_arguments)]
-fn arm_limb(race: &Race, h: f32, ws: f32, fem: f32, sw: f32, shoulder_y: f32, side: Side, pose: ArmPose) -> Limb {
+fn arm_limb(race: &Race, h: f32, ws: f32, fem: f32, mu: f32, sw: f32, shoulder_y: f32, side: Side, pose: ArmPose) -> Limb {
     let sg = side.sign();
-    let ar = 0.5 * ws * race.limb * (1.0 - fem * 0.12);
+    let ar = 0.5 * ws * race.limb * (1.0 - fem * 0.12) * (0.86 + 0.28 * mu);
     let (upper, fore) = (0.186 * h * race.arm, 0.152 * h * race.arm);
     let s = [sg * (sw - ar * 0.9), shoulder_y - ar * 0.55, 0.0];
     let ud = vec3::normalize_or([sg * pose.spread.sin(), -pose.spread.cos(), pose.forward], vec3::neg(vec3::Y));
@@ -682,23 +719,31 @@ fn arm_limb(race: &Race, h: f32, ws: f32, fem: f32, sw: f32, shoulder_y: f32, si
     let w = vec3::add(e, vec3::scale(fd, fore));
     let root = vec3::add(s, [-sg * ar * 1.15, -ar * 0.15, 0.0]);
     let controls = vec![root, s, vec3::lerp(s, e, 0.5), e, vec3::lerp(e, w, 0.5), w];
+    // A deltoid cap over the shoulder, the upper arm full to the elbow, and a forearm that
+    // fills out below the elbow before it tapers: the plate's forearm was a thin tube.
     Limb::new(side, root, [s, e, w], controls, ar, |ts, te| {
-        vec![(0.0, 0.85), (ts, 1.06), (ts + 0.35 * (te - ts), 0.88), (te, 0.65), (te + 0.35 * (1.0 - te), 0.68), (1.0, 0.46)]
+        vec![(0.0, 0.85), (ts, 1.06 + 0.04 * mu), (ts + 0.4 * (te - ts), 0.92 + 0.08 * mu), (te, 0.72), (te + 0.28 * (1.0 - te), 0.84 + 0.08 * mu), (1.0, 0.48)]
     })
 }
 
 /// A leg through hip, knee and ankle (`mkLeg`), its root high inside the hips, the knee a
 /// little forward.
-fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, hip: &FormRing, ankle_y: f32, side: Side) -> Limb {
+#[allow(clippy::too_many_arguments)]
+fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, mu: f32, hip: &FormRing, ankle_y: f32, side: Side) -> Limb {
     let sg = side.sign();
-    let lr = 0.78 * ws * race.limb * (0.95 + fem * 0.06);
+    let lr = 0.78 * ws * race.limb * (0.95 + fem * 0.06) * (0.93 + 0.14 * mu);
     let hw = hip.half_width;
-    let hj = [sg * hw * 0.46, hip.y - 0.05 * s, 0.0];
+    let hj = [sg * hw * 0.48, hip.y - 0.05 * s, 0.0];
     let a = [sg * hw * 0.36, ankle_y, 0.0];
     let k = [sg * hw * 0.41, a[1] + (hj[1] - a[1]) * 0.48, 0.12 * s];
     let root = vec3::add(hj, [0.0, s, 0.0]);
+    // The thigh's top reaches out to the hips' own width, so wide hips flow into the thighs
+    // instead of standing out over them as a ledge; then it tapers to the knee (the plate's stayed
+    // even to mid-thigh). Its root, up inside the trunk, stays narrow so it never shows through
+    // the waist.
+    let top = (1.04 * hw - hj[0].abs()) / lr;
     Limb::new(side, root, [hj, k, a], vec![root, hj, k, a], lr, |th, tk| {
-        vec![(0.0, 1.0), (th, 1.0), (th + 0.35 * (tk - th), 0.86), (tk, 0.58), (tk + 0.35 * (1.0 - tk), 0.64), (1.0, 0.4)]
+        vec![(0.0, 0.75), (th, top.max(1.05)), (th + 0.3 * (tk - th), (0.86 * top).max(0.9)), (tk, 0.6), (tk + 0.35 * (1.0 - tk), 0.66), (1.0, 0.42)]
     })
 }
 
@@ -753,6 +798,54 @@ mod tests {
         let reach = |b: &Body| b.arm(Side::Left).length() / b.height;
         assert!(reach(&goblin) > reach(&human) * 1.1);
         assert!(pig.belly.depth > human.belly.depth * 2.0);
+    }
+
+    #[test]
+    fn the_shape_controls_move_the_body() {
+        let spec = BodySpec::typical(Folk::Human);
+        let shaped = |key: &str, value: f32| {
+            let mut shape = spec.shape();
+            shape.set(key, value);
+            Body::new(&spec.clone().with_shape(shape))
+        };
+        let upper_arm = |b: &Body| b.arm(Side::Left).radius_at(0.5 * (b.arm(Side::Left).t_joints[0] + b.arm(Side::Left).t_joints[1]));
+        let calf = |b: &Body| b.leg_form().calf * b.leg_form().shin_half_width;
+        let (soft, strong) = (shaped("muscle", 0.0), shaped("muscle", 1.0));
+        assert!(upper_arm(&strong) > upper_arm(&soft) * 1.2 && calf(&strong) > calf(&soft) * 1.1);
+        assert!(strong.shoulder_half_width > soft.shoulder_half_width * 1.1 && strong.waist.half_width < soft.waist.half_width);
+        let (stocky, slender) = (shaped("slender", 0.0), shaped("slender", 1.0));
+        assert!(slender.waist.half_width < stocky.waist.half_width * 0.85 && slender.leg(Side::Left).radius < stocky.leg(Side::Left).radius * 0.85);
+        assert!((slender.height - stocky.height).abs() < 1e-4);
+        assert!(shaped("height", 1.1).height > shaped("height", 0.9).height * 1.2);
+        // A full bust stands out in two lobes with a cleft between; a flat chest barely swells.
+        let (flat, full) = (shaped("bust", 0.0), shaped("bust", 1.0));
+        let front = |b: &Body, a: f32| b.trunk().point(a, b.bust.y)[2];
+        let crest = FRONT + full.bust.pair;
+        assert!(front(&full, crest) > front(&flat, crest) + 0.5, "{} {}", front(&full, crest), front(&flat, crest));
+        assert!(front(&full, FRONT) < front(&full, crest) - 0.2, "a cleft");
+        assert!(flat.bust.depth < 0.2 * flat.girth, "breast muscles, not a bust");
+        // A round bust sits lower and fuller underneath than a high one (both full).
+        let full_with = |round: f32| {
+            let mut shape = spec.shape();
+            shape.set("bust", 1.0);
+            shape.set("round", round);
+            Body::new(&spec.clone().with_shape(shape)).bust
+        };
+        let (high, round) = (full_with(0.0), full_with(1.0));
+        assert!(round.y < high.y && round.fall > high.fall && round.power < high.power);
+    }
+
+    #[test]
+    fn the_trunk_is_round_not_boxy() {
+        let body = Body::new(&BodySpec::typical(Folk::Human));
+        // A diagonal of the chest's section falls within 5% of an ellipse's (bulges aside).
+        let (hw, hd) = body.trunk().at(body.waist_y);
+        let a = FRONT + std::f32::consts::FRAC_PI_4;
+        let radius = |exponent: f32| {
+            let [x, z] = armory::build::form::section_point(a, hw, hd, exponent, 1.0);
+            (x * x + z * z).sqrt()
+        };
+        assert!((radius(TRUNK_EXPONENT) / radius(1.0) - 1.0).abs() < 0.05, "{}", radius(TRUNK_EXPONENT) / radius(1.0));
     }
 
     #[test]
@@ -827,10 +920,14 @@ mod tests {
             assert!((place.point([0.0, torso.chest.y, 0.0])[1] - body.chest_y).abs() < 1e-4);
             let head = body.head_form();
             assert!((place.point(head.centre)[1] - body.head.centre[1]).abs() < 1e-4);
-            // The garment form's chest is the skin's chest.
-            let skin = body.trunk().point(FRONT, body.chest_y);
-            let form = torso.profile().point(FRONT, torso.chest.y);
+            // The garment form's chest is the skin's at each breast, and bridges the cleft
+            // between them.
+            let crest = FRONT + body.bust.pair;
+            let skin = body.trunk().point(crest, body.chest_y);
+            let form = torso.profile().point(crest, torso.chest.y);
             assert!((skin[2] - form[2]).abs() < 0.02, "{skin:?} {form:?}");
+            let (skin, form) = (body.trunk().point(FRONT, body.chest_y), torso.profile().point(FRONT, torso.chest.y));
+            assert!(form[2] >= skin[2] - 1e-4, "cloth over the cleft {form:?}, skin {skin:?}");
             let lower = body.lower_body_form();
             assert!(lower.crotch_height < lower.waist_height && lower.leg.knee_height < lower.crotch_height);
             let foot = body.foot_placement(Side::Left);

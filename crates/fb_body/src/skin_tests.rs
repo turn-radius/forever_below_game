@@ -11,6 +11,7 @@ use crate::body::Body;
 use crate::gait::{Gait, IdleCycle};
 use crate::limb::Side;
 use crate::rig::{JOINTS, Joint, Rig, RigPose, Rigid};
+use crate::skin::HEM_SHARE;
 
 /// Seconds of CPU this thread has used. Timing checks read it rather than the wall clock, so a
 /// machine busy with other tests (or anything else) does not fail them.
@@ -183,7 +184,7 @@ fn loose_cloth_follows_the_trunk_with_a_share_of_the_thighs() {
     for y in [d.body.hip_y, d.body.hip_y * 0.7, d.body.hip_y * 0.3] {
         for x in [-2.0, -0.2, 0.2, 2.0] {
             let leg = leg_share([x, y, 0.0]);
-            assert!(leg <= 0.41, "a share only: {leg} at ({x}, {y})");
+            assert!(leg <= HEM_SHARE + 0.01, "a share only: {leg} at ({x}, {y})");
             if y < d.body.hip_y * 0.5 {
                 assert!(leg > 0.1, "some of the thighs toward the hem: {leg} at ({x}, {y})");
             }

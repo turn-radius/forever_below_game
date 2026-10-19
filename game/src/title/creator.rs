@@ -15,21 +15,22 @@
 use bevy::{
     input::{ButtonState, keyboard::{Key, KeyboardInput}},
     prelude::*,
+    window::PrimaryWindow,
 };
-use fb_body::Folk;
+use fb_body::{BodyShape, BodySpec, Folk, ShapeSlider};
 use procgen_rng::Mulberry32;
 
-use crate::character::{Character, ChosenDelver, Class, modifier};
+use crate::character::{Character, ChosenDelver, Class, Sex, modifier};
 use crate::keymap::{Action, ActionInput};
 use crate::launch::{AppState, clock_seed};
-use crate::menu::{ButtonInk, MenuButton, MenuCommand};
+use crate::menu::{ButtonInk, MenuButton, MenuCommand, fraction_along};
 use crate::play::CurrentLevel;
 use crate::title::NewDelveSeed;
 use crate::inventory::doll::doll_leaf;
 use crate::inventory::{DollAssets, Icons};
 use crate::title::last_delver::LastDelver;
 use crate::title::preview::preview_inventory;
-use crate::ui::{BG, BRIGHT, FRAME_GOLD, GOLD, INK, LINE, MUTED, UiFonts};
+use crate::ui::{BG, BRIGHT, CELL, FRAME_GOLD, GOLD, INK, LINE, MUTED, UiFonts, node_rect, ui_cursor};
 
 /// The longest name the creator takes, in characters.
 pub const NAME_MAX: usize = 24;
@@ -41,6 +42,7 @@ const ABILITIES: [&str; 5] = ["Strength", "Dexterity", "Constitution", "Intellig
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CreatorCommand {
     Folk(Folk),
+    Sex(Sex),
     Class(Class),
     RollName,
     RollScores,
@@ -61,6 +63,11 @@ pub struct Draft {
     pub body_seed: u32,
     /// What each ability is moved from the folk's score, in [`ABILITIES`]' order.
     pub nudges: [i32; 5],
+    /// The body's shape: the rolled look's, until a slider moves it.
+    pub shape: BodyShape,
+    /// Whether a slider has moved the shape; a rolled one is rolled again for a new folk.
+    pub shaped: bool,
+    pub sex: Sex,
     pub dirt: f32,
     rng: Mulberry32,
 }
@@ -71,7 +78,9 @@ impl Draft {
         let mut rng = Mulberry32::new(seed.wrapping_mul(0x9e37_79b9) ^ 0x5d1c_7a03);
         let folk = *rng.pick(&Folk::ALL);
         let class = *rng.pick(&Class::ALL);
-        let mut draft = Draft { folk, class, name: String::new(), typed: false, body_seed: 0, nudges: [0; 5], dirt: 0.0, rng };
+        let shape = BodySpec::typical(folk).shape();
+        let sex = *rng.pick(&Sex::ALL);
+        let mut draft = Draft { folk, class, name: String::new(), typed: false, body_seed: 0, nudges: [0; 5], shape, shaped: false, sex, dirt: 0.0, rng };
         draft.roll_name();
         draft.roll_scores();
         draft.roll_look();
@@ -86,6 +95,38 @@ impl Draft {
             if !self.typed {
                 self.roll_name();
             }
+            if !self.shaped {
+                self.shape = self.rolled_shape();
+            }
+        }
+    }
+
+    /// The look's shape for the chosen sex: hips and bust within the sex's range, rolled from
+    /// the body seed. Lizardfolk have no bust.
+    fn rolled_shape(&self) -> BodyShape {
+        let mut shape = BodySpec::roll(self.folk, self.body_seed).shape();
+        let mut rng = Mulberry32::new(self.body_seed ^ 0x5e70_f1a3);
+        let (figure, bust) = match self.sex {
+            Sex::Female => (rng.range_f32(0.55, 0.9), rng.range_f32(0.3, 0.85)),
+            Sex::Male => (rng.range_f32(0.05, 0.4), 0.0),
+        };
+        shape.figure = figure;
+        shape.bust = if self.folk == Folk::Lizardfolk { 0.0 } else { bust };
+        shape
+    }
+
+    /// The body sliders the chosen sex shows: a woman has no beard to cut.
+    pub fn sliders(&self) -> impl Iterator<Item = &'static ShapeSlider> {
+        let sex = self.sex;
+        BodyShape::SLIDERS.iter().filter(move |s| !(sex == Sex::Female && s.key == "beard"))
+    }
+
+    /// Makes them `sex`: the hips and bust take the sex's range, other sliders stay.
+    pub fn set_sex(&mut self, sex: Sex) {
+        if self.sex != sex {
+            self.sex = sex;
+            let rolled = self.rolled_shape();
+            (self.shape.figure, self.shape.bust) = (rolled.figure, rolled.bust);
         }
     }
 
@@ -99,8 +140,17 @@ impl Draft {
         self.nudges = Character::roll_nudges(&mut self.rng);
     }
 
+    /// A new body seed, and the shape it rolls.
     pub fn roll_look(&mut self) {
         self.body_seed = (self.rng.next_f64() * 4_294_967_296.0) as u32;
+        self.shape = self.rolled_shape();
+        self.shaped = false;
+    }
+
+    /// Sets the body slider `key` ([`BodyShape::SLIDERS`]) to `value`.
+    pub fn set_shape(&mut self, key: &str, value: f32) {
+        self.shape.set(key, value);
+        self.shaped = true;
     }
 
     /// Adds typed text to the name, up to [`NAME_MAX`] characters; control characters are
@@ -134,6 +184,8 @@ impl Draft {
         Character {
             folk: self.folk,
             body_seed: self.body_seed,
+            shape: Some(self.shape),
+            sex: Some(self.sex),
             name: self.name.trim().to_string(),
             class: self.class,
             attributes: Character::scores_from(self.folk, self.nudges),
@@ -146,6 +198,7 @@ impl Draft {
     pub fn apply(&mut self, command: CreatorCommand) {
         match command {
             CreatorCommand::Folk(folk) => self.set_folk(folk),
+            CreatorCommand::Sex(sex) => self.set_sex(sex),
             CreatorCommand::Class(class) => self.class = class,
             CreatorCommand::RollName => self.roll_name(),
             CreatorCommand::RollScores => self.roll_scores(),
@@ -255,6 +308,155 @@ pub fn roll_look_every(time: Res<Time>, draft: Option<Res<Draft>>, mut waited: L
     }
 }
 
+/// A body slider's bar ([`BodyShape::SLIDERS`]): a click or drag along it sets it.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShapeBar(pub &'static str);
+
+/// A body slider's filled part, knob and value text, kept up as it is dragged.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShapeFill(pub &'static str);
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShapeKnob(pub &'static str);
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShapeValue(pub &'static str);
+
+/// Set when a body slider moves the draft's shape. Dragging changes the shape without marking
+/// the draft changed, so the page is not built again every frame of a drag (it was, and the
+/// drag crawled); the sliders move in place ([`show_shape`]) and the paper doll refits.
+#[derive(Resource, Default)]
+pub struct ShapeMoved(pub bool);
+
+/// A body slider's width in logical pixels.
+const SHAPE_PX: f32 = 200.0;
+
+/// A press on a body slider sets it under the mouse and drags it until the button comes up.
+/// The bar's place is kept from the press, should the page be built again meanwhile.
+pub fn drag_shape(
+    input: ActionInput,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    bars: Query<(&ShapeBar, &ComputedNode, &UiGlobalTransform)>,
+    mut held: Local<Option<(&'static str, Rect)>>,
+    draft: Option<ResMut<Draft>>,
+    ui_scale: Option<Res<UiScale>>,
+    mut moved: ResMut<ShapeMoved>,
+) {
+    let Some(mut draft) = draft else {
+        *held = None;
+        return;
+    };
+    if !input.pressed(Action::Choose) {
+        *held = None;
+        return;
+    }
+    let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else { return };
+    if input.just_pressed(Action::Choose) {
+        *held = bars.iter().map(|(bar, node, transform)| (bar.0, node_rect(node, transform))).find(|(_, rect)| rect.contains(point));
+    }
+    if let Some((key, rect)) = *held
+        && let Some(slider) = BodyShape::SLIDERS.iter().find(|s| s.key == key)
+    {
+        let value = slider.low + (slider.high - slider.low) * fraction_along(rect, point.x);
+        // In steps of a hundredth of the range, so a still hand does not redress the doll.
+        let step = (slider.high - slider.low) / 100.0;
+        let value = slider.low + ((value - slider.low) / step).round() * step;
+        if draft.shape.get(key) != Some(value) {
+            draft.bypass_change_detection().set_shape(key, value);
+            moved.0 = true;
+        }
+    }
+}
+
+/// Keeps the body sliders' fills, knobs and values on the draft's shape.
+pub fn show_shape(
+    draft: Option<Res<Draft>>,
+    mut fills: Query<(&ShapeFill, &mut Node), Without<ShapeKnob>>,
+    mut knobs: Query<(&ShapeKnob, &mut Node), Without<ShapeFill>>,
+    mut values: Query<(&ShapeValue, &mut Text)>,
+) {
+    let Some(draft) = draft else { return };
+    let fraction = |key: &str| {
+        let slider = BodyShape::SLIDERS.iter().find(|s| s.key == key);
+        slider.map_or(0.0, |s| ((draft.shape.get(key).unwrap_or(s.low) - s.low) / (s.high - s.low)).clamp(0.0, 1.0))
+    };
+    for (fill, mut node) in &mut fills {
+        let width = percent(fraction(fill.0) * 100.0);
+        if node.width != width {
+            node.width = width;
+        }
+    }
+    for (knob, mut node) in &mut knobs {
+        let left = percent(fraction(knob.0) * 100.0);
+        if node.left != left {
+            node.left = left;
+        }
+    }
+    for (value, mut text) in &mut values {
+        if let Some(slider) = BodyShape::SLIDERS.iter().find(|s| s.key == value.0) {
+            let shown = shape_value(&draft, slider);
+            if text.0 != shown {
+                text.0 = shown;
+            }
+        }
+    }
+}
+
+/// What a body slider reads: the height in centimetres, the rest as a share.
+fn shape_value(draft: &Draft, slider: &ShapeSlider) -> String {
+    let value = draft.shape.get(slider.key).unwrap_or(0.0);
+    if slider.key == "height" { format!("{:.0} cm", draft.folk.race().h * value * 10.0) } else { format!("{:.0}%", value * 100.0) }
+}
+
+/// The words at each end of a body slider.
+fn shape_ends(slider: &ShapeSlider) -> (&'static str, &'static str) {
+    match slider.key {
+        "height" => ("short", "tall"),
+        "build" => ("lean", "heavy"),
+        "slender" => ("stocky", "slender"),
+        "muscle" => ("soft", "strong"),
+        "figure" => ("shoulders", "hips"),
+        "bust" => ("flat", "full"),
+        "beard" => ("none", "long"),
+        _ => ("high", "round"),
+    }
+}
+
+/// The body sliders, a line each: label, the low end's word, the bar, the high end's, the value.
+fn shape_sliders(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft) {
+    parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|table| {
+        for slider in draft.sliders() {
+            let value = draft.shape.get(slider.key).unwrap_or(0.0);
+            let fraction = ((value - slider.low) / (slider.high - slider.low)).clamp(0.0, 1.0);
+            let (low, high) = shape_ends(slider);
+            table.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|line| {
+                let cell = |width: f32, justify: JustifyContent| Node { width: px(width), justify_content: justify, ..default() };
+                line.spawn((cell(150.0, JustifyContent::Start), children![(Text::new(slider.label), UiFonts::style(&fonts.body, 18.0, INK))]));
+                line.spawn((cell(72.0, JustifyContent::End), children![(Text::new(low), UiFonts::style(&fonts.body_italic, 15.0, MUTED))]));
+                line.spawn((ShapeBar(slider.key), Node { width: px(SHAPE_PX), height: px(20), align_items: AlignItems::Center, ..default() })).with_children(|bar| {
+                    bar.spawn((Node { width: percent(100), height: px(6), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), ..default() }, BackgroundColor(CELL), BorderColor::all(LINE)))
+                        .with_child((ShapeFill(slider.key), Node { width: percent(fraction * 100.0), height: percent(100), border_radius: BorderRadius::all(px(3)), ..default() }, BackgroundColor(MUTED)));
+                    bar.spawn((
+                        ShapeKnob(slider.key),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: percent(fraction * 100.0),
+                            width: px(14),
+                            height: px(14),
+                            margin: UiRect::left(px(-7)),
+                            border: UiRect::all(px(1)),
+                            border_radius: BorderRadius::MAX,
+                            ..default()
+                        },
+                        BackgroundColor(INK),
+                        BorderColor::all(BG),
+                    ));
+                });
+                line.spawn((cell(72.0, JustifyContent::Start), children![(Text::new(high), UiFonts::style(&fonts.body_italic, 15.0, MUTED))]));
+                line.spawn((cell(64.0, JustifyContent::End), children![(ShapeValue(slider.key), Text::new(shape_value(draft, slider)), UiFonts::style(&fonts.mono, 16.0, BRIGHT))]));
+            });
+        }
+    });
+}
+
 /// A choice among several: gold and ruled in gold when it is the one chosen.
 fn chip(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, command: CreatorCommand, chosen: bool) {
     let idle = if chosen { FRAME_GOLD } else { MUTED };
@@ -310,6 +512,11 @@ fn creator_form(form: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft)
             chip(line, fonts, &folk.race().label, CreatorCommand::Folk(folk), draft.folk == folk);
         }
     });
+    row(form, fonts, "Sex", |line| {
+        for sex in Sex::ALL {
+            chip(line, fonts, sex.label(), CreatorCommand::Sex(sex), draft.sex == sex);
+        }
+    });
     row(form, fonts, "Class", |line| {
         for class in Class::ALL {
             let word = class.word();
@@ -346,6 +553,7 @@ fn creator_form(form: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft)
         chip(line, fonts, "Roll scores", CreatorCommand::RollScores, false);
     });
     row(form, fonts, "Look", |line| chip(line, fonts, "Roll a look", CreatorCommand::RollLook, false));
+    row(form, fonts, "Body", |line| shape_sliders(line, fonts, draft));
 }
 
 #[cfg(test)]
@@ -421,5 +629,92 @@ mod tests {
         draft.roll_look();
         assert_ne!(draft.body_seed, before.body_seed);
         assert_eq!(draft.character().attributes, attributes);
+    }
+
+    #[test]
+    fn the_body_sliders_shape_the_delver() {
+        let mut draft = Draft::roll(8);
+        let rolled = |d: &Draft| {
+            let spec = d.character().spec();
+            let roll = BodySpec::roll(d.folk, d.body_seed);
+            (spec.muscle, spec.slender, spec.stature, spec.frame, spec.jaw) == (roll.muscle, roll.slender, roll.stature, roll.frame, roll.jaw)
+        };
+        assert!(rolled(&draft), "the rolled look to begin with");
+        draft.set_shape("muscle", 1.0);
+        draft.set_shape("height", 0.9);
+        let spec = draft.character().spec();
+        assert_eq!((spec.muscle, spec.stature), (1.0, 0.9));
+        // A new folk keeps a shape the sliders set; a new look rolls it again.
+        draft.set_folk(if draft.folk == Folk::Dwarf { Folk::Gnome } else { Folk::Dwarf });
+        assert_eq!(draft.character().spec().muscle, 1.0);
+        draft.roll_look();
+        assert!(!draft.shaped);
+        assert!(rolled(&draft));
+        assert!(BodyShape::SLIDERS.iter().all(|s| !shape_value(&draft, s).is_empty()));
+    }
+
+    #[test]
+    fn the_sex_sets_the_figure_and_the_beard() {
+        for seed in 1..20 {
+            let mut draft = Draft::roll(seed);
+            draft.set_folk(Folk::Human);
+            draft.set_sex(Sex::Female);
+            let woman = draft.character().spec();
+            assert!(woman.figure >= 0.55 && woman.bust >= 0.3 && woman.beard == fb_body::Beard::None, "{woman:?}");
+            draft.set_shape("muscle", 0.9);
+            draft.set_sex(Sex::Male);
+            let man = draft.character().spec();
+            assert!(man.figure <= 0.4 && man.bust == 0.0 && man.muscle == 0.9, "the other sliders stay: {man:?}");
+            // Rolling a look keeps the sex.
+            draft.roll_look();
+            assert_eq!((draft.sex, draft.character().spec().bust), (Sex::Male, 0.0));
+            draft.set_sex(Sex::Female);
+            draft.set_folk(Folk::Lizardfolk);
+            draft.roll_look();
+            assert_eq!(draft.character().spec().bust, 0.0, "lizardfolk have none");
+        }
+        // No woman is bearded, a dwarf neither, and she has no Beard slider.
+        let mut dwarf = Draft::roll(3);
+        dwarf.set_folk(Folk::Dwarf);
+        dwarf.set_sex(Sex::Female);
+        assert!((1..40).all(|s| {
+            dwarf.body_seed = s;
+            dwarf.character().spec().beard == fb_body::Beard::None
+        }));
+        assert!(dwarf.sliders().all(|s| s.key != "beard"));
+        // A man's beard follows its slider: none at 0, to mid-chest at 1.
+        dwarf.set_sex(Sex::Male);
+        assert!(dwarf.sliders().any(|s| s.key == "beard"));
+        dwarf.set_shape("beard", 0.0);
+        assert_eq!(dwarf.character().spec().beard, fb_body::Beard::None);
+        dwarf.set_shape("beard", 1.0);
+        assert_eq!(dwarf.character().spec().beard_length, 1.0);
+        assert_ne!(dwarf.character().spec().beard, fb_body::Beard::None);
+    }
+
+    #[test]
+    fn dragging_a_body_slider_moves_it() {
+        use crate::keymap::{ActiveContext, Context, Keymap};
+        let mut app = App::new();
+        app.init_resource::<Keymap>().init_resource::<ButtonInput<MouseButton>>().init_resource::<ShapeMoved>().insert_resource(ActiveContext(Context::Menus)).insert_resource(Draft::roll(8));
+        app.add_systems(Update, drag_shape);
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(150.0, 50.0)));
+        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        // The muscle bar, 200 across from x 100 to 300.
+        app.world_mut().spawn((ShapeBar("muscle"), ComputedNode { size: Vec2::new(200.0, 20.0), inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from_translation(Vec2::new(200.0, 50.0))));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert!((app.world().resource::<Draft>().shape.muscle - 0.25).abs() < 0.011, "the press sets it under the mouse");
+        assert!(app.world().resource::<ShapeMoved>().0 && !app.world().resource_ref::<Draft>().is_changed(), "without building the page again");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().get_mut::<Window>(window).unwrap().set_cursor_position(Some(Vec2::new(250.0, 90.0)));
+        app.update();
+        assert!((app.world().resource::<Draft>().shape.muscle - 0.75).abs() < 0.011, "and the drag carries it, off the bar too");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.update();
+        app.world_mut().get_mut::<Window>(window).unwrap().set_cursor_position(Some(Vec2::new(120.0, 50.0)));
+        app.update();
+        assert!((app.world().resource::<Draft>().shape.muscle - 0.75).abs() < 0.011, "let go, it stays");
     }
 }
