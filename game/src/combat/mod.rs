@@ -954,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn a_skeleton_collapses_onto_its_back_where_it_fell() {
+    fn a_skeleton_falls_to_pieces_where_it_stood() {
         let (mut app, _, skeleton) = skeleton_fight(kitted_seed(), None);
         app.update();
         let stood = app.world().get::<Transform>(skeleton).unwrap().translation;
@@ -963,8 +963,9 @@ mod tests {
             app.update();
         }
         let down = app.world().get::<Transform>(skeleton).unwrap();
-        // Its up now points along the floor (it lies down), and it is where it stood.
-        assert!((down.rotation * Vec3::Y).y.abs() < 0.2, "lying down");
+        // The body stays upright where it stood: the heap is all in the bones
+        // (`fb_creatures::pose::skeleton_heap`).
+        assert!((down.rotation * Vec3::Y).y > 0.99, "not tipped over");
         assert!(down.translation.xz().distance(stood.xz()) < 6.0);
         assert_eq!(app.world().get::<crate::creatures::Intent>(skeleton).unwrap().fallen, 1.0);
     }
