@@ -14,7 +14,7 @@
 //!   lands takes its damage from their [`Health`], flashes them and knocks them back a step as it
 //!   does a creature ([`Flinches`], a Medium creature's push), with a thud from where they stand.
 //! - **Felled**: at 0 they hold, flashing, for the flash's hold, then fall onto their back about
-//!   their feet ([`collapse_folk`], `feedback::laid_back`, as a skeleton falls). The body is a
+//!   their feet ([`collapse_folk`], `feedback::laid_back`, as a troll falls). The body is a
 //!   [`Corpse`]: it stops its routine, no longer turns its head, blocks nobody and shows no card.
 //!   "Name is slain" shows low in the view.
 //!
