@@ -240,6 +240,12 @@ const CHEST_SPREAD: f32 = PI / 4.0;
 /// strands (about 6 degrees), and a little over a cloth's thickness.
 const EDGE_COLUMNS: isize = 6;
 const EDGE_RISE: f32 = 0.05;
+/// How steeply a [`Rest`]'s reach may fall off per unit of height into the row above or
+/// below before that row stops holding the cell between them. A surface running no steeper
+/// than this between rows needs no holding (the cells follow it), and holding it anyway
+/// widened a sloping shoulder by the slope times a row's height; only a shelf or a rim
+/// narrower than a row is carried across. Our own figure, with the same test.
+const DILATE_SLOPE: f32 = 1.0;
 
 /// Bins along a limb for its clearance.
 const LIMB_BINS: usize = 24;
@@ -700,17 +706,21 @@ impl<'a> Envelope<'a> {
         let cell = |i: isize, j: isize| grid[i.clamp(0, rows as isize - 1) as usize * cols + j.rem_euclid(cols as isize) as usize];
         Rest::new(y0, y1, |phi, y| {
             let (i, j) = (((y - y0) / dy).round() as isize, ((phi + PI) / dphi).round() as isize);
-            let column = |k: isize| (-1..=1).map(|di| cell(i + di, j + k)).fold(NONE, f32::max);
+            let column = |k: isize| (-1..=1).map(|di: isize| cell(i + di, j + k) - DILATE_SLOPE * dy * di.abs() as f32).fold(NONE, f32::max);
             let own = column(0);
             let mut worn = (-1..=1).map(column).fold(NONE, f32::max);
             // A few columns further, only an edge standing clear of the surface's own run from
             // here (a cloak's front edge over the tunic beside it), not a surface that merely
-            // curves away, so hair beside the edge does not dip under it.
+            // curves away, so hair beside the edge does not dip under it. The run is the slope
+            // across this column, taken from both sides: from one side alone, a cell held up by
+            // the row beside it reads as flat there and the next column as an edge, which held
+            // hair 2 cm off a shoulder where the cloak sweeps out.
             for dir in [-1, 1] {
-                let step = if own > NONE && column(dir) > NONE { column(dir) - own } else { 0.0 };
+                let (ahead, behind) = (column(dir), column(-dir));
+                let slope = if ahead > NONE && behind > NONE { 0.5 * (ahead - behind) } else { 0.0 };
                 for k in 2..=EDGE_COLUMNS {
                     let c = column(dir * k);
-                    if c > own.max(0.0) + step * k as f32 + EDGE_RISE {
+                    if c > own.max(0.0) + slope.max(0.0) * k as f32 + EDGE_RISE {
                         worn = worn.max(c);
                     }
                 }
@@ -1545,8 +1555,15 @@ mod tests {
                         if depth > tolerance {
                             // Over a shelf (a cloak on a pauldron's top) the bins mix heights:
                             // measure the layers under along this point's ray exactly.
-                            let exact = layers[..li].iter().flat_map(|l| l.mesh.parts.iter().filter(|q| measured(l.slot, q) && !env.on_arms(q))).filter_map(|q| ray_reach(q, p)).fold(0.0f32, f32::max);
+                            let parts = || layers[..li].iter().flat_map(|l| l.mesh.parts.iter().filter(|q| measured(l.slot, q) && !env.on_arms(q)));
+                            let exact = parts().filter_map(|q| ray_reach(q, p)).fold(0.0f32, f32::max);
+                            // Along a near-horizontal edge (a neckline on the slope of the
+                            // shoulders) a little height is a lot of radius: the point is no
+                            // deeper in than its nearest surface.
                             depth = exact - p[0].hypot(p[2]);
+                            if depth > tolerance {
+                                depth = depth.min(parts().map(|q| distance_to(q, p, 1.0)).fold(1.0, f32::min));
+                            }
                         }
                         compared += 1;
                         if depth > tolerance {

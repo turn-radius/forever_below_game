@@ -260,17 +260,17 @@ impl Body {
 
     /// Long hair: a curtain from the back and sides of the cap down past the shoulders,
     /// pushed clear of the trunk and arms. Given what it rests on ([`HairFit::rest`]), each
-    /// strand falls until it meets the worn surface and then lies on it: pushed out where the
-    /// surface slopes, and where the surface is a shelf (the top of a cloak's shoulders) it
-    /// rests on top and slides back off it, rather than being pushed out to the shelf's edge.
-    /// Our own rule.
+    /// strand falls until it meets the worn surface and then lies on it: moved onto the surface
+    /// along its normal, so out where the surface is steep and up where it is a shelf (the top
+    /// of a cloak's shoulders), and the more it was lifted the more it then slides back off
+    /// down the slope, rather than being pushed out to the shelf's edge. Our own rule.
     fn long_hair(&self, face: &Face, fit: HairFit, base: f32, vol: f32) -> MeshBuilder {
         let r = face.r;
         let ns = (self.spec.seed % 1000) as f32 * 0.01;
         let length = if self.folk() == Folk::Dwarf { 0.55 } else { 0.42 } * self.trunk_length + r * 0.6;
         let c = face.head.centre;
         let top = self.shoulder_y + 0.2 * self.trunk_length;
-        let (cols, rows) = (36, 36);
+        let (cols, rows) = (72, 36);
         let natural = |u: f32, v: f32| {
             // Round the back from behind one ear to behind the other.
             let th = 1.3 + (TAU - 2.6) * (1.0 - u);
@@ -303,6 +303,7 @@ impl Body {
     /// `rows` steps, laid on `rest` (see [`Body::long_hair`]).
     fn strand(&self, rest: &Rest, margin: f32, natural: impl Fn(f32) -> V3, rows: usize) -> Vec<V3> {
         let s = self.scale;
+        let eps = 0.03 * s;
         // Even its root, where something stands up round the neck (a cowl).
         let root = natural(0.0);
         let root = match rest.at(root[2].atan2(root[0]), root[1]) {
@@ -313,37 +314,51 @@ impl Body {
             _ => root,
         };
         let mut out = vec![root];
-        let mut resting = false;
+        let mut resting = 0.0f32;
+        let mut slope = 0.0f32;
         for k in 1..=rows {
             let (a, b) = (natural((k - 1) as f32 / rows as f32), natural(k as f32 / rows as f32));
             let step = vec3::sub(b, a);
             let prev = out[k - 1];
-            let mut q = if resting {
-                // Sliding back off the top of a shoulder, then falling.
+            // Where it was lifted onto a shoulder it slides back off the top along the surface
+            // (down its slope, and back), then falls.
+            let mut q = {
                 let out_dir = vec3::normalize_or([prev[0], 0.0, prev[2]], vec3::neg(vec3::Z));
-                let dir = vec3::normalize_or(vec3::add(vec3::add([0.0, 0.0, -1.0], vec3::scale(out_dir, 0.3)), [0.0, -0.4, 0.0]), vec3::neg(vec3::Y));
-                vec3::add(prev, vec3::scale(dir, vec3::length(step)))
-            } else {
-                vec3::add(prev, step)
+                let downhill = vec3::add(vec3::scale(out_dir, slope), vec3::neg(vec3::Y));
+                let dir = vec3::normalize_or(vec3::add(vec3::normalize_or(downhill, vec3::neg(vec3::Y)), vec3::scale(vec3::neg(vec3::Z), 0.5)), vec3::neg(vec3::Y));
+                let slide = vec3::scale(dir, vec3::length(step));
+                vec3::add(prev, vec3::add(vec3::scale(step, 1.0 - resting), vec3::scale(slide, resting)))
             };
-            resting = false;
+            resting = 0.0;
             let phi = q[2].atan2(q[0]);
             if let Some(reach) = rest.at(phi, q[1]) {
                 let d = q[0].hypot(q[2]);
                 if d < reach + margin {
-                    // Out to the surface, or up onto it where that is the shorter way (a shelf).
-                    let push = reach + margin - d;
-                    let lift = (1..=40).map(|i| i as f32 * 0.02 * s).find(|&dy| !rest.inside([q[0], q[1] + dy, q[2]], margin));
-                    match lift {
-                        Some(dy) if dy < 0.7 * push => {
-                            q[1] += dy;
-                            resting = true;
+                    // Onto the surface along its normal: out where it is steep, up where it is a
+                    // shelf, and between the two as it tilts, so neighbouring strands never
+                    // part company (a choice between pushing out and lifting did).
+                    let (mut r, mut y) = (d, q[1]);
+                    for _ in 0..8 {
+                        let (Some(here), Some(above), Some(below)) = (rest.at(phi, y), rest.at(phi, y + eps), rest.at(phi, y - eps)) else { break };
+                        let miss = r - (here + margin);
+                        if miss >= -1e-4 {
+                            break;
                         }
-                        _ => {
-                            let k = (reach + margin) / d.max(1e-4);
-                            q = [q[0] * k, q[1], q[2] * k];
-                        }
+                        let g = ((below - above) / (2.0 * eps)).max(0.0);
+                        r -= miss / (1.0 + g * g);
+                        y -= miss * g / (1.0 + g * g);
                     }
+                    // Whatever is left of the way (the iteration stops short) is pushed straight out.
+                    let r = r.max(rest.at(phi, y).map_or(r, |reach| reach + margin));
+                    let (up, out) = (y - q[1], r - d);
+                    // The more it was lifted rather than pushed, the more it slides back off.
+                    resting = (up / (up + out).max(1e-4)) * ((up + out) / (0.2 * s)).min(1.0);
+                    let k = r / d.max(1e-4);
+                    q = [q[0] * k, y, q[2] * k];
+                    slope = match (rest.at(phi, y + eps), rest.at(phi, y - eps)) {
+                        (Some(above), Some(below)) => ((below - above) / (2.0 * eps)).max(0.0),
+                        _ => 0.0,
+                    };
                 } else if q[1] < self.shoulder_y + 0.05 * self.trunk_length {
                     // Below the shoulders it falls back onto what it hangs over and lies on it.
                     let to = (d - HANG_TUCK * step[1].abs()).max(reach + margin);
