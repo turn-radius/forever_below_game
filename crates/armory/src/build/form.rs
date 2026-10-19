@@ -167,11 +167,17 @@ impl Bulge {
         }
     }
 
-    /// The same bulge as cloth drapes over it: its cleft bridged, and hanging from a dome's
-    /// crest rather than following its underside in.
+    /// The same bulge as cloth drapes over it. Over a dome (a bust) it is fitted: it dips part
+    /// way into the cleft and comes back in under each crest within about the dome's own depth
+    /// below it, rather than following the crease. Bridged flat and hanging well below the
+    /// crest, a tunic tented from the bust and the wearer looked bloated. Other bulges (a seat)
+    /// are bridged across their cleft.
     pub fn bridged(self) -> Bulge {
-        let hang = if self.dome > 0.0 { 1.4 * self.spread * (1.0 + self.fall.max(0.0)) } else { 0.0 };
-        Bulge { cleft: 0.0, hang, ..self }
+        if self.dome > 0.0 {
+            Bulge { cleft: 0.55, hang: 0.7 * self.spread * (1.0 + self.fall), ..self }
+        } else {
+            Bulge { cleft: 0.0, ..self }
+        }
     }
 
     /// The same swelling `dy` higher.
@@ -355,8 +361,11 @@ impl TorsoProfile {
         if swell == 0.0 {
             return [x, z];
         }
-        let r = x.hypot(z).max(1e-5);
-        [x + x / r * swell, z + z / r * swell]
+        // Half as far sideways as out: a breast rounds out to the side without reaching into
+        // the room the arm hangs in.
+        let (dx, dz) = (0.5 * x, z);
+        let r = dx.hypot(dz).max(1e-5);
+        [x + dx / r * swell, z + dz / r * swell]
     }
 
     /// The surface point at `angle` and height `y`.

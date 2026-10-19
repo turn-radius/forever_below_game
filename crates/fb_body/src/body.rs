@@ -166,10 +166,10 @@ impl Body {
             spread: (0.22 + 0.06 * b) * t,
             depth: (0.08 + 0.14 * mu) * ws + 0.8 * b * ws,
             toward: FRONT,
-            pair: 0.45 + 0.1 * b,
+            pair: 0.43 + 0.06 * b,
             fall: -0.65 + b * (0.2 + 0.15 * round),
             cleft: 1.0,
-            dome: 0.42 + 0.12 * b,
+            dome: 0.41 + 0.1 * b,
             power: 0.3 + b * (0.6 - 0.3 * round),
             upper: 0.6 + 0.7 * b,
             square: 4.0 - 2.0 * b,
@@ -384,16 +384,20 @@ impl Body {
         for ring in &mut rings[2..=4] {
             *ring = ring.inflated(0.05, 0.03);
         }
+        // At the crotch the cloth takes in the leg's own top section, which fills out under the
+        // seat behind.
+        let sections = self.leg_sections();
+        let top = sections[LEG_SECTIONS - 1];
         LowerBodyForm {
             torso: torso.with_rings(rings),
             leg: self.leg_form(),
             waist_height: self.waist_y,
             // Where the trunk's skin rounds under between the thighs, so the seat covers it.
             crotch_height: self.hip_y - 0.14 * self.trunk_length - 0.25 * self.scale,
-            thigh_half_width: (self.hip.half_width * 0.47).max(leg.radius * 0.9),
-            thigh_half_depth: leg.radius * 1.08,
+            thigh_half_width: (self.hip.half_width * 0.47).max(leg.radius * 0.9).max(top.half_width * 1.02),
+            thigh_half_depth: (leg.radius * 1.08).max(top.front.max(top.back) * 1.04),
             stance: leg.joints[2][0].abs(),
-            sections: Some(self.leg_sections()),
+            sections: Some(sections),
         }
     }
 
@@ -718,7 +722,7 @@ fn arm_limb(race: &Race, h: f32, ws: f32, fem: f32, mu: f32, sw: f32, shoulder_y
     // A deltoid cap over the shoulder, the upper arm full to the elbow, and a forearm that
     // fills out below the elbow before it tapers: the plate's forearm was a thin tube.
     Limb::new(side, root, [s, e, w], controls, ar, |ts, te| {
-        vec![(0.0, 0.85), (ts, 1.1 + 0.06 * mu), (ts + 0.4 * (te - ts), 0.94 + 0.08 * mu), (te, 0.72), (te + 0.28 * (1.0 - te), 0.84 + 0.08 * mu), (1.0, 0.48)]
+        vec![(0.0, 0.85), (ts, 1.06 + 0.04 * mu), (ts + 0.4 * (te - ts), 0.92 + 0.08 * mu), (te, 0.72), (te + 0.28 * (1.0 - te), 0.84 + 0.08 * mu), (1.0, 0.48)]
     })
 }
 

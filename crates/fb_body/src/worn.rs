@@ -388,6 +388,11 @@ impl<'a> Envelope<'a> {
     /// the trunk: most of its points lie close on an arm or hand. Parts are judged whole, so
     /// a skirt hanging by the hands stays on the trunk.
     fn on_arms(&self, part: &Part) -> bool {
+        // Pauldrons are on the arms whatever they stand over: over a robe's belled sleeves
+        // they stood too far off the arm to be judged so, and counted as the trunk's.
+        if part.name == "pauldrons" {
+            return true;
+        }
         let near = part
             .positions
             .iter()
