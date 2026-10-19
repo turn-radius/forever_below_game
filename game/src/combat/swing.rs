@@ -846,6 +846,16 @@ mod tests {
     }
 
     #[test]
+    fn a_fallen_delver_cannot_swing_the_off_hand() {
+        let (mut app, delver, _) = clicker(true);
+        app.insert_resource(crate::combat::vitals::Fallen(1.0));
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_none());
+    }
+
+    #[test]
     fn a_winded_delver_cannot_swing() {
         let (mut app, delver) = swinger();
         app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.05, winded: true };
