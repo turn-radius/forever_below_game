@@ -30,7 +30,8 @@ ffmpeg -i "reference/audio/Cavernous Arpeggios.m4a" -vn -f wav - | oggenc --igno
 ffmpeg -i "reference/audio/Unreachable Home.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/unreachable-home.ogg -
 ffmpeg -i "reference/audio/Cavern Descent.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/cavern-descent.ogg -
 ffmpeg -i "reference/audio/I'm not alone.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/im-not-alone.ogg -
-ffmpeg -i "reference/audio/Untitled.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/untitled.ogg -
+ffmpeg -i "reference/audio/Trolls.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/trolls.ogg -
+ffmpeg -i "reference/audio/Measured Pulse.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/measured-pulse.ogg -
 ffmpeg -i "reference/audio/Let  me think.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/let-me-think.ogg -
 ffmpeg -i "reference/audio/Meant to be here.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/meant-to-be-here.ogg -
 ffmpeg -i "reference/audio/What am I doing?.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/what-am-i-doing.ogg -

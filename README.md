@@ -49,7 +49,7 @@ cargo run -p forever_below -- --seed 42            # skip it: straight into the 
 cargo run -p forever_below -- --title --seed 42    # the title, and New delve plays seed 42
 ```
 
-The game opens on the title screen, to Forever Below's theme. New delve (or Enter) opens the character creator over the card: pick the folk and class, type a name or roll one, roll the ability scores and the look, and watch the delver turn in the kit they start with. Begin the delve (or Enter) rolls a new level from the clock and goes down; Back (or Esc) returns. The theme fades out as you go in. Once you have gone down as someone, the title offers Continue as their name, which starts a fresh level with the same delver (kept in `last_character.json` beside `settings.json`). Settings is the pause menu's settings page (Esc or Back returns), and Quit leaves.
+The game opens on the title screen, to Forever Below's theme. New delve (or Enter) opens the character creator over the card: pick the folk and class, type a name or roll one, roll the ability scores and the look, and watch the delver turn in the kit they start with. Begin the delve (or Enter) rolls a new level from the clock and goes down; Back (or Esc) returns. Opening the creator turns the music to Measured Pulse, which loops until you go in and then fades out. In a level, the Trolls theme takes over while a troll is within a couple of rooms. Once you have gone down as someone, the title offers Continue as their name, which starts a fresh level with the same delver (kept in `last_character.json` beside `settings.json`). Settings is the pause menu's settings page (Esc or Back returns), and Quit leaves.
 
 Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
 
@@ -307,6 +307,8 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[sound]` | `ambience_volume` | 0.3 | Ambient sounds' volume at full, 0 to 1: drips and rumbles, before your sound volume setting. |
 | `[sound]` | `rumble_interval_min` | 60.0 | The shortest time between stone rumbles, in seconds. |
 | `[sound]` | `rumble_interval_max` | 180.0 | The longest time between stone rumbles, in seconds. |
+| `[sound]` | `troll_rooms` | 2 | The troll theme plays while a troll is this many rooms away or fewer. 0 is the same room. |
+| `[sound]` | `troll_linger` | 10.0 | How long the troll theme plays on after the last troll is out of range, in seconds. |
 | `[interface]` | `cell_size` | 72.0 | Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there. |
 | `[interface]` | `min_cell_size` | 48.0 | The fewest logical pixels a cell is drawn at, however short the window. |
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
