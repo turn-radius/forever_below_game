@@ -308,7 +308,7 @@ impl<'a> Envelope<'a> {
         for part in body.skin_mesh().parts.iter().filter(|p| matches!(p.name, "arms" | "hands")) {
             let under: Vec<bool> = part.positions.iter().map(|&p| {
                 let (side, t, _) = env.nearest_arm(p);
-                env.under_cloak(side, t)
+                env.under_cloak(side, t, p)
             }).collect();
             for (&p, _) in part.positions.iter().zip(&under).filter(|(_, u)| **u) {
                 let q = env.torso(p);
@@ -324,7 +324,7 @@ impl<'a> Envelope<'a> {
             let n = arm.path.len();
             for (i, &c) in arm.path.iter().enumerate() {
                 let t = i as f32 / (n - 1) as f32;
-                if !env.under_cloak(side, t) {
+                if !env.under_cloak(side, t, c) {
                     continue;
                 }
                 let r = arm.radius_at(t);
@@ -350,10 +350,18 @@ impl<'a> Envelope<'a> {
     /// forearm raised to hold a staff or a torch comes out through the cloak's front, as an arm
     /// comes out of a real cloak. Our own rule: measured over a raised forearm, a cloak stood
     /// off the shoulders like a shelf.
-    fn under_cloak(&self, side: Side, t: f32) -> bool {
+    ///
+    /// While the forearm is raised only what lies on the shoulder's side of the elbow counts
+    /// (`p` is the point): a wide sleeve sags below a bent elbow, and the cloak hung over the
+    /// sag stood out from the arm in a corner.
+    fn under_cloak(&self, side: Side, t: f32, p: V3) -> bool {
         let arm = self.body.arm(side);
         let forearm = vec3::normalize_or(vec3::sub(arm.joints[2], arm.joints[1]), [0.0, -1.0, 0.0]);
-        t <= arm.t_joints[1] || forearm[1] < -FOREARM_HANGS
+        if forearm[1] < -FOREARM_HANGS {
+            return true;
+        }
+        let upper = vec3::normalize_or(vec3::sub(arm.joints[1], arm.joints[0]), [0.0, -1.0, 0.0]);
+        t <= arm.t_joints[1] && vec3::dot(vec3::sub(p, arm.joints[1]), upper) <= 0.0
     }
 
     /// A body-space point in torso space.
@@ -427,7 +435,7 @@ impl<'a> Envelope<'a> {
             for &p in &part.positions {
                 if on_arms {
                     let (side, t, _) = self.nearest_arm(p);
-                    if !self.under_cloak(side, t) {
+                    if !self.under_cloak(side, t, p) {
                         continue;
                     }
                 }
@@ -440,7 +448,7 @@ impl<'a> Envelope<'a> {
                     let tri = [t[0], t[1], t[2]].map(|i| part.positions[i as usize]);
                     if on_arms && tri.iter().any(|p| {
                         let (side, t, _) = self.nearest_arm(*p);
-                        !self.under_cloak(side, t)
+                        !self.under_cloak(side, t, *p)
                     }) {
                         continue;
                     }
@@ -461,7 +469,7 @@ impl<'a> Envelope<'a> {
                 }
                 if on_arms {
                     let (side, t, da) = self.nearest_arm(p);
-                    if self.under_cloak(side, t) {
+                    if self.under_cloak(side, t, p) {
                         self.over_arms.add(q, e);
                     }
                     // Past the wrist is the hand, not the arm.
