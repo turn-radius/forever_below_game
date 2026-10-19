@@ -3,7 +3,7 @@
 //! Each value is how much it takes off the meter, where a meter runs from 0 (Fed) up to 1.
 //! Healing is not here: the draught's cure is a separate rule.
 
-use armory::families::food::FoodStyle;
+use armory::families::food::{Brew, FoodStyle};
 
 use crate::item::Item;
 
@@ -89,6 +89,15 @@ impl Item {
         })
     }
 
+    /// What a potion with something in it holds, named by its colour as the Armory names it
+    /// (an Antidote, a Mana Potion); `None` for anything else.
+    pub fn brew(&self) -> Option<Brew> {
+        match &self.shape {
+            armory::Item::Food(s) if s.provision.style == FoodStyle::Potion && s.provision.is_full() => Some(Brew::nearest(s.provision.liquid)),
+            _ => None,
+        }
+    }
+
     /// Whether this is a waterskin with water left to drink from.
     pub fn can_sip(&self) -> bool {
         matches!(&self.shape, armory::Item::Food(s) if s.provision.style == FoodStyle::Waterskin && s.provision.is_full())
@@ -163,5 +172,13 @@ mod tests {
             assert_eq!(roll_item("Bread", seed).unwrap().consume(), Some(Consume::Eat));
             assert_eq!(roll_item("Torch", seed).unwrap().consume(), None);
         }
+    }
+
+    #[test]
+    fn a_potion_holds_the_brew_it_is_named_for() {
+        let antidote = (0..200).map(|seed| roll_item("Potion", seed).unwrap()).find(|p| p.brew() == Some(Brew::Antidote)).expect("some potion is an antidote");
+        assert_eq!(antidote.title(), "Antidote");
+        assert_eq!(roll_item("Healing draught", 4).unwrap().brew(), Some(Brew::Healing));
+        assert_eq!(roll_item("Bread", 4).unwrap().brew(), None);
     }
 }
