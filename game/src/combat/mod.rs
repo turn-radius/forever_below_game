@@ -384,9 +384,10 @@ pub fn target_in_reach_from(from: Vec2, hand: Option<f32>, forward: Vec2, reach:
 /// What a bite does the delver under `rules`: its damage (its own, and its venom after a
 /// Constitution save against the rules' difficulty class, halved and rounded down on a success:
 /// SRD 5.1 p. 386, "Poisonous Snake"; rounding down is our own) and how many game hours a
-/// failed save poisons them for ([`rules::Venom::poisons_for_with`]).
-pub fn bite_damage_with(rules: &Rules, attack: &AttackOnDelver, constitution: i32, rng: &mut Mulberry32) -> (u32, Option<f64>) {
-    let bite = rules::bite_damage_with(rules, attack.damage, attack.poison, modifier(constitution), rng);
+/// failed save poisons them for ([`rules::Venom::poisons_for_with`]). Their `poison_resistance`
+/// from gear (of Purity, of the Mongoose) is added to the save.
+pub fn bite_damage_with(rules: &Rules, attack: &AttackOnDelver, constitution: i32, poison_resistance: i32, rng: &mut Mulberry32) -> (u32, Option<f64>) {
+    let bite = rules::bite_damage_with(rules, attack.damage, attack.poison, modifier(constitution) + poison_resistance, rng);
     (bite.damage.value() as u32, bite.venom.poisons_for_with(rules))
 }
 
@@ -603,6 +604,18 @@ mod tests {
         // d20 ≥ 10 with no modifier: 11 in 20.
         assert!((1000..1200).contains(&halved), "{halved} / {full}");
         assert_eq!(venom_after_save(0, 10, &mut rng), 0);
+    }
+
+    #[test]
+    fn poison_resistance_adds_to_the_save_against_venom() {
+        let bite = |resistance: i32, seed: u32| {
+            let attack = AttackOnDelver { attacker: Entity::PLACEHOLDER, species: None, damage: 0, poison: 7, attacker_pos: Vec2::ZERO };
+            bite_damage_with(fb_character::rules::defaults(), &attack, 10, resistance, &mut Mulberry32::new(seed)).1
+        };
+        // A d20 of 8 fails at CON 10 alone and saves with +2 (of the Mongoose).
+        let eight = (0..10_000u32).find(|&s| Mulberry32::new(s).int(1, 20) == 8).unwrap();
+        assert_eq!(bite(0, eight), Some(fb_character::poison::VENOM_POISONED_HOURS));
+        assert_eq!(bite(2, eight), None);
     }
 
     /// Seed 1207's creatures as bones, thinking and moving, with a delver holding `base` (or

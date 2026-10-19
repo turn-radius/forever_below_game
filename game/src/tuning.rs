@@ -445,11 +445,24 @@ pub struct RecoveryTuning {
     /// Game minutes a fed and watered delver takes to regain one hit point
     /// ([`fb_character::recovery`]). Our own.
     pub minutes_per_hit_point: f32,
+    /// How much faster each point of recovery from gear mends, as a fraction of the base rate
+    /// ([`fb_character::recovery::minutes_per_hit_point`]). Our own.
+    pub faster_per_point: f32,
+}
+
+impl RecoveryTuning {
+    /// Game minutes per hit point for a delver with `points` of recovery from their gear.
+    pub fn minutes_for(&self, points: f64) -> f64 {
+        fb_character::recovery::minutes_per_hit_point(self.minutes_per_hit_point as f64, self.faster_per_point as f64, points)
+    }
 }
 
 impl Default for RecoveryTuning {
     fn default() -> Self {
-        RecoveryTuning { minutes_per_hit_point: fb_character::recovery::MINUTES_PER_HIT_POINT as f32 }
+        RecoveryTuning {
+            minutes_per_hit_point: fb_character::recovery::MINUTES_PER_HIT_POINT as f32,
+            faster_per_point: fb_character::recovery::FASTER_PER_POINT as f32,
+        }
     }
 }
 

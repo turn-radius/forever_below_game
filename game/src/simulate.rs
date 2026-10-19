@@ -129,7 +129,8 @@ fn step_the_delver(
             let stopped = effects.as_deref().is_some_and(|e| e.0.stops_recovery(&rules.effects));
             let recovering = fb_character::recovery::recovers(&n, stopped);
             let mut next = recovery.0;
-            let gained = next.step(hours, tuning.recovery.minutes_per_hit_point as f64, recovering, health.hp, health.max);
+            let points = gear.get_or_insert_with(|| character.gear(&inventory)).recovery;
+            let gained = next.step(hours, tuning.recovery.minutes_for(points), recovering, health.hp, health.max);
             recovery.set_if_neq(DelverRecovery(next));
             if gained > 0 {
                 health.heal(gained);

@@ -5,7 +5,8 @@
 //! - Item properties: Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance.
 //!   These describe the item itself.
 //! - Wearer stats: Warmth, Stealth, Carry, Darkvision, HungerRate, SleepinessRate, DiseaseRisk,
-//!   Lockpicking, HealOnKill, Speed, BlockChance, Luck and the six ability scores. These affect the
+//!   Lockpicking, HealOnKill, Speed, BlockChance, Luck, the six ability scores, Recovery and
+//!   PoisonResistance. These affect the
 //!   character wearing the item.
 //!
 //! This is the minimal set the affixes in `data/afx.json` act on: the plate's item fields
@@ -71,6 +72,13 @@ pub struct Stats {
     pub wisdom: f32,
     #[serde(default)]
     pub charisma: f32,
+    /// Points of recovery: each mends the wearer's hit points a little faster while they recover
+    /// (`fb_character::recovery::minutes_per_hit_point`).
+    #[serde(default)]
+    pub recovery: f32,
+    /// Points of poison resistance: each adds 1 to the wearer's saves against venom.
+    #[serde(default)]
+    pub poison_resistance: f32,
 }
 
 fn one() -> f32 {
@@ -107,6 +115,8 @@ impl Default for Stats {
             intelligence: 0.0,
             wisdom: 0.0,
             charisma: 0.0,
+            recovery: 0.0,
+            poison_resistance: 0.0,
         }
     }
 }
@@ -142,14 +152,16 @@ pub enum Stat {
     Intelligence,
     Wisdom,
     Charisma,
+    Recovery,
+    PoisonResistance,
 }
 
 impl Stat {
-    pub const ALL: [Stat; 25] = [
+    pub const ALL: [Stat; 27] = [
         Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
         Stat::Warmth, Stat::Stealth, Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::SleepinessRate, Stat::DiseaseRisk,
         Stat::Lockpicking, Stat::HealOnKill, Stat::Speed, Stat::BlockChance, Stat::Luck, Stat::Strength, Stat::Dexterity, Stat::Constitution,
-        Stat::Intelligence, Stat::Wisdom, Stat::Charisma,
+        Stat::Intelligence, Stat::Wisdom, Stat::Charisma, Stat::Recovery, Stat::PoisonResistance,
     ];
 
     /// Item properties: describe the item itself (Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance).
@@ -233,6 +245,8 @@ impl Stats {
             Stat::Intelligence => &self.intelligence,
             Stat::Wisdom => &self.wisdom,
             Stat::Charisma => &self.charisma,
+            Stat::Recovery => &self.recovery,
+            Stat::PoisonResistance => &self.poison_resistance,
         }
     }
 
@@ -263,6 +277,8 @@ impl Stats {
             Stat::Intelligence => &mut self.intelligence,
             Stat::Wisdom => &mut self.wisdom,
             Stat::Charisma => &mut self.charisma,
+            Stat::Recovery => &mut self.recovery,
+            Stat::PoisonResistance => &mut self.poison_resistance,
         }
     }
 }

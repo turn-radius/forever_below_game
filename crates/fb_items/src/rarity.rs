@@ -439,7 +439,7 @@ mod tests {
                 }
             }
         }
-        for name in ["Fleet", "of Haste", "Vicious", "of Carnage", "Accurate", "of Precision", "Reinforced", "of the Bulwark", "of Deflection", "of the Rampart", "of the Owl", "of the Bat", "of Might", "of the Giant", "of Vigour", "of the Bear", "Sluggish", "Frail"] {
+        for name in ["Fleet", "of Haste", "Vicious", "of Carnage", "Accurate", "of Precision", "Reinforced", "of the Bulwark", "of Deflection", "of the Rampart", "of the Owl", "of the Bat", "of Might", "of the Giant", "of Vigour", "of the Bear", "Sluggish", "Frail", "of the Hare", "of the Wind", "of Mending", "of the Troll", "of Purity", "of the Mongoose"] {
             assert!(seen.contains(name), "{name} never rolled");
         }
     }
@@ -457,6 +457,29 @@ mod tests {
         assert!(rampart.fits_item(&[Tag::Armor, Tag::Wood], Some(Slot::Offhand)), "a shield");
         assert!(!rampart.fits_item(&[Tag::Metal, Tag::Armor, Tag::Wear], Some(Slot::Head)), "not a helm");
         assert!(!rampart.fits_item(&[Tag::Wood], Some(Slot::Offhand)), "not a torch");
+        for name in ["of the Hare", "of the Wind", "of Mending", "of the Troll", "of Purity", "of the Mongoose"] {
+            let ward = by_name(name);
+            for slot in [Slot::Ring1, Slot::Ring2, Slot::Neck, Slot::Charm] {
+                assert!(ward.fits_item(&[Tag::Trinket], Some(slot)), "{name} on {slot:?}");
+            }
+            assert!(!ward.fits_item(&[Tag::Leather, Tag::Wear, Tag::Quiet], Some(Slot::Feet)), "{name} on boots");
+            assert!(ward.in_play(), "{name} is read");
+        }
+    }
+
+    #[test]
+    fn trinket_wards_give_one_or_two_points() {
+        let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
+        let on = |n: &str| {
+            let mut s = crate::Stats::default();
+            by_name(n).apply_to_stats(&mut s);
+            s
+        };
+        assert_eq!((on("of Mending").recovery, on("of the Troll").recovery), (1.0, 2.0));
+        assert_eq!((on("of Purity").poison_resistance, on("of the Mongoose").poison_resistance), (1.0, 2.0));
+        assert_eq!((on("of the Hare").speed, on("of the Wind").speed), (1.05, 1.1));
+        assert_eq!(by_name("of the Troll").least, Rarity::Rare);
+        assert!(!by_name("of the Hare").stacks_with(by_name("Fleet")), "one speed affix to a charm");
     }
 
     #[test]
