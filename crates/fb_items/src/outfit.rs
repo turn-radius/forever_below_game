@@ -152,16 +152,16 @@ impl Outfit {
                 worn.push((slot, item));
             }
         }
-        // A bow or crossbow comes with a quiver or bolt case at the hip and twenty of its
+        // A bow or crossbow comes with a quiver or bolt case slung and twenty of its
         // ammunition, carried as goods for the wearer to stow in it (SRD 5.1 p. 67-68).
         let mut ammunition = Vec::new();
         let shoots = worn.iter().find(|(s, _)| *s == Slot::Mainhand).and_then(|(_, i)| i.profile.ranged);
         if let Some(ranged) = shoots
-            && free(&worn, Slot::Hip)
+            && free(&worn, Slot::Quiver)
         {
             let (holder, ammo) = if ranged.ammunition == armory::Family::Bolt { ("Bolt case", "Bolt") } else { ("Quiver", "Arrow") };
             if let Some(item) = draw(&mut rng, holder) {
-                worn.push((Slot::Hip, item));
+                worn.push((Slot::Quiver, item));
                 ammunition = (0..AMMUNITION_CARRIED).filter_map(|_| draw(&mut rng, ammo)).collect();
             }
         }
@@ -217,7 +217,7 @@ mod tests {
                 for (slot, item) in &set.worn {
                     match outfit.slots.iter().find(|(s, _)| s == slot) {
                         Some((_, choice)) => assert!(choice.bases.contains(&item.base), "{}: {} in {slot:?}", outfit.key, item.base),
-                        None => assert!(matches!(slot, Slot::Ring1 | Slot::Neck | Slot::Charm | Slot::Head | Slot::Hip), "{slot:?}"),
+                        None => assert!(matches!(slot, Slot::Ring1 | Slot::Neck | Slot::Charm | Slot::Head | Slot::Quiver), "{slot:?}"),
                     }
                 }
                 let shoots = set.item(Slot::Mainhand).is_some_and(|i| i.profile.ranged.is_some());
@@ -242,7 +242,7 @@ mod tests {
         let archers: Vec<_> = (0..40).map(|seed| ranger.roll(seed, "human")).filter(|s| s.item(Slot::Mainhand).is_some_and(|i| i.base == "Bow")).collect();
         assert!(!archers.is_empty());
         for set in archers {
-            assert_eq!(set.item(Slot::Hip).map(|i| i.base.as_str()), Some("Quiver"));
+            assert_eq!(set.item(Slot::Quiver).map(|i| i.base.as_str()), Some("Quiver"));
             assert_eq!(set.goods.iter().filter(|g| g.base == "Arrow").count(), 20);
         }
     }
