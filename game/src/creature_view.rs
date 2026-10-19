@@ -346,7 +346,7 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
                     ViewMotion::Rearing => 0.9,
                     ViewMotion::Striking => 0.6,
                 };
-                pose::centipede(centipede, &CentipedePose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, rear, bite: strike, jaw: strike, look: 0.0 })
+                pose::centipede(centipede, &CentipedePose { stride: shown.cycle, pace: if moving { 1.0 } else { 0.0 }, time: t, rear, bite: strike, jaw: strike, look: 0.0, curl: 0.0 })
             }
             Creature::Bat(bat) => {
                 // Still hangs, moving beats its wings, rearing glides, striking beats and bites.

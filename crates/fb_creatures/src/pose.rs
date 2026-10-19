@@ -1708,11 +1708,14 @@ pub struct CentipedePose {
     pub jaw: f32,
     /// How far the head turns toward its left (+X), radians.
     pub look: f32,
+    /// 0 alive, 1 curled into a tight flat spiral on the floor, the head at its middle, the legs
+    /// drawn in against the belly: how a centipede lies dead.
+    pub curl: f32,
 }
 
 impl CentipedePose {
     /// Lying flat, still.
-    pub const REST: CentipedePose = CentipedePose { stride: 0.0, pace: 0.0, time: 0.0, rear: 0.0, bite: 0.0, jaw: 0.0, look: 0.0 };
+    pub const REST: CentipedePose = CentipedePose { stride: 0.0, pace: 0.0, time: 0.0, rear: 0.0, bite: 0.0, jaw: 0.0, look: 0.0, curl: 0.0 };
 }
 
 /// Share of the cycle each leg is on the floor. Lower than most walkers': a centipede's many
@@ -1745,6 +1748,14 @@ const FORCIPULE_WIND_UP: f32 = 0.35;
 /// raised front is.
 const RAISE_PITCH: f32 = 1.1;
 const RAISED_PLATES: f32 = 6.0;
+/// A coiled centipede's spiral, in girths: the radius the head sits at, and how far apart the
+/// turns lie (a little over the body's width, which is two girths). Our own numbers.
+const COIL_CORE: f32 = 1.3;
+const COIL_PITCH: f32 = 2.2;
+/// How far a coiled centipede's legs droop in against its flanks (`yaw`, about the body's
+/// length) and sweep fore and aft (`roll`), radians.
+const COIL_LEG_YAW: f32 = -1.1;
+const COIL_LEG_ROLL: f32 = 0.3;
 
 /// The ground a centipede covers in one full step cycle: what its legs sweep through their
 /// stance, over the share of the cycle they spend in it.
@@ -1773,13 +1784,27 @@ pub fn centipede(state: &CentipedeState, pose: &CentipedePose) -> Vec<Placement>
     let samples = n * per + 1;
     let step = l / per as f32;
     let moving = pose.pace.clamp(0.0, 1.0);
-    let raise = pose.rear.clamp(0.0, 1.0);
+    let curl = pose.curl.clamp(0.0, 1.0);
+    let raise = pose.rear.clamp(0.0, 1.0) * (1.0 - curl);
     let t = pose.time;
     let lambda = BODY_WAVELENGTH * d.body_length;
     let amplitude = BODY_WAVE * (0.3 + 0.7 * moving);
     let neck = (RAISED_PLATES * l).min(d.body_length);
     let pitch_at = |s: f32| RAISE_PITCH * raise * (1.0 - smoothstep(s / neck));
-    let heading = |s: f32| amplitude * (TAU * s / lambda + WAVE_RATE * t).sin();
+    // A coil's heading at each sample: the turn so far, which tightens toward the head as the
+    // radius there is small, so the body winds in a flat spiral with the head at its middle.
+    let (core, pitch) = (COIL_CORE * d.girth, COIL_PITCH * d.girth);
+    let mut coil = Vec::with_capacity(samples);
+    let mut turned = 0.0f32;
+    for _ in 0..samples {
+        let turn = step / (core + pitch * turned / TAU);
+        coil.push(turned + 0.5 * turn);
+        turned += turn;
+    }
+    let heading = |s: f32| {
+        let wave = amplitude * (TAU * s / lambda + WAVE_RATE * t).sin();
+        if curl > 0.0 { wave + curl * (coil[((s / step) as usize).min(samples - 1)] - wave) } else { wave }
+    };
     // Height of the centre line, built up from the tail so every step keeps its length.
     let mut lift = vec![0.0f32; samples + 1];
     for j in (0..samples).rev() {
@@ -1816,7 +1841,7 @@ pub fn centipede(state: &CentipedeState, pose: &CentipedePose) -> Vec<Placement>
     head_at[1] += d.clearance + state.head_depth();
     head_at = vec3::add(head_at, vec3::scale(forward, 0.9 * d.girth * pose.bite));
     let sniff = 0.12 * (1.0 - moving) * (0.9 * t).sin();
-    let tip = -0.5 * raise - 0.3 * pose.bite;
+    let tip = -0.5 * raise - 0.3 * pose.bite - 0.35 * curl;
     let rotation = along(forward).mul_mat(&rz(pose.look + sniff)).mul_mat(&rx(tip));
     let mut head_place = Placement { rotation, origin: head_at };
     // Forcipules: held open and apart, twitching a little, gaping wider as the bite is thrown and
@@ -1883,6 +1908,8 @@ pub fn centipede(state: &CentipedeState, pose: &CentipedePose) -> Vec<Placement>
                 }
                 (yaw, up)
             };
+            // Coiled, the legs draw in against the flanks.
+            let (yaw, roll) = if state.is_last(k) { (yaw, roll) } else { (yaw + curl * (COIL_LEG_YAW - yaw), roll + curl * (COIL_LEG_ROLL - roll)) };
             out[i] = Placement { rotation: rz(side * yaw).mul_mat(&rot_y(-side * roll)), origin: state.hip(k, side) };
         }
     }
@@ -2040,9 +2067,38 @@ mod centipede_tests {
     }
 
     #[test]
+    fn a_coiled_centipede_lies_in_a_tight_flat_spiral() {
+        for seed in [3, 8, 21, 40] {
+            let state = CentipedeState::roll(seed);
+            let rig = state.build();
+            let rest = centipede(&state, &CentipedePose::REST);
+            assert_eq!(centipede(&state, &CentipedePose { curl: 0.0, ..CentipedePose::REST }), rest);
+            let coiled = centipede(&state, &CentipedePose { curl: 1.0, ..CentipedePose::REST });
+            let centres: Vec<V3> = (0..state.segments).map(|k| coiled[state.segment_bone(k)].origin).collect();
+            let mid = centres.iter().fold([0.0f32; 2], |m, c| [m[0] + c[0] / centres.len() as f32, m[1] + c[2] / centres.len() as f32]);
+            let far = centres.iter().map(|c| ((c[0] - mid[0]).powi(2) + (c[2] - mid[1]).powi(2)).sqrt()).fold(0.0, f32::max);
+            assert!(far < state.length / 3.0, "seed {seed}: the coil spans {far} of a body {} long", state.length);
+            for (k, c) in centres.iter().enumerate() {
+                assert!((c[1] - state.centre_height(k)).abs() < 1e-3, "plate {k} stays on the floor");
+            }
+            let low = lowest(&rig, &coiled);
+            assert!(low > -0.05 * state.girth, "seed {seed}: the coil does not sink into the floor: {low}");
+            // The head lies at the middle of the coil, nearer it than the tail.
+            let head = coiled[centipede_bone::HEAD].origin;
+            let tail = centres[state.segments - 1];
+            let dist = |a: V3| ((a[0] - mid[0]).powi(2) + (a[2] - mid[1]).powi(2)).sqrt();
+            assert!(dist(head) < dist(tail), "seed {seed}: the head is tucked in");
+            // Partway, it is between.
+            let half = centipede(&state, &CentipedePose { curl: 0.5, ..CentipedePose::REST });
+            assert_ne!(half, rest);
+            assert_ne!(half, coiled);
+        }
+    }
+
+    #[test]
     fn a_centipede_is_a_pure_function_of_its_pose() {
         let state = CentipedeState::roll(9);
-        let pose = CentipedePose { stride: 2.0, pace: 0.7, time: 3.0, rear: 0.4, bite: 0.2, jaw: 0.3, look: 0.2 };
+        let pose = CentipedePose { stride: 2.0, pace: 0.7, time: 3.0, rear: 0.4, bite: 0.2, jaw: 0.3, look: 0.2, curl: 0.5 };
         assert_eq!(centipede(&state, &pose), centipede(&state, &pose));
         assert_eq!(centipede(&state, &pose).len(), state.bone_count());
         assert!(centipede_stride(&state) > state.girth);
