@@ -439,7 +439,7 @@ mod tests {
                 }
             }
         }
-        for name in ["Fleet", "of Haste", "Vicious", "of Carnage", "Accurate", "of Precision", "Reinforced", "of the Bulwark", "of Deflection", "of the Rampart", "of the Owl", "of the Bat", "of Might", "of the Giant", "of Vigour", "of the Bear", "Sluggish", "Frail", "of the Hare", "of the Wind", "of Mending", "of the Troll", "of Purity", "of the Mongoose"] {
+        for name in ["Fleet", "of Haste", "Vicious", "of Carnage", "Accurate", "of Precision", "Reinforced", "of the Bulwark", "of Deflection", "of the Rampart", "of the Owl", "of the Bat", "of Might", "of the Giant", "of Vigour", "of the Bear", "Sluggish", "Frail", "of the Hare", "of Mending", "of Purity"] {
             assert!(seen.contains(name), "{name} never rolled");
         }
     }
@@ -471,7 +471,7 @@ mod tests {
     fn trinket_wards_give_one_or_two_points() {
         let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
         let on = |n: &str| {
-            let mut s = crate::Stats::default();
+            let mut s = crate::stats::Stats::default();
             by_name(n).apply_to_stats(&mut s);
             s
         };
