@@ -33,6 +33,10 @@ use crate::material::MaterialKind;
 use crate::sections::garment::{Belt, GarmentCut, GarmentStyle, Neckline, Plates, Sleeves};
 use crate::sections::hem::Hem;
 
+/// How far below where it starts to flare a skirt must hang to take its whole flare (4 units,
+/// 40 cm: a robe or a long coat); a shorter one takes its share, and no less than a quarter.
+const FULL_FLARE_DROP: f32 = 4.0;
+
 /// How a sheet hangs on a [`TorsoForm`]. Heights are in the form's space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Drape {
@@ -314,8 +318,11 @@ impl DrapedSurface {
         let skirt = ((d.flare_from - y) / (d.flare_from - d.hem).max(0.3)).clamp(0.0, 1.0);
         // Over an underlay the skirt's fullness falls into its folds round what it hangs over
         // rather than spreading out from it.
+        // A skirt flares by how far it hangs as well: a tunic ending a hand's breadth below the
+        // hips flared as much as a robe and stood out like a peplum.
         if !self.underlaid {
-            r *= 1.0 + d.flare * 0.9 * skirt.powf(1.3);
+            let drop = ((d.flare_from - d.hem) / FULL_FLARE_DROP).clamp(0.25, 1.0);
+            r *= 1.0 + d.flare * 0.9 * drop * skirt.powf(1.3);
         }
         r += d.fold_depth(y) * d.fold_wave(angle);
         if let Some(quilt) = &d.quilt {

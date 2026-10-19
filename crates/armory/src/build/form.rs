@@ -95,15 +95,20 @@ pub struct Bulge {
     /// above and below it (`fall` further below), with a definite edge, rather than a swell
     /// fading by `sharpness` all round the front: a breast's own form.
     pub dome: f32,
-    /// A dome's fullness: 1 a round cap, more a fuller one that drops off sharply at its edge.
+    /// A dome's profile below its crest: 0.5 a round cap that meets its crease steeply, below
+    /// that a flatter plate with a crisper edge, above it a softer, more pointed one.
     pub power: f32,
+    /// The same above its crest, where it slopes up to the collarbone.
+    pub upper: f32,
+    /// The superellipse exponent of a dome's outline: 2 round (a breast), 4 squarish (a pectoral).
+    pub square: f32,
     /// Above 0, cloth over the bulge hangs from its crest, falling back to the form this far
     /// below it instead of following the underside in.
     pub hang: f32,
 }
 
 impl Bulge {
-    pub const NONE: Bulge = Bulge { y: 0.0, spread: 1.0, depth: 0.0, sharpness: 2, toward: FRONT, pair: 0.0, fall: 0.0, cleft: 0.0, dome: 0.0, power: 1.0, hang: 0.0 };
+    pub const NONE: Bulge = Bulge { y: 0.0, spread: 1.0, depth: 0.0, sharpness: 2, toward: FRONT, pair: 0.0, fall: 0.0, cleft: 0.0, dome: 0.0, power: 1.0, upper: 1.0, square: 2.0, hang: 0.0 };
 
     /// How far the form swells at `angle` (lathe convention) and height `y`.
     pub fn at(&self, angle: f32, y: f32) -> f32 {
@@ -134,14 +139,15 @@ impl Bulge {
         let dy = y - self.y;
         let v = dy / if dy < 0.0 { self.spread * (1.0 + self.fall) } else { self.spread }.max(1e-3);
         let off = wrap(angle - self.toward);
-        // Above the crest the dome is fuller, a long slope from the collarbone; below it rounds
-        // under to its crease.
-        let power = if v > 0.0 { 0.6 * self.power } else { self.power };
+        // Above the crest it slopes up to the collarbone; below it rounds under to its crease.
+        let power = if v > 0.0 { self.upper } else { self.power };
+        let n = self.square.max(1.0);
         // Across: each lobe's share at the crest's height, bridged between them by the cleft.
         let across = |v: f32| {
             let lobe = |c: f32| {
                 let da = wrap(angle - c) / self.dome;
-                (1.0 - da * da - v * v).max(0.0).powf(power)
+                let r = (da.abs().powf(n) + v.abs().powf(n)).powf(1.0 / n);
+                (1.0 - r * r).max(0.0).powf(power)
             };
             let lobes = lobe(self.toward - self.pair).max(lobe(self.toward + self.pair));
             if self.pair > 0.0 && off.abs() < self.pair {
@@ -343,7 +349,14 @@ impl TorsoProfile {
     pub fn section(&self, angle: f32, y: f32, inflate: f32) -> [f32; 2] {
         let (hw, hd) = self.at(y);
         let swell: f32 = self.bulges.iter().map(|b| b.at(angle, y)).sum();
-        section_point(angle, hw + inflate, hd + swell + inflate, self.exponent, self.back)
+        // Out from the axis, so a swell to the side of the front (a breast) rounds out
+        // sideways as well as forward; the first bulges only deepened the section.
+        let [x, z] = section_point(angle, hw + inflate, hd + inflate, self.exponent, self.back);
+        if swell == 0.0 {
+            return [x, z];
+        }
+        let r = x.hypot(z).max(1e-5);
+        [x + x / r * swell, z + z / r * swell]
     }
 
     /// The surface point at `angle` and height `y`.
