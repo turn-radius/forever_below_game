@@ -625,7 +625,7 @@ mod tests {
     fn with(folk: Folk, seed: u32, hair: HairStyle, beard: Beard) -> Body {
         let mut spec = BodySpec::roll(folk, seed);
         spec.hair = hair;
-        spec.beard = beard;
+        spec = spec.with_beard(beard);
         Body::new(&spec)
     }
 

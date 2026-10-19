@@ -127,6 +127,11 @@ impl BodyShape {
 }
 
 impl BodySpec {
+    /// The same body with a beard of `style`, at that style's length.
+    pub fn with_beard(self, beard: Beard) -> BodySpec {
+        BodySpec { beard, beard_length: beard_reach(beard), ..self }
+    }
+
     /// The fields that shape the body.
     pub fn shape(&self) -> BodyShape {
         BodyShape {

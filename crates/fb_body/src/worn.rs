@@ -995,7 +995,7 @@ fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> 
         GarmentStyle::Robe => smoothstep(0.05, 0.4, body.spec.bust),
         _ => 0.0,
     };
-    s.cut.fit = 1.0 + (s.cut.fit - 1.0) * (1.0 - 0.8 * fitted);
+    s.cut.fit = 1.0 + (s.cut.fit - 1.0) * (1.0 - 0.6 * fitted);
     s.cut.folds *= 1.0 - 0.5 * fitted;
     let tuck = (!s.cut.style.is_open()).then_some(FITTED_TUCK * if s.cut.style == GarmentStyle::Robe { fitted } else { 1.0 });
     let room = body.waist_y - body.ankle_y - 0.35 * body.scale;
@@ -1955,7 +1955,7 @@ mod tests {
         for (folk, seed, bust) in [Folk::Dwarf, Folk::Human].into_iter().flat_map(|f| [(3u32, 0.0), (1207, 0.0), (40, 0.0), (3, 1.0)].map(move |(s, b)| (f, s, b))) {
             {
                 let mut spec = BodySpec::roll(folk, seed);
-                spec.beard = Beard::Full;
+                spec = spec.with_beard(Beard::Full);
                 spec.bust = bust;
                 let body = Body::new(&spec);
                 for kit in [10u32, 11] {
@@ -2221,7 +2221,7 @@ mod tests {
         let cleric = fb_items::outfit::outfit("cleric").unwrap();
         for seed in 1..=8u32 {
             let mut spec = BodySpec::roll(Folk::Human, seed);
-            spec.beard = Beard::Full;
+            spec = spec.with_beard(Beard::Full);
             spec.hair = if seed % 2 == 0 { HairStyle::Ponytail } else { HairStyle::Long };
             let body = Body::new(&spec);
             let mut worn: Vec<(Slot, Item)> = cleric.roll(seed, "human").worn.into_iter().filter(|(s, _)| LAYER_ORDER.contains(s)).map(|(s, i)| (s, i.shape)).collect();
@@ -2328,7 +2328,7 @@ mod tests {
         use crate::folk::Beard;
         use crate::held::fit_held;
         let mut spec = BodySpec::roll(Folk::Dwarf, 1207);
-        spec.beard = Beard::Forked;
+        spec = spec.with_beard(Beard::Forked);
         // A staff in one hand and a torch in the other: both forearms raised level.
         let mut body = Body::new(&spec);
         for (side, family, seed) in [(Side::Right, Family::Staff, 3), (Side::Left, Family::Torch, 4)] {
