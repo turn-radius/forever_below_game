@@ -137,8 +137,9 @@ impl Plugin for TitlePlugin {
             .init_resource::<NewDelveSeed>()
             .add_message::<MenuCommand>()
             .add_systems(OnEnter(AppState::Title), spawn_title)
+            .init_resource::<creator::ShapeMoved>()
             .add_systems(OnExit(AppState::Title), |mut commands: Commands| commands.remove_resource::<Draft>())
-            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), creator::roll_look_every.run_if(|| creator::roll_look_wait().is_some()), title_controls, run_creator, build_panel).chain().run_if(in_state(AppState::Title)))
+            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), creator::roll_look_every.run_if(|| creator::roll_look_wait().is_some()), title_controls, run_creator, creator::drag_shape, creator::show_shape, build_panel).chain().run_if(in_state(AppState::Title)))
             .add_systems(Update, mark_chosen.before(light_hovered).run_if(in_state(AppState::Title)));
     }
 }

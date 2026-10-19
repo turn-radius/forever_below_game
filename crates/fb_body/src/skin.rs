@@ -28,6 +28,11 @@ use crate::body::{Body, TRUNK_EXPONENT};
 use crate::limb::{Limb, Side};
 use crate::rig::{JOINTS, Joint};
 
+/// The share of the legs loose cloth follows at the ankles, growing from none at the crotch.
+/// It was 0.4 while skirts ended at the knee; a robe that hangs to the feet needs most of its
+/// hem to go with the shins, or the shins stride out through it.
+pub(crate) const HEM_SHARE: f32 = 0.75;
+
 /// Four joint indices and weights for each vertex of one part, parallel to its positions.
 /// Weights are non-negative and sum to 1; unused slots are joint 0 with weight 0.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -362,7 +367,7 @@ impl Skinner {
             // Loose cloth and anything hanging off the legs: a share of the thighs grows toward
             // the hem, split across the midline.
             let hangs = matches!(region, SkinRegion::Auto | SkinRegion::Legs | SkinRegion::Loose);
-            let share = if hangs { 0.4 * smoothstep(self.crotch_y, self.ankle_y, p[1]) } else { 0.0 };
+            let share = if hangs { HEM_SHARE * smoothstep(self.crotch_y, self.ankle_y, p[1]) } else { 0.0 };
             self.trunk_weights(p[1], rest * (1.0 - share), acc);
             if share > 1e-5 {
                 let xm = 0.5 * self.hip_half_width;

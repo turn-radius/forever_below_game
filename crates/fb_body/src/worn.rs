@@ -31,6 +31,7 @@
 use std::f32::consts::{PI, TAU};
 
 use armory::build::boot::boot_parts;
+use armory::build::hafted::smoothstep;
 use armory::build::form::{BACK, FRONT, HeadForm, LimbForm, TorsoForm, TorsoProfile};
 use armory::build::garment::{Fitting, Notch, Underlay, garment_drape, garment_parts_fitted};
 use armory::build::hand::hand_parts_fitted;
@@ -72,6 +73,13 @@ pub const LAYER_ORDER: [Slot; 10] = [Slot::Legs, Slot::Feet, Slot::Shirt, Slot::
 
 /// Clearance kept between a layer and the one under it, over the outer layer's own ease.
 const GAP: f32 = 0.04;
+/// How fast fitted cloth draws in toward the body below the chest, per unit of drop
+/// ([`Fitting::tuck`]): eight times a tunic's own loose fall, so it follows the body in under a
+/// bust and to the waist.
+const FITTED_TUCK: f32 = 1.2;
+/// How far above the ankle a robe's hem hangs, in multiples of the wearer's scale: 1.5 cm on
+/// a human, just clear of the top of the foot.
+const ROBE_CLEARANCE: f32 = 0.15;
 /// A forearm whose direction points further down than this (the downward share of its unit
 /// direction) hangs by the body, under a cloak. Our own threshold: about 37 degrees off the
 /// vertical, so an arm hanging relaxed counts and one bent forward to hold something does not.
@@ -144,6 +152,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
     let mut env = Envelope::new(body);
     let tucked = worn.iter().any(|(slot, item)| *slot == Slot::Feet && matches!(item, Item::Feet(s) if has_shaft(s)));
     let hooded = worn.iter().any(|(slot, item)| *slot == Slot::Head && matches!(item, Item::Hood(_)));
+    let robed = worn.iter().any(|(slot, item)| matches!(slot, Slot::Shirt | Slot::Body) && matches!(item, Item::Garment(g) if g.cut.style == GarmentStyle::Robe));
     // Ears fold back under a hood, and a pig's flop ears under anything; standing ears come
     // out through openings cut in a helm; a frill folds flat under anything on the head.
     fit.head = match worn.iter().find(|(slot, _)| *slot == Slot::Head).map(|(_, item)| item) {
@@ -173,7 +182,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
                     fit.covered.hands |= s.hand.style != HandStyle::Bracer;
                     gloves(body, &env, s)
                 }
-                (Slot::Belt, Item::Belt(s)) => belt(body, &env, s),
+                (Slot::Belt, Item::Belt(s)) => belt(body, &env, s, robed),
                 (Slot::Neck, Item::Amulet(s)) => amulet(body, &env, s),
                 (Slot::Head, Item::Helm(s)) => helm(body, s, fit.head),
                 (Slot::Head, Item::Hood(s)) => hood(body, &env, s, fit.head),
@@ -231,6 +240,12 @@ const CHEST_SPREAD: f32 = PI / 4.0;
 /// strands (about 6 degrees), and a little over a cloth's thickness.
 const EDGE_COLUMNS: isize = 6;
 const EDGE_RISE: f32 = 0.05;
+/// How steeply a [`Rest`]'s reach may fall off per unit of height into the row above or
+/// below before that row stops holding the cell between them. A surface running no steeper
+/// than this between rows needs no holding (the cells follow it), and holding it anyway
+/// widened a sloping shoulder by the slope times a row's height; only a shelf or a rim
+/// narrower than a row is carried across. Our own figure, with the same test.
+const DILATE_SLOPE: f32 = 1.0;
 
 /// Bins along a limb for its clearance.
 const LIMB_BINS: usize = 24;
@@ -299,7 +314,7 @@ impl<'a> Envelope<'a> {
         for part in body.skin_mesh().parts.iter().filter(|p| matches!(p.name, "arms" | "hands")) {
             let under: Vec<bool> = part.positions.iter().map(|&p| {
                 let (side, t, _) = env.nearest_arm(p);
-                env.under_cloak(side, t)
+                env.under_cloak(side, t, p)
             }).collect();
             for (&p, _) in part.positions.iter().zip(&under).filter(|(_, u)| **u) {
                 let q = env.torso(p);
@@ -315,7 +330,7 @@ impl<'a> Envelope<'a> {
             let n = arm.path.len();
             for (i, &c) in arm.path.iter().enumerate() {
                 let t = i as f32 / (n - 1) as f32;
-                if !env.under_cloak(side, t) {
+                if !env.under_cloak(side, t, c) {
                     continue;
                 }
                 let r = arm.radius_at(t);
@@ -341,10 +356,18 @@ impl<'a> Envelope<'a> {
     /// forearm raised to hold a staff or a torch comes out through the cloak's front, as an arm
     /// comes out of a real cloak. Our own rule: measured over a raised forearm, a cloak stood
     /// off the shoulders like a shelf.
-    fn under_cloak(&self, side: Side, t: f32) -> bool {
+    ///
+    /// While the forearm is raised only what lies on the shoulder's side of the elbow counts
+    /// (`p` is the point): a wide sleeve sags below a bent elbow, and the cloak hung over the
+    /// sag stood out from the arm in a corner.
+    fn under_cloak(&self, side: Side, t: f32, p: V3) -> bool {
         let arm = self.body.arm(side);
         let forearm = vec3::normalize_or(vec3::sub(arm.joints[2], arm.joints[1]), [0.0, -1.0, 0.0]);
-        t <= arm.t_joints[1] || forearm[1] < -FOREARM_HANGS
+        if forearm[1] < -FOREARM_HANGS {
+            return true;
+        }
+        let upper = vec3::normalize_or(vec3::sub(arm.joints[1], arm.joints[0]), [0.0, -1.0, 0.0]);
+        t <= arm.t_joints[1] && vec3::dot(vec3::sub(p, arm.joints[1]), upper) <= 0.0
     }
 
     /// A body-space point in torso space.
@@ -384,6 +407,11 @@ impl<'a> Envelope<'a> {
     /// the trunk: most of its points lie close on an arm or hand. Parts are judged whole, so
     /// a skirt hanging by the hands stays on the trunk.
     fn on_arms(&self, part: &Part) -> bool {
+        // Pauldrons are on the arms whatever they stand over: over a robe's belled sleeves
+        // they stood too far off the arm to be judged so, and counted as the trunk's.
+        if part.name == "pauldrons" {
+            return true;
+        }
         let near = part
             .positions
             .iter()
@@ -413,7 +441,7 @@ impl<'a> Envelope<'a> {
             for &p in &part.positions {
                 if on_arms {
                     let (side, t, _) = self.nearest_arm(p);
-                    if !self.under_cloak(side, t) {
+                    if !self.under_cloak(side, t, p) {
                         continue;
                     }
                 }
@@ -426,7 +454,7 @@ impl<'a> Envelope<'a> {
                     let tri = [t[0], t[1], t[2]].map(|i| part.positions[i as usize]);
                     if on_arms && tri.iter().any(|p| {
                         let (side, t, _) = self.nearest_arm(*p);
-                        !self.under_cloak(side, t)
+                        !self.under_cloak(side, t, *p)
                     }) {
                         continue;
                     }
@@ -447,7 +475,7 @@ impl<'a> Envelope<'a> {
                 }
                 if on_arms {
                     let (side, t, da) = self.nearest_arm(p);
-                    if self.under_cloak(side, t) {
+                    if self.under_cloak(side, t, p) {
                         self.over_arms.add(q, e);
                     }
                     // Past the wrist is the hand, not the arm.
@@ -678,17 +706,21 @@ impl<'a> Envelope<'a> {
         let cell = |i: isize, j: isize| grid[i.clamp(0, rows as isize - 1) as usize * cols + j.rem_euclid(cols as isize) as usize];
         Rest::new(y0, y1, |phi, y| {
             let (i, j) = (((y - y0) / dy).round() as isize, ((phi + PI) / dphi).round() as isize);
-            let column = |k: isize| (-1..=1).map(|di| cell(i + di, j + k)).fold(NONE, f32::max);
+            let column = |k: isize| (-1..=1).map(|di: isize| cell(i + di, j + k) - DILATE_SLOPE * dy * di.abs() as f32).fold(NONE, f32::max);
             let own = column(0);
             let mut worn = (-1..=1).map(column).fold(NONE, f32::max);
             // A few columns further, only an edge standing clear of the surface's own run from
             // here (a cloak's front edge over the tunic beside it), not a surface that merely
-            // curves away, so hair beside the edge does not dip under it.
+            // curves away, so hair beside the edge does not dip under it. The run is the slope
+            // across this column, taken from both sides: from one side alone, a cell held up by
+            // the row beside it reads as flat there and the next column as an edge, which held
+            // hair 2 cm off a shoulder where the cloak sweeps out.
             for dir in [-1, 1] {
-                let step = if own > NONE && column(dir) > NONE { column(dir) - own } else { 0.0 };
+                let (ahead, behind) = (column(dir), column(-dir));
+                let slope = if ahead > NONE && behind > NONE { 0.5 * (ahead - behind) } else { 0.0 };
                 for k in 2..=EDGE_COLUMNS {
                     let c = column(dir * k);
-                    if c > own.max(0.0) + step * k as f32 + EDGE_RISE {
+                    if c > own.max(0.0) + slope.max(0.0) * k as f32 + EDGE_RISE {
                         worn = worn.max(c);
                     }
                 }
@@ -955,8 +987,26 @@ impl Cover {
 /// cloth pressed under cloth, which the layering otherwise takes at its fullest.
 fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> ItemMesh {
     let mut s = state.clone();
+    // Cut to the wearer (our own): a tunic, and a robe on a body with a bust, are cut close
+    // and fold less, and every garment but a cloak draws in to the waist below the chest. The
+    // Armory's cut fell straight from the chest, which tented from a bust.
+    let fitted = match s.cut.style {
+        GarmentStyle::Tunic => 1.0,
+        GarmentStyle::Robe => smoothstep(0.05, 0.4, body.spec.bust),
+        _ => 0.0,
+    };
+    s.cut.fit = 1.0 + (s.cut.fit - 1.0) * (1.0 - 0.6 * fitted);
+    s.cut.folds *= 1.0 - 0.5 * fitted;
+    let tuck = (!s.cut.style.is_open()).then_some(FITTED_TUCK * if s.cut.style == GarmentStyle::Robe { fitted } else { 1.0 });
     let room = body.waist_y - body.ankle_y - 0.35 * body.scale;
-    s.cut.length = (s.cut.length * body.scale * 0.95).min(room);
+    s.cut.length = if s.cut.style == GarmentStyle::Robe {
+        // A robe is cut to its wearer and hangs to just above the feet (our own). Scaled as
+        // other lengths are, the longest robe rolled ended at mid-shin on a human, and none
+        // could reach below 19 cm off the ground.
+        body.waist_y - body.ankle_y - ROBE_CLEARANCE * body.scale
+    } else {
+        (s.cut.length * body.scale * 0.95).min(room)
+    };
     s.belt.width *= body.scale.sqrt();
     if cover.garment {
         s.cut.flare = 0.0;
@@ -996,7 +1046,7 @@ fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> 
     }
     let arms = env.arm_forms();
     let under = |a: f32, y: f32| env.outline.at(a, y) + GAP;
-    let mut fitting = Fitting { arms: Some(&arms), over: open.then_some(&under as Underlay), notch: None };
+    let mut fitting = Fitting { arms: Some(&arms), over: open.then_some(&under as Underlay), notch: None, tuck };
     let mut mesh = on_body(body, garment_parts_fitted(&form, &fitting, &s.cut, &s.hem, &s.belt, &s.plates, s.seed).finish());
     // A tail passing out through the skirt (of a cloak, a robe, a tunic) gets a vent cut up
     // from the hem round it.
@@ -1139,10 +1189,13 @@ fn boots(body: &Body, env: &Envelope, state: &FeetState) -> ItemMesh {
     for side in Side::BOTH {
         let mut f = form;
         let leg = body.leg(side);
-        if let Some(d) = Envelope::limb_clearance(&env.legs[index(side)], leg.t_joints[1] - 0.1, 1.0) {
-            f.shin_half_width += d;
-            f.shin_half_depth += d;
-        }
+        // Eased over what is worn under it from the knee down to mid-shin, and from there to
+        // the ankle, where trousers taper in.
+        let tk = leg.t_joints[1];
+        let mid = tk + 0.5 * (1.0 - tk);
+        let clearance = |t0: f32, t1: f32| Envelope::limb_clearance(&env.legs[index(side)], t0, t1).unwrap_or(0.0);
+        let knee = clearance(tk - 0.1, mid);
+        f.ease = [clearance(mid, 1.0).min(knee.max(GAP)), knee];
         let mut mesh = boot_parts(&f, &b, &state.hem).finish();
         body.foot_placement(side).apply_to_item(&mut mesh);
         out.parts.extend(mesh.parts);
@@ -1219,9 +1272,12 @@ fn gloves(body: &Body, env: &Envelope, state: &HandsState) -> ItemMesh {
     out
 }
 
-/// A belt round the waist over what is worn under it.
-fn belt(body: &Body, env: &Envelope, state: &BeltState) -> ItemMesh {
-    on_body(body, Belts::on_form(&env.form(Over::Trunk, 1.0), state))
+/// A belt round the waist over what is worn under it. Over a robe its pouch is left off (our
+/// own): it hung where the robe's skirt falls and caught in it.
+fn belt(body: &Body, env: &Envelope, state: &BeltState, robed: bool) -> ItemMesh {
+    let mut s = state.clone();
+    s.fittings.pouch &= !robed;
+    on_body(body, Belts::on_form(&env.form(Over::Trunk, 1.0), &s))
 }
 
 /// The head form grown by its covered hair and its folded features, in torso space.
@@ -1499,8 +1555,15 @@ mod tests {
                         if depth > tolerance {
                             // Over a shelf (a cloak on a pauldron's top) the bins mix heights:
                             // measure the layers under along this point's ray exactly.
-                            let exact = layers[..li].iter().flat_map(|l| l.mesh.parts.iter().filter(|q| measured(l.slot, q) && !env.on_arms(q))).filter_map(|q| ray_reach(q, p)).fold(0.0f32, f32::max);
+                            let parts = || layers[..li].iter().flat_map(|l| l.mesh.parts.iter().filter(|q| measured(l.slot, q) && !env.on_arms(q)));
+                            let exact = parts().filter_map(|q| ray_reach(q, p)).fold(0.0f32, f32::max);
+                            // Along a near-horizontal edge (a neckline on the slope of the
+                            // shoulders) a little height is a lot of radius: the point is no
+                            // deeper in than its nearest surface.
                             depth = exact - p[0].hypot(p[2]);
+                            if depth > tolerance {
+                                depth = depth.min(parts().map(|q| distance_to(q, p, 1.0)).fold(1.0, f32::min));
+                            }
                         }
                         compared += 1;
                         if depth > tolerance {
@@ -1887,10 +1950,13 @@ mod tests {
     fn a_full_beard_lies_on_mail() {
         use crate::folk::Beard;
         let mut failures = vec![];
-        for folk in [Folk::Dwarf, Folk::Human] {
-            for seed in [3u32, 1207, 40] {
+        // On a flat chest it lies on the mail all down; over a full bust it hangs from the chin
+        // onto the bust's crest and stands off the slope above it, but never passes through.
+        for (folk, seed, bust) in [Folk::Dwarf, Folk::Human].into_iter().flat_map(|f| [(3u32, 0.0), (1207, 0.0), (40, 0.0), (3, 1.0)].map(move |(s, b)| (f, s, b))) {
+            {
                 let mut spec = BodySpec::roll(folk, seed);
-                spec.beard = Beard::Full;
+                spec = spec.with_beard(Beard::Full);
+                spec.bust = bust;
                 let body = Body::new(&spec);
                 for kit in [10u32, 11] {
                     let mut mail = Garment::roll_as(kit + 1, GarmentStyle::Hauberk);
@@ -1906,7 +1972,7 @@ mod tests {
                     while y > lo + 0.05 {
                         let band: Vec<V3> = beard.positions.iter().filter(|p| (p[1] - y).abs() < 0.05 && p[0].abs() < 0.3 * body.scale).copied().collect();
                         let behind = mail.positions.iter().any(|q| (q[1] - y).abs() < 0.1 && q[0].abs() < 0.3 * body.scale && q[2] > 0.0);
-                        if behind && !band.is_empty() {
+                        if behind && !band.is_empty() && bust == 0.0 {
                             let gap = band.iter().map(|p| distance_to(&mail, *p, 1.0)).fold(f32::MAX, f32::min);
                             if gap > 0.1 {
                                 failures.push(format!("{folk:?} {seed} kit {kit}: the beard stands {gap:.3} off the mail at height {y:.2}"));
@@ -2155,7 +2221,7 @@ mod tests {
         let cleric = fb_items::outfit::outfit("cleric").unwrap();
         for seed in 1..=8u32 {
             let mut spec = BodySpec::roll(Folk::Human, seed);
-            spec.beard = Beard::Full;
+            spec = spec.with_beard(Beard::Full);
             spec.hair = if seed % 2 == 0 { HairStyle::Ponytail } else { HairStyle::Long };
             let body = Body::new(&spec);
             let mut worn: Vec<(Slot, Item)> = cleric.roll(seed, "human").worn.into_iter().filter(|(s, _)| LAYER_ORDER.contains(s)).map(|(s, i)| (s, i.shape)).collect();
@@ -2262,7 +2328,7 @@ mod tests {
         use crate::folk::Beard;
         use crate::held::fit_held;
         let mut spec = BodySpec::roll(Folk::Dwarf, 1207);
-        spec.beard = Beard::Forked;
+        spec = spec.with_beard(Beard::Forked);
         // A staff in one hand and a torch in the other: both forearms raised level.
         let mut body = Body::new(&spec);
         for (side, family, seed) in [(Side::Right, Family::Staff, 3), (Side::Left, Family::Torch, 4)] {
@@ -2364,5 +2430,91 @@ mod tests {
     #[test]
     fn a_lizards_snout_and_brow_clear_helms_smoke() {
         a_lizards_snout_and_brow_clear_helms_check(&[1207], &[HelmStyle::Bascinet], 0..1, 10);
+    }
+
+    /// How far `part` reaches from the left leg's line at height `y` (body space), if it is there.
+    fn reach_from_leg(body: &Body, part: &Part, y: f32) -> Option<f32> {
+        let sections = body.leg_sections();
+        let s = sections.iter().min_by(|a, b| (a.y - y).abs().total_cmp(&(b.y - y).abs()))?;
+        part.positions.iter().filter(|p| p[0] > 0.0 && (p[1] - y).abs() < 0.08).map(|p| (p[0] - s.x).hypot(p[2] - s.z)).reduce(f32::max)
+    }
+
+    /// How wide `mesh`'s foot and sole are across the left foot, below `below`.
+    fn across_foot(body: &Body, mesh: &ItemMesh, below: f32) -> f32 {
+        let at = body.foot_placement(Side::Left);
+        let side = at.z();
+        let (lo, hi) = mesh
+            .parts
+            .iter()
+            .filter(|p| matches!(p.name, "foot" | "sole"))
+            .flat_map(|p| &p.positions)
+            .filter(|p| p[0] > 0.0 && p[1] < below)
+            .map(|p| vec3::dot(vec3::sub(*p, at.origin), side))
+            .fold((f32::MAX, f32::MIN), |(lo, hi), d| (lo.min(d), hi.max(d)));
+        hi - lo
+    }
+
+    #[test]
+    fn boots_fit_close_to_the_foot_and_shin() {
+        use armory::families::feet::Feet;
+        use armory::families::legs::Legs;
+        for folk in Folk::ALL {
+            for seed in [3u32, 1207] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                let mut boot = Feet::roll_as(seed, BootStyle::Boot);
+                boot.boot.height = 3.6;
+                boot.boot.cuff = 0.0;
+                let width = boot.boot.width;
+                let worn = [(Slot::Legs, Item::Legs(Legs::roll_as(seed, LegwearStyle::Trousers))), (Slot::Feet, Item::Feet(boot))];
+                let fit = fit_worn(&body, &worn);
+                let feet = &fit.layer(Slot::Feet).unwrap().mesh;
+                let trousers = &fit.layer(Slot::Legs).unwrap().mesh;
+                let shafts: Vec<&Part> = feet.parts.iter().filter(|p| p.name == "shaft").collect();
+                let top = shafts.iter().flat_map(|p| &p.positions).map(|p| p[1]).fold(f32::MIN, f32::max);
+                let form = body.leg_form();
+                // Up the shaft, above the heel, it stands no more than 2 cm off the trousers under it.
+                for k in 1..8 {
+                    let y0 = 1.6 * form.instep_height;
+                    let y = y0 + (top - 0.3 * body.scale - y0) * k as f32 / 8.0;
+                    let boot = shafts.iter().filter_map(|p| reach_from_leg(&body, p, y)).fold(0.0f32, f32::max);
+                    let cloth = trousers.parts.iter().filter_map(|p| reach_from_leg(&body, p, y)).fold(0.0f32, f32::max);
+                    assert!(boot - cloth < 0.2, "{folk:?} {seed} at {y:.2}: boot {boot:.3}, trousers {cloth:.3}");
+                }
+                // Across the foot, within 2.5 cm of the bare foot at the boot's own width.
+                let mut bare = ItemMesh { parts: vec![armory::build::boot::foot_mesh(&form, 0.0).into_part("foot", armory::geom::OutlineMode::Welded)] };
+                body.foot_placement(Side::Left).apply_to_item(&mut bare);
+                let (shod, bare) = (across_foot(&body, feet, form.instep_height), across_foot(&body, &bare, form.instep_height));
+                assert!(shod - bare * width < 0.25, "{folk:?} {seed}: boot {shod:.3} across, bare foot {bare:.3} x {width:.2}");
+            }
+        }
+    }
+
+    #[test]
+    fn robes_hang_to_just_above_the_feet() {
+        for folk in Folk::ALL {
+            for seed in [3u32, 1207] {
+                let body = Body::new(&BodySpec::roll(folk, seed));
+                for kit in [1u32, 40] {
+                    let robe = Item::Garment(Garment::roll_as(kit, GarmentStyle::Robe));
+                    let fit = fit_worn(&body, &[(Slot::Shirt, robe)]);
+                    let skirt = &fit.layer(Slot::Shirt).unwrap().mesh;
+                    let hem = skirt.parts.iter().filter(|p| p.name == "body").flat_map(|p| &p.positions).map(|p| p[1]).fold(f32::MAX, f32::min);
+                    // Below the ankle's top, the folds' wave aside, and clear of the sole.
+                    assert!(hem > 0.5 * body.ankle_y && hem < body.ankle_y + 0.35 * body.scale, "{folk:?} {seed} robe {kit}: hem at {hem:.2}, ankle {:.2}", body.ankle_y);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_robe_hides_the_belts_pouch() {
+        let body = Body::new(&BodySpec::typical(Folk::Human));
+        let mut belt = Belts::roll(3);
+        belt.fittings.pouch = true;
+        let pouch = |shirt: GarmentStyle| {
+            let fit = fit_worn(&body, &[(Slot::Shirt, Item::Garment(Garment::roll_as(3, shirt))), (Slot::Belt, Item::Belt(belt.clone()))]);
+            fit.layer(Slot::Belt).unwrap().mesh.parts.iter().any(|p| p.name == "pouch")
+        };
+        assert!(pouch(GarmentStyle::Tunic) && !pouch(GarmentStyle::Robe));
     }
 }

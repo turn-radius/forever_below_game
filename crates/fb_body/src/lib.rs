@@ -41,5 +41,5 @@ pub use limb::{Limb, Side};
 pub use place::Placement;
 pub use rig::{JOINTS, Joint, Quat, Rig, RigPose, Rigid};
 pub use skin::{PartSkin, SkinRegion, Skinner};
-pub use spec::BodySpec;
+pub use spec::{BodyShape, BodySpec, STATURE, ShapeSlider};
 pub use worn::{Covered, LAYER_ORDER, WornFit, WornLayer, fit_worn};

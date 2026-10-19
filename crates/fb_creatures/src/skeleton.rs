@@ -174,6 +174,8 @@ impl SkeletonState {
         spec.stature = self.stature;
         spec.frame = 0.12 + 0.7 * self.build;
         spec.figure = self.figure;
+        // Bones have no flesh to shape: an average build.
+        (spec.muscle, spec.slender, spec.bust) = (0.5, 0.5, 0.0);
         spec
     }
 

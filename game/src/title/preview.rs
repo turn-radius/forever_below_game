@@ -22,7 +22,7 @@ use bevy::{
 };
 use fb_items::Slot;
 
-use super::creator::Draft;
+use super::creator::{Draft, ShapeMoved};
 use crate::figure::{Figure, spawn_figure};
 use crate::fitting::{Fitting, figure_key};
 use crate::inventory::doll::{DOLL_LAYER, DollView, HELD_LIGHT_PEAK, HELD_LIGHT_REACH, SlotView, TURN_PER_PIXEL, doll_view};
@@ -44,12 +44,19 @@ const KEY_LEVEL: f32 = 0.6;
 /// What the figure was dressed for ([`figure_key`]).
 type Dressed = String;
 
+/// What the draft wants dressed next: its key, the body, the kit and the dirt.
+type Wanted = (Dressed, fb_body::BodySpec, Vec<(Slot, fb_items::Item)>, f32);
+
 /// The figure's stage: what it was dressed for, the figure and camera, the job dressing the
-/// next one, and how far it is turned.
+/// next one and what is wanted after it, and how far it is turned.
 #[derive(Resource, Default)]
 pub struct PreviewStage {
     dressed: Option<Dressed>,
     fitting: Option<Fitting<Dressed, Arc<Figure>>>,
+    wanted: Option<Wanted>,
+    /// The starting kit last rolled, and for which folk and body seed: a drag of a body slider
+    /// refits the body in the same kit without rolling it again.
+    kit: Option<((fb_body::Folk, u32), Vec<(Slot, fb_items::Item)>)>,
     figure: Option<Entity>,
     camera: Option<Entity>,
     turn: f32,
@@ -85,15 +92,18 @@ pub struct PreviewPlugin;
 impl Plugin for PreviewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PreviewStage>()
+            .init_resource::<ShapeMoved>()
             .add_systems(OnExit(AppState::Title), |mut stage: ResMut<PreviewStage>| *stage = PreviewStage::default())
             .add_systems(Update, (fit_preview, turn_preview).chain().run_if(in_state(AppState::Title)));
     }
 }
 
 /// Starts dressing the figure when the draft's body or kit changes, shows it when it is ready,
-/// and takes it away when the creator closes. The camera comes with the creator, so the doll's
+/// and takes it away when the creator closes. While a slider is dragged the draft changes
+/// every frame: the fit in flight is finished and shown, then the latest body is fitted, so
+/// the doll follows the drag instead of waiting for it to stop. The camera comes with the creator, so the doll's
 /// image is cleared of whatever the inventory last drew there before the first figure shows.
-fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, assets: Res<DollAssets>, mut stage: ResMut<PreviewStage>, mut spawner: ItemSpawner) {
+fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, mut moved: ResMut<ShapeMoved>, assets: Res<DollAssets>, mut stage: ResMut<PreviewStage>, mut spawner: ItemSpawner) {
     let Some(draft) = draft else {
         if stage.figure.is_some() || stage.camera.is_some() || stage.fitting.is_some() {
             for entity in [stage.figure, stage.camera].into_iter().flatten() {
@@ -106,24 +116,30 @@ fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, assets: Res<Do
     if stage.camera.is_none() {
         stage.camera = Some(spawn_camera(&mut commands, &assets));
     }
-    if draft.is_changed() {
+    if draft.is_changed() || std::mem::take(&mut moved.0) {
         let spec = draft.character().spec();
-        let dirt = draft.dirt;
-        let kit = preview_kit(&draft);
-        let key = figure_key(&spec, &kit, dirt);
-        if stage.dressed.as_ref() == Some(&key) {
-            stage.fitting = None;
-        } else if stage.fitting.as_ref().is_none_or(|f| f.key() != &key) {
-            stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &kit, dirt))));
+        let rolled_for = (draft.folk, draft.body_seed);
+        if stage.kit.as_ref().is_none_or(|(k, _)| *k != rolled_for) {
+            stage.kit = Some((rolled_for, preview_kit(&draft)));
+        }
+        let kit = stage.kit.as_ref().map(|(_, kit)| kit.clone()).unwrap_or_default();
+        let key = figure_key(&spec, &kit, draft.dirt);
+        stage.wanted = Some((key, spec, kit, draft.dirt));
+    }
+    if let Some(mut fitting) = stage.fitting.take() {
+        match fitting.poll() {
+            Some(figure) => {
+                stage.dressed = Some(fitting.key().clone());
+                show_figure(&mut commands, &mut spawner, &mut stage, &figure);
+            }
+            None => stage.fitting = Some(fitting),
         }
     }
-    let Some(mut fitting) = stage.fitting.take() else { return };
-    match fitting.poll() {
-        Some(figure) => {
-            stage.dressed = Some(fitting.key().clone());
-            show_figure(&mut commands, &mut spawner, &mut stage, &figure);
-        }
-        None => stage.fitting = Some(fitting),
+    if stage.fitting.is_none()
+        && let Some((key, spec, kit, dirt)) = stage.wanted.take()
+        && stage.dressed.as_ref() != Some(&key)
+    {
+        stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &kit, dirt))));
     }
 }
 

@@ -46,6 +46,11 @@ struct Saved {
     class: Class,
     attributes: Attributes,
     body_seed: u32,
+    /// The creator's body shape; files saved before the sliders have none, and roll it.
+    #[serde(default)]
+    shape: Option<fb_body::BodyShape>,
+    #[serde(default)]
+    sex: Option<crate::character::Sex>,
     dirt: f32,
     #[serde(default)]
     learned: AbilityBonus,
@@ -55,13 +60,13 @@ struct Saved {
 
 impl From<&Character> for Saved {
     fn from(c: &Character) -> Self {
-        Saved { name: c.name.clone(), folk: c.folk, class: c.class, attributes: c.attributes, body_seed: c.body_seed, dirt: c.dirt, learned: c.learned, books_read: c.books_read.clone() }
+        Saved { name: c.name.clone(), folk: c.folk, class: c.class, attributes: c.attributes, body_seed: c.body_seed, shape: c.shape, sex: c.sex, dirt: c.dirt, learned: c.learned, books_read: c.books_read.clone() }
     }
 }
 
 impl From<Saved> for Character {
     fn from(s: Saved) -> Self {
-        Character { folk: s.folk, body_seed: s.body_seed, name: s.name, class: s.class, attributes: s.attributes, dirt: s.dirt.clamp(0.0, 1.0), worn: AbilityBonus::default(), learned: s.learned, books_read: s.books_read }
+        Character { folk: s.folk, body_seed: s.body_seed, shape: s.shape, sex: s.sex, name: s.name, class: s.class, attributes: s.attributes, dirt: s.dirt.clamp(0.0, 1.0), worn: AbilityBonus::default(), learned: s.learned, books_read: s.books_read }
     }
 }
 
@@ -210,5 +215,18 @@ mod tests {
         let mut again = App::new();
         again.insert_resource(LastDelverFile(Some(path))).add_plugins(LastDelverPlugin);
         assert_eq!(again.world().resource::<LastDelver>().0, Some(delver));
+    }
+
+    #[test]
+    fn a_shaped_delver_comes_back_with_its_body_and_old_files_roll_theirs() {
+        let path = scratch("shape");
+        let shape = fb_body::BodySpec::roll(Folk::Human, 5).shape().parse("muscle=0.9,bust=0.7,height=1.08").unwrap();
+        let delver = Character { shape: Some(shape), ..Character::roll(5) };
+        save(&path, &delver).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!(back.spec(), delver.spec());
+        std::fs::write(&path, r#"{"name":"Old","folk":"human","class":"mage","attributes":{"strength":10,"dexterity":10,"constitution":10,"intelligence":10,"wisdom":10},"body_seed":1,"dirt":0.4}"#).unwrap();
+        let old = load(&path).unwrap();
+        assert_eq!((old.shape, old.spec()), (None, fb_body::BodySpec::roll(Folk::Human, 1)));
     }
 }

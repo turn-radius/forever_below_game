@@ -235,6 +235,7 @@ impl TrollState {
         spec.stature = self.stature;
         spec.frame = 0.6 + 0.45 * self.build;
         spec.figure = 0.0;
+        (spec.muscle, spec.slender, spec.bust) = (0.9, 0.2, 0.0);
         spec
     }
 
