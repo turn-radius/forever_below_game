@@ -15,7 +15,7 @@ use bevy::{
     winit::WinitPlugin,
 };
 use forever_below::{
-    combat::{Health, vitals::FALL_TIME},
+    combat::{Health, vitals::{FALL_TIME, LAST_GASP}},
     inventory::InventoryScreen,
     launch::AppState,
     map::screen::MapScreen,
@@ -66,7 +66,7 @@ fn fall(app: &mut App) {
     let world = app.world_mut();
     let player = world.query_filtered::<Entity, With<Player>>().single(world).expect("one delver");
     world.get_mut::<Health>(player).expect("the delver has hit points").hp = 0;
-    run(app, (FALL_TIME * 60.0) as usize + 30);
+    run(app, ((LAST_GASP + FALL_TIME) * 60.0) as usize + 30);
     assert_eq!(state(app), AppState::Title);
     run(app, 30);
 }

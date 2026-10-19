@@ -96,13 +96,14 @@ fn raise_guard(
     input: ActionInput,
     cursor: Option<Single<&CursorOptions, With<PrimaryWindow>>>,
     inventory: Res<Inventory>,
+    fallen: Option<Res<super::vitals::Fallen>>,
     mut players: Query<(Entity, &Transform, Option<&Health>, Option<&DelverStamina>, Option<&mut Guard>, Has<Swing>), With<Player>>,
 ) {
     let looking = cursor.is_none_or(|c| c.grab_mode != CursorGrabMode::None);
     let held = (input.pressed(Action::Block) && looking) || crate::launch::env_set("FB_GUARD");
     let shield = holds_shield(&inventory);
     for (player, at, health, stamina, guard, swinging) in &mut players {
-        let able = !health.is_some_and(Health::is_down) && stamina.is_none_or(|s| s.0.can_exert()) && !swinging;
+        let able = !health.is_some_and(Health::is_down) && fallen.is_none() && stamina.is_none_or(|s| s.0.can_exert()) && !swinging;
         let up = held && shield && able;
         match (up, guard) {
             (true, Some(mut guard)) => {

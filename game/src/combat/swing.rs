@@ -160,7 +160,7 @@ pub(super) fn start_swing(
     marksman: Option<Res<super::shoot::Marksman>>,
     mut dice: ResMut<RunDice>,
     (mut last, mut armed): (Local<Option<Strike>>, Local<bool>),
-    (practice, rules): (Option<Res<SwingPractice>>, Option<Res<crate::rules::GameRules>>),
+    (practice, rules, fallen): (Option<Res<SwingPractice>>, Option<Res<crate::rules::GameRules>>, Option<Res<super::vitals::Fallen>>),
     mut toasts: crate::inventory::Toasts,
     mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina, Has<super::guard::Guard>), Ready>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -188,7 +188,7 @@ pub(super) fn start_swing(
         return;
     }
     for (player, at, health, mut stamina, guarding) in &mut players {
-        if health.is_some_and(Health::is_down) || (guarding && !practising) {
+        if health.is_some_and(Health::is_down) || fallen.is_some() || (guarding && !practising) {
             continue;
         }
         // A winded delver cannot swing; each swing otherwise takes its bite of stamina.
@@ -756,6 +756,17 @@ mod tests {
         app.update();
         let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
         assert!((value - (1.0 - 2.0 * fb_character::SWING_COST)).abs() < 1e-9, "{value}");
+    }
+
+    #[test]
+    fn a_fallen_delver_cannot_swing() {
+        let (mut app, delver) = swinger();
+        app.insert_resource(crate::combat::vitals::Fallen(1.0));
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_none());
+        app.world_mut().remove_resource::<crate::combat::vitals::Fallen>();
+        app.update();
+        assert!(app.world().get::<Swing>(delver).is_some());
     }
 
     #[test]
