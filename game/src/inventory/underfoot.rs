@@ -38,14 +38,26 @@ pub fn set_down_around<'a>(
 ) {
     use fb_level::CELL;
     let mut rng = procgen_rng::Mulberry32::new(seed ^ SHED_SALT);
-    let count = items.len().max(1);
+    let ids: Vec<ItemId> = items.map(|item| inventory.add(item.clone())).collect();
+    // What goes in a holder set down with it (an archer's arrows in its quiver) stays in it.
+    let holders: Vec<ItemId> = ids.iter().copied().filter(|&id| inventory.item(id).and_then(|i| i.profile.holds.as_ref()).is_some_and(|g| !g.accepts.is_empty())).collect();
+    let loose: Vec<ItemId> = ids
+        .into_iter()
+        .filter(|&id| {
+            let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
+            !holders.iter().any(|&holder| {
+                holder != id && inventory.item(id).is_some_and(|item| inventory.accepts(holder, item)) && inventory.grid(holder).and_then(|g| g.first_free(footprint)).is_some_and(|at| inventory.put(id, holder, at).is_ok())
+            })
+        })
+        .collect();
+    let count = loose.len().max(1);
     let first = rng.range_f32(0.0, std::f32::consts::TAU);
-    for (i, item) in items.enumerate() {
+    for (i, id) in loose.into_iter().enumerate() {
+        let Some(item) = inventory.item(id) else { continue };
         let radius = crate::carry::floor_radius(&crate::carry::item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), floor_scale).min(CELL * 0.5 - 0.5);
         let angle = first + i as f32 / count as f32 * std::f32::consts::TAU;
         let want = centre + Vec2::from_angle(angle) * (SHED_RING + radius + 0.8 * (i % 2) as f32);
         let spot = crate::player::slide_around(centre, want, radius, &blocked, obstacles);
-        let id = inventory.add(item.clone());
         changes.0.push(FloorChange::SetDownAt(id, spot / CELL, rng.range_f32(0.0, std::f32::consts::TAU)));
     }
 }
