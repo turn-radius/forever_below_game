@@ -85,20 +85,33 @@ pub struct Bulge {
     pub toward: f32,
     /// Two lobes this far (radians) either side of `toward` instead of one: breasts, buttocks.
     pub pair: f32,
-    /// How much further it reaches below its crest than above: a fuller underside, 0 even.
+    /// How much further it reaches below its crest than above: a fuller underside, 0 even,
+    /// below 0 a swell that rounds off underneath (a belly above the groin).
     pub fall: f32,
     /// How far a pair dips between its lobes: 1 to each lobe's own falloff (skin), 0 bridged
     /// flat at the crest's depth (cloth drawn across the cleft).
     pub cleft: f32,
+    /// Above 0, each lobe is a dome this many radians either side of its centre and `spread`
+    /// above and below it (`fall` further below), with a definite edge, rather than a swell
+    /// fading by `sharpness` all round the front: a breast's own form.
+    pub dome: f32,
+    /// A dome's fullness: 1 a round cap, more a fuller one that drops off sharply at its edge.
+    pub power: f32,
+    /// Above 0, cloth over the bulge hangs from its crest, falling back to the form this far
+    /// below it instead of following the underside in.
+    pub hang: f32,
 }
 
 impl Bulge {
-    pub const NONE: Bulge = Bulge { y: 0.0, spread: 1.0, depth: 0.0, sharpness: 2, toward: FRONT, pair: 0.0, fall: 0.0, cleft: 0.0 };
+    pub const NONE: Bulge = Bulge { y: 0.0, spread: 1.0, depth: 0.0, sharpness: 2, toward: FRONT, pair: 0.0, fall: 0.0, cleft: 0.0, dome: 0.0, power: 1.0, hang: 0.0 };
 
     /// How far the form swells at `angle` (lathe convention) and height `y`.
     pub fn at(&self, angle: f32, y: f32) -> f32 {
         if self.depth == 0.0 {
             return 0.0;
+        }
+        if self.dome > 0.0 {
+            return self.depth * self.dome_at(angle, y);
         }
         let lobe = |toward: f32| (angle - toward).cos().max(0.0).powi(self.sharpness);
         let facing = if self.pair > 0.0 {
@@ -115,9 +128,44 @@ impl Bulge {
         self.depth * (-d * d).exp() * facing
     }
 
-    /// The same bulge with its cleft bridged, as cloth drapes over it.
+    /// A dome bulge's share of its depth at `angle` and `y`.
+    fn dome_at(&self, angle: f32, y: f32) -> f32 {
+        let wrap = |a: f32| (a + PI).rem_euclid(2.0 * PI) - PI;
+        let dy = y - self.y;
+        let v = dy / if dy < 0.0 { self.spread * (1.0 + self.fall) } else { self.spread }.max(1e-3);
+        let off = wrap(angle - self.toward);
+        // Above the crest the dome is fuller, a long slope from the collarbone; below it rounds
+        // under to its crease.
+        let power = if v > 0.0 { 0.6 * self.power } else { self.power };
+        // Across: each lobe's share at the crest's height, bridged between them by the cleft.
+        let across = |v: f32| {
+            let lobe = |c: f32| {
+                let da = wrap(angle - c) / self.dome;
+                (1.0 - da * da - v * v).max(0.0).powf(power)
+            };
+            let lobes = lobe(self.toward - self.pair).max(lobe(self.toward + self.pair));
+            if self.pair > 0.0 && off.abs() < self.pair {
+                let bridge = (1.0 - v * v).max(0.0).powf(power);
+                lobes + (bridge - lobes).max(0.0) * (1.0 - self.cleft)
+            } else {
+                lobes
+            }
+        };
+        let share = across(v);
+        if self.hang > 0.0 && dy < 0.0 {
+            // Cloth falls from the crest and back to the form over `hang`.
+            let fall = 1.0 - smoothstep(0.0, self.hang, -dy);
+            share.max(across(0.0) * fall)
+        } else {
+            share
+        }
+    }
+
+    /// The same bulge as cloth drapes over it: its cleft bridged, and hanging from a dome's
+    /// crest rather than following its underside in.
     pub fn bridged(self) -> Bulge {
-        Bulge { cleft: 0.0, ..self }
+        let hang = if self.dome > 0.0 { 1.4 * self.spread * (1.0 + self.fall.max(0.0)) } else { 0.0 };
+        Bulge { cleft: 0.0, hang, ..self }
     }
 
     /// The same swelling `dy` higher.
@@ -997,7 +1045,11 @@ impl LowerBodyProfile {
         }
         // On a real body the blend from leg to hips can dip inside the hips' own outline: keep
         // the cloth out on it, easing in above the crotch.
-        let (rp, rt) = (p[0].hypot(p[1]), x.hypot(z));
+        // Measured toward the cloth's own direction from the axis, so the seam where the two
+        // halves meet keeps out on the hips as well instead of folding into the cleft between
+        // a full seat's lobes.
+        let toward = self.torso_reach(p[0].atan2(p[1]), y, inflate);
+        let (rp, rt) = (p[0].hypot(p[1]), x.hypot(z).max(toward));
         let w = smoothstep(self.form.crotch_height, self.form.crotch_height + 0.2, y);
         let r = rp.max(rp + (rt - rp) * w);
         let k = r / rp.max(1e-5);
@@ -1009,6 +1061,19 @@ impl LowerBodyProfile {
     fn half_section(&self, side: f32, angle: f32, y: f32, inflate: f32) -> [f32; 2] {
         let [x, z] = self.torso_xz(angle, y, inflate);
         if side * angle.cos() >= 0.0 { [x, z] } else { [0.0, z] }
+    }
+
+    /// How far the torso's section at height `y` reaches from the axis toward the direction
+    /// `atan2(x, z)` is `bearing`: the reach of the nearest of its points by direction.
+    fn torso_reach(&self, bearing: f32, y: f32, inflate: f32) -> f32 {
+        const STEPS: usize = 96;
+        (0..STEPS)
+            .map(|i| self.torso_xz(2.0 * PI * i as f32 / STEPS as f32, y, inflate))
+            .min_by(|a, b| {
+                let off = |p: &[f32; 2]| (p[0].atan2(p[1]) - bearing + PI).rem_euclid(2.0 * PI) - PI;
+                off(a).abs().total_cmp(&off(b).abs())
+            })
+            .map_or(0.0, |p| p[0].hypot(p[1]))
     }
 
     fn torso_xz(&self, angle: f32, y: f32, inflate: f32) -> [f32; 2] {

@@ -147,6 +147,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
     let mut env = Envelope::new(body);
     let tucked = worn.iter().any(|(slot, item)| *slot == Slot::Feet && matches!(item, Item::Feet(s) if has_shaft(s)));
     let hooded = worn.iter().any(|(slot, item)| *slot == Slot::Head && matches!(item, Item::Hood(_)));
+    let robed = worn.iter().any(|(slot, item)| matches!(slot, Slot::Shirt | Slot::Body) && matches!(item, Item::Garment(g) if g.cut.style == GarmentStyle::Robe));
     // Ears fold back under a hood, and a pig's flop ears under anything; standing ears come
     // out through openings cut in a helm; a frill folds flat under anything on the head.
     fit.head = match worn.iter().find(|(slot, _)| *slot == Slot::Head).map(|(_, item)| item) {
@@ -176,7 +177,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
                     fit.covered.hands |= s.hand.style != HandStyle::Bracer;
                     gloves(body, &env, s)
                 }
-                (Slot::Belt, Item::Belt(s)) => belt(body, &env, s),
+                (Slot::Belt, Item::Belt(s)) => belt(body, &env, s, robed),
                 (Slot::Neck, Item::Amulet(s)) => amulet(body, &env, s),
                 (Slot::Head, Item::Helm(s)) => helm(body, s, fit.head),
                 (Slot::Head, Item::Hood(s)) => hood(body, &env, s, fit.head),
@@ -1232,9 +1233,12 @@ fn gloves(body: &Body, env: &Envelope, state: &HandsState) -> ItemMesh {
     out
 }
 
-/// A belt round the waist over what is worn under it.
-fn belt(body: &Body, env: &Envelope, state: &BeltState) -> ItemMesh {
-    on_body(body, Belts::on_form(&env.form(Over::Trunk, 1.0), state))
+/// A belt round the waist over what is worn under it. Over a robe its pouch is left off (our
+/// own): it hung where the robe's skirt falls and caught in it.
+fn belt(body: &Body, env: &Envelope, state: &BeltState, robed: bool) -> ItemMesh {
+    let mut s = state.clone();
+    s.fittings.pouch &= !robed;
+    on_body(body, Belts::on_form(&env.form(Over::Trunk, 1.0), &s))
 }
 
 /// The head form grown by its covered hair and its folded features, in torso space.
@@ -1900,10 +1904,13 @@ mod tests {
     fn a_full_beard_lies_on_mail() {
         use crate::folk::Beard;
         let mut failures = vec![];
-        for folk in [Folk::Dwarf, Folk::Human] {
-            for seed in [3u32, 1207, 40] {
+        // On a flat chest it lies on the mail all down; over a full bust it hangs from the chin
+        // onto the bust's crest and stands off the slope above it, but never passes through.
+        for (folk, seed, bust) in [Folk::Dwarf, Folk::Human].into_iter().flat_map(|f| [(3u32, 0.0), (1207, 0.0), (40, 0.0), (3, 1.0)].map(move |(s, b)| (f, s, b))) {
+            {
                 let mut spec = BodySpec::roll(folk, seed);
                 spec.beard = Beard::Full;
+                spec.bust = bust;
                 let body = Body::new(&spec);
                 for kit in [10u32, 11] {
                     let mut mail = Garment::roll_as(kit + 1, GarmentStyle::Hauberk);
@@ -1919,7 +1926,7 @@ mod tests {
                     while y > lo + 0.05 {
                         let band: Vec<V3> = beard.positions.iter().filter(|p| (p[1] - y).abs() < 0.05 && p[0].abs() < 0.3 * body.scale).copied().collect();
                         let behind = mail.positions.iter().any(|q| (q[1] - y).abs() < 0.1 && q[0].abs() < 0.3 * body.scale && q[2] > 0.0);
-                        if behind && !band.is_empty() {
+                        if behind && !band.is_empty() && bust == 0.0 {
                             let gap = band.iter().map(|p| distance_to(&mail, *p, 1.0)).fold(f32::MAX, f32::min);
                             if gap > 0.1 {
                                 failures.push(format!("{folk:?} {seed} kit {kit}: the beard stands {gap:.3} off the mail at height {y:.2}"));
@@ -2451,5 +2458,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_robe_hides_the_belts_pouch() {
+        let body = Body::new(&BodySpec::typical(Folk::Human));
+        let mut belt = Belts::roll(3);
+        belt.fittings.pouch = true;
+        let pouch = |shirt: GarmentStyle| {
+            let fit = fit_worn(&body, &[(Slot::Shirt, Item::Garment(Garment::roll_as(3, shirt))), (Slot::Belt, Item::Belt(belt.clone()))]);
+            fit.layer(Slot::Belt).unwrap().mesh.parts.iter().any(|p| p.name == "pouch")
+        };
+        assert!(pouch(GarmentStyle::Tunic) && !pouch(GarmentStyle::Robe));
     }
 }

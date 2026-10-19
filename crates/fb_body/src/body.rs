@@ -149,23 +149,29 @@ impl Body {
         let waist = FormRing::new(waist_y, 1.38 * ws * (1.0 - fem * 0.1) * (1.05 - 0.1 * mu) * (0.95 + 0.12 * spec.frame), 0.95 * ws);
         let chest = FormRing::new(chest_y, 1.72 * ws * (0.97 + 0.06 * mu), 1.14 * ws * (0.97 + 0.06 * mu));
         let neck_radius = 0.42 * ws * race.neck_r * (0.92 + 0.16 * mu);
-        let belly = Bulge { y: waist_y, spread: 0.3 * t, depth: (race.belly * (0.3 + spec.frame * 0.9) + 0.25 * spec.frame.powi(2)) * ws, sharpness: 2, toward: FRONT, ..Bulge::NONE };
+        let belly = Bulge { y: waist_y, spread: 0.3 * t, depth: (race.belly * (0.3 + spec.frame * 0.9) + 0.25 * spec.frame.powi(2)) * ws, sharpness: 2, toward: FRONT, fall: -0.35, ..Bulge::NONE };
         // The chest is two forms either side of the breastbone, the breast muscles (more with
         // muscle) and a bust over them that sits lower and fuller as it rounds. The plate swelled
         // one shelf across the front, past figure 0.55. The seat is two lobes as well, and the
         // small of the back draws in above it (skin only): our own, so the side view has an S.
         let (b, round) = (spec.bust, spec.bust_round);
+        // Each breast is a dome of its own either side of the breastbone, with a definite edge
+        // and a crease under it: a long slope from the collarbone down to its crest and a short,
+        // rounded underside (fuller and a little lower as it rounds). A Gaussian swell there
+        // blended down into the belly and read as a gut.
         let bust = Bulge {
-            y: chest_y - (0.02 + 0.07 * round * b) * t,
-            spread: (0.1 + 0.05 * round) * t,
-            depth: (0.05 + 0.1 * mu) * ws + 0.85 * b * ws,
-            sharpness: (6.0 - 2.0 * round).round() as i32,
+            y: chest_y - (0.02 + 0.04 * round * b) * t,
+            spread: 0.2 * t,
+            depth: (0.05 + 0.1 * mu) * ws + 0.95 * b * ws,
             toward: FRONT,
-            pair: 0.48,
-            fall: 0.2 + 0.5 * round * b,
+            pair: 0.4,
+            fall: -0.5 + 0.2 * round,
             cleft: 1.0,
+            dome: 0.45,
+            power: 1.0 + 0.8 * round,
+            ..Bulge::NONE
         };
-        let seat = Bulge { y: hip_y - 0.05 * t, spread: 0.16 * t, depth: 0.26 * ws * (1.0 + 0.4 * fem), sharpness: 3, toward: BACK, pair: 0.55, fall: 0.3, cleft: 0.6 };
+        let seat = Bulge { y: hip_y - 0.02 * t, spread: 0.15 * t, depth: 0.17 * ws * (1.0 + 0.4 * fem), sharpness: 5, toward: BACK, pair: 0.55, fall: -0.3, cleft: 1.0, ..Bulge::NONE };
         let lumbar = Bulge { y: waist_y + 0.05 * t, spread: 0.2 * t, depth: -0.09 * ws, sharpness: 2, toward: BACK, ..Bulge::NONE };
         let ankle_y = 0.048 * h;
         let head = HeadForm {
@@ -181,7 +187,7 @@ impl Body {
         };
         let skin = TorsoProfile::new(
             &[
-                FormRing::new(hip_y - 0.14 * t, hip.half_width * 0.58, hip.half_depth * 0.66),
+                FormRing::new(hip_y - 0.14 * t, hip.half_width * 0.74, hip.half_depth * 0.74),
                 hip,
                 waist,
                 chest,
@@ -606,6 +612,9 @@ impl Body {
                 lo = [lo[0].min(p[0]), lo[1].min(p[2])];
                 hi = [hi[0].max(p[0]), hi[1].max(p[2])];
             }
+            // Full thighs meet at the midline near the crotch: the cloth of each leg stops there
+            // rather than crossing into the other's.
+            lo[0] = lo[0].max(0.0);
             let (x, z) = (0.5 * (lo[0] + hi[0]), c[2]);
             LegSection { y, x, z, half_width: 0.5 * (hi[0] - lo[0]), front: hi[1] - z, back: z - lo[1] }
         })
@@ -721,7 +730,7 @@ fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, mu: f32, hip: &FormRing, ank
         // The thigh is full at the hip, out to the hips' own width, so the trunk does not
         // overhang thin legs, and tapers to the knee (the plate's stayed even to mid-thigh). Its
         // root, up inside the trunk, stays narrow so it never shows through the waist.
-        vec![(0.0, 0.75), (th, 1.12), (th + 0.4 * (tk - th), 0.9), (tk, 0.6), (tk + 0.35 * (1.0 - tk), 0.66), (1.0, 0.42)]
+        vec![(0.0, 0.75), (th, 1.08), (th + 0.4 * (tk - th), 0.88), (tk, 0.6), (tk + 0.35 * (1.0 - tk), 0.66), (1.0, 0.42)]
     })
 }
 
@@ -810,7 +819,7 @@ mod tests {
             Body::new(&spec.clone().with_shape(shape)).bust
         };
         let (high, round) = (full_with(0.0), full_with(1.0));
-        assert!(round.y < high.y && round.fall > high.fall && round.sharpness < high.sharpness);
+        assert!(round.y < high.y && round.fall > high.fall && round.power > high.power);
     }
 
     #[test]
