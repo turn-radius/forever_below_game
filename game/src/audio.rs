@@ -16,7 +16,8 @@
 //! played fades out, and fade out in their turn ([`end_theme`]):
 //!
 //! - **Measured Pulse** ([`Playlist::creator_theme`]) from the moment the character creator
-//!   opens until the delve begins, even back on the title's buttons.
+//!   opens until the delve begins. Going back to the title's buttons fades it out and the title
+//!   track in again ([`back_to_the_title_track`]).
 //! - **Trolls** ([`Playlist::troll_theme`]) while a troll not yet burned to death is within
 //!   [`SoundTuning::troll_rooms`] rooms of the delver ([`fb_level::RoomGraph::rooms_apart`]),
 //!   and for [`SoundTuning::troll_linger`] seconds after, so it doesn't stop and start on a
@@ -169,6 +170,9 @@ impl Plugin for MusicPlugin {
                     (
                         turn_music_volume,
                         play_creator_theme.run_if(resource_exists::<PlaylistAudio>).run_if(resource_added::<crate::title::creator::Draft>),
+                        // Beginning the delve closes the creator too, but the title has gone by
+                        // the frame this sees it.
+                        back_to_the_title_track.run_if(resource_removed::<crate::title::creator::Draft>).run_if(resource_exists::<PlaylistAudio>).run_if(in_state(AppState::Title)),
                         play_troll_theme.run_if(resource_exists::<PlaylistAudio>).run_if(in_state(AppState::Delving)),
                         play_music.run_if(resource_exists::<PlaylistAudio>),
                     )
@@ -257,9 +261,20 @@ fn end_theme(theme: &Handle<AudioSource>, fade: f32, tracks: &mut Tracks) {
     fade_out_all(looping.map(|(track, _, sink)| (track, sink)), fade, "as its theme ends");
 }
 
-/// Opening the creator loops its theme, unless it already loops from an earlier opening.
+/// Opening the creator loops its theme, unless it already loops.
 fn play_creator_theme(mut commands: Commands, audio: Res<PlaylistAudio>, settings: Res<MusicSettings>, mut schedule: ResMut<MusicSchedule>, mut tracks: Tracks) {
     loop_theme(&mut commands, &audio.creator_theme, settings.fade, &mut schedule, &mut tracks);
+}
+
+/// Going back from the creator to the title's buttons fades out its theme and brings the title
+/// track back in from the start.
+fn back_to_the_title_track(mut commands: Commands, audio: Res<PlaylistAudio>, settings: Res<MusicSettings>, mut schedule: ResMut<MusicSchedule>, mut tracks: Tracks) {
+    end_theme(&audio.creator_theme, settings.fade, &mut tracks);
+    if let Some(title) = audio.tracks.first() {
+        spawn_track(&mut commands, title.clone(), false);
+        schedule.last = Some(0);
+    }
+    schedule.resume_at = None;
 }
 
 /// Whether a troll at `troll` is within `rooms` rooms of the delver at `delver`, both world
@@ -644,7 +659,14 @@ mod tests {
             .insert_resource(PlaylistAudio { tracks: vec![handle(1), handle(2)], creator_theme: handle(9), troll_theme: handle(10) })
             .insert_resource(MusicSchedule { rng: Mulberry32::new(1), last: Some(0), resume_at: None })
             .add_systems(OnExit(AppState::Title), fade_out_for_the_delve)
-            .add_systems(Update, play_creator_theme.run_if(resource_added::<crate::title::creator::Draft>));
+            .add_systems(
+                Update,
+                (
+                    play_creator_theme.run_if(resource_added::<crate::title::creator::Draft>),
+                    back_to_the_title_track.run_if(resource_removed::<crate::title::creator::Draft>).run_if(in_state(AppState::Title)),
+                )
+                    .chain(),
+            );
         app
     }
 
@@ -667,16 +689,39 @@ mod tests {
         assert!(playing.contains(&(false, Some(FADE), handle(1))), "the title track fades out: {playing:?}");
         assert!(playing.contains(&(true, None, handle(9))), "the theme loops in its place: {playing:?}");
 
-        // Back to the buttons and into the creator again: the theme plays on, alone.
+        // Back to the buttons: the theme fades out and the title track comes in again.
         app.world_mut().remove_resource::<Draft>();
         app.update();
+        let playing = tracks(&mut app);
+        assert!(playing.contains(&(true, Some(FADE), handle(9))), "the theme fades out: {playing:?}");
+        assert!(playing.contains(&(false, None, handle(1))), "the title track fades in: {playing:?}");
+        assert_eq!(app.world().resource::<MusicSchedule>().last, Some(0));
+
+        // Into the creator again: a fresh theme over the title track, fading out.
         app.insert_resource(Draft::roll(2));
         app.update();
-        assert_eq!(tracks(&mut app).iter().filter(|t| t.2 == handle(9)).count(), 1);
+        let playing = tracks(&mut app);
+        assert!(playing.contains(&(true, None, handle(9))), "the theme loops again: {playing:?}");
+        assert!(playing.iter().all(|t| t == &(true, None, handle(9)) || t.1.is_some()), "nothing else plays on: {playing:?}");
 
         app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
         app.update();
         assert!(tracks(&mut app).iter().all(|t| t.1.is_some()), "everything fades as the delve begins");
+    }
+
+    #[test]
+    fn beginning_the_delve_from_the_creator_does_not_bring_the_title_track_back() {
+        use crate::title::creator::Draft;
+        let mut app = creator_theme_app();
+        app.insert_resource(Draft::roll(1));
+        app.update();
+        // `begin_delve` removes the draft and asks for the delve in the same frame.
+        app.world_mut().remove_resource::<Draft>();
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
+        app.update();
+        let playing = tracks(&mut app);
+        assert!(!playing.iter().any(|t| t.2 == handle(1)), "no title track under the delve: {playing:?}");
+        assert!(playing.iter().all(|t| t.1.is_some()), "the theme fades out: {playing:?}");
     }
 
     /// A rough rock level's room graph, the centre of a room for the delver, and the centres of
