@@ -144,6 +144,7 @@ impl<'r> Setup<'r> {
                     folk: Folk::Human,
                     body_seed: 0,
                     shape: None,
+                    sex: None,
                     name: "Folk".into(),
                     class: Class::Fighter,
                     attributes: Attributes { strength: FOLK_SCORE, dexterity: FOLK_SCORE, constitution: FOLK_SCORE, intelligence: FOLK_SCORE, wisdom: FOLK_SCORE },

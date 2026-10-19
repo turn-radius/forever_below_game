@@ -14,6 +14,25 @@ use procgen_rng::Mulberry32;
 use crate::carry::carried_lights;
 use crate::inventory::Inventory;
 
+/// Whether a delver is a woman or a man: what the creator's Sex choice sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sex {
+    Female,
+    Male,
+}
+
+impl Sex {
+    pub const ALL: [Sex; 2] = [Sex::Female, Sex::Male];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Sex::Female => "Female",
+            Sex::Male => "Male",
+        }
+    }
+}
+
 /// The four classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -92,6 +111,8 @@ pub struct Character {
     /// The body's shape as the creator's sliders set it, over the rolled one; `None` keeps the
     /// rolled shape (folk met below, and delvers saved before the sliders).
     pub shape: Option<BodyShape>,
+    /// As the creator chose; `None` for folk met below and delvers saved before the choice.
+    pub sex: Option<Sex>,
     /// Rolled from the folk's syllables in `data/syl.json` (the plate's `genName`).
     pub name: String,
     pub class: Class,
@@ -139,7 +160,7 @@ impl Character {
         let nudges = Character::roll_nudges(rng);
         let attributes = Character::scores_from(folk, nudges);
         let dirt = 0.3 + rng.next_f64() as f32 * 0.2;
-        Character { folk, body_seed, shape: None, name, class, attributes, dirt, worn: AbilityBonus::default() }
+        Character { folk, body_seed, shape: None, sex: None, name, class, attributes, dirt, worn: AbilityBonus::default() }
     }
 
     /// Five nudges to the folk's ability scores, in order strength, dexterity, constitution,
@@ -158,10 +179,15 @@ impl Character {
     /// Their body's spec.
     pub fn spec(&self) -> BodySpec {
         let rolled = BodySpec::roll(self.folk, self.body_seed);
-        match self.shape {
+        let mut spec = match self.shape {
             Some(shape) => rolled.with_shape(shape),
             None => rolled,
+        };
+        // Women are beardless, but for dwarves.
+        if self.sex == Some(Sex::Female) && self.folk != Folk::Dwarf {
+            spec.beard = fb_body::Beard::None;
         }
+        spec
     }
 
     /// The warmth the delver needs from their gear: 6, or 8 for the cold-blooded lizardfolk.

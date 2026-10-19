@@ -22,7 +22,7 @@ use bevy::{
 };
 use fb_items::Slot;
 
-use super::creator::Draft;
+use super::creator::{Draft, ShapeMoved};
 use crate::figure::{Figure, spawn_figure};
 use crate::fitting::{Fitting, figure_key};
 use crate::inventory::doll::{DOLL_LAYER, DollView, HELD_LIGHT_PEAK, HELD_LIGHT_REACH, SlotView, TURN_PER_PIXEL, doll_view};
@@ -54,6 +54,9 @@ pub struct PreviewStage {
     dressed: Option<Dressed>,
     fitting: Option<Fitting<Dressed, Arc<Figure>>>,
     wanted: Option<Wanted>,
+    /// The starting kit last rolled, and for which folk and body seed: a drag of a body slider
+    /// refits the body in the same kit without rolling it again.
+    kit: Option<((fb_body::Folk, u32), Vec<(Slot, fb_items::Item)>)>,
     figure: Option<Entity>,
     camera: Option<Entity>,
     turn: f32,
@@ -89,6 +92,7 @@ pub struct PreviewPlugin;
 impl Plugin for PreviewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PreviewStage>()
+            .init_resource::<ShapeMoved>()
             .add_systems(OnExit(AppState::Title), |mut stage: ResMut<PreviewStage>| *stage = PreviewStage::default())
             .add_systems(Update, (fit_preview, turn_preview).chain().run_if(in_state(AppState::Title)));
     }
@@ -99,7 +103,7 @@ impl Plugin for PreviewPlugin {
 /// every frame: the fit in flight is finished and shown, then the latest body is fitted, so
 /// the doll follows the drag instead of waiting for it to stop. The camera comes with the creator, so the doll's
 /// image is cleared of whatever the inventory last drew there before the first figure shows.
-fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, assets: Res<DollAssets>, mut stage: ResMut<PreviewStage>, mut spawner: ItemSpawner) {
+fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, mut moved: ResMut<ShapeMoved>, assets: Res<DollAssets>, mut stage: ResMut<PreviewStage>, mut spawner: ItemSpawner) {
     let Some(draft) = draft else {
         if stage.figure.is_some() || stage.camera.is_some() || stage.fitting.is_some() {
             for entity in [stage.figure, stage.camera].into_iter().flatten() {
@@ -112,9 +116,13 @@ fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, assets: Res<Do
     if stage.camera.is_none() {
         stage.camera = Some(spawn_camera(&mut commands, &assets));
     }
-    if draft.is_changed() {
+    if draft.is_changed() || std::mem::take(&mut moved.0) {
         let spec = draft.character().spec();
-        let kit = preview_kit(&draft);
+        let rolled_for = (draft.folk, draft.body_seed);
+        if stage.kit.as_ref().is_none_or(|(k, _)| *k != rolled_for) {
+            stage.kit = Some((rolled_for, preview_kit(&draft)));
+        }
+        let kit = stage.kit.as_ref().map(|(_, kit)| kit.clone()).unwrap_or_default();
         let key = figure_key(&spec, &kit, draft.dirt);
         stage.wanted = Some((key, spec, kit, draft.dirt));
     }

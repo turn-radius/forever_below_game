@@ -48,18 +48,20 @@ struct Saved {
     /// The creator's body shape; files saved before the sliders have none, and roll it.
     #[serde(default)]
     shape: Option<fb_body::BodyShape>,
+    #[serde(default)]
+    sex: Option<crate::character::Sex>,
     dirt: f32,
 }
 
 impl From<&Character> for Saved {
     fn from(c: &Character) -> Self {
-        Saved { name: c.name.clone(), folk: c.folk, class: c.class, attributes: c.attributes, body_seed: c.body_seed, shape: c.shape, dirt: c.dirt }
+        Saved { name: c.name.clone(), folk: c.folk, class: c.class, attributes: c.attributes, body_seed: c.body_seed, shape: c.shape, sex: c.sex, dirt: c.dirt }
     }
 }
 
 impl From<Saved> for Character {
     fn from(s: Saved) -> Self {
-        Character { folk: s.folk, body_seed: s.body_seed, shape: s.shape, name: s.name, class: s.class, attributes: s.attributes, dirt: s.dirt.clamp(0.0, 1.0), worn: AbilityBonus::default() }
+        Character { folk: s.folk, body_seed: s.body_seed, shape: s.shape, sex: s.sex, name: s.name, class: s.class, attributes: s.attributes, dirt: s.dirt.clamp(0.0, 1.0), worn: AbilityBonus::default() }
     }
 }
 
