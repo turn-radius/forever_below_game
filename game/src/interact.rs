@@ -5,14 +5,18 @@
 //! greyed. Compare (Alt) is not a slot: [`Verbs::compare`] only says whether the target can be
 //! compared, for an "Alt Compare" prompt.
 //!
-//! | Target | Primary | Secondary | Tertiary |
-//! |---|---|---|---|
-//! | Item on the ground, underfoot or in a container not carried | Take | Equip | |
-//! | Item carried | its use (Eat, Drink, Light, Put out, Refill) | Equip, or Take off if worn | |
-//! | Door | Open or Close | Lock or Unlock, holding its key | Pick the lock, holding lockpicks |
-//! | Container | Open, or Look in once it stands open | Lock or Unlock, holding its key | Pick the lock, holding lockpicks |
-//! | Folk | Talk | Barter | Steal, while hidden |
-//! | Stair | Go down or Go up | | |
+//! | Target | Primary | Secondary | Tertiary | Special |
+//! |---|---|---|---|---|
+//! | Item on the ground, underfoot or in a container not carried | Take | Equip | | Hang at hip |
+//! | Item carried | its use (Eat, Drink, Light, Put out, Refill) | Equip, or Take off if worn | | Hang at hip |
+//! | Door | Open or Close | Lock or Unlock, holding its key | Pick the lock, holding lockpicks | |
+//! | Container | Open, or Look in once it stands open | Lock or Unlock, holding its key | Pick the lock, holding lockpicks | |
+//! | Folk | Talk | Barter | Steal, while hidden | |
+//! | Stair | Go down or Go up | | | |
+//!
+//! Hang at hip sends something that can hang from the belt (a lantern) straight to the hip,
+//! where Equip would put it in a hand. It is on Special because Tertiary's key turns a dragged
+//! item in the inventory.
 //!
 //! The core is pure: a [`Target`] and a [`Delver`] in, [`Verbs`] out. [`item_target`] builds an
 //! item's target from the real inventory. Not wired yet, because the game has none of it: doors
@@ -82,6 +86,7 @@ pub enum Verb {
     Light,
     PutOut,
     Refill,
+    HangAtHip,
     Open,
     LookIn,
     Close,
@@ -107,6 +112,7 @@ impl Verb {
             Verb::Light => "Light",
             Verb::PutOut => "Put out",
             Verb::Refill => "Refill",
+            Verb::HangAtHip => "Hang at hip",
             Verb::Open => "Open",
             Verb::LookIn => "Look in",
             Verb::Close => "Close",
@@ -201,6 +207,9 @@ pub enum Target {
         uses: Option<Verb>,
         /// Whether it can be worn or held.
         equippable: bool,
+        /// Whether it can be hung at the hip now: it hangs there, a belt is worn and it is not
+        /// already there.
+        hangs: bool,
     },
     Door {
         open: bool,
@@ -230,12 +239,13 @@ pub struct Delver {
 /// The verbs `target` gives `delver`.
 pub fn verbs_for(target: &Target, delver: &Delver) -> Verbs {
     match *target {
-        Target::Item { place, uses, equippable } => {
+        Target::Item { place, uses, equippable, hangs } => {
             let equip = equippable.then_some(Verb::Equip);
+            let special = hangs.then_some(Verb::HangAtHip);
             match place {
-                Place::Ground => Verbs { primary: Some(Verb::Take), secondary: equip, compare: equippable, ..Verbs::default() },
-                Place::Carried => Verbs { primary: uses, secondary: equip, compare: equippable, ..Verbs::default() },
-                Place::Worn => Verbs { primary: uses, secondary: Some(Verb::TakeOff), compare: equippable, ..Verbs::default() },
+                Place::Ground => Verbs { primary: Some(Verb::Take), secondary: equip, special, compare: equippable, ..Verbs::default() },
+                Place::Carried => Verbs { primary: uses, secondary: equip, special, compare: equippable, ..Verbs::default() },
+                Place::Worn => Verbs { primary: uses, secondary: Some(Verb::TakeOff), special, compare: equippable, ..Verbs::default() },
             }
         }
         Target::Door { open, lock } => Verbs { primary: Some(if open { Verb::Close } else { Verb::Open }), ..locks(lock, delver) },
@@ -298,7 +308,8 @@ pub fn item_target(inventory: &Inventory, id: ItemId) -> Option<Target> {
         Location::In { .. } | Location::Loose => Place::Ground,
     };
     let uses = use_of(item).filter(|&verb| verb != Verb::Refill || inventory.lantern_wants_oil());
-    Some(Target::Item { place, uses, equippable: !item.slots().is_empty() })
+    let hangs = inventory.location(id) != Some(Location::Worn(fb_items::Slot::Hip)) && inventory.check_wear(id, fb_items::Slot::Hip).is_ok();
+    Some(Target::Item { place, uses, equippable: !item.slots().is_empty(), hangs })
 }
 
 /// The line shown over the crosshair for what is aimed at; `None` shows nothing.
@@ -408,12 +419,12 @@ mod tests {
         keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
         assert_eq!(key_line(&keymap, &verbs_for(&Target::Folk, &Delver::default())), "E Talk \u{b7} G Barter");
         let dagger = roll_item("Dagger", 7).unwrap();
-        let on_floor = Target::Item { place: Place::Ground, uses: None, equippable: !dagger.slots().is_empty() };
+        let on_floor = Target::Item { place: Place::Ground, uses: None, equippable: !dagger.slots().is_empty(), hangs: false };
         assert_eq!(key_line(&Keymap::default(), &verbs_for(&on_floor, &Delver::default())), "F Take \u{b7} G Equip \u{b7} Alt Compare");
     }
 
     fn target(item: &Item, place: Place) -> Target {
-        Target::Item { place, uses: use_of(item), equippable: !item.slots().is_empty() }
+        Target::Item { place, uses: use_of(item), equippable: !item.slots().is_empty(), hangs: false }
     }
 
     fn carried(base: &str, place: Place) -> Verbs {
@@ -455,6 +466,28 @@ mod tests {
         let worn = inventory.add(roll_item("Ring", 2).unwrap());
         inventory.wear(worn, fb_items::Slot::Ring1).unwrap();
         assert_eq!(place(&inventory, worn), Place::Worn);
+    }
+
+    #[test]
+    fn a_lantern_hangs_at_the_hip_only_with_a_belt_and_not_already_there() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let lantern = inventory.add(roll_item("Lantern", 3).unwrap());
+        inventory.stow(lantern).unwrap();
+        let verbs = |inventory: &Inventory, id| verbs_for(&item_target(inventory, id).unwrap(), &Delver::default());
+        assert_eq!(verbs(&inventory, lantern).special, None, "no belt");
+        let belt = inventory.add(roll_item("Belt", 1).unwrap());
+        inventory.wear(belt, fb_items::Slot::Belt).unwrap();
+        assert_eq!(verbs(&inventory, lantern).special, Some(Verb::HangAtHip));
+        assert_eq!(key_line(&Keymap::default(), &verbs(&inventory, lantern)), "F Put out \u{b7} G Equip \u{b7} T Hang at hip \u{b7} Alt Compare");
+        inventory.wear(lantern, fb_items::Slot::Offhand).unwrap();
+        assert_eq!(verbs(&inventory, lantern).special, Some(Verb::HangAtHip), "from the hand");
+        inventory.take_out(lantern);
+        inventory.wear(lantern, fb_items::Slot::Hip).unwrap();
+        assert_eq!(verbs(&inventory, lantern).special, None, "already there");
+        let dagger = inventory.add(roll_item("Dagger", 7).unwrap());
+        assert_eq!(verbs(&inventory, dagger).special, None, "a dagger does not hang");
     }
 
     #[test]

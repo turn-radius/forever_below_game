@@ -294,8 +294,8 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
 }
 
 /// For captures and trying the game: a bow or crossbow in the main hand comes with a full quiver
-/// or bolt case ([`fb_items::outfit::AMMUNITION_CARRIED`]), at the hip if a belt is worn, else on
-/// the back, else carried. One the kit already gave is filled up.
+/// or bolt case ([`fb_items::outfit::AMMUNITION_CARRIED`]), slung in the quiver slot, else carried.
+/// One the kit already gave is filled up.
 fn give_ammunition(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLevel>>) {
     let Some((_, ranged)) = crate::combat::shoot::ranged_in_hand(&inventory) else { return };
     let (holder_base, ammo_base) = if ranged.ammunition == armory::Family::Bolt { ("Bolt case", "Bolt") } else { ("Quiver", "Arrow") };
@@ -304,7 +304,7 @@ fn give_ammunition(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLe
         None => {
             let Some(item) = fb_items::roll_item_with(holder_base, kit_seed(level.as_deref(), 0xa770), starting_odds()) else { return };
             let holder = inventory.add(item);
-            if [Slot::Hip, Slot::Back].into_iter().all(|slot| inventory.wear(holder, slot).is_err()) && inventory.stow(holder).is_err() {
+            if inventory.wear(holder, Slot::Quiver).is_err() && inventory.stow(holder).is_err() {
                 inventory.forget(holder);
                 return;
             }
@@ -676,6 +676,12 @@ impl FloorEquip {
 /// goes is this build's own rule.
 pub fn equip_from_floor(inventory: &mut Inventory, id: ItemId, at: Vec2, yaw: f32) -> Result<FloorEquip, Refusal> {
     let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
+    equip_from_floor_in(inventory, id, slot, at, yaw)
+}
+
+/// [`equip_from_floor`] into `slot` rather than the one it is made for: Hang at hip sends a
+/// lantern to the hip ([`crate::interact::Verb::HangAtHip`]).
+pub fn equip_from_floor_in(inventory: &mut Inventory, id: ItemId, slot: Slot, at: Vec2, yaw: f32) -> Result<FloorEquip, Refusal> {
     let mut changes = equip(inventory, id, slot)?;
     let slot = match inventory.location(id) {
         Some(Location::Worn(worn)) => worn,

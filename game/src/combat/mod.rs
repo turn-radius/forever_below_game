@@ -1060,7 +1060,7 @@ mod tests {
             let weapon = inventory.add(fb_items::roll_item(weapon, weapon_seed).unwrap());
             inventory.wear(weapon, fb_items::Slot::Mainhand).unwrap();
             let holder = inventory.add(fb_items::roll_item(holder, 3).unwrap());
-            inventory.wear(holder, fb_items::Slot::Back).unwrap();
+            inventory.wear(holder, fb_items::Slot::Quiver).unwrap();
             for seed in 0..count {
                 let piece = inventory.add(fb_items::roll_item(ammo, 100 + seed as u32).unwrap());
                 inventory.stow(piece).unwrap();

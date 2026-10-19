@@ -75,8 +75,8 @@ impl From<Misfit> for Refusal {
 
 /// Worn slots that carry a container whose grid shows on the inventory screen, in the order
 /// they show: the pack or sack on the back, then the belt's pouch (the plate's
-/// `containersOf`).
-pub const CARRYING_SLOTS: [Slot; 3] = [Slot::Back, Slot::Belt, Slot::Hip];
+/// `containersOf`), then the quiver or bolt case.
+pub const CARRYING_SLOTS: [Slot; 4] = [Slot::Back, Slot::Belt, Slot::Hip, Slot::Quiver];
 
 /// The minute of fuel a light's card shows ("Fuel 0:42"), rounded as the card rounds it.
 fn fuel_minute(item: &Item) -> Option<u32> {
@@ -754,11 +754,33 @@ mod tests {
         assert_eq!(inventory.check_put(bolt, case, at), Ok(()));
         assert_eq!(inventory.check_put(arrow, case, Placement::new(1, 0, false)), Err(Refusal::NotAccepted));
         // Twenty arrows fit, found by the quiver before a pack.
-        inventory.wear(quiver, Slot::Back).unwrap();
+        inventory.wear(quiver, Slot::Quiver).unwrap();
         for seed in 2..21 {
             let more = inventory.add(rolled("Arrow", seed));
             assert_eq!(inventory.stow(more), Ok(quiver));
         }
         assert_eq!(inventory.contents_count(quiver), 20);
+    }
+
+    #[test]
+    fn a_quiver_is_slung_in_its_own_slot_with_the_hip_and_back_taken_and_no_belt_needed() {
+        let mut inventory = Inventory::default();
+        let (pack, belt, lantern) = (inventory.add(rolled("Pack", 1)), inventory.add(rolled("Belt", 1)), inventory.add(rolled("Lantern", 1)));
+        inventory.wear(pack, Slot::Back).unwrap();
+        inventory.wear(belt, Slot::Belt).unwrap();
+        inventory.wear(lantern, Slot::Hip).unwrap();
+        let quiver = inventory.add(rolled("Quiver", 2));
+        assert_eq!(inventory.check_wear(quiver, Slot::Hip), Err(Refusal::WrongSlot));
+        assert_eq!(inventory.check_wear(quiver, Slot::Back), Err(Refusal::WrongSlot));
+        assert_eq!(inventory.target_slot(quiver), Some(Slot::Quiver));
+        inventory.pick_up(quiver).unwrap();
+        assert_eq!(inventory.worn(Slot::Quiver), Some(quiver));
+        assert!(inventory.carried_containers().contains(&quiver));
+        let arrow = inventory.add(rolled("Arrow", 3));
+        assert_eq!(inventory.stow(arrow), Ok(quiver), "an arrow picked up goes in the quiver, not the pack");
+        // Taking the belt off drops the lantern from the hip but leaves the quiver slung.
+        inventory.take_out(belt);
+        inventory.unhang();
+        assert_eq!(inventory.worn(Slot::Quiver), Some(quiver));
     }
 }
