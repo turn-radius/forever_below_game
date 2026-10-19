@@ -55,13 +55,13 @@ pub const DOLL_STAGE: Vec3 = Vec3::new(0.0, -50_000.0, -30_000.0);
 const DOLL_PADDING: f32 = 1.04;
 /// Radians the doll turns per logical pixel dragged (our own tuning: a drag across the doll's
 /// square turns it about once round).
-const TURN_PER_PIXEL: f32 = 0.014;
+pub(crate) const TURN_PER_PIXEL: f32 = 0.014;
 /// The key's strength on the doll before the shader's quarter steps, as for the icons.
 const KEY_LEVEL: f32 = 0.6;
 /// A held light's strength close up and its reach as a multiple of the body's height (our own
 /// tuning: warm on its own arm and side, gone by the far one).
-const HELD_LIGHT_PEAK: f32 = 0.55;
-const HELD_LIGHT_REACH: f32 = 0.9;
+pub(crate) const HELD_LIGHT_PEAK: f32 = 0.55;
+pub(crate) const HELD_LIGHT_REACH: f32 = 0.9;
 
 /// The doll's frame on the page, in logical pixels: the plate's `.dollwrap`, smaller to share
 /// the screen with the grids.

@@ -29,7 +29,7 @@ use forever_below::{
     record::WorldRecord,
     render::{ArmoryRenderPlugin, ItemSpawner},
     settings::SettingsPlugin,
-    title::{NewDelveSeed, TitlePlugin},
+    title::{NewDelveSeed, TitlePlugin, creator::CreatorCommand},
     travel::{Abyss, Journey, UseStair},
     tuning::{Tuning, TuningPlugin},
 };
@@ -60,7 +60,7 @@ fn run(app: &mut App, frames: usize) {
 fn delving() -> App {
     let mut app = headless_game();
     run(&mut app, 30);
-    app.world_mut().write_message(MenuCommand::NewDelve);
+    app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
     run(&mut app, 60);
@@ -336,7 +336,7 @@ fn the_world_record_round_trips_through_serde_and_death_resets_it() {
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
     run(&mut app, (FALL_TIME * 60.0) as usize + 60);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
-    app.world_mut().write_message(MenuCommand::NewDelve);
+    app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
     run(&mut app, 30);

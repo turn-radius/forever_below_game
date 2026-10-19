@@ -27,7 +27,7 @@ use forever_below::{
     record::WorldRecord,
     render::ArmoryRenderPlugin,
     settings::SettingsPlugin,
-    title::{NewDelveSeed, TitlePlugin},
+    title::{NewDelveSeed, TitlePlugin, creator::CreatorCommand},
     travel::{Abyss, Journey, UseStair},
     tuning::TuningPlugin,
 };
@@ -57,7 +57,7 @@ fn run(app: &mut App, frames: usize) {
 fn delving() -> App {
     let mut app = headless_game();
     run(&mut app, 30);
-    app.world_mut().write_message(MenuCommand::NewDelve);
+    app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
     run(&mut app, 60);

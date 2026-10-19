@@ -49,9 +49,9 @@ cargo run -p forever_below -- --seed 42            # skip it: straight into the 
 cargo run -p forever_below -- --title --seed 42    # the title, and New delve plays seed 42
 ```
 
-The game opens on the title screen, to Forever Below's theme. New delve (or Enter) rolls a new level and a new character from the clock and starts the delve; the theme fades out as you go in. Settings is the pause menu's settings page (Esc or Back returns), and Quit leaves.
+The game opens on the title screen, to Forever Below's theme. New delve (or Enter) opens the character creator over the card: pick the folk and class, type a name or roll one, roll the ability scores and the look, and watch the delver turn in the kit they start with. Begin the delve (or Enter) rolls a new level from the clock and goes down; Back (or Esc) returns. The theme fades out as you go in. Once you have gone down as someone, the title offers Continue as their name, which starts a fresh level with the same delver (kept in `last_character.json` beside `settings.json`). Settings is the pause menu's settings page (Esc or Back returns), and Quit leaves.
 
-Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page.
+Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
 
 ### Play a level
 
@@ -212,14 +212,15 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_PROVOKE=<n>` | a second in, gives the level's `n`th folk (0 the first, in `print_level`'s order) cause to fight: they and the kin who see it turn hostile, for captures of folk fighting (with `FB_DEBUG_POSE`) |
 | `FB_SLAY=<n>` | two seconds in, strikes the level's `n`th folk down, for captures of a body and the gear it drops |
 | `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |
-| `FB_NEW_DELVE=<seconds>` | the title chooses New delve by itself after that many seconds, each time it shows; with `FB_PLAYER_HP=1` and `FB_SCREENSHOT_FRAMES`, captures a fall, the title and the next delve without input |
+| `FB_ROLL_LOOK=<seconds>` | the character creator rolls a look by itself that often, for captures of the doll changing (with `FB_OPEN_MENU=creator` and `--title`) |
+| `FB_NEW_DELVE=<seconds>` | the title begins a delve by itself, past the creator and with a rolled delver, after that many seconds, each time it shows; with `FB_PLAYER_HP=1` and `FB_SCREENSHOT_FRAMES`, captures a fall, the title and the next delve without input |
 | `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot (or `<base>@<slot>` in another it fits: `Lantern@hip`, `Sword@offhand`), after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |
 | `FB_STOW=<base>[,<base>...]` | puts one item of each named base in the carried grids, after `FB_EQUIP` (`Mail coif,Hood,Helm,Tunic`) |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_FOLK_WALK=<n>` | every folk in the level walks in place at `n` times its natural pace (`FB_FOLK_WALK=1`), to see the gait and measure its cost before anything moves them |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |
 | `FB_COMPARE=1` | holds Alt, so the hover card shows its compare card beside it |
-| `FB_OPEN_MENU=main\|controls\|settings` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page |
+| `FB_OPEN_MENU=main\|controls\|settings\|creator` | opens the menu on that page; with `--title`, `settings` opens the title on its settings page and `creator` on the character creator |
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
 | `FB_KEYBINDINGS=<file.toml>` | reads and writes keybindings from another file; default `keybindings.toml` beside the settings file |
 | `FB_FRAME_TIME=<frames>` | prints Bevy's smoothed frame time at each listed frame (`240,270,300`) and quits after the last; with `FB_DEBUG_POSE`, measures a view's frame rate in the window at vsync |

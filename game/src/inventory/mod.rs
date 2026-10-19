@@ -56,7 +56,7 @@ pub use items::{Displaced, Inventory, ItemId, Location, Refusal, char_bucket};
 pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
 use crate::carry::ViewModelCamera;
-use crate::character::{Character, character_for};
+use crate::character::{Character, ChosenDelver, character_for};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
 use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, SheetTab, show_screen, switch_screens};
@@ -192,9 +192,15 @@ fn kit_seed(level: Option<&CurrentLevel>, salt: u32) -> u32 {
 /// The outfit the delver starts in (`data/outfits.json`).
 pub const STARTING_OUTFIT: &str = "fallen";
 
-/// Rolls the delver from the level's seed.
-fn roll_character(mut character: ResMut<Character>, level: Option<Res<CurrentLevel>>) {
-    *character = character_for(kit_seed(level.as_deref(), 0xc4a7));
+/// The delver chosen on the title, taken up, or one rolled from the level's seed.
+fn roll_character(mut commands: Commands, mut character: ResMut<Character>, chosen: Option<Res<ChosenDelver>>, level: Option<Res<CurrentLevel>>) {
+    *character = match chosen {
+        Some(chosen) => {
+            commands.remove_resource::<ChosenDelver>();
+            chosen.0.clone()
+        }
+        None => character_for(kit_seed(level.as_deref(), 0xc4a7)),
+    };
 }
 
 /// The delver starts with almost nothing: the [`STARTING_OUTFIT`]'s clothes, a belt whose pouch
@@ -205,19 +211,28 @@ fn give_starting_kit(mut inventory: ResMut<Inventory>, character: Res<Character>
     if inventory.worn(Slot::Belt).is_some() {
         return;
     }
-    let odds = starting_odds();
-    let Some(belt) = fb_items::roll_item_with("Belt", kit_seed(level.as_deref(), 0xbe17), odds) else { return };
-    let belt = inventory.add(belt);
-    inventory.wear(belt, Slot::Belt).expect("a belt goes on the belt slot");
-    let Some(outfit) = fb_items::outfit::outfit(STARTING_OUTFIT) else { return };
-    for (slot, item) in outfit.roll_with(kit_seed(level.as_deref(), 0x0f17), character.folk.key(), odds).worn {
+    for (slot, item) in starting_kit(|salt| kit_seed(level.as_deref(), salt), character.folk) {
         let id = inventory.add(item);
         if inventory.wear(id, slot).is_err() {
             inventory.forget(id);
         }
     }
-    let torch = inventory.add(starting_torch(kit_seed(level.as_deref(), 0x70c4)));
-    inventory.wear(torch, Slot::Offhand).expect("a torch goes in the off hand");
+}
+
+/// The starting kit, slot by slot, each piece rolled from `seed(salt)`: the belt first, then
+/// the [`STARTING_OUTFIT`] for `folk` (a piece for a slot already filled is not worn), then the
+/// torch. The creator's figure wears it too ([`crate::title::preview`]).
+pub fn starting_kit(seed: impl Fn(u32) -> u32, folk: fb_body::Folk) -> Vec<(Slot, fb_items::Item)> {
+    let odds = starting_odds();
+    let mut kit = Vec::new();
+    if let Some(belt) = fb_items::roll_item_with("Belt", seed(0xbe17), odds) {
+        kit.push((Slot::Belt, belt));
+    }
+    if let Some(outfit) = fb_items::outfit::outfit(STARTING_OUTFIT) {
+        kit.extend(outfit.roll_with(seed(0x0f17), folk.key(), odds).worn);
+    }
+    kit.push((Slot::Offhand, starting_torch(seed(0x70c4))));
+    kit
 }
 
 /// The odds the starting kit rolls at: the first level's, but common only.
@@ -1306,6 +1321,20 @@ mod tests {
 
     /// The cell size as shipped.
     const CELL_PX: f32 = 72.0;
+
+    #[test]
+    fn a_delve_begins_as_the_chosen_delver_or_rolls_one() {
+        let mut app = App::new();
+        app.init_resource::<Character>().add_systems(Update, roll_character);
+        app.update();
+        let rolled = app.world().resource::<Character>().clone();
+        assert_eq!(rolled, character_for(kit_seed(None, 0xc4a7)));
+        let chosen = Character { name: "Brakka".into(), folk: fb_body::Folk::Dwarf, class: crate::character::Class::Cleric, ..Character::roll(11) };
+        app.insert_resource(ChosenDelver(chosen.clone()));
+        app.update();
+        assert_eq!(*app.world().resource::<Character>(), chosen);
+        assert!(app.world().get_resource::<ChosenDelver>().is_none(), "the delve takes it up");
+    }
 
     #[test]
     fn the_delver_starts_with_clothes_a_belt_and_a_burning_torch() {

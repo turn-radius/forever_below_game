@@ -15,7 +15,8 @@ use crate::carry::carried_lights;
 use crate::inventory::Inventory;
 
 /// The four classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Class {
     Fighter,
     Ranger,
@@ -130,24 +131,25 @@ impl Character {
         let body_seed = (rng.next_f64() * 4_294_967_296.0) as u32;
         let class = *rng.pick(&Class::ALL);
         let name = fb_items::naming::folk_name(rng, folk.key());
-        let race = folk.race();
-        let [str_base, dex_base, con_base, int_base, wis_base] = race.stats;
-        // Roll each attribute: nudge and clamp to 3–18. WIS is drawn last, so existing seeds
-        // produce the same first four scores; only the WIS roll and dirt shift.
-        let mut roll = |base: i32| {
-            let nudge = ((rng.next_f64() + rng.next_f64() + rng.next_f64() - 1.5) * 3.0).round() as i32;
-            (base + nudge).clamp(3, 18)
-        };
-        // Fields evaluated in written order: strength, dexterity, constitution, intelligence, wisdom.
-        let attributes = Attributes {
-            strength: roll(str_base),
-            dexterity: roll(dex_base),
-            constitution: roll(con_base),
-            intelligence: roll(int_base),
-            wisdom: roll(wis_base),
-        };
+        // WIS is drawn last, so existing seeds produce the same first four scores; only the WIS
+        // roll and dirt shift.
+        let nudges = Character::roll_nudges(rng);
+        let attributes = Character::scores_from(folk, nudges);
         let dirt = 0.3 + rng.next_f64() as f32 * 0.2;
         Character { folk, body_seed, name, class, attributes, dirt, worn: AbilityBonus::default() }
+    }
+
+    /// Five nudges to the folk's ability scores, in order strength, dexterity, constitution,
+    /// intelligence, wisdom: each `round((r + r + r - 1.5) * 3)`, so -5 to 4, mostly near 0.
+    pub fn roll_nudges(rng: &mut Mulberry32) -> [i32; 5] {
+        std::array::from_fn(|_| ((rng.next_f64() + rng.next_f64() + rng.next_f64() - 1.5) * 3.0).round() as i32)
+    }
+
+    /// The ability scores `nudges` give one of `folk`: its scores in `data/races.json`, each
+    /// moved by its nudge and held within 3 to 18.
+    pub fn scores_from(folk: Folk, nudges: [i32; 5]) -> Attributes {
+        let [strength, dexterity, constitution, intelligence, wisdom] = std::array::from_fn(|i| (folk.race().stats[i] + nudges[i]).clamp(3, 18));
+        Attributes { strength, dexterity, constitution, intelligence, wisdom }
     }
 
     /// Their body's spec.
@@ -342,6 +344,12 @@ pub fn wear_abilities(inventory: Option<Res<Inventory>>, character: Option<ResMu
         character.worn = worn;
     }
 }
+
+/// The delver the next delve begins as, made in the creator or continued from the last delve
+/// ([`crate::title`]); the delve takes it up as it begins. Without one, a delve rolls its delver
+/// from the level ([`character_for`]).
+#[derive(Resource, Clone, Debug, PartialEq)]
+pub struct ChosenDelver(pub Character);
 
 /// Rolls the delver from `seed`, or as one of the folk `FB_FOLK` names.
 pub fn character_for(seed: u32) -> Character {
