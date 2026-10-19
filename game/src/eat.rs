@@ -6,14 +6,16 @@
 //! F is a swallow ([`fb_items::SWALLOW`]) out of its fill, until it is empty.
 //!
 //! [`consume`] does the work and says what it did, so the healing draught adds its cure to it
-//! (#235): 2d4 + 2 hit points from the run's dice, a green flash and a soft chime. The delver's needs are the [`DelverNeeds`] on the
+//! (#235): 2d4 + 2 hit points from the run's dice, a green flash and a soft chime. An Antidote (a potion of the antidote's brew) ends the
+//! venom's Poisoned ([`fb_character::poison`]). The delver's needs are the [`DelverNeeds`] on the
 //! player; the game clock steps them in #229.
 
 use bevy::{ecs::system::SystemParam, prelude::*};
+use armory::families::food::Brew;
 use fb_items::{Consume, Provision};
 use procgen_rng::Mulberry32;
 
-use crate::character::DelverNeeds;
+use crate::character::{DelverEffects, DelverNeeds};
 use crate::combat::{Health, RunDice};
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
@@ -102,6 +104,8 @@ pub struct Consumed {
     pub base: String,
     /// A swallow from a waterskin that stays, not an item used up.
     pub sipped: bool,
+    /// What a potion held, so a rule keyed on it (the antidote's cure) can follow.
+    pub brew: Option<Brew>,
 }
 
 /// Eats or drinks `id`: takes it out of the inventory, wherever it lies, and takes its
@@ -113,10 +117,10 @@ pub fn consume(inventory: &mut Inventory, needs: &mut fb_character::Needs, id: I
         let (name, base) = (item.title().to_string(), item.base.clone());
         let provision = inventory.sip(id)?;
         needs.consume(provision.nutrition, provision.water);
-        return Some(Consumed { how: Consume::Drink, name, provision, base, sipped: true });
+        return Some(Consumed { how: Consume::Drink, name, provision, base, sipped: true, brew: None });
     }
     let (how, provision) = (item.consume()?, item.provision()?);
-    let done = Consumed { how, name: item.title().to_string(), provision, base: item.base.clone(), sipped: false };
+    let done = Consumed { how, name: item.title().to_string(), provision, base: item.base.clone(), sipped: false, brew: item.brew() };
     inventory.forget(id);
     needs.consume(provision.nutrition, provision.water);
     Some(done)
@@ -130,13 +134,17 @@ pub fn say(done: &Consumed) -> String {
     format!("You {} the {}", done.how.past(), done.name.to_lowercase())
 }
 
-/// What eating needs from the world: the delver's needs and hit points, the run's dice, the
-/// green flash and the chime. [`Eating::eat`] is what F in the inventory and a quickslot share.
+/// The effect an Antidote ends: the venom's.
+pub const CURED_BY_ANTIDOTE: &str = "poisoned";
+
+/// What eating needs from the world: the delver's needs, hit points and effects, the run's dice,
+/// the green flash and the chime. [`Eating::eat`] is what F in the inventory and a quickslot share.
 #[derive(SystemParam)]
 pub struct Eating<'w, 's> {
     commands: Commands<'w, 's>,
     needs: Query<'w, 's, &'static mut DelverNeeds, With<Player>>,
     healths: Query<'w, 's, &'static mut Health, With<Player>>,
+    effects: Query<'w, 's, (Entity, &'static mut DelverEffects), With<Player>>,
     dice: Option<ResMut<'w, RunDice>>,
     glow: ResMut<'w, HealGlow>,
     sound: Option<Res<'w, HealSound>>,
@@ -146,7 +154,7 @@ pub struct Eating<'w, 's> {
 
 impl Eating<'_, '_> {
     /// Eats or drinks `id` ([`consume`]), and if it is a healing draught heals the delver, flashes
-    /// the view green and chimes. Returns what the toast says; `None`, and nothing changed, if it
+    /// the view green and chimes; an Antidote ends their poisoning. Returns what the toast says; `None`, and nothing changed, if it
     /// is not food or drink, or there is no delver.
     pub fn eat(&mut self, inventory: &mut Inventory, id: ItemId) -> Option<String> {
         let mut needs = self.needs.single_mut().ok()?;
@@ -162,6 +170,17 @@ impl Eating<'_, '_> {
                 let game = self.settings.as_deref().copied().unwrap_or_default();
                 self.commands.spawn((Name::new("heal"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &self.tuning), DespawnOnExit(crate::launch::AppState::Delving)));
             }
+        }
+        if done.brew == Some(Brew::Antidote)
+            && let Ok((player, mut effects)) = self.effects.single_mut()
+            && effects.0.get(CURED_BY_ANTIDOTE, None).is_some()
+        {
+            effects.0.remove(CURED_BY_ANTIDOTE, None);
+            // The component goes with the last effect, as the clock takes it off.
+            if effects.0.active.is_empty() {
+                self.commands.entity(player).remove::<DelverEffects>();
+            }
+            line = format!("{line}: the venom is gone");
         }
         Some(line)
     }
@@ -264,6 +283,10 @@ mod tests {
 
     fn item(base: &str) -> fb_items::Item {
         fb_items::roll_item(base, 5).unwrap()
+    }
+
+    fn item_seeded(base: &str) -> impl Fn(u32) -> fb_items::Item + '_ {
+        move |seed| fb_items::roll_item(base, seed).unwrap()
     }
 
     fn hungry(hunger: f64) -> fb_character::Needs {
@@ -375,12 +398,17 @@ mod tests {
 
     /// `base` in the pack, wearing one first if need be; an item added loose lies underfoot.
     fn carry(app: &mut App, base: &str) -> ItemId {
+        stow(app, item(base))
+    }
+
+    /// `thing` in the pack, wearing one first if need be.
+    fn stow(app: &mut App, thing: fb_items::Item) -> ItemId {
         let mut inventory = app.world_mut().resource_mut::<Inventory>();
         if inventory.worn(fb_items::Slot::Back).is_none() {
             let pack = inventory.add(item("Pack"));
             inventory.wear(pack, fb_items::Slot::Back).unwrap();
         }
-        let id = inventory.add(item(base));
+        let id = inventory.add(thing);
         inventory.stow(id).unwrap();
         id
     }
@@ -691,6 +719,37 @@ mod tests {
         app.world_mut().resource_mut::<Hovered>().0 = Some((potion, Rect::default()));
         press_u(&mut app);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
+    }
+
+    #[test]
+    fn an_antidote_ends_the_venom_and_leaves_other_effects() {
+        let (mut app, player) = app();
+        let antidote = (0..200).map(item_seeded("Potion")).find(|p| p.brew() == Some(Brew::Antidote)).unwrap();
+        let mut effects = DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0);
+        effects.0.add(&fb_character::rules::defaults().effects, "stinging_eyes", 0.8, None, fb_character::effect::Source::Surroundings);
+        app.world_mut().entity_mut(player).insert(effects);
+        let id = stow(&mut app, antidote.clone());
+        hover(&mut app, id);
+        press_u(&mut app);
+        let left = app.world().get::<DelverEffects>(player).expect("their eyes still sting");
+        assert!(left.poisoned_hours().is_none() && left.0.get("stinging_eyes", None).is_some());
+        assert_eq!(app.world().resource::<Toast>().text, "You drink the antidote: the venom is gone");
+        // With the venom the only effect, the component goes too.
+        app.world_mut().entity_mut(player).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
+        let id = stow(&mut app, antidote);
+        hover(&mut app, id);
+        press_u(&mut app);
+        assert!(app.world().get::<DelverEffects>(player).is_none());
+    }
+
+    #[test]
+    fn a_healing_potion_does_not_cure_the_venom() {
+        let (mut app, player) = app();
+        app.world_mut().entity_mut(player).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
+        let draught = carry(&mut app, "Healing draught");
+        hover(&mut app, draught);
+        press_u(&mut app);
+        assert!(app.world().get::<DelverEffects>(player).is_some_and(|e| e.poisoned_hours().is_some()));
     }
 
     #[test]
