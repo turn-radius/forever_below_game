@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn no_crate_holds_a_held_back_base_smoke() {
-        assert!(!holds_held_back(8));
+        assert!(!holds_held_back(3));
     }
 
     #[test]
