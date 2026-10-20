@@ -301,6 +301,10 @@ pub struct Derived {
     pub luck: f32,
     /// What worn items add to their ability scores.
     pub abilities: AbilityBonus,
+    /// What worn gear adds to a melee or a missile hit roll, the weapon in hand apart.
+    pub to_hit: f32,
+    /// What worn gear adds to a missile hit roll alone.
+    pub ranged_to_hit: f32,
 }
 
 /// The odds the loot of a level `depth` down rolls against for the delver: the level's, with the
@@ -330,11 +334,14 @@ impl Character {
             // in the off hand blocks.
             let heal_on_kill = if slot == fb_items::Slot::Mainhand { s.heal_on_kill as f64 } else { 0.0 };
             let block_chance = if is_shield(slot, item) { s.block_chance as f64 } else { 0.0 };
+            // A weapon's own to hit is on the roll already ([`crate::combat::Weapon::of_stats`]), so
+            // only the worn gear's adds to it; the ranged part counts whatever it is on.
+            let to_hit = if slot == fb_items::Slot::Mainhand || s.is_weapon() { 0.0 } else { s.to_hit as f64 };
             let point = |v: f32| v.round() as i32;
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64 },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64 },
             );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
@@ -401,6 +408,8 @@ impl Character {
             block_chance: gear.block_chance as f32,
             luck: gear.luck as f32,
             abilities: gear.abilities,
+            to_hit: gear.to_hit as f32,
+            ranged_to_hit: gear.ranged_to_hit as f32,
         }
     }
 }

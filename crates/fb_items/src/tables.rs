@@ -314,7 +314,7 @@ mod tests {
     fn every_table_parses_with_its_entries() {
         assert_eq!(bases().len(), 13);
         assert_eq!(goods().len(), 16);
-        assert_eq!(affixes().len(), 61);
+        assert_eq!(affixes().len(), 64);
         assert_eq!(slot_places().len(), 17);
         let head = &slot_places()[0];
         assert_eq!((head.slot, head.label.as_str(), head.size, head.side, head.x_percent, head.y_percent), (Slot::Head, "Head", SlotSize::Big, SlotSide::Left, 4.0, 5.0));
@@ -474,6 +474,9 @@ mod tests {
             ("of Chance", Stat::Luck, 1.0),
             ("of Fortune", Stat::Luck, 2.0),
             ("of Luck", Stat::Luck, 3.0),
+            ("Sighted", Stat::RangedToHit, 1.0),
+            ("of the Hawk", Stat::RangedToHit, 2.0),
+            ("of the Steady Hand", Stat::ToHit, 1.0),
         ];
         for &(name, stat, want) in cases {
             let a = affixes().iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name}"));

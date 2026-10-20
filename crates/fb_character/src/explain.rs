@@ -278,6 +278,25 @@ impl Loadout {
         if e.value() > 1.0 { e.clamp("at most 1", 0.0, 1.0) } else { e }
     }
 
+    /// Points added to the melee attack and the shot roll by worn gear, item by item. Equals
+    /// [`Gear::to_hit`].
+    pub fn to_hit(&self) -> Explained {
+        let mut e = Explained::new("To hit", "").base("no gear", 0.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.to_hit != 0.0) {
+            e = e.add(label, item.to_hit);
+        }
+        e
+    }
+
+    /// Points added to the shot roll only, item by item. Equals [`Gear::ranged_to_hit`].
+    pub fn ranged_to_hit(&self) -> Explained {
+        let mut e = Explained::new("Ranged to hit", "").base("no gear", 0.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.ranged_to_hit != 0.0) {
+            e = e.add(label, item.ranged_to_hit);
+        }
+        e
+    }
+
     /// Points of luck, the items' added: each rolls the loot found a level deeper. Equals
     /// [`Gear::luck`].
     pub fn luck(&self) -> Explained {
@@ -410,6 +429,17 @@ mod tests {
     }
 
     #[test]
+    fn to_hit_and_ranged_to_hit_add_item_by_item() {
+        let hawk = Worn { ranged_to_hit: 2.0, ..Worn::default() };
+        let steady = Worn { to_hit: 1.0, ..Worn::default() };
+        let loadout = Loadout::new("Human", 0.0).wearing("Ring of the Hawk", hawk).wearing("Gloves of the Steady Hand", steady);
+        assert_eq!(loadout.to_hit().line(), "To hit 1 = no gear (0) + Gloves of the Steady Hand (+1)");
+        assert_eq!(loadout.ranged_to_hit().line(), "Ranged to hit 2 = no gear (0) + Ring of the Hawk (+2)");
+        let gear = loadout.gear();
+        assert_eq!((gear.to_hit, gear.ranged_to_hit), (1.0, 2.0));
+    }
+
+    #[test]
     fn a_goblin_in_the_mole_sees_the_best_not_the_sum() {
         let e = Loadout::new("Goblin", 60.0).wearing("Belt of the Mole", mole()).darkvision();
         assert_eq!(e.value(), 60.0);
@@ -446,7 +476,7 @@ mod tests {
 
     #[test]
     fn explained_values_equal_the_plain_functions() {
-        let worn = [("A", Worn { carry: 10.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.9, stealth: 0.0, warmth: 2.0, heal_on_kill: 1.0, speed: 1.1, block_chance: 0.1, abilities: crate::AbilityBonus { strength: 2, ..Default::default() }, disease_risk: 1.0, luck: 2.0, ..Worn::default() }), ("B", Worn { carry: 5.0, darkvision: 70.0, hunger_rate: 0.85, sleepiness_rate: 1.0, stealth: 0.0, warmth: 1.5, luck: 1.0, ..Worn::default() })];
+        let worn = [("A", Worn { carry: 10.0, darkvision: 30.0, hunger_rate: 0.85, sleepiness_rate: 0.9, stealth: 0.0, warmth: 2.0, heal_on_kill: 1.0, speed: 1.1, block_chance: 0.1, abilities: crate::AbilityBonus { strength: 2, ..Default::default() }, disease_risk: 1.0, luck: 2.0, to_hit: 1.0, ranged_to_hit: 1.0, ..Worn::default() }), ("B", Worn { carry: 5.0, darkvision: 70.0, hunger_rate: 0.85, sleepiness_rate: 1.0, stealth: 0.0, warmth: 1.5, luck: 1.0, ranged_to_hit: 2.0, ..Worn::default() })];
         let lights = [("Torch", CarriedLight { reach: 30.0, burn_time: 1.0 }), ("Lantern", CarriedLight { reach: 50.0, burn_time: 2.0 })];
         for with in [0, 1, 2] {
             let mut loadout = Loadout::new("Dwarf", 60.0);
@@ -466,6 +496,8 @@ mod tests {
             assert!((loadout.speed().value() - gear.speed).abs() < 1e-12);
             assert_eq!(loadout.block_chance().value(), gear.block_chance);
             assert_eq!(loadout.luck().value(), gear.luck);
+            assert_eq!(loadout.to_hit().value(), gear.to_hit);
+            assert_eq!(loadout.ranged_to_hit().value(), gear.ranged_to_hit);
             assert_eq!(loadout.ability("STR").value(), gear.abilities.strength as f64);
             let mut needs = Needs::default();
             gear.apply_to(&mut needs);

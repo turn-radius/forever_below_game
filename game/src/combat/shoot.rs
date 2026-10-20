@@ -403,7 +403,7 @@ pub fn shoot(
         range: ranged.range,
         close: hostile_close,
         dexterity: modifier(character.dexterity()),
-        to_hit: stats.to_hit.round() as i32,
+        to_hit: shot_to_hit(&character, &inventory, &stats),
         dice: stats.damage.map(|d| (d.count as u32, d.sides as u32)),
         bonus: stats.damage_bonus.round() as i32,
         draw,
@@ -418,6 +418,13 @@ pub fn shoot(
         let game = around.settings.as_deref().copied().unwrap_or_default();
         commands.spawn((Name::new("loose"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &around.tuning), DespawnOnExit(crate::launch::AppState::Delving)));
     }
+}
+
+/// What a shot adds to its d20 besides the Dexterity modifier: the bow's own `ToHit`, the worn
+/// gear's, and the gear's `RangedToHit`, the bow's included ([`Character::gear`]).
+pub fn shot_to_hit(character: &Character, inventory: &Inventory, bow: &fb_items::stats::Stats) -> i32 {
+    let gear = character.gear(inventory);
+    (bow.to_hit as f64 + gear.to_hit + gear.ranged_to_hit).round() as i32
 }
 
 /// A shot loosed this frame, to be drawn flying ([`spawn_shots`]).
@@ -781,6 +788,39 @@ fn show_ammunition_count(inventory: Res<Inventory>, marksman: Res<Marksman>, mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_affix(base: &str, seed: u32, name: &str) -> fb_items::Item {
+        let mut item = fb_items::roll_item(base, seed).unwrap();
+        let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+        affix.apply_to_stats(&mut item.profile.stats);
+        item.affixes.push(affix);
+        item
+    }
+
+    #[test]
+    fn a_ring_of_the_hawk_helps_the_shot_alone_and_the_steady_hand_helps_both() {
+        let character = Character::roll(3);
+        let mut inventory = Inventory::default();
+        let bow = inventory.add(fb_items::roll_item("Bow", 7).unwrap());
+        inventory.wear(bow, Slot::Mainhand).unwrap();
+        let bow_stats = inventory.item(bow).unwrap().profile.stats;
+        let (swing, shot) = (super::super::Weapon::in_hand(&inventory, &character).to_hit, shot_to_hit(&character, &inventory, &bow_stats));
+        let hawk = inventory.add(with_affix("Ring", 4, "of the Hawk"));
+        inventory.wear(hawk, Slot::Ring1).unwrap();
+        assert_eq!(super::super::Weapon::in_hand(&inventory, &character).to_hit, swing, "no help to a swing");
+        assert_eq!(shot_to_hit(&character, &inventory, &bow_stats), shot + 2);
+        let steady = inventory.add(with_affix("Ring", 5, "of the Steady Hand"));
+        inventory.wear(steady, Slot::Ring2).unwrap();
+        assert_eq!(super::super::Weapon::in_hand(&inventory, &character).to_hit, swing + 1);
+        assert_eq!(shot_to_hit(&character, &inventory, &bow_stats), shot + 3);
+        // A sighted bow counts its own, once.
+        let sighted = inventory.add(with_affix("Bow", 7, "Sighted"));
+        inventory.take_out(bow);
+        inventory.wear(sighted, Slot::Mainhand).unwrap();
+        let sighted_stats = inventory.item(sighted).unwrap().profile.stats;
+        assert_eq!(shot_to_hit(&character, &inventory, &sighted_stats), shot + 4);
+        assert_eq!(super::super::Weapon::in_hand(&inventory, &character).to_hit, swing + 1, "the swing never reads it");
+    }
 
     #[test]
     fn a_segment_meets_a_sphere_where_it_enters() {

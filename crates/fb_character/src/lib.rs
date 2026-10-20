@@ -268,11 +268,18 @@ pub struct Worn {
     /// Points added to the wearer's saves against venom.
     #[serde(default)]
     pub poison_resistance: f64,
+    /// Points added to the melee attack and the shot roll: worn gear's, not the weapon in hand,
+    /// whose own to hit the weapon's roll already has.
+    #[serde(default)]
+    pub to_hit: f64,
+    /// Points added to the shot roll only: any gear's, the bow's own included.
+    #[serde(default)]
+    pub ranged_to_hit: f64,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0 }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0 }
     }
 }
 
@@ -323,6 +330,12 @@ pub struct Gear {
     /// Points added to saves against venom: the worn items' added.
     #[serde(default)]
     pub poison_resistance: f64,
+    /// Points added to the melee attack and the shot roll: the worn items' added.
+    #[serde(default)]
+    pub to_hit: f64,
+    /// Points added to the shot roll only: the items' added.
+    #[serde(default)]
+    pub ranged_to_hit: f64,
 }
 
 impl Default for Gear {
@@ -336,8 +349,10 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0 };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0 };
         for item in worn {
+            gear.to_hit += item.to_hit;
+            gear.ranged_to_hit += item.ranged_to_hit;
             gear.luck += item.luck;
             gear.recovery += item.recovery;
             gear.poison_resistance += item.poison_resistance;

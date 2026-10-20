@@ -506,6 +506,39 @@ mod tests {
     }
 
     #[test]
+    fn sighted_rolls_on_bows_and_crossbows_only() {
+        let sighted = affixes().iter().find(|a| a.name == "Sighted").unwrap();
+        assert!(sighted.in_play());
+        for base in ["Bow", "Crossbow"] {
+            let item = crate::roll_item(base, 1).unwrap();
+            assert!(sighted.fits_item(&item.profile.tags, item.profile.slot), "{base}");
+        }
+        for base in ["Sword", "Mace", "Dagger", "Spear", "Staff", "Shield", "Ring", "Gloves", "Helm"] {
+            let item = crate::roll_item(base, 1).unwrap();
+            assert!(!sighted.fits_item(&item.profile.tags, item.profile.slot), "{base}");
+        }
+    }
+
+    #[test]
+    fn the_hawk_and_the_steady_hand_keep_to_their_slots() {
+        let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
+        let (hawk, steady) = (by_name("of the Hawk"), by_name("of the Steady Hand"));
+        assert_eq!(hawk.least, Rarity::Rare);
+        let any = &[Tag::Trinket][..];
+        for slot in [Slot::Ring1, Slot::Ring2, Slot::Hands, Slot::Head] {
+            assert!(hawk.fits_item(any, Some(slot)), "hawk on {slot:?}");
+        }
+        for slot in [Slot::Ring1, Slot::Hands, Slot::Neck] {
+            assert!(steady.fits_item(any, Some(slot)), "steady hand on {slot:?}");
+        }
+        for slot in [Slot::Mainhand, Slot::Offhand, Slot::Body, Slot::Feet, Slot::Charm] {
+            assert!(!hawk.fits_item(any, Some(slot)) && !steady.fits_item(any, Some(slot)), "{slot:?}");
+        }
+        assert!(!hawk.fits_item(any, Some(Slot::Neck)) && !steady.fits_item(any, Some(Slot::Head)));
+        assert!(hawk.stacks_with(steady), "missile and melee hit stack");
+    }
+
+    #[test]
     fn trinket_wards_give_one_or_two_points() {
         let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
         let on = |n: &str| {

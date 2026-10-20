@@ -192,6 +192,7 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     differ(new.warmth, old.warmth, "warmth", "", true);
     differ(new.light, old.light, "light", " ft", true);
     differ(new.to_hit, old.to_hit, "to hit", "", true);
+    differ(new.ranged_to_hit, old.ranged_to_hit, "to hit with missiles", "", true);
     differ(new.stealth, old.stealth, "stealth", "", true);
     differ(new.lockpicking, old.lockpicking, "lockpicking", "", true);
     differ(new.carry, old.carry, "carry", " lb", true);
@@ -280,6 +281,7 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
         }
     };
     bonus(s.to_hit, "to hit");
+    bonus(s.ranged_to_hit, "to hit with missiles");
     bonus(s.stealth, "stealth");
     bonus(s.lockpicking, "lockpicking");
     if s.carry != 0.0 {

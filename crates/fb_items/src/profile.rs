@@ -268,14 +268,14 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
         Item::Bow(s) => {
             let long = s.limbs.length > 16.0;
             let range = if long { Range::new(150.0, 600.0) } else { Range::new(80.0, 320.0) };
-            Profile { ranged: Some(Ranged { ammunition: Family::Arrow, range }), ..gear(Slot::Mainhand, &[Weapon, Wood], weapon(2.0, if long { d(1, 8) } else { d(1, 6) }), [1, 1]) }
+            Profile { ranged: Some(self::Ranged { ammunition: Family::Arrow, range }), ..gear(Slot::Mainhand, &[Weapon, Wood, Tag::Ranged], weapon(2.0, if long { d(1, 8) } else { d(1, 6) }), [1, 1]) }
         }
         Item::Crossbow(s) => {
             let heavy = s.stock.length > 7.5;
             let range = if heavy { Range::new(100.0, 400.0) } else { Range::new(80.0, 320.0) };
             Profile {
-                ranged: Some(Ranged { ammunition: Family::Bolt, range }),
-                ..gear(Slot::Mainhand, &[Weapon, Wood, Metal], weapon(if heavy { 8.0 } else { 5.0 }, if heavy { d(1, 10) } else { d(1, 8) }), [1, 1])
+                ranged: Some(self::Ranged { ammunition: Family::Bolt, range }),
+                ..gear(Slot::Mainhand, &[Weapon, Wood, Metal, Tag::Ranged], weapon(if heavy { 8.0 } else { 5.0 }, if heavy { d(1, 10) } else { d(1, 8) }), [1, 1])
             }
         }
         Item::Shield(s) => {

@@ -1246,5 +1246,64 @@
    "neck",
    "charm"
   ]
+ },
+ {
+  "n": "Sighted",
+  "k": "pre",
+  "g": 1,
+  "on": "ranged",
+  "fx": [
+   {
+    "add": {
+     "stat": "ranged_to_hit",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 to hit with missiles",
+  "grp": "ranged_to_hit"
+ },
+ {
+  "n": "of the Hawk",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "ranged_to_hit",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 to hit with missiles",
+  "grp": "ranged_to_hit",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "hands",
+   "head"
+  ]
+ },
+ {
+  "n": "of the Steady Hand",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "to_hit",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 to hit",
+  "grp": "to_hit",
+  "at": [
+   "ring1",
+   "hands",
+   "neck"
+  ]
  }
 ]

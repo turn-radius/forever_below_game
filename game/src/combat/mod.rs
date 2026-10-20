@@ -208,7 +208,8 @@ pub struct Weapon {
     pub hold: Option<Hold>,
     /// Whether it bludgeons (a mace, a club, a staff, a fist): a skeleton takes double.
     pub bludgeoning: bool,
-    /// Added to the attack roll (the item's `ToHit`, rounded).
+    /// Added to the attack roll (the item's `ToHit`, rounded, and what the worn gear adds once the
+    /// delver holds it, [`Weapon::held_in`]).
     pub to_hit: i32,
 }
 
@@ -230,9 +231,12 @@ impl Weapon {
 
     /// What the delver swings with `hand`, as [`Weapon::in_hand`] works it out for the main hand.
     pub fn held_in(hand: fb_items::Slot, inventory: &Inventory, character: &Character) -> Weapon {
-        let Some(item) = inventory.worn(hand).and_then(|id| inventory.item(id)) else { return Weapon::fist() };
+        // What the worn gear adds to a hit goes on whatever is swung, a fist too.
+        let gear = character.gear(inventory).to_hit.round() as i32;
+        let Some(item) = inventory.worn(hand).and_then(|id| inventory.item(id)) else { return Weapon { to_hit: gear, ..Weapon::fist() } };
         let hold = Hold::of(&item.shape, &fb_body::Body::new(&character.spec()));
-        Weapon { hold, ..Weapon::wielded(Some(item), STATURE) }
+        let wielded = Weapon::wielded(Some(item), STATURE);
+        Weapon { hold, to_hit: wielded.to_hit + gear, ..wielded }
     }
 
     /// What `item` in the main hand of someone `stature` world units tall swings (a fist with

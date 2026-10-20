@@ -136,7 +136,7 @@ mod tests {
         let delver = Character { folk: Folk::Human, class: Class::Cleric, ..Character::roll(2) };
         let line = identity_line(&delver);
         assert!(line.starts_with("Human \u{b7} ") && line.ends_with(" \u{b7} cleric"), "{line}");
-        let derived = Derived { armour_class: 11, load: 34.4, capacity: 165.0, load_band: LoadBand::Light, warmth: 2.0, light: 25.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, luck: 0.0, abilities: Default::default() };
+        let derived = Derived { armour_class: 11, load: 34.4, capacity: 165.0, load_band: LoadBand::Light, warmth: 2.0, light: 25.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, luck: 0.0, abilities: Default::default(), to_hit: 0.0, ranged_to_hit: 0.0 };
         assert_eq!(stats_line(&derived), "AC 11   Load 34/165 lb   Light 25 ft");
         assert_eq!(stats_line(&Derived { light: 0.0, darkvision: 60.0, ..derived }), "AC 11   Load 34/165 lb   Darkvision 60 ft");
         assert_eq!(stats_line(&Derived { light: 0.0, ..derived }), "AC 11   Load 34/165 lb   No light");

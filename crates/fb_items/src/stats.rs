@@ -28,6 +28,10 @@ pub struct Stats {
     /// Added to every damage roll (the plate's `dmgB`).
     pub damage_bonus: f32,
     pub to_hit: f32,
+    /// Added to the shot roll only, from any gear including the bow itself; a sword swing never
+    /// reads it.
+    #[serde(default)]
+    pub ranged_to_hit: f32,
     pub warmth: f32,
     /// How far its light reaches, in feet.
     pub light: f32,
@@ -94,6 +98,7 @@ impl Default for Stats {
             damage: None,
             damage_bonus: 0.0,
             to_hit: 0.0,
+            ranged_to_hit: 0.0,
             warmth: 0.0,
             light: 0.0,
             burn_time: 1.0,
@@ -130,6 +135,7 @@ pub enum Stat {
     Armour,
     DamageBonus,
     ToHit,
+    RangedToHit,
     Light,
     BurnTime,
     BreakChance,
@@ -157,8 +163,8 @@ pub enum Stat {
 }
 
 impl Stat {
-    pub const ALL: [Stat; 27] = [
-        Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
+    pub const ALL: [Stat; 28] = [
+        Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::RangedToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
         Stat::Warmth, Stat::Stealth, Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::SleepinessRate, Stat::DiseaseRisk,
         Stat::Lockpicking, Stat::HealOnKill, Stat::Speed, Stat::BlockChance, Stat::Luck, Stat::Strength, Stat::Dexterity, Stat::Constitution,
         Stat::Intelligence, Stat::Wisdom, Stat::Charisma, Stat::Recovery, Stat::PoisonResistance,
@@ -166,7 +172,7 @@ impl Stat {
 
     /// Item properties: describe the item itself (Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance).
     pub fn is_item_property(self) -> bool {
-        matches!(self, Stat::Weight | Stat::Armour | Stat::DamageBonus | Stat::ToHit | Stat::Light | Stat::BurnTime | Stat::BreakChance)
+        matches!(self, Stat::Weight | Stat::Armour | Stat::DamageBonus | Stat::ToHit | Stat::RangedToHit | Stat::Light | Stat::BurnTime | Stat::BreakChance)
     }
 
     /// Wearer stats: affect the character wearing the item (Warmth, Stealth, Carry, Darkvision, HungerRate, SleepinessRate, DiseaseRisk, Lockpicking, HealOnKill).
@@ -194,7 +200,7 @@ impl Stat {
     /// distances and rates cannot (its `Math.max(0, it.warmth - 1)`).
     pub fn range(self) -> (f32, f32) {
         match self {
-            Stat::DamageBonus | Stat::ToHit | Stat::Stealth | Stat::Lockpicking => (f32::NEG_INFINITY, f32::INFINITY),
+            Stat::DamageBonus | Stat::ToHit | Stat::RangedToHit | Stat::Stealth | Stat::Lockpicking => (f32::NEG_INFINITY, f32::INFINITY),
             Stat::Strength | Stat::Dexterity | Stat::Constitution | Stat::Intelligence | Stat::Wisdom | Stat::Charisma => (f32::NEG_INFINITY, f32::INFINITY),
             Stat::BreakChance | Stat::BlockChance => (0.0, 1.0),
             _ => (0.0, f32::INFINITY),
@@ -224,6 +230,7 @@ impl Stats {
             Stat::Armour => &self.armour,
             Stat::DamageBonus => &self.damage_bonus,
             Stat::ToHit => &self.to_hit,
+            Stat::RangedToHit => &self.ranged_to_hit,
             Stat::Light => &self.light,
             Stat::BurnTime => &self.burn_time,
             Stat::BreakChance => &self.break_chance,
@@ -256,6 +263,7 @@ impl Stats {
             Stat::Armour => &mut self.armour,
             Stat::DamageBonus => &mut self.damage_bonus,
             Stat::ToHit => &mut self.to_hit,
+            Stat::RangedToHit => &mut self.ranged_to_hit,
             Stat::Light => &mut self.light,
             Stat::BurnTime => &mut self.burn_time,
             Stat::BreakChance => &mut self.break_chance,
