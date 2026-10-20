@@ -121,6 +121,9 @@ impl Plugin for TitlePlugin {
         if !app.is_plugin_added::<LastDelverPlugin>() {
             app.add_plugins(LastDelverPlugin);
         }
+        if !app.is_plugin_added::<crate::ui::InterfaceScalePlugin>() {
+            app.add_plugins(crate::ui::InterfaceScalePlugin);
+        }
         // The creator's paper doll draws its slots' icons and turns its seal as the inventory's does.
         app.add_plugins(preview::PreviewPlugin)
             .init_resource::<crate::inventory::IconCache>()
@@ -257,10 +260,11 @@ fn title_option(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str,
 /// bright and its diamonds show.
 fn mark_chosen(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
     mut options: Query<(&MenuButton, &mut ButtonInk, &ComputedNode, &UiGlobalTransform, &Children)>,
     mut marks: Query<&mut Visibility, With<OptionMark>>,
 ) {
-    let over = hovered_button(window.as_deref().copied(), options.iter().map(|(b, _, n, t, _)| (b, n, t)));
+    let over = hovered_button(window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())), options.iter().map(|(b, _, n, t, _)| (b, n, t)));
     let chosen = over.or(Some(MenuCommand::NewDelve));
     for (button, mut ink, .., children) in &mut options {
         let is_chosen = chosen == Some(button.0);

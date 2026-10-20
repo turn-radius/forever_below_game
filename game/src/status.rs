@@ -7,8 +7,9 @@
 //! - With nothing wrong the row is empty and takes no room.
 //! - Hovering a badge, while the mouse is free, shows its name and what it does above the row
 //!   ("Winded: Cannot sprint or swing hard until stamina is back to 20%").
-//! - The row is placed from the orb cluster's layout in `vmin` ([`cluster_layout`]), so it scales
-//!   with the window, and it is part of the HUD, so it hides under screens.
+//! - The row is placed from the orb cluster's layout in HUD units ([`cluster_layout`],
+//!   [`crate::ui::hud`]), so it scales with the window, and it is part of the HUD, so it hides
+//!   under screens.
 //!
 //! - The character sheet lists the same conditions with the same badges
 //!   (`crate::inventory::sheet::update_conditions`, [`badge`], [`ConditionIcons`]), which is
@@ -22,7 +23,6 @@ use bevy::{
     platform::collections::HashMap,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-    text::FontSize,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use fb_character::LoadBand;
@@ -122,11 +122,11 @@ fn spawn_row(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>,
                     StatusRow,
                     Node {
                         position_type: PositionType::Absolute,
-                        left: vmin(layout.status.min.x),
-                        top: vmin(layout.status.min.y),
-                        height: vmin(layout.badge),
+                        left: crate::ui::hud(layout.status.min.x),
+                        top: crate::ui::hud(layout.status.min.y),
+                        height: crate::ui::hud(layout.badge),
                         flex_direction: FlexDirection::Row,
-                        column_gap: vmin(layout.gap),
+                        column_gap: crate::ui::hud(layout.gap),
                         display: Display::None,
                         ..default()
                     },
@@ -137,9 +137,9 @@ fn spawn_row(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>,
                     StatusCard,
                     Node {
                         position_type: PositionType::Absolute,
-                        bottom: vmin(layout.badge + layout.gap),
-                        left: vmin(0.0),
-                        padding: UiRect::axes(vmin(0.9), vmin(0.5)),
+                        bottom: crate::ui::hud(layout.badge + layout.gap),
+                        left: crate::ui::hud(0.0),
+                        padding: UiRect::axes(crate::ui::hud(0.9), crate::ui::hud(0.5)),
                         border: UiRect::all(px(1)),
                         border_radius: BorderRadius::all(px(3)),
                         display: Display::None,
@@ -148,7 +148,7 @@ fn spawn_row(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>,
                     BackgroundColor(BG.with_alpha(0.92)),
                     BorderColor::all(LINE),
                     Text::default(),
-                    font.clone().with_font_size(FontSize::VMin(1.9)),
+                    font.clone().with_font_size(crate::ui::hud_font(1.9)),
                     TextColor(INK),
                     TextLayout::no_wrap(),
                     Pickable::IGNORE,
@@ -183,7 +183,7 @@ fn draw_badges(
         commands.entity(row).with_children(|row| {
             for (n, condition) in shown.0.iter().enumerate() {
                 let icon = icons.get(condition.kind, images.as_deref_mut());
-                badge(row, condition, vmin(layout.badge), vmin(layout.badge * 0.07), icon).insert(StatusBadge(n));
+                badge(row, condition, crate::ui::hud(layout.badge), crate::ui::hud(layout.badge * 0.07), icon).insert(StatusBadge(n));
             }
         });
     }
@@ -261,7 +261,7 @@ fn show_card(
             text.0 = line;
         }
         colour.set_if_neq(TextColor(severity_colour(condition.severity).lighter(0.2)));
-        let left = vmin(n as f32 * (layout.badge + layout.gap));
+        let left = crate::ui::hud(n as f32 * (layout.badge + layout.gap));
         if node.display != Display::Flex || node.left != left {
             node.display = Display::Flex;
             node.left = left;

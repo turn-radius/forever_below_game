@@ -29,7 +29,7 @@ use crate::keymap::{Action, ActionInput, Binding, CrouchMode, Group, Input, Inpu
 use crate::launch::AppState;
 use crate::play::{DelveSystems, Screen, ScreenOpen, show_screen, switch_screens};
 use crate::settings::{GameSettings, Setting};
-use crate::ui::{BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, UiFonts, node_rect};
+use crate::ui::{BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, UiFonts, node_rect, ui_cursor};
 
 /// The page of the menu on show.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -256,12 +256,12 @@ fn pause_while_open(open: Res<ScreenOpen>, time: Option<ResMut<Time<Virtual>>>, 
     }
 }
 
-/// The button under the mouse, if any.
+/// The button under `cursor`, in the interface's pixels ([`ui_cursor`]), if any.
 pub(crate) fn hovered_button<'a>(
-    window: Option<&Window>,
+    cursor: Option<Vec2>,
     buttons: impl IntoIterator<Item = (&'a MenuButton, &'a ComputedNode, &'a UiGlobalTransform)>,
 ) -> Option<MenuCommand> {
-    let point = window?.cursor_position()?;
+    let point = cursor?;
     buttons.into_iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)).map(|(button, ..)| button.0)
 }
 
@@ -279,6 +279,7 @@ fn choosable(open: Option<Setting>, button: &MenuButton) -> bool {
 fn choose_buttons(
     input: ActionInput,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
     buttons: Query<(&MenuButton, &ComputedNode, &UiGlobalTransform)>,
     mut open: ResMut<OpenChoices>,
     mut chosen: MessageWriter<MenuCommand>,
@@ -286,7 +287,7 @@ fn choose_buttons(
     if !input.just_pressed(Action::Choose) {
         return;
     }
-    match hovered_button(window.as_deref().copied(), buttons.iter().filter(|(b, ..)| choosable(open.0, b))) {
+    match hovered_button(window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())), buttons.iter().filter(|(b, ..)| choosable(open.0, b))) {
         Some(command) => {
             chosen.write(command);
         }
@@ -841,6 +842,7 @@ fn adjust_settings(
     input: ActionInput,
     page: Res<MenuPage>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
     controls: Query<(&SettingControl, &ComputedNode, &UiGlobalTransform)>,
     mut held: Local<Option<Setting>>,
     open: Res<OpenChoices>,
@@ -850,7 +852,7 @@ fn adjust_settings(
         *held = None;
         return;
     }
-    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
+    let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else { return };
     let mut next = *settings;
     // An open dropdown's list lies over the controls below it and takes the click.
     if input.just_pressed(Action::Choose)
@@ -921,12 +923,13 @@ fn show_settings(
 /// Brightens the button under the mouse.
 pub(crate) fn light_hovered(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
     buttons: Query<(&MenuButton, &ButtonInk, &ComputedNode, &UiGlobalTransform, &Children)>,
     open: Option<Res<OpenChoices>>,
     mut colours: Query<&mut TextColor>,
 ) {
     let open = open.and_then(|o| o.0);
-    let over = hovered_button(window.as_deref().copied(), buttons.iter().filter(|(b, ..)| choosable(open, b)).map(|(b, _, n, t, _)| (b, n, t)));
+    let over = hovered_button(window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())), buttons.iter().filter(|(b, ..)| choosable(open, b)).map(|(b, _, n, t, _)| (b, n, t)));
     for (button, ink, _, _, children) in &buttons {
         let colour = if over == Some(button.0) { ink.hover } else { ink.idle };
         for child in children {

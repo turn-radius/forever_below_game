@@ -329,6 +329,9 @@ impl Plugin for PlayPlugin {
         ))
         // Over the plugin tuple's limit.
         .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin, crate::sight::SightPlugin, crate::dazzle::DazzlePlugin, crate::light::ShadowBudgetPlugin, crate::webs::WebsPlugin));
+        if !app.is_plugin_added::<crate::ui::InterfaceScalePlugin>() {
+            app.add_plugins(crate::ui::InterfaceScalePlugin);
+        }
     }
 }
 

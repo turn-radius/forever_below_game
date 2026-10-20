@@ -170,7 +170,7 @@ impl Plugin for CarryPlugin {
 }
 
 /// The light an Armory item gives while it burns or glows, if it is that kind of item.
-/// How high the toast line sits above the bottom of the view, in `vmin`: just clear of the orb
+/// How high the toast line sits above the bottom of the view, in HUD units ([`crate::ui::hud`]): just clear of the orb
 /// cluster and its quick bar ([`crate::combat::orbs::cluster_layout`]).
 pub fn toast_lift() -> f32 {
     crate::combat::orbs::MARGIN + crate::combat::orbs::cluster_layout().size.y + 1.5
@@ -1335,7 +1335,7 @@ fn spawn_hud(commands: &mut Commands, camera: Entity, fonts: Option<&UiFonts>) {
             // with a dark shadow so it reads on lit stone and in the dark alike. It sits just above
             // the orb cluster and quick bar, so the two never overlap at any window size.
             hud.spawn((
-                Node { position_type: PositionType::Absolute, width: percent(100), bottom: vmin(toast_lift()), justify_content: JustifyContent::Center, ..default() },
+                Node { position_type: PositionType::Absolute, width: percent(100), bottom: crate::ui::hud(toast_lift()), justify_content: JustifyContent::Center, ..default() },
                 Pickable::IGNORE,
             ))
             .with_children(|row| {

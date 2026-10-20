@@ -386,15 +386,18 @@ impl Default for SoundTuning {
     }
 }
 
-/// How the inventory screen is laid out.
+/// How the interface is laid out: every screen is drawn for a 1920 by 1080 view and scaled
+/// to fit the one it is in ([`InterfaceTuning::scale`]), and the inventory's cells are sized
+/// from there.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InterfaceTuning {
-    /// Logical pixels from one grid line to the next (the plate's `--cs`) in a window
-    /// [`InterfaceTuning::REFERENCE_HEIGHT`] lines high. The whole screen scales with the
-    /// window's height from there ([`InterfaceTuning::scale`]).
+    /// Logical pixels from one grid line to the next (the plate's `--cs`) in a view
+    /// [`InterfaceTuning::REFERENCE_HEIGHT`] lines high. The whole interface scales with the
+    /// view from there ([`InterfaceTuning::scale`]).
     pub cell_size: f32,
-    /// The fewest logical pixels a cell is drawn at, however short the window.
+    /// The fewest logical pixels a cell is drawn at, however small the window: the floor
+    /// under the whole interface's scale, so text stays readable.
     pub min_cell_size: f32,
     /// How long the mouse rests on an item before its card shows, seconds.
     pub hover_delay: f32,
@@ -402,24 +405,27 @@ pub struct InterfaceTuning {
 
 impl Default for InterfaceTuning {
     fn default() -> Self {
-        InterfaceTuning { cell_size: 72.0, min_cell_size: 48.0, hover_delay: 0.0 }
+        InterfaceTuning { cell_size: 72.0, min_cell_size: 36.0, hover_delay: 0.0 }
     }
 }
 
 impl InterfaceTuning {
-    /// The window height, in logical pixels, at which the screen is drawn at its own size.
+    /// The view, in logical pixels, every screen is laid out for and drawn at its own size in.
     pub const REFERENCE_HEIGHT: f32 = 1080.0;
+    pub const REFERENCE_WIDTH: f32 = 1920.0;
 
-    /// How much the inventory screen is scaled (Bevy's `UiScale`) in a window `height`
-    /// logical pixels high: in step with the height, so the screen keeps one layout at any
-    /// resolution, but never so far down that a cell is drawn under `min_cell_size`. Our own.
-    pub fn scale(&self, height: f32) -> f32 {
-        (height / Self::REFERENCE_HEIGHT).max(self.min_cell_size / self.cell_size.max(1.0))
+    /// How much the interface is scaled (Bevy's `UiScale`) in a view `view` logical pixels
+    /// across: by the height or the width over the reference's, whichever is tighter, so each
+    /// screen keeps one layout and fits at any size and shape, but never so far down that a
+    /// cell is drawn under `min_cell_size`. Our own.
+    pub fn scale(&self, view: Vec2) -> f32 {
+        let fit = (view.y / Self::REFERENCE_HEIGHT).min(view.x / Self::REFERENCE_WIDTH);
+        fit.max(self.min_cell_size / self.cell_size.max(1.0))
     }
 
-    /// The logical pixels a cell is drawn at in a window `height` logical pixels high.
-    pub fn cell_px(&self, height: f32) -> f32 {
-        self.cell_size * self.scale(height)
+    /// The logical pixels a cell is drawn at in a view `view` logical pixels across.
+    pub fn cell_px(&self, view: Vec2) -> f32 {
+        self.cell_size * self.scale(view)
     }
 }
 
