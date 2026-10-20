@@ -15,6 +15,7 @@
 //! per family (the plate's `saMeta`) is a later task.
 
 use crate::dice::Dice;
+use crate::foe::Foe;
 use serde::{Deserialize, Serialize};
 
 /// An item's derived stats.
@@ -28,6 +29,10 @@ pub struct Stats {
     /// Added to every damage roll (the plate's `dmgB`).
     pub damage_bonus: f32,
     pub to_hit: f32,
+    /// Added to the shot roll only, from any gear including the bow itself; a sword swing never
+    /// reads it.
+    #[serde(default)]
+    pub ranged_to_hit: f32,
     pub warmth: f32,
     /// How far its light reaches, in feet.
     pub light: f32,
@@ -79,6 +84,25 @@ pub struct Stats {
     /// Points of poison resistance: each adds 1 to the wearer's saves against venom.
     #[serde(default)]
     pub poison_resistance: f32,
+    /// The fraction of damage taken off the blows of each kind of creature, by [`Foe`] index.
+    #[serde(default)]
+    pub ward: [f32; Foe::COUNT],
+    /// The chance a creature of each kind never notices the wearer, by [`Foe`] index.
+    #[serde(default)]
+    pub shun: [f32; Foe::COUNT],
+    /// The extra damage dice a weapon rolls against each kind of creature, by [`Foe`] index.
+    #[serde(default)]
+    pub bane: [Option<Dice>; Foe::COUNT],
+    /// How fast the wearer swings, draws and reloads, as a multiple of normal: the weapon in
+    /// hand's and the gloves' (`fb_character::Gear::attack_rate`).
+    #[serde(default = "one")]
+    pub attack_rate: f32,
+    /// How fast the wearer's stamina refills, as a multiple of normal.
+    #[serde(default = "one")]
+    pub stamina_refill: f32,
+    /// What swinging, blocking and sprinting cost the wearer in stamina, as a multiple of normal.
+    #[serde(default = "one")]
+    pub stamina_cost: f32,
 }
 
 fn one() -> f32 {
@@ -94,6 +118,7 @@ impl Default for Stats {
             damage: None,
             damage_bonus: 0.0,
             to_hit: 0.0,
+            ranged_to_hit: 0.0,
             warmth: 0.0,
             light: 0.0,
             burn_time: 1.0,
@@ -117,6 +142,12 @@ impl Default for Stats {
             charisma: 0.0,
             recovery: 0.0,
             poison_resistance: 0.0,
+            ward: [0.0; Foe::COUNT],
+            shun: [0.0; Foe::COUNT],
+            bane: [None; Foe::COUNT],
+            attack_rate: 1.0,
+            stamina_refill: 1.0,
+            stamina_cost: 1.0,
         }
     }
 }
@@ -130,6 +161,7 @@ pub enum Stat {
     Armour,
     DamageBonus,
     ToHit,
+    RangedToHit,
     Light,
     BurnTime,
     BreakChance,
@@ -154,19 +186,23 @@ pub enum Stat {
     Charisma,
     Recovery,
     PoisonResistance,
+    AttackRate,
+    StaminaRefill,
+    StaminaCost,
 }
 
 impl Stat {
-    pub const ALL: [Stat; 27] = [
-        Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
+    pub const ALL: [Stat; 31] = [
+        Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::RangedToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
         Stat::Warmth, Stat::Stealth, Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::SleepinessRate, Stat::DiseaseRisk,
         Stat::Lockpicking, Stat::HealOnKill, Stat::Speed, Stat::BlockChance, Stat::Luck, Stat::Strength, Stat::Dexterity, Stat::Constitution,
-        Stat::Intelligence, Stat::Wisdom, Stat::Charisma, Stat::Recovery, Stat::PoisonResistance,
+        Stat::Intelligence, Stat::Wisdom, Stat::Charisma, Stat::Recovery, Stat::PoisonResistance, Stat::AttackRate,
+        Stat::StaminaRefill, Stat::StaminaCost,
     ];
 
     /// Item properties: describe the item itself (Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance).
     pub fn is_item_property(self) -> bool {
-        matches!(self, Stat::Weight | Stat::Armour | Stat::DamageBonus | Stat::ToHit | Stat::Light | Stat::BurnTime | Stat::BreakChance)
+        matches!(self, Stat::Weight | Stat::Armour | Stat::DamageBonus | Stat::ToHit | Stat::RangedToHit | Stat::Light | Stat::BurnTime | Stat::BreakChance)
     }
 
     /// Wearer stats: affect the character wearing the item (Warmth, Stealth, Carry, Darkvision, HungerRate, SleepinessRate, DiseaseRisk, Lockpicking, HealOnKill).
@@ -176,7 +212,7 @@ impl Stat {
 
     /// Whether more of it is better for the wearer.
     pub fn higher_is_better(self) -> bool {
-        !matches!(self, Stat::Weight | Stat::HungerRate | Stat::SleepinessRate | Stat::DiseaseRisk | Stat::BreakChance)
+        !matches!(self, Stat::Weight | Stat::HungerRate | Stat::SleepinessRate | Stat::DiseaseRisk | Stat::BreakChance | Stat::StaminaCost)
     }
 
     /// Whether anything in the game reads it yet. Affixes whose every effect is on a stat
@@ -194,7 +230,7 @@ impl Stat {
     /// distances and rates cannot (its `Math.max(0, it.warmth - 1)`).
     pub fn range(self) -> (f32, f32) {
         match self {
-            Stat::DamageBonus | Stat::ToHit | Stat::Stealth | Stat::Lockpicking => (f32::NEG_INFINITY, f32::INFINITY),
+            Stat::DamageBonus | Stat::ToHit | Stat::RangedToHit | Stat::Stealth | Stat::Lockpicking => (f32::NEG_INFINITY, f32::INFINITY),
             Stat::Strength | Stat::Dexterity | Stat::Constitution | Stat::Intelligence | Stat::Wisdom | Stat::Charisma => (f32::NEG_INFINITY, f32::INFINITY),
             Stat::BreakChance | Stat::BlockChance => (0.0, 1.0),
             _ => (0.0, f32::INFINITY),
@@ -224,6 +260,7 @@ impl Stats {
             Stat::Armour => &self.armour,
             Stat::DamageBonus => &self.damage_bonus,
             Stat::ToHit => &self.to_hit,
+            Stat::RangedToHit => &self.ranged_to_hit,
             Stat::Light => &self.light,
             Stat::BurnTime => &self.burn_time,
             Stat::BreakChance => &self.break_chance,
@@ -247,6 +284,9 @@ impl Stats {
             Stat::Charisma => &self.charisma,
             Stat::Recovery => &self.recovery,
             Stat::PoisonResistance => &self.poison_resistance,
+            Stat::AttackRate => &self.attack_rate,
+            Stat::StaminaRefill => &self.stamina_refill,
+            Stat::StaminaCost => &self.stamina_cost,
         }
     }
 
@@ -256,6 +296,7 @@ impl Stats {
             Stat::Armour => &mut self.armour,
             Stat::DamageBonus => &mut self.damage_bonus,
             Stat::ToHit => &mut self.to_hit,
+            Stat::RangedToHit => &mut self.ranged_to_hit,
             Stat::Light => &mut self.light,
             Stat::BurnTime => &mut self.burn_time,
             Stat::BreakChance => &mut self.break_chance,
@@ -279,6 +320,9 @@ impl Stats {
             Stat::Charisma => &mut self.charisma,
             Stat::Recovery => &mut self.recovery,
             Stat::PoisonResistance => &mut self.poison_resistance,
+            Stat::AttackRate => &mut self.attack_rate,
+            Stat::StaminaRefill => &mut self.stamina_refill,
+            Stat::StaminaCost => &mut self.stamina_cost,
         }
     }
 }
@@ -296,6 +340,16 @@ mod tests {
         assert_eq!(s.stealth, -2.0);
         s.set(Stat::BreakChance, 4.0);
         assert_eq!(s.break_chance, 1.0);
+    }
+
+    #[test]
+    fn stats_saved_without_wards_still_load() {
+        let mut json = serde_json::to_value(Stats::default()).unwrap();
+        json.as_object_mut().unwrap().remove("ward");
+        json.as_object_mut().unwrap().remove("shun");
+        json.as_object_mut().unwrap().remove("bane");
+        let loaded: Stats = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded, Stats::default());
     }
 
     #[test]

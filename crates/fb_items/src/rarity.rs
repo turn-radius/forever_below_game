@@ -223,7 +223,7 @@ mod tests {
     use super::*;
     use crate::game_rng;
 
-    const SWORD: &[Tag] = &[Tag::Weapon, Tag::Metal];
+    const SWORD: &[Tag] = &[Tag::Weapon, Tag::Metal, Tag::Blade];
     const TUNIC: &[Tag] = &[Tag::Cloth, Tag::Wear];
     const PACK: &[Tag] = &[Tag::Container, Tag::Wear, Tag::Leather];
 
@@ -279,6 +279,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn banes_roll_only_on_what_they_suit() {
+        const MACE: &[Tag] = &[Tag::Weapon, Tag::Metal, Tag::Blunt];
+        const BOW: &[Tag] = &[Tag::Weapon, Tag::Wood, Tag::Ranged];
+        let named = |tags: &[Tag], rarity| {
+            let mut names = std::collections::HashSet::new();
+            for seed in 0..5_000 {
+                let mut rng = game_rng(seed);
+                for kind in [AffixKind::Prefix, AffixKind::Suffix] {
+                    let item = Rolling { tags, slot: Some(Slot::Mainhand), rarity };
+                    names.extend(pick_affix(&mut rng, item, kind, true, &[]).map(|a| a.name.as_str()));
+                }
+            }
+            names
+        };
+        let sword = named(SWORD, Rarity::Legendary);
+        assert!(!sword.contains("of the Bonebreaker") && !sword.contains("Bone-crushing"), "no sword breaks bones");
+        assert!(sword.contains("Hunter's") && sword.contains("Ratbane") && sword.contains("of the Spider-slayer"));
+        let mace = named(MACE, Rarity::Legendary);
+        assert!(mace.contains("of the Bonebreaker") && mace.contains("Bone-crushing") && mace.contains("Ratbane"));
+        assert!(!mace.contains("Hunter's"), "a mace is no hunter's weapon");
+        assert!(named(BOW, Rarity::Legendary).contains("Hunter's"));
+        // Banes of a rarer tier stay off lesser items.
+        let magic = named(MACE, Rarity::Magic);
+        assert!(magic.contains("Ratbane") && !magic.contains("of the Bonebreaker") && !magic.contains("Bone-crushing"));
     }
 
     #[test]
@@ -456,7 +483,7 @@ mod tests {
         let rampart = by_name("of the Rampart");
         assert!(rampart.fits_item(&[Tag::Armor, Tag::Wood], Some(Slot::Offhand)), "a shield");
         assert!(!rampart.fits_item(&[Tag::Metal, Tag::Armor, Tag::Wear], Some(Slot::Head)), "not a helm");
-        assert!(!rampart.fits_item(&[Tag::Wood], Some(Slot::Offhand)), "not a torch");
+        assert!(!rampart.fits_item(&[Tag::Light, Tag::Wood], Some(Slot::Offhand)), "not a torch");
         for name in ["of the Hare", "of the Wind", "of Mending", "of the Troll", "of Purity", "of the Mongoose"] {
             let ward = by_name(name);
             for slot in [Slot::Ring1, Slot::Ring2, Slot::Neck, Slot::Charm] {
@@ -465,6 +492,164 @@ mod tests {
             assert!(!ward.fits_item(&[Tag::Leather, Tag::Wear, Tag::Quiet], Some(Slot::Feet)), "{name} on boots");
             assert!(ward.in_play(), "{name} is read");
         }
+    }
+
+    /// The comfort suffixes and the slots they list in `data/afx.json`.
+    const COMFORT: [(&str, &[Slot]); 5] = [
+        ("of Plenty", &[Slot::Belt, Slot::Neck, Slot::Charm, Slot::Ring1]),
+        ("of Wakefulness", &[Slot::Belt, Slot::Neck, Slot::Charm, Slot::Ring1]),
+        ("of the Ox", &[Slot::Belt, Slot::Back, Slot::Body]),
+        ("of Lesser Warding", &[Slot::Head, Slot::Hands, Slot::Neck, Slot::Charm]),
+        ("of the Mole", &[Slot::Head, Slot::Neck, Slot::Charm]),
+    ];
+
+    /// Base `base`'s tags and slot, from the profile of its seed 0 shape (they are the base's, not the
+    /// seed's), and the rarity and affixes the game layer rolls from `seed` at `depth`: what
+    /// `roll_item_with` draws first, without building a shape for every seed.
+    fn game_layer(base: &str) -> Option<(Vec<Tag>, Option<Slot>)> {
+        let shape = crate::armory_base::roll_shape(base, 0)?;
+        let profile = crate::profile::profile(base, &shape);
+        Some((profile.tags, profile.slot))
+    }
+
+    fn rolled_affixes(tags: &[Tag], slot: Option<Slot>, seed: u32, depth: u32) -> Vec<&'static Affix> {
+        roll_rarity_for(&mut game_rng(seed), tags, slot, &Odds::loot(depth)).1
+    }
+
+    #[test]
+    fn comfort_suffixes_stay_off_weapons_and_shields() {
+        for base in ["Sword", "Mace", "Bow", "Shield"] {
+            let (tags, slot) = game_layer(base).unwrap();
+            for seed in 0..2000 {
+                let chosen = rolled_affixes(&tags, slot, seed, 5);
+                for (name, _) in COMFORT {
+                    assert!(chosen.iter().all(|a| a.name != name), "{name} on {base} {seed}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn comfort_suffixes_still_roll_in_their_slots() {
+        let worn: Vec<(&str, Vec<Tag>, Option<Slot>)> =
+            crate::armory_base::ARMORY_BASES.iter().filter_map(|(base, _)| game_layer(base).map(|(tags, slot)| (*base, tags, slot))).filter(|(_, _, slot)| slot.is_some()).collect();
+        for (name, slots) in COMFORT {
+            let affix = affixes().iter().find(|a| a.name == name).unwrap();
+            assert!(affix.in_play(), "{name} is read");
+            let mut rolled = false;
+            for (base, tags, slot) in &worn {
+                for seed in 0..200 {
+                    if rolled_affixes(tags, *slot, seed, 12).iter().all(|a| a.name != name) {
+                        continue;
+                    }
+                    rolled = true;
+                    let slot = slot.map(|s| if s == Slot::Ring2 { Slot::Ring1 } else { s });
+                    assert!(slot.is_some_and(|s| slots.contains(&s)), "{name} on {base} in {slot:?}");
+                }
+            }
+            assert!(rolled, "{name} never rolled");
+        }
+    }
+
+    #[test]
+    fn sighted_rolls_on_bows_and_crossbows_only() {
+        let sighted = affixes().iter().find(|a| a.name == "Sighted").unwrap();
+        assert!(sighted.in_play());
+        for base in ["Bow", "Crossbow"] {
+            let item = crate::roll_item(base, 1).unwrap();
+            assert!(sighted.fits_item(&item.profile.tags, item.profile.slot), "{base}");
+        }
+        for base in ["Sword", "Mace", "Dagger", "Spear", "Staff", "Shield", "Ring", "Gloves", "Helm"] {
+            let item = crate::roll_item(base, 1).unwrap();
+            assert!(!sighted.fits_item(&item.profile.tags, item.profile.slot), "{base}");
+        }
+    }
+
+    #[test]
+    fn block_suffixes_roll_on_shields_gloves_and_charms_but_not_torches() {
+        for name in ["of Deflection", "of the Rampart"] {
+            let affix = affixes().iter().find(|a| a.name == name).unwrap();
+            assert!(affix.in_play(), "{name} is read");
+            for (base, slot) in [("Shield", Slot::Offhand), ("Gloves", Slot::Hands), ("Gauntlets", Slot::Hands), ("Charm", Slot::Charm)] {
+                let Some(item) = crate::roll_item(base, 3) else { continue };
+                assert_eq!(item.profile.slot, Some(slot), "{base}");
+                assert!(affix.fits_item(&item.profile.tags, item.profile.slot), "{name} on {base}");
+            }
+            for base in ["Torch", "Lantern", "Helm", "Boots", "Ring", "Amulet", "Sword"] {
+                let item = crate::roll_item(base, 3).unwrap();
+                assert!(!affix.fits_item(&item.profile.tags, item.profile.slot), "{name} on {base}");
+            }
+        }
+    }
+
+    #[test]
+    fn attack_rate_affixes_stay_on_weapons_and_gloves() {
+        let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
+        let (quick, swift, duellist) = (by_name("Quick"), by_name("of Swiftness"), by_name("of the Duellist"));
+        assert_eq!(swift.least, Rarity::Rare);
+        assert!(quick.in_play() && swift.in_play() && duellist.in_play());
+        assert!(!quick.stacks_with(swift), "one group of weapon speed");
+        assert!(quick.stacks_with(duellist), "gloves stack with a quick weapon");
+        for base in ["Sword", "Dagger", "Mace", "Staff", "Spear", "Bow", "Crossbow"] {
+            let item = crate::roll_item(base, 1).unwrap();
+            assert!(quick.fits_item(&item.profile.tags, item.profile.slot) && swift.fits_item(&item.profile.tags, item.profile.slot), "{base}");
+        }
+        for base in ["Helm", "Gloves", "Boots", "Shield", "Ring", "Tunic", "Torch"] {
+            let Some(item) = crate::roll_item(base, 1) else { continue };
+            assert!(!quick.fits_item(&item.profile.tags, item.profile.slot) && !swift.fits_item(&item.profile.tags, item.profile.slot), "{base} is no weapon");
+        }
+        let any = &[Tag::Leather, Tag::Wear][..];
+        assert!(duellist.fits_item(any, Some(Slot::Hands)));
+        for slot in [Slot::Mainhand, Slot::Offhand, Slot::Head, Slot::Feet, Slot::Ring1, Slot::Body] {
+            assert!(!duellist.fits_item(any, Some(slot)), "{slot:?}");
+        }
+    }
+
+    #[test]
+    fn stamina_affixes_keep_to_their_slots_and_groups() {
+        let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
+        let (tireless, wind, light, endurance) = (by_name("Tireless"), by_name("of Second Wind"), by_name("Light-handed"), by_name("of Endurance"));
+        assert_eq!((wind.kind, tireless.kind, light.kind, endurance.kind), (AffixKind::Suffix, AffixKind::Prefix, AffixKind::Prefix, AffixKind::Suffix));
+        assert_eq!(wind.least, Rarity::Rare);
+        assert!([tireless, wind, light, endurance].iter().all(|a| a.in_play()));
+        assert!(!tireless.stacks_with(wind) && !light.stacks_with(endurance), "one refill and one cost");
+        assert!(tireless.stacks_with(light) && wind.stacks_with(endurance));
+        let any = &[Tag::Leather, Tag::Wear][..];
+        for (affix, yes, no) in [
+            (tireless, &[Slot::Body, Slot::Feet][..], &[Slot::Legs, Slot::Neck, Slot::Mainhand][..]),
+            (wind, &[Slot::Neck, Slot::Charm, Slot::Body][..], &[Slot::Feet, Slot::Belt][..]),
+            (endurance, &[Slot::Legs, Slot::Feet, Slot::Belt][..], &[Slot::Body, Slot::Neck][..]),
+        ] {
+            assert!(yes.iter().all(|s| affix.fits_item(any, Some(*s))) && no.iter().all(|s| !affix.fits_item(any, Some(*s))), "{}", affix.name);
+        }
+        for base in ["Sword", "Bow", "Shield", "Buckler"] {
+            if let Some(item) = crate::roll_item(base, 1) {
+                assert!(light.fits_item(&item.profile.tags, item.profile.slot), "{base}");
+            }
+        }
+        for base in ["Torch", "Lantern", "Helm", "Boots"] {
+            let item = crate::roll_item(base, 1).unwrap();
+            assert!(!light.fits_item(&item.profile.tags, item.profile.slot), "{base} is no weapon or shield");
+        }
+    }
+
+    #[test]
+    fn the_hawk_and_the_steady_hand_keep_to_their_slots() {
+        let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
+        let (hawk, steady) = (by_name("of the Hawk"), by_name("of the Steady Hand"));
+        assert_eq!(hawk.least, Rarity::Rare);
+        let any = &[Tag::Trinket][..];
+        for slot in [Slot::Ring1, Slot::Ring2, Slot::Hands, Slot::Head] {
+            assert!(hawk.fits_item(any, Some(slot)), "hawk on {slot:?}");
+        }
+        for slot in [Slot::Ring1, Slot::Hands, Slot::Neck] {
+            assert!(steady.fits_item(any, Some(slot)), "steady hand on {slot:?}");
+        }
+        for slot in [Slot::Mainhand, Slot::Offhand, Slot::Body, Slot::Feet, Slot::Charm] {
+            assert!(!hawk.fits_item(any, Some(slot)) && !steady.fits_item(any, Some(slot)), "{slot:?}");
+        }
+        assert!(!hawk.fits_item(any, Some(Slot::Neck)) && !steady.fits_item(any, Some(Slot::Head)));
+        assert!(hawk.stacks_with(steady), "missile and melee hit stack");
     }
 
     #[test]

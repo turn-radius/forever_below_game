@@ -174,7 +174,8 @@
   ],
   "tags": [
    "weapon",
-   "wood"
+   "wood",
+   "blunt"
   ],
   "dmg": "1d4",
   "mats": [
@@ -192,7 +193,8 @@
   ],
   "tags": [
    "weapon",
-   "metal"
+   "metal",
+   "blade"
   ],
   "dmg": "1d6",
   "mats": [

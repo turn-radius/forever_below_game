@@ -318,7 +318,12 @@
    }
   ],
   "t": "Darkvision 10 ft",
-  "grp": "darkvision"
+  "grp": "darkvision",
+  "at": [
+   "head",
+   "neck",
+   "charm"
+  ]
  },
  {
   "n": "of Plenty",
@@ -333,7 +338,13 @@
     }
    }
   ],
-  "t": "Hunger 15% slower"
+  "t": "Hunger 15% slower",
+  "at": [
+   "belt",
+   "neck",
+   "charm",
+   "ring1"
+  ]
  },
  {
   "n": "of the Hearth",
@@ -378,7 +389,12 @@
     }
    }
   ],
-  "t": "+25 lb carrying"
+  "t": "+25 lb carrying",
+  "at": [
+   "belt",
+   "back",
+   "body"
+  ]
  },
  {
   "n": "of Wakefulness",
@@ -393,7 +409,13 @@
     }
    }
   ],
-  "t": "Sleep 15% slower"
+  "t": "Sleep 15% slower",
+  "at": [
+   "belt",
+   "neck",
+   "charm",
+   "ring1"
+  ]
  },
  {
   "n": "of Quiet Steps",
@@ -423,7 +445,13 @@
     }
    }
   ],
-  "t": "Resists disease"
+  "t": "Resists disease",
+  "at": [
+   "head",
+   "hands",
+   "neck",
+   "charm"
+  ]
  },
  {
   "n": "of the Leech",
@@ -676,7 +704,10 @@
   "n": "of Deflection",
   "k": "suf",
   "g": 1,
-  "on": "armor",
+  "on": "any",
+  "not": [
+   "light"
+  ],
   "fx": [
    {
     "add": {
@@ -688,14 +719,19 @@
   "t": "10% chance to block a blow",
   "grp": "block",
   "at": [
-   "offhand"
+   "offhand",
+   "hands",
+   "charm"
   ]
  },
  {
   "n": "of the Rampart",
   "k": "suf",
   "g": 1,
-  "on": "armor",
+  "on": "any",
+  "not": [
+   "light"
+  ],
   "fx": [
    {
     "add": {
@@ -708,7 +744,9 @@
   "grp": "block",
   "r": "rare",
   "at": [
-   "offhand"
+   "offhand",
+   "hands",
+   "charm"
   ]
  },
  {
@@ -1218,5 +1256,438 @@
    "neck",
    "charm"
   ]
+ },
+ {
+  "n": "Sighted",
+  "k": "pre",
+  "g": 1,
+  "on": "ranged",
+  "fx": [
+   {
+    "add": {
+     "stat": "ranged_to_hit",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 to hit with missiles",
+  "grp": "ranged_to_hit"
+ },
+ {
+  "n": "of the Hawk",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "ranged_to_hit",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 to hit with missiles",
+  "grp": "ranged_to_hit",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "hands",
+   "head"
+  ]
+ },
+ {
+  "n": "of the Steady Hand",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "to_hit",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 to hit",
+  "grp": "to_hit",
+  "at": [
+   "ring1",
+   "hands",
+   "neck"
+  ]
+ },
+ {
+  "n": "Quick",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "scale": {
+     "stat": "attack_rate",
+     "by": 1.1
+    }
+   }
+  ],
+  "t": "+10% attack speed",
+  "grp": "attack_rate"
+ },
+ {
+  "n": "of Swiftness",
+  "k": "suf",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "scale": {
+     "stat": "attack_rate",
+     "by": 1.2
+    }
+   }
+  ],
+  "t": "+20% attack speed",
+  "grp": "attack_rate",
+  "r": "rare"
+ },
+ {
+  "n": "of the Duellist",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "attack_rate",
+     "by": 1.05
+    }
+   }
+  ],
+  "t": "+5% attack speed",
+  "grp": "duellist",
+  "at": [
+   "hands"
+  ]
+ },
+ {
+  "n": "Tireless",
+  "k": "pre",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_refill",
+     "by": 1.2
+    }
+   }
+  ],
+  "t": "Stamina refills 20% faster",
+  "grp": "stamina_refill",
+  "at": [
+   "body",
+   "feet"
+  ]
+ },
+ {
+  "n": "of Second Wind",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_refill",
+     "by": 1.3
+    }
+   }
+  ],
+  "t": "Stamina refills 30% faster",
+  "grp": "stamina_refill",
+  "r": "rare",
+  "at": [
+   "neck",
+   "charm",
+   "body"
+  ]
+ },
+ {
+  "n": "Light-handed",
+  "k": "pre",
+  "g": 1,
+  "on": "any",
+  "not": [
+   "light"
+  ],
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_cost",
+     "by": 0.75
+    }
+   }
+  ],
+  "t": "Swings and blocks cost 25% less stamina",
+  "grp": "stamina_cost",
+  "at": [
+   "mainhand",
+   "offhand"
+  ]
+ },
+ {
+  "n": "of Endurance",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_cost",
+     "by": 0.8
+    }
+   }
+  ],
+  "t": "Sprinting, swinging and blocking cost 20% less stamina",
+  "grp": "stamina_cost",
+  "at": [
+   "legs",
+   "feet",
+   "belt"
+  ]
+ },
+ {
+  "n": "of the Ossuary",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "ward": {
+     "foe": "undead",
+     "by": 0.25
+    }
+   }
+  ],
+  "t": "Undead deal 25% less",
+  "grp": "ward_undead",
+  "at": [
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Rat-catcher",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "ward": {
+     "foe": "vermin",
+     "by": 0.25
+    }
+   }
+  ],
+  "t": "Vermin deal 25% less",
+  "grp": "ward_vermin",
+  "at": [
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Web",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "ward": {
+     "foe": "spider",
+     "by": 0.25
+    }
+   }
+  ],
+  "t": "Spiders deal 25% less",
+  "grp": "ward_spider",
+  "at": [
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Charmer",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "ward": {
+     "foe": "serpent",
+     "by": 0.25
+    }
+   }
+  ],
+  "t": "Serpents deal 25% less",
+  "grp": "ward_serpent",
+  "at": [
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of Vermin's Peace",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "shun": {
+     "foe": "vermin",
+     "chance": 0.5
+    }
+   }
+  ],
+  "t": "Vermin often pay no heed (50%)",
+  "grp": "shun_vermin",
+  "r": "magic",
+  "at": [
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Grave's Silence",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "shun": {
+     "foe": "undead",
+     "chance": 0.35
+    }
+   }
+  ],
+  "t": "Undead often pay no heed (35%)",
+  "grp": "shun_undead",
+  "r": "rare",
+  "at": [
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Still Web",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "shun": {
+     "foe": "spider",
+     "chance": 0.35
+    }
+   }
+  ],
+  "t": "Spiders often pay no heed (35%)",
+  "grp": "shun_spider",
+  "r": "rare",
+  "at": [
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Bonebreaker",
+  "k": "suf",
+  "g": 1,
+  "on": "blunt",
+  "fx": [
+   {
+    "bane": {
+     "foe": "undead",
+     "dice": "1d6"
+    }
+   }
+  ],
+  "t": "+1d6 against the undead",
+  "grp": "bane_undead",
+  "r": "legendary"
+ },
+ {
+  "n": "Bone-crushing",
+  "k": "pre",
+  "g": 1,
+  "on": "blunt",
+  "fx": [
+   {
+    "bane": {
+     "foe": "undead",
+     "dice": "1d4"
+    }
+   }
+  ],
+  "t": "+1d4 against the undead",
+  "grp": "bane_undead",
+  "r": "rare"
+ },
+ {
+  "n": "Ratbane",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "bane": {
+     "foe": "vermin",
+     "dice": "1d4"
+    }
+   }
+  ],
+  "t": "+1d4 against vermin",
+  "grp": "bane_vermin"
+ },
+ {
+  "n": "of the Spider-slayer",
+  "k": "suf",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "bane": {
+     "foe": "spider",
+     "dice": "1d6"
+    }
+   }
+  ],
+  "t": "+1d6 against spiders",
+  "grp": "bane_spider",
+  "r": "rare"
+ },
+ {
+  "n": "Hunter's",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "not": [
+   "blunt"
+  ],
+  "fx": [
+   {
+    "bane": {
+     "foe": "beast",
+     "dice": "1d4"
+    }
+   },
+   {
+    "bane": {
+     "foe": "serpent",
+     "dice": "1d4"
+    }
+   }
+  ],
+  "t": "+1d4 against beasts and serpents",
+  "grp": "bane_beast",
+  "r": "rare"
  }
 ]

@@ -139,16 +139,16 @@ fn take_blocks(
     rules: Option<Res<crate::rules::GameRules>>,
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
-    mut players: Query<(&Transform, Option<&mut DelverStamina>), With<Player>>,
+    mut players: Query<(&Transform, Option<&mut DelverStamina>, Option<&crate::character::GearStamina>), With<Player>>,
 ) {
     let rules = crate::rules::GameRules::of(&rules);
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
     for miss in misses.read().filter(|m| m.blocked) {
-        let Some((at, stamina)) = players.iter_mut().next() else { continue };
+        let Some((at, stamina, gear)) = players.iter_mut().next() else { continue };
         if let Some(mut stamina) = stamina {
             let mut spent = stamina.0;
-            spent.spend_with(rules, rules.stamina.block_cost);
+            spent.spend_with(rules, rules.stamina.block_cost * gear.map_or(1.0, |g| g.cost as f64));
             stamina.0 = spent;
         }
         if let Some(sound) = &sound {
@@ -258,6 +258,24 @@ mod tests {
             app.update();
             assert!(!app.world().entity(delver).contains::<Guard>(), "{off:?}");
         }
+    }
+
+    #[test]
+    fn a_light_handed_shield_makes_a_block_cost_less() {
+        let cost = |gear: Option<crate::character::GearStamina>| {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins).add_message::<MissedDelver>().add_systems(Update, take_blocks);
+            let delver = app.world_mut().spawn((Player, Transform::default(), DelverStamina::default())).id();
+            if let Some(gear) = gear {
+                app.world_mut().entity_mut(delver).insert(gear);
+            }
+            app.world_mut().write_message(MissedDelver { attacker: Entity::PLACEHOLDER, attacker_pos: Vec2::new(0.0, -5.0), blocked: true });
+            app.update();
+            1.0 - app.world().get::<DelverStamina>(delver).unwrap().0.value
+        };
+        let usual = crate::rules::GameRules::of(&None).stamina.block_cost;
+        assert!((cost(None) - usual).abs() < 1e-9);
+        assert!((cost(Some(crate::character::GearStamina { refill: 1.0, cost: 0.75 })) - usual * 0.75).abs() < 1e-6);
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub mod armory_base;
 pub mod contents;
 pub mod dice;
 pub mod dress;
+pub mod foe;
 pub mod footprint;
 pub mod item;
 pub mod jackalope;
@@ -28,6 +29,7 @@ pub mod tables;
 pub mod troll;
 pub mod undead;
 
+pub use foe::Foe;
 pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, roll_item, roll_item_with, roll_loot};
 pub use oil::LAMP_OIL;
@@ -57,7 +59,7 @@ pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, 
 /// (`docs/items.md`, "Rarity and affixes").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Tag { Cloth, Leather, Metal, Wood, Wear, Armor, Quiet, Weapon, Light, Trinket, Container, Food, Ammunition }
+pub enum Tag { Cloth, Leather, Metal, Wood, Wear, Armor, Quiet, Weapon, Light, Trinket, Container, Food, Ammunition, Ranged, Blunt, Blade }
 
 /// The game layer's random stream for an item rolled from `seed`: rarity, affixes, names and
 /// history draw from it in that order. Kept apart from the Armory's own stream for the shape,

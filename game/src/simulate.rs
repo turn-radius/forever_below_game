@@ -210,17 +210,18 @@ fn step_stamina(
     screen: Res<ScreenOpen>,
     rules: Res<GameRules>,
     input: ActionInput,
-    mut players: Query<(&Locomotion, &Load, &mut DelverStamina, Has<crate::combat::guard::Guard>), With<Player>>,
+    mut players: Query<(&Locomotion, &Load, &mut DelverStamina, Has<crate::combat::guard::Guard>, Option<&crate::character::GearStamina>), With<Player>>,
 ) {
     let seconds = time.delta_secs_f64();
     if screen.0.is_some() || seconds <= 0.0 {
         return;
     }
     let sprinting = input.pressed(Action::Sprint);
-    for (locomotion, load, mut stamina, guarding) in &mut players {
+    for (locomotion, load, mut stamina, guarding, gear) in &mut players {
         let activity = stamina_activity(locomotion.velocity, sprinting && !guarding, !stamina.0.can_exert());
         let mut next = stamina.0;
-        next.step_with(&rules, seconds, activity, load.0);
+        let gear = gear.copied().unwrap_or_default();
+        next.step_geared(&rules, seconds, activity, load.0, gear.refill as f64, gear.cost as f64);
         stamina.set_if_neq(DelverStamina(next));
     }
 }
@@ -363,6 +364,25 @@ mod tests {
         app.world_mut().get_mut::<Locomotion>(delver).unwrap().velocity = Vec2::ZERO;
         run(&mut app, 8);
         assert!(stamina(&app, delver).value > 0.98 && !stamina(&app, delver).winded);
+    }
+
+    #[test]
+    fn gear_refills_stamina_faster_and_slows_the_sprint_drain() {
+        use crate::character::GearStamina;
+        let refilled = |refill: f32| {
+            let mut app = app();
+            let delver = app.world_mut().spawn((Player, Transform::default(), Locomotion::default(), GearStamina { refill, cost: 1.0 })).id();
+            app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.0, winded: true };
+            run(&mut app, 7);
+            stamina(&app, delver).value
+        };
+        assert!(refilled(1.0) < 0.9, "8 s to fill at the usual rate");
+        assert!(refilled(1.3) > 0.98, "of Second Wind fills in 8 / 1.3 s");
+        let mut app = app();
+        sprinting(&mut app);
+        let delver = app.world_mut().spawn((Player, Transform::default(), Locomotion { velocity: Vec2::new(5.0, 0.0), ..default() }, GearStamina { refill: 1.0, cost: 0.8 })).id();
+        run(&mut app, 15);
+        assert!((stamina(&app, delver).value - (1.0 - 15.0 * 0.8 / 30.0)).abs() < 0.02);
     }
 
     #[test]

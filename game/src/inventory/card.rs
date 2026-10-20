@@ -192,6 +192,7 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     differ(new.warmth, old.warmth, "warmth", "", true);
     differ(new.light, old.light, "light", " ft", true);
     differ(new.to_hit, old.to_hit, "to hit", "", true);
+    differ(new.ranged_to_hit, old.ranged_to_hit, "to hit with missiles", "", true);
     differ(new.stealth, old.stealth, "stealth", "", true);
     differ(new.lockpicking, old.lockpicking, "lockpicking", "", true);
     differ(new.carry, old.carry, "carry", " lb", true);
@@ -203,6 +204,9 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     differ(new.sleepiness_rate, old.sleepiness_rate, "sleepiness", "\u{d7}", false);
     differ(new.disease_risk, old.disease_risk, "disease risk", "\u{d7}", false);
     differ(new.speed * 100.0, old.speed * 100.0, "speed", "%", true);
+    differ(new.attack_rate * 100.0, old.attack_rate * 100.0, "attack speed", "%", true);
+    differ(new.stamina_refill * 100.0, old.stamina_refill * 100.0, "stamina refill", "%", true);
+    differ(new.stamina_cost * 100.0, old.stamina_cost * 100.0, "stamina cost", "%", false);
     differ(new.block_chance * 100.0, old.block_chance * 100.0, "chance to block", "%", true);
     differ(new.luck, old.luck, "luck", "", true);
     differ(new.break_chance * 100.0, old.break_chance * 100.0, "chance to break", "%", false);
@@ -215,6 +219,13 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
         (new.charisma, old.charisma, "CHA"),
     ] {
         differ(new, old, name, "", true);
+    }
+    for foe in fb_items::Foe::ALL {
+        let (i, kind) = (foe.index(), foe.label().to_lowercase());
+        differ(new.ward[i] * 100.0, old.ward[i] * 100.0, &format!("less damage from {kind}"), "%", true);
+        differ(new.shun[i] * 100.0, old.shun[i] * 100.0, &format!("chance {kind} pay no heed"), "%", true);
+        let mean = |s: &Stats| s.bane[i].map_or(0.0, |d| d.mean());
+        differ(mean(new), mean(old), &format!("damage against {}", bane_kind(foe)), "", true);
     }
     differ(new.weight, old.weight, "weight", " lb", false);
     lines
@@ -270,6 +281,26 @@ pub fn compare_banner(slot: Slot, worn: bool) -> String {
     format!("{} \u{b7} {}", if worn { "Worn" } else { "Nothing worn" }, slot_label(slot))
 }
 
+/// "Undead deal 25% less": a ward against `foe` of `fraction`.
+pub fn ward_text(foe: fb_items::Foe, fraction: f32) -> String {
+    format!("{} deal {}% less", foe.label(), number((fraction * 100.0).round()))
+}
+
+/// The kind a bane names: "the undead", "vermin", "spiders".
+fn bane_kind(foe: fb_items::Foe) -> String {
+    if foe == fb_items::Foe::Undead { "the undead".to_string() } else { foe.label().to_lowercase() }
+}
+
+/// "+1d6 against the undead": a weapon's extra `dice` against `foe`.
+pub fn bane_text(foe: fb_items::Foe, dice: fb_items::dice::Dice) -> String {
+    format!("+{dice} against {}", bane_kind(foe))
+}
+
+/// "Vermin often pay no heed (50%)": a shun of `chance` for `foe`.
+pub fn shun_text(foe: fb_items::Foe, chance: f32) -> String {
+    format!("{} often pay no heed ({}%)", foe.label(), number((chance * 100.0).round()))
+}
+
 /// The stats the meta line leaves out, where they differ from an ordinary thing's.
 pub fn stat_lines(s: &Stats) -> Vec<String> {
     let plain = Stats::default();
@@ -280,8 +311,20 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
         }
     };
     bonus(s.to_hit, "to hit");
+    bonus(s.ranged_to_hit, "to hit with missiles");
     bonus(s.stealth, "stealth");
     bonus(s.lockpicking, "lockpicking");
+    for foe in fb_items::Foe::ALL {
+        if s.ward[foe.index()] > 0.0 {
+            lines.push(ward_text(foe, s.ward[foe.index()]));
+        }
+        if s.shun[foe.index()] > 0.0 {
+            lines.push(shun_text(foe, s.shun[foe.index()]));
+        }
+        if let Some(dice) = s.bane[foe.index()] {
+            lines.push(bane_text(foe, dice));
+        }
+    }
     if s.carry != 0.0 {
         lines.push(format!("carries {} lb more", number(s.carry)));
     }
@@ -305,6 +348,15 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
     }
     if s.speed != plain.speed {
         lines.push(format!("{:+}% speed", ((s.speed - 1.0) * 100.0).round()));
+    }
+    if s.attack_rate != plain.attack_rate {
+        lines.push(format!("{:+}% attack speed", ((s.attack_rate - 1.0) * 100.0).round()));
+    }
+    if s.stamina_refill != plain.stamina_refill {
+        lines.push(format!("{:+}% stamina refill", ((s.stamina_refill - 1.0) * 100.0).round()));
+    }
+    if s.stamina_cost != plain.stamina_cost {
+        lines.push(format!("{:+}% stamina cost", ((s.stamina_cost - 1.0) * 100.0).round()));
     }
     if s.block_chance > 0.0 {
         lines.push(format!("{}% chance to block a blow", number((s.block_chance * 100.0).round())));
@@ -626,6 +678,11 @@ pub fn show_card(
                 let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
                 text.actions = crate::interact::key_actions(keymap, &verbs);
             }
+            if inventory.is_carried(id)
+                && let Some(key) = keymap.inputs(Action::Drop).first()
+            {
+                text.actions.push((key.label(), "Drop"));
+            }
             fill_card(&mut commands, card, Some((item, &text)), None, &fonts, &mut icons);
             *shown = Some(id);
             *visibility = Visibility::Hidden;
@@ -782,6 +839,12 @@ mod tests {
     #[test]
     fn stats_list_only_what_differs() {
         assert!(stat_lines(&Stats::default()).is_empty());
+        let mut banes = Stats::default();
+        banes.bane[fb_items::Foe::Undead.index()] = Some(fb_items::dice::Dice::new(1, 6));
+        banes.bane[fb_items::Foe::Beast.index()] = Some(fb_items::dice::Dice::new(1, 4));
+        assert_eq!(stat_lines(&banes), vec!["+1d6 against the undead", "+1d4 against beasts"]);
+        let lines = changes(&banes, Some(&Stats::default()));
+        assert!(lines.iter().any(|c| c.text.contains("damage against the undead") && c.better));
         let s = Stats { stealth: -2.0, hunger_rate: 0.85, darkvision: 10.0, ..Stats::default() };
         assert_eq!(stat_lines(&s), vec!["\u{2212}2 stealth", "darkvision 10 ft", "hunger \u{d7}0.85"]);
         assert_eq!(number(3.0), "3");
@@ -1119,6 +1182,7 @@ mod tests {
         let (b, r, d) = (bread, ring, dagger);
         let texts = card_over(inventory.clone(), |_| b);
         assert!(texts.iter().any(|t| t == "F ") && texts.iter().any(|t| t == "Eat"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "\u{b7} X ") && texts.iter().any(|t| t == "Drop"), "{texts:?}");
         let texts = card_over(inventory.clone(), |_| r);
         assert!(texts.iter().any(|t| t == "G ") && texts.iter().any(|t| t == "Take off"), "{texts:?}");
         // Underfoot, the dagger is taken or equipped.

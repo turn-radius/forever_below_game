@@ -208,15 +208,29 @@ pub struct Weapon {
     pub hold: Option<Hold>,
     /// Whether it bludgeons (a mace, a club, a staff, a fist): a skeleton takes double.
     pub bludgeoning: bool,
-    /// Added to the attack roll (the item's `ToHit`, rounded).
+    /// Added to the attack roll (the item's `ToHit`, rounded, and what the worn gear adds once the
+    /// delver holds it, [`Weapon::held_in`]).
     pub to_hit: i32,
+    /// The extra dice it rolls against each kind of creature, by [`fb_items::Foe`] index.
+    pub bane: Banes,
+}
+
+/// Extra damage dice per kind of creature, as a weapon's stats carry them.
+pub type Banes = [Option<Dice>; fb_items::Foe::COUNT];
+
+/// The dice a weapon of `banes` rolls against `foe`, summed: nothing against no kind in
+/// particular (folk), or a kind it holds no bane for. Rolled from the blow's own `rng`, so the
+/// extra goes into the damage before a skeleton's bludgeoning doubling.
+pub fn bane_damage(banes: &Banes, foe: Option<fb_items::Foe>, rng: &mut Mulberry32) -> u32 {
+    let Some(dice) = foe.and_then(|f| banes[f.index()]) else { return 0 };
+    (0..dice.count).map(|_| rng.int(1, dice.sides.max(1) as u32)).sum()
 }
 
 impl Weapon {
     /// A bare fist: 1 + Strength modifier, bludgeoning (SRD 5.1 p. 95, "Unarmed strike"),
     /// reaching an arm's length.
     pub fn fist() -> Weapon {
-        Weapon { kind: SwingKind::Punch, dice: None, bonus: 0, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: true, to_hit: 0 }
+        Weapon { kind: SwingKind::Punch, dice: None, bonus: 0, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: true, to_hit: 0, bane: [None; fb_items::Foe::COUNT] }
     }
 
     /// What the delver's main hand swings. A melee weapon rolls its own damage dice
@@ -230,9 +244,12 @@ impl Weapon {
 
     /// What the delver swings with `hand`, as [`Weapon::in_hand`] works it out for the main hand.
     pub fn held_in(hand: fb_items::Slot, inventory: &Inventory, character: &Character) -> Weapon {
-        let Some(item) = inventory.worn(hand).and_then(|id| inventory.item(id)) else { return Weapon::fist() };
+        // What the worn gear adds to a hit goes on whatever is swung, a fist too.
+        let gear = character.gear(inventory).to_hit.round() as i32;
+        let Some(item) = inventory.worn(hand).and_then(|id| inventory.item(id)) else { return Weapon { to_hit: gear, ..Weapon::fist() } };
         let hold = Hold::of(&item.shape, &fb_body::Body::new(&character.spec()));
-        Weapon { hold, ..Weapon::wielded(Some(item), STATURE) }
+        let wielded = Weapon::wielded(Some(item), STATURE);
+        Weapon { hold, to_hit: wielded.to_hit + gear, ..wielded }
     }
 
     /// What `item` in the main hand of someone `stature` world units tall swings (a fist with
@@ -253,7 +270,7 @@ impl Weapon {
         let melee = is_melee(item.shape.family());
         let stats = &item.profile.stats;
         let dice = if melee { stats.damage.unwrap_or(Dice::new(1, 4)) } else { Dice::new(1, 4) };
-        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: matches!(item.shape.family(), armory::Family::Mace | armory::Family::Club | armory::Family::Staff) || !melee, to_hit: stats.to_hit.round() as i32 }
+        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: matches!(item.shape.family(), armory::Family::Mace | armory::Family::Club | armory::Family::Staff) || !melee, to_hit: stats.to_hit.round() as i32, bane: stats.bane }
     }
 
     /// The range a blow's damage falls in with a Strength modifier of `strength`.
@@ -491,7 +508,7 @@ mod tests {
     #[test]
     fn damage_rolls_stay_within_their_dice() {
         let mut rng = Mulberry32::new(5);
-        let sword = Weapon { kind: SwingKind::Slash, dice: Some(Dice::new(1, 8)), bonus: 1, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0 };
+        let sword = Weapon { kind: SwingKind::Slash, dice: Some(Dice::new(1, 8)), bonus: 1, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0, bane: [None; fb_items::Foe::COUNT] };
         let greatsword = Weapon { dice: Some(Dice::new(2, 6)), bonus: 0, ..sword };
         let mut seen = std::collections::HashSet::new();
         for _ in 0..2000 {
@@ -513,7 +530,7 @@ mod tests {
         let mut rng = Mulberry32::new(11);
         let inventory_sword = fb_items::roll_item("Sword", 7).unwrap();
         let dice = inventory_sword.profile.stats.damage.unwrap();
-        let sword = Weapon { kind: SwingKind::Slash, dice: Some(dice), bonus: 0, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0 };
+        let sword = Weapon { kind: SwingKind::Slash, dice: Some(dice), bonus: 0, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0, bane: [None; fb_items::Foe::COUNT] };
         for species in [Species::Rat, Species::GiantRat] {
             let mut most = 0;
             for _ in 0..500 {
@@ -1055,6 +1072,35 @@ mod tests {
         assert!(!weapon("Sword").bludgeoning && !weapon("Spear").bludgeoning && !weapon("Hand axe").bludgeoning);
     }
 
+    #[test]
+    fn a_bane_adds_its_dice_before_the_bludgeoning_doubling() {
+        use feedback::{Struck, damage_to};
+        use fb_items::{Foe, dice::Dice};
+        let (app, _, skeleton) = skeleton_fight(kitted_seed(), None);
+        let critter = app.world().get::<crate::creatures::Critter>(skeleton).unwrap();
+        // A mace with the Bonebreaker's bane on the undead.
+        let mut mace = fb_items::roll_item("Mace", 7).unwrap();
+        mace.profile.stats.bane[Foe::Undead.index()] = Some(Dice::new(1, 6));
+        let bane = Weapon::of_stats(Some(&mace)).bane;
+        let foe = critter.spot.species.foe();
+        assert_eq!(foe, Foe::Undead);
+        let mut seen = [false; 6];
+        for seed in 0..60 {
+            let mut rng = procgen_rng::Mulberry32::new(seed);
+            let extra = bane_damage(&bane, Some(foe), &mut rng);
+            assert!((1..=6).contains(&extra), "{extra}");
+            seen[extra as usize - 1] = true;
+            let blow = Struck { target: skeleton, damage: 4 + extra, from: Vec2::ZERO, bludgeoning: true, critical: false };
+            assert_eq!(damage_to(critter, &blow), 2 * (4 + extra), "the doubling takes the bane too");
+        }
+        assert!(seen.iter().all(|&s| s), "every face of the die comes up");
+        // Nothing extra to a rat, to folk, or from a weapon with no bane.
+        let mut rng = procgen_rng::Mulberry32::new(1);
+        assert_eq!(bane_damage(&bane, Some(fb_creatures::Species::Rat.foe()), &mut rng), 0);
+        assert_eq!(bane_damage(&bane, None, &mut rng), 0);
+        assert_eq!(bane_damage(&Weapon::fist().bane, Some(foe), &mut rng), 0);
+    }
+
     // Shooting: bows, crossbows and what they loose.
 
     /// `fight`, with the delver holding `weapon` (rolled from `weapon_seed`), a worn `holder`
@@ -1158,7 +1204,7 @@ mod tests {
             let start = Vec3::from_array(fb_level::Level::world(sx as f32 + 0.5, sy as f32 + 0.5)) + Vec3::Y * 8.0;
             for (i, dir) in [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z].into_iter().enumerate() {
                 let item = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Arrow", i as u32).unwrap());
-                let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 0, to_hit: 0, dice: Some((1, 6)), bonus: 0, draw: 1.0, odds: fb_character::combat::Odds::Even };
+                let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 0, to_hit: 0, dice: Some((1, 6)), bonus: 0, bane: [None; fb_items::Foe::COUNT], draw: 1.0, odds: fb_character::combat::Odds::Even };
                 app.world_mut().spawn((shoot::Projectile { item, velocity: dir * speed, origin: start, age: 0.0, shot, passed: vec![] }, Transform::from_translation(start)));
             }
             frames(&mut app, 600);
@@ -1180,7 +1226,7 @@ mod tests {
         easy_to_hit(&mut app, rat);
         let at = app.world().get::<Transform>(rat).unwrap().translation;
         let arrow = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Arrow", 4).unwrap());
-        let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 3, to_hit: 0, dice: Some((1, 6)), bonus: 0, draw: 1.0, odds: fb_character::combat::Odds::Even };
+        let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 3, to_hit: 0, dice: Some((1, 6)), bonus: 0, bane: [None; fb_items::Foe::COUNT], draw: 1.0, odds: fb_character::combat::Odds::Even };
         let origin = at - Vec3::X * 12.0 + Vec3::Y * 1.0;
         app.world_mut().spawn((shoot::Projectile { item: arrow, velocity: Vec3::X * 600.0, origin, age: 0.0, shot, passed: vec![] }, Transform::from_translation(origin)));
         let mut frames_run = 0;

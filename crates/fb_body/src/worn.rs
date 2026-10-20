@@ -548,8 +548,10 @@ impl<'a> Envelope<'a> {
             }
             self.form.with_rings(rings)
         };
+        let (exponent, back) = (self.form.exponent, self.form.back);
         for _ in 0..48 {
-            let reach = Reach::of(&inflate(&grow).eased(fit).profile());
+            let profile = inflate(&grow).eased(fit).profile();
+            let reach = Reach::of(&profile);
             let mut need = [[0.0f32; 2]; 9];
             for (y, phi, e) in relief.into_iter().flat_map(Relief::cells) {
                 let short = self.reach.at(phi, y) + e.max(0.0) + GAP - reach.at(phi, y);
@@ -558,10 +560,13 @@ impl<'a> Envelope<'a> {
                 }
                 let k = ring_y.partition_point(|ry| *ry <= y).clamp(1, 8) - 1;
                 let f = ((y - ring_y[k]) / (ring_y[k + 1] - ring_y[k])).clamp(0.0, 1.0);
-                // Widening lifts the surface toward polar angle phi by about cos^2 of it,
-                // deepening by sin^2; share the lift between them by the square of each, so a
-                // point at the side widens and hardly deepens.
-                let (c, s) = (phi.cos().powi(2), phi.sin().powi(2));
+                // How far widening and deepening the section here lift its surface toward
+                // polar angle phi; share the lift between them by the square of each, so a
+                // point at the side widens and hardly deepens. Taken from the section as it
+                // stands, not a round one: once it is much wider than deep, a point a little
+                // off the side is reached by deepening, and widening it further only ballooned
+                // the form (a hood's cape over pauldrons spread like wings).
+                let (c, s) = section_lift(profile.at(y), phi, exponent, back);
                 let (wa, wd) = (c * c / (c * c + s * s), s * s / (c * c + s * s));
                 let lift = wa * c + wd * s;
                 let (w0, w1) = (1.0 - f, f);
@@ -736,6 +741,20 @@ impl<'a> Envelope<'a> {
         let ahead = |phi: f32| (phi - FRONT_PHI + PI).rem_euclid(TAU) - PI;
         self.trunk.cells().filter(|c| c.0 >= chest && ahead(c.1).abs() <= CHEST_SPREAD).fold(0.0f32, |m, c| m.max(c.2))
     }
+}
+
+/// How far the surface of a section `(half width, half depth)` (a superellipse,
+/// [`armory::build::form::section_point`]) moves out toward polar angle `phi` per unit it is
+/// widened, and per unit it is deepened. On a round section these are cos^2 and sin^2 of
+/// `phi`.
+fn section_lift((hw, hd): (f32, f32), phi: f32, exponent: f32, back: f32) -> (f32, f32) {
+    let e = 2.0 / exponent;
+    let (c, s) = (phi.cos().abs(), phi.sin().abs());
+    // Behind the centre the depth is scaled by `back`.
+    let k = if phi.sin() < 0.0 { back } else { 1.0 };
+    let (hw, hd) = (hw.max(1e-3), (k * hd).max(1e-3));
+    let r = ((c / hw).powf(e) + (s / hd).powf(e)).powf(-1.0 / e);
+    (r.powf(e + 1.0) * c.powf(e) / hw.powf(e + 1.0), k * r.powf(e + 1.0) * s.powf(e) / hd.powf(e + 1.0))
 }
 
 /// How far points reach from the trunk's axis, gridded finely by height and by angle round
@@ -1228,6 +1247,11 @@ fn gloves(body: &Body, env: &Envelope, state: &HandsState) -> ItemMesh {
         let rows = (reach / DOWN).ceil() as usize + 2;
         let mut grid = vec![[NONE; ROUND]; rows];
         for &p in &env.on_arm[index(side)] {
+            // The forearm's alone: a hand turned to its grip lays the cells across the upper
+            // arm too, and a sleeve or pauldron there flared the cuff out past the shoulder.
+            if nearest(arm, p).0 < arm.t_joints[1] {
+                continue;
+            }
             let q = vec3::sub(p, place.origin);
             let l = [vec3::dot(q, x), vec3::dot(q, y), vec3::dot(q, z)];
             let down = -l[1];
@@ -2212,6 +2236,65 @@ mod tests {
     #[test]
     fn legwear_bends_with_the_knees_smoke() {
         legwear_bends_with_the_knees_check(&[Folk::Human, Folk::Pigfolk], &[1207], &[LegwearStyle::Trousers, LegwearStyle::Breeches], &[10]);
+    }
+
+    fn a_coifs_cape_keeps_close_over_pauldrons_check(cases: &[(Folk, u32)]) {
+        use armory::families::hood::Hoods;
+        use armory::sections::hood::HoodStyle;
+        let mut failures = vec![];
+        let fighter = fb_items::outfit::outfit("fighter").unwrap();
+        for &(folk, seed) in cases {
+            let spec = BodySpec::roll(folk, seed);
+            let kit = fighter.roll(seed, folk.key()).worn;
+            let held = |slot: Slot| kit.iter().find(|(s, _)| *s == slot).map(|(_, i)| &i.shape);
+            // Posed for what it holds, as in the game: a grip turns a hand off the forearm.
+            let body = crate::held::fit_hands(&spec, held(Slot::Mainhand), held(Slot::Offhand)).body;
+            let mut worn: Vec<(Slot, Item)> = kit.iter().filter(|(s, _)| LAYER_ORDER.contains(s) && !matches!(s, Slot::Body | Slot::Head | Slot::Back)).map(|(s, i)| (*s, i.shape.clone())).collect();
+            // A cuirass with pauldrons under a ventailed mail coif, as on a lizardfolk of the
+            // Scale Court whose cape spread out like wings.
+            let mut cuirass = Garment::roll_as(seed, GarmentStyle::Cuirass);
+            cuirass.plates.pauldrons = true;
+            let mut coif = Hoods::roll_as(seed, HoodStyle::MailCoif);
+            coif.hood.ventail = true;
+            worn.push((Slot::Body, Item::Garment(cuirass)));
+            worn.push((Slot::Head, Item::Hood(coif)));
+            let fit = fit_worn(&body, &worn);
+            let wide = |slot: Slot| fit.layer(slot).map_or(0.0, |l| l.mesh.parts.iter().flat_map(|p| &p.positions).map(|p| p[0].abs()).fold(0.0f32, f32::max));
+            let (lo, hi) = body.skin_mesh().bounds().unwrap();
+            let under = lo[0].abs().max(hi[0]).max(wide(Slot::Body)).max(wide(Slot::Hands));
+            // The cape lies on the pauldrons, no more than its own thickness and ease past them.
+            if wide(Slot::Head) > under + 1.0 {
+                failures.push(format!("{folk:?} {seed}: the coif reaches {:.2} to the side, what it covers {under:.2}", wide(Slot::Head)));
+            }
+            // A gauntlet's cuff stays on the forearm, whatever lies on the upper arm.
+            if let Some(hands) = fit.layer(Slot::Hands) {
+                let arms = [body.arm(Side::Left), body.arm(Side::Right)];
+                let forearm = |arm: &Limb| vec3::distance(arm.joints[1], arm.joints[2]) + 2.0 * arm.radius_at(arm.t_joints[1]);
+                for p in hands.mesh.parts.iter().filter(|p| p.name == "cuff").flat_map(|p| &p.positions) {
+                    let arm = arms.iter().min_by(|a, b| vec3::distance(*p, a.joints[2]).total_cmp(&vec3::distance(*p, b.joints[2]))).unwrap();
+                    let far = vec3::distance(*p, arm.joints[2]);
+                    if far > forearm(arm) {
+                        failures.push(format!("{folk:?} {seed}: the cuff reaches {far:.2} from the wrist, past the forearm's {:.2}", forearm(arm)));
+                        break;
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn a_coifs_cape_keeps_close_over_pauldrons() {
+        let cases: Vec<(Folk, u32)> = Folk::ALL.iter().flat_map(|&f| (1..=12).map(move |s| (f, s))).collect();
+        a_coifs_cape_keeps_close_over_pauldrons_check(&cases);
+    }
+
+    #[test]
+    fn a_coifs_cape_keeps_close_over_pauldrons_smoke() {
+        // A lizardfolk whose cape spread to 9.6 units, and a dwarf whose gauntlet cuff stood
+        // over its shoulder.
+        a_coifs_cape_keeps_close_over_pauldrons_check(&[(Folk::Lizardfolk, 15), (Folk::Dwarf, 8)]);
     }
 
     #[test]
