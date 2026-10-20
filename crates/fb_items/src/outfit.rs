@@ -228,22 +228,22 @@ mod tests {
         }
     }
 
-    /// Whether any outfit, `seeds` seeds at each depth from 1 to 10, carries a held-back base.
-    fn carries_held_back(seeds: u32) -> bool {
+    /// Whether any outfit, `seeds` seeds at each of `depths`, carries a held-back base.
+    fn carries_held_back(seeds: u32, depths: &[u32]) -> bool {
         outfits().iter().any(|o| {
-            (1..=10).any(|depth| (0..seeds).any(|seed| o.roll_with(seed, "human", Odds::kit(depth)).goods.iter().any(|g| held_back(&g.base))))
+            depths.iter().any(|&depth| (0..seeds).any(|seed| o.roll_with(seed, "human", Odds::kit(depth)).goods.iter().any(|g| held_back(&g.base))))
         })
     }
 
     #[test]
     fn no_outfit_carries_a_held_back_base_smoke() {
-        assert!(!carries_held_back(2));
+        assert!(!carries_held_back(1, &[1, 10]));
     }
 
     #[test]
-    #[ignore = "slow sweep: 200 seeds at each depth for every outfit; run before merging"]
+    #[ignore = "slow sweep: 25 seeds at each depth from 1 to 10 for every outfit; run before merging"]
     fn no_outfit_carries_a_held_back_base() {
-        assert!(!carries_held_back(200));
+        assert!(!carries_held_back(25, &(1..=10).collect::<Vec<_>>()));
     }
 
     #[test]

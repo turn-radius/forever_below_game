@@ -476,14 +476,27 @@ mod tests {
         ("of the Mole", &[Slot::Head, Slot::Neck, Slot::Charm]),
     ];
 
+    /// Base `base`'s tags and slot, from the profile of its seed 0 shape (they are the base's, not the
+    /// seed's), and the rarity and affixes the game layer rolls from `seed` at `depth`: what
+    /// `roll_item_with` draws first, without building a shape for every seed.
+    fn game_layer(base: &str) -> Option<(Vec<Tag>, Option<Slot>)> {
+        let shape = crate::armory_base::roll_shape(base, 0)?;
+        let profile = crate::profile::profile(base, &shape);
+        Some((profile.tags, profile.slot))
+    }
+
+    fn rolled_affixes(tags: &[Tag], slot: Option<Slot>, seed: u32, depth: u32) -> Vec<&'static Affix> {
+        roll_rarity_for(&mut game_rng(seed), tags, slot, &Odds::loot(depth)).1
+    }
+
     #[test]
     fn comfort_suffixes_stay_off_weapons_and_shields() {
-        let odds = Odds::loot(5);
         for base in ["Sword", "Mace", "Bow", "Shield"] {
+            let (tags, slot) = game_layer(base).unwrap();
             for seed in 0..2000 {
-                let item = crate::roll_item_with(base, seed, odds).unwrap();
+                let chosen = rolled_affixes(&tags, slot, seed, 5);
                 for (name, _) in COMFORT {
-                    assert!(item.affixes.iter().all(|a| a.name != name), "{name} on {base} {seed}");
+                    assert!(chosen.iter().all(|a| a.name != name), "{name} on {base} {seed}");
                 }
             }
         }
@@ -491,15 +504,21 @@ mod tests {
 
     #[test]
     fn comfort_suffixes_still_roll_in_their_slots() {
-        let items = deep_rolls(60);
+        let worn: Vec<(&str, Vec<Tag>, Option<Slot>)> =
+            crate::armory_base::ARMORY_BASES.iter().filter_map(|(base, _)| game_layer(base).map(|(tags, slot)| (*base, tags, slot))).filter(|(_, _, slot)| slot.is_some()).collect();
         for (name, slots) in COMFORT {
             let affix = affixes().iter().find(|a| a.name == name).unwrap();
             assert!(affix.in_play(), "{name} is read");
             let mut rolled = false;
-            for item in items.iter().filter(|i| i.affixes.iter().any(|a| a.name == name)) {
-                rolled = true;
-                let slot = item.profile.slot.map(|s| if s == Slot::Ring2 { Slot::Ring1 } else { s });
-                assert!(slot.is_some_and(|s| slots.contains(&s)), "{name} on {} in {slot:?}", item.base);
+            for (base, tags, slot) in &worn {
+                for seed in 0..200 {
+                    if rolled_affixes(tags, *slot, seed, 12).iter().all(|a| a.name != name) {
+                        continue;
+                    }
+                    rolled = true;
+                    let slot = slot.map(|s| if s == Slot::Ring2 { Slot::Ring1 } else { s });
+                    assert!(slot.is_some_and(|s| slots.contains(&s)), "{name} on {base} in {slot:?}");
+                }
             }
             assert!(rolled, "{name} never rolled");
         }
