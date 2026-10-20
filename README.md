@@ -309,8 +309,8 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[sound]` | `rumble_interval_max` | 180.0 | The longest time between stone rumbles, in seconds. |
 | `[sound]` | `troll_rooms` | 2 | The troll theme plays while a troll is this many rooms away or fewer. 0 is the same room. |
 | `[sound]` | `troll_linger` | 10.0 | How long the troll theme plays on after the last troll is out of range, in seconds. |
-| `[interface]` | `cell_size` | 72.0 | Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there. |
-| `[interface]` | `min_cell_size` | 48.0 | The fewest logical pixels a cell is drawn at, however short the window. |
+| `[interface]` | `cell_size` | 72.0 | Inventory grid cell size, in logical pixels, in a 1920 by 1080 window. Every screen scales with the window from there, by its height or width, whichever is tighter. |
+| `[interface]` | `min_cell_size` | 36.0 | The fewest logical pixels a cell is drawn at, however small the window: the floor under the whole interface's scale (36 of 72 is half size). |
 | `[interface]` | `hover_delay` | 0.0 | Seconds the mouse rests on an item before its card shows. |
 | `[input]` | `hold_time` | 0.25 | Seconds a key or button is held before a Hold binding fires. A press let go sooner is a tap. |
 | `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
