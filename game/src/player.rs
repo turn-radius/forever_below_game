@@ -196,15 +196,16 @@ pub(crate) fn look(
 
 /// Keeps the delver's [`Load`] to what they wear and carry, working it out again only when the
 /// character or the inventory has changed, or for a delver just spawned.
-fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inventory>>, rules: Option<Res<crate::rules::GameRules>>, mut players: Query<(&mut Load, &mut GearPace), With<Player>>) {
+fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inventory>>, rules: Option<Res<crate::rules::GameRules>>, mut players: Query<(&mut Load, &mut GearPace, &mut crate::character::GearStamina), With<Player>>) {
     let (Some(character), Some(inventory)) = (character, inventory) else { return };
     let changed = character.is_changed() || inventory.is_changed() || rules.as_ref().is_some_and(|r| r.is_changed());
     let mut derived = None;
-    for (mut load, mut pace) in &mut players {
+    for (mut load, mut pace, mut stamina) in &mut players {
         if changed || load.is_added() {
             let derived = *derived.get_or_insert_with(|| character.derive_with(crate::rules::GameRules::of(&rules), &inventory));
             load.set_if_neq(Load(derived.load_band));
             pace.set_if_neq(GearPace(derived.speed));
+            stamina.set_if_neq(crate::character::GearStamina { refill: derived.stamina_refill, cost: derived.stamina_cost });
         }
     }
 }

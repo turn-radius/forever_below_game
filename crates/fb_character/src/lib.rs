@@ -284,11 +284,22 @@ pub struct Worn {
     /// The chance each kind of creature never notices the wearer, by [`fb_items::Foe`] index.
     #[serde(default)]
     pub shun: [f64; Foe::COUNT],
+    /// Multiple of the speed of a swing, a draw and a reload: the weapon in hand's and the
+    /// gloves', which the game decides when it builds the [`Worn`].
+    #[serde(default = "default_gear")]
+    pub attack_rate: f64,
+    /// Multiple of how fast stamina refills (Tireless, of Second Wind).
+    #[serde(default = "default_gear")]
+    pub stamina_refill: f64,
+    /// Multiple of what stamina costs: a swing, a block and a sprint's drain (Light-handed, of
+    /// Endurance). Lower is better.
+    #[serde(default = "default_gear")]
+    pub stamina_cost: f64,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] }
     }
 }
 
@@ -356,6 +367,15 @@ pub struct Gear {
     /// ([`fb_items::foe::combine_shun`], at most [`MAX_SHUN`](fb_items::foe::MAX_SHUN)).
     #[serde(default)]
     pub shun: [f64; Foe::COUNT],
+    /// Multiple of the speed of a swing, a draw and a reload: the items' multiplied.
+    #[serde(default = "default_gear")]
+    pub attack_rate: f64,
+    /// Multiple of how fast stamina refills: the items' multiplied.
+    #[serde(default = "default_gear")]
+    pub stamina_refill: f64,
+    /// Multiple of what swinging, blocking and sprinting cost in stamina: the items' multiplied.
+    #[serde(default = "default_gear")]
+    pub stamina_cost: f64,
 }
 
 impl Default for Gear {
@@ -369,7 +389,7 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] };
         for item in worn {
             gear.to_hit += item.to_hit;
             gear.ranged_to_hit += item.ranged_to_hit;
@@ -383,6 +403,9 @@ impl Gear {
             gear.stealth += item.stealth;
             gear.heal_on_kill += item.heal_on_kill;
             gear.speed *= item.speed;
+            gear.attack_rate *= item.attack_rate;
+            gear.stamina_refill *= item.stamina_refill;
+            gear.stamina_cost *= item.stamina_cost;
             gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, MAX_BLOCK_CHANCE);
             gear.abilities = gear.abilities.plus(item.abilities);
             gear.disease_risk *= item.disease_risk;
@@ -842,6 +865,12 @@ impl Stamina {
 
     /// [`Stamina::rate_per_second`] under `rules`.
     pub fn rate_per_second_with(rules: &Rules, activity: Activity, load: LoadBand) -> f64 {
+        Stamina::rate_per_second_geared(rules, activity, load, 1.0, 1.0)
+    }
+
+    /// [`Stamina::rate_per_second_with`] for a delver whose gear multiplies the refill rates by
+    /// `refill` and the sprint drain by `cost` ([`Gear::stamina_refill`], [`Gear::stamina_cost`]).
+    pub fn rate_per_second_geared(rules: &Rules, activity: Activity, load: LoadBand, refill: f64, cost: f64) -> f64 {
         let s = &rules.stamina;
         match activity {
             Activity::Exerting => {
@@ -850,11 +879,11 @@ impl Stamina {
                     LoadBand::Burdened => s.burdened_drain,
                     LoadBand::Encumbered | LoadBand::Overloaded => s.encumbered_drain,
                 };
-                -heavier / s.sprint_seconds
+                -heavier * cost / s.sprint_seconds
             }
-            Activity::Walking => 1.0 / s.walk_refill_seconds,
-            Activity::Resting => 1.0 / s.stand_refill_seconds,
-            Activity::Sleeping => s.sleep_refill_factor / s.stand_refill_seconds,
+            Activity::Walking => refill / s.walk_refill_seconds,
+            Activity::Resting => refill / s.stand_refill_seconds,
+            Activity::Sleeping => refill * s.sleep_refill_factor / s.stand_refill_seconds,
         }
     }
 
@@ -870,7 +899,13 @@ impl Stamina {
 
     /// [`Stamina::step`] under `rules`.
     pub fn step_with(&mut self, rules: &Rules, seconds: f64, activity: Activity, load: LoadBand) {
-        self.value = (self.value + Stamina::rate_per_second_with(rules, activity, load) * seconds).clamp(0.0, 1.0);
+        self.step_geared(rules, seconds, activity, load, 1.0, 1.0);
+    }
+
+    /// [`Stamina::step_with`] under the gear's `refill` and `cost` multiples
+    /// ([`Stamina::rate_per_second_geared`]).
+    pub fn step_geared(&mut self, rules: &Rules, seconds: f64, activity: Activity, load: LoadBand, refill: f64, cost: f64) {
+        self.value = (self.value + Stamina::rate_per_second_geared(rules, activity, load, refill, cost) * seconds).clamp(0.0, 1.0);
         self.settle(rules);
     }
 
@@ -1832,6 +1867,23 @@ mod tests {
         let mut walking = empty;
         walking.step(8.0, Activity::Walking, LoadBand::Light);
         assert!(walking.value > 0.5 && walking.value < 1.0);
+    }
+
+    #[test]
+    fn gear_quickens_the_refill_and_slows_the_sprint_drain() {
+        let rules = defaults();
+        let empty = Stamina { value: 0.0, winded: true };
+        let mut standing = empty;
+        standing.step_geared(rules, 8.0 / 1.3, Activity::Resting, LoadBand::Light, 1.3, 1.0);
+        assert!((standing.value - 1.0).abs() < 1e-9, "of Second Wind fills a bar in 8 / 1.3 s: {standing:?}");
+        let mut sprinting = Stamina::default();
+        sprinting.step_geared(rules, 10.0, Activity::Exerting, LoadBand::Light, 1.0, 0.8);
+        assert!((sprinting.value - (1.0 - 10.0 * 0.8 / 30.0)).abs() < 1e-9, "{sprinting:?}");
+        let mut plain = Stamina::default();
+        plain.step_geared(rules, 10.0, Activity::Exerting, LoadBand::Light, 1.3, 1.0);
+        let mut again = Stamina::default();
+        again.step_with(rules, 10.0, Activity::Exerting, LoadBand::Light);
+        assert_eq!(plain, again, "refill never touches the drain");
     }
 
     #[test]

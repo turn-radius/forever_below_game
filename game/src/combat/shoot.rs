@@ -203,9 +203,15 @@ pub fn draw_damage_share(draw: f32) -> f32 {
 }
 
 /// Seconds to span and load a crossbow: a light one 1.5, a heavy one 3, a quarter off with a
-/// stirrup to put the foot in. Our own.
-pub fn reload_seconds(heavy: bool, stirrup: bool) -> f32 {
-    (if heavy { 3.0 } else { 1.5 }) * if stirrup { 0.75 } else { 1.0 }
+/// stirrup to put the foot in, and shorter by the delver's attack `rate`. Our own.
+pub fn reload_seconds(heavy: bool, stirrup: bool, rate: f32) -> f32 {
+    (if heavy { 3.0 } else { 1.5 }) * if stirrup { 0.75 } else { 1.0 } / rate
+}
+
+/// How far a bow's draw clock (seconds at the usual pace, [`DRAW_SECONDS`] to full) goes on in
+/// `dt` real seconds for a delver's attack `rate`.
+pub fn advance_draw(t: f32, dt: f32, rate: f32) -> f32 {
+    t + dt * rate
 }
 
 /// One step of flight: gravity pulls the velocity down, then the shot moves. Returns where it
@@ -340,6 +346,7 @@ pub fn shoot(
     // Tertiary reloads a crossbow when nothing under the crosshair has a use for it.
     let reload_pressed = input.just_pressed(Action::Tertiary) && !around.aimed.as_ref().is_some_and(|a| a.0.is_some());
 
+    let rate = character.gear(&inventory).attack_rate as f32;
     let mut loose = None;
     if crossbow {
         if let Some(reload) = marksman.reload.as_mut() {
@@ -358,7 +365,7 @@ pub fn shoot(
                 let item = inventory.item(weapon_id);
                 let heavy = item.and_then(|i| i.profile.stats.damage).is_some_and(|d| d.sides >= 10);
                 let stirrup = matches!(item.map(|i| &i.shape), Some(armory::Item::Crossbow(s)) if s.stock.stirrup);
-                marksman.reload = Some(Reload { t: 0.0, total: reload_seconds(heavy, stirrup) });
+                marksman.reload = Some(Reload { t: 0.0, total: reload_seconds(heavy, stirrup, rate) });
             } else {
                 toasts.say_once("No bolts to load");
             }
@@ -381,7 +388,7 @@ pub fn shoot(
         }
         if let Some(t) = marksman.draw {
             if input.pressed(Action::Attack) || (block_shoots && input.pressed(Action::Block)) || (crate::launch::env_set("FB_SHOOT") && t < DRAW_SECONDS) {
-                marksman.draw = Some(t + dt);
+                marksman.draw = Some(advance_draw(t, dt, rate));
             } else {
                 loose = Some(marksman.drawn());
             }
@@ -842,9 +849,25 @@ mod tests {
 
     #[test]
     fn a_heavy_crossbow_takes_longer_to_reload_and_a_stirrup_shortens_it() {
-        assert!(reload_seconds(true, false) > reload_seconds(false, false));
-        assert!(reload_seconds(false, true) < reload_seconds(false, false));
-        assert!(reload_seconds(true, true) < reload_seconds(true, false));
+        assert!(reload_seconds(true, false, 1.0) > reload_seconds(false, false, 1.0));
+        assert!(reload_seconds(false, true, 1.0) < reload_seconds(false, false, 1.0));
+        assert!(reload_seconds(true, true, 1.0) < reload_seconds(true, false, 1.0));
+    }
+
+    #[test]
+    fn a_bow_of_swiftness_draws_and_a_crossbow_reloads_faster() {
+        let character = Character::roll(3);
+        let mut inventory = Inventory::default();
+        let bow = inventory.add(with_affix("Bow", 7, "of Swiftness"));
+        inventory.wear(bow, Slot::Mainhand).unwrap();
+        let rate = character.gear(&inventory).attack_rate as f32;
+        assert!((rate - 1.2).abs() < 1e-6);
+        let full = Marksman { draw: Some(advance_draw(0.0, 1.0 / 1.2, rate)), ..Marksman::default() };
+        assert!((full.drawn() - 1.0).abs() < 1e-5, "drawn in 1 / 1.2 s");
+        let part = Marksman { draw: Some(advance_draw(0.0, 0.5, 1.0)), ..Marksman::default() };
+        assert!((part.drawn() - 0.5).abs() < 1e-6, "half a second at the usual pace");
+        assert!((reload_seconds(false, false, rate) - 1.25).abs() < 1e-5);
+        assert!((reload_seconds(true, true, rate) - 3.0 * 0.75 / 1.2).abs() < 1e-5);
     }
 
     #[test]

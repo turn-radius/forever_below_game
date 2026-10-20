@@ -110,7 +110,7 @@ pub mod remote {
 /// rely on it.)
 pub fn register_gameplay_types(app: &mut App) {
     use crate::{
-        character::{DelverMana, DelverNeeds, DelverStamina, DelverVisibility, Load},
+        character::{DelverMana, DelverNeeds, DelverStamina, DelverVisibility, GearStamina, Load},
         creatures::{Critter, Driven, Idle, Intent, Motion},
         exhaustion::{Exhaustion, ExhaustionTimes},
         folk::{Denizen, FolkHead, Stance, Stride},
@@ -129,6 +129,7 @@ pub fn register_gameplay_types(app: &mut App) {
         .register_type::<Exhaustion>()
         .register_type::<ExhaustionTimes>()
         .register_type::<Load>()
+        .register_type::<GearStamina>()
         .register_type::<DelverNeeds>()
         .register_type::<DelverStamina>()
         .register_type::<DelverMana>()

@@ -1317,6 +1317,144 @@
   ]
  },
  {
+  "n": "Quick",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "scale": {
+     "stat": "attack_rate",
+     "by": 1.1
+    }
+   }
+  ],
+  "t": "+10% attack speed",
+  "grp": "attack_rate"
+ },
+ {
+  "n": "of Swiftness",
+  "k": "suf",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "scale": {
+     "stat": "attack_rate",
+     "by": 1.2
+    }
+   }
+  ],
+  "t": "+20% attack speed",
+  "grp": "attack_rate",
+  "r": "rare"
+ },
+ {
+  "n": "of the Duellist",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "attack_rate",
+     "by": 1.05
+    }
+   }
+  ],
+  "t": "+5% attack speed",
+  "grp": "duellist",
+  "at": [
+   "hands"
+  ]
+ },
+ {
+  "n": "Tireless",
+  "k": "pre",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_refill",
+     "by": 1.2
+    }
+   }
+  ],
+  "t": "Stamina refills 20% faster",
+  "grp": "stamina_refill",
+  "at": [
+   "body",
+   "feet"
+  ]
+ },
+ {
+  "n": "of Second Wind",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_refill",
+     "by": 1.3
+    }
+   }
+  ],
+  "t": "Stamina refills 30% faster",
+  "grp": "stamina_refill",
+  "r": "rare",
+  "at": [
+   "neck",
+   "charm",
+   "body"
+  ]
+ },
+ {
+  "n": "Light-handed",
+  "k": "pre",
+  "g": 1,
+  "on": "any",
+  "not": [
+   "light"
+  ],
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_cost",
+     "by": 0.75
+    }
+   }
+  ],
+  "t": "Swings and blocks cost 25% less stamina",
+  "grp": "stamina_cost",
+  "at": [
+   "mainhand",
+   "offhand"
+  ]
+ },
+ {
+  "n": "of Endurance",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_cost",
+     "by": 0.8
+    }
+   }
+  ],
+  "t": "Sprinting, swinging and blocking cost 20% less stamina",
+  "grp": "stamina_cost",
+  "at": [
+   "legs",
+   "feet",
+   "belt"
+  ]
+ },
+ {
   "n": "of the Ossuary",
   "k": "suf",
   "g": 1,

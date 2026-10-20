@@ -59,7 +59,7 @@ fn map_rooms(mut commands: Commands, level: Res<CurrentLevel>) {
 /// The player's body. Its `Transform` is at the feet, on the floor; the camera is a child.
 #[derive(Component, Debug, Default, Reflect)]
 #[reflect(Component)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds, crate::character::DelverStamina, crate::character::DelverMana, crate::character::DelverVisibility, crate::character::DelverRecovery, crate::player::GearPace)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds, crate::character::DelverStamina, crate::character::DelverMana, crate::character::DelverVisibility, crate::character::DelverRecovery, crate::player::GearPace, crate::character::GearStamina)]
 pub struct Player;
 
 /// The first-person camera, a child of [`Player`].

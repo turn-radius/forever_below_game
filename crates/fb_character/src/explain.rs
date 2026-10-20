@@ -269,6 +269,36 @@ impl Loadout {
         e
     }
 
+    /// How fast a swing, a draw and a reload go, as a multiple of the usual: each item's rate
+    /// multiplied. Equals [`Gear::attack_rate`].
+    pub fn attack_rate(&self) -> Explained {
+        let mut e = Explained::new("Attack rate", "").base("usual speed", 1.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.attack_rate != 1.0) {
+            e = e.times(label, item.attack_rate);
+        }
+        e
+    }
+
+    /// How fast stamina refills, as a multiple of the usual: each item's multiplied. Equals
+    /// [`Gear::stamina_refill`].
+    pub fn stamina_refill(&self) -> Explained {
+        let mut e = Explained::new("Stamina refill", "").base("usual rate", 1.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.stamina_refill != 1.0) {
+            e = e.times(label, item.stamina_refill);
+        }
+        e
+    }
+
+    /// What swinging, blocking and sprinting cost in stamina, as a multiple of the usual: each
+    /// item's multiplied. Equals [`Gear::stamina_cost`].
+    pub fn stamina_cost(&self) -> Explained {
+        let mut e = Explained::new("Stamina cost", "").base("usual cost", 1.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.stamina_cost != 1.0) {
+            e = e.times(label, item.stamina_cost);
+        }
+        e
+    }
+
     /// The chance a held shield turns aside a blow that would hit, the items' added, at most
     /// [`crate::MAX_BLOCK_CHANCE`]. Equals [`Gear::block_chance`].
     pub fn block_chance(&self) -> Explained {
@@ -472,6 +502,28 @@ mod tests {
     }
 
     #[test]
+    fn attack_rate_multiplies_item_by_item() {
+        let quick = Worn { attack_rate: 1.1, ..Worn::default() };
+        let duellist = Worn { attack_rate: 1.05, ..Worn::default() };
+        let loadout = Loadout::new("Human", 0.0).wearing("Quick Sword", quick).wearing("Gloves of the Duellist", duellist);
+        assert_eq!(loadout.attack_rate().line(), "Attack rate 1.155 = usual speed (1) × Quick Sword (1.1) × Gloves of the Duellist (1.05)");
+        assert!((loadout.gear().attack_rate - 1.155).abs() < 1e-12);
+    }
+
+    #[test]
+    fn stamina_refill_and_cost_multiply_item_by_item() {
+        let tireless = Worn { stamina_refill: 1.2, ..Worn::default() };
+        let wind = Worn { stamina_refill: 1.3, ..Worn::default() };
+        let light = Worn { stamina_cost: 0.75, ..Worn::default() };
+        let endurance = Worn { stamina_cost: 0.8, ..Worn::default() };
+        let loadout = Loadout::new("Human", 0.0).wearing("Tireless Vest", tireless).wearing("Amulet of Second Wind", wind).wearing("Light-handed Sword", light).wearing("Belt of Endurance", endurance);
+        assert_eq!(loadout.stamina_refill().line(), "Stamina refill 1.56 = usual rate (1) × Tireless Vest (1.2) × Amulet of Second Wind (1.3)");
+        assert_eq!(loadout.stamina_cost().line(), "Stamina cost 0.6 = usual cost (1) × Light-handed Sword (0.75) × Belt of Endurance (0.8)");
+        let gear = loadout.gear();
+        assert!((gear.stamina_refill - 1.56).abs() < 1e-12 && (gear.stamina_cost - 0.6).abs() < 1e-12);
+    }
+
+    #[test]
     fn a_goblin_in_the_mole_sees_the_best_not_the_sum() {
         let e = Loadout::new("Goblin", 60.0).wearing("Belt of the Mole", mole()).darkvision();
         assert_eq!(e.value(), 60.0);
@@ -530,6 +582,9 @@ mod tests {
             assert_eq!(loadout.luck().value(), gear.luck);
             assert_eq!(loadout.to_hit().value(), gear.to_hit);
             assert_eq!(loadout.ranged_to_hit().value(), gear.ranged_to_hit);
+            assert!((loadout.attack_rate().value() - gear.attack_rate).abs() < 1e-12);
+            assert!((loadout.stamina_refill().value() - gear.stamina_refill).abs() < 1e-12);
+            assert!((loadout.stamina_cost().value() - gear.stamina_cost).abs() < 1e-12);
             assert_eq!(loadout.ability("STR").value(), gear.abilities.strength as f64);
             let mut needs = Needs::default();
             gear.apply_to(&mut needs);

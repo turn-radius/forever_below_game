@@ -204,6 +204,9 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     differ(new.sleepiness_rate, old.sleepiness_rate, "sleepiness", "\u{d7}", false);
     differ(new.disease_risk, old.disease_risk, "disease risk", "\u{d7}", false);
     differ(new.speed * 100.0, old.speed * 100.0, "speed", "%", true);
+    differ(new.attack_rate * 100.0, old.attack_rate * 100.0, "attack speed", "%", true);
+    differ(new.stamina_refill * 100.0, old.stamina_refill * 100.0, "stamina refill", "%", true);
+    differ(new.stamina_cost * 100.0, old.stamina_cost * 100.0, "stamina cost", "%", false);
     differ(new.block_chance * 100.0, old.block_chance * 100.0, "chance to block", "%", true);
     differ(new.luck, old.luck, "luck", "", true);
     differ(new.break_chance * 100.0, old.break_chance * 100.0, "chance to break", "%", false);
@@ -330,6 +333,15 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
     }
     if s.speed != plain.speed {
         lines.push(format!("{:+}% speed", ((s.speed - 1.0) * 100.0).round()));
+    }
+    if s.attack_rate != plain.attack_rate {
+        lines.push(format!("{:+}% attack speed", ((s.attack_rate - 1.0) * 100.0).round()));
+    }
+    if s.stamina_refill != plain.stamina_refill {
+        lines.push(format!("{:+}% stamina refill", ((s.stamina_refill - 1.0) * 100.0).round()));
+    }
+    if s.stamina_cost != plain.stamina_cost {
+        lines.push(format!("{:+}% stamina cost", ((s.stamina_cost - 1.0) * 100.0).round()));
     }
     if s.block_chance > 0.0 {
         lines.push(format!("{}% chance to block a blow", number((s.block_chance * 100.0).round())));
