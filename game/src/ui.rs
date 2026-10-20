@@ -138,6 +138,22 @@ pub fn fit_interface(
     }
 }
 
+/// Logical pixels in a HUD unit at full size: a hundredth of the reference view's height.
+pub const HUD_UNIT_PX: f32 = crate::tuning::InterfaceTuning::REFERENCE_HEIGHT / 100.0;
+
+/// `n` HUD units, the HUD's length: hundredths of the 1080-line reference view's height, 10.8
+/// logical pixels each at full size and sized with the window by the shared interface scale
+/// ([`InterfaceScalePlugin`]), so the HUD keeps in step with its borders, text and every other
+/// screen. In a 16:9 window it is what `vmin` was.
+pub fn hud(n: f32) -> Val {
+    px(n * HUD_UNIT_PX)
+}
+
+/// A font `n` HUD units high ([`hud`]).
+pub fn hud_font(n: f32) -> bevy::text::FontSize {
+    bevy::text::FontSize::Px(n * HUD_UNIT_PX)
+}
+
 /// A node's rectangle in logical pixels.
 pub fn node_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Rect {
     Rect::from_center_size(transform.translation * node.inverse_scale_factor, node.size * node.inverse_scale_factor)
@@ -261,6 +277,12 @@ mod tests {
         // Drawn at two thirds, the interface's pixel under the mouse is half as far again.
         let cursor = ui_cursor(&window, Some(&UiScale(2.0 / 3.0))).unwrap();
         assert!((cursor - Vec2::new(960.0, 450.0)).length() < 1e-3, "{cursor}");
+    }
+
+    #[test]
+    fn a_hud_unit_is_what_vmin_was_at_full_size() {
+        assert_eq!(hud(4.0), px(43.2));
+        assert_eq!(hud_font(2.0), bevy::text::FontSize::Px(21.6));
     }
 
     /// A camera drawing a view `width` by `height` logical pixels.

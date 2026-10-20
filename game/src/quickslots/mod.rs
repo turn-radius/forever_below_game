@@ -27,7 +27,7 @@ use crate::inventory::{Dragging, FloorChange, FloorChanges, Hovered, Icons, Inve
 use crate::keymap::{Action, ActionInput};
 use crate::launch::AppState;
 use crate::play::{DelveSystems, inventory_open, level_has_focus};
-use crate::ui::{BAD, BRIGHT, CELL, LINE, OK, UiFonts};
+use crate::ui::{BAD, BRIGHT, CELL, LINE, OK, UiFonts, hud, hud_font};
 
 /// How many slots there are, as keys 1 to 0.
 pub const SLOTS: usize = 10;
@@ -369,15 +369,15 @@ fn spawn_bar(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>,
     let layout = cluster_layout();
     for cluster in &clusters {
         commands.entity(cluster).with_children(|cluster| {
-            let style = SlotStyle { size: vmin(layout.slot), gap: vmin(layout.gap), number: FontSize::VMin(layout.slot * 0.3) };
-            let row = Node { position_type: PositionType::Absolute, left: vmin(layout.bar.min.x), top: vmin(layout.bar.min.y), flex_direction: FlexDirection::Row, column_gap: style.gap, ..default() };
+            let style = SlotStyle { size: hud(layout.slot), gap: hud(layout.gap), number: hud_font(layout.slot * 0.3) };
+            let row = Node { position_type: PositionType::Absolute, left: hud(layout.bar.min.x), top: hud(layout.bar.min.y), flex_direction: FlexDirection::Row, column_gap: style.gap, ..default() };
             spawn_slots(cluster, &fonts, style, false, row);
             // The arrows or bolts left, over the bar's left end.
             cluster.spawn((
                 crate::combat::shoot::AmmunitionCount,
                 Text::new(""),
                 UiFonts::style(&fonts.body, 16.0, BRIGHT),
-                Node { position_type: PositionType::Absolute, left: vmin(layout.bar.min.x), top: vmin(layout.bar.min.y - layout.slot * 0.45), ..default() },
+                Node { position_type: PositionType::Absolute, left: hud(layout.bar.min.x), top: hud(layout.bar.min.y - layout.slot * 0.45), ..default() },
                 Pickable::IGNORE,
             ));
         });
@@ -870,10 +870,10 @@ mod tests {
         let row = layout.bar.width();
         let slots = SLOTS as f32;
         assert!((row - (slots * layout.slot + (slots - 1.0) * layout.gap)).abs() < 1e-4);
-        // In a square window, the narrowest there is: everything inside the view's 100 vmin, and
-        // the slots still big enough to read at 800 x 600 (6 px a vmin).
+        // Everything inside 100 units, the height of any window 540 lines or more, and the slots
+        // still big enough to read at the half-size floor (5.4 px a unit).
         assert!(MARGIN + layout.size.x <= 100.0, "{}", MARGIN + layout.size.x);
-        assert!(layout.slot * 6.0 >= 20.0);
+        assert!(layout.slot * 5.4 >= 20.0);
         let double = orb_cluster_layout(28.0);
         assert!((double.slot - layout.slot * 2.0).abs() < 1e-4, "the bar scales with the cluster");
     }
