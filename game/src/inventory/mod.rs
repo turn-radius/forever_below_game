@@ -43,6 +43,7 @@ pub mod underfoot;
 use bevy::{
     app::HierarchyPropagatePlugin,
     camera::visibility::RenderLayers,
+    input::mouse::{AccumulatedMouseScroll, MouseScrollUnit},
     light::NotShadowCaster,
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
@@ -76,6 +77,13 @@ const GRID_RADIUS_PX: f32 = 12.0;
 /// How far the mouse moves with the button down before a press becomes a drag, in logical
 /// pixels (the plate's 6).
 const DRAG_START_PX: f32 = 6.0;
+/// How far one wheel line scrolls the left column, in logical pixels.
+const SCROLL_LINE_PX: f32 = 36.0;
+/// How near the top or bottom of the left column a held item starts to scroll it, in logical
+/// pixels.
+const EDGE_SCROLL_PX: f32 = 64.0;
+/// How fast a held item at the very edge scrolls the column, in logical pixels a second.
+const EDGE_SCROLL_SPEED: f32 = 700.0;
 /// How long a refusal stays on the screen, in seconds (the plate's `toast`, 3.6 s).
 const TOAST_SECONDS: f32 = 3.6;
 /// What the help line under the grids says (the plate's `.hint`).
@@ -122,6 +130,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<crate::fitting::FitCache>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
+            .init_resource::<ColumnScroll>()
             .add_systems(OnExit(AppState::Delving), leave_the_delve)
             .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD")), give_ammunition.run_if(|| debug_kit_wanted() || env_flag("FB_HOLD")), give_for_capture).chain())
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
@@ -136,6 +145,7 @@ impl Plugin for InventoryPlugin {
                         close_container_with_screen,
                         scale_screen,
                         build_screen,
+                        scroll_column,
                         drag_items,
                         unhang_without_belt,
                         crate::character::wear_abilities,
@@ -440,6 +450,15 @@ pub struct InventoryScreen;
 /// The ledger page. Beyond it lies the level.
 #[derive(Component, Debug)]
 pub struct Ledger;
+
+/// The left column of grids under the header: it scrolls when it holds more than fits.
+#[derive(Component, Debug)]
+pub struct ScrollColumn;
+
+/// How far the left column is scrolled, in logical pixels. The screen is rebuilt whenever the
+/// inventory changes, so this is what keeps the column where it was.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct ColumnScroll(pub f32);
 
 /// A grid on the screen, and whose it is.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -804,7 +823,7 @@ pub(crate) fn build_screen(
     fonts: Res<UiFonts>,
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
-    tuning: Res<Tuning>,
+    (tuning, scrolled): (Res<Tuning>, Res<ColumnScroll>),
     rules: Option<Res<crate::rules::GameRules>>,
     keymap: Option<Res<Keymap>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
@@ -873,7 +892,14 @@ pub(crate) fn build_screen(
                             sheet::sheet(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, &needs, exhaustion, vitals);
                             return;
                         }
-                        leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
+                        // Scrolls when the grids are taller than the screen; the header stays.
+                        leaf.spawn((
+                            ScrollColumn,
+                            ScrollPosition(Vec2::new(0.0, scrolled.0)),
+                            Node { flex_direction: FlexDirection::Column, row_gap: px(16), min_height: px(0), overflow: Overflow::scroll_y(), ..default() },
+                        ))
+                        .with_children(|leaf| {
+                        leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
                             .with_children(|row| {
                                 let carried = screen.inventory.carried_containers();
                                 if carried.is_empty() {
@@ -886,7 +912,7 @@ pub(crate) fn build_screen(
                                     screen.container(row, &mut icons, container, GridView::Container(container), "");
                                 }
                             });
-                        leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, ..default() })
+                        leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
                             .with_children(|row| {
                                 if let Some(container) = showing.0 {
                                     screen.container(row, &mut icons, container, GridView::Container(container), "");
@@ -896,6 +922,7 @@ pub(crate) fn build_screen(
                                     screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
                                 }
                             });
+                        });
                     });
                 // The doll, with the quickslots and the help under it, leaving the left leaf's
                 // height to the grids.
@@ -1062,6 +1089,7 @@ fn target_under(
     slots: &Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
     doll: Option<Rect>,
     ledger: Option<Rect>,
+    column: Option<Rect>,
     cell: f32,
 ) -> Target {
     if let Some((slot, ..)) = drops.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
@@ -1070,9 +1098,11 @@ fn target_under(
     if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
         return Target::Slot(slot.0);
     }
+    // The grids' rectangles follow the scroll (`UiGlobalTransform` includes it), but a grid
+    // scrolled out of the column is clipped, so only the visible part of the column counts.
     for (view, node, transform) in grids {
         let rect = node_rect(node, transform);
-        if rect.contains(point) {
+        if rect.contains(point) && column.is_none_or(|c| c.contains(point)) {
             return Target::Cell { view: *view, cell: cell_under(rect, point, cell) };
         }
     }
@@ -1083,6 +1113,57 @@ fn target_under(
         Some(page) if !page.contains(point) => Target::Level,
         _ => Target::Page,
     }
+}
+
+/// Scrolls the left column with the wheel over it, and while an item is held near its top or
+/// bottom edge, so one can be carried to a bag out of sight.
+#[allow(clippy::too_many_arguments)]
+fn scroll_column(
+    open: Res<ScreenOpen>,
+    scroll: Res<AccumulatedMouseScroll>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
+    time: Res<Time<Real>>,
+    dragging: Res<Dragging>,
+    mut remembered: ResMut<ColumnScroll>,
+    mut columns: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<ScrollColumn>>,
+) {
+    if !open.is(Screen::Inventory) {
+        remembered.set_if_neq(ColumnScroll(0.0));
+        return;
+    }
+    let Ok((mut position, node, transform)) = columns.single_mut() else { return };
+    // Not laid out yet: leave the remembered place alone.
+    if node.size().y <= 0.0 {
+        return;
+    }
+    let max = ((node.content_size() - node.size()) * node.inverse_scale_factor).y.max(0.0);
+    let rect = node_rect(node, transform);
+    let point = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
+    let mut by = 0.0;
+    if let Some(point) = point
+        && point.x >= rect.min.x
+        && point.x <= rect.max.x
+    {
+        let lines = match scroll.unit {
+            MouseScrollUnit::Line => scroll.delta.y,
+            MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
+        };
+        if lines != 0.0 && rect.contains(point) {
+            by -= lines * SCROLL_LINE_PX;
+        }
+        if dragging.0.is_some_and(|d| d.active) {
+            // Deeper into the edge zone, or past the edge, scrolls faster.
+            let top = (EDGE_SCROLL_PX - (point.y - rect.min.y)) / EDGE_SCROLL_PX;
+            let bottom = (EDGE_SCROLL_PX - (rect.max.y - point.y)) / EDGE_SCROLL_PX;
+            by += (bottom.clamp(0.0, 1.0) - top.clamp(0.0, 1.0)) * EDGE_SCROLL_SPEED * time.delta_secs();
+        }
+    }
+    let to = (position.y + by).clamp(0.0, max);
+    if to != position.y {
+        position.y = to;
+    }
+    remembered.set_if_neq(ColumnScroll(to));
 }
 
 /// The grid a view shows.
@@ -1110,7 +1191,7 @@ fn drag_items(
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
     (time, tuning, ui_scale): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>),
-    (drops, mut quickslots): (Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>, ResMut<Quickslots>),
+    (drops, mut quickslots, columns): (Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>, ResMut<Quickslots>, Query<(&ComputedNode, &UiGlobalTransform), With<ScrollColumn>>),
     mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
     let cell_px = tuning.interface.cell_size;
@@ -1122,7 +1203,8 @@ fn drag_items(
     let Some(point) = cursor else { return };
     let ledger = ledgers.iter().next().map(|(n, t)| node_rect(n, t));
     let doll = dolls.iter().next().map(|(n, t)| node_rect(n, t));
-    let target = target_under(point, &drops, &grids, &slots, doll, ledger, cell_px);
+    let column = columns.iter().next().map(|(n, t)| node_rect(n, t));
+    let target = target_under(point, &drops, &grids, &slots, doll, ledger, column, cell_px);
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
@@ -1487,6 +1569,7 @@ mod tests {
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
+            .init_resource::<ColumnScroll>()
             .add_systems(PreUpdate, crate::keymap::track_context)
             .add_systems(Update, (switch_screens, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
@@ -2220,5 +2303,115 @@ mod tests {
         assert_eq!(app.world().resource::<OpenContainer>().0, None);
         press(&mut app, KeyCode::KeyI);
         assert!(!grids(&mut app).contains(&GridView::Container(chest)));
+    }
+
+    /// An app that runs only the column's scrolling, over a column of `content` pixels in a
+    /// 400 by 300 box centred at (200, 150), with the mouse at `at`.
+    fn scroll_app(content: f32, at: Vec2) -> (App, Entity) {
+        let mut app = App::new();
+        app.init_resource::<ScreenOpen>()
+            .init_resource::<AccumulatedMouseScroll>()
+            .init_resource::<Time<Real>>()
+            .init_resource::<Dragging>()
+            .init_resource::<ColumnScroll>()
+            .add_systems(Update, scroll_column);
+        let mut window = Window::default();
+        window.set_cursor_position(Some(at));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        let column = app
+            .world_mut()
+            .spawn((
+                ScrollColumn,
+                ScrollPosition::default(),
+                ComputedNode { size: Vec2::new(400.0, 300.0), content_size: Vec2::new(400.0, content), inverse_scale_factor: 1.0, ..default() },
+                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(200.0, 150.0))),
+            ))
+            .id();
+        (app, column)
+    }
+
+    fn wheel(app: &mut App, lines: f32) {
+        app.world_mut().resource_mut::<AccumulatedMouseScroll>().delta = Vec2::new(0.0, lines);
+        app.update();
+        app.world_mut().resource_mut::<AccumulatedMouseScroll>().delta = Vec2::ZERO;
+    }
+
+    fn offset(app: &App, column: Entity) -> f32 {
+        app.world().get::<ScrollPosition>(column).unwrap().y
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_tall_column_to_its_end_and_no_further() {
+        let (mut app, column) = scroll_app(900.0, Vec2::new(200.0, 150.0));
+        wheel(&mut app, -1.0);
+        assert_eq!(offset(&app, column), SCROLL_LINE_PX);
+        wheel(&mut app, -100.0);
+        assert_eq!(offset(&app, column), 600.0, "900 of content in 300");
+        assert_eq!(app.world().resource::<ColumnScroll>().0, 600.0, "remembered for the next rebuild");
+        wheel(&mut app, 100.0);
+        assert_eq!(offset(&app, column), 0.0);
+    }
+
+    #[test]
+    fn a_column_that_fits_does_not_scroll() {
+        let (mut app, column) = scroll_app(280.0, Vec2::new(200.0, 150.0));
+        wheel(&mut app, -5.0);
+        assert_eq!(offset(&app, column), 0.0);
+    }
+
+    #[test]
+    fn the_wheel_off_the_column_does_nothing() {
+        let (mut app, column) = scroll_app(900.0, Vec2::new(500.0, 150.0));
+        wheel(&mut app, -3.0);
+        assert_eq!(offset(&app, column), 0.0);
+    }
+
+    #[test]
+    fn a_held_item_near_the_bottom_edge_scrolls_down_and_near_the_top_back_up() {
+        let (mut app, column) = scroll_app(900.0, Vec2::new(200.0, 295.0));
+        let held = Drag { id: ItemId(1), grab: IVec2::ZERO, size: Footprint { cols: 1, rows: 1 }, turned: false, press: Vec2::ZERO, active: true, target: None };
+        app.world_mut().resource_mut::<Dragging>().0 = Some(held);
+        let frame = |app: &mut App| {
+            app.world_mut().resource_mut::<Time<Real>>().advance_by(std::time::Duration::from_millis(100));
+            app.update();
+        };
+        frame(&mut app);
+        assert!(offset(&app, column) > 40.0, "{}", offset(&app, column));
+        for _ in 0..40 {
+            frame(&mut app);
+        }
+        assert_eq!(offset(&app, column), 600.0);
+        let mut windows = app.world_mut().query::<&mut Window>();
+        windows.single_mut(app.world_mut()).unwrap().set_cursor_position(Some(Vec2::new(200.0, 5.0)));
+        frame(&mut app);
+        assert!(offset(&app, column) < 600.0);
+        // Carrying nothing, the edge does nothing.
+        app.world_mut().resource_mut::<Dragging>().0 = None;
+        let before = offset(&app, column);
+        frame(&mut app);
+        assert_eq!(offset(&app, column), before);
+    }
+
+    #[test]
+    fn a_grid_scrolled_out_of_the_column_is_not_a_drop_target() {
+        let mut world = World::new();
+        world.spawn((
+            GridView::Underfoot,
+            ComputedNode { size: Vec2::new(100.0, 100.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(50.0, 50.0))),
+        ));
+        let mut state = bevy::ecs::system::SystemState::<(
+            Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+        )>::new(&mut world);
+        let (drops, grids, slots) = state.get(&world).unwrap();
+        let page = Some(Rect::new(0.0, 0.0, 400.0, 400.0));
+        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, None, page, column, 72.0);
+        assert!(matches!(at(None), Target::Cell { .. }));
+        assert!(matches!(at(Some(Rect::new(0.0, 0.0, 200.0, 200.0))), Target::Cell { cell, .. } if cell == IVec2::ZERO));
+        // The column starts below this point: the grid is under the header, clipped away.
+        assert_eq!(at(Some(Rect::new(0.0, 80.0, 200.0, 200.0))), Target::Page);
     }
 }
