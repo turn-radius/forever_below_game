@@ -289,6 +289,11 @@ impl Strikeable<'_, '_> {
         creatures.chain(folk).collect()
     }
 
+    /// The kind of creature `target` is, if it is one (folk are none).
+    pub fn foe(&self, target: Entity) -> Option<fb_items::Foe> {
+        self.creatures.get(target).ok().map(|(_, critter, ..)| critter.spot.species.foe())
+    }
+
     /// The bodies of trolls that lie down and may yet rise, which a flame can still reach: fire
     /// stops their regeneration ([`crate::creatures::trolls`]). No other blow finds them.
     pub fn fallen_trolls(&self) -> Vec<Target> {
@@ -414,7 +419,8 @@ fn land_blows(
                 let attack = attack_roll(rules, &swing.weapon, character.strength(), ac.0, odds, &mut dice.0);
                 info!("swing: {}", attack.line());
                 if attack.hit {
-                    let damage = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
+                    let rolled = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
+                    let damage = rolled + super::bane_damage(&swing.weapon.bane, strikeable.foe(target), &mut dice.0);
                     struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20 });
                     if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
                         burned.write(Burned { target });

@@ -135,6 +135,8 @@ pub struct Shot {
     pub to_hit: i32,
     pub dice: Option<(u32, u32)>,
     pub bonus: i32,
+    /// The bow's extra dice against each kind of creature.
+    pub bane: super::Banes,
     /// The draw, 0 to 1 (1 for a crossbow).
     pub draw: f32,
     /// Odds the shooter brings of their own (poisoned).
@@ -413,6 +415,7 @@ pub fn shoot(
         to_hit: shot_to_hit(&character, &inventory, &stats),
         dice: stats.damage.map(|d| (d.count as u32, d.sides as u32)),
         bonus: stats.damage_bonus.round() as i32,
+        bane: stats.bane,
         draw,
         odds: DelverEffects::attack_odds(effects, crate::rules::GameRules::of(&rules)),
     };
@@ -570,7 +573,8 @@ pub fn fly_projectiles(
                         info!("shot: {} ({})", attack.line(), flown.round());
                         if attack.hit {
                             let full = rules::weapon_damage(shot.shot.dice, shot.shot.bonus, "DEX", shot.shot.dexterity, &mut dice.0).value() as f32;
-                            let damage = ((full * draw_damage_share(shot.shot.draw)).round() as u32).max(1);
+                            let drawn = ((full * draw_damage_share(shot.shot.draw)).round() as u32).max(1);
+                            let damage = drawn + super::bane_damage(&shot.shot.bane, strikeable.foe(target), &mut dice.0);
                             struck.write(Struck { target, damage, from: shot.origin.xz(), bludgeoning: false, critical: attack.natural == 20 });
                             let broken = rules::ammunition_breaks(&attack);
                             if let Ok(body) = globals.get(target) {

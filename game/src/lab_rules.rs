@@ -37,7 +37,7 @@ pub fn strength_of(m: &Modifier) -> Option<f32> {
     match *m {
         Modifier::Add { by, .. } | Modifier::Scale { by, .. } | Modifier::DamageOrArmour { by } | Modifier::Ward { by, .. } => Some(by),
         Modifier::Shun { chance, .. } => Some(chance),
-        Modifier::Condition { .. } => None,
+        Modifier::Condition { .. } | Modifier::Bane { .. } => None,
     }
 }
 

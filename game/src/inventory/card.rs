@@ -224,6 +224,8 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
         let (i, kind) = (foe.index(), foe.label().to_lowercase());
         differ(new.ward[i] * 100.0, old.ward[i] * 100.0, &format!("less damage from {kind}"), "%", true);
         differ(new.shun[i] * 100.0, old.shun[i] * 100.0, &format!("chance {kind} pay no heed"), "%", true);
+        let mean = |s: &Stats| s.bane[i].map_or(0.0, |d| d.mean());
+        differ(mean(new), mean(old), &format!("damage against {}", bane_kind(foe)), "", true);
     }
     differ(new.weight, old.weight, "weight", " lb", false);
     lines
@@ -284,6 +286,16 @@ pub fn ward_text(foe: fb_items::Foe, fraction: f32) -> String {
     format!("{} deal {}% less", foe.label(), number((fraction * 100.0).round()))
 }
 
+/// The kind a bane names: "the undead", "vermin", "spiders".
+fn bane_kind(foe: fb_items::Foe) -> String {
+    if foe == fb_items::Foe::Undead { "the undead".to_string() } else { foe.label().to_lowercase() }
+}
+
+/// "+1d6 against the undead": a weapon's extra `dice` against `foe`.
+pub fn bane_text(foe: fb_items::Foe, dice: fb_items::dice::Dice) -> String {
+    format!("+{dice} against {}", bane_kind(foe))
+}
+
 /// "Vermin often pay no heed (50%)": a shun of `chance` for `foe`.
 pub fn shun_text(foe: fb_items::Foe, chance: f32) -> String {
     format!("{} often pay no heed ({}%)", foe.label(), number((chance * 100.0).round()))
@@ -308,6 +320,9 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
         }
         if s.shun[foe.index()] > 0.0 {
             lines.push(shun_text(foe, s.shun[foe.index()]));
+        }
+        if let Some(dice) = s.bane[foe.index()] {
+            lines.push(bane_text(foe, dice));
         }
     }
     if s.carry != 0.0 {
@@ -819,6 +834,12 @@ mod tests {
     #[test]
     fn stats_list_only_what_differs() {
         assert!(stat_lines(&Stats::default()).is_empty());
+        let mut banes = Stats::default();
+        banes.bane[fb_items::Foe::Undead.index()] = Some(fb_items::dice::Dice::new(1, 6));
+        banes.bane[fb_items::Foe::Beast.index()] = Some(fb_items::dice::Dice::new(1, 4));
+        assert_eq!(stat_lines(&banes), vec!["+1d6 against the undead", "+1d4 against beasts"]);
+        let lines = changes(&banes, Some(&Stats::default()));
+        assert!(lines.iter().any(|c| c.text.contains("damage against the undead") && c.better));
         let s = Stats { stealth: -2.0, hunger_rate: 0.85, darkvision: 10.0, ..Stats::default() };
         assert_eq!(stat_lines(&s), vec!["\u{2212}2 stealth", "darkvision 10 ft", "hunger \u{d7}0.85"]);
         assert_eq!(number(3.0), "3");

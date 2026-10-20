@@ -223,7 +223,7 @@ mod tests {
     use super::*;
     use crate::game_rng;
 
-    const SWORD: &[Tag] = &[Tag::Weapon, Tag::Metal];
+    const SWORD: &[Tag] = &[Tag::Weapon, Tag::Metal, Tag::Blade];
     const TUNIC: &[Tag] = &[Tag::Cloth, Tag::Wear];
     const PACK: &[Tag] = &[Tag::Container, Tag::Wear, Tag::Leather];
 
@@ -279,6 +279,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn banes_roll_only_on_what_they_suit() {
+        const MACE: &[Tag] = &[Tag::Weapon, Tag::Metal, Tag::Blunt];
+        const BOW: &[Tag] = &[Tag::Weapon, Tag::Wood, Tag::Ranged];
+        let named = |tags: &[Tag], rarity| {
+            let mut names = std::collections::HashSet::new();
+            for seed in 0..5_000 {
+                let mut rng = game_rng(seed);
+                for kind in [AffixKind::Prefix, AffixKind::Suffix] {
+                    let item = Rolling { tags, slot: Some(Slot::Mainhand), rarity };
+                    names.extend(pick_affix(&mut rng, item, kind, true, &[]).map(|a| a.name.as_str()));
+                }
+            }
+            names
+        };
+        let sword = named(SWORD, Rarity::Legendary);
+        assert!(!sword.contains("of the Bonebreaker") && !sword.contains("Bone-crushing"), "no sword breaks bones");
+        assert!(sword.contains("Hunter's") && sword.contains("Ratbane") && sword.contains("of the Spider-slayer"));
+        let mace = named(MACE, Rarity::Legendary);
+        assert!(mace.contains("of the Bonebreaker") && mace.contains("Bone-crushing") && mace.contains("Ratbane"));
+        assert!(!mace.contains("Hunter's"), "a mace is no hunter's weapon");
+        assert!(named(BOW, Rarity::Legendary).contains("Hunter's"));
+        // Banes of a rarer tier stay off lesser items.
+        let magic = named(MACE, Rarity::Magic);
+        assert!(magic.contains("Ratbane") && !magic.contains("of the Bonebreaker") && !magic.contains("Bone-crushing"));
     }
 
     #[test]

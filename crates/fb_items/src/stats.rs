@@ -90,6 +90,9 @@ pub struct Stats {
     /// The chance a creature of each kind never notices the wearer, by [`Foe`] index.
     #[serde(default)]
     pub shun: [f32; Foe::COUNT],
+    /// The extra damage dice a weapon rolls against each kind of creature, by [`Foe`] index.
+    #[serde(default)]
+    pub bane: [Option<Dice>; Foe::COUNT],
     /// How fast the wearer swings, draws and reloads, as a multiple of normal: the weapon in
     /// hand's and the gloves' (`fb_character::Gear::attack_rate`).
     #[serde(default = "one")]
@@ -141,6 +144,7 @@ impl Default for Stats {
             poison_resistance: 0.0,
             ward: [0.0; Foe::COUNT],
             shun: [0.0; Foe::COUNT],
+            bane: [None; Foe::COUNT],
             attack_rate: 1.0,
             stamina_refill: 1.0,
             stamina_cost: 1.0,
@@ -343,6 +347,7 @@ mod tests {
         let mut json = serde_json::to_value(Stats::default()).unwrap();
         json.as_object_mut().unwrap().remove("ward");
         json.as_object_mut().unwrap().remove("shun");
+        json.as_object_mut().unwrap().remove("bane");
         let loaded: Stats = serde_json::from_value(json).unwrap();
         assert_eq!(loaded, Stats::default());
     }

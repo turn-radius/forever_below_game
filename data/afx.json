@@ -1596,5 +1596,98 @@
    "neck",
    "charm"
   ]
+ },
+ {
+  "n": "of the Bonebreaker",
+  "k": "suf",
+  "g": 1,
+  "on": "blunt",
+  "fx": [
+   {
+    "bane": {
+     "foe": "undead",
+     "dice": "1d6"
+    }
+   }
+  ],
+  "t": "+1d6 against the undead",
+  "grp": "bane_undead",
+  "r": "legendary"
+ },
+ {
+  "n": "Bone-crushing",
+  "k": "pre",
+  "g": 1,
+  "on": "blunt",
+  "fx": [
+   {
+    "bane": {
+     "foe": "undead",
+     "dice": "1d4"
+    }
+   }
+  ],
+  "t": "+1d4 against the undead",
+  "grp": "bane_undead",
+  "r": "rare"
+ },
+ {
+  "n": "Ratbane",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "bane": {
+     "foe": "vermin",
+     "dice": "1d4"
+    }
+   }
+  ],
+  "t": "+1d4 against vermin",
+  "grp": "bane_vermin"
+ },
+ {
+  "n": "of the Spider-slayer",
+  "k": "suf",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "bane": {
+     "foe": "spider",
+     "dice": "1d6"
+    }
+   }
+  ],
+  "t": "+1d6 against spiders",
+  "grp": "bane_spider",
+  "r": "rare"
+ },
+ {
+  "n": "Hunter's",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "not": [
+   "blunt"
+  ],
+  "fx": [
+   {
+    "bane": {
+     "foe": "beast",
+     "dice": "1d4"
+    }
+   },
+   {
+    "bane": {
+     "foe": "serpent",
+     "dice": "1d4"
+    }
+   }
+  ],
+  "t": "+1d4 against beasts and serpents",
+  "grp": "bane_beast",
+  "r": "rare"
  }
 ]

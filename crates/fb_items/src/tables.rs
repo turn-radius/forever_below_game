@@ -318,7 +318,7 @@ mod tests {
     fn every_table_parses_with_its_entries() {
         assert_eq!(bases().len(), 13);
         assert_eq!(goods().len(), 16);
-        assert_eq!(affixes().len(), 78);
+        assert_eq!(affixes().len(), 83);
         assert_eq!(slot_places().len(), 17);
         let head = &slot_places()[0];
         assert_eq!((head.slot, head.label.as_str(), head.size, head.side, head.x_percent, head.y_percent), (Slot::Head, "Head", SlotSize::Big, SlotSide::Left, 4.0, 5.0));
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(club.slot, Slot::Mainhand);
         assert_eq!(club.damage, Some(Dice::new(1, 4)));
         assert_eq!(club.footprint, Footprint { cols: 1, rows: 3 });
-        assert_eq!(club.tags, [Tag::Weapon, Tag::Wood]);
+        assert_eq!(club.tags, [Tag::Weapon, Tag::Wood, Tag::Blunt]);
         let belt = &bases()["Belt"];
         assert_eq!(belt.holds.as_ref().map(|g| (g.cols, g.rows)), Some((4, 2)));
         assert_eq!(bases()["Lantern"].light, 30.0);
@@ -388,7 +388,7 @@ mod tests {
             Modifier::DamageOrArmour { .. } => (vec![Stat::DamageBonus, Stat::Armour], vec![]),
             Modifier::Condition { slider, .. } => (vec![], vec![slider]),
             // Per-kind arrays, no `Stat`: the tests compare those arrays themselves.
-            Modifier::Ward { .. } | Modifier::Shun { .. } => (vec![], vec![]),
+            Modifier::Ward { .. } | Modifier::Shun { .. } | Modifier::Bane { .. } => (vec![], vec![]),
         }
     }
 
@@ -414,8 +414,8 @@ mod tests {
                     assert!(cs.iter().all(|s| stats.contains(s)), "{}: {m:?} changed {cs:?}", a.name);
                     assert!(cc.iter().all(|c| sliders.contains(c)), "{}: {m:?} changed {cc:?}", a.name);
                     assert_eq!(after.0.damage, before.0.damage);
-                    let per_foe = after.0.ward != before.0.ward || after.0.shun != before.0.shun;
-                    assert_eq!(per_foe, matches!(m, Modifier::Ward { .. } | Modifier::Shun { .. }), "{}: {m:?}", a.name);
+                    let per_foe = after.0.ward != before.0.ward || after.0.shun != before.0.shun || after.0.bane != before.0.bane;
+                    assert_eq!(per_foe, matches!(m, Modifier::Ward { .. } | Modifier::Shun { .. } | Modifier::Bane { .. }), "{}: {m:?}", a.name);
                     changed_any |= !cs.is_empty() || !cc.is_empty() || per_foe;
                 }
                 assert!(changed_any, "{}: {m:?} changes nothing", a.name);
@@ -499,6 +499,33 @@ mod tests {
             a.apply(&mut s, &mut c);
             assert!((s.get(stat) - want).abs() < 1e-6, "{name}: {stat:?} is {}", s.get(stat));
         }
+    }
+
+    #[test]
+    fn banes_give_their_dice_against_their_kinds() {
+        use crate::dice::Dice;
+        use crate::foe::Foe;
+        let cases: &[(&str, &[(Foe, Dice)])] = &[
+            ("of the Bonebreaker", &[(Foe::Undead, Dice::new(1, 6))]),
+            ("Bone-crushing", &[(Foe::Undead, Dice::new(1, 4))]),
+            ("Ratbane", &[(Foe::Vermin, Dice::new(1, 4))]),
+            ("of the Spider-slayer", &[(Foe::Spider, Dice::new(1, 6))]),
+            ("Hunter's", &[(Foe::Beast, Dice::new(1, 4)), (Foe::Serpent, Dice::new(1, 4))]),
+        ];
+        for &(name, banes) in cases {
+            let a = affixes().iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name}"));
+            let (mut s, mut c) = baseline(true);
+            a.apply(&mut s, &mut c);
+            for foe in Foe::ALL {
+                assert_eq!(s.bane[foe.index()], banes.iter().find(|b| b.0 == foe).map(|b| b.1), "{name} against {foe:?}");
+            }
+        }
+        // The same kind twice keeps the greater.
+        let (mut s, mut c) = baseline(true);
+        for name in ["Bone-crushing", "of the Bonebreaker", "Bone-crushing"] {
+            affixes().iter().find(|a| a.name == name).unwrap().apply(&mut s, &mut c);
+        }
+        assert_eq!(s.bane[Foe::Undead.index()], Some(Dice::new(1, 6)));
     }
 
     #[test]

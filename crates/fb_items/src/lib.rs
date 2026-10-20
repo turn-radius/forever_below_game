@@ -59,7 +59,7 @@ pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, 
 /// (`docs/items.md`, "Rarity and affixes").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Tag { Cloth, Leather, Metal, Wood, Wear, Armor, Quiet, Weapon, Light, Trinket, Container, Food, Ammunition, Ranged }
+pub enum Tag { Cloth, Leather, Metal, Wood, Wear, Armor, Quiet, Weapon, Light, Trinket, Container, Food, Ammunition, Ranged, Blunt, Blade }
 
 /// The game layer's random stream for an item rolled from `seed`: rarity, affixes, names and
 /// history draw from it in that order. Kept apart from the Armory's own stream for the shape,
