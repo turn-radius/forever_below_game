@@ -17,6 +17,17 @@ use crate::Needs;
 /// still costs something.
 pub const MINUTES_PER_HIT_POINT: f64 = 10.0;
 
+/// How much faster each point of recovery from gear (of Mending, of the Troll) mends: a quarter,
+/// so +2 takes a hit point in 6.7 minutes instead of 10. Our own. The game's
+/// `recovery.faster_per_point` tuning, this as shipped.
+pub const FASTER_PER_POINT: f64 = 0.25;
+
+/// Game minutes per hit point at `base` for a character with `points` of recovery, each
+/// `faster_per_point` faster. Points below 0 never slow mending past the base.
+pub fn minutes_per_hit_point(base: f64, faster_per_point: f64, points: f64) -> f64 {
+    base / (1.0 + faster_per_point * points).max(1.0)
+}
+
 /// Whether hunger and thirst are both in their best band: Fed and Quenched.
 pub fn fed_and_watered(needs: &Needs) -> bool {
     needs.hunger.band() == 0 && needs.thirst.band() == 0
@@ -103,6 +114,17 @@ mod tests {
             let mut recovery = Recovery::default();
             assert_eq!(recovery.step(5.0, MINUTES_PER_HIT_POINT, recovers(&needs, false), 1, 8), 0);
         }
+    }
+
+    #[test]
+    fn each_point_of_recovery_mends_a_quarter_faster() {
+        assert_eq!(minutes_per_hit_point(MINUTES_PER_HIT_POINT, FASTER_PER_POINT, 0.0), 10.0);
+        assert_eq!(minutes_per_hit_point(MINUTES_PER_HIT_POINT, FASTER_PER_POINT, 1.0), 8.0);
+        let two = minutes_per_hit_point(MINUTES_PER_HIT_POINT, FASTER_PER_POINT, 2.0);
+        assert!((two - 6.667).abs() < 0.01, "{two}");
+        assert_eq!(minutes_per_hit_point(MINUTES_PER_HIT_POINT, FASTER_PER_POINT, -1.0), 10.0);
+        let mut recovery = Recovery::default();
+        assert_eq!(recovery.step(7.0 / 60.0, two, true, 6, 8), 1, "a point in seven minutes at +2");
     }
 
     #[test]

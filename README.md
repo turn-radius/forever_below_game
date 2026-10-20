@@ -315,6 +315,7 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[input]` | `hold_time` | 0.25 | Seconds a key or button is held before a Hold binding fires. A press let go sooner is a tap. |
 | `[clock]` | `game_seconds_per_second` | 12.0 | How many game seconds pass per real second. 12 means 1 game hour passes every 300 real seconds (5 minutes). |
 | `[recovery]` | `minutes_per_hit_point` | 10.0 | Game minutes a fed and watered, unpoisoned delver takes to regain one hit point (10 = one every 50 real seconds at the usual clock). Our own. |
+| `[recovery]` | `faster_per_point` | 0.25 | How much faster each point of recovery from gear (of Mending, of the Troll) mends, as a fraction of the base rate: +2 takes 6.7 minutes a hit point. Our own. |
 
 The shipped values are the defaults in `game/src/tuning.rs`; a test keeps the two, and this list, in step.
 

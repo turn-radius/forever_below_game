@@ -227,7 +227,7 @@ impl Default for LabState {
     /// hauberk, none of which rolled an affix, so the first view has something to read.
     fn default() -> Self {
         let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, shape: None, sex: None, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0, worn: fb_character::AbilityBonus::default() };
+        let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, shape: None, sex: None, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0, worn: fb_character::AbilityBonus::default(), learned: fb_character::AbilityBonus::default(), books_read: Vec::new() };
         let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), activity: Activity::Walking, attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1, swapped: false, ruleset: RuleSet::default(), depth: None, by_fire: false, apply_at: 0.5 };
         for (slot, base, seed) in [(Slot::Mainhand, "Sword", 4), (Slot::Head, "Helm", 9), (Slot::Body, "Mail", 9)] {
             state.equip(slot, base, seed);

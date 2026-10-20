@@ -157,12 +157,22 @@ pub fn bases_of(family: Family) -> impl Iterator<Item = &'static str> {
     ARMORY_BASES.iter().filter(move |(_, b)| b.accept.family() == family).map(|(n, _)| *n)
 }
 
-/// A base of `family` chosen uniformly from `seed`, for loot that names only a family (the
-/// level's item spots). Its own stream, so `roll_item(base, seed)` with the same seed is
+/// A base of `family` chosen from `seed` by [`find_weight`], for loot that names only a family
+/// (the level's item spots). Its own stream, so `roll_item(base, seed)` with the same seed is
 /// unaffected; the mixing constant is this port's own. `None` for a family no base uses.
 pub fn base_for(family: Family, seed: u32) -> Option<&'static str> {
-    let bases: Vec<&str> = bases_of(family).collect();
-    (!bases.is_empty()).then(|| *Mulberry32::new(seed ^ 0xBA5E_F00D).pick(&bases))
+    let bases: Vec<(&str, u32)> = bases_of(family).map(|b| (b, find_weight(b))).collect();
+    (!bases.is_empty()).then(|| *Mulberry32::new(seed ^ 0xBA5E_F00D).weighted(&bases))
+}
+
+/// How often base `name` is found among its family's bases, against 1 for most. A book teaches
+/// its reader for good ([`crate::Item::lesson`]), so it is found about once for every twenty
+/// scrolls and notes (our own). With every weight 1 the pick is the uniform one it always was.
+pub fn find_weight(name: &str) -> u32 {
+    match name {
+        "Scroll" | "Note" => 10,
+        _ => 1,
+    }
 }
 
 /// The shape of base `name` from `seed`: one of its accepted styles, rolled with the
@@ -371,6 +381,14 @@ mod tests {
         names.sort();
         names.dedup();
         names
+    }
+
+    #[test]
+    fn books_are_rare_among_writing_finds() {
+        let books = (0..1000u32).filter(|&s| base_for(Family::Writing, s) == Some("Book")).count();
+        assert!((1..100).contains(&books), "{books} books in 1000 writing finds");
+        let scrolls = (0..1000u32).filter(|&s| base_for(Family::Writing, s) == Some("Scroll")).count();
+        assert!(scrolls > 300, "{scrolls} scrolls");
     }
 
     #[test]

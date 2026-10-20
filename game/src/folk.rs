@@ -615,7 +615,7 @@ mod tests {
                 let person = Person::of(&FolkSpot { seed, ..spot }, 1);
                 let shoots = person.item(Slot::Mainhand).and_then(|w| w.profile.ranged).map(|r| r.ammunition);
                 match shoots {
-                    Some(ammunition) if person.item(Slot::Hip).is_some_and(|h| h.profile.holds.as_ref().is_some_and(|g| g.accepts.contains(&ammunition))) => {
+                    Some(ammunition) if person.item(Slot::Quiver).is_some_and(|h| h.profile.holds.as_ref().is_some_and(|g| g.accepts.contains(&ammunition))) => {
                         archers += 1;
                         assert_eq!(person.goods.len(), fb_items::outfit::AMMUNITION_CARRIED, "{}", person.name);
                         assert!(person.goods.iter().all(|i| i.shape.family() == ammunition), "{}", person.name);

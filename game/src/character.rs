@@ -116,13 +116,29 @@ pub struct Character {
     /// Rolled from the folk's syllables in `data/syl.json` (the plate's `genName`).
     pub name: String,
     pub class: Class,
-    /// The ability scores they were rolled with; [`Character::scores`] adds what they wear.
+    /// The ability scores they were rolled with; [`Character::scores`] adds what they have
+    /// learned and what they wear.
     pub attributes: Attributes,
     /// How dirty they are, 0 clean to 1 filthy (the plate's `C.dirt`).
     pub dirt: f32,
     /// What their worn items add to their ability scores, kept up from the inventory
     /// ([`wear_abilities`]).
     pub worn: AbilityBonus,
+    /// What the books they have read add to their ability scores, for good ([`Character::read`]).
+    pub learned: AbilityBonus,
+    /// The seeds of the books they have read: each teaches them once.
+    pub books_read: Vec<u32>,
+}
+
+/// What reading a book did ([`Character::read`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reading {
+    /// They learned from it: `stat` is now `score`.
+    Learned { stat: fb_items::stats::Stat, score: i32 },
+    /// They have read it before, and it has nothing more to teach them.
+    AlreadyRead,
+    /// It is not a book.
+    NothingToLearn,
 }
 
 impl Default for Character {
@@ -160,7 +176,7 @@ impl Character {
         let nudges = Character::roll_nudges(rng);
         let attributes = Character::scores_from(folk, nudges);
         let dirt = 0.3 + rng.next_f64() as f32 * 0.2;
-        Character { folk, body_seed, shape: None, sex: None, name, class, attributes, dirt, worn: AbilityBonus::default() }
+        Character { folk, body_seed, shape: None, sex: None, name, class, attributes, dirt, worn: AbilityBonus::default(), learned: AbilityBonus::default(), books_read: Vec::new() }
     }
 
     /// Five nudges to the folk's ability scores, in order strength, dexterity, constitution,
@@ -195,11 +211,41 @@ impl Character {
         if self.folk == Folk::Lizardfolk { 8.0 } else { 6.0 }
     }
 
-    /// Their ability scores as they stand: the rolled ones with what they wear added, within 1
-    /// to 30. Every rule that uses a score (to hit, damage, Armor Class, hit points, saves, the
-    /// mana pool, capacity) reads these.
+    /// Their ability scores as they stand: the rolled ones with what they have learned and what
+    /// they wear added, within 1 to 30. Every rule that uses a score (to hit, damage, Armor
+    /// Class, hit points, saves, the mana pool, capacity) reads these.
     pub fn scores(&self) -> Attributes {
-        self.worn.on(&self.attributes)
+        self.worn.plus(self.learned).on(&self.attributes)
+    }
+
+    /// Reads `book`: the score it teaches ([`fb_items::Item::lesson`]) rises by
+    /// [`fb_items::lesson::LESSON_POINTS`] for good, unless they have read this book before.
+    pub fn read(&mut self, book: &fb_items::Item) -> Reading {
+        use fb_items::stats::Stat;
+        let Some(stat) = book.lesson() else { return Reading::NothingToLearn };
+        if self.books_read.contains(&book.seed) {
+            return Reading::AlreadyRead;
+        }
+        self.books_read.push(book.seed);
+        let by = fb_items::lesson::LESSON_POINTS;
+        let learned = &mut self.learned;
+        let field = match stat {
+            Stat::Strength => &mut learned.strength,
+            Stat::Dexterity => &mut learned.dexterity,
+            Stat::Constitution => &mut learned.constitution,
+            Stat::Intelligence => &mut learned.intelligence,
+            _ => &mut learned.wisdom,
+        };
+        *field += by;
+        let a = self.scores();
+        let score = match stat {
+            Stat::Strength => a.strength,
+            Stat::Dexterity => a.dexterity,
+            Stat::Constitution => a.constitution,
+            Stat::Intelligence => a.intelligence,
+            _ => a.wisdom,
+        };
+        Reading::Learned { stat, score }
     }
 
     pub fn strength(&self) -> i32 {
@@ -288,7 +334,7 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64 },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64 },
             );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {

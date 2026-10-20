@@ -83,13 +83,17 @@ pub struct StatusCard;
 #[allow(clippy::type_complexity)]
 fn read_conditions(
     character: Option<Res<Character>>,
+    inventory: Option<Res<crate::inventory::Inventory>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
     rules: Option<Res<crate::rules::GameRules>>,
     players: Query<(&DelverNeeds, &Exhaustion, &DelverStamina, &Load, Has<Constricted>, Option<&Slowed>, Option<&DelverEffects>, Option<&Health>), With<Player>>,
     mut shown: ResMut<ShownConditions>,
 ) {
     let Some((needs, exhaustion, stamina, load, held, slowed, effects, health)) = players.iter().next() else { return };
-    let mending = tuning.as_deref().map_or(fb_character::recovery::MINUTES_PER_HIT_POINT, |t| t.recovery.minutes_per_hit_point as f64);
+    // Gear that mends faster (of Mending) shortens the time a hit point takes.
+    let points = character.as_deref().zip(inventory.as_deref()).map_or(0.0, |(c, i)| c.gear(i).recovery);
+    let recovery = tuning.as_deref().map_or_else(crate::tuning::RecoveryTuning::default, |t| t.recovery.clone());
+    let mending = recovery.minutes_for(points);
     let now = Circumstances {
         needs: needs.0,
         exhaustion: exhaustion.0,

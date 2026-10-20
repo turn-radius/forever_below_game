@@ -171,3 +171,5 @@ game_seconds_per_second = 12.0
 [recovery]
 # Game minutes a fed and watered delver takes to regain one hit point (10 = one every 50 real seconds at the usual clock). Our own.
 minutes_per_hit_point = 10.0
+# How much faster each point of recovery from gear (of Mending +1, of the Troll +2) mends: 0.25 makes +2 take a hit point in 6.7 minutes instead of 10. Our own.
+faster_per_point = 0.25

@@ -6,7 +6,8 @@
 //! [`LastDelver`] is read when [`LastDelverPlugin`] is added and written whenever the player
 //! begins a delve from the creator or continues. A delve begun by `FB_NEW_DELVE` or `--seed`
 //! is not remembered, so captures never overwrite it. A missing or unreadable file means no
-//! last delver.
+//! last delver. What the delver learns from books is theirs for good, so it is written as soon
+//! as they learn it ([`remember_lessons`]), and Continue brings it back.
 
 use std::path::{Path, PathBuf};
 
@@ -37,7 +38,7 @@ impl LastDelverFile {
 }
 
 /// Who the delver is, as saved: all of [`Character`] but what they wear, which is the
-/// inventory's.
+/// inventory's. What they have learned from books came later, so a file without it has none.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 struct Saved {
     name: String,
@@ -51,17 +52,21 @@ struct Saved {
     #[serde(default)]
     sex: Option<crate::character::Sex>,
     dirt: f32,
+    #[serde(default)]
+    learned: AbilityBonus,
+    #[serde(default)]
+    books_read: Vec<u32>,
 }
 
 impl From<&Character> for Saved {
     fn from(c: &Character) -> Self {
-        Saved { name: c.name.clone(), folk: c.folk, class: c.class, attributes: c.attributes, body_seed: c.body_seed, shape: c.shape, sex: c.sex, dirt: c.dirt }
+        Saved { name: c.name.clone(), folk: c.folk, class: c.class, attributes: c.attributes, body_seed: c.body_seed, shape: c.shape, sex: c.sex, dirt: c.dirt, learned: c.learned, books_read: c.books_read.clone() }
     }
 }
 
 impl From<Saved> for Character {
     fn from(s: Saved) -> Self {
-        Character { folk: s.folk, body_seed: s.body_seed, shape: s.shape, sex: s.sex, name: s.name, class: s.class, attributes: s.attributes, dirt: s.dirt.clamp(0.0, 1.0), worn: AbilityBonus::default() }
+        Character { folk: s.folk, body_seed: s.body_seed, shape: s.shape, sex: s.sex, name: s.name, class: s.class, attributes: s.attributes, dirt: s.dirt.clamp(0.0, 1.0), worn: AbilityBonus::default(), learned: s.learned, books_read: s.books_read }
     }
 }
 
@@ -100,7 +105,22 @@ impl Plugin for LastDelverPlugin {
             app.insert_resource(LastDelverFile(LastDelverFile::default_path()));
         }
         let file = app.world().resource::<LastDelverFile>().clone();
-        app.insert_resource(LastDelver(file.0.as_deref().and_then(load))).add_systems(Last, save_last_delver);
+        app.insert_resource(LastDelver(file.0.as_deref().and_then(load))).add_systems(Last, (remember_lessons, save_last_delver).chain());
+    }
+}
+
+/// Copies what the delver has learned from books onto the [`LastDelver`] when it is the same
+/// delver (a delve begun by a debug seed is not remembered, so it never overwrites another's).
+pub fn remember_lessons(character: Option<Res<Character>>, last: Option<ResMut<LastDelver>>) {
+    let (Some(character), Some(mut last)) = (character, last) else { return };
+    if !character.is_changed() {
+        return;
+    }
+    let same = |d: &Character| d.name == character.name && d.body_seed == character.body_seed && d.folk == character.folk && d.class == character.class;
+    let stale = last.0.as_ref().is_some_and(|d| same(d) && (d.learned != character.learned || d.books_read != character.books_read));
+    if stale && let Some(delver) = last.0.as_mut() {
+        delver.learned = character.learned;
+        delver.books_read = character.books_read.clone();
     }
 }
 
@@ -133,6 +153,39 @@ mod tests {
         assert_eq!(load(&path), Some(delver));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"folk\": \"lizard\"") && text.contains("\"class\": \"cleric\""), "{text}");
+    }
+
+    #[test]
+    fn what_they_learned_is_saved_and_an_older_file_loads_with_none() {
+        let path = scratch("learned");
+        let mut delver = Character::roll(21);
+        delver.learned.wisdom = 1;
+        delver.books_read = vec![77];
+        save(&path, &delver).unwrap();
+        assert_eq!(load(&path), Some(delver));
+        std::fs::write(&path, r#"{"name":"Olm","folk":"human","class":"mage","attributes":{"strength":10,"dexterity":10,"constitution":10,"intelligence":10,"wisdom":10},"body_seed":1,"dirt":0.4}"#).unwrap();
+        let old = load(&path).expect("an older file still loads");
+        assert_eq!((old.learned, old.books_read), (AbilityBonus::default(), vec![]));
+    }
+
+    #[test]
+    fn a_lesson_learned_in_the_delve_reaches_the_last_delver_but_not_anothers() {
+        let path = scratch("lesson");
+        let mut app = App::new();
+        let delver = Character::roll(4);
+        app.insert_resource(LastDelverFile(Some(path.clone()))).add_plugins(LastDelverPlugin);
+        app.world_mut().resource_mut::<LastDelver>().0 = Some(delver.clone());
+        app.insert_resource(delver.clone());
+        app.update();
+        app.world_mut().resource_mut::<Character>().learned.strength = 1;
+        app.world_mut().resource_mut::<Character>().books_read.push(5);
+        app.update();
+        let saved = load(&path).unwrap();
+        assert_eq!((saved.learned.strength, saved.books_read), (1, vec![5]));
+        // Someone else delving leaves the last delver alone.
+        app.insert_resource(Character { learned: AbilityBonus { wisdom: 3, ..default() }, ..Character::roll(9) });
+        app.update();
+        assert_eq!(load(&path).unwrap().learned.wisdom, 0);
     }
 
     #[test]

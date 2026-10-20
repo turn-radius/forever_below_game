@@ -1089,5 +1089,134 @@
    "neck",
    "charm"
   ]
+ },
+ {
+  "n": "of the Hare",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "speed",
+     "by": 1.05
+    }
+   }
+  ],
+  "t": "+5% speed",
+  "grp": "speed",
+  "at": [
+   "ring1",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Wind",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "speed",
+     "by": 1.1
+    }
+   }
+  ],
+  "t": "+10% speed",
+  "grp": "speed",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of Mending",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "recovery",
+     "by": 1
+    }
+   }
+  ],
+  "t": "Mends 25% faster",
+  "grp": "recovery",
+  "at": [
+   "ring1",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Troll",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "recovery",
+     "by": 2
+    }
+   }
+  ],
+  "t": "Mends 50% faster",
+  "grp": "recovery",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of Purity",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "poison_resistance",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 to saves against poison",
+  "grp": "poison_resistance",
+  "at": [
+   "ring1",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Mongoose",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "add": {
+     "stat": "poison_resistance",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 to saves against poison",
+  "grp": "poison_resistance",
+  "r": "rare",
+  "at": [
+   "ring1",
+   "neck",
+   "charm"
+  ]
  }
 ]

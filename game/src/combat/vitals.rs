@@ -269,7 +269,10 @@ fn take_bites(
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
     // What they wear and how dirty they are make catching a disease likelier.
-    let disease_risk = inventory.as_deref().map_or(1.0, |i| character.gear(i).disease_risk) * (1.0 + character.dirt.max(0.0) as f64);
+    let gear = inventory.as_deref().map(|i| character.gear(i)).unwrap_or_default();
+    let disease_risk = gear.disease_risk * (1.0 + character.dirt.max(0.0) as f64);
+    // Gear that wards against poison adds to the save against venom.
+    let poison_resistance = gear.poison_resistance.round() as i32;
     for bite in bites.read() {
         if bodies.contains(bite.attacker) {
             continue;
@@ -278,7 +281,7 @@ fn take_bites(
             if health.is_down() {
                 continue;
             }
-            let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), &mut dice.0);
+            let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), poison_resistance, &mut dice.0);
             let damage = spared_by_venom(health.hp, bite.damage, damage, bite.species.is_some_and(Species::venom_spares));
             health.hurt(damage);
             // A failed save poisons them for the poisoned effect's hours, and a rat's bite may
