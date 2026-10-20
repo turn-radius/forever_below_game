@@ -374,11 +374,12 @@ pub fn row_under(rects: impl IntoIterator<Item = (usize, Rect)>, point: Vec2) ->
 pub fn hover_numbers(
     open: Res<ScreenOpen>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
     rows: Query<(&GearRow, &ComputedNode, &UiGlobalTransform)>,
     mut hovered: ResMut<HoveredNumber>,
 ) {
     let over = if open.is(Screen::Inventory) {
-        window.and_then(|w| w.cursor_position()).and_then(|point| row_under(rows.iter().map(|(r, n, t)| (r.0, node_rect(n, t))), point))
+        window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())).and_then(|point| row_under(rows.iter().map(|(r, n, t)| (r.0, node_rect(n, t))), point))
     } else {
         None
     };

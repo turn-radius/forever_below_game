@@ -217,16 +217,20 @@ fn spawn_callouts(mut commands: Commands, mut callouts: MessageReader<Callout>, 
 }
 
 /// Moves each callout on: pinned over its anchor as the view turns, rising, popping in and
-/// fading out, then gone. Hidden while its anchor is behind the eye.
+/// fading out, then gone. Hidden while its anchor is behind the eye. The anchor's place in the
+/// view is carried into the interface's pixels, which `UiScale` sizes
+/// ([`crate::ui::InterfaceScalePlugin`]).
 #[allow(clippy::type_complexity)]
 fn float_callouts(
     mut commands: Commands,
     time: Res<Time>,
+    ui_scale: Option<Res<UiScale>>,
     cameras: Query<(&Camera, &GlobalTransform), With<PlayerCamera>>,
     mut callouts: Query<(Entity, &mut Floating, &mut Node, &mut UiTransform, &mut Visibility, &mut TextColor, &mut TextShadow, Option<&Children>)>,
     mut spans: Query<&mut TextColor, (With<TextSpan>, Without<Floating>)>,
 ) {
     let camera = cameras.single().ok();
+    let per_view = 1.0 / ui_scale.map_or(1.0, |s| s.0.max(f32::EPSILON));
     for (entity, mut floating, mut node, mut transform, mut visibility, mut colour, mut shadow, children) in &mut callouts {
         floating.age += time.delta_secs();
         if floating.age >= floating.life {
@@ -237,7 +241,7 @@ fn float_callouts(
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
-        let at = kept_in_view(at, view);
+        let at = kept_in_view(at * per_view, view * per_view);
         let (rise, scale, alpha) = motion(floating.age, floating.life, floating.pop);
         node.left = px(at.x - 0.5 * WIDTH + floating.aside);
         node.top = px(at.y - rise - TEXT_HEIGHT);

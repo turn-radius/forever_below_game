@@ -252,6 +252,17 @@ mod tests {
         assert_eq!(scale(640.0, 360.0), 0.5, "never under the floor");
     }
 
+    #[test]
+    fn the_mouse_is_read_in_the_interfaces_pixels() {
+        let mut window = Window::default();
+        window.resolution.set_physical_resolution(1280, 720);
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::new(640.0, 300.0)));
+        assert_eq!(ui_cursor(&window, None), Some(Vec2::new(640.0, 300.0)));
+        // Drawn at two thirds, the interface's pixel under the mouse is half as far again.
+        let cursor = ui_cursor(&window, Some(&UiScale(2.0 / 3.0))).unwrap();
+        assert!((cursor - Vec2::new(960.0, 450.0)).length() < 1e-3, "{cursor}");
+    }
+
     /// A camera drawing a view `width` by `height` logical pixels.
     fn camera(width: u32, height: u32) -> Camera {
         let target_info = Some(bevy::camera::RenderTargetInfo { physical_size: UVec2::new(width, height), scale_factor: 1.0 });
