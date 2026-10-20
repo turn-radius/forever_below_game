@@ -12,6 +12,8 @@ use crate::render::ItemSpawner;
 
 use super::grid::Grid;
 use super::items::{Inventory, ItemId};
+use super::{Drag, GridView, Hovered, Target, drop_at};
+use crate::keymap::{Action, ActionInput};
 
 /// How far a shed item lands from where its wearer fell, world units, and the extra every
 /// second one takes. Our own.
@@ -183,6 +185,32 @@ pub fn apply_floor_changes(
                 set_down_at(&mut spawner, &inventory, level, id, at, yaw, &tuning);
             }
         }
+    }
+}
+
+/// The drop key in the inventory: the carried or worn item under the mouse is set down underfoot
+/// as dragging it onto the underfoot grid's first free spot does ([`drop_at`]), a container with
+/// what it holds. With no free spot it is set down at the delver's feet, as dropping it on the
+/// level does. Something already lying about, or nothing under the mouse, does nothing.
+pub fn drop_hovered(
+    input: ActionInput,
+    hovered: Res<Hovered>,
+    mut inventory: ResMut<Inventory>,
+    underfoot: Res<Underfoot>,
+    mut changes: ResMut<FloorChanges>,
+) {
+    let Some((id, _)) = hovered.0 else { return };
+    if !input.just_pressed(Action::Drop) || !inventory.is_carried(id) {
+        return;
+    }
+    let Some(size) = inventory.footprint(id) else { return };
+    let target = match underfoot.grid.first_free(size) {
+        Some(at) => Target::Cell { view: GridView::Underfoot, cell: IVec2::new(at.x as i32, at.y as i32) },
+        None => Target::Level,
+    };
+    let drag = Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None };
+    if let Ok(set_down) = drop_at(&mut inventory, &drag, target, underfoot.grid.cols) {
+        changes.0.extend(set_down);
     }
 }
 
@@ -422,5 +450,103 @@ mod tests {
         assert!(aside_for_column(0, 6) < 0.0 && aside_for_column(5, 6) > 0.0);
         assert!(aside_for_column(0, 6).abs() <= crate::carry::DROP_SPREAD);
         assert!((aside_for_column(2, 6) + aside_for_column(3, 6)).abs() < 1e-5, "symmetric about the middle");
+    }
+
+    /// The floor app with the drop key wired in and the inventory open; `hover` sets the item
+    /// under the mouse, and `press_x` presses the key.
+    fn drop_key_app() -> (App, ItemId, GlobalTransform) {
+        let (mut app, pack, eye) = floor_app();
+        app.init_resource::<crate::keymap::Keymap>()
+            .init_resource::<Hovered>()
+            .init_resource::<Underfoot>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .insert_resource(crate::keymap::ActiveContext(crate::keymap::Context::Inventory))
+            .insert_resource(crate::play::ScreenOpen(Some(crate::play::Screen::Inventory)))
+            .add_systems(Update, drop_hovered.before(apply_floor_changes));
+        (app, pack, eye)
+    }
+
+    fn hover(app: &mut App, id: ItemId) {
+        app.world_mut().resource_mut::<Hovered>().0 = Some((id, Rect::default()));
+    }
+
+    fn press_x(app: &mut App) {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyX);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyX);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+    }
+
+    #[test]
+    fn the_drop_key_sets_the_hovered_torch_down_underfoot() {
+        let (mut app, pack, eye) = drop_key_app();
+        let torch = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let torch = inventory.add(fb_items::roll_item("Torch", 1).unwrap());
+            inventory.put(torch, pack, Placement::new(0, 0, false)).unwrap();
+            torch
+        };
+        press_x(&mut app);
+        assert!(floor_items(&mut app).is_empty(), "nothing hovered, nothing dropped");
+        assert_eq!(app.world().resource::<Inventory>().location(torch), Some(Location::In { container: pack, at: Placement::new(0, 0, false) }));
+        hover(&mut app, torch);
+        press_x(&mut app);
+        assert_eq!(app.world().resource::<Inventory>().location(torch), Some(Location::Loose));
+        let floor = floor_items(&mut app);
+        assert_eq!(floor.len(), 1);
+        assert_eq!(floor[0].1, torch);
+        assert!(floor[0].2.translation.distance(eye.translation()) < REACH);
+    }
+
+    #[test]
+    fn the_drop_key_keeps_a_sacks_contents() {
+        let (mut app, pack, _) = drop_key_app();
+        let (sack, knife) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let sack = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
+            inventory.put(sack, pack, Placement::new(0, 0, false)).unwrap();
+            let knife = inventory.add(dagger());
+            inventory.put(knife, sack, Placement::new(1, 1, false)).unwrap();
+            (sack, knife)
+        };
+        hover(&mut app, sack);
+        press_x(&mut app);
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!(inventory.location(sack), Some(Location::Loose));
+        assert_eq!(inventory.location(knife), Some(Location::In { container: sack, at: Placement::new(1, 1, false) }));
+        assert_eq!(floor_items(&mut app).len(), 1);
+    }
+
+    #[test]
+    fn the_drop_key_takes_off_a_worn_item_and_sets_it_down() {
+        let (mut app, _, _) = drop_key_app();
+        let ring = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let ring = inventory.add(fb_items::roll_item("Ring", 3).unwrap());
+            inventory.wear(ring, Slot::Ring1).unwrap();
+            ring
+        };
+        hover(&mut app, ring);
+        press_x(&mut app);
+        assert_eq!(app.world().resource::<Inventory>().location(ring), Some(Location::Loose));
+        assert_eq!(floor_items(&mut app).len(), 1);
+    }
+
+    #[test]
+    fn the_drop_key_sets_down_at_the_feet_when_underfoot_is_full() {
+        let (mut app, pack, _) = drop_key_app();
+        let torch = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let torch = inventory.add(fb_items::roll_item("Torch", 1).unwrap());
+            inventory.put(torch, pack, Placement::new(0, 0, false)).unwrap();
+            torch
+        };
+        let full = Grid::pack(UNDERFOOT_COLS, UNDERFOOT_ROWS, (100..100 + UNDERFOOT_COLS as u32 * UNDERFOOT_ROWS as u32).map(|n| (ItemId(n), Footprint { cols: 1, rows: 1 })));
+        assert!(full.first_free(Footprint { cols: 1, rows: 1 }).is_none());
+        app.world_mut().resource_mut::<Underfoot>().grid = full;
+        hover(&mut app, torch);
+        press_x(&mut app);
+        assert_eq!(app.world().resource::<Inventory>().location(torch), Some(Location::Loose));
+        assert_eq!(floor_items(&mut app).len(), 1);
     }
 }

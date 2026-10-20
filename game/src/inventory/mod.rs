@@ -162,6 +162,7 @@ impl Plugin for InventoryPlugin {
                         .chain()
                         .after(switch_screens),
                     (icon::draw_icons, icon::reveal_icons).chain().after(build_screen),
+                    underfoot::drop_hovered.run_if(crate::play::inventory_open).after(drag_items).before(underfoot::apply_floor_changes),
                     doll::turn_seal,
                     (doll::start_doll_fitting, doll::poll_doll_fitting, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
                 )

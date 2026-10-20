@@ -626,6 +626,11 @@ pub fn show_card(
                 let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
                 text.actions = crate::interact::key_actions(keymap, &verbs);
             }
+            if inventory.is_carried(id)
+                && let Some(key) = keymap.inputs(Action::Drop).first()
+            {
+                text.actions.push((key.label(), "Drop"));
+            }
             fill_card(&mut commands, card, Some((item, &text)), None, &fonts, &mut icons);
             *shown = Some(id);
             *visibility = Visibility::Hidden;
@@ -1119,6 +1124,7 @@ mod tests {
         let (b, r, d) = (bread, ring, dagger);
         let texts = card_over(inventory.clone(), |_| b);
         assert!(texts.iter().any(|t| t == "F ") && texts.iter().any(|t| t == "Eat"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "\u{b7} X ") && texts.iter().any(|t| t == "Drop"), "{texts:?}");
         let texts = card_over(inventory.clone(), |_| r);
         assert!(texts.iter().any(|t| t == "G ") && texts.iter().any(|t| t == "Take off"), "{texts:?}");
         // Underfoot, the dagger is taken or equipped.
