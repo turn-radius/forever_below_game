@@ -47,6 +47,9 @@ type Dressed = String;
 /// What the draft wants dressed next: its key, the body, the kit and the dirt.
 type Wanted = (Dressed, fb_body::BodySpec, Vec<(Slot, fb_items::Item)>, f32);
 
+/// A starting kit and the folk and body seed it was rolled for.
+type Kit = ((fb_body::Folk, u32), Vec<(Slot, fb_items::Item)>);
+
 /// The figure's stage: what it was dressed for, the figure and camera, the job dressing the
 /// next one and what is wanted after it, and how far it is turned.
 #[derive(Resource, Default)]
@@ -56,7 +59,7 @@ pub struct PreviewStage {
     wanted: Option<Wanted>,
     /// The starting kit last rolled, and for which folk and body seed: a drag of a body slider
     /// refits the body in the same kit without rolling it again.
-    kit: Option<((fb_body::Folk, u32), Vec<(Slot, fb_items::Item)>)>,
+    kit: Option<Kit>,
     figure: Option<Entity>,
     camera: Option<Entity>,
     turn: f32,
