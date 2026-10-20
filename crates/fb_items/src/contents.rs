@@ -11,6 +11,7 @@
 use armory::families::chests::{ChestState, ChestStyle};
 use procgen_rng::Mulberry32;
 
+use crate::armory_base::held_back;
 use crate::item::{Item, roll_item_with};
 use crate::profile::profile;
 use crate::Rarity;
@@ -96,9 +97,10 @@ fn stock(style: ChestStyle) -> (&'static [(&'static str, u32)], (u32, u32)) {
 pub fn roll_contents(style: ChestStyle, loot: u32, odds: crate::Odds) -> Vec<Item> {
     let mut rng = Mulberry32::new(loot ^ 0xC07E_5755);
     let (table, count) = stock(style);
+    let table: Vec<(&str, u32)> = table.iter().copied().filter(|(base, _)| !held_back(base)).collect();
     let mut contents = Vec::new();
     for _ in 0..rng.int(count.0, count.1) {
-        let base = *rng.weighted(table);
+        let base = *rng.weighted(&table);
         let seed = (rng.next_f64() * 4_294_967_296.0) as u32;
         if by_the_sheaf(base) {
             let mut sheaf = Mulberry32::new(seed);
@@ -143,6 +145,27 @@ mod tests {
             }
         }
         assert_ne!(roll_contents(ChestStyle::Chest, 1, crate::Odds::default()), roll_contents(ChestStyle::Chest, 2, crate::Odds::default()));
+    }
+
+    /// Whether any chest or crate of `seeds` loot seeds, at each depth from 1 to 10, holds a
+    /// held-back base.
+    fn holds_held_back(seeds: u32) -> bool {
+        (1..=10).any(|depth| {
+            [ChestStyle::Chest, ChestStyle::Crate].into_iter().any(|style| {
+                (0..seeds).any(|loot| roll_contents(style, loot, crate::Odds::loot(depth)).iter().any(|i| held_back(&i.base)))
+            })
+        })
+    }
+
+    #[test]
+    fn no_crate_holds_a_held_back_base_smoke() {
+        assert!(!holds_held_back(8));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: 300 loot seeds at each depth; run before merging"]
+    fn no_crate_holds_a_held_back_base() {
+        assert!(!holds_held_back(300));
     }
 
     #[test]

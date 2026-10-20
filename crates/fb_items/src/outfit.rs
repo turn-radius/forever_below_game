@@ -14,6 +14,7 @@ use procgen_rng::Mulberry32;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::armory_base::held_back;
 use crate::{Item, Odds, Slot, roll_item_with};
 
 /// One slot's candidates: the chance it is filled, and the bases to pick from (a base listed
@@ -165,7 +166,7 @@ impl Outfit {
                 ammunition = (0..AMMUNITION_CARRIED).filter_map(|_| draw(&mut rng, ammo)).collect();
             }
         }
-        let mut goods: Vec<Item> = self.goods.iter().filter_map(|base| draw(&mut rng, base)).collect();
+        let mut goods: Vec<Item> = self.goods.iter().filter(|base| !held_back(base)).filter_map(|base| draw(&mut rng, base)).collect();
         goods.extend(ammunition);
         let ground = self.ground.iter().filter_map(|base| draw(&mut rng, base)).collect();
         OutfitSet { worn, goods, ground }
@@ -221,10 +222,28 @@ mod tests {
                     }
                 }
                 let shoots = set.item(Slot::Mainhand).is_some_and(|i| i.profile.ranged.is_some());
-                assert_eq!(set.goods.len(), outfit.goods.len() + if shoots { AMMUNITION_CARRIED } else { 0 });
+                assert_eq!(set.goods.len(), outfit.goods.iter().filter(|g| !held_back(g)).count() + if shoots { AMMUNITION_CARRIED } else { 0 });
                 assert_eq!(set.ground.len(), outfit.ground.len());
             }
         }
+    }
+
+    /// Whether any outfit, `seeds` seeds at each depth from 1 to 10, carries a held-back base.
+    fn carries_held_back(seeds: u32) -> bool {
+        outfits().iter().any(|o| {
+            (1..=10).any(|depth| (0..seeds).any(|seed| o.roll_with(seed, "human", Odds::kit(depth)).goods.iter().any(|g| held_back(&g.base))))
+        })
+    }
+
+    #[test]
+    fn no_outfit_carries_a_held_back_base_smoke() {
+        assert!(!carries_held_back(2));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: 200 seeds at each depth for every outfit; run before merging"]
+    fn no_outfit_carries_a_held_back_base() {
+        assert!(!carries_held_back(200));
     }
 
     #[test]

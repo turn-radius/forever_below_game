@@ -167,7 +167,24 @@ pub fn roll_loot(family: armory::Family, seed: u32, odds: Odds) -> Option<Item> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::armory_base::ARMORY_BASES;
+    use crate::armory_base::{ARMORY_BASES, held_back};
+
+    /// Whether floor loot of the sundry family, `seeds` seeds at each depth from 1 to 10, is
+    /// ever a held-back base.
+    fn loose_sundries_hold_back(seeds: u32) -> bool {
+        (1..=10).any(|depth| (0..seeds).filter_map(|seed| roll_loot(armory::Family::Sundry, seed, Odds::loot(depth))).any(|i| held_back(&i.base)))
+    }
+
+    #[test]
+    fn no_loose_loot_is_a_held_back_base_smoke() {
+        assert!(!loose_sundries_hold_back(10));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: 2000 seeds at each depth; run before merging"]
+    fn no_loose_loot_is_a_held_back_base() {
+        assert!(!loose_sundries_hold_back(2000));
+    }
 
     #[test]
     fn a_torch_is_held_in_either_hand_the_off_hand_first_so_it_can_be_swung() {

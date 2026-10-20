@@ -90,6 +90,8 @@ Torches and lanterns are Armory families (`armory::families::torch`, `armory::fa
 - Keys, the tinderbox and the bedroll are new; the plate's text names them (lockpicking, "fever took them in their bedroll") but never drew them. A bedroll is the same rolled, strapped blanket a backpack carries (`armory::build::roll`).
 - A candle can stand in a chamberstick, carry runs of wax, burn down and be lit, and `Sundry::light` gives its 5 ft light from the flame. The rope is one twisted rope laid in a coil and tied, not four stacked rings, and the lockpicks are hooks, rakes, diamonds and a tension wrench in an open leather roll.
 
+- **Bandages are held back** (our own) until bandaging exists, like the affixes nothing reads: `armory_base::HELD_BACK` lists them, `find_weight` gives them 0 so no loose spot picks one, crates and the class goods (fighter, ranger and cleric carry them in `data/outfits.json`) skip them when rolling, and they stay in `ARMORY_BASES` and `data/goods.json` so the forge and `roll_item("Bandages", seed)` still make them. The crate's and the outfits' other picks shift with the table, so some existing seeds hold something else.
+
 ### Writing
 
 `armory::families::writing` makes written goods: scrolls, notes and books. It is new; no prototype draws any of them, so every slider is this port's own. One state holds the three kinds (`WritingKind`): a `piece` section every kind shares (kind, size, paper, ink, lines of ink) and one section of options per kind. The scroll (`scroll`), the note (`note`) and the book (`book`) are built. Each rests on the ground, centred over the origin, its long side along X, and writing is never etched.
