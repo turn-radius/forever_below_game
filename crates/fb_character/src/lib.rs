@@ -28,6 +28,8 @@ pub mod rules;
 
 use rules::{Rules, defaults};
 
+use fb_items::foe::{MAX_SHUN, MAX_WARD};
+use fb_items::Foe;
 use serde::{Deserialize, Serialize};
 
 /// The five core attributes of a character (D&D 5e SRD 5.1, p. 76).
@@ -276,11 +278,17 @@ pub struct Worn {
     /// Points added to the shot roll only: any gear's, the bow's own included.
     #[serde(default)]
     pub ranged_to_hit: f64,
+    /// The fraction of damage taken off each kind of creature's blows, by [`fb_items::Foe`] index.
+    #[serde(default)]
+    pub ward: [f64; Foe::COUNT],
+    /// The chance each kind of creature never notices the wearer, by [`fb_items::Foe`] index.
+    #[serde(default)]
+    pub shun: [f64; Foe::COUNT],
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0 }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] }
     }
 }
 
@@ -340,6 +348,14 @@ pub struct Gear {
     /// Points added to the shot roll only: the items' added.
     #[serde(default)]
     pub ranged_to_hit: f64,
+    /// The fraction of damage taken off each kind of creature's blows: the items' added, at most
+    /// [`MAX_WARD`](fb_items::foe::MAX_WARD).
+    #[serde(default)]
+    pub ward: [f64; Foe::COUNT],
+    /// The chance each kind of creature never notices the delver: the items' chances combined
+    /// ([`fb_items::foe::combine_shun`], at most [`MAX_SHUN`](fb_items::foe::MAX_SHUN)).
+    #[serde(default)]
+    pub shun: [f64; Foe::COUNT],
 }
 
 impl Default for Gear {
@@ -353,7 +369,7 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0 };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] };
         for item in worn {
             gear.to_hit += item.to_hit;
             gear.ranged_to_hit += item.ranged_to_hit;
@@ -370,6 +386,11 @@ impl Gear {
             gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, MAX_BLOCK_CHANCE);
             gear.abilities = gear.abilities.plus(item.abilities);
             gear.disease_risk *= item.disease_risk;
+            for foe in Foe::ALL {
+                let i = foe.index();
+                gear.ward[i] = (gear.ward[i] + item.ward[i]).clamp(0.0, MAX_WARD as f64);
+                gear.shun[i] = (1.0 - (1.0 - gear.shun[i]) * (1.0 - item.shun[i])).clamp(0.0, MAX_SHUN as f64);
+            }
         }
         for light in lights {
             if light.reach > gear.light {
@@ -1619,6 +1640,28 @@ mod tests {
         assert_eq!(LoadBand::Burdened.walk_multiplier(), 0.85);
         assert_eq!(LoadBand::Encumbered.walk_multiplier(), 0.65);
         assert_eq!(LoadBand::Overloaded.walk_multiplier(), 0.0);
+    }
+
+    #[test]
+    fn wards_add_to_a_cap_and_shuns_combine() {
+        let ward = |foe: Foe, by: f64| {
+            let mut w = Worn::default();
+            w.ward[foe.index()] = by;
+            w
+        };
+        let shun = |foe: Foe, by: f64| {
+            let mut w = Worn::default();
+            w.shun[foe.index()] = by;
+            w
+        };
+        let gear = Gear::new(0.0, [ward(Foe::Undead, 0.25), ward(Foe::Undead, 0.25), ward(Foe::Vermin, 0.25), shun(Foe::Vermin, 0.5), shun(Foe::Vermin, 0.35)], []);
+        assert_eq!(gear.ward[Foe::Undead.index()], 0.5);
+        assert_eq!(gear.ward[Foe::Vermin.index()], 0.25);
+        assert_eq!(gear.ward[Foe::Troll.index()], 0.0);
+        assert!((gear.shun[Foe::Vermin.index()] - 0.675).abs() < 1e-9);
+        let many = Gear::new(0.0, [ward(Foe::Spider, 0.5), ward(Foe::Spider, 0.5)], []);
+        assert_eq!(many.ward[Foe::Spider.index()], 0.75, "capped");
+        assert_eq!(Gear::default().ward, [0.0; Foe::COUNT]);
     }
 
     #[test]

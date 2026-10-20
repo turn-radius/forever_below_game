@@ -11,6 +11,7 @@ pub mod armory_base;
 pub mod contents;
 pub mod dice;
 pub mod dress;
+pub mod foe;
 pub mod footprint;
 pub mod item;
 pub mod jackalope;
@@ -28,6 +29,7 @@ pub mod tables;
 pub mod troll;
 pub mod undead;
 
+pub use foe::Foe;
 pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, roll_item, roll_item_with, roll_loot};
 pub use oil::LAMP_OIL;

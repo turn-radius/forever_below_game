@@ -573,6 +573,20 @@ impl Species {
         self.stat_block().fly_speed_feet * UNITS_PER_FOOT / 6.0
     }
 
+    /// The kind of creature gear wards against: vermin (rats, bats, centipedes), undead,
+    /// spiders, serpents, beasts (the jackalope) and trolls.
+    pub fn foe(self) -> fb_items::Foe {
+        use fb_items::Foe;
+        match self {
+            Species::Rat | Species::GiantRat | Species::Bat | Species::GiantBat | Species::GiantCentipede => Foe::Vermin,
+            Species::Skeleton => Foe::Undead,
+            Species::GiantSpider => Foe::Spider,
+            Species::PoisonousSnake | Species::ConstrictorSnake => Foe::Serpent,
+            Species::Jackalope => Foe::Beast,
+            Species::Troll => Foe::Troll,
+        }
+    }
+
     pub fn is_rat(self) -> bool {
         matches!(self, Species::Rat | Species::GiantRat)
     }
@@ -754,6 +768,19 @@ pub fn bat(seed: u32) -> BatState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_species_is_a_kind_of_foe_and_every_kind_has_one() {
+        use fb_items::Foe;
+        let kinds: Vec<Foe> = Species::ALL.into_iter().map(Species::foe).collect();
+        assert!(Foe::ALL.iter().all(|f| kinds.contains(f)), "a kind no species is");
+        assert_eq!(Species::Rat.foe(), Foe::Vermin);
+        assert_eq!(Species::GiantBat.foe(), Foe::Vermin);
+        assert_eq!(Species::GiantCentipede.foe(), Foe::Vermin);
+        assert_eq!(Species::Skeleton.foe(), Foe::Undead);
+        assert_eq!(Species::ConstrictorSnake.foe(), Foe::Serpent);
+        assert_eq!(Species::Jackalope.foe(), Foe::Beast);
+    }
 
     #[test]
     fn the_bats_stat_blocks_are_the_srd_numbers() {

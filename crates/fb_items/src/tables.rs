@@ -318,7 +318,7 @@ mod tests {
     fn every_table_parses_with_its_entries() {
         assert_eq!(bases().len(), 13);
         assert_eq!(goods().len(), 16);
-        assert_eq!(affixes().len(), 64);
+        assert_eq!(affixes().len(), 71);
         assert_eq!(slot_places().len(), 17);
         let head = &slot_places()[0];
         assert_eq!((head.slot, head.label.as_str(), head.size, head.side, head.x_percent, head.y_percent), (Slot::Head, "Head", SlotSize::Big, SlotSide::Left, 4.0, 5.0));
@@ -387,6 +387,8 @@ mod tests {
             Modifier::Add { stat, .. } | Modifier::Scale { stat, .. } => (vec![stat], vec![]),
             Modifier::DamageOrArmour { .. } => (vec![Stat::DamageBonus, Stat::Armour], vec![]),
             Modifier::Condition { slider, .. } => (vec![], vec![slider]),
+            // Per-kind arrays, no `Stat`: the tests compare those arrays themselves.
+            Modifier::Ward { .. } | Modifier::Shun { .. } => (vec![], vec![]),
         }
     }
 
@@ -412,7 +414,9 @@ mod tests {
                     assert!(cs.iter().all(|s| stats.contains(s)), "{}: {m:?} changed {cs:?}", a.name);
                     assert!(cc.iter().all(|c| sliders.contains(c)), "{}: {m:?} changed {cc:?}", a.name);
                     assert_eq!(after.0.damage, before.0.damage);
-                    changed_any |= !cs.is_empty() || !cc.is_empty();
+                    let per_foe = after.0.ward != before.0.ward || after.0.shun != before.0.shun;
+                    assert_eq!(per_foe, matches!(m, Modifier::Ward { .. } | Modifier::Shun { .. }), "{}: {m:?}", a.name);
+                    changed_any |= !cs.is_empty() || !cc.is_empty() || per_foe;
                 }
                 assert!(changed_any, "{}: {m:?} changes nothing", a.name);
             }

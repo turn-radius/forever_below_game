@@ -4,6 +4,7 @@
 //! plate never gave an `fx`, and from the condition `dressState` sets for flaws (Rusted,
 //! Moth-eaten, Mildewed, Lice-ridden, Cracked). See `docs/items.md`, "Affix effects".
 
+use crate::foe::{Foe, combine_shun, combine_ward};
 use crate::stats::{Stat, Stats};
 use armory::cond::Condition;
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,10 @@ pub enum Modifier {
     /// Adds `by` to the damage bonus of a weapon, or to the armour of anything else (the
     /// plate's Rusted: `if(it.dmg) it.dmgB -= 1; else it.ac = max(0, it.ac - 1)`).
     DamageOrArmour { by: f32 },
+    /// Adds `by` to the fraction of damage a kind of creature's blows lose (of the Ossuary).
+    Ward { foe: Foe, by: f32 },
+    /// Gives a `chance` that a creature of a kind never notices the wearer (of Vermin's Peace).
+    Shun { foe: Foe, chance: f32 },
     /// Raises a condition slider to at least `at_least` (`c.wear = max(c.wear, .75)`).
     Condition { slider: ConditionSlider, at_least: f32 },
 }
@@ -69,7 +74,7 @@ impl Modifier {
     pub fn in_play(&self) -> bool {
         match *self {
             Modifier::Add { stat, .. } | Modifier::Scale { stat, .. } => stat.in_play(),
-            Modifier::DamageOrArmour { .. } => true,
+            Modifier::DamageOrArmour { .. } | Modifier::Ward { .. } | Modifier::Shun { .. } => true,
             Modifier::Condition { .. } => false,
         }
     }
@@ -88,6 +93,8 @@ impl Modifier {
                 let stat = if stats.is_weapon() { Stat::DamageBonus } else { Stat::Armour };
                 stats.set(stat, stats.get(stat) + by);
             }
+            Modifier::Ward { foe, by } => stats.ward[foe.index()] = combine_ward(stats.ward[foe.index()], by),
+            Modifier::Shun { foe, chance } => stats.shun[foe.index()] = combine_shun(stats.shun[foe.index()], chance),
             Modifier::Condition { .. } => {}
         }
     }
@@ -107,7 +114,8 @@ impl Modifier {
         match *self {
             Modifier::Add { stat, by } => up(stat, by > 0.0),
             Modifier::Scale { stat, by } => up(stat, by > 1.0),
-            Modifier::DamageOrArmour { by } => by > 0.0,
+            Modifier::DamageOrArmour { by } | Modifier::Ward { by, .. } => by > 0.0,
+            Modifier::Shun { chance, .. } => chance > 0.0,
             Modifier::Condition { .. } => false,
         }
     }

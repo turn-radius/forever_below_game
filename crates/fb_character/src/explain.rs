@@ -18,6 +18,7 @@ use std::fmt;
 
 use crate::rules::{Rules, defaults};
 use crate::{Activity, CarriedLight, Gear, MeterKind, Worn, capacity_lb_with, modifier};
+use fb_items::Foe;
 
 /// How a term combines with the value before it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -295,6 +296,26 @@ impl Loadout {
             e = e.add(label, item.ranged_to_hit);
         }
         e
+    }
+
+    /// The fraction of a kind's damage worn gear takes off, item by item, at most
+    /// [`fb_items::foe::MAX_WARD`]. Equals [`Gear::ward`] for `foe`.
+    pub fn ward(&self, foe: Foe) -> Explained {
+        let mut e = Explained::new(format!("Ward against {}", foe.label().to_lowercase()), "").base("no ward", 0.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.ward[foe.index()] != 0.0) {
+            e = e.add(label, item.ward[foe.index()]);
+        }
+        let max = fb_items::foe::MAX_WARD as f64;
+        if e.value() > max { e.clamp("at most 0.75", 0.0, max) } else { e }
+    }
+
+    /// The chance a kind never notices the delver, as a line: each item's chance, then the whole
+    /// (the chances combined, so two charms of 50% and 35% give 67.5%). Equals [`Gear::shun`]
+    /// for `foe`.
+    pub fn shun_line(&self, foe: Foe) -> String {
+        let parts: Vec<String> = self.worn.iter().filter(|(_, w)| w.shun[foe.index()] != 0.0).map(|(label, w)| format!("{label} {}%", number(w.shun[foe.index()] * 100.0))).collect();
+        let whole = self.gear().shun[foe.index()];
+        format!("{} that never notice you: {}% ({})", foe.label(), number(whole * 100.0), parts.join(", "))
     }
 
     /// Points of luck, the items' added: each rolls the loot found a level deeper. Equals
