@@ -91,8 +91,11 @@ pub struct SwungAt {
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Swing {
     pub weapon: Weapon,
-    /// Seconds into it.
+    /// Seconds into it at the usual pace: it runs on at [`Swing::rate`] times real time, so the
+    /// landing and the pose keep their proportions.
     pub t: f32,
+    /// How much faster than usual it goes ([`Derived::attack_rate`](crate::character::Derived)).
+    pub rate: f32,
     /// Whether its blow has landed (or missed).
     pub landed: bool,
     /// Which way the blow comes in.
@@ -111,7 +114,22 @@ impl Swing {
     /// strike.
     pub fn new(weapon: Weapon) -> Swing {
         let strike = Strike::choices(weapon.kind)[0].0;
-        Swing { weapon, t: 0.0, landed: false, strike, toward: CROSSHAIR_AIM, flourish: Vec3::ZERO, hand: Slot::Mainhand }
+        Swing { weapon, t: 0.0, rate: 1.0, landed: false, strike, toward: CROSSHAIR_AIM, flourish: Vec3::ZERO, hand: Slot::Mainhand }
+    }
+
+    /// Goes on for `dt` real seconds, at its [`Swing::rate`].
+    pub fn step(&mut self, dt: f32) {
+        self.t += dt * self.rate;
+    }
+
+    /// Whether the blow is due: it has reached [`LANDS`].
+    pub fn lands(&self) -> bool {
+        self.t >= LANDS
+    }
+
+    /// Whether it has run its [`SWING_TIME`].
+    pub fn is_over(&self) -> bool {
+        self.t >= SWING_TIME
     }
 
     /// The side of the view its hand is on.
@@ -212,6 +230,7 @@ pub(super) fn start_swing(
         return;
     }
     for (player, at, health, mut stamina, guarding) in &mut players {
+        let gear = character.gear(&inventory);
         if health.is_some_and(Health::is_down) || fallen.is_some() || (guarding && !practising) {
             continue;
         }
@@ -223,10 +242,11 @@ pub(super) fn start_swing(
             }
             let mut spent = stamina.0;
             let rules = crate::rules::GameRules::of(&rules);
-            spent.spend_with(rules, rules.stamina.swing_cost);
+            spent.spend_with(rules, rules.stamina.swing_cost * gear.stamina_cost);
             stamina.0 = spent;
         }
         let weapon = Weapon::held_in(hand, &inventory, &character);
+        let rate = swing_rate(hand, &inventory, &character);
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
             let combat = &tuning.combat;
@@ -236,7 +256,7 @@ pub(super) fn start_swing(
         let flourish = Vec3::new(dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0));
         let strike = practice.strike.unwrap_or_else(|| Strike::roll(weapon.kind, *last, &mut dice.0));
         *last = Some(strike);
-        commands.entity(player).insert(Swing { strike, toward: toward.unwrap_or(CROSSHAIR_AIM), flourish, hand, ..Swing::new(weapon) });
+        commands.entity(player).insert(Swing { strike, rate, toward: toward.unwrap_or(CROSSHAIR_AIM), flourish, hand, ..Swing::new(weapon) });
         if let Some(sound) = &sound {
             let game = settings.as_deref().copied().unwrap_or_default();
             commands.spawn((Name::new("swing"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
@@ -267,6 +287,11 @@ impl Strikeable<'_, '_> {
         let creatures = self.creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes));
         let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target::on_floor(entity, t.translation.xz(), denizen.radius));
         creatures.chain(folk).collect()
+    }
+
+    /// The kind of creature `target` is, if it is one (folk are none).
+    pub fn foe(&self, target: Entity) -> Option<fb_items::Foe> {
+        self.creatures.get(target).ok().map(|(_, critter, ..)| critter.spot.species.foe())
     }
 
     /// The bodies of trolls that lie down and may yet rise, which a flame can still reach: fire
@@ -358,6 +383,20 @@ pub fn toward_target(eye: &GlobalTransform, points: Vec<Vec3>, view: &crate::tun
 /// the half height. Our own.
 const TOWARD_LIMIT: f32 = 0.6;
 
+/// How fast a swing with `hand` goes: the gloves' attack rate and the swung weapon's own. The
+/// delver's gear counts the main hand's weapon, so an off-hand swing swaps that for the off-hand
+/// weapon's (a shield or a torch has none, and a fist is the usual pace).
+fn swing_rate(hand: Slot, inventory: &Inventory, character: &Character) -> f32 {
+    let rate = character.gear(inventory).attack_rate as f32;
+    if hand == Slot::Mainhand {
+        return rate;
+    }
+    let stat = |slot: Slot, weapons_only: bool| {
+        inventory.worn(slot).and_then(|id| inventory.item(id)).map_or(1.0, |i| if !weapons_only || i.profile.stats.is_weapon() { i.profile.stats.attack_rate } else { 1.0 })
+    };
+    rate / stat(Slot::Mainhand, false) * stat(hand, true)
+}
+
 /// Moves each swing on; at [`LANDS`] its blow finds the nearest creature or folk in reach and
 /// ahead, rolls to hit against its [`ArmourClass`] (at disadvantage while the delver is
 /// poisoned, [`crate::character::DelverEffects::attack_odds`]), and on a hit rolls its damage.
@@ -381,8 +420,8 @@ fn land_blows(
     let rules = crate::rules::GameRules::of(&rules);
     let dt = time.delta_secs();
     for (player, at, mut swing, effects) in &mut players {
-        swing.t += dt;
-        if !swing.landed && swing.t >= LANDS {
+        swing.step(dt);
+        if !swing.landed && swing.lands() {
             swing.landed = true;
             let from = at.translation.xz();
             let forward = at.forward().as_vec3().xz();
@@ -394,7 +433,8 @@ fn land_blows(
                 let attack = attack_roll(rules, &swing.weapon, character.strength(), ac.0, odds, &mut dice.0);
                 info!("swing: {}", attack.line());
                 if attack.hit {
-                    let damage = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
+                    let rolled = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
+                    let damage = rolled + super::bane_damage(&swing.weapon.bane, strikeable.foe(target), &mut dice.0);
                     struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20 });
                     if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
                         burned.write(Burned { target });
@@ -410,7 +450,7 @@ fn land_blows(
                 burned.write(Burned { target });
             }
         }
-        if swing.t >= SWING_TIME {
+        if swing.is_over() {
             commands.entity(player).remove::<Swing>();
         }
     }
@@ -822,6 +862,66 @@ mod tests {
     }
 
     #[test]
+    fn a_quick_swing_runs_and_lands_in_proportion() {
+        let run = |rate: f32| {
+            let mut swing = Swing { rate, ..Swing::new(Weapon::fist()) };
+            let (mut at, mut lands) = (0.0_f32, None);
+            while !swing.is_over() {
+                swing.step(0.001);
+                at += 0.001;
+                if lands.is_none() && swing.lands() {
+                    lands = Some(at);
+                }
+            }
+            (lands.unwrap(), at)
+        };
+        let (usual_lands, usual) = run(1.0);
+        assert!((usual_lands - LANDS).abs() < 0.003 && (usual - SWING_TIME).abs() < 0.003, "{usual_lands} {usual}");
+        let (lands, over) = run(1.1);
+        assert!((lands - LANDS / 1.1).abs() < 0.003 && (over - SWING_TIME / 1.1).abs() < 0.003, "{lands} {over}");
+    }
+
+    #[test]
+    fn a_quick_sword_starts_a_swing_at_its_rate() {
+        let rate_with = |affix: Option<&str>| {
+            let (mut app, delver) = swinger();
+            let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+            if let Some(name) = affix {
+                let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+                affix.apply_to_stats(&mut sword.profile.stats);
+                sword.affixes.push(affix);
+            }
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(sword);
+            inventory.wear(id, Slot::Mainhand).unwrap();
+            app.update();
+            app.world().get::<Swing>(delver).unwrap().rate
+        };
+        assert_eq!(rate_with(None), 1.0);
+        assert!((rate_with(Some("Quick")) - 1.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_off_hand_swing_takes_the_off_hand_weapons_rate() {
+        let character = Character::roll(3);
+        let mut inventory = Inventory::default();
+        let quick = |base: &str, name: &str| {
+            let mut item = fb_items::roll_item(base, 3).unwrap();
+            let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+            affix.apply_to_stats(&mut item.profile.stats);
+            item.affixes.push(affix);
+            item
+        };
+        let sword = inventory.add(quick("Sword", "of Swiftness"));
+        inventory.wear(sword, Slot::Mainhand).unwrap();
+        assert!((swing_rate(Slot::Mainhand, &inventory, &character) - 1.2).abs() < 1e-6);
+        assert!((swing_rate(Slot::Offhand, &inventory, &character) - 1.0).abs() < 1e-6, "a fist in the off hand");
+        let dagger = inventory.add(quick("Dagger", "Quick"));
+        inventory.wear(dagger, Slot::Offhand).unwrap();
+        assert!((swing_rate(Slot::Offhand, &inventory, &character) - 1.1).abs() < 1e-6);
+    }
+
+    #[test]
     fn each_swing_takes_a_fixed_bite_of_stamina() {
         let (mut app, delver) = swinger();
         app.update();
@@ -832,6 +932,21 @@ mod tests {
         app.update();
         let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
         assert!((value - (1.0 - 2.0 * fb_character::SWING_COST)).abs() < 1e-9, "{value}");
+    }
+
+    #[test]
+    fn a_light_handed_sword_swings_for_less_stamina() {
+        let (mut app, delver) = swinger();
+        let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+        let affix = fb_items::tables::affixes().iter().find(|a| a.name == "Light-handed").unwrap();
+        affix.apply_to_stats(&mut sword.profile.stats);
+        sword.affixes.push(affix);
+        let mut inventory = app.world_mut().resource_mut::<Inventory>();
+        let id = inventory.add(sword);
+        inventory.wear(id, Slot::Mainhand).unwrap();
+        app.update();
+        let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
+        assert!((value - (1.0 - 0.06)).abs() < 1e-6, "{value}");
     }
 
     #[test]

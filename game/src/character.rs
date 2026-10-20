@@ -294,13 +294,31 @@ pub struct Derived {
     pub heal_on_kill: f32,
     /// Multiple of their pace, from what they wear.
     pub speed: f32,
-    /// Chance the shield in their off hand, raised, turns aside a blow that would hit.
+    /// Chance the shield in their off hand, raised, turns aside a blow that would hit: the
+    /// shield's own and what worn gloves and charms add, at most 90%; 0 with no shield.
     pub block_chance: f32,
     /// Points of luck from what they wear: each rolls the loot of a level they come to a level
     /// deeper.
     pub luck: f32,
     /// What worn items add to their ability scores.
     pub abilities: AbilityBonus,
+    /// What worn gear adds to a melee or a missile hit roll, the weapon in hand apart.
+    pub to_hit: f32,
+    /// What worn gear adds to a missile hit roll alone.
+    pub ranged_to_hit: f32,
+    /// The fraction of damage worn gear takes off each kind of creature's blows, by
+    /// [`fb_items::Foe`] index.
+    pub ward: [f32; fb_items::Foe::COUNT],
+    /// The chance each kind of creature never notices them, by [`fb_items::Foe`] index.
+    pub shun: [f32; fb_items::Foe::COUNT],
+    /// Multiple of the speed of their swings, draws and reloads, from the weapon in hand and
+    /// their gloves.
+    pub attack_rate: f32,
+    /// Multiple of how fast their stamina refills, from what they wear.
+    pub stamina_refill: f32,
+    /// Multiple of what swinging, blocking and sprinting cost them in stamina, from what they
+    /// wear; below 1 is a saving.
+    pub stamina_cost: f32,
 }
 
 /// The odds the loot of a level `depth` down rolls against for the delver: the level's, with the
@@ -324,17 +342,25 @@ impl Character {
     /// ([`Loadout::capacity`] and the rest).
     pub fn loadout(&self, inventory: &Inventory) -> Loadout {
         let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
-        for (slot, item) in inventory.equipped() {
+        let equipped = inventory.equipped();
+        // Block chance counts only with a shield held in the off hand: the gloves and charms that
+        // add to it do nothing alone.
+        let shielded = equipped.iter().any(|(slot, item)| is_shield(*slot, item));
+        for (slot, item) in equipped {
             let s = &item.profile.stats;
-            // Only the main hand strikes, so only its weapon heals on a kill; only a shield held
-            // in the off hand blocks.
+            // Only the main hand strikes, so only its weapon heals on a kill.
             let heal_on_kill = if slot == fb_items::Slot::Mainhand { s.heal_on_kill as f64 } else { 0.0 };
-            let block_chance = if is_shield(slot, item) { s.block_chance as f64 } else { 0.0 };
+            let block_chance = if shielded { s.block_chance as f64 } else { 0.0 };
+            // A weapon's own to hit is on the roll already ([`crate::combat::Weapon::of_stats`]), so
+            // only the worn gear's adds to it; the ranged part counts whatever it is on.
+            let to_hit = if slot == fb_items::Slot::Mainhand || s.is_weapon() { 0.0 } else { s.to_hit as f64 };
+            // Only the weapon in hand and the gloves quicken a swing; a torch or a cloak does not.
+            let attack_rate = if matches!(slot, fb_items::Slot::Mainhand | fb_items::Slot::Hands) { s.attack_rate as f64 } else { 1.0 };
             let point = |v: f32| v.round() as i32;
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64 },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from) },
             );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
@@ -401,6 +427,13 @@ impl Character {
             block_chance: gear.block_chance as f32,
             luck: gear.luck as f32,
             abilities: gear.abilities,
+            to_hit: gear.to_hit as f32,
+            ranged_to_hit: gear.ranged_to_hit as f32,
+            ward: gear.ward.map(|w| w as f32),
+            shun: gear.shun.map(|w| w as f32),
+            attack_rate: gear.attack_rate as f32,
+            stamina_refill: gear.stamina_refill as f32,
+            stamina_cost: gear.stamina_cost as f32,
         }
     }
 }
@@ -449,6 +482,22 @@ pub fn character_for(seed: u32) -> Character {
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component)]
 pub struct Load(#[reflect(remote = crate::inspect::remote::LoadBandDef)] pub LoadBand);
+
+/// What the delver's gear makes of their stamina: how fast it refills and what sprinting,
+/// swinging and blocking cost, as multiples of the usual. Kept up with [`Load`] by
+/// `player::weigh_the_delver`.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct GearStamina {
+    pub refill: f32,
+    pub cost: f32,
+}
+
+impl Default for GearStamina {
+    fn default() -> Self {
+        GearStamina { refill: 1.0, cost: 1.0 }
+    }
+}
 
 /// The delver's hunger, thirst and sleepiness, on the [`Player`](crate::play::Player) from their
 /// spawn, so a new delve starts Fed. Eating and drinking take from it (`crate::eat`); the game
@@ -629,7 +678,10 @@ mod tests {
 
     /// A rolled `base` with the real affix `name` applied to its stats.
     fn with_affix(base: &str, seed: u32, name: &str) -> fb_items::Item {
-        let mut item = fb_items::roll_item(base, seed).unwrap();
+        with_affix_to(fb_items::roll_item(base, seed).unwrap(), name)
+    }
+
+    fn with_affix_to(mut item: fb_items::Item, name: &str) -> fb_items::Item {
         let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
         affix.apply_to_stats(&mut item.profile.stats);
         item.affixes.push(affix);
@@ -687,7 +739,7 @@ mod tests {
         let delver = Character::roll(4);
         let mut inventory = Inventory::default();
         assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0);
-        let sword = inventory.add(with_affix("Sword", 3, "of the Leech"));
+        let sword = inventory.add(with_affix("Sword", 5, "of the Leech"));
         inventory.wear(sword, Slot::Offhand).unwrap();
         assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0, "the off hand does not strike");
         inventory.take_out(sword);
@@ -746,6 +798,71 @@ mod tests {
         assert!((delver.derive(&inventory).speed - 1.2).abs() < 1e-6);
         inventory.take_out(shield);
         assert_eq!(delver.derive(&inventory).block_chance, 0.0);
+    }
+
+    #[test]
+    fn only_the_weapon_and_the_gloves_quicken_an_attack_and_the_rates_multiply() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        assert_eq!(delver.derive(&inventory).attack_rate, 1.0);
+        let sword = inventory.add(with_affix("Sword", 4, "Quick"));
+        inventory.wear(sword, Slot::Mainhand).unwrap();
+        assert!((delver.derive(&inventory).attack_rate - 1.1).abs() < 1e-6);
+        let gloves = inventory.add(with_affix("Gloves", 4, "of the Duellist"));
+        inventory.wear(gloves, Slot::Hands).unwrap();
+        let derived = delver.derive(&inventory);
+        assert!((derived.attack_rate - 1.155).abs() < 1e-6, "{}", derived.attack_rate);
+        assert!(delver.loadout(&inventory).attack_rate().line().contains("× "));
+        // A torch in the off hand or a ring does nothing for it, whatever it carries.
+        let torch = inventory.add(with_affix("Torch", 4, "of Swiftness"));
+        inventory.wear(torch, Slot::Offhand).unwrap();
+        let ring = inventory.add(with_affix("Ring", 4, "Quick"));
+        inventory.wear(ring, Slot::Ring1).unwrap();
+        assert!((delver.derive(&inventory).attack_rate - 1.155).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stamina_refill_and_cost_compose_multiplicatively_across_items() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let plain = delver.derive(&inventory);
+        assert_eq!((plain.stamina_refill, plain.stamina_cost), (1.0, 1.0));
+        for (base, slot, affix) in [("Boots", Slot::Feet, "Tireless"), ("Charm", Slot::Charm, "of Second Wind"), ("Sword", Slot::Mainhand, "Light-handed"), ("Belt", Slot::Belt, "of Endurance")] {
+            let id = inventory.add(with_affix(base, 4, affix));
+            inventory.wear(id, slot).unwrap();
+        }
+        let derived = delver.derive(&inventory);
+        assert!((derived.stamina_refill - 1.2 * 1.3).abs() < 1e-6, "{}", derived.stamina_refill);
+        assert!((derived.stamina_cost - 0.75 * 0.8).abs() < 1e-6, "{}", derived.stamina_cost);
+        assert!(delver.loadout(&inventory).stamina_cost().line().contains("× "));
+    }
+
+    #[test]
+    fn gloves_and_charms_add_to_a_held_shields_block_up_to_90_percent() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let of_chance = |chance: f32| (1..).map(|s| fb_items::roll_item("Shield", s).unwrap()).find(|i| i.profile.stats.block_chance == chance).unwrap();
+        let mut inventory = Inventory::default();
+        let gloves = inventory.add(with_affix("Gloves", 4, "of Deflection"));
+        inventory.wear(gloves, Slot::Hands).unwrap();
+        assert_eq!(delver.derive(&inventory).block_chance, 0.0, "gloves alone block nothing");
+        assert_eq!(delver.loadout(&inventory).block_chance().value(), 0.0);
+        let buckler = inventory.add(of_chance(0.3));
+        inventory.wear(buckler, Slot::Offhand).unwrap();
+        assert!((delver.derive(&inventory).block_chance - 0.4).abs() < 1e-6, "a buckler's 30% and 10% more");
+        assert!(delver.loadout(&inventory).block_chance().line().contains("(+0.1)"));
+        inventory.take_out(buckler);
+        assert_eq!(delver.derive(&inventory).block_chance, 0.0, "the shield put away, the gloves block nothing again");
+        let tower = inventory.add(with_affix_to(of_chance(0.6), "of the Rampart"));
+        inventory.wear(tower, Slot::Offhand).unwrap();
+        let charm = inventory.add(with_affix("Charm", 4, "of the Rampart"));
+        inventory.wear(charm, Slot::Charm).unwrap();
+        let rampart = inventory.add(with_affix("Gauntlets", 4, "of the Rampart"));
+        inventory.take_out(gloves);
+        inventory.wear(rampart, Slot::Hands).unwrap();
+        assert!((delver.derive(&inventory).block_chance - 0.9).abs() < 1e-6, "60% and three 20%s stop at 90%");
     }
 
     #[test]

@@ -28,6 +28,8 @@ pub mod rules;
 
 use rules::{Rules, defaults};
 
+use fb_items::foe::{MAX_SHUN, MAX_WARD};
+use fb_items::Foe;
 use serde::{Deserialize, Serialize};
 
 /// The five core attributes of a character (D&D 5e SRD 5.1, p. 76).
@@ -248,8 +250,9 @@ pub struct Worn {
     /// Multiple of the wearer's pace.
     #[serde(default = "default_gear")]
     pub speed: f64,
-    /// Chance to turn aside a blow that would hit: a held shield's. Only a shield in the off
-    /// hand counts, which the game decides when it builds the [`Worn`].
+    /// Chance to turn aside a blow that would hit: a held shield's, and what other gear adds to
+    /// it. It counts only with a shield in the off hand, which the game decides when it builds
+    /// the [`Worn`].
     #[serde(default)]
     pub block_chance: f64,
     /// Points added to the ability scores.
@@ -268,13 +271,40 @@ pub struct Worn {
     /// Points added to the wearer's saves against venom.
     #[serde(default)]
     pub poison_resistance: f64,
+    /// Points added to the melee attack and the shot roll: worn gear's, not the weapon in hand,
+    /// whose own to hit the weapon's roll already has.
+    #[serde(default)]
+    pub to_hit: f64,
+    /// Points added to the shot roll only: any gear's, the bow's own included.
+    #[serde(default)]
+    pub ranged_to_hit: f64,
+    /// The fraction of damage taken off each kind of creature's blows, by [`fb_items::Foe`] index.
+    #[serde(default)]
+    pub ward: [f64; Foe::COUNT],
+    /// The chance each kind of creature never notices the wearer, by [`fb_items::Foe`] index.
+    #[serde(default)]
+    pub shun: [f64; Foe::COUNT],
+    /// Multiple of the speed of a swing, a draw and a reload: the weapon in hand's and the
+    /// gloves', which the game decides when it builds the [`Worn`].
+    #[serde(default = "default_gear")]
+    pub attack_rate: f64,
+    /// Multiple of how fast stamina refills (Tireless, of Second Wind).
+    #[serde(default = "default_gear")]
+    pub stamina_refill: f64,
+    /// Multiple of what stamina costs: a swing, a block and a sprint's drain (Light-handed, of
+    /// Endurance). Lower is better.
+    #[serde(default = "default_gear")]
+    pub stamina_cost: f64,
 }
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0 }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] }
     }
 }
+
+/// The most any gear makes a raised shield block: 90%, our own, so no blow is certainly turned.
+pub const MAX_BLOCK_CHANCE: f64 = 0.9;
 
 /// A light the delver carries, as plain numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -307,7 +337,7 @@ pub struct Gear {
     pub heal_on_kill: f64,
     /// Multiple of the delver's pace: the items' multiplied.
     pub speed: f64,
-    /// Chance to turn aside a blow that would hit: the items' added, at most 1.
+    /// Chance to turn aside a blow that would hit: the items' added, at most [`MAX_BLOCK_CHANCE`].
     pub block_chance: f64,
     /// Points added to the ability scores: the items' added.
     pub abilities: AbilityBonus,
@@ -323,6 +353,29 @@ pub struct Gear {
     /// Points added to saves against venom: the worn items' added.
     #[serde(default)]
     pub poison_resistance: f64,
+    /// Points added to the melee attack and the shot roll: the worn items' added.
+    #[serde(default)]
+    pub to_hit: f64,
+    /// Points added to the shot roll only: the items' added.
+    #[serde(default)]
+    pub ranged_to_hit: f64,
+    /// The fraction of damage taken off each kind of creature's blows: the items' added, at most
+    /// [`MAX_WARD`](fb_items::foe::MAX_WARD).
+    #[serde(default)]
+    pub ward: [f64; Foe::COUNT],
+    /// The chance each kind of creature never notices the delver: the items' chances combined
+    /// ([`fb_items::foe::combine_shun`], at most [`MAX_SHUN`](fb_items::foe::MAX_SHUN)).
+    #[serde(default)]
+    pub shun: [f64; Foe::COUNT],
+    /// Multiple of the speed of a swing, a draw and a reload: the items' multiplied.
+    #[serde(default = "default_gear")]
+    pub attack_rate: f64,
+    /// Multiple of how fast stamina refills: the items' multiplied.
+    #[serde(default = "default_gear")]
+    pub stamina_refill: f64,
+    /// Multiple of what swinging, blocking and sprinting cost in stamina: the items' multiplied.
+    #[serde(default = "default_gear")]
+    pub stamina_cost: f64,
 }
 
 impl Default for Gear {
@@ -336,8 +389,10 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0 };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] };
         for item in worn {
+            gear.to_hit += item.to_hit;
+            gear.ranged_to_hit += item.ranged_to_hit;
             gear.luck += item.luck;
             gear.recovery += item.recovery;
             gear.poison_resistance += item.poison_resistance;
@@ -348,9 +403,17 @@ impl Gear {
             gear.stealth += item.stealth;
             gear.heal_on_kill += item.heal_on_kill;
             gear.speed *= item.speed;
-            gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, 1.0);
+            gear.attack_rate *= item.attack_rate;
+            gear.stamina_refill *= item.stamina_refill;
+            gear.stamina_cost *= item.stamina_cost;
+            gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, MAX_BLOCK_CHANCE);
             gear.abilities = gear.abilities.plus(item.abilities);
             gear.disease_risk *= item.disease_risk;
+            for foe in Foe::ALL {
+                let i = foe.index();
+                gear.ward[i] = (gear.ward[i] + item.ward[i]).clamp(0.0, MAX_WARD as f64);
+                gear.shun[i] = (1.0 - (1.0 - gear.shun[i]) * (1.0 - item.shun[i])).clamp(0.0, MAX_SHUN as f64);
+            }
         }
         for light in lights {
             if light.reach > gear.light {
@@ -802,6 +865,12 @@ impl Stamina {
 
     /// [`Stamina::rate_per_second`] under `rules`.
     pub fn rate_per_second_with(rules: &Rules, activity: Activity, load: LoadBand) -> f64 {
+        Stamina::rate_per_second_geared(rules, activity, load, 1.0, 1.0)
+    }
+
+    /// [`Stamina::rate_per_second_with`] for a delver whose gear multiplies the refill rates by
+    /// `refill` and the sprint drain by `cost` ([`Gear::stamina_refill`], [`Gear::stamina_cost`]).
+    pub fn rate_per_second_geared(rules: &Rules, activity: Activity, load: LoadBand, refill: f64, cost: f64) -> f64 {
         let s = &rules.stamina;
         match activity {
             Activity::Exerting => {
@@ -810,11 +879,11 @@ impl Stamina {
                     LoadBand::Burdened => s.burdened_drain,
                     LoadBand::Encumbered | LoadBand::Overloaded => s.encumbered_drain,
                 };
-                -heavier / s.sprint_seconds
+                -heavier * cost / s.sprint_seconds
             }
-            Activity::Walking => 1.0 / s.walk_refill_seconds,
-            Activity::Resting => 1.0 / s.stand_refill_seconds,
-            Activity::Sleeping => s.sleep_refill_factor / s.stand_refill_seconds,
+            Activity::Walking => refill / s.walk_refill_seconds,
+            Activity::Resting => refill / s.stand_refill_seconds,
+            Activity::Sleeping => refill * s.sleep_refill_factor / s.stand_refill_seconds,
         }
     }
 
@@ -830,7 +899,13 @@ impl Stamina {
 
     /// [`Stamina::step`] under `rules`.
     pub fn step_with(&mut self, rules: &Rules, seconds: f64, activity: Activity, load: LoadBand) {
-        self.value = (self.value + Stamina::rate_per_second_with(rules, activity, load) * seconds).clamp(0.0, 1.0);
+        self.step_geared(rules, seconds, activity, load, 1.0, 1.0);
+    }
+
+    /// [`Stamina::step_with`] under the gear's `refill` and `cost` multiples
+    /// ([`Stamina::rate_per_second_geared`]).
+    pub fn step_geared(&mut self, rules: &Rules, seconds: f64, activity: Activity, load: LoadBand, refill: f64, cost: f64) {
+        self.value = (self.value + Stamina::rate_per_second_geared(rules, activity, load, refill, cost) * seconds).clamp(0.0, 1.0);
         self.settle(rules);
     }
 
@@ -1603,6 +1678,28 @@ mod tests {
     }
 
     #[test]
+    fn wards_add_to_a_cap_and_shuns_combine() {
+        let ward = |foe: Foe, by: f64| {
+            let mut w = Worn::default();
+            w.ward[foe.index()] = by;
+            w
+        };
+        let shun = |foe: Foe, by: f64| {
+            let mut w = Worn::default();
+            w.shun[foe.index()] = by;
+            w
+        };
+        let gear = Gear::new(0.0, [ward(Foe::Undead, 0.25), ward(Foe::Undead, 0.25), ward(Foe::Vermin, 0.25), shun(Foe::Vermin, 0.5), shun(Foe::Vermin, 0.35)], []);
+        assert_eq!(gear.ward[Foe::Undead.index()], 0.5);
+        assert_eq!(gear.ward[Foe::Vermin.index()], 0.25);
+        assert_eq!(gear.ward[Foe::Troll.index()], 0.0);
+        assert!((gear.shun[Foe::Vermin.index()] - 0.675).abs() < 1e-9);
+        let many = Gear::new(0.0, [ward(Foe::Spider, 0.5), ward(Foe::Spider, 0.5)], []);
+        assert_eq!(many.ward[Foe::Spider.index()], 0.75, "capped");
+        assert_eq!(Gear::default().ward, [0.0; Foe::COUNT]);
+    }
+
+    #[test]
     fn gear_adds_carry_multiplies_rates_and_takes_the_best_darkvision() {
         let worn = [
             Worn { carry: 25.0, darkvision: 10.0, hunger_rate: 0.85, ..Worn::default() },
@@ -1770,6 +1867,23 @@ mod tests {
         let mut walking = empty;
         walking.step(8.0, Activity::Walking, LoadBand::Light);
         assert!(walking.value > 0.5 && walking.value < 1.0);
+    }
+
+    #[test]
+    fn gear_quickens_the_refill_and_slows_the_sprint_drain() {
+        let rules = defaults();
+        let empty = Stamina { value: 0.0, winded: true };
+        let mut standing = empty;
+        standing.step_geared(rules, 8.0 / 1.3, Activity::Resting, LoadBand::Light, 1.3, 1.0);
+        assert!((standing.value - 1.0).abs() < 1e-9, "of Second Wind fills a bar in 8 / 1.3 s: {standing:?}");
+        let mut sprinting = Stamina::default();
+        sprinting.step_geared(rules, 10.0, Activity::Exerting, LoadBand::Light, 1.0, 0.8);
+        assert!((sprinting.value - (1.0 - 10.0 * 0.8 / 30.0)).abs() < 1e-9, "{sprinting:?}");
+        let mut plain = Stamina::default();
+        plain.step_geared(rules, 10.0, Activity::Exerting, LoadBand::Light, 1.3, 1.0);
+        let mut again = Stamina::default();
+        again.step_with(rules, 10.0, Activity::Exerting, LoadBand::Light);
+        assert_eq!(plain, again, "refill never touches the drain");
     }
 
     #[test]

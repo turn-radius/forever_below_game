@@ -161,7 +161,7 @@ pub fn bases_of(family: Family) -> impl Iterator<Item = &'static str> {
 /// (the level's item spots). Its own stream, so `roll_item(base, seed)` with the same seed is
 /// unaffected; the mixing constant is this port's own. `None` for a family no base uses.
 pub fn base_for(family: Family, seed: u32) -> Option<&'static str> {
-    let bases: Vec<(&str, u32)> = bases_of(family).map(|b| (b, find_weight(b))).collect();
+    let bases: Vec<(&str, u32)> = bases_of(family).map(|b| (b, find_weight(b))).filter(|&(_, w)| w > 0).collect();
     (!bases.is_empty()).then(|| *Mulberry32::new(seed ^ 0xBA5E_F00D).weighted(&bases))
 }
 
@@ -169,10 +169,26 @@ pub fn base_for(family: Family, seed: u32) -> Option<&'static str> {
 /// its reader for good ([`crate::Item::lesson`]), so it is found about once for every twenty
 /// scrolls and notes (our own). With every weight 1 the pick is the uniform one it always was.
 pub fn find_weight(name: &str) -> u32 {
+    if held_back(name) {
+        return 0;
+    }
     match name {
         "Scroll" | "Note" => 10,
         _ => 1,
     }
+}
+
+/// Bases nothing in the game uses yet, so none is found loose, in a crate or in a kit (our own).
+/// Like the stats nothing reads ([`crate::stats::Stat::in_play`]), they wait for their system:
+/// bandages for bandaging. They stay in [`ARMORY_BASES`] and `data/goods.json`, so the forge and
+/// [`roll_item`](crate::roll_item) still make them; when the system arrives the base comes off
+/// this list.
+pub const HELD_BACK: &[&str] = &["Bandages"];
+
+/// Whether base `name` is held back ([`HELD_BACK`]): [`find_weight`] gives it 0, and crate
+/// stock and outfit goods skip it.
+pub fn held_back(name: &str) -> bool {
+    HELD_BACK.contains(&name)
 }
 
 /// The shape of base `name` from `seed`: one of its accepted styles, rolled with the
@@ -374,6 +390,19 @@ fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
 mod tests {
     use super::*;
     use crate::tables::{base_groups, bases, goods};
+
+    #[test]
+    fn held_back_bases_are_never_found_loose_but_still_roll_by_name() {
+        for base in HELD_BACK {
+            assert!(held_back(base) && find_weight(base) == 0, "{base}");
+            assert!(armory_base(base).is_some(), "{base} is in ARMORY_BASES");
+            assert!(crate::roll_item(base, 1).is_some(), "{base} still rolls by name");
+        }
+        assert!(!held_back("Rope"));
+        let found: Vec<_> = (0..2000).filter_map(|seed| base_for(Family::Sundry, seed)).collect();
+        assert!(found.len() == 2000 && found.iter().all(|b| !held_back(b)), "a held-back base came up loose");
+        assert!(found.contains(&"Rope"), "the rest of the sundries still come up");
+    }
 
     fn every_named_base() -> Vec<&'static str> {
         let mut names: Vec<&str> = bases().keys().chain(goods().keys()).map(String::as_str).collect();

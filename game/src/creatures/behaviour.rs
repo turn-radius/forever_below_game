@@ -180,6 +180,23 @@ pub struct Brain {
     /// Whether it found nowhere farther to run to.
     cornered: bool,
     rng: Mulberry32,
+    /// This creature's one-off roll, 0 to 1, fixed by its own seed: it never notices a delver
+    /// whose shun chance for its kind is above it ([`Shunned::passes_over`]), until it is struck
+    /// ([`Aroused`]).
+    pub shun_roll: f32,
+}
+
+/// Marks a creature the delver has struck: it no longer passes over a delver who shuns its kind
+/// and chases like any other.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Aroused;
+
+/// Mixed into a creature's seed for its [`Brain::shun_roll`]. Our own.
+const SHUN_SALT: u32 = 0x5B0A_C3D1;
+
+/// The one-off roll, 0 to 1, of the creature with `seed`: the same every run.
+pub fn shun_roll(seed: u32) -> f32 {
+    Mulberry32::new(seed ^ SHUN_SALT).next_f64() as f32
 }
 
 /// Seconds out of sight, at the place it last saw the player, before a creature gives up.
@@ -417,6 +434,7 @@ pub fn brain_for(level: &Level, critter: &Critter, at: Vec2) -> Brain {
         flee_in: 0.0,
         cornered: false,
         rng,
+        shun_roll: shun_roll(critter.spot.seed),
     }
 }
 
@@ -440,7 +458,8 @@ fn behave(
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
     player: Query<DelverToStrike, (With<Player>, Without<Critter>)>,
-    mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform, Option<&mut Flight>)>,
+    shunned: Query<&crate::combat::vitals::Shunned, With<Player>>,
+    mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform, Option<&mut Flight>, Has<Aroused>)>,
     mut vaults: Local<Option<((u32, u32), Vaults)>>,
     mut attacks: BlowsAtDelver,
     mut commands: Commands,
@@ -457,8 +476,9 @@ fn behave(
     let blocked = blocked_by(level, &blocked_cells);
     let delver_ac = player.iter().next().and_then(|(_, ac)| ac.copied());
     let player = player.iter().next().map(|(t, _)| t.translation.xz());
+    let shunned = shunned.iter().next().copied().unwrap_or_default();
     // Every creature's circle, to keep the others out of.
-    let bodies: Vec<(Entity, Vec2, f32)> = creatures.iter().map(|(e, c, _, _, t, _)| (e, t.translation.xz(), body_radius(c))).collect();
+    let bodies: Vec<(Entity, Vec2, f32)> = creatures.iter().map(|(e, c, _, _, t, ..)| (e, t.translation.xz(), body_radius(c))).collect();
     // A stone hall's vaults, worked out once for the level, for the bats that fly under them.
     if level.style == fb_level::LevelStyle::StoneHalls && vaults.as_ref().is_none_or(|(key, _)| *key != (level.seed, level.depth)) && creatures.iter().any(|(_, c, ..)| c.spot.species.is_bat()) {
         *vaults = Some(((level.seed, level.depth), Vaults::new(level)));
@@ -466,14 +486,17 @@ fn behave(
     let vaults = vaults.as_ref().filter(|_| level.style == fb_level::LevelStyle::StoneHalls).map(|(_, v)| v);
     let t = time.elapsed_secs();
     let (tune, player_radius) = (&tuning.creatures, tuning.moving.body_radius);
-    for (entity, critter, mut brain, mut intent, mut transform, mut flight) in &mut creatures {
+    for (entity, critter, mut brain, mut intent, mut transform, mut flight, aroused) in &mut creatures {
         let brain = &mut *brain;
         let species = critter.spot.species;
         let snake = species.is_snake();
         let bat = species.is_bat();
         let at = transform.translation.xz();
         let radius = body_radius(critter);
-        let sees = player.filter(|p| p.distance(at) <= notice_range(species, tune.sense_scale) && line_of_sight(grid(at), grid(*p), &blocked));
+        // A creature whose own roll falls under the delver's shun chance for its kind does not
+        // notice them, unless the delver has struck it.
+        let heeds = aroused || !shunned.passes_over(species.foe(), brain.shun_roll);
+        let sees = player.filter(|p| heeds && p.distance(at) <= notice_range(species, tune.sense_scale) && line_of_sight(grid(at), grid(*p), &blocked));
         brain.cooldown = (brain.cooldown - dt).max(0.0);
 
         // Notice, follow, give up.
@@ -1040,6 +1063,50 @@ mod tests {
     fn attacks(app: &mut App) -> Vec<AttackOnDelver> {
         let messages = app.world().resource::<Messages<AttackOnDelver>>();
         messages.iter_current_update_messages().copied().collect()
+    }
+
+    #[test]
+    fn half_the_rats_shun_a_delver_with_a_fifty_percent_vermin_shun_and_the_same_ones_every_run() {
+        use crate::combat::vitals::Shunned;
+        let mut shun = [0.0; fb_items::Foe::COUNT];
+        shun[fb_items::Foe::Vermin.index()] = 0.5;
+        let delver = Shunned(shun);
+        let passes = |seed: u32| delver.passes_over(Species::Rat.foe(), shun_roll(seed));
+        let first: Vec<bool> = (0..200).map(passes).collect();
+        let second: Vec<bool> = (0..200).map(passes).collect();
+        assert_eq!(first, second, "the same rats every run");
+        let unaware = first.iter().filter(|&&p| p).count();
+        assert!((85..=115).contains(&unaware), "{unaware} of 200 rats never notice");
+        assert!((0..200).all(|s| !Shunned::default().passes_over(Species::Rat.foe(), shun_roll(s))), "no shun, every rat notices");
+    }
+
+    #[test]
+    fn a_shunning_rat_ignores_the_delver_until_it_is_struck_and_then_chases() {
+        use crate::combat::vitals::Shunned;
+        let level = fb_level::generate(1207, 1);
+        let first = level.creatures.iter().find(|c| c.species.is_rat()).unwrap();
+        let room = level.rooms[level.room_at(first.x as i32, first.y as i32).unwrap()];
+        let (cx, cy) = room.centre();
+        let player_at = Vec2::new(cx, cy) * CELL + Vec2::new(-1.0, 1.3) * CELL;
+        let (mut app, roots, player) = level_app(player_at);
+        // Every vermin shuns them (a chance of 1 is above every roll).
+        let mut shun = [0.0; fb_items::Foe::COUNT];
+        shun[fb_items::Foe::Vermin.index()] = 1.0;
+        app.world_mut().entity_mut(player).insert(Shunned(shun));
+        let pack = rat_pack(&app, &roots);
+        for _ in 0..600 {
+            app.update();
+            assert!(attacks(&mut app).iter().all(|a| !pack.contains(&a.attacker)), "a rat that shuns them attacked");
+        }
+        for &rat in &pack {
+            app.world_mut().entity_mut(rat).insert(Aroused);
+        }
+        let mut bitten = false;
+        for _ in 0..600 {
+            app.update();
+            bitten |= attacks(&mut app).iter().any(|a| pack.contains(&a.attacker));
+        }
+        assert!(bitten, "struck rats chase and bite");
     }
 
     #[test]
