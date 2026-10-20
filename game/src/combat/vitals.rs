@@ -631,7 +631,7 @@ mod tests {
         app.update();
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 6, "a plain fist heals nothing");
         let mut inventory = Inventory::default();
-        let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+        let mut sword = fb_items::roll_item("Sword", 5).unwrap();
         let leech = fb_items::tables::affixes().iter().find(|a| a.name == "of the Leech").unwrap();
         leech.apply_to_stats(&mut sword.profile.stats);
         let id = inventory.add(sword);

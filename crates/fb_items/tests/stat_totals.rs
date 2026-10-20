@@ -10,27 +10,29 @@ fn stat_totals_pinned_across_base_seeds() {
         // of the Ox. Every total rose by 1 when Speed (1 as usual) joined the stats, and the belts
         // roll among the new slot-bound suffixes. Shirt 12345, Trousers 12345 and Breeches 54321 changed
         // when the rolls moved eight levels down: they come up rare there. Breeches 99 (Mildewed)
-        // and Belt 99 (Feeble) changed when flaws could roll on magic items.
-        ("Shirt", 1, 17.0),
+        // and Belt 99 (Feeble) changed when flaws could roll on magic items. Nine changed when the
+        // comfort suffixes took slots (Shirt 1 and 12345, Trousers 1, Breeches 1 and 99, Belt 1, Club 1,
+        // Hand axe 1, Torch 123): the pool a draw lands in is smaller, so those seeds roll another affix.
+        ("Shirt", 1, 9.0),
         ("Shirt", 42, 7.0),
-        ("Shirt", 12345, 6.1),
-        ("Trousers", 1, 17.5),
+        ("Shirt", 12345, 8.6),
+        ("Trousers", 1, 9.5),
         ("Trousers", 42, 7.5),
         ("Trousers", 12345, 7.1),
-        ("Breeches", 1, 16.5),
-        ("Breeches", 99, 32.0),
+        ("Breeches", 1, 8.5),
+        ("Breeches", 99, 9.0),
         ("Breeches", 54321, 10.5),
         ("Hood", 1, 16.5),
         ("Hood", 77, 7.0),
         ("Mail coif", 1, 22.0),
-        ("Belt", 1, 5.85),
+        ("Belt", 1, 8.0),
         ("Belt", 99, 8.0),
-        ("Club", 1, 17.0),
+        ("Club", 1, 8.0),
         ("Club", 42, 7.0),
-        ("Hand axe", 1, 17.0),
+        ("Hand axe", 1, 8.0),
         ("Hand axe", 88, 7.0),
         ("Torch", 1, 36.0),
-        ("Torch", 123, 61.0),
+        ("Torch", 123, 36.0),
         ("Lantern", 1, 47.0),
         ("Lantern", 456, 37.0),
     ];

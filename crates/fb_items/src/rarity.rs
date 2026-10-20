@@ -467,6 +467,44 @@ mod tests {
         }
     }
 
+    /// The comfort suffixes and the slots they list in `data/afx.json`.
+    const COMFORT: [(&str, &[Slot]); 5] = [
+        ("of Plenty", &[Slot::Belt, Slot::Neck, Slot::Charm, Slot::Ring1]),
+        ("of Wakefulness", &[Slot::Belt, Slot::Neck, Slot::Charm, Slot::Ring1]),
+        ("of the Ox", &[Slot::Belt, Slot::Back, Slot::Body]),
+        ("of Lesser Warding", &[Slot::Head, Slot::Hands, Slot::Neck, Slot::Charm]),
+        ("of the Mole", &[Slot::Head, Slot::Neck, Slot::Charm]),
+    ];
+
+    #[test]
+    fn comfort_suffixes_stay_off_weapons_and_shields() {
+        let odds = Odds::loot(5);
+        for base in ["Sword", "Mace", "Bow", "Shield"] {
+            for seed in 0..2000 {
+                let item = crate::roll_item_with(base, seed, odds).unwrap();
+                for (name, _) in COMFORT {
+                    assert!(item.affixes.iter().all(|a| a.name != name), "{name} on {base} {seed}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn comfort_suffixes_still_roll_in_their_slots() {
+        let items = deep_rolls(60);
+        for (name, slots) in COMFORT {
+            let affix = affixes().iter().find(|a| a.name == name).unwrap();
+            assert!(affix.in_play(), "{name} is read");
+            let mut rolled = false;
+            for item in items.iter().filter(|i| i.affixes.iter().any(|a| a.name == name)) {
+                rolled = true;
+                let slot = item.profile.slot.map(|s| if s == Slot::Ring2 { Slot::Ring1 } else { s });
+                assert!(slot.is_some_and(|s| slots.contains(&s)), "{name} on {} in {slot:?}", item.base);
+            }
+            assert!(rolled, "{name} never rolled");
+        }
+    }
+
     #[test]
     fn trinket_wards_give_one_or_two_points() {
         let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();

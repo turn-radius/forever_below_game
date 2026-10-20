@@ -318,7 +318,12 @@
    }
   ],
   "t": "Darkvision 10 ft",
-  "grp": "darkvision"
+  "grp": "darkvision",
+  "at": [
+   "head",
+   "neck",
+   "charm"
+  ]
  },
  {
   "n": "of Plenty",
@@ -333,7 +338,13 @@
     }
    }
   ],
-  "t": "Hunger 15% slower"
+  "t": "Hunger 15% slower",
+  "at": [
+   "belt",
+   "neck",
+   "charm",
+   "ring1"
+  ]
  },
  {
   "n": "of the Hearth",
@@ -378,7 +389,12 @@
     }
    }
   ],
-  "t": "+25 lb carrying"
+  "t": "+25 lb carrying",
+  "at": [
+   "belt",
+   "back",
+   "body"
+  ]
  },
  {
   "n": "of Wakefulness",
@@ -393,7 +409,13 @@
     }
    }
   ],
-  "t": "Sleep 15% slower"
+  "t": "Sleep 15% slower",
+  "at": [
+   "belt",
+   "neck",
+   "charm",
+   "ring1"
+  ]
  },
  {
   "n": "of Quiet Steps",
@@ -423,7 +445,13 @@
     }
    }
   ],
-  "t": "Resists disease"
+  "t": "Resists disease",
+  "at": [
+   "head",
+   "hands",
+   "neck",
+   "charm"
+  ]
  },
  {
   "n": "of the Leech",

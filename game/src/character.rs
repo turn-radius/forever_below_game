@@ -687,7 +687,7 @@ mod tests {
         let delver = Character::roll(4);
         let mut inventory = Inventory::default();
         assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0);
-        let sword = inventory.add(with_affix("Sword", 3, "of the Leech"));
+        let sword = inventory.add(with_affix("Sword", 5, "of the Leech"));
         inventory.wear(sword, Slot::Offhand).unwrap();
         assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0, "the off hand does not strike");
         inventory.take_out(sword);
