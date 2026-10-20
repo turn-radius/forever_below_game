@@ -11,7 +11,7 @@
 //! the defaults, Crouch has a Hold or Toggle choice, and every change is saved
 //! ([`KeybindingsFile`]). Looking round, the quickslot digits and the menu click are listed but
 //! not rebindable: the mouse look is not a key, the ten digits are one binding, and the click is
-//! how the menu itself is used. Settings has a slider or a toggle for each [`Setting`]; a change applies the
+//! how the menu itself is used. Settings has a slider, a toggle or a dropdown for each [`Setting`]; a change applies the
 //! same frame and is saved to `settings.json` ([`crate::settings`]). `FB_OPEN_MENU=main|controls|settings` opens the menu at the start, on that
 //! page, for captures.
 //!
@@ -81,6 +81,10 @@ pub enum MenuCommand {
     KeepKeys,
     /// Shows a group of the controls list.
     ShowGroup(Group),
+    /// Opens a setting's dropdown, or closes it if open.
+    OpenChoices(Setting),
+    /// Picks the choice at this index of a setting's dropdown.
+    Pick(Setting, usize),
 }
 
 /// How many key slots an action shows.
@@ -156,6 +160,15 @@ impl Default for ButtonInk {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ControlRow(pub Action);
 
+/// The setting whose dropdown is open, if any. Its list is over the rows below it and takes
+/// every click: one on a choice picks it, one anywhere else closes it.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OpenChoices(pub Option<Setting>);
+
+/// A dropdown's list of choices, shown while its setting is the [`OpenChoices`].
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingChoices(pub Setting);
+
 /// Where a setting is changed: a slider's bar, or a toggle's box. A click or drag here sets it.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettingControl(pub Setting);
@@ -190,20 +203,23 @@ impl Plugin for MenuPlugin {
             .init_resource::<MenuPage>()
             .init_resource::<Rebinding>()
             .init_resource::<ControlsGroup>()
+            .init_resource::<OpenChoices>()
             .add_message::<MenuCommand>()
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| capture_page().is_some()))
             .add_systems(
                 Update,
                 (
-                    choose_buttons,
                     adjust_settings,
+                    choose_buttons,
                     apply_commands,
+                    apply_choices,
                     apply_rebinds,
                     capture_input,
                     sync_capture,
                     pause_while_open.in_set(DelveSystems),
                     build_menu.in_set(DelveSystems),
                     show_settings,
+                    show_choices,
                     light_hovered,
                 )
                     .chain()
@@ -249,18 +265,71 @@ pub(crate) fn hovered_button<'a>(
     buttons.into_iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)).map(|(button, ..)| button.0)
 }
 
-/// A click on a button sends its [`MenuCommand`]. Buttons exist only while a menu shows.
+/// Whether `button` can be chosen: any, unless a dropdown is open, when only its own box and
+/// choices can.
+fn choosable(open: Option<Setting>, button: &MenuButton) -> bool {
+    match open {
+        None => true,
+        Some(open) => matches!(button.0, MenuCommand::OpenChoices(s) | MenuCommand::Pick(s, _) if s == open),
+    }
+}
+
+/// A click on a button sends its [`MenuCommand`]. Buttons exist only while a menu shows. A
+/// click off an open dropdown closes it.
 fn choose_buttons(
     input: ActionInput,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
     buttons: Query<(&MenuButton, &ComputedNode, &UiGlobalTransform)>,
+    mut open: ResMut<OpenChoices>,
     mut chosen: MessageWriter<MenuCommand>,
 ) {
-    if input.just_pressed(Action::Choose)
-        && let Some(command) = hovered_button(window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())), buttons.iter())
-    {
-        chosen.write(command);
+    if !input.just_pressed(Action::Choose) {
+        return;
+    }
+    match hovered_button(window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())), buttons.iter().filter(|(b, ..)| choosable(open.0, b))) {
+        Some(command) => {
+            chosen.write(command);
+        }
+        None => {
+            open.set_if_neq(OpenChoices(None));
+        }
+    }
+}
+
+/// Opens and closes the dropdowns and sets the choice picked. Any other command, a new page or
+/// the menu closing closes an open one.
+fn apply_choices(
+    mut chosen: MessageReader<MenuCommand>,
+    page: Res<MenuPage>,
+    screen: Res<ScreenOpen>,
+    mut open: ResMut<OpenChoices>,
+    mut settings: ResMut<GameSettings>,
+) {
+    for command in chosen.read() {
+        match *command {
+            MenuCommand::OpenChoices(setting) => open.0 = if open.0 == Some(setting) { None } else { Some(setting) },
+            MenuCommand::Pick(setting, index) => {
+                let mut next = *settings;
+                setting.set(&mut next, index as f32);
+                settings.set_if_neq(next);
+                open.0 = None;
+            }
+            _ => open.0 = None,
+        }
+    }
+    if page.is_changed() || screen.is_changed() {
+        open.set_if_neq(OpenChoices(None));
+    }
+}
+
+/// Shows the open dropdown's list and hides the rest.
+fn show_choices(open: Res<OpenChoices>, mut lists: Query<(&SettingChoices, &mut Node)>) {
+    for (list, mut node) in &mut lists {
+        let display = if open.0 == Some(list.0) { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
     }
 }
 
@@ -335,7 +404,7 @@ fn apply_rebinds(
                     *rebinding = Rebinding::Idle;
                 }
             }
-            MenuCommand::Quit | MenuCommand::NewDelve | MenuCommand::Continue | MenuCommand::Creator(_) => {}
+            MenuCommand::Quit | MenuCommand::NewDelve | MenuCommand::Continue | MenuCommand::Creator(_) | MenuCommand::OpenChoices(_) | MenuCommand::Pick(..) => {}
         }
     }
 }
@@ -620,6 +689,10 @@ fn settings_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, keymap: &Keym
                 .insert(BorderColor::all(FAINT))
                 .with_children(|row| {
                     row.spawn((Text::new(setting.name()), UiFonts::style(&fonts.body, 17.0, MUTED), Node { width: px(200), ..default() }));
+                    if let Some(choices) = setting.choices() {
+                        dropdown(row, fonts, setting, &choices, settings);
+                        return;
+                    }
                     match setting.range() {
                         Some(_) => slider(row, setting, setting.fraction(settings)),
                         None => toggle(row, setting, setting.fraction(settings) >= 0.5),
@@ -673,6 +746,62 @@ fn slider(row: &mut ChildSpawnerCommands, setting: Setting, fraction: f32) {
     });
 }
 
+/// A dropdown: a box ruled in tan showing the choice, as wide as a slider, over its list of
+/// choices (hidden until opened, [`show_choices`]). The list is drawn above the rest of the
+/// menu, the choice in cream and the others muted ([`show_settings`]).
+fn dropdown(row: &mut ChildSpawnerCommands, fonts: &UiFonts, setting: Setting, choices: &[String], settings: &GameSettings) {
+    let chosen = setting.get(settings) as usize;
+    row.spawn(Node { width: px(SLIDER_PX), ..default() }).with_children(|cell| {
+        cell.spawn((
+            MenuButton(MenuCommand::OpenChoices(setting)),
+            ButtonInk { idle: BRIGHT, hover: INK },
+            Node {
+                width: percent(100),
+                padding: UiRect::axes(px(8), px(2)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(3)),
+                justify_content: JustifyContent::SpaceBetween,
+                ..default()
+            },
+            BackgroundColor(CELL),
+            BorderColor::all(LINE),
+        ))
+        .with_children(|b| {
+            b.spawn((SettingValue(setting), Text::new(setting.shown(settings)), UiFonts::style(&fonts.mono, 15.0, BRIGHT)));
+            // A chevron: two sides of a small square, turned to point down.
+            b.spawn((
+                Node { width: px(6), height: px(6), align_self: AlignSelf::Center, margin: UiRect::bottom(px(3)), border: UiRect { right: px(1.5), bottom: px(1.5), ..default() }, ..default() },
+                BorderColor::all(BRIGHT),
+                UiTransform { rotation: Rot2::degrees(45.0), ..default() },
+            ));
+        });
+        cell.spawn((
+            SettingChoices(setting),
+            Node {
+                display: Display::None,
+                position_type: PositionType::Absolute,
+                top: percent(100),
+                width: percent(100),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::vertical(px(3)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(3)),
+                ..default()
+            },
+            BackgroundColor(CELL),
+            BorderColor::all(LINE),
+            GlobalZIndex(21),
+        ))
+        .with_children(|list| {
+            for (index, choice) in choices.iter().enumerate() {
+                let ink = if index == chosen { INK } else { MUTED };
+                list.spawn((MenuButton(MenuCommand::Pick(setting, index)), ButtonInk { idle: ink, hover: INK }, Node { padding: UiRect::axes(px(8), px(1)), ..default() }))
+                    .with_child((Text::new(choice.clone()), UiFonts::style(&fonts.mono, 15.0, ink)));
+            }
+        });
+    });
+}
+
 /// A toggle: a small box ruled in tan, with a cream mark when on.
 fn toggle(row: &mut ChildSpawnerCommands, setting: Setting, on: bool) {
     row.spawn((SettingControl(setting), Node { width: px(SLIDER_PX), height: px(22), align_items: AlignItems::Center, ..default() })).with_children(|cell| {
@@ -716,6 +845,7 @@ fn adjust_settings(
     ui_scale: Option<Res<UiScale>>,
     controls: Query<(&SettingControl, &ComputedNode, &UiGlobalTransform)>,
     mut held: Local<Option<Setting>>,
+    open: Res<OpenChoices>,
     mut settings: ResMut<GameSettings>,
 ) {
     if *page != MenuPage::Settings || controls.is_empty() || !input.pressed(Action::Choose) {
@@ -724,7 +854,9 @@ fn adjust_settings(
     }
     let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else { return };
     let mut next = *settings;
+    // An open dropdown's list lies over the controls below it and takes the click.
     if input.just_pressed(Action::Choose)
+        && open.0.is_none()
         && let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point))
     {
         match control.0.range() {
@@ -750,9 +882,18 @@ fn show_settings(
     mut fills: Query<(&SettingFill, &mut Node, &mut Visibility), Without<SettingKnob>>,
     mut knobs: Query<(&SettingKnob, &mut Node), Without<SettingFill>>,
     mut values: Query<(&SettingValue, &mut Text)>,
+    mut choices: Query<(&MenuButton, &mut ButtonInk)>,
 ) {
     if !settings.is_changed() {
         return;
+    }
+    for (button, mut ink) in &mut choices {
+        if let MenuCommand::Pick(setting, index) = button.0 {
+            let idle = if setting.get(&settings) as usize == index { INK } else { MUTED };
+            if ink.idle != idle {
+                ink.idle = idle;
+            }
+        }
     }
     for (fill, mut node, mut visibility) in &mut fills {
         let fraction = fill.0.fraction(&settings);
@@ -784,9 +925,11 @@ pub(crate) fn light_hovered(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
     buttons: Query<(&MenuButton, &ButtonInk, &ComputedNode, &UiGlobalTransform, &Children)>,
+    open: Option<Res<OpenChoices>>,
     mut colours: Query<&mut TextColor>,
 ) {
-    let over = hovered_button(window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())), buttons.iter().map(|(b, _, n, t, _)| (b, n, t)));
+    let open = open.and_then(|o| o.0);
+    let over = hovered_button(window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())), buttons.iter().filter(|(b, ..)| choosable(open, b)).map(|(b, _, n, t, _)| (b, n, t)));
     for (button, ink, _, _, children) in &buttons {
         let colour = if over == Some(button.0) { ink.hover } else { ink.idle };
         for child in children {
@@ -898,7 +1041,10 @@ mod tests {
         choose(&mut app, MenuCommand::Show(MenuPage::Settings));
         app.update();
         let mut controls = app.world_mut().query::<&SettingControl>();
-        assert_eq!(controls.iter(app.world()).map(|c| c.0).collect::<Vec<_>>(), Setting::ALL.to_vec());
+        let sliders_and_toggles: Vec<Setting> = Setting::ALL.into_iter().filter(|s| s.choices().is_none()).collect();
+        assert_eq!(controls.iter(app.world()).map(|c| c.0).collect::<Vec<_>>(), sliders_and_toggles);
+        let mut dropdowns = app.world_mut().query::<&SettingChoices>();
+        assert_eq!(dropdowns.iter(app.world()).map(|c| c.0).collect::<Vec<_>>(), vec![Setting::Resolution]);
         let shown = |app: &mut App, setting: Setting| {
             let mut values = app.world_mut().query::<(&SettingValue, &Text)>();
             values.iter(app.world()).find(|(v, _)| v.0 == setting).map(|(_, t)| t.0.clone()).unwrap()
@@ -910,6 +1056,42 @@ mod tests {
         app.world_mut().resource_mut::<GameSettings>().fullscreen = true;
         app.update();
         assert_eq!(shown(&mut app, Setting::Fullscreen), "On");
+    }
+
+    #[test]
+    fn the_resolution_dropdown_opens_picks_and_closes() {
+        let mut app = menu_app();
+        press(&mut app, KeyCode::Escape);
+        choose(&mut app, MenuCommand::Show(MenuPage::Settings));
+        app.update();
+        let shown_list = |app: &mut App| {
+            let mut lists = app.world_mut().query::<(&SettingChoices, &Node)>();
+            lists.iter(app.world()).filter(|(c, n)| c.0 == Setting::Resolution && n.display != Display::None).count()
+        };
+        let mut picks = app.world_mut().query::<&MenuButton>();
+        let offered = picks.iter(app.world()).filter(|b| matches!(b.0, MenuCommand::Pick(Setting::Resolution, _))).count();
+        assert_eq!(offered, Setting::Resolution.choices().unwrap().len());
+        assert_eq!(shown_list(&mut app), 0, "closed until opened");
+
+        choose(&mut app, MenuCommand::OpenChoices(Setting::Resolution));
+        assert_eq!(app.world().resource::<OpenChoices>().0, Some(Setting::Resolution));
+        assert_eq!(shown_list(&mut app), 1);
+        assert!(!choosable(Some(Setting::Resolution), &MenuButton(MenuCommand::Show(MenuPage::Main))), "the list covers Back");
+
+        let index = crate::settings::RESOLUTIONS.iter().position(|&r| r == [1920, 1080]).unwrap() + 1;
+        choose(&mut app, MenuCommand::Pick(Setting::Resolution, index));
+        assert_eq!(app.world().resource::<GameSettings>().resolution, Some([1920, 1080]));
+        assert_eq!(app.world().resource::<OpenChoices>().0, None, "picking closes it");
+        assert_eq!(shown_list(&mut app), 0);
+        let mut values = app.world_mut().query::<(&SettingValue, &Text)>();
+        assert_eq!(values.iter(app.world()).find(|(v, _)| v.0 == Setting::Resolution).unwrap().1.0, "1920\u{d7}1080");
+
+        choose(&mut app, MenuCommand::OpenChoices(Setting::Resolution));
+        choose(&mut app, MenuCommand::OpenChoices(Setting::Resolution));
+        assert_eq!(app.world().resource::<OpenChoices>().0, None, "its box closes it again");
+        choose(&mut app, MenuCommand::OpenChoices(Setting::Resolution));
+        choose(&mut app, MenuCommand::Show(MenuPage::Main));
+        assert_eq!(app.world().resource::<OpenChoices>().0, None, "leaving the page closes it");
     }
 
     #[test]

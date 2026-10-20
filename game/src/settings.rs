@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::{
     prelude::*,
-    window::{MonitorSelection, PrimaryWindow, WindowMode},
+    window::{Monitor, MonitorSelection, OnMonitor, PrimaryMonitor, PrimaryWindow, VideoMode, VideoModeSelection, WindowMode, WindowResolution},
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +30,9 @@ pub struct GameSettings {
     pub invert_mouse_y: bool,
     /// Borderless fullscreen on the window's monitor, rather than a window.
     pub fullscreen: bool,
+    /// The picture's size in pixels, one of [`RESOLUTIONS`]; `None` is the desktop's. A window
+    /// is opened this size; fullscreen switches the monitor to its closest video mode.
+    pub resolution: Option<[u32; 2]>,
     /// Ink outlines drawn as one screen-space pass over the lit image, rather than as a hull
     /// round every part (`render::InkStyle`).
     pub screen_ink: bool,
@@ -37,11 +40,34 @@ pub struct GameSettings {
 
 impl Default for GameSettings {
     fn default() -> Self {
-        GameSettings { music_volume: 1.0, sound_volume: 1.0, mouse_sensitivity: 1.0, invert_mouse_y: false, fullscreen: false, screen_ink: false }
+        GameSettings { music_volume: 1.0, sound_volume: 1.0, mouse_sensitivity: 1.0, invert_mouse_y: false, fullscreen: false, resolution: None, screen_ink: false }
     }
 }
 
-/// One setting the menu shows: a slider over a range, or a toggle.
+/// The resolutions the settings offer besides the desktop's, smallest first: the common 16:9
+/// and 16:10 sizes.
+pub const RESOLUTIONS: [[u32; 2]; 10] = [
+    [1280, 720],
+    [1280, 800],
+    [1440, 900],
+    [1600, 900],
+    [1680, 1050],
+    [1920, 1080],
+    [1920, 1200],
+    [2560, 1440],
+    [2560, 1600],
+    [3840, 2160],
+];
+
+/// How a resolution reads in the menu: "1920\u{d7}1080", or "Desktop" for `None`.
+pub fn resolution_label(resolution: Option<[u32; 2]>) -> String {
+    match resolution {
+        Some([width, height]) => format!("{width}\u{d7}{height}"),
+        None => "Desktop".into(),
+    }
+}
+
+/// One setting the menu shows: a slider over a range, a toggle, or a dropdown of choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Setting {
     MusicVolume,
@@ -49,13 +75,21 @@ pub enum Setting {
     MouseSensitivity,
     InvertMouseY,
     Fullscreen,
+    Resolution,
     ScreenInk,
 }
 
 impl Setting {
     /// Every setting, in the order the menu lists them.
-    pub const ALL: [Setting; 6] =
-        [Setting::MusicVolume, Setting::SoundVolume, Setting::MouseSensitivity, Setting::InvertMouseY, Setting::Fullscreen, Setting::ScreenInk];
+    pub const ALL: [Setting; 7] = [
+        Setting::MusicVolume,
+        Setting::SoundVolume,
+        Setting::MouseSensitivity,
+        Setting::InvertMouseY,
+        Setting::Fullscreen,
+        Setting::Resolution,
+        Setting::ScreenInk,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -64,8 +98,23 @@ impl Setting {
             Setting::MouseSensitivity => "Mouse sensitivity",
             Setting::InvertMouseY => "Invert mouse Y",
             Setting::Fullscreen => "Fullscreen",
+            Setting::Resolution => "Resolution",
             Setting::ScreenInk => "Screen ink",
         }
+    }
+
+    /// A dropdown's choices as the menu lists them; `None` for a slider or a toggle. Its value
+    /// is the index of the chosen one.
+    pub fn choices(self) -> Option<Vec<String>> {
+        match self {
+            Setting::Resolution => Some(std::iter::once(None).chain(RESOLUTIONS.map(Some)).map(resolution_label).collect()),
+            _ => None,
+        }
+    }
+
+    /// Whether it is a toggle: neither a slider nor a dropdown.
+    pub fn is_toggle(self) -> bool {
+        self.range().is_none() && self.choices().is_none()
     }
 
     /// A slider's range; `None` for a toggle.
@@ -73,11 +122,11 @@ impl Setting {
         match self {
             Setting::MusicVolume | Setting::SoundVolume => Some((0.0, 1.0)),
             Setting::MouseSensitivity => Some((0.25, 3.0)),
-            Setting::InvertMouseY | Setting::Fullscreen | Setting::ScreenInk => None,
+            Setting::InvertMouseY | Setting::Fullscreen | Setting::Resolution | Setting::ScreenInk => None,
         }
     }
 
-    /// Its value in `settings`; a toggle is 0 or 1.
+    /// Its value in `settings`; a toggle is 0 or 1, a dropdown the index of its choice.
     pub fn get(self, settings: &GameSettings) -> f32 {
         match self {
             Setting::MusicVolume => settings.music_volume,
@@ -85,12 +134,13 @@ impl Setting {
             Setting::MouseSensitivity => settings.mouse_sensitivity,
             Setting::InvertMouseY => settings.invert_mouse_y as u8 as f32,
             Setting::Fullscreen => settings.fullscreen as u8 as f32,
+            Setting::Resolution => resolution_index(settings.resolution) as f32,
             Setting::ScreenInk => settings.screen_ink as u8 as f32,
         }
     }
 
     /// Sets it to `value`, pulled into its range (a non-number becomes the default); a toggle
-    /// is on from 0.5.
+    /// is on from 0.5, and a dropdown takes the nearest of its choices.
     pub fn set(self, settings: &mut GameSettings, value: f32) {
         let value = match self.range() {
             Some(_) if value.is_nan() => self.get(&GameSettings::default()),
@@ -103,6 +153,10 @@ impl Setting {
             Setting::MouseSensitivity => settings.mouse_sensitivity = value,
             Setting::InvertMouseY => settings.invert_mouse_y = value >= 0.5,
             Setting::Fullscreen => settings.fullscreen = value >= 0.5,
+            Setting::Resolution => {
+                let index = if value.is_nan() { 0.0 } else { value.round().clamp(0.0, RESOLUTIONS.len() as f32) };
+                settings.resolution = (index >= 1.0).then(|| RESOLUTIONS[index as usize - 1]);
+            }
             Setting::ScreenInk => settings.screen_ink = value >= 0.5,
         }
     }
@@ -125,9 +179,18 @@ impl Setting {
         match self {
             Setting::MusicVolume | Setting::SoundVolume => format!("{:.0}%", value * 100.0),
             Setting::MouseSensitivity => format!("{value:.2}\u{d7}"),
+            Setting::Resolution => resolution_label(settings.resolution),
             Setting::InvertMouseY | Setting::Fullscreen | Setting::ScreenInk => if value >= 0.5 { "On" } else { "Off" }.into(),
         }
     }
+}
+
+/// Where `resolution` is in the Resolution dropdown: 0 for the desktop's, else 1 past its place
+/// in [`RESOLUTIONS`]. A size not offered takes the place of the one nearest it.
+fn resolution_index(resolution: Option<[u32; 2]>) -> usize {
+    let Some([width, height]) = resolution else { return 0 };
+    let off = |[w, h]: [u32; 2]| w.abs_diff(width) + h.abs_diff(height);
+    (0..RESOLUTIONS.len()).min_by_key(|&i| off(RESOLUTIONS[i])).map_or(0, |i| i + 1)
 }
 
 impl GameSettings {
@@ -214,10 +277,26 @@ impl Plugin for SettingsPlugin {
     }
 }
 
-/// The window mode for the fullscreen setting: borderless on the window's own monitor, which
-/// keeps the desktop's resolution and switches without a mode change.
-pub fn window_mode(fullscreen: bool) -> WindowMode {
-    if fullscreen { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed }
+/// The window mode for the fullscreen and resolution settings. Fullscreen at the desktop's
+/// resolution is borderless on the window's own monitor, which switches without a mode change;
+/// at a chosen one it is exclusive, in the monitor's video mode `closest_mode` finds among
+/// `modes`. Borderless, too, while the monitor's modes are not yet known.
+pub fn window_mode(fullscreen: bool, resolution: Option<[u32; 2]>, modes: &[VideoMode]) -> WindowMode {
+    if !fullscreen {
+        return WindowMode::Windowed;
+    }
+    match resolution.and_then(|size| closest_mode(size, modes)) {
+        Some(mode) => WindowMode::Fullscreen(MonitorSelection::Current, VideoModeSelection::Specific(mode)),
+        None => WindowMode::BorderlessFullscreen(MonitorSelection::Current),
+    }
+}
+
+/// The video mode in `modes` nearest `size` in pixels, at its fastest refresh and deepest colour.
+pub fn closest_mode([width, height]: [u32; 2], modes: &[VideoMode]) -> Option<VideoMode> {
+    modes.iter().copied().min_by_key(|mode| {
+        let off = mode.physical_size.x.abs_diff(width) + mode.physical_size.y.abs_diff(height);
+        (off, std::cmp::Reverse(mode.refresh_rate_millihertz), std::cmp::Reverse(mode.bit_depth))
+    })
 }
 
 /// Switches the ink outlines to the style the settings ask for, at the start and whenever they
@@ -229,14 +308,38 @@ fn apply_ink_setting(settings: Res<GameSettings>, style: Option<ResMut<InkStyle>
     }
 }
 
-/// Puts the window in the mode the settings ask for, at the start and whenever they change.
-fn apply_window_settings(settings: Res<GameSettings>, window: Option<Single<&mut Window, With<PrimaryWindow>>>) {
-    let Some(mut window) = window else { return };
-    if settings.is_changed() || window.is_added() {
-        let mode = window_mode(settings.fullscreen);
-        if window.mode != mode {
-            window.mode = mode;
+/// Puts the window in the mode and size the settings ask for, at the start, whenever they change
+/// and when its monitor's video modes come in. A window is sized only when the resolution
+/// changes, so one dragged to a new size keeps it; going back to the desktop's resolution puts
+/// a window back at its usual size.
+#[allow(clippy::type_complexity)]
+fn apply_window_settings(
+    settings: Res<GameSettings>,
+    window: Option<Single<(&mut Window, Option<Ref<OnMonitor>>), With<PrimaryWindow>>>,
+    monitors: Query<(Ref<Monitor>, Has<PrimaryMonitor>)>,
+    mut sized: Local<Option<[u32; 2]>>,
+) {
+    let Some(window) = window else { return };
+    let (mut window, on) = window.into_inner();
+    let monitor = on.as_ref().and_then(|on| monitors.get(on.0).ok()).or_else(|| monitors.iter().find(|(_, primary)| *primary));
+    let monitor_news = on.as_ref().is_some_and(Ref::is_changed) || monitor.as_ref().is_some_and(|(m, _)| m.is_changed());
+    if !settings.is_changed() && !window.is_added() && !monitor_news {
+        return;
+    }
+    let modes = monitor.as_ref().map_or(&[][..], |(m, _)| &m.video_modes[..]);
+    let mode = window_mode(settings.fullscreen, settings.resolution, modes);
+    if window.mode != mode {
+        window.mode = mode;
+    }
+    if !settings.fullscreen && settings.resolution != *sized {
+        match settings.resolution {
+            Some([width, height]) => window.resolution.set_physical_resolution(width, height),
+            None => {
+                let usual = WindowResolution::default();
+                window.resolution.set(usual.width(), usual.height());
+            }
         }
+        *sized = settings.resolution;
     }
 }
 
@@ -320,7 +423,95 @@ mod tests {
         assert_eq!(app.world().get::<Window>(window).unwrap().mode, WindowMode::Windowed);
         app.world_mut().resource_mut::<GameSettings>().fullscreen = true;
         app.update();
-        assert_eq!(app.world().get::<Window>(window).unwrap().mode, window_mode(true));
+        assert_eq!(app.world().get::<Window>(window).unwrap().mode, WindowMode::BorderlessFullscreen(MonitorSelection::Current));
+    }
+
+    #[test]
+    fn the_resolution_is_one_of_its_choices() {
+        let choices = Setting::Resolution.choices().unwrap();
+        assert_eq!(choices.len(), RESOLUTIONS.len() + 1);
+        assert_eq!((choices[0].as_str(), Setting::Resolution.shown(&GameSettings::default())), ("Desktop", "Desktop".into()));
+        let mut settings = GameSettings::default();
+        for (index, choice) in choices.iter().enumerate() {
+            Setting::Resolution.set(&mut settings, index as f32);
+            assert_eq!(Setting::Resolution.get(&settings), index as f32);
+            assert_eq!(&Setting::Resolution.shown(&settings), choice);
+        }
+        assert_eq!(settings.resolution, Some([3840, 2160]));
+        // A size not offered, from an older or hand-edited file, takes the nearest one.
+        let path = scratch("resolution");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"resolution": [1910, 1075]}"#).unwrap();
+        assert_eq!(GameSettings::load(&path).resolution, Some([1920, 1080]));
+        std::fs::write(&path, r#"{"resolution": null}"#).unwrap();
+        assert_eq!(GameSettings::load(&path).resolution, None);
+    }
+
+    fn mode(width: u32, height: u32, hz: u32) -> VideoMode {
+        VideoMode { physical_size: UVec2::new(width, height), bit_depth: 32, refresh_rate_millihertz: hz * 1000 }
+    }
+
+    #[test]
+    fn fullscreen_takes_the_closest_video_mode() {
+        let modes = [mode(1920, 1080, 60), mode(1920, 1080, 120), mode(2560, 1600, 60), mode(1280, 800, 60)];
+        assert_eq!(closest_mode([1920, 1080], &modes), Some(mode(1920, 1080, 120)), "the fastest of the exact size");
+        assert_eq!(closest_mode([2560, 1440], &modes), Some(mode(2560, 1600, 60)));
+        assert_eq!(closest_mode([1280, 720], &[]), None);
+        assert_eq!(window_mode(false, Some([1920, 1080]), &modes), WindowMode::Windowed);
+        assert_eq!(window_mode(true, None, &modes), WindowMode::BorderlessFullscreen(MonitorSelection::Current));
+        assert_eq!(window_mode(true, Some([1920, 1080]), &[]), WindowMode::BorderlessFullscreen(MonitorSelection::Current), "until the modes are known");
+        assert_eq!(
+            window_mode(true, Some([1920, 1080]), &modes),
+            WindowMode::Fullscreen(MonitorSelection::Current, VideoModeSelection::Specific(mode(1920, 1080, 120)))
+        );
+    }
+
+    #[test]
+    fn the_resolution_sizes_the_window_and_its_monitor_modes() {
+        let mut app = App::new();
+        app.insert_resource(SettingsFile(None)).add_plugins(SettingsPlugin);
+        let window = app.world_mut().spawn((Window::default(), PrimaryWindow)).id();
+        app.update();
+        let size = |app: &App| app.world().get::<Window>(window).unwrap().resolution.physical_size();
+        assert_eq!(size(&app), UVec2::new(1280, 720), "the desktop's resolution leaves the window as it opened");
+
+        app.world_mut().resource_mut::<GameSettings>().resolution = Some([1600, 900]);
+        app.update();
+        assert_eq!(size(&app), UVec2::new(1600, 900));
+        // Dragged to a new size, it keeps it through other changes.
+        app.world_mut().get_mut::<Window>(window).unwrap().resolution.set_physical_resolution(1000, 700);
+        app.world_mut().resource_mut::<GameSettings>().music_volume = 0.5;
+        app.update();
+        assert_eq!(size(&app), UVec2::new(1000, 700));
+
+        // Fullscreen goes borderless until the monitor's modes come in, then takes the closest.
+        app.world_mut().resource_mut::<GameSettings>().fullscreen = true;
+        app.update();
+        assert_eq!(app.world().get::<Window>(window).unwrap().mode, WindowMode::BorderlessFullscreen(MonitorSelection::Current));
+        let monitor = app
+            .world_mut()
+            .spawn(Monitor {
+                name: None,
+                physical_height: 1080,
+                physical_width: 1920,
+                physical_position: IVec2::ZERO,
+                refresh_rate_millihertz: Some(60_000),
+                scale_factor: 1.0,
+                video_modes: vec![mode(1920, 1080, 60), mode(1600, 900, 60)],
+            })
+            .id();
+        app.world_mut().entity_mut(window).insert(OnMonitor(monitor));
+        app.update();
+        assert_eq!(
+            app.world().get::<Window>(window).unwrap().mode,
+            WindowMode::Fullscreen(MonitorSelection::Current, VideoModeSelection::Specific(mode(1600, 900, 60)))
+        );
+
+        app.world_mut().resource_mut::<GameSettings>().fullscreen = false;
+        app.world_mut().resource_mut::<GameSettings>().resolution = None;
+        app.update();
+        assert_eq!(app.world().get::<Window>(window).unwrap().mode, WindowMode::Windowed);
+        assert_eq!(size(&app), UVec2::new(1280, 720), "back to the desktop's: the window's usual size");
     }
 
     #[test]
@@ -346,7 +537,7 @@ mod tests {
         first.insert_resource(file.clone()).add_plugins(SettingsPlugin);
         first.update();
         assert!(!path.exists(), "nothing written until something changes");
-        let chosen = GameSettings { music_volume: 0.3, sound_volume: 0.6, mouse_sensitivity: 1.5, invert_mouse_y: true, fullscreen: true, screen_ink: true };
+        let chosen = GameSettings { music_volume: 0.3, sound_volume: 0.6, mouse_sensitivity: 1.5, invert_mouse_y: true, fullscreen: true, resolution: Some([2560, 1440]), screen_ink: true };
         *first.world_mut().resource_mut::<GameSettings>() = chosen;
         first.update();
         assert!(path.exists());
