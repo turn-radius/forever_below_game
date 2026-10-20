@@ -52,6 +52,8 @@ pub enum Action {
     Quickslot,
     DragItem,
     TurnItem,
+    /// In the inventory, sets the item under the mouse down underfoot, as dragging it there does.
+    Drop,
     Inventory,
     /// Opens the journal. No gameplay yet.
     Journal,
@@ -325,6 +327,7 @@ impl Default for Keymap {
                 .in_contexts(ITEMS),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Inventory]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]).in_contexts(&[Context::Inventory]),
+                bind(Action::Drop, "Drop the item under the mouse", Group::Items, &[Key(KeyCode::KeyX)]).in_contexts(&[Context::Inventory]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]).in_contexts(EVERYWHERE),
                 bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyK)]).in_contexts(EVERYWHERE),
                 bind(Action::Journal, "Journal", Group::Screens, &[Key(KeyCode::KeyJ)]).in_contexts(EVERYWHERE),
@@ -776,7 +779,7 @@ mod tests {
     #[test]
     fn the_spare_keys_are_unbound() {
         let keymap = Keymap::default();
-        for key in [KeyCode::KeyC, KeyCode::KeyV, KeyCode::KeyX, KeyCode::KeyZ, KeyCode::KeyB, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU, KeyCode::Tab] {
+        for key in [KeyCode::KeyC, KeyCode::KeyV, KeyCode::KeyZ, KeyCode::KeyB, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU, KeyCode::Tab] {
             assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(key))), "{key:?} is bound");
         }
     }
