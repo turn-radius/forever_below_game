@@ -91,8 +91,11 @@ pub struct SwungAt {
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Swing {
     pub weapon: Weapon,
-    /// Seconds into it.
+    /// Seconds into it at the usual pace: it runs on at [`Swing::rate`] times real time, so the
+    /// landing and the pose keep their proportions.
     pub t: f32,
+    /// How much faster than usual it goes ([`Derived::attack_rate`](crate::character::Derived)).
+    pub rate: f32,
     /// Whether its blow has landed (or missed).
     pub landed: bool,
     /// Which way the blow comes in.
@@ -111,7 +114,22 @@ impl Swing {
     /// strike.
     pub fn new(weapon: Weapon) -> Swing {
         let strike = Strike::choices(weapon.kind)[0].0;
-        Swing { weapon, t: 0.0, landed: false, strike, toward: CROSSHAIR_AIM, flourish: Vec3::ZERO, hand: Slot::Mainhand }
+        Swing { weapon, t: 0.0, rate: 1.0, landed: false, strike, toward: CROSSHAIR_AIM, flourish: Vec3::ZERO, hand: Slot::Mainhand }
+    }
+
+    /// Goes on for `dt` real seconds, at its [`Swing::rate`].
+    pub fn step(&mut self, dt: f32) {
+        self.t += dt * self.rate;
+    }
+
+    /// Whether the blow is due: it has reached [`LANDS`].
+    pub fn lands(&self) -> bool {
+        self.t >= LANDS
+    }
+
+    /// Whether it has run its [`SWING_TIME`].
+    pub fn is_over(&self) -> bool {
+        self.t >= SWING_TIME
     }
 
     /// The side of the view its hand is on.
@@ -227,6 +245,7 @@ pub(super) fn start_swing(
             stamina.0 = spent;
         }
         let weapon = Weapon::held_in(hand, &inventory, &character);
+        let rate = character.gear(&inventory).attack_rate as f32;
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
             let combat = &tuning.combat;
@@ -236,7 +255,7 @@ pub(super) fn start_swing(
         let flourish = Vec3::new(dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0));
         let strike = practice.strike.unwrap_or_else(|| Strike::roll(weapon.kind, *last, &mut dice.0));
         *last = Some(strike);
-        commands.entity(player).insert(Swing { strike, toward: toward.unwrap_or(CROSSHAIR_AIM), flourish, hand, ..Swing::new(weapon) });
+        commands.entity(player).insert(Swing { strike, rate, toward: toward.unwrap_or(CROSSHAIR_AIM), flourish, hand, ..Swing::new(weapon) });
         if let Some(sound) = &sound {
             let game = settings.as_deref().copied().unwrap_or_default();
             commands.spawn((Name::new("swing"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
@@ -381,8 +400,8 @@ fn land_blows(
     let rules = crate::rules::GameRules::of(&rules);
     let dt = time.delta_secs();
     for (player, at, mut swing, effects) in &mut players {
-        swing.t += dt;
-        if !swing.landed && swing.t >= LANDS {
+        swing.step(dt);
+        if !swing.landed && swing.lands() {
             swing.landed = true;
             let from = at.translation.xz();
             let forward = at.forward().as_vec3().xz();
@@ -410,7 +429,7 @@ fn land_blows(
                 burned.write(Burned { target });
             }
         }
-        if swing.t >= SWING_TIME {
+        if swing.is_over() {
             commands.entity(player).remove::<Swing>();
         }
     }
@@ -819,6 +838,46 @@ mod tests {
         let off = Swing { hand: Slot::Offhand, ..main };
         assert_eq!((main.damage_modifier(3), off.damage_modifier(3)), (3, 0));
         assert_eq!((main.damage_modifier(-1), off.damage_modifier(-1)), (-1, -1));
+    }
+
+    #[test]
+    fn a_quick_swing_runs_and_lands_in_proportion() {
+        let run = |rate: f32| {
+            let mut swing = Swing { rate, ..Swing::new(Weapon::fist()) };
+            let (mut at, mut lands) = (0.0_f32, None);
+            while !swing.is_over() {
+                swing.step(0.001);
+                at += 0.001;
+                if lands.is_none() && swing.lands() {
+                    lands = Some(at);
+                }
+            }
+            (lands.unwrap(), at)
+        };
+        let (usual_lands, usual) = run(1.0);
+        assert!((usual_lands - LANDS).abs() < 0.003 && (usual - SWING_TIME).abs() < 0.003, "{usual_lands} {usual}");
+        let (lands, over) = run(1.1);
+        assert!((lands - LANDS / 1.1).abs() < 0.003 && (over - SWING_TIME / 1.1).abs() < 0.003, "{lands} {over}");
+    }
+
+    #[test]
+    fn a_quick_sword_starts_a_swing_at_its_rate() {
+        let rate_with = |affix: Option<&str>| {
+            let (mut app, delver) = swinger();
+            let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+            if let Some(name) = affix {
+                let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+                affix.apply_to_stats(&mut sword.profile.stats);
+                sword.affixes.push(affix);
+            }
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(sword);
+            inventory.wear(id, Slot::Mainhand).unwrap();
+            app.update();
+            app.world().get::<Swing>(delver).unwrap().rate
+        };
+        assert_eq!(rate_with(None), 1.0);
+        assert!((rate_with(Some("Quick")) - 1.1).abs() < 1e-6);
     }
 
     #[test]

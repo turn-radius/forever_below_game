@@ -306,6 +306,9 @@ pub struct Derived {
     pub to_hit: f32,
     /// What worn gear adds to a missile hit roll alone.
     pub ranged_to_hit: f32,
+    /// Multiple of the speed of their swings, draws and reloads, from the weapon in hand and
+    /// their gloves.
+    pub attack_rate: f32,
 }
 
 /// The odds the loot of a level `depth` down rolls against for the delver: the level's, with the
@@ -341,11 +344,13 @@ impl Character {
             // A weapon's own to hit is on the roll already ([`crate::combat::Weapon::of_stats`]), so
             // only the worn gear's adds to it; the ranged part counts whatever it is on.
             let to_hit = if slot == fb_items::Slot::Mainhand || s.is_weapon() { 0.0 } else { s.to_hit as f64 };
+            // Only the weapon in hand and the gloves quicken a swing; a torch or a cloak does not.
+            let attack_rate = if matches!(slot, fb_items::Slot::Mainhand | fb_items::Slot::Hands) { s.attack_rate as f64 } else { 1.0 };
             let point = |v: f32| v.round() as i32;
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64 },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate },
             );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
@@ -414,6 +419,7 @@ impl Character {
             abilities: gear.abilities,
             to_hit: gear.to_hit as f32,
             ranged_to_hit: gear.ranged_to_hit as f32,
+            attack_rate: gear.attack_rate as f32,
         }
     }
 }
@@ -762,6 +768,28 @@ mod tests {
         assert!((delver.derive(&inventory).speed - 1.2).abs() < 1e-6);
         inventory.take_out(shield);
         assert_eq!(delver.derive(&inventory).block_chance, 0.0);
+    }
+
+    #[test]
+    fn only_the_weapon_and_the_gloves_quicken_an_attack_and_the_rates_multiply() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        assert_eq!(delver.derive(&inventory).attack_rate, 1.0);
+        let sword = inventory.add(with_affix("Sword", 4, "Quick"));
+        inventory.wear(sword, Slot::Mainhand).unwrap();
+        assert!((delver.derive(&inventory).attack_rate - 1.1).abs() < 1e-6);
+        let gloves = inventory.add(with_affix("Gloves", 4, "of the Duellist"));
+        inventory.wear(gloves, Slot::Hands).unwrap();
+        let derived = delver.derive(&inventory);
+        assert!((derived.attack_rate - 1.155).abs() < 1e-6, "{}", derived.attack_rate);
+        assert!(delver.loadout(&inventory).attack_rate().line().contains("× "));
+        // A torch in the off hand or a ring does nothing for it, whatever it carries.
+        let torch = inventory.add(with_affix("Torch", 4, "of Swiftness"));
+        inventory.wear(torch, Slot::Offhand).unwrap();
+        let ring = inventory.add(with_affix("Ring", 4, "Quick"));
+        inventory.wear(ring, Slot::Ring1).unwrap();
+        assert!((delver.derive(&inventory).attack_rate - 1.155).abs() < 1e-6);
     }
 
     #[test]

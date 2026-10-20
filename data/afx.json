@@ -1315,5 +1315,57 @@
    "hands",
    "neck"
   ]
+ },
+ {
+  "n": "Quick",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "scale": {
+     "stat": "attack_rate",
+     "by": 1.1
+    }
+   }
+  ],
+  "t": "+10% attack speed",
+  "grp": "attack_rate"
+ },
+ {
+  "n": "of Swiftness",
+  "k": "suf",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "scale": {
+     "stat": "attack_rate",
+     "by": 1.2
+    }
+   }
+  ],
+  "t": "+20% attack speed",
+  "grp": "attack_rate",
+  "r": "rare"
+ },
+ {
+  "n": "of the Duellist",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "attack_rate",
+     "by": 1.05
+    }
+   }
+  ],
+  "t": "+5% attack speed",
+  "grp": "duellist",
+  "at": [
+   "hands"
+  ]
  }
 ]

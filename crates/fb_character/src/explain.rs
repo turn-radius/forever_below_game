@@ -268,6 +268,16 @@ impl Loadout {
         e
     }
 
+    /// How fast a swing, a draw and a reload go, as a multiple of the usual: each item's rate
+    /// multiplied. Equals [`Gear::attack_rate`].
+    pub fn attack_rate(&self) -> Explained {
+        let mut e = Explained::new("Attack rate", "").base("usual speed", 1.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.attack_rate != 1.0) {
+            e = e.times(label, item.attack_rate);
+        }
+        e
+    }
+
     /// The chance a held shield turns aside a blow that would hit, the items' added, at most
     /// [`crate::MAX_BLOCK_CHANCE`]. Equals [`Gear::block_chance`].
     pub fn block_chance(&self) -> Explained {
@@ -451,6 +461,15 @@ mod tests {
     }
 
     #[test]
+    fn attack_rate_multiplies_item_by_item() {
+        let quick = Worn { attack_rate: 1.1, ..Worn::default() };
+        let duellist = Worn { attack_rate: 1.05, ..Worn::default() };
+        let loadout = Loadout::new("Human", 0.0).wearing("Quick Sword", quick).wearing("Gloves of the Duellist", duellist);
+        assert_eq!(loadout.attack_rate().line(), "Attack rate 1.155 = usual speed (1) × Quick Sword (1.1) × Gloves of the Duellist (1.05)");
+        assert!((loadout.gear().attack_rate - 1.155).abs() < 1e-12);
+    }
+
+    #[test]
     fn a_goblin_in_the_mole_sees_the_best_not_the_sum() {
         let e = Loadout::new("Goblin", 60.0).wearing("Belt of the Mole", mole()).darkvision();
         assert_eq!(e.value(), 60.0);
@@ -509,6 +528,7 @@ mod tests {
             assert_eq!(loadout.luck().value(), gear.luck);
             assert_eq!(loadout.to_hit().value(), gear.to_hit);
             assert_eq!(loadout.ranged_to_hit().value(), gear.ranged_to_hit);
+            assert!((loadout.attack_rate().value() - gear.attack_rate).abs() < 1e-12);
             assert_eq!(loadout.ability("STR").value(), gear.abilities.strength as f64);
             let mut needs = Needs::default();
             gear.apply_to(&mut needs);
