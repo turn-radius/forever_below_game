@@ -1367,5 +1367,91 @@
   "at": [
    "hands"
   ]
+ },
+ {
+  "n": "Tireless",
+  "k": "pre",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_refill",
+     "by": 1.2
+    }
+   }
+  ],
+  "t": "Stamina refills 20% faster",
+  "grp": "stamina_refill",
+  "at": [
+   "body",
+   "feet"
+  ]
+ },
+ {
+  "n": "of Second Wind",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_refill",
+     "by": 1.3
+    }
+   }
+  ],
+  "t": "Stamina refills 30% faster",
+  "grp": "stamina_refill",
+  "r": "rare",
+  "at": [
+   "neck",
+   "charm",
+   "body"
+  ]
+ },
+ {
+  "n": "Light-handed",
+  "k": "pre",
+  "g": 1,
+  "on": "any",
+  "not": [
+   "light"
+  ],
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_cost",
+     "by": 0.75
+    }
+   }
+  ],
+  "t": "Swings and blocks cost 25% less stamina",
+  "grp": "stamina_cost",
+  "at": [
+   "mainhand",
+   "offhand"
+  ]
+ },
+ {
+  "n": "of Endurance",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "stamina_cost",
+     "by": 0.8
+    }
+   }
+  ],
+  "t": "Sprinting, swinging and blocking cost 20% less stamina",
+  "grp": "stamina_cost",
+  "at": [
+   "legs",
+   "feet",
+   "belt"
+  ]
  }
 ]

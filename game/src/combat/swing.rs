@@ -230,6 +230,7 @@ pub(super) fn start_swing(
         return;
     }
     for (player, at, health, mut stamina, guarding) in &mut players {
+        let gear = character.gear(&inventory);
         if health.is_some_and(Health::is_down) || fallen.is_some() || (guarding && !practising) {
             continue;
         }
@@ -241,11 +242,11 @@ pub(super) fn start_swing(
             }
             let mut spent = stamina.0;
             let rules = crate::rules::GameRules::of(&rules);
-            spent.spend_with(rules, rules.stamina.swing_cost);
+            spent.spend_with(rules, rules.stamina.swing_cost * gear.stamina_cost);
             stamina.0 = spent;
         }
         let weapon = Weapon::held_in(hand, &inventory, &character);
-        let rate = character.gear(&inventory).attack_rate as f32;
+        let rate = gear.attack_rate as f32;
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
             let combat = &tuning.combat;
@@ -891,6 +892,21 @@ mod tests {
         app.update();
         let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
         assert!((value - (1.0 - 2.0 * fb_character::SWING_COST)).abs() < 1e-9, "{value}");
+    }
+
+    #[test]
+    fn a_light_handed_sword_swings_for_less_stamina() {
+        let (mut app, delver) = swinger();
+        let mut sword = fb_items::roll_item("Sword", 3).unwrap();
+        let affix = fb_items::tables::affixes().iter().find(|a| a.name == "Light-handed").unwrap();
+        affix.apply_to_stats(&mut sword.profile.stats);
+        sword.affixes.push(affix);
+        let mut inventory = app.world_mut().resource_mut::<Inventory>();
+        let id = inventory.add(sword);
+        inventory.wear(id, Slot::Mainhand).unwrap();
+        app.update();
+        let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
+        assert!((value - (1.0 - 0.06)).abs() < 1e-6, "{value}");
     }
 
     #[test]

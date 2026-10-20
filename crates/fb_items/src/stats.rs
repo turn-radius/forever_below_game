@@ -87,6 +87,12 @@ pub struct Stats {
     /// hand's and the gloves' (`fb_character::Gear::attack_rate`).
     #[serde(default = "one")]
     pub attack_rate: f32,
+    /// How fast the wearer's stamina refills, as a multiple of normal.
+    #[serde(default = "one")]
+    pub stamina_refill: f32,
+    /// What swinging, blocking and sprinting cost the wearer in stamina, as a multiple of normal.
+    #[serde(default = "one")]
+    pub stamina_cost: f32,
 }
 
 fn one() -> f32 {
@@ -127,6 +133,8 @@ impl Default for Stats {
             recovery: 0.0,
             poison_resistance: 0.0,
             attack_rate: 1.0,
+            stamina_refill: 1.0,
+            stamina_cost: 1.0,
         }
     }
 }
@@ -166,14 +174,17 @@ pub enum Stat {
     Recovery,
     PoisonResistance,
     AttackRate,
+    StaminaRefill,
+    StaminaCost,
 }
 
 impl Stat {
-    pub const ALL: [Stat; 29] = [
+    pub const ALL: [Stat; 31] = [
         Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::RangedToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
         Stat::Warmth, Stat::Stealth, Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::SleepinessRate, Stat::DiseaseRisk,
         Stat::Lockpicking, Stat::HealOnKill, Stat::Speed, Stat::BlockChance, Stat::Luck, Stat::Strength, Stat::Dexterity, Stat::Constitution,
         Stat::Intelligence, Stat::Wisdom, Stat::Charisma, Stat::Recovery, Stat::PoisonResistance, Stat::AttackRate,
+        Stat::StaminaRefill, Stat::StaminaCost,
     ];
 
     /// Item properties: describe the item itself (Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance).
@@ -188,7 +199,7 @@ impl Stat {
 
     /// Whether more of it is better for the wearer.
     pub fn higher_is_better(self) -> bool {
-        !matches!(self, Stat::Weight | Stat::HungerRate | Stat::SleepinessRate | Stat::DiseaseRisk | Stat::BreakChance)
+        !matches!(self, Stat::Weight | Stat::HungerRate | Stat::SleepinessRate | Stat::DiseaseRisk | Stat::BreakChance | Stat::StaminaCost)
     }
 
     /// Whether anything in the game reads it yet. Affixes whose every effect is on a stat
@@ -261,6 +272,8 @@ impl Stats {
             Stat::Recovery => &self.recovery,
             Stat::PoisonResistance => &self.poison_resistance,
             Stat::AttackRate => &self.attack_rate,
+            Stat::StaminaRefill => &self.stamina_refill,
+            Stat::StaminaCost => &self.stamina_cost,
         }
     }
 
@@ -295,6 +308,8 @@ impl Stats {
             Stat::Recovery => &mut self.recovery,
             Stat::PoisonResistance => &mut self.poison_resistance,
             Stat::AttackRate => &mut self.attack_rate,
+            Stat::StaminaRefill => &mut self.stamina_refill,
+            Stat::StaminaCost => &mut self.stamina_cost,
         }
     }
 }
