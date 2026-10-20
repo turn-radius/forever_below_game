@@ -104,6 +104,10 @@ pub struct Affix {
     #[serde(rename = "g", deserialize_with = "flag")]
     pub good: bool,
     pub on: On,
+    /// Tags that keep it off an item whatever its `on`: a torch held in the off hand carries no
+    /// block.
+    #[serde(default, rename = "not")]
+    pub except: Vec<Tag>,
     /// What it does, ported from the plate's `fx` source, its card text and `dressState`.
     pub fx: Vec<Modifier>,
     /// The card's line ("+2 warmth").
@@ -128,7 +132,7 @@ fn least_rarity() -> Rarity {
 impl Affix {
     /// Whether it can roll on an item with `tags`, whatever its slot.
     pub fn fits(&self, tags: &[Tag]) -> bool {
-        self.on.matches(tags)
+        self.on.matches(tags) && !self.except.iter().any(|t| tags.contains(t))
     }
 
     /// Whether it can roll on an item with `tags` worn in `slot` (`None` for a thing not worn):

@@ -268,14 +268,14 @@ impl Loadout {
         e
     }
 
-    /// The chance a held shield turns aside a blow that would hit, the items' added, at most 1.
-    /// Equals [`Gear::block_chance`].
+    /// The chance a held shield turns aside a blow that would hit, the items' added, at most
+    /// [`crate::MAX_BLOCK_CHANCE`]. Equals [`Gear::block_chance`].
     pub fn block_chance(&self) -> Explained {
         let mut e = Explained::new("Block chance", "").base("no shield", 0.0);
         for (label, item) in self.worn.iter().filter(|(_, w)| w.block_chance != 0.0) {
             e = e.add(label, item.block_chance);
         }
-        if e.value() > 1.0 { e.clamp("at most 1", 0.0, 1.0) } else { e }
+        if e.value() > crate::MAX_BLOCK_CHANCE { e.clamp("at most 0.9", 0.0, crate::MAX_BLOCK_CHANCE) } else { e }
     }
 
     /// Points added to the melee attack and the shot roll by worn gear, item by item. Equals
@@ -437,6 +437,17 @@ mod tests {
         assert_eq!(loadout.ranged_to_hit().line(), "Ranged to hit 2 = no gear (0) + Ring of the Hawk (+2)");
         let gear = loadout.gear();
         assert_eq!((gear.to_hit, gear.ranged_to_hit), (1.0, 2.0));
+    }
+
+    #[test]
+    fn block_chance_adds_item_by_item_and_stops_at_90_percent() {
+        let block = |by: f64| Worn { block_chance: by, ..Worn::default() };
+        let shielded = Loadout::new("Human", 0.0).wearing("Buckler", block(0.3)).wearing("Gloves of Deflection", block(0.1));
+        assert_eq!(shielded.gear().block_chance, 0.3 + 0.1);
+        assert_eq!(shielded.block_chance().line(), "Block chance 0.4 = no shield (0) + Buckler (+0.3) + Gloves of Deflection (+0.1)");
+        let walled = shielded.wearing("Tower shield", block(0.6)).wearing("Charm of the Rampart", block(0.2));
+        assert_eq!(walled.gear().block_chance, 0.9);
+        assert_eq!(walled.block_chance().value(), 0.9);
     }
 
     #[test]

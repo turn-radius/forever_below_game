@@ -294,7 +294,8 @@ pub struct Derived {
     pub heal_on_kill: f32,
     /// Multiple of their pace, from what they wear.
     pub speed: f32,
-    /// Chance the shield in their off hand, raised, turns aside a blow that would hit.
+    /// Chance the shield in their off hand, raised, turns aside a blow that would hit: the
+    /// shield's own and what worn gloves and charms add, at most 90%; 0 with no shield.
     pub block_chance: f32,
     /// Points of luck from what they wear: each rolls the loot of a level they come to a level
     /// deeper.
@@ -328,12 +329,15 @@ impl Character {
     /// ([`Loadout::capacity`] and the rest).
     pub fn loadout(&self, inventory: &Inventory) -> Loadout {
         let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
-        for (slot, item) in inventory.equipped() {
+        let equipped = inventory.equipped();
+        // Block chance counts only with a shield held in the off hand: the gloves and charms that
+        // add to it do nothing alone.
+        let shielded = equipped.iter().any(|(slot, item)| is_shield(*slot, item));
+        for (slot, item) in equipped {
             let s = &item.profile.stats;
-            // Only the main hand strikes, so only its weapon heals on a kill; only a shield held
-            // in the off hand blocks.
+            // Only the main hand strikes, so only its weapon heals on a kill.
             let heal_on_kill = if slot == fb_items::Slot::Mainhand { s.heal_on_kill as f64 } else { 0.0 };
-            let block_chance = if is_shield(slot, item) { s.block_chance as f64 } else { 0.0 };
+            let block_chance = if shielded { s.block_chance as f64 } else { 0.0 };
             // A weapon's own to hit is on the roll already ([`crate::combat::Weapon::of_stats`]), so
             // only the worn gear's adds to it; the ranged part counts whatever it is on.
             let to_hit = if slot == fb_items::Slot::Mainhand || s.is_weapon() { 0.0 } else { s.to_hit as f64 };
@@ -638,7 +642,10 @@ mod tests {
 
     /// A rolled `base` with the real affix `name` applied to its stats.
     fn with_affix(base: &str, seed: u32, name: &str) -> fb_items::Item {
-        let mut item = fb_items::roll_item(base, seed).unwrap();
+        with_affix_to(fb_items::roll_item(base, seed).unwrap(), name)
+    }
+
+    fn with_affix_to(mut item: fb_items::Item, name: &str) -> fb_items::Item {
         let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
         affix.apply_to_stats(&mut item.profile.stats);
         item.affixes.push(affix);
@@ -755,6 +762,32 @@ mod tests {
         assert!((delver.derive(&inventory).speed - 1.2).abs() < 1e-6);
         inventory.take_out(shield);
         assert_eq!(delver.derive(&inventory).block_chance, 0.0);
+    }
+
+    #[test]
+    fn gloves_and_charms_add_to_a_held_shields_block_up_to_90_percent() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let of_chance = |chance: f32| (1..).map(|s| fb_items::roll_item("Shield", s).unwrap()).find(|i| i.profile.stats.block_chance == chance).unwrap();
+        let mut inventory = Inventory::default();
+        let gloves = inventory.add(with_affix("Gloves", 4, "of Deflection"));
+        inventory.wear(gloves, Slot::Hands).unwrap();
+        assert_eq!(delver.derive(&inventory).block_chance, 0.0, "gloves alone block nothing");
+        assert_eq!(delver.loadout(&inventory).block_chance().value(), 0.0);
+        let buckler = inventory.add(of_chance(0.3));
+        inventory.wear(buckler, Slot::Offhand).unwrap();
+        assert!((delver.derive(&inventory).block_chance - 0.4).abs() < 1e-6, "a buckler's 30% and 10% more");
+        assert!(delver.loadout(&inventory).block_chance().line().contains("(+0.1)"));
+        inventory.take_out(buckler);
+        assert_eq!(delver.derive(&inventory).block_chance, 0.0, "the shield put away, the gloves block nothing again");
+        let tower = inventory.add(with_affix_to(of_chance(0.6), "of the Rampart"));
+        inventory.wear(tower, Slot::Offhand).unwrap();
+        let charm = inventory.add(with_affix("Charm", 4, "of the Rampart"));
+        inventory.wear(charm, Slot::Charm).unwrap();
+        let rampart = inventory.add(with_affix("Gauntlets", 4, "of the Rampart"));
+        inventory.take_out(gloves);
+        inventory.wear(rampart, Slot::Hands).unwrap();
+        assert!((delver.derive(&inventory).block_chance - 0.9).abs() < 1e-6, "60% and three 20%s stop at 90%");
     }
 
     #[test]

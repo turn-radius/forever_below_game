@@ -456,7 +456,7 @@ mod tests {
         let rampart = by_name("of the Rampart");
         assert!(rampart.fits_item(&[Tag::Armor, Tag::Wood], Some(Slot::Offhand)), "a shield");
         assert!(!rampart.fits_item(&[Tag::Metal, Tag::Armor, Tag::Wear], Some(Slot::Head)), "not a helm");
-        assert!(!rampart.fits_item(&[Tag::Wood], Some(Slot::Offhand)), "not a torch");
+        assert!(!rampart.fits_item(&[Tag::Light, Tag::Wood], Some(Slot::Offhand)), "not a torch");
         for name in ["of the Hare", "of the Wind", "of Mending", "of the Troll", "of Purity", "of the Mongoose"] {
             let ward = by_name(name);
             for slot in [Slot::Ring1, Slot::Ring2, Slot::Neck, Slot::Charm] {
@@ -516,6 +516,23 @@ mod tests {
         for base in ["Sword", "Mace", "Dagger", "Spear", "Staff", "Shield", "Ring", "Gloves", "Helm"] {
             let item = crate::roll_item(base, 1).unwrap();
             assert!(!sighted.fits_item(&item.profile.tags, item.profile.slot), "{base}");
+        }
+    }
+
+    #[test]
+    fn block_suffixes_roll_on_shields_gloves_and_charms_but_not_torches() {
+        for name in ["of Deflection", "of the Rampart"] {
+            let affix = affixes().iter().find(|a| a.name == name).unwrap();
+            assert!(affix.in_play(), "{name} is read");
+            for (base, slot) in [("Shield", Slot::Offhand), ("Gloves", Slot::Hands), ("Gauntlets", Slot::Hands), ("Charm", Slot::Charm)] {
+                let Some(item) = crate::roll_item(base, 3) else { continue };
+                assert_eq!(item.profile.slot, Some(slot), "{base}");
+                assert!(affix.fits_item(&item.profile.tags, item.profile.slot), "{name} on {base}");
+            }
+            for base in ["Torch", "Lantern", "Helm", "Boots", "Ring", "Amulet", "Sword"] {
+                let item = crate::roll_item(base, 3).unwrap();
+                assert!(!affix.fits_item(&item.profile.tags, item.profile.slot), "{name} on {base}");
+            }
         }
     }
 

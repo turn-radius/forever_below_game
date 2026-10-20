@@ -704,7 +704,10 @@
   "n": "of Deflection",
   "k": "suf",
   "g": 1,
-  "on": "armor",
+  "on": "any",
+  "not": [
+   "light"
+  ],
   "fx": [
    {
     "add": {
@@ -716,14 +719,19 @@
   "t": "10% chance to block a blow",
   "grp": "block",
   "at": [
-   "offhand"
+   "offhand",
+   "hands",
+   "charm"
   ]
  },
  {
   "n": "of the Rampart",
   "k": "suf",
   "g": 1,
-  "on": "armor",
+  "on": "any",
+  "not": [
+   "light"
+  ],
   "fx": [
    {
     "add": {
@@ -736,7 +744,9 @@
   "grp": "block",
   "r": "rare",
   "at": [
-   "offhand"
+   "offhand",
+   "hands",
+   "charm"
   ]
  },
  {

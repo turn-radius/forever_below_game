@@ -248,8 +248,9 @@ pub struct Worn {
     /// Multiple of the wearer's pace.
     #[serde(default = "default_gear")]
     pub speed: f64,
-    /// Chance to turn aside a blow that would hit: a held shield's. Only a shield in the off
-    /// hand counts, which the game decides when it builds the [`Worn`].
+    /// Chance to turn aside a blow that would hit: a held shield's, and what other gear adds to
+    /// it. It counts only with a shield in the off hand, which the game decides when it builds
+    /// the [`Worn`].
     #[serde(default)]
     pub block_chance: f64,
     /// Points added to the ability scores.
@@ -283,6 +284,9 @@ impl Default for Worn {
     }
 }
 
+/// The most any gear makes a raised shield block: 90%, our own, so no blow is certainly turned.
+pub const MAX_BLOCK_CHANCE: f64 = 0.9;
+
 /// A light the delver carries, as plain numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CarriedLight {
@@ -314,7 +318,7 @@ pub struct Gear {
     pub heal_on_kill: f64,
     /// Multiple of the delver's pace: the items' multiplied.
     pub speed: f64,
-    /// Chance to turn aside a blow that would hit: the items' added, at most 1.
+    /// Chance to turn aside a blow that would hit: the items' added, at most [`MAX_BLOCK_CHANCE`].
     pub block_chance: f64,
     /// Points added to the ability scores: the items' added.
     pub abilities: AbilityBonus,
@@ -363,7 +367,7 @@ impl Gear {
             gear.stealth += item.stealth;
             gear.heal_on_kill += item.heal_on_kill;
             gear.speed *= item.speed;
-            gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, 1.0);
+            gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, MAX_BLOCK_CHANCE);
             gear.abilities = gear.abilities.plus(item.abilities);
             gear.disease_risk *= item.disease_risk;
         }
