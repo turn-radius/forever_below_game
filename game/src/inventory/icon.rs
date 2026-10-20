@@ -494,8 +494,8 @@ mod tests {
     fn icons_are_drawn_for_the_cells_they_fill() {
         let interface = crate::tuning::Tuning::default().interface;
         // Twice the cell at 1080 lines, so never enlarged up to 2160 lines at one pixel a point.
-        assert!(ICON_CELL_PX as f32 >= interface.cell_px(2160.0));
-        assert!(ICON_CELL_PX as f32 >= 2.0 * interface.cell_px(1080.0));
+        assert!(ICON_CELL_PX as f32 >= interface.cell_px(Vec2::new(3840.0, 2160.0)));
+        assert!(ICON_CELL_PX as f32 >= 2.0 * interface.cell_px(Vec2::new(1920.0, 1080.0)));
     }
 
     #[test]

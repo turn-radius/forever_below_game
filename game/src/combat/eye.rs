@@ -23,7 +23,7 @@ use crate::inventory::Inventory;
 use crate::light::lit_level;
 use crate::play::{DelveSystems, Player};
 use crate::player::Gait;
-use crate::ui::{FRAME_GOLD, INK};
+use crate::ui::{FRAME_GOLD, INK, hud};
 
 const SHADER_PATH: &str = "embedded://forever_below/combat/eye.wesl";
 
@@ -127,7 +127,7 @@ fn spawn_eye(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>,
             Name::new("Visibility eye"),
             Eye { target: None, snap: false },
             MaterialNode(materials.add(EyeMaterial { style: EyeStyle::default() })),
-            Node { position_type: PositionType::Absolute, left: vmin(eye.min.x), top: vmin(eye.min.y), width: vmin(eye.width()), height: vmin(eye.height()), ..default() },
+            Node { position_type: PositionType::Absolute, left: hud(eye.min.x), top: hud(eye.min.y), width: hud(eye.width()), height: hud(eye.height()), ..default() },
             Pickable::IGNORE,
         ));
     }
@@ -320,7 +320,7 @@ mod tests {
         let (mut app, _) = delve();
         let mut query = app.world_mut().query_filtered::<&Node, With<Eye>>();
         let node = query.single(app.world()).unwrap();
-        assert_eq!((node.left, node.top), (vmin(layout.eye.min.x), vmin(layout.eye.min.y)));
-        assert_eq!((node.width, node.height), (vmin(layout.eye.width()), vmin(layout.eye.height())));
+        assert_eq!((node.left, node.top), (hud(layout.eye.min.x), hud(layout.eye.min.y)));
+        assert_eq!((node.width, node.height), (hud(layout.eye.width()), hud(layout.eye.height())));
     }
 }

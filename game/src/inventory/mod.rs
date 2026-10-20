@@ -143,7 +143,6 @@ impl Plugin for InventoryPlugin {
                         // Screens open and close in `switch_screens`.
                         underfoot::track_underfoot,
                         close_container_with_screen,
-                        scale_screen,
                         build_screen,
                         scroll_column,
                         drag_items,
@@ -793,22 +792,6 @@ pub fn cell_under(rect: Rect, point: Vec2, cell: f32) -> IVec2 {
     IVec2::new(x, y)
 }
 
-/// Scales the UI (Bevy's `UiScale`) with the height of the view the inventory screen is drawn
-/// in while it is open ([`crate::tuning::InterfaceTuning::scale`]), so the screen keeps one
-/// layout at any resolution with its cells `cell_size` apart at 1080 lines; back to 1 when it
-/// closes, so no other screen is scaled.
-pub(crate) fn scale_screen(open: Res<ScreenOpen>, cameras: Query<&Camera, With<ViewModelCamera>>, tuning: Res<Tuning>, scale: Option<ResMut<UiScale>>) {
-    let Some(mut scale) = scale else { return };
-    let height = cameras.iter().next().and_then(Camera::logical_viewport_size).map(|size| size.y);
-    let wanted = match height {
-        Some(height) if open.is(Screen::Inventory) && height > 0.0 => tuning.interface.scale(height),
-        _ => 1.0,
-    };
-    if scale.0 != wanted {
-        scale.0 = wanted;
-    }
-}
-
 /// Builds the screen when it opens and rebuilds it whenever what is in it changes, or the
 /// tuning does; takes it down when it closes.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1447,32 +1430,16 @@ mod tests {
     }
 
     #[test]
-    fn cells_scale_with_the_window_height() {
+    fn cells_scale_with_the_window() {
         let interface = Tuning::default().interface;
         // At 1920 by 1080 the screen is at its own size: a 1 by 3 dagger is 72 by 216.
         let dagger = Grid::<ItemId>::new(1, 3);
-        assert_eq!(interface.scale(1080.0), 1.0);
-        assert_eq!(grid_size(&dagger, interface.cell_px(1080.0)) - LINE_PX, Vec2::new(72.0, 216.0));
-        // At 720 lines it is two thirds the size, cells at their 48 floor; never under it.
-        assert!((interface.cell_px(720.0) - 48.0).abs() < 1e-4);
-        assert!((interface.cell_px(480.0) - 48.0).abs() < 1e-4);
-        assert!((interface.cell_px(1440.0) - 96.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn the_screen_scales_only_while_open() {
-        let mut app = App::new();
-        app.init_resource::<ScreenOpen>().init_resource::<Tuning>().init_resource::<UiScale>().add_systems(Update, scale_screen);
-        let camera = Camera { computed: bevy::camera::ComputedCameraValues { target_info: Some(bevy::camera::RenderTargetInfo { physical_size: UVec2::new(1280, 720), scale_factor: 1.0 }), ..default() }, ..default() };
-        app.world_mut().spawn((ViewModelCamera { follows: Entity::PLACEHOLDER }, camera));
-        app.update();
-        assert_eq!(app.world().resource::<UiScale>().0, 1.0);
-        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
-        app.update();
-        assert!((app.world().resource::<UiScale>().0 - 2.0 / 3.0).abs() < 1e-4);
-        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
-        app.update();
-        assert_eq!(app.world().resource::<UiScale>().0, 1.0);
+        assert_eq!(interface.scale(Vec2::new(1920.0, 1080.0)), 1.0);
+        assert_eq!(grid_size(&dagger, interface.cell_px(Vec2::new(1920.0, 1080.0))) - LINE_PX, Vec2::new(72.0, 216.0));
+        // At 720 lines it is two thirds the size; never under the 36 floor.
+        assert!((interface.cell_px(Vec2::new(1280.0, 720.0)) - 48.0).abs() < 1e-4);
+        assert!((interface.cell_px(Vec2::new(640.0, 360.0)) - 36.0).abs() < 1e-4);
+        assert!((interface.cell_px(Vec2::new(2560.0, 1440.0)) - 96.0).abs() < 1e-4);
     }
 
     #[test]

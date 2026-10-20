@@ -13,8 +13,8 @@
 //! the large life orb, the small stamina orb on its rim up and to the right, the visibility eye
 //! on its rim straight right, the mana orb on its rim down and to the right, and the quickslots
 //! running right from the eye. Everything is positioned from one pure function
-//! ([`orb_cluster_layout`]) in `vmin` (a percent of the view's shorter side), so the cluster
-//! scales with the window.
+//! ([`orb_cluster_layout`]) in HUD units ([`crate::ui::hud`], hundredths of the reference
+//! view's height), so the cluster scales with the window on the shared interface scale.
 //!
 //! The life orb pulses when the delver is struck: its frame and liquid flash toward a hot red
 //! and white and it swells for a moment ([`Pulse`]), harder for a bigger share of their hit
@@ -31,7 +31,7 @@ use super::Health;
 use super::vitals::{FLASH_CAP, VitalsRoot, flash_strength};
 use crate::character::{DelverEffects, DelverMana, DelverStamina};
 use crate::play::{DelveSystems, Player};
-use crate::ui::FRAME_GOLD;
+use crate::ui::{FRAME_GOLD, hud};
 
 const SHADER_PATH: &str = "embedded://forever_below/combat/orb.wesl";
 
@@ -99,9 +99,9 @@ pub const POISONED_LIQUIDS: (Color, Color) = (Color::srgb(0.46, 0.86, 0.22), Col
 /// How quickly the life orb turns green or back, per second: about a second either way. Our own.
 const POISON_RATE: f32 = 3.0;
 
-/// The life orb's diameter in `vmin`, which sizes the whole cluster.
+/// The life orb's diameter HUD units ([`crate::ui::hud`]), which sizes the whole cluster.
 pub const LIFE_DIAMETER: f32 = 14.0;
-/// The space between the cluster and the view's bottom left corner, in `vmin`.
+/// The space between the cluster and the view's bottom left corner, HUD units ([`crate::ui::hud`]).
 pub const MARGIN: f32 = 2.0;
 /// The stamina orb, the eye and the mana orb are this share of the life orb's diameter across.
 pub const SMALL_SHARE: f32 = 0.38;
@@ -112,7 +112,7 @@ pub const SLOT_SHARE: f32 = 0.38;
 /// A status badge's diameter, as a share of the life orb's diameter. Our own.
 pub const BADGE_SHARE: f32 = 0.22;
 
-/// An orb: its centre and radius, in `vmin`.
+/// An orb: its centre and radius, HUD units ([`crate::ui::hud`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Disc {
     pub centre: Vec2,
@@ -131,7 +131,7 @@ impl Disc {
     }
 }
 
-/// Where everything in the cluster of orbs, eye and quickslots goes, in `vmin` from the
+/// Where everything in the cluster of orbs, eye and quickslots goes, HUD units ([`crate::ui::hud`]) from the
 /// cluster's top left corner, down and right positive ([`orb_cluster_layout`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClusterLayout {
@@ -330,7 +330,7 @@ fn spawn_cluster(mut commands: Commands, roots: Query<Entity, Added<VitalsRoot>>
         commands.entity(root).with_child((
             Name::new("Orb cluster"),
             OrbCluster,
-            Node { position_type: PositionType::Absolute, left: vmin(MARGIN), bottom: vmin(MARGIN), width: vmin(size.x), height: vmin(size.y), ..default() },
+            Node { position_type: PositionType::Absolute, left: hud(MARGIN), bottom: hud(MARGIN), width: hud(size.x), height: hud(size.y), ..default() },
             Pickable::IGNORE,
         ));
     }
@@ -350,10 +350,10 @@ fn spawn_orbs(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>
                     MaterialNode(materials.add(OrbMaterial { style: OrbStyle::new(kind) })),
                     Node {
                         position_type: PositionType::Absolute,
-                        left: vmin(square.min.x),
-                        top: vmin(square.min.y),
-                        width: vmin(disc.radius * 2.0),
-                        height: vmin(disc.radius * 2.0),
+                        left: hud(square.min.x),
+                        top: hud(square.min.y),
+                        width: hud(disc.radius * 2.0),
+                        height: hud(disc.radius * 2.0),
                         ..default()
                     },
                     UiTransform::IDENTITY,
@@ -633,12 +633,12 @@ mod tests {
                 OrbKind::Mana => layout.mana,
             };
             let square = disc.square();
-            assert_eq!((node.left, node.top), (vmin(square.min.x), vmin(square.min.y)), "{:?}", orb.kind);
-            assert_eq!((node.width, node.height), (vmin(disc.radius * 2.0), vmin(disc.radius * 2.0)));
+            assert_eq!((node.left, node.top), (hud(square.min.x), hud(square.min.y)), "{:?}", orb.kind);
+            assert_eq!((node.width, node.height), (hud(disc.radius * 2.0), hud(disc.radius * 2.0)));
         }
         let mut cluster = app.world_mut().query_filtered::<&Node, With<OrbCluster>>();
         let node = cluster.single(app.world()).unwrap();
-        assert_eq!((node.left, node.bottom, node.width, node.height), (vmin(MARGIN), vmin(MARGIN), vmin(layout.size.x), vmin(layout.size.y)), "anchored bottom left");
+        assert_eq!((node.left, node.bottom, node.width, node.height), (hud(MARGIN), hud(MARGIN), hud(layout.size.x), hud(layout.size.y)), "anchored bottom left");
     }
 
     #[test]
@@ -684,10 +684,11 @@ mod tests {
         for rect in everything {
             assert!(rect.min.x >= -1e-4 && rect.min.y >= -1e-4 && rect.max.x <= layout.size.x + 1e-4 && rect.max.y <= layout.size.y + 1e-4, "{rect:?} in {:?}", layout.size);
         }
-        // Anchored at the corner with the margin, it fits the narrowest (square) window and the
-        // smallest one still shows a readable orb (6 px a vmin at 800 x 600).
+        // Anchored at the corner with the margin, it fits inside 100 units, the height of any
+        // window 540 lines or more, and at the half-size floor (5.4 px a unit) still shows a
+        // readable orb.
         assert!(MARGIN + layout.size.x <= 100.0 && MARGIN + layout.size.y <= 100.0);
-        assert!(layout.life.radius * 2.0 * 6.0 >= 80.0);
+        assert!(layout.life.radius * 2.0 * 5.4 >= 75.0);
         let double = orb_cluster_layout(28.0);
         assert!((double.size - layout.size * 2.0).length() < 1e-3, "twice the life orb, twice the cluster");
         assert!((double.eye.center() - layout.eye.center() * 2.0).length() < 1e-3);
