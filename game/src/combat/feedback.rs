@@ -23,7 +23,7 @@ use fb_creatures::{Creature, Size};
 
 use super::Health;
 use super::callouts::{Callout, Outcome};
-use crate::creatures::behaviour::{Brain, body_radius};
+use crate::creatures::behaviour::{Aroused, Brain, body_radius};
 use crate::creatures::{Critter, Intent};
 use crate::folk::Denizen;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles};
@@ -243,6 +243,8 @@ pub fn take_blows(
     for blow in struck.read() {
         let Ok((critter, at, mut health)) = creatures.get_mut(blow.target) else { continue };
         let game = settings.as_deref().copied().unwrap_or_default();
+        // Struck at all, shield or no, it turns on the delver whatever they shun.
+        commands.entity(blow.target).insert(Aroused);
         // A skeleton's shield turns some blows from the front: a clash, no harm and no flinch.
         if let Some(kit) = critter.kit.as_ref().filter(|_| critter.spot.species.is_skeleton()) {
             let roll = dice.as_deref_mut().map_or(1.0, |d| d.0.next_f64() as f32);

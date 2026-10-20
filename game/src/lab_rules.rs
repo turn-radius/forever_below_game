@@ -35,7 +35,8 @@ impl Default for RuleSet {
 /// The `by` of an effect, if it has one.
 pub fn strength_of(m: &Modifier) -> Option<f32> {
     match *m {
-        Modifier::Add { by, .. } | Modifier::Scale { by, .. } | Modifier::DamageOrArmour { by } => Some(by),
+        Modifier::Add { by, .. } | Modifier::Scale { by, .. } | Modifier::DamageOrArmour { by } | Modifier::Ward { by, .. } => Some(by),
+        Modifier::Shun { chance, .. } => Some(chance),
         Modifier::Condition { .. } => None,
     }
 }
@@ -45,6 +46,8 @@ fn with_strength(m: Modifier, by: f32) -> Modifier {
         Modifier::Add { stat, .. } => Modifier::Add { stat, by },
         Modifier::Scale { stat, .. } => Modifier::Scale { stat, by },
         Modifier::DamageOrArmour { .. } => Modifier::DamageOrArmour { by },
+        Modifier::Ward { foe, .. } => Modifier::Ward { foe, by },
+        Modifier::Shun { foe, .. } => Modifier::Shun { foe, chance: by },
         other => other,
     }
 }

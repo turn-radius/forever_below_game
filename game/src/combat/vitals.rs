@@ -153,12 +153,17 @@ pub fn starting_health(max: i32, start: Option<i32>) -> Health {
 /// on the delver for every blow at them to roll against, and the chance their shield turns a
 /// hit aside ([`BlockChance`]).
 #[allow(clippy::type_complexity)]
-fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, players: Query<(Entity, Option<&ArmourClass>, Option<&BlockChance>), With<Player>>) {
+fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, players: Query<(Entity, Option<&ArmourClass>, Option<&BlockChance>, Option<&Shunned>), With<Player>>) {
     let none = Inventory::default();
     let inventory = inventory.as_deref().unwrap_or(&none);
     let ac = ArmourClass(character.armour_class(inventory).value().round() as i32);
-    let block = BlockChance(character.gear(inventory).block_chance as f32);
-    for (player, had, blocked) in &players {
+    let gear = character.gear(inventory);
+    let block = BlockChance(gear.block_chance as f32);
+    let shun = Shunned(gear.shun.map(|c| c as f32));
+    for (player, had, blocked, shunned) in &players {
+        if shunned.copied().unwrap_or_default() != shun {
+            commands.entity(player).insert(shun);
+        }
         if had != Some(&ac) {
             commands.entity(player).insert(ac);
         }
@@ -181,6 +186,20 @@ impl BlockChance {
     /// nothing is drawn.
     pub fn turns_aside(self, rng: &mut procgen_rng::Mulberry32) -> bool {
         self.0 > 0.0 && rng.next_f64() < self.0 as f64
+    }
+}
+
+/// The chance each kind of creature never notices the delver, from what they wear (an affix "of
+/// Vermin's Peace"'s), by [`fb_items::Foe`] index: what `creatures::behaviour::behave` weighs
+/// each creature's own roll against.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Shunned(pub [f32; fb_items::Foe::COUNT]);
+
+impl Shunned {
+    /// Whether a creature of `foe` whose own roll is `roll` (0 to 1, fixed for that creature)
+    /// does not notice the delver: its roll falls under the chance.
+    pub fn passes_over(&self, foe: fb_items::Foe, roll: f32) -> bool {
+        roll < self.0[foe.index()]
     }
 }
 
@@ -282,6 +301,9 @@ fn take_bites(
                 continue;
             }
             let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), poison_resistance, &mut dice.0);
+            // Gear that wards against the attacker's kind takes a fraction off, never the last 1.
+            let ward = bite.species.map_or(0.0, |s| gear.ward[s.foe().index()] as f32);
+            let damage = fb_items::foe::warded_damage(damage, ward);
             let damage = spared_by_venom(health.hp, bite.damage, damage, bite.species.is_some_and(Species::venom_spares));
             health.hurt(damage);
             // A failed save poisons them for the poisoned effect's hours, and a rat's bite may
@@ -620,6 +642,29 @@ mod tests {
         app.world_mut().resource_mut::<Character>().worn.constitution = 0;
         app.update();
         assert_eq!(*app.world().get::<Health>(player).unwrap(), Health { hp: max - 3, max });
+    }
+
+    #[test]
+    fn an_ossuary_amulet_takes_a_quarter_off_a_skeletons_blow_but_never_the_last_point() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::Skeleton, 6);
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 4, "unwarded");
+        let mut inventory = Inventory::default();
+        let mut amulet = fb_items::roll_item("Amulet", 5).unwrap();
+        let ossuary = fb_items::tables::affixes().iter().find(|a| a.name == "of the Ossuary").unwrap();
+        ossuary.apply_to_stats(&mut amulet.profile.stats);
+        let id = inventory.add(amulet);
+        inventory.wear(id, fb_items::Slot::Neck).unwrap();
+        app.insert_resource(inventory);
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = 10;
+        bite(&mut app, snake, Species::Skeleton, 6);
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 5, "6 becomes 5");
+        bite(&mut app, snake, Species::Skeleton, 1);
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 4, "1 stays 1");
+        bite(&mut app, snake, Species::Rat, 1);
+        bite(&mut app, snake, Species::Rat, 1);
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 2, "a rat's blow is not warded");
     }
 
     #[test]

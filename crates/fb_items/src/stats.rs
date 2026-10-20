@@ -15,6 +15,7 @@
 //! per family (the plate's `saMeta`) is a later task.
 
 use crate::dice::Dice;
+use crate::foe::Foe;
 use serde::{Deserialize, Serialize};
 
 /// An item's derived stats.
@@ -83,6 +84,12 @@ pub struct Stats {
     /// Points of poison resistance: each adds 1 to the wearer's saves against venom.
     #[serde(default)]
     pub poison_resistance: f32,
+    /// The fraction of damage taken off the blows of each kind of creature, by [`Foe`] index.
+    #[serde(default)]
+    pub ward: [f32; Foe::COUNT],
+    /// The chance a creature of each kind never notices the wearer, by [`Foe`] index.
+    #[serde(default)]
+    pub shun: [f32; Foe::COUNT],
     /// How fast the wearer swings, draws and reloads, as a multiple of normal: the weapon in
     /// hand's and the gloves' (`fb_character::Gear::attack_rate`).
     #[serde(default = "one")]
@@ -132,6 +139,8 @@ impl Default for Stats {
             charisma: 0.0,
             recovery: 0.0,
             poison_resistance: 0.0,
+            ward: [0.0; Foe::COUNT],
+            shun: [0.0; Foe::COUNT],
             attack_rate: 1.0,
             stamina_refill: 1.0,
             stamina_cost: 1.0,
@@ -327,6 +336,15 @@ mod tests {
         assert_eq!(s.stealth, -2.0);
         s.set(Stat::BreakChance, 4.0);
         assert_eq!(s.break_chance, 1.0);
+    }
+
+    #[test]
+    fn stats_saved_without_wards_still_load() {
+        let mut json = serde_json::to_value(Stats::default()).unwrap();
+        json.as_object_mut().unwrap().remove("ward");
+        json.as_object_mut().unwrap().remove("shun");
+        let loaded: Stats = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded, Stats::default());
     }
 
     #[test]

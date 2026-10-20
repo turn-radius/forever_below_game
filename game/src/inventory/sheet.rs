@@ -139,7 +139,7 @@ const TIP_WIDTH: f32 = 380.0;
 pub const ATTRIBUTES: [&str; 5] = ["STR", "DEX", "CON", "INT", "WIS"];
 
 /// The rows of what the delver's gear makes of them.
-pub const GEAR_ROWS: [&str; 17] = ["Load", "Warmth", "Light", "Darkvision", "Armour class", "Hunger rate", "Sleepiness rate", "Heal on a kill", "Speed", "Block chance", "Luck", "Abilities", "To hit", "Ranged to hit", "Attack rate", "Stamina refill", "Stamina cost"];
+pub const GEAR_ROWS: [&str; 18] = ["Load", "Warmth", "Light", "Darkvision", "Armour class", "Hunger rate", "Sleepiness rate", "Heal on a kill", "Speed", "Block chance", "Luck", "Abilities", "To hit", "Ranged to hit", "Attack rate", "Stamina refill", "Stamina cost", "Creature wards"];
 
 /// "STR 14 (+2)": the score and its SRD modifier.
 pub fn attribute_text(name: &str, score: i32) -> String {
@@ -157,7 +157,7 @@ pub fn attribute_lines(character: &Character) -> [String; 5] {
 /// The values of [`GEAR_ROWS`], from `derived` (so they agree with the header): "55 / 150 lb
 /// \u{b7} Burdened", "4 / 6", "20 ft", "60 ft", "13", "\u{d7}0.85", "usual", "+1 HP", "\u{d7}1.2",
 /// "20%", "+2", "+2 STR, -1 CON", then the to hit rows "+1" and "+2" (or "none"), the attack rate "\u{d7}1.1", and the stamina refill and cost multiples.
-pub fn gear_values(character: &Character, derived: &Derived) -> [String; 17] {
+pub fn gear_values(character: &Character, derived: &Derived) -> [String; 18] {
     let feet = |f: f32| if f > 0.0 { format!("{f:.0} ft") } else { "none".to_string() };
     let points = |p: f32| if p.round() == 0.0 { "none".to_string() } else { format!("{:+}", p.round()) };
     let rate = |r: f32| if (r - 1.0).abs() < 1e-6 { "usual".to_string() } else { format!("\u{d7}{}", fb_character::explain::number(r as f64)) };
@@ -182,7 +182,25 @@ pub fn gear_values(character: &Character, derived: &Derived) -> [String; 17] {
         rate(derived.attack_rate),
         rate(derived.stamina_refill),
         rate(derived.stamina_cost),
+        ward_summary(derived),
     ]
+}
+
+/// The creature wards on one line: "Undead -25%, Vermin 50% unaware", or "none". A ward is the
+/// damage a kind loses; a shun the chance a creature of that kind never notices the delver.
+pub fn ward_summary(derived: &Derived) -> String {
+    let pct = |f: f32| fb_character::explain::number((f * 100.0).round() as f64);
+    let mut parts = Vec::new();
+    for foe in fb_items::Foe::ALL {
+        let i = foe.index();
+        if derived.ward[i] > 0.0 {
+            parts.push(format!("{} -{}%", foe.label(), pct(derived.ward[i])));
+        }
+        if derived.shun[i] > 0.0 {
+            parts.push(format!("{} {}% unaware", foe.label(), pct(derived.shun[i])));
+        }
+    }
+    if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
 }
 
 fn meter(needs: &Needs, kind: MeterKind) -> &Meter {
@@ -327,6 +345,19 @@ pub fn breakdown(rules: &Rules, character: &Character, inventory: &Inventory, ro
         14 => vec![loadout.attack_rate().line()],
         15 => vec![loadout.stamina_refill().line()],
         16 => vec![loadout.stamina_cost().line()],
+        17 => {
+            let gear = loadout.gear();
+            let mut lines = Vec::new();
+            for foe in fb_items::Foe::ALL {
+                if gear.ward[foe.index()] > 0.0 {
+                    lines.push(loadout.ward(foe).line());
+                }
+                if gear.shun[foe.index()] > 0.0 {
+                    lines.push(loadout.shun_line(foe));
+                }
+            }
+            if lines.is_empty() { vec!["Nothing worn wards against a kind of creature".to_string()] } else { lines }
+        }
         _ => {
             let lines: Vec<String> = ["STR", "DEX", "CON", "INT", "WIS"].into_iter().map(|a| loadout.ability(a)).filter(|e| e.value() != 0.0).map(|e| e.line()).collect();
             if lines.is_empty() { vec!["Nothing worn adds to an ability score".to_string()] } else { lines }

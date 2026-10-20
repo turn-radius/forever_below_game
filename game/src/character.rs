@@ -306,6 +306,11 @@ pub struct Derived {
     pub to_hit: f32,
     /// What worn gear adds to a missile hit roll alone.
     pub ranged_to_hit: f32,
+    /// The fraction of damage worn gear takes off each kind of creature's blows, by
+    /// [`fb_items::Foe`] index.
+    pub ward: [f32; fb_items::Foe::COUNT],
+    /// The chance each kind of creature never notices them, by [`fb_items::Foe`] index.
+    pub shun: [f32; fb_items::Foe::COUNT],
     /// Multiple of the speed of their swings, draws and reloads, from the weapon in hand and
     /// their gloves.
     pub attack_rate: f32,
@@ -355,7 +360,7 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64 },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from) },
             );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
@@ -424,6 +429,8 @@ impl Character {
             abilities: gear.abilities,
             to_hit: gear.to_hit as f32,
             ranged_to_hit: gear.ranged_to_hit as f32,
+            ward: gear.ward.map(|w| w as f32),
+            shun: gear.shun.map(|w| w as f32),
             attack_rate: gear.attack_rate as f32,
             stamina_refill: gear.stamina_refill as f32,
             stamina_cost: gear.stamina_cost as f32,

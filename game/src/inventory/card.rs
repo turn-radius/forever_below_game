@@ -220,6 +220,11 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     ] {
         differ(new, old, name, "", true);
     }
+    for foe in fb_items::Foe::ALL {
+        let (i, kind) = (foe.index(), foe.label().to_lowercase());
+        differ(new.ward[i] * 100.0, old.ward[i] * 100.0, &format!("less damage from {kind}"), "%", true);
+        differ(new.shun[i] * 100.0, old.shun[i] * 100.0, &format!("chance {kind} pay no heed"), "%", true);
+    }
     differ(new.weight, old.weight, "weight", " lb", false);
     lines
 }
@@ -274,6 +279,16 @@ pub fn compare_banner(slot: Slot, worn: bool) -> String {
     format!("{} \u{b7} {}", if worn { "Worn" } else { "Nothing worn" }, slot_label(slot))
 }
 
+/// "Undead deal 25% less": a ward against `foe` of `fraction`.
+pub fn ward_text(foe: fb_items::Foe, fraction: f32) -> String {
+    format!("{} deal {}% less", foe.label(), number((fraction * 100.0).round()))
+}
+
+/// "Vermin often pay no heed (50%)": a shun of `chance` for `foe`.
+pub fn shun_text(foe: fb_items::Foe, chance: f32) -> String {
+    format!("{} often pay no heed ({}%)", foe.label(), number((chance * 100.0).round()))
+}
+
 /// The stats the meta line leaves out, where they differ from an ordinary thing's.
 pub fn stat_lines(s: &Stats) -> Vec<String> {
     let plain = Stats::default();
@@ -287,6 +302,14 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
     bonus(s.ranged_to_hit, "to hit with missiles");
     bonus(s.stealth, "stealth");
     bonus(s.lockpicking, "lockpicking");
+    for foe in fb_items::Foe::ALL {
+        if s.ward[foe.index()] > 0.0 {
+            lines.push(ward_text(foe, s.ward[foe.index()]));
+        }
+        if s.shun[foe.index()] > 0.0 {
+            lines.push(shun_text(foe, s.shun[foe.index()]));
+        }
+    }
     if s.carry != 0.0 {
         lines.push(format!("carries {} lb more", number(s.carry)));
     }
