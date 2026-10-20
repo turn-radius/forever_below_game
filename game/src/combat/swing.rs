@@ -246,7 +246,7 @@ pub(super) fn start_swing(
             stamina.0 = spent;
         }
         let weapon = Weapon::held_in(hand, &inventory, &character);
-        let rate = gear.attack_rate as f32;
+        let rate = swing_rate(hand, &inventory, &character);
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
             let combat = &tuning.combat;
@@ -377,6 +377,20 @@ pub fn toward_target(eye: &GlobalTransform, points: Vec<Vec3>, view: &crate::tun
 /// How far from the centre of the screen a blow still follows its creature, as a fraction of
 /// the half height. Our own.
 const TOWARD_LIMIT: f32 = 0.6;
+
+/// How fast a swing with `hand` goes: the gloves' attack rate and the swung weapon's own. The
+/// delver's gear counts the main hand's weapon, so an off-hand swing swaps that for the off-hand
+/// weapon's (a shield or a torch has none, and a fist is the usual pace).
+fn swing_rate(hand: Slot, inventory: &Inventory, character: &Character) -> f32 {
+    let rate = character.gear(inventory).attack_rate as f32;
+    if hand == Slot::Mainhand {
+        return rate;
+    }
+    let stat = |slot: Slot, weapons_only: bool| {
+        inventory.worn(slot).and_then(|id| inventory.item(id)).map_or(1.0, |i| if !weapons_only || i.profile.stats.is_weapon() { i.profile.stats.attack_rate } else { 1.0 })
+    };
+    rate / stat(Slot::Mainhand, false) * stat(hand, true)
+}
 
 /// Moves each swing on; at [`LANDS`] its blow finds the nearest creature or folk in reach and
 /// ahead, rolls to hit against its [`ArmourClass`] (at disadvantage while the delver is
@@ -879,6 +893,26 @@ mod tests {
         };
         assert_eq!(rate_with(None), 1.0);
         assert!((rate_with(Some("Quick")) - 1.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_off_hand_swing_takes_the_off_hand_weapons_rate() {
+        let character = Character::roll(3);
+        let mut inventory = Inventory::default();
+        let quick = |base: &str, name: &str| {
+            let mut item = fb_items::roll_item(base, 3).unwrap();
+            let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+            affix.apply_to_stats(&mut item.profile.stats);
+            item.affixes.push(affix);
+            item
+        };
+        let sword = inventory.add(quick("Sword", "of Swiftness"));
+        inventory.wear(sword, Slot::Mainhand).unwrap();
+        assert!((swing_rate(Slot::Mainhand, &inventory, &character) - 1.2).abs() < 1e-6);
+        assert!((swing_rate(Slot::Offhand, &inventory, &character) - 1.0).abs() < 1e-6, "a fist in the off hand");
+        let dagger = inventory.add(quick("Dagger", "Quick"));
+        inventory.wear(dagger, Slot::Offhand).unwrap();
+        assert!((swing_rate(Slot::Offhand, &inventory, &character) - 1.1).abs() < 1e-6);
     }
 
     #[test]
