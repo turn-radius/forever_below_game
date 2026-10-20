@@ -121,6 +121,9 @@ impl Plugin for TitlePlugin {
         if !app.is_plugin_added::<LastDelverPlugin>() {
             app.add_plugins(LastDelverPlugin);
         }
+        if !app.is_plugin_added::<crate::ui::InterfaceScalePlugin>() {
+            app.add_plugins(crate::ui::InterfaceScalePlugin);
+        }
         // The creator's paper doll draws its slots' icons and turns its seal as the inventory's does.
         app.add_plugins(preview::PreviewPlugin)
             .init_resource::<crate::inventory::IconCache>()

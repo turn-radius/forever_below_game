@@ -110,6 +110,34 @@ impl UiFonts {
     }
 }
 
+/// Scales the whole interface (Bevy's `UiScale`) to the view it is drawn in, on the title and
+/// in the delve, whatever screen is open: every screen is laid out for 1920 by 1080 and drawn
+/// at [`InterfaceTuning::scale`](crate::tuning::InterfaceTuning::scale) of that, so it fits any
+/// window. Read the mouse with [`ui_cursor`] to meet the interface in its own pixels.
+pub struct InterfaceScalePlugin;
+
+impl Plugin for InterfaceScalePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, fit_interface);
+    }
+}
+
+/// Sets `UiScale` from the logical size of the view the interface is drawn by: the held torch's
+/// camera in the delve, the title's camera on the title. Left alone while there is none.
+#[allow(clippy::type_complexity)]
+pub fn fit_interface(
+    cameras: Query<&Camera, Or<(With<crate::carry::ViewModelCamera>, With<bevy::ui::IsDefaultUiCamera>)>>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
+    scale: Option<ResMut<UiScale>>,
+) {
+    let Some(mut scale) = scale else { return };
+    let Some(view) = cameras.iter().filter(|c| c.is_active).find_map(Camera::logical_viewport_size).filter(|v| v.min_element() > 0.0) else { return };
+    let wanted = tuning.map_or_else(|| crate::tuning::InterfaceTuning::default().scale(view), |t| t.interface.scale(view));
+    if scale.0 != wanted {
+        scale.0 = wanted;
+    }
+}
+
 /// A node's rectangle in logical pixels.
 pub fn node_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Rect {
     Rect::from_center_size(transform.translation * node.inverse_scale_factor, node.size * node.inverse_scale_factor)
@@ -210,6 +238,42 @@ pub fn dashed_outline(parent: &mut ChildSpawnerCommands, size: Vec2, radius: f32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tuning::InterfaceTuning;
+
+    #[test]
+    fn the_interface_fits_the_tighter_side_of_the_view() {
+        let interface = InterfaceTuning::default();
+        let scale = |w: f32, h: f32| interface.scale(Vec2::new(w, h));
+        assert_eq!(scale(1920.0, 1080.0), 1.0);
+        assert!((scale(1280.0, 720.0) - 2.0 / 3.0).abs() < 1e-4);
+        assert!((scale(2560.0, 1440.0) - 4.0 / 3.0).abs() < 1e-4, "a bigger window, a bigger interface");
+        assert_eq!(scale(2560.0, 1080.0), 1.0, "ultrawide: the height decides");
+        assert!((scale(1280.0, 1024.0) - 2.0 / 3.0).abs() < 1e-4, "5:4: the width decides");
+        assert_eq!(scale(640.0, 360.0), 0.5, "never under the floor");
+    }
+
+    /// A camera drawing a view `width` by `height` logical pixels.
+    fn camera(width: u32, height: u32) -> Camera {
+        let target_info = Some(bevy::camera::RenderTargetInfo { physical_size: UVec2::new(width, height), scale_factor: 1.0 });
+        Camera { computed: bevy::camera::ComputedCameraValues { target_info, ..default() }, ..default() }
+    }
+
+    #[test]
+    fn every_screen_is_scaled_to_the_view() {
+        let mut app = App::new();
+        app.init_resource::<crate::tuning::Tuning>().init_resource::<UiScale>().add_plugins(InterfaceScalePlugin);
+        app.update();
+        assert_eq!(app.world().resource::<UiScale>().0, 1.0, "left alone with no camera");
+        // The title's camera, with nothing open.
+        let title = app.world_mut().spawn((camera(1280, 720), bevy::ui::IsDefaultUiCamera)).id();
+        app.update();
+        assert!((app.world().resource::<UiScale>().0 - 2.0 / 3.0).abs() < 1e-4);
+        // The delve's, at another size.
+        app.world_mut().despawn(title);
+        app.world_mut().spawn((camera(2560, 1440), crate::carry::ViewModelCamera { follows: Entity::PLACEHOLDER }));
+        app.update();
+        assert!((app.world().resource::<UiScale>().0 - 4.0 / 3.0).abs() < 1e-4);
+    }
 
     #[test]
     fn palette_is_the_dark_ledger() {

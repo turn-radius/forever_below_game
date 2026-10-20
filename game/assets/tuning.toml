@@ -153,10 +153,10 @@ troll_rooms = 2
 troll_linger = 10.0
 
 [interface]
-# Inventory grid cell size, in logical pixels, in a window 1080 lines high. The inventory screen scales with the window's height from there.
+# Inventory grid cell size, in logical pixels, in a 1920 by 1080 window. Every screen scales with the window from there, by its height or width, whichever is tighter.
 cell_size = 72.0
-# The fewest logical pixels a cell is drawn at, however short the window.
-min_cell_size = 48.0
+# The fewest logical pixels a cell is drawn at, however small the window: the floor under the whole interface's scale (36 of 72 is half size).
+min_cell_size = 36.0
 # Seconds the mouse rests on an item before its card shows.
 hover_delay = 0.0
 
