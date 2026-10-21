@@ -150,6 +150,10 @@ Where the effects come from:
 
 `fb_items::naming` writes the names and legends. The noun is the Armory's, or the base's own name for the bases marked `named_by_base` in `fb_items::armory_base` (the plate did this for `Blind cavefish` and `Healing draught`). The plate's material word for its own bases ("Linen Shirt", "Oak Club") is gone, since those bases are Armory shapes now and the Armory noun already says what they are. A legendary's title takes its epithet from the plate's lists (Tooth, Oath, Wick, Keepsake...), chosen by whether it is a weapon, a light, a trinket or anything else, and the owner's name is a first name from `data/syl.json`. The title uses a straight apostrophe where the plate used a curly one, because the HUD's font has no curly one.
 
+### Items as they are now
+
+An item can change after its roll (an enchanter swaps its affixes, a smith makes it), so nothing about it is assumed to be what the seed rolls. `fb_items::Item::from_parts(ItemParts)` builds an item from its base, seed, Armory shape, rarity, affixes, name, legend, history lines, coins and odds, rolling nothing: the profile is worked out again from the shape, and the stats from the affixes. `ItemParts::from(item)` takes one apart, so a change is take apart, edit, put together. `Item::history` holds lines beyond a legendary's legend ("Made by ..."), shown on the hover card after the legend's. An affix is found by its name (`tables::affix_named`; names in `data/afx.json` are unique). `game::record::ItemRecord` keeps all of this (affixes by name) and restores through `from_parts`, so a changed item survives leaving a level and coming back. Records last for one delve, so they carry no migration.
+
 ## Rarity shows on the object
 
 `dressState` sets the Armory condition from rarity: common wear 0.15–0.50, magic 0.06–0.26, rare 0.02–0.14. A legendary is either pristine (0.02) or old and worn (0.4–0.7). Rare and legendary items get etching; legendary etching is gold inlay. Flaws raise the matching decay: Rusted sets rust to 1.5, and Moth-eaten, Mildewed and Lice-ridden raise fray and rot.

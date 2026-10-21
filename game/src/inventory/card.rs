@@ -45,7 +45,7 @@ pub struct CardText {
     /// The keys and verbs at the foot, from [`crate::interact::key_actions`]: ("F", "Take").
     /// [`card_text`] leaves it empty; [`show_card`] fills it from the keymap and the item's place.
     pub actions: Vec<(String, &'static str)>,
-    /// A legendary's three lines of history.
+    /// A legendary's three lines of history, then the item's own ("Made by ...").
     pub history: Vec<String>,
 }
 
@@ -164,7 +164,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         light: light_line(&item.shape),
         consume: consume_line(item),
         actions: Vec::new(),
-        history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()),
+        history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()).into_iter().chain(item.history.iter().cloned()).collect(),
     }
 }
 
@@ -809,6 +809,16 @@ mod tests {
             assert_eq!((line.text.as_str(), line.name.as_str(), line.good), (affix.text.as_str(), affix.name.as_str(), affix.good));
         }
         assert!(card.history.is_empty());
+    }
+
+    #[test]
+    fn an_items_own_history_follows_a_legends() {
+        let mut legend = (1..5_000).filter_map(|s| fb_items::roll_item_with("Sword", s, fb_items::Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).unwrap();
+        legend.history.push("Made by Brenna Holt".into());
+        let card = card_text(&legend, None);
+        assert_eq!(card.history.len(), 4);
+        assert_eq!(card.history[..3], legend.legend.as_ref().unwrap().history);
+        assert_eq!(card.history[3], "Made by Brenna Holt");
     }
 
     #[test]

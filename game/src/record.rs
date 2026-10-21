@@ -16,9 +16,13 @@
 //!
 //! The data types are plain serde structs, free of Bevy (only [`WorldRecord`] derives `Resource`,
 //! to be held by the app), so saving the record to disk, and keeping it across death, can build
-//! directly on them. An item is its base and seed, which roll it ([`fb_items::roll_item`]), with
-//! the Armory state it has now (its wear, how far it has burned, what was eaten) and what is in
-//! it, so rebuilding it gives the item as it was.
+//! directly on them. An item is its base and seed, with everything it is now: the Armory state
+//! (its wear, how far it has burned, what was eaten), the rarity, affixes (by name), name, legend
+//! and history lines, and what is in it. Rebuilding it ([`rebuild_item`], by
+//! [`fb_items::Item::from_parts`]) rolls nothing again and works the stats out from the recorded
+//! affixes, so an item that was changed after its roll (enchanted, commissioned, given a maker's
+//! line) comes back as changed. A record lasts one delve, so none of it is kept compatible with
+//! an older shape.
 //!
 //! Not recorded, because the game has no such state yet: folk standing beyond hostility (moods,
 //! earned favour), the level's own lights (glowcaps and braziers burn without end), and
@@ -92,17 +96,24 @@ pub struct FloorRecord {
     pub item: ItemRecord,
 }
 
-/// An item as it is now: what rolls it, the Armory state it has, and what it holds.
+/// An item as it is now: its base and seed, the Armory state it has, the rarity, affixes, name,
+/// legend and history it has (as rolled, or as since changed), and what it holds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ItemRecord {
     pub base: String,
     pub seed: u32,
     pub shape: armory::Item,
+    pub rarity: fb_items::Rarity,
+    /// Its affixes, by name ([`fb_items::tables::affix_named`]).
+    pub affixes: Vec<String>,
+    pub name: String,
+    pub legend: Option<fb_items::naming::Legend>,
+    /// Lines of history beyond the legend's ("Made by ...").
+    pub history: Vec<String>,
     /// A purse's gold, silver and copper.
     pub coins: Option<[u32; 3]>,
     pub contents: Vec<Stowed>,
-    /// The odds it was rolled against; records from before odds roll at the first level's.
-    #[serde(default)]
+    /// The odds it was rolled against.
     pub odds: fb_items::Odds,
 }
 
@@ -165,6 +176,11 @@ pub fn record_item(inventory: &Inventory, id: ItemId) -> Option<ItemRecord> {
         base: item.base.clone(),
         seed: item.seed,
         shape: item.shape.clone(),
+        rarity: item.rarity,
+        affixes: item.affixes.iter().map(|a| a.name.clone()).collect(),
+        name: item.name.clone(),
+        legend: item.legend.clone(),
+        history: item.history.clone(),
         coins: item.coins.map(|c| [c.gp, c.sp, c.cp]),
         contents: record_contents(inventory, id),
         odds: item.odds,
@@ -181,14 +197,46 @@ pub fn record_contents(inventory: &Inventory, container: ItemId) -> Vec<Stowed> 
 }
 
 /// Keeps track of the item `record` describes in `inventory`, loose, with its contents where
-/// they lay. `None` for a base no table knows.
+/// they lay. Nothing is rolled again: the rarity, affixes, name, legend and history are the
+/// record's, and the stats are worked out from the affixes. `None` for a base no table
+/// knows.
 pub fn restore_item(inventory: &mut Inventory, record: &ItemRecord) -> Option<ItemId> {
-    let mut item = fb_items::roll_item_with(&record.base, record.seed, record.odds)?;
-    item.shape = record.shape.clone();
-    item.coins = record.coins.map(|[gp, sp, cp]| Coins { gp, sp, cp });
+    let item = rebuild_item(record)?;
     let id = inventory.add(item);
     restore_contents(inventory, id, &record.contents);
     Some(id)
+}
+
+/// The item `record` describes, without its contents. An affix no table knows is left off, with
+/// a warning; only an unknown base gives `None` (also with a warning).
+pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
+    let affixes = record
+        .affixes
+        .iter()
+        .filter_map(|n| {
+            let found = fb_items::tables::affix_named(n);
+            if found.is_none() {
+                warn!("recorded item {} (seed {}) has unknown affix {n:?}; leaving it off", record.base, record.seed);
+            }
+            found
+        })
+        .collect();
+    let item = fb_items::Item::from_parts(fb_items::ItemParts {
+        base: record.base.clone(),
+        seed: record.seed,
+        shape: record.shape.clone(),
+        rarity: record.rarity,
+        affixes,
+        name: record.name.clone(),
+        legend: record.legend.clone(),
+        history: record.history.clone(),
+        coins: record.coins.map(|[gp, sp, cp]| Coins { gp, sp, cp }),
+        odds: record.odds,
+    });
+    if item.is_none() {
+        warn!("recorded item has unknown base {:?} (seed {}); dropping it", record.base, record.seed);
+    }
+    item
 }
 
 /// Puts `contents` back into `container`'s grid, each where it lay.
@@ -259,6 +307,68 @@ pub fn record_level_left(
 mod tests {
     use super::*;
 
+    /// `item` recorded, loose.
+    fn record_of(item: &fb_items::Item) -> ItemRecord {
+        let mut inventory = Inventory::default();
+        let id = inventory.add(item.clone());
+        record_item(&inventory, id).unwrap()
+    }
+
+    /// `item` through a record, as JSON, and back.
+    fn through_record(item: &fb_items::Item) -> fb_items::Item {
+        let json = serde_json::to_string(&record_of(item)).unwrap();
+        rebuild_item(&serde_json::from_str(&json).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_unchanged_rolled_item_rebuilds_identically() {
+        let odds = fb_items::Odds::loot(8);
+        let legend = (1..2_000).filter_map(|s| fb_items::roll_item_with("Sword", s, odds)).find(|i| i.rarity == fb_items::Rarity::Legendary).unwrap();
+        for item in [fb_items::roll_item("Cloak", 4).unwrap(), fb_items::roll_item("Purse", 11).unwrap(), legend] {
+            assert_eq!(through_record(&item), item);
+        }
+    }
+
+    #[test]
+    fn an_item_whose_affixes_changed_keeps_the_new_ones_and_their_stats() {
+        let mut parts = fb_items::ItemParts::from(fb_items::roll_item("Dagger", 6).unwrap());
+        parts.affixes = vec![];
+        let plain = fb_items::Item::from_parts(parts.clone()).unwrap();
+        let quick = fb_items::tables::affix_named("Quick").unwrap();
+        parts.affixes = vec![quick];
+        parts.name = fb_items::naming::item_name(&fb_items::naming::noun(&parts.base, &parts.shape), &parts.affixes);
+        let changed = fb_items::Item::from_parts(parts).unwrap();
+        assert!(changed.profile.stats.attack_rate > plain.profile.stats.attack_rate);
+        let again = through_record(&changed);
+        assert_eq!(again, changed);
+        assert_eq!(again.affixes, vec![quick]);
+        assert!(again.name.starts_with("Quick"));
+    }
+
+    #[test]
+    fn an_unknown_affix_is_left_off_and_the_rest_of_the_item_restores() {
+        let mut item = fb_items::roll_item("Sword", 9).unwrap();
+        item.history.push("Made by Brenna Holt".into());
+        let mut record = record_of(&item);
+        record.affixes = vec!["Nope".into()];
+        let again = rebuild_item(&record).unwrap();
+        assert!(again.affixes.is_empty());
+        assert_eq!((again.name.as_str(), again.rarity, again.history.clone(), again.shape.clone()), (item.name.as_str(), item.rarity, item.history.clone(), item.shape.clone()));
+        let mut inventory = Inventory::default();
+        assert!(restore_item(&mut inventory, &record).is_some());
+        record.base = "Nothing".into();
+        assert!(rebuild_item(&record).is_none());
+    }
+
+    #[test]
+    fn a_history_line_round_trips() {
+        let mut item = fb_items::roll_item("Sword", 9).unwrap();
+        item.history.push("Made by Brenna Holt".into());
+        let again = through_record(&item);
+        assert_eq!(again.history, vec!["Made by Brenna Holt".to_string()]);
+        assert_eq!(again, item);
+    }
+
     #[test]
     fn an_item_with_contents_round_trips_through_its_record() {
         let mut inventory = Inventory::default();
@@ -314,7 +424,7 @@ mod tests {
         let mut level = LevelRecord::default();
         level.floor.push(FloorRecord {
             spot: ItemSpot { x: 3.25, y: 4.5, yaw: 0.3, family: item.shape.family(), seed: item.seed },
-            item: ItemRecord { base: item.base.clone(), seed: item.seed, shape: item.shape.clone(), coins: Some([1, 2, 3]), contents: vec![], odds: fb_items::Odds::kit(4) },
+            item: ItemRecord { coins: Some([1, 2, 3]), odds: fb_items::Odds::kit(4), ..record_of(&item) },
         });
         level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
         level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false });

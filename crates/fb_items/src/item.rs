@@ -104,6 +104,50 @@ pub struct Item {
     pub coins: Option<Coins>,
     /// The odds its rarity was rolled against, so its base and seed roll it again the same.
     pub odds: Odds,
+    /// Lines of history beyond a legendary's legend ("Made by Brenna Holt"), in the order they
+    /// happened; the hover card shows them after the legend's.
+    pub history: Vec<String>,
+}
+
+/// The parts an [`Item`] is built from by [`Item::from_parts`], rather than rolled: what an item
+/// is now, after being changed (new affixes, a maker's line) or recorded and restored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ItemParts {
+    pub base: String,
+    pub seed: u32,
+    pub shape: armory::Item,
+    pub rarity: Rarity,
+    pub affixes: Vec<&'static Affix>,
+    pub name: String,
+    pub legend: Option<Legend>,
+    pub history: Vec<String>,
+    pub coins: Option<Coins>,
+    pub odds: Odds,
+}
+
+impl From<Item> for ItemParts {
+    fn from(i: Item) -> Self {
+        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds }
+    }
+}
+
+impl Item {
+    /// The item `parts` describe, its profile worked out again from the shape and the affixes
+    /// (their effects on the stats), with nothing rolled: the name, rarity and legend are as
+    /// given. The shape is taken as it is, so condition and fuel stay. `None` for a base no
+    /// table knows. An item taken apart ([`ItemParts::from`]) and put back together is equal.
+    pub fn from_parts(parts: ItemParts) -> Option<Item> {
+        crate::armory_base::armory_base(&parts.base)?;
+        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds } = parts;
+        let mut profile = profile(&base, &shape);
+        if let Some(c) = coins {
+            profile.description = c.to_string();
+        }
+        for a in &affixes {
+            a.apply_to_stats(&mut profile.stats);
+        }
+        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history })
+    }
 }
 
 impl Item {
@@ -205,7 +249,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
         if let Some(c) = coins {
             profile.description = c.to_string();
         }
-        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds });
+        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![] });
     }
 
     let (rarity, affixes) = roll_rarity_for(&mut rng, &profile.tags, profile.slot, &odds);
@@ -217,7 +261,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
     dress(&mut shape, rarity, &affixes, seed);
     // The fuel it starts with is what the item's `BurnTime` makes of a full one.
     shape.scale_fuel(profile.stats.burn_time);
-    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds })
+    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![] })
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that
@@ -407,6 +451,28 @@ mod tests {
         let rusted = (1..3_000).filter_map(|seed| roll_item("Sword", seed)).find(|i| i.affixes.iter().any(|a| a.name == "Rusted")).expect("no rusted sword");
         assert_eq!(rusted.profile.stats.damage_bonus, -1.0);
         assert_eq!(rusted.shape.condition().rust, 1.5);
+    }
+
+    #[test]
+    fn an_item_taken_apart_and_put_back_is_the_same() {
+        for (base, seed) in [("Sword", 9), ("Cloak", 4), ("Purse", 11), ("Torch", 3), ("Sack", 3)] {
+            let item = roll_item(base, seed).unwrap();
+            assert_eq!(Item::from_parts(item.clone().into()), Some(item), "{base} {seed}");
+        }
+        let legend = (1..2_000).filter_map(|seed| roll_item_with("Sword", seed, Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).unwrap();
+        assert_eq!(Item::from_parts(legend.clone().into()), Some(legend));
+        assert_eq!(Item::from_parts(ItemParts { base: "Nothing".into(), ..roll_item("Sword", 1).unwrap().into() }), None);
+    }
+
+    #[test]
+    fn changed_affixes_change_the_stats_and_name_parts_keep() {
+        let mut parts = ItemParts::from(roll_item("Cloak", 4).unwrap());
+        let plain = Item::from_parts(ItemParts { affixes: vec![], ..parts.clone() }).unwrap();
+        let warm = crate::tables::affix_named("Warm").unwrap();
+        parts.affixes = vec![warm];
+        let item = Item::from_parts(parts).unwrap();
+        assert_eq!(item.profile.stats.warmth, plain.profile.stats.warmth + 2.0);
+        assert_eq!(crate::tables::affix_named("Nope"), None);
     }
 
     #[test]

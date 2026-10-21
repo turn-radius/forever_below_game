@@ -38,7 +38,7 @@ pub fn anyone(rng: &mut Mulberry32) -> String {
 }
 
 /// A legendary's title, the name it had before, and three lines of history.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Legend {
     pub title: String,
     pub subtitle: String,

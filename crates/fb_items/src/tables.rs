@@ -299,6 +299,12 @@ pub fn affixes() -> &'static [Affix] {
     &AFFIXES
 }
 
+/// The affix called `name`, the key an item's affixes are recorded by (every name in
+/// `data/afx.json` is unique).
+pub fn affix_named(name: &str) -> Option<&'static Affix> {
+    AFFIXES.iter().find(|a| a.name == name)
+}
+
 /// `data/slots.json`: every equipment slot and where it sits round the doll, in the plate's
 /// order.
 pub fn slot_places() -> &'static [SlotPlace] {
