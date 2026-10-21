@@ -7,7 +7,7 @@
 //! from the families of the trade ([`bases_of`]), then one of the maker's rolls of it, then
 //! shapes it. The price follows the base, material, size and ornament of the shaped item
 //! ([`fb_items::commission`]) and the maker's tier, and updates as the item is shaped. Confirming
-//! puts a [`Commission`] in [`Commissions`]; cancelling (or Esc) closes the screen.
+//! pays from the purses and records a [`Commission`] in [`crate::record::WorldRecord`]'s orders; cancelling (or Esc) closes the screen.
 //!
 //! Open it with [`open`], or write an [`OpenCommission`] message, as the dialogue panel's
 //! Commission topic does. `FB_COMMISSION=<profession>:<tier>[:<style>]` opens it at the start
