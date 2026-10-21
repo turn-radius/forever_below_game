@@ -336,6 +336,7 @@ pub(crate) fn walk_routines(
 
     for (entity, denizen, mut routine, mut stride, mut transform, hostility, attending, assisting) in &mut folk {
         let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+        let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         // A hostile folk has left their routine to fight (`crate::folk_combat::fight`), though
         // the others still keep out of where they stand.
         // Likewise an ally who has joined the delver's fight (`crate::folk_regard`).
@@ -351,7 +352,7 @@ pub(crate) fn walk_routines(
 
         // Notice the player, and let go of them once they are well away.
         let near = player_at.map(|p| (p, p.distance(at)));
-        let sees = |p: Vec2| line_of_sight(grid(at), grid(p), &blocked);
+        let sees = |p: Vec2| line_of_sight(grid(at), grid(p), &see);
         match (routine.phase, near) {
             // Watching or greeting the delver (`crate::folk_regard`) keeps them held.
             (Phase::Held, Some(_)) if attending => routine.away = 0.0,

@@ -579,8 +579,31 @@ fn mossy_column(spot: &geometry::stone::ColumnSpot, seed: u32, quarters: u32) ->
 /// the other kinds. Plain data, so it can be made ahead of time ([`crate::staged`]).
 #[derive(Debug, PartialEq)]
 pub struct FixtureShapes {
-    pub doors: Vec<(Doorway, ItemMesh, Option<ItemMesh>)>,
+    pub doors: Vec<(Doorway, ItemMesh, Option<ItemMesh>, Option<ClaimFit>)>,
     pub braziers: Vec<Option<(ItemMesh, f32)>>,
+}
+
+/// A claim door's shapes, built to its doorway's opening: the leaf, what stays fixed beside it,
+/// and the switch on the claim's side.
+#[derive(Debug, PartialEq)]
+pub struct ClaimFit {
+    pub kind: fb_level::DoorKind,
+    pub switch: fb_level::SwitchKind,
+    pub leaf: geometry::door::ClaimLeaf,
+    /// The lever's plate or the chain's housing, and the lever's handle or the chain and ring.
+    pub fixture: ItemMesh,
+    pub moving: ItemMesh,
+}
+
+impl ClaimFit {
+    pub fn make(level: &Level, door: &fb_level::ClaimDoor, style: fb_level::DoorStyle, seed: u32) -> Self {
+        let spec = geometry::door::DoorSpec::rolled(door.kind, style, level.style, seed);
+        let (fixture, moving) = match door.switch {
+            fb_level::SwitchKind::Lever => (geometry::door::lever_plate(seed), geometry::door::lever_handle()),
+            fb_level::SwitchKind::Chain => (geometry::door::chain_housing(seed), geometry::door::chain_pull(seed)),
+        };
+        ClaimFit { kind: door.kind, switch: door.switch, leaf: geometry::door::claim_leaf(&spec), fixture, moving }
+    }
 }
 
 impl FixtureShapes {
@@ -610,10 +633,10 @@ impl FixtureShapes {
                         })
                         .collect();
                 }
-                // The entrance hangs a door, and so does each door on the edge of a claim.
-                let hung = (doorway.x, doorway.y) == entrance || claim_doors.iter().any(|d| (d.x, d.y) == (doorway.x, doorway.y));
-                let leaf = hung.then(|| geometry::entrance_leaf(seed));
-                (doorway, frame, leaf)
+                // The entrance hangs a door; each door on the edge of a claim hangs one of its kind.
+                let leaf = ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
+                let claim = claim_doors.iter().find(|d| (d.x, d.y) == (doorway.x, doorway.y)).map(|d| ClaimFit::make(level, d, style, seed));
+                (doorway, frame, leaf, claim)
             })
             .collect();
         let braziers = level
@@ -654,13 +677,12 @@ fn spawn_fixtures(
     // The door shut behind the delver when they came in; coming back to it from below finds it
     // shut already, and it does not swing again.
     let shut_already = abyss.is_some_and(|a| a.arrival == Arrival::FromBelow);
-    let lever_plate = geometry::lever_plate(level.seed);
-    let lever_handle = geometry::lever_handle();
+    let relief = geometry::Relief::new(level);
     let FixtureShapes { doors, braziers } = staged.as_mut().and_then(|s| s.take_fixtures(level)).unwrap_or_else(|| FixtureShapes::make(level));
 
     // Door frames, and the entrance door hung in its own.
     let entrance = (level.entrance.x as i32, level.entrance.y as i32);
-    for (doorway, frame, leaf) in doors {
+    for (doorway, frame, leaf, claim) in doors {
         let seed = door_seed(level, &doorway);
         let transform = doorway_transform(&doorway);
         spawner.spawn(&frame, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
@@ -675,33 +697,44 @@ fn spawn_fixtures(
             spawner
                 .spawn(&leaf, &fixture_appearance(seed, ConditionState::Serviceable))
                 .insert((StonePiece, Name::new("entrance door"), door, Transform::from_translation(hinge).with_rotation(door.rotation())));
-        } else if let Some(claim_door) = claim_doors.iter().find(|d| (d.x, d.y) == (doorway.x, doorway.y)) {
-            // A door on the edge of a claim: locked by how the faction stands (`crate::doors`).
+        } else if let (Some(claim_door), Some(fit)) = (claim_doors.iter().find(|d| (d.x, d.y) == (doorway.x, doorway.y)), claim) {
+            // A door on the edge of a claim, of its kind: locked by how the faction stands (`crate::doors`).
+            let cell = (doorway.x, doorway.y);
             let mut state = crate::doors::Doors::default();
             state.add(claim_door, &doorway, saved);
-            let swing = state.0[&(doorway.x, doorway.y)].swing;
-            let hinge = transform.transform_point(v3(geometry::entrance_hinge()));
-            // The lever on the claim's side lets the delver out of a locked door.
-            let door_state = &state.0[&(doorway.x, doorway.y)];
+            let swing = state.0[&cell].swing;
+            let door_state = &state.0[&cell];
+            // The switch on the claim's side lets the delver out of a locked door.
             if !door_state.shared {
-                if let Some(at) = crate::doors::lever_transform(&transform, door_state.through, door_state.inward) {
-                    let rest = at.rotation;
-                    spawner
-                        .spawn(&lever_plate, &fixture_appearance(seed, ConditionState::BattleWorn))
-                        .insert((StonePiece, Name::new("door lever"), crate::doors::Switch { target: crate::doors::SwitchTarget::Door((doorway.x, doorway.y)) }, at));
-                    let pivot = at.mul_transform(Transform::from_translation(Vec3::new(0.0, 0.0, geometry::LEVER_PIVOT)));
-                    let pull = crate::doors::lever_target(door_state);
-                    let handle = crate::doors::LeverHandle { cell: (doorway.x, doorway.y), rest, pull };
-                    spawner
-                        .spawn(&lever_handle, &fixture_appearance(seed, ConditionState::BattleWorn))
-                        .insert((StonePiece, Name::new("door lever handle"), handle, pivot.with_rotation(handle.rotation(pull))));
+                if let Some(at) = crate::doors::switch_mount(&transform, Some(&relief), level.style, door_state.switch, door_state.through, door_state.inward) {
+                    let switch = crate::doors::Switch { target: crate::doors::SwitchTarget::Door(cell), kind: door_state.switch };
+                    spawner.spawn(&fit.fixture, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Name::new("door switch"), switch, at));
+                    match door_state.switch {
+                        fb_level::SwitchKind::Lever => {
+                            let pivot = at.mul_transform(Transform::from_translation(Vec3::new(0.0, 0.0, geometry::door::LEVER_PIVOT)));
+                            let pull = crate::doors::lever_target(door_state);
+                            let handle = crate::doors::LeverHandle { cell, rest: at.rotation, pull };
+                            spawner
+                                .spawn(&fit.moving, &fixture_appearance(seed, ConditionState::BattleWorn))
+                                .insert((StonePiece, Name::new("door lever handle"), handle, pivot.with_rotation(handle.rotation(pull))));
+                        }
+                        fb_level::SwitchKind::Chain => {
+                            let rest = at.transform_point(v3(geometry::door::chain_exit()));
+                            let chain = crate::doors::ChainPull { cell, rest, down: at.rotation * Vec3::NEG_Y };
+                            spawner
+                                .spawn(&fit.moving, &fixture_appearance(seed, ConditionState::BattleWorn))
+                                .insert((StonePiece, Name::new("door chain"), chain, Transform::from_translation(chain.translation(swing)).with_rotation(at.rotation)));
+                        }
+                    }
                 }
             }
-            let leaf_door = crate::doors::DoorLeaf { cell: (doorway.x, doorway.y), shut: transform.rotation };
-            let leaf = leaf.expect("a claim doorway has a leaf");
+            // The pintles or guides stay put on the frame.
+            spawner.spawn(&fit.leaf.fixed, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
+            let hinge = transform.transform_point(v3(fit.leaf.hinge));
+            let leaf_door = crate::doors::DoorLeaf { cell, shut: transform.rotation, hinge, lift: fit.leaf.lift };
             spawner
-                .spawn(&leaf, &fixture_appearance(seed, ConditionState::Serviceable))
-                .insert((StonePiece, Name::new("claim door"), leaf_door, Transform::from_translation(hinge).with_rotation(leaf_door.rotation(swing))));
+                .spawn(&fit.leaf.leaf, &fixture_appearance(seed, ConditionState::Serviceable))
+                .insert((StonePiece, Name::new(format!("claim door, {}", fit.kind.name())), leaf_door, leaf_door.transform(swing)));
             if let Some(hung) = hung.as_deref_mut() {
                 hung.0.extend(state.0);
             }
@@ -1111,7 +1144,7 @@ mod tests {
         let doors = FixtureShapes::make(&level).doors;
         assert!(!doors.is_empty());
         let mut stone = 0;
-        for (_, frame, _) in &doors {
+        for (_, frame, _, _) in &doors {
             for part in &frame.parts {
                 if part.material == Some(MaterialKind::Stone) {
                     stone += 1;
@@ -1328,7 +1361,7 @@ mod tests {
                 let (a, b) = (FixtureShapes::make(&level), FixtureShapes::make(&level));
                 assert_eq!(a, b, "seed {seed} depth {depth}");
                 let finishes = fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
-                for (doorway, frame, _) in &a.doors {
+                for (doorway, frame, _, _) in &a.doors {
                     let timber = frame.parts.iter().any(|p| p.name == "frame");
                     let style = finishes.door_style(doorway.x, doorway.y);
                     assert_eq!(timber, style == Some(fb_level::DoorStyle::Timber), "seed {seed} depth {depth} at {},{}", doorway.x, doorway.y);

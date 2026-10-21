@@ -47,14 +47,14 @@ const ROCK_RING: (f32, f32) = (2.4, 3.8);
 /// radius `r` about a centre `r - hw` across the axis. A round arch has `r == hw`, so both
 /// arcs share a centre.
 #[derive(Clone, Copy, Debug)]
-struct Arch {
-    hw: f32,
-    spring: f32,
-    r: f32,
+pub(super) struct Arch {
+    pub(super) hw: f32,
+    pub(super) spring: f32,
+    pub(super) r: f32,
 }
 
 impl Arch {
-    fn new(style: DoorStyle) -> Self {
+    pub(super) fn new(style: DoorStyle) -> Self {
         let hw = DOOR_WIDTH * 0.5;
         match style {
             DoorStyle::PointedArch => {
@@ -80,7 +80,7 @@ impl Arch {
     }
 
     /// The height of the circle of `radius` over `x`, or `None` past its spring.
-    fn height(&self, x: f32, radius: f32) -> Option<f32> {
+    pub(super) fn height(&self, x: f32, radius: f32) -> Option<f32> {
         let dx = x.abs() - (self.hw - self.r);
         (radius * radius - dx * dx > 0.0 && x.abs() < self.hw + (radius - self.r)).then(|| self.spring + (radius * radius - dx * dx).sqrt())
     }
@@ -88,7 +88,7 @@ impl Arch {
 
 /// A convex polygon, however it is wound, as a block `depth` through the wall centred on
 /// `z = 0`, its faces chamfered by `ch` all round.
-fn prism(poly: &[P2], depth: f32, ch: f32) -> MeshBuilder {
+pub(super) fn prism(poly: &[P2], depth: f32, ch: f32) -> MeshBuilder {
     let mut poly = poly.to_vec();
     if signed_area(&poly) < 0.0 {
         poly.reverse();

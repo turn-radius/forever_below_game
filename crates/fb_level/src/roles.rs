@@ -84,6 +84,10 @@ pub struct ClaimDoor {
     /// Whether the far side of the door is another claim's ground (or the door has no claim
     /// side at all): it has no outside to lock against, and opens from either side.
     pub shared: bool,
+    /// What it is made of, rolled from the level's seed ([`crate::doorkind`]).
+    pub kind: crate::DoorKind,
+    /// The switch on its claim's side, rolled to suit the kind.
+    pub switch: crate::SwitchKind,
 }
 
 impl Level {
@@ -92,6 +96,13 @@ impl Level {
     pub fn claim_doors(&self) -> Vec<ClaimDoor> {
         let (sx, sy, _) = self.start();
         let mut doors = self.edge_doors(&self.claims);
+        for door in &mut doors {
+            if let Some(spec) = self.factions.iter().find(|f| f.id == door.faction) {
+                let mut rng = crate::doorkind::door_stream(self.seed, door.x, door.y);
+                door.kind = crate::doorkind::roll_kind(self.style, spec.intention, spec.armour, &mut rng);
+                door.switch = crate::doorkind::roll_switch(door.kind, &mut rng);
+            }
+        }
         // The main door of each claim: of the doors of its hall, the one nearest the start.
         for claim in &self.claims {
             let Some(hall) = self.room_with_role(claim, RoomRole::Hall) else { continue };
@@ -123,7 +134,7 @@ impl Level {
                     let outside = |nx: i32, ny: i32| self.is_open(nx, ny) && !held(nx, ny);
                     let inward = [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().find(|&(dx, dy)| held(x + dx, y + dy) && outside(x - dx, y - dy)).unwrap_or((0, 0));
                     let shared = inward == (0, 0) || self.room_at(x - inward.0, y - inward.1).is_some_and(|r| self.claim_of(r).is_some());
-                    doors.push(ClaimDoor { x, y, faction: claim.faction, room, main: false, inward, shared });
+                    doors.push(ClaimDoor { x, y, faction: claim.faction, room, main: false, inward, shared, kind: crate::DoorKind::Wood, switch: crate::SwitchKind::Lever });
                 }
             }
         }
@@ -337,6 +348,36 @@ mod tests {
             assert_eq!(all, level.claim_doors());
         }
         assert!(doors > 40 && mains > 20, "{doors} claim doors, {mains} main");
+    }
+
+    #[test]
+    fn claim_door_kinds_lean_by_style_and_faction_and_the_main_door_is_not_always_strongest() {
+        use crate::{DoorKind, LevelStyle};
+        // Counts of (wood, steel, portcullis) by style, and by iron or wood intention.
+        let mut by_style = [[0u32; 3]; 2];
+        let mut by_intention = [[0u32; 3]; 2];
+        let (mut mains, mut weaker_mains) = (0, 0);
+        for (seed, depth) in (1..=3).flat_map(|d| (1..=96).map(move |s| (s, d))) {
+            let level = generate(seed, depth);
+            assert_eq!(level.claim_doors(), generate(seed, depth).claim_doors());
+            for d in level.claim_doors() {
+                let spec = level.factions.iter().find(|f| f.id == d.faction).unwrap();
+                let k = DoorKind::ALL.iter().position(|&x| x == d.kind).unwrap();
+                by_style[(level.style == LevelStyle::StoneHalls) as usize][k] += 1;
+                let iron = matches!(spec.intention, fb_faction::Intention::Plunder | fb_faction::Intention::WayOut);
+                by_intention[iron as usize][k] += 1;
+                if d.main {
+                    mains += 1;
+                    weaker_mains += (d.kind == DoorKind::Wood) as u32;
+                }
+            }
+        }
+        let share = |c: [u32; 3], k: usize| c[k] as f64 / c.iter().sum::<u32>() as f64;
+        println!("odds by style (wood, steel, portcullis): rock {by_style:?}");
+        println!("odds by intention (wood-leaning, iron-leaning): {by_intention:?}");
+        assert!(share(by_style[0], 0) > share(by_style[1], 0) && share(by_style[1], 1) > share(by_style[0], 1), "{by_style:?}");
+        assert!(share(by_intention[0], 0) > share(by_intention[1], 0) && share(by_intention[1], 1) > share(by_intention[0], 1), "{by_intention:?}");
+        assert!(mains > 40 && weaker_mains > 0, "{weaker_mains} of {mains} main doors are wood");
     }
 
     #[test]

@@ -438,10 +438,11 @@ pub fn fight(
         }
         let fight = &mut *fight;
         let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+        let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         let at = transform.translation.xz();
         let radius = denizen.radius;
         let reach = player_radius + combatant.weapon.reach;
-        let sees = line_of_sight(grid(at), grid(player), &blocked);
+        let sees = line_of_sight(grid(at), grid(player), &see);
         // Out of sight long enough, they give up and go home, friendly again.
         fight.unseen = if sees { 0.0 } else { fight.unseen + dt };
         // A faction that is Hostile to the delver does not calm down (`crate::folk_regard`).

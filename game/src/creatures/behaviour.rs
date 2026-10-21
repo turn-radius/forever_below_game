@@ -476,6 +476,7 @@ fn behave(
     let relief = Relief::new(level);
     // A shut claim door is a wall to a creature, and opaque.
     let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), None);
+    let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), None);
     let delver_ac = player.iter().next().and_then(|(_, ac)| ac.copied());
     let player = player.iter().next().map(|(t, _)| t.translation.xz());
     let shunned = shunned.iter().next().copied().unwrap_or_default();
@@ -498,7 +499,7 @@ fn behave(
         // A creature whose own roll falls under the delver's shun chance for its kind does not
         // notice them, unless the delver has struck it.
         let heeds = aroused || !shunned.passes_over(species.foe(), brain.shun_roll);
-        let sees = player.filter(|p| heeds && p.distance(at) <= notice_range(species, tune.sense_scale) && line_of_sight(grid(at), grid(*p), &blocked));
+        let sees = player.filter(|p| heeds && p.distance(at) <= notice_range(species, tune.sense_scale) && line_of_sight(grid(at), grid(*p), &see));
         brain.cooldown = (brain.cooldown - dt).max(0.0);
 
         // Notice, follow, give up.
