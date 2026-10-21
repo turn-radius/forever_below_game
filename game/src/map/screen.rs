@@ -37,7 +37,7 @@ pub(super) fn add(app: &mut App) {
         .add_systems(Update, (build_screen, (zoom_and_pan, redraw_plan, place_plan).chain().after(build_screen)).in_set(DelveSystems));
 }
 
-/// For captures: `FB_OPEN_MAP=<frame>` opens the map that many frames into the delve, once the
+/// For captures: `FB_EXPLORE_ALL=1` marks the level seen, `FB_MAP_ZOOM=<px>` opens the map on its middle at that zoom, and `FB_OPEN_MAP=<frame>` opens the map that many frames into the delve, once the
 /// eye has had time to look round.
 fn open_for_capture(frame: u32) -> impl FnMut(ResMut<ScreenOpen>, Local<u32>) {
     move |mut open, mut frames| {
@@ -199,6 +199,10 @@ pub(super) fn build_screen(
     if let Some(eye) = eyes.iter().next() {
         let (x, y) = to_grid(eye.translation());
         *view = MapView { centre: Vec2::new(x, y), scale: OPENING_ZOOM };
+    }
+    // For captures: `FB_MAP_ZOOM=<pixels to a cell>` opens on the middle of the level at that zoom.
+    if let (Some(zoom), Some(level)) = (std::env::var("FB_MAP_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()), level.as_ref()) {
+        *view = MapView { centre: Vec2::new(level.0.width as f32, level.0.height as f32) * 0.5, scale: zoom.clamp(ZOOM.0, ZOOM.1) };
     }
     commands
         .spawn((
