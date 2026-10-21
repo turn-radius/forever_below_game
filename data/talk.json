@@ -1,0 +1,161 @@
+{
+ "greet_neutral": [
+  "State your business, delver.",
+  "You are a long way from any door. What do you want?",
+  "Another one comes down. Speak, then.",
+  "I have little time to spend. What is it?",
+  "Keep your hands where I can see them, and we can talk.",
+  "The dark takes most who wander. What brings you to the ground of #faction#?",
+  "You walk like someone who has not yet learned the stairs. Ask what you will."
+ ],
+ "greet_friendly": [
+  "Well met, delver. Sit a moment; the dark will keep.",
+  "You are welcome at our fires. What do you need?",
+  "A friendly face is rare down here. Ask what you will.",
+  "#faction.capitalize# remember those who deal fairly. Speak.",
+  "Come in out of the black. There is room by the light.",
+  "Good to see you walking, delver. What can I tell you?"
+ ],
+ "greet_allied": [
+  "Friend of the hearth, ask anything and I will answer true.",
+  "#faction.capitalize# stand with you. What do you need?",
+  "I would trust you with my back to the dark. Ask.",
+  "Welcome home, delver. What we have is yours to ask for.",
+  "You have done right by us, and we do not forget. Speak freely."
+ ],
+ "wary": [
+  "Keep walking.",
+  "I have nothing to say to you.",
+  "Not now. Not you.",
+  "We are watching you, delver. Go on.",
+  "Move along, stranger.",
+  "Take your questions elsewhere."
+ ],
+ "who_way_out": [
+  "I am #name#, a #folk# of #faction#. We hold the way out, or say we do, and few ask to see it.",
+  "#name#, #folk#, of #faction#. We keep watch for the door that opens upward.",
+  "They call me #name#. I am a #folk# of #faction#, and I have been looking for the way out longer than I care to count."
+ ],
+ "who_trade": [
+  "I am #name#, a #folk# of #faction#. We buy, we sell, and we do not ask what you carried down.",
+  "#name#, #folk#, of #faction#. Coin keeps its worth down here better than most things.",
+  "They call me #name#. I am a #folk# of #faction#, and we will deal with anyone who pays."
+ ],
+ "who_worship": [
+  "I am #name#, a #folk# of #faction#. We keep the old rites, for the dark listens.",
+  "#name#, #folk#, of #faction#. We sing to what is below, and we are not yet answered.",
+  "They call me #name#. I am a #folk# of #faction#, and I have buried more than I have met."
+ ],
+ "who_plunder": [
+  "I am #name#, a #folk# of #faction#. We take what the deep leaves unguarded.",
+  "#name#, #folk#, of #faction#. We hold what we have taken, and we hold it hard.",
+  "They call me #name#. I am a #folk# of #faction#, and I do not share."
+ ],
+ "who_calling": [
+  "I work as #calling.a#.",
+  "By trade I am #calling.a#.",
+  "I am #calling.a# of #faction#."
+ ],
+ "who_guard": [
+  "I keep the doors of #faction#.",
+  "I stand the watch for #faction#.",
+  "I am a guard of #faction#."
+ ],
+ "trade_armorer": [
+  "I make and mend armour: padding, leather, mail and plate, as the iron allows.",
+  "Armour is all I make. Bring me coin and I will have you well covered.",
+  "A body is soft and the deep is hard. I make the difference."
+ ],
+ "trade_weaponsmith": [
+  "I forge weapons, and I forge them to be used.",
+  "Blades, hafts and heads: whatever you mean to hit with, I make.",
+  "Every edge I sell has been tried against bone."
+ ],
+ "trade_bowyer": [
+  "Bows, crossbows, and what they throw. I make them all.",
+  "A bow is patience made into wood. I make patience.",
+  "I make bows and the shafts to go with them."
+ ],
+ "trade_tentmaker": [
+  "I make tents and bedrolls. Sleep is the one thing the dark cannot take, if you have somewhere to take it.",
+  "Canvas, cord and a place to lie down. That is what I sell.",
+  "A good tent is the difference between resting and merely stopping."
+ ],
+ "trade_general_goods": [
+  "Lanterns, oil, rope, bread and drink. The things that keep you walking.",
+  "I sell what a delver forgets to bring.",
+  "Light, food, water and cord. Little else matters down here."
+ ],
+ "trade_alchemist": [
+  "I brew draughts and elixirs. Some heal, some help, and I will tell you which is which.",
+  "Potions, philtres and worse. Everything I sell I have first tasted.",
+  "The deep poisons and the deep cures, and often from the same root."
+ ],
+ "trade_enchanter": [
+  "I work the weave in made things: an edge here, a ward there. I can break old work apart as well.",
+  "What an item is, I can alter. For a price, and not always kindly.",
+  "I know how to take the magic out of a thing, and how to put it in."
+ ],
+ "trade_guard": [
+  "I keep the ground of #faction#. Whatever lies within these walls is theirs, and it is not yours to take.",
+  "My post is the door. Those who belong pass; those who do not, do not.",
+  "I stand here so the others can sleep. Mind where you walk."
+ ],
+ "guard_traders": [
+  "If you want to trade, seek #trader#, #trader_calling.a# of ours, #trader_place#.",
+  "For trade, speak to #trader#, #trader_calling.a#. You will find them #trader_place#.",
+  "#trader# is #trader_calling.a# here. Go to them for wares, #trader_place#."
+ ],
+ "guard_no_traders": [
+  "There is no trade on our ground, none I would send you to.",
+  "We keep no market here. You will have to look elsewhere.",
+  "Nobody here has wares to sell, and I will not pretend otherwise."
+ ],
+ "tier_novice": [
+  "I am still learning the craft, so my work is plain, but it is honest.",
+  "I am new to it. My prices are fair for what I make.",
+  "Not yet a name in the trade, but nothing I sell will fail you at the first blow."
+ ],
+ "tier_apprentice": [
+  "I have the craft well in hand, though not the finest of it.",
+  "I have served my years at it. You will find nothing shoddy.",
+  "Better than most, short of the best."
+ ],
+ "tier_expert": [
+  "Few down here make better, and I do not discount for it.",
+  "I have done this a long time. My work lasts.",
+  "Ask anyone who knows the trade. They will name me."
+ ],
+ "tier_master": [
+  "There are not many of my standing this deep, or anywhere.",
+  "I have nothing left to learn, and little time for those who would waste mine.",
+  "What I make, others will tell of when we are gone."
+ ],
+ "level": [
+  "#count# hold ground on this, the #ordinal# level: #factions#. Between their walls the wild answers to no one.",
+  "On the #ordinal# level the ground is held by #factions#. Cross it with care.",
+  "#factions.capitalize# hold what can be held here, on the #ordinal# level. Everything else belongs to the dark.",
+  "You stand on the #ordinal# level. #factions.capitalize# keep their doors here, and the rest is wild."
+ ],
+ "level_alone": [
+  "Only #factions# hold ground on this, the #ordinal# level. The rest is wild.",
+  "On the #ordinal# level, #factions# keep the only doors. Everything else is wild.",
+  "#factions.capitalize# are the only ones who hold anything on this level. Mind the wild."
+ ],
+ "way_out": [
+  "They say a door stands open somewhere below, and that whoever finds it forgets the way back.",
+  "Every faction tells it differently. #faction.capitalize# say the way out is down, and I have no better answer.",
+  "I have heard the stairs go on without end. I have also heard they do not. I believe both.",
+  "Some say the way out is a rumour the deep feeds us to keep us walking. I keep walking anyway.",
+  "The first door shut behind you. They say the last one opens for those who stop looking.",
+  "Ask me again when you have gone deeper. Those who come back up are never the ones who went down."
+ ],
+ "way_master": [
+  "They say #master_calling.a# works for #master_faction#, #master_levels# down. A long way, and every step of it dark.",
+  "There is #master_calling.a# in the service of #master_faction#, #master_levels# below. I only know it as a rumour.",
+  "I have heard of #master_calling.a#, #master_levels# down, among #master_faction#. Whether you will live to see their work, I cannot say."
+ ],
+ "not_yet": [
+  "Not yet."
+ ]
+}

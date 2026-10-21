@@ -174,7 +174,7 @@ fn step_the_delver(
 /// ([`fb_character::rules::WarmthRules`]), and whether a brazier's warmth reaches them.
 fn surroundings(character: &Character, inventory: &Inventory, rules: &GameRules, at: Vec3, fires: &Query<(&Transform, &crate::level::FixedLight), Without<Player>>, depth: u32) -> crate::exposure::Surroundings {
     let warmth = &rules.warmth;
-    let by_fire = fires.iter().any(|(fire, kind)| *kind == crate::level::FixedLight::Brazier && fire.translation.xz().distance(at.xz()) as f64 <= warmth.brazier_reach);
+    let by_fire = fires.iter().any(|(fire, kind)| matches!(kind, crate::level::FixedLight::Brazier | crate::level::FixedLight::Campfire) && fire.translation.xz().distance(at.xz()) as f64 <= warmth.brazier_reach);
     let flame = inventory.equipped().iter().any(|(slot, item)| matches!(slot, fb_items::Slot::Mainhand | fb_items::Slot::Offhand) && item.shape.lit() == Some(true));
     let fire = if by_fire { warmth.brazier } else { 0.0 } + if flame { warmth.held_flame } else { 0.0 };
     let worn = character.loadout(inventory).warmth().value();

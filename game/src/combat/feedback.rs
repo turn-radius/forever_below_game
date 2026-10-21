@@ -58,6 +58,8 @@ pub struct Struck {
     pub bludgeoning: bool,
     /// Whether its attack roll was a natural 20, for its callout ([`super::callouts`]).
     pub critical: bool,
+    /// Whether an allied folk struck it, not the delver (`crate::folk_regard`).
+    pub by_ally: bool,
 }
 
 /// A blow of the delver's that was fire (a lit torch's, [`super::swing::flaming_blow`]) landing on
@@ -73,6 +75,9 @@ pub struct Burned {
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub struct Slain {
     pub target: Entity,
+    /// Whether a folk fighting for the delver struck the blow, not the delver: it earns the
+    /// delver nothing (no standing, no healing).
+    pub by_ally: bool,
 }
 
 /// A creature or a folk at 0 hit points: its body, lying where it fell for the rest of the run.
@@ -279,7 +284,7 @@ pub fn take_blows(
             commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
         }
         if fell {
-            slain.write(Slain { target: blow.target });
+            slain.write(Slain { target: blow.target, by_ally: blow.by_ally });
             commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<Brain>();
             info!("{} falls", critter.spot.species.stat_block().name);
         }

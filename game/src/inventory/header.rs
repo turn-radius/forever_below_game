@@ -4,8 +4,9 @@
 //!
 //! A portrait of the doll's head in a gold frame on Stygian blue, the delver's name in the
 //! display face, a line of folk, height and class, and a line of armour class, load and light
-//! in Plex Mono with the values bright. The tabs are the plate's three; the inventory and character
-//! tabs have a leaf each, and the outfit tab is a label for now. The showing tab is bright.
+//! in Plex Mono with the values bright. The tabs are inventory, factions and character, a leaf
+//! each; clicking one shows it ([`click_tabs`]) and Tab and Shift+Tab step through them
+//! ([`crate::play::next_screen`]). The showing tab is bright.
 
 use bevy::{
     prelude::*,
@@ -16,8 +17,9 @@ use fb_body::Body;
 use super::doll::PORTRAIT;
 use super::items::Inventory;
 use crate::character::{Character, Derived};
-use crate::play::SheetTab;
-use crate::ui::{ACCENT, FAINT, FRAME_GOLD, INK, MUTED, STYGIAN, STYGIAN_DEEP, STYGIAN_LIGHT, UiFonts, numbers_line};
+use crate::play::{Screen, ScreenOpen, SheetTab};
+use crate::ui::{ACCENT, FAINT, FRAME_GOLD, INK, MUTED, STYGIAN, STYGIAN_DEEP, STYGIAN_LIGHT, UiFonts, node_rect, numbers_line, ui_cursor};
+use bevy::window::PrimaryWindow;
 
 /// The line of numbers under the name.
 #[derive(Component, Debug)]
@@ -27,16 +29,17 @@ pub struct HeaderStats;
 #[derive(Component, Debug)]
 pub struct ToastText;
 
-/// The leaf's tabs, the active one first in the plate's order.
-pub const TABS: [&str; 3] = ["inventory", "outfit", "character"];
+/// The leaf's tabs, in the order of [`SheetTab::ALL`].
+pub const TABS: [&str; 3] = ["inventory", "factions", "character"];
 
 /// The place of a tab in [`TABS`].
 fn tab_index(tab: SheetTab) -> usize {
-    match tab {
-        SheetTab::Inventory => 0,
-        SheetTab::Character => 2,
-    }
+    SheetTab::ALL.iter().position(|&t| t == tab).unwrap_or(0)
 }
+
+/// A tab's label in the bar: what clicking it shows.
+#[derive(Component, Debug)]
+pub struct TabLabel(pub SheetTab);
 
 /// Feet and inches for a height in world units (10 cm), rounded as the plate's `renderIdent`
 /// rounds them: to the centimetre, then to the inch.
@@ -111,10 +114,33 @@ pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &fb_cha
         ))
         .with_children(|bar| {
             for (i, tab) in TABS.iter().enumerate() {
-                bar.spawn((Text::new(*tab), UiFonts::style(&fonts.display, 24.0, if i == tab_index(showing) { INK } else { MUTED })));
+                bar.spawn((TabLabel(SheetTab::ALL[i]), Text::new(*tab), UiFonts::style(&fonts.display, 24.0, if i == tab_index(showing) { INK } else { MUTED })));
             }
             bar.spawn((ToastText, Text::default(), UiFonts::style(&fonts.body, 15.0, ACCENT)));
         });
+}
+
+/// The tab whose label holds `point`, of the labels `rects`.
+pub fn tab_under(rects: impl IntoIterator<Item = (SheetTab, Rect)>, point: Vec2) -> Option<SheetTab> {
+    rects.into_iter().find(|(_, rect)| rect.contains(point)).map(|(tab, _)| tab)
+}
+
+/// Shows the tab whose label is clicked while the inventory screen is open.
+pub fn click_tabs(
+    open: Res<ScreenOpen>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
+    labels: Query<(&TabLabel, &ComputedNode, &UiGlobalTransform)>,
+    mut tab: ResMut<SheetTab>,
+) {
+    if !open.is(Screen::Inventory) || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else { return };
+    if let Some(clicked) = tab_under(labels.iter().map(|(l, n, t)| (l.0, node_rect(n, t))), point) {
+        tab.set_if_neq(clicked);
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +148,42 @@ mod tests {
     use super::*;
     use crate::character::Class;
     use fb_body::Folk;
+
+    #[test]
+    fn clicking_a_tab_label_shows_that_tab() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<MouseButton>>().init_resource::<ScreenOpen>().init_resource::<SheetTab>().add_systems(Update, click_tabs);
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(130.0, 20.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        for (i, tab) in SheetTab::ALL.into_iter().enumerate() {
+            app.world_mut().spawn((
+                TabLabel(tab),
+                ComputedNode { size: Vec2::new(100.0, 24.0), inverse_scale_factor: 1.0, ..default() },
+                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(50.0 + 120.0 * i as f32, 20.0))),
+            ));
+        }
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Factions, "the second label");
+        { let mut m = app.world_mut().resource_mut::<ButtonInput<MouseButton>>(); m.release(MouseButton::Left); m.clear(); }
+        app.world_mut().query::<&mut Window>().single_mut(app.world_mut()).unwrap().set_cursor_position(Some(Vec2::new(250.0, 20.0)));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Character);
+        { let mut m = app.world_mut().resource_mut::<ButtonInput<MouseButton>>(); m.release(MouseButton::Left); m.clear(); }
+        app.world_mut().query::<&mut Window>().single_mut(app.world_mut()).unwrap().set_cursor_position(Some(Vec2::new(500.0, 20.0)));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Character, "off the labels nothing changes");
+    }
+
+    #[test]
+    fn the_tab_bar_names_inventory_factions_character() {
+        assert_eq!(TABS, ["inventory", "factions", "character"]);
+        assert_eq!(tab_index(SheetTab::Factions), 1);
+    }
 
     #[test]
     fn heights_read_in_feet_and_inches() {

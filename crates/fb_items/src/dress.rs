@@ -45,6 +45,9 @@ pub fn condition_mut(item: &mut Item) -> &mut Condition {
         Item::Writing(s) => &mut s.cond,
         Item::Arrow(s) | Item::Bolt(s) => &mut s.cond,
         Item::Quiver(s) | Item::BoltCase(s) => &mut s.cond,
+        Item::Banner(s) => &mut s.cond,
+        Item::Tent(s) => &mut s.cond,
+        Item::Campfire(s) => &mut s.cond,
     }
 }
 
@@ -74,7 +77,7 @@ pub fn etching_mut(item: &mut Item) -> Option<&mut Etching> {
         Item::Charm(s) => Some(&mut s.etch),
         Item::Bags(s) => Some(&mut s.etch),
         Item::Chests(s) => Some(&mut s.etch),
-        Item::Food(_) | Item::Torch(_) | Item::Lantern(_) | Item::Sundry(_) | Item::Writing(_) | Item::Arrow(_) | Item::Bolt(_) | Item::Quiver(_) | Item::BoltCase(_) => None,
+        Item::Food(_) | Item::Torch(_) | Item::Lantern(_) | Item::Sundry(_) | Item::Writing(_) | Item::Arrow(_) | Item::Bolt(_) | Item::Quiver(_) | Item::Tent(_) | Item::Campfire(_) | Item::BoltCase(_) | Item::Banner(_) => None,
     }
 }
 

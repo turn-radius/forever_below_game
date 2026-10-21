@@ -14,8 +14,10 @@ use armory::{Family, Item};
 use procgen_rng::Mulberry32;
 
 use crate::creatures::{CREATURE_SALT, place_creatures};
+use crate::claims::{CLAIM_SALT, grow_claims};
 use crate::folk::{FOLK_SALT, place_folk};
 use crate::props::{PROP_SALT, place_props};
+use crate::roles::{ROLE_SALT, assign_roles, light_roles};
 use crate::stairs::{STAIR_SALT, place_stairs};
 use crate::{Cell, Entrance, Facing, ItemSpot, Level, LevelParams, LevelStyle, LightKind, LightSpot, Room};
 
@@ -61,17 +63,33 @@ const LOOT: &[(Family, u32)] = &[
 /// fixed lights. Most of it is dark; the light the player carries is the main light. The depth
 /// picks the [`LevelStyle`] and with it the style's own parameters
 /// ([`LevelParams::for_style`]); the first level's seeds lay out exactly as they always have.
+///
+/// `seed` is also taken as the world seed whose pool of factions the level draws from, so
+/// `generate(seed, 1)` is the first level of the delve `seed`; for the level at any depth of a
+/// delve use [`generate_in`].
 pub fn generate(seed: u32, depth: u32) -> Level {
     generate_with(seed, depth, &LevelParams::for_style(LevelStyle::for_depth(depth)))
+}
+
+/// The level at `depth` of the delve for `world_seed`: a pure function of the two. Its seed is
+/// [`crate::depth_seed`] of them, and its factions are drawn from the world's pool
+/// (`fb_faction::World`), so a faction on several levels is the same one on each.
+pub fn generate_in(world_seed: u32, depth: u32, params: &LevelParams) -> Level {
+    generate_for(world_seed, crate::depth_seed(world_seed, depth), depth, params)
 }
 
 /// The level for `seed` at `depth` laid out with `params` instead of the style's defaults, for
 /// the level view. With the defaults it is [`generate`]'s level. Parameters out of range or
 /// out of order are fitted first ([`LevelParams::fit`]).
 pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
+    generate_for(seed, seed, depth, params)
+}
+
+/// The level for level seed `seed` at `depth`, its factions drawn from the pool of `world_seed`.
+pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> Level {
     let mut params = *params;
     params.fit();
-    let (mut level, layout_seed) = generate_without_creatures(seed, depth, &params);
+    let (mut level, layout_seed) = generate_without_creatures_in(world_seed, seed, depth, &params);
     level.creatures = place_creatures(&level, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT));
     place_stairs(&mut level, &mut Mulberry32::new(layout_seed ^ STAIR_SALT));
     // The newer species come last, after the stairs, so none of them can shift a stair.
@@ -82,9 +100,15 @@ pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
 }
 
 /// The level for `seed` with its props but before its creatures, and the layout stream's seed.
+#[cfg(test)]
 pub(crate) fn generate_without_creatures(seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
-    let (mut level, layout_seed) = generate_without_props(seed, depth, params);
+    generate_without_creatures_in(seed, seed, depth, params)
+}
+
+fn generate_without_creatures_in(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
+    let (mut level, layout_seed) = generate_without_props_in(world_seed, seed, depth, params);
     level.props = place_props(&level, &mut Mulberry32::new(layout_seed ^ PROP_SALT));
+    level.banners = crate::banners::place_banners(&level);
     (level, layout_seed)
 }
 
@@ -92,12 +116,17 @@ pub(crate) fn generate_without_creatures(seed: u32, depth: u32, params: &LevelPa
 /// that rarely lay out (many rooms, wide gaps, a small grid) are relaxed after every
 /// [`RELAX_EVERY`] failed tries, a room fewer at least and the entrance a cell deeper at most,
 /// so every level lays out in the end. No default level needs that many tries.
+#[cfg(test)]
 pub(crate) fn generate_without_props(seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
+    generate_without_props_in(seed, seed, depth, params)
+}
+
+fn generate_without_props_in(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
     (0u32..)
         .find_map(|attempt| {
             let relax = attempt / RELAX_EVERY;
             let p = LevelParams { rooms_min: params.rooms_min.saturating_sub(relax).max(1), entrance_depth: params.entrance_depth + relax, ..*params };
-            try_generate(seed, depth, attempt, &p)
+            try_generate(world_seed, seed, depth, attempt, &p)
         })
         .expect("some attempt lays out a connected level")
 }
@@ -108,13 +137,13 @@ const RELAX_EVERY: u32 = 100;
 /// How many tries the level for `seed` takes with `params`, for tests.
 #[cfg(test)]
 fn tries(seed: u32, depth: u32, params: &LevelParams) -> u32 {
-    (0u32..).find(|&attempt| try_generate(seed, depth, attempt, params).is_some()).unwrap_or(u32::MAX) + 1
+    (0u32..).find(|&attempt| try_generate(seed, seed, depth, attempt, params).is_some()).unwrap_or(u32::MAX) + 1
 }
 
 /// One try at a level, without its props, and the seed of its layout stream. `None` if too
 /// few rooms fit or the corridors could not join them all; [`generate`] then tries again from
 /// a stream derived from the same seed.
-fn try_generate(seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<(Level, u32)> {
+fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<(Level, u32)> {
     let layout_seed = seed ^ attempt.wrapping_mul(0x9E37_79B9);
     let mut rng = Mulberry32::new(layout_seed);
 
@@ -144,7 +173,11 @@ fn try_generate(seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<
         items: Vec::new(),
         lights: Vec::new(),
         folk: Vec::new(),
+        factions: Vec::new(),
+        claims: Vec::new(),
+        roles: Vec::new(),
         props: Vec::new(),
+        banners: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
         webs: Vec::new(),
@@ -164,7 +197,36 @@ fn try_generate(seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<
     }
     furnish(&mut level, &mut Mulberry32::new(layout_seed ^ FURNISH_SALT), p);
     let start_room = level.start_room().expect("the entrance leads into a room");
-    level.folk = place_folk(&level, start_room, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
+    level.factions = fb_faction::World::new(world_seed).draw_specs(seed);
+    // A room too cramped or crowded for its claim's folk to stand in cannot start a claim; the
+    // claims are grown again without it, until every claim holds a few folk at least.
+    let mut cramped: Vec<usize> = Vec::new();
+    let mut need = 3;
+    let mut level = loop {
+        let (claims, strengths) = grow_claims(&level, start_room, &cramped, &mut Mulberry32::new(layout_seed ^ CLAIM_SALT));
+        let mut trial = level.clone();
+        trial.claims = claims;
+        // A faction that found no ground is not on the level.
+        let held: Vec<_> = trial.claims.iter().map(|c| c.faction).collect();
+        trial.factions.retain(|s| held.contains(&s.id));
+        let plans = crate::trades::plan(&trial, &strengths, layout_seed);
+        trial.roles = assign_roles(&trial, &plans);
+        light_roles(&mut trial, &mut Mulberry32::new(layout_seed ^ ROLE_SALT));
+        trial.folk = place_folk(&trial, &strengths, &plans, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
+        let empty: Vec<usize> = trial.claims.iter().zip(&strengths).filter(|(c, want)| trial.folk.iter().filter(|f| f.faction == c.faction).count() < (**want).min(need)).map(|(c, _)| c.rooms[0]).collect();
+        // A level with no ground for a claim of three settles for claims of one: when every claim
+        // of this round came up short, or none was left to grow.
+        let all_short = empty.len() == trial.claims.len();
+        if empty.is_empty() && !(trial.claims.is_empty() && need > 1) {
+            break trial;
+        }
+        cramped.extend(empty);
+        if all_short && need > 1 {
+            need = 1;
+            cramped.clear();
+        }
+    };
+    crate::trades::assign(&mut level, world_seed);
     Some((level, layout_seed))
 }
 
@@ -1057,7 +1119,9 @@ mod tests {
     fn levels_have_braziers_glowcaps_and_dark_rooms() {
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
-            let lit: HashSet<usize> = level.lights.iter().filter_map(|l| level.room_at(l.x as i32, l.y as i32)).collect();
+            // The level's own furnishing leaves most rooms dark; the halls and hearths of claims
+            // are lit on top of it (#546), so count the rooms no one holds.
+            let lit: HashSet<usize> = level.lights.iter().filter_map(|l| level.room_at(l.x as i32, l.y as i32)).filter(|&r| !level.is_claimed(r)).collect();
             assert!(level.lights.iter().any(|l| l.kind == LightKind::Glowcaps), "seed {seed}: no glowcaps");
             assert!(lit.len() * 2 <= level.rooms.len() + 1, "seed {seed}: {} of {} rooms lit", lit.len(), level.rooms.len());
         }
@@ -1087,16 +1151,19 @@ mod tests {
         // u32::MAX were retaken when giant rats left the first level (`GIANTS_FROM_DEPTH`): their
         // giant packs are rats now. All eight were retaken when writing joined the loot table
         // (`Family::Writing`), which moves the weighted pick of every floor item, and again when
-        // folk left half the rooms to the creatures, which no longer share a room with them.
+        // folk left half the rooms to the creatures, which no longer share a room with them, and again
+        // when the factions came from the world's pool (a level draws two to four, which changes the
+        // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved).
         let before = [
-            (0u32, 0xd77b14195ea9c72fu64),
-            (1, 0xdb3d6856815aae),
-            (2, 0x656d0a8084e337db),
-            (7, 0xdc542a7a27bfe92a),
-            (64, 0x19736091b7defee3),
-            (1207, 0xc92acba876935670),
-            (4242, 0xf59b93e28826d3fb),
-            (u32::MAX, 0x9dd24d93fe3a2923),
+            (0u32, 0x3f1ef43848af9f4bu64),
+            (1, 0xfecd367d473ca611),
+            (2, 0x28caf334b99fda9),
+            (7, 0xc65fe113135810cd),
+            (64, 0x8786aec0b970f319),
+            (1207, 0xeb6d2ec3e7c03ea2),
+            (4242, 0x40c986312855b474),
+            (u32::MAX, 0x791ee77a5145fa97),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);
@@ -1305,7 +1372,9 @@ mod tests {
                 // At least `FAR_SHARE` as far as the furthest cell it could have stood on: free
                 // floor against a wall of a room, clear of doors, with free floor in front.
                 let taken = spot_cells(&level);
-                let free = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && !taken.contains(&(x, y));
+                // And in wild ground: a stair never stands in a claim or behind its doors.
+                let held = crate::claims::held_cells(&level, &level.claims);
+                let free = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && !taken.contains(&(x, y)) && !held[(y as u32 * level.width + x as u32) as usize];
                 let mut furthest = 0;
                 for y in 0..level.height as i32 {
                     for x in 0..level.width as i32 {

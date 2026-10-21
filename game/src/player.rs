@@ -234,6 +234,7 @@ pub(crate) fn walk(
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Option<Res<Obstacles>>,
+    doors: Option<Res<crate::doors::Doors>>,
     mut body: Single<Walker<'_>, With<Player>>,
     effects: Query<&crate::character::DelverEffects, With<Player>>,
 ) {
@@ -257,7 +258,9 @@ pub(crate) fn walk(
     locomotion.velocity.smooth_nudge(&wanted, moving.acceleration, dt);
 
     let from = floor(transform.translation);
-    let blocked = blocked_by(&level.0, &blocked_cells);
+    // A shut claim door stops the delver as rock does; the folk's routines never read it.
+    let rock = blocked_by(&level.0, &blocked_cells);
+    let blocked = |x: i32, y: i32| rock(x, y) || doors.as_deref().is_some_and(|d| d.shuts(x, y));
     let obstacles = obstacles.as_deref().map_or(&[][..], |o| &o.0[..]);
     let to = slide_around(from, from + locomotion.velocity * dt, moving.body_radius, blocked, obstacles);
     // Walking into a wall leaves only the speed along it.

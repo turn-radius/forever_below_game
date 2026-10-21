@@ -7,21 +7,23 @@ Read `HANDOFF.md` for the current milestone, and `docs/` for the design notes. T
 ## Workspace
 
 ```
-crates/procgen_rng   seeded RNG for every generator
-crates/armory        Spline Armory in Rust: item state from a seed, mesh data from a state
-crates/fb_items      Forever Below items: rarity, affixes, stats, footprints, history
-crates/fb_body       procedural folk bodies and the fitting of worn and held gear
-game/                the Bevy app (binary: forever_below)
-fixtures/            example generator output from the prototypes (reference only)
-data/                game tables extracted from the plate prototype (JSON)
-reference/           the prototypes and concept art
-tools/               scripts that regenerate fixtures and data from reference/
-docs/                design, rendering, items, body
+crates/procgen_rng      seeded RNG for every generator
+crates/procgen_grammar  tracery-style grammar expansion, and faction names
+crates/fb_faction       the factions of a world, rolled from its seed: names, folk, likes and hates, colours, crest
+crates/armory           Spline Armory in Rust: item state from a seed, mesh data from a state
+crates/fb_items         Forever Below items: rarity, affixes, stats, footprints, history
+crates/fb_body          procedural folk bodies and the fitting of worn and held gear
+game/                   the Bevy app (binary: forever_below)
+fixtures/               example generator output from the prototypes (reference only)
+data/                   game tables extracted from the plate prototype (JSON)
+reference/              the prototypes and concept art
+tools/                  scripts that regenerate fixtures and data from reference/
+docs/                   design, rendering, items, body
 ```
 
 ## Rules
 
-- **Generators never depend on Bevy.** `procgen_rng`, `armory`, `fb_items` and `fb_body` are plain Rust: data in, data out (parameters, plain mesh buffers). Only `game/` uses Bevy. Heroes' Hold and a native Spline Armory will reuse these crates later.
+- **Generators never depend on Bevy.** `procgen_rng`, `procgen_grammar`, `fb_faction`, `armory`, `fb_items` and `fb_body` are plain Rust: data in, data out (parameters, plain mesh buffers). Only `game/` uses Bevy. Heroes' Hold and a native Spline Armory will reuse these crates later.
 - **Generators are pure functions of a seed.** The same seed must give the same item in every save and every run on a platform, because levels and items persist through a delve and are rebuilt from their seeds. Platforms may differ slightly (each one's libm rounds `atan2`, `sin` and the like its own way), and that is fine: the world is procedural. Use `procgen_rng::Mulberry32` (or another seeded RNG in that crate), never `rand` or thread RNGs, inside generators. Matching the browser prototypes number for number is not a goal.
 - **Improve freely on the prototypes.** Keep their intent (the families, the controls that make items varied, the rules in `docs/`), but rebuild the geometry and materials at higher fidelity: denser and better-shaped meshes, proper normals, real lighting, better hands and faces, cloth that drapes. If a better approach breaks with how the prototype did something, take the better approach and note it in `docs/`.
 - **One item generator.** The `armory` crate makes the shape of every item. `fb_items` adds rarity, affixes, stats and history on top. Game code never builds its own one-off item shapes.

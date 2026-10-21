@@ -343,7 +343,7 @@ fn take_bites(
 /// the Leech"'s `HealOnKill`, [`crate::character::Derived::heal_on_kill`]), never above their
 /// maximum. A fallen delver heals nothing.
 fn heal_on_kill(mut slain: MessageReader<Slain>, character: Res<Character>, inventory: Option<Res<Inventory>>, mut players: Query<&mut Health, With<Player>>) {
-    let kills = slain.read().count();
+    let kills = slain.read().filter(|s| !s.by_ally).count();
     if kills == 0 {
         return;
     }
@@ -672,7 +672,7 @@ mod tests {
         let (mut app, player, snake) = delve();
         app.update();
         bite(&mut app, snake, Species::Rat, 4);
-        app.world_mut().write_message(Slain { target: snake });
+        app.world_mut().write_message(Slain { target: snake, by_ally: false });
         app.update();
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 6, "a plain fist heals nothing");
         let mut inventory = Inventory::default();
@@ -683,12 +683,12 @@ mod tests {
         inventory.wear(id, fb_items::Slot::Mainhand).unwrap();
         app.insert_resource(inventory);
         for _ in 0..2 {
-            app.world_mut().write_message(Slain { target: snake });
+            app.world_mut().write_message(Slain { target: snake, by_ally: false });
             app.update();
         }
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 8, "one each kill");
         for _ in 0..5 {
-            app.world_mut().write_message(Slain { target: snake });
+            app.world_mut().write_message(Slain { target: snake, by_ally: false });
             app.update();
         }
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 10, "never above the maximum");
@@ -753,7 +753,7 @@ mod tests {
         assert_eq!(app.world().get::<Slowed>(player), Some(&Slowed(HELD_PACE)));
         app.update();
         assert!(app.world().get::<Constricted>(player).is_some(), "still held");
-        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false });
         app.update();
         assert!(app.world().get::<Constricted>(player).is_none());
         assert!(app.world().get::<Slowed>(player).is_none());

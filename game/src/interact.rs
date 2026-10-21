@@ -28,8 +28,10 @@
 //! and [`key_line`] writes a target's verbs with the keys bound to them: "F Open · R Pick
 //! the lock". Aimed at a container within reach, or at a stair with nothing else aimed at
 //! (`crate::travel`), [`CrosshairPrompt`] shows that line over the crosshair
-//! ([`InteractPlugin`]); a folk's line goes on its card (`crate::folk`). Doors have
-//! no prompt: the only one, the entrance, never opens for the delver, so it has no verb to say.
+//! ([`InteractPlugin`]); a folk's line goes on its card (`crate::folk`). The doors on the edge
+//! of a faction's ground have a prompt of their own (`crate::doors`): "F Open", or "Locked", with
+//! "G Unlock with key" and "R Pick the lock" for what the delver carries. The entrance never
+//! opens for the delver, so it has none.
 
 use bevy::{prelude::*, ui::ComputedUiRenderTargetInfo};
 use fb_items::Item;
@@ -91,6 +93,7 @@ pub enum Verb {
     Open,
     LookIn,
     Close,
+    Pull,
     Lock,
     Unlock,
     PickLock,
@@ -118,8 +121,9 @@ impl Verb {
             Verb::Open => "Open",
             Verb::LookIn => "Look in",
             Verb::Close => "Close",
+            Verb::Pull => "Pull the lever",
             Verb::Lock => "Lock",
-            Verb::Unlock => "Unlock",
+            Verb::Unlock => "Unlock with key",
             Verb::PickLock => "Pick the lock",
             Verb::Talk => "Talk",
             Verb::Barter => "Barter",
@@ -222,6 +226,8 @@ pub enum Target {
         lock: Lock,
     },
     Folk,
+    /// A wall lever wired to something.
+    Switch,
     Stair {
         down: bool,
     },
@@ -253,6 +259,7 @@ pub fn verbs_for(target: &Target, delver: &Delver) -> Verbs {
         Target::Door { open, lock } => Verbs { primary: Some(if open { Verb::Close } else { Verb::Open }), ..locks(lock, delver) },
         // A container left standing open is looked in again with the same key.
         Target::Container { open, lock } => Verbs { primary: Some(if open { Verb::LookIn } else { Verb::Open }), ..locks(lock, delver) },
+        Target::Switch => Verbs { primary: Some(Verb::Pull), ..Verbs::default() },
         Target::Folk => Verbs { primary: Some(Verb::Talk), secondary: Some(Verb::Barter), tertiary: delver.hidden.then_some(Verb::Steal), ..Verbs::default() },
         Target::Stair { down } => Verbs { primary: Some(if down { Verb::GoDown } else { Verb::GoUp }), ..Verbs::default() },
     }

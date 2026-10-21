@@ -103,6 +103,9 @@ pub enum LightKind {
     Glowcaps,
     /// An iron brazier: warm, flickering, man-made.
     Brazier,
+    /// A hearth's campfire, built from the Armory campfire family ([`crate::Prop::Campfire`]
+    /// stands at the same spot): warm, flickering, lit.
+    Campfire,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -148,8 +151,20 @@ pub struct Level {
     pub lights: Vec<LightSpot>,
     /// Who stands in the level, in groups by faction ([`folk`]).
     pub folk: Vec<FolkSpot>,
+    /// The two to four factions of the world's pool this level holds, whole, so the level names
+    /// them without the world; each [`FolkSpot::faction`] is one of them.
+    pub factions: Vec<FactionSpec>,
+    /// The ground each of those factions holds, as rooms ([`claims`]). A room in no claim is
+    /// wild.
+    pub claims: Vec<Claim>,
+    /// What each room of [`Level::rooms`] is for, indexed by room: empty for a wild room
+    /// ([`roles`]).
+    pub roles: Vec<Vec<RoomRole>>,
     /// Containers and scenery standing along the walls ([`props`]).
     pub props: Vec<PropSpot>,
+    /// Faction banners hung on the walls of claimed rooms and beside their doors ([`banners`]).
+    #[serde(default)]
+    pub banners: Vec<BannerSpot>,
     /// Rats and snakes ([`creatures`]).
     pub creatures: Vec<CreatureSpot>,
     /// The ways to the levels above and below ([`stairs`]).
@@ -159,6 +174,19 @@ pub struct Level {
 }
 
 impl Level {
+    /// The spec of one of this level's factions (the [`FolkSpot::faction`] of anyone on it).
+    ///
+    /// # Panics
+    /// If the level does not hold that faction.
+    pub fn faction(&self, id: Faction) -> &FactionSpec {
+        self.factions.iter().find(|f| f.id == id).unwrap_or_else(|| panic!("faction {} is not on this level", id.0))
+    }
+
+    /// The names of the factions on this level, as the world's items name them in their legends.
+    pub fn faction_names(&self) -> Vec<String> {
+        self.factions.iter().map(|f| f.name.clone()).collect()
+    }
+
     /// The cell at `(x, y)`, or rock outside the grid.
     pub fn cell(&self, x: i32, y: i32) -> Cell {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
@@ -261,7 +289,11 @@ impl Level {
     }
 }
 
+pub mod banners;
+pub mod claims;
+pub mod doorkind;
 pub mod creatures;
+pub mod door;
 pub mod finish;
 pub mod folk;
 mod generate;
@@ -269,16 +301,22 @@ pub mod params;
 pub mod sight;
 pub mod path;
 pub mod props;
+pub mod roles;
 pub mod rooms;
 pub mod stairs;
+pub mod trades;
 pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
-pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
-pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
+pub use banners::{BannerSite, BannerSpot};
+pub use claims::{Claim, settle_claims};
+pub use folk::{Faction, FactionSpec, FolkSpot, Trade};
+pub use props::{CONTAINER_SCALE, NO_LOOT, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use finish::{Character, DoorStyle, Finish, Finishes, FloorFinish, Quarter, WallFinish, finishes};
-pub use generate::{generate, generate_with};
+pub use generate::{generate, generate_for, generate_in, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;
+pub use doorkind::{DoorKind, STEEL_PICK_PENALTY, SwitchKind};
+pub use roles::{ClaimDoor, RoomRole};
 pub use rooms::RoomGraph;
 pub use wild::{WebKind, WebSpot};

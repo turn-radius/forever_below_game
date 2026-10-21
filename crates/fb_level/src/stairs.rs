@@ -8,7 +8,7 @@
 //! The way down is placed after everything else, on its own salted stream
 //! ([`STAIR_SALT`]) and as a pure function of the finished layout, so nothing about a level
 //! that existed before stairs changed (the first level's seeds still lay out as they did). It
-//! stands against a wall of a room, far by path from the start, on a cell nothing else uses,
+//! stands in wild ground (never in a claim's room or behind its doors), against a wall of a room, far by path from the start, on a cell nothing else uses,
 //! and shutting that cell cuts no part of the level off. Below the first level the entrance
 //! door is not a door: its cell is the stair up, and the start cell in front of it is where you
 //! arrive.
@@ -131,7 +131,14 @@ pub(crate) fn place_stairs(level: &mut Level, rng: &mut Mulberry32) {
         taken.insert(entrance);
     }
 
-    let dist = distances(level, start, None);
+    // The way down lies in wild ground: not in a claim's rooms or behind its doors.
+    let held = crate::claims::held_cells(level, &level.claims);
+    let mut dist = distances(level, start, None);
+    for (d, &h) in dist.iter_mut().zip(&held) {
+        if h {
+            *d = -1;
+        }
+    }
     let index = |x: i32, y: i32| (y as u32 * level.width + x as u32) as usize;
     let total_open = level.cells.iter().filter(|c| c.is_open()).count();
     // A cell can hold the way down when it and its approach are free floor. The tight pool is

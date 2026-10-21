@@ -10,6 +10,9 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use armory::heraldry::{Field, Tincture};
+use armory::sections::garment::GarmentStyle;
+use armory::sections::hood::HoodStyle;
 use procgen_rng::Mulberry32;
 use serde::Deserialize;
 use serde_json::Value;
@@ -24,6 +27,96 @@ pub struct Choice {
     pub chance: f32,
     pub bases: Vec<String>,
 }
+
+/// The kind of body armour a faction leans toward. Mirrors the faction crate's own, so this
+/// crate needs no dependency on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArmourLean {
+    Padded,
+    Leather,
+    Mail,
+    Scale,
+    Plate,
+}
+
+impl ArmourLean {
+    /// The bases of `slot` this lean favours (a faction of mail wears mail and a mail coif).
+    fn favours(self, slot: Slot) -> &'static [&'static str] {
+        match (slot, self) {
+            (Slot::Body, ArmourLean::Padded) => &["Gambeson"],
+            (Slot::Body, ArmourLean::Leather) => &["Leather jerkin"],
+            (Slot::Body, ArmourLean::Mail) => &["Mail"],
+            (Slot::Body, ArmourLean::Scale) => &["Scale coat"],
+            (Slot::Body, ArmourLean::Plate) => &["Cuirass", "Brigandine"],
+            (Slot::Head, ArmourLean::Mail) => &["Mail coif"],
+            (Slot::Head, ArmourLean::Plate) => &["Helm"],
+            _ => &[],
+        }
+    }
+}
+
+/// A faction's colours as plain data: what its members' cloth, shields and armour show.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Livery {
+    pub tincture: Tincture,
+    pub tincture2: Tincture,
+    /// Painted on every shield, exactly.
+    pub field: Field,
+    pub armour_lean: ArmourLean,
+}
+
+impl Livery {
+    /// The livery of a faction with `field` and `armour_lean`: the field's two tinctures.
+    pub fn from_field(field: Field, armour_lean: ArmourLean) -> Livery {
+        Livery { tincture: field.tincture, tincture2: field.tincture2, field, armour_lean }
+    }
+
+    /// The tinctures as (main, trim): cloth takes a colour for its body and a metal for its
+    /// trim where the livery has one of each.
+    fn cloth(&self) -> (Tincture, Tincture) {
+        if self.tincture.is_metal() && !self.tincture2.is_metal() { (self.tincture2, self.tincture) } else { (self.tincture, self.tincture2) }
+    }
+
+    /// Dresses `item`, if it is cloth that wears colours or a shield, from `rng`. Three
+    /// pieces of cloth in four wear the colours; a shield always carries the field.
+    fn dress(&self, item: &mut Item, rng: &mut Mulberry32) {
+        let (main, trim) = self.cloth();
+        match &mut item.shape {
+            armory::Item::Shield(s) => s.field = self.field,
+            armory::Item::Garment(s) if item.base != "Leather jerkin" && !s.cut.style.is_armour() => {
+                if !rng.chance(LIVERY_CLOTH) {
+                    return;
+                }
+                s.cut.cloth.color = main.dye();
+                s.cut.cloth.color2 = trim.dye();
+                if matches!(s.cut.style, GarmentStyle::Tunic | GarmentStyle::Cloak | GarmentStyle::Robe) && rng.chance(0.5) {
+                    s.hem.on = true;
+                }
+                s.hem.fabric.color = trim.dye();
+                s.hem.fabric.color2 = main.dye();
+            }
+            armory::Item::Hood(s) if s.hood.style != HoodStyle::MailCoif => {
+                if !rng.chance(LIVERY_CLOTH) {
+                    return;
+                }
+                // The hood takes the trim colour unless that is a metal, then the main.
+                let (cloth, edge) = if trim.is_metal() { (main, trim) } else { (trim, main) };
+                s.hood.cloth.color = cloth.dye();
+                s.hood.cloth.color2 = edge.dye();
+                s.hem.on = s.hem.on || rng.chance(0.5);
+                s.hem.fabric.color = edge.dye();
+                s.hem.fabric.color2 = cloth.dye();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// How many pieces of cloth in a faction wear its colours.
+pub const LIVERY_CLOTH: f64 = 0.75;
+/// How often a faction's armoured member wears the armour it leans toward.
+pub const LIVERY_LEAN: f64 = 0.75;
+const LIVERY_SALT: u32 = 0x11FE_5EED;
 
 /// A row of `data/outfits.json`.
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +224,14 @@ impl Outfit {
     /// [`Outfit::roll`] with every item's rarity rolled against `odds`: the folk met at a
     /// depth wear [`Odds::kit`] for it.
     pub fn roll_with(&self, seed: u32, folk: &str, odds: Odds) -> OutfitSet {
+        self.roll_in(seed, folk, odds, None)
+    }
+
+    /// [`Outfit::roll_with`] for a member of a faction: cloth in its tinctures, shields
+    /// painted with its field and body armour leaning toward its lean. The livery is drawn
+    /// from a stream of its own, so the same wearer without one rolls the same bases.
+    pub fn roll_in(&self, seed: u32, folk: &str, odds: Odds, livery: Option<&Livery>) -> OutfitSet {
+        let mut lrng = Mulberry32::new(seed ^ LIVERY_SALT);
         let first = self.key.bytes().next().unwrap_or(0) as u32;
         let mut rng = Mulberry32::new(seed.wrapping_mul(13).wrapping_add(self.key.len() as u32 * 977).wrapping_add(first));
         let draw = |rng: &mut Mulberry32, base: &str| roll_item_with(base, (rng.next_f64() * 4_294_967_296.0) as u32, odds);
@@ -139,8 +240,17 @@ impl Outfit {
             if choice.bases.is_empty() || (choice.chance < 1.0 && rng.next_f64() > choice.chance as f64) {
                 continue;
             }
-            let base = rng.pick(&choice.bases).clone();
-            if let Some(item) = draw(&mut rng, &base) {
+            let mut base = rng.pick(&choice.bases).clone();
+            if let Some(livery) = livery {
+                let favoured: Vec<&String> = choice.bases.iter().filter(|b| livery.armour_lean.favours(*slot).contains(&b.as_str())).collect();
+                if !favoured.is_empty() && lrng.chance(LIVERY_LEAN) {
+                    base = (*lrng.pick(&favoured)).clone();
+                }
+            }
+            if let Some(mut item) = draw(&mut rng, &base) {
+                if let Some(livery) = livery {
+                    livery.dress(&mut item, &mut lrng);
+                }
                 worn.push((*slot, item));
             }
         }
@@ -272,5 +382,83 @@ mod tests {
         let hats = (0..100).filter(|&s| fallen.roll(s, "gnome").item(Slot::Head).is_some()).count();
         assert!((40..80).contains(&hats), "{hats}");
         assert!((0..100).all(|s| fallen.roll(s, "human").item(Slot::Head).is_none()));
+    }
+
+    fn livery(lean: ArmourLean) -> Livery {
+        let field = Field { tincture: Tincture::Vert, tincture2: Tincture::Or, charge: armory::sections::device::Device::Tower, charge_tincture: Tincture::Argent, ..Field::default() };
+        Livery::from_field(field, lean)
+    }
+
+    fn pieces_of_cloth(set: &OutfitSet) -> Vec<armory::Rgb> {
+        set.worn
+            .iter()
+            .filter_map(|(_, i)| match &i.shape {
+                armory::Item::Garment(s) if i.base != "Leather jerkin" && !s.cut.style.is_armour() => Some(s.cut.cloth.color),
+                armory::Item::Hood(s) if s.hood.style != HoodStyle::MailCoif => Some(s.hood.cloth.color),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn most_of_a_factions_cloth_wears_its_colours() {
+        let livery = livery(ArmourLean::Mail);
+        let colours = [Tincture::Vert.dye(), Tincture::Or.dye()];
+        let (mut worn, mut total) = (0, 0);
+        for seed in 0..30 {
+            for key in ["ranger", "mage", "cleric"] {
+                for colour in pieces_of_cloth(&outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&livery))) {
+                    total += 1;
+                    worn += usize::from(colours.contains(&colour));
+                }
+            }
+        }
+        let share = worn as f32 / total as f32;
+        assert!((0.6..0.9).contains(&share), "{worn} of {total}");
+        // Without a livery the same wearers are not in green and gold.
+        let plain = (0..30).flat_map(|seed| pieces_of_cloth(&outfit("mage").unwrap().roll(seed, "human"))).filter(|c| colours.contains(c)).count();
+        assert!(plain < worn / 4, "{plain}");
+    }
+
+    #[test]
+    fn shields_carry_the_factions_field() {
+        let livery = livery(ArmourLean::Plate);
+        let mut shields = 0;
+        for seed in 0..30 {
+            let set = outfit("fighter").unwrap().roll_in(seed, "human", Odds::default(), Some(&livery));
+            if let Some(armory::Item::Shield(s)) = set.item(Slot::Offhand).map(|i| &i.shape) {
+                assert_eq!(s.field, livery.field, "{seed}");
+                shields += 1;
+            }
+        }
+        assert!(shields > 5, "{shields}");
+    }
+
+    #[test]
+    fn an_armour_lean_shifts_the_body_armour() {
+        let fighter = outfit("fighter").unwrap();
+        let share = |lean: Option<ArmourLean>, base: &str| {
+            let hits = (0..60)
+                .filter(|&seed| {
+                    let l = lean.map(livery);
+                    fighter.roll_in(seed, "human", Odds::default(), l.as_ref()).item(Slot::Body).is_some_and(|i| i.base == base)
+                })
+                .count();
+            hits as f32 / 60.0
+        };
+        assert!(share(None, "Mail") < 0.35, "{}", share(None, "Mail"));
+        assert!(share(Some(ArmourLean::Mail), "Mail") > 0.65, "{}", share(Some(ArmourLean::Mail), "Mail"));
+        assert!(share(Some(ArmourLean::Padded), "Gambeson") > 0.65);
+        assert!(share(Some(ArmourLean::Plate), "Mail") < 0.15);
+    }
+
+    #[test]
+    fn a_liveried_roll_is_deterministic_and_leaves_the_unliveried_one_alone() {
+        let livery = livery(ArmourLean::Scale);
+        for outfit in outfits() {
+            let again = (outfit.roll_in(9, "dwarf", Odds::default(), Some(&livery)), outfit.roll_in(9, "dwarf", Odds::default(), Some(&livery)));
+            assert_eq!(again.0, again.1, "{}", outfit.key);
+            assert_eq!(outfit.roll_in(9, "dwarf", Odds::default(), None), outfit.roll(9, "dwarf"), "{}", outfit.key);
+        }
     }
 }

@@ -47,7 +47,7 @@ use bevy::{
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
-use fb_level::{CELL, Level, Stair, StairKind, depth_seed};
+use fb_level::{CELL, Level, Stair, StairKind};
 
 use crate::carry::Aimed;
 use crate::figure::Figure;
@@ -116,7 +116,7 @@ impl Abyss {
     /// The level at `depth`: the same level every time it is asked for. The place to apply what
     /// was recorded on a level (#285) is on the level this returns.
     pub fn level_at(&self, depth: u32) -> Level {
-        fb_level::generate(depth_seed(self.run_seed, depth), depth)
+        fb_level::generate_in(self.run_seed, depth, &fb_level::LevelParams::for_style(fb_level::LevelStyle::for_depth(depth)))
     }
 }
 
@@ -136,7 +136,7 @@ impl Prepared {
     pub fn make(run_seed: u32, depth: u32, odds: fb_items::Odds) -> Self {
         let level = Abyss::new(run_seed).level_at(depth);
         let stone = stone_chunks(&level);
-        let folk = build_figures(&level.folk, depth);
+        let folk = build_figures(&level.folk, &level.factions, depth);
         let staging = Staging::make(&level, odds);
         Prepared { level, stone, folk, staging }
     }
@@ -241,6 +241,7 @@ impl Plugin for TravelPlugin {
             .add_systems(OnEnter(AppState::Delving), begin_the_run)
             .add_systems(OnExit(AppState::Delving), end_the_run)
             .init_resource::<WorldRecord>()
+            .init_resource::<crate::enchanting::Enchanting>()
             .configure_sets(Update, LeavingLevel.run_if(journey_is_leaving).before(step_journey).in_set(DelveSystems))
             .add_systems(Update, record_level_left.after(apply_floor_changes).in_set(LeavingLevel))
             .add_systems(
@@ -252,10 +253,19 @@ impl Plugin for TravelPlugin {
 }
 
 /// A new delve is a new abyss, from the seed of the level it opens on.
-fn begin_the_run(level: Option<Res<CurrentLevel>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>) {
-    // The world record resets with the run for now (#285).
-    *record = WorldRecord::default();
+pub(crate) fn begin_the_run(level: Option<Res<CurrentLevel>>, character: Option<Res<crate::character::Character>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>, mut enchanting: ResMut<crate::enchanting::Enchanting>) {
+    // What was scrapped lasts one delve.
+    *enchanting = default();
     *abyss = level.map_or_else(Abyss::default, |level| Abyss { depth: level.0.depth, ..Abyss::new(level.0.seed) });
+    // The world record resets with the run for now (#285), and standing starts afresh in the
+    // new world from the delver's alignment (#542).
+    // A faction that likes or hates the delver's class or folk starts apart from it (#547).
+    let delver = character.map_or(fb_faction::Delver::of_alignment(fb_faction::Alignment::TrueNeutral), |c| fb_faction::Delver {
+        alignment: c.class.alignment(),
+        class: Some(c.class.faction_class()),
+        folk: Some(c.folk),
+    });
+    *record = WorldRecord::new_delve_as(&delver, abyss.run_seed);
 }
 
 /// Leaving the delve leaves the abyss.
@@ -550,7 +560,7 @@ mod tests {
         assert!(!level.folk.is_empty(), "the level has folk to make");
         assert_eq!(background.folk.len(), level.folk.len());
         for spot in &level.folk {
-            let person = Person::of(spot, 2);
+            let person = Person::of(spot, level.faction(spot.faction), 2);
             let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
             let made = background.folk.iter().find(|(p, _)| p.spot == *spot).expect("every spot has a person");
             assert_eq!(made.0, person);

@@ -3,7 +3,7 @@
 
 use crate::Tag;
 use crate::armory_base::armory_base;
-use crate::tables::{Affix, AffixKind, factions, places, syllables};
+use crate::tables::{Affix, AffixKind, places, syllables};
 use procgen_rng::Mulberry32;
 
 /// What to call the shape rolled for `base`: the base's own name where the table says so
@@ -38,17 +38,27 @@ pub fn anyone(rng: &mut Mulberry32) -> String {
 }
 
 /// A legendary's title, the name it had before, and three lines of history.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Legend {
     pub title: String,
     pub subtitle: String,
     /// Where it was made and by whom; who carried it and what they did; how it was lost.
     pub history: [String; 3],
+    /// Made at an enchanter's bench from a rare item, rather than told of a found relic: its
+    /// lines are its making, and [`crate::Item::in_world`] leaves them as they are.
+    #[serde(default)]
+    pub made: bool,
 }
 
 /// `legendize`: a title (`<owner>'s <epithet>` or `The <adjective> <epithet>`, the epithet
 /// chosen for what the item is) over its old `name`, and its history.
 pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
+    legendize_in(rng, name, tags, None)
+}
+
+/// [`legendize`] for a world: the factions its history names are picked from `factions`, the
+/// world's own names, when there are any, and from the faction name grammar otherwise.
+pub fn legendize_in(rng: &mut Mulberry32, name: &str, tags: &[Tag], factions: Option<&[String]>) -> Legend {
     let owner = anyone(rng).split(' ').next().unwrap_or_default().to_string();
     let epithets: &[&str] = if tags.contains(&Tag::Weapon) {
         &["Tooth", "Oath", "Answer", "Thorn", "Reckoning", "Mercy"]
@@ -70,12 +80,12 @@ pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
     let made_on = rng.int(2, 10);
     let lost_on = made_on + rng.int(3, 22);
     let bearer = anyone(rng);
-    let faction = rng.pick(factions()).clone();
+    let faction = legend_faction(rng, factions);
     let place = rng.pick(places()).clone();
     let made = format!(
         "{} on level {made_on} by {}.",
         rng.pick(&["Forged", "Stitched", "Carved", "Bound", "Made"]),
-        rng.pick(factions())
+        legend_faction(rng, factions)
     );
     let deeds = [
         format!("settled {place} for a season"),
@@ -94,7 +104,32 @@ pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
             "the stair gave way",
         ])
     );
-    Legend { title, subtitle: name.to_string(), history: [made, carried, lost] }
+    Legend { title, subtitle: name.to_string(), history: [made, carried, lost], made: false }
+}
+
+/// A legend's title for an item an enchanter made legendary: as [`legendize_in`] titles one,
+/// except that an owner's name is the maker's (`maker`, a first name), "Ysolde's Shroud". Its
+/// lines are not told here: the caller writes what the making was, and marks it `made`.
+pub fn legendize_made(rng: &mut Mulberry32, name: &str, tags: &[Tag], maker: &str) -> Legend {
+    let mut legend = legendize_in(rng, name, tags, None);
+    if let Some((_, epithet)) = legend.title.split_once("'s ") {
+        legend.title = format!("{maker}'s {epithet}");
+    }
+    legend.made = true;
+    legend
+}
+
+/// A faction named in a legend's history, from the faction name grammar: any folk's, any
+/// intention's. An item carries no world, so this is a faction of the sort the abyss has rather
+/// than one of a particular world's pool, unless `world` gives that pool's names.
+fn legend_faction(rng: &mut Mulberry32, world: Option<&[String]>) -> String {
+    if let Some(names) = world.filter(|n| !n.is_empty()) {
+        return rng.pick(names).clone();
+    }
+    const FOLK: [&str; 6] = ["human", "dwarf", "gnome", "goblin", "lizardfolk", "pigfolk"];
+    const INTENTIONS: [&str; 4] = ["way_out", "trade", "worship", "plunder"];
+    let (folk, intention) = (*rng.pick(&FOLK), *rng.pick(&INTENTIONS));
+    procgen_grammar::faction_name(folk, intention, rng.int(0, u32::MAX))
 }
 
 #[cfg(test)]
@@ -141,7 +176,8 @@ mod tests {
             assert_eq!(legend.subtitle, "Keen Longsword");
             assert!(legend.title.starts_with("The ") || legend.title.contains("'s "), "{}", legend.title);
             assert!(["Tooth", "Oath", "Answer", "Thorn", "Reckoning", "Mercy"].iter().any(|e| legend.title.ends_with(e)));
-            assert!(legend.history[0].contains(" on level ") && factions().iter().any(|f| legend.history[0].contains(f.as_str())));
+            assert!(legend.history[0].contains(" on level ") && legend.history[0].contains(" by the "), "{}", legend.history[0]);
+            assert!(!legend.history[0].contains("Nameless"));
             assert!(legend.history[1].starts_with("Carried by "));
             assert!(legend.history[2].starts_with("Lost on level "));
             assert_eq!(legend, legendize(&mut game_rng(seed), "Keen Longsword", &[Tag::Weapon, Tag::Metal]));

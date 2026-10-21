@@ -186,6 +186,12 @@ pub enum Screen {
     Menu,
     /// The map of the level ([`crate::map`]).
     Map,
+    /// A dialogue with a folk ([`crate::talk`]).
+    Talk,
+    /// The commission screen ([`crate::commission`]).
+    Commission,
+    /// An enchanter's bench, opened from their talk ([`crate::enchanter`]).
+    Enchant,
 }
 
 /// Which screen, if any, is open over the level. The level keeps drawing behind it, but the
@@ -211,15 +217,27 @@ pub fn inventory_open(open: Option<Res<ScreenOpen>>) -> bool {
     open.is_some_and(|o| o.is(Screen::Inventory))
 }
 
-/// Which leaf of the inventory screen is showing: the plate's tab bar. The outfit tab is a
-/// label only for now.
+/// Which leaf of the inventory screen is showing: the plate's tab bar.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SheetTab {
     /// The grids: the pack, the floor and the slots.
     #[default]
     Inventory,
+    /// The factions the delver has met and how each stands with them.
+    Factions,
     /// The character sheet and status.
     Character,
+}
+
+impl SheetTab {
+    /// The tabs in the order the bar shows them.
+    pub const ALL: [SheetTab; 3] = [SheetTab::Inventory, SheetTab::Factions, SheetTab::Character];
+
+    /// The tab `by` places along the bar (negative is back), wrapping round at either end.
+    pub fn stepped(self, by: i32) -> SheetTab {
+        let at = Self::ALL.iter().position(|&t| t == self).unwrap_or(0) as i32;
+        Self::ALL[(at + by).rem_euclid(Self::ALL.len() as i32) as usize]
+    }
 }
 
 /// The keys pressed this frame that open, close or swap screens.
@@ -229,16 +247,19 @@ pub struct ScreenKeys {
     pub character: bool,
     pub map: bool,
     pub back: bool,
+    /// Tab (+1) or Shift+Tab (-1) pressed: steps along the tabs of an open inventory screen.
+    pub step: i32,
 }
 
 /// The screen and tab open after this frame's presses, from `open` and `tab`: Esc closes an
 /// open screen first, and with none open brings up the menu; the inventory key opens the
 /// inventory on its inventory tab and the character key on its character tab, each closing
 /// the screen when its tab is already showing and otherwise swapping to its tab; the map key
-/// opens and closes the map, swapping with the inventory. None of them opens over the menu.
+/// opens and closes the map, swapping with the inventory; Tab and Shift+Tab step along the
+/// tabs of an open inventory screen, wrapping round. None of them opens over the menu.
 /// With no inventory showing the tab is the inventory's.
 pub fn next_screen(open: Option<Screen>, tab: SheetTab, keys: ScreenKeys) -> (Option<Screen>, SheetTab) {
-    let ScreenKeys { inventory, character, map, back } = keys;
+    let ScreenKeys { inventory, character, map, back, step } = keys;
     let tab_asked = if inventory {
         Some(SheetTab::Inventory)
     } else if character {
@@ -251,6 +272,7 @@ pub fn next_screen(open: Option<Screen>, tab: SheetTab, keys: ScreenKeys) -> (Op
         (None, _) if back => (Some(Screen::Menu), tab),
         (Some(Screen::Inventory), Some(asked)) if asked == tab => (None, tab),
         (Some(Screen::Inventory), Some(asked)) => (open, asked),
+        (Some(Screen::Inventory), None) if step != 0 => (open, tab.stepped(step)),
         (None | Some(Screen::Map), Some(asked)) => (Some(Screen::Inventory), asked),
         (Some(Screen::Map), None) if map => (None, tab),
         (None | Some(Screen::Inventory), None) if map => (Some(Screen::Map), tab),
@@ -272,6 +294,8 @@ pub fn show_screen(open: &mut ScreenOpen, screen: Option<Screen>, cursor: Option
 /// run after it.
 pub fn switch_screens(
     input: ActionInput,
+    raw: Res<ButtonInput<KeyCode>>,
+    barter: Option<Res<crate::barter::Barter>>,
     mut open: ResMut<ScreenOpen>,
     mut tab: ResMut<SheetTab>,
     journey: Option<Res<crate::travel::Journey>>,
@@ -287,6 +311,12 @@ pub fn switch_screens(
         character: input.just_pressed(Action::Character),
         map: input.just_pressed(Action::Map),
         back: input.just_pressed(Action::Back),
+        // Not while bartering: the trader's shelf stays up.
+        step: if input.just_pressed(Action::NextTab) && !barter.is_some_and(|b| b.active()) {
+            if raw.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { -1 } else { 1 }
+        } else {
+            0
+        },
     };
     let (next, next_tab) = next_screen(open.0, *tab, keys);
     if next != open.0 {
@@ -315,7 +345,7 @@ impl Plugin for PlayPlugin {
             crate::level::LevelPlugin,
             crate::player::PlayerPlugin,
             crate::carry::CarryPlugin,
-            (crate::folk::FolkPlugin, crate::folk_routine::FolkRoutinePlugin, crate::folk_combat::FolkCombatPlugin),
+            (crate::folk::FolkPlugin, crate::folk_routine::FolkRoutinePlugin, crate::folk_combat::FolkCombatPlugin, crate::shelf::ShelfPlugin, crate::barter::BarterPlugin),
             crate::creatures::CreaturesPlugin,
             crate::combat::CombatPlugin,
             crate::props::PropsPlugin,
@@ -328,7 +358,7 @@ impl Plugin for PlayPlugin {
             crate::map::MapPlugin,
         ))
         // Over the plugin tuple's limit.
-        .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin, crate::sight::SightPlugin, crate::dazzle::DazzlePlugin, crate::light::ShadowBudgetPlugin, crate::webs::WebsPlugin));
+        .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin, crate::sight::SightPlugin, crate::dazzle::DazzlePlugin, crate::light::ShadowBudgetPlugin, crate::webs::WebsPlugin, crate::talk::TalkPlugin, crate::commission::CommissionPlugin, crate::enchanter::EnchanterPlugin));
         if !app.is_plugin_added::<crate::ui::InterfaceScalePlugin>() {
             app.add_plugins(crate::ui::InterfaceScalePlugin);
         }
@@ -401,7 +431,7 @@ mod tests {
     }
 
     fn keys(inventory: bool, character: bool, map: bool, back: bool) -> ScreenKeys {
-        ScreenKeys { inventory, character, map, back }
+        ScreenKeys { inventory, character, map, back, step: 0 }
     }
 
     #[test]
@@ -433,6 +463,22 @@ mod tests {
         assert_eq!(next_screen(Some(Inventory), Character, none), (Some(Inventory), Character));
         assert_eq!(next_screen(Some(Screen::Map), Grids, keys(false, true, false, false)), (Some(Inventory), Character));
         assert_eq!(next_screen(Some(Inventory), Character, keys(false, false, true, false)), (Some(Screen::Map), Grids), "the map swaps for the sheet");
+    }
+
+    #[test]
+    fn tab_steps_through_the_tabs_and_wraps() {
+        use Screen::Inventory;
+        use SheetTab::{Character, Factions, Inventory as Grids};
+        let step = |by| ScreenKeys { step: by, ..default() };
+        assert_eq!(next_screen(Some(Inventory), Grids, step(1)), (Some(Inventory), Factions));
+        assert_eq!(next_screen(Some(Inventory), Factions, step(1)), (Some(Inventory), Character));
+        assert_eq!(next_screen(Some(Inventory), Character, step(1)), (Some(Inventory), Grids), "wraps to the first");
+        assert_eq!(next_screen(Some(Inventory), Grids, step(-1)), (Some(Inventory), Character), "Shift+Tab wraps to the last");
+        assert_eq!(next_screen(Some(Inventory), Character, step(-1)), (Some(Inventory), Factions));
+        assert_eq!(next_screen(None, Grids, step(1)), (None, Grids), "Tab does nothing with the screen closed");
+        assert_eq!(next_screen(Some(Screen::Map), Grids, step(1)), (Some(Screen::Map), Grids));
+        assert_eq!(next_screen(Some(Inventory), Factions, keys(true, false, false, false)), (Some(Inventory), Grids), "I still swaps to the inventory");
+        assert_eq!(next_screen(Some(Inventory), Factions, keys(false, true, false, false)), (Some(Inventory), Character), "K still swaps to the sheet");
     }
 
     #[test]

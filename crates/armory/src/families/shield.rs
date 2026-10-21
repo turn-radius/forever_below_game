@@ -859,7 +859,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, a: ShieldArchetype) -> ShieldState {
 
 /// A field that keeps the rule of tincture: two tinctures of opposite kinds for a divided
 /// field, and a charge that stands out from the field.
-fn roll_field(rng: &mut Mulberry32, painted: bool, divisions: &[(Division, u32)], charge_odds: f64) -> Field {
+pub fn roll_field(rng: &mut Mulberry32, painted: bool, divisions: &[(Division, u32)], charge_odds: f64) -> Field {
     let metal_field = rng.chance(0.3);
     let (first, second): (&[Tincture], &[Tincture]) =
         if metal_field { (&Tincture::METALS, &Tincture::COLOURS) } else { (&Tincture::COLOURS, &Tincture::METALS) };
