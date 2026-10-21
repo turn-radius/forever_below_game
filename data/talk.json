@@ -102,9 +102,9 @@
   "I stand here so the others can sleep. Mind where you walk."
  ],
  "guard_traders": [
-  "If you want to trade, seek #trader#, #trader_calling.a# of ours.",
-  "For trade, speak to #trader#, #trader_calling.a#. They have a place on our ground.",
-  "#trader# is #trader_calling.a# here. Go to them for wares."
+  "If you want to trade, seek #trader#, #trader_calling.a# of ours, #trader_place#.",
+  "For trade, speak to #trader#, #trader_calling.a#. You will find them #trader_place#.",
+  "#trader# is #trader_calling.a# here. Go to them for wares, #trader_place#."
  ],
  "guard_no_traders": [
   "There is no trade on our ground, none I would send you to.",

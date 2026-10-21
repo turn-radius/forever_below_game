@@ -457,9 +457,10 @@ mod tests {
         let mut all: Vec<(Entity, PropPiece, Container)> = chests.iter(app.world()).map(|(e, p, c)| (e, *p, *c)).collect();
         all.sort_by_key(|(_, p, _)| p.index);
         all.into_iter()
-            .find(|(_, p, _)| matches!(p.spot.prop, Prop::Container { style: armory::families::chests::ChestStyle::Chest, .. }))
+            // The first chest that holds loot: a market's stalls are set out empty.
+            .find(|(_, p, _)| matches!(p.spot.prop, Prop::Container { style: armory::families::chests::ChestStyle::Chest, .. }) && p.spot.prop.holds_loot())
             .map(|(e, _, c)| (e, c))
-            .expect("a chest on 1207")
+            .expect("a chest with loot on 1207")
     }
 
     /// Looks at `entity` and presses the pick-up key for a frame.

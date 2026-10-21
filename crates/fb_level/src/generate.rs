@@ -203,10 +203,11 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
     // A faction that found no ground is not on the level.
     let held: Vec<_> = level.claims.iter().map(|c| c.faction).collect();
     level.factions.retain(|s| held.contains(&s.id));
-    level.roles = assign_roles(&level);
+    let plans = crate::trades::plan(&level, &strengths, layout_seed);
+    level.roles = assign_roles(&level, &plans);
     light_roles(&mut level, &mut Mulberry32::new(layout_seed ^ ROLE_SALT));
-    level.folk = place_folk(&level, &strengths, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
-    crate::trades::assign(&mut level, world_seed, layout_seed);
+    level.folk = place_folk(&level, &strengths, &plans, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
+    crate::trades::assign(&mut level, world_seed);
     Some((level, layout_seed))
 }
 
@@ -1134,16 +1135,16 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550).
         let before = [
-            (0u32, 0xa74514ed1e55ad6u64),
-            (1, 0x7728957e145c0e96),
-            (2, 0xeb7bbd397173b98d),
-            (7, 0x5c44efde87911e05),
-            (64, 0x128b82afedf5b5f),
-            (1207, 0x81aae1b3c50bdee3),
-            (4242, 0x619cadac0a2f54c2),
-            (u32::MAX, 0x254c56294246a49a),
+            (0u32, 0x5f275e7bec30f7e8u64),
+            (1, 0x30dbbee283b1cf05),
+            (2, 0x52b43e6b784f019c),
+            (7, 0xc770ac2ad4d7e7c5),
+            (64, 0xbc4215d523813829),
+            (1207, 0xa6d8288503a20949),
+            (4242, 0x63add32b5dae7835),
+            (u32::MAX, 0x6b4912fa6deca4c9),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

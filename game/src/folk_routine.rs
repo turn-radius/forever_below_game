@@ -7,6 +7,9 @@
 //!   a doorway and a little way through it into the next room, or a spot out on the floor
 //!   ([`Place`]). All are rolled from the person's seed (`procgen_rng::Mulberry32`), so a level's
 //!   folk start out the same each run; only the timing of the frame varies.
+//! - **Posts.** A guard ([`keeps_post`]) does not wander: placed at their claim's hall door facing
+//!   out, they stand there, watch the delver who comes near like anyone, and walk back to the
+//!   post after a hold or a fight.
 //! - **Pausing.** A few seconds between walks, each from the tuning (`folk.pause_min` to
 //!   `pause_max`), rolled per person.
 //! - **Walking.** The way there is found once when a place is chosen (`fb_level::path::find_path`)
@@ -168,6 +171,13 @@ impl Routine {
 /// shorter folk.
 pub fn pace(denizen: &Denizen, walk_speed: f32) -> f32 {
     walk_speed * (denizen.person.spot.folk.race().h / HUMAN_HEIGHT).min(1.0)
+}
+
+/// Whether this person is a guard, who stands at their post instead of wandering: they idle
+/// there facing out, turn to watch the delver who comes near (the notice above), and walk back
+/// to the post after anything that moved them.
+pub fn keeps_post(denizen: &Denizen) -> bool {
+    denizen.person.spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard)
 }
 
 fn grid(p: Vec2) -> (f32, f32) {
@@ -385,7 +395,8 @@ pub(crate) fn walk_routines(
                     routine.phase = Phase::Pause { left: left - dt };
                 } else {
                     // Away from home, the next walk is the way back; at home, somewhere new.
-                    let goal = if away { Some(routine.home) } else { choose_place(level, routine.home, radius, tune.wander_radius, &fixed, &mut routine.rng) };
+                    // A guard keeps their post: they never choose a place to stroll to.
+                    let goal = if away { Some(routine.home) } else if keeps_post(denizen) { None } else { choose_place(level, routine.home, radius, tune.wander_radius, &fixed, &mut routine.rng) };
                     let way = goal.and_then(|g| {
                         routine.searches += 1;
                         find_path(cell(at), cell(g), 4000, &blocked).map(|path| (g, path))
@@ -530,6 +541,27 @@ mod tests {
         assert!(left * 2 > folk.len(), "{left} of {} left their spots: {away:?}", folk.len());
         let walk = crate::tuning::FolkTuning::default().walk_speed;
         assert!(fastest > 4.0 && fastest <= walk + 0.5, "fastest pace {fastest}");
+    }
+
+    #[test]
+    fn guards_keep_their_post_and_the_rest_wander() {
+        let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
+        let homes: Vec<Vec2> = folk.iter().map(|&f| position(&app, f)).collect();
+        let guard: Vec<bool> = folk.iter().map(|&f| keeps_post(app.world().get::<Denizen>(f).unwrap())).collect();
+        assert!(guard.iter().any(|&g| g), "seed 1207 has no guard");
+        let mut away = vec![0.0f32; folk.len()];
+        run(&mut app, 60 * 120, |app, _| {
+            for (i, &f) in folk.iter().enumerate() {
+                away[i] = away[i].max(position(app, f).distance(homes[i]));
+            }
+        });
+        for (i, &f) in folk.iter().enumerate() {
+            if guard[i] {
+                assert!(away[i] < 0.5, "guard {i} left their post by {}", away[i]);
+                assert_eq!(app.world().get::<Routine>(f).unwrap().walks, 0);
+            }
+        }
+        assert!(guard.iter().zip(&away).any(|(&g, &d)| !g && d > CELL * 0.5), "no one else wandered: {away:?}");
     }
 
     #[test]

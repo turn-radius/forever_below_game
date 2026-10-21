@@ -577,8 +577,21 @@ pub(crate) mod tests {
     /// Seed 1207's level with its first folk alone, standing at their spot as a stand-in, and
     /// the delver holding a sword `away` world units west of them, facing them.
     pub(crate) fn folk_fight(away: f32) -> (App, Entity, Entity) {
+        fight_with(away, false)
+    }
+
+    /// The index in the level of the folk [`folk_fight`] stands in for.
+    fn plain_index(app: &App) -> usize {
+        app.world().resource::<CurrentLevel>().0.folk.iter().position(|f| f.trade.is_none_or(|t| t.profession != fb_faction::Profession::Guard)).expect("someone who is not a guard")
+    }
+
+    /// [`folk_fight`] with the first guard, or the first who is not one.
+    fn fight_with(away: f32, guard: bool) -> (App, Entity, Entity) {
         let mut app = combat_app();
-        let spot = app.world().resource::<CurrentLevel>().0.folk[0];
+        // Not a guard unless asked: they stand beside a doorway (#550) and are a poor stand-in
+        // for someone met in a room.
+        let is_guard = |f: &&fb_level::FolkSpot| f.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard);
+        let spot = *app.world().resource::<CurrentLevel>().0.folk.iter().find(|f| is_guard(f) == guard).expect("a folk of the wanted kind");
         let folk = stand_in(&mut app, &spot);
         let at = app.world().get::<Transform>(folk).unwrap().translation;
         let player = delver_near(&mut app, at, away);
@@ -863,6 +876,37 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_guard_who_fought_goes_back_to_their_post_and_faces_the_door() {
+        let (mut app, player, guard) = fight_with(12.0, true);
+        app.world_mut().resource_mut::<Tuning>().folk.lose_interest_after = 2.0;
+        app.world_mut().entity_mut(player).insert(Health::full(100_000));
+        let post = app.world().get::<Routine>(guard).expect("a routine").home;
+        let facing = app.world().get::<Routine>(guard).unwrap().facing;
+        app.world_mut().write_message(Provoked { folk: guard });
+        let mut furthest = 0.0f32;
+        for _ in 0..120 {
+            app.update();
+            furthest = furthest.max(app.world().get::<Transform>(guard).unwrap().translation.xz().distance(post));
+        }
+        assert!(hostility(&app, guard).is_hostile());
+        assert!(furthest > 3.0, "the guard never left their post ({furthest})");
+        let faction = app.world().get::<Denizen>(guard).unwrap().person.faction.id;
+        let mut record = app.world_mut().resource_mut::<crate::record::WorldRecord>();
+        let now = record.standings.get(faction).value();
+        record.standings.shift(faction, -now);
+        let at = app.world().get::<Transform>(guard).unwrap().translation.xz();
+        let away = out_of_sight_of(&app, at);
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = away;
+        for _ in 0..60 * 40 {
+            app.update();
+        }
+        assert!(!hostility(&app, guard).is_hostile());
+        let now = app.world().get::<Transform>(guard).unwrap();
+        assert!(now.translation.xz().distance(post) < CELL * 0.5, "the guard is {} from their post", now.translation.xz().distance(post));
+        assert!((now.rotation * Vec3::Z).xz().normalize_or_zero().dot(facing) > 0.95, "the guard does not face the door again");
+    }
+
+    #[test]
     fn a_hostile_folk_who_loses_sight_of_the_delver_long_enough_goes_home_friendly() {
         let (mut app, player, folk) = folk_fight(12.0);
         app.world_mut().resource_mut::<Tuning>().folk.lose_interest_after = 2.0;
@@ -942,7 +986,7 @@ pub(crate) mod tests {
         app.init_resource::<crate::record::WorldRecord>();
         app.world_mut().run_system_once(crate::record::record_level_left).unwrap();
         let record = app.world().resource::<crate::record::WorldRecord>();
-        let left = &record.level(1).unwrap().folk[&0];
+        let left = &record.level(1).unwrap().folk[&plain_index(&app)];
         assert!(left.hostile);
         assert_eq!(left.hp, app.world().get::<Health>(folk).unwrap().hp);
     }
@@ -1024,7 +1068,7 @@ pub(crate) mod tests {
         app.init_resource::<crate::record::WorldRecord>();
         app.world_mut().run_system_once(crate::record::record_level_left).unwrap();
         let record = app.world().resource::<crate::record::WorldRecord>().clone();
-        let left = &record.level(1).unwrap().folk[&0];
+        let left = &record.level(1).unwrap().folk[&plain_index(&app)];
         assert!(left.dead && left.hp == 0);
         // The level laid out again from the record: the folk come back as it has them.
         let mut again = combat_app();
@@ -1033,7 +1077,7 @@ pub(crate) mod tests {
             again.update();
         }
         let mut denizens = again.world_mut().query::<(Entity, &Denizen)>();
-        let spot = again.world().resource::<CurrentLevel>().0.folk[0];
+        let spot = again.world().resource::<CurrentLevel>().0.folk[plain_index(&again)];
         let (body, denizen) = denizens.iter(again.world()).find(|(_, d)| d.person.spot == spot).map(|(e, d)| (e, d.clone())).unwrap();
         assert!(denizen.person.gear.is_empty(), "bare");
         assert!(again.world().get::<Corpse>(body).is_some() && again.world().get::<crate::combat::feedback::Looted>(body).is_some());

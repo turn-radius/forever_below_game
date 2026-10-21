@@ -89,8 +89,9 @@ pub struct Speaker {
     pub depth: u32,
     /// Every faction that holds ground on the level, by name.
     pub level_factions: Vec<String>,
-    /// The traders of the speaker's faction on the level, as (name, profession).
-    pub traders: Vec<(String, Profession)>,
+    /// The traders of the speaker's faction on the level, as (name, profession, where they stand
+    /// from the speaker's post: "in the market, past the hall").
+    pub traders: Vec<(String, Profession, String)>,
 }
 
 /// A master the world places deeper down, for a rumour.
@@ -205,8 +206,27 @@ fn guard_traders(speaker: &Speaker) -> String {
         return say(speaker, "guard_no_traders", 0x09, &[]);
     }
     let mut rng = Mulberry32::new(speaker.seed ^ 0x7A);
-    let (name, profession) = rng.pick(&speaker.traders).clone();
-    say(speaker, "guard_traders", 0x09, &[("trader", name), ("trader_calling", profession.label().to_string())])
+    let (name, profession, place) = rng.pick(&speaker.traders).clone();
+    say(speaker, "guard_traders", 0x09, &[("trader", name), ("trader_calling", profession.label().to_string()), ("trader_place", place)])
+}
+
+/// Where `other` stands, as one at `from` would point to it: "in the market, past the hall". A
+/// guard stands at the hall door, so every room but the hall itself is past it.
+pub fn place_of(level: &fb_level::Level, from: &fb_level::FolkSpot, other: &fb_level::FolkSpot) -> String {
+    use fb_level::RoomRole;
+    let room_of = |s: &fb_level::FolkSpot| level.room_at(s.x as i32, s.y as i32);
+    let Some(there) = room_of(other) else { return "somewhere on our ground".to_string() };
+    let roles = level.roles_of(there);
+    let named = [
+        (RoomRole::Market, "in the market"),
+        (RoomRole::Hearth, "by the hearth"),
+        (RoomRole::Sleeping, "where we sleep"),
+        (RoomRole::Store, "among the stores"),
+        (RoomRole::Hall, "here in the hall"),
+    ];
+    let Some(&(_, text)) = named.iter().find(|(r, _)| roles.contains(r)) else { return "somewhere on our ground".to_string() };
+    let at_hall = room_of(from).is_some_and(|h| level.roles_of(h).contains(&RoomRole::Hall));
+    if at_hall && !roles.contains(&RoomRole::Hall) { format!("{text}, past the hall") } else { text.to_string() }
 }
 
 fn level(speaker: &Speaker) -> String {
@@ -298,7 +318,7 @@ mod tests {
             seed: 4242,
             depth: 3,
             level_factions: vec!["the Ash Choir".into(), "the Scale Court".into(), "the Lantern-keepers".into()],
-            traders: vec![("Borin Ironhand".into(), Profession::Armorer)],
+            traders: vec![("Borin Ironhand".into(), Profession::Armorer, "in the market, past the hall".into())],
         }
     }
 
@@ -310,7 +330,7 @@ mod tests {
     #[test]
     fn the_grammar_is_sound_with_the_symbols_a_speaker_supplies() {
         let mut symbols = base(&speaker(Some(smith()), Band::Neutral));
-        symbols.extend(["trader", "trader_calling", "factions", "count", "ordinal", "master_calling", "master_faction", "master_levels"].map(|k| (k, "x".to_string())));
+        symbols.extend(["trader", "trader_calling", "trader_place", "factions", "count", "ordinal", "master_calling", "master_faction", "master_levels"].map(|k| (k, "x".to_string())));
         let overlay = Grammar { symbols: symbols.into_iter().map(|(k, v)| (k.to_string(), vec![v])).collect() };
         let grammar = grammar().merged(&overlay);
         for symbol in starts::START_SYMBOLS {

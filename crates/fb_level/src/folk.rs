@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::claims::MIN_ROOM_AREA;
 use crate::generate::{is_colonnaded, item_seed, shuffle};
-use crate::{Cell, Level, Room, RoomRole};
-pub use fb_faction::{Faction, FactionSpec, Trade};
+use crate::rooms::RoomGraph;
+use crate::{Cell, Claim, Level, Room, RoomRole};
+pub use fb_faction::{Faction, FactionSpec, Profession, Trade};
 
 /// Someone standing in the level, at a point in grid coordinates (cells, fractional).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -57,26 +58,46 @@ const CLEARANCE: f32 = 0.55;
 /// Least distance from a folk to a room's wall, in cells.
 const WALL_MARGIN: f32 = 0.3;
 
-/// Lays out the level's folk: in each faction's claim ([`crate::Claim`]), a few groups gathered
-/// round a point in a room (a brazier where the room has one) and facing it, as if talking.
-/// `strengths[k]` is how many members claim `k` places. Never in the starting room (no claim
-/// holds it), a corridor, a doorway or beside one. A room too cramped for a whole group takes
-/// what fits, and later passes top up the groups already placed.
-pub(crate) fn place_folk(level: &Level, strengths: &[usize], rng: &mut Mulberry32) -> Vec<FolkSpot> {
+/// Lays out the level's folk by what they do. `plans[k]` is claim `k`'s camp, one entry per
+/// member it places (`strengths[k]`; [`crate::trades::plan`]).
+///
+/// - **Guards** stand at the claim's hall door, on the floor cell just inside its outward
+///   opening and facing out; a second guard at another outward doorway of the claim, or else
+///   beside the first ([`posts`]).
+/// - **Traders** stand in the market, gathered as if talking, and fall back to the claim's
+///   other rooms where the market is too cramped.
+/// - **The rest** gather round the hearth, then the hall and the sleeping room, in groups
+///   facing a point (a brazier where the room has one).
+///
+/// Never in the starting room (no claim holds it), a corridor, or beside a doorway (the guards'
+/// posts apart). A room too cramped for a whole group takes what fits, and later passes top up
+/// the groups already placed. Whoever does not fit is dropped, plain folk first.
+pub(crate) fn place_folk(level: &Level, strengths: &[usize], plans: &[Vec<Option<Trade>>], rng: &mut Mulberry32) -> Vec<FolkSpot> {
     let lit = |i: &usize| level.lights.iter().any(|l| level.room_at(l.x as i32, l.y as i32) == Some(*i));
+    let graph = RoomGraph::new(level);
+    let (sx, sy, _) = level.start();
     let mut folk: Vec<FolkSpot> = Vec::new();
-    for (claim, &strength) in level.claims.iter().zip(strengths) {
+    for ((claim, &strength), plan) in level.claims.iter().zip(strengths).zip(plans) {
         let faction = level.faction(claim.faction);
+        let is_guard = |t: &Option<Trade>| t.is_some_and(|t| t.profession == Profession::Guard);
+        let (guards, rest): (Vec<_>, Vec<_>) = plan.iter().copied().take(strength).partition(is_guard);
+        let (traders, plain): (Vec<_>, Vec<_>) = rest.into_iter().partition(|t| t.is_some());
+
+        // Guards first, at their posts.
+        let mut at_post = 0;
+        for (x, y, yaw) in posts(level, &graph, claim, (sx as i32, sy as i32), guards.len()) {
+            let folk_kind = faction.member_folk(rng);
+            folk.push(FolkSpot { x, y, yaw, folk: folk_kind, seed: item_seed(rng), faction: faction.id, trade: Some(Trade::guard()) });
+            at_post += 1;
+        }
+
         let mut rooms: Vec<usize> = claim.rooms.iter().copied().filter(|&i| level.rooms[i].area() >= MIN_ROOM_AREA).collect();
         shuffle(&mut rooms, rng);
-        // Folk stand where their room's role puts them: a trading faction in its market, the
-        // rest round the hearth, in the hall and about the sleeping room. Lit rooms first
-        // within a role: people gather at the light.
-        let trades = level.trades(claim);
+        // Where the rest stand follows their room's role. Lit rooms first within a role: people
+        // gather at the light.
         let rank = |i: &usize| {
             let roles = level.roles_of(*i);
-            let first = |order: &[RoomRole]| order.iter().position(|r| roles.contains(r)).unwrap_or(order.len());
-            if trades { first(&[RoomRole::Market, RoomRole::Hearth, RoomRole::Hall, RoomRole::Sleeping]) } else { first(&[RoomRole::Hearth, RoomRole::Hall, RoomRole::Sleeping, RoomRole::Market]) }
+            [RoomRole::Hearth, RoomRole::Hall, RoomRole::Sleeping, RoomRole::Market].iter().position(|r| roles.contains(r)).unwrap_or(4)
         };
         if level.style == crate::LevelStyle::StoneHalls {
             // Folk of the halls stand among the columns first.
@@ -84,22 +105,133 @@ pub(crate) fn place_folk(level: &Level, strengths: &[usize], rng: &mut Mulberry3
         } else {
             rooms.sort_by_key(|i| (rank(i), !lit(i)));
         }
-        let groups: Vec<(&Room, Gathering)> = rooms.iter().map(|&i| (&level.rooms[i], Gathering::in_room(level, &level.rooms[i], rng))).collect();
-        let mut placed = 0;
-        for pass in 0..3 {
-            for &(room, gathering) in &groups {
-                let left = strength.saturating_sub(placed);
-                if left == 0 {
-                    break;
-                }
-                let size = if pass == 0 { rng.int(GROUP_SIZE.0, GROUP_SIZE.1) as usize } else { 1 }.min(left);
-                let made = gathering.gather(level, room, faction, size, &folk, rng);
-                placed += made.len();
-                folk.extend(made);
+        let groups: Vec<(usize, Gathering)> = rooms.iter().map(|&i| (i, Gathering::in_room(level, &level.rooms[i], rng))).collect();
+        let markets: Vec<(usize, Gathering)> = groups.iter().copied().filter(|&(i, _)| level.roles_of(i).contains(&RoomRole::Market)).collect();
+
+        // Guards a claim had no post for gather with the rest.
+        let spare_guards = guards.len() - at_post;
+        let start = folk.len();
+        fill(level, faction, spare_guards, &groups, &mut folk, rng);
+        for f in &mut folk[start..] {
+            f.trade = Some(Trade::guard());
+        }
+        // Traders in the market, then wherever there is room.
+        let start = folk.len();
+        let first = fill(level, faction, traders.len(), &markets, &mut folk, rng);
+        fill(level, faction, traders.len() - first, &groups, &mut folk, rng);
+        for (f, t) in folk[start..].iter_mut().zip(&traders) {
+            f.trade = *t;
+        }
+        fill(level, faction, plain.len(), &groups, &mut folk, rng);
+        // A claim too cramped for anyone to gather or stand at a post still holds its first
+        // member, on the first free floor cell (off the doorways if it can be).
+        if strength > 0 && !folk.iter().any(|f| f.faction == faction.id) {
+            let cells: Vec<(i32, i32)> = claim.rooms.iter().flat_map(|&r| (level.rooms[r].y as i32..(level.rooms[r].y + level.rooms[r].h) as i32).flat_map(move |y| (level.rooms[r].x as i32..(level.rooms[r].x + level.rooms[r].w) as i32).map(move |x| (x, y)))).filter(|&(x, y)| level.cell(x, y) == Cell::Floor).collect();
+            let free = |&&(x, y): &&(i32, i32)| folk.iter().all(|f| (f.x - x as f32 - 0.5).hypot(f.y - y as f32 - 0.5) >= FOLK_SPACING);
+            let clear = |&&(x, y): &&(i32, i32)| level.items.iter().all(|i| (i.x - x as f32 - 0.5).hypot(i.y - y as f32 - 0.5) >= CLEARANCE) && level.lights.iter().all(|l| (l.x - x as f32 - 0.5).hypot(l.y - y as f32 - 0.5) >= CLEARANCE);
+            let best = cells.iter().filter(free).find(|c| clear(c) && !by_door(level, c.0, c.1)).or_else(|| cells.iter().filter(free).find(|c| clear(c))).or_else(|| cells.iter().find(free));
+            if let Some(&(x, y)) = best {
+                let (cx, cy) = level.rooms[level.room_at(x, y).unwrap_or(claim.rooms[0])].centre();
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                folk.push(FolkSpot { x: px, y: py, yaw: (px - cx).atan2(py - cy), folk: faction.member_folk(rng), seed: item_seed(rng), faction: faction.id, trade: plan.first().copied().flatten() });
             }
         }
     }
     folk
+}
+
+/// Up to `count` of `faction` in the `groups`' rooms, three passes: the first in groups of two
+/// to four, the others topping up one at a time. Returns how many stand.
+fn fill(level: &Level, faction: &FactionSpec, count: usize, groups: &[(usize, Gathering)], folk: &mut Vec<FolkSpot>, rng: &mut Mulberry32) -> usize {
+    let mut placed = 0;
+    for pass in 0..3 {
+        for &(i, gathering) in groups {
+            let left = count.saturating_sub(placed);
+            if left == 0 {
+                return placed;
+            }
+            let size = if pass == 0 { rng.int(GROUP_SIZE.0, GROUP_SIZE.1) as usize } else { 1 }.min(left);
+            let made = gathering.gather(level, &level.rooms[i], faction, size, folk, rng);
+            placed += made.len();
+            folk.extend(made);
+        }
+    }
+    placed
+}
+
+/// Where `n` guards of `claim` stand, `(x, y, yaw)`. A post is a floor cell of the opening's room
+/// one step along the wall from the cell behind the doorway, never on a door's axis (not the
+/// doorway, not the cell behind it, so the way in stays whole for the delver and for a door's
+/// swing, nor the hinge side, where the leaf rests), clear of items and lights, and the guard faces the doorway. The first guard takes the
+/// hall's main opening (the side away from the door's hinge first); the second takes another outward opening three
+/// cells or more away, else the other side of the main one; later ones step further along the
+/// wall. Fewer guards are posted when no such cell is free.
+pub fn posts(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32), n: usize) -> Vec<(f32, f32, f32)> {
+    use crate::roles::Opening;
+    let openings = crate::roles::openings(level, graph, claim, from);
+    let Some(&main) = openings.first() else { return Vec::new() };
+    let clear = |c: (i32, i32)| {
+        let (px, py) = (c.0 as f32 + 0.5, c.1 as f32 + 0.5);
+        level.items.iter().all(|i| (i.x - px).hypot(i.y - py) >= CLEARANCE) && level.lights.iter().all(|l| (l.x - px).hypot(l.y - py) >= CLEARANCE)
+    };
+    // The cells along the wall from `o`'s, nearest first, that make a post.
+    let beside = |o: &Opening| -> Vec<(i32, i32)> {
+        // The door leaf hinges at the doorway's left edge, looking in from the room, and swings
+        // back to rest against the wall there (#553): the right hand's side first, and the
+        // left's only from two cells along, past where the leaf lies.
+        let right = (-o.out.1, o.out.0);
+        let room = &level.rooms[o.room];
+        let mut cells = Vec::new();
+        for (step, sign) in [(1, 1), (2, 1), (3, 1), (2, -1), (3, -1)] {
+            {
+                let c = (o.cell.0 + right.0 * step * sign, o.cell.1 + right.1 * step * sign);
+                // Nor on any door's axis, nor on the first cell of any door's hinge side.
+                let on_an_axis = openings.iter().any(|d| d.cell == c || (d.cell.0 + d.out.0, d.cell.1 + d.out.1) == c || (d.cell.0 + d.out.1, d.cell.1 - d.out.0) == c);
+                if room.contains(c.0, c.1) && level.cell(c.0, c.1) == Cell::Floor && !on_an_axis && clear(c) {
+                    cells.push(c);
+                }
+            }
+        }
+        cells
+    };
+    let stand = |c: (i32, i32), o: &Opening| {
+        let (px, py) = (c.0 as f32 + 0.5, c.1 as f32 + 0.5);
+        let (dx, dy) = ((o.cell.0 + o.out.0) as f32 + 0.5 - px, (o.cell.1 + o.out.1) as f32 + 0.5 - py);
+        (px, py, (-dx).atan2(-dy))
+    };
+    let mut out: Vec<(f32, f32, f32)> = Vec::new();
+    let mut taken: Vec<(i32, i32)> = Vec::new();
+    let mut main_cells = beside(&main).into_iter();
+    if n > 0 {
+        if let Some(c) = main_cells.next() {
+            out.push(stand(c, &main));
+            taken.push(c);
+        }
+    }
+    if n > 1 {
+        let apart = |o: &Opening| (o.cell.0 - main.cell.0).abs().max((o.cell.1 - main.cell.1).abs()) >= 3;
+        let other = openings.iter().filter(|o| apart(o)).find_map(|o| beside(o).into_iter().find(|c| !taken.contains(c)).map(|c| (c, *o)));
+        match other {
+            Some((c, o)) => {
+                out.push(stand(c, &o));
+                taken.push(c);
+            }
+            None => {
+                if let Some(c) = main_cells.next() {
+                    out.push(stand(c, &main));
+                    taken.push(c);
+                }
+            }
+        }
+    }
+    for c in main_cells {
+        if out.len() >= n {
+            break;
+        }
+        out.push(stand(c, &main));
+    }
+    out.truncate(n);
+    out
 }
 
 /// Where a group stands: round a centre, at about a radius, starting at an angle.
@@ -264,7 +396,8 @@ mod tests {
                 let room = level.room_at(x, y);
                 assert!(room.is_some(), "seed {seed}: {f:?} stands in a corridor");
                 assert_ne!(room, Some(start_room), "seed {seed}: {f:?} stands in the starting room");
-                assert!(!by_door(&level, x, y), "seed {seed}: {f:?} stands by a doorway");
+                // A guard's post is the cell beside the doorway.
+                assert!(f.trade.is_some_and(|t| t.profession == Profession::Guard) || !by_door(&level, x, y), "seed {seed}: {f:?} stands by a doorway");
             }
         }
     }
@@ -329,6 +462,150 @@ mod tests {
         assert_eq!((level.items[0].family, level.items[0].seed), (armory::Family::Torch, 3_185_309_893));
         assert_eq!((level.items[12].family, level.items[12].seed), (armory::Family::Mace, 3_024_996_869));
         assert!((level.items[12].x - 10.6).abs() < 0.05 && (level.items[12].y - 10.5).abs() < 0.05);
+    }
+
+    /// The guards of `claim`, in placement order.
+    fn guards_of<'a>(level: &'a Level, claim: &Claim) -> Vec<&'a FolkSpot> {
+        level.folk.iter().filter(|f| f.faction == claim.faction && f.trade.is_some_and(|t| t.profession == Profession::Guard)).collect()
+    }
+
+    /// How far from a door's axis a guard's centre must stand for the delver to pass: the
+    /// delver's body radius and the widest folk footprint (world units), in cells.
+    const AXIS_CLEARANCE: f32 = (3.5 + 5.0) / 20.0;
+
+    #[test]
+    fn a_guard_stands_beside_the_halls_door_facing_the_doorway() {
+        let (mut claims, mut posted) = (0, 0);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            let graph = RoomGraph::new(&level);
+            let (sx, sy, _) = level.start();
+            for claim in &level.claims {
+                let guards = guards_of(&level, claim);
+                if guards.is_empty() {
+                    continue;
+                }
+                claims += 1;
+                let main = crate::roles::openings(&level, &graph, claim, (sx as i32, sy as i32))[0];
+                assert_eq!(level.room_with_role(claim, RoomRole::Hall), Some(main.room));
+                let door = ((main.cell.0 + main.out.0) as f32 + 0.5, (main.cell.1 + main.out.1) as f32 + 0.5);
+                let side = (main.out.1.abs(), main.out.0.abs());
+                // A guard one to three cells along the wall from the cell behind the door.
+                let beside = guards.iter().find(|g| {
+                    let (cx, cy) = (g.x.floor() as i32 - main.cell.0, g.y.floor() as i32 - main.cell.1);
+                    (1..=3).any(|k| [k, -k].iter().any(|&j| (cx, cy) == (side.0 * j, side.1 * j)))
+                });
+                let Some(g) = beside else { continue };
+                let (dx, dy) = g.facing();
+                let (tx, ty) = (door.0 - g.x, door.1 - g.y);
+                let len = tx.hypot(ty);
+                assert!((dx * tx + dy * ty) / len > 0.999, "seed {seed} depth {depth}: guard does not face the doorway");
+                posted += 1;
+            }
+        }
+        assert!(claims > 100, "{claims} guarded claims");
+        // Measured: 323 of 336 guarded claims have a guard at the main door; in the other 13
+        // no cell beside it is clear of loot and torches, off the doors' axes and off the hinge
+        // sides (one such cell may be a cramped claim's only floor).
+        assert!(posted + 13 >= claims, "{posted} of {claims}");
+    }
+
+    #[test]
+    fn no_guard_stands_on_a_doors_axis_and_the_way_in_stays_wide() {
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            let graph = RoomGraph::new(&level);
+            let (sx, sy, _) = level.start();
+            for claim in &level.claims {
+                let openings = crate::roles::openings(&level, &graph, claim, (sx as i32, sy as i32));
+                let mine = guards_of(&level, claim);
+                // The first guards stand at posts; any more gather with the rest.
+                let posted = posts(&level, &graph, claim, (sx as i32, sy as i32), mine.len()).len();
+                for g in mine.into_iter().take(posted) {
+                    let cell = (g.x.floor() as i32, g.y.floor() as i32);
+                    for o in &openings {
+                        let door = (o.cell.0 + o.out.0, o.cell.1 + o.out.1);
+                        assert!(cell != o.cell && cell != door, "seed {seed} depth {depth}: guard on a door's axis at {cell:?}");
+                        // On the doorway cell and the cell behind it, the guard keeps clear of the line.
+                        let (cx, cy) = (o.cell.0 as f32 + 0.5, o.cell.1 as f32 + 0.5);
+                        let (rx, ry) = (g.x - cx, g.y - cy);
+                        let along = -(rx * o.out.0 as f32 + ry * o.out.1 as f32);
+                        let across = rx * o.out.1 as f32 - ry * o.out.0 as f32;
+                        if (-1.5..=0.5).contains(&along) {
+                            assert!(across.abs() >= AXIS_CLEARANCE, "seed {seed} depth {depth}: guard {across} from a door's axis");
+                            // `across` is positive on the hinge side (the left, looking in): the
+                            // leaf rests against that wall, so the first cell there is left clear.
+                            assert!(!(0.0..1.5).contains(&across), "seed {seed} depth {depth}: guard {across} from a door's axis, on its hinge side");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn guards_stand_clear_of_loot_and_torches_and_the_claims_post_nearly_every_guard() {
+        let (mut guards, mut short_claims, mut claims, mut missing) = (0, 0, 0, 0);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            let graph = RoomGraph::new(&level);
+            let (sx, sy, _) = level.start();
+            for claim in &level.claims {
+                let mine = guards_of(&level, claim);
+                if mine.is_empty() {
+                    continue;
+                }
+                claims += 1;
+                let posts = posts(&level, &graph, claim, (sx as i32, sy as i32), mine.len());
+                let short = mine.len() - posts.len();
+                short_claims += (short > 0) as u32;
+                missing += short as u32;
+                guards += mine.len() as u32;
+            }
+        }
+        // Measured: 13 of 351 guards, in 13 of 336 claims, have no post and gather with the folk.
+        assert!(short_claims <= 13 && missing <= 13 && guards > 300, "{missing} of {guards} guards without a post in {short_claims} of {claims} claims");
+        assert!(missing * 100 <= guards * 4, "{missing} of {guards} guards have no post");
+    }
+
+    #[test]
+    fn a_second_guard_has_another_doorway_or_stands_beside_the_first() {
+        let mut pairs = 0;
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for claim in &level.claims {
+                let guards = guards_of(&level, claim);
+                if let [a, b, ..] = guards[..] {
+                    pairs += 1;
+                    assert!((a.x - b.x).hypot(a.y - b.y) >= FOLK_SPACING, "seed {seed} depth {depth}: guards on one spot");
+                }
+            }
+        }
+        assert!(pairs > 0, "no claim posted two guards");
+    }
+
+    #[test]
+    fn every_trader_stands_in_their_market_where_there_is_room() {
+        let (mut traders, mut in_market, mut markets, mut staffed) = (0, 0, 0, 0);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for claim in &level.claims {
+                let market = level.room_with_role(claim, RoomRole::Market);
+                if market.is_some() {
+                    markets += 1;
+                    staffed += level.folk.iter().any(|f| f.faction == claim.faction && f.trade.is_some_and(|t| t.profession != Profession::Guard) && level.room_at(f.x as i32, f.y as i32) == market) as u32;
+                }
+                for f in level.folk.iter().filter(|f| f.faction == claim.faction && f.trade.is_some_and(|t| t.profession != Profession::Guard)) {
+                    traders += 1;
+                    in_market += (market.is_some() && level.room_at(f.x as i32, f.y as i32) == market) as u32;
+                }
+            }
+        }
+        // Measured over the sweep: 256 of 259 traders stand in a market and 205 of 206 markets
+        // have one (the other's room is too cramped for its two traders, who stand in the
+        // claim's other rooms; `talk::lines::place_of` reads where they actually are).
+        assert!(markets > 100 && staffed + 1 >= markets, "{staffed} of {markets} markets have a trader");
+        assert!(traders > 50 && in_market + 3 >= traders, "{in_market} of {traders} traders stand in a market");
     }
 
     #[test]

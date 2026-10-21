@@ -713,9 +713,9 @@ mod tests {
         assert_eq!((level.items.len(), level.folk.len()), (13, 6));
         assert_eq!((level.items[0].family, level.items[0].seed), (armory::Family::Torch, 3_185_309_893));
         assert_eq!((level.items[12].family, level.items[12].seed), (armory::Family::Mace, 3_024_996_869));
-        // Folk stand by their rooms' roles since #546.
-        assert_eq!(level.folk[5].seed, 880_251_833);
-        assert!((level.folk[5].x - 12.3).abs() < 0.05 && (level.folk[5].y - 25.3).abs() < 0.05);
+        // Folk stand by their rooms' roles since #546, guards at their doors and traders in the market since #550.
+        assert_eq!(level.folk[5].seed, 3_691_438_422);
+        assert!((level.folk[5].x - 13.7).abs() < 0.05 && (level.folk[5].y - 26.9).abs() < 0.05);
         // And everything but the props is the level as laid out before they are placed.
         let (before, _) = crate::generate::generate_without_props(1207, 1, &crate::LevelParams::default());
         assert!(before.props.is_empty() && !level.props.is_empty());
@@ -750,15 +750,16 @@ mod tests {
 
     #[test]
     fn markets_set_out_stalls_hearths_a_pot_and_stores_stock() {
-        let (mut markets, mut pots, mut stores, mut hearths) = (0, 0, 0, 0);
+        let (mut markets, mut bare_markets, mut pots, mut stores, mut hearths) = (0, 0, 0, 0, 0);
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
             for claim in &level.claims {
                 let containers = |room: usize| level.props.iter().filter(|p| p.prop.is_container() && level.room_at(p.x as i32, p.y as i32) == Some(room)).collect::<Vec<_>>();
                 if let Some(room) = level.room_with_role(claim, crate::RoomRole::Market) {
                     markets += 1;
-                    // Set dressing: traders sell from their own shelves.
-                    assert!(!containers(room).is_empty(), "seed {seed} depth {depth}: a market with no stalls");
+                    // Set dressing: traders sell from their own shelves. A market doubled up in
+                    // a small hall may have no wall left to set a stall against.
+                    bare_markets += containers(room).is_empty() as u32;
                     assert!(containers(room).iter().all(|p| !p.prop.holds_loot()), "seed {seed} depth {depth}: a stocked stall");
                 }
                 if let Some(room) = level.room_with_role(claim, crate::RoomRole::Store) {
@@ -773,6 +774,8 @@ mod tests {
         }
         // Claims are seldom big enough for a spare room, so stores are rare.
         assert!(markets > 8, "{markets} markets, {stores} stores");
+        // Measured: every one of the sweep's markets has stalls.
+        assert_eq!(bare_markets, 0, "{bare_markets} of {markets} markets have no stalls");
         assert!(pots * 10 >= hearths * 7, "{pots} of {hearths} hearths have a pot");
     }
 

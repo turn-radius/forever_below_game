@@ -1,8 +1,8 @@
 //! Who has a trade: the guards and traders of each faction's camp, and the masters the world
 //! places on this level.
 //!
-//! A pure function of the world seed and the level, run after the folk are placed from a stream
-//! of its own, so it never moves anyone. Each faction camp (all the faction's folk on the level)
+//! A pure function of the world seed and the level, drawn before the folk are placed from a
+//! stream of its own, so it never moves a wall, an item or a light. Each faction camp (all the faction's folk on the level)
 //! gets a guard or two and a trade or two, about half the folk in all; trade-intention factions
 //! get more traders. Tiers open by depth ([`TradeRules`]) and nobody rolls master: masters come
 //! from the world's table ([`fb_faction::World::masters`]) and replace a trader of their
@@ -11,7 +11,6 @@
 use fb_faction::{FactionSpec, Intention, Masters, Profession, Style, Tier, Trade, TradeRules, World, armour_style};
 use procgen_rng::Mulberry32;
 
-use crate::generate::shuffle;
 use crate::{FolkSpot, Level};
 
 const TRADE_SALT: u32 = 0x7BAD_E5A1;
@@ -35,21 +34,19 @@ pub fn master_faction(world_seed: u32, depth: u32, profession: Profession) -> Op
     level.folk.iter().find(|f| f.trade == Some(master.trade())).map(|f| f.faction)
 }
 
-/// Gives the level's folk their trades.
-pub(crate) fn assign(level: &mut Level, world_seed: u32, layout_seed: u32) {
+/// The trades of each claim's camp, in claim order: `plans[k]` holds one entry per member claim
+/// `k` places (`strengths[k]`), guards first, then traders, then nobody. Drawn before the folk
+/// are placed, so a faction's market and its guards' posts follow from them ([`crate::roles`],
+/// [`crate::folk`]).
+pub(crate) fn plan(level: &Level, strengths: &[usize], layout_seed: u32) -> Vec<Vec<Option<Trade>>> {
     let rules = TradeRules::DEFAULT;
     let mut rng = Mulberry32::new(layout_seed ^ TRADE_SALT);
-    let depth = level.depth;
-    let factions = level.factions.clone();
-    for faction in &factions {
-        let mut camp: Vec<usize> = (0..level.folk.len()).filter(|&i| level.folk[i].faction == faction.id).collect();
-        shuffle(&mut camp, &mut rng);
-        let trades = camp_trades(faction, camp.len(), depth, &rules, &mut rng);
-        for (&i, trade) in camp.iter().zip(trades) {
-            level.folk[i].trade = trade;
-        }
-    }
-    place_masters(level, &masters_of(world_seed, &rules));
+    level.claims.iter().zip(strengths).map(|(claim, &size)| camp_trades(level.faction(claim.faction), size, level.depth, &rules, &mut rng)).collect()
+}
+
+/// Puts each master the world places on this level among the folk, once they stand.
+pub(crate) fn assign(level: &mut Level, world_seed: u32) {
+    place_masters(level, &masters_of(world_seed, &TradeRules::DEFAULT));
 }
 
 /// The trades of a camp of `size` folk, in order: guards first, then traders, then nobody.

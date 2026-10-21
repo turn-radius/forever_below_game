@@ -60,9 +60,9 @@ impl Level {
         claim.rooms.iter().copied().find(|&r| self.roles_of(r).contains(&role))
     }
 
-    /// Whether the faction `claim` belongs to trades, so keeps a market.
+    /// Whether the faction `claim` belongs to has traders, so keeps a market.
     pub fn trades(&self, claim: &Claim) -> bool {
-        self.factions.iter().find(|f| f.id == claim.faction).is_some_and(|f| f.intention == fb_faction::Intention::Trade)
+        self.room_with_role(claim, RoomRole::Market).is_some()
     }
 }
 
@@ -114,12 +114,13 @@ impl Level {
 }
 
 /// The roles of every room of the level, indexed by room: empty where no one holds it.
-pub(crate) fn assign_roles(level: &Level) -> Vec<Vec<RoomRole>> {
+/// `plans` are the claims' trades ([`crate::trades::plan`]): a claim with a trader in them gets a market.
+pub(crate) fn assign_roles(level: &Level, plans: &[Vec<Option<fb_faction::Trade>>]) -> Vec<Vec<RoomRole>> {
     let graph = RoomGraph::new(level);
     let (sx, sy, _) = level.start();
     let mut roles = vec![Vec::new(); level.rooms.len()];
-    for claim in &level.claims {
-        let hall = main_entrance_room(level, &graph, claim, (sx as i32, sy as i32));
+    for (claim, plan) in level.claims.iter().zip(plans) {
+        let hall = openings(level, &graph, claim, (sx as i32, sy as i32)).first().map_or(claim.rooms[0], |o| o.room);
         let centre = |r: usize| level.rooms[r].centre();
         let (hx, hy) = centre(hall);
         let mut others: Vec<usize> = claim.rooms.iter().copied().filter(|&r| r != hall).collect();
@@ -127,7 +128,7 @@ pub(crate) fn assign_roles(level: &Level) -> Vec<Vec<RoomRole>> {
             let d = |r: usize| (centre(r).0 - hx).hypot(centre(r).1 - hy);
             d(a).total_cmp(&d(b)).then(a.cmp(&b))
         });
-        let market = level.trades(claim);
+        let market = plan.iter().flatten().any(|t| t.profession != fb_faction::Profession::Guard);
         roles[hall].push(RoomRole::Hall);
         match others.len() {
             0 => {
@@ -165,10 +166,42 @@ pub(crate) fn assign_roles(level: &Level) -> Vec<Vec<RoomRole>> {
     roles
 }
 
-/// The room of `claim` with the opening nearest `from` (the delver's start) that leads out
-/// of the claim, into a room no one holds or a corridor that reaches one: the claim's main door.
-fn main_entrance_room(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32)) -> usize {
-    main_door(level, graph, claim, from).map_or(claim.rooms[0], |d| d.room)
+/// A way out of a claim: the claim's floor cell `cell` in room `room`, with an open cell beside
+/// it, in direction `out`, that leads into ground the claim does not hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Opening {
+    pub room: usize,
+    pub cell: (i32, i32),
+    pub out: (i32, i32),
+    /// Manhattan distance from the delver's start to `cell`.
+    pub from_start: i32,
+}
+
+/// Every opening of `claim`, nearest `from` (the delver's start) first: the first is the claim's
+/// main door, and its room is the hall.
+pub(crate) fn openings(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32)) -> Vec<Opening> {
+    let mut found = Vec::new();
+    for &r in &claim.rooms {
+        let room = &level.rooms[r];
+        for y in room.y as i32..(room.y + room.h) as i32 {
+            for x in room.x as i32..(room.x + room.w) as i32 {
+                if level.cell(x, y) != Cell::Floor {
+                    continue;
+                }
+                for out in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let (nx, ny) = (x + out.0, y + out.1);
+                    if room.contains(nx, ny) || !level.is_open(nx, ny) {
+                        continue;
+                    }
+                    if graph.rooms_of(nx, ny).iter().any(|o| !claim.rooms.contains(o)) {
+                        found.push(Opening { room: r, cell: (x, y), out, from_start: (x - from.0).abs() + (y - from.1).abs() });
+                    }
+                }
+            }
+        }
+    }
+    found.sort_by_key(|o| (o.from_start, o.room, o.cell, o.out));
+    found
 }
 
 /// The claim's main door: the room it opens from, the room's cell inside it and the open cell
@@ -180,32 +213,10 @@ pub(crate) struct MainDoor {
     pub outside: (i32, i32),
 }
 
-/// The opening of `claim` nearest `from` that leads out of it, if it has one.
+/// The opening of `claim` nearest `from` that leads out of it, if it has one: the first of
+/// [`openings`].
 pub(crate) fn main_door(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32)) -> Option<MainDoor> {
-    let mut best: Option<((i32, usize), MainDoor)> = None;
-    for &r in &claim.rooms {
-        let room = &level.rooms[r];
-        for y in room.y as i32..(room.y + room.h) as i32 {
-            for x in room.x as i32..(room.x + room.w) as i32 {
-                if !level.is_open(x, y) {
-                    continue;
-                }
-                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                    let (nx, ny) = (x + dx, y + dy);
-                    if room.contains(nx, ny) || !level.is_open(nx, ny) {
-                        continue;
-                    }
-                    if graph.rooms_of(nx, ny).iter().any(|o| !claim.rooms.contains(o)) {
-                        let key = ((x - from.0).abs() + (y - from.1).abs(), r);
-                        if best.is_none_or(|(b, _)| key < b) {
-                            best = Some((key, MainDoor { room: r, inside: (x, y), outside: (nx, ny) }));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    best.map(|(_, d)| d)
+    openings(level, graph, claim, from).first().map(|o| MainDoor { room: o.room, inside: o.cell, outside: (o.cell.0 + o.out.0, o.cell.1 + o.out.1) })
 }
 
 /// Lights a brazier in each hall and hearth the level's furnishing left without one, at the

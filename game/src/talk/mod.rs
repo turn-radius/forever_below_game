@@ -156,9 +156,9 @@ fn talk_for_capture(
 /// Everything one folk's talk needs of the level: who the speaker is, what the level holds.
 fn speaker_of<'a>(denizen: &Denizen, band: Band, level: &Level, others: impl Iterator<Item = &'a Denizen>) -> Speaker {
     let person = &denizen.person;
-    let mut traders: Vec<(u32, String, Profession)> = others
+    let mut traders: Vec<(u32, String, Profession, String)> = others
         .filter(|d| d.person.spot.faction == person.spot.faction && d.person.spot.seed != person.spot.seed)
-        .filter_map(|d| d.person.spot.trade.filter(|t| t.profession != Profession::Guard).map(|t| (d.person.spot.seed, d.person.name.clone(), t.profession)))
+        .filter_map(|d| d.person.spot.trade.filter(|t| t.profession != Profession::Guard).map(|t| (d.person.spot.seed, d.person.name.clone(), t.profession, lines::place_of(level, &person.spot, &d.person.spot))))
         .collect();
     traders.sort_by_key(|(seed, ..)| *seed);
     Speaker {
@@ -171,7 +171,7 @@ fn speaker_of<'a>(denizen: &Denizen, band: Band, level: &Level, others: impl Ite
         seed: person.spot.seed,
         depth: level.depth,
         level_factions: level.factions.iter().map(|f| f.name.clone()).collect(),
-        traders: traders.into_iter().map(|(_, name, profession)| (name, profession)).collect(),
+        traders: traders.into_iter().map(|(_, name, profession, place)| (name, profession, place)).collect(),
     }
 }
 
