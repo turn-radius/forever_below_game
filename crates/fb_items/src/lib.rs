@@ -26,6 +26,7 @@ pub mod range;
 pub mod rarity;
 pub mod scrap;
 pub mod stats;
+pub mod stock;
 pub mod tables;
 pub mod troll;
 pub mod undead;

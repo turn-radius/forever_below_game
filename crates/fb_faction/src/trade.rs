@@ -159,6 +159,41 @@ impl Trade {
     }
 }
 
+impl Trade {
+    /// This trade as a shelf sees it ([`fb_items::stock::Shop`]), for a trader named `maker` of
+    /// the faction `house`. `None` for those who sell nothing: guards and enchanters.
+    pub fn shop(&self, maker: &str, house: &str) -> Option<fb_items::stock::Shop> {
+        use fb_items::stock::{Grade, Lean, Line};
+        let line = match self.profession {
+            Profession::Armorer => Line::Armour,
+            Profession::Weaponsmith => Line::Weapons,
+            Profession::Bowyer => Line::Bows,
+            Profession::Tentmaker => Line::Camp,
+            Profession::GeneralGoods => Line::General,
+            Profession::Alchemist => Line::Potions,
+            Profession::Enchanter | Profession::Guard => return None,
+        };
+        let grade = match self.tier {
+            Tier::Novice => Grade::Novice,
+            Tier::Apprentice => Grade::Apprentice,
+            Tier::Expert => Grade::Expert,
+            Tier::Master => Grade::Master,
+        };
+        let lean = self.style.map(|s| match s {
+            Style::Padded => Lean::Padded,
+            Style::Leather => Lean::Leather,
+            Style::Mail => Lean::Mail,
+            Style::Scale => Lean::Scale,
+            Style::Plate => Lean::Plate,
+            Style::Blades => Lean::Blades,
+            Style::AxesAndClubs => Lean::AxesAndClubs,
+            Style::Maces => Lean::Maces,
+            Style::SpearsAndStaves => Lean::SpearsAndStaves,
+        });
+        Some(fb_items::stock::Shop { line, grade, lean, maker: maker.to_string(), house: house.to_string() })
+    }
+}
+
 /// The numbers trades run on, here so a lab can tune them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TradeRules {

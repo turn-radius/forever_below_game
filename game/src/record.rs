@@ -72,6 +72,18 @@ pub struct LevelRecord {
     /// before claims, which leaves the level's own.
     #[serde(default)]
     pub claims: Option<Vec<Claim>>,
+    /// What each tradesperson had on the shelf when the level was left, by their index in the
+    /// level's folk. Back on a revisit the same game day; a new day restocks it (#548).
+    #[serde(default)]
+    pub shelves: BTreeMap<usize, ShelfRecord>,
+}
+
+/// A tradesperson's shelf as it was left.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShelfRecord {
+    /// The game day it was stocked on.
+    pub day: u32,
+    pub wares: Vec<ItemRecord>,
 }
 
 /// A folk as they were left.
@@ -190,7 +202,12 @@ impl WorldRecord {
 /// `id` as it is now, with everything in it, if the inventory knows it.
 pub fn record_item(inventory: &Inventory, id: ItemId) -> Option<ItemRecord> {
     let item = inventory.item(id)?;
-    Some(ItemRecord {
+    Some(ItemRecord { contents: record_contents(inventory, id), ..item_record(item) })
+}
+
+/// `item` as it is now, without any contents.
+pub fn item_record(item: &fb_items::Item) -> ItemRecord {
+    ItemRecord {
         base: item.base.clone(),
         seed: item.seed,
         shape: item.shape.clone(),
@@ -200,9 +217,9 @@ pub fn record_item(inventory: &Inventory, id: ItemId) -> Option<ItemRecord> {
         legend: item.legend.clone(),
         history: item.history.clone(),
         coins: item.coins.map(|c| [c.gp, c.sp, c.cp]),
-        contents: record_contents(inventory, id),
+        contents: vec![],
         odds: item.odds,
-    })
+    }
 }
 
 /// What is in `container`'s grid.
@@ -277,7 +294,7 @@ pub fn record_level_left(
     floor: Query<&FloorItem>,
     containers: Query<(&PropPiece, &Container)>,
     creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>)>,
-    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>)>,
+    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>)>,
 ) {
     let mut left = LevelRecord::default();
     let mut lying: Vec<&FloorItem> = floor.iter().collect();
@@ -302,8 +319,11 @@ pub fn record_level_left(
             },
         );
     }
-    for (denizen, transform, health, hostility, corpse) in &folk {
+    for (denizen, transform, health, hostility, corpse, shelf) in &folk {
         let Some(index) = level.0.folk.iter().position(|s| *s == denizen.person.spot) else { continue };
+        if let Some(shelf) = shelf.filter(|_| corpse.is_none()) {
+            left.shelves.insert(index, ShelfRecord { day: shelf.day, wares: shelf.wares.iter().map(item_record).collect() });
+        }
         let Some(health) = health else { continue };
         let stood = corpse.map_or(*transform, |c| c.fell);
         left.folk.insert(
@@ -386,6 +406,27 @@ mod tests {
         assert!(restore_item(&mut inventory, &record).is_some());
         record.base = "Nothing".into();
         assert!(rebuild_item(&record).is_none());
+    }
+
+    #[test]
+    fn a_shelf_round_trips_through_the_level_record() {
+        let odds = fb_items::Odds::loot(8);
+        let mut wares = vec![fb_items::roll_item_with("Mail", 4, odds).unwrap(), fb_items::roll_item_with("Sword", 5, odds).unwrap()];
+        wares[0].history.push("Made by Bera, master mailwright of the Ash Choir.".into());
+        let mut world = WorldRecord::default();
+        let mut level = LevelRecord::default();
+        level.shelves.insert(3, ShelfRecord { day: 2, wares: wares.iter().map(item_record).collect() });
+        world.levels.insert(8, level);
+        let json = serde_json::to_string(&world).unwrap();
+        let again: WorldRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(again, world);
+        let shelf = &again.level(8).unwrap().shelves[&3];
+        assert_eq!(shelf.day, 2);
+        let rebuilt: Vec<_> = shelf.wares.iter().map(|r| rebuild_item(r).unwrap()).collect();
+        assert_eq!(rebuilt, wares);
+        // A record from before shelves has none.
+        let old: LevelRecord = serde_json::from_str(r#"{"floor":[],"containers":{},"creatures":{}}"#).unwrap();
+        assert!(old.shelves.is_empty());
     }
 
     #[test]

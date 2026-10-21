@@ -54,6 +54,7 @@ pub mod player;
 pub mod props;
 pub mod quickslots;
 pub mod record;
+pub mod shelf;
 pub mod render;
 pub mod settings;
 pub mod sight;

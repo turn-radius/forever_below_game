@@ -1265,14 +1265,21 @@ fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResM
 }
 
 /// For captures: holds the card over the `FB_DEBUG_HOVER`th thing in the first carried grid,
-/// as if the mouse were on it.
+/// as if the mouse were on it; `u<n>` takes the `n`th thing underfoot instead.
 fn debug_hover(
     inventory: Res<Inventory>,
+    underfoot: Res<Underfoot>,
     views: Query<(&ItemView, &ComputedNode, &UiGlobalTransform)>,
     mut hovered: ResMut<Hovered>,
 ) {
-    let index: usize = std::env::var("FB_DEBUG_HOVER").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-    let Some(id) = inventory.carried_containers().first().and_then(|&c| inventory.grid(c)).and_then(|g| g.entries().get(index)).map(|e| e.id) else {
+    let spec = std::env::var("FB_DEBUG_HOVER").unwrap_or_default();
+    let floor = spec.strip_prefix('u');
+    let index: usize = floor.unwrap_or(&spec).parse().unwrap_or(0);
+    let id = match floor {
+        Some(_) => underfoot.grid.entries().get(index).map(|e| e.id),
+        None => inventory.carried_containers().first().and_then(|&c| inventory.grid(c)).and_then(|g| g.entries().get(index)).map(|e| e.id),
+    };
+    let Some(id) = id else {
         return;
     };
     if let Some((_, node, transform)) = views.iter().find(|(v, ..)| v.id == id) {
