@@ -46,6 +46,7 @@ use crate::creatures::behaviour::AttackOnDelver;
 use crate::inventory::Inventory;
 use crate::tuning::Tuning;
 
+pub mod blood;
 pub mod callouts;
 pub mod feedback;
 pub mod eye;
@@ -61,7 +62,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin, shoot::ShootPlugin, guard::GuardPlugin, revival::RevivalPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin, shoot::ShootPlugin, guard::GuardPlugin, revival::RevivalPlugin, blood::BloodPlugin));
     }
 }
 
