@@ -61,8 +61,10 @@ fn begin_delve(app: &mut App) {
     assert_eq!(state(app), AppState::Delving);
 }
 
-/// Drops the delver to 0 hit points and waits out the fall, back to the title.
+/// Drops the delver to 0 hit points with every revive spent and waits out the fall, back to the
+/// title.
 fn fall(app: &mut App) {
+    app.insert_resource(forever_below::combat::revival::Revives(u32::MAX));
     let world = app.world_mut();
     let player = world.query_filtered::<Entity, With<Player>>().single(world).expect("one delver");
     world.get_mut::<Health>(player).expect("the delver has hit points").hp = 0;

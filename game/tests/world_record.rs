@@ -331,7 +331,9 @@ fn the_world_record_round_trips_through_serde_and_death_resets_it() {
     let json = serde_json::to_string(&record).unwrap();
     assert_eq!(serde_json::from_str::<WorldRecord>(&json).unwrap(), record);
 
-    // Fall: the next delve starts with a clean record, and level 1 as generated.
+    // Fall, with every revive spent: the next delve starts with a clean record, and level 1 as
+    // generated.
+    app.insert_resource(forever_below::combat::revival::Revives(u32::MAX));
     let body = player(&mut app);
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
     run(&mut app, (FALL_TIME * 60.0) as usize + 60);

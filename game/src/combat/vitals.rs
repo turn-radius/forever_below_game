@@ -22,6 +22,8 @@
 //!   fall in the abyss", and after [`FALL_TIME`] seconds the game goes back to the title, where
 //!   New delve begins again. Leaving the delve clears everything it spawned (each is scoped
 //!   to it, [`crate::play::DelveSystems`]) and what it kept ([`end_the_delve`]). The SRD's death saving throws (p. 97) are left out.
+//! - Brought down by a blow with a revive left in this world, the delver falls unconscious
+//!   instead and chooses to come to or let go ([`super::revival`]).
 
 use bevy::{
     prelude::*,
@@ -38,6 +40,7 @@ use crate::creatures::behaviour::{AttackOnDelver, MissedDelver, reach};
 use crate::exhaustion::Exhaustion;
 use crate::inventory::Inventory;
 use crate::launch::AppState;
+use crate::rules::GameRules;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, LevelRooms, Obstacles, Player, ScreenOpen};
 use crate::player::Slowed;
 use crate::ui::{BAD, BG, BRIGHT, UiFonts};
@@ -386,6 +389,9 @@ fn break_free(
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct FallOverlay;
 
+/// What [`fall`] reads to decide between falling unconscious and falling in the abyss.
+type Revival<'w> = (Option<Res<'w, super::revival::Revives>>, Option<Res<'w, super::revival::Unconscious>>, Option<Res<'w, GameRules>>);
+
 /// At exhaustion level 6, or [`LAST_GASP`] seconds at 0 hit points, the delver stops and the
 /// view fades out to "You fall in the abyss"; then back to the title. A delver healed above 0
 /// within the gasp stands on.
@@ -402,7 +408,13 @@ fn fall(
     mut words: Query<&mut TextColor>,
     mut screen: Option<ResMut<ScreenOpen>>,
     next: Option<ResMut<NextState<AppState>>>,
+    revival: Revival,
 ) {
+    let (revives, unconscious, rules) = revival;
+    // Lying unconscious, the delver waits on the choice ([`super::revival`]).
+    if unconscious.is_some() {
+        return;
+    }
     let Some(mut fallen) = fallen else {
         let down = players.iter().find(|(_, health, _)| health.is_down()).map(|(player, ..)| player);
         let spent = players.iter().find(|(.., exhaustion)| exhaustion.0.is_dead()).map(|(player, ..)| player);
@@ -424,24 +436,21 @@ fn fall(
         };
         let Some(player) = spent.or(gasped) else { return };
         commands.remove_resource::<Dying>();
-        commands.insert_resource(Fallen(FALL_TIME));
         commands.entity(player).insert(Slowed(0.0)).remove::<(Constricted, super::swing::Swing, super::guard::Guard)>();
         if let Some(screen) = screen.as_deref_mut() {
             screen.0 = None;
         }
-        info!("the delver falls in the abyss");
-        let mut root = commands.spawn((
-            Name::new("You fall"),
-            FallOverlay,
-            Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
-            BackgroundColor(BG.with_alpha(0.0)),
-            GlobalZIndex(10),
-        ));
-        if let Some(camera) = view_models.iter().next() {
-            root.insert(UiTargetCamera(camera));
+        // Brought down by a blow, a delver with a revive left in this world falls unconscious
+        // instead; spent by exhaustion, they do not.
+        let revival = &GameRules::of(&rules).revival;
+        if let Some(revives) = revives.filter(|_| spent.is_none())
+            && revival.left(revives.0) > 0
+        {
+            info!("the delver falls unconscious");
+            super::revival::fall_unconscious(&mut commands, fonts.as_deref(), view_models.iter().next(), revival.left(revives.0));
+            return;
         }
-        let font = fonts.as_deref().map(|f| f.display.clone()).unwrap_or_default();
-        root.with_child((Text::new("You fall in the abyss"), TextFont::from_font_size(52.0).with_font(font), TextColor(BRIGHT.with_alpha(0.0))));
+        begin_the_fall(&mut commands, fonts.as_deref(), view_models.iter().next());
         return;
     };
     fallen.0 -= time.delta_secs();
@@ -460,6 +469,25 @@ fn fall(
     {
         next.set(AppState::Title);
     }
+}
+
+/// Ends the run: "You fall in the abyss" fades in over the view, and after [`FALL_TIME`]
+/// seconds the title returns ([`fall`]).
+pub fn begin_the_fall(commands: &mut Commands, fonts: Option<&UiFonts>, camera: Option<Entity>) {
+    info!("the delver falls in the abyss");
+    commands.insert_resource(Fallen(FALL_TIME));
+    let mut root = commands.spawn((
+        Name::new("You fall"),
+        FallOverlay,
+        Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
+        BackgroundColor(BG.with_alpha(0.0)),
+        GlobalZIndex(10),
+    ));
+    if let Some(camera) = camera {
+        root.insert(UiTargetCamera(camera));
+    }
+    let font = fonts.map(|f| f.display.clone()).unwrap_or_default();
+    root.with_child((Text::new("You fall in the abyss"), TextFont::from_font_size(52.0).with_font(font), TextColor(BRIGHT.with_alpha(0.0))));
 }
 
 /// The HUD root the vitals draw into, which the orbs ([`super::orbs`]), the eye and the
@@ -544,6 +572,7 @@ pub fn end_the_delve(mut commands: Commands, mut cursor: Option<Single<&mut Curs
     commands.insert_resource(Pain::default());
     commands.remove_resource::<Fallen>();
     commands.remove_resource::<Dying>();
+    commands.remove_resource::<super::revival::Unconscious>();
     if let Some(cursor) = cursor.as_deref_mut() {
         crate::player::set_grab(cursor, false);
     }

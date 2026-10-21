@@ -142,6 +142,16 @@ impl Inventory {
         self.items.get(&id)
     }
 
+    /// Takes up to `owed` copper's worth out of purse `id`, giving change, and returns what is
+    /// still owed. Its card says what is left.
+    pub fn spend(&mut self, id: ItemId, owed: u32) -> u32 {
+        let Some(item) = self.items.get_mut(&id) else { return owed };
+        let Some(coins) = item.coins.as_mut() else { return owed };
+        let still = fb_character::revival::pay_from(coins, owed);
+        item.profile.description = coins.to_string();
+        still
+    }
+
     /// Lights `id` if it is out or puts it out if it is lit, wherever it is: in a hand, at the
     /// hip, in a bag or on the floor ([`armory::Item::toggle_lit`]). Returns whether it is lit
     /// now; a spent torch, or anything that is not a light, is left as it was.

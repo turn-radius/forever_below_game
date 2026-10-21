@@ -147,6 +147,18 @@ brazier_reach = 30.0
 # Warmth a lit torch or lantern in hand gives.
 held_flame = 1.0
 
+[revival]
+# Times a delver brought to 0 hit points may come to in one world; the next fall ends the run.
+revives = 2
+# Share of the maximum hit points a friendly faction's healers bring the delver back to.
+hall_hit_points = 1.0
+# Share of the coin the delver carries that the faction takes for its trouble.
+hall_fee = 0.5
+# Share of the maximum hit points a delver who comes to alone, where they fell, has.
+alone_hit_points = 0.25
+# Game hours a delver lies unconscious alone before coming to; hunger and thirst go on.
+hours_alone = 4.0
+
 [visibility]
 # How visible a delver is in the dark, from 0 to 1: the eye is nearly closed.
 in_dark = 0.05
