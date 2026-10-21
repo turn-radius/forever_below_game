@@ -908,6 +908,9 @@ pub(crate) fn build_screen(
                     column_gap: px(28),
                     padding: UiRect::all(px(22)),
                     max_width: percent(94),
+                    // One height on every tab, so the header and tabs sit at the same place
+                    // whatever the page holds; the pages scroll inside it.
+                    height: percent(92),
                     max_height: percent(92),
                     ..default()
                 },
@@ -1907,6 +1910,9 @@ mod tests {
             let mut pages = app.world_mut().query_filtered::<&Node, With<LeafPage>>();
             let node = pages.single(app.world()).unwrap();
             assert_eq!(node.width, px(LEAF_PX), "{tab:?}");
+            let mut ledgers = app.world_mut().query_filtered::<&Node, With<Ledger>>();
+            let ledger = ledgers.single(app.world()).unwrap();
+            assert_eq!((ledger.height, ledger.max_height), (percent(92), percent(92)), "{tab:?}: the ledger holds one height, so the page holds one place");
         }
     }
 
