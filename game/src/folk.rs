@@ -957,8 +957,9 @@ mod tests {
         // inside out (its front faces turned in, or its ink hull pushed in over it), with broken
         // buffers, or with a black or non-finite colour would draw as unlit solid black (#151).
         for seed in seeds {
-            for spot in fb_level::generate(seed, 1).folk.into_iter().take(people) {
-                let person = person_1207(&spot);
+            let level = fb_level::generate(seed, 1);
+            for spot in level.folk.iter().take(people) {
+                let person = Person::of(spot, level.faction(spot.faction), 1);
                 let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
                 for piece in &figure.pieces {
                     for part in &piece.mesh.parts {
