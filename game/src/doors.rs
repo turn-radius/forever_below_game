@@ -275,8 +275,8 @@ impl Doors {
 /// wall: rock, a blocked cell, or a shut door that is not their own faction's and is not a
 /// grate. A shut portcullis stops the body ([`solid_for`]) but not the eye.
 pub fn opaque_for<'a>(level: &'a fb_level::Level, cells: &'a BlockedCells, doors: Option<&'a Doors>, faction: Option<Faction>) -> impl Fn(i32, i32) -> bool + 'a {
-    let rock = blocked_by(level, cells);
-    move |x, y| rock(x, y) || doors.is_some_and(|d| d.blinds(x, y, faction))
+    // Bars stop the body but not the eye.
+    move |x, y| !level.cell(x, y).is_clear() || cells.0.contains(&(x, y)) || doors.is_some_and(|d| d.blinds(x, y, faction))
 }
 
 /// Whether cell `(x, y)` stops someone of `faction` (`None` for creatures): rock, a blocked

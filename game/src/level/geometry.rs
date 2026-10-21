@@ -26,6 +26,7 @@ use fb_level::{
 use procgen_rng::Mulberry32;
 
 pub mod arch;
+pub mod bars;
 pub mod cobble;
 pub mod door;
 pub mod occlusion;

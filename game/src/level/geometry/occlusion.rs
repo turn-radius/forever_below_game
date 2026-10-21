@@ -84,7 +84,7 @@ impl<'a> Enclosure<'a> {
         let mut open = vec![false; (width * height) as usize];
         for y in 0..height {
             for x in 0..width {
-                open[(y * width + x) as usize] = view.is_open(origin.0 + x, origin.1 + y);
+                open[(y * width + x) as usize] = view.cell(origin.0 + x, origin.1 + y).is_clear();
             }
         }
         let vaults = if level.style == LevelStyle::StoneHalls {

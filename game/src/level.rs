@@ -6,11 +6,11 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault|role` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault|role|cells` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
-//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`). Unset, nothing here touches the player's camera.
+//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`), or in the aisle of the first cell block looking at its bars (`cells`). Unset, nothing here touches the player's camera.
 //! `FB_DEPTH=2` plays the stone halls of depth 2.
 
 pub mod geometry;
@@ -52,7 +52,7 @@ impl Plugin for LevelPlugin {
             // delve, then each one they travel to ([`crate::travel`]), as the folk and props are.
             .add_systems(
                 Update,
-                (clear_stone, spawn_stone, spawn_columns, spawn_corridor_arches, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
+                (clear_stone, spawn_stone, spawn_columns, spawn_bars, spawn_corridor_arches, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
             )
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
@@ -522,6 +522,63 @@ fn spawn_columns(
     }
 }
 
+/// The iron bars of the cell blocks, and their gates standing ajar. Each Bars cell and each gate
+/// frame is a piece of its own, since the wear and the vault over them differ cell by cell.
+fn spawn_bars(
+    mut commands: Commands,
+    level: Res<CurrentLevel>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut toon_materials: ResMut<Assets<ToonMaterial>>,
+    mut outline_materials: ResMut<Assets<OutlineMaterial>>,
+) {
+    let level = &level.0;
+    let (bars, gates) = (geometry::bars::bars(level), geometry::bars::gates(level));
+    if bars.is_empty() && gates.is_empty() {
+        return;
+    }
+    let ceiling = geometry::bars::Ceiling::new(level);
+    let stone = fixture_appearance(level.seed, ConditionState::BattleWorn);
+    let ink = outline_materials.add(stone.outline);
+    let mut materials: std::collections::HashMap<&'static str, Handle<ToonMaterial>> = Default::default();
+    let mut attach = |commands: &mut Commands, item: &armory::ItemMesh, root: Entity| {
+        for part in &item.parts {
+            if part.positions.is_empty() {
+                continue;
+            }
+            let material = materials
+                .entry(part.name)
+                .or_insert_with(|| {
+                    let mut material = stone.material_for(part);
+                    material.extension.min_width = MinWidth::default();
+                    toon_materials.add(material)
+                })
+                .clone();
+            let mesh = meshes.add(part_to_mesh(part));
+            let entity = commands.spawn((ArmoryPart, Name::new(part.name), Mesh3d(mesh.clone()), MeshMaterial3d(material), ChildOf(root))).id();
+            if part.outline {
+                commands.spawn((InkOutline, Mesh3d(mesh), MeshMaterial3d(ink.clone()), ChildOf(entity)));
+            }
+        }
+    };
+    for spot in bars {
+        let item = geometry::bars::bars_mesh(&spot, level, &ceiling);
+        let at = v3(geometry::cell_centre(spot.cell.0, spot.cell.1));
+        let root = commands.spawn((StonePiece, ArmoryItem, Name::new("bars"), Transform::from_translation(at), Visibility::default())).id();
+        attach(&mut commands, &item, root);
+    }
+    for spot in gates {
+        let gate = geometry::bars::gate_mesh(&spot, level, &ceiling);
+        let at = v3(geometry::cell_centre(spot.cell.0, spot.cell.1));
+        let turn = Quat::from_rotation_y(geometry::bars::gate_turn(&spot));
+        let root = commands.spawn((StonePiece, ArmoryItem, Name::new("gate"), Transform::from_translation(at).with_rotation(turn), Visibility::default())).id();
+        attach(&mut commands, &gate.frame, root);
+        let leaf = commands
+            .spawn((Name::new("gate leaf"), Transform::from_translation(v3(gate.hinge)).with_rotation(Quat::from_rotation_y(geometry::bars::leaf_swing(&spot))), Visibility::default(), ChildOf(root)))
+            .id();
+        attach(&mut commands, &gate.leaf, leaf);
+    }
+}
+
 /// The arches that span the corridors of the halls' vaulted quarters: one mesh per rib shape,
 /// shared by every arch, turned to run across its corridor, so a long corridor of arches costs
 /// the same as one.
@@ -935,6 +992,21 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let from_dir = if score(-through) >= score(through) { -through } else { through };
             let at = centre + from_dir * CELL * 2.5 + eye;
             Transform::from_translation(at).looking_at(centre + Vec3::Y * 11.0, Vec3::Y)
+        }
+        "cells" => {
+            // The aisle of the first cell block, from in front of the middle of its row of
+            // gates, looking at the bars.
+            let gates = geometry::bars::gates(level);
+            let Some(first) = gates.first() else { return };
+            let room = level.room_at(first.cell.0, first.cell.1);
+            let row: Vec<_> = gates.iter().filter(|g| level.room_at(g.cell.0, g.cell.1) == room).collect();
+            let gate = row[row.len() / 2];
+            let centre = v3(geometry::cell_centre(gate.cell.0, gate.cell.1));
+            let out = -Vec3::new(gate.into.0 as f32, 0.0, gate.into.1 as f32);
+            // As far back in the aisle as it runs, up to three cells.
+            let back = (1..=3).take_while(|&k| level.is_open(gate.cell.0 + gate.into.0 * -k, gate.cell.1 + gate.into.1 * -k)).count() as f32;
+            let at = centre + out * CELL * (back - 0.45).max(0.8) + eye;
+            Transform::from_translation(at).looking_at(centre + Vec3::Y * 9.0, Vec3::Y)
         }
         "corridor" => {
             // The corridor run with the most arches, from its end looking down it.
