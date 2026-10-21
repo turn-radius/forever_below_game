@@ -287,7 +287,8 @@ impl Standings {
     /// faction or its class) rises, one that likes it falls, each by `kill_amount` for the first
     /// kill of that thing and `kill_decay` times less for each after
     /// ([`StandingRules::kills_worth`]); one that both likes and hates it ignores it. The victim's
-    /// own faction falls by `member_kill`. Every faction whose standing moves is marked met.
+    /// own faction falls by `member_kill`, and has met the delver. The others hear of it without
+    /// having met them, so word of the kill waits for them in their standing.
     pub fn on_kill_with(&mut self, rules: &StandingRules, world: &World, victim: Victim) {
         let things: Vec<Preference> = match victim {
             Victim::Creature(kind) => vec![Preference::Creature(kind)],
@@ -316,7 +317,7 @@ impl Standings {
                     1
                 }
             };
-            self.dealt(spec.id, sign * (rules.kills_worth(count) - rules.kills_worth(count - 1)));
+            self.shift(spec.id, sign * (rules.kills_worth(count) - rules.kills_worth(count - 1)));
         }
     }
 
@@ -518,6 +519,19 @@ mod tests {
         assert_eq!(s.band(id), Band::Neutral, "{seen:?}");
         s.on_kill(&world, Victim::Creature(CreatureKind::Spiders));
         assert_eq!(s.band(id), Band::Friendly, "{seen:?} then {}", s.get(id).value());
+        assert!(!s.has_met(id), "hearing of the kills is not meeting the delver");
+    }
+
+    #[test]
+    fn killing_a_member_meets_only_their_own_faction() {
+        let world = World::new(3);
+        let victim = &world.factions()[0];
+        let mut s = Standings::start_from_alignment(Alignment::TrueNeutral, &world);
+        let before: Vec<i32> = world.factions().iter().map(|f| s.get(f.id).value()).collect();
+        s.on_kill(&world, Victim::Member { faction: victim.id, folk: victim.folk, class: None });
+        assert_eq!(s.met().collect::<Vec<_>>(), vec![victim.id]);
+        let moved = world.factions().iter().zip(&before).filter(|(f, b)| f.id != victim.id && s.get(f.id).value() != **b).count();
+        assert!(moved > 0 || world.factions().iter().all(|f| f.id == victim.id || !(f.likes.contains(&Preference::Faction(victim.id)) || f.hates.contains(&Preference::Faction(victim.id)) || f.likes.contains(&Preference::Folk(victim.folk)) || f.hates.contains(&Preference::Folk(victim.folk)))), "factions that care still weigh it");
     }
 
     #[test]
