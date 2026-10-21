@@ -28,11 +28,11 @@ use procgen_rng::Mulberry32;
 
 use super::stone::Vaults;
 
-/// Bar radius (1.3 units thick), the pitch between posts, and the rails' height and thickness.
-const BAR_RADIUS: f32 = 0.65;
+/// Bar radius (0.8 units thick, an 8 cm bar with a 17 cm gap), the pitch between posts, and the rails' height and thickness.
+const BAR_RADIUS: f32 = 0.4;
 const PITCH: f32 = 2.5;
 const RAIL_HEIGHT: f32 = 1.8;
-const RAIL_THICK: f32 = 0.8;
+const RAIL_THICK: f32 = 0.6;
 /// Posts stop this far under the vault.
 const HEADROOM: f32 = 0.15;
 /// How far a gate stands open, degrees from shut.
