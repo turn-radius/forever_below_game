@@ -369,7 +369,7 @@ pub fn corridor_runs(level: &Level) -> Vec<CorridorRun> {
 }
 
 /// The corridor arches of a level of stone halls: along each straight run one arch every two to
-/// four cells from the level's seed, never in a cell beside a door, a room, a turn or a stair, nor
+/// four cells from the level's seed, never in a cell beside a door, a room, a turn, a stair or the open cells of a wider corridor, nor
 /// where the soffit is not flat, and only in the corridors of a Vaulted quarter, in that
 /// quarter's one arch shape. A pure function of the level and its finishes. Rough rock has none.
 pub fn corridor_arches(level: &Level, finishes: &Finishes) -> Vec<CorridorArch> {
@@ -385,6 +385,9 @@ pub fn corridor_arches(level: &Level, finishes: &Finishes) -> Vec<CorridorArch> 
     let near_stair = |x: i32, y: i32| level.stairs.iter().any(|s| (s.x as i32 - x).abs() <= 1 && (s.y as i32 - y).abs() <= 1);
     // A plain corridor cell: floor, outside every room.
     let plain = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && level.room_at(x, y).is_none();
+    // No open cell diagonally beside it: the corridor does not widen or bend away at its ends,
+    // so an arch never stands where it would span only part of a wider corridor.
+    let hemmed = |x: i32, y: i32| [(-1, -1), (1, -1), (-1, 1), (1, 1)].iter().all(|&(dx, dy)| !level.is_open(x + dx, y + dy));
     let mut out = Vec::new();
     for run in corridor_runs(level) {
         let (x0, y0) = run.cells[0];
@@ -397,6 +400,7 @@ pub fn corridor_arches(level: &Level, finishes: &Finishes) -> Vec<CorridorArch> 
             if let Some(quarter) = vaulted
                 && plain(x - dx, y - dy)
                 && plain(x + dx, y + dy)
+                && hemmed(x, y)
                 && flat(x, y)
                 && !near_stair(x, y)
             {
@@ -562,6 +566,35 @@ mod tests {
             total += arches.len();
         }
         assert!(total > 30, "only {total} arches in thirty levels");
+    }
+
+    #[test]
+    fn corridor_arches_place_none_in_a_cell_of_a_wider_corridor() {
+        let mut wide_cells = 0;
+        let mut arches_seen = 0;
+        for width in [2, 3] {
+            let params = fb_level::LevelParams { corridor_width_min: width, corridor_width_max: width, ..fb_level::LevelParams::for_style(fb_level::LevelStyle::StoneHalls) };
+            for seed in 1..=30 {
+                let level = fb_level::generate_with(seed, 2, &params);
+                let finishes = fb_level::finishes(&level, &params);
+                let plain = |x: i32, y: i32| level.is_open(x, y) && level.room_at(x, y).is_none();
+                wide_cells += (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter(|&(x, y)| plain(x, y) && (plain(x + 1, y) || plain(x - 1, y)) && (plain(x, y + 1) || plain(x, y - 1))).count();
+                for a in corridor_arches(&level, &finishes) {
+                    let (x, y) = a.cell;
+                    let (px, py) = if a.along_x { (0, 1) } else { (1, 0) };
+                    let (dx, dy) = (1 - px, 1 - py);
+                    for side in [-1, 1] {
+                        for along in [-1, 0, 1] {
+                            let (cx, cy) = (x + px * side + dx * along, y + py * side + dy * along);
+                            assert!(!level.is_open(cx, cy), "seed {seed}, width {width}: arch at {x},{y} stands beside open cell {cx},{cy}");
+                        }
+                    }
+                    arches_seen += 1;
+                }
+            }
+        }
+        assert!(wide_cells > 100, "only {wide_cells} wide corridor cells, so the test proves little");
+        assert!(arches_seen > 0, "no arches stood in the narrow stretches");
     }
 
     #[test]

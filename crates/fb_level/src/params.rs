@@ -78,6 +78,8 @@ level_params! {
         beside_cost: u32 = 6, 0.0, 20.0, 1.0; "Extra cost to run beside another corridor rather than share it."
         loop_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Chance a room also links its nearest unlinked neighbour, making loops."
         door_reuse_chance: f64 = 0.6, 0.0, 1.0, 0.01; "Chance a corridor reuses a door already on that side of a room."
+        corridor_width_min: u32 = 2, 1.0, 3.0, 1.0; "Narrowest main width a level's spine corridor is drawn at, in cells; other tree links are one narrower, loops and the entrance one cell."
+        corridor_width_max: u32 = 3, 1.0, 3.0, 1.0; "Widest main width a level's spine corridor is drawn at, in cells."
     }
     furnishing {
         brazier_min_area: u32 = 25, 4.0, 100.0, 1.0; "Rooms at least this many cells may hold a brazier."
@@ -122,6 +124,8 @@ impl LevelParams {
                 regular_chance: 0.8,
                 turn_cost: 12,
                 loop_chance: 0.4,
+                corridor_width_min: 2,
+                corridor_width_max: 3,
                 brazier_min_area: 30,
                 past_chance: 0.9,
                 purpose_share: 0.7,
@@ -172,6 +176,7 @@ impl LevelParams {
         self.rooms_max = self.rooms_max.max(self.rooms_min);
         self.side_max = self.side_max.max(self.side_min);
         self.hall_grow_max = self.hall_grow_max.max(self.hall_grow_min);
+        self.corridor_width_max = self.corridor_width_max.max(self.corridor_width_min);
         // The biggest room, a hall at its largest, still fits between the gaps.
         let room_room = self.width.min(self.height).saturating_sub(2 * self.room_gap + 1).max(2);
         self.side_max = self.side_max.min(room_room);

@@ -805,7 +805,7 @@ mod tests {
     use super::*;
 
     /// Per seed: the hash of the level's stone and ink, and of its door frame.
-    const ROUGH_ROCK_HASHES: [(u32, (u64, u64)); 2] = [(1207, (16314085765721590626, 10396788927676635465)), (2, (12820801449123820926, 9434967241214962033))];
+    const ROUGH_ROCK_HASHES: [(u32, (u64, u64)); 2] = [(1207, (3701189268064332467, 10396788927676635465)), (2, (10639431740370850025, 9434967241214962033))];
 
     fn level() -> Level {
         fb_level::generate(1207, 1)
