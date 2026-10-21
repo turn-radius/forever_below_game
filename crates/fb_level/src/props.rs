@@ -106,8 +106,8 @@ pub fn chest_state(style: ChestStyle, seed: u32, opened: bool) -> ChestState {
 }
 
 /// The floor a campfire covers, in world units: its ring of stones and the feet of the rig
-/// at the largest [`campfire_state`] draws. A test holds every seed's mesh inside it.
-pub const CAMPFIRE_RADIUS: f32 = 4.8;
+/// at the largest [`campfire_state`] draws (a big shared fire, its ring about ten units across). A test holds every seed's mesh inside it.
+pub const CAMPFIRE_RADIUS: f32 = 7.3;
 
 /// The Armory state of the campfire of `seed`: the set form, lit, at the larger sizes (it
 /// is the hearth's fire), with the rig and pot the family rolls from the seed: a tripod or a
@@ -115,7 +115,7 @@ pub const CAMPFIRE_RADIUS: f32 = 4.8;
 pub fn campfire_state(seed: u32) -> CampfireState {
     let mut state = Campfire::roll_as(seed, FireForm::Set);
     state.fire.lit = true;
-    state.fire.size = Mulberry32::new(seed ^ 0xF1AE_5123).range_f32(1.1, 1.3);
+    state.fire.size = Mulberry32::new(seed ^ 0xF1AE_5123).range_f32(1.9, 2.1);
     state.fit(&campfire::LIMITS);
     state
 }
@@ -293,17 +293,18 @@ fn furnish_roles(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<Prop
             let room = &level.rooms[r];
             let mut nooks = nooks(level, room, keep_clear);
             shuffle(&mut nooks, rng);
+            // The fire first, whatever else the room is for: it stands on its light.
+            if let Some(fire) = level.lights.iter().find(|l| l.kind == crate::LightKind::Campfire && room.contains(l.x as i32, l.y as i32)) {
+                let prop = Prop::Campfire { seed: campfire_seed(level.seed, fire.x, fire.y) };
+                if let Some(spot) = fit_on_light(level, keep_clear, (fire.x, fire.y), prop, placed, occupied) {
+                    occupied[cell_index(level, spot.x, spot.y)] = true;
+                    placed.push(spot);
+                }
+            }
             for &role in level.roles_of(r) {
                 match role {
                     RoomRole::Hall => {}
                     RoomRole::Hearth => {
-                        if let Some(fire) = level.lights.iter().find(|l| l.kind == crate::LightKind::Campfire && room.contains(l.x as i32, l.y as i32)) {
-                            let prop = Prop::Campfire { seed: campfire_seed(level.seed, fire.x, fire.y) };
-                            if let Some(spot) = fit_on_light(level, keep_clear, (fire.x, fire.y), prop, placed, occupied) {
-                                occupied[cell_index(level, spot.x, spot.y)] = true;
-                                placed.push(spot);
-                            }
-                        }
                         let keg = roll_container(placed, &[(ChestStyle::Barrel, 2), (ChestStyle::Crate, 1)], true, rng);
                         put_in_nook(level, &nooks, keg, placed, occupied, rng);
                     }
@@ -776,8 +777,10 @@ mod tests {
             }
         }
         assert!(beds_all * 3 >= members_all * 2, "{beds_all} bedrolls for {members_all} folk");
-        // Measured: about one in ten, a few more since the campfire took the hearth's middle.
-        assert!(bare * 25 <= claims * 3, "{bare} of {claims} sleeping rooms have no bedroll");
+        // Measured: 29 of 313 (9.3%); 20 of 311 before the hearth's campfire (#569). Every one of
+        // them is a one-room claim, hall, hearth and sleeping room at once, where the hall's
+        // brazier and the hearth's campfire stand apart and leave no wall to lay a bedroll along.
+        assert!(bare * 32 <= claims * 3, "{bare} of {claims} sleeping rooms have no bedroll");
     }
 
     #[test]
@@ -834,6 +837,34 @@ mod tests {
             }
         }
         assert!(hearths > 40 && with_rig > 0 && with_pot > 0 && bare > 0, "{hearths} hearths, {with_rig} rigged, {with_pot} potted, {bare} bare");
+    }
+
+    #[test]
+    fn every_campfire_light_has_its_prop_and_every_hearth_is_lit() {
+        use crate::{LightKind, RoomRole};
+        let (mut hearths, mut brazier_hearths) = (0, 0);
+        for depth in 1..=4 {
+            for seed in 1..=100 {
+                let level = generate(seed, depth);
+                for l in level.lights.iter().filter(|l| l.kind == LightKind::Campfire) {
+                    let props = level.props.iter().filter(|p| matches!(p.prop, Prop::Campfire { .. }) && (p.x - l.x).hypot(p.y - l.y) <= OWN_LIGHT).count();
+                    assert_eq!(props, 1, "seed {seed} depth {depth}: a campfire light at ({}, {}) with {props} fires", l.x, l.y);
+                }
+                for p in level.props.iter().filter(|p| matches!(p.prop, Prop::Campfire { .. })) {
+                    assert!(level.lights.iter().any(|l| l.kind == LightKind::Campfire && (p.x - l.x).hypot(p.y - l.y) <= OWN_LIGHT), "seed {seed} depth {depth}: a fire with no light");
+                }
+                for claim in &level.claims {
+                    let room = level.rooms[level.room_with_role(claim, RoomRole::Hearth).unwrap()];
+                    hearths += 1;
+                    let campfire = level.lights.iter().any(|l| l.kind == LightKind::Campfire && room.contains(l.x as i32, l.y as i32));
+                    let brazier = level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32));
+                    assert!(campfire || brazier, "seed {seed} depth {depth}: a dark hearth");
+                    brazier_hearths += (!campfire) as u32;
+                }
+            }
+        }
+        // A hearth with no room for a fire falls back to a brazier; it is rare.
+        assert!(brazier_hearths * 50 <= hearths, "{brazier_hearths} of {hearths} hearths have only a brazier");
     }
 
     #[test]

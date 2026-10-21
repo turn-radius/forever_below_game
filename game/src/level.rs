@@ -155,10 +155,9 @@ impl FixedLight {
     /// Its light, as tuned.
     pub fn light(self, tuning: &LightTuning) -> PointLight {
         match self {
-            FixedLight::Brazier => cast_shadows(Torch::flickering(Torch::light(tuning.brazier_peak, tuning.brazier_reach, &EXPOSURE), tuning.flicker_depth)),
+            // A hearth's campfire lights like a hall's brazier, so the two fires match.
+            FixedLight::Brazier | FixedLight::Campfire => cast_shadows(Torch::flickering(Torch::light(tuning.brazier_peak, tuning.brazier_reach, &EXPOSURE), tuning.flicker_depth)),
             FixedLight::Glowcaps => glowcap_light(tuning),
-            // The campfire family's own light (its colour, reach and flicker do not depend on the fire's seed).
-            FixedLight::Campfire => crate::carry::world_light(&armory::families::campfire::Campfire::light(&fb_level::props::campfire_state(0)).expect("a campfire is lit"), &EXPOSURE, tuning),
         }
     }
 }

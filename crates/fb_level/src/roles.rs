@@ -252,29 +252,46 @@ pub(crate) fn light_roles(level: &mut Level, rng: &mut Mulberry32) {
         let room = level.rooms[r];
         let (hall, hearth) = (level.roles_of(r).contains(&RoomRole::Hall), level.roles_of(r).contains(&RoomRole::Hearth));
         let brazier_in_room = |level: &Level| level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32));
-        if hearth && !hall {
-            level.lights.retain(|l| !(l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32)));
-        }
         if hall && !brazier_in_room(level) {
             if let Some((x, y)) = lit_cell(level, &room, &|_| true) {
                 level.lights.push(LightSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, kind: LightKind::Brazier });
             }
         }
         if hearth {
-            // A fire stands off the way in from the entrance, apart from other lights and the
-            // gaps between columns, and leaves every open cell reachable round it.
+            // A fire stands where its prop will fit ([`crate::props::fit_on_light`] asks the same
+            // of the cell): off doors and the way in, clear of items, apart from other lights
+            // (a hearth that is not the hall does not count its own brazier, which the campfire
+            // replaces) and the gaps between columns, leaving every open cell reachable round it.
+            let replaced = |l: &LightSpot| !hall && l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32);
             let fits = |&(x, y): &(i32, i32)| {
-                let apart = level.lights.iter().all(|l| (l.x - x as f32 - 0.5).hypot(l.y - y as f32 - 0.5) >= 1.2);
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let apart = level.lights.iter().filter(|l| !replaced(l)).all(|l| (l.x - px).hypot(l.y - py) >= 1.2);
                 let mut occupied = vec![false; level.cells.len()];
                 occupied[(y as u32 * level.width + x as u32) as usize] = true;
-                apart && !keep_clear.contains(&(x, y)) && !crate::props::behind_a_gap(level, x, y, &crate::Facing::ALL) && crate::props::open_cells_reachable(level, &occupied)
+                apart
+                    && !by_door(level, x, y)
+                    && level.items.iter().all(|i| (i.x - px).hypot(i.y - py) >= FIRE_ITEM_GAP)
+                    && !keep_clear.contains(&(x, y))
+                    && !crate::props::behind_a_gap(level, x, y, &crate::Facing::ALL)
+                    && crate::props::open_cells_reachable(level, &occupied)
             };
             if let Some((x, y)) = lit_cell(level, &room, &fits) {
+                // Only now does the campfire take the brazier's place.
+                level.lights.retain(|l| !replaced(l));
                 level.lights.push(LightSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, kind: LightKind::Campfire });
+            } else if !brazier_in_room(level) {
+                // No room for a fire to stand: the hearth is lit by a brazier, never dark.
+                if let Some((x, y)) = lit_cell(level, &room, &|_| true) {
+                    level.lights.push(LightSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, kind: LightKind::Brazier });
+                }
             }
         }
     }
 }
+
+/// Least distance from a hearth's campfire to an item, in cells, so the fire's prop stands clear
+/// of the loot ([`crate::props::CAMPFIRE_RADIUS`] and the props' clearance).
+const FIRE_ITEM_GAP: f32 = 0.8;
 
 /// The open cell of `room` nearest its middle that a light can stand in and `extra` allows:
 /// off the doors, clear of items and lights; a cramped room gives up clearance, then the
