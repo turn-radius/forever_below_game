@@ -147,13 +147,16 @@ pub const GLOWCAP_LIGHT: Color = Color::srgb(0.45, 0.85, 0.88);
 pub enum FixedLight {
     Brazier,
     Glowcaps,
+    /// A hearth's lit campfire (`fb_level::Prop::Campfire` stands at it).
+    Campfire,
 }
 
 impl FixedLight {
     /// Its light, as tuned.
     pub fn light(self, tuning: &LightTuning) -> PointLight {
         match self {
-            FixedLight::Brazier => cast_shadows(Torch::flickering(Torch::light(tuning.brazier_peak, tuning.brazier_reach, &EXPOSURE), tuning.flicker_depth)),
+            // A hearth's campfire lights like a hall's brazier, so the two fires match.
+            FixedLight::Brazier | FixedLight::Campfire => cast_shadows(Torch::flickering(Torch::light(tuning.brazier_peak, tuning.brazier_reach, &EXPOSURE), tuning.flicker_depth)),
             FixedLight::Glowcaps => glowcap_light(tuning),
         }
     }
@@ -714,6 +717,12 @@ fn spawn_fixtures(
         let seed = light_seed(level, i);
         match spot.kind {
             LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light),
+            // The fire itself is the prop standing here; this is its light, hung at the heart of the flame.
+            LightKind::Campfire => {
+                let state = fb_level::props::campfire_state(fb_level::props::campfire_seed(level.seed, spot.x, spot.y));
+                let flame = armory::families::campfire::Campfire::light(&state).map_or(Vec3::Y * 2.0, |anchor| v3(anchor.position));
+                commands.spawn((StonePiece, Name::new("campfire light"), FixedLight::Campfire, FixedLight::Campfire.light(&tuning.light), Transform::from_translation(at + flame)));
+            }
             LightKind::Brazier => {
                 let (mesh, flame) = brazier.expect("a brazier has a shape");
                 spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Transform::from_translation(at)));

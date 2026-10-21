@@ -73,7 +73,7 @@ pub struct Hearth {
 
 sliders! {
     HearthLimits for Hearth {
-        size: 0.8, 1.3, 0.01;
+        size: 0.8, 2.2, 0.01;
         stones: 6.0, 14.0, 1.0;
         logs: 0.0, 8.0, 1.0;
         kindling: 0.0, 10.0, 1.0;
@@ -163,10 +163,13 @@ impl Campfire {
         compose(&mut rng, seed, form)
     }
 
-    /// Where a lit, set fire gives its light: the heart of the flame. `None` otherwise.
+    /// Where a lit, set fire gives its light: the heart of the flame, or above the rig over one. `None` otherwise.
     pub fn light(s: &CampfireState) -> Option<LightAnchor> {
         let f = &s.fire;
-        (f.form == FireForm::Set && f.lit).then(|| LightAnchor::feet([0.0, 1.6 * f.size, 0.0], FLAME_LIGHT, FIRE_FEET, 0.7))
+        // Over a tripod or hook the light hangs above the rig, so the pot does not throw its
+        // shadow over the ceiling; a bare fire's sits at the heart of the flame.
+        let height = if f.rig == Rig::Bare { 1.6 } else { 8.0 };
+        (f.form == FireForm::Set && f.lit).then(|| LightAnchor::feet([0.0, height * f.size, 0.0], FLAME_LIGHT, FIRE_FEET, 0.7))
     }
 }
 

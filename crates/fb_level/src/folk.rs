@@ -253,9 +253,11 @@ struct Gathering {
 }
 
 impl Gathering {
-    /// Round the room's brazier, if it has one, otherwise round a point well inside it.
+    /// Round the room's campfire, or its brazier, if it has one, otherwise round a point well
+    /// inside it.
     fn in_room(level: &Level, room: &Room, rng: &mut Mulberry32) -> Gathering {
-        let brazier = level.lights.iter().find(|l| l.kind == crate::LightKind::Brazier && room.contains(l.x as i32, l.y as i32));
+        let in_room = |kind| level.lights.iter().find(|l| l.kind == kind && room.contains(l.x as i32, l.y as i32));
+        let brazier = in_room(crate::LightKind::Campfire).or_else(|| in_room(crate::LightKind::Brazier));
         let centre = match brazier {
             Some(b) => (b.x, b.y),
             None => (rng.range_f32(room.x as f32 + 1.0, (room.x + room.w) as f32 - 1.0), rng.range_f32(room.y as f32 + 1.0, (room.y + room.h) as f32 - 1.0)),

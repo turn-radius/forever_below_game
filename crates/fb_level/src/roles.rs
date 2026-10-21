@@ -3,9 +3,8 @@
 //!
 //! Roles come from a stream of the level seed of their own, after the claims and before the
 //! folk, so who stands where follows from them. They never move a wall or an item. The hearth
-//! and the hall each get a brazier ([`light_roles`]) where the level's own furnishing left none
-//! in the room; props furnish each role in [`crate::props`], and folk stand by role in
-//! [`crate::folk`].
+//! gets a campfire and the hall a brazier ([`light_roles`]), which always stands alone; props
+//! furnish each role in [`crate::props`], and folk stand by role in [`crate::folk`].
 //!
 //! A claim of few rooms doubles up: a room takes every role the claim has no room left for, the
 //! hall first.
@@ -16,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::folk::by_door;
 use crate::generate::shuffle;
 use crate::rooms::RoomGraph;
-use crate::{Cell, Claim, Level, LightKind, LightSpot};
+use crate::{Cell, Claim, Level, LightKind, LightSpot, Room};
 
 /// Salt for the role stream.
 pub(crate) const ROLE_SALT: u32 = 0x601E_5A11;
@@ -237,40 +236,83 @@ pub(crate) fn main_door(level: &Level, graph: &RoomGraph, claim: &Claim, from: (
     openings(level, graph, claim, from).first().map(|o| MainDoor { room: o.room, inside: o.cell, outside: (o.cell.0 + o.out.0, o.cell.1 + o.out.1) })
 }
 
-/// Lights a brazier in each hall and hearth the level's furnishing left without one, at the
-/// open cell nearest the room's middle that is clear of doors, items and other lights.
+/// Lights the halls and hearths of claims, a room one fire. A hall that is not a hearth gets a
+/// brazier where the level's own furnishing left none in the room, and braziers always stand
+/// alone. A hearth, hall or not, gets a campfire ([`LightKind::Campfire`]; [`crate::props`]
+/// builds the fire it is the light of) in place of any brazier the room had; only where no
+/// campfire fits does it keep a brazier. Each light takes the open cell nearest the
+/// room's middle that is clear of doors, items and other lights.
 pub(crate) fn light_roles(level: &mut Level, rng: &mut Mulberry32) {
     let mut wanted: Vec<usize> = (0..level.rooms.len()).filter(|&r| level.roles_of(r).iter().any(|&role| matches!(role, RoomRole::Hall | RoomRole::Hearth))).collect();
     // The order rooms are lit in decides which of two close cells a light takes; the stream
     // keeps it a function of the seed alone.
     shuffle(&mut wanted, rng);
+    let keep_clear = crate::props::entrance_path(level);
     for r in wanted {
         let room = level.rooms[r];
-        if level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32)) {
-            continue;
+        let (hall, hearth) = (level.roles_of(r).contains(&RoomRole::Hall), level.roles_of(r).contains(&RoomRole::Hearth));
+        let brazier_in_room = |level: &Level| level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32));
+        if hall && !hearth && !brazier_in_room(level) {
+            if let Some((x, y)) = lit_cell(level, &room, &|_| true) {
+                level.lights.push(LightSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, kind: LightKind::Brazier });
+            }
         }
-        let (cx, cy) = room.centre();
-        let floor: Vec<(i32, i32)> = (room.y as i32..(room.y + room.h) as i32)
-            .flat_map(|y| (room.x as i32..(room.x + room.w) as i32).map(move |x| (x, y)))
-            .filter(|&(x, y)| level.cell(x, y) == Cell::Floor)
-            .collect();
-        let clear = |&(x, y): &(i32, i32), from_item: f32, from_light: f32| {
-            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-            let far = |ax: f32, ay: f32, d: f32| (ax - px).hypot(ay - py) >= d;
-            level.items.iter().all(|i| far(i.x, i.y, from_item)) && level.lights.iter().all(|l| far(l.x, l.y, from_light))
-        };
-        // The best cell: off the doors, clear of items and lights; a cramped room gives up
-        // clearance, then the doors, rather than stand dark.
-        let tiers: [&dyn Fn(&(i32, i32)) -> bool; 3] = [&|c| !by_door(level, c.0, c.1) && clear(c, 0.9, 2.0), &|c| !by_door(level, c.0, c.1) && clear(c, 0.55, 0.0), &|_| true];
-        let mut cells: Vec<(i32, i32)> = tiers.iter().map(|ok| floor.iter().copied().filter(|c| ok(c)).collect::<Vec<_>>()).find(|c| !c.is_empty()).unwrap_or_default();
-        cells.sort_by(|a, b| {
-            let d = |c: &(i32, i32)| (c.0 as f32 + 0.5 - cx).hypot(c.1 as f32 + 0.5 - cy);
-            d(a).total_cmp(&d(b)).then(a.cmp(b))
-        });
-        if let Some(&(x, y)) = cells.first() {
-            level.lights.push(LightSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, kind: LightKind::Brazier });
+        if hearth {
+            // A fire stands where its prop will fit ([`crate::props::fit_on_light`] asks the same
+            // of the cell): off doors and the way in, clear of items, apart from other lights
+            // (a hearth does not count a brazier of its own room, which the campfire replaces) and the gaps between columns, leaving every open cell reachable round it.
+            let replaced = |l: &LightSpot| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32);
+            let fits = |&(x, y): &(i32, i32)| {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let apart = level.lights.iter().filter(|l| !replaced(l)).all(|l| (l.x - px).hypot(l.y - py) >= 1.2);
+                let mut occupied = vec![false; level.cells.len()];
+                occupied[(y as u32 * level.width + x as u32) as usize] = true;
+                apart
+                    && !by_door(level, x, y)
+                    && level.items.iter().all(|i| (i.x - px).hypot(i.y - py) >= FIRE_ITEM_GAP)
+                    && !keep_clear.contains(&(x, y))
+                    && !crate::props::behind_a_gap(level, x, y, &crate::Facing::ALL)
+                    && crate::props::open_cells_reachable(level, &occupied)
+            };
+            if let Some((x, y)) = lit_cell(level, &room, &fits) {
+                // Only now does the campfire take the brazier's place.
+                level.lights.retain(|l| !replaced(l));
+                level.lights.push(LightSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, kind: LightKind::Campfire });
+            } else if !brazier_in_room(level) {
+                // No room for a fire to stand: the hearth is lit by a brazier, never dark.
+                if let Some((x, y)) = lit_cell(level, &room, &|_| true) {
+                    level.lights.push(LightSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, kind: LightKind::Brazier });
+                }
+            }
         }
     }
+}
+
+/// Least distance from a hearth's campfire to an item, in cells, so the fire's prop stands clear
+/// of the loot ([`crate::props::CAMPFIRE_RADIUS`] and the props' clearance).
+const FIRE_ITEM_GAP: f32 = 0.8;
+
+/// The open cell of `room` nearest its middle that a light can stand in and `extra` allows:
+/// off the doors, clear of items and lights; a cramped room gives up clearance, then the
+/// doors, rather than stand dark.
+fn lit_cell(level: &Level, room: &Room, extra: &dyn Fn(&(i32, i32)) -> bool) -> Option<(i32, i32)> {
+    let (cx, cy) = room.centre();
+    let floor: Vec<(i32, i32)> = (room.y as i32..(room.y + room.h) as i32)
+        .flat_map(|y| (room.x as i32..(room.x + room.w) as i32).map(move |x| (x, y)))
+        .filter(|&(x, y)| level.cell(x, y) == Cell::Floor && extra(&(x, y)))
+        .collect();
+    let clear = |&(x, y): &(i32, i32), from_item: f32, from_light: f32| {
+        let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+        let far = |ax: f32, ay: f32, d: f32| (ax - px).hypot(ay - py) >= d;
+        level.items.iter().all(|i| far(i.x, i.y, from_item)) && level.lights.iter().all(|l| far(l.x, l.y, from_light))
+    };
+    let tiers: [&dyn Fn(&(i32, i32)) -> bool; 3] = [&|c| !by_door(level, c.0, c.1) && clear(c, 0.9, 2.0), &|c| !by_door(level, c.0, c.1) && clear(c, 0.55, 0.0), &|_| true];
+    let mut cells: Vec<(i32, i32)> = tiers.iter().map(|ok| floor.iter().copied().filter(|c| ok(c)).collect::<Vec<_>>()).find(|c| !c.is_empty()).unwrap_or_default();
+    cells.sort_by(|a, b| {
+        let d = |c: &(i32, i32)| (c.0 as f32 + 0.5 - cx).hypot(c.1 as f32 + 0.5 - cy);
+        d(a).total_cmp(&d(b)).then(a.cmp(b))
+    });
+    cells.first().copied()
 }
 
 #[cfg(test)]
@@ -307,7 +349,7 @@ mod tests {
                 for role in [RoomRole::Hall, RoomRole::Hearth] {
                     let r = level.room_with_role(claim, role).unwrap();
                     let room = level.rooms[r];
-                    assert!(level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32)), "seed {seed} depth {depth}: {role:?} is dark");
+                    assert!(level.lights.iter().any(|l| matches!(l.kind, LightKind::Brazier | LightKind::Campfire) && room.contains(l.x as i32, l.y as i32)), "seed {seed} depth {depth}: {role:?} is dark");
                 }
             }
         }
