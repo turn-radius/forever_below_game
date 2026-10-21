@@ -357,7 +357,8 @@ mod tests {
 
     #[test]
     fn loot_rolls_a_base_of_its_family() {
-        for &family in armory::Item::PORTED {
+        // A banner is scenery: no loot base names it.
+        for &family in armory::Item::PORTED.iter().filter(|f| **f != armory::Family::Banner) {
             for seed in [5, 1207] {
                 let item = roll_loot(family, seed, Odds::default()).unwrap();
                 assert_eq!(item.shape.family(), family);

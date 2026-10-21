@@ -3,6 +3,7 @@ mod amulet_roll;
 mod ammo;
 mod axe_build;
 mod axe_roll;
+mod banner;
 mod bags_build;
 mod bags_roll;
 mod belt_build;

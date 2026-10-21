@@ -6,6 +6,7 @@ use crate::geom::ItemMesh;
 pub mod ammo;
 pub mod amulet;
 pub mod axe;
+pub mod banner;
 pub mod bags;
 pub mod belt;
 pub mod bow;
