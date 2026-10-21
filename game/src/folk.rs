@@ -572,12 +572,17 @@ fn fill_folk_card(commands: &mut Commands, card: Entity, text: &FolkCardText, pr
 
 /// Marks the faction of the folk looked at as met, so the character sheet lists it. Takes the
 /// record mutably only when the faction is new to the delver.
-fn meet_aimed_folk(aimed: Res<AimedFolk>, folk: Query<&Denizen>, record: Option<ResMut<crate::record::WorldRecord>>) {
+fn meet_aimed_folk(aimed: Res<AimedFolk>, folk: Query<&Denizen>, level: Option<Res<crate::play::CurrentLevel>>, record: Option<ResMut<crate::record::WorldRecord>>) {
     let (Some(mut record), Some(entity)) = (record, aimed.0) else { return };
     let Ok(denizen) = folk.get(entity) else { return };
     let faction = denizen.person.faction.id;
     if !record.standings.has_met(faction) {
         record.standings.meet(faction);
+    }
+    if let Some(level) = level
+        && !record.was_met_on(faction, level.0.depth)
+    {
+        record.note_met_on(faction, level.0.depth);
     }
 }
 

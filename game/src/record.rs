@@ -60,6 +60,23 @@ pub struct WorldRecord {
     /// The factions that have given the delver their key, which they give once (#553).
     #[serde(default)]
     pub keys_given: Vec<fb_faction::Faction>,
+    /// The depths where the delver has met each faction, for the character screen's factions tab
+    /// (#571).
+    #[serde(default)]
+    pub met_on: BTreeMap<fb_faction::Faction, std::collections::BTreeSet<u32>>,
+}
+
+impl WorldRecord {
+    /// Whether `faction` is already noted as met on level `depth`.
+    pub fn was_met_on(&self, faction: fb_faction::Faction, depth: u32) -> bool {
+        self.met_on.get(&faction).is_some_and(|d| d.contains(&depth))
+    }
+
+    /// Notes that `faction` was met on level `depth`. Callers check [`Self::was_met_on`] first,
+    /// so the record changes only when there is something new.
+    pub fn note_met_on(&mut self, faction: fb_faction::Faction, depth: u32) {
+        self.met_on.entry(faction).or_default().insert(depth);
+    }
 }
 
 /// One level as it was left.
@@ -204,13 +221,13 @@ impl WorldRecord {
     /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
     /// every faction at the start a delver of `alignment` has.
     pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new() }
     }
 
     /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
     /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
     pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new() }
     }
 
     /// The record of the level at `depth`, if it has been visited.

@@ -24,7 +24,7 @@
 //! fallen" outfit of `data/outfits.json` (a tunic and trousers), with a belt whose pouch is
 //! their first grid (`docs/items.md`, "Slots"; the plate's belt is a container), and a burning
 //! torch in the off hand, which is their carried light (`crate::carry::carried_light`). `FB_OPEN_INVENTORY=1` opens the screen at the start, for
-//! captures (`=character` on the character tab); `FB_DEBUG_KIT=1` dresses the delver in their class's outfit with a lit light in the
+//! captures (`=character` on the character tab, `=factions` on the factions tab; `FB_MEET=0,2` meets those factions, `FB_INVENTORY_SCROLL=<px>` scrolls the page); `FB_DEBUG_KIT=1` dresses the delver in their class's outfit with a lit light in the
 //! off hand, starts them with a pack full of things, and sets a sack holding a few more, and a
 //! shield, down in front of them. `FB_HOLD=<main>[,<off>]` puts items of those bases in the hands
 //! (a torch or lantern lit; `none` empties a hand), after either kit. `FB_DEBUG_HOVER=<n>` holds the
@@ -32,6 +32,7 @@
 
 pub mod card;
 pub mod doll;
+pub mod factions;
 pub mod grid;
 pub mod header;
 pub mod icon;
@@ -147,6 +148,7 @@ impl Plugin for InventoryPlugin {
                         // Screens open and close in `switch_screens`.
                         underfoot::track_underfoot,
                         close_container_with_screen,
+                        (factions::note_first_levels, meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()), reset_scroll_on_tab, header::click_tabs).chain(),
                         build_screen,
                         scroll_column,
                         scroll_shelf,
@@ -154,15 +156,13 @@ impl Plugin for InventoryPlugin {
                         unhang_without_belt,
                         crate::enchanting::scrap_for_capture.run_if(|| env_flag("FB_SCRAP")),
                         crate::character::wear_abilities,
-                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions, sheet::update_factions, sheet::update_enchanting).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions, sheet::update_enchanting).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
                         show_drag,
                         show_toast,
-                        card::spawn_card,
-                        card::show_card,
-                        card::show_compare,
+                        (card::spawn_card, card::show_card, card::show_compare).chain(),
                     )
                         .chain()
                         .after(switch_screens),
@@ -445,6 +445,25 @@ fn open_for_capture(mut open: ResMut<ScreenOpen>, mut tab: ResMut<SheetTab>, mut
     show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
     if std::env::var("FB_OPEN_INVENTORY").is_ok_and(|v| v.eq_ignore_ascii_case("character")) {
         *tab = SheetTab::Character;
+    } else if std::env::var("FB_OPEN_INVENTORY").is_ok_and(|v| v.eq_ignore_ascii_case("factions")) {
+        *tab = SheetTab::Factions;
+    }
+}
+
+/// `FB_MEET=<n>[,<n>...]` has the delver meet the factions at those places in the world's pool
+/// (on the level they stand on), for captures of the factions tab.
+fn meet_for_capture(record: Option<ResMut<crate::record::WorldRecord>>, abyss: Option<Res<crate::travel::Abyss>>, level: Option<Res<CurrentLevel>>, mut done: Local<bool>) {
+    let (Some(mut record), Some(abyss), Some(level)) = (record, abyss, level) else { return };
+    let Some(spec) = std::env::var("FB_MEET").ok().filter(|_| !*done) else { return };
+    *done = true;
+    let world = fb_faction::World::new(abyss.run_seed);
+    for place in spec.split(',').filter_map(|p| p.trim().parse::<usize>().ok()) {
+        let Some(faction) = world.factions().get(place) else { continue };
+        record.standings.meet(faction.id);
+        record.note_met_on(faction.id, level.0.depth);
+        if place == 0 {
+            record.standings.shift(faction.id, 70);
+        }
     }
 }
 
@@ -832,7 +851,7 @@ pub(crate) fn build_screen(
     fonts: Res<UiFonts>,
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
-    (tuning, scrolled, barter, shelf_scrolled): (Res<Tuning>, Res<ColumnScroll>, Res<crate::barter::Barter>, Res<ShelfScrolled>),
+    (tuning, scrolled, barter, shelf_scrolled, record, abyss): (Res<Tuning>, Res<ColumnScroll>, Res<crate::barter::Barter>, Res<ShelfScrolled>, Option<Res<crate::record::WorldRecord>>, Option<Res<crate::travel::Abyss>>),
     rules: Option<Res<crate::rules::GameRules>>,
     keymap: Option<Res<Keymap>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
@@ -845,7 +864,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !barter.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !barter.is_changed() && !(*tab == SheetTab::Factions && record.as_ref().is_some_and(|r| r.is_changed())) && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -893,12 +912,25 @@ pub(crate) fn build_screen(
                     .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(if barter.active() { BARTER_LEAF_MAX_PX } else { LEAF_MAX_PX }), ..default() })
                     .with_children(|leaf| {
                         header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
-                        if *tab == SheetTab::Character {
-                            let (needs, exhaustion, vitals) = players.single().map_or_else(
-                                |_| Default::default(),
-                                |(needs, exhaustion, stamina, mana)| (needs.0, exhaustion.0, sheet::Vitals { stamina: stamina.map_or_else(Default::default, |s| s.0), mana: mana.map_or_else(Default::default, |m| m.0) }),
-                            );
-                            sheet::sheet(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, &needs, exhaustion, vitals);
+                        if *tab != SheetTab::Inventory {
+                            // The page scrolls under the header, whatever the window.
+                            leaf.spawn((
+                                ScrollColumn,
+                                ScrollPosition(Vec2::new(0.0, scrolled.0)),
+                                Node { flex_direction: FlexDirection::Column, min_height: px(0), padding: UiRect::right(px(8)), overflow: Overflow::scroll_y(), ..default() },
+                            ))
+                            .with_children(|page| {
+                                if *tab == SheetTab::Factions {
+                                    let listed = record.as_deref().zip(abyss.as_deref()).map(|(r, a)| factions::entries(r, a.run_seed)).unwrap_or_default();
+                                    factions::page(page, &fonts, &listed);
+                                    return;
+                                }
+                                let (needs, exhaustion, vitals) = players.single().map_or_else(
+                                    |_| Default::default(),
+                                    |(needs, exhaustion, stamina, mana)| (needs.0, exhaustion.0, sheet::Vitals { stamina: stamina.map_or_else(Default::default, |s| s.0), mana: mana.map_or_else(Default::default, |m| m.0) }),
+                                );
+                                sheet::sheet(page, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, &needs, exhaustion, vitals);
+                            });
                             return;
                         }
                         // Scrolls when the grids are taller than the screen; the header stays.
@@ -960,7 +992,7 @@ pub(crate) fn build_screen(
                     .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(doll::FRAME.x), ..default() })
                     .with_children(|leaf| {
                         doll::doll_leaf(leaf, &doll_assets, &inventory, &fonts, &mut icons);
-                        if *tab == SheetTab::Character {
+                        if *tab != SheetTab::Inventory {
                             return;
                         }
                         leaf.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
@@ -1162,6 +1194,15 @@ fn target_under(
     match ledger {
         Some(page) if !page.contains(point) => Target::Level,
         _ => Target::Page,
+    }
+}
+
+/// Starts a page at its top when the tab changes, instead of where the last page was scrolled.
+fn reset_scroll_on_tab(tab: Res<SheetTab>, mut remembered: ResMut<ColumnScroll>) {
+    if tab.is_changed() {
+        // `FB_INVENTORY_SCROLL=<px>` starts the page scrolled that far, for captures.
+        let start = std::env::var("FB_INVENTORY_SCROLL").ok().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+        remembered.set_if_neq(ColumnScroll(start));
     }
 }
 
@@ -1830,16 +1871,113 @@ mod tests {
     }
 
     #[test]
-    fn i_toggles_the_screen_and_tab_does_nothing() {
+    fn i_toggles_the_screen_and_tab_does_nothing_while_it_is_closed() {
         let mut app = screen_app();
         press(&mut app, KeyCode::Tab);
         assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory));
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory);
         press(&mut app, KeyCode::KeyI);
-        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
-        press(&mut app, KeyCode::Tab);
         assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         press(&mut app, KeyCode::KeyI);
         assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory));
+    }
+
+    fn shift_tab(app: &mut App) {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftLeft);
+        press(app, KeyCode::Tab);
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::ShiftLeft);
+        keys.clear();
+    }
+
+    #[test]
+    fn tab_and_shift_tab_cycle_the_tabs_and_wrap() {
+        let mut app = screen_app();
+        let tab = |app: &App| *app.world().resource::<SheetTab>();
+        press(&mut app, KeyCode::KeyI);
+        assert_eq!(tab(&app), SheetTab::Inventory);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(tab(&app), SheetTab::Factions);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(tab(&app), SheetTab::Character);
+        assert!(sheet_showing(&mut app));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(tab(&app), SheetTab::Inventory, "wraps round");
+        shift_tab(&mut app);
+        assert_eq!(tab(&app), SheetTab::Character, "Shift+Tab wraps back");
+        shift_tab(&mut app);
+        assert_eq!(tab(&app), SheetTab::Factions);
+        press(&mut app, KeyCode::KeyK);
+        assert_eq!(tab(&app), SheetTab::Character, "K still shows the sheet");
+        press(&mut app, KeyCode::KeyI);
+        assert_eq!(tab(&app), SheetTab::Inventory, "and I the grids");
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
+    }
+
+    fn page_text(app: &mut App) -> Vec<String> {
+        let mut pages = app.world_mut().query_filtered::<Entity, With<factions::FactionsPage>>();
+        let Some(page) = pages.iter(app.world()).next() else { return Vec::new() };
+        let mut texts = app.world_mut().query::<(&Text, Option<&ChildOf>)>();
+        let world = app.world();
+        let mut lines = Vec::new();
+        for (text, parent) in texts.iter(world) {
+            let mut up = parent.map(|p| p.parent());
+            while let Some(entity) = up {
+                if entity == page {
+                    lines.push(text.0.clone());
+                    break;
+                }
+                up = world.get::<ChildOf>(entity).map(|p| p.parent());
+            }
+        }
+        lines
+    }
+
+    #[test]
+    fn the_factions_tab_says_so_when_no_faction_is_met() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyI);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(page_text(&mut app), vec![factions::NO_FACTIONS_MET.to_string()]);
+    }
+
+    #[test]
+    fn the_factions_tab_lists_the_met_factions_with_their_standing() {
+        let mut app = screen_app();
+        let run_seed = 11;
+        app.insert_resource(crate::travel::Abyss { run_seed, ..default() });
+        let mut record = crate::record::WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, run_seed);
+        let world = fb_faction::World::new(run_seed);
+        let (first, second, unmet) = (world.factions()[0].id, world.factions()[2].id, world.factions()[1].id);
+        record.standings.meet(first);
+        record.standings.meet(second);
+        record.keys_given.push(second);
+        record.note_met_on(first, 1);
+        app.insert_resource(record);
+        press(&mut app, KeyCode::KeyI);
+        press(&mut app, KeyCode::Tab);
+        let lines = page_text(&mut app);
+        assert!(lines.contains(&world.faction(first).name) && lines.contains(&world.faction(second).name), "{lines:?}");
+        assert!(!lines.contains(&world.faction(unmet).name));
+        let band = app.world().resource::<crate::record::WorldRecord>().standings.band(first);
+        assert!(lines.iter().any(|l| l.starts_with(band.label())), "{lines:?}");
+        assert!(lines.contains(&"Given you their key".to_string()) && lines.contains(&"Not yet given".to_string()), "{lines:?}");
+        assert!(lines.contains(&"Depth 1".to_string()), "{lines:?}");
+        assert!(!lines.contains(&factions::NO_FACTIONS_MET.to_string()));
+    }
+
+    #[test]
+    fn the_character_and_factions_pages_scroll_under_the_header() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyK);
+        let mut columns = app.world_mut().query_filtered::<&Node, With<ScrollColumn>>();
+        let node = columns.single(app.world()).unwrap();
+        assert_eq!(node.overflow.y, OverflowAxis::Scroll, "the character sheet scrolls");
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Factions);
+        let mut columns = app.world_mut().query_filtered::<&Node, With<ScrollColumn>>();
+        assert_eq!(columns.single(app.world()).unwrap().overflow.y, OverflowAxis::Scroll, "so does the factions page");
     }
 
     fn sheet_showing(app: &mut App) -> bool {
