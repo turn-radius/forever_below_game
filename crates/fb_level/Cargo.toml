@@ -13,6 +13,7 @@ workspace = true
 armory = { workspace = true }
 fb_body = { workspace = true }
 fb_creatures = { workspace = true }
+fb_faction = { workspace = true }
 procgen_rng = { workspace = true }
 serde = { workspace = true }
 

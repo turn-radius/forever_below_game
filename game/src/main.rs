@@ -4,6 +4,8 @@
 //! (a rat, snake or skeleton on the plate: `--creature --species viper --seed 7 --motion
 //! moving`), and `--skeleton` the same view opened on a skeleton (`--skeleton --seed 7 --motion
 //! swing`).
+//! `--doors` the doors view (a claim door and its switch in a doorway beside a panel of the
+//! kind's parameters: `--doors --kind portcullis --level stone_halls`),
 //! `--forge` the Forge view (an item beside a panel of sliders for every parameter of its
 //! state: `--forge --family lantern --seed 7`), and `--level` the level view (a whole level
 //! from above beside a panel of the generator's parameters: `--level --seed 7`), and `--lab`
@@ -29,6 +31,7 @@ use forever_below::{
     capture::FrameCapturePlugin,
     creature_view::{CreatureChoice, CreatureViewPlugin},
     frame_time::FrameTimeProbe,
+    door_view::{DoorLab, DoorViewPlugin},
     doll_view::{DollChoice, DollMotion, DollSpin, DollViewPlugin},
     forge_view::{Forge, ForgeViewPlugin},
     level_view::{LevelForge, LevelViewPlugin},
@@ -51,6 +54,9 @@ fn main() -> AppExit {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--forge") {
         return run_forge(&args);
+    }
+    if args.iter().any(|a| a == "--doors") {
+        return run_doors(&args);
     }
     if args.iter().any(|a| a == "--lab") {
         return run_lab(&args);
@@ -95,7 +101,8 @@ fn main() -> AppExit {
     if opening == AppState::Delving {
         // `FB_DEPTH=2` plays the stone halls: the level's depth picks its style.
         let depth = std::env::var("FB_DEPTH").ok().and_then(|d| d.parse().ok()).unwrap_or(1);
-        app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED), depth)));
+        // The level travel builds for that depth of the delve (`Abyss::level_at`).
+        app.insert_resource(CurrentLevel(forever_below::travel::Abyss::new(launch.seed.unwrap_or(Launch::DEFAULT_SEED)).level_at(depth)));
     }
     if swings {
         app.add_plugins(SwingPracticePlugin);
@@ -232,6 +239,22 @@ fn run_lab(args: &[String]) -> AppExit {
     )
     .add_plugins((RulesPlugin, ArmoryRenderPlugin, LabFigurePlugin, LabViewPlugin))
     .insert_resource(lab);
+    if let Some(capture) = FrameCapturePlugin::from_env() {
+        app.add_plugins(capture);
+    }
+    app.run()
+}
+
+fn run_doors(args: &[String]) -> AppExit {
+    let lab = match DoorLab::from_args(args.iter().cloned()) {
+        Ok(lab) => lab,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
+    let mut app = App::new();
+    app.add_plugins(view_plugins()).add_plugins((ArmoryRenderPlugin, DoorViewPlugin)).insert_resource(lab);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }

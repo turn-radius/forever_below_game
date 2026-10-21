@@ -155,6 +155,7 @@ fn everything_the_delve_spawns_is_scoped_to_it() {
             Some(Screen::Inventory) => world.query_filtered::<(), With<InventoryScreen>>().iter(world).count(),
             Some(Screen::Menu) => world.query_filtered::<(), With<MenuScreen>>().iter(world).count(),
             Some(Screen::Map) => world.query_filtered::<(), With<MapScreen>>().iter(world).count(),
+            Some(other) => unreachable!("{other:?} is not in the checks"),
         };
         assert_eq!(shown, 1, "{what} is not showing");
         let left = unscoped(&mut app, &before);

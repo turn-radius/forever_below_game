@@ -2,9 +2,10 @@
 //! `#` rock, `.` floor, `+` door, `E` entrance, `@` start, `i` item, `*` light, and folk by
 //! their first letter in capitals: `H` human, `D` dwarf, `N` gnome, `G` goblin, `L` lizardfolk,
 //! `P` pigfolk. Props: containers `c` chest, `b` barrel, `x` crate, `a` amphora (`s` strongbox,
-//! `f` coffer), and scenery `%` rubble, `~` bones, `o` pillar. Creatures: `r` rat, `R` giant
+//! `f` coffer), and scenery `%` rubble, `~` bones, `o` pillar, `=` bedroll, `u` cooking pot. Creatures: `r` rat, `R` giant
 //! rat, `v` poisonous snake, `S` constrictor snake, `k` skeleton, `T` troll, `p` giant spider, `j` jackalope, `c` giant centipede, `b` bat, `B` giant
-//! bat. Webs in a spider's nest: `w`.
+//! bat. Webs in a spider's nest: `w`. The floor of a faction's claimed rooms is its letter, `W`, `X`,
+//! `Y` or `Z` in the order of the faction list, with a legend below it; wild rooms stay `.`.
 
 use armory::build::scenery::Scenery;
 use armory::families::chests::ChestStyle;
@@ -42,7 +43,9 @@ fn prop_mark(prop: Prop) -> char {
             Scenery::Rubble => '%',
             Scenery::Bones => '~',
             Scenery::Pillar => 'o',
+            Scenery::Bedroll => '=',
         },
+        Prop::Campfire { .. } => 'u',
     }
 }
 
@@ -74,6 +77,35 @@ fn main() {
                 .collect()
         })
         .collect();
+    let letter = |k: usize| ['W', 'X', 'Y', 'Z', 'V', 'U'][k % 6];
+    for claim in &level.claims {
+        let k = level.factions.iter().position(|f| f.id == claim.faction).unwrap_or(0);
+        for &r in &claim.rooms {
+            let room = level.rooms[r];
+            for y in room.y..room.y + room.h {
+                for x in room.x..room.x + room.w {
+                    if level.cell(x as i32, y as i32) == fb_level::Cell::Floor {
+                        rows[y as usize][x as usize] = letter(k);
+                    }
+                }
+            }
+        }
+    }
+    // With `roles` as the third argument, a claim's rooms show their role instead of the
+    // faction's letter: `H` hall, `F` hearth, `S` sleeping, `M` market, `T` store (the first
+    // role of a room that has several).
+    if std::env::args().nth(3).as_deref() == Some("roles") {
+        for (r, room) in level.rooms.iter().enumerate() {
+            let Some(role) = level.roles_of(r).first() else { continue };
+            for y in room.y..room.y + room.h {
+                for x in room.x..room.x + room.w {
+                    if level.cell(x as i32, y as i32) == fb_level::Cell::Floor {
+                        rows[y as usize][x as usize] = role.letter();
+                    }
+                }
+            }
+        }
+    }
     for item in &level.items {
         rows[item.y as usize][item.x as usize] = 'i';
     }
@@ -106,9 +138,17 @@ fn main() {
         level.creatures.len()
     );
     println!("{} webs", level.webs.len());
+    println!("factions: {}", level.factions.iter().map(|f| format!("{} ({:?}{})", f.name, f.folk, if f.insular { ", insular" } else { "" })).collect::<Vec<_>>().join("; "));
     for row in rows {
         println!("{}", row.into_iter().collect::<String>());
     }
+    for claim in &level.claims {
+        let k = level.factions.iter().position(|f| f.id == claim.faction).unwrap_or(0);
+        let members = level.folk.iter().filter(|f| f.faction == claim.faction).count();
+        let roles: Vec<String> = claim.rooms.iter().map(|&r| format!("{r}@{},{}:{}", level.rooms[r].x, level.rooms[r].y, level.roles_of(r).iter().map(|x| x.letter()).collect::<String>())).collect();
+        println!("{} claims {} rooms {:?} for {members} folk: {} ({:?}); roles {}", letter(k), claim.rooms.len(), claim.rooms, level.faction(claim.faction).name, level.faction(claim.faction).intention, roles.join(" "));
+    }
+    debug_assert!(level.factions.iter().all(|f| level.claims.iter().any(|c| c.faction == f.id)));
     for item in &level.items {
         println!("{:?} seed {} at ({:.1}, {:.1})", item.family, item.seed, item.x, item.y);
     }
@@ -116,7 +156,7 @@ fn main() {
         println!(
             "{} of {}, seed {}, at ({:.1}, {:.1}) facing {:.0} degrees",
             folk.folk.race().label,
-            folk.faction.name(),
+            level.faction(folk.faction).name,
             folk.seed,
             folk.x,
             folk.y,
@@ -125,8 +165,9 @@ fn main() {
     }
     for prop in &level.props {
         let what = match prop.prop {
-            Prop::Container { style, seed, loot } => format!("{style:?} seed {seed}, loot {loot}"),
+            Prop::Container { style, seed, loot } => format!("{style:?} seed {seed}, loot {}", if loot == fb_level::NO_LOOT { "none".to_string() } else { loot.to_string() }),
             Prop::Scenery { kind, seed } => format!("{kind:?} seed {seed}"),
+            Prop::Campfire { seed } => format!("Campfire seed {seed}"),
         };
         println!("{what} at ({:.1}, {:.1}) facing {:.0} degrees", prop.x, prop.y, prop.yaw.to_degrees());
     }

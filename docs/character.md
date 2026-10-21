@@ -27,3 +27,7 @@ The D&D 5e SRD does not assign a Wisdom score to its folk. Here, each folk's Wis
 |      Goblin |   8 |  14 |  10 |   9 |  11 | Darkvision (60 ft).                      |
 |   Lizardfolk|  12 |  11 |   9 |  13 |  12 | Instinctive cunning (SRD 5.1, p. 99).     |
 |     Pigfolk |  14 |   8 |   9 |  13 |  10 | Average (darkvision 30 ft).              |
+
+## Alignment
+
+The delver has an alignment, which sets where each faction's standing starts (`fb_faction::Standings::start_from_alignment`, design.md). The creator does not offer a choice yet, so it is the class's typical one (`Class::alignment`): Fighter lawful neutral, Ranger neutral good, Mage true neutral, Cleric lawful good. It is not saved with the delver; it follows from the class.

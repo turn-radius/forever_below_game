@@ -107,6 +107,8 @@ pub fn stands_upright(family: Family) -> bool {
 pub fn stands_on_base(shape: &Item) -> bool {
     match shape {
         Item::Sundry(s) => s.article.kind == armory::families::sundry::SundryKind::Candle,
+        Item::Tent(s) => s.tent.form == armory::families::tent::TentForm::Pitched,
+        Item::Campfire(s) => s.fire.form == armory::families::campfire::FireForm::Set,
         _ => matches!(shape.family(), Family::Helm | Family::Hat | Family::Feet | Family::Bags | Family::Chests | Family::Lantern | Family::Food),
     }
 }
@@ -195,7 +197,20 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     if matches!(family, Family::Staff | Family::Spear | Family::Bow) && long > PACK_LIMIT_UNITS {
         p.packable = false;
     }
+    // A tent standing or a fire built is where it was put; rolled up or bundled it goes in a pack.
+    if !is_carried_form(shape) {
+        p.packable = false;
+    }
     p
+}
+
+/// Whether `shape` is in the form it is carried in: everything, but a pitched tent or a built fire.
+fn is_carried_form(shape: &Item) -> bool {
+    match shape {
+        Item::Tent(s) => s.tent.form == armory::families::tent::TentForm::Packed,
+        Item::Campfire(s) => s.fire.form == armory::families::campfire::FireForm::Packed,
+        _ => true,
+    }
 }
 
 /// Where a good that is a hand-held light is held: the off hand, where `data/bases.json` puts
@@ -571,5 +586,32 @@ mod tests {
         assert_eq!((spare.kind, spare.slot, spare.description.as_str()), (Kind::Good, Some(Slot::Offhand), "Light 20 ft · one hour"));
         let (_, mantle) = rolled("Mantle", 3);
         assert_eq!((mantle.slot, mantle.stats.warmth), (Some(Slot::Cloak), 1.5));
+    }
+
+    #[test]
+    fn a_carried_tent_is_a_bulky_heavy_roll_that_fits_a_pack() {
+        for seed in 1..12 {
+            let (shape, p) = rolled("Tent", seed);
+            let Item::Tent(t) = &shape else { panic!("{shape:?}") };
+            assert_eq!(t.tent.form, armory::families::tent::TentForm::Packed);
+            // SRD 5.1 p. 68: a two-person tent weighs 20 lb.
+            assert_eq!((p.kind, p.stats.weight, p.packable), (Kind::Good, 20.0, true), "{seed}");
+            let cells = p.footprint.cols as u32 * p.footprint.rows as u32;
+            assert!((6..=16).contains(&cells), "{seed}: {:?}", p.footprint);
+            assert!(!p.description.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_pitched_tent_and_a_built_fire_stay_where_they_were_put() {
+        use armory::families::{campfire::{Campfire, FireForm}, tent::{Tent, TentForm, TentStyle}};
+        let pitched = Item::Tent(Tent::roll_as(4, TentStyle::Ridge, TentForm::Pitched));
+        let p = profile("Tent", &pitched);
+        assert!(!p.packable && stands_on_base(&pitched));
+        let set = Item::Campfire(Campfire::roll_as(4, FireForm::Set));
+        assert!(!profile("Campfire kit", &set).packable && stands_on_base(&set));
+        let (packed, p) = rolled("Campfire kit", 4);
+        assert!(p.packable && !stands_on_base(&packed));
+        assert_eq!((p.kind, p.stats.weight), (Kind::Good, 12.0));
     }
 }

@@ -2730,10 +2730,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "fb_faction"
+version = "0.1.0"
+dependencies = [
+ "armory",
+ "fb_body",
+ "fb_items",
+ "procgen_grammar",
+ "procgen_rng",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fb_items"
 version = "0.1.0"
 dependencies = [
  "armory",
+ "procgen_grammar",
  "procgen_rng",
  "serde",
  "serde_json",
@@ -2746,6 +2760,7 @@ dependencies = [
  "armory",
  "fb_body",
  "fb_creatures",
+ "fb_faction",
  "fb_items",
  "procgen_rng",
  "serde",
@@ -2877,9 +2892,11 @@ dependencies = [
  "fb_body",
  "fb_character",
  "fb_creatures",
+ "fb_faction",
  "fb_items",
  "fb_level",
  "libc",
+ "procgen_grammar",
  "procgen_rng",
  "serde",
  "serde_json",
@@ -4741,6 +4758,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "procgen_grammar"
+version = "0.1.0"
+dependencies = [
+ "procgen_rng",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

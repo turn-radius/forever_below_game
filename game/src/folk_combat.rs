@@ -38,7 +38,8 @@
 //!   weapon's dice plus the Strength modifier and is sent as an [`AttackOnDelver`], which takes
 //!   the delver's hit points as a creature's blow does, and a miss whooshes past. A friendly
 //!   folk never attacks, however near the delver comes. One who has not seen the delver for
-//!   `folk.lose_interest_after` seconds gives up, friendly again, and heads home.
+//!   `folk.lose_interest_after` seconds gives up, friendly again, and heads home, unless their
+//!   faction is Hostile to the delver, which keeps its folk hostile (`crate::folk_regard`).
 //!
 //! A folk's stance while lying is the one they had standing: the skinned figure is turned as a
 //! whole, not ragdolled. Our own simplification.
@@ -69,7 +70,7 @@ use crate::inventory::underfoot::FloorChanges;
 use crate::inventory::Toasts;
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, BlocksTheWay, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
-use crate::player::{blocked_by, slide_around};
+use crate::player::slide_around;
 use crate::render::ItemSpawner;
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
@@ -81,7 +82,7 @@ impl Plugin for FolkCombatPlugin {
         if !app.is_plugin_added::<crate::belongings::BelongingsPlugin>() {
             app.add_plugins(crate::belongings::BelongingsPlugin);
         }
-        app.add_plugins(HostilityPlugin)
+        app.add_plugins(HostilityPlugin).add_plugins(crate::folk_regard::FolkRegardPlugin)
             .add_message::<Struck>()
             .add_message::<Callout>()
             .add_message::<crate::combat::feedback::Slain>()
@@ -148,7 +149,7 @@ fn debug_provoke(
         && *since >= SLAY_AT
         && let Some((entity, _, at)) = find(index)
     {
-        struck.write(Struck { target: entity, damage: 1000, from: at.translation.xz() + (at.rotation * Vec3::Z).xz() * 10.0, bludgeoning: false, critical: false });
+        struck.write(Struck { target: entity, damage: 1000, from: at.translation.xz() + (at.rotation * Vec3::Z).xz() * 10.0, bludgeoning: false, critical: false, by_ally: false });
         debug.done[1] = true;
     }
 }
@@ -181,13 +182,13 @@ pub struct Fight {
     /// Seconds until they may swing again.
     pub cooldown: f32,
     /// Whether this swing's blow has come down.
-    landed: bool,
+    pub(crate) landed: bool,
     /// Seconds since they last saw the delver.
     pub unseen: f32,
     path: Vec<(i32, i32)>,
     goal: (i32, i32),
     repath: f32,
-    rng: Mulberry32,
+    pub(crate) rng: Mulberry32,
 }
 
 impl Fight {
@@ -198,7 +199,7 @@ impl Fight {
 
 impl Fight {
     /// Drops the fight under way: no swing, no way to the delver, no time unseen.
-    fn calm(&mut self) {
+    pub(crate) fn calm(&mut self) {
         *self = Fight { rng: self.rng.clone(), ..Fight::new(0) };
     }
 }
@@ -208,13 +209,13 @@ const FIGHT_SALT: u32 = 0x0F16_4700;
 /// How far through a swing the blow lands, as a skeleton's does (`creatures::skeletons::LANDS`).
 pub const LANDS: f32 = crate::creatures::skeletons::LANDS;
 /// The wait between a folk's swings, seconds, as a skeleton's. Our own.
-const COOLDOWN: f32 = 0.8;
+pub(crate) const COOLDOWN: f32 = 0.8;
 /// How much farther than their reach a blow still lands, as a skeleton's. Our own.
 const SLACK: f32 = 1.15;
 /// A hostile folk runs at this many times their walking pace: the SRD's Dash (p. 93).
-const DASH: f32 = 2.0;
+pub(crate) const DASH: f32 = 2.0;
 /// How quickly a hostile folk turns to face the delver, radians a second. Our own.
-const TURN_RATE: f32 = 6.0;
+pub(crate) const TURN_RATE: f32 = 6.0;
 /// How often a folk finds its way again while following, seconds, as a creature does.
 const REPATH: f32 = 0.5;
 
@@ -312,7 +313,7 @@ pub fn take_folk_blows(
         }
         info!("{} takes {}: {} of {} hit points", denizen.person.name, blow.damage, health.hp, health.max);
         if fell {
-            slain.write(crate::combat::feedback::Slain { target: blow.target });
+            slain.write(crate::combat::feedback::Slain { target: blow.target, by_ally: blow.by_ally });
             commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<(BlocksTheWay, Routine)>();
             toasts.add(&format!("{} is slain", denizen.person.name));
             info!("{} falls", denizen.person.name);
@@ -402,6 +403,13 @@ type Fighters = (
 /// A living creature, not a folk.
 type Standing = (Without<Denizen>, Without<Corpse>);
 
+/// Seconds a fighter has lost the delver after a frame of `dt`: not at all while they are in
+/// sight with a way to them (straight, or along a path found), and counting while out of sight or
+/// seen only through a grate with no way round.
+pub fn unseen_after(unseen: f32, sees: bool, direct: bool, no_path: bool, dt: f32) -> f32 {
+    if sees && (direct || !no_path) { 0.0 } else { unseen + dt }
+}
+
 /// One frame of every hostile folk's fight: close on the delver round what is in the way, turn
 /// to them, and swing in reach, the blow landing as the arm comes down ([`LANDS`]).
 #[allow(clippy::too_many_arguments)]
@@ -410,11 +418,13 @@ pub fn fight(
     level: Res<CurrentLevel>,
     tuning: Res<Tuning>,
     blocked_cells: Res<BlockedCells>,
+    doors: Option<Res<crate::doors::Doors>>,
     obstacles: Res<Obstacles>,
     player: Query<DelverToStrike, (With<Player>, Without<Denizen>)>,
     creatures: Query<(&Critter, &Transform), Standing>,
     mut folk: Query<Fighters, Without<Corpse>>,
     mut attacks: BlowsAtDelver,
+    record: Res<crate::record::WorldRecord>,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
@@ -423,7 +433,6 @@ pub fn fight(
     let Some((player, delver_ac)) = player.iter().next().map(|(t, ac)| (t.translation.xz(), ac.copied())) else { return };
     let level = &level.0;
     let relief = Relief::new(level);
-    let blocked = blocked_by(level, &blocked_cells);
     let player_radius = tuning.moving.body_radius;
     // Everything that moves or stands but the folk themselves, whose circles are in the
     // obstacles already (each fighter sets its own aside).
@@ -435,13 +444,19 @@ pub fn fight(
             continue;
         }
         let fight = &mut *fight;
+        let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+        let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         let at = transform.translation.xz();
         let radius = denizen.radius;
         let reach = player_radius + combatant.weapon.reach;
-        let sees = line_of_sight(grid(at), grid(player), &blocked);
-        // Out of sight long enough, they give up and go home, friendly again.
-        fight.unseen = if sees { 0.0 } else { fight.unseen + dt };
-        if fight.unseen > tuning.folk.lose_interest_after {
+        let sees = line_of_sight(grid(at), grid(player), &see);
+        // Seen through a grate they cannot get past, and with no way round, counts as unseen too,
+        // so they give up as they do out of sight rather than stand at it for good.
+        let direct = sees && line_of_sight(grid(at), grid(player), &blocked);
+        fight.unseen = unseen_after(fight.unseen, sees, direct, fight.path.is_empty(), dt);
+        // A faction that is Hostile to the delver does not calm down (`crate::folk_regard`).
+        let hated = record.standings.band(denizen.person.faction.id) == fb_faction::Band::Hostile;
+        if fight.unseen > tuning.folk.lose_interest_after && !hated {
             *hostility = Hostility::Friendly;
             fight.calm();
             stride.speed = 0.0;
@@ -480,7 +495,7 @@ pub fn fight(
             fight.landed = false;
         } else if !in_reach {
             // Closing in: straight in sight, else along the way round the rock.
-            let target = if sees {
+            let target = if direct {
                 fight.path.clear();
                 player
             } else {
@@ -520,6 +535,16 @@ pub fn fight(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_fighter_who_sees_the_delver_only_through_a_grate_loses_them_in_time() {
+        // In sight with a straight way, or a path found: not lost.
+        assert_eq!(unseen_after(2.0, true, true, true, 0.5), 0.0);
+        assert_eq!(unseen_after(2.0, true, false, false, 0.5), 0.0);
+        // Out of sight, or in sight only through a grate with no path: the timer runs.
+        assert_eq!(unseen_after(2.0, false, false, true, 0.5), 2.5);
+        assert_eq!(unseen_after(2.0, true, false, true, 0.5), 2.5);
+    }
     use crate::inventory::underfoot::apply_floor_changes;
     use crate::combat::{CombatPlugin, RunDice, Weapon, swing::Swing};
     use crate::inventory::Inventory;
@@ -559,24 +584,41 @@ pub(crate) mod tests {
 
     /// A stand-in (no figure) for the folk at `spot`, standing there.
     fn stand_in(app: &mut App, spot: &fb_level::FolkSpot) -> Entity {
-        let denizen = Denizen { person: Person::of(spot, 1), radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
+        let denizen = Denizen { person: crate::folk::person_1207(spot), radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
         app.world_mut().spawn((denizen.belongings(), denizen, BlocksTheWay(fb_level::FloorShape::Round(3.0)), crate::folk::stand_at(spot))).id()
     }
 
-    /// The delver `away` world units west of `at`, facing it.
-    fn delver_near(app: &mut App, at: Vec3, away: f32) -> Entity {
-        let from = at - Vec3::X * away;
+    /// The delver `away` world units west of `at`, facing it, or, with `open_side`, east, south
+    /// or north of it where the west is rock.
+    fn delver_near(app: &mut App, at: Vec3, away: f32, open_side: bool) -> Entity {
+        let level = &app.world().resource::<CurrentLevel>().0;
+        let open = |from: Vec3| level.is_open((from.x / fb_level::CELL).floor() as i32, (from.z / fb_level::CELL).floor() as i32);
+        let sides = if open_side { vec![-Vec3::X, Vec3::X, Vec3::Z, -Vec3::Z] } else { vec![-Vec3::X] };
+        let from = sides.into_iter().map(|side| at + side * away).find(|&from| open(from)).unwrap_or(at - Vec3::X * away);
         app.world_mut().spawn((Player, Transform::from_translation(from).looking_at(at, Vec3::Y))).id()
     }
 
     /// Seed 1207's level with its first folk alone, standing at their spot as a stand-in, and
     /// the delver holding a sword `away` world units west of them, facing them.
     pub(crate) fn folk_fight(away: f32) -> (App, Entity, Entity) {
+        fight_with(away, false)
+    }
+
+    /// The index in the level of the folk [`folk_fight`] stands in for.
+    fn plain_index(app: &App) -> usize {
+        app.world().resource::<CurrentLevel>().0.folk.iter().position(|f| f.trade.is_none_or(|t| t.profession != fb_faction::Profession::Guard)).expect("someone who is not a guard")
+    }
+
+    /// [`folk_fight`] with the first guard, or the first who is not one.
+    fn fight_with(away: f32, guard: bool) -> (App, Entity, Entity) {
         let mut app = combat_app();
-        let spot = app.world().resource::<CurrentLevel>().0.folk[0];
+        // Not a guard unless asked: they stand beside a doorway (#550) and are a poor stand-in
+        // for someone met in a room.
+        let is_guard = |f: &&fb_level::FolkSpot| f.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard);
+        let spot = *app.world().resource::<CurrentLevel>().0.folk.iter().find(|f| is_guard(f) == guard).expect("a folk of the wanted kind");
         let folk = stand_in(&mut app, &spot);
         let at = app.world().get::<Transform>(folk).unwrap().translation;
-        let player = delver_near(&mut app, at, away);
+        let player = delver_near(&mut app, at, away, !guard);
         app.update();
         (app, player, folk)
     }
@@ -588,7 +630,7 @@ pub(crate) mod tests {
         let spots = app.world().resource::<CurrentLevel>().0.folk.clone();
         let folk: Vec<Entity> = spots.iter().map(|spot| stand_in(&mut app, spot)).collect();
         let at = app.world().get::<Transform>(folk[0]).unwrap().translation;
-        let player = delver_near(&mut app, at, away);
+        let player = delver_near(&mut app, at, away, true);
         app.update();
         (app, player, folk)
     }
@@ -691,10 +733,33 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_faction_that_turns_on_the_delver_reads_hostile_and_others_are_unchanged() {
+        let (mut app, _, folk) = folk_fight(30.0);
+        let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.id;
+        let seed = app.world().resource::<CurrentLevel>().0.seed;
+        let world = fb_faction::World::new(seed);
+        let other = world.factions().iter().map(|f| f.id).find(|id| *id != faction).unwrap();
+        app.insert_resource(crate::record::WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, seed));
+        let (before, other_before) = {
+            let standings = &app.world().resource::<crate::record::WorldRecord>().standings;
+            (standings.get(faction), standings.get(other))
+        };
+        assert_ne!(before.band(), fb_faction::Band::Hostile, "not hostile to begin with");
+        app.world_mut().write_message(Provoked { folk });
+        app.update();
+        assert_eq!(hostility(&app, folk), Hostility::Hostile);
+        let standings = &app.world().resource::<crate::record::WorldRecord>().standings;
+        assert_eq!(standings.band(faction), fb_faction::Band::Hostile);
+        assert!(standings.has_met(faction));
+        assert_eq!(standings.get(other), other_before);
+        assert!(!standings.has_met(other));
+    }
+
+    #[test]
     fn at_0_hit_points_a_folk_dies_and_falls_where_it_stood() {
         let (mut app, _, folk) = folk_fight(9.0);
         let stood = *app.world().get::<Transform>(folk).unwrap();
-        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: stood.translation.xz() - Vec2::X * 9.0, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: stood.translation.xz() - Vec2::X * 9.0, bludgeoning: false, critical: false, by_ally: false });
         for _ in 0..90 {
             app.update();
         }
@@ -708,7 +773,7 @@ pub(crate) mod tests {
     }
 
     fn people() -> Vec<Person> {
-        fb_level::generate(1207, 1).folk.iter().map(|spot| Person::of(spot, 1)).collect()
+        fb_level::generate(1207, 1).folk.iter().map(|spot| crate::folk::person_1207(spot)).collect()
     }
 
     #[test]
@@ -769,21 +834,21 @@ pub(crate) mod tests {
         let expected = crate::hostility::who_turns(first, &kin, &level, |x, y| !level.is_open(x, y));
         assert!(expected.len() > 1, "someone of the faction sees it");
         let at = app.world().get::<Transform>(first).unwrap().translation.xz();
-        app.world_mut().write_message(Struck { target: first, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: first, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false, by_ally: false });
         for _ in 0..3 {
             app.update();
         }
         for &f in &folk {
             let denizen = app.world().get::<Denizen>(f).unwrap();
             let hostile = hostility(&app, f).is_hostile();
-            assert_eq!(hostile, expected.contains(&f), "{} of {}", denizen.person.name, denizen.person.spot.faction.name());
+            assert_eq!(hostile, expected.contains(&f), "{} of {}", denizen.person.name, denizen.person.faction.name);
             if denizen.person.spot.faction != faction {
                 assert!(!hostile, "{} of another faction turned", denizen.person.name);
             }
         }
         assert!(folk.iter().any(|&f| app.world().get::<Denizen>(f).unwrap().person.spot.faction != faction), "a level of one faction tests nothing");
         let toast = &app.world().resource::<crate::inventory::Toast>().text;
-        assert_eq!(*toast, crate::hostility::turn_line(faction));
+        assert_eq!(*toast, crate::hostility::turn_line(&app.world().get::<Denizen>(first).unwrap().person.faction.name));
     }
 
     #[test]
@@ -820,7 +885,7 @@ pub(crate) mod tests {
     }
 
     /// A cell of the level far from `from` (world `(x, z)`) with no line of sight to it.
-    fn out_of_sight_of(app: &App, from: Vec2) -> Vec3 {
+    pub(crate) fn out_of_sight_of(app: &App, from: Vec2) -> Vec3 {
         let level = &app.world().resource::<CurrentLevel>().0;
         let blocked = |x: i32, y: i32| !level.is_open(x, y);
         let (w, h) = (level.width as i32, level.height as i32);
@@ -835,6 +900,37 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_guard_who_fought_goes_back_to_their_post_and_faces_the_door() {
+        let (mut app, player, guard) = fight_with(12.0, true);
+        app.world_mut().resource_mut::<Tuning>().folk.lose_interest_after = 2.0;
+        app.world_mut().entity_mut(player).insert(Health::full(100_000));
+        let post = app.world().get::<Routine>(guard).expect("a routine").home;
+        let facing = app.world().get::<Routine>(guard).unwrap().facing;
+        app.world_mut().write_message(Provoked { folk: guard });
+        let mut furthest = 0.0f32;
+        for _ in 0..120 {
+            app.update();
+            furthest = furthest.max(app.world().get::<Transform>(guard).unwrap().translation.xz().distance(post));
+        }
+        assert!(hostility(&app, guard).is_hostile());
+        assert!(furthest > 3.0, "the guard never left their post ({furthest})");
+        let faction = app.world().get::<Denizen>(guard).unwrap().person.faction.id;
+        let mut record = app.world_mut().resource_mut::<crate::record::WorldRecord>();
+        let now = record.standings.get(faction).value();
+        record.standings.shift(faction, -now);
+        let at = app.world().get::<Transform>(guard).unwrap().translation.xz();
+        let away = out_of_sight_of(&app, at);
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = away;
+        for _ in 0..60 * 40 {
+            app.update();
+        }
+        assert!(!hostility(&app, guard).is_hostile());
+        let now = app.world().get::<Transform>(guard).unwrap();
+        assert!(now.translation.xz().distance(post) < CELL * 0.5, "the guard is {} from their post", now.translation.xz().distance(post));
+        assert!((now.rotation * Vec3::Z).xz().normalize_or_zero().dot(facing) > 0.95, "the guard does not face the door again");
+    }
+
+    #[test]
     fn a_hostile_folk_who_loses_sight_of_the_delver_long_enough_goes_home_friendly() {
         let (mut app, player, folk) = folk_fight(12.0);
         app.world_mut().resource_mut::<Tuning>().folk.lose_interest_after = 2.0;
@@ -844,6 +940,13 @@ pub(crate) mod tests {
             app.update();
         }
         assert!(hostility(&app, folk).is_hostile());
+        // Turning on the delver dropped their faction to Hostile, which never calms down
+        // (`folk_regard`); the delver having made amends, it stands at Neutral again.
+        let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.id;
+        let mut record = app.world_mut().resource_mut::<crate::record::WorldRecord>();
+        let now = record.standings.get(faction).value();
+        record.standings.shift(faction, -now);
+        assert_eq!(record.standings.band(faction), fb_faction::Band::Neutral);
         let home = app.world().get::<Routine>(folk).expect("a routine").home;
         // The delver slips away out of sight.
         let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
@@ -864,7 +967,7 @@ pub(crate) mod tests {
         assert!(matches!(routine.phase, crate::folk_routine::Phase::Walk { goal } if goal == home) || app.world().get::<Transform>(folk).unwrap().translation.xz().distance(home) < 2.0 * CELL, "{:?}", routine.phase);
         // Struck again, they turn again.
         let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
-        app.world_mut().write_message(Struck { target: folk, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: folk, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false, by_ally: false });
         for _ in 0..3 {
             app.update();
         }
@@ -907,7 +1010,7 @@ pub(crate) mod tests {
         app.init_resource::<crate::record::WorldRecord>();
         app.world_mut().run_system_once(crate::record::record_level_left).unwrap();
         let record = app.world().resource::<crate::record::WorldRecord>();
-        let left = &record.level(1).unwrap().folk[&0];
+        let left = &record.level(1).unwrap().folk[&plain_index(&app)];
         assert!(left.hostile);
         assert_eq!(left.hp, app.world().get::<Health>(folk).unwrap().hp);
     }
@@ -918,7 +1021,7 @@ pub(crate) mod tests {
 
     fn strike_down(app: &mut App, folk: Entity) {
         let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
-        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false, by_ally: false });
         for _ in 0..120 {
             app.update();
         }
@@ -929,7 +1032,10 @@ pub(crate) mod tests {
     fn a_slain_folk_drops_everything_it_wore_and_held_once_where_it_fell() {
         use crate::inventory::underfoot::{FloorChange, FloorChanges};
         let (mut app, _, folk) = folk_fight(30.0);
-        let gear = app.world().get::<Denizen>(folk).unwrap().person.gear.clone();
+        // What they wore and held, and carried: their faction's key too.
+        let person = app.world().get::<Denizen>(folk).unwrap().person.clone();
+        let mut gear = person.gear.clone();
+        gear.extend(person.goods.iter().cloned().map(|i| (fb_items::Slot::Mainhand, i)));
         assert!(gear.len() >= 2, "a folk wears and holds something");
         assert!(on_the_floor(&mut app).is_empty(), "nothing lies there while they stand");
         let lying_before = app.world().resource::<CurrentLevel>().0.items.len();
@@ -953,7 +1059,7 @@ pub(crate) mod tests {
         let at = app.world().get::<Corpse>(folk).unwrap().fell.translation.xz();
         for f in &floor {
             let world = fb_level::Level::world(f.spot.x, f.spot.y);
-            assert!(Vec2::new(world[0], world[2]).distance(at) < 12.0, "{} from where they fell", Vec2::new(world[0], world[2]).distance(at));
+            assert!(Vec2::new(world[0], world[2]).distance(at) < 16.0, "{} from where they fell", Vec2::new(world[0], world[2]).distance(at));
         }
         // The body is bare, and sheds nothing more however long it lies.
         assert!(app.world().get::<Denizen>(folk).unwrap().person.gear.is_empty());
@@ -976,6 +1082,10 @@ pub(crate) mod tests {
         assert!(on_the_floor(&mut app).is_empty(), "all taken up");
         let mut inventory = app.world_mut().resource_mut::<Inventory>();
         for &(id, slot) in &ids {
+            // The faction's key is carried, not worn.
+            if inventory.item(id).is_some_and(|i| i.base == fb_items::armory_base::KEY) {
+                continue;
+            }
             inventory.equip(id, slot).unwrap_or_else(|e| panic!("{slot:?}: {e:?}"));
             assert_eq!(inventory.worn(slot), Some(id), "{slot:?} is worn");
         }
@@ -989,7 +1099,7 @@ pub(crate) mod tests {
         app.init_resource::<crate::record::WorldRecord>();
         app.world_mut().run_system_once(crate::record::record_level_left).unwrap();
         let record = app.world().resource::<crate::record::WorldRecord>().clone();
-        let left = &record.level(1).unwrap().folk[&0];
+        let left = &record.level(1).unwrap().folk[&plain_index(&app)];
         assert!(left.dead && left.hp == 0);
         // The level laid out again from the record: the folk come back as it has them.
         let mut again = combat_app();
@@ -998,7 +1108,7 @@ pub(crate) mod tests {
             again.update();
         }
         let mut denizens = again.world_mut().query::<(Entity, &Denizen)>();
-        let spot = again.world().resource::<CurrentLevel>().0.folk[0];
+        let spot = again.world().resource::<CurrentLevel>().0.folk[plain_index(&again)];
         let (body, denizen) = denizens.iter(again.world()).find(|(_, d)| d.person.spot == spot).map(|(e, d)| (e, d.clone())).unwrap();
         assert!(denizen.person.gear.is_empty(), "bare");
         assert!(again.world().get::<Corpse>(body).is_some() && again.world().get::<crate::combat::feedback::Looted>(body).is_some());
@@ -1030,6 +1140,7 @@ pub(crate) mod tests {
         let now = drawn(&mut again);
         assert!(now.iter().any(|n| n == "Body"), "the body is drawn");
         assert!(!now.iter().any(|n| titles.contains(n)), "still drawn in its gear: {now:?}");
-        assert_eq!(on_the_floor(&mut again).len(), person.gear.len());
+        // What they wore and carried, their faction's key among it.
+        assert_eq!(on_the_floor(&mut again).len(), person.gear.len() + person.goods.len());
     }
 }

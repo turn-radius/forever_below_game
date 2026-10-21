@@ -9,10 +9,14 @@
 //!   clear line to them (`fb_level::path::line_of_sight`, as creatures notice the delver)
 //!   ([`who_turns`]). Other factions stay friendly. "The Ash Choir turn on you" shows low in the
 //!   view.
+//! - A faction that turns drops to [`fb_faction::Band::Hostile`] in the delver's standing
+//!   (`WorldRecord::standings`), shared by its camps on every level (#542), after the blow's own
+//!   cost (`StandingRules::blow`, #547).
 //! - Hostile stays hostile while the fight goes on, and the record keeps it (`crate::record`). A
 //!   hostile folk who goes `folk.lose_interest_after` seconds without sight of the delver gives up
 //!   and turns friendly again (`crate::folk_combat::fight`); striking them again provokes them
-//!   again.
+//!   again, unless its faction is Hostile, which never calms down. What folk do on sight by band
+//!   (attack, watch, greet, help) is `crate::folk_regard`.
 //!
 //! Who sees, and the reach of sight in a corridor, are our own.
 
@@ -24,13 +28,13 @@ use crate::combat::feedback::Corpse;
 use crate::folk::Denizen;
 use crate::inventory::Toasts;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems};
-use crate::player::blocked_by;
+use crate::record::WorldRecord;
 
 pub struct HostilityPlugin;
 
 impl Plugin for HostilityPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Provoked>().init_resource::<BlockedCells>().add_systems(Update, turn_on_the_delver.in_set(DelveSystems));
+        app.add_plugins(crate::kills::KillsPlugin).add_message::<Provoked>().init_resource::<BlockedCells>().init_resource::<WorldRecord>().add_systems(Update, turn_on_the_delver.in_set(DelveSystems));
     }
 }
 
@@ -95,8 +99,7 @@ pub fn who_turns(provoked: Entity, folk: &[Kin], level: &Level, blocked: impl Fn
 }
 
 /// The line shown when `faction` turns on the delver: "The Ash Choir turn on you".
-pub fn turn_line(faction: Faction) -> String {
-    let name = faction.name();
+pub fn turn_line(name: &str) -> String {
     let mut letters = name.chars();
     let capital: String = letters.next().map(|c| c.to_uppercase().chain(letters).collect()).unwrap_or_default();
     format!("{capital} turn on you")
@@ -108,29 +111,34 @@ pub fn turn_on_the_delver(
     mut provoked: MessageReader<Provoked>,
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
+    doors: Option<Res<crate::doors::Doors>>,
     mut toasts: Toasts,
+    mut record: ResMut<WorldRecord>,
     mut folk: Query<(Entity, &Denizen, &Transform, &mut Hostility), Without<Corpse>>,
 ) {
     let causes: Vec<Entity> = provoked.read().map(|p| p.folk).collect();
     if causes.is_empty() {
         return;
     }
-    let blocked = blocked_by(&level.0, &blocked_cells);
     let everyone: Vec<Kin> = folk.iter().map(|(entity, d, t, _)| Kin { entity, faction: d.person.spot.faction, at: t.translation.xz() }).collect();
     for cause in causes {
         let mut newly = false;
         let mut faction = None;
+        // Kin see each other across their own faction's shut doors, and no one else's.
+        let blocked = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), everyone.iter().find(|k| k.entity == cause).map(|k| k.faction));
         for entity in who_turns(cause, &everyone, &level.0, &blocked) {
             let Ok((_, denizen, _, mut hostility)) = folk.get_mut(entity) else { continue };
             if !hostility.is_hostile() {
                 *hostility = Hostility::Hostile;
                 newly = true;
-                faction = Some(denizen.person.spot.faction);
-                info!("{} of {} turns hostile", denizen.person.name, denizen.person.spot.faction.name());
+                faction = Some(denizen.person.faction.name.clone());
+                // The faction's standing agrees with its folk, on every level.
+                record.standings.on_blow(denizen.person.faction.id);
+                info!("{} of {} turns hostile", denizen.person.name, denizen.person.faction.name);
             }
         }
         if let (true, Some(faction)) = (newly, faction) {
-            toasts.add(&turn_line(faction));
+            toasts.add(&turn_line(&faction));
         }
     }
 }
@@ -141,10 +149,8 @@ mod tests {
 
     #[test]
     fn the_line_names_the_faction_with_a_capital() {
-        let choir = Faction::all().find(|f| f.name() == "the Ash Choir").unwrap();
-        assert_eq!(turn_line(choir), "The Ash Choir turn on you");
-        let keepers = Faction::all().find(|f| f.name() == "the Lantern-keepers").unwrap();
-        assert_eq!(turn_line(keepers), "The Lantern-keepers turn on you");
+        assert_eq!(turn_line("the Ash Choir"), "The Ash Choir turn on you");
+        assert_eq!(turn_line("the Lantern-keepers"), "The Lantern-keepers turn on you");
     }
 
     #[test]
@@ -174,7 +180,7 @@ mod tests {
         // Of another faction, standing right beside, they stay friendly.
         let mut stranger = first;
         stranger.entity = Entity::from_raw_u32(999).unwrap();
-        stranger.faction = Faction::all().find(|f| *f != first.faction).unwrap();
+        stranger.faction = level.factions.iter().map(|f| f.id).find(|f| *f != first.faction).unwrap();
         stranger.at += Vec2::X;
         let with_stranger: Vec<Kin> = folk.iter().copied().chain([stranger]).collect();
         assert!(!who_turns(first.entity, &with_stranger, &level, open).contains(&stranger.entity));

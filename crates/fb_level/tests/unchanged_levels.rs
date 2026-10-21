@@ -1,6 +1,13 @@
 //! Choosing finishes must not move anything else: a hash of every level for seeds 1..50 at
 //! depths 1..4, taken before finishes existed, and taken again when creatures were kept out of
-//! the rooms folk hold and centipedes moved to the second level (#448).
+//! the rooms folk hold and centipedes moved to the second level (#448), and again when factions
+//! came from the world seed (#536), and again when folk moved into faction claims (#541), and again
+//! when claimed rooms took roles (#546): halls and hearths are lit and furnished, and folk stand by role,
+//! and again when halls hung their banners (#551): `levels_match_those_before_finishes` (the whole level, so it
+//! counts `Level::banners`) was retaken; `layout_items_and_lights_match_those_before_factions` was not, since
+//! banners are a list of their own and move no wall, item, light, prop or folk. Both were retaken when claims
+//! stopped taking rooms the wild ground needs (#541), so the way down is never behind a faction: the claims moved,
+//! and with them the braziers lit in their halls and hearths, the folk, the props and the stairs; walls, rooms and items did not. And again when folk gained trades (#544).
 //!
 //! Floats are rounded to three decimals before hashing. Each platform's libm rounds `sin`,
 //! `atan2` and the like its own way, so the last bits differ between macOS and the Linux CI
@@ -85,5 +92,34 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 18114639057965414438, "snapshot taken before finishes");
+    assert_eq!(all_levels_hash(), 17322507725479787400, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge");
+}
+
+/// A hash of every level's layout, items and lights, which come before the folk in the level's
+/// streams. Since #546 the lights include a brazier added to each claimed hall and hearth that had
+/// none, so the lights, and with them this hash, changed on purpose (and again for #569, when a hearth's brazier became a campfire light, one fire to a room); walls, rooms and items did not
+/// move. Before that, factions from the world seed (#536) moved the folk only; the props, stairs, webs and
+/// creatures read where folk stand (to keep clear of them and out of their rooms), so those moved
+/// with them and are held by [`levels_match_those_before_finishes`] instead. It names fields, so
+/// it reads levels from before `factions` existed too.
+fn all_levels_before_folk_hash() -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for depth in 1..=4 {
+        for seed in 1..=50 {
+            let l = generate(seed, depth);
+            let text = format!(
+                "{:?}",
+                ((&l.seed, &l.depth, &l.style, &l.width, &l.height, &l.cells, &l.ceiling, &l.entrance), (&l.rooms, &l.items, &l.lights))
+            );
+            for b in round_floats(&text).bytes() {
+                h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+    }
+    h
+}
+
+#[test]
+fn layout_items_and_lights_match_those_before_factions() {
+    assert_eq!(all_levels_before_folk_hash(), 13023108855730021471, "snapshot of everything before the folk");
 }
