@@ -340,7 +340,11 @@ fn the_world_record_round_trips_through_serde_and_death_resets_it() {
     run(&mut app, 90);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
     run(&mut app, 30);
-    assert_eq!(*app.world().resource::<WorldRecord>(), WorldRecord::default());
+    // A fresh delve records no level yet, has met no one, and starts every faction's standing
+    // afresh from the delver's alignment (#542).
+    let fresh = app.world().resource::<WorldRecord>();
+    assert!(fresh.levels.is_empty());
+    assert_eq!(fresh.standings.met().count(), 0);
     let generated = fb_level::generate(1207, 1);
     assert_eq!(*level(&app), generated);
     assert!(lying(&mut app).iter().all(|(spot, _)| generated.items.contains(spot)), "level 1 is as generated again");
