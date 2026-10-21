@@ -337,6 +337,11 @@ pub(crate) fn spawn_folk(
             commands.entity(root).insert((health, hostility, left.transform()));
         }
     }
+    // Capture hook: `FB_SPAWN=folk:<faction>` stands folk ahead of the start.
+    let dev = crate::creatures::dev_folk(&level.0);
+    for (person, figure) in build_figures(&dev, &level.0.factions, level.0.depth) {
+        spawn_denizen(&mut commands, &mut spawner, &mut bindposes, &person, &figure);
+    }
     *shown = Some(level.0.folk.clone());
 }
 
