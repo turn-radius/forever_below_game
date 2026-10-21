@@ -198,14 +198,31 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
     furnish(&mut level, &mut Mulberry32::new(layout_seed ^ FURNISH_SALT), p);
     let start_room = level.start_room().expect("the entrance leads into a room");
     level.factions = fb_faction::World::new(world_seed).draw_specs(seed);
-    let (claims, strengths) = grow_claims(&level, start_room, &mut Mulberry32::new(layout_seed ^ CLAIM_SALT));
-    level.claims = claims;
-    // A faction that found no ground is not on the level.
-    let held: Vec<_> = level.claims.iter().map(|c| c.faction).collect();
-    level.factions.retain(|s| held.contains(&s.id));
-    level.roles = assign_roles(&level);
-    light_roles(&mut level, &mut Mulberry32::new(layout_seed ^ ROLE_SALT));
-    level.folk = place_folk(&level, &strengths, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
+    // A room too cramped or crowded for its claim's folk to stand in cannot start a claim; the
+    // claims are grown again without it, until every claim holds a few folk at least.
+    let mut cramped: Vec<usize> = Vec::new();
+    let mut need = 3;
+    let level = loop {
+        let (claims, strengths) = grow_claims(&level, start_room, &cramped, &mut Mulberry32::new(layout_seed ^ CLAIM_SALT));
+        let mut trial = level.clone();
+        trial.claims = claims;
+        // A faction that found no ground is not on the level.
+        let held: Vec<_> = trial.claims.iter().map(|c| c.faction).collect();
+        trial.factions.retain(|s| held.contains(&s.id));
+        trial.roles = assign_roles(&trial);
+        light_roles(&mut trial, &mut Mulberry32::new(layout_seed ^ ROLE_SALT));
+        trial.folk = place_folk(&trial, &strengths, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
+        let empty: Vec<usize> = trial.claims.iter().zip(&strengths).filter(|(c, want)| trial.folk.iter().filter(|f| f.faction == c.faction).count() < (**want).min(need)).map(|(c, _)| c.rooms[0]).collect();
+        if empty.is_empty() {
+            break trial;
+        }
+        cramped.extend(empty);
+        // A level with no ground for a claim of three settles for claims of one.
+        if trial.claims.len() == cramped.len() && need > 1 {
+            need = 1;
+            cramped.clear();
+        }
+    };
     Some((level, layout_seed))
 }
 
@@ -1133,16 +1150,17 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when claims stopped taking rooms
+        // the wild ground needs to stay whole, so the way down is never behind a faction (#541).
         let before = [
-            (0u32, 0xcaf61ae9773d06ddu64),
-            (1, 0xb19699d2ec10787),
-            (2, 0x18d03c490c69e838),
-            (7, 0x1553762d9725647f),
-            (64, 0xdea6ef740733b76d),
-            (1207, 0xf4548d2a21c00aee),
-            (4242, 0xb2b35bddabf38cb),
-            (u32::MAX, 0x4bc6561f3687a9fe),
+            (0u32, 0xefa1ab057d211da9u64),
+            (1, 0xf1617f3bcb419eeb),
+            (2, 0xc88a0297d6c14cc4),
+            (7, 0xd7af6942c3a24ce8),
+            (64, 0x9092da5908e65394),
+            (1207, 0x30c7973717ac1431),
+            (4242, 0x12951b0bf4b2a892),
+            (u32::MAX, 0x533fad8b2fa24b12),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);
@@ -1351,7 +1369,9 @@ mod tests {
                 // At least `FAR_SHARE` as far as the furthest cell it could have stood on: free
                 // floor against a wall of a room, clear of doors, with free floor in front.
                 let taken = spot_cells(&level);
-                let free = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && !taken.contains(&(x, y));
+                // And in wild ground: a stair never stands in a claim or behind its doors.
+                let held = crate::claims::held_cells(&level, &level.claims);
+                let free = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && !taken.contains(&(x, y)) && !held[(y as u32 * level.width + x as u32) as usize];
                 let mut furthest = 0;
                 for y in 0..level.height as i32 {
                     for x in 0..level.width as i32 {

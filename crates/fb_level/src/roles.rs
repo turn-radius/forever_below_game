@@ -84,8 +84,24 @@ impl Level {
     /// Every door on the edge of a claim, in reading order, the entrance excluded. A door
     /// between two rooms of the same claim is no claim door.
     pub fn claim_doors(&self) -> Vec<ClaimDoor> {
-        let entrance = (self.entrance.x as i32, self.entrance.y as i32);
         let (sx, sy, _) = self.start();
+        let mut doors = self.edge_doors(&self.claims);
+        // The main door of each claim: of the doors of its hall, the one nearest the start.
+        for claim in &self.claims {
+            let Some(hall) = self.room_with_role(claim, RoomRole::Hall) else { continue };
+            let nearest = doors.iter().enumerate().filter(|(_, d)| d.room == hall).min_by_key(|(_, d)| ((d.x - sx as i32).abs() + (d.y - sy as i32).abs(), d.y, d.x)).map(|(i, _)| i);
+            if let Some(i) = nearest {
+                doors[i].main = true;
+            }
+        }
+        doors
+    }
+
+    /// The doors on the edge of `claims` (not yet marked main), whether or not they are the
+    /// level's own claims, so growth can ask what a claim would shut.
+    pub(crate) fn edge_doors(&self, claims: &[Claim]) -> Vec<ClaimDoor> {
+        let entrance = (self.entrance.x as i32, self.entrance.y as i32);
+        let claim_of = |r: usize| claims.iter().find(|c| c.rooms.contains(&r));
         let mut doors = Vec::new();
         for y in 0..self.height as i32 {
             for x in 0..self.width as i32 {
@@ -94,19 +110,11 @@ impl Level {
                 }
                 // A door stands in the wall beside its room, or on the room's own edge.
                 let near: Vec<(i32, i32)> = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().map(|(dx, dy)| (x + dx, y + dy)).filter(|&(nx, ny)| self.is_open(nx, ny)).collect();
-                let Some((room, claim)) = near.iter().filter_map(|&(nx, ny)| self.room_at(nx, ny)).find_map(|r| Some((r, self.claim_of(r)?))) else { continue };
+                let Some((room, claim)) = near.iter().filter_map(|&(nx, ny)| self.room_at(nx, ny)).find_map(|r| Some((r, claim_of(r)?))) else { continue };
                 let leads_out = near.iter().any(|&(nx, ny)| (nx, ny) != (x, y) && self.room_at(nx, ny).is_none_or(|r| !claim.rooms.contains(&r)));
                 if leads_out {
                     doors.push(ClaimDoor { x, y, faction: claim.faction, room, main: false });
                 }
-            }
-        }
-        // The main door of each claim: of the doors of its hall, the one nearest the start.
-        for claim in &self.claims {
-            let Some(hall) = self.room_with_role(claim, RoomRole::Hall) else { continue };
-            let nearest = doors.iter().enumerate().filter(|(_, d)| d.room == hall).min_by_key(|(_, d)| ((d.x - sx as i32).abs() + (d.y - sy as i32).abs(), d.y, d.x)).map(|(i, _)| i);
-            if let Some(i) = nearest {
-                doors[i].main = true;
             }
         }
         doors
