@@ -8,7 +8,7 @@ use crate::build::device::device_shapes;
 use crate::build::parts::{Look, Parts};
 use crate::build::plate::{PlateOptions, Surface, plate};
 use crate::geom::{ItemMesh, MeshBuilder, P2, V3};
-use crate::heraldry::Field;
+use crate::heraldry::{Division, Field, Tincture};
 use crate::material::{MaterialKind::Cloth, Rgb};
 use crate::sections::device::Device;
 
@@ -53,11 +53,37 @@ pub fn outline() -> Vec<P2> {
     ring
 }
 
-/// The seed a field's runes are cut from, so a rune charge reads the same on every banner and
-/// crest of its faction. A pure function of the field.
+/// A field as bytes, by explicit position in each enum's `ALL` list rather than by name, so
+/// renaming a variant changes nothing. Painted, division, both tinctures, the charge and its
+/// tincture, then the charge's size.
+fn encode(field: &Field) -> [u8; 10] {
+    let place = |found: Option<usize>| found.map_or(255, |i| i as u8);
+    let size = field.charge_size.to_bits().to_le_bytes();
+    [
+        field.painted as u8,
+        place(Division::ALL.iter().position(|&d| d == field.division)),
+        place(Tincture::ALL.iter().position(|&t| t == field.tincture)),
+        place(Tincture::ALL.iter().position(|&t| t == field.tincture2)),
+        place(Device::ALL.iter().position(|&d| d == field.charge)),
+        place(Tincture::ALL.iter().position(|&t| t == field.charge_tincture)),
+        size[0],
+        size[1],
+        size[2],
+        size[3],
+    ]
+}
+
+/// A stable 64-bit key for a field: the same field, the same key, in every run.
+pub fn field_key(field: &Field) -> u64 {
+    encode(field).iter().fold(0xCBF2_9CE4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01B3))
+}
+
+/// The seed a field's runes are cut from, so a rune charge reads the same on every banner,
+/// shield and crest bearing the field. A pure function of the field's division, tinctures and
+/// charge, by explicit encoding.
 pub fn device_seed(field: &Field) -> u32 {
-    let text = format!("{:?}{:?}{:?}{:?}", field.division, field.tincture, field.charge_tincture, field.charge);
-    text.bytes().fold(0x811C_9DC5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193))
+    let bytes = encode(field);
+    [bytes[1], bytes[2], bytes[4], bytes[5]].iter().fold(0x811C_9DC5u32, |h, &b| (h ^ b as u32).wrapping_mul(0x0100_0193))
 }
 
 /// The crest for `field`: a face painted as a banner's cloth is, and its charge laid on.
@@ -95,7 +121,6 @@ pub fn crest_mesh(field: &Field) -> ItemMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::heraldry::{Division, Tincture};
 
     fn field(division: Division, charge: Device) -> Field {
         Field { painted: true, division, tincture: Tincture::Azure, tincture2: Tincture::Argent, charge, charge_tincture: Tincture::Or, charge_size: 0.5 }
@@ -111,6 +136,16 @@ mod tests {
         let charge = mesh.parts.iter().find(|p| p.name == "charge").expect("a charge");
         assert_eq!(charge.tint, Some(Tincture::Or.rgb()));
         assert!(crest_mesh(&field(Division::Plain, Device::None)).parts.iter().all(|p| p.name != "charge"));
+    }
+
+    #[test]
+    fn the_seed_and_key_follow_the_field_alone() {
+        let f = field(Division::PerBend, Device::Rune);
+        assert_eq!(device_seed(&f), device_seed(&f));
+        assert_eq!(field_key(&f), field_key(&f));
+        assert_ne!(field_key(&f), field_key(&field(Division::PerPale, Device::Rune)));
+        assert_ne!(device_seed(&f), device_seed(&field(Division::PerPale, Device::Rune)));
+        assert_eq!(device_seed(&f), device_seed(&Field { charge_size: 0.9, ..f }), "size does not cut runes");
     }
 
     #[test]

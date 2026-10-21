@@ -403,7 +403,7 @@ impl Generator for Shield {
             let options = PlateOptions { thickness: depth, offset: th * 0.5 + depth * 0.5 - 0.004, cell: [cell * 0.5, cell * 0.5], ..Default::default() };
             let mut charge = MeshBuilder::new();
             let place = |p: &P2| [p[0] * size + centre[0], p[1] * size + centre[1]];
-            for (piece, holes) in device_shapes(device, s.seed) {
+            for (piece, holes) in device_shapes(device, crate::crest::device_seed(&s.field)) {
                 let piece: Vec<P2> = piece.iter().map(place).collect();
                 let holes: Vec<Vec<P2>> = holes.iter().map(|h| h.iter().map(place).collect()).collect();
                 charge.append(&plate(&piece, &holes, &board, &options).merged());

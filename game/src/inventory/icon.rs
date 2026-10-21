@@ -108,7 +108,7 @@ impl IconKey {
 pub struct IconCache {
     images: HashMap<IconKey, Handle<Image>>,
     queued: VecDeque<(Subject, Handle<Image>)>,
-    crests: HashMap<String, Handle<Image>>,
+    crests: HashMap<u64, Handle<Image>>,
     drawing: Vec<Drawing>,
     drawn: HashSet<AssetId<Image>>,
 }
@@ -170,6 +170,14 @@ impl IconCache {
         self.crests.retain(|_, image| !busy.contains(&image.id()));
     }
 
+    /// Forgets every crest, drawn or not, as when the delve ends: the next run's world rolls
+    /// other factions, so the kept crests stay to one world's.
+    pub fn forget_crests(&mut self) {
+        for image in self.crests.drain().map(|(_, image)| image) {
+            self.drawn.remove(&image.id());
+        }
+    }
+
     /// Records the icon in `image` as drawn, as [`draw_icons`] does.
     #[cfg(test)]
     pub(super) fn mark_drawn(&mut self, image: impl Into<AssetId<Image>>) {
@@ -229,7 +237,7 @@ impl Icons<'_> {
     /// The crest for `field`, drawn once from the armory and kept: the faction's arms flat on a
     /// shield, from the same field its banners are painted from. Blank until drawn.
     pub fn crest(&mut self, field: &Field) -> Handle<Image> {
-        let key = format!("{field:?}");
+        let key = armory::crest::field_key(field);
         if let Some(image) = self.cache.crests.get(&key) {
             return image.clone();
         }
@@ -240,6 +248,35 @@ impl Icons<'_> {
         self.cache.crests.insert(key, image.clone());
         self.cache.queued.push_back((Subject::Crest(Box::new(*field)), image.clone()));
         image
+    }
+
+    /// Spawns `node` showing the crest for `field`; until it is drawn, a plain shield stands in
+    /// its place.
+    pub fn spawn_crest<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, field: &Field, node: Node) -> EntityCommands<'a> {
+        let image = self.crest(field);
+        let drawn = self.cache.is_drawn(&image);
+        let mut crest = parent.spawn((node, ImageNode::new(image.clone())));
+        if !drawn {
+            let mut placeholder = Entity::PLACEHOLDER;
+            crest.with_children(|crest| {
+                placeholder = crest
+                    .spawn((
+                        IconPlaceholder,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: percent(100),
+                            height: percent(100),
+                            border_radius: BorderRadius { top_left: px(3).into(), top_right: px(3).into(), bottom_left: percent(50).into(), bottom_right: percent(50).into() },
+                            ..default()
+                        },
+                        BackgroundColor(MUTED.with_alpha(0.25)),
+                        Pickable::IGNORE,
+                    ))
+                    .id();
+            });
+            crest.insert(AwaitingIcon { image: image.id(), placeholder });
+        }
+        crest
     }
 
     /// Spawns `node` showing the icon for `item` lying `turned`. Until the icon is drawn, the

@@ -19,8 +19,9 @@ pub fn plain_field() -> Field {
     Field { painted: false, charge: armory::sections::device::Device::None, ..Field::default() }
 }
 
-/// A node `w` wide showing the crest of `field`.
+/// A node `w` wide showing the crest of `field`, a plain shield standing in until it is drawn.
 pub fn crest<'a>(parent: &'a mut ChildSpawnerCommands, icons: &mut Icons, field: &Field, w: f32) -> EntityCommands<'a> {
-    let image = icons.crest(field);
-    parent.spawn((Name::new("Crest"), Node { width: px(w), height: px(w * ASPECT), flex_shrink: 0.0, ..default() }, ImageNode::new(image)))
+    let mut crest = icons.spawn_crest(parent, field, Node { width: px(w), height: px(w * ASPECT), flex_shrink: 0.0, ..default() });
+    crest.insert(Name::new("Crest"));
+    crest
 }

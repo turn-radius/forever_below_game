@@ -187,6 +187,7 @@ pub fn leave_the_delve(mut commands: Commands, mut stage: ResMut<DollStage>, mut
     *stage = DollStage::default();
     commands.insert_resource(crate::fitting::FitCache::default());
     icons.abandon_drawing();
+    icons.forget_crests();
     commands.insert_resource(Underfoot::default());
     commands.insert_resource(FloorChanges::default());
     commands.insert_resource(OpenContainer::default());
