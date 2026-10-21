@@ -1,0 +1,17 @@
+[package]
+name = "fb_faction"
+description = "The factions of a world, rolled from its seed: names, folk, alignment, likes and hates, colours, crest and dress. No Bevy dependency."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+armory = { workspace = true }
+fb_body = { workspace = true }
+procgen_grammar = { workspace = true }
+procgen_rng = { workspace = true }
+serde = { workspace = true }

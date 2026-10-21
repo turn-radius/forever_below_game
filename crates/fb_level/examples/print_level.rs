@@ -106,6 +106,7 @@ fn main() {
         level.creatures.len()
     );
     println!("{} webs", level.webs.len());
+    println!("factions: {}", level.factions.iter().map(|f| format!("{} ({:?}{})", f.name, f.folk, if f.insular { ", insular" } else { "" })).collect::<Vec<_>>().join("; "));
     for row in rows {
         println!("{}", row.into_iter().collect::<String>());
     }
@@ -116,7 +117,7 @@ fn main() {
         println!(
             "{} of {}, seed {}, at ({:.1}, {:.1}) facing {:.0} degrees",
             folk.folk.race().label,
-            folk.faction.name(),
+            level.faction(folk.faction).name,
             folk.seed,
             folk.x,
             folk.y,

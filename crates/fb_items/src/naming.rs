@@ -3,7 +3,7 @@
 
 use crate::Tag;
 use crate::armory_base::armory_base;
-use crate::tables::{Affix, AffixKind, factions, places, syllables};
+use crate::tables::{Affix, AffixKind, places, syllables};
 use procgen_rng::Mulberry32;
 
 /// What to call the shape rolled for `base`: the base's own name where the table says so
@@ -70,12 +70,12 @@ pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
     let made_on = rng.int(2, 10);
     let lost_on = made_on + rng.int(3, 22);
     let bearer = anyone(rng);
-    let faction = rng.pick(factions()).clone();
+    let faction = legend_faction(rng);
     let place = rng.pick(places()).clone();
     let made = format!(
         "{} on level {made_on} by {}.",
         rng.pick(&["Forged", "Stitched", "Carved", "Bound", "Made"]),
-        rng.pick(factions())
+        legend_faction(rng)
     );
     let deeds = [
         format!("settled {place} for a season"),
@@ -95,6 +95,16 @@ pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
         ])
     );
     Legend { title, subtitle: name.to_string(), history: [made, carried, lost] }
+}
+
+/// A faction named in a legend's history, from the faction name grammar: any folk's, any
+/// intention's. An item carries no world, so this is a faction of the sort the abyss has rather
+/// than one of a particular world's pool.
+fn legend_faction(rng: &mut Mulberry32) -> String {
+    const FOLK: [&str; 6] = ["human", "dwarf", "gnome", "goblin", "lizardfolk", "pigfolk"];
+    const INTENTIONS: [&str; 4] = ["way_out", "trade", "worship", "plunder"];
+    let (folk, intention) = (*rng.pick(&FOLK), *rng.pick(&INTENTIONS));
+    procgen_grammar::faction_name(folk, intention, rng.int(0, u32::MAX))
 }
 
 #[cfg(test)]
@@ -141,7 +151,8 @@ mod tests {
             assert_eq!(legend.subtitle, "Keen Longsword");
             assert!(legend.title.starts_with("The ") || legend.title.contains("'s "), "{}", legend.title);
             assert!(["Tooth", "Oath", "Answer", "Thorn", "Reckoning", "Mercy"].iter().any(|e| legend.title.ends_with(e)));
-            assert!(legend.history[0].contains(" on level ") && factions().iter().any(|f| legend.history[0].contains(f.as_str())));
+            assert!(legend.history[0].contains(" on level ") && legend.history[0].contains(" by the "), "{}", legend.history[0]);
+            assert!(!legend.history[0].contains("Nameless"));
             assert!(legend.history[1].starts_with("Carried by "));
             assert!(legend.history[2].starts_with("Lost on level "));
             assert_eq!(legend, legendize(&mut game_rng(seed), "Keen Longsword", &[Tag::Weapon, Tag::Metal]));

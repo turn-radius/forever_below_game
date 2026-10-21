@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/procgen_rng", "crates/procgen_grammar", "crates/armory", "crates/fb_items", "crates/fb_body", "crates/fb_creatures", "crates/fb_level", "crates/fb_character", "game"]
+members = ["crates/procgen_rng", "crates/procgen_grammar", "crates/fb_faction", "crates/armory", "crates/fb_items", "crates/fb_body", "crates/fb_creatures", "crates/fb_level", "crates/fb_character", "game"]
 
 [workspace.package]
 edition = "2024"
@@ -55,6 +55,7 @@ procgen_grammar = { path = "crates/procgen_grammar" }
 armory = { path = "crates/armory" }
 fb_items = { path = "crates/fb_items" }
 fb_body = { path = "crates/fb_body" }
+fb_faction = { path = "crates/fb_faction" }
 fb_level = { path = "crates/fb_level" }
 fb_creatures = { path = "crates/fb_creatures" }
 fb_character = { path = "crates/fb_character" }

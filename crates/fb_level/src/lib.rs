@@ -148,6 +148,9 @@ pub struct Level {
     pub lights: Vec<LightSpot>,
     /// Who stands in the level, in groups by faction ([`folk`]).
     pub folk: Vec<FolkSpot>,
+    /// The two to four factions of the world's pool this level holds, whole, so the level names
+    /// them without the world; each [`FolkSpot::faction`] is one of them.
+    pub factions: Vec<FactionSpec>,
     /// Containers and scenery standing along the walls ([`props`]).
     pub props: Vec<PropSpot>,
     /// Rats and snakes ([`creatures`]).
@@ -159,6 +162,14 @@ pub struct Level {
 }
 
 impl Level {
+    /// The spec of one of this level's factions (the [`FolkSpot::faction`] of anyone on it).
+    ///
+    /// # Panics
+    /// If the level does not hold that faction.
+    pub fn faction(&self, id: Faction) -> &FactionSpec {
+        self.factions.iter().find(|f| f.id == id).unwrap_or_else(|| panic!("faction {} is not on this level", id.0))
+    }
+
     /// The cell at `(x, y)`, or rock outside the grid.
     pub fn cell(&self, x: i32, y: i32) -> Cell {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
@@ -274,10 +285,10 @@ pub mod stairs;
 pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
-pub use folk::{FACTIONS, Faction, FactionRow, FolkSpot};
+pub use folk::{Faction, FactionSpec, FolkSpot};
 pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use finish::{Character, DoorStyle, Finish, Finishes, FloorFinish, Quarter, WallFinish, finishes};
-pub use generate::{generate, generate_with};
+pub use generate::{generate, generate_for, generate_in, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;
 pub use rooms::RoomGraph;

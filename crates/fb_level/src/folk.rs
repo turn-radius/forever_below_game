@@ -1,9 +1,8 @@
 //! Folk met in the level: who stands where, in groups by faction.
 //!
-//! The factions are `data/factions.json`, embedded here as [`FACTIONS`] with what each one
-//! leans toward: the folk its name suggests and the outfits (keys of `data/outfits.json`) its
-//! members wear. The leanings are our own reading of the names, not the plate's; the plate only
-//! names factions in legendary histories.
+//! The factions come from the world's pool (`fb_faction::World`, rolled from the world seed): a
+//! level holds the two to four its seed draws ([`crate::Level::factions`]), and each group is
+//! one of them. A faction's folk leans its members (an insular one is wholly its own folk).
 //!
 //! Folk come from a third stream of the level seed, after the layout and the furnishing, so
 //! adding or changing folk never moves a wall, an item or a light.
@@ -14,57 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::generate::{is_colonnaded, item_seed, shuffle};
 use crate::{Cell, Level, Room};
-
-/// One faction, an index into [`FACTIONS`] (and `data/factions.json`, in the same order).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Faction(pub u8);
-
-/// A faction's row: its name and what its members lean toward.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FactionRow {
-    /// As `data/factions.json` writes it, article and all.
-    pub name: &'static str,
-    /// The folk most of its members are.
-    pub folk: Folk,
-    /// Keys of `data/outfits.json` its members dress from.
-    pub outfits: &'static [&'static str],
-}
-
-/// The factions of `data/factions.json`, in its order (a test holds them to it). The folk and
-/// outfits are our own reading of each name:
-///
-/// - the Lantern-keepers: humans, clerics and mages who carry lanterns;
-/// - the Mudfoot clan: goblins, scavengers and fighters;
-/// - the Brothers of the Last Door: humans, fighters and clerics;
-/// - the Scale Court: lizardfolk, fighters and rangers;
-/// - the Hogsmeet traders: pigfolk, rangers and scavengers on the road;
-/// - the Gnome Guild of Gears: gnomes, mages and scavengers;
-/// - the Ash Choir: dwarves (ash from the forge), clerics and mages.
-pub const FACTIONS: [FactionRow; 7] = [
-    FactionRow { name: "the Lantern-keepers", folk: Folk::Human, outfits: &["cleric", "mage"] },
-    FactionRow { name: "the Mudfoot clan", folk: Folk::Goblin, outfits: &["scavenger", "scavenger", "fighter"] },
-    FactionRow { name: "the Brothers of the Last Door", folk: Folk::Human, outfits: &["fighter", "cleric"] },
-    FactionRow { name: "the Scale Court", folk: Folk::Lizardfolk, outfits: &["fighter", "ranger"] },
-    FactionRow { name: "the Hogsmeet traders", folk: Folk::Pigfolk, outfits: &["ranger", "scavenger"] },
-    FactionRow { name: "the Gnome Guild of Gears", folk: Folk::Gnome, outfits: &["mage", "scavenger"] },
-    FactionRow { name: "the Ash Choir", folk: Folk::Dwarf, outfits: &["cleric", "mage"] },
-];
-
-impl Faction {
-    /// Every faction, in table order.
-    pub fn all() -> impl Iterator<Item = Faction> {
-        (0..FACTIONS.len() as u8).map(Faction)
-    }
-
-    pub fn row(self) -> &'static FactionRow {
-        &FACTIONS[self.0 as usize % FACTIONS.len()]
-    }
-
-    /// The faction's name as `data/factions.json` writes it ("the Scale Court").
-    pub fn name(self) -> &'static str {
-        self.row().name
-    }
-}
+pub use fb_faction::{Faction, FactionSpec};
 
 /// Someone standing in the level, at a point in grid coordinates (cells, fractional).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -108,8 +57,6 @@ const CLEARANCE: f32 = 0.55;
 const WALL_MARGIN: f32 = 0.3;
 /// Smallest room a group gathers in.
 const MIN_ROOM_AREA: u32 = 9;
-/// Chance that someone is of their faction's folk rather than any folk.
-const FOLK_LEAN: f64 = 0.75;
 
 /// Lays out the level's folk: a few groups, each of one faction gathered round a point in a
 /// room (a brazier where the room has one) and facing it, as if talking. Never in the starting
@@ -131,9 +78,9 @@ pub(crate) fn place_folk(level: &Level, start_room: usize, rng: &mut Mulberry32)
     // share a room with them ([`crate::creatures::has_folk`]).
     rooms.truncate(rooms.len().div_ceil(2));
 
-    let mut factions: Vec<Faction> = Faction::all().collect();
+    let mut factions: Vec<&FactionSpec> = level.factions.iter().collect();
     shuffle(&mut factions, rng);
-    let groups: Vec<(&Room, Faction, Gathering)> = rooms
+    let groups: Vec<(&Room, &FactionSpec, Gathering)> = rooms
         .iter()
         .enumerate()
         .map(|(k, &i)| (&level.rooms[i], factions[k % factions.len()], Gathering::in_room(level, &level.rooms[i], rng)))
@@ -176,7 +123,7 @@ impl Gathering {
 
     /// Up to `size` of `faction` round the centre, clear of `others`: evenly round the ring
     /// with a little jitter, then round wider rings for those who did not fit.
-    fn gather(&self, level: &Level, room: &Room, faction: Faction, size: usize, others: &[FolkSpot], rng: &mut Mulberry32) -> Vec<FolkSpot> {
+    fn gather(&self, level: &Level, room: &Room, faction: &FactionSpec, size: usize, others: &[FolkSpot], rng: &mut Mulberry32) -> Vec<FolkSpot> {
         let (cx, cy) = self.centre;
         let around = size.max(3);
         let mut placed: Vec<FolkSpot> = Vec::new();
@@ -191,11 +138,11 @@ impl Gathering {
             if !fits(level, room, x, y, others.iter().chain(&placed)) {
                 continue;
             }
-            let folk = if rng.chance(FOLK_LEAN) { faction.row().folk } else { *rng.pick(&Folk::ALL) };
+            let folk = faction.member_folk(rng);
             // Facing the centre, give or take: yaw 0 faces -y, so the yaw toward `(dx, dy)` is
             // `atan2(-dx, -dy)`.
             let yaw = (x - cx).atan2(y - cy) + rng.range_f32(-0.3, 0.3);
-            placed.push(FolkSpot { x, y, yaw, folk, seed: item_seed(rng), faction });
+            placed.push(FolkSpot { x, y, yaw, folk, seed: item_seed(rng), faction: faction.id });
         }
         placed
     }
@@ -232,6 +179,7 @@ mod tests {
     use super::*;
     use crate::generate;
     use crate::generate::reachable_from;
+    use crate::generate_in;
     use std::collections::{HashMap, HashSet};
 
     const SEEDS: std::ops::RangeInclusive<u32> = 1..=64;
@@ -242,15 +190,46 @@ mod tests {
     }
 
     #[test]
-    fn the_factions_are_the_data_tables() {
-        let names: Vec<&str> = FACTIONS.iter().map(|f| f.name).collect();
-        let table: Vec<&str> = fb_items::tables::factions().iter().map(String::as_str).collect();
-        assert_eq!(names, table);
-        let lean = |name: &str| FACTIONS.iter().find(|f| f.name == name).unwrap().folk;
-        assert_eq!(lean("the Mudfoot clan"), Folk::Goblin);
-        assert_eq!(lean("the Scale Court"), Folk::Lizardfolk);
-        assert_eq!(lean("the Hogsmeet traders"), Folk::Pigfolk);
-        assert_eq!(lean("the Gnome Guild of Gears"), Folk::Gnome);
+    fn a_level_holds_two_to_four_of_its_worlds_factions() {
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            let world = fb_faction::World::new(seed);
+            assert_eq!(level.factions, world.draw_specs(seed), "seed {seed}");
+            assert!((2..=4).contains(&level.factions.len()));
+            for f in &level.folk {
+                assert!(level.factions.iter().any(|s| s.id == f.faction), "seed {seed}: {f:?} is of a faction the level does not hold");
+            }
+        }
+    }
+
+    #[test]
+    fn a_world_draws_the_same_spec_on_every_level() {
+        let world = 1207;
+        let mut seen = HashMap::new();
+        for depth in 1..=12 {
+            for spec in generate_in(world, depth, &crate::LevelParams::for_style(crate::LevelStyle::for_depth(depth))).factions {
+                assert_eq!(*seen.entry(spec.id).or_insert_with(|| spec.clone()), spec);
+            }
+        }
+        assert!(seen.len() > 3, "{} factions in 12 levels", seen.len());
+    }
+
+    #[test]
+    fn insular_folk_are_all_their_factions_folk_on_every_level() {
+        let mut insular = 0;
+        for world in 1..=48 {
+            for depth in 1..=3 {
+                let level = generate_in(world, depth, &crate::LevelParams::for_style(crate::LevelStyle::for_depth(depth)));
+                for f in &level.folk {
+                    let spec = level.faction(f.faction);
+                    if spec.insular {
+                        insular += 1;
+                        assert_eq!(f.folk, spec.folk, "world {world} depth {depth}: {} has a {:?}", spec.name, f.folk);
+                    }
+                }
+            }
+        }
+        assert!(insular > 20, "only {insular} folk of insular factions");
     }
 
     #[test]
@@ -310,7 +289,7 @@ mod tests {
             for f in &level.folk {
                 let room = level.room_at(f.x as i32, f.y as i32).unwrap();
                 assert_eq!(*by_room.entry(room).or_insert(f.faction), f.faction, "seed {seed}: two factions in room {room}");
-                leaning.0 += (f.folk == f.faction.row().folk) as u32;
+                leaning.0 += (f.folk == level.faction(f.faction).folk) as u32;
                 leaning.1 += 1;
             }
         }

@@ -61,17 +61,33 @@ const LOOT: &[(Family, u32)] = &[
 /// fixed lights. Most of it is dark; the light the player carries is the main light. The depth
 /// picks the [`LevelStyle`] and with it the style's own parameters
 /// ([`LevelParams::for_style`]); the first level's seeds lay out exactly as they always have.
+///
+/// `seed` is also taken as the world seed whose pool of factions the level draws from, so
+/// `generate(seed, 1)` is the first level of the delve `seed`; for the level at any depth of a
+/// delve use [`generate_in`].
 pub fn generate(seed: u32, depth: u32) -> Level {
     generate_with(seed, depth, &LevelParams::for_style(LevelStyle::for_depth(depth)))
+}
+
+/// The level at `depth` of the delve for `world_seed`: a pure function of the two. Its seed is
+/// [`crate::depth_seed`] of them, and its factions are drawn from the world's pool
+/// (`fb_faction::World`), so a faction on several levels is the same one on each.
+pub fn generate_in(world_seed: u32, depth: u32, params: &LevelParams) -> Level {
+    generate_for(world_seed, crate::depth_seed(world_seed, depth), depth, params)
 }
 
 /// The level for `seed` at `depth` laid out with `params` instead of the style's defaults, for
 /// the level view. With the defaults it is [`generate`]'s level. Parameters out of range or
 /// out of order are fitted first ([`LevelParams::fit`]).
 pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
+    generate_for(seed, seed, depth, params)
+}
+
+/// The level for level seed `seed` at `depth`, its factions drawn from the pool of `world_seed`.
+pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> Level {
     let mut params = *params;
     params.fit();
-    let (mut level, layout_seed) = generate_without_creatures(seed, depth, &params);
+    let (mut level, layout_seed) = generate_without_creatures_in(world_seed, seed, depth, &params);
     level.creatures = place_creatures(&level, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT));
     place_stairs(&mut level, &mut Mulberry32::new(layout_seed ^ STAIR_SALT));
     // The newer species come last, after the stairs, so none of them can shift a stair.
@@ -82,8 +98,13 @@ pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
 }
 
 /// The level for `seed` with its props but before its creatures, and the layout stream's seed.
+#[cfg(test)]
 pub(crate) fn generate_without_creatures(seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
-    let (mut level, layout_seed) = generate_without_props(seed, depth, params);
+    generate_without_creatures_in(seed, seed, depth, params)
+}
+
+fn generate_without_creatures_in(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
+    let (mut level, layout_seed) = generate_without_props_in(world_seed, seed, depth, params);
     level.props = place_props(&level, &mut Mulberry32::new(layout_seed ^ PROP_SALT));
     (level, layout_seed)
 }
@@ -92,12 +113,17 @@ pub(crate) fn generate_without_creatures(seed: u32, depth: u32, params: &LevelPa
 /// that rarely lay out (many rooms, wide gaps, a small grid) are relaxed after every
 /// [`RELAX_EVERY`] failed tries, a room fewer at least and the entrance a cell deeper at most,
 /// so every level lays out in the end. No default level needs that many tries.
+#[cfg(test)]
 pub(crate) fn generate_without_props(seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
+    generate_without_props_in(seed, seed, depth, params)
+}
+
+fn generate_without_props_in(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
     (0u32..)
         .find_map(|attempt| {
             let relax = attempt / RELAX_EVERY;
             let p = LevelParams { rooms_min: params.rooms_min.saturating_sub(relax).max(1), entrance_depth: params.entrance_depth + relax, ..*params };
-            try_generate(seed, depth, attempt, &p)
+            try_generate(world_seed, seed, depth, attempt, &p)
         })
         .expect("some attempt lays out a connected level")
 }
@@ -108,13 +134,13 @@ const RELAX_EVERY: u32 = 100;
 /// How many tries the level for `seed` takes with `params`, for tests.
 #[cfg(test)]
 fn tries(seed: u32, depth: u32, params: &LevelParams) -> u32 {
-    (0u32..).find(|&attempt| try_generate(seed, depth, attempt, params).is_some()).unwrap_or(u32::MAX) + 1
+    (0u32..).find(|&attempt| try_generate(seed, seed, depth, attempt, params).is_some()).unwrap_or(u32::MAX) + 1
 }
 
 /// One try at a level, without its props, and the seed of its layout stream. `None` if too
 /// few rooms fit or the corridors could not join them all; [`generate`] then tries again from
 /// a stream derived from the same seed.
-fn try_generate(seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<(Level, u32)> {
+fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<(Level, u32)> {
     let layout_seed = seed ^ attempt.wrapping_mul(0x9E37_79B9);
     let mut rng = Mulberry32::new(layout_seed);
 
@@ -144,6 +170,7 @@ fn try_generate(seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<
         items: Vec::new(),
         lights: Vec::new(),
         folk: Vec::new(),
+        factions: Vec::new(),
         props: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
@@ -164,6 +191,7 @@ fn try_generate(seed: u32, depth: u32, attempt: u32, p: &LevelParams) -> Option<
     }
     furnish(&mut level, &mut Mulberry32::new(layout_seed ^ FURNISH_SALT), p);
     let start_room = level.start_room().expect("the entrance leads into a room");
+    level.factions = fb_faction::World::new(world_seed).draw_specs(seed);
     level.folk = place_folk(&level, start_room, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
     Some((level, layout_seed))
 }
@@ -1087,16 +1115,18 @@ mod tests {
         // u32::MAX were retaken when giant rats left the first level (`GIANTS_FROM_DEPTH`): their
         // giant packs are rats now. All eight were retaken when writing joined the loot table
         // (`Family::Writing`), which moves the weighted pick of every floor item, and again when
-        // folk left half the rooms to the creatures, which no longer share a room with them.
+        // folk left half the rooms to the creatures, which no longer share a room with them, and again
+        // when the factions came from the world's pool (a level draws two to four, which changes the
+        // shuffle that sets the groups).
         let before = [
-            (0u32, 0xd77b14195ea9c72fu64),
-            (1, 0xdb3d6856815aae),
-            (2, 0x656d0a8084e337db),
-            (7, 0xdc542a7a27bfe92a),
-            (64, 0x19736091b7defee3),
-            (1207, 0xc92acba876935670),
-            (4242, 0xf59b93e28826d3fb),
-            (u32::MAX, 0x9dd24d93fe3a2923),
+            (0u32, 0xd7475ae671d65f2bu64),
+            (1, 0x16c5137e36e4f5d8),
+            (2, 0xa3f07d52bb194110),
+            (7, 0xd93ae34b10bbca42),
+            (64, 0x4b90ba564f9a7d34),
+            (1207, 0xf60fb14420633de1),
+            (4242, 0x466a79e120be37c7),
+            (u32::MAX, 0x5f1892ba3e1dea58),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

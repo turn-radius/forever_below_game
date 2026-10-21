@@ -95,8 +95,7 @@ pub fn who_turns(provoked: Entity, folk: &[Kin], level: &Level, blocked: impl Fn
 }
 
 /// The line shown when `faction` turns on the delver: "The Ash Choir turn on you".
-pub fn turn_line(faction: Faction) -> String {
-    let name = faction.name();
+pub fn turn_line(name: &str) -> String {
     let mut letters = name.chars();
     let capital: String = letters.next().map(|c| c.to_uppercase().chain(letters).collect()).unwrap_or_default();
     format!("{capital} turn on you")
@@ -125,12 +124,12 @@ pub fn turn_on_the_delver(
             if !hostility.is_hostile() {
                 *hostility = Hostility::Hostile;
                 newly = true;
-                faction = Some(denizen.person.spot.faction);
-                info!("{} of {} turns hostile", denizen.person.name, denizen.person.spot.faction.name());
+                faction = Some(denizen.person.faction.name.clone());
+                info!("{} of {} turns hostile", denizen.person.name, denizen.person.faction.name);
             }
         }
         if let (true, Some(faction)) = (newly, faction) {
-            toasts.add(&turn_line(faction));
+            toasts.add(&turn_line(&faction));
         }
     }
 }
@@ -141,10 +140,8 @@ mod tests {
 
     #[test]
     fn the_line_names_the_faction_with_a_capital() {
-        let choir = Faction::all().find(|f| f.name() == "the Ash Choir").unwrap();
-        assert_eq!(turn_line(choir), "The Ash Choir turn on you");
-        let keepers = Faction::all().find(|f| f.name() == "the Lantern-keepers").unwrap();
-        assert_eq!(turn_line(keepers), "The Lantern-keepers turn on you");
+        assert_eq!(turn_line("the Ash Choir"), "The Ash Choir turn on you");
+        assert_eq!(turn_line("the Lantern-keepers"), "The Lantern-keepers turn on you");
     }
 
     #[test]
@@ -174,7 +171,7 @@ mod tests {
         // Of another faction, standing right beside, they stay friendly.
         let mut stranger = first;
         stranger.entity = Entity::from_raw_u32(999).unwrap();
-        stranger.faction = Faction::all().find(|f| *f != first.faction).unwrap();
+        stranger.faction = level.factions.iter().map(|f| f.id).find(|f| *f != first.faction).unwrap();
         stranger.at += Vec2::X;
         let with_stranger: Vec<Kin> = folk.iter().copied().chain([stranger]).collect();
         assert!(!who_turns(first.entity, &with_stranger, &level, open).contains(&stranger.entity));
