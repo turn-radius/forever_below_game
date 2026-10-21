@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn every_table_parses_with_its_entries() {
         assert_eq!(bases().len(), 13);
-        assert_eq!(goods().len(), 16);
+        assert_eq!(goods().len(), 22);
         assert_eq!(affixes().len(), 83);
         assert_eq!(slot_places().len(), 17);
         let head = &slot_places()[0];
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(base_groups().len(), 26);
         assert_eq!(food_descriptions().len(), 12);
         assert_eq!((syllables().len(), factions().len(), places().len()), (6, 7, 9));
-        assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 67);
+        assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 73);
     }
 
     #[test]

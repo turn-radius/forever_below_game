@@ -35,7 +35,7 @@ pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, ItemParts, roll_item, roll_item_with, roll_loot};
 pub use oil::LAMP_OIL;
 pub use rarity::Odds;
-pub use provision::{Consume, Provision, SWALLOW, provision};
+pub use provision::{Consume, ELIXIRS, Elixir, Provision, SWALLOW, elixir, provision};
 
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};

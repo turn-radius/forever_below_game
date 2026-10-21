@@ -104,6 +104,54 @@
   "wt": 1,
   "desc": "Light 20 ft · one hour"
  },
+ "Bedroll": {
+  "fp": [
+   2,
+   2
+  ],
+  "wt": 7,
+  "desc": "Blanket roll"
+ },
+ "Tinderbox": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 1,
+  "desc": "Flint, steel and tinder"
+ },
+ "Elixir of the Hare": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.5,
+  "desc": "Swift for an hour · 25% faster"
+ },
+ "Elixir of Vigil": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.5,
+  "desc": "Stays awake for eight hours"
+ },
+ "Elixir of Fasting": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.5,
+  "desc": "Hunger slows for eight hours"
+ },
+ "Elixir of Embers": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.5,
+  "desc": "Warms you through · lifts the cold"
+ },
  "Healing draught": {
   "fp": [
    1,

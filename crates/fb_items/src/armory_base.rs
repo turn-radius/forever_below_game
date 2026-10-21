@@ -183,7 +183,16 @@ pub fn find_weight(name: &str) -> u32 {
 /// bandages for bandaging. They stay in [`ARMORY_BASES`] and `data/goods.json`, so the forge and
 /// [`roll_item`](crate::roll_item) still make them; when the system arrives the base comes off
 /// this list.
-pub const HELD_BACK: &[&str] = &["Bandages"];
+pub const HELD_BACK: &[&str] = &[
+    "Bandages",
+    // Camp goods and elixirs come from tentmakers and alchemists, not loose loot.
+    "Bedroll",
+    "Tinderbox",
+    "Elixir of the Hare",
+    "Elixir of Vigil",
+    "Elixir of Fasting",
+    "Elixir of Embers",
+];
 
 /// Whether base `name` is held back ([`HELD_BACK`]): [`find_weight`] gives it 0, and crate
 /// stock and outfit goods skip it.
@@ -243,6 +252,10 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Wine", ArmoryBase::of(A::Food(&[FoodStyle::Bottle]))),
     ("Potion", ArmoryBase::of(A::Food(&[FoodStyle::Potion]))),
     ("Healing draught", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(healing_draught).named()),
+    ("Elixir of the Hare", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_the_hare).named()),
+    ("Elixir of Vigil", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_vigil).named()),
+    ("Elixir of Fasting", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_fasting).named()),
+    ("Elixir of Embers", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_embers).named()),
     ("Blind cavefish", ArmoryBase::of(A::Food(&[FoodStyle::Fish])).tweaked(blind_cavefish).named()),
     // The plate's own bases (data/bases.json), now Armory families.
     ("Shirt", ArmoryBase::of(A::Garment(&[GarmentStyle::Tunic])).tweaked(shirt).named()),
@@ -266,6 +279,8 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Lockpicks", ArmoryBase::of(A::Sundry(&[SundryKind::Lockpicks]))),
     ("Candle", ArmoryBase::of(A::Sundry(&[SundryKind::Candle]))),
     ("Bandages", ArmoryBase::of(A::Sundry(&[SundryKind::Bandages]))),
+    ("Bedroll", ArmoryBase::of(A::Sundry(&[SundryKind::Bedroll]))),
+    ("Tinderbox", ArmoryBase::of(A::Sundry(&[SundryKind::Tinderbox]))),
     ("Scroll", ArmoryBase::of(A::Writing(&[WritingKind::Scroll]))),
     ("Note", ArmoryBase::of(A::Writing(&[WritingKind::Note]))),
     ("Book", ArmoryBase::of(A::Writing(&[WritingKind::Book]))),
@@ -305,6 +320,32 @@ fn healing_draught(item: &mut Item, r: &mut Mulberry32) {
         p.outer = mix(GLASS, p.liquid, 0.4);
         p.fill = p.fill.max(r.range_f32(0.6, 0.95));
     }
+}
+
+/// An elixir is a full flask of a coloured brew, glass tinted toward it. Our own colours.
+fn elixir(item: &mut Item, r: &mut Mulberry32, liquid: u32) {
+    if let Item::Food(s) = item {
+        let p = &mut s.provision;
+        p.liquid = Rgb::hex(liquid);
+        p.outer = mix(GLASS, p.liquid, 0.4);
+        p.fill = p.fill.max(r.range_f32(0.6, 0.95));
+    }
+}
+
+fn elixir_of_the_hare(item: &mut Item, r: &mut Mulberry32) {
+    elixir(item, r, 0xe27a9a);
+}
+
+fn elixir_of_vigil(item: &mut Item, r: &mut Mulberry32) {
+    elixir(item, r, 0xb89be0);
+}
+
+fn elixir_of_fasting(item: &mut Item, r: &mut Mulberry32) {
+    elixir(item, r, 0x9a5a2a);
+}
+
+fn elixir_of_embers(item: &mut Item, r: &mut Mulberry32) {
+    elixir(item, r, 0xe0612a);
 }
 
 /// A pale fish: the plate's `color='#d8d2c4'` (now the skin, `outer`) and `color2='#ece6d8'`

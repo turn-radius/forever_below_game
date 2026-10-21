@@ -63,7 +63,32 @@ pub const PROVISIONS: &[(&str, Provision)] = &[
     ("Wine", drink(0.3)),
     ("Potion", drink(0.0)),
     ("Healing draught", drink(0.0)),
+    ("Elixir of the Hare", drink(0.0)),
+    ("Elixir of Vigil", drink(0.0)),
+    ("Elixir of Fasting", drink(0.0)),
+    ("Elixir of Embers", drink(0.0)),
 ];
+
+/// What drinking an elixir does: the id of an effect in `data/effects.json`, at an intensity
+/// (`docs/items.md`, "Elixirs"). Our own. The game gives it to the delver.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Elixir {
+    pub effect: &'static str,
+    pub intensity: f64,
+}
+
+/// Every elixir, the alchemist's goods: base and its effect.
+pub const ELIXIRS: &[(&str, Elixir)] = &[
+    ("Elixir of the Hare", Elixir { effect: "swift", intensity: 1.0 }),
+    ("Elixir of Vigil", Elixir { effect: "wakeful", intensity: 1.0 }),
+    ("Elixir of Fasting", Elixir { effect: "full_bellied", intensity: 1.0 }),
+    ("Elixir of Embers", Elixir { effect: "warmed", intensity: 1.0 }),
+];
+
+/// The effect elixir `base` gives, or `None` if it is not an elixir.
+pub fn elixir(base: &str) -> Option<Elixir> {
+    ELIXIRS.iter().find(|(name, _)| *name == base).map(|(_, e)| *e)
+}
 
 /// How much of a waterskin's fill one swallow takes, and how much thirst it quenches. A full
 /// skin is four swallows. Our own.
@@ -78,6 +103,11 @@ impl Item {
     /// What eating or drinking this does, or `None` for anything that cannot be.
     pub fn provision(&self) -> Option<Provision> {
         provision(&self.base)
+    }
+
+    /// What drinking this gives the delver, if it is an elixir.
+    pub fn elixir(&self) -> Option<Elixir> {
+        elixir(&self.base)
     }
 
     /// Whether it is eaten or drunk, or `None` if it is neither.
@@ -171,6 +201,31 @@ mod tests {
             assert_eq!(roll_item("Healing draught", seed).unwrap().consume(), Some(Consume::Drink));
             assert_eq!(roll_item("Bread", seed).unwrap().consume(), Some(Consume::Eat));
             assert_eq!(roll_item("Torch", seed).unwrap().consume(), None);
+        }
+    }
+
+    #[test]
+    fn elixirs_roll_and_are_drunk() {
+        for (base, e) in ELIXIRS {
+            let item = roll_item(base, 5).unwrap();
+            assert_eq!(item.consume(), Some(Consume::Drink));
+            assert_eq!(item.elixir(), Some(*e));
+            assert_eq!(item.title(), *base);
+        }
+        assert!(roll_item("Healing draught", 5).unwrap().elixir().is_none());
+        // Distinct colours.
+        let liquids: Vec<_> = ELIXIRS.iter().map(|(b, _)| match roll_item(b, 5).unwrap().shape { armory::Item::Food(s) => s.provision.liquid, _ => unreachable!() }).collect();
+        for (i, a) in liquids.iter().enumerate() {
+            assert!(liquids[i + 1..].iter().all(|b| a != b));
+        }
+    }
+
+    #[test]
+    fn bedrolls_and_tinderboxes_roll() {
+        for base in ["Bedroll", "Tinderbox"] {
+            let item = roll_item(base, 9).unwrap();
+            assert_eq!(item.title(), base);
+            assert!(item.consume().is_none());
         }
     }
 
