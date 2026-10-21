@@ -105,8 +105,11 @@ pub fn weights(style: LevelStyle, intention: Intention, armour: ArmourLean) -> [
 
 /// Rolls the kind of a door of a faction with `intention` and `armour` in a level of `style`,
 /// from `rng` (the door's own stream).
-pub fn roll_kind(style: LevelStyle, intention: Intention, armour: ArmourLean, rng: &mut Mulberry32) -> DoorKind {
+/// A `shared` door (its far side is another claim's ground, or it has no claim side) has no
+/// switch to work a grate from, so it is only ever wood or steel.
+pub fn roll_kind(style: LevelStyle, intention: Intention, armour: ArmourLean, shared: bool, rng: &mut Mulberry32) -> DoorKind {
     let [wood, steel, grate] = weights(style, intention, armour);
+    let grate = if shared { 0 } else { grate };
     *rng.weighted(&[(DoorKind::Wood, wood), (DoorKind::Steel, steel), (DoorKind::Portcullis, grate)])
 }
 
@@ -142,8 +145,8 @@ mod tests {
     #[test]
     fn the_same_stream_gives_the_same_kind() {
         for (x, y) in [(3, 4), (10, 2), (0, 0)] {
-            let a = roll_kind(LevelStyle::StoneHalls, Intention::Plunder, ArmourLean::Plate, &mut door_stream(7, x, y));
-            let b = roll_kind(LevelStyle::StoneHalls, Intention::Plunder, ArmourLean::Plate, &mut door_stream(7, x, y));
+            let a = roll_kind(LevelStyle::StoneHalls, Intention::Plunder, ArmourLean::Plate, false, &mut door_stream(7, x, y));
+            let b = roll_kind(LevelStyle::StoneHalls, Intention::Plunder, ArmourLean::Plate, false, &mut door_stream(7, x, y));
             assert_eq!(a, b);
         }
     }
@@ -183,9 +186,22 @@ mod tests {
                     assert!(weights(style, intention, armour).iter().all(|&w| w >= 1));
                     let mut seen = std::collections::HashSet::new();
                     for cell in 0..400 {
-                        seen.insert(roll_kind(style, intention, armour, &mut door_stream(3, cell, cell / 7)));
+                        seen.insert(roll_kind(style, intention, armour, false, &mut door_stream(3, cell, cell / 7)));
                     }
                     assert_eq!(seen.len(), 3, "{style:?} {intention:?} {armour:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_shared_door_rolls_only_wood_or_steel() {
+        for style in [LevelStyle::RoughRock, LevelStyle::StoneHalls] {
+            for intention in INTENTIONS {
+                for armour in ARMOUR {
+                    let kinds: std::collections::HashSet<DoorKind> = (0..600).map(|c| roll_kind(style, intention, armour, true, &mut door_stream(5, c, c / 5))).collect();
+                    assert!(!kinds.contains(&DoorKind::Portcullis), "{style:?} {intention:?} {armour:?}");
+                    assert!(kinds.contains(&DoorKind::Wood) && kinds.contains(&DoorKind::Steel));
                 }
             }
         }

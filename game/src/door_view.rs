@@ -473,7 +473,7 @@ fn show(mut commands: Commands, lab: Res<DoorLab>, pose: Res<Pose>, old: Query<E
     }
     let fit = geometry::door::claim_leaf(&lab.spec);
     stone(&mut spawner, &fit.fixed, ConditionState::BattleWorn);
-    let leaf = DoorLeaf { cell: (0, 0), shut: Quat::IDENTITY, hinge: Vec3::from(fit.hinge), lift: fit.lift };
+    let leaf = DoorLeaf { cell: (0, 0), shut: Quat::IDENTITY, hinge: Vec3::from(fit.hinge), lift: fit.lift, squash: fit.squash_for(ceiling_of(lab.level)) };
     spawner.spawn(&fit.leaf, &fixture_appearance(seed, ConditionState::Serviceable)).insert((Shown, Name::new("door leaf"), leaf, leaf.transform(pose.swing)));
 
     // The switch on the side wall, on the +Z side, as the game mounts it.

@@ -731,7 +731,7 @@ fn spawn_fixtures(
             // The pintles or guides stay put on the frame.
             spawner.spawn(&fit.leaf.fixed, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
             let hinge = transform.transform_point(v3(fit.leaf.hinge));
-            let leaf_door = crate::doors::DoorLeaf { cell, shut: transform.rotation, hinge, lift: fit.leaf.lift };
+            let leaf_door = crate::doors::DoorLeaf { cell, shut: transform.rotation, hinge, lift: fit.leaf.lift, squash: fit.leaf.squash_for(level.ceiling) };
             spawner
                 .spawn(&fit.leaf.leaf, &fixture_appearance(seed, ConditionState::Serviceable))
                 .insert((StonePiece, Name::new(format!("claim door, {}", fit.kind.name())), leaf_door, leaf_door.transform(swing)));

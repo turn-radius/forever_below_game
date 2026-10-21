@@ -52,6 +52,8 @@ use crate::combat::RunDice;
 use crate::combat::feedback::Corpse;
 use crate::combat::vitals::{Dying, Fallen};
 use crate::folk::{AimedFolk, Denizen};
+use crate::folk_routine::Routine;
+use crate::hostility::Hostility;
 use crate::interact::{CrosshairPrompt, Delver, Lock, Target, key_line, verbs_for};
 use crate::inventory::{Inventory, ItemId, Toasts};
 use crate::keymap::{Action, ActionInput, Keymap};
@@ -71,6 +73,9 @@ pub fn door_seconds(kind: DoorKind) -> f32 {
     }
 }
 
+/// How far a rising grate has come when it clears the delver's head (its feet above 17 units
+/// by about three quarters of the rise), and so stops blocking the body. Falling, it blocks at once.
+pub const GRATE_CLEAR: f32 = 0.75;
 /// Seconds a portcullis takes to rise or drop.
 pub const PORTCULLIS_SECONDS: f32 = 1.6;
 /// Seconds a lever's handle takes to be thrown.
@@ -193,9 +198,21 @@ impl DoorState {
         !self.unlocked && !self.shared && locked_to(band, self.main)
     }
 
-    /// Whether `feet` stand on the claim's side of the door.
+    /// Whether the door has a switch on its claim's side: not a door with no outside.
+    pub fn switched(&self) -> bool {
+        !self.shared && self.inward != Vec2::ZERO
+    }
+
+    /// Whether `feet` stand on the claim's side of the door, where the switch is.
     pub fn inside(&self, feet: Option<Vec2>) -> bool {
-        feet.is_some_and(|f| self.inward != Vec2::ZERO && (f - self.centre).dot(self.inward) > 0.0)
+        feet.is_some_and(|f| self.switched() && (f - self.centre).dot(self.inward) > 0.0)
+    }
+
+    /// Whether the leaf stops a body: a shut door does, and a grate still on its way up does
+    /// until it has risen clear of a head ([`GRATE_CLEAR`]); one coming down does from the moment
+    /// it is told to (`open` is false then).
+    pub fn blocks_body(&self) -> bool {
+        !self.open || (self.kind == DoorKind::Portcullis && self.swing < GRATE_CLEAR)
     }
 
 }
@@ -232,13 +249,13 @@ impl Doors {
 
     /// Whether cell `(x, y)` holds a shut door, which stops the delver.
     pub fn shuts(&self, x: i32, y: i32) -> bool {
-        self.0.get(&(x, y)).is_some_and(|d| !d.open)
+        self.0.get(&(x, y)).is_some_and(DoorState::blocks_body)
     }
 
     /// Whether cell `(x, y)` holds a shut door that stops someone of `faction` (`None` for the
     /// delver and creatures): a shut door stops everyone but the folk of its own faction.
     pub fn stops(&self, x: i32, y: i32, faction: Option<Faction>) -> bool {
-        self.0.get(&(x, y)).is_some_and(|d| !d.open && Some(d.faction) != faction)
+        self.0.get(&(x, y)).is_some_and(|d| d.blocks_body() && Some(d.faction) != faction)
     }
 
     /// Whether cell `(x, y)` holds a shut door that blocks the sight of someone of `faction`:
@@ -280,12 +297,15 @@ pub struct DoorLeaf {
     pub hinge: Vec3,
     /// How far a grate rises when open, `0` for a leaf that swings.
     pub lift: f32,
+    /// How much a grate's height shrinks, by the time it is fully raised, so what has risen into
+    /// the wall never stands above the ceiling (`1.0` for no shrinking).
+    pub squash: f32,
 }
 
 impl DoorLeaf {
     /// A swinging leaf hung at `hinge`.
     pub fn swinging(cell: (i32, i32), shut: Quat, hinge: Vec3) -> Self {
-        DoorLeaf { cell, shut, hinge, lift: 0.0 }
+        DoorLeaf { cell, shut, hinge, lift: 0.0, squash: 1.0 }
     }
 
     /// The leaf's rotation with the door `swing` open (0 shut, 1 open).
@@ -299,8 +319,15 @@ impl DoorLeaf {
         self.hinge + Vec3::Y * self.lift * (t * t * (3.0 - 2.0 * t))
     }
 
+    /// The grate's height scale with the door `swing` open: it telescopes as it rises, so the
+    /// part that has gone up into the wall stays under the ceiling.
+    pub fn height_scale(&self, swing: f32) -> f32 {
+        let t = swing.clamp(0.0, 1.0);
+        1.0 + (self.squash - 1.0) * (t * t * (3.0 - 2.0 * t))
+    }
+
     pub fn transform(&self, swing: f32) -> Transform {
-        Transform::from_translation(self.translation(swing)).with_rotation(self.rotation(swing))
+        Transform::from_translation(self.translation(swing)).with_rotation(self.rotation(swing)).with_scale(Vec3::new(1.0, self.height_scale(swing), 1.0))
     }
 }
 
@@ -810,14 +837,21 @@ pub fn tend_door(door: &mut DoorState, folk_at: bool, delver_in_way: bool, dt: f
 fn swing_leaves(
     time: Res<Time>,
     mut doors: ResMut<Doors>,
-    folk: Query<(&Transform, &Denizen), Without<Corpse>>,
+    folk: Query<(&Transform, &Denizen, Option<&Hostility>, Option<&Routine>), Without<Corpse>>,
     players: Query<&Transform, (With<Player>, Without<DoorLeaf>, Without<Denizen>)>,
     mut leaves: Query<(&DoorLeaf, &mut Transform), Without<Denizen>>,
 ) {
     let feet = players.iter().next().map(|t| t.translation.xz());
     for (leaf, mut transform) in &mut leaves {
         let Some(door) = doors.bypass_change_detection().0.get_mut(&leaf.cell) else { continue };
-        let folk_at = folk.iter().any(|(t, d)| d.person.faction.id == door.faction && t.translation.xz().distance(door.centre) < FOLK_OPENS);
+        // Folk raise a wooden or steel door for themselves as they walk up to it. A grate is not
+        // raised for a guard standing at their post beside it, only for folk walking through its
+        // cell on their way or hostile ones going out after the delver.
+        let folk_at = folk.iter().any(|(t, d, hostility, routine)| {
+            d.person.faction.id == door.faction
+                && t.translation.xz().distance(door.centre) < FOLK_OPENS
+                && (door.kind != DoorKind::Portcullis || hostility.is_some_and(|h| h.is_hostile()) || routine.is_some_and(|r| r.heads_through(leaf.cell)))
+        });
         let in_way = delver_in_doorway(door, feet);
         tend_door(door, folk_at, in_way, time.delta_secs());
         let want = f32::from(door.open);
@@ -1523,5 +1557,109 @@ mod tests {
             })
             .collect();
         assert!(times[0] < times[1] && times[1] < times[2], "{times:?}");
+    }
+
+    #[test]
+    fn a_rising_grate_blocks_until_clear_and_a_falling_one_blocks_at_once() {
+        let (_, door, mut doors) = hung_of(DoorKind::Portcullis);
+        let cell = (door.x, door.y);
+        let set = |doors: &mut Doors, open: bool, swing: f32| {
+            let d = doors.0.get_mut(&cell).unwrap();
+            d.open = open;
+            d.swing = swing;
+        };
+        // Shut, and told to rise: still a wall for the first stretch of the rise.
+        set(&mut doors, true, 0.0);
+        assert!(doors.shuts(cell.0, cell.1) && doors.stops(cell.0, cell.1, None));
+        set(&mut doors, true, 0.5);
+        assert!(doors.shuts(cell.0, cell.1), "half up, a head would still meet it");
+        set(&mut doors, true, GRATE_CLEAR + 0.01);
+        assert!(!doors.shuts(cell.0, cell.1) && !doors.stops(cell.0, cell.1, None), "risen clear");
+        // Told to drop: a wall from that moment, though it is still up.
+        set(&mut doors, false, 1.0);
+        assert!(doors.shuts(cell.0, cell.1) && doors.stops(cell.0, cell.1, None));
+        // The door's own folk pass either way, and a swinging door follows its flag alone.
+        set(&mut doors, true, 0.1);
+        assert!(!doors.stops(cell.0, cell.1, Some(door.faction)));
+        doors.0.get_mut(&cell).unwrap().kind = DoorKind::Wood;
+        assert!(!doors.shuts(cell.0, cell.1), "an open wooden door lets the delver by at once");
+    }
+
+    #[test]
+    fn a_shared_door_opens_with_f_from_both_sides_and_promises_no_switch() {
+        let (level, door) = claimed();
+        for kind in [DoorKind::Wood, DoorKind::Steel] {
+            let shared = ClaimDoor { shared: true, kind, ..door };
+            let doors = hung(&level, &shared, false);
+            let state = doors.0[&(door.x, door.y)].clone();
+            assert!(!state.switched(), "a door with no outside has no switch");
+            for side in [state.inward, -state.inward] {
+                let feet = state.centre + side * CELL;
+                assert!(!state.inside(Some(feet)), "no claim side to be inside of");
+                for band in [Band::Hostile, Band::Wary, Band::Neutral] {
+                    assert!(!state.locked(band));
+                }
+                let mut app = App::new();
+                let mut keys = ButtonInput::<KeyCode>::default();
+                keys.press(KeyCode::KeyF);
+                app.insert_resource(CurrentLevel(level.clone()))
+                    .insert_resource(doors.clone())
+                    .insert_resource(AimedDoor(Some((door.x, door.y))))
+                    .insert_resource(Inventory::default())
+                    .insert_resource(WorldRecord::default())
+                    .insert_resource(RunDice(Mulberry32::new(1)))
+                    .insert_resource(Keymap::default())
+                    .insert_resource(keys)
+                    .insert_resource(Time::<()>::default())
+                    .add_systems(Update, use_door);
+                app.world_mut().spawn((Player, Transform::from_xyz(feet.x, 0.0, feet.y)));
+                app.update();
+                assert!(app.world().resource::<Doors>().0[&(door.x, door.y)].open, "{kind:?}: F from {side} did not open it");
+            }
+        }
+        // A grate with no switch never says it has one.
+        let keymap = Keymap::default();
+        let line = door_line(&keymap, DoorKind::Portcullis, SwitchKind::Chain, false, false, false, false, false);
+        assert!(!line.contains("chain"), "{line}");
+    }
+
+    #[test]
+    fn a_guard_at_its_post_leaves_a_shut_grate_shut_and_a_walker_through_it_raises_it() {
+        use crate::folk_routine::Routine;
+        let (level, door, doors) = hung_of(DoorKind::Portcullis);
+        let spec = level.faction(door.faction).clone();
+        let mut spot = level.folk[0];
+        spot.faction = door.faction;
+        let person = crate::folk::Person::of(&spot, &spec, 1);
+        let state = doors.0[&(door.x, door.y)].clone();
+        let beside = state.centre + state.inward * CELL * 0.6;
+        let run = |routine: Routine| {
+            let mut app = App::new();
+            app.insert_resource(doors.clone()).insert_resource(Time::<()>::default()).add_systems(Update, swing_leaves);
+            let shut = Quat::IDENTITY;
+            app.world_mut().spawn((DoorLeaf { cell: (door.x, door.y), shut, hinge: Vec3::ZERO, lift: 23.0, squash: 1.0 }, Transform::default()));
+            let denizen = Denizen { person: person.clone(), radius: 2.5, min: Vec3::ZERO, max: Vec3::ZERO };
+            app.world_mut().spawn((denizen, Transform::from_xyz(beside.x, 0.0, beside.y), routine));
+            for _ in 0..5 {
+                app.update();
+            }
+            app.world().resource::<Doors>().0[&(door.x, door.y)].open
+        };
+        let post = || Routine::placed(beside, state.through, 5.0, Mulberry32::new(1));
+        assert!(!run(post()), "a guard standing at its post held the grate up");
+        let walking = post().walking(state.centre + state.through * CELL, vec![(door.x, door.y)]);
+        assert!(run(walking), "a folk walking through the door cell did not raise it");
+        // A walker whose way does not go through the door leaves it shut.
+        let elsewhere = post().walking(beside, vec![(door.x + 5, door.y + 5)]);
+        assert!(!run(elsewhere));
+    }
+
+    #[test]
+    fn a_door_with_no_switch_is_never_inside_of() {
+        let (level, door) = claimed();
+        let cut_off = ClaimDoor { inward: (0, 0), kind: DoorKind::Wood, ..door };
+        let doors = hung(&level, &cut_off, false);
+        let state = &doors.0[&(door.x, door.y)];
+        assert!(!state.switched() && !state.inside(Some(state.centre + Vec2::X * CELL)));
     }
 }

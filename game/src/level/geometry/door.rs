@@ -169,11 +169,19 @@ pub struct ClaimLeaf {
     pub hinge: V3,
     /// How far the leaf rises when open: `0` for a swinging leaf.
     pub lift: f32,
+    /// How tall a grate is (`0` for a swinging leaf).
+    pub height: f32,
 }
 
 impl ClaimLeaf {
     pub fn rises(&self) -> bool {
         self.lift > 0.0
+    }
+
+    /// The height scale a grate telescopes to as it is fully raised, so that its top stands no
+    /// higher than `cap` (the ceiling over the doorway) and nothing of it pokes out of the stone.
+    pub fn squash_for(&self, cap: f32) -> f32 {
+        if self.rises() { ((cap - self.lift) / self.height.max(1.0)).clamp(0.08, 1.0) } else { 1.0 }
     }
 }
 
@@ -222,7 +230,7 @@ fn swinging(spec: &DoorSpec, opening: &Opening, make: fn(&DoorSpec, &Opening, &m
     }
     let mut fixed = Parts::new();
     fixed.add("pintles", pintles, MaterialKind::Iron);
-    ClaimLeaf { leaf: parts.finish(), fixed: fixed.finish(), hinge: [x0, 0.0, LEAF_Z], lift: 0.0 }
+    ClaimLeaf { leaf: parts.finish(), fixed: fixed.finish(), hinge: [x0, 0.0, LEAF_Z], lift: 0.0, height: 0.0 }
 }
 
 /// The ring pull and lock plate on each face of a leaf `thickness` thick, at `x`, in `iron`.
@@ -452,7 +460,9 @@ fn portcullis(spec: &DoorSpec, opening: &Opening) -> ClaimLeaf {
     let rails_n = spec.rails.max(2);
     for j in 0..rails_n {
         let y = low + (high - low) * j as f32 / (rails_n - 1) as f32;
-        let reach = opening.half_width_at(y + rail_r + 1.3) - 0.5;
+        // Where the sides run straight a rail runs on into the guide's channel; under the curve it
+        // stops short of the arch.
+        let reach = if y + rail_r + 1.3 <= opening.straight() { hw - 0.2 } else { opening.half_width_at(y + rail_r + 1.3) - 0.5 };
         if reach < 2.0 {
             continue;
         }
@@ -493,7 +503,7 @@ fn portcullis(spec: &DoorSpec, opening: &Opening) -> ClaimLeaf {
     }
     let mut fixed = Parts::new();
     fixed.add("guides", guides, MaterialKind::Iron);
-    ClaimLeaf { leaf: parts.finish(), fixed: fixed.finish(), hinge: [0.0; 3], lift: opening.crown + GATE_OVERLIFT }
+    ClaimLeaf { leaf: parts.finish(), fixed: fixed.finish(), hinge: [0.0; 3], lift: opening.crown + GATE_OVERLIFT, height: opening.crown }
 }
 
 /// The turn of a swinging leaf about its pin when it stands `swing` open (0 shut, 1 open): a
@@ -837,6 +847,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_raised_grate_telescopes_to_stay_under_the_ceiling_and_clears_the_opening() {
+        for style in STYLES {
+            let o = Opening::of(style);
+            let built = claim_leaf(&spec(DoorKind::Portcullis, style, 2));
+            for cap in [28.0f32, 31.0, 34.0, 40.0] {
+                let squash = built.squash_for(cap);
+                assert!((0.08..=1.0).contains(&squash));
+                // Fully raised: the top is no higher than the cap (unless the floor of the squash was hit),
+                // and the feet are above the opening.
+                let top = built.lift + built.height * squash;
+                assert!(top <= cap + 1e-3 || squash <= 0.0801, "{style:?} cap {cap}: top {top}");
+                assert!(built.lift > o.crown, "the feet rise past the head of the opening");
+            }
+            // A swinging leaf is never squashed.
+            assert_eq!(claim_leaf(&spec(DoorKind::Wood, style, 2)).squash_for(30.0), 1.0);
+        }
+    }
+
+    #[test]
+    fn the_grates_rails_run_into_the_guides() {
+        let o = Opening::of(DoorStyle::Timber);
+        let built = claim_leaf(&spec(DoorKind::Portcullis, DoorStyle::Timber, 4));
+        let rails = built.leaf.parts.iter().find(|p| p.name == "rails").unwrap();
+        let reach = rails.positions.iter().map(|p| p[0]).fold(f32::MIN, f32::max);
+        let guide_inner = built.fixed.parts.iter().flat_map(|p| p.positions.iter()).filter(|p| p[0] > 0.0).map(|p| p[0]).fold(f32::MAX, f32::min);
+        assert!(reach > guide_inner, "the rails stop {} short of the guides' channel", guide_inner - reach);
+        assert!(reach <= o.half_width, "and no further than the jamb");
     }
 
     #[test]

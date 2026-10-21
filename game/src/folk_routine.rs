@@ -126,6 +126,25 @@ pub struct Routine {
 }
 
 impl Routine {
+    /// Whether they are walking a way that goes through grid cell `cell`.
+    pub fn heads_through(&self, cell: (i32, i32)) -> bool {
+        matches!(self.phase, Phase::Walk { .. }) && self.path.contains(&cell)
+    }
+
+    /// A routine of someone placed at `home` facing `facing`, pausing `first` seconds before
+    /// their first walk, drawing from `rng`.
+    pub fn placed(home: Vec2, facing: Vec2, first: f32, rng: Mulberry32) -> Self {
+        Routine { phase: Phase::Pause { left: first }, home, facing, chosen: Vec::new(), walks: 0, searches: 0, resume: None, away: 0.0, holds: 0, path: Vec::new(), stuck: 0.0, speed: 0.0, rng }
+    }
+
+    /// Sets the way they are walking (for tests).
+    #[cfg(test)]
+    pub fn walking(mut self, goal: Vec2, path: Vec<(i32, i32)>) -> Self {
+        self.phase = Phase::Walk { goal };
+        self.path = path;
+        self
+    }
+
     /// Stops them where they are. Each hold wants its own [`Routine::release`].
     pub fn hold(&mut self) {
         self.holds += 1;

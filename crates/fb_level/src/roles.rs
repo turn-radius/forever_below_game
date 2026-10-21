@@ -99,7 +99,7 @@ impl Level {
         for door in &mut doors {
             if let Some(spec) = self.factions.iter().find(|f| f.id == door.faction) {
                 let mut rng = crate::doorkind::door_stream(self.seed, door.x, door.y);
-                door.kind = crate::doorkind::roll_kind(self.style, spec.intention, spec.armour, &mut rng);
+                door.kind = crate::doorkind::roll_kind(self.style, spec.intention, spec.armour, door.shared, &mut rng);
                 door.switch = crate::doorkind::roll_switch(door.kind, &mut rng);
             }
         }
@@ -378,6 +378,22 @@ mod tests {
         assert!(share(by_style[0], 0) > share(by_style[1], 0) && share(by_style[1], 1) > share(by_style[0], 1), "{by_style:?}");
         assert!(share(by_intention[0], 0) > share(by_intention[1], 0) && share(by_intention[1], 1) > share(by_intention[0], 1), "{by_intention:?}");
         assert!(mains > 40 && weaker_mains > 0, "{weaker_mains} of {mains} main doors are wood");
+    }
+
+    #[test]
+    fn a_shared_door_is_never_a_portcullis() {
+        let (mut shared, mut grates) = (0, 0);
+        for (seed, depth) in (1..=3).flat_map(|d| (1..=96).map(move |s| (s, d))) {
+            for d in generate(seed, depth).claim_doors() {
+                if d.shared {
+                    shared += 1;
+                    assert_ne!(d.kind, crate::DoorKind::Portcullis, "seed {seed} depth {depth} door {},{}", d.x, d.y);
+                } else {
+                    grates += (d.kind == crate::DoorKind::Portcullis) as u32;
+                }
+            }
+        }
+        assert!(grates > 20, "{shared} shared doors, {grates} grates elsewhere");
     }
 
     #[test]
