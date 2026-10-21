@@ -3,7 +3,7 @@
 use armory::families::garment::Garment;
 use armory::families::hood::Hoods;
 use armory::geom::vec3::{self, V3};
-use armory::sections::garment::GarmentStyle;
+use armory::sections::garment::{GarmentStyle, Sleeves};
 use armory::sections::hood::HoodStyle;
 use armory::{Family, Item, Part};
 use fb_items::Slot;
@@ -170,6 +170,27 @@ fn cloth_fits_round_the_shoulders_check(folks: &[Folk], seeds: &[u32], kits: &[u
                         failures.push(format!("{case}: the crest climbs {:.2} again past its top", m.ridge));
                     }
                 }
+                // A cloak or mantle: over a robe, over pauldrons, and the mage's own kit.
+                let mage = fb_items::outfit::outfit("mage").expect("the mage outfit");
+                let kits: [(String, Vec<(Slot, Item)>); 3] = [
+                    ("cloak".to_string(), cloaked(GarmentStyle::Cloak, false, kit)),
+                    ("cloak over pauldrons".to_string(), cloaked(GarmentStyle::Cloak, true, kit)),
+                    ("mage kit".to_string(), mage.roll(kit, folk.key()).worn.into_iter().map(|(slot, i)| (slot, i.shape)).collect()),
+                ];
+                for (name, worn) in kits.iter().filter(|(_, worn)| worn.iter().any(|(slot, _)| *slot == Slot::Cloak)) {
+                    let (turn, sag) = cloak_outline(&body, worn);
+                    let case = format!("{folk:?} {seed} kit {kit} {name}");
+                    // The outline from the collar over the shoulder is taut and round: it
+                    // does not dip between the collar and the shoulder (a flat shelf with a
+                    // peak at the arm sagged by up to 0.6 of the wearer's scale), and turns
+                    // by under 58 degrees between neighbouring stretches (a square corner).
+                    if sag > 0.12 * body.scale {
+                        failures.push(format!("{case}: the outline sags {:.2} between the collar and the shoulder", sag / body.scale));
+                    }
+                    if turn > 58.0 {
+                        failures.push(format!("{case}: the outline turns {turn:.0} degrees at the shoulder"));
+                    }
+                }
             }
         }
     }
@@ -184,7 +205,73 @@ fn cloth_fits_round_the_shoulders() {
 
 #[test]
 fn cloth_fits_round_the_shoulders_smoke() {
-    // The pigfolk and dwarf whose pauldrons stood 0.8 above a cowl, a goblin whose cape top
-    // rose past its hood's rim, and the humans in between.
-    cloth_fits_round_the_shoulders_check(&[Folk::Human, Folk::Dwarf, Folk::Goblin, Folk::Pigfolk], &[1207], &[5]);
+    // A gnome and a goblin whose cloak sagged by half their scale between collar and shoulder, and a dwarf whose pauldrons stood above a cowl.
+
+    cloth_fits_round_the_shoulders_check(&[Folk::Dwarf, Folk::Gnome, Folk::Goblin], &[37], &[7]);
 }
+
+
+/// A mage's robe with a mantle or a cloak over it (and pauldrons under it on a hauberk with
+/// `pauldrons`), as the doll wears them.
+fn cloaked(style: GarmentStyle, pauldrons: bool, seed: u32) -> Vec<(Slot, Item)> {
+    let mut robe = Garment::roll_as(seed, GarmentStyle::Robe);
+    robe.cut.sleeves = Sleeves::Long;
+    robe.cut.sleeve_flare = 1.0;
+    let mut worn = vec![
+        (Slot::Shirt, Item::Garment(robe)),
+        (Slot::Cloak, Item::Garment(Garment::roll_as(seed + 1, style))),
+        (Slot::Legs, Item::roll(Family::Legs, seed).unwrap()),
+    ];
+    if pauldrons {
+        let mut mail = Garment::roll_as(seed + 2, GarmentStyle::Hauberk);
+        mail.plates.pauldrons = true;
+        worn.push((Slot::Body, Item::Garment(mail)));
+    }
+    worn
+}
+
+/// How the outline of a cloak over the shoulders, seen from the front, goes from the collar
+/// out over the shoulder and down the arm: the sharpest turn in degrees between neighbouring
+/// stretches of it (a flat top running out from the neck to a square corner turns by a great
+/// deal at the corner), and the deepest the outline sags below the straight line between two
+/// of its points (a dip between the collar and the shoulder, with the shoulder a peak).
+fn cloak_outline(body: &Body, worn: &[(Slot, Item)]) -> (f32, f32) {
+    let fit = fit_worn(body, worn);
+    let cloak = fit.layer(Slot::Cloak).expect("a cloak");
+    let cloth: Vec<&Part> = cloak.mesh.parts.iter().filter(|p| p.name == "body").collect();
+    let s = body.scale;
+    let step = 0.5 * s;
+    let top = |x: f32| cloth.iter().flat_map(|p| p.positions.iter()).filter(|p| (p[0].abs() - x).abs() < 0.5 * step).map(|p| p[1]).fold(f32::MIN, f32::max);
+    // From the collar's edge (where the outline first drops from the neck's height) down to
+    // 1.5 below the shoulder line, where the cloak is falling down the arm.
+    let reach = cloth.iter().flat_map(|p| p.positions.iter()).map(|p| p[0].abs()).fold(0.0f32, f32::max);
+    let samples: Vec<(f32, f32)> = (0..).map(|i| 0.5 * body.shoulder_half_width + step * i as f32).take_while(|&x| x < reach).map(|x| (x, top(x))).filter(|c| c.1 > -1e6).collect();
+    let high = samples.iter().map(|c| c.1).fold(f32::MIN, f32::max);
+    let start = samples.iter().position(|c| high - c.1 > 0.02 * s).unwrap_or(0).saturating_sub(1);
+    let end = samples[start..].iter().position(|c| c.1 < body.shoulder_y - 0.1 * s).unwrap_or(samples.len() - start);
+    let outline: Vec<(f32, f32)> = samples[start..start + end].to_vec();
+    let heading = |a: (f32, f32), b: (f32, f32)| (b.1 - a.1).atan2(b.0 - a.0).to_degrees();
+    let turn = outline.windows(3).map(|w| (heading(w[1], w[2]) - heading(w[0], w[1])).abs()).fold(0.0f32, f32::max);
+    // The sag below the chords: the outline against its least concave majorant.
+    let mut chain: Vec<(f32, f32)> = vec![];
+    for &p in &outline {
+        while chain.len() >= 2 {
+            let (o, q) = (chain[chain.len() - 2], chain[chain.len() - 1]);
+            if (q.0 - o.0) * (p.1 - o.1) - (q.1 - o.1) * (p.0 - o.0) >= 0.0 {
+                chain.pop();
+            } else {
+                break;
+            }
+        }
+        chain.push(p);
+    }
+    let sag = outline
+        .iter()
+        .filter_map(|p| chain.windows(2).find(|w| p.0 >= w[0].0 && p.0 <= w[1].0).map(|w| w[0].1 + (w[1].1 - w[0].1) * (p.0 - w[0].0) / (w[1].0 - w[0].0) - p.1))
+        .fold(0.0f32, f32::max);
+    if sag > 0.12 * s {
+        eprintln!("OUTLINE {:?}", outline.iter().map(|c| (format!("{:.2}", c.0), format!("{:.2}", c.1 - body.shoulder_y))).collect::<Vec<_>>());
+    }
+    (turn, sag)
+}
+

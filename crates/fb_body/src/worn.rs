@@ -2045,7 +2045,7 @@ mod tests {
                         }
                     }
                     // Where it falls past the shoulders it lies on the cloak, not off it: round
-                    // the back it comes within 1.2 cm of it in every direction, the edges of
+                    // the back it comes within 1.6 cm of it in every direction (1.2 before a cloak was drawn taut from the collar over the shoulder, which lifts its top a little off the curtain's edge), the edges of
                     // the curtain too.
                     let cloak = &fit.layer(Slot::Cloak).unwrap().mesh.parts;
                     let (a, b) = (body.shoulder_y - 0.25 * body.trunk_length, body.shoulder_y + 0.05 * body.trunk_length);
@@ -2056,7 +2056,7 @@ mod tests {
                     }
                     let mut sectors: Vec<f32> = nearest.into_iter().filter(|d| *d < f32::MAX).collect();
                     sectors.sort_by(f32::total_cmp);
-                    if sectors.is_empty() || sectors.iter().any(|d| *d > 0.12) {
+                    if sectors.is_empty() || sectors.iter().any(|d| *d > 0.16) {
                         failures.push(format!("{folk:?} {seed} kit {kit}: the hair stands off the cloak: {sectors:.2?}"));
                     }
                 }
