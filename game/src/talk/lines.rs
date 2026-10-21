@@ -38,6 +38,7 @@ pub fn spit_line(speaker: &Speaker) -> String {
 /// until it does, the topic answers "Not yet." ([`super::service_ready`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Service {
+    Barter,
     Commission,
     /// Collecting what was commissioned of this folk; offered only to a delver with an order
     /// with them.
@@ -62,6 +63,7 @@ impl Topic {
         match self {
             Topic::Who => "Who are you?",
             Topic::Trade => "Your trade",
+            Topic::Service(Service::Barter) => "Barter",
             Topic::Service(Service::Commission) => "Commission",
             Topic::Service(Service::Order) => "Your order",
             Topic::Service(Service::Enchant) => "Enchant",
@@ -107,6 +109,9 @@ pub fn topics(speaker: &Speaker) -> Vec<Topic> {
     let mut list = vec![Topic::Who];
     if let Some(trade) = speaker.trade {
         list.push(Topic::Trade);
+        if trade.shop("", "").is_some() {
+            list.push(Topic::Service(Service::Barter));
+        }
         match trade.profession {
             Profession::Armorer | Profession::Weaponsmith | Profession::Bowyer | Profession::Tentmaker => list.push(Topic::Service(Service::Commission)),
             Profession::Enchanter => list.extend([Topic::Service(Service::Enchant), Topic::Service(Service::Scrap)]),
@@ -361,9 +366,9 @@ mod tests {
     fn trades_add_their_topics() {
         let labels = |t| topics(&speaker(t, Band::Neutral)).into_iter().map(Topic::label).collect::<Vec<_>>();
         assert_eq!(labels(None), ["Who are you?", "This level", "The way out"]);
-        assert_eq!(labels(Some(smith())), ["Who are you?", "Your trade", "Commission", "This level", "The way out"]);
+        assert_eq!(labels(Some(smith())), ["Who are you?", "Your trade", "Barter", "Commission", "This level", "The way out"]);
         assert_eq!(labels(Some(Trade { profession: Profession::Enchanter, tier: Tier::Expert, style: None })), ["Who are you?", "Your trade", "Enchant", "Scrap", "This level", "The way out"]);
-        assert_eq!(labels(Some(Trade { profession: Profession::GeneralGoods, tier: Tier::Novice, style: None })), ["Who are you?", "Your trade", "This level", "The way out"]);
+        assert_eq!(labels(Some(Trade { profession: Profession::GeneralGoods, tier: Tier::Novice, style: None })), ["Who are you?", "Your trade", "Barter", "This level", "The way out"]);
         assert_eq!(labels(Some(Trade::guard())), ["Who are you?", "Your trade", "This level", "The way out"]);
     }
 

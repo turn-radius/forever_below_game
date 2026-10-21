@@ -72,6 +72,8 @@ const LINE_PX: f32 = 2.0;
 /// The widest the left leaf grows, in logical pixels: a pack and a belt pouch side by side at
 /// the shipped 72-pixel cells (8 + 4 cells and the gap between).
 const LEAF_MAX_PX: f32 = 900.0;
+/// The same while bartering, wide enough for the trader's shelf beside a pack.
+const BARTER_LEAF_MAX_PX: f32 = 1000.0;
 /// Radius of a grid's rounded corners, in logical pixels (the plate's `.grid`).
 const GRID_RADIUS_PX: f32 = 12.0;
 /// How far the mouse moves with the button down before a press becomes a drag, in logical
@@ -125,12 +127,14 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
             .init_resource::<OpenContainer>()
+            .init_resource::<crate::barter::Barter>()
             .init_resource::<DollAssets>()
             .init_resource::<DollStage>()
             .init_resource::<crate::fitting::FitCache>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
             .init_resource::<ColumnScroll>()
+            .init_resource::<ShelfScrolled>()
             .add_systems(OnExit(AppState::Delving), leave_the_delve)
             .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD")), give_ammunition.run_if(|| debug_kit_wanted() || env_flag("FB_HOLD")), give_for_capture).chain())
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
@@ -145,6 +149,7 @@ impl Plugin for InventoryPlugin {
                         close_container_with_screen,
                         build_screen,
                         scroll_column,
+                        scroll_shelf,
                         drag_items,
                         unhang_without_belt,
                         crate::enchanting::scrap_for_capture.run_if(|| env_flag("FB_SCRAP")),
@@ -162,7 +167,7 @@ impl Plugin for InventoryPlugin {
                         .chain()
                         .after(switch_screens),
                     (icon::draw_icons, icon::reveal_icons).chain().after(build_screen),
-                    underfoot::drop_hovered.run_if(crate::play::inventory_open).after(drag_items).before(underfoot::apply_floor_changes),
+                    underfoot::drop_hovered.run_if(crate::play::inventory_open).run_if(crate::barter::not_bartering).after(drag_items).before(underfoot::apply_floor_changes),
                     doll::turn_seal,
                     (doll::start_doll_fitting, doll::poll_doll_fitting, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
                 )
@@ -460,6 +465,25 @@ pub struct ScrollColumn;
 /// inventory changes, so this is what keeps the column where it was.
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct ColumnScroll(pub f32);
+
+/// The scroll area round the trader's shelf while bartering: the shelf can hold more than fits
+/// beside the balance, so the grid scrolls inside it and the balance and its buttons stay put.
+#[derive(Component, Debug)]
+pub struct ShelfScroll;
+
+/// How far the shelf is scrolled, in logical pixels, kept across the screen's rebuilds.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct ShelfScrolled(pub f32);
+
+/// The tallest the shelf's area is, at the reference size, logical pixels (the interface is
+/// scaled with the window, so the same at every size): what the ledger leaves under the header
+/// and the balance panel.
+pub const SHELF_MAX_PX: f32 = 500.0;
+
+/// How tall the shelf's area is for a grid `grid` pixels tall: all of it if it fits, else the most.
+pub fn shelf_view_height(grid: f32) -> f32 {
+    grid.min(SHELF_MAX_PX)
+}
 
 /// A grid on the screen, and whose it is.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -808,7 +832,7 @@ pub(crate) fn build_screen(
     fonts: Res<UiFonts>,
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
-    (tuning, scrolled): (Res<Tuning>, Res<ColumnScroll>),
+    (tuning, scrolled, barter, shelf_scrolled): (Res<Tuning>, Res<ColumnScroll>, Res<crate::barter::Barter>, Res<ShelfScrolled>),
     rules: Option<Res<crate::rules::GameRules>>,
     keymap: Option<Res<Keymap>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
@@ -821,7 +845,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !barter.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -866,7 +890,7 @@ pub(crate) fn build_screen(
                 ledger
                     // Wide enough for a pack and a belt pouch side by side, and for underfoot
                     // and a bag set down beside it.
-                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(LEAF_MAX_PX), ..default() })
+                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(if barter.active() { BARTER_LEAF_MAX_PX } else { LEAF_MAX_PX }), ..default() })
                     .with_children(|leaf| {
                         header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab == SheetTab::Character {
@@ -893,18 +917,39 @@ pub(crate) fn build_screen(
                                         UiFonts::style(&fonts.body, 14.0, MUTED),
                                     ));
                                 }
-                                for container in carried {
-                                    screen.container(row, &mut icons, container, GridView::Container(container), "");
+                                // The trader's shelf before the pack, with the balance above it.
+                                if let Some(shelf) = barter.session.as_ref().map(|s| s.shelf).filter(|&s| showing.0 == Some(s)) {
+                                    row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(10), ..default() }).with_children(|column| {
+                                        if let Some(grid) = inventory.grid(shelf) {
+                                            crate::barter::panel(column, &fonts, &barter, &inventory, grid_size(grid, screen.cell).x);
+                                        }
+                                        screen.container_in(column, &mut icons, shelf, GridView::Container(shelf), "", Some(shelf_scrolled.0));
+                                    });
+                                }
+                                if barter.active() {
+                                    // Stacked beside the shelf, not wrapped under it.
+                                    row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(16), ..default() }).with_children(|stack| {
+                                        for container in carried {
+                                            screen.container(stack, &mut icons, container, GridView::Container(container), "");
+                                        }
+                                    });
+                                } else {
+                                    for container in carried {
+                                        screen.container(row, &mut icons, container, GridView::Container(container), "");
+                                    }
                                 }
                             });
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
                             .with_children(|row| {
-                                if let Some(container) = showing.0 {
+                                if let Some(container) = showing.0.filter(|&c| !barter.session.as_ref().is_some_and(|s| s.shelf == c)) {
                                     screen.container(row, &mut icons, container, GridView::Container(container), "");
                                 }
-                                screen.underfoot(row, &mut icons, &underfoot);
-                                for &bag in &underfoot.bags {
-                                    screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
+                                // Nothing lies about in the trader's stall.
+                                if !barter.active() {
+                                    screen.underfoot(row, &mut icons, &underfoot);
+                                    for &bag in &underfoot.bags {
+                                        screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
+                                    }
                                 }
                             });
                         });
@@ -966,6 +1011,12 @@ impl ScreenLayout<'_> {
 
     /// A container's grid under its name, with a small picture of it.
     fn container(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, view: GridView, suffix: &str) {
+        self.container_in(parent, icons, id, view, suffix, None);
+    }
+
+    /// [`ScreenLayout::container`], with the grid in a scroll area of its own at `scroll` pixels
+    /// down if that is given (the trader's shelf).
+    fn container_in(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, view: GridView, suffix: &str, scroll: Option<f32>) {
         let (Some(item), Some(grid)) = (self.inventory.item(id), self.inventory.grid(id)) else { return };
         let label = item.profile.holds.as_ref().map_or_else(|| item.name.clone(), |h| h.label.clone());
         parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
@@ -975,7 +1026,19 @@ impl ScreenLayout<'_> {
                 icons.spawn(head, item, false, Node { width: px(size.x), height: px(size.y), ..default() }, size.min_element().max(14.0));
                 head.spawn((Text::new(format!("{label}{suffix}")), UiFonts::style(&self.fonts.display, 18.0, INK)));
             });
-            self.grid(column, icons, view, grid, false);
+            match scroll {
+                None => self.grid(column, icons, view, grid, false),
+                Some(y) => {
+                    let size = grid_size(grid, self.cell);
+                    column
+                        .spawn((
+                            ShelfScroll,
+                            ScrollPosition(Vec2::new(0.0, y)),
+                            Node { width: px(size.x), height: px(shelf_view_height(size.y)), flex_shrink: 0.0, overflow: Overflow::scroll_y(), ..default() },
+                        ))
+                        .with_children(|area| self.grid(area, icons, view, grid, false));
+                }
+            }
         });
     }
 
@@ -1075,6 +1138,7 @@ fn target_under(
     doll: Option<Rect>,
     ledger: Option<Rect>,
     column: Option<Rect>,
+    shelf: Option<(GridView, Rect)>,
     cell: f32,
 ) -> Target {
     if let Some((slot, ..)) = drops.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
@@ -1087,7 +1151,8 @@ fn target_under(
     // scrolled out of the column is clipped, so only the visible part of the column counts.
     for (view, node, transform) in grids {
         let rect = node_rect(node, transform);
-        if rect.contains(point) && column.is_none_or(|c| c.contains(point)) {
+        let in_shelf = shelf.is_none_or(|(shelved, area)| shelved != *view || area.contains(point));
+        if rect.contains(point) && column.is_none_or(|c| c.contains(point)) && in_shelf {
             return Target::Cell { view: *view, cell: cell_under(rect, point, cell) };
         }
     }
@@ -1112,6 +1177,7 @@ fn scroll_column(
     dragging: Res<Dragging>,
     mut remembered: ResMut<ColumnScroll>,
     mut columns: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<ScrollColumn>>,
+    shelf: Query<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
 ) {
     if !open.is(Screen::Inventory) {
         remembered.set_if_neq(ColumnScroll(0.0));
@@ -1126,7 +1192,10 @@ fn scroll_column(
     let rect = node_rect(node, transform);
     let point = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     let mut by = 0.0;
+    // Over the shelf's own area, the shelf scrolls ([`scroll_shelf`]), not the column.
+    let over_shelf = point.is_some_and(|p| shelf.iter().any(|(n, t)| node_rect(n, t).contains(p)));
     if let Some(point) = point
+        && !over_shelf
         && point.x >= rect.min.x
         && point.x <= rect.max.x
     {
@@ -1149,6 +1218,55 @@ fn scroll_column(
         position.y = to;
     }
     remembered.set_if_neq(ColumnScroll(to));
+}
+
+/// Scrolls the trader's shelf with the wheel over it, and while an item is held near its top or
+/// bottom edge, as [`scroll_column`] does the left column.
+#[allow(clippy::too_many_arguments)]
+fn scroll_shelf(
+    open: Res<ScreenOpen>,
+    scroll: Res<AccumulatedMouseScroll>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
+    time: Res<Time<Real>>,
+    dragging: Res<Dragging>,
+    mut remembered: ResMut<ShelfScrolled>,
+    mut areas: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
+) {
+    if !open.is(Screen::Inventory) {
+        remembered.set_if_neq(ShelfScrolled(0.0));
+        return;
+    }
+    let Ok((mut position, node, transform)) = areas.single_mut() else { return };
+    if node.size().y <= 0.0 {
+        return;
+    }
+    let max = ((node.content_size() - node.size()) * node.inverse_scale_factor).y.max(0.0);
+    let rect = node_rect(node, transform);
+    let point = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
+    let mut by = 0.0;
+    if let Some(point) = point
+        && point.x >= rect.min.x
+        && point.x <= rect.max.x
+    {
+        let lines = match scroll.unit {
+            MouseScrollUnit::Line => scroll.delta.y,
+            MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
+        };
+        if lines != 0.0 && rect.contains(point) {
+            by -= lines * SCROLL_LINE_PX;
+        }
+        if dragging.0.is_some_and(|d| d.active) {
+            let top = (EDGE_SCROLL_PX - (point.y - rect.min.y)) / EDGE_SCROLL_PX;
+            let bottom = (EDGE_SCROLL_PX - (rect.max.y - point.y)) / EDGE_SCROLL_PX;
+            by += (bottom.clamp(0.0, 1.0) - top.clamp(0.0, 1.0)) * EDGE_SCROLL_SPEED * time.delta_secs();
+        }
+    }
+    let to = (position.y + by).clamp(0.0, max);
+    if to != position.y {
+        position.y = to;
+    }
+    remembered.set_if_neq(ShelfScrolled(to));
 }
 
 /// The grid a view shows.
@@ -1175,8 +1293,13 @@ fn drag_items(
     underfoot: Res<Underfoot>,
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
-    (time, tuning, ui_scale): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>),
-    (drops, mut quickslots, columns): (Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>, ResMut<Quickslots>, Query<(&ComputedNode, &UiGlobalTransform), With<ScrollColumn>>),
+    (time, tuning, ui_scale, mut barter): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>, ResMut<crate::barter::Barter>),
+    (drops, mut quickslots, columns, shelf_areas): (
+        Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+        ResMut<Quickslots>,
+        Query<(&ComputedNode, &UiGlobalTransform), With<ScrollColumn>>,
+        Query<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
+    ),
     mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
     let cell_px = tuning.interface.cell_size;
@@ -1189,7 +1312,9 @@ fn drag_items(
     let ledger = ledgers.iter().next().map(|(n, t)| node_rect(n, t));
     let doll = dolls.iter().next().map(|(n, t)| node_rect(n, t));
     let column = columns.iter().next().map(|(n, t)| node_rect(n, t));
-    let target = target_under(point, &drops, &grids, &slots, doll, ledger, column, cell_px);
+    // The shelf's grid is clipped to its own scroll area.
+    let shelf = barter.session.as_ref().zip(shelf_areas.iter().next()).map(|(s, (n, t))| (GridView::Container(s.shelf), node_rect(n, t)));
+    let target = target_under(point, &drops, &grids, &slots, doll, ledger, column, shelf, cell_px);
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
@@ -1223,7 +1348,7 @@ fn drag_items(
     if drag.active && input.just_pressed(Action::TurnItem) {
         drag.turn();
     }
-    drag.target = drag.active.then(|| (target, check_drop(&inventory, drag, target)));
+    drag.target = drag.active.then(|| (target, barter.check(&inventory, drag, target).unwrap_or_else(|| check_drop(&inventory, drag, target))));
     if input.just_released(Action::DragItem) {
         let drag = dragging.0.take().expect("a drag");
         let now = time.elapsed_secs();
@@ -1236,9 +1361,9 @@ fn drag_items(
             return;
         }
         let outcome = if drag.active {
-            drop_at(&mut inventory, &drag, target, underfoot.grid.cols)
+            (if barter.active() { barter.drop_at(&mut inventory, &drag, target) } else { None }).unwrap_or_else(|| drop_at(&mut inventory, &drag, target, underfoot.grid.cols))
         } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
-            quick(&mut inventory, drag.id)
+            (if barter.active() { barter.quick(&mut inventory, drag.id) } else { None }).unwrap_or_else(|| quick(&mut inventory, drag.id))
         } else {
             *last_click = Some((drag.id, now));
             return;
@@ -1541,11 +1666,13 @@ mod tests {
             .init_resource::<Underfoot>()
             .init_resource::<FloorChanges>()
             .init_resource::<OpenContainer>()
+            .init_resource::<crate::barter::Barter>()
             .init_resource::<Assets<Image>>()
             .init_resource::<DollAssets>()
             .init_resource::<Character>()
             .init_resource::<Tuning>()
             .init_resource::<ColumnScroll>()
+            .init_resource::<ShelfScrolled>()
             .add_systems(PreUpdate, crate::keymap::track_context)
             .add_systems(Update, (switch_screens, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
@@ -2337,6 +2464,41 @@ mod tests {
     }
 
     #[test]
+    fn the_wheel_scrolls_the_shelf_and_not_the_column_under_it() {
+        let (mut app, column) = scroll_app(900.0, Vec2::new(200.0, 150.0));
+        app.init_resource::<ShelfScrolled>().add_systems(Update, scroll_shelf);
+        let shelf = app
+            .world_mut()
+            .spawn((
+                ShelfScroll,
+                ScrollPosition::default(),
+                ComputedNode { size: Vec2::new(300.0, 200.0), content_size: Vec2::new(300.0, 500.0), inverse_scale_factor: 1.0, ..default() },
+                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(200.0, 150.0))),
+            ))
+            .id();
+        wheel(&mut app, -1.0);
+        assert_eq!(offset(&app, shelf), SCROLL_LINE_PX);
+        assert_eq!(offset(&app, column), 0.0, "the column stays while the mouse is over the shelf");
+        wheel(&mut app, -100.0);
+        assert_eq!(offset(&app, shelf), 300.0, "500 of content in 200");
+        assert_eq!(app.world().resource::<ShelfScrolled>().0, 300.0);
+    }
+
+    #[test]
+    fn a_shelf_scrolls_in_an_area_that_fits_the_ledger_at_any_window_size() {
+        // Ten pieces of three-by-two cells lay out five columns wide, seven rows deep with the
+        // spare ones: taller than the area, so it scrolls, and the area is the same height in
+        // interface pixels at 1280 by 720 and at 1920 by 1080, since the interface scales.
+        let cell = Tuning::default().interface.cell_size;
+        let grid = grid_size(&Grid::<ItemId>::new(5, 12), cell).y;
+        assert!(grid > SHELF_MAX_PX && shelf_view_height(grid) == SHELF_MAX_PX);
+        assert_eq!(shelf_view_height(100.0), 100.0, "a short shelf does not scroll");
+        // Header (about 200), the balance panel (about 200) and the shelf's label leave room.
+        let ledger = crate::tuning::InterfaceTuning::REFERENCE_HEIGHT * 0.92 - 44.0;
+        assert!(200.0 + 200.0 + 40.0 + SHELF_MAX_PX <= ledger, "{ledger}");
+    }
+
+    #[test]
     fn the_wheel_off_the_column_does_nothing() {
         let (mut app, column) = scroll_app(900.0, Vec2::new(500.0, 150.0));
         wheel(&mut app, -3.0);
@@ -2384,7 +2546,7 @@ mod tests {
         )>::new(&mut world);
         let (drops, grids, slots) = state.get(&world).unwrap();
         let page = Some(Rect::new(0.0, 0.0, 400.0, 400.0));
-        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, None, page, column, 72.0);
+        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, None, page, column, None, 72.0);
         assert!(matches!(at(None), Target::Cell { .. }));
         assert!(matches!(at(Some(Rect::new(0.0, 0.0, 200.0, 200.0))), Target::Cell { cell, .. } if cell == IVec2::ZERO));
         // The column starts below this point: the grid is under the header, clipped away.

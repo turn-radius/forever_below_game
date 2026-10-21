@@ -71,11 +71,11 @@ fn reset_talk(mut talk: ResMut<Talk>) {
     *talk = Talk::default();
 }
 
-/// Whether a service's screen exists to open: the commission screen ([`crate::commission`]) and
-/// the enchanter's two ([`crate::enchanter`]).
+/// Whether a service's screen exists to open: the barter screen ([`crate::barter`]), the
+/// commission screen ([`crate::commission`]) and the enchanter's two ([`crate::enchanter`]).
 /// Whatever builds another flips its arm.
 pub fn service_ready(service: Service) -> bool {
-    matches!(service, Service::Commission | Service::Order | Service::Enchant | Service::Scrap)
+    matches!(service, Service::Barter | Service::Commission | Service::Order | Service::Enchant | Service::Scrap)
 }
 
 /// The delver chose a service of the folk they talk to, and its screen should open. Sent only for

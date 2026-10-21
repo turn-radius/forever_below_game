@@ -46,6 +46,12 @@ pub enum Refusal {
     /// Not carried: a quickslot only takes what the delver has with them.
     NotCarried,
     Unknown,
+    /// A trader's shelf takes goods, not coin.
+    NotAWare,
+    /// A bag with things in it cannot be sold full.
+    HoldsThings,
+    /// Bartering is going on: only the pack and the trader's shelf are in play.
+    Bartering,
 }
 
 impl Refusal {
@@ -63,6 +69,9 @@ impl Refusal {
             Refusal::NotUsable => "A quickslot cannot use that.",
             Refusal::NotCarried => "Pick it up first.",
             Refusal::Unknown => "That is not here.",
+            Refusal::NotAWare => "Coin is not a ware.",
+            Refusal::HoldsThings => "Empty it first.",
+            Refusal::Bartering => "Nothing lies about in the stall.",
         }
     }
 }
@@ -304,6 +313,38 @@ impl Inventory {
         self.grids.get_mut(&container).ok_or(Refusal::NotAContainer)?.place(id, footprint, at)?;
         self.locations.insert(id, Location::In { container, at });
         Ok(())
+    }
+
+    /// Whether `id` could go on the trader's `shelf` at `at`: any size of thing, long ones too,
+    /// which a pack would not take, so a spear or a bow can be sold and bought.
+    pub fn check_shelve(&self, id: ItemId, shelf: ItemId, at: Placement) -> Result<(), Refusal> {
+        let item = self.item(id).ok_or(Refusal::Unknown)?;
+        let grid = self.grids.get(&shelf).ok_or(Refusal::NotAContainer)?;
+        if self.holds(id, shelf) {
+            return Err(Refusal::IntoItself);
+        }
+        let size = super::grid::oriented(item.profile.footprint, at.turned);
+        let ignoring = matches!(self.location(id), Some(Location::In { container: c, .. }) if c == shelf).then_some(id);
+        grid.check(size, at.x as i32, at.y as i32, ignoring)?;
+        Ok(())
+    }
+
+    /// Puts `id` on `shelf` at `at` ([`Inventory::check_shelve`]), taking it from wherever it was.
+    pub fn shelve_at(&mut self, id: ItemId, shelf: ItemId, at: Placement) -> Result<(), Refusal> {
+        self.check_shelve(id, shelf, at)?;
+        let footprint = self.item(id).ok_or(Refusal::Unknown)?.profile.footprint;
+        self.take_out(id);
+        self.grids.get_mut(&shelf).ok_or(Refusal::NotAContainer)?.place(id, footprint, at)?;
+        self.locations.insert(id, Location::In { container: shelf, at });
+        Ok(())
+    }
+
+    /// Puts `id` on `shelf` at its first free spot.
+    pub fn shelve(&mut self, id: ItemId, shelf: ItemId) -> Result<Placement, Refusal> {
+        let footprint = self.item(id).ok_or(Refusal::Unknown)?.profile.footprint;
+        let at = self.grids.get(&shelf).ok_or(Refusal::NotAContainer)?.first_free(footprint).ok_or(Refusal::NoRoom)?;
+        self.shelve_at(id, shelf, at)?;
+        Ok(at)
     }
 
     /// Puts `id` into the first carried container with room for it, at its first free spot.

@@ -86,7 +86,7 @@ fn talking_to_a_neutral_folk_opens_the_panel_and_holds_their_routine() {
     assert_eq!(talk.folk, Some(folk));
     assert!(!talk.greeting.is_empty());
     let labels: Vec<_> = talk.topics.iter().map(|t| t.label()).collect();
-    assert_eq!(labels, ["Who are you?", "Your trade", "Commission", "This level", "The way out"]);
+    assert_eq!(labels, ["Who are you?", "Your trade", "Barter", "Commission", "This level", "The way out"]);
 }
 
 #[test]
@@ -170,8 +170,11 @@ fn the_number_keys_choose_topics() {
     let (topic, said) = app.world().resource::<Talk>().answer.clone().expect("an answer");
     assert_eq!(topic, Topic::Who);
     assert!(said.contains(&app.world().get::<Denizen>(folk).unwrap().person.name), "{said}");
-    // A commission opens the commission screen rather than answering.
+    // Barter and commission open their screens rather than answering.
     press(&mut app, KeyCode::Digit3);
+    let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
+    assert_eq!(sent, vec![ServiceChosen { folk, service: Service::Barter }]);
+    press(&mut app, KeyCode::Digit4);
     let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
     assert_eq!(sent, vec![ServiceChosen { folk, service: Service::Commission }]);
     assert_eq!(app.world().resource::<Talk>().answer.as_ref().map(|a| a.0), Some(Topic::Who));

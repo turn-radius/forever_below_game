@@ -88,6 +88,12 @@ pub struct ShelfRecord {
     /// The game day it was stocked on.
     pub day: u32,
     pub wares: Vec<ItemRecord>,
+    /// What the delver sold the trader, which a restock keeps.
+    #[serde(default)]
+    pub sold: Vec<ItemRecord>,
+    /// The trader's coin in copper; none for a record from before they had any.
+    #[serde(default)]
+    pub purse: Option<u64>,
 }
 
 /// A folk as they were left.
@@ -332,7 +338,7 @@ pub fn record_level_left(
     for (denizen, transform, health, hostility, corpse, shelf) in &folk {
         let Some(index) = level.0.folk.iter().position(|s| *s == denizen.person.spot) else { continue };
         if let Some(shelf) = shelf.filter(|_| corpse.is_none()) {
-            left.shelves.insert(index, ShelfRecord { day: shelf.day, wares: shelf.wares.iter().map(item_record).collect() });
+            left.shelves.insert(index, ShelfRecord { day: shelf.day, wares: shelf.wares.iter().map(item_record).collect(), sold: shelf.sold.iter().map(item_record).collect(), purse: Some(shelf.purse) });
         }
         let Some(health) = health else { continue };
         let stood = corpse.map_or(*transform, |c| c.fell);
@@ -425,7 +431,7 @@ mod tests {
         wares[0].history.push("Made by Bera, master mailwright of the Ash Choir.".into());
         let mut world = WorldRecord::default();
         let mut level = LevelRecord::default();
-        level.shelves.insert(3, ShelfRecord { day: 2, wares: wares.iter().map(item_record).collect() });
+        level.shelves.insert(3, ShelfRecord { day: 2, wares: wares.iter().map(item_record).collect(), sold: vec![], purse: None });
         world.levels.insert(8, level);
         let json = serde_json::to_string(&world).unwrap();
         let again: WorldRecord = serde_json::from_str(&json).unwrap();

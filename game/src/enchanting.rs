@@ -34,7 +34,7 @@ pub fn wallet(inventory: &Inventory) -> Coins {
 /// What `copper` taken out of the delver's carried purses, the first ones first, would leave in
 /// each: the purses as they would be, nothing changed yet. `None` when they carry less, or a
 /// purse cannot be rebuilt.
-fn plan_pay(inventory: &Inventory, copper: u64) -> Option<Vec<(ItemId, Item)>> {
+pub fn plan_pay(inventory: &Inventory, copper: u64) -> Option<Vec<(ItemId, Item)>> {
     if wallet(inventory).total_copper() < copper {
         return None;
     }

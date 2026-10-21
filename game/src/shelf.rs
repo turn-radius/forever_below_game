@@ -1,7 +1,8 @@
 //! What a tradesperson has to sell today: [`Shelf`], rolled by [`fb_items::stock::stock`] from
 //! their spot's seed and the game day, so it restocks each game day (#548). A shelf left in
 //! the record ([`crate::record::ShelfRecord`]) comes back the same on a revisit until the next
-//! restock. Nothing buys or sells yet (#351); this only keeps the wares.
+//! restock. The delver buys and sells at the shelf ([`crate::barter`]): what they sell stays on
+//! it ([`Shelf::sold`]) through every restock, and only the rolled wares are rolled again.
 
 use bevy::prelude::*;
 use fb_items::Item;
@@ -16,7 +17,31 @@ use crate::record::{WorldRecord, rebuild_item};
 pub struct Shelf {
     /// The game day it was stocked on (day 0 is the first).
     pub day: u32,
+    /// What the day's roll put out.
     pub wares: Vec<Item>,
+    /// What the delver sold them, which stays until someone buys it.
+    pub sold: Vec<Item>,
+    /// The coin they have to buy with, in copper. It runs down as they buy and is topped up to
+    /// their tier's purse at each restock ([`crate::barter::purse_copper`]).
+    pub purse: u64,
+}
+
+impl Shelf {
+    /// A new day's shelf: the rolled wares again, the sold-in ones kept, and the purse
+    /// topped up (never cut) to what the trade's tier carries.
+    pub fn restocked(self, person: &Person, day: u32) -> Shelf {
+        Shelf { day, wares: roll_shelf(person, day), purse: self.purse.max(starting_purse(person)), sold: self.sold }
+    }
+
+    /// Every ware on the shelf, rolled ones first and then the sold-in.
+    pub fn all(&self) -> impl Iterator<Item = &Item> {
+        self.wares.iter().chain(&self.sold)
+    }
+}
+
+/// The coin a trader begins with, by tier.
+pub fn starting_purse(person: &Person) -> u64 {
+    person.spot.trade.map_or(0, |t| crate::barter::purse_copper(t.tier))
 }
 
 /// The game day `clock` is on: whole days elapsed.
@@ -52,19 +77,30 @@ pub fn stock_shelves(
         if !person.spot.trade.is_some_and(|t| t.shop("", "").is_some()) {
             continue;
         }
-        let kept = record.as_deref().and_then(|r| r.level(level.0.depth)).and_then(|l| {
+        // What the record kept, if any: today's shelf as it was left, or an older one, which
+        // keeps what the delver sold it and rolls the rest again.
+        let left = record.as_deref().and_then(|r| r.level(level.0.depth)).and_then(|l| {
             let index = level.0.folk.iter().position(|s| *s == person.spot)?;
-            l.shelves.get(&index).filter(|s| s.day == today)
+            l.shelves.get(&index)
         });
-        let wares = match kept {
-            Some(saved) => saved.wares.iter().filter_map(rebuild_item).collect(),
-            None => roll_shelf(person, today),
+        let shelf = match left {
+            Some(saved) => {
+                let was = Shelf {
+                    day: saved.day,
+                    wares: saved.wares.iter().filter_map(rebuild_item).collect(),
+                    sold: saved.sold.iter().filter_map(rebuild_item).collect(),
+                    purse: saved.purse.unwrap_or_else(|| starting_purse(person)),
+                };
+                if saved.day == today { was } else { was.restocked(person, today) }
+            }
+            None => Shelf { day: today, wares: roll_shelf(person, today), sold: vec![], purse: starting_purse(person) },
         };
-        commands.entity(entity).insert(Shelf { day: today, wares });
+        commands.entity(entity).insert(shelf);
     }
     for (denizen, mut shelf) in &mut old {
         if shelf.day != today {
-            *shelf = Shelf { day: today, wares: roll_shelf(&denizen.person, today) };
+            let old = std::mem::replace(&mut *shelf, Shelf { day: today, wares: vec![], sold: vec![], purse: 0 });
+            *shelf = old.restocked(&denizen.person, today);
         }
     }
 }
@@ -118,7 +154,7 @@ mod tests {
         let kept = fb_items::roll_item("Dagger", 3).unwrap();
         let mut record = WorldRecord::default();
         let mut left = LevelRecord::default();
-        left.shelves.insert(0, ShelfRecord { day: 0, wares: vec![item_record(&kept)] });
+        left.shelves.insert(0, ShelfRecord { day: 0, wares: vec![item_record(&kept)], sold: vec![], purse: None });
         record.levels.insert(level.depth, left);
         let mut app = App::new();
         app.insert_resource(CurrentLevel(level)).insert_resource(record).insert_resource(GameClock::default()).add_systems(Update, stock_shelves);

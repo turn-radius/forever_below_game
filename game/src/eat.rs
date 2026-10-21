@@ -32,7 +32,7 @@ impl Plugin for EatPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HealGlow>()
             .add_systems(Startup, load_heal_sound)
-            .add_systems(Update, act_on_hovered.run_if(inventory_open).in_set(DelveSystems))
+            .add_systems(Update, act_on_hovered.run_if(inventory_open).run_if(crate::barter::not_bartering).in_set(DelveSystems))
             .add_systems(Update, (spawn_heal_glow, fade_heal_glow).chain().in_set(DelveSystems));
     }
 }

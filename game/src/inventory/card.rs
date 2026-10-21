@@ -647,7 +647,7 @@ pub fn show_card(
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
-    (tuning, time): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>),
+    (tuning, time, barter): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>, Option<Res<crate::barter::Barter>>),
     mut shown: Local<Option<ItemId>>,
     mut hovered_since: Local<Option<(ItemId, f32)>>,
     mut on_screen: ResMut<ShownCard>,
@@ -669,11 +669,14 @@ pub fn show_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(id) || inventory.is_changed() || keymap.as_ref().is_some_and(|k| k.is_changed()) {
+        if *shown != Some(id) || inventory.is_changed() || barter.as_ref().is_some_and(|b| b.is_changed()) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
             let item = inventory.item(id).expect("checked above");
             let fallback = crate::keymap::Keymap::default();
             let keymap = keymap.as_deref().unwrap_or(&fallback);
             let mut text = card_text(item, Some((&inventory, id)));
+            if let Some(tag) = barter.as_deref().and_then(|b| b.tag(&inventory, id)) {
+                text.meta = format!("{tag} \u{b7} {}", text.meta);
+            }
             if !(aimed_container && matches!(anchor, CardAnchor::Crosshair))
                 && let Some(target) = crate::interact::item_target(&inventory, id)
             {
