@@ -6,11 +6,11 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault|role|banner|cells` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault|role|banner|cells|wide` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
-//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`), or the banner `FB_DEBUG_BANNER=<n>` names from in front of it (`banner`), or in the aisle of the first cell block looking at its bars (`cells`). Unset, nothing here touches the player's camera.
+//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`), or the banner `FB_DEBUG_BANNER=<n>` names from in front of it (`banner`), or in the aisle of the first cell block looking at its bars (`cells`), or at the end of the longest stretch of corridor two cells wide or more, looking down it (`wide`). Unset, nothing here touches the player's camera.
 //! `FB_DEPTH=2` plays the stone halls of depth 2.
 
 pub mod geometry;
@@ -1020,6 +1020,36 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let dir = Vec3::new((to.0 - from.0).signum() as f32, 0.0, (to.1 - from.1).signum() as f32);
             let dir = if dir == Vec3::ZERO { if run.along_x { Vec3::X } else { Vec3::Z } } else { dir };
             let at = v3(geometry::cell_centre(from.0, from.1)) - dir * CELL * 0.5 + eye;
+            Transform::from_translation(at).looking_to(dir, Vec3::Y)
+        }
+        "wide" => {
+            // The longest straight stretch of corridor at least two cells wide, from its end
+            // looking down it along the middle of its width.
+            let corridor = |x: i32, y: i32| level.cell(x, y) == fb_level::Cell::Floor && level.room_at(x, y).is_none();
+            let mut best: Option<(usize, (i32, i32), bool)> = None;
+            for along_x in [true, false] {
+                let (lines, length) = if along_x { (level.height as i32, level.width as i32) } else { (level.width as i32, level.height as i32) };
+                for line in 0..lines - 1 {
+                    let mut run = 0;
+                    for at in 0..=length {
+                        let (x, y, nx, ny) = if along_x { (at, line, at, line + 1) } else { (line, at, line + 1, at) };
+                        if at < length && corridor(x, y) && corridor(nx, ny) {
+                            run += 1;
+                        } else {
+                            if best.is_none_or(|b| run > b.0) && run > 0 {
+                                let start = if along_x { (at - run as i32, line) } else { (line, at - run as i32) };
+                                best = Some((run, start, along_x));
+                            }
+                            run = 0;
+                        }
+                    }
+                }
+            }
+            let Some((_, (sx, sy), along_x)) = best else { return };
+            let dir = if along_x { Vec3::X } else { Vec3::Z };
+            // Between the band's two lines, at the run's first cell.
+            let side = if along_x { Vec3::Z } else { Vec3::X };
+            let at = v3(geometry::cell_centre(sx, sy)) + side * CELL * 0.5 - dir * CELL * 0.4 + eye;
             Transform::from_translation(at).looking_to(dir, Vec3::Y)
         }
         "cobble" | "flagstone" | "rubble" => {
