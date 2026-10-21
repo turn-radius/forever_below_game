@@ -362,6 +362,11 @@ const LABELS: &[(&str, &str)] = &[
     ("warmth/brazier", "Warmth of a brazier"),
     ("warmth/brazier_reach", "Reach of a brazier (units)"),
     ("warmth/held_flame", "Warmth of a flame in hand"),
+    ("revival/revives", "Times a delver may come to"),
+    ("revival/hall_hit_points", "Hit points healed in a hall (share)"),
+    ("revival/hall_fee", "Coin a faction takes (share)"),
+    ("revival/alone_hit_points", "Hit points on coming to alone (share)"),
+    ("revival/hours_alone", "Hours unconscious alone"),
 ];
 
 /// The words for an effect's field, by what follows `effects/<id>/`; `None` for one the lab
@@ -429,7 +434,7 @@ pub fn sections(edited: &RuleSet, saved: &RuleSet) -> Vec<Section> {
     for name in names {
         out.push(Section { title: name.clone(), fields: under(&format!("creatures/{name}/")) });
     }
-    for (title, key) in [("Needs", "needs"), ("Exhaustion", "exhaustion"), ("Stamina", "stamina"), ("Mana", "mana"), ("Load", "load"), ("Visibility", "visibility"), ("Warmth", "warmth")] {
+    for (title, key) in [("Needs", "needs"), ("Exhaustion", "exhaustion"), ("Stamina", "stamina"), ("Mana", "mana"), ("Load", "load"), ("Visibility", "visibility"), ("Warmth", "warmth"), ("Revival", "revival")] {
         out.push(Section { title: title.into(), fields: under(&format!("{key}/")) });
     }
     for (id, def) in &edited.rules.effects {

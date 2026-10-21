@@ -87,6 +87,27 @@
       { "kind": "glare", "at_full": 0.55 }
     ]
   },
+  "lame_leg": {
+    "name": "Lame leg",
+    "stages": [{ "at": 0.0, "word": "Limping", "severity": "moderate" }],
+    "on_a_part": true,
+    "influences": [{ "kind": "pace", "at_full": 0.85 }],
+    "note": "A badly set break: it will never heal"
+  },
+  "ruined_eye": {
+    "name": "Ruined eye",
+    "stages": [{ "at": 0.0, "word": "One-eyed", "severity": "moderate" }],
+    "on_a_part": true,
+    "influences": [{ "kind": "sight", "at_full": 0.8 }],
+    "note": "Lost in a fall: it will never heal"
+  },
+  "cracked_ribs": {
+    "name": "Cracked ribs",
+    "stages": [{ "at": 0.0, "word": "Short of breath", "severity": "moderate" }],
+    "on_a_part": true,
+    "influences": [{ "kind": "need_rate", "meter": "Sleepiness", "at_full": 1.3 }],
+    "note": "Knitted crooked: it will never heal"
+  },
   "swift": {
     "name": "Swift",
     "stages": [{ "at": 0.0, "word": "Swift", "severity": "good" }],

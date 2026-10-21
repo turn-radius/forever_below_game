@@ -114,6 +114,8 @@ pub enum Source {
     Surroundings,
     /// Something eaten or drunk.
     Consumed { what: String },
+    /// A fall to 0 hit points the delver came to from ([`crate::revival`]).
+    Fall,
 }
 
 /// One effect on a character now.
