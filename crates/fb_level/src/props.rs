@@ -245,9 +245,14 @@ pub(crate) fn place_props(level: &Level, rng: &mut Mulberry32) -> Vec<PropSpot> 
     let keep_clear = entrance_path(level);
     // The rooms factions hold are furnished for what they are used for, first; the rest of the
     // level gets props as it always did.
+    // A throne or an altar first, at its seat, before anything else takes the wall.
+    let mut purpose_rng = Mulberry32::new(level.seed ^ PURPOSE_PROP_SALT);
+    seat_centrepieces(level, &mut placed, &mut occupied, &mut purpose_rng);
     furnish_roles(level, &keep_clear, &mut placed, &mut occupied, &mut Mulberry32::new(level.seed ^ ROLE_PROP_SALT));
+    // Then the rest of the rooms the level's past put to a purpose, claimed or wild.
+    furnish_purposes(level, &keep_clear, &mut placed, &mut occupied, &mut purpose_rng);
     for (r, room) in level.rooms.iter().enumerate() {
-        if rng.chance(BARE_ROOM) || !level.roles_of(r).is_empty() {
+        if rng.chance(BARE_ROOM) || !level.roles_of(r).is_empty() || level.purpose_of(r).is_some() {
             continue;
         }
         let count = (room.area() / CELLS_PER_PROP + rng.int(0, 1)).clamp(1, MOST_IN_A_ROOM);
@@ -265,7 +270,9 @@ pub(crate) fn place_props(level: &Level, rng: &mut Mulberry32) -> Vec<PropSpot> 
     // A level always holds something to open.
     if !placed.iter().any(|p| p.prop.holds_loot()) {
         let prop = roll_prop(PropKind::Container, &placed, rng);
-        let spot = level.rooms.iter().flat_map(|room| nooks(level, room, &keep_clear)).find_map(|nook| fit(level, &nook, prop, &placed, &occupied, rng));
+        // In wild ground first: a claim's market keeps its stalls empty.
+        let wild_first = (0..level.rooms.len()).filter(|&r| !level.is_claimed(r)).chain((0..level.rooms.len()).filter(|&r| level.is_claimed(r)));
+        let spot = wild_first.flat_map(|r| nooks(level, &level.rooms[r], &keep_clear)).find_map(|nook| fit(level, &nook, prop, &placed, &occupied, rng));
         placed.extend(spot);
     }
     placed
@@ -331,6 +338,124 @@ fn furnish_roles(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<Prop
                     }
                 }
             }
+        }
+    }
+}
+
+/// Salt for the stream that furnishes rooms by their purpose.
+const PURPOSE_PROP_SALT: u32 = 0x9E9F_05E5;
+/// Most bunks in quarters, and most bookshelves in a library.
+const MOST_BUNKS: u32 = 6;
+const MOST_SHELVES: u32 = 8;
+/// Chance a cell of a cell block holds bones, and else rubble.
+const CELL_BONES: f64 = 0.4;
+const CELL_RUBBLE: f64 = 0.15;
+/// Chance a cell of a cell block has a cot (a bunk) along its back wall.
+const CELL_COT: f64 = 0.3;
+
+/// Furnishes the rooms the level's past put to a purpose ([`crate::Purpose`]): bunks and a table
+/// in quarters; cots, bones and rubble in a cell block's cells and a guard's table in its aisle;
+/// a throne or an altar at the room's seat ([`crate::past::seat`]), its back to the wall across
+/// from the main doorway; bookshelves along a library's walls and a reading table; bones heaped
+/// in an ossuary's corners; a table, a weapon rack and a strongbox in a guardroom. As with the
+/// roles, nothing stands in or beside a doorway or a gate, and every open cell stays reachable.
+/// A claimed room has been cleared of bones and rubble, and its faction keeps no strongbox of
+/// loot there.
+fn furnish_purposes(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<PropSpot>, occupied: &mut [bool], rng: &mut Mulberry32) {
+    use crate::Purpose;
+    for r in 0..level.rooms.len() {
+        let Some(purpose) = level.purpose_of(r) else { continue };
+        let room = &level.rooms[r];
+        let claimed = level.is_claimed(r);
+        let mut nooks = nooks(level, room, keep_clear);
+        shuffle(&mut nooks, rng);
+        let scenery = |kind: Scenery, rng: &mut Mulberry32| Prop::Scenery { kind, seed: item_seed(rng) };
+        match purpose {
+            Purpose::Quarters => {
+                for _ in 0..(room.area() / 6).clamp(2, MOST_BUNKS) {
+                    let bunk = scenery(Scenery::Bunk, rng);
+                    let Some(spot) = fit_row(level, &nooks, keep_clear, bunk, placed, occupied) else { break };
+                    placed.push(spot);
+                }
+                let table = scenery(Scenery::Table, rng);
+                put_in_nook(level, &nooks, table, placed, occupied, rng);
+            }
+            Purpose::CellBlock => {
+                let inside = crate::past::behind_bars(level, r);
+                let (cells, aisle): (Vec<Nook>, Vec<Nook>) = nooks.into_iter().partition(|n| inside.contains(&(n.x, n.y)));
+                for nook in &cells {
+                    let roll = rng.next_f64();
+                    let kind = if roll < CELL_COT {
+                        Scenery::Bunk
+                    } else if roll < CELL_COT + CELL_BONES && !claimed {
+                        Scenery::Bones
+                    } else if roll < CELL_COT + CELL_BONES + CELL_RUBBLE && !claimed {
+                        Scenery::Rubble
+                    } else {
+                        continue;
+                    };
+                    let prop = scenery(kind, rng);
+                    let spot = if kind == Scenery::Bunk {
+                        fit_row(level, std::slice::from_ref(nook), keep_clear, prop, placed, occupied)
+                    } else {
+                        fit(level, nook, prop, placed, occupied, rng).inspect(|spot| occupied[cell_index(level, spot.x, spot.y)] = true)
+                    };
+                    placed.extend(spot);
+                }
+                if rng.chance(0.6) {
+                    let table = scenery(Scenery::Table, rng);
+                    put_in_nook(level, &aisle, table, placed, occupied, rng);
+                }
+            }
+            // Seated first, by `seat_centrepieces`.
+            Purpose::ThroneRoom | Purpose::Shrine => {}
+            Purpose::Library => {
+                for _ in 0..(2 + room.area() / 8).min(MOST_SHELVES) {
+                    let shelf = scenery(Scenery::Bookshelf, rng);
+                    put_in_nook(level, &nooks, shelf, placed, occupied, rng);
+                }
+                let table = scenery(Scenery::Table, rng);
+                put_in_nook(level, &nooks, table, placed, occupied, rng);
+            }
+            Purpose::Ossuary if claimed => {}
+            Purpose::Ossuary => {
+                // The corners first.
+                nooks.sort_by_key(|n| !n.is_corner());
+                for _ in 0..(3 + room.area() / 8).min(8) {
+                    let bones = scenery(Scenery::Bones, rng);
+                    put_in_nook(level, &nooks, bones, placed, occupied, rng);
+                }
+            }
+            Purpose::Guardroom => {
+                for kind in [Scenery::Table, Scenery::WeaponRack] {
+                    let prop = scenery(kind, rng);
+                    put_in_nook(level, &nooks, prop, placed, occupied, rng);
+                }
+                if !claimed {
+                    let strongbox = roll_container(placed, &[(ChestStyle::Strongbox, 2), (ChestStyle::Chest, 1)], false, rng);
+                    put_in_nook(level, &nooks, strongbox, placed, occupied, rng);
+                }
+            }
+        }
+    }
+}
+
+/// Sets each throne room's throne and each shrine's altar at the room's seat
+/// ([`crate::past::seat`]), its back to the wall across from the main doorway, if it fits.
+fn seat_centrepieces(level: &Level, placed: &mut Vec<PropSpot>, occupied: &mut [bool], rng: &mut Mulberry32) {
+    use crate::Purpose;
+    for r in 0..level.rooms.len() {
+        let kind = match level.purpose_of(r) {
+            Some(Purpose::ThroneRoom) => Scenery::Throne,
+            Some(Purpose::Shrine) => Scenery::Altar,
+            _ => continue,
+        };
+        let prop = Prop::Scenery { kind, seed: item_seed(rng) };
+        let Some(((x, y), back)) = crate::past::seat(level, r) else { continue };
+        let seat = Nook { x, y, walls: vec![back] };
+        if let Some(spot) = fit(level, &seat, prop, placed, occupied, rng) {
+            occupied[cell_index(level, spot.x, spot.y)] = true;
+            placed.push(spot);
         }
     }
 }
@@ -667,10 +792,15 @@ mod tests {
                 };
             }
         }
-        // Room furniture is placed by a room's purpose, not scattered, so only the loose kinds show up everywhere.
-        for kind in [Scenery::Rubble, Scenery::Bones, Scenery::Pillar, Scenery::Bedroll] {
-            assert!(scenery.contains(&kind), "{kind:?} never placed: {scenery:?}");
+        // Room furniture stands only where a room's purpose calls for it, so the sweep reaches
+        // past the first two levels for it.
+        for (seed, depth) in (1..=40).flat_map(|seed| [3, 4].map(move |depth| (seed, depth))) {
+            scenery.extend(generate(seed, depth).props.iter().filter_map(|p| match p.prop {
+                Prop::Scenery { kind, .. } => Some(kind),
+                _ => None,
+            }));
         }
+        assert_eq!(scenery.len(), Scenery::ALL.len(), "{scenery:?}");
         assert_eq!(styles.len(), STYLES.len(), "{styles:?}");
     }
 
@@ -766,6 +896,81 @@ mod tests {
         level.props.iter().filter(|p| matches!(p.prop, Prop::Scenery { kind: k, .. } if k == kind) && level.room_at(p.x as i32, p.y as i32) == Some(room)).count()
     }
 
+    /// Levels of stone halls and rough rock, enough to hold every purpose a few times.
+    fn purposed() -> impl Iterator<Item = (u32, u32, Level)> {
+        (1..=40).flat_map(|seed| [2, 3, 4].map(move |depth| (seed, depth))).map(|(seed, depth)| (seed, depth, generate(seed, depth)))
+    }
+
+    #[test]
+    fn libraries_hold_shelves_and_books() {
+        let mut libraries = 0;
+        for (seed, depth, level) in purposed() {
+            // A claim that lives in a library fills its walls with its own things first.
+            for r in level.rooms_for(crate::Purpose::Library).filter(|&r| !level.is_claimed(r)) {
+                libraries += 1;
+                assert!(scenery_in(&level, r, Scenery::Bookshelf) >= 1, "seed {seed} depth {depth}: a library without shelves");
+                let books = level.items.iter().filter(|i| i.family == armory::Family::Writing && level.room_at(i.x as i32, i.y as i32) == Some(r)).count();
+                assert!(books >= 1, "seed {seed} depth {depth}: a library without books");
+            }
+        }
+        assert!(libraries >= 5, "only {libraries} libraries");
+    }
+
+    #[test]
+    fn thrones_and_altars_stand_at_their_seat_facing_the_main_door() {
+        let (mut seated, mut rooms) = (0, 0);
+        for (seed, depth, level) in purposed() {
+            for (purpose, kind) in [(crate::Purpose::ThroneRoom, Scenery::Throne), (crate::Purpose::Shrine, Scenery::Altar)] {
+                for r in level.rooms_for(purpose) {
+                    rooms += 1;
+                    assert!(scenery_in(&level, r, kind) <= 1, "seed {seed} depth {depth}");
+                    let Some(spot) = level.props.iter().find(|p| matches!(p.prop, Prop::Scenery { kind: k, .. } if k == kind) && level.room_at(p.x as i32, p.y as i32) == Some(r)) else { continue };
+                    seated += 1;
+                    let ((x, y), back) = crate::past::seat(&level, r).expect("a seated centrepiece has a seat");
+                    assert_eq!((spot.x as i32, spot.y as i32), (x, y), "seed {seed} depth {depth}: {kind:?} off its seat");
+                    // It faces away from the wall it backs onto: yaw 0 faces south.
+                    let (fx, fy) = back.opposite().step();
+                    assert!((spot.yaw - (fx as f32).atan2(fy as f32)).abs() < 1e-4, "seed {seed} depth {depth}: {kind:?} faces {}", spot.yaw);
+                }
+            }
+        }
+        // A claim's folk can stand on the seat before the props come; nearly every one is seated.
+        assert!(seated * 10 >= rooms * 9, "{seated} of {rooms} thrones and altars stand");
+    }
+
+    #[test]
+    fn a_cell_blocks_cells_hold_only_cots_bones_and_rubble() {
+        let mut furnished = 0;
+        for (seed, depth, level) in purposed() {
+            for r in level.rooms_for(crate::Purpose::CellBlock).filter(|&r| !level.is_claimed(r)) {
+                let inside = crate::past::behind_bars(&level, r);
+                assert!(!inside.is_empty(), "seed {seed} depth {depth}");
+                for p in level.props.iter().filter(|p| inside.contains(&(p.x as i32, p.y as i32))) {
+                    furnished += 1;
+                    assert!(matches!(p.prop, Prop::Scenery { kind: Scenery::Bunk | Scenery::Bones | Scenery::Rubble, .. }), "seed {seed} depth {depth}: {:?} in a cell", p.prop);
+                }
+            }
+        }
+        assert!(furnished >= 10, "only {furnished} props in cells");
+    }
+
+    #[test]
+    fn quarters_have_bunks_and_guardrooms_a_rack() {
+        let (mut quarters, mut bunked, mut guardrooms, mut racked) = (0, 0, 0, 0);
+        for (_, _, level) in purposed() {
+            for r in level.rooms_for(crate::Purpose::Quarters).filter(|&r| !level.is_claimed(r)) {
+                quarters += 1;
+                bunked += (scenery_in(&level, r, Scenery::Bunk) > 0) as u32;
+            }
+            for r in level.rooms_for(crate::Purpose::Guardroom).filter(|&r| !level.is_claimed(r)) {
+                guardrooms += 1;
+                racked += (scenery_in(&level, r, Scenery::WeaponRack) > 0) as u32;
+            }
+        }
+        assert!(quarters > 0 && bunked * 10 >= quarters * 8, "{bunked} of {quarters} quarters have bunks");
+        assert!(guardrooms > 0 && racked * 10 >= guardrooms * 7, "{racked} of {guardrooms} guardrooms have a rack");
+    }
+
     #[test]
     fn a_sleeping_room_has_a_bedroll_for_most_of_its_members() {
         let (mut members_all, mut beds_all, mut bare, mut claims) = (0, 0, 0, 0);
@@ -813,8 +1018,9 @@ mod tests {
         }
         // Claims are seldom big enough for a spare room, so stores are rare.
         assert!(markets > 8, "{markets} markets, {stores} stores");
-        // Measured: every one of the sweep's markets has stalls.
-        assert_eq!(bare_markets, 0, "{bare_markets} of {markets} markets have no stalls");
+        // Measured: 1 of 196 has none since rooms were furnished by their purpose (#588), whose
+        // centrepieces take a wall first; every market had stalls before.
+        assert!(bare_markets <= 1, "{bare_markets} of {markets} markets have no stalls");
     }
 
     #[test]

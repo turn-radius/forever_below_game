@@ -254,14 +254,7 @@ fn cell_block_on(level: &Level, room: &Room, side: Facing, rng: &mut Mulberry32)
         return None;
     }
     // `along` runs down the wall, `out` from it into the room.
-    let at = |along: u32, out: u32| -> (i32, i32) {
-        match side {
-            Facing::North => ((room.x + along) as i32, (room.y + out) as i32),
-            Facing::South => ((room.x + along) as i32, (room.y + room.h - 1 - out) as i32),
-            Facing::West => ((room.x + out) as i32, (room.y + along) as i32),
-            Facing::East => ((room.x + room.w - 1 - out) as i32, (room.y + along) as i32),
-        }
-    };
+    let at = |along: u32, out: u32| wall_cell(room, side, along, out);
     // No doorway may open into the cells or their bars.
     for along in 0..length {
         for out in 0..=CELL_DEPTH {
@@ -296,6 +289,105 @@ fn cell_block_on(level: &Level, room: &Room, side: Facing, rng: &mut Mulberry32)
         start += width + 1;
     }
     Some(cells)
+}
+
+/// The cell of `room` `along` cells down its wall on `side` (from its west or north end) and
+/// `out` cells in from that wall.
+fn wall_cell(room: &Room, side: Facing, along: u32, out: u32) -> (i32, i32) {
+    match side {
+        Facing::North => ((room.x + along) as i32, (room.y + out) as i32),
+        Facing::South => ((room.x + along) as i32, (room.y + room.h - 1 - out) as i32),
+        Facing::West => ((room.x + out) as i32, (room.y + along) as i32),
+        Facing::East => ((room.x + room.w - 1 - out) as i32, (room.y + along) as i32),
+    }
+}
+
+/// How many cells long the wall on `side` of `room` is.
+fn wall_length(room: &Room, side: Facing) -> u32 {
+    match side {
+        Facing::North | Facing::South => room.w,
+        Facing::East | Facing::West => room.h,
+    }
+}
+
+/// Where a room's centrepiece stands (a throne room's throne, a shrine's altar): a floor cell
+/// against the wall across from the room's main doorway (of its doorways the nearest the start),
+/// as near the middle of that wall as is clear of doorways, and the wall it backs onto. `None`
+/// for a room with no doorway or no clear cell.
+pub fn seat(level: &Level, r: usize) -> Option<((i32, i32), Facing)> {
+    let room = level.rooms[r];
+    let (sx, sy, _) = level.start();
+    let mut doors: Vec<(i32, i32, Facing)> = Vec::new();
+    for side in Facing::ALL {
+        let (dx, dy) = side.step();
+        for along in 0..wall_length(&room, side) {
+            let (x, y) = wall_cell(&room, side, along, 0);
+            if level.cell(x + dx, y + dy) == Cell::Door {
+                doors.push((x + dx, y + dy, side));
+            }
+        }
+    }
+    let &(_, _, side) = doors.iter().min_by_key(|&&(x, y, _)| ((x - sx as i32).abs() + (y - sy as i32).abs(), y, x))?;
+    let back = side.opposite();
+    let middle = wall_length(&room, back) as i32 / 2;
+    [0, -1, 1, -2, 2].into_iter().filter_map(|k| u32::try_from(middle + k).ok()).filter(|&along| along < wall_length(&room, back)).map(|along| wall_cell(&room, back, along, 0)).find(|&(x, y)| level.cell(x, y) == Cell::Floor && !crate::folk::by_door(level, x, y) && !crate::props::behind_a_gap(level, x, y, &[back])).map(|cell| (cell, back))
+}
+
+/// The lights a room's purpose brings: braziers either side of a throne, one beside an altar,
+/// each a cell out from the wall and two along it from the seat, on floor. A colonnaded hall
+/// has its braziers between its columns already.
+pub(crate) fn purpose_lights(level: &Level) -> Vec<crate::LightSpot> {
+    let mut lights = Vec::new();
+    for r in 0..level.rooms.len() {
+        let sides: &[i32] = match level.purpose_of(r) {
+            Some(Purpose::ThroneRoom) => &[-2, 2],
+            Some(Purpose::Shrine) => &[2, -2],
+            _ => continue,
+        };
+        if crate::generate::is_colonnaded(level, &level.rooms[r]) {
+            continue;
+        }
+        let Some(((x, y), back)) = seat(level, r) else { continue };
+        let (bx, by) = back.step();
+        let (ax, ay) = (-by, bx);
+        let mut lit = 0;
+        for &k in sides {
+            let Some((lx, ly)) = [1].into_iter().map(|out| (x + ax * k - bx * out, y + ay * k - by * out)).find(|&(lx, ly)| level.cell(lx, ly) == Cell::Floor) else { continue };
+            if crate::folk::by_door(level, lx, ly) {
+                continue;
+            }
+            lights.push(crate::LightSpot { x: lx as f32 + 0.5, y: ly as f32 + 0.5, kind: crate::LightKind::Brazier });
+            lit += 1;
+            // A shrine takes one.
+            if level.purpose_of(r) == Some(Purpose::Shrine) && lit == 1 {
+                break;
+            }
+        }
+    }
+    lights
+}
+
+/// The open cells of room `r` that lie behind bars: in a cell block's cells, reached from the
+/// room's doorways only through a gate.
+pub fn behind_bars(level: &Level, r: usize) -> Vec<(i32, i32)> {
+    let room = level.rooms[r];
+    let cells: Vec<(i32, i32)> = (room.y..room.y + room.h).flat_map(|y| (room.x..room.x + room.w).map(move |x| (x as i32, y as i32))).collect();
+    let free = |x: i32, y: i32| room.contains(x, y) && level.is_open(x, y) && level.cell(x, y) != Cell::Gate;
+    let mut seen: Vec<(i32, i32)> = cells.iter().copied().filter(|&(x, y)| free(x, y) && Facing::ALL.iter().any(|f| level.cell(x + f.step().0, y + f.step().1) == Cell::Door)).collect();
+    let mut stack = seen.clone();
+    while let Some((x, y)) = stack.pop() {
+        for f in Facing::ALL {
+            let (nx, ny) = (x + f.step().0, y + f.step().1);
+            if free(nx, ny) && !seen.contains(&(nx, ny)) {
+                seen.push((nx, ny));
+                stack.push((nx, ny));
+            }
+        }
+    }
+    if seen.is_empty() {
+        return Vec::new();
+    }
+    cells.into_iter().filter(|&(x, y)| free(x, y) && !seen.contains(&(x, y))).collect()
 }
 
 #[cfg(test)]

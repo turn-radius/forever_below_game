@@ -704,9 +704,36 @@ fn furnish(level: &mut Level, rng: &mut Mulberry32, p: &LevelParams) {
     let mut lights = place_lights(level, start_room, rng, p.brazier_min_area);
     // A glowcap at a wall's foot may fall on a cell block's bars, and goes.
     lights.retain(|l| level.cell(l.x.floor() as i32, l.y.floor() as i32) == Cell::Floor);
+    // Braziers by thrones and altars, where no light already stands close.
+    for light in crate::past::purpose_lights(level) {
+        if lights.iter().all(|l| (l.x - light.x).hypot(l.y - light.y) > 1.5) {
+            lights.push(light);
+        }
+    }
     level.lights = lights;
     let loot = scatter_items(level, start_room, rng, p);
     level.items.extend(loot);
+    let books = library_books(level, rng, p);
+    level.items.extend(books);
+}
+
+/// Books and scrolls lying about each library: two to four, clear of the loot and the lights.
+fn library_books(level: &Level, rng: &mut Mulberry32, p: &LevelParams) -> Vec<ItemSpot> {
+    use armory::families::Generator;
+    use armory::families::writing::{Writing, WritingKind};
+    let mut taken: Vec<(f32, f32)> = level.lights.iter().map(|l| (l.x, l.y)).chain(level.items.iter().map(|i| (i.x, i.y))).collect();
+    let mut books = Vec::new();
+    for r in level.rooms_for(crate::Purpose::Library).collect::<Vec<_>>() {
+        for _ in 0..rng.int(2, 4) {
+            let Some((x, y)) = inner_spot(level, &level.rooms[r], &taken, rng, p.spot_spacing) else { continue };
+            // The first seed of a few that rolls a book or a scroll, not a note.
+            let seeds: Vec<u32> = (0..8).map(|_| item_seed(rng)).collect();
+            let seed = seeds.iter().copied().find(|&s| Writing::roll(s).piece.kind != WritingKind::Note).unwrap_or(seeds[0]);
+            taken.push((x, y));
+            books.push(ItemSpot { x, y, yaw: rng.range_f32(0.0, std::f32::consts::TAU), family: Family::Writing, seed });
+        }
+    }
+    books
 }
 
 /// A full-range u32 seed for an item.
@@ -873,14 +900,18 @@ fn glowcaps(room: &Room, rng: &mut Mulberry32) -> Vec<LightSpot> {
 fn scatter_items(level: &Level, start_room: usize, rng: &mut Mulberry32, p: &LevelParams) -> Vec<ItemSpot> {
     let table: Vec<(Family, u32)> = LOOT.iter().copied().filter(|(f, _)| Item::PORTED.contains(f)).collect();
     let mut taken: Vec<(f32, f32)> = level.lights.iter().map(|l| (l.x, l.y)).chain(level.items.iter().map(|i| (i.x, i.y))).collect();
+    // Nothing lies where a throne or an altar will stand.
+    taken.extend(seats(level));
     let mut items = Vec::new();
     for (i, room) in level.rooms.iter().enumerate() {
         if i == start_room || rng.chance(p.bare_room_chance) {
             continue;
         }
         let count = (room.area() / p.cells_per_item).clamp(1, p.items_per_room_max) + rng.int(0, 1);
+        // A room put to a purpose keeps its walls clear for its furniture.
+        let inner = level.purpose_of(i).is_some();
         for _ in 0..count {
-            let Some((x, y)) = free_spot(level, room, &taken, rng, p.spot_spacing) else { continue };
+            let Some((x, y)) = (if inner { inner_spot(level, room, &taken, rng, p.spot_spacing) } else { free_spot(level, room, &taken, rng, p.spot_spacing) }) else { continue };
             taken.push((x, y));
             items.push(ItemSpot {
                 x,
@@ -892,6 +923,29 @@ fn scatter_items(level: &Level, start_room: usize, rng: &mut Mulberry32, p: &Lev
         }
     }
     items
+}
+
+/// Where a throne or an altar will stand: the middle of each throne room's and shrine's seat.
+fn seats(level: &Level) -> Vec<(f32, f32)> {
+    (0..level.rooms.len())
+        .filter(|&r| matches!(level.purpose_of(r), Some(crate::Purpose::ThroneRoom | crate::Purpose::Shrine)))
+        .filter_map(|r| crate::past::seat(level, r))
+        .map(|((x, y), _)| (x as f32 + 0.5, y as f32 + 0.5))
+        .collect()
+}
+
+/// A [`free_spot`] in a cell with no wall beside it, so furniture can stand along the walls; a
+/// few tries, then any free spot.
+fn inner_spot(level: &Level, room: &Room, taken: &[(f32, f32)], rng: &mut Mulberry32, spacing: f32) -> Option<(f32, f32)> {
+    if room.w < 3 || room.h < 3 {
+        return free_spot(level, room, taken, rng, spacing);
+    }
+    (0..4).find_map(|_| {
+        let (x, y) = free_spot(level, room, taken, rng, spacing)?;
+        let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+        Facing::ALL.iter().all(|f| level.is_open(cx + f.step().0, cy + f.step().1)).then_some((x, y))
+    })
+    .or_else(|| free_spot(level, room, taken, rng, spacing))
 }
 
 /// A point in `room`, clear of doorways and at least `spacing` from every taken spot.
@@ -1162,15 +1216,15 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when levels took a past (#587: seed 64's first level is a prison with a cell block).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when levels took a past (#587: seed 64's first level is a hold with a cell block), and again when rooms were furnished by their purpose (#588: seeds 7, 64 and 4242 hold a purposed room, whose loot keeps off its walls).
         let before = [
             (0u32, 0x3f1ef43848af9f4bu64),
             (1, 0xfecd367d473ca611),
             (2, 0x28caf334b99fda9),
-            (7, 0xc65fe113135810cd),
-            (64, 0xb9745e80eb842b71),
+            (7, 0x9b68d047cc0b8c2a),
+            (64, 0x377e17267b209fdd),
             (1207, 0xeb6d2ec3e7c03ea2),
-            (4242, 0x40c986312855b474),
+            (4242, 0x6ef916530ca95d0),
             (u32::MAX, 0x791ee77a5145fa97),
         ];
         for (seed, hash) in before {
