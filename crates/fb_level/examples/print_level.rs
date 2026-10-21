@@ -44,8 +44,8 @@ fn prop_mark(prop: Prop) -> char {
             Scenery::Bones => '~',
             Scenery::Pillar => 'o',
             Scenery::Bedroll => '=',
-            Scenery::Cookpot => 'u',
         },
+        Prop::Campfire { .. } => 'u',
     }
 }
 
@@ -167,6 +167,7 @@ fn main() {
         let what = match prop.prop {
             Prop::Container { style, seed, loot } => format!("{style:?} seed {seed}, loot {}", if loot == fb_level::NO_LOOT { "none".to_string() } else { loot.to_string() }),
             Prop::Scenery { kind, seed } => format!("{kind:?} seed {seed}"),
+            Prop::Campfire { seed } => format!("Campfire seed {seed}"),
         };
         println!("{what} at ({:.1}, {:.1}) facing {:.0} degrees", prop.x, prop.y, prop.yaw.to_degrees());
     }

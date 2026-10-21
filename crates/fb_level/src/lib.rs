@@ -103,6 +103,9 @@ pub enum LightKind {
     Glowcaps,
     /// An iron brazier: warm, flickering, man-made.
     Brazier,
+    /// A hearth's campfire, built from the Armory campfire family ([`crate::Prop::Campfire`]
+    /// stands at the same spot): warm, flickering, lit.
+    Campfire,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

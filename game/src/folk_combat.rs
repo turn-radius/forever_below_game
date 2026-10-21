@@ -568,9 +568,13 @@ pub(crate) mod tests {
         app.world_mut().spawn((denizen.belongings(), denizen, BlocksTheWay(fb_level::FloorShape::Round(3.0)), crate::folk::stand_at(spot))).id()
     }
 
-    /// The delver `away` world units west of `at`, facing it.
-    fn delver_near(app: &mut App, at: Vec3, away: f32) -> Entity {
-        let from = at - Vec3::X * away;
+    /// The delver `away` world units west of `at`, facing it, or, with `open_side`, east, south
+    /// or north of it where the west is rock.
+    fn delver_near(app: &mut App, at: Vec3, away: f32, open_side: bool) -> Entity {
+        let level = &app.world().resource::<CurrentLevel>().0;
+        let open = |from: Vec3| level.is_open((from.x / fb_level::CELL).floor() as i32, (from.z / fb_level::CELL).floor() as i32);
+        let sides = if open_side { vec![-Vec3::X, Vec3::X, Vec3::Z, -Vec3::Z] } else { vec![-Vec3::X] };
+        let from = sides.into_iter().map(|side| at + side * away).find(|&from| open(from)).unwrap_or(at - Vec3::X * away);
         app.world_mut().spawn((Player, Transform::from_translation(from).looking_at(at, Vec3::Y))).id()
     }
 
@@ -594,7 +598,7 @@ pub(crate) mod tests {
         let spot = *app.world().resource::<CurrentLevel>().0.folk.iter().find(|f| is_guard(f) == guard).expect("a folk of the wanted kind");
         let folk = stand_in(&mut app, &spot);
         let at = app.world().get::<Transform>(folk).unwrap().translation;
-        let player = delver_near(&mut app, at, away);
+        let player = delver_near(&mut app, at, away, !guard);
         app.update();
         (app, player, folk)
     }
@@ -606,7 +610,7 @@ pub(crate) mod tests {
         let spots = app.world().resource::<CurrentLevel>().0.folk.clone();
         let folk: Vec<Entity> = spots.iter().map(|spot| stand_in(&mut app, spot)).collect();
         let at = app.world().get::<Transform>(folk[0]).unwrap().translation;
-        let player = delver_near(&mut app, at, away);
+        let player = delver_near(&mut app, at, away, true);
         app.update();
         (app, player, folk)
     }

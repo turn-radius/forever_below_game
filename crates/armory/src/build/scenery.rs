@@ -16,7 +16,6 @@ use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
 use crate::build::parts::Parts;
-use crate::build::chain::cable_chain;
 use crate::build::roll::rolled_sheet;
 use crate::geom::{CatmullRom, ItemMesh, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, cuboid, icosphere, lathe, tube, value_noise3, vec3};
 use crate::geom::{Hollow, carve_hollows};
@@ -35,12 +34,10 @@ pub enum Scenery {
     /// A bedroll unrolled on the floor, human length (about 17 units): a canvas mat under a
     /// blanket, with a rolled pillow at the head. Lies along item X, head toward -X.
     Bedroll,
-    /// A cooking pot on a chain from a timber tripod, for hanging over a brazier's fire.
-    Cookpot,
 }
 
 impl Scenery {
-    pub const ALL: [Scenery; 5] = [Scenery::Rubble, Scenery::Bones, Scenery::Pillar, Scenery::Bedroll, Scenery::Cookpot];
+    pub const ALL: [Scenery; 4] = [Scenery::Rubble, Scenery::Bones, Scenery::Pillar, Scenery::Bedroll];
 
     /// The furthest any part of it reaches from its centre across the floor, in world units,
     /// whatever its seed. A pillar's square plinth is this far to a corner.
@@ -50,7 +47,6 @@ impl Scenery {
             Scenery::Bones => 3.6,
             Scenery::Pillar => 4.0,
             Scenery::Bedroll => 9.1,
-            Scenery::Cookpot => 7.6,
         }
     }
 
@@ -61,7 +57,6 @@ impl Scenery {
             Scenery::Bones => bones(seed),
             Scenery::Pillar => pillar(seed, ceiling),
             Scenery::Bedroll => bedroll(seed),
-            Scenery::Cookpot => cookpot(seed),
         }
     }
 }
@@ -357,44 +352,6 @@ pub fn bedroll(seed: u32) -> ItemMesh {
     parts.finish()
 }
 
-/// A cooking pot hung over a fire: a timber tripod, its feet outside the ring of a brazier's
-/// legs (7.2 units out), standing 18 units to its apex, and an iron pot on a chain with a
-/// bail, hung where a brazier's bowl holds the coals (the pot's base 9.6 units up). Centred on
-/// the fire it is to hang over.
-pub fn cookpot(seed: u32) -> ItemMesh {
-    let mut rng = Mulberry32::new(seed ^ 0xc00c_9071);
-    let s = rng.range_f32(2.1, 2.3);
-    let (apex, feet, base) = (18.0, 7.2, 9.6);
-    let a0 = rng.range_f32(0.0, TAU);
-    let mut legs = MeshBuilder::new();
-    for k in 0..3 {
-        let a = a0 + TAU * k as f32 / 3.0;
-        let path = [[a.cos() * feet, 0.0, a.sin() * feet], [a.cos() * feet * 0.5, apex * 0.5, a.sin() * feet * 0.5], [a.cos() * 0.35, apex, a.sin() * 0.35]];
-        legs.append(&tube(&path, 6, &SweepOptions::default(), |t| 0.34 - 0.08 * t));
-    }
-    let mut knot = icosphere(0.8, 1);
-    knot.translate([0.0, apex, 0.0]);
-    legs.append(&knot);
-    let profile = [[0.0, 0.0], [0.55 * s, 0.0], [0.85 * s, 0.25 * s], [1.0 * s, 0.7 * s], [0.95 * s, 1.05 * s], [1.0 * s, 1.1 * s], [0.9 * s, 1.14 * s], [0.5 * s, 1.35 * s], [0.0, 1.42 * s]];
-    let mut body = lathe(&profile, &LatheOptions { facets: 20, shading: Shading::SMOOTH, cap_start: true, cap_end: true, phase: 0.0 });
-    body.translate([0.0, base, 0.0]);
-    let handle: Vec<V3> = (0..=14)
-        .map(|i| {
-            let a = PI * i as f32 / 14.0;
-            [a.cos() * 0.98 * s, base + 1.0 * s + a.sin() * 0.75 * s, 0.0]
-        })
-        .collect();
-    let bail = tube(&handle, 6, &SweepOptions::default(), |_| 0.09);
-    let top = base + 1.75 * s;
-    let chain = cable_chain(&[[0.0, apex - 0.4, 0.0], [0.0, top, 0.0]], false, 0.55, 0.07, 14);
-    let mut parts = Parts::new();
-    parts.add_tinted("tripod", legs, MaterialKind::Wood, Rgb::hex(0x5a4230));
-    parts.add_tinted("pot", body, MaterialKind::Iron, Rgb::hex(0x3d3b38));
-    parts.add_tinted("bail", MeshBuilder::merged([&bail, &chain]), MaterialKind::Iron, Rgb::hex(0x2e2c2a));
-    parts.rest_on_ground();
-    parts.finish()
-}
-
 /// How far a mesh reaches from the origin across the floor (XZ).
 pub fn floor_reach(mesh: &ItemMesh) -> f32 {
     mesh.parts.iter().flat_map(|p| &p.positions).map(|p: &V3| p[0].hypot(p[2])).fold(0.0, f32::max)
@@ -435,7 +392,6 @@ mod tests {
                     Scenery::Bones => assert!(hi[1] < 2.0, "{seed}: bones {} high", hi[1]),
                     Scenery::Pillar => assert!(hi[1] > 6.0 && hi[1] < CEILING + 2.0, "{seed}: a pillar {} high", hi[1]),
                     Scenery::Bedroll => assert!(hi[1] < 1.3, "{seed}: a bedroll {} high", hi[1]),
-                    Scenery::Cookpot => assert!(hi[1] > 15.0 && hi[1] < 19.0, "{seed}: a pot {} high", hi[1]),
                 }
             }
         }

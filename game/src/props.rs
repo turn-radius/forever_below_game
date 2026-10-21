@@ -100,6 +100,10 @@ pub fn prop_mesh(spot: &PropSpot, level: &Level, opened: bool) -> (armory::ItemM
             let item = Item::Chests(chest_state(style, seed, opened));
             (item.build(), appearance_of(&item))
         }
+        Prop::Campfire { seed } => {
+            let item = Item::Campfire(fb_level::props::campfire_state(seed));
+            (item.build(), appearance_of(&item))
+        }
         Prop::Scenery { kind, seed } => {
             let state = if kind == Scenery::Bones { ConditionState::Neglected } else { ConditionState::BattleWorn };
             let [x, _, z] = Level::world(spot.x, spot.y);
@@ -155,6 +159,7 @@ pub fn spawn_prop_shaped<'a>(spawner: &'a mut ItemSpawner, level: &Level, index:
     let name = match spot.prop {
         Prop::Container { style, .. } => format!("{style:?}"),
         Prop::Scenery { kind, .. } => format!("{kind:?}"),
+        Prop::Campfire { .. } => "Campfire".to_string(),
     };
     let mut root = spawner.spawn(mesh, appearance);
     root.insert((LevelPiece, Name::new(name), transform, PropPiece { index, spot, min, max }, BlocksTheWay(prop_floor_shape(spot.prop, scale))));

@@ -12,6 +12,7 @@
 //! furnishes a level.
 
 use armory::build::scenery::Scenery;
+use armory::families::campfire::{self, Campfire, CampfireState, FireForm};
 use armory::families::chests::{ChestState, ChestStyle, Chests};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,9 @@ pub enum Prop {
     Container { style: ChestStyle, seed: u32, loot: u32 },
     /// Scenery built from `seed` (`armory::build::scenery`).
     Scenery { kind: Scenery, seed: u32 },
+    /// A hearth's campfire: the Armory campfire family's set form, lit
+    /// ([`campfire_state`] of `seed`). It stands at its [`crate::LightKind::Campfire`].
+    Campfire { seed: u32 },
 }
 
 /// The `loot` of a container with nothing in it: the stalls of a market, which is set dressing
@@ -101,6 +105,27 @@ pub fn chest_state(style: ChestStyle, seed: u32, opened: bool) -> ChestState {
     state
 }
 
+/// The floor a campfire covers, in world units: its ring of stones and the feet of the rig
+/// at the largest [`campfire_state`] draws. A test holds every seed's mesh inside it.
+pub const CAMPFIRE_RADIUS: f32 = 4.8;
+
+/// The Armory state of the campfire of `seed`: the set form, lit, at the larger sizes (it
+/// is the hearth's fire), with the rig and pot the family rolls from the seed: a tripod or a
+/// hook with a pot, or just the fire.
+pub fn campfire_state(seed: u32) -> CampfireState {
+    let mut state = Campfire::roll_as(seed, FireForm::Set);
+    state.fire.lit = true;
+    state.fire.size = Mulberry32::new(seed ^ 0xF1AE_5123).range_f32(1.1, 1.3);
+    state.fit(&campfire::LIMITS);
+    state
+}
+
+/// The seed of the campfire lit in cell `(x, y)` of the level of `level_seed`: the light and
+/// the prop both take it, so they agree on the fire without either keeping it.
+pub fn campfire_seed(level_seed: u32, x: f32, y: f32) -> u32 {
+    level_seed.wrapping_mul(0x9E37_79B1) ^ ((x.floor() as u32) << 16 | y.floor() as u32).wrapping_mul(0x85EB_CA6B)
+}
+
 impl Prop {
     /// The floor it covers ([`FloorShape`]), the largest any seed builds. Containers are sized
     /// from `armory::families::chests` at its largest size and widest shape, handles, locks and
@@ -116,6 +141,7 @@ impl Prop {
             // A bedroll lies along item X, human length.
             Prop::Scenery { kind: Scenery::Bedroll, .. } => FloorShape::Square { half_width: 8.5, half_depth: 3.0 },
             Prop::Scenery { kind, .. } => FloorShape::Round(kind.radius()),
+            Prop::Campfire { .. } => FloorShape::Round(CAMPFIRE_RADIUS),
         }
     }
 
@@ -250,11 +276,11 @@ const BEDROLL_SHARE: f32 = 0.75;
 /// What a market sets out as stalls, and what a store lays by, by weight.
 const MARKET_STYLES: &[(ChestStyle, u32)] = &[(ChestStyle::Crate, 4), (ChestStyle::Chest, 3), (ChestStyle::Barrel, 3), (ChestStyle::Amphora, 2), (ChestStyle::Coffer, 1)];
 const STORE_STYLES: &[(ChestStyle, u32)] = &[(ChestStyle::Crate, 4), (ChestStyle::Chest, 3), (ChestStyle::Barrel, 2)];
-/// How close to a hearth's brazier a cooking pot counts as hung over it, in cells.
-pub const POT_OVER_FIRE: f32 = 0.3;
+/// How close a light is to a prop that stands on it to count as its own, in cells.
+const OWN_LIGHT: f32 = 0.3;
 
-/// Furnishes the rooms of claims by their roles ([`crate::RoomRole`]): a cooking pot hung over
-/// the hearth's fire and a keg beside it, a bedroll for most of the faction lying along a wall
+/// Furnishes the rooms of claims by their roles ([`crate::RoomRole`]): a campfire
+/// (a tripod or hook and a pot, or just the fire) at the hearth's light and a keg beside it, a bedroll for most of the faction lying along a wall
 /// of the sleeping room, empty stalls of crates and chests in the market (traders sell from
 /// their own shelves) and stocked ones in the stores. The hall's furnishing is its brazier,
 /// lit with the roles. Nothing stands in or beside a doorway, on the way in or in the way of
@@ -271,10 +297,9 @@ fn furnish_roles(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<Prop
                 match role {
                     RoomRole::Hall => {}
                     RoomRole::Hearth => {
-                        if let Some(fire) = level.lights.iter().find(|l| l.kind == crate::LightKind::Brazier && room.contains(l.x as i32, l.y as i32)) {
-                            let prop = Prop::Scenery { kind: Scenery::Cookpot, seed: item_seed(rng) };
-                            let yaw = rng.range_f32(0.0, std::f32::consts::TAU);
-                            if let Some(spot) = fit_hung(level, keep_clear, (fire.x, fire.y), yaw, prop, placed, occupied) {
+                        if let Some(fire) = level.lights.iter().find(|l| l.kind == crate::LightKind::Campfire && room.contains(l.x as i32, l.y as i32)) {
+                            let prop = Prop::Campfire { seed: campfire_seed(level.seed, fire.x, fire.y) };
+                            if let Some(spot) = fit_on_light(level, keep_clear, (fire.x, fire.y), prop, placed, occupied) {
                                 occupied[cell_index(level, spot.x, spot.y)] = true;
                                 placed.push(spot);
                             }
@@ -380,22 +405,26 @@ fn fit_row(level: &Level, nooks: &[Nook], keep_clear: &[(i32, i32)], prop: Prop,
     None
 }
 
-/// A prop hung over the light at `at` (grid coordinates), if it fits: on floor off doorways, the
-/// way in and the columns, clear of items, folk and `placed` (the light it hangs over is
-/// the point), with the open cells still reachable.
-fn fit_hung(level: &Level, keep_clear: &[(i32, i32)], at: (f32, f32), yaw: f32, prop: Prop, placed: &[PropSpot], occupied: &[bool]) -> Option<PropSpot> {
+/// A prop set on the light at `at` (grid coordinates), if it fits: on floor off doorways, the
+/// way in and the gaps between columns, clear of items, folk and `placed` (the light it stands on is the
+/// point), with the open cells still reachable.
+fn fit_on_light(level: &Level, keep_clear: &[(i32, i32)], at: (f32, f32), prop: Prop, placed: &[PropSpot], occupied: &[bool]) -> Option<PropSpot> {
     let (x, y) = at;
     let (cx, cy) = (x.floor() as i32, y.floor() as i32);
     if level.cell(cx, cy) != Cell::Floor || by_door(level, cx, cy) || keep_clear.contains(&(cx, cy)) || occupied[cell_index(level, x, y)] {
         return None;
     }
-    if (-1..=1).any(|dy| (-1..=1).any(|dx| level.cell(cx + dx, cy + dy) == Cell::Column)) {
+    if behind_a_gap(level, cx, cy, &Facing::ALL) {
         return None;
     }
-    let spot = PropSpot { x, y, yaw, prop };
-    // Any light but the one it hangs over (the others are lights of the room standing close).
+    let turn = match prop {
+        Prop::Campfire { seed } => seed as f32 / u32::MAX as f32 * std::f32::consts::TAU,
+        _ => 0.0,
+    };
+    let spot = PropSpot { x, y, yaw: turn, prop };
+    // Any light but the one it stands on (the others are lights of the room standing close).
     if level.items.iter().any(|i| near_spot(&spot, i.x, i.y, CLEARANCE))
-        || level.lights.iter().filter(|l| (l.x - x).hypot(l.y - y) > POT_OVER_FIRE).any(|l| near_spot(&spot, l.x, l.y, CLEARANCE))
+        || level.lights.iter().filter(|l| (l.x - x).hypot(l.y - y) > OWN_LIGHT).any(|l| near_spot(&spot, l.x, l.y, CLEARANCE))
         || level.folk.iter().any(|f| near_spot(&spot, f.x, f.y, 0.0))
         || placed.iter().any(|p| near_spot(&spot, p.x, p.y, p.prop.floor_shape().radius() + PROP_GAP))
     {
@@ -423,7 +452,7 @@ fn cell_index(level: &Level, x: f32, y: f32) -> usize {
 
 /// The cells walked in from the entrance: the start and on in a straight line across the room
 /// the entrance leads into, to the far side.
-fn entrance_path(level: &Level) -> Vec<(i32, i32)> {
+pub(crate) fn entrance_path(level: &Level) -> Vec<(i32, i32)> {
     let (x, y, inward) = level.start();
     let (dx, dy) = inward.step();
     let (mut x, mut y) = (x as i32, y as i32);
@@ -464,7 +493,7 @@ fn nooks(level: &Level, room: &Room, keep_clear: &[(i32, i32)]) -> Vec<Nook> {
 
 /// Whether a cell backed by `walls` lies straight behind a gap between two columns, where a
 /// prop would block the way from the aisle to the walls.
-fn behind_a_gap(level: &Level, x: i32, y: i32, walls: &[Facing]) -> bool {
+pub(crate) fn behind_a_gap(level: &Level, x: i32, y: i32, walls: &[Facing]) -> bool {
     walls.iter().any(|w| {
         let (dx, dy) = w.opposite().step();
         let (gx, gy) = (x + dx, y + dy);
@@ -629,6 +658,7 @@ mod tests {
                 match p.prop {
                     Prop::Scenery { kind, .. } => scenery.insert(kind),
                     Prop::Container { style, .. } => styles.insert(style),
+                    Prop::Campfire { .. } => true,
                 };
             }
         }
@@ -694,8 +724,8 @@ mod tests {
                 }
                 let others = level.items.iter().map(|s| (s.x, s.y)).chain(level.lights.iter().map(|l| (l.x, l.y))).chain(level.folk.iter().map(|f| (f.x, f.y)));
                 for (x, y) in others {
-                    // A pot hangs over the very brazier it is set at.
-                    if matches!(a.prop, Prop::Scenery { kind: Scenery::Cookpot, .. }) && (a.x - x).hypot(a.y - y) <= POT_OVER_FIRE {
+                    // A campfire stands on its own light.
+                    if matches!(a.prop, Prop::Campfire { .. }) && (a.x - x).hypot(a.y - y) <= OWN_LIGHT {
                         continue;
                     }
                     assert!((a.x - x).hypot(a.y - y) * CELL >= ra + CLEARANCE, "seed {seed}: {a:?} on ({x}, {y})");
@@ -715,7 +745,8 @@ mod tests {
         assert_eq!((level.items[12].family, level.items[12].seed), (armory::Family::Mace, 3_024_996_869));
         // Folk stand by their rooms' roles since #546, guards at their doors and traders in the market since #550.
         assert_eq!(level.folk[5].seed, 3_668_467_538);
-        assert!((level.folk[5].x - 11.6).abs() < 0.06 && (level.folk[5].y - 13.3).abs() < 0.06);
+        // Gathered round the hearth's campfire since #569.
+        assert!((level.folk[5].x - 11.55).abs() < 0.06 && (level.folk[5].y - 11.33).abs() < 0.06);
         // And everything but the props is the level as laid out before they are placed.
         let (before, _) = crate::generate::generate_without_props(1207, 1, &crate::LevelParams::default());
         assert!(before.props.is_empty() && !level.props.is_empty());
@@ -745,12 +776,13 @@ mod tests {
             }
         }
         assert!(beds_all * 3 >= members_all * 2, "{beds_all} bedrolls for {members_all} folk");
-        assert!(bare * 10 <= claims, "{bare} of {claims} sleeping rooms have no bedroll");
+        // Measured: about one in ten, a few more since the campfire took the hearth's middle.
+        assert!(bare * 25 <= claims * 3, "{bare} of {claims} sleeping rooms have no bedroll");
     }
 
     #[test]
-    fn markets_set_out_stalls_hearths_a_pot_and_stores_stock() {
-        let (mut markets, mut bare_markets, mut pots, mut stores, mut hearths) = (0, 0, 0, 0, 0);
+    fn markets_set_out_stalls_and_stores_stock() {
+        let (mut markets, mut bare_markets, mut stores) = (0, 0, 0);
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
             for claim in &level.claims {
@@ -767,29 +799,71 @@ mod tests {
                     assert!(!containers(room).is_empty(), "seed {seed} depth {depth}: a store with no stock");
                     assert!(containers(room).iter().all(|p| p.prop.holds_loot()), "seed {seed} depth {depth}: an empty store shelf");
                 }
-                let hearth = level.room_with_role(claim, crate::RoomRole::Hearth).unwrap();
-                hearths += 1;
-                pots += (scenery_in(&level, hearth, Scenery::Cookpot) > 0) as u32;
             }
         }
         // Claims are seldom big enough for a spare room, so stores are rare.
         assert!(markets > 8, "{markets} markets, {stores} stores");
         // Measured: every one of the sweep's markets has stalls.
         assert_eq!(bare_markets, 0, "{bare_markets} of {markets} markets have no stalls");
-        assert!(pots * 10 >= hearths * 7, "{pots} of {hearths} hearths have a pot");
     }
 
     #[test]
-    fn every_cookpot_hangs_over_a_brazier() {
-        let mut pots = 0;
+    fn every_hearth_has_one_lit_campfire_and_no_brazier() {
+        use crate::{LightKind, RoomRole};
+        let (mut hearths, mut with_rig, mut with_pot, mut bare) = (0, 0, 0, 0);
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
-            for p in level.props.iter().filter(|p| matches!(p.prop, Prop::Scenery { kind: Scenery::Cookpot, .. })) {
-                pots += 1;
-                assert!(level.lights.iter().any(|l| l.kind == crate::LightKind::Brazier && (l.x - p.x).hypot(l.y - p.y) <= POT_OVER_FIRE), "seed {seed} depth {depth}: {p:?} hangs over nothing");
+            for claim in &level.claims {
+                let r = level.room_with_role(claim, RoomRole::Hearth).unwrap();
+                let room = level.rooms[r];
+                let fires: Vec<_> = level.props.iter().filter(|p| matches!(p.prop, Prop::Campfire { .. }) && room.contains(p.x as i32, p.y as i32)).collect();
+                assert_eq!(fires.len(), 1, "seed {seed} depth {depth}: {} campfires in the hearth", fires.len());
+                let lights: Vec<_> = level.lights.iter().filter(|l| l.kind == LightKind::Campfire && room.contains(l.x as i32, l.y as i32)).collect();
+                assert_eq!(lights.len(), 1, "seed {seed} depth {depth}: {} campfire lights", lights.len());
+                assert!((lights[0].x - fires[0].x).hypot(lights[0].y - fires[0].y) <= OWN_LIGHT, "seed {seed} depth {depth}: the light is not at the fire");
+                if !level.roles_of(r).contains(&RoomRole::Hall) {
+                    assert!(!level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32)), "seed {seed} depth {depth}: a brazier in the hearth");
+                }
+                let Prop::Campfire { seed: fire } = fires[0].prop else { unreachable!() };
+                let state = campfire_state(fire);
+                assert!(state.fire.lit && state.fire.form == FireForm::Set);
+                hearths += 1;
+                with_rig += (state.fire.rig != campfire::Rig::Bare) as u32;
+                with_pot += (state.fire.rig != campfire::Rig::Bare && state.fire.pot) as u32;
+                bare += (state.fire.rig == campfire::Rig::Bare) as u32;
             }
         }
-        assert!(pots > 40, "{pots} pots");
+        assert!(hearths > 40 && with_rig > 0 && with_pot > 0 && bare > 0, "{hearths} hearths, {with_rig} rigged, {with_pot} potted, {bare} bare");
+    }
+
+    #[test]
+    fn braziers_stand_alone_and_halls_keep_theirs() {
+        use crate::{LightKind, RoomRole};
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for brazier in level.lights.iter().filter(|l| l.kind == LightKind::Brazier) {
+                for p in &level.props {
+                    let gap = (p.x - brazier.x).hypot(p.y - brazier.y) * CELL;
+                    assert!(gap > p.prop.floor_shape().radius(), "seed {seed} depth {depth}: {p:?} sits over or touches the brazier at ({}, {})", brazier.x, brazier.y);
+                }
+            }
+            for claim in &level.claims {
+                let room = level.rooms[level.room_with_role(claim, RoomRole::Hall).unwrap()];
+                assert!(level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32)), "seed {seed} depth {depth}: a hall without its brazier");
+            }
+        }
+    }
+
+    #[test]
+    fn campfires_stay_inside_their_floor_shape() {
+        for seed in 0..96 {
+            let state = campfire_state(seed);
+            assert_eq!(state, campfire_state(seed));
+            let mesh = armory::Item::Campfire(state).build();
+            let reach = armory::build::scenery::floor_reach(&mesh);
+            assert!(reach <= CAMPFIRE_RADIUS, "seed {seed}: reaches {reach} > {CAMPFIRE_RADIUS}");
+            assert!(armory::families::campfire::Campfire::light(&campfire_state(seed)).is_some());
+        }
     }
 
     #[test]
@@ -798,7 +872,7 @@ mod tests {
             let level = generate(seed, depth);
             for p in &level.props {
                 let room = level.room_at(p.x as i32, p.y as i32).unwrap();
-                if matches!(p.prop, Prop::Scenery { kind: Scenery::Bedroll | Scenery::Cookpot, .. }) {
+                if matches!(p.prop, Prop::Scenery { kind: Scenery::Bedroll, .. } | Prop::Campfire { .. }) {
                     assert!(level.is_claimed(room), "seed {seed} depth {depth}: {p:?} in a wild room");
                 }
                 // Claimed rooms get only what their roles furnish them with: no rubble, bones or pillars.

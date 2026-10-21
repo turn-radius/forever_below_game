@@ -70,7 +70,7 @@ fn contents_of(prop: Prop, odds: Odds, names: &[String]) -> Vec<Item> {
     match prop {
         Prop::Container { loot, .. } if loot == fb_level::NO_LOOT => Vec::new(),
         Prop::Container { style, loot, .. } => fb_items::roll_contents(style, loot, odds).into_iter().map(|i| i.in_world(names)).collect(),
-        Prop::Scenery { .. } => Vec::new(),
+        Prop::Scenery { .. } | Prop::Campfire { .. } => Vec::new(),
     }
 }
 
