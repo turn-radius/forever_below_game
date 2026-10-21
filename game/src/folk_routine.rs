@@ -115,6 +115,10 @@ pub struct Routine {
     resume: Option<Vec2>,
     /// Seconds the player has been out of reach while held.
     away: f32,
+    /// How many holders have called [`Routine::hold`] and not yet [`Routine::release`]: the
+    /// routine carries on only when the last lets go, so a greeting ending does not free a folk
+    /// who is also talking.
+    holds: u32,
     path: Vec<(i32, i32)>,
     stuck: f32,
     speed: f32,
@@ -122,8 +126,9 @@ pub struct Routine {
 }
 
 impl Routine {
-    /// Stops them where they are.
+    /// Stops them where they are. Each hold wants its own [`Routine::release`].
     pub fn hold(&mut self) {
+        self.holds += 1;
         if let Phase::Walk { goal } = self.phase {
             self.resume = Some(goal);
         }
@@ -135,6 +140,7 @@ impl Routine {
     /// spot (a pause away from home always ends in the walk back): for one coming back to their
     /// routine from somewhere else, as a folk who gave up a fight does.
     pub fn head_home(&mut self) {
+        self.holds = 0;
         self.resume = None;
         self.path.clear();
         self.speed = 0.0;
@@ -145,7 +151,8 @@ impl Routine {
     /// Lets a held person carry on: back to the walk they were on, or else a short pause and a
     /// new walk.
     pub fn release(&mut self) {
-        if self.phase == Phase::Held {
+        self.holds = self.holds.saturating_sub(1);
+        if self.holds == 0 && self.phase == Phase::Held {
             self.phase = match self.resume.take() {
                 Some(goal) => {
                     self.stuck = 0.0;
@@ -189,6 +196,7 @@ pub(crate) fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Q
             searches: 0,
             resume: None,
             away: 0.0,
+            holds: 0,
             path: Vec::new(),
             stuck: 0.0,
             speed: 0.0,
@@ -290,7 +298,7 @@ fn inset(room: &fb_level::Room, margin: f32) -> (Vec2, Vec2) {
 /// round whatever is in the way, turning to face where they go.
 #[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
-fn walk_routines(
+pub(crate) fn walk_routines(
     time: Res<Time>,
     level: Res<CurrentLevel>,
     tuning: Res<Tuning>,
@@ -298,7 +306,7 @@ fn walk_routines(
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
     creatures: Query<(&Critter, &Transform), Without<Denizen>>,
     props: Query<(&BlocksTheWay, &GlobalTransform), Without<Denizen>>,
-    mut folk: Query<(Entity, &Denizen, &mut Routine, &mut Stride, &mut Transform, Option<&Hostility>)>,
+    mut folk: Query<(Entity, &Denizen, &mut Routine, &mut Stride, &mut Transform, Option<&Hostility>, Has<crate::folk_regard::Attending>, Has<crate::folk_regard::Assisting>)>,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
@@ -319,16 +327,17 @@ fn walk_routines(
     let mut shared = fixed.clone();
     shared.extend(moving.iter().copied());
     let mut body_of: Vec<(Entity, usize)> = Vec::new();
-    for (e, d, _, _, t, _) in folk.iter() {
+    for (e, d, _, _, t, _, _, _) in folk.iter() {
         body_of.push((e, shared.len()));
         shared.push(Obstacle::Circle { centre: t.translation.xz(), radius: d.radius });
     }
     let relief = Relief::new(level);
 
-    for (entity, denizen, mut routine, mut stride, mut transform, hostility) in &mut folk {
+    for (entity, denizen, mut routine, mut stride, mut transform, hostility, attending, assisting) in &mut folk {
         // A hostile folk has left their routine to fight (`crate::folk_combat::fight`), though
         // the others still keep out of where they stand.
-        if hostility.is_some_and(|h| h.is_hostile()) {
+        // Likewise an ally who has joined the delver's fight (`crate::folk_regard`).
+        if hostility.is_some_and(|h| h.is_hostile()) || assisting {
             continue;
         }
         let routine = &mut *routine;
@@ -342,6 +351,8 @@ fn walk_routines(
         let near = player_at.map(|p| (p, p.distance(at)));
         let sees = |p: Vec2| line_of_sight(grid(at), grid(p), &blocked);
         match (routine.phase, near) {
+            // Watching or greeting the delver (`crate::folk_regard`) keeps them held.
+            (Phase::Held, Some(_)) if attending => routine.away = 0.0,
             (Phase::Held, Some((p, d))) => {
                 if d > tune.release_distance || !sees(p) {
                     routine.away += dt;

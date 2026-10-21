@@ -575,7 +575,7 @@ pub fn fly_projectiles(
                             let full = rules::weapon_damage(shot.shot.dice, shot.shot.bonus, "DEX", shot.shot.dexterity, &mut dice.0).value() as f32;
                             let drawn = ((full * draw_damage_share(shot.shot.draw)).round() as u32).max(1);
                             let damage = drawn + super::bane_damage(&shot.shot.bane, strikeable.foe(target), &mut dice.0);
-                            struck.write(Struck { target, damage, from: shot.origin.xz(), bludgeoning: false, critical: attack.natural == 20 });
+                            struck.write(Struck { target, damage, from: shot.origin.xz(), bludgeoning: false, critical: attack.natural == 20, by_ally: false });
                             let broken = rules::ammunition_breaks(&attack);
                             if let Ok(body) = globals.get(target) {
                                 let world = Transform { translation: at, rotation: Quat::from_rotation_arc(Vec3::X, incoming), scale: transform.scale };
