@@ -38,7 +38,13 @@ impl ExploredLevels {
 pub(super) fn add(app: &mut App) {
     app.init_resource::<ExploredLevels>()
         .add_systems(OnEnter(crate::launch::AppState::Delving), forget_the_last_run)
-        .add_systems(Update, look.in_set(DelveSystems));
+        .add_systems(Update, (look, explore_for_capture.run_if(|| std::env::var("FB_EXPLORE_ALL").is_ok())).in_set(DelveSystems));
+}
+
+/// For captures: `FB_EXPLORE_ALL=1` marks every open cell of the level as seen.
+fn explore_for_capture(level: Option<Res<CurrentLevel>>, mut explored: ResMut<ExploredLevels>) {
+    let Some(level) = level else { return };
+    explored.0.insert(level.0.seed, Explored::all(&level.0));
 }
 
 /// A new delve is a new run: nothing of any level has been seen.

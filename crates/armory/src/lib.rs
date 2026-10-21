@@ -17,6 +17,7 @@
 
 pub mod build;
 pub mod cond;
+pub mod crest;
 pub mod etch;
 pub mod fabric;
 pub mod families;

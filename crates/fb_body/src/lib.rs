@@ -27,6 +27,8 @@ pub mod rig;
 pub mod skin;
 #[cfg(test)]
 mod skin_tests;
+#[cfg(test)]
+mod shoulder_tests;
 pub mod spec;
 pub mod worn;
 

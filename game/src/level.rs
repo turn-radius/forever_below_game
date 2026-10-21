@@ -6,11 +6,11 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault|role|cells` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault|role|banner|cells` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
-//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`), or in the aisle of the first cell block looking at its bars (`cells`). Unset, nothing here touches the player's camera.
+//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`), or the banner `FB_DEBUG_BANNER=<n>` names from in front of it (`banner`), or in the aisle of the first cell block looking at its bars (`cells`). Unset, nothing here touches the player's camera.
 //! `FB_DEPTH=2` plays the stone halls of depth 2.
 
 pub mod geometry;
@@ -1059,6 +1059,18 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
                 fb_level::WebKind::Floor => (at + Vec3::Y * 1.0, Quat::from_rotation_y(web.yaw + 1.57) * Vec3::NEG_Z * CELL * 0.45),
             };
             let from = if kind == fb_level::WebKind::Corner { at + back + eye } else { target + back + Vec3::Y * if kind == fb_level::WebKind::Floor { 9.0 } else { -4.0 } };
+            Transform::from_translation(from).looking_at(target, Vec3::Y)
+        }
+        "banner" => {
+            // The banner `FB_DEBUG_BANNER` names (the first if unset), from five cells out in
+            // front of it, looking at its middle.
+            let index = std::env::var("FB_DEBUG_BANNER").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+            let Some(spot) = level.banners.get(index) else { return };
+            let (_, top) = crate::props::banner_hang(spot, level);
+            let hang = crate::props::banner_transform(spot, top);
+            let out = hang.rotation * Vec3::Z;
+            let target = hang.translation - Vec3::Y * 9.0;
+            let from = Vec3::new(hang.translation.x, EYE_HEIGHT, hang.translation.z) + out * CELL * 2.5;
             Transform::from_translation(from).looking_at(target, Vec3::Y)
         }
         "role" => {

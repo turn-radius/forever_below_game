@@ -212,6 +212,8 @@ pub struct DrapedSurface {
 
 const HULL_COLUMNS: usize = 128;
 const HULL_STEP: f32 = 0.05;
+/// How far below its top the cloth over an underlay is drawn taut across the shoulders.
+const SHOULDER_DEPTH: f32 = 1.2;
 
 /// How fast cloth hanging over an underlay (a cloak over the arms) draws back toward the form
 /// below what holds it out, per unit of drop. Our own figure: about the slope a cloak falls
@@ -291,6 +293,47 @@ impl DrapedSurface {
                 }
                 row[j] = total - body;
                 prev = total;
+            }
+        }
+        if under.is_some() {
+            // Cloth stretched over the shoulders is taut from the neck to the arm: in each
+            // meridian the reach of its top rows is the least concave curve over what holds it
+            // out, so it slopes from the neck over the shoulder and falls from it, where the
+            // rows' own reach sagged between the collar and the arm and peaked over the arm.
+            for j in 0..HULL_COLUMNS {
+                let a = angle(j);
+                let i0 = (((y_max - drape.top_at(a)) / HULL_STEP).floor().max(0.0) as usize).min(rows - 1);
+                // No further than the hem (a short cloak's rows below it are not its own). The
+                // depth is not scaled by the wearer: scaled by the trunk's length, a goblin's or
+                // gnome's cloak (arms thick against a small trunk) was still left sagging by over
+                // half its scale between the collar and the arm, where 1.2 reaches the arm.
+                let hem_row = (((y_max - drape.hem) / HULL_STEP).floor().max(0.0) as usize).min(rows - 1);
+                let i1 = (i0 + (SHOULDER_DEPTH / HULL_STEP) as usize).min(hem_row).max(i0);
+                let y = |i: usize| y_max - i as f32 * HULL_STEP;
+                let reach: Vec<f32> = (i0..=i1).map(|i| radial(a, y(i)) + hull[i][j]).collect();
+                // Upper hull of (height, reach), by rising height (the rows run downward).
+                let mut chain: Vec<(f32, f32)> = vec![];
+                for (k, &r) in reach.iter().enumerate().rev() {
+                    let p = (y(i0 + k), r);
+                    while chain.len() >= 2 {
+                        let (o, q) = (chain[chain.len() - 2], chain[chain.len() - 1]);
+                        if (q.0 - o.0) * (p.1 - o.1) - (q.1 - o.1) * (p.0 - o.0) >= 0.0 {
+                            chain.pop();
+                        } else {
+                            break;
+                        }
+                    }
+                    chain.push(p);
+                }
+                for (k, &r) in reach.iter().enumerate() {
+                    let yy = y(i0 + k);
+                    let w = chain.windows(2).find(|w| yy >= w[0].0 - 1e-5 && yy <= w[1].0 + 1e-5);
+                    if let Some(w) = w {
+                        let t = ((yy - w[0].0) / (w[1].0 - w[0].0).max(1e-6)).clamp(0.0, 1.0);
+                        let majorant = w[0].1 + (w[1].1 - w[0].1) * t;
+                        hull[i0 + k][j] += (majorant - r).max(0.0);
+                    }
+                }
             }
         }
         DrapedSurface { profile, drape, hull, y_max, underlaid: under.is_some() }
