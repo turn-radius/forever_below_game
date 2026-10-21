@@ -9,6 +9,8 @@
 //! a small boss at the fess point. The banners show the same field in the level.
 
 use armory::heraldry::{Division, Field, Tincture};
+use std::collections::BTreeMap;
+
 use bevy::prelude::*;
 use fb_faction::{Band, Faction, Preference, World};
 
@@ -149,10 +151,10 @@ pub fn entries(record: &WorldRecord, run_seed: u32) -> Vec<Entry> {
         .collect()
 }
 
-/// "Depth 2", "Depths 2, 3 and 5", or "Not recorded".
+/// "Depth 2", "Depths 2, 3 and 5", or "Met before".
 pub fn levels_line(levels: &[u32]) -> String {
     match levels {
-        [] => "Not recorded".to_string(),
+        [] => "Met before".to_string(),
         [one] => format!("Depth {one}"),
         [rest @ .., last] => format!("Depths {} and {last}", rest.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")),
     }
@@ -272,15 +274,26 @@ pub fn page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, entries: &[Entry
     });
 }
 
-/// Notes the depth of the level on every faction met that has no depth noted yet, however it
-/// was met, so each met faction names at least the level it was first met on. Takes the record
-/// mutably only when there is one.
-pub fn note_first_levels(record: Option<ResMut<WorldRecord>>, level: Option<Res<CurrentLevel>>) {
+/// Notes the depth of the level on a faction whenever the delver meets it, however they do (a
+/// talk, a trade, a blow, a kill), and whenever their standing with a faction whose folk are
+/// on this level changes. The first run only takes stock of what was met before, so a record
+/// from before depths were kept stays unnoted rather than guessed at.
+pub fn note_levels_met(record: Option<ResMut<WorldRecord>>, level: Option<Res<CurrentLevel>>, mut before: Local<Option<BTreeMap<Faction, i32>>>) {
     let (Some(mut record), Some(level)) = (record, level) else { return };
-    let unnoted: Vec<Faction> = record.standings.met().filter(|f| !record.met_on.contains_key(f)).collect();
-    for faction in unnoted {
-        record.note_met_on(faction, level.0.depth);
+    if before.is_some() && !record.is_changed() {
+        return;
     }
+    let now: BTreeMap<Faction, i32> = record.standings.met().map(|f| (f, record.standings.get(f).value())).collect();
+    if let Some(was) = before.as_ref() {
+        let here = |f: &Faction| level.0.factions.iter().any(|spec| spec.id == *f);
+        let to_note: Vec<Faction> = now.iter().filter(|&(f, v)| was.get(f) != Some(v) && (!was.contains_key(f) || here(f))).map(|(f, _)| *f).collect();
+        for faction in to_note {
+            if !record.was_met_on(faction, level.0.depth) {
+                record.note_met_on(faction, level.0.depth);
+            }
+        }
+    }
+    *before = Some(now);
 }
 
 #[cfg(test)]
@@ -343,6 +356,27 @@ mod tests {
         let (a, b) = (world.factions()[0].id, world.factions()[1].id);
         let line = preferences_line(&world, &record, &[Preference::Faction(a), Preference::Creature(fb_faction::CreatureKind::Rats), Preference::Faction(b)]);
         assert_eq!(line, "rats, two factions not yet met");
+    }
+
+    #[test]
+    fn a_faction_met_now_is_noted_on_this_level_and_an_old_save_is_not_guessed() {
+        let mut app = App::new();
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
+        let world = World::new(4);
+        let (old, new) = (world.factions()[0].id, world.factions()[1].id);
+        record.standings.meet(old);
+        app.insert_resource(record);
+        let mut level = fb_level::generate(4, 3);
+        level.depth = 3;
+        app.insert_resource(CurrentLevel(level));
+        app.add_systems(Update, note_levels_met);
+        app.update();
+        assert!(app.world().resource::<WorldRecord>().met_on.is_empty(), "met before depths were kept: nothing invented");
+        assert_eq!(entries(app.world().resource::<WorldRecord>(), 4)[0].levels, Vec::<u32>::new());
+        app.world_mut().resource_mut::<WorldRecord>().standings.meet(new);
+        app.update();
+        let record = app.world().resource::<WorldRecord>();
+        assert!(record.was_met_on(new, 3) && !record.was_met_on(old, 3));
     }
 
     #[test]

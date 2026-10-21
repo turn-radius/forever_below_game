@@ -151,7 +151,7 @@ impl Plugin for InventoryPlugin {
                         // Screens open and close in `switch_screens`.
                         underfoot::track_underfoot,
                         close_container_with_screen,
-                        (factions::note_first_levels, meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()), reset_scroll_on_tab, header::click_tabs).chain(),
+                        (factions::note_levels_met, meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()), header::click_tabs, reset_scroll_on_tab).chain(),
                         build_screen,
                         scroll_column,
                         scroll_shelf,
@@ -910,7 +910,7 @@ pub(crate) fn build_screen(
                     max_width: percent(94),
                     // One height on every tab, so the header and tabs sit at the same place
                     // whatever the page holds; the pages scroll inside it.
-                    height: percent(92),
+                    height: if barter.active() { Val::Auto } else { percent(92) },
                     max_height: percent(92),
                     ..default()
                 },
@@ -919,7 +919,7 @@ pub(crate) fn build_screen(
                 ledger
                     // Wide enough for a pack and a belt pouch side by side, and for underfoot
                     // and a bag set down beside it.
-                    .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(if barter.active() { BARTER_LEAF_MAX_PX } else { LEAF_MAX_PX }), width: if barter.active() { Val::Auto } else { px(LEAF_PX) }, flex_shrink: 0.0, ..default() }, LeafPage))
+                    .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(if barter.active() { BARTER_LEAF_MAX_PX } else { LEAF_MAX_PX }), width: if barter.active() { Val::Auto } else { px(LEAF_PX) }, ..default() }, LeafPage))
                     .with_children(|leaf| {
                         header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab != SheetTab::Inventory {
@@ -1725,7 +1725,7 @@ mod tests {
             .init_resource::<ColumnScroll>()
             .init_resource::<ShelfScrolled>()
             .add_systems(PreUpdate, crate::keymap::track_context)
-            .add_systems(Update, (switch_screens, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
+            .add_systems(Update, (switch_screens, header::click_tabs, reset_scroll_on_tab, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
         app
     }
@@ -1914,6 +1914,50 @@ mod tests {
             let ledger = ledgers.single(app.world()).unwrap();
             assert_eq!((ledger.height, ledger.max_height), (percent(92), percent(92)), "{tab:?}: the ledger holds one height, so the page holds one place");
         }
+    }
+
+    #[test]
+    fn a_barter_keeps_the_content_sized_ledger_and_tab_does_not_cycle() {
+        let mut app = screen_app();
+        app.insert_resource(crate::barter::Barter::started_for_test());
+        press(&mut app, KeyCode::KeyI);
+        let mut ledgers = app.world_mut().query_filtered::<&Node, With<Ledger>>();
+        let ledger = ledgers.single(app.world()).unwrap();
+        assert_eq!((ledger.height, ledger.max_height), (Val::Auto, percent(92)));
+        let mut pages = app.world_mut().query_filtered::<&Node, With<LeafPage>>();
+        assert_eq!(pages.single(app.world()).unwrap().width, Val::Auto);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory, "Tab leaves the trader's shelf up");
+    }
+
+    #[test]
+    fn tab_can_be_rebound() {
+        let mut app = screen_app();
+        app.world_mut().resource_mut::<Keymap>().bindings.iter_mut().find(|b| b.action == Action::NextTab).unwrap().inputs = vec![crate::keymap::Input::Key(KeyCode::KeyG)];
+        press(&mut app, KeyCode::KeyI);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory, "the old key does nothing");
+        press(&mut app, KeyCode::KeyG);
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Factions);
+    }
+
+    #[test]
+    fn clicking_a_tab_starts_the_new_page_at_the_top() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyK);
+        app.world_mut().resource_mut::<ColumnScroll>().0 = 300.0;
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(130.0, 20.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().spawn((
+            header::TabLabel(SheetTab::Factions),
+            ComputedNode { size: Vec2::new(100.0, 24.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(130.0, 20.0))),
+        ));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Factions);
+        assert_eq!(app.world().resource::<ColumnScroll>().0, 0.0);
     }
 
     #[test]

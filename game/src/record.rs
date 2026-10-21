@@ -419,6 +419,28 @@ mod tests {
     }
 
     #[test]
+    fn the_depths_where_factions_were_met_survive_a_save() {
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
+        let (a, b) = (fb_faction::Faction(1), fb_faction::Faction(3));
+        record.note_met_on(a, 2);
+        record.note_met_on(a, 5);
+        record.note_met_on(b, 1);
+        let text = serde_json::to_string(&record).unwrap();
+        let back: WorldRecord = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.met_on, record.met_on);
+        assert_eq!(back.met_on[&a].iter().copied().collect::<Vec<_>>(), vec![2, 5]);
+    }
+
+    #[test]
+    fn a_record_saved_before_met_on_loads_with_none_noted() {
+        let record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
+        let mut value = serde_json::to_value(&record).unwrap();
+        value.as_object_mut().unwrap().remove("met_on").expect("the field is written");
+        let back: WorldRecord = serde_json::from_value(value).unwrap();
+        assert!(back.met_on.is_empty());
+    }
+
+    #[test]
     fn an_unchanged_rolled_item_rebuilds_identically() {
         let odds = fb_items::Odds::loot(8);
         let legend = (1..2_000).filter_map(|s| fb_items::roll_item_with("Sword", s, odds)).find(|i| i.rarity == fb_items::Rarity::Legendary).unwrap();

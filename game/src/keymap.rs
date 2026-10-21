@@ -59,6 +59,8 @@ pub enum Action {
     Journal,
     /// Opens the inventory screen on its character tab.
     Character,
+    /// Steps to the next tab of the inventory screen; with Shift held, to the previous.
+    NextTab,
     /// Opens and closes the map of the level.
     Map,
     /// Closes the open screen or page, or opens the menu over the level.
@@ -330,6 +332,7 @@ impl Default for Keymap {
                 bind(Action::Drop, "Drop the item under the mouse", Group::Items, &[Key(KeyCode::KeyX)]).in_contexts(&[Context::Inventory]),
                 bind(Action::Inventory, "Inventory", Group::Screens, &[Key(KeyCode::KeyI)]).in_contexts(EVERYWHERE),
                 bind(Action::Character, "Character", Group::Screens, &[Key(KeyCode::KeyK)]).in_contexts(EVERYWHERE),
+                bind(Action::NextTab, "Next tab, with Shift the previous", Group::Screens, &[Key(KeyCode::Tab)]).in_contexts(&[Context::Inventory]),
                 bind(Action::Journal, "Journal", Group::Screens, &[Key(KeyCode::KeyJ)]).in_contexts(EVERYWHERE),
                 bind(Action::Map, "Map", Group::Screens, &[Key(KeyCode::KeyM)]).in_contexts(EVERYWHERE),
                 bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]).in_contexts(EVERYWHERE),
@@ -779,7 +782,7 @@ mod tests {
     #[test]
     fn the_spare_keys_are_unbound() {
         let keymap = Keymap::default();
-        for key in [KeyCode::KeyC, KeyCode::KeyV, KeyCode::KeyZ, KeyCode::KeyB, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU, KeyCode::Tab] {
+        for key in [KeyCode::KeyC, KeyCode::KeyV, KeyCode::KeyZ, KeyCode::KeyB, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU] {
             assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(key))), "{key:?} is bound");
         }
     }

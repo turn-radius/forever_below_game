@@ -344,6 +344,27 @@ impl Barter {
         self.session.is_some()
     }
 
+    /// A barter in progress with nobody behind it, for tests of screens that change while
+    /// bartering.
+    #[cfg(test)]
+    pub fn started_for_test() -> Barter {
+        let session = Session {
+            folk: Entity::PLACEHOLDER,
+            name: String::new(),
+            faction_name: String::new(),
+            faction: Faction(0),
+            trade: Trade::guard(),
+            band: Band::Neutral,
+            shelf: ItemId(0),
+            rolled: BTreeSet::new(),
+            stock: BTreeSet::new(),
+            moved: BTreeMap::new(),
+            spot: 0,
+            purse: 0,
+        };
+        Barter { session: Some(session), ..default() }
+    }
+
     /// Whether a drop of `drag` at `target` would work, if bartering decides it.
     pub fn check(&self, inventory: &Inventory, drag: &Drag, target: Target) -> Option<Result<(), Refusal>> {
         let session = self.session.as_ref()?;

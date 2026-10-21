@@ -295,6 +295,7 @@ pub fn show_screen(open: &mut ScreenOpen, screen: Option<Screen>, cursor: Option
 pub fn switch_screens(
     input: ActionInput,
     raw: Res<ButtonInput<KeyCode>>,
+    barter: Option<Res<crate::barter::Barter>>,
     mut open: ResMut<ScreenOpen>,
     mut tab: ResMut<SheetTab>,
     journey: Option<Res<crate::travel::Journey>>,
@@ -310,7 +311,12 @@ pub fn switch_screens(
         character: input.just_pressed(Action::Character),
         map: input.just_pressed(Action::Map),
         back: input.just_pressed(Action::Back),
-        step: if raw.just_pressed(KeyCode::Tab) { if raw.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { -1 } else { 1 } } else { 0 },
+        // Not while bartering: the trader's shelf stays up.
+        step: if input.just_pressed(Action::NextTab) && !barter.is_some_and(|b| b.active()) {
+            if raw.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { -1 } else { 1 }
+        } else {
+            0
+        },
     };
     let (next, next_tab) = next_screen(open.0, *tab, keys);
     if next != open.0 {
