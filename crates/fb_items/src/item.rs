@@ -242,7 +242,10 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
                 let gp = (rng.next_f64() * rng.next_f64() * 14.0) as u32;
                 let sp = rng.int(0, 29);
                 let cp = rng.int(5, 64);
-                Some(Coins { gp, sp, cp })
+                let purse = Coins { gp, sp, cp };
+                // Deeper hoards are richer; the first level's purses are as rolled.
+                let scale = crate::value::coin_depth_factor(odds.depth);
+                Some(if scale > 1.0 { Coins::from_copper((purse.total_copper() as f64 * scale).round() as u64) } else { purse })
             }
             _ => None,
         };

@@ -217,8 +217,10 @@ Each family maps to a slot, tags, weight, armour, warmth and damage, plus a grid
 - **Coins** convert at 1 gp = 10 sp = 100 cp (SRD 5.1 p. 62, Coins). `Coins::from_copper` and `total_copper` move between the two, `plus` (and `+`) adds with change, `minus` takes a price off with change and returns `None` when short (2 gp less 15 sp leaves 5 sp; 15 sp less 2 gp is `None`), and `Sum` over purses is a delver's wallet. `Display` still lists all three; `Coins::short` leaves out the empty ones for the card.
 - **Base price** is in copper in `data/values.json`, one row per base, new and common. Where a base matches an SRD 5.1 equipment price it takes it (pp. 62 to 70): longsword 15 gp (Sword), dagger 2 gp, mace 5 gp, quarterstaff 2 sp (Staff), spear 1 gp, shortbow and light crossbow 25 gp, shield 10 gp, padded 5 gp (Gambeson), leather 10 gp (Leather jerkin), studded leather 45 gp (Brigandine), scale mail 50 gp (Scale coat), chain mail 75 gp (Mail), breastplate 400 gp (Cuirass), handaxe 5 gp, club 1 sp, backpack 2 gp, sack 1 cp, chest 5 gp, torch 1 cp, candle 1 cp, hooded lantern 5 gp, oil 1 sp, hempen rope 1 gp, thieves' tools 25 gp (Lockpicks), waterskin 2 sp, book 25 gp, paper 2 sp (Note), a scroll's sheet 1 gp, arrows and bolts 1 gp per twenty (5 cp), quiver 1 gp (and the bolt case), loaf of bread 2 cp, cheese 1 sp, mug of ale 2 cp (Tankard), wine 2 sp, potion of healing 50 gp (Healing draught and Potion), clothes 5 sp (Tunic) and traveller's clothes 2 gp (Cloak), robe 1 gp. The rest are our own: Helm, Mantle, Gloves, Gauntlets, Shoes, Boots, Satchel, Ring, Amulet, Charm, Mail coif, Pointed hat, Belt, Hood, Shirt, Trousers, Breeches, Leggings, Glowcap, Smoked fish, Meat pie, Sausages, Roast haunch, Blind cavefish, Bandages. A good-quality cover price for a good, not a market: no folk haggles yet. A new base needs a row (`every_base_has_a_price` fails otherwise).
 - Camp goods and elixirs: bedroll 1 gp, tinderbox 5 sp and a two-person tent 2 gp (SRD 5.1 p. 68), a campfire kit 2 gp 1 sp (the SRD iron pot and 1 sp of kindling, our own); the Elixir of the Hare 25 gp, of Vigil and of Fasting 15 gp, of Embers 10 gp (our own, under the 50 gp healing potion).
-- **Rarity** multiplies it (our own): common 1, magic 4, rare 20, legendary 200.
-- **Affixes** multiply it (our own): each good affix by 1.15, 1.3, 1.5 or 1.8 by the least rarity it rolls on, each flaw by 0.7. Held-back affixes count like the rest.
+- **Every factor is in `data/value_rules.json`** (`fb_items::value::RULES`), so the trade lab (#559) can tune them.
+- **Rarity** multiplies it (our own): common 1, magic 2, rare 5, legendary 12. The first cut ran 1, 4, 20 and 200, which put a master's rare hauberk at about 2,000 gp; a rare sword is now about 120 gp and a magic piece two to three times its common base.
+- **Affixes** multiply it (our own): each good affix by 1.15, 1.3, 1.5 or 1.8 by the least rarity it rolls on, each flaw by 0.7. Held-back affixes count like the rest. The product of all of an item's affixes is held between 0.4 and 2.0, so a heap of good affixes cannot run the top end away: a legendary sword tops out at 12 x 2 x 15 gp = 360 gp.
+- **Purses** grow with depth: their coins times `1 + 0.25 (depth - 1)` (`coin_depth_step`), so the first level's purses are as they always were.
 - **Condition** multiplies it (our own): `(1 - 0.6 wear) (1 - 0.4 damage)`, and a quarter of that for a snapped blade. Wear 0.7 leaves 58%. The Armory's rust, rot and fray multipliers already act through wear, so they are not counted twice.
 - A value is never below 1 cp, except a purse: it is worth its coins, and nothing for the bag. A container's value leaves out what it holds; the contents are worth their own.
 
@@ -227,8 +229,27 @@ Each family maps to a slot, tags, weight, armour, warmth and damage, plus a grid
 | Common torch | 1 cp |
 | Common sword, pristine | 15 gp |
 | Common sword, worn to 0.7 | 8 gp 7 sp |
-| Rare sword, pristine, no affix factors | 300 gp |
+| Rare sword, pristine, no affix factors | 75 gp |
+| Rare sword, pristine, affixes at the cap | 150 gp |
+| Legendary sword, pristine, affixes at the cap | 360 gp |
 | Common chain mail | 75 gp |
+
+What a delver can afford, from `cargo run --release -p fb_level --example coins_by_depth -- 40` (40 levels per depth; coins from loose purses and the purses in containers; the rare prices are the median of a master's rare pieces, which roll three levels deeper than the level, worn as they leave the bench):
+
+| Depth | Coins found on a level | Cumulative | Master's rare sword | Master's rare mail |
+|---|---|---|---|---|
+| 1 | 14 gp | 14 gp | 121 gp | 482 gp |
+| 2 | 22 gp | 36 gp | 121 gp | 482 gp |
+| 3 | 21 gp | 57 gp | 122 gp | 482 gp |
+| 4 | 24 gp | 81 gp | 121 gp | 476 gp |
+| 5 | 27 gp | 109 gp | 121 gp | 475 gp |
+| 6 | 36 gp | 145 gp | 121 gp | 475 gp |
+| 7 | 39 gp | 184 gp | 121 gp | 480 gp |
+| 8 | 43 gp | 226 gp | 122 gp | 480 gp |
+| 9 | 39 gp | 266 gp | 121 gp | 480 gp |
+| 10 | 46 gp | 312 gp | 122 gp | 482 gp |
+
+So a delver who has cleared the first five levels and kept what they found can buy a master's rare sword; rare helms, gloves and boots, at 25 to 40 gp, are within reach from the second level; rare mail wants the whole of a ten-level delve's purse.
 
 ## Commissions
 
