@@ -236,11 +236,11 @@ pub(crate) fn main_door(level: &Level, graph: &RoomGraph, claim: &Claim, from: (
     openings(level, graph, claim, from).first().map(|o| MainDoor { room: o.room, inside: o.cell, outside: (o.cell.0 + o.out.0, o.cell.1 + o.out.1) })
 }
 
-/// Lights the halls and hearths of claims. A hall gets a brazier where the level's own
-/// furnishing left none in the room, and braziers always stand alone. A hearth gets a
-/// campfire ([`LightKind::Campfire`]; [`crate::props`] builds the fire it is the light of)
-/// in place of any brazier the room had, unless the room is also the claim's hall, which keeps
-/// its brazier and has the campfire beside it. Each light takes the open cell nearest the
+/// Lights the halls and hearths of claims, a room one fire. A hall that is not a hearth gets a
+/// brazier where the level's own furnishing left none in the room, and braziers always stand
+/// alone. A hearth, hall or not, gets a campfire ([`LightKind::Campfire`]; [`crate::props`]
+/// builds the fire it is the light of) in place of any brazier the room had; only where no
+/// campfire fits does it keep a brazier. Each light takes the open cell nearest the
 /// room's middle that is clear of doors, items and other lights.
 pub(crate) fn light_roles(level: &mut Level, rng: &mut Mulberry32) {
     let mut wanted: Vec<usize> = (0..level.rooms.len()).filter(|&r| level.roles_of(r).iter().any(|&role| matches!(role, RoomRole::Hall | RoomRole::Hearth))).collect();
@@ -252,7 +252,7 @@ pub(crate) fn light_roles(level: &mut Level, rng: &mut Mulberry32) {
         let room = level.rooms[r];
         let (hall, hearth) = (level.roles_of(r).contains(&RoomRole::Hall), level.roles_of(r).contains(&RoomRole::Hearth));
         let brazier_in_room = |level: &Level| level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32));
-        if hall && !brazier_in_room(level) {
+        if hall && !hearth && !brazier_in_room(level) {
             if let Some((x, y)) = lit_cell(level, &room, &|_| true) {
                 level.lights.push(LightSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, kind: LightKind::Brazier });
             }
@@ -260,9 +260,8 @@ pub(crate) fn light_roles(level: &mut Level, rng: &mut Mulberry32) {
         if hearth {
             // A fire stands where its prop will fit ([`crate::props::fit_on_light`] asks the same
             // of the cell): off doors and the way in, clear of items, apart from other lights
-            // (a hearth that is not the hall does not count its own brazier, which the campfire
-            // replaces) and the gaps between columns, leaving every open cell reachable round it.
-            let replaced = |l: &LightSpot| !hall && l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32);
+            // (a hearth does not count a brazier of its own room, which the campfire replaces) and the gaps between columns, leaving every open cell reachable round it.
+            let replaced = |l: &LightSpot| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32);
             let fits = |&(x, y): &(i32, i32)| {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
                 let apart = level.lights.iter().filter(|l| !replaced(l)).all(|l| (l.x - px).hypot(l.y - py) >= 1.2);
@@ -350,8 +349,7 @@ mod tests {
                 for role in [RoomRole::Hall, RoomRole::Hearth] {
                     let r = level.room_with_role(claim, role).unwrap();
                     let room = level.rooms[r];
-                    let kind = if role == RoomRole::Hall { LightKind::Brazier } else { LightKind::Campfire };
-                    assert!(level.lights.iter().any(|l| l.kind == kind && room.contains(l.x as i32, l.y as i32)), "seed {seed} depth {depth}: {role:?} is dark");
+                    assert!(level.lights.iter().any(|l| matches!(l.kind, LightKind::Brazier | LightKind::Campfire) && room.contains(l.x as i32, l.y as i32)), "seed {seed} depth {depth}: {role:?} is dark");
                 }
             }
         }

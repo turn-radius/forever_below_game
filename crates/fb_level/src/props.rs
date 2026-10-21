@@ -747,7 +747,7 @@ mod tests {
         // Folk stand by their rooms' roles since #546, guards at their doors and traders in the market since #550.
         assert_eq!(level.folk[5].seed, 3_668_467_538);
         // Gathered round the hearth's campfire since #569.
-        assert!((level.folk[5].x - 11.55).abs() < 0.06 && (level.folk[5].y - 11.33).abs() < 0.06);
+        assert!((level.folk[5].x - 11.55).abs() < 0.06 && (level.folk[5].y - 13.33).abs() < 0.06);
         // And everything but the props is the level as laid out before they are placed.
         let (before, _) = crate::generate::generate_without_props(1207, 1, &crate::LevelParams::default());
         assert!(before.props.is_empty() && !level.props.is_empty());
@@ -777,10 +777,9 @@ mod tests {
             }
         }
         assert!(beds_all * 3 >= members_all * 2, "{beds_all} bedrolls for {members_all} folk");
-        // Measured: 29 of 313 (9.3%); 20 of 311 before the hearth's campfire (#569). Every one of
-        // them is a one-room claim, hall, hearth and sleeping room at once, where the hall's
-        // brazier and the hearth's campfire stand apart and leave no wall to lay a bedroll along.
-        assert!(bare * 32 <= claims * 3, "{bare} of {claims} sleeping rooms have no bedroll");
+        // Measured: 26 of 312 (8.3%); 20 of 311 before the hearth's campfire (#569), which takes
+        // a little of the room a one-room claim has left for its bedrolls.
+        assert!(bare * 35 <= claims * 3, "{bare} of {claims} sleeping rooms have no bedroll");
     }
 
     #[test]
@@ -824,9 +823,8 @@ mod tests {
                 let lights: Vec<_> = level.lights.iter().filter(|l| l.kind == LightKind::Campfire && room.contains(l.x as i32, l.y as i32)).collect();
                 assert_eq!(lights.len(), 1, "seed {seed} depth {depth}: {} campfire lights", lights.len());
                 assert!((lights[0].x - fires[0].x).hypot(lights[0].y - fires[0].y) <= OWN_LIGHT, "seed {seed} depth {depth}: the light is not at the fire");
-                if !level.roles_of(r).contains(&RoomRole::Hall) {
-                    assert!(!level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32)), "seed {seed} depth {depth}: a brazier in the hearth");
-                }
+                // One fire to a room, hall or not.
+                assert!(!level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32)), "seed {seed} depth {depth}: a brazier in the hearth");
                 let Prop::Campfire { seed: fire } = fires[0].prop else { unreachable!() };
                 let state = campfire_state(fire);
                 assert!(state.fire.lit && state.fire.form == FireForm::Set);
@@ -868,7 +866,7 @@ mod tests {
     }
 
     #[test]
-    fn braziers_stand_alone_and_halls_keep_theirs() {
+    fn braziers_stand_alone_and_halls_that_are_no_hearth_keep_theirs() {
         use crate::{LightKind, RoomRole};
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
@@ -880,7 +878,10 @@ mod tests {
             }
             for claim in &level.claims {
                 let room = level.rooms[level.room_with_role(claim, RoomRole::Hall).unwrap()];
-                assert!(level.lights.iter().any(|l| l.kind == LightKind::Brazier && room.contains(l.x as i32, l.y as i32)), "seed {seed} depth {depth}: a hall without its brazier");
+                let lit = |kind| level.lights.iter().any(|l| l.kind == kind && room.contains(l.x as i32, l.y as i32));
+                // A hall that is not a hearth keeps its brazier; one that is has the campfire.
+                let hearth = level.roles_of(level.room_with_role(claim, RoomRole::Hall).unwrap()).contains(&RoomRole::Hearth);
+                assert!(if hearth { lit(LightKind::Campfire) && !lit(LightKind::Brazier) } else { lit(LightKind::Brazier) }, "seed {seed} depth {depth}: a hall without its fire");
             }
         }
     }
