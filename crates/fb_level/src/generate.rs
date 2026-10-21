@@ -108,6 +108,7 @@ pub(crate) fn generate_without_creatures(seed: u32, depth: u32, params: &LevelPa
 fn generate_without_creatures_in(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> (Level, u32) {
     let (mut level, layout_seed) = generate_without_props_in(world_seed, seed, depth, params);
     level.props = place_props(&level, &mut Mulberry32::new(layout_seed ^ PROP_SALT));
+    level.banners = crate::banners::place_banners(&level);
     (level, layout_seed)
 }
 
@@ -176,6 +177,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         claims: Vec::new(),
         roles: Vec::new(),
         props: Vec::new(),
+        banners: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
         webs: Vec::new(),

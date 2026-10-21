@@ -332,3 +332,16 @@ fn the_charge_sits_on_the_fess_point_unless_the_foot_is_in_the_way() {
     let (y, _) = mid(&state);
     assert!(y > -state.cloth.length * 0.5, "moved up to clear the notch: {y}");
 }
+
+#[test]
+fn hall_banners_are_wide_and_long_and_build() {
+    for seed in 1..=40 {
+        for end in BannerEnd::ALL {
+            let s = Banner::roll_hall(seed, BannerMount::Rod, end);
+            assert!((5.0..=8.0).contains(&s.cloth.width) && (14.0..=20.0).contains(&s.cloth.length), "seed {seed}: {:?}", s.cloth);
+            assert!(s.out_of_range(&LIMITS).is_empty(), "seed {seed}");
+            assert_eq!(s, Banner::roll_hall(seed, BannerMount::Rod, end));
+            drawable(&s);
+        }
+    }
+}

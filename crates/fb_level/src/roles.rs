@@ -121,7 +121,21 @@ pub(crate) fn assign_roles(level: &Level) -> Vec<Vec<RoomRole>> {
 /// The room of `claim` with the opening nearest `from` (the delver's start) that leads out
 /// of the claim, into a room no one holds or a corridor that reaches one: the claim's main door.
 fn main_entrance_room(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32)) -> usize {
-    let mut best: Option<(i32, usize)> = None;
+    main_door(level, graph, claim, from).map_or(claim.rooms[0], |d| d.room)
+}
+
+/// The claim's main door: the room it opens from, the room's cell inside it and the open cell
+/// just outside, where the faction's banners hang beside it ([`crate::banners`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MainDoor {
+    pub room: usize,
+    pub inside: (i32, i32),
+    pub outside: (i32, i32),
+}
+
+/// The opening of `claim` nearest `from` that leads out of it, if it has one.
+pub(crate) fn main_door(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32)) -> Option<MainDoor> {
+    let mut best: Option<((i32, usize), MainDoor)> = None;
     for &r in &claim.rooms {
         let room = &level.rooms[r];
         for y in room.y as i32..(room.y + room.h) as i32 {
@@ -136,15 +150,15 @@ fn main_entrance_room(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i3
                     }
                     if graph.rooms_of(nx, ny).iter().any(|o| !claim.rooms.contains(o)) {
                         let key = ((x - from.0).abs() + (y - from.1).abs(), r);
-                        if best.is_none_or(|b| key < b) {
-                            best = Some(key);
+                        if best.is_none_or(|(b, _)| key < b) {
+                            best = Some((key, MainDoor { room: r, inside: (x, y), outside: (nx, ny) }));
                         }
                     }
                 }
             }
         }
     }
-    best.map_or(claim.rooms[0], |(_, r)| r)
+    best.map(|(_, d)| d)
 }
 
 /// Lights a brazier in each hall and hearth the level's furnishing left without one, at the

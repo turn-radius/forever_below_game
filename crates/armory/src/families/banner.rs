@@ -117,7 +117,7 @@ pub struct BannerCloth {
 sliders! {
     BannerClothLimits for BannerCloth {
         width: 3.0, 9.0, 0.1;
-        length: 4.0, 14.0, 0.1;
+        length: 4.0, 22.0, 0.1;
         end_depth: 0.1, 0.8, 0.01;
         sag: 0.0, 1.0, 0.01;
         folds: 0.0, 1.0, 0.01;
@@ -251,7 +251,7 @@ pub struct BannerLimits {
     pub cond: ConditionLimits,
 }
 
-/// This port's own ranges. A wall banner is 6 to 12 units (60 to 120 cm) tall.
+/// This port's own ranges. A wall banner is 6 to 12 units (60 to 120 cm) tall, a hall's 14 to 20 ([`Banner::roll_hall`]).
 pub const LIMITS: BannerLimits = BannerLimits {
     cloth: BannerClothLimits::SLIDERS,
     field: FieldLimits::SLIDERS,
@@ -331,6 +331,28 @@ impl Banner {
         rng.next_f64();
         rng.next_f64();
         compose(&mut rng, seed, mount, end)
+    }
+}
+
+impl Banner {
+    /// A banner hung in a hall to be read from across it: [`Banner::roll_as`] with the cloth
+    /// widened to 5 to 8 units and drawn out to 14 to 20, from a stream of its own so the rest
+    /// of the roll is the same as `roll_as`'s.
+    pub fn roll_hall(seed: u32, mount: BannerMount, end: BannerEnd) -> BannerState {
+        Banner::roll_sized(seed, mount, end, (5.0, 8.0), (14.0, 20.0))
+    }
+
+    /// [`Banner::roll_as`] with the cloth's width and length drawn from the given ranges
+    /// (clamped to the slider limits), the fringe refitted to the new foot.
+    pub fn roll_sized(seed: u32, mount: BannerMount, end: BannerEnd, width: (f32, f32), length: (f32, f32)) -> BannerState {
+        let mut s = Banner::roll_as(seed, mount, end);
+        let mut rng = Mulberry32::new(armory_stream_seed(seed) ^ 0x4841_4C4C);
+        s.cloth.width = rng.range_f32(width.0, width.1);
+        s.cloth.length = rng.range_f32(length.0, length.1);
+        let foot_length: f32 = outline(&s.cloth).1.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
+        s.fringe.strands = (foot_length / rng.range_f32(0.08, 0.1)).round() as u32;
+        s.fit(&LIMITS);
+        s
     }
 }
 

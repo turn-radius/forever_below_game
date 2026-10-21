@@ -159,6 +159,9 @@ pub struct Level {
     pub roles: Vec<Vec<RoomRole>>,
     /// Containers and scenery standing along the walls ([`props`]).
     pub props: Vec<PropSpot>,
+    /// Faction banners hung on the walls of claimed rooms and beside their doors ([`banners`]).
+    #[serde(default)]
+    pub banners: Vec<BannerSpot>,
     /// Rats and snakes ([`creatures`]).
     pub creatures: Vec<CreatureSpot>,
     /// The ways to the levels above and below ([`stairs`]).
@@ -283,6 +286,7 @@ impl Level {
     }
 }
 
+pub mod banners;
 pub mod claims;
 pub mod creatures;
 pub mod finish;
@@ -298,6 +302,7 @@ pub mod stairs;
 pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
+pub use banners::{BannerSite, BannerSpot};
 pub use claims::{Claim, settle_claims};
 pub use folk::{Faction, FactionSpec, FolkSpot};
 pub use props::{CONTAINER_SCALE, NO_LOOT, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};

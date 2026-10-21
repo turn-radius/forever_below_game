@@ -2,7 +2,10 @@
 //! depths 1..4, taken before finishes existed, and taken again when creatures were kept out of
 //! the rooms folk hold and centipedes moved to the second level (#448), and again when factions
 //! came from the world seed (#536), and again when folk moved into faction claims (#541), and again
-//! when claimed rooms took roles (#546): halls and hearths are lit and furnished, and folk stand by role.
+//! when claimed rooms took roles (#546): halls and hearths are lit and furnished, and folk stand by role,
+//! and again when halls hung their banners (#551): `levels_match_those_before_finishes` (the whole level, so it
+//! counts `Level::banners`) was retaken; `layout_items_and_lights_match_those_before_factions` was not, since
+//! banners are a list of their own and move no wall, item, light, prop or folk.
 //!
 //! Floats are rounded to three decimals before hashing. Each platform's libm rounds `sin`,
 //! `atan2` and the like its own way, so the last bits differ between macOS and the Linux CI
@@ -87,7 +90,7 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 3269022384240624266, "snapshot taken before finishes");
+    assert_eq!(all_levels_hash(), 9615277894642177998, "snapshot taken before finishes");
 }
 
 /// A hash of every level's layout, items and lights, which come before the folk in the level's

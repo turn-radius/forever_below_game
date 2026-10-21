@@ -719,7 +719,7 @@ mod tests {
         // And everything but the props is the level as laid out before they are placed.
         let (before, _) = crate::generate::generate_without_props(1207, 1, &crate::LevelParams::default());
         assert!(before.props.is_empty() && !level.props.is_empty());
-        assert_eq!(Level { props: Vec::new(), creatures: Vec::new(), stairs: Vec::new(), webs: Vec::new(), ..level }, before);
+        assert_eq!(Level { props: Vec::new(), banners: Vec::new(), creatures: Vec::new(), stairs: Vec::new(), webs: Vec::new(), ..level }, before);
     }
 
     /// Props of `kind` standing in `room`.
