@@ -23,7 +23,7 @@ use forever_below::{
     inventory::{Inventory, ItemId},
     launch::AppState,
     menu::MenuCommand,
-    play::{CurrentLevel, PlayPlugin},
+    play::{CurrentLevel, PlayPlugin, Player},
     record::WorldRecord,
     render::ArmoryRenderPlugin,
     settings::SettingsPlugin,
@@ -53,13 +53,18 @@ fn run(app: &mut App, frames: usize) {
     }
 }
 
-/// A new delve in level 1207, a second in.
+/// A new delve in level 1207, a second in. The delver is made too hardy for the level's rats to
+/// down between stairs, which would stop the round trips these tests take: what bites where
+/// moves whenever a level's layout or furnishing does.
 fn delving() -> App {
     let mut app = headless_game();
     run(&mut app, 30);
     app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
+    let world = app.world_mut();
+    let player = world.query_filtered::<Entity, With<Player>>().single(world).expect("one delver");
+    *world.get_mut::<Health>(player).expect("the delver has hit points") = Health::full(10_000);
     run(&mut app, 60);
     app
 }

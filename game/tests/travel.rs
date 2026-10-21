@@ -22,7 +22,7 @@ use forever_below::{
     inventory::{Inventory, ItemId},
     launch::AppState,
     folk::FolkFigures,
-    level::{DoorSwing, EntranceDoor, LevelPiece, PreparedStone, stone_chunks},
+    level::{DoorSwing, EntranceDoor, LevelPiece, PreparedStone, StonePiece, stone_chunks},
     staged::Staged,
     menu::MenuCommand,
     play::{BlockedCells, CurrentLevel, PlayPlugin, Player, PlayerCamera, Screen, ScreenOpen},
@@ -147,6 +147,13 @@ fn count<T: Component>(app: &mut App) -> usize {
 fn named(app: &mut App, name: &str) -> usize {
     let world = app.world_mut();
     world.query::<&Name>().iter(world).filter(|n| n.as_str() == name).count()
+}
+
+/// How many of the level's stone pieces are named `name`: a book's or a note's "ink" part is no
+/// stone.
+fn stone_named(app: &mut App, name: &str) -> usize {
+    let world = app.world_mut();
+    world.query_filtered::<&Name, With<StonePiece>>().iter(world).filter(|n| n.as_str() == name).count()
 }
 
 fn assert_at(app: &mut App, (x, y): (u32, u32), facing: fb_level::Facing, what: &str) {
@@ -274,7 +281,7 @@ fn going_down_at_once_waits_for_the_level_made_in_the_background() {
         _ => c.surfaces.parts.iter().filter(|p| p.name == name).count(),
     }).sum::<usize>();
     for name in ["floor", "ink", "joints"] {
-        assert_eq!(named(&mut app, name), expected(name), "{name}");
+        assert_eq!(stone_named(&mut app, name), expected(name), "{name}");
     }
     assert!(!app.world().resource::<PreparedStone>().is_kept());
 }
