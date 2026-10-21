@@ -638,7 +638,7 @@ impl Plugin for CommissionPlugin {
             .add_systems(
                 Update,
                 (
-                    (open_requests, keep_in_step, press_controls).chain().before(TweakPanelSystems),
+                    (from_talk, open_requests, keep_in_step, press_controls).chain().before(TweakPanelSystems),
                     (build_screen, fill_rolls, show_item, refresh_header, size_stage, turn_item).chain().after(TweakPanelSystems),
                     scroll_for_capture.run_if(|| std::env::var("FB_COMMISSION_SCROLL").is_ok()).after(TweakPanelSystems),
                 )
@@ -707,6 +707,18 @@ enum Readout {
     Open,
     Price,
     Ready,
+}
+
+/// The talk chose Commission: ask for the screen with the speaker as the maker.
+fn from_talk(mut chosen: MessageReader<crate::talk::ServiceChosen>, talk: Res<crate::talk::Talk>, mut requests: MessageWriter<OpenCommission>) {
+    for chosen in chosen.read() {
+        if chosen.service != crate::talk::Service::Commission {
+            continue;
+        }
+        let Some(speaker) = talk.speaker.as_ref() else { continue };
+        let Some(trade) = speaker.trade else { continue };
+        requests.write(OpenCommission { trade, maker: speaker.name.clone(), faction: speaker.faction.clone() });
+    }
 }
 
 fn open_requests(

@@ -170,12 +170,14 @@ fn the_number_keys_choose_topics() {
     let (topic, said) = app.world().resource::<Talk>().answer.clone().expect("an answer");
     assert_eq!(topic, Topic::Who);
     assert!(said.contains(&app.world().get::<Denizen>(folk).unwrap().person.name), "{said}");
-    // A commission is not open yet.
+    // A commission opens the commission screen rather than answering.
     press(&mut app, KeyCode::Digit3);
-    assert_eq!(app.world().resource::<Talk>().answer, Some((Topic::Service(Service::Commission), "Not yet.".to_string())));
+    let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
+    assert_eq!(sent, vec![ServiceChosen { folk, service: Service::Commission }]);
+    assert_eq!(app.world().resource::<Talk>().answer.as_ref().map(|a| a.0), Some(Topic::Who));
     // Past the last topic nothing happens.
     press(&mut app, KeyCode::Digit9);
-    assert_eq!(app.world().resource::<Talk>().answer.as_ref().map(|a| a.0), Some(Topic::Service(Service::Commission)));
+    assert_eq!(app.world().resource::<Talk>().answer.as_ref().map(|a| a.0), Some(Topic::Who));
 }
 
 #[test]
