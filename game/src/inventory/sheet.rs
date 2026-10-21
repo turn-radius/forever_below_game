@@ -99,6 +99,13 @@ pub const NO_CONDITIONS: &str = "No conditions";
 /// A condition's badge on the sheet, in logical pixels across.
 const CONDITION_BADGE_PX: f32 = 24.0;
 
+/// The enchanting line: essence and materials, filled by [`update_enchanting`].
+#[derive(Component, Debug)]
+pub struct EnchantingLine;
+
+/// What the enchanting line says when the delver holds nothing.
+pub const NO_ENCHANTING: &str = "Nothing scrapped";
+
 /// The exhaustion line: "Exhaustion 2: half speed".
 #[derive(Component, Debug)]
 pub struct ExhaustionLine;
@@ -270,7 +277,7 @@ fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Op
 /// Builds the character tab's body: the status section.
 #[allow(clippy::too_many_arguments)]
 pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel, vitals: Vitals) {
-    parent.spawn((CharacterSheet, Name::new("CharacterSheet"), Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() })).with_children(|sheet| {
+    parent.spawn((CharacterSheet, Name::new("CharacterSheet"), Node { flex_direction: FlexDirection::Column, row_gap: px(4), flex_shrink: 0.0, ..default() })).with_children(|sheet| {
         heading(sheet, fonts, "attributes");
         sheet.spawn(Node { column_gap: px(18), flex_wrap: FlexWrap::Wrap, row_gap: px(4), ..default() }).with_children(|line| {
             for (i, text) in attribute_lines(character).into_iter().enumerate() {
@@ -279,6 +286,8 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
         });
         heading(sheet, fonts, "conditions");
         sheet.spawn((ConditionList, Name::new("Conditions"), Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }));
+        heading(sheet, fonts, "enchanting");
+        sheet.spawn((EnchantingLine, Text::new(NO_ENCHANTING), UiFonts::style(&fonts.body, 15.0, MUTED)));
         heading(sheet, fonts, "what your gear makes of you");
         let values = gear_values(character, &character.derive_with(rules, inventory));
         for (i, label) in GEAR_ROWS.into_iter().enumerate() {
@@ -524,6 +533,18 @@ pub fn update_status(
     }
 }
 
+/// The colour a band reads in.
+pub(super) fn band_colour(band: fb_faction::Band) -> Color {
+    use fb_faction::Band::*;
+    match band {
+        Hostile => Color::srgb(0.85, 0.3, 0.25),
+        Wary => Color::srgb(0.85, 0.6, 0.25),
+        Neutral => MUTED,
+        Friendly => Color::srgb(0.55, 0.78, 0.4),
+        Allied => Color::srgb(0.4, 0.8, 0.7),
+    }
+}
+
 /// Fills the sheet's conditions section with the conditions the HUD shows ([`ShownConditions`]),
 /// worst first: each one's badge, name and what it does, or [`NO_CONDITIONS`]. Rebuilt only
 /// when the section is new or the conditions changed.
@@ -557,6 +578,19 @@ pub fn update_conditions(
                 });
             }
         });
+    }
+}
+
+/// Keeps the sheet's enchanting line true to the delver's essence and materials.
+pub fn update_enchanting(stock: Option<Res<crate::enchanting::Enchanting>>, mut lines: Query<(Ref<EnchantingLine>, &mut Text)>) {
+    for (added, mut text) in &mut lines {
+        if !added.is_added() && !stock.as_ref().is_some_and(|s| s.is_changed()) {
+            continue;
+        }
+        let line = stock.as_ref().filter(|s| !s.0.is_empty()).map_or_else(|| NO_ENCHANTING.to_string(), |s| s.0.line());
+        if text.0 != line {
+            text.0 = line;
+        }
     }
 }
 
@@ -683,6 +717,18 @@ mod tests {
         app.world_mut().resource_mut::<ShownConditions>().0.clear();
         app.update();
         assert_eq!(texts(&mut app), vec![NO_CONDITIONS.to_string()]);
+    }
+
+    #[test]
+    fn the_enchanting_line_follows_the_stock() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<crate::enchanting::Enchanting>().add_systems(Update, update_enchanting);
+        let line = app.world_mut().spawn((EnchantingLine, Text::new(NO_ENCHANTING))).id();
+        app.update();
+        assert_eq!(app.world().get::<Text>(line).unwrap().0, NO_ENCHANTING);
+        app.world_mut().resource_mut::<crate::enchanting::Enchanting>().0.essence = 12;
+        app.update();
+        assert_eq!(app.world().get::<Text>(line).unwrap().0, "Essence 12");
     }
 
     #[test]

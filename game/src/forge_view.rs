@@ -180,6 +180,10 @@ impl Tweak for Forge {
         let _ = self.item.cycle_choice(path, by);
     }
 
+    fn set_colour(&mut self, path: &str, rgb: [f32; 3]) {
+        let _ = self.item.set_colour(path, rgb);
+    }
+
     fn flip(&mut self, path: &str) {
         let on = self.item.toggle(path).unwrap_or(false);
         let _ = self.item.set_toggle(path, !on);

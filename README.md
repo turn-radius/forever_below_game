@@ -51,7 +51,7 @@ cargo run -p forever_below -- --title --seed 42    # the title, and New delve pl
 
 The game opens on the title screen, to Forever Below's theme. New delve (or Enter) opens the character creator over the card: pick the folk and class, type a name or roll one, roll the ability scores and the look, and watch the delver turn in the kit they start with. Begin the delve (or Enter) rolls a new level from the clock and goes down; Back (or Esc) returns. Opening the creator turns the music to Measured Pulse, which loops until you go in and then fades out; going Back fades it out and the title's theme in again. In a level, the Trolls theme takes over while a troll is within a couple of rooms. Once you have gone down as someone, the title offers Continue as their name, which starts a fresh level with the same delver (kept in `last_character.json` beside `settings.json`). Settings is the pause menu's settings page (Esc or Back returns), and Quit leaves.
 
-Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
+Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`, `FB_COMMISSION`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
 
 ### Play a level
 
@@ -94,7 +94,7 @@ cargo run -p forever_below -- --family sword --seed 1207 --wear grave_find
 
 A grid of twelve items from consecutive seeds, turning, to compare what the generator makes. `--family` alone also opens it.
 
-- `--family <name>` starts on a family: staff, mace, sword, spear, dagger, club, axe, bow, crossbow, helm, hat, hood, garment, belt, hands, legs, feet, shield, ring, amulet, charm, bags, chests, food, torch, lantern, sundry, writing.
+- `--family <name>` starts on a family: staff, mace, sword, spear, dagger, club, axe, bow, crossbow, helm, hat, hood, garment, belt, hands, legs, feet, shield, ring, amulet, charm, bags, chests, food, torch, lantern, sundry, writing, tent, campfire.
 - `--seed <n>` is the first seed on the page.
 - `--wear <state>` sets the condition: pristine, serviceable, battle_worn, neglected or grave_find.
 
@@ -202,6 +202,8 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera, and on what is held |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start (`=character` on the character tab) |
 | `FB_OPEN_MAP=<frame>` | opens the map that many frames into the delve, once the start has been looked round (`FB_OPEN_MAP=120`) |
+| `FB_COMMISSION=<profession>:<tier>[:<style>]` | opens the commission screen at the start (`weaponsmith:master:blades`, `armorer:apprentice`); `FB_COMMISSION_BASE=Club`, `FB_COMMISSION_ROLL=2` (0 to 5), `FB_COMMISSION_SET=blade.length=1.4,etch.on=true`, `FB_COMMISSION_TURN=0.9` (holds the turn) and `FB_COMMISSION_SCROLL=1100` (panel pixels) set up a capture |
+| `FB_COMMISSION_ORDER=ready\|<hours>\|collect` | a few frames in, places an order with the nearest maker without taking coin: finished already (`ready`), needing that many hours, or handed over into the pack (`collect`); shaped by `FB_COMMISSION_BASE`, `FB_COMMISSION_ROLL` and `FB_COMMISSION_SET`; with `FB_TALK=1 FB_TALK_TOPIC=4` the maker's "Your order" answers |
 | `FB_OPEN_CONTAINER=<n>` | opens the level's `n`th container (0 the first, in `print_level`'s order) a moment in, with the inventory showing what it holds |
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
 | `FB_DROP=<base>[:<rarity>][,...]` | sets an item of each named base down in front of you a moment in, of that rarity if one is named (`Sword:legendary,Sword:common`), spread left to right; for captures of floor items such as a legendary's shimmer |
@@ -210,8 +212,11 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_CONDITIONS=<list>` | holds the delver under conditions for the status badges, comma separated: `hunger:<0 to 1>`, `thirst:<0 to 1>`, `sleep:<0 to 1>`, `exhaustion:<level>`, `winded`, `load:<light\|burdened\|encumbered\|overloaded>`, `poisoned` (an hour) or `poisoned:<minutes>` (`FB_CONDITIONS=hunger:0.8,winded,load:encumbered`) |
 | `FB_CONDITION_HOVER=<n>` | shows the card of the `n`th status badge (0 the first, worst first) as if hovered |
 | `FB_PROVOKE=<n>` | a second in, gives the level's `n`th folk (0 the first, in `print_level`'s order) cause to fight: they and the kin who see it turn hostile, for captures of folk fighting (with `FB_DEBUG_POSE`) |
+| `FB_DOORS=open` | a few frames in, swings open every claim door that is not locked to the delver at their standing (with `FB_STANDING`), for captures of the doors |
+| `FB_STANDING=<faction index>:<band>` | holds the delver's standing with that faction at the middle of the band (`hostile`, `wary`, `neutral`, `friendly`, `allied`), for captures of folk watching, greeting, attacking or helping (`FB_STANDING=2:wary`) |
 | `FB_SLAY=<n>` | two seconds in, strikes the level's `n`th folk down, for captures of a body and the gear it drops |
 | `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |
+| `FB_FALL=<wait\|come_to\|let_go>` | a second in, knocks the delver to 0 hit points; they fall unconscious, and `come_to` or `let_go` makes that choice two seconds later (`wait` leaves the choice showing), for captures of falling unconscious and waking |
 | `FB_ROLL_LOOK=<seconds>` | the character creator rolls a look by itself that often, for captures of the doll changing (with `FB_OPEN_MENU=creator` and `--title`) |
 | `FB_NEW_DELVE=<seconds>` | the title begins a delve by itself, past the creator and with a rolled delver, after that many seconds, each time it shows; with `FB_PLAYER_HP=1` and `FB_SCREENSHOT_FRAMES`, captures a fall, the title and the next delve without input |
 | `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot (or `<base>@<slot>` in another it fits: `Lantern@hip`, `Sword@offhand`), after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |

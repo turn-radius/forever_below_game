@@ -38,6 +38,8 @@ pub struct Rules {
     pub load: LoadRules,
     pub visibility: VisibilityRules,
     pub warmth: WarmthRules,
+    /// Falling unconscious and coming to ([`crate::revival`]).
+    pub revival: crate::revival::RevivalRules,
     /// The creatures' numbers by stat block name. A partial entry keeps the rest of that
     /// creature's defaults; a name no species has is a creature of its own, flat zeros where
     /// the entry is silent.
@@ -60,6 +62,7 @@ impl Default for Rules {
             load: LoadRules::default(),
             visibility: VisibilityRules::default(),
             warmth: WarmthRules::default(),
+            revival: crate::revival::RevivalRules::default(),
             creatures: default_creatures(),
             effects: crate::effect::shipped(),
         }

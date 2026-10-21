@@ -1,0 +1,15 @@
+{
+ "essence": { "common": 2, "magic": 8, "rare": 30, "legendary": 120 },
+ "per_good_affix": { "common": 1, "magic": 2, "rare": 4, "legendary": 8 },
+ "flaw_keeps": 0.5,
+ "materials": [
+  { "id": "gravesteel", "name": "Gravesteel sliver", "from": { "tag": "blade" } },
+  { "id": "ossuary_dust", "name": "Ossuary dust", "from": { "tag": "blunt" } },
+  { "id": "wraith_sinew", "name": "Wraith sinew", "from": { "tag": "ranged" } },
+  { "id": "blood_salt", "name": "Blood salt", "from": { "group": "damage" } },
+  { "id": "seers_glass", "name": "Seer's glass", "from": { "group": "to_hit" } },
+  { "id": "quicksilver", "name": "Quicksilver bead", "from": { "group": "attack_rate" } },
+  { "id": "wardstone", "name": "Wardstone chip", "from": { "group_prefix": "bane_" } },
+  { "id": "heartstone", "name": "Heartstone", "from": { "legendary": true } }
+ ]
+}

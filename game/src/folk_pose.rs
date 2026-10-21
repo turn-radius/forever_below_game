@@ -411,7 +411,7 @@ mod tests {
         let people: Vec<(fb_body::Gait, IdleCycle)> = folk
             .iter()
             .map(|spot| {
-                let person = crate::folk::Person::of(spot, 1);
+                let person = crate::folk::person_1207(spot);
                 (Figure::dress(&person.spec, &person.gear, person.dirt).gait, IdleCycle::of(spot.seed))
             })
             .collect();

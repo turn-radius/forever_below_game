@@ -242,26 +242,49 @@ pub fn set_down_debug_kit(mut inventory: ResMut<Inventory>, mut changes: ResMut<
 /// The items `FB_DROP` asks for, as `base[:rarity]` separated by commas (`Sword:legendary`,
 /// `Helm:rare,Ring`): for each, the first seed from 1 whose roll of that base, eight levels
 /// down (where every rarity rolls), has that rarity (any rarity if none is named). Names that
-/// roll nothing, or a rarity no seed gives, are skipped.
+/// roll nothing, or a rarity no seed gives, are skipped. An entry `@armorer/master/mail/8`
+/// (`@profession/tier[/style[/depth]]`, style `-` for none) sets down the first three pieces of
+/// that trader's stock, maker's line and all ([`stock_for_capture`]).
 pub fn drops_for_capture(spec: &str) -> Vec<fb_items::Item> {
-    use fb_items::Rarity;
     spec.split(',')
-        .filter_map(|entry| {
-            let (base, rarity) = entry.split_once(':').map_or((entry, None), |(b, r)| (b, Some(r.trim().to_lowercase())));
-            let wanted = match rarity.as_deref() {
-                None | Some("") => None,
-                Some("common") => Some(Rarity::Common),
-                Some("magic") => Some(Rarity::Magic),
-                Some("rare") => Some(Rarity::Rare),
-                Some("legendary") => Some(Rarity::Legendary),
-                Some(other) => {
-                    warn!("FB_DROP: no rarity called {other:?}");
-                    return None;
-                }
-            };
-            (1..20_000).filter_map(|seed| fb_items::roll_item_with(base.trim(), seed, fb_items::Odds::loot(8))).find(|item| wanted.is_none_or(|r| item.rarity == r))
+        .flat_map(|entry| match entry.strip_prefix('@') {
+            Some(stock) => stock_for_capture(stock),
+            None => item_for_capture(entry).into_iter().collect(),
         })
         .collect()
+}
+
+/// The first three pieces of the stock `spec` names (`armorer/master/mail/8`), rolled for a
+/// trader called Bera of the Ash Choir, seed 7.
+fn stock_for_capture(spec: &str) -> Vec<fb_items::Item> {
+    use fb_faction::{Profession, Style, Tier, Trade};
+    let mut parts = spec.split('/');
+    let key = |label: &str| label.replace(' ', "_");
+    let (Some(profession), Some(tier)) = (parts.next(), parts.next()) else { return vec![] };
+    let Some(profession) = Profession::TRADES.into_iter().find(|p| key(p.label()).starts_with(profession)) else { return vec![] };
+    let Some(tier) = Tier::ALL.into_iter().find(|t| t.label() == tier) else { return vec![] };
+    let style = parts.next().and_then(|name| Style::ARMOUR.into_iter().chain(Style::WEAPONS).find(|s| key(s.label()) == name));
+    let depth = parts.next().and_then(|d| d.parse().ok()).unwrap_or(1);
+    let Some(shop) = (Trade { profession, tier, style }).shop("Bera", "the Ash Choir") else { return vec![] };
+    fb_items::stock::stock(&shop, depth, 7).into_iter().take(3).collect()
+}
+
+/// The item one `FB_DROP` entry names (`base[:rarity]`).
+fn item_for_capture(entry: &str) -> Option<fb_items::Item> {
+    use fb_items::Rarity;
+    let (base, rarity) = entry.split_once(':').map_or((entry, None), |(b, r)| (b, Some(r.trim().to_lowercase())));
+    let wanted = match rarity.as_deref() {
+        None | Some("") => None,
+        Some("common") => Some(Rarity::Common),
+        Some("magic") => Some(Rarity::Magic),
+        Some("rare") => Some(Rarity::Rare),
+        Some("legendary") => Some(Rarity::Legendary),
+        Some(other) => {
+            warn!("FB_DROP: no rarity called {other:?}");
+            return None;
+        }
+    };
+    (1..20_000).filter_map(|seed| fb_items::roll_item_with(base.trim(), seed, fb_items::Odds::loot(8))).find(|item| wanted.is_none_or(|r| item.rarity == r))
 }
 
 /// For captures (`FB_DROP`): a few frames in, sets each item [`drops_for_capture`] names down

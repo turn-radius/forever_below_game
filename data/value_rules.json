@@ -1,0 +1,10 @@
+{
+  "rarity": { "common": 1.0, "magic": 2.0, "rare": 5.0, "legendary": 12.0 },
+  "affix": {
+    "flaw": 0.7,
+    "good_by_least_rarity": { "common": 1.15, "magic": 1.3, "rare": 1.5, "legendary": 1.8 }
+  },
+  "affix_product": { "min": 0.4, "max": 2.0 },
+  "condition": { "wear": 0.6, "damage": 0.4, "broken": 0.25 },
+  "coin_depth_step": 0.25
+}

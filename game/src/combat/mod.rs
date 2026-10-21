@@ -46,21 +46,24 @@ use crate::creatures::behaviour::AttackOnDelver;
 use crate::inventory::Inventory;
 use crate::tuning::Tuning;
 
+pub mod blood;
 pub mod callouts;
 pub mod feedback;
 pub mod eye;
 pub mod guard;
 pub mod kick;
 pub mod orbs;
+pub mod revival;
 pub mod shoot;
 pub mod swing;
 pub mod vitals;
+pub mod voice;
 
 pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin, shoot::ShootPlugin, guard::GuardPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin, shoot::ShootPlugin, guard::GuardPlugin, revival::RevivalPlugin, blood::BloodPlugin, voice::VoicePlugin));
     }
 }
 
@@ -892,7 +895,7 @@ mod tests {
             if app.world().get::<Corpse>(skeleton).is_some() {
                 return;
             }
-            app.world_mut().write_message(Struck { target: skeleton, damage: 30, from: Vec2::new(-30.0, 0.0), bludgeoning: false, critical: false });
+            app.world_mut().write_message(Struck { target: skeleton, damage: 30, from: Vec2::new(-30.0, 0.0), bludgeoning: false, critical: false, by_ally: false });
             app.update();
         }
         panic!("the skeleton never fell");
@@ -1034,7 +1037,7 @@ mod tests {
         for _ in 0..240 {
             app.update();
         }
-        app.world_mut().write_message(feedback::Struck { target: skeleton, damage: 1, from: Vec2::new(-30.0, 0.0), bludgeoning: false, critical: false });
+        app.world_mut().write_message(feedback::Struck { target: skeleton, damage: 1, from: Vec2::new(-30.0, 0.0), bludgeoning: false, critical: false, by_ally: false });
         for _ in 0..30 {
             app.update();
         }
@@ -1058,7 +1061,7 @@ mod tests {
         use feedback::{Struck, damage_to};
         let (app, _, skeleton) = skeleton_fight(kitted_seed(), None);
         let critter = app.world().get::<crate::creatures::Critter>(skeleton).unwrap();
-        let blow = |bludgeoning| Struck { target: skeleton, damage: 4, from: Vec2::ZERO, bludgeoning, critical: false };
+        let blow = |bludgeoning| Struck { target: skeleton, damage: 4, from: Vec2::ZERO, bludgeoning, critical: false, by_ally: false };
         assert_eq!((damage_to(critter, &blow(false)), damage_to(critter, &blow(true))), (4, 8));
         // The delver's mace and club bludgeon, a sword does not.
         let delver = Character::roll(3);
@@ -1090,7 +1093,7 @@ mod tests {
             let extra = bane_damage(&bane, Some(foe), &mut rng);
             assert!((1..=6).contains(&extra), "{extra}");
             seen[extra as usize - 1] = true;
-            let blow = Struck { target: skeleton, damage: 4 + extra, from: Vec2::ZERO, bludgeoning: true, critical: false };
+            let blow = Struck { target: skeleton, damage: 4 + extra, from: Vec2::ZERO, bludgeoning: true, critical: false, by_ally: false };
             assert_eq!(damage_to(critter, &blow), 2 * (4 + extra), "the doubling takes the bane too");
         }
         assert!(seen.iter().all(|&s| s), "every face of the die comes up");
@@ -1371,7 +1374,7 @@ mod tests {
         for _ in 0..40 {
             let at = *app.world().get::<Transform>(skeleton).unwrap();
             let front = at.translation.xz() + (at.rotation * Vec3::Z).xz() * 10.0;
-            app.world_mut().write_message(feedback::Struck { target: skeleton, damage: 0, from: front, bludgeoning: false, critical: false });
+            app.world_mut().write_message(feedback::Struck { target: skeleton, damage: 0, from: front, bludgeoning: false, critical: false, by_ally: false });
             app.update();
         }
         // The last blow's callout, read the frame after.

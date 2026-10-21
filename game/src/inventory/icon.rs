@@ -87,11 +87,14 @@ pub struct IconKey {
     pub turned: bool,
     /// Whether a torch or lantern is lit, since its flame shows; `None` for anything else.
     pub lit: Option<bool>,
+    /// Lines of history, which grow whenever an enchanter changes the item, so its icon is drawn
+    /// again with its new rarity, etching and wear.
+    pub worked: usize,
 }
 
 impl IconKey {
     pub fn of(item: &Item, turned: bool) -> Self {
-        IconKey { base: item.base.clone(), seed: item.seed, turned, lit: item.shape.lit() }
+        IconKey { base: item.base.clone(), seed: item.seed, turned, lit: item.shape.lit(), worked: item.history.len() }
     }
 }
 

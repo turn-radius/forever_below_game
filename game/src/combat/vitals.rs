@@ -15,13 +15,17 @@
 //!   away). The SRD's constrictor grapples with a separate Constrict attack and restrains its
 //!   target, whose speed becomes 0 (SRD 5.1 p. 370, "Constrict"; p. 358, "Grappled"); the
 //!   slowing, and breaking free by a blow, are our own placeholder.
+//! - Each blow also draws a grunt of pain from the delver ([`super::voice`]).
 //! - The hit points show as the life orb at the bottom left of the view ([`super::orbs`]).
-//! - At 0 they have a last gasp ([`Dying`], [`LAST_GASP`] seconds) to drink a healing draught;
+//! - At 0 they have a last gasp ([`Dying`], [`LAST_GASP`] seconds) to drink a healing draught,
+//!   while blood blooms in from the view's edge and blinks ([`super::blood`], [`gasp_blink`]);
 //!   healed above 0 they stand on. Otherwise the run ends ([`Fallen`]): the delver stops, can no
 //!   longer swing, shoot or guard, the view fades to near black with "You
 //!   fall in the abyss", and after [`FALL_TIME`] seconds the game goes back to the title, where
 //!   New delve begins again. Leaving the delve clears everything it spawned (each is scoped
 //!   to it, [`crate::play::DelveSystems`]) and what it kept ([`end_the_delve`]). The SRD's death saving throws (p. 97) are left out.
+//! - Brought down by a blow with a revive left in this world, the delver falls unconscious
+//!   instead and chooses to come to or let go ([`super::revival`]).
 
 use bevy::{
     prelude::*,
@@ -38,6 +42,7 @@ use crate::creatures::behaviour::{AttackOnDelver, MissedDelver, reach};
 use crate::exhaustion::Exhaustion;
 use crate::inventory::Inventory;
 use crate::launch::AppState;
+use crate::rules::GameRules;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, LevelRooms, Obstacles, Player, ScreenOpen};
 use crate::player::Slowed;
 use crate::ui::{BAD, BG, BRIGHT, UiFonts};
@@ -47,6 +52,7 @@ pub struct VitalsPlugin;
 impl Plugin for VitalsPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<AttackOnDelver>()
+            .add_message::<super::voice::DelverHurt>()
             .add_message::<MissedDelver>()
             .add_message::<Struck>()
             .add_message::<Slain>()
@@ -67,8 +73,14 @@ pub const FLASH_CAP: f32 = 0.6;
 /// How long "You fall in the abyss" shows before the title, seconds. Our own.
 pub const FALL_TIME: f32 = 3.5;
 /// How long a delver at 0 hit points has to drink a healing draught before they fall, seconds.
-/// Our own, to give the player room to react.
-pub const LAST_GASP: f32 = 0.5;
+/// Our own, long enough to reach a quickslot or the inventory once the edge starts blinking.
+pub const LAST_GASP: f32 = 3.0;
+/// How often the view's edge blinks red through the last gasp, a second. Our own, kept under the
+/// three flashes a second that WCAG 2.3.1 allows.
+pub const GASP_BLINKS: f32 = 2.0;
+/// How far in the blood reaches as the last gasp starts and as it runs out, in screen heights.
+/// Our own.
+pub const GASP_SPREAD: (f32, f32) = (0.08, 0.2);
 /// How fast a held delver moves, as a share of their pace. Our own placeholder.
 pub const HELD_PACE: f32 = 0.25;
 
@@ -90,6 +102,12 @@ pub fn vignette_strength(hp: i32, max: i32, seconds: f32) -> f32 {
     let base = 0.35 + 0.65 * (1.0 - share / HURT_BADLY);
     let pulse = 0.85 + 0.15 * (std::f32::consts::TAU * seconds / VIGNETTE_PULSE).sin();
     base * pulse
+}
+
+/// How strong the blood blinks `into` seconds into the last gasp, 0.3 to 1: at full as it
+/// starts, [`GASP_BLINKS`] times a second. Our own.
+pub fn gasp_blink(into: f32) -> f32 {
+    0.3 + 0.7 * (0.5 + 0.5 * (std::f32::consts::TAU * GASP_BLINKS * into.max(0.0)).cos())
 }
 
 /// How opaque the red flash over the view starts, 0 to 1, for a blow of `damage` against `max`
@@ -284,6 +302,7 @@ fn take_bites(
     tuning: Option<Res<crate::tuning::Tuning>>,
     rules: Res<crate::rules::GameRules>,
     inventory: Option<Res<crate::inventory::Inventory>>,
+    mut hurt: MessageWriter<super::voice::DelverHurt>,
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
@@ -326,6 +345,8 @@ fn take_bites(
                 commands.entity(player).insert(DelverEffects(effects));
             }
             pain.strike(flash_strength(damage as i32, health.max));
+            // The delver grunts under it ([`super::voice`]).
+            hurt.write(super::voice::DelverHurt { damage: damage as i32, max: health.max, down: health.is_down() });
             // One dull thud for each blow that lands.
             if let Some(sounds) = &sounds {
                 commands.spawn((Name::new("blow lands"), AudioPlayer::new(sounds.thud.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(AppState::Delving)));
@@ -343,7 +364,7 @@ fn take_bites(
 /// the Leech"'s `HealOnKill`, [`crate::character::Derived::heal_on_kill`]), never above their
 /// maximum. A fallen delver heals nothing.
 fn heal_on_kill(mut slain: MessageReader<Slain>, character: Res<Character>, inventory: Option<Res<Inventory>>, mut players: Query<&mut Health, With<Player>>) {
-    let kills = slain.read().count();
+    let kills = slain.read().filter(|s| !s.by_ally).count();
     if kills == 0 {
         return;
     }
@@ -386,6 +407,9 @@ fn break_free(
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct FallOverlay;
 
+/// What [`fall`] reads to decide between falling unconscious and falling in the abyss.
+type Revival<'w> = (Option<Res<'w, super::revival::Revives>>, Option<Res<'w, super::revival::Unconscious>>, Option<Res<'w, GameRules>>);
+
 /// At exhaustion level 6, or [`LAST_GASP`] seconds at 0 hit points, the delver stops and the
 /// view fades out to "You fall in the abyss"; then back to the title. A delver healed above 0
 /// within the gasp stands on.
@@ -402,7 +426,13 @@ fn fall(
     mut words: Query<&mut TextColor>,
     mut screen: Option<ResMut<ScreenOpen>>,
     next: Option<ResMut<NextState<AppState>>>,
+    revival: Revival,
 ) {
+    let (revives, unconscious, rules) = revival;
+    // Lying unconscious, the delver waits on the choice ([`super::revival`]).
+    if unconscious.is_some() {
+        return;
+    }
     let Some(mut fallen) = fallen else {
         let down = players.iter().find(|(_, health, _)| health.is_down()).map(|(player, ..)| player);
         let spent = players.iter().find(|(.., exhaustion)| exhaustion.0.is_dead()).map(|(player, ..)| player);
@@ -424,24 +454,21 @@ fn fall(
         };
         let Some(player) = spent.or(gasped) else { return };
         commands.remove_resource::<Dying>();
-        commands.insert_resource(Fallen(FALL_TIME));
         commands.entity(player).insert(Slowed(0.0)).remove::<(Constricted, super::swing::Swing, super::guard::Guard)>();
         if let Some(screen) = screen.as_deref_mut() {
             screen.0 = None;
         }
-        info!("the delver falls in the abyss");
-        let mut root = commands.spawn((
-            Name::new("You fall"),
-            FallOverlay,
-            Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
-            BackgroundColor(BG.with_alpha(0.0)),
-            GlobalZIndex(10),
-        ));
-        if let Some(camera) = view_models.iter().next() {
-            root.insert(UiTargetCamera(camera));
+        // Brought down by a blow, a delver with a revive left in this world falls unconscious
+        // instead; spent by exhaustion, they do not.
+        let revival = &GameRules::of(&rules).revival;
+        if let Some(revives) = revives.filter(|_| spent.is_none())
+            && revival.left(revives.0) > 0
+        {
+            info!("the delver falls unconscious");
+            super::revival::fall_unconscious(&mut commands, fonts.as_deref(), view_models.iter().next(), revival.left(revives.0));
+            return;
         }
-        let font = fonts.as_deref().map(|f| f.display.clone()).unwrap_or_default();
-        root.with_child((Text::new("You fall in the abyss"), TextFont::from_font_size(52.0).with_font(font), TextColor(BRIGHT.with_alpha(0.0))));
+        begin_the_fall(&mut commands, fonts.as_deref(), view_models.iter().next());
         return;
     };
     fallen.0 -= time.delta_secs();
@@ -460,6 +487,25 @@ fn fall(
     {
         next.set(AppState::Title);
     }
+}
+
+/// Ends the run: "You fall in the abyss" fades in over the view, and after [`FALL_TIME`]
+/// seconds the title returns ([`fall`]).
+pub fn begin_the_fall(commands: &mut Commands, fonts: Option<&UiFonts>, camera: Option<Entity>) {
+    info!("the delver falls in the abyss");
+    commands.insert_resource(Fallen(FALL_TIME));
+    let mut root = commands.spawn((
+        Name::new("You fall"),
+        FallOverlay,
+        Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
+        BackgroundColor(BG.with_alpha(0.0)),
+        GlobalZIndex(10),
+    ));
+    if let Some(camera) = camera {
+        root.insert(UiTargetCamera(camera));
+    }
+    let font = fonts.map(|f| f.display.clone()).unwrap_or_default();
+    root.with_child((Text::new("You fall in the abyss"), TextFont::from_font_size(52.0).with_font(font), TextColor(BRIGHT.with_alpha(0.0))));
 }
 
 /// The HUD root the vitals draw into, which the orbs ([`super::orbs`]), the eye and the
@@ -498,10 +544,19 @@ fn spawn_vitals(mut commands: Commands, new: Query<Entity, Added<ViewModelCamera
     }
 }
 
-/// Fades the red flash over the view, and draws the dark edge while badly hurt.
+/// How far in the blood reaches `into` seconds into the last gasp: creeping in as it runs out.
+pub fn gasp_spread(into: f32) -> f32 {
+    let (start, end) = GASP_SPREAD;
+    start + (end - start) * (into / LAST_GASP).clamp(0.0, 1.0)
+}
+
+/// Fades the red flash over the view, draws the dark edge while badly hurt, and through the last
+/// gasp blooms blinking blood in from the edge ([`super::blood::GaspBlood`]).
 fn show_vitals(
     time: Res<Time>,
     mut pain: ResMut<Pain>,
+    dying: Option<Res<Dying>>,
+    mut blood: Option<ResMut<super::blood::GaspBlood>>,
     players: Query<&Health, With<Player>>,
     mut edges: Query<&mut BorderColor, With<PainEdge>>,
     mut flashes: Query<&mut BackgroundColor, With<PainFlash>>,
@@ -510,6 +565,14 @@ fn show_vitals(
     let flash = pain.alpha();
     for mut colour in &mut flashes {
         colour.set_if_neq(BackgroundColor(BAD.with_alpha(flash)));
+    }
+    // Through the last gasp blood blooms in from the edge and blinks: drink now.
+    let gasp = dying.map_or_else(super::blood::GaspBlood::default, |dying| {
+        let into = LAST_GASP - dying.0;
+        super::blood::GaspBlood { strength: gasp_blink(into), spread: gasp_spread(into) }
+    });
+    if let Some(blood) = blood.as_mut() {
+        blood.set_if_neq(gasp);
     }
     let Some(health) = players.iter().next() else { return };
     let dark = 0.7 * vignette_strength(health.hp, health.max, time.elapsed_secs());
@@ -544,6 +607,7 @@ pub fn end_the_delve(mut commands: Commands, mut cursor: Option<Single<&mut Curs
     commands.insert_resource(Pain::default());
     commands.remove_resource::<Fallen>();
     commands.remove_resource::<Dying>();
+    commands.remove_resource::<super::revival::Unconscious>();
     if let Some(cursor) = cursor.as_deref_mut() {
         crate::player::set_grab(cursor, false);
     }
@@ -672,7 +736,7 @@ mod tests {
         let (mut app, player, snake) = delve();
         app.update();
         bite(&mut app, snake, Species::Rat, 4);
-        app.world_mut().write_message(Slain { target: snake });
+        app.world_mut().write_message(Slain { target: snake, by_ally: false });
         app.update();
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 6, "a plain fist heals nothing");
         let mut inventory = Inventory::default();
@@ -683,12 +747,12 @@ mod tests {
         inventory.wear(id, fb_items::Slot::Mainhand).unwrap();
         app.insert_resource(inventory);
         for _ in 0..2 {
-            app.world_mut().write_message(Slain { target: snake });
+            app.world_mut().write_message(Slain { target: snake, by_ally: false });
             app.update();
         }
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 8, "one each kill");
         for _ in 0..5 {
-            app.world_mut().write_message(Slain { target: snake });
+            app.world_mut().write_message(Slain { target: snake, by_ally: false });
             app.update();
         }
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 10, "never above the maximum");
@@ -753,7 +817,7 @@ mod tests {
         assert_eq!(app.world().get::<Slowed>(player), Some(&Slowed(HELD_PACE)));
         app.update();
         assert!(app.world().get::<Constricted>(player).is_some(), "still held");
-        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false });
         app.update();
         assert!(app.world().get::<Constricted>(player).is_none());
         assert!(app.world().get::<Slowed>(player).is_none());
@@ -785,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn the_last_gasp_lasts_half_a_second() {
+    fn the_last_gasp_lasts_three_seconds() {
         let (mut app, _, snake) = delve();
         app.update();
         bite(&mut app, snake, Species::Rat, 25);
@@ -1154,6 +1218,51 @@ mod tests {
         assert_eq!(flash_colour(&mut app).alpha, 0.0);
         let edge = edge_colour(&mut app);
         assert!(edge.alpha > 0.0 && edge.red < 0.5, "the dark edge stays: {edge:?}");
+    }
+
+    #[test]
+    fn a_blow_that_lands_tells_the_voice_how_hard_it_was() {
+        let (mut app, _, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::Rat, 3);
+        let hurts: Vec<_> = app.world().resource::<Messages<super::super::voice::DelverHurt>>().iter_current_update_messages().copied().collect();
+        assert_eq!(hurts.len(), 1);
+        assert_eq!((hurts[0].max, hurts[0].down), (10, false));
+        assert!(hurts[0].damage > 0);
+    }
+
+    #[test]
+    fn the_gasp_blinks_twice_a_second_from_full() {
+        assert_eq!(gasp_blink(0.0), 1.0);
+        assert!((gasp_blink(0.25) - 0.3).abs() < 1e-5, "dim half a blink in");
+        assert!((gasp_blink(0.5) - 1.0).abs() < 1e-5, "full again a blink later");
+        // Under three flashes a second.
+        const { assert!(GASP_BLINKS < 3.0) };
+        assert_eq!(gasp_spread(0.0), GASP_SPREAD.0);
+        assert_eq!(gasp_spread(LAST_GASP), GASP_SPREAD.1);
+    }
+
+    #[test]
+    fn through_the_last_gasp_blood_blinks_in_from_the_edge_and_a_draught_clears_it() {
+        let (mut app, player, snake) = delve_with_hud();
+        app.init_resource::<super::super::blood::GaspBlood>();
+        bite(&mut app, snake, Species::Rat, 25);
+        app.update();
+        assert!(app.world().get_resource::<Dying>().is_some());
+        let mut seen = vec![];
+        for _ in 0..90 {
+            app.update();
+            seen.push(*app.world().resource::<super::super::blood::GaspBlood>());
+        }
+        let (low, high) = seen.iter().fold((1.0f32, 0.0f32), |(l, h), b| (l.min(b.strength), h.max(b.strength)));
+        assert!(high > 0.9 && low < 0.4, "it blinks: {low} to {high}");
+        assert!(seen.windows(2).all(|w| w[1].spread >= w[0].spread), "it only creeps in");
+        assert!(seen[89].spread > seen[0].spread);
+        // A draught in time: the blood is gone.
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = 10;
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<super::super::blood::GaspBlood>(), Default::default());
     }
 
     #[test]

@@ -18,7 +18,7 @@ use forever_below::{
     combat::{
         Health,
         feedback::{Corpse, Struck},
-        vitals::FALL_TIME,
+        vitals::{FALL_TIME, LAST_GASP},
     },
     creatures::Critter,
     inventory::{FloorChange, FloorChanges, Inventory, ItemId, OpenContainer},
@@ -237,7 +237,7 @@ fn a_creature_killed_stays_dead_and_one_hurt_stays_hurt() {
     let (hurt, hurt_spot) = critters[1];
     app.world_mut().get_mut::<Health>(hurt).unwrap().hp -= 1;
     let hp = app.world().get::<Health>(hurt).unwrap().hp;
-    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false });
+    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false });
     run(&mut app, 60);
     assert!(app.world().get::<Corpse>(dead).is_some());
     for _ in 0..2 {
@@ -331,16 +331,22 @@ fn the_world_record_round_trips_through_serde_and_death_resets_it() {
     let json = serde_json::to_string(&record).unwrap();
     assert_eq!(serde_json::from_str::<WorldRecord>(&json).unwrap(), record);
 
-    // Fall: the next delve starts with a clean record, and level 1 as generated.
+    // Fall, with every revive spent: the next delve starts with a clean record, and level 1 as
+    // generated.
+    app.insert_resource(forever_below::combat::revival::Revives(u32::MAX));
     let body = player(&mut app);
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
-    run(&mut app, (FALL_TIME * 60.0) as usize + 60);
+    run(&mut app, ((LAST_GASP + FALL_TIME) * 60.0) as usize + 60);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
     app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
     run(&mut app, 30);
-    assert_eq!(*app.world().resource::<WorldRecord>(), WorldRecord::default());
+    // A fresh delve records no level yet, has met no one, and starts every faction's standing
+    // afresh from the delver's alignment (#542).
+    let fresh = app.world().resource::<WorldRecord>();
+    assert!(fresh.levels.is_empty());
+    assert_eq!(fresh.standings.met().count(), 0);
     let generated = fb_level::generate(1207, 1);
     assert_eq!(*level(&app), generated);
     assert!(lying(&mut app).iter().all(|(spot, _)| generated.items.contains(spot)), "level 1 is as generated again");

@@ -32,7 +32,7 @@ impl Plugin for EatPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HealGlow>()
             .add_systems(Startup, load_heal_sound)
-            .add_systems(Update, act_on_hovered.run_if(inventory_open).in_set(DelveSystems))
+            .add_systems(Update, act_on_hovered.run_if(inventory_open).run_if(crate::barter::not_bartering).in_set(DelveSystems))
             .add_systems(Update, (spawn_heal_glow, fade_heal_glow).chain().in_set(DelveSystems));
     }
 }
@@ -106,6 +106,8 @@ pub struct Consumed {
     pub sipped: bool,
     /// What a potion held, so a rule keyed on it (the antidote's cure) can follow.
     pub brew: Option<Brew>,
+    /// What an elixir gives, so the delver can be given it.
+    pub elixir: Option<fb_items::Elixir>,
 }
 
 /// Eats or drinks `id`: takes it out of the inventory, wherever it lies, and takes its
@@ -117,10 +119,10 @@ pub fn consume(inventory: &mut Inventory, needs: &mut fb_character::Needs, id: I
         let (name, base) = (item.title().to_string(), item.base.clone());
         let provision = inventory.sip(id)?;
         needs.consume(provision.nutrition, provision.water);
-        return Some(Consumed { how: Consume::Drink, name, provision, base, sipped: true, brew: None });
+        return Some(Consumed { how: Consume::Drink, name, provision, base, sipped: true, brew: None, elixir: None });
     }
     let (how, provision) = (item.consume()?, item.provision()?);
-    let done = Consumed { how, name: item.title().to_string(), provision, base: item.base.clone(), sipped: false, brew: item.brew() };
+    let done = Consumed { how, name: item.title().to_string(), provision, base: item.base.clone(), sipped: false, brew: item.brew(), elixir: item.elixir() };
     inventory.forget(id);
     needs.consume(provision.nutrition, provision.water);
     Some(done)
@@ -136,6 +138,10 @@ pub fn say(done: &Consumed) -> String {
 
 /// The effect an Antidote ends: the venom's.
 pub const CURED_BY_ANTIDOTE: &str = "poisoned";
+/// The effect the Elixir of Embers gives.
+const WARMED: &str = "warmed";
+/// The chills that warmth from within lifts.
+const LIFTED_BY_WARMTH: [&str; 2] = ["cold", "chilled_blood"];
 
 /// What eating needs from the world: the delver's needs, hit points and effects, the run's dice,
 /// the green flash and the chime. [`Eating::eat`] is what F in the inventory and a quickslot share.
@@ -144,7 +150,8 @@ pub struct Eating<'w, 's> {
     commands: Commands<'w, 's>,
     needs: Query<'w, 's, &'static mut DelverNeeds, With<Player>>,
     healths: Query<'w, 's, &'static mut Health, With<Player>>,
-    effects: Query<'w, 's, (Entity, &'static mut DelverEffects), With<Player>>,
+    effects: Query<'w, 's, (Entity, Option<&'static mut DelverEffects>), With<Player>>,
+    rules: Option<Res<'w, crate::rules::GameRules>>,
     dice: Option<ResMut<'w, RunDice>>,
     glow: ResMut<'w, HealGlow>,
     sound: Option<Res<'w, HealSound>>,
@@ -173,7 +180,7 @@ impl Eating<'_, '_> {
             }
         }
         if done.brew == Some(Brew::Antidote)
-            && let Ok((player, mut effects)) = self.effects.single_mut()
+            && let Ok((player, Some(mut effects))) = self.effects.single_mut()
             && effects.0.get(CURED_BY_ANTIDOTE, None).is_some()
         {
             effects.0.remove(CURED_BY_ANTIDOTE, None);
@@ -182,6 +189,31 @@ impl Eating<'_, '_> {
                 self.commands.entity(player).remove::<DelverEffects>();
             }
             line = format!("{line}: the venom is gone");
+        }
+        if let Some(elixir) = done.elixir
+            && let Ok((player, effects)) = self.effects.single_mut()
+        {
+            let defs = &crate::rules::GameRules::of(&self.rules).effects;
+            let source = fb_character::effect::Source::Consumed { what: done.name.clone() };
+            match effects {
+                Some(mut effects) => {
+                    // Warmth from within drives the cold out at once.
+                    if elixir.effect == WARMED {
+                        for cold in LIFTED_BY_WARMTH {
+                            effects.0.remove(cold, None);
+                        }
+                    }
+                    effects.0.add(defs, elixir.effect, elixir.intensity, None, source);
+                }
+                None => {
+                    let mut fresh = fb_character::effect::Effects::default();
+                    fresh.add(defs, elixir.effect, elixir.intensity, None, source);
+                    self.commands.entity(player).insert(DelverEffects(fresh));
+                }
+            }
+            if let Some(def) = defs.get(elixir.effect) {
+                line = format!("{line}: {}", def.name.to_lowercase());
+            }
         }
         Some(line)
     }
@@ -798,6 +830,63 @@ mod tests {
         hover(&mut app, id);
         press_u(&mut app);
         assert!(app.world().get::<DelverEffects>(player).is_none());
+    }
+
+    #[test]
+    fn each_elixir_gives_its_effect_to_the_delver() {
+        let defs = &fb_character::rules::defaults().effects;
+        for (base, elixir) in fb_items::ELIXIRS {
+            assert!(defs.contains_key(elixir.effect), "{base}");
+            let (mut app, player) = app();
+            let id = carry(&mut app, base);
+            hover(&mut app, id);
+            press_u(&mut app);
+            assert!(app.world().resource::<Inventory>().item(id).is_none(), "{base} is used up");
+            let effects = app.world().get::<DelverEffects>(player).expect(base);
+            assert!(effects.0.get(elixir.effect, None).is_some(), "{base}");
+        }
+        // The Hare quickens the pace; Vigil slows sleepiness; Fasting slows hunger.
+        let (mut app, player) = app();
+        let id = carry(&mut app, "Elixir of the Hare");
+        hover(&mut app, id);
+        press_u(&mut app);
+        let effects = &app.world().get::<DelverEffects>(player).unwrap().0;
+        assert!(effects.pace(defs) > 1.2);
+        assert_eq!(app.world().resource::<Toast>().text, "You drink the elixir of the hare: swift");
+        for (base, meter) in [("Elixir of Vigil", fb_character::MeterKind::Sleepiness), ("Elixir of Fasting", fb_character::MeterKind::Hunger)] {
+            let (mut drinker, player) = self::app();
+            let id = carry(&mut drinker, base);
+            hover(&mut drinker, id);
+            press_u(&mut drinker);
+            let effects = &drinker.world().get::<DelverEffects>(player).unwrap().0;
+            assert!(effects.need_rate(defs, meter) < 1.0, "{base}");
+        }
+    }
+
+    #[test]
+    fn the_elixir_of_embers_drives_out_the_cold() {
+        let defs = &fb_character::rules::defaults().effects;
+        let (mut app, player) = app();
+        let mut effects = fb_character::effect::Effects::default();
+        effects.add(defs, "cold", 1.0, None, fb_character::effect::Source::Consumed { what: "test".into() });
+        app.world_mut().entity_mut(player).insert(DelverEffects(effects));
+        let id = carry(&mut app, "Elixir of Embers");
+        hover(&mut app, id);
+        press_u(&mut app);
+        let effects = &app.world().get::<DelverEffects>(player).unwrap().0;
+        assert!(effects.get("cold", None).is_none());
+        assert!(effects.get(WARMED, None).is_some());
+    }
+
+    #[test]
+    fn an_elixir_joins_the_effects_already_on_the_delver() {
+        let (mut app, player) = app();
+        app.world_mut().entity_mut(player).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
+        let id = carry(&mut app, "Elixir of Vigil");
+        hover(&mut app, id);
+        press_u(&mut app);
+        let effects = app.world().get::<DelverEffects>(player).unwrap();
+        assert!(effects.poisoned_hours().is_some() && effects.0.get("wakeful", None).is_some());
     }
 
     #[test]

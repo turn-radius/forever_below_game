@@ -265,7 +265,7 @@ fn going_down_at_once_waits_for_the_level_made_in_the_background() {
     assert_eq!(app.world().resource::<Staged>().taken, 4);
 
     let second = level(&app).clone();
-    assert_eq!(second, fb_level::generate(depth_seed(1207, 2), 2), "the level made in the background is the one made in place");
+    assert_eq!(second, forever_below::travel::Abyss::new(1207).level_at(2), "the level made in the background is the one made in place");
     // Its stone is laid out whole, from the background's chunks, which are used up.
     let chunks = stone_chunks(&second);
     let expected = |name: &str| chunks.iter().map(|c| match name {
@@ -314,7 +314,8 @@ fn a_fall_on_any_depth_starts_the_next_delve_at_the_first_level_entrance() {
     run(&mut app, 200);
     assert_eq!(app.world().resource::<Abyss>().depth, 2);
 
-    // Fall on the second level.
+    // Fall on the second level, with every revive spent.
+    app.insert_resource(forever_below::combat::revival::Revives(u32::MAX));
     let body = player(&mut app);
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
     run(&mut app, ((LAST_GASP + FALL_TIME) * 60.0) as usize + 30);

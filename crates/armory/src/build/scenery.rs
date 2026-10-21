@@ -16,6 +16,7 @@ use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
 use crate::build::parts::Parts;
+use crate::build::roll::rolled_sheet;
 use crate::geom::{CatmullRom, ItemMesh, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, cuboid, icosphere, lathe, tube, value_noise3, vec3};
 use crate::geom::{Hollow, carve_hollows};
 use crate::material::{MaterialKind, Rgb};
@@ -30,10 +31,13 @@ pub enum Scenery {
     Bones,
     /// A dressed stone column, whole and bedded in the ceiling, or broken off short.
     Pillar,
+    /// A bedroll unrolled on the floor, human length (about 17 units): a canvas mat under a
+    /// blanket, with a rolled pillow at the head. Lies along item X, head toward -X.
+    Bedroll,
 }
 
 impl Scenery {
-    pub const ALL: [Scenery; 3] = [Scenery::Rubble, Scenery::Bones, Scenery::Pillar];
+    pub const ALL: [Scenery; 4] = [Scenery::Rubble, Scenery::Bones, Scenery::Pillar, Scenery::Bedroll];
 
     /// The furthest any part of it reaches from its centre across the floor, in world units,
     /// whatever its seed. A pillar's square plinth is this far to a corner.
@@ -42,6 +46,7 @@ impl Scenery {
             Scenery::Rubble => 4.6,
             Scenery::Bones => 3.6,
             Scenery::Pillar => 4.0,
+            Scenery::Bedroll => 9.1,
         }
     }
 
@@ -51,6 +56,7 @@ impl Scenery {
             Scenery::Rubble => rubble(seed),
             Scenery::Bones => bones(seed),
             Scenery::Pillar => pillar(seed, ceiling),
+            Scenery::Bedroll => bedroll(seed),
         }
     }
 }
@@ -305,6 +311,47 @@ pub fn pillar(seed: u32, ceiling: f32) -> ItemMesh {
     parts.finish()
 }
 
+/// Dyes a blanket may be, dull as a delver's gear is.
+const BLANKET_DYES: [u32; 6] = [0x9a3d33, 0x3d6b8f, 0x4f7f45, 0xb58a35, 0x7a4a7a, 0x8a5a3a];
+
+/// A bedroll laid out flat, human length: a canvas mat about 17 units long and 6 wide, a
+/// blanket over the foot two thirds of it with a ruck, and a small rolled pillow across the
+/// head. It is scaled by its seed from a short folk's length to a tall one's (`s` 0.85 to 1,
+/// so it never reaches past [`Scenery::Bedroll`]'s floor), and lies along item X, head toward
+/// -X, under 1.2 units high.
+pub fn bedroll(seed: u32) -> ItemMesh {
+    let mut rng = Mulberry32::new(seed ^ 0xbed0_11ed);
+    let dye = Rgb::hex(*rng.pick(&BLANKET_DYES)).scaled(rng.range_f32(0.9, 1.1));
+    let s = rng.range_f32(0.85, 1.0);
+    let (len, wide) = (17.0 * s, 6.0 * s);
+    let mut mat = cuboid([len, 0.3, wide]);
+    mat.translate([0.0, 0.15, 0.0]);
+    // The blanket covers the foot two thirds, its head edge folded back in a band.
+    let cover = len * 0.66;
+    let foot = len * 0.5;
+    let mut blanket = cuboid([cover, 0.45, wide * 0.94]);
+    blanket.rotate_y(rng.range_f32(-0.03, 0.03)).translate([foot - cover * 0.5 - 0.1 * s, 0.52, 0.0]);
+    let mut fold = cuboid([1.3 * s, 0.55, wide * 0.94]);
+    fold.rotate_y(rng.range_f32(-0.03, 0.03)).translate([foot - cover + 0.55 * s, 0.57, 0.0]);
+    // A ruck across the blanket.
+    let mut ruck = cuboid([2.6 * s, 0.25, 1.0 * s]);
+    ruck.rotate_y(rng.range_f32(-0.5, 0.5)).translate([rng.range_f32(0.0, 3.5) * s, 0.9, rng.range_f32(-1.0, 1.0) * s]);
+    blanket.append(&ruck);
+    // The pillow lies across the head of the mat.
+    let r = 0.45 * s;
+    let (mut pillow, mut ends) = rolled_sheet([0.0, 0.0, 0.0], r, 3.6 * s, 0.015, 3.0);
+    for m in [&mut pillow, &mut ends] {
+        m.rotate_y(PI * 0.5).translate([-foot + 1.6 * s, 0.3 + r, 0.0]);
+    }
+    let mut parts = Parts::new();
+    parts.add_tinted("mat", mat, MaterialKind::Cloth, Rgb::hex(0x6e6248).scaled(rng.range_f32(0.85, 1.0)));
+    parts.add_tinted("blanket", blanket, MaterialKind::Cloth, dye);
+    parts.add_tinted("blanket_fold", fold, MaterialKind::Cloth, dye.scaled(0.8));
+    parts.add_tinted("pillow", pillow, MaterialKind::Cloth, Rgb::hex(0xb8ab88));
+    parts.add_tinted("pillow_end", ends, MaterialKind::Cloth, Rgb::hex(0x8f8466));
+    parts.finish()
+}
+
 /// How far a mesh reaches from the origin across the floor (XZ).
 pub fn floor_reach(mesh: &ItemMesh) -> f32 {
     mesh.parts.iter().flat_map(|p| &p.positions).map(|p: &V3| p[0].hypot(p[2])).fold(0.0, f32::max)
@@ -344,6 +391,7 @@ mod tests {
                     Scenery::Rubble => assert!(hi[1] < 4.5, "{seed}: a heap {} high", hi[1]),
                     Scenery::Bones => assert!(hi[1] < 2.0, "{seed}: bones {} high", hi[1]),
                     Scenery::Pillar => assert!(hi[1] > 6.0 && hi[1] < CEILING + 2.0, "{seed}: a pillar {} high", hi[1]),
+                    Scenery::Bedroll => assert!(hi[1] < 1.3, "{seed}: a bedroll {} high", hi[1]),
                 }
             }
         }

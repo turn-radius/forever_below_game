@@ -61,6 +61,21 @@ impl Tincture {
             Tincture::Sable => 0x232323,
         })
     }
+
+    /// The tincture as dyed cloth: the same hue as [`Tincture::rgb`] but softer, the way wool
+    /// takes madder, woad, weld and walnut. Or is a weld yellow, Argent undyed wool, Sable a
+    /// soft black.
+    pub fn dye(self) -> Rgb {
+        Rgb::hex(match self {
+            Tincture::Or => 0xc9a43c,
+            Tincture::Argent => 0xdcd3bd,
+            Tincture::Gules => 0x8f2a2d,
+            Tincture::Azure => 0x2c4a80,
+            Tincture::Vert => 0x3a6a3a,
+            Tincture::Purpure => 0x5a3d6b,
+            Tincture::Sable => 0x2a2826,
+        })
+    }
 }
 
 /// How the field is split between its two tinctures.
