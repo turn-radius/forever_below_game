@@ -20,6 +20,7 @@ pub mod figure;
 pub mod fitting;
 pub mod folk;
 pub mod folk_combat;
+pub mod folk_regard;
 pub mod hostility;
 pub mod kills;
 pub mod folk_pose;

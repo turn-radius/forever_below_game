@@ -38,7 +38,8 @@
 //!   weapon's dice plus the Strength modifier and is sent as an [`AttackOnDelver`], which takes
 //!   the delver's hit points as a creature's blow does, and a miss whooshes past. A friendly
 //!   folk never attacks, however near the delver comes. One who has not seen the delver for
-//!   `folk.lose_interest_after` seconds gives up, friendly again, and heads home.
+//!   `folk.lose_interest_after` seconds gives up, friendly again, and heads home, unless their
+//!   faction is Hostile to the delver, which keeps its folk hostile (`crate::folk_regard`).
 //!
 //! A folk's stance while lying is the one they had standing: the skinned figure is turned as a
 //! whole, not ragdolled. Our own simplification.
@@ -81,7 +82,7 @@ impl Plugin for FolkCombatPlugin {
         if !app.is_plugin_added::<crate::belongings::BelongingsPlugin>() {
             app.add_plugins(crate::belongings::BelongingsPlugin);
         }
-        app.add_plugins(HostilityPlugin)
+        app.add_plugins(HostilityPlugin).add_plugins(crate::folk_regard::FolkRegardPlugin)
             .add_message::<Struck>()
             .add_message::<Callout>()
             .add_message::<crate::combat::feedback::Slain>()
@@ -148,7 +149,7 @@ fn debug_provoke(
         && *since >= SLAY_AT
         && let Some((entity, _, at)) = find(index)
     {
-        struck.write(Struck { target: entity, damage: 1000, from: at.translation.xz() + (at.rotation * Vec3::Z).xz() * 10.0, bludgeoning: false, critical: false });
+        struck.write(Struck { target: entity, damage: 1000, from: at.translation.xz() + (at.rotation * Vec3::Z).xz() * 10.0, bludgeoning: false, critical: false, by_ally: false });
         debug.done[1] = true;
     }
 }
@@ -181,13 +182,13 @@ pub struct Fight {
     /// Seconds until they may swing again.
     pub cooldown: f32,
     /// Whether this swing's blow has come down.
-    landed: bool,
+    pub(crate) landed: bool,
     /// Seconds since they last saw the delver.
     pub unseen: f32,
     path: Vec<(i32, i32)>,
     goal: (i32, i32),
     repath: f32,
-    rng: Mulberry32,
+    pub(crate) rng: Mulberry32,
 }
 
 impl Fight {
@@ -198,7 +199,7 @@ impl Fight {
 
 impl Fight {
     /// Drops the fight under way: no swing, no way to the delver, no time unseen.
-    fn calm(&mut self) {
+    pub(crate) fn calm(&mut self) {
         *self = Fight { rng: self.rng.clone(), ..Fight::new(0) };
     }
 }
@@ -208,13 +209,13 @@ const FIGHT_SALT: u32 = 0x0F16_4700;
 /// How far through a swing the blow lands, as a skeleton's does (`creatures::skeletons::LANDS`).
 pub const LANDS: f32 = crate::creatures::skeletons::LANDS;
 /// The wait between a folk's swings, seconds, as a skeleton's. Our own.
-const COOLDOWN: f32 = 0.8;
+pub(crate) const COOLDOWN: f32 = 0.8;
 /// How much farther than their reach a blow still lands, as a skeleton's. Our own.
 const SLACK: f32 = 1.15;
 /// A hostile folk runs at this many times their walking pace: the SRD's Dash (p. 93).
-const DASH: f32 = 2.0;
+pub(crate) const DASH: f32 = 2.0;
 /// How quickly a hostile folk turns to face the delver, radians a second. Our own.
-const TURN_RATE: f32 = 6.0;
+pub(crate) const TURN_RATE: f32 = 6.0;
 /// How often a folk finds its way again while following, seconds, as a creature does.
 const REPATH: f32 = 0.5;
 
@@ -312,7 +313,7 @@ pub fn take_folk_blows(
         }
         info!("{} takes {}: {} of {} hit points", denizen.person.name, blow.damage, health.hp, health.max);
         if fell {
-            slain.write(crate::combat::feedback::Slain { target: blow.target });
+            slain.write(crate::combat::feedback::Slain { target: blow.target, by_ally: blow.by_ally });
             commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<(BlocksTheWay, Routine)>();
             toasts.add(&format!("{} is slain", denizen.person.name));
             info!("{} falls", denizen.person.name);
@@ -415,6 +416,7 @@ pub fn fight(
     creatures: Query<(&Critter, &Transform), Standing>,
     mut folk: Query<Fighters, Without<Corpse>>,
     mut attacks: BlowsAtDelver,
+    record: Res<crate::record::WorldRecord>,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
@@ -441,7 +443,9 @@ pub fn fight(
         let sees = line_of_sight(grid(at), grid(player), &blocked);
         // Out of sight long enough, they give up and go home, friendly again.
         fight.unseen = if sees { 0.0 } else { fight.unseen + dt };
-        if fight.unseen > tuning.folk.lose_interest_after {
+        // A faction that is Hostile to the delver does not calm down (`crate::folk_regard`).
+        let hated = record.standings.band(denizen.person.faction.id) == fb_faction::Band::Hostile;
+        if fight.unseen > tuning.folk.lose_interest_after && !hated {
             *hostility = Hostility::Friendly;
             fight.calm();
             stride.speed = 0.0;
@@ -717,7 +721,7 @@ pub(crate) mod tests {
     fn at_0_hit_points_a_folk_dies_and_falls_where_it_stood() {
         let (mut app, _, folk) = folk_fight(9.0);
         let stood = *app.world().get::<Transform>(folk).unwrap();
-        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: stood.translation.xz() - Vec2::X * 9.0, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: stood.translation.xz() - Vec2::X * 9.0, bludgeoning: false, critical: false, by_ally: false });
         for _ in 0..90 {
             app.update();
         }
@@ -792,7 +796,7 @@ pub(crate) mod tests {
         let expected = crate::hostility::who_turns(first, &kin, &level, |x, y| !level.is_open(x, y));
         assert!(expected.len() > 1, "someone of the faction sees it");
         let at = app.world().get::<Transform>(first).unwrap().translation.xz();
-        app.world_mut().write_message(Struck { target: first, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: first, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false, by_ally: false });
         for _ in 0..3 {
             app.update();
         }
@@ -843,7 +847,7 @@ pub(crate) mod tests {
     }
 
     /// A cell of the level far from `from` (world `(x, z)`) with no line of sight to it.
-    fn out_of_sight_of(app: &App, from: Vec2) -> Vec3 {
+    pub(crate) fn out_of_sight_of(app: &App, from: Vec2) -> Vec3 {
         let level = &app.world().resource::<CurrentLevel>().0;
         let blocked = |x: i32, y: i32| !level.is_open(x, y);
         let (w, h) = (level.width as i32, level.height as i32);
@@ -867,6 +871,13 @@ pub(crate) mod tests {
             app.update();
         }
         assert!(hostility(&app, folk).is_hostile());
+        // Turning on the delver dropped their faction to Hostile, which never calms down
+        // (`folk_regard`); the delver having made amends, it stands at Neutral again.
+        let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.id;
+        let mut record = app.world_mut().resource_mut::<crate::record::WorldRecord>();
+        let now = record.standings.get(faction).value();
+        record.standings.shift(faction, -now);
+        assert_eq!(record.standings.band(faction), fb_faction::Band::Neutral);
         let home = app.world().get::<Routine>(folk).expect("a routine").home;
         // The delver slips away out of sight.
         let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
@@ -887,7 +898,7 @@ pub(crate) mod tests {
         assert!(matches!(routine.phase, crate::folk_routine::Phase::Walk { goal } if goal == home) || app.world().get::<Transform>(folk).unwrap().translation.xz().distance(home) < 2.0 * CELL, "{:?}", routine.phase);
         // Struck again, they turn again.
         let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
-        app.world_mut().write_message(Struck { target: folk, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: folk, damage: 1, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false, by_ally: false });
         for _ in 0..3 {
             app.update();
         }
@@ -941,7 +952,7 @@ pub(crate) mod tests {
 
     fn strike_down(app: &mut App, folk: Entity) {
         let at = app.world().get::<Transform>(folk).unwrap().translation.xz();
-        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false });
+        app.world_mut().write_message(Struck { target: folk, damage: 1000, from: at - Vec2::X * 9.0, bludgeoning: false, critical: false, by_ally: false });
         for _ in 0..120 {
             app.update();
         }

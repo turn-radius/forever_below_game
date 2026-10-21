@@ -250,7 +250,7 @@ mod tests {
             if app.world().get::<Corpse>(troll).is_some() {
                 return;
             }
-            app.world_mut().write_message(Struck { target: troll, damage: 500, from: Vec2::new(0.0, 0.0), bludgeoning: true, critical: false });
+            app.world_mut().write_message(Struck { target: troll, damage: 500, from: Vec2::new(0.0, 0.0), bludgeoning: true, critical: false, by_ally: false });
             app.update();
         }
         panic!("the troll never fell");

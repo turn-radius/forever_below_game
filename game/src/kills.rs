@@ -59,6 +59,7 @@ pub fn victim_of(denizen: &Denizen) -> Victim {
 pub fn kills_move_standing(mut slain: MessageReader<Slain>, abyss: Option<Res<Abyss>>, mut record: ResMut<WorldRecord>, creatures: Query<&Critter>, folk: Query<&Denizen>) {
     let victims: Vec<Victim> = slain
         .read()
+        .filter(|s| !s.by_ally)
         .filter_map(|s| match (creatures.get(s.target), folk.get(s.target)) {
             (Ok(critter), _) => Some(Victim::Creature(kind_of(critter.creature.species()))),
             (_, Ok(denizen)) => Some(victim_of(denizen)),
@@ -123,5 +124,24 @@ mod tests {
         let before = standings.get(member).value();
         weigh(&world, &mut standings, &[Victim::Member { faction: member, folk: world.faction(member).folk, class: None }]);
         assert!(standings.get(member).value() <= before - 40 + 10 && standings.has_met(member));
+    }
+
+    #[test]
+    fn a_kill_by_an_allied_folk_moves_no_standing_and_the_delvers_does() {
+        let level = fb_level::generate(1207, 1);
+        let spot = level.creatures[0];
+        let kind = kind_of(spot.species);
+        let thing = fb_faction::Preference::Creature(kind);
+        let run_seed = (0..500).find(|s| fb_faction::World::new(*s).factions().iter().any(|f| f.likes.contains(&thing) || f.hates.contains(&thing))).expect("a world whose factions care");
+        let standings_after = |by_ally: bool| {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins).add_message::<Slain>().init_resource::<WorldRecord>().insert_resource(Abyss { run_seed, ..Default::default() }).add_systems(Update, kills_move_standing);
+            let target = app.world_mut().spawn(Critter::new(spot, spot.creature())).id();
+            app.world_mut().write_message(Slain { target, by_ally });
+            app.update();
+            app.world().resource::<WorldRecord>().standings.clone()
+        };
+        assert_eq!(standings_after(true), fb_faction::Standings::default(), "an ally's kill counted");
+        assert_ne!(standings_after(false), fb_faction::Standings::default(), "the delver's kill did not");
     }
 }

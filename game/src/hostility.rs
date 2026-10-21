@@ -15,7 +15,8 @@
 //! - Hostile stays hostile while the fight goes on, and the record keeps it (`crate::record`). A
 //!   hostile folk who goes `folk.lose_interest_after` seconds without sight of the delver gives up
 //!   and turns friendly again (`crate::folk_combat::fight`); striking them again provokes them
-//!   again.
+//!   again, unless its faction is Hostile, which never calms down. What folk do on sight by band
+//!   (attack, watch, greet, help) is `crate::folk_regard`.
 //!
 //! Who sees, and the reach of sight in a corridor, are our own.
 
