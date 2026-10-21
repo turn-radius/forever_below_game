@@ -63,6 +63,7 @@ pub mod soak;
 pub mod staged;
 pub mod status;
 pub mod swing_practice;
+pub mod talk;
 pub mod title;
 pub mod travel;
 pub mod webs;

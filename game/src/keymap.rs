@@ -164,10 +164,10 @@ pub enum Context {
 
 impl Context {
     /// The context of the title (`app`) or the screen open over the level, if any. The map
-    /// reads as a menu: nothing in it but the keys that swap screens.
+    /// reads as a menu: nothing in it but the keys that swap screens, and so does a talk.
     pub fn of(app: Option<AppState>, open: Option<Screen>) -> Context {
         match (app, open) {
-            (Some(AppState::Title), _) | (_, Some(Screen::Menu | Screen::Map)) => Context::Menus,
+            (Some(AppState::Title), _) | (_, Some(Screen::Menu | Screen::Map | Screen::Talk)) => Context::Menus,
             (_, Some(Screen::Inventory)) => Context::Inventory,
             (_, None) => Context::Level,
         }

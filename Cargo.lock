@@ -2896,6 +2896,7 @@ dependencies = [
  "fb_items",
  "fb_level",
  "libc",
+ "procgen_grammar",
  "procgen_rng",
  "serde",
  "serde_json",
