@@ -41,7 +41,7 @@ use fb_level::{
 use procgen_rng::Mulberry32;
 
 use super::arch::{Arch, prism};
-use super::{DOOR_HEIGHT, DOOR_WIDTH};
+use super::DOOR_HEIGHT;
 
 /// The sill plank of a timber frame, which a leaf clears.
 const TIMBER_SILL: f32 = 0.5;
@@ -692,6 +692,7 @@ pub fn chain_dip(swing: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::level::geometry::DOOR_WIDTH;
 
     const STYLES: [DoorStyle; 4] = [DoorStyle::Timber, DoorStyle::RoundArch, DoorStyle::PointedArch, DoorStyle::RockCut];
 
