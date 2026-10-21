@@ -14,6 +14,7 @@ use armory::{Family, Item};
 use procgen_rng::Mulberry32;
 
 use crate::creatures::{CREATURE_SALT, place_creatures};
+use crate::claims::{CLAIM_SALT, grow_claims};
 use crate::folk::{FOLK_SALT, place_folk};
 use crate::props::{PROP_SALT, place_props};
 use crate::stairs::{STAIR_SALT, place_stairs};
@@ -171,6 +172,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         lights: Vec::new(),
         folk: Vec::new(),
         factions: Vec::new(),
+        claims: Vec::new(),
         props: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
@@ -192,7 +194,12 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
     furnish(&mut level, &mut Mulberry32::new(layout_seed ^ FURNISH_SALT), p);
     let start_room = level.start_room().expect("the entrance leads into a room");
     level.factions = fb_faction::World::new(world_seed).draw_specs(seed);
-    level.folk = place_folk(&level, start_room, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
+    let (claims, strengths) = grow_claims(&level, start_room, &mut Mulberry32::new(layout_seed ^ CLAIM_SALT));
+    level.claims = claims;
+    // A faction that found no ground is not on the level.
+    let held: Vec<_> = level.claims.iter().map(|c| c.faction).collect();
+    level.factions.retain(|s| held.contains(&s.id));
+    level.folk = place_folk(&level, &strengths, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
     Some((level, layout_seed))
 }
 
@@ -1117,16 +1124,16 @@ mod tests {
         // (`Family::Writing`), which moves the weighted pick of every floor item, and again when
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
-        // shuffle that sets the groups).
+        // shuffle that sets the groups), and again when folk moved into their factions' claims (#541).
         let before = [
-            (0u32, 0xd7475ae671d65f2bu64),
-            (1, 0x16c5137e36e4f5d8),
-            (2, 0xa3f07d52bb194110),
-            (7, 0xd93ae34b10bbca42),
-            (64, 0x4b90ba564f9a7d34),
-            (1207, 0xf60fb14420633de1),
-            (4242, 0x466a79e120be37c7),
-            (u32::MAX, 0x5f1892ba3e1dea58),
+            (0u32, 0x9df7e2f0fadd256du64),
+            (1, 0x803719a0b837c4d0),
+            (2, 0x641f2f5c5fee8b29),
+            (7, 0x809bcf89952da82f),
+            (64, 0x8090455ae5d7f9fc),
+            (1207, 0x1bd582756296e1ea),
+            (4242, 0xd6ee95147fc96e24),
+            (u32::MAX, 0xb41fe82cdd9e03e3),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

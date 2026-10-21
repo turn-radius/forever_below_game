@@ -4,7 +4,8 @@
 //! `P` pigfolk. Props: containers `c` chest, `b` barrel, `x` crate, `a` amphora (`s` strongbox,
 //! `f` coffer), and scenery `%` rubble, `~` bones, `o` pillar. Creatures: `r` rat, `R` giant
 //! rat, `v` poisonous snake, `S` constrictor snake, `k` skeleton, `T` troll, `p` giant spider, `j` jackalope, `c` giant centipede, `b` bat, `B` giant
-//! bat. Webs in a spider's nest: `w`.
+//! bat. Webs in a spider's nest: `w`. The floor of a faction's claimed rooms is its letter, `W`, `X`,
+//! `Y` or `Z` in the order of the faction list, with a legend below it; wild rooms stay `.`.
 
 use armory::build::scenery::Scenery;
 use armory::families::chests::ChestStyle;
@@ -74,6 +75,20 @@ fn main() {
                 .collect()
         })
         .collect();
+    let letter = |k: usize| ['W', 'X', 'Y', 'Z', 'V', 'U'][k % 6];
+    for claim in &level.claims {
+        let k = level.factions.iter().position(|f| f.id == claim.faction).unwrap_or(0);
+        for &r in &claim.rooms {
+            let room = level.rooms[r];
+            for y in room.y..room.y + room.h {
+                for x in room.x..room.x + room.w {
+                    if level.cell(x as i32, y as i32) == fb_level::Cell::Floor {
+                        rows[y as usize][x as usize] = letter(k);
+                    }
+                }
+            }
+        }
+    }
     for item in &level.items {
         rows[item.y as usize][item.x as usize] = 'i';
     }
@@ -110,6 +125,12 @@ fn main() {
     for row in rows {
         println!("{}", row.into_iter().collect::<String>());
     }
+    for claim in &level.claims {
+        let k = level.factions.iter().position(|f| f.id == claim.faction).unwrap_or(0);
+        let members = level.folk.iter().filter(|f| f.faction == claim.faction).count();
+        println!("{} claims {} rooms {:?} for {members} folk: {}", letter(k), claim.rooms.len(), claim.rooms, level.faction(claim.faction).name);
+    }
+    debug_assert!(level.factions.iter().all(|f| level.claims.iter().any(|c| c.faction == f.id)));
     for item in &level.items {
         println!("{:?} seed {} at ({:.1}, {:.1})", item.family, item.seed, item.x, item.y);
     }

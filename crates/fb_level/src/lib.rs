@@ -151,6 +151,9 @@ pub struct Level {
     /// The two to four factions of the world's pool this level holds, whole, so the level names
     /// them without the world; each [`FolkSpot::faction`] is one of them.
     pub factions: Vec<FactionSpec>,
+    /// The ground each of those factions holds, as rooms ([`claims`]). A room in no claim is
+    /// wild.
+    pub claims: Vec<Claim>,
     /// Containers and scenery standing along the walls ([`props`]).
     pub props: Vec<PropSpot>,
     /// Rats and snakes ([`creatures`]).
@@ -272,6 +275,7 @@ impl Level {
     }
 }
 
+pub mod claims;
 pub mod creatures;
 pub mod finish;
 pub mod folk;
@@ -285,6 +289,7 @@ pub mod stairs;
 pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
+pub use claims::{Claim, settle_claims};
 pub use folk::{Faction, FactionSpec, FolkSpot};
 pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use finish::{Character, DoorStyle, Finish, Finishes, FloorFinish, Quarter, WallFinish, finishes};

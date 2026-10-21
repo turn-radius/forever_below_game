@@ -151,6 +151,7 @@ mod tests {
             lights: Vec::new(),
             folk: Vec::new(),
             factions: Vec::new(),
+            claims: Vec::new(),
             props: Vec::new(),
             creatures: Vec::new(),
             stairs: Vec::new(),

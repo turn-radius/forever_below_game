@@ -162,6 +162,7 @@ mod tests {
             lights: vec![],
             folk: vec![],
             factions: vec![],
+            claims: vec![],
             props: vec![],
             creatures: vec![],
             stairs: vec![],

@@ -149,7 +149,7 @@ impl Plugin for InventoryPlugin {
                         unhang_without_belt,
                         crate::enchanting::scrap_for_capture.run_if(|| env_flag("FB_SCRAP")),
                         crate::character::wear_abilities,
-                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions, sheet::update_enchanting).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions, sheet::update_factions, sheet::update_enchanting).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,

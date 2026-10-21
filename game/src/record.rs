@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use fb_items::Coins;
-use fb_level::{ItemSpot, Level};
+use fb_level::{CELL, Claim, ItemSpot, Level, settle_claims};
 use serde::{Deserialize, Serialize};
 
 use crate::carry::FloorItem;
@@ -49,6 +49,10 @@ use crate::props::{Container, PropPiece};
 #[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WorldRecord {
     pub levels: BTreeMap<u32, LevelRecord>,
+    /// The delver's standing with every faction of the world, shared by each level and lasting
+    /// the delve (#542).
+    #[serde(default)]
+    pub standings: fb_faction::Standings,
 }
 
 /// One level as it was left.
@@ -63,6 +67,11 @@ pub struct LevelRecord {
     /// Each folk, by their index in the level's folk.
     #[serde(default)]
     pub folk: BTreeMap<usize, FolkRecord>,
+    /// The ground each faction holds, as the delver left it: a faction down to one member holds
+    /// the one room they hold, and one with no one left holds none. `None` for a record from
+    /// before claims, which leaves the level's own.
+    #[serde(default)]
+    pub claims: Option<Vec<Claim>>,
 }
 
 /// A folk as they were left.
@@ -155,6 +164,12 @@ impl CreatureRecord {
 }
 
 impl WorldRecord {
+    /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
+    /// every faction at the start a delver of `alignment` has.
+    pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)) }
+    }
+
     /// The record of the level at `depth`, if it has been visited.
     pub fn level(&self, depth: u32) -> Option<&LevelRecord> {
         self.levels.get(&depth)
@@ -165,6 +180,9 @@ impl WorldRecord {
     pub fn apply_to(&self, level: &mut Level) {
         if let Some(saved) = self.level(level.depth) {
             level.items = saved.floor.iter().map(|f| f.spot).collect();
+            if let Some(claims) = &saved.claims {
+                level.claims = claims.clone();
+            }
         }
     }
 }
@@ -300,6 +318,16 @@ pub fn record_level_left(
             },
         );
     }
+    // Folk the record has no entry for are as generated. `level.0.claims` are the claims as the
+    // level was last left, so settling them only ever shrinks them.
+    let alive: Vec<Option<(f32, f32)>> = (0..level.0.folk.len())
+        .map(|i| match left.folk.get(&i) {
+            Some(f) if f.dead => None,
+            Some(f) => Some((f.at[0] / CELL, f.at[2] / CELL)),
+            None => Some((level.0.folk[i].x, level.0.folk[i].y)),
+        })
+        .collect();
+    left.claims = Some(settle_claims(&level.0, &alive));
     record.levels.insert(level.0.depth, left);
 }
 
@@ -387,6 +415,32 @@ mod tests {
     }
 
     #[test]
+    fn liveried_gear_keeps_its_colours_through_a_record() {
+        use armory::heraldry::{Field, Tincture};
+        use fb_items::outfit::{ArmourLean, Livery, outfit};
+        let field = Field { tincture: Tincture::Vert, tincture2: Tincture::Or, ..Field::default() };
+        let livery = Livery::from_field(field, ArmourLean::Plate);
+        let robe = outfit("mage").unwrap().roll_in(1, "human", fb_items::Odds::default(), Some(&livery)).worn.into_iter().find(|(_, i)| i.base == "Robe").unwrap().1;
+        let shield = (0..40)
+            .filter_map(|s| outfit("fighter").unwrap().roll_in(s, "human", fb_items::Odds::default(), Some(&livery)).worn.into_iter().find(|(_, i)| i.base == "Shield"))
+            .next()
+            .unwrap()
+            .1;
+        let mut inventory = Inventory::default();
+        let mut other = Inventory::default();
+        for item in [robe, shield] {
+            let want = item.shape.clone();
+            let id = inventory.add(item);
+            let record: ItemRecord = serde_json::from_str(&serde_json::to_string(&record_item(&inventory, id).unwrap()).unwrap()).unwrap();
+            let again = restore_item(&mut other, &record).unwrap();
+            assert_eq!(other.item(again).unwrap().shape, want);
+            if let armory::Item::Shield(s) = &other.item(again).unwrap().shape {
+                assert_eq!(s.field, field);
+            }
+        }
+    }
+
+    #[test]
     fn a_quiver_and_its_arrows_round_trip_and_a_loose_arrow_rolls_again() {
         let mut inventory = Inventory::default();
         let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
@@ -415,6 +469,78 @@ mod tests {
         let mut other = Inventory::default();
         let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
         assert_eq!(other.item(again), inventory.item(sword));
+    }
+
+    #[test]
+    fn standing_is_shared_by_a_factions_camps_on_every_level() {
+        let seed = 1207;
+        let params = fb_level::LevelParams::default();
+        let levels: Vec<_> = (1..=12).map(|d| fb_level::generate_in(seed, d, &params)).collect();
+        let faction = levels
+            .iter()
+            .flat_map(|l| l.factions.iter().map(|f| f.id))
+            .find(|id| levels.iter().filter(|l| l.folk.iter().any(|s| s.faction == *id)).count() >= 2)
+            .expect("a faction with camps on two levels");
+        let camps: Vec<_> = levels.iter().filter(|l| l.folk.iter().any(|s| s.faction == faction)).collect();
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, seed);
+        let before = record.standings.get(faction).value();
+        // Standing raised at a camp on one level reads the same at a camp on another.
+        record.standings.shift(faction, 25);
+        for level in camps {
+            let spot = level.folk.iter().find(|s| s.faction == faction).unwrap();
+            assert_eq!(record.standings.get(spot.faction).value(), before + 25, "depth {}", level.depth);
+        }
+    }
+
+    #[test]
+    fn a_new_delve_starts_standing_afresh_from_the_alignment() {
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::NeutralGood, 5);
+        let world = fb_faction::World::new(5);
+        let first = world.factions()[0].id;
+        let start = record.standings.get(first);
+        record.standings.shift(first, 60);
+        record.standings.turn_hostile(world.factions()[1].id);
+        assert_ne!(record.standings.get(first), start);
+        let fresh = WorldRecord::new_delve(fb_faction::Alignment::NeutralGood, 5);
+        assert_eq!(fresh.standings.get(first), start);
+        assert_eq!(fresh.standings.met().count(), 0);
+        assert!(fresh.levels.is_empty());
+    }
+
+    #[test]
+    fn a_faction_that_turns_reads_hostile_and_the_record_keeps_it() {
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 9);
+        let faction = fb_faction::World::new(9).factions().iter().find(|f| f.alignment == fb_faction::Alignment::LawfulGood).map_or(fb_faction::Faction(0), |f| f.id);
+        record.standings.turn_hostile(faction);
+        assert_eq!(record.standings.band(faction), fb_faction::Band::Hostile);
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(serde_json::from_str::<WorldRecord>(&json).unwrap(), record);
+    }
+
+    #[test]
+    fn claims_round_trip_and_come_back_as_left() {
+        let level = fb_level::generate(1207, 1);
+        let faction = level.claims[0].faction;
+        let mut alive: Vec<Option<(f32, f32)>> = level.folk.iter().map(|f| Some((f.x, f.y))).collect();
+        let members: Vec<usize> = (0..level.folk.len()).filter(|&i| level.folk[i].faction == faction).collect();
+        members[1..].iter().for_each(|&i| alive[i] = None);
+        let mut saved = LevelRecord::default();
+        saved.claims = Some(settle_claims(&level, &alive));
+        assert_eq!(saved.claims.as_ref().unwrap()[0].rooms.len(), 1);
+        let mut record = WorldRecord::default();
+        record.levels.insert(1, saved.clone());
+        let json = serde_json::to_string(&record).unwrap();
+        let record: WorldRecord = serde_json::from_str(&json).unwrap();
+        // Rebuilt from the seed, then made as it was left.
+        let mut again = fb_level::generate(1207, 1);
+        record.apply_to(&mut again);
+        assert_eq!(Some(&again.claims), saved.claims.as_ref());
+        // A level never visited keeps the generated claims, and a record from before claims has none to apply.
+        let mut fresh = fb_level::generate(1207, 1);
+        WorldRecord::default().apply_to(&mut fresh);
+        assert_eq!(fresh.claims, level.claims);
+        let old: LevelRecord = serde_json::from_str(r#"{"floor":[],"containers":{},"creatures":{}}"#).unwrap();
+        assert_eq!(old.claims, None);
     }
 
     #[test]

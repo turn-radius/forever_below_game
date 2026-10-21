@@ -93,6 +93,10 @@ pub fn vital_colour(vitals: &Vitals, vital: Vital) -> Color {
 #[derive(Component, Debug)]
 pub struct ConditionList;
 
+/// The sheet's factions section: the factions met this delve and how each stands with the delver.
+#[derive(Component)]
+pub struct FactionList;
+
 /// What the conditions section says when the delver is under none.
 pub const NO_CONDITIONS: &str = "No conditions";
 
@@ -286,6 +290,8 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
         });
         heading(sheet, fonts, "conditions");
         sheet.spawn((ConditionList, Name::new("Conditions"), Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }));
+        heading(sheet, fonts, "factions");
+        sheet.spawn((FactionList, Name::new("Factions"), Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }));
         heading(sheet, fonts, "enchanting");
         sheet.spawn((EnchantingLine, Text::new(NO_ENCHANTING), UiFonts::style(&fonts.body, 15.0, MUTED)));
         heading(sheet, fonts, "what your gear makes of you");
@@ -533,6 +539,63 @@ pub fn update_status(
     }
 }
 
+/// The line shown when no faction has been met.
+pub const NO_FACTIONS: &str = "You have met no one yet.";
+
+/// The factions met this delve with their band, in pool order: (name, band).
+pub fn faction_lines(record: &crate::record::WorldRecord, run_seed: u32) -> Vec<(String, fb_faction::Band)> {
+    let met: Vec<fb_faction::Faction> = record.standings.met().collect();
+    if met.is_empty() {
+        return Vec::new();
+    }
+    let world = fb_faction::World::new(run_seed);
+    met.into_iter().map(|f| (world.faction(f).name.clone(), record.standings.band(f))).collect()
+}
+
+/// The colour a band reads in.
+fn band_colour(band: fb_faction::Band) -> Color {
+    use fb_faction::Band::*;
+    match band {
+        Hostile => Color::srgb(0.85, 0.3, 0.25),
+        Wary => Color::srgb(0.85, 0.6, 0.25),
+        Neutral => MUTED,
+        Friendly => Color::srgb(0.55, 0.78, 0.4),
+        Allied => Color::srgb(0.4, 0.8, 0.7),
+    }
+}
+
+/// Fills the sheet's factions section: each faction met this delve and its band, or
+/// [`NO_FACTIONS`]. Rebuilt only when the section is new or standing changed.
+pub fn update_factions(
+    mut commands: Commands,
+    record: Option<Res<crate::record::WorldRecord>>,
+    abyss: Option<Res<crate::travel::Abyss>>,
+    lists: Query<(Entity, Ref<FactionList>)>,
+    fonts: Res<UiFonts>,
+) {
+    let changed = record.as_ref().is_some_and(|r| r.is_changed());
+    for (list, added) in &lists {
+        if !changed && !added.is_added() {
+            continue;
+        }
+        let lines = match (&record, &abyss) {
+            (Some(record), Some(abyss)) => faction_lines(record, abyss.run_seed),
+            _ => Vec::new(),
+        };
+        commands.entity(list).despawn_children().with_children(|list| {
+            if lines.is_empty() {
+                list.spawn((Text::new(NO_FACTIONS), UiFonts::style(&fonts.body, 15.0, MUTED)));
+            }
+            for (name, band) in lines {
+                list.spawn(Node { column_gap: px(12), ..default() }).with_children(|line| {
+                    line.spawn(Node { width: px(LABEL_PX), flex_shrink: 0.0, ..default() }).with_child((Text::new(name), UiFonts::style(&fonts.body, 15.0, INK)));
+                    line.spawn((Text::new(band.label()), UiFonts::style(&fonts.mono_bold, 14.0, band_colour(band))));
+                });
+            }
+        });
+    }
+}
+
 /// Fills the sheet's conditions section with the conditions the HUD shows ([`ShownConditions`]),
 /// worst first: each one's badge, name and what it does, or [`NO_CONDITIONS`]. Rebuilt only
 /// when the section is new or the conditions changed.
@@ -617,6 +680,17 @@ mod tests {
 
     fn meter_at(kind: MeterKind, value: f64) -> Meter {
         Meter { value, ..Meter::new(kind) }
+    }
+
+    #[test]
+    fn the_factions_section_lists_those_met_with_their_band() {
+        let mut record = crate::record::WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
+        assert!(faction_lines(&record, 4).is_empty());
+        let world = fb_faction::World::new(4);
+        let id = world.factions()[2].id;
+        record.standings.meet(id);
+        record.standings.turn_hostile(id);
+        assert_eq!(faction_lines(&record, 4), vec![(world.faction(id).name.clone(), fb_faction::Band::Hostile)]);
     }
 
     #[test]
