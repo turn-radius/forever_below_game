@@ -27,6 +27,7 @@ pub mod kills;
 pub mod folk_pose;
 pub mod folk_routine;
 pub mod footsteps;
+pub mod commission;
 pub mod forge_view;
 pub mod frame_time;
 pub mod game_clock;

@@ -31,6 +31,8 @@ pub trait Tweak: Resource + Component<Mutability = bevy::ecs::component::Mutable
     fn cycle(&mut self, _path: &str, _by: isize) {}
     /// Flips the toggle at `path`.
     fn flip(&mut self, _path: &str) {}
+    /// Sets the dye at `path` (a [`FieldKind::Colour`]) to `rgb`, one of [`dye_palette`].
+    fn set_colour(&mut self, _path: &str, _rgb: [f32; 3]) {}
     /// Changes whenever the set of parameters does (a new family), so the panel is rebuilt.
     fn structure(&self) -> u32;
     /// The slider at `path`'s value now.
@@ -118,6 +120,31 @@ pub fn option_label(option: &str) -> String {
     field_label(option)
 }
 
+/// The dyes a colour field offers as swatches: the faction livery's (a tincture's softer dye),
+/// the garment dyes, and undyed wool, browns, greys and blacks, each once.
+pub fn dye_palette() -> Vec<[f32; 3]> {
+    let mut dyes: Vec<armory::material::Rgb> = armory::heraldry::Tincture::ALL.iter().map(|t| t.dye()).collect();
+    dyes.extend(armory::fabric::Fabric::GARMENT_DYES);
+    dyes.extend([0xe9e2cf, 0xb59b72, 0x8a5a2b, 0x6b4a2f, 0x3b2a1e, 0x8a8a86, 0x55524e, 0x1c1b1a].map(armory::material::Rgb::hex));
+    let mut palette: Vec<[f32; 3]> = Vec::new();
+    for dye in dyes {
+        let rgb = [dye.0, dye.1, dye.2];
+        if !palette.iter().any(|p| colour_distance(*p, rgb) < 0.01) {
+            palette.push(rgb);
+        }
+    }
+    palette
+}
+
+/// How far apart two colours are: the largest channel difference.
+pub fn colour_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
+}
+
+fn srgb(rgb: [f32; 3]) -> Color {
+    Color::srgb(rgb[0], rgb[1], rgb[2])
+}
+
 /// The slider being dragged, from the press that caught it until the button comes up.
 #[derive(Resource, Default)]
 struct HeldSlider(Option<(String, Slider)>);
@@ -137,6 +164,15 @@ enum FieldControl {
     Slider(String, Slider),
     Cycle(String),
     Toggle(String),
+    /// A dye swatch: set the colour field at the path to it.
+    Swatch(String, [f32; 3]),
+}
+
+/// A swatch's border, lit when its dye is the field's now; or (no swatch) the field's own colour.
+#[derive(Component)]
+struct SwatchMark {
+    path: String,
+    rgb: Option<[f32; 3]>,
 }
 
 /// A field's value as text.
@@ -202,6 +238,7 @@ fn press_fields<T: Tweak>(
     body: Query<(&ComputedNode, &UiGlobalTransform), With<PanelBody>>,
     mut tweak: ResMut<T>,
     mut held: ResMut<HeldSlider>,
+    ui_scale: Option<Res<UiScale>>,
 ) {
     if !buttons.pressed(MouseButton::Left) {
         held.0 = None;
@@ -211,7 +248,7 @@ fn press_fields<T: Tweak>(
     if !(left || right) {
         return;
     }
-    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
+    let Some(point) = window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())) else { return };
     let Ok((node, transform)) = body.single() else { return };
     if !node_rect(node, transform).contains(point) {
         return;
@@ -221,6 +258,7 @@ fn press_fields<T: Tweak>(
         FieldControl::Slider(path, range) if left => held.0 = Some((path, range)),
         FieldControl::Cycle(path) => tweak.cycle(&path, if left { 1 } else { -1 }),
         FieldControl::Toggle(path) if left => tweak.flip(&path),
+        FieldControl::Swatch(path, rgb) if left => tweak.set_colour(&path, rgb),
         _ => {}
     }
 }
@@ -231,9 +269,10 @@ fn drag_slider<T: Tweak>(
     held: Res<HeldSlider>,
     controls: Query<(&FieldControl, &ComputedNode, &UiGlobalTransform)>,
     mut tweak: ResMut<T>,
+    ui_scale: Option<Res<UiScale>>,
 ) {
     let Some((path, range)) = held.0.clone() else { return };
-    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
+    let Some(point) = window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())) else { return };
     let Some((_, node, transform)) = controls.iter().find(|(c, ..)| matches!(c, FieldControl::Slider(p, _) if *p == path)) else { return };
     let target = value_at(&range, fraction_along(node_rect(node, transform), point.x));
     let snapped = if target >= range.max {
@@ -250,12 +289,12 @@ fn drag_slider<T: Tweak>(
 }
 
 /// Scrolling over the body moves it.
-fn scroll_panel(scroll: Res<AccumulatedMouseScroll>, window: Option<Single<&Window, With<PrimaryWindow>>>, mut body: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<PanelBody>>) {
+fn scroll_panel(scroll: Res<AccumulatedMouseScroll>, window: Option<Single<&Window, With<PrimaryWindow>>>, mut body: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<PanelBody>>, ui_scale: Option<Res<UiScale>>) {
     let lines = match scroll.unit {
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
-    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
+    let Some(point) = window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())) else { return };
     if lines == 0.0 {
         return;
     }
@@ -339,6 +378,26 @@ fn field_row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, field: &Field) 
                 ))
                 .with_child((FieldReadout::Choice(field.path.clone()), Text::new(option_label(value)), UiFonts::style(&fonts.body_medium, 16.0, INK)));
             }
+            FieldKind::Colour { value } => {
+                row.spawn(Node { flex_grow: 1.0, flex_wrap: FlexWrap::Wrap, column_gap: px(3), row_gap: px(3), align_items: AlignItems::Center, padding: UiRect::vertical(px(3)), ..default() })
+                    .with_children(|swatches| {
+                        swatches.spawn((
+                            SwatchMark { path: field.path.clone(), rgb: None },
+                            Node { width: px(26), height: px(26), margin: UiRect::right(px(5)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(4)), ..default() },
+                            BackgroundColor(srgb(*value)),
+                            BorderColor::all(INK),
+                        ));
+                        for rgb in dye_palette() {
+                            swatches.spawn((
+                                FieldControl::Swatch(field.path.clone(), rgb),
+                                SwatchMark { path: field.path.clone(), rgb: Some(rgb) },
+                                Node { width: px(18), height: px(18), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(3)), ..default() },
+                                BackgroundColor(srgb(rgb)),
+                                BorderColor::all(LINE),
+                            ));
+                        }
+                    });
+            }
             FieldKind::Toggle { value } => {
                 row.spawn((
                     FieldControl::Toggle(field.path.clone()),
@@ -404,6 +463,7 @@ fn refresh_fields<T: Tweak>(
     mut readouts: Query<(&FieldReadout, &mut Text)>,
     mut graphics: Query<(&SliderGraphic, &mut Node)>,
     mut marks: Query<(&ToggleMark, &mut Visibility)>,
+    mut swatches: Query<(&SwatchMark, &mut BackgroundColor, &mut BorderColor)>,
 ) {
     let fields = tweak.fields();
     let find = |path: &str| fields.iter().find(|f| f.path == path).map(|f| &f.kind);
@@ -429,6 +489,14 @@ fn refresh_fields<T: Tweak>(
             node.left = at;
         } else {
             node.width = at;
+        }
+    }
+    for (swatch, mut background, mut border) in &mut swatches {
+        let Some(FieldKind::Colour { value }) = find(&swatch.path) else { continue };
+        match swatch.rgb {
+            // The field's own colour.
+            None => background.0 = srgb(*value),
+            Some(rgb) => *border = BorderColor::all(if colour_distance(rgb, *value) < 0.01 { INK } else { LINE }),
         }
     }
     for (mark, mut visibility) in &mut marks {
@@ -458,6 +526,14 @@ mod tests {
         assert_eq!(format_value(1.0, 0.01), "1.00");
         assert_eq!(format_value(0.105, 0.005), "0.105");
         assert_eq!(format_value(0.0125, 0.0005), "0.0125");
+    }
+
+    #[test]
+    fn the_dye_palette_has_the_livery_dyes_once() {
+        let palette = dye_palette();
+        assert!(palette.len() >= 18, "{}", palette.len());
+        let gules = armory::heraldry::Tincture::Gules.dye();
+        assert_eq!(palette.iter().filter(|p| colour_distance(**p, [gules.0, gules.1, gules.2]) < 0.01).count(), 1);
     }
 
     #[test]

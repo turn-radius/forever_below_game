@@ -8,7 +8,9 @@
 //! - a bool is a [`FieldKind::Toggle`];
 //! - a unit enum (serialized as a string) is a [`FieldKind::Choice`], whose options are the
 //!   variants serde names when asked to read an unknown one;
-//! - everything else (the seed, colours, numbers with no declared range) is not listed.
+//! - an array of three numbers at a colour path ([`is_colour_path`]: a cloth's `color` and
+//!   `color2`, a `*_color`, `ink`, the material tints of the `palette`) is a [`FieldKind::Colour`];
+//! - everything else (the seed, numbers with no declared range) is not listed.
 //!
 //! Fields are named by a dotted path from the state: `head.radius`, `flame.fuel`, `cond.wear`.
 //! The section is the path without its last part. Sections and fields come in the order the
@@ -39,6 +41,8 @@ pub enum FieldKind {
     /// One of a few named options (an enum's variants, in snake case).
     Choice { value: String, options: Vec<String> },
     Toggle { value: bool },
+    /// A dye: an sRGB colour, 0..=1 per channel (see [`is_colour_path`]).
+    Colour { value: [f32; 3] },
 }
 
 /// What a probe string must never be: an option.
@@ -58,6 +62,26 @@ impl Item {
             }
         }
         fields
+    }
+
+    /// The dye at `path`, if there is one.
+    pub fn colour(&self, path: &str) -> Option<[f32; 3]> {
+        let (_, state) = self.tagged();
+        colour_in(state_at(&state, path)?)
+    }
+
+    /// Sets the dye at `path` (each channel clamped to 0..=1).
+    pub fn set_colour(&mut self, path: &str, rgb: [f32; 3]) -> Result<(), String> {
+        if !is_colour_path(path) {
+            return Err(format!("{path} is not a colour"));
+        }
+        let (_, mut state) = self.tagged();
+        let slot = state_at_mut(&mut state, path).ok_or_else(|| format!("no field {path}"))?;
+        if colour_in(slot).is_none() {
+            return Err(format!("{path} is not a colour"));
+        }
+        *slot = Value::Array(rgb.iter().map(|c| Number::from_f64(f64::from(c.clamp(0.0, 1.0))).map_or(Value::Null, Value::Number)).collect());
+        self.replace_state(state)
     }
 
     /// The sliders only, with their current values.
@@ -168,6 +192,10 @@ impl Item {
                     Some(range) => FieldKind::Slider { value: n.as_f64().unwrap_or_default() as f32, range },
                     None => continue,
                 },
+                Value::Array(_) if is_colour_path(&path) => match colour_in(value) {
+                    Some(rgb) => FieldKind::Colour { value: rgb },
+                    None => continue,
+                },
                 Value::Bool(on) => FieldKind::Toggle { value: *on },
                 Value::String(current) => {
                     let options = self.options_at(state, &path);
@@ -205,6 +233,24 @@ fn variants_in(message: &str) -> Vec<String> {
         return Vec::new();
     }
     message.split('`').skip(1).step_by(2).skip(1).map(str::to_string).collect()
+}
+
+/// Whether the array at `path` is a dye: a cloth's `color` or `color2`, a `*_color`, a `*_cloth`
+/// (a wrap's whole fabric), `ink`, a provision's `outer`, `inner`, `accent` and `liquid`, and the
+/// `palette`'s tints of wood, leather, cord and fletching (what a grip, strap or fletching is
+/// dyed). Not the etching's inlay or the palette's metals.
+pub fn is_colour_path(path: &str) -> bool {
+    let (root, name) = (path.split('.').next().unwrap_or_default(), path.rsplit('.').next().unwrap_or_default());
+    if root == "palette" {
+        return matches!(name, "wood" | "leather" | "cord" | "fletching");
+    }
+    root != "etch" && (matches!(name, "color" | "color2" | "ink" | "outer" | "inner" | "accent" | "liquid") || name.ends_with("_color") || name.ends_with("_cloth"))
+}
+
+fn colour_in(value: &Value) -> Option<[f32; 3]> {
+    let Value::Array(a) = value else { return None };
+    let [r, g, b] = a.as_slice() else { return None };
+    Some([r.as_f64()? as f32, g.as_f64()? as f32, b.as_f64()? as f32])
 }
 
 fn state_at<'a>(state: &'a Value, path: &str) -> Option<&'a Value> {
@@ -394,6 +440,7 @@ mod tests {
                         item.set_choice(&f.path, options.last().unwrap()).unwrap();
                     }
                     FieldKind::Toggle { value } => item.set_toggle(&f.path, !value).unwrap(),
+                    FieldKind::Colour { .. } => item.set_colour(&f.path, [0.2, 0.4, 0.6]).unwrap(),
                 }
             }
             let _ = item.build();
@@ -406,6 +453,18 @@ mod tests {
         item.set_condition(Condition::of(crate::cond::ConditionState::GraveFind));
         assert_eq!(item.slider("cond.wear"), Some(1.0));
         assert_eq!(item.condition().state, crate::cond::ConditionState::GraveFind);
+    }
+
+    #[test]
+    fn dyes_are_listed_and_set() {
+        let mut item = Item::roll(Family::Garment, 7).unwrap();
+        let colours: Vec<_> = item.fields().into_iter().filter(|f| matches!(f.kind, FieldKind::Colour { .. })).map(|f| f.path).collect();
+        assert!(colours.contains(&"cut.cloth.color".to_string()), "{colours:?}");
+        assert!(!colours.iter().any(|p| p == "etch.inlay" || p == "palette.iron"));
+        item.set_colour("cut.cloth.color", [0.1, 0.2, 2.0]).unwrap();
+        assert_eq!(item.colour("cut.cloth.color"), Some([0.1, 0.2, 1.0]));
+        assert!(item.set_colour("cut.fit", [0.0; 3]).is_err());
+        assert!(item.set_colour("etch.inlay", [0.0; 3]).is_err());
     }
 
     #[test]

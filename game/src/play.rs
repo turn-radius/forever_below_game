@@ -188,6 +188,8 @@ pub enum Screen {
     Map,
     /// A dialogue with a folk ([`crate::talk`]).
     Talk,
+    /// The commission screen ([`crate::commission`]).
+    Commission,
 }
 
 /// Which screen, if any, is open over the level. The level keeps drawing behind it, but the
@@ -330,7 +332,7 @@ impl Plugin for PlayPlugin {
             crate::map::MapPlugin,
         ))
         // Over the plugin tuple's limit.
-        .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin, crate::sight::SightPlugin, crate::dazzle::DazzlePlugin, crate::light::ShadowBudgetPlugin, crate::webs::WebsPlugin, crate::talk::TalkPlugin));
+        .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin, crate::sight::SightPlugin, crate::dazzle::DazzlePlugin, crate::light::ShadowBudgetPlugin, crate::webs::WebsPlugin, crate::talk::TalkPlugin, crate::commission::CommissionPlugin));
         if !app.is_plugin_added::<crate::ui::InterfaceScalePlugin>() {
             app.add_plugins(crate::ui::InterfaceScalePlugin);
         }
