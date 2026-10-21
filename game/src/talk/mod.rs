@@ -71,9 +71,10 @@ fn reset_talk(mut talk: ResMut<Talk>) {
     *talk = Talk::default();
 }
 
-/// Whether a service's screen exists to open. None do yet; whatever builds one flips its arm.
-pub fn service_ready(_service: Service) -> bool {
-    false
+/// Whether a service's screen exists to open: the enchanter's two ([`crate::enchanter`]).
+/// Whatever builds another flips its arm.
+pub fn service_ready(service: Service) -> bool {
+    matches!(service, Service::Enchant | Service::Scrap)
 }
 
 /// The delver chose a service of the folk they talk to, and its screen should open. Sent only for
@@ -318,14 +319,16 @@ fn end_talk(
         Ok((hostility, _, dead)) => dead || hostility.is_some_and(|h| h.is_hostile()),
         Err(_) => true,
     };
-    if open.is(Screen::Talk) && gone {
+    // The enchanter's bench is the talk going on, and holds the folk the same.
+    let talking = open.is(Screen::Talk) || open.is(Screen::Enchant);
+    if talking && gone {
         let turned = folk.get(entity).is_ok_and(|(hostility, _, dead)| !dead && hostility.is_some_and(|h| h.is_hostile()));
         if let (true, Some(speaker)) = (turned, talk.speaker.as_ref()) {
             toasts.say(format!("{} turns on you.", speaker.name));
         }
         show_screen(&mut open, None, cursor.as_deref_mut().map(|c| &mut **c));
     }
-    if !open.is(Screen::Talk) || gone {
+    if !talking || gone {
         if let Ok((_, Some(mut routine), _)) = folk.get_mut(entity) {
             routine.release();
         }

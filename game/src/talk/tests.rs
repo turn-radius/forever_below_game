@@ -249,3 +249,18 @@ fn leaving_the_delve_drops_the_talk() {
     app.update();
     assert_eq!(app.world().resource::<Talk>().folk, None);
 }
+
+#[test]
+fn an_enchanters_enchant_and_scrap_topics_send_the_service_on() {
+    let mut app = talk_app();
+    let trade = Some(Trade { profession: Profession::Enchanter, tier: Tier::Expert, style: None });
+    let folk = stand_in(&mut app, 0, trade, None);
+    talk_to(&mut app, folk);
+    // Who, Trade, Enchant, Scrap.
+    for (digit, service) in [(KeyCode::Digit3, Service::Enchant), (KeyCode::Digit4, Service::Scrap)] {
+        press(&mut app, digit);
+        let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
+        assert_eq!(sent, vec![ServiceChosen { folk, service }]);
+    }
+    assert_eq!(app.world().resource::<Talk>().answer, None, "the bench answers, not the panel");
+}

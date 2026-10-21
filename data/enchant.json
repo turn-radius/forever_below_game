@@ -1,0 +1,13 @@
+{
+ "essence": { "common": 6, "magic": 10, "rare": 24, "legendary": 60 },
+ "copper": { "common": 40, "magic": 100, "rare": 300, "legendary": 1000 },
+ "strip_keeps": 0.5,
+ "flaw_essence": 4,
+ "flaw_copper": 20,
+ "reforge_essence": { "magic": 5, "rare": 18, "legendary": 55 },
+ "reforge_copper": { "magic": 60, "rare": 200, "legendary": 700 },
+ "essence_by_tier": { "novice": 1.25, "apprentice": 1.0, "expert": 0.85, "master": 0.7 },
+ "copper_by_tier": { "novice": 0.6, "apprentice": 1.0, "expert": 1.5, "master": 2.5 },
+ "material_for": { "damage": "blood_salt", "to_hit": "seers_glass", "attack_rate": "quicksilver", "bane_": "wardstone" },
+ "default_material": "heartstone"
+}

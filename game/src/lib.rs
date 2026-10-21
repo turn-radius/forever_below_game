@@ -14,6 +14,7 @@ pub mod creature_view;
 pub mod creatures;
 pub mod doll_view;
 pub mod eat;
+pub mod enchanter;
 pub mod enchanting;
 pub mod exhaustion;
 pub mod exposure;

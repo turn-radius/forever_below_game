@@ -289,6 +289,33 @@ A smith, bowyer or tentmaker makes an item to order at the Armory's controls (`g
 
 The game keeps the delver's `EnchantingStock` in the `Enchanting` resource for the delve: it resets when a run begins. `enchanting::scrap_item` takes an item out of the inventory and adds its salvage (a bag with something in it is refused); the enchanter's talk (#350) will call it. The character sheet shows a line "Essence 38 · Gravesteel sliver ×1" under "enchanting".
 
+## Enchanting
+
+`fb_items::enchant` changes what an item carries at an enchanter's bench. Every function is pure and rebuilds the item through `Item::from_parts`, so the stats follow the affixes and the record of it round-trips. The numbers are our own, in `data/enchant.json`, kept apart from the item prices in `value.rs`.
+
+- **Adding.** `addable(item, tier)` lists good affixes from the pools the item could roll from (its tags and slot, `on`, `not` and `at`, held-back ones left out), none of a group it already has, with room left: at most one good prefix and two good suffixes, three good in all. `add(item, affix, &Enchanter)` puts one on.
+- **Rarity follows the good affixes**: none is common, one magic, two rare, three legendary. Adding raises it; stripping lowers it. An affix rolls only on its rarity or better (`least`), so it can only be added where the count it makes is at least that: of the Bat (legendary tier) goes on an item that already has two good affixes, and makes it legendary. A legendary made this way gets a legend as if rolled.
+- **Tiers.** A novice only strips flaws. An apprentice strips anything and adds magic-tier affixes (those that roll on a common or magic item), so makes magic items at most. An expert adds rare-tier ones and makes rare items, a master legendary-tier ones and legendary items. Legendaries themselves (their legends) are not worked on here (#557).
+- **Stripping.** `removable(item, tier)` and `remove(item, affix, &Enchanter)`. A flaw is cheap to take off; stripping Rusted also takes the rust off the shape. The item keeps the condition it has earned: only the difference between a fresh piece dressed for the old rarity and affixes and one dressed for the new moves its wear, rust, patina, rot and fray (stripping Rusted takes off the rust and the 0.75 wear the flaw set, and any wear beyond that stays); nicks and breaks stay, and the etching follows the new rarity.
+- **Reforging.** `reforge(item, seed, &Enchanter)` rolls every affix again at the item's rarity from the same pools as a fresh roll, flaws possible at the rarity's chance. It tries a few seeds so the result differs from what it had when it can. A common item has nothing to reforge, and a novice cannot.
+- **History.** Each change adds a line: "Enchanted by Ysolde, expert enchanter of the Ash Rite: of the Hawk.", "Stripped by ...: Rusted.", "Reforged by ...."
+- **Costs** (`add_cost`, `remove_cost`, `reforge_cost`), essence, coin and, for legendary-tier affixes, one special material. By the affix's tier (the rarity it rolls from) and scaled by the enchanter: a better enchanter wastes less essence and charges more coin.
+
+| Work | Essence | Coin | Material |
+|---|---|---|---|
+| Add a common-tier affix | 6 | 40 cp | none |
+| Add a magic-tier affix | 10 | 100 cp | none |
+| Add a rare-tier affix | 24 | 300 cp | none |
+| Add a legendary-tier affix | 60 | 1000 cp | one by its group (below) |
+| Strip a flaw | 4 | 20 cp | none |
+| Strip a good affix | half of adding it | half | none |
+| Reforge a magic item | 5 | 60 cp | none |
+| Reforge a rare item | 18 | 200 cp | none |
+
+By enchanter: essence ×1.25 novice, ×1.0 apprentice, ×0.85 expert, ×0.7 master; coin ×0.6, ×1.0, ×1.5, ×2.5. An expert stripping Rusted pays 3 essence and 30 cp; reforging a rare item is cheaper than choosing even one affix of it. Legendary-tier materials are Blood salt for damage, Seer's glass for to hit, Quicksilver bead for attack rate, Wardstone chip for any bane, and a Heartstone for the rest (the ones scrapping gives).
+
+In the game, the Enchant and Scrap topics of an enchanter's talk open the bench (`game/src/enchanter.rs`; the talk's `service_ready` is true for both). The left lists the gear the delver carries, worn or packed, richest first; the right shows the picked item's card, a Strip button on each affix, Reforge and the affixes the enchanter could add, each with its cost, and the card stays up as the result with its new history line. Costs come out of the delver's `Enchanting` stock and their carried purses (`enchanting::do_work`; there is no wallet yet, so coin is paid out of purses, the first ones first); short, nothing is spent and the screen says what is lacking. Scrap lists the same gear with what it would give, and shows what scrapping gave. `FB_ENCHANT=<select|strip|reforge|scrap>` with `FB_TALK=1 FB_TALK_TOPIC=<n>` fills the pack and stock and drives the bench for captures. The inventory icon is keyed by base, seed and the item's history length, so it is drawn again after enchanting. Payment is all or nothing: the new purses are worked out first, and stock and purses change only if the whole cost is covered.
+
 ## Stock
 
 `fb_items::stock::stock(&Shop, depth, seed)` rolls what a trader has to sell, a pure function of its arguments. `Trade::shop(maker, faction)` in `fb_faction` makes the `Shop` from a folk's trade (the types are mirrored in `fb_items` because `fb_faction` sits above it in the crate graph). `cargo run -p fb_faction --example stock -- armorer master mail 8` prints a shelf with values.

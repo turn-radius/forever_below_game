@@ -276,6 +276,19 @@ impl Inventory {
         self.item(container).and_then(|c| c.profile.holds.as_ref()).is_none_or(|g| g.takes(item.shape.family()))
     }
 
+    /// Puts `item` in the place of `id`'s, for what an enchanter has changed (its affixes, name
+    /// and history): the same base and footprint, so where it lies stays. `false`, and nothing
+    /// changes, for an unknown id or another base.
+    pub fn replace_item(&mut self, id: ItemId, item: Item) -> bool {
+        match self.items.get_mut(&id) {
+            Some(old) if old.base == item.base && old.profile.footprint == item.profile.footprint => {
+                *old = item;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Mutable access to the shape of `id`, for state that changes in play (the arrow nocked
     /// on a bow, the ammunition a quiver shows). Not for changing what the item is.
     pub fn shape_mut(&mut self, id: ItemId) -> Option<&mut armory::Item> {

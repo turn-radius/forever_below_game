@@ -12,6 +12,7 @@ pub mod commission;
 pub mod contents;
 pub mod dice;
 pub mod dress;
+pub mod enchant;
 pub mod foe;
 pub mod footprint;
 pub mod item;
