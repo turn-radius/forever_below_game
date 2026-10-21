@@ -316,7 +316,7 @@ fn fits<'a>(level: &Level, room: &Room, x: f32, y: f32, mut others: impl Iterato
 /// Whether cell `(x, y)` is beside a doorway, or diagonally beside one, so nobody stands in
 /// the way in or out.
 pub(crate) fn by_door(level: &Level, x: i32, y: i32) -> bool {
-    (-1..=1).any(|dy| (-1..=1).any(|dx| level.cell(x + dx, y + dy) == Cell::Door))
+    (-1..=1).any(|dy| (-1..=1).any(|dx| level.cell(x + dx, y + dy).is_doorway()))
 }
 
 #[cfg(test)]

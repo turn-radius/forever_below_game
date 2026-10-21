@@ -28,11 +28,27 @@ pub enum Cell {
     /// pathing and sight treat it as rock; it is not open. Unlike rock it stands inside a room,
     /// so the walls drawn on its faces are a stand-in until the geometry draws a real column.
     Column,
+    /// Iron bars: the fronts and partitions of a cell block ([`past`]). Solid to walking and
+    /// pathing like rock, but clear to sight.
+    Bars,
+    /// A gate in the bars of a cell block: open floor, drawn as a barred gate.
+    Gate,
 }
 
 impl Cell {
     pub fn is_open(self) -> bool {
-        !matches!(self, Cell::Rock | Cell::Column)
+        !matches!(self, Cell::Rock | Cell::Column | Cell::Bars)
+    }
+
+    /// Whether sight passes through the cell: open cells and bars.
+    pub fn is_clear(self) -> bool {
+        self.is_open() || self == Cell::Bars
+    }
+
+    /// Whether it is a way through a wall or bars that nothing should stand in or beside: a
+    /// door or a cell block's gate.
+    pub fn is_doorway(self) -> bool {
+        matches!(self, Cell::Door | Cell::Gate)
     }
 }
 
@@ -171,6 +187,12 @@ pub struct Level {
     pub stairs: Vec<Stair>,
     /// Webs hung in the room where giant spiders nest ([`wild`]).
     pub webs: Vec<WebSpot>,
+    /// What the level was built for, if it remembers ([`past`]).
+    #[serde(default)]
+    pub past: Option<Past>,
+    /// What each room of [`Level::rooms`] was built for, indexed by room ([`past`]).
+    #[serde(default)]
+    pub purposes: Vec<Option<Purpose>>,
 }
 
 impl Level {
@@ -298,6 +320,7 @@ pub mod finish;
 pub mod folk;
 mod generate;
 pub mod params;
+pub mod past;
 pub mod sight;
 pub mod path;
 pub mod props;
@@ -316,6 +339,7 @@ pub use finish::{Character, DoorStyle, Finish, Finishes, FloorFinish, Quarter, W
 pub use generate::{generate, generate_for, generate_in, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;
+pub use past::{Past, Purpose};
 pub use doorkind::{DoorKind, STEEL_PICK_PENALTY, SwitchKind};
 pub use roles::{ClaimDoor, RoomRole};
 pub use rooms::RoomGraph;

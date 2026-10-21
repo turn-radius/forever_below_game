@@ -92,13 +92,14 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 17322507725479787400, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge");
+    assert_eq!(all_levels_hash(), 5884638954986930984, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge, and again when levels took a past and cell blocks were carved (#587)");
 }
 
 /// A hash of every level's layout, items and lights, which come before the folk in the level's
 /// streams. Since #546 the lights include a brazier added to each claimed hall and hearth that had
 /// none, so the lights, and with them this hash, changed on purpose (and again for #569, when a hearth's brazier became a campfire light, one fire to a room); walls, rooms and items did not
-/// move. Before that, factions from the world seed (#536) moved the folk only; the props, stairs, webs and
+/// move. #587 carved cell blocks in the rooms a level's past puts to that purpose, changing cells on
+/// purpose; the items and lights that would have stood on the bars moved with them. Before that, factions from the world seed (#536) moved the folk only; the props, stairs, webs and
 /// creatures read where folk stand (to keep clear of them and out of their rooms), so those moved
 /// with them and are held by [`levels_match_those_before_finishes`] instead. It names fields, so
 /// it reads levels from before `factions` existed too.
@@ -121,5 +122,5 @@ fn all_levels_before_folk_hash() -> u64 {
 
 #[test]
 fn layout_items_and_lights_match_those_before_factions() {
-    assert_eq!(all_levels_before_folk_hash(), 13023108855730021471, "snapshot of everything before the folk");
+    assert_eq!(all_levels_before_folk_hash(), 16606506346497781759, "snapshot of everything before the folk; retaken when cell blocks were carved (#587)");
 }

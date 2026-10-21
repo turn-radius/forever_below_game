@@ -777,9 +777,10 @@ mod tests {
             }
         }
         assert!(beds_all * 3 >= members_all * 2, "{beds_all} bedrolls for {members_all} folk");
-        // Measured: 26 of 312 (8.3%); 20 of 311 before the hearth's campfire (#569), which takes
+        // Measured: 27 of 312 (8.7%); 26 before cell blocks (#587), whose bars leave a claim that
+        // moves into one less wall; 20 of 311 before the hearth's campfire (#569), which takes
         // a little of the room a one-room claim has left for its bedrolls.
-        assert!(bare * 35 <= claims * 3, "{bare} of {claims} sleeping rooms have no bedroll");
+        assert!(bare * 100 <= claims * 9, "{bare} of {claims} sleeping rooms have no bedroll");
     }
 
     #[test]

@@ -86,6 +86,10 @@ level_params! {
         cells_per_item: u32 = 10, 2.0, 40.0, 1.0; "Room cells for each item of loot."
         items_per_room_max: u32 = 5, 1.0, 12.0, 1.0; "Most loot in one room, before the odd extra."
     }
+    past {
+        past_chance: f64 = 0.5, 0.0, 1.0, 0.01; "Chance a level remembers a past (a hold, a temple, a prison) that gave its rooms purposes."
+        purpose_share: f64 = 0.4, 0.0, 1.0, 0.01; "Share of a remembering level's rooms, the starting room aside, put to a purpose; the rest stand bare."
+    }
     finish {
         moss_amount: f32 = 1.0, 0.0, 1.0, 0.05; "How strongly the damp field grows moss: none at 0. The first level has none whatever this is."
         grotto_chance: f64 = 0.04, 0.0, 1.0, 0.01; "Chance a room is a grotto, patchily mossy throughout, whatever its quarter; rare by default."
@@ -119,6 +123,8 @@ impl LevelParams {
                 turn_cost: 12,
                 loop_chance: 0.4,
                 brazier_min_area: 30,
+                past_chance: 0.9,
+                purpose_share: 0.7,
                 ..Self::default()
             },
         }

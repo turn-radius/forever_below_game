@@ -181,7 +181,11 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         creatures: Vec::new(),
         stairs: Vec::new(),
         webs: Vec::new(),
+        past: None,
+        purposes: Vec::new(),
     };
+    // The past first, so a prison can make cell blocks of its great halls; columns keep out of them.
+    crate::past::settle_past(&mut level, layout_seed, p);
     if style == LevelStyle::StoneHalls {
         // A level of stone halls has a colonnade; a layout with no hall to hold one is tried
         // again, until the parameters are relaxed. Params that make no such hall (no halls, small
@@ -644,7 +648,8 @@ fn route(grid: &Grid, blocked: &[bool], from: (i32, i32), heading: Facing, to: (
 const COLONNADE_LONG: u32 = 7;
 const COLONNADE_SHORT: u32 = 5;
 
-/// Sets two rows of columns down each hall long and wide enough, apart from the starting room.
+/// Sets two rows of columns down each hall long and wide enough, apart from the starting room and
+/// any cell block.
 /// The rows run one cell in from the long walls and every other cell along them, so a ring of
 /// open floor stays round the walls, the gaps between columns join it to the aisle, and nobody
 /// is walled off. The two cells straight in from each door are kept clear. Returns how many
@@ -654,7 +659,7 @@ fn colonnade_halls(level: &mut Level) -> usize {
     let mut columns = Vec::new();
     for (i, room) in level.rooms.iter().enumerate() {
         let (long, short) = (room.w.max(room.h), room.w.min(room.h));
-        if Some(i) == start_room || long < COLONNADE_LONG || short < COLONNADE_SHORT {
+        if Some(i) == start_room || long < COLONNADE_LONG || short < COLONNADE_SHORT || level.purpose_of(i) == Some(crate::Purpose::CellBlock) {
             continue;
         }
         let along_x = room.w >= room.h;
@@ -683,7 +688,7 @@ fn colonnade_halls(level: &mut Level) -> usize {
 pub(crate) fn straight_in_from_a_door(level: &Level, x: i32, y: i32) -> bool {
     Facing::ALL.iter().any(|f| {
         let (dx, dy) = f.step();
-        (1..=2).any(|k| level.cell(x - dx * k, y - dy * k) == Cell::Door)
+        (1..=2).any(|k| level.cell(x - dx * k, y - dy * k).is_doorway())
     })
 }
 
@@ -696,7 +701,10 @@ fn furnish(level: &mut Level, rng: &mut Mulberry32, p: &LevelParams) {
     let start_room = level.start_room().expect("the entrance leads into a room");
     let start_light = start_light(level, rng);
     level.items.push(start_light);
-    level.lights = place_lights(level, start_room, rng, p.brazier_min_area);
+    let mut lights = place_lights(level, start_room, rng, p.brazier_min_area);
+    // A glowcap at a wall's foot may fall on a cell block's bars, and goes.
+    lights.retain(|l| level.cell(l.x.floor() as i32, l.y.floor() as i32) == Cell::Floor);
+    level.lights = lights;
     let loot = scatter_items(level, start_room, rng, p);
     level.items.extend(loot);
 }
@@ -893,12 +901,12 @@ fn free_spot(level: &Level, room: &Room, taken: &[(f32, f32)], rng: &mut Mulberr
         let cy = rng.int(room.y, room.y + room.h - 1) as i32;
         let x = cx as f32 + rng.range_f32(0.25, 0.75);
         let y = cy as f32 + rng.range_f32(0.25, 0.75);
-        if level.cell(cx, cy) == Cell::Column {
+        if !level.is_open(cx, cy) || level.cell(cx, cy) == Cell::Gate {
             return None;
         }
         let by_door = Facing::ALL.iter().any(|f| {
             let (dx, dy) = f.step();
-            level.cell(cx + dx, cy + dy) == Cell::Door
+            level.cell(cx + dx, cy + dy).is_doorway()
         });
         let crowded = taken.iter().any(|&(tx, ty)| (tx - x).hypot(ty - y) < spacing);
         (!by_door && !crowded).then_some((x, y))
@@ -1154,13 +1162,13 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when levels took a past (#587: seed 64's first level is a prison with a cell block).
         let before = [
             (0u32, 0x3f1ef43848af9f4bu64),
             (1, 0xfecd367d473ca611),
             (2, 0x28caf334b99fda9),
             (7, 0xc65fe113135810cd),
-            (64, 0x8786aec0b970f319),
+            (64, 0xb9745e80eb842b71),
             (1207, 0xeb6d2ec3e7c03ea2),
             (4242, 0x40c986312855b474),
             (u32::MAX, 0x791ee77a5145fa97),
@@ -1378,7 +1386,7 @@ mod tests {
                 let mut furthest = 0;
                 for y in 0..level.height as i32 {
                     for x in 0..level.width as i32 {
-                        let near_door = (-1..=1).any(|dy| (-1..=1).any(|dx| level.cell(x + dx, y + dy) == Cell::Door));
+                        let near_door = (-1..=1).any(|dy| (-1..=1).any(|dx| matches!(level.cell(x + dx, y + dy), Cell::Door | Cell::Gate | Cell::Bars)));
                         for facing in Facing::ALL {
                             let (dx, dy) = facing.step();
                             let (px, py) = (x - dx, y - dy);
