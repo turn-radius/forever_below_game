@@ -133,3 +133,35 @@ fn factions_vary_across_a_world() {
     let intentions: HashSet<Intention> = world.factions().iter().map(|f| f.intention).collect();
     assert!(folk.len() >= 4 && intentions.len() >= 3, "{folk:?} {intentions:?}");
 }
+
+#[test]
+fn masters_work_from_level_six_one_to_a_trade_on_a_level() {
+    let rules = TradeRules::DEFAULT;
+    for seed in WORLDS {
+        let world = World::new(seed);
+        let masters = world.masters(&rules);
+        assert_eq!(masters, world.masters(&rules));
+        for depth in 1..=rules.deepest_master {
+            let here: Vec<_> = masters.on(depth).collect();
+            let kinds: HashSet<_> = here.iter().map(|m| m.profession).collect();
+            assert_eq!(kinds.len(), here.len());
+            assert!(here.len() <= 2 && (here.is_empty() || depth >= rules.master_from));
+            for m in here {
+                assert_eq!(m.style.is_some(), m.profession.is_smith());
+            }
+        }
+        // Every trade has a master somewhere below, to hear a rumour of.
+        for p in Profession::TRADES {
+            assert!(masters.deeper(p, 1).is_some(), "world {seed}: no {p:?} master");
+        }
+    }
+}
+
+#[test]
+fn trades_read_as_the_folk_card_writes_them() {
+    let t = |profession, tier, style| Trade { profession, tier, style }.label();
+    assert_eq!(t(Profession::Weaponsmith, Tier::Apprentice, Some(Style::Blades)), "Apprentice weaponsmith (blades)");
+    assert_eq!(t(Profession::Alchemist, Tier::Master, None), "Master alchemist");
+    assert_eq!(Trade::guard().label(), "Guard");
+    assert!(Tier::Novice < Tier::Apprentice && Tier::Apprentice < Tier::Expert && Tier::Expert < Tier::Master);
+}

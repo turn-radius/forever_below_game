@@ -459,6 +459,8 @@ pub struct FolkCardText {
     /// Their folk and faction, and how the faction stands with the delver: "Dwarf of the Ash
     /// Choir \u{b7} Wary".
     pub line: String,
+    /// Their trade under the name line, if they have one: "Apprentice weaponsmith (blades)".
+    pub trade: Option<String>,
     /// What they wear and what they hold, each item's name and rarity.
     pub wears: Vec<(String, Rarity)>,
     pub holds: Vec<(String, Rarity)>,
@@ -471,6 +473,7 @@ pub fn folk_card_text(person: &Person, band: fb_faction::Band) -> FolkCardText {
     FolkCardText {
         name: person.name.clone(),
         line: format!("{} of {} \u{b7} {}", person.spot.folk.race().label, person.faction.name, band.label()),
+        trade: person.spot.trade.map(|t| t.label()),
         wears: names(&mut person.worn()),
         holds: names(&mut person.held()),
     }
@@ -541,6 +544,9 @@ fn fill_folk_card(commands: &mut Commands, card: Entity, text: &FolkCardText, pr
     commands.entity(card).despawn_children().with_children(|card| {
         card.spawn((Text::new(text.name.clone()), UiFonts::style(&fonts.display, 22.0, INK)));
         card.spawn((Text::new(text.line.clone()), UiFonts::style(&fonts.body_italic, 15.0, MUTED)));
+        if let Some(trade) = &text.trade {
+            card.spawn((Text::new(trade.clone()), UiFonts::style(&fonts.body, 15.0, INK)));
+        }
         for (heading, items) in [("Wears", &text.wears), ("Holds", &text.holds)] {
             if items.is_empty() {
                 continue;
@@ -823,6 +829,17 @@ mod tests {
                 assert!(person.gear.iter().any(|(_, item)| item.title() == name && item.rarity == *rarity), "{name}");
             }
         }
+    }
+
+    #[test]
+    fn the_card_shows_the_trade_under_the_name_and_nothing_for_plain_folk() {
+        use fb_level::Trade;
+        let spot = folk_1207()[0];
+        let card = |trade| folk_card_text(&person_1207(&FolkSpot { trade, ..spot }), fb_faction::Band::Neutral).trade;
+        assert_eq!(card(None), None);
+        assert_eq!(card(Some(Trade::guard())).as_deref(), Some("Guard"));
+        let smith = Trade { profession: fb_faction::Profession::Weaponsmith, tier: fb_faction::Tier::Apprentice, style: Some(fb_faction::Style::Blades) };
+        assert_eq!(card(Some(smith)).as_deref(), Some("Apprentice weaponsmith (blades)"));
     }
 
     #[test]

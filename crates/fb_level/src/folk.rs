@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::claims::MIN_ROOM_AREA;
 use crate::generate::{is_colonnaded, item_seed, shuffle};
 use crate::{Cell, Level, Room};
-pub use fb_faction::{Faction, FactionSpec};
+pub use fb_faction::{Faction, FactionSpec, Trade};
 
 /// Someone standing in the level, at a point in grid coordinates (cells, fractional).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -28,6 +28,9 @@ pub struct FolkSpot {
     /// Rolls their body, name and outfit.
     pub seed: u32,
     pub faction: Faction,
+    /// Their profession, tier and style, if they have one ([`crate::trades`]).
+    #[serde(default)]
+    pub trade: Option<Trade>,
 }
 
 impl FolkSpot {
@@ -133,7 +136,7 @@ impl Gathering {
             // Facing the centre, give or take: yaw 0 faces -y, so the yaw toward `(dx, dy)` is
             // `atan2(-dx, -dy)`.
             let yaw = (x - cx).atan2(y - cy) + rng.range_f32(-0.3, 0.3);
-            placed.push(FolkSpot { x, y, yaw, folk, seed: item_seed(rng), faction: faction.id });
+            placed.push(FolkSpot { x, y, yaw, folk, seed: item_seed(rng), faction: faction.id, trade: None });
         }
         placed
     }
@@ -322,7 +325,7 @@ mod tests {
 
     #[test]
     fn facing_follows_the_yaw() {
-        let spot = |yaw: f32| FolkSpot { x: 0.0, y: 0.0, yaw, folk: Folk::Human, seed: 0, faction: Faction(0) };
+        let spot = |yaw: f32| FolkSpot { x: 0.0, y: 0.0, yaw, folk: Folk::Human, seed: 0, faction: Faction(0), trade: None };
         let (dx, dy) = spot(crate::Facing::North.yaw()).facing();
         assert!(dx.abs() < 1e-6 && (dy + 1.0).abs() < 1e-6);
         let (dx, dy) = spot(crate::Facing::West.yaw()).facing();

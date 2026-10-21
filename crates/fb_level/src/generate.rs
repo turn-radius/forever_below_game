@@ -200,6 +200,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
     let held: Vec<_> = level.claims.iter().map(|c| c.faction).collect();
     level.factions.retain(|s| held.contains(&s.id));
     level.folk = place_folk(&level, &strengths, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
+    crate::trades::assign(&mut level, world_seed, layout_seed);
     Some((level, layout_seed))
 }
 
@@ -1124,16 +1125,16 @@ mod tests {
         // (`Family::Writing`), which moves the weighted pick of every floor item, and again when
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
-        // shuffle that sets the groups), and again when folk moved into their factions' claims (#541).
+        // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when folk gained a trade (#544).
         let before = [
-            (0u32, 0x9df7e2f0fadd256du64),
-            (1, 0x803719a0b837c4d0),
-            (2, 0x641f2f5c5fee8b29),
-            (7, 0x809bcf89952da82f),
-            (64, 0x8090455ae5d7f9fc),
-            (1207, 0x1bd582756296e1ea),
-            (4242, 0xd6ee95147fc96e24),
-            (u32::MAX, 0xb41fe82cdd9e03e3),
+            (0u32, 0x57e2ce4be17e9d54u64),
+            (1, 0x270f83047106bde1),
+            (2, 0x560236c91ffe661c),
+            (7, 0x9b315423aa3ad24f),
+            (64, 0x9f2b4cd96229fca5),
+            (1207, 0x8f07b55b531bd3ef),
+            (4242, 0x66c95fd651d20b87),
+            (u32::MAX, 0xf83eba674781c1ed),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

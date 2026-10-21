@@ -17,6 +17,9 @@
 
 use std::collections::HashSet;
 
+mod trade;
+pub use trade::{Master, Masters, Profession, Style, Tier, Trade, TradeRules, armour_style};
+
 use armory::families::shield::roll_field;
 use armory::heraldry::{Division, Field};
 use fb_body::Folk;
