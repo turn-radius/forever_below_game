@@ -377,6 +377,15 @@ mod tests {
     }
 
     #[test]
+    fn hardly_a_level_is_left_without_folk() {
+        // The regrow falls back to claims of one when no room can hold a claim of three, so a
+        // level ends with no claim only where no room can start one at all.
+        let empty: Vec<_> = sweep().filter(|&(seed, depth)| generate(seed, depth).claims.is_empty()).collect();
+        let total = sweep().count();
+        assert!(empty.len() * 50 <= total, "{} of {total} levels have no claim: {:?}", empty.len(), empty);
+    }
+
+    #[test]
     fn wild_ground_stays_connected() {
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);

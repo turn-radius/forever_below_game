@@ -213,12 +213,14 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         light_roles(&mut trial, &mut Mulberry32::new(layout_seed ^ ROLE_SALT));
         trial.folk = place_folk(&trial, &strengths, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
         let empty: Vec<usize> = trial.claims.iter().zip(&strengths).filter(|(c, want)| trial.folk.iter().filter(|f| f.faction == c.faction).count() < (**want).min(need)).map(|(c, _)| c.rooms[0]).collect();
-        if empty.is_empty() {
+        // A level with no ground for a claim of three settles for claims of one: when every claim
+        // of this round came up short, or none was left to grow.
+        let all_short = empty.len() == trial.claims.len();
+        if empty.is_empty() && !(trial.claims.is_empty() && need > 1) {
             break trial;
         }
         cramped.extend(empty);
-        // A level with no ground for a claim of three settles for claims of one.
-        if trial.claims.len() == cramped.len() && need > 1 {
+        if all_short && need > 1 {
             need = 1;
             cramped.clear();
         }

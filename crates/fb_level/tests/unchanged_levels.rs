@@ -92,7 +92,7 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 18206639958770040709, "snapshot taken before finishes");
+    assert_eq!(all_levels_hash(), 16094505697424005001, "snapshot taken before finishes");
 }
 
 /// A hash of every level's layout, items and lights, which come before the folk in the level's
@@ -121,5 +121,5 @@ fn all_levels_before_folk_hash() -> u64 {
 
 #[test]
 fn layout_items_and_lights_match_those_before_factions() {
-    assert_eq!(all_levels_before_folk_hash(), 862614090297004479, "snapshot of everything before the folk");
+    assert_eq!(all_levels_before_folk_hash(), 4069132447458445395, "snapshot of everything before the folk");
 }
