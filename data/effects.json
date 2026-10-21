@@ -86,5 +86,23 @@
       { "kind": "sight", "at_full": 0.5 },
       { "kind": "glare", "at_full": 0.55 }
     ]
+  },
+  "swift": {
+    "name": "Swift",
+    "stages": [{ "at": 0.0, "word": "Swift", "severity": "good" }],
+    "hours": 1.0,
+    "influences": [{ "kind": "pace", "at_full": 1.25 }]
+  },
+  "wakeful": {
+    "name": "Wakeful",
+    "stages": [{ "at": 0.0, "word": "Wakeful", "severity": "good" }],
+    "hours": 8.0,
+    "influences": [{ "kind": "need_rate", "meter": "Sleepiness", "at_full": 0.2 }]
+  },
+  "full_bellied": {
+    "name": "Full-bellied",
+    "stages": [{ "at": 0.0, "word": "Full-bellied", "severity": "good" }],
+    "hours": 8.0,
+    "influences": [{ "kind": "need_rate", "meter": "Hunger", "at_full": 0.3 }]
   }
 }

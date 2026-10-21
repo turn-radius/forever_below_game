@@ -42,11 +42,12 @@ impl Staging {
     /// The parts of `level`, its floor items and containers' loot rolled against `odds`.
     pub fn make(level: &Level, odds: Odds) -> Self {
         let creatures = build_creatures(&level.creatures, level.depth);
+        let names = level.faction_names();
         let items = level
             .items
             .iter()
             .map(|spot| {
-                let item = fb_items::roll_loot(spot.family, spot.seed, odds)?;
+                let item = fb_items::roll_loot(spot.family, spot.seed, odds)?.in_world(&names);
                 let mesh = item.shape.build();
                 Some((item, mesh))
             })
@@ -56,18 +57,20 @@ impl Staging {
             .iter()
             .map(|spot| {
                 let (mesh, appearance) = prop_mesh(spot, level, false);
-                StagedProp { mesh, appearance, contents: contents_of(spot.prop, odds) }
+                StagedProp { mesh, appearance, contents: contents_of(spot.prop, odds, &names) }
             })
             .collect();
         Staging { creatures, items, props, fixtures: FixtureShapes::make(level), odds }
     }
 }
 
-/// What `prop` holds when its loot rolls against `odds`: nothing for scenery.
-fn contents_of(prop: Prop, odds: Odds) -> Vec<Item> {
+/// What `prop` holds when its loot rolls against `odds`: nothing for scenery or a stall set out
+/// empty ([`fb_level::NO_LOOT`]).
+fn contents_of(prop: Prop, odds: Odds, names: &[String]) -> Vec<Item> {
     match prop {
-        Prop::Container { style, loot, .. } => fb_items::roll_contents(style, loot, odds),
-        Prop::Scenery { .. } => Vec::new(),
+        Prop::Container { loot, .. } if loot == fb_level::NO_LOOT => Vec::new(),
+        Prop::Container { style, loot, .. } => fb_items::roll_contents(style, loot, odds).into_iter().map(|i| i.in_world(names)).collect(),
+        Prop::Scenery { .. } | Prop::Campfire { .. } => Vec::new(),
     }
 }
 
@@ -124,8 +127,9 @@ impl Staged {
     pub fn take_props(&mut self, level: &Level, odds: Odds) -> Option<Vec<StagedProp>> {
         let mut props = self.take_with(level, |s| &mut s.props, |p| p.len() == level.props.len())?;
         if self.odds != odds {
+            let names = level.faction_names();
             for (staged, spot) in props.iter_mut().zip(&level.props) {
-                staged.contents = contents_of(spot.prop, odds);
+                staged.contents = contents_of(spot.prop, odds, &names);
             }
         }
         Some(props)
@@ -166,7 +170,7 @@ mod tests {
         assert!(staged.take_items(&level, after).is_none(), "the floor is rolled in place");
         let props = staged.take_props(&level, after).expect("the shapes still serve");
         for (spot, prop) in level.props.iter().zip(&props) {
-            assert_eq!(prop.contents, contents_of(spot.prop, after), "{spot:?}");
+            assert_eq!(prop.contents, contents_of(spot.prop, after, &level.faction_names()), "{spot:?}");
         }
     }
 
@@ -184,7 +188,7 @@ mod tests {
 
             assert_eq!(staging.items.len(), level.items.len());
             for (spot, staged) in level.items.iter().zip(&staging.items) {
-                let rolled = fb_items::roll_loot(spot.family, spot.seed, Odds::loot(depth));
+                let rolled = fb_items::roll_loot(spot.family, spot.seed, Odds::loot(depth)).map(|i| i.in_world(&level.faction_names()));
                 assert_eq!(rolled.as_ref(), staged.as_ref().map(|(item, _)| item), "depth {depth}: the loot");
                 if let (Some(item), Some((_, mesh))) = (&rolled, staged) {
                     assert_eq!(&item.shape.build(), mesh, "depth {depth}: its shape");
@@ -205,7 +209,7 @@ mod tests {
                 // A container stocked from the staged contents holds what one stocked in place does.
                 let (mut ahead, mut here) = (Inventory::default(), Inventory::default());
                 let stocked_ahead = stock_container_with(&mut ahead, spot.prop, staged.contents.clone());
-                let stocked_here = stock_container(&mut here, spot.prop, Odds::loot(depth));
+                let stocked_here = stock_container(&mut here, spot.prop, Odds::loot(depth), &level.faction_names());
                 assert_eq!(stocked_ahead.is_some(), stocked_here.is_some());
                 if let (Some(a), Some(h)) = (stocked_ahead, stocked_here) {
                     let (a, h) = (record_contents(&ahead, a), record_contents(&here, h));

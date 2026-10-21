@@ -45,7 +45,7 @@ pub struct CardText {
     /// The keys and verbs at the foot, from [`crate::interact::key_actions`]: ("F", "Take").
     /// [`card_text`] leaves it empty; [`show_card`] fills it from the keymap and the item's place.
     pub actions: Vec<(String, &'static str)>,
-    /// A legendary's three lines of history.
+    /// A legendary's three lines of history, then the item's own ("Made by ...").
     pub history: Vec<String>,
 }
 
@@ -119,6 +119,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     let s = &p.stats;
     let cells = format!("{}\u{d7}{} cells", p.footprint.cols, p.footprint.rows);
     let weight = format!("{} lb", number(s.weight));
+    let value = item.value().short();
     let meta: Vec<String> = if p.kind == Kind::Gear {
         let noun = fb_items::naming::noun(&item.base, &item.shape);
         let damage = s.damage.map(|d| {
@@ -133,13 +134,14 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
             (s.warmth > 0.0).then(|| format!("warmth +{}", number(s.warmth))),
             damage,
             (s.light > 0.0).then(|| format!("light {} ft", number(s.light))),
+            Some(value),
             Some(cells),
         ]
         .into_iter()
         .flatten()
         .collect()
     } else {
-        [(!p.description.is_empty()).then(|| p.description.clone()), Some(weight), Some(cells)].into_iter().flatten().collect()
+        [(!p.description.is_empty()).then(|| p.description.clone()), Some(weight), Some(value), Some(cells)].into_iter().flatten().collect()
     };
     let contents = p.holds.as_ref().map(|holds| {
         let inside = format!("{}\u{d7}{} inside", holds.cols, holds.rows);
@@ -162,7 +164,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         light: light_line(&item.shape),
         consume: consume_line(item),
         actions: Vec::new(),
-        history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()),
+        history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()).into_iter().chain(item.history.iter().cloned()).collect(),
     }
 }
 
@@ -645,7 +647,7 @@ pub fn show_card(
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
-    (tuning, time): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>),
+    (tuning, time, barter): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>, Option<Res<crate::barter::Barter>>),
     mut shown: Local<Option<ItemId>>,
     mut hovered_since: Local<Option<(ItemId, f32)>>,
     mut on_screen: ResMut<ShownCard>,
@@ -667,11 +669,14 @@ pub fn show_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(id) || inventory.is_changed() || keymap.as_ref().is_some_and(|k| k.is_changed()) {
+        if *shown != Some(id) || inventory.is_changed() || barter.as_ref().is_some_and(|b| b.is_changed()) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
             let item = inventory.item(id).expect("checked above");
             let fallback = crate::keymap::Keymap::default();
             let keymap = keymap.as_deref().unwrap_or(&fallback);
             let mut text = card_text(item, Some((&inventory, id)));
+            if let Some(tag) = barter.as_deref().and_then(|b| b.tag(&inventory, id)) {
+                text.meta = format!("{tag} \u{b7} {}", text.meta);
+            }
             if !(aimed_container && matches!(anchor, CardAnchor::Crosshair))
                 && let Some(target) = crate::interact::item_target(&inventory, id)
             {
@@ -799,6 +804,7 @@ mod tests {
         assert!(card.meta.starts_with("Magic \u{b7} "), "{}", card.meta);
         assert!(card.meta.contains(&format!("{} lb", number(s.weight))), "{}", card.meta);
         assert!(card.meta.contains(&format!("{}", s.damage.unwrap())), "{}", card.meta);
+        assert!(card.meta.contains(&magic.value().short()), "{}", card.meta);
         let fp = magic.profile.footprint;
         assert!(card.meta.ends_with(&format!("{}\u{d7}{} cells", fp.cols, fp.rows)), "{}", card.meta);
         assert_eq!(card.affixes.len(), magic.affixes.len());
@@ -806,6 +812,16 @@ mod tests {
             assert_eq!((line.text.as_str(), line.name.as_str(), line.good), (affix.text.as_str(), affix.name.as_str(), affix.good));
         }
         assert!(card.history.is_empty());
+    }
+
+    #[test]
+    fn an_items_own_history_follows_a_legends() {
+        let mut legend = (1..5_000).filter_map(|s| fb_items::roll_item_with("Sword", s, fb_items::Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).unwrap();
+        legend.history.push("Made by Brenna Holt".into());
+        let card = card_text(&legend, None);
+        assert_eq!(card.history.len(), 4);
+        assert_eq!(card.history[..3], legend.legend.as_ref().unwrap().history);
+        assert_eq!(card.history[3], "Made by Brenna Holt");
     }
 
     #[test]
@@ -826,6 +842,7 @@ mod tests {
         let card = card_text(&bread, None);
         assert!(card.meta.starts_with(&bread.profile.description), "{}", card.meta);
         assert!(card.affixes.is_empty() && card.contents.is_none());
+        assert!(card.meta.contains(&bread.value().short()), "{}", card.meta);
 
         let mut inventory = Inventory::default();
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());

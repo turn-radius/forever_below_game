@@ -7,6 +7,9 @@
 //!   a doorway and a little way through it into the next room, or a spot out on the floor
 //!   ([`Place`]). All are rolled from the person's seed (`procgen_rng::Mulberry32`), so a level's
 //!   folk start out the same each run; only the timing of the frame varies.
+//! - **Posts.** A guard ([`keeps_post`]) does not wander: placed at their claim's hall door facing
+//!   out, they stand there, watch the delver who comes near like anyone, and walk back to the
+//!   post after a hold or a fight.
 //! - **Pausing.** A few seconds between walks, each from the tuning (`folk.pause_min` to
 //!   `pause_max`), rolled per person.
 //! - **Walking.** The way there is found once when a place is chosen (`fb_level::path::find_path`)
@@ -47,7 +50,7 @@ use crate::folk::{Denizen, Stride};
 use crate::hostility::Hostility;
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, BlocksTheWay, CurrentLevel, DelveSystems, Obstacle, Player};
-use crate::player::{blocked_by, slide_around};
+use crate::player::slide_around;
 use crate::tuning::Tuning;
 
 pub struct FolkRoutinePlugin;
@@ -115,6 +118,10 @@ pub struct Routine {
     resume: Option<Vec2>,
     /// Seconds the player has been out of reach while held.
     away: f32,
+    /// How many holders have called [`Routine::hold`] and not yet [`Routine::release`]: the
+    /// routine carries on only when the last lets go, so a greeting ending does not free a folk
+    /// who is also talking.
+    holds: u32,
     path: Vec<(i32, i32)>,
     stuck: f32,
     speed: f32,
@@ -122,8 +129,28 @@ pub struct Routine {
 }
 
 impl Routine {
-    /// Stops them where they are.
+    /// Whether they are walking a way that goes through grid cell `cell`.
+    pub fn heads_through(&self, cell: (i32, i32)) -> bool {
+        matches!(self.phase, Phase::Walk { .. }) && self.path.contains(&cell)
+    }
+
+    /// A routine of someone placed at `home` facing `facing`, pausing `first` seconds before
+    /// their first walk, drawing from `rng`.
+    pub fn placed(home: Vec2, facing: Vec2, first: f32, rng: Mulberry32) -> Self {
+        Routine { phase: Phase::Pause { left: first }, home, facing, chosen: Vec::new(), walks: 0, searches: 0, resume: None, away: 0.0, holds: 0, path: Vec::new(), stuck: 0.0, speed: 0.0, rng }
+    }
+
+    /// Sets the way they are walking (for tests).
+    #[cfg(test)]
+    pub fn walking(mut self, goal: Vec2, path: Vec<(i32, i32)>) -> Self {
+        self.phase = Phase::Walk { goal };
+        self.path = path;
+        self
+    }
+
+    /// Stops them where they are. Each hold wants its own [`Routine::release`].
     pub fn hold(&mut self) {
+        self.holds += 1;
         if let Phase::Walk { goal } = self.phase {
             self.resume = Some(goal);
         }
@@ -135,6 +162,7 @@ impl Routine {
     /// spot (a pause away from home always ends in the walk back): for one coming back to their
     /// routine from somewhere else, as a folk who gave up a fight does.
     pub fn head_home(&mut self) {
+        self.holds = 0;
         self.resume = None;
         self.path.clear();
         self.speed = 0.0;
@@ -145,7 +173,8 @@ impl Routine {
     /// Lets a held person carry on: back to the walk they were on, or else a short pause and a
     /// new walk.
     pub fn release(&mut self) {
-        if self.phase == Phase::Held {
+        self.holds = self.holds.saturating_sub(1);
+        if self.holds == 0 && self.phase == Phase::Held {
             self.phase = match self.resume.take() {
                 Some(goal) => {
                     self.stuck = 0.0;
@@ -163,6 +192,13 @@ pub fn pace(denizen: &Denizen, walk_speed: f32) -> f32 {
     walk_speed * (denizen.person.spot.folk.race().h / HUMAN_HEIGHT).min(1.0)
 }
 
+/// Whether this person is a guard, who stands at their post instead of wandering: they idle
+/// there facing out, turn to watch the delver who comes near (the notice above), and walk back
+/// to the post after anything that moved them.
+pub fn keeps_post(denizen: &Denizen) -> bool {
+    denizen.person.spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard)
+}
+
 fn grid(p: Vec2) -> (f32, f32) {
     (p.x / CELL, p.y / CELL)
 }
@@ -173,7 +209,7 @@ fn cell(p: Vec2) -> (i32, i32) {
 
 /// Gives each new person a routine (a body brought back from the record has none).
 #[allow(clippy::type_complexity)]
-fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entity, &Denizen), (Added<Denizen>, Without<crate::combat::feedback::Corpse>)>) {
+pub(crate) fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entity, &Denizen), (Added<Denizen>, Without<crate::combat::feedback::Corpse>)>) {
     for (entity, denizen) in &new {
         let mut rng = Mulberry32::new(denizen.person.spot.seed ^ ROUTINE_SALT);
         let first = rng.range_f32(0.0, tuning.folk.pause_max.max(tuning.folk.pause_min));
@@ -189,6 +225,7 @@ fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entit
             searches: 0,
             resume: None,
             away: 0.0,
+            holds: 0,
             path: Vec::new(),
             stuck: 0.0,
             speed: 0.0,
@@ -290,15 +327,16 @@ fn inset(room: &fb_level::Room, margin: f32) -> (Vec2, Vec2) {
 /// round whatever is in the way, turning to face where they go.
 #[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
-fn walk_routines(
+pub(crate) fn walk_routines(
     time: Res<Time>,
     level: Res<CurrentLevel>,
     tuning: Res<Tuning>,
     blocked_cells: Res<BlockedCells>,
+    doors: Option<Res<crate::doors::Doors>>,
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
     creatures: Query<(&Critter, &Transform), Without<Denizen>>,
     props: Query<(&BlocksTheWay, &GlobalTransform), Without<Denizen>>,
-    mut folk: Query<(Entity, &Denizen, &mut Routine, &mut Stride, &mut Transform, Option<&Hostility>)>,
+    mut folk: Query<(Entity, &Denizen, &mut Routine, &mut Stride, &mut Transform, Option<&Hostility>, Has<crate::folk_regard::Attending>, Has<crate::folk_regard::Assisting>)>,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
@@ -307,7 +345,7 @@ fn walk_routines(
     let player_at = player.iter().next().map(|t| t.translation.xz());
     let level = &level.0;
     let tune = &tuning.folk;
-    let blocked = blocked_by(level, &blocked_cells);
+    // What stops a person (rock, and shut doors but their own faction's) is made per person below.
     // What every person keeps out of that stays put: props and braziers. Where they choose to
     // go leaves out the creatures and the player, which move, so the choice stays the seed's.
     let mut fixed: Vec<Obstacle> = props.iter().map(|(blocks, at)| Obstacle::of(blocks.0, at)).collect();
@@ -319,16 +357,19 @@ fn walk_routines(
     let mut shared = fixed.clone();
     shared.extend(moving.iter().copied());
     let mut body_of: Vec<(Entity, usize)> = Vec::new();
-    for (e, d, _, _, t, _) in folk.iter() {
+    for (e, d, _, _, t, _, _, _) in folk.iter() {
         body_of.push((e, shared.len()));
         shared.push(Obstacle::Circle { centre: t.translation.xz(), radius: d.radius });
     }
     let relief = Relief::new(level);
 
-    for (entity, denizen, mut routine, mut stride, mut transform, hostility) in &mut folk {
+    for (entity, denizen, mut routine, mut stride, mut transform, hostility, attending, assisting) in &mut folk {
+        let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+        let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         // A hostile folk has left their routine to fight (`crate::folk_combat::fight`), though
         // the others still keep out of where they stand.
-        if hostility.is_some_and(|h| h.is_hostile()) {
+        // Likewise an ally who has joined the delver's fight (`crate::folk_regard`).
+        if hostility.is_some_and(|h| h.is_hostile()) || assisting {
             continue;
         }
         let routine = &mut *routine;
@@ -340,8 +381,10 @@ fn walk_routines(
 
         // Notice the player, and let go of them once they are well away.
         let near = player_at.map(|p| (p, p.distance(at)));
-        let sees = |p: Vec2| line_of_sight(grid(at), grid(p), &blocked);
+        let sees = |p: Vec2| line_of_sight(grid(at), grid(p), &see);
         match (routine.phase, near) {
+            // Watching or greeting the delver (`crate::folk_regard`) keeps them held.
+            (Phase::Held, Some(_)) if attending => routine.away = 0.0,
             (Phase::Held, Some((p, d))) => {
                 if d > tune.release_distance || !sees(p) {
                     routine.away += dt;
@@ -372,7 +415,8 @@ fn walk_routines(
                     routine.phase = Phase::Pause { left: left - dt };
                 } else {
                     // Away from home, the next walk is the way back; at home, somewhere new.
-                    let goal = if away { Some(routine.home) } else { choose_place(level, routine.home, radius, tune.wander_radius, &fixed, &mut routine.rng) };
+                    // A guard keeps their post: they never choose a place to stroll to.
+                    let goal = if away { Some(routine.home) } else if keeps_post(denizen) { None } else { choose_place(level, routine.home, radius, tune.wander_radius, &fixed, &mut routine.rng) };
                     let way = goal.and_then(|g| {
                         routine.searches += 1;
                         find_path(cell(at), cell(g), 4000, &blocked).map(|path| (g, path))
@@ -475,7 +519,7 @@ mod tests {
             .folk
             .iter()
             .map(|spot| {
-                let denizen = Denizen { person: crate::folk::Person::of(spot, 1), radius: FOOTPRINT, min: Vec3::ZERO, max: Vec3::ZERO };
+                let denizen = Denizen { person: crate::folk::person_1207(spot), radius: FOOTPRINT, min: Vec3::ZERO, max: Vec3::ZERO };
                 app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(FOOTPRINT)), Stride::default(), crate::folk::stand_at(spot))).id()
             })
             .collect();
@@ -517,6 +561,27 @@ mod tests {
         assert!(left * 2 > folk.len(), "{left} of {} left their spots: {away:?}", folk.len());
         let walk = crate::tuning::FolkTuning::default().walk_speed;
         assert!(fastest > 4.0 && fastest <= walk + 0.5, "fastest pace {fastest}");
+    }
+
+    #[test]
+    fn guards_keep_their_post_and_the_rest_wander() {
+        let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
+        let homes: Vec<Vec2> = folk.iter().map(|&f| position(&app, f)).collect();
+        let guard: Vec<bool> = folk.iter().map(|&f| keeps_post(app.world().get::<Denizen>(f).unwrap())).collect();
+        assert!(guard.iter().any(|&g| g), "seed 1207 has no guard");
+        let mut away = vec![0.0f32; folk.len()];
+        run(&mut app, 60 * 120, |app, _| {
+            for (i, &f) in folk.iter().enumerate() {
+                away[i] = away[i].max(position(app, f).distance(homes[i]));
+            }
+        });
+        for (i, &f) in folk.iter().enumerate() {
+            if guard[i] {
+                assert!(away[i] < 0.5, "guard {i} left their post by {}", away[i]);
+                assert_eq!(app.world().get::<Routine>(f).unwrap().walks, 0);
+            }
+        }
+        assert!(guard.iter().zip(&away).any(|(&g, &d)| !g && d > CELL * 0.5), "no one else wandered: {away:?}");
     }
 
     #[test]
@@ -639,12 +704,20 @@ mod tests {
 
     #[test]
     fn shorter_folk_walk_slower() {
-        let tall = fb_level::generate(1207, 1).folk.into_iter().map(|s| crate::folk::Person::of(&s, 1)).collect::<Vec<_>>();
+        // Folk of several worlds, so every folk's height is there to compare.
+        let tall = (1..=8)
+            .flat_map(|world| {
+                let level = fb_level::generate(world, 1);
+                level.folk.iter().map(|s| crate::folk::Person::of(s, level.faction(s.faction), 1)).collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         let mk = |p: &crate::folk::Person| Denizen { person: p.clone(), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO };
         for a in &tall {
             for b in &tall {
                 if a.spot.folk.race().h < b.spot.folk.race().h {
-                    assert!(pace(&mk(a), 11.0) < pace(&mk(b), 11.0));
+                    // Strictly slower unless both are as tall as a human, whose pace is the cap.
+                    let capped = a.spot.folk.race().h >= HUMAN_HEIGHT;
+                    assert!(if capped { pace(&mk(a), 11.0) <= pace(&mk(b), 11.0) } else { pace(&mk(a), 11.0) < pace(&mk(b), 11.0) });
                 }
             }
         }

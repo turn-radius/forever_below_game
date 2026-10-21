@@ -46,6 +46,16 @@ pub enum Class {
 impl Class {
     pub const ALL: [Class; 4] = [Class::Fighter, Class::Ranger, Class::Mage, Class::Cleric];
 
+    /// The class as the factions' likes and hates name it.
+    pub fn faction_class(self) -> fb_faction::ClassKind {
+        match self {
+            Class::Fighter => fb_faction::ClassKind::Fighter,
+            Class::Ranger => fb_faction::ClassKind::Ranger,
+            Class::Mage => fb_faction::ClassKind::Mage,
+            Class::Cleric => fb_faction::ClassKind::Cleric,
+        }
+    }
+
     /// The class's outfit key in `data/outfits.json`.
     pub fn outfit_key(self) -> &'static str {
         match self {
@@ -53,6 +63,19 @@ impl Class {
             Class::Ranger => "ranger",
             Class::Mage => "mage",
             Class::Cleric => "cleric",
+        }
+    }
+
+    /// The alignment a delver of this class starts with, which sets where each faction's
+    /// standing begins (`fb_faction::Standings::start_from_alignment`). Not chosen in the
+    /// creator yet: it is the class's typical one.
+    pub fn alignment(self) -> fb_faction::Alignment {
+        use fb_faction::Alignment::*;
+        match self {
+            Class::Fighter => LawfulNeutral,
+            Class::Ranger => NeutralGood,
+            Class::Mage => TrueNeutral,
+            Class::Cleric => LawfulGood,
         }
     }
 

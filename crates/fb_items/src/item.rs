@@ -3,7 +3,7 @@
 
 use crate::armory_base::{base_for, roll_shape};
 use crate::dress::dress;
-use crate::naming::{Legend, item_name, legendize, noun};
+use crate::naming::{Legend, item_name, legendize, legendize_in, noun};
 use crate::profile::{Profile, profile};
 use crate::rarity::{Odds, roll_rarity_for};
 use crate::tables::Affix;
@@ -16,6 +16,68 @@ pub struct Coins {
     pub gp: u32,
     pub sp: u32,
     pub cp: u32,
+}
+
+impl Coins {
+    pub const CP_PER_SP: u64 = 10;
+    pub const CP_PER_GP: u64 = 100;
+
+    /// `cp` copper made into the fewest coins: 250 cp is 2 gp 5 sp.
+    pub fn from_copper(cp: u64) -> Coins {
+        Coins {
+            gp: (cp / Self::CP_PER_GP).min(u64::from(u32::MAX)) as u32,
+            sp: (cp % Self::CP_PER_GP / Self::CP_PER_SP) as u32,
+            cp: (cp % Self::CP_PER_SP) as u32,
+        }
+    }
+
+    /// Everything in copper: 1 gp is 100.
+    pub fn total_copper(self) -> u64 {
+        u64::from(self.gp) * Self::CP_PER_GP + u64::from(self.sp) * Self::CP_PER_SP + u64::from(self.cp)
+    }
+
+    /// The sum, with change.
+    pub fn plus(self, other: Coins) -> Coins {
+        Coins::from_copper(self.total_copper() + other.total_copper())
+    }
+
+    /// What is left after paying `price`, with change (2 gp less 15 sp is 5 sp); `None` if
+    /// there is not enough.
+    pub fn minus(self, price: Coins) -> Option<Coins> {
+        self.total_copper().checked_sub(price.total_copper()).map(Coins::from_copper)
+    }
+
+    /// Whether it holds no coin.
+    pub fn is_empty(self) -> bool {
+        self.total_copper() == 0
+    }
+
+    /// Only the coins it has, for a card: "1 gp 5 sp", "3 cp", "0 cp" for none.
+    pub fn short(self) -> String {
+        let c = Coins::from_copper(self.total_copper());
+        let parts: Vec<String> = [(c.gp, "gp"), (c.sp, "sp"), (c.cp, "cp")].into_iter().filter(|&(n, _)| n > 0).map(|(n, unit)| format!("{n} {unit}")).collect();
+        if parts.is_empty() { "0 cp".to_string() } else { parts.join(" ") }
+    }
+}
+
+impl std::ops::Add for Coins {
+    type Output = Coins;
+    fn add(self, other: Coins) -> Coins {
+        self.plus(other)
+    }
+}
+
+/// A delver's wallet: the sum of their purses (`purses.filter_map(|p| p.coins).sum()`).
+impl std::iter::Sum for Coins {
+    fn sum<I: Iterator<Item = Coins>>(iter: I) -> Coins {
+        Coins::from_copper(iter.map(Coins::total_copper).sum())
+    }
+}
+
+impl<'a> std::iter::Sum<&'a Coins> for Coins {
+    fn sum<I: Iterator<Item = &'a Coins>>(iter: I) -> Coins {
+        iter.copied().sum()
+    }
 }
 
 impl fmt::Display for Coins {
@@ -42,12 +104,75 @@ pub struct Item {
     pub coins: Option<Coins>,
     /// The odds its rarity was rolled against, so its base and seed roll it again the same.
     pub odds: Odds,
+    /// Lines of history beyond a legendary's legend ("Made by Brenna Holt"), in the order they
+    /// happened; the hover card shows them after the legend's.
+    pub history: Vec<String>,
+}
+
+/// The parts an [`Item`] is built from by [`Item::from_parts`], rather than rolled: what an item
+/// is now, after being changed (new affixes, a maker's line) or recorded and restored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ItemParts {
+    pub base: String,
+    pub seed: u32,
+    pub shape: armory::Item,
+    pub rarity: Rarity,
+    pub affixes: Vec<&'static Affix>,
+    pub name: String,
+    pub legend: Option<Legend>,
+    pub history: Vec<String>,
+    pub coins: Option<Coins>,
+    pub odds: Odds,
+}
+
+impl From<Item> for ItemParts {
+    fn from(i: Item) -> Self {
+        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds }
+    }
+}
+
+impl Item {
+    /// The item `parts` describe, its profile worked out again from the shape and the affixes
+    /// (their effects on the stats), with nothing rolled: the name, rarity and legend are as
+    /// given. The shape is taken as it is, so condition and fuel stay. `None` for a base no
+    /// table knows. An item taken apart ([`ItemParts::from`]) and put back together is equal.
+    pub fn from_parts(parts: ItemParts) -> Option<Item> {
+        crate::armory_base::armory_base(&parts.base)?;
+        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds } = parts;
+        let mut profile = profile(&base, &shape);
+        if let Some(c) = coins {
+            profile.description = c.to_string();
+        }
+        for a in &affixes {
+            a.apply_to_stats(&mut profile.stats);
+        }
+        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history })
+    }
 }
 
 impl Item {
     /// The name shown first: a legendary's title, otherwise its name.
     pub fn title(&self) -> &str {
         self.legend.as_ref().map_or(&self.name, |l| &l.title)
+    }
+
+    /// This item found in a world whose factions are called `factions`: a legendary's history
+    /// names those rather than factions of the grammar's making. Its title stays, and a legend made at
+    /// an enchanter's bench (`Legend::made`) is left as it is: it tells its making, not a found relic. Pure in the
+    /// item's seed and the names, and a no-op for anything not legendary or for no names.
+    pub fn in_world(mut self, factions: &[String]) -> Item {
+        if factions.is_empty() {
+            return self;
+        }
+        let tags = self.profile.tags.clone();
+        let seed = self.seed;
+        let name = self.name.clone();
+        if let Some(legend) = self.legend.as_mut().filter(|l| !l.made) {
+            // Its own stream, so the item rolls the same whatever world it is found in.
+            let told = legendize_in(&mut game_rng(seed ^ 0x1e6e_d15c), &name, &tags, Some(factions));
+            legend.history = told.history;
+        }
+        self
     }
 
     /// How far its light reaches against its base's: 1.5 for a Gleaming torch (+10 ft on 20),
@@ -136,14 +261,17 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
                 let gp = (rng.next_f64() * rng.next_f64() * 14.0) as u32;
                 let sp = rng.int(0, 29);
                 let cp = rng.int(5, 64);
-                Some(Coins { gp, sp, cp })
+                let purse = Coins { gp, sp, cp };
+                // Deeper hoards are richer; the first level's purses are as rolled.
+                let scale = crate::value::coin_depth_factor(odds.depth);
+                Some(if scale > 1.0 { Coins::from_copper((purse.total_copper() as f64 * scale).round() as u64) } else { purse })
             }
             _ => None,
         };
         if let Some(c) = coins {
             profile.description = c.to_string();
         }
-        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds });
+        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![] });
     }
 
     let (rarity, affixes) = roll_rarity_for(&mut rng, &profile.tags, profile.slot, &odds);
@@ -155,7 +283,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
     dress(&mut shape, rarity, &affixes, seed);
     // The fuel it starts with is what the item's `BurnTime` makes of a full one.
     shape.scale_fuel(profile.stats.burn_time);
-    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds })
+    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![] })
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that
@@ -168,6 +296,18 @@ pub fn roll_loot(family: armory::Family, seed: u32, odds: Odds) -> Option<Item> 
 mod tests {
     use super::*;
     use crate::armory_base::{ARMORY_BASES, held_back};
+
+    #[test]
+    fn tents_and_campfire_kits_roll_by_name_but_never_lie_loose() {
+        for (family, base) in [(armory::Family::Tent, "Tent"), (armory::Family::Campfire, "Campfire kit")] {
+            // Held back from loose loot until tentmakers stock them.
+            assert!((0..200).all(|seed| roll_loot(family, seed, Odds::loot(3)).is_none()), "{base} lies loose");
+            let by_name = roll_item(base, 9).unwrap();
+            assert_eq!((by_name.profile.kind, by_name.rarity), (Kind::Good, Rarity::Common));
+            assert!(by_name.profile.packable && by_name.profile.stats.weight >= 12.0, "{base}");
+            assert_eq!(roll_item(base, 9), Some(by_name));
+        }
+    }
 
     /// Whether floor loot of the sundry family, `seeds` seeds at each depth from 1 to 10, is
     /// ever a held-back base.
@@ -328,6 +468,24 @@ mod tests {
     }
 
     #[test]
+    fn a_legend_in_a_world_names_that_worlds_factions() {
+        let names: Vec<String> = ["the Scale Court", "the Ember Tithe", "the Low Choir"].iter().map(|s| s.to_string()).collect();
+        let found: Vec<Item> = (1..2_000).filter_map(|seed| roll_item_with("Sword", seed, Odds::loot(8))).filter(|i| i.rarity == Rarity::Legendary).take(20).collect();
+        assert!(found.len() >= 3);
+        for item in found {
+            let here = item.clone().in_world(&names);
+            let legend = here.legend.as_ref().unwrap();
+            assert_eq!(legend.title, item.legend.as_ref().unwrap().title, "the title stays");
+            assert!(names.iter().any(|n| legend.history[0].contains(&format!("by {n}."))), "{}", legend.history[0]);
+            assert_eq!(here, item.clone().in_world(&names), "deterministic");
+            assert_eq!(item.clone().in_world(&[]), item, "no names leaves the grammar's");
+            assert!(item.legend.as_ref().unwrap().history[0].contains(" by the "), "the grammar still names one");
+        }
+        let common = roll_item_with("Sword", 1, Odds::loot(1)).unwrap();
+        assert_eq!(common.clone().in_world(&names), common);
+    }
+
+    #[test]
     fn affixes_show_in_name_stats_and_shape() {
         let (warm, base_warmth) = (1..2_000)
             .filter_map(|seed| {
@@ -348,6 +506,28 @@ mod tests {
     }
 
     #[test]
+    fn an_item_taken_apart_and_put_back_is_the_same() {
+        for (base, seed) in [("Sword", 9), ("Cloak", 4), ("Purse", 11), ("Torch", 3), ("Sack", 3)] {
+            let item = roll_item(base, seed).unwrap();
+            assert_eq!(Item::from_parts(item.clone().into()), Some(item), "{base} {seed}");
+        }
+        let legend = (1..2_000).filter_map(|seed| roll_item_with("Sword", seed, Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).unwrap();
+        assert_eq!(Item::from_parts(legend.clone().into()), Some(legend));
+        assert_eq!(Item::from_parts(ItemParts { base: "Nothing".into(), ..roll_item("Sword", 1).unwrap().into() }), None);
+    }
+
+    #[test]
+    fn changed_affixes_change_the_stats_and_name_parts_keep() {
+        let mut parts = ItemParts::from(roll_item("Cloak", 4).unwrap());
+        let plain = Item::from_parts(ItemParts { affixes: vec![], ..parts.clone() }).unwrap();
+        let warm = crate::tables::affix_named("Warm").unwrap();
+        parts.affixes = vec![warm];
+        let item = Item::from_parts(parts).unwrap();
+        assert_eq!(item.profile.stats.warmth, plain.profile.stats.warmth + 2.0);
+        assert_eq!(crate::tables::affix_named("Nope"), None);
+    }
+
+    #[test]
     fn legendaries_have_titles() {
         let legend = (1..2_000).filter_map(|seed| roll_item_with("Sword", seed, Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).expect("no legendary sword");
         let l = legend.legend.as_ref().unwrap();
@@ -357,7 +537,11 @@ mod tests {
 
     #[test]
     fn loot_rolls_a_base_of_its_family() {
-        for &family in armory::Item::PORTED {
+        // A banner is scenery: no loot base names it.
+        for &family in armory::Item::PORTED.iter().filter(|f| **f != armory::Family::Banner) {
+            if crate::armory_base::bases_of(family).all(held_back) {
+                continue;
+            }
             for seed in [5, 1207] {
                 let item = roll_loot(family, seed, Odds::default()).unwrap();
                 assert_eq!(item.shape.family(), family);

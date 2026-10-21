@@ -16,12 +16,14 @@ use armory::families::axe::{Axe, AxeArchetype};
 use armory::families::bags::{BagStyle, Bags};
 use armory::families::feet::Feet;
 use armory::families::food::{Brew, Food, FoodStyle, GLOWCAP};
+use armory::families::campfire::FireForm;
 use armory::families::garment::Garment;
 use armory::families::hands::Hands;
 use armory::families::hat::Hats;
 use armory::families::hood::Hoods;
 use armory::families::legs::Legs;
 use armory::families::sundry::{Sundry, SundryKind};
+use armory::families::tent::TentForm;
 use armory::families::torch::BurnState;
 use armory::families::writing::{Writing, WritingKind};
 use armory::fabric::FabricPattern;
@@ -183,7 +185,23 @@ pub fn find_weight(name: &str) -> u32 {
 /// bandages for bandaging. They stay in [`ARMORY_BASES`] and `data/goods.json`, so the forge and
 /// [`roll_item`](crate::roll_item) still make them; when the system arrives the base comes off
 /// this list.
-pub const HELD_BACK: &[&str] = &["Bandages"];
+pub const HELD_BACK: &[&str] = &[
+    "Bandages",
+    KEY,
+    // Camp goods and elixirs come from tentmakers and alchemists, not loose loot.
+    "Bedroll",
+    "Tinderbox",
+    "Tent",
+    "Campfire kit",
+    "Elixir of the Hare",
+    "Elixir of Vigil",
+    "Elixir of Fasting",
+    "Elixir of Embers",
+];
+
+/// The base of a faction's key, which a faction gives an Allied delver and is never found
+/// loose, so it is held back from loot and stock like the rest of [`HELD_BACK`].
+pub const KEY: &str = "Key";
 
 /// Whether base `name` is held back ([`HELD_BACK`]): [`find_weight`] gives it 0, and crate
 /// stock and outfit goods skip it.
@@ -243,6 +261,10 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Wine", ArmoryBase::of(A::Food(&[FoodStyle::Bottle]))),
     ("Potion", ArmoryBase::of(A::Food(&[FoodStyle::Potion]))),
     ("Healing draught", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(healing_draught).named()),
+    ("Elixir of the Hare", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_the_hare).named()),
+    ("Elixir of Vigil", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_vigil).named()),
+    ("Elixir of Fasting", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_fasting).named()),
+    ("Elixir of Embers", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_embers).named()),
     ("Blind cavefish", ArmoryBase::of(A::Food(&[FoodStyle::Fish])).tweaked(blind_cavefish).named()),
     // The plate's own bases (data/bases.json), now Armory families.
     ("Shirt", ArmoryBase::of(A::Garment(&[GarmentStyle::Tunic])).tweaked(shirt).named()),
@@ -264,8 +286,11 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Lamp oil", ArmoryBase::of(A::Food(&[FoodStyle::Flask])).tweaked(lamp_oil).named()),
     ("Rope", ArmoryBase::of(A::Sundry(&[SundryKind::Rope]))),
     ("Lockpicks", ArmoryBase::of(A::Sundry(&[SundryKind::Lockpicks]))),
+    ("Key", ArmoryBase::of(A::Sundry(&[SundryKind::Keys]))),
     ("Candle", ArmoryBase::of(A::Sundry(&[SundryKind::Candle]))),
     ("Bandages", ArmoryBase::of(A::Sundry(&[SundryKind::Bandages]))),
+    ("Bedroll", ArmoryBase::of(A::Sundry(&[SundryKind::Bedroll]))),
+    ("Tinderbox", ArmoryBase::of(A::Sundry(&[SundryKind::Tinderbox]))),
     ("Scroll", ArmoryBase::of(A::Writing(&[WritingKind::Scroll]))),
     ("Note", ArmoryBase::of(A::Writing(&[WritingKind::Note]))),
     ("Book", ArmoryBase::of(A::Writing(&[WritingKind::Book]))),
@@ -275,9 +300,29 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Bolt", ArmoryBase::of(A::Any(Family::Bolt))),
     ("Quiver", ArmoryBase::of(A::Any(Family::Quiver))),
     ("Bolt case", ArmoryBase::of(A::Any(Family::BoltCase))),
+    // Camp goods: carried packed; the pitched and set forms are the same items put down (SRD 5.1 p. 68-70).
+    ("Tent", ArmoryBase::of(A::Any(Family::Tent)).tweaked(packed_tent)),
+    ("Campfire kit", ArmoryBase::of(A::Any(Family::Campfire)).tweaked(packed_fire)),
 ];
 
 // ── Tweaks ───────────────────────────────────────────────────────────────────────────────
+
+/// A tent is carried rolled up with its poles; put down, the same item pitches.
+fn packed_tent(item: &mut Item, _: &mut Mulberry32) {
+    if let Item::Tent(s) = item {
+        s.tent.form = TentForm::Packed;
+    }
+}
+
+/// A campfire kit is carried as a bundle; put down, the same item is built into a fire. A
+/// carried kit is never lit and its wood is fresh.
+fn packed_fire(item: &mut Item, _: &mut Mulberry32) {
+    if let Item::Campfire(s) = item {
+        s.fire.form = FireForm::Packed;
+        s.fire.lit = false;
+        s.fire.ash = 0.0;
+    }
+}
 
 /// A short cloak: the plate's `s.garment.length=.4+r()*1.2`.
 fn mantle(item: &mut Item, r: &mut Mulberry32) {
@@ -305,6 +350,32 @@ fn healing_draught(item: &mut Item, r: &mut Mulberry32) {
         p.outer = mix(GLASS, p.liquid, 0.4);
         p.fill = p.fill.max(r.range_f32(0.6, 0.95));
     }
+}
+
+/// An elixir is a full flask of a coloured brew, glass tinted toward it. Our own colours.
+fn elixir(item: &mut Item, r: &mut Mulberry32, liquid: u32) {
+    if let Item::Food(s) = item {
+        let p = &mut s.provision;
+        p.liquid = Rgb::hex(liquid);
+        p.outer = mix(GLASS, p.liquid, 0.4);
+        p.fill = p.fill.max(r.range_f32(0.6, 0.95));
+    }
+}
+
+fn elixir_of_the_hare(item: &mut Item, r: &mut Mulberry32) {
+    elixir(item, r, 0xe27a9a);
+}
+
+fn elixir_of_vigil(item: &mut Item, r: &mut Mulberry32) {
+    elixir(item, r, 0xb89be0);
+}
+
+fn elixir_of_fasting(item: &mut Item, r: &mut Mulberry32) {
+    elixir(item, r, 0x9a5a2a);
+}
+
+fn elixir_of_embers(item: &mut Item, r: &mut Mulberry32) {
+    elixir(item, r, 0xe0612a);
 }
 
 /// A pale fish: the plate's `color='#d8d2c4'` (now the skin, `outer`) and `color2='#ece6d8'`
@@ -484,8 +555,12 @@ mod tests {
 
     #[test]
     fn every_ported_family_has_a_base() {
-        for &family in Item::PORTED {
-            let base = base_for(family, 1207).unwrap_or_else(|| panic!("{family:?} has no base"));
+        // A banner is scenery: the Armory draws it, but no loot base names it.
+        for &family in Item::PORTED.iter().filter(|f| **f != Family::Banner) {
+            let Some(base) = base_for(family, 1207) else {
+                assert!(bases_of(family).next().is_some() && bases_of(family).all(held_back), "{family:?} has no base");
+                continue;
+            };
             assert_eq!(armory_base(base).unwrap().accept.family(), family);
             assert_eq!(base_for(family, 1207), Some(base));
         }

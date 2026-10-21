@@ -19,7 +19,7 @@ pub struct KindlePlugin;
 impl Plugin for KindlePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(FixedUpdate, burn_fuel.after(advance_game_clock).in_set(DelveSystems));
-        app.add_systems(Update, (light_carried.run_if(level_has_focus), light_hovered.run_if(inventory_open)).in_set(DelveSystems));
+        app.add_systems(Update, (light_carried.run_if(level_has_focus), light_hovered.run_if(inventory_open).run_if(crate::barter::not_bartering)).in_set(DelveSystems));
     }
 }
 

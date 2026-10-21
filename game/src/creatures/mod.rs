@@ -467,6 +467,10 @@ const DEV_AHEAD: f32 = 2.5;
 /// [`dev_spots`] for the value `spec`.
 pub fn dev_spots_for(level: &Level, spec: &str) -> Vec<CreatureSpot> {
     let (name, seeds) = spec.split_once(':').unwrap_or((spec, ""));
+    if name.trim() == "folk" {
+        // Folk are stood by [`dev_folk_for`].
+        return Vec::new();
+    }
     let species = match name.trim() {
         "skeleton" => fb_creatures::Species::Skeleton,
         "troll" => fb_creatures::Species::Troll,
@@ -494,6 +498,90 @@ pub fn dev_spots_for(level: &Level, spec: &str) -> Vec<CreatureSpot> {
         .map(|(i, seed)| {
             let at = Vec2::new(sx as f32 + 0.5, sy as f32 + 0.5) + ahead * DEV_AHEAD + across * (i as f32 - 0.5 * (count - 1.0)) * 1.2;
             CreatureSpot { x: at.x, y: at.y, yaw: yaw + std::f32::consts::PI, species, seed, pack: 0 }
+        })
+        .collect()
+}
+
+/// A trade `FB_SPAWN` names after a folk: `weaponsmith`, `master-alchemist`, `guard` (a tier
+/// then a dash, apprentice if left out; the profession's label without spaces or its first word).
+type TradeWord = (fb_faction::Tier, fb_faction::Profession);
+
+fn parse_trade_word(word: &str) -> Option<TradeWord> {
+    use fb_faction::{Profession, Tier};
+    let word = word.to_lowercase();
+    let (tier, name) = match word.split_once('-') {
+        Some((t, n)) => (Tier::ALL.into_iter().find(|x| x.label() == t)?, n),
+        None => (Tier::Apprentice, word.as_str()),
+    };
+    let profession = if name == "guard" {
+        Profession::Guard
+    } else {
+        Profession::TRADES.into_iter().find(|p| p.label().replace(' ', "") == name || p.label().split(' ').next() == Some(name))?
+    };
+    Some((tier, profession))
+}
+
+/// How far ahead a lone folk stands, cells: within the delver's reach (a cell), so the card shows.
+const FOLK_AHEAD: f32 = 1.0;
+
+/// Folk `FB_SPAWN` asks for: `folk` (the level's first drawn faction), `folk:<faction index>`, or
+/// several such, `folk:3,folk:7`, each [`DEV_AHEAD`] cells ahead of the start and spread across
+/// the way, facing the start. A faction index is a faction id of the level's drawn factions if
+/// it holds one, otherwise a place in that list (wrapping). A trade may follow, `folk:3:weaponsmith`
+/// or `folk:master-alchemist` or `folk:guard` (see [`parse_trade_word`]). None when unset or not about folk.
+pub fn dev_folk(level: &Level) -> Vec<fb_level::FolkSpot> {
+    let Some(spec) = std::env::var("FB_SPAWN").ok().filter(|s| !s.is_empty()) else { return Vec::new() };
+    dev_folk_for(level, &spec)
+}
+
+/// [`dev_folk`] for the value `spec`.
+pub fn dev_folk_for(level: &Level, spec: &str) -> Vec<fb_level::FolkSpot> {
+    if level.factions.is_empty() {
+        return Vec::new();
+    }
+    let picks: Vec<(Option<u32>, Option<TradeWord>)> = spec
+        .split(',')
+        .filter_map(|part| {
+            let rest = part.trim().strip_prefix("folk")?;
+            let mut pieces = rest.split(':').map(str::trim).filter(|p| !p.is_empty());
+            let (mut pick, mut trade) = (None, None);
+            for piece in pieces.by_ref() {
+                match piece.parse() {
+                    Ok(n) => pick = Some(n),
+                    Err(_) => trade = parse_trade_word(piece),
+                }
+            }
+            Some((pick, trade))
+        })
+        .collect();
+    let (sx, sy, facing) = level.start();
+    let yaw = facing.yaw();
+    let ahead = Vec2::new(-yaw.sin(), -yaw.cos());
+    let across = Vec2::new(-ahead.y, ahead.x);
+    let count = picks.len() as f32;
+    picks
+        .into_iter()
+        .enumerate()
+        .map(|(i, (pick, word))| {
+            let spec = match pick {
+                Some(n) => level.factions.iter().find(|f| f.id.0 as u32 == n).unwrap_or(&level.factions[n as usize % level.factions.len()]),
+                None => &level.factions[0],
+            };
+            // The way out of the start is a corridor a cell wide: several stand in a staggered file.
+            let sway = if i % 2 == 0 { -0.2 } else { 0.2 } * (count - 1.0).min(1.0);
+            let at = Vec2::new(sx as f32 + 0.5, sy as f32 + 0.5) + ahead * (FOLK_AHEAD + 0.9 * i as f32) + across * sway;
+            let mut rng = procgen_rng::Mulberry32::new(1207 + i as u32);
+            let folk = spec.member_folk(&mut rng);
+            let trade = word.map(|(tier, profession)| fb_level::Trade {
+                profession,
+                tier,
+                style: match profession {
+                    fb_faction::Profession::Armorer => Some(fb_faction::Style::of_lean(spec.armour)),
+                    fb_faction::Profession::Weaponsmith => Some(fb_faction::Style::Blades),
+                    _ => None,
+                },
+            });
+            fb_level::FolkSpot { x: at.x, y: at.y, yaw: yaw + std::f32::consts::PI, folk, seed: 1207 + i as u32, faction: spec.id, trade }
         })
         .collect()
 }
@@ -1036,6 +1124,14 @@ mod tests {
     fn a_skeletons_bones_are_measured_once_and_its_dev_spot_asks_by_name() {
         let level = fb_level::generate(1207, 1);
         assert!(dev_spots_for(&level, "unicorn").is_empty());
+        assert!(dev_spots_for(&level, "folk:3").is_empty(), "folk are not creatures");
+        let folk = dev_folk_for(&level, "folk:3,folk");
+        assert_eq!(folk.len(), 2);
+        assert!(level.factions.iter().any(|f| f.id == folk[0].faction));
+        assert_eq!(folk[1].faction, level.factions[0].id);
+        assert!(dev_folk_for(&level, "skeleton").is_empty());
+        let trades: Vec<_> = dev_folk_for(&level, "folk:3:weaponsmith,folk::master-alchemist,folk:guard,folk").iter().map(|f| f.trade.map(|t| t.label())).collect();
+        assert_eq!(trades, [Some("Apprentice weaponsmith (blades)".to_string()), Some("Master alchemist".to_string()), Some("Guard".to_string()), None]);
         let spots = dev_spots_for(&level, "skeleton:1,2,3");
         assert_eq!(spots.iter().map(|s| s.seed).collect::<Vec<_>>(), vec![1, 2, 3]);
         let spot = spots[0];

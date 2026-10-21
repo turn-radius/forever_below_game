@@ -6,11 +6,11 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault|role` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
-//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`). Unset, nothing here touches the player's camera.
+//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`). Unset, nothing here touches the player's camera.
 //! `FB_DEPTH=2` plays the stone halls of depth 2.
 
 pub mod geometry;
@@ -43,7 +43,8 @@ pub struct LevelPlugin;
 
 impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Tuning>()
+        app.add_plugins(crate::doors::DoorsPlugin)
+            .init_resource::<Tuning>()
             .init_resource::<PreparedStone>()
             .insert_resource(abyss_ambient(&LightTuning::default()))
             .insert_resource(ClearColor(FOG_COLOR))
@@ -146,13 +147,16 @@ pub const GLOWCAP_LIGHT: Color = Color::srgb(0.45, 0.85, 0.88);
 pub enum FixedLight {
     Brazier,
     Glowcaps,
+    /// A hearth's lit campfire (`fb_level::Prop::Campfire` stands at it).
+    Campfire,
 }
 
 impl FixedLight {
     /// Its light, as tuned.
     pub fn light(self, tuning: &LightTuning) -> PointLight {
         match self {
-            FixedLight::Brazier => cast_shadows(Torch::flickering(Torch::light(tuning.brazier_peak, tuning.brazier_reach, &EXPOSURE), tuning.flicker_depth)),
+            // A hearth's campfire lights like a hall's brazier, so the two fires match.
+            FixedLight::Brazier | FixedLight::Campfire => cast_shadows(Torch::flickering(Torch::light(tuning.brazier_peak, tuning.brazier_reach, &EXPOSURE), tuning.flicker_depth)),
             FixedLight::Glowcaps => glowcap_light(tuning),
         }
     }
@@ -578,14 +582,38 @@ fn mossy_column(spot: &geometry::stone::ColumnSpot, seed: u32, quarters: u32) ->
 /// the other kinds. Plain data, so it can be made ahead of time ([`crate::staged`]).
 #[derive(Debug, PartialEq)]
 pub struct FixtureShapes {
-    pub doors: Vec<(Doorway, ItemMesh, Option<ItemMesh>)>,
+    pub doors: Vec<(Doorway, ItemMesh, Option<ItemMesh>, Option<ClaimFit>)>,
     pub braziers: Vec<Option<(ItemMesh, f32)>>,
+}
+
+/// A claim door's shapes, built to its doorway's opening: the leaf, what stays fixed beside it,
+/// and the switch on the claim's side.
+#[derive(Debug, PartialEq)]
+pub struct ClaimFit {
+    pub kind: fb_level::DoorKind,
+    pub switch: fb_level::SwitchKind,
+    pub leaf: geometry::door::ClaimLeaf,
+    /// The lever's plate or the chain's housing, and the lever's handle or the chain and ring.
+    pub fixture: ItemMesh,
+    pub moving: ItemMesh,
+}
+
+impl ClaimFit {
+    pub fn make(level: &Level, door: &fb_level::ClaimDoor, style: fb_level::DoorStyle, seed: u32) -> Self {
+        let spec = geometry::door::DoorSpec::rolled(door.kind, style, level.style, seed);
+        let (fixture, moving) = match door.switch {
+            fb_level::SwitchKind::Lever => (geometry::door::lever_plate(seed), geometry::door::lever_handle()),
+            fb_level::SwitchKind::Chain => (geometry::door::chain_housing(seed), geometry::door::chain_pull(seed)),
+        };
+        ClaimFit { kind: door.kind, switch: door.switch, leaf: geometry::door::claim_leaf(&spec), fixture, moving }
+    }
 }
 
 impl FixtureShapes {
     pub fn make(level: &Level) -> Self {
         let view = CellView::new(level);
         let entrance = (level.entrance.x as i32, level.entrance.y as i32);
+        let claim_doors = level.claim_doors();
         let doors = geometry::doorways(&view)
             .into_iter()
             .map(|doorway| {
@@ -608,8 +636,10 @@ impl FixtureShapes {
                         })
                         .collect();
                 }
+                // The entrance hangs a door; each door on the edge of a claim hangs one of its kind.
                 let leaf = ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
-                (doorway, frame, leaf)
+                let claim = claim_doors.iter().find(|d| (d.x, d.y) == (doorway.x, doorway.y)).map(|d| ClaimFit::make(level, d, style, seed));
+                (doorway, frame, leaf, claim)
             })
             .collect();
         let braziers = level
@@ -637,17 +667,25 @@ fn spawn_fixtures(
     tuning: Res<Tuning>,
     mut staged: Option<ResMut<crate::staged::Staged>>,
     mut blocked: ResMut<BlockedCells>,
+    mut hung: Option<ResMut<crate::doors::Doors>>,
+    record: Option<Res<crate::record::WorldRecord>>,
     mut spawner: crate::render::ItemSpawner,
 ) {
     let level = &level.0;
+    let claim_doors = level.claim_doors();
+    let saved = record.as_deref().and_then(|r| r.level(level.depth));
+    if let Some(hung) = hung.as_deref_mut() {
+        *hung = crate::doors::Doors::default();
+    }
     // The door shut behind the delver when they came in; coming back to it from below finds it
     // shut already, and it does not swing again.
     let shut_already = abyss.is_some_and(|a| a.arrival == Arrival::FromBelow);
+    let relief = geometry::Relief::new(level);
     let FixtureShapes { doors, braziers } = staged.as_mut().and_then(|s| s.take_fixtures(level)).unwrap_or_else(|| FixtureShapes::make(level));
 
     // Door frames, and the entrance door hung in its own.
     let entrance = (level.entrance.x as i32, level.entrance.y as i32);
-    for (doorway, frame, leaf) in doors {
+    for (doorway, frame, leaf, claim) in doors {
         let seed = door_seed(level, &doorway);
         let transform = doorway_transform(&doorway);
         spawner.spawn(&frame, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
@@ -662,6 +700,47 @@ fn spawn_fixtures(
             spawner
                 .spawn(&leaf, &fixture_appearance(seed, ConditionState::Serviceable))
                 .insert((StonePiece, Name::new("entrance door"), door, Transform::from_translation(hinge).with_rotation(door.rotation())));
+        } else if let (Some(claim_door), Some(fit)) = (claim_doors.iter().find(|d| (d.x, d.y) == (doorway.x, doorway.y)), claim) {
+            // A door on the edge of a claim, of its kind: locked by how the faction stands (`crate::doors`).
+            let cell = (doorway.x, doorway.y);
+            let mut state = crate::doors::Doors::default();
+            state.add(claim_door, &doorway, saved);
+            let swing = state.0[&cell].swing;
+            let door_state = &state.0[&cell];
+            // The switch on the claim's side lets the delver out of a locked door.
+            if !door_state.shared {
+                if let Some(at) = crate::doors::switch_mount(&transform, Some(&relief), level.style, door_state.switch, door_state.through, door_state.inward) {
+                    let switch = crate::doors::Switch { target: crate::doors::SwitchTarget::Door(cell), kind: door_state.switch };
+                    spawner.spawn(&fit.fixture, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Name::new("door switch"), switch, at));
+                    match door_state.switch {
+                        fb_level::SwitchKind::Lever => {
+                            let pivot = at.mul_transform(Transform::from_translation(Vec3::new(0.0, 0.0, geometry::door::LEVER_PIVOT)));
+                            let pull = crate::doors::lever_target(door_state);
+                            let handle = crate::doors::LeverHandle { cell, rest: at.rotation, pull };
+                            spawner
+                                .spawn(&fit.moving, &fixture_appearance(seed, ConditionState::BattleWorn))
+                                .insert((StonePiece, Name::new("door lever handle"), handle, pivot.with_rotation(handle.rotation(pull))));
+                        }
+                        fb_level::SwitchKind::Chain => {
+                            let rest = at.transform_point(v3(geometry::door::chain_exit()));
+                            let chain = crate::doors::ChainPull { cell, rest, down: at.rotation * Vec3::NEG_Y };
+                            spawner
+                                .spawn(&fit.moving, &fixture_appearance(seed, ConditionState::BattleWorn))
+                                .insert((StonePiece, Name::new("door chain"), chain, Transform::from_translation(chain.translation(swing)).with_rotation(at.rotation)));
+                        }
+                    }
+                }
+            }
+            // The pintles or guides stay put on the frame.
+            spawner.spawn(&fit.leaf.fixed, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
+            let hinge = transform.transform_point(v3(fit.leaf.hinge));
+            let leaf_door = crate::doors::DoorLeaf { cell, shut: transform.rotation, hinge, lift: fit.leaf.lift, squash: fit.leaf.squash_for(level.ceiling) };
+            spawner
+                .spawn(&fit.leaf.leaf, &fixture_appearance(seed, ConditionState::Serviceable))
+                .insert((StonePiece, Name::new(format!("claim door, {}", fit.kind.name())), leaf_door, leaf_door.transform(swing)));
+            if let Some(hung) = hung.as_deref_mut() {
+                hung.0.extend(state.0);
+            }
         }
     }
 
@@ -671,6 +750,12 @@ fn spawn_fixtures(
         let seed = light_seed(level, i);
         match spot.kind {
             LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light),
+            // The fire itself is the prop standing here; this is its light, hung at the heart of the flame.
+            LightKind::Campfire => {
+                let state = fb_level::props::campfire_state(fb_level::props::campfire_seed(level.seed, spot.x, spot.y));
+                let flame = armory::families::campfire::Campfire::light(&state).map_or(Vec3::Y * 2.0, |anchor| v3(anchor.position));
+                commands.spawn((StonePiece, Name::new("campfire light"), FixedLight::Campfire, FixedLight::Campfire.light(&tuning.light), Transform::from_translation(at + flame)));
+            }
             LightKind::Brazier => {
                 let (mesh, flame) = brazier.expect("a brazier has a shape");
                 spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Transform::from_translation(at)));
@@ -904,6 +989,49 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let from = if kind == fb_level::WebKind::Corner { at + back + eye } else { target + back + Vec3::Y * if kind == fb_level::WebKind::Floor { 9.0 } else { -4.0 } };
             Transform::from_translation(from).looking_at(target, Vec3::Y)
         }
+        "role" => {
+            // The first room with the role `FB_DEBUG_ROLE` names (hall, hearth, sleeping, market
+            // or store; hearth if unset), from the free floor farthest from its middle, looking
+            // at the middle. `FB_DEBUG_ROOM=<index>` picks that room of the level instead.
+            let want = match std::env::var("FB_DEBUG_ROLE").as_deref() {
+                Ok("hall") => fb_level::RoomRole::Hall,
+                Ok("sleeping") => fb_level::RoomRole::Sleeping,
+                Ok("market") => fb_level::RoomRole::Market,
+                Ok("store") => fb_level::RoomRole::Store,
+                _ => fb_level::RoomRole::Hearth,
+            };
+            let by_index = std::env::var("FB_DEBUG_ROOM").ok().and_then(|v| v.parse::<usize>().ok());
+            let Some(index) = by_index.or_else(|| (0..level.rooms.len()).find(|&r| level.roles_of(r).contains(&want))) else { return };
+            let room = level.rooms[index];
+            // At the room's middle, or for a sleeping room at the middle of its bedrolls.
+            let beds: Vec<(f32, f32)> = level
+                .props
+                .iter()
+                .filter(|p| matches!(p.prop, fb_level::Prop::Scenery { kind: armory::build::scenery::Scenery::Bedroll, .. }) && room.contains(p.x as i32, p.y as i32))
+                .map(|p| (p.x, p.y))
+                .collect();
+            let (cx, cy) = if want == fb_level::RoomRole::Sleeping && !beds.is_empty() {
+                (beds.iter().map(|b| b.0).sum::<f32>() / beds.len() as f32, beds.iter().map(|b| b.1).sum::<f32>() / beds.len() as f32)
+            } else {
+                room.centre()
+            };
+            let free = |x: f32, y: f32| level.props.iter().all(|p| (p.x - x).hypot(p.y - y) > 0.9);
+            let stand = (room.y..room.y + room.h)
+                .flat_map(|y| (room.x..room.x + room.w).map(move |x| (x as f32 + 0.5, y as f32 + 0.5)))
+                .filter(|&(x, y)| level.cell(x as i32, y as i32) == fb_level::Cell::Floor && free(x, y))
+                // Far from the middle, or for beds about two cells off them so they fill the view.
+                .min_by(|a, b| {
+                    let score = |p: &(f32, f32)| {
+                        let d = (p.0 - cx).hypot(p.1 - cy);
+                        if want == fb_level::RoomRole::Sleeping { (d - 2.0).abs() } else { -d }
+                    };
+                    score(a).total_cmp(&score(b))
+                })
+                .unwrap_or((cx, cy));
+            let at = v3(fb_level::Level::world(stand.0, stand.1)) + eye;
+            let aim = v3(fb_level::Level::world(cx, cy));
+            Transform::from_translation(at).looking_at(aim, Vec3::Y)
+        }
         "brazier" | "glowcaps" => {
             let kind = if mode == "brazier" { LightKind::Brazier } else { LightKind::Glowcaps };
             let Some(spot) = level.lights.iter().find(|l| l.kind == kind) else { return };
@@ -1025,7 +1153,7 @@ mod tests {
         let doors = FixtureShapes::make(&level).doors;
         assert!(!doors.is_empty());
         let mut stone = 0;
-        for (_, frame, _) in &doors {
+        for (_, frame, _, _) in &doors {
             for part in &frame.parts {
                 if part.material == Some(MaterialKind::Stone) {
                     stone += 1;
@@ -1242,7 +1370,7 @@ mod tests {
                 let (a, b) = (FixtureShapes::make(&level), FixtureShapes::make(&level));
                 assert_eq!(a, b, "seed {seed} depth {depth}");
                 let finishes = fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
-                for (doorway, frame, _) in &a.doors {
+                for (doorway, frame, _, _) in &a.doors {
                     let timber = frame.parts.iter().any(|p| p.name == "frame");
                     let style = finishes.door_style(doorway.x, doorway.y);
                     assert_eq!(timber, style == Some(fb_level::DoorStyle::Timber), "seed {seed} depth {depth} at {},{}", doorway.x, doorway.y);
