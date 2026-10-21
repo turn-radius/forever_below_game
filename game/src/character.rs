@@ -46,6 +46,16 @@ pub enum Class {
 impl Class {
     pub const ALL: [Class; 4] = [Class::Fighter, Class::Ranger, Class::Mage, Class::Cleric];
 
+    /// The class as the factions' likes and hates name it.
+    pub fn faction_class(self) -> fb_faction::ClassKind {
+        match self {
+            Class::Fighter => fb_faction::ClassKind::Fighter,
+            Class::Ranger => fb_faction::ClassKind::Ranger,
+            Class::Mage => fb_faction::ClassKind::Mage,
+            Class::Cleric => fb_faction::ClassKind::Cleric,
+        }
+    }
+
     /// The class's outfit key in `data/outfits.json`.
     pub fn outfit_key(self) -> &'static str {
         match self {

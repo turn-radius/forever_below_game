@@ -159,6 +159,12 @@ impl WorldRecord {
         WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)) }
     }
 
+    /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
+    /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
+    pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)) }
+    }
+
     /// The record of the level at `depth`, if it has been visited.
     pub fn level(&self, depth: u32) -> Option<&LevelRecord> {
         self.levels.get(&depth)
