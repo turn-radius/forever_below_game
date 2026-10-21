@@ -50,10 +50,18 @@ pub struct HoodSurface {
     pub cape_hem: f32,
     /// Where the point of the crown is drawn to, from the head's surface.
     peak_pull: V3,
+    /// Polar angle (from the crown) where the hood leaves the head for the neck: [`POLAR_LOW`],
+    /// or higher up the head where the cape's top stands as high as that (a cape over high
+    /// shoulders, on a small head), so the neck always rises from the cape to the head instead
+    /// of folding back on itself.
+    polar_low: f32,
 }
 
 /// Polar angle (from the crown) where a hood leaves the head for the neck.
 const POLAR_LOW: f32 = 0.74 * PI;
+/// The highest a hood may leave the head for a high cape: a little under the equator, so the
+/// slit's smoothstep from the equator to the join never has equal edges.
+const HOOD_FLOOR: f32 = 0.55 * PI;
 /// Half the width of the slit left down the front of the neck.
 const SLIT: f32 = 0.02;
 /// Polar angle of the crown's point, toward the back of the head.
@@ -98,7 +106,24 @@ impl HoodSurface {
         let (s_cape, s_head) = if style.has_cape() { (0.34, 0.5) } else { (0.0, 0.0) };
         let lift = 0.35 + 0.35 * hood.peak;
         let peak_pull = vec3::scale([0.0, lift * 0.7, -lift], hood.peak);
-        HoodSurface { head: *head, hood: *hood, cape, ease, s_cape, s_head, cape_top, cape_hem, peak_pull }
+        let mut surface = HoodSurface { head: *head, hood: *hood, cape, ease, s_cape, s_head, cape_top, cape_hem, peak_pull, polar_low: POLAR_LOW };
+        if surface.cape.is_some() {
+            surface.polar_low = surface.neck_join();
+        }
+        surface
+    }
+
+    /// Where the hood leaves the head: the lowest point on the head (from [`POLAR_LOW`] up to
+    /// the head's equator) at which the head's surface, all the way round, lies a little above
+    /// the top of the cape beneath it.
+    fn neck_join(&self) -> f32 {
+        let margin = 0.08 * self.head.half_height;
+        let clear = |polar: f32| (0..48).all(|i| {
+            let az = TAU * i as f32 / 48.0;
+            self.head_point(az, polar, 0.0)[1] >= self.cape_top_at(az) + margin
+        });
+        let steps = ((POLAR_LOW - HOOD_FLOOR) / (0.01 * PI)).round() as usize;
+        (0..=steps).map(|i| POLAR_LOW - 0.01 * PI * i as f32).find(|&polar| clear(polar)).unwrap_or(HOOD_FLOOR)
     }
 
     /// Half the angle of the face opening at polar angle `polar` (rows on the head).
@@ -110,7 +135,7 @@ impl HoodSurface {
             _ => {
                 let max = 0.5 + 0.6 * o;
                 max * smoothstep(0.16 * PI, 0.36 * PI, polar) * (1.0 - smoothstep(0.58 * PI, 0.72 * PI, polar))
-                    + SLIT * smoothstep(0.5 * PI, POLAR_LOW, polar)
+                    + SLIT * smoothstep(0.5 * PI, self.polar_low, polar)
             }
         }
     }
@@ -150,8 +175,13 @@ impl HoodSurface {
 
     /// Top of the cape at `azimuth`: a cowl's falls low over the chest.
     fn cape_top_at(&self, azimuth: f32) -> f32 {
-        let front = azimuth.cos().max(0.0).powi(2);
-        let dip = if self.hood.style == HoodStyle::Cowl { 0.9 + 0.6 * self.hood.ease } else { 0.25 };
+        // A cowl falls low over the chest only: narrow enough that it stays up over the
+        // shoulders it rests on (at 50 degrees from straight ahead it dips by under a fifth of
+        // its fall, where the square of the cosine gave two fifths and left what is worn on
+        // the shoulders standing out above its edge).
+        let cowl = self.hood.style == HoodStyle::Cowl;
+        let front = azimuth.cos().max(0.0).powi(if cowl { 4 } else { 2 });
+        let dip = if cowl { 0.9 + 0.6 * self.hood.ease } else { 0.25 };
         self.cape_top - dip * front
     }
 
@@ -175,7 +205,7 @@ impl HoodSurface {
     /// Polar angle on the head of row `s` (from `s_head` at the hood's lower edge to the crown).
     fn polar(&self, s: f32) -> f32 {
         let t = ((s - self.s_head) / (1.0 - self.s_head)).clamp(0.0, 1.0);
-        POLAR_LOW * (1.0 - t)
+        self.polar_low * (1.0 - t)
     }
 
     /// The sheet's outer surface at column `u` and row `s`, `extra` further out.
@@ -198,8 +228,8 @@ impl HoodSurface {
         let t = (s - self.s_cape) / (self.s_head - self.s_cape);
         let p0 = self.cape_point(az, top, extra);
         let below = self.cape_point(az, top - 0.2, extra);
-        let p3 = self.head_point(az, POLAR_LOW, extra);
-        let above = self.head_point(az, POLAR_LOW - 0.08, extra);
+        let p3 = self.head_point(az, self.polar_low, extra);
+        let above = self.head_point(az, self.polar_low - 0.08, extra);
         let l = vec3::distance(p0, p3) / 3.0;
         let t0 = vec3::normalize_or(vec3::sub(p0, below), vec3::Y);
         let t3 = vec3::normalize_or(vec3::sub(above, p3), vec3::Y);
@@ -384,6 +414,60 @@ mod tests {
                 assert!(r > head.half_width * 0.95, "{style:?} at u {u}: {r}");
             }
         }
+    }
+
+    #[test]
+    fn the_neck_rises_from_a_high_cape_to_the_head() {
+        // Shoulders that stand up past the hood's usual rim (a cape over pauldrons on a small
+        // head): the hood leaves the head higher up, so the neck still climbs from the cape's
+        // top to the rim rather than folding back down onto itself.
+        let head = HeadForm::mannequin(0.8);
+        let mut torso = TorsoForm::MANNEQUIN;
+        torso.shoulder_top.y += 0.6;
+        torso.neck.y += 0.6;
+        for style in [HoodStyle::Hood, HoodStyle::Cowl] {
+            let s = HoodSurface::new(&head, &torso, &Hood { style, peak: 0.0, ..Hood::default() }, 3);
+            assert!(s.polar_low < POLAR_LOW, "{style:?} still leaves the head at {}", s.polar_low);
+            for i in 0..48 {
+                let az = TAU * i as f32 / 48.0;
+                let (top, rim) = (s.cape_top_at(az), s.head_point(az, s.polar_low, 0.0)[1]);
+                assert!(rim >= top, "{style:?} at {az}: the rim {rim} is under the cape's top {top}");
+            }
+        }
+        // And where the usual rim is high enough nothing moves.
+        let s = HoodSurface::new(&HeadForm::mannequin(1.0), &TorsoForm::MANNEQUIN, &Hood::default(), 3);
+        assert_eq!(s.polar_low, POLAR_LOW);
+    }
+
+    #[test]
+    fn a_tiny_head_under_very_high_shoulders_still_builds_a_clean_sheet() {
+        // Past anywhere the head can clear them the hood leaves at its floor, short of the
+        // equator, and the sheet has no NaN where the slit's smoothstep would have had equal edges.
+        let head = HeadForm::mannequin(0.4);
+        let mut torso = TorsoForm::MANNEQUIN;
+        torso.shoulder_top.y += 3.0;
+        torso.neck.y += 3.0;
+        for style in [HoodStyle::Hood, HoodStyle::Cowl] {
+            let s = HoodSurface::new(&head, &torso, &Hood { style, ..Hood::default() }, 3);
+            assert_eq!(s.polar_low, HOOD_FLOOR, "{style:?}");
+            for r in 0..=20 {
+                for c in 0..=20 {
+                    let p = s.point(c as f32 / 20.0, r as f32 / 20.0, 0.0);
+                    assert!(p.iter().all(|v| v.is_finite()), "{style:?} at {c},{r}: {p:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_cowl_dips_over_the_chest_only() {
+        let (head, torso) = (HeadForm::mannequin(1.0), TorsoForm::MANNEQUIN);
+        let s = HoodSurface::new(&head, &torso, &Hood { style: HoodStyle::Cowl, ..Hood::default() }, 3);
+        let fall = |az: f32| s.cape_top - s.cape_top_at(az);
+        assert!(fall(0.0) > 0.9, "a cowl falls low over the chest: {}", fall(0.0));
+        // At 50 degrees from straight ahead, over the shoulder's front, under a fifth of that.
+        assert!(fall(50f32.to_radians()) < 0.2 * fall(0.0), "{} at 50 degrees", fall(50f32.to_radians()));
+        assert!(fall(PI / 2.0).abs() < 1e-4 && fall(PI).abs() < 1e-4, "level over the shoulders and the back");
     }
 
     #[test]
