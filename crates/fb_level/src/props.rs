@@ -140,7 +140,11 @@ impl Prop {
             }
             // A bedroll lies along item X, human length.
             Prop::Scenery { kind: Scenery::Bedroll, .. } => FloorShape::Square { half_width: 8.5, half_depth: 3.0 },
-            Prop::Scenery { kind, .. } => FloorShape::Round(kind.radius()),
+            // Room furniture is box-like: its own footprint, back along -Z.
+            Prop::Scenery { kind, .. } => match kind.footprint() {
+                Some((half_width, half_depth)) => FloorShape::Square { half_width, half_depth },
+                None => FloorShape::Round(kind.radius()),
+            },
             Prop::Campfire { .. } => FloorShape::Round(CAMPFIRE_RADIUS),
         }
     }
@@ -663,7 +667,10 @@ mod tests {
                 };
             }
         }
-        assert_eq!(scenery.len(), Scenery::ALL.len(), "{scenery:?}");
+        // Room furniture is placed by a room's purpose, not scattered, so only the loose kinds show up everywhere.
+        for kind in [Scenery::Rubble, Scenery::Bones, Scenery::Pillar, Scenery::Bedroll] {
+            assert!(scenery.contains(&kind), "{kind:?} never placed: {scenery:?}");
+        }
         assert_eq!(styles.len(), STYLES.len(), "{styles:?}");
     }
 

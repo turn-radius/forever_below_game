@@ -6,6 +6,8 @@
 //! swing`).
 //! `--doors` the doors view (a claim door and its switch in a doorway beside a panel of the
 //! kind's parameters: `--doors --kind portcullis --level stone_halls`),
+//! `--scenery` the scenery view (a grid of one kind of scenery from consecutive seeds:
+//! `--scenery --kind bunk --seed 7`),
 //! `--forge` the Forge view (an item beside a panel of sliders for every parameter of its
 //! state: `--forge --family lantern --seed 7`), and `--level` the level view (a whole level
 //! from above beside a panel of the generator's parameters: `--level --seed 7`), and `--lab`
@@ -47,6 +49,7 @@ use forever_below::{
     swing_practice::SwingPracticePlugin,
     title::{NewDelveSeed, TitlePlugin},
     tuning::TuningPlugin,
+    scenery_view::{SceneryView, SceneryViewPlugin},
     turntable::{Focus, Turntable, TurntablePlugin},
 };
 
@@ -60,6 +63,9 @@ fn main() -> AppExit {
     }
     if args.iter().any(|a| a == "--lab") {
         return run_lab(&args);
+    }
+    if args.iter().any(|a| a == "--scenery") {
+        return run_scenery(&args);
     }
     if args.iter().any(|a| a == "--level") {
         return run_level_view(&args);
@@ -255,6 +261,22 @@ fn run_doors(args: &[String]) -> AppExit {
     };
     let mut app = App::new();
     app.add_plugins(view_plugins()).add_plugins((ArmoryRenderPlugin, DoorViewPlugin)).insert_resource(lab);
+    if let Some(capture) = FrameCapturePlugin::from_env() {
+        app.add_plugins(capture);
+    }
+    app.run()
+}
+
+fn run_scenery(args: &[String]) -> AppExit {
+    let view = match SceneryView::from_args(args.iter().cloned()) {
+        Ok(view) => view,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
+    let mut app = App::new();
+    app.add_plugins(view_plugins()).add_plugins((ArmoryRenderPlugin, SceneryViewPlugin)).insert_resource(view);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }

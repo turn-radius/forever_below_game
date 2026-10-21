@@ -44,6 +44,12 @@ fn prop_mark(prop: Prop) -> char {
             Scenery::Bones => '~',
             Scenery::Pillar => 'o',
             Scenery::Bedroll => '=',
+            Scenery::Bunk => 'B',
+            Scenery::Throne => 'T',
+            Scenery::Altar => 'A',
+            Scenery::Bookshelf => 'H',
+            Scenery::Table => 't',
+            Scenery::WeaponRack => 'W',
         },
         Prop::Campfire { .. } => 'u',
     }

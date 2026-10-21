@@ -276,6 +276,13 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
                 canvas.line([c[0] - px * 0.15, c[1] - px * 0.15], [c[0] + px * 0.15, c[1] + px * 0.15], ink, INK, 0.75);
                 canvas.line([c[0] - px * 0.15, c[1] + px * 0.15], [c[0] + px * 0.15, c[1] - px * 0.15], ink, INK, 0.75);
             }
+            // Room furniture: a bar as wide as it is, along its item X and turned by its yaw, as thick as it is deep.
+            Prop::Scenery { kind, .. } => {
+                let (hw, hd) = kind.footprint().unwrap_or((4.0, 4.0));
+                let along = [spot.yaw.cos(), -spot.yaw.sin()];
+                let half = px * hw / 20.0;
+                canvas.line([c[0] - along[0] * half, c[1] - along[1] * half], [c[0] + along[0] * half, c[1] + along[1] * half], px * hd * 2.0 / 20.0, INK, 0.6);
+            }
         }
     }
     for light in &level.lights {
