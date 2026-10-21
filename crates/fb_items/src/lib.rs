@@ -28,6 +28,7 @@ pub mod stats;
 pub mod tables;
 pub mod troll;
 pub mod undead;
+pub mod value;
 
 pub use foe::Foe;
 pub use contents::{container_item, roll_contents};

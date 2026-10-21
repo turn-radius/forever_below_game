@@ -172,6 +172,25 @@ Each family maps to a slot, tags, weight, armour, warmth and damage, plus a grid
 - The plate's shields had tower, buckler and everything else; the port's pavise counts as a tower (armour 3, 15 lb).
 - Chests cannot be packed, as the plate's `long` flag had it.
 
+## Value
+
+`Item::value()` gives what an item is worth in coins (`fb_items::value`); `Item::value_copper()` is the same in copper. The card shows it on its info line, before the cells ("Magic · Sword · 4 lb · 1d8 · 62 gp 3 sp · 1×4 cells").
+
+- **Coins** convert at 1 gp = 10 sp = 100 cp (SRD 5.1 p. 62, Coins). `Coins::from_copper` and `total_copper` move between the two, `plus` (and `+`) adds with change, `minus` takes a price off with change and returns `None` when short (2 gp less 15 sp leaves 5 sp; 15 sp less 2 gp is `None`), and `Sum` over purses is a delver's wallet. `Display` still lists all three; `Coins::short` leaves out the empty ones for the card.
+- **Base price** is in copper in `data/values.json`, one row per base, new and common. Where a base matches an SRD 5.1 equipment price it takes it (pp. 62 to 70): longsword 15 gp (Sword), dagger 2 gp, mace 5 gp, quarterstaff 2 sp (Staff), spear 1 gp, shortbow and light crossbow 25 gp, shield 10 gp, padded 5 gp (Gambeson), leather 10 gp (Leather jerkin), studded leather 45 gp (Brigandine), scale mail 50 gp (Scale coat), chain mail 75 gp (Mail), breastplate 400 gp (Cuirass), handaxe 5 gp, club 1 sp, backpack 2 gp, sack 1 cp, chest 5 gp, torch 1 cp, candle 1 cp, hooded lantern 5 gp, oil 1 sp, hempen rope 1 gp, thieves' tools 25 gp (Lockpicks), waterskin 2 sp, book 25 gp, paper 2 sp (Note), a scroll's sheet 1 gp, arrows and bolts 1 gp per twenty (5 cp), quiver 1 gp (and the bolt case), loaf of bread 2 cp, cheese 1 sp, mug of ale 2 cp (Tankard), wine 2 sp, potion of healing 50 gp (Healing draught and Potion), clothes 5 sp (Tunic) and traveller's clothes 2 gp (Cloak), robe 1 gp. The rest are our own: Helm, Mantle, Gloves, Gauntlets, Shoes, Boots, Satchel, Ring, Amulet, Charm, Mail coif, Pointed hat, Belt, Hood, Shirt, Trousers, Breeches, Leggings, Glowcap, Smoked fish, Meat pie, Sausages, Roast haunch, Blind cavefish, Bandages. A good-quality cover price for a good, not a market: no folk haggles yet. A new base needs a row (`every_base_has_a_price` fails otherwise).
+- **Rarity** multiplies it (our own): common 1, magic 4, rare 20, legendary 200.
+- **Affixes** multiply it (our own): each good affix by 1.15, 1.3, 1.5 or 1.8 by the least rarity it rolls on, each flaw by 0.7. Held-back affixes count like the rest.
+- **Condition** multiplies it (our own): `(1 - 0.6 wear) (1 - 0.4 damage)`, and a quarter of that for a snapped blade. Wear 0.7 leaves 58%. The Armory's rust, rot and fray multipliers already act through wear, so they are not counted twice.
+- A value is never below 1 cp, except a purse: it is worth its coins, and nothing for the bag. A container's value leaves out what it holds; the contents are worth their own.
+
+| Item | Value |
+|---|---|
+| Common torch | 1 cp |
+| Common sword, pristine | 15 gp |
+| Common sword, worn to 0.7 | 8 gp 7 sp |
+| Rare sword, pristine, no affix factors | 300 gp |
+| Common chain mail | 75 gp |
+
 ## Slots
 
 `data/slots.json` lists the slots: head, neck, shirt, shoulders (cloak), armour (body), main hand, hands, feet, back, belt, off hand, legs, two rings, a charm, the hip, beside the belt, and the quiver, over the back's slot, neither of which the plate had. A quiver or bolt case is slung only in the quiver slot, which needs no belt, so it never vies with a lantern at the hip or a pack on the back; its grid shows with the other carried containers, and arrows or bolts picked up go into it first. A bow or crossbow draws only from a worn quiver or bolt case. Rings fill whichever ring slot is free. Any weapon (sword, dagger, mace, club, axe, spear, staff, bow, crossbow) can be held in either hand (`fb_items::Item::slots`), the user's call: the plate held weapons only in the main hand. Equipped without saying where (a double-click, F, a drop on the doll) it takes the main hand if that is free, else the off hand if that is, else it swaps out the main hand's (`Inventory::target_slot`). Only the main hand swings; an off-hand weapon is held and drawn but does not attack until the character simulation is designed (#122). A two-handed weapon (a staff, spear, bow or crossbow) in the off hand is held in the left hand alone, as the doll holds it in the right, so a staff in the off hand beside a sword in the main hand is drawn in both fists; this is our own choice until two-handed holds are designed.

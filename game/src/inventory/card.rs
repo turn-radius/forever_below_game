@@ -119,6 +119,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     let s = &p.stats;
     let cells = format!("{}\u{d7}{} cells", p.footprint.cols, p.footprint.rows);
     let weight = format!("{} lb", number(s.weight));
+    let value = item.value().short();
     let meta: Vec<String> = if p.kind == Kind::Gear {
         let noun = fb_items::naming::noun(&item.base, &item.shape);
         let damage = s.damage.map(|d| {
@@ -133,13 +134,14 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
             (s.warmth > 0.0).then(|| format!("warmth +{}", number(s.warmth))),
             damage,
             (s.light > 0.0).then(|| format!("light {} ft", number(s.light))),
+            Some(value),
             Some(cells),
         ]
         .into_iter()
         .flatten()
         .collect()
     } else {
-        [(!p.description.is_empty()).then(|| p.description.clone()), Some(weight), Some(cells)].into_iter().flatten().collect()
+        [(!p.description.is_empty()).then(|| p.description.clone()), Some(weight), Some(value), Some(cells)].into_iter().flatten().collect()
     };
     let contents = p.holds.as_ref().map(|holds| {
         let inside = format!("{}\u{d7}{} inside", holds.cols, holds.rows);
@@ -799,6 +801,7 @@ mod tests {
         assert!(card.meta.starts_with("Magic \u{b7} "), "{}", card.meta);
         assert!(card.meta.contains(&format!("{} lb", number(s.weight))), "{}", card.meta);
         assert!(card.meta.contains(&format!("{}", s.damage.unwrap())), "{}", card.meta);
+        assert!(card.meta.contains(&magic.value().short()), "{}", card.meta);
         let fp = magic.profile.footprint;
         assert!(card.meta.ends_with(&format!("{}\u{d7}{} cells", fp.cols, fp.rows)), "{}", card.meta);
         assert_eq!(card.affixes.len(), magic.affixes.len());
@@ -826,6 +829,7 @@ mod tests {
         let card = card_text(&bread, None);
         assert!(card.meta.starts_with(&bread.profile.description), "{}", card.meta);
         assert!(card.affixes.is_empty() && card.contents.is_none());
+        assert!(card.meta.contains(&bread.value().short()), "{}", card.meta);
 
         let mut inventory = Inventory::default();
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());

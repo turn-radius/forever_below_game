@@ -18,6 +18,68 @@ pub struct Coins {
     pub cp: u32,
 }
 
+impl Coins {
+    pub const CP_PER_SP: u64 = 10;
+    pub const CP_PER_GP: u64 = 100;
+
+    /// `cp` copper made into the fewest coins: 250 cp is 2 gp 5 sp.
+    pub fn from_copper(cp: u64) -> Coins {
+        Coins {
+            gp: (cp / Self::CP_PER_GP).min(u64::from(u32::MAX)) as u32,
+            sp: (cp % Self::CP_PER_GP / Self::CP_PER_SP) as u32,
+            cp: (cp % Self::CP_PER_SP) as u32,
+        }
+    }
+
+    /// Everything in copper: 1 gp is 100.
+    pub fn total_copper(self) -> u64 {
+        u64::from(self.gp) * Self::CP_PER_GP + u64::from(self.sp) * Self::CP_PER_SP + u64::from(self.cp)
+    }
+
+    /// The sum, with change.
+    pub fn plus(self, other: Coins) -> Coins {
+        Coins::from_copper(self.total_copper() + other.total_copper())
+    }
+
+    /// What is left after paying `price`, with change (2 gp less 15 sp is 5 sp); `None` if
+    /// there is not enough.
+    pub fn minus(self, price: Coins) -> Option<Coins> {
+        self.total_copper().checked_sub(price.total_copper()).map(Coins::from_copper)
+    }
+
+    /// Whether it holds no coin.
+    pub fn is_empty(self) -> bool {
+        self.total_copper() == 0
+    }
+
+    /// Only the coins it has, for a card: "1 gp 5 sp", "3 cp", "0 cp" for none.
+    pub fn short(self) -> String {
+        let c = Coins::from_copper(self.total_copper());
+        let parts: Vec<String> = [(c.gp, "gp"), (c.sp, "sp"), (c.cp, "cp")].into_iter().filter(|&(n, _)| n > 0).map(|(n, unit)| format!("{n} {unit}")).collect();
+        if parts.is_empty() { "0 cp".to_string() } else { parts.join(" ") }
+    }
+}
+
+impl std::ops::Add for Coins {
+    type Output = Coins;
+    fn add(self, other: Coins) -> Coins {
+        self.plus(other)
+    }
+}
+
+/// A delver's wallet: the sum of their purses (`purses.filter_map(|p| p.coins).sum()`).
+impl std::iter::Sum for Coins {
+    fn sum<I: Iterator<Item = Coins>>(iter: I) -> Coins {
+        Coins::from_copper(iter.map(Coins::total_copper).sum())
+    }
+}
+
+impl<'a> std::iter::Sum<&'a Coins> for Coins {
+    fn sum<I: Iterator<Item = &'a Coins>>(iter: I) -> Coins {
+        iter.copied().sum()
+    }
+}
+
 impl fmt::Display for Coins {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} gp · {} sp · {} cp", self.gp, self.sp, self.cp)
