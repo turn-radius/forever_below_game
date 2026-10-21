@@ -8,7 +8,11 @@ use std::collections::HashSet;
 
 use armory::reflect::{Field, FieldKind};
 
+use crate::stock::{Shop, flawed};
 use crate::value::base_copper;
+use crate::{Item, ItemParts, Odds, dress, roll_item_with};
+use armory::cond::{Condition, ConditionState};
+use procgen_rng::Mulberry32;
 
 /// What a field of the Armory shape is for, which sets the tier that opens it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -244,6 +248,30 @@ pub fn shaped_copper(base: &str, shape: &Shape, size: f64) -> u64 {
     (worth.round() as u64).max(1)
 }
 
+/// The item a maker finishes from an order, pure in its arguments: `shape` is the Armory shape
+/// as the delver edited it, taken as it is (never rolled again). Its rarity and affixes roll
+/// from the game layer exactly as `shop`'s stock does, capped by the maker's grade
+/// ([`crate::stock::Grade::cap`]) at the level's `depth` plus the grade's bonus, so a novice's
+/// work is common and a master's at best rare. It leaves the bench new (no flaw, the wear of
+/// the grade's finish) and its history ends with the maker's line, naming `delver`. Its seed is
+/// salted so the icon of a shaped piece is cached apart from a found item's of the same base
+/// and seed. `None` for a base no table knows.
+pub fn finish(shop: &Shop, base: &str, shape: &Shape, seed: u32, depth: u32, delver: &str) -> Option<Item> {
+    let odds = Odds::loot(depth + shop.grade.bonus_depth()).capped(shop.grade.cap());
+    let mut rng = Mulberry32::new(seed ^ 0xC033_15A1);
+    let rolled = (0..6).filter_map(|k| roll_item_with(base, seed.wrapping_add(k), odds)).find(|i| !flawed(i))?;
+    let mut parts = ItemParts::from(rolled);
+    parts.seed ^= 0xC0DE_1C0D;
+    parts.shape = shape.clone();
+    let condition = dress::condition_mut(&mut parts.shape);
+    *condition = Condition::of(ConditionState::Pristine);
+    condition.state = ConditionState::Custom;
+    let (least, most) = shop.grade.finish_wear();
+    condition.wear = rng.range_f32(least, most);
+    parts.history.push(shop.made_for_line(delver));
+    Item::from_parts(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +279,40 @@ mod tests {
 
     fn sword() -> Shape {
         roll_shape("Sword", 1207).unwrap()
+    }
+
+    fn shop(grade: crate::stock::Grade) -> Shop {
+        Shop { line: crate::stock::Line::Weapons, grade, lean: Some(crate::stock::Lean::Blades), maker: "Oda".into(), house: "the Brothers of the Last Door".into() }
+    }
+
+    #[test]
+    fn a_finished_piece_keeps_the_edited_shape_and_names_maker_and_delver() {
+        use crate::stock::Grade;
+        let mut shape = sword();
+        shape.set_slider("blade.length", 15.0).unwrap();
+        let item = finish(&shop(Grade::Apprentice), "Sword", &shape, 77, 6, "Wren").unwrap();
+        // Everything but the bench's condition is as edited.
+        let mut kept = item.shape.clone();
+        *dress::condition_mut(&mut kept) = *dress::condition_mut(&mut shape.clone());
+        assert_eq!(kept, shape);
+        assert_eq!(item.history.last().unwrap(), "Made by Oda, apprentice bladesmith of the Brothers of the Last Door, for Wren.");
+        let c = item.shape.condition();
+        assert!(c.wear <= 0.06 && !c.broken && c.damage == 0.0);
+        assert_eq!(finish(&shop(Grade::Apprentice), "Sword", &shape, 77, 6, "Wren"), Some(item));
+    }
+
+    #[test]
+    fn the_makers_grade_caps_the_rarity_of_what_they_finish() {
+        use crate::{Rarity, stock::Grade};
+        for (grade, cap) in [(Grade::Novice, Rarity::Common), (Grade::Apprentice, Rarity::Magic), (Grade::Expert, Rarity::Rare), (Grade::Master, Rarity::Rare)] {
+            let mut best = Rarity::Common;
+            for seed in 0..60 {
+                let item = finish(&shop(grade), "Sword", &sword(), seed, 12, "Wren").unwrap();
+                assert!(item.rarity <= cap && item.affixes.iter().all(|a| a.good), "{} {:?}", grade.label(), item.rarity);
+                best = best.max(item.rarity);
+            }
+            assert!(grade == Grade::Novice || best > Rarity::Common, "{} finishes only common work", grade.label());
+        }
     }
 
     fn class_of(shape: &Shape, path: &str) -> Option<FieldClass> {

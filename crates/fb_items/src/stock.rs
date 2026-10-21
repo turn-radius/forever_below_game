@@ -188,10 +188,17 @@ impl Shop {
         let verb = if self.line == Line::General { "Sold" } else { "Made" };
         format!("{verb} by {}, {} {noun} of {}.", self.maker, self.grade.label(), self.house)
     }
+
+    /// The maker's line for a piece made to order: "Made by Oda, apprentice weaponsmith of the
+    /// Brothers of the Last Door, for Wren."
+    pub fn made_for_line(&self, delver: &str) -> String {
+        let line = self.maker_line();
+        format!("{}, for {delver}.", line.trim_end_matches('.'))
+    }
 }
 
 /// Whether an affix is a flaw or ages the piece: nothing flawed is sold new.
-fn flawed(item: &Item) -> bool {
+pub(crate) fn flawed(item: &Item) -> bool {
     let pristine = Condition::of(ConditionState::Pristine);
     item.affixes.iter().any(|a| {
         let mut c = pristine;

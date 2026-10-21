@@ -75,7 +75,7 @@ fn reset_talk(mut talk: ResMut<Talk>) {
 /// the enchanter's two ([`crate::enchanter`]).
 /// Whatever builds another flips its arm.
 pub fn service_ready(service: Service) -> bool {
-    matches!(service, Service::Commission | Service::Enchant | Service::Scrap)
+    matches!(service, Service::Commission | Service::Order | Service::Enchant | Service::Scrap)
 }
 
 /// The delver chose a service of the folk they talk to, and its screen should open. Sent only for
@@ -103,6 +103,14 @@ pub struct Talk {
     /// How many times a rumour was resolved this talk.
     pub resolved: u32,
     revision: u32,
+}
+
+impl Talk {
+    /// Has the speaker answer `topic` with `text`, the panel drawing it afresh.
+    pub fn say(&mut self, topic: Topic, text: String) {
+        self.answer = Some((topic, text));
+        self.revision += 1;
+    }
 }
 
 /// For captures: talk to this folk next frame as though the Talk key were pressed on them, and
@@ -297,6 +305,12 @@ fn talk(
             talk.folk = Some(entity);
             talk.greeting = lines::greeting(&speaker);
             talk.topics = lines::topics(&speaker);
+            // A maker holding an order of the delver's offers to speak of it, after Commission.
+            if record.as_ref().is_some_and(|r| r.orders.iter().any(|o| o.maker_seed == speaker.seed && o.depth == speaker.depth))
+                && let Some(at) = talk.topics.iter().position(|t| *t == Topic::Service(Service::Commission))
+            {
+                talk.topics.insert(at + 1, Topic::Service(Service::Order));
+            }
             talk.speaker = Some(speaker);
             talk.answer = None;
             talk.revision += 1;

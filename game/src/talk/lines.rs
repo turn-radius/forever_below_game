@@ -39,6 +39,9 @@ pub fn spit_line(speaker: &Speaker) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Service {
     Commission,
+    /// Collecting what was commissioned of this folk; offered only to a delver with an order
+    /// with them.
+    Order,
     Enchant,
     Scrap,
 }
@@ -60,6 +63,7 @@ impl Topic {
             Topic::Who => "Who are you?",
             Topic::Trade => "Your trade",
             Topic::Service(Service::Commission) => "Commission",
+            Topic::Service(Service::Order) => "Your order",
             Topic::Service(Service::Enchant) => "Enchant",
             Topic::Service(Service::Scrap) => "Scrap",
             Topic::Level => "This level",
