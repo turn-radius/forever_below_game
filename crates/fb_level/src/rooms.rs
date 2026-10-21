@@ -169,6 +169,8 @@ mod tests {
             creatures: vec![],
             stairs: vec![],
             webs: vec![],
+            past: None,
+            purposes: Vec::new(),
         }
     }
 

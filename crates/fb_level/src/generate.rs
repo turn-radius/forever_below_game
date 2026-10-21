@@ -25,6 +25,9 @@ use crate::{Cell, Entrance, Facing, ItemSpot, Level, LevelParams, LevelStyle, Li
 // move them; its defaults are the values these constants always had.
 /// Salt for the furnishing stream.
 const FURNISH_SALT: u32 = 0x5EED_17E5;
+/// Salt for the stream that draws a level's main corridor width, so the layout stream is the
+/// same whatever width is drawn.
+const WIDTH_SALT: u32 = 0x31D7_4A11;
 
 /// What the abyss leaves lying about, by weight. Families not yet ported are skipped. No
 /// chests: every container stands as a prop (`crate::props`).
@@ -157,7 +160,9 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
     }
     let mut doors = vec![Vec::new(); rooms.len()];
     let entrance = place_entrance(&mut grid, &rooms, &mut doors, &mut rng, p)?;
-    connect(&mut grid, &rooms, &mut doors, &mut rng, p);
+    let start = start_room_of(&rooms, &entrance)?;
+    let main_width = Mulberry32::new(layout_seed ^ WIDTH_SALT).int(p.corridor_width_min, p.corridor_width_max.max(p.corridor_width_min));
+    connect(&mut grid, &rooms, &mut doors, start, main_width, &mut rng, p);
 
     let style = LevelStyle::for_depth(depth);
     let mut level = Level {
@@ -181,7 +186,11 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         creatures: Vec::new(),
         stairs: Vec::new(),
         webs: Vec::new(),
+        past: None,
+        purposes: Vec::new(),
     };
+    // The past first, so a prison can make cell blocks of its great halls; columns keep out of them.
+    crate::past::settle_past(&mut level, layout_seed, p);
     if style == LevelStyle::StoneHalls {
         // A level of stone halls has a colonnade; a layout with no hall to hold one is tried
         // again, until the parameters are relaxed. Params that make no such hall (no halls, small
@@ -466,13 +475,69 @@ fn place_entrance(grid: &mut Grid, rooms: &[Room], doors: &mut [Vec<Door>], rng:
     }
 }
 
+/// The room the entrance passage leads into.
+fn start_room_of(rooms: &[Room], entrance: &Entrance) -> Option<usize> {
+    let (dx, dy) = entrance.inward.step();
+    let (mut x, mut y) = (entrance.x as i32, entrance.y as i32);
+    for _ in 0..1000 {
+        if let Some(i) = rooms.iter().position(|r| r.contains(x, y)) {
+            return Some(i);
+        }
+        x += dx;
+        y += dy;
+    }
+    None
+}
+
 /// Joins the rooms with corridors: a spanning tree over the rooms, so all are linked, plus a
 /// few loops. A link that cannot be routed is skipped; the caller checks reachability.
-fn connect(grid: &mut Grid, rooms: &[Room], doors: &mut [Vec<Door>], rng: &mut Mulberry32, p: &LevelParams) {
+/// Each link is carved at its rank's width: the spine (the tree path from `start` to the
+/// room furthest from it by tree links) at `main_width`, other tree links one narrower, loops
+/// one cell.
+fn connect(grid: &mut Grid, rooms: &[Room], doors: &mut [Vec<Door>], start: usize, main_width: u32, rng: &mut Mulberry32, p: &LevelParams) {
     let blocked = room_halos(grid, rooms);
-    for (a, b) in links(rooms, rng, p.loop_chance) {
-        join(grid, &blocked, rooms, doors, (a, b), rng, p);
+    let (edges, tree) = links(rooms, rng, p.loop_chance);
+    let spine = spine_links(rooms.len(), &edges[..tree], start);
+    for (i, &(a, b)) in edges.iter().enumerate() {
+        let width = if i >= tree {
+            1
+        } else if spine[i] {
+            main_width
+        } else {
+            main_width.saturating_sub(1).max(1)
+        };
+        join(grid, &blocked, rooms, doors, (a, b), width, rng, p);
     }
+}
+
+/// Which of the tree `edges` lie on the path from `start` to the room furthest from it.
+fn spine_links(rooms: usize, edges: &[(usize, usize)], start: usize) -> Vec<bool> {
+    let mut hops = vec![usize::MAX; rooms];
+    let mut via = vec![usize::MAX; rooms];
+    let mut order = vec![start];
+    hops[start] = 0;
+    let mut head = 0;
+    while head < order.len() {
+        let room = order[head];
+        head += 1;
+        for (i, &(a, b)) in edges.iter().enumerate() {
+            let other = if a == room { b } else if b == room { a } else { continue };
+            if hops[other] == usize::MAX {
+                hops[other] = hops[room] + 1;
+                via[other] = i;
+                order.push(other);
+            }
+        }
+    }
+    let mut spine = vec![false; edges.len()];
+    let mut room = (0..rooms).filter(|&r| hops[r] != usize::MAX).max_by_key(|&r| (hops[r], std::cmp::Reverse(r))).unwrap_or(start);
+    while room != start {
+        let i = via[room];
+        spine[i] = true;
+        let (a, b) = edges[i];
+        room = if a == room { b } else { a };
+    }
+    spine
 }
 
 /// Cells corridors may not enter: the grid's outer ring, every room, and the ring of rock
@@ -492,7 +557,8 @@ fn room_halos(grid: &Grid, rooms: &[Room]) -> Vec<bool> {
 
 /// Which rooms to join: Prim's spanning tree by centre distance, then for some rooms an extra
 /// link to their nearest room not yet linked to them.
-fn links(rooms: &[Room], rng: &mut Mulberry32, loop_chance: f64) -> Vec<(usize, usize)> {
+/// Returns the links and how many of them, the first ones, form the tree.
+fn links(rooms: &[Room], rng: &mut Mulberry32, loop_chance: f64) -> (Vec<(usize, usize)>, usize) {
     let dist = |a: usize, b: usize| {
         let ((ax, ay), (bx, by)) = (rooms[a].centre(), rooms[b].centre());
         (ax - bx).powi(2) + (ay - by).powi(2)
@@ -509,6 +575,7 @@ fn links(rooms: &[Room], rng: &mut Mulberry32, loop_chance: f64) -> Vec<(usize, 
         linked[b] = true;
         edges.push((a, b));
     }
+    let tree = edges.len();
     for a in 0..rooms.len() {
         if !rng.chance(loop_chance) {
             continue;
@@ -521,12 +588,12 @@ fn links(rooms: &[Room], rng: &mut Mulberry32, loop_chance: f64) -> Vec<(usize, 
             edges.push((a, b));
         }
     }
-    edges
+    (edges, tree)
 }
 
 /// Cuts a door in each of two rooms and routes a corridor between them. Leaves the grid
 /// untouched and returns `false` if no route exists.
-fn join(grid: &mut Grid, blocked: &[bool], rooms: &[Room], doors: &mut [Vec<Door>], (a, b): (usize, usize), rng: &mut Mulberry32, p: &LevelParams) -> bool {
+fn join(grid: &mut Grid, blocked: &[bool], rooms: &[Room], doors: &mut [Vec<Door>], (a, b): (usize, usize), width: u32, rng: &mut Mulberry32, p: &LevelParams) -> bool {
     let from = pick_door(rooms, &doors[a], a, b, rng, p.door_reuse_chance);
     let to = pick_door(rooms, &doors[b], b, a, rng, p.door_reuse_chance);
     let Some(path) = route(grid, blocked, from.outside(), from.out, to.outside(), p) else {
@@ -538,12 +605,53 @@ fn join(grid: &mut Grid, blocked: &[bool], rooms: &[Room], doors: &mut [Vec<Door
             doors[room].push(door);
         }
     }
-    for (x, y) in path {
+    for &(x, y) in &path {
         if grid.get(x, y) == Cell::Rock {
             grid.set(x, y, Cell::Floor);
         }
     }
+    if width > 1 {
+        widen(grid, blocked, &path, width);
+    }
     true
+}
+
+/// Opens the cells beside a carved `path` so the corridor is `width` cells across: one side
+/// of the line for two, both for three. At a turn both the incoming and outgoing direction
+/// widen, so corners fill. A side cell opens only if it is rock, in bounds and unblocked, and
+/// the cell beyond it is not open corridor of another run, which keeps a wall of rock between
+/// parallel corridors.
+fn widen(grid: &mut Grid, blocked: &[bool], path: &[(i32, i32)], width: u32) {
+    let mut mine: std::collections::HashSet<(i32, i32)> = path.iter().copied().collect();
+    let mut sides = Vec::new();
+    for (i, &(x, y)) in path.iter().enumerate() {
+        let mut dirs = Vec::with_capacity(2);
+        if i > 0 {
+            dirs.push((x - path[i - 1].0, y - path[i - 1].1));
+        }
+        if i + 1 < path.len() {
+            dirs.push((path[i + 1].0 - x, path[i + 1].1 - y));
+        }
+        for (dx, dy) in dirs {
+            let (px, py) = (-dy, dx);
+            sides.push(((x, y), (px, py)));
+            if width > 2 {
+                sides.push(((x, y), (-px, -py)));
+            }
+        }
+    }
+    for ((x, y), (px, py)) in sides {
+        let (sx, sy) = (x + px, y + py);
+        if !grid.in_bounds(sx, sy) || blocked[grid.index(sx, sy)] || grid.get(sx, sy) != Cell::Rock {
+            continue;
+        }
+        let (bx, by) = (sx + px, sy + py);
+        if grid.get(bx, by).is_open() && !mine.contains(&(bx, by)) {
+            continue;
+        }
+        grid.set(sx, sy, Cell::Floor);
+        mine.insert((sx, sy));
+    }
 }
 
 /// The door in room `a` for a corridor toward room `b`: on the side facing `b`, lined up with
@@ -644,7 +752,8 @@ fn route(grid: &Grid, blocked: &[bool], from: (i32, i32), heading: Facing, to: (
 const COLONNADE_LONG: u32 = 7;
 const COLONNADE_SHORT: u32 = 5;
 
-/// Sets two rows of columns down each hall long and wide enough, apart from the starting room.
+/// Sets two rows of columns down each hall long and wide enough, apart from the starting room and
+/// any cell block.
 /// The rows run one cell in from the long walls and every other cell along them, so a ring of
 /// open floor stays round the walls, the gaps between columns join it to the aisle, and nobody
 /// is walled off. The two cells straight in from each door are kept clear. Returns how many
@@ -654,7 +763,7 @@ fn colonnade_halls(level: &mut Level) -> usize {
     let mut columns = Vec::new();
     for (i, room) in level.rooms.iter().enumerate() {
         let (long, short) = (room.w.max(room.h), room.w.min(room.h));
-        if Some(i) == start_room || long < COLONNADE_LONG || short < COLONNADE_SHORT {
+        if Some(i) == start_room || long < COLONNADE_LONG || short < COLONNADE_SHORT || level.purpose_of(i) == Some(crate::Purpose::CellBlock) {
             continue;
         }
         let along_x = room.w >= room.h;
@@ -683,7 +792,7 @@ fn colonnade_halls(level: &mut Level) -> usize {
 pub(crate) fn straight_in_from_a_door(level: &Level, x: i32, y: i32) -> bool {
     Facing::ALL.iter().any(|f| {
         let (dx, dy) = f.step();
-        (1..=2).any(|k| level.cell(x - dx * k, y - dy * k) == Cell::Door)
+        (1..=2).any(|k| level.cell(x - dx * k, y - dy * k).is_doorway())
     })
 }
 
@@ -696,9 +805,43 @@ fn furnish(level: &mut Level, rng: &mut Mulberry32, p: &LevelParams) {
     let start_room = level.start_room().expect("the entrance leads into a room");
     let start_light = start_light(level, rng);
     level.items.push(start_light);
-    level.lights = place_lights(level, start_room, rng, p.brazier_min_area);
+    let mut lights = place_lights(level, start_room, rng, p.brazier_min_area);
+    // A glowcap at a wall's foot may fall on a cell block's bars, and a brazier at a room's middle
+    // in front of a cell's gate; both go.
+    lights.retain(|l| {
+        let (x, y) = (l.x.floor() as i32, l.y.floor() as i32);
+        level.cell(x, y) == Cell::Floor && !(l.kind == LightKind::Brazier && crate::folk::by_door(level, x, y))
+    });
+    // Braziers by thrones and altars, where no light already stands close.
+    for light in crate::past::purpose_lights(level) {
+        if lights.iter().all(|l| (l.x - light.x).hypot(l.y - light.y) > 1.5) {
+            lights.push(light);
+        }
+    }
+    level.lights = lights;
     let loot = scatter_items(level, start_room, rng, p);
     level.items.extend(loot);
+    let books = library_books(level, rng, p);
+    level.items.extend(books);
+}
+
+/// Books and scrolls lying about each library: two to four, clear of the loot and the lights.
+fn library_books(level: &Level, rng: &mut Mulberry32, p: &LevelParams) -> Vec<ItemSpot> {
+    use armory::families::Generator;
+    use armory::families::writing::{Writing, WritingKind};
+    let mut taken: Vec<(f32, f32)> = level.lights.iter().map(|l| (l.x, l.y)).chain(level.items.iter().map(|i| (i.x, i.y))).collect();
+    let mut books = Vec::new();
+    for r in level.rooms_for(crate::Purpose::Library).collect::<Vec<_>>() {
+        for _ in 0..rng.int(2, 4) {
+            let Some((x, y)) = inner_spot(level, &level.rooms[r], &taken, rng, p.spot_spacing) else { continue };
+            // The first seed of a few that rolls a book or a scroll, not a note.
+            let seeds: Vec<u32> = (0..8).map(|_| item_seed(rng)).collect();
+            let seed = seeds.iter().copied().find(|&s| Writing::roll(s).piece.kind != WritingKind::Note).unwrap_or(seeds[0]);
+            taken.push((x, y));
+            books.push(ItemSpot { x, y, yaw: rng.range_f32(0.0, std::f32::consts::TAU), family: Family::Writing, seed });
+        }
+    }
+    books
 }
 
 /// A full-range u32 seed for an item.
@@ -865,14 +1008,18 @@ fn glowcaps(room: &Room, rng: &mut Mulberry32) -> Vec<LightSpot> {
 fn scatter_items(level: &Level, start_room: usize, rng: &mut Mulberry32, p: &LevelParams) -> Vec<ItemSpot> {
     let table: Vec<(Family, u32)> = LOOT.iter().copied().filter(|(f, _)| Item::PORTED.contains(f)).collect();
     let mut taken: Vec<(f32, f32)> = level.lights.iter().map(|l| (l.x, l.y)).chain(level.items.iter().map(|i| (i.x, i.y))).collect();
+    // Nothing lies where a throne or an altar will stand.
+    taken.extend(seats(level));
     let mut items = Vec::new();
     for (i, room) in level.rooms.iter().enumerate() {
         if i == start_room || rng.chance(p.bare_room_chance) {
             continue;
         }
         let count = (room.area() / p.cells_per_item).clamp(1, p.items_per_room_max) + rng.int(0, 1);
+        // A room put to a purpose keeps its walls clear for its furniture.
+        let inner = level.purpose_of(i).is_some();
         for _ in 0..count {
-            let Some((x, y)) = free_spot(level, room, &taken, rng, p.spot_spacing) else { continue };
+            let Some((x, y)) = (if inner { inner_spot(level, room, &taken, rng, p.spot_spacing) } else { free_spot(level, room, &taken, rng, p.spot_spacing) }) else { continue };
             taken.push((x, y));
             items.push(ItemSpot {
                 x,
@@ -886,6 +1033,29 @@ fn scatter_items(level: &Level, start_room: usize, rng: &mut Mulberry32, p: &Lev
     items
 }
 
+/// Where a throne or an altar will stand: the middle of each throne room's and shrine's seat.
+fn seats(level: &Level) -> Vec<(f32, f32)> {
+    (0..level.rooms.len())
+        .filter(|&r| matches!(level.purpose_of(r), Some(crate::Purpose::ThroneRoom | crate::Purpose::Shrine)))
+        .filter_map(|r| crate::past::seat(level, r))
+        .map(|((x, y), _)| (x as f32 + 0.5, y as f32 + 0.5))
+        .collect()
+}
+
+/// A [`free_spot`] in a cell with no wall beside it, so furniture can stand along the walls; a
+/// few tries, then any free spot.
+fn inner_spot(level: &Level, room: &Room, taken: &[(f32, f32)], rng: &mut Mulberry32, spacing: f32) -> Option<(f32, f32)> {
+    if room.w < 3 || room.h < 3 {
+        return free_spot(level, room, taken, rng, spacing);
+    }
+    (0..4).find_map(|_| {
+        let (x, y) = free_spot(level, room, taken, rng, spacing)?;
+        let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+        Facing::ALL.iter().all(|f| level.is_open(cx + f.step().0, cy + f.step().1)).then_some((x, y))
+    })
+    .or_else(|| free_spot(level, room, taken, rng, spacing))
+}
+
 /// A point in `room`, clear of doorways and at least `spacing` from every taken spot.
 fn free_spot(level: &Level, room: &Room, taken: &[(f32, f32)], rng: &mut Mulberry32, spacing: f32) -> Option<(f32, f32)> {
     (0..24).find_map(|_| {
@@ -893,12 +1063,12 @@ fn free_spot(level: &Level, room: &Room, taken: &[(f32, f32)], rng: &mut Mulberr
         let cy = rng.int(room.y, room.y + room.h - 1) as i32;
         let x = cx as f32 + rng.range_f32(0.25, 0.75);
         let y = cy as f32 + rng.range_f32(0.25, 0.75);
-        if level.cell(cx, cy) == Cell::Column {
+        if !level.is_open(cx, cy) || level.cell(cx, cy) == Cell::Gate {
             return None;
         }
         let by_door = Facing::ALL.iter().any(|f| {
             let (dx, dy) = f.step();
-            level.cell(cx + dx, cy + dy) == Cell::Door
+            level.cell(cx + dx, cy + dy).is_doorway()
         });
         let crowded = taken.iter().any(|&(tx, ty)| (tx - x).hypot(ty - y) < spacing);
         (!by_door && !crowded).then_some((x, y))
@@ -1054,18 +1224,56 @@ mod tests {
         }
     }
 
-    #[test]
-    fn corridors_are_one_cell_wide() {
-        for seed in SEEDS {
-            let level = generate(seed, 1);
-            let corridor = |x: i32, y: i32| level.is_open(x, y) && level.room_at(x, y).is_none();
-            for y in 0..level.height as i32 - 1 {
-                for x in 0..level.width as i32 - 1 {
-                    let square = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)];
-                    assert!(!square.iter().all(|&(x, y)| corridor(x, y)), "seed {seed}: wide corridor at ({x}, {y})");
+    /// The widest open square outside every room, in cells (up to four).
+    fn widest_corridor_square(level: &Level) -> u32 {
+        let corridor = |x: i32, y: i32| level.is_open(x, y) && level.room_at(x, y).is_none();
+        let mut widest = 0;
+        for y in 0..level.height as i32 {
+            for x in 0..level.width as i32 {
+                let mut n = 0;
+                while n < 4 && (0..=n).all(|k| (0..=n).all(|j| corridor(x + k, y + j))) {
+                    n += 1;
                 }
+                widest = widest.max(n as u32);
             }
         }
+        widest
+    }
+
+    #[test]
+    fn corridors_are_no_wider_than_their_width() {
+        for width in 1..=3 {
+            let params = LevelParams { corridor_width_min: width, corridor_width_max: width, ..LevelParams::default() };
+            for seed in SEEDS {
+                let level = generate_with(seed, 1, &params);
+                let widest = widest_corridor_square(&level);
+                assert!(widest <= width, "seed {seed}, width {width}: a {widest} by {widest} open block outside the rooms");
+            }
+        }
+    }
+
+    #[test]
+    fn corridor_width_max_one_lays_out_only_one_cell_corridors() {
+        let params = LevelParams { corridor_width_min: 1, corridor_width_max: 1, ..LevelParams::default() };
+        for seed in SEEDS {
+            assert_eq!(widest_corridor_square(&generate_with(seed, 1, &params)), 1, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn wide_corridors_stay_whole_and_repeat() {
+        let params = LevelParams { corridor_width_min: 3, corridor_width_max: 3, ..LevelParams::default() };
+        for seed in SEEDS {
+            let level = generate_with(seed, 1, &params);
+            assert!(is_whole(&level), "seed {seed}");
+            assert_eq!(level.cells, generate_with(seed, 1, &params).cells);
+        }
+    }
+
+    #[test]
+    fn stone_halls_mostly_have_a_wide_corridor() {
+        let wide = SEEDS.filter(|&s| widest_corridor_square(&generate(s, 2)) >= 2).count();
+        assert!(wide * 4 >= SEEDS.count() * 3, "only {wide} of {} levels have a corridor two cells wide", SEEDS.count());
     }
 
     #[test]
@@ -1154,16 +1362,16 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588).
         let before = [
-            (0u32, 0x3f1ef43848af9f4bu64),
-            (1, 0xfecd367d473ca611),
-            (2, 0x28caf334b99fda9),
-            (7, 0xc65fe113135810cd),
-            (64, 0x8786aec0b970f319),
-            (1207, 0xeb6d2ec3e7c03ea2),
-            (4242, 0x40c986312855b474),
-            (u32::MAX, 0x791ee77a5145fa97),
+            (0u32, 0x8ce8fc5baaf05876u64),
+            (1, 0xaacf4d03867a1718),
+            (2, 0x168d9a3ac6b499b7),
+            (7, 0x28bcb9ad10b96016),
+            (64, 0xa3ef2b348696405a),
+            (1207, 0x957fbf7eeb07f80a),
+            (4242, 0xdfa9e21feed9fe08),
+            (u32::MAX, 0xc2af47d6c679ceeb),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);
@@ -1378,7 +1586,7 @@ mod tests {
                 let mut furthest = 0;
                 for y in 0..level.height as i32 {
                     for x in 0..level.width as i32 {
-                        let near_door = (-1..=1).any(|dy| (-1..=1).any(|dx| level.cell(x + dx, y + dy) == Cell::Door));
+                        let near_door = (-1..=1).any(|dy| (-1..=1).any(|dx| matches!(level.cell(x + dx, y + dy), Cell::Door | Cell::Gate | Cell::Bars)));
                         for facing in Facing::ALL {
                             let (dx, dy) = facing.step();
                             let (px, py) = (x - dx, y - dy);

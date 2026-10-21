@@ -149,7 +149,7 @@ pub(crate) fn place_stairs(level: &mut Level, rng: &mut Mulberry32) {
             if level.cell(x, y) != Cell::Floor || (x, y) == entrance || taken.contains(&(x, y)) || dist[index(x, y)] < 0 {
                 continue;
             }
-            let near_door = (-1..=1).any(|dy| (-1..=1).any(|dx| level.cell(x + dx, y + dy) == Cell::Door));
+            let near_door = (-1..=1).any(|dy| (-1..=1).any(|dx| matches!(level.cell(x + dx, y + dy), Cell::Door | Cell::Gate | Cell::Bars)));
             for (n, facing) in Facing::ALL.into_iter().enumerate() {
                 let (dx, dy) = facing.step();
                 let (ax, ay) = (x - dx, y - dy);

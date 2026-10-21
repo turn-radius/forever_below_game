@@ -29,7 +29,7 @@ pub struct Lamp {
 
 /// Whether nothing but open cells lies between two points ([`crate::path::line_of_sight`]).
 pub fn line_of_sight(level: &Level, from: (f32, f32), to: (f32, f32)) -> bool {
-    crate::path::line_of_sight(from, to, |x, y| !level.is_open(x, y))
+    crate::path::line_of_sight(from, to, |x, y| !level.cell(x, y).is_clear())
 }
 
 /// Points of a cell a line may reach to see it: its middle and a little in from each corner,
@@ -158,6 +158,8 @@ mod tests {
             creatures: Vec::new(),
             stairs: Vec::new(),
             webs: Vec::new(),
+            past: None,
+            purposes: Vec::new(),
         }
     }
 

@@ -179,7 +179,12 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
                 continue;
             }
             let beside = (-1..=1).any(|dy| (-1..=1).any(|dx| seen(x + dx, y + dy)));
-            if beside && !level.is_open(x, y) {
+            if level.cell(x, y) == Cell::Bars {
+                // Bars are drawn once a seen cell touches them, not hatched as rock.
+                if [(0, -1), (0, 1), (-1, 0), (1, 0)].iter().any(|&(dx, dy)| seen(x + dx, y + dy)) {
+                    bars(&mut canvas, &frame, level, x, y, ink);
+                }
+            } else if beside && !level.is_open(x, y) {
                 hatch(&mut canvas, &frame, x, y, level.seed);
             }
         }
@@ -196,7 +201,7 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
             let (fx, fy) = (x as f32, y as f32);
             let sides = [((0, -1), (fx, fy), (fx + 1.0, fy)), ((0, 1), (fx, fy + 1.0), (fx + 1.0, fy + 1.0)), ((-1, 0), (fx, fy), (fx, fy + 1.0)), ((1, 0), (fx + 1.0, fy), (fx + 1.0, fy + 1.0))];
             for ((dx, dy), a, b) in sides {
-                if level.is_open(x + dx, y + dy) {
+                if level.is_open(x + dx, y + dy) || level.cell(x + dx, y + dy) == Cell::Bars {
                     continue;
                 }
                 let points: Vec<[f32; 2]> = (0..=3).map(|k| k as f32 / 3.0).map(|t| wobbled(a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)).collect();
@@ -206,6 +211,9 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
             }
             if level.cell(x, y) == Cell::Door {
                 door(&mut canvas, &frame, level, x, y, ink);
+            }
+            if level.cell(x, y) == Cell::Gate {
+                gate(&mut canvas, &frame, level, x, y, ink);
             }
         }
     }
@@ -275,6 +283,13 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
             Prop::Scenery { kind: Scenery::Bones, .. } => {
                 canvas.line([c[0] - px * 0.15, c[1] - px * 0.15], [c[0] + px * 0.15, c[1] + px * 0.15], ink, INK, 0.75);
                 canvas.line([c[0] - px * 0.15, c[1] + px * 0.15], [c[0] + px * 0.15, c[1] - px * 0.15], ink, INK, 0.75);
+            }
+            // Room furniture: a bar as wide as it is, along its item X and turned by its yaw, as thick as it is deep.
+            Prop::Scenery { kind, .. } => {
+                let (hw, hd) = kind.footprint().unwrap_or((4.0, 4.0));
+                let along = [spot.yaw.cos(), -spot.yaw.sin()];
+                let half = px * hw / 20.0;
+                canvas.line([c[0] - along[0] * half, c[1] - along[1] * half], [c[0] + along[0] * half, c[1] + along[1] * half], px * hd * 2.0 / 20.0, INK, 0.6);
             }
         }
     }
@@ -366,4 +381,60 @@ mod tests {
             assert_eq!(wobble(x, y, 3), (wx, wy));
         }
     }
+
+    #[test]
+    fn bars_are_a_barred_line_and_a_gate_a_gap_with_a_tick() {
+        let level = fb_level::generate(2, 2);
+        let px = 16.0;
+        let frame = PlanFrame::of(px);
+        let plan = draw_plan(&level, &Explored::all(&level), px);
+        let ink_at = |x: f32, y: f32| {
+            let p = frame.at(x, y);
+            plan.alpha(p[0] as u32, p[1] as u32)
+        };
+        let bar = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).find(|&(x, y)| level.cell(x, y) == Cell::Bars).expect("a cell block");
+        let arms = crate::level::geometry::bars::arms_of(&level, bar.0, bar.1);
+        let (cx, cy) = (bar.0 as f32 + 0.5, bar.1 as f32 + 0.5);
+        assert!(crate::level::geometry::bars::ARMS.iter().enumerate().any(|(k, &(dx, dy))| arms[k] && ink_at(cx + dx as f32 * 0.25, cy + dy as f32 * 0.25) > 0.5), "bars are inked along their run");
+        let gate = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).find(|&(x, y)| level.cell(x, y) == Cell::Gate).expect("a gate");
+        assert!(ink_at(gate.0 as f32 + 0.5, gate.1 as f32 + 0.5) > 0.8, "a gate stands in floor");
+    }
+}
+
+
+/// The bars of a cell block: a thin line along each arm with a row of short ticks across it.
+fn bars(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, x: i32, y: i32, ink: f32) {
+    use crate::level::geometry::bars::{ARMS, arms_of};
+    let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+    let arms = arms_of(level, x, y);
+    for (k, &(dx, dy)) in ARMS.iter().enumerate() {
+        if !arms[k] {
+            continue;
+        }
+        let (ux, uy) = (dx as f32, dy as f32);
+        let end = frame.at(cx + ux * 0.5, cy + uy * 0.5);
+        canvas.line(frame.at(cx, cy), end, ink * 0.6, INK, 0.9);
+        // Ticks every fifth of a cell, across the line.
+        for t in [0.1, 0.3, 0.5] {
+            let (px, py) = (cx + ux * t, cy + uy * t);
+            let (sx, sy) = (uy.abs() * 0.14, ux.abs() * 0.14);
+            canvas.line(frame.at(px - sx, py - sy), frame.at(px + sx, py + sy), ink * 0.7, INK, 0.9);
+        }
+    }
+}
+
+/// A gate in a cell's bars: the bars stop short either side of a gap, and a tick stands for
+/// the leaf, hinged at one jamb.
+fn gate(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, x: i32, y: i32, ink: f32) {
+    let spot = crate::level::geometry::bars::gate_at(level, x, y);
+    let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+    let (ux, uy) = if spot.along_x { (1.0, 0.0) } else { (0.0, 1.0) };
+    let (nx, ny) = (spot.into.0 as f32, spot.into.1 as f32);
+    for s in [-1.0f32, 1.0] {
+        canvas.line(frame.at(cx + ux * s * 0.5, cy + uy * s * 0.5), frame.at(cx + ux * s * 0.34, cy + uy * s * 0.34), ink * 0.6, INK, 0.9);
+    }
+    // The leaf, swung from the -x/-y jamb into the cell.
+    let hinge = (cx - ux * 0.32, cy - uy * 0.32);
+    let free = (hinge.0 + ux * 0.2 + nx * 0.5, hinge.1 + uy * 0.2 + ny * 0.5);
+    canvas.line(frame.at(hinge.0, hinge.1), frame.at(free.0, free.1), ink * 0.7, INK, 0.9);
 }

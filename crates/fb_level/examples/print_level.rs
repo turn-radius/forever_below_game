@@ -44,6 +44,12 @@ fn prop_mark(prop: Prop) -> char {
             Scenery::Bones => '~',
             Scenery::Pillar => 'o',
             Scenery::Bedroll => '=',
+            Scenery::Bunk => 'B',
+            Scenery::Throne => 'T',
+            Scenery::Altar => 'A',
+            Scenery::Bookshelf => 'H',
+            Scenery::Table => 't',
+            Scenery::WeaponRack => 'W',
         },
         Prop::Campfire { .. } => 'u',
     }
@@ -73,6 +79,8 @@ fn main() {
                     fb_level::Cell::Floor => '.',
                     fb_level::Cell::Door => '+',
                     fb_level::Cell::Column => 'O',
+                    fb_level::Cell::Bars => '|',
+                    fb_level::Cell::Gate => '=',
                 })
                 .collect()
         })
@@ -101,6 +109,21 @@ fn main() {
                 for x in room.x..room.x + room.w {
                     if level.cell(x as i32, y as i32) == fb_level::Cell::Floor {
                         rows[y as usize][x as usize] = role.letter();
+                    }
+                }
+            }
+        }
+    }
+    // With `purposes` as the third argument, rooms show what they were built for: `q` quarters,
+    // `c` cell block, `t` throne room, `s` shrine, `l` library, `o` ossuary, `g` guardroom.
+    if std::env::args().nth(3).as_deref() == Some("purposes") {
+        println!("past: {}", level.past.map_or("none", |p| p.name()));
+        for (r, room) in level.rooms.iter().enumerate() {
+            let Some(purpose) = level.purpose_of(r) else { continue };
+            for y in room.y..room.y + room.h {
+                for x in room.x..room.x + room.w {
+                    if level.cell(x as i32, y as i32) == fb_level::Cell::Floor {
+                        rows[y as usize][x as usize] = purpose.letter();
                     }
                 }
             }

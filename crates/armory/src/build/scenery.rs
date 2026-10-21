@@ -15,6 +15,7 @@ use std::f32::consts::{PI, TAU};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
+use crate::build::furniture;
 use crate::build::parts::Parts;
 use crate::build::roll::rolled_sheet;
 use crate::geom::{CatmullRom, ItemMesh, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, cuboid, icosphere, lathe, tube, value_noise3, vec3};
@@ -34,10 +35,55 @@ pub enum Scenery {
     /// A bedroll unrolled on the floor, human length (about 17 units): a canvas mat under a
     /// blanket, with a rolled pillow at the head. Lies along item X, head toward -X.
     Bedroll,
+    /// A timber bunk bed, human length (19 by 8 units), on four posts: a straw tick, a blanket
+    /// and a pillow, one tier or two (about 15 units high). Long side along X, back to -Z.
+    Bunk,
+    /// A heavy stone or carved timber chair on a stepped dais (14 by 11 units), a tall back
+    /// (20 to 26 units), armrests and finials. Back to -Z, front toward +Z.
+    Throne,
+    /// A stone altar 10 units high and 12 wide by 6 deep, with a cloth runner, candles, and a
+    /// bowl or an idol. Back to -Z.
+    Altar,
+    /// A tall timber bookcase, 16 wide, 5 deep and 20 to 24 high, shelves of books. Back to -Z.
+    Bookshelf,
+    /// A plank table 8 units high and 14 by 7, with benches and clutter. Back to -Z.
+    Table,
+    /// A timber weapon rack 14 wide and 4 deep, holding spears, axes, halberds and maces.
+    /// Back to -Z.
+    WeaponRack,
 }
 
 impl Scenery {
-    pub const ALL: [Scenery; 4] = [Scenery::Rubble, Scenery::Bones, Scenery::Pillar, Scenery::Bedroll];
+    pub const ALL: [Scenery; 10] = [
+        Scenery::Rubble,
+        Scenery::Bones,
+        Scenery::Pillar,
+        Scenery::Bedroll,
+        Scenery::Bunk,
+        Scenery::Throne,
+        Scenery::Altar,
+        Scenery::Bookshelf,
+        Scenery::Table,
+        Scenery::WeaponRack,
+    ];
+
+    /// The rooms' furniture, stood with its back to a wall or a room's edge.
+    pub const FURNITURE: [Scenery; 6] = [Scenery::Bunk, Scenery::Throne, Scenery::Altar, Scenery::Bookshelf, Scenery::Table, Scenery::WeaponRack];
+
+    /// Half the width (along X) and half the depth (along Z) of the floor a piece of furniture
+    /// covers, centred on the origin with its back at -Z: nothing of any seed reaches past it.
+    /// None for the round and irregular kinds, which have only a [`Scenery::radius`].
+    pub fn footprint(self) -> Option<(f32, f32)> {
+        match self {
+            Scenery::Bunk => Some((9.5, 4.0)),
+            Scenery::Throne => Some((7.0, 5.5)),
+            Scenery::Altar => Some((6.4, 3.4)),
+            Scenery::Bookshelf => Some((8.0, 2.5)),
+            Scenery::Table => Some((7.0, 5.5)),
+            Scenery::WeaponRack => Some((7.0, 2.0)),
+            Scenery::Rubble | Scenery::Bones | Scenery::Pillar | Scenery::Bedroll => None,
+        }
+    }
 
     /// The furthest any part of it reaches from its centre across the floor, in world units,
     /// whatever its seed. A pillar's square plinth is this far to a corner.
@@ -47,6 +93,13 @@ impl Scenery {
             Scenery::Bones => 3.6,
             Scenery::Pillar => 4.0,
             Scenery::Bedroll => 9.1,
+            // The corner of each piece's footprint, rounded up.
+            Scenery::Bunk => 10.4,
+            Scenery::Throne => 9.0,
+            Scenery::Altar => 7.3,
+            Scenery::Bookshelf => 8.4,
+            Scenery::Table => 9.0,
+            Scenery::WeaponRack => 7.3,
         }
     }
 
@@ -57,6 +110,12 @@ impl Scenery {
             Scenery::Bones => bones(seed),
             Scenery::Pillar => pillar(seed, ceiling),
             Scenery::Bedroll => bedroll(seed),
+            Scenery::Bunk => furniture::bunk(seed),
+            Scenery::Throne => furniture::throne(seed),
+            Scenery::Altar => furniture::altar(seed),
+            Scenery::Bookshelf => furniture::bookshelf(seed),
+            Scenery::Table => furniture::table(seed),
+            Scenery::WeaponRack => furniture::weapon_rack(seed),
         }
     }
 }
@@ -312,7 +371,7 @@ pub fn pillar(seed: u32, ceiling: f32) -> ItemMesh {
 }
 
 /// Dyes a blanket may be, dull as a delver's gear is.
-const BLANKET_DYES: [u32; 6] = [0x9a3d33, 0x3d6b8f, 0x4f7f45, 0xb58a35, 0x7a4a7a, 0x8a5a3a];
+pub(crate) const BLANKET_DYES: [u32; 6] = [0x9a3d33, 0x3d6b8f, 0x4f7f45, 0xb58a35, 0x7a4a7a, 0x8a5a3a];
 
 /// A bedroll laid out flat, human length: a canvas mat about 17 units long and 6 wide, a
 /// blanket over the foot two thirds of it with a ruck, and a small rolled pillow across the
@@ -392,9 +451,48 @@ mod tests {
                     Scenery::Bones => assert!(hi[1] < 2.0, "{seed}: bones {} high", hi[1]),
                     Scenery::Pillar => assert!(hi[1] > 6.0 && hi[1] < CEILING + 2.0, "{seed}: a pillar {} high", hi[1]),
                     Scenery::Bedroll => assert!(hi[1] < 1.3, "{seed}: a bedroll {} high", hi[1]),
+                    Scenery::Bunk => assert!(hi[1] > 5.0 && hi[1] < 16.0, "{seed}: a bunk {} high", hi[1]),
+                    Scenery::Throne => assert!(hi[1] > 20.0 && hi[1] < 26.5, "{seed}: a throne {} high", hi[1]),
+                    Scenery::Altar => assert!(hi[1] > 10.0 && hi[1] < 14.0, "{seed}: an altar {} high", hi[1]),
+                    Scenery::Bookshelf => assert!(hi[1] > 20.0 && hi[1] < 24.0, "{seed}: a bookshelf {} high", hi[1]),
+                    Scenery::Table => assert!(hi[1] > 8.0 && hi[1] < 11.0, "{seed}: a table {} high", hi[1]),
+                    Scenery::WeaponRack => assert!(hi[1] > 14.0 && hi[1] < 27.0, "{seed}: a rack {} high", hi[1]),
                 }
             }
         }
+    }
+
+    #[test]
+    fn furniture_stays_in_its_footprint_with_its_back_to_minus_z() {
+        for kind in Scenery::FURNITURE {
+            let (hw, hd) = kind.footprint().unwrap();
+            assert!(hw.hypot(hd) <= kind.radius(), "{kind:?}: corner {} past its radius", hw.hypot(hd));
+            for seed in 0..64 {
+                let mesh = kind.build(seed, CEILING);
+                let (lo, hi) = mesh.bounds().unwrap();
+                assert!(lo[0] >= -hw - 1e-3 && hi[0] <= hw + 1e-3, "{kind:?} {seed}: x {lo:?} {hi:?}");
+                let culprit = mesh.parts.iter().find(|p| p.positions.iter().any(|v| v[2] < -hd - 1e-3 || v[2] > hd + 1e-3)).map(|p| p.name.clone());
+                assert!(lo[2] >= -hd - 1e-3 && hi[2] <= hd + 1e-3, "{kind:?} {seed}: z {lo:?} {hi:?} in {culprit:?}");
+                if !matches!(kind, Scenery::Table | Scenery::Bunk) {
+                    assert!(lo[2] < -hd + 0.3, "{kind:?} {seed}: back at {} not against -Z", lo[2]);
+                }
+                assert!(hi[1] < CEILING, "{kind:?} {seed}: {} reaches the ceiling", hi[1]);
+            }
+        }
+    }
+
+    #[test]
+    fn furniture_varies_with_its_seed() {
+        for kind in Scenery::FURNITURE {
+            let distinct: std::collections::HashSet<usize> = (0..32).map(|s| kind.build(s, CEILING).parts.iter().map(|p| p.positions.len()).sum()).collect();
+            assert!(distinct.len() > 8, "{kind:?}: {} distinct builds in 32", distinct.len());
+        }
+        let tall = (0..64).filter(|&s| bunk_height(s) > 12.0).count();
+        assert!((10..54).contains(&tall), "{tall} of 64 bunks are two-tier");
+    }
+
+    fn bunk_height(seed: u32) -> f32 {
+        Scenery::Bunk.build(seed, CEILING).bounds().unwrap().1[1]
     }
 
     #[test]

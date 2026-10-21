@@ -146,10 +146,12 @@ fn apply_decay(
         let blooms = patch_field(fbm(p * 0.5 + vec3(5.2), cell * 0.5), n2);
         let bloom = patches(blooms, t * 0.5, 0.12);
         let stain = patches(blooms, t * 0.68, 0.5);
-        c = mix(c, c * vec3(0.74, 0.6, 0.5), stain * 0.7);
+        c = mix(c, c * vec3(0.8, 0.7, 0.62), stain * 0.55);
+        // Rust in muted browns, laid over the iron rather than replacing it, so a rusted piece
+        // still reads as iron under the toon bands.
         let crust = filtered_noise(p * 7.0 + vec3(2.3), cell * 7.0);
-        let rust = mix(vec3(0.32, 0.14, 0.07), vec3(0.56, 0.27, 0.11), smoothstep(0.3, 0.75, crust * 0.6 + n2 * 0.4));
-        c = mix(c, rust, bloom);
+        let rust = mix(vec3(0.3, 0.18, 0.12), vec3(0.46, 0.29, 0.18), smoothstep(0.3, 0.75, crust * 0.6 + n2 * 0.4));
+        c = mix(c, rust, bloom * 0.7);
         // Pits: dark specks, thickest in the blooms.
         let pit = smoothstep(0.0, 0.03, filtered_noise(p * 15.0 + vec3(7.3), cell * 15.0) - mix(0.97, 0.88, t) + 0.1 * bloom);
         c = mix(c, vec3(0.1, 0.06, 0.04), pit * smoothstep(0.1, 0.3, t) * 0.85);

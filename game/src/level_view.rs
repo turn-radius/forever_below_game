@@ -410,6 +410,13 @@ fn draw_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, para
             }
         }
     }
+    // A square in each room's corner in its purpose's colour, named in the legend.
+    for (r, room) in level.rooms.iter().enumerate() {
+        let Some(purpose) = level.purpose_of(r) else { continue };
+        let c = frame.at(room.x as f32 + 0.5, room.y as f32 + 0.5);
+        let h = frame.px * 0.3;
+        canvas.rect([c[0] - h, c[1] - h], [c[0] + h, c[1] + h], purpose_tint(purpose), 1.0);
+    }
     let ink = (frame.px * 0.09).max(1.2);
     for room in &level.rooms {
         let (cx, cy) = room.centre();
@@ -438,6 +445,20 @@ fn draw_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, para
     }
 }
 
+/// The colour of a room's purpose square on the plan.
+fn purpose_tint(purpose: fb_level::past::Purpose) -> [f32; 3] {
+    use fb_level::past::Purpose::*;
+    match purpose {
+        Quarters => [0.55, 0.75, 0.55],
+        CellBlock => [0.85, 0.30, 0.30],
+        ThroneRoom => [0.95, 0.80, 0.25],
+        Shrine => [0.90, 0.90, 0.98],
+        Library => [0.45, 0.55, 0.95],
+        Ossuary => [0.80, 0.72, 0.60],
+        Guardroom => [0.95, 0.55, 0.20],
+    }
+}
+
 /// The outline colour of quarter `q`, cycling through colours that stand apart from the floors'.
 fn quarter_tint(q: usize) -> [f32; 3] {
     const TINTS: [[f32; 3]; 6] = [[0.95, 0.35, 0.35], [0.35, 0.85, 0.95], [0.95, 0.55, 0.95], [0.95, 0.95, 0.40], [0.55, 0.60, 1.0], [1.0, 0.65, 0.30]];
@@ -452,6 +473,19 @@ fn refresh_quarter_legend(mut commands: Commands, forge: Res<LevelForge>, fonts:
     }
     let f = finishes(&forge.level, &forge.params);
     commands.entity(entity).with_children(|column| {
+        let past = forge.level.past.map_or("none".to_string(), |p| p.name().to_string());
+        column.spawn((Text::new(format!("past: {past}")), UiFonts::style(&fonts.body, 15.0, MUTED)));
+        for purpose in fb_level::past::Purpose::ALL {
+            let rooms = forge.level.rooms_for(purpose).count();
+            if rooms == 0 {
+                continue;
+            }
+            let tint = purpose_tint(purpose);
+            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
+                row.spawn((Node { width: px(14), height: px(14), ..default() }, BackgroundColor(Color::srgb(tint[0], tint[1], tint[2]))));
+                row.spawn((Text::new(format!("{} x {rooms}", purpose.name())), UiFonts::style(&fonts.body, 15.0, MUTED)));
+            });
+        }
         column.spawn((Text::new(format!("quarters, leaning {}", f.lean().name())), UiFonts::style(&fonts.body, 15.0, MUTED)));
         for (q, quarter) in f.quarters().iter().enumerate() {
             let tint = quarter_tint(q);

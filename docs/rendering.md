@@ -28,7 +28,7 @@ Each material carries a **type** and an **amount**. Its fragment shader mixes in
 
 | type | material | what decay does |
 |---|---|---|
-| 1 | iron (`metal`) | dulls, rust blooms, pitting |
+| 1 | iron (`metal`) | dulls, rust blooms (muted browns laid at 70% over the iron, so rust never outshouts the toon bands), pitting |
 | 2 | brass (`accent`) | tarnish, verdigris |
 | 3 | wood | grain, silvering, rot, moss |
 | 4 | leather, string | darkening, scuffs, grime |

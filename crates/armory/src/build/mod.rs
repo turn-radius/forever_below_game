@@ -47,7 +47,7 @@
 //! - [`key`]: keys with ring, trefoil or lozenge bows and warded bits.
 //! - [`note`]: paper notes: flat, folded, sealed or crumpled sheets with ink and stains.
 //! - [`roll`]: rolled sheets and the straps round them (bedrolls, bandages).
-//! - [`scenery`]: what lies about a level and is never an item: rubble, bones, pillars.
+//! - [`scenery`]: what lies about a level and is never an item: rubble, bones, pillars, and the furniture of rooms ([`furniture`]).
 //! - [`light`]: carried light ([`light::LightAnchor`]), flames and embers (torches,
 //!   lanterns, candles, glowcaps).
 
@@ -84,6 +84,7 @@ pub mod note;
 pub mod plank;
 pub mod plate;
 pub mod roll;
+pub mod furniture;
 pub mod scenery;
 pub mod socket;
 pub mod spearhead;
