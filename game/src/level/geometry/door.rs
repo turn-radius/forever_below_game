@@ -405,9 +405,15 @@ fn portcullis(spec: &DoorSpec, opening: &Opening) -> ClaimLeaf {
     let mut bars = MeshBuilder::new();
     let mut shoes = MeshBuilder::new();
     let mut tops = Vec::new();
+    let rail_r = r * 0.8;
+    // The head rail follows the opening's curve, its top a little under the arch; each upright
+    // stops in it.
+    let mut head: Vec<(f32, f32)> = Vec::new();
     for i in 0..n {
         let x = -inner + 2.0 * inner * i as f32 / (n - 1) as f32;
-        let top = opening.top_at(x.abs() + r * 1.5) - 0.5;
+        let rail_y = opening.top_at(x.abs() + r * 1.5) - 0.55 - rail_r;
+        head.push((x, rail_y));
+        let top = rail_y;
         tops.push(top);
         let body = top - (tip + foot);
         let mut bar = if spec.timber {
@@ -427,12 +433,26 @@ fn portcullis(spec: &DoorSpec, opening: &Opening) -> ClaimLeaf {
     }
     let mut rails = MeshBuilder::new();
     let mut studs = MeshBuilder::new();
-    let rail_r = r * 0.8;
-    let (low, high) = (tip + 3.0, opening.straight() + (opening.crown - opening.straight()) * 0.55);
+    for pair in head.windows(2) {
+        let ([x0, y0], [x1, y1]) = ([pair[0].0, pair[0].1], [pair[1].0, pair[1].1]);
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len = dx.hypot(dy);
+        let seg = if spec.timber {
+            let mut beam = plank(len + rail_r, rail_r * 2.0, rail_r * 2.0, 0.08);
+            beam.rotate_z(dy.atan2(dx)).translate([(x0 + x1) * 0.5, (y0 + y1) * 0.5, 0.2]);
+            beam
+        } else {
+            let mut rod = armory::geom::tube(&[[x0, y0, 0.2], [x1, y1, 0.2]], 8, &armory::geom::SweepOptions::default(), |_| rail_r);
+            rod.translate([0.0, 0.0, 0.0]);
+            rod
+        };
+        rails.append(&seg);
+    }
+    let (low, high) = (tip + 3.0, (opening.straight() + (opening.crown - opening.straight()) * 0.55).min(opening.top_at(0.0) - 5.0));
     let rails_n = spec.rails.max(2);
     for j in 0..rails_n {
         let y = low + (high - low) * j as f32 / (rails_n - 1) as f32;
-        let reach = opening.half_width_at(y + rail_r) - 0.75;
+        let reach = opening.half_width_at(y + rail_r + 1.3) - 0.5;
         if reach < 2.0 {
             continue;
         }
@@ -785,6 +805,36 @@ mod tests {
                 let xs: std::collections::BTreeSet<i32> = uprights.positions.iter().map(|p| (p[0] * 4.0).round() as i32).collect();
                 assert!(xs.len() > 12);
                 assert_eq!(built.hinge, [0.0; 3]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_portcullis_follows_the_arch_and_no_bar_ends_outside_it() {
+        for style in [DoorStyle::RoundArch, DoorStyle::PointedArch, DoorStyle::RockCut] {
+            let o = Opening::of(style);
+            for timber in [false, true] {
+                for seed in 0..6 {
+                    let mut s = spec(DoorKind::Portcullis, style, seed);
+                    s.timber = timber;
+                    s.bar = if timber { 0.42 } else { 0.28 };
+                    let built = claim_leaf(&s);
+                    let uprights = built.leaf.parts.iter().find(|p| p.name == "uprights").unwrap();
+                    let rails = built.leaf.parts.iter().find(|p| p.name == "rails").unwrap();
+                    // Every point of every bar, and of the head rail, lies inside the profile with room to spare.
+                    for p in uprights.positions.iter().chain(&rails.positions) {
+                        assert!(p[1] <= o.top_at(p[0]) - 0.3, "{style:?} timber {timber}: ({}, {}) over the head {}", p[0], p[1], o.top_at(p[0]));
+                    }
+                    // Each upright's top is held by the head rail: it reaches the rail's height there.
+                    let xs: std::collections::BTreeSet<i32> = uprights.positions.iter().map(|p| (p[0] * 100.0).round() as i32).collect();
+                    assert!(xs.len() > 6);
+                    let rail_top = |x: f32| rails.positions.iter().filter(|p| (p[0] - x).abs() < 1.6).map(|p| p[1]).fold(f32::MIN, f32::max);
+                    for p in uprights.positions.iter().filter(|p| p[1] > o.straight()) {
+                        assert!(p[1] <= rail_top(p[0]) + 0.1, "{style:?}: a bar ends at {} over its rail {}", p[1], rail_top(p[0]));
+                    }
+                    // The rail rises toward the crown, as the arch does.
+                    assert!(rail_top(0.0) > rail_top(5.0) + 0.4, "{style:?} timber {timber} seed {seed}: the head rail is flat {} {}", rail_top(0.0), rail_top(5.0));
+                }
             }
         }
     }
