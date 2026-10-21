@@ -152,6 +152,7 @@ mod tests {
             folk: Vec::new(),
             factions: Vec::new(),
             claims: Vec::new(),
+            roles: Vec::new(),
             props: Vec::new(),
             creatures: Vec::new(),
             stairs: Vec::new(),

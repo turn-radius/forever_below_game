@@ -173,10 +173,11 @@ fn rescale_props(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut props: Query
 
 /// Keeps track of a container prop in `inventory`, loose, holding what its loot rolls against
 /// `odds`: each thing at its first free spot, upright first and then turned, and anything with
-/// no room left out. `None` for scenery.
+/// no room left out. `None` for scenery. A container set out empty ([`fb_level::NO_LOOT`]) holds nothing.
 pub fn stock_container(inventory: &mut Inventory, prop: Prop, odds: fb_items::Odds) -> Option<ItemId> {
     let Prop::Container { style, loot, .. } = prop else { return None };
-    stock_container_with(inventory, prop, fb_items::roll_contents(style, loot, odds))
+    let contents = if loot == fb_level::NO_LOOT { Vec::new() } else { fb_items::roll_contents(style, loot, odds) };
+    stock_container_with(inventory, prop, contents)
 }
 
 /// [`stock_container`] with the `contents` it rolled already (`crate::staged`).
@@ -559,6 +560,9 @@ mod tests {
         let inventory = app.world().resource::<Inventory>();
         for spot in &level.props {
             let Prop::Container { style, loot, .. } = spot.prop else { continue };
+            if !spot.prop.holds_loot() {
+                continue;
+            }
             let rolled = fb_items::roll_contents(style, loot, fb_items::Odds::loot(level.depth));
             assert!(!rolled.is_empty());
             // Some container in the inventory holds exactly these, by title, in roll order.

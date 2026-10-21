@@ -264,6 +264,13 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
                     canvas.disc([c[0] + wx * px * 0.18, c[1] + wy * px * 0.18], px * 0.06, INK, 0.75);
                 }
             }
+            Prop::Scenery { kind: Scenery::Bedroll, .. } => {
+                // Lying along its item X, turned by its yaw: a bar the length of the bedroll.
+                let along = [spot.yaw.cos(), -spot.yaw.sin()];
+                let half = px * 0.4;
+                canvas.line([c[0] - along[0] * half, c[1] - along[1] * half], [c[0] + along[0] * half, c[1] + along[1] * half], px * 0.2, INK, 0.6);
+            }
+            Prop::Scenery { kind: Scenery::Cookpot, .. } => canvas.ring(c, px * 0.12, ink, INK, 0.9),
             Prop::Scenery { kind: Scenery::Bones, .. } => {
                 canvas.line([c[0] - px * 0.15, c[1] - px * 0.15], [c[0] + px * 0.15, c[1] + px * 0.15], ink, INK, 0.75);
                 canvas.line([c[0] - px * 0.15, c[1] + px * 0.15], [c[0] + px * 0.15, c[1] - px * 0.15], ink, INK, 0.75);

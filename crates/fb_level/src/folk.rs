@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::claims::MIN_ROOM_AREA;
 use crate::generate::{is_colonnaded, item_seed, shuffle};
-use crate::{Cell, Level, Room};
+use crate::{Cell, Level, Room, RoomRole};
 pub use fb_faction::{Faction, FactionSpec, Trade};
 
 /// Someone standing in the level, at a point in grid coordinates (cells, fractional).
@@ -69,12 +69,20 @@ pub(crate) fn place_folk(level: &Level, strengths: &[usize], rng: &mut Mulberry3
         let faction = level.faction(claim.faction);
         let mut rooms: Vec<usize> = claim.rooms.iter().copied().filter(|&i| level.rooms[i].area() >= MIN_ROOM_AREA).collect();
         shuffle(&mut rooms, rng);
-        // Lit rooms first: people gather at the light.
+        // Folk stand where their room's role puts them: a trading faction in its market, the
+        // rest round the hearth, in the hall and about the sleeping room. Lit rooms first
+        // within a role: people gather at the light.
+        let trades = level.trades(claim);
+        let rank = |i: &usize| {
+            let roles = level.roles_of(*i);
+            let first = |order: &[RoomRole]| order.iter().position(|r| roles.contains(r)).unwrap_or(order.len());
+            if trades { first(&[RoomRole::Market, RoomRole::Hearth, RoomRole::Hall, RoomRole::Sleeping]) } else { first(&[RoomRole::Hearth, RoomRole::Hall, RoomRole::Sleeping, RoomRole::Market]) }
+        };
         if level.style == crate::LevelStyle::StoneHalls {
             // Folk of the halls stand among the columns first.
-            rooms.sort_by_key(|i| (!is_colonnaded(level, &level.rooms[*i]), !lit(i)));
+            rooms.sort_by_key(|i| (!is_colonnaded(level, &level.rooms[*i]), rank(i), !lit(i)));
         } else {
-            rooms.sort_by_key(|i| !lit(i));
+            rooms.sort_by_key(|i| (rank(i), !lit(i)));
         }
         let groups: Vec<(&Room, Gathering)> = rooms.iter().map(|&i| (&level.rooms[i], Gathering::in_room(level, &level.rooms[i], rng))).collect();
         let mut placed = 0;

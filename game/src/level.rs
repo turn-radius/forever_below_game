@@ -6,11 +6,11 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault|role` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
-//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`). Unset, nothing here touches the player's camera.
+//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`). Unset, nothing here touches the player's camera.
 //! `FB_DEPTH=2` plays the stone halls of depth 2.
 
 pub mod geometry;
@@ -903,6 +903,49 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             };
             let from = if kind == fb_level::WebKind::Corner { at + back + eye } else { target + back + Vec3::Y * if kind == fb_level::WebKind::Floor { 9.0 } else { -4.0 } };
             Transform::from_translation(from).looking_at(target, Vec3::Y)
+        }
+        "role" => {
+            // The first room with the role `FB_DEBUG_ROLE` names (hall, hearth, sleeping, market
+            // or store; hearth if unset), from the free floor farthest from its middle, looking
+            // at the middle. `FB_DEBUG_ROOM=<index>` picks that room of the level instead.
+            let want = match std::env::var("FB_DEBUG_ROLE").as_deref() {
+                Ok("hall") => fb_level::RoomRole::Hall,
+                Ok("sleeping") => fb_level::RoomRole::Sleeping,
+                Ok("market") => fb_level::RoomRole::Market,
+                Ok("store") => fb_level::RoomRole::Store,
+                _ => fb_level::RoomRole::Hearth,
+            };
+            let by_index = std::env::var("FB_DEBUG_ROOM").ok().and_then(|v| v.parse::<usize>().ok());
+            let Some(index) = by_index.or_else(|| (0..level.rooms.len()).find(|&r| level.roles_of(r).contains(&want))) else { return };
+            let room = level.rooms[index];
+            // At the room's middle, or for a sleeping room at the middle of its bedrolls.
+            let beds: Vec<(f32, f32)> = level
+                .props
+                .iter()
+                .filter(|p| matches!(p.prop, fb_level::Prop::Scenery { kind: armory::build::scenery::Scenery::Bedroll, .. }) && room.contains(p.x as i32, p.y as i32))
+                .map(|p| (p.x, p.y))
+                .collect();
+            let (cx, cy) = if want == fb_level::RoomRole::Sleeping && !beds.is_empty() {
+                (beds.iter().map(|b| b.0).sum::<f32>() / beds.len() as f32, beds.iter().map(|b| b.1).sum::<f32>() / beds.len() as f32)
+            } else {
+                room.centre()
+            };
+            let free = |x: f32, y: f32| level.props.iter().all(|p| (p.x - x).hypot(p.y - y) > 0.9);
+            let stand = (room.y..room.y + room.h)
+                .flat_map(|y| (room.x..room.x + room.w).map(move |x| (x as f32 + 0.5, y as f32 + 0.5)))
+                .filter(|&(x, y)| level.cell(x as i32, y as i32) == fb_level::Cell::Floor && free(x, y))
+                // Far from the middle, or for beds about two cells off them so they fill the view.
+                .min_by(|a, b| {
+                    let score = |p: &(f32, f32)| {
+                        let d = (p.0 - cx).hypot(p.1 - cy);
+                        if want == fb_level::RoomRole::Sleeping { (d - 2.0).abs() } else { -d }
+                    };
+                    score(a).total_cmp(&score(b))
+                })
+                .unwrap_or((cx, cy));
+            let at = v3(fb_level::Level::world(stand.0, stand.1)) + eye;
+            let aim = v3(fb_level::Level::world(cx, cy));
+            Transform::from_translation(at).looking_at(aim, Vec3::Y)
         }
         "brazier" | "glowcaps" => {
             let kind = if mode == "brazier" { LightKind::Brazier } else { LightKind::Glowcaps };

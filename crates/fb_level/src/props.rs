@@ -36,11 +36,15 @@ pub struct PropSpot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Prop {
     /// An Armory container: the [`armory::Family::Chests`] item of `style` rolled from `seed`
-    /// (`Chests::roll_as`), holding what `loot` rolls.
+    /// (`Chests::roll_as`), holding what `loot` rolls, or nothing if `loot` is [`NO_LOOT`].
     Container { style: ChestStyle, seed: u32, loot: u32 },
     /// Scenery built from `seed` (`armory::build::scenery`).
     Scenery { kind: Scenery, seed: u32 },
 }
+
+/// The `loot` of a container with nothing in it: the stalls of a market, which is set dressing
+/// (its traders sell from their own shelves). Whoever stocks a container skips this seed.
+pub const NO_LOOT: u32 = u32::MAX;
 
 /// The floor a prop covers about its centre, in world units, before its yaw turns it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,6 +113,8 @@ impl Prop {
                 let half = Scenery::Pillar.radius() * std::f32::consts::FRAC_1_SQRT_2;
                 FloorShape::Square { half_width: half, half_depth: half }
             }
+            // A bedroll lies along item X, human length.
+            Prop::Scenery { kind: Scenery::Bedroll, .. } => FloorShape::Square { half_width: 8.5, half_depth: 3.0 },
             Prop::Scenery { kind, .. } => FloorShape::Round(kind.radius()),
         }
     }
@@ -125,6 +131,12 @@ impl Prop {
     /// Whether it is a container.
     pub fn is_container(self) -> bool {
         matches!(self, Prop::Container { .. })
+    }
+
+    /// Whether it is a container with something to find in it: markets' stalls are empty
+    /// ([`NO_LOOT`]).
+    pub fn holds_loot(self) -> bool {
+        matches!(self, Prop::Container { loot, .. } if loot != NO_LOOT)
     }
 }
 
@@ -201,8 +213,11 @@ pub(crate) fn place_props(level: &Level, rng: &mut Mulberry32) -> Vec<PropSpot> 
     let mut placed: Vec<PropSpot> = Vec::new();
     let mut occupied = vec![false; level.cells.len()];
     let keep_clear = entrance_path(level);
-    for room in &level.rooms {
-        if rng.chance(BARE_ROOM) {
+    // The rooms factions hold are furnished for what they are used for, first; the rest of the
+    // level gets props as it always did.
+    furnish_roles(level, &keep_clear, &mut placed, &mut occupied, &mut Mulberry32::new(level.seed ^ ROLE_PROP_SALT));
+    for (r, room) in level.rooms.iter().enumerate() {
+        if rng.chance(BARE_ROOM) || !level.roles_of(r).is_empty() {
             continue;
         }
         let count = (room.area() / CELLS_PER_PROP + rng.int(0, 1)).clamp(1, MOST_IN_A_ROOM);
@@ -218,7 +233,7 @@ pub(crate) fn place_props(level: &Level, rng: &mut Mulberry32) -> Vec<PropSpot> 
         }
     }
     // A level always holds something to open.
-    if !placed.iter().any(|p| p.prop.is_container()) {
+    if !placed.iter().any(|p| p.prop.holds_loot()) {
         let prop = roll_prop(PropKind::Container, &placed, rng);
         let spot = level.rooms.iter().flat_map(|room| nooks(level, room, &keep_clear)).find_map(|nook| fit(level, &nook, prop, &placed, &occupied, rng));
         placed.extend(spot);
@@ -226,10 +241,175 @@ pub(crate) fn place_props(level: &Level, rng: &mut Mulberry32) -> Vec<PropSpot> 
     placed
 }
 
+/// Salt for the stream that furnishes the rooms of claims.
+const ROLE_PROP_SALT: u32 = 0xF0E5_B0D5;
+/// Most bedrolls in a sleeping room.
+const MOST_BEDROLLS: usize = 6;
+/// Share of a faction's members that have a bedroll, when the room has the walls for them.
+const BEDROLL_SHARE: f32 = 0.75;
+/// What a market sets out as stalls, and what a store lays by, by weight.
+const MARKET_STYLES: &[(ChestStyle, u32)] = &[(ChestStyle::Crate, 4), (ChestStyle::Chest, 3), (ChestStyle::Barrel, 3), (ChestStyle::Amphora, 2), (ChestStyle::Coffer, 1)];
+const STORE_STYLES: &[(ChestStyle, u32)] = &[(ChestStyle::Crate, 4), (ChestStyle::Chest, 3), (ChestStyle::Barrel, 2)];
+/// How close to a hearth's brazier a cooking pot counts as hung over it, in cells.
+pub const POT_OVER_FIRE: f32 = 0.3;
+
+/// Furnishes the rooms of claims by their roles ([`crate::RoomRole`]): a cooking pot hung over
+/// the hearth's fire and a keg beside it, a bedroll for most of the faction lying along a wall
+/// of the sleeping room, empty stalls of crates and chests in the market (traders sell from
+/// their own shelves) and stocked ones in the stores. The hall's furnishing is its brazier,
+/// lit with the roles. Nothing stands in or beside a doorway, on the way in or in the way of
+/// anyone standing, and every open cell stays reachable.
+fn furnish_roles(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<PropSpot>, occupied: &mut [bool], rng: &mut Mulberry32) {
+    use crate::RoomRole;
+    for claim in &level.claims {
+        let members = level.folk.iter().filter(|f| f.faction == claim.faction).count();
+        for &r in &claim.rooms {
+            let room = &level.rooms[r];
+            let mut nooks = nooks(level, room, keep_clear);
+            shuffle(&mut nooks, rng);
+            for &role in level.roles_of(r) {
+                match role {
+                    RoomRole::Hall => {}
+                    RoomRole::Hearth => {
+                        if let Some(fire) = level.lights.iter().find(|l| l.kind == crate::LightKind::Brazier && room.contains(l.x as i32, l.y as i32)) {
+                            let prop = Prop::Scenery { kind: Scenery::Cookpot, seed: item_seed(rng) };
+                            let yaw = rng.range_f32(0.0, std::f32::consts::TAU);
+                            if let Some(spot) = fit_hung(level, keep_clear, (fire.x, fire.y), yaw, prop, placed, occupied) {
+                                occupied[cell_index(level, spot.x, spot.y)] = true;
+                                placed.push(spot);
+                            }
+                        }
+                        let keg = roll_container(placed, &[(ChestStyle::Barrel, 2), (ChestStyle::Crate, 1)], true, rng);
+                        put_in_nook(level, &nooks, keg, placed, occupied, rng);
+                    }
+                    RoomRole::Sleeping => {
+                        let beds = ((members as f32 * BEDROLL_SHARE).ceil() as usize).clamp(1, MOST_BEDROLLS);
+                        for _ in 0..beds {
+                            let bed = Prop::Scenery { kind: Scenery::Bedroll, seed: item_seed(rng) };
+                            let Some(spot) = fit_row(level, &nooks, keep_clear, bed, placed, occupied) else { break };
+                            placed.push(spot);
+                        }
+                    }
+                    RoomRole::Market | RoomRole::Store => {
+                        let market = role == RoomRole::Market;
+                        let (styles, base) = if market { (MARKET_STYLES, 3) } else { (STORE_STYLES, 2) };
+                        let count = (base + room.area() / 12).min(base + 2);
+                        for _ in 0..count {
+                            let prop = roll_container(placed, styles, market, rng);
+                            put_in_nook(level, &nooks, prop, placed, occupied, rng);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A container of a style drawn from `styles`, holding nothing if `empty`. A level's first
+/// loot container is a chest, as ever.
+fn roll_container(placed: &[PropSpot], styles: &[(ChestStyle, u32)], empty: bool, rng: &mut Mulberry32) -> Prop {
+    let first = !empty && !placed.iter().any(|p| p.prop.holds_loot());
+    let style = if first { ChestStyle::Chest } else { *rng.weighted(styles) };
+    let (seed, loot) = (item_seed(rng), item_seed(rng));
+    Prop::Container { style, seed, loot: if empty { NO_LOOT } else { loot } }
+}
+
+/// Sets `prop` in the first of `nooks` it fits.
+fn put_in_nook(level: &Level, nooks: &[Nook], prop: Prop, placed: &mut Vec<PropSpot>, occupied: &mut [bool], rng: &mut Mulberry32) {
+    if let Some(spot) = nooks.iter().find_map(|nook| fit(level, nook, prop, placed, occupied, rng)) {
+        occupied[cell_index(level, spot.x, spot.y)] = true;
+        placed.push(spot);
+    }
+}
+
+/// Whether something at `(px, py)` is nearer to `spot` than `gap` world units from its edge,
+/// counting the spot as a circle of its floor shape's radius.
+fn near_spot(spot: &PropSpot, px: f32, py: f32, gap: f32) -> bool {
+    (px - spot.x).hypot(py - spot.y) * CELL < spot.prop.floor_shape().radius() + gap
+}
+
+/// Whether `spot` stands clear of the level's items, lights and folk, and of `placed`.
+fn clear_of_all(level: &Level, spot: &PropSpot, placed: &[PropSpot]) -> bool {
+    let reach = spot.prop.floor_shape().radius();
+    !(level.items.iter().any(|i| near_spot(spot, i.x, i.y, CLEARANCE))
+        || level.lights.iter().any(|l| near_spot(spot, l.x, l.y, CLEARANCE))
+        || level.folk.iter().any(|f| near_spot(spot, f.x, f.y, CLEARANCE))
+        || placed.iter().any(|p| (p.x - spot.x).hypot(p.y - spot.y) * CELL < reach + p.prop.floor_shape().radius() + PROP_GAP))
+}
+
+/// A bedroll lying along a wall of the room across two cells, if it fits: against the wall
+/// at the line between two neighbouring cells along it, both floor, free, off doorways and
+/// the way in, backed by rock, clear of everything, with the open cells still reachable.
+/// Marks both cells in `occupied`.
+fn fit_row(level: &Level, nooks: &[Nook], keep_clear: &[(i32, i32)], prop: Prop, placed: &[PropSpot], occupied: &mut [bool]) -> Option<PropSpot> {
+    let (_, half_depth) = prop.floor_shape().half_extents();
+    let out = (half_depth + WALL_GAP) / CELL;
+    let free = |x: i32, y: i32, back: (i32, i32), wall: Facing, occupied: &[bool]| {
+        level.cell(x, y) == Cell::Floor
+            && !behind_a_gap(level, x, y, &[wall])
+            && level.cell(x + back.0, y + back.1) == Cell::Rock
+            && !occupied[(y as u32 * level.width + x as u32) as usize]
+            && !by_door(level, x, y)
+            && !keep_clear.contains(&(x, y))
+    };
+    for nook in nooks {
+        for &wall in &nook.walls {
+            let (bx, by) = wall.step();
+            for (ax, ay) in [(-by, bx), (by, -bx)] {
+                let (x2, y2) = (nook.x + ax, nook.y + ay);
+                if !free(nook.x, nook.y, (bx, by), wall, occupied) || !free(x2, y2, (bx, by), wall, occupied) {
+                    continue;
+                }
+                let x = nook.x as f32 + 0.5 + ax as f32 * 0.5 + bx as f32 * (0.5 - out);
+                let y = nook.y as f32 + 0.5 + ay as f32 * 0.5 + by as f32 * (0.5 - out);
+                let yaw = (-bx as f32).atan2(-by as f32);
+                let spot = PropSpot { x, y, yaw, prop };
+                if !clear_of_all(level, &spot, placed) {
+                    continue;
+                }
+                let mut marked = occupied.to_vec();
+                marked[cell_index(level, nook.x as f32, nook.y as f32)] = true;
+                marked[cell_index(level, x2 as f32, y2 as f32)] = true;
+                if open_cells_reachable(level, &marked) {
+                    occupied.copy_from_slice(&marked);
+                    return Some(spot);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A prop hung over the light at `at` (grid coordinates), if it fits: on floor off doorways, the
+/// way in and the columns, clear of items, folk and `placed` (the light it hangs over is
+/// the point), with the open cells still reachable.
+fn fit_hung(level: &Level, keep_clear: &[(i32, i32)], at: (f32, f32), yaw: f32, prop: Prop, placed: &[PropSpot], occupied: &[bool]) -> Option<PropSpot> {
+    let (x, y) = at;
+    let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+    if level.cell(cx, cy) != Cell::Floor || by_door(level, cx, cy) || keep_clear.contains(&(cx, cy)) || occupied[cell_index(level, x, y)] {
+        return None;
+    }
+    if (-1..=1).any(|dy| (-1..=1).any(|dx| level.cell(cx + dx, cy + dy) == Cell::Column)) {
+        return None;
+    }
+    let spot = PropSpot { x, y, yaw, prop };
+    // Any light but the one it hangs over (the others are lights of the room standing close).
+    if level.items.iter().any(|i| near_spot(&spot, i.x, i.y, CLEARANCE))
+        || level.lights.iter().filter(|l| (l.x - x).hypot(l.y - y) > POT_OVER_FIRE).any(|l| near_spot(&spot, l.x, l.y, CLEARANCE))
+        || level.folk.iter().any(|f| near_spot(&spot, f.x, f.y, 0.0))
+        || placed.iter().any(|p| near_spot(&spot, p.x, p.y, p.prop.floor_shape().radius() + PROP_GAP))
+    {
+        return None;
+    }
+    let mut occupied = occupied.to_vec();
+    occupied[cell_index(level, x, y)] = true;
+    open_cells_reachable(level, &occupied).then_some(spot)
+}
+
 fn roll_prop(kind: PropKind, placed: &[PropSpot], rng: &mut Mulberry32) -> Prop {
     match kind {
         PropKind::Container => {
-            let first = !placed.iter().any(|p| p.prop.is_container());
+            let first = !placed.iter().any(|p| p.prop.holds_loot());
             let style = if first { ChestStyle::Chest } else { *rng.weighted(STYLES) };
             Prop::Container { style, seed: item_seed(rng), loot: item_seed(rng) }
         }
@@ -514,6 +694,10 @@ mod tests {
                 }
                 let others = level.items.iter().map(|s| (s.x, s.y)).chain(level.lights.iter().map(|l| (l.x, l.y))).chain(level.folk.iter().map(|f| (f.x, f.y)));
                 for (x, y) in others {
+                    // A pot hangs over the very brazier it is set at.
+                    if matches!(a.prop, Prop::Scenery { kind: Scenery::Cookpot, .. }) && (a.x - x).hypot(a.y - y) <= POT_OVER_FIRE {
+                        continue;
+                    }
                     assert!((a.x - x).hypot(a.y - y) * CELL >= ra + CLEARANCE, "seed {seed}: {a:?} on ({x}, {y})");
                 }
             }
@@ -529,12 +713,97 @@ mod tests {
         assert_eq!((level.items.len(), level.folk.len()), (13, 6));
         assert_eq!((level.items[0].family, level.items[0].seed), (armory::Family::Torch, 3_185_309_893));
         assert_eq!((level.items[12].family, level.items[12].seed), (armory::Family::Mace, 3_024_996_869));
-        assert_eq!(level.folk[5].seed, 3_724_764_086);
-        assert!((level.folk[5].x - 12.4).abs() < 0.05 && (level.folk[5].y - 24.5).abs() < 0.05);
+        // Folk stand by their rooms' roles since #546.
+        assert_eq!(level.folk[5].seed, 880_251_833);
+        assert!((level.folk[5].x - 12.3).abs() < 0.05 && (level.folk[5].y - 25.3).abs() < 0.05);
         // And everything but the props is the level as laid out before they are placed.
         let (before, _) = crate::generate::generate_without_props(1207, 1, &crate::LevelParams::default());
         assert!(before.props.is_empty() && !level.props.is_empty());
         assert_eq!(Level { props: Vec::new(), creatures: Vec::new(), stairs: Vec::new(), webs: Vec::new(), ..level }, before);
+    }
+
+    /// Props of `kind` standing in `room`.
+    fn scenery_in(level: &Level, room: usize, kind: Scenery) -> usize {
+        level.props.iter().filter(|p| matches!(p.prop, Prop::Scenery { kind: k, .. } if k == kind) && level.room_at(p.x as i32, p.y as i32) == Some(room)).count()
+    }
+
+    #[test]
+    fn a_sleeping_room_has_a_bedroll_for_most_of_its_members() {
+        let (mut members_all, mut beds_all, mut bare, mut claims) = (0, 0, 0, 0);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for claim in &level.claims {
+                let members = level.folk.iter().filter(|f| f.faction == claim.faction).count();
+                let room = level.room_with_role(claim, crate::RoomRole::Sleeping).unwrap();
+                let beds = scenery_in(&level, room, Scenery::Bedroll);
+                // A cramped room, its fire and its folk in the way, has no wall cell left to lay one in.
+                bare += (beds == 0) as u32;
+                claims += 1;
+                assert!(beds <= members.max(1), "seed {seed} depth {depth}: {beds} bedrolls for {members} folk");
+                members_all += members;
+                beds_all += beds;
+            }
+        }
+        assert!(beds_all * 3 >= members_all * 2, "{beds_all} bedrolls for {members_all} folk");
+        assert!(bare * 10 <= claims, "{bare} of {claims} sleeping rooms have no bedroll");
+    }
+
+    #[test]
+    fn markets_set_out_stalls_hearths_a_pot_and_stores_stock() {
+        let (mut markets, mut pots, mut stores, mut hearths) = (0, 0, 0, 0);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for claim in &level.claims {
+                let containers = |room: usize| level.props.iter().filter(|p| p.prop.is_container() && level.room_at(p.x as i32, p.y as i32) == Some(room)).collect::<Vec<_>>();
+                if let Some(room) = level.room_with_role(claim, crate::RoomRole::Market) {
+                    markets += 1;
+                    // Set dressing: traders sell from their own shelves.
+                    assert!(!containers(room).is_empty(), "seed {seed} depth {depth}: a market with no stalls");
+                    assert!(containers(room).iter().all(|p| !p.prop.holds_loot()), "seed {seed} depth {depth}: a stocked stall");
+                }
+                if let Some(room) = level.room_with_role(claim, crate::RoomRole::Store) {
+                    stores += 1;
+                    assert!(!containers(room).is_empty(), "seed {seed} depth {depth}: a store with no stock");
+                    assert!(containers(room).iter().all(|p| p.prop.holds_loot()), "seed {seed} depth {depth}: an empty store shelf");
+                }
+                let hearth = level.room_with_role(claim, crate::RoomRole::Hearth).unwrap();
+                hearths += 1;
+                pots += (scenery_in(&level, hearth, Scenery::Cookpot) > 0) as u32;
+            }
+        }
+        // Claims are seldom big enough for a spare room, so stores are rare.
+        assert!(markets > 8, "{markets} markets, {stores} stores");
+        assert!(pots * 10 >= hearths * 7, "{pots} of {hearths} hearths have a pot");
+    }
+
+    #[test]
+    fn every_cookpot_hangs_over_a_brazier() {
+        let mut pots = 0;
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for p in level.props.iter().filter(|p| matches!(p.prop, Prop::Scenery { kind: Scenery::Cookpot, .. })) {
+                pots += 1;
+                assert!(level.lights.iter().any(|l| l.kind == crate::LightKind::Brazier && (l.x - p.x).hypot(l.y - p.y) <= POT_OVER_FIRE), "seed {seed} depth {depth}: {p:?} hangs over nothing");
+            }
+        }
+        assert!(pots > 40, "{pots} pots");
+    }
+
+    #[test]
+    fn rooms_no_one_holds_get_no_role_props() {
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for p in &level.props {
+                let room = level.room_at(p.x as i32, p.y as i32).unwrap();
+                if matches!(p.prop, Prop::Scenery { kind: Scenery::Bedroll | Scenery::Cookpot, .. }) {
+                    assert!(level.is_claimed(room), "seed {seed} depth {depth}: {p:?} in a wild room");
+                }
+                // Claimed rooms get only what their roles furnish them with: no rubble, bones or pillars.
+                if level.is_claimed(room) {
+                    assert!(!matches!(p.prop, Prop::Scenery { kind: Scenery::Rubble | Scenery::Bones | Scenery::Pillar, .. }), "seed {seed} depth {depth}: {p:?} in a claim");
+                }
+            }
+        }
     }
 
     #[test]
