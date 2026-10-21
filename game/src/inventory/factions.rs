@@ -4,9 +4,8 @@
 //! its key, and the depths where the delver met it (`WorldRecord::met_on`). A faction not met
 //! does not appear, and neither does its name in another faction's likes.
 //!
-//! The crest is drawn flat from the faction's heraldic field (`armory::heraldry::Field`): its
-//! first tincture, the division in the second on a six by six grid of cells, and the charge as
-//! a small boss at the fess point. The banners show the same field in the level.
+//! The crest is the armory's, drawn from the faction's heraldic field (`armory::heraldry::Field`)
+//! by the same pattern shader and device shapes as its banners in the level ([`crate::crest`]).
 
 use armory::heraldry::{Division, Field, Tincture};
 use std::collections::BTreeMap;
@@ -14,6 +13,7 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use fb_faction::{Band, Faction, Preference, World};
 
+use super::icon::Icons;
 use super::sheet::band_colour;
 use crate::play::CurrentLevel;
 use crate::crest::crest;
@@ -27,9 +27,8 @@ pub struct FactionsPage;
 /// What the page says when no faction has been met.
 pub const NO_FACTIONS_MET: &str = "You have met no faction yet. Speak with the folk you find in the dark.";
 
-/// The crest's size in logical pixels.
-const CREST_W: f32 = 46.0;
-const CREST_H: f32 = 56.0;
+/// The crest's width in logical pixels.
+const CREST_W: f32 = 64.0;
 /// The standing bar's width and height.
 const BAR_PX: f32 = 200.0;
 const BAR_HEIGHT_PX: f32 = 10.0;
@@ -146,7 +145,7 @@ fn fact(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, text: S
 }
 
 /// Builds the factions tab's body: one card per met faction, or [`NO_FACTIONS_MET`].
-pub fn page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, entries: &[Entry]) {
+pub fn page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, icons: &mut Icons, entries: &[Entry]) {
     parent.spawn((FactionsPage, Name::new("FactionsPage"), Node { flex_direction: FlexDirection::Column, row_gap: px(10), flex_shrink: 0.0, ..default() })).with_children(|page| {
         if entries.is_empty() {
             page.spawn((Text::new(NO_FACTIONS_MET), UiFonts::style(&fonts.body, 15.0, MUTED)));
@@ -159,7 +158,7 @@ pub fn page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, entries: &[Entry
                 BorderColor::all(FAINT),
             ))
             .with_children(|card| {
-                crest(card, &entry.field, CREST_W, CREST_H);
+                crest(card, icons, &entry.field, CREST_W);
                 card.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(3), flex_grow: 1.0, flex_shrink: 1.0, ..default() }).with_children(|text| {
                     text.spawn((Text::new(entry.name.clone()), UiFonts::style(&fonts.display, 22.0, INK)));
                     text.spawn((Text::new(format!("{} \u{b7} {}", entry.folk, entry.colours)), UiFonts::style(&fonts.body, 14.0, MUTED)));
@@ -212,7 +211,6 @@ pub fn note_levels_met(record: Option<ResMut<WorldRecord>>, level: Option<Res<Cu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crest::{CELLS, second_tincture};
 
     fn record_with(seed: u32, met: &[usize]) -> (WorldRecord, Vec<Faction>) {
         let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, seed);
@@ -301,14 +299,19 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_field_has_no_second_tincture_and_a_party_one_splits() {
-        let cells = |d| (0..CELLS).flat_map(|j| (0..CELLS).map(move |i| second_tincture(d, i, j))).filter(|&b| b).count();
-        assert_eq!(cells(Division::Plain), 0);
-        assert_eq!(cells(Division::PerPale), CELLS * CELLS / 2);
-        assert_eq!(cells(Division::Quarterly), CELLS * CELLS / 2);
-        for division in Division::ALL {
-            let n = cells(division);
-            assert!(division == Division::Plain || (n > 0 && n < CELLS * CELLS), "{division:?} paints {n} cells");
+    fn a_crest_is_drawn_from_exactly_the_factions_own_field() {
+        let (record, ids) = record_with(77, &[0, 1, 2, 3]);
+        let world = World::new(77);
+        let listed = entries(&record, 77);
+        assert_eq!(listed.len(), ids.len());
+        for entry in &listed {
+            assert_eq!(entry.field, world.faction(entry.id).field, "{}", entry.name);
+            // What the armory draws is a pure function of that field.
+            let mesh = armory::crest::crest_mesh(&entry.field);
+            let cloth = mesh.parts.iter().find(|p| p.name == "cloth").unwrap();
+            assert_eq!(cloth.tint, Some(entry.field.tincture.rgb()));
+            assert_eq!(cloth.pattern, entry.field.surface());
+            assert_eq!(mesh.parts.iter().any(|p| p.name == "charge"), entry.field.painted && entry.field.charge != armory::sections::device::Device::None);
         }
     }
 }

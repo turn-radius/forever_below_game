@@ -10,7 +10,8 @@ use fb_level::sight::Explored;
 
 use super::explore::ExploredLevels;
 use super::screen::{MapScreen, MapView, screen_size};
-use crate::crest::{crest, plain_shield};
+use crate::crest::{ASPECT, crest, plain_field};
+use crate::inventory::icon::Icons;
 use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen};
 use crate::record::WorldRecord;
 
@@ -19,8 +20,6 @@ use crate::record::WorldRecord;
 /// in view, small enough to stay on its claim when zoomed in.
 pub const WIDTH_CELLS: f32 = 1.6;
 pub const WIDTH_PX: (f32, f32) = (22.0, 58.0);
-/// A crest is this much taller than wide, as on the factions tab.
-pub const ASPECT: f32 = 56.0 / 46.0;
 /// How much larger the marks are drawn in a window bigger than 1280 by 720, at most.
 pub const MAX_WINDOW_SCALE: f32 = 2.0;
 
@@ -115,6 +114,7 @@ fn refresh_crests(
     record: Option<Res<WorldRecord>>,
     abyss: Option<Res<crate::travel::Abyss>>,
     mut layers: Query<(Entity, &mut CrestLayer)>,
+    mut icons: Icons,
 ) {
     if !open.is(Screen::Map) {
         return;
@@ -134,8 +134,8 @@ fn refresh_crests(
     let marks = claim_marks(&level.0, seen);
     commands.entity(layer).despawn_related::<Children>().with_children(|layer| {
         for mark in marks {
-            let (w, h) = (WIDTH_PX.0, WIDTH_PX.0 * ASPECT);
-            let mut shield = if met(mark.faction) { crest(layer, &world.faction(mark.faction).field, w, h) } else { plain_shield(layer, w, h) };
+            let field = if met(mark.faction) { world.faction(mark.faction).field } else { plain_field() };
+            let mut shield = crest(layer, &mut icons, &field, WIDTH_PX.0);
             shield.insert((CrestMark { at: mark.at }, Pickable::IGNORE));
             shield.entry::<Node>().and_modify(|mut n| n.position_type = PositionType::Absolute);
         }
@@ -172,8 +172,6 @@ fn place_crests(
         node.top = px(corner.y);
         node.width = px(w);
         node.height = px(h);
-        node.border_radius.bottom_left = px(w * 0.5).into();
-        node.border_radius.bottom_right = px(w * 0.5).into();
     }
 }
 
@@ -181,6 +179,7 @@ fn place_crests(
 mod tests {
     use super::*;
     use crate::play::CurrentLevel;
+    use crate::ui::UiFonts;
 
     /// A level with at least two claims, and a seen set to start from.
     fn level_with_claims() -> Level {
@@ -261,6 +260,9 @@ mod tests {
         let mut explored = ExploredLevels::default();
         explored.0.insert(level.seed, seen);
         app.add_plugins(MinimalPlugins)
+            .init_resource::<Assets<Image>>()
+            .init_resource::<UiFonts>()
+            .init_resource::<crate::inventory::icon::IconCache>()
             .init_resource::<WorldRecord>()
             .init_resource::<crate::travel::Abyss>()
             .insert_resource(explored)
@@ -272,10 +274,10 @@ mod tests {
         app
     }
 
-    /// The marks on the layer: their names and where they stand.
-    fn shown(app: &mut App) -> Vec<(String, Vec2)> {
-        let mut q = app.world_mut().query::<(&Name, &CrestMark)>();
-        let mut v: Vec<_> = q.iter(app.world()).map(|(n, m)| (n.as_str().to_string(), m.at)).collect();
+    /// The marks on the layer: the picture each shows and where it stands.
+    fn shown(app: &mut App) -> Vec<(AssetId<Image>, Vec2)> {
+        let mut q = app.world_mut().query::<(&ImageNode, &CrestMark)>();
+        let mut v: Vec<_> = q.iter(app.world()).map(|(i, m)| (i.image.id(), m.at)).collect();
         v.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.1.y.total_cmp(&b.1.y)));
         v
     }
@@ -283,18 +285,20 @@ mod tests {
     #[test]
     fn an_unmet_claim_shows_a_plain_shield_and_a_met_one_its_crest() {
         let level = level_with_claims();
-        let (first, second) = (level.claims[0].faction, level.claims[1].faction);
+        let first = level.claims[0].faction;
         let mut app = marked(level.clone(), Explored::all(&level));
-        let names: Vec<_> = shown(&mut app).into_iter().map(|(n, _)| n).collect();
-        assert!(!names.is_empty() && names.iter().all(|n| n == "Plain shield"), "{names:?}");
-        // Meeting one faction swaps its marks for crests, and only its.
+        let before = shown(&mut app);
+        let plain = before[0].0;
+        assert_eq!(before.len(), level.claims.len());
+        assert!(before.iter().all(|(i, _)| *i == plain), "one plain shield for every unmet claim");
+        // Meeting one faction swaps its marks for its crest, and only its.
         app.world_mut().resource_mut::<WorldRecord>().standings.meet(first);
         app.update();
-        let names: Vec<_> = shown(&mut app).into_iter().map(|(n, _)| n).collect();
+        let after = shown(&mut app);
         let held_by = |f| level.claims.iter().filter(|c| c.faction == f).count();
-        assert_eq!(names.iter().filter(|n| *n == "Crest").count(), held_by(first));
-        assert_eq!(names.iter().filter(|n| *n == "Plain shield").count(), level.claims.len() - held_by(first));
-        assert!(second == first || names.contains(&"Plain shield".to_string()));
+        assert_eq!(after.iter().filter(|(i, _)| *i != plain).count(), held_by(first));
+        assert_eq!(after.iter().filter(|(i, _)| *i == plain).count(), level.claims.len() - held_by(first));
+        assert_eq!(before.iter().map(|m| m.1).collect::<Vec<_>>(), after.iter().map(|m| m.1).collect::<Vec<_>>(), "they stand where they did");
     }
 
     #[test]
@@ -303,12 +307,15 @@ mod tests {
         let faction = level.claims[0].faction;
         level.claims[1].faction = faction;
         let mut app = marked(level.clone(), Explored::all(&level));
+        let plain = shown(&mut app)[0].0;
         app.world_mut().resource_mut::<WorldRecord>().standings.meet(faction);
         app.update();
         let marks = shown(&mut app);
-        let crests = marks.iter().filter(|(n, _)| n == "Crest").count();
+        let crests = marks.iter().filter(|(i, _)| *i != plain).count();
         assert_eq!(crests, level.claims.iter().filter(|c| c.faction == faction).count());
         assert!(crests >= 2);
+        let own: Vec<_> = marks.iter().filter(|(i, _)| *i != plain).map(|m| m.0).collect();
+        assert!(own.iter().all(|i| *i == own[0]), "both wear the same arms");
     }
 
     #[test]

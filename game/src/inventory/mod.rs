@@ -932,7 +932,7 @@ pub(crate) fn build_screen(
                             .with_children(|page| {
                                 if *tab == SheetTab::Factions {
                                     let listed = record.as_deref().zip(abyss.as_deref()).map(|(r, a)| factions::entries(r, a.run_seed)).unwrap_or_default();
-                                    factions::page(page, &fonts, &listed);
+                                    factions::page(page, &fonts, &mut icons, &listed);
                                     return;
                                 }
                                 let (needs, exhaustion, vitals) = players.single().map_or_else(
