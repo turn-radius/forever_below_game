@@ -529,8 +529,8 @@ mod tests {
         assert_eq!((level.items.len(), level.folk.len()), (13, 6));
         assert_eq!((level.items[0].family, level.items[0].seed), (armory::Family::Torch, 3_185_309_893));
         assert_eq!((level.items[12].family, level.items[12].seed), (armory::Family::Mace, 3_024_996_869));
-        assert_eq!(level.folk[5].seed, 4_135_868_862);
-        assert!((level.folk[5].x - 12.5).abs() < 0.05 && (level.folk[5].y - 24.6).abs() < 0.05);
+        assert_eq!(level.folk[5].seed, 3_724_764_086);
+        assert!((level.folk[5].x - 12.4).abs() < 0.05 && (level.folk[5].y - 24.5).abs() < 0.05);
         // And everything but the props is the level as laid out before they are placed.
         let (before, _) = crate::generate::generate_without_props(1207, 1, &crate::LevelParams::default());
         assert!(before.props.is_empty() && !level.props.is_empty());

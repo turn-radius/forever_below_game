@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use fb_items::Coins;
-use fb_level::{ItemSpot, Level};
+use fb_level::{CELL, Claim, ItemSpot, Level, settle_claims};
 use serde::{Deserialize, Serialize};
 
 use crate::carry::FloorItem;
@@ -63,6 +63,11 @@ pub struct LevelRecord {
     /// Each folk, by their index in the level's folk.
     #[serde(default)]
     pub folk: BTreeMap<usize, FolkRecord>,
+    /// The ground each faction holds, as the delver left it: a faction down to one member holds
+    /// the one room they hold, and one with no one left holds none. `None` for a record from
+    /// before claims, which leaves the level's own.
+    #[serde(default)]
+    pub claims: Option<Vec<Claim>>,
 }
 
 /// A folk as they were left.
@@ -164,6 +169,9 @@ impl WorldRecord {
     pub fn apply_to(&self, level: &mut Level) {
         if let Some(saved) = self.level(level.depth) {
             level.items = saved.floor.iter().map(|f| f.spot).collect();
+            if let Some(claims) = &saved.claims {
+                level.claims = claims.clone();
+            }
         }
     }
 }
@@ -262,6 +270,16 @@ pub fn record_level_left(
             },
         );
     }
+    // Folk the record has no entry for are as generated. `level.0.claims` are the claims as the
+    // level was last left, so settling them only ever shrinks them.
+    let alive: Vec<Option<(f32, f32)>> = (0..level.0.folk.len())
+        .map(|i| match left.folk.get(&i) {
+            Some(f) if f.dead => None,
+            Some(f) => Some((f.at[0] / CELL, f.at[2] / CELL)),
+            None => Some((level.0.folk[i].x, level.0.folk[i].y)),
+        })
+        .collect();
+    left.claims = Some(settle_claims(&level.0, &alive));
     record.levels.insert(level.0.depth, left);
 }
 
@@ -387,6 +405,32 @@ mod tests {
         assert_eq!(record.standings.band(faction), fb_faction::Band::Hostile);
         let json = serde_json::to_string(&record).unwrap();
         assert_eq!(serde_json::from_str::<WorldRecord>(&json).unwrap(), record);
+    }
+
+    #[test]
+    fn claims_round_trip_and_come_back_as_left() {
+        let level = fb_level::generate(1207, 1);
+        let faction = level.claims[0].faction;
+        let mut alive: Vec<Option<(f32, f32)>> = level.folk.iter().map(|f| Some((f.x, f.y))).collect();
+        let members: Vec<usize> = (0..level.folk.len()).filter(|&i| level.folk[i].faction == faction).collect();
+        members[1..].iter().for_each(|&i| alive[i] = None);
+        let mut saved = LevelRecord::default();
+        saved.claims = Some(settle_claims(&level, &alive));
+        assert_eq!(saved.claims.as_ref().unwrap()[0].rooms.len(), 1);
+        let mut record = WorldRecord::default();
+        record.levels.insert(1, saved.clone());
+        let json = serde_json::to_string(&record).unwrap();
+        let record: WorldRecord = serde_json::from_str(&json).unwrap();
+        // Rebuilt from the seed, then made as it was left.
+        let mut again = fb_level::generate(1207, 1);
+        record.apply_to(&mut again);
+        assert_eq!(Some(&again.claims), saved.claims.as_ref());
+        // A level never visited keeps the generated claims, and a record from before claims has none to apply.
+        let mut fresh = fb_level::generate(1207, 1);
+        WorldRecord::default().apply_to(&mut fresh);
+        assert_eq!(fresh.claims, level.claims);
+        let old: LevelRecord = serde_json::from_str(r#"{"floor":[],"containers":{},"creatures":{}}"#).unwrap();
+        assert_eq!(old.claims, None);
     }
 
     #[test]

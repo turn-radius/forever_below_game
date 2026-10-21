@@ -86,7 +86,7 @@ const PAIR: f64 = 0.4;
 /// Whether any folk stand in room `i`. No creature is placed there: folk and the things that
 /// would bite them do not share a room.
 pub(crate) fn has_folk(level: &Level, i: usize) -> bool {
-    level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == Some(i))
+    level.is_claimed(i) || level.folk.iter().any(|f| level.room_at(f.x as i32, f.y as i32) == Some(i))
 }
 
 /// Lays out the level's creatures: a few rat packs, each in a room of its own, and maybe a
@@ -461,7 +461,7 @@ mod tests {
         let (sx, sy, _) = level.start();
         assert_eq!((sx, sy, level.rooms.len()), (1, 22, 6));
         assert_eq!((level.items.len(), level.folk.len(), level.props.len()), (13, 6, 16));
-        assert_eq!(level.folk[5].seed, 4_135_868_862);
+        assert_eq!(level.folk[5].seed, 3_724_764_086);
         assert_eq!(level.props[0].prop, crate::Prop::Container { style: armory::families::chests::ChestStyle::Chest, seed: 1_184_162_579, loot: 3_392_196_572 });
         let (before, _) = crate::generate::generate_without_creatures(1207, 1, &crate::LevelParams::default());
         assert!(before.creatures.is_empty() && !level.creatures.is_empty());

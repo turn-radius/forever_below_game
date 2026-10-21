@@ -11,6 +11,7 @@ use fb_body::Folk;
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
+use crate::claims::MIN_ROOM_AREA;
 use crate::generate::{is_colonnaded, item_seed, shuffle};
 use crate::{Cell, Level, Room};
 pub use fb_faction::{Faction, FactionSpec};
@@ -40,9 +41,6 @@ impl FolkSpot {
 pub(crate) const FOLK_SALT: u32 = 0xF01C_5A17;
 /// Folk in a level, inclusive.
 pub const FOLK_COUNT: (u32, u32) = (3, 10);
-/// How many folk a level aims for, inclusive. A cramped level may hold fewer, never under
-/// [`FOLK_COUNT`]'s least.
-const TARGET_COUNT: (u32, u32) = (6, 10);
 /// Rings a group tries, each [`RING_STEP`] cells wider than the last.
 const RINGS: usize = 4;
 const RING_STEP: f32 = 0.5;
@@ -55,46 +53,39 @@ const FOLK_SPACING: f32 = 0.7;
 const CLEARANCE: f32 = 0.55;
 /// Least distance from a folk to a room's wall, in cells.
 const WALL_MARGIN: f32 = 0.3;
-/// Smallest room a group gathers in.
-const MIN_ROOM_AREA: u32 = 9;
 
-/// Lays out the level's folk: a few groups, each of one faction gathered round a point in a
-/// room (a brazier where the room has one) and facing it, as if talking. Never in the starting
-/// room, a corridor, a doorway or beside one. A room too cramped for a whole group takes what
-/// fits, and a second pass tops up the groups already placed.
-pub(crate) fn place_folk(level: &Level, start_room: usize, rng: &mut Mulberry32) -> Vec<FolkSpot> {
-    let target = rng.int(TARGET_COUNT.0, TARGET_COUNT.1) as usize;
-    let mut rooms: Vec<usize> = (0..level.rooms.len()).filter(|&i| i != start_room && level.rooms[i].area() >= MIN_ROOM_AREA).collect();
-    shuffle(&mut rooms, rng);
-    // Lit rooms first: people gather at the light.
+/// Lays out the level's folk: in each faction's claim ([`crate::Claim`]), a few groups gathered
+/// round a point in a room (a brazier where the room has one) and facing it, as if talking.
+/// `strengths[k]` is how many members claim `k` places. Never in the starting room (no claim
+/// holds it), a corridor, a doorway or beside one. A room too cramped for a whole group takes
+/// what fits, and later passes top up the groups already placed.
+pub(crate) fn place_folk(level: &Level, strengths: &[usize], rng: &mut Mulberry32) -> Vec<FolkSpot> {
     let lit = |i: &usize| level.lights.iter().any(|l| level.room_at(l.x as i32, l.y as i32) == Some(*i));
-    if level.style == crate::LevelStyle::StoneHalls {
-        // Folk of the halls stand among the columns first.
-        rooms.sort_by_key(|i| (!is_colonnaded(level, &level.rooms[*i]), !lit(i)));
-    } else {
-        rooms.sort_by_key(|i| !lit(i));
-    }
-    // Folk gather in at most half the rooms, leaving the rest to the creatures, which never
-    // share a room with them ([`crate::creatures::has_folk`]).
-    rooms.truncate(rooms.len().div_ceil(2));
-
-    let mut factions: Vec<&FactionSpec> = level.factions.iter().collect();
-    shuffle(&mut factions, rng);
-    let groups: Vec<(&Room, &FactionSpec, Gathering)> = rooms
-        .iter()
-        .enumerate()
-        .map(|(k, &i)| (&level.rooms[i], factions[k % factions.len()], Gathering::in_room(level, &level.rooms[i], rng)))
-        .collect();
     let mut folk: Vec<FolkSpot> = Vec::new();
-    for pass in 0..2 {
-        for &(room, faction, gathering) in &groups {
-            let left = target.saturating_sub(folk.len());
-            if left == 0 {
-                return folk;
+    for (claim, &strength) in level.claims.iter().zip(strengths) {
+        let faction = level.faction(claim.faction);
+        let mut rooms: Vec<usize> = claim.rooms.iter().copied().filter(|&i| level.rooms[i].area() >= MIN_ROOM_AREA).collect();
+        shuffle(&mut rooms, rng);
+        // Lit rooms first: people gather at the light.
+        if level.style == crate::LevelStyle::StoneHalls {
+            // Folk of the halls stand among the columns first.
+            rooms.sort_by_key(|i| (!is_colonnaded(level, &level.rooms[*i]), !lit(i)));
+        } else {
+            rooms.sort_by_key(|i| !lit(i));
+        }
+        let groups: Vec<(&Room, Gathering)> = rooms.iter().map(|&i| (&level.rooms[i], Gathering::in_room(level, &level.rooms[i], rng))).collect();
+        let mut placed = 0;
+        for pass in 0..3 {
+            for &(room, gathering) in &groups {
+                let left = strength.saturating_sub(placed);
+                if left == 0 {
+                    break;
+                }
+                let size = if pass == 0 { rng.int(GROUP_SIZE.0, GROUP_SIZE.1) as usize } else { 1 }.min(left);
+                let made = gathering.gather(level, room, faction, size, &folk, rng);
+                placed += made.len();
+                folk.extend(made);
             }
-            let size = if pass == 0 { rng.int(GROUP_SIZE.0, GROUP_SIZE.1) as usize } else { 1 }.min(left);
-            let placed = gathering.gather(level, room, faction, size, &folk, rng);
-            folk.extend(placed);
         }
     }
     folk
@@ -194,8 +185,11 @@ mod tests {
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
             let world = fb_faction::World::new(seed);
-            assert_eq!(level.factions, world.draw_specs(seed), "seed {seed}");
-            assert!((2..=4).contains(&level.factions.len()));
+            let drawn = world.draw_specs(seed);
+            assert!((2..=4).contains(&drawn.len()));
+            // Those of the draw that found ground, in the draw's order.
+            assert!(!level.factions.is_empty() && level.factions.iter().all(|s| drawn.contains(s)), "seed {seed}");
+            assert!(level.factions.windows(2).all(|w| drawn.iter().position(|d| *d == w[0]) < drawn.iter().position(|d| *d == w[1])));
             for f in &level.folk {
                 assert!(level.factions.iter().any(|s| s.id == f.faction), "seed {seed}: {f:?} is of a faction the level does not hold");
             }
