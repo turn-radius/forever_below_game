@@ -553,7 +553,7 @@ fn build(s: &BannerState) -> ItemMesh {
         for side in [1.0f32, -1.0] {
             let options = PlateOptions { thickness: 0.0, offset: 0.03 * side, cell, crease: 1.2, ..Default::default() };
             let mut face = MeshBuilder::new();
-            for (piece, holes) in device_shapes(s.field.charge, s.seed) {
+            for (piece, holes) in device_shapes(s.field.charge, crate::crest::device_seed(&s.field)) {
                 let piece: Vec<P2> = piece.iter().map(place).collect();
                 let holes: Vec<Vec<P2>> = holes.iter().map(|hole| hole.iter().map(place).collect()).collect();
                 face.append(&plate(&piece, &holes, &drape, &options).face);

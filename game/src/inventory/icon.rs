@@ -36,6 +36,7 @@ use bevy::{
         view::Tonemapping,
     },
 };
+use armory::heraldry::Field;
 use fb_items::Item;
 
 use crate::launch::AppState;
@@ -54,6 +55,10 @@ pub const ICON_LAYER: usize = 2;
 /// the density and is only ever shrunk, never enlarged, on one of ordinary density, in the
 /// card and up to 2160 lines. Our own.
 pub const ICON_CELL_PX: u32 = 144;
+
+/// The size in pixels of a crest's image: tall as a shield is, for the largest the map or the
+/// tab draws one and more.
+pub const CREST_PX: UVec2 = UVec2::new(160, 208);
 
 /// Where icons are drawn: far below the level and the view model's stage.
 const ICON_STAGE: Vec3 = Vec3::new(0.0, -50_000.0, 0.0);
@@ -102,9 +107,16 @@ impl IconKey {
 #[derive(Resource, Default)]
 pub struct IconCache {
     images: HashMap<IconKey, Handle<Image>>,
-    queued: VecDeque<(IconKey, Item, Handle<Image>)>,
+    queued: VecDeque<(Subject, Handle<Image>)>,
+    crests: HashMap<u64, Handle<Image>>,
     drawing: Vec<Drawing>,
     drawn: HashSet<AssetId<Image>>,
+}
+
+/// What an icon shows: an item, or a faction's crest ([`armory::crest`]).
+enum Subject {
+    Item(IconKey, Box<Item>),
+    Crest(Box<Field>),
 }
 
 struct Drawing {
@@ -144,16 +156,26 @@ impl IconCache {
     /// Forgets every icon that is drawn and not drawing, so each is made again when next asked
     /// for (the soak's `FB_SOAK_CHURN`, to make and take down many icon cameras).
     pub fn forget_drawn(&mut self) {
-        let busy: HashSet<AssetId<Image>> = self.drawing.iter().map(|d| d.image).chain(self.queued.iter().map(|q| q.2.id())).collect();
+        let busy: HashSet<AssetId<Image>> = self.drawing.iter().map(|d| d.image).chain(self.queued.iter().map(|q| q.1.id())).collect();
         self.images.retain(|_, image| busy.contains(&image.id()));
+        self.crests.retain(|_, image| busy.contains(&image.id()));
         self.drawn.retain(|id| busy.contains(id));
     }
 
     /// Forgets the icons queued or being drawn, whose stages are despawned with the delve, so
     /// each is made afresh when next asked for. Icons already drawn are kept.
     pub fn abandon_drawing(&mut self) {
-        let busy: HashSet<AssetId<Image>> = self.drawing.drain(..).map(|d| d.image).chain(self.queued.drain(..).map(|q| q.2.id())).collect();
+        let busy: HashSet<AssetId<Image>> = self.drawing.drain(..).map(|d| d.image).chain(self.queued.drain(..).map(|q| q.1.id())).collect();
         self.images.retain(|_, image| !busy.contains(&image.id()));
+        self.crests.retain(|_, image| !busy.contains(&image.id()));
+    }
+
+    /// Forgets every crest, drawn or not, as when the delve ends: the next run's world rolls
+    /// other factions, so the kept crests stay to one world's.
+    pub fn forget_crests(&mut self) {
+        for image in self.crests.drain().map(|(_, image)| image) {
+            self.drawn.remove(&image.id());
+        }
     }
 
     /// Records the icon in `image` as drawn, as [`draw_icons`] does.
@@ -208,8 +230,53 @@ impl Icons<'_> {
         target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let image = self.images.add(target);
         self.cache.images.insert(key.clone(), image.clone());
-        self.cache.queued.push_back((key, item.clone(), image.clone()));
+        self.cache.queued.push_back((Subject::Item(key, Box::new(item.clone())), image.clone()));
         image
+    }
+
+    /// The crest for `field`, drawn once from the armory and kept: the faction's arms flat on a
+    /// shield, from the same field its banners are painted from. Blank until drawn.
+    pub fn crest(&mut self, field: &Field) -> Handle<Image> {
+        let key = armory::crest::field_key(field);
+        if let Some(image) = self.cache.crests.get(&key) {
+            return image.clone();
+        }
+        let mut target = Image::new_target_texture(CREST_PX.x, CREST_PX.y, TextureFormat::Rgba8UnormSrgb, None);
+        target.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
+        target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+        let image = self.images.add(target);
+        self.cache.crests.insert(key, image.clone());
+        self.cache.queued.push_back((Subject::Crest(Box::new(*field)), image.clone()));
+        image
+    }
+
+    /// Spawns `node` showing the crest for `field`; until it is drawn, a plain shield stands in
+    /// its place.
+    pub fn spawn_crest<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, field: &Field, node: Node) -> EntityCommands<'a> {
+        let image = self.crest(field);
+        let drawn = self.cache.is_drawn(&image);
+        let mut crest = parent.spawn((node, ImageNode::new(image.clone())));
+        if !drawn {
+            let mut placeholder = Entity::PLACEHOLDER;
+            crest.with_children(|crest| {
+                placeholder = crest
+                    .spawn((
+                        IconPlaceholder,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: percent(100),
+                            height: percent(100),
+                            border_radius: BorderRadius { top_left: px(3).into(), top_right: px(3).into(), bottom_left: percent(50).into(), bottom_right: percent(50).into() },
+                            ..default()
+                        },
+                        BackgroundColor(MUTED.with_alpha(0.25)),
+                        Pickable::IGNORE,
+                    ))
+                    .id();
+            });
+            crest.insert(AwaitingIcon { image: image.id(), placeholder });
+        }
+        crest
     }
 
     /// Spawns `node` showing the icon for `item` lying `turned`. Until the icon is drawn, the
@@ -327,11 +394,15 @@ pub fn draw_icons(mut commands: Commands, mut cache: ResMut<IconCache>, mut spaw
         !done
     });
     while cache.drawing.len() < STAGES {
-        let Some((key, item, image)) = cache.queued.pop_front() else { break };
+        let Some((subject, image)) = cache.queued.pop_front() else { break };
         let stage = (0..STAGES).find(|s| cache.drawing.iter().all(|d| d.stage != *s)).expect("a free stage");
         let id = image.id();
         // An item with no shape is never drawn and keeps its placeholder.
-        if let Some(entities) = stage_icon(&mut commands, &mut spawner, &item, key.turned, image, stage) {
+        let entities = match subject {
+            Subject::Item(key, item) => stage_icon(&mut commands, &mut spawner, &item, key.turned, image, stage),
+            Subject::Crest(field) => stage_crest(&mut commands, &mut spawner, &field, image, stage),
+        };
+        if let Some(entities) = entities {
             cache.drawing.push(Drawing { stage, image: id, entities, started: now, frames: 0 });
         }
     }
@@ -344,15 +415,44 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
     let points: Vec<Vec3> = mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
     let (rotation, min, max) = icon_pose(&points, stands_upright(item), turned)?;
     let size = icon_size(item, turned);
+    Some(stage_mesh(commands, spawner, &mesh, &appearance_of(&item.shape), &format!("Icon: {}", item.name), (rotation, min, max), size, image, stage))
+}
+
+/// Spawns the crest for `field` on `stage`, face on, with the camera, light and readback of an
+/// item's icon.
+fn stage_crest(commands: &mut Commands, spawner: &mut ItemSpawner, field: &Field, image: Handle<Image>, stage: usize) -> Option<[Entity; 4]> {
+    let mesh = armory::crest::crest_mesh(field);
+    let points: Vec<Vec3> = mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+    let (min, max) = bounds(points.iter().copied())?;
+    let appearance = crate::render::ItemAppearance { palette: crate::render::ItemPalette::ARMORY, ..default() };
+    Some(stage_mesh(commands, spawner, &mesh, &appearance, "Icon: crest", (Quat::IDENTITY, min, max), CREST_PX, image, stage))
+}
+
+/// Spawns `mesh` posed by `pose` (rotation and posed bounds) on `stage`, with a camera drawing
+/// it into `image` of `size`, its light, and a readback watching for it to show. Returns the
+/// camera, the mesh, the light and the readback.
+#[allow(clippy::too_many_arguments)]
+fn stage_mesh(
+    commands: &mut Commands,
+    spawner: &mut ItemSpawner,
+    mesh: &armory::geom::ItemMesh,
+    appearance: &crate::render::ItemAppearance,
+    name: &str,
+    pose: (Quat, Vec3, Vec3),
+    size: UVec2,
+    image: Handle<Image>,
+    stage: usize,
+) -> [Entity; 4] {
+    let (rotation, min, max) = pose;
     let view = icon_view(min, max, size.x as f32 / size.y as f32);
     let centre = (min + max) * 0.5;
     let at = stage_at(stage);
     let layer = RenderLayers::layer(ICON_LAYER);
     let exposure = Exposure::INDOOR;
 
-    let mut root = spawner.spawn(&mesh, &appearance_of(&item.shape));
+    let mut root = spawner.spawn(mesh, appearance);
     root.insert((
-        Name::new(format!("Icon: {}", item.name)),
+        Name::new(name.to_string()),
         DespawnOnExit(AppState::Delving),
         Transform::from_translation(at - centre).with_rotation(rotation),
         Propagate(layer.clone()),
@@ -413,7 +513,7 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
             }
         })
         .id();
-    Some([camera, root, light, readback])
+    [camera, root, light, readback]
 }
 
 /// Whether any pixel of an RGBA8 image `width` by `height`, read back with its rows padded

@@ -13,6 +13,7 @@ pub mod dazzle;
 pub mod door_view;
 pub mod doors;
 pub mod combat;
+pub mod crest;
 pub mod creature_view;
 pub mod creatures;
 pub mod doll_view;

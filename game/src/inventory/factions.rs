@@ -4,9 +4,8 @@
 //! its key, and the depths where the delver met it (`WorldRecord::met_on`). A faction not met
 //! does not appear, and neither does its name in another faction's likes.
 //!
-//! The crest is drawn flat from the faction's heraldic field (`armory::heraldry::Field`): its
-//! first tincture, the division in the second on a six by six grid of cells, and the charge as
-//! a small boss at the fess point. The banners show the same field in the level.
+//! The crest is the armory's, drawn from the faction's heraldic field (`armory::heraldry::Field`)
+//! by the same pattern shader and device shapes as its banners in the level ([`crate::crest`]).
 
 use armory::heraldry::{Division, Field, Tincture};
 use std::collections::BTreeMap;
@@ -14,10 +13,12 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use fb_faction::{Band, Faction, Preference, World};
 
+use super::icon::Icons;
 use super::sheet::band_colour;
 use crate::play::CurrentLevel;
+use crate::crest::crest;
 use crate::record::WorldRecord;
-use crate::ui::{BG, CELL, FAINT, FRAME_GOLD, INK, LINE, MUTED, OK, UiFonts};
+use crate::ui::{BG, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts};
 
 /// The leaf under the header when the factions tab is showing.
 #[derive(Component, Debug)]
@@ -26,11 +27,8 @@ pub struct FactionsPage;
 /// What the page says when no faction has been met.
 pub const NO_FACTIONS_MET: &str = "You have met no faction yet. Speak with the folk you find in the dark.";
 
-/// The crest's size in logical pixels.
-const CREST_W: f32 = 46.0;
-const CREST_H: f32 = 56.0;
-/// Cells across and down the crest's field.
-const CELLS: usize = 6;
+/// The crest's width in logical pixels.
+const CREST_W: f32 = 64.0;
 /// The standing bar's width and height.
 const BAR_PX: f32 = 200.0;
 const BAR_HEIGHT_PX: f32 = 10.0;
@@ -51,12 +49,6 @@ pub struct Entry {
     pub levels: Vec<u32>,
 }
 
-/// A tincture's colour on the page.
-pub fn tincture_colour(tincture: Tincture) -> Color {
-    let armory::material::Rgb(r, g, b) = tincture.rgb();
-    Color::srgb(r, g, b)
-}
-
 /// The tincture's heraldic name: "azure", "argent".
 pub fn tincture_word(tincture: Tincture) -> String {
     format!("{tincture:?}").to_lowercase()
@@ -72,27 +64,6 @@ pub fn colours_line(field: &Field) -> String {
         line = format!("{line}, a {} {}", format!("{:?}", field.charge).to_lowercase(), tincture_word(field.charge_tincture));
     }
     line
-}
-
-/// Whether cell (`i` across, `j` down) of the crest's grid is in the field's second tincture.
-pub fn second_tincture(division: Division, i: usize, j: usize) -> bool {
-    let x = (i as f32 + 0.5) / CELLS as f32;
-    let y = (j as f32 + 0.5) / CELLS as f32;
-    let (i, j) = (i as i32, j as i32);
-    match division {
-        Division::Plain => false,
-        Division::PerPale => x > 0.5,
-        Division::PerFess => y > 0.5,
-        Division::Quarterly => (x > 0.5) != (y > 0.5),
-        Division::PerBend => y > x,
-        Division::PerChevron => y > 0.35 + (x - 0.5).abs(),
-        Division::PerSaltire => (x - 0.5).abs() < (y - 0.5).abs(),
-        Division::Paly => i % 2 == 1,
-        Division::Barry => j % 2 == 1,
-        Division::Bendy => (i - j).rem_euclid(4) < 2,
-        Division::Checky => (i + j) % 2 == 1,
-        Division::Lozengy => (i + j) % 3 == 0,
-    }
 }
 
 /// How a preference reads: creatures and classes plural, folk by their name, another faction by
@@ -165,65 +136,6 @@ pub fn standing_fill(standing: i32) -> f32 {
     ((standing + 100) as f32 / 200.0).clamp(0.0, 1.0)
 }
 
-/// The crest: a shield of the field's tinctures.
-fn crest(parent: &mut ChildSpawnerCommands, field: &Field) {
-    parent
-        .spawn((
-            Name::new("Crest"),
-            Node {
-                width: px(CREST_W),
-                height: px(CREST_H),
-                flex_shrink: 0.0,
-                border: UiRect::all(px(2)),
-                border_radius: BorderRadius { top_left: px(3).into(), top_right: px(3).into(), bottom_right: px(CREST_W * 0.5).into(), bottom_left: px(CREST_W * 0.5).into() },
-                overflow: Overflow::clip(),
-                position_type: PositionType::Relative,
-                ..default()
-            },
-            BackgroundColor(tincture_colour(field.tincture)),
-            BorderColor::all(FRAME_GOLD),
-        ))
-        .with_children(|shield| {
-            if field.painted && field.division != Division::Plain {
-                let second = tincture_colour(field.tincture2);
-                for j in 0..CELLS {
-                    for i in 0..CELLS {
-                        if second_tincture(field.division, i, j) {
-                            shield.spawn((
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: percent(100.0 * i as f32 / CELLS as f32),
-                                    top: percent(100.0 * j as f32 / CELLS as f32),
-                                    width: percent(100.0 / CELLS as f32 + 1.0),
-                                    height: percent(100.0 / CELLS as f32 + 1.0),
-                                    ..default()
-                                },
-                                BackgroundColor(second),
-                            ));
-                        }
-                    }
-                }
-            }
-            if field.charge != armory::sections::device::Device::None {
-                let size = 100.0 * field.charge_size.clamp(0.2, 0.8) * 0.7;
-                shield.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: percent(50.0 - size * 0.5),
-                        top: percent(42.0 - size * 0.5),
-                        width: percent(size),
-                        height: percent(size * CREST_W / CREST_H),
-                        border: UiRect::all(px(1)),
-                        border_radius: BorderRadius::all(px(6)),
-                        ..default()
-                    },
-                    BackgroundColor(tincture_colour(field.charge_tincture)),
-                    BorderColor::all(BG),
-                ));
-            }
-        });
-}
-
 /// A labelled line: a small label in muted ink, then the words.
 fn fact(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, text: String, colour: Color) {
     parent.spawn(Node { column_gap: px(8), ..default() }).with_children(|line| {
@@ -233,7 +145,7 @@ fn fact(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, text: S
 }
 
 /// Builds the factions tab's body: one card per met faction, or [`NO_FACTIONS_MET`].
-pub fn page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, entries: &[Entry]) {
+pub fn page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, icons: &mut Icons, entries: &[Entry]) {
     parent.spawn((FactionsPage, Name::new("FactionsPage"), Node { flex_direction: FlexDirection::Column, row_gap: px(10), flex_shrink: 0.0, ..default() })).with_children(|page| {
         if entries.is_empty() {
             page.spawn((Text::new(NO_FACTIONS_MET), UiFonts::style(&fonts.body, 15.0, MUTED)));
@@ -246,7 +158,7 @@ pub fn page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, entries: &[Entry
                 BorderColor::all(FAINT),
             ))
             .with_children(|card| {
-                crest(card, &entry.field);
+                crest(card, icons, &entry.field, CREST_W);
                 card.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(3), flex_grow: 1.0, flex_shrink: 1.0, ..default() }).with_children(|text| {
                     text.spawn((Text::new(entry.name.clone()), UiFonts::style(&fonts.display, 22.0, INK)));
                     text.spawn((Text::new(format!("{} \u{b7} {}", entry.folk, entry.colours)), UiFonts::style(&fonts.body, 14.0, MUTED)));
@@ -387,14 +299,19 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_field_has_no_second_tincture_and_a_party_one_splits() {
-        let cells = |d| (0..CELLS).flat_map(|j| (0..CELLS).map(move |i| second_tincture(d, i, j))).filter(|&b| b).count();
-        assert_eq!(cells(Division::Plain), 0);
-        assert_eq!(cells(Division::PerPale), CELLS * CELLS / 2);
-        assert_eq!(cells(Division::Quarterly), CELLS * CELLS / 2);
-        for division in Division::ALL {
-            let n = cells(division);
-            assert!(division == Division::Plain || (n > 0 && n < CELLS * CELLS), "{division:?} paints {n} cells");
+    fn a_crest_is_drawn_from_exactly_the_factions_own_field() {
+        let (record, ids) = record_with(77, &[0, 1, 2, 3]);
+        let world = World::new(77);
+        let listed = entries(&record, 77);
+        assert_eq!(listed.len(), ids.len());
+        for entry in &listed {
+            assert_eq!(entry.field, world.faction(entry.id).field, "{}", entry.name);
+            // What the armory draws is a pure function of that field.
+            let mesh = armory::crest::crest_mesh(&entry.field);
+            let cloth = mesh.parts.iter().find(|p| p.name == "cloth").unwrap();
+            assert_eq!(cloth.tint, Some(entry.field.tincture.rgb()));
+            assert_eq!(cloth.pattern, entry.field.surface());
+            assert_eq!(mesh.parts.iter().any(|p| p.name == "charge"), entry.field.painted && entry.field.charge != armory::sections::device::Device::None);
         }
     }
 }
