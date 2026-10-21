@@ -201,6 +201,16 @@ pub fn shun_roll(seed: u32) -> f32 {
 
 /// Seconds out of sight, at the place it last saw the player, before a creature gives up.
 pub const LOSE_AFTER: f32 = 3.0;
+/// Seconds a creature presses on without getting anywhere before it counts as stuck at a grate it
+/// sees the delver through, and how long it rests after giving them up.
+pub const STUCK_AT_GRATE: f32 = 1.5;
+pub const GRATE_REST: f32 = 8.0;
+
+/// Whether a creature that sees the delver only through a grate (no way to them) gives them up:
+/// once it has pressed on without progress for [`STUCK_AT_GRATE`], and for as long as it rests after.
+pub fn gives_up_at_grate(stuck: f32, resting: bool) -> bool {
+    stuck > STUCK_AT_GRATE || resting
+}
 /// How far from its spot a snake follows, in world units (3 cells).
 const SNAKE_LEASH: f32 = 3.0 * CELL;
 /// How often a creature finds its way again while following, seconds.
@@ -476,6 +486,7 @@ fn behave(
     let relief = Relief::new(level);
     // A shut claim door is a wall to a creature, and opaque.
     let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), None);
+    let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), None);
     let delver_ac = player.iter().next().and_then(|(_, ac)| ac.copied());
     let player = player.iter().next().map(|(t, _)| t.translation.xz());
     let shunned = shunned.iter().next().copied().unwrap_or_default();
@@ -498,7 +509,13 @@ fn behave(
         // A creature whose own roll falls under the delver's shun chance for its kind does not
         // notice them, unless the delver has struck it.
         let heeds = aroused || !shunned.passes_over(species.foe(), brain.shun_roll);
-        let sees = player.filter(|p| heeds && p.distance(at) <= notice_range(species, tune.sense_scale) && line_of_sight(grid(at), grid(*p), &blocked));
+        let sees = player.filter(|p| heeds && p.distance(at) <= notice_range(species, tune.sense_scale) && line_of_sight(grid(at), grid(*p), &see));
+        // One seen only through a grate, with no way to them, is soon given up (it stands at the
+        // grate pressing on otherwise): after pressing against it, it loses them, and rests a while
+        // before it takes notice again.
+        let sees = sees.filter(|p| {
+            line_of_sight(grid(at), grid(*p), &blocked) || !gives_up_at_grate(brain.stuck, matches!(brain.mode, Mode::Wander { wait, .. } if wait > 0.0))
+        });
         brain.cooldown = (brain.cooldown - dt).max(0.0);
 
         // Notice, follow, give up.
@@ -512,7 +529,8 @@ fn behave(
                 // A jackalope has nothing to go back to: it stops running once it has lost them.
                 let there = species.is_jackalope() || last_seen.distance(at) < reach(critter, player_radius) + CELL * 0.25;
                 if (*lost > LOSE_AFTER && there) || *lost > 3.0 * LOSE_AFTER {
-                    brain.mode = Mode::Wander { target: None, wait: brain.rng.range_f32(0.5, 2.0) };
+                    let wait = if brain.stuck > STUCK_AT_GRATE { GRATE_REST } else { brain.rng.range_f32(0.5, 2.0) };
+                    brain.mode = Mode::Wander { target: None, wait };
                 }
             }
             (Mode::Wander { .. }, Some(p)) => {
@@ -1794,4 +1812,59 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn a_creature_that_sees_the_delver_through_a_grate_gives_up_and_rests() {
+        use crate::doors::Doors;
+        use fb_faction::Faction;
+        use fb_level::{Cell, DoorKind, SwitchKind};
+        assert!(gives_up_at_grate(STUCK_AT_GRATE + 0.1, false) && gives_up_at_grate(0.0, true) && !gives_up_at_grate(0.5, false));
+        let mut level = fb_level::generate(1207, 1);
+        // A corridor of seven cells along a row, shut in by rock all round, with a shut grate across it.
+        let (x, y) = (0..level.height as i32)
+            .flat_map(|y| (1..level.width as i32 - 8).map(move |x| (x, y)))
+            .find(|&(x, y)| y > 0 && (0..7).all(|k| level.cell(x + k, y) == Cell::Floor))
+            .expect("a run of floor");
+        let width = level.width;
+        for k in -1..=7 {
+            for dy in [-1, 1] {
+                level.cells[((y + dy) as u32 * width + (x + k) as u32) as usize] = Cell::Rock;
+            }
+        }
+        for gx in [x - 1, x + 7] {
+            level.cells[(y as u32 * width + gx as u32) as usize] = Cell::Rock;
+        }
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .add_plugins(BehaviourPlugin)
+            .add_systems(Update, (super::super::idle, animate).chain().after(behave));
+        app.insert_resource(Obstacles(Vec::new()));
+        app.insert_resource(CurrentLevel(level.clone()));
+        let mut doors = Doors::default();
+        let door = fb_level::ClaimDoor { x: x + 3, y, faction: Faction(1), room: 0, main: false, inward: (1, 0), shared: false, kind: DoorKind::Portcullis, switch: SwitchKind::Chain };
+        doors.add(&door, &crate::level::geometry::Doorway { x: x + 3, y, through: [1.0, 0.0, 0.0] }, None);
+        assert!(doors.shuts(x + 3, y));
+        app.insert_resource(doors);
+        let spot = fb_level::CreatureSpot { x: x as f32 + 1.5, y: y as f32 + 0.5, yaw: 0.0, species: Species::Rat, seed: 3, pack: 0 };
+        let rat = {
+            let mut commands = app.world_mut().commands();
+            spawn_skeleton(&mut commands, &level, &spot, &spot.creature().rig()).0
+        };
+        let delver = Vec2::new(x as f32 + 5.0, y as f32 + 0.5) * CELL;
+        app.world_mut().spawn((Player, Transform::from_xyz(delver.x, 0.0, delver.y)));
+        app.world_mut().flush();
+        let (mut chasing, mut resting, frames) = (0, 0, 60 * 40);
+        for _ in 0..frames {
+            app.update();
+            match app.world().get::<Brain>(rat).unwrap().mode {
+                Mode::Chase { .. } => chasing += 1,
+                Mode::Wander { .. } => resting += 1,
+            }
+            assert!(position(&app, rat).x < (x + 3) as f32 * CELL, "the rat got through a shut grate");
+        }
+        // It noticed them, and did not press on at the grate for the whole forty seconds.
+        assert!(chasing > 0, "it never noticed the delver through the grate");
+        assert!(resting * 10 > frames * 4, "chasing {chasing} of {frames} frames: it stands at the grate for good");
+    }
 }

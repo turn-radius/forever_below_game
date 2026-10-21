@@ -125,7 +125,7 @@ pub fn turn_on_the_delver(
         let mut newly = false;
         let mut faction = None;
         // Kin see each other across their own faction's shut doors, and no one else's.
-        let blocked = crate::doors::solid_for(&level.0, &blocked_cells, doors.as_deref(), everyone.iter().find(|k| k.entity == cause).map(|k| k.faction));
+        let blocked = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), everyone.iter().find(|k| k.entity == cause).map(|k| k.faction));
         for entity in who_turns(cause, &everyone, &level.0, &blocked) {
             let Ok((_, denizen, _, mut hostility)) = folk.get_mut(entity) else { continue };
             if !hostility.is_hostile() {
