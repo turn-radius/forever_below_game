@@ -3,7 +3,7 @@
 
 use crate::armory_base::{base_for, roll_shape};
 use crate::dress::dress;
-use crate::naming::{Legend, item_name, legendize, noun};
+use crate::naming::{Legend, item_name, legendize, legendize_in, noun};
 use crate::profile::{Profile, profile};
 use crate::rarity::{Odds, roll_rarity_for};
 use crate::tables::Affix;
@@ -154,6 +154,24 @@ impl Item {
     /// The name shown first: a legendary's title, otherwise its name.
     pub fn title(&self) -> &str {
         self.legend.as_ref().map_or(&self.name, |l| &l.title)
+    }
+
+    /// This item found in a world whose factions are called `factions`: a legendary's history
+    /// names those rather than factions of the grammar's making. Its title stays. Pure in the
+    /// item's seed and the names, and a no-op for anything not legendary or for no names.
+    pub fn in_world(mut self, factions: &[String]) -> Item {
+        if factions.is_empty() {
+            return self;
+        }
+        let tags = self.profile.tags.clone();
+        let seed = self.seed;
+        let name = self.name.clone();
+        if let Some(legend) = self.legend.as_mut() {
+            // Its own stream, so the item rolls the same whatever world it is found in.
+            let told = legendize_in(&mut game_rng(seed ^ 0x1e6e_d15c), &name, &tags, Some(factions));
+            legend.history = told.history;
+        }
+        self
     }
 
     /// How far its light reaches against its base's: 1.5 for a Gleaming torch (+10 ft on 20),
@@ -446,6 +464,24 @@ mod tests {
         assert_eq!(torch.fuel_left(), Some(3_600.0));
         assert_eq!(torch.fuel_capacity(), Some(3_600.0));
         assert_eq!(roll_item("Sword", 1).unwrap().fuel_left(), None);
+    }
+
+    #[test]
+    fn a_legend_in_a_world_names_that_worlds_factions() {
+        let names: Vec<String> = ["the Scale Court", "the Ember Tithe", "the Low Choir"].iter().map(|s| s.to_string()).collect();
+        let found: Vec<Item> = (1..2_000).filter_map(|seed| roll_item_with("Sword", seed, Odds::loot(8))).filter(|i| i.rarity == Rarity::Legendary).take(20).collect();
+        assert!(found.len() >= 3);
+        for item in found {
+            let here = item.clone().in_world(&names);
+            let legend = here.legend.as_ref().unwrap();
+            assert_eq!(legend.title, item.legend.as_ref().unwrap().title, "the title stays");
+            assert!(names.iter().any(|n| legend.history[0].contains(&format!("by {n}."))), "{}", legend.history[0]);
+            assert_eq!(here, item.clone().in_world(&names), "deterministic");
+            assert_eq!(item.clone().in_world(&[]), item, "no names leaves the grammar's");
+            assert!(item.legend.as_ref().unwrap().history[0].contains(" by the "), "the grammar still names one");
+        }
+        let common = roll_item_with("Sword", 1, Odds::loot(1)).unwrap();
+        assert_eq!(common.clone().in_world(&names), common);
     }
 
     #[test]

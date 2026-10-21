@@ -843,6 +843,7 @@ pub(crate) fn lay_out_items(
         let rolled = match ahead.as_mut() {
             Some(ahead) => ahead.next().flatten(),
             None => fb_items::roll_loot(spot.family, spot.seed, odds).map(|item| {
+                let item = item.in_world(&level.0.faction_names());
                 let mesh = item.shape.build();
                 (item, mesh)
             }),
