@@ -119,8 +119,8 @@ mod tests {
         let liker = world.factions().iter().find(|f| f.likes.contains(&spiders)).unwrap().id;
         let mut standings = fb_faction::Standings::default();
         weigh(&world, &mut standings, &[Victim::Creature(CreatureKind::Spiders)]);
-        assert!(standings.get(liker).value() < 0 && standings.has_met(liker));
-        let member = world.factions().iter().map(|f| f.id).find(|f| !standings.has_met(*f)).unwrap();
+        assert!(standings.get(liker).value() < 0 && !standings.has_met(liker), "they hear of it, without meeting the delver");
+        let member = world.factions().iter().map(|f| f.id).find(|f| *f != liker).unwrap();
         let before = standings.get(member).value();
         weigh(&world, &mut standings, &[Victim::Member { faction: member, folk: world.faction(member).folk, class: None }]);
         assert!(standings.get(member).value() <= before - 40 + 10 && standings.has_met(member));
