@@ -702,8 +702,12 @@ fn furnish(level: &mut Level, rng: &mut Mulberry32, p: &LevelParams) {
     let start_light = start_light(level, rng);
     level.items.push(start_light);
     let mut lights = place_lights(level, start_room, rng, p.brazier_min_area);
-    // A glowcap at a wall's foot may fall on a cell block's bars, and goes.
-    lights.retain(|l| level.cell(l.x.floor() as i32, l.y.floor() as i32) == Cell::Floor);
+    // A glowcap at a wall's foot may fall on a cell block's bars, and a brazier at a room's middle
+    // in front of a cell's gate; both go.
+    lights.retain(|l| {
+        let (x, y) = (l.x.floor() as i32, l.y.floor() as i32);
+        level.cell(x, y) == Cell::Floor && !(l.kind == LightKind::Brazier && crate::folk::by_door(level, x, y))
+    });
     // Braziers by thrones and altars, where no light already stands close.
     for light in crate::past::purpose_lights(level) {
         if lights.iter().all(|l| (l.x - light.x).hypot(l.y - light.y) > 1.5) {

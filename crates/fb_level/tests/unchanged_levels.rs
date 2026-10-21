@@ -92,7 +92,7 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 8331732412397625203, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge, and again when levels took a past and cell blocks were carved (#587), and again when rooms were furnished by their purpose (#588)");
+    assert_eq!(all_levels_hash(), 17098881861475647423, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge, and again when levels took a past and cell blocks were carved (#587), and again when rooms were furnished by their purpose (#588), and again when braziers left the front of cell gates");
 }
 
 /// A hash of every level's layout, items and lights, which come before the folk in the level's
@@ -122,5 +122,5 @@ fn all_levels_before_folk_hash() -> u64 {
 
 #[test]
 fn layout_items_and_lights_match_those_before_factions() {
-    assert_eq!(all_levels_before_folk_hash(), 9254727614052716319, "snapshot of everything before the folk; retaken when cell blocks were carved (#587), and when purposed rooms took braziers by their thrones and altars, books in libraries and loot off their walls (#588)");
+    assert_eq!(all_levels_before_folk_hash(), 16963402841683871603, "snapshot of everything before the folk; retaken when cell blocks were carved (#587), and when purposed rooms took braziers by their thrones and altars, books in libraries and loot off their walls (#588), and when braziers left the front of cell gates");
 }

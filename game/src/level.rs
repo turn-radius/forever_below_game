@@ -537,18 +537,19 @@ fn spawn_bars(
         return;
     }
     let ceiling = geometry::bars::Ceiling::new(level);
-    let stone = fixture_appearance(level.seed, ConditionState::BattleWorn);
-    let ink = outline_materials.add(stone.outline);
-    let mut materials: std::collections::HashMap<&'static str, Handle<ToonMaterial>> = Default::default();
-    let mut attach = |commands: &mut Commands, item: &armory::ItemMesh, root: Entity| {
+    let ink = outline_materials.add(fixture_appearance(level.seed, ConditionState::BattleWorn).outline);
+    // One set of materials for each keep of iron: a cell block's bars all match.
+    let mut materials: std::collections::HashMap<(geometry::bars::Keep, &'static str), Handle<ToonMaterial>> = Default::default();
+    let mut attach = |commands: &mut Commands, item: &armory::ItemMesh, root: Entity, keep: geometry::bars::Keep| {
+        let iron = ItemAppearance { condition: keep.condition(), ..fixture_appearance(level.seed, ConditionState::Serviceable) };
         for part in &item.parts {
             if part.positions.is_empty() {
                 continue;
             }
             let material = materials
-                .entry(part.name)
+                .entry((keep, part.name))
                 .or_insert_with(|| {
-                    let mut material = stone.material_for(part);
+                    let mut material = iron.material_for(part);
                     material.extension.min_width = MinWidth::default();
                     toon_materials.add(material)
                 })
@@ -564,18 +565,19 @@ fn spawn_bars(
         let item = geometry::bars::bars_mesh(&spot, level, &ceiling);
         let at = v3(geometry::cell_centre(spot.cell.0, spot.cell.1));
         let root = commands.spawn((StonePiece, ArmoryItem, Name::new("bars"), Transform::from_translation(at), Visibility::default())).id();
-        attach(&mut commands, &item, root);
+        attach(&mut commands, &item, root, geometry::bars::Keep::of(level, spot.cell));
     }
     for spot in gates {
         let gate = geometry::bars::gate_mesh(&spot, level, &ceiling);
         let at = v3(geometry::cell_centre(spot.cell.0, spot.cell.1));
         let turn = Quat::from_rotation_y(geometry::bars::gate_turn(&spot));
         let root = commands.spawn((StonePiece, ArmoryItem, Name::new("gate"), Transform::from_translation(at).with_rotation(turn), Visibility::default())).id();
-        attach(&mut commands, &gate.frame, root);
+        let keep = geometry::bars::Keep::of(level, spot.cell);
+        attach(&mut commands, &gate.frame, root, keep);
         let leaf = commands
             .spawn((Name::new("gate leaf"), Transform::from_translation(v3(gate.hinge)).with_rotation(Quat::from_rotation_y(geometry::bars::leaf_swing(&spot))), Visibility::default(), ChildOf(root)))
             .id();
-        attach(&mut commands, &gate.leaf, leaf);
+        attach(&mut commands, &gate.leaf, leaf, keep);
     }
 }
 

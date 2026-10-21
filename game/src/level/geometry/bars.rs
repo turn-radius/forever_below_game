@@ -11,9 +11,14 @@
 //! A gate is a fixed frame (jambs, a lintel, bars either side and above) and a leaf hinged on
 //! its `-x` jamb that stands ajar, swung into the cell. Both are built with `x` along the bars
 //! and `z` through them, on the cell's centre.
+//!
+//! How well the iron has kept ([`Keep`]) belongs to the cell block, not the bar: one block stands
+//! in plain iron grey, another is weathered, another rusted through, and every bar and gate of a
+//! block matches.
 
 use armory::{
     ItemMesh, MaterialKind, Rgb,
+    cond::{Condition, ConditionState},
     build::{
         parts::{Look, Parts},
         plank::plank,
@@ -40,8 +45,8 @@ pub const GATE_AJAR: f32 = 70.0;
 /// The gate leaf's hinge, across the cell from its centre.
 pub const GATE_HINGE: f32 = -(DOOR_WIDTH * 0.5 - 0.4);
 
-const IRON: Rgb = Rgb::hex(0x2c2a27);
-const RUST: Rgb = Rgb::hex(0x5a3a26);
+/// The tint of a rusted bar: a dull brown close to the iron, so a run reads as one piece.
+const RUST: Rgb = Rgb::hex(0x4a3c33);
 
 /// The four grid directions an arm can run, as `(dx, dz)`: east, south, west, north.
 pub const ARMS: [(i32, i32); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
@@ -156,9 +161,67 @@ fn hash(cell: (i32, i32), seed: u32, salt: u32) -> u32 {
     (cell.0 as u32).wrapping_mul(73_856_093) ^ (cell.1 as u32).wrapping_mul(19_349_663) ^ seed ^ salt
 }
 
-/// Wear on the bars of one run: which are bent, rusted or gone.
+/// How well a cell block's iron has kept, the same for every bar and gate of the block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Keep {
+    /// Plain iron grey, barely worn: no rusted bars, the odd one bent.
+    Kept,
+    /// Dulled, with a little rust and a few bars bent.
+    Weathered,
+    /// Rusted through: many bars brown, bent or gone.
+    Rusted,
+}
+
+impl Keep {
+    /// The keep of the cell block holding `cell`: drawn from the level's seed and the block's
+    /// room, so a block keeps it on every visit. Two in five blocks are kept, a third weathered,
+    /// the rest rusted.
+    pub fn of(level: &Level, cell: (i32, i32)) -> Keep {
+        let room = level.room_at(cell.0, cell.1).map_or(u32::MAX, |r| r as u32);
+        let roll = Mulberry32::new(level.seed ^ room.wrapping_mul(0x9e37_79b9) ^ 0x1c07_ee90).range_f32(0.0, 1.0);
+        if roll < 0.4 {
+            Keep::Kept
+        } else if roll < 0.75 {
+            Keep::Weathered
+        } else {
+            Keep::Rusted
+        }
+    }
+
+    /// The condition the block's iron is drawn in: kept iron is barely dulled, and even a rusted
+    /// block stops short of neglect, so rust stays a tone on the iron.
+    pub fn condition(self) -> Condition {
+        match self {
+            Keep::Kept => Condition { wear: 0.1, rust: 0.5, ..Condition::of(ConditionState::Serviceable) },
+            Keep::Weathered => Condition { wear: 0.3, ..Condition::of(ConditionState::Serviceable) },
+            Keep::Rusted => Condition { wear: 0.5, ..Condition::of(ConditionState::BattleWorn) },
+        }
+    }
+
+    /// The tint of its sound iron: a plain iron grey when kept, darker as it weathers, browning
+    /// when rusted.
+    pub fn iron(self) -> Rgb {
+        match self {
+            Keep::Kept => Rgb::hex(0x474c53),
+            Keep::Weathered => Rgb::hex(0x48494c),
+            Keep::Rusted => Rgb::hex(0x3d3834),
+        }
+    }
+
+    /// The share of bars missing, bent and rusted, each counted on from the last.
+    fn odds(self) -> (f32, f32, f32) {
+        match self {
+            Keep::Kept => (0.0, 0.04, 0.04),
+            Keep::Weathered => (0.02, 0.1, 0.22),
+            Keep::Rusted => (0.06, 0.18, 0.45),
+        }
+    }
+}
+
+/// Wear on the bars of one run: which are bent, rusted or gone, by the block's [`Keep`].
 struct Wear {
     rng: Mulberry32,
+    keep: Keep,
 }
 
 enum Post {
@@ -171,11 +234,12 @@ enum Post {
 impl Wear {
     fn post(&mut self, allow_missing: bool) -> Post {
         let roll = self.rng.range_f32(0.0, 1.0);
-        if allow_missing && roll < 0.06 {
+        let (missing, bent, rusty) = self.keep.odds();
+        if allow_missing && roll < missing {
             Post::Missing
-        } else if roll < 0.18 {
+        } else if roll < bent {
             Post::Bent(self.rng.range_f32(0.5, 1.4) * if self.rng.chance(0.5) { 1.0 } else { -1.0 })
-        } else if roll < 0.45 {
+        } else if roll < rusty {
             Post::Rusty
         } else {
             Post::Sound
@@ -215,18 +279,20 @@ struct Builder {
     sound: MeshBuilder,
     rusty: MeshBuilder,
     rails: MeshBuilder,
+    /// The tint of the sound iron, by the block's [`Keep`].
+    iron: Rgb,
 }
 
 impl Builder {
-    fn new() -> Self {
-        Builder { sound: MeshBuilder::new(), rusty: MeshBuilder::new(), rails: MeshBuilder::new() }
+    fn new(keep: Keep) -> Self {
+        Builder { sound: MeshBuilder::new(), rusty: MeshBuilder::new(), rails: MeshBuilder::new(), iron: keep.iron() }
     }
 
     fn finish(self) -> ItemMesh {
         let mut parts = Parts::new();
-        parts.add_look("bars", self.sound, Look::of(MaterialKind::Iron).tinted(IRON));
+        parts.add_look("bars", self.sound, Look::of(MaterialKind::Iron).tinted(self.iron));
         parts.add_look("rusted bars", self.rusty, Look::of(MaterialKind::Iron).tinted(RUST));
-        parts.add_look("rails", self.rails, Look::of(MaterialKind::Iron).tinted(IRON));
+        parts.add_look("rails", self.rails, Look::of(MaterialKind::Iron).tinted(self.iron));
         parts.finish()
     }
 
@@ -242,8 +308,9 @@ impl Builder {
 pub fn bars_mesh(spot: &BarsSpot, level: &Level, ceiling: &Ceiling) -> ItemMesh {
     let (cx, cz) = ((spot.cell.0 as f32 + 0.5) * CELL, (spot.cell.1 as f32 + 0.5) * CELL);
     let half = CELL * 0.5;
-    let mut wear = Wear { rng: Mulberry32::new(hash(spot.cell, level.seed, 0xba25_0001)) };
-    let mut out = Builder::new();
+    let keep = Keep::of(level, spot.cell);
+    let mut wear = Wear { rng: Mulberry32::new(hash(spot.cell, level.seed, 0xba25_0001)), keep };
+    let mut out = Builder::new(keep);
     let count = spot.arms.iter().filter(|&&a| a).count();
     let straight = count <= 2 && (spot.arms[0] == spot.arms[2]) && (spot.arms[1] == spot.arms[3]);
 
@@ -300,8 +367,9 @@ pub fn gate_mesh(spot: &GateSpot, level: &Level, ceiling: &Ceiling) -> GateMesh 
     // World offsets of local (x, z) from the cell centre: a gate along z is turned a quarter.
     let world = |x: f32, z: f32| if spot.along_x { (cx + x, cz + z) } else { (cx + z, cz - x) };
     let half = CELL * 0.5;
-    let mut wear = Wear { rng: Mulberry32::new(hash(spot.cell, level.seed, 0x6a7e_0002)) };
-    let mut fixed = Builder::new();
+    let iron_keep = Keep::of(level, spot.cell);
+    let mut wear = Wear { rng: Mulberry32::new(hash(spot.cell, level.seed, 0x6a7e_0002)), keep: iron_keep };
+    let mut fixed = Builder::new(iron_keep);
     let (mut pins, mut lock) = (MeshBuilder::new(), MeshBuilder::new());
     let mut min_ceiling = f32::MAX;
     let tops = |x: f32| {
@@ -354,7 +422,7 @@ pub fn gate_mesh(spot: &GateSpot, level: &Level, ceiling: &Ceiling) -> GateMesh 
 
     // The leaf, hinged at the origin and running along +x.
     let width = DOOR_WIDTH - 0.8;
-    let mut leaf = Builder::new();
+    let mut leaf = Builder::new(iron_keep);
     let (hang_top, hang_low) = (opening - 1.0, 2.0);
     for s in [0.0, width] {
         let mut stile = cylinder(0.7, hang_top - hang_low + RAIL_HEIGHT, 8, Shading::SMOOTH);
@@ -385,11 +453,11 @@ pub fn gate_mesh(spot: &GateSpot, level: &Level, ceiling: &Ceiling) -> GateMesh 
 
     let mut frame = fixed.finish();
     let mut extra = Parts::new();
-    extra.add_look("hinge pins", pins, Look::of(MaterialKind::Iron).tinted(IRON).without_outline());
+    extra.add_look("hinge pins", pins, Look::of(MaterialKind::Iron).tinted(iron_keep.iron()).without_outline());
     frame.parts.extend(extra.finish().parts);
     let mut leaf_mesh = leaf.finish();
     let mut extra = Parts::new();
-    extra.add_look("lock box", lock, Look::of(MaterialKind::Iron).tinted(IRON));
+    extra.add_look("lock box", lock, Look::of(MaterialKind::Iron).tinted(iron_keep.iron()));
     leaf_mesh.parts.extend(extra.finish().parts);
     GateMesh { frame, leaf: leaf_mesh, hinge: [GATE_HINGE, 0.0, 0.0], opening }
 }
@@ -415,6 +483,21 @@ mod tests {
 
     fn block_levels() -> Vec<Level> {
         [2u32, 3, 5].iter().map(|&s| fb_level::generate(s, 2)).collect()
+    }
+
+    #[test]
+    fn a_cell_blocks_iron_keeps_alike_and_every_keep_shows_up() {
+        let mut seen = std::collections::HashSet::new();
+        for level in (1..=40).flat_map(|s| [2, 4].map(|d| fb_level::generate(s, d))) {
+            for r in level.rooms_for(fb_level::Purpose::CellBlock) {
+                let room = level.rooms[r];
+                let cells: Vec<(i32, i32)> = (room.y..room.y + room.h).flat_map(|y| (room.x..room.x + room.w).map(move |x| (x as i32, y as i32))).filter(|&(x, y)| matches!(level.cell(x, y), Cell::Bars | Cell::Gate)).collect();
+                let keep = Keep::of(&level, cells[0]);
+                assert!(cells.iter().all(|&c| Keep::of(&level, c) == keep), "seed {}: a block of mixed iron", level.seed);
+                seen.insert(keep);
+            }
+        }
+        assert_eq!(seen.len(), 3, "{seen:?}");
     }
 
     #[test]
