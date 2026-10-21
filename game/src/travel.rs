@@ -241,6 +241,7 @@ impl Plugin for TravelPlugin {
             .add_systems(OnEnter(AppState::Delving), begin_the_run)
             .add_systems(OnExit(AppState::Delving), end_the_run)
             .init_resource::<WorldRecord>()
+            .init_resource::<crate::enchanting::Enchanting>()
             .configure_sets(Update, LeavingLevel.run_if(journey_is_leaving).before(step_journey).in_set(DelveSystems))
             .add_systems(Update, record_level_left.after(apply_floor_changes).in_set(LeavingLevel))
             .add_systems(
@@ -252,7 +253,9 @@ impl Plugin for TravelPlugin {
 }
 
 /// A new delve is a new abyss, from the seed of the level it opens on.
-fn begin_the_run(level: Option<Res<CurrentLevel>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>) {
+fn begin_the_run(level: Option<Res<CurrentLevel>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>, mut enchanting: ResMut<crate::enchanting::Enchanting>) {
+    // What was scrapped lasts one delve.
+    *enchanting = default();
     // The world record resets with the run for now (#285).
     *record = WorldRecord::default();
     *abyss = level.map_or_else(Abyss::default, |level| Abyss { depth: level.0.depth, ..Abyss::new(level.0.seed) });

@@ -24,6 +24,7 @@ pub mod profile;
 pub mod provision;
 pub mod range;
 pub mod rarity;
+pub mod scrap;
 pub mod stats;
 pub mod tables;
 pub mod troll;

@@ -230,6 +230,23 @@ Each family maps to a slot, tags, weight, armour, warmth and damage, plus a grid
 | Rare sword, pristine, no affix factors | 300 gp |
 | Common chain mail | 75 gp |
 
+## Scrapping
+
+`fb_items::scrap::scrap(&Item)` says what an item breaks into: a `Salvage { essence, materials }`, or `None` for what is not gear (food, purses, bags, lights). An enchanter spends the result (`EnchantingStock::spend` fails and takes nothing when short). All the numbers are our own, in `data/scrap.json`; the plate had no scrapping.
+
+- **Essence** by rarity: common 2, magic 8, rare 30, legendary 120. Each good affix adds by the least rarity it rolls on: 1, 2, 4 or 8. Each flaw halves the total, so a flawed item gives less than the same one unflawed. Never below 1.
+- **Materials** come only from rare and legendary weapons, one of each that applies: Gravesteel sliver (blade), Ossuary dust (blunt), Wraith sinew (ranged), then one for each good affix group the weapon carries, Blood salt (damage), Seer's glass (to hit), Quicksilver bead (attack rate) and Wardstone chip (any bane). A legendary also gives a Heartstone. An enchanter can ask for these by id for legendary-tier affixes and for legendaries.
+- A pure function of the item, with no randomness.
+
+| Item | Essence | Materials |
+|---|---|---|
+| Common cloak | 2 | none |
+| Magic cloak, one common affix | 9 | none |
+| Rare sword | 30 plus affixes | Gravesteel sliver, and one for each affix group |
+| Legendary sword | 120 plus affixes | the same, and a Heartstone |
+
+The game keeps the delver's `EnchantingStock` in the `Enchanting` resource for the delve: it resets when a run begins. `enchanting::scrap_item` takes an item out of the inventory and adds its salvage (a bag with something in it is refused); the enchanter's talk (#350) will call it. The character sheet shows a line "Essence 38 · Gravesteel sliver ×1" under "enchanting".
+
 ## Slots
 
 `data/slots.json` lists the slots: head, neck, shirt, shoulders (cloak), armour (body), main hand, hands, feet, back, belt, off hand, legs, two rings, a charm, the hip, beside the belt, and the quiver, over the back's slot, neither of which the plate had. A quiver or bolt case is slung only in the quiver slot, which needs no belt, so it never vies with a lantern at the hip or a pack on the back; its grid shows with the other carried containers, and arrows or bolts picked up go into it first. A bow or crossbow draws only from a worn quiver or bolt case. Rings fill whichever ring slot is free. Any weapon (sword, dagger, mace, club, axe, spear, staff, bow, crossbow) can be held in either hand (`fb_items::Item::slots`), the user's call: the plate held weapons only in the main hand. Equipped without saying where (a double-click, F, a drop on the doll) it takes the main hand if that is free, else the off hand if that is, else it swaps out the main hand's (`Inventory::target_slot`). Only the main hand swings; an off-hand weapon is held and drawn but does not attack until the character simulation is designed (#122). A two-handed weapon (a staff, spear, bow or crossbow) in the off hand is held in the left hand alone, as the doll holds it in the right, so a staff in the off hand beside a sword in the main hand is drawn in both fists; this is our own choice until two-handed holds are designed.
