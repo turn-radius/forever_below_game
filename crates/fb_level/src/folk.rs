@@ -162,7 +162,7 @@ fn fill(level: &Level, faction: &FactionSpec, count: usize, groups: &[(usize, Ga
 /// Where `n` guards of `claim` stand, `(x, y, yaw)`. A post is a floor cell of the opening's room
 /// one step along the wall from the cell behind the doorway, never on a door's axis (not the
 /// doorway, not the cell behind it, so the way in stays whole for the delver and for a door's
-/// swing, nor the hinge side, where the leaf rests), clear of items and lights, and the guard faces the doorway. The first guard takes the
+/// swing, nor where the open leaf sweeps, [`crate::door`]), clear of items and lights, and the guard faces the doorway. The first guard takes the
 /// hall's main opening (the side away from the door's hinge first); the second takes another outward opening three
 /// cells or more away, else the other side of the main one; later ones step further along the
 /// wall. Fewer guards are posted when no such cell is free.
@@ -174,20 +174,30 @@ pub fn posts(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32), 
         let (px, py) = (c.0 as f32 + 0.5, c.1 as f32 + 0.5);
         level.items.iter().all(|i| (i.x - px).hypot(i.y - py) >= CLEARANCE) && level.lights.iter().all(|l| (l.x - px).hypot(l.y - py) >= CLEARANCE)
     };
+    // Every claim door's leaf: its door cell and where it hangs.
+    let doors: Vec<((i32, i32), crate::door::LeafSweep)> =
+        level.claim_doors().iter().filter_map(|d| crate::door::LeafSweep::of(level, d.x, d.y).map(|s| ((d.x, d.y), s))).collect();
     // The cells along the wall from `o`'s, nearest first, that make a post.
     let beside = |o: &Opening| -> Vec<(i32, i32)> {
-        // The door leaf hinges at the doorway's left edge, looking in from the room, and swings
-        // back to rest against the wall there (#553): the right hand's side first, and the
-        // left's only from two cells along, past where the leaf lies.
-        let right = (-o.out.1, o.out.0);
+        // The leaf hinges on the frame's jamb on the world's `-across` side and stands open
+        // through the doorway (`door::LeafSweep`, the rule the game draws by): the side away
+        // from the hinge first, and the hinge side's first cell last.
+        let door = doors.iter().find(|s| s.0 == o.cell || s.0 == (o.cell.0 + o.out.0, o.cell.1 + o.out.1)).map(|s| s.1);
+        let mut right = (-o.out.1, o.out.0);
+        if let Some(d) = door {
+            if right.0 as f32 * d.across.0 + right.1 as f32 * d.across.1 < 0.0 {
+                right = (-right.0, -right.1);
+            }
+        }
         let room = &level.rooms[o.room];
         let mut cells = Vec::new();
-        for (step, sign) in [(1, 1), (2, 1), (3, 1), (2, -1), (3, -1)] {
+        for (step, sign) in [(1, 1), (2, 1), (3, 1), (1, -1), (2, -1), (3, -1)] {
             {
                 let c = (o.cell.0 + right.0 * step * sign, o.cell.1 + right.1 * step * sign);
-                // Nor on any door's axis, nor on the first cell of any door's hinge side.
-                let on_an_axis = openings.iter().any(|d| d.cell == c || (d.cell.0 + d.out.0, d.cell.1 + d.out.1) == c || (d.cell.0 + d.out.1, d.cell.1 - d.out.0) == c);
-                if room.contains(c.0, c.1) && level.cell(c.0, c.1) == Cell::Floor && !on_an_axis && clear(c) {
+                // Nor on any door's axis, nor where any door's open leaf sweeps.
+                let on_an_axis = openings.iter().any(|d| d.cell == c || (d.cell.0 + d.out.0, d.cell.1 + d.out.1) == c);
+                let swept = doors.iter().any(|s| s.1.sweeps(c.0 as f32 + 0.5, c.1 as f32 + 0.5, crate::door::FOLK_RADIUS));
+                if room.contains(c.0, c.1) && level.cell(c.0, c.1) == Cell::Floor && !on_an_axis && !swept && clear(c) {
                     cells.push(c);
                 }
             }
@@ -523,6 +533,10 @@ mod tests {
                 let posted = posts(&level, &graph, claim, (sx as i32, sy as i32), mine.len()).len();
                 for g in mine.into_iter().take(posted) {
                     let cell = (g.x.floor() as i32, g.y.floor() as i32);
+                    for d in level.claim_doors() {
+                        let sweep = crate::door::LeafSweep::of(&level, d.x, d.y).unwrap();
+                        assert!(!sweep.sweeps(g.x, g.y, crate::door::FOLK_RADIUS), "seed {seed} depth {depth}: guard in the leaf of door {:?}", (d.x, d.y));
+                    }
                     for o in &openings {
                         let door = (o.cell.0 + o.out.0, o.cell.1 + o.out.1);
                         assert!(cell != o.cell && cell != door, "seed {seed} depth {depth}: guard on a door's axis at {cell:?}");
@@ -533,9 +547,6 @@ mod tests {
                         let across = rx * o.out.1 as f32 - ry * o.out.0 as f32;
                         if (-1.5..=0.5).contains(&along) {
                             assert!(across.abs() >= AXIS_CLEARANCE, "seed {seed} depth {depth}: guard {across} from a door's axis");
-                            // `across` is positive on the hinge side (the left, looking in): the
-                            // leaf rests against that wall, so the first cell there is left clear.
-                            assert!(!(0.0..1.5).contains(&across), "seed {seed} depth {depth}: guard {across} from a door's axis, on its hinge side");
                         }
                     }
                 }

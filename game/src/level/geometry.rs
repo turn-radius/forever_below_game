@@ -52,18 +52,15 @@ const RELIEF_WAVELENGTH: f32 = 11.0;
 const INK_LIFT: f32 = 0.05;
 
 /// A doorway's opening, in world units: 1.3 m wide and 2.2 m high.
-pub const DOOR_WIDTH: f32 = 13.0;
+pub use fb_level::door::{DOOR_WIDTH, FRAME_DEPTH, LEAF_LAP, LEAF_THICKNESS};
 pub const DOOR_HEIGHT: f32 = 22.0;
 /// The timber frame round a doorway: beam width and depth through the wall.
 const FRAME_BEAM: f32 = 1.8;
-pub const FRAME_DEPTH: f32 = 3.6;
 /// The masonry that fills a doorway's cell round the frame, through the wall.
 const INFILL_DEPTH: f32 = 3.0;
 
 /// The entrance door's leaf: it lies over the frame on its inward face, so it is larger than
 /// the opening by this much on every side but the floor.
-const LEAF_LAP: f32 = 0.6;
-pub const LEAF_THICKNESS: f32 = 1.0;
 
 /// What the level's surfaces are coloured: a cold grey stone, a little darker underfoot and
 /// darker again overhead, where no light ever reaches for long.
@@ -669,7 +666,7 @@ fn door_frame_in(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
 /// Where the entrance door hangs in its doorway's space: the hinge line on the frame's inward
 /// face, at the opening's left edge.
 pub fn entrance_hinge() -> V3 {
-    [-(DOOR_WIDTH * 0.5 + LEAF_LAP), 0.0, FRAME_DEPTH * 0.5 + LEAF_THICKNESS * 0.5 + 0.05]
+    [fb_level::door::HINGE_ACROSS, 0.0, fb_level::door::HINGE_THROUGH]
 }
 
 /// The entrance door's leaf, in hinge space: the hinge line is the +Y axis, the leaf runs
@@ -745,7 +742,7 @@ pub fn entrance_swing(progress: f32) -> f32 {
 }
 
 /// How far the entrance door stands open, radians from shut (turned into the level).
-pub const ENTRANCE_OPEN_ANGLE: f32 = -85.0 * std::f32::consts::PI / 180.0;
+pub const ENTRANCE_OPEN_ANGLE: f32 = -fb_level::door::OPEN_DEGREES * std::f32::consts::PI / 180.0;
 
 /// An iron brazier standing on the floor at the origin: a bowl on three splayed legs braced
 /// by a ring, heaped with coals under a flame. Returns the mesh and the height of the

@@ -1135,16 +1135,16 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep.
         let before = [
-            (0u32, 0x5f275e7bec30f7e8u64),
-            (1, 0x30dbbee283b1cf05),
-            (2, 0x52b43e6b784f019c),
-            (7, 0xc770ac2ad4d7e7c5),
-            (64, 0xbc4215d523813829),
-            (1207, 0xa6d8288503a20949),
-            (4242, 0x63add32b5dae7835),
-            (u32::MAX, 0x6b4912fa6deca4c9),
+            (0u32, 0xa559ab3642f6feb2u64),
+            (1, 0x73c5848246fa430b),
+            (2, 0xf3cf520a6af62325),
+            (7, 0x269521d59ffb6f69),
+            (64, 0x8dbdaa1e06392d9d),
+            (1207, 0xfaa379f807c64f3b),
+            (4242, 0xf4b434ffa5e1fae),
+            (u32::MAX, 0xd971a36c80ebf9a7),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

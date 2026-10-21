@@ -289,6 +289,7 @@ impl Level {
 pub mod banners;
 pub mod claims;
 pub mod creatures;
+pub mod door;
 pub mod finish;
 pub mod folk;
 mod generate;
