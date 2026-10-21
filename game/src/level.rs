@@ -43,7 +43,8 @@ pub struct LevelPlugin;
 
 impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Tuning>()
+        app.add_plugins(crate::doors::DoorsPlugin)
+            .init_resource::<Tuning>()
             .init_resource::<PreparedStone>()
             .insert_resource(abyss_ambient(&LightTuning::default()))
             .insert_resource(ClearColor(FOG_COLOR))
@@ -586,6 +587,7 @@ impl FixtureShapes {
     pub fn make(level: &Level) -> Self {
         let view = CellView::new(level);
         let entrance = (level.entrance.x as i32, level.entrance.y as i32);
+        let claim_doors = level.claim_doors();
         let doors = geometry::doorways(&view)
             .into_iter()
             .map(|doorway| {
@@ -608,7 +610,9 @@ impl FixtureShapes {
                         })
                         .collect();
                 }
-                let leaf = ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
+                // The entrance hangs a door, and so does each door on the edge of a claim.
+                let hung = (doorway.x, doorway.y) == entrance || claim_doors.iter().any(|d| (d.x, d.y) == (doorway.x, doorway.y));
+                let leaf = hung.then(|| geometry::entrance_leaf(seed));
                 (doorway, frame, leaf)
             })
             .collect();
@@ -637,9 +641,16 @@ fn spawn_fixtures(
     tuning: Res<Tuning>,
     mut staged: Option<ResMut<crate::staged::Staged>>,
     mut blocked: ResMut<BlockedCells>,
+    mut hung: Option<ResMut<crate::doors::Doors>>,
+    record: Option<Res<crate::record::WorldRecord>>,
     mut spawner: crate::render::ItemSpawner,
 ) {
     let level = &level.0;
+    let claim_doors = level.claim_doors();
+    let saved = record.as_deref().and_then(|r| r.level(level.depth));
+    if let Some(hung) = hung.as_deref_mut() {
+        *hung = crate::doors::Doors::default();
+    }
     // The door shut behind the delver when they came in; coming back to it from below finds it
     // shut already, and it does not swing again.
     let shut_already = abyss.is_some_and(|a| a.arrival == Arrival::FromBelow);
@@ -662,6 +673,20 @@ fn spawn_fixtures(
             spawner
                 .spawn(&leaf, &fixture_appearance(seed, ConditionState::Serviceable))
                 .insert((StonePiece, Name::new("entrance door"), door, Transform::from_translation(hinge).with_rotation(door.rotation())));
+        } else if let Some(claim_door) = claim_doors.iter().find(|d| (d.x, d.y) == (doorway.x, doorway.y)) {
+            // A door on the edge of a claim: locked by how the faction stands (`crate::doors`).
+            let mut state = crate::doors::Doors::default();
+            state.add(claim_door, &doorway, saved);
+            let swing = state.0[&(doorway.x, doorway.y)].swing;
+            let hinge = transform.transform_point(v3(geometry::entrance_hinge()));
+            let leaf_door = crate::doors::DoorLeaf { cell: (doorway.x, doorway.y), shut: transform.rotation };
+            let leaf = leaf.expect("a claim doorway has a leaf");
+            spawner
+                .spawn(&leaf, &fixture_appearance(seed, ConditionState::Serviceable))
+                .insert((StonePiece, Name::new("claim door"), leaf_door, Transform::from_translation(hinge).with_rotation(leaf_door.rotation(swing))));
+            if let Some(hung) = hung.as_deref_mut() {
+                hung.0.extend(state.0);
+            }
         }
     }
 

@@ -154,6 +154,7 @@ mod tests {
             claims: Vec::new(),
             roles: Vec::new(),
             props: Vec::new(),
+            banners: Vec::new(),
             creatures: Vec::new(),
             stairs: Vec::new(),
             webs: Vec::new(),

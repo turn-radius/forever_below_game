@@ -66,6 +66,53 @@ impl Level {
     }
 }
 
+/// A door on the edge of a claim: a door cell of one of its rooms that opens onto ground the
+/// claim does not hold. Its faction decides who it is locked to ([`Level::claim_doors`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClaimDoor {
+    pub x: i32,
+    pub y: i32,
+    pub faction: crate::Faction,
+    /// Index into [`Level::rooms`] of the claim's room the door is in.
+    pub room: usize,
+    /// The claim's main door: the one of its hall nearest where the delver starts. At Neutral
+    /// standing it stands open to the delver while the claim's other doors are locked.
+    pub main: bool,
+}
+
+impl Level {
+    /// Every door on the edge of a claim, in reading order, the entrance excluded. A door
+    /// between two rooms of the same claim is no claim door.
+    pub fn claim_doors(&self) -> Vec<ClaimDoor> {
+        let entrance = (self.entrance.x as i32, self.entrance.y as i32);
+        let (sx, sy, _) = self.start();
+        let mut doors = Vec::new();
+        for y in 0..self.height as i32 {
+            for x in 0..self.width as i32 {
+                if self.cell(x, y) != Cell::Door || (x, y) == entrance {
+                    continue;
+                }
+                // A door stands in the wall beside its room, or on the room's own edge.
+                let near: Vec<(i32, i32)> = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().map(|(dx, dy)| (x + dx, y + dy)).filter(|&(nx, ny)| self.is_open(nx, ny)).collect();
+                let Some((room, claim)) = near.iter().filter_map(|&(nx, ny)| self.room_at(nx, ny)).find_map(|r| Some((r, self.claim_of(r)?))) else { continue };
+                let leads_out = near.iter().any(|&(nx, ny)| (nx, ny) != (x, y) && self.room_at(nx, ny).is_none_or(|r| !claim.rooms.contains(&r)));
+                if leads_out {
+                    doors.push(ClaimDoor { x, y, faction: claim.faction, room, main: false });
+                }
+            }
+        }
+        // The main door of each claim: of the doors of its hall, the one nearest the start.
+        for claim in &self.claims {
+            let Some(hall) = self.room_with_role(claim, RoomRole::Hall) else { continue };
+            let nearest = doors.iter().enumerate().filter(|(_, d)| d.room == hall).min_by_key(|(_, d)| ((d.x - sx as i32).abs() + (d.y - sy as i32).abs(), d.y, d.x)).map(|(i, _)| i);
+            if let Some(i) = nearest {
+                doors[i].main = true;
+            }
+        }
+        doors
+    }
+}
+
 /// The roles of every room of the level, indexed by room: empty where no one holds it.
 pub(crate) fn assign_roles(level: &Level) -> Vec<Vec<RoomRole>> {
     let graph = RoomGraph::new(level);
@@ -121,7 +168,21 @@ pub(crate) fn assign_roles(level: &Level) -> Vec<Vec<RoomRole>> {
 /// The room of `claim` with the opening nearest `from` (the delver's start) that leads out
 /// of the claim, into a room no one holds or a corridor that reaches one: the claim's main door.
 fn main_entrance_room(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32)) -> usize {
-    let mut best: Option<(i32, usize)> = None;
+    main_door(level, graph, claim, from).map_or(claim.rooms[0], |d| d.room)
+}
+
+/// The claim's main door: the room it opens from, the room's cell inside it and the open cell
+/// just outside, where the faction's banners hang beside it ([`crate::banners`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MainDoor {
+    pub room: usize,
+    pub inside: (i32, i32),
+    pub outside: (i32, i32),
+}
+
+/// The opening of `claim` nearest `from` that leads out of it, if it has one.
+pub(crate) fn main_door(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32)) -> Option<MainDoor> {
+    let mut best: Option<((i32, usize), MainDoor)> = None;
     for &r in &claim.rooms {
         let room = &level.rooms[r];
         for y in room.y as i32..(room.y + room.h) as i32 {
@@ -136,15 +197,15 @@ fn main_entrance_room(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i3
                     }
                     if graph.rooms_of(nx, ny).iter().any(|o| !claim.rooms.contains(o)) {
                         let key = ((x - from.0).abs() + (y - from.1).abs(), r);
-                        if best.is_none_or(|b| key < b) {
-                            best = Some(key);
+                        if best.is_none_or(|(b, _)| key < b) {
+                            best = Some((key, MainDoor { room: r, inside: (x, y), outside: (nx, ny) }));
                         }
                     }
                 }
             }
         }
     }
-    best.map_or(claim.rooms[0], |(_, r)| r)
+    best.map(|(_, d)| d)
 }
 
 /// Lights a brazier in each hall and hearth the level's furnishing left without one, at the
@@ -237,6 +298,27 @@ mod tests {
         }
         // A market too cramped to stand in (a room of 3 by 3 round its fire) is left to the folk's other rooms.
         assert!(markets > 8 && staffed * 10 >= markets * 8, "{staffed} of {markets} markets have a trader");
+    }
+
+    #[test]
+    fn claim_doors_lie_on_claim_edges_and_each_hall_has_one_main() {
+        let (mut doors, mut mains) = (0, 0);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            let all = level.claim_doors();
+            for d in &all {
+                assert_eq!(level.cell(d.x, d.y), Cell::Door);
+                assert_eq!(level.claim_of(d.room).map(|c| c.faction), Some(d.faction), "seed {seed} depth {depth}");
+            }
+            doors += all.len();
+            for claim in &level.claims {
+                let n = all.iter().filter(|d| d.faction == claim.faction && d.main).count();
+                assert!(n <= 1, "seed {seed} depth {depth}: {n} main doors");
+                mains += n;
+            }
+            assert_eq!(all, level.claim_doors());
+        }
+        assert!(doors > 40 && mains > 20, "{doors} claim doors, {mains} main");
     }
 
     #[test]

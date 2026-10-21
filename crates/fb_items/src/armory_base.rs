@@ -187,6 +187,7 @@ pub fn find_weight(name: &str) -> u32 {
 /// this list.
 pub const HELD_BACK: &[&str] = &[
     "Bandages",
+    KEY,
     // Camp goods and elixirs come from tentmakers and alchemists, not loose loot.
     "Bedroll",
     "Tinderbox",
@@ -197,6 +198,10 @@ pub const HELD_BACK: &[&str] = &[
     "Elixir of Fasting",
     "Elixir of Embers",
 ];
+
+/// The base of a faction's key, which a faction gives an Allied delver and is never found
+/// loose, so it is held back from loot and stock like the rest of [`HELD_BACK`].
+pub const KEY: &str = "Key";
 
 /// Whether base `name` is held back ([`HELD_BACK`]): [`find_weight`] gives it 0, and crate
 /// stock and outfit goods skip it.
@@ -281,6 +286,7 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Lamp oil", ArmoryBase::of(A::Food(&[FoodStyle::Flask])).tweaked(lamp_oil).named()),
     ("Rope", ArmoryBase::of(A::Sundry(&[SundryKind::Rope]))),
     ("Lockpicks", ArmoryBase::of(A::Sundry(&[SundryKind::Lockpicks]))),
+    ("Key", ArmoryBase::of(A::Sundry(&[SundryKind::Keys]))),
     ("Candle", ArmoryBase::of(A::Sundry(&[SundryKind::Candle]))),
     ("Bandages", ArmoryBase::of(A::Sundry(&[SundryKind::Bandages]))),
     ("Bedroll", ArmoryBase::of(A::Sundry(&[SundryKind::Bedroll]))),

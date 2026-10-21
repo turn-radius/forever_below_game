@@ -70,7 +70,7 @@ use crate::inventory::underfoot::FloorChanges;
 use crate::inventory::Toasts;
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, BlocksTheWay, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
-use crate::player::{blocked_by, slide_around};
+use crate::player::slide_around;
 use crate::render::ItemSpawner;
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
@@ -411,6 +411,7 @@ pub fn fight(
     level: Res<CurrentLevel>,
     tuning: Res<Tuning>,
     blocked_cells: Res<BlockedCells>,
+    doors: Option<Res<crate::doors::Doors>>,
     obstacles: Res<Obstacles>,
     player: Query<DelverToStrike, (With<Player>, Without<Denizen>)>,
     creatures: Query<(&Critter, &Transform), Standing>,
@@ -425,7 +426,6 @@ pub fn fight(
     let Some((player, delver_ac)) = player.iter().next().map(|(t, ac)| (t.translation.xz(), ac.copied())) else { return };
     let level = &level.0;
     let relief = Relief::new(level);
-    let blocked = blocked_by(level, &blocked_cells);
     let player_radius = tuning.moving.body_radius;
     // Everything that moves or stands but the folk themselves, whose circles are in the
     // obstacles already (each fighter sets its own aside).
@@ -437,6 +437,7 @@ pub fn fight(
             continue;
         }
         let fight = &mut *fight;
+        let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         let at = transform.translation.xz();
         let radius = denizen.radius;
         let reach = player_radius + combatant.weapon.reach;

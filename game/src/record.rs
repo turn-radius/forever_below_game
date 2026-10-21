@@ -57,6 +57,9 @@ pub struct WorldRecord {
     /// delve (#554). The finished item is worked out from the order when it is handed over.
     #[serde(default)]
     pub orders: Vec<crate::commission::Commission>,
+    /// The factions that have given the delver their key, which they give once (#553).
+    #[serde(default)]
+    pub keys_given: Vec<fb_faction::Faction>,
 }
 
 /// One level as it was left.
@@ -80,6 +83,9 @@ pub struct LevelRecord {
     /// level's folk. Back on a revisit the same game day; a new day restocks it (#548).
     #[serde(default)]
     pub shelves: BTreeMap<usize, ShelfRecord>,
+    /// Each claim door as the delver left it (#553).
+    #[serde(default)]
+    pub doors: Vec<DoorRecord>,
 }
 
 /// A tradesperson's shelf as it was left.
@@ -94,6 +100,15 @@ pub struct ShelfRecord {
     /// The trader's coin in copper; none for a record from before they had any.
     #[serde(default)]
     pub purse: Option<u64>,
+}
+
+/// A claim door as it was left: swung open or shut, and unlocked by key or picks or not.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoorRecord {
+    pub x: i32,
+    pub y: i32,
+    pub open: bool,
+    pub unlocked: bool,
 }
 
 /// A folk as they were left.
@@ -189,13 +204,13 @@ impl WorldRecord {
     /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
     /// every faction at the start a delver of `alignment` has.
     pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new() }
     }
 
     /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
     /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
     pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new() }
     }
 
     /// The record of the level at `depth`, if it has been visited.
@@ -311,8 +326,10 @@ pub fn record_level_left(
     containers: Query<(&PropPiece, &Container)>,
     creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>)>,
     folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>)>,
+    doors: Option<Res<crate::doors::Doors>>,
 ) {
     let mut left = LevelRecord::default();
+    left.doors = doors.map_or_else(Vec::new, |d| d.records());
     let mut lying: Vec<&FloorItem> = floor.iter().collect();
     lying.sort_by_key(|f| f.id);
     left.floor = lying.into_iter().filter_map(|f| Some(FloorRecord { spot: f.spot, item: record_item(&inventory, f.id)? })).collect();

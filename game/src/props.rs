@@ -32,7 +32,8 @@ use bevy::{
     window::{CursorOptions, PrimaryWindow},
 };
 use fb_items::footprint::Footprint;
-use fb_level::{CELL, Level, Prop, PropSpot, chest_state};
+use armory::families::{Generator, banner::{Banner, BannerMount, BannerState}};
+use fb_level::{BannerSite, BannerSpot, CELL, Level, Prop, PropSpot, chest_state};
 
 use crate::carry::{Aimed, appearance_of, item_points};
 use crate::inventory::{Inventory, ItemId, OpenContainer};
@@ -58,6 +59,7 @@ impl Plugin for PropsPlugin {
                 Update,
                 (
                     lay_out_props.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    lay_out_banners.run_if(resource_exists_and_changed::<CurrentLevel>),
                     rescale_props.run_if(resource_exists_and_changed::<Tuning>),
                     open_aimed_container.run_if(level_has_focus),
                     prompt_aimed_container.after(crate::carry::aim),
@@ -168,6 +170,74 @@ fn rescale_props(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut props: Query
             *transform = prop_transform(&level.0, &piece.spot, piece.min.y, scale);
             blocks.0 = prop_floor_shape(piece.spot.prop, scale);
         }
+    }
+}
+
+/// A faction banner hanging on a wall: which of `CurrentLevel.banners` it is. Banners are
+/// cloth on a rod, high on the wall, so they block nothing.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BannerPiece {
+    pub index: usize,
+}
+
+/// How far below the ceiling a rod hangs at most, in world units, and the least clear space
+/// under a banner's lowest point (its fringe included).
+const BANNER_BELOW_CEILING: f32 = 2.0;
+const BANNER_OFF_FLOOR: f32 = 4.0;
+/// Where a hall banner's middle hangs, in world units up: a little above the eye, so the cloth
+/// reads from across the hall.
+const BANNER_MIDDLE: f32 = 20.0;
+/// A lintel banner's lowest point: just over the top of the doorway.
+const LINTEL_FOOT: f32 = crate::level::geometry::DOOR_HEIGHT + 1.5;
+
+/// The banner `spot` hangs, and how high its rod hangs: a rod-hung one rolled from its seed (its
+/// end, hem and fringe, and its size: wide and long in a hall, short and wide over a door),
+/// painted with exactly its faction's field. The rod is set from the cloth, so the middle sits at
+/// [`BANNER_MIDDLE`] (or the foot just over the doorway for a lintel banner); under a low ceiling
+/// the cloth is shortened rather than hung higher.
+pub fn banner_hang(spot: &BannerSpot, level: &Level) -> (BannerState, f32) {
+    let rolled = Banner::roll(spot.seed);
+    let lintel = spot.site == BannerSite::Lintel;
+    let mut state = if lintel {
+        Banner::roll_sized(spot.seed, BannerMount::Rod, rolled.cloth.end, (5.0, 7.0), (5.0, 8.0))
+    } else {
+        Banner::roll_hall(spot.seed, BannerMount::Rod, rolled.cloth.end)
+    };
+    let [x, _, z] = Level::world(spot.x, spot.y);
+    let highest = crate::level::geometry::stone::ceiling_at(level, x, z) - BANNER_BELOW_CEILING;
+    let length = state.cloth.length;
+    let (top, length) = if lintel {
+        let top = (LINTEL_FOOT + length).min(highest);
+        (top, length.min(top - LINTEL_FOOT).max(3.0))
+    } else {
+        let top = (BANNER_MIDDLE + length / 2.0).min(highest);
+        (top, length.min(top - BANNER_OFF_FLOOR))
+    };
+    state.cloth.length = length;
+    // The hem takes the charge's colour, so it never clashes with the faction's tinctures.
+    let field = level.faction(spot.faction).field;
+    state.hem.trim = field.charge_tincture;
+    state.field = field;
+    (state, top.max(length + BANNER_OFF_FLOOR))
+}
+
+/// Where a banner's rod hangs: at its spot, `top` up, facing out from the wall.
+pub fn banner_transform(spot: &BannerSpot, top: f32) -> Transform {
+    let centre = Vec3::from_array(Level::world(spot.x, spot.y));
+    Transform::from_translation(Vec3::new(centre.x, top, centre.z)).with_rotation(Quat::from_rotation_y(spot.yaw))
+}
+
+/// Spawns (or respawns, when the level changes) the level's banners.
+fn lay_out_banners(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<BannerPiece>>, mut spawner: ItemSpawner) {
+    for entity in &old {
+        commands.entity(entity).despawn();
+    }
+    for (index, spot) in level.0.banners.iter().enumerate() {
+        let (state, top) = banner_hang(spot, &level.0);
+        let item = Item::Banner(state);
+        let (mesh, appearance) = (item.build(), appearance_of(&item));
+        let name = format!("Banner of {}", level.0.faction(spot.faction).name);
+        spawner.spawn(&mesh, &appearance).insert((LevelPiece, Name::new(name), banner_transform(spot, top), BannerPiece { index }));
     }
 }
 
@@ -670,5 +740,40 @@ mod tests {
                 assert!(!obstacle.overlaps(at, BODY_RADIUS), "{spot:?}: walked into it at {at}");
             }
         }
+    }
+
+    #[test]
+    fn banners_carry_their_factions_field_and_hang_big_and_mid_wall() {
+        let mut seen = 0;
+        for seed in [1207, 3, 9, 7, 12] {
+            let level = fb_level::generate(seed, 1);
+            for spot in &level.banners {
+                seen += 1;
+                let (state, top) = banner_hang(spot, &level);
+                assert_eq!(state.field, level.faction(spot.faction).field, "seed {seed}: {spot:?}");
+                assert_eq!(state.hanging.mount, BannerMount::Rod);
+                let ceiling = crate::level::geometry::stone::ceiling_at(&level, spot.x * CELL, spot.y * CELL);
+                assert!(top <= ceiling - 1.9 && top - state.cloth.length >= BANNER_OFF_FLOOR - 1e-3, "{spot:?}: top {top}, length {}", state.cloth.length);
+                let middle = top - state.cloth.length / 2.0;
+                if spot.site == BannerSite::Lintel {
+                    assert!(top - state.cloth.length >= LINTEL_FOOT - 1e-3 && state.cloth.width >= 5.0, "{spot:?}: {:?}", state.cloth);
+                } else {
+                    assert!(state.cloth.length >= 14.0 && state.cloth.width >= 5.0, "{spot:?}: {:?}", state.cloth);
+                    assert!((17.0..=21.0).contains(&middle), "{spot:?}: middle {middle}");
+                }
+                assert_eq!(state, banner_hang(spot, &level).0, "the same seed hangs the same banner");
+            }
+        }
+        assert!(seen > 0);
+    }
+
+    #[test]
+    fn banners_are_drawn_and_block_nothing() {
+        let mut app = props_app();
+        let level = fb_level::generate(1207, 1);
+        let mut banners = app.world_mut().query_filtered::<(&BannerPiece, &Children), Without<BlocksTheWay>>();
+        assert_eq!(banners.iter(app.world()).count(), level.banners.len());
+        assert!(!level.banners.is_empty());
+        assert!(banners.iter(app.world()).all(|(_, parts)| !parts.is_empty()));
     }
 }

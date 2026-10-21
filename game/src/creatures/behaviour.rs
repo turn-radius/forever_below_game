@@ -48,7 +48,7 @@ use fb_character::combat::{Odds, ToHit};
 use crate::level::geometry::Relief;
 use crate::level::geometry::stone::Vaults;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player};
-use crate::player::{blocked_by, slide_around};
+use crate::player::slide_around;
 use crate::tuning::Tuning;
 
 pub struct BehaviourPlugin;
@@ -457,6 +457,7 @@ fn behave(
     rules: Option<Res<crate::rules::GameRules>>,
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
+    doors: Option<Res<crate::doors::Doors>>,
     player: Query<DelverToStrike, (With<Player>, Without<Critter>)>,
     shunned: Query<&crate::combat::vitals::Shunned, With<Player>>,
     mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform, Option<&mut Flight>, Has<Aroused>)>,
@@ -473,7 +474,8 @@ fn behave(
     }
     let level = &level.0;
     let relief = Relief::new(level);
-    let blocked = blocked_by(level, &blocked_cells);
+    // A shut claim door is a wall to a creature, and opaque.
+    let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), None);
     let delver_ac = player.iter().next().and_then(|(_, ac)| ac.copied());
     let player = player.iter().next().map(|(t, _)| t.translation.xz());
     let shunned = shunned.iter().next().copied().unwrap_or_default();

@@ -28,8 +28,10 @@
 //! and [`key_line`] writes a target's verbs with the keys bound to them: "F Open · R Pick
 //! the lock". Aimed at a container within reach, or at a stair with nothing else aimed at
 //! (`crate::travel`), [`CrosshairPrompt`] shows that line over the crosshair
-//! ([`InteractPlugin`]); a folk's line goes on its card (`crate::folk`). Doors have
-//! no prompt: the only one, the entrance, never opens for the delver, so it has no verb to say.
+//! ([`InteractPlugin`]); a folk's line goes on its card (`crate::folk`). The doors on the edge
+//! of a faction's ground have a prompt of their own (`crate::doors`): "F Open", or "Locked", with
+//! "G Unlock with key" and "R Pick the lock" for what the delver carries. The entrance never
+//! opens for the delver, so it has none.
 
 use bevy::{prelude::*, ui::ComputedUiRenderTargetInfo};
 use fb_items::Item;
@@ -119,7 +121,7 @@ impl Verb {
             Verb::LookIn => "Look in",
             Verb::Close => "Close",
             Verb::Lock => "Lock",
-            Verb::Unlock => "Unlock",
+            Verb::Unlock => "Unlock with key",
             Verb::PickLock => "Pick the lock",
             Verb::Talk => "Talk",
             Verb::Barter => "Barter",

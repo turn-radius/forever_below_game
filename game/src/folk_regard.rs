@@ -40,7 +40,7 @@ use crate::folk_routine::{Routine, pace};
 use crate::hostility::Hostility;
 use crate::inventory::Toasts;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
-use crate::player::{blocked_by, slide_around};
+use crate::player::slide_around;
 use crate::record::WorldRecord;
 use crate::tuning::Tuning;
 
@@ -154,13 +154,14 @@ fn note_striker(time: Res<Time>, mut attacks: MessageReader<AttackOnDelver>, mut
 fn hostile_on_sight(
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
+    doors: Option<Res<crate::doors::Doors>>,
     record: Res<WorldRecord>,
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
     mut folk: Query<(&Denizen, &Transform, &mut Hostility), Without<Corpse>>,
 ) {
     let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
-    let blocked = blocked_by(&level.0, &blocked_cells);
     for (denizen, at, mut hostility) in &mut folk {
+        let blocked = crate::doors::solid_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         if hostility.is_hostile() || record.standings.band(denizen.person.faction.id) != Band::Hostile {
             continue;
         }
@@ -184,6 +185,7 @@ fn regard(
     time: Res<Time>,
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
+    doors: Option<Res<crate::doors::Doors>>,
     record: Res<WorldRecord>,
     mut toasts: Toasts,
     mut last_spoke: Local<std::collections::HashMap<fb_faction::Faction, f32>>,
@@ -192,10 +194,10 @@ fn regard(
 ) {
     let dt = time.delta_secs().min(0.1);
     let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
-    let blocked = blocked_by(&level.0, &blocked_cells);
     let now = time.elapsed_secs();
     for (entity, denizen, at, hostility, mut routine, greeting, attending, assisting) in &mut folk {
         let faction = denizen.person.faction.id;
+        let blocked = crate::doors::solid_for(&level.0, &blocked_cells, doors.as_deref(), Some(faction));
         let band = record.standings.band(faction);
         let at = at.translation.xz();
         let distance = at.distance(player);
@@ -253,6 +255,7 @@ fn assist(
     level: Res<CurrentLevel>,
     tuning: Res<Tuning>,
     blocked_cells: Res<BlockedCells>,
+    doors: Option<Res<crate::doors::Doors>>,
     obstacles: Res<Obstacles>,
     record: Res<WorldRecord>,
     last: Res<LastStriker>,
@@ -269,9 +272,9 @@ fn assist(
     let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
     let now = time.elapsed_secs();
     let target = last.0.filter(|(_, when)| now - when <= STRIKER_FOR).and_then(|(creature, _)| creatures.get(creature).ok().map(|(c, t, ac)| (creature, c, t.translation.xz(), ac.copied().unwrap_or(ArmourClass::UNARMOURED).0)));
-    let blocked = blocked_by(&level.0, &blocked_cells);
     let relief = crate::level::geometry::Relief::new(&level.0);
     for (entity, denizen, hostility, combatant, mut fight, mut stride, mut arm, mut transform, mut routine, assisting) in &mut folk {
+        let blocked = crate::doors::solid_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         let at = transform.translation.xz();
         let ally = !hostility.is_hostile() && record.standings.band(denizen.person.faction.id) == Band::Allied;
         let engaged = target.filter(|&(_, _, goes, _)| {
