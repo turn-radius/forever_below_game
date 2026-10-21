@@ -10,7 +10,7 @@
 use armory::build::scenery::Scenery;
 use fb_level::props::Prop;
 use fb_level::sight::Explored;
-use fb_level::{Cell, Level, LightKind, StairKind};
+use fb_level::{Cell, FloorFinish, Finishes, Level, LightKind, StairKind};
 
 /// Cells of blank page round the level.
 pub const MARGIN: f32 = 1.5;
@@ -22,6 +22,59 @@ const HATCH: [f32; 3] = [0.369, 0.314, 0.251];
 const ACCENT: [f32; 3] = [0.769, 0.541, 0.322];
 const GLOW: [f32; 3] = [0.851, 0.569, 0.247];
 const CAP: [f32; 3] = [0.525, 0.729, 0.502];
+
+/// What each floor finish is tinted on the plan, and moss.
+pub const fn floor_tint(floor: FloorFinish) -> [f32; 3] {
+    match floor {
+        FloorFinish::Rock => [0.55, 0.42, 0.30],
+        FloorFinish::Flagstone => [0.42, 0.52, 0.66],
+        FloorFinish::Cobble => [0.80, 0.62, 0.25],
+    }
+}
+
+pub const MOSS_TINT: [f32; 3] = [0.30, 0.78, 0.30];
+
+/// The colour of quarter `q` on the plan, cycling through colours that stand apart from the
+/// floors'.
+pub fn quarter_tint(q: usize) -> [f32; 3] {
+    const TINTS: [[f32; 3]; 6] = [[0.95, 0.35, 0.35], [0.35, 0.85, 0.95], [0.95, 0.55, 0.95], [0.95, 0.95, 0.40], [0.55, 0.60, 1.0], [1.0, 0.65, 0.30]];
+    TINTS[q % TINTS.len()]
+}
+
+/// The finishes over the floor of each cell `shade` allows: each floor tinted by how it is laid,
+/// moss in green by how thick it grows, and each quarter washed in its own colour (its corridors
+/// harder, so they read as its own), drawn along the edges where it meets another quarter, and
+/// round its rooms. The map shades only what the delver has seen; the level view shades all.
+pub fn shade_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, f: &Finishes, shade: impl Fn(i32, i32) -> bool) {
+    let edge = (frame.px * 0.14).max(2.0);
+    let inset = edge * 0.5;
+    for y in 0..level.height as i32 {
+        for x in 0..level.width as i32 {
+            if !shade(x, y) {
+                continue;
+            }
+            let Some(finish) = f.at(x, y) else { continue };
+            let (a, b) = (frame.at(x as f32, y as f32), frame.at(x as f32 + 1.0, y as f32 + 1.0));
+            canvas.rect(a, b, floor_tint(finish.floor), 0.5);
+            canvas.rect(a, b, MOSS_TINT, finish.moss * 0.8);
+            let Some(q) = f.quarter(x, y) else { continue };
+            let room = level.room_at(x, y);
+            canvas.rect(a, b, quarter_tint(q), if room.is_some() { 0.13 } else { 0.30 });
+            // Each side that meets another quarter, or bounds the cell's room, drawn a little
+            // inside so both sides show their own colour. Rock has no quarter; its walls are
+            // drawn already.
+            let sides = [((0, -1), [a[0], a[1] + inset], [b[0], a[1] + inset]), ((0, 1), [a[0], b[1] - inset], [b[0], b[1] - inset]), ((-1, 0), [a[0] + inset, a[1]], [a[0] + inset, b[1]]), ((1, 0), [b[0] - inset, a[1]], [b[0] - inset, b[1]])];
+            for ((dx, dy), p, r) in sides {
+                let (nx, ny) = (x + dx, y + dy);
+                let other_quarter = f.quarter(nx, ny).is_some_and(|n| n != q);
+                let room_edge = room.is_some() && level.room_at(nx, ny) != room;
+                if other_quarter || room_edge {
+                    canvas.line(p, r, edge, quarter_tint(q), if other_quarter { 0.95 } else { 0.9 });
+                }
+            }
+        }
+    }
+}
 
 /// An RGBA picture being drawn, each pixel premultiplied by its alpha.
 #[derive(Clone, Debug, PartialEq)]
@@ -364,6 +417,46 @@ mod tests {
         // Its west wall is inked a little brighter than the wash.
         let wall = frame.at(room.x as f32, room.y as f32 + room.h as f32 * 0.5);
         assert!(all.alpha(wall[0] as u32, wall[1] as u32) > 0.8);
+    }
+
+    /// The colour drawn at the middle of cell `(x, y)`.
+    fn colour_at(canvas: &PlanCanvas, frame: &PlanFrame, x: i32, y: i32) -> [u8; 4] {
+        let c = frame.at(x as f32 + 0.5, y as f32 + 0.5);
+        let i = ((c[1] as u32 * canvas.width + c[0] as u32) * 4) as usize;
+        let rgba = canvas.to_rgba8();
+        [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+    }
+
+    #[test]
+    fn seen_floors_are_shaded_by_their_finish_and_unseen_ones_stay_blank() {
+        // The first stone halls with a clear flagstone floor in a room, away from its edges.
+        let flagstone = |level: &Level, f: &Finishes| {
+            (0..level.height as i32)
+                .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
+                .find(|&(x, y)| level.room_at(x, y).is_some() && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().all(|&(dx, dy)| level.room_at(x + dx, y + dy) == level.room_at(x, y)) && level.cell(x, y) == Cell::Floor && f.at(x, y).is_some_and(|c| c.floor == FloorFinish::Flagstone && c.moss < 0.05))
+        };
+        let (level, f, (x, y)) = (1..40)
+            .map(|seed| fb_level::generate(seed, 2))
+            .find_map(|level| {
+                let f = fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
+                let cell = flagstone(&level, &f)?;
+                Some((level, f, cell))
+            })
+            .expect("a flagstone floor in the stone halls");
+        let px = 16.0;
+        let frame = PlanFrame::of(px);
+        let seen = Explored::all(&level);
+        let shaded = draw_plan_with(&level, &seen, px, |canvas, frame| shade_finishes(canvas, frame, &level, &f, |_, _| true));
+        // It reads blue-grey: bluer than it is red.
+        let [r, _, b, _] = colour_at(&shaded, &frame, x, y);
+        assert!(b > r, "flagstone shaded blue-grey: {r} red, {b} blue");
+        // Shading nothing leaves the plain plan.
+        let plain = draw_plan(&level, &seen, px);
+        let none = draw_plan_with(&level, &seen, px, |canvas, frame| shade_finishes(canvas, frame, &level, &f, |_, _| false));
+        assert_eq!(none, plain);
+        // A cell not seen stays blank, finish or no.
+        let unseen = draw_plan_with(&level, &Explored::new(&level), px, |canvas, frame| shade_finishes(canvas, frame, &level, &f, |x, y| Explored::new(&level).is_seen(x, y)));
+        assert!((0..unseen.height).all(|y| (0..unseen.width).all(|x| unseen.alpha(x, y) == 0.0)));
     }
 
     #[test]
