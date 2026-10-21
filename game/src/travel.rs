@@ -252,10 +252,12 @@ impl Plugin for TravelPlugin {
 }
 
 /// A new delve is a new abyss, from the seed of the level it opens on.
-fn begin_the_run(level: Option<Res<CurrentLevel>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>) {
-    // The world record resets with the run for now (#285).
-    *record = WorldRecord::default();
+fn begin_the_run(level: Option<Res<CurrentLevel>>, character: Option<Res<crate::character::Character>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>) {
     *abyss = level.map_or_else(Abyss::default, |level| Abyss { depth: level.0.depth, ..Abyss::new(level.0.seed) });
+    // The world record resets with the run for now (#285), and standing starts afresh in the
+    // new world from the delver's alignment (#542).
+    let alignment = character.map_or(fb_faction::Alignment::TrueNeutral, |c| c.class.alignment());
+    *record = WorldRecord::new_delve(alignment, abyss.run_seed);
 }
 
 /// Leaving the delve leaves the abyss.

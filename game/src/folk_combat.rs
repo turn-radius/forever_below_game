@@ -691,6 +691,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_faction_that_turns_on_the_delver_reads_hostile_and_others_are_unchanged() {
+        let (mut app, _, folk) = folk_fight(30.0);
+        let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.id;
+        let seed = app.world().resource::<CurrentLevel>().0.seed;
+        let world = fb_faction::World::new(seed);
+        let other = world.factions().iter().map(|f| f.id).find(|id| *id != faction).unwrap();
+        app.insert_resource(crate::record::WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, seed));
+        let (before, other_before) = {
+            let standings = &app.world().resource::<crate::record::WorldRecord>().standings;
+            (standings.get(faction), standings.get(other))
+        };
+        assert_ne!(before.band(), fb_faction::Band::Hostile, "not hostile to begin with");
+        app.world_mut().write_message(Provoked { folk });
+        app.update();
+        assert_eq!(hostility(&app, folk), Hostility::Hostile);
+        let standings = &app.world().resource::<crate::record::WorldRecord>().standings;
+        assert_eq!(standings.band(faction), fb_faction::Band::Hostile);
+        assert!(standings.has_met(faction));
+        assert_eq!(standings.get(other), other_before);
+        assert!(!standings.has_met(other));
+    }
+
+    #[test]
     fn at_0_hit_points_a_folk_dies_and_falls_where_it_stood() {
         let (mut app, _, folk) = folk_fight(9.0);
         let stood = *app.world().get::<Transform>(folk).unwrap();

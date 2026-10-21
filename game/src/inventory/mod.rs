@@ -148,7 +148,7 @@ impl Plugin for InventoryPlugin {
                         drag_items,
                         unhang_without_belt,
                         crate::character::wear_abilities,
-                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions, sheet::update_factions).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,

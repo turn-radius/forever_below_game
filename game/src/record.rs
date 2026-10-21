@@ -45,6 +45,10 @@ use crate::props::{Container, PropPiece};
 #[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WorldRecord {
     pub levels: BTreeMap<u32, LevelRecord>,
+    /// The delver's standing with every faction of the world, shared by each level and lasting
+    /// the delve (#542).
+    #[serde(default)]
+    pub standings: fb_faction::Standings,
 }
 
 /// One level as it was left.
@@ -144,6 +148,12 @@ impl CreatureRecord {
 }
 
 impl WorldRecord {
+    /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
+    /// every faction at the start a delver of `alignment` has.
+    pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)) }
+    }
+
     /// The record of the level at `depth`, if it has been visited.
     pub fn level(&self, depth: u32) -> Option<&LevelRecord> {
         self.levels.get(&depth)
@@ -305,6 +315,52 @@ mod tests {
         let mut other = Inventory::default();
         let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
         assert_eq!(other.item(again), inventory.item(sword));
+    }
+
+    #[test]
+    fn standing_is_shared_by_a_factions_camps_on_every_level() {
+        let seed = 1207;
+        let params = fb_level::LevelParams::default();
+        let levels: Vec<_> = (1..=12).map(|d| fb_level::generate_in(seed, d, &params)).collect();
+        let faction = levels
+            .iter()
+            .flat_map(|l| l.factions.iter().map(|f| f.id))
+            .find(|id| levels.iter().filter(|l| l.folk.iter().any(|s| s.faction == *id)).count() >= 2)
+            .expect("a faction with camps on two levels");
+        let camps: Vec<_> = levels.iter().filter(|l| l.folk.iter().any(|s| s.faction == faction)).collect();
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, seed);
+        let before = record.standings.get(faction).value();
+        // Standing raised at a camp on one level reads the same at a camp on another.
+        record.standings.shift(faction, 25);
+        for level in camps {
+            let spot = level.folk.iter().find(|s| s.faction == faction).unwrap();
+            assert_eq!(record.standings.get(spot.faction).value(), before + 25, "depth {}", level.depth);
+        }
+    }
+
+    #[test]
+    fn a_new_delve_starts_standing_afresh_from_the_alignment() {
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::NeutralGood, 5);
+        let world = fb_faction::World::new(5);
+        let first = world.factions()[0].id;
+        let start = record.standings.get(first);
+        record.standings.shift(first, 60);
+        record.standings.turn_hostile(world.factions()[1].id);
+        assert_ne!(record.standings.get(first), start);
+        let fresh = WorldRecord::new_delve(fb_faction::Alignment::NeutralGood, 5);
+        assert_eq!(fresh.standings.get(first), start);
+        assert_eq!(fresh.standings.met().count(), 0);
+        assert!(fresh.levels.is_empty());
+    }
+
+    #[test]
+    fn a_faction_that_turns_reads_hostile_and_the_record_keeps_it() {
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 9);
+        let faction = fb_faction::World::new(9).factions().iter().find(|f| f.alignment == fb_faction::Alignment::LawfulGood).map_or(fb_faction::Faction(0), |f| f.id);
+        record.standings.turn_hostile(faction);
+        assert_eq!(record.standings.band(faction), fb_faction::Band::Hostile);
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(serde_json::from_str::<WorldRecord>(&json).unwrap(), record);
     }
 
     #[test]

@@ -15,3 +15,6 @@ fb_body = { workspace = true }
 procgen_grammar = { workspace = true }
 procgen_rng = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

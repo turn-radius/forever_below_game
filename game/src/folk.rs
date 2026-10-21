@@ -19,7 +19,8 @@
 //! - Each stands in a circle on the floor that the player cannot walk into
 //!   ([`BlocksTheWay`], gathered into `play::Obstacles`).
 //! - Looked at within reach, a card under the crosshair says who they are ([`folk_card_text`]):
-//!   name, folk and faction, and what they wear and hold, item names in their rarity's colour,
+//!   name, folk and faction with how the faction stands with the delver ("Dwarf of the Ash
+//!   Choir \u{b7} Wary", `WorldRecord::standings`), and what they wear and hold, item names in their rarity's colour,
 //!   styled as the item card, and the keys for talking and bartering ([`crate::interact::key_line`]).
 //!
 //! Figures are built once per spot, in parallel, and kept in [`FolkFigures`], so the same
@@ -58,7 +59,7 @@ impl Plugin for FolkPlugin {
                     spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>),
                     idle_folk,
                     turn_heads,
-                    (aim_at_folk, spawn_folk_card, show_folk_card).chain(),
+                    (aim_at_folk, meet_aimed_folk, spawn_folk_card, show_folk_card).chain(),
                 )
                     .in_set(DelveSystems),
             );
@@ -302,7 +303,7 @@ pub(crate) fn spawn_folk(
     level: Res<CurrentLevel>,
     mut figures: ResMut<FolkFigures>,
     old: Query<Entity, With<Denizen>>,
-    record: Option<Res<crate::record::WorldRecord>>,
+    mut record: Option<ResMut<crate::record::WorldRecord>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     mut spawner: ItemSpawner,
     mut shown: Local<Option<Vec<FolkSpot>>>,
@@ -340,6 +341,12 @@ pub(crate) fn spawn_folk(
     // Capture hook: `FB_SPAWN=folk:<faction>` stands folk ahead of the start.
     let dev = crate::creatures::dev_folk(&level.0);
     for (person, figure) in build_figures(&dev, &level.0.factions, level.0.depth) {
+        // The delver is taken to have met them, so the sheet's factions section lists them.
+        if let Some(record) = record.as_deref_mut() {
+            if !record.standings.has_met(person.faction.id) {
+                record.standings.meet(person.faction.id);
+            }
+        }
         spawn_denizen(&mut commands, &mut spawner, &mut bindposes, &person, &figure);
     }
     *shown = Some(level.0.folk.clone());
@@ -435,7 +442,8 @@ fn turn_heads(
 #[derive(Clone, Debug, PartialEq)]
 pub struct FolkCardText {
     pub name: String,
-    /// Their folk and faction: "Dwarf of the Ash Choir".
+    /// Their folk and faction, and how the faction stands with the delver: "Dwarf of the Ash
+    /// Choir \u{b7} Wary".
     pub line: String,
     /// What they wear and what they hold, each item's name and rarity.
     pub wears: Vec<(String, Rarity)>,
@@ -444,11 +452,11 @@ pub struct FolkCardText {
 
 /// The card for `person`: their name, folk and faction (named as `data/factions.json` names
 /// it), and what they wear and hold.
-pub fn folk_card_text(person: &Person) -> FolkCardText {
+pub fn folk_card_text(person: &Person, band: fb_faction::Band) -> FolkCardText {
     let names = |gear: &mut dyn Iterator<Item = &(Slot, Item)>| gear.map(|(_, item)| (item.title().to_string(), item.rarity)).collect();
     FolkCardText {
         name: person.name.clone(),
-        line: format!("{} of {}", person.spot.folk.race().label, person.faction.name),
+        line: format!("{} of {} \u{b7} {}", person.spot.folk.race().label, person.faction.name, band.label()),
         wears: names(&mut person.worn()),
         holds: names(&mut person.held()),
     }
@@ -539,6 +547,17 @@ fn fill_folk_card(commands: &mut Commands, card: Entity, text: &FolkCardText, pr
     });
 }
 
+/// Marks the faction of the folk looked at as met, so the character sheet lists it. Takes the
+/// record mutably only when the faction is new to the delver.
+fn meet_aimed_folk(aimed: Res<AimedFolk>, folk: Query<&Denizen>, record: Option<ResMut<crate::record::WorldRecord>>) {
+    let (Some(mut record), Some(entity)) = (record, aimed.0) else { return };
+    let Ok(denizen) = folk.get(entity) else { return };
+    let faction = denizen.person.faction.id;
+    if !record.standings.has_met(faction) {
+        record.standings.meet(faction);
+    }
+}
+
 /// Shows the card for the folk looked at, under the crosshair, while the level has focus and
 /// no item card is up. A card filled this frame waits a frame to be measured.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -549,9 +568,10 @@ fn show_folk_card(
     aimed_item: Option<Res<Aimed>>,
     keymap: Option<Res<Keymap>>,
     folk: Query<&Denizen>,
+    record: Option<Res<crate::record::WorldRecord>>,
     fonts: Res<UiFonts>,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<FolkCard>>,
-    mut shown: Local<Option<Entity>>,
+    mut shown: Local<Option<(Entity, fb_faction::Band)>>,
 ) {
     let screen_open = open.is_some_and(|o| o.0.is_some());
     let item_card = aimed_item.is_some_and(|a| a.0.is_some());
@@ -562,12 +582,13 @@ fn show_folk_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(entity) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
+        let band = record.as_ref().map_or(fb_faction::Band::Neutral, |r| r.standings.band(denizen.person.faction.id));
+        if *shown != Some((entity, band)) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
             // Nobody hides from the delver yet, so no steal.
             let fallback = Keymap::default();
             let prompt = key_line(keymap.as_deref().unwrap_or(&fallback), &verbs_for(&Target::Folk, &Delver::default()));
-            fill_folk_card(&mut commands, card, &folk_card_text(&denizen.person), &prompt, &fonts);
-            *shown = Some(entity);
+            fill_folk_card(&mut commands, card, &folk_card_text(&denizen.person, band), &prompt, &fonts);
+            *shown = Some((entity, band));
             *visibility = Visibility::Hidden;
             continue;
         }
@@ -777,9 +798,9 @@ mod tests {
     fn the_card_names_the_person_their_faction_and_their_gear() {
         for spot in folk_1207() {
             let person = person_1207(&spot);
-            let card = folk_card_text(&person);
+            let card = folk_card_text(&person, fb_faction::Band::Wary);
             assert_eq!(card.name, person.name);
-            assert!(card.line.ends_with(person.faction.name.as_str()), "{}", card.line);
+            assert!(card.line.ends_with(&format!("{} \u{b7} Wary", person.faction.name)), "{}", card.line);
             assert_eq!(person.faction.id, spot.faction);
             assert!(card.line.starts_with(spot.folk.race().label.as_str()), "{}", card.line);
             assert_eq!(card.wears.len() + card.holds.len(), person.gear.len());
@@ -810,6 +831,25 @@ mod tests {
         app.update();
         app.update();
         assert!(line(&mut app).starts_with("E Talk"), "{}", line(&mut app));
+    }
+
+    #[test]
+    fn aiming_at_a_folk_meets_their_faction_and_leaves_the_record_alone_after() {
+        let (mut app, _, _) = looking_app(Vec3::ZERO);
+        app.init_resource::<Keymap>().init_resource::<UiFonts>().init_resource::<Aimed>().init_resource::<AimedFolk>().add_systems(Update, (meet_aimed_folk, show_folk_card).chain());
+        app.insert_resource(crate::record::WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 1207));
+        let folk = app.world_mut().query_filtered::<Entity, With<Denizen>>().single(app.world()).unwrap();
+        let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.id;
+        app.world_mut().spawn((FolkCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().resource_mut::<AimedFolk>().0 = Some(folk);
+        app.update();
+        assert!(app.world().resource::<crate::record::WorldRecord>().standings.has_met(faction));
+        app.update();
+        let changed = app.world().resource_ref::<crate::record::WorldRecord>().last_changed();
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(app.world().resource_ref::<crate::record::WorldRecord>().last_changed(), changed, "the record is untouched while a folk is aimed at");
     }
 
     #[test]

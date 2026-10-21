@@ -56,6 +56,19 @@ impl Class {
         }
     }
 
+    /// The alignment a delver of this class starts with, which sets where each faction's
+    /// standing begins (`fb_faction::Standings::start_from_alignment`). Not chosen in the
+    /// creator yet: it is the class's typical one.
+    pub fn alignment(self) -> fb_faction::Alignment {
+        use fb_faction::Alignment::*;
+        match self {
+            Class::Fighter => LawfulNeutral,
+            Class::Ranger => NeutralGood,
+            Class::Mage => TrueNeutral,
+            Class::Cleric => LawfulGood,
+        }
+    }
+
     /// How the class casts: Mages from INT, Clerics from WIS, Fighters and Rangers hardly at all.
     pub fn casting(self) -> Casting {
         match self {

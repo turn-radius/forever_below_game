@@ -2738,6 +2738,7 @@ dependencies = [
  "procgen_grammar",
  "procgen_rng",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

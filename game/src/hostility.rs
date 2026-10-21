@@ -9,6 +9,8 @@
 //!   clear line to them (`fb_level::path::line_of_sight`, as creatures notice the delver)
 //!   ([`who_turns`]). Other factions stay friendly. "The Ash Choir turn on you" shows low in the
 //!   view.
+//! - A faction that turns drops to [`fb_faction::Band::Hostile`] in the delver's standing
+//!   (`WorldRecord::standings`), shared by its camps on every level (#542).
 //! - Hostile stays hostile while the fight goes on, and the record keeps it (`crate::record`). A
 //!   hostile folk who goes `folk.lose_interest_after` seconds without sight of the delver gives up
 //!   and turns friendly again (`crate::folk_combat::fight`); striking them again provokes them
@@ -24,13 +26,14 @@ use crate::combat::feedback::Corpse;
 use crate::folk::Denizen;
 use crate::inventory::Toasts;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems};
+use crate::record::WorldRecord;
 use crate::player::blocked_by;
 
 pub struct HostilityPlugin;
 
 impl Plugin for HostilityPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Provoked>().init_resource::<BlockedCells>().add_systems(Update, turn_on_the_delver.in_set(DelveSystems));
+        app.add_message::<Provoked>().init_resource::<BlockedCells>().init_resource::<WorldRecord>().add_systems(Update, turn_on_the_delver.in_set(DelveSystems));
     }
 }
 
@@ -108,6 +111,7 @@ pub fn turn_on_the_delver(
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
     mut toasts: Toasts,
+    mut record: ResMut<WorldRecord>,
     mut folk: Query<(Entity, &Denizen, &Transform, &mut Hostility), Without<Corpse>>,
 ) {
     let causes: Vec<Entity> = provoked.read().map(|p| p.folk).collect();
@@ -125,6 +129,8 @@ pub fn turn_on_the_delver(
                 *hostility = Hostility::Hostile;
                 newly = true;
                 faction = Some(denizen.person.faction.name.clone());
+                // The faction's standing agrees with its folk, on every level.
+                record.standings.turn_hostile(denizen.person.faction.id);
                 info!("{} of {} turns hostile", denizen.person.name, denizen.person.faction.name);
             }
         }
