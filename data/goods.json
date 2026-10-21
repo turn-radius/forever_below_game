@@ -61,6 +61,14 @@
   "wt": 5,
   "desc": "Hemp rope, 50 ft"
  },
+ "Key": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.1,
+  "desc": "Opens the doors of the faction that gave it"
+ },
  "Lockpicks": {
   "fp": [
    1,

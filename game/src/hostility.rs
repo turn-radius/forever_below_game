@@ -29,7 +29,6 @@ use crate::folk::Denizen;
 use crate::inventory::Toasts;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems};
 use crate::record::WorldRecord;
-use crate::player::blocked_by;
 
 pub struct HostilityPlugin;
 
@@ -112,6 +111,7 @@ pub fn turn_on_the_delver(
     mut provoked: MessageReader<Provoked>,
     level: Res<CurrentLevel>,
     blocked_cells: Res<BlockedCells>,
+    doors: Option<Res<crate::doors::Doors>>,
     mut toasts: Toasts,
     mut record: ResMut<WorldRecord>,
     mut folk: Query<(Entity, &Denizen, &Transform, &mut Hostility), Without<Corpse>>,
@@ -120,11 +120,12 @@ pub fn turn_on_the_delver(
     if causes.is_empty() {
         return;
     }
-    let blocked = blocked_by(&level.0, &blocked_cells);
     let everyone: Vec<Kin> = folk.iter().map(|(entity, d, t, _)| Kin { entity, faction: d.person.spot.faction, at: t.translation.xz() }).collect();
     for cause in causes {
         let mut newly = false;
         let mut faction = None;
+        // Kin see each other across their own faction's shut doors, and no one else's.
+        let blocked = crate::doors::solid_for(&level.0, &blocked_cells, doors.as_deref(), everyone.iter().find(|k| k.entity == cause).map(|k| k.faction));
         for entity in who_turns(cause, &everyone, &level.0, &blocked) {
             let Ok((_, denizen, _, mut hostility)) = folk.get_mut(entity) else { continue };
             if !hostility.is_hostile() {

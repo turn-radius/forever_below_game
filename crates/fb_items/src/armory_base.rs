@@ -183,7 +183,11 @@ pub fn find_weight(name: &str) -> u32 {
 /// bandages for bandaging. They stay in [`ARMORY_BASES`] and `data/goods.json`, so the forge and
 /// [`roll_item`](crate::roll_item) still make them; when the system arrives the base comes off
 /// this list.
-pub const HELD_BACK: &[&str] = &["Bandages"];
+pub const HELD_BACK: &[&str] = &["Bandages", KEY];
+
+/// The base of a faction's key, which a faction gives an Allied delver and is never found
+/// loose, so it is held back from loot and stock like the rest of [`HELD_BACK`].
+pub const KEY: &str = "Key";
 
 /// Whether base `name` is held back ([`HELD_BACK`]): [`find_weight`] gives it 0, and crate
 /// stock and outfit goods skip it.
@@ -264,6 +268,7 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Lamp oil", ArmoryBase::of(A::Food(&[FoodStyle::Flask])).tweaked(lamp_oil).named()),
     ("Rope", ArmoryBase::of(A::Sundry(&[SundryKind::Rope]))),
     ("Lockpicks", ArmoryBase::of(A::Sundry(&[SundryKind::Lockpicks]))),
+    ("Key", ArmoryBase::of(A::Sundry(&[SundryKind::Keys]))),
     ("Candle", ArmoryBase::of(A::Sundry(&[SundryKind::Candle]))),
     ("Bandages", ArmoryBase::of(A::Sundry(&[SundryKind::Bandages]))),
     ("Scroll", ArmoryBase::of(A::Writing(&[WritingKind::Scroll]))),

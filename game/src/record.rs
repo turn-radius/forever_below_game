@@ -49,6 +49,9 @@ pub struct WorldRecord {
     /// the delve (#542).
     #[serde(default)]
     pub standings: fb_faction::Standings,
+    /// The factions that have given the delver their key, which they give once (#553).
+    #[serde(default)]
+    pub keys_given: Vec<fb_faction::Faction>,
 }
 
 /// One level as it was left.
@@ -68,6 +71,18 @@ pub struct LevelRecord {
     /// before claims, which leaves the level's own.
     #[serde(default)]
     pub claims: Option<Vec<Claim>>,
+    /// Each claim door as the delver left it (#553).
+    #[serde(default)]
+    pub doors: Vec<DoorRecord>,
+}
+
+/// A claim door as it was left: swung open or shut, and unlocked by key or picks or not.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoorRecord {
+    pub x: i32,
+    pub y: i32,
+    pub open: bool,
+    pub unlocked: bool,
 }
 
 /// A folk as they were left.
@@ -160,13 +175,13 @@ impl WorldRecord {
     /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
     /// every faction at the start a delver of `alignment` has.
     pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)) }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), keys_given: Vec::new() }
     }
 
     /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
     /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
     pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)) }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), keys_given: Vec::new() }
     }
 
     /// The record of the level at `depth`, if it has been visited.
@@ -244,8 +259,10 @@ pub fn record_level_left(
     containers: Query<(&PropPiece, &Container)>,
     creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>)>,
     folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>)>,
+    doors: Option<Res<crate::doors::Doors>>,
 ) {
     let mut left = LevelRecord::default();
+    left.doors = doors.map_or_else(Vec::new, |d| d.records());
     let mut lying: Vec<&FloorItem> = floor.iter().collect();
     lying.sort_by_key(|f| f.id);
     left.floor = lying.into_iter().filter_map(|f| Some(FloorRecord { spot: f.spot, item: record_item(&inventory, f.id)? })).collect();

@@ -47,7 +47,7 @@ use crate::folk::{Denizen, Stride};
 use crate::hostility::Hostility;
 use crate::level::geometry::Relief;
 use crate::play::{BlockedCells, BlocksTheWay, CurrentLevel, DelveSystems, Obstacle, Player};
-use crate::player::{blocked_by, slide_around};
+use crate::player::slide_around;
 use crate::tuning::Tuning;
 
 pub struct FolkRoutinePlugin;
@@ -303,6 +303,7 @@ pub(crate) fn walk_routines(
     level: Res<CurrentLevel>,
     tuning: Res<Tuning>,
     blocked_cells: Res<BlockedCells>,
+    doors: Option<Res<crate::doors::Doors>>,
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
     creatures: Query<(&Critter, &Transform), Without<Denizen>>,
     props: Query<(&BlocksTheWay, &GlobalTransform), Without<Denizen>>,
@@ -315,7 +316,7 @@ pub(crate) fn walk_routines(
     let player_at = player.iter().next().map(|t| t.translation.xz());
     let level = &level.0;
     let tune = &tuning.folk;
-    let blocked = blocked_by(level, &blocked_cells);
+    // What stops a person (rock, and shut doors but their own faction's) is made per person below.
     // What every person keeps out of that stays put: props and braziers. Where they choose to
     // go leaves out the creatures and the player, which move, so the choice stays the seed's.
     let mut fixed: Vec<Obstacle> = props.iter().map(|(blocks, at)| Obstacle::of(blocks.0, at)).collect();
@@ -334,6 +335,7 @@ pub(crate) fn walk_routines(
     let relief = Relief::new(level);
 
     for (entity, denizen, mut routine, mut stride, mut transform, hostility, attending, assisting) in &mut folk {
+        let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         // A hostile folk has left their routine to fight (`crate::folk_combat::fight`), though
         // the others still keep out of where they stand.
         // Likewise an ally who has joined the delver's fight (`crate::folk_regard`).
