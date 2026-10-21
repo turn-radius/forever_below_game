@@ -73,6 +73,9 @@ const LINE_PX: f32 = 2.0;
 /// The widest the left leaf grows, in logical pixels: a pack and a belt pouch side by side at
 /// the shipped 72-pixel cells (8 + 4 cells and the gap between).
 const LEAF_MAX_PX: f32 = 900.0;
+/// The left page's width on every tab, so the header and tabs never move when switching. The
+/// interface scale grows it with the window.
+pub const LEAF_PX: f32 = 620.0;
 /// The same while bartering, wide enough for the trader's shelf beside a pack.
 const BARTER_LEAF_MAX_PX: f32 = 1000.0;
 /// Radius of a grid's rounded corners, in logical pixels (the plate's `.grid`).
@@ -475,6 +478,10 @@ pub struct InventoryScreen;
 /// The ledger page. Beyond it lies the level.
 #[derive(Component, Debug)]
 pub struct Ledger;
+
+/// The left page: header, tabs and the tab's body, one width on every tab.
+#[derive(Component, Debug)]
+pub struct LeafPage;
 
 /// The left column of grids under the header: it scrolls when it holds more than fits.
 #[derive(Component, Debug)]
@@ -909,7 +916,7 @@ pub(crate) fn build_screen(
                 ledger
                     // Wide enough for a pack and a belt pouch side by side, and for underfoot
                     // and a bag set down beside it.
-                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(if barter.active() { BARTER_LEAF_MAX_PX } else { LEAF_MAX_PX }), ..default() })
+                    .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(if barter.active() { BARTER_LEAF_MAX_PX } else { LEAF_MAX_PX }), width: if barter.active() { Val::Auto } else { px(LEAF_PX) }, flex_shrink: 0.0, ..default() }, LeafPage))
                     .with_children(|leaf| {
                         header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab != SheetTab::Inventory {
@@ -1888,6 +1895,19 @@ mod tests {
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.release(KeyCode::ShiftLeft);
         keys.clear();
+    }
+
+    #[test]
+    fn the_left_page_keeps_one_width_on_every_tab() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyI);
+        for tab in SheetTab::ALL {
+            *app.world_mut().resource_mut::<SheetTab>() = tab;
+            app.update();
+            let mut pages = app.world_mut().query_filtered::<&Node, With<LeafPage>>();
+            let node = pages.single(app.world()).unwrap();
+            assert_eq!(node.width, px(LEAF_PX), "{tab:?}");
+        }
     }
 
     #[test]

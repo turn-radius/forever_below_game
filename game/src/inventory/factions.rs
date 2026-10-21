@@ -109,7 +109,19 @@ fn preferences_line(world: &World, record: &WorldRecord, list: &[Preference]) ->
     if list.is_empty() {
         return "nothing known".to_string();
     }
-    list.iter().map(|&p| preference_word(world, record, p)).collect::<Vec<_>>().join(", ")
+    let unmet = list.iter().filter(|p| matches!(p, Preference::Faction(id) if !record.standings.has_met(*id))).count();
+    let mut words: Vec<String> = list.iter().filter(|p| !matches!(p, Preference::Faction(id) if !record.standings.has_met(*id))).map(|&p| preference_word(world, record, p)).collect();
+    if unmet > 0 {
+        words.push(unmet_phrase(unmet));
+    }
+    words.join(", ")
+}
+
+/// "a faction not yet met", "two factions not yet met", up to ten in words.
+pub fn unmet_phrase(n: usize) -> String {
+    const WORDS: [&str; 11] = ["no", "a", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+    let count = WORDS.get(n).map_or(n.to_string(), |w| w.to_string());
+    format!("{count} {} not yet met", if n == 1 { "faction" } else { "factions" })
 }
 
 /// The met factions of the world rolled from `run_seed`, in pool order.
@@ -317,6 +329,20 @@ mod tests {
         let record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
         let other = world.factions()[0].id;
         assert_eq!(preference_word(&world, &record, Preference::Faction(other)), "a faction not yet met");
+    }
+
+    #[test]
+    fn unmet_factions_fold_into_one_phrase_at_the_end() {
+        assert_eq!(unmet_phrase(1), "a faction not yet met");
+        assert_eq!(unmet_phrase(2), "two factions not yet met");
+        assert_eq!(unmet_phrase(3), "three factions not yet met");
+        assert_eq!(unmet_phrase(10), "ten factions not yet met");
+        assert_eq!(unmet_phrase(11), "11 factions not yet met");
+        let world = World::new(4);
+        let record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
+        let (a, b) = (world.factions()[0].id, world.factions()[1].id);
+        let line = preferences_line(&world, &record, &[Preference::Faction(a), Preference::Creature(fb_faction::CreatureKind::Rats), Preference::Faction(b)]);
+        assert_eq!(line, "rats, two factions not yet met");
     }
 
     #[test]
