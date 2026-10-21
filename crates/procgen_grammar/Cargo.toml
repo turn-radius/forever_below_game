@@ -1,0 +1,15 @@
+[package]
+name = "procgen_grammar"
+description = "Tracery-style grammar expansion from a seeded RNG, and the faction name grammar."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+procgen_rng = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
