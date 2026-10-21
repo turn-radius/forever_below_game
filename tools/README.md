@@ -92,6 +92,13 @@ The script prints each file's spectral centroid and share of energy above 2 kHz 
 
 In game, the delver's steps play at 0.35 of the effects volume (creatures at 0.7 of that), each with a random gain of ±15% and playback speed of ±6%. The same sample is never played twice in a row.
 
+**Pain grunts**: `tools/synth_grunt.py` synthesises the grunt the delver gives when a blow lands, the way a throat makes one: Rosenberg glottal pulses with a little jitter and shimmer, the pitch jumping at the blow and falling away, through three formant band-passes for a vowel, with breath noise forced out at the start. There are three everyday takes ("uh", a breathier "ah", and an "ugh" that closes and creaks) and a longer hard cry, each in a low voice (from about 125 Hz) and a high one (about 220 Hz, formants a sixth higher), normalised to -3 dBFS, the same on every run. The game picks the voice by the delver's sex and nudges the speed by folk (`game/src/combat/voice.rs`).
+
+```
+python3 tools/synth_grunt.py /tmp/grunt
+for f in /tmp/grunt/*.wav; do oggenc -q 6 -o game/assets/audio/$(basename $f .wav).ogg $f; done
+```
+
 **Breathing**: `tools/synth_breath.py` synthesises the delver's breath as three seamless loops, each a run of soft inhales and exhales: noise band-limited to about 300–1500 Hz (a high-pass at 300 Hz, a 4-pole low-pass and a gentle extra low-pass, so no hiss) under smooth raised-cosine envelopes, normalised to -16 dBFS, the same on every run. Steady is a slow, even breath every 4.2 s (12.6 s loop), harder is a deeper breath every 2.4 s (12.0 s) and ragged is fast and uneven with catches and a slight flutter (9.5 s). The strengths differ in pace and character, not brightness.
 
 ```

@@ -14,7 +14,7 @@ use armory::{
 use fb_level::{CELL, Cell, Character, DoorStyle, Finishes, Level, LevelStyle};
 use procgen_rng::Mulberry32;
 
-use super::{DOOR_HEIGHT, DOOR_WIDTH, FLOOR_RELIEF, INFILL_DEPTH, stone};
+use super::{DOOR_HEIGHT, FLOOR_RELIEF, INFILL_DEPTH, stone};
 
 /// How thick the ring of voussoirs is, measured radially.
 const RING: f32 = 3.0;
@@ -457,7 +457,7 @@ pub fn corridor_arch(soffit: f32, seed: u32, pointed: bool) -> Option<ItemMesh> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::level::geometry::{CEILING_RELIEF, WALL_RELIEF, stone};
+    use crate::level::geometry::{CEILING_RELIEF, DOOR_WIDTH, WALL_RELIEF, stone};
 
     const STYLES: [DoorStyle; 3] = [DoorStyle::RoundArch, DoorStyle::PointedArch, DoorStyle::RockCut];
 
