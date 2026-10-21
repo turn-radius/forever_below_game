@@ -15,6 +15,7 @@
 //!   away). The SRD's constrictor grapples with a separate Constrict attack and restrains its
 //!   target, whose speed becomes 0 (SRD 5.1 p. 370, "Constrict"; p. 358, "Grappled"); the
 //!   slowing, and breaking free by a blow, are our own placeholder.
+//! - Each blow also draws a grunt of pain from the delver ([`super::voice`]).
 //! - The hit points show as the life orb at the bottom left of the view ([`super::orbs`]).
 //! - At 0 they have a last gasp ([`Dying`], [`LAST_GASP`] seconds) to drink a healing draught,
 //!   while blood blooms in from the view's edge and blinks ([`super::blood`], [`gasp_blink`]);
@@ -51,6 +52,7 @@ pub struct VitalsPlugin;
 impl Plugin for VitalsPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<AttackOnDelver>()
+            .add_message::<super::voice::DelverHurt>()
             .add_message::<MissedDelver>()
             .add_message::<Struck>()
             .add_message::<Slain>()
@@ -300,6 +302,7 @@ fn take_bites(
     tuning: Option<Res<crate::tuning::Tuning>>,
     rules: Res<crate::rules::GameRules>,
     inventory: Option<Res<crate::inventory::Inventory>>,
+    mut hurt: MessageWriter<super::voice::DelverHurt>,
 ) {
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
@@ -342,6 +345,8 @@ fn take_bites(
                 commands.entity(player).insert(DelverEffects(effects));
             }
             pain.strike(flash_strength(damage as i32, health.max));
+            // The delver grunts under it ([`super::voice`]).
+            hurt.write(super::voice::DelverHurt { damage: damage as i32, max: health.max, down: health.is_down() });
             // One dull thud for each blow that lands.
             if let Some(sounds) = &sounds {
                 commands.spawn((Name::new("blow lands"), AudioPlayer::new(sounds.thud.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(AppState::Delving)));
@@ -1213,6 +1218,17 @@ mod tests {
         assert_eq!(flash_colour(&mut app).alpha, 0.0);
         let edge = edge_colour(&mut app);
         assert!(edge.alpha > 0.0 && edge.red < 0.5, "the dark edge stays: {edge:?}");
+    }
+
+    #[test]
+    fn a_blow_that_lands_tells_the_voice_how_hard_it_was() {
+        let (mut app, _, snake) = delve();
+        app.update();
+        bite(&mut app, snake, Species::Rat, 3);
+        let hurts: Vec<_> = app.world().resource::<Messages<super::super::voice::DelverHurt>>().iter_current_update_messages().copied().collect();
+        assert_eq!(hurts.len(), 1);
+        assert_eq!((hurts[0].max, hurts[0].down), (10, false));
+        assert!(hurts[0].damage > 0);
     }
 
     #[test]

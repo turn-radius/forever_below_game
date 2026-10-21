@@ -57,12 +57,13 @@ pub mod revival;
 pub mod shoot;
 pub mod swing;
 pub mod vitals;
+pub mod voice;
 
 pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin, shoot::ShootPlugin, guard::GuardPlugin, revival::RevivalPlugin, blood::BloodPlugin));
+        app.init_resource::<RunDice>().init_resource::<Tuning>().init_resource::<crate::rules::GameRules>().add_systems(Update, arm_creatures.in_set(crate::play::DelveSystems)).add_plugins((swing::SwingPlugin, feedback::FeedbackPlugin, vitals::VitalsPlugin, orbs::OrbPlugin, eye::EyePlugin, kick::KickPlugin, callouts::CalloutPlugin, shoot::ShootPlugin, guard::GuardPlugin, revival::RevivalPlugin, blood::BloodPlugin, voice::VoicePlugin));
     }
 }
 
