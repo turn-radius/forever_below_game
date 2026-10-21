@@ -27,6 +27,7 @@ use procgen_rng::Mulberry32;
 
 pub mod arch;
 pub mod cobble;
+pub mod door;
 pub mod occlusion;
 pub mod stone;
 
@@ -744,78 +745,6 @@ pub fn entrance_swing(progress: f32) -> f32 {
 /// How far the entrance door stands open, radians from shut (turned into the level).
 pub const ENTRANCE_OPEN_ANGLE: f32 = -fb_level::door::OPEN_DEGREES * std::f32::consts::PI / 180.0;
 
-/// A lever's plate is this wide, tall and deep, and sits at this height above the floor.
-pub const LEVER_HALF_WIDTH: f32 = 1.5;
-pub const LEVER_HALF_HEIGHT: f32 = 2.5;
-pub const LEVER_HEIGHT: f32 = 10.0;
-/// How far the handle's pivot stands out of the wall from the lever's origin.
-pub const LEVER_PIVOT: f32 = 0.7;
-/// The handle's length from the pivot to the tip of its knob.
-pub const LEVER_REACH: f32 = 3.6;
-/// How far the handle is thrown, radians, when pulled.
-pub const LEVER_THROW: f32 = 2.4;
-
-/// How far along the way through the doorway the lever stands from the door's plane.
-pub const LEVER_BESIDE: f32 = 5.5;
-
-/// Where a wall lever sits in a doorway's space: on the cell's side wall away from the hinge
-/// (so the swinging leaf, which never reaches past the opening's edge, is clear of it), beside
-/// the frame on the side `face` (+1 or -1 along the way through the doorway), at hand height. The
-/// lever's own space has +Z out of the wall, [`LEVER_TURN`] about Y from the doorway's.
-pub fn lever_mount(face: f32) -> V3 {
-    [CELL * 0.5 - 0.2, LEVER_HEIGHT, face.signum() * LEVER_BESIDE]
-}
-
-/// The turn about Y from the doorway's space to a lever's, so its +Z faces into the cell.
-pub const LEVER_TURN: f32 = -std::f32::consts::FRAC_PI_2;
-
-/// The wall plate of a lever: an iron plate let into the wall with rivets at its corners and a
-/// boss for the pivot, in the lever's space (origin on the wall face, +Z out of the wall).
-pub fn lever_plate(seed: u32) -> ItemMesh {
-    let mut rng = Mulberry32::new(seed ^ 0x1e7e_4b01);
-    let mut iron = MeshBuilder::new();
-    let mut plate = plank(LEVER_HALF_WIDTH * 2.0, LEVER_HALF_HEIGHT * 2.0, 0.8, 0.15);
-    plate.translate([0.0, 0.0, 0.1]);
-    iron.append(&plate);
-    for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-        let mut rivet = icosphere(0.22, 1);
-        rivet.scale([1.0, 1.0, 0.6]).translate([sx * (LEVER_HALF_WIDTH - 0.5), sy * (LEVER_HALF_HEIGHT - 0.5), 0.5 + rng.range_f32(0.0, 0.03)]);
-        iron.append(&rivet);
-    }
-    let mut boss = cylinder(0.6, 0.5, 12, Shading::BANDED);
-    boss.place_basis([0.0, 0.0, 0.5], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
-    iron.append(&boss);
-    let mut parts = Parts::new();
-    parts.add("ironwork", iron, MaterialKind::Iron);
-    parts.finish()
-}
-
-/// A lever's handle, in its pivot's space: an arm up the +Y axis ending in a knob. Turned about
-/// Z (the wall's normal) it is thrown down along the wall ([`lever_throw`]).
-pub fn lever_handle() -> ItemMesh {
-    let mut iron = MeshBuilder::new();
-    let arm_len = LEVER_REACH - 0.5;
-    let mut arm = cylinder(0.22, arm_len, 10, Shading::SMOOTH);
-    arm.translate([0.0, arm_len * 0.5, 0.0]);
-    iron.append(&arm);
-    let mut knob = icosphere(0.55, 2);
-    knob.translate([0.0, LEVER_REACH - 0.5, 0.0]);
-    iron.append(&knob);
-    let mut pin = cylinder(0.4, 0.5, 10, Shading::BANDED);
-    pin.place_basis([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
-    iron.append(&pin);
-    let mut parts = Parts::new();
-    parts.add("ironwork", iron, MaterialKind::Iron);
-    parts.finish()
-}
-
-/// The handle's turn about its pivot, radians, with the lever `pull` of the way thrown (0 up, 1
-/// thrown), eased as a stiff lever is.
-pub fn lever_throw(pull: f32) -> f32 {
-    let t = pull.clamp(0.0, 1.0);
-    LEVER_THROW * t * t * (3.0 - 2.0 * t)
-}
-
 /// An iron brazier standing on the floor at the origin: a bowl on three splayed legs braced
 /// by a ring, heaped with coals under a flame. Returns the mesh and the height of the
 /// flame's heart, where its light hangs.
@@ -1059,27 +988,6 @@ mod tests {
         // The leaf covers the opening from the hinge.
         let (lo, hi) = leaf.bounds().unwrap();
         assert!(lo[0] < 0.0 && hi[0] > DOOR_WIDTH && hi[1] > DOOR_HEIGHT);
-    }
-
-    #[test]
-    fn the_lever_stands_clear_of_the_leafs_swing() {
-        let hinge = entrance_hinge();
-        let width = DOOR_WIDTH + LEAF_LAP * 2.0;
-        for face in [-1.0f32, 1.0] {
-            let at = lever_mount(face);
-            // On the side wall, beside the frame and not in the opening.
-            assert!(at[2].abs() - LEVER_HALF_WIDTH > FRAME_DEPTH * 0.5 + 1.0, "beside the frame");
-            // The lever, its handle thrown along the wall, reaches out of the wall this far.
-            let nearest = at[0] - LEVER_PIVOT - 0.6;
-            for step in 0..=20 {
-                let angle = ENTRANCE_OPEN_ANGLE * step as f32 / 20.0;
-                for k in 0..=26 {
-                    let along = width * k as f32 / 26.0;
-                    let x = hinge[0] + along * angle.cos();
-                    assert!(x < nearest - 1.0, "leaf at {angle} reaches x {x}, the lever stands from {nearest}");
-                }
-            }
-        }
     }
 
     /// Whether the ray from `from` along `dir` crosses any triangle of `mesh`, by the

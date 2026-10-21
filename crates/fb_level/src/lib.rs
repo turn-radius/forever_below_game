@@ -291,6 +291,7 @@ impl Level {
 
 pub mod banners;
 pub mod claims;
+pub mod doorkind;
 pub mod creatures;
 pub mod door;
 pub mod finish;
@@ -315,6 +316,7 @@ pub use finish::{Character, DoorStyle, Finish, Finishes, FloorFinish, Quarter, W
 pub use generate::{generate, generate_for, generate_in, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;
+pub use doorkind::{DoorKind, STEEL_PICK_PENALTY, SwitchKind};
 pub use roles::{ClaimDoor, RoomRole};
 pub use rooms::RoomGraph;
 pub use wild::{WebKind, WebSpot};

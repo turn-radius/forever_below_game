@@ -403,6 +403,13 @@ type Fighters = (
 /// A living creature, not a folk.
 type Standing = (Without<Denizen>, Without<Corpse>);
 
+/// Seconds a fighter has lost the delver after a frame of `dt`: not at all while they are in
+/// sight with a way to them (straight, or along a path found), and counting while out of sight or
+/// seen only through a grate with no way round.
+pub fn unseen_after(unseen: f32, sees: bool, direct: bool, no_path: bool, dt: f32) -> f32 {
+    if sees && (direct || !no_path) { 0.0 } else { unseen + dt }
+}
+
 /// One frame of every hostile folk's fight: close on the delver round what is in the way, turn
 /// to them, and swing in reach, the blow landing as the arm comes down ([`LANDS`]).
 #[allow(clippy::too_many_arguments)]
@@ -438,12 +445,15 @@ pub fn fight(
         }
         let fight = &mut *fight;
         let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+        let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         let at = transform.translation.xz();
         let radius = denizen.radius;
         let reach = player_radius + combatant.weapon.reach;
-        let sees = line_of_sight(grid(at), grid(player), &blocked);
-        // Out of sight long enough, they give up and go home, friendly again.
-        fight.unseen = if sees { 0.0 } else { fight.unseen + dt };
+        let sees = line_of_sight(grid(at), grid(player), &see);
+        // Seen through a grate they cannot get past, and with no way round, counts as unseen too,
+        // so they give up as they do out of sight rather than stand at it for good.
+        let direct = sees && line_of_sight(grid(at), grid(player), &blocked);
+        fight.unseen = unseen_after(fight.unseen, sees, direct, fight.path.is_empty(), dt);
         // A faction that is Hostile to the delver does not calm down (`crate::folk_regard`).
         let hated = record.standings.band(denizen.person.faction.id) == fb_faction::Band::Hostile;
         if fight.unseen > tuning.folk.lose_interest_after && !hated {
@@ -485,7 +495,7 @@ pub fn fight(
             fight.landed = false;
         } else if !in_reach {
             // Closing in: straight in sight, else along the way round the rock.
-            let target = if sees {
+            let target = if direct {
                 fight.path.clear();
                 player
             } else {
@@ -525,6 +535,16 @@ pub fn fight(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_fighter_who_sees_the_delver_only_through_a_grate_loses_them_in_time() {
+        // In sight with a straight way, or a path found: not lost.
+        assert_eq!(unseen_after(2.0, true, true, true, 0.5), 0.0);
+        assert_eq!(unseen_after(2.0, true, false, false, 0.5), 0.0);
+        // Out of sight, or in sight only through a grate with no path: the timer runs.
+        assert_eq!(unseen_after(2.0, false, false, true, 0.5), 2.5);
+        assert_eq!(unseen_after(2.0, true, false, true, 0.5), 2.5);
+    }
     use crate::inventory::underfoot::apply_floor_changes;
     use crate::combat::{CombatPlugin, RunDice, Weapon, swing::Swing};
     use crate::inventory::Inventory;

@@ -129,6 +129,25 @@ pub struct Routine {
 }
 
 impl Routine {
+    /// Whether they are walking a way that goes through grid cell `cell`.
+    pub fn heads_through(&self, cell: (i32, i32)) -> bool {
+        matches!(self.phase, Phase::Walk { .. }) && self.path.contains(&cell)
+    }
+
+    /// A routine of someone placed at `home` facing `facing`, pausing `first` seconds before
+    /// their first walk, drawing from `rng`.
+    pub fn placed(home: Vec2, facing: Vec2, first: f32, rng: Mulberry32) -> Self {
+        Routine { phase: Phase::Pause { left: first }, home, facing, chosen: Vec::new(), walks: 0, searches: 0, resume: None, away: 0.0, holds: 0, path: Vec::new(), stuck: 0.0, speed: 0.0, rng }
+    }
+
+    /// Sets the way they are walking (for tests).
+    #[cfg(test)]
+    pub fn walking(mut self, goal: Vec2, path: Vec<(i32, i32)>) -> Self {
+        self.phase = Phase::Walk { goal };
+        self.path = path;
+        self
+    }
+
     /// Stops them where they are. Each hold wants its own [`Routine::release`].
     pub fn hold(&mut self) {
         self.holds += 1;
@@ -346,6 +365,7 @@ pub(crate) fn walk_routines(
 
     for (entity, denizen, mut routine, mut stride, mut transform, hostility, attending, assisting) in &mut folk {
         let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+        let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         // A hostile folk has left their routine to fight (`crate::folk_combat::fight`), though
         // the others still keep out of where they stand.
         // Likewise an ally who has joined the delver's fight (`crate::folk_regard`).
@@ -361,7 +381,7 @@ pub(crate) fn walk_routines(
 
         // Notice the player, and let go of them once they are well away.
         let near = player_at.map(|p| (p, p.distance(at)));
-        let sees = |p: Vec2| line_of_sight(grid(at), grid(p), &blocked);
+        let sees = |p: Vec2| line_of_sight(grid(at), grid(p), &see);
         match (routine.phase, near) {
             // Watching or greeting the delver (`crate::folk_regard`) keeps them held.
             (Phase::Held, Some(_)) if attending => routine.away = 0.0,

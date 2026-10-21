@@ -161,7 +161,7 @@ fn hostile_on_sight(
 ) {
     let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
     for (denizen, at, mut hostility) in &mut folk {
-        let blocked = crate::doors::solid_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+        let blocked = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         if hostility.is_hostile() || record.standings.band(denizen.person.faction.id) != Band::Hostile {
             continue;
         }
@@ -197,7 +197,7 @@ fn regard(
     let now = time.elapsed_secs();
     for (entity, denizen, at, hostility, mut routine, greeting, attending, assisting) in &mut folk {
         let faction = denizen.person.faction.id;
-        let blocked = crate::doors::solid_for(&level.0, &blocked_cells, doors.as_deref(), Some(faction));
+        let blocked = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), Some(faction));
         let band = record.standings.band(faction);
         let at = at.translation.xz();
         let distance = at.distance(player);
@@ -275,10 +275,11 @@ fn assist(
     let relief = crate::level::geometry::Relief::new(&level.0);
     for (entity, denizen, hostility, combatant, mut fight, mut stride, mut arm, mut transform, mut routine, assisting) in &mut folk {
         let blocked = crate::doors::solid_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+        let see = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         let at = transform.translation.xz();
         let ally = !hostility.is_hostile() && record.standings.band(denizen.person.faction.id) == Band::Allied;
         let engaged = target.filter(|&(_, _, goes, _)| {
-            ally && at.distance(goes) <= ALLY_RANGE && (assisting || (at.distance(player) <= SEE && line_of_sight(grid(at), grid(goes), &blocked) && line_of_sight(grid(at), grid(player), &blocked)))
+            ally && at.distance(goes) <= ALLY_RANGE && (assisting || (at.distance(player) <= SEE && line_of_sight(grid(at), grid(goes), &see) && line_of_sight(grid(at), grid(player), &see)))
         });
         let Some((creature, critter, goes, armour)) = engaged else {
             if assisting {
