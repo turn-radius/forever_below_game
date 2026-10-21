@@ -2045,8 +2045,12 @@ mod tests {
                         }
                     }
                     // Where it falls past the shoulders it lies on the cloak, not off it: round
-                    // the back it comes within 1.6 cm of it in every direction (1.2 before a cloak was drawn taut from the collar over the shoulder, which lifts its top a little off the curtain's edge), the edges of
-                    // the curtain too.
+                    // the back it comes within 1.6 cm of it in every direction, the edges of
+                    // the curtain too. (1.2 cm before a cloak was drawn taut from the collar over the
+                    // shoulder: the rest grid holds a roof sloping about 1 in 3 up as a shelf, so one
+                    // strand at the front of a human's shoulder stands 1.5 cm off it, against 0.9 cm
+                    // at most before, and every other strand and folk stays within 1.1 cm. Raising the
+                    // grid's `DILATE_SLOPE` to 2 cleared that strand but broke a beard on mail.)
                     let cloak = &fit.layer(Slot::Cloak).unwrap().mesh.parts;
                     let (a, b) = (body.shoulder_y - 0.25 * body.trunk_length, body.shoulder_y + 0.05 * body.trunk_length);
                     let mut nearest = [f32::MAX; 24];

@@ -303,7 +303,12 @@ impl DrapedSurface {
             for j in 0..HULL_COLUMNS {
                 let a = angle(j);
                 let i0 = (((y_max - drape.top_at(a)) / HULL_STEP).floor().max(0.0) as usize).min(rows - 1);
-                let i1 = (i0 + (SHOULDER_DEPTH / HULL_STEP) as usize).min(rows - 1);
+                // No further than the hem (a short cloak's rows below it are not its own). The
+                // depth is not scaled by the wearer: scaled by the trunk's length, a goblin's or
+                // gnome's cloak (arms thick against a small trunk) was still left sagging by over
+                // half its scale between the collar and the arm, where 1.2 reaches the arm.
+                let hem_row = (((y_max - drape.hem) / HULL_STEP).floor().max(0.0) as usize).min(rows - 1);
+                let i1 = (i0 + (SHOULDER_DEPTH / HULL_STEP) as usize).min(hem_row).max(i0);
                 let y = |i: usize| y_max - i as f32 * HULL_STEP;
                 let reach: Vec<f32> = (i0..=i1).map(|i| radial(a, y(i)) + hull[i][j]).collect();
                 // Upper hull of (height, reach), by rising height (the rows run downward).

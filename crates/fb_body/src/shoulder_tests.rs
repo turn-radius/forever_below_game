@@ -55,7 +55,7 @@ fn height_over(parts: &[&Part], x: f32, z: f32) -> Option<f32> {
 }
 
 /// The angle in degrees between the two triangles at each edge of `part`, and the edge's middle.
-/// Folded seams (the sheet doubling back on itself) are left out.
+/// A fold (the sheet doubling back on itself) reads as the sharpest crease there is.
 fn creases(part: &Part) -> Vec<(f32, V3)> {
     let mut edges: HashMap<(u32, u32), Vec<V3>> = HashMap::new();
     for t in part.indices.chunks(3) {
@@ -70,7 +70,6 @@ fn creases(part: &Part) -> Vec<(f32, V3)> {
         .into_iter()
         .filter(|(_, n)| n.len() == 2)
         .map(|((a, b), n)| (vec3::dot(n[0], n[1]).clamp(-1.0, 1.0).acos().to_degrees(), vec3::lerp(part.positions[a as usize], part.positions[b as usize], 0.5)))
-        .filter(|(angle, _)| *angle < 150.0)
         .collect()
 }
 
@@ -92,6 +91,7 @@ fn measure(body: &Body, worn: &[(Slot, Item)]) -> Shoulder {
     let fit = fit_worn(body, worn);
     let hood = fit.layer(Slot::Head).expect("a hood");
     let cloth: Vec<&Part> = hood.mesh.parts.iter().filter(|p| p.name == "hood").collect();
+    assert!(!cloth.is_empty(), "the hood has no \"hood\" part");
     let s = body.scale;
     // The crest: the highest the cloth gets at each distance out from the neck, on the
     // right-hand shoulder, from the head's edge out to where the cape ends.
@@ -115,6 +115,7 @@ fn measure(body: &Body, worn: &[(Slot, Item)]) -> Shoulder {
         .max_by(|a, b| a.0.total_cmp(&b.0))
         .unwrap_or((0.0, [0.0; 3]));
     let crease = worst.0;
+    assert!(crest.len() >= 3, "the crest has only {} samples", crest.len());
     // After the crest's highest point it only falls.
     let top = crest.iter().enumerate().max_by(|a, b| a.1[1].total_cmp(&b.1[1])).map_or(0, |(i, _)| i);
     let ridge = crest[top..].windows(2).map(|w| w[1][1] - w[0][1]).fold(0.0f32, f32::max);
@@ -132,13 +133,21 @@ fn measure(body: &Body, worn: &[(Slot, Item)]) -> Shoulder {
     // lies (its front is open on a cowl); every few points of it, to keep the check quick.
     let on_shoulder = |p: &&V3| p[0] > head && p[0] < reach - step && p[1] > body.shoulder_y - 0.6 * s && p[1] < body.shoulder_y + 0.11 * body.trunk_length && p[2].abs() < 0.6 * body.shoulder_half_width.min(2.0);
     let points: Vec<&V3> = under.iter().flat_map(|p| p.positions.iter()).filter(on_shoulder).collect();
+    let (mut tested, mut missed) = (0, 0);
     for p in points.iter().step_by((points.len() / 250).max(1)) {
-        if let Some(h) = height_over(&cloth, p[0], p[2]) {
-            if p[1] - h > poke {
-                (poke, at) = (p[1] - h, **p);
+        match height_over(&cloth, p[0], p[2]) {
+            Some(h) => {
+                tested += 1;
+                if p[1] - h > poke {
+                    (poke, at) = (p[1] - h, **p);
+                }
             }
+            None => missed += 1,
         }
     }
+    // The check must see the cloth: most of the shoulder's points have it over them (a
+    // cowl's open front is the rest).
+    assert!(tested >= 20 && tested >= 2 * missed, "only {tested} of {} points of the shoulder lie under the cloth", tested + missed);
     Shoulder { poke, crease, ridge, at }
 }
 
@@ -147,6 +156,7 @@ const CASES: [(HoodStyle, bool); 3] = [(HoodStyle::Cowl, false), (HoodStyle::Cow
 
 fn cloth_fits_round_the_shoulders_check(folks: &[Folk], seeds: &[u32], kits: &[u32]) {
     let mut failures = vec![];
+    let (mut measured, mut unmeasured) = (0, 0);
     for &folk in folks {
         for &seed in seeds {
             let body = Body::new(&BodySpec::roll(folk, seed));
@@ -178,7 +188,11 @@ fn cloth_fits_round_the_shoulders_check(folks: &[Folk], seeds: &[u32], kits: &[u
                     ("mage kit".to_string(), mage.roll(kit, folk.key()).worn.into_iter().map(|(slot, i)| (slot, i.shape)).collect()),
                 ];
                 for (name, worn) in kits.iter().filter(|(_, worn)| worn.iter().any(|(slot, _)| *slot == Slot::Cloak)) {
-                    let (turn, sag) = cloak_outline(&body, worn);
+                    let Some((turn, sag)) = cloak_outline(&body, worn) else {
+                        unmeasured += 1;
+                        continue;
+                    };
+                    measured += 1;
                     let case = format!("{folk:?} {seed} kit {kit} {name}");
                     // The outline from the collar over the shoulder is taut and round: it
                     // does not dip between the collar and the shoulder (a flat shelf with a
@@ -191,10 +205,18 @@ fn cloth_fits_round_the_shoulders_check(folks: &[Folk], seeds: &[u32], kits: &[u
                         failures.push(format!("{case}: the outline turns {turn:.0} degrees at the shoulder"));
                     }
                 }
+                // A cloak cut as short as it goes keeps its hem close to what is under it: within
+                // half the wearer's scale (it stood 0.2 to 0.35 out with the shoulders drawn taut).
+                let (hem, beneath) = hem_reach(&body, kit);
+                if hem > beneath + 0.5 * body.scale {
+                    failures.push(format!("{folk:?} {seed} kit {kit}: a short cloak's hem flares {:.2} out from what is under it", hem - beneath));
+                }
             }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // The cloak outlines are really measured: at most a quarter have no roof to judge.
+    assert!(measured > 0 && 3 * unmeasured <= measured, "{measured} cloak outlines measured, {unmeasured} with no roof");
 }
 
 #[test]
@@ -205,9 +227,9 @@ fn cloth_fits_round_the_shoulders() {
 
 #[test]
 fn cloth_fits_round_the_shoulders_smoke() {
-    // A gnome and a goblin whose cloak sagged by half their scale between collar and shoulder, and a dwarf whose pauldrons stood above a cowl.
-
-    cloth_fits_round_the_shoulders_check(&[Folk::Dwarf, Folk::Gnome, Folk::Goblin], &[37], &[7]);
+    // A goblin whose cloak sagged by two thirds of its scale between collar and shoulder, and a
+    // pigfolk whose pauldrons stood 0.8 above a cowl; the sweep has the rest (about 7 s here).
+    cloth_fits_round_the_shoulders_check(&[Folk::Goblin, Folk::Pigfolk], &[37], &[7]);
 }
 
 
@@ -235,10 +257,11 @@ fn cloaked(style: GarmentStyle, pauldrons: bool, seed: u32) -> Vec<(Slot, Item)>
 /// stretches of it (a flat top running out from the neck to a square corner turns by a great
 /// deal at the corner), and the deepest the outline sags below the straight line between two
 /// of its points (a dip between the collar and the shoulder, with the shoulder a peak).
-fn cloak_outline(body: &Body, worn: &[(Slot, Item)]) -> (f32, f32) {
+fn cloak_outline(body: &Body, worn: &[(Slot, Item)]) -> Option<(f32, f32)> {
     let fit = fit_worn(body, worn);
     let cloak = fit.layer(Slot::Cloak).expect("a cloak");
     let cloth: Vec<&Part> = cloak.mesh.parts.iter().filter(|p| p.name == "body").collect();
+    assert!(!cloth.is_empty(), "the cloak has no \"body\" part");
     let s = body.scale;
     let step = 0.5 * s;
     let top = |x: f32| cloth.iter().flat_map(|p| p.positions.iter()).filter(|p| (p[0].abs() - x).abs() < 0.5 * step).map(|p| p[1]).fold(f32::MIN, f32::max);
@@ -250,6 +273,11 @@ fn cloak_outline(body: &Body, worn: &[(Slot, Item)]) -> (f32, f32) {
     let start = samples.iter().position(|c| high - c.1 > 0.02 * s).unwrap_or(0).saturating_sub(1);
     let end = samples[start..].iter().position(|c| c.1 < body.shoulder_y - 0.1 * s).unwrap_or(samples.len() - start);
     let outline: Vec<(f32, f32)> = samples[start..start + end].to_vec();
+    // A gnome's or goblin's cowl collar can stand as wide as its shoulders, with no roof between
+    // it and the arm to measure: that is no answer, and the check counts how often it happens.
+    if outline.len() < 3 {
+        return None;
+    }
     let heading = |a: (f32, f32), b: (f32, f32)| (b.1 - a.1).atan2(b.0 - a.0).to_degrees();
     let turn = outline.windows(3).map(|w| (heading(w[1], w[2]) - heading(w[0], w[1])).abs()).fold(0.0f32, f32::max);
     // The sag below the chords: the outline against its least concave majorant.
@@ -272,6 +300,30 @@ fn cloak_outline(body: &Body, worn: &[(Slot, Item)]) -> (f32, f32) {
     if sag > 0.12 * s {
         eprintln!("OUTLINE {:?}", outline.iter().map(|c| (format!("{:.2}", c.0), format!("{:.2}", c.1 - body.shoulder_y))).collect::<Vec<_>>());
     }
-    (turn, sag)
+    Some((turn, sag))
 }
 
+
+/// A cloak cut as short as it goes, over a robe with long sleeves (and not over the legs): its
+/// hem as far out from the axis as the cloak reaches, and as far out as whatever is under it
+/// (the skin and the robe) reaches there. A hull that ran past the cloak's own rows left the
+/// hem flaring out from the arms.
+fn hem_reach(body: &Body, seed: u32) -> (f32, f32) {
+    let mut worn = cloaked(GarmentStyle::Cloak, false, seed);
+    for (slot, item) in worn.iter_mut() {
+        if let (Slot::Cloak, Item::Garment(g)) = (&*slot, item) {
+            g.cut.length = 0.0;
+        }
+    }
+    let fit = fit_worn(body, &worn);
+    let cloak = &fit.layer(Slot::Cloak).expect("a cloak").mesh.parts.iter().find(|p| p.name == "body").expect("a body part").positions;
+    let low = cloak.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+    let band = 0.15 * body.scale;
+    let radial = |p: &V3| p[0].hypot(p[2]);
+    let hem = cloak.iter().filter(|p| p[1] < low + band).map(radial).fold(0.0f32, f32::max);
+    let skin = body.skin_mesh();
+    let mut under: Vec<&Part> = skin.parts.iter().collect();
+    under.extend(fit.layer(Slot::Shirt).expect("a robe").mesh.parts.iter());
+    let beneath = under.iter().flat_map(|p| p.positions.iter()).filter(|p| p[1] > low - band && p[1] < low + 3.0 * band).map(radial).fold(0.0f32, f32::max);
+    (hem, beneath)
+}

@@ -59,6 +59,9 @@ pub struct HoodSurface {
 
 /// Polar angle (from the crown) where a hood leaves the head for the neck.
 const POLAR_LOW: f32 = 0.74 * PI;
+/// The highest a hood may leave the head for a high cape: a little under the equator, so the
+/// slit's smoothstep from the equator to the join never has equal edges.
+const HOOD_FLOOR: f32 = 0.55 * PI;
 /// Half the width of the slit left down the front of the neck.
 const SLIT: f32 = 0.02;
 /// Polar angle of the crown's point, toward the back of the head.
@@ -119,8 +122,8 @@ impl HoodSurface {
             let az = TAU * i as f32 / 48.0;
             self.head_point(az, polar, 0.0)[1] >= self.cape_top_at(az) + margin
         });
-        let steps = ((POLAR_LOW - 0.5 * PI) / (0.01 * PI)).round() as usize;
-        (0..=steps).map(|i| POLAR_LOW - 0.01 * PI * i as f32).find(|&polar| clear(polar)).unwrap_or(0.5 * PI)
+        let steps = ((POLAR_LOW - HOOD_FLOOR) / (0.01 * PI)).round() as usize;
+        (0..=steps).map(|i| POLAR_LOW - 0.01 * PI * i as f32).find(|&polar| clear(polar)).unwrap_or(HOOD_FLOOR)
     }
 
     /// Half the angle of the face opening at polar angle `polar` (rows on the head).
@@ -434,6 +437,26 @@ mod tests {
         // And where the usual rim is high enough nothing moves.
         let s = HoodSurface::new(&HeadForm::mannequin(1.0), &TorsoForm::MANNEQUIN, &Hood::default(), 3);
         assert_eq!(s.polar_low, POLAR_LOW);
+    }
+
+    #[test]
+    fn a_tiny_head_under_very_high_shoulders_still_builds_a_clean_sheet() {
+        // Past anywhere the head can clear them the hood leaves at its floor, short of the
+        // equator, and the sheet has no NaN where the slit's smoothstep would have had equal edges.
+        let head = HeadForm::mannequin(0.4);
+        let mut torso = TorsoForm::MANNEQUIN;
+        torso.shoulder_top.y += 3.0;
+        torso.neck.y += 3.0;
+        for style in [HoodStyle::Hood, HoodStyle::Cowl] {
+            let s = HoodSurface::new(&head, &torso, &Hood { style, ..Hood::default() }, 3);
+            assert_eq!(s.polar_low, HOOD_FLOOR, "{style:?}");
+            for r in 0..=20 {
+                for c in 0..=20 {
+                    let p = s.point(c as f32 / 20.0, r as f32 / 20.0, 0.0);
+                    assert!(p.iter().all(|v| v.is_finite()), "{style:?} at {c},{r}: {p:?}");
+                }
+            }
+        }
     }
 
     #[test]
