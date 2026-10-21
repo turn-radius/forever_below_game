@@ -169,7 +169,7 @@ fn make_marker(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 /// Builds the screen when the map opens, centred on the delver, and takes it down when it
 /// closes.
 #[allow(clippy::too_many_arguments)]
-fn build_screen(
+pub(super) fn build_screen(
     mut commands: Commands,
     open: Res<ScreenOpen>,
     screens: Query<Entity, With<MapScreen>>,
@@ -210,12 +210,16 @@ fn build_screen(
             GlobalZIndex(10),
         ))
         .with_children(|root| {
-            root.spawn((PlanNode, ImageNode::new(plan.image.clone()), Node { position_type: PositionType::Absolute, ..default() })).with_child((
-                Marker,
-                ImageNode::new(marker.0.clone()),
-                Node { position_type: PositionType::Absolute, width: px(MARKER_PX), height: px(MARKER_PX), ..default() },
-                UiTransform::IDENTITY,
-            ));
+            root.spawn((PlanNode, ImageNode::new(plan.image.clone()), Node { position_type: PositionType::Absolute, ..default() })).with_children(|plan| {
+                // The faction marks come first, so the delver's marker draws over them.
+                plan.spawn((Name::new("Crests"), super::crests::CrestLayer::default(), Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }));
+                plan.spawn((
+                    Marker,
+                    ImageNode::new(marker.0.clone()),
+                    Node { position_type: PositionType::Absolute, width: px(MARKER_PX), height: px(MARKER_PX), ..default() },
+                    UiTransform::IDENTITY,
+                ));
+            });
             root.spawn((
                 Text::new(level.map_or("Map".to_string(), |l| format!("Map \u{b7} Depth {}", l.0.depth))),
                 UiFonts::style(&fonts.display, 30.0, crate::ui::INK),
@@ -271,7 +275,7 @@ fn zoom_and_pan(
 }
 
 /// The map screen's size in its own logical pixels.
-fn screen_size(node: &ComputedNode) -> Vec2 {
+pub(super) fn screen_size(node: &ComputedNode) -> Vec2 {
     node.size * node.inverse_scale_factor
 }
 
