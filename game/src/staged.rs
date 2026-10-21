@@ -63,9 +63,11 @@ impl Staging {
     }
 }
 
-/// What `prop` holds when its loot rolls against `odds`: nothing for scenery.
+/// What `prop` holds when its loot rolls against `odds`: nothing for scenery or a stall set out
+/// empty ([`fb_level::NO_LOOT`]).
 fn contents_of(prop: Prop, odds: Odds) -> Vec<Item> {
     match prop {
+        Prop::Container { loot, .. } if loot == fb_level::NO_LOOT => Vec::new(),
         Prop::Container { style, loot, .. } => fb_items::roll_contents(style, loot, odds),
         Prop::Scenery { .. } => Vec::new(),
     }

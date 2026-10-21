@@ -1,7 +1,8 @@
 //! Choosing finishes must not move anything else: a hash of every level for seeds 1..50 at
 //! depths 1..4, taken before finishes existed, and taken again when creatures were kept out of
 //! the rooms folk hold and centipedes moved to the second level (#448), and again when factions
-//! came from the world seed (#536), and again when folk moved into faction claims (#541).
+//! came from the world seed (#536), and again when folk moved into faction claims (#541), and again
+//! when claimed rooms took roles (#546): halls and hearths are lit and furnished, and folk stand by role.
 //!
 //! Floats are rounded to three decimals before hashing. Each platform's libm rounds `sin`,
 //! `atan2` and the like its own way, so the last bits differ between macOS and the Linux CI
@@ -86,11 +87,13 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 17596904236505462266, "snapshot taken before finishes");
+    assert_eq!(all_levels_hash(), 3269022384240624266, "snapshot taken before finishes");
 }
 
 /// A hash of every level's layout, items and lights, which come before the folk in the level's
-/// streams. Factions from the world seed (#536) moved the folk only; the props, stairs, webs and
+/// streams. Since #546 the lights include a brazier added to each claimed hall and hearth that had
+/// none, so the lights, and with them this hash, changed on purpose; walls, rooms and items did not
+/// move. Before that, factions from the world seed (#536) moved the folk only; the props, stairs, webs and
 /// creatures read where folk stand (to keep clear of them and out of their rooms), so those moved
 /// with them and are held by [`levels_match_those_before_finishes`] instead. It names fields, so
 /// it reads levels from before `factions` existed too.
@@ -113,5 +116,5 @@ fn all_levels_before_folk_hash() -> u64 {
 
 #[test]
 fn layout_items_and_lights_match_those_before_factions() {
-    assert_eq!(all_levels_before_folk_hash(), 834952517506886917, "snapshot of everything before the folk");
+    assert_eq!(all_levels_before_folk_hash(), 5426846019979321743, "snapshot of everything before the folk");
 }

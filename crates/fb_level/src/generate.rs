@@ -17,6 +17,7 @@ use crate::creatures::{CREATURE_SALT, place_creatures};
 use crate::claims::{CLAIM_SALT, grow_claims};
 use crate::folk::{FOLK_SALT, place_folk};
 use crate::props::{PROP_SALT, place_props};
+use crate::roles::{ROLE_SALT, assign_roles, light_roles};
 use crate::stairs::{STAIR_SALT, place_stairs};
 use crate::{Cell, Entrance, Facing, ItemSpot, Level, LevelParams, LevelStyle, LightKind, LightSpot, Room};
 
@@ -173,6 +174,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         folk: Vec::new(),
         factions: Vec::new(),
         claims: Vec::new(),
+        roles: Vec::new(),
         props: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
@@ -199,6 +201,8 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
     // A faction that found no ground is not on the level.
     let held: Vec<_> = level.claims.iter().map(|c| c.faction).collect();
     level.factions.retain(|s| held.contains(&s.id));
+    level.roles = assign_roles(&level);
+    light_roles(&mut level, &mut Mulberry32::new(layout_seed ^ ROLE_SALT));
     level.folk = place_folk(&level, &strengths, &mut Mulberry32::new(layout_seed ^ FOLK_SALT));
     Some((level, layout_seed))
 }
@@ -1092,7 +1096,9 @@ mod tests {
     fn levels_have_braziers_glowcaps_and_dark_rooms() {
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
-            let lit: HashSet<usize> = level.lights.iter().filter_map(|l| level.room_at(l.x as i32, l.y as i32)).collect();
+            // The level's own furnishing leaves most rooms dark; the halls and hearths of claims
+            // are lit on top of it (#546), so count the rooms no one holds.
+            let lit: HashSet<usize> = level.lights.iter().filter_map(|l| level.room_at(l.x as i32, l.y as i32)).filter(|&r| !level.is_claimed(r)).collect();
             assert!(level.lights.iter().any(|l| l.kind == LightKind::Glowcaps), "seed {seed}: no glowcaps");
             assert!(lit.len() * 2 <= level.rooms.len() + 1, "seed {seed}: {} of {} rooms lit", lit.len(), level.rooms.len());
         }
@@ -1124,16 +1130,17 @@ mod tests {
         // (`Family::Writing`), which moves the weighted pick of every floor item, and again when
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
-        // shuffle that sets the groups), and again when folk moved into their factions' claims (#541).
+        // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546).
         let before = [
-            (0u32, 0x9df7e2f0fadd256du64),
-            (1, 0x803719a0b837c4d0),
-            (2, 0x641f2f5c5fee8b29),
-            (7, 0x809bcf89952da82f),
-            (64, 0x8090455ae5d7f9fc),
-            (1207, 0x1bd582756296e1ea),
-            (4242, 0xd6ee95147fc96e24),
-            (u32::MAX, 0xb41fe82cdd9e03e3),
+            (0u32, 0xcaf61ae9773d06ddu64),
+            (1, 0xb19699d2ec10787),
+            (2, 0x18d03c490c69e838),
+            (7, 0x1553762d9725647f),
+            (64, 0xdea6ef740733b76d),
+            (1207, 0xf4548d2a21c00aee),
+            (4242, 0xb2b35bddabf38cb),
+            (u32::MAX, 0x4bc6561f3687a9fe),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

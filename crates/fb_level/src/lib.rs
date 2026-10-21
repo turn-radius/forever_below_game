@@ -154,6 +154,9 @@ pub struct Level {
     /// The ground each of those factions holds, as rooms ([`claims`]). A room in no claim is
     /// wild.
     pub claims: Vec<Claim>,
+    /// What each room of [`Level::rooms`] is for, indexed by room: empty for a wild room
+    /// ([`roles`]).
+    pub roles: Vec<Vec<RoomRole>>,
     /// Containers and scenery standing along the walls ([`props`]).
     pub props: Vec<PropSpot>,
     /// Rats and snakes ([`creatures`]).
@@ -284,6 +287,7 @@ pub mod params;
 pub mod sight;
 pub mod path;
 pub mod props;
+pub mod roles;
 pub mod rooms;
 pub mod stairs;
 pub mod webs;
@@ -291,10 +295,11 @@ pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use claims::{Claim, settle_claims};
 pub use folk::{Faction, FactionSpec, FolkSpot};
-pub use props::{CONTAINER_SCALE, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
+pub use props::{CONTAINER_SCALE, NO_LOOT, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use finish::{Character, DoorStyle, Finish, Finishes, FloorFinish, Quarter, WallFinish, finishes};
 pub use generate::{generate, generate_for, generate_in, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;
+pub use roles::RoomRole;
 pub use rooms::RoomGraph;
 pub use wild::{WebKind, WebSpot};

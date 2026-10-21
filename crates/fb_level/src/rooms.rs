@@ -163,6 +163,7 @@ mod tests {
             folk: vec![],
             factions: vec![],
             claims: vec![],
+            roles: vec![],
             props: vec![],
             creatures: vec![],
             stairs: vec![],
