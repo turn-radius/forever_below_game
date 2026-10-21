@@ -16,7 +16,8 @@
 //!   target, whose speed becomes 0 (SRD 5.1 p. 370, "Constrict"; p. 358, "Grappled"); the
 //!   slowing, and breaking free by a blow, are our own placeholder.
 //! - The hit points show as the life orb at the bottom left of the view ([`super::orbs`]).
-//! - At 0 they have a last gasp ([`Dying`], [`LAST_GASP`] seconds) to drink a healing draught;
+//! - At 0 they have a last gasp ([`Dying`], [`LAST_GASP`] seconds) to drink a healing draught,
+//!   while the view's edge widens and blinks bright red ([`gasp_blink`]);
 //!   healed above 0 they stand on. Otherwise the run ends ([`Fallen`]): the delver stops, can no
 //!   longer swing, shoot or guard, the view fades to near black with "You
 //!   fall in the abyss", and after [`FALL_TIME`] seconds the game goes back to the title, where
@@ -70,8 +71,13 @@ pub const FLASH_CAP: f32 = 0.6;
 /// How long "You fall in the abyss" shows before the title, seconds. Our own.
 pub const FALL_TIME: f32 = 3.5;
 /// How long a delver at 0 hit points has to drink a healing draught before they fall, seconds.
-/// Our own, to give the player room to react.
-pub const LAST_GASP: f32 = 0.5;
+/// Our own, long enough to reach a quickslot or the inventory once the edge starts blinking.
+pub const LAST_GASP: f32 = 3.0;
+/// How often the view's edge blinks red through the last gasp, a second. Our own, kept under the
+/// three flashes a second that WCAG 2.3.1 allows.
+pub const GASP_BLINKS: f32 = 2.0;
+/// How wide the edge is while it blinks through the last gasp, against 28 px otherwise. Our own.
+const GASP_EDGE: f32 = 56.0;
 /// How fast a held delver moves, as a share of their pace. Our own placeholder.
 pub const HELD_PACE: f32 = 0.25;
 
@@ -81,6 +87,9 @@ pub const HURT_BADLY: f32 = 0.25;
 pub const VIGNETTE_PULSE: f32 = 3.0;
 /// The darkened edge's colour: a dark red. Our own.
 const VIGNETTE_COLOUR: Color = Color::srgb(0.32, 0.02, 0.03);
+/// The edge's blood red through the last gasp, deeper than the interface's salmon [`BAD`] so it
+/// reads as danger against torchlit rock. Our own.
+const GASP_COLOUR: Color = Color::srgb(0.86, 0.06, 0.05);
 
 /// How strong the dark red edge is, 0 to 1, for `hp` of `max` hit points `seconds` into the
 /// delve: nothing at a quarter of `max` or more, and below that stronger the nearer 0, with a
@@ -93,6 +102,12 @@ pub fn vignette_strength(hp: i32, max: i32, seconds: f32) -> f32 {
     let base = 0.35 + 0.65 * (1.0 - share / HURT_BADLY);
     let pulse = 0.85 + 0.15 * (std::f32::consts::TAU * seconds / VIGNETTE_PULSE).sin();
     base * pulse
+}
+
+/// How strong the red edge blinks `into` seconds into the last gasp, 0.3 to 1: at full as it
+/// starts, [`GASP_BLINKS`] times a second. Our own.
+pub fn gasp_blink(into: f32) -> f32 {
+    0.3 + 0.7 * (0.5 + 0.5 * (std::f32::consts::TAU * GASP_BLINKS * into.max(0.0)).cos())
 }
 
 /// How opaque the red flash over the view starts, 0 to 1, for a blow of `damage` against `max`
@@ -526,12 +541,14 @@ fn spawn_vitals(mut commands: Commands, new: Query<Entity, Added<ViewModelCamera
     }
 }
 
-/// Fades the red flash over the view, and draws the dark edge while badly hurt.
+/// Fades the red flash over the view, draws the dark edge while badly hurt, and blinks the edge
+/// bright red through the last gasp ([`gasp_blink`]).
 fn show_vitals(
     time: Res<Time>,
     mut pain: ResMut<Pain>,
+    dying: Option<Res<Dying>>,
     players: Query<&Health, With<Player>>,
-    mut edges: Query<&mut BorderColor, With<PainEdge>>,
+    mut edges: Query<(&mut BorderColor, &mut Node), With<PainEdge>>,
     mut flashes: Query<&mut BackgroundColor, With<PainFlash>>,
 ) {
     pain.left = (pain.left - time.delta_secs()).max(0.0);
@@ -539,10 +556,22 @@ fn show_vitals(
     for mut colour in &mut flashes {
         colour.set_if_neq(BackgroundColor(BAD.with_alpha(flash)));
     }
+    // Through the last gasp the edge widens and blinks bright red: drink now.
+    if let Some(dying) = dying {
+        let blink = gasp_blink(LAST_GASP - dying.0);
+        for (mut edge, mut node) in &mut edges {
+            edge.set_if_neq(BorderColor::all(GASP_COLOUR.with_alpha(blink)));
+            node.border = UiRect::all(px(GASP_EDGE));
+        }
+        return;
+    }
     let Some(health) = players.iter().next() else { return };
     let dark = 0.7 * vignette_strength(health.hp, health.max, time.elapsed_secs());
-    for mut edge in &mut edges {
+    for (mut edge, mut node) in &mut edges {
         edge.set_if_neq(BorderColor::all(VIGNETTE_COLOUR.with_alpha(dark)));
+        if node.border != UiRect::all(px(28)) {
+            node.border = UiRect::all(px(28));
+        }
     }
 }
 
@@ -814,7 +843,7 @@ mod tests {
     }
 
     #[test]
-    fn the_last_gasp_lasts_half_a_second() {
+    fn the_last_gasp_lasts_three_seconds() {
         let (mut app, _, snake) = delve();
         app.update();
         bite(&mut app, snake, Species::Rat, 25);
@@ -1183,6 +1212,38 @@ mod tests {
         assert_eq!(flash_colour(&mut app).alpha, 0.0);
         let edge = edge_colour(&mut app);
         assert!(edge.alpha > 0.0 && edge.red < 0.5, "the dark edge stays: {edge:?}");
+    }
+
+    #[test]
+    fn the_gasp_blinks_twice_a_second_from_full() {
+        assert_eq!(gasp_blink(0.0), 1.0);
+        assert!((gasp_blink(0.25) - 0.3).abs() < 1e-5, "dim half a blink in");
+        assert!((gasp_blink(0.5) - 1.0).abs() < 1e-5, "full again a blink later");
+        assert!(GASP_BLINKS < 3.0, "under three flashes a second");
+    }
+
+    #[test]
+    fn through_the_last_gasp_the_edge_blinks_bright_red_and_then_settles() {
+        let (mut app, player, snake) = delve_with_hud();
+        bite(&mut app, snake, Species::Rat, 25);
+        app.update();
+        assert!(app.world().get_resource::<Dying>().is_some());
+        let mut seen = vec![];
+        for _ in 0..30 {
+            app.update();
+            seen.push(edge_colour(&mut app));
+        }
+        assert!(seen.iter().all(|c| c.red > 0.8), "bright red, not the dark edge");
+        let (low, high) = seen.iter().fold((1.0f32, 0.0f32), |(l, h), c| (l.min(c.alpha), h.max(c.alpha)));
+        assert!(high > 0.9 && low < 0.4, "it blinks: {low} to {high}");
+        let mut node = app.world_mut().query_filtered::<&Node, With<PainEdge>>();
+        assert_eq!(node.single(app.world()).unwrap().border, UiRect::all(px(GASP_EDGE)));
+        // A draught in time: the gasp ends and the edge goes back to the slow dark one.
+        app.world_mut().get_mut::<Health>(player).unwrap().hp = 10;
+        app.update();
+        app.update();
+        assert!(edge_colour(&mut app).red < 0.5);
+        assert_eq!(node.single(app.world()).unwrap().border, UiRect::all(px(28)));
     }
 
     #[test]
