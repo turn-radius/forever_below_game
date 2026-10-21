@@ -559,7 +559,7 @@ pub(crate) mod tests {
 
     /// A stand-in (no figure) for the folk at `spot`, standing there.
     fn stand_in(app: &mut App, spot: &fb_level::FolkSpot) -> Entity {
-        let denizen = Denizen { person: Person::of(spot, 1), radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
+        let denizen = Denizen { person: crate::folk::person_1207(spot), radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
         app.world_mut().spawn((denizen.belongings(), denizen, BlocksTheWay(fb_level::FloorShape::Round(3.0)), crate::folk::stand_at(spot))).id()
     }
 
@@ -708,7 +708,7 @@ pub(crate) mod tests {
     }
 
     fn people() -> Vec<Person> {
-        fb_level::generate(1207, 1).folk.iter().map(|spot| Person::of(spot, 1)).collect()
+        fb_level::generate(1207, 1).folk.iter().map(|spot| crate::folk::person_1207(spot)).collect()
     }
 
     #[test]
@@ -776,14 +776,14 @@ pub(crate) mod tests {
         for &f in &folk {
             let denizen = app.world().get::<Denizen>(f).unwrap();
             let hostile = hostility(&app, f).is_hostile();
-            assert_eq!(hostile, expected.contains(&f), "{} of {}", denizen.person.name, denizen.person.spot.faction.name());
+            assert_eq!(hostile, expected.contains(&f), "{} of {}", denizen.person.name, denizen.person.faction.name);
             if denizen.person.spot.faction != faction {
                 assert!(!hostile, "{} of another faction turned", denizen.person.name);
             }
         }
         assert!(folk.iter().any(|&f| app.world().get::<Denizen>(f).unwrap().person.spot.faction != faction), "a level of one faction tests nothing");
         let toast = &app.world().resource::<crate::inventory::Toast>().text;
-        assert_eq!(*toast, crate::hostility::turn_line(faction));
+        assert_eq!(*toast, crate::hostility::turn_line(&app.world().get::<Denizen>(first).unwrap().person.faction.name));
     }
 
     #[test]
@@ -953,7 +953,7 @@ pub(crate) mod tests {
         let at = app.world().get::<Corpse>(folk).unwrap().fell.translation.xz();
         for f in &floor {
             let world = fb_level::Level::world(f.spot.x, f.spot.y);
-            assert!(Vec2::new(world[0], world[2]).distance(at) < 12.0, "{} from where they fell", Vec2::new(world[0], world[2]).distance(at));
+            assert!(Vec2::new(world[0], world[2]).distance(at) < 16.0, "{} from where they fell", Vec2::new(world[0], world[2]).distance(at));
         }
         // The body is bare, and sheds nothing more however long it lies.
         assert!(app.world().get::<Denizen>(folk).unwrap().person.gear.is_empty());

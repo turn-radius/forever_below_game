@@ -1,6 +1,7 @@
 //! Choosing finishes must not move anything else: a hash of every level for seeds 1..50 at
 //! depths 1..4, taken before finishes existed, and taken again when creatures were kept out of
-//! the rooms folk hold and centipedes moved to the second level (#448).
+//! the rooms folk hold and centipedes moved to the second level (#448), and again when factions
+//! came from the world seed (#536).
 //!
 //! Floats are rounded to three decimals before hashing. Each platform's libm rounds `sin`,
 //! `atan2` and the like its own way, so the last bits differ between macOS and the Linux CI
@@ -85,5 +86,5 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 18114639057965414438, "snapshot taken before finishes");
+    assert_eq!(all_levels_hash(), 10690408706069781928, "snapshot taken before finishes");
 }

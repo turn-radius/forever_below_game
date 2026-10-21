@@ -9,6 +9,7 @@ Read `HANDOFF.md` for the current milestone, and `docs/` for the design notes. T
 ```
 crates/procgen_rng      seeded RNG for every generator
 crates/procgen_grammar  tracery-style grammar expansion, and faction names
+crates/fb_faction       the factions of a world, rolled from its seed: names, folk, likes and hates, colours, crest
 crates/armory           Spline Armory in Rust: item state from a seed, mesh data from a state
 crates/fb_items         Forever Below items: rarity, affixes, stats, footprints, history
 crates/fb_body          procedural folk bodies and the fitting of worn and held gear

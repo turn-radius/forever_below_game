@@ -475,7 +475,7 @@ mod tests {
             .folk
             .iter()
             .map(|spot| {
-                let denizen = Denizen { person: crate::folk::Person::of(spot, 1), radius: FOOTPRINT, min: Vec3::ZERO, max: Vec3::ZERO };
+                let denizen = Denizen { person: crate::folk::person_1207(spot), radius: FOOTPRINT, min: Vec3::ZERO, max: Vec3::ZERO };
                 app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(FOOTPRINT)), Stride::default(), crate::folk::stand_at(spot))).id()
             })
             .collect();
@@ -639,12 +639,20 @@ mod tests {
 
     #[test]
     fn shorter_folk_walk_slower() {
-        let tall = fb_level::generate(1207, 1).folk.into_iter().map(|s| crate::folk::Person::of(&s, 1)).collect::<Vec<_>>();
+        // Folk of several worlds, so every folk's height is there to compare.
+        let tall = (1..=8)
+            .flat_map(|world| {
+                let level = fb_level::generate(world, 1);
+                level.folk.iter().map(|s| crate::folk::Person::of(s, level.faction(s.faction), 1)).collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         let mk = |p: &crate::folk::Person| Denizen { person: p.clone(), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO };
         for a in &tall {
             for b in &tall {
                 if a.spot.folk.race().h < b.spot.folk.race().h {
-                    assert!(pace(&mk(a), 11.0) < pace(&mk(b), 11.0));
+                    // Strictly slower unless both are as tall as a human, whose pace is the cap.
+                    let capped = a.spot.folk.race().h >= HUMAN_HEIGHT;
+                    assert!(if capped { pace(&mk(a), 11.0) <= pace(&mk(b), 11.0) } else { pace(&mk(a), 11.0) < pace(&mk(b), 11.0) });
                 }
             }
         }

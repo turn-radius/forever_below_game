@@ -2730,10 +2730,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fb_faction"
+version = "0.1.0"
+dependencies = [
+ "armory",
+ "fb_body",
+ "procgen_grammar",
+ "procgen_rng",
+ "serde",
+]
+
+[[package]]
 name = "fb_items"
 version = "0.1.0"
 dependencies = [
  "armory",
+ "procgen_grammar",
  "procgen_rng",
  "serde",
  "serde_json",
@@ -2746,6 +2758,7 @@ dependencies = [
  "armory",
  "fb_body",
  "fb_creatures",
+ "fb_faction",
  "fb_items",
  "procgen_rng",
  "serde",
@@ -2877,6 +2890,7 @@ dependencies = [
  "fb_body",
  "fb_character",
  "fb_creatures",
+ "fb_faction",
  "fb_items",
  "fb_level",
  "libc",

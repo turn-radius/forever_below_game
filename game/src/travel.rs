@@ -47,7 +47,7 @@ use bevy::{
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
-use fb_level::{CELL, Level, Stair, StairKind, depth_seed};
+use fb_level::{CELL, Level, Stair, StairKind};
 
 use crate::carry::Aimed;
 use crate::figure::Figure;
@@ -116,7 +116,7 @@ impl Abyss {
     /// The level at `depth`: the same level every time it is asked for. The place to apply what
     /// was recorded on a level (#285) is on the level this returns.
     pub fn level_at(&self, depth: u32) -> Level {
-        fb_level::generate(depth_seed(self.run_seed, depth), depth)
+        fb_level::generate_in(self.run_seed, depth, &fb_level::LevelParams::for_style(fb_level::LevelStyle::for_depth(depth)))
     }
 }
 
@@ -136,7 +136,7 @@ impl Prepared {
     pub fn make(run_seed: u32, depth: u32, odds: fb_items::Odds) -> Self {
         let level = Abyss::new(run_seed).level_at(depth);
         let stone = stone_chunks(&level);
-        let folk = build_figures(&level.folk, depth);
+        let folk = build_figures(&level.folk, &level.factions, depth);
         let staging = Staging::make(&level, odds);
         Prepared { level, stone, folk, staging }
     }
@@ -550,7 +550,7 @@ mod tests {
         assert!(!level.folk.is_empty(), "the level has folk to make");
         assert_eq!(background.folk.len(), level.folk.len());
         for spot in &level.folk {
-            let person = Person::of(spot, 2);
+            let person = Person::of(spot, level.faction(spot.faction), 2);
             let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
             let made = background.folk.iter().find(|(p, _)| p.spot == *spot).expect("every spot has a person");
             assert_eq!(made.0, person);
