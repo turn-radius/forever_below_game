@@ -53,8 +53,7 @@ const RELIEF_WAVELENGTH: f32 = 11.0;
 const INK_LIFT: f32 = 0.05;
 
 /// A doorway's opening, in world units: 1.3 m wide and 2.2 m high.
-pub use fb_level::door::{DOOR_WIDTH, FRAME_DEPTH, LEAF_LAP, LEAF_THICKNESS};
-pub const DOOR_HEIGHT: f32 = 22.0;
+pub use fb_level::door::{DOOR_HEIGHT, DOOR_WIDTH, FRAME_DEPTH, LEAF_LAP, LEAF_THICKNESS};
 /// The timber frame round a doorway: beam width and depth through the wall.
 const FRAME_BEAM: f32 = 1.8;
 /// The masonry that fills a doorway's cell round the frame, through the wall.

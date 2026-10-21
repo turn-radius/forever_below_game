@@ -175,8 +175,7 @@ pub fn posts(level: &Level, graph: &RoomGraph, claim: &Claim, from: (i32, i32), 
         level.items.iter().all(|i| (i.x - px).hypot(i.y - py) >= CLEARANCE) && level.lights.iter().all(|l| (l.x - px).hypot(l.y - py) >= CLEARANCE)
     };
     // Every claim door's leaf: its door cell and where it hangs.
-    let doors: Vec<((i32, i32), crate::door::LeafSweep)> =
-        level.claim_doors().iter().filter_map(|d| crate::door::LeafSweep::of(level, d.x, d.y).map(|s| ((d.x, d.y), s))).collect();
+    let doors = crate::door::LeafSweep::all(level);
     // The cells along the wall from `o`'s, nearest first, that make a post.
     let beside = |o: &Opening| -> Vec<(i32, i32)> {
         // The leaf hinges on the frame's jamb on the world's `-across` side and stands open
@@ -537,9 +536,8 @@ mod tests {
                 let posted = posts(&level, &graph, claim, (sx as i32, sy as i32), mine.len()).len();
                 for g in mine.into_iter().take(posted) {
                     let cell = (g.x.floor() as i32, g.y.floor() as i32);
-                    for d in level.claim_doors() {
-                        let sweep = crate::door::LeafSweep::of(&level, d.x, d.y).unwrap();
-                        assert!(!sweep.sweeps(g.x, g.y, crate::door::FOLK_RADIUS), "seed {seed} depth {depth}: guard in the leaf of door {:?}", (d.x, d.y));
+                    for (cell, sweep) in crate::door::LeafSweep::all(&level) {
+                        assert!(!sweep.sweeps(g.x, g.y, crate::door::FOLK_RADIUS), "seed {seed} depth {depth}: guard in the leaf of door {cell:?}");
                     }
                     for o in &openings {
                         let door = (o.cell.0 + o.out.0, o.cell.1 + o.out.1);

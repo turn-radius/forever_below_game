@@ -92,7 +92,7 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 8607398168832372798, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round");
+    assert_eq!(all_levels_hash(), 17322507725479787400, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge");
 }
 
 /// A hash of every level's layout, items and lights, which come before the folk in the level's

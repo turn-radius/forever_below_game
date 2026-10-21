@@ -43,47 +43,17 @@ const CAVE_ARCH: Rgb = Rgb::hex(0x7d7a72);
 /// The rock-cut arch's stones are rougher: thicker, deeper and more chamfered.
 const ROCK_RING: (f32, f32) = (2.4, 3.8);
 
-/// The two arcs that make an opening: `hw` either side of the centre at the spring, each of
-/// radius `r` about a centre `r - hw` across the axis. A round arch has `r == hw`, so both
-/// arcs share a centre.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Arch {
-    pub(super) hw: f32,
-    pub(super) spring: f32,
-    pub(super) r: f32,
+pub(super) use fb_level::door::Arch;
+
+/// The angle at which `arch`'s arcs meet.
+fn theta_max(arch: &Arch) -> f32 {
+    ((arch.r - arch.hw) / arch.r).acos()
 }
 
-impl Arch {
-    pub(super) fn new(style: DoorStyle) -> Self {
-        let hw = DOOR_WIDTH * 0.5;
-        match style {
-            DoorStyle::PointedArch => {
-                // An equilateral-ish point: the arcs' radius is the span, the crown about 26.
-                let r = DOOR_WIDTH;
-                let rise = (r * r - (r - hw) * (r - hw)).sqrt();
-                Arch { hw, spring: 26.0 - rise, r }
-            }
-            // Clear height at the middle is a little over the door's.
-            _ => Arch { hw, spring: DOOR_HEIGHT - hw + 0.5, r: hw },
-        }
-    }
-
-    /// The angle at which the arcs meet.
-    fn theta_max(&self) -> f32 {
-        ((self.r - self.hw) / self.r).acos()
-    }
-
-    /// The point at angle `theta` on the arc of `side` (+1 right, -1 left), at `radius`.
-    fn point(&self, side: f32, theta: f32, radius: f32) -> P2 {
-        let c = self.hw - self.r;
-        [side * (c + radius * theta.cos()), self.spring + radius * theta.sin()]
-    }
-
-    /// The height of the circle of `radius` over `x`, or `None` past its spring.
-    pub(super) fn height(&self, x: f32, radius: f32) -> Option<f32> {
-        let dx = x.abs() - (self.hw - self.r);
-        (radius * radius - dx * dx > 0.0 && x.abs() < self.hw + (radius - self.r)).then(|| self.spring + (radius * radius - dx * dx).sqrt())
-    }
+/// The point at angle `theta` on the arc of `side` (+1 right, -1 left), at `radius`.
+fn point(arch: &Arch, side: f32, theta: f32, radius: f32) -> P2 {
+    let c = arch.hw - arch.r;
+    [side * (c + radius * theta.cos()), arch.spring + radius * theta.sin()]
 }
 
 /// A convex polygon, however it is wound, as a block `depth` through the wall centred on
@@ -175,7 +145,7 @@ fn above(poly: &[P2], from: P2, slope: f32) -> Vec<P2> {
 fn voussoirs(arch: &Arch, (joint, chamfer): (f32, f32), (thick, depth): (f32, f32), key_rise: f32, rough: bool, rng: &mut Mulberry32) -> MeshBuilder {
     let mut ring = MeshBuilder::new();
     let r_mid = arch.r + thick * 0.5;
-    let theta_max = arch.theta_max();
+    let theta_max = theta_max(&arch);
     let key_theta = (KEY_HALF / r_mid).min(theta_max * 0.4);
     let seat = theta_max - key_theta;
     let stones = ((r_mid * seat / WEDGE).round() as usize).max(2);
@@ -189,7 +159,7 @@ fn voussoirs(arch: &Arch, (joint, chamfer): (f32, f32), (thick, depth): (f32, f3
             let t = if rough { rng.range_f32(ROCK_RING.0, ROCK_RING.1) } else { thick };
             // The rock-cut rim wanders outward only, so the opening is never narrower.
             let inner = if rough { rng.range_f32(0.0, 0.3) } else { 0.0 };
-            let poly = [arch.point(side, a, arch.r + inner), arch.point(side, b, arch.r + inner), arch.point(side, b, arch.r + t), arch.point(side, a, arch.r + t)];
+            let poly = [point(&arch, side, a, arch.r + inner), point(&arch, side, b, arch.r + inner), point(&arch, side, b, arch.r + t), point(&arch, side, a, arch.r + t)];
             let depth = depth + if rough { rng.range_f32(0.0, 0.9) } else { (rng.range_f32(0.0, 1.0) - 0.5) * 0.25 };
             let mut stone = prism(&poly, depth, chamfer);
             stone.translate([0.0, 0.0, (rng.range_f32(0.0, 1.0) - 0.5) * 0.2]);
@@ -198,8 +168,8 @@ fn voussoirs(arch: &Arch, (joint, chamfer): (f32, f32), (thick, depth): (f32, f3
     }
     if !rough {
         // The keystone: wedge-sided over the crown, rising a little above the ring.
-        let key_in = |side: f32| arch.point(side, seat, arch.r);
-        let key_out = |side: f32| arch.point(side, seat, arch.r + thick);
+        let key_in = |side: f32| point(&arch, side, seat, arch.r);
+        let key_out = |side: f32| point(&arch, side, seat, arch.r + thick);
         let crown = arch.height(0.0, arch.r + thick).unwrap_or(arch.spring + arch.r + thick) + key_rise;
         let poly = [key_in(-1.0), key_in(1.0), key_out(1.0), [1.2, crown], [-1.2, crown], key_out(-1.0)];
         ring.append(&prism(&poly, depth + KEY_PROUD, chamfer));
@@ -299,9 +269,9 @@ pub fn door_arch(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
         core.translate([(lo + hi) * 0.5, (floor + top) * 0.5, 0.0]);
         masonry.append(&core);
     }
-    let (steps, theta_max) = (14, arch.theta_max());
+    let (steps, theta_max) = (14, theta_max(&arch));
     let mut outline: Vec<P2> = vec![[-inner, top], [-inner, spring], [-hw, spring]];
-    let intrados = |side: f32, theta: f32| arch.point(side, theta, arch.r);
+    let intrados = |side: f32, theta: f32| point(&arch, side, theta, arch.r);
     outline.extend((1..=steps).map(|i| intrados(-1.0, theta_max * i as f32 / steps as f32)));
     outline.extend((0..steps).rev().map(|i| intrados(1.0, theta_max * i as f32 / steps as f32)));
     outline.extend([[inner, spring], [inner, top]]);

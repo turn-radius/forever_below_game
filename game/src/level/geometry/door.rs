@@ -34,18 +34,15 @@ use armory::{
     },
     geom::{MeshBuilder, P2, Shading, V3, cylinder, extrude, frustum, icosphere, torus},
 };
-use fb_level::{DoorKind, DoorStyle, LevelStyle, SwitchKind};
+use fb_level::{
+    DoorKind, DoorStyle, LevelStyle, SwitchKind,
+    door::{CLEAR, HINGE_SET, LEAF_Z},
+};
 use procgen_rng::Mulberry32;
 
 use super::arch::{Arch, prism};
 use super::{DOOR_HEIGHT, DOOR_WIDTH};
 
-/// How far the hinge pin stands off the hinge-side jamb. The pintles span the gap.
-pub const HINGE_SET: f32 = 0.8;
-/// The gap between a leaf's latch edge and its jamb, and between its head and the frame.
-pub const CLEAR: f32 = 0.12;
-/// How far back from the +Z face of the opening a swinging leaf's middle stands.
-pub const LEAF_Z: f32 = 0.5;
 /// The sill plank of a timber frame, which a leaf clears.
 const TIMBER_SILL: f32 = 0.5;
 /// The portcullis rises this far past its own crown, so its feet clear the opening.
@@ -67,7 +64,7 @@ pub struct Opening {
 impl Opening {
     pub fn of(style: DoorStyle) -> Self {
         match style {
-            DoorStyle::Timber => Opening { arch: None, half_width: DOOR_WIDTH * 0.5, crown: DOOR_HEIGHT, sill: TIMBER_SILL },
+            DoorStyle::Timber => Opening { arch: None, half_width: fb_level::door::half_width(style), crown: DOOR_HEIGHT, sill: TIMBER_SILL },
             _ => {
                 let arch = Arch::new(style);
                 Opening { arch: Some(arch), half_width: arch.hw, crown: arch.height(0.0, arch.r).unwrap_or(arch.spring + arch.r), sill: 0.0 }
@@ -197,6 +194,7 @@ pub fn claim_leaf(spec: &DoorSpec) -> ClaimLeaf {
 
 /// The span a swinging leaf covers across the opening: from the pin to the latch-side clearance.
 fn span(opening: &Opening) -> (f32, f32) {
+    // The same span as `fb_level::door::leaf_span`, which keeps folk out of the swing.
     (-opening.half_width + HINGE_SET, opening.half_width - CLEAR)
 }
 

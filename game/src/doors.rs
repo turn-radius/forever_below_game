@@ -1662,33 +1662,53 @@ mod tests {
         let state = &doors.0[&(door.x, door.y)];
         assert!(!state.switched() && !state.inside(Some(state.centre + Vec2::X * CELL)));
     }
-    /// The rule `fb_level` keeps guards clear by is the one the game draws: the hinge and the
-    /// open leaf's far edge, taken from the doorway's frame and the leaf's rotation, are the
-    /// sweep's hinge and its far end.
+    /// The rule `fb_level` keeps guards clear by is the one the game draws: for every claim door
+    /// with a swinging leaf, in rock caves and stone halls alike, the hinge and the open leaf's far
+    /// edge, taken from the leaf as the game builds and hangs it, are the sweep's hinge and its
+    /// far end. A portcullis has no sweep.
     #[test]
     fn the_leaf_sweep_is_where_the_game_hangs_the_leaf() {
-        let mut checked = 0;
+        let (mut checked, mut styles, mut grates) = (0, std::collections::HashSet::new(), 0);
         for seed in 1..40 {
-            let level = fb_level::generate(seed, 1);
-            let doorways = geometry::doorways(&geometry::CellView::new(&level));
-            for door in level.claim_doors() {
-                let Some(doorway) = doorways.iter().find(|w| (w.x, w.y) == (door.x, door.y)) else { continue };
-                let sweep = fb_level::door::LeafSweep::of(&level, door.x, door.y).expect("a framed claim door has a sweep");
-                let [x, y, z] = doorway.basis().map(Vec3::from_array);
-                let shut = Quat::from_mat3(&Mat3::from_cols(x, y, z));
-                let hinge = Vec3::from_array(geometry::cell_centre(door.x, door.y)) + shut * Vec3::from_array(geometry::entrance_hinge());
-                let leaf = DoorLeaf { cell: (door.x, door.y), shut };
-                let free = hinge + leaf.rotation(1.0) * Vec3::X * (geometry::DOOR_WIDTH + 1.2);
-                let cells = |v: Vec3| (v.x / CELL, v.z / CELL);
-                let (h, f) = (cells(hinge), cells(free));
-                assert!((h.0 - sweep.hinge.0).abs() < 1e-3 && (h.1 - sweep.hinge.1).abs() < 1e-3, "seed {seed}: hinge {h:?} vs {:?}", sweep.hinge);
-                let far = (sweep.hinge.0 + sweep.through.0 as f32 * sweep.width, sweep.hinge.1 + sweep.through.1 as f32 * sweep.width);
-                // Open to 85 degrees: within a few percent of straight through.
-                assert!((f.0 - far.0).abs() < 0.07 && (f.1 - far.1).abs() < 0.07, "seed {seed}: free edge {f:?} vs {far:?}");
-                checked += 1;
+            for depth in 1..=10 {
+                let level = fb_level::generate(seed, depth);
+                let finishes = geometry::level_finishes(&level);
+                let doorways = geometry::doorways(&geometry::CellView::new(&level));
+                for door in level.claim_doors() {
+                    let Some(doorway) = doorways.iter().find(|w| (w.x, w.y) == (door.x, door.y)) else { continue };
+                    let style = finishes.door_style(door.x, door.y).unwrap_or(fb_level::DoorStyle::Timber);
+                    let sweep = fb_level::door::LeafSweep::of(&level, &door, style);
+                    if door.kind == DoorKind::Portcullis {
+                        assert!(sweep.is_none(), "seed {seed} depth {depth}: a portcullis sweeps nothing");
+                        grates += 1;
+                        continue;
+                    }
+                    let sweep = sweep.expect("a framed swinging claim door has a sweep");
+                    let fit = crate::level::ClaimFit::make(&level, &door, style, 1);
+                    assert!(!fit.leaf.rises());
+                    let [x, y, z] = doorway.basis().map(Vec3::from_array);
+                    let shut = Quat::from_mat3(&Mat3::from_cols(x, y, z));
+                    let at = Transform::from_translation(Vec3::from_array(geometry::cell_centre(door.x, door.y))).with_rotation(shut);
+                    let hinge = at.transform_point(Vec3::from_array(fit.leaf.hinge));
+                    let leaf = DoorLeaf::swinging((door.x, door.y), shut, hinge);
+                    // The leaf's far edge: the greatest reach of its mesh from the pin along +X.
+                    let reach = fit.leaf.leaf.parts.iter().flat_map(|p| p.positions.iter()).map(|p| p[0]).fold(0.0f32, f32::max);
+                    let free = hinge + leaf.rotation(1.0) * Vec3::X * reach;
+                    let cells = |v: Vec3| (v.x / CELL, v.z / CELL);
+                    let (h, f) = (cells(hinge), cells(free));
+                    assert!((h.0 - sweep.hinge.0).abs() < 1e-3 && (h.1 - sweep.hinge.1).abs() < 1e-3, "seed {seed} depth {depth} {style:?}: hinge {h:?} vs {:?}", sweep.hinge);
+                    assert!((reach / CELL - sweep.width).abs() < 0.01, "seed {seed} depth {depth} {style:?}: leaf reaches {} cells, sweep {}", reach / CELL, sweep.width);
+                    let far = (sweep.hinge.0 + sweep.through.0 as f32 * sweep.width, sweep.hinge.1 + sweep.through.1 as f32 * sweep.width);
+                    // Open to 85 degrees: within a few percent of straight through.
+                    assert!((f.0 - far.0).abs() < 0.07 && (f.1 - far.1).abs() < 0.07, "seed {seed} depth {depth} {style:?}: free edge {f:?} vs {far:?}");
+                    styles.insert(style);
+                    checked += 1;
+                }
             }
         }
-        assert!(checked > 20, "{checked} claim doors");
+        assert!(checked > 40, "{checked} swinging claim doors");
+        assert!(styles.contains(&fb_level::DoorStyle::RoundArch) || styles.contains(&fb_level::DoorStyle::PointedArch), "no stone-hall arch covered, only {styles:?}");
+        assert!(grates > 0, "no portcullis seen");
     }
 
     /// No guard's post lies in any claim door's open leaf, taking the folk as 0.3 cell wide.
@@ -1698,7 +1718,7 @@ mod tests {
         for seed in 1..80 {
             for depth in 1..=3 {
                 let level = fb_level::generate(seed, depth);
-                let sweeps: Vec<_> = level.claim_doors().iter().filter_map(|d| Some(((d.x, d.y), fb_level::door::LeafSweep::of(&level, d.x, d.y)?))).collect();
+                let sweeps = fb_level::door::LeafSweep::all(&level);
                 for g in level.folk.iter().filter(|f| f.trade == Some(fb_faction::Trade::guard())) {
                     guards += 1;
                     for (cell, sweep) in &sweeps {
