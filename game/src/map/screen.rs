@@ -37,7 +37,7 @@ pub(super) fn add(app: &mut App) {
         .add_systems(Update, (build_screen, (zoom_and_pan, redraw_plan, place_plan).chain().after(build_screen)).in_set(DelveSystems));
 }
 
-/// For captures: `FB_OPEN_MAP=<frame>` opens the map that many frames into the delve, once the
+/// For captures: `FB_EXPLORE_ALL=1` marks the level seen, `FB_MAP_ZOOM=<px>` opens the map on its middle at that zoom, and `FB_OPEN_MAP=<frame>` opens the map that many frames into the delve, once the
 /// eye has had time to look round.
 fn open_for_capture(frame: u32) -> impl FnMut(ResMut<ScreenOpen>, Local<u32>) {
     move |mut open, mut frames| {
@@ -169,7 +169,7 @@ fn make_marker(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 /// Builds the screen when the map opens, centred on the delver, and takes it down when it
 /// closes.
 #[allow(clippy::too_many_arguments)]
-fn build_screen(
+pub(super) fn build_screen(
     mut commands: Commands,
     open: Res<ScreenOpen>,
     screens: Query<Entity, With<MapScreen>>,
@@ -200,6 +200,10 @@ fn build_screen(
         let (x, y) = to_grid(eye.translation());
         *view = MapView { centre: Vec2::new(x, y), scale: OPENING_ZOOM };
     }
+    // For captures: `FB_MAP_ZOOM=<pixels to a cell>` opens on the middle of the level at that zoom.
+    if let (Some(zoom), Some(level)) = (std::env::var("FB_MAP_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()), level.as_ref()) {
+        *view = MapView { centre: Vec2::new(level.0.width as f32, level.0.height as f32) * 0.5, scale: zoom.clamp(ZOOM.0, ZOOM.1) };
+    }
     commands
         .spawn((
             Name::new("Map"),
@@ -210,12 +214,16 @@ fn build_screen(
             GlobalZIndex(10),
         ))
         .with_children(|root| {
-            root.spawn((PlanNode, ImageNode::new(plan.image.clone()), Node { position_type: PositionType::Absolute, ..default() })).with_child((
-                Marker,
-                ImageNode::new(marker.0.clone()),
-                Node { position_type: PositionType::Absolute, width: px(MARKER_PX), height: px(MARKER_PX), ..default() },
-                UiTransform::IDENTITY,
-            ));
+            root.spawn((PlanNode, ImageNode::new(plan.image.clone()), Node { position_type: PositionType::Absolute, ..default() })).with_children(|plan| {
+                // The faction marks come first, so the delver's marker draws over them.
+                plan.spawn((Name::new("Crests"), super::crests::CrestLayer::default(), Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }));
+                plan.spawn((
+                    Marker,
+                    ImageNode::new(marker.0.clone()),
+                    Node { position_type: PositionType::Absolute, width: px(MARKER_PX), height: px(MARKER_PX), ..default() },
+                    UiTransform::IDENTITY,
+                ));
+            });
             root.spawn((
                 Text::new(level.map_or("Map".to_string(), |l| format!("Map \u{b7} Depth {}", l.0.depth))),
                 UiFonts::style(&fonts.display, 30.0, crate::ui::INK),
@@ -271,7 +279,7 @@ fn zoom_and_pan(
 }
 
 /// The map screen's size in its own logical pixels.
-fn screen_size(node: &ComputedNode) -> Vec2 {
+pub(super) fn screen_size(node: &ComputedNode) -> Vec2 {
     node.size * node.inverse_scale_factor
 }
 

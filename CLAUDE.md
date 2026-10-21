@@ -1,6 +1,6 @@
 # Forever Below
 
-A first-person, stylized-3D dungeon crawler in the spirit of Ultima Underworld, built in Rust with Bevy 0.20. You come through a door into an endless Stygian abyss, and it shuts behind you. The way out is a rumor the world keeps feeding you. You delve, settle a level for a while, earn favor with its factions, then go deeper. Death sends you back to the beginning, but the items you leave behind stay in the world.
+A first-person, stylized-3D dungeon crawler in the spirit of Ultima Underworld, built in Rust with Bevy 0.20. You come through a door into an endless Stygian abyss, and it shuts behind you. The way out is a rumor the world keeps feeding you. You delve, settle a level for a while, earn favor with its factions, then go deeper. Within a delve the abyss keeps everything that happens on every level. Death ends the delve, and the next delver starts in a new world.
 
 Read `HANDOFF.md` for the current milestone, and `docs/` for the design notes. The browser prototypes in `reference/` show the idea: the look, the item families, the paper doll and the rules. They are a starting point, not a spec to match. The Rust build should go well past them, with higher-fidelity items and characters than three.js allowed.
 
@@ -23,8 +23,8 @@ docs/                   design, rendering, items, body
 
 ## Rules
 
-- **Generators never depend on Bevy.** `procgen_rng`, `procgen_grammar`, `armory`, `fb_items` and `fb_body` are plain Rust: data in, data out (parameters, plain mesh buffers). Only `game/` uses Bevy. Heroes' Hold and a native Spline Armory will reuse these crates later.
-- **Generators are pure functions of a seed.** The same seed must give the same item in every save and every run on a platform, because items persist and carry history across runs. Platforms may differ slightly (each one's libm rounds `atan2`, `sin` and the like its own way), and that is fine: the world is procedural. Use `procgen_rng::Mulberry32` (or another seeded RNG in that crate), never `rand` or thread RNGs, inside generators. Matching the browser prototypes number for number is not a goal.
+- **Generators never depend on Bevy.** `procgen_rng`, `procgen_grammar`, `fb_faction`, `armory`, `fb_items` and `fb_body` are plain Rust: data in, data out (parameters, plain mesh buffers). Only `game/` uses Bevy. Heroes' Hold and a native Spline Armory will reuse these crates later.
+- **Generators are pure functions of a seed.** The same seed must give the same item in every save and every run on a platform, because levels and items persist through a delve and are rebuilt from their seeds. Platforms may differ slightly (each one's libm rounds `atan2`, `sin` and the like its own way), and that is fine: the world is procedural. Use `procgen_rng::Mulberry32` (or another seeded RNG in that crate), never `rand` or thread RNGs, inside generators. Matching the browser prototypes number for number is not a goal.
 - **Improve freely on the prototypes.** Keep their intent (the families, the controls that make items varied, the rules in `docs/`), but rebuild the geometry and materials at higher fidelity: denser and better-shaped meshes, proper normals, real lighting, better hands and faces, cloth that drapes. If a better approach breaks with how the prototype did something, take the better approach and note it in `docs/`.
 - **One item generator.** The `armory` crate makes the shape of every item. `fb_items` adds rarity, affixes, stats and history on top. Game code never builds its own one-off item shapes.
 - **Units: 1 world unit = 10 cm**, as in the prototypes. A human is about 17 units tall.
@@ -34,11 +34,11 @@ docs/                   design, rendering, items, body
 
 ## Game decisions already made
 
-- First person. Death restarts the run. A possible ending retires the character.
+- First person. Death ends the delve, and the next delver starts in a new world. A possible ending retires the character.
 - Classes: Fighter, Ranger, Mage, Cleric. Freshly fallen and Scavenger are starting looks.
 - Folk: human, dwarf, gnome, goblin, lizardfolk, pigfolk. Enemies are classic D&D monsters. D&D coinage. No mining.
 - Diablo-style rarity and affixes that can raise or lower any parameter, survival ones included.
 - Cataclysm-style simulation for every character: light, warmth, food, water, sleep, dirt, disease, limb health, encumbrance.
-- No reforging. Items change only through finding, carrying, wearing and wear and tear.
+- Items change through finding, carrying, wearing and wear and tear, and through the folk who make and enchant them: commissions, added and removed affixes, reforging and scrapping. A changed item is recorded as it is now, not only by its seed.
 - Containers keep their contents wherever they go. A bag set down opens underfoot as its own grid.
 - Quests come from NPC needs. Keeping a quest's reward instead of finishing it lets the quest lapse and costs faction standing.

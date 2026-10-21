@@ -290,7 +290,7 @@ fn the_decal_covers_the_whole_charge() {
             state.field.charge = device;
             state.field.charge_size = 0.5;
             let size = 0.5 * 5.0;
-            let expected: f32 = armory::build::device::device_shapes(device, seed)
+            let expected: f32 = armory::build::device::device_shapes(device, armory::crest::device_seed(&state.field))
                 .iter()
                 .map(|(piece, holes)| armory::geom::signed_area(piece).abs() - holes.iter().map(|h| armory::geom::signed_area(h).abs()).sum::<f32>())
                 .sum::<f32>()

@@ -4,6 +4,7 @@
 
 use bevy::prelude::*;
 
+pub mod crests;
 pub mod explore;
 pub mod plan;
 pub mod screen;
@@ -14,5 +15,6 @@ impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         explore::add(app);
         screen::add(app);
+        crests::add(app);
     }
 }
