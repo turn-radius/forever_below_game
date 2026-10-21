@@ -1296,16 +1296,16 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way.
         let before = [
-            (0u32, 0x3f1ef43848af9f4bu64),
-            (1, 0xdc484f437aa8293a),
-            (2, 0x28caf334b99fda9),
-            (7, 0x21dbcf0a3ba322e1),
-            (64, 0x8786aec0b970f319),
-            (1207, 0xe7338f33b385c2a4),
-            (4242, 0x2999cae962cff45b),
-            (u32::MAX, 0x791ee77a5145fa97),
+            (0u32, 0x8ce8fc5baaf05876u64),
+            (1, 0xaacf4d03867a1718),
+            (2, 0x168d9a3ac6b499b7),
+            (7, 0xa5f338c852ff6ab1),
+            (64, 0xb077a70c2fb1a4da),
+            (1207, 0x957fbf7eeb07f80a),
+            (4242, 0x67bd7b1c68310bcc),
+            (u32::MAX, 0xc2af47d6c679ceeb),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

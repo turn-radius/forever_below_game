@@ -78,8 +78,8 @@ level_params! {
         beside_cost: u32 = 6, 0.0, 20.0, 1.0; "Extra cost to run beside another corridor rather than share it."
         loop_chance: f64 = 0.3, 0.0, 1.0, 0.01; "Chance a room also links its nearest unlinked neighbour, making loops."
         door_reuse_chance: f64 = 0.6, 0.0, 1.0, 0.01; "Chance a corridor reuses a door already on that side of a room."
-        corridor_width_min: u32 = 1, 1.0, 3.0, 1.0; "Narrowest main width a level's spine corridor is drawn at, in cells; other tree links are one narrower, loops and the entrance one cell."
-        corridor_width_max: u32 = 2, 1.0, 3.0, 1.0; "Widest main width a level's spine corridor is drawn at, in cells."
+        corridor_width_min: u32 = 2, 1.0, 3.0, 1.0; "Narrowest main width a level's spine corridor is drawn at, in cells; other tree links are one narrower, loops and the entrance one cell."
+        corridor_width_max: u32 = 3, 1.0, 3.0, 1.0; "Widest main width a level's spine corridor is drawn at, in cells."
     }
     furnishing {
         brazier_min_area: u32 = 25, 4.0, 100.0, 1.0; "Rooms at least this many cells may hold a brazier."
