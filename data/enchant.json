@@ -9,5 +9,8 @@
  "essence_by_tier": { "novice": 1.25, "apprentice": 1.0, "expert": 0.85, "master": 0.7 },
  "copper_by_tier": { "novice": 0.6, "apprentice": 1.0, "expert": 1.5, "master": 2.5 },
  "material_for": { "damage": "blood_salt", "to_hit": "seers_glass", "attack_rate": "quicksilver", "bane_": "wardstone" },
- "default_material": "heartstone"
+ "default_material": "heartstone",
+ "legend_essence": 120,
+ "legend_copper": 3000,
+ "legend_heartstones": 1
 }

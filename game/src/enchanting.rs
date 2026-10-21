@@ -4,7 +4,7 @@
 
 use crate::inventory::{Inventory, ItemId};
 use bevy::prelude::*;
-use fb_items::enchant::{self, Cost, Enchanter, Refusal, add_cost, remove_cost, reforge_cost};
+use fb_items::enchant::{self, Cost, Enchanter, Refusal, add_cost, legend_cost, reforge_cost, remove_cost};
 use fb_items::scrap::{EnchantingStock, Salvage, scrap};
 use fb_items::tables::Affix;
 use fb_items::{Coins, Item, ItemParts};
@@ -71,6 +71,8 @@ pub enum Work {
     Add(&'static Affix),
     Strip(&'static Affix),
     Reforge,
+    /// Make a rare item legendary, adding this affix when there is one to add. A master's work.
+    Legend(Option<&'static Affix>),
 }
 
 /// Why the work was not done.
@@ -98,12 +100,15 @@ pub fn quote(item: &Item, work: Work, by: &Enchanter) -> Result<Cost, Refusal> {
         Work::Add(affix) => enchant::add(item, affix, by),
         Work::Strip(affix) => enchant::remove(item, affix, by),
         Work::Reforge => enchant::reforge(item, reforge_seed(item), by),
+        // Neither the price nor the answer depends on the level it is made on.
+        Work::Legend(affix) => enchant::make_legendary(item, affix, by, 0),
     };
     done?;
     Ok(match work {
         Work::Add(affix) => add_cost(affix, by.tier),
         Work::Strip(affix) => remove_cost(affix, by.tier),
         Work::Reforge => reforge_cost(item, by.tier),
+        Work::Legend(affix) => legend_cost(affix, by.tier),
     })
 }
 
@@ -134,6 +139,11 @@ pub fn shortfall(stock: &EnchantingStock, wallet: Coins, cost: &Cost) -> Option<
 /// the stock and the purses, then the item in the inventory is replaced by the changed one. Nothing
 /// is spent for work that is declined. Returns the cost paid.
 pub fn do_work(inventory: &mut Inventory, stock: &mut EnchantingStock, id: ItemId, work: Work, by: &Enchanter) -> Result<Cost, Declined> {
+    do_work_in(inventory, stock, id, work, by, 0)
+}
+
+/// [`do_work`] at the bench of level `level`: a legend made there says so.
+pub fn do_work_in(inventory: &mut Inventory, stock: &mut EnchantingStock, id: ItemId, work: Work, by: &Enchanter, level: u32) -> Result<Cost, Declined> {
     let item = inventory.item(id).ok_or(Declined::Refused(Refusal::NotEnchantable))?.clone();
     let cost = quote(&item, work, by).map_err(Declined::Refused)?;
     if let Some(short) = shortfall(stock, wallet(inventory), &cost) {
@@ -143,6 +153,7 @@ pub fn do_work(inventory: &mut Inventory, stock: &mut EnchantingStock, id: ItemI
         Work::Add(affix) => enchant::add(&item, affix, by),
         Work::Strip(affix) => enchant::remove(&item, affix, by),
         Work::Reforge => enchant::reforge(&item, reforge_seed(&item), by),
+        Work::Legend(affix) => enchant::make_legendary(&item, affix, by, level),
     }
     .map_err(Declined::Refused)?;
     // Everything is worked out before anything is taken, and taken only if all of it can be.
@@ -191,7 +202,7 @@ pub fn bench_kit_for_capture(mut inventory: ResMut<Inventory>, mut stock: ResMut
     if *frames != 6 {
         return;
     }
-    stock.0.essence = 180;
+    stock.0.essence = 240;
     for (id, n) in [("heartstone", 2), ("blood_salt", 1), ("gravesteel", 1)] {
         stock.0.materials.insert(id.into(), n);
     }
@@ -201,12 +212,13 @@ pub fn bench_kit_for_capture(mut inventory: ResMut<Inventory>, mut stock: ResMut
         rolled("Sword", &|i| i.rarity == fb_items::Rarity::Magic && rusted.is_some_and(|r| i.affixes.contains(&r))).or_else(|| rolled("Sword", &|i| i.affixes.iter().any(|a| !a.good))),
         rolled("Dagger", &|i| i.rarity == fb_items::Rarity::Magic && i.affixes.iter().all(|a| a.good)),
         rolled("Helm", &|i| i.rarity == fb_items::Rarity::Rare && i.affixes.iter().all(|a| a.good)),
+        rolled("Cloak", &|i| i.rarity == fb_items::Rarity::Rare),
         rolled("Tunic", &|i| i.rarity == fb_items::Rarity::Common && i.affixes.is_empty()),
         rolled("Ring", &|i| i.rarity == fb_items::Rarity::Rare && i.affixes.iter().all(|a| a.good)),
         fb_items::roll_item("Purse", 31).map(|mut purse| {
-            purse.coins = Some(Coins { gp: 12, sp: 5, cp: 0 });
+            purse.coins = Some(Coins { gp: 120, sp: 5, cp: 0 });
             let mut parts = ItemParts::from(purse);
-            parts.coins = Some(Coins { gp: 12, sp: 5, cp: 0 });
+            parts.coins = Some(Coins { gp: 120, sp: 5, cp: 0 });
             Item::from_parts(parts).expect("a purse")
         }),
     ];
@@ -214,6 +226,10 @@ pub fn bench_kit_for_capture(mut inventory: ResMut<Inventory>, mut stock: ResMut
         let id = inventory.add(item);
         // A weapon is too long for the pouch: it goes in a hand.
         if inventory.stow(id).is_err() {
+            let own = inventory.item(id).and_then(|i| i.slots().first().copied()).filter(|s| !matches!(s, fb_items::Slot::Mainhand | fb_items::Slot::Offhand));
+            if own.is_some_and(|slot| inventory.equip(id, slot).is_ok()) {
+                continue;
+            }
             let hand = if inventory.worn(fb_items::Slot::Mainhand).is_none() { fb_items::Slot::Mainhand } else { fb_items::Slot::Offhand };
             let _ = inventory.equip(id, hand);
         }
@@ -348,6 +364,65 @@ mod tests {
         let again = crate::record::rebuild_item(&serde_json::from_str(&json).unwrap()).unwrap();
         assert_eq!(again, after);
         assert!(again.history.last().unwrap().starts_with("Reforged by Ysolde"));
+    }
+
+    /// A pack with a worn rare cloak and `gp` of coin in a purse.
+    fn cloak_kit(gp: u32) -> (Inventory, ItemId) {
+        let mut inventory = Inventory::default();
+        let cloak = (0..20_000).filter_map(|s| roll_item_with("Cloak", s, Odds::loot(8))).find(|i| i.rarity == Rarity::Rare).unwrap();
+        let id = inventory.add(cloak);
+        inventory.equip(id, fb_items::Slot::Cloak).unwrap();
+        let mut coins = ItemParts::from(roll_item("Purse", 4).unwrap());
+        coins.coins = Some(Coins { gp, sp: 0, cp: 0 });
+        let purse = inventory.add(Item::from_parts(coins).unwrap());
+        let belt = inventory.add(roll_item("Belt", 3).unwrap());
+        inventory.equip(belt, fb_items::Slot::Belt).unwrap();
+        inventory.stow(purse).unwrap();
+        (inventory, id)
+    }
+
+    #[test]
+    fn a_master_makes_a_cloak_legendary_for_a_heartstone_essence_and_coin() {
+        let (mut inventory, id) = cloak_kit(100);
+        let mut stock = EnchantingStock { essence: 100, ..Default::default() };
+        // Short of the Heartstone: nothing is spent.
+        let before = (inventory.clone(), stock.clone());
+        let err = do_work_in(&mut inventory, &mut stock, id, Work::Legend(None), &by(Tier::Master), 4).unwrap_err();
+        assert!(matches!(&err, Declined::Short(s) if s.contains("Heartstone")), "{err:?}");
+        assert_eq!((inventory.item(id), stock.clone(), wallet(&inventory)), (before.0.item(id), before.1.clone(), wallet(&before.0)));
+        stock.materials.insert("heartstone".into(), 1);
+        let cost = do_work_in(&mut inventory, &mut stock, id, Work::Legend(None), &by(Tier::Master), 4).unwrap();
+        assert_eq!((cost.essence, cost.copper), (84, 7500));
+        assert_eq!((stock.essence, stock.count("heartstone")), (16, 0));
+        assert_eq!(wallet(&inventory).total_copper(), 10_000 - 7500);
+        let legend = inventory.item(id).unwrap();
+        assert_eq!(legend.rarity, Rarity::Legendary);
+        let told = legend.legend.as_ref().unwrap();
+        assert_eq!(told.history[1], "Made legendary by Ysolde, master enchanter of the Ash Rite on level 4.");
+        assert!(told.history.iter().all(|h| !h.contains("Lost")));
+    }
+
+    #[test]
+    fn an_expert_is_told_only_a_master_can_and_nothing_is_spent() {
+        let (mut inventory, id) = cloak_kit(100);
+        let mut stock = EnchantingStock { essence: 500, materials: [("heartstone".to_string(), 3)].into(), ..Default::default() };
+        let before = (inventory.clone(), stock.clone());
+        let err = do_work(&mut inventory, &mut stock, id, Work::Legend(None), &by(Tier::Expert)).unwrap_err();
+        assert_eq!(err, Declined::Refused(Refusal::MasterOnly));
+        assert_eq!(err.reason(), "Only a master enchanter can make a legend.");
+        assert_eq!((inventory.item(id), stock), (before.0.item(id), before.1));
+    }
+
+    #[test]
+    fn a_legend_made_at_the_bench_comes_back_the_same_from_a_record() {
+        let (mut inventory, id) = cloak_kit(100);
+        let mut stock = EnchantingStock { essence: 100, materials: [("heartstone".to_string(), 1)].into(), ..Default::default() };
+        do_work_in(&mut inventory, &mut stock, id, Work::Legend(None), &by(Tier::Master), 4).unwrap();
+        let made = inventory.item(id).unwrap().clone();
+        let json = serde_json::to_string(&crate::record::item_record(&made)).unwrap();
+        let again = crate::record::rebuild_item(&serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(again, made);
+        assert_eq!(again.legend, made.legend);
     }
 
     #[test]

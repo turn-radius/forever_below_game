@@ -157,7 +157,8 @@ impl Item {
     }
 
     /// This item found in a world whose factions are called `factions`: a legendary's history
-    /// names those rather than factions of the grammar's making. Its title stays. Pure in the
+    /// names those rather than factions of the grammar's making. Its title stays, and a legend made at
+    /// an enchanter's bench (`Legend::made`) is left as it is: it tells its making, not a found relic. Pure in the
     /// item's seed and the names, and a no-op for anything not legendary or for no names.
     pub fn in_world(mut self, factions: &[String]) -> Item {
         if factions.is_empty() {
@@ -166,7 +167,7 @@ impl Item {
         let tags = self.profile.tags.clone();
         let seed = self.seed;
         let name = self.name.clone();
-        if let Some(legend) = self.legend.as_mut() {
+        if let Some(legend) = self.legend.as_mut().filter(|l| !l.made) {
             // Its own stream, so the item rolls the same whatever world it is found in.
             let told = legendize_in(&mut game_rng(seed ^ 0x1e6e_d15c), &name, &tags, Some(factions));
             legend.history = told.history;

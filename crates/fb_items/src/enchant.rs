@@ -6,12 +6,12 @@
 //! Rarity follows the good affixes an item carries: one is magic, two rare, three legendary.
 //! The enchanter's [`Tier`] decides what they will do: a novice only strips flaws, an apprentice
 //! adds affixes of the magic tier (the ones that roll on a common or magic item) and so makes
-//! magic items, an expert rare ones, a master legendary ones. Legendaries themselves (their
-//! legends) are left alone here.
+//! magic items, an expert rare ones, a master legendary ones, and a master alone makes a rare
+//! item a legend ([`make_legendary`]). Legendaries themselves are left alone here.
 
 use crate::dress::{condition_mut, dress, etching_mut};
 use crate::item::{Item, ItemParts};
-use crate::naming::{item_name, legendize, noun};
+use crate::naming::{item_name, legendize, legendize_made, noun};
 use crate::rarity::roll_affixes_for;
 use crate::scrap::Material;
 use crate::tables::{Affix, AffixKind, affixes};
@@ -81,6 +81,12 @@ pub enum Refusal {
     NotCarried,
     /// A common item has nothing to reroll.
     NothingToReforge,
+    /// Making a legend is a master's work alone.
+    MasterOnly,
+    /// Only a rare item can be made legendary.
+    NotRare,
+    /// A legendary is as it is.
+    Legendary,
 }
 
 impl Refusal {
@@ -92,6 +98,9 @@ impl Refusal {
             Refusal::Full => "It can carry no more.",
             Refusal::NotCarried => "It does not carry that.",
             Refusal::NothingToReforge => "Nothing to reforge.",
+            Refusal::MasterOnly => "Only a master enchanter can make a legend.",
+            Refusal::NotRare => "Only a rare item can be made legendary.",
+            Refusal::Legendary => "A legend cannot be changed.",
         }
     }
 }
@@ -117,6 +126,9 @@ struct Table {
     copper_by_tier: BTreeMap<Tier, f64>,
     material_for: BTreeMap<String, String>,
     default_material: String,
+    legend_essence: u32,
+    legend_copper: u32,
+    legend_heartstones: u32,
 }
 
 static TABLE: LazyLock<Table> = LazyLock::new(|| serde_json::from_str(include_str!("../../../data/enchant.json")).unwrap_or_else(|e| panic!("data/enchant.json: {e}")));
@@ -146,6 +158,19 @@ pub fn add_cost(affix: &Affix, tier: Tier) -> Cost {
     }
 }
 
+/// What making a rare item legendary with `affix` costs at `tier`: a large lot of essence and
+/// coin, scaled by the enchanter's craft as adding is, and special materials: a Heartstone and
+/// the material of the affix's group (Blood salt for damage, and so on; a group with none of its
+/// own asks for the Heartstone alone). With no affix to add, the Heartstone alone.
+pub fn legend_cost(affix: Option<&Affix>, tier: Tier) -> Cost {
+    let t = &*TABLE;
+    let mut materials = vec![Material { id: "heartstone".into(), count: t.legend_heartstones }];
+    if let Some(group) = affix.map(material_of).filter(|g| g.id != materials[0].id) {
+        materials.push(group);
+    }
+    Cost { essence: scaled(t.legend_essence, t.essence_by_tier[&tier]), materials, copper: u64::from(scaled(t.legend_copper, t.copper_by_tier[&tier])) }
+}
+
 /// What stripping `affix` costs at `tier`: a flaw is cheap to take off, a good affix half what
 /// adding it costs.
 pub fn remove_cost(affix: &Affix, tier: Tier) -> Cost {
@@ -170,6 +195,18 @@ pub fn enchantable(item: &Item) -> bool {
     item.profile.kind == Kind::Gear && item.coins.is_none() && item.rarity != Rarity::Legendary && item.legend.is_none() && !item.profile.tags.contains(&Tag::Container)
 }
 
+/// Why `item` can be worked on by no enchanter: a legend cannot be changed, and what is not gear
+/// has nothing to enchant. `None` for what can be.
+pub fn unchangeable(item: &Item) -> Option<Refusal> {
+    if item.rarity == Rarity::Legendary || item.legend.is_some() {
+        Some(Refusal::Legendary)
+    } else if !enchantable(item) {
+        Some(Refusal::NotEnchantable)
+    } else {
+        None
+    }
+}
+
 fn good(item: &Item) -> impl Iterator<Item = &&'static Affix> {
     item.affixes.iter().filter(|a| a.good)
 }
@@ -185,8 +222,8 @@ fn rarity_of(good_count: usize) -> Rarity {
 
 /// Why `tier` could not add `affix` to `item`, or `Ok` with the rarity it would make.
 fn check_add(item: &Item, affix: &Affix, tier: Tier) -> Result<Rarity, Refusal> {
-    if !enchantable(item) {
-        return Err(Refusal::NotEnchantable);
+    if let Some(refusal) = unchangeable(item) {
+        return Err(refusal);
     }
     if !affix.good || !affix.in_play() || !affix.fits_item(&item.profile.tags, item.profile.slot) || item.affixes.iter().any(|a| !affix.stacks_with(a)) {
         return Err(Refusal::DoesNotFit);
@@ -230,10 +267,16 @@ fn dressed(base: &str, seed: u32, rarity: Rarity, affixes: &[&Affix]) -> Option<
     Some(shape)
 }
 
-fn rebuilt(item: &Item, mut affixes: Vec<&'static Affix>, line: String) -> Item {
+fn rebuilt(item: &Item, affixes: Vec<&'static Affix>, line: String) -> Item {
+    rebuilt_as(item, affixes, line, Rarity::Common)
+}
+
+/// [`rebuilt`] with a rarity at least `floor`: a rare item with no room for a third good affix
+/// can still be made a legend, as rolled legendaries of such slots are.
+fn rebuilt_as(item: &Item, mut affixes: Vec<&'static Affix>, line: String, floor: Rarity) -> Item {
     // Good ones first, so the name takes them before a flaw.
     affixes.sort_by_key(|a| !a.good);
-    let rarity = rarity_of(affixes.iter().filter(|a| a.good).count());
+    let rarity = rarity_of(affixes.iter().filter(|a| a.good).count()).max(floor);
     let mut parts = ItemParts::from(item.clone());
     parts.name = item_name(&noun(&parts.base, &parts.shape), &affixes);
     parts.legend = (rarity == Rarity::Legendary).then(|| item.legend.clone().unwrap_or_else(|| legendize(&mut game_rng(item.seed ^ 0xE4C4), &parts.name, &item.profile.tags)));
@@ -271,11 +314,62 @@ pub fn add(item: &Item, affix: &'static Affix, by: &Enchanter) -> Result<Item, R
     Ok(rebuilt(item, chosen, format!("Enchanted by {}: {}.", by.by(), affix.name)))
 }
 
+/// The affixes `tier` could put on `item` to make it a legend: none unless they are a master and
+/// it is a rare item. Any good affix the item could roll will do, whatever tier it rolls at: it
+/// is the third good one that makes the item legendary. Some things have none to take (a
+/// cloak's pool is two affixes wide), and are made legendary without one.
+pub fn legendary_options(item: &Item, tier: Tier) -> Vec<&'static Affix> {
+    if tier < Tier::Master || item.rarity != Rarity::Rare {
+        return vec![];
+    }
+    addable(item, tier)
+}
+
+/// `item`, a rare one, made legendary by the master `by` at `level`: `affix`
+/// ([`legendary_options`]) is added when there is one (`None` for an item with no room or nothing
+/// to take), it is raised to legendary (its etching gold-inlaid), and given a title: "The
+/// <adjective> <epithet>" or the maker's own, "<enchanter>'s <epithet>", since the enchanter put
+/// the legend there, so they are the owner it names (the delver's name is not known to the item).
+/// Its legend tells its making, not a found relic's story: its own first line of history (or that
+/// it was found in the abyss), "Made legendary by Ysolde, master enchanter of the Ash Rite on
+/// level 4.", and what it was before. `level` is the level of the bench. An expert or lower is
+/// `MasterOnly`; a common or magic item is `NotRare`; a legendary cannot be changed.
+pub fn make_legendary(item: &Item, affix: Option<&'static Affix>, by: &Enchanter, level: u32) -> Result<Item, Refusal> {
+    if by.tier < Tier::Master {
+        return Err(Refusal::MasterOnly);
+    }
+    if let Some(refusal) = unchangeable(item) {
+        return Err(refusal);
+    }
+    if item.rarity != Rarity::Rare {
+        return Err(Refusal::NotRare);
+    }
+    let mut chosen = item.affixes.clone();
+    if let Some(affix) = affix {
+        check_add(item, affix, by.tier)?;
+        chosen.push(affix);
+    }
+    let made = rebuilt_as(item, chosen, String::new(), Rarity::Legendary);
+    let tags = made.profile.tags.clone();
+    let mut parts = ItemParts::from(made);
+    // The making is told in its legend, not twice.
+    parts.history.pop();
+    let maker = by.name.split(' ').next().unwrap_or_default();
+    let mut legend = legendize_made(&mut game_rng(item.seed ^ 0x1e6e_d15c), &parts.name, &tags, maker);
+    legend.history = [
+        item.history.first().cloned().unwrap_or_else(|| "Found in the abyss.".to_string()),
+        format!("Made legendary by {} on level {level}.", by.by()),
+        format!("It was a rare {} before.", item.name),
+    ];
+    parts.legend = Some(legend);
+    Ok(Item::from_parts(parts).expect("an item of a known base stays one"))
+}
+
 /// `item` with `affix` taken off by `by`: a novice strips only flaws. The rarity follows the
 /// count: stripping a good affix from a rare item makes it magic.
 pub fn remove(item: &Item, affix: &Affix, by: &Enchanter) -> Result<Item, Refusal> {
-    if !enchantable(item) {
-        return Err(Refusal::NotEnchantable);
+    if let Some(refusal) = unchangeable(item) {
+        return Err(refusal);
     }
     if !item.affixes.iter().any(|a| a.name == affix.name) {
         return Err(Refusal::NotCarried);
@@ -292,8 +386,8 @@ pub fn remove(item: &Item, affix: &Affix, by: &Enchanter) -> Result<Item, Refusa
 /// roll that comes out the same set is tried again from the next seed a few times, so a reforge
 /// changes something when it can. A novice cannot: it takes an apprentice.
 pub fn reforge(item: &Item, seed: u32, by: &Enchanter) -> Result<Item, Refusal> {
-    if !enchantable(item) {
-        return Err(Refusal::NotEnchantable);
+    if let Some(refusal) = unchangeable(item) {
+        return Err(refusal);
     }
     if item.rarity == Rarity::Common {
         return Err(Refusal::NothingToReforge);
@@ -391,6 +485,69 @@ mod tests {
         assert_eq!(add_cost(bat, Tier::Master).materials, vec![Material { id: "heartstone".into(), count: 1 }]);
         assert_eq!(add_cost(affix_named("of Carnage").unwrap(), Tier::Master).materials[0].id, "blood_salt");
         assert!(removable(&legend, Tier::Master).is_empty());
+    }
+
+    #[test]
+    fn a_master_makes_a_rare_cloak_legendary_and_the_legend_names_her() {
+        let cloak = find("Cloak", |i| i.rarity == Rarity::Rare);
+        let legend = make_legendary(&cloak, None, &by(Tier::Master), 4).unwrap();
+        assert_eq!(legend.rarity, Rarity::Legendary);
+        assert_eq!(Item::from_parts(ItemParts::from(legend.clone())).unwrap(), legend);
+        let told = legend.legend.as_ref().unwrap();
+        assert!(told.made && (told.title.starts_with("The ") || told.title.starts_with("Ysolde's ")), "{}", told.title);
+        assert_eq!(told.subtitle, legend.name);
+        assert_eq!(told.history[0], "Found in the abyss.");
+        assert_eq!(told.history[1], "Made legendary by Ysolde, master enchanter of the Ash Rite on level 4.");
+        assert!(told.history.iter().all(|h| !h.contains("Lost") && !h.contains("Carried")), "{:?}", told.history);
+        assert!(legend.history.is_empty());
+        // The world does not re-tell it, and the etching is inlaid.
+        let names = vec!["the Pale Hand".to_string()];
+        assert_eq!(legend.clone().in_world(&names), legend);
+        let mut shape = legend.shape.clone();
+        if let Some(e) = etching_mut(&mut shape) {
+            assert_eq!(e.finish, armory::etch::EtchFinish::Inlaid);
+        }
+        assert_eq!(Ok(&legend), make_legendary(&cloak, None, &by(Tier::Master), 4).as_ref());
+        assert_eq!(legend_cost(None, Tier::Master).materials, vec![Material { id: "heartstone".into(), count: 1 }]);
+        // An item with a maker's line keeps it as the first line of its making.
+        let mut parts = ItemParts::from(cloak);
+        parts.history.push("Made by Brenna Holt".into());
+        let signed = make_legendary(&Item::from_parts(parts).unwrap(), None, &by(Tier::Master), 4).unwrap();
+        assert_eq!(signed.legend.as_ref().unwrap().history[0], "Made by Brenna Holt");
+        assert_eq!(signed.history, vec!["Made by Brenna Holt".to_string()]);
+    }
+
+    #[test]
+    fn a_legend_takes_an_affix_when_there_is_room_and_asks_for_its_material() {
+        let helm = find("Helm", |i| i.rarity == Rarity::Rare && !legendary_options(i, Tier::Master).is_empty());
+        let affix = legendary_options(&helm, Tier::Master)[0];
+        let legend = make_legendary(&helm, Some(affix), &by(Tier::Master), 7).unwrap();
+        consistent(&legend);
+        assert!(legend.affixes.contains(&affix) && legend.legend.as_ref().unwrap().history[1].starts_with("Made legendary by Ysolde"));
+        let cost = legend_cost(Some(affix), Tier::Master);
+        assert!(cost.materials.iter().any(|m| m.id == "heartstone") && cost.essence > add_cost(affix, Tier::Master).essence);
+        let carnage = affix_named("of Carnage").unwrap();
+        assert_eq!(legend_cost(Some(carnage), Tier::Master).materials.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["heartstone", "blood_salt"]);
+    }
+
+    #[test]
+    fn only_a_master_makes_a_legend_and_only_of_a_rare_item() {
+        let cloak = find("Cloak", |i| i.rarity == Rarity::Rare);
+        assert_eq!(make_legendary(&cloak, None, &by(Tier::Expert), 1), Err(Refusal::MasterOnly));
+        assert!(legendary_options(&cloak, Tier::Expert).is_empty());
+        let magic = find("Cloak", |i| i.rarity == Rarity::Magic);
+        assert_eq!(make_legendary(&magic, None, &by(Tier::Master), 1), Err(Refusal::NotRare));
+        let common = find("Cloak", |i| i.rarity == Rarity::Common);
+        assert_eq!(make_legendary(&common, None, &by(Tier::Master), 1), Err(Refusal::NotRare));
+        let legend = make_legendary(&cloak, None, &by(Tier::Master), 1).unwrap();
+        assert_eq!(make_legendary(&legend, None, &by(Tier::Master), 1), Err(Refusal::Legendary));
+        assert_eq!(make_legendary(&legend, None, &by(Tier::Expert), 1), Err(Refusal::MasterOnly));
+        // Nothing else changes one either.
+        let keen = affix_named("Keen").unwrap();
+        assert_eq!(add(&legend, keen, &by(Tier::Master)), Err(Refusal::Legendary));
+        assert_eq!(remove(&legend, legend.affixes[0], &by(Tier::Master)), Err(Refusal::Legendary));
+        assert_eq!(reforge(&legend, 1, &by(Tier::Master)), Err(Refusal::Legendary));
+        assert_eq!(unchangeable(&legend), Some(Refusal::Legendary));
     }
 
     #[test]

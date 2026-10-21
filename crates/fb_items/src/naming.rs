@@ -44,6 +44,10 @@ pub struct Legend {
     pub subtitle: String,
     /// Where it was made and by whom; who carried it and what they did; how it was lost.
     pub history: [String; 3],
+    /// Made at an enchanter's bench from a rare item, rather than told of a found relic: its
+    /// lines are its making, and [`crate::Item::in_world`] leaves them as they are.
+    #[serde(default)]
+    pub made: bool,
 }
 
 /// `legendize`: a title (`<owner>'s <epithet>` or `The <adjective> <epithet>`, the epithet
@@ -100,7 +104,19 @@ pub fn legendize_in(rng: &mut Mulberry32, name: &str, tags: &[Tag], factions: Op
             "the stair gave way",
         ])
     );
-    Legend { title, subtitle: name.to_string(), history: [made, carried, lost] }
+    Legend { title, subtitle: name.to_string(), history: [made, carried, lost], made: false }
+}
+
+/// A legend's title for an item an enchanter made legendary: as [`legendize_in`] titles one,
+/// except that an owner's name is the maker's (`maker`, a first name), "Ysolde's Shroud". Its
+/// lines are not told here: the caller writes what the making was, and marks it `made`.
+pub fn legendize_made(rng: &mut Mulberry32, name: &str, tags: &[Tag], maker: &str) -> Legend {
+    let mut legend = legendize_in(rng, name, tags, None);
+    if let Some((_, epithet)) = legend.title.split_once("'s ") {
+        legend.title = format!("{maker}'s {epithet}");
+    }
+    legend.made = true;
+    legend
 }
 
 /// A faction named in a legend's history, from the faction name grammar: any folk's, any

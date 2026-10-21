@@ -13,7 +13,7 @@
 //!   ([`crate::ui`]); the mouse is read in the interface's own pixels ([`ui_cursor`]). Back
 //!   returns to the talk; Esc leaves, and the folk's hold is released however it closes
 //!   ([`crate::talk`] treats the bench as the talk going on).
-//! - `FB_ENCHANT=<select|strip|reforge|scrap>` fills the delver's pack and stock a few frames in
+//! - `FB_ENCHANT=<select|strip|reforge|offer|legendary|scrap>` fills the delver's pack and stock a few frames in
 //!   and, once the bench is open (`FB_TALK=1 FB_TALK_TOPIC=<n>` opens it), picks an item and does
 //!   that, for captures.
 
@@ -65,6 +65,7 @@ enum Do {
     Strip(&'static Affix),
     Add(&'static Affix),
     Reforge,
+    Legend(Option<&'static Affix>),
     Scrap,
     Back,
 }
@@ -102,6 +103,8 @@ pub struct Open {
     /// What the last thing done said, and whether it went well.
     notice: Option<(String, bool)>,
     scrapped: Option<Scrapped>,
+    /// The level the bench is on, for the legend a made legendary tells.
+    level: u32,
 }
 
 #[derive(Resource, Default, Debug)]
@@ -138,14 +141,14 @@ fn candidates(inventory: &Inventory, mode: Service) -> Vec<ItemId> {
 }
 
 /// The talk chose Enchant or Scrap: open the bench on the speaker.
-fn open_bench(mut chosen: MessageReader<ServiceChosen>, talk: Res<Talk>, mut bench: ResMut<Bench>, mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
+fn open_bench(mut chosen: MessageReader<ServiceChosen>, talk: Res<Talk>, level: Option<Res<crate::play::CurrentLevel>>, mut bench: ResMut<Bench>, mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
     for ServiceChosen { service, .. } in chosen.read() {
         if !matches!(service, Service::Enchant | Service::Scrap) {
             continue;
         }
         let Some(speaker) = talk.speaker.as_ref() else { continue };
         let tier = speaker.trade.map_or(enchant::Tier::Novice, |t| tier_of(t.tier));
-        bench.open = Some(Open { mode: *service, by: Enchanter { name: speaker.name.clone(), tier, faction: speaker.faction.clone() }, selected: None, notice: None, scrapped: None });
+        bench.open = Some(Open { mode: *service, by: Enchanter { name: speaker.name.clone(), tier, faction: speaker.faction.clone() }, selected: None, notice: None, scrapped: None, level: level.as_ref().map_or(0, |l| l.0.depth) });
         bench.changed();
         show_screen(&mut open, Some(Screen::Enchant), cursor.as_deref_mut().map(|c| &mut **c));
     }
@@ -172,6 +175,7 @@ fn act(bench: &mut Bench, inventory: &mut Inventory, stock: &mut Enchanting, act
         Do::Strip(affix) => finish(open, inventory, stock, Work::Strip(affix)),
         Do::Add(affix) => finish(open, inventory, stock, Work::Add(affix)),
         Do::Reforge => finish(open, inventory, stock, Work::Reforge),
+        Do::Legend(affix) => finish(open, inventory, stock, Work::Legend(affix)),
         Do::Scrap => {
             if let Some(id) = open.selected {
                 let title = inventory.item(id).map(|i| i.title().to_string()).unwrap_or_default();
@@ -199,8 +203,9 @@ fn finish(open: &mut Open, inventory: &mut Inventory, stock: &mut Enchanting, wo
         Work::Add(a) => format!("Added {}", a.name),
         Work::Strip(a) => format!("Stripped {}", a.name),
         Work::Reforge => "Reforged it".to_string(),
+        Work::Legend(_) => "Made it legendary".to_string(),
     };
-    open.notice = Some(match enchanting::do_work(inventory, &mut stock.0, id, work, &open.by) {
+    open.notice = Some(match enchanting::do_work_in(inventory, &mut stock.0, id, work, &open.by, open.level) {
         Ok(cost) => (format!("{verb}. Paid {}.", cost_line(&cost)), true),
         Err(declined @ (Declined::Refused(_) | Declined::Short(_))) => (declined.reason(), false),
     });
@@ -462,8 +467,35 @@ fn tier_note(tier: enchant::Tier) -> String {
         enchant::Tier::Novice => "A novice enchanter only strips flaws.".into(),
         enchant::Tier::Apprentice => "An apprentice strips any affix and adds magic-tier ones, making magic items.".into(),
         enchant::Tier::Expert => "An expert adds affixes up to rare-tier, making rare items.".into(),
-        enchant::Tier::Master => "A master adds affixes of any tier, even legendary ones, which ask for a rare material.".into(),
+        enchant::Tier::Master => "A master adds affixes of any tier, even legendary ones, which ask for a rare material, and can make a rare item a legend.".into(),
     }
+}
+
+/// Why the bench has no Strip to offer for `item` at `by`, if it has none.
+fn strip_note(item: &Item, by: &Enchanter) -> Option<&'static str> {
+    if !enchant::removable(item, by.tier).is_empty() {
+        return None;
+    }
+    Some(match enchant::unchangeable(item) {
+        Some(refusal) => refusal.reason(),
+        None if item.affixes.is_empty() => "It carries no affix.",
+        None => Refusal::TooHigh.reason(),
+    })
+}
+
+/// Why the bench will not reforge `item` for `by`, if it will not.
+fn reforge_note(item: &Item, by: &Enchanter) -> Option<&'static str> {
+    enchant::reforge(item, enchanting::reforge_seed(item), by).err().map(Refusal::reason)
+}
+
+/// Why the bench will not make `item` legendary for `by`, if it will not.
+fn legend_note(item: &Item, by: &Enchanter) -> Option<&'static str> {
+    enchant::make_legendary(item, None, by, 0).err().map(Refusal::reason)
+}
+
+/// Why the bench adds nothing to `item`, when it is the item that will not take it.
+fn add_note(item: &Item) -> Option<&'static str> {
+    enchant::unchangeable(item).map(Refusal::reason)
 }
 
 /// The right column for a picked item.
@@ -503,7 +535,7 @@ fn detail(col: &mut ChildSpawnerCommands, fonts: &UiFonts, open: &Open, inventor
     let removable = enchant::removable(item, by.tier);
     line(col, fonts, "Strip", &fonts.mono, 13.0, MUTED);
     if removable.is_empty() {
-        line(col, fonts, if item.affixes.is_empty() { "It carries no affix." } else { "Beyond their craft: a novice strips only flaws." }, &fonts.body_italic, 17.0, MUTED);
+        line(col, fonts, strip_note(item, by).unwrap_or_default(), &fonts.body_italic, 17.0, MUTED);
     }
     for affix in removable {
         let (cost, affordable) = priced(Work::Strip(affix));
@@ -529,16 +561,38 @@ fn detail(col: &mut ChildSpawnerCommands, fonts: &UiFonts, open: &Open, inventor
             });
         }
         None => {
-            let why = match enchant::reforge(item, enchanting::reforge_seed(item), by) {
-                Err(r) => r.reason(),
-                Ok(_) => Refusal::TooHigh.reason(),
-            };
-            line(col, fonts, why, &fonts.body_italic, 17.0, MUTED);
+            line(col, fonts, reforge_note(item, by).unwrap_or(Refusal::TooHigh.reason()), &fonts.body_italic, 17.0, MUTED);
+        }
+    }
+    // Legend.
+    line(col, fonts, "Legend", &fonts.mono, 13.0, MUTED);
+    if let Some(why) = legend_note(item, by) {
+        line(col, fonts, why, &fonts.body_italic, 17.0, MUTED);
+    } else {
+        let options = enchant::legendary_options(item, by.tier);
+        let choices: Vec<Option<&'static Affix>> = if options.is_empty() { vec![None] } else { options.into_iter().map(Some).collect() };
+        for affix in choices {
+            let (cost, affordable) = priced(Work::Legend(affix));
+            col.spawn(frame(BenchButton { act: Do::Legend(affix), enabled: cost.is_some(), scrolls: true })).with_children(|b| {
+                b.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|t| {
+                    match affix {
+                        Some(a) => {
+                            line(t, fonts, format!("Make legendary with \u{201c}{}\u{201d}", a.name), &fonts.body_medium, 19.0, rarity_color(fb_items::Rarity::Legendary));
+                            line(t, fonts, a.text.clone(), &fonts.body, 15.0, MUTED);
+                        }
+                        None => {
+                            line(t, fonts, "Make legendary", &fonts.body_medium, 19.0, rarity_color(fb_items::Rarity::Legendary));
+                            line(t, fonts, "Gives it a title and a legend. It has no room for another affix.", &fonts.body, 15.0, MUTED);
+                        }
+                    }
+                });
+                line(b, fonts, cost.unwrap_or_default(), &fonts.mono, 14.0, if affordable { INK } else { BAD });
+            });
         }
     }
     // Add.
     line(col, fonts, "Add", &fonts.mono, 13.0, MUTED);
-    line(col, fonts, tier_note(by.tier), &fonts.body_italic, 15.0, MUTED);
+    line(col, fonts, add_note(item).map_or_else(|| tier_note(by.tier), String::from), &fonts.body_italic, 15.0, MUTED);
     for affix in enchant::addable(item, by.tier) {
         let (cost, affordable) = priced(Work::Add(affix));
         col.spawn(frame(BenchButton { act: Do::Add(affix), enabled: cost.is_some(), scrolls: true })).with_children(|b| {
@@ -562,6 +616,7 @@ fn drive_for_capture(mut bench: ResMut<Bench>, mut inventory: ResMut<Inventory>,
         3 => {
             let id = match what.as_str() {
                 "reforge" => pick(&|i| i.base == "Dagger"),
+                "legendary" | "offer" => pick(&|i| i.base == "Cloak"),
                 "scrap" => pick(&|i| i.base == "Sword"),
                 _ => pick(&|i| i.affixes.iter().any(|a| !a.good)),
             }
@@ -572,9 +627,11 @@ fn drive_for_capture(mut bench: ResMut<Bench>, mut inventory: ResMut<Inventory>,
         }
         8 => {
             let Some(item) = bench.open.as_ref().and_then(|o| o.selected).and_then(|id| inventory.item(id)).cloned() else { return };
+            let open_tier = bench.open.as_ref().map_or(enchant::Tier::Novice, |o| o.by.tier);
             let todo = match what.as_str() {
                 "strip" => item.affixes.iter().find(|a| !a.good).map(|a| Do::Strip(a)),
                 "reforge" => Some(Do::Reforge),
+                "legendary" => Some(Do::Legend(enchant::legendary_options(&item, open_tier).first().copied())),
                 "scrap" => Some(Do::Scrap),
                 _ => None,
             };
@@ -598,7 +655,7 @@ mod tests {
 
     fn bench_with(inventory: &mut Inventory, item: Item, tier: Tier, mode: Service) -> (Bench, ItemId) {
         let id = inventory.add(item);
-        let open = Open { mode, by: by(tier), selected: Some(id), notice: None, scrapped: None };
+        let open = Open { mode, by: by(tier), selected: Some(id), notice: None, scrapped: None, level: 1 };
         (Bench { open: Some(open), revision: 0 }, id)
     }
 
@@ -625,5 +682,24 @@ mod tests {
         let open = bench.open.as_ref().unwrap();
         assert!(open.scrapped.is_some() && open.selected.is_none());
         assert!(act(&mut bench, &mut inventory, &mut stock, Do::Back));
+    }
+
+    #[test]
+    fn a_legendary_item_gives_its_real_reason_everywhere() {
+        let cloak = (0..20_000).filter_map(|s| roll_item_with("Cloak", s, Odds::loot(8))).find(|i| i.rarity == fb_items::Rarity::Rare).unwrap();
+        let legend = enchant::make_legendary(&cloak, None, &by(Tier::Master), 3).unwrap();
+        for tier in [Tier::Expert, Tier::Master] {
+            let by = by(tier);
+            let want = "A legend cannot be changed.";
+            assert_eq!(strip_note(&legend, &by), Some(want));
+            assert_eq!(reforge_note(&legend, &by), Some(want));
+            assert_eq!(add_note(&legend), Some(want));
+        }
+        assert_eq!(legend_note(&legend, &by(Tier::Master)), Some("A legend cannot be changed."));
+        assert_eq!(legend_note(&legend, &by(Tier::Expert)), Some("Only a master enchanter can make a legend."));
+        // A rare item an expert is asked about, and a common one a master is.
+        assert_eq!(legend_note(&cloak, &by(Tier::Expert)), Some("Only a master enchanter can make a legend."));
+        assert_eq!(legend_note(&cloak, &by(Tier::Master)), None);
+        assert_eq!(strip_note(&cloak, &by(Tier::Novice)), Some("Beyond this enchanter's craft."));
     }
 }
