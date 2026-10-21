@@ -532,12 +532,19 @@ impl<'a> Envelope<'a> {
             // rests on the shoulders and still closes round the neck.
             let s = self.body.scale;
             let neck = base[8].y;
+            // What counts is what stands out over the shoulder itself, not a collar round the
+            // neck: told apart by its reach, which at a shoulder is past halfway from the
+            // shoulder section's width to the shoulder top's. Cutting it off at the neck's
+            // height instead left a yoke or a sleeve cap standing above the cloth, and the
+            // top section widened to meet the arms below it: a flat shelf with a corner.
+            let wide = 0.5 * (base[6].half_width + base[7].half_width);
             let top = self
                 .over_arms
                 .cells()
-                .filter(|&(y, phi, e)| phi.cos().abs() > 0.7 && e > 0.25 * s && y < neck - 0.25 * s)
+                .filter(|&(y, phi, e)| phi.cos().abs() > 0.7 && e > 0.25 * s && self.reach.at(phi, y) + e > wide)
                 .fold(base[7].y, |m, c| m.max(c.0));
-            base[7].y = top.min(neck - 0.25 * s);
+            base[7].y = top;
+            base[8].y = neck.max(top + 0.25 * s);
         }
         let ring_y = base.map(|r| r.y);
         let mut grow = [[0.0f32; 2]; 9];
