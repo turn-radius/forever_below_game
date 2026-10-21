@@ -78,6 +78,12 @@ pub struct ClaimDoor {
     /// The claim's main door: the one of its hall nearest where the delver starts. At Neutral
     /// standing it stands open to the delver while the claim's other doors are locked.
     pub main: bool,
+    /// The way from the door into the claim, as a cell step along the doorway's axis; `(0, 0)`
+    /// where the door has no such side. A lock holds from outside only, so it is the claim's side.
+    pub inward: (i32, i32),
+    /// Whether the far side of the door is another claim's ground (or the door has no claim
+    /// side at all): it has no outside to lock against, and opens from either side.
+    pub shared: bool,
 }
 
 impl Level {
@@ -113,7 +119,11 @@ impl Level {
                 let Some((room, claim)) = near.iter().filter_map(|&(nx, ny)| self.room_at(nx, ny)).find_map(|r| Some((r, claim_of(r)?))) else { continue };
                 let leads_out = near.iter().any(|&(nx, ny)| (nx, ny) != (x, y) && self.room_at(nx, ny).is_none_or(|r| !claim.rooms.contains(&r)));
                 if leads_out {
-                    doors.push(ClaimDoor { x, y, faction: claim.faction, room, main: false });
+                    let held = |nx: i32, ny: i32| self.is_open(nx, ny) && self.room_at(nx, ny).is_some_and(|r| claim.rooms.contains(&r));
+                    let outside = |nx: i32, ny: i32| self.is_open(nx, ny) && !held(nx, ny);
+                    let inward = [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().find(|&(dx, dy)| held(x + dx, y + dy) && outside(x - dx, y - dy)).unwrap_or((0, 0));
+                    let shared = inward == (0, 0) || self.room_at(x - inward.0, y - inward.1).is_some_and(|r| self.claim_of(r).is_some());
+                    doors.push(ClaimDoor { x, y, faction: claim.faction, room, main: false, inward, shared });
                 }
             }
         }

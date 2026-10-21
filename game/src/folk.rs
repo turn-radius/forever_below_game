@@ -119,7 +119,7 @@ impl Person {
         let outfit = *rng.pick(&faction.outfit_keys());
         let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
             let set = o.roll_in(spot.seed, spot.folk.key(), odds, Some(&livery(faction)));
-            let ammunition = set.goods.into_iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).collect();
+            let ammunition: Vec<Item> = set.goods.into_iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).collect();
             (set.worn, ammunition)
         });
         let has = |gear: &[(Slot, Item)], slot| gear.iter().any(|(s, _)| *s == slot);
@@ -135,6 +135,9 @@ impl Person {
             "fallen" => dirt_rng.range_f32(0.3, 0.5),
             _ => dirt_rng.range_f32(0.08, 0.38),
         };
+        // Every member carries their faction's key, which falls with their belongings.
+        let mut goods = goods;
+        goods.extend(crate::doors::key_of(faction));
         Person { spot: *spot, depth, faction: faction.clone(), name, spec: BodySpec::roll(spot.folk, spot.seed), outfit, gear, goods, dirt }
     }
 
@@ -674,10 +677,10 @@ mod tests {
                 match shoots {
                     Some(ammunition) if person.item(Slot::Quiver).is_some_and(|h| h.profile.holds.as_ref().is_some_and(|g| g.accepts.contains(&ammunition))) => {
                         archers += 1;
-                        assert_eq!(person.goods.len(), fb_items::outfit::AMMUNITION_CARRIED, "{}", person.name);
-                        assert!(person.goods.iter().all(|i| i.shape.family() == ammunition), "{}", person.name);
+                        assert_eq!(person.goods.len(), fb_items::outfit::AMMUNITION_CARRIED + 1, "{}", person.name);
+                        assert!(person.goods.iter().filter(|i| !crate::doors::is_key_of(i, faction.id)).all(|i| i.shape.family() == ammunition), "{}", person.name);
                     }
-                    _ => assert!(person.goods.is_empty(), "{} carries {} things", person.name, person.goods.len()),
+                    _ => assert!(person.goods.iter().all(|i| crate::doors::is_key_of(i, faction.id)), "{} carries {} things", person.name, person.goods.len()),
                 }
             }
         }
