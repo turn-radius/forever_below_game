@@ -105,6 +105,8 @@ ported! {
     Arrow => ammo::Arrows(AmmoState),
     Bolt => ammo::Bolts(AmmoState),
     Quiver => quiver::Quivers(QuiverState),
+    Tent => tent::Tent(TentState),
+    Campfire => campfire::Campfire(CampfireState),
     BoltCase => quiver::BoltCases(QuiverState),
     Banner => banner::Banner(BannerState),
 }
@@ -176,7 +178,7 @@ impl Item {
             Item::Charm(s) => s.etch,
             Item::Bags(s) => s.etch,
             Item::Chests(s) => s.etch,
-            Item::Food(_) | Item::Torch(_) | Item::Lantern(_) | Item::Sundry(_) | Item::Writing(_) | Item::Arrow(_) | Item::Bolt(_) | Item::Quiver(_) | Item::BoltCase(_) | Item::Banner(_) => return None,
+            Item::Food(_) | Item::Torch(_) | Item::Lantern(_) | Item::Sundry(_) | Item::Writing(_) | Item::Arrow(_) | Item::Bolt(_) | Item::Quiver(_) | Item::Tent(_) | Item::Campfire(_) | Item::BoltCase(_) | Item::Banner(_) => return None,
         };
         etch.on.then_some(etch)
     }

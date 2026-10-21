@@ -10,6 +10,7 @@ mod belt_build;
 mod belt_roll;
 mod bow_build;
 mod bow_roll;
+mod camp_build;
 mod charm_build;
 mod charm_roll;
 mod chests_build;

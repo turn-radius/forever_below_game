@@ -184,5 +184,21 @@
   ],
   "wt": 3,
   "desc": "Bound pages · about 25 gp"
+ },
+ "Tent": {
+  "fp": [
+   2,
+   5
+  ],
+  "wt": 20,
+  "desc": "Shelter · sleeps two · pitch it where you rest"
+ },
+ "Campfire kit": {
+  "fp": [
+   2,
+   3
+  ],
+  "wt": 12,
+  "desc": "Kindling, a rig and a pot · set it down to make a fire"
  }
 }

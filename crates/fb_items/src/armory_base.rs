@@ -16,12 +16,14 @@ use armory::families::axe::{Axe, AxeArchetype};
 use armory::families::bags::{BagStyle, Bags};
 use armory::families::feet::Feet;
 use armory::families::food::{Brew, Food, FoodStyle, GLOWCAP};
+use armory::families::campfire::FireForm;
 use armory::families::garment::Garment;
 use armory::families::hands::Hands;
 use armory::families::hat::Hats;
 use armory::families::hood::Hoods;
 use armory::families::legs::Legs;
 use armory::families::sundry::{Sundry, SundryKind};
+use armory::families::tent::TentForm;
 use armory::families::torch::BurnState;
 use armory::families::writing::{Writing, WritingKind};
 use armory::fabric::FabricPattern;
@@ -188,6 +190,8 @@ pub const HELD_BACK: &[&str] = &[
     // Camp goods and elixirs come from tentmakers and alchemists, not loose loot.
     "Bedroll",
     "Tinderbox",
+    "Tent",
+    "Campfire kit",
     "Elixir of the Hare",
     "Elixir of Vigil",
     "Elixir of Fasting",
@@ -290,9 +294,29 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Bolt", ArmoryBase::of(A::Any(Family::Bolt))),
     ("Quiver", ArmoryBase::of(A::Any(Family::Quiver))),
     ("Bolt case", ArmoryBase::of(A::Any(Family::BoltCase))),
+    // Camp goods: carried packed; the pitched and set forms are the same items put down (SRD 5.1 p. 68-70).
+    ("Tent", ArmoryBase::of(A::Any(Family::Tent)).tweaked(packed_tent)),
+    ("Campfire kit", ArmoryBase::of(A::Any(Family::Campfire)).tweaked(packed_fire)),
 ];
 
 // ── Tweaks ───────────────────────────────────────────────────────────────────────────────
+
+/// A tent is carried rolled up with its poles; put down, the same item pitches.
+fn packed_tent(item: &mut Item, _: &mut Mulberry32) {
+    if let Item::Tent(s) = item {
+        s.tent.form = TentForm::Packed;
+    }
+}
+
+/// A campfire kit is carried as a bundle; put down, the same item is built into a fire. A
+/// carried kit is never lit and its wood is fresh.
+fn packed_fire(item: &mut Item, _: &mut Mulberry32) {
+    if let Item::Campfire(s) = item {
+        s.fire.form = FireForm::Packed;
+        s.fire.lit = false;
+        s.fire.ash = 0.0;
+    }
+}
 
 /// A short cloak: the plate's `s.garment.length=.4+r()*1.2`.
 fn mantle(item: &mut Item, r: &mut Mulberry32) {
@@ -527,7 +551,10 @@ mod tests {
     fn every_ported_family_has_a_base() {
         // A banner is scenery: the Armory draws it, but no loot base names it.
         for &family in Item::PORTED.iter().filter(|f| **f != Family::Banner) {
-            let base = base_for(family, 1207).unwrap_or_else(|| panic!("{family:?} has no base"));
+            let Some(base) = base_for(family, 1207) else {
+                assert!(bases_of(family).next().is_some() && bases_of(family).all(held_back), "{family:?} has no base");
+                continue;
+            };
             assert_eq!(armory_base(base).unwrap().accept.family(), family);
             assert_eq!(base_for(family, 1207), Some(base));
         }

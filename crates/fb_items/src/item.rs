@@ -275,6 +275,18 @@ mod tests {
     use super::*;
     use crate::armory_base::{ARMORY_BASES, held_back};
 
+    #[test]
+    fn tents_and_campfire_kits_roll_by_name_but_never_lie_loose() {
+        for (family, base) in [(armory::Family::Tent, "Tent"), (armory::Family::Campfire, "Campfire kit")] {
+            // Held back from loose loot until tentmakers stock them.
+            assert!((0..200).all(|seed| roll_loot(family, seed, Odds::loot(3)).is_none()), "{base} lies loose");
+            let by_name = roll_item(base, 9).unwrap();
+            assert_eq!((by_name.profile.kind, by_name.rarity), (Kind::Good, Rarity::Common));
+            assert!(by_name.profile.packable && by_name.profile.stats.weight >= 12.0, "{base}");
+            assert_eq!(roll_item(base, 9), Some(by_name));
+        }
+    }
+
     /// Whether floor loot of the sundry family, `seeds` seeds at each depth from 1 to 10, is
     /// ever a held-back base.
     fn loose_sundries_hold_back(seeds: u32) -> bool {
@@ -487,6 +499,9 @@ mod tests {
     fn loot_rolls_a_base_of_its_family() {
         // A banner is scenery: no loot base names it.
         for &family in armory::Item::PORTED.iter().filter(|f| **f != armory::Family::Banner) {
+            if crate::armory_base::bases_of(family).all(held_back) {
+                continue;
+            }
             for seed in [5, 1207] {
                 let item = roll_loot(family, seed, Odds::default()).unwrap();
                 assert_eq!(item.shape.family(), family);

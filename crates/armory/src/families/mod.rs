@@ -10,6 +10,7 @@ pub mod banner;
 pub mod bags;
 pub mod belt;
 pub mod bow;
+pub mod campfire;
 pub mod charm;
 pub mod chests;
 pub mod club;
@@ -32,6 +33,7 @@ pub mod spear;
 pub mod staff;
 pub mod sundry;
 pub mod sword;
+pub mod tent;
 pub mod torch;
 pub mod writing;
 

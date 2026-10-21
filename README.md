@@ -94,7 +94,7 @@ cargo run -p forever_below -- --family sword --seed 1207 --wear grave_find
 
 A grid of twelve items from consecutive seeds, turning, to compare what the generator makes. `--family` alone also opens it.
 
-- `--family <name>` starts on a family: staff, mace, sword, spear, dagger, club, axe, bow, crossbow, helm, hat, hood, garment, belt, hands, legs, feet, shield, ring, amulet, charm, bags, chests, food, torch, lantern, sundry, writing.
+- `--family <name>` starts on a family: staff, mace, sword, spear, dagger, club, axe, bow, crossbow, helm, hat, hood, garment, belt, hands, legs, feet, shield, ring, amulet, charm, bags, chests, food, torch, lantern, sundry, writing, tent, campfire.
 - `--seed <n>` is the first seed on the page.
 - `--wear <state>` sets the condition: pristine, serviceable, battle_worn, neglected or grave_find.
 
