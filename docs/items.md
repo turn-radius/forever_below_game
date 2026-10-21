@@ -151,7 +151,7 @@ Where it departs from the shield and the garments:
 - `tools/extract_data.js` writes `afx.json` from the plate, which has none of these fields or affixes; run it again only to merge.
 - When affixes are chosen by hand (from the armory), rarity follows from them: two good affixes make it rare, one makes it magic, none makes it common.
 - Name: `<prefix> <Armory noun> <suffix>`. The noun comes from `forgeNoun` (Longsword, Rondel Dagger, Kettle Hat).
-- A **legendary** gets a title (`<owner>'s <noun>` or `The <adjective> <noun>`). The original name becomes its subtitle, and it gets three lines of history: where it was made and by which faction, who carried it and what they did, and how it was lost.
+- A **legendary** gets a title (`<owner>'s <noun>` or `The <adjective> <noun>`). The original name becomes its subtitle, and it gets three lines of history: where it was made and by which faction, who carried it and what they did, and how it was lost. The factions it names are the delver's world's own: an item found on a level (floor loot, container contents) is told with `Item::in_world(level.faction_names())`, which picks them from the level's factions by the item's seed and leaves the title as rolled; with no world, as in the Forge, they come from the faction name grammar. A record keeps the legend as told, so a restored item names the same factions.
 
 ### Affix effects
 

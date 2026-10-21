@@ -38,7 +38,7 @@ pub fn anyone(rng: &mut Mulberry32) -> String {
 }
 
 /// A legendary's title, the name it had before, and three lines of history.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Legend {
     pub title: String,
     pub subtitle: String,
@@ -49,6 +49,12 @@ pub struct Legend {
 /// `legendize`: a title (`<owner>'s <epithet>` or `The <adjective> <epithet>`, the epithet
 /// chosen for what the item is) over its old `name`, and its history.
 pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
+    legendize_in(rng, name, tags, None)
+}
+
+/// [`legendize`] for a world: the factions its history names are picked from `factions`, the
+/// world's own names, when there are any, and from the faction name grammar otherwise.
+pub fn legendize_in(rng: &mut Mulberry32, name: &str, tags: &[Tag], factions: Option<&[String]>) -> Legend {
     let owner = anyone(rng).split(' ').next().unwrap_or_default().to_string();
     let epithets: &[&str] = if tags.contains(&Tag::Weapon) {
         &["Tooth", "Oath", "Answer", "Thorn", "Reckoning", "Mercy"]
@@ -70,12 +76,12 @@ pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
     let made_on = rng.int(2, 10);
     let lost_on = made_on + rng.int(3, 22);
     let bearer = anyone(rng);
-    let faction = legend_faction(rng);
+    let faction = legend_faction(rng, factions);
     let place = rng.pick(places()).clone();
     let made = format!(
         "{} on level {made_on} by {}.",
         rng.pick(&["Forged", "Stitched", "Carved", "Bound", "Made"]),
-        legend_faction(rng)
+        legend_faction(rng, factions)
     );
     let deeds = [
         format!("settled {place} for a season"),
@@ -99,8 +105,11 @@ pub fn legendize(rng: &mut Mulberry32, name: &str, tags: &[Tag]) -> Legend {
 
 /// A faction named in a legend's history, from the faction name grammar: any folk's, any
 /// intention's. An item carries no world, so this is a faction of the sort the abyss has rather
-/// than one of a particular world's pool.
-fn legend_faction(rng: &mut Mulberry32) -> String {
+/// than one of a particular world's pool, unless `world` gives that pool's names.
+fn legend_faction(rng: &mut Mulberry32, world: Option<&[String]>) -> String {
+    if let Some(names) = world.filter(|n| !n.is_empty()) {
+        return rng.pick(names).clone();
+    }
     const FOLK: [&str; 6] = ["human", "dwarf", "gnome", "goblin", "lizardfolk", "pigfolk"];
     const INTENTIONS: [&str; 4] = ["way_out", "trade", "worship", "plunder"];
     let (folk, intention) = (*rng.pick(&FOLK), *rng.pick(&INTENTIONS));

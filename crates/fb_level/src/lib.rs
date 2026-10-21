@@ -176,6 +176,11 @@ impl Level {
         self.factions.iter().find(|f| f.id == id).unwrap_or_else(|| panic!("faction {} is not on this level", id.0))
     }
 
+    /// The names of the factions on this level, as the world's items name them in their legends.
+    pub fn faction_names(&self) -> Vec<String> {
+        self.factions.iter().map(|f| f.name.clone()).collect()
+    }
+
     /// The cell at `(x, y)`, or rock outside the grid.
     pub fn cell(&self, x: i32, y: i32) -> Cell {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {

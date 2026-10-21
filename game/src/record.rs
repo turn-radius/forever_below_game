@@ -113,6 +113,10 @@ pub struct ItemRecord {
     /// The odds it was rolled against; records from before odds roll at the first level's.
     #[serde(default)]
     pub odds: fb_items::Odds,
+    /// A legendary's legend as it was told where it was found, which names that world's
+    /// factions; records from before roll the grammar's.
+    #[serde(default)]
+    pub legend: Option<fb_items::naming::Legend>,
 }
 
 /// An item in a container's grid.
@@ -192,6 +196,7 @@ pub fn record_item(inventory: &Inventory, id: ItemId) -> Option<ItemRecord> {
         coins: item.coins.map(|c| [c.gp, c.sp, c.cp]),
         contents: record_contents(inventory, id),
         odds: item.odds,
+        legend: item.legend.clone(),
     })
 }
 
@@ -209,6 +214,9 @@ pub fn record_contents(inventory: &Inventory, container: ItemId) -> Vec<Stowed> 
 pub fn restore_item(inventory: &mut Inventory, record: &ItemRecord) -> Option<ItemId> {
     let mut item = fb_items::roll_item_with(&record.base, record.seed, record.odds)?;
     item.shape = record.shape.clone();
+    if record.legend.is_some() {
+        item.legend.clone_from(&record.legend);
+    }
     item.coins = record.coins.map(|[gp, sp, cp]| Coins { gp, sp, cp });
     let id = inventory.add(item);
     restore_contents(inventory, id, &record.contents);
@@ -446,7 +454,7 @@ mod tests {
         let mut level = LevelRecord::default();
         level.floor.push(FloorRecord {
             spot: ItemSpot { x: 3.25, y: 4.5, yaw: 0.3, family: item.shape.family(), seed: item.seed },
-            item: ItemRecord { base: item.base.clone(), seed: item.seed, shape: item.shape.clone(), coins: Some([1, 2, 3]), contents: vec![], odds: fb_items::Odds::kit(4) },
+            item: ItemRecord { base: item.base.clone(), seed: item.seed, shape: item.shape.clone(), coins: Some([1, 2, 3]), contents: vec![], odds: fb_items::Odds::kit(4), legend: None },
         });
         level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
         level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false });

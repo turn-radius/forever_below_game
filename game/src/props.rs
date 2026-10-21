@@ -174,9 +174,9 @@ fn rescale_props(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut props: Query
 /// Keeps track of a container prop in `inventory`, loose, holding what its loot rolls against
 /// `odds`: each thing at its first free spot, upright first and then turned, and anything with
 /// no room left out. `None` for scenery. A container set out empty ([`fb_level::NO_LOOT`]) holds nothing.
-pub fn stock_container(inventory: &mut Inventory, prop: Prop, odds: fb_items::Odds) -> Option<ItemId> {
+pub fn stock_container(inventory: &mut Inventory, prop: Prop, odds: fb_items::Odds, names: &[String]) -> Option<ItemId> {
     let Prop::Container { style, loot, .. } = prop else { return None };
-    let contents = if loot == fb_level::NO_LOOT { Vec::new() } else { fb_items::roll_contents(style, loot, odds) };
+    let contents = if loot == fb_level::NO_LOOT { Vec::new() } else { fb_items::roll_contents(style, loot, odds).into_iter().map(|i| i.in_world(names)).collect() };
     stock_container_with(inventory, prop, contents)
 }
 
@@ -234,7 +234,7 @@ fn lay_out_props(
             }
             _ => match &ahead {
                 Some(ahead) => stock_container_with(&mut inventory, spot.prop, ahead.contents.clone()),
-                None => stock_container(&mut inventory, spot.prop, odds),
+                None => stock_container(&mut inventory, spot.prop, odds, &level.0.faction_names()),
             },
         };
         let opened = left.is_some_and(|c| c.opened);
@@ -563,7 +563,7 @@ mod tests {
             if !spot.prop.holds_loot() {
                 continue;
             }
-            let rolled = fb_items::roll_contents(style, loot, fb_items::Odds::loot(level.depth));
+            let rolled: Vec<_> = fb_items::roll_contents(style, loot, fb_items::Odds::loot(level.depth)).into_iter().map(|i| i.in_world(&level.faction_names())).collect();
             assert!(!rolled.is_empty());
             // Some container in the inventory holds exactly these, by title, in roll order.
             let titles: Vec<String> = rolled.iter().map(|i| i.title().to_string()).collect();
