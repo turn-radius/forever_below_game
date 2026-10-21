@@ -13,7 +13,7 @@ use bevy::{
 use fb_level::{CELL, Level};
 
 use super::explore::{ExploredLevels, to_grid};
-use super::plan::{MARGIN, PlanCanvas, draw_plan};
+use super::plan::{MARGIN, PlanCanvas, draw_plan_with, shade_finishes};
 use crate::carry::ViewModelCamera;
 use crate::play::{CurrentLevel, DelveSystems, PlayerCamera, Screen, ScreenOpen};
 use crate::ui::{BG, MUTED, UiFonts};
@@ -296,7 +296,10 @@ fn redraw_plan(open: Res<ScreenOpen>, level: Option<Res<CurrentLevel>>, explored
         return;
     }
     plan.drawn = Some(key);
-    let _ = images.insert(&plan.image, image_of(&draw_plan(&level.0, seen, PLAN_PX)));
+    // The floors of what has been seen, shaded by their finishes as in the level view.
+    let finishes = crate::level::geometry::level_finishes(&level.0);
+    let canvas = draw_plan_with(&level.0, seen, PLAN_PX, |canvas, frame| shade_finishes(canvas, frame, &level.0, &finishes, |x, y| seen.is_seen(x, y)));
+    let _ = images.insert(&plan.image, image_of(&canvas));
 }
 
 /// Lays the plan and the marker where the view puts them.

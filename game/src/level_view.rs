@@ -20,7 +20,7 @@ use fb_level::sight::Explored;
 use fb_level::{Cell, FloorFinish, Level, LevelParams, LevelStyle, WallFinish, finishes, generate_with};
 
 use crate::forge_view::fresh_seed;
-use crate::map::plan::{MARGIN, PlanCanvas, PlanFrame, draw_plan_with};
+use crate::map::plan::{MARGIN, PlanCanvas, PlanFrame, MOSS_TINT, draw_plan_with, floor_tint, quarter_tint, shade_finishes};
 use crate::map::screen::{MapView, ZOOM};
 use crate::tweak_panel::{PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, chip, over_body, panel_body};
 use crate::ui::{BG, BRIGHT, FAINT, INK, LINE, MUTED, UiFonts, node_rect};
@@ -355,61 +355,14 @@ fn draw_level(forge: Res<LevelForge>, plan: Res<PlanView>, mut images: ResMut<As
     let _ = images.insert(&plan.image, image);
 }
 
-/// What a floor finish is tinted on the plan.
-const fn floor_tint(floor: FloorFinish) -> [f32; 3] {
-    match floor {
-        FloorFinish::Rock => [0.55, 0.42, 0.30],
-        FloorFinish::Flagstone => [0.42, 0.52, 0.66],
-        FloorFinish::Cobble => [0.80, 0.62, 0.25],
-    }
-}
-
-const MOSS_TINT: [f32; 3] = [0.30, 0.78, 0.30];
 const MARK_INK: [f32; 3] = [0.902, 0.863, 0.776];
 
-/// The level's finishes over the plan's floor: each floor tinted by how it is laid, moss in
-/// green by how thick it grows, and a mark at the middle of each room for its walls.
+/// The level's finishes over the plan's floor, shaded as the map shades them
+/// ([`shade_finishes`]) but over every cell, with each room's purpose square and a mark at the
+/// middle of each room for its walls.
 fn draw_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, params: &LevelParams) {
     let f = finishes(level, params);
-    for y in 0..level.height as i32 {
-        for x in 0..level.width as i32 {
-            let Some(finish) = f.at(x, y) else { continue };
-            let (a, b) = (frame.at(x as f32, y as f32), frame.at(x as f32 + 1.0, y as f32 + 1.0));
-            canvas.rect(a, b, floor_tint(finish.floor), 0.5);
-            canvas.rect(a, b, MOSS_TINT, finish.moss * 0.8);
-        }
-    }
-    // Each quarter outlined in its own colour along the edges where it meets another quarter, or
-    // rock, so the groups of rooms read at a glance.
-    let edge = (frame.px * 0.14).max(2.0);
-    for y in 0..level.height as i32 {
-        for x in 0..level.width as i32 {
-            let Some(q) = f.quarter(x, y) else { continue };
-            let (a, b) = (frame.at(x as f32, y as f32), frame.at(x as f32 + 1.0, y as f32 + 1.0));
-            // Corridors are tinted harder than rooms, so a quarter's corridors read as its own.
-            canvas.rect(a, b, quarter_tint(q), if level.room_at(x, y).is_some() { 0.13 } else { 0.30 });
-            // Each side of a cell that meets another quarter, drawn a little inside so both
-            // quarters show their own colour. Rock has no quarter; its walls are drawn already.
-            let inset = edge * 0.5;
-            let sides = [((0, -1), [a[0], a[1] + inset], [b[0], a[1] + inset]), ((0, 1), [a[0], b[1] - inset], [b[0], b[1] - inset]), ((-1, 0), [a[0] + inset, a[1]], [a[0] + inset, b[1]]), ((1, 0), [b[0] - inset, a[1]], [b[0] - inset, b[1]])];
-            for ((dx, dy), p, r) in sides {
-                if f.quarter(x + dx, y + dy).is_some_and(|n| n != q) {
-                    canvas.line(p, r, edge, quarter_tint(q), 0.95);
-                }
-            }
-        }
-    }
-    // Each room outlined in its quarter's colour.
-    for (q, quarter) in f.quarters().iter().enumerate() {
-        for &r in &quarter.rooms {
-            let room = level.rooms[r];
-            let (a, b) = (frame.at(room.x as f32, room.y as f32), frame.at((room.x + room.w) as f32, (room.y + room.h) as f32));
-            let (a, b) = ([a[0] + edge * 0.5, a[1] + edge * 0.5], [b[0] - edge * 0.5, b[1] - edge * 0.5]);
-            for (p, s) in [(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a)] {
-                canvas.line(p, s, edge, quarter_tint(q), 0.9);
-            }
-        }
-    }
+    shade_finishes(canvas, frame, level, &f, |_, _| true);
     // A square in each room's corner in its purpose's colour, named in the legend.
     for (r, room) in level.rooms.iter().enumerate() {
         let Some(purpose) = level.purpose_of(r) else { continue };
@@ -457,12 +410,6 @@ fn purpose_tint(purpose: fb_level::past::Purpose) -> [f32; 3] {
         Ossuary => [0.80, 0.72, 0.60],
         Guardroom => [0.95, 0.55, 0.20],
     }
-}
-
-/// The outline colour of quarter `q`, cycling through colours that stand apart from the floors'.
-fn quarter_tint(q: usize) -> [f32; 3] {
-    const TINTS: [[f32; 3]; 6] = [[0.95, 0.35, 0.35], [0.35, 0.85, 0.95], [0.95, 0.55, 0.95], [0.95, 0.95, 0.40], [0.55, 0.60, 1.0], [1.0, 0.65, 0.30]];
-    TINTS[q % TINTS.len()]
 }
 
 /// Rebuilds the legend's quarters: each outline colour with its character.
