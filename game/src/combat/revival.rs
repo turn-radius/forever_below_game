@@ -21,7 +21,7 @@ use bevy::{
     window::{CursorOptions, PrimaryWindow},
 };
 use fb_character::revival::{Wound, choose_hall, coin_words, fee, in_copper, pick_wound};
-use fb_level::{CELL as GRID, Level, folk::Faction};
+use fb_level::{CELL as GRID, Level};
 
 use super::feedback::Corpse;
 use super::{Health, RunDice};
@@ -273,7 +273,9 @@ fn come_to(
         let (faction, room) = choose_hall(&rooms)?;
         let theirs: Vec<Vec2> = friends.iter().filter(|(f, _)| *f == faction).map(|(_, at)| *at).collect();
         let cell = hall_cell(&level.0, room, &friends.iter().map(|(_, at)| *at).collect::<Vec<_>>())?;
-        Some((Faction(faction), cell, theirs))
+        // Named as the world rolled it, from any of its folk.
+        let name = folk.iter().find(|(_, d, _)| d.person.spot.faction.0 == faction).map(|(_, d, _)| d.person.faction.name.clone())?;
+        Some((name, cell, theirs))
     });
 
     match hall {
@@ -291,7 +293,7 @@ fn come_to(
                 charge(inventory, owed);
                 owed
             });
-            let name = capitalised(faction.name());
+            let name = capitalised(&faction);
             info!("{name} carry the delver to their hall; they take {owed} cp");
             lines.push(format!("{name} found you and carried you to their hall."));
             lines.push(if owed > 0 { format!("Their healers tended you. They took {} for their trouble.", coin_words(owed)) } else { "Their healers tended you. You had no coin to give, and they will remember it.".to_string() });
@@ -548,7 +550,7 @@ mod tests {
         let (mut app, player) = delve();
         let (level, spot, room) = level_with_folk();
         let at = crate::folk::stand_at(&spot);
-        app.world_mut().spawn((Denizen { person: crate::folk::Person::of(&spot, 1), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO }, at, GlobalTransform::from(at)));
+        app.world_mut().spawn((Denizen { person: crate::folk::Person::of(&spot, level.faction(spot.faction), 1), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO }, at, GlobalTransform::from(at)));
         app.insert_resource(CurrentLevel(level.clone()));
         let purse = fb_items::roll_item("Purse", 7).unwrap();
         let held = in_copper(purse.coins.unwrap());
@@ -573,7 +575,7 @@ mod tests {
         let (mut app, player) = delve();
         let (level, spot, _) = level_with_folk();
         let at = crate::folk::stand_at(&spot);
-        app.world_mut().spawn((Denizen { person: crate::folk::Person::of(&spot, 1), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO }, Hostility::Hostile, at, GlobalTransform::from(at)));
+        app.world_mut().spawn((Denizen { person: crate::folk::Person::of(&spot, level.faction(spot.faction), 1), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO }, Hostility::Hostile, at, GlobalTransform::from(at)));
         app.insert_resource(CurrentLevel(level));
         knock_down(&mut app, player);
         choose(&mut app, ReviveButton::ComeTo);
