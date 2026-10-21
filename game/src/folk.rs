@@ -95,6 +95,20 @@ pub struct Person {
     pub dirt: f32,
 }
 
+/// The colours and armour a faction's members dress in.
+fn livery(faction: &FactionSpec) -> fb_items::outfit::Livery {
+    use fb_faction::ArmourLean as Faction;
+    use fb_items::outfit::ArmourLean as Lean;
+    let lean = match faction.armour {
+        Faction::Padded => Lean::Padded,
+        Faction::Leather => Lean::Leather,
+        Faction::Mail => Lean::Mail,
+        Faction::Scale => Lean::Scale,
+        Faction::Plate => Lean::Plate,
+    };
+    fb_items::outfit::Livery::from_field(faction.field, lean)
+}
+
 impl Person {
     /// The person at `spot` on a level `depth` down, their gear rolled against
     /// [`fb_items::Odds::kit`] for it: a pure function of the two.
@@ -104,7 +118,7 @@ impl Person {
         let name = fb_items::naming::folk_name(&mut rng, spot.folk.key());
         let outfit = *rng.pick(&faction.outfit_keys());
         let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
-            let set = o.roll_with(spot.seed, spot.folk.key(), odds);
+            let set = o.roll_in(spot.seed, spot.folk.key(), odds, Some(&livery(faction)));
             let ammunition = set.goods.into_iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).collect();
             (set.worn, ammunition)
         });

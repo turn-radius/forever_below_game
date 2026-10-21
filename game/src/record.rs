@@ -287,6 +287,32 @@ mod tests {
     }
 
     #[test]
+    fn liveried_gear_keeps_its_colours_through_a_record() {
+        use armory::heraldry::{Field, Tincture};
+        use fb_items::outfit::{ArmourLean, Livery, outfit};
+        let field = Field { tincture: Tincture::Vert, tincture2: Tincture::Or, ..Field::default() };
+        let livery = Livery::from_field(field, ArmourLean::Plate);
+        let robe = outfit("mage").unwrap().roll_in(1, "human", fb_items::Odds::default(), Some(&livery)).worn.into_iter().find(|(_, i)| i.base == "Robe").unwrap().1;
+        let shield = (0..40)
+            .filter_map(|s| outfit("fighter").unwrap().roll_in(s, "human", fb_items::Odds::default(), Some(&livery)).worn.into_iter().find(|(_, i)| i.base == "Shield"))
+            .next()
+            .unwrap()
+            .1;
+        let mut inventory = Inventory::default();
+        let mut other = Inventory::default();
+        for item in [robe, shield] {
+            let want = item.shape.clone();
+            let id = inventory.add(item);
+            let record: ItemRecord = serde_json::from_str(&serde_json::to_string(&record_item(&inventory, id).unwrap()).unwrap()).unwrap();
+            let again = restore_item(&mut other, &record).unwrap();
+            assert_eq!(other.item(again).unwrap().shape, want);
+            if let armory::Item::Shield(s) = &other.item(again).unwrap().shape {
+                assert_eq!(s.field, field);
+            }
+        }
+    }
+
+    #[test]
     fn a_quiver_and_its_arrows_round_trip_and_a_loose_arrow_rolls_again() {
         let mut inventory = Inventory::default();
         let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
