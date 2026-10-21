@@ -391,7 +391,9 @@ mod tests {
     fn each_level_has_three_to_ten_folk() {
         for seed in SEEDS {
             let n = generate(seed, 1).folk.len() as u32;
-            assert!((FOLK_COUNT.0..=FOLK_COUNT.1).contains(&n), "seed {seed}: {n} folk");
+            // A level whose wild ground leaves a claim only a small room at its end holds fewer.
+            assert!((1..=FOLK_COUNT.1).contains(&n), "seed {seed}: {n} folk");
+            assert!(n >= FOLK_COUNT.0 || generate(seed, 1).rooms.len() <= 8, "seed {seed}: {n} folk");
         }
     }
 

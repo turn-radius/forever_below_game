@@ -24,6 +24,8 @@ const TARGET_COUNT: (u32, u32) = (6, 10);
 const MEMBERS_PER_ROOM: usize = 3;
 /// Smallest room a claim starts from or a group gathers in.
 pub(crate) const MIN_ROOM_AREA: u32 = 9;
+/// Smallest room a trading faction's claim starts from, if it holds but the one.
+const TRADER_SEED_AREA: u32 = 16;
 
 /// The rooms one faction holds on a level.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,8 +48,9 @@ impl Level {
 }
 
 /// Grows a claim for each of the level's factions, and how many members each is to place
-/// (the same order as the claims). A faction that finds no room to seed in gets no claim.
-pub(crate) fn grow_claims(level: &Level, start_room: usize, rng: &mut Mulberry32) -> (Vec<Claim>, Vec<usize>) {
+/// (the same order as the claims). A faction that finds no room to seed in gets no claim. No
+/// claim starts in a room of `avoid`, ones where no folk were found space to stand.
+pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng: &mut Mulberry32) -> (Vec<Claim>, Vec<usize>) {
     let n = level.factions.len();
     if n == 0 {
         return (Vec::new(), Vec::new());
@@ -76,7 +79,15 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, rng: &mut Mulberry32
         shuffle(&mut seeds, rng);
         // Folk of the halls hold the colonnades, leaving the creatures the rest.
         seeds.sort_by_key(|&r| !hall(r));
-        let Some(&seed) = seeds.first() else { continue };
+        // Traders set out a market, which a bare nine cells has no room for.
+        let min_seed = if level.factions[k].intention == fb_faction::Intention::Trade { TRADER_SEED_AREA } else { MIN_ROOM_AREA };
+        // The first seed whose loss leaves the wild ground whole; none, and the faction has no ground.
+        let fits = |rooms: &[usize], claims: &[Claim]| {
+            let mut trial = claims.to_vec();
+            trial.push(Claim { faction: level.factions[k].id, rooms: rooms.to_vec() });
+            wild_stays_whole(level, &trial)
+        };
+        let Some(&seed) = seeds.iter().find(|&&r| !avoid.contains(&r) && level.rooms[r].area() >= min_seed && fits(&[r], &claims)) else { continue };
         let extra = rng.int(0, 1) as usize;
         // One room stays back for each faction still to place.
         let spare = budget.saturating_sub(m - j - 1).max(1);
@@ -92,6 +103,8 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, rng: &mut Mulberry32
                 .collect();
             frontier.sort_unstable();
             frontier.dedup();
+            // A room whose loss would cut wild rooms off from the start, or from each other, stays wild.
+            frontier.retain(|&r| fits(&[rooms.as_slice(), &[r]].concat(), &claims));
             if frontier.iter().any(|&r| hall(r)) {
                 frontier.retain(|&r| hall(r));
             }
@@ -106,6 +119,50 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, rng: &mut Mulberry32
         strengths.push(strength[k]);
     }
     (claims, strengths)
+}
+
+/// Whether the ground `claims` leave free is one piece with the start: every open cell outside
+/// their rooms and their edge doors can be walked to from the start without crossing either.
+/// The stairs lie in that ground, so the way down is never behind a faction.
+pub(crate) fn wild_stays_whole(level: &Level, claims: &[Claim]) -> bool {
+    let held = held_cells(level, claims);
+    let index = |x: i32, y: i32| (y as u32 * level.width + x as u32) as usize;
+    let (sx, sy, _) = level.start();
+    let mut seen = vec![false; level.cells.len()];
+    seen[index(sx as i32, sy as i32)] = true;
+    let mut stack = vec![(sx as i32, sy as i32)];
+    let mut reached = 1;
+    while let Some((x, y)) = stack.pop() {
+        for facing in crate::Facing::ALL {
+            let (dx, dy) = facing.step();
+            let (nx, ny) = (x + dx, y + dy);
+            if level.is_open(nx, ny) && !held[index(nx, ny)] && !seen[index(nx, ny)] {
+                seen[index(nx, ny)] = true;
+                reached += 1;
+                stack.push((nx, ny));
+            }
+        }
+    }
+    let wild = (0..level.cells.len()).filter(|&i| level.cells[i].is_open() && !held[i]).count();
+    reached == wild
+}
+
+/// The cells `claims` shut to the delver in the wild: their rooms' open cells and their edge
+/// doors, as a flag per cell.
+pub(crate) fn held_cells(level: &Level, claims: &[Claim]) -> Vec<bool> {
+    let index = |x: i32, y: i32| (y as u32 * level.width + x as u32) as usize;
+    let mut held = vec![false; level.cells.len()];
+    for y in 0..level.height as i32 {
+        for x in 0..level.width as i32 {
+            if level.is_open(x, y) && level.room_at(x, y).is_some_and(|r| claims.iter().any(|c| c.rooms.contains(&r))) {
+                held[index(x, y)] = true;
+            }
+        }
+    }
+    for door in level.edge_doors(claims) {
+        held[index(door.x, door.y)] = true;
+    }
+    held
 }
 
 /// The claims of `level` after the delver's work on it. `alive[i]` is where folk `i` of
@@ -265,6 +322,81 @@ mod tests {
             for c in &level.creatures {
                 if let Some(room) = level.room_at(c.x as i32, c.y as i32) {
                     assert!(!level.is_claimed(room), "seed {seed} depth {depth}: {c:?} in a claim");
+                }
+            }
+        }
+    }
+
+    /// Cells the delver can walk from the start without entering a claim room or passing a
+    /// claim door, as a flag per cell.
+    fn wild_reach(level: &Level) -> Vec<bool> {
+        let doors: HashSet<(i32, i32)> = level.claim_doors().iter().map(|d| (d.x, d.y)).collect();
+        let index = |x: i32, y: i32| (y as u32 * level.width + x as u32) as usize;
+        let mut seen = vec![false; level.cells.len()];
+        let (sx, sy, _) = level.start();
+        let mut stack = vec![(sx as i32, sy as i32)];
+        seen[index(sx as i32, sy as i32)] = true;
+        while let Some((x, y)) = stack.pop() {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                let held = level.room_at(nx, ny).is_some_and(|r| level.is_claimed(r)) || doors.contains(&(nx, ny));
+                if level.is_open(nx, ny) && !held && !seen[index(nx, ny)] {
+                    seen[index(nx, ny)] = true;
+                    stack.push((nx, ny));
+                }
+            }
+        }
+        seen
+    }
+
+    /// Seeds and depths whose stairs the delver cannot reach through wild ground.
+    fn blocked_levels(seeds: std::ops::RangeInclusive<u32>, depths: std::ops::RangeInclusive<u32>) -> Vec<(u32, u32)> {
+        let mut blocked = Vec::new();
+        for depth in depths {
+            for seed in seeds.clone() {
+                let level = generate(seed, depth);
+                let seen = wild_reach(&level);
+                let reaches = |x: u32, y: u32| seen[(y * level.width + x) as usize];
+                let ok = !level.stairs.is_empty()
+                    && level.stairs.iter().all(|s| {
+                        let (ax, ay) = s.approach();
+                        reaches(ax, ay)
+                    });
+                if !ok {
+                    blocked.push((seed, depth));
+                }
+            }
+        }
+        blocked
+    }
+
+    #[test]
+    fn the_start_reaches_every_stair_through_wild_ground() {
+        let blocked = blocked_levels(1..=200, 1..=4);
+        assert!(blocked.is_empty(), "{} blocked (seed, depth): {:?}", blocked.len(), blocked);
+    }
+
+    #[test]
+    fn hardly_a_level_is_left_without_folk() {
+        // The regrow falls back to claims of one when no room can hold a claim of three, so a
+        // level ends with no claim only where no room can start one at all.
+        let empty: Vec<_> = sweep().filter(|&(seed, depth)| generate(seed, depth).claims.is_empty()).collect();
+        let total = sweep().count();
+        assert!(empty.len() * 50 <= total, "{} of {total} levels have no claim: {:?}", empty.len(), empty);
+    }
+
+    #[test]
+    fn wild_ground_stays_connected() {
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            let seen = wild_reach(&level);
+            let doors: HashSet<(i32, i32)> = level.claim_doors().iter().map(|d| (d.x, d.y)).collect();
+            for y in 0..level.height as i32 {
+                for x in 0..level.width as i32 {
+                    let held = level.room_at(x, y).is_some_and(|r| level.is_claimed(r)) || doors.contains(&(x, y));
+                    if level.is_open(x, y) && !held {
+                        assert!(seen[(y as u32 * level.width + x as u32) as usize], "seed {seed} depth {depth}: wild cell ({x}, {y}) is cut off");
+                    }
                 }
             }
         }

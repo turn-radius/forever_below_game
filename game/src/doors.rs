@@ -22,7 +22,18 @@
 //!
 //! A shut door is a wall, and opaque to sight, for everyone but the folk of its own faction
 //! ([`solid_for`], read by the delver's walk, folk routines and combat, creatures, and every
-//! line of sight). The leaf swings open for a folk of the faction who walks up to it.
+//! line of sight). A folk of the faction who walks up to it opens it for themselves, and it
+//! swings shut behind them after [`CLOSE_BEHIND`] seconds, so a locked door never stays open to the
+//! delver; a door the delver opened stays as they left it. If standing drops while a door is
+//! open it stays open (and passable) until closed with F; then the lock applies. An open door
+//! never reads "Locked": its prompt is "F Close".
+//!
+//! A lock holds from outside only. From the claim's own side of the door ([`DoorState::inside`])
+//! a lever on the side wall beside the frame ([`Switch`], F "Pull the lever") swings the door open
+//! whatever the band, and pulling it again shuts the door; the door itself says "Locked" with a
+//! pointer to the lever, and the key and picks are for the outside. The lever's handle follows the
+//! door (thrown while the door is open), so the door's record keeps the lever. Every member of a
+//! faction carries its key (`crate::folk`), so it drops with their belongings when they are slain.
 //!
 //! All the numbers (the difficulties, the pick time, the noise) are our own. Each door's state,
 //! open or shut and unlocked or not, goes into the level's record (`crate::record`).
@@ -51,6 +62,8 @@ use crate::record::{DoorRecord, LevelRecord, WorldRecord};
 
 /// Seconds a door leaf takes to swing open or shut.
 pub const SWING_SECONDS: f32 = 0.6;
+/// Seconds a lever's handle takes to be thrown.
+pub const LEVER_SECONDS: f32 = 0.35;
 /// Seconds the pick is held before the roll.
 pub const PICK_SECONDS: f32 = 1.5;
 /// What lockpicks add to the roll.
@@ -67,6 +80,8 @@ pub const NOISE_RANGE: f32 = 8.0 * CELL;
 pub const NOISE_COST: i32 = 6;
 /// How near a folk of the faction swings its door open for itself, world units.
 pub const FOLK_OPENS: f32 = 1.6 * CELL;
+/// Seconds after the last folk of its faction leaves a door they opened before it swings shut.
+pub const CLOSE_BEHIND: f32 = 1.5;
 /// How far past the door's own cell a body still stops it shutting, world units (a body's radius).
 const IN_THE_WAY: f32 = 4.0;
 /// How far past the door's opening a look still counts as aimed at it, world units.
@@ -76,9 +91,20 @@ pub struct DoorsPlugin;
 
 impl Plugin for DoorsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Doors>().init_resource::<AimedDoor>().add_systems(
+        app.init_resource::<Doors>().init_resource::<AimedDoor>().init_resource::<AimedSwitch>().add_systems(
             Update,
-            (aim_door, prompt_door.after(crate::travel::prompt_stair), use_door.run_if(level_has_focus), open_for_capture, swing_leaves, give_keys.run_if(level_has_focus)).chain().in_set(DelveSystems),
+            (
+                aim_door,
+                prompt_door.after(crate::travel::prompt_stair),
+                use_door.run_if(level_has_focus),
+                use_switch.run_if(level_has_focus),
+                open_for_capture,
+                swing_leaves,
+                throw_levers,
+                give_keys.run_if(level_has_focus),
+            )
+                .chain()
+                .in_set(DelveSystems),
         );
     }
 }
@@ -120,16 +146,32 @@ pub struct DoorState {
     pub unlocked: bool,
     /// How far the leaf has swung, 0 shut to 1 open.
     pub swing: f32,
+    /// Whether a folk of the faction opened it for themselves rather than the delver. Such a
+    /// door closes behind them after [`CLOSE_BEHIND`] seconds; one the delver opened stays as left.
+    pub folk_held: bool,
+    /// Seconds since a folk of the faction was last at a `folk_held` door.
+    pub idle: f32,
     /// The doorway's centre on the floor and the way through it (world `(x, z)`).
     pub centre: Vec2,
     pub through: Vec2,
+    /// The way from the door into the claim (world `(x, z)`, a unit step), or zero if unknown.
+    pub inward: Vec2,
+    /// Whether it has no outside to lock against: its far side is another claim's ground, or it
+    /// has no claim side at all. It opens from either side, so no one is shut in by it.
+    pub shared: bool,
 }
 
 impl DoorState {
-    /// Whether it is locked to a delver in `band` with its faction.
+    /// Whether it is locked to a delver in `band` with its faction, from outside.
     pub fn locked(&self, band: Band) -> bool {
-        !self.unlocked && locked_to(band, self.main)
+        !self.unlocked && !self.shared && locked_to(band, self.main)
     }
+
+    /// Whether `feet` stand on the claim's side of the door.
+    pub fn inside(&self, feet: Option<Vec2>) -> bool {
+        feet.is_some_and(|f| self.inward != Vec2::ZERO && (f - self.centre).dot(self.inward) > 0.0)
+    }
+
 }
 
 /// The claim doors of the level, by cell.
@@ -145,8 +187,12 @@ impl Doors {
             open: false,
             unlocked: false,
             swing: 0.0,
+            folk_held: false,
+            idle: 0.0,
             centre: Vec2::new(door.x as f32 + 0.5, door.y as f32 + 0.5) * CELL,
             through: Vec2::new(doorway.through[0], doorway.through[2]),
+            inward: Vec2::new(door.inward.0 as f32, door.inward.1 as f32),
+            shared: door.shared || door.inward == (0, 0),
         };
         if let Some(record) = saved.and_then(|l| l.doors.iter().find(|d| (d.x, d.y) == (door.x, door.y))) {
             state.open = record.open;
@@ -169,7 +215,8 @@ impl Doors {
 
     /// What the record keeps of every door.
     pub fn records(&self) -> Vec<DoorRecord> {
-        self.0.iter().map(|(&(x, y), d)| DoorRecord { x, y, open: d.open, unlocked: d.unlocked }).collect()
+        // A door a folk is holding open for themselves is kept shut: it would close behind them.
+        self.0.iter().map(|(&(x, y), d)| DoorRecord { x, y, open: d.open && !d.folk_held, unlocked: d.unlocked }).collect()
     }
 }
 
@@ -293,21 +340,33 @@ fn aim_door(
     fallen: Option<Res<Fallen>>,
     dying: Option<Res<Dying>>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
+    switches: Query<(Entity, &GlobalTransform), With<Switch>>,
+    mut aimed_switch: ResMut<AimedSwitch>,
 ) {
     let busy = aimed.is_some_and(|a| a.0.is_some()) || aimed_folk.is_some_and(|a| a.0.is_some()) || fallen.is_some() || dying.is_some();
-    let found = if busy || doors.0.is_empty() { None } else { cameras.iter().next().and_then(|eye| door_in_reach(&doors, eye.translation(), eye.forward().as_vec3())) };
+    let eye = cameras.iter().next();
+    let lever = if busy { None } else { eye.and_then(|eye| switch_in_reach(switches.iter(), eye.translation(), eye.forward().as_vec3())) };
+    // A lever under the crosshair wins over the door beside it.
+    let found = if busy || doors.0.is_empty() || lever.is_some() { None } else { eye.and_then(|eye| door_in_reach(&doors, eye.translation(), eye.forward().as_vec3())) };
     if aimed_door.0 != found {
         aimed_door.0 = found;
+    }
+    if aimed_switch.0 != lever {
+        aimed_switch.0 = lever;
     }
 }
 
 /// What the prompt over the crosshair says for a door that is `open` and `locked`, holding
 /// `key` and `picks`: "F Open", "F Close", or "Locked \u{b7} G Unlock \u{b7} R Pick the lock".
-pub fn door_line(keymap: &Keymap, open: bool, locked: bool, key: bool, picks: bool) -> String {
+pub fn door_line(keymap: &Keymap, open: bool, locked: bool, key: bool, picks: bool, inside: bool) -> String {
     let lock = Lock { has_lock: true, locked };
-    let delver = Delver { has_key: key && locked && !open, has_lockpicks: picks, hidden: false };
+    // The key and picks are for the outside; inside, the lever is the way.
+    let delver = Delver { has_key: key && locked && !open && !inside, has_lockpicks: picks && !inside, hidden: false };
     let mut verbs = verbs_for(&Target::Door { open, lock }, &delver);
     if locked && !open {
+        if inside {
+            return "Locked \u{b7} the lever is by the door".to_string();
+        }
         verbs.primary = None;
         let rest = key_line(keymap, &verbs);
         return if rest.is_empty() { "Locked".to_string() } else { format!("Locked \u{b7} {rest}") };
@@ -321,19 +380,23 @@ pub fn door_line(keymap: &Keymap, open: bool, locked: bool, key: bool, picks: bo
 #[allow(clippy::too_many_arguments)]
 fn prompt_door(
     aimed: Res<AimedDoor>,
+    aimed_switch: Res<AimedSwitch>,
     doors: Res<Doors>,
     record: Option<Res<WorldRecord>>,
     inventory: Option<Res<Inventory>>,
     keymap: Option<Res<Keymap>>,
+    players: Query<&Transform, With<Player>>,
     mut prompt: ResMut<CrosshairPrompt>,
     mut said: Local<Option<String>>,
 ) {
-    let line = aimed.0.and_then(|cell| doors.0.get(&cell)).map(|door| {
+    let feet = players.iter().next().map(|t| t.translation.xz());
+    let lever = aimed_switch.0.map(|_| key_line(keymap.as_deref().unwrap_or(&Keymap::default()), &verbs_for(&Target::Switch, &Delver::default())));
+    let line = lever.or_else(|| aimed.0.and_then(|cell| doors.0.get(&cell)).map(|door| {
         let locked = door.locked(band_of(record.as_deref(), door.faction));
         let (key, picks) = inventory.as_deref().map_or((false, false), |i| (carries_key(i, door.faction), carries_lockpicks(i)));
         let fallback = Keymap::default();
-        door_line(keymap.as_deref().unwrap_or(&fallback), door.open, locked, key, picks)
-    });
+        door_line(keymap.as_deref().unwrap_or(&fallback), door.open, locked, key, picks, door.inside(feet))
+    }));
     if *said != line {
         if line.is_some() || prompt.0 == *said {
             prompt.0.clone_from(&line);
@@ -366,7 +429,10 @@ fn use_door(
     };
     let Some(door) = doors.0.get_mut(&cell) else { return };
     let band = band_of(record.as_deref(), door.faction);
-    let locked = door.locked(band);
+    let feet = players.iter().next().map(|t| t.translation.xz());
+    let inside = door.inside(feet);
+    // A lock holds from outside only: the key and picks are for that side.
+    let locked = door.locked(band) && !inside;
     let (key, lockpicks) = inventory.as_deref().map_or((false, false), |i| (carries_key(i, door.faction), carries_lockpicks(i)));
     let spec = level.0.factions.iter().find(|f| f.id == door.faction);
     let name = spec.map_or_else(|| "they".to_string(), |f| f.name.clone());
@@ -374,16 +440,19 @@ fn use_door(
     if input.just_pressed(Action::Primary) {
         if door.open {
             // A door is not shut on someone standing in it.
-            let feet = players.iter().next().map(|t| t.translation.xz());
             if feet.is_some_and(|f| (f - door.centre).abs().max_element() < CELL * 0.5 + IN_THE_WAY) {
                 toasts.say("Something is in the way");
             } else {
                 door.open = false;
+                door.folk_held = false;
             }
+        } else if door.locked(band) && inside {
+            toasts.say("The door is locked, the lever is by the door");
         } else if locked {
             toasts.say("The door is locked");
         } else {
             door.open = true;
+            door.folk_held = false;
         }
     }
     if input.just_pressed(Action::Secondary) && locked && !door.open && key {
@@ -392,7 +461,7 @@ fn use_door(
     }
 
     // Picking: a press starts it, holding it runs the clock, the roll comes at the end.
-    let locked = door.locked(band);
+    let locked = door.locked(band) && !inside;
     if !(locked && lockpicks && !door.open && input.pressed(Action::Tertiary)) {
         *picking = None;
         return;
@@ -440,6 +509,133 @@ fn use_door(
     }
 }
 
+/// What a [`Switch`] works.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwitchTarget {
+    /// The claim door in this cell.
+    Door((i32, i32)),
+}
+
+/// A wall lever wired to something, aimed at and pulled with F. Its entity is the lever's plate;
+/// the handle ([`LeverHandle`]) turns on it.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Switch {
+    pub target: SwitchTarget,
+}
+
+/// The lever under the crosshair and in reach, if any.
+#[derive(Resource, Debug, Default, PartialEq, Eq)]
+pub struct AimedSwitch(pub Option<Entity>);
+
+/// The handle of the lever of a door: it follows the door, thrown while the door stands open.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct LeverHandle {
+    pub cell: (i32, i32),
+    /// The handle's rotation unthrown, in world space.
+    pub rest: Quat,
+    /// How far it is thrown, 0 up to 1 thrown.
+    pub pull: f32,
+}
+
+impl LeverHandle {
+    /// The handle's rotation with the lever `pull` thrown.
+    pub fn rotation(&self, pull: f32) -> Quat {
+        self.rest * Quat::from_rotation_z(geometry::lever_throw(pull))
+    }
+}
+
+/// Where the lever of the door at `doorway` stands on the claim side `inward` (a world `(x, z)`
+/// step into the claim): the lever's world transform, or `None` where the door has no claim side.
+pub fn lever_transform(doorway_at: &Transform, through: Vec2, inward: Vec2) -> Option<Transform> {
+    if inward == Vec2::ZERO {
+        return None;
+    }
+    let face = if inward.dot(through) >= 0.0 { 1.0 } else { -1.0 };
+    let at = geometry::lever_mount(face);
+    let local = Transform::from_translation(Vec3::new(at[0], at[1], at[2])).with_rotation(Quat::from_rotation_y(geometry::LEVER_TURN));
+    Some(doorway_at.mul_transform(local))
+}
+
+/// How far the lever of `door` is thrown: while the door stands open.
+pub fn lever_target(door: &DoorState) -> f32 {
+    f32::from(door.open)
+}
+
+/// The lever whose plate lies under the look from `eye` along `forward`, if any, nearest first.
+fn switch_in_reach<'a>(switches: impl Iterator<Item = (Entity, &'a GlobalTransform)>, eye: Vec3, forward: Vec3) -> Option<Entity> {
+    let mut best: Option<(f32, Entity)> = None;
+    for (entity, at) in switches {
+        let normal = at.rotation() * Vec3::Z;
+        let slant = forward.dot(normal);
+        if slant > -1e-3 {
+            continue;
+        }
+        let t = (at.translation() - eye).dot(normal) / slant;
+        if t <= 0.0 || t > REACH || best.is_some_and(|(b, _)| b <= t) {
+            continue;
+        }
+        let local = at.affine().inverse().transform_point3a((eye + forward * t).into());
+        if local.x.abs() <= geometry::LEVER_HALF_WIDTH + AIM_SLACK && local.y.abs() <= geometry::LEVER_HALF_HEIGHT + AIM_SLACK {
+            best = Some((t, entity));
+        }
+    }
+    best.map(|(_, entity)| entity)
+}
+
+/// What pulling a door's lever did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pulled {
+    Opened,
+    Shut,
+    /// Someone stands in the doorway, so the door will not shut.
+    InTheWay,
+}
+
+/// Pulls the lever of `door`: opens it whatever the band, or shuts it again.
+pub fn pull_lever(door: &mut DoorState, feet: Option<Vec2>) -> Pulled {
+    door.folk_held = false;
+    if !door.open {
+        door.open = true;
+        Pulled::Opened
+    } else if delver_in_doorway(door, feet) {
+        Pulled::InTheWay
+    } else {
+        door.open = false;
+        Pulled::Shut
+    }
+}
+
+/// F on the aimed lever works what it is wired to.
+fn use_switch(input: ActionInput, aimed: Res<AimedSwitch>, switches: Query<&Switch>, mut doors: ResMut<Doors>, players: Query<&Transform, With<Player>>, mut toasts: Toasts) {
+    let Some(switch) = aimed.0.and_then(|e| switches.get(e).ok()) else { return };
+    if !input.just_pressed(Action::Primary) {
+        return;
+    }
+    match switch.target {
+        SwitchTarget::Door(cell) => {
+            let Some(door) = doors.0.get_mut(&cell) else { return };
+            let feet = players.iter().next().map(|t| t.translation.xz());
+            if pull_lever(door, feet) == Pulled::InTheWay {
+                toasts.say("Something is in the way");
+            }
+        }
+    }
+}
+
+/// Turns each lever's handle toward where its door stands.
+fn throw_levers(time: Res<Time>, doors: Res<Doors>, mut handles: Query<(&mut LeverHandle, &mut Transform)>) {
+    let step = time.delta_secs() / LEVER_SECONDS;
+    for (mut handle, mut transform) in &mut handles {
+        let Some(door) = doors.0.get(&handle.cell) else { continue };
+        let want = lever_target(door);
+        let pull = if handle.pull < want { (handle.pull + step).min(want) } else { (handle.pull - step).max(want) };
+        if pull != handle.pull {
+            handle.pull = pull;
+            transform.rotation = handle.rotation(pull);
+        }
+    }
+}
+
 /// For captures (`FB_DOORS=open`): a few frames in, opens every door that is not locked to the
 /// delver as they stand with its faction.
 fn open_for_capture(mut doors: ResMut<Doors>, record: Option<Res<WorldRecord>>, mut frames: Local<u32>) {
@@ -455,14 +651,48 @@ fn open_for_capture(mut doors: ResMut<Doors>, record: Option<Res<WorldRecord>>, 
     }
 }
 
-/// Swings each leaf toward where its door stands: open if the delver opened it or a folk of the
-/// faction is at it.
-fn swing_leaves(time: Res<Time>, mut doors: ResMut<Doors>, folk: Query<(&Transform, &Denizen), Without<Corpse>>, mut leaves: Query<(&DoorLeaf, &mut Transform), Without<Denizen>>) {
+/// Whether the delver stands in the doorway of `door`.
+fn delver_in_doorway(door: &DoorState, feet: Option<Vec2>) -> bool {
+    feet.is_some_and(|f| (f - door.centre).abs().max_element() < CELL * 0.5 + IN_THE_WAY)
+}
+
+/// One step of a door's own state: a folk of its faction at it opens it for themselves, and it
+/// shuts behind them [`CLOSE_BEHIND`] seconds after the last one leaves (never on the delver in
+/// the doorway). A door the delver opened is left as it is.
+pub fn tend_door(door: &mut DoorState, folk_at: bool, delver_in_way: bool, dt: f32) {
+    if folk_at {
+        if !door.open {
+            door.open = true;
+            door.folk_held = true;
+        }
+        door.idle = 0.0;
+    } else if door.folk_held {
+        door.idle += dt;
+        if door.idle >= CLOSE_BEHIND && !delver_in_way {
+            door.open = false;
+            door.folk_held = false;
+        }
+    }
+}
+
+/// Opens and shuts doors for the folk of their faction, then swings each leaf toward where its
+/// door stands. A leaf that is swung open is a door that is open, so the prompt and the walk
+/// agree with what the delver sees.
+fn swing_leaves(
+    time: Res<Time>,
+    mut doors: ResMut<Doors>,
+    folk: Query<(&Transform, &Denizen), Without<Corpse>>,
+    players: Query<&Transform, (With<Player>, Without<DoorLeaf>, Without<Denizen>)>,
+    mut leaves: Query<(&DoorLeaf, &mut Transform), Without<Denizen>>,
+) {
     let step = time.delta_secs() / SWING_SECONDS;
+    let feet = players.iter().next().map(|t| t.translation.xz());
     for (leaf, mut transform) in &mut leaves {
         let Some(door) = doors.bypass_change_detection().0.get_mut(&leaf.cell) else { continue };
         let folk_at = folk.iter().any(|(t, d)| d.person.faction.id == door.faction && t.translation.xz().distance(door.centre) < FOLK_OPENS);
-        let want = f32::from(door.open || folk_at);
+        let in_way = delver_in_doorway(door, feet);
+        tend_door(door, folk_at, in_way, time.delta_secs());
+        let want = f32::from(door.open);
         let swing = if door.swing < want { (door.swing + step).min(want) } else { (door.swing - step).max(want) };
         if swing != door.swing {
             door.swing = swing;
@@ -496,7 +726,7 @@ mod tests {
         (1..60)
             .filter_map(|seed| {
                 let level = fb_level::generate(seed, 1);
-                let door = level.claim_doors().into_iter().find(|d| geometry::doorways(&geometry::CellView::new(&level)).iter().any(|w| (w.x, w.y) == (d.x, d.y)))?;
+                let door = level.claim_doors().into_iter().filter(|d| !d.shared && d.inward != (0, 0)).find(|d| geometry::doorways(&geometry::CellView::new(&level)).iter().any(|w| (w.x, w.y) == (d.x, d.y)))?;
                 Some((level, door))
             })
             .next()
@@ -543,12 +773,12 @@ mod tests {
     #[test]
     fn the_prompt_says_locked_and_what_opens_it() {
         let keymap = Keymap::default();
-        assert_eq!(door_line(&keymap, false, false, false, false), "F Open");
-        assert_eq!(door_line(&keymap, true, false, false, false), "F Close");
-        assert_eq!(door_line(&keymap, false, true, false, false), "Locked");
-        assert_eq!(door_line(&keymap, false, true, true, false), "Locked \u{b7} G Unlock with key");
-        assert_eq!(door_line(&keymap, false, true, false, true), "Locked \u{b7} R Pick the lock");
-        assert_eq!(door_line(&keymap, false, true, true, true), "Locked \u{b7} G Unlock with key \u{b7} R Pick the lock");
+        assert_eq!(door_line(&keymap, false, false, false, false, false), "F Open");
+        assert_eq!(door_line(&keymap, true, false, false, false, false), "F Close");
+        assert_eq!(door_line(&keymap, false, true, false, false, false), "Locked");
+        assert_eq!(door_line(&keymap, false, true, true, false, false), "Locked \u{b7} G Unlock with key");
+        assert_eq!(door_line(&keymap, false, true, false, true, false), "Locked \u{b7} R Pick the lock");
+        assert_eq!(door_line(&keymap, false, true, true, true, false), "Locked \u{b7} G Unlock with key \u{b7} R Pick the lock");
     }
 
     #[test]
@@ -805,6 +1035,215 @@ mod tests {
         hold_the_pick(&mut app);
         assert!(!app.world().resource::<Doors>().0[&cell].unlocked);
         assert_eq!(standing(&app, faction), -30);
+    }
+
+    #[test]
+    fn a_door_a_folk_opened_closes_behind_them() {
+        let (level, door) = claimed();
+        let mut doors = hung(&level, &door, true);
+        let d = doors.0.get_mut(&(door.x, door.y)).unwrap();
+        tend_door(d, true, false, 0.1);
+        assert!(d.open && d.folk_held);
+        tend_door(d, false, false, CLOSE_BEHIND * 0.5);
+        assert!(d.open);
+        tend_door(d, false, true, CLOSE_BEHIND);
+        assert!(d.open, "not on the delver in the doorway");
+        tend_door(d, false, false, 0.1);
+        assert!(!d.open && !d.folk_held);
+        assert!(doors.shuts(door.x, door.y));
+    }
+
+    #[test]
+    fn a_door_the_delver_opened_stays_open_after_folk_pass() {
+        let (level, door) = claimed();
+        let mut doors = hung(&level, &door, false);
+        let d = doors.0.get_mut(&(door.x, door.y)).unwrap();
+        d.open = true;
+        tend_door(d, true, false, 0.1);
+        tend_door(d, false, false, CLOSE_BEHIND * 4.0);
+        assert!(d.open && !d.folk_held);
+    }
+
+    #[test]
+    fn an_open_door_is_never_locked_and_stays_passable_after_the_band_drops() {
+        let (level, door) = claimed();
+        let mut doors = hung(&level, &door, true);
+        let keymap = Keymap::default();
+        let d = doors.0.get_mut(&(door.x, door.y)).unwrap();
+        assert!(!d.locked(Band::Friendly));
+        d.open = true;
+        assert!(d.locked(Band::Wary));
+        for (key, picks) in [(false, false), (true, false), (false, true), (true, true)] {
+            let line = door_line(&keymap, d.open, d.locked(Band::Wary), key, picks, false);
+            assert!(!line.contains("Locked") && line.contains("Close"), "{line}");
+        }
+        assert!(!doors.shuts(door.x, door.y));
+        assert!(!doors.stops(door.x, door.y, None));
+        let d = doors.0.get_mut(&(door.x, door.y)).unwrap();
+        d.open = false;
+        assert!(door_line(&keymap, d.open, d.locked(Band::Wary), false, false, false).starts_with("Locked"));
+    }
+
+    #[test]
+    fn records_keep_open_and_locked_consistent() {
+        let (level, door) = claimed();
+        let mut doors = hung(&level, &door, true);
+        let d = doors.0.get_mut(&(door.x, door.y)).unwrap();
+        tend_door(d, true, false, 0.1);
+        assert_eq!(doors.records(), vec![DoorRecord { x: door.x, y: door.y, open: false, unlocked: false }]);
+        doors.0.get_mut(&(door.x, door.y)).unwrap().folk_held = false;
+        assert!(doors.records()[0].open);
+    }
+
+    /// The feet a step inside and outside of the claim door `state`.
+    fn sides(state: &DoorState) -> (Vec2, Vec2) {
+        (state.centre + state.inward * CELL, state.centre - state.inward * CELL)
+    }
+
+    #[test]
+    fn from_inside_a_locked_door_points_to_the_lever_and_from_outside_stays_locked() {
+        let (level, door) = claimed();
+        let doors = hung(&level, &door, true);
+        let state = &doors.0[&(door.x, door.y)];
+        let (inside, outside) = sides(state);
+        let keymap = Keymap::default();
+        assert!(state.inside(Some(inside)) && !state.inside(Some(outside)) && !state.inside(None));
+        let line = |feet, key| door_line(&keymap, false, state.locked(Band::Wary), key, key, state.inside(Some(feet)));
+        assert_eq!(line(inside, true), "Locked \u{b7} the lever is by the door");
+        assert_eq!(line(outside, false), "Locked");
+        assert_eq!(line(outside, true), "Locked \u{b7} G Unlock with key \u{b7} R Pick the lock");
+    }
+
+    #[test]
+    fn pulling_the_lever_opens_a_locked_door_at_any_standing_and_pulling_again_shuts_it() {
+        let (level, door) = claimed();
+        let mut doors = hung(&level, &door, true);
+        let state = doors.0.get_mut(&(door.x, door.y)).unwrap();
+        let (inside, _) = sides(state);
+        assert!(state.locked(Band::Hostile) && state.locked(Band::Wary));
+        assert_eq!(pull_lever(state, Some(inside)), Pulled::Opened);
+        assert!(state.open && lever_target(state) == 1.0);
+        assert!(!doors.shuts(door.x, door.y));
+        // Standing falls while the delver is inside: the door stays open, and the lever still works.
+        let state = doors.0.get_mut(&(door.x, door.y)).unwrap();
+        assert_eq!(pull_lever(state, Some(inside)), Pulled::Shut);
+        assert!(!state.open && lever_target(state) == 0.0);
+        assert_eq!(pull_lever(state, Some(inside)), Pulled::Opened, "reachable again from inside");
+        // Not shut on the delver in the doorway.
+        assert_eq!(pull_lever(state, Some(state.centre)), Pulled::InTheWay);
+        assert!(state.open);
+    }
+
+    #[test]
+    fn the_lever_sits_on_the_claim_side_clear_of_the_leaf() {
+        let (level, door) = claimed();
+        let doorway = geometry::doorways(&geometry::CellView::new(&level)).into_iter().find(|w| (w.x, w.y) == (door.x, door.y)).unwrap();
+        let doors = hung(&level, &door, true);
+        let state = &doors.0[&(door.x, door.y)];
+        let doorway_at = {
+            let [x, y, z] = doorway.basis().map(|v| Vec3::new(v[0], v[1], v[2]));
+            let c = geometry::cell_centre(doorway.x, doorway.y);
+            Transform::from_translation(Vec3::new(c[0], c[1], c[2])).with_rotation(Quat::from_mat3(&Mat3::from_cols(x, y, z)))
+        };
+        let lever = lever_transform(&doorway_at, state.through, state.inward).expect("the claim door has a lever");
+        let at = lever.translation;
+        // On the claim's side of the door's plane, at hand height, in the door's cell.
+        assert!((at.xz() - state.centre).dot(state.inward) > 0.0);
+        assert!((at.y - geometry::LEVER_HEIGHT).abs() < 1e-3);
+        assert!((at.xz() - state.centre).abs().max_element() <= CELL * 0.5);
+        // It faces into the cell, along the doorway's plane, off the hinge side.
+        let normal = lever.rotation * Vec3::Z;
+        assert!(normal.dot(doorway_at.rotation * Vec3::X) < -0.99);
+        // The leaf at every angle of its swing, in the doorway's space, is clear of it.
+        let local = doorway_at.compute_affine().inverse().transform_point3(at);
+        let hinge = geometry::entrance_hinge();
+        let width = DOOR_WIDTH + 1.2;
+        for step in 0..=20 {
+            let angle = geometry::ENTRANCE_OPEN_ANGLE * step as f32 / 20.0;
+            for k in 0..=26 {
+                let along = width * k as f32 / 26.0;
+                let (x, z) = (hinge[0] + along * angle.cos(), hinge[2] - along * angle.sin());
+                assert!(local.x - x > geometry::LEVER_PIVOT + 1.0, "the leaf reaches ({x}, {z}) at {angle}");
+            }
+        }
+        // The level's record keeps the door, and the lever follows it.
+        let mut doors = doors.clone();
+        doors.0.get_mut(&(door.x, door.y)).unwrap().open = true;
+        let left = LevelRecord { doors: doors.records(), ..LevelRecord::default() };
+        let mut again = Doors::default();
+        again.add(&door_with_main(&door), &doorway, Some(&left));
+        let restored = &again.0[&(door.x, door.y)];
+        assert!(restored.open && lever_target(restored) == 1.0);
+    }
+
+    fn door_with_main(door: &ClaimDoor) -> ClaimDoor {
+        ClaimDoor { main: true, ..*door }
+    }
+
+    #[test]
+    fn a_door_with_no_outside_is_never_locked_so_no_one_is_trapped() {
+        let (level, door) = claimed();
+        // Shared with another claim, or with no claim side to put a lever on: opens from either side.
+        for shut_in in [ClaimDoor { shared: true, ..door }, ClaimDoor { inward: (0, 0), ..door }] {
+            let doors = hung(&level, &shut_in, true);
+            let state = &doors.0[&(door.x, door.y)];
+            for band in [Band::Hostile, Band::Wary, Band::Neutral] {
+                assert!(!state.locked(band), "{shut_in:?} {band:?}");
+            }
+            let keymap = Keymap::default();
+            assert_eq!(door_line(&keymap, false, state.locked(Band::Hostile), false, false, false), "F Open");
+        }
+        // The level's own shared doors, wherever it has them, are the same.
+        for seed in 1..40 {
+            for d in fb_level::generate(seed, 1).claim_doors().into_iter().filter(|d| d.shared) {
+                assert!(d.inward == (0, 0) || d.shared);
+            }
+        }
+    }
+
+    #[test]
+    fn a_door_does_not_shut_on_the_delver_in_the_doorway_or_re_lock_behind_them() {
+        let (level, door) = claimed();
+        let mut doors = hung(&level, &door, true);
+        let state = doors.0.get_mut(&(door.x, door.y)).unwrap();
+        tend_door(state, true, false, 0.1);
+        // The folk have gone but the delver stands in the doorway: it stays open however long.
+        tend_door(state, false, true, CLOSE_BEHIND * 10.0);
+        assert!(state.open);
+        // A door the delver opened and left unlocked stays so, and open, as the band falls.
+        state.unlocked = true;
+        assert!(!state.locked(Band::Hostile));
+    }
+
+    #[test]
+    fn a_key_taken_from_a_slain_member_opens_the_door_from_outside() {
+        let (level, door) = claimed();
+        let faction = level.faction(door.faction).clone();
+        let spot = level.folk.iter().find(|s| s.faction == door.faction).expect("the claim has folk");
+        let person = crate::folk::Person::of(spot, &faction, 1);
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.equip(pack, fb_items::Slot::Back).unwrap();
+        assert!(!carries_key(&inventory, faction.id));
+        for item in person.goods.iter().filter(|i| is_key_of(i, faction.id)) {
+            let id = inventory.add(item.clone());
+            inventory.pick_up(id).unwrap();
+        }
+        assert!(carries_key(&inventory, faction.id));
+        let keymap = Keymap::default();
+        assert_eq!(door_line(&keymap, false, true, carries_key(&inventory, faction.id), false, false), "Locked \u{b7} G Unlock with key");
+    }
+
+    #[test]
+    fn every_faction_member_carries_the_factions_key() {
+        for world in 1..=4 {
+            let level = fb_level::generate(world, 1);
+            for spot in &level.folk {
+                let faction = level.faction(spot.faction).clone();
+                let person = crate::folk::Person::of(spot, &faction, 1);
+                assert!(person.goods.iter().any(|i| is_key_of(i, faction.id)), "{} has no key", person.name);
+            }
+        }
     }
 
     #[test]

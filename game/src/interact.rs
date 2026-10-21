@@ -93,6 +93,7 @@ pub enum Verb {
     Open,
     LookIn,
     Close,
+    Pull,
     Lock,
     Unlock,
     PickLock,
@@ -120,6 +121,7 @@ impl Verb {
             Verb::Open => "Open",
             Verb::LookIn => "Look in",
             Verb::Close => "Close",
+            Verb::Pull => "Pull the lever",
             Verb::Lock => "Lock",
             Verb::Unlock => "Unlock with key",
             Verb::PickLock => "Pick the lock",
@@ -224,6 +226,8 @@ pub enum Target {
         lock: Lock,
     },
     Folk,
+    /// A wall lever wired to something.
+    Switch,
     Stair {
         down: bool,
     },
@@ -255,6 +259,7 @@ pub fn verbs_for(target: &Target, delver: &Delver) -> Verbs {
         Target::Door { open, lock } => Verbs { primary: Some(if open { Verb::Close } else { Verb::Open }), ..locks(lock, delver) },
         // A container left standing open is looked in again with the same key.
         Target::Container { open, lock } => Verbs { primary: Some(if open { Verb::LookIn } else { Verb::Open }), ..locks(lock, delver) },
+        Target::Switch => Verbs { primary: Some(Verb::Pull), ..Verbs::default() },
         Target::Folk => Verbs { primary: Some(Verb::Talk), secondary: Some(Verb::Barter), tertiary: delver.hidden.then_some(Verb::Steal), ..Verbs::default() },
         Target::Stair { down } => Verbs { primary: Some(if down { Verb::GoDown } else { Verb::GoUp }), ..Verbs::default() },
     }

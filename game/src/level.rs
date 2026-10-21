@@ -654,6 +654,8 @@ fn spawn_fixtures(
     // The door shut behind the delver when they came in; coming back to it from below finds it
     // shut already, and it does not swing again.
     let shut_already = abyss.is_some_and(|a| a.arrival == Arrival::FromBelow);
+    let lever_plate = geometry::lever_plate(level.seed);
+    let lever_handle = geometry::lever_handle();
     let FixtureShapes { doors, braziers } = staged.as_mut().and_then(|s| s.take_fixtures(level)).unwrap_or_else(|| FixtureShapes::make(level));
 
     // Door frames, and the entrance door hung in its own.
@@ -679,6 +681,22 @@ fn spawn_fixtures(
             state.add(claim_door, &doorway, saved);
             let swing = state.0[&(doorway.x, doorway.y)].swing;
             let hinge = transform.transform_point(v3(geometry::entrance_hinge()));
+            // The lever on the claim's side lets the delver out of a locked door.
+            let door_state = &state.0[&(doorway.x, doorway.y)];
+            if !door_state.shared {
+                if let Some(at) = crate::doors::lever_transform(&transform, door_state.through, door_state.inward) {
+                    let rest = at.rotation;
+                    spawner
+                        .spawn(&lever_plate, &fixture_appearance(seed, ConditionState::BattleWorn))
+                        .insert((StonePiece, Name::new("door lever"), crate::doors::Switch { target: crate::doors::SwitchTarget::Door((doorway.x, doorway.y)) }, at));
+                    let pivot = at.mul_transform(Transform::from_translation(Vec3::new(0.0, 0.0, geometry::LEVER_PIVOT)));
+                    let pull = crate::doors::lever_target(door_state);
+                    let handle = crate::doors::LeverHandle { cell: (doorway.x, doorway.y), rest, pull };
+                    spawner
+                        .spawn(&lever_handle, &fixture_appearance(seed, ConditionState::BattleWorn))
+                        .insert((StonePiece, Name::new("door lever handle"), handle, pivot.with_rotation(handle.rotation(pull))));
+                }
+            }
             let leaf_door = crate::doors::DoorLeaf { cell: (doorway.x, doorway.y), shut: transform.rotation };
             let leaf = leaf.expect("a claim doorway has a leaf");
             spawner

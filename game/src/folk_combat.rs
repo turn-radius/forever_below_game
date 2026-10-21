@@ -1008,7 +1008,10 @@ pub(crate) mod tests {
     fn a_slain_folk_drops_everything_it_wore_and_held_once_where_it_fell() {
         use crate::inventory::underfoot::{FloorChange, FloorChanges};
         let (mut app, _, folk) = folk_fight(30.0);
-        let gear = app.world().get::<Denizen>(folk).unwrap().person.gear.clone();
+        // What they wore and held, and carried: their faction's key too.
+        let person = app.world().get::<Denizen>(folk).unwrap().person.clone();
+        let mut gear = person.gear.clone();
+        gear.extend(person.goods.iter().cloned().map(|i| (fb_items::Slot::Mainhand, i)));
         assert!(gear.len() >= 2, "a folk wears and holds something");
         assert!(on_the_floor(&mut app).is_empty(), "nothing lies there while they stand");
         let lying_before = app.world().resource::<CurrentLevel>().0.items.len();
@@ -1055,6 +1058,10 @@ pub(crate) mod tests {
         assert!(on_the_floor(&mut app).is_empty(), "all taken up");
         let mut inventory = app.world_mut().resource_mut::<Inventory>();
         for &(id, slot) in &ids {
+            // The faction's key is carried, not worn.
+            if inventory.item(id).is_some_and(|i| i.base == fb_items::armory_base::KEY) {
+                continue;
+            }
             inventory.equip(id, slot).unwrap_or_else(|e| panic!("{slot:?}: {e:?}"));
             assert_eq!(inventory.worn(slot), Some(id), "{slot:?} is worn");
         }
@@ -1109,6 +1116,7 @@ pub(crate) mod tests {
         let now = drawn(&mut again);
         assert!(now.iter().any(|n| n == "Body"), "the body is drawn");
         assert!(!now.iter().any(|n| titles.contains(n)), "still drawn in its gear: {now:?}");
-        assert_eq!(on_the_floor(&mut again).len(), person.gear.len());
+        // What they wore and carried, their faction's key among it.
+        assert_eq!(on_the_floor(&mut again).len(), person.gear.len() + person.goods.len());
     }
 }
