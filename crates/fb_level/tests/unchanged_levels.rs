@@ -86,5 +86,32 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 10690408706069781928, "snapshot taken before finishes");
+    assert_eq!(all_levels_hash(), 10009356540815911944, "snapshot taken before finishes");
+}
+
+/// A hash of every level's layout, items and lights, which come before the folk in the level's
+/// streams. Factions from the world seed (#536) moved the folk only; the props, stairs, webs and
+/// creatures read where folk stand (to keep clear of them and out of their rooms), so those moved
+/// with them and are held by [`levels_match_those_before_finishes`] instead. It names fields, so
+/// it reads levels from before `factions` existed too.
+fn all_levels_before_folk_hash() -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for depth in 1..=4 {
+        for seed in 1..=50 {
+            let l = generate(seed, depth);
+            let text = format!(
+                "{:?}",
+                ((&l.seed, &l.depth, &l.style, &l.width, &l.height, &l.cells, &l.ceiling, &l.entrance), (&l.rooms, &l.items, &l.lights))
+            );
+            for b in round_floats(&text).bytes() {
+                h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+    }
+    h
+}
+
+#[test]
+fn layout_items_and_lights_match_those_before_factions() {
+    assert_eq!(all_levels_before_folk_hash(), 834952517506886917, "snapshot of everything before the folk");
 }

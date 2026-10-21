@@ -78,6 +78,17 @@ pub enum Outfit {
 }
 
 impl Outfit {
+    /// The delver's class that dresses this way, if one does.
+    pub fn class(self) -> Option<ClassKind> {
+        match self {
+            Outfit::Fighter => Some(ClassKind::Fighter),
+            Outfit::Ranger => Some(ClassKind::Ranger),
+            Outfit::Mage => Some(ClassKind::Mage),
+            Outfit::Cleric => Some(ClassKind::Cleric),
+            Outfit::Scavenger => None,
+        }
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Outfit::Fighter => "fighter",
@@ -203,7 +214,7 @@ pub struct FactionSpec {
     pub name: String,
     /// The folk most of its members are.
     pub folk: Folk,
-    /// Its members dress from these two outfits.
+    /// Its members dress from these two outfits, which differ.
     pub outfits: [Outfit; 2],
     pub alignment: Alignment,
     pub intention: Intention,
@@ -258,6 +269,7 @@ pub struct World {
 impl World {
     /// The pool for the world (delve) seed `seed`: the same seed, the same factions.
     pub fn new(seed: u32) -> World {
+        debug_assert!(POOL_SIZE.1 <= u8::MAX as u32, "a faction id is a u8");
         let count = Mulberry32::new(mix(seed, SIZE_SALT, 0)).int(POOL_SIZE.0, POOL_SIZE.1) as usize;
         let mut taken = HashSet::new();
         let factions = (0..count)
@@ -342,7 +354,10 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
         Folk::Lizardfolk => &[(Fighter, 3), (Ranger, 3), (Mage, 1)],
         Folk::Pigfolk => &[(Ranger, 3), (Scavenger, 3), (Cleric, 1)],
     };
-    let outfits = [*rng.weighted(by_intention), *rng.weighted(by_folk)];
+    // The two differ: the second is drawn from its folk's table without the first.
+    let first = *rng.weighted(by_intention);
+    let rest: Vec<(Outfit, u32)> = by_folk.iter().copied().filter(|(o, _)| *o != first).collect();
+    let outfits = [first, *rng.weighted(&rest)];
 
     let armour = *rng.weighted(match intention {
         Intention::WayOut => &[(ArmourLean::Mail, 3), (ArmourLean::Plate, 2), (ArmourLean::Leather, 2), (ArmourLean::Scale, 1)][..],
@@ -362,7 +377,9 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
         *rng.pick(&others)
     });
     let mut hate_pool: Vec<Preference> = CreatureKind::ALL.iter().map(|&k| Preference::Creature(k)).collect();
-    hate_pool.extend(ClassKind::ALL.iter().map(|&c| Preference::Class(c)));
+    // A faction never hates a class it dresses in.
+    let worn: Vec<ClassKind> = outfits.iter().filter_map(|o| o.class()).collect();
+    hate_pool.extend(ClassKind::ALL.iter().filter(|c| !worn.contains(c)).map(|&c| Preference::Class(c)));
     hate_pool.extend((0..count).filter(|&i| i != index).map(|i| Preference::Faction(Faction(i as u8))));
     let mut like_pool = hate_pool.clone();
     like_pool.extend(Folk::ALL.iter().filter(|f| Some(**f) != hated_folk).map(|&f| Preference::Folk(f)));

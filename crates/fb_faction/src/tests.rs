@@ -110,6 +110,23 @@ fn likes_and_hates_are_one_to_three_and_never_both() {
 }
 
 #[test]
+fn no_faction_contradicts_itself() {
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            assert_ne!(spec.outfits[0], spec.outfits[1], "{}: {:?}", spec.name, spec.outfits);
+            for hate in &spec.hates {
+                assert!(!spec.likes.contains(hate), "{} likes and hates {hate:?}", spec.name);
+                assert_ne!(*hate, Preference::Faction(spec.id), "{} hates itself", spec.name);
+                if let Preference::Class(c) = hate {
+                    assert!(spec.outfits.iter().all(|o| o.class() != Some(*c)), "{} hates {c:?} and dresses in it", spec.name);
+                }
+            }
+            assert!(!spec.likes.contains(&Preference::Faction(spec.id)), "{} likes itself", spec.name);
+        }
+    }
+}
+
+#[test]
 fn factions_vary_across_a_world() {
     let world = World::new(1207);
     let folk: HashSet<Folk> = world.factions().iter().map(|f| f.folk).collect();

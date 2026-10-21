@@ -95,7 +95,8 @@ fn main() -> AppExit {
     if opening == AppState::Delving {
         // `FB_DEPTH=2` plays the stone halls: the level's depth picks its style.
         let depth = std::env::var("FB_DEPTH").ok().and_then(|d| d.parse().ok()).unwrap_or(1);
-        app.insert_resource(CurrentLevel(fb_level::generate(launch.seed.unwrap_or(Launch::DEFAULT_SEED), depth)));
+        // The level travel builds for that depth of the delve (`Abyss::level_at`).
+        app.insert_resource(CurrentLevel(forever_below::travel::Abyss::new(launch.seed.unwrap_or(Launch::DEFAULT_SEED)).level_at(depth)));
     }
     if swings {
         app.add_plugins(SwingPracticePlugin);
