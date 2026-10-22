@@ -542,3 +542,52 @@ fn a_trade_moves_standing_once_per_folk_per_day() {
     assert!(barter.trade_standing(&mut standings, 78, faction, 1));
     assert_eq!(standings.get(faction).value(), after.value() * 3);
 }
+
+#[test]
+fn the_portrait_is_the_look_of_the_trader_s_own_person() {
+    let person = person(smith());
+    let mut inventory = delver(Coins::from_copper(100));
+    let session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf_of(vec![sword(1)], 50)).unwrap();
+    assert_eq!(session.look, Look::of(&person));
+    assert_eq!(session.look.spec, person.spec);
+    assert_eq!(session.look.gear, person.gear);
+    assert_eq!(session.look.dirt, person.dirt);
+    // The same figure the world dresses them in.
+    assert_eq!(session.look.key(), crate::fitting::figure_key(&person.spec, &person.gear, person.dirt));
+}
+
+#[test]
+fn two_folk_of_one_faction_look_different() {
+    let level = fb_level::generate(1207, 1);
+    let looks: Vec<_> = level.folk.iter().map(|spot| (spot.faction, Look::of(&Person::of(spot, level.faction(spot.faction), 1)).key())).collect();
+    let mut seen = 0;
+    for (i, (faction, key)) in looks.iter().enumerate() {
+        for (other, other_key) in &looks[i + 1..] {
+            if other == faction {
+                seen += 1;
+                assert_ne!(key, other_key, "two folk of faction {faction:?} share a look");
+            }
+        }
+    }
+    assert!(seen > 0, "no two folk of one faction in the level");
+}
+
+#[test]
+fn the_portrait_texture_is_let_go_with_the_barter() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut app = barter_app();
+    app.init_resource::<Assets<Image>>().init_resource::<portrait::TraderStage>();
+    let image = app.world_mut().resource_mut::<Assets<Image>>().add(Image::default());
+    app.world_mut().resource_mut::<Barter>().portrait = Some(image);
+    app.world_mut().run_system_once(portrait::clear_trader).unwrap();
+    assert!(app.world().resource::<Barter>().portrait.is_none());
+}
+
+#[test]
+fn leaving_the_delve_forgets_the_trader_s_stage() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut app = barter_app();
+    app.world_mut().resource_mut::<portrait::TraderStage>().mark_dressed_for_test("a trader");
+    app.world_mut().run_system_once(leave_the_delve).unwrap();
+    assert!(!app.world().resource::<portrait::TraderStage>().is_dressed(), "a later barter dresses the trader afresh");
+}

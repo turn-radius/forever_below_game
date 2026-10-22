@@ -18,9 +18,13 @@
 //!   ([`crate::shelf::Shelf::purse`]), so they can run out. What the delver sells stays on the
 //!   shelf through a restock. A trade moves the faction's standing a little and meets it.
 //!
-//! `FB_BARTER=1` presses Barter on the folk nearest the delver a few dozen frames in, for
-//! captures. `FB_BARTER=deal` also gives the delver 40 gp and starts a deal (the first ware to
+//! `FB_BARTER=1` presses Barter on the trader nearest the delver a few dozen frames in, for
+//! captures (`FB_BARTER_PICK=<n>` on the nth nearest, 0 the first). `FB_BARTER=deal` also gives the delver 40 gp and starts a deal (the first ware to
 //! the pack, the first thing they carry to the shelf), and `FB_BARTER=accept` then accepts it.
+
+mod portrait;
+
+pub use portrait::Look;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -35,6 +39,7 @@ use serde::Deserialize;
 
 use crate::combat::feedback::Corpse;
 use crate::enchanting::{plan_pay, wallet};
+use crate::fitting::FitCache;
 use crate::folk::{AimedFolk, Denizen};
 use crate::folk_routine::Routine;
 use crate::hostility::Hostility;
@@ -182,6 +187,8 @@ pub struct Session {
     pub spot: u32,
     /// The trader's coin as it stood then, in copper.
     pub purse: u64,
+    /// What the trader looks like, for the portrait over their shelf.
+    pub look: Look,
 }
 
 impl Session {
@@ -335,6 +342,8 @@ impl Session {
 #[derive(Resource, Default, Debug)]
 pub struct Barter {
     pub session: Option<Session>,
+    /// The texture the trader's portrait is drawn into, while the barter lasts.
+    pub portrait: Option<Handle<Image>>,
     /// What the last Accept said, and the deal's totals it was said about: it shows only while
     /// the deal is still that one.
     notice: Option<(String, (u64, u64))>,
@@ -364,6 +373,7 @@ impl Barter {
             moved: BTreeMap::new(),
             spot: 0,
             purse: 0,
+            look: Look { spec: fb_body::BodySpec::roll(fb_body::Folk::Human, 1), gear: vec![], dirt: 0.0 },
         };
         Barter { session: Some(session), ..default() }
     }
@@ -495,6 +505,7 @@ pub fn begin(inventory: &mut Inventory, folk: Entity, person: &crate::folk::Pers
         moved: BTreeMap::new(),
         spot: person.spot.seed,
         purse: shelf.purse,
+        look: Look::of(person),
     })
 }
 
@@ -607,18 +618,19 @@ pub struct BarterPlugin;
 
 impl Plugin for BarterPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Barter>().init_resource::<BarterRequest>();
+        app.init_resource::<Barter>().init_resource::<BarterRequest>().init_resource::<portrait::TraderStage>();
         if std::env::var_os("FB_BARTER").is_some() {
             app.add_systems(Update, (barter_for_capture, deal_for_capture.after(open_barter)).in_set(DelveSystems));
         }
         app.add_systems(OnExit(crate::launch::AppState::Delving), leave_the_delve.before(crate::inventory::leave_the_delve));
         app.add_systems(Update, (open_barter, click_barter, close_barter, hover_buttons).chain().in_set(DelveSystems));
+        app.add_systems(Update, (portrait::stage_trader.run_if(resource_exists::<FitCache>), portrait::show_trader, portrait::clear_trader).chain().in_set(DelveSystems));
     }
 }
 
 /// Leaving the delve ends a barter in progress, so the shelf's chest and wares do not stay in the
 /// inventory, and forgets who the delver has traded with.
-pub fn leave_the_delve(mut barter: ResMut<Barter>, mut inventory: ResMut<Inventory>, mut showing: ResMut<OpenContainer>) {
+pub fn leave_the_delve(mut barter: ResMut<Barter>, mut inventory: ResMut<Inventory>, mut showing: ResMut<OpenContainer>, mut stage: ResMut<portrait::TraderStage>) {
     if let Some(session) = barter.session.take() {
         end(&mut inventory, session);
     }
@@ -626,12 +638,14 @@ pub fn leave_the_delve(mut barter: ResMut<Barter>, mut inventory: ResMut<Invento
         showing.0 = None;
     }
     *barter = Barter::default();
+    // The trader's figure goes with the delve; forget it so the same trader is dressed afresh.
+    *stage = portrait::TraderStage::default();
 }
 
 /// For captures (`FB_BARTER=1`): barters with the folk nearest the delver once the level is up.
 fn barter_for_capture(
     player: Query<&Transform, With<Player>>,
-    folk: Query<(Entity, &Transform), (With<Denizen>, Without<Corpse>)>,
+    folk: Query<(Entity, &Transform), (With<Denizen>, With<Shelf>, Without<Corpse>)>,
     mut request: ResMut<BarterRequest>,
     mut frames: Local<u32>,
 ) {
@@ -640,7 +654,10 @@ fn barter_for_capture(
         return;
     }
     let Some(at) = player.iter().next().map(|t| t.translation) else { return };
-    request.0 = folk.iter().min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))).map(|(e, _)| e);
+    let mut near: Vec<_> = folk.iter().collect();
+    near.sort_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at)));
+    let nth: usize = std::env::var("FB_BARTER_PICK").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    request.0 = near.get(nth).map(|(e, _)| *e);
 }
 
 /// For captures (`FB_BARTER=deal` or `accept`): a few frames after the screen opens, gives the
@@ -756,6 +773,10 @@ pub enum Act {
     Accept,
     Cancel,
 }
+
+/// The trader's name over their shelf.
+#[derive(Component, Debug)]
+pub struct TraderName;
 
 /// A button on the balance.
 #[derive(Component, Debug)]
@@ -919,9 +940,18 @@ pub fn panel(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, barter: &Barter
             BorderColor::all(FAINT),
         ))
         .with_children(|panel| {
-            panel.spawn((Text::default(), UiFonts::style(&fonts.body, 15.0, MUTED))).with_children(|head| {
-                head.spawn((TextSpan::new(format!("{} \u{b7} ", session.trade.label())), UiFonts::style(&fonts.body, 15.0, MUTED)));
-                head.spawn((TextSpan::new(session.band.label()), UiFonts::style(&fonts.body_medium, 15.0, band_colour)));
+            panel.spawn(Node { column_gap: px(14), align_items: AlignItems::Center, ..default() }).with_children(|head| {
+                if let Some(portrait) = barter.portrait.clone() {
+                    crate::inventory::header::portrait_frame(head, portrait, crate::inventory::doll::PORTRAIT);
+                }
+                head.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(3), ..default() }).with_children(|who| {
+                    who.spawn((TraderName, Text::new(session.name.clone()), UiFonts::style(&fonts.display, 28.0, INK)));
+                    who.spawn((Text::new(capital(&session.faction_name)), UiFonts::style(&fonts.body, 15.0, MUTED)));
+                    who.spawn((Text::default(), UiFonts::style(&fonts.body, 15.0, MUTED))).with_children(|line| {
+                        line.spawn((TextSpan::new(format!("{} \u{b7} ", session.trade.label())), UiFonts::style(&fonts.body, 15.0, MUTED)));
+                        line.spawn((TextSpan::new(session.band.label()), UiFonts::style(&fonts.body_medium, 15.0, band_colour)));
+                    });
+                });
             });
             for (word, count, copper) in [("Buying", deal.buying.len(), deal.cost), ("Selling", deal.selling.len(), deal.offer)] {
                 panel.spawn((Text::new(format!("{word} {count} \u{b7} ")), UiFonts::style(&fonts.body, 17.0, INK))).with_children(|row| {

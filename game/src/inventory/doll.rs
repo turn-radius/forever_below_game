@@ -186,8 +186,7 @@ impl FromWorld for DollAssets {
         doll_image.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
         let glow = image_of(&light_glow(1.0));
         let mut images = world.resource_mut::<Assets<Image>>();
-        let mut portrait = Image::new_target_texture(PORTRAIT_PIXELS.x, PORTRAIT_PIXELS.y, TextureFormat::Rgba8UnormSrgb, None);
-        portrait.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
+        let portrait = portrait_target();
         DollAssets {
             bands: layers.map(|canvas| images.add(image_of(&canvas))),
             doll: images.add(doll_image),
@@ -244,15 +243,72 @@ impl DollStage {
     }
 }
 
-/// The portrait's view of a head centred at `centre` with half height `r`, in body space: the
-/// orthographic width and height and the point it looks at. The plate frames the box from
-/// `1.55 r` either side and `1.45 r` below to `1.75 r` above a point `0.35 r` under the head's
-/// centre (`drawPortrait`), here widened to the image's shape.
-pub fn portrait_view(centre: Vec3, r: f32) -> (Vec2, Vec3) {
+/// The portrait's view of a head centred at `centre` with half height `r`, in body space, whose
+/// gear reaches up to `top`: the orthographic width and height and the point it looks at. The
+/// plate frames the box from `1.55 r` either side and `1.45 r` below to `1.75 r` above a point
+/// `0.35 r` under the head's centre (`drawPortrait`), here widened to the image's shape. A hood
+/// or hat rising above that box lifts the frame's top to `0.2 r` over it, keeping the bottom; a
+/// bare head is framed as the plate frames it.
+pub fn portrait_view(centre: Vec3, r: f32, top: f32) -> (Vec2, Vec3) {
     let aspect = PORTRAIT_PIXELS.x as f32 / PORTRAIT_PIXELS.y as f32;
     let (width, height) = (3.1 * r, 3.2 * r);
     let height = height.max(width / aspect);
-    (Vec2::new(height * aspect, height), centre + Vec3::Y * (-0.35 + (1.75 - 1.45) * 0.5) * r)
+    let look = centre + Vec3::Y * (-0.35 + (1.75 - 1.45) * 0.5) * r;
+    let (bottom, frame_top) = (look.y - height * 0.5, look.y + height * 0.5);
+    let wanted = top + 0.2 * r;
+    if wanted <= frame_top {
+        return (Vec2::new(height * aspect, height), look);
+    }
+    let height = wanted - bottom;
+    (Vec2::new(height * aspect, height), Vec3::new(look.x, bottom + height * 0.5, look.z))
+}
+
+/// The Armory's key light for a stage whose subject is `side` units across: far off along the
+/// key's direction, so its falloff is nearly flat over the subject. Its transform is relative to
+/// where the subject is looked at from.
+pub fn studio_key(side: f32) -> (PointLight, Transform) {
+    let distance = 12.0 * side;
+    let range = 8.0 * distance;
+    let light = point_light(Color::WHITE, KEY_LEVEL / reach_falloff(distance, range), range, &Exposure::INDOOR);
+    (light, Transform::from_translation(StudioLight::ARMORY.key_from() * distance))
+}
+
+/// A camera on the head of `figure`, a child of its `root`, drawing into `image` (the size of
+/// the portrait) on `layer`: the delver's portrait in the header and the trader's on the barter
+/// screen alike. It starts off; whoever shows the portrait turns it on.
+pub fn spawn_portrait_camera(commands: &mut Commands, image: Handle<Image>, figure: &Figure, layer: RenderLayers, root: Entity) -> Entity {
+    let exposure = Exposure::INDOOR;
+    let (head, _) = figure.head();
+    let (view, looking_at) = portrait_view(head, figure.body.head.half_height, figure.head_top());
+    let from = PORTRAIT_FROM.normalize();
+    commands
+        .spawn((
+            Name::new("Portrait camera"),
+            crate::render::ScreenInkExempt,
+            Camera3d::default(),
+            Camera { order: -4, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },
+            RenderTarget::Image(image.into()),
+            Projection::Orthographic(OrthographicProjection {
+                scaling_mode: ScalingMode::Fixed { width: view.x, height: view.y },
+                near: 0.1,
+                far: 60.0,
+                ..OrthographicProjection::default_3d()
+            }),
+            exposure,
+            Tonemapping::Linear,
+            AmbientLight { color: StudioLight::ARMORY.ambient_color, brightness: StudioLight::ARMORY.ambient / exposure.exposure(), ..default() },
+            layer,
+            Transform::from_translation(looking_at + from * 30.0).looking_at(looking_at, Vec3::Y),
+            ChildOf(root),
+        ))
+        .id()
+}
+
+/// A new render target the size of the portrait.
+pub fn portrait_target() -> Image {
+    let mut portrait = Image::new_target_texture(PORTRAIT_PIXELS.x, PORTRAIT_PIXELS.y, TextureFormat::Rgba8UnormSrgb, None);
+    portrait.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
+    portrait
 }
 
 /// The orthographic view, width and height in world units, that holds a figure of `bounds`
@@ -347,30 +403,7 @@ fn spawn_doll_figure(
     stage.figure = Some(root);
 
     // The portrait turns with the doll, so it always sees the face.
-    let (head, _) = figure.head();
-    let (view, looking_at) = portrait_view(head, figure.body.head.half_height);
-    let from = PORTRAIT_FROM.normalize();
-    let portrait = commands
-        .spawn((
-            Name::new("Portrait camera"),
-            crate::render::ScreenInkExempt,
-            Camera3d::default(),
-            Camera { order: -4, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },
-            RenderTarget::Image(assets.portrait.clone().into()),
-            Projection::Orthographic(OrthographicProjection {
-                scaling_mode: ScalingMode::Fixed { width: view.x, height: view.y },
-                near: 0.1,
-                far: 60.0,
-                ..OrthographicProjection::default_3d()
-            }),
-            exposure,
-            Tonemapping::Linear,
-            AmbientLight { color: StudioLight::ARMORY.ambient_color, brightness: StudioLight::ARMORY.ambient / exposure.exposure(), ..default() },
-            layer.clone(),
-            Transform::from_translation(looking_at + from * 30.0).looking_at(looking_at, Vec3::Y),
-            ChildOf(root),
-        ))
-        .id();
+    let portrait = spawn_portrait_camera(commands, assets.portrait.clone(), figure, layer.clone(), root);
     stage.portrait = Some(portrait);
 
     let (side, centre_y) = doll_view(bounds);
@@ -390,9 +423,7 @@ fn spawn_doll_figure(
         None => {
             // Far off along the Armory key's direction, so its falloff is nearly flat over the
             // doll, as for the icons.
-            let distance = 12.0 * side;
-            let range = 8.0 * distance;
-            let key = point_light(Color::WHITE, KEY_LEVEL / reach_falloff(distance, range), range, &exposure);
+            let key = studio_key(side);
             let camera = commands
                 .spawn((
                     Name::new("Doll camera"),
@@ -408,7 +439,7 @@ fn spawn_doll_figure(
                     layer.clone(),
                     at,
                 ))
-                .with_child((Name::new("Doll key light"), key, Transform::from_translation(StudioLight::ARMORY.key_from() * distance), layer))
+                .with_child((Name::new("Doll key light"), key.0, key.1, layer))
                 .id();
             stage.camera = Some(camera);
         }
@@ -771,7 +802,7 @@ mod tests {
         wait_for_doll_fitting(&mut app);
         let stage = app.world().resource::<DollStage>();
         let (portrait, figure) = (stage.portrait().unwrap(), stage.figure.unwrap());
-        let (head, r) = { let f = stage.built.as_ref().unwrap(); (f.head().0, f.body.head.half_height) };
+        let (head, r, stage_top) = { let f = stage.built.as_ref().unwrap(); (f.head().0, f.body.head.half_height, f.head_top()) };
         // Drawn into the portrait image, turning with the doll, and looking at its head.
         let target = app.world().get::<RenderTarget>(portrait).unwrap();
         assert!(matches!(target, RenderTarget::Image(i) if i.handle == app.world().resource::<DollAssets>().portrait));
@@ -779,8 +810,31 @@ mod tests {
         let at = app.world().get::<Transform>(portrait).unwrap();
         let to_head = (head - at.translation).normalize();
         assert!(to_head.dot(at.forward().as_vec3()) > 0.99, "looks at the head");
-        let (view, _) = portrait_view(head, r);
+        let (view, _) = portrait_view(head, r, stage_top);
         assert!(view.y >= 3.2 * r && view.y < 5.0 * r, "{view}");
+    }
+
+    #[test]
+    fn the_portrait_frame_holds_hoods_and_hats_and_leaves_a_bare_head_alone() {
+        use fb_body::Folk;
+        for folk in [Folk::Gnome, Folk::Goblin, Folk::Human] {
+            let spec = fb_body::BodySpec::roll(folk, 7);
+            let bare = Figure::dress(&spec, &[], 0.0);
+            let (head, r) = bare.head();
+            let (view, at) = portrait_view(head, bare.body.head.half_height, bare.head_top());
+            let plate = portrait_view(head, bare.body.head.half_height, f32::MIN);
+            assert_eq!((view, at), plate, "{folk:?}: a bare head is framed as the plate frames it");
+            for kit in ["Hood", "Pointed hat"] {
+                let Some(item) = fb_items::roll_item(kit, 3) else { continue };
+                if !item.slots().contains(&Slot::Head) {
+                    continue;
+                }
+                let figure = Figure::dress(&spec, &[(Slot::Head, item)], 0.0);
+                let (view, at) = portrait_view(head, figure.body.head.half_height, figure.head_top());
+                assert!(figure.head_top() >= bare.head_top(), "{folk:?} {kit}");
+                assert!(at.y + view.y * 0.5 >= figure.head_top(), "{folk:?} {kit}: the gear's top {} is inside the frame's {} (r {r})", figure.head_top(), at.y + view.y * 0.5);
+            }
+        }
     }
 
     #[test]
