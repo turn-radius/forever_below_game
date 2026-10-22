@@ -178,6 +178,9 @@ pub struct ItemRecord {
     pub contents: Vec<Stowed>,
     /// The odds it was rolled against.
     pub odds: fb_items::Odds,
+    /// What is written on it.
+    #[serde(default)]
+    pub words: Option<String>,
 }
 
 /// An item in a container's grid.
@@ -267,6 +270,7 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
         coins: item.coins.map(|c| [c.gp, c.sp, c.cp]),
         contents: vec![],
         odds: item.odds,
+        words: item.words.clone(),
     }
 }
 
@@ -315,6 +319,7 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         history: record.history.clone(),
         coins: record.coins.map(|[gp, sp, cp]| Coins { gp, sp, cp }),
         odds: record.odds,
+        words: record.words.clone(),
     });
     if item.is_none() {
         warn!("recorded item has unknown base {:?} (seed {}); dropping it", record.base, record.seed);
@@ -463,6 +468,14 @@ mod tests {
         assert_eq!(again, changed);
         assert_eq!(again.affixes, vec![quick]);
         assert!(again.name.starts_with("Quick"));
+    }
+
+    #[test]
+    fn a_note_keeps_its_words_through_a_record() {
+        let level = fb_level::generate(5, 2);
+        let note = fb_items::roll_item("Note", 31).unwrap().in_world(&level.lore());
+        assert!(note.words.is_some());
+        assert_eq!(through_record(&note), note);
     }
 
     #[test]

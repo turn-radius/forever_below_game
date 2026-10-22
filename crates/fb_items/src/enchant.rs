@@ -501,8 +501,8 @@ mod tests {
         assert!(told.history.iter().all(|h| !h.contains("Lost") && !h.contains("Carried")), "{:?}", told.history);
         assert!(legend.history.is_empty());
         // The world does not re-tell it, and the etching is inlaid.
-        let names = vec!["the Pale Hand".to_string()];
-        assert_eq!(legend.clone().in_world(&names), legend);
+        let lore = crate::notes::Lore { factions: vec!["the Pale Hand".to_string()], ..Default::default() };
+        assert_eq!(legend.clone().in_world(&lore), legend);
         let mut shape = legend.shape.clone();
         if let Some(e) = etching_mut(&mut shape) {
             assert_eq!(e.finish, armory::etch::EtchFinish::Inlaid);
