@@ -215,6 +215,11 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         let (claims, strengths) = grow_claims(&level, start_room, &cramped, &mut Mulberry32::new(layout_seed ^ CLAIM_SALT));
         let mut trial = level.clone();
         trial.claims = claims;
+        // What a faction keeps is in its containers and on its traders' shelves, not on the floor.
+        // Claims settle after the loot is scattered, so what lies in a claimed room is taken out
+        // before folk and fires are placed, and nothing keeps clear of what is gone.
+        let mut in_claim = trial.items.iter().map(|i| trial.room_at(i.x as i32, i.y as i32).is_some_and(|r| trial.is_claimed(r))).collect::<Vec<_>>().into_iter();
+        trial.items.retain(|_| !in_claim.next().unwrap_or(false));
         // A faction that found no ground is not on the level.
         let held: Vec<_> = trial.claims.iter().map(|c| c.faction).collect();
         trial.factions.retain(|s| held.contains(&s.id));
@@ -1362,16 +1367,16 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588), and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618).
         let before = [
-            (0u32, 0x8ce8fc5baaf05876u64),
-            (1, 0xaacf4d03867a1718),
-            (2, 0x168d9a3ac6b499b7),
-            (7, 0x28bcb9ad10b96016),
-            (64, 0xa3ef2b348696405a),
-            (1207, 0x957fbf7eeb07f80a),
-            (4242, 0xdfa9e21feed9fe08),
-            (u32::MAX, 0xc2af47d6c679ceeb),
+            (0u32, 0x1f1a3218b008af65u64),
+            (1, 0x449e6b9c0122874a),
+            (2, 0x4f77a21635f56cb),
+            (7, 0xf62fd5bc05f65db),
+            (64, 0x36ec7c3ea51f5f9a),
+            (1207, 0xf8e33bcb5d895512),
+            (4242, 0x401bea1115e7dbf6),
+            (u32::MAX, 0xec7118df0d2cac3a),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);
@@ -1416,6 +1421,24 @@ mod tests {
             }
             assert!(!level.items.is_empty() && !level.lights.is_empty() && !level.folk.is_empty() && !level.creatures.is_empty(), "seed {seed} depth {depth}");
         }
+    }
+
+    #[test]
+    fn no_floor_item_lies_in_a_claimed_room() {
+        let (mut claimed_rooms, mut wild_items) = (0, 0);
+        for depth in 1..=4 {
+            for seed in 1..=40 {
+                let level = generate(seed, depth);
+                for item in &level.items {
+                    let room = level.room_at(item.x as i32, item.y as i32);
+                    assert!(!room.is_some_and(|r| level.is_claimed(r)), "seed {seed} depth {depth}: an item at {},{} in a claimed room", item.x, item.y);
+                    wild_items += room.is_some() as usize;
+                }
+                claimed_rooms += (0..level.rooms.len()).filter(|&r| level.is_claimed(r)).count();
+            }
+        }
+        assert!(claimed_rooms > 50, "{claimed_rooms} claimed rooms");
+        assert!(wild_items > 200, "{wild_items} items in unclaimed rooms");
     }
 
     #[test]

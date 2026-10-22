@@ -460,7 +460,7 @@ mod tests {
         let level = generate(1207, 1);
         let (sx, sy, _) = level.start();
         assert_eq!((sx, sy, level.rooms.len()), (1, 22, 6));
-        assert_eq!((level.items.len(), level.folk.len(), level.props.len()), (13, 6, 25));
+        assert_eq!((level.items.len(), level.folk.len(), level.props.len()), (10, 6, 27));
         // Folk stand by their rooms' roles and the rooms are furnished first (#546), guards at their doors and traders in the market (#550).
         assert_eq!(level.folk[5].seed, 3_668_467_538);
         let chest = level.props.iter().find(|p| p.prop.holds_loot()).unwrap();

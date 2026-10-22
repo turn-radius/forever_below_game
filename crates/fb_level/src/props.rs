@@ -359,8 +359,8 @@ const CELL_COT: f64 = 0.3;
 /// from the main doorway; bookshelves along a library's walls and a reading table; bones heaped
 /// in an ossuary's corners; a table, a weapon rack and a strongbox in a guardroom. As with the
 /// roles, nothing stands in or beside a doorway or a gate, and every open cell stays reachable.
-/// A claimed room has been cleared of bones and rubble, and its faction keeps no strongbox of
-/// loot there.
+/// A claimed room has been cleared of bones and rubble; its faction keeps its guardroom's
+/// strongbox, with its loot, like any other.
 fn furnish_purposes(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<PropSpot>, occupied: &mut [bool], rng: &mut Mulberry32) {
     use crate::Purpose;
     for r in 0..level.rooms.len() {
@@ -431,7 +431,8 @@ fn furnish_purposes(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<P
                     let prop = scenery(kind, rng);
                     put_in_nook(level, &nooks, prop, placed, occupied, rng);
                 }
-                if !claimed {
+                // A market's stalls stay empty, so no strongbox stands among them.
+                if !level.roles_of(r).contains(&crate::RoomRole::Market) {
                     let strongbox = roll_container(placed, &[(ChestStyle::Strongbox, 2), (ChestStyle::Chest, 1)], false, rng);
                     put_in_nook(level, &nooks, strongbox, placed, occupied, rng);
                 }
@@ -878,9 +879,9 @@ mod tests {
         let level = generate(1207, 1);
         let (sx, sy, facing) = level.start();
         assert_eq!((sx, sy, facing, level.rooms.len()), (1, 22, Facing::East, 6));
-        assert_eq!((level.items.len(), level.folk.len()), (13, 6));
+        assert_eq!((level.items.len(), level.folk.len()), (10, 6));
         assert_eq!((level.items[0].family, level.items[0].seed), (armory::Family::Torch, 3_185_309_893));
-        assert_eq!((level.items[12].family, level.items[12].seed), (armory::Family::Mace, 3_024_996_869));
+        assert_eq!((level.items[9].family, level.items[9].seed), (armory::Family::Torch, 3_740_850_500));
         // Folk stand by their rooms' roles since #546, guards at their doors and traders in the market since #550.
         assert_eq!(level.folk[5].seed, 3_668_467_538);
         // Gathered round the hearth's campfire since #569.
@@ -1021,6 +1022,32 @@ mod tests {
         // Measured: 1 of 196 has none since rooms were furnished by their purpose (#588), whose
         // centrepieces take a wall first; every market had stalls before.
         assert!(bare_markets <= 1, "{bare_markets} of {markets} markets have no stalls");
+    }
+
+    /// Every container a faction keeps rolls its loot, but a market's stalls and a hearth's keg.
+    #[test]
+    fn held_containers_hold_loot_but_stalls_and_kegs() {
+        use crate::RoomRole;
+        let (mut kept, mut guard_boxes) = (0, 0);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for room in (0..level.rooms.len()).filter(|&r| level.is_claimed(r)) {
+                let roles = level.roles_of(room);
+                let held: Vec<_> = level.props.iter().filter(|p| p.prop.is_container() && level.room_at(p.x as i32, p.y as i32) == Some(room)).collect();
+                // A market's stalls are empty, and a hearth has one empty keg; all else holds loot.
+                let empty = held.iter().filter(|p| !p.prop.holds_loot()).count();
+                let allowed = if roles.contains(&RoomRole::Market) { held.len() } else if roles.contains(&RoomRole::Hearth) { 1 } else { 0 };
+                assert!(empty <= allowed, "seed {seed} depth {depth}: {empty} empty containers in a held room");
+                if !roles.contains(&RoomRole::Market) {
+                    kept += held.iter().filter(|p| p.prop.holds_loot()).count();
+                }
+                if level.purpose_of(room) == Some(crate::Purpose::Guardroom) && !roles.contains(&RoomRole::Market) {
+                    guard_boxes += held.iter().filter(|p| p.prop.holds_loot() && matches!(p.prop, Prop::Container { style: ChestStyle::Strongbox | ChestStyle::Chest, .. })).count();
+                }
+            }
+        }
+        assert!(kept > 0, "{kept} held containers with loot");
+        assert!(guard_boxes > 0, "no claimed guardroom keeps a strongbox");
     }
 
     #[test]

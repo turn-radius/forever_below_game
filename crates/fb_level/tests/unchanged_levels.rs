@@ -92,7 +92,7 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 18438069829968930493, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge, and again when corridors took widths by rank (#581), and when rough rock's main width became two to three, and again when levels took a past and cell blocks were carved (#587), rooms were furnished by their purpose (#588) and braziers left the front of cell gates");
+    assert_eq!(all_levels_hash(), 17328026596201357821, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge, and again when corridors took widths by rank (#581), and when rough rock's main width became two to three, and again when levels took a past and cell blocks were carved (#587), rooms were furnished by their purpose (#588) and braziers left the front of cell gates, and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618)");
 }
 
 /// A hash of every level's layout, items and lights, which come before the folk in the level's
@@ -122,5 +122,5 @@ fn all_levels_before_folk_hash() -> u64 {
 
 #[test]
 fn layout_items_and_lights_match_those_before_factions() {
-    assert_eq!(all_levels_before_folk_hash(), 7447611667703957657, "snapshot of everything before the folk; retaken when corridors took widths by rank (#581), and when rough rock's main width became two to three, and when cell blocks were carved (#587), purposed rooms took braziers, books and loot off their walls (#588) and braziers left the front of cell gates");
+    assert_eq!(all_levels_before_folk_hash(), 6637469238529347463, "snapshot of everything before the folk; retaken when corridors took widths by rank (#581), and when rough rock's main width became two to three, and when cell blocks were carved (#587), purposed rooms took braziers, books and loot off their walls (#588) and braziers left the front of cell gates, and again when floor items left claimed rooms (#618)");
 }

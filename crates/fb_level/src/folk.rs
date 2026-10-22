@@ -485,10 +485,10 @@ mod tests {
     fn folk_do_not_move_the_loot() {
         // Seed 1207's items as they lay before folk came (`print_level 1207`).
         let level = generate(1207, 1);
-        assert_eq!(level.items.len(), 13);
+        assert_eq!(level.items.len(), 10);
         assert_eq!((level.items[0].family, level.items[0].seed), (armory::Family::Torch, 3_185_309_893));
-        assert_eq!((level.items[12].family, level.items[12].seed), (armory::Family::Mace, 3_024_996_869));
-        assert!((level.items[12].x - 10.6).abs() < 0.05 && (level.items[12].y - 10.5).abs() < 0.05);
+        assert_eq!((level.items[9].family, level.items[9].seed), (armory::Family::Torch, 3_740_850_500));
+        assert!((level.items[9].x - 12.7).abs() < 0.05 && (level.items[9].y - 27.6).abs() < 0.05);
     }
 
     /// The guards of `claim`, in placement order.
