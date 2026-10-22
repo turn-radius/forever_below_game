@@ -54,6 +54,7 @@ use forever_below::{
 };
 
 fn main() -> AppExit {
+    forever_below::pulp::on();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--forge") {
         return run_forge(&args);

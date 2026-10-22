@@ -29,7 +29,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::{apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
+import super::decay::{value_noise, apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -77,6 +77,8 @@ struct ToonUniform {
     // fraction of it, 0 for none.
     shimmer_color: vec3<f32>,
     shimmer_strength: f32,
+    // SPIKE `FB_LOOK=pulp`: 1 for the painterly variant, 0 for the house toon look.
+    pulp: u32,
 }
 
 // Bindless where the device allows it (`ToonExtension`'s `bindless` attribute), as Bevy's
@@ -151,7 +153,24 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
 
 // The band for one light: three.js samples its gradient at N.L * 0.5 + 0.5, so the unlit
 // side still gets the lowest band. A shadowed fragment drops to the lowest band.
+var<private> pulp_jitter: f32 = 0.0;
+
+// SPIKE: five soft-edged bands in place of three hard ones. The edges are smoothsteps wide
+// enough to read as brush blends, and `pulp_jitter` (low-frequency noise in item space) moves
+// them so the edge wanders like a loaded brush.
+fn pulp_band(n_dot_l: f32, shadow: f32) -> f32 {
+    let c = clamp(n_dot_l * 0.5 + 0.5, 0.0, 1.0) * (0.3 + 0.7 * shadow) + pulp_jitter;
+    return 0.09
+        + 0.20 * smoothstep(0.20, 0.34, c)
+        + 0.24 * smoothstep(0.38, 0.52, c)
+        + 0.25 * smoothstep(0.56, 0.68, c)
+        + 0.22 * smoothstep(0.72, 0.86, c);
+}
+
 fn toon_band(toon: ToonUniform, n_dot_l: f32, shadow: f32) -> f32 {
+    if toon.pulp != 0u {
+        return pulp_band(n_dot_l, shadow);
+    }
     let coord = clamp(n_dot_l * 0.5 + 0.5, 0.0, 1.0) * shadow;
     let count = max(toon.band_count, 1u);
     let index = min(u32(floor(coord * f32(count))), count - 1u);
@@ -180,7 +199,16 @@ fn reach_attenuation(distance_squared: f32, inverse_range_squared: f32) -> f32 {
 // `REACH_STEPS` hard steps: capped at full, so a wall beside the flame is full light and not
 // burnt white, then rounded up, so the dimmest step runs out to the light's range and ends
 // there, as dim light ends at the edge of a torch's reach. Keeps the light's hue.
-fn reach_step(radiance: vec3<f32>) -> vec3<f32> {
+fn reach_step(radiance: vec3<f32>, pulp: u32) -> vec3<f32> {
+    if pulp != 0u {
+        let lv = max(radiance.r, max(radiance.g, radiance.b));
+        if lv <= 0.0 {
+            return vec3(0.0);
+        }
+        let sc = min(lv, 1.0) * REACH_STEPS;
+        let soft = (floor(sc) + smoothstep(0.3, 0.7, fract(sc)) + 0.15) / REACH_STEPS;
+        return radiance * (min(soft, 1.0) / lv);
+    }
     let level = max(radiance.r, max(radiance.g, radiance.b));
     if level <= 0.0 {
         return vec3(0.0);
@@ -273,7 +301,7 @@ fn toon_direct_light(toon: ToonUniform, in: PbrInput) -> vec3<f32> {
 
         // Lambert: the band stands in for N.L, 1/PI as in Bevy's diffuse lobe.
         let radiance = (*clustered).color_inverse_square_range.rgb * attenuation * cone * (exposure / PI);
-        light += reach_step(radiance) * flame_flicker((*clustered).position_radius) * toon_band(toon, dot(N, L), shadow);
+        light += reach_step(radiance, toon.pulp) * flame_flicker((*clustered).position_radius) * toon_band(toon, dot(N, L), shadow);
     }
 
     for (var i: u32 = 0u; i < view_bindings::lights.n_directional_lights; i = i + 1u) {
@@ -379,6 +407,10 @@ fn fragment(
         toon.decay_scale,
         toon.decay_seed,
     );
+    if toon.pulp != 0u {
+        pulp_jitter = (value_noise(item_position * 0.55 + vec3(toon.decay_seed)) - 0.5) * 0.20
+            + (value_noise(item_position * 3.1) - 0.5) * 0.07;
+    }
     var base = apply_decay(
         etched,
         item_position,
@@ -436,7 +468,25 @@ fn fragment(
     openness = select(vertex_output.color.a, 1.0, flame);
     let ambient = view_bindings::lights.ambient_color.rgb * pbr_input.diffuse_occlusion * openness;
     let light = toon_direct_light(toon, pbr_input) * openness + ambient * view_bindings::view.exposure;
-    let lit = srgb_to_linear(tone * light);
+    var graded = light;
+    var painted = tone;
+    if toon.pulp != 0u {
+        // Warm lights, cool violet shadows: the lit side of a surface drifts toward ochre and
+        // the shaded side toward blue-violet, as an oil painter pushes temperature, not value.
+        let lum = dot(light, vec3(0.3333));
+        graded = light * mix(vec3(0.80, 0.84, 1.22), vec3(1.05, 1.0, 0.92), smoothstep(0.12, 0.85, lum));
+        // A little extra chroma, and a faint canvas tooth.
+        let grey = vec3(dot(tone, vec3(0.3, 0.59, 0.11)));
+        painted = mix(grey, tone, 1.14);
+        painted = painted * (1.0 + (value_noise(item_position * 9.0) - 0.5) * 0.07);
+        // A warm rim light from behind, in the colour of the surface.
+        if !flame && toon.decay_type != DECAY_ROCK && toon.decay_type != DECAY_STRATA {
+            let to_eye_p = normalize(view_bindings::view.world_position - pbr_input.world_position.xyz);
+            let rim = pow(1.0 - clamp(dot(pbr_input.N, to_eye_p), 0.0, 1.0), 3.0);
+            graded = graded + vec3(1.0, 0.66, 0.38) * (0.30 * rim);
+        }
+    }
+    let lit = srgb_to_linear(painted * graded);
     // Glow fades as the stone clouds over (`gemMat`).
     let glow = srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
 

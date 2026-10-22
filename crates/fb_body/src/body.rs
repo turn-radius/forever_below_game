@@ -128,27 +128,28 @@ impl Body {
     /// The body for `spec` with its arms in `pose`.
     pub fn posed(spec: &BodySpec, pose: Pose) -> Body {
         let race = spec.folk.race();
+        let lk = crate::look::look_for(spec.folk);
         let h = race.h * spec.stature;
         let s = h / 17.5;
         let (mu, slim) = (spec.muscle, 1.12 - 0.24 * spec.slender);
         // Slenderness thins trunk and limbs alike at the same height; 0.5 is the plate's girth.
         let ws = s.powf(0.72) * race.girth * (0.88 + spec.frame * 0.3) * slim;
         let fem = spec.figure;
-        let head_r = race.head_r * s.powf(0.35);
+        let head_r = race.head_r * s.powf(0.35) * lk.head;
         let half_height = head_r * race.hh;
         let head_y = h - half_height;
         let chin_y = head_y - half_height;
         let shoulder_y = chin_y - race.neck * s * 0.55;
-        let hip_y = h * race.leg;
+        let hip_y = h * (race.leg + lk.leg);
         let t = shoulder_y - hip_y;
-        let sw = 2.1 * ws * (1.07 - fem * 0.15) * (0.92 + 0.16 * mu);
+        let sw = 2.1 * ws * (1.07 - fem * 0.15) * (0.92 + 0.16 * mu) * lk.shoulders;
         let hip = FormRing::new(hip_y, 1.66 * ws * (0.95 + fem * 0.13), 1.12 * ws);
         let waist_y = hip_y + 0.3 * t;
         let chest_y = hip_y + 0.7 * t;
         // Muscle narrows the waist under a broad chest; weight fills it.
-        let waist = FormRing::new(waist_y, 1.38 * ws * (1.0 - fem * 0.3) * (1.05 - 0.1 * mu) * (0.95 + 0.12 * spec.frame), 0.95 * ws);
-        let chest = FormRing::new(chest_y, 1.72 * ws * (0.97 + 0.06 * mu), 1.14 * ws * (0.97 + 0.06 * mu));
-        let neck_radius = 0.42 * ws * race.neck_r * (0.92 + 0.16 * mu);
+        let waist = FormRing::new(waist_y, 1.38 * ws * (1.0 - fem * 0.3) * (1.05 - 0.1 * mu) * (0.95 + 0.12 * spec.frame) * lk.waist, 0.95 * ws * lk.waist);
+        let chest = FormRing::new(chest_y, 1.72 * ws * (0.97 + 0.06 * mu) * lk.chest, 1.14 * ws * (0.97 + 0.06 * mu) * lk.chest);
+        let neck_radius = 0.42 * ws * race.neck_r * (0.92 + 0.16 * mu) * lk.neck;
         let belly = Bulge { y: waist_y, spread: 0.3 * t, depth: (race.belly * (0.3 + spec.frame * 0.9) + 0.25 * spec.frame.powi(2)) * ws, sharpness: 2, toward: FRONT, fall: -0.35, ..Bulge::NONE };
         // The chest is two forms either side of the breastbone, the breast muscles (more with
         // muscle) and a bust over them that sits lower and fuller as it rounds. The plate swelled
@@ -180,11 +181,11 @@ impl Body {
         let ankle_y = 0.048 * h;
         let head = HeadForm {
             centre: [0.0, head_y, 0.12 * s],
-            half_width: head_r * race.hw,
+            half_width: head_r * race.hw * lk.head_width,
             half_height,
             half_depth: head_r * race.hd,
-            jaw: race.jaw + (spec.jaw - 0.5) * 0.3,
-            chin: race.chin,
+            jaw: race.jaw + (spec.jaw - 0.5) * 0.3 + lk.jaw,
+            chin: race.chin + lk.chin,
             flat: race.flat,
             neck_radius,
             neck_base: shoulder_y + 0.05 * t,
@@ -204,8 +205,8 @@ impl Body {
             TRUNK_BACK,
             vec![belly, bust, seat, lumbar],
         );
-        let arm = |side: Side| arm_limb(race, h, ws, fem, mu, sw, shoulder_y, side, pose.arm(side));
-        let leg = |side: Side| leg_limb(race, s, ws, fem, mu, &hip, ankle_y, side);
+        let arm = |side: Side| arm_limb(race, h, ws, fem, mu, sw, shoulder_y, side, pose.arm(side), &lk);
+        let leg = |side: Side| leg_limb(race, s, ws, fem, mu, &hip, ankle_y, side, &lk);
         Body {
             spec: spec.clone(),
             pose,
@@ -708,7 +709,7 @@ pub(crate) fn lighten(c: Rgb, k: f32) -> Rgb {
 /// the radius swells over the upper arm, narrows at the elbow, fills the forearm and
 /// tapers to the wrist.
 #[allow(clippy::too_many_arguments)]
-fn arm_limb(race: &Race, h: f32, ws: f32, fem: f32, mu: f32, sw: f32, shoulder_y: f32, side: Side, pose: ArmPose) -> Limb {
+fn arm_limb(race: &Race, h: f32, ws: f32, fem: f32, mu: f32, sw: f32, shoulder_y: f32, side: Side, pose: ArmPose, lk: &crate::look::Look) -> Limb {
     let sg = side.sign();
     let ar = 0.5 * ws * race.limb * (1.0 - fem * 0.12) * (0.86 + 0.28 * mu);
     let (upper, fore) = (0.186 * h * race.arm, 0.152 * h * race.arm);
@@ -722,14 +723,14 @@ fn arm_limb(race: &Race, h: f32, ws: f32, fem: f32, mu: f32, sw: f32, shoulder_y
     // A deltoid cap over the shoulder, the upper arm full to the elbow, and a forearm that
     // fills out below the elbow before it tapers: the plate's forearm was a thin tube.
     Limb::new(side, root, [s, e, w], controls, ar, |ts, te| {
-        vec![(0.0, 0.85), (ts, 1.06 + 0.04 * mu), (ts + 0.4 * (te - ts), 0.92 + 0.08 * mu), (te, 0.72), (te + 0.28 * (1.0 - te), 0.84 + 0.08 * mu), (1.0, 0.48)]
+        vec![(0.0, 0.85), (ts, (1.06 + 0.04 * mu) * lk.deltoid), (ts + 0.4 * (te - ts), (0.92 + 0.08 * mu) * lk.deltoid), (te, 0.72), (te + 0.28 * (1.0 - te), (0.84 + 0.08 * mu) * lk.forearm), (1.0, 0.48)]
     })
 }
 
 /// A leg through hip, knee and ankle (`mkLeg`), its root high inside the hips, the knee a
 /// little forward.
 #[allow(clippy::too_many_arguments)]
-fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, mu: f32, hip: &FormRing, ankle_y: f32, side: Side) -> Limb {
+fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, mu: f32, hip: &FormRing, ankle_y: f32, side: Side, lk: &crate::look::Look) -> Limb {
     let sg = side.sign();
     let lr = 0.78 * ws * race.limb * (0.95 + fem * 0.06) * (0.93 + 0.14 * mu);
     let hw = hip.half_width;
@@ -743,7 +744,7 @@ fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, mu: f32, hip: &FormRing, ank
     // the waist.
     let top = (1.04 * hw - hj[0].abs()) / lr;
     Limb::new(side, root, [hj, k, a], vec![root, hj, k, a], lr, |th, tk| {
-        vec![(0.0, 0.75), (th, top.max(1.05)), (th + 0.3 * (tk - th), (0.86 * top).max(0.9)), (tk, 0.6), (tk + 0.35 * (1.0 - tk), 0.66), (1.0, 0.42)]
+        vec![(0.0, 0.75), (th, top.max(1.05)), (th + 0.3 * (tk - th), (0.86 * top).max(0.9)), (tk, 0.6), (tk + 0.35 * (1.0 - tk), 0.66 * lk.calf), (1.0, 0.42)]
     })
 }
 

@@ -56,6 +56,7 @@ pub mod level;
 pub mod level_view;
 pub mod map;
 pub mod light;
+pub mod pulp;
 pub mod menu;
 pub mod play;
 pub mod player;

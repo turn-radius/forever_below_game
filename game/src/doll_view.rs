@@ -51,10 +51,14 @@ impl Plugin for DollViewPlugin {
             .init_resource::<DollSpin>()
             .init_resource::<DollMotion>()
             .init_resource::<UiFonts>()
-            .insert_resource(ClearColor(PLATE))
-            .insert_resource(StudioLight::ARMORY.ambient_light(&Exposure::INDOOR))
+            .insert_resource(ClearColor(if crate::pulp::on() { Color::srgb(0.05, 0.05, 0.07) } else { PLATE }))
+            .insert_resource(if crate::pulp::on() {
+                GlobalAmbientLight { color: Color::srgb(0.46, 0.54, 0.82), brightness: 0.30 / Exposure::INDOOR.exposure(), ..default() }
+            } else {
+                StudioLight::ARMORY.ambient_light(&Exposure::INDOOR)
+            })
             .add_plugins(TweakPanelPlugin::<DollMotion>::default())
-            .add_systems(Startup, setup)
+            .add_systems(Startup, (setup, pulp_lights).chain())
             .add_systems(
                 Update,
                 (
@@ -282,7 +286,7 @@ struct DollCamera;
 #[derive(Component)]
 struct StatusLine;
 
-fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
+fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let exposure = Exposure::INDOOR;
     commands
         .spawn((
@@ -295,6 +299,9 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
             Transform::from_xyz(0.0, 0.0, 60.0),
         ))
         .with_child(StudioLight::ARMORY.key_light(&exposure));
+    if crate::pulp::on() {
+        pulp_rig(&mut commands, &exposure, &mut meshes, &mut materials);
+    }
     commands
         .spawn((
             Node {
@@ -520,4 +527,48 @@ mod tests {
         let choice = DollChoice { folk: Folk::Gnome, seed: 31, outfit: outfit_index("mage").unwrap(), bare: false, body: None, without: None };
         assert_eq!(choice.figure().pieces, choice.figure().pieces);
     }
+}
+
+/// SPIKE (`FB_LOOK=pulp`): one strong warm key from the upper left, a cool fill from the lower
+/// right, and a dark painterly backdrop gradient behind the figure. The camera's plain key
+/// (spawned by `setup`) is replaced by marking this rig's lights on top: the plain key is
+/// tinted to the warm key by `warm_the_key`.
+fn pulp_rig(commands: &mut Commands, exposure: &Exposure, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let _ = (exposure, &mut *commands);
+    // A backdrop: a big quad far behind the figure, dark teal-umber at the top running to a
+    // warm ember glow low behind the feet, unlit.
+    let (w, h) = (400.0, 300.0);
+    let positions = vec![[-w, -h, 0.0], [w, -h, 0.0], [w, h, 0.0], [-w, h, 0.0]];
+    let colours = vec![[0.055, 0.022, 0.012, 1.0], [0.055, 0.022, 0.012, 1.0], [0.002, 0.004, 0.012, 1.0], [0.002, 0.004, 0.012, 1.0]];
+    let mesh = Mesh::new(PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colours)
+        .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(materials.add(StandardMaterial { unlit: true, base_color: Color::WHITE, ..default() })),
+        Transform::from_xyz(0.0, 0.0, -240.0),
+        bevy::light::NotShadowCaster,
+        bevy::light::NotShadowReceiver,
+    ));
+}
+
+/// SPIKE: the warm key and cool fill of the pulp rig, on the camera.
+fn pulp_lights(mut commands: Commands, camera: Query<Entity, With<DollCamera>>, mut keys: Query<&mut DirectionalLight>) {
+    if !crate::pulp::on() {
+        return;
+    }
+    for mut key in &mut keys {
+        key.color = Color::srgb(1.0, 0.90, 0.74);
+        key.illuminance *= 1.5;
+    }
+    let Ok(camera) = camera.single() else { return };
+    let exposure = Exposure::INDOOR;
+    commands.spawn((
+        DirectionalLight { color: Color::srgb(0.42, 0.55, 1.0), illuminance: 0.33 * std::f32::consts::PI / exposure.exposure(), ..default() },
+        Transform::from_xyz(8.0, -3.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ChildOf(camera),
+    ));
 }

@@ -55,9 +55,10 @@ impl Face {
         let a = az.abs();
         let front = bump(az, 0.75);
         let brow = if self.folk == Folk::Lizardfolk { 0.0 } else if self.folk == Folk::Dwarf { 0.09 } else { 0.065 };
-        let ridge = brow * bump(polar - 0.43 * PI, 0.05 * PI) * front;
+        let lk = crate::look::look_for(self.folk);
+        let ridge = brow * lk.brow * bump(polar - 0.43 * PI, 0.05 * PI) * front;
         let socket = -0.06 * bump(polar - self.eye_polar, 0.055 * PI) * bump(a - self.eye_azimuth, 0.17);
-        let cheek = 0.03 * bump(polar - 0.575 * PI, 0.06 * PI) * bump(a - 0.75, 0.25);
+        let cheek = 0.03 * lk.cheek * bump(polar - 0.575 * PI, 0.06 * PI) * bump(a - 0.75, 0.25);
         // The mouth's muzzle over the teeth and the point of the chin stand out of the flat
         // face, so the profile has a mouth and a chin and not only a nose.
         let flat = self.head.flat;
@@ -279,7 +280,7 @@ fn blob(size: V3, at: V3, up: V3, facing: V3, segments: usize) -> MeshBuilder {
 }
 
 fn eyes(face: &Face, kind: EyeKind, p: &mut Pieces) {
-    let r = face.r;
+    let r = face.r * crate::look::look_for(face.folk).eye;
     for sg in [1.0f32, -1.0] {
         let at = face.eye(sg);
         let n = face.normal(sg * face.eye_azimuth, face.eye_polar);

@@ -359,7 +359,17 @@ impl<'w, 's> ItemSpawner<'w, 's> {
             }
             let part_entity = part_entity.id();
             if part.outline {
-                let ink = if see_through { glass_outline.clone() } else { outline.clone() };
+                let ink = if see_through {
+                    glass_outline.clone()
+                } else if crate::pulp::on() {
+                    // SPIKE: ink is the part's own colour, darkened, and thinner.
+                    let c = part.tint.or(part.material.map(|kind| appearance.palette.get(kind))).unwrap_or(Rgb(0.5, 0.5, 0.5));
+                    let dark = Color::srgb(c.0 * 0.22 + 0.02, c.1 * 0.2 + 0.015, c.2 * 0.22 + 0.03);
+                    let material = OutlineMaterial { color: dark.into(), width_px: appearance.outline.width_px * 0.55, max_width: appearance.outline.max_width * 0.6, ..appearance.outline };
+                    self.shared_outlines.get_or_add(&mut self.outline_materials, material)
+                } else {
+                    outline.clone()
+                };
                 let mut hull = self.commands.spawn((InkOutline, Mesh3d(mesh), MeshMaterial3d(ink), ChildOf(part_entity)));
                 if let Some((_, skinned)) = skin {
                     hull.insert((skinned.clone(), DynamicSkinnedMeshBounds));
