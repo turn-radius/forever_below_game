@@ -459,8 +459,9 @@ fn build_bench(
             panel.spawn((Node { height: px(1), flex_shrink: 0.0, ..default() }, BackgroundColor(FAINT)));
             panel.spawn(Node { flex_grow: 1.0, min_height: px(0), column_gap: px(26), ..default() }).with_children(|body| {
                 // The list of what the delver carries.
-                body.spawn((ScrollColumn, ScrollPosition::default(), Node { width: px(LIST_WIDTH), flex_shrink: 0.0, flex_direction: FlexDirection::Column, row_gap: px(6), overflow: Overflow::scroll_y(), ..default() })).with_children(|col| {
-                    col.spawn(Node { column_gap: px(10), flex_shrink: 0.0, ..default() }).with_children(|tabs| {
+                body.spawn(Node { width: px(LIST_WIDTH), flex_shrink: 0.0, flex_direction: FlexDirection::Column, row_gap: px(6), min_height: px(0), ..default() }).with_children(|left| {
+                    // The tabs stay above the list, so they never scroll away from where they take clicks.
+                    left.spawn(Node { column_gap: px(10), flex_shrink: 0.0, ..default() }).with_children(|tabs| {
                         for tab in BenchTab::ALL {
                             let count = if tab == BenchTab::Equipped { worn.len() } else { packed.len() };
                             let mut button = tabs.spawn(frame(BenchButton { act: Do::Tab(tab), enabled: true, scrolls: false }));
@@ -470,6 +471,7 @@ fn build_bench(
                             });
                         }
                     });
+                    left.spawn((ScrollColumn, ScrollPosition::default(), Node { flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(6), overflow: Overflow::scroll_y(), ..default() })).with_children(|col| {
                     if list.is_empty() {
                         let none = match (open.mode == Service::Scrap, open.tab) {
                             (true, BenchTab::Equipped) => "Nothing worn they could take apart.",
@@ -500,6 +502,7 @@ fn build_bench(
                             });
                         });
                     }
+                    });
                 });
                 // The right: the picked item and the work on it, or what was scrapped.
                 body.spawn((ScrollColumn, ScrollPosition::default(), Node { flex_grow: 1.0, min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(7), overflow: Overflow::scroll_y(), ..default() })).with_children(|col| {
@@ -696,7 +699,8 @@ fn open_for_capture(mut bench: ResMut<Bench>, inventory: Res<Inventory>, mut ope
         "novice" => enchant::Tier::Novice,
         "apprentice" => enchant::Tier::Apprentice,
         "expert" => enchant::Tier::Expert,
-        _ => enchant::Tier::Master,
+        "master" => enchant::Tier::Master,
+        _ => return,
     };
     let tab = if split(&inventory, Service::Enchant).0.is_empty() { BenchTab::Inventory } else { BenchTab::Equipped };
     bench.open = Some(Open { mode: Service::Enchant, by: Enchanter { name: "Ysolde".into(), tier, faction: "the Ash Rite".into() }, selected: None, tab, notice: None, scrapped: None, level: 1 });
@@ -788,14 +792,14 @@ mod tests {
         inventory.equip(cloak, fb_items::Slot::Cloak).unwrap();
         let belt = inventory.add(fb_items::roll_item("Belt", 3).unwrap());
         inventory.equip(belt, fb_items::Slot::Belt).unwrap();
-        let dagger = inventory.add(roll_item_with("Ring", 9, Odds::default()).unwrap());
-        inventory.stow(dagger).unwrap();
+        let ring = inventory.add(roll_item_with("Ring", 9, Odds::default()).unwrap());
+        inventory.stow(ring).unwrap();
         let (worn, packed) = split(&inventory, Service::Enchant);
-        assert!(worn.contains(&sword) && worn.contains(&cloak) && !worn.contains(&dagger));
-        assert_eq!(packed, vec![dagger]);
+        assert!(worn.contains(&sword) && worn.contains(&cloak) && !worn.contains(&ring));
+        assert_eq!(packed, vec![ring]);
         assert_eq!(tab_of(&inventory, sword), BenchTab::Equipped);
-        assert_eq!(tab_of(&inventory, dagger), BenchTab::Inventory);
-        assert!(is_equipped(&inventory, cloak) && !is_equipped(&inventory, dagger));
+        assert_eq!(tab_of(&inventory, ring), BenchTab::Inventory);
+        assert!(is_equipped(&inventory, cloak) && !is_equipped(&inventory, ring));
     }
 
     #[test]
@@ -806,10 +810,10 @@ mod tests {
         inventory.equip(sword, fb_items::Slot::Mainhand).unwrap();
         let belt = inventory.add(fb_items::roll_item("Belt", 3).unwrap());
         inventory.equip(belt, fb_items::Slot::Belt).unwrap();
-        let dagger = inventory.add(roll_item_with("Ring", 9, Odds::default()).unwrap());
-        inventory.stow(dagger).unwrap();
-        let (mut bench, _) = bench_with(&mut inventory, roll_item_with("Helm", 2, Odds::default()).unwrap(), Tier::Master, Service::Enchant);
-        act(&mut bench, &mut inventory, &mut stock, Do::Pick(dagger));
+        let ring = inventory.add(roll_item_with("Ring", 9, Odds::default()).unwrap());
+        inventory.stow(ring).unwrap();
+        let mut bench = Bench { open: Some(Open { mode: Service::Enchant, by: by(Tier::Master), selected: None, tab: BenchTab::default(), notice: None, scrapped: None, level: 1 }), revision: 0 };
+        act(&mut bench, &mut inventory, &mut stock, Do::Pick(ring));
         assert_eq!(bench.open.as_ref().unwrap().tab, BenchTab::Inventory);
         act(&mut bench, &mut inventory, &mut stock, Do::Pick(sword));
         assert_eq!(bench.open.as_ref().unwrap().tab, BenchTab::Equipped);
