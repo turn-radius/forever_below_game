@@ -182,7 +182,7 @@ impl HoodSurface {
     fn gap(&self, polar: f32) -> f32 {
         let o = self.hood.opening;
         match self.hood.style {
-            HoodStyle::Coif => (1.05 + 0.4 * o) * smoothstep(0.1 * PI, 0.3 * PI, polar),
+            HoodStyle::Coif => (1.05 + 0.4 * o).max(self.min_opening) * smoothstep(0.1 * PI, 0.3 * PI, polar),
             // Closed over the crown (a seam), open round the face, a slit under the chin.
             _ => {
                 let max = (0.5 + 0.6 * o).max(self.min_opening);

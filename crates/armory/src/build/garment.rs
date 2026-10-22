@@ -419,7 +419,8 @@ fn round_corners(need: Vec<Vec<f32>>, round: f32, from_row: usize) -> Vec<Vec<f3
     for (row, o) in need.iter().zip(out.iter_mut()) {
         let reach = row.iter().sum::<f32>() / HULL_COLUMNS as f32;
         let arc = reach * TAU / HULL_COLUMNS as f32;
-        let k_max = ((2.0 * round * 0.5).sqrt() / arc).ceil().max(1.0) as isize;
+        // At most half way round, whatever the row's reach (nothing of it when it is ~0).
+        let k_max = (((2.0 * round * 0.5).sqrt() / arc.max(1e-4)).ceil().max(1.0) as isize).min(HULL_COLUMNS as isize / 2);
         for j in 0..HULL_COLUMNS {
             for k in -k_max..=k_max {
                 let d = k as f32 * arc;

@@ -194,7 +194,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
                 fit.hair.covered = true;
             }
             fit.covered.tail |= body.folk() == Folk::Pigfolk && matches!(slot, Slot::Legs | Slot::Shirt | Slot::Body | Slot::Cloak);
-            env.absorb(slot, &mesh);
+            env.absorb(slot, matches!(item, Item::Hood(_)), &mesh);
             fit.layers.push(WornLayer { slot, mesh });
         }
     }
@@ -283,10 +283,12 @@ struct Envelope<'a> {
 enum Over {
     /// What is worn on the trunk.
     Trunk,
-    /// The bare trunk, its shoulder section moved up to the top of the arms, for a cloak or a
-    /// hood's cape that hangs over everything worn, and the arms, through an underlay
+    /// The bare trunk, its shoulder section moved up to the top of the arms, for a hood's cape
+    /// that hangs over everything worn, and the arms, through an underlay
     /// ([`Envelope::outline`]).
     Shoulders,
+    /// The same for a cloak, its collar kept to the jaw however high the shoulders stand.
+    Cloak,
 }
 
 impl<'a> Envelope<'a> {
@@ -425,7 +427,7 @@ impl<'a> Envelope<'a> {
     /// cover it already, gloves are all on the arms, and of a belt only the strap round the
     /// waist counts: what hangs from it (a pouch, sword frogs, rings) bulges out on one side,
     /// which the forms' sections cannot follow.
-    fn absorb(&mut self, slot: Slot, mesh: &ItemMesh) {
+    fn absorb(&mut self, slot: Slot, hood: bool, mesh: &ItemMesh) {
         if slot == Slot::Feet {
             return;
         }
@@ -470,7 +472,7 @@ impl<'a> Envelope<'a> {
                 }
                 // A hood's head and the top of its neck are not a shoulder: counted, they would
                 // raise the shoulders (and the collar of a cloak over them) up the face.
-                if slot == Slot::Head && q[1] > head_limit {
+                if hood && q[1] > head_limit {
                     continue;
                 }
                 let e = self.trunk_excess(q).max(0.0);
@@ -526,7 +528,7 @@ impl<'a> Envelope<'a> {
     fn form(&self, over: Over, fit: f32) -> TorsoForm {
         let relief = match over {
             Over::Trunk => Some(&self.trunk),
-            Over::Shoulders => None,
+            Over::Shoulders | Over::Cloak => None,
         };
         let mut base = self.form.rings();
         if over != Over::Trunk {
@@ -546,13 +548,22 @@ impl<'a> Envelope<'a> {
                 .cells()
                 .filter(|&(y, phi, e)| phi.cos().abs() > 0.7 && e > 0.25 * s && self.reach.at(phi, y) + e > wide)
                 .fold(base[7].y, |m, c| m.max(c.0));
-            base[7].y = top;
-            // The collar stops at the jaw (it rode up the face on a head small over its
-            // shoulders), but never nearer the shoulders than 0.15 of the wearer's scale
-            // that makes the cloth dome over them.
             let head = self.body.head_form();
             let jaw = head.centre[1] - 0.7 * head.half_height;
-            base[8].y = (top + 0.15 * s).max(neck.min(jaw));
+            if over == Over::Cloak {
+                // A cloak's collar stops at the jaw whatever stands on the shoulders (it rode
+                // up the face on a head small over its shoulders, or over very high pauldrons):
+                // the cloth goes round them below the jaw, with 0.15 of the wearer's scale
+                // between the shoulder section and the collar to dome over.
+                base[7].y = top.min(jaw - 0.15 * s);
+                base[8].y = (base[7].y + 0.15 * s).max(neck.min(jaw));
+            } else {
+                // A hood's cape goes over whatever stands on the shoulders, and its rim and
+                // face opening keep it off the face; its neck rises at least 0.15 of the
+                // wearer's scale above them.
+                base[7].y = top;
+                base[8].y = (top + 0.15 * s).max(neck.min(jaw));
+            }
         }
         let ring_y = base.map(|r| r.y);
         let mut grow = [[0.0f32; 2]; 9];
@@ -1063,7 +1074,7 @@ fn garment(body: &Body, env: &Envelope, state: &GarmentState, cover: &Cover) -> 
     // underlay, falling past them and back toward the legs below them, instead of on a form
     // widened all round to clear them (which stood out like a tent).
     let open = s.cut.style.is_open();
-    let mut form = env.form(if open { Over::Shoulders } else { Over::Trunk }, s.cut.fit);
+    let mut form = env.form(if open { Over::Cloak } else { Over::Trunk }, s.cut.fit);
     // The Armory flares a skirt as a share of the form it hangs over: over gear that would
     // be wider than on the body, so keep the flare's spread as it would be on the body alone.
     s.cut.flare *= (env.form.hip.half_width / form.hip.half_width).min(1.0);
