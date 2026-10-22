@@ -178,7 +178,9 @@ pub const STONE_INK: Color = Color::srgb(0.008, 0.009, 0.011);
 const STONE_JOINT_INK: Color = Color::srgb(0.02, 0.022, 0.026);
 
 fn abyss_ambient(tuning: &LightTuning) -> GlobalAmbientLight {
-    GlobalAmbientLight { color: AMBIENT_COLOR, brightness: tuning.ambient_lux, ..default() }
+    // SPIKE (`FB_LOOK=pulp`): a cooler blue-violet fill out of the dark, against the warm lamp.
+    let color = if crate::pulp::mode() == 1 { Color::srgb(0.38, 0.42, 0.95) } else { AMBIENT_COLOR };
+    GlobalAmbientLight { color, brightness: tuning.ambient_lux * if crate::pulp::mode() == 1 { 1.5 } else { 1.0 }, ..default() }
 }
 
 /// The abyss's fog, as tuned.
@@ -203,7 +205,7 @@ fn apply_light_tuning(
     let light = &tuning.light;
     // The view from above has its own bright fill.
     if debug.iter().all(|d| d.fog) {
-        ambient.brightness = light.ambient_lux;
+        ambient.brightness = light.ambient_lux * if crate::pulp::mode() == 1 { 1.5 } else { 1.0 };
     }
     for mut fog in &mut fogs {
         fog.falloff = FogFalloff::Linear { start: light.fog_start, end: light.fog_end };

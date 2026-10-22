@@ -110,6 +110,12 @@ pub struct Body {
     pub arms: [Limb; 2],
     pub legs: [Limb; 2],
     skin: TorsoProfile,
+    /// SPIKE: how much muscle the limbs and trunk show (0 none).
+    pub anat: f32,
+    /// How much of it the arms and the legs show: the game turns it down under clothes, which
+    /// are fitted to the plain body.
+    pub anat_arms: f32,
+    pub anat_legs: f32,
 }
 
 fn index(side: Side) -> usize {
@@ -129,6 +135,8 @@ impl Body {
     pub fn posed(spec: &BodySpec, pose: Pose) -> Body {
         let race = spec.folk.race();
         let lk = crate::look::look_for(spec.folk);
+        // Muscle shows with the look's strength for the folk and with the muscle slider.
+        let anat = lk.anat * (0.4 + 0.8 * spec.muscle);
         let h = race.h * spec.stature;
         let s = h / 17.5;
         let (mu, slim) = (spec.muscle, 1.12 - 0.24 * spec.slender);
@@ -165,7 +173,7 @@ impl Body {
         let bust = Bulge {
             y: chest_y + (0.02 - 0.05 * round * b) * t,
             spread: (0.22 + 0.06 * b) * t,
-            depth: (0.08 + 0.14 * mu) * ws + 0.8 * b * ws,
+            depth: (0.08 + 0.14 * mu) * ws + 0.8 * b * ws + 0.12 * anat * ws,
             toward: FRONT,
             pair: 0.43 + 0.06 * b,
             fall: -0.65 + b * (0.2 + 0.15 * round),
@@ -176,7 +184,7 @@ impl Body {
             square: 4.0 - 2.0 * b,
             ..Bulge::NONE
         };
-        let seat = Bulge { y: hip_y - 0.02 * t, spread: 0.15 * t, depth: 0.17 * ws * (1.0 + 0.4 * fem), sharpness: 5, toward: BACK, pair: 0.55, fall: -0.3, cleft: 1.0, ..Bulge::NONE };
+        let seat = Bulge { y: hip_y - 0.02 * t, spread: 0.15 * t, depth: 0.17 * ws * (1.0 + 0.4 * fem) * (1.0 + 0.5 * anat), sharpness: 5, toward: BACK, pair: 0.55, fall: -0.3, cleft: 1.0, ..Bulge::NONE };
         let lumbar = Bulge { y: waist_y + 0.05 * t, spread: 0.2 * t, depth: -0.09 * ws, sharpness: 2, toward: BACK, ..Bulge::NONE };
         let ankle_y = 0.048 * h;
         let head = HeadForm {
@@ -190,6 +198,17 @@ impl Body {
             neck_radius,
             neck_base: shoulder_y + 0.05 * t,
         };
+        let mut bulges = vec![belly, bust, seat, lumbar];
+        if anat > 0.0 {
+            // Latissimus wings under the arms, the trapezius running up to the neck, the ridge of
+            // the collarbones, and the plates of the abdomen: the muscle that makes a torso read
+            // as a V instead of a tube.
+            bulges.push(Bulge { y: chest_y - 0.12 * t, spread: 0.3 * t, depth: 0.36 * ws * anat, sharpness: 2, toward: BACK, pair: 1.15, fall: -0.25, ..Bulge::NONE });
+            bulges.push(Bulge { y: shoulder_y + 0.02 * t, spread: 0.13 * t, depth: 0.34 * ws * anat, sharpness: 2, toward: BACK, pair: 0.7, fall: 0.3, ..Bulge::NONE });
+            bulges.push(Bulge { y: shoulder_y - 0.04 * t, spread: 0.05 * t, depth: 0.07 * ws * anat, sharpness: 3, toward: FRONT, pair: 0.55, dome: 0.5, power: 0.5, upper: 0.6, square: 3.0, ..Bulge::NONE });
+            bulges.push(Bulge { y: waist_y + 0.1 * t, spread: 0.2 * t, depth: 0.09 * ws * anat, toward: FRONT, pair: 0.15, fall: 0.0, cleft: 1.0, dome: 0.13, power: 0.5, upper: 0.5, square: 3.0, ..Bulge::NONE });
+            bulges.push(Bulge { y: chest_y - 0.1 * t, spread: 0.1 * t, depth: 0.08 * ws * anat, toward: FRONT, pair: 0.42, fall: -0.5, dome: 0.35, power: 0.4, upper: 0.5, square: 4.0, ..Bulge::NONE });
+        }
         let skin = TorsoProfile::new(
             &[
                 FormRing::new(hip_y - 0.14 * t, hip.half_width * 0.62, hip.half_depth * 0.8),
@@ -197,13 +216,13 @@ impl Body {
                 waist,
                 chest,
                 FormRing::new(shoulder_y - 0.05 * t, sw * 0.95, chest.half_depth * 0.88),
-                FormRing::new(shoulder_y + 0.05 * t, sw * 0.62, chest.half_depth * 0.66),
-                FormRing::new(shoulder_y + 0.11 * t, neck_radius * 1.2, neck_radius * 1.1),
+                FormRing::new(shoulder_y + 0.05 * t, sw * (0.62 + 0.1 * anat), chest.half_depth * (0.66 + 0.06 * anat)),
+                FormRing::new(shoulder_y + 0.11 * t, neck_radius * (1.2 + 0.35 * anat), neck_radius * (1.1 + 0.15 * anat)),
                 FormRing::new(shoulder_y + 0.17 * t, neck_radius, neck_radius * 0.95),
             ],
             TRUNK_EXPONENT,
             TRUNK_BACK,
-            vec![belly, bust, seat, lumbar],
+            bulges,
         );
         let arm = |side: Side| arm_limb(race, h, ws, fem, mu, sw, shoulder_y, side, pose.arm(side), &lk);
         let leg = |side: Side| leg_limb(race, s, ws, fem, mu, &hip, ankle_y, side, &lk);
@@ -232,6 +251,9 @@ impl Body {
             arms: [arm(Side::Right), arm(Side::Left)],
             legs: [leg(Side::Right), leg(Side::Left)],
             skin,
+            anat,
+            anat_arms: anat,
+            anat_legs: anat,
         }
     }
 
@@ -575,7 +597,21 @@ impl Body {
             let f = smoothstep(te + 0.1 * (1.0 - te), 1.0, t);
             let (kb, ka) = (1.0 + (back - 1.0) * f, 1.0 + (across - 1.0) * f);
             let (s, c) = a.sin_cos();
-            arm.radius_at(t) / ((c / kb).powi(2) + (s / ka).powi(2)).sqrt()
+            let base = arm.radius_at(t) / ((c / kb).powi(2) + (s / ka).powi(2)).sqrt();
+            if self.anat_arms <= 0.0 {
+                return base;
+            }
+            // `c` runs front (+) to back (-): deltoid cap, biceps in front and triceps behind in
+            // the upper arm, and the forearm's brachioradialis; the elbow's point.
+            let ts = arm.t_joints[0];
+            let g = |x: f32, w: f32| (-(x / w).powi(2)).exp();
+            let upper = ts + 0.45 * (te - ts);
+            let delt = 0.22 * g(t - ts * 0.95, 0.1);
+            let bi = 0.18 * g(t - upper, 0.16) * c.max(0.0);
+            let tri = 0.2 * g(t - upper, 0.16) * (-c).max(0.0).powi(2);
+            let fore = 0.16 * g(t - (te + 0.22 * (1.0 - te)), 0.12) * (0.5 + 0.5 * c);
+            let elbow = 0.05 * g(t - te, 0.04) * (-c).max(0.0);
+            base * (1.0 + self.anat_arms * (delt + bi + tri + fore + elbow))
         })
     }
 
@@ -597,7 +633,19 @@ impl Body {
         // The back of the thigh's top fills out under the seat, so the buttock rounds into the
         // thigh in a fold instead of overhanging it as a rim.
         let under_seat = 0.28 * (-((t - 1.5 * th) / (0.9 * th)).powi(2)).exp() * (-front).max(0.0).powi(2);
-        leg.radius_at(t) * (1.0 + calf + knee + thigh + under_seat)
+        let mut swell = calf + knee + thigh + under_seat;
+        if self.anat_legs > 0.0 {
+            // Quadriceps sweeping down the front and over the knee, hamstrings behind, the
+            // calf's two bellies high behind the shin, a taper to the ankle.
+            let g = |x: f32, w: f32| (-(x / w).powi(2)).exp();
+            let back = (-front).max(0.0);
+            let quad = 0.22 * g(t - (th + 0.4 * (tk - th)), 0.2) * front.max(0.0).powi(2);
+            let ham = 0.1 * g(t - (th + 0.35 * (tk - th)), 0.2) * back * back;
+            let belly = 0.26 * g(t - (tk + 0.22 * (1.0 - tk)), 0.1) * back.powf(1.5) * (1.0 + 0.5 * (4.0 * a).sin().abs());
+            let shin = -0.05 * g(t - (tk + 0.5 * (1.0 - tk)), 0.2) * front.max(0.0);
+            swell += self.anat_legs * (quad + ham + belly + shin);
+        }
+        leg.radius_at(t) * (1.0 + swell)
     }
 
     /// The left leg's skin in horizontal sections from the ankle up to the crotch, for
@@ -711,7 +759,7 @@ pub(crate) fn lighten(c: Rgb, k: f32) -> Rgb {
 #[allow(clippy::too_many_arguments)]
 fn arm_limb(race: &Race, h: f32, ws: f32, fem: f32, mu: f32, sw: f32, shoulder_y: f32, side: Side, pose: ArmPose, lk: &crate::look::Look) -> Limb {
     let sg = side.sign();
-    let ar = 0.5 * ws * race.limb * (1.0 - fem * 0.12) * (0.86 + 0.28 * mu);
+    let ar = 0.5 * ws * race.limb * (1.0 - fem * 0.12) * (0.86 + 0.28 * mu) * (1.0 + 0.1 * lk.anat);
     let (upper, fore) = (0.186 * h * race.arm, 0.152 * h * race.arm);
     let s = [sg * (sw - ar * 0.9), shoulder_y - ar * 0.55, 0.0];
     let ud = vec3::normalize_or([sg * pose.spread.sin(), -pose.spread.cos(), pose.forward], vec3::neg(vec3::Y));
@@ -732,7 +780,7 @@ fn arm_limb(race: &Race, h: f32, ws: f32, fem: f32, mu: f32, sw: f32, shoulder_y
 #[allow(clippy::too_many_arguments)]
 fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, mu: f32, hip: &FormRing, ankle_y: f32, side: Side, lk: &crate::look::Look) -> Limb {
     let sg = side.sign();
-    let lr = 0.78 * ws * race.limb * (0.95 + fem * 0.06) * (0.93 + 0.14 * mu);
+    let lr = 0.78 * ws * race.limb * (0.95 + fem * 0.06) * (0.93 + 0.14 * mu) * (1.0 + 0.14 * lk.anat);
     let hw = hip.half_width;
     let hj = [sg * hw * 0.48, hip.y - 0.05 * s, 0.0];
     let a = [sg * hw * 0.36, ankle_y, 0.0];

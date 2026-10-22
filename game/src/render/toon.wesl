@@ -29,7 +29,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::{value_noise, apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
+import super::decay::{value_noise, apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA, DECAY_IRON, DECAY_BRASS, DECAY_GOLD, DECAY_SILVER, DECAY_CLOTH, DECAY_SKIN, DECAY_LEATHER};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -77,7 +77,7 @@ struct ToonUniform {
     // fraction of it, 0 for none.
     shimmer_color: vec3<f32>,
     shimmer_strength: f32,
-    // SPIKE `FB_LOOK=pulp`: 1 for the painterly variant, 0 for the house toon look.
+    // SPIKE `FB_LOOK`: 1 for the pulp look (inked toon bands, warm light and violet shadow, rim light, shiny metal), 2 for the painterly variant (`paint`), 0 for the house toon look.
     pulp: u32,
 }
 
@@ -167,8 +167,27 @@ fn pulp_band(n_dot_l: f32, shadow: f32) -> f32 {
         + 0.22 * smoothstep(0.72, 0.86, c);
 }
 
+// SPIKE (pulp): what the lights' stylised highlights add up to for this fragment: the hard
+// band and glint of a metal, and a soft sheen for cloth and skin.
+var<private> spec_hard: vec3<f32>;
+var<private> spec_soft: vec3<f32>;
+
+// A banded highlight from one light of colour `radiance` (shadow `shadow`) on the surface with
+// normal `N`, seen from direction `V`, light from `L`: a hard-edged bright band and a thin glint.
+fn add_highlight(radiance: vec3<f32>, shadow: f32, N: vec3<f32>, L: vec3<f32>, V: vec3<f32>) {
+    let H = normalize(L + V);
+    let nh = clamp(dot(N, H), 0.0, 1.0);
+    let facing = step(0.0, dot(N, L));
+    let wide = smoothstep(0.935, 0.945, nh);
+    let glint = smoothstep(0.989, 0.992, nh) ;
+    let level = max(radiance.r, max(radiance.g, radiance.b));
+    let k = shadow * facing * min(level, 1.0) / max(level, 1e-4);
+    spec_hard += radiance * k * (0.75 * wide + 0.9 * glint);
+    spec_soft += radiance * k * pow(nh, 9.0);
+}
+
 fn toon_band(toon: ToonUniform, n_dot_l: f32, shadow: f32) -> f32 {
-    if toon.pulp != 0u {
+    if toon.pulp == 2u {
         return pulp_band(n_dot_l, shadow);
     }
     let coord = clamp(n_dot_l * 0.5 + 0.5, 0.0, 1.0) * shadow;
@@ -200,7 +219,7 @@ fn reach_attenuation(distance_squared: f32, inverse_range_squared: f32) -> f32 {
 // burnt white, then rounded up, so the dimmest step runs out to the light's range and ends
 // there, as dim light ends at the edge of a torch's reach. Keeps the light's hue.
 fn reach_step(radiance: vec3<f32>, pulp: u32) -> vec3<f32> {
-    if pulp != 0u {
+    if pulp == 2u {
         let lv = max(radiance.r, max(radiance.g, radiance.b));
         if lv <= 0.0 {
             return vec3(0.0);
@@ -302,6 +321,9 @@ fn toon_direct_light(toon: ToonUniform, in: PbrInput) -> vec3<f32> {
         // Lambert: the band stands in for N.L, 1/PI as in Bevy's diffuse lobe.
         let radiance = (*clustered).color_inverse_square_range.rgb * attenuation * cone * (exposure / PI);
         light += reach_step(radiance, toon.pulp) * flame_flicker((*clustered).position_radius) * toon_band(toon, dot(N, L), shadow);
+        if toon.pulp == 1u {
+            add_highlight(reach_step(radiance, 0u), shadow, N, L, normalize(view_bindings::view.world_position - P));
+        }
     }
 
     for (var i: u32 = 0u; i < view_bindings::lights.n_directional_lights; i = i + 1u) {
@@ -313,6 +335,9 @@ fn toon_direct_light(toon: ToonUniform, in: PbrInput) -> vec3<f32> {
             shadow *= in.directional_shadow_factor;
         }
         light += (*directional).color.rgb * (exposure / PI) * toon_band(toon, dot(N, (*directional).direction_to_light), shadow);
+        if toon.pulp == 1u {
+            add_highlight((*directional).color.rgb * (exposure / PI), shadow, N, (*directional).direction_to_light, normalize(view_bindings::view.world_position - P));
+        }
     }
 
     return light;
@@ -407,7 +432,7 @@ fn fragment(
         toon.decay_scale,
         toon.decay_seed,
     );
-    if toon.pulp != 0u {
+    if toon.pulp == 2u {
         pulp_jitter = (value_noise(item_position * 0.55 + vec3(toon.decay_seed)) - 0.5) * 0.20
             + (value_noise(item_position * 3.1) - 0.5) * 0.07;
     }
@@ -470,23 +495,49 @@ fn fragment(
     let light = toon_direct_light(toon, pbr_input) * openness + ambient * view_bindings::view.exposure;
     var graded = light;
     var painted = tone;
+    var shine = vec3(0.0);
     if toon.pulp != 0u {
         // Warm lights, cool violet shadows: the lit side of a surface drifts toward ochre and
         // the shaded side toward blue-violet, as an oil painter pushes temperature, not value.
         let lum = dot(light, vec3(0.3333));
-        graded = light * mix(vec3(0.80, 0.84, 1.22), vec3(1.05, 1.0, 0.92), smoothstep(0.12, 0.85, lum));
-        // A little extra chroma, and a faint canvas tooth.
-        let grey = vec3(dot(tone, vec3(0.3, 0.59, 0.11)));
-        painted = mix(grey, tone, 1.14);
-        painted = painted * (1.0 + (value_noise(item_position * 9.0) - 0.5) * 0.07);
-        // A warm rim light from behind, in the colour of the surface.
-        if !flame && toon.decay_type != DECAY_ROCK && toon.decay_type != DECAY_STRATA {
+        // Pulp pushes harder than paint: a bluer, deeper shade and a hotter lit side.
+        let cool = select(vec3(0.62, 0.78, 1.45), vec3(0.80, 0.84, 1.22), toon.pulp == 2u);
+        let hot = select(vec3(1.12, 1.0, 0.84), vec3(1.05, 1.0, 0.92), toon.pulp == 2u);
+        graded = light * mix(cool, hot, smoothstep(0.10, 0.9, lum));
+        let rocky = toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA;
+        if toon.pulp == 1u {
+            // Blue-violet fill out of the dark: what the lamp does not reach is cool, not brown.
+            graded = graded + vec3(0.16, 0.20, 0.46) * (0.16 * (1.0 - smoothstep(0.06, 0.55, lum)) * openness);
+        }
+        if toon.pulp == 2u {
+            // A little extra chroma, and a faint canvas tooth.
+            let grey = vec3(dot(tone, vec3(0.3, 0.59, 0.11)));
+            painted = mix(grey, tone, 1.14);
+            painted = painted * (1.0 + (value_noise(item_position * 9.0) - 0.5) * 0.07);
+            if !flame && !rocky {
+                let to_eye_p = normalize(view_bindings::view.world_position - pbr_input.world_position.xyz);
+                let rim = pow(1.0 - clamp(dot(pbr_input.N, to_eye_p), 0.0, 1.0), 3.0);
+                graded = graded + vec3(1.0, 0.66, 0.38) * (0.30 * rim);
+            }
+        } else if !flame && !rocky {
+            // A cool coloured rim from behind, strongest in the shade, so a silhouette parts from
+            // what is behind it; kept mild.
             let to_eye_p = normalize(view_bindings::view.world_position - pbr_input.world_position.xyz);
             let rim = pow(1.0 - clamp(dot(pbr_input.N, to_eye_p), 0.0, 1.0), 3.0);
-            graded = graded + vec3(1.0, 0.66, 0.38) * (0.30 * rim);
+            let shade = 1.0 - 0.55 * smoothstep(0.15, 0.8, lum);
+            graded = graded + vec3(0.30, 0.42, 0.95) * (0.42 * rim * shade);
+            // Metal catches the light in a hard bright band, near white and tinted by the metal.
+            let metal = toon.decay_type == DECAY_IRON || toon.decay_type == DECAY_BRASS || toon.decay_type == DECAY_GOLD || toon.decay_type == DECAY_SILVER;
+            let worn = 1.0 - 0.7 * clamp(toon.decay_amount, 0.0, 1.0);
+            if metal {
+                let tint = mix(vec3(1.0), tone * 1.6, select(0.3, 0.55, toon.decay_type == DECAY_GOLD || toon.decay_type == DECAY_BRASS));
+                shine = srgb_to_linear(clamp(tint, vec3(0.0), vec3(1.0))) * spec_hard * (1.5 * worn);
+            } else if toon.decay_type == DECAY_CLOTH || toon.decay_type == DECAY_SKIN || toon.decay_type == DECAY_LEATHER {
+                shine = srgb_to_linear(tone) * spec_soft * 0.07;
+            }
         }
     }
-    let lit = srgb_to_linear(painted * graded);
+    let lit = srgb_to_linear(painted * graded) + shine;
     // Glow fades as the stone clouds over (`gemMat`).
     let glow = srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
 

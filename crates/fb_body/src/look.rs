@@ -31,10 +31,14 @@ pub struct Look {
     pub brow: f32,
     pub cheek: f32,
     pub eye: f32,
+    /// Muscle masses and landmarks on the body (0 none), scaled by the folk and the muscle slider.
+    pub anat: f32,
+    /// Face sculpting: brow shelf, sockets, cheekbones, nose bridge, jaw angle, lips (0 none).
+    pub sculpt: f32,
 }
 
 impl Look {
-    pub const NOW: Look = Look { head: 1.0, head_width: 1.0, leg: 0.0, shoulders: 1.0, chest: 1.0, waist: 1.0, neck: 1.0, deltoid: 1.0, forearm: 1.0, calf: 1.0, jaw: 0.0, chin: 0.0, brow: 1.0, cheek: 1.0, eye: 1.0 };
+    pub const NOW: Look = Look { head: 1.0, head_width: 1.0, leg: 0.0, shoulders: 1.0, chest: 1.0, waist: 1.0, neck: 1.0, deltoid: 1.0, forearm: 1.0, calf: 1.0, jaw: 0.0, chin: 0.0, brow: 1.0, cheek: 1.0, eye: 1.0, anat: 0.0, sculpt: 0.0 };
 
     /// 1980s pulp fantasy: about eight heads tall, broad chest, narrow waist, long legs,
     /// defined limbs, a squarer jaw, a heavier brow, smaller eyes.
@@ -42,9 +46,9 @@ impl Look {
         head: 0.90,
         head_width: 0.94,
         leg: 0.035,
-        shoulders: 1.14,
-        chest: 1.08,
-        waist: 0.88,
+        shoulders: 1.2,
+        chest: 1.12,
+        waist: 0.84,
         neck: 1.12,
         deltoid: 1.14,
         forearm: 1.12,
@@ -54,6 +58,8 @@ impl Look {
         brow: 1.5,
         cheek: 2.2,
         eye: 0.8,
+        anat: 1.0,
+        sculpt: 1.0,
     };
 
     /// How much of the look a folk takes: dwarves stay stocky, gnomes small, the rest part-way.
@@ -75,12 +81,36 @@ impl Look {
         Look {
             head: m(self.head), head_width: m(self.head_width), leg: a(self.leg), shoulders: m(self.shoulders), chest: m(self.chest), waist: m(self.waist),
             neck: m(self.neck), deltoid: m(self.deltoid), forearm: m(self.forearm), calf: m(self.calf), jaw: a(self.jaw), chin: a(self.chin),
-            brow: m(self.brow), cheek: m(self.cheek), eye: m(self.eye),
+            brow: m(self.brow), cheek: m(self.cheek), eye: m(self.eye), anat: self.anat, sculpt: self.sculpt,
+        }
+    }
+
+    /// How much muscle each folk shows: dwarves and pigfolk heavy, lizardfolk lean, gnomes and
+    /// goblins wiry.
+    pub fn anat_share(folk: Folk) -> f32 {
+        match folk {
+            Folk::Human => 1.0,
+            Folk::Dwarf => 1.25,
+            Folk::Gnome => 0.5,
+            Folk::Goblin => 0.55,
+            Folk::Lizardfolk => 0.8,
+            Folk::Pigfolk => 0.9,
         }
     }
 
     pub fn for_folk(self, folk: Folk) -> Look {
-        self.at(Look::share(folk))
+        let mut look = self.at(Look::share(folk));
+        look.anat = self.anat * Look::anat_share(folk);
+        look.sculpt = self.sculpt
+            * match folk {
+                Folk::Human => 1.0,
+                Folk::Dwarf => 0.9,
+                Folk::Gnome => 0.7,
+                Folk::Goblin => 0.8,
+                Folk::Lizardfolk => 0.25,
+                Folk::Pigfolk => 0.35,
+            };
+        look
     }
 }
 
@@ -99,4 +129,9 @@ pub fn look() -> Look {
 /// The look in force, at `folk`'s share of it.
 pub fn look_for(folk: Folk) -> Look {
     look().for_folk(folk)
+}
+
+/// Whether a look was set (`FB_LOOK=pulp`): the spike's other switches follow it.
+pub fn active() -> bool {
+    LOOK.get().is_some()
 }

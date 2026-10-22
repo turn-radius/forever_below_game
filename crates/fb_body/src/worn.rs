@@ -1241,6 +1241,14 @@ fn gloves(body: &Body, env: &Envelope, state: &HandsState) -> ItemMesh {
         let forearm = vec3::distance(arm.joints[1], arm.joints[2]);
         let mut hand = h;
         hand.cuff = hand.cuff.min(0.85 * forearm / h.size);
+        if crate::look::active() {
+            // SPIKE: the hourglass mitten is a ball on a bell; a fingered, plated gauntlet with a
+            // modest flared cuff reads as armour instead.
+            if hand.style == armory::sections::hand::HandStyle::Hourglass {
+                hand.style = armory::sections::hand::HandStyle::Gauntlet;
+            }
+            hand.flare *= 0.12;
+        }
         // What is worn on the forearm under the cuff, as the cuff sees it: in the hand's
         // space, gridded by how far below the wrist and by angle round the forearm, the most
         // it reaches from the forearm's axis in each cell and the cells about it. The cuff is
@@ -1296,7 +1304,7 @@ fn gloves(body: &Body, env: &Envelope, state: &HandsState) -> ItemMesh {
             (m > NONE).then_some(m)
         };
         let pose = body.hand_pose(side);
-        let mut mesh = hand_parts_fitted(&form, &hand, &state.hem, pose.fingers, pose.thumb, Some(&under)).finish();
+        let mut mesh = hand_parts_fitted(&form, &hand, &state.hem, pose.fingers, pose.thumb, if crate::look::active() && hand.style.is_plated() { None } else { Some(&under) }).finish();
         place.apply_to_item(&mut mesh);
         out.parts.extend(mesh.parts);
     }

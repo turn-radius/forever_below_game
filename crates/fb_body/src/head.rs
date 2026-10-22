@@ -64,7 +64,25 @@ impl Face {
         let flat = self.head.flat;
         let muzzle = 0.12 * flat * bump(polar - 0.69 * PI, 0.07 * PI) * bump(az, 0.45);
         let chin = 0.16 * self.head.chin * bump(polar - 0.8 * PI, 0.05 * PI) * bump(az, 0.32);
-        ridge + socket + cheek + muzzle + chin
+        let mut sculpt = 0.0;
+        if lk.sculpt > 0.0 {
+            let sc = lk.sculpt;
+            // A rough sculpt (SPIKE): a brow shelf over deep sockets, a nose bridge, a cheekbone
+            // with a hollow under it, the angle of the jaw, and the lips with a line between them.
+            let brow_shelf = 0.035 * bump(polar - 0.405 * PI, 0.035 * PI) * bump(a, 0.55) * front;
+            let deep = -0.05 * bump(polar - self.eye_polar, 0.045 * PI) * bump(a - self.eye_azimuth, 0.15);
+            let bridge = 0.05 * bump(polar - 0.485 * PI, 0.05 * PI) * bump(az, 0.07);
+            let temple = -0.03 * bump(polar - 0.5 * PI, 0.07 * PI) * bump(a - 0.95, 0.12);
+            let zygoma = 0.05 * bump(polar - 0.55 * PI, 0.04 * PI) * bump(a - 0.85, 0.2);
+            let hollow = -0.05 * bump(polar - 0.65 * PI, 0.05 * PI) * bump(a - 0.72, 0.2);
+            let jaw = 0.045 * bump(polar - 0.77 * PI, 0.045 * PI) * bump(a - 1.15, 0.28);
+            let upper_lip = 0.03 * bump(polar - 0.67 * PI, 0.025 * PI) * bump(az, 0.24);
+            let line = -0.035 * bump(polar - 0.697 * PI, 0.02 * PI) * bump(az, 0.3);
+            let lower_lip = 0.035 * bump(polar - 0.73 * PI, 0.025 * PI) * bump(az, 0.2);
+            let under_lip = -0.025 * bump(polar - 0.77 * PI, 0.025 * PI) * bump(az, 0.2);
+            sculpt = sc * (brow_shelf + deep + bridge + temple + zygoma + hollow + jaw + upper_lip + line + lower_lip + under_lip);
+        }
+        ridge + socket + cheek + muzzle + chin + sculpt
     }
 
     /// The skin at `az` (0 the face, a quarter turn the wearer's left) and `polar` (0 the
@@ -84,7 +102,7 @@ impl Face {
 
     /// The skull's skin as a closed surface.
     pub fn skull(&self) -> MeshBuilder {
-        let (cols, rows) = (64, 44);
+        let (cols, rows) = if crate::look::look_for(self.folk).sculpt > 0.0 { (112, 80) } else { (64, 44) };
         // Rows climb from under the chin to the crown; columns run round from the back.
         let points: Vec<Vec<V3>> = (0..=rows)
             .map(|j| {

@@ -425,8 +425,17 @@ fn frame_camera(pivots: Query<(&Pivot, &Transform), Without<DollCamera>>, mut ca
     let Some((pivot, at)) = pivots.iter().next() else { return };
     for (projection, mut transform) in &mut cameras {
         let Projection::Perspective(perspective) = projection else { continue };
-        let distance = framing_distance(pivot.size, perspective, FILL);
-        let target = Transform::from_translation(at.translation + Vec3::Z * distance).looking_at(at.translation, Vec3::Y);
+        let mut distance = framing_distance(pivot.size, perspective, FILL);
+        let mut look_at = at.translation;
+        // SPIKE: `FB_DOLL_FACE=<zoom>` frames the head close up.
+        // `FB_DOLL_FACE=<zoom>,<height>,<x>` frames a spot (height as a share of the figure's
+        // height above its middle, 0.405 the head) for close ups.
+        if let Ok(v) = std::env::var("FB_DOLL_FACE") {
+            let n: Vec<f32> = v.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+            look_at += Vec3::Y * pivot.size.y * n.get(1).copied().unwrap_or(0.405) + Vec3::X * pivot.size.y * n.get(2).copied().unwrap_or(0.0);
+            distance /= n.first().copied().unwrap_or(1.0).max(1.0);
+        }
+        let target = Transform::from_translation(look_at + Vec3::Z * distance).looking_at(look_at, Vec3::Y);
         if *transform != target {
             *transform = target;
         }

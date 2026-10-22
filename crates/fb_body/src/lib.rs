@@ -26,6 +26,7 @@ pub mod look;
 pub mod place;
 pub mod rig;
 pub mod skin;
+pub mod stand;
 #[cfg(test)]
 mod skin_tests;
 #[cfg(test)]
@@ -42,6 +43,7 @@ pub use hand::HandPose;
 pub use held::{HIP_SIDE, Hands, HeldFit, HipFit, Hold, MAIN_HAND, OFF_HAND, fit_hands, fit_held, fit_hip};
 pub use limb::{Limb, Side};
 pub use look::{Look, look, set_look};
+pub use stand::{Carry, StandPose};
 pub use place::Placement;
 pub use rig::{JOINTS, Joint, Quat, Rig, RigPose, Rigid};
 pub use skin::{PartSkin, SkinRegion, Skinner};

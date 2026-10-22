@@ -313,7 +313,7 @@ impl From<&ToonExtension> for ToonUniform {
             etch_stitched: (toon.etch.style == EtchStyle::Embroidered) as u32,
             shimmer_color: toon.shimmer.color,
             shimmer_strength: toon.shimmer.strength,
-            pulp: crate::pulp::on() as u32,
+            pulp: crate::pulp::mode(),
             band_values: [Vec4::new(v[0], v[1], v[2], v[3]), Vec4::new(v[4], v[5], v[6], v[7])],
             band_count: toon.bands.count,
             decay_type: toon.decay.kind,

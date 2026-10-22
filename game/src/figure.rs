@@ -80,7 +80,18 @@ impl Figure {
         let shapes: Vec<(Slot, armory::Item)> = worn.iter().map(|(slot, item)| (*slot, item.shape.clone())).collect();
         let fit = fit_worn(&body, &shapes);
 
-        let mut skin = body.skin_mesh();
+        // SPIKE: limb muscle shows only where no clothes are fitted over it.
+        let mut skin_body = body.clone();
+        if fb_body::look::active() {
+            let worn_on = |slots: &[Slot]| worn.iter().any(|(s, _)| slots.contains(s));
+            if worn_on(&[Slot::Legs]) {
+                skin_body.anat_legs *= 0.2;
+            }
+            if worn_on(&[Slot::Shirt, Slot::Body]) {
+                skin_body.anat_arms *= 0.35;
+            }
+        }
+        let mut skin = skin_body.skin_mesh();
         skin.parts.retain(|p| !fit.covered.hides(p.name));
         let mut head = body.head_mesh_fitted(fit.head);
         head.parts.extend(body.hair_mesh(fit.hair).parts);
@@ -153,7 +164,14 @@ impl Figure {
         }
         let neck = Vec3::from_array(body.neck_base().origin);
         let rig = Rig::of(&body);
-        let gait = Gait::new(&body, &rig);
+        let mut gait = Gait::new(&body, &rig);
+        if fb_body::look::active() {
+            // SPIKE: stand in a cover pose chosen by what is held.
+            gait = gait.stood(fb_body::StandPose::choose(hands.main.as_ref().map(|f| f.hold), hands.off.as_ref().map(|f| f.hold), spec.seed));
+        }
+        if fb_body::look::active() && hands.main.as_ref().is_some_and(|f| f.hold == fb_body::Hold::Upright) {
+            ground_haft(&mut pieces, &rig, &gait);
+        }
         Figure { body, pieces, light, neck, rig, gait, hooded }
     }
 
@@ -312,5 +330,47 @@ mod tests {
             }
         }
         assert_eq!(direct.bounds(), async_result.bounds(), "bounds differ");
+    }
+}
+
+/// SPIKE: slides the main hand's upright haft through the fist, along its own length, until its
+/// butt rests on the floor in the standing pose, so a planted staff or spear does not float.
+fn ground_haft(pieces: &mut [Piece], rig: &Rig, gait: &Gait) {
+    let wrist = Joint::wrist(fb_body::MAIN_HAND);
+    let pose = gait.idle(&fb_body::IdleCycle::of(0), 0.0);
+    let frame = rig.skin_frames(&pose)[wrist.index()];
+    let Some(piece) = pieces.iter_mut().find(|p| p.attach == Some(wrist)) else { return };
+    let posed = |p: [f32; 3]| frame.point(p);
+    let (mut lo, mut hi) = (None::<[f32; 3]>, None::<[f32; 3]>);
+    for p in piece.mesh.parts.iter().flat_map(|part| part.positions.iter().copied()) {
+        let q = posed(p);
+        if lo.is_none_or(|l| q[1] < l[1]) {
+            lo = Some(q);
+        }
+        if hi.is_none_or(|h| q[1] > h[1]) {
+            hi = Some(q);
+        }
+    }
+    let (Some(lo), Some(hi)) = (lo, hi) else { return };
+    let axis = Vec3::from_array(hi) - Vec3::from_array(lo);
+    let len = axis.length();
+    if len < 1e-3 || axis.y / len < 0.5 {
+        return;
+    }
+    let axis = axis / len;
+    // Down the haft by however far the butt floats, but never more than half its length.
+    let t = (lo[1] / axis.y).clamp(0.0, 0.5 * len);
+    let world = -axis * t;
+    // Back into the rest frame of the wrist (a rotation's inverse is its transpose).
+    let m = frame.rotation;
+    let d = [
+        m.cols[0][0] * world.x + m.cols[0][1] * world.y + m.cols[0][2] * world.z,
+        m.cols[1][0] * world.x + m.cols[1][1] * world.y + m.cols[1][2] * world.z,
+        m.cols[2][0] * world.x + m.cols[2][1] * world.y + m.cols[2][2] * world.z,
+    ];
+    for part in &mut piece.mesh.parts {
+        for p in &mut part.positions {
+            *p = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+        }
     }
 }

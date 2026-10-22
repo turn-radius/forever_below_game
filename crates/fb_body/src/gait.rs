@@ -112,6 +112,8 @@ pub struct Gait {
     leg_length: f32,
     /// How much each arm holds (0 free, 1 holding), right then left.
     hold: [f32; 2],
+    /// SPIKE: a static standing pose for the idle.
+    stand: Option<crate::stand::StandPose>,
 }
 
 /// A frame whose `y` is `y` and whose `z` is as near forward as it can be.
@@ -151,7 +153,13 @@ impl Gait {
             [false, true] => [0.0, 0.8],
             [false, false] => [0.0, 0.0],
         };
-        Gait { rig: rig.clone(), legs, scale: body.scale, height: body.height, leg_length: legs[0].hip[1] - legs[0].ankle[1], hold }
+        Gait { rig: rig.clone(), legs, scale: body.scale, height: body.height, leg_length: legs[0].hip[1] - legs[0].ankle[1], hold, stand: None }
+    }
+
+    /// SPIKE: this gait standing in `pose` (the idle holds it, breathing).
+    pub fn stood(mut self, pose: crate::stand::StandPose) -> Gait {
+        self.stand = Some(pose);
+        self
     }
 
     /// How far a step reaches.
@@ -299,6 +307,9 @@ impl Gait {
     /// Standing at `t` seconds: breathing, and now and then shifting weight between the feet.
     pub fn idle(&self, cycle: &IdleCycle, t: f32) -> RigPose {
         let breath = cycle.breath(t);
+        if let Some(stand) = &self.stand {
+            return self.idle_stand(stand, breath);
+        }
         let shift = cycle.shift(t);
         let mut pose = RigPose::REST;
 
@@ -325,6 +336,46 @@ impl Gait {
         pose.rotation[Joint::Head.index()] = Quat::z(-0.1 * roll);
         // A breath lifts the chest and the shoulders hanging from it.
         pose.offset[Joint::Chest.index()] = [0.0, BREATH_LIFT * self.height * breath, 0.0];
+        pose
+    }
+
+    /// SPIKE: the idle held in a [`crate::stand::StandPose`].
+    fn idle_stand(&self, sp: &crate::stand::StandPose, breath: f32) -> RigPose {
+        let mut pose = RigPose::REST;
+        let roll = sp.roll * sp.weight;
+        let pelvis = rot(vec3::Z, roll);
+        let hip_x = self.legs[0].hip[0].abs();
+        let x = sp.sway * hip_x * sp.weight;
+        // The unloaded foot's index (0 right, 1 left): weight left means the right is loose.
+        let loose = if sp.weight > 0.0 { 0 } else { 1 };
+        let side = if loose == 0 { -1.0 } else { 1.0 };
+        let loaded = 1 - loose;
+        let ll = self.leg_length;
+        let mut targets = [self.legs[0].ankle, self.legs[1].ankle];
+        targets[loose] = vec3::add(targets[loose], [side * sp.loose[0] * ll, sp.loose[1] * ll, sp.loose[2] * ll]);
+        let turn = |i: usize, out: f32| rot(vec3::Y, if i == 0 { -out } else { out });
+        let mut feet = [Mat3::IDENTITY; 2];
+        feet[loaded] = turn(loaded, sp.turn[0]);
+        feet[loose] = turn(loose, sp.turn[1]).mul_mat(&rot(vec3::X, sp.loose_pitch));
+        let leg = &self.legs[loaded];
+        let reach = vec3::distance(leg.hip, leg.ankle);
+        let y = self.pelvis_height(leg, targets[loaded], x, &pelvis, reach);
+        let at = [x, y, 0.0];
+        self.set_legs(&mut pose, at, &pelvis, targets, feet);
+        pose.offset[Joint::Pelvis.index()] = vec3::sub(at, self.rig.rest_at(Joint::Pelvis));
+        pose.rotation[Joint::Pelvis.index()] = Quat::from_mat3(&pelvis);
+        let eul = |a: [f32; 3]| Quat::y(a[0]).mul(Quat::z(a[1])).mul(Quat::x(a[2]));
+        pose.rotation[Joint::Spine.index()] = eul(sp.spine);
+        pose.rotation[Joint::Chest.index()] = eul(sp.chest).mul(Quat::x(-0.012 * breath));
+        pose.rotation[Joint::Head.index()] = eul(sp.head);
+        pose.offset[Joint::Chest.index()] = [0.0, BREATH_LIFT * self.height * breath, 0.0];
+        for (i, side) in Side::BOTH.into_iter().enumerate() {
+            let [shoulder, elbow, wrist] = Joint::arm(side);
+            let c = &sp.arms[i];
+            pose.rotation[shoulder.index()] = c.shoulder_q();
+            pose.rotation[elbow.index()] = c.elbow_q();
+            pose.rotation[wrist.index()] = c.wrist_q();
+        }
         pose
     }
 
