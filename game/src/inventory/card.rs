@@ -563,19 +563,22 @@ fn fill_card(commands: &mut Commands, card: Entity, shown: Option<(&Item, &CardT
     });
 }
 
-/// "Costs 2 gp 3 sp · worth 1 gp 5 sp": the word in the body face, the coins bold in their
-/// metals (red, all of them, for a ware the delver cannot pay for), the note muted.
+/// "Costs 2 gp 3 sp", then "worth 1 gp 5 sp" under it: the word in the body face, the coins
+/// bold in their metals (red, all of them, for a ware the delver cannot pay for), the note
+/// muted on a line of its own so a narrow card never breaks it.
 fn price_line(info: &mut ChildSpawnerCommands, fonts: &UiFonts, price: Price) {
     let (word, coins, note) = price.parts();
     let size = 16.0;
-    info.spawn((Text::new(format!("{word} ")), UiFonts::style(&fonts.body_medium, size, INK))).with_children(|line| {
-        if matches!(price, Price::Costs { afford: false, .. }) {
-            line.spawn((TextSpan::new(coins.short()), UiFonts::style(&fonts.mono_bold, size - 1.0, BAD)));
-        } else {
-            coin_spans(line, fonts, coins, size - 1.0);
-        }
+    info.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|column| {
+        column.spawn((Text::new(format!("{word}\u{a0}\u{a0}")), UiFonts::style(&fonts.body_medium, size, INK))).with_children(|line| {
+            if matches!(price, Price::Costs { afford: false, .. }) {
+                line.spawn((TextSpan::new(coins.short()), UiFonts::style(&fonts.mono_bold, size - 1.0, BAD)));
+            } else {
+                coin_spans(line, fonts, coins, size - 1.0);
+            }
+        });
         if let Some(note) = note {
-            line.spawn((TextSpan::new(format!(" \u{b7} {note}")), UiFonts::style(&fonts.mono, 12.0, MUTED)));
+            column.spawn((Text::new(note), UiFonts::style(&fonts.mono, 12.0, MUTED)));
         }
     });
 }

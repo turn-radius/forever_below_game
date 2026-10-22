@@ -28,7 +28,8 @@
 //! off hand, starts them with a pack full of things, and sets a sack holding a few more, and a
 //! shield, down in front of them. `FB_HOLD=<main>[,<off>]` puts items of those bases in the hands
 //! (a torch or lantern lit; `none` empties a hand), after either kit. `FB_DEBUG_HOVER=<n>` holds the
-//! card over the `n`th thing in the first carried grid.
+//! card over the `n`th thing in the first carried grid (`u<n>` underfoot, `o<n>` in the open
+//! container or trader's shelf).
 
 pub mod card;
 pub mod doll;
@@ -95,7 +96,7 @@ const TOAST_SECONDS: f32 = 3.6;
 /// What the help line under the grids says (the plate's `.hint`).
 pub fn help_text(keymap: &Keymap) -> String {
     format!(
-        "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. {turn} while dragging to turn an item. Double-click to wear or take off. Drop food, a light or a weapon on a quickslot to bind it, and the keys {slots} use it.",
+        "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. {turn} while dragging to turn an item. Double-click to wear or take off, or to empty a purse into your own. Drop food, a light or a weapon on a quickslot to bind it, and the keys {slots} use it.",
         turn = keymap.label(Action::TurnItem),
         slots = keymap.label(Action::Quickslot),
     )
@@ -1505,19 +1506,26 @@ fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResM
 }
 
 /// For captures: holds the card over the `FB_DEBUG_HOVER`th thing in the first carried grid,
-/// as if the mouse were on it; `u<n>` takes the `n`th thing underfoot instead.
+/// as if the mouse were on it; `u<n>` takes the `n`th thing underfoot instead, and `o<n>` the
+/// `n`th in the open container (a chest, or a trader's shelf).
 fn debug_hover(
     inventory: Res<Inventory>,
     underfoot: Res<Underfoot>,
+    open: Res<OpenContainer>,
     views: Query<(&ItemView, &ComputedNode, &UiGlobalTransform)>,
     mut hovered: ResMut<Hovered>,
 ) {
     let spec = std::env::var("FB_DEBUG_HOVER").unwrap_or_default();
-    let floor = spec.strip_prefix('u');
-    let index: usize = floor.unwrap_or(&spec).parse().unwrap_or(0);
-    let id = match floor {
-        Some(_) => underfoot.grid.entries().get(index).map(|e| e.id),
-        None => inventory.carried_containers().first().and_then(|&c| inventory.grid(c)).and_then(|g| g.entries().get(index)).map(|e| e.id),
+    let (place, number) = match spec.chars().next() {
+        Some(c @ ('u' | 'o')) => (Some(c), &spec[1..]),
+        _ => (None, spec.as_str()),
+    };
+    let index: usize = number.parse().unwrap_or(0);
+    let nth_in = |container: Option<ItemId>| container.and_then(|c| inventory.grid(c)).and_then(|g| g.entries().get(index)).map(|e| e.id);
+    let id = match place {
+        Some('u') => underfoot.grid.entries().get(index).map(|e| e.id),
+        Some(_) => nth_in(open.0),
+        None => nth_in(inventory.carried_containers().first().copied()),
     };
     let Some(id) = id else {
         return;

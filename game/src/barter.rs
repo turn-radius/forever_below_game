@@ -644,7 +644,7 @@ fn barter_for_capture(
 }
 
 /// For captures (`FB_BARTER=deal` or `accept`): a few frames after the screen opens, gives the
-/// delver a purse of 40 gp if they carry none, moves the first ware to the pack and the first
+/// delver 40 gp if they carry none, moves the first ware to the pack and the first
 /// thing they carry that is not a purse to the shelf; for `accept`, settles it after that.
 fn deal_for_capture(
     mut barter: ResMut<Barter>,
