@@ -879,9 +879,9 @@ mod tests {
         let level = generate(1207, 1);
         let (sx, sy, facing) = level.start();
         assert_eq!((sx, sy, facing, level.rooms.len()), (1, 22, Facing::East, 6));
-        assert_eq!((level.items.len(), level.folk.len()), (13, 6));
+        assert_eq!((level.items.len(), level.folk.len()), (10, 6));
         assert_eq!((level.items[0].family, level.items[0].seed), (armory::Family::Torch, 3_185_309_893));
-        assert_eq!((level.items[12].family, level.items[12].seed), (armory::Family::Mace, 3_024_996_869));
+        assert_eq!((level.items[9].family, level.items[9].seed), (armory::Family::Torch, 3_740_850_500));
         // Folk stand by their rooms' roles since #546, guards at their doors and traders in the market since #550.
         assert_eq!(level.folk[5].seed, 3_668_467_538);
         // Gathered round the hearth's campfire since #569.
