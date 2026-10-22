@@ -630,7 +630,7 @@ impl Plugin for BarterPlugin {
 
 /// Leaving the delve ends a barter in progress, so the shelf's chest and wares do not stay in the
 /// inventory, and forgets who the delver has traded with.
-pub fn leave_the_delve(mut barter: ResMut<Barter>, mut inventory: ResMut<Inventory>, mut showing: ResMut<OpenContainer>) {
+pub fn leave_the_delve(mut barter: ResMut<Barter>, mut inventory: ResMut<Inventory>, mut showing: ResMut<OpenContainer>, mut stage: ResMut<portrait::TraderStage>) {
     if let Some(session) = barter.session.take() {
         end(&mut inventory, session);
     }
@@ -638,6 +638,8 @@ pub fn leave_the_delve(mut barter: ResMut<Barter>, mut inventory: ResMut<Invento
         showing.0 = None;
     }
     *barter = Barter::default();
+    // The trader's figure goes with the delve; forget it so the same trader is dressed afresh.
+    *stage = portrait::TraderStage::default();
 }
 
 /// For captures (`FB_BARTER=1`): barters with the folk nearest the delver once the level is up.

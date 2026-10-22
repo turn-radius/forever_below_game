@@ -72,6 +72,14 @@ pub fn stage_trader(
 ) {
     let Some(session) = barter.session.as_ref() else { return };
     let key = session.look.key();
+    if stage.dressed.as_ref().is_some_and(|d| d != &key) {
+        // Another trader: the old face goes at once, and nothing is drawn till the new one is fitted.
+        if let Some(old) = stage.root.take() {
+            commands.entity(old).despawn();
+        }
+        stage.camera = None;
+        stage.dressed = None;
+    }
     if stage.dressed.as_ref() != Some(&key) && stage.fitting.as_ref().is_none_or(|f| f.key() != &key) {
         stage.fitting = Some(match cache.figure(&key) {
             Some(figure) => Fitting::ready(key.clone(), figure),
@@ -137,4 +145,16 @@ pub fn clear_trader(mut commands: Commands, mut barter: ResMut<Barter>, mut stag
     stage.camera = None;
     stage.dressed = None;
     stage.fitting = None;
+}
+
+impl TraderStage {
+    /// Whether a figure is standing for the barter.
+    pub fn is_dressed(&self) -> bool {
+        self.dressed.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn mark_dressed_for_test(&mut self, key: &str) {
+        self.dressed = Some(key.to_string());
+    }
 }

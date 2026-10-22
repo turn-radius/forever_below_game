@@ -166,6 +166,26 @@ impl Figure {
             .fold(None, |acc, p| Some(acc.map_or((p, p), |(lo, hi): (Vec3, Vec3)| (lo.min(p), hi.max(p)))))
     }
 
+    /// The top of what is worn on the head, in body space: the highest vertex of any unlit piece
+    /// within one and a half head radii of the head's centre, sideways, and above it, among the gear (not the body, head and hair, which come first). A hood or a
+    /// tall hat rises above the skull; the bare head's own top is returned for a bare head. Held
+    /// lights are left out.
+    pub fn head_top(&self) -> f32 {
+        let (centre, r) = self.head();
+        let reach = 1.5 * r;
+        self.pieces
+            .iter()
+            .skip(2)
+            .filter(|p| !p.lit)
+            .flat_map(|p| {
+                // What rides the head (a helm or hat) counts whole, horns and brim included.
+                let on_head = p.on_head;
+                p.mesh.parts.iter().flat_map(|part| &part.positions).filter(move |v| on_head || ((v[0] - centre.x).abs() <= reach && (v[2] - centre.z).abs() <= reach)).map(|v| v[1])
+            })
+            .filter(|&y| y >= centre.y)
+            .fold(centre.y + self.body.head.half_height, f32::max)
+    }
+
     /// The head's centre and its radius (its largest half extent), in body space.
     pub fn head(&self) -> (Vec3, f32) {
         let head = &self.body.head;

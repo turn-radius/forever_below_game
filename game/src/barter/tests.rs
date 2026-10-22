@@ -582,3 +582,12 @@ fn the_portrait_texture_is_let_go_with_the_barter() {
     app.world_mut().run_system_once(portrait::clear_trader).unwrap();
     assert!(app.world().resource::<Barter>().portrait.is_none());
 }
+
+#[test]
+fn leaving_the_delve_forgets_the_trader_s_stage() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut app = barter_app();
+    app.world_mut().resource_mut::<portrait::TraderStage>().mark_dressed_for_test("a trader");
+    app.world_mut().run_system_once(leave_the_delve).unwrap();
+    assert!(!app.world().resource::<portrait::TraderStage>().is_dressed(), "a later barter dresses the trader afresh");
+}
