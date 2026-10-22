@@ -899,7 +899,7 @@ pub(crate) fn build_screen(
     }
     let fallback = Keymap::default();
     let keymap = keymap.as_deref().unwrap_or(&fallback);
-    let screen = ScreenLayout { inventory: &inventory, fonts: &fonts, cell: tuning.interface.cell_size };
+    let screen = ScreenLayout { inventory: &inventory, barter: &barter, fonts: &fonts, cell: tuning.interface.cell_size };
     commands
         .spawn((
             Name::new("Inventory"),
@@ -1046,9 +1046,32 @@ pub(crate) fn build_screen(
         });
 }
 
+/// The price tag in an item's cell while bartering.
+#[derive(Component, Debug)]
+pub struct PriceTag;
+
+/// What a cell's price tag says, its ink and its edge, for a barter `price`: a ware's cost in
+/// its coin's metal on a gold edge (red ink if the delver cannot pay it), what the trader pays
+/// on a green one. `None` for a price that is not a trade's.
+pub fn cell_tag(price: card::Price) -> Option<(String, Color, Color)> {
+    match price {
+        card::Price::Costs { price, afford, .. } => {
+            let (text, metal) = crate::ui::coin_tag(price.total_copper());
+            Some((text, if afford { metal } else { BAD }, crate::ui::FRAME_GOLD))
+        }
+        card::Price::SellsFor { price, .. } => {
+            let (text, metal) = crate::ui::coin_tag(price.total_copper());
+            Some((text, metal, OK))
+        }
+        card::Price::Worth(_) | card::Price::Holds(_) => None,
+    }
+}
+
 /// What the screen is built from.
 struct ScreenLayout<'a> {
     inventory: &'a Inventory,
+    /// While bartering, what tags the items' cells with their prices ([`cell_tag`]).
+    barter: &'a crate::barter::Barter,
     fonts: &'a UiFonts,
     /// Logical pixels from one grid line to the next.
     cell: f32,
@@ -1176,6 +1199,23 @@ impl ScreenLayout<'_> {
                                     },
                                     BackgroundColor(rarity_color(item.rarity)),
                                 ));
+                            }
+                            if let Some((text, ink, edge)) = self.barter.tag(self.inventory, entry.id).and_then(cell_tag) {
+                                slot.spawn((
+                                    PriceTag,
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        right: px(3),
+                                        bottom: px(3),
+                                        padding: UiRect::new(px(4), px(4), px(0), px(1)),
+                                        border: UiRect::all(px(1)),
+                                        border_radius: BorderRadius::all(px(4)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(BG.with_alpha(0.88)),
+                                    BorderColor::all(edge),
+                                ))
+                                .with_child((Text::new(text), UiFonts::style(&self.fonts.mono_bold, 11.0, ink)));
                             }
                         });
                 }
@@ -2440,6 +2480,48 @@ mod tests {
         let spans = spans.to_vec();
         let head = text.0.clone();
         head + &spans.iter().filter_map(|s| app.world().get::<TextSpan>(*s)).map(|t| t.0.clone()).collect::<String>()
+    }
+
+    #[test]
+    fn a_tag_says_the_trade_s_price_in_its_coin() {
+        use card::Price;
+        use fb_items::Coins;
+        let worth = Coins::default();
+        let costs = |cp, afford| cell_tag(Price::Costs { price: Coins::from_copper(cp), worth, afford });
+        assert_eq!(costs(250, true), Some(("2.5g".to_string(), crate::ui::COIN_GOLD, crate::ui::FRAME_GOLD)));
+        assert_eq!(costs(250, false).map(|t| t.1), Some(BAD), "out of reach");
+        assert_eq!(cell_tag(Price::SellsFor { price: Coins::from_copper(8 * 10), worth }), Some(("8s".to_string(), crate::ui::COIN_SILVER, OK)));
+        assert_eq!(cell_tag(Price::Worth(worth)), None);
+    }
+
+    #[test]
+    fn bartering_tags_every_ware_and_good_with_its_price() {
+        let mut app = screen_app();
+        let spot = fb_level::generate(1207, 1).folk[0];
+        let trade = fb_faction::Trade { profession: fb_faction::Profession::Weaponsmith, tier: fb_faction::Tier::Apprentice, style: None };
+        let person = crate::folk::person_1207(&fb_level::FolkSpot { trade: Some(trade), ..spot });
+        let wares: Vec<_> = (1..4).filter_map(|s| fb_items::roll_item("Sword", s)).collect();
+        let shelf = crate::shelf::Shelf { day: 0, wares: wares.clone(), sold: vec![], purse: 6000 };
+        let session = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            let dagger = inventory.add(fb_items::roll_item("Dagger", 6).unwrap());
+            inventory.stow(dagger).unwrap();
+            let purse = inventory.add(purse_of(fb_items::Coins { gp: 1, sp: 0, cp: 0 }));
+            inventory.stow(purse).unwrap();
+            crate::barter::begin(&mut inventory, Entity::PLACEHOLDER, &person, fb_faction::Band::Neutral, &shelf).unwrap()
+        };
+        let shelf_id = session.shelf;
+        app.world_mut().resource_mut::<crate::barter::Barter>().session = Some(session);
+        app.world_mut().resource_mut::<OpenContainer>().0 = Some(shelf_id);
+        press(&mut app, KeyCode::KeyI);
+        let tags = app.world_mut().query_filtered::<(), With<PriceTag>>().iter(app.world()).count();
+        assert_eq!(tags, wares.len() + 1, "the swords on the shelf and the dagger, not the purse or the pack");
+        // No barter, no tags.
+        app.world_mut().resource_mut::<crate::barter::Barter>().session = None;
+        app.update();
+        assert_eq!(app.world_mut().query_filtered::<(), With<PriceTag>>().iter(app.world()).count(), 0);
     }
 
     #[test]
