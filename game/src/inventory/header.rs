@@ -85,24 +85,30 @@ fn backdrop() -> BackgroundGradient {
     )
 }
 
+/// A portrait in its gold frame on Stygian blue, `size` logical pixels (the plate's `.portrait`):
+/// the delver's in the header and the trader's on the barter screen.
+pub fn portrait_frame(parent: &mut ChildSpawnerCommands, portrait: Handle<Image>, size: Vec2) {
+    parent
+        .spawn((
+            Node {
+                width: px(size.x),
+                height: px(size.y),
+                flex_shrink: 0.0,
+                border: UiRect::all(px(2)),
+                border_radius: BorderRadius::all(px(4)),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BorderColor::all(FRAME_GOLD),
+            backdrop(),
+        ))
+        .with_child((Node { width: percent(100), height: percent(100), ..default() }, ImageNode::new(portrait)));
+}
+
 /// Builds the header and the tab bar.
 pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &fb_character::rules::Rules, character: &Character, inventory: &Inventory, portrait: Handle<Image>, showing: SheetTab) {
     parent.spawn(Node { column_gap: px(16), align_items: AlignItems::Center, ..default() }).with_children(|ident| {
-        ident
-            .spawn((
-                Node {
-                    width: px(PORTRAIT.x),
-                    height: px(PORTRAIT.y),
-                    flex_shrink: 0.0,
-                    border: UiRect::all(px(2)),
-                    border_radius: BorderRadius::all(px(4)),
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-                BorderColor::all(FRAME_GOLD),
-                backdrop(),
-            ))
-            .with_child((Node { width: percent(100), height: percent(100), ..default() }, ImageNode::new(portrait)));
+        portrait_frame(ident, portrait, PORTRAIT);
         ident.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(3), ..default() }).with_children(|text| {
             text.spawn((Text::new(character.name.clone()), UiFonts::style(&fonts.display, 34.0, INK)));
             text.spawn((Text::new(identity_line(character)), UiFonts::style(&fonts.body, 14.0, MUTED)));
