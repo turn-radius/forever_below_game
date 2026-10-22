@@ -1028,26 +1028,26 @@ mod tests {
     #[test]
     fn held_containers_hold_loot_but_stalls_and_kegs() {
         use crate::RoomRole;
-        let (mut kept, mut strongboxes) = (0, 0);
+        let (mut kept, mut guard_boxes) = (0, 0);
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
-            for p in level.props.iter().filter(|p| p.prop.is_container()) {
-                let Some(room) = level.room_at(p.x as i32, p.y as i32) else { continue };
-                if !level.is_claimed(room) {
-                    continue;
-                }
+            for room in (0..level.rooms.len()).filter(|&r| level.is_claimed(r)) {
                 let roles = level.roles_of(room);
-                // The stalls and the keg (a barrel or crate, where strongboxes are strongboxes and chests).
-                let keg = matches!(p.prop, Prop::Container { style: ChestStyle::Barrel | ChestStyle::Crate, .. }) && roles.contains(&RoomRole::Hearth);
-                if roles.contains(&RoomRole::Market) || keg {
-                    continue;
+                let held: Vec<_> = level.props.iter().filter(|p| p.prop.is_container() && level.room_at(p.x as i32, p.y as i32) == Some(room)).collect();
+                // A market's stalls are empty, and a hearth has one empty keg; all else holds loot.
+                let empty = held.iter().filter(|p| !p.prop.holds_loot()).count();
+                let allowed = if roles.contains(&RoomRole::Market) { held.len() } else if roles.contains(&RoomRole::Hearth) { 1 } else { 0 };
+                assert!(empty <= allowed, "seed {seed} depth {depth}: {empty} empty containers in a held room");
+                if !roles.contains(&RoomRole::Market) {
+                    kept += held.iter().filter(|p| p.prop.holds_loot()).count();
                 }
-                kept += 1;
-                strongboxes += matches!(p.prop, Prop::Container { style: ChestStyle::Strongbox, .. }) as u32;
-                assert!(p.prop.holds_loot(), "seed {seed} depth {depth}: an empty container in a held room");
+                if level.purpose_of(room) == Some(crate::Purpose::Guardroom) && !roles.contains(&RoomRole::Market) {
+                    guard_boxes += held.iter().filter(|p| p.prop.holds_loot() && matches!(p.prop, Prop::Container { style: ChestStyle::Strongbox | ChestStyle::Chest, .. })).count();
+                }
             }
         }
-        assert!(kept > 0, "{kept} held containers, {strongboxes} strongboxes");
+        assert!(kept > 0, "{kept} held containers with loot");
+        assert!(guard_boxes > 0, "no claimed guardroom keeps a strongbox");
     }
 
     #[test]

@@ -215,6 +215,11 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         let (claims, strengths) = grow_claims(&level, start_room, &cramped, &mut Mulberry32::new(layout_seed ^ CLAIM_SALT));
         let mut trial = level.clone();
         trial.claims = claims;
+        // What a faction keeps is in its containers and on its traders' shelves, not on the floor.
+        // Claims settle after the loot is scattered, so what lies in a claimed room is taken out
+        // before folk and fires are placed, and nothing keeps clear of what is gone.
+        let mut in_claim = trial.items.iter().map(|i| trial.room_at(i.x as i32, i.y as i32).is_some_and(|r| trial.is_claimed(r))).collect::<Vec<_>>().into_iter();
+        trial.items.retain(|_| !in_claim.next().unwrap_or(false));
         // A faction that found no ground is not on the level.
         let held: Vec<_> = trial.claims.iter().map(|c| c.faction).collect();
         trial.factions.retain(|s| held.contains(&s.id));
@@ -236,10 +241,6 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         }
     };
     crate::trades::assign(&mut level, world_seed);
-    // What a faction keeps is in its containers and on its traders' shelves, not on the floor.
-    // Claims settle after the loot is scattered, so what lies in a claimed room is taken out here.
-    let items = std::mem::take(&mut level.items);
-    level.items = items.into_iter().filter(|i| !level.room_at(i.x as i32, i.y as i32).is_some_and(|r| level.is_claimed(r))).collect();
     Some((level, layout_seed))
 }
 
@@ -1366,15 +1367,15 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588), and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618).
         let before = [
-            (0u32, 0x399b6c5745443c11u64),
-            (1, 0x99866534f858a3d7),
-            (2, 0xe037887d53a1b179),
-            (7, 0x9e54da7f0c8fde80),
-            (64, 0xc2b38a92cff12748),
+            (0u32, 0x1f1a3218b008af65u64),
+            (1, 0x449e6b9c0122874a),
+            (2, 0x4f77a21635f56cb),
+            (7, 0xf62fd5bc05f65db),
+            (64, 0x36ec7c3ea51f5f9a),
             (1207, 0xf8e33bcb5d895512),
-            (4242, 0xe469fc799e9f912e),
+            (4242, 0x401bea1115e7dbf6),
             (u32::MAX, 0xec7118df0d2cac3a),
         ];
         for (seed, hash) in before {
