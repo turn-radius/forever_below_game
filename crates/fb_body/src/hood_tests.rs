@@ -101,8 +101,9 @@ struct Posed<'a> {
     skin: Vec<(&'a str, Vec<V3>, &'a [u32])>,
     /// The head's frame as the pose has it: its centre and its three axes.
     head: (V3, [V3; 3]),
-    /// The hair and beard's points, at rest.
-    hair: &'a [V3],
+    /// The hair and beard's points and triangles, at rest.
+    hair: &'a Vec<V3>,
+    hair_tris: &'a [u32],
 }
 
 fn poses(body: &Body) -> Vec<(String, Option<crate::rig::RigPose>)> {
@@ -126,6 +127,7 @@ struct Fitted {
     /// are (to the chest under a hood).
     refs: [(V3, PartSkin); 4],
     hair: Vec<V3>,
+    hair_tris: Vec<u32>,
 }
 
 fn fitted(body: &Body, worn: &[(Slot, Item)]) -> Fitted {
@@ -147,8 +149,13 @@ fn fitted(body: &Body, worn: &[(Slot, Item)]) -> Fitted {
         (p, PartSkin { joints: vec![joints], weights: vec![weights] })
     };
     let refs = [weighted(c), weighted(vec3::add(c, [1.0, 0.0, 0.0])), weighted(vec3::add(c, [0.0, 1.0, 0.0])), weighted(vec3::add(c, [0.0, 0.0, 1.0]))];
-    let hair = body.hair_mesh(fit.hair).parts.iter().flat_map(|p| p.positions.iter().copied()).collect();
-    Fitted { layers, skin, rig: Rig::of(body), centre: c, refs, hair }
+    let (mut hair, mut hair_tris) = (vec![], vec![]);
+    for part in body.hair_mesh(fit.hair).parts {
+        let at = hair.len() as u32;
+        hair.extend(part.positions.iter().copied());
+        hair_tris.extend(part.indices.iter().map(|i| i + at));
+    }
+    Fitted { layers, skin, rig: Rig::of(body), centre: c, refs, hair, hair_tris }
 }
 
 impl Fitted {
@@ -167,6 +174,7 @@ impl Fitted {
             skin: self.skin.iter().map(|(name, points, indices, skin)| (*name, place(points, skin), &indices[..])).collect(),
             head: (r[0], [axis(1), axis(2), axis(3)]),
             hair: &self.hair,
+            hair_tris: &self.hair_tris,
         }
     }
 
@@ -348,6 +356,8 @@ fn under<'a>(posed: &'a Posed, cape: &[Slot], under_skip: &[Slot]) -> impl Itera
         .filter(|(name, _, _)| !matches!(*name, "head" | "skull" | "ears" | "eyes" | "face"))
         .map(|(_, pts, idx)| (pts, *idx))
         .chain(posed.layers.iter().filter(move |(slot, name, _, _)| !cape.contains(slot) && !skip.contains(slot) && *slot != Slot::Back && *name != "collar").map(|(_, _, pts, idx)| (pts, *idx)))
+        // The hair and beard a hood's cape lies on.
+        .chain(std::iter::once((posed.hair, posed.hair_tris)))
 }
 
 /// The heights a cape is measured over: from 1.8 of the wearer's scale below the shoulder line up
@@ -495,10 +505,10 @@ fn read(folk: Folk, seed: u32, kit_seed: u32, walking: bool) -> Vec<Reading> {
 }
 
 /// What the specs hold the numbers to: nothing in front of the face and a cloak's collar under
-/// the jaw (2 cm of the wearer's scale of slack for the cloth's thickness), and a cape within a
+/// the jaw (5% of the wearer's scale of slack: the cloth's thickness above the collar's ring), and a cape within a
 /// hand's width (a hand is 0.6 to 1.0 units: 1.0 of the wearer's scale) of what is under it.
 const FACE_CLEAR: f32 = 0.0;
-const COLLAR_SLACK: f32 = 0.02;
+const COLLAR_SLACK: f32 = 0.05;
 const CAPE_CLOSE: f32 = 1.0;
 /// And in the walk, where arms and trunk move under a cape that rides the chest.
 const CAPE_CLOSE_WALKING: f32 = 1.2;

@@ -166,6 +166,17 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
         // everything but a pack.
         if hair.is_none() && slot == if hooded { Slot::Head } else { Slot::Back } {
             hair = Some((env.shoulder_clearance(), env.chest_clearance(), env.rest()));
+            // Under a hood the hair and beard are part of what its cape hangs over: drawn
+            // into the outline, so the cape lies on them and they do not show through it.
+            if let (true, Some((clearance, chest, rest))) = (hooded, &hair) {
+                let under_hood = HairFit { clearance: *clearance, chest: *chest, covered: true, rest: Some(*rest) };
+                for part in body.hair_mesh(under_hood).parts {
+                    for &p in &part.positions {
+                        let q = env.torso(p);
+                        env.outline.add(q);
+                    }
+                }
+            }
         }
         for (_, item) in worn.iter().filter(|(s, _)| *s == slot) {
             let mesh = match (slot, item) {
