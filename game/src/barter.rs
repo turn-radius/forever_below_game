@@ -12,13 +12,14 @@
 //!   until Accept; Cancel, Esc or leaving the screen puts everything back as it was.
 //! - Prices are [`price`] (what the trader asks) and [`offer`] (what they pay), from
 //!   `data/barter_rules.json`: our own numbers, tuned by tier and by the faction's standing.
-//! - Accept ([`settle`]) is all or nothing. The delver pays from their purses and is paid into
-//!   one (a new purse if they carry none); the trader pays from the purse on their shelf
+//! - Accept ([`settle`]) is all or nothing. The delver pays from their coin purse, then any
+//!   purses they carry unopened ([`crate::enchanting::pay`]), and is paid into their coin purse
+//!   ([`Inventory::coins`]); the trader pays from the purse on their shelf
 //!   ([`crate::shelf::Shelf::purse`]), so they can run out. What the delver sells stays on the
 //!   shelf through a restock. A trade moves the faction's standing a little and meets it.
 //!
 //! `FB_BARTER=1` presses Barter on the folk nearest the delver a few dozen frames in, for
-//! captures. `FB_BARTER=deal` also gives the delver a purse and starts a deal (the first ware to
+//! captures. `FB_BARTER=deal` also gives the delver 40 gp and starts a deal (the first ware to
 //! the pack, the first thing they carry to the shelf), and `FB_BARTER=accept` then accepts it.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,7 +30,7 @@ use bevy::{
     window::{CursorOptions, PrimaryWindow},
 };
 use fb_faction::{Band, Faction, StandingRules, Tier, Trade};
-use fb_items::{Coins, Item, ItemParts, Slot};
+use fb_items::{Coins, Item, Slot};
 use serde::Deserialize;
 
 use crate::combat::feedback::Corpse;
@@ -37,13 +38,14 @@ use crate::enchanting::{plan_pay, wallet};
 use crate::folk::{AimedFolk, Denizen};
 use crate::folk_routine::Routine;
 use crate::hostility::Hostility;
+use crate::inventory::card::Price;
 use crate::inventory::{Drag, FloorChange, GridView, Inventory, ItemId, Location, OpenContainer, Placement, Refusal, Target, Toasts};
 use crate::keymap::{Action, ActionInput};
 use crate::play::{DelveSystems, Player, Screen, ScreenOpen, show_screen};
 use crate::record::WorldRecord;
 use crate::shelf::Shelf;
 use crate::talk::{Service, ServiceChosen};
-use crate::ui::{ACCENT, BAD, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, node_rect, ui_cursor};
+use crate::ui::{ACCENT, BAD, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, coin_spans, node_rect, ui_cursor};
 
 /// A number for each tier.
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -211,18 +213,19 @@ impl Session {
         deal
     }
 
-    /// The price on `id`'s card while bartering: what a ware costs, or what the trader pays for
-    /// something of the delver's.
-    pub fn tag(&self, inventory: &Inventory, id: ItemId) -> Option<String> {
+    /// The price on `id`'s card and in its cell while bartering: what a ware costs, and whether
+    /// the delver can pay it, or what the trader pays for something of the delver's.
+    pub fn tag(&self, inventory: &Inventory, id: ItemId) -> Option<Price> {
         let item = inventory.item(id)?;
         if item.coins.is_some() || id == self.shelf {
             return None;
         }
+        let worth = item.value();
         if self.stock.contains(&id) {
-            return price(item, self.trade, self.band).map(|p| format!("Costs {}", Coins::from_copper(p).short()));
+            return price(item, self.trade, self.band).map(|p| Price::Costs { price: Coins::from_copper(p), worth, afford: wallet(inventory).total_copper() >= p });
         }
         if inventory.is_carried(id) || self.on_shelf(inventory, id) {
-            return offer(item, self.trade, self.band).map(|p| format!("Pays {}", Coins::from_copper(p).short()));
+            return offer(item, self.trade, self.band).map(|p| Price::SellsFor { price: Coins::from_copper(p), worth });
         }
         None
     }
@@ -383,9 +386,13 @@ impl Barter {
     }
 
     /// A double-click on `id`: a ware goes to the pack (or the hands, if it is too long for the
-    /// pack); the delver's own goes on the shelf.
+    /// pack); the delver's own goes on the shelf. A purse of theirs is opened as at any other
+    /// time (`None`, left to [`crate::inventory::quick`]).
     pub fn quick(&mut self, inventory: &mut Inventory, id: ItemId) -> Option<Result<Vec<FloorChange>, Refusal>> {
         let session = self.session.as_mut()?;
+        if inventory.is_carried(id) && inventory.item(id).is_some_and(|i| i.coins.is_some()) {
+            return None;
+        }
         session.note(inventory, id);
         let session = &*session;
         let done = if session.on_shelf(inventory, id) {
@@ -414,8 +421,8 @@ impl Barter {
         true
     }
 
-    /// The price line for `id`'s card, while bartering.
-    pub fn tag(&self, inventory: &Inventory, id: ItemId) -> Option<String> {
+    /// The price for `id`'s card and cell, while bartering.
+    pub fn tag(&self, inventory: &Inventory, id: ItemId) -> Option<Price> {
         self.session.as_ref()?.tag(inventory, id)
     }
 }
@@ -536,7 +543,7 @@ pub struct Receipt {
 }
 
 /// Settles the deal on `session`: the delver pays or is paid, the wares change hands, the shelf
-/// is updated. All or nothing: on `Err` (short of coin, no room for coin, nothing to settle)
+/// is updated. All or nothing: on `Err` (short of coin, the trader short of coin, nothing to settle)
 /// nothing has moved. The standing is the caller's to move.
 pub fn settle(inventory: &mut Inventory, session: &mut Session, shelf: &mut Shelf) -> Result<Receipt, String> {
     let deal = session.deal(inventory);
@@ -552,37 +559,14 @@ pub fn settle(inventory: &mut Inventory, session: &mut Session, shelf: &mut Shel
     } else if balance > 0 && shelf.purse < balance as u64 {
         return Err(format!("{} cannot afford that: {} in their purse.", session.name, Coins::from_copper(shelf.purse).short()));
     }
-    // The coin the delver is paid goes into a purse they carry, or a new one: the one step that
-    // can fail after the checks, and it is undone if it does.
-    if balance > 0 {
-        let amount = balance as u64;
-        let carried = inventory.ids().filter(|&id| inventory.is_carried(id)).find(|&id| inventory.item(id).is_some_and(|i| i.coins.is_some()));
-        let holding = |item: &Item, copper: u64| {
-            let mut parts = ItemParts::from(item.clone());
-            parts.coins = Some(Coins::from_copper(copper));
-            Item::from_parts(parts)
-        };
-        match carried {
-            Some(id) => {
-                let fuller = inventory.item(id).and_then(|i| holding(i, i.coins.map_or(0, Coins::total_copper) + amount)).ok_or("Cannot take the coin.")?;
-                if !inventory.replace_item(id, fuller) {
-                    return Err("Cannot take the coin.".into());
-                }
-            }
-            None => {
-                let purse = fb_items::roll_item("Purse", session.faction.0.into()).and_then(|p| holding(&p, amount)).ok_or("Cannot take the coin.")?;
-                let id = inventory.add(purse);
-                if inventory.stow(id).is_err() {
-                    inventory.forget(id);
-                    return Err("No room in your pack for the coin.".into());
-                }
-            }
-        }
+    if let Some(payment) = paying
+        && !payment.make(inventory)
+    {
+        return Err("Cannot pay.".into());
     }
-    if let Some(paid) = paying {
-        for (id, purse) in paid {
-            inventory.replace_item(id, purse);
-        }
+    // The coin the delver is paid goes into their coin purse.
+    if balance > 0 {
+        inventory.add_coins(Coins::from_copper(balance as u64));
     }
     // The shelf as it stands is what the trader has now: rolled wares and sold-in ones apart.
     let entries: Vec<ItemId> = inventory.grid(session.shelf).map(|g| g.entries().iter().map(|e| e.id).collect()).unwrap_or_default();
@@ -660,7 +644,7 @@ fn barter_for_capture(
 }
 
 /// For captures (`FB_BARTER=deal` or `accept`): a few frames after the screen opens, gives the
-/// delver a purse of 40 gp if they carry none, moves the first ware to the pack and the first
+/// delver 40 gp if they carry none, moves the first ware to the pack and the first
 /// thing they carry that is not a purse to the shelf; for `accept`, settles it after that.
 fn deal_for_capture(
     mut barter: ResMut<Barter>,
@@ -685,10 +669,7 @@ fn deal_for_capture(
             let _ = inventory.stow(blade);
         }
         if wallet(&inventory).total_copper() == 0 {
-            let mut parts = ItemParts::from(fb_items::roll_item("Purse", 4).expect("a purse"));
-            parts.coins = Some(Coins::from_copper(4000));
-            let purse = inventory.add(Item::from_parts(parts).expect("a purse"));
-            let _ = inventory.stow(purse);
+            inventory.add_coins(Coins::from_copper(4000));
         }
         let ware = inventory.grid(session.shelf).and_then(|g| g.entries().first().map(|e| e.id));
         if let Some(ware) = ware {
@@ -942,10 +923,17 @@ pub fn panel(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, barter: &Barter
                 head.spawn((TextSpan::new(format!("{} \u{b7} ", session.trade.label())), UiFonts::style(&fonts.body, 15.0, MUTED)));
                 head.spawn((TextSpan::new(session.band.label()), UiFonts::style(&fonts.body_medium, 15.0, band_colour)));
             });
-            panel.spawn((Text::new(format!("Buying {} \u{b7} {}", deal.buying.len(), coin(deal.cost))), UiFonts::style(&fonts.body, 17.0, INK)));
-            panel.spawn((Text::new(format!("Selling {} \u{b7} {}", deal.selling.len(), coin(deal.offer))), UiFonts::style(&fonts.body, 17.0, INK)));
+            for (word, count, copper) in [("Buying", deal.buying.len(), deal.cost), ("Selling", deal.selling.len(), deal.offer)] {
+                panel.spawn((Text::new(format!("{word} {count} \u{b7} ")), UiFonts::style(&fonts.body, 17.0, INK))).with_children(|row| {
+                    coin_spans(row, fonts, Coins::from_copper(copper), 16.0);
+                });
+            }
             panel.spawn((Text::new(line), UiFonts::style(&fonts.body_medium, 18.0, colour)));
-            panel.spawn((Text::new(format!("You carry {} \u{b7} {} has {}", coin(mine), session.name, coin(session.purse))), UiFonts::style(&fonts.mono, 12.5, MUTED)));
+            panel.spawn((Text::new("You carry "), UiFonts::style(&fonts.mono, 12.5, MUTED))).with_children(|row| {
+                coin_spans(row, fonts, Coins::from_copper(mine), 12.5);
+                row.spawn((TextSpan::new(format!(" \u{b7} {} has ", session.name)), UiFonts::style(&fonts.mono, 12.5, MUTED)));
+                coin_spans(row, fonts, Coins::from_copper(session.purse), 12.5);
+            });
             if let Some((said, for_totals)) = &barter.notice
                 && (*for_totals == (0, 0) || *for_totals == (deal.cost, deal.offer))
             {

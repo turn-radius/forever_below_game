@@ -25,22 +25,52 @@ pub fn scrap_item(inventory: &mut Inventory, stock: &mut EnchantingStock, id: It
     Some(salvage)
 }
 
-/// The coin the delver carries: the sum of the purses they have on them, in a pack or worn.
-/// There is no wallet of its own yet, so coin lives in purses.
+/// The coin the delver carries: their coin purse ([`Inventory::coins`]) and the purses they have
+/// on them unopened, in a pack or worn.
 pub fn wallet(inventory: &Inventory) -> Coins {
-    inventory.ids().filter(|&id| inventory.is_carried(id)).filter_map(|id| inventory.item(id)?.coins).sum()
+    inventory.coins() + carried_purses(inventory).filter_map(|id| inventory.item(id)?.coins).sum()
 }
 
-/// What `copper` taken out of the delver's carried purses, the first ones first, would leave in
-/// each: the purses as they would be, nothing changed yet. `None` when they carry less, or a
-/// purse cannot be rebuilt.
-pub fn plan_pay(inventory: &Inventory, copper: u64) -> Option<Vec<(ItemId, Item)>> {
+/// The purses the delver carries unopened.
+fn carried_purses(inventory: &Inventory) -> impl Iterator<Item = ItemId> + '_ {
+    inventory.ids().filter(|&id| inventory.is_carried(id) && inventory.item(id).is_some_and(|i| i.coins.is_some()))
+}
+
+/// A payment worked out and not yet made: what the coin purse and each purse drawn on would
+/// hold after it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Payment {
+    pub coins: Coins,
+    pub purses: Vec<(ItemId, Item)>,
+}
+
+impl Payment {
+    /// Makes the payment. `false`, and nothing changed, when a purse is no longer there or
+    /// cannot take its new coins.
+    pub fn make(self, inventory: &mut Inventory) -> bool {
+        let Some(before) = self.purses.iter().map(|(id, _)| Some((*id, inventory.item(*id)?.clone()))).collect::<Option<Vec<_>>>() else { return false };
+        if !self.purses.into_iter().all(|(id, purse)| inventory.replace_item(id, purse)) {
+            for (id, purse) in before {
+                inventory.replace_item(id, purse);
+            }
+            return false;
+        }
+        inventory.set_coins(self.coins);
+        true
+    }
+}
+
+/// What taking `copper` from the delver would leave: the coin purse first, then the purses they
+/// carry, the first ones first. Nothing is changed yet. `None` when they carry less, or a purse
+/// cannot be rebuilt.
+pub fn plan_pay(inventory: &Inventory, copper: u64) -> Option<Payment> {
     if wallet(inventory).total_copper() < copper {
         return None;
     }
-    let mut owed = copper;
-    let mut paid = Vec::new();
-    for id in inventory.ids().filter(|&id| inventory.is_carried(id)) {
+    let held = inventory.coins().total_copper();
+    let mut owed = copper - held.min(copper);
+    let mut payment = Payment { coins: Coins::from_copper(held - held.min(copper)), purses: Vec::new() };
+    for id in carried_purses(inventory) {
         if owed == 0 {
             break;
         }
@@ -49,20 +79,16 @@ pub fn plan_pay(inventory: &Inventory, copper: u64) -> Option<Vec<(ItemId, Item)
         let take = coins.total_copper().min(owed);
         let mut parts = ItemParts::from(item.clone());
         parts.coins = Some(Coins::from_copper(coins.total_copper() - take));
-        paid.push((id, Item::from_parts(parts)?));
+        payment.purses.push((id, Item::from_parts(parts)?));
         owed -= take;
     }
-    (owed == 0).then_some(paid)
+    (owed == 0).then_some(payment)
 }
 
-/// Takes `copper` out of the delver's carried purses, the first ones first. `false`, and nothing
-/// taken, when they carry less.
+/// Takes `copper` from the delver: the coin purse first, then the purses they carry. `false`,
+/// and nothing taken, when they carry less.
 pub fn pay(inventory: &mut Inventory, copper: u64) -> bool {
-    let Some(paid) = plan_pay(inventory, copper) else { return false };
-    for (id, purse) in paid {
-        inventory.replace_item(id, purse);
-    }
-    true
+    plan_pay(inventory, copper).is_some_and(|payment| payment.make(inventory))
 }
 
 /// A piece of work at the bench.
@@ -162,10 +188,12 @@ pub fn do_work_in(inventory: &mut Inventory, stock: &mut EnchantingStock, id: It
     if !stock.spend(cost.essence, &cost.materials) {
         return Err(Declined::Short("Cannot pay.".into()));
     }
-    let before: Vec<(ItemId, Item)> = paid.iter().filter_map(|(id, _)| Some((*id, inventory.item(*id)?.clone()))).collect();
-    let committed = paid.into_iter().all(|(id, purse)| inventory.replace_item(id, purse)) && inventory.replace_item(id, changed);
+    let coins_before = inventory.coins();
+    let before: Vec<(ItemId, Item)> = paid.purses.iter().filter_map(|(id, _)| Some((*id, inventory.item(*id)?.clone()))).collect();
+    let committed = paid.make(inventory) && inventory.replace_item(id, changed);
     if !committed {
         *stock = snapshot;
+        inventory.set_coins(coins_before);
         for (id, purse) in before {
             inventory.replace_item(id, purse);
         }
@@ -433,6 +461,28 @@ mod tests {
         assert_eq!(wallet(&inventory).gp, 3);
         assert!(pay(&mut inventory, 120));
         assert_eq!(wallet(&inventory).total_copper(), 180);
+    }
+
+    #[test]
+    fn coin_comes_out_of_the_coin_purse_first_then_the_purses() {
+        let (mut inventory, _) = kit(|_| true, 2);
+        inventory.set_coins(Coins { gp: 3, sp: 0, cp: 0 });
+        assert_eq!(wallet(&inventory).gp, 5);
+        assert!(pay(&mut inventory, 400));
+        assert_eq!(inventory.coins(), Coins::default());
+        assert_eq!(wallet(&inventory).total_copper(), 100, "the last gold from the purse");
+        assert!(!pay(&mut inventory, 101));
+        assert_eq!(wallet(&inventory).total_copper(), 100, "nothing taken when short");
+    }
+
+    #[test]
+    fn a_purse_left_behind_is_not_coin_to_pay_with() {
+        let mut inventory = Inventory::default();
+        inventory.set_coins(Coins { gp: 1, sp: 0, cp: 0 });
+        let mut parts = ItemParts::from(roll_item("Purse", 4).unwrap());
+        parts.coins = Some(Coins { gp: 9, sp: 0, cp: 0 });
+        inventory.add(Item::from_parts(parts).unwrap());
+        assert_eq!(wallet(&inventory).gp, 1);
     }
 
     #[test]
