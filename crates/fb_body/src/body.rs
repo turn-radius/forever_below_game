@@ -176,7 +176,9 @@ impl Body {
             ..Bulge::NONE
         };
         let seat = Bulge { y: hip_y - 0.02 * t, spread: 0.15 * t, depth: 0.17 * ws * (1.0 + 0.4 * fem), sharpness: 5, toward: BACK, pair: 0.55, fall: -0.3, cleft: 1.0, ..Bulge::NONE };
-        let lumbar = Bulge { y: waist_y + 0.05 * t, spread: 0.2 * t, depth: -0.09 * ws, sharpness: 2, toward: BACK, ..Bulge::NONE };
+        let lumbar = Bulge { y: waist_y + 0.05 * t, spread: 0.26 * t, depth: -0.05 * ws, sharpness: 2, toward: BACK, ..Bulge::NONE };
+        // The front of the pelvis draws in below the belly to the thighs' own front, so the
+        // groin narrows into the inner thighs instead of standing out over them (skin only).
         let ankle_y = 0.048 * h;
         let head = HeadForm {
             centre: [0.0, head_y, 0.12 * s],
@@ -206,7 +208,7 @@ impl Body {
         );
         let arm = |side: Side| arm_limb(race, h, ws, fem, mu, sw, shoulder_y, side, pose.arm(side));
         let leg = |side: Side| leg_limb(race, s, ws, fem, mu, &hip, ankle_y, side);
-        Body {
+        let mut body = Body {
             spec: spec.clone(),
             pose,
             height: h,
@@ -231,6 +233,32 @@ impl Body {
             arms: [arm(Side::Right), arm(Side::Left)],
             legs: [leg(Side::Right), leg(Side::Left)],
             skin,
+        };
+        body.draw_in_pubis();
+        body
+    }
+
+    /// Draws the front of the pelvis in to the thighs' own front, where the trunk would stand
+    /// out past them below the belly (a rounded mass over the groin, read from the front as a
+    /// second rear): the groin then narrows into the inner thighs. The swell it removes is
+    /// measured on this body, so a dwarf whose thighs are already as deep as its hips loses
+    /// none (skin only; garments are built on the form and measured over the skin).
+    fn draw_in_pubis(&mut self) {
+        let (t, s) = (self.trunk_length, self.scale);
+        let leg = self.leg(Side::Left);
+        let (top, bottom) = (self.hip_y + 0.05 * t, self.hip_y - 0.14 * t);
+        let (mut at, mut excess) = (self.hip_y, 0.0f32);
+        for i in 0..=24 {
+            let y = top + (bottom - top) * i as f32 / 24.0;
+            let leg_t = (0..=400).map(|k| k as f32 / 400.0).min_by(|a, b| (leg.point_at(*a)[1] - y).abs().total_cmp(&(leg.point_at(*b)[1] - y).abs())).unwrap_or(1.0);
+            let thigh_front = leg.point_at(leg_t)[2] + self.leg_radius(leg, leg_t, 0.0);
+            let over = self.skin.section(FRONT, y, 0.0)[1] - thigh_front - 0.02 * s;
+            if over > excess {
+                (at, excess) = (y, over);
+            }
+        }
+        if excess > 0.0 {
+            self.skin.bulges.push(Bulge { y: at, spread: 0.16 * t, depth: -excess * 0.7, sharpness: 2, toward: FRONT, fall: 0.6, ..Bulge::NONE });
         }
     }
 
@@ -595,7 +623,7 @@ impl Body {
         let thigh = 0.05 * smoothstep(0.0, th, t) * (1.0 - smoothstep(th, tk, t)) * (front * front - 0.5);
         // The back of the thigh's top fills out under the seat, so the buttock rounds into the
         // thigh in a fold instead of overhanging it as a rim.
-        let under_seat = 0.28 * (-((t - 1.5 * th) / (0.9 * th)).powi(2)).exp() * (-front).max(0.0).powi(2);
+        let under_seat = 0.24 * (-((t - 1.7 * th) / (1.0 * th)).powi(2)).exp() * (-front).max(0.0).powi(2);
         leg.radius_at(t) * (1.0 + calf + knee + thigh + under_seat)
     }
 
