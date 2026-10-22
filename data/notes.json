@@ -1,0 +1,136 @@
+{
+  "note_creature": [
+    "I escaped from #creature.a# on the #depth# level. #companions# #creature_advice#",
+    "#creatures.capitalize#. #creatures.capitalize# on the #depth# level, more than I could count. #companions# #creature_advice#",
+    "If you are reading this, you have come further than #companion_name#. #creatures.capitalize# took #them# on the #depth# level. #creature_advice#",
+    "Day #day#. #creature.a.capitalize# found our camp. #companions# I am writing this by the last of my #light#.",
+    "Beware the #creatures#. #creature_advice# #signoff#"
+  ],
+  "companions": [
+    "My companions are dead.",
+    "My companions are dead, all of them.",
+    "I alone came out.",
+    "#companion_name# did not come out.",
+    "I left #companion_name# behind. Gods forgive me.",
+    "We were four. Now I am one."
+  ],
+  "them": ["him", "her", "them"],
+  "creature_advice": [
+    "Do not go looking for them.",
+    "Keep your light high and your back to a wall.",
+    "Do not sleep where they can reach you.",
+    "Run. Do not be brave.",
+    "They hear you before you see them.",
+    "Fire turns them, for a while.",
+    "Do not go back for the bodies."
+  ],
+
+  "note_trader": [
+    "See #trader# for the best #wares#. Signed, #trader_faction#",
+    "#trader# of #trader_faction# deals in #wares#, and fairly. Tell them #writer# sent you.",
+    "Need #wares#? Ask for #trader#, the #trade# of #trader_faction#. Tell them nothing of me.",
+    "#trader#, #trade# to #trader_faction#: #wares#, and no questions asked.",
+    "Owe #trader# eleven silver for #wares#. Must pay before they send #trader_faction# after me."
+  ],
+
+  "note_book": [
+    "I left my research in the #book_place#. It is my treatise on #book_topic#.",
+    "My treatise on #book_topic# lies in the #book_place#. Whoever finds it, read it well. It cost me #cost#.",
+    "Thirty years of study, my treatise on #book_topic#, and I left it in the #book_place#. If I do not come back for it, it is yours.",
+    "There is a book in the #book_place# on #book_topic#. Read it before you go deeper. I wish I had."
+  ],
+  "cost": ["my eyes", "my friends", "my youth", "everything", "three fingers"],
+
+  "note_hate": [
+    "I have learned #hater# wish #hated# eradicated, every last one.",
+    "#hater.capitalize# want #hated# gone from the deep. Do not walk among them with #hated# at your side.",
+    "Overheard: #hater# will pay for the end of #hated#. I did not stay to ask how much.",
+    "Whatever you do, do not speak well of #hated# where #hater# can hear it.",
+    "#hater.capitalize# hate #hated# above all things. Remember it."
+  ],
+
+  "note_like": [
+    "#liker.capitalize# are kind to #liked#. Find them if you are one.",
+    "I have learned #liker# favour #liked#. It may buy you a meal, or your life.",
+    "Word is #liker# look after #liked#. Not after me."
+  ],
+
+  "note_place": [
+    "Do not linger in the #place#. #place_warning#",
+    "Something moves in the #place# at night. #place_warning#",
+    "I hid what I had in the #place#. If I am dead, take it.",
+    "The #place# was #past_line#. Now it is only dark.",
+    "Meet me in the #place#. Come alone. Bring a light."
+  ],
+  "place_warning": [
+    "I heard it breathe.",
+    "The door shut behind me twice.",
+    "It is colder there than it should be.",
+    "Count the bones when you go in. Count them again when you leave.",
+    "Whatever kept it is not gone."
+  ],
+
+  "note_faction": [
+    "#faction.capitalize# claim they know the way out. They lie, or they would have left.",
+    "Trust #faction# no further than a torch throws its light.",
+    "#faction.capitalize# took my coin and my boots. Remember the name.",
+    "If you are lost, #faction# may take you in. If you are lucky.",
+    "#faction.capitalize# hold this level. They let me pass. They will not let me pass twice."
+  ],
+
+  "note_lament": [
+    "The door shut behind me. It has not opened since. #signoff#",
+    "There is a way out. There must be. Everyone says so. #signoff#",
+    "Down is the only way. I tell myself that up is down too, somewhere. #signoff#",
+    "I have forgotten the colour of the sky. I have lost count of the days. #signoff#",
+    "If you find this, tell #companion_name# I tried.",
+    "Food: none. Water: little. Light: #light_left#. Hope: some. #signoff#",
+    "The walls are moving. I am sure of it now. #signoff#"
+  ],
+
+  "signoff": [
+    "#writer#",
+    "- #writer#",
+    "Signed, #writer#",
+    "#writer#, #depth# level",
+    "",
+    ""
+  ],
+  "day": ["three", "nine", "twelve", "nineteen", "forty", "sixty-one", "ninety"],
+  "light": ["candle", "torch", "lamp oil", "tinder"],
+  "light_left": ["one candle", "a stub of torch", "a thumb of oil", "none"],
+
+  "wares_armorer": ["armour", "mail and plate", "helms and hauberks"],
+  "wares_weaponsmith": ["blades", "steel", "swords and axes"],
+  "wares_bowyer": ["bows", "bows and arrows", "strings and shafts"],
+  "wares_tentmaker": ["tents", "a dry place to sleep", "canvas and rope"],
+  "wares_general_goods": ["supplies", "rope, oil and rations", "whatever you lack"],
+  "wares_alchemist": ["potions and cures", "draughts and salves", "remedies"],
+  "wares_enchanter": ["enchantments", "charms and wards", "a little magic"],
+
+  "topic_strength": [
+    "lifting stones of increasing weight to strengthen the arm",
+    "the strength to be had from hauling one's own pack twice over",
+    "a regimen of climbing for a stronger back"
+  ],
+  "topic_dexterity": [
+    "working exercises into your daily routine to sharpen your dexterity",
+    "juggling knives, and the nimbleness it teaches",
+    "the quick hand and the quicker foot"
+  ],
+  "topic_constitution": [
+    "hardening the body against hunger, cold and rot",
+    "fasting, and the endurance it builds",
+    "cold water, and why the deep cannot kill a body that bathes in it"
+  ],
+  "topic_intelligence": [
+    "the reckoning of the abyss's depth by the falling of stones",
+    "memory palaces, and holding a map in one's head",
+    "the grammar of old runes"
+  ],
+  "topic_wisdom": [
+    "listening to the dark before stepping into it",
+    "the patience of the hermit",
+    "knowing when to turn back"
+  ]
+}

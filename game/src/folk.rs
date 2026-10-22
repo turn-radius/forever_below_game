@@ -66,8 +66,7 @@ impl Plugin for FolkPlugin {
     }
 }
 
-/// Salts for a person's name and dirt, drawn apart from their body and outfit. Our own.
-const NAME_SALT: u32 = 0x4E41_4D45;
+/// Salt for a person's dirt, drawn apart from their body and outfit. Our own.
 const DIRT_SALT: u32 = 0xD127_0001;
 
 /// How far above a held flame its light hangs, in world units (10 cm).
@@ -114,7 +113,7 @@ impl Person {
     /// [`fb_items::Odds::kit`] for it: a pure function of the two.
     pub fn of(spot: &FolkSpot, faction: &FactionSpec, depth: u32) -> Person {
         let odds = fb_items::Odds::kit(depth);
-        let mut rng = Mulberry32::new(spot.seed ^ NAME_SALT);
+        let mut rng = spot.name_stream();
         let name = fb_items::naming::folk_name(&mut rng, spot.folk.key());
         let outfit = *rng.pick(&faction.outfit_keys());
         let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {

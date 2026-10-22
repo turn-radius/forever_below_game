@@ -4,6 +4,7 @@
 use crate::armory_base::{base_for, roll_shape};
 use crate::dress::dress;
 use crate::naming::{Legend, item_name, legendize, legendize_in, noun};
+use crate::notes::Lore;
 use crate::profile::{Profile, profile};
 use crate::rarity::{Odds, roll_rarity_for};
 use crate::tables::Affix;
@@ -107,6 +108,8 @@ pub struct Item {
     /// Lines of history beyond a legendary's legend ("Made by Brenna Holt"), in the order they
     /// happened; the hover card shows them after the legend's.
     pub history: Vec<String>,
+    /// What is written on it: a note's words, written where it is found ([`Item::in_world`]).
+    pub words: Option<String>,
 }
 
 /// The parts an [`Item`] is built from by [`Item::from_parts`], rather than rolled: what an item
@@ -123,11 +126,12 @@ pub struct ItemParts {
     pub history: Vec<String>,
     pub coins: Option<Coins>,
     pub odds: Odds,
+    pub words: Option<String>,
 }
 
 impl From<Item> for ItemParts {
     fn from(i: Item) -> Self {
-        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds }
+        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words }
     }
 }
 
@@ -138,7 +142,7 @@ impl Item {
     /// table knows. An item taken apart ([`ItemParts::from`]) and put back together is equal.
     pub fn from_parts(parts: ItemParts) -> Option<Item> {
         crate::armory_base::armory_base(&parts.base)?;
-        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds } = parts;
+        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words } = parts;
         let mut profile = profile(&base, &shape);
         if let Some(c) = coins {
             profile.description = c.to_string();
@@ -146,7 +150,7 @@ impl Item {
         for a in &affixes {
             a.apply_to_stats(&mut profile.stats);
         }
-        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history })
+        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words })
     }
 }
 
@@ -156,11 +160,17 @@ impl Item {
         self.legend.as_ref().map_or(&self.name, |l| &l.title)
     }
 
-    /// This item found in a world whose factions are called `factions`: a legendary's history
-    /// names those rather than factions of the grammar's making. Its title stays, and a legend made at
-    /// an enchanter's bench (`Legend::made`) is left as it is: it tells its making, not a found relic. Pure in the
-    /// item's seed and the names, and a no-op for anything not legendary or for no names.
-    pub fn in_world(mut self, factions: &[String]) -> Item {
+    /// This item found on a level that knows `lore` of itself. A legendary's history names the
+    /// lore's factions rather than factions of the grammar's making: its title stays, and a legend
+    /// made at an enchanter's bench (`Legend::made`) is left as it is, as it tells its making, not
+    /// a found relic. A note with nothing written on it is written on, of the level
+    /// ([`crate::notes::write_note`]); one already written keeps its words wherever it goes. Pure
+    /// in the item's seed and the lore, and a no-op for anything else.
+    pub fn in_world(mut self, lore: &Lore) -> Item {
+        if self.words.is_none() && self.is_note() {
+            self.words = Some(crate::notes::write_note(self.seed, lore));
+        }
+        let factions = &lore.factions;
         if factions.is_empty() {
             return self;
         }
@@ -173,6 +183,11 @@ impl Item {
             legend.history = told.history;
         }
         self
+    }
+
+    /// Whether it is a note, which [`Item::in_world`] writes on.
+    pub fn is_note(&self) -> bool {
+        matches!(&self.shape, armory::Item::Writing(s) if s.piece.kind == armory::families::writing::WritingKind::Note)
     }
 
     /// How far its light reaches against its base's: 1.5 for a Gleaming torch (+10 ft on 20),
@@ -271,7 +286,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
         if let Some(c) = coins {
             profile.description = c.to_string();
         }
-        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![] });
+        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None });
     }
 
     let (rarity, affixes) = roll_rarity_for(&mut rng, &profile.tags, profile.slot, &odds);
@@ -283,7 +298,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
     dress(&mut shape, rarity, &affixes, seed);
     // The fuel it starts with is what the item's `BurnTime` makes of a full one.
     shape.scale_fuel(profile.stats.burn_time);
-    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![] })
+    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None })
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that
@@ -470,19 +485,34 @@ mod tests {
     #[test]
     fn a_legend_in_a_world_names_that_worlds_factions() {
         let names: Vec<String> = ["the Scale Court", "the Ember Tithe", "the Low Choir"].iter().map(|s| s.to_string()).collect();
+        let lore = Lore { factions: names.clone(), ..Lore::default() };
         let found: Vec<Item> = (1..2_000).filter_map(|seed| roll_item_with("Sword", seed, Odds::loot(8))).filter(|i| i.rarity == Rarity::Legendary).take(20).collect();
         assert!(found.len() >= 3);
         for item in found {
-            let here = item.clone().in_world(&names);
+            let here = item.clone().in_world(&lore);
             let legend = here.legend.as_ref().unwrap();
             assert_eq!(legend.title, item.legend.as_ref().unwrap().title, "the title stays");
             assert!(names.iter().any(|n| legend.history[0].contains(&format!("by {n}."))), "{}", legend.history[0]);
-            assert_eq!(here, item.clone().in_world(&names), "deterministic");
-            assert_eq!(item.clone().in_world(&[]), item, "no names leaves the grammar's");
+            assert_eq!(here, item.clone().in_world(&lore), "deterministic");
+            assert_eq!(item.clone().in_world(&Lore::default()), item, "no names leaves the grammar's");
             assert!(item.legend.as_ref().unwrap().history[0].contains(" by the "), "the grammar still names one");
         }
         let common = roll_item_with("Sword", 1, Odds::loot(1)).unwrap();
-        assert_eq!(common.clone().in_world(&names), common);
+        assert_eq!(common.clone().in_world(&lore), common);
+    }
+
+    #[test]
+    fn a_note_found_in_a_world_is_written_on_once() {
+        let lore = Lore { depth: 4, creatures: vec![crate::notes::Thing::new("troll", "trolls")], ..Lore::default() };
+        let note = roll_item("Note", 7).unwrap();
+        assert_eq!(note.words, None, "rolled outside a world it is blank");
+        let found = note.clone().in_world(&lore);
+        assert_eq!(found.words.as_deref(), Some(crate::notes::write_note(7, &lore).as_str()));
+        let elsewhere = found.clone().in_world(&Lore { depth: 9, ..Lore::default() });
+        assert_eq!(elsewhere.words, found.words, "carried to another level, it keeps its words");
+        for base in ["Scroll", "Book", "Sword"] {
+            assert_eq!(roll_item(base, 7).unwrap().in_world(&lore).words, None, "{base}");
+        }
     }
 
     #[test]
