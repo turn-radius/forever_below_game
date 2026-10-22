@@ -18,12 +18,16 @@ use super::doll::PORTRAIT;
 use super::items::Inventory;
 use crate::character::{Character, Derived};
 use crate::play::{Screen, ScreenOpen, SheetTab};
-use crate::ui::{ACCENT, FAINT, FRAME_GOLD, INK, MUTED, STYGIAN, STYGIAN_DEEP, STYGIAN_LIGHT, UiFonts, node_rect, numbers_line, ui_cursor};
+use crate::ui::{ACCENT, FAINT, FRAME_GOLD, INK, MUTED, STYGIAN, STYGIAN_DEEP, STYGIAN_LIGHT, UiFonts, coin_spans, node_rect, numbers_line, ui_cursor};
 use bevy::window::PrimaryWindow;
 
 /// The line of numbers under the name.
 #[derive(Component, Debug)]
 pub struct HeaderStats;
+
+/// The line under the numbers with the delver's coin purse ([`Inventory::coins`]).
+#[derive(Component, Debug)]
+pub struct HeaderPurse;
 
 /// The line saying why a drop was refused, beside the tabs.
 #[derive(Component, Debug)]
@@ -104,6 +108,14 @@ pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &fb_cha
             text.spawn((Text::new(identity_line(character)), UiFonts::style(&fonts.body, 14.0, MUTED)));
             text.spawn((HeaderStats, Node { margin: UiRect::top(px(2)), ..default() })).with_children(|line| {
                 numbers_line(line, fonts, &stats_line(&character.derive_with(rules, inventory)), 13.0);
+            });
+            text.spawn((HeaderPurse, Text::new("Purse "), UiFonts::style(&fonts.mono, 13.0, MUTED))).with_children(|line| {
+                let coins = inventory.coins();
+                if coins.is_empty() {
+                    line.spawn((TextSpan::new("empty"), UiFonts::style(&fonts.mono, 13.0, MUTED)));
+                } else {
+                    coin_spans(line, fonts, coins, 13.0);
+                }
             });
         });
     });

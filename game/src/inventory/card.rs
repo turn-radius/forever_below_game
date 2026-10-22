@@ -6,14 +6,48 @@
 //! worn adds a compare card beside it: what is worn in its place, and what a swap changes.
 
 use bevy::{prelude::*, ui::ComputedUiRenderTargetInfo};
-use fb_items::{Item, Kind, Rarity, Slot, stats::Stats, tables::slot_places};
+use fb_items::{Coins, Item, Kind, Rarity, Slot, stats::Stats, tables::slot_places};
 
 use super::icon::Icons;
 use super::items::{Inventory, ItemId, Location};
 use super::{Dragging, Hovered};
 use crate::keymap::{Action, ActionInput};
 use crate::play::{Screen, ScreenOpen};
-use crate::ui::{BAD, BG, FAINT, GOLD, INK, LINE, MUTED, OK, UiFonts, numbers_line, rarity_color};
+use crate::ui::{BAD, BG, FAINT, GOLD, INK, LINE, MUTED, OK, UiFonts, coin_spans, numbers_line, rarity_color};
+
+/// The price line under a card's title, its coins each in their metal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Price {
+    /// What it is worth: "Worth 1 gp 5 sp".
+    Worth(Coins),
+    /// What a purse holds, opened by a double-click: "Holds 2 gp 3 sp".
+    Holds(Coins),
+    /// A ware's price while bartering, what it is worth, and whether the delver can pay it.
+    Costs { price: Coins, worth: Coins, afford: bool },
+    /// What the trader pays for something of the delver's, and what it is worth.
+    SellsFor { price: Coins, worth: Coins },
+}
+
+impl Price {
+    /// The word before the coins, the coins, and the note after them.
+    pub fn parts(self) -> (&'static str, Coins, Option<String>) {
+        match self {
+            Price::Worth(c) => ("Worth", c, None),
+            Price::Holds(c) => ("Holds", c, Some("double-click to open".into())),
+            Price::Costs { price, worth, .. } => ("Costs", price, Some(format!("worth {}", worth.short()))),
+            Price::SellsFor { price, worth } => ("Sells for", price, Some(format!("worth {}", worth.short()))),
+        }
+    }
+
+    /// The line as plain text: "Costs 2 gp 3 sp · worth 1 gp 5 sp".
+    pub fn line(self) -> String {
+        let (word, coins, note) = self.parts();
+        match note {
+            Some(note) => format!("{word} {} \u{b7} {note}", coins.short()),
+            None => format!("{word} {}", coins.short()),
+        }
+    }
+}
 
 /// One affix on the card: what it changes, its name, and whether it is a flaw.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +65,8 @@ pub struct CardText {
     pub rarity: Rarity,
     /// A legendary's old name, under its title.
     pub subtitle: Option<String>,
+    /// What it is worth, or while bartering what it costs or sells for.
+    pub price: Price,
     /// Rarity, what it is, weight, its main numbers and footprint, as one line.
     pub meta: String,
     /// What a container holds.
@@ -121,7 +157,6 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     let s = &p.stats;
     let cells = format!("{}\u{d7}{} cells", p.footprint.cols, p.footprint.rows);
     let weight = format!("{} lb", number(s.weight));
-    let value = item.value().short();
     let meta: Vec<String> = if p.kind == Kind::Gear {
         let noun = fb_items::naming::noun(&item.base, &item.shape);
         let damage = s.damage.map(|d| {
@@ -136,15 +171,17 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
             (s.warmth > 0.0).then(|| format!("warmth +{}", number(s.warmth))),
             damage,
             (s.light > 0.0).then(|| format!("light {} ft", number(s.light))),
-            Some(value),
             Some(cells),
         ]
         .into_iter()
         .flatten()
         .collect()
     } else {
-        [(!p.description.is_empty()).then(|| p.description.clone()), Some(weight), Some(value), Some(cells)].into_iter().flatten().collect()
+        // A purse's description is its coins, which the price line says.
+        let description = (!p.description.is_empty() && item.coins.is_none()).then(|| p.description.clone());
+        [description, Some(weight), Some(cells)].into_iter().flatten().collect()
     };
+    let price = item.coins.map_or_else(|| Price::Worth(item.value()), Price::Holds);
     let contents = p.holds.as_ref().map(|holds| {
         let inside = format!("{}\u{d7}{} inside", holds.cols, holds.rows);
         match held {
@@ -159,6 +196,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         title: item.title().to_string(),
         rarity: item.rarity,
         subtitle: item.legend.as_ref().map(|l| l.subtitle.clone()),
+        price,
         meta: meta.join(" \u{b7} "),
         contents,
         affixes: item.affixes.iter().map(|a| AffixLine { text: a.text.clone(), name: a.name.clone(), good: a.good }).collect(),
@@ -528,6 +566,26 @@ fn fill_card(commands: &mut Commands, card: Entity, shown: Option<(&Item, &CardT
     });
 }
 
+/// "Costs 2 gp 3 sp", then "worth 1 gp 5 sp" under it: the word in the body face, the coins
+/// bold in their metals (red, all of them, for a ware the delver cannot pay for), the note
+/// muted on a line of its own so a narrow card never breaks it.
+fn price_line(info: &mut ChildSpawnerCommands, fonts: &UiFonts, price: Price) {
+    let (word, coins, note) = price.parts();
+    let size = 16.0;
+    info.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|column| {
+        column.spawn((Text::new(format!("{word}\u{a0}\u{a0}")), UiFonts::style(&fonts.body_medium, size, INK))).with_children(|line| {
+            if matches!(price, Price::Costs { afford: false, .. }) {
+                line.spawn((TextSpan::new(coins.short()), UiFonts::style(&fonts.mono_bold, size - 1.0, BAD)));
+            } else {
+                coin_spans(line, fonts, coins, size - 1.0);
+            }
+        });
+        if let Some(note) = note {
+            column.spawn((Text::new(note), UiFonts::style(&fonts.mono, 12.0, MUTED)));
+        }
+    });
+}
+
 /// The item's picture and what [`card_text`] says of it.
 fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, fonts: &UiFonts, icons: &mut Icons) {
     let footprint = item.profile.footprint;
@@ -549,6 +607,7 @@ fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, font
             if let Some(subtitle) = &text.subtitle {
                 info.spawn((Text::new(subtitle.clone()), UiFonts::style(&fonts.body_italic, 15.0, colour)));
             }
+            price_line(info, fonts, text.price);
             numbers_line(info, fonts, &text.meta, 12.0);
             if let Some(contents) = &text.contents {
                 numbers_line(info, fonts, contents, 12.0);
@@ -684,8 +743,8 @@ pub fn show_card(
             let fallback = crate::keymap::Keymap::default();
             let keymap = keymap.as_deref().unwrap_or(&fallback);
             let mut text = card_text(item, Some((&inventory, id)));
-            if let Some(tag) = barter.as_deref().and_then(|b| b.tag(&inventory, id)) {
-                text.meta = format!("{tag} \u{b7} {}", text.meta);
+            if let Some(price) = barter.as_deref().and_then(|b| b.tag(&inventory, id)) {
+                text.price = price;
             }
             if !(aimed_container && matches!(anchor, CardAnchor::Crosshair))
                 && let Some(target) = crate::interact::item_target(&inventory, id)
@@ -814,7 +873,8 @@ mod tests {
         assert!(card.meta.starts_with("Magic \u{b7} "), "{}", card.meta);
         assert!(card.meta.contains(&format!("{} lb", number(s.weight))), "{}", card.meta);
         assert!(card.meta.contains(&format!("{}", s.damage.unwrap())), "{}", card.meta);
-        assert!(card.meta.contains(&magic.value().short()), "{}", card.meta);
+        assert_eq!(card.price, Price::Worth(magic.value()));
+        assert!(!card.meta.contains(&magic.value().short()), "the price has a line of its own: {}", card.meta);
         let fp = magic.profile.footprint;
         assert!(card.meta.ends_with(&format!("{}\u{d7}{} cells", fp.cols, fp.rows)), "{}", card.meta);
         assert_eq!(card.affixes.len(), magic.affixes.len());
@@ -858,12 +918,22 @@ mod tests {
     }
 
     #[test]
+    fn a_purse_says_what_it_holds_and_how_to_open_it() {
+        let mut parts = fb_items::ItemParts::from(fb_items::roll_item("Purse", 4).unwrap());
+        parts.coins = Some(Coins { gp: 2, sp: 3, cp: 0 });
+        let purse = fb_items::Item::from_parts(parts).unwrap();
+        let card = card_text(&purse, None);
+        assert_eq!(card.price.line(), "Holds 2 gp 3 sp \u{b7} double-click to open");
+        assert!(!card.meta.contains("gp"), "the coins are said once: {}", card.meta);
+    }
+
+    #[test]
     fn goods_and_containers_say_what_they_are() {
         let bread = fb_items::roll_item("Bread", 3).unwrap();
         let card = card_text(&bread, None);
         assert!(card.meta.starts_with(&bread.profile.description), "{}", card.meta);
         assert!(card.affixes.is_empty() && card.contents.is_none());
-        assert!(card.meta.contains(&bread.value().short()), "{}", card.meta);
+        assert_eq!(card.price.line(), format!("Worth {}", bread.value().short()));
 
         let mut inventory = Inventory::default();
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());

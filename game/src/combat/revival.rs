@@ -342,20 +342,15 @@ pub fn hall_cell(level: &Level, room: usize, folk: &[Vec2]) -> Option<(i32, i32)
     cells.iter().filter(|c| clear(c)).min_by(|a, b| to_centre(a).total_cmp(&to_centre(b))).or_else(|| cells.iter().min_by(|a, b| to_centre(a).total_cmp(&to_centre(b)))).copied()
 }
 
-/// The copper in every purse the delver carries.
+/// The copper the delver carries: their coin purse and any purses unopened.
 fn carried_copper(inventory: &Inventory) -> u32 {
-    inventory.ids().filter(|&id| inventory.is_carried(id)).filter_map(|id| inventory.item(id)?.coins).map(in_copper).sum()
+    in_copper(crate::enchanting::wallet(inventory))
 }
 
-/// Takes `owed` copper out of the purses the delver carries, one after another.
-fn charge(inventory: &mut Inventory, mut owed: u32) {
-    let purses: Vec<_> = inventory.ids().filter(|&id| inventory.is_carried(id) && inventory.item(id).is_some_and(|i| i.coins.is_some())).collect();
-    for id in purses {
-        if owed == 0 {
-            break;
-        }
-        owed = inventory.spend(id, owed);
-    }
+/// Takes `owed` copper from the delver ([`crate::enchanting::pay`]); the fee is never more than
+/// they carry.
+fn charge(inventory: &mut Inventory, owed: u32) {
+    crate::enchanting::pay(inventory, owed.into());
 }
 
 /// "the Scale Court" as the start of a line.

@@ -28,7 +28,8 @@
 //! off hand, starts them with a pack full of things, and sets a sack holding a few more, and a
 //! shield, down in front of them. `FB_HOLD=<main>[,<off>]` puts items of those bases in the hands
 //! (a torch or lantern lit; `none` empties a hand), after either kit. `FB_DEBUG_HOVER=<n>` holds the
-//! card over the `n`th thing in the first carried grid.
+//! card over the `n`th thing in the first carried grid (`u<n>` underfoot, `o<n>` in the open
+//! container or trader's shelf).
 
 pub mod card;
 pub mod doll;
@@ -95,7 +96,7 @@ const TOAST_SECONDS: f32 = 3.6;
 /// What the help line under the grids says (the plate's `.hint`).
 pub fn help_text(keymap: &Keymap) -> String {
     format!(
-        "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. {turn} while dragging to turn an item. Double-click to wear or take off. Drop food, a light or a weapon on a quickslot to bind it, and the keys {slots} use it.",
+        "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. {turn} while dragging to turn an item. Double-click to wear or take off, or to empty a purse into your own. Drop food, a light or a weapon on a quickslot to bind it, and the keys {slots} use it.",
         turn = keymap.label(Action::TurnItem),
         slots = keymap.label(Action::Quickslot),
     )
@@ -775,13 +776,14 @@ pub fn equip_from_floor_in(inventory: &mut Inventory, id: ItemId, slot: Slot, at
 }
 
 /// A double-click on `id` (the plate's `quick`): something worn is taken off and stowed, or set
-/// down underfoot if there is no room for it; something wearable is equipped in its slot
-/// ([`equip`]); anything else lying underfoot, or in a container not carried (a chest standing
-/// in the level, a bag set down), is taken into the carried grids. Taking from a container on
-/// a double-click is this build's own rule.
+/// down underfoot if there is no room for it; a purse is opened ([`open_purse`]); something
+/// wearable is equipped in its slot ([`equip`]); anything else lying underfoot, or in a
+/// container not carried (a chest standing in the level, a bag set down), is taken into the
+/// carried grids. Taking from a container on a double-click is this build's own rule.
 pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
     let item = inventory.item(id).ok_or(Refusal::Unknown)?;
     let wearable = item.profile.slot.is_some();
+    let purse = item.coins.is_some();
     match inventory.location(id) {
         Some(Location::Worn(_)) => {
             inventory.take_out(id);
@@ -790,12 +792,28 @@ pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, 
                 Err(_) => vec![FloorChange::SetDown(id, 0.0)],
             })
         }
+        _ if purse => open_purse(inventory, id),
         _ if wearable => {
             let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
             equip(inventory, id, slot)
         }
         _ => take_up(inventory, id),
     }
+}
+
+/// Empties purse `id` into the delver's coin purse ([`Inventory::coins`]) and forgets it,
+/// wherever it is: in a pack, in a chest, or lying in the level, which it is lifted from.
+pub fn open_purse(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
+    let coins = inventory.item(id).and_then(|i| i.coins).ok_or(Refusal::Unknown)?;
+    let lying = inventory.location(id) == Some(Location::Loose);
+    inventory.add_coins(coins);
+    inventory.forget(id);
+    Ok(lying.then_some(FloorChange::Lifted(id)).into_iter().collect())
+}
+
+/// What the toast says when a purse holding `coins` is opened.
+pub fn opened_line(coins: fb_items::Coins) -> String {
+    if coins.is_empty() { "The purse is empty.".to_string() } else { format!("You empty the purse: {}.", coins.short()) }
 }
 
 /// Takes `id` into the carried grids if it is not carried: lying underfoot it is picked up
@@ -882,7 +900,7 @@ pub(crate) fn build_screen(
     }
     let fallback = Keymap::default();
     let keymap = keymap.as_deref().unwrap_or(&fallback);
-    let screen = ScreenLayout { inventory: &inventory, fonts: &fonts, cell: tuning.interface.cell_size };
+    let screen = ScreenLayout { inventory: &inventory, barter: &barter, fonts: &fonts, cell: tuning.interface.cell_size };
     commands
         .spawn((
             Name::new("Inventory"),
@@ -1029,9 +1047,32 @@ pub(crate) fn build_screen(
         });
 }
 
+/// The price tag in an item's cell while bartering.
+#[derive(Component, Debug)]
+pub struct PriceTag;
+
+/// What a cell's price tag says, its ink and its edge, for a barter `price`: a ware's cost in
+/// its coin's metal on a gold edge (red ink if the delver cannot pay it), what the trader pays
+/// on a green one. `None` for a price that is not a trade's.
+pub fn cell_tag(price: card::Price) -> Option<(String, Color, Color)> {
+    match price {
+        card::Price::Costs { price, afford, .. } => {
+            let (text, metal) = crate::ui::coin_tag(price.total_copper());
+            Some((text, if afford { metal } else { BAD }, crate::ui::FRAME_GOLD))
+        }
+        card::Price::SellsFor { price, .. } => {
+            let (text, metal) = crate::ui::coin_tag(price.total_copper());
+            Some((text, metal, OK))
+        }
+        card::Price::Worth(_) | card::Price::Holds(_) => None,
+    }
+}
+
 /// What the screen is built from.
 struct ScreenLayout<'a> {
     inventory: &'a Inventory,
+    /// While bartering, what tags the items' cells with their prices ([`cell_tag`]).
+    barter: &'a crate::barter::Barter,
     fonts: &'a UiFonts,
     /// Logical pixels from one grid line to the next.
     cell: f32,
@@ -1159,6 +1200,23 @@ impl ScreenLayout<'_> {
                                     },
                                     BackgroundColor(rarity_color(item.rarity)),
                                 ));
+                            }
+                            if let Some((text, ink, edge)) = self.barter.tag(self.inventory, entry.id).and_then(cell_tag) {
+                                slot.spawn((
+                                    PriceTag,
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        right: px(3),
+                                        bottom: px(3),
+                                        padding: UiRect::new(px(4), px(4), px(0), px(1)),
+                                        border: UiRect::all(px(1)),
+                                        border_radius: BorderRadius::all(px(4)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(BG.with_alpha(0.88)),
+                                    BorderColor::all(edge),
+                                ))
+                                .with_child((Text::new(text), UiFonts::style(&self.fonts.mono_bold, 11.0, ink)));
                             }
                         });
                 }
@@ -1412,6 +1470,7 @@ fn drag_items(
             toast.say(said, now);
             return;
         }
+        let purse = inventory.item(drag.id).and_then(|i| i.coins);
         let outcome = if drag.active {
             (if barter.active() { barter.drop_at(&mut inventory, &drag, target) } else { None }).unwrap_or_else(|| drop_at(&mut inventory, &drag, target, underfoot.grid.cols))
         } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
@@ -1421,7 +1480,12 @@ fn drag_items(
             return;
         };
         match outcome {
-            Ok(changes) => floor_changes.0.extend(changes),
+            Ok(changes) => {
+                if let Some(coins) = purse.filter(|_| inventory.item(drag.id).is_none()) {
+                    toast.say(opened_line(coins), now);
+                }
+                floor_changes.0.extend(changes);
+            }
             Err(refusal) => {
                 toast.say(refusal.reason(), now);
             }
@@ -1442,19 +1506,26 @@ fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResM
 }
 
 /// For captures: holds the card over the `FB_DEBUG_HOVER`th thing in the first carried grid,
-/// as if the mouse were on it; `u<n>` takes the `n`th thing underfoot instead.
+/// as if the mouse were on it; `u<n>` takes the `n`th thing underfoot instead, and `o<n>` the
+/// `n`th in the open container (a chest, or a trader's shelf).
 fn debug_hover(
     inventory: Res<Inventory>,
     underfoot: Res<Underfoot>,
+    open: Res<OpenContainer>,
     views: Query<(&ItemView, &ComputedNode, &UiGlobalTransform)>,
     mut hovered: ResMut<Hovered>,
 ) {
     let spec = std::env::var("FB_DEBUG_HOVER").unwrap_or_default();
-    let floor = spec.strip_prefix('u');
-    let index: usize = floor.unwrap_or(&spec).parse().unwrap_or(0);
-    let id = match floor {
-        Some(_) => underfoot.grid.entries().get(index).map(|e| e.id),
-        None => inventory.carried_containers().first().and_then(|&c| inventory.grid(c)).and_then(|g| g.entries().get(index)).map(|e| e.id),
+    let (place, number) = match spec.chars().next() {
+        Some(c @ ('u' | 'o')) => (Some(c), &spec[1..]),
+        _ => (None, spec.as_str()),
+    };
+    let index: usize = number.parse().unwrap_or(0);
+    let nth_in = |container: Option<ItemId>| container.and_then(|c| inventory.grid(c)).and_then(|g| g.entries().get(index)).map(|e| e.id);
+    let id = match place {
+        Some('u') => underfoot.grid.entries().get(index).map(|e| e.id),
+        Some(_) => nth_in(open.0),
+        None => nth_in(inventory.carried_containers().first().copied()),
     };
     let Some(id) = id else {
         return;
@@ -2410,6 +2481,71 @@ mod tests {
         spans.iter().filter_map(|s| app.world().get::<TextSpan>(*s)).map(|t| t.0.clone()).collect()
     }
 
+    /// The header's purse line, as read from its text and spans.
+    fn header_purse(app: &mut App) -> String {
+        let mut lines = app.world_mut().query_filtered::<(&Text, &Children), With<header::HeaderPurse>>();
+        let (text, spans) = lines.single(app.world()).unwrap();
+        let spans = spans.to_vec();
+        let head = text.0.clone();
+        head + &spans.iter().filter_map(|s| app.world().get::<TextSpan>(*s)).map(|t| t.0.clone()).collect::<String>()
+    }
+
+    #[test]
+    fn a_tag_says_the_trade_s_price_in_its_coin() {
+        use card::Price;
+        use fb_items::Coins;
+        let worth = Coins::default();
+        let costs = |cp, afford| cell_tag(Price::Costs { price: Coins::from_copper(cp), worth, afford });
+        assert_eq!(costs(250, true), Some(("2.5g".to_string(), crate::ui::COIN_GOLD, crate::ui::FRAME_GOLD)));
+        assert_eq!(costs(250, false).map(|t| t.1), Some(BAD), "out of reach");
+        assert_eq!(cell_tag(Price::SellsFor { price: Coins::from_copper(8 * 10), worth }), Some(("8s".to_string(), crate::ui::COIN_SILVER, OK)));
+        assert_eq!(cell_tag(Price::Worth(worth)), None);
+    }
+
+    #[test]
+    fn bartering_tags_every_ware_and_good_with_its_price() {
+        let mut app = screen_app();
+        let spot = fb_level::generate(1207, 1).folk[0];
+        let trade = fb_faction::Trade { profession: fb_faction::Profession::Weaponsmith, tier: fb_faction::Tier::Apprentice, style: None };
+        let person = crate::folk::person_1207(&fb_level::FolkSpot { trade: Some(trade), ..spot });
+        let wares: Vec<_> = (1..4).filter_map(|s| fb_items::roll_item("Sword", s)).collect();
+        let shelf = crate::shelf::Shelf { day: 0, wares: wares.clone(), sold: vec![], purse: 6000 };
+        let session = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            let dagger = inventory.add(fb_items::roll_item("Dagger", 6).unwrap());
+            inventory.stow(dagger).unwrap();
+            let purse = inventory.add(purse_of(fb_items::Coins { gp: 1, sp: 0, cp: 0 }));
+            inventory.stow(purse).unwrap();
+            crate::barter::begin(&mut inventory, Entity::PLACEHOLDER, &person, fb_faction::Band::Neutral, &shelf).unwrap()
+        };
+        let shelf_id = session.shelf;
+        app.world_mut().resource_mut::<crate::barter::Barter>().session = Some(session);
+        app.world_mut().resource_mut::<OpenContainer>().0 = Some(shelf_id);
+        press(&mut app, KeyCode::KeyI);
+        let tags = app.world_mut().query_filtered::<(), With<PriceTag>>().iter(app.world()).count();
+        assert_eq!(tags, wares.len() + 1, "the swords on the shelf and the dagger, not the purse or the pack");
+        // No barter, no tags.
+        app.world_mut().resource_mut::<crate::barter::Barter>().session = None;
+        app.update();
+        assert_eq!(app.world_mut().query_filtered::<(), With<PriceTag>>().iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn the_header_shows_the_coin_purse_and_opening_a_purse_fills_it() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyI);
+        assert_eq!(header_purse(&mut app), "Purse empty");
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let purse = inventory.add(purse_of(fb_items::Coins { gp: 2, sp: 3, cp: 0 }));
+            quick(&mut inventory, purse).unwrap();
+        }
+        app.update();
+        assert_eq!(header_purse(&mut app), "Purse 2 gp 3 sp");
+    }
+
     #[test]
     fn the_header_s_stats_update_when_equipping() {
         let mut app = screen_app();
@@ -2576,6 +2712,46 @@ mod tests {
         // Bread lying underfoot is picked up.
         let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
         assert_eq!(quick(&mut inventory, bread), Ok(vec![FloorChange::Lifted(bread)]));
+    }
+
+    fn purse_of(coins: fb_items::Coins) -> fb_items::Item {
+        let mut parts = fb_items::ItemParts::from(fb_items::roll_item("Purse", 4).unwrap());
+        parts.coins = Some(coins);
+        fb_items::Item::from_parts(parts).unwrap()
+    }
+
+    #[test]
+    fn double_clicking_a_purse_empties_it_into_the_coin_purse() {
+        use fb_items::Coins;
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        inventory.set_coins(Coins { gp: 1, sp: 0, cp: 0 });
+        let purse = inventory.add(purse_of(Coins { gp: 2, sp: 3, cp: 0 }));
+        inventory.stow(purse).unwrap();
+        assert_eq!(quick(&mut inventory, purse), Ok(vec![]));
+        assert_eq!(inventory.coins(), Coins { gp: 3, sp: 3, cp: 0 });
+        assert_eq!(inventory.item(purse), None);
+        assert_eq!(inventory.contents_count(pack), 0);
+        assert_eq!(opened_line(Coins { gp: 2, sp: 3, cp: 0 }), "You empty the purse: 2 gp 3 sp.");
+        assert_eq!(opened_line(Coins::default()), "The purse is empty.");
+        // One lying underfoot is lifted from the level as it is opened.
+        let lying = inventory.add(purse_of(Coins { gp: 0, sp: 0, cp: 7 }));
+        assert_eq!(quick(&mut inventory, lying), Ok(vec![FloorChange::Lifted(lying)]));
+        assert_eq!(inventory.coins(), Coins { gp: 3, sp: 3, cp: 7 });
+        assert_eq!(inventory.item(lying), None);
+    }
+
+    #[test]
+    fn a_purse_in_a_chest_is_opened_where_it_lies() {
+        let mut inventory = Inventory::default();
+        let (chest, bread) = chest_with_bread(&mut inventory);
+        inventory.forget(bread);
+        let purse = inventory.add(purse_of(fb_items::Coins { gp: 5, sp: 0, cp: 0 }));
+        inventory.put(purse, chest, Placement::new(0, 0, false)).unwrap();
+        assert_eq!(quick(&mut inventory, purse), Ok(vec![]));
+        assert_eq!(inventory.coins().gp, 5);
+        assert_eq!(inventory.contents_count(chest), 0);
     }
 
     fn chest_with_bread(inventory: &mut Inventory) -> (ItemId, ItemId) {
