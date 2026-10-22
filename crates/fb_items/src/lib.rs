@@ -20,6 +20,7 @@ pub mod jackalope;
 pub mod lesson;
 pub mod modifier;
 pub mod naming;
+pub mod notes;
 pub mod oil;
 pub mod outfit;
 pub mod profile;
