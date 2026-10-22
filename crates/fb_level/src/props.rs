@@ -359,8 +359,8 @@ const CELL_COT: f64 = 0.3;
 /// from the main doorway; bookshelves along a library's walls and a reading table; bones heaped
 /// in an ossuary's corners; a table, a weapon rack and a strongbox in a guardroom. As with the
 /// roles, nothing stands in or beside a doorway or a gate, and every open cell stays reachable.
-/// A claimed room has been cleared of bones and rubble, and its faction keeps no strongbox of
-/// loot there.
+/// A claimed room has been cleared of bones and rubble; its faction keeps its guardroom's
+/// strongbox, with its loot, like any other.
 fn furnish_purposes(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<PropSpot>, occupied: &mut [bool], rng: &mut Mulberry32) {
     use crate::Purpose;
     for r in 0..level.rooms.len() {
@@ -431,7 +431,8 @@ fn furnish_purposes(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<P
                     let prop = scenery(kind, rng);
                     put_in_nook(level, &nooks, prop, placed, occupied, rng);
                 }
-                if !claimed {
+                // A market's stalls stay empty, so no strongbox stands among them.
+                if !level.roles_of(r).contains(&crate::RoomRole::Market) {
                     let strongbox = roll_container(placed, &[(ChestStyle::Strongbox, 2), (ChestStyle::Chest, 1)], false, rng);
                     put_in_nook(level, &nooks, strongbox, placed, occupied, rng);
                 }
@@ -1021,6 +1022,32 @@ mod tests {
         // Measured: 1 of 196 has none since rooms were furnished by their purpose (#588), whose
         // centrepieces take a wall first; every market had stalls before.
         assert!(bare_markets <= 1, "{bare_markets} of {markets} markets have no stalls");
+    }
+
+    /// Every container a faction keeps rolls its loot, but a market's stalls and a hearth's keg.
+    #[test]
+    fn held_containers_hold_loot_but_stalls_and_kegs() {
+        use crate::RoomRole;
+        let (mut kept, mut strongboxes) = (0, 0);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for p in level.props.iter().filter(|p| p.prop.is_container()) {
+                let Some(room) = level.room_at(p.x as i32, p.y as i32) else { continue };
+                if !level.is_claimed(room) {
+                    continue;
+                }
+                let roles = level.roles_of(room);
+                // The stalls and the keg (a barrel or crate, where strongboxes are strongboxes and chests).
+                let keg = matches!(p.prop, Prop::Container { style: ChestStyle::Barrel | ChestStyle::Crate, .. }) && roles.contains(&RoomRole::Hearth);
+                if roles.contains(&RoomRole::Market) || keg {
+                    continue;
+                }
+                kept += 1;
+                strongboxes += matches!(p.prop, Prop::Container { style: ChestStyle::Strongbox, .. }) as u32;
+                assert!(p.prop.holds_loot(), "seed {seed} depth {depth}: an empty container in a held room");
+            }
+        }
+        assert!(kept > 0, "{kept} held containers, {strongboxes} strongboxes");
     }
 
     #[test]
