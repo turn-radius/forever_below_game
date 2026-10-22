@@ -384,9 +384,13 @@ impl Barter {
     }
 
     /// A double-click on `id`: a ware goes to the pack (or the hands, if it is too long for the
-    /// pack); the delver's own goes on the shelf.
+    /// pack); the delver's own goes on the shelf. A purse of theirs is opened as at any other
+    /// time (`None`, left to [`crate::inventory::quick`]).
     pub fn quick(&mut self, inventory: &mut Inventory, id: ItemId) -> Option<Result<Vec<FloorChange>, Refusal>> {
         let session = self.session.as_mut()?;
+        if inventory.is_carried(id) && inventory.item(id).is_some_and(|i| i.coins.is_some()) {
+            return None;
+        }
         session.note(inventory, id);
         let session = &*session;
         let done = if session.on_shelf(inventory, id) {

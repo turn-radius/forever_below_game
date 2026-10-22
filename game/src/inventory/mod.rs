@@ -775,13 +775,14 @@ pub fn equip_from_floor_in(inventory: &mut Inventory, id: ItemId, slot: Slot, at
 }
 
 /// A double-click on `id` (the plate's `quick`): something worn is taken off and stowed, or set
-/// down underfoot if there is no room for it; something wearable is equipped in its slot
-/// ([`equip`]); anything else lying underfoot, or in a container not carried (a chest standing
-/// in the level, a bag set down), is taken into the carried grids. Taking from a container on
-/// a double-click is this build's own rule.
+/// down underfoot if there is no room for it; a purse is opened ([`open_purse`]); something
+/// wearable is equipped in its slot ([`equip`]); anything else lying underfoot, or in a
+/// container not carried (a chest standing in the level, a bag set down), is taken into the
+/// carried grids. Taking from a container on a double-click is this build's own rule.
 pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
     let item = inventory.item(id).ok_or(Refusal::Unknown)?;
     let wearable = item.profile.slot.is_some();
+    let purse = item.coins.is_some();
     match inventory.location(id) {
         Some(Location::Worn(_)) => {
             inventory.take_out(id);
@@ -790,12 +791,28 @@ pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, 
                 Err(_) => vec![FloorChange::SetDown(id, 0.0)],
             })
         }
+        _ if purse => open_purse(inventory, id),
         _ if wearable => {
             let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
             equip(inventory, id, slot)
         }
         _ => take_up(inventory, id),
     }
+}
+
+/// Empties purse `id` into the delver's coin purse ([`Inventory::coins`]) and forgets it,
+/// wherever it is: in a pack, in a chest, or lying in the level, which it is lifted from.
+pub fn open_purse(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
+    let coins = inventory.item(id).and_then(|i| i.coins).ok_or(Refusal::Unknown)?;
+    let lying = inventory.location(id) == Some(Location::Loose);
+    inventory.add_coins(coins);
+    inventory.forget(id);
+    Ok(lying.then_some(FloorChange::Lifted(id)).into_iter().collect())
+}
+
+/// What the toast says when a purse holding `coins` is opened.
+pub fn opened_line(coins: fb_items::Coins) -> String {
+    format!("You empty the purse: {}.", coins.short())
 }
 
 /// Takes `id` into the carried grids if it is not carried: lying underfoot it is picked up
@@ -1412,6 +1429,7 @@ fn drag_items(
             toast.say(said, now);
             return;
         }
+        let purse = inventory.item(drag.id).and_then(|i| i.coins);
         let outcome = if drag.active {
             (if barter.active() { barter.drop_at(&mut inventory, &drag, target) } else { None }).unwrap_or_else(|| drop_at(&mut inventory, &drag, target, underfoot.grid.cols))
         } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
@@ -1421,7 +1439,12 @@ fn drag_items(
             return;
         };
         match outcome {
-            Ok(changes) => floor_changes.0.extend(changes),
+            Ok(changes) => {
+                if let Some(coins) = purse.filter(|_| inventory.item(drag.id).is_none()) {
+                    toast.say(opened_line(coins), now);
+                }
+                floor_changes.0.extend(changes);
+            }
             Err(refusal) => {
                 toast.say(refusal.reason(), now);
             }
@@ -2576,6 +2599,45 @@ mod tests {
         // Bread lying underfoot is picked up.
         let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
         assert_eq!(quick(&mut inventory, bread), Ok(vec![FloorChange::Lifted(bread)]));
+    }
+
+    fn purse_of(coins: fb_items::Coins) -> fb_items::Item {
+        let mut parts = fb_items::ItemParts::from(fb_items::roll_item("Purse", 4).unwrap());
+        parts.coins = Some(coins);
+        fb_items::Item::from_parts(parts).unwrap()
+    }
+
+    #[test]
+    fn double_clicking_a_purse_empties_it_into_the_coin_purse() {
+        use fb_items::Coins;
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        inventory.set_coins(Coins { gp: 1, sp: 0, cp: 0 });
+        let purse = inventory.add(purse_of(Coins { gp: 2, sp: 3, cp: 0 }));
+        inventory.stow(purse).unwrap();
+        assert_eq!(quick(&mut inventory, purse), Ok(vec![]));
+        assert_eq!(inventory.coins(), Coins { gp: 3, sp: 3, cp: 0 });
+        assert_eq!(inventory.item(purse), None);
+        assert_eq!(inventory.contents_count(pack), 0);
+        assert_eq!(opened_line(Coins { gp: 2, sp: 3, cp: 0 }), "You empty the purse: 2 gp 3 sp.");
+        // One lying underfoot is lifted from the level as it is opened.
+        let lying = inventory.add(purse_of(Coins { gp: 0, sp: 0, cp: 7 }));
+        assert_eq!(quick(&mut inventory, lying), Ok(vec![FloorChange::Lifted(lying)]));
+        assert_eq!(inventory.coins(), Coins { gp: 3, sp: 3, cp: 7 });
+        assert_eq!(inventory.item(lying), None);
+    }
+
+    #[test]
+    fn a_purse_in_a_chest_is_opened_where_it_lies() {
+        let mut inventory = Inventory::default();
+        let (chest, bread) = chest_with_bread(&mut inventory);
+        inventory.forget(bread);
+        let purse = inventory.add(purse_of(fb_items::Coins { gp: 5, sp: 0, cp: 0 }));
+        inventory.put(purse, chest, Placement::new(0, 0, false)).unwrap();
+        assert_eq!(quick(&mut inventory, purse), Ok(vec![]));
+        assert_eq!(inventory.coins().gp, 5);
+        assert_eq!(inventory.contents_count(chest), 0);
     }
 
     fn chest_with_bread(inventory: &mut Inventory) -> (ItemId, ItemId) {
