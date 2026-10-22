@@ -39,7 +39,21 @@ impl FolkSpot {
     pub fn facing(&self) -> (f32, f32) {
         (-self.yaw.sin(), -self.yaw.cos())
     }
+
+    /// Their name, from its own stream of their seed ([`NAME_SALT`]); the game draws their
+    /// outfit on from the same stream.
+    pub fn name(&self) -> String {
+        fb_items::naming::folk_name(&mut self.name_stream(), self.folk.key())
+    }
+
+    /// The stream their name is drawn from first.
+    pub fn name_stream(&self) -> Mulberry32 {
+        Mulberry32::new(self.seed ^ NAME_SALT)
+    }
 }
+
+/// Salt for a person's name, drawn apart from their body and outfit. Our own.
+pub const NAME_SALT: u32 = 0x4E41_4D45;
 
 /// Salt for the folk stream.
 pub(crate) const FOLK_SALT: u32 = 0xF01C_5A17;

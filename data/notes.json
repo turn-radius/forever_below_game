@@ -1,5 +1,5 @@
 {
-  "creature": [
+  "note_creature": [
     "I escaped from #creature.a# on the #depth# level. #companions# #creature_advice#",
     "#creatures.capitalize#. #creatures.capitalize# on the #depth# level, more than I could count. #companions# #creature_advice#",
     "If you are reading this, you have come further than #companion_name#. #creatures.capitalize# took #them# on the #depth# level. #creature_advice#",
@@ -25,7 +25,7 @@
     "Do not go back for the bodies."
   ],
 
-  "trader": [
+  "note_trader": [
     "See #trader# for the best #wares#. Signed, #trader_faction#",
     "#trader# of #trader_faction# deals in #wares#, and fairly. Tell them #writer# sent you.",
     "Need #wares#? Ask for #trader#. #trader_faction.capitalize# keep their #trade# well.",
@@ -33,7 +33,7 @@
     "Owe #trader# eleven silver for #wares#. Must pay before they send #trader_faction# after me."
   ],
 
-  "book": [
+  "note_book": [
     "I left my research in the #book_place#. It is my treatise on #book_topic#.",
     "My treatise on #book_topic# lies in the #book_place#. Whoever finds it, read it well. It cost me #cost#.",
     "Thirty years of study, my treatise on #book_topic#, and I left it in the #book_place#. If I do not come back for it, it is yours.",
@@ -41,7 +41,7 @@
   ],
   "cost": ["my eyes", "my friends", "my youth", "everything", "three fingers"],
 
-  "hate": [
+  "note_hate": [
     "I have learned #hater# wish #hated# eradicated, every last one.",
     "#hater.capitalize# want #hated# gone from the deep. Do not walk among them with #hated# at your side.",
     "Overheard: #hater# will pay for the end of #hated#. I did not stay to ask how much.",
@@ -49,13 +49,13 @@
     "#hater.capitalize# hate #hated# above all things. Remember it."
   ],
 
-  "like": [
+  "note_like": [
     "#liker.capitalize# are kind to #liked#. Find them if you are one.",
     "I have learned #liker# favour #liked#. It may buy you a meal, or your life.",
     "Word is #liker# look after #liked#. Not after me."
   ],
 
-  "place": [
+  "note_place": [
     "Do not linger in the #place#. #place_warning#",
     "Something moves in the #place# at night. #place_warning#",
     "I hid what I had in the #place#. If I am dead, take it.",
@@ -70,7 +70,7 @@
     "Whatever kept it is not gone."
   ],
 
-  "faction": [
+  "note_faction": [
     "#faction.capitalize# claim they know the way out. They lie, or they would have left.",
     "Trust #faction# no further than a torch throws its light.",
     "#faction.capitalize# took my coin and my boots. Remember the name.",
@@ -78,7 +78,7 @@
     "#faction.capitalize# hold this level. They let me pass. They will not let me pass twice."
   ],
 
-  "lament": [
+  "note_lament": [
     "The door shut behind me. It has not opened since. #signoff#",
     "There is a way out. There must be. Everyone says so. #signoff#",
     "Down is the only way. I tell myself that up is down too, somewhere. #signoff#",

@@ -317,6 +317,7 @@ pub mod doorkind;
 pub mod creatures;
 pub mod door;
 pub mod finish;
+pub mod lore;
 pub mod folk;
 mod generate;
 pub mod params;

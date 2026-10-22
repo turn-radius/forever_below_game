@@ -111,17 +111,17 @@ impl NoteKind {
     pub const ALL: [NoteKind; 8] =
         [NoteKind::Creature, NoteKind::Trader, NoteKind::Book, NoteKind::Hate, NoteKind::Like, NoteKind::Place, NoteKind::Faction, NoteKind::Lament];
 
-    /// Its symbol in `data/notes.json`.
+    /// Its symbol in `data/notes.json`, apart from the fact symbols bound into it ([`bind`]).
     pub fn key(self) -> &'static str {
         match self {
-            NoteKind::Creature => "creature",
-            NoteKind::Trader => "trader",
-            NoteKind::Book => "book",
-            NoteKind::Hate => "hate",
-            NoteKind::Like => "like",
-            NoteKind::Place => "place",
-            NoteKind::Faction => "faction",
-            NoteKind::Lament => "lament",
+            NoteKind::Creature => "note_creature",
+            NoteKind::Trader => "note_trader",
+            NoteKind::Book => "note_book",
+            NoteKind::Hate => "note_hate",
+            NoteKind::Like => "note_like",
+            NoteKind::Place => "note_place",
+            NoteKind::Faction => "note_faction",
+            NoteKind::Lament => "note_lament",
         }
     }
 
@@ -259,16 +259,20 @@ mod tests {
     }
 
     /// The symbols the code binds, which the shipped grammar may refer to without defining.
-    const BOUND: [&str; 17] = [
+    const BOUND: [&str; 18] = [
         "writer", "companion_name", "depth", "past_line", "creature", "creatures", "trader", "trader_faction", "trade", "wares", "book_place", "book_topic",
-        "hater", "hated", "liker", "liked", "place",
+        "hater", "hated", "liker", "liked", "place", "faction",
     ];
 
     #[test]
     fn the_grammar_is_sound_once_the_world_is_bound() {
-        let mut problems = grammar().problems("#lament#");
-        problems.retain(|p| !matches!(p, procgen_grammar::GrammarError::MissingSymbol(s) if BOUND.contains(&s.as_str()) || s == "faction"));
+        let mut problems = grammar().problems("#note_lament#");
+        problems.retain(|p| !matches!(p, procgen_grammar::GrammarError::MissingSymbol(s) if BOUND.contains(&s.as_str())));
         assert!(problems.is_empty(), "{problems:?}");
+        for sym in BOUND {
+            // A fact bound over a symbol of the grammar would replace its rules.
+            assert!(!grammar().symbols.contains_key(sym), "`{sym}` is both bound and in data/notes.json");
+        }
         for kind in NoteKind::ALL {
             assert!(grammar().symbols.contains_key(kind.key()), "no `{}` in data/notes.json", kind.key());
         }
@@ -311,7 +315,8 @@ mod tests {
         let words = write_note(creature, &lore);
         assert!(words.to_lowercase().contains("troll"), "{words}");
         let trader = (0..500).find(|&s| note_kind(s, &lore) == NoteKind::Trader).unwrap();
-        assert!(write_note(trader, &lore).contains("Bera Holt"));
+        let words = write_note(trader, &lore);
+        assert!(words.contains("Bera Holt") && words.len() > "Bera Holt".len() + 12, "a sentence, not the bare name: {words}");
         let book = (0..500).find(|&s| note_kind(s, &lore) == NoteKind::Book).unwrap();
         let words = write_note(book, &lore);
         assert!(words.contains("library"), "{words}");
