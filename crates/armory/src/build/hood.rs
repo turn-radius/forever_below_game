@@ -550,7 +550,7 @@ mod tests {
     fn a_cowl_dips_over_the_chest_only() {
         let (head, torso) = (HeadForm::mannequin(1.0), TorsoForm::MANNEQUIN);
         let s = HoodSurface::new(&head, &torso, &Hood { style: HoodStyle::Cowl, ..Hood::default() }, 3);
-        let fall = |az: f32| s.cape_top - s.cape_top_at(az);
+        let fall = |az: f32| s.cape_top - s.cape_top_raw(az);
         assert!(fall(0.0) > 0.9, "a cowl falls low over the chest: {}", fall(0.0));
         // At 50 degrees from straight ahead, over the shoulder's front, under a fifth of that.
         assert!(fall(50f32.to_radians()) < 0.2 * fall(0.0), "{} at 50 degrees", fall(50f32.to_radians()));
