@@ -548,10 +548,11 @@ impl<'a> Envelope<'a> {
                 .fold(base[7].y, |m, c| m.max(c.0));
             base[7].y = top;
             // The collar stops at the jaw (it rode up the face on a head small over its
-            // shoulders), unless the shoulders themselves stand that high.
+            // shoulders), but never nearer the shoulders than 0.15 of the wearer's scale
+            // that makes the cloth dome over them.
             let head = self.body.head_form();
             let jaw = head.centre[1] - 0.7 * head.half_height;
-            base[8].y = neck.max(top + 0.25 * s).min(jaw.max(top + 0.12 * s));
+            base[8].y = (top + 0.15 * s).max(neck.min(jaw));
         }
         let ring_y = base.map(|r| r.y);
         let mut grow = [[0.0f32; 2]; 9];
@@ -1354,7 +1355,7 @@ fn hood(body: &Body, env: &Envelope, state: &HoodState, head: HeadFit) -> ItemMe
     // underlay, as a cloak does, rather than on a form widened all round to clear them (which
     // stood out from the shoulders like a disc).
     let under = |a: f32, y: f32| env.outline.at(a, y) + GAP;
-    on_body(body, hood_parts_over(&head_over_hair(body, head), &env.form(Over::Shoulders, 1.0), Some(&under as Underlay), &hood, &state.hem, state.seed).finish())
+    on_body(body, hood_parts_over(&head_over_hair(body, head), &env.form(Over::Shoulders, 1.0), Some(&under as Underlay), body.face().eye_azimuth + 0.25, &hood, &state.hem, state.seed).finish())
 }
 
 /// A hat over the head and hair.

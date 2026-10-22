@@ -54,25 +54,30 @@ fn height_over(parts: &[&Part], x: f32, z: f32) -> Option<f32> {
         .reduce(f32::max)
 }
 
-/// The angle in degrees between the two triangles at each edge of `part`, and the edge's middle.
-/// A fold (the sheet doubling back on itself) reads as the sharpest crease there is. Only the
-/// surface that can be seen counts: the faces that look up or out from the body's axis (a
-/// sheet's thickness offsets its inner face, which folds where the sheet turns tighter than it is
-/// thick, out of sight).
-fn creases(part: &Part) -> Vec<(f32, V3)> {
+/// The triangles of the outer face of a sheet with thickness ([`armory::build::form::shell`]): it
+/// stitches the outer face first, then the inner face (a copy of the vertices, moved inward and
+/// turned inside out), so the outer triangles are the leading ones, which use vertices below
+/// every inner vertex. By construction, not by which way a triangle faces: a fold in the outer
+/// surface keeps both its sides.
+fn outer_face(indices: &[u32]) -> &[u32] {
+    let mut highest = 0;
+    for (i, t) in indices.chunks(3).enumerate() {
+        if t.iter().copied().min().unwrap_or(0) > highest {
+            return &indices[..3 * i];
+        }
+        highest = highest.max(t.iter().copied().max().unwrap_or(0));
+    }
+    indices
+}
+
+/// The angle in degrees between the two triangles at each edge of the triangles `indices` of
+/// `positions`, and the edge's middle. A fold (the sheet doubling back on itself) reads as the
+/// sharpest crease there is.
+fn creases_of(positions: &[V3], indices: &[u32]) -> Vec<(f32, V3)> {
     let mut edges: HashMap<(u32, u32), Vec<V3>> = HashMap::new();
-    for t in part.indices.chunks(3) {
-        let tri = [t[0], t[1], t[2]].map(|i| part.positions[i as usize]);
+    for t in indices.chunks(3) {
+        let tri = [t[0], t[1], t[2]].map(|i| positions[i as usize]);
         let n = vec3::normalize_or(vec3::cross(vec3::sub(tri[1], tri[0]), vec3::sub(tri[2], tri[0])), vec3::Y);
-        let c = vec3::scale(vec3::add(vec3::add(tri[0], tri[1]), tri[2]), 1.0 / 3.0);
-        if vec3::dot(n, [c[0], 3.0, c[2]]) <= 0.0 {
-            continue;
-        }
-        // A sliver (three points nearly in a line) has no normal worth the name.
-        let longest = (0..3).map(|k| vec3::distance(tri[k], tri[(k + 1) % 3])).fold(0.0f32, f32::max);
-        if vec3::length(vec3::cross(vec3::sub(tri[1], tri[0]), vec3::sub(tri[2], tri[0]))) < 0.12 * longest * longest {
-            continue;
-        }
         for k in 0..3 {
             let (a, b) = (t[k], t[(k + 1) % 3]);
             edges.entry(if a < b { (a, b) } else { (b, a) }).or_default().push(n);
@@ -81,8 +86,62 @@ fn creases(part: &Part) -> Vec<(f32, V3)> {
     edges
         .into_iter()
         .filter(|(_, n)| n.len() == 2)
-        .map(|((a, b), n)| (vec3::dot(n[0], n[1]).clamp(-1.0, 1.0).acos().to_degrees(), vec3::lerp(part.positions[a as usize], part.positions[b as usize], 0.5)))
+        .map(|((a, b), n)| (vec3::dot(n[0], n[1]).clamp(-1.0, 1.0).acos().to_degrees(), vec3::lerp(positions[a as usize], positions[b as usize], 0.5)))
         .collect()
+}
+
+/// [`creases_of`] the outer face of `part`, the surface that can be seen (the inner face's
+/// offset folds where the sheet turns tighter than it is thick, out of sight).
+fn creases(part: &Part) -> Vec<(f32, V3)> {
+    creases_of(&part.positions, outer_face(&part.indices))
+}
+
+/// A strip of `n` rows by 3 columns with `bend(row)` giving each row's (x, y), for the specs of
+/// the crease measure.
+fn strip(bend: impl Fn(usize) -> (f32, f32), n: usize) -> (Vec<V3>, Vec<u32>) {
+    let mut positions = vec![];
+    for r in 0..n {
+        let (x, y) = bend(r);
+        for c in 0..3 {
+            positions.push([x, y, c as f32]);
+        }
+    }
+    let mut indices = vec![];
+    for r in 0..n - 1 {
+        for c in 0..2 {
+            let i = (3 * r + c) as u32;
+            indices.extend([i, i + 3, i + 1, i + 1, i + 3, i + 4]);
+        }
+    }
+    (positions, indices)
+}
+
+#[test]
+fn the_crease_measure_sees_a_fold_and_a_square_corner() {
+    let sharpest = |bend: &dyn Fn(usize) -> (f32, f32)| {
+        let (positions, indices) = strip(bend, 8);
+        creases_of(&positions, &indices).into_iter().map(|c| c.0).fold(0.0f32, f32::max)
+    };
+    // A flat run and a gentle curve are no crease at all.
+    assert!(sharpest(&|r| (r as f32, 0.0)) < 1.0);
+    assert!(sharpest(&|r| (r as f32, 0.02 * (r * r) as f32)) < 20.0);
+    // The cloth out over a shelf and straight down at its edge, the shape of a flat cape with
+    // a corner at the shoulder (#570), turns a right angle: over the 60 degrees the spec allows.
+    assert!(sharpest(&|r| if r < 4 { (r as f32, 0.0) } else { (3.0, -((r - 3) as f32)) }) > 80.0);
+    // Cloth doubling back on itself (rows 4 to 7 return over rows 0 to 3) reads as a near
+    // half turn.
+    assert!(sharpest(&|r| if r < 4 { (r as f32, 0.01) } else { ((7 - r) as f32 + 0.1, 0.02) }) > 150.0);
+}
+
+#[test]
+fn the_outer_face_is_the_leading_triangles() {
+    // Two faces of a strip: the outer first, then the same grid again for the inner.
+    let (positions, mut indices) = strip(|r| (r as f32, 0.0), 2);
+    let outer = positions.len() as u32;
+    let (_, more) = strip(|r| (r as f32, -0.1), 2);
+    let n = indices.len();
+    indices.extend(more.iter().map(|i| i + outer));
+    assert_eq!(outer_face(&indices).len(), n);
 }
 
 /// What the cloth over one shoulder does: how far worn things stand above it, how sharply its
@@ -169,6 +228,7 @@ const CASES: [(HoodStyle, bool); 3] = [(HoodStyle::Cowl, false), (HoodStyle::Cow
 fn cloth_fits_round_the_shoulders_check(folks: &[Folk], seeds: &[u32], kits: &[u32]) {
     let mut failures = vec![];
     let (mut measured, mut unmeasured) = (0, 0);
+    let mut measured_by: HashMap<Folk, usize> = HashMap::new();
     for &folk in folks {
         for &seed in seeds {
             let body = Body::new(&BodySpec::roll(folk, seed));
@@ -205,6 +265,7 @@ fn cloth_fits_round_the_shoulders_check(folks: &[Folk], seeds: &[u32], kits: &[u
                         continue;
                     };
                     measured += 1;
+                    *measured_by.entry(folk).or_default() += 1;
                     let case = format!("{folk:?} {seed} kit {kit} {name}");
                     // The outline from the collar over the shoulder is taut and round: it
                     // does not dip between the collar and the shoulder (a flat shelf with a
@@ -227,9 +288,14 @@ fn cloth_fits_round_the_shoulders_check(folks: &[Folk], seeds: &[u32], kits: &[u
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    // The cloak outlines are really measured: at most as many have no roof to judge as have one
-    // (a collar that stops at the jaw leaves a small head little roof between it and the arm).
-    assert!(measured > 0 && unmeasured <= measured, "{measured} cloak outlines measured, {unmeasured} with no roof");
+    // The cloak outlines are really measured: at most a quarter have no roof to judge.
+    assert!(measured > 0 && 3 * unmeasured <= measured, "{measured} cloak outlines measured, {unmeasured} with no roof");
+    // And on every folk, not only the broad ones (whose roofs are long): at least one outline for
+    // every seed and kit.
+    for &folk in folks {
+        let n = measured_by.get(&folk).copied().unwrap_or(0);
+        assert!(n >= seeds.len() * kits.len(), "{folk:?}: only {n} cloak outlines measured");
+    }
 }
 
 #[test]
@@ -241,8 +307,8 @@ fn cloth_fits_round_the_shoulders() {
 #[test]
 fn cloth_fits_round_the_shoulders_smoke() {
     // A goblin whose cloak sagged by two thirds of its scale between collar and shoulder, and a
-    // pigfolk whose pauldrons stood 0.8 above a cowl; the sweep has the rest (about 7 s here).
-    cloth_fits_round_the_shoulders_check(&[Folk::Goblin, Folk::Pigfolk], &[37], &[7]);
+    // pigfolk whose pauldrons stood 0.8 above a cowl; a human, whose roofs are long enough to be measured; the sweep has the rest.
+    cloth_fits_round_the_shoulders_check(&[Folk::Goblin, Folk::Pigfolk, Folk::Human], &[37], &[7]);
 }
 
 
@@ -285,7 +351,16 @@ fn cloak_outline(body: &Body, worn: &[(Slot, Item)]) -> Option<(f32, f32)> {
     let high = samples.iter().map(|c| c.1).fold(f32::MIN, f32::max);
     let start = samples.iter().position(|c| high - c.1 > 0.02 * s).unwrap_or(0).saturating_sub(1);
     let end = samples[start..].iter().position(|c| c.1 < body.shoulder_y - 0.1 * s).unwrap_or(samples.len() - start);
-    let outline: Vec<(f32, f32)> = samples[start..start + end].to_vec();
+    let mut outline: Vec<(f32, f32)> = samples[start..start + end].to_vec();
+    // A collar that stops at the jaw leaves little roof between it and the shoulder (a small
+    // head on a broad pair of shoulders): then the roof is taken at the shoulder instead, from
+    // the highest point out over the shoulder's crown to a third of the wearer's scale below
+    // the line.
+    if outline.len() < 3 {
+        let crest = samples.iter().position(|c| c.1 >= high - 1e-4).unwrap_or(0);
+        let down = samples[crest..].iter().position(|c| c.1 < body.shoulder_y - 0.35 * s).unwrap_or(samples.len() - crest);
+        outline = samples[crest..crest + down].to_vec();
+    }
     // A gnome's or goblin's cowl collar can stand as wide as its shoulders, with no roof between
     // it and the arm to measure: that is no answer, and the check counts how often it happens.
     if outline.len() < 3 {

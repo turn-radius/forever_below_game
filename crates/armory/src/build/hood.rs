@@ -57,6 +57,9 @@ pub struct HoodSurface {
     /// rim stays at [`FRONT_RIM`] whatever the cape does ([`HoodSurface::rim`]): raising it
     /// there would draw the cloth across the mouth and nose.
     polar_low: f32,
+    /// The least the face opening may be, a half angle round the face: out to the wearer's eyes
+    /// and a little past them (a lizard's sit far round the sides of its head).
+    min_opening: f32,
 }
 
 /// Polar angle (from the crown) where a hood leaves the head for the neck under the chin: the
@@ -82,13 +85,13 @@ const PEAK_POLAR: f32 = 0.24 * PI;
 
 impl HoodSurface {
     pub fn new(head: &HeadForm, torso: &TorsoForm, hood: &Hood, seed: u32) -> HoodSurface {
-        Self::over(head, torso, None, hood, seed)
+        Self::over(head, torso, None, 0.0, hood, seed)
     }
 
     /// The sheet with its cape hung over `under` as well as the torso (the arms and whatever is
     /// worn on them), as a cloak is, so it lies on the shoulders and falls down them instead
     /// of standing out from a form widened all round to clear them.
-    pub fn over(head: &HeadForm, torso: &TorsoForm, under: Option<Underlay>, hood: &Hood, seed: u32) -> HoodSurface {
+    pub fn over(head: &HeadForm, torso: &TorsoForm, under: Option<Underlay>, min_opening: f32, hood: &Hood, seed: u32) -> HoodSurface {
         let mut rng = Mulberry32::new(seed ^ 0x2545_f491);
         let style = hood.style;
         let ease = match style {
@@ -126,7 +129,7 @@ impl HoodSurface {
         let (s_cape, s_head) = if style.has_cape() { (0.34, 0.5) } else { (0.0, 0.0) };
         let lift = 0.35 + 0.35 * hood.peak;
         let peak_pull = vec3::scale([0.0, lift * 0.7, -lift], hood.peak);
-        let mut surface = HoodSurface { head: *head, hood: *hood, cape, ease, s_cape, s_head, cape_top, cape_hem, peak_pull, polar_low: FRONT_RIM };
+        let mut surface = HoodSurface { head: *head, hood: *hood, cape, ease, s_cape, s_head, cape_top, cape_hem, peak_pull, polar_low: FRONT_RIM, min_opening };
         if surface.cape.is_some() {
             surface.neck_join();
         }
@@ -182,7 +185,7 @@ impl HoodSurface {
             HoodStyle::Coif => (1.05 + 0.4 * o) * smoothstep(0.1 * PI, 0.3 * PI, polar),
             // Closed over the crown (a seam), open round the face, a slit under the chin.
             _ => {
-                let max = 0.5 + 0.6 * o;
+                let max = (0.5 + 0.6 * o).max(self.min_opening);
                 max * smoothstep(0.16 * PI, 0.36 * PI, polar) * (1.0 - smoothstep(CLOSE_FROM, FRONT_RIM, polar))
                     + SLIT * smoothstep(0.5 * PI, FRONT_RIM, polar)
             }
@@ -379,13 +382,14 @@ pub fn hood_look(hood: &Hood) -> Look {
 /// `"binding"`, `"ties"`, `"ventail"`, `"strap"` and `"buckle"`, as the state calls for them.
 /// The hem's `hemline` trims the cape's edge, its `neck` the face opening.
 pub fn hood_parts(head: &HeadForm, torso: &TorsoForm, hood: &Hood, hem: &Hem, seed: u32) -> Parts {
-    hood_parts_over(head, torso, None, hood, hem, seed)
+    hood_parts_over(head, torso, None, 0.0, hood, hem, seed)
 }
 
-/// [`hood_parts`] with the cape hung over `under` too ([`HoodSurface::over`]).
-pub fn hood_parts_over(head: &HeadForm, torso: &TorsoForm, under: Option<Underlay>, hood: &Hood, hem: &Hem, seed: u32) -> Parts {
+/// [`hood_parts`] with the cape hung over `under` too, and the face opening at least
+/// `min_opening` round ([`HoodSurface::over`]).
+pub fn hood_parts_over(head: &HeadForm, torso: &TorsoForm, under: Option<Underlay>, min_opening: f32, hood: &Hood, hem: &Hem, seed: u32) -> Parts {
     let mut parts = Parts::new();
-    let surface = HoodSurface::over(head, torso, under, hood, seed);
+    let surface = HoodSurface::over(head, torso, under, min_opening, hood, seed);
     let look = hood_look(hood);
     let t = thickness(hood.style);
     let style = hood.style;
