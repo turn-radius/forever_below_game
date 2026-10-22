@@ -45,6 +45,48 @@ pub const FRAME_GOLD: Color = hex(0xe3b76a);
 pub const OK: Color = hex(0x86ba80);
 pub const BAD: Color = hex(0xea735b);
 
+/// Coins in their own metal, so a price reads at a glance: gold, silver and copper pieces.
+pub const COIN_GOLD: Color = hex(0xe8bf5a);
+pub const COIN_SILVER: Color = hex(0xc9d0d8);
+pub const COIN_COPPER: Color = hex(0xd9875a);
+
+/// `coins` cut into runs for a price, each in its metal: "2 gp" gold, " 3 sp" silver, " 5 cp"
+/// copper, made into the fewest coins first. No coin is "0 cp", in copper.
+pub fn coin_runs(coins: fb_items::Coins) -> Vec<(String, Color)> {
+    let c = fb_items::Coins::from_copper(coins.total_copper());
+    let runs: Vec<(String, Color)> = [(c.gp, "gp", COIN_GOLD), (c.sp, "sp", COIN_SILVER), (c.cp, "cp", COIN_COPPER)]
+        .into_iter()
+        .filter(|&(n, ..)| n > 0)
+        .enumerate()
+        .map(|(i, (n, unit, colour))| (format!("{}{n} {unit}", if i == 0 { "" } else { " " }), colour))
+        .collect();
+    if runs.is_empty() { vec![("0 cp".to_string(), COIN_COPPER)] } else { runs }
+}
+
+/// A price short enough for a grid cell, in its largest coin, with one decimal under ten:
+/// 250 cp is "2.5g", 2500 cp "25g", 35 cp "3.5s", 7 cp "7c". The colour is that coin's.
+pub fn coin_tag(copper: u64) -> (String, Color) {
+    let (unit, per, colour) = match copper {
+        100.. => ("g", 100, COIN_GOLD),
+        10.. => ("s", 10, COIN_SILVER),
+        _ => ("c", 1, COIN_COPPER),
+    };
+    let tenths = (copper * 10 + per / 2) / per;
+    let text = match tenths {
+        100.. => format!("{}{unit}", (copper + per / 2) / per),
+        t if t % 10 == 0 => format!("{}{unit}", t / 10),
+        t => format!("{}.{}{unit}", t / 10, t % 10),
+    };
+    (text, colour)
+}
+
+/// Spawns `coins` as spans of the text `line`, each in its metal, in Plex Mono bold at `size`.
+pub fn coin_spans(line: &mut ChildSpawnerCommands, fonts: &UiFonts, coins: fb_items::Coins, size: f32) {
+    for (run, colour) in coin_runs(coins) {
+        line.spawn((TextSpan::new(run), UiFonts::style(&fonts.mono_bold, size, colour)));
+    }
+}
+
 /// The colour an item's name is written in: the plate's dark-theme rarity colours
 /// (`--r-common` to `--r-legend`), its four hues lightened to read on the dark page.
 pub fn rarity_color(rarity: Rarity) -> Color {
@@ -277,6 +319,26 @@ mod tests {
         // Drawn at two thirds, the interface's pixel under the mouse is half as far again.
         let cursor = ui_cursor(&window, Some(&UiScale(2.0 / 3.0))).unwrap();
         assert!((cursor - Vec2::new(960.0, 450.0)).length() < 1e-3, "{cursor}");
+    }
+
+    #[test]
+    fn coins_read_in_their_own_metal() {
+        use fb_items::Coins;
+        let runs = coin_runs(Coins { gp: 0, sp: 23, cp: 5 });
+        assert_eq!(runs, vec![("2 gp".to_string(), COIN_GOLD), (" 3 sp".to_string(), COIN_SILVER), (" 5 cp".to_string(), COIN_COPPER)]);
+        assert_eq!(coin_runs(Coins { gp: 0, sp: 8, cp: 0 }), vec![("8 sp".to_string(), COIN_SILVER)]);
+        assert_eq!(coin_runs(Coins::default()), vec![("0 cp".to_string(), COIN_COPPER)]);
+        for metal in [COIN_GOLD, COIN_SILVER, COIN_COPPER] {
+            assert!(contrast_ratio(metal, BG) >= 4.5, "readable on the page");
+            assert!(contrast_ratio(metal, CELL) >= 4.5, "readable on a cell");
+        }
+    }
+
+    #[test]
+    fn a_grid_tag_names_the_largest_coin() {
+        let tag = |cp| coin_tag(cp).0;
+        assert_eq!([tag(250), tag(2500), tag(35), tag(7), tag(200), tag(1049), tag(99), tag(995)], ["2.5g", "25g", "3.5s", "7c", "2g", "10g", "9.9s", "10g"]);
+        assert_eq!(coin_tag(250).1, COIN_GOLD);
     }
 
     #[test]

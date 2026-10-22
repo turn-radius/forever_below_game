@@ -2433,6 +2433,29 @@ mod tests {
         spans.iter().filter_map(|s| app.world().get::<TextSpan>(*s)).map(|t| t.0.clone()).collect()
     }
 
+    /// The header's purse line, as read from its text and spans.
+    fn header_purse(app: &mut App) -> String {
+        let mut lines = app.world_mut().query_filtered::<(&Text, &Children), With<header::HeaderPurse>>();
+        let (text, spans) = lines.single(app.world()).unwrap();
+        let spans = spans.to_vec();
+        let head = text.0.clone();
+        head + &spans.iter().filter_map(|s| app.world().get::<TextSpan>(*s)).map(|t| t.0.clone()).collect::<String>()
+    }
+
+    #[test]
+    fn the_header_shows_the_coin_purse_and_opening_a_purse_fills_it() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyI);
+        assert_eq!(header_purse(&mut app), "Purse empty");
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let purse = inventory.add(purse_of(fb_items::Coins { gp: 2, sp: 3, cp: 0 }));
+            quick(&mut inventory, purse).unwrap();
+        }
+        app.update();
+        assert_eq!(header_purse(&mut app), "Purse 2 gp 3 sp");
+    }
+
     #[test]
     fn the_header_s_stats_update_when_equipping() {
         let mut app = screen_app();
