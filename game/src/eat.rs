@@ -158,6 +158,7 @@ pub struct Eating<'w, 's> {
     settings: Option<Res<'w, GameSettings>>,
     tuning: Res<'w, Tuning>,
     character: Option<ResMut<'w, Character>>,
+    page: Option<ResMut<'w, crate::reading::OpenPage>>,
 }
 
 impl Eating<'_, '_> {
@@ -218,10 +219,15 @@ impl Eating<'_, '_> {
         Some(line)
     }
 
-    /// Reads book `id` ([`Character::read`]): the score it teaches rises for good, once per
-    /// delver. Returns what the toast says; `None` if it is not a book or there is no delver.
+    /// Reads `id`: a note's words open on a page ([`crate::reading`]), and a book teaches
+    /// ([`Character::read`]), the score it teaches rising for good, once per delver. Returns what
+    /// the toast says; `None` if there is nothing to read on it or no delver to read a book.
     pub fn read(&mut self, inventory: &Inventory, id: ItemId) -> Option<String> {
         let book = inventory.item(id)?;
+        if let (Some(words), Some(page)) = (&book.words, self.page.as_mut()) {
+            page.open(book.title(), words.clone());
+            return Some(format!("You read the {}", book.title().to_lowercase()));
+        }
         let character = self.character.as_mut()?;
         book.lesson()?;
         let name = book.title().to_lowercase();

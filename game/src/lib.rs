@@ -61,6 +61,7 @@ pub mod play;
 pub mod player;
 pub mod props;
 pub mod quickslots;
+pub mod reading;
 pub mod record;
 pub mod shelf;
 pub mod render;

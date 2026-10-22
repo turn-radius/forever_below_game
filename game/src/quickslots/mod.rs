@@ -100,7 +100,7 @@ pub enum QuickUse {
     Light,
     /// Fill the lanterns held or at the hip from it.
     Refill,
-    /// Read it: a book.
+    /// Read it: a book, or a note.
     Read,
     /// Draw it into the hand.
     Draw,
@@ -114,7 +114,7 @@ pub fn quick_use(item: &Item) -> Option<QuickUse> {
         Some(QuickUse::Light)
     } else if item.has_oil() {
         Some(QuickUse::Refill)
-    } else if item.lesson().is_some() {
+    } else if item.lesson().is_some() || item.words.is_some() {
         Some(QuickUse::Read)
     } else if item.slots().iter().any(|s| matches!(s, Slot::Mainhand | Slot::Offhand)) {
         Some(QuickUse::Draw)
@@ -639,6 +639,7 @@ mod tests {
         assert_eq!(quick_use(&item(fb_items::LAMP_OIL)), Some(QuickUse::Refill));
         assert_eq!(quick_use(&item("Book")), Some(QuickUse::Read));
         assert_eq!(quick_use(&item("Scroll")), None, "a scroll does nothing yet");
+        assert_eq!(quick_use(&item("Note").in_world(&fb_items::notes::Lore::default())), Some(QuickUse::Read), "a note is read");
         bind(&mut app, 4, first);
         press(&mut app, KeyCode::Digit5);
         assert_eq!(toast(&app), "You fill the lantern");

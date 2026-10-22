@@ -28,7 +28,7 @@
   "note_trader": [
     "See #trader# for the best #wares#. Signed, #trader_faction#",
     "#trader# of #trader_faction# deals in #wares#, and fairly. Tell them #writer# sent you.",
-    "Need #wares#? Ask for #trader#. #trader_faction.capitalize# keep their #trade# well.",
+    "Need #wares#? Ask for #trader#, the #trade# of #trader_faction#. Tell them nothing of me.",
     "#trader#, #trade# to #trader_faction#: #wares#, and no questions asked.",
     "Owe #trader# eleven silver for #wares#. Must pay before they send #trader_faction# after me."
   ],

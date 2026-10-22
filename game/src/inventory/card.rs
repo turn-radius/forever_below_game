@@ -42,6 +42,8 @@ pub struct CardText {
     pub light: Option<String>,
     /// What food or drink eases, or what a book teaches: "Eases hunger 40%", "Teaches +1 WIS".
     pub consume: Option<String>,
+    /// What is written on it: a note's words.
+    pub words: Option<String>,
     /// The keys and verbs at the foot, from [`crate::interact::key_actions`]: ("F", "Take").
     /// [`card_text`] leaves it empty; [`show_card`] fills it from the keymap and the item's place.
     pub actions: Vec<(String, &'static str)>,
@@ -163,6 +165,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         stats: stat_lines(s),
         light: light_line(&item.shape),
         consume: consume_line(item),
+        words: item.words.clone(),
         actions: Vec::new(),
         history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()).into_iter().chain(item.history.iter().cloned()).collect(),
     }
@@ -567,6 +570,13 @@ fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, font
             if let Some(consume) = &text.consume {
                 info.spawn((Text::new(consume.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
             }
+            if let Some(words) = &text.words {
+                info.spawn((
+                    Node { margin: UiRect::vertical(px(4)), padding: UiRect::axes(px(10), px(8)), ..default() },
+                    BackgroundColor(BG.mix(&GOLD, 0.2)),
+                ))
+                .with_child((Text::new(words.clone()), UiFonts::style(&fonts.body_italic, 14.5, INK)));
+            }
             if !text.actions.is_empty() {
                 info.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(6), margin: UiRect::top(px(2)), ..default() }).with_children(|row| {
                     for (n, (key, name)) in text.actions.iter().enumerate() {
@@ -812,6 +822,17 @@ mod tests {
             assert_eq!((line.text.as_str(), line.name.as_str(), line.good), (affix.text.as_str(), affix.name.as_str(), affix.good));
         }
         assert!(card.history.is_empty());
+        assert_eq!(card.words, None);
+    }
+
+    #[test]
+    fn a_notes_card_shows_its_words() {
+        let lore = fb_level::generate(4, 2).lore();
+        let note = fb_items::roll_item("Note", 12).unwrap().in_world(&lore);
+        assert_eq!(card_text(&note, None).words, note.words);
+        assert!(card_text(&note, None).words.is_some());
+        assert_eq!(crate::interact::use_of(&note), Some(crate::interact::Verb::Read));
+        assert_eq!(crate::interact::use_of(&fb_items::roll_item("Note", 12).unwrap()), None, "a blank note has nothing to read");
     }
 
     #[test]

@@ -16,8 +16,8 @@ pub enum AppState {
 
 /// The debug switches that open the game straight into the level: each shows or holds
 /// something in it (README, "Debug switches").
-pub const LEVEL_SWITCHES: [&str; 10] =
-    ["FB_DEBUG_POSE", "FB_DEBUG_CAMERA", "FB_DEBUG_HOVER", "FB_DEBUG_KIT", "FB_DROP", "FB_OPEN_INVENTORY", "FB_OPEN_CONTAINER", "FB_OPEN_MENU", "FB_OPEN_MAP", "FB_COMMISSION"];
+pub const LEVEL_SWITCHES: [&str; 11] =
+    ["FB_DEBUG_POSE", "FB_DEBUG_CAMERA", "FB_DEBUG_HOVER", "FB_DEBUG_KIT", "FB_DROP", "FB_OPEN_INVENTORY", "FB_OPEN_CONTAINER", "FB_OPEN_MENU", "FB_OPEN_MAP", "FB_COMMISSION", "FB_READ"];
 
 /// What the command line asks of a run of the level.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
