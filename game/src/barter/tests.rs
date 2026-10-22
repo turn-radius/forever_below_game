@@ -98,7 +98,8 @@ fn a_deal_moves_the_wares_and_the_coin_together() {
     let mut shelf = shelf_of(vec![ware.clone()], 6000);
     let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
     let id = shelf_id(&inventory, &session, ware.title());
-    assert_eq!(session.tag(&inventory, id), Some(format!("Costs {}", Coins::from_copper(cost).short())));
+    assert_eq!(session.tag(&inventory, id), Some(Price::Costs { price: Coins::from_copper(cost), worth: ware.value(), afford: true }));
+    assert_eq!(session.tag(&inventory, id).unwrap().line(), format!("Costs {} \u{b7} worth {}", Coins::from_copper(cost).short(), ware.value().short()));
     // Nothing is bought until it is in the pack.
     assert!(session.deal(&inventory).is_empty());
     inventory.stow(id).unwrap();
@@ -127,7 +128,7 @@ fn selling_pays_into_the_coin_purse_and_the_trader_runs_down() {
     let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
     inventory.shelve(id, session.shelf).unwrap();
     assert_eq!(session.deal(&inventory).offer, pays);
-    assert_eq!(session.tag(&inventory, id), Some(format!("Pays {}", Coins::from_copper(pays).short())));
+    assert_eq!(session.tag(&inventory, id), Some(Price::SellsFor { price: Coins::from_copper(pays), worth: mine.value() }));
     settle(&mut inventory, &mut session, &mut shelf).unwrap();
     assert_eq!(wallet(&inventory).total_copper(), 50 + pays);
     // Into the delver's coin purse; the purse they carry is as it was.
@@ -183,6 +184,7 @@ fn short_coin_refuses_and_nothing_moves() {
     let mut shelf = shelf_of(vec![ware], 6000);
     let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
     let id = shelf_id(&inventory, &session, &session_title(&inventory, &session));
+    assert!(matches!(session.tag(&inventory, id), Some(Price::Costs { afford: false, .. })), "a ware out of reach is marked so");
     inventory.stow(id).unwrap();
     let before = shelf.clone();
     let refused = settle(&mut inventory, &mut session, &mut shelf).unwrap_err();

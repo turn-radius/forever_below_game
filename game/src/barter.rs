@@ -38,13 +38,14 @@ use crate::enchanting::{plan_pay, wallet};
 use crate::folk::{AimedFolk, Denizen};
 use crate::folk_routine::Routine;
 use crate::hostility::Hostility;
+use crate::inventory::card::Price;
 use crate::inventory::{Drag, FloorChange, GridView, Inventory, ItemId, Location, OpenContainer, Placement, Refusal, Target, Toasts};
 use crate::keymap::{Action, ActionInput};
 use crate::play::{DelveSystems, Player, Screen, ScreenOpen, show_screen};
 use crate::record::WorldRecord;
 use crate::shelf::Shelf;
 use crate::talk::{Service, ServiceChosen};
-use crate::ui::{ACCENT, BAD, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, node_rect, ui_cursor};
+use crate::ui::{ACCENT, BAD, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, coin_spans, node_rect, ui_cursor};
 
 /// A number for each tier.
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -212,18 +213,19 @@ impl Session {
         deal
     }
 
-    /// The price on `id`'s card while bartering: what a ware costs, or what the trader pays for
-    /// something of the delver's.
-    pub fn tag(&self, inventory: &Inventory, id: ItemId) -> Option<String> {
+    /// The price on `id`'s card and in its cell while bartering: what a ware costs, and whether
+    /// the delver can pay it, or what the trader pays for something of the delver's.
+    pub fn tag(&self, inventory: &Inventory, id: ItemId) -> Option<Price> {
         let item = inventory.item(id)?;
         if item.coins.is_some() || id == self.shelf {
             return None;
         }
+        let worth = item.value();
         if self.stock.contains(&id) {
-            return price(item, self.trade, self.band).map(|p| format!("Costs {}", Coins::from_copper(p).short()));
+            return price(item, self.trade, self.band).map(|p| Price::Costs { price: Coins::from_copper(p), worth, afford: wallet(inventory).total_copper() >= p });
         }
         if inventory.is_carried(id) || self.on_shelf(inventory, id) {
-            return offer(item, self.trade, self.band).map(|p| format!("Pays {}", Coins::from_copper(p).short()));
+            return offer(item, self.trade, self.band).map(|p| Price::SellsFor { price: Coins::from_copper(p), worth });
         }
         None
     }
@@ -419,8 +421,8 @@ impl Barter {
         true
     }
 
-    /// The price line for `id`'s card, while bartering.
-    pub fn tag(&self, inventory: &Inventory, id: ItemId) -> Option<String> {
+    /// The price for `id`'s card and cell, while bartering.
+    pub fn tag(&self, inventory: &Inventory, id: ItemId) -> Option<Price> {
         self.session.as_ref()?.tag(inventory, id)
     }
 }
@@ -921,10 +923,17 @@ pub fn panel(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, barter: &Barter
                 head.spawn((TextSpan::new(format!("{} \u{b7} ", session.trade.label())), UiFonts::style(&fonts.body, 15.0, MUTED)));
                 head.spawn((TextSpan::new(session.band.label()), UiFonts::style(&fonts.body_medium, 15.0, band_colour)));
             });
-            panel.spawn((Text::new(format!("Buying {} \u{b7} {}", deal.buying.len(), coin(deal.cost))), UiFonts::style(&fonts.body, 17.0, INK)));
-            panel.spawn((Text::new(format!("Selling {} \u{b7} {}", deal.selling.len(), coin(deal.offer))), UiFonts::style(&fonts.body, 17.0, INK)));
+            for (word, count, copper) in [("Buying", deal.buying.len(), deal.cost), ("Selling", deal.selling.len(), deal.offer)] {
+                panel.spawn((Text::new(format!("{word} {count} \u{b7} ")), UiFonts::style(&fonts.body, 17.0, INK))).with_children(|row| {
+                    coin_spans(row, fonts, Coins::from_copper(copper), 16.0);
+                });
+            }
             panel.spawn((Text::new(line), UiFonts::style(&fonts.body_medium, 18.0, colour)));
-            panel.spawn((Text::new(format!("You carry {} \u{b7} {} has {}", coin(mine), session.name, coin(session.purse))), UiFonts::style(&fonts.mono, 12.5, MUTED)));
+            panel.spawn((Text::new("You carry "), UiFonts::style(&fonts.mono, 12.5, MUTED))).with_children(|row| {
+                coin_spans(row, fonts, Coins::from_copper(mine), 12.5);
+                row.spawn((TextSpan::new(format!(" \u{b7} {} has ", session.name)), UiFonts::style(&fonts.mono, 12.5, MUTED)));
+                coin_spans(row, fonts, Coins::from_copper(session.purse), 12.5);
+            });
             if let Some((said, for_totals)) = &barter.notice
                 && (*for_totals == (0, 0) || *for_totals == (deal.cost, deal.offer))
             {
