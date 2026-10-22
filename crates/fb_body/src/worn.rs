@@ -36,7 +36,7 @@ use armory::build::form::{BACK, FRONT, HeadForm, LimbForm, TorsoForm, TorsoProfi
 use armory::build::garment::{Fitting, Notch, Underlay, garment_drape, garment_parts_fitted};
 use armory::build::hand::hand_parts_fitted;
 use armory::build::hat::hat_parts;
-use armory::build::hood::hood_parts;
+use armory::build::hood::hood_parts_over;
 use armory::build::legwear::{LegDrape, LegHole, legwear_parts_holed};
 use armory::build::parts::{Look, Parts};
 use armory::build::strap::strap;
@@ -283,11 +283,9 @@ struct Envelope<'a> {
 enum Over {
     /// What is worn on the trunk.
     Trunk,
-    /// The trunk and the arms with whatever is on them, its shoulder section moved up to the
-    /// top of the arms (a hood's cape).
-    Arms,
-    /// The bare trunk, its shoulder section moved up to the top of the arms, for a cloak that
-    /// hangs over everything worn, and the arms, through an underlay ([`Envelope::outline`]).
+    /// The bare trunk, its shoulder section moved up to the top of the arms, for a cloak or a
+    /// hood's cape that hangs over everything worn, and the arms, through an underlay
+    /// ([`Envelope::outline`]).
     Shoulders,
 }
 
@@ -434,6 +432,7 @@ impl<'a> Envelope<'a> {
         let body = self.body;
         let top = self.form.neck.y + 0.7; // up to the top of a high collar
         let crotch = body.hip_y - 0.14 * body.trunk_length;
+        let head_limit = self.form.shoulder_top.y + 0.1 * body.scale;
         // Everything counts toward what a cloak hangs over, a belt's pouch included, but for
         // what is on a raised forearm.
         for part in &mesh.parts {
@@ -467,6 +466,11 @@ impl<'a> Envelope<'a> {
             for &p in &part.positions {
                 let q = self.torso(p);
                 if q[1] > top {
+                    continue;
+                }
+                // A hood's head and the top of its neck are not a shoulder: counted, they would
+                // raise the shoulders (and the collar of a cloak over them) up the face.
+                if slot == Slot::Head && q[1] > head_limit {
                     continue;
                 }
                 let e = self.trunk_excess(q).max(0.0);
@@ -522,7 +526,6 @@ impl<'a> Envelope<'a> {
     fn form(&self, over: Over, fit: f32) -> TorsoForm {
         let relief = match over {
             Over::Trunk => Some(&self.trunk),
-            Over::Arms => Some(&self.over_arms),
             Over::Shoulders => None,
         };
         let mut base = self.form.rings();
@@ -544,7 +547,11 @@ impl<'a> Envelope<'a> {
                 .filter(|&(y, phi, e)| phi.cos().abs() > 0.7 && e > 0.25 * s && self.reach.at(phi, y) + e > wide)
                 .fold(base[7].y, |m, c| m.max(c.0));
             base[7].y = top;
-            base[8].y = neck.max(top + 0.25 * s);
+            // The collar stops at the jaw (it rode up the face on a head small over its
+            // shoulders), unless the shoulders themselves stand that high.
+            let head = self.body.head_form();
+            let jaw = head.centre[1] - 0.7 * head.half_height;
+            base[8].y = neck.max(top + 0.25 * s).min(jaw.max(top + 0.12 * s));
         }
         let ring_y = base.map(|r| r.y);
         let mut grow = [[0.0f32; 2]; 9];
@@ -1343,7 +1350,11 @@ fn helm(body: &Body, state: &HelmState, fit: HeadFit) -> ItemMesh {
 fn hood(body: &Body, env: &Envelope, state: &HoodState, head: HeadFit) -> ItemMesh {
     let mut hood = state.hood;
     hood.cape *= body.scale;
-    on_body(body, hood_parts(&head_over_hair(body, head), &env.form(Over::Arms, 1.0), &hood, &state.hem, state.seed).finish())
+    // The cape rests on the shoulders and hangs over the arms and what is on them through an
+    // underlay, as a cloak does, rather than on a form widened all round to clear them (which
+    // stood out from the shoulders like a disc).
+    let under = |a: f32, y: f32| env.outline.at(a, y) + GAP;
+    on_body(body, hood_parts_over(&head_over_hair(body, head), &env.form(Over::Shoulders, 1.0), Some(&under as Underlay), &hood, &state.hem, state.seed).finish())
 }
 
 /// A hat over the head and hair.
