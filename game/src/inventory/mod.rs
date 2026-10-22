@@ -813,7 +813,7 @@ pub fn open_purse(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChan
 
 /// What the toast says when a purse holding `coins` is opened.
 pub fn opened_line(coins: fb_items::Coins) -> String {
-    format!("You empty the purse: {}.", coins.short())
+    if coins.is_empty() { "The purse is empty.".to_string() } else { format!("You empty the purse: {}.", coins.short()) }
 }
 
 /// Takes `id` into the carried grids if it is not carried: lying underfoot it is picked up
@@ -2734,6 +2734,7 @@ mod tests {
         assert_eq!(inventory.item(purse), None);
         assert_eq!(inventory.contents_count(pack), 0);
         assert_eq!(opened_line(Coins { gp: 2, sp: 3, cp: 0 }), "You empty the purse: 2 gp 3 sp.");
+        assert_eq!(opened_line(Coins::default()), "The purse is empty.");
         // One lying underfoot is lifted from the level as it is opened.
         let lying = inventory.add(purse_of(Coins { gp: 0, sp: 0, cp: 7 }));
         assert_eq!(quick(&mut inventory, lying), Ok(vec![FloorChange::Lifted(lying)]));

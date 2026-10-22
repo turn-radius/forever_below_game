@@ -45,15 +45,17 @@ pub struct Payment {
 }
 
 impl Payment {
-    /// Makes the payment. `false`, and nothing changed, when a purse is no longer there.
+    /// Makes the payment. `false`, and nothing changed, when a purse is no longer there or
+    /// cannot take its new coins.
     pub fn make(self, inventory: &mut Inventory) -> bool {
-        if self.purses.iter().any(|(id, _)| inventory.item(*id).is_none()) {
+        let Some(before) = self.purses.iter().map(|(id, _)| Some((*id, inventory.item(*id)?.clone()))).collect::<Option<Vec<_>>>() else { return false };
+        if !self.purses.into_iter().all(|(id, purse)| inventory.replace_item(id, purse)) {
+            for (id, purse) in before {
+                inventory.replace_item(id, purse);
+            }
             return false;
         }
         inventory.set_coins(self.coins);
-        for (id, purse) in self.purses {
-            inventory.replace_item(id, purse);
-        }
         true
     }
 }
