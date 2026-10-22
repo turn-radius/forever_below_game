@@ -6,6 +6,7 @@ use crate::inventory::Toast;
 use crate::keymap::Keymap;
 use crate::record::{LevelRecord, ShelfRecord, item_record};
 use fb_faction::{Profession, Style};
+use fb_items::ItemParts;
 use fb_level::FolkSpot;
 
 fn smith() -> Option<Trade> {
@@ -115,7 +116,7 @@ fn a_deal_moves_the_wares_and_the_coin_together() {
 }
 
 #[test]
-fn selling_pays_into_a_purse_and_the_trader_runs_down() {
+fn selling_pays_into_the_coin_purse_and_the_trader_runs_down() {
     let person = person(smith());
     let mine = sword(9);
     let pays = offer(&mine, smith().unwrap(), Band::Neutral).unwrap();
@@ -129,13 +130,15 @@ fn selling_pays_into_a_purse_and_the_trader_runs_down() {
     assert_eq!(session.tag(&inventory, id), Some(format!("Pays {}", Coins::from_copper(pays).short())));
     settle(&mut inventory, &mut session, &mut shelf).unwrap();
     assert_eq!(wallet(&inventory).total_copper(), 50 + pays);
+    // Into the delver's coin purse; the purse they carry is as it was.
+    assert_eq!(inventory.coins().total_copper(), pays);
     assert_eq!(shelf.purse, 6000 - pays);
     assert_eq!(shelf.sold, vec![mine]);
     assert!(!inventory.is_carried(id));
 }
 
 #[test]
-fn a_sale_with_no_purse_to_receive_into_makes_one() {
+fn a_sale_with_no_purse_carried_adds_no_item() {
     let person = person(smith());
     let mine = sword(9);
     let mut inventory = Inventory::default();
@@ -150,6 +153,25 @@ fn a_sale_with_no_purse_to_receive_into_makes_one() {
     assert_eq!(wallet(&inventory).total_copper(), 0);
     settle(&mut inventory, &mut session, &mut shelf).unwrap();
     assert_eq!(wallet(&inventory).total_copper(), pays);
+    assert_eq!(inventory.coins().total_copper(), pays);
+    assert_eq!(inventory.ids().filter(|&i| inventory.item(i).is_some_and(|x| x.coins.is_some())).count(), 0, "no purse made");
+}
+
+#[test]
+fn buying_takes_from_the_coin_purse_before_a_purse_carried() {
+    let person = person(smith());
+    let ware = sword(5);
+    let cost = price(&ware, smith().unwrap(), Band::Neutral).unwrap();
+    let mut inventory = delver(Coins::from_copper(cost));
+    inventory.set_coins(Coins::from_copper(cost - 1));
+    let mut shelf = shelf_of(vec![ware], 6000);
+    let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    let id = shelf_id(&inventory, &session, &session_title(&inventory, &session));
+    inventory.stow(id).unwrap();
+    settle(&mut inventory, &mut session, &mut shelf).unwrap();
+    assert_eq!(inventory.coins(), Coins::default());
+    let purse = inventory.ids().find(|&i| inventory.item(i).is_some_and(|x| x.coins.is_some())).unwrap();
+    assert_eq!(inventory.item(purse).unwrap().coins.unwrap().total_copper(), cost - 1, "one copper came from the purse");
 }
 
 #[test]

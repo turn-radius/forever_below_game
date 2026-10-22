@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bevy::prelude::Resource;
-use fb_items::{Item, Slot, footprint::Footprint};
+use fb_items::{Coins, Item, Slot, footprint::Footprint};
 
 use super::grid::{Grid, Misfit, Placement};
 
@@ -119,9 +119,26 @@ pub struct Inventory {
     /// Each container's grid and what lies in it, wherever the container is.
     grids: HashMap<ItemId, Grid<ItemId>>,
     worn: HashMap<Slot, ItemId>,
+    /// The delver's own coin purse: what they are paid, and what the purses they open hold.
+    coins: Coins,
 }
 
 impl Inventory {
+    /// What is in the delver's coin purse. [`crate::enchanting::wallet`] adds the purses they
+    /// carry unopened.
+    pub fn coins(&self) -> Coins {
+        self.coins
+    }
+
+    pub fn set_coins(&mut self, coins: Coins) {
+        self.coins = coins;
+    }
+
+    /// Puts `coins` in the delver's coin purse.
+    pub fn add_coins(&mut self, coins: Coins) {
+        self.coins = self.coins + coins;
+    }
+
     /// Keeps track of `item`, loose. A container gets its empty grid.
     pub fn add(&mut self, item: Item) -> ItemId {
         let id = ItemId(self.next);
@@ -149,16 +166,6 @@ impl Inventory {
 
     pub fn item(&self, id: ItemId) -> Option<&Item> {
         self.items.get(&id)
-    }
-
-    /// Takes up to `owed` copper's worth out of purse `id`, giving change, and returns what is
-    /// still owed. Its card says what is left.
-    pub fn spend(&mut self, id: ItemId, owed: u32) -> u32 {
-        let Some(item) = self.items.get_mut(&id) else { return owed };
-        let Some(coins) = item.coins.as_mut() else { return owed };
-        let still = fb_character::revival::pay_from(coins, owed);
-        item.profile.description = coins.to_string();
-        still
     }
 
     /// Lights `id` if it is out or puts it out if it is lit, wherever it is: in a hand, at the
