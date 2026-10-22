@@ -13,7 +13,7 @@
 //!   ([`crate::ui`]); the mouse is read in the interface's own pixels ([`ui_cursor`]). Back
 //!   returns to the talk; Esc leaves, and the folk's hold is released however it closes
 //!   ([`crate::talk`] treats the bench as the talk going on).
-//! - `FB_ENCHANT=<select|strip|reforge|offer|legendary|scrap>` fills the delver's pack and stock a few frames in
+//! - `FB_ENCHANT_OPEN=<tier>` opens the bench with no talk, for captures; `FB_ENCHANT=<equipped|inventory|select|strip|reforge|offer|legendary|scrap>` fills the delver's pack and stock a few frames in
 //!   and, once the bench is open (`FB_TALK=1 FB_TALK_TOPIC=<n>` opens it), picks an item and does
 //!   that, for captures.
 
@@ -30,7 +30,7 @@ use fb_items::{Coins, Item};
 use crate::carry::ViewModelCamera;
 use crate::enchanting::{self, Declined, Enchanting, Work, cost_line, quote, shortfall, tier_of, wallet};
 use crate::inventory::card::card_text;
-use crate::inventory::{Inventory, ItemId};
+use crate::inventory::{Icons, Inventory, ItemId, Location};
 use crate::keymap::{Action, ActionInput};
 use crate::play::{DelveSystems, Screen, ScreenOpen, show_screen};
 use crate::talk::{Service, ServiceChosen, Talk};
@@ -51,7 +51,7 @@ impl Plugin for EnchanterPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Bench>();
         if std::env::var("FB_ENCHANT").is_ok_and(|v| !v.is_empty()) {
-            app.add_systems(Update, (enchanting::bench_kit_for_capture, drive_for_capture).in_set(DelveSystems));
+            app.add_systems(Update, (enchanting::bench_kit_for_capture, open_for_capture, drive_for_capture).chain().in_set(DelveSystems));
         }
         app.add_systems(OnExit(crate::launch::AppState::Delving), |mut bench: ResMut<Bench>| *bench = Bench::default());
         app.add_systems(Update, (open_bench, click_bench, close_bench, build_bench, hover_bench, scroll_bench).chain().in_set(DelveSystems));
@@ -62,6 +62,7 @@ impl Plugin for EnchanterPlugin {
 #[derive(Clone, Copy, Debug)]
 enum Do {
     Pick(ItemId),
+    Tab(BenchTab),
     Strip(&'static Affix),
     Add(&'static Affix),
     Reforge,
@@ -69,6 +70,28 @@ enum Do {
     Scrap,
     Back,
 }
+
+/// The two lists of what the delver has: gear worn or held, and gear packed away.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum BenchTab {
+    #[default]
+    Equipped,
+    Inventory,
+}
+
+impl BenchTab {
+    const ALL: [BenchTab; 2] = [BenchTab::Equipped, BenchTab::Inventory];
+
+    fn label(self) -> &'static str {
+        match self {
+            BenchTab::Equipped => "Equipped",
+            BenchTab::Inventory => "Inventory",
+        }
+    }
+}
+
+/// The side of the box the picked item's drawing is fitted into, logical pixels.
+const DRAWING_BOX: f32 = 200.0;
 
 /// A button at the bench. `enabled` ones light under the mouse; `scrolls` ones sit in a scrolled
 /// column and count only where that column shows.
@@ -100,6 +123,8 @@ pub struct Open {
     mode: Service,
     by: Enchanter,
     selected: Option<ItemId>,
+    /// The list showing on the left.
+    tab: BenchTab,
     /// What the last thing done said, and whether it went well.
     notice: Option<(String, bool)>,
     scrapped: Option<Scrapped>,
@@ -140,15 +165,41 @@ fn candidates(inventory: &Inventory, mode: Service) -> Vec<ItemId> {
     ids
 }
 
+/// Whether `id` is worn or held, and not merely carried in something worn.
+fn is_equipped(inventory: &Inventory, id: ItemId) -> bool {
+    matches!(inventory.location(id), Some(Location::Worn(_)))
+}
+
+/// The gear the bench could work on, split into what is worn or held and what is packed.
+fn split(inventory: &Inventory, mode: Service) -> (Vec<ItemId>, Vec<ItemId>) {
+    candidates(inventory, mode).into_iter().partition(|&id| is_equipped(inventory, id))
+}
+
+/// The tab an item is listed under.
+fn tab_of(inventory: &Inventory, id: ItemId) -> BenchTab {
+    if is_equipped(inventory, id) { BenchTab::Equipped } else { BenchTab::Inventory }
+}
+
+/// The rows of "Make legendary" that `by` offers for `item`: none unless the bench will make it
+/// legendary at all. An item with no affix to take gets the one row without an affix.
+fn legend_rows(item: &Item, by: &Enchanter) -> Vec<Option<&'static Affix>> {
+    if legend_note(item, by).is_some() {
+        return vec![];
+    }
+    let options = enchant::legendary_options(item, by.tier);
+    if options.is_empty() { vec![None] } else { options.into_iter().map(Some).collect() }
+}
+
 /// The talk chose Enchant or Scrap: open the bench on the speaker.
-fn open_bench(mut chosen: MessageReader<ServiceChosen>, talk: Res<Talk>, level: Option<Res<crate::play::CurrentLevel>>, mut bench: ResMut<Bench>, mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
+fn open_bench(mut chosen: MessageReader<ServiceChosen>, talk: Res<Talk>, level: Option<Res<crate::play::CurrentLevel>>, inventory: Res<Inventory>, mut bench: ResMut<Bench>, mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
     for ServiceChosen { service, .. } in chosen.read() {
         if !matches!(service, Service::Enchant | Service::Scrap) {
             continue;
         }
         let Some(speaker) = talk.speaker.as_ref() else { continue };
         let tier = speaker.trade.map_or(enchant::Tier::Novice, |t| tier_of(t.tier));
-        bench.open = Some(Open { mode: *service, by: Enchanter { name: speaker.name.clone(), tier, faction: speaker.faction.clone() }, selected: None, notice: None, scrapped: None, level: level.as_ref().map_or(0, |l| l.0.depth) });
+        let tab = if split(&inventory, *service).0.is_empty() { BenchTab::Inventory } else { BenchTab::Equipped };
+        bench.open = Some(Open { mode: *service, by: Enchanter { name: speaker.name.clone(), tier, faction: speaker.faction.clone() }, selected: None, tab, notice: None, scrapped: None, level: level.as_ref().map_or(0, |l| l.0.depth) });
         bench.changed();
         show_screen(&mut open, Some(Screen::Enchant), cursor.as_deref_mut().map(|c| &mut **c));
     }
@@ -171,7 +222,9 @@ fn act(bench: &mut Bench, inventory: &mut Inventory, stock: &mut Enchanting, act
             open.selected = Some(id);
             open.notice = None;
             open.scrapped = None;
+            open.tab = tab_of(inventory, id);
         }
+        Do::Tab(tab) => open.tab = tab,
         Do::Strip(affix) => finish(open, inventory, stock, Work::Strip(affix)),
         Do::Add(affix) => finish(open, inventory, stock, Work::Add(affix)),
         Do::Reforge => finish(open, inventory, stock, Work::Reforge),
@@ -254,7 +307,12 @@ fn hover_bench(
     let point = windows.iter().next().and_then(|w| ui_cursor(w, ui_scale.as_deref()));
     for (button, node, at, mut fill, mut border) in &mut buttons {
         let over = button.enabled && point.is_some_and(|p| node_rect(node, at).contains(p) && (!button.scrolls || columns.iter().any(|(n, t)| node_rect(n, t).contains(p))));
-        let picked = matches!(button.act, Do::Pick(id) if bench.open.as_ref().and_then(|o| o.selected) == Some(id));
+        let current = bench.open.as_ref();
+        let picked = match button.act {
+            Do::Pick(id) => current.and_then(|o| o.selected) == Some(id),
+            Do::Tab(tab) => current.is_some_and(|o| o.tab == tab),
+            _ => false,
+        };
         let (want_fill, want_border) = if over { (FAINT, LINE) } else if picked { (CELL, ACCENT) } else { (CELL, FAINT) };
         if fill.0 != want_fill {
             fill.0 = want_fill;
@@ -330,6 +388,7 @@ fn build_bench(
     inventory: Res<Inventory>,
     stock: Res<Enchanting>,
     fonts: Option<Res<UiFonts>>,
+    mut icons: Icons,
     cameras: Query<Entity, With<ViewModelCamera>>,
     roots: Query<Entity, With<BenchScreen>>,
     mut drawn: Local<Option<u32>>,
@@ -365,7 +424,8 @@ fn build_bench(
     };
     *drawn = Some(bench.revision);
     let purse = wallet(&inventory);
-    let list = candidates(&inventory, open.mode);
+    let (worn, packed) = split(&inventory, open.mode);
+    let list = if open.tab == BenchTab::Equipped { worn.clone() } else { packed.clone() };
     let by = &open.by;
     commands.entity(root).with_children(|root| {
         root.spawn((
@@ -399,10 +459,27 @@ fn build_bench(
             panel.spawn((Node { height: px(1), flex_shrink: 0.0, ..default() }, BackgroundColor(FAINT)));
             panel.spawn(Node { flex_grow: 1.0, min_height: px(0), column_gap: px(26), ..default() }).with_children(|body| {
                 // The list of what the delver carries.
-                body.spawn((ScrollColumn, ScrollPosition::default(), Node { width: px(LIST_WIDTH), flex_shrink: 0.0, flex_direction: FlexDirection::Column, row_gap: px(6), overflow: Overflow::scroll_y(), ..default() })).with_children(|col| {
-                    line(col, &fonts, "You carry", &fonts.mono, 13.0, MUTED);
+                body.spawn(Node { width: px(LIST_WIDTH), flex_shrink: 0.0, flex_direction: FlexDirection::Column, row_gap: px(6), min_height: px(0), ..default() }).with_children(|left| {
+                    // The tabs stay above the list, so they never scroll away from where they take clicks.
+                    left.spawn(Node { column_gap: px(10), flex_shrink: 0.0, ..default() }).with_children(|tabs| {
+                        for tab in BenchTab::ALL {
+                            let count = if tab == BenchTab::Equipped { worn.len() } else { packed.len() };
+                            let mut button = tabs.spawn(frame(BenchButton { act: Do::Tab(tab), enabled: true, scrolls: false }));
+                            button.insert(Node { flex_grow: 1.0, justify_content: JustifyContent::Center, padding: UiRect::new(px(14), px(14), px(7), px(8)), border: UiRect::all(px(1.0)), border_radius: BorderRadius::all(px(8)), flex_shrink: 0.0, ..default() });
+                            button.with_children(|b| {
+                                line(b, &fonts, format!("{} {}", tab.label(), count), &fonts.display, 21.0, if open.tab == tab { INK } else { MUTED });
+                            });
+                        }
+                    });
+                    left.spawn((ScrollColumn, ScrollPosition::default(), Node { flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(6), overflow: Overflow::scroll_y(), ..default() })).with_children(|col| {
                     if list.is_empty() {
-                        line(col, &fonts, if open.mode == Service::Scrap { "Nothing they could take apart." } else { "Nothing they could work on." }, &fonts.body_italic, 18.0, MUTED);
+                        let none = match (open.mode == Service::Scrap, open.tab) {
+                            (true, BenchTab::Equipped) => "Nothing worn they could take apart.",
+                            (true, BenchTab::Inventory) => "Nothing packed they could take apart.",
+                            (false, BenchTab::Equipped) => "Nothing worn they could work on.",
+                            (false, BenchTab::Inventory) => "Nothing packed they could work on.",
+                        };
+                        line(col, &fonts, none, &fonts.body_italic, 18.0, MUTED);
                     }
                     for &id in &list {
                         let Some(item) = inventory.item(id) else { continue };
@@ -425,12 +502,13 @@ fn build_bench(
                             });
                         });
                     }
+                    });
                 });
                 // The right: the picked item and the work on it, or what was scrapped.
                 body.spawn((ScrollColumn, ScrollPosition::default(), Node { flex_grow: 1.0, min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(7), overflow: Overflow::scroll_y(), ..default() })).with_children(|col| {
                     let picked = open.selected.and_then(|id| inventory.item(id).map(|i| (id, i)));
                     match picked {
-                        Some((id, item)) => detail(col, &fonts, open, &inventory, &stock, purse, id, item),
+                        Some((id, item)) => detail(col, &fonts, &mut icons, open, &inventory, &stock, purse, id, item),
                         None => {
                             if let Some(done) = &open.scrapped {
                                 line(col, &fonts, "Scrapped", &fonts.mono, 13.0, MUTED);
@@ -500,10 +578,21 @@ fn add_note(item: &Item) -> Option<&'static str> {
 
 /// The right column for a picked item.
 #[allow(clippy::too_many_arguments)]
-fn detail(col: &mut ChildSpawnerCommands, fonts: &UiFonts, open: &Open, inventory: &Inventory, stock: &Enchanting, purse: Coins, id: ItemId, item: &Item) {
+fn detail(col: &mut ChildSpawnerCommands, fonts: &UiFonts, icons: &mut Icons, open: &Open, inventory: &Inventory, stock: &Enchanting, purse: Coins, id: ItemId, item: &Item) {
     let card = card_text(item, Some((inventory, id)));
-    line(col, fonts, card.title.clone(), &fonts.display, 32.0, rarity_color(card.rarity));
-    line(col, fonts, card.meta.clone(), &fonts.body_italic, 16.0, MUTED);
+    // The item drawn, with its name and whether it is worn or held.
+    col.spawn(Node { column_gap: px(18), align_items: AlignItems::Center, flex_shrink: 0.0, ..default() }).with_children(|head| {
+        let size = crate::inventory::icon::icon_size(item, false).as_vec2();
+        let fit = (DRAWING_BOX / size.x).min(DRAWING_BOX / size.y);
+        icons.spawn(head, item, false, Node { width: px(size.x * fit), height: px(size.y * fit), flex_shrink: 0.0, ..default() }, 48.0);
+        head.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), min_width: px(0), ..default() }).with_children(|text| {
+            line(text, fonts, card.title.clone(), &fonts.display, 32.0, rarity_color(card.rarity));
+            line(text, fonts, card.meta.clone(), &fonts.body_italic, 16.0, MUTED);
+            if is_equipped(inventory, id) {
+                line(text, fonts, "Equipped", &fonts.mono, 14.0, ACCENT);
+            }
+        });
+    });
     for a in &card.affixes {
         let text = format!("{}  \u{b7}  {}", a.name, a.text);
         line(col, fonts, text, &fonts.body, 18.0, if a.good { OK } else { BAD });
@@ -564,32 +653,6 @@ fn detail(col: &mut ChildSpawnerCommands, fonts: &UiFonts, open: &Open, inventor
             line(col, fonts, reforge_note(item, by).unwrap_or(Refusal::TooHigh.reason()), &fonts.body_italic, 17.0, MUTED);
         }
     }
-    // Legend.
-    line(col, fonts, "Legend", &fonts.mono, 13.0, MUTED);
-    if let Some(why) = legend_note(item, by) {
-        line(col, fonts, why, &fonts.body_italic, 17.0, MUTED);
-    } else {
-        let options = enchant::legendary_options(item, by.tier);
-        let choices: Vec<Option<&'static Affix>> = if options.is_empty() { vec![None] } else { options.into_iter().map(Some).collect() };
-        for affix in choices {
-            let (cost, affordable) = priced(Work::Legend(affix));
-            col.spawn(frame(BenchButton { act: Do::Legend(affix), enabled: cost.is_some(), scrolls: true })).with_children(|b| {
-                b.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|t| {
-                    match affix {
-                        Some(a) => {
-                            line(t, fonts, format!("Make legendary with \u{201c}{}\u{201d}", a.name), &fonts.body_medium, 19.0, rarity_color(fb_items::Rarity::Legendary));
-                            line(t, fonts, a.text.clone(), &fonts.body, 15.0, MUTED);
-                        }
-                        None => {
-                            line(t, fonts, "Make legendary", &fonts.body_medium, 19.0, rarity_color(fb_items::Rarity::Legendary));
-                            line(t, fonts, "Gives it a title and a legend. It has no room for another affix.", &fonts.body, 15.0, MUTED);
-                        }
-                    }
-                });
-                line(b, fonts, cost.unwrap_or_default(), &fonts.mono, 14.0, if affordable { INK } else { BAD });
-            });
-        }
-    }
     // Add.
     line(col, fonts, "Add", &fonts.mono, 13.0, MUTED);
     line(col, fonts, add_note(item).map_or_else(|| tier_note(by.tier), String::from), &fonts.body_italic, 15.0, MUTED);
@@ -603,6 +666,46 @@ fn detail(col: &mut ChildSpawnerCommands, fonts: &UiFonts, open: &Open, inventor
             line(b, fonts, cost.unwrap_or_default(), &fonts.mono, 14.0, if affordable { INK } else { BAD });
         });
     }
+    // A legend is one more thing the enchanter could add, so it is listed with the rest.
+    for affix in legend_rows(item, by) {
+        let (cost, affordable) = priced(Work::Legend(affix));
+        col.spawn(frame(BenchButton { act: Do::Legend(affix), enabled: cost.is_some(), scrolls: true })).with_children(|b| {
+            b.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|t| {
+                match affix {
+                    Some(a) => {
+                        line(t, fonts, format!("Make legendary with \u{201c}{}\u{201d}", a.name), &fonts.body_medium, 19.0, rarity_color(fb_items::Rarity::Legendary));
+                        line(t, fonts, a.text.clone(), &fonts.body, 15.0, MUTED);
+                    }
+                    None => {
+                        line(t, fonts, "Make legendary", &fonts.body_medium, 19.0, rarity_color(fb_items::Rarity::Legendary));
+                        line(t, fonts, "Gives it a title and a legend. It has no room for another affix.", &fonts.body, 15.0, MUTED);
+                    }
+                }
+            });
+            line(b, fonts, cost.unwrap_or_default(), &fonts.mono, 14.0, if affordable { INK } else { BAD });
+        });
+    }
+}
+
+/// For captures: `FB_ENCHANT_OPEN=<novice|apprentice|expert|master>` opens the bench on a made-up
+/// enchanter of that tier a dozen frames in, with no talk, once the capture kit is in the pack.
+fn open_for_capture(mut bench: ResMut<Bench>, inventory: Res<Inventory>, mut open: ResMut<ScreenOpen>, mut frames: Local<u32>) {
+    let Some(tier) = std::env::var("FB_ENCHANT_OPEN").ok().filter(|t| !t.is_empty()) else { return };
+    *frames += 1;
+    if *frames != 12 || bench.is_open() {
+        return;
+    }
+    let tier = match tier.as_str() {
+        "novice" => enchant::Tier::Novice,
+        "apprentice" => enchant::Tier::Apprentice,
+        "expert" => enchant::Tier::Expert,
+        "master" => enchant::Tier::Master,
+        _ => return,
+    };
+    let tab = if split(&inventory, Service::Enchant).0.is_empty() { BenchTab::Inventory } else { BenchTab::Equipped };
+    bench.open = Some(Open { mode: Service::Enchant, by: Enchanter { name: "Ysolde".into(), tier, faction: "the Ash Rite".into() }, selected: None, tab, notice: None, scrapped: None, level: 1 });
+    bench.changed();
+    show_screen(&mut open, Some(Screen::Enchant), None);
 }
 
 /// For captures: with the bench open, picks an item and does what `FB_ENCHANT` says.
@@ -613,6 +716,12 @@ fn drive_for_capture(mut bench: ResMut<Bench>, mut inventory: ResMut<Inventory>,
     let mode = open.mode;
     let pick = |want: &dyn Fn(&Item) -> bool| candidates(&inventory, mode).into_iter().find(|&id| inventory.item(id).is_some_and(want));
     match *frames {
+        3 if matches!(what.as_str(), "equipped" | "inventory") => {
+            // The lists alone, with nothing picked.
+            if what == "inventory" {
+                act(&mut bench, &mut inventory, &mut stock, Do::Tab(BenchTab::Inventory));
+            }
+        }
         3 => {
             let id = match what.as_str() {
                 "reforge" => pick(&|i| i.base == "Dagger"),
@@ -655,7 +764,7 @@ mod tests {
 
     fn bench_with(inventory: &mut Inventory, item: Item, tier: Tier, mode: Service) -> (Bench, ItemId) {
         let id = inventory.add(item);
-        let open = Open { mode, by: by(tier), selected: Some(id), notice: None, scrapped: None, level: 1 };
+        let open = Open { mode, by: by(tier), selected: Some(id), tab: BenchTab::default(), notice: None, scrapped: None, level: 1 };
         (Bench { open: Some(open), revision: 0 }, id)
     }
 
@@ -668,6 +777,75 @@ mod tests {
         let list = candidates(&inventory, Service::Enchant);
         assert_eq!(list, vec![sword]);
         assert!(!list.contains(&purse));
+    }
+
+    fn rare_cloak() -> Item {
+        (0..20_000).filter_map(|s| roll_item_with("Cloak", s, Odds::loot(8))).find(|i| i.rarity == fb_items::Rarity::Rare).unwrap()
+    }
+
+    #[test]
+    fn worn_gear_is_listed_under_equipped_and_packed_gear_under_inventory() {
+        let mut inventory = Inventory::default();
+        let sword = inventory.add(roll_item_with("Sword", 5, Odds::default()).unwrap());
+        inventory.equip(sword, fb_items::Slot::Mainhand).unwrap();
+        let cloak = inventory.add(rare_cloak());
+        inventory.equip(cloak, fb_items::Slot::Cloak).unwrap();
+        let belt = inventory.add(fb_items::roll_item("Belt", 3).unwrap());
+        inventory.equip(belt, fb_items::Slot::Belt).unwrap();
+        let ring = inventory.add(roll_item_with("Ring", 9, Odds::default()).unwrap());
+        inventory.stow(ring).unwrap();
+        let (worn, packed) = split(&inventory, Service::Enchant);
+        assert!(worn.contains(&sword) && worn.contains(&cloak) && !worn.contains(&ring));
+        assert_eq!(packed, vec![ring]);
+        assert_eq!(tab_of(&inventory, sword), BenchTab::Equipped);
+        assert_eq!(tab_of(&inventory, ring), BenchTab::Inventory);
+        assert!(is_equipped(&inventory, cloak) && !is_equipped(&inventory, ring));
+    }
+
+    #[test]
+    fn picking_an_item_shows_the_tab_it_is_listed_under() {
+        let mut inventory = Inventory::default();
+        let mut stock = Enchanting::default();
+        let sword = inventory.add(roll_item_with("Sword", 5, Odds::default()).unwrap());
+        inventory.equip(sword, fb_items::Slot::Mainhand).unwrap();
+        let belt = inventory.add(fb_items::roll_item("Belt", 3).unwrap());
+        inventory.equip(belt, fb_items::Slot::Belt).unwrap();
+        let ring = inventory.add(roll_item_with("Ring", 9, Odds::default()).unwrap());
+        inventory.stow(ring).unwrap();
+        let mut bench = Bench { open: Some(Open { mode: Service::Enchant, by: by(Tier::Master), selected: None, tab: BenchTab::default(), notice: None, scrapped: None, level: 1 }), revision: 0 };
+        act(&mut bench, &mut inventory, &mut stock, Do::Pick(ring));
+        assert_eq!(bench.open.as_ref().unwrap().tab, BenchTab::Inventory);
+        act(&mut bench, &mut inventory, &mut stock, Do::Pick(sword));
+        assert_eq!(bench.open.as_ref().unwrap().tab, BenchTab::Equipped);
+        act(&mut bench, &mut inventory, &mut stock, Do::Tab(BenchTab::Inventory));
+        assert_eq!(bench.open.as_ref().unwrap().tab, BenchTab::Inventory);
+    }
+
+    #[test]
+    fn a_master_lists_legendary_rows_and_a_journeyman_none() {
+        let cloak = rare_cloak();
+        assert!(!legend_rows(&cloak, &by(Tier::Master)).is_empty());
+        for tier in [Tier::Novice, Tier::Apprentice, Tier::Expert] {
+            assert!(legend_rows(&cloak, &by(tier)).is_empty(), "{tier:?}");
+        }
+        // Not a rare item, and a legend already made: nothing either.
+        let common = (0..20_000).filter_map(|s| roll_item_with("Cloak", s, Odds::default())).find(|i| i.rarity == fb_items::Rarity::Common).unwrap();
+        assert!(legend_rows(&common, &by(Tier::Master)).is_empty());
+        let legend = enchant::make_legendary(&cloak, None, &by(Tier::Master), 3).unwrap();
+        assert!(legend_rows(&legend, &by(Tier::Master)).is_empty());
+    }
+
+    #[test]
+    fn legendary_rows_are_priced_like_the_rest() {
+        let item = (0..20_000).filter_map(|s| roll_item_with("Sword", s, Odds::loot(8))).find(|i| i.rarity == fb_items::Rarity::Rare && !enchant::legendary_options(i, Tier::Master).is_empty()).unwrap();
+        let master = by(Tier::Master);
+        let rows = legend_rows(&item, &master);
+        assert!(!rows.is_empty() && rows.iter().all(Option::is_some));
+        for affix in rows {
+            let cost = quote(&item, Work::Legend(affix), &master).unwrap();
+            assert_eq!(cost, enchant::legend_cost(affix, Tier::Master));
+            assert!(cost.materials.iter().any(|m| m.id == "heartstone"));
+        }
     }
 
     #[test]
