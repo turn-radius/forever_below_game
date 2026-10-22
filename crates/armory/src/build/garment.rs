@@ -238,6 +238,14 @@ impl DrapedSurface {
     /// the underlay. Below what holds it out it draws back toward the form at no less than
     /// [`UNDERLAY_TUCK`]. Our own model, in the spirit of the hanging hull.
     pub fn over(form: &TorsoForm, drape: Drape, under: Option<Underlay>, thickness: f32) -> DrapedSurface {
+        Self::over_rounded(form, drape, under, thickness, 0.0)
+    }
+
+    /// [`DrapedSurface::over`] with the cloth's resting surface rounded outward at its corners
+    /// (the hull's vertices, a pauldron's corners) to a radius of `round` units: cloth that does not
+    /// stretch tight across a corner drapes round it instead of folding to a point there. Zero
+    /// leaves the hull as it is.
+    pub fn over_rounded(form: &TorsoForm, drape: Drape, under: Option<Underlay>, thickness: f32, round: f32) -> DrapedSurface {
         let profile = form.profile();
         let y_max = drape.top + 0.5;
         let rows = ((y_max - (drape.hem - 1.5)) / HULL_STEP).ceil() as usize + 1;
@@ -271,6 +279,7 @@ impl DrapedSurface {
                 row
             })
             .collect();
+        let need = if under.is_some() && round > 0.0 { round_corners(need, round, ((0.6 / HULL_STEP) as usize) + ((y_max - drape.top) / HULL_STEP) as usize) } else { need };
         let tuck = if under.is_some() { drape.tuck.max(UNDERLAY_TUCK) } else { drape.tuck };
         let mut hull = vec![vec![drape.ease; HULL_COLUMNS]; rows];
         for j in 0..HULL_COLUMNS {
@@ -398,6 +407,45 @@ impl DrapedSurface {
             self.point(uu, y0 + (y1 - y0) * v, offset)
         })
     }
+}
+
+/// `need` (reach by row and column) with its corners rounded outward: each value is raised to
+/// the highest of its neighbours' less a parabola of the distance to them (a circle of radius
+/// `round` through a corner), round each row. Nothing is lowered.
+fn round_corners(need: Vec<Vec<f32>>, round: f32, from_row: usize) -> Vec<Vec<f32>> {
+    let rows = need.len();
+    let mut out = need.clone();
+    // Round each row: the arc length between columns is the reach times the angle between them.
+    for (row, o) in need.iter().zip(out.iter_mut()) {
+        let reach = row.iter().sum::<f32>() / HULL_COLUMNS as f32;
+        let arc = reach * TAU / HULL_COLUMNS as f32;
+        // At most half way round, whatever the row's reach (nothing of it when it is ~0).
+        let k_max = (((2.0 * round * 0.5).sqrt() / arc.max(1e-4)).ceil().max(1.0) as isize).min(HULL_COLUMNS as isize / 2);
+        for j in 0..HULL_COLUMNS {
+            for k in -k_max..=k_max {
+                let d = k as f32 * arc;
+                let v = row[(j as isize + k).rem_euclid(HULL_COLUMNS as isize) as usize] - d * d / (2.0 * round);
+                o[j] = o[j].max(v);
+            }
+        }
+    }
+    // And down each column, from row `from_row` on: rounded right to the top it lifted the rows
+    // where the shoulder turns into the neck, into a corner there.
+    let src = out.clone();
+    let k_max = ((round).sqrt() / HULL_STEP).ceil().max(1.0) as isize;
+    for i in from_row..rows {
+        for j in 0..HULL_COLUMNS {
+            for k in -k_max..=k_max {
+                let r = i as isize + k;
+                if r < 0 || r >= rows as isize {
+                    continue;
+                }
+                let d = k as f32 * HULL_STEP;
+                out[i][j] = out[i][j].max(src[r as usize][j] - d * d / (2.0 * round));
+            }
+        }
+    }
+    out
 }
 
 /// The convex hull of a row of radii from an axis along unit directions `dirs` (x, z),

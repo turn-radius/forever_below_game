@@ -78,12 +78,14 @@ pub struct DollChoice {
     pub body: Option<&'static str>,
     /// A slot of the outfit left off (`--without back`), to see what it does to the rest.
     pub without: Option<fb_items::Slot>,
+    /// Items worn over the outfit's (`--wear "head=Mail coif,shoulders=Cloak"`), rolled from the seed.
+    pub wear: Option<&'static str>,
 }
 
 impl Default for DollChoice {
     /// A human fighter from seed 1207: a class outfit, so the doll holds a weapon.
     fn default() -> Self {
-        DollChoice { folk: Folk::Human, seed: 1207, outfit: outfit_index("fighter").unwrap_or(0), bare: false, body: None, without: None }
+        DollChoice { folk: Folk::Human, seed: 1207, outfit: outfit_index("fighter").unwrap_or(0), bare: false, body: None, without: None, wear: None }
     }
 }
 
@@ -111,6 +113,15 @@ impl DollChoice {
                 "--without" => {
                     let slot = value()?;
                     choice.without = Some(serde_json::from_str(&format!("{slot:?}")).map_err(|_| format!("--without: unknown slot {slot:?}"))?);
+                }
+                "--wear" => {
+                    let text = value()?;
+                    for pair in text.split(',') {
+                        let (slot, base) = pair.split_once('=').ok_or(format!("--wear: {pair:?} is not slot=Base"))?;
+                        serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")).map_err(|_| format!("--wear: unknown slot {slot:?}"))?;
+                        fb_items::roll_item(base, 1).ok_or(format!("--wear: unknown item {base:?}"))?;
+                    }
+                    choice.wear = Some(Box::leak(text.into_boxed_str()));
                 }
                 "--body" => {
                     let text = value()?;
@@ -147,6 +158,12 @@ impl DollChoice {
     pub fn figure(&self) -> Figure {
         let mut worn = if self.bare { vec![] } else { self.outfit().roll(self.seed, self.folk.key()).worn };
         worn.retain(|(slot, _)| Some(*slot) != self.without);
+        for pair in self.wear.into_iter().flat_map(|w| w.split(',')) {
+            let Some((slot, base)) = pair.split_once('=') else { continue };
+            let (Ok(slot), Some(item)) = (serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")), fb_items::roll_item(base, self.seed)) else { continue };
+            worn.retain(|(s, _)| *s != slot);
+            worn.push((slot, item));
+        }
         Figure::dress(&self.spec(), &worn, DIRT)
     }
 
@@ -517,7 +534,7 @@ mod tests {
 
     #[test]
     fn a_choice_looks_the_same_every_time() {
-        let choice = DollChoice { folk: Folk::Gnome, seed: 31, outfit: outfit_index("mage").unwrap(), bare: false, body: None, without: None };
+        let choice = DollChoice { folk: Folk::Gnome, seed: 31, outfit: outfit_index("mage").unwrap(), bare: false, body: None, without: None, wear: None };
         assert_eq!(choice.figure().pieces, choice.figure().pieces);
     }
 }
