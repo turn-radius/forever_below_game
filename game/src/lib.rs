@@ -78,6 +78,7 @@ pub mod travel;
 pub mod webs;
 pub mod rules;
 pub mod tuning;
+pub mod notes_view;
 pub mod scenery_view;
 pub mod turntable;
 pub mod tweak_panel;

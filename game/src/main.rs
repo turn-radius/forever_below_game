@@ -49,6 +49,7 @@ use forever_below::{
     swing_practice::SwingPracticePlugin,
     title::{NewDelveSeed, TitlePlugin},
     tuning::TuningPlugin,
+    notes_view::{NotesView, NotesViewPlugin},
     scenery_view::{SceneryView, SceneryViewPlugin},
     turntable::{Focus, Turntable, TurntablePlugin},
 };
@@ -66,6 +67,9 @@ fn main() -> AppExit {
     }
     if args.iter().any(|a| a == "--scenery") {
         return run_scenery(&args);
+    }
+    if args.iter().any(|a| a == "--notes") {
+        return run_notes(&args);
     }
     if args.iter().any(|a| a == "--level") {
         return run_level_view(&args);
@@ -277,6 +281,22 @@ fn run_scenery(args: &[String]) -> AppExit {
     };
     let mut app = App::new();
     app.add_plugins(view_plugins()).add_plugins((ArmoryRenderPlugin, SceneryViewPlugin)).insert_resource(view);
+    if let Some(capture) = FrameCapturePlugin::from_env() {
+        app.add_plugins(capture);
+    }
+    app.run()
+}
+
+fn run_notes(args: &[String]) -> AppExit {
+    let view = match NotesView::from_args(args.iter().cloned()) {
+        Ok(view) => view,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
+    let mut app = App::new();
+    app.add_plugins(view_plugins()).add_plugins(NotesViewPlugin).insert_resource(view);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }

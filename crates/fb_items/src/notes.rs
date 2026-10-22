@@ -19,7 +19,7 @@ use crate::naming;
 use crate::stats::Stat;
 
 /// Salt for a note's words, so they never move the note's shape or anything else of its seed.
-const WORDS_SALT: u32 = 0x40_7E5A_17;
+const WORDS_SALT: u32 = 0x407E_5A17;
 
 /// A thing a faction likes or hates, or a creature: one of it and many of it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
