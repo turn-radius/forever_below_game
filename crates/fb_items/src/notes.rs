@@ -195,9 +195,15 @@ pub fn write_note(seed: u32, lore: &Lore) -> String {
 /// tells of. Every kind gets a writer, a companion and the depth; the kind's own fact fills the
 /// rest.
 fn bind(kind: NoteKind, lore: &Lore, rng: &mut Mulberry32) -> Grammar {
+    let writer = naming::anyone(rng);
+    // A companion of another name, so no one writes of themselves as lost.
+    let mut companion = naming::anyone(rng);
+    while companion == writer {
+        companion = naming::anyone(rng);
+    }
     let mut symbols: Vec<(&str, String)> = vec![
-        ("writer", naming::anyone(rng)),
-        ("companion_name", naming::anyone(rng)),
+        ("writer", writer),
+        ("companion_name", companion),
         ("depth", ordinal(lore.depth.max(1))),
         ("past_line", lore.past.as_ref().map_or_else(|| "something else once".to_string(), |p| format!("part of a {p} once"))),
     ];

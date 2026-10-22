@@ -82,7 +82,7 @@
     "The door shut behind me. It has not opened since. #signoff#",
     "There is a way out. There must be. Everyone says so. #signoff#",
     "Down is the only way. I tell myself that up is down too, somewhere. #signoff#",
-    "I have forgotten the colour of the sky. Day #day#. #signoff#",
+    "I have forgotten the colour of the sky. I have lost count of the days. #signoff#",
     "If you find this, tell #companion_name# I tried.",
     "Food: none. Water: little. Light: #light_left#. Hope: some. #signoff#",
     "The walls are moving. I am sure of it now. #signoff#"
@@ -96,7 +96,7 @@
     "",
     ""
   ],
-  "day": ["three", "nine", "twelve", "nineteen", "forty", "I have lost count", "who knows"],
+  "day": ["three", "nine", "twelve", "nineteen", "forty", "sixty-one", "ninety"],
   "light": ["candle", "torch", "lamp oil", "tinder"],
   "light_left": ["one candle", "a stub of torch", "a thumb of oil", "none"],
 

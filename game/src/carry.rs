@@ -839,11 +839,12 @@ pub(crate) fn lay_out_items(
     // It rolls for the luck the delver wears as they come to the level.
     let odds = crate::character::loot_odds(character.as_deref(), Some(&inventory), level.0.depth);
     let mut ahead = staged.as_mut().and_then(|s| s.take_items(&level.0, odds)).map(Vec::into_iter);
+    let lore = level.0.lore();
     for spot in &level.0.items {
         let rolled = match ahead.as_mut() {
             Some(ahead) => ahead.next().flatten(),
             None => fb_items::roll_loot(spot.family, spot.seed, odds).map(|item| {
-                let item = item.in_world(&level.0.lore());
+                let item = item.in_world(&lore);
                 let mesh = item.shape.build();
                 (item, mesh)
             }),

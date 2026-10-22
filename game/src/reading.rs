@@ -1,6 +1,8 @@
 //! Reading what is written on a thing: a note's words on a page over the view
 //! ([`fb_items::Item::words`]). Reading a note ([`crate::eat::Eating::read`]) opens the page, and
-//! the next key or click puts it down.
+//! the next key or click puts it down. That press is spent on the page: it is cleared before
+//! anything else in the frame reads it, so Esc does not also open the menu, nor a click take
+//! what lies under the cursor.
 //!
 //! `FB_READ=<seed>` writes a note of that seed on the level a moment in and opens it, for captures.
 
@@ -13,9 +15,12 @@ pub struct ReadingPlugin;
 
 impl Plugin for ReadingPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<OpenPage>().add_systems(Update, (put_page_down, show_page).chain().in_set(DelveSystems));
+        app.init_resource::<OpenPage>()
+            .add_systems(PreUpdate, put_page_down.after(bevy::input::InputSystems))
+            .add_systems(Update, show_page.in_set(DelveSystems))
+            .add_systems(OnExit(crate::launch::AppState::Delving), close_page);
         if std::env::var_os("FB_READ").is_some() {
-            app.add_systems(Update, read_for_capture.before(put_page_down).in_set(DelveSystems));
+            app.add_systems(Update, read_for_capture.before(show_page).in_set(DelveSystems));
         }
     }
 }
@@ -24,8 +29,6 @@ impl Plugin for ReadingPlugin {
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct OpenPage {
     pub page: Option<Page>,
-    /// Set the frame it opens, so the press that opened it does not also close it.
-    fresh: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,7 +41,6 @@ impl OpenPage {
     /// Opens a page with `words` under `title`.
     pub fn open(&mut self, title: impl Into<String>, words: impl Into<String>) {
         self.page = Some(Page { title: title.into(), words: words.into() });
-        self.fresh = true;
     }
 
     pub fn is_open(&self) -> bool {
@@ -67,18 +69,30 @@ fn read_for_capture(level: Res<crate::play::CurrentLevel>, mut open: ResMut<Open
     }
 }
 
-/// Closes the page on the first key or mouse button pressed after the frame it opened.
-fn put_page_down(mut open: ResMut<OpenPage>, keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>) {
+/// Closes the page on the first key or mouse button pressed after it opened, and spends that
+/// press. It runs as input is read, before the frame's other systems: a page opens in `Update`,
+/// so the press that opened it was read a frame earlier.
+fn put_page_down(mut open: ResMut<OpenPage>, mut keys: ResMut<ButtonInput<KeyCode>>, mut mouse: ResMut<ButtonInput<MouseButton>>) {
     if !open.is_open() {
         return;
     }
-    if open.fresh {
-        open.fresh = false;
+    let pressed_keys: Vec<KeyCode> = keys.get_just_pressed().copied().collect();
+    let pressed_buttons: Vec<MouseButton> = mouse.get_just_pressed().copied().collect();
+    if pressed_keys.is_empty() && pressed_buttons.is_empty() {
         return;
     }
-    if keys.get_just_pressed().next().is_some() || mouse.get_just_pressed().next().is_some() {
-        open.page = None;
+    for key in pressed_keys {
+        keys.clear_just_pressed(key);
     }
+    for button in pressed_buttons {
+        mouse.clear_just_pressed(button);
+    }
+    open.page = None;
+}
+
+/// Puts the page down as the delve ends, so none is left open, unseen, in the next.
+fn close_page(mut open: ResMut<OpenPage>) {
+    open.page = None;
 }
 
 /// Draws the open page over the view, or clears it once put down.
@@ -152,17 +166,19 @@ mod tests {
     }
 
     #[test]
-    fn the_press_that_opens_a_page_does_not_close_it_and_the_next_one_does() {
+    fn a_press_puts_the_page_down_and_is_spent_on_it() {
         let mut app = app();
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
         app.world_mut().resource_mut::<OpenPage>().open("Note", "I escaped from a troll.");
         app.update();
-        assert!(app.world().resource::<OpenPage>().is_open(), "still open the frame it opened");
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
-        app.update();
         assert!(app.world().resource::<OpenPage>().is_open(), "nothing pressed");
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(!app.world().resource::<OpenPage>().is_open(), "Esc puts it down");
+        assert!(!app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Escape), "and nothing else sees the Esc");
+        app.world_mut().resource_mut::<OpenPage>().open("Note", "Again.");
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
         app.update();
         assert!(!app.world().resource::<OpenPage>().is_open(), "a click puts it down");
+        assert!(!app.world().resource::<ButtonInput<MouseButton>>().just_pressed(MouseButton::Left), "and the click lands on nothing else");
     }
 }
