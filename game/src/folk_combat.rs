@@ -1035,7 +1035,8 @@ pub(crate) mod tests {
         // What they wore and held, and carried: their faction's key too.
         let person = app.world().get::<Denizen>(folk).unwrap().person.clone();
         let mut gear = person.gear.clone();
-        gear.extend(person.goods.iter().cloned().map(|i| (fb_items::Slot::Mainhand, i)));
+        // An archer's arrows fall inside its quiver, not loose.
+        gear.extend(person.goods.iter().filter(|i| !matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).cloned().map(|i| (fb_items::Slot::Mainhand, i)));
         assert!(gear.len() >= 2, "a folk wears and holds something");
         assert!(on_the_floor(&mut app).is_empty(), "nothing lies there while they stand");
         let lying_before = app.world().resource::<CurrentLevel>().0.items.len();
@@ -1141,6 +1142,7 @@ pub(crate) mod tests {
         assert!(now.iter().any(|n| n == "Body"), "the body is drawn");
         assert!(!now.iter().any(|n| titles.contains(n)), "still drawn in its gear: {now:?}");
         // What they wore and carried, their faction's key among it.
-        assert_eq!(on_the_floor(&mut again).len(), person.gear.len() + person.goods.len());
+        let loose = person.goods.iter().filter(|i| !matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).count();
+        assert_eq!(on_the_floor(&mut again).len(), person.gear.len() + loose);
     }
 }
