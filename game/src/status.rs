@@ -536,6 +536,16 @@ mod tests {
         );
         assert_eq!(DebugConditions::parse("poisoned").poisoned, Some(1.0), "an hour, as venom gives");
         assert!(!DebugConditions::parse("").holds_anything());
+        assert_eq!(DebugConditions::parse("load:65").load, Some(Load::of(65.0, 165.0)), "pounds of a capacity of 165");
+    }
+
+    #[test]
+    fn the_load_card_reads_where_the_load_sits() {
+        let (mut app, player) = delve();
+        *app.world_mut().get_mut::<Load>(player).unwrap() = Load::of(65.0, 165.0);
+        app.update();
+        let line = app.world().resource::<ShownConditions>().0.iter().find(|c| c.kind == ConditionKind::Load).map(|c| format!("{}: {}", c.name, c.effect));
+        assert_eq!(line.as_deref(), Some("Burdened: 65 lb, 39% of your capacity. Encumbered from 110 lb. Walking at 99.7% pace; sprinting tires you 1.01x as fast."));
     }
 
     fn delve() -> (App, Entity) {
