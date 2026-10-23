@@ -41,7 +41,13 @@ fn nothing_that_was_there_before_moves() {
         for seed in 1..=50 {
             let (old, new) = (before(seed, depth), generate(seed, depth));
             assert!(old.webs.is_empty());
-            assert_eq!(new.creatures[..old.creatures.len()], old.creatures[..], "seed {seed} depth {depth}: creatures moved");
+            // Rats, snakes and surplus skeleton packs may make way for the newcomers (#662); none
+            // that stays moves, and every troll stays.
+            let kept: Vec<CreatureSpot> = new.creatures.iter().filter(|c| !newcomer(c.species)).copied().collect();
+            let mut rest = old.creatures.iter();
+            assert!(kept.iter().all(|k| rest.any(|o| o == k)), "seed {seed} depth {depth}: creatures moved");
+            let trolls = |l: &[CreatureSpot]| l.iter().filter(|c| c.species == Species::Troll).count();
+            assert_eq!(trolls(&kept), trolls(&old.creatures), "seed {seed} depth {depth}: a troll made way");
             assert_eq!(Level { creatures: Vec::new(), webs: Vec::new(), ..new }, Level { creatures: Vec::new(), ..old }, "seed {seed} depth {depth}: the level moved");
         }
     }
@@ -184,6 +190,7 @@ fn assert_spread(level: &Level) {
     let (seed, depth) = (level.seed, level.depth);
     for (r, room) in level.rooms.iter().enumerate() {
         let here: Vec<_> = packs(level).into_iter().filter(|p| p.1 == Some(r)).collect();
+        assert!(here.len() <= 1, "seed {seed} depth {depth}: room {r} holds {} groups", here.len());
         if here.iter().any(|p| p.2.iter().any(|&s| newcomer(s))) {
             assert_eq!(here.len(), 1, "seed {seed} depth {depth}: room {r} holds {} groups", here.len());
             let cap = (room.area() / CELLS_PER_CREATURE).max(1) as usize;
