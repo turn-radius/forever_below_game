@@ -8,7 +8,8 @@
 //! top right sets the walk ([`DollMotion`]): a toggle for walking or standing, and a slider for
 //! its speed as a multiple of the folk's own natural pace, so the gait, the skinned gear and the
 //! idle can be judged live. Command line:
-//! `--doll --folk dwarf --seed 7 --outfit cleric` ([`DollChoice::from_args`]).
+//! `--doll --folk dwarf --seed 7 --outfit cleric` ([`DollChoice::from_args`]); `--sex female`
+//! rolls the body as folk are rolled ([`BodySpec::roll_as`]).
 //!
 //! The seed rolls the body ([`BodySpec::roll`]) and the outfit ([`fb_items::outfit::Outfit::roll`]),
 //! whose items are rolled through `fb_items` like any other, so the same folk, seed and outfit
@@ -80,12 +81,15 @@ pub struct DollChoice {
     pub without: Option<fb_items::Slot>,
     /// Items worn over the outfit's (`--wear "head=Mail coif,shoulders=Cloak"`), rolled from the seed.
     pub wear: Option<&'static str>,
+    /// The body rolled as a woman or a man ([`BodySpec::roll_as`], `--sex female`), as folk are,
+    /// rather than as the seed rolled it.
+    pub sex: Option<fb_body::Sex>,
 }
 
 impl Default for DollChoice {
     /// A human fighter from seed 1207: a class outfit, so the doll holds a weapon.
     fn default() -> Self {
-        DollChoice { folk: Folk::Human, seed: 1207, outfit: outfit_index("fighter").unwrap_or(0), bare: false, body: None, without: None, wear: None }
+        DollChoice { folk: Folk::Human, seed: 1207, outfit: outfit_index("fighter").unwrap_or(0), bare: false, body: None, without: None, wear: None, sex: None }
     }
 }
 
@@ -110,6 +114,14 @@ impl DollChoice {
                 // The walk's own, read by `DollMotion::from_args`.
                 "--doll" | "--walk" => {}
                 "--bare" => choice.bare = true,
+                "--sex" => {
+                    let sex = value()?;
+                    choice.sex = Some(match sex.as_str() {
+                        "female" | "woman" => fb_body::Sex::Female,
+                        "male" | "man" => fb_body::Sex::Male,
+                        _ => return Err(format!("--sex: {sex:?} is not female or male")),
+                    });
+                }
                 "--without" => {
                     let slot = value()?;
                     choice.without = Some(serde_json::from_str(&format!("{slot:?}")).map_err(|_| format!("--without: unknown slot {slot:?}"))?);
@@ -169,7 +181,10 @@ impl DollChoice {
 
     /// The body: rolled from the seed, with `--body`'s fields over it.
     pub fn spec(&self) -> BodySpec {
-        let spec = BodySpec::roll(self.folk, self.seed);
+        let spec = match self.sex {
+            Some(sex) => BodySpec::roll_as(self.folk, self.seed, sex),
+            None => BodySpec::roll(self.folk, self.seed),
+        };
         match self.body.and_then(|text| spec.shape().parse(text).ok()) {
             Some(shape) => spec.with_shape(shape),
             None => spec,
@@ -488,6 +503,10 @@ mod tests {
         assert!(!DollSpin::from_args(args("--doll")).unwrap().paused);
         assert!(DollChoice::from_args(args("--turn=0.5 --seed 7")).is_ok());
         assert!(DollChoice::from_args(args("--bare")).unwrap().bare);
+        assert_eq!(DollChoice::from_args(args("--sex female")).unwrap().sex, Some(fb_body::Sex::Female));
+        assert!(DollChoice::from_args(args("--sex both")).is_err());
+        let (woman, man) = (DollChoice::from_args(args("--sex female")).unwrap().spec(), DollChoice::from_args(args("--sex male")).unwrap().spec());
+        assert!(woman.bust > man.bust && woman.beard == fb_body::Beard::None);
         let shaped = DollChoice::from_args(args("--body muscle=1,bust=0.5")).unwrap();
         assert_eq!((shaped.spec().muscle, shaped.spec().bust), (1.0, 0.5));
         assert!(DollChoice::from_args(args("--body wings=1")).is_err());
