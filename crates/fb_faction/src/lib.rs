@@ -23,7 +23,7 @@ pub use trade::{Master, Masters, Profession, Style, Tier, Trade, TradeRules, arm
 use armory::families::shield::roll_field;
 use armory::heraldry::{Division, Field};
 use fb_body::Folk;
-use procgen_grammar::faction_name;
+use procgen_grammar::faction_named;
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +81,16 @@ pub enum Outfit {
 }
 
 impl Outfit {
+    /// The outfit a class dresses in.
+    pub fn of(class: ClassKind) -> Outfit {
+        match class {
+            ClassKind::Fighter => Outfit::Fighter,
+            ClassKind::Ranger => Outfit::Ranger,
+            ClassKind::Mage => Outfit::Mage,
+            ClassKind::Cleric => Outfit::Cleric,
+        }
+    }
+
     /// The delver's class that dresses this way, if one does.
     pub fn class(self) -> Option<ClassKind> {
         match self {
@@ -217,7 +227,12 @@ pub struct FactionSpec {
     pub name: String,
     /// The folk most of its members are.
     pub folk: Folk,
-    /// Its members dress from these two outfits, which differ.
+    /// The classes its name says its members are, none if the name says nothing ("the Daughters of
+    /// the Burning Chapel" are all clerics; "the Black Reavers" fighters and rangers). Its
+    /// members dress only in these, and it never hates one.
+    #[serde(default)]
+    pub classes: Vec<ClassKind>,
+    /// Its members dress from these two outfits, which differ unless its name says one class.
     pub outfits: [Outfit; 2],
     pub alignment: Alignment,
     pub intention: Intention,
@@ -342,6 +357,23 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
     let alignment = *rng.pick(&Alignment::ALL);
     let insular = rng.chance(INSULAR_ODDS);
 
+    // The name comes first, because its words say who the members are: the `class` it sets
+    // narrows the classes they dress as. On a clash with a name already in the pool, another
+    // seed from the same stream.
+    let (folk_key, intention_key) = (folk_key(folk), intention.key());
+    let mut named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));
+    for _ in 0..64 {
+        if !taken.contains(&named.text) {
+            break;
+        }
+        named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));
+    }
+    let classes = named_classes(named.tag("class"));
+    let mut name = named.text;
+    if taken.contains(&name) {
+        name = format!("{name} of the {}th Hall", index + 1);
+    }
+
     // Dress: one outfit from what its purpose wears, one from what its folk wear.
     let by_intention: &[(Outfit, u32)] = match intention {
         Intention::WayOut => &[(Ranger, 3), (Fighter, 3), (Scavenger, 1)],
@@ -360,7 +392,14 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
     // The two differ: the second is drawn from its folk's table without the first.
     let first = *rng.weighted(by_intention);
     let rest: Vec<(Outfit, u32)> = by_folk.iter().copied().filter(|(o, _)| *o != first).collect();
-    let outfits = [first, *rng.weighted(&rest)];
+    let mut outfits = [first, *rng.weighted(&rest)];
+    // A name that says what they are dresses every member so: one class in both outfits, or two
+    // classes in a drawn order.
+    match classes[..] {
+        [only] => outfits = [Outfit::of(only); 2],
+        [a, b] => outfits = if rng.chance(0.5) { [Outfit::of(b), Outfit::of(a)] } else { [Outfit::of(a), Outfit::of(b)] },
+        _ => {}
+    }
 
     let armour = *rng.weighted(match intention {
         Intention::WayOut => &[(ArmourLean::Mail, 3), (ArmourLean::Plate, 2), (ArmourLean::Leather, 2), (ArmourLean::Scale, 1)][..],
@@ -394,20 +433,17 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
     let more = hate_count.saturating_sub(hates.len());
     hates.extend(hate_pool.into_iter().filter(|p| !likes.contains(p)).take(more));
 
-    // The name; on a clash with one already in the pool, another seed from the same stream.
-    let (folk_key, intention_key) = (folk_key(folk), intention.key());
-    let mut name = faction_name(folk_key, intention_key, rng.int(0, u32::MAX));
-    for _ in 0..64 {
-        if !taken.contains(&name) {
-            break;
-        }
-        name = faction_name(folk_key, intention_key, rng.int(0, u32::MAX));
-    }
-    if taken.contains(&name) {
-        name = format!("{name} of the {}th Hall", index + 1);
-    }
+    FactionSpec { id, name, folk, classes, outfits, alignment, intention, likes, hates, field, armour, insular }
+}
 
-    FactionSpec { id, name, folk, outfits, alignment, intention, likes, hates, field, armour, insular }
+/// The classes a name's `class` tag says its members are: `cleric`, or `fighter_or_ranger`. Empty
+/// for no tag, or one this crate does not know.
+fn named_classes(tag: Option<&str>) -> Vec<ClassKind> {
+    match tag {
+        Some("cleric") => vec![ClassKind::Cleric],
+        Some("fighter_or_ranger") => vec![ClassKind::Fighter, ClassKind::Ranger],
+        _ => Vec::new(),
+    }
 }
 
 fn shuffle<T>(items: &mut [T], rng: &mut Mulberry32) {

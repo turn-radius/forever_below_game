@@ -113,7 +113,9 @@ fn likes_and_hates_are_one_to_three_and_never_both() {
 fn no_faction_contradicts_itself() {
     for seed in 0..300 {
         for spec in World::new(seed).factions() {
-            assert_ne!(spec.outfits[0], spec.outfits[1], "{}: {:?}", spec.name, spec.outfits);
+            if spec.classes.len() != 1 {
+                assert_ne!(spec.outfits[0], spec.outfits[1], "{}: {:?}", spec.name, spec.outfits);
+            }
             for hate in &spec.hates {
                 assert!(!spec.likes.contains(hate), "{} likes and hates {hate:?}", spec.name);
                 assert_ne!(*hate, Preference::Faction(spec.id), "{} hates itself", spec.name);
@@ -122,6 +124,50 @@ fn no_faction_contradicts_itself() {
                 }
             }
             assert!(!spec.likes.contains(&Preference::Faction(spec.id)), "{} likes itself", spec.name);
+        }
+    }
+}
+
+fn words(name: &str) -> Vec<&str> {
+    name.split(|c: char| !c.is_alphanumeric()).collect()
+}
+
+#[test]
+fn a_name_that_says_a_class_dresses_every_member_so() {
+    let (mut clerics, mut martial, mut unsaid) = (0, 0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            let w = words(&spec.name);
+            let says_cleric = ["Chapel", "Choir", "Vigil", "Synod", "Litany", "Congregation", "Rite"].iter().any(|c| w.contains(c));
+            match &spec.classes[..] {
+                [ClassKind::Cleric] => {
+                    clerics += 1;
+                    assert_eq!(spec.outfits, [Outfit::Cleric; 2], "{}", spec.name);
+                    assert!(!spec.hates.contains(&Preference::Class(ClassKind::Cleric)), "{} hates clerics", spec.name);
+                }
+                [a, b] => {
+                    martial += 1;
+                    assert_eq!({ let mut c = [*a, *b]; c.sort_by_key(|k| *k as u8); c }, [ClassKind::Fighter, ClassKind::Ranger], "{}", spec.name);
+                    assert!(spec.outfits.contains(&Outfit::Fighter) && spec.outfits.contains(&Outfit::Ranger), "{}: {:?}", spec.name, spec.outfits);
+                    assert!(!spec.hates.contains(&Preference::Class(ClassKind::Fighter)) && !spec.hates.contains(&Preference::Class(ClassKind::Ranger)), "{}", spec.name);
+                }
+                [] => {
+                    unsaid += 1;
+                    assert!(!says_cleric || w.iter().any(|x| ["reavers", "raiders", "highwaymen"].contains(x)), "{} says cleric but sets no class", spec.name);
+                }
+                other => panic!("{}: {other:?}", spec.name),
+            }
+        }
+    }
+    assert!(clerics > 20 && martial > 20 && unsaid > 500, "{clerics} cleric, {martial} martial, {unsaid} unsaid");
+}
+
+#[test]
+fn the_same_seed_gives_the_same_name_and_makeup() {
+    for seed in 0..40 {
+        let (a, b) = (World::new(seed), World::new(seed));
+        for (x, y) in a.factions().iter().zip(b.factions()) {
+            assert_eq!((&x.name, &x.classes, x.outfits), (&y.name, &y.classes, y.outfits));
         }
     }
 }
