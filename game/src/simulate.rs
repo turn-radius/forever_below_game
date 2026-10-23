@@ -64,6 +64,7 @@ fn step_the_delver(
     tuning: Res<Tuning>,
     input: ActionInput,
     mut last: Local<f64>,
+    mut jumps: Local<u32>,
     mut players: Query<(Entity, Option<&Transform>, &Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana, Option<&mut DelverEffects>, &mut DelverRecovery, Option<&mut Health>, Has<crate::combat::guard::Guard>), With<Player>>,
     fires: Query<(&Transform, &crate::level::FixedLight), Without<Player>>,
     level: Option<Res<crate::play::CurrentLevel>>,
@@ -73,7 +74,9 @@ fn step_the_delver(
 ) {
     let now = clock.game_seconds();
     // A new delve restarts the clock below where this last stood.
-    let passed = if now < *last { now } else { now - *last };
+    // A clock set at a stroke (a delve resumed) starts it afresh from there.
+    let jumped = std::mem::replace(&mut *jumps, clock.jumps()) != clock.jumps();
+    let passed = if jumped { 0.0 } else if now < *last { now } else { now - *last };
     *last = now;
     let hours = passed / 3600.0;
     let rules_changed = rules.is_changed() && !rules.is_added();
@@ -354,6 +357,23 @@ mod tests {
     fn sprinting(app: &mut App) {
         app.init_resource::<ButtonInput<KeyCode>>();
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftLeft);
+    }
+
+    /// A clock set at a stroke, as a resumed delve sets it, steps nothing by the time it skipped:
+    /// the delver is as hungry as they were, and only the time after it counts.
+    #[test]
+    fn a_clock_set_at_a_stroke_does_not_step_the_delver_by_the_time_it_skipped() {
+        let mut app = app();
+        let delver = walker(&mut app);
+        run(&mut app, 1);
+        let before = app.world().get::<DelverNeeds>(delver).unwrap().0;
+        app.world_mut().resource_mut::<GameClock>().jump_to(fb_character::GameTime::from_seconds(40.0 * 3600.0));
+        run(&mut app, 1);
+        let after = app.world().get::<DelverNeeds>(delver).unwrap().0;
+        assert!((after.hunger.value - before.hunger.value).abs() < 0.001, "{} not {}", after.hunger.value, before.hunger.value);
+        // Time passing after the jump counts as ever.
+        run(&mut app, 300);
+        assert!(app.world().get::<DelverNeeds>(delver).unwrap().0.hunger.value > after.hunger.value);
     }
 
     #[test]

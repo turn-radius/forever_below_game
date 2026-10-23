@@ -227,7 +227,7 @@ impl Shunned {
 /// moving their maximum and hit points by as much as the first-level hit points moved, never
 /// below 1 for one still standing. `last` is the first-level hit points last seen; the first
 /// look only notes them, so a delver started on other hit points keeps them.
-fn fit_hit_points(character: Res<Character>, rules: Option<Res<crate::rules::GameRules>>, mut last: Local<Option<i32>>, mut players: Query<&mut Health, With<Player>>) {
+pub(crate) fn fit_hit_points(character: Res<Character>, rules: Option<Res<crate::rules::GameRules>>, mut last: Local<Option<i32>>, mut players: Query<&mut Health, With<Player>>) {
     if !character.is_changed() && !rules.as_ref().is_some_and(|r| r.is_changed()) {
         return;
     }

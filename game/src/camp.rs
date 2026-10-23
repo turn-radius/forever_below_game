@@ -22,6 +22,9 @@
 //!   wake ([`wake_up`]) rested, or early when something hostile comes within `wake_distance`,
 //!   when hunger or thirst reaches the Famished band, when they are hurt, or at a key press. They
 //!   cannot lie down while tired too little, hungry or thirsty, or with something hostile near.
+//! - Lying down in a set camp is the one place the delve is saved ([`crate::save`], "Your delve is
+//!   saved."), before the sleep goes on. A resumed delve puts the delver back to sleep in the camp
+//!   they saved in ([`PendingBed`]), and they wake as any sleeper does.
 //!
 //! Camp goods are drawn at their own size on the floor, not the tuning's larger floor scale: a
 //! tent or bedroll set at 115% would no longer fit the room it was checked against.
@@ -30,7 +33,7 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use fb_items::camp::Camp;
 use fb_level::{CELL, Cell, FloorShape, Level};
 
-use crate::carry::{Aimed, ViewModelCamera};
+use crate::carry::{Aimed, FloorItem, ViewModelCamera};
 use crate::character::DelverNeeds;
 use crate::combat::{Health, feedback::Corpse};
 use crate::creatures::Critter;
@@ -57,7 +60,19 @@ impl Plugin for CampPlugin {
             .add_systems(Update, (lay_out_hovered, pack_hovered).run_if(inventory_open).run_if(crate::barter::not_bartering).before(apply_floor_changes).in_set(DelveSystems))
             .add_systems(Update, debug_lay_out.run_if(|| std::env::var_os("FB_LAY_OUT").is_some()).in_set(DelveSystems))
             .add_systems(Update, pack_aimed.run_if(level_has_focus).before(apply_floor_changes).in_set(DelveSystems))
-            .add_systems(Update, (go_to_sleep.run_if(level_has_focus), wake_up, spawn_veil, fade_veil).chain().in_set(DelveSystems));
+            .add_systems(
+                Update,
+                (
+                    debug_lie_down.run_if(|| std::env::var_os("FB_LIE_DOWN").is_some()),
+                    go_to_sleep.run_if(level_has_focus),
+                    resume_in_bed.run_if(resource_exists::<PendingBed>),
+                    wake_up,
+                    spawn_veil,
+                    fade_veil,
+                )
+                    .chain()
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -504,6 +519,7 @@ fn go_to_sleep(
     mut toast: ResMut<Toast>,
     mut players: Query<(&Transform, &DelverNeeds, &mut Locomotion, Option<&Health>), With<Player>>,
     time: Option<Res<Time<Real>>>,
+    mut commands: Commands,
 ) {
     if asleep.0.is_some() || !input.just_pressed(Action::Primary) {
         return;
@@ -527,6 +543,77 @@ fn go_to_sleep(
     locomotion.velocity = Vec2::ZERO;
     asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
     toast.say(format!("You lie down in the {}", camp_name(camp.camp)), now);
+    // Lying down in a camp is the one place the delve is saved (`crate::save`), before the sleep
+    // goes on; it says so, or that it could not, over the line above.
+    commands.queue(crate::save::save_in_camp(bed));
+}
+
+/// Where the delver of a delve resumed lies down, until the level has laid its camp out: the spot
+/// of the set camp they saved in.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct PendingBed {
+    pub spot: fb_level::ItemSpot,
+    /// Frames spent looking for the camp.
+    pub waited: u32,
+}
+
+/// Frames a resumed delve waits for its camp to be laid out before it gives the bed up.
+const BED_PATIENCE: u32 = 600;
+
+/// Puts the delver of a resumed delve back to sleep in the camp they saved in, once the level has
+/// laid it out: the sleep goes on as it was when they lay down, and ends as any sleep does.
+#[allow(clippy::too_many_arguments)]
+fn resume_in_bed(
+    mut commands: Commands,
+    pending: Option<ResMut<PendingBed>>,
+    beds: Query<(Entity, &FloorItem, &SetCamp)>,
+    clock: Res<GameClock>,
+    mut asleep: ResMut<Asleep>,
+    mut toast: ResMut<Toast>,
+    mut players: Query<(&mut Locomotion, Option<&Health>), With<Player>>,
+    time: Option<Res<Time<Real>>>,
+) {
+    let Some(mut pending) = pending else { return };
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    let Some((bed, _, camp)) = beds.iter().find(|(_, floor, _)| floor.spot == pending.spot) else {
+        pending.waited += 1;
+        if pending.waited >= BED_PATIENCE {
+            commands.remove_resource::<PendingBed>();
+            toast.say("Your camp is gone.", now);
+        }
+        return;
+    };
+    commands.remove_resource::<PendingBed>();
+    let Ok((mut locomotion, health)) = players.single_mut() else { return };
+    locomotion.velocity = Vec2::ZERO;
+    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+}
+
+/// For captures (`FB_LIE_DOWN`): a while after a camp is laid out (`FB_LAY_OUT`), tires the delver
+/// and presses F on it, so the sleep begins as it does for a player, and saves the delve if the
+/// delve may (`FB_SAVE_FILE`).
+fn debug_lie_down(
+    mut frames: Local<u32>,
+    mut aimed: ResMut<Aimed>,
+    mut keys: Option<ResMut<ButtonInput<KeyCode>>>,
+    keymap: Res<crate::keymap::Keymap>,
+    camps: Query<Entity, With<SetCamp>>,
+    mut players: Query<&mut DelverNeeds, With<Player>>,
+) {
+    *frames += 1;
+    if *frames < 20 || *frames > 24 {
+        return;
+    }
+    let (Some(bed), Some(keys)) = (camps.iter().next(), keys.as_mut()) else { return };
+    aimed.0 = Some(bed);
+    for mut needs in &mut players {
+        needs.0.sleepiness.value = needs.0.sleepiness.value.max(0.8);
+    }
+    for input in keymap.inputs(Action::Primary) {
+        if let crate::keymap::Input::Key(key) = *input {
+            keys.press(key);
+        }
+    }
 }
 
 /// Ends the sleep: rested, hurt (any fall in their hit points since they were last looked at,

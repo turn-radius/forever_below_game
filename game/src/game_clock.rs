@@ -16,9 +16,25 @@ use crate::tuning::Tuning;
 pub struct GameClock {
     /// The elapsed game time.
     pub time: GameTime,
+    /// How many times the clock has been set to another time at a stroke ([`GameClock::jump_to`]).
+    /// A system that steps by the time since it last looked tells such a jump from time passing by
+    /// this changing, and takes the new time as its starting point.
+    jumps: u32,
 }
 
 impl GameClock {
+    /// Sets the clock to `time` at a stroke, as a resumed delve does ([`crate::save`]): nothing is
+    /// to be stepped by the time between the old reading and the new one.
+    pub fn jump_to(&mut self, time: GameTime) {
+        self.time = time;
+        self.jumps += 1;
+    }
+
+    /// How many times the clock has been set at a stroke.
+    pub const fn jumps(&self) -> u32 {
+        self.jumps
+    }
+
     /// Advances the clock by `delta_seconds` game seconds.
     pub fn advance(&mut self, delta_seconds: f64) {
         self.time.advance(delta_seconds);
