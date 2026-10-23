@@ -210,7 +210,23 @@ pub struct TorsoForm {
     pub belly: Bulge,
     pub bust: Bulge,
     pub seat: Bulge,
+    /// The form's fit to a body's pelvis by height ([`TorsoProfile::fill`], [`FILL_ROWS`]
+    /// rows, none when its heights are all equal): how far the cloth reaches in front and
+    /// behind past the sections and swellings, signed, so cloth hangs over the pelvis a body
+    /// has instead of the one the sections alone would draw.
+    pub fill: [[f32; 3]; FILL_ROWS],
+    /// The half depth of the bare form's section at each of the fill's rows. The fill is a
+    /// floor: where this form's own section has been widened past the bare one (a garment's fit,
+    /// the layers under it) by more than the fill asks, nothing is added; only the shortfall
+    /// remains. Equal to the fill's heights' own half depths where the form is unwidened.
+    pub fill_floor: [f32; FILL_ROWS],
+    /// How far each of the fill's rows draws the form in at the sides (0 or below): where the
+    /// form is wider than the body there.
+    pub fill_side: [f32; FILL_ROWS],
 }
+
+/// Rows of a [`TorsoForm`]'s fit to the thighs.
+pub const FILL_ROWS: usize = 24;
 
 impl TorsoForm {
     /// The prototype's garment mannequin (`buildGarment` rows), 1 unit = 10 cm.
@@ -229,6 +245,9 @@ impl TorsoForm {
         belly: Bulge::NONE,
         bust: Bulge::NONE,
         seat: Bulge::NONE,
+        fill: [[0.0; 3]; FILL_ROWS],
+        fill_floor: [0.0; FILL_ROWS],
+        fill_side: [0.0; FILL_ROWS],
     };
 
     /// Every section from the shoulders down widened by `ease` (a garment's fit over the body).
@@ -259,7 +278,13 @@ impl TorsoForm {
 
     /// The form sampled densely for lookups by height.
     pub fn profile(&self) -> TorsoProfile {
-        TorsoProfile::new(&self.rings(), self.exponent, self.back, vec![self.belly, self.bust, self.seat])
+        let mut profile = TorsoProfile::new(&self.rings(), self.exponent, self.back, vec![self.belly, self.bust, self.seat]);
+        if self.fill[0][0] < self.fill[FILL_ROWS - 1][0] {
+            profile.fill = self.fill.to_vec();
+            profile.fill_floor = self.fill_floor.to_vec();
+            profile.fill_side = self.fill_side.to_vec();
+        }
+        profile
     }
 
     /// Where an arm leaves the body on side `side` (+1 left, -1 right), and the arm's
@@ -316,6 +341,14 @@ pub struct TorsoProfile {
     pub exponent: f32,
     pub back: f32,
     pub bulges: Vec<Bulge>,
+    /// Extra depth at the front and the back by height (`[y, front, back]`, rising in y),
+    /// zero outside the run: a skin's fit to what meets it (the pelvis to the thighs).
+    pub fill: Vec<[f32; 3]>,
+    /// The bare half depth at each row of `fill`, for it to act as a floor, or none for a fill
+    /// that is simply added (a skin's).
+    pub fill_floor: Vec<f32>,
+    /// The fill's draw-in at the sides at each of its rows, or none.
+    pub fill_side: Vec<f32>,
 }
 
 impl TorsoProfile {
@@ -331,7 +364,7 @@ impl TorsoProfile {
                 samples[i].y = samples[i - 1].y + 1e-4;
             }
         }
-        TorsoProfile { samples, exponent, back, bulges }
+        TorsoProfile { samples, exponent, back, bulges, fill: vec![], fill_floor: vec![], fill_side: vec![] }
     }
 
     pub fn bottom(&self) -> f32 {
@@ -355,10 +388,12 @@ impl TorsoProfile {
     /// bulges.
     pub fn section(&self, angle: f32, y: f32, inflate: f32) -> [f32; 2] {
         let (hw, hd) = self.at(y);
-        let swell: f32 = self.bulges.iter().map(|b| b.at(angle, y)).sum();
+        let swell: f32 = self.bulges.iter().map(|b| b.at(angle, y)).sum::<f32>() + self.fill_at(angle, y);
         // Out from the axis, so a swell to the side of the front (a breast) rounds out
         // sideways as well as forward; the first bulges only deepened the section.
-        let [x, z] = section_point(angle, hw + inflate, hd + inflate, self.exponent, self.back);
+        let [mut x, z] = section_point(angle, hw + inflate, hd + inflate, self.exponent, self.back);
+        // Drawn in at the sides where the form is wider than the body.
+        x += self.side_at(y) * x.signum() * angle.cos().abs().powi(2);
         if swell == 0.0 {
             return [x, z];
         }
@@ -367,6 +402,42 @@ impl TorsoProfile {
         let (dx, dz) = (0.5 * x, z);
         let r = dx.hypot(dz).max(1e-5);
         [x + dx / r * swell, z + dz / r * swell]
+    }
+
+    /// How far the fill draws the form in at the sides at height `y`.
+    fn side_at(&self, y: f32) -> f32 {
+        let (f, s) = (&self.fill, &self.fill_side);
+        if s.len() != f.len() || f.len() < 2 || y <= f[0][0] || y >= f[f.len() - 1][0] {
+            return 0.0;
+        }
+        let i = f.partition_point(|r| r[0] < y).clamp(1, f.len() - 1);
+        let k = (y - f[i - 1][0]) / (f[i][0] - f[i - 1][0]).max(1e-6);
+        s[i - 1] + (s[i] - s[i - 1]) * k
+    }
+
+    /// The fill's swell at `angle` and `y`: its front share round the front, its back share round the back.
+    fn fill_at(&self, angle: f32, y: f32) -> f32 {
+        let f = &self.fill;
+        if f.len() < 2 || y <= f[0][0] || y >= f[f.len() - 1][0] {
+            return 0.0;
+        }
+        let i = f.partition_point(|r| r[0] < y).clamp(1, f.len() - 1);
+        let k = (y - f[i - 1][0]) / (f[i][0] - f[i - 1][0]).max(1e-6);
+        let at = |c: usize| f[i - 1][c] + (f[i][c] - f[i - 1][c]) * k;
+        // Already out past the bare section by this much: the fill only makes up the rest.
+        let slack = if self.fill_floor.len() == f.len() {
+            let bare = self.fill_floor[i - 1] + (self.fill_floor[i] - self.fill_floor[i - 1]) * k;
+            (self.at(y).1 - bare).max(0.0)
+        } else {
+            0.0
+        };
+        // Only a shortfall is a floor; a pull in (below 0) is the form's own excess over the body,
+        // and stays whatever the form has been widened by.
+        let floor = |fill: f32, slack: f32| if fill > 0.0 { (fill - slack).max(0.0) } else { fill };
+        let (front_fill, back_fill) = (floor(at(1), slack), floor(at(2), slack * self.back));
+        let share = |toward: f32| 1.0 - smoothstep(0.6, 1.0, (angle - toward).sin_cos().1.acos().abs());
+        // The back reaches round to the lobes of the seat; the front stays on the midline.
+        front_fill * (angle - FRONT).cos().max(0.0).powi(2) + back_fill * share(BACK)
     }
 
     /// The surface point at `angle` and height `y`.
@@ -919,6 +990,11 @@ pub struct LowerBodyForm {
     /// Half width (side to side) and half depth of one thigh at the crotch.
     pub thigh_half_width: f32,
     pub thigh_half_depth: f32,
+    /// How far a thigh reaches in front of its middle and behind it at the crotch, where they
+    /// differ (the seat fills out behind, the front is flat): the crotch's section on a real
+    /// body. The mannequin's are both `thigh_half_depth`.
+    pub thigh_front: f32,
+    pub thigh_back: f32,
     /// Distance of each ankle from the midline.
     pub stance: f32,
     /// A real leg's sections from the ankle up toward the crotch (the left leg; the right
@@ -954,6 +1030,8 @@ impl LowerBodyForm {
             crotch_height: 8.0,
             thigh_half_width: 0.84,
             thigh_half_depth: 0.95,
+            thigh_front: 0.95,
+            thigh_back: 0.95,
             stance: 0.62,
             sections: None,
         }
@@ -1020,7 +1098,7 @@ impl LowerBodyProfile {
     fn real_section(&self, y: f32) -> Option<LegSection> {
         let sections = self.form.sections.as_ref()?;
         let f = &self.form;
-        let crotch = LegSection { y: f.crotch_height, x: f.thigh_half_width, z: 0.0, half_width: f.thigh_half_width, front: f.thigh_half_depth, back: f.thigh_half_depth };
+        let crotch = LegSection { y: f.crotch_height, x: f.thigh_half_width, z: 0.0, half_width: f.thigh_half_width, front: f.thigh_front, back: f.thigh_back };
         let all: Vec<LegSection> = sections.iter().copied().filter(|s| s.y < crotch.y - 0.05).chain(std::iter::once(crotch)).collect();
         let i = all.partition_point(|s| s.y < y);
         if i == 0 {
@@ -1307,6 +1385,18 @@ mod tests {
         assert!(p.bottom() < -8.9 && p.top() > 4.5);
         let front = p.point(FRONT, 2.4);
         assert!(front[2] > 1.1, "front of the chest faces +Z: {front:?}");
+    }
+
+    #[test]
+    fn the_mannequin_has_no_fit_to_a_pelvis_and_a_symmetric_crotch() {
+        // Standalone items are built on the mannequin: a body's pelvis fit must not reach them.
+        let p = TorsoForm::MANNEQUIN.profile();
+        assert!(p.fill.is_empty() && p.fill_floor.is_empty() && p.fill_side.is_empty());
+        let lower = LowerBodyForm::mannequin();
+        assert!(lower.thigh_front == lower.thigh_back && lower.thigh_front == lower.thigh_half_depth);
+        for y in [-3.0, -1.0, 0.0, 1.0] {
+            assert_eq!(p.at(y), TorsoForm::MANNEQUIN.profile().at(y));
+        }
     }
 
     #[test]

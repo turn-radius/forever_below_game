@@ -31,6 +31,8 @@ mod skin_tests;
 mod shoulder_tests;
 #[cfg(test)]
 mod hood_tests;
+#[cfg(test)]
+mod pelvis_tests;
 pub mod spec;
 pub mod worn;
 
