@@ -200,6 +200,11 @@ impl Burden {
         rules.load.walk(self.load_lb, self.capacity_lb)
     }
 
+    /// How far along the load curve they are, from 0 to 1 ([`LoadRules::strain`]).
+    pub fn strain_with(self, rules: &Rules) -> f64 {
+        rules.load.strain(self.load_lb, self.capacity_lb)
+    }
+
     /// How many times as fast as usual sprinting drains stamina.
     pub fn sprint_drain(self) -> f64 {
         self.sprint_drain_with(defaults())
@@ -914,7 +919,12 @@ impl Stamina {
         let s = &rules.stamina;
         match activity {
             Activity::Exerting => -load.sprint_drain_with(rules) * cost / s.sprint_seconds,
-            Activity::Walking => refill / s.walk_refill_seconds,
+            // The refill fades out with the load's strain and a slow drain fades in, both on the
+            // same curve as pace: continuous, refilling through the Burdened edge.
+            Activity::Walking => {
+                let strain = load.strain_with(rules);
+                refill / s.walk_refill_seconds * (1.0 - strain) - strain / rules.load.walk_drain_seconds
+            }
             Activity::Resting => refill / s.stand_refill_seconds,
             Activity::Sleeping => refill * s.sleep_refill_factor / s.stand_refill_seconds,
         }
@@ -1955,6 +1965,27 @@ mod tests {
         let (light, burdened, encumbered) = (after(Burden::default()), after(Burden::new(82.5, 165.0)), after(Burden::new(165.0, 165.0)));
         assert!(light > burdened && burdened > encumbered, "{light} {burdened} {encumbered}");
         assert!((1.0 - encumbered - 2.0 * (1.0 - light)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn walking_stamina_fades_from_a_refill_to_a_slow_drain_with_no_jump() {
+        let rate = |lb: f64| Stamina::rate_per_second(Activity::Walking, Burden::new(lb, 165.0));
+        // STR 11: refills a pool in 12 seconds up to 55 lb.
+        assert!((rate(55.0) - 1.0 / 12.0).abs() < 1e-12);
+        assert!((rate(56.0) - 0.083326).abs() < 1e-6, "{}", rate(56.0));
+        assert!((rate(110.0) - 0.058333).abs() < 1e-6, "{}", rate(110.0));
+        assert!((rate(165.0) + 1.0 / 60.0).abs() < 1e-12, "a full pool lasts a minute at capacity");
+        let mut last = rate(0.0);
+        let mut turned = None;
+        for pounds in 1..=165 {
+            let now = rate(pounds as f64);
+            assert!((now - last).abs() < 0.004, "{pounds} lb: {last} to {now}");
+            if turned.is_none() && now < 0.0 {
+                turned = Some(pounds);
+            }
+            last = now;
+        }
+        assert_eq!(turned, Some(156), "only deep into Encumbered does walking drain");
     }
 
     #[test]

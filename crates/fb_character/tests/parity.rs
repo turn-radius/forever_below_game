@@ -21,8 +21,8 @@ use scenario::{Book, run};
 /// The digest of the scenario's 3028 numbers on the code before the move. Taken again from
 /// main's plain functions when main added the proficiency bonus to attacks (#359): the rules
 /// file must play as main does, not as the code did before that change. Taken again when load pace
-/// and sprint drain became a curve of the load rather than steps by band.
-const GOLDEN: u64 = 0x20ed_dd9b_fcef_3de6;
+/// and sprint drain became a curve of the load rather than steps by band, and again when walking stamina followed the load.
+const GOLDEN: u64 = 0xff34_485f_05d4_5411;
 const GOLDEN_LEN: usize = 3028;
 
 /// The scenario through the `_with` functions, under a rules table.

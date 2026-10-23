@@ -129,6 +129,10 @@ capacity_walk = 0.65
 capacity_drain = 2.0
 # Walking pace multiple while Overloaded, past capacity; 0 roots the delver.
 overloaded_walk = 0.0
+# Real seconds a full stamina pool lasts walking at capacity. Walking refills it as usual up to
+# the Burdened edge; past it the refill fades out on the same curve and this drain fades in, so
+# the pool only starts to fall deep into Encumbered (about 156 lb for STR 11).
+walk_drain_seconds = 60.0
 
 # How cold the abyss is and how much fire warms. Worn warmth is weighed against the folk's need
 # (6, or 8 for the cold-blooded lizardfolk) less the comfort, plus the chill of each level below

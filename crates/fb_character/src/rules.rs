@@ -465,11 +465,16 @@ pub struct LoadRules {
     pub capacity_drain: f64,
     /// Walking pace multiple while Overloaded: 0 is rooted.
     pub overloaded_walk: f32,
+    /// Real seconds a full stamina pool lasts walking at capacity. Walking refills the pool at
+    /// its usual rate up to the Burdened edge; past it the refill fades out along the same curve
+    /// as pace and drain, and this drain fades in, so the pool only starts to fall when the
+    /// drain outweighs the refill, deep into Encumbered.
+    pub walk_drain_seconds: f64,
 }
 
 impl Default for LoadRules {
     fn default() -> Self {
-        LoadRules { capacity_per_strength: 15.0, burdened_multiple: 5.0, encumbered_multiple: 10.0, load_curve: 2.0, capacity_walk: 0.65, capacity_drain: 2.0, overloaded_walk: 0.0 }
+        LoadRules { capacity_per_strength: 15.0, burdened_multiple: 5.0, encumbered_multiple: 10.0, load_curve: 2.0, capacity_walk: 0.65, capacity_drain: 2.0, overloaded_walk: 0.0, walk_drain_seconds: 60.0 }
     }
 }
 
@@ -494,19 +499,24 @@ impl LoadRules {
         capacity_lb * self.encumbered_multiple / self.capacity_per_strength
     }
 
+    /// How far along the curve `load_lb` is: the slope raised to `load_curve`, 0 up to the
+    /// Burdened edge and 1 at capacity. Pace, sprint drain and walking stamina all follow it.
+    pub fn strain(&self, load_lb: f64, capacity_lb: f64) -> f64 {
+        self.slope(load_lb, capacity_lb).powf(self.load_curve)
+    }
+
     /// The walking pace multiple at `load_lb` of `capacity_lb`: continuous, with no corner at the
     /// Burdened edge, and `overloaded_walk` once past capacity.
     pub fn walk(&self, load_lb: f64, capacity_lb: f64) -> f32 {
         if capacity_lb <= 0.0 || load_lb > capacity_lb {
             return self.overloaded_walk;
         }
-        let t = self.slope(load_lb, capacity_lb).powf(self.load_curve);
-        1.0 - (1.0 - self.capacity_walk) * t as f32
+        1.0 - (1.0 - self.capacity_walk) * self.strain(load_lb, capacity_lb) as f32
     }
 
     /// The sprint drain multiple at `load_lb` of `capacity_lb`, on the same curve as [`walk`](Self::walk).
     pub fn drain(&self, load_lb: f64, capacity_lb: f64) -> f64 {
-        1.0 + (self.capacity_drain - 1.0) * self.slope(load_lb, capacity_lb).powf(self.load_curve)
+        1.0 + (self.capacity_drain - 1.0) * self.strain(load_lb, capacity_lb)
     }
 }
 

@@ -348,6 +348,7 @@ const LABELS: &[(&str, &str)] = &[
     ("load/capacity_walk", "Pace at capacity (\u{d7})"),
     ("load/capacity_drain", "Sprint drain at capacity (\u{d7})"),
     ("load/overloaded_walk", "Pace while Overloaded (\u{d7})"),
+    ("load/walk_drain_seconds", "Seconds of walking a pool lasts at capacity"),
     ("visibility/in_dark", "Seen in the dark"),
     ("visibility/in_light", "Added by full light"),
     ("visibility/moving", "Added by sprinting"),
