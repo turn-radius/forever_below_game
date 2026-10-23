@@ -196,13 +196,16 @@ impl Body {
         let shoulder_y = chin_y - race.neck * s * 0.55;
         let hip_y = h * race.leg;
         let t = shoulder_y - hip_y;
-        let sw = 2.1 * ws * (1.07 - fem * 0.15) * (0.92 + 0.16 * mu);
+        let sw = 2.1 * ws * (1.07 - fem * 0.15) * (0.92 + 0.16 * mu) * race.shoulders;
         let hip = FormRing::new(hip_y, HIP_WIDTH * (1.0 + HIP_LIMB * (race.limb - 1.0).max(0.0)) * ws * (0.95 + fem * 0.13), 1.12 * ws);
         let waist_y = hip_y + 0.3 * t;
         let chest_y = hip_y + 0.7 * t;
         // Muscle narrows the waist under a broad chest; weight fills it.
         let waist = FormRing::new(waist_y, 1.38 * ws * (1.0 - fem * 0.3) * (1.05 - 0.1 * mu) * (0.95 + 0.12 * spec.frame), 0.95 * ws);
-        let chest = FormRing::new(chest_y, 1.72 * ws * (0.97 + 0.06 * mu), 1.14 * ws * (0.97 + 0.06 * mu));
+        // A hump at the withers (a bull's) deepens the chest and the shoulders, front and back, so
+        // everything built on the form follows it.
+        let hump = race.hump;
+        let chest = FormRing::new(chest_y, 1.72 * ws * (0.97 + 0.06 * mu), 1.14 * ws * (0.97 + 0.06 * mu) * (1.0 + 0.3 * hump));
         let neck_radius = 0.42 * ws * race.neck_r * (0.92 + 0.16 * mu);
         let belly = Bulge { y: waist_y, spread: 0.3 * t, depth: (race.belly * (0.3 + spec.frame * 0.9) + 0.25 * spec.frame.powi(2)) * ws, sharpness: 2, toward: FRONT, fall: -0.35, ..Bulge::NONE };
         // The chest is two forms either side of the breastbone, the breast muscles (more with
@@ -234,9 +237,10 @@ impl Body {
         let lumbar = Bulge { y: waist_y + 0.05 * t, spread: 0.26 * t, depth: -0.05 * ws, sharpness: 2, toward: BACK, ..Bulge::NONE };
         // The front of the pelvis draws in below the belly to the thighs' own front, so the
         // groin narrows into the inner thighs instead of standing out over them (skin only).
-        let ankle_y = 0.048 * h;
+        // Legs that stand on the toes lift the ankle to the hock.
+        let ankle_y = race.legs.map_or(0.048 * h, |g| g.hock * hip_y);
         let head = HeadForm {
-            centre: [0.0, head_y, 0.12 * s],
+            centre: [0.0, head_y, (0.12 + race.hunch) * s],
             half_width: head_r * race.hw,
             half_height,
             half_depth: head_r * race.hd,
@@ -253,8 +257,8 @@ impl Body {
                 FormRing::new(hip_y + ILIAC * t, hip.half_width * ILIAC_WIDTH, hip.half_depth),
                 waist,
                 chest,
-                FormRing::new(shoulder_y - 0.05 * t, sw * 0.95, chest.half_depth * 0.88),
-                FormRing::new(shoulder_y + 0.05 * t, sw * 0.62, chest.half_depth * 0.66),
+                FormRing::new(shoulder_y - 0.05 * t, sw * 0.95, chest.half_depth * 0.88 * (1.0 + 0.3 * hump)),
+                FormRing::new(shoulder_y + 0.05 * t, sw * 0.62, chest.half_depth * 0.66 * (1.0 + 0.6 * hump)),
                 FormRing::new(shoulder_y + 0.11 * t, neck_radius * 1.2, neck_radius * 1.1),
                 FormRing::new(shoulder_y + 0.17 * t, neck_radius, neck_radius * 0.95),
             ],
@@ -512,11 +516,12 @@ impl Body {
         let w = self.waist_y;
         let sw = self.shoulder_half_width;
         let (hip, chest) = (self.hip, self.chest);
+        let hump = self.race().hump;
         let below = |y: f32, k: f32| FormRing::new(y - w, hip.half_width * k, hip.half_depth * (k + 0.04));
         TorsoForm {
             neck: FormRing::new(self.shoulder_y + 0.11 * t - w, self.neck_radius * 1.2, self.neck_radius * 1.1),
-            shoulder_top: FormRing::new(self.shoulder_y + 0.05 * t - w, sw * 0.62, chest.half_depth * 0.66),
-            shoulder: FormRing::new(self.shoulder_y - 0.05 * t - w, sw * 0.95, chest.half_depth * 0.88),
+            shoulder_top: FormRing::new(self.shoulder_y + 0.05 * t - w, sw * 0.62, chest.half_depth * 0.66 * (1.0 + 0.6 * hump)),
+            shoulder: FormRing::new(self.shoulder_y - 0.05 * t - w, sw * 0.95, chest.half_depth * 0.88 * (1.0 + 0.3 * hump)),
             chest: chest.raised(-w),
             waist: self.waist.raised(-w),
             hip: FormRing::new(hip.y - w, hip.half_width * 1.01, hip.half_depth * 1.03),
@@ -662,6 +667,8 @@ impl Body {
             thigh_back: top.back * 1.04,
             stance: leg.joints[2][0].abs(),
             sections: Some(sections),
+            // A leg on its toes ends its cloth at the hock.
+            hem_floor: if self.race().legs.is_some() { self.ankle_y - 0.3 * self.scale } else { 0.0 },
         }
     }
 
@@ -777,17 +784,34 @@ impl Body {
         add(nails, "nails", lighten(skin, 0.22), false);
         let mut legs = MeshBuilder::new();
         let mut feet = MeshBuilder::new();
+        let mut hooves = MeshBuilder::new();
         for side in Side::BOTH {
             legs.append(&self.leg_mesh(side));
+            if let Some(foot) = self.hooved_foot(side) {
+                // A leg on its toes ends in a pastern and a cloven hoof, not a sole.
+                feet.append(&foot.flesh);
+                hooves.append(&foot.hoof);
+                continue;
+            }
             let mut f = foot_mesh(&self.leg_form(), 0.0);
             self.foot_placement(side).apply(&mut f);
             feet.append(&f);
         }
         add(legs, "legs", skin, true);
         // Pigfolk walk on darker trotters (`buildBody`: the skin at 0.62).
-        add(feet, "feet", if self.folk() == Folk::Pigfolk { skin.scaled(0.62) } else { skin }, true);
+        let socks = self.race().coat && self.traits().marking == crate::parts::Marking::Socks;
+        add(feet, "feet", if self.folk() == Folk::Pigfolk { skin.scaled(0.62) } else if socks { crate::coat::WHITE } else { skin }, true);
         add(self.tail_mesh(), "tail", skin, true);
         let mut out = ItemMesh { parts };
+        if !hooves.is_empty() {
+            let tone = crate::parts::mix(Rgb::hex(0x1f1a17), Rgb::hex(0x8d8473), self.traits().hoof_tone);
+            out.parts.push(hooves.into_part("hooves", OutlineMode::Welded).with_material(MaterialKind::Bone).with_tint(tone));
+        }
+        if let Some(hair) = self.tail_hair() {
+            let tint = self.spec.hair_colour;
+            out.parts.push(hair.into_part("tail_hair", OutlineMode::Welded).with_material(MaterialKind::Hair).with_tint(tint).without_outline());
+        }
+        out.parts.extend(self.markings());
         if self.folk() == Folk::Lizardfolk {
             let claws = self.claws_mesh().into_part("claws", OutlineMode::Welded).with_material(MaterialKind::Bone);
             out.parts.push(claws);
@@ -849,7 +873,7 @@ impl Body {
     }
 
     /// A leg's radius at `t` along it and `a` round it (0 the front, +Z; PI the back).
-    fn leg_radius(&self, leg: &Limb, t: f32, a: f32) -> f32 {
+    pub(crate) fn leg_radius(&self, leg: &Limb, t: f32, a: f32) -> f32 {
         let [th, tk] = leg.t_joints;
         let calf_t = tk + 0.3 * (1.0 - tk);
         let front = a.cos();
@@ -924,7 +948,80 @@ impl Body {
                 .sample_evenly(24);
                 Some((path, Box::new(move |u: f32| 0.08 * s * (1.0 - u * 0.6))))
             }
-            _ => None,
+            _ => {
+                let (joints, radius) = self.jointed_tail()?;
+                let end = joints.last().copied()?;
+                let mut controls = joints;
+                controls.push(end);
+                let path = CatmullRom::centripetal(controls).sample_evenly(36);
+                Some((path, radius))
+            }
+        }
+    }
+
+    /// The traits a seed rolled for the denizen parts ([`crate::parts`]): the horns' shape, a
+    /// coat's marking, a nose ring, the mane. Meaningless for a race with none of them.
+    pub fn traits(&self) -> crate::parts::Traits {
+        crate::parts::Traits::roll(self.spec.seed)
+    }
+
+    /// The bone joints of a jointed tail (`tail_shape` in the race row) and its radius along it:
+    /// the root behind the seat and one point per bone, each segment swinging a little less back
+    /// from hanging, and the tip. `None` for a race without one.
+    pub fn jointed_tail(&self) -> Option<(Vec<V3>, TailRadius)> {
+        let shape = self.race().tail_shape?;
+        let n = shape.bones.clamp(1, crate::parts::TAIL_BONES);
+        let (hy, hd, t) = (self.hip_y, self.hip.half_depth, self.trunk_length);
+        let seg = shape.length * hy / n as f32;
+        let mut p = [0.0, hy + 0.06 * t, -0.95 * hd];
+        let mut points = vec![p];
+        for i in 0..n {
+            // Leaving the rump backward and down, then hanging.
+            let swing = 0.9 / (1.0 + 1.6 * i as f32);
+            p = vec3::add(p, [0.0, -seg * swing.cos(), -seg * swing.sin()]);
+            points.push(p);
+        }
+        let root = shape.radius * self.leg(Side::Left).radius;
+        Some((points, Box::new(move |u: f32| root * (1.0 - 0.84 * u) + 0.02)))
+    }
+
+    /// The bones' rest joints of the jointed tail: where each bone starts.
+    pub fn tail_joints(&self) -> Vec<V3> {
+        self.jointed_tail().map(|(mut points, _)| {
+            points.pop();
+            points
+        }).unwrap_or_default()
+    }
+
+    /// The tail's end of hair, if its shape ends in a tuft.
+    fn tail_hair(&self) -> Option<MeshBuilder> {
+        let shape = self.race().tail_shape?;
+        if shape.end != crate::folk::TailEnd::Tuft {
+            return None;
+        }
+        let (points, radius) = self.jointed_tail()?;
+        let end = *points.last()?;
+        let seg = vec3::distance(points[points.len() - 2], end);
+        Some(crate::parts::tuft(end, seg, radius(1.0), self.traits().tuft, self.spec.seed))
+    }
+
+    /// The foot of `side`'s leg if the race stands on its toes: the pastern, hoof and where they lie.
+    pub fn hooved_foot(&self, side: Side) -> Option<crate::parts::Foot> {
+        let g = self.race().legs?;
+        let leg = self.leg(side);
+        Some(crate::parts::digitigrade_foot(leg.joints[2], &g, leg.radius))
+    }
+
+    /// The line from the ankle joint to the sole a foot hangs along, for the skin weights: for
+    /// folk down to the sole and out along the foot, for a hoofed leg along the pastern to the hoof.
+    pub fn foot_line(&self, side: Side) -> Vec<V3> {
+        let end = self.leg(side).joints[2];
+        match self.hooved_foot(side) {
+            Some(f) => vec![end, f.coronet, [f.coronet[0], 0.15, 0.5 * (f.heel + f.toe)]],
+            None => {
+                let sole = [end[0], 0.15, end[2]];
+                vec![end, sole, vec3::add(sole, [0.0, 0.0, 0.148 * self.height * self.race().foot])]
+            }
         }
     }
 
@@ -1000,7 +1097,12 @@ fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, mu: f32, hip: &FormRing, ank
     let hw = hip.half_width;
     let hj = [sg * hw * HIP_JOINT_X, hip.y - 0.05 * s, 0.0];
     let a = [sg * hw * 0.36, ankle_y, 0.0];
-    let k = [sg * hw * 0.41, a[1] + (hj[1] - a[1]) * 0.48, 0.12 * s];
+    // A leg on its toes folds: the knee well forward of the hip, higher up, and the hock (the
+    // ankle joint) under the hip; the pastern and hoof lie beyond it ([`crate::parts`]).
+    let k = match race.legs {
+        Some(g) => [sg * hw * 0.41, a[1] + (hj[1] - a[1]) * g.knee_height, g.knee_forward * hj[1]],
+        None => [sg * hw * 0.41, a[1] + (hj[1] - a[1]) * 0.48, 0.12 * s],
+    };
     let root = vec3::add(hj, [0.0, s, 0.0]);
     // The thigh's top reaches out to the hips' own width, so wide hips flow into the thighs
     // instead of standing out over them as a ledge; then it tapers to the knee (the plate's stayed

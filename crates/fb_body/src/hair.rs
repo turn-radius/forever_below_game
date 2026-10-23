@@ -10,11 +10,12 @@
 
 use std::f32::consts::{PI, TAU};
 
-use armory::build::form::{ShellOptions, patch, shell};
+use armory::build::form::{BACK, ShellOptions, patch, shell};
 use armory::build::hafted::smoothstep;
 use armory::geom::vec3::{self, V3};
 use armory::geom::{CatmullRom, MeshBuilder, OutlineMode, Shading, SweepOptions, spike, torus, tube, uv_sphere, value_noise3};
 use armory::{ItemMesh, MaterialKind, Rgb};
+use procgen_rng::Mulberry32;
 
 use crate::body::Body;
 use crate::folk::{Beard, Folk, HairStyle};
@@ -131,7 +132,7 @@ pub fn hair_volume(style: HairStyle, head_radius: f32, covered: bool) -> f32 {
     let v = match style {
         HairStyle::Shaggy => 0.25,
         HairStyle::Long => 0.18,
-        HairStyle::Bald | HairStyle::Crest => 0.0,
+        HairStyle::Bald | HairStyle::Crest | HairStyle::Mane => 0.0,
         _ => 0.1,
     };
     v * head_radius * if covered { 0.5 } else { 1.0 }
@@ -200,6 +201,10 @@ impl Body {
         let r = face.r;
         match style {
             HairStyle::Bald | HairStyle::Crest => return,
+            HairStyle::Mane => {
+                self.mane(face, fit, hair);
+                return;
+            }
             HairStyle::Mohawk => {
                 if fit.covered {
                     return;
@@ -255,6 +260,45 @@ impl Body {
                 hair.append(&knot);
             }
             _ => {}
+        }
+    }
+
+    /// A bull's forelock and mane: locks from the poll falling forward over the brow, and a
+    /// shaggy mane down the nape and the back of the neck over the withers, lying out from
+    /// whatever is worn on the shoulders by its clearance. Under a helm the forelock goes.
+    fn mane(&self, face: &Face, fit: HairFit, hair: &mut MeshBuilder) {
+        let tr = self.traits();
+        let r = face.r;
+        let mut rng = Mulberry32::new(self.spec.seed ^ 0x3a4e_5bc1);
+        if !fit.covered {
+            for _ in 0..(8.0 + 22.0 * tr.mane) as usize {
+                let az = rng.range_f32(-0.55, 0.55);
+                let polar = rng.range_f32(0.1, 0.3) * PI;
+                let root = face.point(az, polar, -0.05 * r);
+                let out = vec3::normalize_or([rng.range_f32(-0.3, 0.3), 0.1, 1.0], vec3::Z);
+                let len = rng.range_f32(0.5, 1.1) * r * (0.5 + 0.6 * tr.mane);
+                hair.append(&crate::parts::lock(root, out, len, 0.1 * r, 0.9, [rng.range_f32(-0.2, 0.2) * r, 0.0, 0.0]));
+            }
+        }
+        // The nape, between the horns and down the neck.
+        for _ in 0..(10.0 + 34.0 * tr.mane) as usize {
+            let polar = rng.range_f32(0.5, 0.78) * PI;
+            let root = face.point(PI + rng.range_f32(-0.7, 0.7), polar, -0.02 * r);
+            let out = vec3::normalize_or([rng.range_f32(-0.5, 0.5), -0.3, -1.0], vec3::neg(vec3::Z));
+            let len = rng.range_f32(0.7, 1.5) * r * (0.7 + 0.5 * tr.mane);
+            hair.append(&crate::parts::lock(root, out, len, 0.14 * r, 0.9, [0.0, 0.0, -0.2 * r]));
+        }
+        // The neck's crest and the withers.
+        let (t, w) = (self.trunk_length, self.girth);
+        let lift = fit.clearance.max(0.0) + 0.03;
+        for _ in 0..(16.0 + 56.0 * tr.mane) as usize {
+            let y = rng.range_f32(self.chest_y + 0.1 * t, self.shoulder_y + 0.15 * t);
+            let (p, n) = self.trunk_surface(BACK + rng.range_f32(-0.7, 0.7), y, 0.0);
+            let root = vec3::add(p, vec3::scale(n, lift - 0.1 * w));
+            let out = vec3::normalize_or(vec3::add(n, [0.0, 0.0, -0.4]), vec3::neg(vec3::Z));
+            let len = rng.range_f32(0.5, 1.4) * w * (0.8 + 0.5 * tr.mane);
+            let sway = [rng.range_f32(-0.3, 0.3) * w, 0.0, rng.range_f32(-0.4, 0.1) * w];
+            hair.append(&crate::parts::lock(root, out, len, 0.3 * w, 1.0, sway));
         }
     }
 
@@ -486,7 +530,7 @@ impl Body {
     /// none.
     fn brows(&self, face: &Face) -> MeshBuilder {
         let mut out = MeshBuilder::new();
-        if self.folk() == Folk::Lizardfolk {
+        if matches!(self.folk(), Folk::Lizardfolk | Folk::Minotaur) {
             return out;
         }
         let r = face.r;

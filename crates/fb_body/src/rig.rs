@@ -1,4 +1,4 @@
-//! A folk's rig: sixteen joints with their rest frames, taken from the body's own limb joints,
+//! A folk's rig: sixteen joints, then a tail's four bones, with their rest frames, taken from the body's own limb joints,
 //! and the maths to pose it ([`RigPose`]) and to skin points with it. Plain Rust, no Bevy.
 //!
 //! Every joint rests with an identity rotation, so a joint's frame is body space moved to its
@@ -15,8 +15,12 @@ use armory::geom::vec3::{self, Mat3, V3};
 use crate::body::Body;
 use crate::limb::Side;
 
-/// How many joints a folk's rig has.
-pub const JOINTS: usize = 16;
+/// How many joints a folk's rig has: sixteen of the body, then [`TAIL_JOINTS`] of a jointed tail
+/// (a race without one has them at rest at the pelvis, and nothing is weighted to them).
+pub const JOINTS: usize = 16 + TAIL_JOINTS;
+
+/// The bones a jointed tail has at most.
+pub const TAIL_JOINTS: usize = crate::parts::TAIL_BONES;
 
 /// A joint of the rig. Right then left, as [`Side::BOTH`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -41,6 +45,11 @@ pub enum Joint {
     HipL,
     KneeL,
     AnkleL,
+    /// A jointed tail's bones, root first; each hangs from the one before and the first from the pelvis.
+    Tail0,
+    Tail1,
+    Tail2,
+    Tail3,
 }
 
 impl Joint {
@@ -62,7 +71,14 @@ impl Joint {
         Joint::HipL,
         Joint::KneeL,
         Joint::AnkleL,
+        Joint::Tail0,
+        Joint::Tail1,
+        Joint::Tail2,
+        Joint::Tail3,
     ];
+
+    /// The tail's bones, root first.
+    pub const TAIL: [Joint; TAIL_JOINTS] = [Joint::Tail0, Joint::Tail1, Joint::Tail2, Joint::Tail3];
 
     pub fn index(self) -> usize {
         self as usize
@@ -86,6 +102,10 @@ impl Joint {
             Joint::HipL => "hip_l",
             Joint::KneeL => "knee_l",
             Joint::AnkleL => "ankle_l",
+            Joint::Tail0 => "tail_0",
+            Joint::Tail1 => "tail_1",
+            Joint::Tail2 => "tail_2",
+            Joint::Tail3 => "tail_3",
         }
     }
 
@@ -103,6 +123,10 @@ impl Joint {
             Joint::AnkleR => Joint::KneeR,
             Joint::KneeL => Joint::HipL,
             Joint::AnkleL => Joint::KneeL,
+            Joint::Tail0 => Joint::Pelvis,
+            Joint::Tail1 => Joint::Tail0,
+            Joint::Tail2 => Joint::Tail1,
+            Joint::Tail3 => Joint::Tail2,
         })
     }
 
@@ -290,6 +314,12 @@ impl Rig {
             for (joint, at) in Joint::leg(side).into_iter().zip(body.leg(side).joints) {
                 rest[joint.index()] = at;
             }
+        }
+        // The tail's bones start where its joints are; with none they rest at the pelvis, a
+        // step the previous one ended (so nothing moves).
+        let tail = body.tail_joints();
+        for (i, joint) in Joint::TAIL.into_iter().enumerate() {
+            rest[joint.index()] = tail.get(i).copied().unwrap_or(rest[Joint::Pelvis.index()]);
         }
         Rig { rest }
     }

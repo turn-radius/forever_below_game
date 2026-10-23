@@ -1,13 +1,16 @@
-//! The six folk and their rows in `data/races.json` (the plate prototype's `RACES`), with
+//! The six folk, the denizens built on the same body, and their rows in `data/races.json` (the plate prototype's `RACES`), with
 //! the colour tables in `data/eyes.json` and `data/hair*.json`.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use armory::Rgb;
+use fb_denizens::DenizenBody;
 use serde::{Deserialize, Serialize};
 
-/// One of the six folk who delve.
+/// One of the six folk who delve, or one of the denizens of the abyss who share their body
+/// ([`Folk::DENIZENS`]): a denizen is a race of the folk body, with the same skin, rig, gait and
+/// fitting, and turns on the shared parts (horns, hooves, a tail, a muzzle) by its row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Folk {
@@ -19,10 +22,38 @@ pub enum Folk {
     Lizardfolk,
     #[serde(rename = "pig")]
     Pigfolk,
+    /// A bull-headed denizen (`fb_denizens::DenizenBody::Minotaur`).
+    Minotaur,
 }
 
 impl Folk {
+    /// The six folk who delve. Factions and members roll from these; the denizens are
+    /// [`Folk::DENIZENS`].
     pub const ALL: [Folk; 6] = [Folk::Human, Folk::Dwarf, Folk::Gnome, Folk::Goblin, Folk::Lizardfolk, Folk::Pigfolk];
+
+    /// The denizens whose bodies are built on the folk body so far.
+    pub const DENIZENS: [Folk; 1] = [Folk::Minotaur];
+
+    /// Whether this is a denizen, not one of the six folk.
+    pub fn is_denizen(self) -> bool {
+        Folk::DENIZENS.contains(&self)
+    }
+
+    /// The denizen body this folk row stands for, if it is a denizen.
+    pub fn denizen_body(self) -> Option<DenizenBody> {
+        match self {
+            Folk::Minotaur => Some(DenizenBody::Minotaur),
+            _ => None,
+        }
+    }
+
+    /// The folk row a denizen body is built as, if it is built yet.
+    pub fn of_denizen(body: DenizenBody) -> Option<Folk> {
+        match body {
+            DenizenBody::Minotaur => Some(Folk::Minotaur),
+            _ => None,
+        }
+    }
 
     /// The folk's key in `data/races.json`.
     pub fn key(self) -> &'static str {
@@ -33,13 +64,14 @@ impl Folk {
             Folk::Goblin => "goblin",
             Folk::Lizardfolk => "lizard",
             Folk::Pigfolk => "pig",
+            Folk::Minotaur => "minotaur",
         }
     }
 
     /// Parses a key from `data/races.json`, or the folk's name ("lizardfolk", "pigfolk").
     pub fn parse(text: &str) -> Option<Folk> {
         let text = text.trim().to_ascii_lowercase();
-        Folk::ALL.into_iter().find(|f| f.key() == text || f.race().label.to_ascii_lowercase() == text)
+        Folk::ALL.into_iter().chain(Folk::DENIZENS).find(|f| f.key() == text || f.race().label.to_ascii_lowercase() == text)
     }
 
     /// The folk's row in `data/races.json`.
@@ -59,6 +91,8 @@ pub enum Ears {
     Long,
     /// Folded forward and down (pigfolk).
     Flop,
+    /// Broad leaves set out from under the horns, drooping and swept back (minotaurs).
+    Leaf,
     None,
 }
 
@@ -76,6 +110,9 @@ pub enum Nose {
     Snout,
     /// A pig's snout disc (pigfolk).
     Pig,
+    /// A bull's broad skull and long deep muzzle with its nose pad (minotaurs); see
+    /// [`Race::muzzle`].
+    Muzzle,
 }
 
 /// Eye kinds (`RACES[*].eyes`).
@@ -90,6 +127,8 @@ pub enum EyeKind {
     Amber,
     /// Small dark beads (pigfolk).
     Small,
+    /// Large amber eyes set at the sides of the head, with a horizontal pupil (a bull's).
+    Bovine,
 }
 
 /// Hair styles (`RACES[*].hairs`); labels as the plate's hair menu gives them.
@@ -106,6 +145,8 @@ pub enum HairStyle {
     Mohawk,
     /// A lizard's frill of spines (the plate's "Frill").
     Crest,
+    /// A forelock over the brow and a shaggy mane down the neck and over the withers (a bull's).
+    Mane,
 }
 
 impl HairStyle {
@@ -185,6 +226,104 @@ pub struct Race {
     /// 1 for a tail (lizardfolk).
     #[serde(default)]
     pub tail: u32,
+    /// Denizen parts any race can turn on by giving its row the field: horns, legs that stand
+    /// on the toes with cloven hooves, a jointed tail, a coat and a bull's muzzle. See
+    /// [`crate::parts`].
+    #[serde(default)]
+    pub horns: Option<HornRow>,
+    #[serde(default)]
+    pub legs: Option<Digitigrade>,
+    #[serde(default)]
+    pub tail_shape: Option<TailRow>,
+    #[serde(default)]
+    pub muzzle: Option<MuzzleRow>,
+    /// The body's hunch: how far the head is thrust forward of the neck's column, as a share of
+    /// the body's scale, and the hump at the withers, as a share of the chest's depth.
+    #[serde(default)]
+    pub hunch: f32,
+    #[serde(default)]
+    pub hump: f32,
+    /// Shoulders' breadth, over a human's at the same height.
+    #[serde(default = "one")]
+    pub shoulders: f32,
+    /// A hide with a coat: the skins are coat colours, and a seed may mark it with a blaze,
+    /// socks or pied patches ([`crate::parts::Marking`]).
+    #[serde(default)]
+    pub coat: bool,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+/// A range a seed rolls a value in.
+pub type Span = [f32; 2];
+
+/// The horns a race grows ([`crate::parts::HornSpec`] is the pair a body rolls from this).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct HornRow {
+    /// Length along the curve, in half widths of the head.
+    pub length: Span,
+    /// 0 straight to 1 a deep hook; 0 close and forward to 1 wide out; 0 level to 1 lifted.
+    pub curve: Span,
+    pub spread: Span,
+    pub rise: Span,
+    /// How worn each tip is, 0 sharp to 1 a stub.
+    pub wear: Span,
+    /// Chance that one of the pair is broken off.
+    pub broken: f32,
+    /// Where on the skull's top (share along it) the horns root.
+    pub root: f32,
+}
+
+/// Legs that stand on the toes: a short thigh sloping forward to the knee, a long shin back to a
+/// high hock, and a pastern forward again to a cloven hoof. Lengths are shares of the hip's
+/// height, so they scale with the body (a faun's goat legs are a shorter, lower `hock`).
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct Digitigrade {
+    /// How high the hock is: the pastern drops this far to the floor.
+    pub hock: f32,
+    /// How far up from the hock to the hip the knee sits.
+    pub knee_height: f32,
+    /// How far the knee stands in front of the hip.
+    pub knee_forward: f32,
+    /// How far the hoof's coronet stands in front of the hock, as a share of the hock's height.
+    pub pastern: f32,
+    /// The hoof's breadth as a share of the leg's radius, and how far its toes part (0..1).
+    pub hoof: f32,
+    pub split: f32,
+}
+
+/// What a tail ends in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TailEnd {
+    /// A tuft of hair (a bull's).
+    Tuft,
+    /// A spade-shaped blade (a devil's); not built yet.
+    Spade,
+}
+
+/// A jointed tail: its bones carry it in the rig, so it swings.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct TailRow {
+    pub bones: usize,
+    pub end: TailEnd,
+    /// Its length as a share of the hip's height, and its radius at the root as a share of the
+    /// leg's.
+    pub length: f32,
+    pub radius: f32,
+}
+
+/// A muzzle: a long, deep snout lofted along the face from a broad skull (a bull's).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct MuzzleRow {
+    /// How long the skull and muzzle are, in the head's depths.
+    pub length: Span,
+    /// Chance of a ring through the nose.
+    pub ring: f32,
+    /// How big the ears are.
+    pub ears: Span,
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(name: &str, json: &str) -> T {

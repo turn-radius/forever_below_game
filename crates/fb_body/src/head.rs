@@ -8,7 +8,7 @@
 //! rather than flat ellipsoids and extruded blades; a lizard's snout has a row of teeth
 //! along its jaw line, and its frill is spines joined by a membrane instead of bare cones.
 
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use armory::build::form::{HeadForm, ShellOptions, patch, rolled_edge};
 use armory::geom::vec3::{self, V3};
@@ -45,6 +45,7 @@ impl Face {
         let (eye_azimuth, eye_polar) = match folk {
             Folk::Lizardfolk => (0.95, 0.43 * PI),
             Folk::Pigfolk => (0.34, 0.5 * PI),
+            Folk::Minotaur => (1.12, 0.46 * PI),
             _ => (0.4, 0.5 * PI),
         };
         Face { head, folk, r: head.half_width.max(head.half_depth), eye_azimuth, eye_polar }
@@ -137,6 +138,10 @@ struct Pieces {
     ivory: MeshBuilder,
     frill: MeshBuilder,
     ears: MeshBuilder,
+    horn: MeshBuilder,
+    horn_tip: MeshBuilder,
+    mark: MeshBuilder,
+    ring: MeshBuilder,
 }
 
 impl Body {
@@ -175,12 +180,19 @@ impl Body {
         eyes(&face, race.eyes, &mut p);
         let nv = 0.85 + spec.nose * 0.35;
         nose(&face, race.nose, nv, &mut p);
-        if race.nose != Nose::Snout {
+        if let (Some(row), Nose::Muzzle) = (&race.muzzle, race.nose) {
+            muzzle(&face, row, &self.traits(), &mut p);
+            if race.coat && self.traits().marking == crate::parts::Marking::Blaze {
+                blaze(&face, &mut p);
+            }
+        }
+        if !matches!(race.nose, Nose::Snout | Nose::Muzzle) {
             mouth(&face, (spec.brow - 0.5) * 0.06, q.mouth, &mut p);
         }
         for sg in [1.0f32, -1.0] {
-            ear(&face, race.ears, sg, q.ear, fit.fold_ears, &mut p);
+            ear(&face, race.ears, sg, self.ear_size(q.ear), fit.fold_ears, &mut p);
         }
+        self.horns_into(&face, &mut p);
         if self.folk() == Folk::Lizardfolk {
             if fit.fold_frill { folded_frill(&face, &mut p) } else { frill(&face, &mut p) }
         }
@@ -201,7 +213,9 @@ impl Body {
         let shade = if self.folk() == Folk::Pigfolk { lighten(skin, 0.08) } else { skin.scaled(0.92) };
         add(p.shade, "head_shade", Some(MaterialKind::Skin), shade, true);
         add(p.ears, "ears", Some(MaterialKind::Skin), if race.ears == Ears::Flop { shade } else { skin }, true);
+        let tr = self.traits();
         let white = match race.eyes {
+            EyeKind::Bovine => crate::parts::mix(Rgb::hex(0xdca02e), Rgb::hex(0xc4281a), tr.eyes),
             EyeKind::Yellow => Rgb::hex(0xe3c83a),
             EyeKind::Amber => Rgb::hex(0xd8962a),
             EyeKind::Small => Rgb::hex(0x160e0b),
@@ -213,6 +227,13 @@ impl Body {
         add(p.mouth, "mouth", None, MOUTH, false);
         add(p.ivory, "teeth", Some(MaterialKind::Bone), IVORY, true);
         add(p.frill, "frill", Some(MaterialKind::Skin), spec.hair_colour, true);
+        add(p.horn, "horns", Some(MaterialKind::Bone), Rgb::hex(0xcfc4a6), true);
+        add(p.horn_tip, "horn_tips", Some(MaterialKind::Bone), Rgb::hex(0x2b241d), true);
+        add(p.mark, "markings", Some(MaterialKind::Skin), crate::coat::WHITE, false);
+        if let Some(metal) = tr.ring.filter(|_| race.muzzle.is_some()) {
+            let (material, tint) = crate::parts::Traits::ring_colour(metal);
+            add(p.ring, "ring", Some(material), tint, true);
+        }
         ItemMesh { parts }
     }
 }
@@ -223,7 +244,9 @@ impl Body {
 pub struct StandingFeatures {
     /// Each standing ear (not folded).
     pub ears: Vec<Vec<V3>>,
-    /// A lizard's face: its snout with its jaw and teeth, its eyes and the ridges over them.
+    /// Each horn (with its boss), which comes out through headgear.
+    pub horns: Vec<Vec<V3>>,
+    /// A lizard's or a bull's face: its snout with its jaw and teeth, its eyes and the ridges over them.
     pub face: Option<Vec<V3>>,
 }
 
@@ -240,11 +263,29 @@ impl Body {
         if !fit.fold_ears {
             for sg in [1.0f32, -1.0] {
                 let mut p = Pieces::default();
-                ear(&face, race.ears, sg, q.ear, false, &mut p);
+                ear(&face, race.ears, sg, self.ear_size(q.ear), false, &mut p);
                 if !p.ears.is_empty() {
                     out.ears.push(surface_points(&p.ears));
                 }
             }
+        }
+        for sg in [1.0f32, -1.0] {
+            let mut p = Pieces::default();
+            self.horn_into(&face, sg, &mut p);
+            let tip = p.horn_tip.clone();
+            p.horn.append(&tip);
+            if !p.horn.is_empty() {
+                out.horns.push(surface_points(&p.horn));
+            }
+        }
+        if let (Some(row), Nose::Muzzle) = (&race.muzzle, race.nose) {
+            let mut p = Pieces::default();
+            muzzle(&face, row, &self.traits(), &mut p);
+            eyes(&face, race.eyes, &mut p);
+            for m in [p.shade, p.mouth, p.whites, p.pupils] {
+                p.skin.append(&m);
+            }
+            out.face = Some(surface_points(&p.skin));
         }
         if self.folk() == Folk::Lizardfolk {
             let mut p = Pieces::default();
@@ -305,6 +346,20 @@ fn eyes(face: &Face, kind: EyeKind, p: &mut Pieces) {
             }
             EyeKind::Small => {
                 p.whites.append(&blob([0.07 * r, 0.07 * r, 0.05 * r], out(0.02), up, n, 12));
+            }
+            EyeKind::Bovine => {
+                p.whites.append(&blob([0.2 * r, 0.16 * r, 0.1 * r], at, up, n, 18));
+                // A wide horizontal pupil, under a heavy brow.
+                p.pupils.append(&blob([0.11 * r, 0.03 * r, 0.03 * r], out(0.085), up, n, 10));
+                let across = vec3::normalize_or(vec3::cross(vec3::Y, n), vec3::X);
+                let brow: Vec<V3> = (-3..=3)
+                    .map(|k| {
+                        let k = k as f32 / 3.0;
+                        let o = vec3::add(vec3::add(at, vec3::scale(across, 0.26 * r * k)), vec3::scale(n, 0.02 * r));
+                        vec3::add(o, [0.0, (0.15 - 0.05 * k * k) * r, 0.0])
+                    })
+                    .collect();
+                p.skin.append(&tube(&brow, 8, &SweepOptions::default(), |t| 0.07 * r * (1.0 - 0.4 * (t - 0.5).abs())));
             }
         }
     }
@@ -380,6 +435,7 @@ fn nose(face: &Face, kind: Nose, nv: f32, p: &mut Pieces) {
             }
         }
         Nose::Snout => snout(face, p),
+        Nose::Muzzle => {}
     }
 }
 
@@ -500,6 +556,7 @@ fn ear(face: &Face, kind: Ears, sg: f32, size: f32, folded: bool, p: &mut Pieces
     // (all in head radii) and how far its root is set in along its length.
     let (az, polar, w, l, point, cup, fold, t, set) = match kind {
         Ears::None => return,
+        Ears::Leaf => return leaf_ear(face, sg, size, folded, p),
         Ears::Round => (sg * 1.57, 0.53 * PI, 0.17, 0.56, 0.0, 0.05, 0.0, 0.04, 0.0),
         Ears::Pointed => (sg * 1.55, 0.52 * PI, 0.2, 0.62, 0.85, 0.05, 0.0, 0.04, 0.4),
         Ears::Long => (sg * 1.55, 0.52 * PI, 0.2, 1.15, 0.85, 0.05, 0.0, 0.04, 0.4),
@@ -696,4 +753,103 @@ mod tests {
             }
         }
     }
+}
+
+impl Body {
+    /// The size an ear is drawn at: a seeded nudge for most, the race row's range for the broad
+    /// leaf ears of a bull.
+    fn ear_size(&self, nudge: f32) -> f32 {
+        match &self.race().muzzle {
+            Some(row) if self.race().ears == Ears::Leaf => row.ears[0] + (row.ears[1] - row.ears[0]) * self.traits().ears,
+            _ => nudge,
+        }
+    }
+
+    /// Both horns, if the race has any.
+    fn horns_into(&self, face: &Face, p: &mut Pieces) {
+        for sg in [1.0f32, -1.0] {
+            self.horn_into(face, sg, p);
+        }
+    }
+
+    /// The horn on side `sg` (+1 the left): rooted on the skull's top behind the brow, with a boss.
+    fn horn_into(&self, face: &Face, sg: f32, p: &mut Pieces) {
+        let Some(row) = &self.race().horns else { return };
+        let side = usize::from(sg > 0.0);
+        let spec = self.traits().horn_spec(row, side, face.head.half_width);
+        let root = face.point(sg * 1.6, (0.2 + 0.4 * row.root) * PI, -0.05 * face.r);
+        let h = crate::parts::horn(root, sg, &spec);
+        p.horn.append(&h.base);
+        p.horn_tip.append(&h.tip);
+        p.horn.append(&crate::parts::ball(root, 1.18 * spec.radius, [1.0, 0.8, 1.0]));
+    }
+}
+
+/// A bull's ear: a broad leaf set out from under the horn, drooping and swept back; folded
+/// under a hood it is a flat lobe lying on the side of the head.
+fn leaf_ear(face: &Face, sg: f32, size: f32, folded: bool, p: &mut Pieces) {
+    let (h, r) = (&face.head, face.r);
+    if folded {
+        let at = face.point(sg * 1.7, 0.47 * PI, 0.03 * r);
+        p.ears.append(&blob([0.22 * r, 0.3 * r, 0.05 * r], at, vec3::Y, face.normal(sg * 1.7, 0.47 * PI), 12));
+        return;
+    }
+    let len = size * h.half_width;
+    let mut ear = uv_sphere(1.0, 16, 10);
+    ear.scale([len, 0.15 * h.half_height, 0.4 * h.half_height]).translate([len * 0.85, 0.0, 0.0]);
+    if sg < 0.0 {
+        ear.scale([-1.0, 1.0, 1.0]).flip();
+    }
+    ear.rotate_z(-sg * 0.35).rotate_y(sg * 0.5).translate([h.centre[0] + sg * 0.84 * h.half_width, h.centre[1] + 0.45 * h.half_height, h.centre[2] - 0.25 * h.half_depth]);
+    p.ears.append(&ear);
+}
+
+/// A bull's muzzle: a long, deep, blunt snout lofted forward and a little down from the broad
+/// skull, with a damp nose pad, flared nostrils, a heavy lower lip and, in four of ten, a ring
+/// through the septum.
+fn muzzle(face: &Face, row: &crate::folk::MuzzleRow, tr: &crate::parts::Traits, p: &mut Pieces) {
+    use crate::parts::{Loft, ball, ring};
+    let h = &face.head;
+    let (hw, hh, hd, c) = (h.half_width, h.half_height, h.half_depth, h.centre);
+    let total = row.length[0] + (row.length[1] - row.length[0]) * tr.muzzle;
+    let l = (total - 1.1) * hd;
+    let at = |k: &[(f32, f32)], s: f32| -> Vec<(f32, f32)> { k.iter().map(|&(f, v)| (f * l, v * s)).collect() };
+    let loft = Loft::new(
+        [0.0, c[1] - 0.2 * hh, c[2] + 0.1 * hd],
+        l,
+        vec![(0.0, FRAC_PI_2 + 0.14)],
+        at(&[(0.0, 0.8), (0.2, 0.75), (0.55, 0.6), (0.88, 0.56), (1.0, 0.47)], hw),
+        at(&[(0.0, 0.62), (0.5, 0.5), (0.9, 0.46), (1.0, 0.36)], hh),
+        at(&[(0.0, 0.7), (0.5, 0.5), (0.9, 0.46), (1.0, 0.38)], hh),
+        2.3,
+    );
+    p.skin.append(&loft.mesh(0.0, l, 20, 36));
+    let tip = loft.centre(l);
+    p.shade.append(&ball(vec3::add(tip, [0.0, 0.02 * hh, -0.08 * hd]), 1.0, [0.54 * hw, 0.42 * hh, 0.4 * hd]));
+    p.skin.append(&ball(vec3::add(loft.centre(0.8 * l), [0.0, -0.3 * hh, 0.0]), 1.0, [0.6 * hw, 0.2 * hh, 0.6 * hd]));
+    for sg in [1.0f32, -1.0] {
+        let nostril = vec3::add(tip, [sg * 0.25 * hw, 0.04 * hh, 0.26 * hd]);
+        let mut hole = uv_sphere(1.0, 12, 8);
+        hole.scale([0.13 * hw, 0.1 * hh, 0.08 * hd]).rotate_z(-sg * 0.5).translate(nostril);
+        p.mouth.append(&hole);
+        // The mouth's line along the muzzle's side.
+        let line: Vec<V3> = (2..=9)
+            .map(|i| {
+                let a = l * i as f32 / 10.0;
+                let q = loft.point(a, if sg > 0.0 { 0.0 } else { PI }, 0.01 * hh);
+                [q[0], q[1] - 0.14 * hh, q[2]]
+            })
+            .collect();
+        p.mouth.append(&tube(&line, 6, &SweepOptions::default(), |_| 0.03 * hh));
+    }
+    if tr.ring.is_some() {
+        p.ring.append(&ring([tip[0], tip[1] - 0.1 * hh, tip[2] + 0.2 * hd], vec3::Z, vec3::neg(vec3::Y), 0.42 * hh, 0.06 * hh));
+    }
+}
+
+/// A blaze: a white stripe down the face onto the muzzle.
+fn blaze(face: &Face, p: &mut Pieces) {
+    let r = face.r;
+    let pts: Vec<V3> = (0..=8).map(|i| face.point(0.0, (0.05 + 0.4 * i as f32 / 8.0) * PI, 0.012 * r)).collect();
+    p.mark.append(&tube(&pts, 10, &SweepOptions::default(), |t| (0.2 - 0.07 * t) * r));
 }

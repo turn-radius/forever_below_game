@@ -113,6 +113,7 @@ impl Covered {
         match name {
             "hands" | "nails" => self.hands,
             "feet" | "claws" => self.feet,
+            "socks" => self.legs,
             "legs" => self.legs,
             "tail" => self.tail,
             _ => false,
@@ -150,7 +151,9 @@ impl WornFit {
 pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
     let mut fit = WornFit::default();
     let mut env = Envelope::new(body);
-    let tucked = worn.iter().any(|(slot, item)| *slot == Slot::Feet && matches!(item, Item::Feet(s) if has_shaft(s)));
+    // Hooves take no boots: footwear is skipped for a race on its toes (see docs/body.md).
+    let hooved = body.race().legs.is_some();
+    let tucked = !hooved && worn.iter().any(|(slot, item)| *slot == Slot::Feet && matches!(item, Item::Feet(s) if has_shaft(s)));
     let hooded = worn.iter().any(|(slot, item)| *slot == Slot::Head && matches!(item, Item::Hood(_)));
     let robed = worn.iter().any(|(slot, item)| matches!(slot, Slot::Shirt | Slot::Body) && matches!(item, Item::Garment(g) if g.cut.style == GarmentStyle::Robe));
     // Ears fold back under a hood, and a pig's flop ears under anything; standing ears come
@@ -184,6 +187,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
                     fit.covered.legs |= s.legwear.style != LegwearStyle::Breeches;
                     legwear(body, s, tucked)
                 }
+                (Slot::Feet, Item::Feet(_)) if hooved => continue,
                 (Slot::Feet, Item::Feet(s)) => {
                     fit.covered.feet = true;
                     boots(body, &env, s)
@@ -1182,7 +1186,7 @@ fn legwear(body: &Body, state: &LegsState, tucked: bool) -> ItemMesh {
         wear.taper = 1.0;
     }
     let form = body.lower_body_form();
-    let holes = if body.folk() == Folk::Lizardfolk { [1.0f32, -1.0].map(|side| tail_hole(body, &LegDrape::new(&form, &wear, state.seed), side)) } else { [None, None] };
+    let holes = if body.folk() == Folk::Lizardfolk || body.race().tail_shape.is_some() { [1.0f32, -1.0].map(|side| tail_hole(body, &LegDrape::new(&form, &wear, state.seed), side)) } else { [None, None] };
     legwear_parts_holed(&form, &wear, &state.hem, state.seed, holes).finish()
 }
 
@@ -1363,10 +1367,32 @@ fn helm(body: &Body, state: &HelmState, fit: HeadFit) -> ItemMesh {
     // lizard's snout and brow.
     let features = body.standing_features(fit);
     let local = |f: Vec<V3>| f.into_iter().map(|p| vec3::sub(p, at)).collect::<Vec<V3>>();
-    let openings = Openings { through: features.ears.into_iter().map(local).collect(), lift: features.face.into_iter().map(local).collect(), margin: 0.08 * body.scale.sqrt() };
+    let openings = Openings { through: through_features(features.ears, features.horns).into_iter().map(local).collect(), lift: features.face.into_iter().map(local).collect(), margin: 0.08 * body.scale.sqrt() };
     let mut mesh = Helm::build_with_openings(&s, &openings);
     Placement::translation(at).apply_to_item(&mut mesh);
     mesh
+}
+
+/// The features that come out through a helm, one cloud each: a horn and an ear on the same
+/// side stand close, and cut as two holes that overlap they spoil each other (the shell's
+/// outline cannot take two overlapping holes), so each side's pair is one opening.
+fn through_features(ears: Vec<Vec<V3>>, horns: Vec<Vec<V3>>) -> Vec<Vec<V3>> {
+    if horns.is_empty() {
+        return ears;
+    }
+    let mut out: Vec<Vec<V3>> = vec![];
+    for (i, horn) in horns.into_iter().enumerate() {
+        let mut cloud = horn;
+        // Ears come in the same order (left, right) when both are standing.
+        if let Some(ear) = ears.get(i).filter(|_| ears.len() == 2) {
+            cloud.extend(ear.iter().copied());
+        }
+        out.push(cloud);
+    }
+    if ears.len() != 2 {
+        out.extend(ears);
+    }
+    out
 }
 
 /// A hood over the head and hair, its cape over everything on the shoulders.
@@ -2558,6 +2584,45 @@ mod tests {
     #[test]
     fn a_lizards_snout_and_brow_clear_helms_smoke() {
         a_lizards_snout_and_brow_clear_helms_check(&[1207], &[HelmStyle::Bascinet], 0..1, 10);
+    }
+
+    fn a_minotaurs_horns_and_muzzle_clear_helms_check(seeds: &[u32], styles: &[HelmStyle], kits: std::ops::Range<u32>, min_checked: usize) {
+        let mut failures = vec![];
+        let mut checked = 0;
+        for &seed in seeds {
+            let body = Body::new(&BodySpec::roll(Folk::Minotaur, seed));
+            for &style in styles {
+                for kit in kits.clone() {
+                    let mut helm = Helm::roll_as(seed + kit, style);
+                    helm.aventail.on = kit % 2 == 0;
+                    helm.cheeks.on = kit < 2;
+                    let fit = fit_worn(&body, &[(Slot::Head, Item::Helm(helm))]);
+                    // The skull and muzzle, the horns and their tips, the ears, eyes and nose.
+                    for feature in body.head_mesh_fitted(fit.head).parts.iter().filter(|p| matches!(p.name, "head" | "head_shade" | "horns" | "horn_tips" | "ears" | "eye_whites" | "ring")) {
+                        for part in &fit.layer(Slot::Head).unwrap().mesh.parts {
+                            checked += 1;
+                            let n = crossings(feature, part);
+                            if n > 0 {
+                                failures.push(format!("minotaur {seed} {style:?} kit {kit}: its {} passes through the {} ({n} crossings)", feature.name, part.name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > min_checked, "{checked}");
+        assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every seed; run before merging fitting changes"]
+    fn a_minotaurs_horns_and_muzzle_clear_helms() {
+        a_minotaurs_horns_and_muzzle_clear_helms_check(&[3, 1207, 40, 8, 77, 501], &[HelmStyle::Kettle, HelmStyle::Nasal], 0..4, 100);
+    }
+
+    #[test]
+    fn a_minotaurs_horns_and_muzzle_clear_helms_smoke() {
+        a_minotaurs_horns_and_muzzle_clear_helms_check(&[7], &[HelmStyle::Kettle, HelmStyle::Nasal], 0..1, 2);
     }
 
     /// How far `part` reaches from the left leg's line at height `y` (body space), if it is there.

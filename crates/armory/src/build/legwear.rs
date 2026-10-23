@@ -50,7 +50,8 @@ impl LegDrape {
             LegwearStyle::Trousers => 0.3,
             LegwearStyle::Leggings => 0.4,
             LegwearStyle::Breeches => knee - 0.55,
-        };
+        }
+        .max(form.hem_floor);
         let top = form.waist_height + 0.15;
         let puttee_top = wear.puttees.then_some(match wear.style {
             LegwearStyle::Breeches => hem + 0.2,

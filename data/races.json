@@ -269,5 +269,102 @@
    10
   ],
   "dv": 30
+ },
+ "minotaur": {
+  "label": "Minotaur",
+  "h": 24.6,
+  "headR": 1.55,
+  "hw": 1.0,
+  "hh": 1.05,
+  "hd": 0.95,
+  "jaw": 0.2,
+  "chin": 0.15,
+  "flat": 0.1,
+  "neck": 1.0,
+  "neckR": 2.5,
+  "leg": 0.54,
+  "girth": 1.75,
+  "limb": 1.55,
+  "arm": 1.1,
+  "foot": 1.0,
+  "belly": 0.1,
+  "skins": [
+   "#2c2420",
+   "#3a2a20",
+   "#5b3d29",
+   "#6b4429",
+   "#7d4125",
+   "#9b7b55",
+   "#716b64",
+   "#a88f6a"
+  ],
+  "hairs": [
+   "mane"
+  ],
+  "beardP": 0,
+  "ears": "leaf",
+  "nose": "muzzle",
+  "eyes": "bovine",
+  "stats": [
+   18,
+   11,
+   16,
+   6,
+   16
+  ],
+  "dv": 60,
+  "coat": true,
+  "hunch": 0.9,
+  "hump": 1.3,
+  "shoulders": 1.3,
+  "horns": {
+   "length": [
+    1.5,
+    3.1
+   ],
+   "curve": [
+    0,
+    1
+   ],
+   "spread": [
+    0,
+    1
+   ],
+   "rise": [
+    0,
+    1
+   ],
+   "wear": [
+    0,
+    0.6
+   ],
+   "broken": 0.2,
+   "root": 0.3
+  },
+  "legs": {
+   "hock": 0.3,
+   "knee_height": 0.52,
+   "knee_forward": 0.15,
+   "pastern": 0.5,
+   "hoof": 0.8,
+   "split": 0.4
+  },
+  "tail_shape": {
+   "bones": 3,
+   "end": "tuft",
+   "length": 0.6,
+   "radius": 0.3
+  },
+  "muzzle": {
+   "length": [
+    2.7,
+    3.4
+   ],
+   "ring": 0.4,
+   "ears": [
+    0.75,
+    1.3
+   ]
+  }
  }
 }

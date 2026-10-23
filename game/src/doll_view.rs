@@ -133,7 +133,7 @@ impl DollChoice {
                 }
                 "--folk" => {
                     let folk = value()?;
-                    choice.folk = Folk::parse(&folk).ok_or(format!("unknown folk {folk:?}; one of human, dwarf, gnome, goblin, lizard, pig"))?;
+                    choice.folk = Folk::parse(&folk).ok_or(format!("unknown folk {folk:?}; one of human, dwarf, gnome, goblin, lizard, pig, minotaur"))?;
                 }
                 "--seed" => {
                     let seed = value()?;
@@ -178,8 +178,9 @@ impl DollChoice {
 
     /// Steps `by` folk through [`Folk::ALL`], wrapping.
     pub fn step_folk(&mut self, by: isize) {
-        let at = Folk::ALL.iter().position(|&f| f == self.folk).unwrap_or(0) as isize;
-        self.folk = Folk::ALL[(at + by).rem_euclid(Folk::ALL.len() as isize) as usize];
+        let all: Vec<Folk> = Folk::ALL.into_iter().chain(Folk::DENIZENS).collect();
+        let at = all.iter().position(|&f| f == self.folk).unwrap_or(0) as isize;
+        self.folk = all[(at + by).rem_euclid(all.len() as isize) as usize];
     }
 
     /// Steps `by` outfits, wrapping.
