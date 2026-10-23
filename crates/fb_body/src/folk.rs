@@ -246,6 +246,9 @@ pub struct Race {
     /// Shoulders' breadth, over a human's at the same height.
     #[serde(default = "one")]
     pub shoulders: f32,
+    /// Front-to-back depth of the chest and waist over a human's (a bull's deep barrel chest).
+    #[serde(default = "one")]
+    pub depth: f32,
     /// A hide with a coat: the skins are coat colours, and a seed may mark it with a blaze,
     /// socks or pied patches ([`crate::parts::Marking`]).
     #[serde(default)]

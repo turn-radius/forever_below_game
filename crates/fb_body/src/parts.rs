@@ -127,10 +127,10 @@ impl Traits {
         let broken = (h.broken_side as usize == side && h.broken_roll < row.broken).then_some(h.broken_at);
         HornSpec {
             length: lerp(row.length, h.length) * hw,
-            radius: (0.2 + 0.05 * h.length) * hw,
+            radius: (0.3 + 0.1 * h.length) * hw,
             rise: 0.3 + 0.22 * rise,
             rise_tip: 0.7 + 0.8 * rise + 0.25 * curve,
-            yaw: -0.25 + 0.3 * (1.0 - spread),
+            yaw: 0.3 + 0.3 * (1.0 - spread),
             curl: (0.9 + 1.1 * curve) * (1.3 - 0.55 * spread),
             wear: lerp(row.wear, h.wear[side]),
             broken,

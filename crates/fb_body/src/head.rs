@@ -140,6 +140,7 @@ struct Pieces {
     ears: MeshBuilder,
     horn: MeshBuilder,
     horn_tip: MeshBuilder,
+    ear_in: MeshBuilder,
     mark: MeshBuilder,
     ring: MeshBuilder,
 }
@@ -213,6 +214,7 @@ impl Body {
         let shade = if self.folk() == Folk::Pigfolk { lighten(skin, 0.08) } else { skin.scaled(0.92) };
         add(p.shade, "head_shade", Some(MaterialKind::Skin), shade, true);
         add(p.ears, "ears", Some(MaterialKind::Skin), if race.ears == Ears::Flop { shade } else { skin }, true);
+        add(p.ear_in, "ear_hollows", Some(MaterialKind::Skin), crate::parts::mix(skin, Rgb::hex(0xd9b0a0), 0.55), false);
         let tr = self.traits();
         let white = match race.eyes {
             EyeKind::Bovine => crate::parts::mix(Rgb::hex(0xdca02e), Rgb::hex(0xc4281a), tr.eyes),
@@ -794,14 +796,17 @@ fn leaf_ear(face: &Face, sg: f32, size: f32, folded: bool, p: &mut Pieces) {
         p.ears.append(&blob([0.22 * r, 0.3 * r, 0.05 * r], at, vec3::Y, face.normal(sg * 1.7, 0.47 * PI), 12));
         return;
     }
-    let len = size * h.half_width;
-    let mut ear = uv_sphere(1.0, 16, 10);
-    ear.scale([len, 0.15 * h.half_height, 0.4 * h.half_height]).translate([len * 0.85, 0.0, 0.0]);
-    if sg < 0.0 {
-        ear.scale([-1.0, 1.0, 1.0]).flip();
-    }
-    ear.rotate_z(-sg * 0.35).rotate_y(sg * 0.5).translate([h.centre[0] + sg * 0.84 * h.half_width, h.centre[1] + 0.45 * h.half_height, h.centre[2] - 0.25 * h.half_depth]);
-    p.ears.append(&ear);
+    // A cupped leaf set below and behind the horn, out and drooping, its inside paler.
+    let l = 1.4 * size * h.half_width;
+    let w = 0.32 * l;
+    let root = [h.centre[0] + sg * 0.86 * h.half_width, h.centre[1] + 0.18 * h.half_height, h.centre[2] - 0.3 * h.half_depth];
+    let dir = vec3::normalize_or([sg * 1.0, -0.4, -0.45], vec3::X);
+    let want = vec3::normalize_or([sg * 0.2, 0.25, 1.0], vec3::Z);
+    let out = vec3::normalize_or(vec3::sub(want, vec3::scale(dir, vec3::dot(want, dir))), vec3::Z);
+    let across = vec3::cross(dir, out);
+    let place = |q: V3, lift: f32| vec3::add(root, vec3::add(vec3::scale(dir, q[1] + 0.5 * l), vec3::add(vec3::scale(across, q[0]), vec3::scale(out, q[2] + lift))));
+    p.ears.append(&ear_sheet(w, l, 0.35, 0.22 * w, 0.18 * l, 0.05 * r, |q| place(q, 0.0)));
+    p.ear_in.append(&ear_sheet(0.8 * w, 0.85 * l, 0.35, 0.22 * w, 0.18 * l, 0.02 * r, |q| place([q[0], q[1] + 0.05 * l, q[2]], 0.07 * r)));
 }
 
 /// A bull's muzzle: a long, deep, blunt snout lofted forward and a little down from the broad
@@ -817,7 +822,7 @@ fn muzzle(face: &Face, row: &crate::folk::MuzzleRow, tr: &crate::parts::Traits, 
     let loft = Loft::new(
         [0.0, c[1] - 0.2 * hh, c[2] + 0.1 * hd],
         l,
-        vec![(0.0, FRAC_PI_2 + 0.14)],
+        vec![(0.0, FRAC_PI_2 + 0.3)],
         at(&[(0.0, 0.8), (0.2, 0.75), (0.55, 0.6), (0.88, 0.56), (1.0, 0.47)], hw),
         at(&[(0.0, 0.62), (0.5, 0.5), (0.9, 0.46), (1.0, 0.36)], hh),
         at(&[(0.0, 0.7), (0.5, 0.5), (0.9, 0.46), (1.0, 0.38)], hh),
