@@ -1,6 +1,10 @@
 //! The title screen: the game's name in striped gold on the dark of the abyss, and below it New
 //! delve, Continue, Settings and Quit.
 //!
+//! With a delve saved ([`crate::save`]) the options begin with "Resume <name>, depth N", and a
+//! new delve ("New delve", "Continue as") first asks "Replace your saved delve?" ([`ReplacePrompt`]).
+//! A save that could not be read is set aside and the title says so in one line under the options.
+//!
 //! The lettering is real text in Almendra Bold, set on one line by an offscreen camera into an
 //! image, which [`LetteringMaterial`] rules in gold bands with a solid rim, as the concept
 //! card's letters are. The options are plain words, centred under it; the chosen one, under the
@@ -25,7 +29,8 @@ use bevy::{
 
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
-use crate::menu::{ButtonInk, MENU_PX, MenuButton, MenuCommand, MenuPage, capture_page, hovered_button, light_hovered, menu_page};
+use crate::menu::{ButtonInk, MENU_PX, MenuButton, MenuCommand, MenuPage, Replacing, capture_page, hovered_button, light_hovered, menu_page};
+use crate::save::SavedGame;
 use crate::settings::GameSettings;
 use crate::ui::{BG, BRIGHT, LINE, MUTED, UiFonts};
 use creator::{CreatorCommand, Draft, creator_page, open_creator, run_creator};
@@ -48,6 +53,11 @@ pub const ABYSS: Color = Color::srgb(0.020, 0.024, 0.031);
 /// The seed New delve plays; a fresh one from the clock when `None`.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NewDelveSeed(pub Option<u32>);
+
+/// The question "Replace your saved delve?" while it waits for an answer, and which new delve
+/// asked it.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplacePrompt(pub Option<Replacing>);
 
 /// The striped lettering.
 #[derive(Component, Debug)]
@@ -138,11 +148,29 @@ impl Plugin for TitlePlugin {
             .init_resource::<GameSettings>()
             .init_resource::<MenuPage>()
             .init_resource::<NewDelveSeed>()
+            .init_resource::<ReplacePrompt>()
+            .init_resource::<SavedGame>()
             .add_message::<MenuCommand>()
             .add_systems(OnEnter(AppState::Title), spawn_title)
+            .add_systems(OnExit(AppState::Title), |mut prompt: ResMut<ReplacePrompt>| prompt.0 = None)
             .init_resource::<creator::ShapeMoved>()
             .add_systems(OnExit(AppState::Title), |mut commands: Commands| commands.remove_resource::<Draft>())
-            .add_systems(Update, (choose_new_delve_after.run_if(|| new_delve_wait().is_some()), creator::roll_look_every.run_if(|| creator::roll_look_wait().is_some()), title_controls, run_creator, creator::drag_shape, creator::show_shape, build_panel).chain().run_if(in_state(AppState::Title)))
+            .add_systems(
+                Update,
+                (
+                    choose_new_delve_after.run_if(|| new_delve_wait().is_some()),
+                    choose_resume_after.run_if(|| resume_wait().is_some()),
+                    creator::roll_look_every.run_if(|| creator::roll_look_wait().is_some()),
+                    title_controls,
+                    resume_saved_delve,
+                    run_creator,
+                    creator::drag_shape,
+                    creator::show_shape,
+                    build_panel,
+                )
+                    .chain()
+                    .run_if(in_state(AppState::Title)),
+            )
             .add_systems(Update, mark_chosen.before(light_hovered).run_if(in_state(AppState::Title)));
     }
 }
@@ -154,7 +182,10 @@ fn spawn_title(
     mut materials: ResMut<Assets<LetteringMaterial>>,
     mut page: ResMut<MenuPage>,
     seed: Res<NewDelveSeed>,
+    mut prompt: ResMut<ReplacePrompt>,
 ) {
+    // `FB_OPEN_MENU=replace` opens the question "Replace your saved delve?", for captures.
+    prompt.0 = std::env::var("FB_OPEN_MENU").is_ok_and(|name| name == "replace").then_some(Replacing::NewDelve);
     // `FB_OPEN_MENU=settings` with `--title` opens on the settings page, for captures, and
     // `FB_OPEN_MENU=creator` on the creator, drafting from `--seed` (or 1).
     *page = capture_page().filter(|&p| p != MenuPage::Controls).unwrap_or_default();
@@ -216,18 +247,83 @@ fn choose_new_delve_after(time: Res<Time>, mut shown: Local<f32>, mut chosen: Me
     }
 }
 
+/// `FB_RESUME=<seconds>`: how long the title waits before resuming the saved delve by itself, for
+/// captures of a resumed delve.
+fn resume_wait() -> Option<f32> {
+    std::env::var("FB_RESUME").ok().and_then(|s| s.trim().parse::<f32>().ok())
+}
+
+/// Resumes the saved delve once the title has shown for [`resume_wait`] seconds.
+fn choose_resume_after(time: Res<Time>, mut shown: Local<f32>, mut chosen: MessageWriter<MenuCommand>) {
+    *shown += time.delta_secs();
+    if *shown >= resume_wait().unwrap_or(f32::MAX) {
+        *shown = 0.0;
+        chosen.write(MenuCommand::ResumeDelve);
+    }
+}
+
 /// New delve (its option, or Enter on the main page) opens the character creator
 /// ([`creator`]), which begins the delve; Esc on the settings page goes back to the options.
-fn title_controls(mut commands: Commands, input: ActionInput, mut chosen: MessageReader<MenuCommand>, mut page: ResMut<MenuPage>, draft: Option<Res<Draft>>) {
-    let chose = chosen.read().filter(|c| **c == MenuCommand::NewDelve).count() > 0;
+/// With a delve saved, New delve and Continue ask first ([`ReplacePrompt`]), Esc is the answer
+/// "keep it", and Enter resumes.
+fn title_controls(
+    mut commands: Commands,
+    input: ActionInput,
+    mut chosen: MessageReader<MenuCommand>,
+    mut page: ResMut<MenuPage>,
+    draft: Option<Res<Draft>>,
+    saved: Res<SavedGame>,
+    mut prompt: ResMut<ReplacePrompt>,
+) {
+    let mut chose = false;
+    for command in chosen.read() {
+        match *command {
+            MenuCommand::NewDelve => chose = true,
+            MenuCommand::AskReplace(which) if saved.delve.is_some() => prompt.0 = Some(which),
+            MenuCommand::KeepSave => prompt.0 = None,
+            // The player replaced it, one way or the other.
+            MenuCommand::Continue => prompt.0 = None,
+            _ => {}
+        }
+    }
     if draft.is_some() {
         return;
     }
-    if chose || (*page == MenuPage::Main && input.just_pressed(Action::NewDelve)) {
+    if prompt.0.is_some() && !chose {
+        if input.just_pressed(Action::Back) {
+            prompt.0 = None;
+        }
+        return;
+    }
+    // With a delve saved, Enter resumes it ([`resume_saved_delve`]) and opens nothing here.
+    let enter = *page == MenuPage::Main && saved.delve.is_none() && input.just_pressed(Action::NewDelve);
+    if chose || enter {
         *page = MenuPage::Main;
+        prompt.0 = None;
         open_creator(&mut commands);
     } else if *page != MenuPage::Main && input.just_pressed(Action::Back) {
         *page = MenuPage::Main;
+    }
+}
+
+/// Resume (its option, or Enter on the main page with a delve saved): the saved delve begins, in
+/// the camp it was saved in.
+fn resume_saved_delve(
+    mut commands: Commands,
+    input: ActionInput,
+    mut chosen: MessageReader<MenuCommand>,
+    mut saved: ResMut<SavedGame>,
+    mut next: ResMut<NextState<AppState>>,
+    page: Res<MenuPage>,
+    draft: Option<Res<Draft>>,
+    prompt: Res<ReplacePrompt>,
+) {
+    let clicked = chosen.read().any(|c| *c == MenuCommand::ResumeDelve);
+    let enter = *page == MenuPage::Main && draft.is_none() && prompt.0.is_none() && input.just_pressed(Action::NewDelve);
+    if (clicked || enter)
+        && let Some(delve) = saved.delve.take()
+    {
+        crate::save::begin_resume(&mut commands, &mut next, *delve);
     }
 }
 
@@ -263,9 +359,21 @@ fn mark_chosen(
     ui_scale: Option<Res<UiScale>>,
     mut options: Query<(&MenuButton, &mut ButtonInk, &ComputedNode, &UiGlobalTransform, &Children)>,
     mut marks: Query<&mut Visibility, With<OptionMark>>,
+    saved: Option<Res<SavedGame>>,
+    prompt: Option<Res<ReplacePrompt>>,
 ) {
     let over = hovered_button(window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())), options.iter().map(|(b, _, n, t, _)| (b, n, t)));
-    let chosen = over.or(Some(MenuCommand::NewDelve));
+    // Enter begins a new delve, or with a delve saved resumes it; with the question up the
+    // answer that keeps the save is the one to rest on.
+    let asking = prompt.is_some_and(|p| p.0.is_some());
+    let default = if asking {
+        MenuCommand::KeepSave
+    } else if saved.is_some_and(|s| s.delve.is_some()) {
+        MenuCommand::ResumeDelve
+    } else {
+        MenuCommand::NewDelve
+    };
+    let chosen = over.or(Some(default));
     for (button, mut ink, .., children) in &mut options {
         let is_chosen = chosen == Some(button.0);
         let idle = if is_chosen { BRIGHT } else { MUTED };
@@ -278,6 +386,24 @@ fn mark_chosen(
             }
         }
     }
+}
+
+/// "Replace your saved delve?" in the place of the options, with what would be lost under it, and
+/// the two answers: Replace goes on to the new delve that asked, Keep it goes back to the options.
+fn replace_prompt(list: &mut ChildSpawnerCommands, fonts: &UiFonts, replacing: Replacing, delve: &crate::save::SavedDelve) {
+    list.spawn((Text::new("Replace your saved delve?"), UiFonts::style(&fonts.display, 34.0, BRIGHT), TextLayout::justify(Justify::Center)));
+    list.spawn((
+        Node { max_width: percent(90), margin: UiRect::bottom(px(10)), ..default() },
+        Text::new(format!("{}, depth {}, will be lost.", delve.delver.name, delve.depth)),
+        UiFonts::style(&fonts.body, 18.0, MUTED),
+        TextLayout::justify(Justify::Center),
+    ));
+    let go = match replacing {
+        Replacing::NewDelve => MenuCommand::NewDelve,
+        Replacing::Continue => MenuCommand::Continue,
+    };
+    title_option(list, fonts, "Replace", go);
+    title_option(list, fonts, "Keep it", MenuCommand::KeepSave);
 }
 
 /// The width of the creator's panel in logical pixels.
@@ -320,6 +446,8 @@ fn build_panel(
     page: Res<MenuPage>,
     draft: Option<Res<Draft>>,
     last: Option<Res<LastDelver>>,
+    saved: Res<SavedGame>,
+    prompt: Res<ReplacePrompt>,
     dolls: Res<crate::inventory::DollAssets>,
     mut icons: crate::inventory::Icons,
     keymap: Res<Keymap>,
@@ -332,7 +460,7 @@ fn build_panel(
 ) {
     let Some(screen) = screens.iter().next() else { return };
     let drafting = draft.is_some();
-    let changed = page.is_changed() || draft.as_ref().is_some_and(|d| d.is_changed()) || *drafted != drafting;
+    let changed = page.is_changed() || draft.as_ref().is_some_and(|d| d.is_changed()) || *drafted != drafting || saved.is_changed() || prompt.is_changed();
     if panels.iter().next().is_some() && !changed {
         return;
     }
@@ -360,12 +488,30 @@ fn build_panel(
                     },
                 ))
                 .with_children(|list| {
-                    title_option(list, &fonts, "New delve", MenuCommand::NewDelve);
+                    if let (Some(replacing), Some(delve)) = (prompt.0, saved.delve.as_deref()) {
+                        replace_prompt(list, &fonts, replacing, delve);
+                        return;
+                    }
+                    let saved_delve = saved.delve.as_deref();
+                    if let Some(delve) = saved_delve {
+                        title_option(list, &fonts, &format!("Resume {}, depth {}", delve.delver.name, delve.depth), MenuCommand::ResumeDelve);
+                    }
+                    // With a delve saved, a new delve asks before it replaces it.
+                    let begin = |replacing, command| if saved_delve.is_some() { MenuCommand::AskReplace(replacing) } else { command };
+                    title_option(list, &fonts, "New delve", begin(Replacing::NewDelve, MenuCommand::NewDelve));
                     if let Some(delver) = last.as_ref().and_then(|l| l.0.as_ref()) {
-                        title_option(list, &fonts, &format!("Continue as {}", delver.name), MenuCommand::Continue);
+                        title_option(list, &fonts, &format!("Continue as {}", delver.name), begin(Replacing::Continue, MenuCommand::Continue));
                     }
                     title_option(list, &fonts, "Settings", MenuCommand::Show(MenuPage::Settings));
                     title_option(list, &fonts, "Quit", MenuCommand::Quit);
+                    if let Some(line) = saved.unreadable {
+                        list.spawn((
+                            Node { margin: UiRect::top(px(14)), max_width: percent(90), ..default() },
+                            Text::new(line),
+                            UiFonts::style(&fonts.body, 18.0, MUTED),
+                            TextLayout::justify(Justify::Center),
+                        ));
+                    }
                 });
         }
         (None, shown) => centred_panel(screen, MENU_PX + 64.0, |panel| menu_page(panel, &fonts, shown, &keymap, &settings, &crate::menu::ControlsView::default())),
@@ -376,6 +522,7 @@ fn build_panel(
 mod tests {
     use super::*;
     use crate::play::CurrentLevel;
+    use crate::travel::Abyss;
     use bevy::state::app::StatesPlugin;
 
     fn title_app(seed: Option<u32>) -> App {
@@ -387,10 +534,12 @@ mod tests {
             .init_resource::<crate::keymap::ActiveContext>()
             .add_systems(PreUpdate, crate::keymap::track_context)
             .init_resource::<MenuPage>()
+            .init_resource::<SavedGame>()
+            .init_resource::<ReplacePrompt>()
             .insert_resource(NewDelveSeed(seed))
             .add_message::<MenuCommand>()
             .add_message::<bevy::input::keyboard::KeyboardInput>()
-            .add_systems(Update, (title_controls, run_creator).chain().run_if(in_state(AppState::Title)));
+            .add_systems(Update, (title_controls, resume_saved_delve, run_creator).chain().run_if(in_state(AppState::Title)));
         app
     }
 
@@ -442,6 +591,26 @@ mod tests {
         assert_eq!(world.get::<ButtonInk>(new_delve).unwrap().idle, BRIGHT);
         assert!(world.get::<Children>(quit).unwrap().iter().all(|m| world.get::<Visibility>(m) == Some(&Visibility::Hidden)));
         assert_eq!(world.get::<ButtonInk>(quit).unwrap().idle, MUTED);
+    }
+
+    #[test]
+    fn with_a_save_resume_is_chosen_until_the_question_is_up_and_then_keep_it() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(SavedGame { delve: Some(Box::new(crate::save::sample_delve())), unreadable: None })
+            .init_resource::<ReplacePrompt>()
+            .add_systems(Update, mark_chosen);
+        let mut option = |command| {
+            let marks = [app.world_mut().spawn((OptionMark, Visibility::Hidden)).id(), app.world_mut().spawn((OptionMark, Visibility::Hidden)).id()];
+            app.world_mut().spawn((MenuButton(command), ComputedNode::default(), UiGlobalTransform::default())).add_children(&marks).id()
+        };
+        let (resume, new_delve, keep) = (option(MenuCommand::ResumeDelve), option(MenuCommand::AskReplace(Replacing::NewDelve)), option(MenuCommand::KeepSave));
+        app.update();
+        let ink = |app: &App, e: Entity| app.world().get::<ButtonInk>(e).unwrap().idle;
+        assert_eq!((ink(&app, resume), ink(&app, new_delve), ink(&app, keep)), (BRIGHT, MUTED, MUTED));
+        app.world_mut().resource_mut::<ReplacePrompt>().0 = Some(Replacing::NewDelve);
+        app.update();
+        assert_eq!((ink(&app, resume), ink(&app, keep)), (MUTED, BRIGHT));
     }
 
     #[test]
@@ -571,6 +740,122 @@ mod tests {
         keys.press(KeyCode::Escape);
         app.update();
         assert_eq!(*app.world().resource::<MenuPage>(), MenuPage::Main);
+        assert_eq!(state(&app), AppState::Title);
+    }
+
+    /// A title with a delve saved to a file of its own.
+    fn saved_title(seed: Option<u32>, name: &str) -> (App, std::path::PathBuf) {
+        let folder = std::env::temp_dir().join(format!("fb-title-save-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let path = folder.join(crate::save::FILE_NAME);
+        let delve = crate::save::sample_delve();
+        crate::save::write(&path, &delve).unwrap();
+        let mut app = title_app(seed);
+        app.insert_resource(crate::save::SaveFile(Some(path.clone())))
+            .init_resource::<crate::save::Saveable>()
+            .insert_resource(SavedGame { delve: Some(Box::new(delve)), unreadable: None })
+            .insert_resource(LastDelver(Some(crate::character::Character { name: "Brakka".into(), ..crate::character::Character::roll(6) })));
+        app.update();
+        (app, path)
+    }
+
+    fn prompt(app: &App) -> Option<Replacing> {
+        app.world().resource::<ReplacePrompt>().0
+    }
+
+    #[test]
+    fn new_delve_with_a_save_asks_and_only_replace_goes_on_to_the_creator() {
+        let (mut app, path) = saved_title(None, "ask");
+        // The button asks, and nothing opens or goes.
+        app.world_mut().write_message(MenuCommand::AskReplace(Replacing::NewDelve));
+        app.update();
+        assert_eq!(prompt(&app), Some(Replacing::NewDelve));
+        assert!(app.world().get_resource::<Draft>().is_none() && path.exists());
+        // Keep it: back to the options with the save as it was.
+        app.world_mut().write_message(MenuCommand::KeepSave);
+        app.update();
+        assert_eq!(prompt(&app), None);
+        assert!(app.world().get_resource::<Draft>().is_none() && path.exists() && state(&app) == AppState::Title);
+        // Replace: the creator opens (the save goes when the delve begins, not before).
+        app.world_mut().write_message(MenuCommand::AskReplace(Replacing::NewDelve));
+        app.update();
+        app.world_mut().write_message(MenuCommand::NewDelve);
+        app.update();
+        assert_eq!(prompt(&app), None);
+        assert!(app.world().get_resource::<Draft>().is_some());
+        assert!(path.exists(), "still saved until a delve begins");
+    }
+
+    #[test]
+    fn enter_with_a_save_resumes_it_and_the_question_ignores_enter_and_esc_keeps_it() {
+        let (mut app, path) = saved_title(None, "enter");
+        // Enter is not a yes to replacing: with the question up it does nothing, and Esc keeps.
+        app.world_mut().write_message(MenuCommand::AskReplace(Replacing::NewDelve));
+        app.update();
+        tap(&mut app, KeyCode::Enter);
+        assert_eq!(prompt(&app), Some(Replacing::NewDelve));
+        assert!(app.world().get_resource::<Draft>().is_none() && state(&app) == AppState::Title);
+        tap(&mut app, KeyCode::Escape);
+        assert_eq!(prompt(&app), None);
+        // With no question up, Enter resumes.
+        tap(&mut app, KeyCode::Enter);
+        app.update();
+        assert_eq!(state(&app), AppState::Delving);
+        assert!(app.world().get_resource::<crate::save::ResumeDelve>().is_some());
+        assert!(path.exists() && app.world().get_resource::<Draft>().is_none());
+    }
+
+    #[test]
+    fn continue_with_a_save_asks_and_replacing_it_begins_the_delve_and_forgets_the_save() {
+        let (mut app, path) = saved_title(None, "continue");
+        app.world_mut().write_message(MenuCommand::AskReplace(Replacing::Continue));
+        app.update();
+        assert_eq!(prompt(&app), Some(Replacing::Continue));
+        assert_eq!(state(&app), AppState::Title);
+        app.world_mut().write_message(MenuCommand::Continue);
+        app.update();
+        app.update();
+        assert_eq!(state(&app), AppState::Delving);
+        assert!(!path.exists(), "the saved delve was replaced");
+        assert!(app.world().resource::<crate::save::Saveable>().0, "and the new delve may save");
+        assert!(app.world().resource::<SavedGame>().delve.is_none());
+        assert!(app.world().get_resource::<crate::save::ResumeDelve>().is_none());
+    }
+
+    #[test]
+    fn a_debug_seed_delve_neither_replaces_the_save_nor_may_save() {
+        let (mut app, path) = saved_title(Some(5), "seeded");
+        app.world_mut().write_message(MenuCommand::Continue);
+        app.update();
+        app.update();
+        assert_eq!(state(&app), AppState::Delving);
+        assert!(path.exists(), "the save is left alone");
+        assert!(!app.world().resource::<crate::save::Saveable>().0);
+    }
+
+    #[test]
+    fn resume_goes_down_to_the_saved_depth_and_leaves_the_file() {
+        let (mut app, path) = saved_title(None, "resume");
+        let saved = crate::save::sample_delve();
+        app.world_mut().write_message(MenuCommand::ResumeDelve);
+        app.update();
+        app.update();
+        assert_eq!(state(&app), AppState::Delving);
+        let level = &app.world().resource::<CurrentLevel>().0;
+        assert_eq!((level.depth, level.seed), (saved.depth, Abyss::new(saved.run_seed).level_at(saved.depth).seed));
+        assert_eq!(chosen(&app).map(|c| c.name), Some(saved.delver.name.clone()));
+        assert!(app.world().resource::<crate::save::ResumeDelve>().0.depth == 3);
+        assert!(app.world().resource::<crate::save::Saveable>().0);
+        assert!(path.exists(), "resuming does not spend the save");
+    }
+
+    #[test]
+    fn resume_does_nothing_without_a_save() {
+        let mut app = title_app(None);
+        app.update();
+        app.world_mut().write_message(MenuCommand::ResumeDelve);
+        app.update();
+        app.update();
         assert_eq!(state(&app), AppState::Title);
     }
 }

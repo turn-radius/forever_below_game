@@ -39,9 +39,10 @@ impl LastDelverFile {
 
 /// Who the delver is, as saved: all of [`Character`] but what they wear, which is the
 /// inventory's. What they have learned from books came later, so a file without it has none.
+/// The saved delve ([`crate::save`]) keeps its delver this way too.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-struct Saved {
-    name: String,
+pub struct Saved {
+    pub name: String,
     folk: Folk,
     class: Class,
     attributes: Attributes,
