@@ -32,6 +32,23 @@ pub const TRUNK_BACK: f32 = 0.92;
 const RUN: f32 = 0.15;
 /// The share of the front filled out to the thighs; more raises a pooch over the hip on a body whose thighs are as deep as its hips.
 const FRONT_FILL: f32 = 0.4;
+/// Where the crotch is, below the hips, as a share of the trunk's length.
+const CROTCH_DROP: f32 = 0.14;
+/// The heights the pelvis is measured at when drawing the groin in.
+const PUBIS_SAMPLES: usize = 24;
+/// Heights the trunk is fitted to the thighs at, from end to end.
+const FIT_SAMPLES: usize = 64;
+/// How many closing runs the fitted heights reach beyond the waist and the crotch.
+const FIT_MARGIN: f32 = 2.0;
+/// Passes of the fit: the second adds what the first left short.
+const FIT_PASSES: usize = 2;
+/// Halvings of the search along a thigh for a height: finer than any mesh row.
+const BISECTIONS: usize = 24;
+/// Angles sampled either side of the front or the back of the trunk, to find how deep it reaches
+/// (the seat has two lobes, not one midline): the count, the radians either side, and the step.
+const SEAT_STEPS: usize = 12;
+const SEAT_SPAN: f32 = 0.9;
+const SEAT_STEP: f32 = 0.15;
 
 /// How one arm hangs (the plate's `poseFor`): `spread` out from the body and `forward`
 /// lean of the upper arm, `bend` of the forearm toward the front (0 straight down, 1
@@ -249,13 +266,11 @@ impl Body {
     /// none (skin only; garments are built on the form and measured over the skin).
     fn draw_in_pubis(&mut self) {
         let (t, s) = (self.trunk_length, self.scale);
-        let leg = self.leg(Side::Left);
-        let (top, bottom) = (self.hip_y + 0.05 * t, self.hip_y - 0.14 * t);
+        let (top, bottom) = (self.hip_y + 0.05 * t, self.hip_y - CROTCH_DROP * t);
         let (mut at, mut excess) = (self.hip_y, 0.0f32);
-        for i in 0..=24 {
-            let y = top + (bottom - top) * i as f32 / 24.0;
-            let leg_t = (0..=400).map(|k| k as f32 / 400.0).min_by(|a, b| (leg.point_at(*a)[1] - y).abs().total_cmp(&(leg.point_at(*b)[1] - y).abs())).unwrap_or(1.0);
-            let thigh_front = leg.point_at(leg_t)[2] + self.leg_radius(leg, leg_t, 0.0);
+        for i in 0..=PUBIS_SAMPLES {
+            let y = top + (bottom - top) * i as f32 / PUBIS_SAMPLES as f32;
+            let Some((thigh_front, _)) = self.thigh_reach(y) else { continue };
             let over = self.skin.section(FRONT, y, 0.0)[1] - thigh_front - 0.02 * s;
             if over > excess {
                 (at, excess) = (y, over);
@@ -264,46 +279,71 @@ impl Body {
         if excess > 0.0 {
             self.skin.bulges.push(Bulge { y: at, spread: 0.16 * t, depth: -excess * 0.7, sharpness: 2, toward: FRONT, fall: 0.6, ..Bulge::NONE });
         }
-        for _ in 0..2 {
-            self.fit_trunk_to_thighs();
+        // The thighs do not change between the passes: their reach is measured once.
+        let ys = self.fit_heights();
+        let thighs: Vec<Option<(f32, f32)>> = ys.iter().map(|&y| self.thigh_reach(y)).collect();
+        for _ in 0..FIT_PASSES {
+            self.fit_trunk_to_thighs(&ys, &thighs);
         }
     }
 
-    /// Fits the trunk's skin from the waist to the crotch to the thighs' own silhouette, front
-    /// and back. The silhouette of the trunk and the thigh together is closed over a short
-    /// run of height (a sliding maximum, then minimum), which fills the creases where the
-    /// trunk falls away from a thigh that carries on, and the fill is added to the trunk,
-    /// so the seat rounds into the backs of the thighs and the hips into the waist without a
-    /// step. Closing never takes anything away, so each folk keeps its own proportions.
-    fn fit_trunk_to_thighs(&mut self) {
-        let t = self.trunk_length;
+    /// How far the left thigh reaches in front of its axis and behind it, at height `y`: the
+    /// thigh's radius at the front and at the back, from the axis' depth. `None` above the
+    /// thigh's root and below its ankle. The leg is a line falling steadily from the root, so
+    /// the share along it at `y` is found by bisection.
+    fn thigh_reach(&self, y: f32) -> Option<(f32, f32)> {
+        // The body is symmetric, so the left leg stands for both.
         let leg = self.leg(Side::Left);
-        let (lo, hi) = (self.hip_y - 0.14 * t, self.waist_y);
+        let (top, bottom) = (leg.point_at(0.0)[1], leg.point_at(1.0)[1]);
+        if y > top || y < bottom {
+            return None;
+        }
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        for _ in 0..BISECTIONS {
+            let mid = 0.5 * (lo + hi);
+            if leg.point_at(mid)[1] > y {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let u = 0.5 * (lo + hi);
+        let c = leg.point_at(u)[2];
+        Some((c + self.leg_radius(leg, u, 0.0), -(c - self.leg_radius(leg, u, PI))))
+    }
+
+    /// The heights the trunk is fitted at: from the waist to the crotch, and a closing run
+    /// beyond each end so the closing has neighbours at the ends.
+    fn fit_heights(&self) -> Vec<f32> {
+        let t = self.trunk_length;
+        let (lo, hi) = (self.hip_y - CROTCH_DROP * t, self.waist_y);
+        let run = RUN * t;
+        let (y0, y1) = (lo - FIT_MARGIN * run, hi + FIT_MARGIN * run);
+        (0..=FIT_SAMPLES).map(|i| y0 + (y1 - y0) * i as f32 / FIT_SAMPLES as f32).collect()
+    }
+
+    /// Fits the trunk's skin from the waist to the crotch to the thighs' own silhouette, front
+    /// and back, at the heights `ys` ([`Body::fit_heights`]), where `thighs` is each one's
+    /// [`Body::thigh_reach`]. The silhouette of the trunk and the thigh together is closed
+    /// over a short run of height (a sliding maximum, then minimum), which fills the creases
+    /// where the trunk falls away from a thigh that carries on, and the fill is added to the
+    /// trunk, so the seat rounds into the backs of the thighs and the hips into the waist
+    /// without a step. Closing never takes anything away, so each folk keeps its own
+    /// proportions.
+    fn fit_trunk_to_thighs(&mut self, ys: &[f32], thighs: &[Option<(f32, f32)>]) {
+        let t = self.trunk_length;
+        let (lo, hi) = (self.hip_y - CROTCH_DROP * t, self.waist_y);
         let run = RUN * t;
         // Where the trunk and a thigh reach the same depth the union takes a little more than
         // either, so one never shows as an edge on the other.
         let blend = 0.05 * self.scale;
         let smooth_max = |a: f32, b: f32, w: f32| a.max(b) + w * (1.0 + (-(a - b).abs() / w).exp()).ln();
-        let (y0, y1) = (lo - 2.0 * run, hi + 2.0 * run);
-        let n = 64;
-        let thigh_at = |y: f32| -> Option<(f32, f32)> {
-            let (mut best, mut at) = (f32::MAX, 0.0);
-            for k in 0..=200 {
-                let u = k as f32 / 200.0;
-                let d = (leg.point_at(u)[1] - y).abs();
-                if d < best {
-                    (best, at) = (d, u);
-                }
-            }
-            let c = leg.point_at(at)[2];
-            (best < 0.02 * t).then(|| (c + self.leg_radius(leg, at, 0.0), -(c - self.leg_radius(leg, at, PI))))
-        };
-        let ys: Vec<f32> = (0..=n).map(|i| y0 + (y1 - y0) * i as f32 / n as f32).collect();
+        let n = FIT_SAMPLES;
         // Depth to the front, and to the back, of the trunk and of it with the thigh.
-        let reach = |y: f32, toward: f32, sign: f32| (0..=12).map(|k| sign * self.skin.section(toward - 0.9 + 0.15 * k as f32, y, 0.0)[1]).fold(f32::MIN, f32::max);
+        let reach = |y: f32, toward: f32, sign: f32| (0..=SEAT_STEPS).map(|k| sign * self.skin.section(toward - SEAT_SPAN + SEAT_STEP * k as f32, y, 0.0)[1]).fold(f32::MIN, f32::max);
         let trunk: Vec<(f32, f32)> = ys.iter().map(|&y| (reach(y, FRONT, 1.0), reach(y, BACK, -1.0))).collect();
-        let union: Vec<(f32, f32)> = ys.iter().zip(&trunk).map(|(&y, &(f, b))| thigh_at(y).map_or((f, b), |(lf, lb)| (smooth_max(f, lf, blend), smooth_max(b, lb, blend)))).collect();
-        let w = ((run / ((y1 - y0) / n as f32)).round() as isize).max(1);
+        let union: Vec<(f32, f32)> = trunk.iter().zip(thighs).map(|(&(f, b), thigh)| thigh.map_or((f, b), |(lf, lb)| (smooth_max(f, lf, blend), smooth_max(b, lb, blend)))).collect();
+        let w = ((run / ((ys[n] - ys[0]) / n as f32)).round() as isize).max(1);
         let slide = |v: Vec<f32>, max: bool| -> Vec<f32> {
             let len = v.len() as isize;
             (0..len).map(|i| (i - w..=i + w).filter(|j| (0..len).contains(j)).map(|j| v[j as usize]).fold(if max { f32::MIN } else { f32::MAX }, |a, b| if max { a.max(b) } else { a.min(b) })).collect()
