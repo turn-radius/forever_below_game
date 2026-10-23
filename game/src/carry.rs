@@ -873,12 +873,23 @@ pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory,
     let item = inventory.item(id)?;
     let points = item_points(&mesh);
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
-    let transform = rest_on_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, tuning.view.floor_item_scale)?;
+    let transform = rest_on_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, floor_scale_of(item, tuning))?;
     let (min, max) = bounds(points.iter().copied())?;
     let light = rolled_light(item);
     let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
     let mut root = spawner.spawn(&mesh, &appearance);
     root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }));
+    // A bedroll or tent set down covers the floor it was checked against (`crate::camp`), and a
+    // tent blocks the way as a prop does, from a child at the middle of what it covers.
+    if let Some(camp) = item.camp().filter(|_| item.is_set_camp()) {
+        let site = crate::camp::Site { centre: at.xz(), half: Vec2::new(max.x - min.x, max.z - min.z) * 0.5, yaw: spot.yaw };
+        let set = crate::camp::SetCamp::new(camp, &item.shape, site, min, max);
+        root.insert(set);
+        // What stops the way is the canvas, round the item's origin, not the ropes and pegs.
+        if let Some(shape) = crate::camp::blocks_the_way(camp, &set.canvas) {
+            root.with_child((crate::play::BlocksTheWay(shape), Transform::default()));
+        }
+    }
     if let Some(anchor) = light {
         // A lit thing on the floor lights its corner, from a little above the flame so the
         // stone under it does not burn white. Its light is shadowed so it stops at the rock,
@@ -889,6 +900,13 @@ pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory,
         root.insert(Propagate(NotShadowCaster)).with_child((given_light(anchor, Exposure::INDOOR, &tuning.light), Transform::from_translation(at)));
     }
     Some(root.id())
+}
+
+/// How large `item` is drawn lying on the floor: the tuning's `floor_item_scale`, except for a
+/// bedroll or tent set down, which is drawn at its own size so it covers the floor it was
+/// checked against (`crate::camp`).
+pub fn floor_scale_of(item: &fb_items::Item, tuning: &Tuning) -> f32 {
+    if item.is_set_camp() { 1.0 } else { tuning.view.floor_item_scale }
 }
 
 /// The shimmer an item lying on the floor is drawn with: a legendary's in the legendary colour
@@ -963,12 +981,23 @@ pub fn set_down(
 ) -> Option<Entity> {
     let item = inventory.item(id)?;
     // Straight down, the top of the head points the way the body faces.
-    let forward = eye.forward().as_vec3().xz().try_normalize().unwrap_or_else(|| eye.up().as_vec3().xz().normalize_or(Vec2::NEG_Y));
+    let forward = crate::camp::facing(eye);
     let radius = floor_radius(&item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), tuning.view.floor_item_scale);
     let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells), &obstacles.0) / CELL;
     // Laid square to the player's view.
     let yaw = (-forward.x).atan2(-forward.y);
     set_down_at(spawner, inventory, level, id, at, yaw, tuning)
+}
+
+/// Sets loose camp good `id`, already in its set-down form, where setting it down in front of the
+/// eye puts it, without asking whether the place takes it ([`crate::camp::check_site`]). Only
+/// for captures (`FB_DROP=Tent+set`); the player's own set-down checks first
+/// ([`crate::camp::lay_out`]). `None` if it is not a set camp.
+pub fn set_camp_down_unchecked(spawner: &mut ItemSpawner, inventory: &Inventory, level: &mut Level, eye: &GlobalTransform, id: ItemId, tuning: &Tuning) -> Option<Entity> {
+    let item = inventory.item(id)?;
+    let (half, _) = crate::camp::footprint(item).filter(|_| item.is_set_camp())?;
+    let site = crate::camp::site_ahead(eye.translation().xz(), crate::camp::facing(eye), half, crate::camp::gap_for(item.camp()?));
+    set_down_at(spawner, inventory, level, id, site.centre / CELL, site.yaw, tuning)
 }
 
 /// Sets loose item `id` down at `at` on the floor (cells), turned `yaw`, into the level data
@@ -1030,7 +1059,7 @@ fn relight_given_lights(tuning: Res<Tuning>, mut lights: Query<(Ref<GivenLight>,
 }
 
 /// Redraws every floor item at the tuning's floor scale, about where it rests.
-fn rescale_floor_items(tuning: Res<Tuning>, mut items: Query<(&FloorItem, &mut Transform)>) {
+fn rescale_floor_items(tuning: Res<Tuning>, mut items: Query<(&FloorItem, &mut Transform), Without<crate::camp::SetCamp>>) {
     let scale = tuning.view.floor_item_scale;
     for (floor, mut transform) in &mut items {
         if transform.scale.x != scale {

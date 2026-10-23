@@ -10,6 +10,19 @@ use crate::folk::{Beard, Folk, GREY_HAIR, HairStyle, eye_colours, hair_colours};
 /// The heights the creator offers, as shares of the folk's typical height.
 pub const STATURE: (f32, f32) = (0.9, 1.1);
 
+pub use fb_items::Sex;
+
+/// The hips and bust (`figure`, `bust`) of a body of `folk` and `seed` of `sex`: a woman's
+/// within wide-hipped ranges, a man's narrow with no bust. Lizardfolk have no bust.
+pub fn figure_bust(sex: Sex, folk: Folk, seed: u32) -> (f32, f32) {
+    let mut rng = Mulberry32::new(seed ^ 0x5e70_f1a3);
+    let (figure, bust) = match sex {
+        Sex::Female => (rng.range_f32(0.55, 0.9), rng.range_f32(0.3, 0.85)),
+        Sex::Male => (rng.range_f32(0.05, 0.4), 0.0),
+    };
+    (figure, if folk == Folk::Lizardfolk { 0.0 } else { bust })
+}
+
 /// One character's body: its folk, build, face and hair.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BodySpec {
@@ -43,6 +56,9 @@ pub struct BodySpec {
     /// How far the beard hangs, 0 none to 1 down to mid-chest (further on a dwarf): what the
     /// creator's Beard slider sets. A rolled beard takes its style's length.
     pub beard_length: f32,
+    /// Rolled as a woman ([`BodySpec::roll_as`]): her face is drawn with finer brows, larger
+    /// eyes and fuller lips (our own; the plate and the creator have no sex in the face).
+    pub woman: bool,
 }
 
 /// The fields of a [`BodySpec`] that shape the body rather than the face and hair: what the
@@ -154,6 +170,49 @@ impl BodySpec {
         BodySpec { stature, frame, slender, muscle, figure, bust, bust_round, beard: style, beard_length: beard, ..self }
     }
 
+    /// A body of `folk` rolled from `seed` as a `sex`: the same face and hair as
+    /// [`BodySpec::roll`], with the hips and bust of the sex, and no beard on a woman.
+    pub fn roll_as(folk: Folk, seed: u32, sex: Sex) -> BodySpec {
+        let rolled = BodySpec::roll(folk, seed);
+        let mut shape = rolled.shape();
+        (shape.figure, shape.bust) = figure_bust(sex, folk, seed);
+        let mut spec = rolled.with_shape(shape);
+        if sex == Sex::Female {
+            (spec.beard, spec.beard_length) = (Beard::None, 0.0);
+            spec.woman = true;
+            spec.soften_face();
+        }
+        spec
+    }
+
+    /// A woman's face and hair, from the man's the seed rolled (our own, since the creator
+    /// varies only hips, bust and beard by sex): the jaw narrower, the nose and brow lighter,
+    /// and the hair longer. Every style turns to the folk's long one (a human's sometimes tied
+    /// back, drawn from its own stream of the seed). Lizardfolk keep their crest and goblins
+    /// their ridge, which carry no sex.
+    fn soften_face(&mut self) {
+        self.jaw *= 0.5;
+        self.brow *= 0.55;
+        self.nose *= 0.8;
+        let longer = match self.folk {
+            Folk::Human | Folk::Dwarf | Folk::Gnome => HairStyle::Long,
+            Folk::Goblin | Folk::Pigfolk => HairStyle::Shaggy,
+            // The denizen races have their own heads and manes, which carry no sex yet (a succubus,
+            // later, will be a woman).
+            Folk::Lizardfolk | Folk::Minotaur | Folk::Faun | Folk::Cyclops | Folk::WingedDemon | Folk::HornedDemon | Folk::Succubus => return,
+        };
+        if self.hair == HairStyle::Mohawk {
+            return;
+        }
+        // Always the long style (a human's sometimes tied back), whatever the seed rolled, so
+        // that it reads at a glance.
+        let mut rng = Mulberry32::new(self.seed ^ 0xFE11_A1E5);
+        let tied = if self.folk == Folk::Human && rng.chance(0.4) { HairStyle::Ponytail } else { longer };
+        if !matches!(self.hair, HairStyle::Long | HairStyle::Ponytail) {
+            self.hair = tied;
+        }
+    }
+
     /// A body of `folk` rolled from `seed`: the same seed always gives the same body.
     pub fn roll(folk: Folk, seed: u32) -> BodySpec {
         let race = folk.race();
@@ -189,7 +248,7 @@ impl BodySpec {
             let tone = rng.next_f64() as f32;
             hair_colour = crate::parts::mix(skin, armory::Rgb::hex(0x0e0b0a), 0.25 + 0.5 * tone);
         }
-        BodySpec { folk, seed, figure, frame, stature, muscle, slender, bust, bust_round, jaw, brow, nose, skin, eyes, hair, hair_colour, beard, beard_length }
+        BodySpec { folk, seed, figure, frame, stature, muscle, slender, bust, bust_round, jaw, brow, nose, skin, eyes, hair, hair_colour, beard, beard_length, woman: false }
     }
 
     /// The folk's midpoint body: average build, typical height, the first skin and hair.
@@ -213,6 +272,7 @@ impl BodySpec {
             hair: race.hairs[0],
             hair_colour: hair_colours(folk)[0],
             beard: Beard::None,
+            woman: false,
             beard_length: 0.0,
         }
     }
@@ -246,6 +306,48 @@ pub fn beard_cut(was: Beard, length: f32) -> Beard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sex_sets_the_figure_and_the_beard() {
+        for folk in Folk::ALL {
+            for seed in 0..40 {
+                let (woman, man) = (BodySpec::roll_as(folk, seed, Sex::Female), BodySpec::roll_as(folk, seed, Sex::Male));
+                assert_eq!((woman.beard, woman.beard_length), (Beard::None, 0.0), "{folk:?} {seed}");
+                assert!(woman.figure >= 0.55 && man.figure <= 0.4, "{folk:?} {seed}");
+                assert_eq!(man.bust, 0.0);
+                assert_eq!(woman.bust > 0.0, folk != Folk::Lizardfolk, "{folk:?} {seed}");
+                // The skin, eyes and hair colour are the seed's own; the face is softer and nobody
+                // is bald (a lizard's crest and a goblin's ridge stay).
+                assert_eq!((woman.skin, woman.eyes, woman.hair_colour), (man.skin, man.eyes, man.hair_colour));
+                assert!(woman.jaw <= man.jaw * 0.51 && woman.brow <= man.brow * 0.56 && woman.nose <= man.nose * 0.81);
+                assert_ne!(woman.hair, HairStyle::Bald, "{folk:?} {seed}");
+                if folk == Folk::Lizardfolk {
+                    assert_eq!(woman.hair, man.hair);
+                }
+                assert_eq!(woman, BodySpec::roll_as(folk, seed, Sex::Female));
+            }
+        }
+    }
+
+    #[test]
+    fn women_wear_their_hair_longer_and_stay_their_folk() {
+        for folk in [Folk::Human, Folk::Dwarf, Folk::Gnome] {
+            for seed in 0..100 {
+                let woman = BodySpec::roll_as(folk, seed, Sex::Female);
+                assert!(matches!(woman.hair, HairStyle::Long | HairStyle::Ponytail), "{folk:?} {seed}: {:?}", woman.hair);
+                assert!(woman.woman && !BodySpec::roll_as(folk, seed, Sex::Male).woman);
+            }
+        }
+        // Every style is one the folk has: a dwarf woman is still a dwarf, with her people's skin.
+        for folk in Folk::ALL {
+            let race = folk.race();
+            for seed in 0..100 {
+                let woman = BodySpec::roll_as(folk, seed, Sex::Female);
+                assert!(race.hairs.contains(&woman.hair), "{folk:?}: {:?}", woman.hair);
+                assert!(race.skins.iter().any(|s| s.0 == woman.skin));
+            }
+        }
+    }
 
     #[test]
     fn rolls_are_deterministic_and_follow_the_folk() {

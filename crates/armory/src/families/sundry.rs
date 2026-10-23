@@ -37,8 +37,8 @@ use crate::fabric::{Fabric, FabricPattern};
 use crate::families::Generator;
 use crate::geom::polygon::P2;
 use crate::geom::{
-    ItemMesh, LatheOptions, MeshBuilder, Shading, SlabOptions, SweepOptions, V3, bevelled_slab, cylinder, ellipsoid,
-    icosphere, lathe, spline_profile, torus, tube, vec3,
+    GridOptions, ItemMesh, LatheOptions, MeshBuilder, Shading, SlabOptions, SweepOptions, V3, bevelled_slab, cylinder, ellipsoid,
+    icosphere, lathe, spline_profile, thick_sheet, torus, tube, vec3,
 };
 use crate::material::{MaterialKind, Rgb};
 use crate::palette::Palette;
@@ -103,6 +103,10 @@ pub struct Article {
     pub lit: bool,
     /// How far a candle has burnt down, 0..0.8.
     pub burnt: f32,
+    /// A bedroll is unrolled and laid out on the floor to sleep on, not rolled and strapped for
+    /// carrying. The same bedroll either way: its colours, weave and wear carry over.
+    #[serde(default)]
+    pub laid: bool,
 }
 
 sliders! {
@@ -135,6 +139,7 @@ impl Default for Article {
             bow: KeyBow::Ring,
             lit: false,
             burnt: 0.0,
+            laid: false,
         }
     }
 }
@@ -285,6 +290,7 @@ fn build_sundry(s: &SundryState) -> ItemMesh {
         SundryKind::Lockpicks => lockpicks(s, &mut parts),
         SundryKind::Keys => keys(s, &mut parts),
         SundryKind::Tinderbox => tinderbox(s, &mut parts),
+        SundryKind::Bedroll if s.article.laid => laid_bedroll(s, &mut parts),
         SundryKind::Bedroll => bedroll(s, &mut parts),
         SundryKind::Bandages => bandages(s, &mut parts),
     }
@@ -537,6 +543,120 @@ fn bedroll(s: &SundryState, parts: &mut Parts) {
         .collect();
     parts.add("straps", MeshBuilder::merged([&straps, &thong(&path, false, 0.035 * sz)]), Leather);
     parts.add("buckles", buckles, a.material);
+}
+
+/// How far a laid bedroll reaches from its centre along X and Z at its largest, whatever its
+/// size or seed, in world units: the floor the game keeps clear to lay one.
+pub const LAID_BEDROLL_HALF: (f32, f32) = (9.0, 3.6);
+
+/// `t` eased from 0 at `lo` to 1 at `hi`.
+fn ease(lo: f32, hi: f32, t: f32) -> f32 {
+    let x = ((t - lo) / (hi - lo)).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// A bedroll unrolled on the floor, as cloth: a thin mat whose rim rolls down to the floor, a
+/// padded blanket lying on it over the foot two thirds (a low ruck across it, its own rim rolling
+/// down, a hem rolled along its head edge), a pillow that bulges and sags, and the strap bent
+/// over the foot edge. Mat and blanket are displaced grids over one heightfield, so the blanket
+/// sits on the mat with no gap. Lies along X, head toward -X, as the room's `Scenery::Bedroll`
+/// does, under 1.3 units high. The blanket wears the bedroll's weave as a field pattern laid
+/// over its own uv (wrapped patterns radiate from the item's vertical axis, which a flat sheet
+/// spanning the middle of the item would show as a sunburst).
+fn laid_bedroll(s: &SundryState, parts: &mut Parts) {
+    let a = &s.article;
+    // A short folk's length to a tall one's; never past [`LAID_BEDROLL_HALF`].
+    laid_bedroll_parts(parts, (a.size / 1.2).clamp(0.85, 1.0), a.color, a.pattern, a.color2);
+}
+
+/// The one laid-out bedroll, for a delver's own ([`Article::laid`]) and the faction camps' lying
+/// along their sleeping rooms' walls (`build::scenery::bedroll`): `k` scales its length from a
+/// short folk's (0.85) to a tall one's (1), `color` is the blanket's dye and `pattern` and
+/// `color2` its weave. The parts are not yet set on the ground ([`Parts::rest_on_ground`]).
+pub fn laid_bedroll_parts(parts: &mut Parts, k: f32, color: Rgb, pattern: FabricPattern, color2: Rgb) {
+    let a = Article { color, pattern, color2, ..Article::default() };
+    let (len, wide) = (16.0 * k, 6.0 * k);
+    let (hl, hw) = (len * 0.5, wide * 0.5);
+    let opts = GridOptions::default();
+    // The mat's top: low and level, its rim rolling down to the floor over the last stretch.
+    let mat_top = |x: f32, z: f32| 0.12 * ease(0.0, 0.9, (hl - x.abs()).min(hw - z.abs()));
+    let (cols, rows) = (24usize, 10usize);
+    let mat_grid: Vec<Vec<V3>> = (0..=rows)
+        .map(|r| {
+            let z = (r as f32 / rows as f32 * 2.0 - 1.0) * hw;
+            (0..=cols).map(|c| {
+                let x = (c as f32 / cols as f32 * 2.0 - 1.0) * hl;
+                [x, mat_top(x, z), z]
+            }).collect()
+        })
+        .collect();
+    let mat = thick_sheet(&mat_grid, &opts, 0.1);
+
+    // The blanket over the foot two thirds, a little narrower than the mat.
+    let (cover, covered) = (len * 0.66, wide * 0.94);
+    let head = hl - cover - 0.1 * k;
+    let (bl, bw) = (cover * 0.5, covered * 0.5);
+    let mid = head + bl;
+    let thick = 0.12;
+    let blanket_top = |x: f32, z: f32| {
+        let rim = ease(0.0, 0.9, (bl - (x - mid).abs()).min(bw - z.abs()));
+        let ruck = 0.07 * (0.5 + 0.5 * ((x - mid) * 0.9 + z * 0.5).sin());
+        mat_top(x, z) + thick + (0.08 + ruck) * rim
+    };
+    let (bcols, brows) = (18usize, 8usize);
+    let blanket_grid: Vec<Vec<V3>> = (0..=brows)
+        .map(|r| {
+            let z = (r as f32 / brows as f32 * 2.0 - 1.0) * bw;
+            (0..=bcols).map(|c| {
+                let x = mid + (c as f32 / bcols as f32 * 2.0 - 1.0) * bl;
+                [x, blanket_top(x, z), z]
+            }).collect()
+        })
+        .collect();
+    let blanket = thick_sheet(&blanket_grid, &opts, thick);
+    // A hem rolled along the blanket's head edge, half sunk in it.
+    let mut hem = cylinder(0.26 * k, covered * 0.96, 10, Shading::SMOOTH);
+    hem.rotate_x(FRAC_PI_2).translate([head + 0.2 * k, blanket_top(head + 0.2 * k, 0.0) - 0.02, -covered * 0.48]);
+
+    // The pillow: a plump pad across the head, sagging a little at its middle.
+    let mut pillow = ellipsoid([0.95 * k, 0.4 * k, 2.2 * k]);
+    pillow.translate([-hl + 1.8 * k, 0.12 + 0.3 * k, 0.0]);
+
+    // The strap lies flat across the blanket's foot and bends over the edge, as the bandage's
+    // loose end follows the ground.
+    let edge = hl - 0.2 * k;
+    let strap_path: Vec<V3> = (0..=12)
+        .map(|i| {
+            let t = i as f32 / 12.0;
+            let x = edge - 2.0 * k + t * 2.5 * k;
+            let over = ease(0.55, 1.0, t);
+            [x, blanket_top(x.min(edge - 0.3), 0.0) + 0.05 - over * (blanket_top(edge - 0.3, 0.0) + 0.02), 0.0]
+        })
+        .collect();
+    let faces: Vec<V3> = (0..strap_path.len())
+        .map(|i| {
+            let (p, q) = (strap_path[i.saturating_sub(1)], strap_path[(i + 1).min(strap_path.len() - 1)]);
+            let t = vec3::normalize_or(vec3::sub(q, p), vec3::X);
+            [-t[1], t[0], 0.0]
+        })
+        .collect();
+    let strap_mesh = strap(&strap_path, &faces, wide * 0.8, 0.06, false);
+
+    parts.add_tinted("mat", mat, Cloth, Rgb::hex(0x6e6248));
+    let mut look = Look::of(Cloth).tinted(a.color);
+    // A weave over the blanket's uv: stripes run along it, checks and tartan as checks.
+    let field = match a.pattern {
+        FabricPattern::Plain => None,
+        FabricPattern::Stripes => Some((crate::fabric::PatternKind::Barry, 6.0)),
+        _ => Some((crate::fabric::PatternKind::Checky, 8.0)),
+    };
+    if let Some((kind, scale)) = field {
+        look.pattern = Some(crate::fabric::SurfacePattern { kind, color: a.color2, scale });
+    }
+    parts.add_look("blanket", blanket, look);
+    parts.add_tinted("blanket_fold", hem, Cloth, a.color.scaled(0.8));
+    parts.add_tinted("pillow", pillow, Cloth, Rgb::hex(0xb8ab88));
+    parts.add("straps", strap_mesh, Leather);
 }
 
 /// A roll of linen with its end unrolled along the ground.

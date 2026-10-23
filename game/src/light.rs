@@ -199,8 +199,8 @@ fn size_shadow_maps(tuning: Res<Tuning>, mut map: ResMut<PointLightShadowMap>) {
 /// The shader tells a flame from a steady light (glowcaps, the debug light) by the light's
 /// [`PointLight::radius`], which carries its flicker depth ([`flicker_depth`]). Bevy uses
 /// `radius` only for the size of specular highlights and the penumbra of percentage-closer soft
-/// shadows (`bevy_light-0.20.0/src/point_light.rs`); the toon shader draws no specular and this
-/// game builds without `experimental_pbr_pcss`, so the field is otherwise unread. This channel
+/// shadows (`bevy_light-0.20.0/src/point_light.rs`); the toon shader's metal highlight is a point
+/// lobe that ignores it (`toon_highlight`), and this game builds without `experimental_pbr_pcss`, so the field is otherwise unread. This channel
 /// is our own convention.
 pub struct Torch;
 

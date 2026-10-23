@@ -249,6 +249,9 @@ pub struct ToonExtension {
     pub pattern: Pattern,
     pub etch: Etch,
     pub shimmer: Shimmer,
+    /// Strength of the hard specular highlight each light leaves on the part, tinted by its own
+    /// colour as metal's is (`toon_highlight` in `toon.wesl`); 0 for none.
+    pub gloss: f32,
 }
 
 /// GPU layout of [`ToonExtension`]; must match `ToonUniform` in `toon.wesl`.
@@ -284,6 +287,7 @@ pub struct ToonUniform {
     etch_stitched: u32,
     shimmer_color: Vec3,
     shimmer_strength: f32,
+    gloss: f32,
 }
 
 impl From<&ToonExtension> for ToonUniform {
@@ -312,6 +316,7 @@ impl From<&ToonExtension> for ToonUniform {
             etch_stitched: (toon.etch.style == EtchStyle::Embroidered) as u32,
             shimmer_color: toon.shimmer.color,
             shimmer_strength: toon.shimmer.strength,
+            gloss: toon.gloss,
             band_values: [Vec4::new(v[0], v[1], v[2], v[3]), Vec4::new(v[4], v[5], v[6], v[7])],
             band_count: toon.bands.count,
             decay_type: toon.decay.kind,

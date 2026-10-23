@@ -271,11 +271,24 @@ pub fn food_descriptions() -> &'static HashMap<FoodStyle, String> {
 pub type Syllables = (Vec<String>, Vec<String>);
 
 static SYLLABLES: LazyLock<BTreeMap<String, Syllables>> = LazyLock::new(|| parse("syl.json", include_str!("../../../data/syl.json")));
+/// A folk's given names, women's and men's.
+#[derive(Clone, Debug, Deserialize)]
+pub struct GivenNames {
+    pub female: Vec<String>,
+    pub male: Vec<String>,
+}
+
+static GIVEN_NAMES: LazyLock<BTreeMap<String, GivenNames>> = LazyLock::new(|| parse("given_names.json", include_str!("../../../data/given_names.json")));
 static PLACES: LazyLock<Vec<String>> = LazyLock::new(|| parse("places.json", include_str!("../../../data/places.json")));
 
 /// `data/syl.json`: for each folk, first and second name syllables.
 pub fn syllables() -> &'static BTreeMap<String, Syllables> {
     &SYLLABLES
+}
+
+/// `data/given_names.json`: for each folk, women's and men's given names.
+pub fn given_names() -> &'static BTreeMap<String, GivenNames> {
+    &GIVEN_NAMES
 }
 
 /// `data/places.json`.
@@ -332,7 +345,7 @@ mod tests {
         assert_eq!((quiver.side, quiver.x_percent, quiver.y_percent, quiver.size), (SlotSide::Right, neck.x_percent, neck.y_percent, neck.size));
         assert_eq!(base_groups().len(), 26);
         assert_eq!(food_descriptions().len(), 12);
-        assert_eq!((syllables().len(), places().len()), (6, 9));
+        assert_eq!((syllables().len(), places().len()), (8, 9));
         assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 73);
     }
 

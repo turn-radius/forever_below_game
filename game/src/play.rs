@@ -207,9 +207,15 @@ impl ScreenOpen {
 }
 
 /// Run condition: no screen is open over the level, the delver is not between levels
-/// ([`crate::travel`]) and the debug inspector is closed ([`crate::inspect`]).
-pub fn level_has_focus(screen: Option<Res<ScreenOpen>>, journey: Option<Res<crate::travel::Journey>>, inspector: Option<Res<crate::inspect::InspectorOpen>>) -> bool {
-    !screen.is_some_and(|s| s.0.is_some()) && journey.is_none() && !inspector.is_some_and(|i| i.0)
+/// ([`crate::travel`]) or asleep ([`crate::camp`]) and the debug inspector is closed
+/// ([`crate::inspect`]).
+pub fn level_has_focus(
+    screen: Option<Res<ScreenOpen>>,
+    journey: Option<Res<crate::travel::Journey>>,
+    inspector: Option<Res<crate::inspect::InspectorOpen>>,
+    asleep: Option<Res<crate::camp::Asleep>>,
+) -> bool {
+    !screen.is_some_and(|s| s.0.is_some()) && journey.is_none() && !inspector.is_some_and(|i| i.0) && !asleep.is_some_and(|a| a.0.is_some())
 }
 
 /// Run condition: the inventory screen is open, for keys that act on the item under the mouse.
@@ -358,7 +364,7 @@ impl Plugin for PlayPlugin {
             crate::map::MapPlugin,
         ))
         // Over the plugin tuple's limit.
-        .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin, crate::sight::SightPlugin, crate::dazzle::DazzlePlugin, crate::light::ShadowBudgetPlugin, crate::webs::WebsPlugin, crate::talk::TalkPlugin, crate::commission::CommissionPlugin, crate::enchanter::EnchanterPlugin, crate::reading::ReadingPlugin));
+        .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin, crate::sight::SightPlugin, crate::dazzle::DazzlePlugin, crate::light::ShadowBudgetPlugin, crate::webs::WebsPlugin, crate::camp::CampPlugin, crate::save::SavePlugin, crate::talk::TalkPlugin, crate::commission::CommissionPlugin, crate::enchanter::EnchanterPlugin, crate::reading::ReadingPlugin));
         if !app.is_plugin_added::<crate::ui::InterfaceScalePlugin>() {
             app.add_plugins(crate::ui::InterfaceScalePlugin);
         }
