@@ -34,7 +34,8 @@
 //!
 //! `FB_LEARN=<kind>:<topic>[+<topic>...]` (`minotaur:greeting+trade`) teaches those words at
 //! once, for captures. `FB_TALK=1` opens the panel on the folk nearest the delver a few dozen frames in, and
-//! `FB_TALK_TOPIC=<n>` then chooses the nth topic (counting from 1), for captures.
+//! `FB_TALK_TOPIC=<n>` then chooses the nth topic (counting from 1; `strange` or `denizens` choose a
+//! folk's topic of the denizens), for captures; `FB_TALK=folk` skips the denizens.
 
 pub mod lines;
 
@@ -165,9 +166,10 @@ fn learn_for_capture(record: Option<ResMut<WorldRecord>>, mut done: Local<bool>)
 /// Opens `FB_TALK` talks on the folk nearest the delver, and `FB_TALK_TOPIC` chooses a topic.
 fn talk_for_capture(
     player: Query<&Transform, With<Player>>,
-    folk: Query<(Entity, &Transform), (With<Denizen>, Without<Corpse>)>,
+    folk: Query<(Entity, &Denizen, &Transform), Without<Corpse>>,
     mut request: ResMut<TalkRequest>,
     talk: Res<Talk>,
+    record: Option<Res<WorldRecord>>,
     mut frames: Local<u32>,
     mut chosen: Local<bool>,
 ) {
@@ -175,11 +177,19 @@ fn talk_for_capture(
     const OPEN_AT: u32 = 40;
     if *frames == OPEN_AT {
         let Some(at) = player.iter().next().map(|t| t.translation) else { return };
-        request.folk = folk.iter().min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))).map(|(e, _)| e);
+        // `FB_TALK=folk` skips the denizens, for the folk who speak of them.
+        let only_folk = std::env::var("FB_TALK").is_ok_and(|v| v == "folk");
+        request.folk = folk.iter().filter(|(_, d, _)| !only_folk || (d.person.faction.denizen.is_none() && record.as_ref().is_none_or(|r| r.standings.band(d.person.faction.id) > Band::Wary))).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))).map(|(e, ..)| e);
     }
     if *frames == OPEN_AT + 8 && !*chosen && talk.folk.is_some() {
         *chosen = true;
-        if let Some(n) = std::env::var("FB_TALK_TOPIC").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+        // A number, or `strange` or `denizens` for a folk's topic of the denizens.
+        let by_name = |v: &str| match v {
+            "strange" => talk.topics.iter().position(|t| *t == Topic::Strange),
+            "denizens" => talk.topics.iter().position(|t| matches!(t, Topic::Faction(_))),
+            _ => None,
+        };
+        if let Some(n) = std::env::var("FB_TALK_TOPIC").ok().and_then(|v| v.trim().parse::<usize>().ok().or_else(|| by_name(v.trim()).map(|i| i + 1))) {
             request.topic = Some(n);
         }
     }
