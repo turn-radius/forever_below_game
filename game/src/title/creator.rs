@@ -105,13 +105,7 @@ impl Draft {
     /// the body seed. Lizardfolk have no bust.
     fn rolled_shape(&self) -> BodyShape {
         let mut shape = BodySpec::roll(self.folk, self.body_seed).shape();
-        let mut rng = Mulberry32::new(self.body_seed ^ 0x5e70_f1a3);
-        let (figure, bust) = match self.sex {
-            Sex::Female => (rng.range_f32(0.55, 0.9), rng.range_f32(0.3, 0.85)),
-            Sex::Male => (rng.range_f32(0.05, 0.4), 0.0),
-        };
-        shape.figure = figure;
-        shape.bust = if self.folk == Folk::Lizardfolk { 0.0 } else { bust };
+        (shape.figure, shape.bust) = self.sex.figure_bust(self.folk, self.body_seed);
         shape
     }
 

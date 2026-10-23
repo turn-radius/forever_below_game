@@ -7,7 +7,7 @@
 //! Folk come from a third stream of the level seed, after the layout and the furnishing, so
 //! adding or changing folk never moves a wall, an item or a light.
 
-use fb_body::Folk;
+use fb_body::{Folk, Sex};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
@@ -28,13 +28,27 @@ pub struct FolkSpot {
     pub folk: Folk,
     /// Rolls their body, name and outfit.
     pub seed: u32,
+    /// A woman or a man: the one their faction's name says, otherwise rolled from their seed
+    /// ([`FactionSpec::member_sex`]).
+    #[serde(default = "default_sex")]
+    pub sex: Sex,
     pub faction: Faction,
     /// Their profession, tier and style, if they have one ([`crate::trades`]).
     #[serde(default)]
     pub trade: Option<Trade>,
 }
 
+fn default_sex() -> Sex {
+    Sex::Male
+}
+
 impl FolkSpot {
+    /// A member of `faction` with `seed` and `trade`, standing nowhere yet, of the faction's
+    /// folk and the sex the faction gives them.
+    pub(crate) fn of(faction: &FactionSpec, seed: u32, trade: Option<Trade>) -> FolkSpot {
+        FolkSpot { x: 0.0, y: 0.0, yaw: 0.0, folk: faction.folk, seed, sex: faction.member_sex(seed), faction: faction.id, trade }
+    }
+
     /// The unit grid direction they face, `(dx, dy)` with `y` south.
     pub fn facing(&self) -> (f32, f32) {
         (-self.yaw.sin(), -self.yaw.cos())
@@ -101,7 +115,7 @@ pub(crate) fn place_folk(level: &Level, strengths: &[usize], plans: &[Vec<Option
         let mut at_post = 0;
         for (x, y, yaw) in posts(level, &graph, claim, (sx as i32, sy as i32), guards.len()) {
             let folk_kind = faction.member_folk(rng);
-            folk.push(FolkSpot { x, y, yaw, folk: folk_kind, seed: item_seed(rng), faction: faction.id, trade: Some(Trade::guard()) });
+            folk.push(FolkSpot { x, y, yaw, folk: folk_kind, ..FolkSpot::of(faction, item_seed(rng), Some(Trade::guard())) });
             at_post += 1;
         }
 
@@ -147,7 +161,7 @@ pub(crate) fn place_folk(level: &Level, strengths: &[usize], plans: &[Vec<Option
             if let Some(&(x, y)) = best {
                 let (cx, cy) = level.rooms[level.room_at(x, y).unwrap_or(claim.rooms[0])].centre();
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-                folk.push(FolkSpot { x: px, y: py, yaw: (px - cx).atan2(py - cy), folk: faction.member_folk(rng), seed: item_seed(rng), faction: faction.id, trade: plan.first().copied().flatten() });
+                folk.push(FolkSpot { x: px, y: py, yaw: (px - cx).atan2(py - cy), folk: faction.member_folk(rng), ..FolkSpot::of(faction, item_seed(rng), plan.first().copied().flatten()) });
             }
         }
     }
@@ -301,7 +315,7 @@ impl Gathering {
             // Facing the centre, give or take: yaw 0 faces -y, so the yaw toward `(dx, dy)` is
             // `atan2(-dx, -dy)`.
             let yaw = (x - cx).atan2(y - cy) + rng.range_f32(-0.3, 0.3);
-            placed.push(FolkSpot { x, y, yaw, folk, seed: item_seed(rng), faction: faction.id, trade: None });
+            placed.push(FolkSpot { x, y, yaw, folk, ..FolkSpot::of(faction, item_seed(rng), None) });
         }
         placed
     }
@@ -392,6 +406,34 @@ mod tests {
             }
         }
         assert!(insular > 20, "only {insular} folk of insular factions");
+    }
+
+    #[test]
+    fn folk_are_the_sex_their_factions_name_says() {
+        let (mut women, mut men, mut free) = (0, 0, [0, 0]);
+        for world in 1..=60 {
+            for depth in 1..=3 {
+                let level = generate_in(world, depth, &crate::LevelParams::for_style(crate::LevelStyle::for_depth(depth)));
+                for f in &level.folk {
+                    let spec = level.faction(f.faction);
+                    assert_eq!(f.sex, spec.member_sex(f.seed), "{}", spec.name);
+                    match spec.sex {
+                        Some(Sex::Female) => {
+                            women += 1;
+                            assert_eq!(f.sex, Sex::Female, "{}", spec.name);
+                        }
+                        Some(Sex::Male) => {
+                            men += 1;
+                            assert_eq!(f.sex, Sex::Male, "{}", spec.name);
+                        }
+                        None => free[(f.sex == Sex::Female) as usize] += 1,
+                    }
+                }
+            }
+        }
+        assert!(women > 10 && men > 10, "{women} women and {men} men in sex-named factions");
+        let share = free[1] as f32 / (free[0] + free[1]) as f32;
+        assert!((0.4..=0.6).contains(&share), "{share} of the unnamed factions' folk are women");
     }
 
     #[test]
@@ -637,7 +679,7 @@ mod tests {
 
     #[test]
     fn facing_follows_the_yaw() {
-        let spot = |yaw: f32| FolkSpot { x: 0.0, y: 0.0, yaw, folk: Folk::Human, seed: 0, faction: Faction(0), trade: None };
+        let spot = |yaw: f32| FolkSpot { x: 0.0, y: 0.0, yaw, folk: Folk::Human, seed: 0, sex: Sex::Male, faction: Faction(0), trade: None };
         let (dx, dy) = spot(crate::Facing::North.yaw()).facing();
         assert!(dx.abs() < 1e-6 && (dy + 1.0).abs() < 1e-6);
         let (dx, dy) = spot(crate::Facing::West.yaw()).facing();

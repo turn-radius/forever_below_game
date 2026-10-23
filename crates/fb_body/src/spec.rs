@@ -10,6 +10,37 @@ use crate::folk::{Beard, Folk, GREY_HAIR, HairStyle, eye_colours, hair_colours};
 /// The heights the creator offers, as shares of the folk's typical height.
 pub const STATURE: (f32, f32) = (0.9, 1.1);
 
+/// Whether someone is a woman or a man: what the creator's Sex choice sets for the delver, and
+/// what a faction's name sets for its members.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sex {
+    Female,
+    Male,
+}
+
+impl Sex {
+    pub const ALL: [Sex; 2] = [Sex::Female, Sex::Male];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Sex::Female => "Female",
+            Sex::Male => "Male",
+        }
+    }
+
+    /// The hips and bust (`figure`, `bust`) of a body of `folk` and `seed` of this sex: a
+    /// woman's within wide-hipped ranges, a man's narrow with no bust. Lizardfolk have no bust.
+    pub fn figure_bust(self, folk: Folk, seed: u32) -> (f32, f32) {
+        let mut rng = Mulberry32::new(seed ^ 0x5e70_f1a3);
+        let (figure, bust) = match self {
+            Sex::Female => (rng.range_f32(0.55, 0.9), rng.range_f32(0.3, 0.85)),
+            Sex::Male => (rng.range_f32(0.05, 0.4), 0.0),
+        };
+        (figure, if folk == Folk::Lizardfolk { 0.0 } else { bust })
+    }
+}
+
 /// One character's body: its folk, build, face and hair.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BodySpec {
@@ -154,6 +185,19 @@ impl BodySpec {
         BodySpec { stature, frame, slender, muscle, figure, bust, bust_round, beard: style, beard_length: beard, ..self }
     }
 
+    /// A body of `folk` rolled from `seed` as a `sex`: the same face and hair as
+    /// [`BodySpec::roll`], with the hips and bust of the sex, and no beard on a woman.
+    pub fn roll_as(folk: Folk, seed: u32, sex: Sex) -> BodySpec {
+        let rolled = BodySpec::roll(folk, seed);
+        let mut shape = rolled.shape();
+        (shape.figure, shape.bust) = sex.figure_bust(folk, seed);
+        let mut spec = rolled.with_shape(shape);
+        if sex == Sex::Female {
+            (spec.beard, spec.beard_length) = (Beard::None, 0.0);
+        }
+        spec
+    }
+
     /// A body of `folk` rolled from `seed`: the same seed always gives the same body.
     pub fn roll(folk: Folk, seed: u32) -> BodySpec {
         let race = folk.race();
@@ -240,6 +284,22 @@ pub fn beard_cut(was: Beard, length: f32) -> Beard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sex_sets_the_figure_and_the_beard() {
+        for folk in Folk::ALL {
+            for seed in 0..40 {
+                let (woman, man) = (BodySpec::roll_as(folk, seed, Sex::Female), BodySpec::roll_as(folk, seed, Sex::Male));
+                assert_eq!((woman.beard, woman.beard_length), (Beard::None, 0.0), "{folk:?} {seed}");
+                assert!(woman.figure >= 0.55 && man.figure <= 0.4, "{folk:?} {seed}");
+                assert_eq!(man.bust, 0.0);
+                assert_eq!(woman.bust > 0.0, folk != Folk::Lizardfolk, "{folk:?} {seed}");
+                // The face and hair are the seed's own.
+                assert_eq!((woman.hair, woman.skin, woman.jaw), (man.hair, man.skin, man.jaw));
+                assert_eq!(woman, BodySpec::roll_as(folk, seed, Sex::Female));
+            }
+        }
+    }
 
     #[test]
     fn rolls_are_deterministic_and_follow_the_folk() {

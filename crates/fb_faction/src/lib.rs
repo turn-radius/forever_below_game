@@ -22,7 +22,7 @@ pub use trade::{Master, Masters, Profession, Style, Tier, Trade, TradeRules, arm
 
 use armory::families::shield::roll_field;
 use armory::heraldry::{Division, Field};
-use fb_body::Folk;
+use fb_body::{Folk, Sex};
 use procgen_grammar::faction_named;
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,7 @@ const INSULAR_ODDS: f64 = 0.25;
 const SIZE_SALT: u32 = 0xFAC7_0001;
 const FACTION_SALT: u32 = 0xFAC7_0002;
 const DRAW_SALT: u32 = 0xFAC7_0003;
+const SEX_SALT: u32 = 0xFAC7_0004;
 
 /// One faction, an index into its world's pool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -227,6 +228,10 @@ pub struct FactionSpec {
     pub name: String,
     /// The folk most of its members are.
     pub folk: Folk,
+    /// The sex its name says its members are ("the Sisters of the Pale Gate" are all women), if
+    /// it says one; otherwise they are either.
+    #[serde(default)]
+    pub sex: Option<Sex>,
     /// The classes its name says its members are, none if the name says nothing ("the Daughters of
     /// the Burning Chapel" are all clerics; "the Black Reavers" fighters and rangers). Its
     /// members dress only in these, and it never hates one.
@@ -252,6 +257,13 @@ impl FactionSpec {
     /// chance [`FOLK_LEAN`] and any folk else, from the member's stream `rng`.
     pub fn member_folk(&self, rng: &mut Mulberry32) -> Folk {
         if self.insular || rng.chance(FOLK_LEAN) { self.folk } else { *rng.pick(&Folk::ALL) }
+    }
+
+    /// The sex of a member whose seed is `seed`: the one its name says, otherwise a woman or a
+    /// man with even odds. A pure function of the seed (no stream shared with the member's
+    /// place), so it does not move where anyone stands.
+    pub fn member_sex(&self, seed: u32) -> Sex {
+        self.sex.unwrap_or_else(|| if Mulberry32::new(seed ^ SEX_SALT).chance(0.5) { Sex::Female } else { Sex::Male })
     }
 
     /// The outfit keys of `data/outfits.json` its members dress from.
@@ -369,6 +381,11 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
         named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));
     }
     let classes = named_classes(named.tag("class"));
+    let sex = match named.tag("sex") {
+        Some("female") => Some(Sex::Female),
+        Some("male") => Some(Sex::Male),
+        _ => None,
+    };
     let mut name = named.text;
     if taken.contains(&name) {
         name = format!("{name} of the {}th Hall", index + 1);
@@ -433,7 +450,7 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
     let more = hate_count.saturating_sub(hates.len());
     hates.extend(hate_pool.into_iter().filter(|p| !likes.contains(p)).take(more));
 
-    FactionSpec { id, name, folk, classes, outfits, alignment, intention, likes, hates, field, armour, insular }
+    FactionSpec { id, name, folk, sex, classes, outfits, alignment, intention, likes, hates, field, armour, insular }
 }
 
 /// The classes a name's `class` tag says its members are: `cleric`, or `fighter_or_ranger`. Empty

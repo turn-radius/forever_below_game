@@ -14,24 +14,8 @@ use procgen_rng::Mulberry32;
 use crate::carry::carried_lights;
 use crate::inventory::Inventory;
 
-/// Whether a delver is a woman or a man: what the creator's Sex choice sets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Sex {
-    Female,
-    Male,
-}
-
-impl Sex {
-    pub const ALL: [Sex; 2] = [Sex::Female, Sex::Male];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Sex::Female => "Female",
-            Sex::Male => "Male",
-        }
-    }
-}
+/// Whether a delver is a woman or a man: what the creator's Sex choice sets. Folk have one too.
+pub use fb_body::Sex;
 
 /// The four classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

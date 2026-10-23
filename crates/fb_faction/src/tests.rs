@@ -163,6 +163,36 @@ fn a_name_that_says_a_class_dresses_every_member_so() {
 }
 
 #[test]
+fn a_name_that_says_a_sex_makes_every_member_so() {
+    let (mut women, mut men, mut unsaid) = (0, 0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            let w = words(&spec.name);
+            let female = ["Daughters", "Sisters"].iter().any(|x| w.contains(x));
+            let male = ["Brothers", "Sons"].iter().any(|x| w.contains(x));
+            assert_eq!(spec.sex, if female { Some(Sex::Female) } else if male { Some(Sex::Male) } else { None }, "{}", spec.name);
+            let members: Vec<Sex> = (0..200).map(|i| spec.member_sex(i * 7919 + seed)).collect();
+            let share = members.iter().filter(|s| **s == Sex::Female).count();
+            match spec.sex {
+                Some(Sex::Female) => {
+                    women += 1;
+                    assert_eq!(share, 200, "{}", spec.name);
+                }
+                Some(Sex::Male) => {
+                    men += 1;
+                    assert_eq!(share, 0, "{}", spec.name);
+                }
+                None => {
+                    unsaid += 1;
+                    assert!((70..=130).contains(&share), "{}: {share} of 200 are women", spec.name);
+                }
+            }
+        }
+    }
+    assert!(women > 20 && men > 20 && unsaid > 500, "{women} women, {men} men, {unsaid} unsaid");
+}
+
+#[test]
 fn the_same_seed_gives_the_same_name_and_makeup() {
     for seed in 0..40 {
         let (a, b) = (World::new(seed), World::new(seed));
