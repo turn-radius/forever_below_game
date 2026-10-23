@@ -2,7 +2,10 @@
 //!
 //! The factions come from the world's pool (`fb_faction::World`, rolled from the world seed): a
 //! level holds the two to four its seed draws ([`crate::Level::factions`]), and each group is
-//! one of them. A faction's folk leans its members (an insular one is wholly its own folk).
+//! one of them. A faction's folk leans its members (an insular one is wholly its own folk). From
+//! [`fb_faction::DENIZEN_DEPTH`] down a level also holds a denizen faction or two, whose members
+//! are denizens ([`FolkSpot::denizen`]); they stand in their claim like folk, but they are big,
+//! so they stand further apart and further from walls, loot and lights.
 //!
 //! Folk come from a third stream of the level seed, after the layout and the furnishing, so
 //! adding or changing folk never moves a wall, an item or a light.
@@ -15,7 +18,7 @@ use crate::claims::MIN_ROOM_AREA;
 use crate::generate::{is_colonnaded, item_seed, shuffle};
 use crate::rooms::RoomGraph;
 use crate::{Cell, Claim, Level, Room, RoomRole};
-pub use fb_faction::{Faction, FactionSpec, Profession, Trade};
+pub use fb_faction::{DenizenBody, DenizenKind, Faction, FactionSpec, Profession, Trade};
 
 /// Someone standing in the level, at a point in grid coordinates (cells, fractional).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -25,7 +28,13 @@ pub struct FolkSpot {
     /// The way they face, radians about +Y, as [`crate::Facing::yaw`]: 0 faces north (-y), a
     /// quarter turn faces west.
     pub yaw: f32,
+    /// The folk they are. For a denizen ([`FolkSpot::denizen`] is `Some`) this is a placeholder
+    /// (human) that must not be read.
     pub folk: Folk,
+    /// The body of a denizen of the abyss: `Some` for a member of a denizen faction, `None` for
+    /// folk.
+    #[serde(default)]
+    pub denizen: Option<DenizenBody>,
     /// Rolls their body, name and outfit.
     pub seed: u32,
     /// A woman or a man: the one their faction's name says, otherwise rolled from their seed
@@ -46,7 +55,7 @@ impl FolkSpot {
     /// A member of `faction` with `seed` and `trade`, standing nowhere yet, of the faction's
     /// folk and the sex the faction gives them.
     pub(crate) fn of(faction: &FactionSpec, seed: u32, trade: Option<Trade>) -> FolkSpot {
-        FolkSpot { x: 0.0, y: 0.0, yaw: 0.0, folk: faction.folk, seed, sex: faction.member_sex(seed), faction: faction.id, trade }
+        FolkSpot { x: 0.0, y: 0.0, yaw: 0.0, folk: faction.folk, denizen: None, seed, sex: faction.member_sex(seed), faction: faction.id, trade }
     }
 
     /// The unit grid direction they face, `(dx, dy)` with `y` south.
@@ -55,7 +64,8 @@ impl FolkSpot {
     }
 
     /// Their name, from its own stream of their seed ([`NAME_SALT`]); the game draws their
-    /// outfit on from the same stream.
+    /// outfit on from the same stream. A denizen's name is drawn as the placeholder folk's, until
+    /// denizens have names of their own.
     pub fn name(&self) -> String {
         fb_items::naming::folk_name(&mut self.name_stream(), self.folk.key(), Some(self.sex))
     }
@@ -80,11 +90,30 @@ const RING_STEP: f32 = 0.5;
 const GROUP_SIZE: (u32, u32) = (2, 4);
 /// Least distance between two folk, in cells (1.4 m).
 const FOLK_SPACING: f32 = 0.7;
+/// Least distance between two where either is a denizen, in cells: a minotaur is half as tall
+/// again as a human and as broad.
+const DENIZEN_SPACING: f32 = 1.1;
+/// Least distance from a denizen to an item or a light, in cells.
+const DENIZEN_CLEARANCE: f32 = 0.8;
+/// Least distance from a denizen to a room's wall, in cells.
+const DENIZEN_WALL_MARGIN: f32 = 0.45;
+/// How much wider a denizen group's rings are than a folk group's.
+const DENIZEN_RING_SCALE: f32 = 1.4;
 /// Least distance from a folk to an item or a light, in cells, so nobody stands in a brazier
 /// or on the loot.
 const CLEARANCE: f32 = 0.55;
 /// Least distance from a folk to a room's wall, in cells.
 const WALL_MARGIN: f32 = 0.3;
+
+/// A new member of `faction`: a folk faction's folk (drawing exactly what [`FactionSpec::member_folk`]
+/// does, so the levels of folk factions are as they ever were) or a denizen faction's body, with
+/// the placeholder folk.
+fn member(faction: &FactionSpec, rng: &mut Mulberry32) -> (Folk, Option<DenizenBody>) {
+    match faction.member_body(rng) {
+        Some(body) => (Folk::Human, Some(body)),
+        None => (faction.member_folk(rng), None),
+    }
+}
 
 /// Lays out the level's folk by what they do. `plans[k]` is claim `k`'s camp, one entry per
 /// member it places (`strengths[k]`; [`crate::trades::plan`]).
@@ -114,8 +143,8 @@ pub(crate) fn place_folk(level: &Level, strengths: &[usize], plans: &[Vec<Option
         // Guards first, at their posts.
         let mut at_post = 0;
         for (x, y, yaw) in posts(level, &graph, claim, (sx as i32, sy as i32), guards.len()) {
-            let folk_kind = faction.member_folk(rng);
-            folk.push(FolkSpot { x, y, yaw, folk: folk_kind, ..FolkSpot::of(faction, item_seed(rng), Some(Trade::guard())) });
+            let (folk_kind, denizen) = member(faction, rng);
+            folk.push(FolkSpot { x, y, yaw, folk: folk_kind, denizen, ..FolkSpot::of(faction, item_seed(rng), Some(Trade::guard())) });
             at_post += 1;
         }
 
@@ -155,13 +184,15 @@ pub(crate) fn place_folk(level: &Level, strengths: &[usize], plans: &[Vec<Option
         // member, on the first free floor cell (off the doorways if it can be).
         if strength > 0 && !folk.iter().any(|f| f.faction == faction.id) {
             let cells: Vec<(i32, i32)> = claim.rooms.iter().flat_map(|&r| (level.rooms[r].y as i32..(level.rooms[r].y + level.rooms[r].h) as i32).flat_map(move |y| (level.rooms[r].x as i32..(level.rooms[r].x + level.rooms[r].w) as i32).map(move |x| (x, y)))).filter(|&(x, y)| level.cell(x, y) == Cell::Floor).collect();
-            let free = |&&(x, y): &&(i32, i32)| folk.iter().all(|f| (f.x - x as f32 - 0.5).hypot(f.y - y as f32 - 0.5) >= FOLK_SPACING);
-            let clear = |&&(x, y): &&(i32, i32)| level.items.iter().all(|i| (i.x - x as f32 - 0.5).hypot(i.y - y as f32 - 0.5) >= CLEARANCE) && level.lights.iter().all(|l| (l.x - x as f32 - 0.5).hypot(l.y - y as f32 - 0.5) >= CLEARANCE);
+            let (apart, room_for) = if faction.is_denizen() { (DENIZEN_SPACING, DENIZEN_CLEARANCE) } else { (FOLK_SPACING, CLEARANCE) };
+            let free = |&&(x, y): &&(i32, i32)| folk.iter().all(|f| (f.x - x as f32 - 0.5).hypot(f.y - y as f32 - 0.5) >= if f.denizen.is_some() { DENIZEN_SPACING } else { apart });
+            let clear = |&&(x, y): &&(i32, i32)| level.items.iter().all(|i| (i.x - x as f32 - 0.5).hypot(i.y - y as f32 - 0.5) >= room_for) && level.lights.iter().all(|l| (l.x - x as f32 - 0.5).hypot(l.y - y as f32 - 0.5) >= room_for);
             let best = cells.iter().filter(free).find(|c| clear(c) && !by_door(level, c.0, c.1)).or_else(|| cells.iter().filter(free).find(|c| clear(c))).or_else(|| cells.iter().find(free));
             if let Some(&(x, y)) = best {
                 let (cx, cy) = level.rooms[level.room_at(x, y).unwrap_or(claim.rooms[0])].centre();
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-                folk.push(FolkSpot { x: px, y: py, yaw: (px - cx).atan2(py - cy), folk: faction.member_folk(rng), ..FolkSpot::of(faction, item_seed(rng), plan.first().copied().flatten()) });
+                let (folk_kind, denizen) = member(faction, rng);
+                folk.push(FolkSpot { x: px, y: py, yaw: (px - cx).atan2(py - cy), folk: folk_kind, denizen, ..FolkSpot::of(faction, item_seed(rng), plan.first().copied().flatten()) });
             }
         }
     }
@@ -299,6 +330,8 @@ impl Gathering {
     fn gather(&self, level: &Level, room: &Room, faction: &FactionSpec, size: usize, others: &[FolkSpot], rng: &mut Mulberry32) -> Vec<FolkSpot> {
         let (cx, cy) = self.centre;
         let around = size.max(3);
+        let wide = faction.is_denizen();
+        let scale = if wide { DENIZEN_RING_SCALE } else { 1.0 };
         let mut placed: Vec<FolkSpot> = Vec::new();
         for k in 0..around * RINGS {
             if placed.len() == size {
@@ -306,28 +339,30 @@ impl Gathering {
             }
             let ring = (k / around) as f32;
             let angle = self.start + k as f32 / around as f32 * std::f32::consts::TAU + ring * 0.5 + rng.range_f32(-0.25, 0.25);
-            let r = (self.radius + ring * RING_STEP) * rng.range_f32(0.92, 1.08);
+            let r = (self.radius + ring * RING_STEP) * scale * rng.range_f32(0.92, 1.08);
             let (x, y) = (cx + angle.cos() * r, cy + angle.sin() * r);
-            if !fits(level, room, x, y, others.iter().chain(&placed)) {
+            if !fits(level, room, x, y, wide, others.iter().chain(&placed)) {
                 continue;
             }
-            let folk = faction.member_folk(rng);
+            let (folk, denizen) = member(faction, rng);
             // Facing the centre, give or take: yaw 0 faces -y, so the yaw toward `(dx, dy)` is
             // `atan2(-dx, -dy)`.
             let yaw = (x - cx).atan2(y - cy) + rng.range_f32(-0.3, 0.3);
-            placed.push(FolkSpot { x, y, yaw, folk, ..FolkSpot::of(faction, item_seed(rng), None) });
+            placed.push(FolkSpot { x, y, yaw, folk, denizen, ..FolkSpot::of(faction, item_seed(rng), None) });
         }
         placed
     }
 }
 
 /// Whether someone can stand at `(x, y)` in `room`: on its floor, off its walls, not in or
-/// beside a doorway, and clear of items, lights and `others`.
-fn fits<'a>(level: &Level, room: &Room, x: f32, y: f32, mut others: impl Iterator<Item = &'a FolkSpot>) -> bool {
-    let inside = x >= room.x as f32 + WALL_MARGIN
-        && y >= room.y as f32 + WALL_MARGIN
-        && x <= (room.x + room.w) as f32 - WALL_MARGIN
-        && y <= (room.y + room.h) as f32 - WALL_MARGIN;
+/// beside a doorway, and clear of items, lights and `others`. A `wide` one (a denizen) needs more
+/// room all round, and so does anyone standing near one.
+fn fits<'a>(level: &Level, room: &Room, x: f32, y: f32, wide: bool, mut others: impl Iterator<Item = &'a FolkSpot>) -> bool {
+    let (margin, clearance, spacing) = if wide { (DENIZEN_WALL_MARGIN, DENIZEN_CLEARANCE, DENIZEN_SPACING) } else { (WALL_MARGIN, CLEARANCE, FOLK_SPACING) };
+    let inside = x >= room.x as f32 + margin
+        && y >= room.y as f32 + margin
+        && x <= (room.x + room.w) as f32 - margin
+        && y <= (room.y + room.h) as f32 - margin;
     if !inside {
         return false;
     }
@@ -336,9 +371,9 @@ fn fits<'a>(level: &Level, room: &Room, x: f32, y: f32, mut others: impl Iterato
         return false;
     }
     let near = |px: f32, py: f32, d: f32| (px - x).hypot(py - y) < d;
-    !level.items.iter().any(|i| near(i.x, i.y, CLEARANCE))
-        && !level.lights.iter().any(|l| near(l.x, l.y, CLEARANCE))
-        && !others.any(|f| near(f.x, f.y, FOLK_SPACING))
+    !level.items.iter().any(|i| near(i.x, i.y, clearance))
+        && !level.lights.iter().any(|l| near(l.x, l.y, clearance))
+        && !others.any(|f| near(f.x, f.y, if f.denizen.is_some() { DENIZEN_SPACING } else { spacing }))
 }
 
 /// Whether cell `(x, y)` is beside a doorway, or diagonally beside one, so nobody stands in
@@ -677,9 +712,102 @@ mod tests {
         assert!(traders > 50 && in_market + 3 >= traders, "{in_market} of {traders} traders stand in a market");
     }
 
+    /// The levels of worlds 1..=48 at the denizen depth and the one below,
+    /// made once for the denizen tests.
+    fn deep_levels() -> &'static [Level] {
+        static LEVELS: std::sync::OnceLock<Vec<Level>> = std::sync::OnceLock::new();
+        LEVELS.get_or_init(|| [fb_faction::DENIZEN_DEPTH, fb_faction::DENIZEN_DEPTH + 1].into_iter().flat_map(|depth| (1..=48).map(move |seed| generate(seed, depth))).collect())
+    }
+
+    #[test]
+    fn levels_above_the_denizen_depth_hold_no_denizens() {
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            assert!(!fb_faction::denizens_at(depth));
+            assert!(level.factions.iter().all(|f| f.denizen.is_none()), "seed {seed} depth {depth}");
+            assert!(level.folk.iter().all(|f| f.denizen.is_none()), "seed {seed} depth {depth}");
+        }
+    }
+
+    #[test]
+    fn most_levels_from_the_denizen_depth_down_hold_a_denizen_faction() {
+        let levels = deep_levels();
+        let with = levels.iter().filter(|l| l.factions.iter().any(|f| f.is_denizen())).count();
+        assert!(with * 10 >= levels.len() * 7, "{with} of {} levels hold a denizen faction", levels.len());
+        assert!(levels.iter().all(|l| l.factions.iter().filter(|f| f.is_denizen()).count() <= 2));
+        assert!(levels.iter().any(|l| l.folk.iter().any(|f| f.denizen.is_some())));
+    }
+
+    #[test]
+    fn a_denizen_faction_holds_one_claim_and_its_members_stand_in_it_as_its_kind() {
+        let mut denizens = 0;
+        let mut bodies = HashSet::new();
+        for level in deep_levels() {
+            for spec in level.factions.iter().filter(|f| f.is_denizen()) {
+                denizens += 1;
+                let claims: Vec<&Claim> = level.claims.iter().filter(|c| c.faction == spec.id).collect();
+                assert_eq!(claims.len(), 1, "{} holds {} claims on seed {} depth {}", spec.name, claims.len(), level.seed, level.depth);
+                for f in level.folk.iter().filter(|f| f.faction == spec.id) {
+                    assert!(claims[0].rooms.contains(&level.room_at(f.x as i32, f.y as i32).unwrap()), "{} stands outside its claim", spec.name);
+                }
+            }
+            for f in &level.folk {
+                let spec = level.faction(f.faction);
+                match f.denizen {
+                    Some(body) => {
+                        assert_eq!(Some(body.kind()), spec.denizen, "{} has a {body:?}", spec.name);
+                        bodies.insert(body);
+                    }
+                    None => assert!(!spec.is_denizen(), "{} has a member with no body", spec.name),
+                }
+            }
+        }
+        assert!(denizens > 30, "{denizens} denizen factions in the sweep");
+        assert!(bodies.len() >= 3, "{bodies:?}");
+    }
+
+    #[test]
+    fn denizens_stand_wider_apart() {
+        for level in deep_levels() {
+            for (i, a) in level.folk.iter().enumerate() {
+                for b in &level.folk[i + 1..] {
+                    // Guards at a doorway's posts are placed by the doorway, not by their size.
+                    let posted = |f: &FolkSpot| f.trade.is_some_and(|t| t.profession == Profession::Guard);
+                    if (a.denizen.is_some() || b.denizen.is_some()) && !(posted(a) && posted(b)) {
+                        assert!((a.x - b.x).hypot(a.y - b.y) >= DENIZEN_SPACING, "seed {} depth {}: {a:?} and {b:?}", level.seed, level.depth);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deeper_levels_are_deterministic() {
+        for seed in [1, 1207] {
+            let depth = fb_faction::DENIZEN_DEPTH;
+            assert_eq!(generate(seed, depth), generate(seed, depth));
+            assert_eq!(generate(seed, depth + 2).folk, generate(seed, depth + 2).folk);
+        }
+    }
+
+    #[test]
+    fn denizen_camps_have_guards_and_traders_like_folk_ones() {
+        let (mut guards, mut traders) = (0, 0);
+        for level in deep_levels() {
+            for f in level.folk.iter().filter(|f| f.denizen.is_some()) {
+                match f.trade {
+                    Some(t) if t.profession == Profession::Guard => guards += 1,
+                    Some(_) => traders += 1,
+                    None => {}
+                }
+            }
+        }
+        assert!(guards > 10 && traders > 5, "{guards} guards and {traders} traders among the denizens");
+    }
+
     #[test]
     fn facing_follows_the_yaw() {
-        let spot = |yaw: f32| FolkSpot { x: 0.0, y: 0.0, yaw, folk: Folk::Human, seed: 0, sex: Sex::Male, faction: Faction(0), trade: None };
+        let spot = |yaw: f32| FolkSpot { x: 0.0, y: 0.0, yaw, folk: Folk::Human, denizen: None, seed: 0, sex: Sex::Male, faction: Faction(0), trade: None };
         let (dx, dy) = spot(crate::Facing::North.yaw()).facing();
         assert!(dx.abs() < 1e-6 && (dy + 1.0).abs() < 1e-6);
         let (dx, dy) = spot(crate::Facing::West.yaw()).facing();

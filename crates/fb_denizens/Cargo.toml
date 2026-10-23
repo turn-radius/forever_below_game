@@ -1,0 +1,17 @@
+[package]
+name = "fb_denizens"
+description = "The denizens of the abyss as plain data: their kinds, the depth they live below and their tongues. No Bevy dependency."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+procgen_rng = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

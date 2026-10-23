@@ -226,8 +226,8 @@ impl Delver {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Victim {
     Creature(CreatureKind),
-    /// A member of `faction`, of this `folk`, dressed as this `class` if it is one.
-    Member { faction: Faction, folk: Folk, class: Option<ClassKind> },
+    /// A member of `faction`, of this `folk` (none for a denizen), dressed as this `class` if it is one.
+    Member { faction: Faction, folk: Option<Folk>, class: Option<ClassKind> },
 }
 
 /// How many kills of one liked or hated thing have counted toward one faction, for the decay.
@@ -292,7 +292,7 @@ impl Standings {
     pub fn on_kill_with(&mut self, rules: &StandingRules, world: &World, victim: Victim) {
         let things: Vec<Preference> = match victim {
             Victim::Creature(kind) => vec![Preference::Creature(kind)],
-            Victim::Member { faction, folk, class } => [Some(Preference::Faction(faction)), Some(Preference::Folk(folk)), class.map(Preference::Class)].into_iter().flatten().collect(),
+            Victim::Member { faction, folk, class } => [Some(Preference::Faction(faction)), folk.map(Preference::Folk), class.map(Preference::Class)].into_iter().flatten().collect(),
         };
         for spec in world.factions() {
             if let Victim::Member { faction, .. } = victim
@@ -528,7 +528,7 @@ mod tests {
         let victim = &world.factions()[0];
         let mut s = Standings::start_from_alignment(Alignment::TrueNeutral, &world);
         let before: Vec<i32> = world.factions().iter().map(|f| s.get(f.id).value()).collect();
-        s.on_kill(&world, Victim::Member { faction: victim.id, folk: victim.folk, class: None });
+        s.on_kill(&world, Victim::Member { faction: victim.id, folk: Some(victim.folk), class: None });
         assert_eq!(s.met().collect::<Vec<_>>(), vec![victim.id]);
         let moved = world.factions().iter().zip(&before).filter(|(f, b)| f.id != victim.id && s.get(f.id).value() != **b).count();
         assert!(moved > 0 || world.factions().iter().all(|f| f.id == victim.id || !(f.likes.contains(&Preference::Faction(victim.id)) || f.hates.contains(&Preference::Faction(victim.id)) || f.likes.contains(&Preference::Folk(victim.folk)) || f.hates.contains(&Preference::Folk(victim.folk)))), "factions that care still weigh it");
@@ -576,8 +576,22 @@ mod tests {
         assert_eq!(s.band(a), Band::Hostile);
         assert!(s.has_met(a));
         let before = s.get(b).value();
-        s.on_kill(&world, Victim::Member { faction: b, folk: world.faction(b).folk, class: None });
+        s.on_kill(&world, Victim::Member { faction: b, folk: Some(world.faction(b).folk), class: None });
         assert!(s.get(b).value() < before, "{} vs {before}", s.get(b).value());
+    }
+
+    #[test]
+    fn killing_a_member_of_a_denizen_faction_pleases_the_folk_faction_that_hates_it() {
+        let hates = |w: &World| w.folk_factions().iter().find_map(|f| f.hates.iter().find_map(|p| match p {
+            Preference::Faction(d) if w.faction(*d).is_denizen() => Some((f.id, *d)),
+            _ => None,
+        }));
+        let world = (0..500).map(World::new).find(|w| hates(w).is_some()).expect("a folk faction hates a denizen one");
+        let (folk, denizen) = hates(&world).unwrap();
+        let mut s = Standings::start_from_alignment(Alignment::TrueNeutral, &world);
+        let before = s.get(folk).value();
+        s.on_kill(&world, Victim::Member { faction: denizen, folk: None, class: None });
+        assert!(s.get(folk).value() > before, "{} vs {before}", s.get(folk).value());
     }
 
     #[test]

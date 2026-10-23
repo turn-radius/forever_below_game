@@ -48,13 +48,13 @@ impl Sex {
 /// syllables as the plate rolled it, which names a delver whose sex is not chosen yet. Family
 /// names are shared by both.
 pub fn folk_name(rng: &mut Mulberry32, folk: &str, sex: Option<Sex>) -> String {
-    let (a, b) = &syllables()[folk];
-    let first = match sex {
-        Some(sex) => {
-            let given = &given_names()[folk];
-            rng.pick(if sex == Sex::Female { &given.female } else { &given.male }).clone()
-        }
-        None => format!("{}{}", rng.pick(a), rng.pick(b)),
+    // A body with no syllables of its own (a denizen) is named from the human ones, and with no
+    // given names of its own, from its syllables.
+    let table = syllables();
+    let (a, b) = table.get(folk).unwrap_or(&table["human"]);
+    let first = match (sex, given_names().get(folk)) {
+        (Some(sex), Some(given)) => rng.pick(if sex == Sex::Female { &given.female } else { &given.male }).clone(),
+        _ => format!("{}{}", rng.pick(a), rng.pick(b)),
     };
     let last = format!("{}{}", rng.pick(a), rng.pick(b));
     if matches!(folk, "goblin" | "lizard") { first } else { format!("{first} {last}") }
@@ -192,7 +192,8 @@ mod tests {
 
     #[test]
     fn given_names_follow_the_sex_and_family_names_are_shared() {
-        for folk in syllables().keys() {
+        // The denizen tongues have syllables but no given names: they fall back to the syllables.
+        for folk in given_names().keys() {
             let given = &given_names()[folk];
             assert!(given.female.len() >= 10 && given.male.len() >= 10, "{folk}");
             assert!(given.female.iter().all(|f| !given.male.contains(f)), "{folk}: a name for both");

@@ -29,7 +29,7 @@
 use std::sync::Arc;
 
 use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, platform::collections::HashMap, prelude::*, tasks::{AsyncComputeTaskPool, TaskPool}, ui::ComputedUiRenderTargetInfo};
-use fb_body::{BodySpec, Joint};
+use fb_body::{BodySpec, Folk, Joint};
 use fb_items::{Item, Rarity, Slot, roll_item_with};
 use fb_level::{FactionSpec, FolkSpot, Level};
 use procgen_rng::Mulberry32;
@@ -105,7 +105,12 @@ fn livery(faction: &FactionSpec) -> fb_items::outfit::Livery {
         Faction::Scale => Lean::Scale,
         Faction::Plate => Lean::Plate,
     };
-    let livery = fb_items::outfit::Livery::from_field(faction.field, lean).with_garment(faction.looks.garment.map(|g| match g {
+    let livery = fb_items::outfit::Livery::from_field(faction.field, lean);
+    // A name's robe goes on folk, and on fauns, whose robes are fitted to their legs and tails;
+    // the other denizens go as their kit has them, their rows being sparse by design.
+    let robed = faction.denizen.is_none_or(|k| k == fb_faction::DenizenKind::Faun);
+    let garment = faction.looks.garment.filter(|_| robed);
+    let livery = livery.with_garment(garment.map(|g| match g {
         fb_faction::Garment::Robe => fb_items::outfit::Garment::Robe,
         fb_faction::Garment::RobeOverArmour => fb_items::outfit::Garment::RobeOverArmour,
     }));
@@ -113,7 +118,22 @@ fn livery(faction: &FactionSpec) -> fb_items::outfit::Livery {
         fb_faction::Trim::GoldHem => fb_items::outfit::Trim::GoldHem,
     }));
     // A name that gives the colours has every piece of cloth wear them.
-    if faction.looks.colours.is_empty() { livery } else { livery.named() }
+    let livery = if faction.looks.colours.is_empty() { livery } else { livery.named() };
+    // Denizens go sparsely dressed, so their legwear wears the colours; folk's is left alone.
+    if faction.is_denizen() { livery.with_legs() } else { livery }
+}
+
+/// The key of the outfit a denizen of `folk` dresses from, in `data/outfits.json`: the row of its
+/// folk key (`minotaur`, `cyclops`, `faun`, `demon`), or `<key>_guard` for a guard if the table
+/// has one. `None` for folk, and for a denizen whose kind has no row yet (it takes its
+/// faction's outfit).
+fn denizen_outfit(folk: Folk, spot: &FolkSpot) -> Option<&'static str> {
+    spot.denizen?;
+    let key = folk.key();
+    let kind = if key.contains("demon") { "demon" } else { key };
+    let guard = spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard);
+    let guard_row = format!("{kind}_guard");
+    guard.then(|| fb_items::outfit::outfit(&guard_row)).flatten().or_else(|| fb_items::outfit::outfit(kind)).map(|o| o.key.as_str())
 }
 
 impl Person {
@@ -122,10 +142,17 @@ impl Person {
     pub fn of(spot: &FolkSpot, faction: &FactionSpec, depth: u32) -> Person {
         let odds = fb_items::Odds::kit(depth);
         let mut rng = spot.name_stream();
-        let name = fb_items::naming::folk_name(&mut rng, spot.folk.key(), Some(spot.sex));
+        // A denizen's body is a race of the folk body ([`Folk::of_denizen`]): dressed, named and
+        // rolled as that race. One with no syllables of its own yet is named as a human is. The
+        // name is drawn from the spot's sex (a man, for a denizen).
+        let folk = spot.denizen.and_then(Folk::of_denizen).unwrap_or(spot.folk);
+        let name_key = if fb_items::tables::syllables().contains_key(folk.key()) { folk.key() } else { Folk::Human.key() };
+        let name = fb_items::naming::folk_name(&mut rng, name_key, Some(spot.sex));
         let outfit = *rng.pick(&faction.outfit_keys());
+        // A denizen dresses from the row of its own kind, not a delver's class outfit.
+        let outfit = denizen_outfit(folk, spot).unwrap_or(outfit);
         let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
-            let set = o.roll_in(spot.seed, spot.folk.key(), odds, Some(&livery(faction)));
+            let set = o.roll_in(spot.seed, folk.key(), odds, Some(&livery(faction)));
             let ammunition: Vec<Item> = set.goods.into_iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).collect();
             (set.worn, ammunition)
         });
@@ -145,7 +172,9 @@ impl Person {
         // Every member carries their faction's key, which falls with their belongings.
         let mut goods = goods;
         goods.extend(crate::doors::key_of(faction));
-        Person { spot: *spot, depth, faction: faction.clone(), name, spec: BodySpec::roll_as(spot.folk, spot.seed, spot.sex), outfit, gear, goods, dirt }
+        // A denizen's build is its race's own, rolled as ever; folk take the hips and bust of their sex.
+        let spec = if spot.denizen.is_some() { BodySpec::roll(folk, spot.seed) } else { BodySpec::roll_as(folk, spot.seed, spot.sex) };
+        Person { spot: *spot, depth, faction: faction.clone(), name, spec, outfit, gear, goods, dirt }
     }
 
     /// What they wear, innermost slots first as listed.
@@ -169,6 +198,14 @@ pub fn footprint(figure: &Figure) -> f32 {
     figure.body.shoulder_half_width * 1.2 + 0.3
 }
 
+/// Whether the game makes a person and a figure for `spot`: every folk, and every denizen whose
+/// body is built ([`Folk::of_denizen`]). The spots of denizens whose body is not built yet stay
+/// in [`Level::folk`] (saved records are keyed by a spot's place in the whole list, so none
+/// shifts) but nobody is made or spawned for them; this one rule hides them everywhere.
+pub fn has_figure(spot: &FolkSpot) -> bool {
+    spot.denizen.is_none_or(|body| Folk::of_denizen(body).is_some())
+}
+
 /// Figures already built, by spot seed, so a level drawn again reuses them.
 #[derive(Resource, Default)]
 pub struct FolkFigures {
@@ -182,7 +219,7 @@ impl FolkFigures {
     /// The person and figure for every spot in `spots` on a level `depth` down, building (in
     /// parallel) those not yet built.
     pub fn for_spots(&mut self, spots: &[FolkSpot], factions: &[FactionSpec], depth: u32) -> Vec<Arc<(Person, Figure)>> {
-        let missing: Vec<FolkSpot> = spots.iter().filter(|s| !self.built.get(&s.seed).is_some_and(|built| built.0.spot == **s && built.0.depth == depth)).copied().collect();
+        let missing: Vec<FolkSpot> = spots.iter().filter(|s| has_figure(s)).filter(|s| !self.built.get(&s.seed).is_some_and(|built| built.0.spot == **s && built.0.depth == depth)).copied().collect();
         self.built_here += missing.len();
         self.keep(build_figures(&missing, factions, depth));
         spots.iter().filter_map(|s| self.built.get(&s.seed).cloned()).collect()
@@ -201,7 +238,7 @@ impl FolkFigures {
 /// the async compute pool so that, ahead of time, it leaves the frame's own pool free.
 pub fn build_figures(spots: &[FolkSpot], factions: &[FactionSpec], depth: u32) -> Vec<(Person, Figure)> {
     AsyncComputeTaskPool::get_or_init(TaskPool::default).scope(|scope| {
-        for spot in spots {
+        for spot in spots.iter().filter(|s| has_figure(s)) {
             scope.spawn(async move {
                 let faction = factions.iter().find(|f| f.id == spot.faction).expect("a spot's faction is on its level");
                 let person = Person::of(spot, faction, depth);
@@ -341,7 +378,9 @@ pub(crate) fn spawn_folk(
     }
     // On a level that was left, each folk is as they were left (`crate::record`).
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
-    for (index, built) in figures.for_spots(&level.0.folk, &level.0.factions, level.0.depth).into_iter().enumerate() {
+    // A saved record is kept by a spot's place in the whole list, denizens' spots included.
+    let indices = level.0.folk.iter().enumerate().filter(|(_, s)| has_figure(s)).map(|(i, _)| i);
+    for (index, built) in indices.zip(figures.for_spots(&level.0.folk, &level.0.factions, level.0.depth)) {
         let (person, figure) = &*built;
         let left = saved.and_then(|l| l.folk.get(&index));
         let Some(left) = left else {
@@ -482,7 +521,7 @@ pub fn folk_card_text(person: &Person, band: fb_faction::Band) -> FolkCardText {
     let names = |gear: &mut dyn Iterator<Item = &(Slot, Item)>| gear.map(|(_, item)| (item.title().to_string(), item.rarity)).collect();
     FolkCardText {
         name: person.name.clone(),
-        line: format!("{} of {} \u{b7} {}", person.spot.folk.race().label, person.faction.name, band.label()),
+        line: format!("{} of {} \u{b7} {}", person.spec.folk.race().label, person.faction.name, band.label()),
         trade: person.spot.trade.map(|t| t.label()),
         wears: names(&mut person.worn()),
         holds: names(&mut person.held()),
@@ -653,6 +692,107 @@ mod tests {
 
 
     #[test]
+    fn a_minotaur_spot_is_a_dressed_minotaur() {
+        let spot = FolkSpot { denizen: Some(fb_denizens::DenizenBody::Minotaur), ..folk_1207()[0] };
+        let person = person_1207(&spot);
+        assert_eq!(person.spec.folk, Folk::Minotaur);
+        assert_eq!(person, person_1207(&spot));
+        let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+        assert!(figure.body.height > 22.0 && figure.pieces.len() >= 4, "{} tall", figure.body.height);
+    }
+
+    /// A level at the denizen depth that holds a member of a built denizen body, and the first
+    /// world's levels there.
+    fn denizen_levels() -> Vec<Level> {
+        let levels: Vec<Level> = (1..=24).map(|seed| fb_level::generate(seed, fb_faction::DENIZEN_DEPTH)).filter(|l| l.folk.iter().any(|f| f.denizen.is_some())).collect();
+        assert!(!levels.is_empty(), "no level at the denizen depth holds a denizen");
+        levels
+    }
+
+    #[test]
+    fn only_denizens_with_a_built_body_have_a_figure() {
+        for body in fb_denizens::DenizenBody::ALL {
+            let spot = FolkSpot { denizen: Some(body), ..folk_1207()[0] };
+            assert_eq!(has_figure(&spot), Folk::of_denizen(body).is_some(), "{body:?}");
+        }
+        assert!(has_figure(&FolkSpot { denizen: Some(fb_denizens::DenizenBody::Minotaur), ..folk_1207()[0] }));
+        assert!(folk_1207().iter().all(has_figure));
+    }
+
+    #[test]
+    fn denizen_spots_spawn_as_their_folk_in_their_faction_and_leave_indices_aligned() {
+        let (mut seen, mut hidden, mut unbuilt) = (0, 0, 0);
+        for level in denizen_levels() {
+            let figures = FolkFigures::default().for_spots(&level.folk, &level.factions, level.depth);
+            let shown: Vec<(usize, &FolkSpot)> = level.folk.iter().enumerate().filter(|(_, s)| has_figure(s)).collect();
+            assert_eq!(figures.len(), shown.len());
+            hidden += level.folk.len() - shown.len();
+            unbuilt += level.folk.iter().filter(|s| s.denizen.is_some_and(|b| Folk::of_denizen(b).is_none())).count();
+            for ((index, spot), built) in shown.iter().zip(&figures) {
+                assert_eq!(built.0.spot, **spot, "figure for spot {index} is its own");
+                assert_eq!(built.0.faction.id, spot.faction);
+                if let Some(body) = spot.denizen {
+                    seen += 1;
+                    assert_eq!(Some(built.0.spec.folk), Folk::of_denizen(body));
+                    assert!(built.0.held().next().is_some(), "{} holds a weapon", built.0.name);
+                    assert!(built.1.bounds().is_some());
+                }
+            }
+        }
+        assert!(seen > 0, "no built denizen on the sweep");
+        // Exactly the spots of unbuilt bodies stay hidden, and the sweep meets some while any
+        // denizen body is unbuilt.
+        assert_eq!(hidden, unbuilt);
+        let any_unbuilt = fb_denizens::DenizenBody::ALL.iter().any(|b| Folk::of_denizen(*b).is_none());
+        assert!(!any_unbuilt || hidden > 0, "no unbuilt denizen met in the sweep");
+    }
+
+    #[test]
+    fn denizen_members_dress_sparsely_in_the_faction_colours_and_guards_may_wear_more() {
+        let (mut bare, mut members, mut in_colours) = (0, 0, 0);
+        for level in denizen_levels() {
+            for spot in level.folk.iter().filter(|s| s.denizen.is_some_and(|b| Folk::of_denizen(b) == Some(Folk::Minotaur))) {
+                let person = Person::of(spot, level.faction(spot.faction), level.depth);
+                members += 1;
+                assert!(person.item(Slot::Mainhand).is_some(), "{} is armed", person.name);
+                assert!(person.item(Slot::Legs).is_some() && person.item(Slot::Feet).is_none());
+                let guard = spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard);
+                if person.item(Slot::Body).is_none() {
+                    bare += 1;
+                } else {
+                    assert!(guard, "{} wears body armour without guarding", person.name);
+                }
+                let field = level.faction(spot.faction).field;
+                if let Some(armory::Item::Legs(legs)) = person.item(Slot::Legs).map(|i| &i.shape) {
+                    in_colours += usize::from([field.tincture.dye(), field.tincture2.dye()].contains(&legs.legwear.cloth.color));
+                }
+            }
+        }
+        // Only guards (a few in a camp) ever wear body armour, so the share is a small sample's.
+        assert!(members > 0 && bare * 10 >= members * 6, "{bare} of {members} are bare chested");
+        assert!(in_colours * 10 >= members * 5, "{in_colours} of {members} kilts wear the faction's tinctures");
+    }
+
+    #[test]
+    fn a_denizen_with_no_syllables_of_its_own_is_still_named() {
+        let mut rng = Mulberry32::new(5);
+        assert!(!fb_items::naming::folk_name(&mut rng, "winged demon", Some(fb_body::Sex::Male)).is_empty());
+    }
+
+    #[test]
+    fn a_faun_spot_is_a_dressed_faun_with_bare_goat_legs() {
+        let spot = FolkSpot { denizen: Some(fb_denizens::DenizenBody::Faun), ..folk_1207()[0] };
+        let person = person_1207(&spot);
+        assert_eq!(person.spec.folk, Folk::Faun);
+        assert_eq!(person, person_1207(&spot));
+        let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+        let height = Folk::Human.race().h;
+        assert!(figure.body.height > 0.9 * height && figure.body.height < 1.1 * height && figure.pieces.len() >= 3, "{} tall", figure.body.height);
+        let parts = figure.pieces.iter().find(|p| p.name == "Body").unwrap().mesh.parts.iter().map(|p| p.name).collect::<Vec<_>>();
+        assert!(parts.contains(&"hooves"), "{parts:?}");
+    }
+
+    #[test]
     fn the_same_spot_is_the_same_person() {
         for spot in folk_1207() {
             assert_eq!(person_1207(&spot), person_1207(&spot));
@@ -676,6 +816,29 @@ mod tests {
             assert!(lo.y > -0.5 && lo.y < 0.5, "{}: lowest point {}", person.name, lo.y);
             assert!(hi.y > spot.folk.race().h * 0.85, "{}: {} tall", person.name, hi.y);
         }
+    }
+
+    /// A cyclops is a folk body: the game's own path (`Person::of`, `Figure::dress`) dresses
+    /// it from an outfit, holding its weapon, standing a giant's height on the floor.
+    #[test]
+    fn a_cyclops_is_dressed_and_holds_a_weapon_through_the_folk_path() {
+        let level = fb_level::generate(1207, 1);
+        let mut checked = 0;
+        for spot in level.folk.iter().take(6) {
+            let spot = FolkSpot { denizen: Some(fb_denizens::DenizenBody::Cyclops), ..*spot };
+            let person = Person::of(&spot, level.faction(spot.faction), 1);
+            assert_eq!(person.spec.folk, Folk::Cyclops);
+            let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+            let names: Vec<&str> = figure.pieces.iter().map(|p| p.name.as_str()).collect();
+            assert!(person.held().any(|(_, item)| names.contains(&item.title())), "{} holds nothing: {names:?}", person.name);
+            assert!(person.worn().any(|(_, item)| names.contains(&item.title())), "{} wears nothing: {names:?}", person.name);
+            let (lo, hi) = figure.bounds().unwrap();
+            assert!(lo.y > -0.5 && lo.y < 0.5, "{}: lowest point {}", person.name, lo.y);
+            // Taller than any of the six folk, about 1.7 times a human.
+            assert!(hi.y > 1.5 * Folk::Human.race().h, "{}: {} tall", person.name, hi.y);
+            checked += 1;
+        }
+        assert!(checked > 0);
     }
 
     #[test]

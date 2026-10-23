@@ -105,6 +105,11 @@ pub struct EnchantingLine;
 /// What the enchanting line says when the delver holds nothing.
 pub const NO_ENCHANTING: &str = "Nothing scrapped";
 
+/// The tongues section: a heading and a row for each denizen tongue the delver has learned
+/// some of, filled by [`update_tongues`]. Empty until a word is learned.
+#[derive(Component, Debug)]
+pub struct TongueList;
+
 /// The exhaustion line: "Exhaustion 2: half speed".
 #[derive(Component, Debug)]
 pub struct ExhaustionLine;
@@ -263,12 +268,17 @@ fn heading(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, title: &str) {
 
 /// A row: its label in the body face, then what `fill_row` puts after it.
 fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Option<usize>, fill_row: impl FnOnce(&mut ChildSpawnerCommands)) {
+    row_labelled(parent, fonts, label, gear, Node { width: px(LABEL_PX), flex_shrink: 0.0, ..default() }, fill_row);
+}
+
+/// [`row`] with the label's box given: the tongues section lets it size to its words.
+fn row_labelled(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Option<usize>, label_box: Node, fill_row: impl FnOnce(&mut ChildSpawnerCommands)) {
     let mut row = parent.spawn(Node { align_items: AlignItems::Center, column_gap: px(12), min_height: px(22), ..default() });
     if let Some(i) = gear {
         row.insert(GearRow(i));
     }
     row.with_children(|row| {
-        row.spawn(Node { width: px(LABEL_PX), flex_shrink: 0.0, ..default() }).with_child((Text::new(label), UiFonts::style(&fonts.body, 15.0, MUTED)));
+        row.spawn(label_box).with_child((Text::new(label), UiFonts::style(&fonts.body, 15.0, MUTED)));
         fill_row(row);
     });
 }
@@ -287,6 +297,7 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
         sheet.spawn((ConditionList, Name::new("Conditions"), Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }));
         heading(sheet, fonts, "enchanting");
         sheet.spawn((EnchantingLine, Text::new(NO_ENCHANTING), UiFonts::style(&fonts.body, 15.0, MUTED)));
+        sheet.spawn((TongueList, Name::new("Tongues"), Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }));
         heading(sheet, fonts, "what your gear makes of you");
         let values = gear_values(character, &character.derive_with(rules, inventory));
         for (i, label) in GEAR_ROWS.into_iter().enumerate() {
@@ -578,6 +589,50 @@ pub fn update_conditions(
     }
 }
 
+/// What the sheet says of a tongue the delver knows some of: "29%", then what they can do in it
+/// ("barter, quests") once the words for it are learned.
+pub fn tongue_summary(lexicon: &fb_denizens::tongue::Lexicon, kind: fb_denizens::DenizenKind) -> (String, String) {
+    let share = format!("{}%", (lexicon.known_share(kind) * 100.0).round());
+    let mut can = Vec::new();
+    if lexicon.can_barter(kind) {
+        can.push("barter");
+    }
+    if lexicon.can_take_quests(kind) {
+        can.push("quests");
+    }
+    (share, can.join(", "))
+}
+
+/// Fills the sheet's tongues section from the lexicon in the delve record: one row for each
+/// tongue with any word learned, and nothing at all (no heading) before that. Rebuilt only when
+/// the section is new or the record changed.
+pub fn update_tongues(mut commands: Commands, record: Option<Res<crate::record::WorldRecord>>, mut lists: Query<(Entity, Ref<TongueList>, &mut Node)>, fonts: Res<UiFonts>) {
+    let changed = record.as_ref().is_some_and(|r| r.is_changed());
+    for (list, added, mut node) in &mut lists {
+        if !changed && !added.is_added() {
+            continue;
+        }
+        let lexicon = record.as_deref().map(|r| r.lexicon());
+        let known: Vec<fb_denizens::DenizenKind> = lexicon.map(|l| fb_denizens::DenizenKind::ALL.into_iter().filter(|&k| l.known_share(k) > 0.0).collect()).unwrap_or_default();
+        // Empty, the section takes no room, not even the gap the sheet leaves between sections.
+        node.display = if known.is_empty() { Display::None } else { Display::Flex };
+        commands.entity(list).despawn_children().with_children(|list| {
+            let Some(lexicon) = lexicon.filter(|_| !known.is_empty()) else { return };
+            heading(list, &fonts, "tongues");
+            for kind in known {
+                let (share, can) = tongue_summary(lexicon, kind);
+                let label_box = Node { min_width: px(LABEL_PX), flex_shrink: 0.0, ..default() };
+                row_labelled(list, &fonts, fb_denizens::tongue::tongue_name(kind), None, label_box, |row| {
+                    row.spawn((Text::new(share), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
+                    if !can.is_empty() {
+                        row.spawn((Text::new(can), UiFonts::style(&fonts.body, 14.0, MUTED)));
+                    }
+                });
+            }
+        });
+    }
+}
+
 /// Keeps the sheet's enchanting line true to the delver's essence and materials.
 pub fn update_enchanting(stock: Option<Res<crate::enchanting::Enchanting>>, mut lines: Query<(Ref<EnchantingLine>, &mut Text)>) {
     for (added, mut text) in &mut lines {
@@ -664,6 +719,33 @@ mod tests {
         let rules = app.world().resource::<GameRules>().0.clone();
         let (character, inventory) = (app.world().resource::<Character>(), app.world().resource::<Inventory>());
         assert!(breakdown(&rules, character, inventory, 4)[0].contains("base (14)"), "{:?}", breakdown(&rules, character, inventory, 4));
+    }
+
+    #[test]
+    fn the_tongues_section_lists_only_tongues_with_words_and_what_they_allow() {
+        use fb_denizens::DenizenKind;
+        use fb_denizens::tongue::{Lexicon, Teaching, Topic};
+        let mut lexicon = Lexicon::new();
+        assert_eq!(lexicon.known_share(DenizenKind::Minotaur), 0.0, "nothing known, nothing listed");
+        lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[Topic::Greeting]));
+        let (share, can) = tongue_summary(&lexicon, DenizenKind::Minotaur);
+        assert!(share.ends_with('%') && !share.starts_with('0'), "{share}");
+        assert_eq!(can, "");
+        lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[Topic::Trade, Topic::Quest]));
+        assert_eq!(tongue_summary(&lexicon, DenizenKind::Minotaur).1, "barter, quests");
+    }
+
+    #[test]
+    fn the_tongues_section_fills_once_a_word_is_learned() {
+        let mut app = App::new();
+        app.init_resource::<UiFonts>().init_resource::<crate::record::WorldRecord>().add_systems(Update, update_tongues);
+        let list = app.world_mut().spawn((TongueList, Node::default())).id();
+        app.update();
+        assert!(app.world().get::<Children>(list).is_none(), "no heading before a word is known");
+        let teaching = crate::reading::teaching_for_capture("demon:scroll:4", 0).unwrap();
+        app.world_mut().resource_mut::<crate::record::WorldRecord>().lexicon.learn_teaching(teaching.teaching().unwrap());
+        app.update();
+        assert!(app.world().get::<Children>(list).is_some_and(|c| c.len() == 2), "a heading and a row for the one tongue");
     }
 
     #[test]

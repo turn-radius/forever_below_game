@@ -15,6 +15,7 @@
 //! Plain Rust, no Bevy; every body is a pure function of its spec.
 
 pub mod body;
+pub mod coat;
 pub mod gait;
 pub mod folk;
 pub mod hair;
@@ -22,9 +23,12 @@ pub mod hand;
 pub mod head;
 pub mod held;
 pub mod limb;
+pub mod parts;
 pub mod place;
 pub mod rig;
 pub mod skin;
+#[cfg(test)]
+mod denizen_tests;
 #[cfg(test)]
 mod skin_tests;
 #[cfg(test)]
@@ -38,7 +42,7 @@ pub mod worn;
 
 pub use body::{ArmPose, Body, GRIP_MAX, Pose};
 pub use gait::{Gait, IdleCycle};
-pub use folk::{Beard, EyeKind, Ears, Folk, HairStyle, Nose, Race};
+pub use folk::{Beard, BlockAttack, EyeKind, Ears, Folk, HairStyle, Nose, Race, StatBlock};
 pub use hair::HairFit;
 pub use head::{HeadFit, StandingFeatures};
 pub use hand::HandPose;

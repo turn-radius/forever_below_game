@@ -5,6 +5,9 @@
 //! what lies under the cursor.
 //!
 //! `FB_READ=<seed>` writes a note of that seed on the level a moment in and opens it, for captures.
+//! `FB_TEACH=<kind>[:book|scroll][:seed][,...]` puts a book or scroll written in that tongue
+//! (`minotaur`, `cyclops`, `faun`, `demon`) in the pack, and `FB_TEACH_READ=1` reads every one a
+//! moment into the delve, so the toast and the sheet's tongues can be captured.
 
 use bevy::prelude::*;
 
@@ -19,8 +22,69 @@ impl Plugin for ReadingPlugin {
             .add_systems(PreUpdate, put_page_down.after(bevy::input::InputSystems))
             .add_systems(Update, show_page.in_set(DelveSystems))
             .add_systems(OnExit(crate::launch::AppState::Delving), close_page);
+        if std::env::var_os("FB_TEACH_READ").is_some() {
+            app.add_systems(Update, read_teaching_for_capture.in_set(DelveSystems));
+        }
         if std::env::var_os("FB_READ").is_some() {
             app.add_systems(Update, read_for_capture.before(show_page).in_set(DelveSystems));
+        }
+    }
+}
+
+/// Reads a book or scroll written in a denizen tongue: the words it teaches join the `lexicon`
+/// for the rest of the delve. Returns the toast's line, "You learn 12 words of Minotaur speech:
+/// greetings and trade.", counting only the words that were new, or "You already know these
+/// words." when none were.
+pub fn study(lexicon: &mut fb_denizens::tongue::Lexicon, teaching: &fb_denizens::tongue::Teaching) -> String {
+    let learned = lexicon.learn_teaching(teaching);
+    let n = learned.len();
+    if n == 0 {
+        return "You already know these words.".to_string();
+    }
+    format!("You learn {n} {} of {}: {}.", if n == 1 { "word" } else { "words" }, fb_denizens::tongue::tongue_name(teaching.kind), teaching.topic_list())
+}
+
+/// The book or scroll `FB_TEACH`'s entry `spec` names (`minotaur:scroll:7`), the `index`th of the
+/// list: written in the tongue, rolled from the seed (1000 and the index if none). `None`, with a
+/// warning, for an entry that names no tongue.
+pub fn teaching_for_capture(spec: &str, index: u32) -> Option<fb_items::Item> {
+    use fb_denizens::tongue::{Teaching, TeachingSize};
+    let mut parts = spec.split(':').map(str::trim);
+    let name = parts.next().unwrap_or_default();
+    let Some(kind) = fb_denizens::DenizenKind::ALL.into_iter().find(|k| k.key() == name.to_lowercase()) else {
+        warn!("FB_TEACH: no tongue called {name:?}");
+        return None;
+    };
+    let (mut base, mut seed) = ("Scroll", 1000 + index);
+    for part in parts {
+        match part.parse::<u32>() {
+            Ok(n) => seed = n,
+            Err(_) if part.eq_ignore_ascii_case("book") => base = "Book",
+            Err(_) => {}
+        }
+    }
+    let size = if base == "Book" { TeachingSize::Book } else { TeachingSize::Scroll };
+    let mut parts = fb_items::ItemParts::from(fb_items::roll_item(base, seed)?);
+    parts.teaching = Some(Teaching::roll(seed, kind, size));
+    fb_items::Item::from_parts(parts)
+}
+
+/// Reads every book and scroll in the pack that teaches words, a moment into the delve.
+fn read_teaching_for_capture(
+    mut eating: crate::eat::Eating,
+    inventory: Res<crate::inventory::Inventory>,
+    mut toasts: crate::inventory::Toasts,
+    mut frames: Local<u32>,
+) {
+    *frames += 1;
+    const READ_AT: u32 = 60;
+    if *frames != READ_AT {
+        return;
+    }
+    let taught: Vec<_> = inventory.carried_containers().into_iter().filter_map(|c| inventory.grid(c)).flat_map(|g| g.entries().iter().map(|e| e.id).collect::<Vec<_>>()).filter(|&id| inventory.item(id).is_some_and(|i| i.teaching().is_some())).collect();
+    for id in taught {
+        if let Some(line) = eating.read(&inventory, id) {
+            toasts.say(line);
         }
     }
 }
@@ -163,6 +227,27 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, put_page_down);
         app
+    }
+
+    #[test]
+    fn studying_counts_the_new_words_and_says_when_none_are() {
+        use fb_denizens::tongue::{Lexicon, Teaching, Topic};
+        let greetings = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Greeting, Topic::Trade]);
+        let mut lexicon = Lexicon::new();
+        let said = study(&mut lexicon, &greetings);
+        assert_eq!(said, format!("You learn {} words of Minotaur speech: greetings and trade.", greetings.words.len()));
+        assert_eq!(study(&mut lexicon, &greetings), "You already know these words.");
+        let more = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Trade, Topic::Quest]);
+        assert!(study(&mut lexicon, &more).contains("of Minotaur speech: trade and requests"));
+    }
+
+    #[test]
+    fn capture_entries_name_a_tongue_a_size_and_a_seed() {
+        let book = teaching_for_capture("Demon:book:5", 0).unwrap();
+        assert_eq!((book.base.as_str(), book.seed, book.tongue()), ("Book", 5, Some(fb_denizens::DenizenKind::Demon)));
+        let scroll = teaching_for_capture("cyclops", 3).unwrap();
+        assert_eq!((scroll.base.as_str(), scroll.seed), ("Scroll", 1003));
+        assert!(teaching_for_capture("orc", 0).is_none());
     }
 
     #[test]

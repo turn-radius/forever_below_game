@@ -1,7 +1,8 @@
 //! What a book teaches. Every book teaches one of the five ability scores, fixed by its seed
 //! ([`Item::lesson`]): reading it raises the reader's score by [`LESSON_POINTS`] for good, once
-//! per reader (the game keeps who has read what). Scrolls and notes teach nothing yet. Our own
-//! rule, the user's call; books are rare to match ([`crate::armory_base::find_weight`]).
+//! per reader (the game keeps who has read what). A book found in a denizen tongue teaches its
+//! words instead, and a scroll can too ([`crate::tongues`]); notes teach nothing. Our own rule,
+//! the user's call; books are rare to match ([`crate::armory_base::find_weight`]).
 
 use armory::families::writing::WritingKind;
 use procgen_rng::Mulberry32;
@@ -43,6 +44,10 @@ impl Item {
     /// The ability score reading this teaches, or `None` for anything that is not a book. Its
     /// own stream of the seed (the mixing constant is our own), so the shape is unaffected.
     pub fn lesson(&self) -> Option<Stat> {
+        // A book written in a denizen tongue teaches its words instead ([`Item::teaching`]).
+        if self.teaching.is_some() {
+            return None;
+        }
         let armory::Item::Writing(state) = &self.shape else { return None };
         (state.piece.kind == WritingKind::Book).then(|| *Mulberry32::new(self.seed ^ 0x7EAC_4B00).pick(&LESSONS))
     }

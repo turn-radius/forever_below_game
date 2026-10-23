@@ -1148,6 +1148,35 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let aim = v3(fb_level::Level::world(cx, cy));
             Transform::from_translation(at).looking_at(aim, Vec3::Y)
         }
+        "denizen" => {
+            // The level's denizen members that are stood in the game: a guard if
+            // `FB_DEBUG_ROLE=guard`, otherwise the middle of the biggest knot of them, from the
+            // most open side a few cells off, looking at them.
+            let shown: Vec<&fb_level::FolkSpot> = level.folk.iter().filter(|s| crate::folk::has_figure(s) && s.denizen.is_some()).collect();
+            let guard = std::env::var("FB_DEBUG_ROLE").as_deref() == Ok("guard");
+            let near = |a: &fb_level::FolkSpot| shown.iter().filter(|b| (a.x - b.x).hypot(a.y - b.y) < 4.0).count();
+            let Some(anchor) = shown.iter().copied().filter(|s| !guard || s.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard)).max_by_key(|s| near(s)) else { return };
+            let group: Vec<_> = shown.iter().filter(|b| (anchor.x - b.x).hypot(anchor.y - b.y) < 4.0).collect();
+            let (mx, my) = if guard { (anchor.x, anchor.y) } else { (group.iter().map(|g| g.x).sum::<f32>() / group.len() as f32, group.iter().map(|g| g.y).sum::<f32>() / group.len() as f32) };
+            let at = v3(fb_level::Level::world(mx, my));
+            let (cx, cy) = (mx.floor() as i32, my.floor() as i32);
+            let reach = if guard { 3 } else { 4 };
+            let side = [fb_level::Facing::North, fb_level::Facing::East, fb_level::Facing::South, fb_level::Facing::West]
+                .into_iter()
+                .max_by_key(|f| (1..=reach).take_while(|k| level.is_open(cx + f.step().0 * k, cy + f.step().1 * k)).count())
+                .unwrap_or(facing);
+            // A guard is seen from the front, the way they face, if that side is open.
+            let side = if guard {
+                let (fx, fy) = anchor.facing();
+                let ahead = if fx.abs() > fy.abs() { if fx > 0.0 { fb_level::Facing::East } else { fb_level::Facing::West } } else if fy > 0.0 { fb_level::Facing::South } else { fb_level::Facing::North };
+                if (1..=2).all(|k| level.is_open(cx + ahead.step().0 * k, cy + ahead.step().1 * k)) { ahead } else { side }
+            } else {
+                side
+            };
+            let back = (1..=reach).take_while(|k| level.is_open(cx + side.step().0 * k, cy + side.step().1 * k)).count() as f32;
+            let from = at + v3(geometry::facing_vector(side)) * CELL * back.max(if guard { 2.0 } else { 1.0 }) * 0.9 + eye;
+            Transform::from_translation(from).looking_at(at + Vec3::Y * 11.0, Vec3::Y)
+        }
         "brazier" | "glowcaps" => {
             let kind = if mode == "brazier" { LightKind::Brazier } else { LightKind::Glowcaps };
             let Some(spot) = level.lights.iter().find(|l| l.kind == kind) else { return };

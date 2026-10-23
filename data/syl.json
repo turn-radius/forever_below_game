@@ -183,5 +183,60 @@
    "sk",
    "ma"
   ]
+ ],
+ "minotaur": [
+  [
+   "Gor",
+   "Kar",
+   "Thar",
+   "Mor",
+   "Brak",
+   "Dur",
+   "Rok",
+   "Vash",
+   "Hur",
+   "Gar",
+   "Bor"
+  ],
+  [
+   "gash",
+   "dok",
+   "mar",
+   "rug",
+   "thak",
+   "non",
+   "bor",
+   "gar",
+   "dun",
+   "mok"
+  ]
+ ],
+ "faun": [
+  [
+   "Fen",
+   "Lio",
+   "Syl",
+   "Ari",
+   "Pan",
+   "Tem",
+   "Nyl",
+   "Eli",
+   "Ody",
+   "Mir",
+   "Sel",
+   "Thal"
+  ],
+  [
+   "ius",
+   "eon",
+   "anthe",
+   "ilos",
+   "opa",
+   "andre",
+   "isel",
+   "ymn",
+   "adon",
+   "ira"
+  ]
  ]
 }

@@ -2699,6 +2699,7 @@ name = "fb_body"
 version = "0.1.0"
 dependencies = [
  "armory",
+ "fb_denizens",
  "fb_items",
  "libc",
  "procgen_rng",
@@ -2730,11 +2731,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fb_denizens"
+version = "0.1.0"
+dependencies = [
+ "procgen_rng",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fb_faction"
 version = "0.1.0"
 dependencies = [
  "armory",
  "fb_body",
+ "fb_denizens",
  "fb_items",
  "procgen_grammar",
  "procgen_rng",
@@ -2747,6 +2758,7 @@ name = "fb_items"
 version = "0.1.0"
 dependencies = [
  "armory",
+ "fb_denizens",
  "procgen_grammar",
  "procgen_rng",
  "serde",
@@ -2760,6 +2772,7 @@ dependencies = [
  "armory",
  "fb_body",
  "fb_creatures",
+ "fb_denizens",
  "fb_faction",
  "fb_items",
  "procgen_rng",
@@ -2892,6 +2905,7 @@ dependencies = [
  "fb_body",
  "fb_character",
  "fb_creatures",
+ "fb_denizens",
  "fb_faction",
  "fb_items",
  "fb_level",

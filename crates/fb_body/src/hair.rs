@@ -10,11 +10,12 @@
 
 use std::f32::consts::{PI, TAU};
 
-use armory::build::form::{ShellOptions, patch, shell};
+use armory::build::form::{BACK, ShellOptions, patch, shell};
 use armory::build::hafted::smoothstep;
 use armory::geom::vec3::{self, V3};
 use armory::geom::{CatmullRom, MeshBuilder, OutlineMode, Shading, SweepOptions, spike, torus, tube, uv_sphere, value_noise3};
 use armory::{ItemMesh, MaterialKind, Rgb};
+use procgen_rng::Mulberry32;
 
 use crate::body::Body;
 use crate::folk::{Beard, Folk, HairStyle};
@@ -131,7 +132,8 @@ pub fn hair_volume(style: HairStyle, head_radius: f32, covered: bool) -> f32 {
     let v = match style {
         HairStyle::Shaggy => 0.25,
         HairStyle::Long => 0.18,
-        HairStyle::Bald | HairStyle::Crest => 0.0,
+        HairStyle::Curly => 0.22,
+        HairStyle::Bald | HairStyle::Crest | HairStyle::Mane => 0.0,
         _ => 0.1,
     };
     v * head_radius * if covered { 0.5 } else { 1.0 }
@@ -143,6 +145,7 @@ fn cap_style(style: HairStyle) -> (f32, f32, f32, f32) {
     match style {
         HairStyle::Shaggy => (0.09, 0.2, 0.09, 0.38),
         HairStyle::Long => (0.07, 0.13, 0.03, 0.31),
+        HairStyle::Curly => (0.06, 0.1, 0.01, 0.3),
         HairStyle::Crop => (0.05, 0.04, 0.012, 0.31),
         _ => (0.05, 0.05, 0.012, 0.31),
     }
@@ -200,6 +203,10 @@ impl Body {
         let r = face.r;
         match style {
             HairStyle::Bald | HairStyle::Crest => return,
+            HairStyle::Mane => {
+                self.mane(face, fit, hair);
+                return;
+            }
             HairStyle::Mohawk => {
                 if fit.covered {
                     return;
@@ -249,12 +256,69 @@ impl Body {
                 hair.append(&tail);
                 tie.append(&band);
             }
+            HairStyle::Curly => {
+                // Tight curls: small balls of hair crowded over the cap, fuller toward the crown.
+                let mut rng = Mulberry32::new(self.spec.seed ^ 0x2c1b_77e9);
+                let count = if fit.covered { 40 } else { 150 };
+                for _ in 0..count {
+                    let th = rng.range_f32(-PI, PI);
+                    let v = rng.range_f32(0.04, 1.0f32).sqrt();
+                    let ph = (self.hairline(style, th) * v).max(1e-3);
+                    if fit.covered && v < 0.55 {
+                        continue;
+                    }
+                    let at = face.point(th, ph, (base + 0.5 * vol) * r);
+                    let size = rng.range_f32(0.1, 0.16) * r;
+                    let mut curl = uv_sphere(1.0, 8, 6);
+                    curl.scale([size, size * 0.9, size]).translate(at);
+                    hair.append(&curl);
+                }
+            }
             HairStyle::Topknot if !fit.covered => {
                 let mut knot = uv_sphere(1.0, 16, 10);
                 knot.scale([0.34 * r, 0.3 * r, 0.34 * r]).translate(face.point(PI * 0.85, 0.13 * PI, 0.22 * r));
                 hair.append(&knot);
             }
             _ => {}
+        }
+    }
+
+    /// A bull's forelock and mane: locks from the poll falling forward over the brow, and a
+    /// shaggy mane down the nape and the back of the neck over the withers, lying out from
+    /// whatever is worn on the shoulders by its clearance. Under a helm the forelock goes.
+    fn mane(&self, face: &Face, fit: HairFit, hair: &mut MeshBuilder) {
+        let tr = self.traits();
+        let r = face.r;
+        let mut rng = Mulberry32::new(self.spec.seed ^ 0x3a4e_5bc1);
+        if !fit.covered {
+            for _ in 0..(8.0 + 22.0 * tr.mane) as usize {
+                let az = rng.range_f32(-0.55, 0.55);
+                let polar = rng.range_f32(0.1, 0.3) * PI;
+                let root = face.point(az, polar, -0.05 * r);
+                let out = vec3::normalize_or([rng.range_f32(-0.3, 0.3), 0.1, 1.0], vec3::Z);
+                let len = rng.range_f32(0.5, 1.1) * r * (0.5 + 0.6 * tr.mane);
+                hair.append(&crate::parts::lock(root, out, len, 0.1 * r, 0.9, [rng.range_f32(-0.2, 0.2) * r, 0.0, 0.0]));
+            }
+        }
+        // The nape, between the horns and down the neck.
+        for _ in 0..(10.0 + 34.0 * tr.mane) as usize {
+            let polar = rng.range_f32(0.5, 0.78) * PI;
+            let root = face.point(PI + rng.range_f32(-0.7, 0.7), polar, -0.02 * r);
+            let out = vec3::normalize_or([rng.range_f32(-0.5, 0.5), -0.3, -1.0], vec3::neg(vec3::Z));
+            let len = rng.range_f32(0.7, 1.5) * r * (0.7 + 0.5 * tr.mane);
+            hair.append(&crate::parts::lock(root, out, len, 0.14 * r, 0.9, [0.0, 0.0, -0.2 * r]));
+        }
+        // The neck's crest and the withers.
+        let (t, w) = (self.trunk_length, self.girth);
+        let lift = fit.clearance.max(0.0) + 0.03;
+        for _ in 0..(16.0 + 56.0 * tr.mane) as usize {
+            let y = rng.range_f32(self.chest_y + 0.1 * t, self.shoulder_y + 0.15 * t);
+            let (p, n) = self.trunk_surface(BACK + rng.range_f32(-0.7, 0.7), y, 0.0);
+            let root = vec3::add(p, vec3::scale(n, lift - 0.1 * w));
+            let out = vec3::normalize_or(vec3::add(n, [0.0, 0.0, -0.4]), vec3::neg(vec3::Z));
+            let len = rng.range_f32(0.5, 1.4) * w * (0.8 + 0.5 * tr.mane);
+            let sway = [rng.range_f32(-0.3, 0.3) * w, 0.0, rng.range_f32(-0.4, 0.1) * w];
+            hair.append(&crate::parts::lock(root, out, len, 0.3 * w, 1.0, sway));
         }
     }
 
@@ -486,7 +550,7 @@ impl Body {
     /// none.
     fn brows(&self, face: &Face) -> MeshBuilder {
         let mut out = MeshBuilder::new();
-        if self.folk() == Folk::Lizardfolk {
+        if matches!(self.folk(), Folk::Lizardfolk | Folk::Minotaur) {
             return out;
         }
         let r = face.r;
@@ -498,6 +562,19 @@ impl Body {
         } * if self.spec.woman { 0.7 } else { 1.0 };
         // A woman's brow arches higher over the eye.
         let arch = if self.spec.woman { 0.02 * PI } else { 0.0 };
+        if face.one_eyed() {
+            // One brow, unbroken over the one eye, a bar of hair on the heavy ridge.
+            let pts = CatmullRom::centripetal(vec![
+                face.point(-0.78, 0.3 * PI + tilt * 0.4, 0.05 * r),
+                face.point(-0.4, 0.285 * PI, 0.06 * r),
+                face.point(0.0, 0.28 * PI + tilt * 0.3, 0.065 * r),
+                face.point(0.4, 0.285 * PI, 0.06 * r),
+                face.point(0.78, 0.3 * PI + tilt * 0.4, 0.05 * r),
+            ])
+            .sample_evenly(24);
+            out.append(&tube(&pts, 8, &SweepOptions::default(), |t| width * 2.0 * r * (1.0 - 0.5 * (t - 0.5).abs())));
+            return out;
+        }
         for sg in [1.0f32, -1.0] {
             let pts = CatmullRom::centripetal(vec![
                 face.point(sg * 0.14, 0.43 * PI + tilt * 0.6, 0.03 * r),
@@ -661,7 +738,7 @@ mod tests {
     #[test]
     #[ignore = "slow sweep: body rendering test, every folk and beard; run before merging fitting changes"]
     fn every_listed_style_builds() {
-        every_listed_style_builds_check(&Folk::ALL, &Beard::ALL, &HairStyle::ALL);
+        every_listed_style_builds_check(&Folk::fitted(), &Beard::ALL, &HairStyle::ALL);
     }
 
     #[test]

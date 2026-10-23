@@ -112,7 +112,8 @@ fn main() -> AppExit {
         // `FB_DEPTH=2` plays the stone halls: the level's depth picks its style.
         let depth = std::env::var("FB_DEPTH").ok().and_then(|d| d.parse().ok()).unwrap_or(1);
         // The level travel builds for that depth of the delve (`Abyss::level_at`).
-        app.insert_resource(CurrentLevel(forever_below::travel::Abyss::new(launch.seed.unwrap_or(Launch::DEFAULT_SEED)).level_at(depth)));
+        let abyss = forever_below::travel::Abyss::new(launch.seed.unwrap_or(Launch::DEFAULT_SEED));
+        app.insert_resource(CurrentLevel(abyss.level_at(depth))).insert_resource(abyss);
     }
     if swings {
         app.add_plugins(SwingPracticePlugin);

@@ -33,6 +33,7 @@ bevy-inspector-egui = { version = "0.38", default-features = false, features = [
 # which `keybindings.toml` writes its keys with.
 bevy = { workspace = true, features = ["file_watcher", "serialize"] }
 armory = { workspace = true }
+fb_denizens = { workspace = true }
 fb_items = { workspace = true }
 fb_body = { workspace = true }
 fb_level = { workspace = true }

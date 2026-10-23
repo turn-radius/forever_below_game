@@ -168,7 +168,7 @@ impl Combatant {
     /// `person` armed with what their main hand holds, at their folk's height.
     pub fn of(person: &Person) -> Combatant {
         let held = person.item(Slot::Mainhand);
-        let weapon = Weapon::wielded(held, person.spot.folk.race().h);
+        let weapon = Weapon::wielded(held, person.spec.folk.race().h);
         Combatant { weapon, strength: FolkStats::of(person).strength, swing_time: swing_time(held.map(|i| i.shape.family())) }
     }
 }
@@ -238,7 +238,7 @@ pub struct FolkStats {
 impl FolkStats {
     /// `person`'s stats, as the module says.
     pub fn of(person: &Person) -> FolkStats {
-        let [strength, dexterity, constitution, _, _] = person.spot.folk.race().stats;
+        let [strength, dexterity, constitution, _, _] = person.spec.folk.race().stats;
         let class = Class::of_outfit(person.outfit);
         let hit_points = match class {
             Some(class) => first_level_hit_points_explained_for(class, constitution),

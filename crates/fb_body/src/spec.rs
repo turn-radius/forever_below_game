@@ -197,7 +197,9 @@ impl BodySpec {
         let longer = match self.folk {
             Folk::Human | Folk::Dwarf | Folk::Gnome => HairStyle::Long,
             Folk::Goblin | Folk::Pigfolk => HairStyle::Shaggy,
-            Folk::Lizardfolk => return,
+            // The denizen races have their own heads and manes, which carry no sex yet (a succubus,
+            // later, will be a woman).
+            Folk::Lizardfolk | Folk::Minotaur | Folk::Faun | Folk::Cyclops => return,
         };
         if self.hair == HairStyle::Mohawk {
             return;
@@ -225,7 +227,7 @@ impl BodySpec {
         let eyes = *rng.pick(eye_colours());
         let hair = *rng.pick(&race.hairs);
         let mut hair_colour = *rng.pick(hair_colours(folk));
-        if !matches!(folk, Folk::Lizardfolk | Folk::Goblin) && rng.chance(0.16) {
+        if !matches!(folk, Folk::Lizardfolk | Folk::Goblin) && !race.coat && rng.chance(0.16) {
             hair_colour = *rng.pick(&GREY_HAIR);
         }
         let beard = if rng.chance(race.beard_chance as f64) {
@@ -240,6 +242,12 @@ impl BodySpec {
         let bust = (1.7 * (figure - 0.42) + rng.range_f32(-0.2, 0.2)).clamp(0.0, 1.0);
         let bust_round = rng.next_f64() as f32;
         let beard_length = beard_reach(beard);
+        // A coat's mane and tail are the hide darkened toward black (the shade rolled last, so no
+        // other folk's rolls move).
+        if race.coat {
+            let tone = rng.next_f64() as f32;
+            hair_colour = crate::parts::mix(skin, armory::Rgb::hex(0x0e0b0a), 0.25 + 0.5 * tone);
+        }
         BodySpec { folk, seed, figure, frame, stature, muscle, slender, bust, bust_round, jaw, brow, nose, skin, eyes, hair, hair_colour, beard, beard_length, woman: false }
     }
 

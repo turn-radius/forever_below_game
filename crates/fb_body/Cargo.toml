@@ -13,6 +13,7 @@ workspace = true
 procgen_rng = { workspace = true }
 armory = { workspace = true }
 fb_items = { workspace = true }
+fb_denizens = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

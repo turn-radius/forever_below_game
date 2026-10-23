@@ -22,10 +22,10 @@ fn main() {
     for f in world.factions() {
         let list = |ps: &[Preference]| ps.iter().map(|p| describe(p, &world)).collect::<Vec<_>>().join(", ");
         println!(
-            "{:>2} {}\n     {:?}, {}, {:?}{}\n     outfits {} and {}, {:?} armour\n     field {:?} {:?} on {:?}, crest {:?} {:?}\n     likes {}\n     hates {}",
+            "{:>2} {}\n     {}, {}, {:?}{}\n     outfits {} and {}, {:?} armour\n     field {:?} {:?} on {:?}, crest {:?} {:?}\n     likes {}\n     hates {}",
             f.id.0,
             f.name,
-            f.folk,
+            f.denizen.map_or_else(|| format!("{:?}", f.folk), |kind| format!("denizens: {}", kind.label())),
             f.alignment.label(),
             f.intention,
             if f.insular { ", insular" } else { "" },
@@ -41,8 +41,10 @@ fn main() {
             list(&f.hates),
         );
     }
+    // Level seeds follow; they are drawn as at depth 3, where denizen factions can be found.
+    let depth = fb_faction::DENIZEN_DEPTH;
     for level in args.filter_map(|s| s.parse::<u32>().ok()) {
-        let names: Vec<&str> = world.draw(level).into_iter().map(|id| world.faction(id).name.as_str()).collect();
+        let names: Vec<&str> = world.draw_at(level, depth).into_iter().map(|id| world.faction(id).name.as_str()).collect();
         println!("level {level}: {}", names.join("; "));
     }
 }

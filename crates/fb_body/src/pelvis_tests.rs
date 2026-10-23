@@ -43,7 +43,7 @@ fn heights(from: f32, to: f32, step: f32) -> Vec<f32> {
 }
 
 fn bodies() -> Vec<Body> {
-    Folk::ALL.into_iter().flat_map(|f| [1u32, 1207, 40_401].map(move |s| Body::new(&BodySpec::roll(f, s)))).collect()
+    Folk::fitted().into_iter().flat_map(|f| [1u32, 1207, 40_401].map(move |s| Body::new(&BodySpec::roll(f, s)))).collect()
 }
 
 /// How far the trunk's skin stands out past the legs' at the front and the back, at the
@@ -222,7 +222,7 @@ fn width_profile(body: &Body) -> Vec<(f32, f32)> {
 }
 
 fn hip_bodies() -> Vec<Body> {
-    Folk::ALL
+    Folk::fitted()
         .into_iter()
         .flat_map(|folk| [BodySpec::typical(folk)].into_iter().chain([1u32, 1207, 40401, 7].map(|s| BodySpec::roll(folk, s))))
         .map(|spec| Body::new(&spec))
@@ -254,7 +254,7 @@ fn hips_are_a_little_wider_than_the_waist_from_the_front() {
     let ratio = profile.iter().map(|p| p.1).fold(0.0, f32::max) / profile[0].1;
     assert!((1.08..=1.2).contains(&ratio), "typical human hips are {ratio} times the waist");
     // Every folk's hips stay wider than its waist, a broad folk's more so.
-    for folk in Folk::ALL {
+    for folk in Folk::fitted() {
         let body = Body::new(&BodySpec::typical(folk));
         let profile = width_profile(&body);
         let ratio = profile.iter().map(|p| p.1).fold(0.0, f32::max) / profile[0].1;

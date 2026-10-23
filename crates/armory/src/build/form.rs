@@ -1001,6 +1001,9 @@ pub struct LowerBodyForm {
     /// mirrors it), which the cloth follows instead of the straight legs built from `leg`:
     /// the bend forward at the knee, the calf behind and the knee in front.
     pub sections: Option<[LegSection; LEG_SECTIONS]>,
+    /// The lowest a hem may hang: 0 for legs that stand on the floor; a leg on its toes (a hock
+    /// well above the floor) lifts it, so trousers end at the hock and do not hang to the ground.
+    pub hem_floor: f32,
 }
 
 /// How many [`LegSection`]s a [`LowerBodyForm`] takes.
@@ -1034,6 +1037,7 @@ impl LowerBodyForm {
             thigh_back: 0.95,
             stance: 0.62,
             sections: None,
+            hem_floor: 0.0,
         }
     }
 

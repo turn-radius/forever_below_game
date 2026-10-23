@@ -63,6 +63,22 @@ fn folk_mark(folk: Folk) -> char {
         Folk::Goblin => 'G',
         Folk::Lizardfolk => 'L',
         Folk::Pigfolk => 'P',
+        Folk::Minotaur => 'M',
+        Folk::Faun => 'F',
+        Folk::Cyclops => 'c',
+    }
+}
+
+/// A denizen's mark: the first letter of its body, lower case (m, c, f, w, h, s).
+fn denizen_mark(body: fb_level::DenizenBody) -> char {
+    use fb_level::DenizenBody::*;
+    match body {
+        Minotaur => 'm',
+        Cyclops => 'c',
+        Faun => 'f',
+        WingedDemon => 'w',
+        HornedDemon => 'h',
+        Succubus => 's',
     }
 }
 
@@ -139,7 +155,7 @@ fn main() {
         rows[prop.y as usize][prop.x as usize] = prop_mark(prop.prop);
     }
     for folk in &level.folk {
-        rows[folk.y as usize][folk.x as usize] = folk_mark(folk.folk);
+        rows[folk.y as usize][folk.x as usize] = folk.denizen.map_or_else(|| folk_mark(folk.folk), denizen_mark);
     }
     for web in &level.webs {
         rows[web.y as usize][web.x as usize] = 'w';
@@ -161,7 +177,10 @@ fn main() {
         level.creatures.len()
     );
     println!("{} webs", level.webs.len());
-    println!("factions: {}", level.factions.iter().map(|f| format!("{} ({:?}{})", f.name, f.folk, if f.insular { ", insular" } else { "" })).collect::<Vec<_>>().join("; "));
+    println!("factions: {}", level.factions.iter().map(|f| match f.denizen {
+        Some(kind) => format!("{} (denizens: {}, {})", f.name, kind.label(), f.alignment.label()),
+        None => format!("{} ({:?}{})", f.name, f.folk, if f.insular { ", insular" } else { "" }),
+    }).collect::<Vec<_>>().join("; "));
     for row in rows {
         println!("{}", row.into_iter().collect::<String>());
     }
@@ -178,7 +197,7 @@ fn main() {
     for folk in &level.folk {
         println!(
             "{} of {}, seed {}, at ({:.1}, {:.1}) facing {:.0} degrees",
-            folk.folk.race().label,
+            folk.denizen.map_or(folk.folk.race().label.to_string(), |body| body.label().to_string()),
             level.faction(folk.faction).name,
             folk.seed,
             folk.x,

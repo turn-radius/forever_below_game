@@ -145,7 +145,7 @@ impl DollChoice {
                 }
                 "--folk" => {
                     let folk = value()?;
-                    choice.folk = Folk::parse(&folk).ok_or(format!("unknown folk {folk:?}; one of human, dwarf, gnome, goblin, lizard, pig"))?;
+                    choice.folk = Folk::parse(&folk).ok_or(format!("unknown folk {folk:?}; one of human, dwarf, gnome, goblin, lizard, pig, minotaur, faun"))?;
                 }
                 "--seed" => {
                     let seed = value()?;
@@ -193,8 +193,9 @@ impl DollChoice {
 
     /// Steps `by` folk through [`Folk::ALL`], wrapping.
     pub fn step_folk(&mut self, by: isize) {
-        let at = Folk::ALL.iter().position(|&f| f == self.folk).unwrap_or(0) as isize;
-        self.folk = Folk::ALL[(at + by).rem_euclid(Folk::ALL.len() as isize) as usize];
+        let all: Vec<Folk> = Folk::every();
+        let at = all.iter().position(|&f| f == self.folk).unwrap_or(0) as isize;
+        self.folk = all[(at + by).rem_euclid(all.len() as isize) as usize];
     }
 
     /// Steps `by` outfits, wrapping.
@@ -530,14 +531,14 @@ mod tests {
     fn folk_and_outfits_cycle_back_round() {
         let start = DollChoice::default();
         let mut choice = start;
-        for _ in 0..Folk::ALL.len() {
+        for _ in 0..Folk::ALL.len() + Folk::DENIZENS.len() {
             choice.step_folk(1);
         }
         choice.step_outfit(-1);
         choice.step_outfit(1);
         assert_eq!(choice, start);
         choice.step_folk(-1);
-        assert_eq!(choice.folk, Folk::Pigfolk);
+        assert_eq!(Some(&choice.folk), Folk::DENIZENS.last(), "Tab goes on through the denizens");
     }
 
     #[test]

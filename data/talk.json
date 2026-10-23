@@ -157,5 +157,19 @@
  ],
  "not_yet": [
   "Not yet."
+ ],
+ "gesture": [
+  "The #folk# gestures toward the hall and grunts.",
+  "The #folk# regards you, then jerks a thumb at the dark behind it and grunts.",
+  "The #folk# says something low and heavy that you cannot follow, and points toward the hall.",
+  "The #folk# snorts and waves you on with the back of a hand.",
+  "The #folk# speaks, a few rough syllables, and nods toward the hall of #faction#.",
+  "The #folk# stares at you, then taps its chest and gestures toward the hall."
+ ],
+ "gesture_hostile": [
+  "The #folk# snorts, lowers its head and shows you its teeth.",
+  "The #folk# bellows something savage and hefts its weapon.",
+  "The #folk# paws the ground and growls, and does not look away.",
+  "The #folk# bares its teeth and jerks its weapon toward the way you came."
  ]
 }

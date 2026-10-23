@@ -109,7 +109,7 @@ pub fn entries(record: &WorldRecord, run_seed: u32) -> Vec<Entry> {
                 id,
                 name: spec.name.clone(),
                 field: spec.field,
-                folk: spec.folk.race().label.to_string(),
+                folk: spec.denizen.map_or_else(|| spec.folk.race().label.to_string(), |kind| kind.label().to_string()),
                 colours: colours_line(&spec.field),
                 standing: record.standings.get(id).value(),
                 band: record.standings.band(id),

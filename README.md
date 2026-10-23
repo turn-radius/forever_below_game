@@ -53,7 +53,7 @@ The game opens on the title screen, to Forever Below's theme. New delve (or Ente
 
 **Saving.** The delve is saved when the delver lies down in a set bedroll or tent (set one down from the pack with F, then F on it to sleep): "Your delve is saved." shows, and there is no other way to save. The title then offers "Resume <name>, depth N" above New delve, which rebuilds the world from its seed, every level as it was left, and the delver lying in the same camp with their gear, needs, hit points, clock, standings, commissions and lessons. Quitting without sleeping loses the progress since the last camp. Dying deletes the save. Resume is the highlighted choice and Enter resumes. New delve and Continue as ask "Replace your saved delve?" first. The save is `delve.json` beside `settings.json`, written to a temporary file and renamed, so a crash cannot leave half of one; a save the game cannot read is renamed `delve.unreadable.json` and the title says so in one line. A delve begun with `--seed`, `FB_NEW_DELVE` or a debug switch never writes or deletes the save. The design is in the header of `game/src/save.rs`.
 
-Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`, `FB_COMMISSION`, `FB_READ`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
+Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`, `FB_COMMISSION`, `FB_READ`, `FB_TEACH`, `FB_TEACH_READ`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
 
 ### Play a level
 
@@ -209,13 +209,15 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_WEAR=<state>` | turntable starting condition (`--wear` wins) |
 | `FB_CLOSEUP=<0–11>` | turntable opens on a close-up of that grid slot |
 | `FB_DEBUG_POSE=x,y,yaw,pitch` | holds the player at a grid point (cells), turned `yaw` degrees from north and tilted `pitch` degrees |
-| `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps` | a lit camera at a fixed view of the level |
+| `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps\|denizen` | a lit camera at a fixed view of the level |
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera, and on what is held |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start (`=character` on the character tab) |
 | `FB_OPEN_MAP=<frame>` | opens the map that many frames into the delve, once the start has been looked round (`FB_OPEN_MAP=120`) |
 | `FB_COMMISSION=<profession>:<tier>[:<style>]` | opens the commission screen at the start (`weaponsmith:master:blades`, `armorer:apprentice`); `FB_COMMISSION_BASE=Club`, `FB_COMMISSION_ROLL=2` (0 to 5), `FB_COMMISSION_SET=blade.length=1.4,etch.on=true`, `FB_COMMISSION_TURN=0.9` (holds the turn) and `FB_COMMISSION_SCROLL=1100` (panel pixels) set up a capture |
 | `FB_COMMISSION_ORDER=ready\|<hours>\|collect` | a few frames in, places an order with the nearest maker without taking coin: finished already (`ready`), needing that many hours, or handed over into the pack (`collect`); shaped by `FB_COMMISSION_BASE`, `FB_COMMISSION_ROLL` and `FB_COMMISSION_SET`; with `FB_TALK=1 FB_TALK_TOPIC=4` the maker's "Your order" answers |
 | `FB_READ=<seed>` | a moment in, writes a note of that seed on the level and opens it to read, for captures of the page and of a level's notes |
+| `FB_TEACH=<kind>[:book/scroll][:seed][,...]` | puts a book or scroll written in that denizen tongue (`minotaur`, `cyclops`, `faun`, `demon`) in the pack, for captures of its card |
+| `FB_TEACH_READ=1` | a moment in, reads every teaching book and scroll in the pack, for captures of the toast and the sheet's tongues |
 | `FB_OPEN_CONTAINER=<n>` | opens the level's `n`th container (0 the first, in `print_level`'s order) a moment in, with the inventory showing what it holds |
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
 | `FB_DROP=<base>[:<rarity>][,...]` | sets an item of each named base down in front of you a moment in, of that rarity if one is named (`Sword:legendary,Sword:common`), spread left to right; for captures of floor items such as a legendary's shimmer; `Tent+set` or `Bedroll+set` is that camp good already pitched or laid out |

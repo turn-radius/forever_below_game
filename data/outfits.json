@@ -259,5 +259,157 @@
    "Purse",
    "Candle"
   ]
+ },
+ "minotaur": {
+  "label": "Minotaur",
+  "slots": {
+   "legs": [
+    "Breeches"
+   ],
+   "belt": [
+    "Belt"
+   ],
+   "hands": [
+    0.5,
+    "Gloves"
+   ],
+   "cloak": [
+    0.25,
+    "Mantle"
+   ],
+   "mainhand": [
+    "Hand axe",
+    "Hand axe",
+    "Mace",
+    "Spear",
+    "Club"
+   ]
+  },
+  "goods": [
+   "Roast haunch"
+  ],
+  "ground": []
+ },
+ "minotaur_guard": {
+  "label": "Minotaur warden",
+  "slots": {
+   "legs": [
+    "Breeches"
+   ],
+   "belt": [
+    "Belt"
+   ],
+   "hands": [
+    0.7,
+    "Gloves",
+    "Gauntlets"
+   ],
+   "cloak": [
+    0.5,
+    "Mantle"
+   ],
+   "body": [
+    0.6,
+    "Leather jerkin",
+    "Brigandine",
+    "Scale coat",
+    "Mail"
+   ],
+   "head": [
+    0.5,
+    "Helm"
+   ],
+   "mainhand": [
+    "Hand axe",
+    "Mace",
+    "Spear"
+   ],
+   "offhand": [
+    0.4,
+    "Shield"
+   ]
+  },
+  "goods": [
+   "Roast haunch"
+  ],
+  "ground": []
+ },
+ "cyclops": {
+  "label": "Cyclops",
+  "slots": {
+   "legs": [
+    "Breeches"
+   ],
+   "belt": [
+    "Belt"
+   ],
+   "mainhand": [
+    "Club",
+    "Club",
+    "Mace"
+   ]
+  },
+  "goods": [
+   "Roast haunch"
+  ],
+  "ground": []
+ },
+ "faun": {
+  "label": "Faun",
+  "slots": {
+   "shirt": [
+    "Shirt",
+    "Tunic"
+   ],
+   "body": [
+    0.4,
+    "Leather jerkin"
+   ],
+   "belt": [
+    0.7,
+    "Belt"
+   ],
+   "mainhand": [
+    "Sword",
+    "Bow",
+    "Dagger"
+   ]
+  },
+  "goods": [
+   "Apple",
+   "Wine"
+  ],
+  "ground": []
+ },
+ "demon": {
+  "label": "Demon",
+  "slots": {
+   "belt": [
+    "Belt"
+   ],
+   "hands": [
+    0.5,
+    "Gloves"
+   ],
+   "neck": [
+    0.7,
+    "Amulet"
+   ],
+   "ring1": [
+    0.6,
+    "Ring"
+   ],
+   "ring2": [
+    0.4,
+    "Ring"
+   ],
+   "mainhand": [
+    "Sword",
+    "Spear",
+    "Mace"
+   ]
+  },
+  "goods": [],
+  "ground": []
  }
 }

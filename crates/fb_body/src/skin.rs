@@ -62,8 +62,10 @@ pub enum SkinRegion {
     Foot,
     /// The head, which turns about the neck.
     Head,
-    /// Rigid on the pelvis (a tail).
+    /// Rigid on the pelvis.
     Pelvis,
+    /// A tail: along its bones when the body has a jointed tail, else rigid on the pelvis.
+    Tail,
     /// Rigid on the chest (a hood and the head inside it, which turn with the body).
     Chest,
 }
@@ -74,9 +76,10 @@ impl SkinRegion {
         match part {
             "arms" => SkinRegion::Arm,
             "hands" | "nails" => SkinRegion::Hand,
-            "legs" => SkinRegion::Leg,
+            "legs" | "leg_fur" => SkinRegion::Leg,
             "feet" | "claws" => SkinRegion::Foot,
-            "tail" => SkinRegion::Pelvis,
+            "tail" | "tail_hair" => SkinRegion::Tail,
+            "hooves" | "socks" => SkinRegion::Foot,
             _ => SkinRegion::Trunk,
         }
     }
@@ -117,7 +120,7 @@ struct LimbFit {
 }
 
 impl LimbFit {
-    fn new(limb: &Limb, arm: bool, reach: f32) -> LimbFit {
+    fn new(limb: &Limb, arm: bool, reach: f32, foot: Option<Vec<V3>>) -> LimbFit {
         let side = limb.side;
         let mut cum = vec![0.0];
         for w in limb.path.windows(2) {
@@ -134,7 +137,9 @@ impl LimbFit {
         let n = limb.path.len();
         let end = limb.path[n - 1];
         let end_dir = vec3::normalize_or(vec3::sub(end, limb.path[n - 3]), vec3::neg(vec3::Y));
-        let extension = if arm {
+        let extension = if let Some(line) = foot {
+            line
+        } else if arm {
             vec![end, vec3::add(end, vec3::scale(end_dir, reach))]
         } else {
             // Down to the sole and out along the foot.
@@ -222,14 +227,18 @@ pub struct Skinner {
     neck_to: f32,
     trunk_length: f32,
     hip_half_width: f32,
+    /// Where a jointed tail's bones start, and where it ends (empty for a body without one).
+    tail: Vec<V3>,
 }
 
 impl Skinner {
     pub fn new(body: &Body) -> Skinner {
         let hand = 0.105 * body.height * body.race().arm;
         let foot = 0.148 * body.height * body.race().foot;
-        let arms = [LimbFit::new(body.arm(Side::Right), true, hand), LimbFit::new(body.arm(Side::Left), true, hand)];
-        let legs = [LimbFit::new(body.leg(Side::Right), false, foot), LimbFit::new(body.leg(Side::Left), false, foot)];
+        let arms = [LimbFit::new(body.arm(Side::Right), true, hand, None), LimbFit::new(body.arm(Side::Left), true, hand, None)];
+        // A foot on its toes hangs along the pastern to the hoof.
+        let line = |side: Side| body.hooved_foot(side).is_some().then(|| body.foot_line(side));
+        let legs = [LimbFit::new(body.leg(Side::Right), false, foot, line(Side::Right)), LimbFit::new(body.leg(Side::Left), false, foot, line(Side::Left))];
         let [a0, a1] = arms;
         let [l0, l1] = legs;
         Skinner {
@@ -244,6 +253,7 @@ impl Skinner {
             neck_to: body.neck_base().origin[1] + 0.05 * body.trunk_length,
             trunk_length: body.trunk_length,
             hip_half_width: body.hip.half_width,
+            tail: body.jointed_tail().map(|(points, _)| points).unwrap_or_default(),
         }
     }
 
@@ -269,11 +279,45 @@ impl Skinner {
         match region {
             SkinRegion::Head => acc[Joint::Head.index()] = 1.0,
             SkinRegion::Pelvis => acc[Joint::Pelvis.index()] = 1.0,
+            SkinRegion::Tail => self.tail_weights(p, &mut acc),
             SkinRegion::Chest => acc[Joint::Chest.index()] = 1.0,
             SkinRegion::Trunk => self.trunk_weights(p[1], 1.0, &mut acc),
             _ => self.limbed(p, region, &mut acc),
         }
         top_four(&acc)
+    }
+
+    /// A tail's weights: along its bones, each blending into the next over half a segment either
+    /// side of the joint between them, and the first into the pelvis at its root. Rigid on the
+    /// pelvis when the body has no jointed tail.
+    fn tail_weights(&self, p: V3, acc: &mut [f32; JOINTS]) {
+        let n = self.tail.len().saturating_sub(1);
+        if n == 0 {
+            acc[Joint::Pelvis.index()] = 1.0;
+            return;
+        }
+        // The share along the tail, in bones: 0 at the root, `n` at the tip (past it, along the last).
+        let (mut best, mut at) = (f32::MAX, 0.0);
+        for (i, w) in self.tail.windows(2).enumerate() {
+            let seg = vec3::sub(w[1], w[0]);
+            let s = (vec3::dot(vec3::sub(p, w[0]), seg) / vec3::length_squared(seg).max(1e-9)).clamp(0.0, if i + 1 == n { 1.5 } else { 1.0 });
+            let d = vec3::distance(p, vec3::add(w[0], vec3::scale(seg, s)));
+            if d < best {
+                (best, at) = (d, i as f32 + s);
+            }
+        }
+        // Each bone is centred on its middle; the first fades into the pelvis near the root.
+        let c = (at - 0.5).clamp(0.0, (n - 1) as f32);
+        let (i, f) = ((c.floor() as usize).min(n - 1), c - c.floor());
+        let root = 1.0 - smoothstep(0.0, 0.5, at);
+        let k = 1.0 - root;
+        acc[Joint::Pelvis.index()] += root;
+        if i + 1 < n {
+            acc[Joint::TAIL[i].index()] += k * (1.0 - f);
+            acc[Joint::TAIL[i + 1].index()] += k * f;
+        } else {
+            acc[Joint::TAIL[i].index()] += k;
+        }
     }
 
     /// The trunk's weights at height `y`.
@@ -355,7 +399,7 @@ impl Skinner {
                 leg_claim = 1.0;
                 leg_a = nearest_end(2, 3);
             }
-            SkinRegion::Trunk | SkinRegion::Loose | SkinRegion::Head | SkinRegion::Pelvis | SkinRegion::Chest => {}
+            SkinRegion::Trunk | SkinRegion::Loose | SkinRegion::Head | SkinRegion::Pelvis | SkinRegion::Tail | SkinRegion::Chest => {}
         }
         let total = arm_claim + leg_claim;
         if total > 1.0 {

@@ -371,7 +371,7 @@ fn cloth_fits_round_the_shoulders_check(folks: &[Folk], seeds: &[u32], kits: &[u
 #[test]
 #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
 fn cloth_fits_round_the_shoulders() {
-    cloth_fits_round_the_shoulders_check(&Folk::ALL, &[1207, 3, 40], &[5, 6, 7]);
+    cloth_fits_round_the_shoulders_check(&Folk::fitted(), &[1207, 3, 40], &[5, 6, 7]);
 }
 
 #[test]

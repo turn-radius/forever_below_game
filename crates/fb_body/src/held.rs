@@ -270,9 +270,16 @@ fn draw_scale(body: &Body, item: &Item) -> f32 {
         Item::Sword(_) | Item::Dagger(_) => BLADE_SCALE * root,
         Item::Bow(_) => (BOW_SCALE * root).min(body.height * BOW_MAX / height()),
         Item::Shield(_) => (SHIELD_SCALE * root).min(body.height * SHIELD_MAX / height()),
+        // A giant's hafted weapons (maces, clubs, axes, staves and spears) are grown with it,
+        // as swords are; folk (up to a lizard's 1.04 of a human) draw them as they are.
+        // Torches, lanterns and crossbows are drawn as they are for everyone.
+        Item::Mace(_) | Item::Club(_) | Item::Axe(_) | Item::Staff(_) | Item::Spear(_) if body.scale > GIANT_SCALE => root,
         _ => 1.0,
     }
 }
+
+/// The body scale (height over a human's) above which held items are drawn grown with it.
+const GIANT_SCALE: f32 = 1.35;
 
 fn with_arm(mut pose: Pose, side: Side, arm: ArmPose) -> Pose {
     match side {
@@ -773,7 +780,7 @@ mod tests {
     #[test]
     fn a_lantern_hangs_plumb_from_the_belt_at_the_off_hand_hip() {
         use fb_items::Slot;
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let body = body(folk);
             let belt = crate::fit_worn(&body, &[(Slot::Belt, roll(Family::Belt, 3))]);
             let belt = &belt.layer(Slot::Belt).unwrap().mesh;
@@ -830,11 +837,12 @@ mod tests {
     #[test]
     fn the_grip_never_exceeds_the_hand() {
         let families = [Family::Sword, Family::Dagger, Family::Mace, Family::Club, Family::Axe, Family::Staff, Family::Spear, Family::Torch, Family::Bow, Family::Crossbow];
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let body = body(folk);
             let cap = body.grip_radius();
             let half_fist = body.hand_form().knuckle_half_width;
             for family in families {
+                let mut read = 0;
                 for seed in 0..10 {
                     let item = roll(family, seed);
                     let fit = fit(&body, Side::Right, &item);
@@ -846,12 +854,46 @@ mod tests {
                     // handle along its own tilted axis, not the posed grip's: measuring across the
                     // grip axis would read a tilted handle as wider than it is.
                     let axis = if family == Family::Torch { fit.placement.rotation.transform(vec3::Y) } else { g.y() };
-                    let widest = points(&fit.mesh, HANDLES)
-                        .map(|p| vec3::sub(p, g.origin))
-                        .filter(|d| vec3::dot(*d, axis).abs() < half_fist * 0.6)
-                        .map(|d| vec3::length(vec3::sub(d, vec3::scale(axis, vec3::dot(d, axis)))))
-                        .fold(0.0, f32::max);
+                    // A giant's fist outgrows a splint torch: the grip cap (GRIP_MAX) is above the
+                    // torch's own handle, so nothing is thinned and the Armory builds no separate
+                    // handle part (the haft is part of the head), or the handle is shorter than
+                    // the fist's window, so a reading may be empty. Only a giant's torch may go
+                    // unread; the six folk's fists always thin it to a handle, and every family
+                    // is read for each of them.
+                    let giant = folk.is_denizen() || body.scale > GIANT_SCALE;
+                    let across = |window: f32| {
+                        points(&fit.mesh, HANDLES)
+                            .map(|p| vec3::sub(p, g.origin))
+                            .filter(|d| vec3::dot(*d, axis).abs() < half_fist * window)
+                            .map(|d| vec3::length(vec3::sub(d, vec3::scale(axis, vec3::dot(d, axis)))))
+                            .fold(0.0, f32::max)
+                    };
+                    let widest = if giant { [0.6, 1.0].into_iter().map(across).find(|w| *w > 0.0).unwrap_or(0.0) } else { across(0.6) };
+                    if giant && family == Family::Torch && widest == 0.0 {
+                        continue;
+                    }
+                    read += 1;
                     assert!(widest > 0.0 && widest <= cap * 1.1 + 0.005, "{folk:?} {} seed {seed}: drawn handle {widest} in a fist of {cap}", item.noun());
+                }
+                // Every folk's every family is read at every seed; a giant's torch at least once.
+                assert!(if folk.is_denizen() || body.scale > GIANT_SCALE { read > 0 } else { read == 10 }, "{folk:?} {family:?}: {read} of 10 read");
+            }
+        }
+    }
+
+    /// A cyclops's hands close on a club, an axe, a staff or a spear as a folk's do: the handle
+    /// runs through the fist's grip frame, in the palm.
+    #[test]
+    fn a_cyclops_holds_its_weapons_in_its_palms() {
+        let body = body(Folk::Cyclops);
+        for family in [Family::Club, Family::Axe, Family::Mace, Family::Staff, Family::Spear, Family::Sword] {
+            for seed in 0..8 {
+                let item = roll(family, seed);
+                for side in [Side::Right, Side::Left] {
+                    let fit = fit(&body, side, &item);
+                    let g = grip(&body, side, &fit);
+                    let nearest = points(&fit.mesh, HANDLES).map(|p| vec3::distance(p, g.origin)).fold(f32::MAX, f32::min);
+                    assert!(nearest < 0.5 * body.hand_form().knuckle_half_width + 0.05, "{} seed {seed} {side:?}: handle {nearest} from the palm", item.noun());
                 }
             }
         }
@@ -982,7 +1024,7 @@ mod tests {
 
     #[test]
     fn staves_and_spears_stand_upright_off_the_ground() {
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let body = body(folk);
             for item in [roll(Family::Staff, 4), roll(Family::Spear, 8), roll(Family::Spear, 2)] {
                 let fit = fit(&body, Side::Right, &item);
@@ -1001,7 +1043,7 @@ mod tests {
         use armory::families::lantern::Lantern;
         use armory::families::torch::{BurnState, Torch};
         let mut failures = vec![];
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             for seed in [1u32, 8, 1207] {
                 let spec = BodySpec::roll(folk, seed);
                 for light_seed in [3u32, 4, 9] {

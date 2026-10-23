@@ -138,6 +138,12 @@ pub fn wary_line(speaker: &Speaker) -> String {
     say(speaker, "wary", 0x02, &[])
 }
 
+/// What a denizen does when the delver speaks to them: a gesture, since the delver has no
+/// tongue they share. #628 replaces this with the tongue-gated panel.
+pub fn gesture(speaker: &Speaker, hostile: bool) -> String {
+    if hostile { say(speaker, "gesture_hostile", 0x04, &[]) } else { say(speaker, "gesture", 0x03, &[]) }
+}
+
 /// "Apprentice weaponsmith (blades)", lower case, as a trade reads mid-sentence.
 fn calling(trade: &Trade) -> String {
     trade.label().to_lowercase()
@@ -354,6 +360,19 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_denizen_gestures_in_words_of_its_own_kind() {
+        for seed in 0..40 {
+            let mut s = speaker(None, Band::Neutral);
+            s.folk = "Minotaur".into();
+            s.seed = seed;
+            let line = gesture(&s, false);
+            assert!(!gesture(&s, true).contains('#'));
+            assert!(line.contains("minotaur") && !line.contains('#') && !line.contains("..."), "{line}");
+            assert_eq!(line, gesture(&s, false));
         }
     }
 

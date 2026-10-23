@@ -32,6 +32,7 @@ pub mod scrap;
 pub mod stats;
 pub mod stock;
 pub mod tables;
+pub mod tongues;
 pub mod troll;
 pub mod undead;
 pub mod value;

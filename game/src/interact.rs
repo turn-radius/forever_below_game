@@ -305,7 +305,7 @@ pub fn use_of(item: &Item) -> Option<Verb> {
             fb_items::camp::Camp::Tent => Verb::Pitch,
         });
     }
-    if item.lesson().is_some() || item.words.is_some() {
+    if item.lesson().is_some() || item.teaching().is_some() || item.words.is_some() {
         return Some(Verb::Read);
     }
     if let Some(how) = item.consume() {

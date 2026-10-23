@@ -1,6 +1,7 @@
 use super::*;
 
-const FOLK: [&str; 6] = ["human", "dwarf", "gnome", "goblin", "lizardfolk", "pigfolk"];
+/// Folk, then the denizen kinds, which the name data keys the same way.
+const FOLK: [&str; 10] = ["human", "dwarf", "gnome", "goblin", "lizardfolk", "pigfolk", "minotaur", "cyclops", "faun", "demon"];
 const INTENTIONS: [&str; 4] = ["way_out", "trade", "worship", "plunder"];
 
 #[test]

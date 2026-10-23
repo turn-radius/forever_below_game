@@ -260,6 +260,13 @@ impl Room {
         x >= self.x as i32 && y >= self.y as i32 && x < (self.x + self.w) as i32 && y < (self.y + self.h) as i32
     }
 
+    /// How far the point (`x`, `y`) lies from the room's floor, in cells: 0 inside it.
+    pub fn gap_to(&self, x: f32, y: f32) -> f32 {
+        let dx = (self.x as f32 - x).max(x - (self.x + self.w) as f32).max(0.0);
+        let dy = (self.y as f32 - y).max(y - (self.y + self.h) as f32).max(0.0);
+        dx.hypot(dy)
+    }
+
     /// The room's centre in grid coordinates (cells, fractional).
     pub fn centre(&self) -> (f32, f32) {
         (self.x as f32 + self.w as f32 / 2.0, self.y as f32 + self.h as f32 / 2.0)
@@ -334,7 +341,7 @@ pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use banners::{BannerSite, BannerSpot};
 pub use claims::{Claim, settle_claims};
-pub use folk::{Faction, FactionSpec, FolkSpot, Trade};
+pub use folk::{DenizenBody, DenizenKind, Faction, FactionSpec, FolkSpot, Trade};
 pub use props::{CONTAINER_SCALE, NO_LOOT, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};
 pub use finish::{Character, DoorStyle, Finish, Finishes, FloorFinish, Quarter, WallFinish, finishes};
 pub use generate::{generate, generate_for, generate_in, generate_with};

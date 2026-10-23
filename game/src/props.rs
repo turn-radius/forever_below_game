@@ -249,10 +249,9 @@ fn lay_out_banners(mut commands: Commands, level: Res<CurrentLevel>, old: Query<
 /// Keeps track of a container prop in `inventory`, loose, holding what its loot rolls against
 /// `odds`: each thing at its first free spot, upright first and then turned, and anything with
 /// no room left out. `None` for scenery. A container set out empty ([`fb_level::NO_LOOT`]) holds nothing.
-pub fn stock_container(inventory: &mut Inventory, prop: Prop, odds: fb_items::Odds, lore: &fb_items::notes::Lore) -> Option<ItemId> {
-    let Prop::Container { style, loot, .. } = prop else { return None };
-    let contents = if loot == fb_level::NO_LOOT { Vec::new() } else { fb_items::roll_contents(style, loot, odds).into_iter().map(|i| i.in_world(lore)).collect() };
-    stock_container_with(inventory, prop, contents)
+pub fn stock_container(inventory: &mut Inventory, spot: &PropSpot, odds: fb_items::Odds, level: &fb_level::Level, lore: &fb_items::notes::Lore) -> Option<ItemId> {
+    let contents = level.container_contents(spot, odds, lore);
+    stock_container_with(inventory, spot.prop, contents)
 }
 
 /// [`stock_container`] with the `contents` it rolled already (`crate::staged`).
@@ -310,7 +309,7 @@ fn lay_out_props(
             }
             _ => match &ahead {
                 Some(ahead) => stock_container_with(&mut inventory, spot.prop, ahead.contents.clone()),
-                None => stock_container(&mut inventory, spot.prop, odds, &lore),
+                None => stock_container(&mut inventory, spot, odds, &level.0, &lore),
             },
         };
         let opened = left.is_some_and(|c| c.opened);
@@ -640,7 +639,7 @@ mod tests {
             if !spot.prop.holds_loot() {
                 continue;
             }
-            let rolled: Vec<_> = fb_items::roll_contents(style, loot, fb_items::Odds::loot(level.depth)).into_iter().map(|i| i.in_world(&level.lore())).collect();
+            let rolled = level.container_contents(spot, fb_items::Odds::loot(level.depth), &level.lore());
             assert!(!rolled.is_empty());
             // Some container in the inventory holds exactly these, by title, in roll order.
             let titles: Vec<String> = rolled.iter().map(|i| i.title().to_string()).collect();
