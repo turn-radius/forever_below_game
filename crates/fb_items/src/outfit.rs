@@ -95,6 +95,16 @@ impl Livery {
                 s.hem.fabric.color = trim.dye();
                 s.hem.fabric.color2 = main.dye();
             }
+            // Legwear wears the colours too: a denizen's whole dress may be a kilt of them.
+            armory::Item::Legs(s) => {
+                if !rng.chance(LIVERY_CLOTH) {
+                    return;
+                }
+                s.legwear.cloth.color = main.dye();
+                s.legwear.cloth.color2 = trim.dye();
+                s.hem.fabric.color = trim.dye();
+                s.hem.fabric.color2 = main.dye();
+            }
             armory::Item::Hood(s) if s.hood.style != HoodStyle::MailCoif => {
                 if !rng.chance(LIVERY_CLOTH) {
                     return;

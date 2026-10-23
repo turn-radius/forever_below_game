@@ -52,7 +52,9 @@ fn kind_from_word(word: &str) -> Option<CreatureKind> {
 pub fn victim_of(denizen: &Denizen) -> Victim {
     let person = &denizen.person;
     let class = [Outfit::Fighter, Outfit::Ranger, Outfit::Mage, Outfit::Cleric, Outfit::Scavenger].into_iter().find(|o| o.key() == person.outfit).and_then(Outfit::class);
-    Victim::Member { faction: person.faction.id, folk: Some(person.spec.folk), class }
+    // A denizen is not one of the folk the factions like or hate: only its faction hears.
+    let folk = if person.spot.denizen.is_some() { None } else { Some(person.spec.folk) };
+    Victim::Member { faction: person.faction.id, folk, class }
 }
 
 /// Weighs each of the delver's kills this frame against every faction.
@@ -124,6 +126,21 @@ mod tests {
         let before = standings.get(member).value();
         weigh(&world, &mut standings, &[Victim::Member { faction: member, folk: Some(world.faction(member).folk), class: None }]);
         assert!(standings.get(member).value() <= before - 40 + 10 && standings.has_met(member));
+    }
+
+    #[test]
+    fn a_denizen_kill_is_a_member_kill_with_no_folk_that_moves_its_faction() {
+        let level = (1..=24).map(|s| fb_level::generate(s, fb_faction::DENIZEN_DEPTH)).find(|l| l.folk.iter().any(|f| f.denizen.is_some() && crate::folk::has_figure(f))).expect("a level with a built denizen");
+        let spot = *level.folk.iter().find(|f| f.denizen.is_some() && crate::folk::has_figure(f)).unwrap();
+        let person = crate::folk::Person::of(&spot, level.faction(spot.faction), level.depth);
+        let denizen = Denizen { person, radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO };
+        let victim = victim_of(&denizen);
+        assert!(matches!(victim, Victim::Member { folk: None, faction, .. } if faction == spot.faction));
+        let world = fb_faction::World::new(level.seed);
+        let mut standings = fb_faction::Standings::default();
+        let before = standings.get(spot.faction).value();
+        weigh(&world, &mut standings, &[victim]);
+        assert!(standings.get(spot.faction).value() < before && standings.has_met(spot.faction));
     }
 
     #[test]

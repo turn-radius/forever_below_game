@@ -189,7 +189,7 @@ impl Routine {
 /// A person's pace, world units per second: the tuned human pace, in proportion to height for
 /// shorter folk.
 pub fn pace(denizen: &Denizen, walk_speed: f32) -> f32 {
-    walk_speed * (denizen.person.spot.folk.race().h / HUMAN_HEIGHT).min(1.0)
+    walk_speed * (denizen.person.spec.folk.race().h / HUMAN_HEIGHT).min(1.0)
 }
 
 /// Whether this person is a guard, who stands at their post instead of wandering: they idle
@@ -714,9 +714,9 @@ mod tests {
         let mk = |p: &crate::folk::Person| Denizen { person: p.clone(), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO };
         for a in &tall {
             for b in &tall {
-                if a.spot.folk.race().h < b.spot.folk.race().h {
+                if a.spec.folk.race().h < b.spec.folk.race().h {
                     // Strictly slower unless both are as tall as a human, whose pace is the cap.
-                    let capped = a.spot.folk.race().h >= HUMAN_HEIGHT;
+                    let capped = a.spec.folk.race().h >= HUMAN_HEIGHT;
                     assert!(if capped { pace(&mk(a), 11.0) <= pace(&mk(b), 11.0) } else { pace(&mk(a), 11.0) < pace(&mk(b), 11.0) });
                 }
             }

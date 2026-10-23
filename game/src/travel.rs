@@ -256,7 +256,10 @@ impl Plugin for TravelPlugin {
 pub(crate) fn begin_the_run(level: Option<Res<CurrentLevel>>, character: Option<Res<crate::character::Character>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>, mut enchanting: ResMut<crate::enchanting::Enchanting>) {
     // What was scrapped lasts one delve.
     *enchanting = default();
-    *abyss = level.map_or_else(Abyss::default, |level| Abyss { depth: level.0.depth, ..Abyss::new(level.0.seed) });
+    // `FB_DEPTH` starts below the first level, whose seed is not the run's: the run keeps the
+    // seed `main` made the level from, so the world the sheet and standings read is the level's.
+    let dev_run = crate::launch::env_set("FB_DEPTH") && abyss.run_seed != 0;
+    *abyss = level.map_or_else(Abyss::default, |level| Abyss { depth: level.0.depth, ..Abyss::new(if dev_run { abyss.run_seed } else { level.0.seed }) });
     // The world record resets with the run for now (#285), and standing starts afresh in the
     // new world from the delver's alignment (#542).
     // A faction that likes or hates the delver's class or folk starts apart from it (#547).

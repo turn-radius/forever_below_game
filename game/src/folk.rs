@@ -108,6 +108,19 @@ fn livery(faction: &FactionSpec) -> fb_items::outfit::Livery {
     fb_items::outfit::Livery::from_field(faction.field, lean)
 }
 
+/// The key of the outfit a denizen of `folk` dresses from, in `data/outfits.json`: the row of its
+/// folk key (`minotaur`, `cyclops`, `faun`, `demon`), or `<key>_guard` for a guard if the table
+/// has one. `None` for folk, and for a denizen whose kind has no row yet (it takes its
+/// faction's outfit).
+fn denizen_outfit(folk: Folk, spot: &FolkSpot) -> Option<&'static str> {
+    spot.denizen?;
+    let key = folk.key();
+    let kind = if key.contains("demon") { "demon" } else { key };
+    let guard = spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard);
+    let guard_row = format!("{kind}_guard");
+    guard.then(|| fb_items::outfit::outfit(&guard_row)).flatten().or_else(|| fb_items::outfit::outfit(kind)).map(|o| o.key.as_str())
+}
+
 impl Person {
     /// The person at `spot` on a level `depth` down, their gear rolled against
     /// [`fb_items::Odds::kit`] for it: a pure function of the two.
@@ -119,6 +132,8 @@ impl Person {
         let folk = spot.denizen.and_then(Folk::of_denizen).unwrap_or(spot.folk);
         let name = fb_items::naming::folk_name(&mut rng, folk.key());
         let outfit = *rng.pick(&faction.outfit_keys());
+        // A denizen dresses from the row of its own kind, not a delver's class outfit.
+        let outfit = denizen_outfit(folk, spot).unwrap_or(outfit);
         let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
             let set = o.roll_in(spot.seed, folk.key(), odds, Some(&livery(faction)));
             let ammunition: Vec<Item> = set.goods.into_iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).collect();
@@ -164,16 +179,12 @@ pub fn footprint(figure: &Figure) -> f32 {
     figure.body.shoulder_half_width * 1.2 + 0.3
 }
 
-/// Whether the game makes a person and a figure for `spot`. Denizens of the abyss
-/// ([`FolkSpot::denizen`]) are not dressed as folk bodies, and have no body of their own in the
-/// game yet, so for now their spots stay in [`Level::folk`] (the saved records of the others
-/// still count them) but nobody is made or spawned for them. When the denizen bodies land
-/// (`fb_creatures`) this goes, and their spots are spawned as creature rigs.
-///
-/// TODO: the denizen-spawn task removes this and the `FB_SPAWN` dev filter in
-/// `creatures::dev_folk_for` together.
+/// Whether the game makes a person and a figure for `spot`: every folk, and every denizen whose
+/// body is built ([`Folk::of_denizen`]). The spots of denizens whose body is not built yet stay
+/// in [`Level::folk`] (saved records are keyed by a spot's place in the whole list, so none
+/// shifts) but nobody is made or spawned for them; this one rule hides them everywhere.
 pub fn has_figure(spot: &FolkSpot) -> bool {
-    spot.denizen.is_none()
+    spot.denizen.is_none_or(|body| Folk::of_denizen(body).is_some())
 }
 
 /// Figures already built, by spot seed, so a level drawn again reuses them.
@@ -491,7 +502,7 @@ pub fn folk_card_text(person: &Person, band: fb_faction::Band) -> FolkCardText {
     let names = |gear: &mut dyn Iterator<Item = &(Slot, Item)>| gear.map(|(_, item)| (item.title().to_string(), item.rarity)).collect();
     FolkCardText {
         name: person.name.clone(),
-        line: format!("{} of {} \u{b7} {}", person.spot.folk.race().label, person.faction.name, band.label()),
+        line: format!("{} of {} \u{b7} {}", person.spec.folk.race().label, person.faction.name, band.label()),
         trade: person.spot.trade.map(|t| t.label()),
         wears: names(&mut person.worn()),
         holds: names(&mut person.held()),
@@ -669,6 +680,75 @@ mod tests {
         assert_eq!(person, person_1207(&spot));
         let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
         assert!(figure.body.height > 22.0 && figure.pieces.len() >= 4, "{} tall", figure.body.height);
+    }
+
+    /// A level at the denizen depth that holds a member of a built denizen body, and the first
+    /// world's levels there.
+    fn denizen_levels() -> Vec<Level> {
+        (1..=24).map(|seed| fb_level::generate(seed, fb_faction::DENIZEN_DEPTH)).filter(|l| l.folk.iter().any(|f| f.denizen.is_some())).collect()
+    }
+
+    #[test]
+    fn only_denizens_with_a_built_body_have_a_figure() {
+        for body in fb_denizens::DenizenBody::ALL {
+            let spot = FolkSpot { denizen: Some(body), ..folk_1207()[0] };
+            assert_eq!(has_figure(&spot), Folk::of_denizen(body).is_some(), "{body:?}");
+        }
+        assert!(has_figure(&FolkSpot { denizen: Some(fb_denizens::DenizenBody::Minotaur), ..folk_1207()[0] }));
+        assert!(folk_1207().iter().all(has_figure));
+    }
+
+    #[test]
+    fn denizen_spots_spawn_as_their_folk_in_their_faction_and_leave_indices_aligned() {
+        let (mut seen, mut hidden) = (0, 0);
+        for level in denizen_levels() {
+            let figures = FolkFigures::default().for_spots(&level.folk, &level.factions, level.depth);
+            let shown: Vec<(usize, &FolkSpot)> = level.folk.iter().enumerate().filter(|(_, s)| has_figure(s)).collect();
+            assert_eq!(figures.len(), shown.len());
+            hidden += level.folk.len() - shown.len();
+            for ((index, spot), built) in shown.iter().zip(&figures) {
+                assert_eq!(built.0.spot, **spot, "figure for spot {index} is its own");
+                assert_eq!(built.0.faction.id, spot.faction);
+                if let Some(body) = spot.denizen {
+                    seen += 1;
+                    assert_eq!(Some(built.0.spec.folk), Folk::of_denizen(body));
+                    assert!(built.0.held().next().is_some(), "{} holds a weapon", built.0.name);
+                    assert!(built.1.bounds().is_some());
+                }
+            }
+        }
+        assert!(seen > 0, "no built denizen on the sweep");
+        // Unbuilt bodies stay hidden whatever is built: the sweep sees some while few bodies exist.
+        let _ = hidden;
+    }
+
+    #[test]
+    fn denizen_members_dress_sparsely_in_the_faction_colours_and_guards_may_wear_more() {
+        let (mut bare, mut armoured_guards, mut members) = (0, 0, 0);
+        for level in denizen_levels() {
+            for spot in level.folk.iter().filter(|s| s.denizen.is_some_and(|b| Folk::of_denizen(b) == Some(Folk::Minotaur))) {
+                let person = Person::of(spot, level.faction(spot.faction), level.depth);
+                members += 1;
+                assert!(person.item(Slot::Mainhand).is_some(), "{} is armed", person.name);
+                assert!(person.item(Slot::Legs).is_some() && person.item(Slot::Feet).is_none());
+                let guard = spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard);
+                if person.item(Slot::Body).is_none() {
+                    bare += 1;
+                } else if guard {
+                    armoured_guards += 1;
+                } else {
+                    panic!("{} wears body armour without guarding", person.name);
+                }
+            }
+        }
+        assert!(members > 0 && bare * 10 >= members * 7, "{bare} of {members} are bare chested");
+        let _ = armoured_guards;
+    }
+
+    #[test]
+    fn a_denizen_with_no_syllables_of_its_own_is_still_named() {
+        let mut rng = Mulberry32::new(5);
+        assert!(!fb_items::naming::folk_name(&mut rng, "winged demon").is_empty());
     }
 
     #[test]

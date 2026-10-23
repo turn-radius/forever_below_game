@@ -24,7 +24,10 @@ pub fn item_name(noun: &str, affixes: &[&Affix]) -> String {
 /// A name for one of `folk` (a key of `data/syl.json`): two syllables, and a family name of
 /// two more except for goblins and lizardfolk (`genName`).
 pub fn folk_name(rng: &mut Mulberry32, folk: &str) -> String {
-    let (a, b) = &syllables()[folk];
+    // A body with no syllables of its own yet (a denizen whose task has not added them) is
+    // named from the human ones.
+    let table = syllables();
+    let (a, b) = table.get(folk).unwrap_or(&table["human"]);
     let first = format!("{}{}", rng.pick(a), rng.pick(b));
     let last = format!("{}{}", rng.pick(a), rng.pick(b));
     if matches!(folk, "goblin" | "lizard") { first } else { format!("{first} {last}") }

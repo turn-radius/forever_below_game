@@ -163,7 +163,7 @@ fn speaker_of<'a>(denizen: &Denizen, band: Band, level: &Level, others: impl Ite
     traders.sort_by_key(|(seed, ..)| *seed);
     Speaker {
         name: person.name.clone(),
-        folk: person.spot.folk.race().label.clone(),
+        folk: person.spec.folk.race().label.clone(),
         faction: person.faction.name.clone(),
         intention: person.faction.intention,
         band,
@@ -289,6 +289,13 @@ fn talk(
     let Ok((_, denizen, hostility, _)) = folk.get(entity) else { return };
     let band = record.as_ref().map_or(Band::Neutral, |r| r.standings.band(denizen.person.faction.id));
     let speaker = speaker_of(denizen, band, &level.0, folk.iter().map(|(_, d, ..)| d));
+    // HOOK for #628: denizens speak no human language, so until the tongue-gated panel lands
+    // they gesture instead. That task replaces this branch with the panel when the delver
+    // knows the denizen's tongue.
+    if denizen.person.spot.denizen.is_some() {
+        toasts.say(lines::gesture(&speaker));
+        return;
+    }
     match lines::reception(band, hostility.is_some_and(|h| h.is_hostile())) {
         Reception::Spits => toasts.say(lines::spit_line(&speaker)),
         Reception::Turns => {
