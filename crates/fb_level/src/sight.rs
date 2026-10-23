@@ -119,6 +119,22 @@ impl Explored {
     pub fn all(level: &Level) -> Self {
         Explored { width: level.width, height: level.height, cells: level.cells.iter().map(|c| c.is_open()).collect() }
     }
+
+    /// The cells seen as bits, eight to a byte, row by row from the top left, for saving.
+    pub fn to_bits(&self) -> Vec<u8> {
+        let mut bits = vec![0u8; self.cells.len().div_ceil(8)];
+        for (i, _) in self.cells.iter().enumerate().filter(|(_, seen)| **seen) {
+            bits[i / 8] |= 1 << (i % 8);
+        }
+        bits
+    }
+
+    /// What [`Explored::to_bits`] wrote for a level `width` by `height` cells. `None` if the
+    /// bits are not the length that size takes.
+    pub fn from_bits(width: u32, height: u32, bits: &[u8]) -> Option<Self> {
+        let count = (width as usize).checked_mul(height as usize)?;
+        (bits.len() == count.div_ceil(8)).then(|| Explored { width, height, cells: (0..count).map(|i| bits[i / 8] & (1 << (i % 8)) != 0).collect() })
+    }
 }
 
 #[cfg(test)]
@@ -243,5 +259,19 @@ mod tests {
         let open = level.cells.iter().filter(|c| c.is_open()).count();
         assert!(explored.count() > 4 && explored.count() < open / 2, "{} of {open}", explored.count());
         assert!(explored.is_seen(ex as i32, ey as i32));
+    }
+
+    #[test]
+    fn what_was_seen_packs_into_bits_and_comes_back() {
+        let level = drawn(&["#####", "#...#", "#.+.#", "#####"]);
+        let mut seen = Explored::new(&level);
+        seen.look(&level, &Eye { x: 1.5, y: 1.5, forward: (1.0, 0.0), half_fov: 1.0, range: 10.0 }, &[]);
+        let all = Explored::all(&level);
+        for explored in [seen, all, Explored::new(&level)] {
+            let bits = explored.to_bits();
+            assert_eq!(bits.len(), 3);
+            assert_eq!(Explored::from_bits(level.width, level.height, &bits), Some(explored));
+        }
+        assert_eq!(Explored::from_bits(5, 4, &[0, 0]), None, "the wrong length is refused");
     }
 }

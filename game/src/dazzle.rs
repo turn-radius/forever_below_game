@@ -64,11 +64,14 @@ fn dazzle_the_delver(
     lights: Query<(&GlobalTransform, &PointLight)>,
     mut players: Query<(Entity, &Transform, Option<&mut DelverEffects>), With<Player>>,
     mut state: Local<(Adaptation, Option<f64>)>,
+    mut jumps: Local<u32>,
 ) {
     let (eyes, last) = &mut *state;
     let now = clock.game_seconds();
-    // A new delve restarts the clock below where this last stood.
-    let minutes = last.map_or(0.0, |was| if now < was { 0.0 } else { (now - was) / 60.0 });
+    // A new delve restarts the clock below where this last stood, and a clock set at a stroke (a
+    // delve resumed) lets no time pass.
+    let jumped = std::mem::replace(&mut *jumps, clock.jumps()) != clock.jumps();
+    let minutes = last.map_or(0.0, |was| if jumped || now < was { 0.0 } else { (now - was) / 60.0 });
     *last = Some(now);
     let Some((player, at, effects)) = players.iter_mut().next() else { return };
     let eye = at.translation + Vec3::Y * EYE_HEIGHT;
