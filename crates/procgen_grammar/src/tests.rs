@@ -185,3 +185,45 @@ fn golden_names() {
     assert_eq!(faction_name("human", "way_out", 3), "the Veil Assembly");
     assert_eq!(faction_name("pigfolk", "trade", 3), "the Hog League of Grain");
 }
+
+#[test]
+fn an_action_sets_a_key_and_writes_nothing() {
+    let g = Grammar::from_pairs(&[("origin", &["[sex:female]Daughters of the #place#"]), ("place", &["Gate"])]);
+    let e = expand_tagged(&g, "#origin#", 1).unwrap();
+    assert_eq!(e.text, "Daughters of the Gate");
+    assert_eq!(e.tag("sex"), Some("female"));
+    assert_eq!(e.tag("class"), None);
+    assert_eq!(expand(&g, "#origin#", 1).unwrap(), "Daughters of the Gate");
+    assert!(g.problems("#origin#").is_empty());
+}
+
+#[test]
+fn a_set_key_reads_back_and_its_value_expands() {
+    let g = Grammar::from_pairs(&[("origin", &["[who:#name#]#who# meets #who.capitalize#"]), ("name", &["ash", "bell"])]);
+    for seed in 0..10 {
+        let e = expand_tagged(&g, "#origin#", seed).unwrap();
+        let who = e.tag("who").unwrap().to_string();
+        assert_eq!(e.text, format!("{who} meets {}", apply_modifier("capitalize", &who).unwrap()));
+    }
+    assert!(g.problems("#origin#").is_empty());
+}
+
+#[test]
+fn an_action_deep_in_a_rule_reaches_the_result() {
+    let g = Grammar::from_pairs(&[("origin", &["the #kin#"]), ("kin", &["[sex:male]Sons", "[sex:male]Brothers"])]);
+    assert_eq!(expand_tagged(&g, "#origin#", 4).unwrap().tag("sex"), Some("male"));
+}
+
+#[test]
+fn a_bracket_that_is_not_an_action_is_text() {
+    let g = Grammar::from_pairs(&[("origin", &["a [b] c [d: e"])]);
+    assert_eq!(expand(&g, "#origin#", 1).unwrap(), "a [b] c [d: e");
+}
+
+#[test]
+fn rules_without_actions_set_nothing() {
+    let g = Grammar::from_pairs(&[("origin", &["#a# #a# #a#"]), ("a", &["x", "y", "z", "w"])]);
+    for seed in 0..20 {
+        assert!(expand_tagged(&g, "#origin#", seed).unwrap().tags.is_empty());
+    }
+}
