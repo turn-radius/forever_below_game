@@ -375,6 +375,53 @@ pub fn save_in_camp(bed: Entity) -> impl FnOnce(&mut World) {
     }
 }
 
+/// What the title finds on disk: the saved delve it may resume, and what it has to say about a
+/// save it could not read.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct SavedGame {
+    pub delve: Option<Box<SavedDelve>>,
+    /// One line for the title when the save was unreadable.
+    pub unreadable: Option<&'static str>,
+}
+
+/// The title's line when an unreadable save was renamed aside.
+pub const SET_ASIDE_LINE: &str = "Your saved delve could not be read, and was set aside.";
+
+/// The title's line when an unreadable save could not even be moved.
+pub const UNREADABLE_LINE: &str = "Your saved delve could not be read.";
+
+impl SavedGame {
+    /// What is saved at `path`: the delve, or nothing for no file, or a line about a file that is
+    /// not a delve, which is renamed aside ([`set_aside`]) so it is not met again. Never panics.
+    pub fn find(path: &Path) -> SavedGame {
+        match read(path) {
+            Ok(delve) => SavedGame { delve: Some(Box::new(delve)), unreadable: None },
+            Err(SaveError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => SavedGame::default(),
+            Err(error) => {
+                warn!("save: {} cannot be read ({error})", path.display());
+                let aside = set_aside(path);
+                SavedGame { delve: None, unreadable: Some(if aside.is_some() { SET_ASIDE_LINE } else { UNREADABLE_LINE }) }
+            }
+        }
+    }
+}
+
+/// Looks for a saved delve each time the title shows.
+fn find_saved_game(file: Res<SaveFile>, mut found: ResMut<SavedGame>) {
+    *found = file.0.as_deref().map(SavedGame::find).unwrap_or_default();
+}
+
+/// A command: the player is beginning a delve of their own from the title (the creator, or
+/// Continue as). It may save from now on, and it replaces any saved delve, which the title asked
+/// about first.
+pub fn begin_players_delve(world: &mut World) {
+    world.insert_resource(Saveable(true));
+    if let Some(path) = world.get_resource::<SaveFile>().and_then(|f| f.0.clone()) {
+        forget(&path);
+    }
+    world.insert_resource(SavedGame::default());
+}
+
 /// The saved delve a delve being begun resumes: the title puts it here ([`begin_resume`]) and the
 /// first frame of the delve takes it ([`restore_delve`]).
 #[derive(Resource, Clone, Debug)]
@@ -504,6 +551,8 @@ impl Plugin for SavePlugin {
             app.insert_resource(SaveFile(SaveFile::default_path()));
         }
         app.init_resource::<Saveable>()
+            .init_resource::<SavedGame>()
+            .add_systems(OnEnter(AppState::Title), find_saved_game)
             .configure_sets(Update, ResumeSet.before(DelveSystems).run_if(in_state(AppState::Delving)).run_if(resource_exists::<ResumeDelve>))
             .add_systems(Update, restore_delve.in_set(ResumeSet))
             .add_systems(Update, settle_hit_points.after(crate::combat::vitals::fit_hit_points).run_if(resource_exists::<SettleHitPoints>).in_set(DelveSystems))
@@ -704,5 +753,20 @@ mod tests {
             assert!(!may_touch(None));
             assert!(!may_touch(Some(&Saveable(false))));
         }
+    }
+
+    #[test]
+    fn a_save_is_found_for_the_title_or_set_aside_with_one_line() {
+        let path = scratch("find");
+        assert_eq!(SavedGame::find(&path), SavedGame::default(), "no file, no save, no line");
+        write(&path, &sample()).unwrap();
+        let found = SavedGame::find(&path);
+        assert_eq!(found.delve.as_deref(), Some(&sample()));
+        assert_eq!(found.unreadable, None);
+        std::fs::write(&path, "{ \"version\": 1, \"depth\"").unwrap();
+        let found = SavedGame::find(&path);
+        assert_eq!((found.delve, found.unreadable), (None, Some(SET_ASIDE_LINE)));
+        assert!(!path.exists() && path.with_file_name(ASIDE_NAME).exists());
+        assert_eq!(SavedGame::find(&path), SavedGame::default(), "and it is not met again");
     }
 }

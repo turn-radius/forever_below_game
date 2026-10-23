@@ -52,6 +52,15 @@ impl MenuPage {
     }
 }
 
+/// Which new delve is waiting on the answer to "Replace your saved delve?".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Replacing {
+    /// A new delver, from the creator.
+    NewDelve,
+    /// The last delver again, on a fresh level.
+    Continue,
+}
+
 /// What a menu button does when chosen.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuCommand {
@@ -65,6 +74,12 @@ pub enum MenuCommand {
     NewDelve,
     /// Begins a new delve as the last delver, from the title ([`crate::title::last_delver`]).
     Continue,
+    /// Resumes the saved delve, from the title ([`crate::save`]).
+    ResumeDelve,
+    /// Asks, from the title, whether a new delve may replace the saved one.
+    AskReplace(Replacing),
+    /// Answers the ask: keep the saved delve.
+    KeepSave,
     /// A button of the character creator ([`crate::title::creator`]).
     Creator(crate::title::creator::CreatorCommand),
     /// Waits for the key or button to put in this slot of the action.
@@ -404,7 +419,7 @@ fn apply_rebinds(
                     *rebinding = Rebinding::Idle;
                 }
             }
-            MenuCommand::Quit | MenuCommand::NewDelve | MenuCommand::Continue | MenuCommand::Creator(_) | MenuCommand::OpenChoices(_) | MenuCommand::Pick(..) => {}
+            MenuCommand::Quit | MenuCommand::NewDelve | MenuCommand::Continue | MenuCommand::ResumeDelve | MenuCommand::AskReplace(_) | MenuCommand::KeepSave | MenuCommand::Creator(_) | MenuCommand::OpenChoices(_) | MenuCommand::Pick(..) => {}
         }
     }
 }
