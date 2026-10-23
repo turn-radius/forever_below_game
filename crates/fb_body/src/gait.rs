@@ -112,6 +112,8 @@ pub struct Gait {
     leg_length: f32,
     /// How much each arm holds (0 free, 1 holding), right then left.
     hold: [f32; 2],
+    /// How far the spine rests bent forward (the race row's `stoop`), radians.
+    stoop: f32,
     /// How many bones the jointed tail has, if the body has one.
     tail: usize,
     /// How much of the foot's toe-down pitch a swing keeps: the pitch swings the foot about the
@@ -157,7 +159,7 @@ impl Gait {
             [false, true] => [0.0, 0.8],
             [false, false] => [0.0, 0.0],
         };
-        Gait { rig: rig.clone(), legs, scale: body.scale, height: body.height, leg_length: legs[0].hip[1] - legs[0].ankle[1], hold, tail: body.tail_joints().len(), pitch_k: ((0.048 * body.height) / body.ankle_y).min(1.0).powi(2) }
+        Gait { rig: rig.clone(), legs, scale: body.scale, height: body.height, leg_length: legs[0].hip[1] - legs[0].ankle[1], hold, stoop: body.race().stoop, tail: body.tail_joints().len(), pitch_k: ((0.048 * body.height) / body.ankle_y).min(1.0).powi(2) }
     }
 
     /// How far a step reaches.
@@ -230,6 +232,22 @@ impl Gait {
     /// at, so it keeps its bend and the body keeps its height.
     fn reach(leg: &Leg) -> f32 {
         (REACH * (leg.upper + leg.lower)).min(1.04 * vec3::distance(leg.hip, leg.ankle))
+    }
+
+    /// Bends the spine forward by the race's stoop, in `pose` (a pose's own rotations kept): the
+    /// waist and mid-chest share the lean, the head lifts back toward level, and the shoulders turn
+    /// back against it so the arms still hang straight down. Nothing for a body with none.
+    fn stoop(&self, pose: &mut RigPose) {
+        if self.stoop == 0.0 {
+            return;
+        }
+        let s = self.stoop;
+        let turn = |pose: &mut RigPose, joint: Joint, angle: f32| pose.rotation[joint.index()] = pose.rotation[joint.index()].mul(Quat::x(angle));
+        turn(pose, Joint::Spine, 0.4 * s);
+        turn(pose, Joint::Chest, 0.6 * s);
+        turn(pose, Joint::Head, -0.75 * s);
+        turn(pose, Joint::ShoulderL, -s);
+        turn(pose, Joint::ShoulderR, -s);
     }
 
     /// Sets the legs of `pose` for the pelvis at `at` turned by `pelvis`, each ankle at
@@ -306,6 +324,7 @@ impl Gait {
             pose.rotation[shoulder.index()] = Quat::x(swing);
             pose.rotation[elbow.index()] = Quat::x(-(0.12 + 0.4 * forward) * k * free);
         }
+        self.stoop(&mut pose);
         // A tail swings against the hips, each bone a little behind the one before.
         for i in 0..self.tail {
             pose.rotation[Joint::TAIL[i].index()] = Quat::y(0.2 * k * (a + 1.2 - 0.8 * i as f32).sin());
@@ -342,6 +361,7 @@ impl Gait {
         pose.rotation[Joint::Head.index()] = Quat::z(-0.1 * roll);
         // A breath lifts the chest and the shoulders hanging from it.
         pose.offset[Joint::Chest.index()] = [0.0, BREATH_LIFT * self.height * breath, 0.0];
+        self.stoop(&mut pose);
         // A tail sways slowly, now and then flicking.
         for i in 0..self.tail {
             pose.rotation[Joint::TAIL[i].index()] = Quat::y(0.09 * (TAU * 0.35 * t + cycle.shift_phase - 0.9 * i as f32).sin());

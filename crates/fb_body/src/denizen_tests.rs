@@ -263,3 +263,22 @@ fn every_outfit_fits_clear_of_the_skin() {
     }
     assert!(measured > 0, "no cloth was measured");
 }
+
+#[test]
+fn the_trunk_stoops_in_the_rest_pose_and_the_arms_still_hang() {
+    let body = minotaur(7);
+    let rig = Rig::of(&body);
+    let gait = Gait::new(&body, &rig);
+    let pose = gait.idle(&IdleCycle::of(1), 0.0);
+    let world = rig.world(&pose);
+    let head = Joint::Head.index();
+    let (rest, bent) = (rig.rest_at(Joint::Head), world[head].origin);
+    assert!(bent[2] > rest[2] + 1.0, "the neck's base leans forward: {rest:?} to {bent:?}");
+    let (shoulder, wrist) = (world[Joint::ShoulderL.index()].origin, world[Joint::WristL.index()].origin);
+    assert!((wrist[2] - shoulder[2]).abs() < 0.2 * (shoulder[1] - wrist[1]), "the arm hangs: {shoulder:?} {wrist:?}");
+    // A folk stands as it did.
+    let human = Body::new(&BodySpec::roll(Folk::Human, 3));
+    let hrig = Rig::of(&human);
+    let hpose = Gait::new(&human, &hrig).idle(&IdleCycle::of(1), 0.0);
+    assert!((hrig.world(&hpose)[head].origin[2] - hrig.rest_at(Joint::Head)[2]).abs() < 0.3);
+}

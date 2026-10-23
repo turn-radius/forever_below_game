@@ -1212,7 +1212,9 @@ fn tail_hole(body: &Body, drape: &LegDrape, side: f32) -> Option<LegHole> {
         let y = drape.hem + (drape.top - drape.hem) * k as f32 / rows as f32;
         for j in 0..96 {
             let a = TAU * j as f32 / 96.0;
-            if near(drape.point(side, a, y, 0.0)) {
+            let at = drape.point(side, a, y, 0.0);
+            // A jointed tail's root lies inside the hips: only the cloth behind it is cut.
+            if near(at) && (body.race().tail_shape.is_none() || at[2] < 0.0) {
                 hits.push((a, y));
             }
         }

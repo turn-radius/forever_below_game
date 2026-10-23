@@ -797,8 +797,8 @@ fn leaf_ear(face: &Face, sg: f32, size: f32, folded: bool, p: &mut Pieces) {
         return;
     }
     // A cupped leaf set below and behind the horn, out and drooping, its inside paler.
-    let l = 1.4 * size * h.half_width;
-    let w = 0.32 * l;
+    let l = 0.85 * size * h.half_width;
+    let w = 0.36 * l;
     let root = [h.centre[0] + sg * 0.86 * h.half_width, h.centre[1] + 0.18 * h.half_height, h.centre[2] - 0.3 * h.half_depth];
     let dir = vec3::normalize_or([sg * 1.0, -0.4, -0.45], vec3::X);
     let want = vec3::normalize_or([sg * 0.2, 0.25, 1.0], vec3::Z);

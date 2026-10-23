@@ -254,6 +254,12 @@ pub struct Race {
     /// Shoulders' breadth, over a human's at the same height.
     #[serde(default = "one")]
     pub shoulders: f32,
+    /// How far the spine bends forward at rest, radians: the chest and shoulders lean over the
+    /// hips, the head lifts back to look ahead and the arms still hang straight down. 0 for folk.
+    /// Applied in the rig's rest pose by the gait (`Gait::pose`), so the skin and every worn layer
+    /// lean with it through their weights.
+    #[serde(default)]
+    pub stoop: f32,
     /// Front-to-back depth of the chest and waist over a human's (a bull's deep barrel chest).
     #[serde(default = "one")]
     pub depth: f32,

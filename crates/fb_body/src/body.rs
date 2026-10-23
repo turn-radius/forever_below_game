@@ -665,8 +665,8 @@ impl Body {
             thigh_half_depth: (leg.radius * 1.08).max(top.front.max(top.back) * 1.04),
             // The thigh's own reach at the crotch each way (flat in front, full behind), not the
             // deeper of the two both ways, which stood the cloth out in front as a pouch.
-            thigh_front: top.front * 1.04,
-            thigh_back: top.back * 1.04,
+            thigh_front: top.front * if self.race().hooved() { 1.45 } else { 1.04 },
+            thigh_back: top.back * if self.race().hooved() { 1.45 } else { 1.04 },
             stance: leg.joints[2][0].abs(),
             sections: Some(sections),
             // A leg on its toes ends its cloth at the hock.
