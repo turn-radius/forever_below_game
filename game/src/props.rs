@@ -219,11 +219,15 @@ pub fn banner_hang(spot: &BannerSpot, level: &Level) -> (BannerState, f32) {
         (top, length.min(top - BANNER_OFF_FLOOR))
     };
     state.cloth.length = length;
-    // The hem takes the charge's colour, so it never clashes with the faction's tinctures.
-    let field = level.faction(spot.faction).field;
+    fly_colours(&mut state, level.faction(spot.faction).field);
+    (state, top.max(length + BANNER_OFF_FLOOR))
+}
+
+/// Paints `state` with exactly `field`, its hem in the charge's colour so it never clashes with
+/// the faction's tinctures. Shared with the lineup view's hall banner.
+pub fn fly_colours(state: &mut BannerState, field: armory::heraldry::Field) {
     state.hem.trim = field.charge_tincture;
     state.field = field;
-    (state, top.max(length + BANNER_OFF_FLOOR))
 }
 
 /// Where a banner's rod hangs: at its spot, `top` up, facing out from the wall.

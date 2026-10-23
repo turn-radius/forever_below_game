@@ -35,6 +35,7 @@ use forever_below::{
     frame_time::FrameTimeProbe,
     door_view::{DoorLab, DoorViewPlugin},
     doll_view::{DollChoice, DollMotion, DollSpin, DollViewPlugin},
+    lineup_view::{LineupChoice, LineupViewPlugin},
     forge_view::{Forge, ForgeViewPlugin},
     level_view::{LevelForge, LevelViewPlugin},
     lab_figure::LabFigurePlugin,
@@ -76,6 +77,9 @@ fn main() -> AppExit {
     }
     if args.iter().any(|a| a == "--turntable" || a.starts_with("--family")) {
         return run_turntable();
+    }
+    if args.iter().any(|a| a == "--lineup") {
+        return run_lineup(&args);
     }
     if args.iter().any(|a| a == "--doll") {
         return run_doll(&args);
@@ -155,6 +159,22 @@ fn run_turntable() -> AppExit {
     .add_plugins((ArmoryRenderPlugin, TurntablePlugin))
     .insert_resource(turntable)
     .insert_resource(focus);
+    if let Some(capture) = FrameCapturePlugin::from_env() {
+        app.add_plugins(capture);
+    }
+    app.run()
+}
+
+fn run_lineup(args: &[String]) -> AppExit {
+    let choice = match LineupChoice::from_args(args.iter().cloned()) {
+        Ok(choice) => choice,
+        Err(error) => {
+            eprintln!("forever_below: {error}");
+            return AppExit::error();
+        }
+    };
+    let mut app = App::new();
+    app.add_plugins(view_plugins()).add_plugins((ArmoryRenderPlugin, LineupViewPlugin)).insert_resource(choice);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
