@@ -34,7 +34,8 @@ pub fn kind_of(species: Species) -> CreatureKind {
         Species::PoisonousSnake | Species::ConstrictorSnake => CreatureKind::Snakes,
         Species::Skeleton => CreatureKind::Undead,
         Species::GiantSpider => CreatureKind::Spiders,
-        Species::Troll => CreatureKind::Trolls,
+        // The nearest kind there is until the denizens' own factions give them one.
+        Species::Troll | Species::Minotaur => CreatureKind::Trolls,
         Species::Jackalope => CreatureKind::Jackalopes,
         Species::GiantCentipede => CreatureKind::Centipedes,
         Species::Bat | Species::GiantBat => CreatureKind::Bats,

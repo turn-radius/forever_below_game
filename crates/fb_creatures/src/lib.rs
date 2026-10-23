@@ -1,7 +1,7 @@
 //! # fb_creatures
 //!
 //! Creatures of the abyss as plain data: rats, snakes, skeletons, giant spiders, trolls, jackalopes, giant
-//! centipedes and bats, something to fight.
+//! centipedes, bats and minotaurs, something to fight or to talk to.
 //!
 //! - [`centipede`] rolls a [`CentipedeState`]: a spine of plates, each with a pair of legs, a
 //!   head with antennae, simple eyes and forcipules, in a colouring and banding.
@@ -22,6 +22,11 @@
 //! - [`bat`] rolls a [`BatState`]: a bat or a giant bat with its wingspan, ear and nose shape,
 //!   coat and wing membrane; the first creatures that fly, hanging from the ceiling or beating
 //!   their wings at a height above the floor ([`pose::BatPose`]).
+//! - [`minotaur`] rolls a [`MinotaurState`]: a bull-headed giant half again a man's height, on
+//!   digitigrade legs ending in cloven hooves, the first of the denizens (intelligent folk of the
+//!   deep, who hold ground and are spoken to by gesture). [`denizen`] holds what the denizen
+//!   bodies share: the upright frame on a human's joints, horns, hooves, tails and hands, and
+//!   the mapping between [`fb_denizens::DenizenBody`] and [`Species`].
 //! - Each state builds a [`Rig`]: named bones, each carrying its own [`armory::ItemMesh`] built
 //!   from Armory geometry in the bone's own space, so the game can move the bones without a
 //!   skeleton (a rat's body, head, legs and tail; a snake's head, jaw, tongue and spine) or a
@@ -46,8 +51,10 @@
 
 pub mod bat;
 pub mod centipede;
+pub mod denizen;
 pub mod gear;
 pub mod jackalope;
+pub mod minotaur;
 pub mod pose;
 pub mod rat;
 pub mod rig;
@@ -62,6 +69,7 @@ pub use centipede::{CentipedeBanding, CentipedeColouring, CentipedeState};
 pub use rat::{RatColouring, RatPattern, RatState};
 pub use gear::{GearPiece, SkeletonGear};
 pub use jackalope::{JackalopeColouring, JackalopeState};
+pub use minotaur::MinotaurState;
 pub use rig::{Bone, Rig};
 pub use skeleton::SkeletonState;
 pub use snake::{SnakeColouring, SnakePattern, SnakeState};
@@ -172,6 +180,7 @@ pub enum Species {
     GiantCentipede,
     Bat,
     GiantBat,
+    Minotaur,
 }
 
 /// The six ability scores of a stat block.
@@ -263,7 +272,7 @@ pub struct StatBlock {
 }
 
 impl Species {
-    pub const ALL: [Species; 11] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll, Species::Jackalope, Species::GiantCentipede, Species::Bat, Species::GiantBat];
+    pub const ALL: [Species; 12] = [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll, Species::Jackalope, Species::GiantCentipede, Species::Bat, Species::GiantBat, Species::Minotaur];
 
     /// The SRD 5.1 stat block, read from the CC-BY-4.0 PDF ([`SRD`]):
     ///
@@ -299,6 +308,12 @@ impl Species {
     ///   STR 18 DEX 13 CON 20 INT 7 WIS 9 CHA 7, darkvision 60 ft., Challenge 5 (1,800 XP);
     ///   Multiattack: Bite +7 to hit, 7 (1d6 + 4) piercing, and two Claws +7 to hit, 14
     ///   (2d6 + 4) slashing each ([`troll::CLAW`]). Its Regeneration is [`troll::Regeneration`].
+    /// - [Minotaur, p. 333](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=333):
+    ///   Large monstrosity, Armor Class 14 (natural armor), Hit Points 76 (9d10 + 27), Speed 40
+    ///   ft., STR 18 DEX 11 CON 16 INT 6 WIS 16 CHA 9, darkvision 60 ft., Challenge 3 (700 XP);
+    ///   Greataxe: +6 to hit, reach 5 ft., 17 (2d12 + 4) slashing ([`minotaur::GREATAXE`]), and
+    ///   Gore: +6 to hit, reach 5 ft., 13 (2d8 + 4) piercing, which is [`StatBlock::bite`]. Its
+    ///   Charge, Reckless and Labyrinthine Recall wait for later.
     /// - Jackalope: the SRD has none, so the block is our own. Small beast, Armor Class 14, Hit
     ///   Points 9 (2d6 + 2), Speed 50 ft., darkvision 60 ft., Challenge 1/4 (50 XP); Antlers: +4
     ///   to hit, 5 (1d6 + 2) piercing. A giant rat's Small frame
@@ -555,6 +570,27 @@ impl Species {
                 xp: 50,
                 page: 373,
             },
+            Species::Minotaur => StatBlock {
+                name: "Minotaur",
+                size: Size::Large,
+                abilities: ab(18, 11, 16, 6, 16, 9),
+                hit_points: 76,
+                hit_dice: Dice::new(9, 10, 27),
+                speed_feet: 40.0,
+                fly_speed_feet: 0.0,
+                armour_class: 14,
+                attack_bonus: 6,
+                bite: Dice::new(2, 8, 4),
+                ranged: None,
+                vulnerabilities: &[],
+                immunities: &[],
+                condition_immunities: &[],
+                venom: None,
+                senses_feet: 60.0,
+                challenge: "3",
+                xp: 700,
+                page: 333,
+            },
         }
     }
 
@@ -582,7 +618,7 @@ impl Species {
             Species::Skeleton => Foe::Undead,
             Species::GiantSpider => Foe::Spider,
             Species::PoisonousSnake | Species::ConstrictorSnake => Foe::Serpent,
-            Species::Jackalope => Foe::Beast,
+            Species::Jackalope | Species::Minotaur => Foe::Beast,
             Species::Troll => Foe::Troll,
         }
     }
@@ -605,6 +641,24 @@ impl Species {
 
     pub fn is_troll(self) -> bool {
         self == Species::Troll
+    }
+
+    pub fn is_minotaur(self) -> bool {
+        self == Species::Minotaur
+    }
+
+    /// The denizen body this species is, if it is one: the bodies of `fb_denizens` that have a
+    /// species built so far. Cyclopes, fauns and demons wait for later.
+    pub fn denizen_body(self) -> Option<fb_denizens::DenizenBody> {
+        match self {
+            Species::Minotaur => Some(fb_denizens::DenizenBody::Minotaur),
+            _ => None,
+        }
+    }
+
+    /// The species that is the denizen body `body`; `None` for a body not built yet.
+    pub fn of_denizen(body: fb_denizens::DenizenBody) -> Option<Species> {
+        Species::ALL.into_iter().find(|s| s.denizen_body() == Some(body))
     }
 
     pub fn is_jackalope(self) -> bool {
@@ -633,7 +687,7 @@ impl Species {
     }
 }
 
-/// One creature: a rat, a snake, a skeleton, a spider, a troll, a jackalope or a centipede, rolled from a seed.
+/// One creature: a rat, a snake, a skeleton, a spider, a troll, a jackalope, a centipede, a bat or a minotaur, rolled from a seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Creature {
     Rat(RatState),
@@ -644,6 +698,7 @@ pub enum Creature {
     Jackalope(JackalopeState),
     Centipede(CentipedeState),
     Bat(BatState),
+    Minotaur(MinotaurState),
 }
 
 impl Creature {
@@ -659,6 +714,8 @@ impl Creature {
             Creature::Spider(SpiderState::roll(seed))
         } else if species.is_troll() {
             Creature::Troll(TrollState::roll(seed))
+        } else if species.is_minotaur() {
+            Creature::Minotaur(MinotaurState::roll(seed))
         } else if species.is_jackalope() {
             Creature::Jackalope(JackalopeState::roll(seed))
         } else if species.is_centipede() {
@@ -678,6 +735,7 @@ impl Creature {
             Creature::Jackalope(_) => Species::Jackalope,
             Creature::Centipede(c) => c.species,
             Creature::Bat(b) => b.species,
+            Creature::Minotaur(_) => Species::Minotaur,
         }
     }
 
@@ -691,6 +749,7 @@ impl Creature {
             Creature::Jackalope(j) => j.seed,
             Creature::Centipede(c) => c.seed,
             Creature::Bat(b) => b.seed,
+            Creature::Minotaur(m) => m.seed,
         }
     }
 
@@ -705,6 +764,7 @@ impl Creature {
             Creature::Jackalope(j) => j.build(),
             Creature::Centipede(c) => c.build(),
             Creature::Bat(b) => b.build(),
+            Creature::Minotaur(m) => m.build(),
         }
     }
 
@@ -720,6 +780,7 @@ impl Creature {
             Creature::Jackalope(j) => j.radius(),
             Creature::Centipede(c) => c.radius(),
             Creature::Bat(b) => b.radius(),
+            Creature::Minotaur(m) => m.radius(),
         }
     }
 }
@@ -760,6 +821,11 @@ pub fn centipede(seed: u32) -> CentipedeState {
     CentipedeState::roll(seed)
 }
 
+/// A minotaur rolled from `seed`.
+pub fn minotaur(seed: u32) -> MinotaurState {
+    MinotaurState::roll(seed)
+}
+
 /// A bat or a giant bat rolled from `seed`; one in five is a giant bat. Our own odds.
 pub fn bat(seed: u32) -> BatState {
     BatState::roll(seed)
@@ -780,6 +846,34 @@ mod tests {
         assert_eq!(Species::Skeleton.foe(), Foe::Undead);
         assert_eq!(Species::ConstrictorSnake.foe(), Foe::Serpent);
         assert_eq!(Species::Jackalope.foe(), Foe::Beast);
+    }
+
+    #[test]
+    fn the_minotaur_stat_block_is_the_srd_numbers() {
+        let m = Species::Minotaur.stat_block();
+        assert_eq!((m.name, m.size, m.armour_class, m.hit_points, m.hit_dice, m.speed_feet, m.fly_speed_feet), ("Minotaur", Size::Large, 14, 76, Dice::new(9, 10, 27), 40.0, 0.0));
+        assert_eq!((m.abilities.strength, m.abilities.dexterity, m.abilities.constitution, m.abilities.intelligence, m.abilities.wisdom, m.abilities.charisma), (18, 11, 16, 6, 16, 9));
+        assert_eq!((m.senses_feet, m.challenge, m.xp, m.attack_bonus, m.bite, m.page), (60.0, "3", 700, 6, Dice::new(2, 8, 4), 333));
+        assert_eq!(minotaur::GREATAXE, Dice::new(2, 12, 4));
+        assert_eq!((m.bite.average(), minotaur::GREATAXE.average(), m.hit_dice.average()), (13, 17, 76));
+        assert!(Species::Minotaur.is_minotaur() && !Species::Troll.is_minotaur());
+        // 40 ft. a round is 20 units a second, a little over 20.3 as 40 * 3.048 / 6.
+        assert!((Species::Minotaur.speed() - 20.32).abs() < 0.01);
+        assert_eq!(Creature::of(Species::Minotaur, 5).species(), Species::Minotaur);
+        assert_eq!(Creature::of(Species::Minotaur, 5).seed(), 5);
+    }
+
+    #[test]
+    fn species_and_denizen_bodies_map_both_ways() {
+        use fb_denizens::DenizenBody;
+        assert_eq!(Species::Minotaur.denizen_body(), Some(DenizenBody::Minotaur));
+        assert_eq!(Species::of_denizen(DenizenBody::Minotaur), Some(Species::Minotaur));
+        // The bodies not built yet have no species, and no other species is a denizen.
+        for body in [DenizenBody::Cyclops, DenizenBody::Faun, DenizenBody::WingedDemon, DenizenBody::HornedDemon, DenizenBody::Succubus] {
+            assert_eq!(Species::of_denizen(body), None, "{body:?}");
+        }
+        assert!(Species::ALL.iter().filter(|s| s.denizen_body().is_some()).all(|&s| Species::of_denizen(s.denizen_body().unwrap()) == Some(s)));
+        assert_eq!(Species::ALL.iter().filter(|s| s.denizen_body().is_some()).count(), 1);
     }
 
     #[test]

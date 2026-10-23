@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 armory = { workspace = true }
 fb_body = { workspace = true }
+fb_denizens = { workspace = true }
 fb_items = { workspace = true }
 procgen_rng = { workspace = true }
 serde = { workspace = true }

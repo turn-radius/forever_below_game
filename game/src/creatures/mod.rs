@@ -921,6 +921,17 @@ pub fn animate(
                     pose::troll_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)
                 }
             }
+            Creature::Minotaur(minotaur) => {
+                // Measured each frame: minotaurs are not placed in levels yet, and keep their
+                // dimensions on the body, as a troll does, when they are.
+                let dims = minotaur.dims();
+                if intent.fallen > 0.0 {
+                    pose::minotaur_fallen(&dims, intent.fallen)
+                } else {
+                    motion.cycle = (motion.cycle + strode / pose::minotaur_stride(&dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                    pose::minotaur_with(&dims, &pose::DenizenPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, swing: intent.swing, gore: (now.strike > 0.0).then_some(now.strike), gesture: None, look: now.look, jaw: now.jaw })
+                }
+            }
             Creature::Centipede(centipede) => {
                 // The legs step once a stride, and the body's wave goes with them.
                 motion.cycle = (motion.cycle + strode / pose::centipede_stride(centipede) * std::f32::consts::TAU) % std::f32::consts::TAU;
@@ -1078,6 +1089,7 @@ mod tests {
                     Creature::Skeleton(s) => s.height(),
                     Creature::Spider(s) => s.span,
                     Creature::Troll(t) => t.height(),
+                    Creature::Minotaur(m) => m.height(),
                     Creature::Jackalope(j) => j.length,
                     Creature::Centipede(c) => c.girth * 4.0,
                     Creature::Bat(b) => b.length,

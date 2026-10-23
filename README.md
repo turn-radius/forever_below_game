@@ -126,9 +126,9 @@ cargo run -p forever_below -- --skeleton --seed 7 --motion swing
 
 One rat, snake or skeleton on the turntable's plate, posed and animated as in the level, with its SRD armor class, hit points and bite (a skeleton's shortsword). `--skeleton` is the view opened on a skeleton: roll seeds with Left and Right to see the bones' colour, cracks and missing pieces, and the gear the seed rolls it (`--bare` takes it off; G toggles it).
 
-- `--species <name>`: rat (the default), giant_rat, viper (the poisonous snake), constrictor or skeleton.
+- `--species <name>`: rat (the default), giant_rat, viper (the poisonous snake), constrictor, skeleton, giant_spider, troll, jackalope, giant_centipede, bat, giant_bat or minotaur.
 - `--seed <n>` rolls the creature; 1207 by default.
-- `--motion <name>`: still (the default), moving (trotting, slithering or walking in place at its own speed), rearing or striking. A skeleton has three: still (`stand`), moving (`walk`) and striking (`swing`, the right arm's blow).
+- `--motion <name>`: still (the default), moving (trotting, slithering or walking in place at its own speed), rearing or striking. A skeleton has three: still (`stand`), moving (`walk`) and striking (`swing`, the right arm's blow). A minotaur has five: stand, walk, swing (a two-handed chop), gore (its horns) and gesture (how it talks); `FB_VIEW_ANGLE=90` holds the turn at an angle for a capture from the side.
 
 Tab and Shift+Tab change the species, Left and Right the seed, M the motion, G a skeleton's gear, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 
@@ -297,6 +297,7 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[creatures.size]` | `giant_centipede` | 1.0 | Giant centipedes, as a multiple. |
 | `[creatures.size]` | `bat` | 1.0 | Bats, as a multiple. |
 | `[creatures.size]` | `giant_bat` | 1.0 | Giant bats, as a multiple. |
+| `[creatures.size]` | `minotaur` | 1.0 | Minotaurs, as a multiple. |
 | `[combat]` | `reach_scale` | 1.0 | How far your blows reach, as a multiple of the weapon's own reach. |
 | `[combat]` | `hit_cone_degrees` | 50.0 | Half the angle of the cone ahead a blow can land in, in degrees either side of the crosshair. |
 | `[combat]` | `flash_hold` | 0.12 | Seconds a struck creature's flash holds at full. |

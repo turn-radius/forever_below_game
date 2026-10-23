@@ -114,6 +114,7 @@ pub fn species(s: Species) -> Thing {
         Species::GiantCentipede => ("giant centipede", "giant centipedes"),
         Species::Bat => ("bat", "bats"),
         Species::GiantBat => ("giant bat", "giant bats"),
+        Species::Minotaur => ("minotaur", "minotaurs"),
     };
     Thing::new(one, many)
 }

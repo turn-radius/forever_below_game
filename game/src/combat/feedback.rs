@@ -169,6 +169,7 @@ pub fn knockback(creature: &Creature) -> f32 {
         Creature::Jackalope(j) => j.drawn_size(),
         Creature::Centipede(c) => c.drawn_size(),
         Creature::Bat(b) => b.drawn_size(),
+        Creature::Minotaur(m) => m.drawn_size(),
     };
     knockback_for(size)
 }
@@ -381,6 +382,12 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
                 let share = collapse_share(corpse.since, hold);
                 intent.fallen = share.max(1e-3);
                 *transform = laid_back(2.0 * troll.map_or(25.0, |t| t.height), &corpse.fell, share);
+            }
+            Creature::Minotaur(minotaur) => {
+                // Over backwards onto its back, as a troll falls.
+                let share = collapse_share(corpse.since, hold);
+                intent.fallen = share.max(1e-3);
+                *transform = laid_back(2.0 * minotaur.height(), &corpse.fell, share);
             }
             Creature::Jackalope(jackalope) => *transform = tipped_over(jackalope, &corpse.fell, collapse_share(corpse.since, hold)),
             Creature::Spider(spider) => {
