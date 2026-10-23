@@ -169,13 +169,14 @@ impl Item {
     /// made at an enchanter's bench (`Legend::made`) is left as it is, as it tells its making, not
     /// a found relic. A note with nothing written on it is written on, of the level
     /// ([`crate::notes::write_note`]), or now and then with a rumour of the denizens
-    /// ([`crate::tongues::rumour`]); one already written keeps its words wherever it goes. Pure
+    /// ([`crate::tongues::rumour`]) or, deep down, of the level's denizen factions ([`crate::tongues::knowledge`]); one already written keeps its words wherever it goes. Pure
     /// in the item's seed and the lore, and a no-op for anything else.
     pub fn in_world(mut self, lore: &Lore) -> Item {
         if self.words.is_none() && self.is_note() {
-            self.words = Some(match crate::tongues::rumour(self.seed, lore.depth) {
-                Some((_, rumour)) => rumour,
-                None => crate::notes::write_note(self.seed, lore),
+            self.words = Some(match (crate::tongues::rumour(self.seed, lore.depth), crate::tongues::knowledge(self.seed, lore)) {
+                (Some((_, rumour)), _) => rumour,
+                (None, Some(known)) => known,
+                (None, None) => crate::notes::write_note(self.seed, lore),
             });
         }
         let factions = &lore.factions;

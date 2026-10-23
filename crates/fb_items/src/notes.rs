@@ -86,6 +86,8 @@ pub struct Lore {
     pub books: Vec<Book>,
     /// The tongues of the denizen factions on it, one for each kind, if any.
     pub tongues: Vec<fb_denizens::DenizenKind>,
+    /// The denizen factions on it, as the grammar names them, with their kind.
+    pub denizens: Vec<(String, fb_denizens::DenizenKind)>,
 }
 
 /// The kinds of note, each an `origin` symbol of `data/notes.json`.
@@ -264,6 +266,7 @@ mod tests {
             traders: vec![Trader { name: "Bera Holt".into(), faction: "the Ash Choir".into(), trade: "alchemist".into(), wares: "alchemist".into() }],
             books: vec![Book { place: Some("library".into()), teaches: Stat::Dexterity }],
             tongues: vec![],
+            denizens: vec![],
         }
     }
 

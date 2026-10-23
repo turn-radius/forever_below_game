@@ -10,7 +10,7 @@
 use armory::ItemMesh;
 use bevy::prelude::*;
 use fb_items::{Item, Odds};
-use fb_level::{Level, Prop};
+use fb_level::Level;
 
 use crate::creatures::{Built, build_creatures};
 use crate::level::FixtureShapes;
@@ -57,20 +57,10 @@ impl Staging {
             .iter()
             .map(|spot| {
                 let (mesh, appearance) = prop_mesh(spot, level, false);
-                StagedProp { mesh, appearance, contents: contents_of(spot.prop, odds, &lore) }
+                StagedProp { mesh, appearance, contents: level.container_contents(spot, odds, &lore) }
             })
             .collect();
         Staging { creatures, items, props, fixtures: FixtureShapes::make(level), odds }
-    }
-}
-
-/// What `prop` holds when its loot rolls against `odds`: nothing for scenery or a stall set out
-/// empty ([`fb_level::NO_LOOT`]).
-fn contents_of(prop: Prop, odds: Odds, lore: &fb_items::notes::Lore) -> Vec<Item> {
-    match prop {
-        Prop::Container { loot, .. } if loot == fb_level::NO_LOOT => Vec::new(),
-        Prop::Container { style, loot, .. } => fb_items::roll_contents(style, loot, odds).into_iter().map(|i| i.in_world(lore)).collect(),
-        Prop::Scenery { .. } | Prop::Campfire { .. } => Vec::new(),
     }
 }
 
@@ -129,7 +119,7 @@ impl Staged {
         if self.odds != odds {
             let lore = level.lore();
             for (staged, spot) in props.iter_mut().zip(&level.props) {
-                staged.contents = contents_of(spot.prop, odds, &lore);
+                staged.contents = level.container_contents(spot, odds, &lore);
             }
         }
         Some(props)
@@ -170,7 +160,7 @@ mod tests {
         assert!(staged.take_items(&level, after).is_none(), "the floor is rolled in place");
         let props = staged.take_props(&level, after).expect("the shapes still serve");
         for (spot, prop) in level.props.iter().zip(&props) {
-            assert_eq!(prop.contents, contents_of(spot.prop, after, &level.lore()), "{spot:?}");
+            assert_eq!(prop.contents, level.container_contents(spot, after, &level.lore()), "{spot:?}");
         }
     }
 
@@ -209,7 +199,7 @@ mod tests {
                 // A container stocked from the staged contents holds what one stocked in place does.
                 let (mut ahead, mut here) = (Inventory::default(), Inventory::default());
                 let stocked_ahead = stock_container_with(&mut ahead, spot.prop, staged.contents.clone());
-                let stocked_here = stock_container(&mut here, spot.prop, Odds::loot(depth), &level.lore());
+                let stocked_here = stock_container(&mut here, spot, Odds::loot(depth), &level, &level.lore());
                 assert_eq!(stocked_ahead.is_some(), stocked_here.is_some());
                 if let (Some(a), Some(h)) = (stocked_ahead, stocked_here) {
                     let (a, h) = (record_contents(&ahead, a), record_contents(&here, h));

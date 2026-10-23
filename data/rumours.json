@@ -16,7 +16,6 @@
   "A low bellowing from the stair, answered from far below",
   "Bronze rings and a smell of wet hide in the dark of the stair"
  ],
-
  "rumour_cyclops": [
   "They say giants with one great eye keep the deep halls past the #stair# stair, and that they build on a scale no mason here could follow.",
   "I heard a voice come up the #stair# stair that shook the dust from the lintel. The old hands call them the one-eyed, and they say the one-eyed #cyclops_deal#.",
@@ -34,7 +33,6 @@
   "Stone blocks too large for any cart, stacked beyond the #stair# stair",
   "A lamp the size of a cart wheel burning far down"
  ],
-
  "rumour_faun": [
   "They say the #stair# stair lets out in a green dark, where goat-legged folk pipe among the roots and #faun_deal#.",
   "Someone left a reed pipe on the #stair# stair, and the notes it gave were not any tune I knew. The fauns, they say, #faun_deal#.",
@@ -52,7 +50,6 @@
   "Pipes somewhere below, and a smell of green wine",
   "Cloven prints leading down, and a trailing garland of ivy"
  ],
-
  "rumour_demon": [
   "They say there is a people below the #stair# stair that no priest will name, winged and horned, who #demon_deal#.",
   "I will not write all I heard past the #stair# stair. #demon_sign.capitalize#. The pit-folk #demon_deal#, and they keep their word to the letter.",
@@ -70,6 +67,30 @@
   "Scorched stone and a hiss in the dark",
   "Claw marks on the lintel, scored from the far side"
  ],
-
- "stair": ["ninth", "ninth", "last", "deepest known"]
+ "stair": [
+  "ninth",
+  "ninth",
+  "last",
+  "deepest known"
+ ],
+ "knows_minotaur": [
+  "#faction.capitalize# hold the halls past the flooded stair, minotaurs every one. Bring bronze if you mean to trade with them.",
+  "The minotaurs of #faction# keep to their maze and mind their bargains. Greet them in their own speech or not at all.",
+  "I sold a lamp to #faction#, bull-headed folk, and was paid fairly. They are a people who #minotaur_deal#."
+ ],
+ "knows_cyclops": [
+  "#faction.capitalize# are cyclopes, and they hold these deep halls as their own. Do not stare at the eye.",
+  "The one-eyed folk of #faction# built what you walk through. They #cyclops_deal#.",
+  "I met a cyclops of #faction# who spoke slowly and weighed every word. They #cyclops_deal#."
+ ],
+ "knows_faun": [
+  "#faction.capitalize# are fauns, and a guest who brings a gift is welcome at their fires. They #faun_deal#.",
+  "The goat-legged folk of #faction# pipe in the dark and trade in herbs. Learn a few words of Sylvan before you go in.",
+  "I slept one night under the roof of #faction#, fauns all, and woke to a song. They #faun_deal#."
+ ],
+ "knows_demon": [
+  "#faction.capitalize# are demons, and they hold this ground. Mind what you promise them, for they #demon_deal#.",
+  "The demons of #faction# keep to their black halls. Learn their harsh speech or say nothing at all.",
+  "I will say it plainly: #faction# are demons, and they #demon_deal#."
+ ]
 }

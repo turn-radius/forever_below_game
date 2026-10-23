@@ -268,12 +268,17 @@ fn heading(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, title: &str) {
 
 /// A row: its label in the body face, then what `fill_row` puts after it.
 fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Option<usize>, fill_row: impl FnOnce(&mut ChildSpawnerCommands)) {
+    row_labelled(parent, fonts, label, gear, Node { width: px(LABEL_PX), flex_shrink: 0.0, ..default() }, fill_row);
+}
+
+/// [`row`] with the label's box given: the tongues section lets it size to its words.
+fn row_labelled(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Option<usize>, label_box: Node, fill_row: impl FnOnce(&mut ChildSpawnerCommands)) {
     let mut row = parent.spawn(Node { align_items: AlignItems::Center, column_gap: px(12), min_height: px(22), ..default() });
     if let Some(i) = gear {
         row.insert(GearRow(i));
     }
     row.with_children(|row| {
-        row.spawn(Node { width: px(LABEL_PX), flex_shrink: 0.0, ..default() }).with_child((Text::new(label), UiFonts::style(&fonts.body, 15.0, MUTED)));
+        row.spawn(label_box).with_child((Text::new(label), UiFonts::style(&fonts.body, 15.0, MUTED)));
         fill_row(row);
     });
 }
@@ -601,20 +606,23 @@ pub fn tongue_summary(lexicon: &fb_denizens::tongue::Lexicon, kind: fb_denizens:
 /// Fills the sheet's tongues section from the lexicon in the delve record: one row for each
 /// tongue with any word learned, and nothing at all (no heading) before that. Rebuilt only when
 /// the section is new or the record changed.
-pub fn update_tongues(mut commands: Commands, record: Option<Res<crate::record::WorldRecord>>, lists: Query<(Entity, Ref<TongueList>)>, fonts: Res<UiFonts>) {
+pub fn update_tongues(mut commands: Commands, record: Option<Res<crate::record::WorldRecord>>, mut lists: Query<(Entity, Ref<TongueList>, &mut Node)>, fonts: Res<UiFonts>) {
     let changed = record.as_ref().is_some_and(|r| r.is_changed());
-    for (list, added) in &lists {
+    for (list, added, mut node) in &mut lists {
         if !changed && !added.is_added() {
             continue;
         }
         let lexicon = record.as_deref().map(|r| r.lexicon());
         let known: Vec<fb_denizens::DenizenKind> = lexicon.map(|l| fb_denizens::DenizenKind::ALL.into_iter().filter(|&k| l.known_share(k) > 0.0).collect()).unwrap_or_default();
+        // Empty, the section takes no room, not even the gap the sheet leaves between sections.
+        node.display = if known.is_empty() { Display::None } else { Display::Flex };
         commands.entity(list).despawn_children().with_children(|list| {
             let Some(lexicon) = lexicon.filter(|_| !known.is_empty()) else { return };
             heading(list, &fonts, "tongues");
             for kind in known {
                 let (share, can) = tongue_summary(lexicon, kind);
-                row(list, &fonts, fb_denizens::tongue::tongue_name(kind), None, |row| {
+                let label_box = Node { min_width: px(LABEL_PX), flex_shrink: 0.0, ..default() };
+                row_labelled(list, &fonts, fb_denizens::tongue::tongue_name(kind), None, label_box, |row| {
                     row.spawn((Text::new(share), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
                     if !can.is_empty() {
                         row.spawn((Text::new(can), UiFonts::style(&fonts.body, 14.0, MUTED)));
@@ -731,7 +739,7 @@ mod tests {
     fn the_tongues_section_fills_once_a_word_is_learned() {
         let mut app = App::new();
         app.init_resource::<UiFonts>().init_resource::<crate::record::WorldRecord>().add_systems(Update, update_tongues);
-        let list = app.world_mut().spawn(TongueList).id();
+        let list = app.world_mut().spawn((TongueList, Node::default())).id();
         app.update();
         assert!(app.world().get::<Children>(list).is_none(), "no heading before a word is known");
         let teaching = crate::reading::teaching_for_capture("demon:scroll:4", 0).unwrap();
