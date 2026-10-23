@@ -12,6 +12,8 @@
 //! | Door | Open or Close | Lock or Unlock, holding its key | Pick the lock, holding lockpicks | |
 //! | Container | Open, or Look in once it stands open | Lock or Unlock, holding its key | Pick the lock, holding lockpicks | |
 //! | Folk | Talk | Barter | Steal, while hidden | |
+//! | Bedroll or tent in the pack | Lay out, or Pitch | Equip, if it can be | | |
+//! | Bedroll or tent set down | | | | |
 //! | Stair | Go down or Go up | | | |
 //!
 //! Hang at hip sends something that can hang from the belt (a lantern) straight to the hip,
@@ -89,6 +91,10 @@ pub enum Verb {
     PutOut,
     Refill,
     Read,
+    /// Unroll a bedroll from the pack onto the floor in front of the delver (`crate::camp`).
+    LayOut,
+    /// Pitch a tent from the pack on the floor in front of the delver (`crate::camp`).
+    Pitch,
     HangAtHip,
     Open,
     LookIn,
@@ -117,6 +123,8 @@ impl Verb {
             Verb::PutOut => "Put out",
             Verb::Refill => "Refill",
             Verb::Read => "Read",
+            Verb::LayOut => "Lay out",
+            Verb::Pitch => "Pitch",
             Verb::HangAtHip => "Hang at hip",
             Verb::Open => "Open",
             Verb::LookIn => "Look in",
@@ -231,6 +239,8 @@ pub enum Target {
     Stair {
         down: bool,
     },
+    /// A bedroll or tent set down in the level (`crate::camp`).
+    Camp,
 }
 
 /// What the lookup needs of the delver. Keys, lockpicks and hiding are not in the game yet, so
@@ -262,6 +272,7 @@ pub fn verbs_for(target: &Target, delver: &Delver) -> Verbs {
         Target::Switch => Verbs { primary: Some(Verb::Pull), ..Verbs::default() },
         Target::Folk => Verbs { primary: Some(Verb::Talk), secondary: Some(Verb::Barter), tertiary: delver.hidden.then_some(Verb::Steal), ..Verbs::default() },
         Target::Stair { down } => Verbs { primary: Some(if down { Verb::GoDown } else { Verb::GoUp }), ..Verbs::default() },
+        Target::Camp => Verbs::default(),
     }
 }
 
@@ -278,9 +289,16 @@ fn locks(lock: Lock, delver: &Delver) -> Verbs {
     }
 }
 
-/// What using `item` does: eat or drink it, light it or put it out, refill a lantern from it, or
-/// read it if it is a book or has words written on it.
+/// What using `item` does: eat or drink it, light it or put it out, refill a lantern from it, read
+/// it if it is a book or has words written on it, or set it down if it is a bedroll or a tent.
 pub fn use_of(item: &Item) -> Option<Verb> {
+    // A bedroll or tent in the pack is set down on the floor to sleep in.
+    if let Some(camp) = item.camp().filter(|_| !item.is_set_camp()) {
+        return Some(match camp {
+            fb_items::camp::Camp::Bedroll => Verb::LayOut,
+            fb_items::camp::Camp::Tent => Verb::Pitch,
+        });
+    }
     if item.lesson().is_some() || item.words.is_some() {
         return Some(Verb::Read);
     }
@@ -315,6 +333,9 @@ pub fn use_of(item: &Item) -> Option<Verb> {
 /// `None` if the inventory does not know it.
 pub fn item_target(inventory: &Inventory, id: ItemId) -> Option<Target> {
     let item = inventory.item(id)?;
+    if item.is_set_camp() {
+        return Some(Target::Camp);
+    }
     let place = match inventory.location(id)? {
         Location::Worn(_) => Place::Worn,
         Location::In { .. } if inventory.is_carried(id) => Place::Carried,

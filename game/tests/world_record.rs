@@ -171,6 +171,59 @@ fn an_item_dropped_on_the_level_below_is_still_there_after_up_and_down_again() {
     }
 }
 
+/// Sets `base` from the pack down in front of the delver at the level's start, as the inventory
+/// screen's F does, and lets the floor change land.
+fn set_camp(app: &mut App, base: &str, seed: u32) -> ItemId {
+    let lvl = level(app).clone();
+    let blocked = app.world().resource::<forever_below::play::BlockedCells>().clone();
+    let obstacles = app.world().resource::<forever_below::play::Obstacles>().0.clone();
+    // The first open floor with room ahead for the biggest tent.
+    let roomy = Vec2::new(10.5, 8.5);
+    let (feet, forward) = (0..lvl.height as i32)
+        .flat_map(|y| (0..lvl.width as i32).map(move |x| (x, y)))
+        .filter(|&(x, y)| lvl.cell(x, y) == fb_level::Cell::Floor)
+        .flat_map(|(x, y)| [fb_level::Facing::North, fb_level::Facing::East, fb_level::Facing::South, fb_level::Facing::West].map(move |f| (x, y, f)))
+        .map(|(x, y, f)| (Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * fb_level::CELL, Vec2::new(f.step().0 as f32, f.step().1 as f32)))
+        .find(|&(feet, forward)| forever_below::camp::check_site(&forever_below::camp::site_ahead(feet, forward, roomy), &lvl, &blocked, &obstacles, &[]).is_ok())
+        .expect("somewhere in the level a camp fits");
+    let id = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item(base, seed).unwrap());
+    let mut changes = FloorChanges::default();
+    let said = forever_below::camp::lay_out(&mut app.world_mut().resource_mut::<Inventory>(), &mut changes, id, feet, forward, &lvl, &blocked, &obstacles, &[]);
+    assert!(said.is_ok(), "{base}: {said:?}");
+    app.world_mut().resource_mut::<FloorChanges>().0.extend(changes.0);
+    run(app, 5);
+    id
+}
+
+/// The set camps lying in the level: what each is, and whether it blocks the way.
+fn camps(app: &mut App) -> Vec<(fb_items::camp::Camp, bool)> {
+    let world = app.world_mut();
+    let found: Vec<_> = world.query::<(&forever_below::camp::SetCamp, &FloorItem, Option<&Children>)>().iter(world).map(|(c, _, kids)| (c.camp, kids.map_or(vec![], |k| k.to_vec()))).collect();
+    found.into_iter().map(|(camp, kids)| (camp, kids.into_iter().any(|k| world.get::<forever_below::play::BlocksTheWay>(k).is_some()))).collect()
+}
+
+#[test]
+fn a_set_bedroll_and_a_pitched_tent_are_still_set_after_leaving_and_returning() {
+    for (base, blocks) in [("Bedroll", false), ("Tent", true)] {
+        let mut app = delving();
+        let id = set_camp(&mut app, base, 40_010);
+        let wanted = app.world().resource::<Inventory>().item(id).unwrap().clone();
+        assert!(wanted.is_set_camp(), "{base}: set down");
+        assert_eq!(camps(&mut app).len(), 1, "{base}: lying in the level as a set camp");
+        assert_eq!(camps(&mut app)[0].1, blocks, "{base}: blocks the way only if a tent");
+        let floor = |app: &mut App| lying(app).into_iter().find(|(_, i)| i.seed == 40_010 && i.base == base).expect("it lies in the level");
+        let (spot, _) = floor(&mut app);
+        for trip in 0..1 {
+            round_trip(&mut app);
+            let (now, item) = floor(&mut app);
+            assert_eq!(now, spot, "{base} trip {trip}: where it was set");
+            assert_eq!(item, wanted, "{base} trip {trip}: the same item, still set down");
+            assert_eq!(camps(&mut app), vec![(wanted.camp().unwrap(), blocks)], "{base} trip {trip}: one set camp, not two");
+            assert_eq!(kept(&app, base, 40_010), 1, "{base} trip {trip}: one, not two");
+        }
+    }
+}
+
 #[test]
 fn a_torch_burnt_on_the_floor_is_as_burnt_when_the_delver_returns() {
     let mut app = delving();

@@ -244,7 +244,8 @@ pub fn set_down_debug_kit(mut inventory: ResMut<Inventory>, mut changes: ResMut<
 /// down (where every rarity rolls), has that rarity (any rarity if none is named). Names that
 /// roll nothing, or a rarity no seed gives, are skipped. An entry `@armorer/master/mail/8`
 /// (`@profession/tier[/style[/depth]]`, style `-` for none) sets down the first three pieces of
-/// that trader's stock, maker's line and all ([`stock_for_capture`]).
+/// that trader's stock, maker's line and all ([`stock_for_capture`]). An entry `Tent+set` or
+/// `Bedroll+set` is that camp good already set down.
 pub fn drops_for_capture(spec: &str) -> Vec<fb_items::Item> {
     spec.split(',')
         .flat_map(|entry| match entry.strip_prefix('@') {
@@ -272,6 +273,10 @@ fn stock_for_capture(spec: &str) -> Vec<fb_items::Item> {
 /// The item one `FB_DROP` entry names (`base[:rarity]`).
 fn item_for_capture(entry: &str) -> Option<fb_items::Item> {
     use fb_items::Rarity;
+    // `Tent+set` is the tent already pitched, a bedroll laid out (`crate::camp`).
+    if let Some(base) = entry.strip_suffix("+set") {
+        return item_for_capture(base).and_then(|item| fb_items::camp::set_up(&item));
+    }
     let (base, rarity) = entry.split_once(':').map_or((entry, None), |(b, r)| (b, Some(r.trim().to_lowercase())));
     let wanted = match rarity.as_deref() {
         None | Some("") => None,

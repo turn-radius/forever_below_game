@@ -37,7 +37,7 @@ use crate::fabric::{Fabric, FabricPattern};
 use crate::families::Generator;
 use crate::geom::polygon::P2;
 use crate::geom::{
-    ItemMesh, LatheOptions, MeshBuilder, Shading, SlabOptions, SweepOptions, V3, bevelled_slab, cylinder, ellipsoid,
+    ItemMesh, LatheOptions, MeshBuilder, Shading, SlabOptions, SweepOptions, V3, bevelled_slab, cuboid, cylinder, ellipsoid,
     icosphere, lathe, spline_profile, torus, tube, vec3,
 };
 use crate::material::{MaterialKind, Rgb};
@@ -103,6 +103,10 @@ pub struct Article {
     pub lit: bool,
     /// How far a candle has burnt down, 0..0.8.
     pub burnt: f32,
+    /// A bedroll is unrolled and laid out on the floor to sleep on, not rolled and strapped for
+    /// carrying. The same bedroll either way: its colours, weave and wear carry over.
+    #[serde(default)]
+    pub laid: bool,
 }
 
 sliders! {
@@ -135,6 +139,7 @@ impl Default for Article {
             bow: KeyBow::Ring,
             lit: false,
             burnt: 0.0,
+            laid: false,
         }
     }
 }
@@ -285,6 +290,7 @@ fn build_sundry(s: &SundryState) -> ItemMesh {
         SundryKind::Lockpicks => lockpicks(s, &mut parts),
         SundryKind::Keys => keys(s, &mut parts),
         SundryKind::Tinderbox => tinderbox(s, &mut parts),
+        SundryKind::Bedroll if s.article.laid => laid_bedroll(s, &mut parts),
         SundryKind::Bedroll => bedroll(s, &mut parts),
         SundryKind::Bandages => bandages(s, &mut parts),
     }
@@ -537,6 +543,47 @@ fn bedroll(s: &SundryState, parts: &mut Parts) {
         .collect();
     parts.add("straps", MeshBuilder::merged([&straps, &thong(&path, false, 0.035 * sz)]), Leather);
     parts.add("buckles", buckles, a.material);
+}
+
+/// How far a laid bedroll reaches from its centre along X and Z at its largest, whatever its
+/// size or seed, in world units: the floor the game keeps clear to lay one.
+pub const LAID_BEDROLL_HALF: (f32, f32) = (9.0, 3.6);
+
+/// A bedroll unrolled on the floor: a canvas mat about 16 units long and 6 wide under a blanket
+/// of the bedroll's own weave over its foot two thirds, with a rolled pillow across the head and
+/// the strap lying loose at the foot. Lies along X, head toward -X, as the room's
+/// `Scenery::Bedroll` does, under 1.3 units high.
+fn laid_bedroll(s: &SundryState, parts: &mut Parts) {
+    let a = &s.article;
+    // A short folk's length to a tall one's; never past [`LAID_BEDROLL_HALF`].
+    let k = (a.size / 1.2).clamp(0.85, 1.0);
+    let (len, wide) = (16.0 * k, 6.0 * k);
+    let cloth = Fabric { color: a.color, pattern: a.pattern, color2: a.color2, scale: 2.0 };
+    let mut mat = cuboid([len, 0.3, wide]);
+    mat.translate([0.0, 0.15, 0.0]);
+    let cover = len * 0.66;
+    let foot = len * 0.5;
+    let mut blanket = cuboid([cover, 0.45, wide * 0.94]);
+    blanket.translate([foot - cover * 0.5 - 0.1 * k, 0.52, 0.0]);
+    let mut fold = cuboid([1.3 * k, 0.55, wide * 0.94]);
+    fold.translate([foot - cover + 0.55 * k, 0.57, 0.0]);
+    let mut ruck = cuboid([2.6 * k, 0.25, 1.0 * k]);
+    ruck.rotate_y(0.3).translate([1.2 * k, 0.9, 0.4 * k]);
+    blanket.append(&ruck);
+    let r = 0.45 * k;
+    let (mut pillow, mut ends) = rolled_sheet([0.0, 0.0, 0.0], r, 3.6 * k, 0.015, 3.0);
+    for m in [&mut pillow, &mut ends] {
+        m.rotate_y(FRAC_PI_2).translate([-foot + 1.6 * k, 0.3 + r, 0.0]);
+    }
+    parts.add_tinted("mat", mat, Cloth, Rgb::hex(0x6e6248));
+    parts.add_look("blanket", blanket, Look::cloth(&cloth));
+    parts.add_tinted("blanket_fold", fold, Cloth, a.color.scaled(0.8));
+    parts.add_tinted("pillow", pillow, Cloth, Rgb::hex(0xb8ab88));
+    parts.add_tinted("pillow_end", ends, Cloth, Rgb::hex(0x8f8466));
+    // The strap, laid flat across the mat's foot.
+    let mut strap = cuboid([0.5 * k, 0.1, wide * 0.9]);
+    strap.translate([foot - 0.35 * k, 0.35, 0.0]);
+    parts.add("straps", strap, Leather);
 }
 
 /// A roll of linen with its end unrolled along the ground.
