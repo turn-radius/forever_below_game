@@ -30,6 +30,8 @@ use std::collections::HashSet;
 mod trade;
 pub use trade::{Master, Masters, Profession, Style, Tier, Trade, TradeRules, armour_style};
 
+use armory::families::Generator;
+use armory::families::banner::{Banner, BannerMount, BannerState};
 use armory::families::shield::roll_field;
 use armory::heraldry::{Division, Field, Tincture};
 use fb_body::{Folk, Sex};
@@ -64,6 +66,7 @@ const DENIZEN_SIZE_SALT: u32 = 0xFAC7_0014;
 const DENIZEN_SALT: u32 = 0xFAC7_0015;
 const DENIZEN_DRAW_SALT: u32 = 0xFAC7_0016;
 const DENIZEN_TASTE_SALT: u32 = 0xFAC7_0017;
+const BANNER_SALT: u32 = 0xFAC7_0018;
 
 /// One faction, an index into its world's pool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -397,6 +400,31 @@ pub struct FactionSpec {
 }
 
 impl FactionSpec {
+    /// The faction's banner as it hangs in a hall: one shape (its end, hem, fringe and finials)
+    /// wherever it hangs, rod-hung, painted with exactly its field and hemmed in its charge's
+    /// tincture so the hem never clashes. A pure function of the spec, from a seed of its own.
+    pub fn banner(&self) -> BannerState {
+        let seed = self.banner_seed();
+        self.paint(Banner::roll_hall(seed, BannerMount::Rod, Banner::roll(seed).cloth.end))
+    }
+
+    /// [`FactionSpec::banner`] with its width and length drawn from the given ranges instead, as
+    /// for a short one over a door: the same shape at another size.
+    pub fn banner_sized(&self, width: (f32, f32), length: (f32, f32)) -> BannerState {
+        let seed = self.banner_seed();
+        self.paint(Banner::roll_sized(seed, BannerMount::Rod, Banner::roll(seed).cloth.end, width, length))
+    }
+
+    fn banner_seed(&self) -> u32 {
+        mix(armory::crest::field_key(&self.field) as u32, BANNER_SALT, self.id.0 as u32)
+    }
+
+    fn paint(&self, mut banner: BannerState) -> BannerState {
+        banner.hem.trim = self.field.charge_tincture;
+        banner.field = self.field;
+        banner
+    }
+
     /// The folk of a member: always the faction's own if it is insular, otherwise its own with
     /// chance [`FOLK_LEAN`] and any folk else, from the member's stream `rng`. A faction whose
     /// name says its members are of every folk draws each one evenly from all six.
