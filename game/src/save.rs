@@ -125,6 +125,9 @@ pub struct SavedDelve {
     pub revives: u32,
     pub enchanting: EnchantingStock,
     pub explored: Vec<SavedExplored>,
+    /// What each recorded level was when it was recorded, so a game whose generators have changed
+    /// since does not hang the record on the wrong things ([`SavedDelve::check_levels`]).
+    pub signatures: Vec<LevelSignature>,
     /// The camp they lay down in.
     pub camp: fb_level::ItemSpot,
 }
@@ -166,6 +169,55 @@ pub struct SavedExplored {
     pub bits: String,
 }
 
+/// What a level was made of when it was recorded. The record keys containers, creatures, folk and
+/// shelves by their index in the level the seed generates, so it only belongs to a game that
+/// generates the same level.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LevelSignature {
+    pub depth: u32,
+    pub level_seed: u32,
+    pub width: u32,
+    pub height: u32,
+    pub props: u32,
+    pub creatures: u32,
+    pub folk: u32,
+    /// FNV-1a over the generated layout: the cells, rooms, props, creatures, folk, items and
+    /// factions.
+    pub hash: u64,
+}
+
+impl LevelSignature {
+    /// The signature of `level` as generated.
+    pub fn of(level: &fb_level::Level) -> LevelSignature {
+        let layout = serde_json::to_vec(&(&level.cells, &level.rooms, &level.props, &level.creatures, &level.folk, &level.items, &level.factions, &level.stairs)).unwrap_or_default();
+        let hash = layout.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+        LevelSignature {
+            depth: level.depth,
+            level_seed: level.seed,
+            width: level.width,
+            height: level.height,
+            props: level.props.len() as u32,
+            creatures: level.creatures.len() as u32,
+            folk: level.folk.len() as u32,
+            hash,
+        }
+    }
+
+    /// The signatures of every level `record` holds, in the world of `run_seed`.
+    pub fn of_record(run_seed: u32, record: &WorldRecord) -> Vec<LevelSignature> {
+        let abyss = Abyss::new(run_seed);
+        record.levels.keys().map(|&depth| LevelSignature::of(&abyss.level_at(depth))).collect()
+    }
+}
+
+impl SavedDelve {
+    /// Whether every recorded level generates now as it did when it was recorded.
+    pub fn check_levels(&self) -> Result<(), SaveError> {
+        let now = LevelSignature::of_record(self.run_seed, &self.record);
+        if now == self.signatures { Ok(()) } else { Err(SaveError::Stale) }
+    }
+}
+
 /// Why a save could not be written or read.
 #[derive(Debug)]
 pub enum SaveError {
@@ -174,6 +226,8 @@ pub enum SaveError {
     Unreadable(String),
     /// A save of another version.
     Version(u32),
+    /// Made by a game that generated its levels differently.
+    Stale,
     /// Something the save needs is not in the game now.
     Missing(&'static str),
 }
@@ -184,6 +238,7 @@ impl std::fmt::Display for SaveError {
             SaveError::Io(error) => write!(f, "{error}"),
             SaveError::Unreadable(why) => write!(f, "{why}"),
             SaveError::Version(version) => write!(f, "it is version {version}, and this game reads version {VERSION}"),
+            SaveError::Stale => write!(f, "its levels are not the ones this game generates"),
             SaveError::Missing(what) => write!(f, "there is no {what} to save"),
         }
     }
@@ -334,6 +389,7 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
     let mut explored: Vec<SavedExplored> =
         world.resource::<ExploredLevels>().0.iter().map(|(&level_seed, seen)| SavedExplored { level_seed, width: seen.width, height: seen.height, bits: to_hex(&seen.to_bits()) }).collect();
     explored.sort_by_key(|e| e.level_seed);
+    let signatures = LevelSignature::of_record(abyss.run_seed, &record);
     Ok(SavedDelve {
         version: VERSION,
         run_seed: abyss.run_seed,
@@ -346,6 +402,7 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
         revives: world.resource::<Revives>().0,
         enchanting: world.resource::<Enchanting>().0.clone(),
         explored,
+        signatures,
         camp,
     })
 }
@@ -388,6 +445,9 @@ pub struct SavedGame {
 /// The title's line when an unreadable save was renamed aside.
 pub const SET_ASIDE_LINE: &str = "Your saved delve could not be read, and was set aside.";
 
+/// The title's line when a save's levels are not the ones this game generates, and it was set aside.
+pub const STALE_LINE: &str = "Your saved delve was made by an earlier version of the game, and was set aside.";
+
 /// The title's line when an unreadable save could not even be moved.
 pub const UNREADABLE_LINE: &str = "Your saved delve could not be read.";
 
@@ -396,7 +456,14 @@ impl SavedGame {
     /// not a delve, which is renamed aside ([`set_aside`]) so it is not met again. Never panics.
     pub fn find(path: &Path) -> SavedGame {
         match read(path) {
-            Ok(delve) => SavedGame { delve: Some(Box::new(delve)), unreadable: None },
+            Ok(delve) => match delve.check_levels() {
+                Ok(()) => SavedGame { delve: Some(Box::new(delve)), unreadable: None },
+                Err(error) => {
+                    warn!("save: {} is not for this game ({error})", path.display());
+                    let aside = set_aside(path);
+                    SavedGame { delve: None, unreadable: Some(if aside.is_some() { STALE_LINE } else { UNREADABLE_LINE }) }
+                }
+            },
             Err(SaveError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => SavedGame::default(),
             Err(error) => {
                 warn!("save: {} cannot be read ({error})", path.display());
@@ -577,6 +644,9 @@ impl Plugin for SavePlugin {
 #[cfg(test)]
 pub(crate) fn sample_delve() -> SavedDelve {
     let character = Character::roll(5);
+    let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 1207);
+    record.levels.insert(1, crate::record::LevelRecord::default());
+    let signatures = LevelSignature::of_record(1207, &record);
     let bed = fb_items::roll_item("Tent", 9).unwrap();
     let sack = ItemRecord {
         contents: vec![Stowed { x: 1, y: 0, turned: true, item: item_record(&fb_items::roll_item("Dagger", 4).unwrap()) }],
@@ -587,7 +657,7 @@ pub(crate) fn sample_delve() -> SavedDelve {
         run_seed: 1207,
         depth: 3,
         delver: SavedDelver::from(&character),
-        record: WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 1207),
+        record,
         pack: SavedPack { worn: vec![(fb_items::Slot::Belt, item_record(&fb_items::roll_item("Belt", 3).unwrap())), (fb_items::Slot::Back, sack)], coins: [1, 2, 3], quickslots: [None; SLOTS] },
         body: SavedBody {
             at: [12.5, 0.0, 33.25],
@@ -606,6 +676,7 @@ pub(crate) fn sample_delve() -> SavedDelve {
         clock: GameTime::from_seconds(123_456.789),
         revives: 1,
         enchanting: EnchantingStock { essence: 4, materials: [("iron".to_string(), 2)].into() },
+        signatures,
         explored: vec![SavedExplored { level_seed: 7, width: 8, height: 8, bits: to_hex(&[0xff, 0x00, 0x0f, 0, 0, 0, 0, 1]) }],
         camp: fb_level::ItemSpot { x: 4.5, y: 9.25, yaw: 0.5, family: bed.shape.family(), seed: bed.seed },
     }
@@ -796,5 +867,23 @@ mod tests {
         assert_eq!((found.delve, found.unreadable), (None, Some(SET_ASIDE_LINE)));
         assert!(!path.exists() && path.with_file_name(ASIDE_NAME).exists());
         assert_eq!(SavedGame::find(&path), SavedGame::default(), "and it is not met again");
+    }
+
+    #[test]
+    fn a_save_whose_levels_generate_differently_now_is_set_aside_with_its_own_line() {
+        let path = scratch("stale");
+        let mut delve = sample();
+        assert_eq!(delve.signatures.len(), 1);
+        write(&path, &delve).unwrap();
+        assert_eq!(SavedGame::find(&path).delve.as_deref(), Some(&delve), "as made, it is found");
+        // A generator changed since: the level's layout, or its counts, are not what was recorded.
+        for change in [|s: &mut LevelSignature| s.hash ^= 1, |s: &mut LevelSignature| s.folk += 1, |s: &mut LevelSignature| s.level_seed += 1] {
+            delve.signatures[0] = sample().signatures[0].clone();
+            change(&mut delve.signatures[0]);
+            write(&path, &delve).unwrap();
+            let found = SavedGame::find(&path);
+            assert_eq!((found.delve, found.unreadable), (None, Some(STALE_LINE)));
+            assert!(!path.exists() && path.with_file_name(ASIDE_NAME).exists());
+        }
     }
 }
