@@ -368,5 +368,106 @@
   },
   "depth": 1.6,
   "stoop": 0.5
+ },
+ "faun": {
+  "label": "Faun",
+  "h": 17.2,
+  "headR": 1.05,
+  "hw": 0.84,
+  "hh": 1.12,
+  "hd": 1,
+  "jaw": 0.55,
+  "chin": 0.45,
+  "flat": 0.55,
+  "neck": 1,
+  "neckR": 0.95,
+  "leg": 0.52,
+  "girth": 0.93,
+  "limb": 0.92,
+  "arm": 1,
+  "foot": 1,
+  "belly": 0.08,
+  "skins": [
+   "#f0cfb0",
+   "#e2b48f",
+   "#c68b62",
+   "#9a6440",
+   "#6e4630"
+  ],
+  "hairs": [
+   "curly",
+   "curly",
+   "shaggy",
+   "crop"
+  ],
+  "beardP": 0.4,
+  "ears": "pointed",
+  "nose": "human",
+  "eyes": "human",
+  "stats": [
+   12,
+   16,
+   11,
+   12,
+   10
+  ],
+  "dv": 0,
+  "horns": {
+   "length": [
+    0.8,
+    1.6
+   ],
+   "curve": [
+    0.5,
+    1
+   ],
+   "spread": [
+    0.2,
+    0.8
+   ],
+   "rise": [
+    0,
+    0.6
+   ],
+   "wear": [
+    0,
+    0.15
+   ],
+   "broken": 0.03,
+   "root": 0.3,
+   "radius": [
+    0.18,
+    0.26
+   ],
+   "curl": [
+    1.4,
+    2.8
+   ]
+  },
+  "legs": {
+   "hock": 0.27,
+   "knee_height": 0.55,
+   "knee_forward": 0.2,
+   "pastern": 0.3,
+   "hoof": 0.62,
+   "split": 0.3
+  },
+  "tail_shape": {
+   "bones": 2,
+   "end": "tuft",
+   "length": 0.24,
+   "radius": 0.22,
+   "lift": 2.1
+  },
+  "fur": {
+   "colours": [
+    "#4a3322",
+    "#2a221d",
+    "#7a756e",
+    "#a8793f",
+    "#5b3d29"
+   ],
+   "shag": 1.0
+  }
  }
 }

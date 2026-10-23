@@ -24,6 +24,8 @@ pub enum Folk {
     Pigfolk,
     /// A bull-headed denizen (`fb_denizens::DenizenBody::Minotaur`).
     Minotaur,
+    /// A goat-legged denizen with a human's upper body (`fb_denizens::DenizenBody::Faun`).
+    Faun,
 }
 
 impl Race {
@@ -40,7 +42,7 @@ impl Folk {
     pub const ALL: [Folk; 6] = [Folk::Human, Folk::Dwarf, Folk::Gnome, Folk::Goblin, Folk::Lizardfolk, Folk::Pigfolk];
 
     /// The denizens whose bodies are built on the folk body so far.
-    pub const DENIZENS: [Folk; 1] = [Folk::Minotaur];
+    pub const DENIZENS: [Folk; 2] = [Folk::Minotaur, Folk::Faun];
 
     /// Whether this is a denizen, not one of the six folk.
     pub fn is_denizen(self) -> bool {
@@ -51,6 +53,7 @@ impl Folk {
     pub fn denizen_body(self) -> Option<DenizenBody> {
         match self {
             Folk::Minotaur => Some(DenizenBody::Minotaur),
+            Folk::Faun => Some(DenizenBody::Faun),
             _ => None,
         }
     }
@@ -59,6 +62,7 @@ impl Folk {
     pub fn of_denizen(body: DenizenBody) -> Option<Folk> {
         match body {
             DenizenBody::Minotaur => Some(Folk::Minotaur),
+            DenizenBody::Faun => Some(Folk::Faun),
             _ => None,
         }
     }
@@ -73,6 +77,7 @@ impl Folk {
             Folk::Lizardfolk => "lizard",
             Folk::Pigfolk => "pig",
             Folk::Minotaur => "minotaur",
+            Folk::Faun => "faun",
         }
     }
 
@@ -153,6 +158,8 @@ pub enum HairStyle {
     Mohawk,
     /// A lizard's frill of spines (the plate's "Frill").
     Crest,
+    /// Tight curls all over the crown, each a small lock of its own (fauns).
+    Curly,
     /// A forelock over the brow and a shaggy mane down the neck and over the withers (a bull's).
     Mane,
 }
@@ -267,6 +274,19 @@ pub struct Race {
     /// socks or pied patches ([`crate::parts::Marking`]).
     #[serde(default)]
     pub coat: bool,
+    /// Fur on the legs only (a faun's): the skins stay a human's, the legs and the pasterns are
+    /// a fur colour a seed picks, and shaggy locks hang from the thighs and shanks.
+    #[serde(default)]
+    pub fur: Option<FurRow>,
+}
+
+/// Fur that grows on a race's legs only.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct FurRow {
+    /// The colours a seed picks one from.
+    pub colours: Vec<Hex>,
+    /// How long and thick the locks are, 1 for a faun's.
+    pub shag: f32,
 }
 
 fn one() -> f32 {
@@ -345,6 +365,10 @@ pub struct TailRow {
     /// leg's.
     pub length: f32,
     pub radius: f32,
+    /// How far the tail is raised from hanging, radians: 0 hangs, about 2 stands up and curls
+    /// back (a goat's).
+    #[serde(default)]
+    pub lift: f32,
 }
 
 /// A muzzle: a long, deep snout lofted along the face from a broad skull (a bull's).

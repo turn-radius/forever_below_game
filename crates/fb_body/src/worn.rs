@@ -114,7 +114,7 @@ impl Covered {
             "hands" | "nails" => self.hands,
             "feet" | "claws" => self.feet,
             "socks" => self.legs,
-            "legs" => self.legs,
+            "legs" | "leg_fur" => self.legs,
             "tail" => self.tail,
             _ => false,
         }
@@ -183,6 +183,8 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
         }
         for (_, item) in worn.iter().filter(|(s, _)| *s == slot) {
             let mesh = match (slot, item) {
+                // Furred legs stay bare: trousers hung on goat legs read as a man on stilts.
+                (Slot::Legs, Item::Legs(_)) if body.race().fur.is_some() => continue,
                 (Slot::Legs, Item::Legs(s)) => {
                     fit.covered.legs |= s.legwear.style != LegwearStyle::Breeches;
                     legwear(body, s, tucked)
@@ -208,6 +210,8 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
             if slot == Slot::Head {
                 fit.hair.covered = true;
             }
+            // A robe hangs to the hock over furred legs: the fur under it would poke through the cloth.
+            fit.covered.legs |= robed && body.race().fur.is_some() && matches!(slot, Slot::Shirt | Slot::Body);
             fit.covered.tail |= body.folk() == Folk::Pigfolk && matches!(slot, Slot::Legs | Slot::Shirt | Slot::Body | Slot::Cloak);
             env.absorb(slot, matches!(item, Item::Hood(_)), &mesh);
             fit.layers.push(WornLayer { slot, mesh });

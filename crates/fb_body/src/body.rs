@@ -799,10 +799,11 @@ impl Body {
             self.foot_placement(side).apply(&mut f);
             feet.append(&f);
         }
-        add(legs, "legs", skin, true);
+        let fur = self.fur_colour();
+        add(legs, "legs", fur.unwrap_or(skin), true);
         // Pigfolk walk on darker trotters (`buildBody`: the skin at 0.62).
         let socks = self.race().coat && self.traits().marking == crate::parts::Marking::Socks;
-        add(feet, "feet", if self.folk() == Folk::Pigfolk { skin.scaled(0.62) } else if socks { crate::coat::WHITE } else { skin }, true);
+        add(feet, "feet", if self.folk() == Folk::Pigfolk { skin.scaled(0.62) } else if socks { crate::coat::WHITE } else { fur.unwrap_or(skin) }, true);
         add(self.tail_mesh(), "tail", skin, true);
         let mut out = ItemMesh { parts };
         if !hooves.is_empty() {
@@ -812,6 +813,12 @@ impl Body {
         if let Some(hair) = self.tail_hair() {
             let tint = self.spec.hair_colour;
             out.parts.push(hair.into_part("tail_hair", OutlineMode::Welded).with_material(MaterialKind::Hair).with_tint(tint).without_outline());
+        }
+        if let Some(colour) = fur {
+            let locks = self.leg_fur();
+            if !locks.is_empty() {
+                out.parts.push(locks.into_part("leg_fur", OutlineMode::Welded).with_material(MaterialKind::Hair).with_tint(colour).without_outline());
+            }
         }
         out.parts.extend(self.markings());
         if self.folk() == Folk::Lizardfolk {
@@ -979,7 +986,7 @@ impl Body {
         let mut points = vec![p];
         for i in 0..n {
             // Leaving the rump backward and down, then hanging.
-            let swing = 0.9 / (1.0 + 1.6 * i as f32);
+            let swing = 0.9 / (1.0 + 1.6 * i as f32) + shape.lift * (1.0 - 0.15 * i as f32).max(0.0);
             p = vec3::add(p, [0.0, -seg * swing.cos(), -seg * swing.sin()]);
             points.push(p);
         }

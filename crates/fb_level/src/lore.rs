@@ -196,6 +196,7 @@ fn folk(f: Folk) -> Thing {
         Folk::Lizardfolk => ("lizardfolk", "lizardfolk"),
         Folk::Pigfolk => ("pigfolk", "pigfolk"),
         Folk::Minotaur => ("minotaur", "minotaurs"),
+        Folk::Faun => ("faun", "fauns"),
     };
     Thing::new(one, many)
 }

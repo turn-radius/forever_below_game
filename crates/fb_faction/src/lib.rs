@@ -299,6 +299,7 @@ pub fn folk_key(folk: Folk) -> &'static str {
         Folk::Lizardfolk => "lizardfolk",
         Folk::Pigfolk => "pigfolk",
         Folk::Minotaur => "minotaur",
+        Folk::Faun => "faun",
     }
 }
 
@@ -478,6 +479,7 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
         Folk::Lizardfolk => &[(Fighter, 3), (Ranger, 3), (Mage, 1)],
         Folk::Pigfolk => &[(Ranger, 3), (Scavenger, 3), (Cleric, 1)],
         Folk::Minotaur => &[(Fighter, 4), (Scavenger, 2), (Ranger, 1)],
+        Folk::Faun => &[(Ranger, 3), (Mage, 2), (Cleric, 1)],
     };
     // The two differ: the second is drawn from its folk's table without the first.
     let first = *rng.weighted(by_intention);

@@ -133,7 +133,7 @@ impl DollChoice {
                 }
                 "--folk" => {
                     let folk = value()?;
-                    choice.folk = Folk::parse(&folk).ok_or(format!("unknown folk {folk:?}; one of human, dwarf, gnome, goblin, lizard, pig, minotaur"))?;
+                    choice.folk = Folk::parse(&folk).ok_or(format!("unknown folk {folk:?}; one of human, dwarf, gnome, goblin, lizard, pig, minotaur, faun"))?;
                 }
                 "--seed" => {
                     let seed = value()?;

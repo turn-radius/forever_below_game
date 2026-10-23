@@ -76,7 +76,7 @@ impl SkinRegion {
         match part {
             "arms" => SkinRegion::Arm,
             "hands" | "nails" => SkinRegion::Hand,
-            "legs" => SkinRegion::Leg,
+            "legs" | "leg_fur" => SkinRegion::Leg,
             "feet" | "claws" => SkinRegion::Foot,
             "tail" | "tail_hair" => SkinRegion::Tail,
             "hooves" | "socks" => SkinRegion::Foot,

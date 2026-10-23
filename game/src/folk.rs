@@ -672,6 +672,19 @@ mod tests {
     }
 
     #[test]
+    fn a_faun_spot_is_a_dressed_faun_with_bare_goat_legs() {
+        let spot = FolkSpot { denizen: Some(fb_denizens::DenizenBody::Faun), ..folk_1207()[0] };
+        let person = person_1207(&spot);
+        assert_eq!(person.spec.folk, Folk::Faun);
+        assert_eq!(person, person_1207(&spot));
+        let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+        let height = Folk::Human.race().h;
+        assert!(figure.body.height > 0.9 * height && figure.body.height < 1.1 * height && figure.pieces.len() >= 3, "{} tall", figure.body.height);
+        let parts = figure.pieces.iter().find(|p| p.name == "Body").unwrap().mesh.parts.iter().map(|p| p.name).collect::<Vec<_>>();
+        assert!(parts.contains(&"hooves"), "{parts:?}");
+    }
+
+    #[test]
     fn the_same_spot_is_the_same_person() {
         for spot in folk_1207() {
             assert_eq!(person_1207(&spot), person_1207(&spot));

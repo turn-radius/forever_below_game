@@ -5,7 +5,7 @@
 use std::f32::consts::TAU;
 
 use armory::geom::vec3::{self, V3};
-use armory::geom::{GridOptions, MeshBuilder, OutlineMode, SweepOptions, stitch_grid, tube_varying};
+use armory::geom::{GridOptions, MeshBuilder, OutlineMode, SweepOptions, stitch_grid, tube, tube_varying};
 use armory::{MaterialKind, Part, Rgb};
 use procgen_rng::Mulberry32;
 
@@ -88,6 +88,79 @@ impl Body {
             let (_, n) = self.trunk_surface(angle, y, FILM);
             patch.push_fan_cap(&rows[0], n);
             out.append(&patch);
+        }
+        out
+    }
+}
+
+impl Body {
+    /// The colour of the fur on the legs, for a race whose row has `fur`.
+    pub fn fur_colour(&self) -> Option<Rgb> {
+        let row = self.race().fur.as_ref()?;
+        let i = ((self.traits().fur * row.colours.len() as f32) as usize).min(row.colours.len() - 1);
+        Some(row.colours[i].0)
+    }
+
+    /// Shaggy locks over each thigh and shank, and a feather down the back of each pastern: a
+    /// race's `fur`. Each lock roots in the skin and hangs down along the leg, a little out
+    /// from it, longer at the back and the outside; one part (`"leg_fur"`) skinned to the legs.
+    pub(crate) fn leg_fur(&self) -> MeshBuilder {
+        let Some(row) = self.race().fur.as_ref() else { return MeshBuilder::new() };
+        let mut rng = Mulberry32::new(self.spec.seed ^ 0x5f3a_91c7);
+        let mut out = MeshBuilder::new();
+        let s = self.scale * row.shag;
+        for side in Side::BOTH {
+            let leg = self.leg(side);
+            let sg = side.sign();
+            let [th, tk] = leg.t_joints;
+            let rows = 26usize;
+            for r in 0..rows {
+                let t = (0.8 * th) + (0.985 - 0.8 * th) * r as f32 / (rows - 1) as f32;
+                let c = leg.point_at(t);
+                let along = leg.tangent_at(t);
+                let front = vec3::normalize_or(vec3::sub(vec3::Z, vec3::scale(along, along[2])), vec3::Z);
+                let across = vec3::normalize_or(vec3::cross(along, front), vec3::X);
+                // Fuller and longer toward the hock and down the back; sparse over the knee.
+                let below = (t - tk) / (1.0 - tk);
+                let base_len = if t < tk { 0.35 + 0.25 * ((t - th) / (tk - th)).clamp(0.0, 1.0) } else { 0.6 + 0.3 * below };
+                let count = 11;
+                for k in 0..count {
+                    let a = TAU * (k as f32 + rng.range_f32(-0.4, 0.4)) / count as f32;
+                    // a = 0 is the front; the back (PI) is shaggiest.
+                    let back = 0.5 * (1.0 - a.cos());
+                    let outside = (a.sin() * sg).max(0.0);
+                    if a.cos() > 0.6 && t > tk - 0.05 && t < tk + 0.1 {
+                        continue; // a bare knee
+                    }
+                    let dir = vec3::normalize_or(vec3::add(vec3::scale(front, a.cos()), vec3::scale(across, a.sin())), front);
+                    let rad = self.leg_radius(leg, t, a);
+                    let root = vec3::add(c, vec3::scale(dir, rad - 0.04 * s));
+                    let len = base_len * s * rng.range_f32(0.7, 1.25) * (0.55 + 0.6 * back + 0.25 * outside);
+                    let flare = rng.range_f32(0.35, 0.8);
+                    let wave = rng.range_f32(-0.12, 0.12) * s;
+                    let path: Vec<V3> = (0..=4)
+                        .map(|i| {
+                            let u = i as f32 / 4.0;
+                            let hang = vec3::scale(along, len * u);
+                            let out_k = flare * len * u * (1.2 - u) * 0.8;
+                            let sideways = vec3::scale(across, wave * u * u);
+                            vec3::add(vec3::add(root, hang), vec3::add(vec3::scale(dir, out_k), sideways))
+                        })
+                        .collect();
+                    out.append(&tube(&path, 4, &SweepOptions::default(), |u| (0.1 * s) * (1.0 - 0.9 * u) + 0.008));
+                }
+            }
+            // A feather down the back of the pastern from the hock.
+            if let Some(foot) = self.hooved_foot(side) {
+                let hock = leg.joints[2];
+                for k in 0..9 {
+                    let a = TAU * (k as f32 + rng.range_f32(-0.3, 0.3)) / 9.0;
+                    let at = vec3::add(hock, [0.3 * leg.radius * a.sin(), -0.1 * s, -0.5 * leg.radius * (0.4 + 0.6 * (0.5 - 0.5 * a.cos()))]);
+                    let to = vec3::lerp(hock, foot.coronet, rng.range_f32(0.55, 0.9));
+                    let mid = vec3::add(vec3::lerp(at, to, 0.5), [0.0, 0.0, -0.1 * s]);
+                    out.append(&tube(&[at, mid, to], 4, &SweepOptions::default(), |u| 0.08 * s * (1.0 - 0.85 * u) + 0.008));
+                }
+            }
         }
         out
     }

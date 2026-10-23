@@ -22,7 +22,7 @@ use armory::geom::{CatmullRom, GridOptions, MeshBuilder, Shading, SweepOptions, 
 use armory::Rgb;
 use procgen_rng::Mulberry32;
 
-use crate::folk::{Digitigrade, HornRow, Race, Span};
+use crate::folk::{Digitigrade, HornRow, Span};
 
 /// Mixed into a body's seed for the denizen traits, so they do not roll the numbers the body's
 /// own fields do.
@@ -81,6 +81,8 @@ pub struct Traits {
     pub tuft: f32,
     /// The hooves, 0 black to 1 pale horn.
     pub hoof_tone: f32,
+    /// Which of a race's fur colours (0..=1 over its list).
+    pub fur: f32,
 }
 
 impl Traits {
@@ -107,7 +109,8 @@ impl Traits {
         let tuft = rng.next_f64() as f32;
         let hoof_tone = rng.next_f64() as f32;
         let horns = HornRoll { length, curve, spread, rise, wear, broken_roll, broken_side, broken_at };
-        Traits { horns, marking, ring, muzzle, ears, mane, mane_tone, eyes, tuft, hoof_tone }
+        let fur = rng.next_f64() as f32;
+        Traits { horns, marking, ring, muzzle, ears, mane, mane_tone, eyes, tuft, hoof_tone, fur }
     }
 
     /// The ring's colour and material kind.

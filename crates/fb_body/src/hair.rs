@@ -132,6 +132,7 @@ pub fn hair_volume(style: HairStyle, head_radius: f32, covered: bool) -> f32 {
     let v = match style {
         HairStyle::Shaggy => 0.25,
         HairStyle::Long => 0.18,
+        HairStyle::Curly => 0.22,
         HairStyle::Bald | HairStyle::Crest | HairStyle::Mane => 0.0,
         _ => 0.1,
     };
@@ -144,6 +145,7 @@ fn cap_style(style: HairStyle) -> (f32, f32, f32, f32) {
     match style {
         HairStyle::Shaggy => (0.09, 0.2, 0.09, 0.38),
         HairStyle::Long => (0.07, 0.13, 0.03, 0.31),
+        HairStyle::Curly => (0.06, 0.1, 0.01, 0.3),
         HairStyle::Crop => (0.05, 0.04, 0.012, 0.31),
         _ => (0.05, 0.05, 0.012, 0.31),
     }
@@ -253,6 +255,24 @@ impl Body {
                 let (tail, band) = self.ponytail(face, fit);
                 hair.append(&tail);
                 tie.append(&band);
+            }
+            HairStyle::Curly => {
+                // Tight curls: small balls of hair crowded over the cap, fuller toward the crown.
+                let mut rng = Mulberry32::new(self.spec.seed ^ 0x2c1b_77e9);
+                let count = if fit.covered { 40 } else { 150 };
+                for _ in 0..count {
+                    let th = rng.range_f32(-PI, PI);
+                    let v = rng.range_f32(0.04, 1.0f32).sqrt();
+                    let ph = (self.hairline(style, th) * v).max(1e-3);
+                    if fit.covered && v < 0.55 {
+                        continue;
+                    }
+                    let at = face.point(th, ph, (base + 0.5 * vol) * r);
+                    let size = rng.range_f32(0.1, 0.16) * r;
+                    let mut curl = uv_sphere(1.0, 8, 6);
+                    curl.scale([size, size * 0.9, size]).translate(at);
+                    hair.append(&curl);
+                }
             }
             HairStyle::Topknot if !fit.covered => {
                 let mut knot = uv_sphere(1.0, 16, 10);

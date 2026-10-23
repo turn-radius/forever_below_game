@@ -264,6 +264,167 @@ fn every_outfit_fits_clear_of_the_skin() {
     assert!(measured > 0, "no cloth was measured");
 }
 
+// ── The faun ──
+
+fn faun(seed: u32) -> Body {
+    Body::new(&BodySpec::roll(Folk::Faun, seed))
+}
+
+#[test]
+fn the_same_seed_builds_the_same_faun_and_it_is_a_denizen_of_the_folk_body() {
+    for seed in [1, 7, 1207] {
+        assert_eq!(faun(seed).mesh(), faun(seed).mesh());
+    }
+    assert_ne!(faun(1).mesh(), faun(2).mesh());
+    assert_eq!(Folk::of_denizen(Folk::Faun.denizen_body().unwrap()), Some(Folk::Faun));
+    assert!(Folk::Faun.is_denizen() && Folk::parse("faun") == Some(Folk::Faun));
+    // The SRD satyr (p. 344): Str 12, Dex 16, Con 11, Int 12, Wis 10.
+    assert_eq!(Folk::Faun.race().stats, [12, 16, 11, 12, 10]);
+}
+
+#[test]
+fn a_faun_is_a_mans_height_with_hooves_on_the_floor_and_every_part_valid() {
+    let human = Body::new(&BodySpec::typical(Folk::Human)).height;
+    for seed in 0..12 {
+        let body = faun(seed);
+        let k = body.height / human;
+        assert!((0.93..1.07).contains(&k), "seed {seed}: {k} times a human");
+        let skin = body.skin_mesh();
+        assert!(min_y(&skin, "hooves").abs() < 0.05, "seed {seed}: hooves at {}", min_y(&skin, "hooves"));
+        for part in body.mesh().parts.iter() {
+            part.validate().unwrap_or_else(|e| panic!("seed {seed} {}: {e}", part.name));
+        }
+        let names: Vec<_> = skin.parts.iter().map(|p| p.name).collect();
+        assert!(names.contains(&"hooves") && names.contains(&"tail") && names.contains(&"leg_fur"), "{names:?}");
+        assert!(body.head_mesh().parts.iter().any(|p| p.name == "horns"), "seed {seed}: horns");
+    }
+}
+
+#[test]
+fn a_fauns_horns_are_short_and_its_legs_are_furred_in_one_of_the_rows_colours() {
+    let row = Folk::Faun.race().horns.clone().unwrap();
+    let minotaur_row = Folk::Minotaur.race().horns.clone().unwrap();
+    let lengths: Vec<f32> = (0..100).map(|s| faun(s).traits().horn_spec(&row, 0, 2.0).length).collect();
+    assert!(lengths.iter().all(|l| *l <= row.length[1] * 2.0 + 1e-3) && row.length[1] * 1.5 < minotaur_row.length[1], "short horns");
+    let fur = Folk::Faun.race().fur.clone().unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    for seed in 0..60 {
+        let body = faun(seed);
+        let colour = body.fur_colour().unwrap();
+        assert!(fur.colours.iter().any(|c| c.0 == colour));
+        seen.insert(fur.colours.iter().position(|c| c.0 == colour).unwrap());
+        // The skin is a human's, not the fur's.
+        assert!(Folk::Faun.race().skins.iter().any(|c| c.0 == body.spec.skin));
+        // No coat markings on a faun.
+        assert!(body.skin_mesh().parts.iter().all(|p| p.name != "socks" && p.name != "markings"));
+    }
+    assert!(seen.len() >= 3, "{seen:?}");
+    // Folk have no fur parts.
+    assert!(Body::new(&BodySpec::roll(Folk::Human, 3)).skin_mesh().parts.iter().all(|p| p.name != "leg_fur"));
+}
+
+#[test]
+fn the_fur_lies_on_the_legs_from_the_hip_to_the_hock_and_no_higher() {
+    let body = faun(7);
+    let fur = body.skin_mesh().parts.into_iter().find(|p| p.name == "leg_fur").unwrap();
+    let top = fur.positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+    assert!(top < body.hip_y + 0.1 * body.trunk_length && top > body.leg(Side::Left).joints[1][1], "fur tops out at {top}");
+    let skinner = Skinner::new(&body);
+    let w = skinner.part(&fur, SkinRegion::of_skin("leg_fur"));
+    assert_eq!(w.joints.len(), fur.positions.len());
+}
+
+#[test]
+fn a_fauns_hooves_stay_planted_in_the_walk() {
+    for seed in [1, 7] {
+        let body = faun(seed);
+        let rig = Rig::of(&body);
+        let gait = Gait::new(&body, &rig);
+        let skinner = Skinner::new(&body);
+        let hooves = body.skin_mesh().parts.into_iter().find(|p| p.name == "hooves").unwrap();
+        let weights = skinner.part(&hooves, SkinRegion::of_skin("hooves"));
+        for i in 0..16 {
+            let phase = i as f32 / 16.0;
+            let pose = gait.pose(phase, gait.natural_speed(), &IdleCycle::of(5), 0.0);
+            let frames = rig.skin_frames(&pose);
+            let low = |side: Side| {
+                hooves
+                    .positions
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, p)| (p[0] > 0.0) == (side == Side::Left) && p[1] < 0.2 && weights.weights[*k][0] > 0.99)
+                    .map(|(k, &p)| Rig::skin_point(&frames, p, weights.joints[k], weights.weights[k])[1])
+                    .fold(f32::MAX, f32::min)
+            };
+            for side in Side::BOTH {
+                let y = low(side);
+                assert!(y > -0.08, "seed {seed} phase {phase}: a hoof sinks to {y}");
+                if gait.in_stance(phase, side) {
+                    assert!(y.abs() < 0.08, "seed {seed} phase {phase}: the stance hoof is at {y}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_faun_wears_no_boots_or_trousers_and_its_horns_come_out_through_headgear() {
+    let body = faun(7);
+    let fit = fit_worn(&body, &[(Slot::Feet, roll(Family::Feet, 3)), (Slot::Legs, roll(Family::Legs, 3))]);
+    assert!(fit.layer(Slot::Feet).is_none() && fit.layer(Slot::Legs).is_none(), "furred hooved legs stay bare");
+    assert!(!fit.covered.feet && !fit.covered.legs);
+    for seed in [1, 7, 40] {
+        let features = faun(seed).standing_features(Default::default());
+        assert_eq!(features.horns.len(), 2, "both horns come out through headgear");
+    }
+}
+
+#[test]
+fn a_fauns_clothes_clear_its_skin_and_a_weapon_sits_in_its_palm() {
+    for seed in [3, 1207] {
+        let body = faun(seed);
+        for outfit_seed in [10u32, 11, 12, 13] {
+            let worn: Vec<(Slot, Item)> = [(Slot::Shirt, Family::Garment), (Slot::Body, Family::Garment), (Slot::Belt, Family::Belt), (Slot::Hands, Family::Hands), (Slot::Head, Family::Hood)]
+                .iter()
+                .filter_map(|&(slot, family)| Item::roll(family, outfit_seed).map(|i| (slot, i)))
+                .collect();
+            let fit = fit_worn(&body, &worn);
+            assert!(fit.layers.len() >= 3, "seed {seed} outfit {outfit_seed}");
+            let trunk = body.trunk();
+            for layer in fit.layers.iter().filter(|l| matches!(l.slot, Slot::Shirt | Slot::Body)) {
+                let mut inside = 0usize;
+                let mut total = 0usize;
+                for p in layer.mesh.parts.iter().filter(|p| p.name == "body").flat_map(|p| &p.positions) {
+                    if p[1] < body.hip_y || p[1] > body.shoulder_y || p[0].abs() > body.shoulder_half_width * 0.7 {
+                        continue;
+                    }
+                    total += 1;
+                    let (hw, hd) = trunk.at(p[1]);
+                    if ((p[0] / hw).powi(2) + (p[2] / hd).powi(2)).sqrt() < 0.9 {
+                        inside += 1;
+                    }
+                }
+                assert!(inside * 50 <= total.max(50), "seed {seed} outfit {outfit_seed} {:?}: {inside} of {total} inside the trunk", layer.slot);
+            }
+        }
+    }
+    let body = faun(7);
+    for family in [Family::Spear, Family::Sword] {
+        let item = (0..40).filter_map(|s| Item::roll(family, s)).next().unwrap();
+        let fit = fit_held(&body, Side::Right, &item).expect("held");
+        let posed = Body::posed(&body.spec, fit.pose);
+        let grip = posed.grip(Side::Right);
+        let palm = posed.hand_form().palm_length;
+        let along = grip.y();
+        let to_axis = |p: [f32; 3]| {
+            let v = vec3::sub(p, grip.origin);
+            vec3::length(vec3::sub(v, vec3::scale(along, vec3::dot(v, along))))
+        };
+        let closest = fit.mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| to_axis(p)).fold(f32::MAX, f32::min);
+        assert!(closest < 0.5 * palm, "{family:?}: the haft is {closest} from the grip's axis, palm {palm}");
+    }
+}
+
 #[test]
 fn the_trunk_stoops_in_the_rest_pose_and_the_arms_still_hang() {
     let body = minotaur(7);
