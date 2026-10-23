@@ -26,6 +26,14 @@ pub enum Folk {
     Minotaur,
 }
 
+impl Race {
+    /// Whether the race stands on its toes with cloven hooves: it takes no boots and its cloth
+    /// ends at the hock.
+    pub fn hooved(&self) -> bool {
+        self.legs.is_some()
+    }
+}
+
 impl Folk {
     /// The six folk who delve. Factions and members roll from these; the denizens are
     /// [`Folk::DENIZENS`].
@@ -259,6 +267,14 @@ fn one() -> f32 {
     1.0
 }
 
+fn default_radius() -> Span {
+    [0.3, 0.4]
+}
+
+fn default_curl() -> Span {
+    [0.9, 2.0]
+}
+
 /// A range a seed rolls a value in.
 pub type Span = [f32; 2];
 
@@ -275,6 +291,13 @@ pub struct HornRow {
     pub wear: Span,
     /// Chance that one of the pair is broken off.
     pub broken: f32,
+    /// Root radius in half widths of the head, by the horn's length share (short horns are
+    /// slim, long ones heavy), and how far the heading turns toward the front along its length,
+    /// radians, by the curve share (up to about 4.5 for a ram's spiral).
+    #[serde(default = "default_radius")]
+    pub radius: Span,
+    #[serde(default = "default_curl")]
+    pub curl: Span,
     /// Where on the skull's top (share along it) the horns root.
     pub root: f32,
 }

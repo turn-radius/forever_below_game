@@ -152,7 +152,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
     let mut fit = WornFit::default();
     let mut env = Envelope::new(body);
     // Hooves take no boots: footwear is skipped for a race on its toes (see docs/body.md).
-    let hooved = body.race().legs.is_some();
+    let hooved = body.race().hooved();
     let tucked = !hooved && worn.iter().any(|(slot, item)| *slot == Slot::Feet && matches!(item, Item::Feet(s) if has_shaft(s)));
     let hooded = worn.iter().any(|(slot, item)| *slot == Slot::Head && matches!(item, Item::Hood(_)));
     let robed = worn.iter().any(|(slot, item)| matches!(slot, Slot::Shirt | Slot::Body) && matches!(item, Item::Garment(g) if g.cut.style == GarmentStyle::Robe));
@@ -1367,7 +1367,7 @@ fn helm(body: &Body, state: &HelmState, fit: HeadFit) -> ItemMesh {
     // lizard's snout and brow.
     let features = body.standing_features(fit);
     let local = |f: Vec<V3>| f.into_iter().map(|p| vec3::sub(p, at)).collect::<Vec<V3>>();
-    let openings = Openings { through: through_features(features.ears, features.horns).into_iter().map(local).collect(), lift: features.face.into_iter().map(local).collect(), margin: 0.08 * body.scale.sqrt() };
+    let openings = Openings { through: through_features(features.ears, features.horns, 0.08 * body.scale.sqrt()).into_iter().map(local).collect(), lift: features.face.into_iter().map(local).collect(), margin: 0.08 * body.scale.sqrt() };
     let mut mesh = Helm::build_with_openings(&s, &openings);
     Placement::translation(at).apply_to_item(&mut mesh);
     mesh
@@ -1376,23 +1376,32 @@ fn helm(body: &Body, state: &HelmState, fit: HeadFit) -> ItemMesh {
 /// The features that come out through a helm, one cloud each: a horn and an ear on the same
 /// side stand close, and cut as two holes that overlap they spoil each other (the shell's
 /// outline cannot take two overlapping holes), so each side's pair is one opening.
-fn through_features(ears: Vec<Vec<V3>>, horns: Vec<Vec<V3>>) -> Vec<Vec<V3>> {
-    if horns.is_empty() {
-        return ears;
-    }
+fn through_features(ears: Vec<Vec<V3>>, horns: Vec<Vec<V3>>, margin: f32) -> Vec<Vec<V3>> {
+    let centroid = |c: &[V3]| {
+        let n = c.len().max(1) as f32;
+        c.iter().fold([0.0; 3], |a, p| vec3::add(a, vec3::scale(*p, 1.0 / n)))
+    };
+    let mut ears: Vec<Option<Vec<V3>>> = ears.into_iter().map(Some).collect();
     let mut out: Vec<Vec<V3>> = vec![];
-    for (i, horn) in horns.into_iter().enumerate() {
-        let mut cloud = horn;
-        // Ears come in the same order (left, right) when both are standing.
-        if let Some(ear) = ears.get(i).filter(|_| ears.len() == 2) {
-            cloud.extend(ear.iter().copied());
+    for mut cloud in horns {
+        let at = centroid(&cloud);
+        // The ear on the same side (by the sign of x), if it stands near this horn.
+        let near = ears.iter().position(|e| e.as_ref().is_some_and(|e| {
+            let c = centroid(e);
+            c[0] * at[0] >= 0.0 && vec3::distance(c, at) < 2.0 * margin + 1.5 * cloud_radius(&cloud, at).max(cloud_radius(e, c))
+        }));
+        if let Some(ear) = near.and_then(|i| ears[i].take()) {
+            cloud.extend(ear);
         }
         out.push(cloud);
     }
-    if ears.len() != 2 {
-        out.extend(ears);
-    }
+    out.extend(ears.into_iter().flatten());
     out
+}
+
+/// How far the farthest point of `cloud` is from `centre`.
+fn cloud_radius(cloud: &[V3], centre: V3) -> f32 {
+    cloud.iter().map(|p| vec3::distance(*p, centre)).fold(0.0, f32::max)
 }
 
 /// A hood over the head and hair, its cape over everything on the shoulders.
@@ -2584,6 +2593,24 @@ mod tests {
     #[test]
     fn a_lizards_snout_and_brow_clear_helms_smoke() {
         a_lizards_snout_and_brow_clear_helms_check(&[1207], &[HelmStyle::Bascinet], 0..1, 10);
+    }
+
+    #[test]
+    fn a_horn_and_the_ear_beside_it_are_one_opening_and_far_apart_ones_are_two() {
+        let blob = |c: V3| -> Vec<V3> { (0..8).map(|k| vec3::add(c, [0.1 * (k % 2) as f32, 0.1 * (k / 4) as f32, 0.0])).collect() };
+        let margin = 0.1;
+        // A horn and an ear on the same side, close together: one cloud.
+        let long_horn: Vec<V3> = (0..8).map(|k| [1.0 + 0.3 * k as f32, 0.5 + 0.1 * k as f32, 0.0]).collect();
+        let merged = through_features(vec![blob([1.0, 0.0, 0.0])], vec![long_horn], margin);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].len(), 16);
+        // A horn at the top of the skull and an ear far down the side: two.
+        let apart = through_features(vec![blob([3.0, -4.0, 0.0])], vec![blob([0.2, 1.0, 0.0])], margin);
+        assert_eq!(apart.len(), 2);
+        // Opposite sides never merge, and a single horn leaves both ears to cut for themselves.
+        let sides = through_features(vec![blob([1.0, 0.0, 0.0]), blob([-1.0, 0.0, 0.0])], vec![blob([-1.1, 0.2, 0.0])], margin);
+        assert_eq!(sides.len(), 2);
+        assert!(sides.iter().any(|c| c.len() == 16 && c[0][0] < 0.0) && sides.iter().any(|c| c.len() == 8 && c[0][0] > 0.0));
     }
 
     fn a_minotaurs_horns_and_muzzle_clear_helms_check(seeds: &[u32], styles: &[HelmStyle], kits: std::ops::Range<u32>, min_checked: usize) {

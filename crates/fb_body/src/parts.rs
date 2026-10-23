@@ -127,11 +127,11 @@ impl Traits {
         let broken = (h.broken_side as usize == side && h.broken_roll < row.broken).then_some(h.broken_at);
         HornSpec {
             length: lerp(row.length, h.length) * hw,
-            radius: (0.3 + 0.1 * h.length) * hw,
+            radius: lerp(row.radius, h.length) * hw,
             rise: 0.3 + 0.22 * rise,
             rise_tip: 0.7 + 0.8 * rise + 0.25 * curve,
             yaw: 0.3 + 0.3 * (1.0 - spread),
-            curl: (0.9 + 1.1 * curve) * (1.3 - 0.55 * spread),
+            curl: lerp(row.curl, h.curve) * (1.3 - 0.55 * spread),
             wear: lerp(row.wear, h.wear[side]),
             broken,
         }
@@ -462,9 +462,4 @@ pub fn tuft(end: V3, seg: f32, radius: f32, fullness: f32, seed: u32) -> MeshBui
         out.append(&tube(&path, 5, &SweepOptions::default(), |s| 0.2 * radius * (1.0 + 0.4 * fullness) * (1.0 - 0.85 * s) + 0.01));
     }
     out
-}
-
-/// Whether this race row turns on any denizen part.
-pub fn is_denizen_row(race: &Race) -> bool {
-    race.horns.is_some() || race.legs.is_some() || race.tail_shape.is_some() || race.muzzle.is_some()
 }

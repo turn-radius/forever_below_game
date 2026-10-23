@@ -50,6 +50,8 @@ const THIGH_BACK: f32 = 0.2;
 const HIP_LIMB: f32 = 0.5;
 /// How far out the top of a thigh reaches, as a share of the hips' half width: inside the hip line, so the thigh never stands out past it.
 const THIGH_TOP: f32 = 0.92;
+/// How far below the hock a hoofed leg's cloth may hang, in the body's scale.
+const HOCK_HEM: f32 = 0.3;
 /// Angles sampled round a section to find how wide it is.
 const SIDE_STEPS: usize = 48;
 /// How far past the thighs the garment form's section over them reaches sideways, as a share of their reach.
@@ -668,7 +670,7 @@ impl Body {
             stance: leg.joints[2][0].abs(),
             sections: Some(sections),
             // A leg on its toes ends its cloth at the hock.
-            hem_floor: if self.race().legs.is_some() { self.ankle_y - 0.3 * self.scale } else { 0.0 },
+            hem_floor: if self.race().hooved() { self.ankle_y - HOCK_HEM * self.scale } else { 0.0 },
         }
     }
 

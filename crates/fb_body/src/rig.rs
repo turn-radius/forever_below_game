@@ -1,5 +1,6 @@
-//! A folk's rig: sixteen joints, then a tail's four bones, with their rest frames, taken from the body's own limb joints,
-//! and the maths to pose it ([`RigPose`]) and to skin points with it. Plain Rust, no Bevy.
+//! A folk's rig: sixteen joints taken from the body's own limb joints, then four bones for a
+//! jointed tail, each with its rest frame, and the maths to pose it ([`RigPose`]) and to skin
+//! points with it. Plain Rust, no Bevy.
 //!
 //! Every joint rests with an identity rotation, so a joint's frame is body space moved to its
 //! origin: a rotation about +X is a swing in the vertical plane (negative swings a hanging limb
