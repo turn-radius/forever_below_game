@@ -18,6 +18,8 @@ pub mod crest;
 pub mod creature_view;
 pub mod creatures;
 pub mod doll_view;
+pub mod lineup_check;
+pub mod lineup_view;
 pub mod eat;
 pub mod enchanter;
 pub mod enchanting;
