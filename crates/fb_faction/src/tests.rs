@@ -193,6 +193,23 @@ fn a_name_that_says_a_sex_makes_every_member_so() {
 }
 
 #[test]
+fn no_name_says_two_classes() {
+    let cleric = ["Chapel", "Choir", "Vigil", "Synod", "Litany", "Congregation", "Rite"];
+    let martial = ["reavers", "raiders", "highwaymen"];
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            let w = words(&spec.name);
+            let both = cleric.iter().any(|c| w.contains(c)) && martial.iter().any(|m| w.contains(m));
+            assert!(!both, "{} says two classes", spec.name);
+        }
+    }
+    // The grammar notes a key set twice to different values.
+    let g = procgen_grammar::Grammar::from_pairs(&[("origin", &["[class:cleric]a [class:fighter]b", "[class:cleric]a [class:cleric]b"])]);
+    let conflicts = |seed| procgen_grammar::expand_tagged(&g, "#origin#", seed).unwrap().conflicts;
+    assert!((0..20).any(|s| conflicts(s) == ["class"]) && (0..20).any(|s| conflicts(s).is_empty()));
+}
+
+#[test]
 fn the_same_seed_gives_the_same_name_and_makeup() {
     for seed in 0..40 {
         let (a, b) = (World::new(seed), World::new(seed));

@@ -370,12 +370,13 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
     let insular = rng.chance(INSULAR_ODDS);
 
     // The name comes first, because its words say who the members are: the `class` it sets
-    // narrows the classes they dress as. On a clash with a name already in the pool, another
-    // seed from the same stream.
+    // narrows the classes they dress as. A name with two class words ("the Reavers of the
+    // Chapel") says two things of its members, so it is never kept: like a clash with a name
+    // already in the pool, it is drawn again from another seed of the same stream.
     let (folk_key, intention_key) = (folk_key(folk), intention.key());
     let mut named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));
     for _ in 0..64 {
-        if !taken.contains(&named.text) {
+        if !taken.contains(&named.text) && named.conflicts.is_empty() {
             break;
         }
         named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));

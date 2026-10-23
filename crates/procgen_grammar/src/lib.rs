@@ -175,6 +175,8 @@ fn split_tag(tag: &str) -> (&str, Vec<&str>) {
 pub struct Expansion {
     pub text: String,
     pub tags: BTreeMap<String, String>,
+    /// Keys that actions set to two different values (the last stands).
+    pub conflicts: Vec<String>,
 }
 
 impl Expansion {
@@ -202,14 +204,15 @@ pub fn expand_tagged(grammar: &Grammar, start: &str, seed: u32) -> Result<Expans
 
 /// [`expand_with`], with what the actions set.
 pub fn expand_tagged_with(grammar: &Grammar, start: &str, rng: &mut Mulberry32) -> Result<Expansion, GrammarError> {
-    let mut run = Run { tags: BTreeMap::new(), budget: MAX_EXPANSIONS };
+    let mut run = Run { tags: BTreeMap::new(), conflicts: Vec::new(), budget: MAX_EXPANSIONS };
     let text = expand_text(grammar, start, rng, 0, &mut run)?;
-    Ok(Expansion { text, tags: run.tags })
+    Ok(Expansion { text, tags: run.tags, conflicts: run.conflicts })
 }
 
 /// The state one expansion carries: the keys set so far and the expansions left.
 struct Run {
     tags: BTreeMap<String, String>,
+    conflicts: Vec<String>,
     budget: usize,
 }
 
@@ -231,6 +234,11 @@ fn expand_text(g: &Grammar, text: &str, rng: &mut Mulberry32, depth: usize, run:
                 continue;
             };
             let value = expand_text(g, value, rng, depth + 1, run)?;
+            // The last value stands, but a key set to two different values is noted, so a caller
+            // that cannot hold both (a faction that is all clerics and all fighters) can ask again.
+            if run.tags.get(key).is_some_and(|was| *was != value) && !run.conflicts.iter().any(|k| k == key) {
+                run.conflicts.push(key.to_string());
+            }
             run.tags.insert(key.to_string(), value);
             rest = &after[end + 1..];
             continue;
@@ -383,7 +391,7 @@ pub fn faction_name(folk_key: &str, intention_key: &str, seed: u32) -> String {
 pub fn faction_named(folk_key: &str, intention_key: &str, seed: u32) -> Expansion {
     faction_names()
         .named(folk_key, intention_key, seed)
-        .unwrap_or_else(|_| Expansion { text: "the Nameless".to_string(), tags: BTreeMap::new() })
+        .unwrap_or_else(|_| Expansion { text: "the Nameless".to_string(), ..Expansion::default() })
 }
 
 #[cfg(test)]
