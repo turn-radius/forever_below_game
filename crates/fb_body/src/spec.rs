@@ -199,7 +199,7 @@ impl BodySpec {
             Folk::Goblin | Folk::Pigfolk => HairStyle::Shaggy,
             // The denizen races have their own heads and manes, which carry no sex yet (a succubus,
             // later, will be a woman).
-            Folk::Lizardfolk | Folk::Minotaur | Folk::Faun | Folk::Cyclops => return,
+            Folk::Lizardfolk | Folk::Minotaur | Folk::Faun | Folk::Cyclops | Folk::WingedDemon | Folk::HornedDemon | Folk::Succubus => return,
         };
         if self.hair == HairStyle::Mohawk {
             return;

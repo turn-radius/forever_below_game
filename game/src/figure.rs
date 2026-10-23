@@ -80,7 +80,7 @@ impl Figure {
         let shapes: Vec<(Slot, armory::Item)> = worn.iter().map(|(slot, item)| (*slot, item.shape.clone())).collect();
         let fit = fit_worn(&body, &shapes);
 
-        let mut skin = body.skin_mesh();
+        let mut skin = body.skin_mesh_lifted(fit.wing_lift);
         skin.parts.retain(|p| !fit.covered.hides(p.name));
         let mut head = body.head_mesh_fitted(fit.head);
         head.parts.extend(body.hair_mesh(fit.hair).parts);
@@ -89,7 +89,7 @@ impl Figure {
         let hooded = matches!(held(Slot::Head), Some(armory::Item::Hood(_)));
         // Every vertex of the skin and the gear follows the rig's joints, by where it rests; what
         // is held rides a joint rigidly. The head and the hood turn with the body under a hood.
-        let skinner = Skinner::new(&body);
+        let skinner = Skinner::with_wing_lift(&body, fit.wing_lift);
         let head_region = if hooded { SkinRegion::Chest } else { SkinRegion::Head };
         let weights = |mesh: &ItemMesh, region: &dyn Fn(&str) -> SkinRegion| Some(skinner.mesh(mesh, region));
         let mut pieces = vec![
@@ -152,7 +152,7 @@ impl Figure {
             }
         }
         let neck = Vec3::from_array(body.neck_base().origin);
-        let rig = Rig::of(&body);
+        let rig = Rig::of_lifted(&body, fit.wing_lift);
         let gait = Gait::new(&body, &rig);
         Figure { body, pieces, light, neck, rig, gait, hooded }
     }
@@ -248,6 +248,29 @@ mod tests {
                 let held = &figure.pieces.iter().find(|p| p.name == weapon.title()).unwrap().mesh;
                 let nearest = held.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
                 assert!(nearest < 0.7, "{outfit}: weapon {nearest} from the fist");
+            }
+        }
+    }
+
+    #[test]
+    fn each_demon_is_dressed_with_wings_over_the_gear_and_holds_a_weapon() {
+        for folk in [Folk::WingedDemon, Folk::HornedDemon, Folk::Succubus] {
+            for outfit in ["fighter", "mage"] {
+                let worn = fb_items::outfit::outfit(outfit).unwrap().roll(7, folk.key()).worn;
+                let figure = Figure::dress(&BodySpec::roll(folk, 7), &worn, 0.2);
+                let body = figure.pieces.iter().find(|p| p.name == "Body").unwrap();
+                let names: Vec<&str> = body.mesh.parts.iter().map(|p| p.name).collect();
+                assert!(figure.pieces.len() >= 4 && figure.pieces.iter().all(|p| !p.mesh.parts.is_empty()), "{folk:?} {outfit}");
+                assert!(names.contains(&"tail_spade"), "{folk:?} {outfit}: {names:?}");
+                // The wings are skinned (every vertex to joints) and the body has them only where the race does.
+                assert_eq!(names.contains(&"wing_membrane"), folk != Folk::HornedDemon, "{folk:?} {outfit}");
+                assert!(body.skin.as_ref().is_some_and(|s| s.len() == body.mesh.parts.len()));
+                if let Some((_, weapon)) = worn.iter().find(|(s, _)| *s == Slot::Mainhand) {
+                    let fist = Vec3::from_array(figure.body.grip(fb_body::MAIN_HAND).origin);
+                    let held = &figure.pieces.iter().find(|p| p.name == weapon.title()).unwrap().mesh;
+                    let nearest = held.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
+                    assert!(nearest < 0.7, "{folk:?} {outfit}: weapon {nearest} from the fist");
+                }
             }
         }
     }

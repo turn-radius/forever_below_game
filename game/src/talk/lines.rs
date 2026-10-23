@@ -2,6 +2,8 @@
 //! grammars of `data/talk.json` with `procgen_grammar`, seeded by the folk's own seed and the
 //! topic, so the same folk always say the same thing. Nothing here knows Bevy.
 
+use fb_denizens::DenizenKind;
+use fb_denizens::tongue::{self, Word};
 use fb_faction::{Band, Intention, Profession, Tier, Trade};
 use procgen_grammar::{Grammar, expand_with};
 use procgen_rng::Mulberry32;
@@ -29,8 +31,12 @@ pub fn reception(band: Band, turned_on_delver: bool) -> Reception {
     }
 }
 
-/// The toast for a folk who will not speak: "Hilda Stonefoot spits at your feet."
+/// The toast for a folk who will not speak: "Hilda Stonefoot spits at your feet." A denizen
+/// snorts, hisses or bellows first.
 pub fn spit_line(speaker: &Speaker) -> String {
+    if speaker.denizen.is_some() {
+        return say(speaker, "dn_spit", 0x21, &denizen_extras(speaker));
+    }
     format!("{} spits at your feet.", speaker.name)
 }
 
@@ -55,6 +61,15 @@ pub enum Topic {
     Service(Service),
     Level,
     WayOut,
+    /// A denizen: what to beware of.
+    Threats,
+    /// A denizen: work they have.
+    Quest,
+    /// A folk deep enough to know them: the denizen faction at this index of
+    /// [`Speaker::denizen_factions`].
+    Faction(u8),
+    /// A folk near the top who has heard a rumour of the denizens.
+    Strange,
 }
 
 impl Topic {
@@ -70,8 +85,56 @@ impl Topic {
             Topic::Service(Service::Scrap) => "Scrap",
             Topic::Level => "This level",
             Topic::WayOut => "The way out",
+            Topic::Threats => "Dangers",
+            Topic::Quest => "Work",
+            Topic::Faction(_) => "The denizens",
+            Topic::Strange => "Strange tales",
         }
     }
+
+    /// The line the panel lists it by for this speaker: a denizen faction's topic is named for it.
+    pub fn label_for(self, speaker: &Speaker) -> String {
+        match self {
+            Topic::Faction(i) => speaker.denizen_factions.get(i as usize).map_or_else(|| self.label().to_string(), |f| format!("The {}", f.name.trim_start_matches("the "))),
+            _ => self.label().to_string(),
+        }
+    }
+
+    /// The part of a tongue the topic is spoken of, if a denizen speaks it.
+    pub fn tongue_topic(self) -> Option<tongue::Topic> {
+        match self {
+            Topic::Who => Some(tongue::Topic::Kin),
+            Topic::Trade | Topic::Service(Service::Barter) => Some(tongue::Topic::Trade),
+            Topic::Level | Topic::WayOut => Some(tongue::Topic::Place),
+            Topic::Threats => Some(tongue::Topic::Threat),
+            Topic::Quest => Some(tongue::Topic::Quest),
+            _ => None,
+        }
+    }
+
+    /// A number that is the same in every run, to mix into a line's glyph seed.
+    pub fn salt(self) -> u32 {
+        match self {
+            Topic::Who => 1,
+            Topic::Trade => 2,
+            Topic::Service(s) => 3 + s as u32,
+            Topic::Level => 10,
+            Topic::WayOut => 11,
+            Topic::Threats => 12,
+            Topic::Quest => 13,
+            Topic::Faction(i) => 20 + i as u32,
+            Topic::Strange => 40,
+        }
+    }
+}
+
+/// A denizen faction a folk knows of on their level.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownDenizens {
+    pub name: String,
+    pub kind: DenizenKind,
+    /// How the faction thinks of the delver.
+    pub band: Band,
 }
 
 /// Who is speaking, and the little of the level they know.
@@ -92,6 +155,10 @@ pub struct Speaker {
     /// The traders of the speaker's faction on the level, as (name, profession, where they stand
     /// from the speaker's post: "in the market, past the hall").
     pub traders: Vec<(String, Profession, String)>,
+    /// A denizen speaks one of the tongues: the kind of denizen they are.
+    pub denizen: Option<DenizenKind>,
+    /// The denizen factions on the level, which a folk deep enough knows by name.
+    pub denizen_factions: Vec<KnownDenizens>,
 }
 
 /// A master the world places deeper down, for a rumour.
@@ -107,6 +174,9 @@ pub struct MasterRumour {
 /// The topics a folk offers, in order: who they are; for a trade, the trade and what it offers
 /// beyond talk; the level; the way out.
 pub fn topics(speaker: &Speaker) -> Vec<Topic> {
+    if speaker.denizen.is_some() {
+        return vec![Topic::Who, Topic::Level, Topic::Threats, Topic::Trade, Topic::Service(Service::Barter), Topic::Quest];
+    }
     let mut list = vec![Topic::Who];
     if let Some(trade) = speaker.trade {
         list.push(Topic::Trade);
@@ -119,12 +189,26 @@ pub fn topics(speaker: &Speaker) -> Vec<Topic> {
             _ => {}
         }
     }
-    list.extend([Topic::Level, Topic::WayOut]);
+    list.push(Topic::Level);
+    if fb_denizens::denizens_at(speaker.depth) {
+        list.extend((0..speaker.denizen_factions.len().min(3)).map(|i| Topic::Faction(i as u8)));
+    } else if strange_tale(speaker).is_some() {
+        list.push(Topic::Strange);
+    }
+    list.push(Topic::WayOut);
     list
 }
 
 /// What they say on being greeted, warmer as the faction thinks better of the delver.
 pub fn greeting(speaker: &Speaker) -> String {
+    if speaker.denizen.is_some() {
+        let symbol = match speaker.band {
+            Band::Allied => "dn_greet_allied",
+            Band::Friendly => "dn_greet_friendly",
+            _ => "dn_greet",
+        };
+        return say(speaker, symbol, 0x11, &denizen_extras(speaker));
+    }
     let symbol = match speaker.band {
         Band::Allied => "greet_allied",
         Band::Friendly => "greet_friendly",
@@ -135,13 +219,48 @@ pub fn greeting(speaker: &Speaker) -> String {
 
 /// The one line a Wary folk says; they keep walking, which reads as turning away.
 pub fn wary_line(speaker: &Speaker) -> String {
+    if speaker.denizen.is_some() {
+        return say(speaker, "dn_wary", 0x12, &denizen_extras(speaker));
+    }
     say(speaker, "wary", 0x02, &[])
 }
 
-/// What a denizen does when the delver speaks to them: a gesture, since the delver has no
-/// tongue they share. #628 replaces this with the tongue-gated panel.
-pub fn gesture(speaker: &Speaker, hostile: bool) -> String {
-    if hostile { say(speaker, "gesture_hostile", 0x04, &[]) } else { say(speaker, "gesture", 0x03, &[]) }
+/// What a denizen does when the delver asks to barter in words they do not know well enough:
+/// a gesture refusing.
+pub fn barter_refusal(speaker: &Speaker) -> String {
+    say(speaker, "dn_barter_refused", 0x13, &denizen_extras(speaker))
+}
+
+/// The symbols a denizen's lines use besides a folk's: the sound it makes.
+fn denizen_extras(speaker: &Speaker) -> Vec<(&'static str, String)> {
+    let Some(kind) = speaker.denizen else { return Vec::new() };
+    vec![("sound", say(speaker, &format!("dn_sound_{}", kind.key()), 0x14, &[]))]
+}
+
+/// The words a denizen's `topic` line needs (`None` is the greeting): the topic's core words of
+/// its tongue plus the line's own extras listed in data/talk.json as `needs_<line>`. Empty for a
+/// folk, whose lines the delver always reads.
+pub fn line_needs(speaker: &Speaker, topic: Option<Topic>) -> Vec<Word> {
+    let Some(kind) = speaker.denizen else { return Vec::new() };
+    let (tongue_topic, line) = match topic {
+        None => (tongue::Topic::Greeting, "dn_greet"),
+        Some(t) => match (t.tongue_topic(), t) {
+            (Some(tt), Topic::Who) => (tt, "dn_kin"),
+            (Some(tt), Topic::Level) => (tt, "dn_place"),
+            (Some(tt), Topic::Threats) => (tt, "dn_threat"),
+            (Some(tt), Topic::Trade | Topic::Service(Service::Barter)) => (tt, "dn_trade"),
+            (Some(tt), Topic::Quest) => (tt, "dn_quest"),
+            _ => return Vec::new(),
+        },
+    };
+    let extra: Vec<&str> = grammar().symbols.get(&format!("needs_{line}")).map(|v| v.iter().map(String::as_str).collect()).unwrap_or_default();
+    tongue::needs_with(kind, tongue_topic, &extra).unwrap_or_else(|e| panic!("data/talk.json, needs_{line}: {e}"))
+}
+
+/// The seed a denizen's `topic` line is shown in glyphs from (`None` is the greeting): the
+/// speaker's seed mixed with the topic, the same every frame.
+pub fn glyph_seed(speaker: &Speaker, topic: Option<Topic>) -> u32 {
+    speaker.seed ^ topic.map_or(0, |t| t.salt()).wrapping_mul(0x9E37_79B1)
 }
 
 /// "Apprentice weaponsmith (blades)", lower case, as a trade reads mid-sentence.
@@ -151,13 +270,69 @@ fn calling(trade: &Trade) -> String {
 
 /// Their answer to `topic`. `rumour` is a master deeper down, if the caller found one.
 pub fn answer(speaker: &Speaker, topic: Topic, rumour: Option<&MasterRumour>) -> String {
+    if speaker.denizen.is_some() {
+        return denizen_answer(speaker, topic);
+    }
     match topic {
         Topic::Who => who(speaker),
         Topic::Trade => trade(speaker),
         Topic::Service(_) => say(speaker, "not_yet", 0x05, &[]),
         Topic::Level => level(speaker),
         Topic::WayOut => way_out(speaker, rumour),
+        Topic::Faction(i) => faction_line(speaker, i),
+        Topic::Strange => strange_tale(speaker).unwrap_or_else(|| say(speaker, "not_yet", 0x05, &[])),
+        Topic::Threats | Topic::Quest => say(speaker, "not_yet", 0x05, &[]),
     }
+}
+
+/// A denizen's answer to `topic`, in plain words (the panel shows it in glyphs until the delver
+/// knows the words, [`line_needs`]).
+fn denizen_answer(speaker: &Speaker, topic: Topic) -> String {
+    let symbol = match topic {
+        Topic::Who => "dn_kin",
+        Topic::Level | Topic::WayOut => "dn_place",
+        Topic::Threats => "dn_threat",
+        Topic::Trade => "dn_trade",
+        Topic::Service(Service::Barter) => return barter_refusal(speaker),
+        Topic::Quest => "dn_quest",
+        _ => "not_yet",
+    };
+    say(speaker, symbol, 0x30 + topic.salt(), &denizen_extras(speaker))
+}
+
+/// What a folk at or below the denizens' depth says of the denizen faction at `index` on their
+/// level: who they are from the `knows_<kind>` origins of data/rumours.json, then whether they
+/// are friendly or dangerous to the delver.
+fn faction_line(speaker: &Speaker, index: u8) -> String {
+    let Some(known) = speaker.denizen_factions.get(index as usize) else { return say(speaker, "not_yet", 0x05, &[]) };
+    let mut rng = Mulberry32::new(speaker.seed ^ 0x6B4E ^ (index as u32).wrapping_mul(0x9E37));
+    let bound = Grammar { symbols: [("faction".to_string(), vec![known.name.clone()])].into_iter().collect() };
+    let key = format!("knows_{}", known.kind.key());
+    let who = expand_with(&fb_items::tongues::grammar().merged(&bound), &format!("#{key}#"), &mut rng).unwrap_or_else(|e| panic!("data/rumours.json, {key}: {e}"));
+    let who = who.split_whitespace().collect::<Vec<_>>().join(" ");
+    let band = match known.band {
+        Band::Hostile => "dn_band_hostile",
+        Band::Wary => "dn_band_wary",
+        Band::Neutral => "dn_band_neutral",
+        Band::Friendly => "dn_band_friendly",
+        Band::Allied => "dn_band_allied",
+    };
+    format!("{who} {}", say(speaker, band, 0x41 + index as u32, &[]))
+}
+
+/// A rumour of the denizens that a folk above their depth has heard, if they have: the chance
+/// rises with depth ([`fb_items::tongues::rumour_odds`]), from rare at the top. The same folk
+/// always have it or not, and tell the same rumour.
+pub fn strange_tale(speaker: &Speaker) -> Option<String> {
+    if fb_denizens::denizens_at(speaker.depth) {
+        return None;
+    }
+    let mut rng = Mulberry32::new(speaker.seed ^ 0x5742);
+    if !rng.chance(fb_items::tongues::rumour_odds(speaker.depth)) {
+        return None;
+    }
+    let kind = *rng.pick(&DenizenKind::ALL);
+    Some(fb_items::tongues::tell(kind, &mut rng))
 }
 
 fn who(speaker: &Speaker) -> String {
@@ -325,6 +500,8 @@ mod tests {
             depth: 3,
             level_factions: vec!["the Ash Choir".into(), "the Scale Court".into(), "the Lantern-keepers".into()],
             traders: vec![("Borin Ironhand".into(), Profession::Armorer, "in the market, past the hall".into())],
+            denizen: None,
+            denizen_factions: Vec::new(),
         }
     }
 
@@ -336,7 +513,7 @@ mod tests {
     #[test]
     fn the_grammar_is_sound_with_the_symbols_a_speaker_supplies() {
         let mut symbols = base(&speaker(Some(smith()), Band::Neutral));
-        symbols.extend(["trader", "trader_calling", "trader_place", "factions", "count", "ordinal", "master_calling", "master_faction", "master_levels"].map(|k| (k, "x".to_string())));
+        symbols.extend(["trader", "trader_calling", "trader_place", "factions", "count", "ordinal", "master_calling", "master_faction", "master_levels", "sound"].map(|k| (k, "x".to_string())));
         let overlay = Grammar { symbols: symbols.into_iter().map(|(k, v)| (k.to_string(), vec![v])).collect() };
         let grammar = grammar().merged(&overlay);
         for symbol in starts::START_SYMBOLS {
@@ -364,15 +541,45 @@ mod tests {
     }
 
     #[test]
-    fn a_denizen_gestures_in_words_of_its_own_kind() {
+    fn a_denizen_snorts_and_spits_in_words_of_its_own_kind() {
         for seed in 0..40 {
             let mut s = speaker(None, Band::Neutral);
             s.folk = "Minotaur".into();
+            s.denizen = Some(DenizenKind::Minotaur);
             s.seed = seed;
-            let line = gesture(&s, false);
-            assert!(!gesture(&s, true).contains('#'));
-            assert!(line.contains("minotaur") && !line.contains('#') && !line.contains("..."), "{line}");
-            assert_eq!(line, gesture(&s, false));
+            for line in [spit_line(&s), wary_line(&s), barter_refusal(&s)] {
+                assert!(line.contains("minotaur") && !line.contains('#') && !line.contains("..."), "{line}");
+                assert!(line.starts_with("The minotaur"), "{line}");
+            }
+            let mut allowed = vec![
+                "The minotaur shakes its head at your words; you don't share enough of its speech to trade.".to_string(),
+                "The minotaur regards your coin without understanding, shakes its head, and turns it over; you don't know enough of its speech to trade.".to_string(),
+            ];
+            for sound in ["a low bellow", "a rumble deep in its chest", "a snort of hot breath"] {
+                allowed.push(format!("The minotaur {sound} and pushes your hand away; you can't make yourself understood well enough to trade."));
+            }
+            assert!(allowed.contains(&barter_refusal(&s)), "{}", barter_refusal(&s));
+            assert_eq!(spit_line(&s), spit_line(&s));
+        }
+    }
+
+    #[test]
+    fn every_denizen_line_expands_and_names_real_words() {
+        for kind in DenizenKind::ALL {
+            for band in [Band::Neutral, Band::Friendly, Band::Allied] {
+                let s = Speaker { denizen: Some(kind), folk: kind.label().into(), band, ..speaker(None, band) };
+                let topics = topics(&s);
+                assert_eq!(topics, [Topic::Who, Topic::Level, Topic::Threats, Topic::Trade, Topic::Service(Service::Barter), Topic::Quest]);
+                let mut lines = vec![greeting(&s)];
+                lines.extend(topics.iter().map(|t| answer(&s, *t, None)));
+                for line in lines {
+                    assert!(!line.contains("...") && !line.contains('#') && !line.is_empty(), "{kind:?}: {line:?}");
+                }
+                // The core words plus the line's extras, none unknown (a bad key panics).
+                assert!(line_needs(&s, None).len() >= tongue::CORE_WORDS);
+                assert!(line_needs(&s, Some(Topic::Who)).len() > tongue::CORE_WORDS);
+                assert!(line_needs(&s, Some(Topic::Quest)).iter().any(|w| w.key == "reward"));
+            }
         }
     }
 
@@ -460,10 +667,11 @@ mod tests {
 
     mod starts {
         /// The symbols a line is started from.
-        pub const START_SYMBOLS: [&str; 27] = [
+        pub const START_SYMBOLS: [&str; 40] = [
             "greet_neutral", "greet_friendly", "greet_allied", "wary", "who_way_out", "who_trade", "who_worship", "who_plunder", "who_calling", "who_guard", "trade_armorer", "trade_weaponsmith",
             "trade_bowyer", "trade_tentmaker", "trade_general_goods", "trade_alchemist", "trade_enchanter", "trade_guard", "guard_traders", "guard_no_traders", "tier_novice", "tier_master", "level",
-            "level_alone", "way_out", "way_master", "not_yet",
+            "level_alone", "way_out", "way_master", "not_yet", "dn_spit", "dn_wary", "dn_greet", "dn_greet_friendly", "dn_greet_allied", "dn_kin", "dn_place", "dn_threat", "dn_trade", "dn_quest",
+            "dn_barter_refused", "dn_band_hostile", "dn_sound_minotaur",
         ];
     }
 }

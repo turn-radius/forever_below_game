@@ -29,6 +29,14 @@ pub enum Folk {
     /// A one-eyed giant of the abyss. Not one of the six who delve, so it is not in
     /// [`Folk::ALL`]; see [`Folk::DENIZENS`].
     Cyclops,
+    /// A lean demon with bat wings (`fb_denizens::DenizenBody::WingedDemon`).
+    #[serde(rename = "winged_demon")]
+    WingedDemon,
+    /// A big, brutish demon with curling horns and no wings (`fb_denizens::DenizenBody::HornedDemon`).
+    #[serde(rename = "horned_demon")]
+    HornedDemon,
+    /// A slender demon with small horns and wings (`fb_denizens::DenizenBody::Succubus`).
+    Succubus,
 }
 
 impl Race {
@@ -45,7 +53,7 @@ impl Folk {
     pub const ALL: [Folk; 6] = [Folk::Human, Folk::Dwarf, Folk::Gnome, Folk::Goblin, Folk::Lizardfolk, Folk::Pigfolk];
 
     /// The denizens whose bodies are built on the folk body so far.
-    pub const DENIZENS: &'static [Folk] = &[Folk::Minotaur, Folk::Faun, Folk::Cyclops];
+    pub const DENIZENS: &'static [Folk] = &[Folk::Minotaur, Folk::Faun, Folk::Cyclops, Folk::WingedDemon, Folk::HornedDemon, Folk::Succubus];
 
     /// The folk and the denizens built on their body, for tests that sweep every body.
     pub fn every() -> Vec<Folk> {
@@ -69,6 +77,9 @@ impl Folk {
             Folk::Minotaur => Some(DenizenBody::Minotaur),
             Folk::Faun => Some(DenizenBody::Faun),
             Folk::Cyclops => Some(DenizenBody::Cyclops),
+            Folk::WingedDemon => Some(DenizenBody::WingedDemon),
+            Folk::HornedDemon => Some(DenizenBody::HornedDemon),
+            Folk::Succubus => Some(DenizenBody::Succubus),
             _ => None,
         }
     }
@@ -79,7 +90,9 @@ impl Folk {
             DenizenBody::Minotaur => Some(Folk::Minotaur),
             DenizenBody::Faun => Some(Folk::Faun),
             DenizenBody::Cyclops => Some(Folk::Cyclops),
-            _ => None,
+            DenizenBody::WingedDemon => Some(Folk::WingedDemon),
+            DenizenBody::HornedDemon => Some(Folk::HornedDemon),
+            DenizenBody::Succubus => Some(Folk::Succubus),
         }
     }
 
@@ -95,13 +108,16 @@ impl Folk {
             Folk::Minotaur => "minotaur",
             Folk::Faun => "faun",
             Folk::Cyclops => "cyclops",
+            Folk::WingedDemon => "winged_demon",
+            Folk::HornedDemon => "horned_demon",
+            Folk::Succubus => "succubus",
         }
     }
 
     /// Parses a key from `data/races.json`, or the folk's name ("lizardfolk", "pigfolk").
     pub fn parse(text: &str) -> Option<Folk> {
-        let text = text.trim().to_ascii_lowercase();
-        Folk::every().into_iter().find(|f| f.key() == text || f.race().label.to_ascii_lowercase() == text)
+        let text = text.trim().to_ascii_lowercase().replace(['-', '_'], " ");
+        Folk::every().into_iter().find(|f| f.key().replace('_', " ") == text || f.race().label.to_ascii_lowercase() == text)
     }
 
     /// The folk's row in `data/races.json`.
@@ -270,6 +286,18 @@ pub struct Race {
     pub legs: Option<Digitigrade>,
     #[serde(default)]
     pub tail_shape: Option<TailRow>,
+    /// Bat-like wings on the back ([`crate::wings`]).
+    #[serde(default)]
+    pub wings: Option<WingRow>,
+    /// A heavier brow ridge over the eyes, added to the usual (a horned demon's).
+    #[serde(default)]
+    pub brow: f32,
+    /// The SRD 5.1 stat block the race's scores come from, if it has one.
+    #[serde(default)]
+    pub srd: Option<Srd>,
+    /// Hands end in claws, not nails.
+    #[serde(default)]
+    pub claws: bool,
     #[serde(default)]
     pub muzzle: Option<MuzzleRow>,
     /// The body's hunch: how far the head is thrust forward of the neck's column, as a share of
@@ -330,6 +358,20 @@ fn default_curl() -> Span {
     [0.9, 2.0]
 }
 
+/// Where a denizen's stat block is from: the SRD 5.1 creature and page, and the numbers the combat
+/// task uses (the scores are the row's `stats`).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Srd {
+    pub creature: String,
+    pub page: u32,
+    pub cr: String,
+    pub ac: u32,
+    pub hp: u32,
+    /// What is changed from the block, if anything.
+    #[serde(default)]
+    pub note: String,
+}
+
 /// A range a seed rolls a value in.
 pub type Span = [f32; 2];
 
@@ -381,7 +423,7 @@ pub struct Digitigrade {
 pub enum TailEnd {
     /// A tuft of hair (a bull's).
     Tuft,
-    /// A spade-shaped blade (a devil's); not built yet.
+    /// A spade-shaped blade (a devil's).
     Spade,
 }
 
@@ -398,6 +440,27 @@ pub struct TailRow {
     /// back (a goat's).
     #[serde(default)]
     pub lift: f32,
+    /// How much more each bone swings back than the one before it (radians per bone): a rising
+    /// curl at the tail's end; 0 hangs it.
+    #[serde(default)]
+    pub curve: f32,
+}
+
+/// The wings a race grows: a bat's, a membrane stretched on an arm and fingers, rolled within
+/// these ranges ([`crate::parts::WingRoll`]).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct WingRow {
+    /// Each wing's open reach from the shoulder, as a share of the body's height.
+    pub span: Span,
+    /// How open they rest, 0 folded against the back to 1 spread.
+    pub open: Span,
+    /// Chance that the membrane is torn.
+    pub tear: f32,
+    /// Membrane colours; empty draws the skin darkened.
+    #[serde(default)]
+    pub membrane: Vec<Hex>,
+    /// Fingers on the wing, 3 or 4.
+    pub fingers: usize,
 }
 
 /// A muzzle: a long, deep snout lofted along the face from a broad skull (a bull's).
@@ -450,6 +513,7 @@ static RACES: LazyLock<BTreeMap<Folk, Race>> = LazyLock::new(|| parse("races.jso
 static EYES: LazyLock<Vec<Rgb>> = LazyLock::new(|| colours("eyes.json", include_str!("../../../data/eyes.json")));
 static HAIR: LazyLock<Vec<Rgb>> = LazyLock::new(|| colours("hair.json", include_str!("../../../data/hair.json")));
 static HAIR_GOBLIN: LazyLock<Vec<Rgb>> = LazyLock::new(|| colours("hair_gob.json", include_str!("../../../data/hair_gob.json")));
+static HAIR_DEMON: LazyLock<Vec<Rgb>> = LazyLock::new(|| colours("hair_demon.json", include_str!("../../../data/hair_demon.json")));
 static HAIR_LIZARD: LazyLock<Vec<Rgb>> = LazyLock::new(|| colours("hair_liz.json", include_str!("../../../data/hair_liz.json")));
 
 /// Iris colours (`data/eyes.json`).
@@ -463,6 +527,7 @@ pub fn hair_colours(folk: Folk) -> &'static [Rgb] {
     match folk {
         Folk::Lizardfolk => &HAIR_LIZARD,
         Folk::Goblin => &HAIR_GOBLIN,
+        Folk::WingedDemon | Folk::HornedDemon | Folk::Succubus => &HAIR_DEMON,
         _ => &HAIR,
     }
 }

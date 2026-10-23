@@ -116,6 +116,8 @@ pub struct Gait {
     stoop: f32,
     /// How many bones the jointed tail has, if the body has one.
     tail: usize,
+    /// Whether the body has wings.
+    wings: bool,
     /// How much of the foot's toe-down pitch a swing keeps: the pitch swings the foot about the
     /// ankle, so a foot hanging far below it (a hoof under a high hock) pitches less (squared)
     /// or the toe would dig into the floor. 1 for every folk.
@@ -159,7 +161,7 @@ impl Gait {
             [false, true] => [0.0, 0.8],
             [false, false] => [0.0, 0.0],
         };
-        Gait { rig: rig.clone(), legs, scale: body.scale, height: body.height, leg_length: legs[0].hip[1] - legs[0].ankle[1], hold, stoop: body.race().stoop, tail: body.tail_joints().len(), pitch_k: ((0.048 * body.height) / body.ankle_y).min(1.0).powi(2) }
+        Gait { rig: rig.clone(), legs, scale: body.scale, height: body.height, leg_length: legs[0].hip[1] - legs[0].ankle[1], hold, stoop: body.race().stoop, tail: body.tail_joints().len(), wings: body.race().wings.is_some(), pitch_k: ((0.048 * body.height) / body.ankle_y).min(1.0).powi(2) }
     }
 
     /// How far a step reaches.
@@ -329,7 +331,22 @@ impl Gait {
         for i in 0..self.tail {
             pose.rotation[Joint::TAIL[i].index()] = Quat::y(0.2 * k * (a + 1.2 - 0.8 * i as f32).sin());
         }
+        // Wings spread a little as the body goes, and lift and settle with each step.
+        if self.wings {
+            self.set_wings(&mut pose, 0.55 + 0.3 * (k - 1.0).max(0.0), (2.0 * a).sin() * k);
+        }
         pose
+    }
+
+    /// Sets the wings' joints: `spread` 0 at rest to 1 as far as a walk opens them, `flap` a lift
+    /// and settle (-1 to 1).
+    fn set_wings(&self, pose: &mut RigPose, spread: f32, flap: f32) {
+        for side in Side::BOTH {
+            let [root, wrist] = Joint::wing(side);
+            let [q0, q1] = crate::wings::wing_rotation(side, spread, flap);
+            pose.rotation[root.index()] = q0;
+            pose.rotation[wrist.index()] = q1;
+        }
     }
 
     /// Standing at `t` seconds: breathing, and now and then shifting weight between the feet.
@@ -365,6 +382,10 @@ impl Gait {
         // A tail sways slowly, now and then flicking.
         for i in 0..self.tail {
             pose.rotation[Joint::TAIL[i].index()] = Quat::y(0.09 * (TAU * 0.35 * t + cycle.shift_phase - 0.9 * i as f32).sin());
+        }
+        // Wings stir with the breath, held a little open.
+        if self.wings {
+            self.set_wings(&mut pose, 0.35 + 0.1 * breath, 0.6 * breath);
         }
         pose
     }

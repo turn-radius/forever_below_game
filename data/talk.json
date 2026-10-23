@@ -158,18 +158,73 @@
  "not_yet": [
   "Not yet."
  ],
- "gesture": [
-  "The #folk# gestures toward the hall and grunts.",
-  "The #folk# regards you, then jerks a thumb at the dark behind it and grunts.",
-  "The #folk# says something low and heavy that you cannot follow, and points toward the hall.",
-  "The #folk# snorts and waves you on with the back of a hand.",
-  "The #folk# speaks, a few rough syllables, and nods toward the hall of #faction#.",
-  "The #folk# stares at you, then taps its chest and gestures toward the hall."
+ "dn_sound_minotaur": ["a low bellow", "a rumble deep in its chest", "a snort of hot breath"],
+ "dn_sound_cyclops": ["a slow, grinding word", "a long, heavy breath", "a grunt like a stone shifting"],
+ "dn_sound_faun": ["a piping trill", "a bleat that is almost a word", "a low, reedy hum"],
+ "dn_sound_demon": ["a dry hiss", "a crackle like a burning coal", "a purr that is not kind"],
+ "dn_spit": [
+  "The #folk# #sound# and spits at your feet.",
+  "The #folk# bares its teeth, #sound# in its throat, and spits at your feet.",
+  "The #folk# #sound#, glares, and spits at your feet."
  ],
- "gesture_hostile": [
-  "The #folk# snorts, lowers its head and shows you its teeth.",
-  "The #folk# bellows something savage and hefts its weapon.",
-  "The #folk# paws the ground and growls, and does not look away.",
-  "The #folk# bares its teeth and jerks its weapon toward the way you came."
- ]
+ "dn_wary": [
+  "The #folk# gives #sound#, a warning, and turns its back on you.",
+  "The #folk# watches you with hard eyes, #sound#, and waves you off.",
+  "The #folk# #sound# and steps between you and the hall of #faction#."
+ ],
+ "dn_greet": [
+  "Hail, stranger. You stand in the halls of #faction#. Say what you want.",
+  "Well met, stranger, if you mean no harm. Few come this deep.",
+  "Hail. We do not see your kind often. What do you want of #faction#?"
+ ],
+ "dn_greet_friendly": [
+  "Well met, friend. #faction.capitalize# remember those who deal fairly.",
+  "Hail, friend. Come into the light and say what you need.",
+  "Well met. It is good to see a friendly face in the dark."
+ ],
+ "dn_greet_allied": [
+  "Hail, friend of our hall. #faction.capitalize# stand with you.",
+  "Welcome, friend. What we have is yours to ask for.",
+  "Well met, kin of the hall. Ask, and I will answer true."
+ ],
+ "dn_kin": [
+  "I am of #faction#, a #folk# of the herd. Our banner hangs in this hall, and we keep its name.",
+  "I am kin to all who hold this hall. Our name is on the banner, and we do not give it lightly.",
+  "I am #folk#, and #faction# is my kin. You, who are you? Where is your banner?"
+ ],
+ "dn_place": [
+  "Here is our ground, deep in the dark. The way out is far above, and the door is shut.",
+  "You stand here in the deep. Past our door the dark goes on without end.",
+  "This is the deep, and the way out is a long climb. Mind the door and the dark."
+ ],
+ "dn_threat": [
+  "Beware the dark between the halls. Our enemy bleeds there, and blood draws worse.",
+  "There is death out there for the careless. Flee when you hear the blade.",
+  "Beware, stranger. The enemy is near, and blood spilled here is not forgotten."
+ ],
+ "dn_trade": [
+  "We trade. Coin buys goods, and goods sell at a fair price.",
+  "Trade is honest here. Buy, sell, name your price and pay in coin.",
+  "If you would trade, show your coin. Our goods are not cheap."
+ ],
+ "dn_quest": [
+  "We have need. Bring what was lost, and the reward is yours.",
+  "Help us, and we will not forget it. Find what is missing and bring it here for your reward.",
+  "There is a need in this hall. Help, and the oath of #faction# is yours."
+ ],
+ "dn_barter_refused": [
+  "The #folk# shakes its head at your words; you don't share enough of its speech to trade.",
+  "The #folk# #sound# and pushes your hand away; you can't make yourself understood well enough to trade.",
+  "The #folk# regards your coin without understanding, shakes its head, and turns it over; you don't know enough of its speech to trade."
+ ],
+ "dn_band_hostile": ["They would kill you on sight, so keep far from them."],
+ "dn_band_wary": ["They watch you with little love, so tread softly near them."],
+ "dn_band_neutral": ["They will hear you out, if you have the words, and they mean you no harm."],
+ "dn_band_friendly": ["They think well of you, and will deal with you fairly."],
+ "dn_band_allied": ["They count you one of their own, and you are safe in their halls."],
+ "needs_dn_kin": ["name", "banner"],
+ "needs_dn_place": ["dark"],
+ "needs_dn_threat": ["flee"],
+ "needs_dn_trade": ["coin"],
+ "needs_dn_quest": ["reward"]
 }

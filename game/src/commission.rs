@@ -1529,6 +1529,8 @@ mod tests {
             depth: 6,
             level_factions: vec![],
             traders: vec![],
+            denizen: None,
+            denizen_factions: vec![],
         };
         let mut talk = crate::talk::Talk::default();
         talk.folk = Some(folk);

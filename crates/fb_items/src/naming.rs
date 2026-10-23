@@ -52,11 +52,21 @@ pub fn folk_name(rng: &mut Mulberry32, folk: &str, sex: Option<Sex>) -> String {
     // given names of its own, from its syllables.
     let table = syllables();
     let (a, b) = table.get(folk).unwrap_or(&table["human"]);
-    let first = match (sex, given_names().get(folk)) {
-        (Some(sex), Some(given)) => rng.pick(if sex == Sex::Female { &given.female } else { &given.male }).clone(),
-        _ => format!("{}{}", rng.pick(a), rng.pick(b)),
+    let given = sex.and_then(|sex| given_names().get(folk).map(|g| if sex == Sex::Female { &g.female } else { &g.male }));
+    let first = match given {
+        Some(names) => rng.pick(names).clone(),
+        None => format!("{}{}", rng.pick(a), rng.pick(b)),
     };
-    let last = format!("{}{}", rng.pick(a), rng.pick(b));
+    let mut last = format!("{}{}", rng.pick(a), rng.pick(b));
+    // A family name that repeats a first name made of the same syllables ("Rokrug Rokrug") is
+    // drawn again, a few times at most. Given names cannot repeat it, so those families are shared
+    // between the sexes as they were.
+    for _ in 0..8 {
+        if given.is_some() || last != first || matches!(folk, "goblin" | "lizard") {
+            break;
+        }
+        last = format!("{}{}", rng.pick(a), rng.pick(b));
+    }
     if matches!(folk, "goblin" | "lizard") { first } else { format!("{first} {last}") }
 }
 
@@ -188,6 +198,17 @@ mod tests {
         assert_eq!(noun("Blind cavefish", &fish), "Blind cavefish");
         let sword = roll_shape("Sword", 3).unwrap();
         assert_eq!(noun("Sword", &sword), sword.noun());
+    }
+
+    #[test]
+    fn a_family_name_never_repeats_the_first() {
+        for folk in syllables().keys().filter(|f| !matches!(f.as_str(), "goblin" | "lizard")) {
+            for seed in 0..3000 {
+                let name = folk_name(&mut Mulberry32::new(seed), folk, None);
+                let (first, last) = name.split_once(' ').expect("two names");
+                assert_ne!(first, last, "{folk} seed {seed}: {name}");
+            }
+        }
     }
 
     #[test]

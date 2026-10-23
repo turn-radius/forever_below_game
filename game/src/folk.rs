@@ -146,8 +146,11 @@ impl Person {
         // rolled as that race. One with no syllables of its own yet is named as a human is. The
         // name is drawn from the spot's sex (a man, for a denizen).
         let folk = spot.denizen.and_then(Folk::of_denizen).unwrap_or(spot.folk);
+        // A succubus is a woman whatever her faction rolled; the other denizens are men.
+        let succubus = spot.denizen == Some(fb_denizens::DenizenBody::Succubus);
+        let sex = if succubus { fb_body::Sex::Female } else { spot.sex };
         let name_key = if fb_items::tables::syllables().contains_key(folk.key()) { folk.key() } else { Folk::Human.key() };
-        let name = fb_items::naming::folk_name(&mut rng, name_key, Some(spot.sex));
+        let name = fb_items::naming::folk_name(&mut rng, name_key, Some(sex));
         let outfit = *rng.pick(&faction.outfit_keys());
         // A denizen dresses from the row of its own kind, not a delver's class outfit.
         let outfit = denizen_outfit(folk, spot).unwrap_or(outfit);
@@ -173,7 +176,7 @@ impl Person {
         let mut goods = goods;
         goods.extend(crate::doors::key_of(faction));
         // A denizen's build is its race's own, rolled as ever; folk take the hips and bust of their sex.
-        let spec = if spot.denizen.is_some() { BodySpec::roll(folk, spot.seed) } else { BodySpec::roll_as(folk, spot.seed, spot.sex) };
+        let spec = if spot.denizen.is_some() && !succubus { BodySpec::roll(folk, spot.seed) } else { BodySpec::roll_as(folk, spot.seed, sex) };
         Person { spot: *spot, depth, faction: faction.clone(), name, spec, outfit, gear, goods, dirt }
     }
 
@@ -790,6 +793,24 @@ mod tests {
         assert!(figure.body.height > 0.9 * height && figure.body.height < 1.1 * height && figure.pieces.len() >= 3, "{} tall", figure.body.height);
         let parts = figure.pieces.iter().find(|p| p.name == "Body").unwrap().mesh.parts.iter().map(|p| p.name).collect::<Vec<_>>();
         assert!(parts.contains(&"hooves"), "{parts:?}");
+    }
+
+    #[test]
+    fn a_demon_spot_is_a_dressed_demon_of_its_kind() {
+        for (body, folk) in [
+            (fb_denizens::DenizenBody::WingedDemon, Folk::WingedDemon),
+            (fb_denizens::DenizenBody::HornedDemon, Folk::HornedDemon),
+            (fb_denizens::DenizenBody::Succubus, Folk::Succubus),
+        ] {
+            let spot = FolkSpot { denizen: Some(body), ..folk_1207()[0] };
+            let person = person_1207(&spot);
+            assert_eq!(person.spec.folk, folk);
+            // A succubus is a woman, in body and in name; the other demons are men.
+            assert_eq!(person.spec.woman, folk == Folk::Succubus, "{folk:?}");
+            assert_eq!(person, person_1207(&spot));
+            let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+            assert!(figure.pieces.len() >= 4 && figure.body.height > 15.0, "{folk:?}: {} tall", figure.body.height);
+        }
     }
 
     #[test]

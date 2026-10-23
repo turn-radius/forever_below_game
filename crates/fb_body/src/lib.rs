@@ -30,6 +30,8 @@ pub mod skin;
 #[cfg(test)]
 mod denizen_tests;
 #[cfg(test)]
+mod demon_tests;
+#[cfg(test)]
 mod skin_tests;
 #[cfg(test)]
 mod shoulder_tests;
@@ -38,6 +40,7 @@ mod hood_tests;
 #[cfg(test)]
 mod pelvis_tests;
 pub mod spec;
+pub mod wings;
 pub mod worn;
 
 pub use body::{ArmPose, Body, GRIP_MAX, Pose};

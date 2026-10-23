@@ -145,7 +145,7 @@ impl DollChoice {
                 }
                 "--folk" => {
                     let folk = value()?;
-                    choice.folk = Folk::parse(&folk).ok_or(format!("unknown folk {folk:?}; one of human, dwarf, gnome, goblin, lizard, pig, minotaur, faun"))?;
+                    choice.folk = Folk::parse(&folk).ok_or(format!("unknown folk {folk:?}; one of human, dwarf, gnome, goblin, lizard, pig, minotaur, faun, cyclops, winged_demon, horned_demon, succubus"))?;
                 }
                 "--seed" => {
                     let seed = value()?;

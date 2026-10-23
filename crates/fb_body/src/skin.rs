@@ -68,6 +68,8 @@ pub enum SkinRegion {
     Tail,
     /// Rigid on the chest (a hood and the head inside it, which turn with the body).
     Chest,
+    /// A wing's bones and membrane: along its arm and fingers, the trunk's near the back.
+    Wing,
 }
 
 impl SkinRegion {
@@ -80,6 +82,8 @@ impl SkinRegion {
             "feet" | "claws" => SkinRegion::Foot,
             "tail" | "tail_hair" => SkinRegion::Tail,
             "hooves" | "socks" => SkinRegion::Foot,
+            "tail_spade" => SkinRegion::Tail,
+            "wing_bones" | "wing_membrane" => SkinRegion::Wing,
             _ => SkinRegion::Trunk,
         }
     }
@@ -229,10 +233,17 @@ pub struct Skinner {
     hip_half_width: f32,
     /// Where a jointed tail's bones start, and where it ends (empty for a body without one).
     tail: Vec<V3>,
+    /// The wings' weights, right then left, for a body with wings.
+    wings: [Option<crate::wings::WingSkin>; 2],
 }
 
 impl Skinner {
     pub fn new(body: &Body) -> Skinner {
+        Skinner::with_wing_lift(body, 0.0)
+    }
+
+    /// The weights of `body` whose wings stand `lift` out from the back, over gear.
+    pub fn with_wing_lift(body: &Body, wing_lift: f32) -> Skinner {
         let hand = 0.105 * body.height * body.race().arm;
         let foot = 0.148 * body.height * body.race().foot;
         let arms = [LimbFit::new(body.arm(Side::Right), true, hand, None), LimbFit::new(body.arm(Side::Left), true, hand, None)];
@@ -254,6 +265,7 @@ impl Skinner {
             trunk_length: body.trunk_length,
             hip_half_width: body.hip.half_width,
             tail: body.jointed_tail().map(|(points, _)| points).unwrap_or_default(),
+            wings: [Side::Right, Side::Left].map(|side| body.wing(side, wing_lift).map(|w| w.skin())),
         }
     }
 
@@ -280,6 +292,7 @@ impl Skinner {
             SkinRegion::Head => acc[Joint::Head.index()] = 1.0,
             SkinRegion::Pelvis => acc[Joint::Pelvis.index()] = 1.0,
             SkinRegion::Tail => self.tail_weights(p, &mut acc),
+            SkinRegion::Wing => self.wing_weights(p, &mut acc),
             SkinRegion::Chest => acc[Joint::Chest.index()] = 1.0,
             SkinRegion::Trunk => self.trunk_weights(p[1], 1.0, &mut acc),
             _ => self.limbed(p, region, &mut acc),
@@ -318,6 +331,21 @@ impl Skinner {
         } else {
             acc[Joint::TAIL[i].index()] += k;
         }
+    }
+
+    /// A wing's weights: on the root joint and the wrist joint of the wing the point is on,
+    /// and the trunk's near the back; the trunk alone for a body with no wings.
+    fn wing_weights(&self, p: V3, acc: &mut [f32; JOINTS]) {
+        let side = usize::from(p[0] >= 0.0);
+        let Some(wing) = &self.wings[side] else {
+            self.trunk_weights(p[1], 1.0, acc);
+            return;
+        };
+        let joints = Joint::wing(if side == 1 { Side::Left } else { Side::Right });
+        let (root, wrist, trunk) = wing.weights(p);
+        acc[joints[0].index()] += root;
+        acc[joints[1].index()] += wrist;
+        self.trunk_weights(p[1], trunk, acc);
     }
 
     /// The trunk's weights at height `y`.
@@ -399,7 +427,7 @@ impl Skinner {
                 leg_claim = 1.0;
                 leg_a = nearest_end(2, 3);
             }
-            SkinRegion::Trunk | SkinRegion::Loose | SkinRegion::Head | SkinRegion::Pelvis | SkinRegion::Tail | SkinRegion::Chest => {}
+            SkinRegion::Trunk | SkinRegion::Loose | SkinRegion::Head | SkinRegion::Pelvis | SkinRegion::Tail | SkinRegion::Chest | SkinRegion::Wing => {}
         }
         let total = arm_claim + leg_claim;
         if total > 1.0 {
