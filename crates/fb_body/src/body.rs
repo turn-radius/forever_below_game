@@ -755,6 +755,7 @@ impl Body {
     /// and a lizard's `"tail"` and `"claws"` or a pig's `"tail"`.
     pub fn skin_mesh(&self) -> ItemMesh {
         let skin = self.spec.skin;
+        let fur = self.fur_colour();
         let pattern = self.skin_pattern();
         let mut parts = vec![];
         let mut add = |m: MeshBuilder, name: &'static str, tint: Rgb, outline: bool| {
@@ -800,19 +801,19 @@ impl Body {
             self.foot_placement(side).apply(&mut f);
             feet.append(&f);
         }
-        let fur = self.fur_colour();
         add(legs, "legs", fur.unwrap_or(skin), true);
         // Pigfolk walk on darker trotters (`buildBody`: the skin at 0.62).
         let socks = self.race().coat && self.traits().marking == crate::parts::Marking::Socks;
         add(feet, "feet", if self.folk() == Folk::Pigfolk { skin.scaled(0.62) } else if socks { crate::coat::WHITE } else { fur.unwrap_or(skin) }, true);
-        add(self.tail_mesh(), "tail", skin, true);
+        debug_assert!(!(self.race().coat && self.race().fur.is_some()), "a race has a coat or leg fur, not both");
+        add(self.tail_mesh(), "tail", fur.unwrap_or(skin), true);
         let mut out = ItemMesh { parts };
         if !hooves.is_empty() {
             let tone = crate::parts::mix(Rgb::hex(0x1f1a17), Rgb::hex(0x8d8473), self.traits().hoof_tone);
             out.parts.push(hooves.into_part("hooves", OutlineMode::Welded).with_material(MaterialKind::Bone).with_tint(tone));
         }
         if let Some(hair) = self.tail_hair() {
-            let tint = self.spec.hair_colour;
+            let tint = fur.unwrap_or(self.spec.hair_colour);
             out.parts.push(hair.into_part("tail_hair", OutlineMode::Welded).with_material(MaterialKind::Hair).with_tint(tint).without_outline());
         }
         if let Some(colour) = fur {

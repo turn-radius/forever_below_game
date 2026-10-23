@@ -443,3 +443,57 @@ fn the_trunk_stoops_in_the_rest_pose_and_the_arms_still_hang() {
     let hpose = Gait::new(&human, &hrig).idle(&IdleCycle::of(1), 0.0);
     assert!((hrig.world(&hpose)[head].origin[2] - hrig.rest_at(Joint::Head)[2]).abs() < 0.3);
 }
+
+#[test]
+fn under_a_robe_a_fauns_fur_goes_but_the_pastern_and_hoof_show_below_the_hem() {
+    use armory::families::garment::Garment;
+    use armory::sections::garment::GarmentStyle;
+    for seed in [3, 7] {
+        let body = faun(seed);
+        for kit in [1u32, 40] {
+            let robe = Item::Garment(Garment::roll_as(kit, GarmentStyle::Robe));
+            let fit = fit_worn(&body, &[(Slot::Body, robe)]);
+            assert!(fit.covered.hides("leg_fur") && fit.covered.hides("legs") && !fit.covered.hides("feet"), "the leg tube and fur go under the robe, the feet stay");
+            let hem = fit.layer(Slot::Body).unwrap().mesh.parts.iter().filter(|p| p.name == "body").flat_map(|p| &p.positions).map(|p| p[1]).fold(f32::MAX, f32::min);
+            let skin = body.skin_mesh();
+            let pastern = skin.parts.iter().filter(|p| p.name == "feet").flat_map(|p| &p.positions).filter(|p| p[1] < hem - 0.05 && p[1] > 0.4).count();
+            assert!(pastern > 8, "seed {seed} robe {kit}: {pastern} pastern vertices between the hem ({hem}) and the hoof");
+        }
+    }
+    // Trousers alone leave the fur showing.
+    let bare = fit_worn(&faun(3), &[(Slot::Legs, roll(Family::Legs, 3))]);
+    assert!(!bare.covered.hides("leg_fur"));
+}
+
+#[test]
+fn a_fauns_tail_and_tuft_take_the_fur_colour() {
+    let body = faun(7);
+    let fur = body.fur_colour().unwrap();
+    let skin = body.skin_mesh();
+    for name in ["tail", "tail_hair", "legs"] {
+        let part = skin.parts.iter().find(|p| p.name == name).unwrap();
+        assert_eq!(part.tint, Some(fur), "{name}");
+    }
+}
+
+#[test]
+fn curly_hair_builds_under_a_hood_and_a_helm() {
+    use crate::folk::HairStyle;
+    for seed in [3, 7] {
+        let mut spec = BodySpec::roll(Folk::Faun, seed);
+        spec.hair = HairStyle::Curly;
+        let body = Body::new(&spec);
+        let open = body.hair_mesh(Default::default());
+        assert!(open.parts.iter().any(|p| p.name == "hair"));
+        for family in [Family::Hood, Family::Helm] {
+            let fit = fit_worn(&body, &[(Slot::Head, roll(family, 3))]);
+            assert!(fit.hair.covered, "{family:?}");
+            let covered = body.hair_mesh(fit.hair);
+            for part in &covered.parts {
+                part.validate().unwrap_or_else(|e| panic!("{family:?} {}: {e}", part.name));
+            }
+            let count = |m: &armory::ItemMesh| m.parts.iter().filter(|p| p.name == "hair").map(|p| p.positions.len()).sum::<usize>();
+            assert!(count(&covered) > 0 && count(&covered) < count(&open), "{family:?}: fewer curls under it");
+        }
+    }
+}

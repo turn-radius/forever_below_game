@@ -105,6 +105,9 @@ pub struct Covered {
     /// Anything over the seat (legwear, a shirt, armour or a cloak) on a pig: its curled
     /// tail tucks in under it (our own; a lizard's tail comes out through vents and holes).
     pub tail: bool,
+    /// A robe over furred legs: the leg tube and its fur under it would poke through the cloth
+    /// (the robe hangs to the hock), so they go; the pasterns and hooves (the `"feet"` part) stay.
+    pub fur: bool,
 }
 
 impl Covered {
@@ -114,7 +117,7 @@ impl Covered {
             "hands" | "nails" => self.hands,
             "feet" | "claws" => self.feet,
             "socks" => self.legs,
-            "legs" | "leg_fur" => self.legs,
+            "legs" | "leg_fur" => self.legs || self.fur,
             "tail" => self.tail,
             _ => false,
         }
@@ -156,6 +159,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
     let tucked = !hooved && worn.iter().any(|(slot, item)| *slot == Slot::Feet && matches!(item, Item::Feet(s) if has_shaft(s)));
     let hooded = worn.iter().any(|(slot, item)| *slot == Slot::Head && matches!(item, Item::Hood(_)));
     let robed = worn.iter().any(|(slot, item)| matches!(slot, Slot::Shirt | Slot::Body) && matches!(item, Item::Garment(g) if g.cut.style == GarmentStyle::Robe));
+    fit.covered.fur = robed && body.race().fur.is_some();
     // Ears fold back under a hood, and a pig's flop ears under anything; standing ears come
     // out through openings cut in a helm; a frill folds flat under anything on the head.
     fit.head = match worn.iter().find(|(slot, _)| *slot == Slot::Head).map(|(_, item)| item) {
@@ -184,7 +188,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
         for (_, item) in worn.iter().filter(|(s, _)| *s == slot) {
             let mesh = match (slot, item) {
                 // Furred legs stay bare: trousers hung on goat legs read as a man on stilts.
-                (Slot::Legs, Item::Legs(_)) if body.race().fur.is_some() => continue,
+                (Slot::Legs, Item::Legs(_)) if body.race().fur.is_some() && hooved => continue,
                 (Slot::Legs, Item::Legs(s)) => {
                     fit.covered.legs |= s.legwear.style != LegwearStyle::Breeches;
                     legwear(body, s, tucked)
@@ -210,8 +214,6 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
             if slot == Slot::Head {
                 fit.hair.covered = true;
             }
-            // A robe hangs to the hock over furred legs: the fur under it would poke through the cloth.
-            fit.covered.legs |= robed && body.race().fur.is_some() && matches!(slot, Slot::Shirt | Slot::Body);
             fit.covered.tail |= body.folk() == Folk::Pigfolk && matches!(slot, Slot::Legs | Slot::Shirt | Slot::Body | Slot::Cloak);
             env.absorb(slot, matches!(item, Item::Hood(_)), &mesh);
             fit.layers.push(WornLayer { slot, mesh });
