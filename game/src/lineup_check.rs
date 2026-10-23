@@ -165,6 +165,50 @@ pub fn expectations(faction: &FactionSpec, world: &[FactionSpec]) -> Vec<(&'stat
     lines
 }
 
+/// The colour words a faction's name can carry and the tinctures they stand for. Grey is either
+/// of the two neutrals.
+const COLOUR_WORDS: [(&str, &[Tincture]); 24] = [
+    ("grey", &[Tincture::Argent, Tincture::Sable]),
+    ("gray", &[Tincture::Argent, Tincture::Sable]),
+    ("black", &[Tincture::Sable]),
+    ("negro", &[Tincture::Sable]),
+    ("white", &[Tincture::Argent]),
+    ("silver", &[Tincture::Argent]),
+    ("plata", &[Tincture::Argent]),
+    ("gold", &[Tincture::Or]),
+    ("golden", &[Tincture::Or]),
+    ("gilded", &[Tincture::Or]),
+    ("oro", &[Tincture::Or]),
+    ("crimson", &[Tincture::Gules]),
+    ("scarlet", &[Tincture::Gules]),
+    ("red", &[Tincture::Gules]),
+    ("rojo", &[Tincture::Gules]),
+    ("green", &[Tincture::Vert]),
+    ("emerald", &[Tincture::Vert]),
+    ("verde", &[Tincture::Vert]),
+    ("azure", &[Tincture::Azure]),
+    ("blue", &[Tincture::Azure]),
+    ("azul", &[Tincture::Azure]),
+    ("purple", &[Tincture::Purpure]),
+    ("violeta", &[Tincture::Purpure]),
+    ("violet", &[Tincture::Purpure]),
+];
+
+/// Where a faction's colours disagree with the colour words in its name, one line each, such as
+/// "Name says grey; colours are purpure and or". A word is met if either of the faction's two
+/// tinctures is one it stands for. Empty when the name has no colour word or they agree.
+pub fn name_colour_flags(faction: &FactionSpec) -> Vec<String> {
+    let have = [faction.field.tincture, faction.field.tincture2];
+    faction
+        .name
+        .to_lowercase()
+        .split(|c: char| !c.is_alphabetic())
+        .filter_map(|word| COLOUR_WORDS.iter().find(|(w, _)| *w == word))
+        .filter(|(_, stands)| !stands.iter().any(|t| have.contains(t)))
+        .map(|(word, _)| format!("Name says {word}; colours are {}", colours_line(faction)))
+        .collect()
+}
+
 /// Which expectation a member misses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rule {
@@ -676,6 +720,44 @@ mod tests {
             }
         }
         assert!(named > 0 && checked > 0);
+    }
+
+    #[test]
+    fn colour_words_in_the_name_must_match_the_field() {
+        let mut spec = faction();
+        spec.name = "the Sisters of the Grey Cloister".into();
+        spec.field.tincture = Tincture::Purpure;
+        spec.field.tincture2 = Tincture::Or;
+        assert_eq!(name_colour_flags(&spec), vec!["Name says grey; colours are purpure and or".to_string()]);
+        spec.field.tincture2 = Tincture::Argent;
+        assert!(name_colour_flags(&spec).is_empty(), "grey is met by argent");
+        spec.name = "the Crimson Brothers".into();
+        assert_eq!(name_colour_flags(&spec).len(), 1);
+        spec.field.tincture = Tincture::Gules;
+        assert!(name_colour_flags(&spec).is_empty());
+        spec.name = "the Cloister of Nothing".into();
+        spec.field.tincture = Tincture::Azure;
+        assert!(name_colour_flags(&spec).is_empty());
+    }
+
+    /// Counts how many factions in worlds 1 to 200 have a colour word their colours do not meet.
+    #[test]
+    #[ignore = "a sweep that reports; run it with --ignored --nocapture"]
+    fn sweep_name_colours() {
+        let (mut factions, mut worded, mut flagged) = (0, 0, 0);
+        for world in 1..=200 {
+            for spec in World::new(world).factions() {
+                factions += 1;
+                let has_word = spec.name.to_lowercase().split(|c: char| !c.is_alphabetic()).any(|w| COLOUR_WORDS.iter().any(|(c, _)| *c == w));
+                worded += usize::from(has_word);
+                let flags = name_colour_flags(spec);
+                if !flags.is_empty() {
+                    flagged += 1;
+                    println!("FLAG {world} {} {}: {}", spec.id.0, spec.name, flags.join("; "));
+                }
+            }
+        }
+        println!("SWEEP {factions} factions, {worded} with a colour word, {flagged} flagged");
     }
 
     #[test]

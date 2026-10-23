@@ -468,6 +468,9 @@ fn spawn_interface(commands: &mut Commands, fonts: &UiFonts, choice: &LineupChoi
             for (heading, text) in lineup_check::expectations(faction, world.factions()) {
                 line(panel, format!("{heading}: {text}"), 16.0, INK);
             }
+            for flag in lineup_check::name_colour_flags(faction) {
+                line(panel, flag, 16.0, BAD);
+            }
             panel.spawn((Text::new("Members"), UiFonts::style(&fonts.display_bold, 24.0, BRIGHT), Node { margin: UiRect::top(px(10)), ..default() }));
             for rule in Rule::ALL {
                 let met = members.iter().filter(|m| lineup_check::passes(&m.misses, rule)).count();
