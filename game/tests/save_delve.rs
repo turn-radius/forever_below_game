@@ -492,17 +492,6 @@ fn a_saved_delve_comes_back_whole_on_three_levels() {
 }
 
 #[test]
-fn a_save_is_one_versioned_file_beside_the_settings_with_nothing_left_over() {
-    let (_, _, _, file) = played("file");
-    let folder = file.parent().unwrap();
-    let names: Vec<String> = std::fs::read_dir(folder).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-    assert_eq!(names, vec![save::FILE_NAME.to_string()], "no temporary file is left behind");
-    let text = std::fs::read_to_string(&file).unwrap();
-    assert!(text.starts_with(&format!("{{\"version\":{}", save::VERSION)), "the version comes first: {}", &text[..40]);
-}
-
-/// A delve begun any other way than from the title never writes the save.
-#[test]
 fn a_delve_that_may_not_save_writes_nothing_when_the_delver_lies_down() {
     let file = scratch("unsaveable");
     let mut app = delving(&file);
@@ -664,8 +653,13 @@ fn every_resource_and_component_is_accounted_for() {
         ("kindle::Held", "the light in hand, worked out from the pack"),
     ];
 
-    let file = scratch("accounted");
-    let mut app = delving(&file);
+    // The whole flow has been played (levels visited, a tent pitched, poisoned, asleep), so what
+    // only exists then is in the world too. The save it made is one versioned file, alone.
+    let (mut app, _, _, file) = played("accounted");
+    let names: Vec<String> = std::fs::read_dir(file.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, vec![save::FILE_NAME.to_string()], "no temporary file is left behind");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.starts_with(&format!("{{\"version\":{}", save::VERSION)), "the version comes first: {}", &text[..40]);
     let delver = player(&mut app);
     let world = app.world_mut();
     let short = |name: &str| -> String {
@@ -686,6 +680,15 @@ fn every_resource_and_component_is_accounted_for() {
     let known: BTreeSet<&str> = PLAYER_KEPT.iter().copied().chain(PLAYER_NOT_KEPT.iter().map(|(n, _)| *n)).collect();
     let unknown: Vec<&String> = components.iter().filter(|n| !known.contains(n.as_str())).collect();
     assert!(unknown.is_empty(), "components of the delver the save has not decided about (add each to PLAYER_KEPT or PLAYER_NOT_KEPT): {unknown:#?}");
+
+    // And the other way: a name in a list that is no longer a type of the game is a stale entry.
+    // (What exists only when it happens, a fall or a journey, or only in the real game's asset
+    // server, is registered by then too, except these.)
+    const ONLY_WHEN_IT_HAPPENS: &[&str] = &["combat::vitals::Fallen", "combat::vitals::Dying", "combat::revival::Unconscious", "travel::Journey", "travel::Below", "combat::shoot::Marksman", "combat::vitals::Constricted", "combat::swing::Swing", "combat::guard::Guard", "player::Slowed", "kindle::Held", "rules::RulesFile"];
+    let registered: BTreeSet<String> = world.components().iter_registered().map(|(_, info)| short(&info.name().to_string())).collect();
+    let listed = KEPT.iter().map(|(n, _)| *n).chain(NOT_KEPT.iter().map(|(n, _)| *n)).chain(PLAYER_KEPT.iter().copied()).chain(PLAYER_NOT_KEPT.iter().map(|(n, _)| *n));
+    let stale: Vec<&str> = listed.filter(|n| *n != "Transform" && !ONLY_WHEN_IT_HAPPENS.contains(n) && !registered.contains(*n)).collect();
+    assert!(stale.is_empty(), "names in the lists that are not types of the game: {stale:#?}");
 }
 
 #[test]
@@ -696,6 +699,10 @@ fn dying_deletes_the_save_and_the_title_offers_no_resume() {
     app.insert_resource(Revives(u32::MAX));
     let body = player(&mut app);
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
+    // The save goes at the lethal blow, in the last gasp, before the fall.
+    run(&mut app, 10);
+    assert!(app.world().get_resource::<forever_below::combat::vitals::Dying>().is_some() && app.world().get_resource::<forever_below::combat::vitals::Fallen>().is_none());
+    assert!(!file.exists(), "deleted in the last gasp, so quitting then cannot keep it");
     run(&mut app, ((LAST_GASP + FALL_TIME) * 60.0) as usize + 60);
     assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
     assert!(!file.exists(), "death deleted the save");

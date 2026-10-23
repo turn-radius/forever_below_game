@@ -55,7 +55,7 @@ use crate::carry::FloorItem;
 use crate::character::{Character, ChosenDelver, DelverEffects, DelverMana, DelverNeeds, DelverRecovery, DelverStamina};
 use crate::combat::Health;
 use crate::combat::revival::Revives;
-use crate::combat::vitals::Fallen;
+use crate::combat::vitals::{Dying, Fallen};
 use crate::enchanting::Enchanting;
 use crate::exhaustion::{Exhaustion, ExhaustionTimes};
 use crate::game_clock::GameClock;
@@ -613,6 +613,16 @@ fn forget_save_on_death(saveable: Option<Res<Saveable>>, file: Option<Res<SaveFi
     }
 }
 
+/// Deletes the save at the lethal blow: the delver is brought to 0 hit points ([`Dying`] begins)
+/// with no revive left in this world, so quitting or crashing in the last gasp cannot keep it.
+/// With a revive left they may fall unconscious and come to, so nothing is deleted yet.
+fn forget_save_on_lethal_blow(saveable: Option<Res<Saveable>>, file: Option<Res<SaveFile>>, revives: Option<Res<Revives>>, rules: Option<Res<crate::rules::GameRules>>) {
+    let left = crate::rules::GameRules::of(&rules).revival.left(revives.map_or(0, |r| r.0));
+    if left == 0 {
+        forget_save_on_death(saveable, file);
+    }
+}
+
 /// A delve no longer may touch the save once it is over.
 fn end_saveable(mut saveable: ResMut<Saveable>) {
     saveable.0 = false;
@@ -636,6 +646,7 @@ impl Plugin for SavePlugin {
             .add_systems(Update, restore_delve.in_set(ResumeSet))
             .add_systems(Update, settle_hit_points.after(crate::combat::vitals::fit_hit_points).run_if(resource_exists::<SettleHitPoints>).in_set(DelveSystems))
             .add_systems(Update, forget_save_on_death.run_if(resource_added::<Fallen>).in_set(DelveSystems))
+            .add_systems(Update, forget_save_on_lethal_blow.run_if(resource_added::<Dying>).in_set(DelveSystems))
             .add_systems(OnExit(AppState::Delving), end_saveable);
     }
 }
@@ -884,6 +895,25 @@ mod tests {
             let found = SavedGame::find(&path);
             assert_eq!((found.delve, found.unreadable), (None, Some(STALE_LINE)));
             assert!(!path.exists() && path.with_file_name(ASIDE_NAME).exists());
+        }
+    }
+
+    #[test]
+    fn the_lethal_blow_deletes_the_save_unless_a_revive_is_left() {
+        for (revives, gone) in [(u32::MAX, true), (0, false)] {
+            let path = scratch(&format!("lethal-{revives}"));
+            write(&path, &sample()).unwrap();
+            let mut app = App::new();
+            app.insert_resource(SaveFile(Some(path.clone())))
+                .insert_resource(Saveable(true))
+                .insert_resource(Revives(revives))
+                .init_resource::<crate::rules::GameRules>()
+                .add_systems(Update, forget_save_on_lethal_blow.run_if(resource_added::<Dying>));
+            app.update();
+            assert!(path.exists());
+            app.insert_resource(Dying(5.0));
+            app.update();
+            assert_eq!(!path.exists(), gone, "revives {revives}: gone in the last gasp, before any Fallen");
         }
     }
 }
