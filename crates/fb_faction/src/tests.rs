@@ -138,10 +138,17 @@ fn tagged_words() -> Vec<(String, String, String)> {
     fn walk(v: &serde_json::Value, out: &mut Vec<(String, String, String)>) {
         match v {
             serde_json::Value::String(s) => {
-                if let Some((tag, word)) = s.strip_prefix('[').and_then(|rest| rest.split_once(']')) {
+                // A word may carry several tags.
+                let mut rest = s.as_str();
+                let mut set = Vec::new();
+                while let Some((tag, after)) = rest.strip_prefix('[').and_then(|r| r.split_once(']')) {
                     if let Some((key, value)) = tag.split_once(':') {
-                        out.push((word.to_lowercase(), key.to_string(), value.to_string()));
+                        set.push((key.to_string(), value.to_string()));
                     }
+                    rest = after;
+                }
+                for (key, value) in set {
+                    out.push((rest.to_lowercase(), key, value));
                 }
             }
             serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
@@ -166,7 +173,7 @@ fn said(name: &str, key: &str) -> Vec<String> {
 
 #[test]
 fn a_name_that_says_a_class_dresses_every_member_so() {
-    let (mut clerics, mut martial, mut unsaid) = (0, 0, 0);
+    let (mut clerics, mut martial, mut knights, mut unsaid) = (0, 0, 0, 0);
     for seed in 0..300 {
         for spec in World::new(seed).factions() {
             let classes = said(&spec.name, "class");
@@ -176,6 +183,12 @@ fn a_name_that_says_a_class_dresses_every_member_so() {
                     assert_eq!(classes, ["cleric"], "{}", spec.name);
                     assert_eq!(spec.outfits, [Outfit::Cleric; 2], "{}", spec.name);
                     assert!(!spec.hates.contains(&Preference::Class(ClassKind::Cleric)), "{} hates clerics", spec.name);
+                }
+                [ClassKind::Fighter] => {
+                    knights += 1;
+                    assert_eq!(classes, ["fighter"], "{}", spec.name);
+                    assert_eq!(spec.outfits, [Outfit::Fighter; 2], "{}", spec.name);
+                    assert!(!spec.hates.contains(&Preference::Class(ClassKind::Fighter)), "{} hates fighters", spec.name);
                 }
                 [a, b] => {
                     martial += 1;
@@ -192,7 +205,7 @@ fn a_name_that_says_a_class_dresses_every_member_so() {
             }
         }
     }
-    assert!(clerics > 20 && martial > 20 && unsaid > 500, "{clerics} cleric, {martial} martial, {unsaid} unsaid");
+    assert!(clerics > 20 && martial > 20 && knights > 3 && unsaid > 400, "{clerics} cleric, {martial} martial, {knights} knights, {unsaid} unsaid");
 }
 
 #[test]

@@ -473,11 +473,12 @@ fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, na
     FactionSpec { id, name, folk, sex, classes, outfits, alignment, intention, likes, hates, field, armour, insular }
 }
 
-/// The classes a name's `class` tag says its members are: `cleric`, or `fighter_or_ranger`. Empty
+/// The classes a name's `class` tag says its members are: `cleric`, `fighter`, or `fighter_or_ranger`. Empty
 /// for no tag, or one this crate does not know.
 fn named_classes(tag: Option<&str>) -> Vec<ClassKind> {
     match tag {
         Some("cleric") => vec![ClassKind::Cleric],
+        Some("fighter") => vec![ClassKind::Fighter],
         Some("fighter_or_ranger") => vec![ClassKind::Fighter, ClassKind::Ranger],
         _ => Vec::new(),
     }

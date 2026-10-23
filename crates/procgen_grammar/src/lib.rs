@@ -389,8 +389,11 @@ pub fn faction_name(folk_key: &str, intention_key: &str, seed: u32) -> String {
         .unwrap_or_else(|_| "the Nameless".to_string())
 }
 
-/// [`faction_name`], with what its words set: `sex` (`female`, `male`) and `class` (`cleric`,
-/// `fighter_or_ranger`) in `data/faction_names.json`. An unknown key gives "the Nameless", which
+/// [`faction_name`], with what its words set in `data/faction_names.json`: `sex` (`female`,
+/// `male`), `class` (`cleric`, `fighter`, `fighter_or_ranger`), and how members look: `colour` and
+/// `colour2` (a tincture: `azure`, `gules`, `or`, `argent`, `sable`, `vert`, `purpure`), `garment`
+/// (`robe`, `robe_over_armour`), `armour` (`plate`, `light`), `trim` (`gold_hem`) and `folk_mix`
+/// (`mixed`, `own`). An unknown key gives "the Nameless", which
 /// sets nothing.
 pub fn faction_named(folk_key: &str, intention_key: &str, seed: u32) -> Expansion {
     faction_names()
