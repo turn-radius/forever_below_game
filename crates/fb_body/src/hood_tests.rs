@@ -587,7 +587,7 @@ fn print_hood_numbers() {
         (Folk::parse(&f[0].to_lowercase()).unwrap(), f[1].parse().unwrap(), f[2].parse().unwrap())
     });
     let r2 = |x: f32| (x * 100.0).round() / 100.0;
-    for folk in Folk::ALL {
+    for folk in Folk::fitted() {
         for seed in [1207u32, 40, 3] {
             for kit_seed in [5u32, 7] {
                 if pick.is_some_and(|p| p != (folk, seed, kit_seed)) || (pick.is_none() && (seed == 3 || kit_seed == 5)) {
@@ -613,7 +613,7 @@ fn print_hood_numbers() {
 #[test]
 #[ignore = "slow sweep: body fitting test, every folk and seed, standing and walking; run before merging fitting changes"]
 fn hoods_keep_off_the_face_and_close_over_the_shoulders() {
-    let n = hoods_keep_off_the_face_and_close_over_the_shoulders_check(&Folk::ALL, &[1207, 40], &[7], true);
+    let n = hoods_keep_off_the_face_and_close_over_the_shoulders_check(&Folk::fitted(), &[1207, 40], &[7], true);
     assert!(n >= 6 * 2 * 15 * 4, "only {n} readings");
 }
 

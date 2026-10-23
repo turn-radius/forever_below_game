@@ -560,6 +560,19 @@ impl Body {
             Folk::Goblin => 0.035,
             _ => 0.055,
         };
+        if face.one_eyed() {
+            // One brow, unbroken over the one eye, a bar of hair on the heavy ridge.
+            let pts = CatmullRom::centripetal(vec![
+                face.point(-0.72, 0.39 * PI + tilt * 0.4, 0.04 * r),
+                face.point(-0.36, 0.375 * PI, 0.05 * r),
+                face.point(0.0, 0.37 * PI + tilt * 0.3, 0.055 * r),
+                face.point(0.36, 0.375 * PI, 0.05 * r),
+                face.point(0.72, 0.39 * PI + tilt * 0.4, 0.04 * r),
+            ])
+            .sample_evenly(24);
+            out.append(&tube(&pts, 8, &SweepOptions::default(), |t| width * 1.5 * r * (1.0 - 0.5 * (t - 0.5).abs())));
+            return out;
+        }
         for sg in [1.0f32, -1.0] {
             let pts = CatmullRom::centripetal(vec![
                 face.point(sg * 0.14, 0.43 * PI + tilt * 0.6, 0.03 * r),
@@ -723,7 +736,7 @@ mod tests {
     #[test]
     #[ignore = "slow sweep: body rendering test, every folk and beard; run before merging fitting changes"]
     fn every_listed_style_builds() {
-        every_listed_style_builds_check(&Folk::ALL, &Beard::ALL, &HairStyle::ALL);
+        every_listed_style_builds_check(&Folk::fitted(), &Beard::ALL, &HairStyle::ALL);
     }
 
     #[test]

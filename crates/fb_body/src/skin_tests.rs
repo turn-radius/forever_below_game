@@ -110,7 +110,7 @@ fn all_parts(d: &Dressed) -> impl Iterator<Item = (&Part, &PartSkin)> {
 
 #[test]
 fn weights_are_valid_and_the_same_for_the_same_seed() {
-    for folk in Folk::ALL {
+    for folk in Folk::fitted() {
         let a = dress(folk, 1207, "fighter");
         let b = dress(folk, 1207, "fighter");
         assert_eq!(a.rig, b.rig);
@@ -261,7 +261,7 @@ fn gear_stays_on_the_skin(folk: Folk, seed: u32, outfit: &str) {
 #[test]
 #[ignore = "slow sweep: a fighter's gear on the skin through the walk for every folk; run before merging fitting changes"]
 fn legwear_boots_sleeves_and_gloves_stay_on_the_skin_through_the_walk() {
-    for folk in Folk::ALL {
+    for folk in Folk::fitted() {
         gear_stays_on_the_skin(folk, 1207, "fighter");
     }
 }
@@ -278,7 +278,7 @@ fn legwear_boots_sleeves_and_gloves_stay_on_the_skin_through_the_walk_smoke() {
 #[test]
 #[ignore = "slow sweep: gear on the skin for every outfit and folk, seed 1207; run before merging fitting changes"]
 fn gear_stays_on_the_skin_in_every_outfit() {
-    for folk in Folk::ALL {
+    for folk in Folk::fitted() {
         for outfit in fb_items::outfit::outfits() {
             gear_stays_on_the_skin(folk, 1207, &outfit.key);
         }
@@ -287,7 +287,7 @@ fn gear_stays_on_the_skin_in_every_outfit() {
 
 #[test]
 fn cloth_is_not_torn_by_the_walk() {
-    for folk in Folk::ALL {
+    for folk in Folk::fitted() {
         let d = dress(folk, 1207, "fighter");
         for (name, pose) in poses(&d) {
             let frames = d.rig.skin_frames(&pose);
@@ -328,7 +328,7 @@ fn cloth_is_not_torn_by_the_walk() {
 
 #[test]
 fn held_items_stay_in_the_fists_through_the_walk() {
-    for folk in Folk::ALL {
+    for folk in Folk::fitted() {
         let d = dress(folk, 1207, "fighter");
         let hands = d.skin.iter().find(|(p, _)| p.name == "hands").unwrap();
         let mut held = 0;
@@ -374,7 +374,7 @@ fn weighting_a_dressed_folk_is_quick() {
 
 #[test]
 fn posing_every_folk_each_frame_is_cheap() {
-    let all: Vec<(Gait, IdleCycle)> = Folk::ALL
+    let all: Vec<(Gait, IdleCycle)> = Folk::fitted()
         .into_iter()
         .map(|folk| {
             let d = dress(folk, 1207, "fighter");

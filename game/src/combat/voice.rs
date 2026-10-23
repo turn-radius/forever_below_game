@@ -93,6 +93,7 @@ pub fn voice_for(folk: Folk, sex: Option<Sex>) -> (Voice, f32) {
         Folk::Pigfolk => 0.94,
         Folk::Minotaur => 0.7,
         Folk::Faun => 1.08,
+        Folk::Cyclops => 0.72,
     };
     (voice, speed)
 }

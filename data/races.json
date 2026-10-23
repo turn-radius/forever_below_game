@@ -469,5 +469,89 @@
    ],
    "shag": 1.0
   }
+ },
+ "cyclops": {
+  "label": "Cyclops",
+  "h": 29.0,
+  "headR": 1.3,
+  "hw": 0.95,
+  "hh": 1.02,
+  "hd": 1.0,
+  "jaw": 0.3,
+  "chin": 0.3,
+  "flat": 0.55,
+  "neck": 0.8,
+  "neckR": 1.55,
+  "leg": 0.45,
+  "girth": 1.45,
+  "limb": 1.1,
+  "arm": 1.0,
+  "foot": 1.4,
+  "belly": 0.25,
+  "skins": [
+   "#c98b6a",
+   "#b9785a",
+   "#a86a50",
+   "#9a8a7a",
+   "#8a8c88",
+   "#7e7a74"
+  ],
+  "hairs": [
+   "shaggy",
+   "long",
+   "crop",
+   "bald",
+   "topknot"
+  ],
+  "beardP": 0.6,
+  "ears": "round",
+  "nose": "broad",
+  "eyes": "one",
+  "stats": [
+   22,
+   11,
+   20,
+   8,
+   6
+  ],
+  "dv": 60,
+  "block": {
+   "size": "Huge",
+   "kind": "giant",
+   "armour_class": 14,
+   "hit_points": 138,
+   "hit_dice": [
+    12,
+    12,
+    60
+   ],
+   "speed": 30,
+   "charisma": 10,
+   "attacks": [
+    {
+     "name": "Greatclub",
+     "bonus": 9,
+     "dice": [
+      3,
+      8,
+      6
+     ],
+     "damage": "bludgeoning",
+     "range": "reach 10 ft."
+    },
+    {
+     "name": "Rock",
+     "bonus": 9,
+     "dice": [
+      4,
+      10,
+      6
+     ],
+     "damage": "bludgeoning",
+     "range": "range 30/120 ft."
+    }
+   ],
+   "source": "SRD 5.1 Cyclops stat block (Huge giant); STR 22 DEX 11 CON 20 INT 8 WIS 6 CHA 10 are `stats` plus `charisma`"
+  }
  }
 }

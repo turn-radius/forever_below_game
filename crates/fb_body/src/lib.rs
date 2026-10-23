@@ -42,7 +42,7 @@ pub mod worn;
 
 pub use body::{ArmPose, Body, GRIP_MAX, Pose};
 pub use gait::{Gait, IdleCycle};
-pub use folk::{Beard, EyeKind, Ears, Folk, HairStyle, Nose, Race};
+pub use folk::{Beard, BlockAttack, EyeKind, Ears, Folk, HairStyle, Nose, Race, StatBlock};
 pub use hair::HairFit;
 pub use head::{HeadFit, StandingFeatures};
 pub use hand::HandPose;

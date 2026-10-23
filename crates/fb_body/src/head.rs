@@ -46,18 +46,33 @@ impl Face {
             Folk::Lizardfolk => (0.95, 0.43 * PI),
             Folk::Pigfolk => (0.34, 0.5 * PI),
             Folk::Minotaur => (1.12, 0.46 * PI),
+            // A one-eyed face keeps a nominal spread: it is how wide a hood's opening and
+            // the brow's stroke run, though the one eye sits on the middle, a little high.
+            Folk::Cyclops => (0.4, 0.465 * PI),
             _ => (0.4, 0.5 * PI),
         };
         Face { head, folk, r: head.half_width.max(head.half_depth), eye_azimuth, eye_polar }
+    }
+
+    /// Whether the face has one eye, centred ([`EyeKind::One`]).
+    pub fn one_eyed(&self) -> bool {
+        self.folk.race().eyes == EyeKind::One
     }
 
     /// Relief over the head form, in units of the head's radius.
     fn relief(&self, az: f32, polar: f32) -> f32 {
         let a = az.abs();
         let front = bump(az, 0.75);
-        let brow = if self.folk == Folk::Lizardfolk { 0.0 } else if self.folk == Folk::Dwarf { 0.09 } else { 0.065 };
-        let ridge = brow * bump(polar - 0.43 * PI, 0.05 * PI) * front;
-        let socket = -0.06 * bump(polar - self.eye_polar, 0.055 * PI) * bump(a - self.eye_azimuth, 0.17);
+        let one = self.one_eyed();
+        let brow = if self.folk == Folk::Lizardfolk { 0.0 } else if one { 0.12 } else if self.folk == Folk::Dwarf { 0.09 } else { 0.065 };
+        // One heavy brow runs unbroken over the single eye, a little above it.
+        let ridge_at = if one { self.eye_polar - 0.075 * PI } else { 0.43 * PI };
+        let ridge = brow * bump(polar - ridge_at, if one { 0.045 * PI } else { 0.05 * PI }) * if one { bump(az, 0.95) } else { front };
+        let socket = if one {
+            -0.07 * bump(polar - self.eye_polar, 0.07 * PI) * bump(a, 0.3)
+        } else {
+            -0.06 * bump(polar - self.eye_polar, 0.055 * PI) * bump(a - self.eye_azimuth, 0.17)
+        };
         let cheek = 0.03 * bump(polar - 0.575 * PI, 0.06 * PI) * bump(a - 0.75, 0.25);
         // The mouth's muzzle over the teeth and the point of the chin stand out of the flat
         // face, so the profile has a mouth and a chin and not only a nose.
@@ -79,6 +94,9 @@ impl Face {
 
     /// Where an eye's centre sits, on side `sg` (+1 the wearer's left).
     pub fn eye(&self, sg: f32) -> V3 {
+        if self.one_eyed() {
+            return self.point(0.0, self.eye_polar, -0.01 * self.r);
+        }
         self.point(sg * self.eye_azimuth, self.eye_polar, -0.01 * self.r)
     }
 
@@ -102,12 +120,14 @@ struct Quirks {
     ear: f32,
     eyes: f32,
     mouth: f32,
+    /// How far a one-eyed face's lid droops, 0..=1.
+    droop: f32,
 }
 
 impl Quirks {
     fn roll(seed: u32) -> Quirks {
         let mut rng = Mulberry32::new(seed ^ 0x5eed_f00d);
-        Quirks { ear: rng.range_f32(0.88, 1.12), eyes: rng.range_f32(0.94, 1.06), mouth: rng.range_f32(0.9, 1.1) }
+        Quirks { ear: rng.range_f32(0.88, 1.12), eyes: rng.range_f32(0.94, 1.06), mouth: rng.range_f32(0.9, 1.1), droop: rng.range_f32(0.1, 0.9) }
     }
 }
 
@@ -178,7 +198,7 @@ impl Body {
         let spec = &self.spec;
         let mut p = Pieces::default();
         p.skin.append(&face.skull());
-        eyes(&face, race.eyes, &mut p);
+        eyes(&face, race.eyes, q.droop, &mut p);
         let nv = 0.85 + spec.nose * 0.35;
         nose(&face, race.nose, nv, &mut p);
         if let (Some(row), Nose::Muzzle) = (&race.muzzle, race.nose) {
@@ -221,9 +241,9 @@ impl Body {
             EyeKind::Yellow => Rgb::hex(0xe3c83a),
             EyeKind::Amber => Rgb::hex(0xd8962a),
             EyeKind::Small => Rgb::hex(0x160e0b),
-            EyeKind::Human => EYE_WHITE,
+            EyeKind::Human | EyeKind::One => EYE_WHITE,
         };
-        add(p.whites, "eye_whites", None, white, race.eyes != EyeKind::Human);
+        add(p.whites, "eye_whites", None, white, !matches!(race.eyes, EyeKind::Human | EyeKind::One));
         add(p.irises, "irises", None, spec.eyes, false);
         add(p.pupils, "pupils", None, PUPIL, false);
         add(p.mouth, "mouth", None, MOUTH, false);
@@ -283,7 +303,7 @@ impl Body {
         if let (Some(row), Nose::Muzzle) = (&race.muzzle, race.nose) {
             let mut p = Pieces::default();
             muzzle(&face, row, &self.traits(), &mut p);
-            eyes(&face, race.eyes, &mut p);
+            eyes(&face, race.eyes, q.droop, &mut p);
             for m in [p.shade, p.mouth, p.whites, p.pupils] {
                 p.skin.append(&m);
             }
@@ -292,7 +312,7 @@ impl Body {
         if self.folk() == Folk::Lizardfolk {
             let mut p = Pieces::default();
             snout(&face, &mut p);
-            eyes(&face, race.eyes, &mut p);
+            eyes(&face, race.eyes, q.droop, &mut p);
             for m in [p.mouth, p.ivory, p.whites, p.pupils] {
                 p.skin.append(&m);
             }
@@ -321,8 +341,12 @@ fn blob(size: V3, at: V3, up: V3, facing: V3, segments: usize) -> MeshBuilder {
     m
 }
 
-fn eyes(face: &Face, kind: EyeKind, p: &mut Pieces) {
+fn eyes(face: &Face, kind: EyeKind, droop: f32, p: &mut Pieces) {
     let r = face.r;
+    if kind == EyeKind::One {
+        one_eye(face, droop, p);
+        return;
+    }
     for sg in [1.0f32, -1.0] {
         let at = face.eye(sg);
         let n = face.normal(sg * face.eye_azimuth, face.eye_polar);
@@ -363,8 +387,35 @@ fn eyes(face: &Face, kind: EyeKind, p: &mut Pieces) {
                     .collect();
                 p.skin.append(&tube(&brow, 8, &SweepOptions::default(), |t| 0.07 * r * (1.0 - 0.4 * (t - 0.5).abs())));
             }
+            EyeKind::One => {}
         }
     }
+}
+
+/// A cyclops's one large eye, centred under its brow: a white, a seeded iris and a round
+/// pupil, with a heavy upper lid that droops by `droop` (0..=1) and a lower rim.
+fn one_eye(face: &Face, droop: f32, p: &mut Pieces) {
+    let r = face.r;
+    let at = face.eye(1.0);
+    let n = face.normal(0.0, face.eye_polar);
+    let up = vec3::Y;
+    let out = |d: f32| vec3::add(at, vec3::scale(n, d * r));
+    let (w, h) = (0.3 * r, 0.2 * r);
+    p.whites.append(&blob([w, h, 0.12 * r], at, up, n, 22));
+    p.irises.append(&blob([0.135 * r, 0.135 * r, 0.05 * r], out(0.085), up, n, 16));
+    p.pupils.append(&blob([0.068 * r, 0.068 * r, 0.03 * r], out(0.12), up, n, 12));
+    // The lid comes down over the top of the iris as it droops.
+    p.skin.append(&lid(at, n, 1.0, w, h * (1.0 - 0.5 * droop), 0.055 * r * (1.0 + 0.6 * droop)));
+    // A low rim under the eye, as a pouch.
+    let across = vec3::normalize_or(vec3::cross(vec3::Y, n), vec3::X);
+    let pts: Vec<V3> = (0..=10)
+        .map(|i| {
+            let a = PI * (1.1 + 0.8 * i as f32 / 10.0);
+            let (x, y) = (a.cos() * w * 1.02, a.sin() * h * 0.95 - h * 0.05);
+            vec3::add(at, vec3::add(vec3::add(vec3::scale(across, x), vec3::scale(vec3::cross(n, across), y)), vec3::scale(n, w * 0.34 * (1.0 - (x / w).powi(2)).max(0.0).sqrt())))
+        })
+        .collect();
+    p.skin.append(&tube(&pts, 8, &SweepOptions::default(), |t| 0.03 * r * (0.5 + 0.5 * (PI * t).sin())));
 }
 
 /// An upper eyelid: a fold of skin along the top of an eye `w` wide and `h` tall, drooping a
@@ -390,10 +441,12 @@ fn nose(face: &Face, kind: Nose, nv: f32, p: &mut Pieces) {
     match kind {
         Nose::Human | Nose::Broad => {
             let k = if kind == Nose::Broad { 1.35 } else { 1.0 };
+            // Under a single eye the bridge starts lower, below its lower rim.
+            let top = if face.one_eyed() { 0.545 } else { 0.45 };
             let path = CatmullRom::centripetal(vec![
-                hp(0.0, 0.45 * PI, -0.03 * r),
-                hp(0.0, 0.53 * PI, 0.08 * r * nv),
-                hp(0.0, 0.6 * PI, 0.18 * r * nv),
+                hp(0.0, top * PI, -0.03 * r),
+                hp(0.0, if face.one_eyed() { (top + (0.635 - top) * 0.43) * PI } else { 0.53 * PI }, 0.08 * r * nv),
+                hp(0.0, if face.one_eyed() { (top + (0.635 - top) * 0.81) * PI } else { 0.6 * PI }, 0.18 * r * nv),
                 hp(0.0, 0.635 * PI, 0.05 * r),
             ])
             .sample_evenly(20);
@@ -485,6 +538,7 @@ fn mouth(face: &Face, smile: f32, width: f32, p: &mut Pieces) {
     let r = face.r;
     let folk = face.folk;
     let mw = width * match folk {
+        Folk::Cyclops => 0.42,
         Folk::Goblin => 0.55,
         Folk::Pigfolk => 0.36,
         _ => 0.3,
@@ -690,7 +744,7 @@ mod tests {
 
     #[test]
     fn every_head_part_validates() {
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             for seed in [1, 1207] {
                 let body = Body::new(&BodySpec::roll(folk, seed));
                 let mesh = body.head_mesh();
@@ -704,7 +758,7 @@ mod tests {
 
     #[test]
     fn each_folk_has_a_head_of_its_own() {
-        let heads: Vec<(Folk, [f32; 3])> = Folk::ALL.iter().map(|&f| (f, extents(&Body::new(&BodySpec::typical(f))))).collect();
+        let heads: Vec<(Folk, [f32; 3])> = Folk::fitted().iter().map(|&f| (f, extents(&Body::new(&BodySpec::typical(f))))).collect();
         let get = |f: Folk| heads.iter().find(|h| h.0 == f).unwrap().1;
         let (human, goblin, gnome, lizard, pig) = (get(Folk::Human), get(Folk::Goblin), get(Folk::Gnome), get(Folk::Lizardfolk), get(Folk::Pigfolk));
         // A lizard's snout and a goblin's nose reach far forward; a pig's disc further than a human's nose.
@@ -727,7 +781,7 @@ mod tests {
 
     #[test]
     fn faces_are_seeded() {
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let a = Body::new(&BodySpec::roll(folk, 5)).head_mesh();
             assert_eq!(a, Body::new(&BodySpec::roll(folk, 5)).head_mesh());
             assert_ne!(a, Body::new(&BodySpec::roll(folk, 6)).head_mesh(), "{folk:?}");
@@ -736,18 +790,20 @@ mod tests {
 
     #[test]
     fn eyes_sit_in_the_face() {
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let body = Body::new(&BodySpec::roll(folk, 9));
             let face = body.face();
             let c = body.head.centre;
             for sg in [1.0f32, -1.0] {
                 let eye = face.eye(sg);
                 // On the skin, in front of the head's centre, between chin and crown, on its side.
-                let skin = face.point(sg * face.eye_azimuth, face.eye_polar, 0.0);
+                let one = face.one_eyed();
+                let skin = face.point(if one { 0.0 } else { sg * face.eye_azimuth }, face.eye_polar, 0.0);
                 assert!(vec3::distance(eye, skin) < 0.05 * face.r);
                 assert!(eye[2] > c[2], "{folk:?} eye {eye:?}");
                 assert!(eye[1] > body.chin_y && eye[1] < body.height);
-                assert!(eye[0] * sg > 0.0);
+                // One eye sits on the middle; two sit one to a side.
+                assert!(if one { eye[0].abs() < 0.01 * face.r } else { eye[0] * sg > 0.0 });
             }
             let whites = body.head_mesh().parts.into_iter().find(|p| p.name == "eye_whites").unwrap();
             for p in &whites.positions {

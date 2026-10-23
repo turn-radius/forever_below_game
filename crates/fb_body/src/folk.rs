@@ -26,6 +26,9 @@ pub enum Folk {
     Minotaur,
     /// A goat-legged denizen with a human's upper body (`fb_denizens::DenizenBody::Faun`).
     Faun,
+    /// A one-eyed giant of the abyss. Not one of the six who delve, so it is not in
+    /// [`Folk::ALL`]; see [`Folk::DENIZENS`].
+    Cyclops,
 }
 
 impl Race {
@@ -42,7 +45,18 @@ impl Folk {
     pub const ALL: [Folk; 6] = [Folk::Human, Folk::Dwarf, Folk::Gnome, Folk::Goblin, Folk::Lizardfolk, Folk::Pigfolk];
 
     /// The denizens whose bodies are built on the folk body so far.
-    pub const DENIZENS: [Folk; 2] = [Folk::Minotaur, Folk::Faun];
+    pub const DENIZENS: &'static [Folk] = &[Folk::Minotaur, Folk::Faun, Folk::Cyclops];
+
+    /// The folk and the denizens built on their body, for tests that sweep every body.
+    pub fn every() -> Vec<Folk> {
+        Folk::ALL.into_iter().chain(Folk::DENIZENS.iter().copied()).collect()
+    }
+
+    /// The folk and the denizens whose fitting the sweeps in this crate cover: the six folk and
+    /// the cyclops (the minotaur's parts have their own tests, in `denizen_tests`).
+    pub fn fitted() -> Vec<Folk> {
+        Folk::ALL.into_iter().chain([Folk::Cyclops]).collect()
+    }
 
     /// Whether this is a denizen, not one of the six folk.
     pub fn is_denizen(self) -> bool {
@@ -54,6 +68,7 @@ impl Folk {
         match self {
             Folk::Minotaur => Some(DenizenBody::Minotaur),
             Folk::Faun => Some(DenizenBody::Faun),
+            Folk::Cyclops => Some(DenizenBody::Cyclops),
             _ => None,
         }
     }
@@ -63,6 +78,7 @@ impl Folk {
         match body {
             DenizenBody::Minotaur => Some(Folk::Minotaur),
             DenizenBody::Faun => Some(Folk::Faun),
+            DenizenBody::Cyclops => Some(Folk::Cyclops),
             _ => None,
         }
     }
@@ -78,13 +94,14 @@ impl Folk {
             Folk::Pigfolk => "pig",
             Folk::Minotaur => "minotaur",
             Folk::Faun => "faun",
+            Folk::Cyclops => "cyclops",
         }
     }
 
     /// Parses a key from `data/races.json`, or the folk's name ("lizardfolk", "pigfolk").
     pub fn parse(text: &str) -> Option<Folk> {
         let text = text.trim().to_ascii_lowercase();
-        Folk::ALL.into_iter().chain(Folk::DENIZENS).find(|f| f.key() == text || f.race().label.to_ascii_lowercase() == text)
+        Folk::ALL.into_iter().chain(Folk::DENIZENS.iter().copied()).find(|f| f.key() == text || f.race().label.to_ascii_lowercase() == text)
     }
 
     /// The folk's row in `data/races.json`.
@@ -142,6 +159,9 @@ pub enum EyeKind {
     Small,
     /// Large amber eyes set at the sides of the head, with a horizontal pupil (a bull's).
     Bovine,
+    /// One large eye, centred under one heavy brow (cyclopes): a white, a seeded iris from
+    /// `data/eyes.json` and a round pupil, under a drooping lid.
+    One,
 }
 
 /// Hair styles (`RACES[*].hairs`); labels as the plate's hair menu gives them.
@@ -278,6 +298,9 @@ pub struct Race {
     /// a fur colour a seed picks, and shaggy locks hang from the thighs and shanks.
     #[serde(default)]
     pub fur: Option<FurRow>,
+    /// A denizen's SRD stat block (the folk who delve have none: they are rolled as characters).
+    #[serde(default)]
+    pub block: Option<StatBlock>,
 }
 
 /// Fur that grows on a race's legs only.
@@ -380,6 +403,33 @@ pub struct MuzzleRow {
     pub ring: f32,
     /// How big the ears are.
     pub ears: Span,
+
+}
+
+/// A denizen's stat block as the SRD gives it: what the 5-number `stats` row cannot hold.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct StatBlock {
+    pub size: String,
+    pub kind: String,
+    pub armour_class: i32,
+    pub hit_points: i32,
+    /// Count, sides and bonus of the hit dice (12d12 + 60).
+    pub hit_dice: [i32; 3],
+    /// Walking speed in feet.
+    pub speed: u32,
+    pub charisma: i32,
+    pub attacks: Vec<BlockAttack>,
+    pub source: String,
+}
+
+/// One attack of a [`StatBlock`]: to hit and damage dice (count, sides, bonus).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct BlockAttack {
+    pub name: String,
+    pub bonus: i32,
+    pub dice: [i32; 3],
+    pub damage: String,
+    pub range: String,
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(name: &str, json: &str) -> T {
@@ -430,5 +480,24 @@ mod tests {
         assert_eq!(Folk::Lizardfolk.race().tail, 1);
         assert_eq!(eye_colours().len(), 5);
         assert!(!hair_colours(Folk::Goblin).is_empty());
+    }
+
+    #[test]
+    fn the_cyclops_is_a_denizen_on_the_folk_body() {
+        assert!(!Folk::ALL.contains(&Folk::Cyclops));
+        assert_eq!(Folk::DENIZENS, [Folk::Cyclops]);
+        assert_eq!(Folk::parse("cyclops"), Some(Folk::Cyclops));
+        assert_eq!(Folk::Cyclops.denizen_body(), Some(fb_denizens::DenizenBody::Cyclops));
+        assert_eq!(Folk::of_denizen(fb_denizens::DenizenBody::Cyclops), Some(Folk::Cyclops));
+        assert_eq!(Folk::Human.denizen_body(), None);
+        let r = Folk::Cyclops.race();
+        assert_eq!(r.eyes, EyeKind::One);
+        assert!(r.h / Folk::Human.race().h > 1.6 && r.h / Folk::Human.race().h < 1.8);
+        // SRD: STR 22 DEX 11 CON 20 INT 8 WIS 6 CHA 10, AC 14, 138 hp (12d12 + 60), 30 ft.
+        assert_eq!(r.stats, [22, 11, 20, 8, 6]);
+        let b = r.block.as_ref().unwrap();
+        assert_eq!((b.armour_class, b.hit_points, b.hit_dice, b.speed, b.charisma), (14, 138, [12, 12, 60], 30, 10));
+        assert_eq!(b.attacks.iter().map(|a| a.dice).collect::<Vec<_>>(), [[3, 8, 6], [4, 10, 6]]);
+        assert!(Folk::ALL.into_iter().all(|f| f.race().block.is_none()));
     }
 }

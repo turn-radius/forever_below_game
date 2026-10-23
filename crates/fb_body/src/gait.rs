@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn the_stance_foot_is_planted_flat_on_the_floor() {
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let (_, rig, gait) = rigged(folk, 1207);
             let stride = gait.stride_length();
             for side in Side::BOTH {
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn the_swing_foot_clears_the_floor_and_the_legs_stay_reachable() {
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let (_, rig, gait) = rigged(folk, 1207);
             let mut highest = 0.0f32;
             for i in 0..100 {

@@ -178,7 +178,7 @@ impl DollChoice {
 
     /// Steps `by` folk through [`Folk::ALL`], wrapping.
     pub fn step_folk(&mut self, by: isize) {
-        let all: Vec<Folk> = Folk::ALL.into_iter().chain(Folk::DENIZENS).collect();
+        let all: Vec<Folk> = Folk::every();
         let at = all.iter().position(|&f| f == self.folk).unwrap_or(0) as isize;
         self.folk = all[(at + by).rem_euclid(all.len() as isize) as usize];
     }
@@ -519,7 +519,7 @@ mod tests {
         choice.step_outfit(1);
         assert_eq!(choice, start);
         choice.step_folk(-1);
-        assert_eq!(choice.folk, Folk::Minotaur, "Tab goes on through the denizens");
+        assert_eq!(Some(&choice.folk), Folk::DENIZENS.last(), "Tab goes on through the denizens");
     }
 
     #[test]

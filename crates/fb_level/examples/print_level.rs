@@ -65,6 +65,7 @@ fn folk_mark(folk: Folk) -> char {
         Folk::Pigfolk => 'P',
         Folk::Minotaur => 'M',
         Folk::Faun => 'F',
+        Folk::Cyclops => 'c',
     }
 }
 

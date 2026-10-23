@@ -1143,12 +1143,12 @@ mod tests {
     use std::f32::consts::PI;
 
     fn bodies() -> impl Iterator<Item = Body> {
-        Folk::ALL.into_iter().flat_map(|f| [1u32, 1207, 40_401].map(move |s| Body::new(&BodySpec::roll(f, s))))
+        Folk::fitted().into_iter().flat_map(|f| [1u32, 1207, 40_401].map(move |s| Body::new(&BodySpec::roll(f, s))))
     }
 
     #[test]
     fn the_same_seed_builds_the_same_body() {
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let a = Body::new(&BodySpec::roll(folk, 77)).skin_mesh();
             let b = Body::new(&BodySpec::roll(folk, 77)).skin_mesh();
             assert_eq!(a, b, "{folk:?}");

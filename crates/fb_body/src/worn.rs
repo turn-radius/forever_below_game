@@ -1593,7 +1593,7 @@ mod tests {
     }
 
     fn bodies() -> impl Iterator<Item = Body> {
-        Folk::ALL.into_iter().flat_map(|f| [3u32, 1207].map(move |s| Body::new(&BodySpec::roll(f, s))))
+        Folk::fitted().into_iter().flat_map(|f| [3u32, 1207].map(move |s| Body::new(&BodySpec::roll(f, s))))
     }
 
     /// Radial reach from the body's axis, binned by polar angle and height.
@@ -1815,12 +1815,12 @@ mod tests {
     #[test]
     #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
     fn a_cloak_over_bell_sleeves_falls_close_to_the_body() {
-        a_cloak_over_bell_sleeves_falls_close_to_the_body_check(&Folk::ALL, &[3, 1207, 40], &[10, 11, 12, 13]);
+        a_cloak_over_bell_sleeves_falls_close_to_the_body_check(&Folk::fitted(), &[3, 1207, 40], &[10, 11, 12, 13]);
     }
 
     #[test]
     fn a_cloak_over_bell_sleeves_falls_close_to_the_body_smoke() {
-        a_cloak_over_bell_sleeves_falls_close_to_the_body_check(&Folk::ALL, &[1207], &[10]);
+        a_cloak_over_bell_sleeves_falls_close_to_the_body_check(&Folk::fitted(), &[1207], &[10]);
     }
 
     /// The triangles of `part` whose bounds meet the box `lo..hi`.
@@ -2202,7 +2202,7 @@ mod tests {
     #[test]
     #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
     fn a_bracer_lies_close_over_a_mail_sleeve() {
-        a_bracer_lies_close_over_a_mail_sleeve_check(&Folk::ALL, &[3, 1207], &[10, 11, 12]);
+        a_bracer_lies_close_over_a_mail_sleeve_check(&Folk::fitted(), &[3, 1207], &[10, 11, 12]);
     }
 
     #[test]
@@ -2316,7 +2316,7 @@ mod tests {
     #[test]
     #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
     fn legwear_bends_with_the_knees() {
-        legwear_bends_with_the_knees_check(&Folk::ALL, &[3, 1207], &LegwearStyle::ALL, &[10, 11]);
+        legwear_bends_with_the_knees_check(&Folk::fitted(), &[3, 1207], &LegwearStyle::ALL, &[10, 11]);
     }
 
     #[test]
@@ -2372,7 +2372,7 @@ mod tests {
     #[test]
     #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
     fn a_coifs_cape_keeps_close_over_pauldrons() {
-        let cases: Vec<(Folk, u32)> = Folk::ALL.iter().flat_map(|&f| (1..=12).map(move |s| (f, s))).collect();
+        let cases: Vec<(Folk, u32)> = Folk::fitted().iter().flat_map(|&f| (1..=12).map(move |s| (f, s))).collect();
         a_coifs_cape_keeps_close_over_pauldrons_check(&cases);
     }
 
@@ -2562,11 +2562,11 @@ mod tests {
         standing_ears_clear_open_caps_check(&[Folk::Goblin, Folk::Gnome], &[1207], &[HelmStyle::Kettle, HelmStyle::Skullcap], 0..2, 10);
     }
 
-    fn a_lizards_snout_and_brow_clear_helms_check(seeds: &[u32], styles: &[HelmStyle], kits: std::ops::Range<u32>, min_checked: usize) {
+    fn a_lizards_snout_and_brow_clear_helms_check(folk: Folk, seeds: &[u32], styles: &[HelmStyle], kits: std::ops::Range<u32>, min_checked: usize) {
         let mut failures = vec![];
         let mut checked = 0;
         for &seed in seeds {
-            let body = Body::new(&BodySpec::roll(Folk::Lizardfolk, seed));
+            let body = Body::new(&BodySpec::roll(folk, seed));
             for &style in styles {
                 for kit in kits.clone() {
                     let mut helm = Helm::roll_as(seed + kit, style);
@@ -2579,7 +2579,7 @@ mod tests {
                             checked += 1;
                             let n = crossings(feature, part);
                             if n > 0 {
-                                failures.push(format!("lizardfolk {seed} {style:?} kit {kit}: its {} passes through the {} ({n} crossings)", feature.name, part.name));
+                                failures.push(format!("{folk:?} {seed} {style:?} kit {kit}: its {} passes through the {} ({n} crossings)", feature.name, part.name));
                             }
                         }
                     }
@@ -2593,12 +2593,23 @@ mod tests {
     #[test]
     #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
     fn a_lizards_snout_and_brow_clear_helms() {
-        a_lizards_snout_and_brow_clear_helms_check(&[3, 1207, 40, 8, 77, 501], &HelmStyle::ALL, 0..4, 500);
+        a_lizards_snout_and_brow_clear_helms_check(Folk::Lizardfolk, &[3, 1207, 40, 8, 77, 501], &HelmStyle::ALL, 0..4, 500);
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every folk and seed; run before merging fitting changes"]
+    fn a_cyclopss_eye_and_brow_clear_helms() {
+        a_lizards_snout_and_brow_clear_helms_check(Folk::Cyclops, &[3, 1207, 40, 8, 77, 501], &HelmStyle::ALL, 0..4, 500);
+    }
+
+    #[test]
+    fn a_cyclopss_eye_and_brow_clear_helms_smoke() {
+        a_lizards_snout_and_brow_clear_helms_check(Folk::Cyclops, &[7, 1207], &[HelmStyle::Bascinet, HelmStyle::Kettle, HelmStyle::Nasal], 0..2, 10);
     }
 
     #[test]
     fn a_lizards_snout_and_brow_clear_helms_smoke() {
-        a_lizards_snout_and_brow_clear_helms_check(&[1207], &[HelmStyle::Bascinet], 0..1, 10);
+        a_lizards_snout_and_brow_clear_helms_check(Folk::Lizardfolk, &[1207], &[HelmStyle::Bascinet], 0..1, 10);
     }
 
     #[test]
@@ -2684,7 +2695,7 @@ mod tests {
     fn boots_fit_close_to_the_foot_and_shin() {
         use armory::families::feet::Feet;
         use armory::families::legs::Legs;
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             for seed in [3u32, 1207] {
                 let body = Body::new(&BodySpec::roll(folk, seed));
                 let mut boot = Feet::roll_as(seed, BootStyle::Boot);
@@ -2704,7 +2715,7 @@ mod tests {
                     let y = y0 + (top - 0.3 * body.scale - y0) * k as f32 / 8.0;
                     let boot = shafts.iter().filter_map(|p| reach_from_leg(&body, p, y)).fold(0.0f32, f32::max);
                     let cloth = trousers.parts.iter().filter_map(|p| reach_from_leg(&body, p, y)).fold(0.0f32, f32::max);
-                    assert!(boot - cloth < 0.2, "{folk:?} {seed} at {y:.2}: boot {boot:.3}, trousers {cloth:.3}");
+                    assert!(boot - cloth < 0.2 * body.scale.max(1.0), "{folk:?} {seed} at {y:.2}: boot {boot:.3}, trousers {cloth:.3}");
                 }
                 // Across the foot, within 2.5 cm of the bare foot at the boot's own width.
                 let mut bare = ItemMesh { parts: vec![armory::build::boot::foot_mesh(&form, 0.0).into_part("foot", armory::geom::OutlineMode::Welded)] };
@@ -2717,7 +2728,7 @@ mod tests {
 
     #[test]
     fn robes_hang_to_just_above_the_feet() {
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             for seed in [3u32, 1207] {
                 let body = Body::new(&BodySpec::roll(folk, seed));
                 for kit in [1u32, 40] {
