@@ -5,7 +5,8 @@
 // hard bands, as three.js `MeshToonMaterial` does with a 1-pixel gradient map
 // (`makeGradient` in `reference/spline_armory_engine.js`), then scaled by the light's colour.
 // Point and spot lights also step down in hard steps across their reach (`reach_falloff`), and
-// flames flicker on top of their steps (`flame_flicker`). Wear is painted on the base colour first (`decay.wesl`); both
+// flames flicker on top of their steps (`flame_flicker`). Metal adds a hard two-step highlight
+// per light (`toon_highlight`). Wear is painted on the base colour first (`decay.wesl`); both
 // work in display (sRGB) values, as the prototype did. The vertex shader is Bevy's mesh
 // vertex shader plus one thing: fine parts that get no ink line are fattened to a minimum
 // width on screen, so a bowstring stays visible across the room.
@@ -77,6 +78,8 @@ struct ToonUniform {
     // fraction of it, 0 for none.
     shimmer_color: vec3<f32>,
     shimmer_strength: f32,
+    // Strength of the specular highlight each light leaves (`toon_highlight`), 0 for none.
+    gloss: f32,
 }
 
 // Bindless where the device allows it (`ToonExtension`'s `bindless` attribute), as Bevy's
@@ -199,7 +202,7 @@ const FLICKER_LAG: vec3<f32> = vec3(0.0071, 0.0, 0.0053);
 // A flame's strength multiplier now: the prototype's flicker
 // `.88 + .08 sin(13.1t) + .05 sin(7.3t + 1.2) + .03 sin(23.7t)` (`docs/rendering.md`, "Light"),
 // scaled toward 1 by the light's flicker depth, 0 for a steady light. The depth rides in the
-// light's radius, which Bevy otherwise uses only for specular and soft shadows, neither drawn
+// light's radius, which Bevy otherwise uses only for area-light specular and soft shadows, neither drawn
 // here (`light::Torch`). Applied after `reach_step`, so the steps hold still and only their
 // brightness wavers. Mirrors `light::Torch::wavering`.
 fn flame_flicker(position_radius: vec4<f32>) -> f32 {
@@ -212,12 +215,37 @@ fn flame_flicker(position_radius: vec4<f32>) -> f32 {
     return 1.0 - depth * (1.0 - curve);
 }
 
+// Sharpness of the highlight's Blinn-Phong lobe, `(N.H)^power`, and where its two steps fall on
+// it: a broad dim sheen and a small bright core, each at its share of the gloss. Our own tuning.
+const HIGHLIGHT_POWER: f32 = 40.0;
+const HIGHLIGHT_SHEEN: f32 = 0.2;
+const HIGHLIGHT_CORE: f32 = 0.6;
+const HIGHLIGHT_SHEEN_SHARE: f32 = 0.35;
+
+// The specular highlight one light leaves on a glossy part, as a multiple of its radiance
+// added to the band: a Blinn-Phong lobe (half vector H between the light and the eye) cut into
+// two hard steps, so metal glints in the house's crisp toon style rather than with a soft PBR
+// sheen. Added to the light the base colour is multiplied by, so the glint takes the metal's
+// own colour, as real metal's does (gold glints gold). None on the unlit side or in shadow.
+// Edges are softened over a fixed width of the lobe: `fwidth` is not allowed inside the
+// light loop, whose bounds vary per fragment.
+fn toon_highlight(gloss: f32, N: vec3<f32>, L: vec3<f32>, V: vec3<f32>, shadow: f32) -> f32 {
+    if gloss <= 0.0 || dot(N, L) <= 0.0 {
+        return 0.0;
+    }
+    let lobe = pow(max(dot(N, normalize(L + V)), 0.0), HIGHLIGHT_POWER);
+    let sheen = smoothstep(HIGHLIGHT_SHEEN * 0.8, HIGHLIGHT_SHEEN * 1.2, lobe);
+    let core = smoothstep(HIGHLIGHT_CORE * 0.9, HIGHLIGHT_CORE * 1.1, lobe);
+    return gloss * mix(sheen * HIGHLIGHT_SHEEN_SHARE, 1.0, core) * shadow;
+}
+
 // Radiance from every point, spot and directional light reaching this fragment, banded per
 // light, times the view's exposure. Same light data and units as Bevy's
-// `apply_pbr_lighting`, with a Lambert lobe.
+// `apply_pbr_lighting`, with a Lambert lobe, plus a highlight on glossy parts.
 fn toon_direct_light(toon: ToonUniform, in: PbrInput) -> vec3<f32> {
     let N = in.N;
     let P = in.world_position.xyz;
+    let V = normalize(view_bindings::view.world_position - P);
     let receives_shadows = (in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u;
 
     let view_z = dot(vec4<f32>(
@@ -273,7 +301,8 @@ fn toon_direct_light(toon: ToonUniform, in: PbrInput) -> vec3<f32> {
 
         // Lambert: the band stands in for N.L, 1/PI as in Bevy's diffuse lobe.
         let radiance = (*clustered).color_inverse_square_range.rgb * attenuation * cone * (exposure / PI);
-        light += reach_step(radiance) * flame_flicker((*clustered).position_radius) * toon_band(toon, dot(N, L), shadow);
+        let band = toon_band(toon, dot(N, L), shadow) + toon_highlight(toon.gloss, N, L, V, shadow);
+        light += reach_step(radiance) * flame_flicker((*clustered).position_radius) * band;
     }
 
     for (var i: u32 = 0u; i < view_bindings::lights.n_directional_lights; i = i + 1u) {
@@ -284,7 +313,9 @@ fn toon_direct_light(toon: ToonUniform, in: PbrInput) -> vec3<f32> {
             shadow = shadows::fetch_directional_shadow(i, in.world_position, in.world_normal, view_z, in.frag_coord.xy);
             shadow *= in.directional_shadow_factor;
         }
-        light += (*directional).color.rgb * (exposure / PI) * toon_band(toon, dot(N, (*directional).direction_to_light), shadow);
+        let L = (*directional).direction_to_light;
+        let band = toon_band(toon, dot(N, L), shadow) + toon_highlight(toon.gloss, N, L, V, shadow);
+        light += (*directional).color.rgb * (exposure / PI) * band;
     }
 
     return light;
