@@ -14,7 +14,7 @@ use armory::build::form::{BACK, Bulge, FRONT, FormRing, HandForm, HeadForm, FILL
 use armory::build::hafted::smoothstep;
 use armory::fabric::{PatternKind, SurfacePattern};
 use armory::geom::vec3::{self, V3};
-use armory::geom::{CatmullRom, GridOptions, MeshBuilder, OutlineMode, SweepOptions, spike, stitch_grid, tube};
+use armory::geom::{CatmullRom, GridOptions, MeshBuilder, OutlineMode, SweepOptions, spike, stitch_grid, tube, uv_sphere};
 use armory::{ItemMesh, MaterialKind, Rgb};
 
 use crate::folk::{Folk, Race};
@@ -187,7 +187,7 @@ impl Body {
         let race = spec.folk.race();
         let h = race.h * spec.stature;
         let s = h / 17.5;
-        let (mu, slim) = (spec.muscle, 1.12 - 0.24 * spec.slender);
+        let (mu, slim) = (spec.muscle + race.brawn, 1.12 - 0.24 * spec.slender);
         // Slenderness thins trunk and limbs alike at the same height; 0.5 is the plate's girth.
         let ws = s.powf(0.72) * race.girth * (0.88 + spec.frame * 0.3) * slim;
         let fem = spec.figure;
@@ -796,6 +796,7 @@ impl Body {
                 continue;
             }
             let mut f = foot_mesh(&self.leg_form(), 0.0);
+            f.append(&self.toes_mesh(side));
             self.foot_placement(side).apply(&mut f);
             feet.append(&f);
         }
@@ -824,6 +825,35 @@ impl Body {
         if self.folk() == Folk::Lizardfolk {
             let claws = self.claws_mesh().into_part("claws", OutlineMode::Welded).with_material(MaterialKind::Bone);
             out.parts.push(claws);
+        }
+        out
+    }
+
+    /// The toes of a bare foot in its [`LegForm`] space (empty for a race with none): the big
+    /// toe on the inner side, the rest smaller and shorter toward the outer, each a rounded
+    /// lobe over the foot's end, so a giant's foot has toes and not a bare club's end.
+    fn toes_mesh(&self, side: Side) -> MeshBuilder {
+        let mut out = MeshBuilder::new();
+        let n = self.race().toes;
+        if n == 0 {
+            return out;
+        }
+        let form = self.leg_form();
+        let l = form.foot_length;
+        let (w, _) = form.half_width(0.9 * l);
+        let toe_h = form.height(0.9 * l);
+        for i in 0..n {
+            let t = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.5 };
+            // Across the ball, inner to outer, the big toe first.
+            let z = side.sign() * (w * 0.78 - 2.0 * w * 0.78 * t);
+            let size = 1.0 - 0.52 * t;
+            let rad = 0.27 * w * (0.8 + 0.4 * size);
+            let x = 0.94 * l + 0.04 * l * (1.0 - t) - 0.02 * l * t;
+            let mut toe = uv_sphere(1.0, 14, 10);
+            let ry = 0.5 * toe_h * (0.8 + 0.2 * size);
+            toe.scale([rad * 1.5, ry, rad]);
+            toe.translate([x, ry * 0.95, z]);
+            out.append(&toe);
         }
         out
     }

@@ -48,7 +48,7 @@ impl Face {
             Folk::Minotaur => (1.12, 0.46 * PI),
             // A one-eyed face keeps a nominal spread: it is how wide a hood's opening and
             // the brow's stroke run, though the one eye sits on the middle, a little high.
-            Folk::Cyclops => (0.4, 0.465 * PI),
+            Folk::Cyclops => (0.4, 0.43 * PI),
             _ => (0.4, 0.5 * PI),
         };
         Face { head, folk, r: head.half_width.max(head.half_depth), eye_azimuth, eye_polar }
@@ -64,12 +64,12 @@ impl Face {
         let a = az.abs();
         let front = bump(az, 0.75);
         let one = self.one_eyed();
-        let brow = if self.folk == Folk::Lizardfolk { 0.0 } else if one { 0.12 } else if self.folk == Folk::Dwarf { 0.09 } else { 0.065 };
+        let brow = if self.folk == Folk::Lizardfolk { 0.0 } else if one { 0.17 } else if self.folk == Folk::Dwarf { 0.09 } else { 0.065 };
         // One heavy brow runs unbroken over the single eye, a little above it.
-        let ridge_at = if one { self.eye_polar - 0.075 * PI } else { 0.43 * PI };
-        let ridge = brow * bump(polar - ridge_at, if one { 0.045 * PI } else { 0.05 * PI }) * if one { bump(az, 0.95) } else { front };
+        let ridge_at = if one { self.eye_polar - 0.14 * PI } else { 0.43 * PI };
+        let ridge = brow * bump(polar - ridge_at, if one { 0.055 * PI } else { 0.05 * PI }) * if one { bump(az, 0.95) } else { front };
         let socket = if one {
-            -0.07 * bump(polar - self.eye_polar, 0.07 * PI) * bump(a, 0.3)
+            -0.1 * bump(polar - self.eye_polar, 0.1 * PI) * bump(a, 0.45)
         } else {
             -0.06 * bump(polar - self.eye_polar, 0.055 * PI) * bump(a - self.eye_azimuth, 0.17)
         };
@@ -400,12 +400,13 @@ fn one_eye(face: &Face, droop: f32, p: &mut Pieces) {
     let n = face.normal(0.0, face.eye_polar);
     let up = vec3::Y;
     let out = |d: f32| vec3::add(at, vec3::scale(n, d * r));
-    let (w, h) = (0.3 * r, 0.2 * r);
-    p.whites.append(&blob([w, h, 0.12 * r], at, up, n, 22));
-    p.irises.append(&blob([0.135 * r, 0.135 * r, 0.05 * r], out(0.085), up, n, 16));
-    p.pupils.append(&blob([0.068 * r, 0.068 * r, 0.03 * r], out(0.12), up, n, 12));
+    // About 2.7 times a human eye's width, and nearly round: the face's one feature.
+    let (w, h) = (0.44 * r, 0.34 * r);
+    p.whites.append(&blob([w, h, 0.2 * r], at, up, n, 26));
+    p.irises.append(&blob([0.25 * r, 0.25 * r, 0.07 * r], out(0.15), up, n, 20));
+    p.pupils.append(&blob([0.115 * r, 0.115 * r, 0.04 * r], out(0.205), up, n, 14));
     // The lid comes down over the top of the iris as it droops.
-    p.skin.append(&lid(at, n, 1.0, w, h * (1.0 - 0.5 * droop), 0.055 * r * (1.0 + 0.6 * droop)));
+    p.skin.append(&lid(at, n, 1.0, w, h * (1.0 - 0.45 * droop), 0.075 * r * (1.0 + 0.6 * droop)));
     // A low rim under the eye, as a pouch.
     let across = vec3::normalize_or(vec3::cross(vec3::Y, n), vec3::X);
     let pts: Vec<V3> = (0..=10)
@@ -415,7 +416,7 @@ fn one_eye(face: &Face, droop: f32, p: &mut Pieces) {
             vec3::add(at, vec3::add(vec3::add(vec3::scale(across, x), vec3::scale(vec3::cross(n, across), y)), vec3::scale(n, w * 0.34 * (1.0 - (x / w).powi(2)).max(0.0).sqrt())))
         })
         .collect();
-    p.skin.append(&tube(&pts, 8, &SweepOptions::default(), |t| 0.03 * r * (0.5 + 0.5 * (PI * t).sin())));
+    p.skin.append(&tube(&pts, 8, &SweepOptions::default(), |t| 0.04 * r * (0.5 + 0.5 * (PI * t).sin())));
 }
 
 /// An upper eyelid: a fold of skin along the top of an eye `w` wide and `h` tall, drooping a
@@ -440,7 +441,8 @@ fn nose(face: &Face, kind: Nose, nv: f32, p: &mut Pieces) {
     let hp = |az: f32, polar: f32, off: f32| face.point(az, polar, off);
     match kind {
         Nose::Human | Nose::Broad => {
-            let k = if kind == Nose::Broad { 1.35 } else { 1.0 };
+            // A one-eyed face's nose is broader still, and low and flat under the eye.
+            let k = if face.one_eyed() { 1.75 } else if kind == Nose::Broad { 1.35 } else { 1.0 };
             // Under a single eye the bridge starts lower, below its lower rim.
             let top = if face.one_eyed() { 0.545 } else { 0.45 };
             let path = CatmullRom::centripetal(vec![

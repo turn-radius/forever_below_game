@@ -563,14 +563,14 @@ impl Body {
         if face.one_eyed() {
             // One brow, unbroken over the one eye, a bar of hair on the heavy ridge.
             let pts = CatmullRom::centripetal(vec![
-                face.point(-0.72, 0.39 * PI + tilt * 0.4, 0.04 * r),
-                face.point(-0.36, 0.375 * PI, 0.05 * r),
-                face.point(0.0, 0.37 * PI + tilt * 0.3, 0.055 * r),
-                face.point(0.36, 0.375 * PI, 0.05 * r),
-                face.point(0.72, 0.39 * PI + tilt * 0.4, 0.04 * r),
+                face.point(-0.78, 0.3 * PI + tilt * 0.4, 0.05 * r),
+                face.point(-0.4, 0.285 * PI, 0.06 * r),
+                face.point(0.0, 0.28 * PI + tilt * 0.3, 0.065 * r),
+                face.point(0.4, 0.285 * PI, 0.06 * r),
+                face.point(0.78, 0.3 * PI + tilt * 0.4, 0.05 * r),
             ])
             .sample_evenly(24);
-            out.append(&tube(&pts, 8, &SweepOptions::default(), |t| width * 1.5 * r * (1.0 - 0.5 * (t - 0.5).abs())));
+            out.append(&tube(&pts, 8, &SweepOptions::default(), |t| width * 2.0 * r * (1.0 - 0.5 * (t - 0.5).abs())));
             return out;
         }
         for sg in [1.0f32, -1.0] {

@@ -298,6 +298,12 @@ pub struct Race {
     /// a fur colour a seed picks, and shaggy locks hang from the thighs and shanks.
     #[serde(default)]
     pub fur: Option<FurRow>,
+    /// Added to the body's muscle: a heavy-boned race is brawny at any roll (0 for the folk).
+    #[serde(default)]
+    pub brawn: f32,
+    /// Toes drawn on a bare foot (0 for the folk, whose feet are bare shapes).
+    #[serde(default)]
+    pub toes: u32,
     /// A denizen's SRD stat block (the folk who delve have none: they are rolled as characters).
     #[serde(default)]
     pub block: Option<StatBlock>,
