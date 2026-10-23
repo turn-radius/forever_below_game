@@ -243,6 +243,13 @@ impl Inventory {
         self.worn.get(&slot).copied()
     }
 
+    /// Every slot with something in it, and what, in the slots' order.
+    pub fn worn_ids(&self) -> Vec<(Slot, ItemId)> {
+        let mut worn: Vec<(Slot, ItemId)> = self.worn.iter().map(|(&slot, &id)| (slot, id)).collect();
+        worn.sort_by_key(|(slot, _)| *slot as u8);
+        worn
+    }
+
     /// Everything worn or held, with its slot, in the slots' order.
     pub fn equipped(&self) -> Vec<(Slot, &Item)> {
         let mut worn: Vec<(Slot, &Item)> = self.worn.iter().filter_map(|(&slot, &id)| Some((slot, self.item(id)?))).collect();

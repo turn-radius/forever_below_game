@@ -68,9 +68,11 @@ pub fn refill_and_say(inventory: &mut Inventory, flask: ItemId) -> String {
 
 /// Burns every lit light's fuel by the game time that passed since the last step, wherever
 /// the light is.
-fn burn_fuel(clock: Res<GameClock>, mut inventory: ResMut<Inventory>, mut last: Local<f64>) {
+fn burn_fuel(clock: Res<GameClock>, mut inventory: ResMut<Inventory>, mut last: Local<f64>, mut jumps: Local<u32>) {
     let now = clock.game_seconds();
-    let passed = now - *last;
+    // A clock set at a stroke (a delve resumed) burns nothing for the time it skipped.
+    let jumped = std::mem::replace(&mut *jumps, clock.jumps()) != clock.jumps();
+    let passed = if jumped { 0.0 } else { now - *last };
     *last = now;
     if passed > 0.0 {
         // Burning is not a change anyone sees until a card's minute, a state or a held torch's
@@ -304,6 +306,22 @@ mod tests {
 
         fn spent(app: &App, id: ItemId) -> bool {
             matches!(&app.world().resource::<Inventory>().item(id).unwrap().shape, armory::Item::Torch(s) if s.burn.state == BurnState::Spent)
+        }
+
+        /// A clock set at a stroke, as a resumed delve sets it, burns nothing for the time it skipped:
+        /// a torch lit on the floor is as long as it was.
+        #[test]
+        fn a_clock_set_at_a_stroke_burns_no_fuel_for_the_time_it_skipped() {
+            let mut app = app();
+            let id = light(&mut app, fresh_torch(1.0), true);
+            run(&mut app, 2);
+            let before = left(&app, id);
+            app.world_mut().resource_mut::<crate::game_clock::GameClock>().jump_to(fb_character::GameTime::from_seconds(30.0 * 3600.0));
+            run(&mut app, 1);
+            assert!(before - left(&app, id) < 30.0, "{before} then {}", left(&app, id));
+            assert!(!spent(&app, id));
+            run(&mut app, 100);
+            assert!(left(&app, id) < before - 100.0, "and it burns on after");
         }
 
         #[test]
