@@ -55,6 +55,7 @@ use crate::carry::FloorItem;
 use crate::character::{Character, ChosenDelver, DelverEffects, DelverMana, DelverNeeds, DelverRecovery, DelverStamina};
 use crate::combat::Health;
 use crate::combat::revival::Revives;
+use crate::combat::vitals::Fallen;
 use crate::enchanting::Enchanting;
 use crate::exhaustion::{Exhaustion, ExhaustionTimes};
 use crate::game_clock::GameClock;
@@ -534,6 +535,17 @@ fn settle_hit_points(mut commands: Commands, settle: Res<SettleHitPoints>, mut p
     commands.remove_resource::<SettleHitPoints>();
 }
 
+/// Deletes the save when the delver falls for good ([`Fallen`] is inserted), so death cannot be
+/// undone by resuming. Only a delve that may touch the save ([`Saveable`]) does.
+fn forget_save_on_death(saveable: Option<Res<Saveable>>, file: Option<Res<SaveFile>>) {
+    if !may_touch(saveable.as_deref()) {
+        return;
+    }
+    if let Some(path) = file.and_then(|f| f.0.clone()) {
+        forget(&path);
+    }
+}
+
 /// A delve no longer may touch the save once it is over.
 fn end_saveable(mut saveable: ResMut<Saveable>) {
     saveable.0 = false;
@@ -556,6 +568,7 @@ impl Plugin for SavePlugin {
             .configure_sets(Update, ResumeSet.before(DelveSystems).run_if(in_state(AppState::Delving)).run_if(resource_exists::<ResumeDelve>))
             .add_systems(Update, restore_delve.in_set(ResumeSet))
             .add_systems(Update, settle_hit_points.after(crate::combat::vitals::fit_hit_points).run_if(resource_exists::<SettleHitPoints>).in_set(DelveSystems))
+            .add_systems(Update, forget_save_on_death.run_if(resource_added::<Fallen>).in_set(DelveSystems))
             .add_systems(OnExit(AppState::Delving), end_saveable);
     }
 }
@@ -752,6 +765,21 @@ mod tests {
         if !crate::launch::env_set("FB_SAVE_FILE") {
             assert!(!may_touch(None));
             assert!(!may_touch(Some(&Saveable(false))));
+        }
+    }
+
+    #[test]
+    fn death_deletes_the_save_of_a_delve_that_may_touch_it_and_no_other() {
+        for (saveable, gone) in [(true, true), (false, false)] {
+            let path = scratch(&format!("death-{saveable}"));
+            write(&path, &sample()).unwrap();
+            let mut app = App::new();
+            app.insert_resource(SaveFile(Some(path.clone()))).insert_resource(Saveable(saveable)).add_systems(Update, forget_save_on_death.run_if(resource_added::<Fallen>));
+            app.update();
+            assert!(path.exists(), "nothing has fallen");
+            app.insert_resource(Fallen(1.0));
+            app.update();
+            assert_eq!(!path.exists(), gone, "saveable {saveable}");
         }
     }
 

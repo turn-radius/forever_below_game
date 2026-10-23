@@ -32,6 +32,7 @@ use forever_below::{
         Health,
         feedback::{Corpse, Struck},
         revival::Revives,
+        vitals::{FALL_TIME, LAST_GASP},
     },
     commission::{Commission, CommissionScreen},
     creatures::Critter,
@@ -685,6 +686,20 @@ fn every_resource_and_component_is_accounted_for() {
     let known: BTreeSet<&str> = PLAYER_KEPT.iter().copied().chain(PLAYER_NOT_KEPT.iter().map(|(n, _)| *n)).collect();
     let unknown: Vec<&String> = components.iter().filter(|n| !known.contains(n.as_str())).collect();
     assert!(unknown.is_empty(), "components of the delver the save has not decided about (add each to PLAYER_KEPT or PLAYER_NOT_KEPT): {unknown:#?}");
+}
+
+#[test]
+fn dying_deletes_the_save_and_the_title_offers_no_resume() {
+    let (mut app, _, _, file) = played("death");
+    assert!(file.exists());
+    // Walked on and fell, with every revive spent.
+    app.insert_resource(Revives(u32::MAX));
+    let body = player(&mut app);
+    app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
+    run(&mut app, ((LAST_GASP + FALL_TIME) * 60.0) as usize + 60);
+    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
+    assert!(!file.exists(), "death deleted the save");
+    assert!(app.world().resource::<SavedGame>().delve.is_none(), "so the title has none to resume");
 }
 
 #[test]
