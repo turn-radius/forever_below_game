@@ -6,7 +6,8 @@
 //!   speech is unreadable.
 //! - A kind's members come in one or more bodies ([`DenizenKind::bodies`]): demons come in three
 //!   ([`DenizenBody::WingedDemon`], [`DenizenBody::HornedDemon`], [`DenizenBody::Succubus`]), the
-//!   others in one. The bodies themselves are `fb_creatures` species.
+//!   others in one. The bodies themselves are races of the folk body (`fb_body::Folk::DENIZENS`),
+//!   built as folk are and dressed with their gear.
 //! - Denizens live only at [`DENIZEN_DEPTH`] and below; shallower levels hold folk factions only.
 //!
 //! - [`tongue`] holds the tongues: each kind's vocabulary and native words, the script its speech

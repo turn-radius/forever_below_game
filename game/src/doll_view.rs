@@ -512,14 +512,14 @@ mod tests {
     fn folk_and_outfits_cycle_back_round() {
         let start = DollChoice::default();
         let mut choice = start;
-        for _ in 0..Folk::ALL.len() {
+        for _ in 0..Folk::ALL.len() + Folk::DENIZENS.len() {
             choice.step_folk(1);
         }
         choice.step_outfit(-1);
         choice.step_outfit(1);
         assert_eq!(choice, start);
         choice.step_folk(-1);
-        assert_eq!(choice.folk, Folk::Pigfolk);
+        assert_eq!(choice.folk, Folk::Minotaur, "Tab goes on through the denizens");
     }
 
     #[test]

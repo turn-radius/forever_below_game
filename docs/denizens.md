@@ -25,3 +25,9 @@ Code: `fb_items::tongues`, `Level::floor_item`, `game/src/reading.rs`. All odds 
 ## Unreadable speech
 
 `glyphs(kind, text, seed)` turns a line into its tongue's script: letters and digits become glyphs, spaces and punctuation stay. The scripts are borrowed letters, because the UI's running-text face (Alegreya Sans, which the talk panel uses) has no runic or invented-script blocks and Almendra has next to no Greek: Greek for minotaurs, Cyrillic for cyclopes, macron and acute Latin for fauns, caron and stroke Latin for demons. A test reads each Alegreya face's character map and checks every glyph.
+
+## Bodies
+
+A denizen is a race of the folk body (`fb_body`), not a separate creature rig: `Folk::Minotaur` has a row in `data/races.json` like the six folk, and its body, skin, rig, gait, `fit_worn`, `fit_held`, hair and head fitting are the folk's own. `Folk::ALL` stays the six folk (so factions and members roll as before); `Folk::DENIZENS` lists the denizen races built so far, with `Folk::denizen_body()` and `Folk::of_denizen()` mapping to and from `DenizenBody`. See "Denizen parts" in `docs/body.md`.
+
+The Minotaur's SRD stat block (5.1 p. 333) is Large, Armor Class 14 (natural armor), 76 hit points (9d10 + 27), speed 40 ft., Str 18, Dex 11, Con 16, Int 6, Wis 16, Cha 9; a greataxe hit is +6 for 17 (2d12 + 4) slashing and a gore +6 for 13 (2d8 + 4) piercing. The ability scores are the race row's `stats`; the rest waits for the denizen combat task.

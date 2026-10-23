@@ -1,7 +1,7 @@
 //! The denizen parts and the minotaur built on them: the same body, rig, gait and fitting the
 //! folk have, with horns, hooves, a tail and a muzzle turned on by the race row.
 
-use armory::geom::vec3::{self, V3};
+use armory::geom::vec3;
 use armory::{Family, Item};
 use fb_items::Slot;
 
