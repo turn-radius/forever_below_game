@@ -10,7 +10,7 @@
 use std::f32::consts::{PI, TAU};
 
 use armory::build::boot::foot_mesh;
-use armory::build::form::{BACK, Bulge, FRONT, FormRing, HandForm, HeadForm, LEG_SECTIONS, LegForm, LegSection, LowerBodyForm, TorsoForm, TorsoProfile};
+use armory::build::form::{BACK, Bulge, FRONT, FormRing, HandForm, HeadForm, FILL_ROWS, LEG_SECTIONS, LegForm, LegSection, LowerBodyForm, TorsoForm, TorsoProfile};
 use armory::build::hafted::smoothstep;
 use armory::fabric::{PatternKind, SurfacePattern};
 use armory::geom::vec3::{self, V3};
@@ -32,6 +32,10 @@ pub const TRUNK_BACK: f32 = 0.92;
 const RUN: f32 = 0.15;
 /// The share of the front filled out to the thighs; more raises a pooch over the hip on a body whose thighs are as deep as its hips.
 const FRONT_FILL: f32 = 0.4;
+/// How far below the hips (in the body's scale) the garment form's section over the thighs lies.
+const THIGH_RING: f32 = 1.2;
+/// How far past the skin the garment form reaches over the pelvis, before a garment's own fit, as a share of the body's scale.
+const GARMENT_MARGIN: f32 = 0.04;
 /// Where the crotch is, below the hips, as a share of the trunk's length.
 const CROTCH_DROP: f32 = 0.14;
 /// The heights the pelvis is measured at when drawing the groin in.
@@ -127,6 +131,8 @@ pub struct Body {
     pub bust: Bulge,
     /// The buttocks.
     pub seat: Bulge,
+    /// The garment form's fit to the skin's pelvis ([`Body::garment_fill`]), in torso space.
+    garment_fill: [[f32; 3]; FILL_ROWS],
     /// Right then left ([`Side::BOTH`]).
     pub arms: [Limb; 2],
     pub legs: [Limb; 2],
@@ -251,11 +257,13 @@ impl Body {
             belly,
             bust,
             seat,
+            garment_fill: [[0.0; 3]; FILL_ROWS],
             arms: [arm(Side::Right), arm(Side::Left)],
             legs: [leg(Side::Right), leg(Side::Left)],
             skin,
         };
         body.draw_in_pubis();
+        body.garment_fill = body.garment_fill_rows();
         body
     }
 
@@ -452,6 +460,11 @@ impl Body {
     /// trunk's sections, eased a little over the hips, and below them the envelope of both
     /// legs that a skirt hangs over.
     pub fn torso_form(&self) -> TorsoForm {
+        TorsoForm { fill: self.garment_fill, ..self.torso_form_bare() }
+    }
+
+    /// [`Body::torso_form`] without its fit to the skin's pelvis.
+    fn torso_form_bare(&self) -> TorsoForm {
         let t = self.trunk_length;
         let s = self.scale;
         let w = self.waist_y;
@@ -465,7 +478,7 @@ impl Body {
             chest: chest.raised(-w),
             waist: self.waist.raised(-w),
             hip: FormRing::new(hip.y - w, hip.half_width * 1.01, hip.half_depth * 1.03),
-            thigh: below(self.hip_y - 1.2 * s, 1.035),
+            thigh: below(self.hip_y - THIGH_RING * s, 1.035),
             knee: below(self.leg(Side::Left).joints[1][1], 1.04),
             shin: below(self.ankle_y + 0.5 * s, 1.04),
             exponent: TRUNK_EXPONENT,
@@ -474,7 +487,42 @@ impl Body {
             // Cloth is drawn across the cleft between the lobes, not into it.
             bust: self.bust.bridged().raised(-w),
             seat: self.seat.bridged().raised(-w),
+            fill: [[0.0; 3]; FILL_ROWS],
         }
+    }
+
+    /// The garment form's fit to the skin's pelvis, in torso space: at each of [`FILL_ROWS`]
+    /// heights from the crotch to above the waist, how far the form (sections and swellings)
+    /// falls short of, or stands past, the skin's reach in front and behind, and a little
+    /// over ([`GARMENT_MARGIN`]), so cloth hangs over the pelvis the skin has (the groin drawn
+    /// in, the seat rounding into the thighs) and not over the form's own, which stood out
+    /// from it as a bulge. Tapered to nothing at both ends, so the form meets itself there.
+    fn garment_fill_rows(&self) -> [[f32; 3]; FILL_ROWS] {
+        let Some(last) = self.skin.fill.last() else { return [[0.0; 3]; FILL_ROWS] };
+        let (t, w) = (self.trunk_length, self.waist_y);
+        let (lo, hi, run) = (self.hip_y - THIGH_RING * self.scale, w, RUN * t);
+        let form = self.torso_form_bare().profile();
+        let margin = GARMENT_MARGIN * self.scale;
+        let reach = |profile: &TorsoProfile, y: f32, toward: f32, sign: f32| (0..=SEAT_STEPS).map(|k| sign * profile.section(toward - SEAT_SPAN + SEAT_STEP * k as f32, y, 0.0)[1]).fold(f32::MIN, f32::max);
+        // How far the form falls short of the skin at the worst of the angles round `toward`
+        // (the skin's lobes of the seat reach further than the form's bridged one does).
+        let short = |y: f32, toward: f32, sign: f32| {
+            (0..=SEAT_STEPS)
+                .map(|k| {
+                    let a = toward - SEAT_SPAN + SEAT_STEP * k as f32;
+                    sign * (self.skin.section(a, y, 0.0)[1] - form.section(a, y - w, 0.0)[1])
+                })
+                .fold(f32::MIN, f32::max)
+        };
+        std::array::from_fn(|i| {
+            let y = lo + (last[0] - lo) * i as f32 / (FILL_ROWS - 1) as f32;
+            let window = smoothstep(lo, lo + 0.3 * self.scale, y) * (1.0 - smoothstep(hi - run, hi + run, y));
+            // The skin the cloth hangs over is the trunk's and the thigh's together.
+            let (thigh_front, thigh_back) = self.thigh_reach(y).unwrap_or((f32::MIN, f32::MIN));
+            let front = short(y, FRONT, 1.0).max(thigh_front - reach(&form, y - w, FRONT, 1.0)) + margin;
+            let back = short(y, BACK, -1.0).max(thigh_back - reach(&form, y - w, BACK, -1.0)) + margin;
+            [y - w, front * window, back * window]
+        })
     }
 
     /// The head form for this body, in torso space like [`Body::torso_form`] (hoods take
@@ -540,6 +588,10 @@ impl Body {
             crotch_height: self.hip_y - 0.14 * self.trunk_length - 0.25 * self.scale,
             thigh_half_width: (self.hip.half_width * 0.47).max(leg.radius * 0.9).max(top.half_width * 1.02),
             thigh_half_depth: (leg.radius * 1.08).max(top.front.max(top.back) * 1.04),
+            // The thigh's own reach at the crotch each way (flat in front, full behind), not the
+            // deeper of the two both ways, which stood the cloth out in front as a pouch.
+            thigh_front: top.front * 1.04,
+            thigh_back: top.back * 1.04,
             stance: leg.joints[2][0].abs(),
             sections: Some(sections),
         }

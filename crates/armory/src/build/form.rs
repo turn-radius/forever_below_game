@@ -210,7 +210,15 @@ pub struct TorsoForm {
     pub belly: Bulge,
     pub bust: Bulge,
     pub seat: Bulge,
+    /// The form's fit to a body's pelvis by height ([`TorsoProfile::fill`], [`FILL_ROWS`]
+    /// rows, none when its heights are all equal): how far the cloth reaches in front and
+    /// behind past the sections and swellings, signed, so cloth hangs over the pelvis a body
+    /// has instead of the one the sections alone would draw.
+    pub fill: [[f32; 3]; FILL_ROWS],
 }
+
+/// Rows of a [`TorsoForm`]'s fit to the thighs.
+pub const FILL_ROWS: usize = 24;
 
 impl TorsoForm {
     /// The prototype's garment mannequin (`buildGarment` rows), 1 unit = 10 cm.
@@ -229,6 +237,7 @@ impl TorsoForm {
         belly: Bulge::NONE,
         bust: Bulge::NONE,
         seat: Bulge::NONE,
+        fill: [[0.0; 3]; FILL_ROWS],
     };
 
     /// Every section from the shoulders down widened by `ease` (a garment's fit over the body).
@@ -259,7 +268,11 @@ impl TorsoForm {
 
     /// The form sampled densely for lookups by height.
     pub fn profile(&self) -> TorsoProfile {
-        TorsoProfile::new(&self.rings(), self.exponent, self.back, vec![self.belly, self.bust, self.seat])
+        let mut profile = TorsoProfile::new(&self.rings(), self.exponent, self.back, vec![self.belly, self.bust, self.seat]);
+        if self.fill[0][0] < self.fill[FILL_ROWS - 1][0] {
+            profile.fill = self.fill.to_vec();
+        }
+        profile
     }
 
     /// Where an arm leaves the body on side `side` (+1 left, -1 right), and the arm's
@@ -936,6 +949,11 @@ pub struct LowerBodyForm {
     /// Half width (side to side) and half depth of one thigh at the crotch.
     pub thigh_half_width: f32,
     pub thigh_half_depth: f32,
+    /// How far a thigh reaches in front of its middle and behind it at the crotch, where they
+    /// differ (the seat fills out behind, the front is flat): the crotch's section on a real
+    /// body. The mannequin's are both `thigh_half_depth`.
+    pub thigh_front: f32,
+    pub thigh_back: f32,
     /// Distance of each ankle from the midline.
     pub stance: f32,
     /// A real leg's sections from the ankle up toward the crotch (the left leg; the right
@@ -971,6 +989,8 @@ impl LowerBodyForm {
             crotch_height: 8.0,
             thigh_half_width: 0.84,
             thigh_half_depth: 0.95,
+            thigh_front: 0.95,
+            thigh_back: 0.95,
             stance: 0.62,
             sections: None,
         }
@@ -1037,7 +1057,7 @@ impl LowerBodyProfile {
     fn real_section(&self, y: f32) -> Option<LegSection> {
         let sections = self.form.sections.as_ref()?;
         let f = &self.form;
-        let crotch = LegSection { y: f.crotch_height, x: f.thigh_half_width, z: 0.0, half_width: f.thigh_half_width, front: f.thigh_half_depth, back: f.thigh_half_depth };
+        let crotch = LegSection { y: f.crotch_height, x: f.thigh_half_width, z: 0.0, half_width: f.thigh_half_width, front: f.thigh_front, back: f.thigh_back };
         let all: Vec<LegSection> = sections.iter().copied().filter(|s| s.y < crotch.y - 0.05).chain(std::iter::once(crotch)).collect();
         let i = all.partition_point(|s| s.y < y);
         if i == 0 {

@@ -19,7 +19,7 @@ struct Reach {
 fn reach(mesh: &armory::geom::mesh::ItemMesh, names: &[&str], y: f32) -> Option<Reach> {
     let mut r = Reach { x: 0.0, front: f32::MIN, back: f32::MAX };
     let mut any = false;
-    for part in mesh.parts.iter().filter(|p| names.iter().any(|n| *n == p.name)) {
+    for part in mesh.parts.iter().filter(|p| names.is_empty() || names.iter().any(|n| *n == p.name)) {
         for t in part.indices.chunks(3) {
             for k in 0..3 {
                 let (p, q) = (part.positions[t[k] as usize], part.positions[t[(k + 1) % 3] as usize]);
@@ -76,11 +76,15 @@ fn the_pelvis_does_not_stand_proud_of_the_thighs_in_front() {
 /// height from just above the waist to just below the crotch (`front`, `back`). Samples a
 /// fine step apart, so where the grid falls does not matter.
 fn crease(body: &Body, reach_scale: f32) -> (f32, f32) {
-    let mesh = body.skin_mesh();
+    crease_of(body, &body.skin_mesh(), &["trunk", "legs"], reach_scale)
+}
+
+/// [`crease`] of any mesh (the parts named `names`, or all of them where there are none).
+fn crease_of(body: &Body, mesh: &armory::geom::mesh::ItemMesh, names: &[&str], reach_scale: f32) -> (f32, f32) {
     let step = 0.04 * body.scale;
     let span = (reach_scale / 0.04).round() as usize;
     let (from, to) = (body.waist_y + 0.1 * body.trunk_length, body.hip_y - 0.14 * body.trunk_length - 0.1 * body.scale);
-    let reaches: Vec<Reach> = heights(from, to, step).into_iter().filter_map(|y| reach(&mesh, &["trunk", "legs"], y)).collect();
+    let reaches: Vec<Reach> = heights(from, to, step).into_iter().filter_map(|y| reach(mesh, names, y)).collect();
     let (mut front, mut back) = (0.0f32, 0.0f32);
     for i in span..reaches.len().saturating_sub(span) {
         let (a, m, b) = (reaches[i - span], reaches[i], reaches[i + span]);
@@ -107,5 +111,36 @@ fn the_seat_rounds_into_the_backs_of_the_thighs() {
         }
         let (_, over) = proud(&body);
         assert!(over < 0.15 * body.scale, "{:?} seed {}: the seat overhangs the thighs by {over}", body.folk(), body.spec.seed);
+    }
+}
+
+/// Gear of `base` fitted on `body` in `slot`, its outer surface.
+fn worn_mesh(body: &Body, slot: fb_items::Slot, base: &str, seed: u32) -> armory::geom::mesh::ItemMesh {
+    let item = fb_items::roll_item(base, seed).unwrap_or_else(|| panic!("no base {base}")).shape;
+    fit_worn(body, &[(slot, item)]).layer(slot).expect("worn").mesh.clone()
+}
+
+/// How much further the cloth stands out from the skin, front and back, at the crotch than at
+/// the hips (in the body's scale): cloth that follows the pelvis stands off by about the same
+/// everywhere there, while cloth built on a deeper pelvis hangs out over the groin and seat as a
+/// pouch.
+fn pouch(body: &Body, cloth: &armory::geom::mesh::ItemMesh) -> (f32, f32) {
+    let skin = body.skin_mesh();
+    let off = |y: f32| {
+        let (c, k) = (reach(cloth, &[], y).expect("cloth"), reach(&skin, &["trunk", "legs"], y).expect("skin"));
+        (c.front - k.front, k.back - c.back)
+    };
+    let crotch = body.hip_y - 0.14 * body.trunk_length;
+    let (hip, low) = (off(body.hip_y), off(crotch + 0.1 * body.scale));
+    ((low.0 - hip.0) / body.scale, (low.1 - hip.1) / body.scale)
+}
+
+#[test]
+fn trousers_hang_over_the_pelvis_without_a_pouch() {
+    for body in bodies().into_iter().filter(|b| b.spec.seed == 1207) {
+        let trousers = worn_mesh(&body, fb_items::Slot::Legs, "Trousers", body.spec.seed);
+        let (front, back) = pouch(&body, &trousers);
+        assert!(front < 0.14, "{:?} seed {}: trousers stand out {front} (of the body's scale) further over the groin than at the hips", body.folk(), body.spec.seed);
+        assert!(back < 0.08, "{:?} seed {}: trousers stand out {back} further behind at the crotch than at the hips", body.folk(), body.spec.seed);
     }
 }
