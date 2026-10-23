@@ -186,6 +186,52 @@ fn golden_names() {
     assert_eq!(faction_name("pigfolk", "trade", 3), "the Hog League of Grain");
 }
 
+/// Every name of the shipped data, with what it set.
+fn all_names() -> Vec<(String, Expansion)> {
+    let mut out = Vec::new();
+    for folk in FOLK {
+        for intent in INTENTIONS {
+            for seed in 0..120 {
+                let e = faction_named(folk, intent, seed);
+                out.push((format!("{folk}/{intent}"), e));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn names_say_what_their_members_are() {
+    let names = all_names();
+    let has = |e: &Expansion, w: &str| e.text.split(|c: char| !c.is_alphanumeric()).any(|x| x == w);
+    for (_, e) in &names {
+        for (word, key, value) in [
+            ("Daughters", "sex", "female"),
+            ("Sisters", "sex", "female"),
+            ("Brothers", "sex", "male"),
+            ("Sons", "sex", "male"),
+            ("Chapel", "class", "cleric"),
+            ("Choir", "class", "cleric"),
+            ("Synod", "class", "cleric"),
+        ] {
+            if has(e, word) {
+                assert_eq!(e.tag(key), Some(value), "{}", e.text);
+            }
+        }
+        // Children, Wardens and Pilgrims say nothing of sex.
+        if ["Children", "Wardens", "Pilgrims"].iter().any(|w| has(e, w)) && !["Daughters", "Sisters", "Brothers", "Sons"].iter().any(|w| has(e, w)) {
+            assert_eq!(e.tag("sex"), None, "{}", e.text);
+        }
+        for key in e.tags.keys() {
+            assert!(["sex", "class"].contains(&key.as_str()), "{}: {key}", e.text);
+        }
+    }
+    let seen = |key: &str, value: &str| names.iter().any(|(_, e)| e.tag(key) == Some(value));
+    assert!(seen("sex", "female") && seen("sex", "male") && seen("class", "cleric") && seen("class", "fighter_or_ranger"));
+    assert!(names.iter().any(|(_, e)| e.tags.is_empty()), "every name says something");
+    assert!(names.iter().any(|(_, e)| e.tag("sex") == Some("female") && e.tag("class") == Some("cleric")), "no Daughters of a Chapel");
+}
+
 #[test]
 fn an_action_sets_a_key_and_writes_nothing() {
     let g = Grammar::from_pairs(&[("origin", &["[sex:female]Daughters of the #place#"]), ("place", &["Gate"])]);
