@@ -48,7 +48,7 @@ use forever_below::{
     quickslots::Quickslots,
     record::{LevelRecord, WorldRecord},
     render::{ArmoryRenderPlugin, ItemSpawner},
-    save::{self, ResumeDelve, SaveFile, Saveable},
+    save::{self, ResumeDelve, SaveFile, SavedGame, Saveable},
     settings::SettingsPlugin,
     title::{NewDelveSeed, TitlePlugin, creator::CreatorCommand},
     travel::{Abyss, Journey, UseStair},
@@ -407,14 +407,13 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
     (app, at_save, lying, file)
 }
 
-/// Resumes the delve in `file` in a game of its own, up to the frame its state is put back.
+/// Resumes the delve in `file` in a game of its own, through the title's Resume, up to the frame
+/// its state is put back.
 fn resumed(file: &PathBuf) -> (App, Snapshot) {
-    let saved = save::read(file).expect("the save reads");
     let mut app = headless_game(file);
     run(&mut app, 30);
-    app.world_mut()
-        .run_system_once(move |mut commands: Commands, mut next: ResMut<NextState<AppState>>| save::begin_resume(&mut commands, &mut next, saved.clone()))
-        .unwrap();
+    assert!(app.world().resource::<SavedGame>().delve.is_some(), "the title found the save");
+    app.world_mut().write_message(MenuCommand::ResumeDelve);
     let mut frames = 0;
     // The state is put back on the first frame of the delve; the next frame it is only played.
     loop {
@@ -468,6 +467,18 @@ fn a_saved_delve_comes_back_whole_on_three_levels() {
     assert_eq!(now.camps, lying.camps, "the tent is still pitched");
     assert_eq!(now.containers, lying.containers, "the chests");
     assert_eq!(now.creatures, lying.creatures, "the creatures, hurt or dead");
+    // By now the rats of this level may have come for the sleeper. Let them be, and walk up.
+    let delver = player(&mut app);
+    let world = app.world_mut();
+    let creatures: Vec<Entity> = world.query_filtered::<Entity, With<Critter>>().iter(world).collect();
+    for creature in creatures {
+        world.despawn(creature);
+    }
+    let max = world.get::<Health>(delver).unwrap().max;
+    world.get_mut::<Health>(delver).unwrap().hp = max;
+    world.remove_resource::<forever_below::combat::vitals::Dying>();
+    world.remove_resource::<forever_below::combat::revival::Unconscious>();
+    world.resource_mut::<Asleep>().0 = None;
     // The levels left behind come back as they were: down the stairs and up again.
     go(&mut app, StairKind::Up);
     assert_eq!(app.world().resource::<Abyss>().depth, 2);
@@ -674,4 +685,18 @@ fn every_resource_and_component_is_accounted_for() {
     let known: BTreeSet<&str> = PLAYER_KEPT.iter().copied().chain(PLAYER_NOT_KEPT.iter().map(|(n, _)| *n)).collect();
     let unknown: Vec<&String> = components.iter().filter(|n| !known.contains(n.as_str())).collect();
     assert!(unknown.is_empty(), "components of the delver the save has not decided about (add each to PLAYER_KEPT or PLAYER_NOT_KEPT): {unknown:#?}");
+}
+
+#[test]
+fn an_unreadable_save_is_set_aside_and_the_title_says_so() {
+    let file = scratch("garbled");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{\"version\":1,\"run_seed\":12").unwrap();
+    let mut app = headless_game(&file);
+    run(&mut app, 30);
+    let found = app.world().resource::<SavedGame>();
+    assert!(found.delve.is_none());
+    assert_eq!(found.unreadable, Some(save::SET_ASIDE_LINE));
+    assert!(!file.exists() && file.with_file_name(save::ASIDE_NAME).exists());
+    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title, "no panic, the title stands");
 }

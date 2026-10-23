@@ -225,6 +225,16 @@ pub fn begin_delve(commands: &mut Commands, next: &mut NextState<AppState>, seed
     next.set(AppState::Delving);
 }
 
+/// Begins a delve the player chose (the creator's Begin, or Continue as): [`begin_delve`], and
+/// when no `--seed` names the level, one that may save and that replaces any saved delve
+/// ([`crate::save::begin_players_delve`]).
+fn begin_players_delve(commands: &mut Commands, next: &mut NextState<AppState>, seed: &NewDelveSeed, delver: Character) {
+    begin_delve(commands, next, seed, delver);
+    if seed.0.is_none() {
+        commands.queue(crate::save::begin_players_delve);
+    }
+}
+
 /// Carries out the creator's buttons, the typed name, Enter (Begin) and Esc (Back), and the
 /// title's Continue. Beginning from the creator or continuing remembers the delver as the
 /// [`LastDelver`].
@@ -246,7 +256,7 @@ pub fn run_creator(
                 MenuCommand::Creator(CreatorCommand::Begin) => begin_delve(&mut commands, &mut next, &seed, Draft::roll(clock_seed()).character()),
                 MenuCommand::Continue => {
                     if let Some(delver) = last.as_ref().and_then(|l| l.0.clone()) {
-                        begin_delve(&mut commands, &mut next, &seed, delver);
+                        begin_players_delve(&mut commands, &mut next, &seed, delver);
                     }
                 }
                 _ => {}
@@ -288,7 +298,7 @@ pub fn run_creator(
         if let Some(mut last) = last {
             last.0 = Some(delver.clone());
         }
-        begin_delve(&mut commands, &mut next, &seed, delver);
+        begin_players_delve(&mut commands, &mut next, &seed, delver);
     }
 }
 
