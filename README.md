@@ -230,6 +230,8 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_FALL=<wait\|come_to\|let_go>` | a second in, knocks the delver to 0 hit points; they fall unconscious, and `come_to` or `let_go` makes that choice two seconds later (`wait` leaves the choice showing), for captures of falling unconscious and waking |
 | `FB_ROLL_LOOK=<seconds>` | the character creator rolls a look by itself that often, for captures of the doll changing (with `FB_OPEN_MENU=creator` and `--title`) |
 | `FB_NEW_DELVE=<seconds>` | the title begins a delve by itself, past the creator and with a rolled delver, after that many seconds, each time it shows; with `FB_PLAYER_HP=1` and `FB_SCREENSHOT_FRAMES`, captures a fall, the title and the next delve without input |
+| `FB_SAVE_FILE=<path>` | the saved delve lives at that path, and any delve may save to it and delete it, `--seed` ones too; for captures of saving and resuming (a debug delve otherwise never touches the player's save) |
+| `FB_LIE_DOWN=1` | a little after a camp is laid out (`FB_LAY_OUT=Tent` or `FB_DROP=Tent+set`, with `--seed`), tires the delver and presses F on it, so they lie down as a player does and the delve is saved if `FB_SAVE_FILE` allows |
 | `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot (or `<base>@<slot>` in another it fits: `Lantern@hip`, `Sword@offhand`), after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |
 | `FB_STOW=<base>[,<base>...]` | puts one item of each named base in the carried grids, after `FB_EQUIP` (`Mail coif,Hood,Helm,Tunic`) |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |

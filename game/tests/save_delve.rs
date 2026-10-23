@@ -395,16 +395,15 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
     }
     run(&mut app, 5);
 
-    // Lie down: the delve is saved by hand, as lying down in the camp saves it.
+    // Lie down: F, and one frame.
     look_down_at_camp(&mut app, feet, forward, 0.6);
-    let bed = {
-        let world = app.world_mut();
-        world.query_filtered::<Entity, With<SetCamp>>().single(world).expect("one camp")
-    };
-    let delve = save::gather(app.world_mut(), bed).expect("the delve is gathered");
-    save::write(&file, &delve).expect("the delve is written");
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    app.update();
+    assert!(app.world().resource::<Asleep>().0.is_some(), "asleep: {}", app.world().resource::<forever_below::inventory::Toast>().text);
+    assert_eq!(app.world().resource::<forever_below::inventory::Toast>().text, "Your delve is saved.");
     let at_save = snapshot(&mut app);
     let lying = standing(&mut app);
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Released);
     (app, at_save, lying, file)
 }
 
@@ -488,6 +487,21 @@ fn a_save_is_one_versioned_file_beside_the_settings_with_nothing_left_over() {
     assert_eq!(names, vec![save::FILE_NAME.to_string()], "no temporary file is left behind");
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(text.starts_with(&format!("{{\"version\":{}", save::VERSION)), "the version comes first: {}", &text[..40]);
+}
+
+/// A delve begun any other way than from the title never writes the save.
+#[test]
+fn a_delve_that_may_not_save_writes_nothing_when_the_delver_lies_down() {
+    let file = scratch("unsaveable");
+    let mut app = delving(&file);
+    app.insert_resource(Saveable(false));
+    let (feet, forward) = set_camp_where(&mut app, "Bedroll", 40_011);
+    look_down_at_camp(&mut app, feet, forward, 0.6);
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    app.update();
+    assert!(app.world().resource::<Asleep>().0.is_some());
+    assert!(!file.exists(), "no save was written");
+    assert!(app.world().resource::<forever_below::inventory::Toast>().text.starts_with("You lie down"));
 }
 
 /// Every resource and every component of the delver the game has, and what the save does with

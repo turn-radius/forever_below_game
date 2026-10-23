@@ -63,6 +63,7 @@ impl Plugin for CampPlugin {
             .add_systems(
                 Update,
                 (
+                    debug_lie_down.run_if(|| std::env::var_os("FB_LIE_DOWN").is_some()),
                     go_to_sleep.run_if(level_has_focus),
                     resume_in_bed.run_if(resource_exists::<PendingBed>),
                     wake_up,
@@ -518,6 +519,7 @@ fn go_to_sleep(
     mut toast: ResMut<Toast>,
     mut players: Query<(&Transform, &DelverNeeds, &mut Locomotion, Option<&Health>), With<Player>>,
     time: Option<Res<Time<Real>>>,
+    mut commands: Commands,
 ) {
     if asleep.0.is_some() || !input.just_pressed(Action::Primary) {
         return;
@@ -541,6 +543,9 @@ fn go_to_sleep(
     locomotion.velocity = Vec2::ZERO;
     asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
     toast.say(format!("You lie down in the {}", camp_name(camp.camp)), now);
+    // Lying down in a camp is the one place the delve is saved (`crate::save`), before the sleep
+    // goes on; it says so, or that it could not, over the line above.
+    commands.queue(crate::save::save_in_camp(bed));
 }
 
 /// Where the delver of a delve resumed lies down, until the level has laid its camp out: the spot
@@ -582,6 +587,33 @@ fn resume_in_bed(
     let Ok((mut locomotion, health)) = players.single_mut() else { return };
     locomotion.velocity = Vec2::ZERO;
     asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+}
+
+/// For captures (`FB_LIE_DOWN`): a while after a camp is laid out (`FB_LAY_OUT`), tires the delver
+/// and presses F on it, so the sleep begins as it does for a player, and saves the delve if the
+/// delve may (`FB_SAVE_FILE`).
+fn debug_lie_down(
+    mut frames: Local<u32>,
+    mut aimed: ResMut<Aimed>,
+    mut keys: Option<ResMut<ButtonInput<KeyCode>>>,
+    keymap: Res<crate::keymap::Keymap>,
+    camps: Query<Entity, With<SetCamp>>,
+    mut players: Query<&mut DelverNeeds, With<Player>>,
+) {
+    *frames += 1;
+    if *frames < 20 || *frames > 24 {
+        return;
+    }
+    let (Some(bed), Some(keys)) = (camps.iter().next(), keys.as_mut()) else { return };
+    aimed.0 = Some(bed);
+    for mut needs in &mut players {
+        needs.0.sleepiness.value = needs.0.sleepiness.value.max(0.8);
+    }
+    for input in keymap.inputs(Action::Primary) {
+        if let crate::keymap::Input::Key(key) = *input {
+            keys.press(key);
+        }
+    }
 }
 
 /// Ends the sleep: rested, hurt (any fall in their hit points since they were last looked at,
