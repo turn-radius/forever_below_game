@@ -316,6 +316,9 @@ pub struct TorsoProfile {
     pub exponent: f32,
     pub back: f32,
     pub bulges: Vec<Bulge>,
+    /// Extra depth at the front and the back by height (`[y, front, back]`, rising in y),
+    /// zero outside the run: a skin's fit to what meets it (the pelvis to the thighs).
+    pub fill: Vec<[f32; 3]>,
 }
 
 impl TorsoProfile {
@@ -331,7 +334,7 @@ impl TorsoProfile {
                 samples[i].y = samples[i - 1].y + 1e-4;
             }
         }
-        TorsoProfile { samples, exponent, back, bulges }
+        TorsoProfile { samples, exponent, back, bulges, fill: vec![] }
     }
 
     pub fn bottom(&self) -> f32 {
@@ -355,7 +358,7 @@ impl TorsoProfile {
     /// bulges.
     pub fn section(&self, angle: f32, y: f32, inflate: f32) -> [f32; 2] {
         let (hw, hd) = self.at(y);
-        let swell: f32 = self.bulges.iter().map(|b| b.at(angle, y)).sum();
+        let swell: f32 = self.bulges.iter().map(|b| b.at(angle, y)).sum::<f32>() + self.fill_at(angle, y);
         // Out from the axis, so a swell to the side of the front (a breast) rounds out
         // sideways as well as forward; the first bulges only deepened the section.
         let [x, z] = section_point(angle, hw + inflate, hd + inflate, self.exponent, self.back);
@@ -367,6 +370,20 @@ impl TorsoProfile {
         let (dx, dz) = (0.5 * x, z);
         let r = dx.hypot(dz).max(1e-5);
         [x + dx / r * swell, z + dz / r * swell]
+    }
+
+    /// The fill's swell at `angle` and `y`: its front share round the front, its back share round the back.
+    fn fill_at(&self, angle: f32, y: f32) -> f32 {
+        let f = &self.fill;
+        if f.len() < 2 || y <= f[0][0] || y >= f[f.len() - 1][0] {
+            return 0.0;
+        }
+        let i = f.partition_point(|r| r[0] < y).clamp(1, f.len() - 1);
+        let k = (y - f[i - 1][0]) / (f[i][0] - f[i - 1][0]).max(1e-6);
+        let at = |c: usize| f[i - 1][c] + (f[i][c] - f[i - 1][c]) * k;
+        let share = |toward: f32| 1.0 - smoothstep(0.6, 1.0, (angle - toward).sin_cos().1.acos().abs());
+        // The back reaches round to the lobes of the seat; the front stays on the midline.
+        at(1) * (angle - FRONT).cos().max(0.0).powi(2) + at(2) * share(BACK)
     }
 
     /// The surface point at `angle` and height `y`.

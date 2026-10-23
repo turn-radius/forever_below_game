@@ -69,33 +69,43 @@ fn the_pelvis_does_not_stand_proud_of_the_thighs_in_front() {
     }
 }
 
-#[test]
-fn the_seat_does_not_overhang_the_backs_of_the_thighs() {
-    for body in bodies() {
-        let (_, back) = proud(&body);
-        assert!(back < 0.15 * body.scale, "{:?} seed {}: the seat overhangs the thighs by {back}", body.folk(), body.spec.seed);
-    }
-}
-
-/// The largest bend of the side profile (front and back) from just above the waist to the
-/// crotch, as the change of slope between samples a fixed step apart.
-fn side_kink(body: &Body) -> f32 {
+/// How deep the side silhouette dips between its neighbours, in units of the body's scale:
+/// how far a point of the profile lies behind the chord joining the points `reach` above
+/// and below it (a crease, a ledge's underside, a step). The seat that carries on into the
+/// thigh and the groin that narrows into it have none; the worst dip is taken over every
+/// height from just above the waist to just below the crotch (`front`, `back`). Samples a
+/// fine step apart, so where the grid falls does not matter.
+fn crease(body: &Body, reach_scale: f32) -> (f32, f32) {
     let mesh = body.skin_mesh();
-    let step = 0.12 * body.scale;
+    let step = 0.04 * body.scale;
+    let span = (reach_scale / 0.04).round() as usize;
     let (from, to) = (body.waist_y + 0.1 * body.trunk_length, body.hip_y - 0.14 * body.trunk_length - 0.1 * body.scale);
     let reaches: Vec<Reach> = heights(from, to, step).into_iter().filter_map(|y| reach(&mesh, &["trunk", "legs"], y)).collect();
-    let mut worst = 0.0f32;
-    for w in reaches.windows(3) {
-        worst = worst.max((w[0].front - 2.0 * w[1].front + w[2].front).abs() / step);
-        worst = worst.max((w[0].back - 2.0 * w[1].back + w[2].back).abs() / step);
+    let (mut front, mut back) = (0.0f32, 0.0f32);
+    for i in span..reaches.len().saturating_sub(span) {
+        let (a, m, b) = (reaches[i - span], reaches[i], reaches[i + span]);
+        front = front.max(0.5 * (a.front + b.front) - m.front);
+        back = back.max(m.back - 0.5 * (a.back + b.back));
     }
-    worst
+    (front / body.scale, back / body.scale)
 }
 
 #[test]
-fn the_side_profile_has_no_ledge_between_waist_and_thigh() {
+fn the_front_has_no_crease_over_the_groin() {
     for body in bodies() {
-        let kink = side_kink(&body);
-        assert!(kink < 0.36, "{:?} seed {}: the side profile bends by {kink} from waist to crotch", body.folk(), body.spec.seed);
+        let (front, _) = crease(&body, 0.2);
+        assert!(front < 0.02, "{:?} seed {}: the front profile dips {front} (of the body's scale) between waist and crotch", body.folk(), body.spec.seed);
+    }
+}
+
+#[test]
+fn the_seat_rounds_into_the_backs_of_the_thighs() {
+    for body in bodies() {
+        for reach in [0.1, 0.2] {
+            let (_, back) = crease(&body, reach);
+            assert!(back < 0.022, "{:?} seed {}: the back profile dips {back} (of the body's scale, over {reach}) between waist and thigh", body.folk(), body.spec.seed);
+        }
+        let (_, over) = proud(&body);
+        assert!(over < 0.15 * body.scale, "{:?} seed {}: the seat overhangs the thighs by {over}", body.folk(), body.spec.seed);
     }
 }

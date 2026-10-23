@@ -7,7 +7,7 @@
 //! torso's space instead, the same axes with the waist at y = 0
 //! ([`Body::torso_placement`] moves them onto the body).
 
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 
 use armory::build::boot::foot_mesh;
 use armory::build::form::{BACK, Bulge, FRONT, FormRing, HandForm, HeadForm, LEG_SECTIONS, LegForm, LegSection, LowerBodyForm, TorsoForm, TorsoProfile};
@@ -28,6 +28,10 @@ use crate::spec::BodySpec;
 pub const TRUNK_EXPONENT: f32 = 0.9;
 /// The back's depth relative to the front (`tSurf`'s 0.92).
 pub const TRUNK_BACK: f32 = 0.92;
+/// How far (a share of the trunk's length) the pelvis closes creases with the thighs.
+const RUN: f32 = 0.15;
+/// The share of the front filled out to the thighs; more raises a pooch over the hip on a body whose thighs are as deep as its hips.
+const FRONT_FILL: f32 = 0.4;
 
 /// How one arm hangs (the plate's `poseFor`): `spread` out from the body and `forward`
 /// lean of the upper arm, `bend` of the forearm toward the front (0 straight down, 1
@@ -175,7 +179,7 @@ impl Body {
             square: 4.0 - 2.0 * b,
             ..Bulge::NONE
         };
-        let seat = Bulge { y: hip_y - 0.02 * t, spread: 0.15 * t, depth: 0.17 * ws * (1.0 + 0.4 * fem), sharpness: 5, toward: BACK, pair: 0.55, fall: -0.3, cleft: 1.0, ..Bulge::NONE };
+        let seat = Bulge { y: hip_y - 0.04 * t, spread: 0.2 * t, depth: 0.17 * ws * (1.0 + 0.4 * fem), sharpness: 5, toward: BACK, pair: 0.55, fall: -0.3, cleft: 1.0, ..Bulge::NONE };
         let lumbar = Bulge { y: waist_y + 0.05 * t, spread: 0.26 * t, depth: -0.05 * ws, sharpness: 2, toward: BACK, ..Bulge::NONE };
         // The front of the pelvis draws in below the belly to the thighs' own front, so the
         // groin narrows into the inner thighs instead of standing out over them (skin only).
@@ -259,6 +263,78 @@ impl Body {
         }
         if excess > 0.0 {
             self.skin.bulges.push(Bulge { y: at, spread: 0.16 * t, depth: -excess * 0.7, sharpness: 2, toward: FRONT, fall: 0.6, ..Bulge::NONE });
+        }
+        for _ in 0..2 {
+            self.fit_trunk_to_thighs();
+        }
+    }
+
+    /// Fits the trunk's skin from the waist to the crotch to the thighs' own silhouette, front
+    /// and back. The silhouette of the trunk and the thigh together is closed over a short
+    /// run of height (a sliding maximum, then minimum), which fills the creases where the
+    /// trunk falls away from a thigh that carries on, and the fill is added to the trunk,
+    /// so the seat rounds into the backs of the thighs and the hips into the waist without a
+    /// step. Closing never takes anything away, so each folk keeps its own proportions.
+    fn fit_trunk_to_thighs(&mut self) {
+        let t = self.trunk_length;
+        let leg = self.leg(Side::Left);
+        let (lo, hi) = (self.hip_y - 0.14 * t, self.waist_y);
+        let run = RUN * t;
+        // Where the trunk and a thigh reach the same depth the union takes a little more than
+        // either, so one never shows as an edge on the other.
+        let blend = 0.05 * self.scale;
+        let smooth_max = |a: f32, b: f32, w: f32| a.max(b) + w * (1.0 + (-(a - b).abs() / w).exp()).ln();
+        let (y0, y1) = (lo - 2.0 * run, hi + 2.0 * run);
+        let n = 64;
+        let thigh_at = |y: f32| -> Option<(f32, f32)> {
+            let (mut best, mut at) = (f32::MAX, 0.0);
+            for k in 0..=200 {
+                let u = k as f32 / 200.0;
+                let d = (leg.point_at(u)[1] - y).abs();
+                if d < best {
+                    (best, at) = (d, u);
+                }
+            }
+            let c = leg.point_at(at)[2];
+            (best < 0.02 * t).then(|| (c + self.leg_radius(leg, at, 0.0), -(c - self.leg_radius(leg, at, PI))))
+        };
+        let ys: Vec<f32> = (0..=n).map(|i| y0 + (y1 - y0) * i as f32 / n as f32).collect();
+        // Depth to the front, and to the back, of the trunk and of it with the thigh.
+        let reach = |y: f32, toward: f32, sign: f32| (0..=12).map(|k| sign * self.skin.section(toward - 0.9 + 0.15 * k as f32, y, 0.0)[1]).fold(f32::MIN, f32::max);
+        let trunk: Vec<(f32, f32)> = ys.iter().map(|&y| (reach(y, FRONT, 1.0), reach(y, BACK, -1.0))).collect();
+        let union: Vec<(f32, f32)> = ys.iter().zip(&trunk).map(|(&y, &(f, b))| thigh_at(y).map_or((f, b), |(lf, lb)| (smooth_max(f, lf, blend), smooth_max(b, lb, blend)))).collect();
+        let w = ((run / ((y1 - y0) / n as f32)).round() as isize).max(1);
+        let slide = |v: Vec<f32>, max: bool| -> Vec<f32> {
+            let len = v.len() as isize;
+            (0..len).map(|i| (i - w..=i + w).filter(|j| (0..len).contains(j)).map(|j| v[j as usize]).fold(if max { f32::MIN } else { f32::MAX }, |a, b| if max { a.max(b) } else { a.min(b) })).collect()
+        };
+        let close = |v: Vec<f32>| slide(slide(v, true), false);
+        let front = close(union.iter().map(|u| u.0).collect());
+        let back = close(union.iter().map(|u| u.1).collect());
+        // A little smoothing of the fill itself, so it has no creases of its own.
+        let soften = |v: Vec<f32>| -> Vec<f32> {
+            let at = |i: isize| v[i.clamp(0, v.len() as isize - 1) as usize];
+            (0..v.len() as isize).map(|i| (at(i - 2) + 2.0 * at(i - 1) + 3.0 * at(i) + 2.0 * at(i + 1) + at(i + 2)) / 9.0).collect()
+        };
+        let df = soften((0..=n).map(|i| FRONT_FILL * (front[i] - trunk[i].0).max(0.0)).collect());
+        let db = soften((0..=n).map(|i| (back[i] - trunk[i].1).max(0.0)).collect());
+        let window = |y: f32| smoothstep(lo, lo + run, y) * (1.0 - smoothstep(hi - run, hi + run, y));
+        let fill: Vec<[f32; 3]> = (0..=n).filter(|&i| ys[i] >= lo && ys[i] <= hi + run).map(|i| [ys[i], df[i] * window(ys[i]), db[i] * window(ys[i])]).collect();
+        // The ends of the run taper to nothing, so the fill joins the bare section.
+        if let (Some(first), Some(last)) = (fill.first().copied(), fill.last().copied()) {
+            let mut run = vec![[first[0] - 1e-3, 0.0, 0.0]];
+            run.extend(fill);
+            run.push([last[0] + 1e-3, 0.0, 0.0]);
+            // A second pass adds what the first left short (the fill moves the silhouette
+            // round the lobes of the seat a little).
+            if self.skin.fill.len() == run.len() {
+                for (row, add) in self.skin.fill.iter_mut().zip(&run) {
+                    row[1] += add[1];
+                    row[2] += add[2];
+                }
+            } else {
+                self.skin.fill = run;
+            }
         }
     }
 
@@ -623,7 +699,7 @@ impl Body {
         let thigh = 0.05 * smoothstep(0.0, th, t) * (1.0 - smoothstep(th, tk, t)) * (front * front - 0.5);
         // The back of the thigh's top fills out under the seat, so the buttock rounds into the
         // thigh in a fold instead of overhanging it as a rim.
-        let under_seat = 0.24 * (-((t - 1.7 * th) / (1.0 * th)).powi(2)).exp() * (-front).max(0.0).powi(2);
+        let under_seat = 0.24 * (-((t - 1.7 * th) / th).powi(2)).exp() * (-front).max(0.0).powi(2);
         leg.radius_at(t) * (1.0 + calf + knee + thigh + under_seat)
     }
 
