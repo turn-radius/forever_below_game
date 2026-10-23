@@ -495,11 +495,13 @@ impl Body {
             Folk::Dwarf => 0.085,
             Folk::Goblin => 0.035,
             _ => 0.055,
-        };
+        } * if self.spec.woman { 0.7 } else { 1.0 };
+        // A woman's brow arches higher over the eye.
+        let arch = if self.spec.woman { 0.02 * PI } else { 0.0 };
         for sg in [1.0f32, -1.0] {
             let pts = CatmullRom::centripetal(vec![
                 face.point(sg * 0.14, 0.43 * PI + tilt * 0.6, 0.03 * r),
-                face.point(sg * 0.38, 0.415 * PI, 0.04 * r),
+                face.point(sg * 0.38, 0.415 * PI - arch, 0.04 * r),
                 face.point(sg * 0.62, 0.435 * PI - tilt * 0.4, 0.03 * r),
             ])
             .sample_evenly(14);

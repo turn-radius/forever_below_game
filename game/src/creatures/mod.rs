@@ -581,7 +581,7 @@ pub fn dev_folk_for(level: &Level, spec: &str) -> Vec<fb_level::FolkSpot> {
                     _ => None,
                 },
             });
-            fb_level::FolkSpot { x: at.x, y: at.y, yaw: yaw + std::f32::consts::PI, folk, seed: 1207 + i as u32, faction: spec.id, trade }
+            fb_level::FolkSpot { x: at.x, y: at.y, yaw: yaw + std::f32::consts::PI, folk, seed: 1207 + i as u32, sex: spec.member_sex(1207 + i as u32), faction: spec.id, trade }
         })
         .collect()
 }

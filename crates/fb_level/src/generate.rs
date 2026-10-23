@@ -1367,16 +1367,16 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588), and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618). Then seed 1207 again when the wild groups were placed among the rats and each took a room of its own (#662).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588), and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618). Then seed 1207 again when the wild groups were placed among the rats and each took a room of its own (#662), and seeds 1 and 4242 again when faction names were rolled before their members (#663), and all eight when folk gained a sex (#663), and seeds 1 and 4242 again when a name that says a class was rolled over with that class given (#663).
         let before = [
-            (0u32, 0x1f1a3218b008af65u64),
-            (1, 0x449e6b9c0122874a),
-            (2, 0x4f77a21635f56cb),
-            (7, 0xf62fd5bc05f65db),
-            (64, 0x36ec7c3ea51f5f9a),
-            (1207, 0x9cf8dea8ef2143d2),
-            (4242, 0x401bea1115e7dbf6),
-            (u32::MAX, 0xec7118df0d2cac3a),
+            (0u32, 0xf6aedcf09a11efeu64),
+            (1, 0x964052c5ff7f73d8),
+            (2, 0x3a098b31f7bedf36),
+            (7, 0xd4799adb07d0e04a),
+            (64, 0xf4d90e47ab648078),
+            (1207, 0x46ee98a53fedc3a7),
+            (4242, 0x13966fc2c4bc1d5f),
+            (u32::MAX, 0x796683c83957bced),
         ];
         for (seed, hash) in before {
             let level = generate(seed, 1);

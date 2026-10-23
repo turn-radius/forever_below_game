@@ -185,3 +185,120 @@ fn golden_names() {
     assert_eq!(faction_name("human", "way_out", 3), "the Veil Assembly");
     assert_eq!(faction_name("pigfolk", "trade", 3), "the Hog League of Grain");
 }
+
+/// Every name of the shipped data, with what it set.
+fn all_names() -> Vec<(String, Expansion)> {
+    let mut out = Vec::new();
+    for folk in FOLK {
+        for intent in INTENTIONS {
+            for seed in 0..120 {
+                let e = faction_named(folk, intent, seed);
+                out.push((format!("{folk}/{intent}"), e));
+            }
+        }
+    }
+    out
+}
+
+/// Every `[key:value]Word` rule of the shipped name data, as (lowercase word, key, value), so
+/// the tests follow the data rather than a list of their own.
+fn tagged_words() -> Vec<(String, String, String)> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<(String, String, String)>) {
+        match v {
+            serde_json::Value::String(s) => {
+                if let Some((tag, word)) = s.strip_prefix('[').and_then(|rest| rest.split_once(']')) {
+                    if let Some((key, value)) = tag.split_once(':') {
+                        out.push((word.to_lowercase(), key.to_string(), value.to_string()));
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            serde_json::Value::Object(map) => map.values().for_each(|i| walk(i, out)),
+            _ => {}
+        }
+    }
+    let data: serde_json::Value = serde_json::from_str(include_str!("../../../data/faction_names.json")).unwrap();
+    let mut out = Vec::new();
+    walk(&data, &mut out);
+    out
+}
+
+#[test]
+fn names_say_what_their_members_are() {
+    let names = all_names();
+    let tagged = tagged_words();
+    for key in ["sex", "class"] {
+        assert!(tagged.iter().any(|(_, k, _)| k == key), "the data tags no {key}");
+    }
+    for (_, e) in &names {
+        let words: Vec<String> = e.text.split(|c: char| !c.is_alphanumeric()).map(str::to_lowercase).collect();
+        let said: Vec<&(String, String, String)> = tagged.iter().filter(|(w, _, _)| words.contains(w)).collect();
+        for (word, key, value) in &said {
+            if !e.conflicts.contains(key) {
+                assert_eq!(e.tag(key), Some(value.as_str()), "{} says {word}", e.text);
+            }
+        }
+        // A name with none of the tagged words sets nothing, and a name sets only what words say.
+        for key in e.tags.keys() {
+            assert!(said.iter().any(|(_, k, _)| k == key), "{}: {key} is set by no word", e.text);
+        }
+    }
+    let seen = |key: &str, value: &str| names.iter().any(|(_, e)| e.tag(key) == Some(value));
+    assert!(seen("sex", "female") && seen("sex", "male") && seen("class", "cleric") && seen("class", "fighter_or_ranger"));
+    assert!(names.iter().any(|(_, e)| e.tags.is_empty()), "every name says something");
+    assert!(names.iter().any(|(_, e)| e.tag("sex") == Some("female") && e.tag("class") == Some("cleric")), "no Daughters of a Chapel");
+    assert!(names.iter().any(|(_, e)| e.tag("sex") == Some("male") && e.tag("class") == Some("cleric")), "no Brothers of a Chapel");
+}
+
+#[test]
+fn actions_are_rule_level_only() {
+    // Tracery's action inside a tag is not supported: the tag names no symbol.
+    let g = Grammar::from_pairs(&[("origin", &["#[hero:#name#]story#"]), ("name", &["Ash"]), ("story", &["tale"])]);
+    assert!(matches!(expand_tagged(&g, "#origin#", 1), Err(GrammarError::MissingSymbol(_))));
+    // A value ends at the first `]`, so actions do not nest.
+    let g = Grammar::from_pairs(&[("origin", &["[a:[b:c]]x"])]);
+    let e = expand_tagged(&g, "#origin#", 1).unwrap();
+    assert_eq!((e.tag("a"), e.tag("b"), e.text.as_str()), (Some("[b:c"), None, "]x"));
+}
+
+#[test]
+fn an_action_sets_a_key_and_writes_nothing() {
+    let g = Grammar::from_pairs(&[("origin", &["[sex:female]Daughters of the #place#"]), ("place", &["Gate"])]);
+    let e = expand_tagged(&g, "#origin#", 1).unwrap();
+    assert_eq!(e.text, "Daughters of the Gate");
+    assert_eq!(e.tag("sex"), Some("female"));
+    assert_eq!(e.tag("class"), None);
+    assert_eq!(expand(&g, "#origin#", 1).unwrap(), "Daughters of the Gate");
+    assert!(g.problems("#origin#").is_empty());
+}
+
+#[test]
+fn a_set_key_reads_back_and_its_value_expands() {
+    let g = Grammar::from_pairs(&[("origin", &["[who:#name#]#who# meets #who.capitalize#"]), ("name", &["ash", "bell"])]);
+    for seed in 0..10 {
+        let e = expand_tagged(&g, "#origin#", seed).unwrap();
+        let who = e.tag("who").unwrap().to_string();
+        assert_eq!(e.text, format!("{who} meets {}", apply_modifier("capitalize", &who).unwrap()));
+    }
+    assert!(g.problems("#origin#").is_empty());
+}
+
+#[test]
+fn an_action_deep_in_a_rule_reaches_the_result() {
+    let g = Grammar::from_pairs(&[("origin", &["the #kin#"]), ("kin", &["[sex:male]Sons", "[sex:male]Brothers"])]);
+    assert_eq!(expand_tagged(&g, "#origin#", 4).unwrap().tag("sex"), Some("male"));
+}
+
+#[test]
+fn a_bracket_that_is_not_an_action_is_text() {
+    let g = Grammar::from_pairs(&[("origin", &["a [b] c [d: e"])]);
+    assert_eq!(expand(&g, "#origin#", 1).unwrap(), "a [b] c [d: e");
+}
+
+#[test]
+fn rules_without_actions_set_nothing() {
+    let g = Grammar::from_pairs(&[("origin", &["#a# #a# #a#"]), ("a", &["x", "y", "z", "w"])]);
+    for seed in 0..20 {
+        assert!(expand_tagged(&g, "#origin#", seed).unwrap().tags.is_empty());
+    }
+}

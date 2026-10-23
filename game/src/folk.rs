@@ -114,7 +114,7 @@ impl Person {
     pub fn of(spot: &FolkSpot, faction: &FactionSpec, depth: u32) -> Person {
         let odds = fb_items::Odds::kit(depth);
         let mut rng = spot.name_stream();
-        let name = fb_items::naming::folk_name(&mut rng, spot.folk.key());
+        let name = fb_items::naming::folk_name(&mut rng, spot.folk.key(), Some(spot.sex));
         let outfit = *rng.pick(&faction.outfit_keys());
         let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
             let set = o.roll_in(spot.seed, spot.folk.key(), odds, Some(&livery(faction)));
@@ -137,7 +137,7 @@ impl Person {
         // Every member carries their faction's key, which falls with their belongings.
         let mut goods = goods;
         goods.extend(crate::doors::key_of(faction));
-        Person { spot: *spot, depth, faction: faction.clone(), name, spec: BodySpec::roll(spot.folk, spot.seed), outfit, gear, goods, dirt }
+        Person { spot: *spot, depth, faction: faction.clone(), name, spec: BodySpec::roll_as(spot.folk, spot.seed, spot.sex), outfit, gear, goods, dirt }
     }
 
     /// What they wear, innermost slots first as listed.
@@ -695,6 +695,31 @@ mod tests {
             }
         }
         assert!(archers > 0, "no archers among the folk");
+    }
+
+    #[test]
+    fn women_of_a_named_faction_are_women_beardless_and_dressed_as_it_says() {
+        let (mut women, mut men, mut clerics) = (0, 0, 0);
+        for world in 1..=40 {
+            let level = fb_level::generate(world, 1);
+            for spot in &level.folk {
+                let faction = level.faction(spot.faction);
+                let person = Person::of(spot, faction, 1);
+                if faction.sex == Some(fb_body::Sex::Female) {
+                    women += 1;
+                    assert_eq!((person.spec.beard, person.spec.bust > 0.0 || spot.folk == fb_body::Folk::Lizardfolk), (fb_body::Beard::None, true), "{}", faction.name);
+                }
+                if faction.sex == Some(fb_body::Sex::Male) {
+                    men += 1;
+                    assert_eq!(person.spec.bust, 0.0, "{}", faction.name);
+                }
+                if faction.classes == [fb_faction::ClassKind::Cleric] {
+                    clerics += 1;
+                    assert_eq!(person.outfit, "cleric", "{}", faction.name);
+                }
+            }
+        }
+        assert!(women > 0 && men > 0 && clerics > 0, "{women} women, {men} men, {clerics} clerics in 40 worlds");
     }
 
     #[test]

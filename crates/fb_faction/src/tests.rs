@@ -113,7 +113,9 @@ fn likes_and_hates_are_one_to_three_and_never_both() {
 fn no_faction_contradicts_itself() {
     for seed in 0..300 {
         for spec in World::new(seed).factions() {
-            assert_ne!(spec.outfits[0], spec.outfits[1], "{}: {:?}", spec.name, spec.outfits);
+            if spec.classes.len() != 1 {
+                assert_ne!(spec.outfits[0], spec.outfits[1], "{}: {:?}", spec.name, spec.outfits);
+            }
             for hate in &spec.hates {
                 assert!(!spec.likes.contains(hate), "{} likes and hates {hate:?}", spec.name);
                 assert_ne!(*hate, Preference::Faction(spec.id), "{} hates itself", spec.name);
@@ -122,6 +124,146 @@ fn no_faction_contradicts_itself() {
                 }
             }
             assert!(!spec.likes.contains(&Preference::Faction(spec.id)), "{} likes itself", spec.name);
+        }
+    }
+}
+
+fn words(name: &str) -> Vec<String> {
+    name.split(|c: char| !c.is_alphanumeric()).map(str::to_lowercase).collect()
+}
+
+/// Every `[key:value]Word` rule of `data/faction_names.json`, as (lowercase word, key, value),
+/// so these tests follow the data and not a word list of their own.
+fn tagged_words() -> Vec<(String, String, String)> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<(String, String, String)>) {
+        match v {
+            serde_json::Value::String(s) => {
+                if let Some((tag, word)) = s.strip_prefix('[').and_then(|rest| rest.split_once(']')) {
+                    if let Some((key, value)) = tag.split_once(':') {
+                        out.push((word.to_lowercase(), key.to_string(), value.to_string()));
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            serde_json::Value::Object(map) => map.values().for_each(|i| walk(i, out)),
+            _ => {}
+        }
+    }
+    let data: serde_json::Value = serde_json::from_str(include_str!("../../../data/faction_names.json")).unwrap();
+    let mut out = Vec::new();
+    walk(&data, &mut out);
+    out
+}
+
+/// The distinct values the words of `name` give `key`.
+fn said(name: &str, key: &str) -> Vec<String> {
+    let w = words(name);
+    let mut out: Vec<String> = tagged_words().into_iter().filter(|(word, k, _)| k == key && w.contains(word)).map(|(_, _, v)| v).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[test]
+fn a_name_that_says_a_class_dresses_every_member_so() {
+    let (mut clerics, mut martial, mut unsaid) = (0, 0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            let classes = said(&spec.name, "class");
+            match &spec.classes[..] {
+                [ClassKind::Cleric] => {
+                    clerics += 1;
+                    assert_eq!(classes, ["cleric"], "{}", spec.name);
+                    assert_eq!(spec.outfits, [Outfit::Cleric; 2], "{}", spec.name);
+                    assert!(!spec.hates.contains(&Preference::Class(ClassKind::Cleric)), "{} hates clerics", spec.name);
+                }
+                [a, b] => {
+                    martial += 1;
+                    assert_eq!(classes, ["fighter_or_ranger"], "{}", spec.name);
+                    assert_eq!({ let mut c = [*a, *b]; c.sort_by_key(|k| *k as u8); c }, [ClassKind::Fighter, ClassKind::Ranger], "{}", spec.name);
+                    assert!(spec.outfits.contains(&Outfit::Fighter) && spec.outfits.contains(&Outfit::Ranger), "{}: {:?}", spec.name, spec.outfits);
+                    assert!(!spec.hates.contains(&Preference::Class(ClassKind::Fighter)) && !spec.hates.contains(&Preference::Class(ClassKind::Ranger)), "{}", spec.name);
+                }
+                [] => {
+                    unsaid += 1;
+                    assert!(classes.is_empty(), "{} says {classes:?} but sets no class", spec.name);
+                }
+                other => panic!("{}: {other:?}", spec.name),
+            }
+        }
+    }
+    assert!(clerics > 20 && martial > 20 && unsaid > 500, "{clerics} cleric, {martial} martial, {unsaid} unsaid");
+}
+
+#[test]
+fn a_name_that_says_a_sex_makes_every_member_so() {
+    let (mut women, mut men, mut unsaid) = (0, 0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            let sexes = said(&spec.name, "sex");
+            assert_eq!(spec.sex, match &sexes[..] {
+                [s] if s == "female" => Some(Sex::Female),
+                [s] if s == "male" => Some(Sex::Male),
+                [] => None,
+                other => panic!("{} says {other:?}", spec.name),
+            }, "{}", spec.name);
+            let members: Vec<Sex> = (0..200).map(|i| spec.member_sex(i * 7919 + seed)).collect();
+            let share = members.iter().filter(|s| **s == Sex::Female).count();
+            match spec.sex {
+                Some(Sex::Female) => {
+                    women += 1;
+                    assert_eq!(share, 200, "{}", spec.name);
+                }
+                Some(Sex::Male) => {
+                    men += 1;
+                    assert_eq!(share, 0, "{}", spec.name);
+                }
+                None => {
+                    unsaid += 1;
+                    assert!((70..=130).contains(&share), "{}: {share} of 200 are women", spec.name);
+                }
+            }
+        }
+    }
+    assert!(women > 20 && men > 20 && unsaid > 500, "{women} women, {men} men, {unsaid} unsaid");
+}
+
+#[test]
+fn a_faction_can_be_women_and_clerics_or_men_and_clerics() {
+    let (mut women, mut men) = (None, None);
+    for seed in 0..3000 {
+        for spec in World::new(seed).factions() {
+            if spec.classes == [ClassKind::Cleric] {
+                match spec.sex {
+                    Some(Sex::Female) => women = women.or(Some((seed, spec.name.clone()))),
+                    Some(Sex::Male) => men = men.or(Some((seed, spec.name.clone()))),
+                    None => {}
+                }
+            }
+        }
+    }
+    assert!(women.is_some() && men.is_some(), "women and clerics {women:?}, men and clerics {men:?}");
+}
+
+#[test]
+fn no_name_says_two_classes() {
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            assert!(said(&spec.name, "class").len() < 2, "{} says two classes", spec.name);
+        }
+    }
+    // The grammar notes a key set twice to different values.
+    let g = procgen_grammar::Grammar::from_pairs(&[("origin", &["[class:cleric]a [class:fighter]b", "[class:cleric]a [class:cleric]b"])]);
+    let conflicts = |seed| procgen_grammar::expand_tagged(&g, "#origin#", seed).unwrap().conflicts;
+    assert!((0..20).any(|s| conflicts(s) == ["class"]) && (0..20).any(|s| conflicts(s).is_empty()));
+}
+
+#[test]
+fn the_same_seed_gives_the_same_name_and_makeup() {
+    for seed in 0..40 {
+        let (a, b) = (World::new(seed), World::new(seed));
+        for (x, y) in a.factions().iter().zip(b.factions()) {
+            assert_eq!((&x.name, &x.classes, x.outfits), (&y.name, &y.classes, y.outfits));
         }
     }
 }

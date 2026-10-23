@@ -1035,7 +1035,8 @@ pub(crate) mod tests {
         // What they wore and held, and carried: their faction's key too.
         let person = app.world().get::<Denizen>(folk).unwrap().person.clone();
         let mut gear = person.gear.clone();
-        gear.extend(person.goods.iter().cloned().map(|i| (fb_items::Slot::Mainhand, i)));
+        // An archer's arrows fall inside its quiver, not loose.
+        gear.extend(person.goods.iter().filter(|i| !matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).cloned().map(|i| (fb_items::Slot::Mainhand, i)));
         assert!(gear.len() >= 2, "a folk wears and holds something");
         assert!(on_the_floor(&mut app).is_empty(), "nothing lies there while they stand");
         let lying_before = app.world().resource::<CurrentLevel>().0.items.len();
@@ -1044,6 +1045,12 @@ pub(crate) mod tests {
         let floor = on_the_floor(&mut app);
         assert_eq!(floor.len(), gear.len(), "one for each piece of gear");
         let inventory = app.world().resource::<Inventory>();
+        // An archer's arrows lie in the quiver that fell with it.
+        let arrows = person.goods.iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).count();
+        if arrows > 0 {
+            let quiver = floor.iter().find(|f| inventory.item(f.id).is_some_and(|i| i.base == "Quiver")).expect("the quiver lies there");
+            assert_eq!(inventory.contents_count(quiver.id), arrows, "every arrow is in the quiver");
+        }
         let mut lying: Vec<(String, u32)> = floor.iter().map(|f| inventory.item(f.id).map(|i| (i.base.to_string(), i.seed)).unwrap()).collect();
         let mut wore: Vec<(String, u32)> = gear.iter().map(|(_, i)| (i.base.to_string(), i.seed)).collect();
         lying.sort();
@@ -1141,6 +1148,14 @@ pub(crate) mod tests {
         assert!(now.iter().any(|n| n == "Body"), "the body is drawn");
         assert!(!now.iter().any(|n| titles.contains(n)), "still drawn in its gear: {now:?}");
         // What they wore and carried, their faction's key among it.
-        assert_eq!(on_the_floor(&mut again).len(), person.gear.len() + person.goods.len());
+        let loose = person.goods.iter().filter(|i| !matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).count();
+        let floor = on_the_floor(&mut again);
+        assert_eq!(floor.len(), person.gear.len() + loose);
+        let arrows = person.goods.len() - loose;
+        if arrows > 0 {
+            let inventory = again.world().resource::<Inventory>();
+            let quiver = floor.iter().find(|f| inventory.item(f.id).is_some_and(|i| i.base == "Quiver")).expect("the quiver lies there");
+            assert_eq!(inventory.contents_count(quiver.id), arrows, "every arrow is in the quiver");
+        }
     }
 }

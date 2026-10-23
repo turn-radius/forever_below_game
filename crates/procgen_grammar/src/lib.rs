@@ -6,6 +6,16 @@
 //! `expand(&grammar, "#origin#", seed)` always gives the same text for the same seed.
 //! `##` is a literal `#`.
 //!
+//! Actions, after Tracery's `[key:value]`: a rule with `[key:value]` in its text sets `key` for
+//! the rest of the expansion (the value is itself expanded, so `[who:#name#]` works), writes
+//! nothing, and `#key#` reads it back. [`expand_tagged`] returns what was set beside the text:
+//! `[sex:female]Daughters of the #place#` gives "Daughters of the Gate" and `sex = female`.
+//! Actions are rule-level only: Tracery's `#[hero:#name#]story#`, an action inside a tag, is not
+//! supported (such a tag names a symbol that does not exist), and a value ends at the first `]`,
+//! so actions do not nest. A key set to two different values keeps the last and is listed in
+//! [`Expansion::conflicts`]. A rule with no actions expands exactly as before, so a grammar
+//! without them keeps its seeds.
+//!
 //! Modifiers: `capitalize`, `upper`, `lower`, `s` (plural), `a` (article: "a" or "an").
 //!
 //! Faction names live in `data/faction_names.json` and come out of [`faction_name`].
@@ -99,10 +109,12 @@ impl Grammar {
             }
             texts.extend(rules.iter().map(String::as_str));
         }
+        // A tag may read a key some rule sets.
+        let set_keys: Vec<&str> = texts.iter().flat_map(|t| action_keys(t)).collect();
         for text in texts {
             for tag in tags(text) {
                 let (sym, mods) = split_tag(tag);
-                if !self.symbols.contains_key(sym) {
+                if !self.symbols.contains_key(sym) && !set_keys.contains(&sym) {
                     push(GrammarError::MissingSymbol(sym.to_string()));
                 }
                 for m in mods {
@@ -137,43 +149,104 @@ fn tags(text: &str) -> Vec<&str> {
     out
 }
 
+/// The key of each `[key:value]` action in `text`.
+fn action_keys(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find('[') {
+        let after = &rest[i + 1..];
+        if let Some((key, _)) = after.split_once(':').filter(|(k, _)| is_key(k)) {
+            out.push(key);
+        }
+        rest = after;
+    }
+    out
+}
+
+/// Whether `k` can name a key: letters, digits and `_`, not empty.
+fn is_key(k: &str) -> bool {
+    !k.is_empty() && k.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
 fn split_tag(tag: &str) -> (&str, Vec<&str>) {
     let mut parts = tag.split('.');
     let sym = parts.next().unwrap_or("");
     (sym, parts.collect())
 }
 
+/// What an expansion made: its text, and every key an action set, with its last value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Expansion {
+    pub text: String,
+    pub tags: BTreeMap<String, String>,
+    /// Keys that actions set to two different values (the last stands).
+    pub conflicts: Vec<String>,
+}
+
+impl Expansion {
+    /// What `key` was set to, if an action set it.
+    pub fn tag(&self, key: &str) -> Option<&str> {
+        self.tags.get(key).map(String::as_str)
+    }
+}
+
 /// Expand `start` (usually `"#origin#"`) with a stream seeded by `seed`.
 pub fn expand(grammar: &Grammar, start: &str, seed: u32) -> Result<String, GrammarError> {
-    let mut rng = Mulberry32::new(seed);
-    expand_with(grammar, start, &mut rng)
+    expand_tagged(grammar, start, seed).map(|e| e.text)
 }
 
 /// Expand from an RNG the caller owns, so several expansions can share one stream.
-pub fn expand_with(
-    grammar: &Grammar,
-    start: &str,
-    rng: &mut Mulberry32,
-) -> Result<String, GrammarError> {
-    let mut budget = MAX_EXPANSIONS;
-    expand_text(grammar, start, rng, 0, &mut budget)
+pub fn expand_with(grammar: &Grammar, start: &str, rng: &mut Mulberry32) -> Result<String, GrammarError> {
+    expand_tagged_with(grammar, start, rng).map(|e| e.text)
 }
 
-fn expand_text(
-    g: &Grammar,
-    text: &str,
-    rng: &mut Mulberry32,
-    depth: usize,
-    budget: &mut usize,
-) -> Result<String, GrammarError> {
+/// [`expand`], with what the actions set.
+pub fn expand_tagged(grammar: &Grammar, start: &str, seed: u32) -> Result<Expansion, GrammarError> {
+    let mut rng = Mulberry32::new(seed);
+    expand_tagged_with(grammar, start, &mut rng)
+}
+
+/// [`expand_with`], with what the actions set.
+pub fn expand_tagged_with(grammar: &Grammar, start: &str, rng: &mut Mulberry32) -> Result<Expansion, GrammarError> {
+    let mut run = Run { tags: BTreeMap::new(), conflicts: Vec::new(), budget: MAX_EXPANSIONS };
+    let text = expand_text(grammar, start, rng, 0, &mut run)?;
+    Ok(Expansion { text, tags: run.tags, conflicts: run.conflicts })
+}
+
+/// The state one expansion carries: the keys set so far and the expansions left.
+struct Run {
+    tags: BTreeMap<String, String>,
+    conflicts: Vec<String>,
+    budget: usize,
+}
+
+fn expand_text(g: &Grammar, text: &str, rng: &mut Mulberry32, depth: usize, run: &mut Run) -> Result<String, GrammarError> {
     if depth > MAX_DEPTH {
         return Err(GrammarError::TooDeep);
     }
     let mut out = String::new();
     let mut rest = text;
-    while let Some(i) = rest.find('#') {
+    while let Some(i) = rest.find(['#', '[']) {
         out.push_str(&rest[..i]);
         let after = &rest[i + 1..];
+        if rest.as_bytes()[i] == b'[' {
+            // An action `[key:value]`; anything else with a bracket is plain text.
+            let action = after.find(']').and_then(|end| after[..end].split_once(':').filter(|(k, _)| is_key(k)).map(|(k, v)| (k, v, end)));
+            let Some((key, value, end)) = action else {
+                out.push('[');
+                rest = after;
+                continue;
+            };
+            let value = expand_text(g, value, rng, depth + 1, run)?;
+            // The last value stands, but a key set to two different values is noted, so a caller
+            // that cannot hold both (a faction that is all clerics and all fighters) can ask again.
+            if run.tags.get(key).is_some_and(|was| *was != value) && !run.conflicts.iter().any(|k| k == key) {
+                run.conflicts.push(key.to_string());
+            }
+            run.tags.insert(key.to_string(), value);
+            rest = &after[end + 1..];
+            continue;
+        }
         let Some(j) = after.find('#') else {
             // Unclosed: keep the `#` as text.
             out.push('#');
@@ -183,20 +256,21 @@ fn expand_text(
         if j == 0 {
             out.push('#');
         } else {
-            if *budget == 0 {
+            if run.budget == 0 {
                 return Err(GrammarError::TooLarge);
             }
-            *budget -= 1;
+            run.budget -= 1;
             let (sym, mods) = split_tag(&after[..j]);
-            let rules = g
-                .symbols
-                .get(sym)
-                .ok_or_else(|| GrammarError::MissingSymbol(sym.to_string()))?;
-            if rules.is_empty() {
-                return Err(GrammarError::EmptySymbol(sym.to_string()));
-            }
-            let rule = rng.pick(rules);
-            let mut s = expand_text(g, rule, rng, depth + 1, budget)?;
+            let mut s = if let Some(set) = run.tags.get(sym) {
+                set.clone()
+            } else {
+                let rules = g.symbols.get(sym).ok_or_else(|| GrammarError::MissingSymbol(sym.to_string()))?;
+                if rules.is_empty() {
+                    return Err(GrammarError::EmptySymbol(sym.to_string()));
+                }
+                let rule = rng.pick(rules);
+                expand_text(g, rule, rng, depth + 1, run)?
+            };
             for m in mods {
                 s = apply_modifier(m, &s)?;
             }
@@ -276,8 +350,13 @@ impl FactionNames {
     }
 
     pub fn name(&self, folk: &str, intention: &str, seed: u32) -> Result<String, GrammarError> {
+        self.named(folk, intention, seed).map(|e| e.text)
+    }
+
+    /// The name, with what its words set ([`Expansion::tags`]).
+    pub fn named(&self, folk: &str, intention: &str, seed: u32) -> Result<Expansion, GrammarError> {
         let g = self.grammar(folk, intention)?;
-        expand(&g, "#origin#", mix(seed, folk, intention))
+        expand_tagged(&g, "#origin#", mix(seed, folk, intention))
     }
 }
 
@@ -308,6 +387,15 @@ pub fn faction_name(folk_key: &str, intention_key: &str, seed: u32) -> String {
     faction_names()
         .name(folk_key, intention_key, seed)
         .unwrap_or_else(|_| "the Nameless".to_string())
+}
+
+/// [`faction_name`], with what its words set: `sex` (`female`, `male`) and `class` (`cleric`,
+/// `fighter_or_ranger`) in `data/faction_names.json`. An unknown key gives "the Nameless", which
+/// sets nothing.
+pub fn faction_named(folk_key: &str, intention_key: &str, seed: u32) -> Expansion {
+    faction_names()
+        .named(folk_key, intention_key, seed)
+        .unwrap_or_else(|_| Expansion { text: "the Nameless".to_string(), ..Expansion::default() })
 }
 
 #[cfg(test)]
