@@ -763,24 +763,7 @@ pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &Creatu
     if let Creature::Troll(troll) = &creature {
         commands.entity(root).insert(trolls::Troll::new(troll));
     }
-    if let Creature::Minotaur(minotaur) = &creature {
-        commands.entity(root).insert(Denizen::new(minotaur));
-    }
     (root, bones)
-}
-
-/// On a minotaur: its measured joints and its height, so nothing rebuilds its body each frame.
-#[derive(Component, Clone, Debug)]
-pub struct Denizen {
-    pub dims: fb_creatures::skeleton::SkeletonDims,
-    /// Crown to soles, hunched, world units.
-    pub height: f32,
-}
-
-impl Denizen {
-    pub fn new(state: &fb_creatures::MinotaurState) -> Denizen {
-        Denizen { dims: state.dims(), height: state.height() }
-    }
 }
 
 /// Idling: what a creature does standing still, when nothing else drives it. Snakes lie
@@ -820,7 +803,7 @@ pub fn tongue_flick(t: f32) -> f32 {
 }
 
 /// What [`animate`] reads and writes on each creature.
-type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>, Has<crate::combat::feedback::Corpse>, Option<&'static trolls::Troll>, Option<&'static Denizen>);
+type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>, Has<crate::combat::feedback::Corpse>, Option<&'static trolls::Troll>);
 
 /// Poses every creature for this frame from how it moved and what it means to do.
 pub fn animate(
@@ -833,7 +816,7 @@ pub fn animate(
     let dt = time.delta_secs();
     let relief = Relief::new(&level.0);
     let player = players.iter().next().map(GlobalTransform::translation);
-    for (critter, root, intent, mut motion, bones, mut trail, dead, troll_body, denizen_body) in &mut creatures {
+    for (critter, root, intent, mut motion, bones, mut trail, dead, troll_body) in &mut creatures {
         let at = root.translation.xz();
         if let (Some(trail), Creature::Snake(snake)) = (trail.as_deref_mut(), &critter.creature) {
             trail.record(at, snake.dims().body_length * root.scale.x);
@@ -936,23 +919,6 @@ pub fn animate(
                     motion.cycle = (motion.cycle + strode / pose::troll_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
                     let stance = critter.arms.as_ref().map_or([None, None], |a| a.stance);
                     pose::troll_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)
-                }
-            }
-            Creature::Minotaur(minotaur) => {
-                // Measured once, when it appeared.
-                let measured;
-                let dims = match denizen_body {
-                    Some(body) => &body.dims,
-                    None => {
-                        measured = minotaur.dims();
-                        &measured
-                    }
-                };
-                if intent.fallen > 0.0 {
-                    pose::minotaur_fallen(dims, intent.fallen)
-                } else {
-                    motion.cycle = (motion.cycle + strode / pose::denizen_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
-                    pose::minotaur_with(dims, &pose::DenizenPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, swing: intent.swing, gore: (now.strike > 0.0).then_some(now.strike), gesture: None, look: now.look, jaw: now.jaw })
                 }
             }
             Creature::Centipede(centipede) => {
@@ -1112,7 +1078,6 @@ mod tests {
                     Creature::Skeleton(s) => s.height(),
                     Creature::Spider(s) => s.span,
                     Creature::Troll(t) => t.height(),
-                    Creature::Minotaur(m) => m.height(),
                     Creature::Jackalope(j) => j.length,
                     Creature::Centipede(c) => c.girth * 4.0,
                     Creature::Bat(b) => b.length,

@@ -27,17 +27,16 @@
 //! rule on a clock, with no engine in it.
 
 use armory::geom::vec3::{self, V3};
-use armory::geom::{MeshBuilder, Shading, SweepOptions, ellipsoid, spike, tube, uv_sphere};
+use armory::geom::{CatmullRom, GridOptions, MeshBuilder, Shading, SweepOptions, ellipsoid, spike, stitch_grid, tube, uv_sphere};
 use armory::{MaterialKind, Part, Rgb};
 use fb_body::{Body, BodySpec, Folk, Placement, Side};
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use crate::denizen::{Loft, about, ball, blot, cran_y, limb_tube, some, tube_surface};
 use crate::rat::{mix, part};
 use crate::rig::Rig;
-use crate::shape::eye;
+use crate::shape::{eye, keyed};
 use crate::skeleton::{NAMES, SkeletonDims, arm_bone, index, leg_bone, parent_of};
 use crate::{Dice, Size, Species};
 
@@ -272,6 +271,95 @@ impl TrollState {
 
 // ── Layout ──
 
+/// A surface lofted between rings along a curved centre line: each ring is a squared ellipse in
+/// the plane across the line, with its own half width and depths in front of the line and behind
+/// it. The torso, and the head's upper half, are lofts.
+#[derive(Clone, Debug)]
+struct Loft {
+    length: f32,
+    tilt: Vec<(f32, f32)>,
+    half_width: Vec<(f32, f32)>,
+    front: Vec<(f32, f32)>,
+    back: Vec<(f32, f32)>,
+    squareness: f32,
+    /// The centre line sampled evenly by length.
+    samples: Vec<V3>,
+}
+
+const LOFT_SAMPLES: usize = 96;
+
+impl Loft {
+    /// A loft starting at `start` and running `length` along a line that leans forward by
+    /// `tilt` (radians from vertical) at each distance along it.
+    fn new(start: V3, length: f32, tilt: Vec<(f32, f32)>, half_width: Vec<(f32, f32)>, front: Vec<(f32, f32)>, back: Vec<(f32, f32)>, squareness: f32) -> Loft {
+        let mut samples = vec![start];
+        let step = length / LOFT_SAMPLES as f32;
+        for k in 0..LOFT_SAMPLES {
+            let a = (k as f32 + 0.5) * step;
+            let th = keyed(&tilt, a);
+            let last = samples[k];
+            samples.push(vec3::add(last, [0.0, th.cos() * step, th.sin() * step]));
+        }
+        Loft { length, tilt, half_width, front, back, squareness, samples }
+    }
+
+    /// The centre line at distance `a` along it.
+    fn centre(&self, a: f32) -> V3 {
+        let f = (a / self.length * LOFT_SAMPLES as f32).clamp(0.0, LOFT_SAMPLES as f32);
+        let i = (f.floor() as usize).min(LOFT_SAMPLES - 1);
+        vec3::lerp(self.samples[i], self.samples[i + 1], f - i as f32)
+    }
+
+    fn lean(&self, a: f32) -> f32 {
+        keyed(&self.tilt, a)
+    }
+
+    /// The way the line runs at `a`, and the way is forward across it.
+    fn along(&self, a: f32) -> V3 {
+        let th = self.lean(a);
+        [0.0, th.cos(), th.sin()]
+    }
+
+    fn forward(&self, a: f32) -> V3 {
+        let th = self.lean(a);
+        [0.0, -th.sin(), th.cos()]
+    }
+
+    /// The skin at distance `a` along the line and `phi` round it (0 the creature's left, a
+    /// quarter turn on the front), `inflate` out.
+    fn point(&self, a: f32, phi: f32, inflate: f32) -> V3 {
+        let e = 2.0 / self.squareness.max(0.5);
+        let (s, c) = phi.sin_cos();
+        let w = (keyed(&self.half_width, a) + inflate).max(0.0);
+        let depth = if s >= 0.0 { keyed(&self.front, a) } else { keyed(&self.back, a) } + inflate;
+        let spow = |x: f32| x.signum() * x.abs().powf(e);
+        let centre = self.centre(a);
+        vec3::add(vec3::add(centre, [w * spow(c), 0.0, 0.0]), vec3::scale(self.forward(a), depth.max(0.0) * spow(s)))
+    }
+
+    /// The outward direction of the skin at `a`, `phi` (the ring's, near enough).
+    fn normal(&self, a: f32, phi: f32) -> V3 {
+        let p = self.point(a, phi, 0.0);
+        vec3::normalize_or(vec3::sub(p, self.centre(a)), self.forward(a))
+    }
+
+    /// The loft from distance `a0` to `a1`, closed at both ends. `dip` is how far the first
+    /// `overlap` of it sinks inside the surface (reaching nothing at its far end), so a piece
+    /// that sits on another reaches into it and does not open when bent.
+    fn mesh(&self, a0: f32, a1: f32, rows: usize, cols: usize, overlap: f32, dip: f32) -> MeshBuilder {
+        let ring = |a: f32| -> Vec<V3> {
+            let inflate = if overlap > 0.0 { -dip * (1.0 - ((a - a0) / overlap).clamp(0.0, 1.0)) } else { 0.0 };
+            (0..cols).map(|c| self.point(a, TAU * c as f32 / cols as f32, inflate)).collect()
+        };
+        let rings: Vec<Vec<V3>> = (0..=rows).map(|r| ring(a0 + (a1 - a0) * r as f32 / rows as f32)).collect();
+        let mut mesh = stitch_grid(&rings, &GridOptions { wrap_around: true, ..Default::default() });
+        mesh.flip();
+        mesh.push_fan_cap(&rings[0], vec3::neg(self.along(a0)));
+        mesh.push_fan_cap(&rings[rows], self.along(a1));
+        mesh
+    }
+}
+
 /// Where everything of a troll sits: the torso's loft and its stations, the neck and head, the
 /// limbs' girths, and the joints as the skeleton's poses take them.
 struct Layout {
@@ -402,6 +490,39 @@ impl Kit<'_> {
     fn claws(&self, mesh: MeshBuilder) -> Part {
         part(mesh, "claws", MaterialKind::Bone, Rgb::hex(0x4a4132), false)
     }
+}
+
+/// A part, or none when its mesh is empty.
+fn some(parts: &mut Vec<Part>, mesh: MeshBuilder, make: impl FnOnce(MeshBuilder) -> Part) {
+    if !mesh.is_empty() {
+        parts.push(make(mesh));
+    }
+}
+
+/// A tube through `points`, smoothed, `radius` along it.
+fn limb_tube(points: &[V3], sides: usize, radius: impl Fn(f32) -> f32) -> MeshBuilder {
+    let path = CatmullRom::centripetal(points.to_vec()).sample_evenly(28);
+    tube(&path, sides, &SweepOptions::default(), radius)
+}
+
+/// A ball at `at`.
+fn ball(at: V3, r: f32, squash: V3) -> MeshBuilder {
+    let mut m = uv_sphere(r, 14, 10);
+    m.scale(squash).translate(at);
+    m
+}
+
+/// A flattened blot (or a wart) standing out of a surface at `at`, facing `normal`, `r` across.
+fn blot(at: V3, normal: V3, r: f32, height: f32) -> MeshBuilder {
+    let mut m = uv_sphere(1.0, 8, 6);
+    m.scale([r, height, r]).place(vec3::sub(at, vec3::scale(normal, 0.3 * height)), normal);
+    m
+}
+
+/// The troll's skin, one bone's worth: `mesh` shifted to be about `origin`.
+fn about(mut mesh: MeshBuilder, origin: V3) -> MeshBuilder {
+    mesh.translate(vec3::neg(origin));
+    mesh
 }
 
 fn build(state: &TrollState) -> Rig {
@@ -567,6 +688,17 @@ fn build(state: &TrollState) -> Rig {
         rig.add(NAMES[bone], parent_of(bone), Placement::translation(d.offset(bone)), parts);
     }
     rig
+}
+
+/// The point on a tube round the line through `line` at share `t`, `around` its section, and
+/// its outward direction.
+fn tube_surface(line: &[V3; 2], t: f32, around: f32, radius: f32) -> (V3, V3) {
+    let axis = vec3::normalize_or(vec3::sub(line[1], line[0]), vec3::neg(vec3::Y));
+    let u = vec3::normalize_or(vec3::cross(axis, vec3::X), vec3::Z);
+    let v = vec3::cross(axis, u);
+    let n = vec3::add(vec3::scale(u, around.cos()), vec3::scale(v, around.sin()));
+    let centre = vec3::lerp(line[0], line[1], t);
+    (n, vec3::add(centre, vec3::scale(n, radius)))
 }
 
 // ── Head ──
@@ -793,6 +925,11 @@ fn head(l: &Layout, state: &TrollState, kit: &Kit, rng: &mut Mulberry32, meshes:
         jaw_parts.push(part(to_jaw(tusks), "tusks", MaterialKind::Bone, Rgb::hex(0xe0d6ae), false));
     }
     meshes[index::JAW] = jaw_parts;
+}
+
+/// The distance along `loft` at height `y` (its line is vertical).
+fn cran_y(loft: &Loft, y: f32) -> f32 {
+    (y - loft.samples[0][1]).clamp(0.0, loft.length)
 }
 
 // ── Hands and feet ──

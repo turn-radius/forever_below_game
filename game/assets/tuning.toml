@@ -91,8 +91,6 @@ giant_centipede = 1.0
 bat = 1.0
 # Giant bats, as a multiple.
 giant_bat = 1.0
-# Minotaurs, as a multiple.
-minotaur = 1.0
 
 [combat]
 # How far your blows reach, as a multiple of the weapon's own reach.

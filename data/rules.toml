@@ -291,14 +291,3 @@ hit_points = 22
 hit_dice = { count = 4, sides = 10, bonus = 0 }
 bite = { count = 1, sides = 6, bonus = 2 }
 venom = { count = 0, sides = 0, bonus = 0 }
-
-# Minotaur, SRD p. 333: Large, Armor Class 14 (natural armor), Hit Points 76 (9d10 + 27); Greataxe
-# +6 to hit, 17 (2d12 + 4) slashing (`fb_creatures::minotaur::GREATAXE`) and Gore +6 to hit, 13
-# (2d8 + 4) piercing, which is the bite row.
-[creatures."Minotaur"]
-armour_class = 14
-attack_bonus = 6
-hit_points = 76
-hit_dice = { count = 9, sides = 10, bonus = 27 }
-bite = { count = 2, sides = 8, bonus = 4 }
-venom = { count = 0, sides = 0, bonus = 0 }

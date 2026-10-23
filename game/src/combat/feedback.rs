@@ -169,7 +169,6 @@ pub fn knockback(creature: &Creature) -> f32 {
         Creature::Jackalope(j) => j.drawn_size(),
         Creature::Centipede(c) => c.drawn_size(),
         Creature::Bat(b) => b.drawn_size(),
-        Creature::Minotaur(m) => m.drawn_size(),
     };
     knockback_for(size)
 }
@@ -359,9 +358,9 @@ fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creat
 /// Lays each body down once the flash's hold is over ([`collapse_share`]): a rat rolls onto its
 /// back about its middle, a centipede curls up where it stood, a snake goes slack.
 #[allow(clippy::type_complexity)]
-pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent, Option<&crate::creatures::trolls::Troll>, Option<&crate::creatures::Denizen>, Option<&mut crate::creatures::Flight>)>) {
+pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent, Option<&crate::creatures::trolls::Troll>, Option<&mut crate::creatures::Flight>)>) {
     let hold = tuning.combat.flash_hold;
-    for (critter, mut corpse, mut transform, mut intent, troll, denizen, flight) in &mut bodies {
+    for (critter, mut corpse, mut transform, mut intent, troll, flight) in &mut bodies {
         corpse.since += time.delta_secs();
         if corpse.since <= hold {
             continue;
@@ -382,12 +381,6 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
                 let share = collapse_share(corpse.since, hold);
                 intent.fallen = share.max(1e-3);
                 *transform = laid_back(2.0 * troll.map_or(25.0, |t| t.height), &corpse.fell, share);
-            }
-            Creature::Minotaur(minotaur) => {
-                // Over backwards onto its back, as a troll falls.
-                let share = collapse_share(corpse.since, hold);
-                intent.fallen = share.max(1e-3);
-                *transform = laid_back(2.0 * denizen.map_or_else(|| minotaur.height(), |d| d.height), &corpse.fell, share);
             }
             Creature::Jackalope(jackalope) => *transform = tipped_over(jackalope, &corpse.fell, collapse_share(corpse.since, hold)),
             Creature::Spider(spider) => {

@@ -365,7 +365,7 @@ pub fn reach(critter: &Critter, player_radius: f32) -> f32 {
         // Its fangs, with the front legs raised over the delver.
         Creature::Spider(spider) => player_radius + 0.3 * spider.span * critter.size,
         // The floor it covers and the arms' reach past it.
-        Creature::Troll(_) | Creature::Minotaur(_) => player_radius + 1.1 * critter.radius,
+        Creature::Troll(_) => player_radius + 1.1 * critter.radius,
         // Its head lowered, the antlers a little past its nose.
         Creature::Jackalope(jackalope) => player_radius + 0.55 * jackalope.length * critter.size,
         // Its head leads the body from its middle: it bites when that reaches the delver.
@@ -388,7 +388,7 @@ pub fn body_radius(critter: &Critter) -> f32 {
         // Its body, not its legs, which fold round whatever it passes.
         Creature::Spider(spider) => 0.2 * spider.span * critter.size,
         // Its body, not its reach, and no wider than a doorway lets through.
-        Creature::Troll(_) | Creature::Minotaur(_) => (0.55 * critter.radius).min(TROLL_SQUEEZE),
+        Creature::Troll(_) => (0.55 * critter.radius).min(TROLL_SQUEEZE),
         // A third of its length from its middle, no wider than a snake's, so it passes a doorway.
         Creature::Centipede(centipede) => (0.35 * centipede.length * critter.size).min(SNAKE_SQUEEZE),
     }

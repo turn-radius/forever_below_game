@@ -2725,7 +2725,6 @@ version = "0.1.0"
 dependencies = [
  "armory",
  "fb_body",
- "fb_denizens",
  "fb_items",
  "procgen_rng",
  "serde",
