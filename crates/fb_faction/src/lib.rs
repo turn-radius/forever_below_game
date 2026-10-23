@@ -21,7 +21,7 @@ mod trade;
 pub use trade::{Master, Masters, Profession, Style, Tier, Trade, TradeRules, armour_style};
 
 use armory::families::shield::roll_field;
-use armory::heraldry::{Division, Field};
+use armory::heraldry::{Division, Field, Tincture};
 use fb_body::{Folk, Sex};
 use procgen_grammar::faction_named;
 use procgen_rng::Mulberry32;
@@ -123,6 +123,118 @@ pub enum ArmourLean {
     Mail,
     Scale,
     Plate,
+}
+
+/// The cloth a faction's name puts its members in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Garment {
+    /// Every member wears a robe as the outermost layer ("the Sisters of Azul").
+    Robe,
+    /// Body armour, and a robe or surcoat over it ("the Redeemed").
+    RobeOverArmour,
+}
+
+/// The trim a faction's name puts on its cloth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Trim {
+    /// A hem and edges in gold.
+    GoldHem,
+}
+
+/// Which folk a faction's name says its members are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolkSaid {
+    /// Of every folk, evenly ("the Redeemed", "the Grey Company").
+    Mixed,
+    /// Of the faction's own folk alone ("the Dwarven Guild").
+    Own,
+}
+
+/// What a faction's name says about how its members look, none of it when the name says nothing
+/// ([`Looks::is_plain`]), and then the faction is rolled as it always was.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Looks {
+    /// Its colours as the name gives them, the main colour first: one or two tinctures. They are
+    /// also the faction's [`field`](FactionSpec::field), and every piece of its cloth is dyed in
+    /// them.
+    #[serde(default)]
+    pub colours: Vec<Tincture>,
+    /// The armour lean the name says, which is also the faction's [`armour`](FactionSpec::armour).
+    #[serde(default)]
+    pub armour: Option<ArmourLean>,
+    #[serde(default)]
+    pub garment: Option<Garment>,
+    #[serde(default)]
+    pub trim: Option<Trim>,
+    #[serde(default)]
+    pub folk: Option<FolkSaid>,
+}
+
+impl Looks {
+    /// Whether the name says nothing about looks.
+    pub fn is_plain(&self) -> bool {
+        *self == Looks::default()
+    }
+
+    /// What the tags of a name (`colour`, `colour2`, `armour`, `garment`, `trim`, `folk_mix`) say.
+    /// A value this crate does not know says nothing.
+    fn of(name: &procgen_grammar::Expansion) -> Looks {
+        let tincture = |v: &str| match v {
+            "or" => Some(Tincture::Or),
+            "argent" => Some(Tincture::Argent),
+            "gules" => Some(Tincture::Gules),
+            "azure" => Some(Tincture::Azure),
+            "vert" => Some(Tincture::Vert),
+            "purpure" => Some(Tincture::Purpure),
+            "sable" => Some(Tincture::Sable),
+            _ => None,
+        };
+        let mut colours: Vec<Tincture> = ["colour", "colour2"].iter().filter_map(|k| name.tag(k).and_then(tincture)).collect();
+        colours.dedup();
+        Looks {
+            colours,
+            armour: match name.tag("armour") {
+                Some("plate") => Some(ArmourLean::Plate),
+                Some("light") => Some(ArmourLean::Leather),
+                _ => None,
+            },
+            garment: match name.tag("garment") {
+                Some("robe") => Some(Garment::Robe),
+                Some("robe_over_armour") => Some(Garment::RobeOverArmour),
+                _ => None,
+            },
+            trim: match name.tag("trim") {
+                Some("gold_hem") => Some(Trim::GoldHem),
+                _ => None,
+            },
+            folk: match name.tag("folk_mix") {
+                Some("mixed") => Some(FolkSaid::Mixed),
+                Some("own") => Some(FolkSaid::Own),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// The field of `rolled` with the colours a name gives: the first is the main tincture, the second
+/// the other one. Given one, the other is whichever rolled tincture is of the opposite kind, so a
+/// colour keeps a metal and a metal a colour. A charge that would vanish into the field changes
+/// to the next tincture neither of them is.
+fn coloured_field(mut field: Field, colours: &[Tincture]) -> Field {
+    let Some(&first) = colours.first() else { return field };
+    let second = colours.get(1).copied().unwrap_or(if field.tincture.is_metal() != first.is_metal() { field.tincture } else { field.tincture2 });
+    (field.tincture, field.tincture2) = (first, second);
+    if field.charge_tincture == first || field.charge_tincture == second {
+        let at = Tincture::ALL.iter().position(|t| *t == field.charge_tincture).unwrap_or(0);
+        field.charge_tincture = (1..=Tincture::ALL.len())
+            .map(|i| Tincture::ALL[(at + i) % Tincture::ALL.len()])
+            .find(|t| *t != first && *t != second && t.is_metal() != second.is_metal())
+            .unwrap_or(Tincture::Sable);
+    }
+    field
 }
 
 /// The nine alignments.
@@ -245,18 +357,29 @@ pub struct FactionSpec {
     pub likes: Vec<Preference>,
     /// One to three, none also in `likes`. An insular faction hates another folk.
     pub hates: Vec<Preference>,
-    /// Its colours (two tinctures of opposite kinds, in a divided field) and its crest.
+    /// Its colours (two tinctures of opposite kinds, in a divided field, unless the name gives
+    /// them) and its crest.
     pub field: Field,
     pub armour: ArmourLean,
+    /// What its name says of how members look: colours, garment, trim and folk.
+    #[serde(default)]
+    pub looks: Looks,
     /// Dislikes other folk, and is made wholly of its own.
     pub insular: bool,
 }
 
 impl FactionSpec {
     /// The folk of a member: always the faction's own if it is insular, otherwise its own with
-    /// chance [`FOLK_LEAN`] and any folk else, from the member's stream `rng`.
+    /// chance [`FOLK_LEAN`] and any folk else, from the member's stream `rng`. A faction whose
+    /// name says its members are of every folk draws each one evenly from all six.
     pub fn member_folk(&self, rng: &mut Mulberry32) -> Folk {
-        if self.insular || rng.chance(FOLK_LEAN) { self.folk } else { *rng.pick(&Folk::ALL) }
+        if self.looks.folk == Some(FolkSaid::Mixed) {
+            *rng.pick(&Folk::ALL)
+        } else if self.insular || rng.chance(FOLK_LEAN) {
+            self.folk
+        } else {
+            *rng.pick(&Folk::ALL)
+        }
     }
 
     /// The sex of a member whose seed is `seed`: the one its name says, otherwise a woman or a
@@ -367,7 +490,7 @@ const DIVISIONS: [(Division, u32); 11] = [
 /// whose name says no class is rolled exactly as before.
 fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>) -> FactionSpec {
     let first = roll_with(world, index, count, taken, None);
-    if first.classes.is_empty() { first } else { roll_with(world, index, count, taken, Some(&first)) }
+    if first.classes.is_empty() && first.looks.is_plain() { first } else { roll_with(world, index, count, taken, Some(&first)) }
 }
 
 /// One roll of a faction. With `named` (the first roll, whose name said a class) the members
@@ -379,7 +502,14 @@ fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, na
     let folk = *rng.pick(&Folk::ALL);
     let intention = *rng.pick(&Intention::ALL);
     let alignment = *rng.pick(&Alignment::ALL);
-    let insular = rng.chance(INSULAR_ODDS);
+    let mut insular = rng.chance(INSULAR_ODDS);
+    let said = named.map(|n| n.looks.clone()).unwrap_or_default();
+    // A name that says its members are of one folk, or of every folk, settles it.
+    match said.folk {
+        Some(FolkSaid::Own) => insular = true,
+        Some(FolkSaid::Mixed) => insular = false,
+        None => {}
+    }
     let dressed_as: &[ClassKind] = named.map_or(&[], |n| &n.classes);
 
     // Dress: one outfit from what its purpose wears, one from what its folk wear.
@@ -415,9 +545,10 @@ fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, na
         Intention::Worship => &[(ArmourLean::Padded, 2), (ArmourLean::Mail, 2), (ArmourLean::Plate, 2), (ArmourLean::Scale, 1)],
         Intention::Plunder => &[(ArmourLean::Leather, 3), (ArmourLean::Scale, 3), (ArmourLean::Mail, 1), (ArmourLean::Plate, 1)],
     });
+    let armour = said.armour.unwrap_or(armour);
 
     // The armory's field roll keeps the rule of tincture; the crest is always there.
-    let field = roll_field(&mut rng, true, &DIVISIONS, 1.0);
+    let field = coloured_field(roll_field(&mut rng, true, &DIVISIONS, 1.0), &said.colours);
 
     // Likes and hates come off two shuffled lists with nothing in both. An insular faction's
     // first hate is another folk (and that folk is not one it likes); no other faction hates
@@ -441,8 +572,8 @@ fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, na
     let more = hate_count.saturating_sub(hates.len());
     hates.extend(hate_pool.into_iter().filter(|p| !likes.contains(p)).take(more));
 
-    let (name, sex, classes) = match named {
-        Some(n) => (n.name.clone(), n.sex, n.classes.clone()),
+    let (name, sex, classes, looks) = match named {
+        Some(n) => (n.name.clone(), n.sex, n.classes.clone(), n.looks.clone()),
         None => {
         // The name comes first, because its words say who the members are: the `class` it sets
         // narrows the classes they dress as. A name with two class words ("the Reavers of the
@@ -457,6 +588,7 @@ fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, na
             named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));
         }
         let classes = named_classes(named.tag("class"));
+        let looks = Looks::of(&named);
         let sex = match named.tag("sex") {
             Some("female") => Some(Sex::Female),
             Some("male") => Some(Sex::Male),
@@ -466,18 +598,19 @@ fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, na
         if taken.contains(&name) {
             name = format!("{name} of the {}th Hall", index + 1);
         }
-            (name, sex, classes)
+            (name, sex, classes, looks)
         }
     };
 
-    FactionSpec { id, name, folk, sex, classes, outfits, alignment, intention, likes, hates, field, armour, insular }
+    FactionSpec { id, name, folk, sex, classes, outfits, alignment, intention, likes, hates, field, armour, looks, insular }
 }
 
-/// The classes a name's `class` tag says its members are: `cleric`, or `fighter_or_ranger`. Empty
+/// The classes a name's `class` tag says its members are: `cleric`, `fighter`, or `fighter_or_ranger`. Empty
 /// for no tag, or one this crate does not know.
 fn named_classes(tag: Option<&str>) -> Vec<ClassKind> {
     match tag {
         Some("cleric") => vec![ClassKind::Cleric],
+        Some("fighter") => vec![ClassKind::Fighter],
         Some("fighter_or_ranger") => vec![ClassKind::Fighter, ClassKind::Ranger],
         _ => Vec::new(),
     }

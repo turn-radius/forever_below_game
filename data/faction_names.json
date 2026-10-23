@@ -1,6 +1,10 @@
 {
  "shared": {
-  "sanctum": ["[class:cleric]Chapel", "[class:cleric]Chapel", "[class:cleric]Sanctum", "[class:cleric]Cloister", "[class:cleric]Abbey", "[class:cleric]Shrine"]
+  "sanctum": ["[class:cleric]Chapel", "[class:cleric]Chapel", "[class:cleric]Sanctum", "[class:cleric]Cloister", "[class:cleric]Abbey", "[class:cleric]Shrine"],
+  "tincture": ["[colour:azure]Azul", "[colour:azure]Azul", "[colour:gules]Rojo", "[colour:vert]Verde", "[colour:or]Oro", "[colour:argent]Plata", "[colour:sable]Negro", "[colour:purpure]Violeta"],
+  "hue": ["[colour:gules]Crimson", "[colour:gules]Scarlet", "[colour:or]Gilded", "[colour:or]Gold", "[colour:gules]Red", "[colour:sable]Black", "[colour:argent]White", "[colour:argent]Silver", "[colour:vert]Green", "[colour:purpure]Purple", "[colour:azure]Azure"],
+  "redeemed": ["[class:fighter][colour:argent][colour2:or][garment:robe_over_armour][armour:plate][trim:gold_hem][folk_mix:mixed]Redeemed"],
+  "knights": ["[class:fighter][garment:robe_over_armour][armour:plate][trim:gold_hem]Knights"]
  },
  "intention": {
   "way_out": {
@@ -12,7 +16,11 @@
     "the #adj# #place# #group#",
     "the #name# #watchers#",
     "the #thing# #court#",
-    "the #adj# #court#"
+    "the #adj# #court#",
+    "the #redeemed#",
+    "the #brothers# of #tincture#",
+    "the #hue# #brothers#",
+    "the #knights# of the #adj# #place#"
    ]
   },
   "trade": {
@@ -24,7 +32,8 @@
     "the #adj# #company# of #goods#",
     "the #name# #company#",
     "the #adj# #thing# #traders#",
-    "the #guild# of the #adj# #place#"
+    "the #guild# of the #adj# #place#",
+    "the #hue# #company#"
    ]
   },
   "worship": {
@@ -40,7 +49,13 @@
     "the #brothers# of the #adj# #sanctum#",
     "the #brothers# of the #adj# #sanctum#",
     "the #brothers# of the #sanctum#",
-    "the #thing# #sanctum#"
+    "the #thing# #sanctum#",
+    "the #redeemed#",
+    "the #brothers# of #tincture#",
+    "the #brothers# of #tincture#",
+    "the #hue# #brothers#",
+    "the #hue# #brothers#",
+    "the #knights# of the #adj# #place#"
    ]
   },
   "plunder": {
@@ -52,7 +67,8 @@
     "the #adj# #raiders.capitalize#",
     "the #adj# #group.capitalize#",
     "the #raiders.capitalize# of the #adj# #place#",
-    "the #thing# #raiders#"
+    "the #thing# #raiders#",
+    "the #hue# #raiders.capitalize#"
    ]
   }
  },
@@ -61,39 +77,39 @@
    "name": ["#pre##post#"],
    "pre": ["Ash", "Dun", "Black", "Wolf", "Stone", "Raven", "Thorn", "Gal", "Mor", "Fen", "Hollow", "Rook", "Elm", "Gray"],
    "post": ["mere", "ford", "holt", "wick", "vale", "ridge", "gate", "moor", "wood", "haven"],
-   "adj": ["Last", "Ashen", "Grey", "Hollow", "Pale", "Black", "Sunken", "Weeping", "Lost", "Silent", "Drowned", "Wandering", "Faithful", "Unsleeping", "Broken", "Burning"],
+   "adj": ["Last", "Ashen", "[colour:argent]Grey", "Hollow", "Pale", "[colour:sable]Black", "Sunken", "Weeping", "Lost", "Silent", "Drowned", "Wandering", "Faithful", "Unsleeping", "Broken", "Burning"],
    "thing": ["Lantern", "Ash", "Bell", "Candle", "Chain", "Lamp", "Ember", "Key", "Veil", "Thorn", "Oath", "Crown", "Rope", "Wick"],
    "place": ["Door", "Stair", "Well", "Gate", "Light", "Threshold", "Bridge", "Hall", "Road", "Shore", "[class:cleric]Chapel"],
-   "brothers": ["[sex:male]Brothers", "[sex:female]Sisters", "[sex:male]Sons", "[sex:female]Daughters", "Children", "Wardens", "Pilgrims", "Penitents"],
+   "brothers": ["[sex:male][garment:robe]Brothers", "[sex:female][garment:robe]Sisters", "[sex:male]Sons", "[sex:female]Daughters", "Children", "Wardens", "[garment:robe]Pilgrims", "[garment:robe]Penitents"],
    "watchers": ["keepers", "wardens", "watchers", "bearers", "seekers", "guardians"],
-   "court": ["Court", "[class:cleric]Synod", "Conclave", "Fellowship", "Assembly"],
-   "choir": ["[class:cleric]Choir", "Chorus", "[class:cleric]Vigil", "Covenant", "[class:cleric]Congregation", "[class:cleric]Rite", "[class:cleric]Litany"],
-   "group": ["company", "band", "brotherhood", "order", "league", "watch"],
-   "raiders": ["[class:fighter_or_ranger]reavers", "[class:fighter_or_ranger]raiders", "cutpurses", "[class:fighter_or_ranger]highwaymen", "rovers", "thieves"],
+   "court": ["Court", "[class:cleric][garment:robe]Synod", "Conclave", "Fellowship", "Assembly"],
+   "choir": ["[class:cleric][garment:robe]Choir", "Chorus", "[class:cleric][garment:robe]Vigil", "Covenant", "[class:cleric][garment:robe]Congregation", "[class:cleric][garment:robe]Rite", "[class:cleric][garment:robe]Litany"],
+   "group": ["[folk_mix:mixed]company", "band", "brotherhood", "order", "league", "watch"],
+   "raiders": ["[class:fighter_or_ranger][armour:light]reavers", "[class:fighter_or_ranger]raiders", "cutpurses", "[class:fighter_or_ranger]highwaymen", "rovers", "thieves"],
    "traders": ["traders", "merchants", "peddlers", "chandlers", "carriers", "factors"],
-   "guild": ["Guild", "Company", "League", "Brotherhood"],
-   "company": ["Company", "House", "Exchange", "Concern", "League"],
+   "guild": ["Guild", "[folk_mix:mixed]Company", "League", "Brotherhood"],
+   "company": ["[folk_mix:mixed]Company", "House", "Exchange", "Concern", "League"],
    "goods": ["Salt", "Lamps", "Candles", "Ale", "Wool", "Spices", "Coin", "Oil", "Rope"],
-   "folkname": ["Human", "Common", "Free", "Lowland", "Wayfarers'"]
+   "folkname": ["[folk_mix:own]Human", "Common", "Free", "[folk_mix:own]Lowland", "Wayfarers'"]
   },
   "dwarf": {
    "name": ["#pre##post#"],
    "pre": ["Iron", "Deep", "Stone", "Grim", "Anvil", "Rune", "Black", "Gold", "Hammer", "Flint", "Coal", "Granite"],
    "post": ["beard", "hold", "forge", "hammer", "helm", "hall", "fist", "delve", "axe", "brow"],
-   "adj": ["Last", "Deep", "Iron", "Hollow", "Grim", "Black", "Sworn", "Silent", "Forsaken", "Unbroken", "Cold", "Old", "Burning"],
+   "adj": ["Last", "Deep", "Iron", "Hollow", "Grim", "[colour:sable]Black", "Sworn", "Silent", "Forsaken", "Unbroken", "Cold", "Old", "Burning"],
    "thing": ["Anvil", "Rune", "Hammer", "Ember", "Stone", "Forge", "Chain", "Oath", "Gem", "Bellows", "Lantern", "Cinder"],
-   "place": ["Hall", "Gate", "Forge", "Vault", "Stair", "Door", "Halls", "[class:cleric]Chapel"],
-   "brothers": ["[sex:male]Sons", "[sex:female]Daughters", "Thanes", "[sex:male]Brothers", "Elders", "Clansmen", "Stonekin"],
+   "place": ["Hall", "Gate", "Forge", "[folk_mix:own]Vault", "Stair", "Door", "[folk_mix:own]Halls", "[class:cleric]Chapel"],
+   "brothers": ["[sex:male]Sons", "[sex:female]Daughters", "Thanes", "[sex:male][garment:robe]Brothers", "Elders", "Clansmen", "Stonekin"],
    "watchers": ["wardens", "keepers", "guardians", "watchers", "holders", "oathkeepers"],
    "court": ["Moot", "Court", "Conclave", "Assembly", "Council"],
-   "choir": ["[class:cleric]Choir", "Chant", "[class:cleric]Vigil", "Covenant", "[class:cleric]Rite", "Hearth"],
+   "choir": ["[class:cleric][garment:robe]Choir", "Chant", "[class:cleric][garment:robe]Vigil", "Covenant", "[class:cleric][garment:robe]Rite", "Hearth"],
    "group": ["clan", "kin", "hold", "line", "house", "brotherhood"],
-   "raiders": ["[class:fighter_or_ranger]reavers", "[class:fighter_or_ranger]raiders", "delvers", "grudge-bearers", "axemen", "vandals"],
+   "raiders": ["[class:fighter_or_ranger][armour:light]reavers", "[class:fighter_or_ranger]raiders", "delvers", "grudge-bearers", "axemen", "vandals"],
    "traders": ["traders", "smiths", "merchants", "ingot-sellers", "brewers", "factors"],
-   "guild": ["Guild", "League", "Brotherhood", "Company"],
-   "company": ["Company", "House", "Exchange", "League", "Concern"],
+   "guild": ["Guild", "League", "Brotherhood", "[folk_mix:mixed]Company"],
+   "company": ["[folk_mix:mixed]Company", "House", "Exchange", "League", "Concern"],
    "goods": ["Anvils", "Ale", "Ingots", "Gems", "Chains", "Hammers", "Coal", "Rivets"],
-   "folkname": ["Dwarven", "Deep Dwarf", "Stonebeard", "Ironbeard", "Dwarf"]
+   "folkname": ["[folk_mix:own]Dwarven", "Deep Dwarf", "Stonebeard", "Ironbeard", "Dwarf"]
   },
   "gnome": {
    "name": ["#pre##post#"],
@@ -102,74 +118,74 @@
    "adj": ["Last", "Clever", "Whirring", "Brass", "Tinkling", "Curious", "Little", "Buried", "Bright", "Humming", "Crooked", "Ticking", "Burning"],
    "thing": ["Gear", "Spring", "Lens", "Cog", "Clock", "Whistle", "Lamp", "Spindle", "Crank", "Bellows", "Ratchet", "Wire"],
    "place": ["Workshop", "Burrow", "Door", "Stair", "Foundry", "Pipe", "Attic", "Hatch", "[class:cleric]Chapel"],
-   "brothers": ["Tinkers", "[sex:male]Brothers", "[sex:female]Sisters", "Artificers", "Apprentices", "Fellows"],
+   "brothers": ["Tinkers", "[sex:male][garment:robe]Brothers", "[sex:female][garment:robe]Sisters", "Artificers", "Apprentices", "Fellows"],
    "watchers": ["keepers", "winders", "tenders", "wardens", "oilers", "watchers"],
    "court": ["Assembly", "Court", "Moot", "Workshop", "Parliament"],
-   "choir": ["Chorus", "[class:cleric]Choir", "Chime", "Carillon", "[class:cleric]Vigil", "[class:cleric]Rite"],
+   "choir": ["Chorus", "[class:cleric][garment:robe]Choir", "Chime", "Carillon", "[class:cleric][garment:robe]Vigil", "[class:cleric][garment:robe]Rite"],
    "group": ["circle", "club", "troupe", "league", "cabal"],
    "raiders": ["scrappers", "tinkers", "pilferers", "magpies", "scavengers", "snatchers"],
    "traders": ["traders", "tinkers", "peddlers", "clockmakers", "brokers", "hawkers"],
    "guild": ["Guild", "Society", "Brotherhood", "Syndicate"],
-   "company": ["Company", "Exchange", "Consortium", "House", "Concern"],
+   "company": ["[folk_mix:mixed]Company", "Exchange", "Consortium", "House", "Concern"],
    "goods": ["Gears", "Springs", "Clocks", "Lenses", "Whistles", "Lamps", "Cogs", "Bellows"],
-   "folkname": ["Gnome", "Gnomish", "Burrow", "Tinker"]
+   "folkname": ["Gnome", "[folk_mix:own]Gnomish", "Burrow", "Tinker"]
   },
   "goblin": {
    "name": ["#pre##post#"],
    "pre": ["Mud", "Rat", "Bone", "Rot", "Grub", "Slime", "Gut", "Skull", "Tick", "Mold", "Gore", "Snot", "Filth", "Scab"],
    "post": ["foot", "bone", "tooth", "fang", "claw", "gut", "snout", "hide", "skin", "eye", "knuckle"],
-   "adj": ["Last", "Rotten", "Bloody", "Black", "Stinking", "Sneaking", "Cackling", "Hungry", "Gnawing", "Foul", "Red", "Filthy", "Crooked", "Burning"],
+   "adj": ["Last", "Rotten", "Bloody", "[colour:sable]Black", "Stinking", "Sneaking", "Cackling", "Hungry", "Gnawing", "Foul", "[colour:gules]Red", "Filthy", "Crooked", "Burning"],
    "thing": ["Rat", "Bone", "Knife", "Skull", "Fang", "Torch", "Grub", "Spit", "Rust", "Tooth", "Bile", "Pit"],
    "place": ["Pit", "Midden", "Warren", "Hole", "Gutter", "Door", "Tunnel", "Cesspit"],
-   "brothers": ["[sex:male]Brothers", "Spawn", "Whelps"],
+   "brothers": ["[sex:male][garment:robe]Brothers", "Spawn", "Whelps"],
    "watchers": ["guards", "watchers", "keepers", "sneaks", "lookouts", "wardens"],
    "court": ["Court", "Moot", "Council"],
-   "choir": ["[class:cleric]Choir", "Howl", "Screech", "Chorus", "Cackle", "[class:cleric]Rite"],
+   "choir": ["[class:cleric][garment:robe]Choir", "Howl", "Screech", "Chorus", "Cackle", "[class:cleric][garment:robe]Rite"],
    "group": ["clan", "kin", "horde", "pack", "band", "warband", "tribe", "mob", "gang"],
    "raiders": ["[class:fighter_or_ranger]raiders", "cutthroats", "stabbers", "snatchers", "pillagers", "gougers"],
    "traders": ["traders", "fences", "swappers", "hagglers", "peddlers", "scrap-dealers"],
    "guild": ["Guild", "Swap", "Heap", "Syndicate"],
-   "company": ["Company", "Heap", "Gang", "Outfit", "Concern"],
+   "company": ["[folk_mix:mixed]Company", "Heap", "Gang", "Outfit", "Concern"],
    "goods": ["Scraps", "Bones", "Hides", "Teeth", "Trinkets", "Rags", "Candle-ends", "Slops"],
-   "folkname": ["Goblin", "Grub"]
+   "folkname": ["[folk_mix:own]Goblin", "Grub"]
   },
   "lizardfolk": {
    "name": ["#pre##post#"],
    "pre": ["Sun", "Slit", "Marsh", "Bask", "Reed", "Cold", "Fang", "Mire", "Sand", "Fen", "Stone"],
    "post": ["scale", "tail", "eye", "crest", "claw", "hiss", "tongue", "back", "spine", "coil"],
-   "adj": ["Last", "Cold", "Basking", "Slow", "Patient", "Emerald", "Coiled", "Ancient", "Sunless", "Drowned", "Venomous", "Still", "Hidden", "Burning"],
+   "adj": ["Last", "Cold", "Basking", "Slow", "Patient", "[colour:vert]Emerald", "Coiled", "Ancient", "Sunless", "Drowned", "Venomous", "Still", "Hidden", "Burning"],
    "thing": ["Scale", "Sun", "Egg", "Fang", "Tongue", "Venom", "Reed", "Mist", "Crest", "Tail", "Eye", "Basilisk"],
    "place": ["Fen", "Nest", "Pool", "Basin", "Mire", "Hollow", "Door", "Spine", "Shore", "[class:cleric]Chapel"],
-   "brothers": ["Hatchlings", "Brood", "[sex:male]Brothers", "Clutch", "Elders", "Kin"],
+   "brothers": ["Hatchlings", "Brood", "[sex:male][garment:robe]Brothers", "Clutch", "Elders", "Kin"],
    "watchers": ["wardens", "keepers", "watchers", "sentinels", "guardians", "brooders"],
-   "court": ["Court", "Conclave", "Brood", "[class:cleric]Synod", "Throne"],
-   "choir": ["[class:cleric]Choir", "Hiss", "Chant", "[class:cleric]Vigil", "[class:cleric]Rite", "Covenant"],
+   "court": ["Court", "Conclave", "Brood", "[class:cleric][garment:robe]Synod", "Throne"],
+   "choir": ["[class:cleric][garment:robe]Choir", "Hiss", "Chant", "[class:cleric][garment:robe]Vigil", "[class:cleric][garment:robe]Rite", "Covenant"],
    "group": ["clan", "brood", "clutch", "kin", "tribe"],
-   "raiders": ["[class:fighter_or_ranger]reavers", "[class:fighter_or_ranger]raiders", "stalkers", "ambushers", "lurkers", "snappers"],
-   "traders": ["traders", "egg-sellers", "venom-brokers", "herbalists", "salters", "merchants"],
+   "raiders": ["[class:fighter_or_ranger][armour:light]reavers", "[class:fighter_or_ranger]raiders", "stalkers", "ambushers", "lurkers", "snappers"],
+   "traders": ["traders", "egg-sellers", "toxin-brokers", "herbalists", "salters", "merchants"],
    "guild": ["Guild", "Brood", "League", "Concern"],
-   "company": ["Company", "Exchange", "House", "Concern", "Brood"],
+   "company": ["[folk_mix:mixed]Company", "Exchange", "House", "Concern", "Brood"],
    "goods": ["Eggs", "Venom", "Hides", "Salt", "Herbs", "Scales", "Reeds", "Amber"],
-   "folkname": ["Lizard", "Marsh", "Fen", "Sunscale"]
+   "folkname": ["Lizard", "Marsh", "Fen", "[folk_mix:own]Sunscale"]
   },
   "pigfolk": {
    "name": ["#pre##post#"],
    "pre": ["Hogs", "Tusk", "Bristle", "Swill", "Trough", "Boar", "Sows", "Mud", "Truffle", "Wallow"],
    "post": ["meet", "moot", "wallow", "pen", "trot", "snout", "ford", "stye", "market", "gate"],
-   "adj": ["Last", "Muddy", "Bristled", "Honest", "Golden", "Hungry", "Weary", "Burning"],
+   "adj": ["Last", "Muddy", "Bristled", "Honest", "[colour:or]Golden", "Hungry", "Weary", "Burning"],
    "thing": ["Trough", "Tusk", "Truffle", "Snout", "Mud", "Swill", "Trotter", "Bristle", "Acorn", "Bell"],
    "place": ["Wallow", "Pen", "Stye", "Door", "Trough", "Midden", "Market", "Barn", "[class:cleric]Chapel"],
-   "brothers": ["[sex:male]Brothers", "[sex:female]Sisters", "Elders", "Drovers"],
+   "brothers": ["[sex:male][garment:robe]Brothers", "[sex:female][garment:robe]Sisters", "Elders", "Drovers"],
    "watchers": ["keepers", "herders", "wardens", "drovers", "watchers", "tenders"],
    "court": ["Court", "Moot", "Sounder", "Assembly"],
-   "choir": ["[class:cleric]Choir", "Chorus", "[class:cleric]Vigil"],
+   "choir": ["[class:cleric][garment:robe]Choir", "Chorus", "[class:cleric][garment:robe]Vigil"],
    "group": ["sounder", "herd", "clan", "drove", "band"],
    "raiders": ["[class:fighter_or_ranger]raiders", "rooters", "tuskers", "foragers", "poachers", "pillagers"],
    "traders": ["traders", "drovers", "hawkers", "merchants", "butchers", "peddlers"],
    "guild": ["Guild", "League", "Brotherhood"],
-   "company": ["Company", "House", "Market", "Concern", "Exchange"],
+   "company": ["[folk_mix:mixed]Company", "House", "Market", "Concern", "Exchange"],
    "goods": ["Truffles", "Swill", "Grain", "Tallow", "Ale", "Cheese", "Hides", "Acorns"],
-   "folkname": ["Hog", "Pigfolk", "Boar", "Sow"]
+   "folkname": ["Hog", "[folk_mix:own]Pigfolk", "Boar", "Sow"]
   }
  }
 }

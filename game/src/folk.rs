@@ -105,7 +105,15 @@ fn livery(faction: &FactionSpec) -> fb_items::outfit::Livery {
         Faction::Scale => Lean::Scale,
         Faction::Plate => Lean::Plate,
     };
-    fb_items::outfit::Livery::from_field(faction.field, lean)
+    let livery = fb_items::outfit::Livery::from_field(faction.field, lean).with_garment(faction.looks.garment.map(|g| match g {
+        fb_faction::Garment::Robe => fb_items::outfit::Garment::Robe,
+        fb_faction::Garment::RobeOverArmour => fb_items::outfit::Garment::RobeOverArmour,
+    }));
+    let livery = livery.with_trim(faction.looks.trim.map(|t| match t {
+        fb_faction::Trim::GoldHem => fb_items::outfit::Trim::GoldHem,
+    }));
+    // A name that gives the colours has every piece of cloth wear them.
+    if faction.looks.colours.is_empty() { livery } else { livery.named() }
 }
 
 impl Person {
@@ -700,7 +708,7 @@ mod tests {
     #[test]
     fn women_of_a_named_faction_are_women_beardless_and_dressed_as_it_says() {
         let (mut women, mut men, mut clerics) = (0, 0, 0);
-        for world in 1..=40 {
+        for world in 1..=200 {
             let level = fb_level::generate(world, 1);
             for spot in &level.folk {
                 let faction = level.faction(spot.faction);
@@ -719,7 +727,7 @@ mod tests {
                 }
             }
         }
-        assert!(women > 0 && men > 0 && clerics > 0, "{women} women, {men} men, {clerics} clerics in 40 worlds");
+        assert!(women > 0 && men > 0 && clerics > 0, "{women} women, {men} men, {clerics} clerics in 200 worlds");
     }
 
     #[test]

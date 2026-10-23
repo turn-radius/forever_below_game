@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use armory::fabric::FabricPattern;
 use armory::heraldry::{Field, Tincture};
 use armory::sections::garment::GarmentStyle;
 use armory::sections::hood::HoodStyle;
@@ -55,6 +56,22 @@ impl ArmourLean {
     }
 }
 
+/// The cloth a faction's name puts its members in. Mirrors the faction crate's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Garment {
+    /// A robe as the outermost layer.
+    Robe,
+    /// The armour lean's body armour, with a robe over it.
+    RobeOverArmour,
+}
+
+/// The trim a faction's name puts on its cloth. Mirrors the faction crate's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trim {
+    /// Hem and edges in gold.
+    GoldHem,
+}
+
 /// A faction's colours as plain data: what its members' cloth, shields and armour show.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Livery {
@@ -63,52 +80,126 @@ pub struct Livery {
     /// Painted on every shield, exactly.
     pub field: Field,
     pub armour_lean: ArmourLean,
+    /// The faction's name gives its colours, so all of its cloth wears them (and plain, in the
+    /// main colour), not three pieces in four, and the main colour is the name's first.
+    pub named: bool,
+    /// The garment its name puts every member in, if it says one.
+    pub garment: Option<Garment>,
+    /// The trim its name puts on their cloth, if it says one.
+    pub trim: Option<Trim>,
 }
 
 impl Livery {
     /// The livery of a faction with `field` and `armour_lean`: the field's two tinctures.
     pub fn from_field(field: Field, armour_lean: ArmourLean) -> Livery {
-        Livery { tincture: field.tincture, tincture2: field.tincture2, field, armour_lean }
+        Livery { tincture: field.tincture, tincture2: field.tincture2, field, armour_lean, named: false, garment: None, trim: None }
+    }
+
+    /// This livery with the colours its faction's name gives: all cloth wears them.
+    pub fn named(self) -> Livery {
+        Livery { named: true, ..self }
+    }
+
+    /// This livery with the garment its faction's name puts members in.
+    pub fn with_garment(self, garment: Option<Garment>) -> Livery {
+        Livery { garment, ..self }
+    }
+
+    /// This livery with the trim its faction's name puts on cloth.
+    pub fn with_trim(self, trim: Option<Trim>) -> Livery {
+        Livery { trim, ..self }
     }
 
     /// The tinctures as (main, trim): cloth takes a colour for its body and a metal for its
     /// trim where the livery has one of each.
     fn cloth(&self) -> (Tincture, Tincture) {
-        if self.tincture.is_metal() && !self.tincture2.is_metal() { (self.tincture2, self.tincture) } else { (self.tincture, self.tincture2) }
+        if !self.named && self.tincture.is_metal() && !self.tincture2.is_metal() { (self.tincture2, self.tincture) } else { (self.tincture, self.tincture2) }
+    }
+
+    /// The colour of the trim: gold where the name says a gold hem, else the cloth's own.
+    fn edge(&self) -> Tincture {
+        if self.trim == Some(Trim::GoldHem) { Tincture::Or } else { self.cloth().1 }
     }
 
     /// Dresses `item`, if it is cloth that wears colours or a shield, from `rng`. Three
-    /// pieces of cloth in four wear the colours; a shield always carries the field.
-    fn dress(&self, item: &mut Item, rng: &mut Mulberry32) {
+    /// pieces of cloth in four wear the colours, or all of it where the name gives them (or
+    /// `forced`); a shield always carries the field.
+    fn dress(&self, item: &mut Item, rng: &mut Mulberry32, forced: bool) {
         let (main, trim) = self.cloth();
+        let all = self.named || forced;
+        let gold = self.trim == Some(Trim::GoldHem);
         match &mut item.shape {
             armory::Item::Shield(s) => s.field = self.field,
             armory::Item::Garment(s) if item.base != "Leather jerkin" && !s.cut.style.is_armour() => {
-                if !rng.chance(LIVERY_CLOTH) {
+                if !rng.chance(LIVERY_CLOTH) && !all {
                     return;
                 }
                 s.cut.cloth.color = main.dye();
                 s.cut.cloth.color2 = trim.dye();
-                if matches!(s.cut.style, GarmentStyle::Tunic | GarmentStyle::Cloak | GarmentStyle::Robe) && rng.chance(0.5) {
+                if self.named {
+                    // One colour, not a pattern of two.
+                    s.cut.cloth.pattern = FabricPattern::Plain;
+                }
+                if matches!(s.cut.style, GarmentStyle::Tunic | GarmentStyle::Cloak | GarmentStyle::Robe) && (rng.chance(0.5) || gold) {
                     s.hem.on = true;
                 }
-                s.hem.fabric.color = trim.dye();
-                s.hem.fabric.color2 = main.dye();
+                let edge = self.edge();
+                s.hem.fabric.color = edge.dye();
+                s.hem.fabric.color2 = if gold { edge.dye() } else { main.dye() };
+                if gold {
+                    // The Armory's own trim controls: a plain gold band at the hem, neck and cuffs.
+                    s.hem.fabric.pattern = FabricPattern::Plain;
+                    (s.hem.hemline, s.hem.neck, s.hem.cuffs) = (true, true, true);
+                    s.hem.width = s.hem.width.max(0.4);
+                }
             }
             armory::Item::Hood(s) if s.hood.style != HoodStyle::MailCoif => {
-                if !rng.chance(LIVERY_CLOTH) {
+                if !rng.chance(LIVERY_CLOTH) && !all {
                     return;
                 }
                 // The hood takes the trim colour unless that is a metal, then the main.
                 let (cloth, edge) = if trim.is_metal() { (main, trim) } else { (trim, main) };
+                let (cloth, edge) = if self.named { (main, self.edge()) } else { (cloth, edge) };
                 s.hood.cloth.color = cloth.dye();
                 s.hood.cloth.color2 = edge.dye();
-                s.hem.on = s.hem.on || rng.chance(0.5);
+                if self.named {
+                    s.hood.cloth.pattern = FabricPattern::Plain;
+                }
+                s.hem.on = s.hem.on || rng.chance(0.5) || gold;
                 s.hem.fabric.color = edge.dye();
-                s.hem.fabric.color2 = cloth.dye();
+                s.hem.fabric.color2 = if gold { edge.dye() } else { cloth.dye() };
+                if gold {
+                    s.hem.fabric.pattern = FabricPattern::Plain;
+                }
             }
             _ => {}
         }
+    }
+
+    /// Puts `garment` on a member's `worn` kit: a robe as the outermost layer, in the colours
+    /// and trim of the livery, and for [`Garment::RobeOverArmour`] the lean's body armour under
+    /// it. The robe goes over body armour, in the cloak's place, or in the shirt's place where
+    /// there is none. The kit's other gear stays.
+    fn robe(&self, garment: Garment, worn: &mut Vec<(Slot, Item)>, odds: Odds, lrng: &mut Mulberry32) {
+        let seed = |rng: &mut Mulberry32| (rng.next_f64() * 4_294_967_296.0) as u32;
+        if garment == Garment::RobeOverArmour {
+            let favoured = self.armour_lean.favours(Slot::Body);
+            let armoured = worn.iter().any(|(s, i)| *s == Slot::Body && favoured.contains(&i.base.as_str()));
+            if !armoured && !favoured.is_empty() {
+                worn.retain(|(s, _)| *s != Slot::Body);
+                let base = *lrng.pick(favoured);
+                if let Some(armour) = roll_item_with(base, seed(lrng), odds) {
+                    worn.push((Slot::Body, armour));
+                }
+            }
+        }
+        let Some(mut robe) = roll_item_with("Robe", seed(lrng), odds) else { return };
+        self.dress(&mut robe, lrng, true);
+        let over_armour = worn.iter().any(|(s, _)| *s == Slot::Body);
+        let slot = if over_armour { Slot::Cloak } else { Slot::Shirt };
+        // A cloak over a robe hides it, and a shirt under one is not seen.
+        worn.retain(|(s, _)| *s != slot && *s != Slot::Cloak);
+        worn.push((slot, robe));
     }
 }
 
@@ -249,10 +340,13 @@ impl Outfit {
             }
             if let Some(mut item) = draw(&mut rng, &base) {
                 if let Some(livery) = livery {
-                    livery.dress(&mut item, &mut lrng);
+                    livery.dress(&mut item, &mut lrng, false);
                 }
                 worn.push((*slot, item));
             }
+        }
+        if let Some((livery, garment)) = livery.and_then(|l| l.garment.map(|g| (l, g))) {
+            livery.robe(garment, &mut worn, odds, &mut lrng);
         }
         let free = |worn: &[(Slot, Item)], slot: Slot| worn.iter().all(|(s, _)| *s != slot);
         let extras = [(Slot::Head, "Pointed hat", GNOME_HAT, folk == "gnome"), (Slot::Ring1, "Ring", EXTRA_RING, true), (Slot::Neck, "Amulet", EXTRA_AMULET, true), (Slot::Charm, "Charm", EXTRA_CHARM, true)];
@@ -459,6 +553,120 @@ mod tests {
             let again = (outfit.roll_in(9, "dwarf", Odds::default(), Some(&livery)), outfit.roll_in(9, "dwarf", Odds::default(), Some(&livery)));
             assert_eq!(again.0, again.1, "{}", outfit.key);
             assert_eq!(outfit.roll_in(9, "dwarf", Odds::default(), None), outfit.roll(9, "dwarf"), "{}", outfit.key);
+        }
+    }
+
+    /// Azure and argent, named by the faction, in a robe.
+    fn sisters(lean: ArmourLean) -> Livery {
+        let field = Field { tincture: Tincture::Azure, tincture2: Tincture::Argent, charge: armory::sections::device::Device::Cross, charge_tincture: Tincture::Gules, ..Field::default() };
+        Livery::from_field(field, lean).named().with_garment(Some(Garment::Robe))
+    }
+
+    /// Argent and or, named, in plate with a robe over it and a gold hem.
+    fn redeemed() -> Livery {
+        let field = Field { tincture: Tincture::Argent, tincture2: Tincture::Or, charge: armory::sections::device::Device::Cross, charge_tincture: Tincture::Gules, ..Field::default() };
+        Livery::from_field(field, ArmourLean::Plate).named().with_garment(Some(Garment::RobeOverArmour)).with_trim(Some(Trim::GoldHem))
+    }
+
+    fn robe_of(set: &OutfitSet) -> (Slot, &Item) {
+        // The outermost robe: the cloak slot's, else the shirt's.
+        set.worn
+            .iter()
+            .filter(|(s, i)| matches!(s, Slot::Cloak | Slot::Shirt) && i.base == "Robe")
+            .max_by_key(|(s, _)| *s == Slot::Cloak)
+            .map(|(s, i)| (*s, i))
+            .expect("a robe")
+    }
+
+    #[test]
+    fn a_faction_that_names_its_colours_dresses_all_its_cloth_in_them() {
+        let livery = sisters(ArmourLean::Padded);
+        let blue = Tincture::Azure.dye();
+        let (mut worn, mut total) = (0, 0);
+        for seed in 0..40 {
+            for key in ["ranger", "mage", "cleric", "scavenger"] {
+                for colour in pieces_of_cloth(&outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&livery))) {
+                    total += 1;
+                    worn += usize::from(colour == blue);
+                }
+            }
+        }
+        assert_eq!(worn, total, "{worn} of {total} pieces of cloth are blue");
+    }
+
+    #[test]
+    fn a_robe_is_the_outer_layer_of_every_member() {
+        for key in ["fighter", "ranger", "mage", "cleric", "scavenger"] {
+            for seed in 0..25 {
+                let set = outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&sisters(ArmourLean::Mail)));
+                let (slot, robe) = robe_of(&set);
+                match &robe.shape {
+                    armory::Item::Garment(g) => {
+                        assert_eq!(g.cut.style, GarmentStyle::Robe);
+                        assert_eq!(g.cut.cloth.color, Tincture::Azure.dye(), "{key} {seed}");
+                    }
+                    other => panic!("{other:?}"),
+                }
+                // Over body armour where there is any; and nothing is worn over the robe.
+                assert_eq!(slot == Slot::Cloak, set.item(Slot::Body).is_some(), "{key} {seed}");
+                assert!(slot == Slot::Cloak || set.item(Slot::Cloak).is_none(), "{key} {seed}: a cloak over the robe");
+            }
+        }
+    }
+
+    #[test]
+    fn a_robe_over_armour_covers_the_leans_armour_in_gold_and_white() {
+        for key in ["fighter", "ranger", "mage", "cleric", "scavenger"] {
+            for seed in 0..25 {
+                let set = outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&redeemed()));
+                let body = set.item(Slot::Body).unwrap_or_else(|| panic!("{key} {seed} wears no armour"));
+                assert!(["Cuirass", "Brigandine"].contains(&body.base.as_str()), "{key} {seed}: {}", body.base);
+                let (slot, robe) = robe_of(&set);
+                assert_eq!(slot, Slot::Cloak, "{key} {seed}");
+                let armory::Item::Garment(g) = &robe.shape else { panic!() };
+                assert_eq!(g.cut.cloth.color, Tincture::Argent.dye());
+                assert!(g.hem.on && g.hem.hemline && g.hem.neck && g.hem.cuffs, "{key} {seed}: no hem");
+                assert_eq!(g.hem.fabric.color, Tincture::Or.dye());
+            }
+        }
+    }
+
+    #[test]
+    fn a_gold_hem_edges_a_tunic_and_a_hood_too() {
+        let set = outfit("ranger").unwrap().roll_in(3, "human", Odds::default(), Some(&redeemed()));
+        for (_, item) in &set.worn {
+            match &item.shape {
+                armory::Item::Garment(g) if matches!(g.cut.style, GarmentStyle::Tunic | GarmentStyle::Robe | GarmentStyle::Cloak) => {
+                    assert!(g.hem.on && g.hem.fabric.color == Tincture::Or.dye(), "{}", item.base);
+                }
+                armory::Item::Hood(h) if h.hood.style != HoodStyle::MailCoif => assert!(h.hem.on && h.hem.fabric.color == Tincture::Or.dye()),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn a_robe_keeps_the_class_kit() {
+        let livery = sisters(ArmourLean::Padded);
+        let mace = (0..30).filter(|&s| outfit("cleric").unwrap().roll_in(s, "human", Odds::default(), Some(&livery)).item(Slot::Mainhand).is_some_and(|i| i.base == "Mace")).count();
+        assert!(mace > 12, "{mace}");
+        let bows = (0..30).filter(|&s| outfit("ranger").unwrap().roll_in(s, "human", Odds::default(), Some(&livery)).item(Slot::Mainhand).is_some_and(|i| i.base == "Bow")).count();
+        assert!(bows > 8, "{bows}");
+        // A bow still comes with its quiver.
+        for seed in 0..30 {
+            let set = outfit("ranger").unwrap().roll_in(seed, "human", Odds::default(), Some(&livery));
+            if set.item(Slot::Mainhand).is_some_and(|i| i.base == "Bow") {
+                assert!(set.item(Slot::Quiver).is_some(), "{seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_dressed_member_is_deterministic_and_a_plain_livery_is_as_before() {
+        for livery in [sisters(ArmourLean::Scale), redeemed()] {
+            for outfit in outfits() {
+                assert_eq!(outfit.roll_in(9, "dwarf", Odds::default(), Some(&livery)), outfit.roll_in(9, "dwarf", Odds::default(), Some(&livery)), "{}", outfit.key);
+            }
         }
     }
 }

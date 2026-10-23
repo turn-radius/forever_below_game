@@ -142,7 +142,7 @@ fn shipped_names_resemble_the_hand_made_seven() {
     ];
     for (folk, intent, name) in want {
         let g = faction_names().grammar(folk, intent).unwrap();
-        let found = (0..20_000).any(|s| expand(&g, "#origin#", s).unwrap() == name);
+        let found = (0..300_000).any(|s| expand(&g, "#origin#", s).unwrap() == name);
         assert!(found, "{folk}/{intent} never yields {name}");
     }
 }
@@ -181,8 +181,8 @@ fn mix_separates_folk() {
 // Goldens: these move whenever data/faction_names.json or the RNG changes. Update them then.
 #[test]
 fn golden_names() {
-    assert_eq!(faction_name("goblin", "plunder", 3), "the Pillagers of the Red Pit");
-    assert_eq!(faction_name("human", "way_out", 3), "the Veil Assembly");
+    assert_eq!(faction_name("goblin", "plunder", 3), "the Rust pillagers");
+    assert_eq!(faction_name("human", "way_out", 3), "the Children of Violeta");
     assert_eq!(faction_name("pigfolk", "trade", 3), "the Hog League of Grain");
 }
 
@@ -206,10 +206,17 @@ fn tagged_words() -> Vec<(String, String, String)> {
     fn walk(v: &serde_json::Value, out: &mut Vec<(String, String, String)>) {
         match v {
             serde_json::Value::String(s) => {
-                if let Some((tag, word)) = s.strip_prefix('[').and_then(|rest| rest.split_once(']')) {
+                // A word may carry several tags: `[garment:robe][sex:female]Sisters`.
+                let mut rest = s.as_str();
+                let mut set = Vec::new();
+                while let Some((tag, after)) = rest.strip_prefix('[').and_then(|r| r.split_once(']')) {
                     if let Some((key, value)) = tag.split_once(':') {
-                        out.push((word.to_lowercase(), key.to_string(), value.to_string()));
+                        set.push((key.to_string(), value.to_string()));
                     }
+                    rest = after;
+                }
+                for (key, value) in set {
+                    out.push((rest.to_lowercase(), key, value));
                 }
             }
             serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
@@ -227,7 +234,7 @@ fn tagged_words() -> Vec<(String, String, String)> {
 fn names_say_what_their_members_are() {
     let names = all_names();
     let tagged = tagged_words();
-    for key in ["sex", "class"] {
+    for key in ["sex", "class", "colour", "colour2", "garment", "armour", "trim", "folk_mix"] {
         assert!(tagged.iter().any(|(_, k, _)| k == key), "the data tags no {key}");
     }
     for (_, e) in &names {
@@ -301,4 +308,49 @@ fn rules_without_actions_set_nothing() {
     for seed in 0..20 {
         assert!(expand_tagged(&g, "#origin#", seed).unwrap().tags.is_empty());
     }
+}
+
+/// The first name of `folk`/`intent` that satisfies `pick`, from the first 300,000 seeds.
+fn find_name(folk: &str, intent: &str, pick: impl Fn(&Expansion) -> bool) -> Option<Expansion> {
+    (0..300_000).map(|seed| faction_named(folk, intent, seed)).find(|e| e.conflicts.is_empty() && pick(e))
+}
+
+#[test]
+fn the_sisters_of_azul_are_women_in_blue_robes() {
+    let e = find_name("human", "worship", |e| e.text == "the Sisters of Azul").expect("the Sisters of Azul can be rolled");
+    assert_eq!((e.tag("colour"), e.tag("garment"), e.tag("sex")), (Some("azure"), Some("robe"), Some("female")));
+    assert_eq!(e.tag("armour"), None);
+}
+
+#[test]
+fn the_redeemed_are_knights_of_every_folk_in_white_and_gold() {
+    let e = find_name("human", "worship", |e| e.text == "the Redeemed").expect("the Redeemed can be rolled");
+    assert_eq!((e.tag("colour"), e.tag("colour2")), (Some("argent"), Some("or")));
+    assert_eq!((e.tag("garment"), e.tag("armour"), e.tag("trim"), e.tag("folk_mix")), (Some("robe_over_armour"), Some("plate"), Some("gold_hem"), Some("mixed")));
+}
+
+#[test]
+fn the_crimson_brothers_are_men_in_red() {
+    let e = find_name("human", "worship", |e| e.text == "the Crimson Brothers").expect("the Crimson Brothers can be rolled");
+    assert_eq!((e.tag("colour"), e.tag("sex"), e.tag("garment")), (Some("gules"), Some("male"), Some("robe")));
+}
+
+#[test]
+fn the_grey_company_is_pale_and_mixed() {
+    let e = find_name("human", "trade", |e| e.text.starts_with("the Grey Company")).expect("a Grey Company can be rolled");
+    assert_eq!((e.tag("colour"), e.tag("folk_mix")), (Some("argent"), Some("mixed")));
+}
+
+#[test]
+fn a_name_that_says_a_folk_and_a_mix_is_flagged() {
+    // "mixed" and "own" in one name conflict, and a caller does not keep a name that conflicts.
+    let clash = (0..300_000).map(|seed| faction_named("dwarf", "trade", seed)).any(|e| e.conflicts.iter().any(|k| k == "folk_mix"));
+    assert!(clash, "no dwarven company clashes with its folk");
+    assert!(find_name("dwarf", "trade", |e| e.tag("folk_mix") == Some("own")).is_some());
+}
+
+#[test]
+fn reavers_wear_light_armour() {
+    let e = find_name("human", "plunder", |e| e.text.to_lowercase().contains("reavers")).expect("reavers");
+    assert_eq!(e.tag("armour"), Some("light"));
 }

@@ -69,7 +69,9 @@ fn insular_factions_are_wholly_their_folk() {
             } else {
                 assert_eq!(spec.hated_folk().count(), 0, "{}", spec.name);
                 let own = members.iter().filter(|f| **f == spec.folk).count();
-                assert!((140..=200).contains(&own), "{}: {own} of 200 are its folk", spec.name);
+                // A name that says its members are of every folk leaves one in six their own.
+                let share = if spec.looks.folk == Some(FolkSaid::Mixed) { 10..=60 } else { 140..=200 };
+                assert!(share.contains(&own), "{}: {own} of 200 are its folk", spec.name);
                 assert!(members.iter().any(|f| *f != spec.folk), "{} is never mixed", spec.name);
             }
         }
@@ -83,7 +85,10 @@ fn every_field_keeps_the_rule_of_tincture() {
         for spec in World::new(seed).factions() {
             let f = spec.field;
             assert!(f.painted && f.division != Division::Plain, "{}", spec.name);
-            assert_ne!(f.tincture.is_metal(), f.tincture2.is_metal(), "{}: {:?} on {:?}", spec.name, f.tincture, f.tincture2);
+            // Unless its name gives both its colours ("the Redeemed" are argent and or).
+            if spec.looks.colours.len() < 2 {
+                assert_ne!(f.tincture.is_metal(), f.tincture2.is_metal(), "{}: {:?} on {:?}", spec.name, f.tincture, f.tincture2);
+            }
             assert_ne!(f.charge, armory::sections::device::Device::None, "{} has no crest", spec.name);
             assert_ne!(f.charge_tincture, f.tincture);
             assert_ne!(f.charge_tincture, f.tincture2);
@@ -138,10 +143,17 @@ fn tagged_words() -> Vec<(String, String, String)> {
     fn walk(v: &serde_json::Value, out: &mut Vec<(String, String, String)>) {
         match v {
             serde_json::Value::String(s) => {
-                if let Some((tag, word)) = s.strip_prefix('[').and_then(|rest| rest.split_once(']')) {
+                // A word may carry several tags.
+                let mut rest = s.as_str();
+                let mut set = Vec::new();
+                while let Some((tag, after)) = rest.strip_prefix('[').and_then(|r| r.split_once(']')) {
                     if let Some((key, value)) = tag.split_once(':') {
-                        out.push((word.to_lowercase(), key.to_string(), value.to_string()));
+                        set.push((key.to_string(), value.to_string()));
                     }
+                    rest = after;
+                }
+                for (key, value) in set {
+                    out.push((rest.to_lowercase(), key, value));
                 }
             }
             serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
@@ -166,7 +178,7 @@ fn said(name: &str, key: &str) -> Vec<String> {
 
 #[test]
 fn a_name_that_says_a_class_dresses_every_member_so() {
-    let (mut clerics, mut martial, mut unsaid) = (0, 0, 0);
+    let (mut clerics, mut martial, mut knights, mut unsaid) = (0, 0, 0, 0);
     for seed in 0..300 {
         for spec in World::new(seed).factions() {
             let classes = said(&spec.name, "class");
@@ -176,6 +188,12 @@ fn a_name_that_says_a_class_dresses_every_member_so() {
                     assert_eq!(classes, ["cleric"], "{}", spec.name);
                     assert_eq!(spec.outfits, [Outfit::Cleric; 2], "{}", spec.name);
                     assert!(!spec.hates.contains(&Preference::Class(ClassKind::Cleric)), "{} hates clerics", spec.name);
+                }
+                [ClassKind::Fighter] => {
+                    knights += 1;
+                    assert_eq!(classes, ["fighter"], "{}", spec.name);
+                    assert_eq!(spec.outfits, [Outfit::Fighter; 2], "{}", spec.name);
+                    assert!(!spec.hates.contains(&Preference::Class(ClassKind::Fighter)), "{} hates fighters", spec.name);
                 }
                 [a, b] => {
                     martial += 1;
@@ -192,7 +210,7 @@ fn a_name_that_says_a_class_dresses_every_member_so() {
             }
         }
     }
-    assert!(clerics > 20 && martial > 20 && unsaid > 500, "{clerics} cleric, {martial} martial, {unsaid} unsaid");
+    assert!(clerics > 20 && martial > 20 && knights > 3 && unsaid > 400, "{clerics} cleric, {martial} martial, {knights} knights, {unsaid} unsaid");
 }
 
 #[test]
@@ -306,4 +324,139 @@ fn trades_read_as_the_folk_card_writes_them() {
     assert_eq!(t(Profession::Alchemist, Tier::Master, None), "Master alchemist");
     assert_eq!(Trade::guard().label(), "Guard");
     assert!(Tier::Novice < Tier::Apprentice && Tier::Apprentice < Tier::Expert && Tier::Expert < Tier::Master);
+}
+
+fn tincture(name: &str) -> armory::heraldry::Tincture {
+    use armory::heraldry::Tincture::*;
+    match name {
+        "or" => Or,
+        "argent" => Argent,
+        "gules" => Gules,
+        "azure" => Azure,
+        "vert" => Vert,
+        "purpure" => Purpure,
+        "sable" => Sable,
+        other => panic!("{other}"),
+    }
+}
+
+#[test]
+fn a_name_that_says_a_colour_gives_the_field_that_colour() {
+    let (mut one, mut two) = (0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            let said_main = said(&spec.name, "colour");
+            let said_second = said(&spec.name, "colour2");
+            assert_eq!(spec.looks.colours.first().map(|t| *t), said_main.first().map(|v| tincture(v)), "{}", spec.name);
+            assert_eq!(spec.looks.colours.get(1).map(|t| *t), said_second.first().map(|v| tincture(v)), "{}", spec.name);
+            let Some(&main) = spec.looks.colours.first() else { continue };
+            assert_eq!(spec.field.tincture, main, "{}", spec.name);
+            if let Some(&second) = spec.looks.colours.get(1) {
+                two += 1;
+                assert_eq!(spec.field.tincture2, second, "{}", spec.name);
+            } else {
+                one += 1;
+                assert_ne!(spec.field.tincture2.is_metal(), main.is_metal(), "{}: the other colour is of the other kind", spec.name);
+            }
+            assert!(spec.field.charge_tincture != spec.field.tincture && spec.field.charge_tincture != spec.field.tincture2, "{}", spec.name);
+        }
+    }
+    assert!(one > 10 && two > 0, "{one} named one colour, {two} two");
+}
+
+#[test]
+fn the_sisters_of_azul_wear_blue_robes() {
+    let found = (0..4000).find_map(|seed| World::new(seed).factions().iter().find(|f| f.name == "the Sisters of Azul").cloned());
+    let spec = found.expect("a world has the Sisters of Azul");
+    assert_eq!(spec.field.tincture, armory::heraldry::Tincture::Azure);
+    assert_eq!((spec.looks.garment, spec.looks.trim, spec.sex), (Some(Garment::Robe), None, Some(Sex::Female)));
+}
+
+#[test]
+fn the_redeemed_are_knights_of_every_folk() {
+    let found = (0..4000).find_map(|seed| World::new(seed).factions().iter().find(|f| f.name == "the Redeemed").cloned());
+    let spec = found.expect("a world has the Redeemed");
+    use armory::heraldry::Tincture::*;
+    assert_eq!((spec.field.tincture, spec.field.tincture2), (Argent, Or));
+    assert_eq!((spec.armour, spec.looks.garment, spec.looks.trim), (ArmourLean::Plate, Some(Garment::RobeOverArmour), Some(Trim::GoldHem)));
+    assert_eq!((spec.classes.clone(), spec.outfits), (vec![ClassKind::Fighter], [Outfit::Fighter; 2]));
+    assert!(!spec.insular);
+    let mut rng = Mulberry32::new(9);
+    let mut counts = std::collections::HashMap::new();
+    for _ in 0..1200 {
+        *counts.entry(spec.member_folk(&mut rng)).or_insert(0) += 1;
+    }
+    assert_eq!(counts.len(), Folk::ALL.len());
+    assert!(counts.values().all(|n| (140..=260).contains(n)), "{counts:?}");
+}
+
+#[test]
+fn the_crimson_brothers_are_men_in_red() {
+    let found = (0..4000).find_map(|seed| World::new(seed).factions().iter().find(|f| f.name == "the Crimson Brothers").cloned());
+    let spec = found.expect("a world has the Crimson Brothers");
+    assert_eq!(spec.field.tincture, armory::heraldry::Tincture::Gules);
+    assert_eq!((spec.sex, spec.looks.garment), (Some(Sex::Male), Some(Garment::Robe)));
+}
+
+#[test]
+fn a_name_that_says_a_folk_keeps_it() {
+    let (mut own, mut mixed) = (0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            match said(&spec.name, "folk_mix").first().map(String::as_str) {
+                Some("own") => {
+                    own += 1;
+                    assert!(spec.insular && spec.looks.folk == Some(FolkSaid::Own), "{}", spec.name);
+                }
+                Some("mixed") => {
+                    mixed += 1;
+                    assert!(!spec.insular && spec.looks.folk == Some(FolkSaid::Mixed), "{}", spec.name);
+                }
+                _ => assert_eq!(spec.looks.folk, None, "{}", spec.name),
+            }
+        }
+    }
+    assert!(own > 3 && mixed > 3, "{own} own, {mixed} mixed");
+}
+
+#[test]
+fn a_name_that_says_nothing_of_looks_rolls_as_before() {
+    // Rolled with no name read at all, the faction is the same: the look tags change only the
+    // factions whose names say them.
+    let mut plain = 0;
+    for seed in 0..120 {
+        let world = World::new(seed);
+        let mut taken = HashSet::new();
+        for (i, spec) in world.factions().iter().enumerate() {
+            if spec.looks.is_plain() && spec.classes.is_empty() {
+                plain += 1;
+                assert_eq!(*spec, roll_with(seed, i, world.factions().len(), &taken, None), "{}", spec.name);
+            }
+            taken.insert(spec.name.clone());
+        }
+    }
+    assert!(plain > 800, "{plain}");
+}
+
+#[test]
+fn looks_are_the_same_every_run() {
+    for seed in 0..40 {
+        for (x, y) in World::new(seed).factions().iter().zip(World::new(seed).factions()) {
+            assert_eq!((&x.looks, x.field, x.armour, x.insular), (&y.looks, y.field, y.armour, y.insular));
+        }
+    }
+}
+
+#[test]
+fn reavers_dress_light() {
+    let mut found = 0;
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            if said(&spec.name, "armour").first().map(String::as_str) == Some("light") {
+                found += 1;
+                assert_eq!(spec.armour, ArmourLean::Leather, "{}", spec.name);
+            }
+        }
+    }
+    assert!(found > 3, "{found}");
 }
