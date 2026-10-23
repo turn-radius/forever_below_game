@@ -32,7 +32,7 @@ use bevy::{
     window::{CursorOptions, PrimaryWindow},
 };
 use fb_items::footprint::Footprint;
-use armory::families::{Generator, banner::{Banner, BannerMount, BannerState}};
+use armory::families::banner::BannerState;
 use fb_level::{BannerSite, BannerSpot, CELL, Level, Prop, PropSpot, chest_state};
 
 use crate::carry::{Aimed, appearance_of, item_points};
@@ -195,19 +195,15 @@ const BANNER_MIDDLE: f32 = 20.0;
 /// A lintel banner's lowest point: just over the top of the doorway.
 const LINTEL_FOOT: f32 = crate::level::geometry::DOOR_HEIGHT + 1.5;
 
-/// The banner `spot` hangs, and how high its rod hangs: a rod-hung one rolled from its seed (its
-/// end, hem and fringe, and its size: wide and long in a hall, short and wide over a door),
-/// painted with exactly its faction's field. The rod is set from the cloth, so the middle sits at
-/// [`BANNER_MIDDLE`] (or the foot just over the doorway for a lintel banner); under a low ceiling
-/// the cloth is shortened rather than hung higher.
+/// The banner `spot` hangs, and how high its rod hangs: its faction's own banner
+/// ([`fb_faction::FactionSpec::banner`]), the same shape wherever the faction hangs it, and short
+/// and wide over a door. The rod is set from the cloth, so the middle sits at [`BANNER_MIDDLE`]
+/// (or the foot just over the doorway for a lintel banner); under a low ceiling the cloth is
+/// shortened rather than hung higher.
 pub fn banner_hang(spot: &BannerSpot, level: &Level) -> (BannerState, f32) {
-    let rolled = Banner::roll(spot.seed);
+    let faction = level.faction(spot.faction);
     let lintel = spot.site == BannerSite::Lintel;
-    let mut state = if lintel {
-        Banner::roll_sized(spot.seed, BannerMount::Rod, rolled.cloth.end, (5.0, 7.0), (5.0, 8.0))
-    } else {
-        Banner::roll_hall(spot.seed, BannerMount::Rod, rolled.cloth.end)
-    };
+    let mut state = if lintel { faction.banner_sized((5.0, 7.0), (5.0, 8.0)) } else { faction.banner() };
     let [x, _, z] = Level::world(spot.x, spot.y);
     let highest = crate::level::geometry::stone::ceiling_at(level, x, z) - BANNER_BELOW_CEILING;
     let length = state.cloth.length;
@@ -219,10 +215,6 @@ pub fn banner_hang(spot: &BannerSpot, level: &Level) -> (BannerState, f32) {
         (top, length.min(top - BANNER_OFF_FLOOR))
     };
     state.cloth.length = length;
-    // The hem takes the charge's colour, so it never clashes with the faction's tinctures.
-    let field = level.faction(spot.faction).field;
-    state.hem.trim = field.charge_tincture;
-    state.field = field;
     (state, top.max(length + BANNER_OFF_FLOOR))
 }
 
@@ -435,6 +427,7 @@ mod tests {
     use super::*;
     use crate::play::{Obstacle, Obstacles, gather_obstacles};
     use fb_level::FloorShape;
+    use armory::families::banner::BannerMount;
     use crate::player::{blocked_by, slide_around};
     /// The player's body radius as shipped.
     const BODY_RADIUS: f32 = 3.5;
@@ -771,6 +764,26 @@ mod tests {
             }
         }
         assert!(seen > 0);
+    }
+
+    #[test]
+    fn a_faction_hangs_one_banner_shape_everywhere() {
+        // A banner's shape, apart from the length a low ceiling cuts it to and the size over a door.
+        let shape = |b: &BannerState| (b.cloth.end, b.cloth.end_depth, b.hem, b.fringe.on, b.hanging.stuff, b.hanging.finial, b.palette);
+        let mut compared = 0;
+        for seed in [1207, 3, 9, 7, 12] {
+            let level = fb_level::generate(seed, 1);
+            for spot in &level.banners {
+                let (state, _) = banner_hang(spot, &level);
+                let own = level.faction(spot.faction).banner();
+                assert_eq!(shape(&state), shape(&own), "seed {seed}: {spot:?}");
+                if spot.site != BannerSite::Lintel {
+                    assert_eq!(state.cloth.width, own.cloth.width, "seed {seed}: {spot:?}");
+                }
+                compared += 1;
+            }
+        }
+        assert!(compared > 0);
     }
 
     #[test]

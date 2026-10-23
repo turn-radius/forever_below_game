@@ -36,6 +36,7 @@ use bevy::{
         view::Tonemapping,
     },
 };
+use armory::families::{Generator, banner::{Banner, BannerState}};
 use armory::heraldry::Field;
 use fb_items::Item;
 
@@ -59,6 +60,9 @@ pub const ICON_CELL_PX: u32 = 144;
 /// The size in pixels of a crest's image: tall as a shield is, for the largest the map or the
 /// tab draws one and more.
 pub const CREST_PX: UVec2 = UVec2::new(160, 208);
+
+/// The size in pixels of a faction banner's image: tall as a hall banner hangs, rod included.
+pub const BANNER_PX: UVec2 = UVec2::new(112, 280);
 
 /// Where icons are drawn: far below the level and the view model's stage.
 const ICON_STAGE: Vec3 = Vec3::new(0.0, -50_000.0, 0.0);
@@ -108,15 +112,23 @@ impl IconKey {
 pub struct IconCache {
     images: HashMap<IconKey, Handle<Image>>,
     queued: VecDeque<(Subject, Handle<Image>)>,
-    crests: HashMap<u64, Handle<Image>>,
+    arms: HashMap<Arms, Handle<Image>>,
     drawing: Vec<Drawing>,
     drawn: HashSet<AssetId<Image>>,
 }
 
-/// What an icon shows: an item, or a faction's crest ([`armory::crest`]).
+/// What an icon shows: an item, a faction's crest ([`armory::crest`]), or a faction's banner.
 enum Subject {
     Item(IconKey, Box<Item>),
     Crest(Box<Field>),
+    Banner(Box<BannerState>),
+}
+
+/// A faction's arms as kept: a crest by its field's key, a banner by its field's key and seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Arms {
+    Crest(u64),
+    Banner(u64, u32),
 }
 
 struct Drawing {
@@ -158,7 +170,7 @@ impl IconCache {
     pub fn forget_drawn(&mut self) {
         let busy: HashSet<AssetId<Image>> = self.drawing.iter().map(|d| d.image).chain(self.queued.iter().map(|q| q.1.id())).collect();
         self.images.retain(|_, image| busy.contains(&image.id()));
-        self.crests.retain(|_, image| busy.contains(&image.id()));
+        self.arms.retain(|_, image| busy.contains(&image.id()));
         self.drawn.retain(|id| busy.contains(id));
     }
 
@@ -167,13 +179,13 @@ impl IconCache {
     pub fn abandon_drawing(&mut self) {
         let busy: HashSet<AssetId<Image>> = self.drawing.drain(..).map(|d| d.image).chain(self.queued.drain(..).map(|q| q.1.id())).collect();
         self.images.retain(|_, image| !busy.contains(&image.id()));
-        self.crests.retain(|_, image| !busy.contains(&image.id()));
+        self.arms.retain(|_, image| !busy.contains(&image.id()));
     }
 
-    /// Forgets every crest, drawn or not, as when the delve ends: the next run's world rolls
-    /// other factions, so the kept crests stay to one world's.
-    pub fn forget_crests(&mut self) {
-        for image in self.crests.drain().map(|(_, image)| image) {
+    /// Forgets every crest and banner, drawn or not, as when the delve ends: the next run's world rolls
+    /// other factions, so the kept arms stay to one world's.
+    pub fn forget_arms(&mut self) {
+        for image in self.arms.drain().map(|(_, image)| image) {
             self.drawn.remove(&image.id());
         }
     }
@@ -237,16 +249,27 @@ impl Icons<'_> {
     /// The crest for `field`, drawn once from the armory and kept: the faction's arms flat on a
     /// shield, from the same field its banners are painted from. Blank until drawn.
     pub fn crest(&mut self, field: &Field) -> Handle<Image> {
-        let key = armory::crest::field_key(field);
-        if let Some(image) = self.cache.crests.get(&key) {
+        self.arms(Arms::Crest(armory::crest::field_key(field)), CREST_PX, || Subject::Crest(Box::new(*field)))
+    }
+
+    /// The image of `banner` hanging face on, drawn once from the armory and kept. Blank until
+    /// drawn.
+    pub fn banner(&mut self, banner: &BannerState) -> Handle<Image> {
+        let key = Arms::Banner(armory::crest::field_key(&banner.field), banner.seed);
+        self.arms(key, BANNER_PX, || Subject::Banner(Box::new(banner.clone())))
+    }
+
+    /// The kept image of `key`, or a new one of `size` queued to draw `subject`.
+    fn arms(&mut self, key: Arms, size: UVec2, subject: impl FnOnce() -> Subject) -> Handle<Image> {
+        if let Some(image) = self.cache.arms.get(&key) {
             return image.clone();
         }
-        let mut target = Image::new_target_texture(CREST_PX.x, CREST_PX.y, TextureFormat::Rgba8UnormSrgb, None);
+        let mut target = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
         target.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
         target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let image = self.images.add(target);
-        self.cache.crests.insert(key, image.clone());
-        self.cache.queued.push_back((Subject::Crest(Box::new(*field)), image.clone()));
+        self.cache.arms.insert(key, image.clone());
+        self.cache.queued.push_back((subject(), image.clone()));
         image
     }
 
@@ -254,29 +277,36 @@ impl Icons<'_> {
     /// its place.
     pub fn spawn_crest<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, field: &Field, node: Node) -> EntityCommands<'a> {
         let image = self.crest(field);
+        let shield = BorderRadius { top_left: px(3).into(), top_right: px(3).into(), bottom_left: percent(50).into(), bottom_right: percent(50).into() };
+        self.spawn_arms(parent, image, node, shield)
+    }
+
+    /// Spawns `node` showing `banner`; until it is drawn, a plain cloth stands in its place.
+    pub fn spawn_banner<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, banner: &BannerState, node: Node) -> EntityCommands<'a> {
+        let image = self.banner(banner);
+        self.spawn_arms(parent, image, node, BorderRadius::all(px(3)))
+    }
+
+    /// Spawns `node` showing `image`, with a faint shape rounded by `corners` in its place until
+    /// it is drawn.
+    fn spawn_arms<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, image: Handle<Image>, node: Node, corners: BorderRadius) -> EntityCommands<'a> {
         let drawn = self.cache.is_drawn(&image);
-        let mut crest = parent.spawn((node, ImageNode::new(image.clone())));
+        let mut arms = parent.spawn((node, ImageNode::new(image.clone())));
         if !drawn {
             let mut placeholder = Entity::PLACEHOLDER;
-            crest.with_children(|crest| {
-                placeholder = crest
+            arms.with_children(|arms| {
+                placeholder = arms
                     .spawn((
                         IconPlaceholder,
-                        Node {
-                            position_type: PositionType::Absolute,
-                            width: percent(100),
-                            height: percent(100),
-                            border_radius: BorderRadius { top_left: px(3).into(), top_right: px(3).into(), bottom_left: percent(50).into(), bottom_right: percent(50).into() },
-                            ..default()
-                        },
+                        Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), border_radius: corners, ..default() },
                         BackgroundColor(MUTED.with_alpha(0.25)),
                         Pickable::IGNORE,
                     ))
                     .id();
             });
-            crest.insert(AwaitingIcon { image: image.id(), placeholder });
+            arms.insert(AwaitingIcon { image: image.id(), placeholder });
         }
-        crest
+        arms
     }
 
     /// Spawns `node` showing the icon for `item` lying `turned`. Until the icon is drawn, the
@@ -402,7 +432,8 @@ pub fn draw_icons(mut commands: Commands, mut cache: ResMut<IconCache>, mut spaw
         // An item with no shape is never drawn and keeps its placeholder.
         let entities = match subject {
             Subject::Item(key, item) => stage_icon(&mut commands, &mut spawner, &item, key.turned, image, stage),
-            Subject::Crest(field) => stage_crest(&mut commands, &mut spawner, &field, image, stage),
+            Subject::Crest(field) => stage_arms(&mut commands, &mut spawner, &armory::crest::crest_mesh(&field), "Icon: crest", CREST_PX, image, stage),
+            Subject::Banner(banner) => stage_arms(&mut commands, &mut spawner, &Banner::build(&banner), "Icon: banner", BANNER_PX, image, stage),
         };
         if let Some(entities) = entities {
             cache.drawing.push(Drawing { stage, image: id, entities, started: now, frames: 0 });
@@ -420,14 +451,13 @@ fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, t
     Some(stage_mesh(commands, spawner, &mesh, &appearance_of(&item.shape), &format!("Icon: {}", item.name), (rotation, min, max), size, image, stage))
 }
 
-/// Spawns the crest for `field` on `stage`, face on, with the camera, light and readback of an
-/// item's icon.
-fn stage_crest(commands: &mut Commands, spawner: &mut ItemSpawner, field: &Field, image: Handle<Image>, stage: usize) -> Option<[Entity; 4]> {
-    let mesh = armory::crest::crest_mesh(field);
+/// Spawns a faction's arms, `mesh` (its crest or its banner), on `stage`, face on, into an
+/// image of `size`, with the camera, light and readback of an item's icon.
+fn stage_arms(commands: &mut Commands, spawner: &mut ItemSpawner, mesh: &armory::geom::ItemMesh, name: &str, size: UVec2, image: Handle<Image>, stage: usize) -> Option<[Entity; 4]> {
     let points: Vec<Vec3> = mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
     let (min, max) = bounds(points.iter().copied())?;
     let appearance = crate::render::ItemAppearance { palette: crate::render::ItemPalette::ARMORY, ..default() };
-    Some(stage_mesh(commands, spawner, &mesh, &appearance, "Icon: crest", (Quat::IDENTITY, min, max), CREST_PX, image, stage))
+    Some(stage_mesh(commands, spawner, mesh, &appearance, name, (Quat::IDENTITY, min, max), size, image, stage))
 }
 
 /// Spawns `mesh` posed by `pose` (rotation and posed bounds) on `stage`, with a camera drawing

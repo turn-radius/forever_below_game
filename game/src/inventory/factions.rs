@@ -1,22 +1,22 @@
 //! The factions tab: the inventory screen's second leaf, in the character sheet's look. It lists
-//! every faction the delver has met this delve, each with its crest and colours, its folk, what
+//! every faction the delver has met this delve, each with its banner and colours, its folk, what
 //! it likes and hates, the delver's standing with it as a word and a bar, whether it has given
 //! its key, and the depths where the delver met it (`WorldRecord::met_on`). A faction not met
 //! does not appear, and neither does its name in another faction's likes.
 //!
-//! The crest is the armory's, drawn from the faction's heraldic field (`armory::heraldry::Field`)
-//! by the same pattern shader and device shapes as its banners in the level ([`crate::crest`]).
+//! The banner is the faction's own ([`fb_faction::FactionSpec::banner`]), the one it hangs in its
+//! halls: the same shape and the same heraldic field, drawn face on by the armory.
 
+use armory::families::banner::BannerState;
 use armory::heraldry::{Division, Field, Tincture};
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use fb_faction::{Band, Faction, Preference, World};
 
-use super::icon::Icons;
+use super::icon::{BANNER_PX, Icons};
 use super::sheet::band_colour;
 use crate::play::CurrentLevel;
-use crate::crest::crest;
 use crate::record::WorldRecord;
 use crate::ui::{BG, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts};
 
@@ -27,8 +27,8 @@ pub struct FactionsPage;
 /// What the page says when no faction has been met.
 pub const NO_FACTIONS_MET: &str = "You have met no faction yet. Speak with the folk you find in the dark.";
 
-/// The crest's width in logical pixels.
-const CREST_W: f32 = 64.0;
+/// The banner's width in logical pixels.
+const BANNER_W: f32 = 56.0;
 /// The standing bar's width and height.
 const BAR_PX: f32 = 200.0;
 const BAR_HEIGHT_PX: f32 = 10.0;
@@ -39,6 +39,8 @@ pub struct Entry {
     pub id: Faction,
     pub name: String,
     pub field: Field,
+    /// The banner it hangs in its halls.
+    pub banner: BannerState,
     pub folk: String,
     pub colours: String,
     pub standing: i32,
@@ -109,6 +111,7 @@ pub fn entries(record: &WorldRecord, run_seed: u32) -> Vec<Entry> {
                 id,
                 name: spec.name.clone(),
                 field: spec.field,
+                banner: spec.banner(),
                 folk: spec.denizen.map_or_else(|| spec.folk.race().label.to_string(), |kind| kind.label().to_string()),
                 colours: colours_line(&spec.field),
                 standing: record.standings.get(id).value(),
@@ -158,7 +161,8 @@ pub fn page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, icons: &mut Icon
                 BorderColor::all(FAINT),
             ))
             .with_children(|card| {
-                crest(card, icons, &entry.field, CREST_W);
+                let height = BANNER_W * BANNER_PX.y as f32 / BANNER_PX.x as f32;
+                icons.spawn_banner(card, &entry.banner, Node { width: px(BANNER_W), height: px(height), flex_shrink: 0.0, ..default() }).insert(Name::new("Banner"));
                 card.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(3), flex_grow: 1.0, flex_shrink: 1.0, ..default() }).with_children(|text| {
                     text.spawn((Text::new(entry.name.clone()), UiFonts::style(&fonts.display, 22.0, INK)));
                     text.spawn((Text::new(format!("{} \u{b7} {}", entry.folk, entry.colours)), UiFonts::style(&fonts.body, 14.0, MUTED)));
@@ -299,13 +303,15 @@ mod tests {
     }
 
     #[test]
-    fn a_crest_is_drawn_from_exactly_the_factions_own_field() {
+    fn a_banner_is_the_one_the_faction_hangs_painted_with_its_own_field() {
         let (record, ids) = record_with(77, &[0, 1, 2, 3]);
         let world = World::new(77);
         let listed = entries(&record, 77);
         assert_eq!(listed.len(), ids.len());
         for entry in &listed {
             assert_eq!(entry.field, world.faction(entry.id).field, "{}", entry.name);
+            assert_eq!(entry.banner, world.faction(entry.id).banner(), "{}", entry.name);
+            assert_eq!(entry.banner.field, entry.field, "{}", entry.name);
             // What the armory draws is a pure function of that field.
             let mesh = armory::crest::crest_mesh(&entry.field);
             let cloth = mesh.parts.iter().find(|p| p.name == "cloth").unwrap();
