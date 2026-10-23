@@ -11,18 +11,36 @@
 //!   place it does not fit: a doorway, the way to a stair, rock or a wall, a prop or someone
 //!   standing, or another camp. A refusal says why in the toast.
 //! - A set tent blocks the way as a prop does ([`BlocksTheWay`]); a bedroll is walked over.
+//! - F on a set camp within reach sleeps in it ([`go_to_sleep`]): the delver is [`Asleep`], the
+//!   view goes dark, the world holds still round them but for the game clock, which runs at the
+//!   camp rules' `sleep_clock_ratio` (a night in under a minute), and their needs step as
+//!   `Activity::Sleeping` ([`crate::simulate`]): sleepiness falls at the needs' own rate in a
+//!   bedroll and `tent_rest` times that in a tent. A light they carry is put out first. They
+//!   wake ([`wake_up`]) rested, or early when something hostile comes within `wake_distance`,
+//!   when hunger or thirst reaches the Famished band, when they are hurt, or at a key press. They
+//!   cannot lie down while tired too little, hungry or thirsty, or with something hostile near.
 //!
 //! Camp goods are drawn at their own size on the floor, not the tuning's larger floor scale: a
 //! tent or bedroll set at 115% would no longer fit the room it was checked against.
 
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use fb_items::camp::Camp;
 use fb_level::{CELL, Cell, FloorShape, Level};
 
-use crate::inventory::{FloorChange, FloorChanges, Hovered, Inventory, ItemId, Toast};
+use crate::carry::{Aimed, ViewModelCamera};
+use crate::character::DelverNeeds;
+use crate::combat::{Health, feedback::Corpse};
+use crate::creatures::Critter;
+use crate::folk::Denizen;
+use crate::game_clock::GameClock;
+use crate::hostility::Hostility;
 use crate::interact::{self, Slot, Verb};
+use crate::inventory::{FloorChange, FloorChanges, Hovered, Inventory, ItemId, Toast};
 use crate::keymap::{Action, ActionInput};
-use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player, PlayerCamera, inventory_open};
+use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, inventory_open, level_has_focus};
+use crate::player::Locomotion;
+use crate::rules::GameRules;
+use crate::ui::{BG, BRIGHT, MUTED, UiFonts};
 
 pub struct CampPlugin;
 
@@ -30,7 +48,11 @@ impl Plugin for CampPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Toast>()
             .init_resource::<FloorChanges>()
-            .add_systems(Update, lay_out_hovered.run_if(inventory_open).run_if(crate::barter::not_bartering).in_set(DelveSystems));
+            .init_resource::<Asleep>()
+            .init_resource::<GameRules>()
+            .add_systems(OnEnter(crate::launch::AppState::Delving), |mut asleep: ResMut<Asleep>| asleep.0 = None)
+            .add_systems(Update, lay_out_hovered.run_if(inventory_open).run_if(crate::barter::not_bartering).in_set(DelveSystems))
+            .add_systems(Update, (go_to_sleep.run_if(level_has_focus), wake_up, spawn_veil, fade_veil).chain().in_set(DelveSystems));
     }
 }
 
@@ -258,6 +280,272 @@ fn lay_out_hovered(
     }
 }
 
+/// The delver asleep, if they are. Nothing else about the delver changes: the needs step as
+/// Sleeping ([`crate::simulate`]), the game clock runs fast ([`crate::game_clock`]), and the level
+/// gives no focus to the world ([`level_has_focus`]) until they wake.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
+pub struct Asleep(pub Option<Sleeping>);
+
+/// A sleep under way.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sleeping {
+    /// What they sleep in, which sets how well they sleep.
+    pub camp: Camp,
+    /// The set camp's entity: if it goes, they wake.
+    pub bed: Entity,
+    /// Their hit points when they lay down; any fewer wakes them.
+    pub hit_points: i32,
+    /// The game hour they lay down.
+    pub since: f64,
+    /// The real second they lay down, so the key press that began the sleep does not end it.
+    pub began: f32,
+}
+
+/// Seconds after lying down before a key press wakes the delver.
+const KEY_GRACE: f32 = 0.4;
+
+/// Whether anything hostile is within range of a point: a creature that is up and about, or a
+/// folk who has turned on the delver. Corpses do not count.
+#[derive(SystemParam)]
+pub struct Watchers<'w, 's> {
+    creatures: Query<'w, 's, &'static GlobalTransform, (With<Critter>, Without<Corpse>)>,
+    folk: Query<'w, 's, (&'static GlobalTransform, &'static Hostility), (With<Denizen>, Without<Corpse>)>,
+}
+
+impl Watchers<'_, '_> {
+    /// Whether anything hostile is within `range` of `at` (world `(x, z)`).
+    pub fn near(&self, at: Vec2, range: f32) -> bool {
+        self.creatures.iter().any(|t| t.translation().xz().distance(at) <= range)
+            || self.folk.iter().any(|(t, hostility)| hostility.is_hostile() && t.translation().xz().distance(at) <= range)
+    }
+}
+
+/// What keeps a delver from lying down, if anything: something hostile `watched` near, hunger or
+/// thirst at the Famished band (the sleep would be broken, `exhaustion.famished_at`), or too little
+/// sleepiness (`camp.tired_from`).
+pub fn cannot_sleep(rules: &fb_character::rules::Rules, needs: &fb_character::Needs, watched: bool) -> Option<&'static str> {
+    if watched {
+        return Some("You cannot sleep with something so near.");
+    }
+    if needs.hunger.value >= rules.exhaustion.famished_at {
+        return Some("You are too hungry to sleep.");
+    }
+    if needs.thirst.value >= rules.exhaustion.famished_at {
+        return Some("You are too thirsty to sleep.");
+    }
+    if needs.sleepiness.value < rules.camp.tired_from {
+        return Some("You are not tired enough to sleep.");
+    }
+    None
+}
+
+/// Why a delver asleep should wake now, if they should: hurt (fewer hit points than they lay down
+/// with), something hostile `watched` near, hunger or thirst at the Famished band, or rested. A
+/// key press is not here: it is the input's ([`wake_up`]).
+pub fn reason_to_wake(rules: &fb_character::rules::Rules, needs: &fb_character::Needs, hit_points: i32, began_with: i32, watched: bool) -> Option<&'static str> {
+    if hit_points < began_with {
+        return Some("You wake in pain.");
+    }
+    if watched {
+        return Some("Something stirs nearby, and you wake.");
+    }
+    if needs.hunger.value >= rules.exhaustion.famished_at {
+        return Some("Hunger wakes you.");
+    }
+    if needs.thirst.value >= rules.exhaustion.famished_at {
+        return Some("Thirst wakes you.");
+    }
+    if needs.sleepiness.value <= 0.0 {
+        return Some("You wake rested.");
+    }
+    None
+}
+
+/// "7 hours": the game time from hour `from` to hour `now` in whole hours, at least one.
+fn hours_slept(from: f64, now: f64) -> String {
+    let hours = (now - from).round().max(1.0) as u32;
+    format!("{hours} hour{}", if hours == 1 { "" } else { "s" })
+}
+
+/// What a camp is called in a line.
+fn camp_name(camp: Camp) -> &'static str {
+    match camp {
+        Camp::Bedroll => "bedroll",
+        Camp::Tent => "tent",
+    }
+}
+
+/// F on a set camp in reach: lies down in it ([`cannot_sleep`] says if they cannot). A torch or
+/// lantern they carry is put out first, since a night would burn it down.
+#[allow(clippy::too_many_arguments)]
+fn go_to_sleep(
+    input: ActionInput,
+    aimed: Res<Aimed>,
+    camps: Query<&SetCamp>,
+    rules: Res<GameRules>,
+    clock: Res<GameClock>,
+    watchers: Watchers,
+    mut asleep: ResMut<Asleep>,
+    mut inventory: ResMut<Inventory>,
+    mut toast: ResMut<Toast>,
+    mut players: Query<(&Transform, &DelverNeeds, &mut Locomotion, Option<&Health>), With<Player>>,
+    time: Option<Res<Time<Real>>>,
+) {
+    if asleep.0.is_some() || !input.just_pressed(Action::Primary) {
+        return;
+    }
+    let Some(bed) = aimed.0 else { return };
+    let Ok(camp) = camps.get(bed) else { return };
+    let Ok((body, needs, mut locomotion, health)) = players.single_mut() else { return };
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    let watched = watchers.near(body.translation.xz(), rules.camp.wake_distance as f32);
+    if let Some(reason) = cannot_sleep(&rules, &needs.0, watched) {
+        toast.say(reason, now);
+        return;
+    }
+    // Any light they carry is put out; the inventory is only touched if one burns.
+    let lit: Vec<ItemId> = crate::carry::carried_lights(&inventory).into_iter().map(|(_, id)| id).collect();
+    for id in lit {
+        if inventory.item(id).is_some_and(|item| item.shape.lit() == Some(true)) {
+            let _ = inventory.toggle_light(id);
+        }
+    }
+    locomotion.velocity = Vec2::ZERO;
+    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+    toast.say(format!("You lie down in the {}", camp_name(camp.camp)), now);
+}
+
+/// The actions whose press wakes a sleeper: any move, a blow, using or taking something, a screen.
+const WAKING: [Action; 13] = [
+    Action::WalkForward,
+    Action::WalkBack,
+    Action::StepLeft,
+    Action::StepRight,
+    Action::Jump,
+    Action::Crouch,
+    Action::Attack,
+    Action::Block,
+    Action::Primary,
+    Action::Secondary,
+    Action::Back,
+    Action::Inventory,
+    Action::Map,
+];
+
+/// Ends the sleep: rested, hurt, hungry, thirsty, a hostile near, a key, a screen opened, or the
+/// camp gone from under them.
+#[allow(clippy::too_many_arguments)]
+fn wake_up(
+    input: ActionInput,
+    screen: Res<ScreenOpen>,
+    rules: Res<GameRules>,
+    clock: Res<GameClock>,
+    watchers: Watchers,
+    beds: Query<(), With<SetCamp>>,
+    mut asleep: ResMut<Asleep>,
+    mut toast: ResMut<Toast>,
+    players: Query<(&Transform, &DelverNeeds, Option<&Health>), With<Player>>,
+    time: Option<Res<Time<Real>>>,
+) {
+    let Some(sleep) = asleep.0 else { return };
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    let Ok((body, needs, health)) = players.single() else {
+        asleep.0 = None;
+        return;
+    };
+    let watched = watchers.near(body.translation.xz(), rules.camp.wake_distance as f32);
+    let keyed = now - sleep.began > KEY_GRACE && (screen.0.is_some() || WAKING.into_iter().any(|a| input.just_pressed(a)));
+    let reason = reason_to_wake(&rules, &needs.0, health.map_or(sleep.hit_points, |h| h.hp), sleep.hit_points, watched)
+        .or_else(|| (!beds.contains(sleep.bed)).then_some("Your bed is gone, and you wake."))
+        .or_else(|| keyed.then_some("You wake."));
+    let Some(reason) = reason else { return };
+    asleep.0 = None;
+    toast.say(format!("{reason} You slept {}.", hours_slept(sleep.since, clock.time.hours())), now);
+}
+
+/// The dark that falls over the view while the delver sleeps.
+#[derive(Component, Debug, Default)]
+pub struct SleepVeil {
+    /// How dark it is now, 0 to 1.
+    pub dark: f32,
+}
+
+/// The veil's heading (`true`) and the line beneath it.
+#[derive(Component, Debug)]
+struct VeilWords(bool);
+
+/// How quickly the veil falls and lifts, per real second.
+const VEIL_RATE: f32 = 1.2;
+/// The veil's most opaque, so the level shows a little through it.
+const VEIL_DARK: f32 = 0.96;
+
+/// One veil over each new view, clear until the delver sleeps.
+fn spawn_veil(mut commands: Commands, fonts: Option<Res<UiFonts>>, cameras: Query<Entity, Added<ViewModelCamera>>) {
+    for camera in &cameras {
+        let body = fonts.as_deref().map(|f| f.body.clone()).unwrap_or_default();
+        commands
+            .spawn((
+                Name::new("Sleep veil"),
+                SleepVeil::default(),
+                DespawnOnExit(crate::launch::AppState::Delving),
+                UiTargetCamera(camera),
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    position_type: PositionType::Absolute,
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    row_gap: px(10),
+                    ..default()
+                },
+                BackgroundColor(BG.with_alpha(0.0)),
+                GlobalZIndex(30),
+                Pickable::IGNORE,
+            ))
+            .with_children(|veil| {
+                veil.spawn((VeilWords(true), Text::new(""), TextFont::from_font_size(30.0).with_font(body.clone()), TextColor(BRIGHT.with_alpha(0.0)), TextLayout::justify(Justify::Center)));
+                veil.spawn((VeilWords(false), Text::new("Any move or key wakes you"), TextFont::from_font_size(18.0).with_font(body), TextColor(MUTED.with_alpha(0.0)), TextLayout::justify(Justify::Center)));
+            });
+    }
+}
+
+/// The veil's darkness after `seconds` of heading from `dark` toward `target` (0 or 1).
+fn veil_step(dark: f32, target: f32, seconds: f32) -> f32 {
+    let step = VEIL_RATE * seconds;
+    if dark < target { (dark + step).min(target) } else { (dark - step).max(target) }
+}
+
+/// Darkens the veil while asleep and clears it after, with its words.
+fn fade_veil(
+    time: Res<Time<Real>>,
+    asleep: Res<Asleep>,
+    clock: Res<GameClock>,
+    mut veils: Query<(&mut SleepVeil, &mut BackgroundColor, &Children)>,
+    mut words: Query<(&VeilWords, &mut Text, &mut TextColor)>,
+) {
+    let target = if asleep.0.is_some() { 1.0 } else { 0.0 };
+    for (mut veil, mut background, children) in &mut veils {
+        let dark = veil_step(veil.dark, target, time.delta_secs());
+        if dark != veil.dark {
+            veil.dark = dark;
+        }
+        background.0 = BG.with_alpha(dark * VEIL_DARK);
+        for &child in children {
+            let Ok((role, mut text, mut colour)) = words.get_mut(child) else { continue };
+            if role.0
+                && let Some(sleep) = asleep.0
+            {
+                let line = format!("Sleeping in the {}: {}", camp_name(sleep.camp), hours_slept(sleep.since, clock.time.hours()));
+                if text.0 != line {
+                    text.0 = line;
+                }
+            }
+            colour.0 = if role.0 { BRIGHT } else { MUTED }.with_alpha(dark);
+        }
+    }
+}
+
 /// The floor shape a set camp blocks the way with: a tent, but not a bedroll, which is walked
 /// over.
 pub fn blocks_the_way(camp: Camp, site: &Site) -> Option<FloorShape> {
@@ -409,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn set_camps_have_no_verbs_to_take_or_equip() {
+    fn a_set_camp_is_slept_in_not_taken_or_equipped() {
         let mut inventory = Inventory::default();
         let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
         inventory.wear(pack, fb_items::Slot::Back).unwrap();
@@ -425,6 +713,192 @@ mod tests {
         inventory.take_out(bedroll);
         let laid = fb_items::camp::set_up(inventory.item(bedroll).unwrap()).unwrap();
         assert!(inventory.replace_form(bedroll, laid));
-        assert_eq!(verbs(&inventory), interact::Verbs::default());
+        assert_eq!(verbs(&inventory), interact::Verbs { primary: Some(Verb::Sleep), ..interact::Verbs::default() });
+    }
+
+    fn rules() -> fb_character::rules::Rules {
+        fb_character::rules::Rules::default()
+    }
+
+    fn needs(hunger: f64, thirst: f64, sleepiness: f64) -> fb_character::Needs {
+        let mut needs = fb_character::Needs::default();
+        needs.hunger.value = hunger;
+        needs.thirst.value = thirst;
+        needs.sleepiness.value = sleepiness;
+        needs
+    }
+
+    #[test]
+    fn a_delver_lies_down_only_when_tired_fed_watered_and_alone() {
+        let rules = rules();
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.5), false), None);
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.1), false), Some("You are not tired enough to sleep."));
+        assert_eq!(cannot_sleep(&rules, &needs(0.8, 0.1, 0.9), false), Some("You are too hungry to sleep."));
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.8, 0.9), false), Some("You are too thirsty to sleep."));
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.9), true), Some("You cannot sleep with something so near."));
+    }
+
+    #[test]
+    fn a_sleeper_wakes_rested_hurt_hungry_thirsty_or_disturbed() {
+        let rules = rules();
+        let wakes = |n: fb_character::Needs, hp: i32, watched: bool| reason_to_wake(&rules, &n, hp, 10, watched);
+        assert_eq!(wakes(needs(0.1, 0.1, 0.4), 10, false), None, "still tired, nothing amiss");
+        assert_eq!(wakes(needs(0.1, 0.1, 0.0), 10, false), Some("You wake rested."));
+        assert_eq!(wakes(needs(0.1, 0.1, 0.4), 9, false), Some("You wake in pain."));
+        assert_eq!(wakes(needs(0.1, 0.1, 0.4), 10, true), Some("Something stirs nearby, and you wake."));
+        assert_eq!(wakes(needs(0.76, 0.1, 0.4), 10, false), Some("Hunger wakes you."));
+        assert_eq!(wakes(needs(0.1, 0.76, 0.4), 10, false), Some("Thirst wakes you."));
+        // Hurt wins over rested: the pain is what they wake to.
+        assert_eq!(wakes(needs(0.1, 0.1, 0.0), 9, false), Some("You wake in pain."));
+    }
+
+    /// An app with the sleep systems, a tired delver and a set camp aimed at.
+    fn sleeper(camp_base: &str) -> (App, Entity, Entity) {
+        use crate::keymap::Keymap;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Keymap>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Aimed>()
+            .init_resource::<Inventory>()
+            .init_resource::<Toast>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<GameClock>()
+            .init_resource::<GameRules>()
+            .init_resource::<Asleep>()
+            .add_systems(Update, (go_to_sleep, wake_up).chain());
+        let item = fb_items::camp::set_up(&fb_items::roll_item(camp_base, 5).unwrap()).unwrap();
+        let camp = item.camp().unwrap();
+        let bed = app.world_mut().spawn(SetCamp { camp, site: Site { centre: Vec2::ZERO, half: Vec2::new(8.0, 3.0), yaw: 0.0 } }).id();
+        app.world_mut().resource_mut::<Aimed>().0 = Some(bed);
+        let mut tired = DelverNeeds::default();
+        tired.0.sleepiness.value = 0.8;
+        let delver = app.world_mut().spawn((Player, Transform::default(), tired, Locomotion { velocity: Vec2::new(4.0, 0.0), ..default() }, Health::full(10))).id();
+        (app, delver, bed)
+    }
+
+    fn press(app: &mut App, key: KeyCode) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.clear();
+        keys.press(key);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
+    }
+
+    #[test]
+    fn f_on_a_set_tent_lies_the_delver_down_and_still() {
+        let (mut app, delver, bed) = sleeper("Tent");
+        press(&mut app, KeyCode::KeyF);
+        let sleep = app.world().resource::<Asleep>().0.expect("asleep");
+        assert_eq!((sleep.camp, sleep.bed, sleep.hit_points), (Camp::Tent, bed, 10));
+        assert_eq!(app.world().get::<Locomotion>(delver).unwrap().velocity, Vec2::ZERO);
+        assert!(app.world().resource::<Toast>().text.starts_with("You lie down in the tent"));
+    }
+
+    #[test]
+    fn a_rested_delver_cannot_lie_down_and_is_told_why() {
+        let (mut app, delver, _) = sleeper("Bedroll");
+        app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.05;
+        press(&mut app, KeyCode::KeyF);
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        assert_eq!(app.world().resource::<Toast>().text, "You are not tired enough to sleep.");
+    }
+
+    #[test]
+    fn a_light_they_carry_is_put_out_before_they_sleep() {
+        let (mut app, _, _) = sleeper("Bedroll");
+        let torch = app.world_mut().resource_mut::<Inventory>().add(crate::carry::lit_torch(7));
+        app.world_mut().resource_mut::<Inventory>().equip(torch, fb_items::Slot::Offhand).unwrap();
+        assert_eq!(app.world().resource::<Inventory>().item(torch).unwrap().shape.lit(), Some(true));
+        press(&mut app, KeyCode::KeyF);
+        assert!(app.world().resource::<Asleep>().0.is_some());
+        assert_eq!(app.world().resource::<Inventory>().item(torch).unwrap().shape.lit(), Some(false), "put out");
+    }
+
+    #[test]
+    fn the_press_that_began_the_sleep_does_not_end_it_but_a_later_one_does() {
+        let (mut app, _, _) = sleeper("Bedroll");
+        press(&mut app, KeyCode::KeyF);
+        app.update();
+        assert!(app.world().resource::<Asleep>().0.is_some(), "still asleep a frame on");
+        // A key a while later (real time) wakes them.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        press(&mut app, KeyCode::KeyW);
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        assert!(app.world().resource::<Toast>().text.starts_with("You wake."), "{}", app.world().resource::<Toast>().text);
+    }
+
+    #[test]
+    fn rested_hurt_or_hungry_wakes_them_at_once() {
+        for (what, wake) in [
+            ("rested", Box::new(|app: &mut App, d: Entity| app.world_mut().get_mut::<DelverNeeds>(d).unwrap().0.sleepiness.value = 0.0) as Box<dyn Fn(&mut App, Entity)>),
+            ("hurt", Box::new(|app: &mut App, d: Entity| app.world_mut().get_mut::<Health>(d).unwrap().hp = 6)),
+            ("hungry", Box::new(|app: &mut App, d: Entity| app.world_mut().get_mut::<DelverNeeds>(d).unwrap().0.hunger.value = 0.9)),
+        ] {
+            let (mut app, delver, _) = sleeper("Tent");
+            press(&mut app, KeyCode::KeyF);
+            assert!(app.world().resource::<Asleep>().0.is_some(), "{what}");
+            wake(&mut app, delver);
+            app.update();
+            assert_eq!(app.world().resource::<Asleep>().0, None, "{what}: woken");
+            assert!(app.world().resource::<Toast>().text.contains("You slept"), "{what}: {}", app.world().resource::<Toast>().text);
+        }
+    }
+
+    #[test]
+    fn a_creature_that_comes_near_wakes_them_and_one_far_off_does_not() {
+        let (mut app, _, _) = sleeper("Bedroll");
+        press(&mut app, KeyCode::KeyF);
+        let spot = *fb_level::generate(1207, 1).creatures.first().expect("a creature");
+        let critter = crate::creatures::Critter::new(spot, spot.creature());
+        let far = Transform::from_xyz(300.0, 0.0, 0.0);
+        let rat = app.world_mut().spawn((critter, far, GlobalTransform::from(far))).id();
+        app.update();
+        assert!(app.world().resource::<Asleep>().0.is_some(), "far off, they sleep on");
+        let near = Transform::from_xyz(40.0, 0.0, 0.0);
+        app.world_mut().entity_mut(rat).insert((near, GlobalTransform::from(near)));
+        app.update();
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        assert!(app.world().resource::<Toast>().text.starts_with("Something stirs nearby"), "{}", app.world().resource::<Toast>().text);
+        // And they will not lie down with it there.
+        press(&mut app, KeyCode::KeyF);
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        assert_eq!(app.world().resource::<Toast>().text, "You cannot sleep with something so near.");
+    }
+
+    #[test]
+    fn the_camp_going_wakes_the_sleeper() {
+        let (mut app, _, bed) = sleeper("Bedroll");
+        press(&mut app, KeyCode::KeyF);
+        app.world_mut().despawn(bed);
+        app.update();
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+    }
+
+    #[test]
+    fn the_veil_darkens_while_asleep_and_clears_after() {
+        let mut dark = 0.0;
+        for _ in 0..4 {
+            dark = veil_step(dark, 1.0, 0.25);
+        }
+        assert!((dark - 1.0).abs() < 1e-6, "dark inside a second: {dark}");
+        assert_eq!(veil_step(dark, 1.0, 0.25), 1.0, "no darker than dark");
+        for _ in 0..4 {
+            dark = veil_step(dark, 0.0, 0.25);
+        }
+        assert_eq!(dark, 0.0, "clear again");
+    }
+
+    #[test]
+    fn the_veil_follows_the_sleeper_on_screen() {
+        let (mut app, _, _) = sleeper("Bedroll");
+        app.add_systems(Update, fade_veil);
+        let veil = app.world_mut().spawn((SleepVeil::default(), BackgroundColor(BG.with_alpha(0.0)), Children::default())).id();
+        press(&mut app, KeyCode::KeyF);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        app.update();
+        let dark = app.world().get::<SleepVeil>(veil).unwrap().dark;
+        assert!(dark > 0.0, "it has begun to fall: {dark}");
+        assert!(app.world().get::<BackgroundColor>(veil).unwrap().0.alpha() > 0.0);
     }
 }

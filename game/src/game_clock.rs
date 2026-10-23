@@ -30,13 +30,16 @@ impl GameClock {
     }
 }
 
-/// Advances the game clock each `FixedUpdate` step, scaling the step by the configured ratio.
+/// Advances the game clock each `FixedUpdate` step, scaling the step by the configured ratio, or
+/// by the camp rules' sleeping ratio while the delver sleeps ([`crate::camp::Asleep`]).
 /// Runs only while delving ([`DelveSystems`]) and with no screen open.
 pub fn advance_game_clock(
     mut clock: ResMut<GameClock>,
     tuning: Res<Tuning>,
     time: Res<Time<Fixed>>,
     screen: Res<ScreenOpen>,
+    asleep: Option<Res<crate::camp::Asleep>>,
+    rules: Option<Res<crate::rules::GameRules>>,
 ) {
     // Hold still while any screen is open. Only the pause menu also pauses `Time<Virtual>`, so
     // the inventory relies on this check.
@@ -45,7 +48,12 @@ pub fn advance_game_clock(
     }
 
     let delta_real_seconds = time.delta_secs() as f64;
-    let game_seconds = delta_real_seconds * tuning.clock.game_seconds_per_second as f64;
+    // Asleep, the night passes at the camp rules' pace (`[camp]` in `rules.toml`) instead.
+    let per_second = match (asleep.is_some_and(|a| a.0.is_some()), rules) {
+        (true, Some(rules)) => rules.camp.sleep_clock_ratio,
+        _ => tuning.clock.game_seconds_per_second as f64,
+    };
+    let game_seconds = delta_real_seconds * per_second;
     clock.advance(game_seconds);
 }
 

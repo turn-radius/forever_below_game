@@ -361,6 +361,11 @@ const LABELS: &[(&str, &str)] = &[
     ("warmth/brazier", "Warmth of a brazier"),
     ("warmth/brazier_reach", "Reach of a brazier (units)"),
     ("warmth/held_flame", "Warmth of a flame in hand"),
+    ("camp/bedroll_rest", "Sleep in a bedroll (\u{d7} the rate)"),
+    ("camp/tent_rest", "Sleep in a tent (\u{d7} the rate)"),
+    ("camp/sleep_clock_ratio", "Game seconds a second asleep"),
+    ("camp/wake_distance", "Wakes when hostile this near (units)"),
+    ("camp/tired_from", "Tired enough to sleep from"),
     ("revival/revives", "Times a delver may come to"),
     ("revival/hall_hit_points", "Hit points healed in a hall (share)"),
     ("revival/hall_fee", "Coin a faction takes (share)"),
@@ -433,7 +438,7 @@ pub fn sections(edited: &RuleSet, saved: &RuleSet) -> Vec<Section> {
     for name in names {
         out.push(Section { title: name.clone(), fields: under(&format!("creatures/{name}/")) });
     }
-    for (title, key) in [("Needs", "needs"), ("Exhaustion", "exhaustion"), ("Stamina", "stamina"), ("Mana", "mana"), ("Load", "load"), ("Visibility", "visibility"), ("Warmth", "warmth"), ("Revival", "revival")] {
+    for (title, key) in [("Needs", "needs"), ("Exhaustion", "exhaustion"), ("Stamina", "stamina"), ("Mana", "mana"), ("Load", "load"), ("Visibility", "visibility"), ("Warmth", "warmth"), ("Camp", "camp"), ("Revival", "revival")] {
         out.push(Section { title: title.into(), fields: under(&format!("{key}/")) });
     }
     for (id, def) in &edited.rules.effects {

@@ -13,7 +13,7 @@
 //! | Container | Open, or Look in once it stands open | Lock or Unlock, holding its key | Pick the lock, holding lockpicks | |
 //! | Folk | Talk | Barter | Steal, while hidden | |
 //! | Bedroll or tent in the pack | Lay out, or Pitch | Equip, if it can be | | |
-//! | Bedroll or tent set down | | | | |
+//! | Bedroll or tent set down | Sleep | | | |
 //! | Stair | Go down or Go up | | | |
 //!
 //! Hang at hip sends something that can hang from the belt (a lantern) straight to the hip,
@@ -95,6 +95,8 @@ pub enum Verb {
     LayOut,
     /// Pitch a tent from the pack on the floor in front of the delver (`crate::camp`).
     Pitch,
+    /// Sleep in a bedroll or tent set down (`crate::camp`).
+    Sleep,
     HangAtHip,
     Open,
     LookIn,
@@ -125,6 +127,7 @@ impl Verb {
             Verb::Read => "Read",
             Verb::LayOut => "Lay out",
             Verb::Pitch => "Pitch",
+            Verb::Sleep => "Sleep",
             Verb::HangAtHip => "Hang at hip",
             Verb::Open => "Open",
             Verb::LookIn => "Look in",
@@ -272,7 +275,7 @@ pub fn verbs_for(target: &Target, delver: &Delver) -> Verbs {
         Target::Switch => Verbs { primary: Some(Verb::Pull), ..Verbs::default() },
         Target::Folk => Verbs { primary: Some(Verb::Talk), secondary: Some(Verb::Barter), tertiary: delver.hidden.then_some(Verb::Steal), ..Verbs::default() },
         Target::Stair { down } => Verbs { primary: Some(if down { Verb::GoDown } else { Verb::GoUp }), ..Verbs::default() },
-        Target::Camp => Verbs::default(),
+        Target::Camp => Verbs { primary: Some(Verb::Sleep), ..Verbs::default() },
     }
 }
 

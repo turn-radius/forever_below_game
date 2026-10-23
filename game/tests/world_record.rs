@@ -174,6 +174,11 @@ fn an_item_dropped_on_the_level_below_is_still_there_after_up_and_down_again() {
 /// Sets `base` from the pack down in front of the delver at the level's start, as the inventory
 /// screen's F does, and lets the floor change land.
 fn set_camp(app: &mut App, base: &str, seed: u32) -> ItemId {
+    set_camp_where(app, base, seed).0
+}
+
+/// [`set_camp`], and where the delver stood to do it and the way they faced.
+fn set_camp_where(app: &mut App, base: &str, seed: u32) -> (ItemId, Vec2, Vec2) {
     let lvl = level(app).clone();
     let blocked = app.world().resource::<forever_below::play::BlockedCells>().clone();
     let obstacles = app.world().resource::<forever_below::play::Obstacles>().0.clone();
@@ -192,7 +197,7 @@ fn set_camp(app: &mut App, base: &str, seed: u32) -> ItemId {
     assert!(said.is_ok(), "{base}: {said:?}");
     app.world_mut().resource_mut::<FloorChanges>().0.extend(changes.0);
     run(app, 5);
-    id
+    (id, feet, forward)
 }
 
 /// The set camps lying in the level: what each is, and whether it blocks the way.
@@ -222,6 +227,66 @@ fn a_set_bedroll_and_a_pitched_tent_are_still_set_after_leaving_and_returning() 
             assert_eq!(kept(&app, base, 40_010), 1, "{base} trip {trip}: one, not two");
         }
     }
+}
+
+/// Sleeping in a set bedroll with the whole game running: aimed at from where it was set, F lies
+/// the delver down, the clock runs at the sleeping pace, sleepiness falls and they wake rested.
+#[test]
+fn a_delver_sleeps_in_a_set_bedroll_until_rested() {
+    let mut app = delving();
+    let (_, feet, forward) = set_camp_where(&mut app, "Bedroll", 40_011);
+    let delver = player(&mut app);
+    // Back to where they stood, facing the way they faced, looking down at the bedroll.
+    {
+        let mut world = app.world_mut().entity_mut(delver);
+        world.get_mut::<Transform>().unwrap().translation = Vec3::new(feet.x, 0.0, feet.y);
+        let yaw = (-forward.x).atan2(-forward.y);
+        world.get_mut::<Transform>().unwrap().rotation = Quat::from_rotation_y(yaw);
+        let mut walk = world.get_mut::<forever_below::player::Locomotion>().unwrap();
+        walk.yaw = yaw;
+        walk.pitch = -60f32.to_radians();
+        walk.velocity = Vec2::ZERO;
+        // Tired enough to sleep, and little enough to sleep it off in a few seconds.
+        world.get_mut::<forever_below::character::DelverNeeds>().unwrap().0.sleepiness.value = 0.3;
+    }
+    // Nothing stirring near: the level's creatures are somewhere else for this.
+    let world = app.world_mut();
+    let creatures: Vec<Entity> = world.query_filtered::<Entity, With<Critter>>().iter(world).collect();
+    for creature in creatures {
+        world.despawn(creature);
+    }
+    // (The headless game has no mouse to turn the view, so the view is turned here.)
+    let mut eyes = world.query_filtered::<&mut Transform, With<forever_below::play::PlayerCamera>>();
+    for mut eye in eyes.iter_mut(world) {
+        eye.rotation = Quat::from_rotation_x(-60f32.to_radians());
+    }
+    run(&mut app, 5);
+    let aimed = app.world().resource::<forever_below::carry::Aimed>().0;
+    assert!(aimed.is_some_and(|e| app.world().get::<forever_below::camp::SetCamp>(e).is_some()), "the bedroll is under the crosshair: {aimed:?}");
+    let hours = |app: &App| app.world().resource::<forever_below::game_clock::GameClock>().time.hours();
+    let before = hours(&app);
+    // F, typed into the window.
+    for state in [bevy::input::ButtonState::Pressed, bevy::input::ButtonState::Released] {
+        app.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::KeyF,
+            logical_key: bevy::input::keyboard::Key::Character("f".into()),
+            state,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+    }
+    assert!(app.world().resource::<forever_below::camp::Asleep>().0.is_some(), "asleep: {}", app.world().resource::<forever_below::inventory::Toast>().text);
+    // 0.3 of the meter is 2.4 game hours at eight to rest, a few seconds at 900 to one.
+    run(&mut app, 900);
+    let asleep = app.world().resource::<forever_below::camp::Asleep>().0;
+    assert_eq!(asleep, None, "woken within fifteen seconds");
+    let slept = hours(&app) - before;
+    assert!((slept - 2.4).abs() < 0.3, "slept {slept} game hours");
+    let sleepiness = app.world().get::<forever_below::character::DelverNeeds>(delver).unwrap().0.sleepiness.value;
+    assert!(sleepiness < 0.01, "rested (and a hair tired again by the frames since): {sleepiness}");
+    assert!(app.world().resource::<forever_below::inventory::Toast>().text.starts_with("You wake rested."), "{}", app.world().resource::<forever_below::inventory::Toast>().text);
 }
 
 #[test]

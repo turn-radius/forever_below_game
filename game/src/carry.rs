@@ -980,7 +980,15 @@ pub fn set_down(
 ) -> Option<Entity> {
     let item = inventory.item(id)?;
     // Straight down, the top of the head points the way the body faces.
-    let forward = eye.forward().as_vec3().xz().try_normalize().unwrap_or_else(|| eye.up().as_vec3().xz().normalize_or(Vec2::NEG_Y));
+    let forward = crate::camp::facing(eye);
+    // A camp already set down (a capture's `FB_DROP=Tent+set`) lies where setting it down puts it,
+    // without the check.
+    if item.is_set_camp()
+        && let Some((half, _)) = crate::camp::footprint(item)
+    {
+        let site = crate::camp::site_ahead(eye.translation().xz(), forward, half);
+        return set_down_at(spawner, inventory, level, id, site.centre / CELL, site.yaw, tuning);
+    }
     let radius = floor_radius(&item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), tuning.view.floor_item_scale);
     let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells), &obstacles.0) / CELL;
     // Laid square to the player's view.
