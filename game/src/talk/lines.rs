@@ -551,7 +551,14 @@ mod tests {
                 assert!(line.contains("minotaur") && !line.contains('#') && !line.contains("..."), "{line}");
                 assert!(line.starts_with("The minotaur"), "{line}");
             }
-            assert!(barter_refusal(&s).contains("don't share enough of its speech") || barter_refusal(&s).contains("understood") || barter_refusal(&s).contains("know enough"), "{}", barter_refusal(&s));
+            let mut allowed = vec![
+                "The minotaur shakes its head at your words; you don't share enough of its speech to trade.".to_string(),
+                "The minotaur regards your coin without understanding, shakes its head, and turns it over; you don't know enough of its speech to trade.".to_string(),
+            ];
+            for sound in ["a low bellow", "a rumble deep in its chest", "a snort of hot breath"] {
+                allowed.push(format!("The minotaur {sound} and pushes your hand away; you can't make yourself understood well enough to trade."));
+            }
+            assert!(allowed.contains(&barter_refusal(&s)), "{}", barter_refusal(&s));
             assert_eq!(spit_line(&s), spit_line(&s));
         }
     }

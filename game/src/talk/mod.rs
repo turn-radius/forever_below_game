@@ -547,7 +547,8 @@ fn build_talk_screen(
             if readable {
                 panel.spawn((Text::new(format!("\u{201c}{text}\u{201d}")), UiFonts::style(&fonts.body, 22.0, colour)));
             } else {
-                panel.spawn((Text::new(text), UiFonts::style(&fonts.body_italic, 22.0, MUTED)));
+                // Any character may break the line, so a glyph run with no spaces still wraps in the panel.
+                panel.spawn((Text::new(text), TextLayout::new(Justify::Left, LineBreak::AnyCharacter), UiFonts::style(&fonts.body_italic, 22.0, MUTED)));
             }
             panel.spawn((Node { height: px(1), margin: UiRect::vertical(px(4)), ..default() }, BackgroundColor(FAINT)));
             for (i, topic) in talk.topics.iter().enumerate() {

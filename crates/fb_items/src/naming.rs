@@ -29,7 +29,15 @@ pub fn folk_name(rng: &mut Mulberry32, folk: &str) -> String {
     let table = syllables();
     let (a, b) = table.get(folk).unwrap_or(&table["human"]);
     let first = format!("{}{}", rng.pick(a), rng.pick(b));
-    let last = format!("{}{}", rng.pick(a), rng.pick(b));
+    let mut last = format!("{}{}", rng.pick(a), rng.pick(b));
+    // A family name that repeats the first ("Rokrug Rokrug") is drawn again, a few times at most.
+    // Names that were not duplicates are unchanged.
+    for _ in 0..8 {
+        if last != first || matches!(folk, "goblin" | "lizard") {
+            break;
+        }
+        last = format!("{}{}", rng.pick(a), rng.pick(b));
+    }
     if matches!(folk, "goblin" | "lizard") { first } else { format!("{first} {last}") }
 }
 
@@ -160,6 +168,17 @@ mod tests {
         assert_eq!(noun("Blind cavefish", &fish), "Blind cavefish");
         let sword = roll_shape("Sword", 3).unwrap();
         assert_eq!(noun("Sword", &sword), sword.noun());
+    }
+
+    #[test]
+    fn a_family_name_never_repeats_the_first() {
+        for folk in syllables().keys().filter(|f| !matches!(f.as_str(), "goblin" | "lizard")) {
+            for seed in 0..3000 {
+                let name = folk_name(&mut Mulberry32::new(seed), folk);
+                let (first, last) = name.split_once(' ').expect("two names");
+                assert_ne!(first, last, "{folk} seed {seed}: {name}");
+            }
+        }
     }
 
     #[test]
