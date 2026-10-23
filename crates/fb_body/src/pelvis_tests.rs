@@ -98,7 +98,7 @@ fn crease_of(body: &Body, mesh: &armory::geom::mesh::ItemMesh, names: &[&str], r
 fn the_front_has_no_crease_over_the_groin() {
     for body in bodies() {
         let (front, _) = crease(&body, 0.2);
-        assert!(front < 0.025, "{:?} seed {}: the front profile dips {front} (of the body's scale) between waist and crotch", body.folk(), body.spec.seed);
+        assert!(front < 0.02, "{:?} seed {}: the front profile dips {front} (of the body's scale) between waist and crotch", body.folk(), body.spec.seed);
     }
 }
 
@@ -110,7 +110,7 @@ fn the_seat_rounds_into_the_backs_of_the_thighs() {
             assert!(back < 0.022, "{:?} seed {}: the back profile dips {back} (of the body's scale, over {reach}) between waist and thigh", body.folk(), body.spec.seed);
         }
         let (_, over) = proud(&body);
-        assert!(over < 0.35 * body.scale, "{:?} seed {}: the seat overhangs the thighs by {over}", body.folk(), body.spec.seed);
+        assert!(over < 0.15 * body.scale, "{:?} seed {}: the seat overhangs the thighs by {over}", body.folk(), body.spec.seed);
     }
 }
 
@@ -165,7 +165,7 @@ fn trousers_hang_over_the_pelvis_without_a_pouch() {
         let trousers = worn_mesh(&body, fb_items::Slot::Legs, "Trousers", body.spec.seed);
         let (front, back) = pouch(&body, &trousers).expect("trousers over the crotch");
         assert!(front < 0.14, "{:?} seed {}: trousers stand out {front} (of the body's scale) further over the groin than at the hips", body.folk(), body.spec.seed);
-        assert!(back < 0.3, "{:?} seed {}: trousers stand out {back} further behind at the crotch than at the hips", body.folk(), body.spec.seed);
+        assert!(back < 0.07, "{:?} seed {}: trousers stand out {back} further behind at the crotch than at the hips", body.folk(), body.spec.seed);
     }
 }
 
@@ -191,11 +191,11 @@ fn trousers_narrow_from_the_hips_into_the_thighs() {
         let crotch = body.hip_y - 0.14 * body.trunk_length;
         let worst = heights(body.hip_y + 0.1 * body.trunk_length, crotch, 0.1 * body.scale).into_iter().filter_map(|y| stand_x(&body, &cloth, y)).fold(f32::MIN, f32::max);
         let growth = (worst - reference) / body.scale;
-        assert!(growth < 0.11, "{:?} seed {}: trousers stand out {growth} (of the body's scale) further past the skin over the hips than at the waist", body.folk(), body.spec.seed);
+        assert!(growth < 0.02, "{:?} seed {}: trousers stand out {growth} (of the body's scale) further past the skin over the hips than at the waist", body.folk(), body.spec.seed);
         // And the outline from the hips to the thighs has no pinch after a lobe.
         for reach_scale in [0.2, 0.4] {
             let dip = outline_dip(&body, &cloth, reach_scale);
-            assert!(dip < if reach_scale > 0.3 { 0.065 } else { 0.08 }, "{:?} seed {}: the trousers' outline pinches by {dip} (over {reach_scale}) between the hips and the thighs", body.folk(), body.spec.seed);
+            assert!(dip < 0.04, "{:?} seed {}: the trousers' outline pinches by {dip} (over {reach_scale}) between the hips and the thighs", body.folk(), body.spec.seed);
         }
     }
 }

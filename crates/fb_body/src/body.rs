@@ -44,6 +44,8 @@ const HIP_JOINT: f32 = 0.88;
 const HIP_JOINT_X: f32 = 0.48;
 /// How much deeper than wide a thigh is toward its top, as a share of its radius: the narrower hips left a thigh round, which stood the hips out in front of it.
 const THIGH_DEEP: f32 = 0.2;
+/// How much deeper still the back of a thigh is, as a share of its radius: the seat's weight hangs on the thigh's back, and with the hips narrower the thigh's own depth no longer carries it, so the seat overhangs the thigh.
+const THIGH_BACK: f32 = 0.2;
 /// How much thicker legs widen the hips (they stand out past the hips otherwise), per unit of the folk's limb thickness over a human's.
 const HIP_LIMB: f32 = 0.5;
 /// How far out the top of a thigh reaches, as a share of the hips' half width: inside the hip line, so the thigh never stands out past it.
@@ -59,7 +61,7 @@ const FILL_DEPTH: f32 = 1.8;
 /// How far past the skin the garment form reaches over the pelvis, before a garment's own fit, as a share of the body's scale.
 const GARMENT_MARGIN: f32 = 0.01;
 /// Over how far (in the body's scale) the garment fill builds up from the thigh section, so no step shows at the crotch.
-const FILL_ONSET: f32 = 0.9;
+const FILL_ONSET: f32 = 0.2;
 /// The same for the front, which reaches down to [`FILL_DEPTH`] and builds up quickly.
 const FILL_ONSET_FRONT: f32 = 0.3;
 /// Where the crotch is, below the hips, as a share of the trunk's length.
@@ -854,7 +856,8 @@ impl Body {
         let calf = (0.06 + 0.1 * self.spec.muscle) * (-((t - calf_t) / 0.12).powi(2)).exp() * (-front).max(0.0).powi(2);
         let knee = 0.05 * (-((t - tk) / 0.05).powi(2)).exp() * front.max(0.0).powi(3);
         // The thigh is a little deeper front to back than across, below the seat.
-        let thigh = THIGH_DEEP * smoothstep(0.0, th, t) * (1.0 - smoothstep(th, tk, t)) * front * front;
+        let window = smoothstep(0.0, th, t);
+        let thigh = window * THIGH_DEEP * (1.0 - smoothstep(th, tk, t)) * front * front + window * THIGH_BACK * (1.0 - smoothstep(th + 0.2 * (tk - th), th + 0.6 * (tk - th), t)) * (-front).max(0.0).powi(2);
         // The back of the thigh's top fills out under the seat, so the buttock rounds into the
         // thigh in a fold instead of overhanging it as a rim.
         let under_seat = 0.24 * (-((t - 1.7 * th) / th).powi(2)).exp() * (-front).max(0.0).powi(2);
