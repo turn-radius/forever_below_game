@@ -35,6 +35,15 @@ ffmpeg -i "reference/audio/Measured Pulse.m4a" -vn -f wav - | oggenc --ignorelen
 ffmpeg -i "reference/audio/Let  me think.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/let-me-think.ogg -
 ffmpeg -i "reference/audio/Meant to be here.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/meant-to-be-here.ogg -
 ffmpeg -i "reference/audio/What am I doing?.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/what-am-i-doing.ogg -
+ffmpeg -i "reference/audio/Am I seeing the light?.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/am-i-seeing-the-light.ogg -
+ffmpeg -i "reference/audio/Bitter Pulse.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/bitter-pulse.ogg -
+ffmpeg -i "reference/audio/Descenso al Infierno.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/descenso-al-infierno.ogg -
+ffmpeg -i "reference/audio/Falling Apart.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/falling-apart.ogg -
+ffmpeg -i "reference/audio/I should have stayed.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/i-should-have-stayed.ogg -
+ffmpeg -i "reference/audio/I went too far.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/i-went-too-far.ogg -
+ffmpeg -i "reference/audio/I’m right where I started.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/im-right-where-i-started.ogg -
+ffmpeg -i "reference/audio/Missing Friends.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/missing-friends.ogg -
+ffmpeg -i "reference/audio/Sinking Bass.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/sinking-bass.ogg -
 ```
 
 **Sound effects**: there are no recorded sound effects. `tools/synth_door_shut.py` synthesises the entrance door's slam and latch by modal synthesis (decaying sine modes struck by filtered noise; the script's docstring cites the sources) with Python's standard library alone, the same on every run, and `oggenc` encodes it:

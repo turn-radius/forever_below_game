@@ -1,0 +1,26 @@
+{
+ "human": {
+  "female": ["Alys", "Brenna", "Cora", "Edda", "Isolde", "Maud", "Marta", "Ysolde", "Wenna", "Sabine", "Tamsin", "Ursa", "Hilda", "Ottilie", "Petra", "Rosamund"],
+  "male": ["Alden", "Berric", "Corwin", "Edmund", "Garrick", "Halric", "Jorun", "Osric", "Perrin", "Ulwin", "Wilmer", "Roderic", "Tobin", "Marden", "Fenric", "Ned"]
+ },
+ "dwarf": {
+  "female": ["Dorna", "Hilde", "Thrana", "Brunhild", "Durna", "Gerda", "Morna", "Helga", "Kazra", "Bruni", "Thorra", "Valda", "Ingra", "Gimra"],
+  "male": ["Balin", "Dorin", "Gimrum", "Thrain", "Horgrim", "Kazdek", "Brubek", "Durgar", "Harlin", "Morgrim", "Thordun", "Vigar", "Ulgrim", "Grorum"]
+ },
+ "gnome": {
+  "female": ["Fizzi", "Nimmie", "Bimsy", "Pipsy", "Tobbie", "Wizzle", "Quilla", "Zanna", "Dobbie", "Fenny", "Lilly", "Orla"],
+  "male": ["Fizwick", "Nimble", "Bimkin", "Pipnik", "Tobwick", "Wizble", "Quilnik", "Zandle", "Dobzel", "Fenwick", "Lilbo", "Orlkin"]
+ },
+ "goblin": {
+  "female": ["Griga", "Snagra", "Zuka", "Nixa", "Rotka", "Skabra", "Grubba", "Moka", "Yagra", "Krizza", "Pezka"],
+  "male": ["Grik", "Snag", "Zug", "Nix", "Rot", "Skab", "Grub", "Mok", "Yag", "Kriz", "Pez"]
+ },
+ "lizard": {
+  "female": ["Ssara", "Ixessa", "Tsalia", "Vexa", "Sizza", "Kassa", "Zhulia", "Thessa", "Issa", "Rhazsa"],
+  "male": ["Ssareth", "Ixix", "Tsalar", "Vexok", "Sizzith", "Kassesh", "Rhazaal", "Zhulek", "Thessok", "Issar"]
+ },
+ "pig": {
+  "female": ["Bess", "Hogga", "Grumma", "Rooka", "Snora", "Tuska", "Borma", "Gruna", "Muddy", "Trotta", "Besma", "Truffle"],
+  "male": ["Hogbert", "Bragwin", "Grumtle", "Rookrik", "Snorgut", "Tuskdle", "Borsk", "Grunbert", "Mudwin", "Trotsby"]
+ }
+}

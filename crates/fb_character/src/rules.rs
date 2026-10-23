@@ -38,6 +38,8 @@ pub struct Rules {
     pub load: LoadRules,
     pub visibility: VisibilityRules,
     pub warmth: WarmthRules,
+    /// Sleeping in a set bedroll or tent.
+    pub camp: CampRules,
     /// Falling unconscious and coming to ([`crate::revival`]).
     pub revival: crate::revival::RevivalRules,
     /// The creatures' numbers by stat block name. A partial entry keeps the rest of that
@@ -62,6 +64,7 @@ impl Default for Rules {
             load: LoadRules::default(),
             visibility: VisibilityRules::default(),
             warmth: WarmthRules::default(),
+            camp: CampRules::default(),
             revival: crate::revival::RevivalRules::default(),
             creatures: default_creatures(),
             effects: crate::effect::shipped(),
@@ -549,6 +552,43 @@ impl WarmthRules {
     /// `worn` and warmed by `fire`: positive is cold, negative is warmth to spare.
     pub fn shortfall(&self, need: f64, depth: u32, worn: f64, fire: f64) -> f64 {
         need - self.comfort + self.chill_per_depth * depth.saturating_sub(1) as f64 - worn - fire
+    }
+}
+
+/// Sleeping in a set bedroll or tent (`game/src/camp.rs`). Our own: the SRD has long rests
+/// (p. 84, eight hours) but no bedrolls that make them better.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CampRules {
+    /// How many times as fast sleepiness falls asleep in a bedroll as the needs' own rate
+    /// (`needs.sleep_hours_to_rested`): 1 is that rate.
+    pub bedroll_rest: f64,
+    /// The same in a tent, which keeps the draught and the damp off and sleeps better.
+    pub tent_rest: f64,
+    /// Game seconds that pass each real second while the delver sleeps, so a night's sleep takes
+    /// under a minute to play (8 game hours at 900 is 32 seconds).
+    pub sleep_clock_ratio: f64,
+    /// How near, in world units (10 cm each), a creature or a hostile folk may come before the
+    /// delver wakes, or will not let them sleep at all.
+    pub wake_distance: f64,
+    /// Sleepiness (0 rested to 1 spent) the delver must have reached to fall asleep: the
+    /// Tired band begins here.
+    pub tired_from: f64,
+}
+
+impl Default for CampRules {
+    fn default() -> Self {
+        CampRules { bedroll_rest: 1.0, tent_rest: 1.5, sleep_clock_ratio: 900.0, wake_distance: 80.0, tired_from: 0.25 }
+    }
+}
+
+impl CampRules {
+    /// How much better than the needs' own rate `camp` sleeps.
+    pub fn rest(&self, camp: fb_items::camp::Camp) -> f64 {
+        match camp {
+            fb_items::camp::Camp::Bedroll => self.bedroll_rest,
+            fb_items::camp::Camp::Tent => self.tent_rest,
+        }
     }
 }
 

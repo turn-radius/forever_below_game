@@ -8,6 +8,7 @@
 //! `docs/items.md`.
 
 pub mod armory_base;
+pub mod camp;
 pub mod commission;
 pub mod contents;
 pub mod dice;
@@ -39,6 +40,7 @@ pub mod value;
 pub use foe::Foe;
 pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, ItemParts, roll_item, roll_item_with, roll_loot};
+pub use naming::Sex;
 pub use oil::LAMP_OIL;
 pub use rarity::Odds;
 pub use provision::{Consume, ELIXIRS, Elixir, Provision, SWALLOW, elixir, provision};

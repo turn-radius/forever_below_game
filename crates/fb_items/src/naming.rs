@@ -3,7 +3,7 @@
 
 use crate::Tag;
 use crate::armory_base::armory_base;
-use crate::tables::{Affix, AffixKind, places, syllables};
+use crate::tables::{Affix, AffixKind, given_names, places, syllables};
 use procgen_rng::Mulberry32;
 
 /// What to call the shape rolled for `base`: the base's own name where the table says so
@@ -21,14 +21,41 @@ pub fn item_name(noun: &str, affixes: &[&Affix]) -> String {
     [first(AffixKind::Prefix), Some(noun), first(AffixKind::Suffix)].into_iter().flatten().collect::<Vec<_>>().join(" ")
 }
 
-/// A name for one of `folk` (a key of `data/syl.json`): two syllables, and a family name of
-/// two more except for goblins and lizardfolk (`genName`).
-pub fn folk_name(rng: &mut Mulberry32, folk: &str) -> String {
-    // A body with no syllables of its own yet (a denizen whose task has not added them) is
-    // named from the human ones.
+/// Whether someone is a woman or a man: what the delver's creator chooses, and what a
+/// faction's name says of its members. It picks a given name here; `fb_body` re-exports it for
+/// the body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sex {
+    Female,
+    Male,
+}
+
+impl Sex {
+    pub const ALL: [Sex; 2] = [Sex::Female, Sex::Male];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Sex::Female => "Female",
+            Sex::Male => "Male",
+        }
+    }
+}
+
+/// A name for one of `folk` (a key of `data/syl.json`): a given name and a family name of two
+/// syllables, except for goblins and lizardfolk, who have only the given name (`genName`). With
+/// a `sex` the given name is one of that sex's in `data/given_names.json`; with none, it is two
+/// syllables as the plate rolled it, which names a delver whose sex is not chosen yet. Family
+/// names are shared by both.
+pub fn folk_name(rng: &mut Mulberry32, folk: &str, sex: Option<Sex>) -> String {
+    // A body with no syllables of its own (a denizen) is named from the human ones, and with no
+    // given names of its own, from its syllables.
     let table = syllables();
     let (a, b) = table.get(folk).unwrap_or(&table["human"]);
-    let first = format!("{}{}", rng.pick(a), rng.pick(b));
+    let first = match (sex, given_names().get(folk)) {
+        (Some(sex), Some(given)) => rng.pick(if sex == Sex::Female { &given.female } else { &given.male }).clone(),
+        _ => format!("{}{}", rng.pick(a), rng.pick(b)),
+    };
     let last = format!("{}{}", rng.pick(a), rng.pick(b));
     if matches!(folk, "goblin" | "lizard") { first } else { format!("{first} {last}") }
 }
@@ -37,7 +64,8 @@ pub fn folk_name(rng: &mut Mulberry32, folk: &str) -> String {
 pub fn anyone(rng: &mut Mulberry32) -> String {
     let folk: Vec<&String> = syllables().keys().collect();
     let folk = rng.pick(&folk).as_str();
-    folk_name(rng, folk)
+    let sex = *rng.pick(&Sex::ALL);
+    folk_name(rng, folk, Some(sex))
 }
 
 /// A legendary's title, the name it had before, and three lines of history.
@@ -163,12 +191,34 @@ mod tests {
     }
 
     #[test]
+    fn given_names_follow_the_sex_and_family_names_are_shared() {
+        // The denizen tongues have syllables but no given names: they fall back to the syllables.
+        for folk in given_names().keys() {
+            let given = &given_names()[folk];
+            assert!(given.female.len() >= 10 && given.male.len() >= 10, "{folk}");
+            assert!(given.female.iter().all(|f| !given.male.contains(f)), "{folk}: a name for both");
+            for seed in 0..60 {
+                for sex in Sex::ALL {
+                    let name = folk_name(&mut game_rng(seed), folk, Some(sex));
+                    assert_eq!(name, folk_name(&mut game_rng(seed), folk, Some(sex)));
+                    let first = name.split(' ').next().unwrap();
+                    let own = if sex == Sex::Female { &given.female } else { &given.male };
+                    assert!(own.iter().any(|g| g == first), "{folk} {sex:?}: {name}");
+                }
+                // The same stream gives the same family name to a woman and a man.
+                let (f, m) = (folk_name(&mut game_rng(seed), folk, Some(Sex::Female)), folk_name(&mut game_rng(seed), folk, Some(Sex::Male)));
+                assert_eq!(f.split(' ').nth(1), m.split(' ').nth(1));
+            }
+        }
+    }
+
+    #[test]
     fn goblins_and_lizardfolk_have_one_name() {
         let mut rng = game_rng(1);
         for _ in 0..20 {
-            assert!(!folk_name(&mut rng, "goblin").contains(' '));
-            assert!(!folk_name(&mut rng, "lizard").contains(' '));
-            assert_eq!(folk_name(&mut rng, "dwarf").split(' ').count(), 2);
+            assert!(!folk_name(&mut rng, "goblin", None).contains(' '));
+            assert!(!folk_name(&mut rng, "lizard", None).contains(' '));
+            assert_eq!(folk_name(&mut rng, "dwarf", None).split(' ').count(), 2);
         }
     }
 

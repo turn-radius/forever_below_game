@@ -106,6 +106,19 @@ fn livery(faction: &FactionSpec) -> fb_items::outfit::Livery {
         Faction::Plate => Lean::Plate,
     };
     let livery = fb_items::outfit::Livery::from_field(faction.field, lean);
+    // A name's robe goes on folk, and on fauns, whose robes are fitted to their legs and tails;
+    // the other denizens go as their kit has them, their rows being sparse by design.
+    let robed = faction.denizen.is_none_or(|k| k == fb_faction::DenizenKind::Faun);
+    let garment = faction.looks.garment.filter(|_| robed);
+    let livery = livery.with_garment(garment.map(|g| match g {
+        fb_faction::Garment::Robe => fb_items::outfit::Garment::Robe,
+        fb_faction::Garment::RobeOverArmour => fb_items::outfit::Garment::RobeOverArmour,
+    }));
+    let livery = livery.with_trim(faction.looks.trim.map(|t| match t {
+        fb_faction::Trim::GoldHem => fb_items::outfit::Trim::GoldHem,
+    }));
+    // A name that gives the colours has every piece of cloth wear them.
+    let livery = if faction.looks.colours.is_empty() { livery } else { livery.named() };
     // Denizens go sparsely dressed, so their legwear wears the colours; folk's is left alone.
     if faction.is_denizen() { livery.with_legs() } else { livery }
 }
@@ -130,10 +143,11 @@ impl Person {
         let odds = fb_items::Odds::kit(depth);
         let mut rng = spot.name_stream();
         // A denizen's body is a race of the folk body ([`Folk::of_denizen`]): dressed, named and
-        // rolled as that race. One with no syllables of its own yet is named as a human is.
+        // rolled as that race. One with no syllables of its own yet is named as a human is. The
+        // name is drawn from the spot's sex (a man, for a denizen).
         let folk = spot.denizen.and_then(Folk::of_denizen).unwrap_or(spot.folk);
         let name_key = if fb_items::tables::syllables().contains_key(folk.key()) { folk.key() } else { Folk::Human.key() };
-        let name = fb_items::naming::folk_name(&mut rng, name_key);
+        let name = fb_items::naming::folk_name(&mut rng, name_key, Some(spot.sex));
         let outfit = *rng.pick(&faction.outfit_keys());
         // A denizen dresses from the row of its own kind, not a delver's class outfit.
         let outfit = denizen_outfit(folk, spot).unwrap_or(outfit);
@@ -158,7 +172,9 @@ impl Person {
         // Every member carries their faction's key, which falls with their belongings.
         let mut goods = goods;
         goods.extend(crate::doors::key_of(faction));
-        Person { spot: *spot, depth, faction: faction.clone(), name, spec: BodySpec::roll(folk, spot.seed), outfit, gear, goods, dirt }
+        // A denizen's build is its race's own, rolled as ever; folk take the hips and bust of their sex.
+        let spec = if spot.denizen.is_some() { BodySpec::roll(folk, spot.seed) } else { BodySpec::roll_as(folk, spot.seed, spot.sex) };
+        Person { spot: *spot, depth, faction: faction.clone(), name, spec, outfit, gear, goods, dirt }
     }
 
     /// What they wear, innermost slots first as listed.
@@ -752,14 +768,15 @@ mod tests {
                 }
             }
         }
-        assert!(members > 0 && bare * 10 >= members * 7, "{bare} of {members} are bare chested");
+        // Only guards (a few in a camp) ever wear body armour, so the share is a small sample's.
+        assert!(members > 0 && bare * 10 >= members * 6, "{bare} of {members} are bare chested");
         assert!(in_colours * 10 >= members * 5, "{in_colours} of {members} kilts wear the faction's tinctures");
     }
 
     #[test]
     fn a_denizen_with_no_syllables_of_its_own_is_still_named() {
         let mut rng = Mulberry32::new(5);
-        assert!(!fb_items::naming::folk_name(&mut rng, "winged demon").is_empty());
+        assert!(!fb_items::naming::folk_name(&mut rng, "winged demon", Some(fb_body::Sex::Male)).is_empty());
     }
 
     #[test]
@@ -849,6 +866,31 @@ mod tests {
             }
         }
         assert!(archers > 0, "no archers among the folk");
+    }
+
+    #[test]
+    fn women_of_a_named_faction_are_women_beardless_and_dressed_as_it_says() {
+        let (mut women, mut men, mut clerics) = (0, 0, 0);
+        for world in 1..=200 {
+            let level = fb_level::generate(world, 1);
+            for spot in &level.folk {
+                let faction = level.faction(spot.faction);
+                let person = Person::of(spot, faction, 1);
+                if faction.sex == Some(fb_body::Sex::Female) {
+                    women += 1;
+                    assert_eq!((person.spec.beard, person.spec.bust > 0.0 || spot.folk == fb_body::Folk::Lizardfolk), (fb_body::Beard::None, true), "{}", faction.name);
+                }
+                if faction.sex == Some(fb_body::Sex::Male) {
+                    men += 1;
+                    assert_eq!(person.spec.bust, 0.0, "{}", faction.name);
+                }
+                if faction.classes == [fb_faction::ClassKind::Cleric] {
+                    clerics += 1;
+                    assert_eq!(person.outfit, "cleric", "{}", faction.name);
+                }
+            }
+        }
+        assert!(women > 0 && men > 0 && clerics > 0, "{women} women, {men} men, {clerics} clerics in 200 worlds");
     }
 
     #[test]

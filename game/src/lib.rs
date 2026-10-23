@@ -6,6 +6,7 @@ pub mod audio;
 pub mod barter;
 pub mod belongings;
 pub mod breath;
+pub mod camp;
 pub mod capture;
 pub mod carry;
 pub mod character;

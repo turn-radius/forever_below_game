@@ -154,9 +154,25 @@ impl ItemAppearance {
                     _ => Etch::default(),
                 },
                 shimmer: self.shimmer,
+                gloss: part.material.map_or(0.0, |kind| gloss(kind, decay.amount)),
             },
         }
     }
+}
+
+/// How strongly a part of `kind` worn by `decay` (`Condition::decay`) catches a highlight: metals
+/// only, polished silver most and iron least, and wear dulls it (rust and patina take most of the
+/// shine, never quite all). The prototype drew no highlight (three.js `MeshToonMaterial` has
+/// none); the values are our own.
+pub fn gloss(kind: MaterialKind, decay: f32) -> f32 {
+    let polished = match kind {
+        MaterialKind::Silver => 0.6,
+        MaterialKind::Gold => 0.5,
+        MaterialKind::Brass => 0.45,
+        MaterialKind::Iron => 0.4,
+        _ => return 0.0,
+    };
+    polished * (1.0 - 0.8 * decay.clamp(0.0, 1.0))
 }
 
 /// How much of the light behind it glass stops, at its thinnest: the prototype's `glassMat`
@@ -553,6 +569,22 @@ mod tests {
         let cloth = ItemAppearance { etching: Some(embroidered), ..default() }.material_for(&part(MaterialKind::Cloth));
         assert_eq!(cloth.extension.etch.style, EtchStyle::Embroidered);
         assert_eq!(ItemAppearance::default().material_for(&part(MaterialKind::Iron)).extension.etch, Etch::default());
+    }
+
+    #[test]
+    fn metal_catches_a_highlight_and_wear_dulls_it() {
+        let part = |material| Part { material: Some(material), ..cylinder(0.2, 8.0, 12) };
+        let pristine = ItemAppearance::default();
+        for metal in [MaterialKind::Iron, MaterialKind::Brass, MaterialKind::Gold, MaterialKind::Silver] {
+            assert!(pristine.material_for(&part(metal)).extension.gloss > 0.0, "{metal:?}");
+        }
+        for matte in [MaterialKind::Wood, MaterialKind::Leather, MaterialKind::Cloth, MaterialKind::Stone, MaterialKind::Skin] {
+            assert_eq!(pristine.material_for(&part(matte)).extension.gloss, 0.0, "{matte:?}");
+        }
+        let rusted = ItemAppearance { condition: Condition::of(armory::cond::ConditionState::GraveFind), ..default() };
+        let new = pristine.material_for(&part(MaterialKind::Iron)).extension.gloss;
+        let old = rusted.material_for(&part(MaterialKind::Iron)).extension.gloss;
+        assert!(old > 0.0 && old < new * 0.5, "{old} {new}");
     }
 
     #[test]

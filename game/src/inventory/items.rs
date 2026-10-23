@@ -315,6 +315,34 @@ impl Inventory {
         }
     }
 
+    /// Puts `item` in the place of loose `id`, for a camp good that has changed form (a tent
+    /// pitched or packed, a bedroll laid out or rolled up): the same base and seed, but a profile
+    /// and footprint of its own. Only a loose item changes, since a grid holds it at the footprint
+    /// it had. `false`, and nothing changes, for an unknown id, one that is placed, or another item.
+    pub fn replace_form(&mut self, id: ItemId, item: Item) -> bool {
+        if self.location(id) != Some(Location::Loose) {
+            return false;
+        }
+        match self.items.get_mut(&id) {
+            Some(old) if old.base == item.base && old.seed == item.seed => {
+                *old = item;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// [`Inventory::replace_form`] for an item that is still in a pack or a slot: takes `id` out
+    /// of it and gives it `item`'s form in one step. Nothing changes, and it is `false`, for an
+    /// unknown id or another item, so a camp good is never left out of its pack in its old form.
+    pub fn set_form_out(&mut self, id: ItemId, item: Item) -> bool {
+        if !self.items.get(&id).is_some_and(|old| old.base == item.base && old.seed == item.seed) {
+            return false;
+        }
+        self.take_out(id);
+        self.replace_form(id, item)
+    }
+
     /// Mutable access to the shape of `id`, for state that changes in play (the arrow nocked
     /// on a bow, the ammunition a quiver shows). Not for changing what the item is.
     pub fn shape_mut(&mut self, id: ItemId) -> Option<&mut armory::Item> {

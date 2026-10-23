@@ -198,7 +198,7 @@ impl Body {
         let spec = &self.spec;
         let mut p = Pieces::default();
         p.skin.append(&face.skull());
-        eyes(&face, race.eyes, q.droop, &mut p);
+        eyes(&face, race.eyes, q.droop, spec.woman, &mut p);
         let nv = 0.85 + spec.nose * 0.35;
         nose(&face, race.nose, nv, &mut p);
         if let (Some(row), Nose::Muzzle) = (&race.muzzle, race.nose) {
@@ -208,7 +208,7 @@ impl Body {
             }
         }
         if !matches!(race.nose, Nose::Snout | Nose::Muzzle) {
-            mouth(&face, (spec.brow - 0.5) * 0.06, q.mouth, &mut p);
+            mouth(&face, (spec.brow - 0.5) * 0.06, q.mouth, spec.woman, &mut p);
         }
         for sg in [1.0f32, -1.0] {
             ear(&face, race.ears, sg, self.ear_size(q.ear), fit.fold_ears, &mut p);
@@ -303,7 +303,7 @@ impl Body {
         if let (Some(row), Nose::Muzzle) = (&race.muzzle, race.nose) {
             let mut p = Pieces::default();
             muzzle(&face, row, &self.traits(), &mut p);
-            eyes(&face, race.eyes, q.droop, &mut p);
+            eyes(&face, race.eyes, q.droop, self.spec.woman, &mut p);
             for m in [p.shade, p.mouth, p.whites, p.pupils] {
                 p.skin.append(&m);
             }
@@ -312,7 +312,7 @@ impl Body {
         if self.folk() == Folk::Lizardfolk {
             let mut p = Pieces::default();
             snout(&face, &mut p);
-            eyes(&face, race.eyes, q.droop, &mut p);
+            eyes(&face, race.eyes, q.droop, self.spec.woman, &mut p);
             for m in [p.mouth, p.ivory, p.whites, p.pupils] {
                 p.skin.append(&m);
             }
@@ -341,12 +341,13 @@ fn blob(size: V3, at: V3, up: V3, facing: V3, segments: usize) -> MeshBuilder {
     m
 }
 
-fn eyes(face: &Face, kind: EyeKind, droop: f32, p: &mut Pieces) {
-    let r = face.r;
+fn eyes(face: &Face, kind: EyeKind, droop: f32, woman: bool, p: &mut Pieces) {
     if kind == EyeKind::One {
         one_eye(face, droop, p);
         return;
     }
+    // A woman's eyes are drawn a tenth larger.
+    let r = face.r * if woman { 1.1 } else { 1.0 };
     for sg in [1.0f32, -1.0] {
         let at = face.eye(sg);
         let n = face.normal(sg * face.eye_azimuth, face.eye_polar);
@@ -536,7 +537,7 @@ fn snout(face: &Face, p: &mut Pieces) {
 
 /// The mouth as a dark line across the face, set by `smile`, with a lower lip under it; goblins
 /// show fangs and pigfolk tusks.
-fn mouth(face: &Face, smile: f32, width: f32, p: &mut Pieces) {
+fn mouth(face: &Face, smile: f32, width: f32, woman: bool, p: &mut Pieces) {
     let r = face.r;
     let folk = face.folk;
     let mw = width * match folk {
@@ -555,7 +556,7 @@ fn mouth(face: &Face, smile: f32, width: f32, p: &mut Pieces) {
     p.mouth.append(&tube(&path, 6, &SweepOptions::default(), |t| 0.026 * r * (0.6 + 0.4 * (PI * t).sin())));
     if folk != Folk::Pigfolk {
         let lip = face.point(0.0, 0.725 * PI, -0.012 * r);
-        p.skin.append(&blob([mw * r * 0.5, 0.035 * r, 0.03 * r], lip, vec3::Y, face.normal(0.0, 0.72 * PI), 14));
+        p.skin.append(&blob([mw * r * 0.5, 0.035 * r * if woman { 1.5 } else { 1.0 }, 0.03 * r], lip, vec3::Y, face.normal(0.0, 0.72 * PI), 14));
     }
     match folk {
         Folk::Goblin => {

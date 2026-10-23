@@ -69,7 +69,9 @@ fn insular_factions_are_wholly_their_folk() {
             } else {
                 assert_eq!(spec.hated_folk().count(), 0, "{}", spec.name);
                 let own = members.iter().filter(|f| **f == spec.folk).count();
-                assert!((140..=200).contains(&own), "{}: {own} of 200 are its folk", spec.name);
+                // A name that says its members are of every folk leaves one in six their own.
+                let share = if spec.looks.folk == Some(FolkSaid::Mixed) { 10..=60 } else { 140..=200 };
+                assert!(share.contains(&own), "{}: {own} of 200 are its folk", spec.name);
                 assert!(members.iter().any(|f| *f != spec.folk), "{} is never mixed", spec.name);
             }
         }
@@ -83,7 +85,10 @@ fn every_field_keeps_the_rule_of_tincture() {
         for spec in World::new(seed).factions() {
             let f = spec.field;
             assert!(f.painted && f.division != Division::Plain, "{}", spec.name);
-            assert_ne!(f.tincture.is_metal(), f.tincture2.is_metal(), "{}: {:?} on {:?}", spec.name, f.tincture, f.tincture2);
+            // Unless its name gives both its colours ("the Redeemed" are argent and or).
+            if spec.looks.colours.len() < 2 {
+                assert_ne!(f.tincture.is_metal(), f.tincture2.is_metal(), "{}: {:?} on {:?}", spec.name, f.tincture, f.tincture2);
+            }
             assert_ne!(f.charge, armory::sections::device::Device::None, "{} has no crest", spec.name);
             assert_ne!(f.charge_tincture, f.tincture);
             assert_ne!(f.charge_tincture, f.tincture2);
@@ -113,7 +118,9 @@ fn likes_and_hates_are_one_to_three_and_never_both() {
 fn no_faction_contradicts_itself() {
     for seed in 0..300 {
         for spec in World::new(seed).factions() {
-            assert_ne!(spec.outfits[0], spec.outfits[1], "{}: {:?}", spec.name, spec.outfits);
+            if spec.classes.len() != 1 {
+                assert_ne!(spec.outfits[0], spec.outfits[1], "{}: {:?}", spec.name, spec.outfits);
+            }
             for hate in &spec.hates {
                 assert!(!spec.likes.contains(hate), "{} likes and hates {hate:?}", spec.name);
                 assert_ne!(*hate, Preference::Faction(spec.id), "{} hates itself", spec.name);
@@ -122,6 +129,159 @@ fn no_faction_contradicts_itself() {
                 }
             }
             assert!(!spec.likes.contains(&Preference::Faction(spec.id)), "{} likes itself", spec.name);
+        }
+    }
+}
+
+fn words(name: &str) -> Vec<String> {
+    name.split(|c: char| !c.is_alphanumeric()).map(str::to_lowercase).collect()
+}
+
+/// Every `[key:value]Word` rule of `data/faction_names.json`, as (lowercase word, key, value),
+/// so these tests follow the data and not a word list of their own.
+fn tagged_words() -> Vec<(String, String, String)> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<(String, String, String)>) {
+        match v {
+            serde_json::Value::String(s) => {
+                // A word may carry several tags.
+                let mut rest = s.as_str();
+                let mut set = Vec::new();
+                while let Some((tag, after)) = rest.strip_prefix('[').and_then(|r| r.split_once(']')) {
+                    if let Some((key, value)) = tag.split_once(':') {
+                        set.push((key.to_string(), value.to_string()));
+                    }
+                    rest = after;
+                }
+                for (key, value) in set {
+                    out.push((rest.to_lowercase(), key, value));
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            serde_json::Value::Object(map) => map.values().for_each(|i| walk(i, out)),
+            _ => {}
+        }
+    }
+    let data: serde_json::Value = serde_json::from_str(include_str!("../../../data/faction_names.json")).unwrap();
+    let mut out = Vec::new();
+    walk(&data, &mut out);
+    out
+}
+
+/// The distinct values the words of `name` give `key`.
+fn said(name: &str, key: &str) -> Vec<String> {
+    let w = words(name);
+    let mut out: Vec<String> = tagged_words().into_iter().filter(|(word, k, _)| k == key && w.contains(word)).map(|(_, _, v)| v).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[test]
+fn a_name_that_says_a_class_dresses_every_member_so() {
+    let (mut clerics, mut martial, mut knights, mut unsaid) = (0, 0, 0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            let classes = said(&spec.name, "class");
+            match &spec.classes[..] {
+                [ClassKind::Cleric] => {
+                    clerics += 1;
+                    assert_eq!(classes, ["cleric"], "{}", spec.name);
+                    assert_eq!(spec.outfits, [Outfit::Cleric; 2], "{}", spec.name);
+                    assert!(!spec.hates.contains(&Preference::Class(ClassKind::Cleric)), "{} hates clerics", spec.name);
+                }
+                [ClassKind::Fighter] => {
+                    knights += 1;
+                    assert_eq!(classes, ["fighter"], "{}", spec.name);
+                    assert_eq!(spec.outfits, [Outfit::Fighter; 2], "{}", spec.name);
+                    assert!(!spec.hates.contains(&Preference::Class(ClassKind::Fighter)), "{} hates fighters", spec.name);
+                }
+                [a, b] => {
+                    martial += 1;
+                    assert_eq!(classes, ["fighter_or_ranger"], "{}", spec.name);
+                    assert_eq!({ let mut c = [*a, *b]; c.sort_by_key(|k| *k as u8); c }, [ClassKind::Fighter, ClassKind::Ranger], "{}", spec.name);
+                    assert!(spec.outfits.contains(&Outfit::Fighter) && spec.outfits.contains(&Outfit::Ranger), "{}: {:?}", spec.name, spec.outfits);
+                    assert!(!spec.hates.contains(&Preference::Class(ClassKind::Fighter)) && !spec.hates.contains(&Preference::Class(ClassKind::Ranger)), "{}", spec.name);
+                }
+                [] => {
+                    unsaid += 1;
+                    assert!(classes.is_empty(), "{} says {classes:?} but sets no class", spec.name);
+                }
+                other => panic!("{}: {other:?}", spec.name),
+            }
+        }
+    }
+    assert!(clerics > 20 && martial > 20 && knights > 3 && unsaid > 400, "{clerics} cleric, {martial} martial, {knights} knights, {unsaid} unsaid");
+}
+
+#[test]
+fn a_name_that_says_a_sex_makes_every_member_so() {
+    let (mut women, mut men, mut unsaid) = (0, 0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).folk_factions() {
+            let sexes = said(&spec.name, "sex");
+            assert_eq!(spec.sex, match &sexes[..] {
+                [s] if s == "female" => Some(Sex::Female),
+                [s] if s == "male" => Some(Sex::Male),
+                [] => None,
+                other => panic!("{} says {other:?}", spec.name),
+            }, "{}", spec.name);
+            let members: Vec<Sex> = (0..200).map(|i| spec.member_sex(i * 7919 + seed)).collect();
+            let share = members.iter().filter(|s| **s == Sex::Female).count();
+            match spec.sex {
+                Some(Sex::Female) => {
+                    women += 1;
+                    assert_eq!(share, 200, "{}", spec.name);
+                }
+                Some(Sex::Male) => {
+                    men += 1;
+                    assert_eq!(share, 0, "{}", spec.name);
+                }
+                None => {
+                    unsaid += 1;
+                    assert!((70..=130).contains(&share), "{}: {share} of 200 are women", spec.name);
+                }
+            }
+        }
+    }
+    assert!(women > 20 && men > 20 && unsaid > 500, "{women} women, {men} men, {unsaid} unsaid");
+}
+
+#[test]
+fn a_faction_can_be_women_and_clerics_or_men_and_clerics() {
+    let (mut women, mut men) = (None, None);
+    for seed in 0..3000 {
+        for spec in World::new(seed).folk_factions() {
+            if spec.classes == [ClassKind::Cleric] {
+                match spec.sex {
+                    Some(Sex::Female) => women = women.or(Some((seed, spec.name.clone()))),
+                    Some(Sex::Male) => men = men.or(Some((seed, spec.name.clone()))),
+                    None => {}
+                }
+            }
+        }
+    }
+    assert!(women.is_some() && men.is_some(), "women and clerics {women:?}, men and clerics {men:?}");
+}
+
+#[test]
+fn no_name_says_two_classes() {
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            assert!(said(&spec.name, "class").len() < 2, "{} says two classes", spec.name);
+        }
+    }
+    // The grammar notes a key set twice to different values.
+    let g = procgen_grammar::Grammar::from_pairs(&[("origin", &["[class:cleric]a [class:fighter]b", "[class:cleric]a [class:cleric]b"])]);
+    let conflicts = |seed| procgen_grammar::expand_tagged(&g, "#origin#", seed).unwrap().conflicts;
+    assert!((0..20).any(|s| conflicts(s) == ["class"]) && (0..20).any(|s| conflicts(s).is_empty()));
+}
+
+#[test]
+fn the_same_seed_gives_the_same_name_and_makeup() {
+    for seed in 0..40 {
+        let (a, b) = (World::new(seed), World::new(seed));
+        for (x, y) in a.factions().iter().zip(b.factions()) {
+            assert_eq!((&x.name, &x.classes, x.outfits), (&y.name, &y.classes, y.outfits));
         }
     }
 }
@@ -166,80 +326,218 @@ fn trades_read_as_the_folk_card_writes_them() {
     assert!(Tier::Novice < Tier::Apprentice && Tier::Apprentice < Tier::Expert && Tier::Expert < Tier::Master);
 }
 
+fn tincture(name: &str) -> armory::heraldry::Tincture {
+    use armory::heraldry::Tincture::*;
+    match name {
+        "or" => Or,
+        "argent" => Argent,
+        "gules" => Gules,
+        "azure" => Azure,
+        "vert" => Vert,
+        "purpure" => Purpure,
+        "sable" => Sable,
+        other => panic!("{other}"),
+    }
+}
+
+#[test]
+fn a_name_that_says_a_colour_gives_the_field_that_colour() {
+    let (mut one, mut two) = (0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            let said_main = said(&spec.name, "colour");
+            let said_second = said(&spec.name, "colour2");
+            assert_eq!(spec.looks.colours.first().map(|t| *t), said_main.first().map(|v| tincture(v)), "{}", spec.name);
+            assert_eq!(spec.looks.colours.get(1).map(|t| *t), said_second.first().map(|v| tincture(v)), "{}", spec.name);
+            let Some(&main) = spec.looks.colours.first() else { continue };
+            assert_eq!(spec.field.tincture, main, "{}", spec.name);
+            if let Some(&second) = spec.looks.colours.get(1) {
+                two += 1;
+                assert_eq!(spec.field.tincture2, second, "{}", spec.name);
+            } else {
+                one += 1;
+                assert_ne!(spec.field.tincture2.is_metal(), main.is_metal(), "{}: the other colour is of the other kind", spec.name);
+            }
+            assert!(spec.field.charge_tincture != spec.field.tincture && spec.field.charge_tincture != spec.field.tincture2, "{}", spec.name);
+        }
+    }
+    assert!(one > 10 && two > 0, "{one} named one colour, {two} two");
+}
+
+#[test]
+fn the_sisters_of_azul_wear_blue_robes() {
+    let found = (0..4000).find_map(|seed| World::new(seed).factions().iter().find(|f| f.name == "the Sisters of Azul").cloned());
+    let spec = found.expect("a world has the Sisters of Azul");
+    assert_eq!(spec.field.tincture, armory::heraldry::Tincture::Azure);
+    assert_eq!((spec.looks.garment, spec.looks.trim, spec.sex), (Some(Garment::Robe), None, Some(Sex::Female)));
+}
+
+#[test]
+fn the_redeemed_are_knights_of_every_folk() {
+    let found = (0..4000).find_map(|seed| World::new(seed).factions().iter().find(|f| f.name == "the Redeemed").cloned());
+    let spec = found.expect("a world has the Redeemed");
+    use armory::heraldry::Tincture::*;
+    assert_eq!((spec.field.tincture, spec.field.tincture2), (Argent, Or));
+    assert_eq!((spec.armour, spec.looks.garment, spec.looks.trim), (ArmourLean::Plate, Some(Garment::RobeOverArmour), Some(Trim::GoldHem)));
+    assert_eq!((spec.classes.clone(), spec.outfits), (vec![ClassKind::Fighter], [Outfit::Fighter; 2]));
+    assert!(!spec.insular);
+    let mut rng = Mulberry32::new(9);
+    let mut counts = std::collections::HashMap::new();
+    for _ in 0..1200 {
+        *counts.entry(spec.member_folk(&mut rng)).or_insert(0) += 1;
+    }
+    assert_eq!(counts.len(), Folk::ALL.len());
+    assert!(counts.values().all(|n| (140..=260).contains(n)), "{counts:?}");
+}
+
+#[test]
+fn the_crimson_brothers_are_men_in_red() {
+    let found = (0..4000).find_map(|seed| World::new(seed).factions().iter().find(|f| f.name == "the Crimson Brothers").cloned());
+    let spec = found.expect("a world has the Crimson Brothers");
+    assert_eq!(spec.field.tincture, armory::heraldry::Tincture::Gules);
+    assert_eq!((spec.sex, spec.looks.garment), (Some(Sex::Male), Some(Garment::Robe)));
+}
+
+#[test]
+fn a_name_that_says_a_folk_keeps_it() {
+    let (mut own, mut mixed) = (0, 0);
+    for seed in 0..300 {
+        for spec in World::new(seed).folk_factions() {
+            match said(&spec.name, "folk_mix").first().map(String::as_str) {
+                Some("own") => {
+                    own += 1;
+                    assert!(spec.insular && spec.looks.folk == Some(FolkSaid::Own), "{}", spec.name);
+                }
+                Some("mixed") => {
+                    mixed += 1;
+                    assert!(!spec.insular && spec.looks.folk == Some(FolkSaid::Mixed), "{}", spec.name);
+                }
+                _ => assert_eq!(spec.looks.folk, None, "{}", spec.name),
+            }
+        }
+    }
+    assert!(own > 3 && mixed > 3, "{own} own, {mixed} mixed");
+}
+
+#[test]
+fn a_name_that_says_nothing_of_looks_rolls_as_before() {
+    // Rolled with no name read at all, the faction is the same: the look tags change only the
+    // factions whose names say them.
+    let mut plain = 0;
+    for seed in 0..120 {
+        let world = World::new(seed);
+        let mut taken = HashSet::new();
+        for (i, spec) in world.folk_factions().iter().enumerate() {
+            if spec.looks.is_plain() && spec.classes.is_empty() {
+                plain += 1;
+                // (The tastes a denizen faction takes the place of are the one thing that moves.)
+                let again = roll_with(seed, i, world.folk_count(), &taken, None);
+                assert_eq!(FactionSpec { likes: vec![], hates: vec![], ..spec.clone() }, FactionSpec { likes: vec![], hates: vec![], ..again }, "{}", spec.name);
+            }
+            taken.insert(spec.name.clone());
+        }
+    }
+    assert!(plain > 800, "{plain}");
+}
+
+#[test]
+fn looks_are_the_same_every_run() {
+    for seed in 0..40 {
+        for (x, y) in World::new(seed).factions().iter().zip(World::new(seed).factions()) {
+            assert_eq!((&x.looks, x.field, x.armour, x.insular), (&y.looks, y.field, y.armour, y.insular));
+        }
+    }
+}
+
+#[test]
+fn reavers_dress_light() {
+    let mut found = 0;
+    for seed in 0..300 {
+        for spec in World::new(seed).factions() {
+            if said(&spec.name, "armour").first().map(String::as_str) == Some("light") {
+                found += 1;
+                assert_eq!(spec.armour, ArmourLean::Leather, "{}", spec.name);
+            }
+        }
+    }
+    assert!(found > 3, "{found}");
+}
+
 // Denizen factions.
 
-/// The folk factions (name and folk) that worlds rolled before denizen factions existed.
+/// The folk factions (name and folk) that worlds rolled before denizen factions existed, as the
+/// names' words set them (#663, #682).
 const BEFORE_DENIZENS: &[(u32, &[(&str, Folk)])] = &[
     (0, &[
-        ("the Stone grudge-bearers", Folk::Dwarf),
+        ("the Gold Grudge-bearers", Folk::Dwarf),
         ("the Stonebeard Guild of Ale", Folk::Dwarf),
         ("the Lamp Chime", Folk::Gnome),
         ("the Crest Vigil", Folk::Lizardfolk),
-        ("the Wardens of the Drowned Gate", Folk::Human),
-        ("the Stonekin of the Sworn Halls", Folk::Dwarf),
+        ("the Fenwick guardians", Folk::Human),
+        ("the Burning Stair brotherhood", Folk::Dwarf),
         ("the Deephold brewers", Folk::Dwarf),
-        ("the Rovers of the Sunken Road", Folk::Human),
-        ("the Lost Fellowship", Folk::Human),
+        ("the Rovers of the Weeping Shore", Folk::Human),
+        ("the Knights of the Drowned Shore", Folk::Human),
         ("the Spit Cackle", Folk::Goblin),
         ("the Stonetail traders", Folk::Lizardfolk),
-        ("the Hiss of the Last Tail", Folk::Lizardfolk),
-        ("the Lens Court", Folk::Gnome),
-        ("the Morwick reavers", Folk::Human),
-        ("the Brotherhood of the Ticking Hatch", Folk::Gnome),
-        ("the Sons of the Forsaken Cinder", Folk::Dwarf),
+        ("the Brood of the Last Abbey", Folk::Lizardfolk),
+        ("the Brothers of Rojo", Folk::Gnome),
+        ("the Ashen Highwaymen", Folk::Human),
+        ("the Brotherhood of the Burning Hatch", Folk::Gnome),
+        ("the Rune Abbey", Folk::Dwarf),
         ("the Trufflepen raiders", Folk::Pigfolk),
     ]),
     (1, &[
         ("the Gnomish Brotherhood of Springs", Folk::Gnome),
-        ("the Scale Synod", Folk::Lizardfolk),
-        ("the Last Gate brotherhood", Folk::Human),
-        ("the Thanes of the Sworn Door", Folk::Dwarf),
+        ("the Hatchlings of Plata", Folk::Lizardfolk),
+        ("the Lantern Synod", Folk::Human),
+        ("the Grim Stair house", Folk::Dwarf),
         ("the Granitefist factors", Folk::Dwarf),
-        ("the Spindle Workshop", Folk::Gnome),
-        ("the Elders of the Deep Gate", Folk::Dwarf),
+        ("the White Apprentices", Folk::Gnome),
+        ("the Elders of the Chapel", Folk::Dwarf),
         ("the Boltgimble troupe", Folk::Gnome),
-        ("the Wardens of the Weeping Candle", Folk::Human),
-        ("the Lens Court", Folk::Gnome),
-        ("the Chant of the Forsaken Forge", Folk::Dwarf),
-        ("the Bone-watchers", Folk::Goblin),
-        ("the Black Concern of Ale", Folk::Human),
+        ("the Thorn Sanctum", Folk::Human),
+        ("the Gilded Brothers", Folk::Gnome),
+        ("the Hollow Gem Vigil", Folk::Dwarf),
+        ("the Brothers of the Black Pit", Folk::Goblin),
+        ("the Hollowvale Exchange", Folk::Human),
     ]),
     (9, &[
-        ("the Watchers of the Bristled Midden", Folk::Pigfolk),
+        ("the Bristleford herders", Folk::Pigfolk),
         ("the Elmvale league", Folk::Human),
-        ("the League of the Honest Pen", Folk::Pigfolk),
-        ("the Whelps of the Rotten Door", Folk::Goblin),
+        ("the Black Market", Folk::Pigfolk),
+        ("the Whelps of the Chapel", Folk::Goblin),
         ("the Grub Choir", Folk::Goblin),
-        ("the Silent House", Folk::Dwarf),
-        ("the Emerald Sun herbalists", Folk::Lizardfolk),
+        ("the Grudge-bearers of the Unbroken Vault", Folk::Dwarf),
+        ("the Coiled Sun herbalists", Folk::Lizardfolk),
         ("the Venomous Brood", Folk::Lizardfolk),
-        ("the Stonebrow ingot-sellers", Folk::Dwarf),
-        ("the Wickwick magpies", Folk::Gnome),
+        ("the Dwarven Guild of Rivets", Folk::Dwarf),
+        ("the Crooked Tinkers", Folk::Gnome),
         ("the Bristlepen traders", Folk::Pigfolk),
-        ("the Rite of the Bloody Pit", Folk::Goblin),
+        ("the Whelps of the Bloody Shrine", Folk::Goblin),
         ("the Human League of Salt", Folk::Human),
         ("the Sunscale League of Eggs", Folk::Lizardfolk),
-        ("the Bristle Sounder", Folk::Pigfolk),
-        ("the Syndicate of the Little Workshop", Folk::Gnome),
-        ("the Cutpurses of the Silent Stair", Folk::Human),
+        ("the Silver Elders", Folk::Pigfolk),
+        ("the Azure Consortium", Folk::Gnome),
+        ("the Ember highwaymen", Folk::Human),
     ]),
     (1207, &[
-        ("the Stonehelm wardens", Folk::Dwarf),
-        ("the Grey Synod", Folk::Human),
-        ("the Ratchet scavengers", Folk::Gnome),
+        ("the Silent Moot", Folk::Dwarf),
+        ("the Knights of the Black Road", Folk::Human),
+        ("the Purple Scavengers", Folk::Gnome),
         ("the Springnook troupe", Folk::Gnome),
         ("the Muddy Tuskers", Folk::Pigfolk),
-        ("the Whistle Choir", Folk::Gnome),
-        ("the Whirring Burrow troupe", Folk::Gnome),
-        ("the Sunless Vigil", Folk::Lizardfolk),
-        ("the Ash Rite", Folk::Human),
-        ("the Chain Choir", Folk::Human),
-        ("the Weary Acorn Chorus", Folk::Pigfolk),
-        ("the Rune Choir", Folk::Dwarf),
+        ("the Chime of the Whirring Ratchet", Folk::Gnome),
+        ("the Lens Court", Folk::Gnome),
+        ("the Elders of the Ancient Mist", Folk::Lizardfolk),
+        ("the Brothers of the Unsleeping Well", Folk::Human),
+        ("the Pale Choir", Folk::Human),
+        ("the Azure Drovers", Folk::Pigfolk),
+        ("the Choir of the Deep Ember", Folk::Dwarf),
         ("the Slimeclaw swappers", Folk::Goblin),
-        ("the Tuskers of the Muddy Stye", Folk::Pigfolk),
-        ("the Unbroken Forge factors", Folk::Dwarf),
-        ("the Humming Circle", Folk::Gnome),
+        ("the Snout raiders", Folk::Pigfolk),
+        ("the Cold Forge factors", Folk::Dwarf),
+        ("the Scavengers of the Last Hatch", Folk::Gnome),
     ]),
 ];
 
@@ -413,4 +711,30 @@ fn deeper_levels_draw_the_folk_and_usually_one_denizen_faction() {
     }
     assert!(with_one * 10 >= levels * 7, "{with_one} of {levels} levels have a denizen faction");
     assert!(with_two > 0 && with_two * 3 < with_one, "{with_two} of {with_one} have two");
+}
+
+#[test]
+fn a_denizen_faction_takes_its_looks_from_its_name_and_its_members_stay_men() {
+    let (mut coloured, mut classed) = (0, 0);
+    for seed in 0..200 {
+        for spec in World::new(seed).denizen_factions() {
+            assert_eq!(spec.looks.folk, None, "{}: a denizen is no one folk", spec.name);
+            assert!(!spec.insular && spec.sex.is_none(), "{}", spec.name);
+            // The members are denizens, rolled as men, whatever the name says of its Daughters.
+            assert!((0..50).all(|i| spec.member_sex(i * 31 + seed) == Sex::Male), "{}", spec.name);
+            if let Some(&first) = spec.looks.colours.first() {
+                coloured += 1;
+                assert_eq!(spec.field.tincture, first, "{}", spec.name);
+            }
+            if let [only] = spec.classes[..] {
+                classed += 1;
+                assert_eq!(spec.outfits, [Outfit::of(only); 2], "{}", spec.name);
+                assert!(!spec.hates.contains(&Preference::Class(only)), "{}", spec.name);
+            }
+            if let Some(armour) = spec.looks.armour {
+                assert_eq!(spec.armour, armour, "{}", spec.name);
+            }
+        }
+    }
+    assert!(coloured > 5 && classed > 20, "{coloured} named a colour, {classed} a class");
 }

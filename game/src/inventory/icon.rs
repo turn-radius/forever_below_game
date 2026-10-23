@@ -332,7 +332,9 @@ pub fn reveal_icons(mut commands: Commands, cache: Res<IconCache>, awaiting: Que
 /// its longest side a coif or a tunic lay on its side. Its footprint runs the same way, so
 /// lying unturned it is upright, and a quarter turn (R) is the only other way it can lie.
 pub fn stands_upright(item: &Item) -> bool {
-    fb_items::profile::stands_upright(item.shape.family())
+    // A thing built to stand on a base (a pitched tent, a set fire, a candle) is drawn standing
+    // as built too: end-on it is a beige box.
+    fb_items::profile::stands_upright(item.shape.family()) || fb_items::profile::stands_on_base(&item.shape)
 }
 
 /// How an item is posed for its icon: turned so its longest side runs up the image and its
@@ -544,6 +546,19 @@ mod tests {
         let turned = max - min;
         assert!(turned.x > turned.y * 2.0, "{turned}");
         assert!(icon_pose(&[], false, false).is_none());
+    }
+
+    #[test]
+    fn a_pitched_tent_is_posed_standing_not_end_on() {
+        let packed = fb_items::roll_item("Tent", 4).unwrap();
+        let pitched = fb_items::camp::set_up(&packed).unwrap();
+        assert!(!stands_upright(&packed), "rolled up it lies along its longest side");
+        assert!(stands_upright(&pitched));
+        let points: Vec<Vec3> = pitched.shape.build().parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+        let (rotation, min, max) = icon_pose(&points, stands_upright(&pitched), false).unwrap();
+        assert!((rotation * Vec3::Y).y > 0.9, "ground down");
+        let posed = max - min;
+        assert!(posed.x > posed.y, "wider than tall, not stood on end: {posed}");
     }
 
     #[test]
