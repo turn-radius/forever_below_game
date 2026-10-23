@@ -270,6 +270,12 @@ pub struct Race {
     pub legs: Option<Digitigrade>,
     #[serde(default)]
     pub tail_shape: Option<TailRow>,
+    /// Bat-like wings on the back ([`crate::wings`]).
+    #[serde(default)]
+    pub wings: Option<WingRow>,
+    /// Hands end in claws, not nails.
+    #[serde(default)]
+    pub claws: bool,
     #[serde(default)]
     pub muzzle: Option<MuzzleRow>,
     /// The body's hunch: how far the head is thrust forward of the neck's column, as a share of
@@ -381,7 +387,7 @@ pub struct Digitigrade {
 pub enum TailEnd {
     /// A tuft of hair (a bull's).
     Tuft,
-    /// A spade-shaped blade (a devil's); not built yet.
+    /// A spade-shaped blade (a devil's).
     Spade,
 }
 
@@ -398,6 +404,27 @@ pub struct TailRow {
     /// back (a goat's).
     #[serde(default)]
     pub lift: f32,
+    /// How much more each bone swings back than the one before it (radians per bone), lifting a
+    /// long tail's end into an S; 0 hangs it.
+    #[serde(default)]
+    pub curve: f32,
+}
+
+/// The wings a race grows: a bat's, a membrane stretched on an arm and fingers, rolled within
+/// these ranges ([`crate::parts::WingRoll`]).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct WingRow {
+    /// Each wing's open reach from the shoulder, as a share of the body's height.
+    pub span: Span,
+    /// How open they rest, 0 folded against the back to 1 spread.
+    pub open: Span,
+    /// Chance that the membrane is torn.
+    pub tear: f32,
+    /// Membrane colours; empty draws the skin darkened.
+    #[serde(default)]
+    pub membrane: Vec<Hex>,
+    /// Fingers on the wing, 3 or 4.
+    pub fingers: usize,
 }
 
 /// A muzzle: a long, deep snout lofted along the face from a broad skull (a bull's).

@@ -1,6 +1,5 @@
-//! A folk's rig: sixteen joints taken from the body's own limb joints, then four bones for a
-//! jointed tail, each with its rest frame, and the maths to pose it ([`RigPose`]) and to skin
-//! points with it. Plain Rust, no Bevy.
+//! A folk's rig: sixteen joints, then a tail's four bones and the wings' four, with their rest frames, taken from the body's own limb joints,
+//! and the maths to pose it ([`RigPose`]) and to skin points with it. Plain Rust, no Bevy.
 //!
 //! Every joint rests with an identity rotation, so a joint's frame is body space moved to its
 //! origin: a rotation about +X is a swing in the vertical plane (negative swings a hanging limb
@@ -18,7 +17,10 @@ use crate::limb::Side;
 
 /// How many joints a folk's rig has: sixteen of the body, then [`TAIL_JOINTS`] of a jointed tail
 /// (a race without one has them at rest at the pelvis, and nothing is weighted to them).
-pub const JOINTS: usize = 16 + TAIL_JOINTS;
+pub const JOINTS: usize = 16 + TAIL_JOINTS + WING_JOINTS;
+
+/// The joints a pair of wings has: a root on the back and a wrist for each wing.
+pub const WING_JOINTS: usize = 4;
 
 /// The bones a jointed tail has at most.
 pub const TAIL_JOINTS: usize = crate::parts::TAIL_BONES;
@@ -51,6 +53,12 @@ pub enum Joint {
     Tail1,
     Tail2,
     Tail3,
+    /// A wing's root on the back (it hangs from the chest) and its wrist, where the fingers
+    /// start, for each side (a race without wings has them at rest at the chest).
+    WingR0,
+    WingR1,
+    WingL0,
+    WingL1,
 }
 
 impl Joint {
@@ -76,6 +84,10 @@ impl Joint {
         Joint::Tail1,
         Joint::Tail2,
         Joint::Tail3,
+        Joint::WingR0,
+        Joint::WingR1,
+        Joint::WingL0,
+        Joint::WingL1,
     ];
 
     /// The tail's bones, root first.
@@ -107,6 +119,10 @@ impl Joint {
             Joint::Tail1 => "tail_1",
             Joint::Tail2 => "tail_2",
             Joint::Tail3 => "tail_3",
+            Joint::WingR0 => "wing_r0",
+            Joint::WingR1 => "wing_r1",
+            Joint::WingL0 => "wing_l0",
+            Joint::WingL1 => "wing_l1",
         }
     }
 
@@ -128,7 +144,18 @@ impl Joint {
             Joint::Tail1 => Joint::Tail0,
             Joint::Tail2 => Joint::Tail1,
             Joint::Tail3 => Joint::Tail2,
+            Joint::WingR0 | Joint::WingL0 => Joint::Chest,
+            Joint::WingR1 => Joint::WingR0,
+            Joint::WingL1 => Joint::WingL0,
         })
+    }
+
+    /// Root and wrist of `side`'s wing.
+    pub fn wing(side: Side) -> [Joint; 2] {
+        match side {
+            Side::Right => [Joint::WingR0, Joint::WingR1],
+            Side::Left => [Joint::WingL0, Joint::WingL1],
+        }
     }
 
     /// Shoulder, elbow, wrist of `side`'s arm.
@@ -321,6 +348,13 @@ impl Rig {
         let tail = body.tail_joints();
         for (i, joint) in Joint::TAIL.into_iter().enumerate() {
             rest[joint.index()] = tail.get(i).copied().unwrap_or(rest[Joint::Pelvis.index()]);
+        }
+        // The same for wings: roots on the back and wrists, or at the chest for a race with none.
+        for side in Side::BOTH {
+            let [root, wrist] = Joint::wing(side);
+            let at = body.wing_joints(side);
+            rest[root.index()] = at.map_or(rest[Joint::Chest.index()], |j| j[0]);
+            rest[wrist.index()] = at.map_or(rest[Joint::Chest.index()], |j| j[1]);
         }
         Rig { rest }
     }

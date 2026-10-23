@@ -15,7 +15,7 @@
 //! piece is a pure function of its numbers; the rolls use [`procgen_rng::Mulberry32`] only.
 //! The shapes and numbers began as the first minotaur's, built as a creature (our own).
 
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use armory::geom::vec3::{self, V3};
 use armory::geom::{CatmullRom, GridOptions, MeshBuilder, Shading, SweepOptions, spike, stitch_grid, tube, uv_sphere};
@@ -83,6 +83,24 @@ pub struct Traits {
     pub hoof_tone: f32,
     /// Which of a race's fur colours (0..=1 over its list).
     pub fur: f32,
+    pub wings: WingRoll,
+}
+
+/// How a seed shaped the wings, each a share (0..=1) of its row's range.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WingRoll {
+    pub span: f32,
+    pub open: f32,
+    /// The roll the row's chance of a tear is tested against, then which panel and how far along
+    /// the trailing edge it opens, and a second tear's.
+    pub tear_roll: f32,
+    pub tear_panel: f32,
+    pub tear_at: f32,
+    pub tear2_panel: f32,
+    pub tear2_at: f32,
+    /// Which membrane colour, and how much darker the bones are.
+    pub tone: f32,
+    pub bone: f32,
 }
 
 impl Traits {
@@ -108,9 +126,21 @@ impl Traits {
         let broken_at = rng.range_f32(0.35, 0.8);
         let tuft = rng.next_f64() as f32;
         let hoof_tone = rng.next_f64() as f32;
-        let horns = HornRoll { length, curve, spread, rise, wear, broken_roll, broken_side, broken_at };
         let fur = rng.next_f64() as f32;
-        Traits { horns, marking, ring, muzzle, ears, mane, mane_tone, eyes, tuft, hoof_tone, fur }
+        // The wings come last, so the rolls above keep their numbers.
+        let wings = WingRoll {
+            span: rng.next_f64() as f32,
+            open: rng.next_f64() as f32,
+            tear_roll: rng.next_f64() as f32,
+            tear_panel: rng.next_f64() as f32,
+            tear_at: rng.range_f32(0.15, 0.85),
+            tear2_panel: rng.next_f64() as f32,
+            tear2_at: rng.range_f32(0.15, 0.85),
+            tone: rng.next_f64() as f32,
+            bone: rng.next_f64() as f32,
+        };
+        let horns = HornRoll { length, curve, spread, rise, wear, broken_roll, broken_side, broken_at };
+        Traits { horns, marking, ring, muzzle, ears, mane, mane_tone, eyes, tuft, hoof_tone, fur, wings }
     }
 
     /// The ring's colour and material kind.
@@ -465,4 +495,52 @@ pub fn tuft(end: V3, seg: f32, radius: f32, fullness: f32, seed: u32) -> MeshBui
         out.append(&tube(&path, 5, &SweepOptions::default(), |s| 0.2 * radius * (1.0 + 0.4 * fullness) * (1.0 - 0.85 * s) + 0.01));
     }
     out
+}
+
+/// A devil's spade at the end of a tail: a flat, leaf-shaped blade on a short neck, pointing along
+/// `dir` from `end` (where the tail's cord ends, `radius` thick), with a ridge down its middle.
+/// `scale` is the body's, which sets its size.
+pub fn spade(end: V3, dir: V3, radius: f32, scale: f32) -> MeshBuilder {
+    let length = 2.4 * scale.sqrt().max(0.8) + 6.0 * radius;
+    let width = 0.5 * length * 0.62;
+    let thick = 0.28 * radius + 0.03;
+    // Width along the blade: a short neck, the broad shoulders of the spade near its first third,
+    // then a point.
+    let half_width = |a: f32| -> f32 {
+        let f = a / length;
+        let neck = radius * 0.9;
+        if f < 0.18 {
+            neck + (width * 0.35 - neck) * (f / 0.18)
+        } else {
+            let k = (f - 0.18) / 0.82;
+            // A heart's two lobes, then the point.
+            width * (0.35 + 0.65 * (PI * k.powf(0.6).min(1.0) * 0.5).sin() * (1.0 - k.powf(2.2))) * (1.0 - 0.1 * k)
+        }
+    };
+    let rows = 28usize;
+    let cols = 20usize;
+    let mut rings: Vec<Vec<V3>> = vec![];
+    for i in 0..=rows {
+        let a = length * i as f32 / rows as f32;
+        let w = half_width(a).max(0.0);
+        // Thin through, thicker along the middle ridge.
+        let ring: Vec<V3> = (0..cols)
+            .map(|c| {
+                let ang = TAU * c as f32 / cols as f32;
+                let (s, co) = ang.sin_cos();
+                let t = thick * (1.0 - 0.8 * (a / length)) + 0.01;
+                [w * co, a, t * s]
+            })
+            .collect();
+        rings.push(ring);
+    }
+    let mut m = stitch_grid(&rings, &GridOptions { wrap_around: true, ..Default::default() });
+    m.flip();
+    m.push_fan_cap(&rings[0], [0.0, -1.0, 0.0]);
+    m.push_fan_cap(&rings[rows], [0.0, 1.0, 0.0]);
+    // The blade's flat faces the side to side of the tail's swing: its width is across the swing.
+    let across = vec3::normalize_or(vec3::cross(dir, vec3::Z), vec3::X);
+    let flat = vec3::cross(across, dir);
+    m.place_basis(end, dir, flat);
+    m
 }

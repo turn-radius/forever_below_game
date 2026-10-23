@@ -18,7 +18,7 @@ use armory::geom::{CatmullRom, GridOptions, MeshBuilder, OutlineMode, SweepOptio
 use armory::{ItemMesh, MaterialKind, Rgb};
 
 use crate::folk::{Folk, Race};
-use crate::hand::{HandPose, grip_centre, hand_meshes};
+use crate::hand::{HandPose, grip_centre, hand_meshes_with};
 use crate::limb::{Limb, Side};
 use crate::place::Placement;
 use crate::spec::BodySpec;
@@ -775,7 +775,7 @@ impl Body {
         let mut nails = MeshBuilder::new();
         for side in Side::BOTH {
             arms.append(&self.arm_mesh(side));
-            let (mut h, mut n) = hand_meshes(&self.hand_form(), &self.hand_pose(side));
+            let (mut h, mut n) = hand_meshes_with(&self.hand_form(), &self.hand_pose(side), self.race().claws);
             let at = self.hand_placement(side);
             at.apply(&mut h);
             at.apply(&mut n);
@@ -784,7 +784,7 @@ impl Body {
         }
         add(arms, "arms", skin, true);
         add(hands, "hands", skin, true);
-        add(nails, "nails", lighten(skin, 0.22), false);
+        add(nails, "nails", if self.race().claws { crate::parts::shade(skin, -0.45) } else { lighten(skin, 0.22) }, false);
         let mut legs = MeshBuilder::new();
         let mut feet = MeshBuilder::new();
         let mut hooves = MeshBuilder::new();
@@ -812,6 +812,11 @@ impl Body {
             let tone = crate::parts::mix(Rgb::hex(0x1f1a17), Rgb::hex(0x8d8473), self.traits().hoof_tone);
             out.parts.push(hooves.into_part("hooves", OutlineMode::Welded).with_material(MaterialKind::Bone).with_tint(tone));
         }
+        if let Some(spade) = self.tail_spade() {
+            let tint = crate::parts::shade(skin, -0.25);
+            out.parts.push(spade.into_part("tail_spade", OutlineMode::Welded).with_material(MaterialKind::Skin).with_tint(tint));
+        }
+        out.parts.extend(self.wing_parts(0.0));
         if let Some(hair) = self.tail_hair() {
             let tint = fur.unwrap_or(self.spec.hair_colour);
             out.parts.push(hair.into_part("tail_hair", OutlineMode::Welded).with_material(MaterialKind::Hair).with_tint(tint).without_outline());
@@ -1017,7 +1022,7 @@ impl Body {
         let mut points = vec![p];
         for i in 0..n {
             // Leaving the rump backward and down, then hanging.
-            let swing = 0.9 / (1.0 + 1.6 * i as f32) + shape.lift * (1.0 - 0.15 * i as f32).max(0.0);
+            let swing = 0.9 / (1.0 + 1.6 * i as f32) + shape.lift * (1.0 - 0.15 * i as f32).max(0.0) + shape.curve * i as f32;
             p = vec3::add(p, [0.0, -seg * swing.cos(), -seg * swing.sin()]);
             points.push(p);
         }
@@ -1043,6 +1048,18 @@ impl Body {
         let end = *points.last()?;
         let seg = vec3::distance(points[points.len() - 2], end);
         Some(crate::parts::tuft(end, seg, radius(1.0), self.traits().tuft, self.spec.seed))
+    }
+
+    /// The tail's spade, if its shape ends in one: a leaf-shaped blade, flat, on the last bone's line.
+    fn tail_spade(&self) -> Option<MeshBuilder> {
+        let shape = self.race().tail_shape?;
+        if shape.end != crate::folk::TailEnd::Spade {
+            return None;
+        }
+        let (points, radius) = self.jointed_tail()?;
+        let end = *points.last()?;
+        let dir = vec3::normalize_or(vec3::sub(end, points[points.len() - 2]), vec3::neg(vec3::Y));
+        Some(crate::parts::spade(end, dir, radius(1.0), self.scale))
     }
 
     /// The foot of `side`'s leg if the race stands on its toes: the pastern, hoof and where they lie.

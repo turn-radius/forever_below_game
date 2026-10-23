@@ -53,6 +53,12 @@ pub fn grip_centre(form: &HandForm, pose: &HandPose) -> V3 {
 
 /// The skin of one hand and, separately, its nails.
 pub fn hand_meshes(form: &HandForm, pose: &HandPose) -> (MeshBuilder, MeshBuilder) {
+    hand_meshes_with(form, pose, false)
+}
+
+/// The skin of one hand and its nails, or its claws: a long hooked point from the end of each
+/// digit instead of a nail.
+pub fn hand_meshes_with(form: &HandForm, pose: &HandPose, claws: bool) -> (MeshBuilder, MeshBuilder) {
     let mut skin = MeshBuilder::new();
     // The palm rounds off just past the knuckles, under the fingers' roots.
     skin.append(&palm_mesh(form, form.knuckle_half_depth * 1.2, 0.0));
@@ -60,7 +66,7 @@ pub fn hand_meshes(form: &HandForm, pose: &HandPose) -> (MeshBuilder, MeshBuilde
     let digits = form.fingers.iter().zip(pose.fingers).chain(std::iter::once((&form.thumb, pose.thumb)));
     for (digit, curl) in digits {
         skin.append(&digit_mesh(digit, curl, 0.0));
-        nails.append(&nail(digit, curl));
+        nails.append(&if claws { claw(digit, curl) } else { nail(digit, curl) });
     }
     // The ball of the thumb: a flattened pad from the wrist toward the thumb's root.
     let t = &form.thumb;
@@ -71,6 +77,22 @@ pub fn hand_meshes(form: &HandForm, pose: &HandPose) -> (MeshBuilder, MeshBuilde
     pad.place_basis(centre, vec3::normalize_or([-0.35, 1.0, 0.0], vec3::Y), vec3::Z);
     skin.append(&pad);
     (skin, nails)
+}
+
+/// A claw: a curved point from the tip of a digit, along its last phalanx and hooking in toward the palm.
+fn claw(digit: &Digit, curl: f32) -> MeshBuilder {
+    let joints = digit.joints(curl);
+    let n = joints.len();
+    let (a, b) = (joints[n - 2], joints[n - 1]);
+    let along = vec3::normalize_or(vec3::sub(b, a), vec3::Y);
+    let back = vec3::normalize_or(vec3::sub(vec3::scale(along, vec3::dot(digit.bend, along)), digit.bend), vec3::Z);
+    let r = digit.radius;
+    let len = 0.95 * vec3::distance(a, b).max(r * 2.0);
+    // The base sits on the tip; the claw leaves along the phalanx, tipped a little toward the palm.
+    let dir = vec3::normalize_or(vec3::sub(vec3::scale(along, 1.0), vec3::scale(back, 0.22)), along);
+    let mut m = armory::geom::spike(0.62 * r, len, 7, 0.0, armory::geom::Shading::SMOOTH);
+    m.place(vec3::add(b, vec3::scale(along, -0.2 * r)), dir);
+    m
 }
 
 /// A nail on the back of a digit's last phalanx.
