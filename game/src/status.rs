@@ -271,7 +271,7 @@ fn show_card(
 
 /// Conditions to hold the delver under, for captures: `FB_CONDITIONS` lists them, comma
 /// separated, as `hunger:<0 to 1>`, `thirst:<0 to 1>`, `sleep:<0 to 1>`, `exhaustion:<level>`,
-/// `winded`, `load:<light|burdened|encumbered|overloaded>`, `poisoned` (for an hour) or
+/// `winded`, `load:<light|burdened|encumbered|overloaded>` or `load:<pounds>` (of a capacity of 165), `poisoned` (for an hour) or
 /// `poisoned:<minutes>`, and any other effect by its id at an intensity, `stinging_eyes:0.8`;
 /// `FB_CONDITION_HOVER=<n>` shows the
 /// card of the `n`th badge.
@@ -282,7 +282,7 @@ pub struct DebugConditions {
     pub sleepiness: Option<f64>,
     pub exhaustion: Option<u32>,
     pub winded: bool,
-    pub load: Option<LoadBand>,
+    pub load: Option<Load>,
     /// Game hours of poison to hold the delver at.
     pub poisoned: Option<f64>,
     /// Any other effect by its id in `data/effects.json`, at an intensity.
@@ -313,12 +313,13 @@ impl DebugConditions {
                 "winded" => debug.winded = true,
                 "poisoned" | "poison" => debug.poisoned = Some(value.trim().parse::<f64>().map_or(fb_character::poison::VENOM_POISONED_HOURS, |minutes| minutes.max(0.0) / 60.0)),
                 "load" => {
-                    debug.load = match value.trim().to_ascii_lowercase().as_str() {
-                        "light" => Some(LoadBand::Light),
-                        "burdened" => Some(LoadBand::Burdened),
-                        "encumbered" => Some(LoadBand::Encumbered),
-                        "overloaded" => Some(LoadBand::Overloaded),
-                        _ => None,
+                    let value = value.trim().to_ascii_lowercase();
+                    debug.load = match value.as_str() {
+                        "light" => Some(Load::sample(LoadBand::Light)),
+                        "burdened" => Some(Load::sample(LoadBand::Burdened)),
+                        "encumbered" => Some(Load::sample(LoadBand::Encumbered)),
+                        "overloaded" => Some(Load::sample(LoadBand::Overloaded)),
+                        pounds => pounds.parse::<f32>().ok().map(|lb| Load::of(lb.max(0.0), 165.0)),
                     }
                 }
                 other => {
@@ -371,8 +372,8 @@ fn hold_debug_conditions(
         if debug.winded {
             stamina.set_if_neq(DelverStamina(fb_character::Stamina { value: 0.05, winded: true }));
         }
-        if let Some(band) = debug.load {
-            load.set_if_neq(Load(band));
+        if let Some(held) = debug.load {
+            load.set_if_neq(held);
         }
     }
 }
@@ -531,7 +532,7 @@ mod tests {
         let debug = DebugConditions::parse("hunger:0.8, winded,load:Encumbered,exhaustion:2,thirst:3,poisoned:30,bogus");
         assert_eq!(
             debug,
-            DebugConditions { hunger: Some(0.8), thirst: Some(1.0), exhaustion: Some(2), winded: true, load: Some(LoadBand::Encumbered), poisoned: Some(0.5), ..DebugConditions::default() }
+            DebugConditions { hunger: Some(0.8), thirst: Some(1.0), exhaustion: Some(2), winded: true, load: Some(Load::sample(LoadBand::Encumbered)), poisoned: Some(0.5), ..DebugConditions::default() }
         );
         assert_eq!(DebugConditions::parse("poisoned").poisoned, Some(1.0), "an hour, as venom gives");
         assert!(!DebugConditions::parse("").holds_anything());

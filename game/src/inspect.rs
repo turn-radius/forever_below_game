@@ -95,13 +95,11 @@ pub mod remote {
         pub max: f64,
     }
 
-    #[reflect_remote(fb_character::LoadBand)]
+    #[reflect_remote(fb_character::Burden)]
     #[derive(Clone, Copy, Debug)]
-    pub enum LoadBandDef {
-        Light,
-        Burdened,
-        Encumbered,
-        Overloaded,
+    pub struct BurdenDef {
+        pub load_lb: f64,
+        pub capacity_lb: f64,
     }
 }
 

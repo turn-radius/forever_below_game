@@ -118,8 +118,9 @@ impl Activity {
     }
 }
 
-/// Load band based on carrying capacity percentage (SRD p. 79).
-/// Light: under 34%. Burdened: 34% to under 67%. Encumbered: 67% to 100%. Overloaded: above 100%.
+/// The label of a load, by SRD 5.1's "Variant: Encumbrance" (pp. 79-80) edges at 5, 10 and 15
+/// times STR: Light up to 5, Burdened up to 10, Encumbered up to 15, Overloaded past that. The
+/// band only names the load; pace and sprint drain come from the load itself ([`Burden`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LoadBand {
     #[default]
@@ -137,29 +138,15 @@ impl LoadBand {
 
     /// [`LoadBand::from_load`] under `rules`.
     pub fn from_load_with(rules: &Rules, load_lb: f64, capacity_lb: f64) -> Self {
-        if capacity_lb <= 0.0 {
-            return LoadBand::Overloaded;
-        }
-        let percent = load_lb / capacity_lb;
-        if percent > rules.load.overloaded_over {
+        if capacity_lb <= 0.0 || load_lb > capacity_lb {
             LoadBand::Overloaded
-        } else if percent >= rules.load.encumbered_from {
+        } else if load_lb > rules.load.encumbered_edge(capacity_lb) {
             LoadBand::Encumbered
-        } else if percent >= rules.load.burdened_from {
+        } else if load_lb > rules.load.burdened_edge(capacity_lb) {
             LoadBand::Burdened
         } else {
             LoadBand::Light
         }
-    }
-
-    /// Walk speed multiplier for this load band.
-    pub fn walk_multiplier(self) -> f32 {
-        self.walk_multiplier_with(defaults())
-    }
-
-    /// [`LoadBand::walk_multiplier`] under `rules`.
-    pub fn walk_multiplier_with(self, rules: &Rules) -> f32 {
-        rules.load.walk(self)
     }
 
     /// HUD word for this load band.
@@ -170,6 +157,57 @@ impl LoadBand {
             LoadBand::Encumbered => "Encumbered",
             LoadBand::Overloaded => "Overloaded",
         }
+    }
+}
+
+/// What a delver carries against what they can carry, in pounds: the load itself, from which
+/// their [`LoadBand`], walking pace and sprint drain follow (the curve in [`LoadRules`]).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Burden {
+    pub load_lb: f64,
+    pub capacity_lb: f64,
+}
+
+impl Default for Burden {
+    /// Carrying nothing.
+    fn default() -> Self {
+        Burden { load_lb: 0.0, capacity_lb: 1.0 }
+    }
+}
+
+impl Burden {
+    pub fn new(load_lb: f64, capacity_lb: f64) -> Self {
+        Burden { load_lb, capacity_lb }
+    }
+
+    /// Their band.
+    pub fn band(self) -> LoadBand {
+        self.band_with(defaults())
+    }
+
+    /// [`Burden::band`] under `rules`.
+    pub fn band_with(self, rules: &Rules) -> LoadBand {
+        LoadBand::from_load_with(rules, self.load_lb, self.capacity_lb)
+    }
+
+    /// Walking pace multiple, 1 at Light, easing to 0.65 at capacity and 0 past it.
+    pub fn walk_multiplier(self) -> f32 {
+        self.walk_multiplier_with(defaults())
+    }
+
+    /// [`Burden::walk_multiplier`] under `rules`.
+    pub fn walk_multiplier_with(self, rules: &Rules) -> f32 {
+        rules.load.walk(self.load_lb, self.capacity_lb)
+    }
+
+    /// How many times as fast as usual sprinting drains stamina.
+    pub fn sprint_drain(self) -> f64 {
+        self.sprint_drain_with(defaults())
+    }
+
+    /// [`Burden::sprint_drain`] under `rules`.
+    pub fn sprint_drain_with(self, rules: &Rules) -> f64 {
+        rules.load.drain(self.load_lb, self.capacity_lb)
     }
 }
 
@@ -858,30 +896,24 @@ impl Default for Stamina {
 
 impl Stamina {
     /// The change per real second at `activity` under `load`: negative drains. Only Exerting
-    /// drains, by a full pool in [`SPRINT_SECONDS`] while Light, 1.5 times as fast Burdened and
-    /// twice as fast Encumbered or Overloaded. Sleeping refills twice as fast as standing.
-    pub fn rate_per_second(activity: Activity, load: LoadBand) -> f64 {
+    /// drains, by a full pool in [`SPRINT_SECONDS`] while Light, and as many times faster as the
+    /// load asks ([`Burden::sprint_drain`]): 1 through the Burdened edge, easing to 2 at capacity.
+    /// Sleeping refills twice as fast as standing.
+    pub fn rate_per_second(activity: Activity, load: Burden) -> f64 {
         Stamina::rate_per_second_with(defaults(), activity, load)
     }
 
     /// [`Stamina::rate_per_second`] under `rules`.
-    pub fn rate_per_second_with(rules: &Rules, activity: Activity, load: LoadBand) -> f64 {
+    pub fn rate_per_second_with(rules: &Rules, activity: Activity, load: Burden) -> f64 {
         Stamina::rate_per_second_geared(rules, activity, load, 1.0, 1.0)
     }
 
     /// [`Stamina::rate_per_second_with`] for a delver whose gear multiplies the refill rates by
     /// `refill` and the sprint drain by `cost` ([`Gear::stamina_refill`], [`Gear::stamina_cost`]).
-    pub fn rate_per_second_geared(rules: &Rules, activity: Activity, load: LoadBand, refill: f64, cost: f64) -> f64 {
+    pub fn rate_per_second_geared(rules: &Rules, activity: Activity, load: Burden, refill: f64, cost: f64) -> f64 {
         let s = &rules.stamina;
         match activity {
-            Activity::Exerting => {
-                let heavier = match load {
-                    LoadBand::Light => 1.0,
-                    LoadBand::Burdened => s.burdened_drain,
-                    LoadBand::Encumbered | LoadBand::Overloaded => s.encumbered_drain,
-                };
-                -heavier * cost / s.sprint_seconds
-            }
+            Activity::Exerting => -load.sprint_drain_with(rules) * cost / s.sprint_seconds,
             Activity::Walking => refill / s.walk_refill_seconds,
             Activity::Resting => refill / s.stand_refill_seconds,
             Activity::Sleeping => refill * s.sleep_refill_factor / s.stand_refill_seconds,
@@ -894,18 +926,18 @@ impl Stamina {
     }
 
     /// Advances by `seconds` of real time at `activity` under `load`.
-    pub fn step(&mut self, seconds: f64, activity: Activity, load: LoadBand) {
+    pub fn step(&mut self, seconds: f64, activity: Activity, load: Burden) {
         self.step_with(defaults(), seconds, activity, load);
     }
 
     /// [`Stamina::step`] under `rules`.
-    pub fn step_with(&mut self, rules: &Rules, seconds: f64, activity: Activity, load: LoadBand) {
+    pub fn step_with(&mut self, rules: &Rules, seconds: f64, activity: Activity, load: Burden) {
         self.step_geared(rules, seconds, activity, load, 1.0, 1.0);
     }
 
     /// [`Stamina::step_with`] under the gear's `refill` and `cost` multiples
     /// ([`Stamina::rate_per_second_geared`]).
-    pub fn step_geared(&mut self, rules: &Rules, seconds: f64, activity: Activity, load: LoadBand, refill: f64, cost: f64) {
+    pub fn step_geared(&mut self, rules: &Rules, seconds: f64, activity: Activity, load: Burden, refill: f64, cost: f64) {
         self.value = (self.value + Stamina::rate_per_second_geared(rules, activity, load, refill, cost) * seconds).clamp(0.0, 1.0);
         self.settle(rules);
     }
@@ -1641,25 +1673,15 @@ mod tests {
 
     #[test]
     fn load_band_boundaries() {
-        let cap = 150.0; // STR 10: capacity
-
-        // Exactly 34% (51 lb) is Burdened
-        assert_eq!(LoadBand::from_load(51.0, cap), LoadBand::Burdened);
-
-        // Just under 34% (50.99 lb) is Light
-        assert_eq!(LoadBand::from_load(50.99, cap), LoadBand::Light);
-
-        // Exactly 67% (100.5 lb) is Encumbered
-        assert_eq!(LoadBand::from_load(100.5, cap), LoadBand::Encumbered);
-
-        // Just under 67% (100.49 lb) is Burdened
-        assert_eq!(LoadBand::from_load(100.49, cap), LoadBand::Burdened);
-
-        // Exactly 100% (150 lb) is Encumbered
-        assert_eq!(LoadBand::from_load(150.0, cap), LoadBand::Encumbered);
-
-        // Just over 100% (150.01 lb) is Overloaded
+        // STR 10: capacity 150, edges at 5 and 10 times STR.
+        let cap = 150.0;
+        assert_eq!(LoadBand::from_load(50.0, cap), LoadBand::Light, "Light up to 5 x STR");
+        assert_eq!(LoadBand::from_load(50.01, cap), LoadBand::Burdened);
+        assert_eq!(LoadBand::from_load(100.0, cap), LoadBand::Burdened, "Burdened up to 10 x STR");
+        assert_eq!(LoadBand::from_load(100.01, cap), LoadBand::Encumbered);
+        assert_eq!(LoadBand::from_load(150.0, cap), LoadBand::Encumbered, "Encumbered up to 15 x STR");
         assert_eq!(LoadBand::from_load(150.01, cap), LoadBand::Overloaded);
+        assert_eq!(LoadBand::from_load(1.0, 0.0), LoadBand::Overloaded);
     }
 
     #[test]
@@ -1670,12 +1692,88 @@ mod tests {
         assert_eq!(LoadBand::Overloaded.word(), "Overloaded");
     }
 
+    /// STR 11, capacity 165: the edges are 55, 110 and 165 lb.
+    fn str_11(load_lb: f64) -> Burden {
+        Burden::new(load_lb, capacity_lb(11, 0.0))
+    }
+
+    fn pace_percent(load_lb: f64) -> f64 {
+        str_11(load_lb).walk_multiplier() as f64 * 100.0
+    }
+
     #[test]
-    fn load_band_walk_multipliers() {
-        assert_eq!(LoadBand::Light.walk_multiplier(), 1.0);
-        assert_eq!(LoadBand::Burdened.walk_multiplier(), 0.85);
-        assert_eq!(LoadBand::Encumbered.walk_multiplier(), 0.65);
-        assert_eq!(LoadBand::Overloaded.walk_multiplier(), 0.0);
+    fn the_issue_table_for_str_11() {
+        // (load, sprint drain, walking pace %)
+        let table = [(55.0, 1.0, 100.0), (82.5, 1.0625, 97.8125), (110.0, 1.25, 91.25), (137.5, 1.5625, 80.3125), (165.0, 2.0, 65.0)];
+        for (lb, drain, pace) in table {
+            assert!((str_11(lb).sprint_drain() - drain).abs() < 1e-9, "{lb} lb drain {}", str_11(lb).sprint_drain());
+            assert!((pace_percent(lb) - pace).abs() < 1e-4, "{lb} lb pace {}", pace_percent(lb));
+        }
+        assert_eq!(format!("{:.1}", pace_percent(82.5)), "97.8");
+        assert_eq!(format!("{:.1}", pace_percent(110.0)), "91.3");
+        assert_eq!(format!("{:.1}", pace_percent(137.5)), "80.3");
+    }
+
+    #[test]
+    fn the_issue_examples_for_str_11() {
+        assert_eq!(pace_percent(55.0), 100.0, "full pace at 55 lb");
+        assert_eq!(str_11(55.0).band(), LoadBand::Light);
+        assert!(pace_percent(56.0) > 99.99 && pace_percent(56.0) < 100.0, "99.99% at 56 lb, not 85%: {}", pace_percent(56.0));
+        let sixty_five = str_11(65.0);
+        assert_eq!(sixty_five.band(), LoadBand::Burdened);
+        assert_eq!(format!("{:.1}", pace_percent(65.0)), "99.7");
+        assert_eq!(format!("{:.2}", sixty_five.sprint_drain()), "1.01");
+        assert_eq!(str_11(110.0).band(), LoadBand::Burdened);
+        assert_eq!(str_11(110.5).band(), LoadBand::Encumbered);
+        assert_eq!(str_11(165.0).band(), LoadBand::Encumbered);
+        assert_eq!(str_11(166.0).band(), LoadBand::Overloaded);
+        assert_eq!(str_11(166.0).walk_multiplier(), 0.0, "rooted");
+        assert_eq!(str_11(40.0).band(), LoadBand::Light);
+    }
+
+    #[test]
+    fn pace_and_drain_never_jump_nor_turn_a_corner_below_overloaded() {
+        let (mut last_pace, mut last_drain) = (1.0, 1.0);
+        let (mut last_pace_step, mut last_drain_step) = (0.0, 0.0);
+        let mut pounds = 0.0;
+        while pounds <= 165.0 {
+            let (pace, drain) = (str_11(pounds).walk_multiplier() as f64, str_11(pounds).sprint_drain());
+            // One pound moves them by well under a point of pace or a tenth of drain.
+            assert!(last_pace - pace < 0.01 && drain - last_drain < 0.025, "{pounds} lb: {last_pace} to {pace}, {last_drain} to {drain}");
+            // A corner is a sudden change of slope: the fall per step only ever grows smoothly.
+            let (pace_step, drain_step) = (last_pace - pace, drain - last_drain);
+            assert!(pace_step + 1e-6 >= last_pace_step && drain_step + 1e-6 >= last_drain_step, "{pounds} lb bends the wrong way");
+            assert!(pace_step - last_pace_step < 0.0005 && drain_step - last_drain_step < 0.0015, "{pounds} lb: a corner, {last_pace_step} to {pace_step}");
+            (last_pace, last_drain, last_pace_step, last_drain_step) = (pace, drain, pace_step, drain_step);
+            pounds += 1.0;
+        }
+        // Past the Burdened edge it starts from rest: no step at 55 lb.
+        assert!(pace_percent(56.0) > 99.9 && str_11(56.0).sprint_drain() < 1.001);
+    }
+
+    #[test]
+    fn a_straight_line_curve_is_a_line() {
+        let mut rules = Rules::default();
+        rules.load.load_curve = 1.0;
+        let at_ten_times = Burden::new(110.0, 165.0);
+        assert!((at_ten_times.sprint_drain_with(&rules) - 1.5).abs() < 1e-9);
+        assert!((at_ten_times.walk_multiplier_with(&rules) as f64 - 0.825).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_ring_of_strength_moves_every_edge_through_the_game_path() {
+        // Capacity comes from the gear as the game derives it: STR 11 plus a ring of +2 STR.
+        let bonus = AbilityBonus { strength: 2, ..AbilityBonus::default() };
+        let attributes = bonus.on(&Attributes { strength: 11, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 });
+        let rules = defaults();
+        let capacity = Gear::default().capacity_lb_with(rules, attributes.strength);
+        assert_eq!(capacity, 195.0);
+        assert_eq!((rules.load.burdened_edge(capacity), rules.load.encumbered_edge(capacity)), (65.0, 130.0));
+        assert_eq!(LoadBand::from_load(65.0, capacity), LoadBand::Light);
+        assert_eq!(LoadBand::from_load(66.0, capacity), LoadBand::Burdened);
+        assert_eq!(LoadBand::from_load(131.0, capacity), LoadBand::Encumbered);
+        assert_eq!(Burden::new(65.0, capacity).walk_multiplier(), 1.0, "65 lb is full pace for them, as 55 is without the ring");
+        assert!((Burden::new(130.0, capacity).sprint_drain() - 1.25).abs() < 1e-9);
     }
 
     #[test]
@@ -1841,9 +1939,9 @@ mod tests {
     #[test]
     fn a_full_pool_lasts_thirty_seconds_of_sprinting_while_light() {
         let mut stamina = Stamina::default();
-        stamina.step(29.0, Activity::Exerting, LoadBand::Light);
+        stamina.step(29.0, Activity::Exerting, Burden::default());
         assert!(stamina.value > 0.0 && !stamina.winded, "{stamina:?}");
-        stamina.step(1.0, Activity::Exerting, LoadBand::Light);
+        stamina.step(1.0, Activity::Exerting, Burden::default());
         assert!(stamina.value.abs() < 1e-9 && stamina.winded, "{stamina:?}");
     }
 
@@ -1854,7 +1952,7 @@ mod tests {
             stamina.step(10.0, Activity::Exerting, band);
             stamina.value
         };
-        let (light, burdened, encumbered) = (after(LoadBand::Light), after(LoadBand::Burdened), after(LoadBand::Encumbered));
+        let (light, burdened, encumbered) = (after(Burden::default()), after(Burden::new(82.5, 165.0)), after(Burden::new(165.0, 165.0)));
         assert!(light > burdened && burdened > encumbered, "{light} {burdened} {encumbered}");
         assert!((1.0 - encumbered - 2.0 * (1.0 - light)).abs() < 1e-9);
     }
@@ -1863,10 +1961,10 @@ mod tests {
     fn standing_refills_from_empty_in_eight_seconds_and_walking_is_slower() {
         let empty = Stamina { value: 0.0, winded: true };
         let mut standing = empty;
-        standing.step(8.0, Activity::Resting, LoadBand::Light);
+        standing.step(8.0, Activity::Resting, Burden::default());
         assert!((standing.value - 1.0).abs() < 1e-9 && !standing.winded);
         let mut walking = empty;
-        walking.step(8.0, Activity::Walking, LoadBand::Light);
+        walking.step(8.0, Activity::Walking, Burden::default());
         assert!(walking.value > 0.5 && walking.value < 1.0);
     }
 
@@ -1875,15 +1973,15 @@ mod tests {
         let rules = defaults();
         let empty = Stamina { value: 0.0, winded: true };
         let mut standing = empty;
-        standing.step_geared(rules, 8.0 / 1.3, Activity::Resting, LoadBand::Light, 1.3, 1.0);
+        standing.step_geared(rules, 8.0 / 1.3, Activity::Resting, Burden::default(), 1.3, 1.0);
         assert!((standing.value - 1.0).abs() < 1e-9, "of Second Wind fills a bar in 8 / 1.3 s: {standing:?}");
         let mut sprinting = Stamina::default();
-        sprinting.step_geared(rules, 10.0, Activity::Exerting, LoadBand::Light, 1.0, 0.8);
+        sprinting.step_geared(rules, 10.0, Activity::Exerting, Burden::default(), 1.0, 0.8);
         assert!((sprinting.value - (1.0 - 10.0 * 0.8 / 30.0)).abs() < 1e-9, "{sprinting:?}");
         let mut plain = Stamina::default();
-        plain.step_geared(rules, 10.0, Activity::Exerting, LoadBand::Light, 1.3, 1.0);
+        plain.step_geared(rules, 10.0, Activity::Exerting, Burden::default(), 1.3, 1.0);
         let mut again = Stamina::default();
-        again.step_with(rules, 10.0, Activity::Exerting, LoadBand::Light);
+        again.step_with(rules, 10.0, Activity::Exerting, Burden::default());
         assert_eq!(plain, again, "refill never touches the drain");
     }
 
@@ -1891,9 +1989,9 @@ mod tests {
     fn a_winded_delver_cannot_exert_until_twenty_percent() {
         let mut stamina = Stamina { value: 0.0, winded: true };
         assert!(!stamina.can_exert());
-        stamina.step(1.5, Activity::Resting, LoadBand::Light);
+        stamina.step(1.5, Activity::Resting, Burden::default());
         assert!(stamina.value < SECOND_WIND && !stamina.can_exert(), "{stamina:?}");
-        stamina.step(0.2, Activity::Resting, LoadBand::Light);
+        stamina.step(0.2, Activity::Resting, Burden::default());
         assert!(stamina.value >= SECOND_WIND && stamina.can_exert(), "{stamina:?}");
     }
 
@@ -1912,9 +2010,9 @@ mod tests {
     #[test]
     fn stamina_steps_the_same_in_any_step_size() {
         let (mut whole, mut parts) = (Stamina::default(), Stamina::default());
-        whole.step(12.0, Activity::Exerting, LoadBand::Burdened);
+        whole.step(12.0, Activity::Exerting, Burden::new(110.0, 165.0));
         for _ in 0..120 {
-            parts.step(0.1, Activity::Exerting, LoadBand::Burdened);
+            parts.step(0.1, Activity::Exerting, Burden::new(110.0, 165.0));
         }
         assert!((whole.value - parts.value).abs() < 1e-9);
     }

@@ -3,7 +3,7 @@
 
 use fb_character::combat::{self, Attack, Bite, Venom};
 use fb_character::explain;
-use fb_character::{Activity, Attributes, Casting, Exhaustion, ExhaustionTimes, LoadBand, Mana, Needs, Stamina, capacity_lb, visibility};
+use fb_character::{Activity, Attributes, Casting, Exhaustion, ExhaustionTimes, Burden, LoadBand, Mana, Needs, Stamina, capacity_lb, visibility};
 use procgen_rng::Mulberry32;
 
 use super::scenario::Book;
@@ -41,13 +41,13 @@ impl Book for Plain {
     fn load_band(&self, load: f64, capacity: f64) -> LoadBand {
         LoadBand::from_load(load, capacity)
     }
-    fn walk(&self, band: LoadBand) -> f32 {
-        band.walk_multiplier()
+    fn walk(&self, load: f64, capacity: f64) -> f32 {
+        Burden::new(load, capacity).walk_multiplier()
     }
     fn speed(&self, exhaustion: Exhaustion) -> f32 {
         exhaustion.speed_multiplier()
     }
-    fn stamina_step(&self, stamina: &mut Stamina, seconds: f64, activity: Activity, load: LoadBand) {
+    fn stamina_step(&self, stamina: &mut Stamina, seconds: f64, activity: Activity, load: Burden) {
         stamina.step(seconds, activity, load);
     }
     fn stamina_spend(&self, stamina: &mut Stamina, cost: f64) {

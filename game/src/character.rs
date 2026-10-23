@@ -499,12 +499,33 @@ pub fn character_for(seed: u32) -> Character {
     character
 }
 
-/// The delver's load band, kept on the [`Player`](crate::play::Player) so walking need not
-/// work out [`Character::derive`] every frame. `player::weigh_the_delver` refreshes it when
-/// the character or the inventory changes.
+/// What the delver carries against what they can carry, kept on the [`Player`](crate::play::Player)
+/// so walking need not work out [`Character::derive`] every frame. Their band, walking pace and
+/// sprint drain are worked out from it under the rules ([`fb_character::Burden`]).
+/// `player::weigh_the_delver` refreshes it when the character or the inventory changes.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component)]
-pub struct Load(#[reflect(remote = crate::inspect::remote::LoadBandDef)] pub LoadBand);
+pub struct Load(#[reflect(remote = crate::inspect::remote::BurdenDef)] pub fb_character::Burden);
+
+impl Load {
+    /// Carrying `load_lb` of a capacity of `capacity_lb`.
+    pub fn of(load_lb: f32, capacity_lb: f32) -> Load {
+        Load(fb_character::Burden::new(load_lb as f64, capacity_lb as f64))
+    }
+
+    /// A load in `band`, for captures and tests: a typical weight for a capacity of 165 lb.
+    pub fn sample(band: LoadBand) -> Load {
+        Load::of(
+            match band {
+                LoadBand::Light => 0.0,
+                LoadBand::Burdened => 82.5,
+                LoadBand::Encumbered => 137.5,
+                LoadBand::Overloaded => 200.0,
+            },
+            165.0,
+        )
+    }
+}
 
 /// What the delver's gear makes of their stamina: how fast it refills and what sprinting,
 /// swinging and blocking cost, as multiples of the usual. Kept up with [`Load`] by

@@ -203,7 +203,7 @@ fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inv
     for (mut load, mut pace, mut stamina) in &mut players {
         if changed || load.is_added() {
             let derived = *derived.get_or_insert_with(|| character.derive_with(crate::rules::GameRules::of(&rules), &inventory));
-            load.set_if_neq(Load(derived.load_band));
+            load.set_if_neq(Load::of(derived.load, derived.capacity));
             pace.set_if_neq(GearPace(derived.speed));
             stamina.set_if_neq(crate::character::GearStamina { refill: derived.stamina_refill, cost: derived.stamina_cost });
         }
@@ -552,18 +552,19 @@ mod tests {
 
     use fb_character::LoadBand;
 
-    fn loaded(band: LoadBand) -> Load {
-        Load(band)
+    /// STR 11's capacity of 165 lb, with `lb` of it carried.
+    fn loaded(lb: f32) -> Load {
+        Load::of(lb, 165.0)
     }
 
     #[test]
     fn load_slows_the_walk_and_multiplies_with_exhaustion() {
         for frames in [10, 30] {
             let usual = walked(frames, |_| {});
-            let burdened = walked_as(frames, |_| {}, loaded(LoadBand::Burdened));
-            let encumbered = walked_as(frames, |_| {}, loaded(LoadBand::Encumbered));
-            let both = walked_as(frames, |_| {}, (loaded(LoadBand::Encumbered), exhausted(2)));
-            assert!((burdened / usual - 0.85).abs() < 0.01, "{burdened} against {usual}");
+            let burdened = walked_as(frames, |_| {}, loaded(110.0));
+            let encumbered = walked_as(frames, |_| {}, loaded(165.0));
+            let both = walked_as(frames, |_| {}, (loaded(165.0), exhausted(2)));
+            assert!((burdened / usual - 0.9125).abs() < 0.01, "{burdened} against {usual}");
             assert!((encumbered / usual - 0.65).abs() < 0.01, "{encumbered} against {usual}");
             assert!((both / usual - 0.325).abs() < 0.01, "{both} against {usual}");
         }
@@ -571,7 +572,7 @@ mod tests {
 
     #[test]
     fn an_overloaded_delver_does_not_move() {
-        assert_eq!(walked_as(30, |_| {}, loaded(LoadBand::Overloaded)), 0.0);
+        assert_eq!(walked_as(30, |_| {}, loaded(166.0)), 0.0);
     }
 
     /// A delver of strength 10 wearing a mail shirt made as heavy as `fraction` of what they can
@@ -590,7 +591,9 @@ mod tests {
     #[test]
     fn the_real_load_sets_the_pace_and_dropping_it_lets_the_delver_move_again() {
         let usual = walked(30, |_| {});
-        for (band, fraction, pace) in [(LoadBand::Burdened, 0.5, 0.85), (LoadBand::Encumbered, 0.8, 0.65)] {
+        // Edges at a third and two thirds of capacity: half of it is t = 0.25, 97.8% pace; 0.8 of
+        // it is t = 0.7, 82.85%.
+        for (band, fraction, pace) in [(LoadBand::Burdened, 0.5, 0.978125), (LoadBand::Encumbered, 0.8, 0.8285)] {
             let (delver, inventory, _) = laden(fraction);
             let (mut app, body, start) = walking(|_| {}, ());
             app.insert_resource(delver).insert_resource(inventory);
@@ -599,7 +602,7 @@ mod tests {
             }
             let walked = app.world().get::<Transform>(body).unwrap().translation.distance(start);
             assert!((walked / usual - pace).abs() < 0.01, "{band:?}: {walked} against {usual}");
-            assert_eq!(app.world().get::<Load>(body), Some(&Load(band)));
+            assert_eq!(app.world().get::<Load>(body).map(|l| l.0.band()), Some(band));
         }
 
         let (delver, inventory, mail) = laden(1.2);
@@ -608,13 +611,13 @@ mod tests {
         for _ in 0..30 {
             app.update();
         }
-        assert_eq!(app.world().get::<Load>(body), Some(&Load(LoadBand::Overloaded)));
+        assert_eq!(app.world().get::<Load>(body).map(|l| l.0.band()), Some(LoadBand::Overloaded));
         assert_eq!(app.world().get::<Transform>(body).unwrap().translation.distance(start), 0.0, "overloaded");
         app.world_mut().resource_mut::<Inventory>().forget(mail);
         for _ in 0..30 {
             app.update();
         }
-        assert_eq!(app.world().get::<Load>(body), Some(&Load(LoadBand::Light)));
+        assert_eq!(app.world().get::<Load>(body).map(|l| l.0.band()), Some(LoadBand::Light));
         let moved = app.world().get::<Transform>(body).unwrap().translation.distance(start);
         assert!((moved / usual - 1.0).abs() < 0.05, "{moved} against {usual}");
     }

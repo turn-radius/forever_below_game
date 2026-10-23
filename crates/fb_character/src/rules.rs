@@ -24,7 +24,7 @@ use fb_creatures::{Dice, Species, StatBlock};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::effect::EffectDef;
-use crate::{Activity, LoadBand, MeterKind};
+use crate::{Activity, MeterKind};
 
 /// Every number the character rules run on. See the [module docs](self).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -387,10 +387,6 @@ impl Default for ExhaustionRules {
 pub struct StaminaRules {
     /// Seconds a full pool lasts sprinting while Light.
     pub sprint_seconds: f64,
-    /// Sprinting drains this many times as fast Burdened ...
-    pub burdened_drain: f64,
-    /// ... and Encumbered or Overloaded.
-    pub encumbered_drain: f64,
     /// Seconds to refill from empty standing still.
     pub stand_refill_seconds: f64,
     /// Seconds to refill from empty while walking.
@@ -409,8 +405,6 @@ impl Default for StaminaRules {
     fn default() -> Self {
         StaminaRules {
             sprint_seconds: 30.0,
-            burdened_drain: 1.5,
-            encumbered_drain: 2.0,
             stand_refill_seconds: 8.0,
             walk_refill_seconds: 12.0,
             sleep_refill_factor: 2.0,
@@ -448,40 +442,71 @@ impl Default for ManaRules {
 }
 
 /// What a delver can carry and how the weight slows them.
+///
+/// The band edges are SRD 5.1's "Variant: Encumbrance" (pp. 79-80), in multiples of STR:
+/// Burdened past 5, Encumbered past 10, capacity 15. The curve between them is our own: with `t`
+/// running from 0 at the Burdened edge to 1 at capacity, sprint drain is `1 + (capacity_drain - 1)
+/// * t^k` and walking pace `1 - (1 - capacity_walk) * t^k`, `k` being `load_curve`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LoadRules {
-    /// Pounds of capacity for each point of STR (SRD 5.1 p. 79).
+    /// Pounds of capacity for each point of STR (SRD 5.1 p. 79): the capacity, in multiples of STR.
     pub capacity_per_strength: f64,
-    /// Burdened from this share of the capacity.
-    pub burdened_from: f64,
-    /// Encumbered from this share of the capacity.
-    pub encumbered_from: f64,
-    /// Overloaded above this share of the capacity.
-    pub overloaded_over: f64,
-    /// Walking pace multiple while Burdened.
-    pub burdened_walk: f32,
-    /// Walking pace multiple while Encumbered.
-    pub encumbered_walk: f32,
+    /// Burdened past this many times STR, in pounds.
+    pub burdened_multiple: f64,
+    /// Encumbered past this many times STR, in pounds.
+    pub encumbered_multiple: f64,
+    /// The exponent `k` of the curve: 1 is a straight line, 2 barely tells through Burdened and
+    /// bites through Encumbered.
+    pub load_curve: f64,
+    /// Walking pace multiple at capacity, where the curve ends.
+    pub capacity_walk: f32,
+    /// Sprint drain multiple at capacity, where the curve ends.
+    pub capacity_drain: f64,
     /// Walking pace multiple while Overloaded: 0 is rooted.
     pub overloaded_walk: f32,
 }
 
 impl Default for LoadRules {
     fn default() -> Self {
-        LoadRules { capacity_per_strength: 15.0, burdened_from: 0.34, encumbered_from: 0.67, overloaded_over: 1.0, burdened_walk: 0.85, encumbered_walk: 0.65, overloaded_walk: 0.0 }
+        LoadRules { capacity_per_strength: 15.0, burdened_multiple: 5.0, encumbered_multiple: 10.0, load_curve: 2.0, capacity_walk: 0.65, capacity_drain: 2.0, overloaded_walk: 0.0 }
     }
 }
 
 impl LoadRules {
-    /// The walking pace multiple of `band`.
-    pub fn walk(&self, band: LoadBand) -> f32 {
-        match band {
-            LoadBand::Light => 1.0,
-            LoadBand::Burdened => self.burdened_walk,
-            LoadBand::Encumbered => self.encumbered_walk,
-            LoadBand::Overloaded => self.overloaded_walk,
+    /// Where on the curve `load` sits against `capacity`: 0 up to the Burdened edge, 1 at
+    /// capacity, between them the share of the way there.
+    pub fn slope(&self, load_lb: f64, capacity_lb: f64) -> f64 {
+        let from = self.burdened_edge(capacity_lb);
+        if capacity_lb <= from {
+            return if load_lb > from { 1.0 } else { 0.0 };
         }
+        ((load_lb - from) / (capacity_lb - from)).clamp(0.0, 1.0)
+    }
+
+    /// The pounds past which a delver of this `capacity_lb` is Burdened.
+    pub fn burdened_edge(&self, capacity_lb: f64) -> f64 {
+        capacity_lb * self.burdened_multiple / self.capacity_per_strength
+    }
+
+    /// The pounds past which a delver of this `capacity_lb` is Encumbered.
+    pub fn encumbered_edge(&self, capacity_lb: f64) -> f64 {
+        capacity_lb * self.encumbered_multiple / self.capacity_per_strength
+    }
+
+    /// The walking pace multiple at `load_lb` of `capacity_lb`: continuous, with no corner at the
+    /// Burdened edge, and `overloaded_walk` once past capacity.
+    pub fn walk(&self, load_lb: f64, capacity_lb: f64) -> f32 {
+        if capacity_lb <= 0.0 || load_lb > capacity_lb {
+            return self.overloaded_walk;
+        }
+        let t = self.slope(load_lb, capacity_lb).powf(self.load_curve);
+        1.0 - (1.0 - self.capacity_walk) * t as f32
+    }
+
+    /// The sprint drain multiple at `load_lb` of `capacity_lb`, on the same curve as [`walk`](Self::walk).
+    pub fn drain(&self, load_lb: f64, capacity_lb: f64) -> f64 {
+        1.0 + (self.capacity_drain - 1.0) * self.slope(load_lb, capacity_lb).powf(self.load_curve)
     }
 }
 
