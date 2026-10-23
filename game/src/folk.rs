@@ -128,9 +128,10 @@ impl Person {
         let odds = fb_items::Odds::kit(depth);
         let mut rng = spot.name_stream();
         // A denizen's body is a race of the folk body ([`Folk::of_denizen`]): dressed, named and
-        // rolled as that race.
+        // rolled as that race. One with no syllables of its own yet is named as a human is.
         let folk = spot.denizen.and_then(Folk::of_denizen).unwrap_or(spot.folk);
-        let name = fb_items::naming::folk_name(&mut rng, folk.key());
+        let name_key = if fb_items::tables::syllables().contains_key(folk.key()) { folk.key() } else { Folk::Human.key() };
+        let name = fb_items::naming::folk_name(&mut rng, name_key);
         let outfit = *rng.pick(&faction.outfit_keys());
         // A denizen dresses from the row of its own kind, not a delver's class outfit.
         let outfit = denizen_outfit(folk, spot).unwrap_or(outfit);
@@ -788,6 +789,29 @@ mod tests {
             assert!(lo.y > -0.5 && lo.y < 0.5, "{}: lowest point {}", person.name, lo.y);
             assert!(hi.y > spot.folk.race().h * 0.85, "{}: {} tall", person.name, hi.y);
         }
+    }
+
+    /// A cyclops is a folk body: the game's own path (`Person::of`, `Figure::dress`) dresses
+    /// it from an outfit, holding its weapon, standing a giant's height on the floor.
+    #[test]
+    fn a_cyclops_is_dressed_and_holds_a_weapon_through_the_folk_path() {
+        let level = fb_level::generate(1207, 1);
+        let mut checked = 0;
+        for spot in level.folk.iter().take(6) {
+            let spot = FolkSpot { denizen: Some(fb_denizens::DenizenBody::Cyclops), ..*spot };
+            let person = Person::of(&spot, level.faction(spot.faction), 1);
+            assert_eq!(person.spec.folk, Folk::Cyclops);
+            let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+            let names: Vec<&str> = figure.pieces.iter().map(|p| p.name.as_str()).collect();
+            assert!(person.held().any(|(_, item)| names.contains(&item.title())), "{} holds nothing: {names:?}", person.name);
+            assert!(person.worn().any(|(_, item)| names.contains(&item.title())), "{} wears nothing: {names:?}", person.name);
+            let (lo, hi) = figure.bounds().unwrap();
+            assert!(lo.y > -0.5 && lo.y < 0.5, "{}: lowest point {}", person.name, lo.y);
+            // Taller than any of the six folk, about 1.7 times a human.
+            assert!(hi.y > 1.5 * Folk::Human.race().h, "{}: {} tall", person.name, hi.y);
+            checked += 1;
+        }
+        assert!(checked > 0);
     }
 
     #[test]
