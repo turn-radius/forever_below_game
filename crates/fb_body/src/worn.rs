@@ -134,6 +134,9 @@ pub struct WornFit {
     /// How the head's features sit under headgear.
     pub head: HeadFit,
     pub covered: Covered,
+    /// How far the wings must stand out from the back to clear everything worn there
+    /// ([`Body::skin_mesh_lifted`]); 0 without wings.
+    pub wing_lift: f32,
 }
 
 impl WornFit {
@@ -222,7 +225,27 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
     let rest = |env: &Envelope| (env.shoulder_clearance(), env.chest_clearance(), env.rest());
     let (clearance, chest, surface) = hair.unwrap_or_else(|| rest(&env));
     (fit.hair.clearance, fit.hair.chest, fit.hair.rest) = (clearance, chest, Some(surface));
+    if body.race().wings.is_some() {
+        fit.wing_lift = wing_lift(body, &fit.layers);
+    }
     fit
+}
+
+/// How far behind the bare back the gear worn on it reaches between the hips and the shoulders
+/// (a cloak's hem and folds, a pack, a cuirass's back), plus a little: the wings stand that far out
+/// from the back, over it all (see `docs/body.md`).
+fn wing_lift(body: &Body, layers: &[WornLayer]) -> f32 {
+    let (y0, y1) = (body.hip_y, body.shoulder_y + 0.1 * body.trunk_length);
+    let mut lift = 0.0f32;
+    for layer in layers.iter().filter(|l| l.slot != Slot::Head) {
+        for p in layer.mesh.parts.iter().flat_map(|part| part.positions.iter()) {
+            if p[1] < y0 || p[1] > y1 || p[0].abs() > 1.2 * body.shoulder_half_width || p[2] > 0.0 {
+                continue;
+            }
+            lift = lift.max(body.back_z(p[0], p[1]) - p[2]);
+        }
+    }
+    if lift > 0.0 { lift + 0.1 * body.scale } else { 0.0 }
 }
 
 impl Body {
@@ -238,7 +261,7 @@ impl Body {
     /// The body as it shows under `fit`'s gear: skin less what the gear hides, the head with
     /// its features folded under headgear, and the hair fitted under it all.
     pub fn under(&self, fit: &WornFit) -> ItemMesh {
-        let mut mesh = self.skin_mesh();
+        let mut mesh = self.skin_mesh_lifted(fit.wing_lift);
         mesh.parts.retain(|p| !fit.covered.hides(p.name));
         mesh.parts.extend(self.head_mesh_fitted(fit.head).parts);
         mesh.parts.extend(self.hair_mesh(fit.hair).parts);

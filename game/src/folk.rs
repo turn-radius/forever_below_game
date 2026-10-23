@@ -776,6 +776,22 @@ mod tests {
     }
 
     #[test]
+    fn a_demon_spot_is_a_dressed_demon_of_its_kind() {
+        for (body, folk) in [
+            (fb_denizens::DenizenBody::WingedDemon, Folk::WingedDemon),
+            (fb_denizens::DenizenBody::HornedDemon, Folk::HornedDemon),
+            (fb_denizens::DenizenBody::Succubus, Folk::Succubus),
+        ] {
+            let spot = FolkSpot { denizen: Some(body), ..folk_1207()[0] };
+            let person = person_1207(&spot);
+            assert_eq!(person.spec.folk, folk);
+            assert_eq!(person, person_1207(&spot));
+            let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+            assert!(figure.pieces.len() >= 4 && figure.body.height > 15.0, "{folk:?}: {} tall", figure.body.height);
+        }
+    }
+
+    #[test]
     fn the_same_spot_is_the_same_person() {
         for spot in folk_1207() {
             assert_eq!(person_1207(&spot), person_1207(&spot));
