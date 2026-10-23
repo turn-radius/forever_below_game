@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn a_choice_looks_the_same_every_time() {
-        let choice = DollChoice { folk: Folk::Gnome, seed: 31, outfit: outfit_index("mage").unwrap(), bare: false, body: None, without: None, wear: None };
+        let choice = DollChoice { folk: Folk::Gnome, seed: 31, outfit: outfit_index("mage").unwrap(), bare: false, body: None, sex: None, without: None, wear: None };
         assert_eq!(choice.figure().pieces, choice.figure().pieces);
     }
 }
