@@ -114,7 +114,7 @@ pub struct Horns {
 pub struct MinotaurState {
     pub seed: u32,
     /// Height as a share of a typical human's before its legs are lengthened and it hunches,
-    /// 1.25..1.40.
+    /// 1.2..1.35.
     pub stature: f32,
     /// 0.6 heavy to 1 huge: the chest, shoulders and limbs.
     pub build: f32,
@@ -149,7 +149,7 @@ impl MinotaurState {
     /// A minotaur rolled from `seed`: the same seed always gives the same minotaur.
     pub fn roll(seed: u32) -> MinotaurState {
         let mut rng = Mulberry32::new(seed ^ MINOTAUR_SALT);
-        let stature = rng.range_f32(1.25, 1.40);
+        let stature = rng.range_f32(1.2, 1.35);
         let build = 0.6 + 0.4 * rng.next_f64() as f32;
         let stoop = rng.next_f64() as f32;
         let reach = rng.range_f32(1.1, 1.25);
@@ -233,7 +233,7 @@ impl MinotaurState {
             shoulders: 1.0 + 0.12 * self.build,
             hump: 0.4 + 0.6 * self.stoop,
             reach: self.reach,
-            neck: (2.3, 0.9),
+            neck: (2.4, 1.7),
             head: (2.0, 1.25, 1.45),
             head_lean: 0.32 + 0.12 * self.stoop,
             head_set: (0.1, 1.0),
@@ -456,8 +456,7 @@ fn build(state: &MinotaurState) -> Rig {
             }
             m.transform(&frame.rotation);
         }
-        let tint = if state.marking == Marking::Socks { state.white() } else { state.hide_colour() };
-        meshes[ub + 2] = vec![part(flesh, "paw", MaterialKind::Skin, tint, true), part(nails, "nails", MaterialKind::Bone, Rgb::hex(0x2d2620), false)];
+        meshes[ub + 2] = vec![part(flesh, "paw", MaterialKind::Skin, state.hide_colour(), true), part(nails, "nails", MaterialKind::Bone, Rgb::hex(0x2d2620), false)];
     }
 
     // ── Legs and hooves ──
@@ -466,23 +465,34 @@ fn build(state: &MinotaurState) -> Rig {
         let [hip, knee, hock] = d.legs[k];
         let tb = leg_bone(side);
         let leg_r = l.leg_radius;
-        // Thigh: from inside the hip, a heavy swell to the knee.
+        // Thigh: broad at the hip, tapering to the knee, with the quadriceps swelling in front
+        // and the hamstring behind. The tube runs a little past the knee and the shank starts a
+        // little before it, so the joint is one surface and not a ball.
         let root = vec3::add(hip, [-sg * 0.3 * leg_r, 0.5 * leg_r, 0.0]);
-        let mut mesh = limb_tube(&[root, hip, vec3::lerp(hip, knee, 0.45), knee], 24, |t| leg_r * (1.15 - 0.4 * t + 0.1 * (PI * t).sin()));
-        mesh.append(&ball(hip, 1.05 * leg_r, [1.0, 1.0, 1.0]));
-        mesh.append(&ball(knee, 0.72 * leg_r, [1.0, 1.0, 1.0]));
+        let thigh_dir = vec3::normalize_or(vec3::sub(knee, hip), vec3::neg(vec3::Y));
+        let shank_dir = vec3::normalize_or(vec3::sub(hock, knee), vec3::neg(vec3::Y));
+        let past_knee = vec3::add(knee, vec3::scale(thigh_dir, 0.45 * leg_r));
+        let mut mesh = limb_tube(&[root, hip, vec3::lerp(hip, knee, 0.4), vec3::lerp(hip, knee, 0.8), past_knee], 26, |t| leg_r * (1.3 - 0.62 * t + 0.1 * (PI * t).sin()));
+        mesh.append(&ball(hip, 1.15 * leg_r, [1.0, 1.0, 1.0]));
+        let side_out = [sg * 0.05 * leg_r, 0.0, 0.0];
+        let at = |t: f32, back: f32| vec3::add(vec3::add(vec3::lerp(hip, knee, t), side_out), [0.0, 0.0, -back * leg_r]);
+        // The hamstring behind the upper thigh, the quadriceps in front of it.
+        mesh.append(&ball(at(0.32, 0.55), 0.6 * leg_r, [1.0, 1.6, 1.0]));
+        mesh.append(&ball(at(0.42, -0.4), 0.55 * leg_r, [0.95, 1.7, 0.9]));
         meshes[tb] = vec![kit.skin(about(mesh, d.origins[tb]), "skin")];
         if state.marking == Marking::Pied && rng.chance(0.5) {
             let (n, at) = tube_surface(&[hip, knee], rng.range_f32(0.2, 0.7), rng.range_f32(0.0, TAU), leg_r * 0.95);
             patches[tb].append(&about(blot(at, n, 0.9 * leg_r, 0.1 * leg_r), d.origins[tb]));
         }
 
-        // Shin: a calf swelling behind the bone and a long tendon down to the high hock.
-        let r2 = 0.62 * leg_r;
-        let mut mesh = limb_tube(&[knee, vec3::lerp(knee, hock, 0.3), vec3::lerp(knee, hock, 0.7), hock], 22, |t| r2 * (1.0 + 0.32 * (PI * t.powf(0.7)).sin() - 0.45 * t));
-        mesh.append(&ball(knee, 0.72 * leg_r, [1.0, 1.0, 1.0]));
-        // The hock stands out behind, a bony knuckle.
-        mesh.append(&ball(vec3::add(hock, [0.0, 0.0, -0.3 * leg_r]), 0.5 * leg_r, [0.9, 1.15, 1.0]));
+        // Shank: from the knee a calf swelling behind, tapering to a lean tendon at the high
+        // hock, which stands out behind as a bony point.
+        let r2 = 0.68 * leg_r;
+        let before_knee = vec3::sub(knee, vec3::scale(shank_dir, 0.1 * leg_r));
+        let mut mesh = limb_tube(&[before_knee, knee, vec3::lerp(knee, hock, 0.3), vec3::lerp(knee, hock, 0.7), hock], 24, |t| r2 * (1.0 + 0.35 * (PI * t.powf(0.6)).sin() - 0.5 * t));
+        let calf = vec3::add(vec3::lerp(knee, hock, 0.25), [0.0, 0.0, -0.4 * leg_r]);
+        mesh.append(&ball(calf, 0.5 * leg_r, [0.95, 1.7, 1.0]));
+        mesh.append(&ball(vec3::add(hock, [0.0, 0.0, -0.22 * leg_r]), 0.38 * leg_r, [0.85, 1.3, 1.0]));
         meshes[tb + 1] = vec![kit.skin(about(mesh, d.origins[tb + 1]), "skin")];
 
         // Pastern and cloven hoof, in the foot's own frame, the sole flat on the floor.
