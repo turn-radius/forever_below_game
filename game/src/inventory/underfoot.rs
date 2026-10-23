@@ -142,6 +142,9 @@ pub enum FloorChange {
     /// The item has been let go, to land at a spot on the floor (cells) turned `yaw`: where
     /// what took its place lay.
     SetDownAt(ItemId, Vec2, f32),
+    /// A camp good already in its set-down form, put down in front of the eye without the checks
+    /// of `crate::camp::lay_out`. For captures only.
+    SetDownCamp(ItemId),
 }
 
 /// Changes to make to the level this frame.
@@ -183,6 +186,11 @@ pub fn apply_floor_changes(
             }
             FloorChange::SetDownAt(id, at, yaw) => {
                 set_down_at(&mut spawner, &inventory, level, id, at, yaw, &tuning);
+            }
+            FloorChange::SetDownCamp(id) => {
+                if let Some(eye) = eyes.iter().next() {
+                    crate::carry::set_camp_down_unchecked(&mut spawner, &inventory, level, eye, id, &tuning);
+                }
             }
         }
     }
@@ -244,7 +252,8 @@ pub fn set_down_debug_kit(mut inventory: ResMut<Inventory>, mut changes: ResMut<
 /// down (where every rarity rolls), has that rarity (any rarity if none is named). Names that
 /// roll nothing, or a rarity no seed gives, are skipped. An entry `@armorer/master/mail/8`
 /// (`@profession/tier[/style[/depth]]`, style `-` for none) sets down the first three pieces of
-/// that trader's stock, maker's line and all ([`stock_for_capture`]).
+/// that trader's stock, maker's line and all ([`stock_for_capture`]). An entry `Tent+set` or
+/// `Bedroll+set` is that camp good already set down.
 pub fn drops_for_capture(spec: &str) -> Vec<fb_items::Item> {
     spec.split(',')
         .flat_map(|entry| match entry.strip_prefix('@') {
@@ -272,6 +281,10 @@ fn stock_for_capture(spec: &str) -> Vec<fb_items::Item> {
 /// The item one `FB_DROP` entry names (`base[:rarity]`).
 fn item_for_capture(entry: &str) -> Option<fb_items::Item> {
     use fb_items::Rarity;
+    // `Tent+set` is the tent already pitched, a bedroll laid out (`crate::camp`).
+    if let Some(base) = entry.strip_suffix("+set") {
+        return item_for_capture(base).and_then(|item| fb_items::camp::set_up(&item));
+    }
     let (base, rarity) = entry.split_once(':').map_or((entry, None), |(b, r)| (b, Some(r.trim().to_lowercase())));
     let wanted = match rarity.as_deref() {
         None | Some("") => None,
@@ -297,9 +310,10 @@ pub fn set_down_for_capture(mut inventory: ResMut<Inventory>, mut changes: ResMu
     let drops = drops_for_capture(&std::env::var("FB_DROP").unwrap_or_default());
     let count = drops.len();
     for (i, item) in drops.into_iter().enumerate() {
+        let set_camp = item.is_set_camp();
         let id = inventory.add(item);
         let aside = if count > 1 { (i as f32 / (count - 1) as f32 * 2.0 - 1.0) * crate::carry::DROP_SPREAD } else { 0.0 };
-        changes.0.push(FloorChange::SetDown(id, aside));
+        changes.0.push(if set_camp { FloorChange::SetDownCamp(id) } else { FloorChange::SetDown(id, aside) });
     }
 }
 

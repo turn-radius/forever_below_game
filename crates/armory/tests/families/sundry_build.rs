@@ -97,3 +97,30 @@ fn a_lit_candle_gives_light_from_its_flame() {
         }
     }
 }
+
+#[test]
+fn a_laid_bedroll_is_the_same_bedroll_unrolled_on_the_floor() {
+    use armory::families::sundry::LAID_BEDROLL_HALF;
+    let mut seen = 0;
+    for (state, rolled) in built().filter(|(s, _)| s.article.kind == SundryKind::Bedroll) {
+        seen += 1;
+        let mut laid_state = state.clone();
+        laid_state.article.laid = true;
+        let laid = Sundry::build(&laid_state);
+        assert_eq!(laid, Sundry::build(&laid_state), "seed {}: deterministic", state.seed);
+        assert_ne!(laid, rolled, "seed {}: drawn differently", state.seed);
+        for p in &laid.parts {
+            p.validate().unwrap_or_else(|e| panic!("seed {}: {e}", state.seed));
+        }
+        let (lo, hi) = bounds(&laid.parts);
+        assert!(lo[1].abs() < 1e-3, "seed {}: rests on the floor at {}", state.seed, lo[1]);
+        assert!(hi[1] < 1.3, "seed {}: {} high", state.seed, hi[1]);
+        let parts: Vec<_> = laid.parts.iter().map(|p| (p.name.clone(), bounds([p]))).collect();
+        assert!(hi[0].max(-lo[0]) <= LAID_BEDROLL_HALF.0 && hi[2].max(-lo[2]) <= LAID_BEDROLL_HALF.1, "seed {}: {lo:?} {hi:?} {parts:?}", state.seed);
+        assert!(hi[0] - lo[0] > 12.0, "seed {}: about a person long", state.seed);
+        // Laying it out does not change what it is: the rolled one comes back from the same state.
+        laid_state.article.laid = false;
+        assert_eq!(Sundry::build(&laid_state), rolled);
+    }
+    assert!(seen > 5, "{seen} bedrolls in the sweep");
+}

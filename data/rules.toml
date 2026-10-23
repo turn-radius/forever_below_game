@@ -149,6 +149,21 @@ brazier_reach = 30.0
 # Warmth a lit torch or lantern in hand gives.
 held_flame = 1.0
 
+# Sleeping in a bedroll or a tent set down on the floor (the delver aims at it and uses it).
+[camp]
+# How many times as fast sleepiness falls in a bedroll as the needs' own rate (sleep_hours_to_rested):
+# 1.0 is that rate, eight hours from spent to rested.
+bedroll_rest = 1.0
+# The same in a tent, which keeps the draught and the damp off: 1.5 is about five and a half hours.
+tent_rest = 1.5
+# Game seconds that pass each real second while asleep, so a night's sleep plays in under a minute.
+sleep_clock_ratio = 900.0
+# How near, in world units (10 cm each), a creature or a hostile folk may come before the delver
+# wakes, and before they will not lie down at all.
+wake_distance = 80.0
+# Sleepiness, from 0 rested to 1 spent, the delver must have reached to fall asleep.
+tired_from = 0.25
+
 [revival]
 # Times a delver brought to 0 hit points may come to in one world; the next fall ends the run.
 revives = 2

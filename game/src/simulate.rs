@@ -44,8 +44,8 @@ const HUNGRY_BAND: usize = 2;
 /// The delver's activity from how they are moving: standing is Resting, walking Walking, and
 /// sprinting, swinging or moving burdened Exerting ([`activity_for`]).
 ///
-/// Sleeping is not reachable yet: when resting in bed arrives, it returns
-/// [`Activity::Sleeping`] here.
+/// Sleeping is not read from movement: a delver asleep in a set bedroll or tent
+/// ([`crate::camp::Asleep`]) is Sleeping whatever else, which [`step_the_delver`] decides.
 pub fn delver_activity(rules: &fb_character::rules::Rules, velocity: Vec2, sprinting: bool, swinging: bool, load: Load) -> Activity {
     activity_for(velocity.length() > STANDING, sprinting, swinging, load.0.band_with(rules))
 }
@@ -67,6 +67,7 @@ fn step_the_delver(
     mut players: Query<(Entity, Option<&Transform>, &Locomotion, Has<Swing>, &Load, &mut DelverNeeds, &mut DelverExhaustion, &mut DelverTimes, &mut DelverMana, Option<&mut DelverEffects>, &mut DelverRecovery, Option<&mut Health>, Has<crate::combat::guard::Guard>), With<Player>>,
     fires: Query<(&Transform, &crate::level::FixedLight), Without<Player>>,
     level: Option<Res<crate::play::CurrentLevel>>,
+    asleep: Option<Res<crate::camp::Asleep>>,
     mut wearing_down: Local<f64>,
     mut commands: Commands,
 ) {
@@ -105,7 +106,8 @@ fn step_the_delver(
         }
         // No sprint with a shield raised (`crate::player::walk`).
         let sprinting = input.pressed(Action::Sprint) && !guarding;
-        let activity = delver_activity(&rules, locomotion.velocity, sprinting, swinging, *load);
+        let sleeping = asleep.as_deref().and_then(|a| a.0);
+        let activity = if sleeping.is_some() { Activity::Sleeping } else { delver_activity(&rules, locomotion.velocity, sprinting, swinging, *load) };
         let (mut n, mut e, mut t) = (needs.0, exhaustion.0, times.0);
         // Gear's rates and the effects' on them (the cold makes hunger rise faster), put on
         // afresh each step so an effect that ends takes its share with it.
@@ -115,6 +117,12 @@ fn step_the_delver(
             None => fb_character::effect::Effects::default().apply_rates(&rules.effects, &mut n, worn),
         }
         t.step_with(&rules, &mut n, &mut e, activity, hours, crate::character::modifier(character.constitution()));
+        // Sleepiness falls at the needs' own rate asleep; a tent sleeps better than a bedroll by
+        // the camp rules' share more of it (`[camp]` in `rules.toml`).
+        if let Some(sleep) = sleeping {
+            let better = (rules.camp.rest(sleep.camp) - 1.0) * hours / rules.needs.sleep_hours_to_rested;
+            n.sleepiness.value = (n.sleepiness.value - better).clamp(0.0, 1.0);
+        }
         needs.0 = n;
         times.0 = t;
         // Only written when the pool changes, so a full one marks nothing.
@@ -765,5 +773,45 @@ mod tests {
         let hunger = app.world().get::<Simulated>(folk).unwrap().needs.hunger;
         assert_eq!(hunger.word(), "Fed", "{hunger:?}");
         assert!(hunger.value > 0.09, "a ration takes 0.4: {}", hunger.value);
+    }
+
+    /// A still delver, tired to `sleepiness`, asleep in `camp`; the sleep's clock at its pace.
+    fn asleep_in(app: &mut App, camp: fb_items::camp::Camp, sleepiness: f64) -> Entity {
+        app.init_resource::<crate::camp::Asleep>();
+        let delver = app.world_mut().spawn((Player, Transform::default(), Locomotion { velocity: Vec2::new(30.0, 0.0), ..default() })).id();
+        app.update();
+        app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = sleepiness;
+        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp, bed: Entity::PLACEHOLDER, hit_points: 0, since: 0.0, began: 0.0 });
+        delver
+    }
+
+    #[test]
+    fn sleepiness_falls_asleep_at_the_rate_it_always_did_and_a_tent_sleeps_better() {
+        use fb_items::camp::Camp;
+        let after = |camp: Camp| {
+            let mut app = app();
+            let delver = asleep_in(&mut app, camp, 0.9);
+            // Eight real seconds at 900 game seconds each: two game hours.
+            run(&mut app, 8);
+            let hours = app.world().resource::<GameClock>().time.hours();
+            (app.world().get::<DelverNeeds>(delver).unwrap().0.sleepiness.value, hours)
+        };
+        let ((bedroll, hours), (tent, tent_hours)) = (after(Camp::Bedroll), after(Camp::Tent));
+        assert!((hours - 2.0).abs() < 0.05 && (tent_hours - 2.0).abs() < 0.05, "the clock runs at the sleeping pace: {hours} {tent_hours}");
+        // Eight game hours from spent to rested, so two hours is a quarter of the meter.
+        assert!((0.9 - bedroll - 0.25).abs() < 0.01, "a bedroll falls at the needs' own rate: {bedroll}");
+        assert!((0.9 - tent - 0.375).abs() < 0.01, "a tent falls 1.5 times as fast: {tent}");
+    }
+
+    #[test]
+    fn asleep_the_delver_is_resting_whatever_their_velocity_and_awake_they_are_not() {
+        let mut app = app();
+        let delver = asleep_in(&mut app, fb_items::camp::Camp::Bedroll, 0.5);
+        run(&mut app, 4);
+        assert!(app.world().get::<DelverNeeds>(delver).unwrap().0.sleepiness.value < 0.5, "falling asleep, though the velocity says walking");
+        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = None;
+        let before = app.world().get::<DelverNeeds>(delver).unwrap().0.sleepiness.value;
+        run(&mut app, 60);
+        assert!(app.world().get::<DelverNeeds>(delver).unwrap().0.sleepiness.value > before, "awake and walking, it rises again");
     }
 }
