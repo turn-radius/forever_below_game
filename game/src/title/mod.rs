@@ -264,8 +264,8 @@ fn choose_resume_after(time: Res<Time>, mut shown: Local<f32>, mut chosen: Messa
 
 /// New delve (its option, or Enter on the main page) opens the character creator
 /// ([`creator`]), which begins the delve; Esc on the settings page goes back to the options.
-/// With a delve saved, New delve and Continue ask first ([`ReplacePrompt`]): Enter asks too, and
-/// Esc is the answer "keep it".
+/// With a delve saved, New delve and Continue ask first ([`ReplacePrompt`]), Esc is the answer
+/// "keep it", and Enter resumes.
 fn title_controls(
     mut commands: Commands,
     input: ActionInput,
@@ -295,23 +295,32 @@ fn title_controls(
         }
         return;
     }
-    let enter = *page == MenuPage::Main && input.just_pressed(Action::NewDelve);
+    // With a delve saved, Enter resumes it ([`resume_saved_delve`]) and opens nothing here.
+    let enter = *page == MenuPage::Main && saved.delve.is_none() && input.just_pressed(Action::NewDelve);
     if chose || enter {
         *page = MenuPage::Main;
-        if saved.delve.is_some() && !chose {
-            prompt.0 = Some(Replacing::NewDelve);
-        } else {
-            prompt.0 = None;
-            open_creator(&mut commands);
-        }
+        prompt.0 = None;
+        open_creator(&mut commands);
     } else if *page != MenuPage::Main && input.just_pressed(Action::Back) {
         *page = MenuPage::Main;
     }
 }
 
-/// Resume (its option): the saved delve begins, in the camp it was saved in.
-fn resume_saved_delve(mut commands: Commands, mut chosen: MessageReader<MenuCommand>, mut saved: ResMut<SavedGame>, mut next: ResMut<NextState<AppState>>) {
-    if chosen.read().any(|c| *c == MenuCommand::ResumeDelve)
+/// Resume (its option, or Enter on the main page with a delve saved): the saved delve begins, in
+/// the camp it was saved in.
+fn resume_saved_delve(
+    mut commands: Commands,
+    input: ActionInput,
+    mut chosen: MessageReader<MenuCommand>,
+    mut saved: ResMut<SavedGame>,
+    mut next: ResMut<NextState<AppState>>,
+    page: Res<MenuPage>,
+    draft: Option<Res<Draft>>,
+    prompt: Res<ReplacePrompt>,
+) {
+    let clicked = chosen.read().any(|c| *c == MenuCommand::ResumeDelve);
+    let enter = *page == MenuPage::Main && draft.is_none() && prompt.0.is_none() && input.just_pressed(Action::NewDelve);
+    if (clicked || enter)
         && let Some(delve) = saved.delve.take()
     {
         crate::save::begin_resume(&mut commands, &mut next, *delve);
@@ -354,13 +363,13 @@ fn mark_chosen(
     prompt: Option<Res<ReplacePrompt>>,
 ) {
     let over = hovered_button(window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())), options.iter().map(|(b, _, n, t, _)| (b, n, t)));
-    // Enter begins a new delve; with a delve saved it asks first, and with the question up the
+    // Enter begins a new delve, or with a delve saved resumes it; with the question up the
     // answer that keeps the save is the one to rest on.
     let asking = prompt.is_some_and(|p| p.0.is_some());
     let default = if asking {
         MenuCommand::KeepSave
     } else if saved.is_some_and(|s| s.delve.is_some()) {
-        MenuCommand::AskReplace(Replacing::NewDelve)
+        MenuCommand::ResumeDelve
     } else {
         MenuCommand::NewDelve
     };
@@ -585,6 +594,26 @@ mod tests {
     }
 
     #[test]
+    fn with_a_save_resume_is_chosen_until_the_question_is_up_and_then_keep_it() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(SavedGame { delve: Some(Box::new(crate::save::sample_delve())), unreadable: None })
+            .init_resource::<ReplacePrompt>()
+            .add_systems(Update, mark_chosen);
+        let mut option = |command| {
+            let marks = [app.world_mut().spawn((OptionMark, Visibility::Hidden)).id(), app.world_mut().spawn((OptionMark, Visibility::Hidden)).id()];
+            app.world_mut().spawn((MenuButton(command), ComputedNode::default(), UiGlobalTransform::default())).add_children(&marks).id()
+        };
+        let (resume, new_delve, keep) = (option(MenuCommand::ResumeDelve), option(MenuCommand::AskReplace(Replacing::NewDelve)), option(MenuCommand::KeepSave));
+        app.update();
+        let ink = |app: &App, e: Entity| app.world().get::<ButtonInk>(e).unwrap().idle;
+        assert_eq!((ink(&app, resume), ink(&app, new_delve), ink(&app, keep)), (BRIGHT, MUTED, MUTED));
+        app.world_mut().resource_mut::<ReplacePrompt>().0 = Some(Replacing::NewDelve);
+        app.update();
+        assert_eq!((ink(&app, resume), ink(&app, keep)), (MUTED, BRIGHT));
+    }
+
+    #[test]
     fn new_delve_opens_the_creator_and_begin_goes_down() {
         let mut app = title_app(Some(42));
         app.update();
@@ -758,17 +787,22 @@ mod tests {
     }
 
     #[test]
-    fn enter_with_a_save_asks_and_a_second_enter_does_not_answer_and_esc_keeps_it() {
+    fn enter_with_a_save_resumes_it_and_the_question_ignores_enter_and_esc_keeps_it() {
         let (mut app, path) = saved_title(None, "enter");
+        // Enter is not a yes to replacing: with the question up it does nothing, and Esc keeps.
+        app.world_mut().write_message(MenuCommand::AskReplace(Replacing::NewDelve));
+        app.update();
         tap(&mut app, KeyCode::Enter);
         assert_eq!(prompt(&app), Some(Replacing::NewDelve));
-        assert!(app.world().get_resource::<Draft>().is_none());
-        tap(&mut app, KeyCode::Enter);
-        assert_eq!(prompt(&app), Some(Replacing::NewDelve), "Enter does not answer yes");
-        assert!(app.world().get_resource::<Draft>().is_none() && path.exists());
+        assert!(app.world().get_resource::<Draft>().is_none() && state(&app) == AppState::Title);
         tap(&mut app, KeyCode::Escape);
         assert_eq!(prompt(&app), None);
-        assert!(path.exists());
+        // With no question up, Enter resumes.
+        tap(&mut app, KeyCode::Enter);
+        app.update();
+        assert_eq!(state(&app), AppState::Delving);
+        assert!(app.world().get_resource::<crate::save::ResumeDelve>().is_some());
+        assert!(path.exists() && app.world().get_resource::<Draft>().is_none());
     }
 
     #[test]
