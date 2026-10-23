@@ -1021,7 +1021,8 @@ mod tests {
     #[test]
     fn every_creature_on_1207_animates() {
         let (mut app, roots) = level_app();
-        assert!(roots.len() >= 5);
+        // Two since #662, which gave every wild group a room of its own, taking it from the snake and rats where the level is short; the newer species are covered by the test above.
+        assert!(roots.len() >= 2);
         for _ in 0..10 {
             app.update();
         }

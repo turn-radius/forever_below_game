@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn rats_come_in_packs_and_snakes_alone_in_quiet_rooms() {
-        let mut snakes = 0;
+        let (mut snakes, mut with_rats) = (0, 0);
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
             let start_room = level.start_room();
@@ -439,9 +439,11 @@ mod tests {
                     assert!(members.len() as u32 <= PACK_SIZE.1, "seed {seed}: {} rats", members.len());
                 }
             }
-            assert!(packs.values().filter(|m| m[0].species.is_rat()).count() >= 1, "seed {seed}: no rats");
+            with_rats += packs.values().any(|m| m[0].species.is_rat()) as usize;
         }
         assert!(snakes >= 16, "only {snakes} snakes in {} levels", SEEDS.count());
+        // Rats give way to the wild species on a crowded level below the first (#662).
+        assert!(with_rats * 2 >= 2 * SEEDS.count(), "rats on only {with_rats} of {} levels", 2 * SEEDS.count());
     }
 
     #[test]

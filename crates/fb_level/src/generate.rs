@@ -96,7 +96,7 @@ pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams
     level.creatures = place_creatures(&level, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT));
     place_stairs(&mut level, &mut Mulberry32::new(layout_seed ^ STAIR_SALT));
     // The newer species come last, after the stairs, so none of them can shift a stair.
-    let (creatures, webs) = crate::wild::place_wild(&level);
+    let (creatures, webs) = crate::wild::place_wild(&mut level);
     level.creatures.extend(creatures);
     level.webs = webs;
     level
@@ -1367,14 +1367,14 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588), and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588), and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618). Then seed 1207 again when the wild groups were placed among the rats and each took a room of its own (#662).
         let before = [
             (0u32, 0x1f1a3218b008af65u64),
             (1, 0x449e6b9c0122874a),
             (2, 0x4f77a21635f56cb),
             (7, 0xf62fd5bc05f65db),
             (64, 0x36ec7c3ea51f5f9a),
-            (1207, 0xf8e33bcb5d895512),
+            (1207, 0x9cf8dea8ef2143d2),
             (4242, 0x401bea1115e7dbf6),
             (u32::MAX, 0xec7118df0d2cac3a),
         ];
@@ -1483,8 +1483,8 @@ mod tests {
             beasts_in += level.creatures.iter().filter(|c| !c.species.is_skeleton() && in_hall(c.x, c.y)).count();
         }
         assert!(folk_in * 3 >= folk, "only {folk_in} of {folk} folk stand in a colonnade");
-        // Creatures keep out of the halls more than the halls' share of the rooms they could take.
-        assert!(beasts_in * rooms * 3 <= beasts * halls * 2, "{beasts_in} of {beasts} creatures stand in a colonnade, in {halls} of {rooms} rooms");
+        // Creatures keep out of the halls more than the halls' share of the rooms they could take. The wild species, which no longer share a held room (#662), take the halls that are left, so the bound is the share itself.
+        assert!(beasts_in * rooms <= beasts * halls, "{beasts_in} of {beasts} creatures stand in a colonnade, in {halls} of {rooms} rooms");
     }
 
     #[test]
@@ -1602,7 +1602,10 @@ mod tests {
                 assert!(at(ax, ay) >= 0, "seed {seed} depth {depth}: reachable from the start");
                 // At least `FAR_SHARE` as far as the furthest cell it could have stood on: free
                 // floor against a wall of a room, clear of doors, with free floor in front.
-                let taken = spot_cells(&level);
+                // The cells of the creatures the stair was placed among, including rats and snakes later dropped to make room for the wild species (#662).
+                let (bare, layout_seed) = generate_without_creatures(seed, depth, &LevelParams::for_style(LevelStyle::for_depth(depth)));
+                let mut taken = spot_cells(&level);
+                taken.extend(place_creatures(&bare, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT)).iter().map(|s| (s.x.floor() as i32, s.y.floor() as i32)));
                 // And in wild ground: a stair never stands in a claim or behind its doors.
                 let held = crate::claims::held_cells(&level, &level.claims);
                 let free = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && !taken.contains(&(x, y)) && !held[(y as u32 * level.width + x as u32) as usize];
