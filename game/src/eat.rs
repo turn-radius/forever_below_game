@@ -32,6 +32,7 @@ impl Plugin for EatPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HealGlow>()
             .add_systems(Startup, load_heal_sound)
+            .add_systems(Update, drink_nearest_healing.run_if(crate::play::level_has_focus).in_set(DelveSystems))
             .add_systems(Update, act_on_hovered.run_if(inventory_open).run_if(crate::barter::not_bartering).in_set(DelveSystems))
             .add_systems(Update, (spawn_heal_glow, fade_heal_glow).chain().in_set(DelveSystems));
     }
@@ -162,6 +163,11 @@ pub struct Eating<'w, 's> {
 }
 
 impl Eating<'_, '_> {
+    /// Whether the delver is at full hit points.
+    pub fn unhurt(&self) -> bool {
+        self.healths.single().is_ok_and(|h| h.hp >= h.max)
+    }
+
     /// Eats or drinks `id` ([`consume`]), and if it is a healing draught heals the delver, flashes
     /// the view green and chimes; an Antidote ends their poisoning. Returns what the toast says; `None`, and nothing changed, if it
     /// is not food or drink, or there is no delver.
@@ -239,6 +245,66 @@ impl Eating<'_, '_> {
             Reading::Learned { stat, score } => format!("You study the {name}. Your {} rises to {score}", fb_items::lesson::long_name(stat)),
             Reading::AlreadyRead | Reading::NothingToLearn => format!("The {name} has nothing more to teach you"),
         })
+    }
+}
+
+/// The healing draught nearest to hand among what is carried, never one lying underfoot or in a
+/// container not carried: a quickslot's first, then the belt's grid, then the pack's, then the
+/// bags inside those, breadth first.
+pub fn nearest_healing(inventory: &Inventory, slots: Option<&crate::quickslots::Quickslots>) -> Option<ItemId> {
+    use fb_items::Slot;
+    let is_draught = |id: ItemId| inventory.is_carried(id) && inventory.item(id).is_some_and(|i| i.base == HEALING_DRAUGHT);
+    if let Some(id) = slots.and_then(|s| s.0.iter().flatten().copied().find(|&id| is_draught(id))) {
+        return Some(id);
+    }
+    let order = [Slot::Belt, Slot::Hip, Slot::Back, Slot::Quiver];
+    let mut level: Vec<ItemId> = order.iter().filter_map(|&slot| inventory.worn(slot)).collect();
+    while !level.is_empty() {
+        let mut inside = Vec::new();
+        for container in level {
+            for entry in inventory.grid(container).map(|g| g.entries()).into_iter().flatten() {
+                if is_draught(entry.id) {
+                    return Some(entry.id);
+                }
+                inside.push(entry.id);
+            }
+        }
+        level = inside;
+    }
+    None
+}
+
+/// H on the level: drinks the nearest healing draught carried ([`nearest_healing`]) as the
+/// inventory's drink does ([`Eating::eat`]). Says so if none is carried, and at full hit points
+/// keeps the draught.
+fn drink_nearest_healing(
+    input: ActionInput,
+    mut slots: Option<ResMut<crate::quickslots::Quickslots>>,
+    mut inventory: ResMut<Inventory>,
+    mut eating: Eating,
+    mut floor_changes: ResMut<FloorChanges>,
+    mut toast: ResMut<Toast>,
+    time: Option<Res<Time<Real>>>,
+) {
+    if !input.just_pressed(Action::DrinkHealing) {
+        return;
+    }
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    let Some(id) = nearest_healing(&inventory, slots.as_deref()) else {
+        toast.say("You have no healing draught.", now);
+        return;
+    };
+    if eating.unhurt() {
+        toast.say("You are unhurt.", now);
+        return;
+    }
+    // From a quickslot, drink as the key does, so the slot moves on to the next draught.
+    let slot = slots.as_deref().and_then(|s| s.slot_of(id));
+    if let (Some(slots), Some(slot)) = (slots.as_mut(), slot) {
+        let line = crate::quickslots::use_slot(slot, slots, &mut inventory, &mut eating, &mut floor_changes);
+        toast.say(line, now);
+    } else if let Some(line) = eating.eat(&mut inventory, id) {
+        toast.say(line, now);
     }
 }
 
@@ -914,5 +980,173 @@ mod tests {
         press_u(&mut app);
         assert!(app.world().resource::<Inventory>().item(loaf).is_some());
         assert_eq!(app.world().get::<DelverNeeds>(player).unwrap().0.hunger.value, 0.55);
+    }
+
+    fn on_the_level(app: &mut App) {
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+    }
+
+    /// A sack stowed in the pack with a healing draught inside.
+    fn draught_in_a_pouch(app: &mut App) -> (ItemId, ItemId) {
+        let sack = stow(app, item("Sack"));
+        let mut inventory = app.world_mut().resource_mut::<Inventory>();
+        let draught = inventory.add(item(HEALING_DRAUGHT));
+        let at = inventory.grid(sack).and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint)).unwrap();
+        inventory.put(draught, sack, at).unwrap();
+        (sack, draught)
+    }
+
+    #[test]
+    fn h_drinks_a_draught_from_a_pouch_in_the_pack() {
+        let (mut app, player) = app();
+        on_the_level(&mut app);
+        app.world_mut().entity_mut(player).insert(hurt(3));
+        app.world_mut().spawn(crate::carry::ViewModelCamera { follows: Entity::PLACEHOLDER });
+        let (sack, draught) = draught_in_a_pouch(&mut app);
+        press_key(&mut app, KeyCode::KeyH);
+        let hp = app.world().get::<Health>(player).unwrap().hp;
+        assert!((7..=12).contains(&hp), "{hp}");
+        let inventory = app.world().resource::<Inventory>();
+        assert!(inventory.item(draught).is_none());
+        assert_eq!(inventory.contents_count(sack), 0);
+        assert!(app.world().resource::<Toast>().text.starts_with("You drink the healing draught (+"));
+        assert!(app.world().resource::<HealGlow>().0 > 0.0);
+        let chimes = app.world_mut().query_filtered::<(), With<crate::audio::SoundEffect>>().iter(app.world()).count();
+        assert_eq!(chimes, 1);
+    }
+
+    #[test]
+    fn h_drinks_the_belt_draught_before_the_pack_one() {
+        let (mut app, player) = app();
+        on_the_level(&mut app);
+        app.world_mut().entity_mut(player).insert(hurt(3));
+        let (_, in_pouch) = draught_in_a_pouch(&mut app);
+        let in_pack = stow(&mut app, item(HEALING_DRAUGHT));
+        let on_belt = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(item("Belt"));
+            inventory.wear(belt, fb_items::Slot::Belt).unwrap();
+            let draught = inventory.add(item(HEALING_DRAUGHT));
+            let at = inventory.grid(belt).and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint)).unwrap();
+            inventory.put(draught, belt, at).unwrap();
+            draught
+        };
+        press_key(&mut app, KeyCode::KeyH);
+        let inventory = app.world().resource::<Inventory>();
+        assert!(inventory.item(on_belt).is_none());
+        assert!(inventory.item(in_pack).is_some() && inventory.item(in_pouch).is_some());
+        // The pack's own draught comes before the one in the pouch.
+        press_key(&mut app, KeyCode::KeyH);
+        let inventory = app.world().resource::<Inventory>();
+        assert!(inventory.item(in_pack).is_none() && inventory.item(in_pouch).is_some());
+    }
+
+    #[test]
+    fn h_with_no_draught_says_so_and_changes_nothing() {
+        let (mut app, player) = app();
+        on_the_level(&mut app);
+        app.world_mut().entity_mut(player).insert(hurt(3));
+        let loaf = carry(&mut app, "Bread");
+        press_key(&mut app, KeyCode::KeyH);
+        assert_eq!(app.world().resource::<Toast>().text, "You have no healing draught.");
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
+        assert!(app.world().resource::<Inventory>().item(loaf).is_some());
+        assert_eq!(app.world().resource::<HealGlow>().0, 0.0);
+    }
+
+    #[test]
+    fn h_at_full_hit_points_keeps_the_draught() {
+        let (mut app, player) = app();
+        on_the_level(&mut app);
+        app.world_mut().entity_mut(player).insert(hurt(12));
+        let draught = carry(&mut app, HEALING_DRAUGHT);
+        press_key(&mut app, KeyCode::KeyH);
+        assert_eq!(app.world().resource::<Toast>().text, "You are unhurt.");
+        assert!(app.world().resource::<Inventory>().item(draught).is_some());
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 12);
+    }
+
+    #[test]
+    fn h_ignores_a_draught_on_the_floor_or_in_a_bag_underfoot() {
+        let (mut app, player) = app();
+        on_the_level(&mut app);
+        app.world_mut().entity_mut(player).insert(hurt(3));
+        carry(&mut app, "Torch");
+        let (lying, boxed) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let lying = inventory.add(item(HEALING_DRAUGHT));
+            let sack = inventory.add(item("Sack"));
+            let boxed = inventory.add(item(HEALING_DRAUGHT));
+            let at = inventory.grid(sack).and_then(|g| g.first_free(inventory.item(boxed).unwrap().profile.footprint)).unwrap();
+            inventory.put(boxed, sack, at).unwrap();
+            (lying, boxed)
+        };
+        press_key(&mut app, KeyCode::KeyH);
+        assert_eq!(app.world().resource::<Toast>().text, "You have no healing draught.");
+        let inventory = app.world().resource::<Inventory>();
+        assert!(inventory.item(lying).is_some() && inventory.item(boxed).is_some());
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
+    }
+
+    #[test]
+    fn h_does_nothing_on_the_inventory_or_talk_screens() {
+        let (mut app, player) = app();
+        app.world_mut().entity_mut(player).insert(hurt(3));
+        let draught = carry(&mut app, HEALING_DRAUGHT);
+        for screen in [Some(Screen::Inventory), Some(Screen::Talk)] {
+            app.world_mut().resource_mut::<ScreenOpen>().0 = screen;
+            press_key(&mut app, KeyCode::KeyH);
+            assert!(app.world().resource::<Inventory>().item(draught).is_some(), "{screen:?}");
+            assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
+            assert!(app.world().resource::<Toast>().text.is_empty());
+        }
+    }
+
+    #[test]
+    fn drink_healing_is_bound_to_h_and_nothing_else_is() {
+        let keymap = Keymap::default();
+        assert_eq!(keymap.inputs(Action::DrinkHealing), &[crate::keymap::Input::Key(KeyCode::KeyH)]);
+        let clashes = keymap.bindings.iter().filter(|b| b.action != Action::DrinkHealing && b.inputs.contains(&crate::keymap::Input::Key(KeyCode::KeyH))).count();
+        assert_eq!(clashes, 0);
+    }
+
+    #[test]
+    fn h_drinks_the_slotted_draught_and_the_slot_takes_the_next() {
+        let (mut app, player) = app();
+        on_the_level(&mut app);
+        app.world_mut().init_resource::<crate::quickslots::Quickslots>();
+        app.world_mut().entity_mut(player).insert(hurt(3));
+        let a = stow(&mut app, item(HEALING_DRAUGHT));
+        let c = stow(&mut app, item(HEALING_DRAUGHT));
+        let b = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(item("Belt"));
+            inventory.wear(belt, fb_items::Slot::Belt).unwrap();
+            let draught = inventory.add(item(HEALING_DRAUGHT));
+            let at = inventory.grid(belt).and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint)).unwrap();
+            inventory.put(draught, belt, at).unwrap();
+            draught
+        };
+        app.world_mut().resource_mut::<crate::quickslots::Quickslots>().bind(2, a);
+        press_key(&mut app, KeyCode::KeyH);
+        let inventory = app.world().resource::<Inventory>();
+        assert!(inventory.item(a).is_none() && inventory.item(b).is_some() && inventory.item(c).is_some());
+        let held = app.world().resource::<crate::quickslots::Quickslots>().get(2);
+        assert!(held.is_some() && held != Some(a), "{held:?}");
+    }
+
+    #[test]
+    fn h_ignores_a_slotted_draught_set_down_underfoot() {
+        let (mut app, player) = app();
+        on_the_level(&mut app);
+        app.world_mut().init_resource::<crate::quickslots::Quickslots>();
+        app.world_mut().entity_mut(player).insert(hurt(3));
+        carry(&mut app, "Torch");
+        let lying = app.world_mut().resource_mut::<Inventory>().add(item(HEALING_DRAUGHT));
+        app.world_mut().resource_mut::<crate::quickslots::Quickslots>().bind(0, lying);
+        press_key(&mut app, KeyCode::KeyH);
+        assert_eq!(app.world().resource::<Toast>().text, "You have no healing draught.");
+        assert!(app.world().resource::<Inventory>().item(lying).is_some());
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
     }
 }

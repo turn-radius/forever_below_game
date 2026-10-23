@@ -50,6 +50,9 @@ pub enum Action {
     Light,
     /// Uses the item in a quickslot: its ten keys, 1 to 0, are the slots in order.
     Quickslot,
+    /// In the level, drinks the nearest healing draught carried: belt and quickslots, then the
+    /// pack, then the bags in it.
+    DrinkHealing,
     DragItem,
     TurnItem,
     /// In the inventory, sets the item under the mouse down underfoot, as dragging it there does.
@@ -327,6 +330,7 @@ impl Default for Keymap {
                     ],
                 )
                 .in_contexts(ITEMS),
+                bind(Action::DrinkHealing, "Drink a healing draught", Group::Items, &[Key(KeyCode::KeyH)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Inventory]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]).in_contexts(&[Context::Inventory]),
                 bind(Action::Drop, "Drop the item under the mouse", Group::Items, &[Key(KeyCode::KeyX)]).in_contexts(&[Context::Inventory]),
