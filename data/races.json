@@ -714,11 +714,11 @@
   "nose": "broad",
   "eyes": "yellow",
   "stats": [
-   22,
-   17,
+   20,
+   15,
    21,
-   12,
-   16
+   19,
+   17
   ],
   "dv": 120,
   "brow": 0.14,
@@ -776,12 +776,12 @@
    "curve": 0.3
   },
   "srd": {
-   "creature": "Horned Devil",
-   "page": 276,
-   "cr": "11",
-   "ac": 18,
-   "hp": 178,
-   "note": "Horned Devil scores; flight and wings removed, and its Large size is the 2.4 m of the body."
+   "creature": "Glabrezu",
+   "page": 271,
+   "cr": "9",
+   "ac": 17,
+   "hp": 157,
+   "note": "Glabrezu scores; the pincer arms are not modelled."
   }
  },
  "succubus": {

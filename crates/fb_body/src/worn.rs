@@ -235,9 +235,11 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
 /// (a cloak's hem and folds, a pack, a cuirass's back), plus a little: the wings stand that far out
 /// from the back, over it all (see `docs/body.md`).
 fn wing_lift(body: &Body, layers: &[WornLayer]) -> f32 {
-    let (y0, y1) = (body.hip_y, body.shoulder_y + 0.1 * body.trunk_length);
+    // From the hips up to the chin: a collar, pauldrons and a hood's cape reach behind the neck.
+    // What is on the head itself (a helm, a hood's cowl) is above it.
+    let (y0, y1) = (body.hip_y, body.chin_y);
     let mut lift = 0.0f32;
-    for layer in layers.iter().filter(|l| l.slot != Slot::Head) {
+    for layer in layers {
         for p in layer.mesh.parts.iter().flat_map(|part| part.positions.iter()) {
             if p[1] < y0 || p[1] > y1 || p[0].abs() > 1.2 * body.shoulder_half_width || p[2] > 0.0 {
                 continue;
@@ -2655,11 +2657,11 @@ mod tests {
         assert!(sides.iter().any(|c| c.len() == 16 && c[0][0] < 0.0) && sides.iter().any(|c| c.len() == 8 && c[0][0] > 0.0));
     }
 
-    fn a_minotaurs_horns_and_muzzle_clear_helms_check(seeds: &[u32], styles: &[HelmStyle], kits: std::ops::Range<u32>, min_checked: usize) {
+    fn a_minotaurs_horns_and_muzzle_clear_helms_check(folk: Folk, seeds: &[u32], styles: &[HelmStyle], kits: std::ops::Range<u32>, min_checked: usize) {
         let mut failures = vec![];
         let mut checked = 0;
         for &seed in seeds {
-            let body = Body::new(&BodySpec::roll(Folk::Minotaur, seed));
+            let body = Body::new(&BodySpec::roll(folk, seed));
             for &style in styles {
                 for kit in kits.clone() {
                     let mut helm = Helm::roll_as(seed + kit, style);
@@ -2672,7 +2674,7 @@ mod tests {
                             checked += 1;
                             let n = crossings(feature, part);
                             if n > 0 {
-                                failures.push(format!("minotaur {seed} {style:?} kit {kit}: its {} passes through the {} ({n} crossings)", feature.name, part.name));
+                                failures.push(format!("{folk:?} {seed} {style:?} kit {kit}: its {} passes through the {} ({n} crossings)", feature.name, part.name));
                             }
                         }
                     }
@@ -2686,12 +2688,26 @@ mod tests {
     #[test]
     #[ignore = "slow sweep: body fitting test, every seed; run before merging fitting changes"]
     fn a_minotaurs_horns_and_muzzle_clear_helms() {
-        a_minotaurs_horns_and_muzzle_clear_helms_check(&[3, 1207, 40, 8, 77, 501], &[HelmStyle::Kettle, HelmStyle::Nasal], 0..4, 100);
+        a_minotaurs_horns_and_muzzle_clear_helms_check(Folk::Minotaur, &[3, 1207, 40, 8, 77, 501], &[HelmStyle::Kettle, HelmStyle::Nasal], 0..4, 100);
+    }
+
+    #[test]
+    #[ignore = "slow sweep: body fitting test, every seed; run before merging fitting changes"]
+    fn the_demons_horns_clear_helms() {
+        // The horned demon's big curled horns. (The winged demon and the succubus have small horns on a
+        // folk head; this sweep's strict skull-against-shell test fails for them as it does for a gnome or
+        // a goblin, so they are not in it: see "Known limits" in docs/body.md.)
+        a_minotaurs_horns_and_muzzle_clear_helms_check(Folk::HornedDemon, &[3, 1207, 40, 8, 77, 501], &[HelmStyle::Kettle, HelmStyle::Nasal], 0..4, 100);
+    }
+
+    #[test]
+    fn the_demons_horns_clear_helms_smoke() {
+        a_minotaurs_horns_and_muzzle_clear_helms_check(Folk::HornedDemon, &[7], &[HelmStyle::Kettle, HelmStyle::Nasal], 0..1, 2);
     }
 
     #[test]
     fn a_minotaurs_horns_and_muzzle_clear_helms_smoke() {
-        a_minotaurs_horns_and_muzzle_clear_helms_check(&[7], &[HelmStyle::Kettle, HelmStyle::Nasal], 0..1, 2);
+        a_minotaurs_horns_and_muzzle_clear_helms_check(Folk::Minotaur, &[7], &[HelmStyle::Kettle, HelmStyle::Nasal], 0..1, 2);
     }
 
     /// How far `part` reaches from the left leg's line at height `y` (body space), if it is there.

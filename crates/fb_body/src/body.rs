@@ -167,6 +167,8 @@ pub struct Body {
     pub arms: [Limb; 2],
     pub legs: [Limb; 2],
     skin: TorsoProfile,
+    /// How far back the body reaches at heights up it, for wings (made on first use).
+    pub(crate) back_floors: std::sync::OnceLock<Vec<(f32, f32)>>,
 }
 
 fn index(side: Side) -> usize {
@@ -296,6 +298,7 @@ impl Body {
             arms: [arm(Side::Right), arm(Side::Left)],
             legs: [leg(Side::Right), leg(Side::Left)],
             skin,
+            back_floors: std::sync::OnceLock::new(),
         };
         body.draw_in_pubis();
         body.garment_fill = body.garment_fill_rows();

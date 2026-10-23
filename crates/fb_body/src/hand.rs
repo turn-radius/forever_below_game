@@ -87,7 +87,10 @@ fn claw(digit: &Digit, curl: f32) -> MeshBuilder {
     let along = vec3::normalize_or(vec3::sub(b, a), vec3::Y);
     let back = vec3::normalize_or(vec3::sub(vec3::scale(along, vec3::dot(digit.bend, along)), digit.bend), vec3::Z);
     let r = digit.radius;
-    let len = 0.95 * vec3::distance(a, b).max(r * 2.0);
+    // A digit closed on a grip (curled past a relaxed hand's) keeps a short claw, so it does not
+    // poke into the haft it holds.
+    let hold = ((curl - 0.42) / 0.18).clamp(0.0, 1.0);
+    let len = 1.5 * vec3::distance(a, b).max(r * 2.0) * (1.0 - 0.65 * hold * hold * (3.0 - 2.0 * hold));
     // The base sits on the tip; the claw leaves along the phalanx, tipped a little toward the palm.
     let dir = vec3::normalize_or(vec3::sub(vec3::scale(along, 1.0), vec3::scale(back, 0.22)), along);
     let mut m = armory::geom::spike(0.62 * r, len, 7, 0.0, armory::geom::Shading::SMOOTH);

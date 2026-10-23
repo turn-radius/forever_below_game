@@ -39,7 +39,13 @@ fn the_demons_are_denizens_built_from_their_seeds_and_the_kinds_differ() {
         }
         assert_ne!(demon(folk, 1).mesh(), demon(folk, 2).mesh());
         let srd = folk.race().srd.as_ref().expect("an SRD block");
-        assert!(srd.page > 200 && srd.ac > 10 && srd.hp > 30);
+        let (creature, page, cr, ac, hp, stats, dv) = match folk {
+            Folk::WingedDemon => ("Vrock", 273, "6", 15, 104, [17, 15, 18, 8, 13], 120),
+            Folk::HornedDemon => ("Glabrezu", 271, "9", 17, 157, [20, 15, 21, 19, 17], 120),
+            _ => ("Succubus/Incubus", 349, "4", 15, 66, [8, 17, 13, 15, 12], 60),
+        };
+        assert_eq!((srd.creature.as_str(), srd.page, srd.cr.as_str(), srd.ac, srd.hp), (creature, page, cr, ac, hp), "{folk:?}");
+        assert_eq!((folk.race().stats, folk.race().dv), (stats, dv), "{folk:?}");
     }
     let kinds: Vec<Vec<&str>> = DEMONS.iter().map(|&f| demon(f, 7).skin_mesh().parts.iter().map(|p| p.name).collect()).collect();
     assert!(kinds[0].contains(&"wing_membrane") && kinds[2].contains(&"wing_membrane") && !kinds[1].contains(&"wing_membrane"));
@@ -85,19 +91,15 @@ fn wings_fold_at_rest_and_stay_clear_of_the_body() {
             for name in ["wing_bones", "wing_membrane"] {
                 let p = part(&skin, name).unwrap();
                 let root = body.wing(Side::Left, 0.0).unwrap().root_skin;
-                let open = wing_open(&body);
-                for q in p.positions.iter().step_by(6).filter(|q| vec3::distance(**q, [root[0].abs() * q[0].signum(), root[1], root[2]]) > 1.0) {
+                for q in p.positions.iter().filter(|q| vec3::distance(**q, [root[0].abs() * q[0].signum(), root[1], root[2]]) > 1.0) {
                     let floor = body.back_floor(q[1]);
-                    assert!(q[2] < floor + 0.06 || q[1] > body.height - 0.5 || open > 0.5, "{folk:?} {seed} {name}: a point at {q:?} is in front of the back's {floor}");
+                    assert!(q[2] < floor + 0.06, "{folk:?} {seed} {name}: a point at {q:?} is in front of the back's {floor}");
                 }
             }
         }
     }
 }
 
-fn wing_open(body: &Body) -> f32 {
-    body.wing(Side::Left, 0.0).unwrap().open
-}
 
 #[test]
 fn wings_spread_a_little_in_the_walk_and_the_idle() {
@@ -159,6 +161,116 @@ fn wing_weights_follow_the_bones_and_the_trunk() {
     assert!(rig.rest_at(Joint::WingL1)[1] > rig.rest_at(Joint::WingL0)[1], "the wrist is above the root");
 }
 
+/// A point of the rest body as `pose` carries it with the chest, taken back into the rest frame:
+/// what is fixed to the chest stays where it was.
+fn in_chest_frame(rig: &Rig, pose: &RigPose, p: [f32; 3]) -> [f32; 3] {
+    let w = rig.world(pose)[Joint::Chest.index()];
+    let d = vec3::sub(p, w.origin);
+    let c = w.rotation.cols;
+    vec3::add(rig.rest_at(Joint::Chest), [vec3::dot(c[0], d), vec3::dot(c[1], d), vec3::dot(c[2], d)])
+}
+
+fn wing_stalk(body: &Body) -> [f32; 3] {
+    body.wing(Side::Left, 0.0).unwrap().root_skin
+}
+
+#[test]
+fn animated_wings_never_swing_into_the_back() {
+    for folk in [Folk::WingedDemon, Folk::Succubus] {
+        for seed in [7, 40] {
+            let body = demon(folk, seed);
+            let rig = Rig::of(&body);
+            let gait = Gait::new(&body, &rig);
+            let skinner = Skinner::new(&body);
+            let skin = body.skin_mesh();
+            let stalk = wing_stalk(&body);
+            let mut poses: Vec<RigPose> = (0..8).map(|i| gait.walk(i as f32 / 8.0, gait.natural_speed() * 1.3)).collect();
+            poses.extend([0.0f32, 0.7, 1.9, 3.1].map(|t| gait.idle(&IdleCycle::of(3), t)));
+            let mut checked = 0usize;
+            for name in ["wing_bones", "wing_membrane"] {
+                let p = part(&skin, name).unwrap();
+                let w = skinner.part(p, SkinRegion::of_skin(name));
+                for (pi, pose) in poses.iter().enumerate() {
+                    let frames = rig.skin_frames(pose);
+                    for (k, &q) in p.positions.iter().enumerate() {
+                        // What hangs from the chest and the wings, above the hips.
+                        if q[1] < body.chest_y - 0.5 || vec3::distance(q, [stalk[0].abs() * q[0].signum(), stalk[1], stalk[2]]) < 1.0 {
+                            continue;
+                        }
+                        let on_chest: f32 = w.joints[k].iter().zip(w.weights[k]).filter(|(j, _)| matches!(**j as usize, 2 | 16..=23)).map(|(_, x)| x).sum();
+                        if on_chest < 0.99 {
+                            continue;
+                        }
+                        let local = in_chest_frame(&rig, pose, Rig::skin_point(&frames, q, w.joints[k], w.weights[k]));
+                        let floor = body.back_floor(local[1]);
+                        checked += 1;
+                        assert!(local[2] < floor + 0.06, "{folk:?} {seed} {name} pose {pi}: a point at {local:?} swings in front of the back's {floor}");
+                    }
+                }
+            }
+            assert!(checked > 1000, "{folk:?}: {checked} points checked");
+        }
+    }
+}
+
+#[test]
+fn a_cloaked_demons_posed_wings_stay_outside_the_gear() {
+    for folk in [Folk::WingedDemon, Folk::Succubus] {
+        for outfit_seed in [10u32, 12] {
+            let body = demon(folk, 3);
+            let worn: Vec<(Slot, Item)> = [(Slot::Body, Family::Garment), (Slot::Cloak, Family::Garment), (Slot::Back, Family::Bags)].iter().filter_map(|&(slot, family)| Item::roll(family, outfit_seed).map(|i| (slot, i))).collect();
+            let fit = fit_worn(&body, &worn);
+            assert!(fit.wing_lift > 0.0, "{folk:?}: gear on the back lifts the wings");
+            let rig = Rig::of_lifted(&body, fit.wing_lift);
+            let bare = Rig::of(&body);
+            assert!(rig.rest_at(Joint::WingL0)[2] < bare.rest_at(Joint::WingL0)[2] - 0.3, "the wing pivots where it stands");
+            let gait = Gait::new(&body, &rig);
+            let skinner = Skinner::with_wing_lift(&body, fit.wing_lift);
+            let lifted = body.skin_mesh_lifted(fit.wing_lift);
+            let membrane = part(&lifted, "wing_membrane").unwrap();
+            let wm = skinner.part(membrane, SkinRegion::Wing);
+            let gear: Vec<(armory::Part, crate::skin::PartSkin)> =
+                fit.layers.iter().flat_map(|l| l.mesh.parts.iter().map(move |p| (p.clone(), l.slot))).map(|(p, slot)| { let w = skinner.part(&p, SkinRegion::of_worn(slot, p.name)); (p, w) }).collect();
+            for (pi, phase) in [0.0f32, 0.2, 0.45, 0.7].into_iter().enumerate() {
+                let pose = gait.walk(phase, gait.natural_speed());
+                let frames = rig.skin_frames(&pose);
+                let back = |p: &armory::Part, w: &crate::skin::PartSkin, f: &dyn Fn(&[f32; 3]) -> bool| -> Vec<[f32; 3]> {
+                    p.positions.iter().enumerate().filter(|(_, q)| f(q)).map(|(k, &q)| in_chest_frame(&rig, &pose, Rig::skin_point(&frames, q, w.joints[k], w.weights[k]))).collect()
+                };
+                // Cloth on the back above the waist, where it hangs from the shoulders and moves with the chest.
+                let band = |q: &[f32; 3]| q[1] > body.chest_y && q[1] < body.chin_y && q[0].abs() < 0.5 * body.shoulder_half_width;
+                let gear_back = gear.iter().flat_map(|(p, w)| back(p, w, &band)).map(|q| q[2]).fold(0.0f32, f32::min);
+                let wing_front = back(membrane, &wm, &|q| q[1] > body.chest_y && q[1] < body.chin_y && q[0].abs() < 2.5 * body.shoulder_half_width).into_iter().map(|q| q[2]).fold(f32::MIN, f32::max);
+                assert!(wing_front < gear_back + 0.1, "{folk:?} outfit {outfit_seed} phase {pi}: the wing's front {wing_front} is inside the gear's back {gear_back}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_wings_clear_collars_pauldrons_and_a_hoods_cape() {
+    let mut seen = 0;
+    for folk in [Folk::WingedDemon, Folk::Succubus] {
+        for seed in [10u32, 11, 12, 13, 14, 15] {
+            let body = demon(folk, 3);
+            for kit in [vec![(Slot::Head, Family::Hood), (Slot::Cloak, Family::Garment)], vec![(Slot::Body, Family::Garment), (Slot::Neck, Family::Amulet)]] {
+                let worn: Vec<(Slot, Item)> = kit.iter().filter_map(|&(slot, family)| Item::roll(family, seed).map(|i| (slot, i))).collect();
+                let fit = fit_worn(&body, &worn);
+                let lifted = body.skin_mesh_lifted(fit.wing_lift);
+                let high = |p: &&[f32; 3]| p[1] > body.shoulder_y && p[1] < body.chin_y && p[0].abs() < 0.8 * body.shoulder_half_width && p[2] < 0.0;
+                let gear_back = fit.layers.iter().flat_map(|l| l.mesh.parts.iter().flat_map(|p| p.positions.iter())).filter(high).map(|p| p[2]).fold(0.0f32, f32::min);
+                let membrane = part(&lifted, "wing_membrane").unwrap();
+                let wing_front = membrane.positions.iter().filter(|p| p[1] > body.shoulder_y && p[1] < body.chin_y && p[0].abs() < 2.5 * body.shoulder_half_width).map(|p| p[2]).fold(f32::MIN, f32::max);
+                if gear_back < -0.1 {
+                    seen += 1;
+                }
+                assert!(wing_front < gear_back.min(body.back_floor(body.shoulder_y)) + 0.02, "{folk:?} {seed}: the wing ({wing_front}) is in gear behind the neck ({gear_back})");
+            }
+        }
+    }
+    assert!(seen > 6, "gear was measured behind the neck {seen} times");
+}
+
 #[test]
 fn the_spade_is_skinned_to_the_tail_and_swings_with_it() {
     for folk in DEMONS {
@@ -189,13 +301,27 @@ fn the_spade_is_skinned_to_the_tail_and_swings_with_it() {
 fn claws_are_longer_than_nails() {
     let claws = demon(Folk::WingedDemon, 7).skin_mesh();
     let nails = Body::new(&BodySpec::roll(Folk::Human, 7)).skin_mesh();
-    let len = |m: &armory::ItemMesh| {
+    // The longest nail or claw: the farthest a vertex of the part is from the wrist along the hand.
+    let len = |m: &armory::ItemMesh, body: &Body| {
+        let wrist = body.arm(Side::Left).joints[2];
         let p = part(m, "nails").unwrap();
-        let (lo, hi) = p.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(l, h), p| (std::array::from_fn(|i| l[i].min(p[i])), std::array::from_fn(|i| h[i].max(p[i]))));
-        hi[1] - lo[1]
+        p.positions.iter().filter(|q| q[0] > 0.0).map(|q| vec3::distance(*q, wrist)).fold(0.0f32, f32::max) / body.hand_form().palm_length
     };
-    assert!(len(&claws) > 0.0 && part(&demon(Folk::Succubus, 7).skin_mesh(), "nails").is_some());
-    let _ = (len(&nails), nails);
+    let (demon_body, human) = (demon(Folk::WingedDemon, 7), Body::new(&BodySpec::roll(Folk::Human, 7)));
+    let (c, n) = (len(&claws, &demon_body), len(&nails, &human));
+    assert!(c > n * 1.08, "claws reach {c} palms from the wrist, a human's nails {n}");
+    assert!(part(&demon(Folk::Succubus, 7).skin_mesh(), "nails").is_some());
+    // A fist closed on a grip keeps short claws, so they do not poke into the haft: the claws' surface
+    // (which grows with their length) is a good deal smaller than on a relaxed hand.
+    let area = |m: &armory::geom::MeshBuilder| -> f32 {
+        m.indices.chunks(3).map(|t| vec3::length(vec3::cross(vec3::sub(m.positions[t[1] as usize], m.positions[t[0] as usize]), vec3::sub(m.positions[t[2] as usize], m.positions[t[0] as usize])))).sum()
+    };
+    let form = demon_body.hand_form();
+    let open = area(&crate::hand::hand_meshes_with(&form, &crate::hand::HandPose::RELAXED, true).1);
+    let fist = area(&crate::hand::hand_meshes_with(&form, &crate::hand::HandPose::gripping(&form, 0.1), true).1);
+    let plain = area(&crate::hand::hand_meshes_with(&form, &crate::hand::HandPose::RELAXED, false).1);
+    assert!(open > 1.5 * plain, "claws are larger than nails ({open} against {plain})");
+    assert!(fist < 0.6 * open, "claws shorten on a gripping hand: {fist} against {open}");
 }
 
 #[test]
@@ -221,7 +347,7 @@ fn gear_clears_the_skin_and_the_wings_stand_over_it() {
             let trunk = body.trunk();
             for outfit_seed in [10u32, 11, 12, 13] {
                 let worn: Vec<(Slot, Item)> =
-                    [(Slot::Shirt, Family::Garment), (Slot::Body, Family::Garment), (Slot::Cloak, Family::Garment)].iter().filter_map(|&(slot, family)| Item::roll(family, outfit_seed).map(|i| (slot, i))).collect();
+                    [(Slot::Shirt, Family::Garment), (Slot::Body, Family::Garment), (Slot::Cloak, Family::Garment), (Slot::Head, Family::Hood)].iter().filter_map(|&(slot, family)| Item::roll(family, outfit_seed).map(|i| (slot, i))).collect();
                 let fit = fit_worn(&body, &worn);
                 for layer in &fit.layers {
                     let (mut inside, mut total) = (0usize, 0usize);
@@ -244,8 +370,8 @@ fn gear_clears_the_skin_and_the_wings_stand_over_it() {
                     assert_eq!(fit.wing_lift, 0.0);
                     continue;
                 }
-                let gear_back = fit.layers.iter().filter(|l| l.slot != Slot::Head).flat_map(|l| l.mesh.parts.iter().flat_map(|p| p.positions.iter())).filter(|p| p[1] > body.hip_y && p[1] < body.shoulder_y && p[0].abs() < 0.5 * body.shoulder_half_width).map(|p| p[2]).fold(0.0f32, f32::min);
-                let edge = part(&lifted, "wing_membrane").unwrap().positions.iter().filter(|p| p[1] > body.hip_y + 1.0 && p[1] < body.shoulder_y && p[0].abs() < 2.5 * body.shoulder_half_width).map(|p| p[2]).fold(f32::MIN, f32::max);
+                let gear_back = fit.layers.iter().flat_map(|l| l.mesh.parts.iter().flat_map(|p| p.positions.iter())).filter(|p| p[1] > body.hip_y && p[1] < body.chin_y && p[0].abs() < 0.5 * body.shoulder_half_width).map(|p| p[2]).fold(0.0f32, f32::min);
+                let edge = part(&lifted, "wing_membrane").unwrap().positions.iter().filter(|p| p[1] > body.hip_y + 1.0 && p[1] < body.chin_y && p[0].abs() < 2.5 * body.shoulder_half_width).map(|p| p[2]).fold(f32::MIN, f32::max);
                 assert!(edge < gear_back + 0.02, "{folk:?} {seed} outfit {outfit_seed}: the membrane ({edge}) reaches into the gear on the back ({gear_back})");
             }
         }

@@ -18,7 +18,7 @@
 //! Space is the body's: 1 unit = 10 cm, soles on y = 0, face +Z, the wearer's left +X. Plain
 //! Rust; a pure function of the body and its seed.
 
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::PI;
 
 use armory::build::form::BACK;
 use armory::build::hafted::smoothstep;
@@ -30,6 +30,9 @@ use armory::geom::OutlineMode;
 use crate::body::Body;
 use crate::limb::Side;
 use crate::parts::{mix, shade};
+
+/// Heights the back's reach is sampled at, up the body.
+const BACK_SAMPLES: usize = 96;
 
 /// Bone lengths as shares of the wing's reach: upper arm, forearm, then the fingers.
 const HUMERUS: f32 = 0.2;
@@ -104,10 +107,7 @@ impl Body {
         // The root: between the shoulder blades, a little off the spine.
         let y_root = self.shoulder_y - 0.17 * t;
         let x_root = sg * 0.3 * self.shoulder_half_width;
-        let floor: Vec<(f32, f32)> = (0..=48).map(|k| {
-            let y = self.height * k as f32 / 48.0;
-            (y, self.back_floor(y))
-        }).collect();
+        let floor = self.back_floors().clone();
         let long_hair = matches!(self.spec.hair, crate::folk::HairStyle::Long | crate::folk::HairStyle::Ponytail);
         let clearance = (0.12 + if long_hair { 0.5 } else { 0.0 }) * s;
         let root_skin = [x_root, y_root, self.back_z(x_root, y_root)];
@@ -169,8 +169,14 @@ impl Body {
 
     /// The root and the wrist of `side`'s wing at rest, the rig's wing joints.
     pub fn wing_joints(&self, side: Side) -> Option<[V3; 2]> {
-        let w = self.wing(side, 0.0)?;
-        Some([w.root_skin, w.wrist])
+        self.wing_joints_lifted(side, 0.0)
+    }
+
+    /// The root and the wrist of `side`'s wing standing `lift` out from the back: the pivots of a
+    /// wing over gear, so it turns about where it is.
+    pub fn wing_joints_lifted(&self, side: Side, lift: f32) -> Option<[V3; 2]> {
+        let w = self.wing(side, lift)?;
+        Some([w.root, w.wrist])
     }
 
     /// The back's surface behind the body at lateral `x` and height `y`: the trunk's, found by
@@ -186,9 +192,30 @@ impl Body {
             .map_or(-1.0, |p| p[1])
     }
 
+    /// [`Body::back_floor`] sampled up the whole height, once per body.
+    pub fn back_floors(&self) -> &Vec<(f32, f32)> {
+        self.back_floors.get_or_init(|| {
+            (0..=BACK_SAMPLES)
+                .map(|k| {
+                    let y = self.height * k as f32 / BACK_SAMPLES as f32;
+                    (y, self.back_floor_at(y))
+                })
+                .collect()
+        })
+    }
+
+    /// How far back anything of the body reaches at height `y` (from the samples of
+    /// [`Body::back_floors`], between which it is interpolated).
+    pub fn back_floor(&self, y: f32) -> f32 {
+        let f = self.back_floors();
+        let k = (y / self.height * BACK_SAMPLES as f32).clamp(0.0, BACK_SAMPLES as f32);
+        let (i, t) = ((k.floor() as usize).min(BACK_SAMPLES - 1), k - k.floor());
+        f[i].1 * (1.0 - t) + f[i + 1].1 * t
+    }
+
     /// How far back anything of the body reaches at height `y`: the trunk's seat and back,
     /// the legs (hocks and thighs) below the hips and the head above.
-    pub fn back_floor(&self, y: f32) -> f32 {
+    fn back_floor_at(&self, y: f32) -> f32 {
         let yc = y.clamp(self.hip_y - 0.14 * self.trunk_length, self.shoulder_y + 0.1 * self.trunk_length);
         let mut z = (0..=24)
             .map(|k| self.trunk().section(BACK + (k as f32 / 24.0 - 0.5) * 1.8, yc, 0.0)[1])
@@ -459,11 +486,15 @@ impl WingSkin {
 
 /// How the wings move: the root joint swings the whole wing out and the wrist opens the
 /// fingers, each by an angle given by `spread` (0 rest, 1 as far as a walk takes them) and `flap`.
+///
+/// Wings only ever move away from the back: the turn out about the vertical (the root's `y`) and
+/// the flap (a lift of the fingers backward, 0 settled to 1 lifted, from `flap` in -1..=1) both
+/// carry the folded wing behind where it rests, so it never swings into the back or the gear.
 pub fn wing_rotation(side: Side, spread: f32, flap: f32) -> [crate::rig::Quat; 2] {
     use crate::rig::Quat;
     let sg = side.sign();
-    let root = Quat::z(sg * 0.2 * spread).mul(Quat::y(-sg * 0.1 * spread)).mul(Quat::x(0.05 * flap));
-    let wrist = Quat::z(sg * 0.26 * spread).mul(Quat::x(0.12 * flap));
-    let _ = TAU;
+    let lift = 0.5 + 0.5 * flap.clamp(-1.0, 1.0);
+    let root = Quat::z(sg * 0.2 * spread).mul(Quat::y(sg * 0.1 * spread)).mul(Quat::x(0.06 * lift));
+    let wrist = Quat::z(sg * 0.26 * spread).mul(Quat::x(0.12 * lift));
     [root, wrist]
 }

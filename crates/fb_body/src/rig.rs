@@ -329,6 +329,12 @@ pub struct Rig {
 impl Rig {
     /// The rig of `body` as it is posed (its arms may hold things).
     pub fn of(body: &Body) -> Rig {
+        Rig::of_lifted(body, 0.0)
+    }
+
+    /// The rig of `body` with its wings standing `lift` out from the back, over gear
+    /// ([`crate::WornFit::wing_lift`]): the wing joints are where those wings are.
+    pub fn of_lifted(body: &Body, wing_lift: f32) -> Rig {
         let hips = [body.leg(Side::Right).joints[0], body.leg(Side::Left).joints[0]];
         let mut rest = [vec3::ZERO; JOINTS];
         rest[Joint::Pelvis.index()] = [0.0, 0.5 * (hips[0][1] + hips[1][1]), 0.0];
@@ -352,7 +358,7 @@ impl Rig {
         // The same for wings: roots on the back and wrists, or at the chest for a race with none.
         for side in Side::BOTH {
             let [root, wrist] = Joint::wing(side);
-            let at = body.wing_joints(side);
+            let at = body.wing_joints_lifted(side, wing_lift);
             rest[root.index()] = at.map_or(rest[Joint::Chest.index()], |j| j[0]);
             rest[wrist.index()] = at.map_or(rest[Joint::Chest.index()], |j| j[1]);
         }

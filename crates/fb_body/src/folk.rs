@@ -440,8 +440,8 @@ pub struct TailRow {
     /// back (a goat's).
     #[serde(default)]
     pub lift: f32,
-    /// How much more each bone swings back than the one before it (radians per bone), lifting a
-    /// long tail's end into an S; 0 hangs it.
+    /// How much more each bone swings back than the one before it (radians per bone): a rising
+    /// curl at the tail's end; 0 hangs it.
     #[serde(default)]
     pub curve: f32,
 }

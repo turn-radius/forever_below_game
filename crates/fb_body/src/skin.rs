@@ -239,6 +239,11 @@ pub struct Skinner {
 
 impl Skinner {
     pub fn new(body: &Body) -> Skinner {
+        Skinner::with_wing_lift(body, 0.0)
+    }
+
+    /// The weights of `body` whose wings stand `lift` out from the back, over gear.
+    pub fn with_wing_lift(body: &Body, wing_lift: f32) -> Skinner {
         let hand = 0.105 * body.height * body.race().arm;
         let foot = 0.148 * body.height * body.race().foot;
         let arms = [LimbFit::new(body.arm(Side::Right), true, hand, None), LimbFit::new(body.arm(Side::Left), true, hand, None)];
@@ -260,7 +265,7 @@ impl Skinner {
             trunk_length: body.trunk_length,
             hip_half_width: body.hip.half_width,
             tail: body.jointed_tail().map(|(points, _)| points).unwrap_or_default(),
-            wings: [Side::Right, Side::Left].map(|side| body.wing(side, 0.0).map(|w| w.skin())),
+            wings: [Side::Right, Side::Left].map(|side| body.wing(side, wing_lift).map(|w| w.skin())),
         }
     }
 

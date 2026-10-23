@@ -89,7 +89,7 @@ impl Figure {
         let hooded = matches!(held(Slot::Head), Some(armory::Item::Hood(_)));
         // Every vertex of the skin and the gear follows the rig's joints, by where it rests; what
         // is held rides a joint rigidly. The head and the hood turn with the body under a hood.
-        let skinner = Skinner::new(&body);
+        let skinner = Skinner::with_wing_lift(&body, fit.wing_lift);
         let head_region = if hooded { SkinRegion::Chest } else { SkinRegion::Head };
         let weights = |mesh: &ItemMesh, region: &dyn Fn(&str) -> SkinRegion| Some(skinner.mesh(mesh, region));
         let mut pieces = vec![
@@ -152,7 +152,7 @@ impl Figure {
             }
         }
         let neck = Vec3::from_array(body.neck_base().origin);
-        let rig = Rig::of(&body);
+        let rig = Rig::of_lifted(&body, fit.wing_lift);
         let gait = Gait::new(&body, &rig);
         Figure { body, pieces, light, neck, rig, gait, hooded }
     }
