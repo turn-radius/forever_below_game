@@ -105,7 +105,7 @@ impl Draft {
     /// the body seed. Lizardfolk have no bust.
     fn rolled_shape(&self) -> BodyShape {
         let mut shape = BodySpec::roll(self.folk, self.body_seed).shape();
-        (shape.figure, shape.bust) = self.sex.figure_bust(self.folk, self.body_seed);
+        (shape.figure, shape.bust) = fb_body::figure_bust(self.sex, self.folk, self.body_seed);
         shape
     }
 
@@ -125,7 +125,7 @@ impl Draft {
     }
 
     pub fn roll_name(&mut self) {
-        self.name = fb_items::naming::folk_name(&mut self.rng, self.folk.key());
+        self.name = fb_items::naming::folk_name(&mut self.rng, self.folk.key(), Some(self.sex));
         self.name.truncate(self.name.char_indices().nth(NAME_MAX).map_or(self.name.len(), |(i, _)| i));
         self.typed = false;
     }

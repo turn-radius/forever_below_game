@@ -177,7 +177,7 @@ impl Character {
     fn roll_as(folk: Folk, rng: &mut Mulberry32) -> Character {
         let body_seed = (rng.next_f64() * 4_294_967_296.0) as u32;
         let class = *rng.pick(&Class::ALL);
-        let name = fb_items::naming::folk_name(rng, folk.key());
+        let name = fb_items::naming::folk_name(rng, folk.key(), None);
         // WIS is drawn last, so existing seeds produce the same first four scores; only the WIS
         // roll and dirt shift.
         let nudges = Character::roll_nudges(rng);

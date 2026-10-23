@@ -114,7 +114,7 @@ impl Person {
     pub fn of(spot: &FolkSpot, faction: &FactionSpec, depth: u32) -> Person {
         let odds = fb_items::Odds::kit(depth);
         let mut rng = spot.name_stream();
-        let name = fb_items::naming::folk_name(&mut rng, spot.folk.key());
+        let name = fb_items::naming::folk_name(&mut rng, spot.folk.key(), Some(spot.sex));
         let outfit = *rng.pick(&faction.outfit_keys());
         let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
             let set = o.roll_in(spot.seed, spot.folk.key(), odds, Some(&livery(faction)));

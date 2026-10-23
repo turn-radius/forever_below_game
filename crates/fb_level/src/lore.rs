@@ -187,7 +187,7 @@ mod tests {
     fn a_trader_is_named_as_the_folk_is_named() {
         let level = (1..=40).map(|s| generate(s, 1)).find(|l| !l.lore().traders.is_empty()).expect("a level with a trader");
         let spot = level.folk.iter().find(|s| s.trade.is_some_and(|t| t.profession != Profession::Guard)).unwrap();
-        let name = fb_items::naming::folk_name(&mut procgen_rng::Mulberry32::new(spot.seed ^ crate::folk::NAME_SALT), spot.folk.key());
+        let name = fb_items::naming::folk_name(&mut procgen_rng::Mulberry32::new(spot.seed ^ crate::folk::NAME_SALT), spot.folk.key(), Some(spot.sex));
         assert_eq!(level.lore().traders[0].name, name);
     }
 

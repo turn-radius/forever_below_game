@@ -10,35 +10,17 @@ use crate::folk::{Beard, Folk, GREY_HAIR, HairStyle, eye_colours, hair_colours};
 /// The heights the creator offers, as shares of the folk's typical height.
 pub const STATURE: (f32, f32) = (0.9, 1.1);
 
-/// Whether someone is a woman or a man: what the creator's Sex choice sets for the delver, and
-/// what a faction's name sets for its members.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Sex {
-    Female,
-    Male,
-}
+pub use fb_items::Sex;
 
-impl Sex {
-    pub const ALL: [Sex; 2] = [Sex::Female, Sex::Male];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Sex::Female => "Female",
-            Sex::Male => "Male",
-        }
-    }
-
-    /// The hips and bust (`figure`, `bust`) of a body of `folk` and `seed` of this sex: a
-    /// woman's within wide-hipped ranges, a man's narrow with no bust. Lizardfolk have no bust.
-    pub fn figure_bust(self, folk: Folk, seed: u32) -> (f32, f32) {
-        let mut rng = Mulberry32::new(seed ^ 0x5e70_f1a3);
-        let (figure, bust) = match self {
-            Sex::Female => (rng.range_f32(0.55, 0.9), rng.range_f32(0.3, 0.85)),
-            Sex::Male => (rng.range_f32(0.05, 0.4), 0.0),
-        };
-        (figure, if folk == Folk::Lizardfolk { 0.0 } else { bust })
-    }
+/// The hips and bust (`figure`, `bust`) of a body of `folk` and `seed` of `sex`: a woman's
+/// within wide-hipped ranges, a man's narrow with no bust. Lizardfolk have no bust.
+pub fn figure_bust(sex: Sex, folk: Folk, seed: u32) -> (f32, f32) {
+    let mut rng = Mulberry32::new(seed ^ 0x5e70_f1a3);
+    let (figure, bust) = match sex {
+        Sex::Female => (rng.range_f32(0.55, 0.9), rng.range_f32(0.3, 0.85)),
+        Sex::Male => (rng.range_f32(0.05, 0.4), 0.0),
+    };
+    (figure, if folk == Folk::Lizardfolk { 0.0 } else { bust })
 }
 
 /// One character's body: its folk, build, face and hair.
@@ -190,7 +172,7 @@ impl BodySpec {
     pub fn roll_as(folk: Folk, seed: u32, sex: Sex) -> BodySpec {
         let rolled = BodySpec::roll(folk, seed);
         let mut shape = rolled.shape();
-        (shape.figure, shape.bust) = sex.figure_bust(folk, seed);
+        (shape.figure, shape.bust) = figure_bust(sex, folk, seed);
         let mut spec = rolled.with_shape(shape);
         if sex == Sex::Female {
             (spec.beard, spec.beard_length) = (Beard::None, 0.0);

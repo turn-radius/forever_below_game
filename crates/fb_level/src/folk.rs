@@ -57,7 +57,7 @@ impl FolkSpot {
     /// Their name, from its own stream of their seed ([`NAME_SALT`]); the game draws their
     /// outfit on from the same stream.
     pub fn name(&self) -> String {
-        fb_items::naming::folk_name(&mut self.name_stream(), self.folk.key())
+        fb_items::naming::folk_name(&mut self.name_stream(), self.folk.key(), Some(self.sex))
     }
 
     /// The stream their name is drawn from first.
