@@ -11,11 +11,11 @@
 //!   once all of them are learned ([`Lexicon::readable`]). Until then the line is shown as
 //!   [`glyphs`], the tongue's own script, with the line's rhythm kept.
 //! - [`Lexicon::can_barter`] and [`Lexicon::can_take_quests`] say when enough of a tongue is
-//!   known to trade and to take work, from the thresholds [`BARTER_SHARE`] and [`QUEST_SHARE`].
+//!   known to trade and to take work: the greeting phrases plus the trade or quest phrases.
 //!
 //! The vocabulary and phonologies are Rust constants, not a JSON table: they are small, the
-//! phonology is code-shaped (rolled syllables), and tests can name them. Our own rules, the
-//! user's call to tune.
+//! phonology is code-shaped (rolled syllables), and tests can name them. Our own rules, for a
+//! designer to tune.
 
 mod lexicon;
 mod phonology;
@@ -23,11 +23,11 @@ mod script;
 mod teaching;
 mod vocabulary;
 
-pub use lexicon::{BARTER_SHARE, Lexicon, QUEST_SHARE};
+pub use lexicon::Lexicon;
 pub use phonology::native;
 pub use script::{glyphs, script};
 pub use teaching::{Teaching, TeachingSize};
-pub use vocabulary::{CORE_WORDS, Topic, VOCABULARY, Word, needs, needs_with, word};
+pub use vocabulary::{CORE_WORDS, Topic, VOCABULARY, Word, UnknownWord, needs, needs_with, word};
 
 use crate::DenizenKind;
 

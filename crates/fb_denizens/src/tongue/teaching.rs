@@ -2,8 +2,9 @@
 //! seed.
 
 use procgen_rng::Mulberry32;
+use serde::{Deserialize, Serialize};
 
-use super::vocabulary::{Topic, Word};
+use super::vocabulary::{Topic, Word, word};
 use crate::DenizenKind;
 
 /// How much a piece of writing teaches.
@@ -24,14 +25,36 @@ impl TeachingSize {
     }
 }
 
-/// The words a book or scroll teaches, all of one tongue.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The words a book or scroll teaches, all of one tongue. Saved as the kind, the topics and the
+/// words' keys.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "TeachingSaved", into = "TeachingSaved")]
 pub struct Teaching {
     pub kind: DenizenKind,
     /// The topics it covers, in table order.
     pub topics: Vec<Topic>,
     /// Every word of those topics.
     pub words: Vec<Word>,
+}
+
+/// A [`Teaching`] as saved: words by key, so a word the vocabulary no longer has is dropped.
+#[derive(Serialize, Deserialize)]
+struct TeachingSaved {
+    kind: DenizenKind,
+    topics: Vec<Topic>,
+    keys: Vec<String>,
+}
+
+impl From<Teaching> for TeachingSaved {
+    fn from(t: Teaching) -> Self {
+        TeachingSaved { kind: t.kind, topics: t.topics, keys: t.words.iter().map(|w| w.key.to_string()).collect() }
+    }
+}
+
+impl From<TeachingSaved> for Teaching {
+    fn from(s: TeachingSaved) -> Self {
+        Teaching { kind: s.kind, topics: s.topics, words: s.keys.iter().filter_map(|k| word(k)).collect() }
+    }
 }
 
 impl Teaching {

@@ -1,7 +1,6 @@
 //! What each tongue sounds like. A native word is rolled from the kind and the word's key alone,
 //! so it is the same in every world, run and save, and no two words of a tongue are spelt alike.
 
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use procgen_rng::Mulberry32;
@@ -71,25 +70,30 @@ fn roll(kind: DenizenKind, key: &str, salt: u32) -> String {
     out
 }
 
+/// The spelling of the word with this key: its first roll, unless another word's first roll is
+/// the same, in which case it re-rolls with its own key and the attempt number. It depends only
+/// on the kind and the vocabulary's keys, never on the order of the table.
+fn spell(kind: DenizenKind, key: &str) -> String {
+    let first_rolls: Vec<String> = VOCABULARY.iter().filter(|w| w.key != key).map(|w| roll(kind, w.key, 0)).collect();
+    let mut attempt = 0;
+    loop {
+        let spelt = roll(kind, key, attempt);
+        if !first_rolls.contains(&spelt) {
+            break spelt;
+        }
+        attempt += 1;
+    }
+}
+
 fn table(kind: DenizenKind) -> &'static [String] {
     static TABLES: [OnceLock<Vec<String>>; 4] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
-    let slot = DenizenKind::ALL.iter().position(|k| *k == kind).unwrap_or(0);
-    TABLES[slot].get_or_init(|| {
-        let mut taken = HashSet::new();
-        VOCABULARY
-            .iter()
-            .map(|word| {
-                let mut salt = 0;
-                loop {
-                    let spelt = roll(kind, word.key, salt);
-                    if taken.insert(spelt.clone()) {
-                        break spelt;
-                    }
-                    salt += 1;
-                }
-            })
-            .collect()
-    })
+    let slot = match kind {
+        DenizenKind::Minotaur => 0,
+        DenizenKind::Cyclops => 1,
+        DenizenKind::Faun => 2,
+        DenizenKind::Demon => 3,
+    };
+    TABLES[slot].get_or_init(|| VOCABULARY.iter().map(|word| spell(kind, word.key)).collect())
 }
 
 /// How the word with this `key` is spelt in `kind`'s tongue; fixed per kind and key. A key that
@@ -99,4 +103,10 @@ pub fn native(kind: DenizenKind, key: &str) -> String {
         Some(i) => table(kind)[i].clone(),
         None => roll(kind, key, 0),
     }
+}
+
+/// The spelling worked out for this word alone, for tests to hold the table to.
+#[cfg(test)]
+pub(super) fn spell_alone(kind: DenizenKind, key: &str) -> String {
+    spell(kind, key)
 }

@@ -28,7 +28,9 @@ pub fn script(kind: DenizenKind) -> &'static str {
 
 /// `text` in `kind`'s script: every letter and digit becomes a glyph of the script, and spaces
 /// and punctuation stay, so the word lengths and the rhythm of the line show through. The same
-/// `kind`, `text` and `seed` always give the same glyphs.
+/// `kind`, `text` and `seed` always give the same glyphs. Callers must pass a stable seed per
+/// line (the speaker's seed mixed with the line's topic, say), never a per-frame value, or the
+/// glyphs would change between frames.
 pub fn glyphs(kind: DenizenKind, text: &str, seed: u32) -> String {
     let set: Vec<char> = script(kind).chars().collect();
     let salt = text.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193));

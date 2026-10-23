@@ -140,16 +140,27 @@ pub fn needs(_kind: DenizenKind, topic: Topic) -> Vec<Word> {
     topic.words().take(CORE_WORDS).copied().collect()
 }
 
-/// [`needs`], plus the words with these `extra` keys (a line that names a thing, say). Keys
-/// that are not words are ignored.
-pub fn needs_with(kind: DenizenKind, topic: Topic, extra: &[&str]) -> Vec<Word> {
+/// A key that names no word.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownWord(pub String);
+
+impl std::fmt::Display for UnknownWord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no word with the key \"{}\"", self.0)
+    }
+}
+
+impl std::error::Error for UnknownWord {}
+
+/// [`needs`], plus the words with these `extra` keys (a line that names a thing, say). A key
+/// that is not a word is an error, so a misspelt line fails where it is written.
+pub fn needs_with(kind: DenizenKind, topic: Topic, extra: &[&str]) -> Result<Vec<Word>, UnknownWord> {
     let mut out = needs(kind, topic);
     for key in extra {
-        if let Some(found) = word(key)
-            && !out.contains(&found)
-        {
+        let found = word(key).ok_or_else(|| UnknownWord((*key).to_string()))?;
+        if !out.contains(&found) {
             out.push(found);
         }
     }
-    out
+    Ok(out)
 }

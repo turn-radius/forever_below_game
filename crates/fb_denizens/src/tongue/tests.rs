@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use super::*;
+use super::phonology;
 use crate::DenizenKind;
 
 const LINE: &str = "Well met, stranger. What will you trade?";
@@ -97,20 +98,19 @@ fn enough_of_a_tongue_lets_the_delver_barter_and_take_quests() {
     lex.learn_teaching(&Teaching::of_topics(kind, &[Topic::Quest]));
     assert!(lex.can_take_quests(kind));
 
-    // A wide share of the tongue does it without the particular phrases.
+    // Without the greeting, nothing else is enough, however much of the tongue is known.
     let mut wide = Lexicon::new();
-    wide.learn_teaching(&Teaching::of_topics(kind, &[Topic::Farewell, Topic::Kin, Topic::Place, Topic::Threat]));
-    assert!(wide.known_share(kind) >= BARTER_SHARE);
-    assert!(wide.can_barter(kind));
-    wide.learn_teaching(&Teaching::of_topics(kind, &[Topic::Greeting]));
-    assert!(wide.known_share(kind) >= QUEST_SHARE);
-    assert!(wide.can_take_quests(kind));
+    wide.learn_teaching(&Teaching::of_topics(kind, &[Topic::Farewell, Topic::Kin, Topic::Trade, Topic::Quest, Topic::Place, Topic::Threat]));
+    assert!(wide.known_share(kind) > 0.8);
+    assert!(!wide.can_barter(kind));
+    assert!(!wide.can_take_quests(kind));
 }
 
 #[test]
 fn a_line_is_readable_once_all_its_words_are_learned() {
     let kind = DenizenKind::Faun;
-    let line = needs_with(kind, Topic::Trade, &["blood", "no_such_word", "buy"]);
+    let line = needs_with(kind, Topic::Trade, &["blood", "buy"]).unwrap();
+    assert_eq!(needs_with(kind, Topic::Trade, &["blood", "no_such_word"]), Err(UnknownWord("no_such_word".to_string())));
     assert_eq!(line.len(), CORE_WORDS + 1);
     let mut lex = Lexicon::new();
     lex.learn_teaching(&Teaching::of_topics(kind, &[Topic::Trade]));
@@ -153,13 +153,16 @@ fn teaching_is_rolled_from_the_seed() {
             let book = Teaching::roll(seed, kind, TeachingSize::Book);
             assert!((1..=2).contains(&scroll.topics.len()), "{seed}");
             assert!((3..=5).contains(&book.topics.len()), "{seed}");
-            assert!(book.words.len() > scroll.words.len() || book.topics.len() > scroll.topics.len());
             assert!(scroll.description().starts_with(&format!("{} phrases: ", kind.label())));
             // Teaching what it says it does.
             let mut lex = Lexicon::new();
             lex.learn_teaching(&book);
             assert!(book.topics.iter().all(|t| lex.topic_readable(kind, *t)));
         }
+    }
+    for (size, lo, hi) in [(TeachingSize::Scroll, 1, 2), (TeachingSize::Book, 3, 5)] {
+        let counts: HashSet<usize> = (0..200u32).map(|s| Teaching::roll(s, DenizenKind::Faun, size).topics.len()).collect();
+        assert!(counts.contains(&lo) && counts.contains(&hi), "{size:?}: {counts:?}");
     }
     let varied: HashSet<_> = (0..50u32).map(|s| Teaching::roll(s, DenizenKind::Cyclops, TeachingSize::Scroll).topics).collect();
     assert!(varied.len() > 3);
@@ -251,5 +254,27 @@ fn every_glyph_is_drawn_by_the_talk_panels_fonts() {
                 assert!(drawn.contains(&(c as u32)), "{face} lacks {c} (U+{:04X}) of {kind:?}", c as u32);
             }
         }
+    }
+}
+
+#[test]
+fn a_word_is_spelt_the_same_alone_as_in_the_table() {
+    for kind in DenizenKind::ALL {
+        for w in VOCABULARY {
+            assert_eq!(phonology::spell_alone(kind, w.key), w.native(kind), "{kind:?} {}", w.key);
+        }
+    }
+}
+
+#[test]
+fn a_teaching_round_trips_through_json() {
+    for kind in DenizenKind::ALL {
+        let teaching = Teaching::roll(11, kind, TeachingSize::Book);
+        let json = serde_json::to_string(&teaching).unwrap();
+        assert!(json.contains("keys"));
+        assert_eq!(serde_json::from_str::<Teaching>(&json).unwrap(), teaching);
+    }
+    for w in VOCABULARY {
+        assert_eq!(word(w.key), Some(*w));
     }
 }
