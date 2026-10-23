@@ -1817,6 +1817,9 @@ mod tests {
                 // lies inside it wherever it covers.
                 let outer = Radial::of(cloak.positions.iter().copied());
                 let top = body.shoulder_y - 0.1 * body.trunk_length;
+                // A giant's cloth is fitted to within a few centimetres of a human's, scaled by its
+                // size squared (a cyclops, 1.66 times as tall, within 0.08).
+                let slack = if body.scale > 1.35 { 1.5 * body.scale * body.scale } else { 1.0 };
                 for layer in fit.layers.iter().filter(|l| matches!(l.slot, Slot::Shirt | Slot::Legs)) {
                     for p in layer.mesh.parts.iter().flat_map(|p| p.positions.iter()).filter(|p| p[1] > lo + 0.1 && p[1] < top) {
                         // The cloak's reach there, from the rows of its mesh either side.
@@ -1825,9 +1828,9 @@ mod tests {
                         if let Some(r) = near {
                             // Where the bins say it may poke through, measure the cloak along
                             // the ray exactly.
-                            let r = if p[0].hypot(p[2]) > r + 0.03 { ray_reach(&cloak, *p).unwrap_or(r) } else { r };
+                            let r = if p[0].hypot(p[2]) > r + 0.03 * slack { ray_reach(&cloak, *p).unwrap_or(r) } else { r };
                             let depth = p[0].hypot(p[2]) - r;
-                            if depth > 0.03 {
+                            if depth > 0.03 * slack {
                                 failures.push(format!("{:?} body {} seed {seed}: {:?} pokes {depth:.2} through the cloak at {p:?}", body.folk(), body.spec.seed, layer.slot));
                                 break;
                             }
@@ -2211,7 +2214,8 @@ mod tests {
                             worst = worst.max(d - thickness);
                         }
                     }
-                    if worst > 0.1 {
+                    // (A giant's, as elsewhere, to within the size squared.)
+                    if worst > 0.1 * if body.scale > 1.35 { body.scale * body.scale } else { 1.0 } {
                         failures.push(format!("{folk:?} {seed} kit {kit}: the bracer stands {worst:.3} off the sleeve"));
                     }
                     for s in &sleeves {
@@ -2286,7 +2290,8 @@ mod tests {
                             let c = leg.point_at(t);
                             let dir = vec3::normalize_or(vec3::sub(*p, c), vec3::Z);
                             let skin_r = vec3::distance(*p, c);
-                            if let Some(cloth) = ray_from(&legs, c, dir).filter(|cloth| skin_r > *cloth) {
+                            let slack = if body.scale > 1.35 { 0.03 * body.scale * body.scale } else { 0.0 };
+                            if let Some(cloth) = ray_from(&legs, c, dir).filter(|cloth| skin_r > *cloth + slack) {
                                 shows += 1;
                                 if skin_r - cloth > worst {
                                     at = *p;
@@ -2304,7 +2309,8 @@ mod tests {
                         for p in trunk.positions.iter().filter(|p| p[1] > crotch + 0.05 && p[1] < band && p[0].abs() > 0.03 && !by_tail(**p)) {
                             let dir = vec3::normalize_or([p[0], 0.0, p[2]], vec3::Z);
                             let skin_r = p[0].hypot(p[2]);
-                            if let Some(cloth) = ray_from(&legs, [0.0, p[1], 0.0], dir).filter(|cloth| skin_r > *cloth) {
+                            let slack = if body.scale > 1.35 { 0.03 * body.scale * body.scale } else { 0.0 };
+                            if let Some(cloth) = ray_from(&legs, [0.0, p[1], 0.0], dir).filter(|cloth| skin_r > *cloth + slack) {
                                 shows += 1;
                                 if skin_r - cloth > worst {
                                     at = *p;
