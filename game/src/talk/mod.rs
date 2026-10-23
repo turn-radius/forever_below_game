@@ -20,7 +20,20 @@
 //!   until their screens exist. When one does, [`service_ready`] says so for it and choosing the
 //!   topic sends a [`ServiceChosen`] for that screen to open on.
 //!
-//! `FB_TALK=1` opens the panel on the folk nearest the delver a few dozen frames in, and
+//! - A denizen (minotaur, faun, ...) answers in its own tongue ([`fb_denizens::tongue`]). Standing
+//!   works as for folk (Hostile snort and spit, Wary turn away, the rest open the panel), but
+//!   each line names the words it needs ([`lines::line_needs`]) and shows as the tongue's glyphs
+//!   until the delver knows them all ([`WorldRecord::lexicon`]), then in plain words. The panel
+//!   says how much of the tongue is known. The Trade topic and Barter need the trade words
+//!   ([`Lexicon::can_barter`]); without them the denizen shakes its head
+//!   ([`lines::barter_refusal`]). There is no quest system yet: the Work topic is spoken like the
+//!   rest, and [`Lexicon::can_take_quests`] gates taking one at the hook in [`choose`].
+//! - Folk deep enough to know the denizens ([`fb_denizens::DENIZEN_DEPTH`]) have a topic for
+//!   each denizen faction on their level; shallower, a folk sometimes has a rumour of them,
+//!   more often the deeper they stand ([`lines::strange_tale`]).
+//!
+//! `FB_LEARN=<kind>:<topic>[+<topic>...]` (`minotaur:greeting+trade`) teaches those words at
+//! once, for captures. `FB_TALK=1` opens the panel on the folk nearest the delver a few dozen frames in, and
 //! `FB_TALK_TOPIC=<n>` then chooses the nth topic (counting from 1), for captures.
 
 pub mod lines;
@@ -46,7 +59,9 @@ use crate::keymap::{Action, ActionInput, Input, Keymap};
 use crate::play::{CurrentLevel, DelveSystems, Player, Screen, ScreenOpen, show_screen};
 use crate::record::WorldRecord;
 use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, node_rect, ui_cursor};
-pub use lines::{MasterRumour, Reception, Service, Speaker, Topic};
+pub use lines::{KnownDenizens, MasterRumour, Reception, Service, Speaker, Topic};
+use fb_denizens::DenizenKind;
+use fb_denizens::tongue::Lexicon;
 
 /// The width of the panel at the reference size, logical pixels.
 const PANEL_WIDTH: f32 = 600.0;
@@ -60,6 +75,9 @@ impl Plugin for TalkPlugin {
         app.init_resource::<Talk>().init_resource::<TalkRequest>().add_message::<ServiceChosen>();
         if std::env::var_os("FB_TALK").is_some() {
             app.add_systems(Update, talk_for_capture.in_set(DelveSystems));
+        }
+        if std::env::var_os("FB_LEARN").is_some() {
+            app.add_systems(Update, learn_for_capture.in_set(DelveSystems));
         }
         app.add_systems(OnExit(crate::launch::AppState::Delving), reset_talk);
         app.add_systems(Update, (click_topics, talk, end_talk, build_talk_screen, hover_topics).chain().in_set(DelveSystems));
@@ -94,6 +112,8 @@ pub struct Talk {
     pub speaker: Option<Speaker>,
     pub greeting: String,
     pub topics: Vec<Topic>,
+    /// The tongue the speaker's lines are in, if they are a denizen.
+    pub tongue: Option<DenizenKind>,
     /// The topic last chosen and what was said.
     pub answer: Option<(Topic, String)>,
     /// Counts changes, so the panel knows when to draw again.
@@ -129,6 +149,19 @@ pub struct TalkScreen;
 #[derive(Component, Debug)]
 struct TopicButton(usize);
 
+/// For captures (`FB_LEARN=minotaur:greeting+trade`): teaches those topics' words at once.
+fn learn_for_capture(record: Option<ResMut<WorldRecord>>, mut done: Local<bool>) {
+    let (Some(mut record), false) = (record, *done) else { return };
+    *done = true;
+    let Ok(spec) = std::env::var("FB_LEARN") else { return };
+    for entry in spec.split(',') {
+        let Some((kind, topics)) = entry.split_once(':') else { continue };
+        let Some(kind) = DenizenKind::ALL.into_iter().find(|k| k.key() == kind.trim()) else { continue };
+        let topics: Vec<_> = topics.split('+').filter_map(|t| fb_denizens::tongue::Topic::ALL.into_iter().find(|x| x.key() == t.trim())).collect();
+        record.lexicon.learn_teaching(&fb_denizens::tongue::Teaching::of_topics(kind, &topics));
+    }
+}
+
 /// Opens `FB_TALK` talks on the folk nearest the delver, and `FB_TALK_TOPIC` chooses a topic.
 fn talk_for_capture(
     player: Query<&Transform, With<Player>>,
@@ -154,8 +187,9 @@ fn talk_for_capture(
 
 
 /// Everything one folk's talk needs of the level: who the speaker is, what the level holds.
-fn speaker_of<'a>(denizen: &Denizen, band: Band, level: &Level, others: impl Iterator<Item = &'a Denizen>) -> Speaker {
+fn speaker_of<'a>(denizen: &Denizen, band: Band, level: &Level, others: impl Iterator<Item = &'a Denizen>, band_of: impl Fn(fb_faction::Faction) -> Band) -> Speaker {
     let person = &denizen.person;
+    let kind = person.faction.denizen;
     let mut traders: Vec<(u32, String, Profession, String)> = others
         .filter(|d| d.person.spot.faction == person.spot.faction && d.person.spot.seed != person.spot.seed)
         .filter_map(|d| d.person.spot.trade.filter(|t| t.profession != Profession::Guard).map(|t| (d.person.spot.seed, d.person.name.clone(), t.profession, lines::place_of(level, &person.spot, &d.person.spot))))
@@ -163,7 +197,7 @@ fn speaker_of<'a>(denizen: &Denizen, band: Band, level: &Level, others: impl Ite
     traders.sort_by_key(|(seed, ..)| *seed);
     Speaker {
         name: person.name.clone(),
-        folk: person.spec.folk.race().label.clone(),
+        folk: kind.map_or_else(|| person.spec.folk.race().label.clone(), |k| k.label().to_string()),
         faction: person.faction.name.clone(),
         intention: person.faction.intention,
         band,
@@ -172,6 +206,8 @@ fn speaker_of<'a>(denizen: &Denizen, band: Band, level: &Level, others: impl Ite
         depth: level.depth,
         level_factions: level.factions.iter().map(|f| f.name.clone()).collect(),
         traders: traders.into_iter().map(|(_, name, profession, place)| (name, profession, place)).collect(),
+        denizen: kind,
+        denizen_factions: level.factions.iter().filter_map(|f| f.denizen.map(|kind| KnownDenizens { name: f.name.clone(), kind, band: band_of(f.id) })).collect(),
     }
 }
 
@@ -191,9 +227,19 @@ fn master_rumour(speaker: &Speaker, run_seed: u32) -> Option<MasterRumour> {
 
 /// The answer to `topic` for the open talk, saved on [`Talk`]. A service whose screen exists is
 /// sent on instead ([`ServiceChosen`]) and says nothing here.
-fn choose(talk: &mut Talk, topic: Topic, run_seed: Option<u32>, services: &mut MessageWriter<ServiceChosen>) {
+fn choose(talk: &mut Talk, topic: Topic, run_seed: Option<u32>, lexicon: &Lexicon, services: &mut MessageWriter<ServiceChosen>) {
     let (Some(folk), Some(speaker)) = (talk.folk, talk.speaker.as_ref()) else { return };
-    let _ = speaker;
+    // A denizen trades only with one who has their trade words; else it shakes its head.
+    if let (Some(kind), Topic::Service(Service::Barter)) = (speaker.denizen, topic)
+        && !lexicon.can_barter(kind)
+    {
+        let said = lines::barter_refusal(speaker);
+        talk.answer = Some((topic, said));
+        talk.revision += 1;
+        return;
+    }
+    // HOOK: no quest system yet. When one exists, taking a denizen's quest from the Work topic
+    // is allowed only if `lexicon.can_take_quests(kind)`; until then the topic is just spoken.
     if let Topic::Service(service) = topic
         && service_ready(service)
     {
@@ -277,7 +323,8 @@ fn talk(
             pick = n.checked_sub(1).and_then(|i| talk.topics.get(i)).copied();
         }
         if let Some(topic) = pick {
-            choose(&mut talk, topic, run_seed, &mut services);
+            let lexicon = record.as_ref().map_or_else(Lexicon::new, |r| r.lexicon().clone());
+            choose(&mut talk, topic, run_seed, &lexicon, &mut services);
         }
         return;
     }
@@ -288,14 +335,7 @@ fn talk(
     let Some(entity) = target else { return };
     let Ok((_, denizen, hostility, _)) = folk.get(entity) else { return };
     let band = record.as_ref().map_or(Band::Neutral, |r| r.standings.band(denizen.person.faction.id));
-    let speaker = speaker_of(denizen, band, &level.0, folk.iter().map(|(_, d, ..)| d));
-    // HOOK for #628: denizens speak no human language, so until the tongue-gated panel lands
-    // they gesture instead. That task replaces this branch with the panel when the delver
-    // knows the denizen's tongue.
-    if denizen.person.spot.denizen.is_some() {
-        toasts.say(lines::gesture(&speaker, hostility.is_some_and(|h| h.is_hostile())));
-        return;
-    }
+    let speaker = speaker_of(denizen, band, &level.0, folk.iter().map(|(_, d, ..)| d), |f| record.as_ref().map_or(Band::Neutral, |r| r.standings.band(f)));
     match lines::reception(band, hostility.is_some_and(|h| h.is_hostile())) {
         Reception::Spits => toasts.say(lines::spit_line(&speaker)),
         Reception::Turns => {
@@ -312,6 +352,7 @@ fn talk(
             talk.folk = Some(entity);
             talk.greeting = lines::greeting(&speaker);
             talk.topics = lines::topics(&speaker);
+            talk.tongue = speaker.denizen;
             // A maker holding an order of the delver's offers to speak of it, after Commission.
             if record.as_ref().is_some_and(|r| r.orders.iter().any(|o| o.maker_seed == speaker.seed && o.depth == speaker.depth))
                 && let Some(at) = talk.topics.iter().position(|t| *t == Topic::Service(Service::Commission))
@@ -377,6 +418,18 @@ fn leave_keys(keymap: &Keymap) -> String {
     keys.join(" or ")
 }
 
+/// What the panel shows for a line `said` in plain words on `topic` (`None` is the greeting),
+/// and whether the delver can read it: a folk's line always, a denizen's once every word it
+/// needs is learned, else the tongue's glyphs, steady for the line ([`lines::glyph_seed`]).
+pub fn shown(speaker: &Speaker, topic: Option<Topic>, said: &str, lexicon: &Lexicon) -> (String, bool) {
+    match speaker.denizen {
+        // The refusal to barter is what the denizen does, not what it says.
+        Some(_) if topic == Some(Topic::Service(Service::Barter)) => (said.to_string(), true),
+        Some(kind) if !lexicon.readable(kind, &lines::line_needs(speaker, topic)) => (fb_denizens::tongue::glyphs(kind, said, lines::glyph_seed(speaker, topic)), false),
+        _ => (said.to_string(), true),
+    }
+}
+
 /// Draws the panel while the talk is open, and again whenever it changes.
 #[allow(clippy::too_many_arguments)]
 fn build_talk_screen(
@@ -384,10 +437,11 @@ fn build_talk_screen(
     open: Res<ScreenOpen>,
     talk: Res<Talk>,
     keymap: Option<Res<Keymap>>,
+    record: Option<Res<WorldRecord>>,
     fonts: Option<Res<UiFonts>>,
     cameras: Query<Entity, With<ViewModelCamera>>,
     screens: Query<Entity, With<TalkScreen>>,
-    mut drawn: Local<Option<u32>>,
+    mut drawn: Local<Option<(u32, u32)>>,
 ) {
     let existing = screens.iter().next();
     let (true, Some(speaker), Some(fonts)) = (open.is(Screen::Talk), talk.speaker.as_ref(), fonts) else {
@@ -397,7 +451,11 @@ fn build_talk_screen(
         *drawn = None;
         return;
     };
-    if existing.is_some() && *drawn == Some(talk.revision) {
+    // A denizen's lines depend on the words the delver knows, so a change in them draws again.
+    let empty = Lexicon::new();
+    let lexicon = record.as_ref().map_or(&empty, |r| r.lexicon());
+    let known = talk.tongue.map_or(0, |k| (lexicon.known_share(k) * 1000.0) as u32);
+    if existing.is_some() && *drawn == Some((talk.revision, known)) {
         return;
     }
     let Some(camera) = cameras.iter().next() else { return };
@@ -428,7 +486,7 @@ fn build_talk_screen(
             ))
             .id(),
     };
-    *drawn = Some(talk.revision);
+    *drawn = Some((talk.revision, known));
     let trade = speaker.trade.map(|t| t.label());
     commands.entity(root).with_children(|root| {
         root.spawn((
@@ -463,14 +521,24 @@ fn build_talk_screen(
                 line.spawn((TextSpan::new(speaker.band.label()), UiFonts::style(&fonts.body_medium, 18.0, band_colour(speaker.band))));
             });
             panel.spawn((Node { height: px(1), margin: UiRect::vertical(px(4)), ..default() }, BackgroundColor(FAINT)));
-            let (heading, said, colour) = match &talk.answer {
-                Some((topic, said)) => (Some(topic.label()), said.clone(), BRIGHT),
-                None => (None, talk.greeting.clone(), INK),
+            if let Some(kind) = talk.tongue {
+                let share = (lexicon.known_share(kind) * 100.0).round() as u32;
+                panel.spawn((Text::new(format!("{} \u{2014} you know {share}%", fb_denizens::tongue::tongue_name(kind))), UiFonts::style(&fonts.body_italic, 16.0, MUTED)));
+            }
+            let (heading, said, colour, topic) = match &talk.answer {
+                Some((topic, said)) => (Some(topic.label_for(speaker)), said.clone(), BRIGHT, Some(*topic)),
+                None => (None, talk.greeting.clone(), INK, None),
             };
             if let Some(heading) = heading {
                 panel.spawn((Text::new(heading), UiFonts::style(&fonts.mono, 13.0, MUTED)));
             }
-            panel.spawn((Text::new(format!("\u{201c}{said}\u{201d}")), UiFonts::style(&fonts.body, 22.0, colour)));
+            // A denizen's line the delver cannot read yet is its script, dimmed and in italics.
+            let (text, readable) = shown(speaker, topic, &said, lexicon);
+            if readable {
+                panel.spawn((Text::new(format!("\u{201c}{text}\u{201d}")), UiFonts::style(&fonts.body, 22.0, colour)));
+            } else {
+                panel.spawn((Text::new(text), UiFonts::style(&fonts.body_italic, 22.0, MUTED)));
+            }
             panel.spawn((Node { height: px(1), margin: UiRect::vertical(px(4)), ..default() }, BackgroundColor(FAINT)));
             for (i, topic) in talk.topics.iter().enumerate() {
                 panel
@@ -489,7 +557,7 @@ fn build_talk_screen(
                     ))
                     .with_children(|row| {
                         row.spawn((Text::new((i + 1).to_string()), UiFonts::style(&fonts.mono_bold, 16.0, ACCENT)));
-                        row.spawn((Text::new(topic.label()), UiFonts::style(&fonts.body, 21.0, INK)));
+                        row.spawn((Text::new(topic.label_for(speaker)), UiFonts::style(&fonts.body, 21.0, INK)));
                     });
             }
             panel.spawn((Node { margin: UiRect::top(px(4)), ..default() }, Text::new(format!("1-{} choose \u{b7} {leave} leave", talk.topics.len().max(1))), UiFonts::style(&fonts.mono, 13.0, MUTED)));

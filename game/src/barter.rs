@@ -743,6 +743,13 @@ fn open_barter(
     let Ok((denizen, hostility, shelf, _)) = folk.get(entity) else { return };
     let person = &denizen.person;
     let band = record.as_ref().map_or(Band::Neutral, |r| r.standings.band(person.faction.id));
+    // A denizen trades only with one who has learned enough of its tongue.
+    if let Some(kind) = person.faction.denizen
+        && !record.as_ref().is_some_and(|r| r.lexicon().can_barter(kind))
+    {
+        toasts.say(format!("The {} shakes its head at your words; you don't share enough of its speech to trade.", kind.key()));
+        return;
+    }
     if let Some(line) = refusal_line(&person.faction.name, band, hostility.is_some_and(|h| h.is_hostile())) {
         toasts.say(line);
         return;

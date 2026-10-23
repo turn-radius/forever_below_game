@@ -6,6 +6,11 @@ use fb_level::FolkSpot;
 
 /// An app with the talk, the routines' start and seed 1207's first level, no drawing.
 fn talk_app() -> App {
+    talk_app_on(fb_level::generate(1207, 1))
+}
+
+/// [`talk_app`] on `level`.
+fn talk_app_on(level: fb_level::Level) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin, bevy::state::app::StatesPlugin))
         .insert_state(crate::launch::AppState::Delving)
@@ -16,7 +21,7 @@ fn talk_app() -> App {
         .init_resource::<WorldRecord>()
         .init_resource::<AimedFolk>()
         .init_resource::<crate::tuning::Tuning>()
-        .insert_resource(CurrentLevel(fb_level::generate(1207, 1)));
+        .insert_resource(CurrentLevel(level));
     crate::play::run_delve_systems_while_delving(&mut app);
     app.add_plugins(TalkPlugin).add_systems(Update, begin_routines.in_set(DelveSystems));
     app.update();
@@ -268,4 +273,199 @@ fn an_enchanters_enchant_and_scrap_topics_send_the_service_on() {
         assert_eq!(sent, vec![ServiceChosen { folk, service }]);
     }
     assert_eq!(app.world().resource::<Talk>().answer, None, "the bench answers, not the panel");
+}
+
+// Denizens speak their tongues.
+
+use fb_denizens::DenizenKind;
+use fb_denizens::tongue::{self, Teaching};
+
+/// A level at the denizens' depth with a minotaur in it, and the index of that spot.
+fn minotaur_level() -> (fb_level::Level, usize) {
+    (1..120)
+        .find_map(|seed| {
+            let level = fb_level::generate(seed, fb_faction::DENIZEN_DEPTH);
+            let at = level.folk.iter().position(|f| f.denizen.is_some() && level.faction(f.faction).denizen == Some(DenizenKind::Minotaur))?;
+            Some((level, at))
+        })
+        .expect("a minotaur level within 120 seeds")
+}
+
+fn minotaur_app() -> (App, Entity) {
+    let (level, at) = minotaur_level();
+    let mut app = talk_app_on(level);
+    let folk = stand_in(&mut app, at, None, None);
+    (app, folk)
+}
+
+fn record_of(app: &mut App) -> Mut<'_, WorldRecord> {
+    app.world_mut().resource_mut::<WorldRecord>()
+}
+
+fn speaker_line(speaker: &Speaker, topic: Option<Topic>) -> String {
+    match topic {
+        None => lines::greeting(speaker),
+        Some(t) => lines::answer(speaker, t, None),
+    }
+}
+
+/// What the panel shows for the greeting and for each topic, as (topic, text, readable).
+fn panel_lines(app: &App) -> Vec<(Option<Topic>, String, bool)> {
+    let talk = app.world().resource::<Talk>();
+    let speaker = talk.speaker.as_ref().expect("a speaker");
+    let lexicon = app.world().resource::<WorldRecord>().lexicon();
+    std::iter::once(None)
+        .chain(talk.topics.iter().map(|t| Some(*t)))
+        .map(|topic| {
+            let (text, readable) = shown(speaker, topic, &speaker_line(speaker, topic), lexicon);
+            (topic, text, readable)
+        })
+        .collect()
+}
+
+#[test]
+fn a_neutral_minotaur_opens_the_panel_and_every_line_is_glyphs_until_words_are_learned() {
+    let (mut app, folk) = minotaur_app();
+    talk_to(&mut app, folk);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk), "denizens open the panel like folk");
+    assert_eq!(app.world().resource::<Talk>().tongue, Some(DenizenKind::Minotaur));
+    let labels: Vec<_> = app.world().resource::<Talk>().topics.iter().map(|t| t.label()).collect();
+    assert_eq!(labels, ["Who are you?", "This level", "Dangers", "Your trade", "Barter", "Work"]);
+    for (topic, text, readable) in panel_lines(&app) {
+        if topic != Some(Topic::Service(Service::Barter)) {
+            assert!(!readable, "{topic:?}: {text}");
+            assert!(text.chars().any(|c| tongue::script(DenizenKind::Minotaur).contains(c)), "{text}");
+        }
+    }
+    // The same glyphs every time the panel is drawn.
+    assert_eq!(panel_lines(&app), panel_lines(&app));
+}
+
+#[test]
+fn learning_greetings_and_trade_makes_those_lines_readable_and_the_rest_not() {
+    let (mut app, folk) = minotaur_app();
+    record_of(&mut app).lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[tongue::Topic::Greeting, tongue::Topic::Trade]));
+    talk_to(&mut app, folk);
+    let lines = panel_lines(&app);
+    for (topic, text, readable) in &lines {
+        match topic {
+            None | Some(Topic::Trade) => assert!(readable, "{topic:?}: {text}"),
+            Some(Topic::Service(Service::Barter)) => {}
+            Some(other) => assert!(!readable, "{other:?}: {text}"),
+        }
+    }
+}
+
+#[test]
+fn a_line_needing_a_word_beyond_its_topics_core_stays_glyphs_until_that_word_is_learned() {
+    let (mut app, folk) = minotaur_app();
+    // The Kin line also needs name and banner, which are not among a topic's first three words.
+    let kin = Teaching::of_topics(DenizenKind::Minotaur, &[tongue::Topic::Kin]);
+    let core: Vec<_> = kin.words.iter().copied().take(tongue::CORE_WORDS).collect();
+    record_of(&mut app).lexicon.learn(DenizenKind::Minotaur, &core);
+    talk_to(&mut app, folk);
+    let who = |app: &App| panel_lines(app).into_iter().find(|l| l.0 == Some(Topic::Who)).unwrap();
+    assert!(!who(&app).2, "core words alone do not read the line that names the banner");
+    record_of(&mut app).lexicon.learn_teaching(&kin);
+    assert!(who(&app).2);
+}
+
+#[test]
+fn barter_is_refused_without_the_trade_words_and_allowed_with_them() {
+    let (mut app, folk) = minotaur_app();
+    talk_to(&mut app, folk);
+    let barter = app.world().resource::<Talk>().topics.iter().position(|t| *t == Topic::Service(Service::Barter)).unwrap();
+    press(&mut app, DIGITS[barter]);
+    let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
+    assert!(sent.is_empty(), "no barter screen without the words");
+    let (topic, said) = app.world().resource::<Talk>().answer.clone().expect("a gesture line");
+    assert_eq!(topic, Topic::Service(Service::Barter));
+    assert!(said.contains("shakes its head") && said.contains("minotaur") && said.contains("trade"), "{said}");
+    // The refusal reads as a gesture, not as speech in glyphs.
+    let talk = app.world().resource::<Talk>();
+    let lexicon = app.world().resource::<WorldRecord>().lexicon();
+    assert_eq!(shown(talk.speaker.as_ref().unwrap(), Some(topic), &said, lexicon), (said.clone(), true));
+    // Greeting words alone are not enough; the trade words too are.
+    record_of(&mut app).lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[tongue::Topic::Greeting]));
+    press(&mut app, DIGITS[barter]);
+    assert!(app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().next().is_none());
+    record_of(&mut app).lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[tongue::Topic::Trade]));
+    press(&mut app, DIGITS[barter]);
+    let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
+    assert_eq!(sent, vec![ServiceChosen { folk, service: Service::Barter }]);
+}
+
+#[test]
+fn words_learned_persist_across_a_record_save_and_load() {
+    let (mut app, folk) = minotaur_app();
+    record_of(&mut app).lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[tongue::Topic::Greeting]));
+    let saved = serde_json::to_string(app.world().resource::<WorldRecord>()).expect("saves");
+    let loaded: WorldRecord = serde_json::from_str(&saved).expect("loads");
+    assert_eq!(loaded.lexicon(), app.world().resource::<WorldRecord>().lexicon());
+    *app.world_mut().resource_mut::<WorldRecord>() = loaded;
+    talk_to(&mut app, folk);
+    assert!(panel_lines(&app)[0].2, "the greeting still reads after the reload");
+}
+
+#[test]
+fn a_hostile_or_wary_denizen_snorts_or_turns_away_without_a_panel() {
+    let (mut app, folk) = minotaur_app();
+    standing(&mut app, folk, -30);
+    talk_to(&mut app, folk);
+    assert!(toast(&app).contains("The minotaur"), "{}", toast(&app));
+    assert_eq!(app.world().resource::<ScreenOpen>().0, None);
+    standing(&mut app, folk, -100);
+    talk_to(&mut app, folk);
+    assert!(toast(&app).contains("spits at your feet") && toast(&app).starts_with("The minotaur"), "{}", toast(&app));
+    assert_eq!(app.world().resource::<ScreenOpen>().0, None);
+}
+
+// Folk speak of the denizens.
+
+/// The folk at `index` of `level`, spoken to at `band`.
+fn folk_speaker(level: &fb_level::Level, index: usize, band: Band) -> Speaker {
+    let spot = level.folk[index];
+    let person = crate::folk::Person::of(&spot, level.faction(spot.faction), level.depth);
+    let denizen = Denizen { person, radius: 3.0, min: Vec3::ZERO, max: Vec3::ONE };
+    speaker_of(&denizen, band, level, std::iter::empty(), |_| band)
+}
+
+#[test]
+fn folk_speak_of_the_denizens_more_the_deeper_they_stand() {
+    let level = fb_level::generate(1207, 1);
+    let share = |depth: u32| {
+        let with = (0..200u32).filter(|&seed| lines::topics(&Speaker { seed, depth, ..folk_speaker(&level, 0, Band::Neutral) }).contains(&Topic::Strange)).count();
+        with as f32 / 200.0
+    };
+    let (top, mid, deep) = (share(1), share(5), share(fb_faction::DENIZEN_DEPTH - 1));
+    assert!(top < mid && mid < deep, "{top} {mid} {deep}");
+    assert!(top <= 0.15 && deep >= 0.45, "{top} {deep}");
+    // The same folk always have the same rumour.
+    let speaker = (0..400).map(|seed| Speaker { seed, depth: 9, ..folk_speaker(&level, 0, Band::Neutral) }).find(|s| lines::strange_tale(s).is_some()).expect("one with a tale");
+    assert_eq!(lines::strange_tale(&speaker), lines::strange_tale(&speaker.clone()));
+}
+
+#[test]
+fn deep_folk_name_the_denizen_factions_on_their_level_and_how_they_stand() {
+    let (level, _) = minotaur_level();
+    let spot = level.folk.iter().position(|f| f.denizen.is_none()).expect("a folk");
+    let faction = level.factions.iter().find(|f| f.denizen == Some(DenizenKind::Minotaur)).unwrap().name.clone();
+    let hostile = folk_speaker(&level, spot, Band::Hostile);
+    let topics = lines::topics(&hostile);
+    let at = topics.iter().position(|t| matches!(t, Topic::Faction(_))).expect("a topic for the denizen faction");
+    assert!(!topics.contains(&Topic::Strange));
+    let said = lines::answer(&hostile, topics[at], None);
+    assert!(said.contains(&faction) && said.to_lowercase().contains("minotaur"), "{said}");
+    assert!(said.contains("kill you on sight"), "a hostile faction is dangerous: {said}");
+    assert!(topics[at].label_for(&hostile).starts_with("The "));
+    let allied = folk_speaker(&level, spot, Band::Allied);
+    assert!(lines::answer(&allied, topics[at], None).contains("one of their own"));
+    assert_eq!(lines::answer(&hostile, topics[at], None), lines::answer(&hostile, topics[at], None));
+}
+
+#[test]
+fn shallow_folk_have_no_denizen_faction_topics() {
+    let level = fb_level::generate(1207, 1);
+    let speaker = folk_speaker(&level, 0, Band::Neutral);
+    assert!(!lines::topics(&speaker).iter().any(|t| matches!(t, Topic::Faction(_))));
 }
