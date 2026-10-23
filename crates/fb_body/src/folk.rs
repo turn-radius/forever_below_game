@@ -93,7 +93,6 @@ impl Folk {
             DenizenBody::WingedDemon => Some(Folk::WingedDemon),
             DenizenBody::HornedDemon => Some(Folk::HornedDemon),
             DenizenBody::Succubus => Some(Folk::Succubus),
-            _ => None,
         }
     }
 
