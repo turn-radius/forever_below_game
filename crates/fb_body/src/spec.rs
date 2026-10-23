@@ -56,6 +56,9 @@ pub struct BodySpec {
     /// How far the beard hangs, 0 none to 1 down to mid-chest (further on a dwarf): what the
     /// creator's Beard slider sets. A rolled beard takes its style's length.
     pub beard_length: f32,
+    /// Rolled as a woman ([`BodySpec::roll_as`]): her face is drawn with finer brows, larger
+    /// eyes and fuller lips (our own; the plate and the creator have no sex in the face).
+    pub woman: bool,
 }
 
 /// The fields of a [`BodySpec`] that shape the body rather than the face and hair: what the
@@ -176,6 +179,7 @@ impl BodySpec {
         let mut spec = rolled.with_shape(shape);
         if sex == Sex::Female {
             (spec.beard, spec.beard_length) = (Beard::None, 0.0);
+            spec.woman = true;
             spec.soften_face();
         }
         spec
@@ -183,8 +187,8 @@ impl BodySpec {
 
     /// A woman's face and hair, from the man's the seed rolled (our own, since the creator
     /// varies only hips, bust and beard by sex): the jaw narrower, the nose and brow lighter,
-    /// and the hair longer. Nobody is bald, and a short or tied-up style turns to the folk's
-    /// long one about two times in three, from its own stream of the seed. Lizardfolk keep
+    /// and the hair longer. Every style turns to the folk's
+    /// long one, from its own stream of the seed. Lizardfolk keep
     /// their crest and goblins their ridge, which carry no sex.
     fn soften_face(&mut self) {
         self.jaw *= 0.5;
@@ -199,10 +203,14 @@ impl BodySpec {
         if self.hair == HairStyle::Mohawk {
             return;
         }
+        if self.hair == HairStyle::Mohawk {
+            return;
+        }
+        // Always the long style (a human's sometimes tied back), whatever the seed rolled, so
+        // that it reads at a glance.
         let mut rng = Mulberry32::new(self.seed ^ 0xFE11_A1E5);
-        let turns = rng.chance(0.67);
         let tied = if self.folk == Folk::Human && rng.chance(0.4) { HairStyle::Ponytail } else { longer };
-        if self.hair == HairStyle::Bald || (turns && matches!(self.hair, HairStyle::Crop | HairStyle::Topknot | HairStyle::Shaggy)) {
+        if !matches!(self.hair, HairStyle::Long | HairStyle::Ponytail) {
             self.hair = tied;
         }
     }
@@ -236,7 +244,7 @@ impl BodySpec {
         let bust = (1.7 * (figure - 0.42) + rng.range_f32(-0.2, 0.2)).clamp(0.0, 1.0);
         let bust_round = rng.next_f64() as f32;
         let beard_length = beard_reach(beard);
-        BodySpec { folk, seed, figure, frame, stature, muscle, slender, bust, bust_round, jaw, brow, nose, skin, eyes, hair, hair_colour, beard, beard_length }
+        BodySpec { folk, seed, figure, frame, stature, muscle, slender, bust, bust_round, jaw, brow, nose, skin, eyes, hair, hair_colour, beard, beard_length, woman: false }
     }
 
     /// The folk's midpoint body: average build, typical height, the first skin and hair.
@@ -260,6 +268,7 @@ impl BodySpec {
             hair: race.hairs[0],
             hair_colour: hair_colours(folk)[0],
             beard: Beard::None,
+            woman: false,
             beard_length: 0.0,
         }
     }
@@ -319,8 +328,11 @@ mod tests {
     #[test]
     fn women_wear_their_hair_longer_and_stay_their_folk() {
         for folk in [Folk::Human, Folk::Dwarf, Folk::Gnome] {
-            let longer = |sex| (0..300).filter(|&s| matches!(BodySpec::roll_as(folk, s, sex).hair, HairStyle::Long | HairStyle::Ponytail)).count();
-            assert!(longer(Sex::Female) > longer(Sex::Male) + 60, "{folk:?}: {} against {}", longer(Sex::Female), longer(Sex::Male));
+            for seed in 0..100 {
+                let woman = BodySpec::roll_as(folk, seed, Sex::Female);
+                assert!(matches!(woman.hair, HairStyle::Long | HairStyle::Ponytail), "{folk:?} {seed}: {:?}", woman.hair);
+                assert!(woman.woman && !BodySpec::roll_as(folk, seed, Sex::Male).woman);
+            }
         }
         // Every style is one the folk has: a dwarf woman is still a dwarf, with her people's skin.
         for folk in Folk::ALL {
